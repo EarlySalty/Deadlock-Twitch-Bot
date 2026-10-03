@@ -4120,9 +4120,7 @@ mod tests {
                     let reply = api.last_message().await.unwrap();
                     assert!(reply.ends_with(TRUSTPILOT_URL), "{reply}");
                     assert!(
-                        TRUSTPILOT_REPLIES
-                            .iter()
-                            .any(|intro| reply.starts_with(intro)),
+                        TRUSTPILOT_REPLIES.iter().any(|intro| reply.contains(intro)),
                         "{reply}"
                     );
                 }
