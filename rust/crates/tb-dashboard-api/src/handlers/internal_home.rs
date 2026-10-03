@@ -663,7 +663,9 @@ pub async fn get_handler(
     let kpis = kpis_recent_block(&pool, &resolved_login, since).await;
     let ban = ban_events_block(&pool, &resolved_user_id, since).await;
     let raid_events = raid_events_block(&pool, &resolved_login, &resolved_user_id, since).await;
-    let last_stream = last_stream_summary(&pool, &resolved_user_id, &kpis.recent_streams).await;
+    let last_stream =
+        last_stream_summary_for_dashboard(&pool, &auth, &resolved_user_id, &kpis.recent_streams)
+            .await;
     let health_score = health_score_block(&pool, &resolved_login).await;
     let week_comparison = week_comparison_block(&pool, &resolved_login).await;
     let personal_bests = personal_bests_block(&pool, &resolved_login).await;
@@ -1388,7 +1390,24 @@ fn read_f64(row: &PgRow, col: &str) -> f64 {
 
 // ── Block 2b: last_stream_summary (internal_home.py:717-734,827-839) ─────────
 
-pub(crate) async fn last_stream_summary(
+pub(crate) async fn last_stream_summary_for_dashboard(
+    pool: &PgPool,
+    auth: &DashboardAuthLevel,
+    resolved_user_id: &str,
+    recent_streams: &[Value],
+) -> Value {
+    // Die bestehende KPI-Auswahl darf einen Login verwenden. Die Freigabe
+    // der Chatdaten bleibt für Partner an ihre authentifizierte ID gebunden.
+    // Eine heutige Namensauflösung ersetzt auch eine fehlende Auth-ID nicht.
+    let chat_user_id = match auth {
+        DashboardAuthLevel::Partner { twitch_user_id, .. } => twitch_user_id.trim(),
+        DashboardAuthLevel::Admin { .. } => resolved_user_id.trim(),
+        DashboardAuthLevel::None => "",
+    };
+    last_stream_summary(pool, chat_user_id, recent_streams).await
+}
+
+async fn last_stream_summary(
     pool: &PgPool,
     resolved_user_id: &str,
     recent_streams: &[Value],
@@ -1480,6 +1499,118 @@ async fn chat_stream_stats_block(
 #[cfg(test)]
 mod chat_stream_stats_tests {
     use super::*;
+
+    async fn wiedervergebener_login_fixture(pool: &PgPool) {
+        sqlx::query(
+            "CREATE TABLE twitch_streamer_identities (twitch_login TEXT, twitch_user_id TEXT, is_on_discord INTEGER, discord_user_id TEXT)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO twitch_streamer_identities VALUES ('alterlogin', '200', 0, '')")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE twitch_chat_messages (session_id BIGINT, message_ts TIMESTAMPTZ)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO twitch_chat_messages VALUES (1, '2026-03-01T10:01:00Z')")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    fn fremde_login_session() -> Value {
+        json!({
+            "session_id": 1, "twitch_user_id": "200", "avg_viewers": 7,
+            "started_at": "2026-03-01T10:00:00Z", "ended_at": "2026-03-01T10:05:00Z"
+        })
+    }
+
+    #[tokio::test]
+    async fn eigener_alter_login_override_darf_partner_auth_id_nicht_ersetzen() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        wiedervergebener_login_fixture(&database.pool).await;
+        for auth_id in ["100", ""] {
+            let auth = DashboardAuthLevel::Partner {
+                twitch_login: "alterlogin".into(),
+                twitch_user_id: auth_id.into(),
+                display_name: "AlterLogin".into(),
+            };
+            // Derselbe Aufruferpfad wie GET: erlaubter eigener Override,
+            // heutige Identitätsauflösung und anschließende Summaryfreigabe.
+            let identity = resolve_identity(&auth, &Some("ALTERLOGIN".into())).unwrap();
+            let (_, resolved_user_id, _) = identity_block(
+                &database.pool,
+                &identity.twitch_login,
+                &identity.twitch_user_id,
+            )
+            .await;
+            assert_eq!(resolved_user_id, "200");
+            let summary = last_stream_summary_for_dashboard(
+                &database.pool,
+                &auth,
+                &resolved_user_id,
+                &[fremde_login_session()],
+            )
+            .await;
+            assert_eq!(summary["avg_viewers"], json!(7));
+            assert!(summary["chat_messages"].is_null());
+            assert!(summary["chat_series"].is_null());
+        }
+    }
+
+    #[tokio::test]
+    async fn admin_zielwahl_behaelt_chatfreigabe_und_leere_summary_bleibt_null() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        wiedervergebener_login_fixture(&database.pool).await;
+        for auth in [
+            DashboardAuthLevel::admin(),
+            DashboardAuthLevel::Admin {
+                actor: Some(crate::auth::level::AdminActor {
+                    twitch_login: "admin".into(),
+                    twitch_user_id: "100".into(),
+                }),
+            },
+        ] {
+            let identity = resolve_identity(&auth, &Some("alterlogin".into())).unwrap();
+            let (_, resolved_user_id, _) = identity_block(
+                &database.pool,
+                &identity.twitch_login,
+                &identity.twitch_user_id,
+            )
+            .await;
+            let summary = last_stream_summary_for_dashboard(
+                &database.pool,
+                &auth,
+                &resolved_user_id,
+                &[fremde_login_session()],
+            )
+            .await;
+            assert_eq!(summary["chat_messages"], json!(1));
+            assert_eq!(summary["chat_series"][0]["messages"], json!(1));
+            assert!(last_stream_summary_for_dashboard(
+                &database.pool,
+                &auth,
+                &resolved_user_id,
+                &[],
+            )
+            .await
+            .is_null());
+        }
+        let summary = last_stream_summary_for_dashboard(
+            &database.pool,
+            &DashboardAuthLevel::None,
+            "200",
+            &[fremde_login_session()],
+        )
+        .await;
+        assert!(summary["chat_messages"].is_null());
+        assert!(summary["chat_series"].is_null());
+    }
 
     #[tokio::test]
     async fn fuenf_minuten_buckets_trennen_sessions_und_beachten_grenzen() {

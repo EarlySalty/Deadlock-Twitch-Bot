@@ -16,8 +16,8 @@ use tb_llm::{Message, Request};
 use crate::auth::level::DashboardAuthLevel;
 
 use super::internal_home::{
-    access_state_block, ban_count_block, kpis_recent_block, last_stream_summary, oauth_block,
-    raid_events_block, AccessState, KpisData, OauthData,
+    access_state_block, ban_count_block, kpis_recent_block, last_stream_summary_for_dashboard,
+    oauth_block, raid_events_block, AccessState, KpisData, OauthData,
 };
 use super::moderation_settings::{self, ModerationSettings};
 use super::platform_token::PlatformTokenConfig;
@@ -506,7 +506,8 @@ pub async fn ask(
             scam_guard_settings::load_settings(&pool, &login),
         );
 
-        let letzter_stream = last_stream_summary(&pool, &user_id, &kpis_30.recent_streams).await;
+        let letzter_stream =
+            last_stream_summary_for_dashboard(&pool, &auth, &user_id, &kpis_30.recent_streams).await;
 
         let (live_status, verbindungen) = match uplink::partner_id(&pool, &auth).await {
             Ok(id) => {
