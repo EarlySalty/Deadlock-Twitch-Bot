@@ -891,8 +891,11 @@ async fn historische_mitternachtsänderungen_korrigieren_chat_und_präsenz_im_fo
                 ticks(pool, 1, "zweite_person", "222", "2026-10-01T21:59:30Z", 1).await;
             }
             "update" => {
-                sqlx::raw_sql("UPDATE twitch_chat_messages SET message_ts='2026-09-30 21:59:30Z' WHERE message_ts='2026-10-01 21:59:30Z';
-                    UPDATE twitch_viewer_presence_ticks SET tick_at='2026-09-30 21:59:30Z' WHERE tick_at='2026-10-01 21:59:30Z';")
+                // Timescale erlaubt UPDATEs der Zeitspalte innerhalb eines Chunks.
+                // Die Korrektur überschreitet Berliner Mitternacht und das Sessionende,
+                // bleibt aber im selben UTC-Tageschunk der echten Chat-Hypertable.
+                sqlx::raw_sql("UPDATE twitch_chat_messages SET message_ts='2026-10-01 22:02:30Z' WHERE message_ts='2026-10-01 21:59:30Z';
+                    UPDATE twitch_viewer_presence_ticks SET tick_at='2026-10-01 22:02:30Z' WHERE tick_at='2026-10-01 21:59:30Z';")
                     .execute(pool).await.unwrap();
             }
             _ => unreachable!(),
@@ -1139,7 +1142,9 @@ async fn historische_raidkorrektur_markiert_erfolg_tag_und_beide_ids_nach_aggreg
     let db = db::migrated_pool("tb_cp_raid_dirty").await;
     let pool = &db.pool;
     db::seed_partners(pool).await;
-    let id: i64 = sqlx::query_scalar("INSERT INTO twitch_raid_history(from_broadcaster_id,from_broadcaster_login,to_broadcaster_id,to_broadcaster_login,executed_at,success) VALUES ('100','alpha','200','beta','2026-10-01 12:00Z',TRUE) RETURNING id")
+    // Beide historischen Tage liegen im selben echten Timescale-Wochenchunk.
+    // Die Korrektur muss trotzdem alten und neuen Berliner Tag invalidieren.
+    let id: i64 = sqlx::query_scalar("INSERT INTO twitch_raid_history(from_broadcaster_id,from_broadcaster_login,to_broadcaster_id,to_broadcaster_login,executed_at,success) VALUES ('100','alpha','200','beta','2026-09-29 12:00Z',TRUE) RETURNING id")
         .fetch_one(pool).await.unwrap();
     assert!(
         sqlx::query_scalar::<_, bool>(
@@ -1163,7 +1168,7 @@ async fn historische_raidkorrektur_markiert_erfolg_tag_und_beide_ids_nach_aggreg
         .await
         .unwrap();
     let days = run_aggregation(pool, now, false).await.unwrap();
-    assert!(days.iter().any(|(marked, _)| *marked == day("2026-10-01")));
+    assert!(days.iter().any(|(marked, _)| *marked == day("2026-09-29")));
     let after = list_streamer_points(pool, Some(since), 100).await.unwrap();
     assert_eq!(after.rows.len(), 1);
     assert_eq!(after.rows[0].raids_to_partners, 0);
@@ -1176,7 +1181,7 @@ async fn historische_raidkorrektur_markiert_erfolg_tag_und_beide_ids_nach_aggreg
     .await
     .unwrap();
     let days = run_aggregation(pool, now, false).await.unwrap();
-    for expected in [day("2026-09-30"), day("2026-10-01")] {
+    for expected in [day("2026-09-30"), day("2026-09-29")] {
         assert!(days.iter().any(|(marked, _)| *marked == expected));
     }
     sqlx::query("UPDATE twitch_raid_history SET from_broadcaster_id='200',to_broadcaster_id='100' WHERE id=$1")
