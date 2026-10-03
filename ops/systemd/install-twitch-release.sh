@@ -83,6 +83,7 @@ generated=(
   rust/target/release/tb-bot
   rust/target/release/tb-dashboard
   rust/target/release/tb-stream-audit
+  rust/target/release/tb-config-check
   bot/analytics/dashboard_v2/dist
   bot/admin_dashboard/dist
   website/dist
@@ -164,6 +165,7 @@ if [[ ! -e "$release" ]]; then
   install -m 0755 "$checkout/rust/target/release/tb-bot" "$stage/rust/target/release/tb-bot"
   install -m 0755 "$checkout/rust/target/release/tb-dashboard" "$stage/rust/target/release/tb-dashboard"
   install -m 0755 "$checkout/rust/target/release/tb-stream-audit" "$stage/rust/target/release/tb-stream-audit"
+  install -m 0755 "$checkout/rust/target/release/tb-config-check" "$stage/rust/target/release/tb-config-check"
   if [[ "$collector_expected" == 1 ]]; then
     install -m 0755 "$checkout/rust/target/release/tb-category-collector" "$stage/rust/target/release/tb-category-collector"
   fi
