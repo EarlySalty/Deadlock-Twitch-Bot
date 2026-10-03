@@ -2,6 +2,31 @@ import { useEffect, useRef } from "react";
 import { ExternalLink } from "lucide-react";
 import { loadTrustpilotWidget, registerTrustpilot, TRUSTPILOT_PROFILE_URL, TRUSTPILOT_REVIEW_URL } from "@/lib/trustpilot";
 
+export function TrustpilotLauncher() {
+  useEffect(() => {
+    void registerTrustpilot().catch((error: unknown) => {
+      console.warn("Die Trustpilot-Einbindung konnte nicht geladen werden.", error);
+    });
+  }, []);
+
+  return (
+    <a
+      id="trustpilot"
+      href={TRUSTPILOT_REVIEW_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label="Community auf Trustpilot bewerten"
+      className="fixed bottom-24 right-5 flex min-h-11 items-center gap-3 rounded-2xl border border-accent/60 bg-background px-4 py-3 text-text-primary shadow-xl sm:bottom-auto sm:right-7 sm:top-[min(55dvh,calc(100dvh-8rem))] sm:-translate-y-1/2 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+    >
+      <span>
+        <span className="block text-xs font-semibold text-accent">Trustpilot</span>
+        <span className="block text-sm">Community bewerten</span>
+      </span>
+      <ExternalLink size={16} aria-hidden="true" />
+    </a>
+  );
+}
+
 export function Trustpilot() {
   const widget = useRef<HTMLDivElement>(null);
 
@@ -17,38 +42,29 @@ export function Trustpilot() {
   }, []);
 
   return (
-    <section id="trustpilot" aria-labelledby="trustpilot-heading" className="max-w-3xl mx-auto px-6 pb-16">
-      <div className="panel-card rounded-2xl p-6 md:p-8 text-center">
-        <h2 id="trustpilot-heading" className="text-2xl font-semibold font-display text-[var(--color-text-primary)]">
-          Wie erlebst du unsere Community?
-        </h2>
-        <p className="text-[var(--color-text-secondary)] mt-3 mb-5">
-          Teile deine Erfahrung mit der Deutschen Deadlock Community auf Trustpilot.
-          Wir freuen uns über ehrliches Feedback.
-        </p>
-        <div
-          ref={widget}
-          className="trustpilot-widget"
-          data-locale="de-DE"
-          data-template-id="56278e9abfbbba0bdcd568bc"
-          data-businessunit-id="6ac13d8b89ce8ac6e14678b8"
-          data-style-height="52px"
-          data-style-width="100%"
-          data-theme="dark"
-          data-token="67ca1866-b9c4-4cdb-a307-946f9817a6a5"
-          style={{ minHeight: 52 }}
-        >
-          <a href={TRUSTPILOT_PROFILE_URL} target="_blank" rel="noopener noreferrer">Trustpilot</a>
-        </div>
-        <a
-          href={TRUSTPILOT_REVIEW_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-5 inline-flex items-center gap-2 rounded-xl px-6 py-3 gradient-accent font-semibold focus-visible:outline-2 focus-visible:outline-offset-4"
-        >
-          Community auf Trustpilot bewerten
-          <ExternalLink size={18} aria-hidden="true" />
+    <section aria-label="Community-Bewertungen auf Trustpilot" className="shrink-0 border-b border-border px-4 py-2">
+      <div className="flex items-center justify-between gap-3">
+        <a href={TRUSTPILOT_PROFILE_URL} target="_blank" rel="noopener noreferrer" className="flex min-h-11 min-w-0 flex-col justify-center rounded-lg text-xs text-text-secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+          <span className="font-semibold text-accent">Trustpilot</span>
+          <span>Bewertungen ansehen</span>
         </a>
+        <a href={TRUSTPILOT_REVIEW_URL} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+          Bewerten <ExternalLink size={13} aria-hidden="true" />
+        </a>
+      </div>
+      <div
+        ref={widget}
+        className="trustpilot-widget [@media(max-height:500px)]:hidden"
+        data-locale="de-DE"
+        data-template-id="56278e9abfbbba0bdcd568bc"
+        data-businessunit-id="6ac13d8b89ce8ac6e14678b8"
+        data-style-height="52px"
+        data-style-width="100%"
+        data-theme="dark"
+        data-token="67ca1866-b9c4-4cdb-a307-946f9817a6a5"
+        style={{ minHeight: 52 }}
+      >
+        <a href={TRUSTPILOT_PROFILE_URL} target="_blank" rel="noopener noreferrer">Trustpilot</a>
       </div>
     </section>
   );
