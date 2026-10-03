@@ -312,8 +312,9 @@ selbst liegt in der zentralen DB (Deadlock-Bots, Paket D).
 | `created_at`, `updated_at` | Tageslimit (3 je Kanal und Berliner Tag zählt `accepted` und laufende `pending`) und Doppelsend-Schutz (`pending` 120 s) |
 
 `failed` (Broker nicht erreichbar) und `rejected` dürfen erneut eingereicht
-werden. Rechte: `twitchbot` und `twitchdash` lesen/schreiben (der Knopf im
-Dashboard nutzt denselben Dienst).
+werden. `twitchbot` liest und schreibt; `twitchdash` hat ausschließlich SELECT.
+Der Dashboardknopf nutzt den authentifizierten internen Producer-Schreibpfad
+mit der Twitch-ID aus der tatsächlichen Dashboard-Session.
 
 ---
 

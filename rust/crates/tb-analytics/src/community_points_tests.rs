@@ -821,6 +821,166 @@ async fn historische_rohänderung_bleibt_bei_punktedeckel_hinter_cursor_sichtbar
 }
 
 #[tokio::test]
+async fn historische_sessionkorrektur_markiert_grenzen_und_identität_nach_aggregation() {
+    let db = db::migrated_pool("tb_cp_session_dirty").await;
+    let pool = &db.pool;
+    db::seed_partners(pool).await;
+    sqlx::query("UPDATE twitch_stream_sessions SET ended_at='2026-10-01 09:00Z' WHERE id=1")
+        .execute(pool)
+        .await
+        .unwrap();
+    ticks(pool, 1, "viewer", "111", "2026-10-01T08:00:00Z", 10).await;
+    sqlx::query("INSERT INTO twitch_chat_messages(session_id,streamer_login,chatter_login,chatter_id,message_ts,content) VALUES (1,'alpha','viewer','111','2026-10-01 08:06Z','Spätere Nachricht im Stream')")
+        .execute(pool).await.unwrap();
+    let d = day("2026-10-01");
+    let now = ts("2026-10-03T12:00:00Z");
+    run_aggregation(pool, now, false).await.unwrap();
+    let before = list_viewer_points(pool, None, 100).await.unwrap();
+    assert_eq!(before.rows.len(), 1);
+    assert_eq!(
+        (before.rows[0].points_watch, before.rows[0].points_chat),
+        (1, 1)
+    );
+    let since = ts(before.next_updated_since.as_deref().unwrap());
+
+    // Die historischen Rohzeilen bleiben unverändert; nur die Session wird korrigiert.
+    sqlx::query("UPDATE twitch_stream_sessions SET started_at='2026-10-01 08:03Z',ended_at='2026-10-01 08:04:30Z' WHERE id=1")
+        .execute(pool).await.unwrap();
+    let days = run_aggregation(pool, now, false).await.unwrap();
+    assert!(days.iter().any(|(marked, _)| *marked == d));
+    let after = list_viewer_points(pool, Some(since), 100).await.unwrap();
+    assert_eq!(after.rows.len(), 1);
+    assert_eq!(
+        (
+            after.rows[0].watch_minutes,
+            after.rows[0].points_watch,
+            after.rows[0].points_chat
+        ),
+        (1, 0, 0)
+    );
+    let since = ts(after.next_updated_since.as_deref().unwrap());
+
+    sqlx::query("UPDATE twitch_stream_sessions SET twitch_user_id='200' WHERE id=1")
+        .execute(pool)
+        .await
+        .unwrap();
+    run_aggregation(pool, now, false).await.unwrap();
+    let moved = list_viewer_points(pool, Some(since), 100).await.unwrap();
+    assert_eq!(moved.rows.len(), 2);
+    let old = moved
+        .rows
+        .iter()
+        .find(|r| r.channel_twitch_user_id == "100")
+        .unwrap();
+    let new = moved
+        .rows
+        .iter()
+        .find(|r| r.channel_twitch_user_id == "200")
+        .unwrap();
+    assert_eq!(
+        (
+            old.watch_minutes,
+            old.points_watch,
+            old.points_chat,
+            old.points_discovery
+        ),
+        (0, 0, 0, 0)
+    );
+    assert_eq!(new.watch_minutes, 1);
+
+    sqlx::query("UPDATE twitch_stream_sessions SET started_at='2026-09-30 20:00Z',ended_at='2026-09-30 21:00Z' WHERE id=1")
+        .execute(pool).await.unwrap();
+    let days = run_aggregation(pool, now, false).await.unwrap();
+    assert!(days.iter().any(|(marked, _)| *marked == day("2026-09-30")));
+    assert!(days.iter().any(|(marked, _)| *marked == d));
+    let value: i32 = sqlx::query_scalar("SELECT points_watch + points_chat + points_discovery FROM twitch_community_points_viewer_daily WHERE twitch_user_id='111' AND channel_twitch_user_id='200' AND day=$1")
+        .bind(d).fetch_one(pool).await.unwrap();
+    assert_eq!(value, 0);
+}
+
+#[tokio::test]
+async fn historische_raidkorrektur_markiert_erfolg_tag_und_beide_ids_nach_aggregation() {
+    let db = db::migrated_pool("tb_cp_raid_dirty").await;
+    let pool = &db.pool;
+    db::seed_partners(pool).await;
+    let id: i64 = sqlx::query_scalar("INSERT INTO twitch_raid_history(from_broadcaster_id,from_broadcaster_login,to_broadcaster_id,to_broadcaster_login,executed_at,success) VALUES ('100','alpha','200','beta','2026-10-01 12:00Z',TRUE) RETURNING id")
+        .fetch_one(pool).await.unwrap();
+    let now = ts("2026-10-03T12:00:00Z");
+    run_aggregation(pool, now, false).await.unwrap();
+    let before = list_streamer_points(pool, None, 100).await.unwrap();
+    assert_eq!(before.rows[0].raids_to_partners, 1);
+    let since = ts(before.next_updated_since.as_deref().unwrap());
+
+    sqlx::query("UPDATE twitch_raid_history SET success=FALSE WHERE id=$1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
+    let days = run_aggregation(pool, now, false).await.unwrap();
+    assert!(days.iter().any(|(marked, _)| *marked == day("2026-10-01")));
+    let after = list_streamer_points(pool, Some(since), 100).await.unwrap();
+    assert_eq!(after.rows.len(), 1);
+    assert_eq!(after.rows[0].raids_to_partners, 0);
+
+    sqlx::query(
+        "UPDATE twitch_raid_history SET success=TRUE,executed_at='2026-09-30 12:00Z' WHERE id=$1",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .unwrap();
+    let days = run_aggregation(pool, now, false).await.unwrap();
+    for expected in [day("2026-09-30"), day("2026-10-01")] {
+        assert!(days.iter().any(|(marked, _)| *marked == expected));
+    }
+    sqlx::query("UPDATE twitch_raid_history SET from_broadcaster_id='200',to_broadcaster_id='100' WHERE id=$1")
+        .bind(id).execute(pool).await.unwrap();
+    run_aggregation(pool, now, false).await.unwrap();
+    let rows = list_streamer_points(pool, None, 100).await.unwrap().rows;
+    assert_eq!(
+        rows.iter()
+            .find(|r| r.day == "2026-09-30" && r.streamer_twitch_user_id == "100")
+            .unwrap()
+            .raids_to_partners,
+        0
+    );
+    assert_eq!(
+        rows.iter()
+            .find(|r| r.day == "2026-09-30" && r.streamer_twitch_user_id == "200")
+            .unwrap()
+            .raids_to_partners,
+        1
+    );
+
+    sqlx::query("UPDATE twitch_raid_history SET to_broadcaster_id='999' WHERE id=$1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
+    run_aggregation(pool, now, false).await.unwrap();
+    let raids: i32 = sqlx::query_scalar("SELECT raids_to_partners FROM twitch_community_points_streamer_daily WHERE streamer_twitch_user_id='200' AND day='2026-09-30'")
+        .fetch_one(pool).await.unwrap();
+    assert_eq!(raids, 0);
+    sqlx::query("UPDATE twitch_raid_history SET to_broadcaster_id='100' WHERE id=$1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
+    run_aggregation(pool, now, false).await.unwrap();
+    let before = list_streamer_points(pool, None, 100).await.unwrap();
+    let since = ts(before.next_updated_since.as_deref().unwrap());
+    sqlx::query("DELETE FROM twitch_raid_history WHERE id=$1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
+    run_aggregation(pool, now, false).await.unwrap();
+    let after = list_streamer_points(pool, Some(since), 100).await.unwrap();
+    assert_eq!(after.rows.len(), 1);
+    assert_eq!(after.rows[0].raids_to_partners, 0);
+}
+
+#[tokio::test]
 async fn aggregation_hält_laden_und_schreiben_auf_einer_pool_connection() {
     let _db = db::migrated_pool_with_max_connections("tb_cp_single_connection", 1).await;
     let pool = _db.pool.clone();
