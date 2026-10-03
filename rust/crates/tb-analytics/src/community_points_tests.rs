@@ -1471,3 +1471,103 @@ async fn bann_aenderungen_rechnen_historische_punkte_neu() {
         previous_stamp = rows.iter().map(|r| r.updated_at.clone()).max().unwrap();
     }
 }
+
+#[tokio::test]
+async fn bann_aenderungen_waehrend_erster_aggregation_bleiben_offen() {
+    let db = db::migrated_pool_with_max_connections("tb_cp_first_ban_race", 5).await;
+    let pool = &db.pool;
+    db::seed_partners(pool).await;
+    ticks(pool, 1, "viewer", "111", "2026-10-01T08:00:00Z", 20).await;
+    ticks(pool, 1, "anderer", "333", "2026-10-01T08:00:00Z", 1).await;
+    sqlx::raw_sql(
+        "CREATE FUNCTION first_ban_fixture_pause() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN PERFORM pg_advisory_xact_lock(74103); RETURN NEW; END $$;
+         CREATE TRIGGER fixture_pause_first_ban BEFORE INSERT ON twitch_community_points_viewer_daily
+         FOR EACH ROW EXECUTE FUNCTION first_ban_fixture_pause();",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let d = day("2026-10-01");
+    let now = ts("2026-10-10T12:00:00Z");
+    for (setup, change, initially_banned, finally_banned) in [
+        ("", "INSERT INTO twitch_ban_events(twitch_user_id,event_type,target_id,received_at) VALUES ('100','ban','111','2026-10-10 12:00Z')", false, true),
+        ("INSERT INTO twitch_ban_events(twitch_user_id,event_type,target_id,received_at) VALUES ('200','ban','111','2026-10-10 12:00Z')", "UPDATE twitch_ban_events SET twitch_user_id='100'", false, true),
+        ("INSERT INTO twitch_ban_events(twitch_user_id,event_type,target_id,received_at) VALUES ('100','ban','111','2026-10-10 12:00Z')", "DELETE FROM twitch_ban_events", true, false),
+        ("", "INSERT INTO twitch_chatter_global_ban(chatter_login,chatter_id) VALUES ('viewer','111')", false, true),
+        ("INSERT INTO twitch_chatter_global_ban(chatter_login,chatter_id) VALUES ('zweiter','222')", "UPDATE twitch_chatter_global_ban SET chatter_id='111'", false, true),
+        ("INSERT INTO twitch_chatter_global_ban(chatter_login,chatter_id) VALUES ('viewer','111')", "DELETE FROM twitch_chatter_global_ban", true, false),
+    ] {
+        sqlx::raw_sql(
+            "DELETE FROM twitch_ban_events;
+             DELETE FROM twitch_chatter_global_ban;
+             DELETE FROM twitch_community_points_viewer_daily;
+             DELETE FROM twitch_community_points_streamer_daily;
+             DELETE FROM twitch_community_points_discoveries;",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        if !setup.is_empty() {
+            sqlx::query(setup).execute(pool).await.unwrap();
+        }
+        sqlx::query("DELETE FROM twitch_community_points_dirty_days")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO twitch_community_points_dirty_days(day) VALUES ($1)")
+            .bind(d)
+            .execute(pool)
+            .await
+            .unwrap();
+        let mut pause = pool.begin().await.unwrap();
+        sqlx::query("SELECT pg_advisory_xact_lock(74103)")
+            .execute(&mut *pause)
+            .await
+            .unwrap();
+        let aggregation_pool = pool.clone();
+        let aggregation = tokio::spawn(async move {
+            aggregate_day(&aggregation_pool, d, now).await.unwrap();
+        });
+        wait_for_dirty_day_fixture_lock(pool).await;
+        let published: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_community_points_viewer_daily WHERE day=$1",
+        )
+        .bind(d)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(published, 0, "{change}");
+        tokio::time::timeout(std::time::Duration::from_secs(5), sqlx::query(change).execute(pool))
+            .await
+            .expect("Bannänderung wartet auf die erste Aggregation")
+            .unwrap();
+        let generations: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_community_points_dirty_days WHERE day=$1",
+        )
+        .bind(d)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(generations, 2, "{change}");
+        pause.commit().await.unwrap();
+        aggregation.await.unwrap();
+        let stale = list_viewer_points(pool, None, 100).await.unwrap().rows;
+        let old_points = stale.iter().find(|r| r.twitch_user_id == "111").map_or(0, |r| r.points_watch);
+        assert_eq!(old_points == 0, initially_banned, "{change}");
+        let remaining: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_community_points_dirty_days WHERE day=$1",
+        )
+        .bind(d)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(remaining, 1, "{change}");
+        let runs = run_aggregation(pool, now, false).await.unwrap();
+        assert!(runs.iter().any(|(date, _)| *date == d), "{change}");
+        let fresh = list_viewer_points(pool, None, 100).await.unwrap().rows;
+        let new_points = fresh.iter().find(|r| r.twitch_user_id == "111").map_or(0, |r| r.points_watch);
+        assert_eq!(new_points == 0, finally_banned, "{change}");
+        assert_eq!(aggregate_day(pool, d, now).await.unwrap(), DayWriteStats::default());
+    }
+}

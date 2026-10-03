@@ -101,10 +101,32 @@ BEGIN
         END IF;
     END IF;
     INSERT INTO public.twitch_community_points_dirty_days(day)
-    SELECT DISTINCT day FROM public.twitch_community_points_viewer_daily
+    SELECT day FROM public.twitch_community_points_viewer_daily
      WHERE twitch_user_id = ANY(viewer_ids)
        AND (TG_ARGV[0] = 'twitch_chatter_global_ban'
             OR channel_twitch_user_id = ANY(channel_ids))
+    UNION
+    SELECT d::date
+      FROM public.twitch_viewer_presence_ticks t
+      JOIN public.twitch_stream_sessions s ON s.id = t.session_id
+      CROSS JOIN LATERAL generate_series(
+          (t.tick_at AT TIME ZONE 'Europe/Berlin')::date::timestamp,
+          ((t.tick_at + INTERVAL '60 seconds') AT TIME ZONE 'Europe/Berlin')::date::timestamp,
+          INTERVAL '1 day') d
+     WHERE TRIM(t.viewer_twitch_user_id) = ANY(viewer_ids)
+       AND (TG_ARGV[0] = 'twitch_chatter_global_ban'
+            OR s.twitch_user_id = ANY(channel_ids))
+    UNION
+    SELECT d::date
+      FROM public.twitch_chat_messages m
+      JOIN public.twitch_stream_sessions s ON s.id = m.session_id
+      CROSS JOIN LATERAL generate_series(
+          (m.message_ts AT TIME ZONE 'Europe/Berlin')::date::timestamp,
+          ((m.message_ts + INTERVAL '2 hours') AT TIME ZONE 'Europe/Berlin')::date::timestamp,
+          INTERVAL '1 day') d
+     WHERE TRIM(m.chatter_id) = ANY(viewer_ids)
+       AND (TG_ARGV[0] = 'twitch_chatter_global_ban'
+            OR s.twitch_user_id = ANY(channel_ids))
      ORDER BY day;
     RETURN NULL;
 END $$;
