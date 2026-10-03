@@ -10,6 +10,8 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react(), tailwindcss()].flat(),
     resolve: {
+      // Hooks und Renderer müssen auch bei verlinkten Abhängigkeiten dieselbe React-Instanz verwenden.
+      dedupe: ['react', 'react-dom'],
       alias: {
         '@': path.resolve(__dirname, './src'),
       },
