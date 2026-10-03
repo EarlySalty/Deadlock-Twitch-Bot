@@ -346,6 +346,11 @@ pub async fn lade_vod(
             .await?;
     }
     if !output.success {
+        if meldet_video_nicht_vorhanden(&output.stderr, twitch_id) {
+            return Err(VodArchiveError::VideoNichtGefunden {
+                twitch_id: twitch_id.into(),
+            });
+        }
         return Err(VodArchiveError::Werkzeug {
             schritt: "Download".to_string(),
             meldung: kurzfassung(&output.stderr),
@@ -363,6 +368,15 @@ pub async fn lade_vod(
         aufgenommen_am: lies_aufnahmedatum(verzeichnis, twitch_id),
         pfad,
     })
+}
+
+fn meldet_video_nicht_vorhanden(stderr: &str, twitch_id: &str) -> bool {
+    let id = twitch_id.strip_prefix('v').unwrap_or(twitch_id);
+    if id.is_empty() || id.starts_with('0') || !id.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    let erwartet = format!("ERROR: [twitch:vod] {id}: Video {id} does not exist");
+    stderr.lines().any(|line| line.trim() == erwartet)
 }
 
 /// Sucht die fertige Mediendatei. yt-dlp haelt sich nicht immer an `.mp4`,
@@ -540,6 +554,24 @@ fn kurzfassung(stderr: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fehlendes_video_ist_nur_ein_id_genauer_kandidat() {
+        assert!(super::meldet_video_nicht_vorhanden(
+            "ERROR: [twitch:vod] 123: Video 123 does not exist",
+            "v123"
+        ));
+        for text in [
+            "Video 123 does not exist",
+            "ERROR: [twitch:vod] 456: Video 456 does not exist",
+            "ERROR: [twitch:vod] 123: Video 123 does not exist: upstream error",
+        ] {
+            assert!(!super::meldet_video_nicht_vorhanden(text, "v123"));
+        }
+        assert!(!super::meldet_video_nicht_vorhanden(
+            "ERROR: [twitch:vod] 123: Video 123 does not exist",
+            "v0123"
+        ));
+    }
     use super::*;
     use std::sync::Mutex;
 
