@@ -83,8 +83,6 @@ fi
 # generierte Artefakte werden separat auf Typ, Eigentum und Schreibschutz geprüft.
 
 if [[ $brain_editor_only -eq 1 ]]; then
-  exec 7>/run/lock/install-twitch-brain-editor.lock
-  flock -n 7 || exit 75
   release_root=/opt/deadlock/twitch/releases
   current=/opt/deadlock/twitch/current
   for directory in /opt /opt/deadlock /opt/deadlock/twitch "$release_root"; do
@@ -117,10 +115,20 @@ if [[ $brain_editor_only -eq 1 ]]; then
     echo "Der Konfigeditor stammt nicht aus dem angegebenen sauberen SHA." >&2
     exit 1
   fi
+  baseline_revision=$(readelf --string-dump=.twitch_build "$previous_release/rust/target/release/tb-bot" 2>/dev/null | awk '/\[/{print $NF}')
+  if [[ ! "$baseline_revision" =~ ^[0-9a-f]{40}$ ||
+        "$previous_name" != "$baseline_revision"* && "$previous_name" != "${baseline_revision:0:8}"* ]]; then
+    echo "Die bisherige Bot-Herkunft passt nicht zum Release." >&2
+    exit 1
+  fi
+  previous_editor_revision=$baseline_revision
+  if [[ "$previous_name" == *-brain-* ]]; then previous_editor_revision=${previous_name##*-brain-}; fi
   for binary in "$previous_release"/rust/target/release/*; do
     revision=$(readelf --string-dump=.twitch_build "$binary" 2>/dev/null | awk '/\[/{print $NF}')
-    if [[ ! "$revision" =~ ^[0-9a-f]{40}$ ]]; then
-      echo "Ein vorhandenes Binary hat keine gültige SHA-Herkunft." >&2
+    expected_revision=$baseline_revision
+    if [[ $(basename -- "$binary") == tb-config-check ]]; then expected_revision=$previous_editor_revision; fi
+    if [[ "$revision" != "$expected_revision" ]]; then
+      echo "Ein vorhandenes Binary verletzt den bisherigen SHA-Herkunftsvertrag." >&2
       exit 1
     fi
   done
