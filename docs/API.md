@@ -259,6 +259,7 @@ Auth: `X-Internal-Token` + Loopback-Guard (wie alle Routen unter `/internal/twit
 | Methode | Pfad | Datei |
 |---------|------|-------|
 | GET | `/internal/twitch/v1/community-points/viewers` | rust/crates/tb-internal-api/src/handlers/community_points.rs |
+| GET | `/internal/twitch/v1/community-points/viewers/activity` | rust/crates/tb-internal-api/src/handlers/community_points.rs |
 | GET | `/internal/twitch/v1/community-points/streamers` | rust/crates/tb-internal-api/src/handlers/community_points.rs |
 
 Query: `updated_since=<RFC3339>` (optional, exklusiv), `limit=1..5000`
@@ -277,6 +278,12 @@ Streamer-Zeile: `streamer_twitch_user_id`, `streamer_login`, `discord_user_id`
 (oder `null`), `day`, `viewer_minutes`, `unique_viewers`, `raids_to_partners`,
 `updated_at`.
 
+`GET …/viewers/activity?twitch_user_id=<ID>&day=<Berliner YYYY-MM-DD>&activity_since=<RFC3339>`
+berechnet ausschließlich Rohaktivität ab der gespeicherten Consent-Grenze.
+Antwort: `twitch_user_id`, `day`, `activity_since`, `computed_at`, `rows` mit
+normalen Viewerfeldern. Die Antwort bindet ID, Tag und Grenze ausdrücklich;
+eine leere Liste bestätigt Null. Dieser Lesepfad verändert keine Tageswerte.
+
 ### Streamer-Vorschläge aus der Community (Community-Streamer-Brücke, Paket F)
 | Methode | Pfad | Datei |
 |---------|------|-------|
@@ -284,7 +291,8 @@ Streamer-Zeile: `streamer_twitch_user_id`, `streamer_login`, `discord_user_id`
 | GET | `/internal/twitch/v1/scout/community-suggestions/outcomes` | rust/crates/tb-internal-api/src/handlers/scout_community.rs |
 
 `POST` Body `{"twitch_login":"name","suggested_by_discord_id":"123…","reason":"…","idempotency_key":"…"}`
-(`reason` optional, unbekannte Felder 400). `twitch_login` darf `@name` oder ein
+(`reason`, ursprüngliches `submitted_at` und `privacy_epoch` optional; Zeit
+und Epoche gemeinsam vorhanden, unbekannte Felder 400). `twitch_login` darf `@name` oder ein
 `twitch.tv/name`-Link sein. Der Login wird per Helix auf die Twitch-User-ID
 aufgelöst. Antwort 200 `{"status":"created"|"already_known"|"already_partner"|"blocked"|"not_found","twitch_user_id":"…"|null}`.
 
@@ -302,14 +310,29 @@ die Outreach-Kette.
 
 `GET …/outcomes?updated_since=<RFC3339>&limit=1..5000`: Cursor wie bei den
 Community-Punkten (`{"rows":[...],"next_updated_since":"…","has_more":false}`).
-Je Community-Kandidat eine Zeile: `twitch_user_id`, `twitch_login`,
-`suggested_by_discord_id` (erster Vorschlagender), `suggested_at`,
+Je gültigem Kanal-/Discordpaar eine Zeile: `twitch_user_id`, `twitch_login`,
+`suggested_by_discord_id` dieser individuellen Zuordnung, eigenes `suggested_at`,
+optionale ursprüngliche `submitted_at`/`privacy_epoch`, `is_first_eligible` für
+das atomar vor Pagination gewählte früheste gültige Paar des Kanals,
 `suggestion_count`, `candidate_status`, `is_partner_active`, `partner_since`
 (Partnerzeit aus `twitch_partners.partnered_at`, sonst Zeitpunkt der ersten
 Beobachtung; `null`, solange kein aktiver Partner), `updated_at`. Der Aufruf
 gleicht vorher den Partnerstand mit `twitch_streamers_partner_state` ab und
-stempelt geänderte Zeilen neu; eine Zeile kommt also wieder, sobald der Kanal
+stempelt die individuellen Zuordnungen mit eindeutigen persistenten Cursorn
+neu; eine Zeile kommt also wieder, sobald der Kanal
 aktiver Partner wird (oder es nicht mehr ist).
+
+### Privacy der neuen Scoutkopien
+
+`GET /internal/twitch/v1/scout/community-privacy/export?discord_user_id=<String>`
+liefert ausschließlich die Communityvorschläge und Kandidatenkopien dieser Person.
+`POST …/erase` bindet `discord_user_id`, UUID `operation_id` und positive
+`epoch`; `POST …/consent` zusätzlich die gespeicherte `activity_since`.
+Die Antwort bindet dieselbe Anfrage-ID/Epoche und `applied|replayed|stale`.
+Wiederholungen verwenden dieselbe UUID; eine alte Epoche mutiert keinen neuen Stand.
+Erasure entfernt eigene Kopien, erhält fremde gültige Vorschlagszuordnungen
+und rekonstruiert keinen Erstautor. Die neue Einwilligung erlaubt ausschließlich
+die aktuelle Epoche mit ursprünglicher Zeit ab der Grenze.
 
 ## Clip-Contest aus Twitch (Community-Streamer-Brücke, Paket E)
 
@@ -320,14 +343,18 @@ Discord ein. Ein Dienst für beide Wege:
 | Weg | Auslöser | Datei |
 |-----|----------|-------|
 | Chat | `!clipcontest [clip-url]` im eigenen Kanal (nur Broadcaster und Mods) | rust/crates/tb-chat/src/commands.rs |
+| Interner Producer | `POST /internal/twitch/v1/clips/contest/submit` mit `clip_db_id` und serverseitiger `actor_twitch_user_id` | rust/crates/tb-internal-api/src/handlers/clip_contest.rs |
 | Dashboard | `POST /social-media/api/clips/{clip_db_id}/clip-contest` (Social-Studio, Knopf "Für Clip-Contest einreichen") | rust/crates/tb-dashboard-api/src/handlers/social_media_clip_contest.rs |
 
 Weitergabe an den Master-Broker von Deadlock-Bots über den vorhandenen
-`BrokerRelay` (Basis-URL der Betriebskonfiguration, bestehendes interne Token):
+`BrokerRelay` im Producer (Basis-URL der Bot-TOML, bestehendes internes Token).
+Das Dashboard verwendet ausschließlich den authentifizierten internen Producerweg:
 
 `POST /internal/master/v1/clips/submit`
 `{"source":"twitch","clip_url":"https://clips.twitch.tv/<id>","streamer_twitch_user_id":"456","streamer_login":"name","submitted_by_twitch_user_id":"456","title":"...","idempotency_key":"twitch-clip-<clip_id>"}`
-mit `X-Idempotency-Key` = `idempotency_key`. Erwartet wird der Broker-Envelope
+Optionale `submitted_at` bindet den ursprünglichen DB-Claimzeitpunkt.
+Akteur und Zeitpunkt bleiben beim Retry gemeinsam unverändert; Altbestand
+ohne Herkunft erhält keinen erfundenen Zeitpunkt. Mit `X-Idempotency-Key` = `idempotency_key`. Erwartet wird der Broker-Envelope
 `{"ok":true,"result":{"status":"accepted"|"duplicate"|"rejected","submission_id":123,"reason":null}}`.
 
 Regeln: Kanal aktiver Partner; Clip-URL nur `clips.twitch.tv/<slug>` oder

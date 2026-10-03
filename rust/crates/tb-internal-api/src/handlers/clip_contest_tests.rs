@@ -76,7 +76,7 @@ async fn clip_contest_rollenmatrix_erhaelt_community_und_watchdog_vertrag() {
         ])
         .arg(sql)
         .output()
-        .expect("Rollenprüfung in eigener PostgreSQL-Fixture");
+        .expect("Rollenfixture benötigt PostgreSQL 16 mit /usr/lib/postgresql/16/bin/psql; uplink_test wird ausschließlich im isolierten Testcluster angelegt");
     assert!(
         output.status.success(),
         "Rollenprüfung fehlgeschlagen: {}\n{}",

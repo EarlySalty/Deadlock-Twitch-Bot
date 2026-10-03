@@ -255,10 +255,11 @@ Outreach-Log fuer Partner-Ansprache.
 
 Migration `rust/migrations/20261001100000_community_points.sql`. Der tb-bot
 (`community_points_aggregation`, alle 5 Minuten) rechnet die Tageswerte
-(Tag nach Europe/Berlin) aus den Rohdaten neu und schreibt nur geänderte
-Zeilen; Logik und Regeln in `rust/crates/tb-analytics/src/community_points.rs`.
-Quellen: `twitch_viewer_presence_ticks` (Twitch-User-ID über
-`twitch_session_chatters.chatter_id` derselben Session), `twitch_chat_messages`,
+(Tag nach Europe/Berlin) aus den Rohdaten neu. Markierte Rohdatenänderungen
+aktualisieren auch unveränderte gedeckelte Werte, damit der Consumer neue
+Rohaktivität hinter seinem Cursor erkennt; Logik und Regeln in `rust/crates/tb-analytics/src/community_points.rs`.
+Quellen: `twitch_viewer_presence_ticks` (bei Erfassung gespeicherte
+`viewer_twitch_user_id`), `twitch_chat_messages`,
 `twitch_raid_history`, `twitch_ban_events`, `twitch_chatter_global_ban`,
 `twitch_chatter_rollup`, `twitch_streamers_partner_state`.
 `updated_at` ist je Tabelle streng monoton und eindeutig (Lese-Cursor).
@@ -306,6 +307,7 @@ selbst liegt in der zentralen DB (Deadlock-Bots, Paket D).
 | `clip_url` | kanonisch `https://clips.twitch.tv/<clip_id>` |
 | `broadcaster_twitch_id`, `broadcaster_login` | Partnerkanal |
 | `submitted_by_twitch_id` | Twitch-ID des Chatakteurs oder der authentifizierten Dashboard-Session |
+| `submitted_at` | ursprünglicher DB-Claimzeitpunkt, bei Retry unverändert; unbelegter Altbestand `NULL` |
 | `via` | `chat` oder `dashboard` |
 | `status` | `pending`, `accepted`, `duplicate`, `rejected`, `failed` |
 | `broker_submission_id`, `reason` | Antwort des Brokers |

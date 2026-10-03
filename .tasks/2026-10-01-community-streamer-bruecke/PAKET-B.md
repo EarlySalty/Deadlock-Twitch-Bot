@@ -11,7 +11,7 @@ datum: 2026-10-01
   - `twitch_community_points_discoveries` je (`twitch_user_id`, `channel_twitch_user_id`): erstes Auftauchen, `bonus_awarded` endgültig
   - Cursor-Indizes `(updated_at, Schlüssel)` UNIQUE
 - Regeln und Aggregation: `rust/crates/tb-analytics/src/community_points.rs` (Tests in `community_points_tests.rs`). Alle Werte aus PLAN als Konstanten (5 min je Punkt, Deckel 72/144, Chat 30, 10 Zeichen, 60 s Cooldown, Duplikat, Entdecker 10 Punkte, max 3/Tag). Reine Funktionen für Tagesgrenze Berlin, Ausschlüsse, Deckel, Chat-Regeln, Entdecker-Auswahl und die komplette Tagesrechnung (`compute_day`).
-- Taktung: tb-bot-Task `community_points_aggregation` (`rust/bin/tb-bot/src/community_points_wiring.rs`), alle 300 s. Rechnet heute neu, den Vortag zusätzlich beim ersten Lauf nach dem Start und in der ersten Stunde nach Berliner Mitternacht. Schreibt nur geänderte Zeilen; Zeilen eines Tages, die nicht mehr vorkommen, werden genullt.
+- Taktung: tb-bot-Task `community_points_aggregation` (`rust/bin/tb-bot/src/community_points_wiring.rs`), alle 300 s. Rechnet heute neu, den Vortag zusätzlich beim ersten Lauf nach dem Start und in der ersten Stunde nach Berliner Mitternacht. Markierte alte Tage werden bei Rohkorrekturen zusätzlich neu berechnet. Rohänderungen stempeln auch unveränderte gedeckelte Werte neu; Zeilen eines Tages, die nicht mehr vorkommen, werden genullt.
 - Endpunkte (`rust/crates/tb-internal-api/src/handlers/community_points.rs`, Router in `lib.rs`): `GET /internal/twitch/v1/community-points/viewers` und `/streamers`, JSON exakt nach PLAN, Auth/Loopback wie `/streamer-invites`, `limit` 1..5000 (Standard 1000), `updated_since` exklusiv.
 - Doku: `docs/DATABASE.md` (Abschnitt Community-Punkte), `docs/API.md` (Interne Twitch-API).
 

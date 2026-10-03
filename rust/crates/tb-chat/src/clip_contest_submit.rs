@@ -290,7 +290,10 @@ pub struct BrokerClipRequest {
 
 enum ClaimOutcome {
     Finished(SubmitOutcome),
-    Forward(Option<DateTime<Utc>>),
+    Forward {
+        submitted_by: Option<String>,
+        submitted_at: Option<DateTime<Utc>>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -516,7 +519,7 @@ impl ClipContestSubmitter {
             return Ok(SubmitOutcome::ForeignClip);
         }
 
-        let submitted_at = match self
+        let (submitted_by, submitted_at) = match self
             .claim(
                 request,
                 &clip_id,
@@ -527,7 +530,10 @@ impl ClipContestSubmitter {
             .await?
         {
             ClaimOutcome::Finished(outcome) => return Ok(outcome),
-            ClaimOutcome::Forward(submitted_at) => submitted_at,
+            ClaimOutcome::Forward {
+                submitted_by,
+                submitted_at,
+            } => (submitted_by, submitted_at),
         };
 
         let broker_request = BrokerClipRequest {
@@ -535,8 +541,7 @@ impl ClipContestSubmitter {
             clip_url: clip_url.clone(),
             streamer_twitch_user_id: broadcaster_id.to_string(),
             streamer_login,
-            submitted_by_twitch_user_id: request
-                .submitted_by
+            submitted_by_twitch_user_id: submitted_by
                 .as_deref()
                 .map(str::trim)
                 .filter(|id| valid_twitch_id(id))
@@ -769,7 +774,7 @@ impl ClipContestSubmitter {
         if limit_erreicht(Self::count_today(&mut *tx, broadcaster_id, now).await?) {
             return Ok(ClaimOutcome::Finished(SubmitOutcome::RateLimited));
         }
-        let submitted_at: Option<DateTime<Utc>> = sqlx::query_scalar(
+        let (submitted_by, submitted_at): (Option<String>, Option<DateTime<Utc>>) = sqlx::query_as(
             "INSERT INTO twitch_clip_contest_forwards
                  (clip_id, clip_url, broadcaster_twitch_id, broadcaster_login,
                   submitted_by_twitch_id, via, status, submitted_at)
@@ -777,14 +782,13 @@ impl ClipContestSubmitter {
              ON CONFLICT (clip_id) DO UPDATE SET
                  clip_url = EXCLUDED.clip_url,
                  broadcaster_login = EXCLUDED.broadcaster_login,
-                 submitted_by_twitch_id = EXCLUDED.submitted_by_twitch_id,
                  via = EXCLUDED.via,
                  status = 'pending',
                  broker_submission_id = NULL,
                  reason = NULL,
                  created_at = clock_timestamp(),
                  updated_at = clock_timestamp()
-             RETURNING submitted_at",
+             RETURNING submitted_by_twitch_id, submitted_at",
         )
         .bind(clip_id)
         .bind(clip_url)
@@ -800,7 +804,10 @@ impl ClipContestSubmitter {
         .fetch_one(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(ClaimOutcome::Forward(submitted_at))
+        Ok(ClaimOutcome::Forward {
+            submitted_by,
+            submitted_at,
+        })
     }
 }
 

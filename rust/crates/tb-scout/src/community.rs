@@ -16,8 +16,8 @@
 //! - `not_found` vergibt der Endpunkt, wenn Helix den Login nicht kennt.
 //!
 //! Für Paket C (150 Punkte, wenn ein vorgeschlagener Kanal Partner wird)
-//! liefert [`liste_ergebnisse`] je Community-Kandidat den ersten
-//! Vorschlagenden und den Partnerstand, mit Cursor `updated_since`.
+//! liefert [`liste_ergebnisse`] gültige individuelle Vorschlagszuordnungen
+//! und den Partnerstand, mit Cursor `updated_since`.
 
 use chrono::{DateTime, NaiveDateTime, SecondsFormat, Utc};
 use serde::Serialize;
@@ -235,9 +235,10 @@ pub(crate) async fn naechster_stempel(
 ) -> Result<DateTime<Utc>, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT GREATEST(clock_timestamp(),
-                         COALESCE(MAX(community_updated_at), '-infinity'::timestamptz)
-                             + INTERVAL '1 microsecond')
-           FROM twitch_scout_candidates WHERE source = 'community'",
+                COALESCE((SELECT MAX(community_updated_at) FROM twitch_scout_candidates
+                           WHERE source='community'), '-infinity'::timestamptz) + INTERVAL '1 microsecond',
+                COALESCE((SELECT MAX(outcome_updated_at) FROM twitch_scout_community_suggestions),
+                         '-infinity'::timestamptz) + INTERVAL '1 microsecond')",
     )
     .fetch_one(&mut **tx)
     .await
@@ -500,9 +501,12 @@ pub async fn vorschlag_einreichen(
 pub struct VorschlagErgebnis {
     pub twitch_user_id: String,
     pub twitch_login: String,
-    /// Erster Vorschlagender (bekommt bei Partnerschaft die Punkte).
+    /// Person dieser gültigen individuellen Vorschlagszuordnung.
     pub suggested_by_discord_id: String,
     pub suggested_at: Option<String>,
+    pub submitted_at: Option<String>,
+    pub privacy_epoch: Option<i64>,
+    pub is_first_eligible: bool,
     pub suggestion_count: i32,
     /// Status in der Scout-Freigabe (`vorgeschlagen`, `approved`, …).
     pub candidate_status: String,
@@ -572,60 +576,122 @@ pub async fn aktualisiere_partnerstand(pool: &PgPool) -> Result<u64, sqlx::Error
     Ok(geaendert)
 }
 
-type ErgebnisZeile = (
-    String,
-    Option<String>,
-    Option<String>,
-    Option<DateTime<Utc>>,
-    i32,
-    String,
-    Option<DateTime<Utc>>,
-    DateTime<Utc>,
-);
+#[derive(sqlx::FromRow)]
+struct ErgebnisQuelle {
+    id: i64,
+    idempotency_key: String,
+    twitch_user_id: String,
+    streamer_login: String,
+    suggested_by_discord_id: String,
+    created_at: DateTime<Utc>,
+    submitted_at: Option<DateTime<Utc>>,
+    privacy_epoch: Option<i64>,
+    suggestion_count: i32,
+    status: String,
+    partner_active_since: Option<DateTime<Utc>>,
+    community_updated_at: DateTime<Utc>,
+    outcome_updated_at: Option<DateTime<Utc>>,
+}
 
-/// Eine Seite Community-Kandidaten ab Cursor (exklusiv), sortiert nach
-/// `community_updated_at`. Gleicht vorher den Partnerstand ab.
+/// Gültige individuelle Zuordnungen mit exklusivem, eindeutigem Cursor.
+/// Die Erasure des Erstautors berührt keine fremde Vorschlagszuordnung.
 pub async fn liste_ergebnisse(
     pool: &PgPool,
     since: Option<DateTime<Utc>>,
     limit: i64,
 ) -> Result<ErgebnisSeite, sqlx::Error> {
     aktualisiere_partnerstand(pool).await?;
-    let zeilen: Vec<ErgebnisZeile> = sqlx::query_as(
-        "SELECT streamer_login, twitch_user_id, suggested_by_discord_id, suggested_at,
-                suggestion_count, status, partner_active_since, community_updated_at
-           FROM twitch_scout_candidates
-          WHERE source = 'community'
-            AND community_updated_at IS NOT NULL
-            AND suggested_by_discord_id IS NOT NULL
-            AND community_updated_at > COALESCE($1, '-infinity'::timestamptz)
-          ORDER BY community_updated_at, streamer_login
-          LIMIT $2",
+    let mut tx = pool.begin().await?;
+    lock(&mut tx).await?;
+    let quellen: Vec<ErgebnisQuelle> = sqlx::query_as(
+        "SELECT s.id, s.idempotency_key, s.twitch_user_id, c.streamer_login,
+                s.suggested_by_discord_id, s.created_at, s.submitted_at, s.privacy_epoch,
+                c.suggestion_count, c.status, c.partner_active_since, c.community_updated_at,
+                s.outcome_updated_at
+           FROM twitch_scout_community_suggestions s
+           JOIN twitch_scout_candidates c ON c.twitch_user_id=s.twitch_user_id
+          WHERE c.source='community' AND c.community_updated_at IS NOT NULL
+            AND s.result_status IN ('created','already_known')
+          ORDER BY c.community_updated_at, COALESCE(s.submitted_at,s.created_at), s.id",
     )
-    .bind(since)
-    .bind(limit + 1)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
-    let has_more = zeilen.len() as i64 > limit;
-    let mut rows = Vec::with_capacity(zeilen.len());
-    let mut letzter = None;
-    for z in zeilen.into_iter().take(limit as usize) {
-        letzter = Some(z.7);
+    let mut paare = std::collections::HashSet::new();
+    let mut gueltige = Vec::new();
+    let mut erste_kanaele = std::collections::HashSet::new();
+    for mut quelle in quellen {
+        match crate::community_privacy::require_submission(
+            &mut tx,
+            &quelle.suggested_by_discord_id,
+            &quelle.idempotency_key,
+            quelle.submitted_at,
+            quelle.privacy_epoch,
+        )
+        .await
+        {
+            Ok(()) => {}
+            Err(VorschlagFehler::PrivacyGesperrt) => continue,
+            Err(VorschlagFehler::Db(error)) => return Err(error),
+            Err(error) => return Err(sqlx::Error::Protocol(format!("Outcomeprüfung: {error:?}"))),
+        }
+        if !paare.insert((
+            quelle.twitch_user_id.clone(),
+            quelle.suggested_by_discord_id.clone(),
+        )) {
+            continue;
+        }
+        if quelle
+            .outcome_updated_at
+            .is_none_or(|old| old < quelle.community_updated_at)
+        {
+            let stempel = naechster_stempel(&mut tx).await?;
+            sqlx::query(
+                "UPDATE twitch_scout_community_suggestions SET outcome_updated_at=$2 WHERE id=$1",
+            )
+            .bind(quelle.id)
+            .bind(stempel)
+            .execute(&mut *tx)
+            .await?;
+            quelle.outcome_updated_at = Some(stempel);
+        }
+        let is_first_eligible = erste_kanaele.insert(quelle.twitch_user_id.clone());
+        gueltige.push((quelle, is_first_eligible));
+    }
+    gueltige.sort_by_key(|(row, _)| row.outcome_updated_at);
+    let mut rows = Vec::new();
+    let mut letzter = since;
+    let mut has_more = false;
+    for (z, is_first_eligible) in gueltige {
+        let stempel = z
+            .outcome_updated_at
+            .expect("Gültige Zuordnung wurde gestempelt");
+        if since.is_some_and(|since| stempel <= since) {
+            continue;
+        }
+        if rows.len() >= limit as usize {
+            has_more = true;
+            break;
+        }
+        letzter = Some(stempel);
         rows.push(VorschlagErgebnis {
-            twitch_user_id: z.1.unwrap_or_default(),
-            twitch_login: z.0,
-            suggested_by_discord_id: z.2.unwrap_or_default(),
-            suggested_at: z.3.map(format_cursor),
-            suggestion_count: z.4,
-            candidate_status: z.5,
-            is_partner_active: z.6.is_some(),
-            partner_since: z.6.map(format_cursor),
-            updated_at: format_cursor(z.7),
+            twitch_user_id: z.twitch_user_id,
+            twitch_login: z.streamer_login,
+            suggested_by_discord_id: z.suggested_by_discord_id,
+            suggested_at: Some(format_cursor(z.submitted_at.unwrap_or(z.created_at))),
+            submitted_at: z.submitted_at.map(format_cursor),
+            privacy_epoch: z.privacy_epoch,
+            is_first_eligible,
+            suggestion_count: z.suggestion_count,
+            candidate_status: z.status,
+            is_partner_active: z.partner_active_since.is_some(),
+            partner_since: z.partner_active_since.map(format_cursor),
+            updated_at: format_cursor(stempel),
         });
     }
+    tx.commit().await?;
     Ok(ErgebnisSeite {
         rows,
-        next_updated_since: letzter.or(since).map(format_cursor),
+        next_updated_since: letzter.map(format_cursor),
         has_more,
     })
 }

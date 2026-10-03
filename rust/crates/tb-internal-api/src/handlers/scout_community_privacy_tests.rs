@@ -275,3 +275,155 @@ async fn schreiben_vor_erasure_wird_vollständig_gelöscht() {
 async fn erasure_vor_schreiben_sperrt_den_neuen_auftrag() {
     race(true).await;
 }
+
+#[tokio::test]
+async fn erstautor_erasure_erhaelt_fremde_outcomes_mit_eigener_consent_epoche() {
+    use tb_scout::community::liste_ergebnisse;
+    let db = super::tests::migrated_pool("tb_scout_individual_outcomes").await;
+    let pool = &db.pool;
+    let original = entry(A, "first-private", "1001", "gemeinsam");
+    vorschlag_einreichen(pool, &original).await.unwrap();
+    apply_operation(pool, B, uuid::Uuid::new_v4(), 1, Some(at()))
+        .await
+        .unwrap();
+    let mut other = entry(B, "other-private", "1001", "gemeinsam");
+    other.privacy_epoch = Some(1);
+    vorschlag_einreichen(pool, &other).await.unwrap();
+    // Ein weiterer Key derselben Person erzeugt keine zweite Zuordnung.
+    let mut duplicate = other.clone();
+    duplicate.idempotency_key = "other-second-key".into();
+    vorschlag_einreichen(pool, &duplicate).await.unwrap();
+    let first = liste_ergebnisse(pool, None, 1).await.unwrap();
+    assert_eq!(first.rows.len(), 1);
+    assert_eq!(first.rows[0].suggested_by_discord_id, A);
+    assert!(first.rows[0].is_first_eligible);
+    assert!(first.has_more);
+    let cursor = first.rows[0]
+        .updated_at
+        .parse::<chrono::DateTime<chrono::Utc>>()
+        .unwrap();
+    let second = liste_ergebnisse(pool, Some(cursor), 1).await.unwrap();
+    assert_eq!(second.rows.len(), 1);
+    assert_eq!(second.rows[0].suggested_by_discord_id, B);
+    assert!(!second.rows[0].is_first_eligible);
+    assert_eq!(second.rows[0].privacy_epoch, Some(1));
+    assert_eq!(
+        second.rows[0].submitted_at.as_deref(),
+        Some("2026-10-01T10:00:00Z")
+    );
+    assert_ne!(first.rows[0].updated_at, second.rows[0].updated_at);
+    assert!(!second.has_more);
+    let cursor = second.rows[0]
+        .updated_at
+        .parse::<chrono::DateTime<chrono::Utc>>()
+        .unwrap();
+    assert!(liste_ergebnisse(pool, Some(cursor), 1)
+        .await
+        .unwrap()
+        .rows
+        .is_empty());
+
+    apply_operation(pool, A, uuid::Uuid::new_v4(), 1, None)
+        .await
+        .unwrap();
+    let (author, reason, when): (Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as("SELECT suggested_by_discord_id,suggestion_reason,suggested_at FROM twitch_scout_candidates WHERE twitch_user_id='1001'")
+        .fetch_one(pool).await.unwrap();
+    assert_eq!((author, reason, when), (None, None, None));
+    sqlx::query("INSERT INTO twitch_partners (twitch_user_id,twitch_login,status,partnered_at) VALUES ('1001','gemeinsam','active','2026-10-02 10:00:00+00')")
+        .execute(pool).await.unwrap();
+    // Die Erasure stempelt die fortbestehende fremde Zuordnung hinter den Cursor.
+    let remaining = liste_ergebnisse(pool, Some(cursor), 1).await.unwrap();
+    assert_eq!(remaining.rows.len(), 1);
+    assert_eq!(remaining.rows[0].suggested_by_discord_id, B);
+    assert!(remaining.rows[0].is_first_eligible);
+    assert_eq!(remaining.rows[0].privacy_epoch, Some(1));
+    assert!(remaining.rows[0].is_partner_active);
+    assert_eq!(
+        remaining.rows[0].partner_since.as_deref(),
+        Some("2026-10-02T10:00:00Z")
+    );
+    assert_eq!(remaining.rows[0].suggested_at, second.rows[0].suggested_at);
+    assert_eq!(export(pool, A).await.unwrap().suggestions.len(), 0);
+    assert_eq!(export(pool, B).await.unwrap().suggestions.len(), 2);
+
+    // Eine neue Epoche macht frühere fremde Herkunft ungültig.
+    let floor = at() + chrono::Duration::minutes(1);
+    apply_operation(pool, B, uuid::Uuid::new_v4(), 2, Some(floor))
+        .await
+        .unwrap();
+    assert!(liste_ergebnisse(pool, None, 10)
+        .await
+        .unwrap()
+        .rows
+        .is_empty());
+    let mut fresh = entry(B, "other-new-consent", "1001", "gemeinsam");
+    fresh.privacy_epoch = Some(2);
+    fresh.submitted_at = Some(floor);
+    vorschlag_einreichen(pool, &fresh).await.unwrap();
+    let page = liste_ergebnisse(pool, None, 10).await.unwrap();
+    assert_eq!(page.rows.len(), 1);
+    assert_eq!(page.rows[0].suggested_by_discord_id, B);
+    assert_eq!(page.rows[0].privacy_epoch, Some(2));
+    assert_eq!(
+        page.rows[0].submitted_at.as_deref(),
+        Some("2026-10-01T10:01:00Z")
+    );
+    let author: Option<String> = sqlx::query_scalar(
+        "SELECT suggested_by_discord_id FROM twitch_scout_candidates WHERE twitch_user_id='1001'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(author, None);
+    apply_operation(pool, B, uuid::Uuid::new_v4(), 3, None)
+        .await
+        .unwrap();
+    assert!(liste_ergebnisse(pool, None, 10)
+        .await
+        .unwrap()
+        .rows
+        .is_empty());
+}
+
+#[tokio::test]
+async fn consentwechsel_erhaelt_fremde_berechtigung_hinter_cursor_ohne_ersatzautor() {
+    use tb_scout::community::liste_ergebnisse;
+    let db = super::tests::migrated_pool("tb_scout_consent_outcome_cursor").await;
+    let pool = &db.pool;
+    let mut later = entry(A, "created-first-later-origin", "1001", "chronologie");
+    later.submitted_at = Some(at() + chrono::Duration::seconds(1));
+    vorschlag_einreichen(pool, &later).await.unwrap();
+    let earlier = entry(B, "created-second-earlier-origin", "1001", "chronologie");
+    vorschlag_einreichen(pool, &earlier).await.unwrap();
+    // Die ursprüngliche Zeit entscheidet unabhängig von Insert- oder Seitenfolge.
+    let first = liste_ergebnisse(pool, None, 1).await.unwrap();
+    assert_eq!(first.rows[0].suggested_by_discord_id, B);
+    assert!(first.rows[0].is_first_eligible);
+    let cursor = first.rows[0]
+        .updated_at
+        .parse::<chrono::DateTime<chrono::Utc>>()
+        .unwrap();
+    let second = liste_ergebnisse(pool, Some(cursor), 1).await.unwrap();
+    assert_eq!(second.rows[0].suggested_by_discord_id, A);
+    assert!(!second.rows[0].is_first_eligible);
+    let cursor = second.rows[0]
+        .updated_at
+        .parse::<chrono::DateTime<chrono::Utc>>()
+        .unwrap();
+    apply_operation(
+        pool,
+        B,
+        uuid::Uuid::new_v4(),
+        1,
+        Some(at() + chrono::Duration::minutes(1)),
+    )
+    .await
+    .unwrap();
+    let changed = liste_ergebnisse(pool, Some(cursor), 1).await.unwrap();
+    assert_eq!(changed.rows.len(), 1);
+    assert_eq!(changed.rows[0].suggested_by_discord_id, A);
+    assert!(changed.rows[0].is_first_eligible);
+    assert_eq!(changed.rows[0].submitted_at, second.rows[0].submitted_at);
+    assert_eq!(changed.rows[0].privacy_epoch, Some(0));
+    assert_ne!(changed.rows[0].updated_at, second.rows[0].updated_at);
+}

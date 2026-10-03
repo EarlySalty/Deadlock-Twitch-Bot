@@ -340,6 +340,9 @@ const EN: Record<string, string> = {
   'Für Clip-Contest einreichen': 'Submit to clip contest',
   'Clip ist im Wochen-Contest, die Community stimmt im Discord ab.':
     'Clip is in the weekly contest, the community votes on Discord.',
+  'Bitte melde dich mit dem Twitch-Konto dieses Kanals an.':
+    'Please sign in with the Twitch account for this channel.',
+  'Die Einreichung läuft schon.': 'The submission is already in progress.',
   'Der Clip wurde bereits eingereicht und wird nicht erneut gesendet.':
     'This clip has already been submitted and will not be sent again.',
   'Clips einreichen geht nur in Kanälen von Partnern.':

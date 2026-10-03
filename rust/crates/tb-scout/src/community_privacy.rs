@@ -124,6 +124,20 @@ pub async fn apply_operation(
             FROM affected WHERE c.streamer_login=affected.streamer_login")
             .bind(discord_id).bind(&channels).bind(stamp).execute(&mut *tx).await?;
     }
+    if activity_since.is_some() {
+        // Eine neue Epoche kann bisherige Paare ausschließen und andere erstmals
+        // berechtigen. Auch diese Änderung muss hinter dem Outcome-Cursor stehen.
+        let stamp = naechster_stempel(&mut tx).await?;
+        sqlx::query("WITH affected AS (
+              SELECT c.streamer_login, ROW_NUMBER() OVER(ORDER BY c.streamer_login) AS n
+                FROM twitch_scout_candidates c
+               WHERE c.source='community' AND EXISTS(
+                  SELECT 1 FROM twitch_scout_community_suggestions s
+                   WHERE s.twitch_user_id=c.twitch_user_id AND s.suggested_by_discord_id=$1))
+            UPDATE twitch_scout_candidates c SET community_updated_at=$2 + affected.n * INTERVAL '1 microsecond'
+              FROM affected WHERE c.streamer_login=affected.streamer_login")
+            .bind(discord_id).bind(stamp).execute(&mut *tx).await?;
+    }
     sqlx::query("INSERT INTO twitch_scout_community_privacy(identity_hash,epoch,operation_id,activity_since) VALUES ($1,$2,$3,$4)
         ON CONFLICT(identity_hash) DO UPDATE SET epoch=EXCLUDED.epoch,operation_id=EXCLUDED.operation_id,activity_since=EXCLUDED.activity_since")
         .bind(identity).bind(epoch).bind(operation_id).bind(activity_since).execute(&mut *tx).await?;

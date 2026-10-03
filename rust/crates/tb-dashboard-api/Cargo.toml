@@ -59,8 +59,6 @@ tb-raid       = { workspace = true }
 tb-scout      = { workspace = true }
 tb-social-media = { workspace = true }
 tb-transport-twitch = { workspace = true }
-# Bestehende Discord-Integrationen des Dashboards.
-tb-transport-discord = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

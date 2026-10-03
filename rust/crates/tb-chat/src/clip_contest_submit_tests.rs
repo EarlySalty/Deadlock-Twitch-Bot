@@ -566,6 +566,7 @@ async fn broker_offline_dann_neuer_versuch_und_doppelsend_schutz() {
     *broker.answer.lock().unwrap() = accepted(5);
     let mut dashboard = request(url);
     dashboard.via = SubmitVia::Dashboard;
+    dashboard.submitted_by = Some("9898".into());
     assert!(matches!(
         submitter.submit(dashboard).await,
         SubmitOutcome::Accepted { .. }
@@ -579,6 +580,14 @@ async fn broker_offline_dann_neuer_versuch_und_doppelsend_schutz() {
     let payloads = broker.requests.lock().unwrap().clone();
     assert_eq!(payloads.len(), 2);
     assert_eq!(payloads[0].submitted_at, payloads[1].submitted_at);
+    assert_eq!(
+        payloads[0].submitted_by_twitch_user_id,
+        payloads[1].submitted_by_twitch_user_id
+    );
+    assert_eq!(
+        status_of(&pool, "ClipEins").await.unwrap().2.as_deref(),
+        Some("4242")
+    );
     assert_eq!(
         payloads[0].submitted_at.as_deref(),
         Some(
