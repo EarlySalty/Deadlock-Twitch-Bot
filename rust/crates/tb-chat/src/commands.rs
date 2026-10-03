@@ -3178,7 +3178,10 @@ mod tests {
         assert_eq!(api.message_count().await, 1);
         assert_eq!(
             api.sent.lock().await[0].1,
-            crate::clip_contest_submit::REPLY_BROKER_UNAVAILABLE
+            format!(
+                "@testuser {}",
+                crate::clip_contest_submit::REPLY_BROKER_UNAVAILABLE
+            )
         );
     }
 
