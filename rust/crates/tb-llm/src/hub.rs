@@ -293,9 +293,9 @@ pub async fn complete(use_case: &str, request: Request) -> Result<Response, LlmE
 }
 
 /// Wie [`complete`], liefert im Fehlerfall aber auch Anbieter und Modell des
-/// letzten Versuchs mit. Jeder fehlgeschlagene Versuch wird hier einmal mit
-/// `warn!` geloggt (inklusive Anbieter-Body); Aufrufer sollen nicht erneut
-/// warnen, sondern hoechstens auf `debug!` ergaenzen.
+/// letzten Versuchs mit. Gleiche Fehlerklassen teilen das zentrale Warnbudget;
+/// technische Details stehen auf `debug!`. Aufrufer ergänzen höchstens eine
+/// Debug-Meldung, damit derselbe Fehler nicht doppelt gewarnt wird.
 pub async fn complete_detailed(use_case: &str, request: Request) -> Result<Response, LlmFailure> {
     let chain: Vec<LlmEndpoint> = match &request.endpoint {
         Some(endpoint) => vec![endpoint.clone()],
