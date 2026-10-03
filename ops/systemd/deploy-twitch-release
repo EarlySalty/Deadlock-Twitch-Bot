@@ -35,6 +35,11 @@ if [[ $# -eq 3 && "$1" == --brain-apply && "$2" == --expected-revision && "$3" =
   exec /opt/deadlock/twitch/current/rust/target/release/tb-config-check --config /var/lib/deadlock-twitch/config/bot.toml --brain-apply --expected-revision "$3"
 fi
 
+brain_editor_only=0
+if [[ ${1:-} == --brain-editor-release ]]; then
+  brain_editor_only=1
+  shift
+fi
 sha="${1:-}"
 if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
   usage
@@ -159,6 +164,10 @@ if [[ ${#restart_targets[@]} -eq 0 ]]; then
   exit 1
 fi
 
+if [[ $brain_editor_only -eq 1 && $restart_explicit -eq 1 ]]; then
+  echo "Der Editorrelease startet keine Dienste neu." >&2
+  exit 1
+fi
 src="${src:-/home/nathanael/repos/twitch-release-$sha}"
 dest="/opt/deadlock/twitch/builds/$sha"
 
@@ -189,6 +198,9 @@ fi
 if [[ -f "$src/rust/bin/tb-dashboard/src/bin/clip_context_learn.rs" ]]; then
   required_artifacts+=(rust/target/release/clip_context_learn)
 fi
+if [[ $brain_editor_only -eq 1 ]]; then
+  required_artifacts=(rust/target/release/tb-config-check)
+fi
 for artifact in "${required_artifacts[@]}"; do
   if [[ ! -e "$src/$artifact" ]]; then
     echo "Release-Artefakt fehlt vor dem Verschieben: $artifact" >&2
@@ -204,6 +216,12 @@ fi
 mv -- "$src" "$dest"
 chown -R root:root "$dest"
 chmod -R go-w "$dest"
+
+if [[ $brain_editor_only -eq 1 ]]; then
+  /usr/local/sbin/install-twitch-release "$dest" "$sha" --brain-editor-only
+  printf 'Twitch-Konfigeditor installiert: %s\n' "$sha"
+  exit 0
+fi
 
 current=/opt/deadlock/twitch/current
 release_root=/opt/deadlock/twitch/releases

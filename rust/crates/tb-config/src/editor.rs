@@ -1,8 +1,8 @@
 use crate::{
-    dashboard_options::BrainClientMode,
-    file::{ErrorKind, FileError, Schema, MAX_CONFIG_BYTES},
-    global::Database,
     BotConfigSnapshot,
+    dashboard_options::BrainClientMode,
+    file::{ErrorKind, FileError, MAX_CONFIG_BYTES, Schema},
+    global::Database,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
@@ -39,6 +39,12 @@ fn supplied<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     T::deserialize(deserializer).map(Some)
 }
 
+#[derive(Clone, Deserialize)]
+pub enum TwitchPublicScope {
+    #[serde(rename = "bot.public")]
+    BotPublic,
+}
+
 #[derive(Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BrainClientPatch {
@@ -46,6 +52,8 @@ pub struct BrainClientPatch {
     pub mode: Option<BrainClientMode>,
     #[serde(default, deserialize_with = "supplied")]
     pub endpoint: Option<String>,
+    #[serde(default, deserialize_with = "supplied")]
+    pub public_scopes: Option<[TwitchPublicScope; 1]>,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -235,6 +243,13 @@ fn save_brain_at(
     {
         return Err(FileError::invalid("brain_patch").into());
     }
+    if patch
+        .dashboard_brain_client
+        .as_ref()
+        .is_some_and(|client| client.public_scopes.is_some())
+    {
+        return Err(FileError::invalid("dashboard.options.brain_client.public_scopes").into());
+    }
     for (client, field) in [
         (&patch.bot_brain_client, "bot.brain_client.endpoint"),
         (
@@ -243,7 +258,8 @@ fn save_brain_at(
         ),
     ] {
         if let Some(client) = client {
-            if client.mode.is_none() && client.endpoint.is_none() {
+            if client.mode.is_none() && client.endpoint.is_none() && client.public_scopes.is_none()
+            {
                 return Err(FileError::invalid("brain_patch").into());
             }
             if let Some(endpoint) = &client.endpoint {
@@ -253,6 +269,20 @@ fn save_brain_at(
     }
     let saved = save_with(source, expected_revision, |current, document| {
         inspect_saved(current)?;
+        if patch
+            .bot_brain_client
+            .as_ref()
+            .is_some_and(|client| client.public_scopes.is_some())
+        {
+            let mut scopes = toml_edit::Array::new();
+            scopes.push("bot.public");
+            replace_value(
+                document,
+                &["bot", "brain_client"],
+                "public_scopes",
+                toml_edit::value(scopes),
+            )?;
+        }
         for (client, path) in [
             (&patch.bot_brain_client, &["bot", "brain_client"][..]),
             (
@@ -368,7 +398,7 @@ fn open_lock(directory: &Path, metadata: &Metadata) -> Result<File, EditError> {
                 Ok(lock) => {
                     #[cfg(unix)]
                     {
-                        use std::os::unix::fs::{fchown, MetadataExt, PermissionsExt};
+                        use std::os::unix::fs::{MetadataExt, PermissionsExt, fchown};
                         fchown(&lock, Some(metadata.uid()), Some(metadata.gid()))
                             .map_err(|_| EditError::Io)?;
                         let group = if metadata.mode() & 0o040 != 0 {
@@ -476,7 +506,7 @@ fn save_with(
         file.write_all(text.as_bytes()).map_err(|_| EditError::Io)?;
         #[cfg(unix)]
         {
-            use std::os::unix::fs::{fchown, MetadataExt};
+            use std::os::unix::fs::{MetadataExt, fchown};
             fchown(&file, Some(metadata.uid()), Some(metadata.gid())).map_err(|_| EditError::Io)?;
         }
         file.set_permissions(metadata.permissions())
@@ -622,9 +652,11 @@ pool_max=17
         );
         assert!(saved.snapshot.settings().bot.brain_chat.enabled);
         assert_eq!(unselected(&original.snapshot), unselected(&saved.snapshot));
-        assert!(fs::read_to_string(fixture.path())
-            .unwrap()
-            .contains("# Ausgangsmodus"));
+        assert!(
+            fs::read_to_string(fixture.path())
+                .unwrap()
+                .contains("# Ausgangsmodus")
+        );
         assert_eq!(
             original.snapshot.settings().bot.brain_client.mode,
             BrainClientMode::Legacy
@@ -727,6 +759,88 @@ pool_max=17
             Err(EditError::Invalid(_))
         ));
         assert_eq!(fs::read_to_string(fixture.path()).unwrap(), text);
+    }
+
+    #[test]
+    fn bestaetigter_bot_scope_erlaubt_cutover_und_erhaelt_fremde_felder() {
+        for text in [
+            CONFIG.replacen("public_scopes=[\"bot.public\"]", "public_scopes=[]", 1),
+            CONFIG.replacen("public_scopes=[\"bot.public\"]\n", "", 1),
+        ] {
+            let fixture = Fixture::new(&text);
+            let before = load_saved(&fixture.path()).unwrap();
+            let patch: BrainPatch = serde_json::from_str(
+                r#"{"bot_brain_client":{"mode":"typed","public_scopes":["bot.public"]}}"#,
+            )
+            .unwrap();
+            let stale = format!("{text}\n# Fremde Änderung\n");
+            fs::write(fixture.path(), &stale).unwrap();
+            assert!(matches!(
+                save_brain_at(&fixture.path(), &before.revision, &patch),
+                Err(EditError::Conflict)
+            ));
+            assert_eq!(fs::read_to_string(fixture.path()).unwrap(), stale);
+            let lock = OpenOptions::new()
+                .write(true)
+                .open(fixture.0.join(".bot.toml.lock"))
+                .unwrap();
+            lock.try_lock().unwrap();
+            let revision = load_saved(&fixture.path()).unwrap().revision;
+            assert!(matches!(
+                save_brain_at(&fixture.path(), &revision, &patch),
+                Err(EditError::Busy)
+            ));
+            drop(lock);
+            save_brain_at(&fixture.path(), &revision, &patch).unwrap();
+            let saved = load_saved(&fixture.path()).unwrap();
+            let mut expected = serde_json::to_value(before.snapshot.settings()).unwrap();
+            expected["bot"]["brain_client"]["mode"] = "typed".into();
+            expected["bot"]["brain_client"]["public_scopes"] = serde_json::json!(["bot.public"]);
+            assert_eq!(
+                serde_json::to_value(saved.snapshot.settings()).unwrap(),
+                expected
+            );
+            assert!(
+                fs::read_to_string(fixture.path())
+                    .unwrap()
+                    .contains("# Fremde Änderung")
+            );
+        }
+    }
+
+    #[test]
+    fn scope_patch_bleibt_auf_einen_bestaetigten_bot_scope_begrenzt() {
+        let fixture = Fixture::new(CONFIG);
+        for scopes in [
+            "[]",
+            "null",
+            "[\"other\"]",
+            "[\"bot.private\"]",
+            "[\"bot.public\",\"bot.public\"]",
+            "[\"bot.public\",\"other\"]",
+        ] {
+            let input = format!(r#"{{"bot_brain_client":{{"public_scopes":{scopes}}}}}"#);
+            assert!(serde_json::from_str::<BrainPatch>(&input).is_err());
+        }
+        assert!(serde_json::from_str::<BrainPatch>(r#"{"bot_brain_client":{"public_scopes":["bot.public"],"public_scopes":["bot.public"]}}"#).is_err());
+        assert!(matches!(
+            fixture.apply(r#"{"dashboard_brain_client":{"public_scopes":["bot.public"]}}"#),
+            Err(EditError::Invalid(_))
+        ));
+        assert_eq!(fs::read_to_string(fixture.path()).unwrap(), CONFIG);
+        fixture
+            .apply(r#"{"bot_brain_client":{"public_scopes":["bot.public"]}}"#)
+            .unwrap();
+        assert_eq!(
+            load_saved(&fixture.path())
+                .unwrap()
+                .snapshot
+                .settings()
+                .bot
+                .brain_client
+                .public_scopes,
+            ["bot.public"]
+        );
     }
 
     #[test]
@@ -837,11 +951,13 @@ pool_max=17
         });
         assert!(matches!(result, Err(EditError::Conflict)));
         assert_eq!(fs::read_to_string(fixture.path()).unwrap(), changed);
-        assert!(!fs::read_dir(&fixture.0).unwrap().any(|entry| entry
-            .unwrap()
-            .path()
-            .extension()
-            .is_some_and(|ext| ext == "tmp")));
+        assert!(!fs::read_dir(&fixture.0).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "tmp")
+        }));
     }
 
     #[cfg(unix)]
