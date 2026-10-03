@@ -46,59 +46,9 @@ paths = [
 description = "Öffentlicher TrustBox-Kennwert im HTML-Attribut data-token, unverändert aus origin/main. Trustpilot liefert die Einbettung für den Webseiten-Body: https://help.trustpilot.com/s/article/Add-a-product-review-TrustBox-widget?language=en_US"
 targetRules = ["generic-api-key"]
 condition = "AND"
-paths = ['''^website/src/components/partner-clean/Trustpilot\.tsx
-description = "Potential Discord bot token assignment"
-regex = '''(?i)(discord|bot).{0,24}(token|secret|key).{0,8}[:=]\s*["']?(mfa\.[A-Za-z0-9_-]{20,}|[MN][A-Za-z0-9]{23}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27})'''
-tags = ["discord", "token", "deadlock-custom"]
-
-[[rules.allowlists]]
-regexes = ['''(?i)(example|sample|dummy|test|fake|placeholder|changeme)''']
-
-[[rules]]
-id = "deadlock-twitch-oauth-token"
-description = "Potential Twitch OAuth token assignment"
-regex = '''(?i)(twitch|irc).{0,20}(oauth|token|password).{0,8}[:=]\s*["']?oauth:[a-z0-9]{20,}'''
-tags = ["twitch", "oauth", "deadlock-custom"]
-
-[[rules.allowlists]]
-regexes = ['''(?i)(example|sample|dummy|test|fake|placeholder|changeme)''']
-
-[[rules]]
-id = "deadlock-steam-token"
-description = "Potential Steam refresh or machine auth token assignment"
-regex = '''(?i)(steam).{0,24}(refresh[_-]?token|machine[_-]?auth[_-]?token).{0,8}[:=]\s*["']?[A-Za-z0-9._-]{20,}'''
-tags = ["steam", "token", "deadlock-custom"]
-
-[[rules.allowlists]]
-regexes = ['''(?i)(example|sample|dummy|test|fake|placeholder|changeme)''']
-'']
+paths = ['''^website/src/components/partner-clean/Trustpilot\.tsx$''']
 regexTarget = "line"
-regexes = ['''^\s*data-token="[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}"\s*
-description = "Potential Discord bot token assignment"
-regex = '''(?i)(discord|bot).{0,24}(token|secret|key).{0,8}[:=]\s*["']?(mfa\.[A-Za-z0-9_-]{20,}|[MN][A-Za-z0-9]{23}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27})'''
-tags = ["discord", "token", "deadlock-custom"]
-
-[[rules.allowlists]]
-regexes = ['''(?i)(example|sample|dummy|test|fake|placeholder|changeme)''']
-
-[[rules]]
-id = "deadlock-twitch-oauth-token"
-description = "Potential Twitch OAuth token assignment"
-regex = '''(?i)(twitch|irc).{0,20}(oauth|token|password).{0,8}[:=]\s*["']?oauth:[a-z0-9]{20,}'''
-tags = ["twitch", "oauth", "deadlock-custom"]
-
-[[rules.allowlists]]
-regexes = ['''(?i)(example|sample|dummy|test|fake|placeholder|changeme)''']
-
-[[rules]]
-id = "deadlock-steam-token"
-description = "Potential Steam refresh or machine auth token assignment"
-regex = '''(?i)(steam).{0,24}(refresh[_-]?token|machine[_-]?auth[_-]?token).{0,8}[:=]\s*["']?[A-Za-z0-9._-]{20,}'''
-tags = ["steam", "token", "deadlock-custom"]
-
-[[rules.allowlists]]
-regexes = ['''(?i)(example|sample|dummy|test|fake|placeholder|changeme)''']
-'']
+regexes = ['''^\s*data-token="[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}"\s*$''']
 
 [[rules]]
 id = "deadlock-discord-bot-token"
