@@ -440,7 +440,8 @@ async fn mounted_routes_and_csrf_are_enforced() {
     let db = database().await;
     // Compose both router trees exactly like production: profile routes must
     // coexist with the existing website wildcard without startup conflicts.
-    let router = crate::build_public_router(db.pool.clone()).merge(crate::build_website_router());
+    let router = crate::build_public_router(db.pool.clone())
+        .merge(crate::build_website_router(db.pool.clone()));
     let response = router
         .clone()
         .oneshot(

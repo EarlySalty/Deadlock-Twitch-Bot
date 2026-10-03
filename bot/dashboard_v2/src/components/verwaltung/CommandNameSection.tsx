@@ -163,6 +163,7 @@ export function OtherCommandNames({ excluded }: { excluded: string[] }) {
           <div key={row.command} className="soft-elevate rounded-xl border border-border bg-background/60 p-4">
             <EditableCommandName command={row.command} />
             <p className="mt-2 text-xs leading-5 text-text-secondary">{row.summary.split(row.default_name).join(row.effective_name)}</p>
+            {row.command === 'discord' && <p className="mt-2 text-xs leading-5 text-primary">Wenn du diesen Namen änderst, hilft der Bot bei !dldc mit „Meinst du {row.effective_name}?“ weiter.</p>}
           </div>
         ))}
       </div>

@@ -104,10 +104,19 @@ fn knowledge_base() -> &'static KnowledgeBase {
     })
 }
 
-/// `!commands` schickt nur den Link — die Befehlsliste im Chat war eine
-/// unlesbare Textwand, die Website erklärt jeden Befehl richtig.
-fn commands_reply() -> String {
-    format!("Alle Befehle mit Erklärung findest du hier: {COMMANDS_URL}")
+/// Der Link öffnet die aktiven Befehle des aktuellen Kanals.
+fn commands_reply(broadcaster_id: &str) -> String {
+    let id: String = broadcaster_id
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() {
+                (byte as char).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect();
+    format!("Alle Befehle für diesen Kanal findest du hier: {COMMANDS_URL}?streamer_id={id}")
 }
 
 fn dashboard_reply() -> String {
@@ -502,6 +511,21 @@ impl CommandEngine {
         let Some(command_info) =
             crate::command_names::resolve_command(&invoked_command, &overrides)
         else {
+            if invoked_command == "!dldc" {
+                if let Some(entry) = crate::command_names::entry_by_key("discord") {
+                    let active = crate::command_names::effective_name(entry, &overrides);
+                    if active != "!dldc" {
+                        self.reply(
+                            event,
+                            &format!(
+                                "Meinst du {active}? So heißt der Community-Befehl hier im Kanal."
+                            ),
+                        )
+                        .await;
+                        return true;
+                    }
+                }
+            }
             return false;
         };
         let cmd = command_info.name;
@@ -812,7 +836,8 @@ impl CommandEngine {
     }
 
     async fn cmd_commands(&self, event: &ChatMessageEvent) {
-        self.reply(event, &commands_reply()).await;
+        self.reply(event, &commands_reply(&event.broadcaster_user_id))
+            .await;
     }
 
     async fn cmd_dashboard(&self, event: &ChatMessageEvent) {
@@ -2737,12 +2762,12 @@ mod tests {
 
     #[test]
     fn commands_reply_zeigt_link() {
-        assert!(commands_reply().contains("/streamer/commands"));
+        assert!(commands_reply("bc123").contains("/streamer/commands"));
     }
 
     #[test]
     fn commands_reply_listet_keine_befehle_auf() {
-        let reply = commands_reply();
+        let reply = commands_reply("bc123");
         assert!(
             reply.len() <= 480,
             "Twitch-Antwort zu lang: {}",
@@ -3075,6 +3100,45 @@ mod tests {
         let engine = make_engine_with_pool(pool, api);
 
         assert!(engine.handle(&make_event("!rank", false, false)).await);
+    }
+
+    #[tokio::test]
+    async fn umbenanntes_dldc_hilft_nur_im_eigenen_kanal() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        apply_ddl(&database.pool).await;
+        sqlx::query(r#"INSERT INTO streamer_plans (twitch_user_id, twitch_login, command_name_overrides) VALUES ('bc123','testchannel','{"discord":"!community"}')"#).execute(&database.pool).await.unwrap();
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(database.pool.clone(), api.clone());
+        assert!(engine.handle(&make_event("!dldc", false, false)).await);
+        assert!(api.sent.lock().await[0]
+            .1
+            .contains("Meinst du !community?"));
+        let mut foreign = make_event("!dldc", false, false);
+        foreign.broadcaster_user_id = "99".into();
+        assert!(
+            !engine
+                .handle(&ChatMessageEvent {
+                    message: ChatMessageBody {
+                        text: "!community".into(),
+                        fragments: vec![]
+                    },
+                    ..foreign.clone()
+                })
+                .await
+        );
+        assert!(engine.handle(&foreign).await);
+        assert!(!api
+            .sent
+            .lock()
+            .await
+            .last()
+            .unwrap()
+            .1
+            .contains("Meinst du !community?"));
+        assert_eq!(
+            commands_reply("42"),
+            format!("Alle Befehle für diesen Kanal findest du hier: {COMMANDS_URL}?streamer_id=42")
+        );
     }
 
     #[tokio::test]

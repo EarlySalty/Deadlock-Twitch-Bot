@@ -1931,7 +1931,7 @@ pub fn build_obs_ws_router(pool: PgPool, token: String) -> Router {
 /// - `GET /website` (+ `/{path}`) → 301 auf `/streamer(/path)` (Query erhalten).
 ///
 /// Öffentlich (kein Login). Nativ registriert (vor dem Strangler-Fallback).
-pub fn build_website_router() -> Router {
+pub fn build_website_router(pool: PgPool) -> Router {
     use handlers::website;
 
     Router::new()
@@ -1939,7 +1939,7 @@ pub fn build_website_router() -> Router {
         .route("/streamer/help", get(handlers::help_page::help_page))
         .route(
             "/streamer/commands",
-            get(handlers::help_page::commands_page),
+            get(handlers::help_page::commands_page).layer(Extension(pool)),
         )
         .route("/streamer/faq", get(handlers::help_page::faq_redirect))
         // The public router dispatches /streamer/{*path} to profiles or website assets.
@@ -2139,7 +2139,7 @@ pub fn build_router_with_analysis_writer(
         .merge(build_v2_spa_pages_router(pool.clone()))
         .merge(build_obs_ws_router(pool.clone(), token.clone()))
         .merge(build_platform_token_router(pool.clone(), token.clone()))
-        .merge(build_website_router())
+        .merge(build_website_router(pool.clone()))
         .merge(build_clip_contest_router(
             contest_writer,
             rate_limiter.clone(),
