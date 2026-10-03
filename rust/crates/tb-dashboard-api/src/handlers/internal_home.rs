@@ -114,6 +114,7 @@ mod pb_recap_tests {
             r#"CREATE TABLE twitch_stream_sessions (
                 id BIGINT PRIMARY KEY,
                 streamer_login TEXT NOT NULL,
+                twitch_user_id TEXT,
                 started_at TIMESTAMPTZ NOT NULL,
                 ended_at TIMESTAMPTZ,
                 peak_viewers INT,
@@ -662,7 +663,7 @@ pub async fn get_handler(
     let kpis = kpis_recent_block(&pool, &resolved_login, since).await;
     let ban = ban_events_block(&pool, &resolved_user_id, since).await;
     let raid_events = raid_events_block(&pool, &resolved_login, &resolved_user_id, since).await;
-    let last_stream = last_stream_summary(&pool, &resolved_login, &kpis.recent_streams).await;
+    let last_stream = last_stream_summary(&pool, &resolved_user_id, &kpis.recent_streams).await;
     let health_score = health_score_block(&pool, &resolved_login).await;
     let week_comparison = week_comparison_block(&pool, &resolved_login).await;
     let personal_bests = personal_bests_block(&pool, &resolved_login).await;
@@ -1303,6 +1304,8 @@ pub(crate) async fn kpis_recent_block(
 
     let recent_sql = r#"
         SELECT
+            s.id AS session_id,
+            s.twitch_user_id,
             s.started_at,
             s.ended_at,
             s.duration_seconds,
@@ -1337,6 +1340,8 @@ pub(crate) async fn kpis_recent_block(
                 let avg_v = read_f64(row, "avg_viewers");
                 data.recent_streams.push(json!({
                     "date": date,
+                    "session_id": read_i64(row, "session_id"),
+                    "twitch_user_id": row.try_get::<Option<String>, _>("twitch_user_id").unwrap_or(None),
                     "started_at": started_iso,
                     "ended_at": row_ts_iso(row, "ended_at"),
                     "duration_seconds": read_i64(row, "duration_seconds"),
@@ -1385,55 +1390,205 @@ fn read_f64(row: &PgRow, col: &str) -> f64 {
 
 pub(crate) async fn last_stream_summary(
     pool: &PgPool,
-    resolved_login: &str,
+    resolved_user_id: &str,
     recent_streams: &[Value],
 ) -> Value {
     let Some(ls) = recent_streams.first() else {
         return Value::Null;
     };
+    // Die Session kommt ausschließlich aus der serverseitigen KPI-Auswahl.
+    // Ein wiedervergebener Login darf keine fremde Chat-Historie freigeben.
+    // Historische Kennzahlen bleiben erhalten; ohne belegte Kanal-ID gibt es
+    // weder die zusätzliche Chat-Serie noch eine vermeintlich sichere Summe.
+    let eigene_session = !resolved_user_id.is_empty()
+        && ls.get("twitch_user_id").and_then(Value::as_str) == Some(resolved_user_id);
     let started_at = ls.get("started_at").and_then(Value::as_str).unwrap_or("");
     let ended_at = ls.get("ended_at").and_then(Value::as_str).unwrap_or("");
-
-    let chat_count: Option<i64> = if resolved_login.is_empty() {
-        None
+    let stats = if eigene_session {
+        match ls.get("session_id").and_then(Value::as_i64) {
+            Some(session_id) => {
+                chat_stream_stats_block(pool, session_id, started_at, ended_at).await
+            }
+            None => None,
+        }
     } else {
-        chat_count_block(pool, resolved_login, started_at, ended_at).await
+        None
     };
-
+    let (count, series) = match stats {
+        Some((count, series)) => (Some(count), Some(series)),
+        None => (None, None),
+    };
     let mut obj = ls.clone();
     if let Some(map) = obj.as_object_mut() {
-        map.insert("chat_messages".to_string(), json!(chat_count));
+        map.insert("chat_messages".to_string(), json!(count));
+        map.insert("chat_series".to_string(), json!(series));
     }
     obj
 }
 
-async fn chat_count_block(
+async fn chat_stream_stats_block(
     pool: &PgPool,
-    resolved_login: &str,
+    session_id: i64,
     started_at: &str,
     ended_at: &str,
-) -> Option<i64> {
-    // Python bindet started_at/ended_at als String-Timestamps an message_ts.
+) -> Option<(i64, Vec<Value>)> {
     let started_dt = parse_iso(started_at)?;
     let ended_dt = parse_iso(ended_at)?;
+    if session_id <= 0 || ended_dt < started_dt {
+        return None;
+    }
     let sql = r#"
-        SELECT COUNT(*) AS c FROM twitch_chat_messages
-        WHERE LOWER(streamer_login) = LOWER($1)
-          AND message_ts >= $2 AND message_ts <= $3
+        WITH counts AS (
+            SELECT FLOOR(EXTRACT(EPOCH FROM (message_ts - $2::timestamptz)) / 300)::bigint AS bucket,
+                   COUNT(*)::bigint AS messages
+            FROM twitch_chat_messages
+            WHERE session_id = $1 AND message_ts >= $2 AND message_ts <= $3
+            GROUP BY bucket
+        ), buckets AS (
+            SELECT generate_series(0::bigint,
+                FLOOR(EXTRACT(EPOCH FROM ($3::timestamptz - $2::timestamptz)) / 300)::bigint) AS bucket
+        )
+        SELECT buckets.bucket * 300 AS t_seconds,
+               COALESCE(counts.messages, 0)::bigint AS messages
+        FROM buckets LEFT JOIN counts USING (bucket)
+        ORDER BY buckets.bucket
     "#;
-    match sqlx::query(sql)
-        .bind(resolved_login)
+    let rows = match sqlx::query(sql)
+        .bind(session_id)
         .bind(started_dt)
         .bind(ended_dt)
-        .fetch_optional(pool)
+        .fetch_all(pool)
         .await
     {
-        Ok(Some(row)) => Some(row.try_get::<i64, _>("c").unwrap_or(0)),
-        Ok(None) => None,
-        Err(e) => {
-            tracing::warn!("internal-home chat-count query: {e}");
-            None
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!("internal-home chat-series query: {error}");
+            return None;
         }
+    };
+    let mut total = 0_i64;
+    let mut points = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let messages = row.try_get::<i64, _>("messages").ok()?;
+        let t_seconds = row.try_get::<i64, _>("t_seconds").ok()?;
+        total += messages;
+        points.push(json!({ "t_seconds": t_seconds, "messages": messages }));
+    }
+    Some((total, points))
+}
+
+#[cfg(test)]
+mod chat_stream_stats_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn fuenf_minuten_buckets_trennen_sessions_und_beachten_grenzen() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        sqlx::query(
+            "CREATE TABLE twitch_chat_messages (session_id BIGINT, message_ts TIMESTAMPTZ)",
+        )
+        .execute(&database.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"INSERT INTO twitch_chat_messages VALUES
+            (1, '2026-03-01T09:59:59Z'),
+            (1, '2026-03-01T10:00:00Z'),
+            (1, '2026-03-01T10:04:59Z'),
+            (1, '2026-03-01T10:05:00Z'),
+            (1, '2026-03-01T10:15:00Z'),
+            (1, '2026-03-01T10:15:01Z'),
+            (2, '2026-03-01T10:03:00Z')"#,
+        )
+        .execute(&database.pool)
+        .await
+        .unwrap();
+        let (count, series) = chat_stream_stats_block(
+            &database.pool,
+            1,
+            "2026-03-01T10:00:00Z",
+            "2026-03-01T10:15:00Z",
+        )
+        .await
+        .unwrap();
+        assert_eq!(count, 4);
+        let summary = last_stream_summary(
+            &database.pool,
+            "42",
+            &[json!({
+                "session_id": 1, "twitch_user_id": "42",
+                "started_at": "2026-03-01T10:00:00Z", "ended_at": "2026-03-01T10:15:00Z"
+            })],
+        )
+        .await;
+        assert_eq!(summary["chat_messages"], json!(count));
+        assert_eq!(summary["chat_series"], json!(series));
+        assert_eq!(
+            series,
+            vec![
+                json!({"t_seconds": 0, "messages": 2}),
+                json!({"t_seconds": 300, "messages": 1}),
+                json!({"t_seconds": 600, "messages": 0}),
+                json!({"t_seconds": 900, "messages": 1}),
+            ]
+        );
+        let (count, series) = chat_stream_stats_block(
+            &database.pool,
+            3,
+            "2026-03-01T10:00:00Z",
+            "2026-03-01T10:01:00Z",
+        )
+        .await
+        .unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(series, vec![json!({"t_seconds": 0, "messages": 0})]);
+    }
+
+    #[tokio::test]
+    async fn fehlende_kanal_id_erhaelt_kennzahlen_ohne_fremde_chatdaten() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        for (user_id, session) in [
+            (
+                "99",
+                json!({"session_id": 1, "twitch_user_id": "42", "avg_viewers": 7}),
+            ),
+            (
+                "",
+                json!({"session_id": 1, "twitch_user_id": "42", "avg_viewers": 7}),
+            ),
+            ("42", json!({"session_id": 1, "avg_viewers": 7})),
+        ] {
+            let summary = last_stream_summary(&database.pool, user_id, &[session]).await;
+            assert_eq!(summary["avg_viewers"], json!(7));
+            assert!(summary["chat_messages"].is_null());
+            assert!(summary["chat_series"].is_null());
+        }
+    }
+
+    #[tokio::test]
+    async fn ungueltige_session_und_offener_stream_haben_keine_chatserie() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        assert!(chat_stream_stats_block(
+            &database.pool,
+            0,
+            "2026-03-01T10:00:00Z",
+            "2026-03-01T10:15:00Z"
+        )
+        .await
+        .is_none());
+        assert!(chat_stream_stats_block(
+            &database.pool,
+            1,
+            "2026-03-01T10:15:00Z",
+            "2026-03-01T10:00:00Z"
+        )
+        .await
+        .is_none());
+        assert!(
+            chat_stream_stats_block(&database.pool, 1, "2026-03-01T10:00:00Z", "")
+                .await
+                .is_none()
+        );
     }
 }
 

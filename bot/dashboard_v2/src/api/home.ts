@@ -136,6 +136,7 @@ export interface InternalHomeLastStreamSummary {
   peak_viewers: number | null;
   follower_delta: number | null;
   chat_messages: number | null;
+  chat_series?: { t_seconds: number; messages: number }[] | null;
 }
 
 export interface InternalHomeWeekComparison {

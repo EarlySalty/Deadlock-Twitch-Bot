@@ -506,7 +506,7 @@ pub async fn ask(
             scam_guard_settings::load_settings(&pool, &login),
         );
 
-        let letzter_stream = last_stream_summary(&pool, &login, &kpis_30.recent_streams).await;
+        let letzter_stream = last_stream_summary(&pool, &user_id, &kpis_30.recent_streams).await;
 
         let (live_status, verbindungen) = match uplink::partner_id(&pool, &auth).await {
             Ok(id) => {

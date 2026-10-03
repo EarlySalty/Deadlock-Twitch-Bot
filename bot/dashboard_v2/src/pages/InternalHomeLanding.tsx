@@ -129,6 +129,7 @@ function MiniStat({
   seriesLabel,
   trendPct,
   markPeak = false,
+  emptyLabel,
 }: {
   label: string;
   value: number | null | undefined;
@@ -140,6 +141,7 @@ function MiniStat({
   seriesLabel?: string;
   trendPct?: number | null;
   markPeak?: boolean;
+  emptyLabel?: string;
 }) {
   const accentColor = {
     primary: 'bg-primary/15 border-primary/25 text-primary',
@@ -213,8 +215,12 @@ function MiniStat({
         <div className="mt-3 flex items-end justify-between gap-3">
           <div className="min-w-0 shrink-0">
             <div className="flex flex-wrap items-end gap-2">
-              <div className="kpi-number text-3xl font-bold leading-none tracking-tight text-white md:text-[2.15rem]">
-                {value != null ? prefix + formatNumber(value) + suffix : '\u2013'}
+              <div
+                className={value == null && emptyLabel
+                  ? 'max-w-[120px] text-sm leading-snug text-text-secondary'
+                  : 'kpi-number text-3xl font-bold leading-none tracking-tight text-white md:text-[2.15rem]'}
+              >
+                {value != null ? prefix + formatNumber(value) + suffix : emptyLabel ?? '\u2013'}
               </div>
               {trendPct != null ? (
                 <div
@@ -589,6 +595,7 @@ export function InternalHomeLanding() {
   const viewersOverTime = data?.viewersOverTime ?? null;
   const liveStatus = data?.liveStatus ?? null;
   const streamViewerSeries = (viewersOverTime ?? []).map((point) => point.viewers);
+  const streamChatSeries = (lastStream?.chat_series ?? []).map((point) => point.messages);
   const weekDailySeries = weekComp?.daily_series ?? null;
 
   const score = Math.max(0, Math.min(100, healthScore?.overall ?? 0));
@@ -980,6 +987,9 @@ export function InternalHomeLanding() {
                         value={lastStream.chat_messages}
                         icon={MessageSquare}
                         accent="warning"
+                        series={streamChatSeries}
+                        seriesLabel="Chat-Nachrichten je fünf Minuten im letzten Stream"
+                        emptyLabel="Keine Chatdaten verfügbar"
                       />
                     </div>
                   ) : null}

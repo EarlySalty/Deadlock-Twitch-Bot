@@ -207,6 +207,24 @@ const INTERNAL_HOME_FIXTURE: InternalHomeData = {
       },
     ],
   },
+  lastStreamSummary: {
+    started_at: '2026-04-21T17:00:00Z',
+    ended_at: '2026-04-21T17:30:00Z',
+    duration_seconds: 1800,
+    avg_viewers: 142,
+    peak_viewers: 221,
+    follower_delta: 34,
+    chat_messages: 32,
+    chat_series: [
+      { t_seconds: 0, messages: 4 },
+      { t_seconds: 300, messages: 5 },
+      { t_seconds: 600, messages: 3 },
+      { t_seconds: 900, messages: 8 },
+      { t_seconds: 1200, messages: 7 },
+      { t_seconds: 1500, messages: 5 },
+      { t_seconds: 1800, messages: 0 },
+    ],
+  },
   generatedAt: NOW_ISO,
 };
 
