@@ -417,7 +417,7 @@ mod tests {
     #[tokio::test]
     async fn fehlende_auth_id_wird_vor_datenbankzugriff_abgelehnt() {
         let db = database().await;
-        let auth = crate::auth::DashboardAuthLevel::Partner {
+        let auth = crate::DashboardAuthLevel::Partner {
             twitch_login: "kanal".into(), twitch_user_id: String::new(), display_name: "Kanal".into(),
         };
         let response = crate::auth::streamer_scope::resolve_analysis_target(&db.pool, &auth, Some("kanal"))
