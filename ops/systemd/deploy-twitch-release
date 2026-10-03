@@ -216,15 +216,15 @@ for directory in /opt /opt/deadlock /opt/deadlock/twitch "$release_root"; do
 done
 if [[ -L "$current" ]]; then
   previous_link=$(readlink -- "$current")
-  if [[ "$previous_link" =~ ^releases/[0-9a-f]{40}$ ]]; then
+  if [[ "$previous_link" =~ ^releases/[0-9a-f]{8,40}$ ]]; then
     previous_release="/opt/deadlock/twitch/$previous_link"
-  elif [[ "$previous_link" =~ ^/opt/deadlock/twitch/releases/[0-9a-f]{40}$ ]]; then
+  elif [[ "$previous_link" =~ ^/opt/deadlock/twitch/releases/[0-9a-f]{8,40}$ ]]; then
     previous_release="$previous_link"
   else
     echo "Bisheriger Release-Link hat ein unerwartetes Ziel." >&2
     exit 1
   fi
-  if [[ $(stat -c %u "$current") != 0 || ! "$previous_release" =~ ^/opt/deadlock/twitch/releases/[0-9a-f]{40}$ ||
+  if [[ $(stat -c %u "$current") != 0 || ! "$previous_release" =~ ^/opt/deadlock/twitch/releases/[0-9a-f]{8,40}$ ||
         ! -d "$previous_release" || -L "$previous_release" || $(stat -c %u "$previous_release") != 0 ]] ||
      [[ -n $(find "$previous_release" -maxdepth 0 -perm /022 -print) ]]; then
     echo "Bisheriger Release-Link ist nicht sicher rückstellbar." >&2
@@ -362,6 +362,12 @@ BEGIN
             WHERE p.oid='public.finish_raid_ad_vorlauf_on_arrival()'::regprocedure AND a.grantee=0 AND a.privilege_type='EXECUTE') THEN
         RAISE EXCEPTION 'Arrivaltrigger ist nicht korrekt gehärtet';
     END IF;
+    IF NOT EXISTS (SELECT FROM pg_trigger WHERE tgname='finish_raid_ad_vorlauf_on_arrival'
+        AND tgrelid='public.twitch_raid_arrival_tracking'::regclass
+        AND tgfoid='public.finish_raid_ad_vorlauf_on_arrival()'::regprocedure
+        AND tgenabled IN ('O','A') AND tgtype=5 AND tgqual IS NULL AND tgnargs=0 AND NOT tgisinternal) THEN
+        RAISE EXCEPTION 'Arrivaltrigger ist nicht als unbedingter AFTER INSERT ROW gebunden';
+    END IF;
     IF EXISTS (SELECT FROM pg_hba_file_rules WHERE error IS NOT NULL) OR
        EXISTS (SELECT FROM pg_ident_file_mappings WHERE error IS NOT NULL) THEN
         RAISE EXCEPTION 'PostgreSQL meldet HBA- oder Ident-Parsefehler';
@@ -417,7 +423,7 @@ else
     *) echo "TCPlistener benötigt einen belegten konkreten Prüfpfad; Deploy gestoppt." >&2; exit 1 ;;
   esac
   expect_hba_rejection runuser -u twitchdash -- /usr/bin/env -i /usr/bin/psql --no-psqlrc --no-password \
-    "host=$tcp_address port=5432 dbname=twitch_analytics user=twitchanalysis passfile=/dev/null connect_timeout=5" \
+    "host=$tcp_address port=5432 dbname=twitch_analytics user=twitchanalysis passfile=/dev/null connect_timeout=5 sslmode=disable" \
     -v ON_ERROR_STOP=1 -At -c 'SELECT 1'
 fi
 echo "Liveprüfung bestanden: Reload, rollenbegrenzter Peerzugang, Ablehnung und Rechte-Metadaten."
