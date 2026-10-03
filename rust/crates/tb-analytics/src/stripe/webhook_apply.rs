@@ -969,22 +969,26 @@ mod tests {
         );
     }
 
-    // ── DB-Integration (skip ohne TB_TEST_DATABASE_URL) ─────────────────────
+    // DB-Integration über die gemeinsame Konfiguration der Testdatenbank.
     use sqlx::postgres::PgPoolOptions;
+    mod local_test_database {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-support/database.rs"
+        ));
+    }
 
-    async fn pool_or_skip(schema: &str) -> Option<PgPool> {
-        mod local_test_database {
-            include!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../test-support/database.rs"
-            ));
-        }
+    fn configured_test_dsn() -> Option<String> {
         let dsn = local_test_database::database_url();
         assert!(
             dsn.is_some() || !local_test_database::required(),
             "Isolierte Testdatenbank fehlt"
         );
-        let dsn = dsn?;
+        dsn
+    }
+
+    async fn pool_or_skip(schema: &str) -> Option<PgPool> {
+        let dsn = configured_test_dsn()?;
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)
@@ -1610,10 +1614,10 @@ mod tests {
     /// Eigenes Schema mit allen Tabellen, die PartnerScoreRefresher liest/schreibt.
     ///
     /// Wichtig: `search_path` wird per `after_connect` auf JEDER Pool-Verbindung
-    /// gesetzt — der Refresher nutzt denselben Pool, dessen Verbindungen also alle
-    /// auf das Test-Schema zeigen (sonst greift er auf `public` zu).
+    /// gesetzt. Der Refresher nutzt denselben Pool; dessen Verbindungen zeigen
+    /// dadurch auf das Testschema statt auf `public`.
     async fn refresh_pool_or_skip(schema: &str) -> Option<PgPool> {
-        let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let dsn = configured_test_dsn()?;
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&dsn)
