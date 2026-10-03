@@ -424,6 +424,7 @@ BEGIN
     FOREACH community_table IN ARRAY ARRAY[
         'twitch_community_points_viewer_daily',
         'twitch_community_points_streamer_daily',
+        'twitch_community_points_discoveries',
         'twitch_clip_contest_forwards',
         'twitch_scout_community_suggestions'
     ] LOOP

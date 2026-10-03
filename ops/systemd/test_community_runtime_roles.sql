@@ -20,6 +20,7 @@ DECLARE
 BEGIN
     FOREACH community_table IN ARRAY ARRAY[
         'twitch_community_points_viewer_daily', 'twitch_community_points_streamer_daily',
+        'twitch_community_points_discoveries',
         'twitch_clip_contest_forwards', 'twitch_scout_community_suggestions'
     ] LOOP
         IF NOT has_table_privilege('twitchdash', community_table, 'SELECT') THEN
@@ -69,10 +70,12 @@ DECLARE
 BEGIN
     FOREACH community_table IN ARRAY ARRAY[
         'twitch_community_points_viewer_daily', 'twitch_community_points_streamer_daily',
+        'twitch_community_points_discoveries',
         'twitch_clip_contest_forwards', 'twitch_scout_community_suggestions'
     ] LOOP
         EXECUTE format('SELECT COUNT(*) FROM public.%I',community_table);
-        stamp_column := CASE WHEN community_table='twitch_scout_community_suggestions' THEN 'created_at' ELSE 'updated_at' END;
+        stamp_column := CASE WHEN community_table='twitch_scout_community_suggestions' THEN 'created_at'
+            WHEN community_table='twitch_community_points_discoveries' THEN 'first_seen_at' ELSE 'updated_at' END;
         BEGIN
             EXECUTE format('INSERT INTO public.%I DEFAULT VALUES',community_table);
             RAISE EXCEPTION 'Dashboard-Insert in % unerwartet erlaubt',community_table;
