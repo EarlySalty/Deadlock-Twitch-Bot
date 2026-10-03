@@ -631,6 +631,67 @@ async fn broker_offline_dann_neuer_versuch_und_doppelsend_schutz() {
 }
 
 #[tokio::test]
+async fn verspaeteter_alter_abschluss_erhaelt_neueren_erfolg() {
+    struct RetryBroker {
+        started: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+        calls: AtomicUsize,
+        requests: Mutex<Vec<BrokerClipRequest>>,
+    }
+
+    #[async_trait]
+    impl ClipContestBroker for RetryBroker {
+        async fn submit(&self, request: &BrokerClipRequest) -> Result<BrokerClipResponse, String> {
+            self.requests.lock().unwrap().push(request.clone());
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                self.started.notify_one();
+                self.release.notified().await;
+                Err("Verspätete verlorene Antwort".into())
+            } else {
+                accepted(87)
+            }
+        }
+    }
+
+    let db = migrated_pool("tb_clipcontest_stale_completion").await;
+    let pool = &db.pool;
+    let broker = Arc::new(RetryBroker {
+        started: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+        calls: AtomicUsize::new(0),
+        requests: Mutex::new(Vec::new()),
+    });
+    let submitter = Arc::new(ClipContestSubmitter::new(pool.clone(), lookup(), broker.clone()));
+    let old = {
+        let submitter = submitter.clone();
+        tokio::spawn(async move {
+            submitter.submit(request(Some("https://clips.twitch.tv/ClipEins"))).await
+        })
+    };
+    broker.started.notified().await;
+    sqlx::query("UPDATE twitch_clip_contest_forwards SET updated_at = updated_at - INTERVAL '121 seconds' WHERE clip_id = 'ClipEins'")
+        .execute(pool).await.unwrap();
+    let mut retry = request(Some("https://clips.twitch.tv/ClipEins"));
+    retry.submitted_by = Some("9898".into());
+    assert!(matches!(submitter.submit(retry).await, SubmitOutcome::Accepted { .. }));
+    let success: (String, Option<i64>, DateTime<Utc>, Option<String>, DateTime<Utc>) = sqlx::query_as(
+        "SELECT status, broker_submission_id, submitted_at, submitted_by_twitch_id, updated_at FROM twitch_clip_contest_forwards WHERE clip_id = 'ClipEins'",
+    ).fetch_one(pool).await.unwrap();
+    broker.release.notify_one();
+    assert_eq!(old.await.unwrap(), SubmitOutcome::StoreUnavailable);
+    let final_row: (String, Option<i64>, DateTime<Utc>, Option<String>, DateTime<Utc>) = sqlx::query_as(
+        "SELECT status, broker_submission_id, submitted_at, submitted_by_twitch_id, updated_at FROM twitch_clip_contest_forwards WHERE clip_id = 'ClipEins'",
+    ).fetch_one(pool).await.unwrap();
+    assert_eq!(final_row, success);
+    assert_eq!(final_row.0, "accepted");
+    assert_eq!(final_row.1, Some(87));
+    assert_eq!(final_row.3.as_deref(), Some("4242"));
+    assert_eq!(ClipContestSubmitter::count_today(pool, "456", Utc::now()).await.unwrap(), 1);
+    let requests = broker.requests.lock().unwrap();
+    assert_eq!(requests[0], requests[1]);
+}
+
+#[tokio::test]
 async fn ohne_url_juengster_clip_der_laufenden_session() {
     let _db = migrated_pool("tb_clipcontest_latest").await;
     let pool = _db.pool.clone();

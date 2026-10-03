@@ -469,8 +469,6 @@ pub async fn vorschlag_einreichen(
             .await?;
         }
         VorschlagStatus::AlreadyKnown => {
-            // Zahl verschiedener Vorschlagender nachziehen; der erste
-            // Vorschlagende bleibt stehen.
             let stempel = naechster_stempel(&mut tx).await?;
             sqlx::query(
                 "UPDATE twitch_scout_candidates c
@@ -481,8 +479,7 @@ pub async fn vorschlag_einreichen(
                            FROM twitch_scout_community_suggestions
                           WHERE twitch_user_id = $1
                             AND result_status IN ('created', 'already_known')) n
-                  WHERE c.twitch_user_id = $1
-                    AND c.suggestion_count <> n.anzahl",
+                  WHERE c.twitch_user_id = $1",
             )
             .bind(user_id)
             .bind(stempel)
