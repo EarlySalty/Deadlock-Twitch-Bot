@@ -3998,7 +3998,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "serde",
- "sha2",
+ "sha2 0.11.0",
  "sqlx 0.9.0",
  "tb-raid",
  "tokio",
