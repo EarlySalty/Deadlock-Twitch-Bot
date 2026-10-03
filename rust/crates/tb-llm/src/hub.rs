@@ -422,7 +422,11 @@ async fn complete_chain(
                     LlmError::Http { status, body } => (Some(*status), body.chars().count()),
                     _ => (None, 0),
                 };
-                tracing::warn!(
+                tb_observability::warning_budget::warn(
+                    error.code(),
+                    "KI-Aufruf fehlgeschlagen; gleiche Fehler werden zusammengefasst",
+                );
+                tracing::debug!(
                     use_case,
                     provider = endpoint.provider,
                     model = %endpoint.model,

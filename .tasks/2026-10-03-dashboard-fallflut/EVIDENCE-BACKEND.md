@@ -29,3 +29,7 @@ Die Tabelle war während Zählung und Löschung mit `SHARE ROW EXCLUSIVE` gesper
 ## Prüfung
 
 Der Regressionstest simuliert HTTP 404 und kaputtes JSON, verlangt jeweils null gespeicherte Fälle und null Moderationsmaßnahmen und prüft danach dieselbe Unterhaltung mit wieder funktionierender Modellantwort. Bestehende Parser-, Dialog- und Datenbank-Mocks wurden an die Fehlertrennung angepasst.
+
+## Warnungen bei weiteren Ausfällen
+
+Die Abnahme fand zusätzlich ungebremste Warnungen im zentralen Connector und eine doppelte Warnung beim Gesprächswächter. Der Connector und die Antwortprüfung verwenden nun den bereits vorhandenen `tb_observability::warning_budget::warn`-Pfad. Dieser begrenzt gleiche Fehlerklassen im laufenden Prozess auf eine Meldung je 24 Stunden und zwei je sieben Tagen und führt die unterdrückten Wiederholungen bei der nächsten Meldung mit. Die lokale doppelte Aufrufmeldung steht nur noch auf Debug. Das bestehende Warnbudget ist ein Prozesszustand und wird bei einem Dienstneustart zurückgesetzt; der separate tägliche Modellresolver behält seine persistierte Begrenzung.

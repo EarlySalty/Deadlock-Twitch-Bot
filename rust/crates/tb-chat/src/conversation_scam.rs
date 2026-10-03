@@ -389,7 +389,11 @@ fn parse_verdict(raw: &str, channel: &str, chatter: &str) -> Result<Verdict, &'s
     match parse_verdict_result(raw) {
         Ok(verdict) => Ok(verdict),
         Err(reason) => {
-            warn!(
+            tb_observability::warning_budget::warn(
+                "conversation_scam_response",
+                "Scam-Prüfung liefert keine gültige Entscheidung; es wird kein Fall angelegt",
+            );
+            debug!(
                 reason,
                 channel, chatter, "Conversation-Scam-Judge-Antwort unbrauchbar"
             );
@@ -504,7 +508,7 @@ impl ScamJudge for LlmScamJudge {
                 Ok(verdict)
             }
             Err(error) => {
-                warn!(
+                debug!(
                     reason = "llm_error",
                     channel = %dialog.channel_login,
                     chatter = %dialog.chatter_login,
