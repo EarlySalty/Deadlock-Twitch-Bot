@@ -359,8 +359,10 @@ mod brain_client_tests {
 
     #[test]
     fn admin_twitch_id_muss_eine_positive_plattform_id_sein() {
-        let mut config = DashboardOptions::default();
-        config.admin_twitch_user_id = Some("123456".into());
+        let mut config = DashboardOptions {
+            admin_twitch_user_id: Some("123456".into()),
+            ..Default::default()
+        };
         assert!(config.validate().is_ok());
         config.admin_twitch_user_id = Some("earlysalty".into());
         assert!(config.validate().is_err());
