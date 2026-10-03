@@ -86,6 +86,20 @@ const CLIP_FAILED_REPLY: &str =
 const HELP_BASE_URL: &str = "https://deutsche-deadlock-community.de/streamer/help";
 const COMMANDS_URL: &str = "https://deutsche-deadlock-community.de/streamer/commands";
 const DASHBOARD_URL: &str = "https://deutsche-deadlock-community.de/twitch/dashboard";
+const TRUSTPILOT_URL: &str = "https://de.trustpilot.com/evaluate/deutsche-deadlock-community.de";
+const TRUSTPILOT_REPLIES: &[&str] = &[
+    "Wie erlebst du die Deutsche Deadlock Community? Teile deine Erfahrung auf Trustpilot:",
+    "Du möchtest die Deutsche Deadlock Community bewerten? Hier kannst du deine Erfahrung teilen:",
+    "Platz für Lob und Kritik: Bewerte deine Erfahrung mit der Deutschen Deadlock Community auf Trustpilot:",
+    "Deine Meinung zur Deutschen Deadlock Community ist willkommen. Hier geht es zur Bewertung:",
+];
+
+fn trustpilot_reply() -> String {
+    let introduction = TRUSTPILOT_REPLIES
+        .choose(&mut rand::rng())
+        .expect("Trustpilot-Antworten sind fest hinterlegt");
+    format!("{introduction} {TRUSTPILOT_URL}")
+}
 
 fn knowledge_dir() -> Result<PathBuf, String> {
     let snapshot =
@@ -474,7 +488,10 @@ impl CommandEngine {
             return false;
         };
         if crate::stat_commands::StatCommand::from_chat(command).is_some()
-            || matches!(command, "!clip" | "!dldc" | "!dlde" | "!invite")
+            || matches!(
+                command,
+                "!clip" | "!dldc" | "!dlde" | "!invite" | "!trustpilot"
+            )
         {
             return false;
         }
@@ -681,6 +698,10 @@ impl CommandEngine {
             }
             "!commands" => {
                 self.cmd_commands(event).await;
+                true
+            }
+            "!trustpilot" => {
+                self.reply(event, &trustpilot_reply()).await;
                 true
             }
             "!dashboard" => {
@@ -4081,6 +4102,8 @@ mod tests {
                 "!dldc",
                 "!invite",
                 "!commands",
+                "!trustpilot",
+                "!bewerten",
                 "!help",
                 "!ping",
             ] {
@@ -4093,6 +4116,16 @@ mod tests {
                     api.message_count().await > before,
                     "{text} antwortet bei live={is_live}, {game}"
                 );
+                if matches!(text, "!trustpilot" | "!bewerten") {
+                    let reply = api.last_message().await.unwrap();
+                    assert!(reply.ends_with(TRUSTPILOT_URL), "{reply}");
+                    assert!(
+                        TRUSTPILOT_REPLIES
+                            .iter()
+                            .any(|intro| reply.starts_with(intro)),
+                        "{reply}"
+                    );
+                }
             }
             let before = api.message_count().await;
             assert!(
@@ -4126,6 +4159,8 @@ mod tests {
             "!createclip",
             "!invite",
             "!dldc",
+            "!trustpilot",
+            "!bewerten",
         ] {
             assert!(
                 !engine

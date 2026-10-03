@@ -13,6 +13,7 @@ import { ClipManager } from "@/components/partner-clean/ClipManager";
 import { Community } from "@/components/partner-clean/Community";
 import { Security } from "@/components/partner-clean/Security";
 import { CTA } from "@/components/partner-clean/CTA";
+import { Trustpilot } from "@/components/partner-clean/Trustpilot";
 import { useNetworkStreamers } from "@/hooks/useNetworkStreamers";
 
 export function StreamerNetworkPage() {
@@ -33,6 +34,7 @@ export function StreamerNetworkPage() {
         <Community />
         <Security />
         <CTA />
+        <Trustpilot />
         <PublicProfiles />
       </main>
       <Footer />

@@ -128,6 +128,12 @@ pub fn catalog() -> &'static [CommandInfo] {
             summary: "Verlinkt die Übersicht aller Befehle.",
         },
         CommandInfo {
+            name: "!trustpilot",
+            aliases: &["!bewerten"],
+            group: Fun,
+            summary: "Verlinkt die Bewertung der Deutschen Deadlock Community auf Trustpilot.",
+        },
+        CommandInfo {
             name: "!dashboard",
             aliases: &[],
             group: Fun,

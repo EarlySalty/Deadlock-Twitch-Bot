@@ -20,6 +20,7 @@ Stand Twitch-Chat: `2026-09-09`
 | `!uban` | `!unban` | Broadcaster oder Mod | letzten Auto-Ban rueckgaengig machen | nutzt letzten gespeicherten Auto-Ban |
 | `!clip` | `!createclip` | jeder im Kanal | Clip aus dem aktuellen Streambuffer erstellen | braucht gueltige Auth bzw. Fallback-Token |
 | `!ping` | `!health`, `!status`, `!bot` | jeder im Kanal | Liveness-/Statusantwort | allgemeiner Bot-Check |
+| `!trustpilot` | `!bewerten` | jeder im Kanal | eigene Erfahrung mit der Deutschen Deadlock Community auf Trustpilot bewerten | freiwillig, auch außerhalb eines laufenden Deadlock-Streams |
 | `!silentban` | keine | Broadcaster oder Mod | Chat-Hinweis fuer Auto-Bans toggeln | Bans laufen weiter, nur die Chat-Nachricht wird abgeschaltet |
 | `!silentraid` | keine | Broadcaster oder Mod | Chat-Hinweis fuer Raids toggeln | Raids laufen weiter, nur die Chat-Nachricht wird abgeschaltet |
 | `!lurkersteuer_off` | `!lurkersteuer_aus`, `!lurker_tax_off` | nur Broadcaster | Lurker Steuer dauerhaft deaktivieren | nur in Paid-Plaenen verfuegbar |
