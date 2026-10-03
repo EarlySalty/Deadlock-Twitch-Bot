@@ -120,14 +120,14 @@ struct FixedJudge;
 
 #[async_trait]
 impl ScamJudge for FixedJudge {
-    async fn judge(&self, _dialog: &mut DialogState) -> Verdict {
-        Verdict {
+    async fn judge(&self, _dialog: &mut DialogState) -> Result<Verdict, &'static str> {
+        Ok(Verdict {
             verdict: VerdictKind::Scam,
             confidence: 0.95,
             category: "growth-pitch".to_string(),
             reasoning: "clear Discord growth pitch".to_string(),
             pattern: None,
-        }
+        })
     }
 }
 
@@ -135,14 +135,14 @@ struct ZeroDayRiskJudge;
 
 #[async_trait]
 impl ScamJudge for ZeroDayRiskJudge {
-    async fn judge(&self, _dialog: &mut DialogState) -> Verdict {
-        Verdict {
+    async fn judge(&self, _dialog: &mut DialogState) -> Result<Verdict, &'static str> {
+        Ok(Verdict {
             verdict: VerdictKind::Scam,
             confidence: 0.80,
             category: "befriending_pivot".to_string(),
             reasoning: "generic English befriending followed by a Discord pivot".to_string(),
             pattern: None,
-        }
+        })
     }
 }
 
@@ -152,7 +152,7 @@ struct CrossChannelRecordingJudge {
 
 #[async_trait]
 impl ScamJudge for CrossChannelRecordingJudge {
-    async fn judge(&self, dialog: &mut DialogState) -> Verdict {
+    async fn judge(&self, dialog: &mut DialogState) -> Result<Verdict, &'static str> {
         let input: serde_json::Value = serde_json::from_str(&dialog.messages()[1].content).unwrap();
         self.inputs.lock().unwrap().push((
             input["message"].as_str().unwrap().to_string(),

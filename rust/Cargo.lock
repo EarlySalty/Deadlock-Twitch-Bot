@@ -3903,6 +3903,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "sqlx 0.9.0",
+ "tb-observability",
  "tokio",
  "toml 0.8.23",
  "tracing",
