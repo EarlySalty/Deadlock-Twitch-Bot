@@ -167,6 +167,7 @@ fn broker_payload_exakt_nach_plan() {
         streamer_twitch_user_id: "456".into(),
         streamer_login: "name".into(),
         submitted_by_twitch_user_id: Some("456".into()),
+        submitted_at: None,
         title: Some("Titel".into()),
         idempotency_key: "twitch-clip-AbcDef".into(),
     };
@@ -353,6 +354,12 @@ async fn einreichung_angenommen_dann_schon_drin_ohne_zweiten_brokeraufruf() {
             submission_id: Some(123)
         }
     );
+    let original_at: DateTime<Utc> = sqlx::query_scalar(
+        "SELECT submitted_at FROM twitch_clip_contest_forwards WHERE clip_id = 'ClipEins'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(
         broker.requests.lock().unwrap()[0],
         BrokerClipRequest {
@@ -361,6 +368,7 @@ async fn einreichung_angenommen_dann_schon_drin_ohne_zweiten_brokeraufruf() {
             streamer_twitch_user_id: "456".into(),
             streamer_login: "name".into(),
             submitted_by_twitch_user_id: Some("4242".into()),
+            submitted_at: Some(original_at.to_rfc3339_opts(SecondsFormat::Micros, true)),
             title: Some("Titel ClipEins".into()),
             idempotency_key: "twitch-clip-ClipEins".into(),
         }
@@ -546,6 +554,15 @@ async fn broker_offline_dann_neuer_versuch_und_doppelsend_schutz() {
         SubmitOutcome::BrokerUnavailable
     );
     assert_eq!(status_of(&pool, "ClipEins").await.unwrap().0, "failed");
+    let original_at: DateTime<Utc> = sqlx::query_scalar(
+        "SELECT submitted_at FROM twitch_clip_contest_forwards WHERE clip_id = 'ClipEins'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    // created_at trägt weiterhin den Tageslimitzeitpunkt, nicht die Herkunft.
+    sqlx::query("UPDATE twitch_clip_contest_forwards SET created_at = created_at - INTERVAL '2 days' WHERE clip_id = 'ClipEins'")
+        .execute(&pool).await.unwrap();
     *broker.answer.lock().unwrap() = accepted(5);
     let mut dashboard = request(url);
     dashboard.via = SubmitVia::Dashboard;
@@ -554,6 +571,22 @@ async fn broker_offline_dann_neuer_versuch_und_doppelsend_schutz() {
         SubmitOutcome::Accepted { .. }
     ));
     assert_eq!(status_of(&pool, "ClipEins").await.unwrap().1, "dashboard");
+    let (stored_at, created_at): (DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
+        "SELECT submitted_at, created_at FROM twitch_clip_contest_forwards WHERE clip_id = 'ClipEins'",
+    ).fetch_one(&pool).await.unwrap();
+    assert_eq!(stored_at, original_at);
+    assert!(created_at > original_at);
+    let payloads = broker.requests.lock().unwrap().clone();
+    assert_eq!(payloads.len(), 2);
+    assert_eq!(payloads[0].submitted_at, payloads[1].submitted_at);
+    assert_eq!(
+        payloads[0].submitted_at.as_deref(),
+        Some(
+            original_at
+                .to_rfc3339_opts(SecondsFormat::Micros, true)
+                .as_str()
+        )
+    );
 
     // Zwei gleichzeitige Einreichungen desselben Clips: genau ein Brokeraufruf.
     let slow = Arc::new(FakeBroker {
@@ -625,4 +658,58 @@ async fn ohne_url_juengster_clip_der_laufenden_session() {
         submitter.submit(request(None)).await,
         SubmitOutcome::Accepted { clip_url, .. } if clip_url == "https://clips.twitch.tv/PipelineClip"
     ));
+}
+
+#[tokio::test]
+async fn verlorene_brokerantwort_und_unbelegter_altbestand_behalten_herkunft() {
+    let db = migrated_pool("tb_clipcontest_origin").await;
+    let pool = db.pool.clone();
+    let broker = FakeBroker::new(Err("Antwort nach Remotecommit verloren".into()));
+    let submitter = ClipContestSubmitter::new(pool.clone(), lookup(), broker.clone());
+    let url = Some("https://clips.twitch.tv/LostResponse");
+    assert_eq!(
+        submitter.submit(request(url)).await,
+        SubmitOutcome::BrokerUnavailable
+    );
+    let original = broker.requests.lock().unwrap()[0].clone();
+    assert!(original.submitted_at.is_some());
+    *broker.answer.lock().unwrap() = Ok(BrokerClipResponse {
+        status: BrokerClipStatus::Duplicate,
+        submission_id: Some(81),
+        reason: Some("idempotency_metadata_drift".into()),
+    });
+    assert!(matches!(
+        submitter.submit(request(url)).await,
+        SubmitOutcome::AlreadyIn { .. }
+    ));
+    assert_eq!(broker.requests.lock().unwrap()[1], original);
+    assert!(matches!(
+        submitter.submit(request(url)).await,
+        SubmitOutcome::AlreadyIn { .. }
+    ));
+    assert_eq!(broker.calls.load(Ordering::SeqCst), 2);
+
+    // Ein Bestand ohne belegbaren ursprünglichen Claim erhält keine neue Herkunft.
+    sqlx::query("INSERT INTO twitch_clip_contest_forwards (clip_id, clip_url, broadcaster_twitch_id, broadcaster_login, submitted_by_twitch_id, via, status, created_at, submitted_at) VALUES ('LegacyOrigin', 'https://clips.twitch.tv/LegacyOrigin', '456', 'name', '4242', 'chat', 'failed', clock_timestamp() - INTERVAL '2 days', NULL)")
+        .execute(&pool).await.unwrap();
+    *broker.answer.lock().unwrap() = accepted(82);
+    assert!(matches!(
+        submitter
+            .submit(request(Some("https://clips.twitch.tv/LegacyOrigin")))
+            .await,
+        SubmitOutcome::Accepted { .. }
+    ));
+    let body = broker.requests.lock().unwrap().last().unwrap().clone();
+    assert_eq!(body.submitted_at, None);
+    assert!(serde_json::to_value(&body)
+        .unwrap()
+        .get("submitted_at")
+        .is_none());
+    let stored: Option<DateTime<Utc>> = sqlx::query_scalar(
+        "SELECT submitted_at FROM twitch_clip_contest_forwards WHERE clip_id = 'LegacyOrigin'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored, None);
 }

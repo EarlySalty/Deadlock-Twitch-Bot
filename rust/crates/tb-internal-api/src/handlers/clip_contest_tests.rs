@@ -104,6 +104,12 @@ impl ClipContestBroker for Broker {
         assert_eq!(body.streamer_twitch_user_id, "456");
         assert_eq!(body.submitted_by_twitch_user_id.as_deref(), Some("456"));
         assert_eq!(body.streamer_login, "authentischer_partner");
+        let submitted_at = body
+            .submitted_at
+            .as_deref()
+            .expect("Serverseitige DB-Herkunft");
+        assert!(chrono::DateTime::parse_from_rfc3339(submitted_at).is_ok());
+        assert!(submitted_at.ends_with('Z'));
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(BrokerClipResponse {
             status: BrokerClipStatus::Duplicate,

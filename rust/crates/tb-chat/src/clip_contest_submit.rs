@@ -23,7 +23,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{PgPool, Row};
@@ -282,8 +282,15 @@ pub struct BrokerClipRequest {
     pub streamer_twitch_user_id: String,
     pub streamer_login: String,
     pub submitted_by_twitch_user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submitted_at: Option<String>,
     pub title: Option<String>,
     pub idempotency_key: String,
+}
+
+enum ClaimOutcome {
+    Finished(SubmitOutcome),
+    Forward(Option<DateTime<Utc>>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -509,7 +516,7 @@ impl ClipContestSubmitter {
             return Ok(SubmitOutcome::ForeignClip);
         }
 
-        if let Some(outcome) = self
+        let submitted_at = match self
             .claim(
                 request,
                 &clip_id,
@@ -519,8 +526,9 @@ impl ClipContestSubmitter {
             )
             .await?
         {
-            return Ok(outcome);
-        }
+            ClaimOutcome::Finished(outcome) => return Ok(outcome),
+            ClaimOutcome::Forward(submitted_at) => submitted_at,
+        };
 
         let broker_request = BrokerClipRequest {
             source: "twitch".into(),
@@ -533,6 +541,7 @@ impl ClipContestSubmitter {
                 .map(str::trim)
                 .filter(|id| valid_twitch_id(id))
                 .map(str::to_string),
+            submitted_at: submitted_at.map(|at| at.to_rfc3339_opts(SecondsFormat::Micros, true)),
             title: broker_title(&clip.title),
             idempotency_key: idempotency_key(&clip_id),
         };
@@ -721,8 +730,8 @@ impl ClipContestSubmitter {
         Ok(None)
     }
 
-    /// Beansprucht die Einreichung unter Advisory-Lock je Kanal. `Some`:
-    /// abbrechen mit diesem Ergebnis, `None`: Broker aufrufen.
+    /// Beansprucht die Einreichung unter Advisory-Lock je Kanal und liefert
+    /// den unveränderlichen Ursprung für die Brokerweitergabe.
     async fn claim(
         &self,
         request: &SubmitRequest,
@@ -730,7 +739,7 @@ impl ClipContestSubmitter {
         clip_url: &str,
         broadcaster_id: &str,
         streamer_login: &str,
-    ) -> Result<Option<SubmitOutcome>, sqlx::Error> {
+    ) -> Result<ClaimOutcome, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
             .bind(format!("clip-contest-forward:{broadcaster_id}"))
@@ -749,22 +758,22 @@ impl ClipContestSubmitter {
         if let Some((status, updated_at)) = zeile {
             match bestand(&status, updated_at, now) {
                 Bestand::SchonDrin => {
-                    return Ok(Some(SubmitOutcome::AlreadyIn {
+                    return Ok(ClaimOutcome::Finished(SubmitOutcome::AlreadyIn {
                         clip_url: clip_url.to_string(),
                     }))
                 }
-                Bestand::Laeuft => return Ok(Some(SubmitOutcome::InFlight)),
+                Bestand::Laeuft => return Ok(ClaimOutcome::Finished(SubmitOutcome::InFlight)),
                 Bestand::Frei => {}
             }
         }
         if limit_erreicht(Self::count_today(&mut *tx, broadcaster_id, now).await?) {
-            return Ok(Some(SubmitOutcome::RateLimited));
+            return Ok(ClaimOutcome::Finished(SubmitOutcome::RateLimited));
         }
-        sqlx::query(
+        let submitted_at: Option<DateTime<Utc>> = sqlx::query_scalar(
             "INSERT INTO twitch_clip_contest_forwards
                  (clip_id, clip_url, broadcaster_twitch_id, broadcaster_login,
-                  submitted_by_twitch_id, via, status)
-             VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+                  submitted_by_twitch_id, via, status, submitted_at)
+             VALUES ($1, $2, $3, $4, $5, $6, 'pending', clock_timestamp())
              ON CONFLICT (clip_id) DO UPDATE SET
                  clip_url = EXCLUDED.clip_url,
                  broadcaster_login = EXCLUDED.broadcaster_login,
@@ -774,7 +783,8 @@ impl ClipContestSubmitter {
                  broker_submission_id = NULL,
                  reason = NULL,
                  created_at = clock_timestamp(),
-                 updated_at = clock_timestamp()",
+                 updated_at = clock_timestamp()
+             RETURNING submitted_at",
         )
         .bind(clip_id)
         .bind(clip_url)
@@ -787,10 +797,10 @@ impl ClipContestSubmitter {
                 .filter(|id| !id.trim().is_empty()),
         )
         .bind(request.via.as_str())
-        .execute(&mut *tx)
+        .fetch_one(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(None)
+        Ok(ClaimOutcome::Forward(submitted_at))
     }
 }
 
