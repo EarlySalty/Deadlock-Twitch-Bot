@@ -111,6 +111,19 @@ struct ChannelsResponse {
 const CATEGORY_HARD_CAP: usize = 1200;
 
 impl HelixClient {
+    /// Prüft genau ein VOD über den bestehenden Helix-Zugang.
+    pub async fn video_verfuegbar(&self, twitch_id: &str) -> Result<bool, HelixError> {
+        let id = twitch_id.strip_prefix('v').unwrap_or(twitch_id);
+        if id.is_empty() || id.starts_with('0') || !id.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(HelixError::InvalidResponse("ungültige VOD-ID"));
+        }
+        let request = self.get("/videos").await?.query(&[("id", id)]);
+        let response = self.send_with_retry(request).await?;
+        let status = response.status().as_u16();
+        let body: serde_json::Value = response.json().await?;
+        video_verfuegbarkeit(status, &body, id)
+    }
+
     /// Live-Streams für die gegebenen stabilen Twitch-User-IDs (gebatcht à 100).
     pub async fn get_streams_by_user_ids(
         &self,
@@ -625,6 +638,41 @@ impl HelixClient {
     }
 }
 
+fn video_verfuegbarkeit(
+    status: u16,
+    body: &serde_json::Value,
+    id: &str,
+) -> Result<bool, HelixError> {
+    if status == 404
+        && body.get("status").and_then(|v| v.as_u64()) == Some(404)
+        && body.get("error").and_then(|v| v.as_str()) == Some("Not Found")
+        && body.get("message").is_some_and(|v| v.is_string())
+    {
+        return Ok(false);
+    }
+    if status != 200 {
+        return Err(HelixError::Status { status });
+    }
+    if body.get("error").is_some() {
+        return Err(HelixError::InvalidResponse(
+            "VOD-Antwort enthält einen Fehler",
+        ));
+    }
+    let data = body
+        .get("data")
+        .and_then(|v| v.as_array())
+        .ok_or(HelixError::InvalidResponse("VOD-Antwort ohne Datenliste"))?;
+    if data.is_empty() {
+        return Ok(false);
+    }
+    if data.len() == 1 && data[0].get("id").and_then(|v| v.as_str()) == Some(id) {
+        return Ok(true);
+    }
+    Err(HelixError::InvalidResponse(
+        "VOD-Antwort passt nicht zur angefragten ID",
+    ))
+}
+
 /// Ein Archiv-VOD (Teilmenge der Helix-`/videos`-Felder).
 #[derive(Debug, Clone, Deserialize)]
 pub struct ArchiveVideo {
@@ -816,6 +864,39 @@ pub fn normalize_ad_time(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn vod_abwesenheit_braucht_eindeutige_helix_antwort() {
+        use super::video_verfuegbarkeit as pruefe;
+        use serde_json::json;
+        assert_eq!(pruefe(200, &json!({"data": []}), "123").unwrap(), false);
+        assert_eq!(
+            pruefe(200, &json!({"data": [{"id":"123"}]}), "123").unwrap(),
+            true
+        );
+        assert_eq!(
+            pruefe(
+                404,
+                &json!({"status":404,"error":"Not Found","message":"missing"}),
+                "123"
+            )
+            .unwrap(),
+            false
+        );
+        for (status, body) in [
+            (200, json!({})),
+            (200, json!({"data":null})),
+            (200, json!({"data":[],"error":"Unauthorized"})),
+            (200, json!({"data":[{"id":"456"}]})),
+            (404, json!({})),
+            (404, json!({"status":404,"error":"Not Found"})),
+            (401, json!({"data":[]})),
+            (403, json!({"data":[]})),
+            (429, json!({"data":[]})),
+            (500, json!({"data":[]})),
+        ] {
+            assert!(pruefe(status, &body, "123").is_err());
+        }
+    }
     use super::normalize_ad_time;
     use crate::client::{HelixClient, HelixConfig, HelixError};
     use wiremock::matchers::{header, method, path, query_param};
