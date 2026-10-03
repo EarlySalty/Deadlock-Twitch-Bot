@@ -90,7 +90,7 @@ pub async fn apply_operation(
     };
     if let Some((old_epoch, old_id, old_floor)) = previous {
         if epoch < old_epoch {
-            return Ok(response(old_epoch, "stale", old_floor));
+            return Ok(response(epoch, "stale", old_floor));
         }
         if epoch == old_epoch {
             if operation_id != old_id || activity_since != old_floor {

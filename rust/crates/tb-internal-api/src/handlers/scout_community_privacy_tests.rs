@@ -152,7 +152,7 @@ async fn export_erasure_verlorene_antwort_replay_und_monotone_consent_epoche() {
     );
     let late = apply_operation(pool, A, erase_id, 1, None).await.unwrap();
     assert_eq!(late.status, "stale");
-    assert_eq!(late.epoch, 2);
+    assert_eq!(late.epoch, 1);
     assert_eq!(late.activity_since.as_deref(), Some("2026-10-01T10:00:00Z"));
     let mut replay = original.clone();
     replay.privacy_epoch = Some(2);
