@@ -5,6 +5,12 @@ DO $$ BEGIN
     IF current_database() <> 'twitch_all_live_test' THEN
         RAISE EXCEPTION 'Nur die eigene Wegwerf-Datenbank ist erlaubt';
     END IF;
+    IF to_regclass('public.twitch_watchdog_incidents') IS NULL
+        OR pg_get_serial_sequence('public.twitch_watchdog_incidents', 'id') <> 'public.twitch_watchdog_incidents_id_seq'
+        OR NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='public.twitch_watchdog_incidents'::regclass AND attname='id' AND attidentity='a')
+        OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='twitchcollector') THEN
+        RAISE EXCEPTION 'Autoritative Watchdogtabelle, Identitysequenz oder Collectorrolle fehlt';
+    END IF;
 END $$;
 \ir twitch-runtime-roles.sql
 \ir twitch-runtime-roles.sql
@@ -75,6 +81,26 @@ BEGIN
     BEGIN
         PERFORM nextval('twitch_scout_community_suggestions_id_seq');
         RAISE EXCEPTION 'Dashboard-Sequenzzugriff unerwartet erlaubt';
+    EXCEPTION WHEN insufficient_privilege THEN NULL;
+    END;
+END $$;
+RESET ROLE;
+SET LOCAL ROLE twitchcollector;
+INSERT INTO public.twitch_watchdog_incidents(service,started_at)
+VALUES ('deadlock-twitch-bot-rust.service','2026-10-03 00:00Z');
+UPDATE public.twitch_watchdog_incidents SET notified_at='2026-10-03 00:01Z'
+WHERE service='deadlock-twitch-bot-rust.service';
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM public.twitch_watchdog_incidents WHERE notified_at='2026-10-03 00:01Z') THEN
+        RAISE EXCEPTION 'Collector kann Watchdogincident nicht schreiben oder lesen';
+    END IF;
+    IF NOT (has_sequence_privilege(current_user,'public.twitch_watchdog_incidents_id_seq','USAGE')
+        AND has_sequence_privilege(current_user,'public.twitch_watchdog_incidents_id_seq','SELECT')) THEN
+        RAISE EXCEPTION 'Collector fehlen Identitysequenzrechte';
+    END IF;
+    BEGIN
+        DELETE FROM public.twitch_watchdog_incidents;
+        RAISE EXCEPTION 'Collector-Delete unerwartet erlaubt';
     EXCEPTION WHEN insufficient_privilege THEN NULL;
     END;
 END $$;

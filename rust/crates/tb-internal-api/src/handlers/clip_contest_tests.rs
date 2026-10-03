@@ -27,6 +27,65 @@ async fn migrated_pool(_db_name: &str) -> crate::test_postgres::TestPostgres {
     db
 }
 
+#[tokio::test]
+async fn clip_contest_rollenmatrix_erhaelt_community_und_watchdog_vertrag() {
+    let db = crate::test_postgres::TestPostgres::start_with_timescaledb().await;
+    for ddl in [
+        "CREATE DATABASE twitch_analytics",
+        "CREATE DATABASE twitch_all_live_test",
+        "CREATE ROLE twitchcollector NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
+    ] {
+        sqlx::query(ddl).execute(&db.pool).await.unwrap();
+    }
+    let options = (*db.pool.connect_options())
+        .clone()
+        .database("twitch_all_live_test");
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(options.clone())
+        .await
+        .unwrap();
+    sqlx::query("CREATE EXTENSION timescaledb")
+        .execute(&pool)
+        .await
+        .unwrap();
+    tb_db::migrate::MIGRATOR.run(&pool).await.unwrap();
+    let watchdog = tb_db::migrate::MIGRATOR
+        .iter()
+        .find(|migration| migration.version == 20261001220000)
+        .expect("Autoritative Watchdogmigration gehört zum vollständigen Quellstand");
+    let checksum: Vec<u8> = sqlx::query_scalar(
+        "SELECT checksum FROM _sqlx_migrations WHERE version=20261001220000 AND success",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(checksum.as_slice(), watchdog.checksum.as_ref());
+    let sql = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../ops/systemd/test_community_runtime_roles.sql");
+    let output = std::process::Command::new("/usr/lib/postgresql/16/bin/psql")
+        .args([
+            "--no-psqlrc",
+            "--host",
+            options.get_host(),
+            "--username",
+            "uplink_test",
+            "--dbname",
+            "twitch_all_live_test",
+            "--file",
+        ])
+        .arg(sql)
+        .output()
+        .expect("Rollenprüfung in eigener PostgreSQL-Fixture");
+    assert!(
+        output.status.success(),
+        "Rollenprüfung fehlgeschlagen: {}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    pool.close().await;
+}
+
 struct Lookup;
 #[async_trait::async_trait]
 impl ClipLookup for Lookup {

@@ -612,6 +612,81 @@ async fn beendete_session_begrenzt_tick_abdeckung() {
 }
 
 #[tokio::test]
+async fn sessiongrenzen_sperren_watchtime_chat_und_entdeckerbonus() {
+    let db = db::migrated_pool("tb_cp_session_boundaries").await;
+    let pool = &db.pool;
+    db::seed_partners(pool).await;
+    sqlx::query("UPDATE twitch_stream_sessions SET started_at='2026-10-01 08:00Z', ended_at='2026-10-01 08:04:30Z' WHERE id=1")
+        .execute(pool).await.unwrap();
+    ticks(pool, 1, "vor_start", "901", "2026-10-01T07:59:30Z", 1).await;
+    ticks(pool, 1, "ab_ende", "902", "2026-10-01T08:04:30Z", 2).await;
+    ticks(pool, 1, "gueltig", "903", "2026-10-01T08:00:00Z", 9).await;
+    ticks(pool, 2, "laufend", "904", "2026-10-01T10:00:00Z", 10).await;
+    sqlx::raw_sql("INSERT INTO twitch_chat_messages(session_id,streamer_login,chatter_login,chatter_id,message_ts,is_command,content) VALUES
+        (1,'alpha','vor_start','901','2026-10-01 07:59:30Z',FALSE,'Nachricht vor dem Start'),
+        (1,'alpha','ab_ende','902','2026-10-01 08:04:30Z',FALSE,'Nachricht genau am Ende'),
+        (1,'alpha','nur_chat_danach','906','2026-10-01 08:05Z',FALSE,'Nur Chat nach dem Ende'),
+        (1,'alpha','gueltig','903','2026-10-01 07:59:30Z',FALSE,'Hallo genau am Anfang'),
+        (1,'alpha','gueltig','903','2026-10-01 08:00Z',FALSE,'Hallo genau am Anfang'),
+        (1,'alpha','gueltig','903','2026-10-01 08:01Z',FALSE,'Zweite gültige Nachricht'),
+        (1,'alpha','gueltig','903','2026-10-01 08:04Z',FALSE,'Letzte gültige Nachricht'),
+        (1,'alpha','gueltig','903','2026-10-01 08:04:30Z',FALSE,'Ab Ende nicht mehr zählen'),
+        (2,'beta','laufend','904','2026-10-01 10:01Z',FALSE,'Laufende Session zählt'),
+        (2,'beta','nur_chat_laufend','905','2026-10-01 10:06Z',FALSE,'Auch Chat ohne Helix-Tick');")
+        .execute(pool).await.unwrap();
+    let d = day("2026-10-01");
+    let now = ts("2026-10-01T12:00:00Z");
+    let input = load_day_input(pool, d, now).await.unwrap();
+    assert_eq!(input.presence.len(), 3);
+    for id in ["901", "902", "906"] {
+        assert!(!input.presence.iter().any(|row| row.viewer_id == id));
+        assert!(!input.chat.keys().any(|(_, viewer)| viewer == id));
+    }
+    let closed = input
+        .presence
+        .iter()
+        .find(|row| row.viewer_id == "903")
+        .unwrap();
+    assert_eq!(closed.first_seen_at, ts("2026-10-01T08:00:00Z"));
+    assert_eq!(closed.seconds, 270.0);
+    assert_eq!(input.chat[&("100".into(), "903".into())].len(), 3);
+    aggregate_day(pool, d, now).await.unwrap();
+    let page = list_viewer_points(pool, None, 100).await.unwrap();
+    assert_eq!(page.rows.len(), 3);
+    let row = |id: &str| {
+        page.rows
+            .iter()
+            .find(|row| row.twitch_user_id == id)
+            .unwrap()
+    };
+    assert_eq!(
+        (
+            row("903").watch_minutes,
+            row("903").points_watch,
+            row("903").points_chat,
+            row("903").points_discovery
+        ),
+        (4, 0, 3, 10)
+    );
+    assert_eq!(
+        (
+            row("904").watch_minutes,
+            row("904").points_watch,
+            row("904").points_chat,
+            row("904").points_discovery
+        ),
+        (5, 1, 1, 10)
+    );
+    assert_eq!(
+        (row("905").points_chat, row("905").points_discovery),
+        (1, 10)
+    );
+    let excluded_discoveries: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_community_points_discoveries WHERE twitch_user_id IN ('901','902','906')")
+        .fetch_one(pool).await.unwrap();
+    assert_eq!(excluded_discoveries, 0);
+}
+
+#[tokio::test]
 async fn aggregation_hält_laden_und_schreiben_auf_einer_pool_connection() {
     let _db = db::migrated_pool_with_max_connections("tb_cp_single_connection", 1).await;
     let pool = _db.pool.clone();

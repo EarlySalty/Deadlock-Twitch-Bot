@@ -511,7 +511,7 @@ const PARTNER_SESSIONS_CTE: &str = "partners AS (
         SELECT * FROM UNNEST($1::text[], $2::text[]) AS p(channel_id, channel_login)
     ),
     sessions AS (
-        SELECT s.id, p.channel_id, s.ended_at
+        SELECT s.id, p.channel_id, s.started_at, s.ended_at
           FROM twitch_stream_sessions s
           JOIN partners p
             ON s.twitch_user_id = p.channel_id
@@ -539,6 +539,8 @@ async fn load_presence(
               FROM twitch_viewer_presence_ticks t
               JOIN sessions ss ON ss.id = t.session_id
              WHERE t.tick_at >= $3 AND t.tick_at < $4
+               AND t.tick_at >= ss.started_at
+               AND (ss.ended_at IS NULL OR t.tick_at < ss.ended_at)
                AND COALESCE(TRIM(t.viewer_twitch_user_id), '') <> ''
             UNION ALL
             SELECT ss.channel_id, m.chatter_id, LOWER(m.chatter_login), m.message_ts,
@@ -546,6 +548,8 @@ async fn load_presence(
               FROM twitch_chat_messages m
               JOIN sessions ss ON ss.id = m.session_id
              WHERE m.message_ts >= $3 AND m.message_ts < $4
+               AND m.message_ts >= ss.started_at
+               AND (ss.ended_at IS NULL OR m.message_ts < ss.ended_at)
                AND COALESCE(TRIM(m.chatter_id), '') <> ''
         ),
         ordered AS (
@@ -613,6 +617,8 @@ async fn load_chat(
           FROM twitch_chat_messages m
           JOIN sessions ss ON ss.id = m.session_id
          WHERE m.message_ts >= $3 AND m.message_ts < $4
+           AND m.message_ts >= ss.started_at
+           AND (ss.ended_at IS NULL OR m.message_ts < ss.ended_at)
            AND COALESCE(TRIM(m.chatter_id), '') <> ''
          ORDER BY ss.channel_id, TRIM(m.chatter_id), m.message_ts, m.id"
     );
