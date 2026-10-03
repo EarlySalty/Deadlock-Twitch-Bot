@@ -8,10 +8,7 @@ if [[ $EUID -ne 0 ]]; then
   echo "Der Release-Installer muss als root laufen." >&2
   exit 1
 fi
-brain_editor_only=0
-if [[ $# -eq 3 && $3 == --brain-editor-only ]]; then
-  brain_editor_only=1
-elif [[ $# -ne 2 ]]; then
+if [[ $# -ne 2 ]]; then
   echo "Aufruf: $0 <sauberer-checkout> <vollständiger-git-sha>" >&2
   exit 1
 fi
@@ -81,97 +78,6 @@ fi
 # Builders könnten dabei Programme ausführen. Vertrauenswürdige Skripte und SQL
 # kommen unten ausschließlich per `git archive` aus dem expliziten SHA;
 # generierte Artefakte werden separat auf Typ, Eigentum und Schreibschutz geprüft.
-
-if [[ $brain_editor_only -eq 1 ]]; then
-  release_root=/opt/deadlock/twitch/releases
-  current=/opt/deadlock/twitch/current
-  for directory in /opt /opt/deadlock /opt/deadlock/twitch "$release_root"; do
-    if [[ ! -d "$directory" || -L "$directory" || $(stat -c %u "$directory") != 0 ]] ||
-       [[ -n $(find "$directory" -maxdepth 0 -perm /022 -print) ]]; then
-      echo "Release-Elternverzeichnis ist nicht ausschließlich rootkontrolliert." >&2
-      exit 1
-    fi
-  done
-  if [[ ! -L "$current" || $(stat -c %u "$current") != 0 ]]; then
-    echo "Der Editorrelease benötigt einen root-eigenen current-Link." >&2
-    exit 1
-  fi
-  previous_link=$(readlink -- "$current")
-  previous_release=$(realpath -- "$current")
-  previous_name=$(basename -- "$previous_release")
-  if [[ $(dirname -- "$previous_release") != "$release_root" ||
-        ! "$previous_name" =~ ^[0-9a-f]{8,40}(-dashboard-[0-9a-f]{8,40})?(-brain-[0-9a-f]{40})?$ ||
-        ! -d "$previous_release" || -L "$previous_release" ||
-        ! -f "$previous_release/SHA256SUMS" || -L "$previous_release/SHA256SUMS" ]] ||
-     [[ -n $(find "$previous_release" -xdev \( ! -user root -o -perm /022 \) -print -quit) ]] ||
-     [[ -n $(find "$previous_release" -xdev ! \( -type f -o -type d \) -print -quit) ]]; then
-    echo "Der bestehende Release ist nicht sicher kopierbar." >&2
-    exit 1
-  fi
-  (cd "$previous_release" && sha256sum --check --strict SHA256SUMS >/dev/null)
-  editor=rust/target/release/tb-config-check
-  if [[ ! -f "$checkout/$editor" || -L "$checkout/$editor" ]] ||
-     [[ $(readelf --string-dump=.twitch_build "$checkout/$editor" 2>/dev/null | awk '/\[/{print $NF}') != "$git_sha" ]]; then
-    echo "Der Konfigeditor stammt nicht aus dem angegebenen sauberen SHA." >&2
-    exit 1
-  fi
-  baseline_revision=$(readelf --string-dump=.twitch_build "$previous_release/rust/target/release/tb-bot" 2>/dev/null | awk '/\[/{print $NF}')
-  if [[ ! "$baseline_revision" =~ ^[0-9a-f]{40}$ ||
-        "$previous_name" != "$baseline_revision"* && "$previous_name" != "${baseline_revision:0:8}"* ]]; then
-    echo "Die bisherige Bot-Herkunft passt nicht zum Release." >&2
-    exit 1
-  fi
-  previous_editor_revision=$baseline_revision
-  if [[ "$previous_name" == *-brain-* ]]; then previous_editor_revision=${previous_name##*-brain-}; fi
-  for binary in "$previous_release"/rust/target/release/*; do
-    revision=$(readelf --string-dump=.twitch_build "$binary" 2>/dev/null | awk '/\[/{print $NF}')
-    expected_revision=$baseline_revision
-    if [[ $(basename -- "$binary") == tb-config-check ]]; then expected_revision=$previous_editor_revision; fi
-    if [[ "$revision" != "$expected_revision" ]]; then
-      echo "Ein vorhandenes Binary verletzt den bisherigen SHA-Herkunftsvertrag." >&2
-      exit 1
-    fi
-  done
-  base_name=${previous_name%-brain-*}
-  release="$release_root/$base_name-brain-$git_sha"
-  if [[ -e "$release" || -L "$release" ]]; then
-    echo "Der Editorrelease existiert bereits." >&2
-    exit 1
-  fi
-  stage=$(mktemp -d "$release_root/.stage-brain-$git_sha-XXXXXXXX")
-  cleanup_editor_stage() {
-    if [[ -d "$stage" && "$stage" == "$release_root"/.stage-brain-"$git_sha"-* ]]; then
-      find "$stage" -xdev -depth -delete
-    fi
-  }
-  trap cleanup_editor_stage EXIT
-  cp -a "$previous_release/." "$stage/"
-  install -o root -g root -m 0755 "$checkout/$editor" "$stage/$editor"
-  while IFS= read -r -d '' relative; do
-    if [[ "$relative" != ./SHA256SUMS && "$relative" != "./$editor" ]]; then
-      cmp --silent "$previous_release/$relative" "$stage/$relative"
-    fi
-  done < <(cd "$previous_release" && find . -type f -print0)
-  if [[ $(readelf --string-dump=.twitch_build "$stage/$editor" 2>/dev/null | awk '/\[/{print $NF}') != "$git_sha" ]]; then
-    echo "Die installierte Editorherkunft stimmt nicht." >&2
-    exit 1
-  fi
-  (cd "$stage" && find . -type f ! -path ./SHA256SUMS -print0 | sort -z | xargs -0 sha256sum >SHA256SUMS && sha256sum --check --strict SHA256SUMS >/dev/null)
-  chmod 0755 "$stage"
-  chmod 0644 "$stage/SHA256SUMS"
-  if [[ $(readlink -- "$current") != "$previous_link" ]]; then
-    echo "current wurde während der Editorinstallation geändert." >&2
-    exit 1
-  fi
-  mv -- "$stage" "$release"
-  temporary=$(mktemp -d /opt/deadlock/twitch/.brain-current.XXXXXXXX)
-  ln -s -- "releases/$(basename -- "$release")" "$temporary/current"
-  mv -Tf -- "$temporary/current" "$current"
-  rmdir -- "$temporary"
-  trap - EXIT
-  printf 'Twitch-Editorrelease aktiviert: %s\n' "$release"
-  exit 0
-fi
 
 generated=(
   rust/target/release/tb-bot
