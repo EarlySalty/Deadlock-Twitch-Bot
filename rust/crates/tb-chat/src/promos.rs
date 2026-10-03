@@ -35,6 +35,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+#[path = "../../../test-support/postgres.rs"]
+mod pitch_test_postgres;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
@@ -4293,6 +4297,7 @@ mod db_tests {
     struct MockPitchJudge {
         response: Option<crate::promo_pitch::PitchResponse>,
         calls: Arc<std::sync::atomic::AtomicUsize>,
+        inputs: Mutex<Vec<PitchJudgeInput>>,
     }
 
     impl MockPitchJudge {
@@ -4300,6 +4305,7 @@ mod db_tests {
             Self {
                 response,
                 calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                inputs: Mutex::new(Vec::new()),
             }
         }
     }
@@ -4308,9 +4314,10 @@ mod db_tests {
     impl PitchJudge for MockPitchJudge {
         async fn decide(
             &self,
-            _input: PitchJudgeInput,
+            input: PitchJudgeInput,
         ) -> Option<crate::promo_pitch::PitchResponse> {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inputs.lock().await.push(input);
             self.response.clone()
         }
     }
@@ -5923,6 +5930,96 @@ mod db_tests {
             1,
             "eine Review-Karte erwartet"
         );
+    }
+
+    #[tokio::test]
+    async fn screenshot_anfaenger_anlass_sendet_einmal_und_behaelt_schutzregeln() {
+        let postgres = super::pitch_test_postgres::TestPostgres::start().await;
+        let pool = postgres.pool.clone();
+        apply_ddl(&pool).await;
+        seed_partner_channel(&pool, "c-cryonix", "cryonixkanal").await;
+        let api = Arc::new(super::tests::MockApi::default());
+        let judge = Arc::new(MockPitchJudge::new(
+            crate::promo_pitch::parse_pitch_response(
+                r#"{"occasion":"new_player","reply":"der erste tag hat es in sich. andere deadlock-spieler helfen bei uns im discord mit deinen anfängerfragen, damit du dich nicht allein durchbeißen musst.","ernst_gemeint":true,"confidence":0.95}"#,
+            ),
+        ));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(judge.clone())
+            .set_zuschauer_register(test_register(pool.clone()));
+        let mut event = pitch_event(
+            "c-cryonix",
+            "cryonixkanal",
+            "u-cryonix",
+            "Cryonix_Cluster",
+            "Habe heute auch mit diesem Spiel angefangen",
+        );
+        engine.on_message_pitch(&event).await;
+        assert_eq!(api.message_count().await, 1);
+        let inputs = judge.inputs.lock().await;
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].game.as_deref(), Some("Deadlock"));
+        assert_eq!(inputs[0].trigger_text, event.text());
+        drop(inputs);
+
+        for text in [
+            "Yoa' meistens bekomme ich auf's Maul",
+            "Sach ma' welche Rollen gibt es in diesem Spiel?",
+        ] {
+            event.message.text = text.to_string();
+            engine.on_message_pitch(&event).await;
+        }
+        assert_eq!(
+            api.message_count().await,
+            1,
+            "Folgefragen dürfen keinen zweiten Pitch auslösen"
+        );
+        assert_eq!(judge.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let sent: (String, String) = sqlx::query_as(
+            "SELECT occasion, target_user_id FROM twitch_promo_pitch_log WHERE sent_at IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(sent, ("new_player".to_string(), "u-cryonix".to_string()));
+
+        seed_partner_channel(&pool, "c-negativ", "negativkanal").await;
+        let negative = Arc::new(MockPitchJudge::new(
+            crate::promo_pitch::parse_pitch_response(
+                r#"{"occasion":"new_player","reply":"andere spieler helfen bei deinen anfängerfragen","ernst_gemeint":false,"confidence":0.95}"#,
+            ),
+        ));
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_pitch_judge(negative.clone())
+            .set_zuschauer_register(test_register(pool.clone()));
+        let mut event = pitch_event(
+            "c-negativ",
+            "negativkanal",
+            "u-ironie",
+            "Ironie",
+            "Klar, nach 1000 Stunden habe ich heute erst mit diesem Spiel angefangen",
+        );
+        engine.on_message_pitch(&event).await;
+        assert_eq!(negative.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            api.message_count().await,
+            1,
+            "Ein nicht ernst gemeintes Urteil bleibt still"
+        );
+
+        event.chatter_user_id = "u-adressat".into();
+        event.message.text = "@anderer Habe heute auch mit diesem Spiel angefangen".into();
+        event.reply = Some(crate::types::ChatReply {
+            parent_user_id: "u-anderer".into(),
+            parent_user_login: "anderer".into(),
+        });
+        engine.on_message_pitch(&event).await;
+        assert_eq!(
+            negative.calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "Fremde Anrede muss vor dem Judge blockieren"
+        );
+        assert_eq!(api.message_count().await, 1);
     }
 
     #[tokio::test]
