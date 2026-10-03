@@ -124,7 +124,7 @@ done
 # ausführen. Ein neuer Checkout-Name macht eine kopierte alte Binary nicht neu.
 check_binary_revisions() {
   local source_root="$1" binary embedded_revision
-  local binaries=(tb-bot tb-dashboard tb-stream-audit)
+  local binaries=(tb-bot tb-dashboard tb-stream-audit tb-config-check)
   if [[ "$collector_expected" == 1 ]]; then binaries+=(tb-category-collector); fi
   if [[ "$clip_context_expected" == 1 ]]; then binaries+=(clip_context_learn); fi
   if [[ "$watchdog_expected" == 1 ]]; then binaries+=(tb-twitch-watchdog); fi

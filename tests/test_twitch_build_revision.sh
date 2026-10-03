@@ -62,16 +62,29 @@ build_and_check "$second"
 sed -n '/^check_binary_revisions() {$/,/^}$/p' "$repo/ops/systemd/install-twitch-release.sh" > "$scratch/check.sh"
 source "$scratch/check.sh"
 mkdir -p "$scratch/package/rust/target/release"
-for name in tb-bot tb-dashboard tb-stream-audit; do
+for name in tb-bot tb-dashboard tb-stream-audit tb-config-check; do
   cp "$scratch/target/debug/revision-check" "$scratch/package/rust/target/release/$name"
 done
 git_sha="$second"
+collector_expected=0
+clip_context_expected=0
+watchdog_expected=0
 check_binary_revisions "$scratch/package"
 git_sha="$third"
 if (check_binary_revisions "$scratch/package") 2>/dev/null; then
   echo 'Veraltete Binaries wurden akzeptiert' >&2; exit 1
 fi
 git_sha="$second"
+cp /usr/bin/true "$scratch/package/rust/target/release/tb-config-check"
+if (check_binary_revisions "$scratch/package") 2>/dev/null; then
+  echo 'Editor ohne Herkunft wurde akzeptiert' >&2; exit 1
+fi
+rm -- "$scratch/package/rust/target/release/tb-config-check"
+if (check_binary_revisions "$scratch/package") 2>/dev/null; then
+  echo 'Release ohne Editor wurde akzeptiert' >&2; exit 1
+fi
+cp "$scratch/target/debug/revision-check" "$scratch/package/rust/target/release/tb-config-check"
+check_binary_revisions "$scratch/package"
 cp /usr/bin/true "$scratch/package/rust/target/release/tb-bot"
 if (check_binary_revisions "$scratch/package") 2>/dev/null; then
   echo 'Binary ohne Herkunft wurde akzeptiert' >&2; exit 1

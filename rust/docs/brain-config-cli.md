@@ -26,7 +26,7 @@ Nach erfolgreicher Gesamtprüfung und atomarem Speichern folgt dasselbe begrenzt
 
 ## Installation und Betrieb
 
-Installation und produktive Ausführung erfolgen erst nach gemeinsamer Abnahme über den bestehenden privilegierten Verwaltungsweg. Das Binary muss aus demselben geprüften Integrationsstand stammen; die vorhandenen Skripte `ops/systemd/deploy-twitch-release` und `ops/systemd/install-twitch-release.sh` verteilen `tb-config-check` derzeit nicht als Releaseartefakt. Diese Installation bleibt Aufgabe der Integration, ohne Erweiterung dieser Skripte in diesem Bauschritt.
+Installation und produktive Ausführung erfolgen nach gemeinsamer Abnahme über den bestehenden privilegierten Verwaltungsweg. `ops/systemd/install-twitch-release.sh` installiert `tb-config-check` als Releaseartefakt und prüft dessen eingebetteten Git-SHA beim Checkout und beim Release. `ops/systemd/deploy-twitch-release` erlaubt die begrenzten Aufrufe `--brain-inspect` und `--brain-apply --expected-revision <alter-sha256>` gegen die feste produktive Konfiguration.
 
 Das ausführende Konto benötigt Leserechte auf die Konfiguration, Schreib- und Suchrechte im Konfigurationsverzeichnis, Zugriff auf `.bot.toml.lock` und die erforderlichen Rechte zum Erhalten von Eigentümer, Gruppe und Dateimodus. Das Werkzeug beschafft keine erhöhten Rechte. Eine vorhandene Sperrdatei behält ihre Metadaten; eine neue Sperre erhält Eigentümer und Gruppe der Konfiguration sowie Modus `0600`, bei gruppenlesbarer Konfiguration `0660`. Symlinks, harte Links beim Schreiben, Sonderdateien, Git-Checkouts als Schreibablage, unzugängliche Sperren und Revisionskonflikte führen zum Abbruch.
 

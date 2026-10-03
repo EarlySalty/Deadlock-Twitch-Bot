@@ -1,13 +1,15 @@
+include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
+
 use std::{
     ffi::OsStr,
     io::{Read, Write},
 };
 use tb_config::{
+    BotConfigSnapshot,
     editor::{
-        inspect_brain, save_brain, BrainInspection, BrainPatch, EditError, BRAIN_CONFIG_PATH,
+        BRAIN_CONFIG_PATH, BrainInspection, BrainPatch, EditError, inspect_brain, save_brain,
     },
     file::ConfigArguments,
-    BotConfigSnapshot,
 };
 
 fn print_brain(inspection: &BrainInspection) -> Result<(), EditError> {
@@ -22,10 +24,18 @@ fn report_edit(result: Result<(), EditError>) -> std::process::ExitCode {
         Err(error) => {
             match error {
                 EditError::Invalid(error) => eprintln!("{error}"),
-                EditError::Conflict => eprintln!("Die gespeicherte Konfiguration wurde verändert. Brain-Stand erneut prüfen."),
-                EditError::Busy => eprintln!("Die Konfiguration wird gerade bearbeitet. Später erneut versuchen."),
-                EditError::UnsafeLocation => eprintln!("Konfiguration und Sperre müssen reguläre Dateien ohne Verknüpfungen sein und außerhalb eines Git-Checkouts liegen."),
-                EditError::Io => eprintln!("Brain-Konfiguration konnte nicht gelesen oder gespeichert werden. Dateirechte und Betriebsablage prüfen."),
+                EditError::Conflict => eprintln!(
+                    "Die gespeicherte Konfiguration wurde verändert. Brain-Stand erneut prüfen."
+                ),
+                EditError::Busy => {
+                    eprintln!("Die Konfiguration wird gerade bearbeitet. Später erneut versuchen.")
+                }
+                EditError::UnsafeLocation => eprintln!(
+                    "Konfiguration und Sperre müssen reguläre Dateien ohne Verknüpfungen sein und außerhalb eines Git-Checkouts liegen."
+                ),
+                EditError::Io => eprintln!(
+                    "Brain-Konfiguration konnte nicht gelesen oder gespeichert werden. Dateirechte und Betriebsablage prüfen."
+                ),
             }
             std::process::ExitCode::from(2)
         }
@@ -53,6 +63,9 @@ fn apply_brain(expected_revision: &str) -> Result<(), EditError> {
 }
 
 fn main() -> std::process::ExitCode {
+    if print_build_revision() {
+        return std::process::ExitCode::SUCCESS;
+    }
     let arguments = match ConfigArguments::parse(std::env::args_os().skip(1)) {
         Ok(arguments) => arguments,
         Err(error) => {
@@ -83,7 +96,9 @@ fn main() -> std::process::ExitCode {
         }
         [] => {}
         _ => {
-            eprintln!("Erlaubt sind --config, zusätzlich --brain-inspect oder --brain-apply --expected-revision mit dem alten SHA-256.");
+            eprintln!(
+                "Erlaubt sind --config, zusätzlich --brain-inspect oder --brain-apply --expected-revision mit dem alten SHA-256."
+            );
             return std::process::ExitCode::from(2);
         }
     }
