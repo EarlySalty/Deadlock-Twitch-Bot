@@ -837,6 +837,15 @@ async fn historische_mitternachtsänderungen_korrigieren_chat_und_präsenz_im_fo
         (1,'alpha','viewer','111','2026-10-01 21:59:30Z','Nachricht über die Tagesgrenze hinweg'),
         (1,'alpha','viewer','111','2026-10-01 22:01:00Z','Nachricht über die Tagesgrenze hinweg');")
         .execute(pool).await.unwrap();
+    assert!(
+        sqlx::query_scalar::<_, bool>(
+            "SELECT bool_and(tableoid <> 'public.twitch_chat_messages'::regclass)
+             FROM twitch_chat_messages",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    );
     let previous = day("2026-10-01");
     let following = day("2026-10-02");
     let now = ts("2026-10-04T12:00:00Z");
@@ -1150,6 +1159,16 @@ async fn historische_raidkorrektur_markiert_erfolg_tag_und_beide_ids_nach_aggreg
     db::seed_partners(pool).await;
     let id: i64 = sqlx::query_scalar("INSERT INTO twitch_raid_history(from_broadcaster_id,from_broadcaster_login,to_broadcaster_id,to_broadcaster_login,executed_at,success) VALUES ('100','alpha','200','beta','2026-10-01 12:00Z',TRUE) RETURNING id")
         .fetch_one(pool).await.unwrap();
+    assert!(
+        sqlx::query_scalar::<_, bool>(
+            "SELECT tableoid <> 'public.twitch_raid_history'::regclass
+             FROM twitch_raid_history WHERE id=$1",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    );
     let now = ts("2026-10-03T12:00:00Z");
     run_aggregation(pool, now, false).await.unwrap();
     let before = list_streamer_points(pool, None, 100).await.unwrap();
