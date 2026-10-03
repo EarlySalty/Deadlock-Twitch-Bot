@@ -30,7 +30,7 @@ Danach nutzt `!rank @deinname` diesen Account über die Deadlock API. Die Verbin
 - `!watchtime` zeigt deine hier erfasste Zuschauerzeit und den Anteil im laufenden Stream. Gezählt werden erfasste Anwesenheiten, auch mit Pausen dazwischen. Die Zahl ist keine lückenlose Messung deiner tatsächlichen Sehzeit.
 - `!rank`, `!wins`, `!winrate`, `!mmr`, `!live`, `!lastmatch`, `!streak` und `!mostplayed` zeigen Deadlock-Statistiken des Streamers. `!live` meint ein laufendes Spiel, nicht den Twitch-Livestatus.
 - `!clip` erstellt einen Clip aus dem laufenden Stream. Der Kanalschalter muss an sein und die Twitch-Verbindung passen. Die Kategorie ist egal.
-- `!discord`, `!dldc` und `!dlde` zeigen den hinterlegten Discord-Link. `!invite` zeigt einen Einladungslink. Diese Befehle funktionieren auch offline.
+- `!dldc` und `!dlde` zeigen den hinterlegten Discord-Link. `!invite` zeigt einen Einladungslink. `!discord` gehört bewusst nicht dem Bot, damit Creator ihren eigenen `!discord`-Command nutzen können. Diese Befehle funktionieren auch offline.
 - `!sub` zeigt den Abo-Link dieses Kanals. `!sub erinnerung an/aus/status` verwaltet deine freiwillige Abo-Erinnerung.
 - `!lurk` sagt dem Chat, dass du still weiterschaust, sofern der Kanal den Befehl eingeschaltet hat.
 - `!commands` verlinkt die Befehlsübersicht, `!dashboard` öffnet dein Twitch-Dashboard, `!help <thema>` die passende Hilfe und `!ping` prüft, ob der Bot antwortet.

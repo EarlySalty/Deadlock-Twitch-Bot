@@ -86,7 +86,6 @@ mod tests {
         for command in [
             "!raid",
             "!traid",
-            "!discord",
             "!dldc",
             "!dlde",
             "!invite",

@@ -465,7 +465,7 @@ impl CommandEngine {
             return false;
         };
         if crate::stat_commands::StatCommand::from_chat(command).is_some()
-            || matches!(command, "!clip" | "!discord" | "!invite")
+            || matches!(command, "!clip" | "!dldc" | "!dlde" | "!invite")
         {
             return false;
         }
@@ -647,7 +647,7 @@ impl CommandEngine {
                 }
                 true
             }
-            "!dldc" | "!dlde" | "!discord" => {
+            "!dldc" | "!dlde" => {
                 self.cmd_dldc(event).await;
                 true
             }
@@ -4014,7 +4014,7 @@ mod tests {
                 "!lastmatch",
                 "!streak",
                 "!mostplayed",
-                "!discord",
+                "!dldc",
                 "!invite",
                 "!commands",
                 "!help",
@@ -4030,6 +4030,13 @@ mod tests {
                     "{text} antwortet bei live={is_live}, {game}"
                 );
             }
+            let before = api.message_count().await;
+            assert!(
+                !engine.handle(&make_event("!discord", false, false)).await,
+                "!discord muss dem Creator frei bleiben"
+            );
+            assert_eq!(api.message_count().await, before);
+
             // Ein normaler Zuschauer erhält weiterhin keinen Mod-Zugriff.
             engine.handle(&make_event("!raid", false, false)).await;
             assert!(api
@@ -4054,7 +4061,6 @@ mod tests {
             "!clip",
             "!createclip",
             "!invite",
-            "!discord",
             "!dldc",
         ] {
             assert!(

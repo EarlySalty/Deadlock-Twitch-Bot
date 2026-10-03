@@ -44,7 +44,7 @@ Passt ein Anlass, schreibst du genau zwei kurze Teile in dieser Reihenfolge:
 1. Reagiere echt auf das Gesagte. Kein Werbeton, keine Floskel.
 2. Nenne genau einen dazu passenden Grund, warum sich der Community-Discord für diese Person wirklich lohnt. Verkaufe nicht den Ort oder die Aktivität, sondern den ersparten Aufwand, den konkreten Zugang oder den Schutz. Gute Nutzen sind: statt Solo Queue aktive Voice-Lanes bzw. einen festen Ranked-Stack nutzen; für Scrims nicht erst Gegner über einzelne DMs zusammensuchen; an Deadlock-Turnieren mit Anmeldung teilnehmen; eine konkrete Build-/Item-Frage mit anderen Deadlock-Spielern klären; komplett kostenloses Coaching, bei dem ein Replay mit einem Coach durchgegangen werden kann; neue Deadlock-Patchnotes auf Deutsch bekommen, ohne das englische Changelog selbst übersetzen zu müssen; oder Scam-/Fake-Server-Pitches durch den Schutz in Partner-Chats erkennen lassen. Zähle nie mehrere Vorteile auf, wenn die Nachricht nur zu einem passt.
 
-Sonderfall coaching: Der zweite Teil soll nicht vage bleiben. Sag klar, dass das Coaching komplett kostenlos ist und wie man es bekommt: !discord nutzen, auf dem Server den Kanal #ich-brauch-einen-coach öffnen und dort Coaching beantragen. Nenne keinen direkten Invite-Link.
+Sonderfall coaching: Der zweite Teil soll nicht vage bleiben. Sag klar, dass das Coaching komplett kostenlos ist und wie man es bekommt: !dldc nutzen, auf dem Server den Kanal #ich-brauch-einen-coach öffnen und dort Coaching beantragen. Nenne keinen direkten Invite-Link.
 
 Leere Meta-Sätze sind verboten, auch wenn sie nett klingen: "gut aufgehoben", "wer Bock auf Deadlock hat", "schau mal rein", "schau vorbei", "Austausch", "vernetzen", "Gleichgesinnte", "Community für Deadlock" oder sinngleiche Aussagen ohne konkretes Ergebnis. Ebenfalls verboten sind Verwaltungs- und Broschürenformulierungen wie "wird aufbereitet", "kann angefragt werden", "wird gemeinsam besprochen", "zum Organisieren", "findest du im Discord" oder "im Discord findest du". Wenn der Satz im Kern nur sagt, wo etwas passiert, statt warum es nützlich ist, setzt du occasion auf null. Der Zuschauer soll wegen eines echten Vorteils Interesse bekommen, nicht weil du ihm sagst, dass die Community existiert.
 
@@ -139,7 +139,7 @@ impl PitchOccasion {
     }
 }
 
-pub const COACHING_ACTION_CTA: &str = "coaching ist bei uns komplett kostenlos: !discord nutzen, auf dem server #ich-brauch-einen-coach öffnen und dort coaching beantragen.";
+pub const COACHING_ACTION_CTA: &str = "coaching ist bei uns komplett kostenlos: !dldc nutzen, auf dem server #ich-brauch-einen-coach öffnen und dort coaching beantragen.";
 
 pub fn finalize_occasion_reply(occasion: PitchOccasion, model_reply: &str) -> String {
     if occasion != PitchOccasion::Coaching {
@@ -148,7 +148,7 @@ pub fn finalize_occasion_reply(occasion: PitchOccasion, model_reply: &str) -> St
 
     let body = model_reply.trim();
     let lower = body.to_lowercase();
-    if lower.contains("!discord")
+    if lower.contains("!dldc")
         && lower.contains("#ich-brauch-einen-coach")
         && lower.contains("kostenlos")
         && lower.contains("beantrag")
@@ -1037,7 +1037,7 @@ mod tests {
         );
         assert!(reply.starts_with("uff, nach ein paar monaten festzuhängen ist mies."));
         assert!(reply.contains("komplett kostenlos"));
-        assert!(reply.contains("!discord"));
+        assert!(reply.contains("!dldc"));
         assert!(reply.contains("#ich-brauch-einen-coach"));
         assert!(reply.contains("coaching beantragen"));
         assert!(pitch_filter_reject(&reply).is_none());
@@ -1046,7 +1046,7 @@ mod tests {
 
     #[test]
     fn coaching_reply_dupliziert_vollstaendigen_antragsweg_nicht() {
-        let model = "festhängen nervt. coaching ist bei uns komplett kostenlos: !discord nutzen, auf dem server #ich-brauch-einen-coach öffnen und dort coaching beantragen.";
+        let model = "festhängen nervt. coaching ist bei uns komplett kostenlos: !dldc nutzen, auf dem server #ich-brauch-einen-coach öffnen und dort coaching beantragen.";
         assert_eq!(
             finalize_occasion_reply(PitchOccasion::Coaching, model),
             model
