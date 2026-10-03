@@ -68,3 +68,11 @@ tags = ["steam", "token", "deadlock-custom"]
 
 [[rules.allowlists]]
 regexes = ['''(?i)(example|sample|dummy|test|fake|placeholder|changeme)''']
+
+[[allowlists]]
+description = "Öffentlicher Trustpilot-Widgetbezeichner im Browsermarkup; kein Zugangsschlüssel."
+targetRules = ["generic-api-key"]
+paths = ['''website/src/components/partner-clean/Trustpilot\.tsx''']
+regexTarget = "line"
+regexes = ['''data-token="[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"''']
+condition = "AND"

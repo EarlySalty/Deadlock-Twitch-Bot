@@ -19,7 +19,7 @@ fn body_wird_geprueft_und_normalisiert() {
         twitch_login: " @Neuling ".into(),
         suggested_by_discord_id: DISCORD_A.into(),
         reason: Some("Spielt stark".into()),
-        idempotency_key: "discord-suggestion-1".into(),
+        idempotency_key: "k".into(),
         submitted_at: None,
         privacy_epoch: None,
     })
