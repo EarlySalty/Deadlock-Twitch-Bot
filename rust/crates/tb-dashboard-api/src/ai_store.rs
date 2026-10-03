@@ -454,6 +454,7 @@ mod tests {
         let writer = PgPoolOptions::new().max_connections(2).min_connections(0)
             .connect_lazy_with(db.pool.connect_options().as_ref().clone().application_name("ai-cleanup-cancel-test"));
         let store = AiStore::new(&writer);
+        let cleanup_task = store._cleanup.handle.abort_handle();
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
             loop {
                 let blocked: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_stat_activity
@@ -465,6 +466,12 @@ mod tests {
         }).await.expect("Der Aufräumtask muss tatsächlich auf dem gesperrten DELETE warten");
         drop(store);
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while !cleanup_task.is_finished() { tokio::task::yield_now().await; }
+        }).await.expect("Der Aufräumtask muss vor Freigabe des Blockers beendet sein");
+        // PostgreSQL verarbeitet das Verbindungsende erst nach der blockierten
+        // Anfrage. Der abgebrochene Task darf keinen DELETE bestätigen.
+        blocker.rollback().await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
             loop {
                 let active: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_stat_activity
                     WHERE application_name = 'ai-cleanup-cancel-test')")
@@ -473,7 +480,6 @@ mod tests {
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         }).await.expect("Abbruch muss das wartende Backend schließen");
-        blocker.rollback().await.unwrap();
         let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM twitch_ai_chat_sessions")
             .fetch_one(&db.pool).await.unwrap();
         assert_eq!(rows, 1, "Der abgebrochene DELETE wurde nicht bestätigt");
