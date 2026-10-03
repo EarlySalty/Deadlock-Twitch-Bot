@@ -31,6 +31,7 @@ async fn migrated_pool(_db_name: &str) -> crate::test_postgres::TestPostgres {
 async fn clip_contest_rollenmatrix_erhaelt_community_und_watchdog_vertrag() {
     let db = crate::test_postgres::TestPostgres::start_with_timescaledb().await;
     for ddl in [
+        "CREATE ROLE postgres NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
         "CREATE DATABASE twitch_analytics",
         "CREATE DATABASE twitch_all_live_test",
         "CREATE ROLE twitchcollector NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
