@@ -22,7 +22,11 @@ pub enum CommandNameValidationError {
 }
 
 pub fn key(entry: &CommandInfo) -> &'static str {
-    entry.name.strip_prefix('!').unwrap_or(entry.name)
+    // Die gespeicherte Kommandoidentität bleibt bei einem neuen Standardnamen erhalten.
+    match entry.name {
+        "!dldc" => "discord",
+        name => name.strip_prefix('!').unwrap_or(name),
+    }
 }
 
 pub fn entry_by_key(command_key: &str) -> Option<&'static CommandInfo> {
@@ -202,6 +206,27 @@ mod tests {
     #[test]
     fn stat_commands_custom_names_ersetzen_standardnamen_und_aliase() {
         let mut overrides = BTreeMap::new();
+        let community_command = entry_by_key("discord").unwrap();
+        assert_eq!(community_command.name, "!dldc");
+        assert_eq!(effective_name(community_command, &overrides), "!dldc");
+        assert_eq!(effective_aliases(community_command, &overrides), &["!dlde"]);
+        assert!(resolve_command("!discord", &overrides).is_none());
+        assert!(conflicting_command("raid", "!discord", &overrides).is_none());
+        overrides.insert("discord".into(), "!community".into());
+        assert_eq!(effective_name(community_command, &overrides), "!community");
+        assert!(effective_aliases(community_command, &overrides).is_empty());
+        assert_eq!(
+            resolve_command("!community", &overrides).map(|entry| entry.name),
+            Some("!dldc")
+        );
+        for trigger in ["!discord", "!dldc", "!dlde"] {
+            assert!(resolve_command(trigger, &overrides).is_none());
+        }
+        assert!(conflicting_command("discord", "!community", &overrides).is_none());
+        assert_eq!(
+            conflicting_command("raid", "!community", &overrides).map(key),
+            Some("discord")
+        );
         assert_eq!(
             resolve_command("!raid", &overrides).map(|c| c.name),
             Some("!raid")
