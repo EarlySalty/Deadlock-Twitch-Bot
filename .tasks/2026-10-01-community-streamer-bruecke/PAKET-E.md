@@ -24,7 +24,7 @@ datum: 2026-10-01
 | Ergebnis | Text |
 | --- | --- |
 | angenommen | Clip ist im Wochen-Contest, die Community stimmt im Discord ab. |
-| schon drin (eigener Eintrag oder Broker `duplicate`) | Der Clip ist schon im Wochen-Contest. |
+| schon drin (eigener Eintrag oder Broker `duplicate`) | Der Clip wurde bereits eingereicht und wird nicht erneut gesendet. |
 | abgelehnt | Der Clip wurde nicht angenommen: <Grund>. `not_partner`: „dieser Kanal ist im Discord noch nicht als Partner eingetragen. Bitte melde dich beim Team.“; `invalid_clip_url`, `idempotency_conflict` mit eigenem Satz, sonst allgemein |
 | Broker nicht erreichbar | Der Discord ist gerade nicht erreichbar. Versuch es später nochmal. |
 | Limit | Heute sind schon 3 Clips aus diesem Kanal eingereicht. Morgen geht es weiter. |

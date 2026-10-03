@@ -433,7 +433,25 @@ pub async fn record_chatters_for_streamer(
             new_lurkers += 1;
         }
 
-        // 2) session_chatters — Conflict aktualisiert NUR last_seen_at
+        // Wie der Chatpfad zuerst Rollup, danach Session-Chatter sperren.
+        // 2) rollup: total_messages/total_sessions nie inkrementieren;
+        //    chatter_id per COALESCE nachtragen (bestehende ID gewinnt, Python).
+        sqlx::query!(
+            "INSERT INTO twitch_chatter_rollup \
+             (streamer_login, chatter_login, chatter_id, first_seen_at, last_seen_at, \
+              total_messages, total_sessions) \
+             VALUES ($1, $2, $3, $4, $4, 0, 1) \
+             ON CONFLICT (streamer_login, chatter_login) DO UPDATE SET \
+               last_seen_at = EXCLUDED.last_seen_at, \
+               chatter_id = COALESCE(twitch_chatter_rollup.chatter_id, EXCLUDED.chatter_id)",
+            &streamer.streamer_login,
+            login,
+            chatter_id.as_deref(),
+            tick_at,
+        )
+        .execute(&mut *tx)
+        .await?;
+        // 3) session_chatters — Conflict aktualisiert NUR last_seen_at
         //    (chatter_id wie Python NICHT überschrieben).
         sqlx::query!(
             "INSERT INTO twitch_session_chatters \
@@ -452,23 +470,6 @@ pub async fn record_chatters_for_streamer(
         .execute(&mut *tx)
         .await?;
 
-        // 3) rollup — total_messages/total_sessions NIE inkrementieren;
-        //    chatter_id per COALESCE nachtragen (bestehende ID gewinnt, Python).
-        sqlx::query!(
-            "INSERT INTO twitch_chatter_rollup \
-             (streamer_login, chatter_login, chatter_id, first_seen_at, last_seen_at, \
-              total_messages, total_sessions) \
-             VALUES ($1, $2, $3, $4, $4, 0, 1) \
-             ON CONFLICT (streamer_login, chatter_login) DO UPDATE SET \
-               last_seen_at = EXCLUDED.last_seen_at, \
-               chatter_id = COALESCE(twitch_chatter_rollup.chatter_id, EXCLUDED.chatter_id)",
-            &streamer.streamer_login,
-            login,
-            chatter_id.as_deref(),
-            tick_at,
-        )
-        .execute(&mut *tx)
-        .await?;
         // Anwesenheit und Plattform-ID gemeinsam mit den übrigen Daten schreiben.
         sqlx::query(
             "INSERT INTO twitch_viewer_presence_ticks

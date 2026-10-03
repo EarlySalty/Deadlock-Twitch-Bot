@@ -1,6 +1,8 @@
 -- Rohänderungen bleiben für den Consent-Sync sichtbar, auch bei Punktedeckeln.
 CREATE TABLE twitch_community_points_dirty_days (
-    day DATE PRIMARY KEY
+    day DATE NOT NULL,
+    generation UUID NOT NULL DEFAULT gen_random_uuid(),
+    PRIMARY KEY (day, generation)
 );
 
 CREATE FUNCTION twitch_community_mark_dirty_day() RETURNS trigger
@@ -55,12 +57,11 @@ BEGIN
                 INTERVAL '1 day') d);
         END IF;
     END IF;
-    -- Das Update hält die Zeilensperre bis zum Rohdatencommit. Eine parallele
-    -- Aggregation liest danach die Änderung oder lässt eine neue Markierung stehen.
-    -- Alte und neue Tage gemeinsam sortieren, damit Datumswechsel gleich sperren.
+    -- Jede Rohtransaktion hinterlässt eigene Markierungen. Die Aggregation
+    -- bestätigt nur vor ihrem Lesen sichtbare Generationen; spätere bleiben stehen.
+    -- Dadurch halten Rohschreiber keine gemeinsame Tageszeile gesperrt.
     INSERT INTO public.twitch_community_points_dirty_days(day)
-    SELECT DISTINCT d FROM unnest(affected_days) AS days(d) ORDER BY d
-    ON CONFLICT (day) DO UPDATE SET day = EXCLUDED.day;
+    SELECT DISTINCT d FROM unnest(affected_days) AS days(d) ORDER BY d;
     RETURN NULL;
 END $$;
 REVOKE ALL ON FUNCTION twitch_community_mark_dirty_day() FROM PUBLIC;

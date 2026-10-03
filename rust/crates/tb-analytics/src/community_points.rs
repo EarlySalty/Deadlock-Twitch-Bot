@@ -1121,18 +1121,26 @@ pub async fn aggregate_day(
         .execute(&mut *tx)
         .await?;
 
-    // Die Tageszeile vor dem Lesen sperren. Gleichzeitige Rohschreiber setzen
-    // nach unserem Commit eine neue Markierung, statt ihre Änderung zu verlieren.
-    let raw_activity_changed =
-        sqlx::query("DELETE FROM twitch_community_points_dirty_days WHERE day=$1")
-            .bind(day)
-            .execute(&mut *tx)
-            .await?
-            .rows_affected()
-            > 0;
+    // Nur bereits committed Generationen bestätigen. Spätere Rohtransaktionen
+    // bleiben für den nächsten Lauf sichtbar, ohne während der Rechnung zu warten.
+    let generations: Vec<String> = sqlx::query_scalar(
+        "SELECT generation::text FROM twitch_community_points_dirty_days WHERE day=$1",
+    )
+    .bind(day)
+    .fetch_all(&mut *tx)
+    .await?;
+    let raw_activity_changed = !generations.is_empty();
     let input = load_day_input_on_conn(&mut tx, day, now).await?;
     let output = compute_day(&input);
     let stats = write_day_on_conn(&mut tx, day, &output, raw_activity_changed).await?;
+    sqlx::query(
+        "DELETE FROM twitch_community_points_dirty_days
+         WHERE day=$1 AND generation::text=ANY($2)",
+    )
+    .bind(day)
+    .bind(&generations)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(stats)
 }
@@ -1147,7 +1155,7 @@ pub async fn run_aggregation(
     let mut out = Vec::new();
     let mut days = days_to_aggregate(now, first_run);
     let dirty: Vec<NaiveDate> = sqlx::query_scalar(
-        "SELECT day FROM twitch_community_points_dirty_days WHERE day <= $1 ORDER BY day",
+        "SELECT DISTINCT day FROM twitch_community_points_dirty_days WHERE day <= $1 ORDER BY day",
     )
     .bind(berlin_day(now))
     .fetch_all(pool)

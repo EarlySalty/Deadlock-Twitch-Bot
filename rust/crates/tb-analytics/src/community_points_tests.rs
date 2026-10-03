@@ -931,27 +931,16 @@ async fn historische_mitternachtsänderungen_korrigieren_chat_und_präsenz_im_fo
     }
 }
 
-async fn wait_for_dirty_day_fixture_lock(pool: &PgPool, query: Option<&str>) {
+async fn wait_for_dirty_day_fixture_lock(pool: &PgPool) {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
-        let waiting: bool = if let Some(query) = query {
-            sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM pg_stat_activity
-                WHERE datname=current_database() AND wait_event_type='Lock' AND query=$1)",
-            )
-            .bind(query)
-            .fetch_one(pool)
-            .await
-            .unwrap()
-        } else {
-            sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM pg_locks
-                WHERE locktype='advisory' AND objid::bigint=74103 AND NOT granted)",
-            )
-            .fetch_one(pool)
-            .await
-            .unwrap()
-        };
+        let waiting: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pg_locks
+             WHERE locktype='advisory' AND objid::bigint=74103 AND NOT granted)",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
         if waiting {
             return;
         }
@@ -994,7 +983,7 @@ async fn dirty_day_write_race(aggregation_first: bool) {
         "CREATE TRIGGER fixture_pause_dirty AFTER DELETE ON twitch_community_points_dirty_days
          FOR EACH ROW EXECUTE FUNCTION dirty_day_fixture_pause()"
     } else {
-        // AFTER-Trigger laufen nach Namen; die Markerzeile ist vor dieser Pause gesperrt.
+        // Die neue Generation ist geschrieben, aber noch nicht committed.
         "CREATE TRIGGER z_fixture_pause_dirty AFTER INSERT ON twitch_viewer_presence_ticks
          FOR EACH ROW EXECUTE FUNCTION dirty_day_fixture_pause()"
     };
@@ -1015,7 +1004,7 @@ async fn dirty_day_write_race(aggregation_first: bool) {
                 .unwrap();
         }
     });
-    wait_for_dirty_day_fixture_lock(pool, None).await;
+    wait_for_dirty_day_fixture_lock(pool).await;
     let second_pool = (*pool).clone();
     let second = tokio::spawn(async move {
         if aggregation_first {
@@ -1027,18 +1016,14 @@ async fn dirty_day_write_race(aggregation_first: bool) {
             aggregate_day(&second_pool, d, now).await.unwrap();
         }
     });
-    wait_for_dirty_day_fixture_lock(
-        pool,
-        Some(if aggregation_first {
-            DIRTY_DAY_RACE_INSERT
-        } else {
-            "DELETE FROM twitch_community_points_dirty_days WHERE day=$1"
-        }),
-    )
-    .await;
+    // Der zweite Pfad muss fertig werden, während der erste noch pausiert ist.
+    // So belegt die DB sowohl nicht blockierte Erfassung als auch nicht verlorene Marker.
+    tokio::time::timeout(std::time::Duration::from_secs(5), second)
+        .await
+        .expect("Rohschreiber und Aggregation blockieren einander")
+        .unwrap();
     pause.commit().await.unwrap();
     first.await.unwrap();
-    second.await.unwrap();
     let pending: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM twitch_community_points_dirty_days WHERE day=$1)",
     )
@@ -1048,11 +1033,8 @@ async fn dirty_day_write_race(aggregation_first: bool) {
     .unwrap();
     let intermediate = list_viewer_points(pool, Some(cursor), 100).await.unwrap();
     assert_eq!(intermediate.rows.len(), 1);
-    assert_eq!(pending, aggregation_first);
-    assert_eq!(
-        intermediate.rows[0].watch_minutes,
-        if aggregation_first { 5 } else { 6 }
-    );
+    assert!(pending, "Die spätere Rohgeneration muss erhalten bleiben");
+    assert_eq!(intermediate.rows[0].watch_minutes, 5);
     run_aggregation(pool, now, false).await.unwrap();
     let after = list_viewer_points(pool, Some(cursor), 100).await.unwrap();
     assert_eq!(after.rows.len(), 1);

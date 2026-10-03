@@ -305,7 +305,7 @@ selbst liegt in der zentralen DB (Deadlock-Bots, Paket D).
 | `clip_id` (PK) | Twitch-Clip-ID (Slug) |
 | `clip_url` | kanonisch `https://clips.twitch.tv/<clip_id>` |
 | `broadcaster_twitch_id`, `broadcaster_login` | Partnerkanal |
-| `submitted_by_twitch_id` | wer eingereicht hat (Broadcaster/Mod), Dashboard-Admin ohne |
+| `submitted_by_twitch_id` | Twitch-ID des Chatakteurs oder der authentifizierten Dashboard-Session |
 | `via` | `chat` oder `dashboard` |
 | `status` | `pending`, `accepted`, `duplicate`, `rejected`, `failed` |
 | `broker_submission_id`, `reason` | Antwort des Brokers |

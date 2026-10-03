@@ -42,8 +42,8 @@ Gegen Wegwerf-Timescale (`timescale/timescaledb:2.17.2-pg16`), `TB_TEST_DATABASE
 ## Rest-Risiken
 
 - Ticks ohne passende `chatter_id` in `twitch_session_chatters` (alte Zeilen, IRC-Lurker ohne ID) zählen nicht.
-- Partner-Status gilt zum Zeitpunkt der Rechnung: verliert ein Kanal den Partnerstatus im Lauf des Tages, werden seine Tageszeilen genullt. Vergangene Tage (außer Vortag in der Kulanzstunde) werden nicht nachgerechnet.
-- Daten, die nach der Kulanzstunde für den Vortag eintreffen (z. B. Bot lange offline über Mitternacht), werden nur beim nächsten Neustart (erster Lauf) berücksichtigt.
+- Partner-Status gilt zum Zeitpunkt der Rechnung: verliert ein Kanal den Partnerstatus, werden seine Tageszeilen beim nächsten Lauf für diesen Tag genullt. Markierte alte Tage werden bei Rohdatenkorrekturen erneut berechnet und verwenden ebenfalls den aktuellen Partnerbestand.
+- Später eingetroffene oder korrigierte Rohdaten markieren die betroffenen Berliner Tage. Der nächste Aggregationslauf verarbeitet diese Markierungen auch außerhalb des Startup- und Kulanzfensters.
 - Chat-Vorgeschichte reicht 2 h zurück; ein Duplikat zu einer älteren letzten Nachricht wird nicht erkannt.
 - Entdecker-Bonus ist eine endgültige Entscheidung; wird ein Kanal-Bann später aufgehoben, kommt der Bonus nicht nachträglich.
 - Last: Jeder Lauf liest alle Ticks und Nachrichten des Tages der Partnerkanäle. Bei deutlich mehr Partnern/Zuschauern ggf. inkrementell rechnen.

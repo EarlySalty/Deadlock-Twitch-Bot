@@ -340,7 +340,26 @@ const EN: Record<string, string> = {
   'Für Clip-Contest einreichen': 'Submit to clip contest',
   'Clip ist im Wochen-Contest, die Community stimmt im Discord ab.':
     'Clip is in the weekly contest, the community votes on Discord.',
-  'Der Clip ist schon im Wochen-Contest.': 'This clip is already in the weekly contest.',
+  'Der Clip wurde bereits eingereicht und wird nicht erneut gesendet.':
+    'This clip has already been submitted and will not be sent again.',
+  'Clips einreichen geht nur in Kanälen von Partnern.':
+    'Clips can only be submitted in partner channels.',
+  'Clips einreichen können nur der Broadcaster und Mods.':
+    'Only the broadcaster and moderators can submit clips.',
+  'Twitch antwortet gerade nicht. Versuch es gleich nochmal.':
+    'Twitch is not responding right now. Please try again in a moment.',
+  "So geht's: !clipcontest <Clip-Link> reicht einen Clip aus diesem Kanal für den Wochen-Contest im Discord ein. Ohne Link nehme ich den neuesten Clip aus dem laufenden Stream.":
+    'Use !clipcontest <clip link> to submit a clip from this channel to the weekly contest on Discord. Without a link, the newest clip from the current stream is used.',
+  'Der Clip wurde nicht angenommen: dieser Kanal ist im Discord noch nicht als Partner eingetragen. Bitte melde dich beim Team.':
+    'The clip was not accepted: this channel is not registered as a partner on Discord yet. Please contact the team.',
+  'Der Clip wurde nicht angenommen: der Link ist kein gültiger Twitch-Clip.':
+    'The clip was not accepted: the link is not a valid Twitch clip.',
+  'Der Clip wurde nicht angenommen: er passt nicht zu einer früheren Einreichung.':
+    'The clip was not accepted: it conflicts with an earlier submission.',
+  'Der Clip wurde nicht angenommen: er ist diese Woche schon dabei.':
+    'The clip was not accepted: it is already in this week’s contest.',
+  'Der Clip wurde nicht angenommen: der Contest nimmt ihn gerade nicht an.':
+    'The clip was not accepted: the contest is not accepting it right now.',
   'Heute sind schon 3 Clips aus diesem Kanal eingereicht. Morgen geht es weiter.':
     'This channel already submitted 3 clips today. Try again tomorrow.',
   'Der Discord ist gerade nicht erreichbar. Versuch es später nochmal.':
