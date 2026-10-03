@@ -28,8 +28,8 @@ fn twitch_actor<'a>(
 ) -> Option<&'a str> {
     session.filter(|s| !s.0.is_empty())?;
     match auth {
-        DashboardAuthLevel::Partner { twitch_user_id, .. } => Some(twitch_user_id),
-        DashboardAuthLevel::Admin { actor: Some(actor) } => Some(&actor.twitch_user_id),
+        DashboardAuthLevel::Partner { twitch_user_id, .. } => Some(twitch_user_id.as_str()),
+        DashboardAuthLevel::Admin { actor: Some(actor) } => Some(actor.twitch_user_id.as_str()),
         _ => None,
     }
     .filter(|id| valid_twitch_id(id))
