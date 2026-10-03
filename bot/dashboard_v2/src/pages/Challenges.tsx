@@ -2,10 +2,13 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Check,
+  Copy,
+  Link,
+  Film,
+  Search,
   Clock3,
   Crown,
   Flame,
-  LockKeyhole,
   Medal,
   Snowflake,
   Sparkles,
@@ -16,6 +19,7 @@ import {
 } from 'lucide-react';
 import {
   fetchChallengesMe,
+  fetchNetworkAvatars,
   fetchChallengeViewers,
   fetchEffortLeaderboard,
   fetchViewerLeaderboard,
@@ -26,6 +30,15 @@ import { ApiHttpError } from '@/api/httpError';
 
 type LeaderboardTab = 'viewers' | 'effort';
 
+
+const ACHIEVEMENT_NAMES: Record<string, string> = {
+  recruiter: 'Werber', team_player: 'Teamspieler', duo: 'Duo',
+  stamina: 'Ausdauer', talent_scout: 'Talentscout', clip_hunter: 'Clipjäger',
+};
+const ACHIEVEMENT_ICONS = {
+  recruiter: UserPlus, team_player: Users, duo: Users,
+  stamina: Flame, talent_scout: Search, clip_hunter: Film,
+};
 
 const ACHIEVEMENT_CONDITIONS: Record<string, string> = {
   recruiter: 'aktive Leute in den Discord bringen',
@@ -61,7 +74,7 @@ function ProgressBar({
       className="h-2.5 overflow-hidden rounded-full border border-white/5 bg-black/35"
     >
       <div
-        className="h-full rounded-full bg-gradient-to-r from-primary to-accent transition-[width] duration-500"
+        className="h-full rounded-full bg-gradient-to-r from-primary to-[#f1d299] transition-[width] duration-500"
         style={{ width: `${pct}%` }}
       />
     </div>
@@ -98,13 +111,13 @@ function SectionTitle({ title, aside }: { title: string; aside?: ReactNode }) {
 
 function QuestCard({ quest }: { quest: ChallengeQuest }) {
   return (
-    <article className="panel-card rounded-2xl border border-border p-4 md:p-5">
+    <article className="panel-card challenge-quest rounded-2xl border border-primary/25 p-5 md:p-6">
       <div className="flex items-start justify-between gap-3">
         <h3 className="font-semibold leading-snug text-white">{quest.text}</h3>
         <div
           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border ${
             quest.completed
-              ? 'border-success/30 bg-success/10 text-success'
+              ? 'border-primary/30 bg-primary/10 text-primary'
               : 'border-primary/20 bg-primary/10 text-primary'
           }`}
         >
@@ -131,6 +144,7 @@ function LeaderboardRow({
   own,
   raidBoost,
   pinned = false,
+  avatarUrl,
 }: {
   rank: number;
   name: string;
@@ -138,33 +152,40 @@ function LeaderboardRow({
   own: boolean;
   raidBoost?: boolean;
   pinned?: boolean;
+  avatarUrl?: string | null;
 }) {
   const first = rank === 1;
+  const topThree = rank <= 3;
+  const podium = rank === 2 ? 'border-[#e3d4b6]/20 bg-[#e3d4b6]/5' : 'border-[#d98a33]/20 bg-[#d98a33]/5';
   return (
     <div
-      className={`grid grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border px-3 py-2 md:px-4 ${
+      data-rank={rank}
+      className={`grid grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border px-3 py-3 md:px-4 ${
         own
-          ? 'border-amber-500/50 bg-amber-500/15'
+          ? 'border-primary/50 bg-primary/15'
           : pinned
             ? 'border-primary/40 bg-primary/10'
             : first
               ? 'border-primary/20 bg-primary/5'
-              : 'border-border bg-black/15'
+              : topThree ? podium : 'border-white/5 bg-black/15'
       }`}
     >
       <div className="flex items-center justify-center">
         {first ? (
           <Crown className="h-5 w-5 text-primary" aria-label="Platz 1" />
+        ) : topThree ? (
+          <Medal className={`h-5 w-5 ${rank === 2 ? 'text-[#e3d4b6]' : 'text-[#d98a33]'}`} aria-label={`Platz ${rank}`} />
         ) : (
           <span className={`text-sm font-bold tabular-nums ${own ? 'text-primary' : 'text-text-secondary'}`}>#{rank}</span>
         )}
       </div>
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
+      <div className="flex min-w-0 items-center gap-3">
+        <ChallengeAvatar name={name} url={avatarUrl} />
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <span className="truncate font-semibold text-white">{name}</span>
           {own ? (
             <span className="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-primary">
-              Du
+              DU
             </span>
           ) : null}
           {raidBoost ? (
@@ -180,14 +201,37 @@ function LeaderboardRow({
   );
 }
 
-function achievementBadges(achievements: ChallengeAchievement[]) {
-  return achievements.flatMap(achievement =>
-    achievement.tiers.map((tier, index) => ({
-      id: `${achievement.key}-${tier.target}`,
-      title: `${achievement.name} ${index + 1}`,
-      condition: `${tier.target} ${ACHIEVEMENT_CONDITIONS[achievement.key] ?? 'Fortschritt erreichen'}`,
-      earned: tier.unlocked,
-    })),
+function ChallengeAvatar({ name, url }: { name: string; url?: string | null }) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  return url && url !== failedUrl ? (
+    <img src={url} alt="" loading="lazy" onError={() => setFailedUrl(url)} className="h-10 w-10 shrink-0 rounded-full border border-white/15 object-cover" />
+  ) : (
+    <span aria-hidden="true" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm font-bold text-text-secondary">{name[0]?.toLocaleUpperCase('de-DE') ?? '?'}</span>
+  );
+}
+
+function AchievementCard({ achievement }: { achievement: ChallengeAchievement }) {
+  const nextTier = achievement.tiers.findIndex(tier => !tier.unlocked);
+  const targetTier = achievement.tiers[nextTier] ?? achievement.tiers.at(-1);
+  const Icon = ACHIEVEMENT_ICONS[achievement.key as keyof typeof ACHIEVEMENT_ICONS] ?? Trophy;
+  const name = ACHIEVEMENT_NAMES[achievement.key] ?? achievement.name;
+  const complete = nextTier === -1;
+  return (
+    <article data-achievement={achievement.key} className="challenge-achievement rounded-2xl border border-white/10 bg-black/20 p-5">
+      <div className="flex items-center gap-3">
+        <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${complete ? 'border-primary/30 bg-primary/10 text-primary' : 'border-white/10 bg-white/5 text-text-secondary'}`}><Icon className="h-5 w-5" /></span>
+        <div className="min-w-0"><h3 className="font-semibold text-white">{name}</h3><p className="mt-1 text-xs text-text-secondary">{ACHIEVEMENT_CONDITIONS[achievement.key]}</p></div>
+      </div>
+      <div className="mt-5 flex gap-2" aria-label={`Stufen für ${name}`}>
+        {achievement.tiers.map((tier, index) => (
+          <div key={tier.target} title={`Stufe ${index + 1}: ${tier.target}, ${tier.unlocked ? 'erreicht' : index === nextTier ? 'nächste Stufe' : 'noch gesperrt'}`} className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg border py-2 text-xs font-semibold ${tier.unlocked ? 'border-primary/35 bg-primary/15 text-primary' : index === nextTier ? 'border-primary/35 text-primary' : 'border-white/5 bg-black/20 text-text-secondary/60'}`}>
+            {tier.unlocked ? <Check className="h-3.5 w-3.5" /> : null}Stufe {index + 1}
+          </div>
+        ))}
+      </div>
+      <div className="mb-2 mt-4 flex justify-between gap-2 text-xs"><span className="text-text-secondary">{complete ? 'Alle Stufen erreicht' : `Nächste Stufe: ${nextTier + 1}`}</span><span className={`font-semibold tabular-nums ${complete ? 'text-primary' : 'text-white'}`}>{achievement.progress.toLocaleString('de-DE')} / {targetTier?.target.toLocaleString('de-DE') ?? 0}</span></div>
+      <ProgressBar current={achievement.progress} target={targetTier?.target ?? 0} label={`Fortschritt für ${name}`} />
+    </article>
   );
 }
 
@@ -207,6 +251,7 @@ function LoadingState() {
 
 export function Challenges() {
   const queryClient = useQueryClient();
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
   const [leaderboardTab, setLeaderboardTab] = useState<LeaderboardTab>('viewers');
   const me = useQuery({
     queryKey: ['challenges', 'me'],
@@ -232,6 +277,11 @@ export function Challenges() {
     staleTime: 60_000,
     refetchInterval: 60_000,
   });
+
+  const network = useQuery({
+    queryKey: ['public-network', 'avatars'], queryFn: fetchNetworkAvatars, staleTime: 300_000,
+  });
+  const avatarFor = (login: string, supplied?: string | null) => supplied ?? network.data?.streamers.find(streamer => streamer.login.toLowerCase() === login.toLowerCase())?.avatar_url;
 
   const countdown = useMondayCountdown(me.data?.next_reset_at);
   const quests = me.data?.quests ?? [];
@@ -290,6 +340,15 @@ export function Challenges() {
   }
 
   const data = me.data;
+  const copyReferral = async () => {
+    if (!data.referral_url) return;
+    try {
+      await navigator.clipboard.writeText(data.referral_url);
+      setCopyStatus('copied');
+    } catch {
+      setCopyStatus('error');
+    }
+  };
   const nextThreshold = data.level.next_threshold;
   const levelTarget =
     nextThreshold === null ? 1 : Math.max(1, nextThreshold - data.level.current_threshold);
@@ -301,24 +360,14 @@ export function Challenges() {
     nextThreshold === null
       ? 'Du hast die aktuelle Maximalstufe erreicht.'
       : `${data.next_goal.fastest_route} bis Level ${data.level.level + 1}.`;
-  const badges = achievementBadges(data.achievements);
+
 
   return (
-    <div className="space-y-6 pb-10">
-      {data.category_data_complete === false && (
-        <div role="status" className="panel-card rounded-2xl border border-primary/30 p-4 text-sm text-text-secondary">
-          Deine Punkte und Erfolge bleiben erhalten. Wegen einer Datenlücke sind betroffene Stream-Aufgaben und die Ausdauer-Wertung ausgesetzt. Die Rangliste zeigt die bisher bestätigten Punkte. Vollständig erfasste Zeiträume werden automatisch wieder gewertet.
-        </div>
-      )}
-      <section className="panel-card rounded-2xl border border-primary/35 bg-black/25 px-4 py-3 md:px-5">
-        <p className="display-font text-xl font-bold leading-snug text-white md:text-2xl">
-          {nextGoalSentence}
-        </p>
-        <div className="mt-3">
-          <ProgressBar current={levelCurrent} target={levelTarget} label="Fortschritt zum nächsten Ziel" />
-        </div>
-      </section>
-
+    <div className="challenges-page space-y-8 pb-32">
+      <header className="flex items-center gap-4 py-3 md:py-5">
+        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-primary/25 bg-primary/10 text-primary"><Trophy className="h-7 w-7" /></div>
+        <div><h1 className="display-font text-3xl font-bold tracking-tight text-white md:text-4xl">Rangliste <span className="text-primary">&amp; Erfolge</span></h1><p className="mt-2 text-sm text-text-secondary">Deine Wochenaufgaben, dein Fortschritt und die Community im Vergleich.</p></div>
+      </header>
       <section className="space-y-4">
         <SectionTitle
           title="Diese Woche"
@@ -332,7 +381,7 @@ export function Challenges() {
                 <Flame className="h-3.5 w-3.5" />
                 {data.streak.current} Wochen{data.streak.data_complete === false ? ' (letzter bestätigter Stand)' : ''}
               </span>
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/10 px-3 py-1.5 text-accent">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-text-secondary">
                 <Snowflake className="h-3.5 w-3.5" />
                 {data.streak.freeze_used_this_month ? 'Schutz diesen Monat verbraucht' : 'Ein Schutz pro Monat verfügbar'}
               </span>
@@ -372,7 +421,7 @@ export function Challenges() {
       <section className="space-y-4">
         <SectionTitle title="Mit uns erreicht" />
         <div className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
-          <article className="panel-card flex flex-col justify-between rounded-2xl border border-border p-4 md:p-5">
+          <article className="panel-card challenge-level rounded-2xl border border-primary/30 p-5 md:p-6">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">
@@ -384,9 +433,10 @@ export function Challenges() {
               </div>
               <Medal className="h-8 w-8 text-primary" />
             </div>
-            <div className="mt-6">
+            <p className="mt-3 text-sm font-medium text-white">{nextGoalSentence}</p>
+            <div className="mt-4">
               <div className="mb-2 flex items-center justify-between text-xs">
-                <span className="text-text-secondary">Nächstes Level</span>
+                <span className="text-text-secondary">{nextThreshold === null ? 'Maximalstufe' : `Punkte für Level ${data.level.level + 1}`}</span>
                 <span className="font-semibold text-white">
                   {Math.min(levelCurrent, levelTarget)} / {levelTarget} Punkte
                 </span>
@@ -397,7 +447,7 @@ export function Challenges() {
 
           <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-1">
             <article className="panel-card flex h-auto items-center gap-3 rounded-2xl border border-border px-4 py-2">
-              <UserPlus className="h-5 w-5 shrink-0 text-primary" />
+              <UserPlus className="h-5 w-5 shrink-0 text-text-secondary" />
               <div className="min-w-0">
                 <div className="text-xl font-bold tabular-nums text-white">
                   {data.with_us.people_brought_in_who_stayed}
@@ -424,58 +474,46 @@ export function Challenges() {
           </div>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {badges.map(badge => (
-            <article
-              key={badge.id}
-              className={`rounded-2xl border p-4 ${
-                badge.earned
-                  ? 'border-primary/30 bg-primary/10'
-                  : 'border-white/10 bg-black/20'
-              }`}
-            >
-              <div className="flex items-center gap-3">
-                <div
-                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border ${
-                    badge.earned
-                      ? 'border-primary/25 bg-primary/10 text-primary'
-                      : 'border-white/10 bg-white/5 text-zinc-300'
-                  }`}
-                >
-                  {badge.earned ? (
-                    <Trophy className="h-4 w-4" />
-                  ) : (
-                    <LockKeyhole className="h-4 w-4 text-zinc-500" />
-                  )}
-                </div>
-                <div className="min-w-0">
-                  <h3 className={`font-semibold ${badge.earned ? 'text-white' : 'text-zinc-300'}`}>
-                    {badge.title}
-                  </h3>
-                  <p className={`mt-1 text-xs ${badge.earned ? 'text-text-secondary' : 'text-zinc-300'}`}>
-                    {badge.earned ? 'Erreicht' : badge.condition}
-                  </p>
-                </div>
-              </div>
-            </article>
-          ))}
+        <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
+          {data.achievements.map(achievement => <AchievementCard key={achievement.key} achievement={achievement} />)}
         </div>
       </section>
 
       <section className="min-h-0 space-y-2">
         <SectionTitle title="Deine Werber" />
-        <div className="panel-card min-h-0 self-start rounded-2xl border border-border p-2">
+        <div className="panel-card min-h-0 self-start rounded-2xl border border-border p-4 md:p-5">
+          {data.referral_url ? (
+            <div className="mb-4">
+              <label htmlFor="challenge-referral" className="mb-2 flex items-center gap-2 text-sm font-semibold text-white">
+                <Link className="h-4 w-4 text-text-secondary" />Dein Empfehlungslink
+              </label>
+              <div className="flex gap-2">
+                <input id="challenge-referral" readOnly value={data.referral_url}
+                  onFocus={event => event.currentTarget.select()}
+                  className="min-w-0 flex-1 rounded-xl border border-white/10 px-3 py-2.5 text-sm text-white" />
+                <button type="button" onClick={() => void copyReferral()}
+                  className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-primary/30 bg-primary/10 px-4 py-2.5 text-sm font-semibold text-primary hover:bg-primary/20">
+                  <Copy className="h-4 w-4" />{copyStatus === 'copied' ? 'Kopiert' : 'Kopieren'}
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-text-secondary">Teile den Link mit deinem Chat. Aktive Einladungen werden deinem Kanal zugeordnet.</p>
+              <p role="status" className="mt-1 text-xs text-text-secondary">
+                {copyStatus === 'error' ? 'Kopieren hat nicht geklappt. Markiere den Link und kopiere ihn selbst.'
+                  : copyStatus === 'copied' ? 'Der Link ist in deiner Zwischenablage.' : ''}
+              </p>
+            </div>
+          ) : <p className="mb-4 text-sm text-text-secondary">Dein Empfehlungslink ist gerade nicht verfügbar.</p>}
           {recruiters.data?.recruiters.length ? (
             <div className="space-y-2">
-              {recruiters.data.recruiters.map((recruiter, index) => (
+              {recruiters.data.recruiters.map((recruiter) => (
                 <div
                   key={recruiter.twitch_user_id}
                   className="grid grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border border-border bg-black/15 px-3 py-2.5"
                 >
-                  <span className="text-center text-sm font-bold text-text-secondary">#{index + 1}</span>
+                  <ChallengeAvatar name={recruiter.display_name ?? 'Zuschauer'} url={recruiter.avatar_url} />
                   <div className="min-w-0">
                     <div className="truncate font-semibold text-white">
-                      {recruiter.display_name ?? 'Twitch Viewer'}
+                      {recruiter.display_name ?? 'Twitch-Zuschauer'}
                     </div>
                   </div>
                   <div className="text-right">
@@ -491,7 +529,7 @@ export function Challenges() {
             <p className="px-2 py-1 text-sm text-text-secondary">Werber werden geladen.</p>
           ) : (
             <p className="px-2 py-1 text-sm text-text-secondary">
-              Noch niemand hat über deinen Link aktive Leute gebracht.
+              Noch keine aktiven Einladungen über deinen Link.
             </p>
           )}
         </div>
@@ -500,11 +538,13 @@ export function Challenges() {
       <section className="space-y-4">
         <SectionTitle title="Rangliste" />
         <div className="panel-card rounded-2xl border border-border p-3 md:p-5">
-          <div className="mb-4 flex w-full gap-2 rounded-xl border border-border bg-black/20 p-1.5 sm:w-fit">
+          <div className="mb-4 flex w-full gap-2 rounded-full border border-white/10 bg-black/25 p-1.5 sm:w-fit">
             <button
               type="button"
               onClick={() => setLeaderboardTab('viewers')}
-              className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold transition-colors sm:flex-none ${
+              aria-pressed={leaderboardTab === 'viewers'}
+              title="Durchschnittliche Zuschauerzahl pro Stream in den letzten 30 Tagen."
+              className={`flex-1 rounded-full px-4 py-2 text-sm font-semibold transition-colors sm:flex-none ${
                 leaderboardTab === 'viewers'
                   ? 'bg-primary text-[#0D0806]'
                   : 'text-text-secondary hover:text-white'
@@ -515,7 +555,9 @@ export function Challenges() {
             <button
               type="button"
               onClick={() => setLeaderboardTab('effort')}
-              className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold transition-colors sm:flex-none ${
+              aria-pressed={leaderboardTab === 'effort'}
+              title="Bestätigte Einsatzpunkte in diesem Kalendermonat."
+              className={`flex-1 rounded-full px-4 py-2 text-sm font-semibold transition-colors sm:flex-none ${
                 leaderboardTab === 'effort'
                   ? 'bg-primary text-[#0D0806]'
                   : 'text-text-secondary hover:text-white'
@@ -525,6 +567,7 @@ export function Challenges() {
             </button>
           </div>
 
+          <div className="mb-2 grid grid-cols-[44px_minmax(0,1fr)_auto] gap-3 border-b border-white/10 px-3 pb-3 text-xs font-semibold text-text-secondary md:px-4"><span className="text-center">#</span><span>Spieler</span><span title={leaderboardTab === 'viewers' ? 'Ø Zuschauer pro Stream' : 'Bestätigte Einsatzpunkte im Monat'} className="text-right">{leaderboardTab === 'viewers' ? 'Ø Zuschauer pro Stream' : 'Punkte'}</span></div>
           {leaderboardTab === 'viewers' ? (
             viewers.isLoading ? (
               <div className="py-8 text-center text-sm text-text-secondary">Rangliste wird geladen.</div>
@@ -537,6 +580,7 @@ export function Challenges() {
                     key={`${row.rank}-${row.streamer}`}
                     rank={row.rank}
                     name={row.streamer}
+                    avatarUrl={avatarFor(row.streamer, row.avatar_url)}
                     value={`${row.avg_viewers.toLocaleString('de-DE', { maximumFractionDigits: 1 })} Ø`}
                     own={Boolean(
                       viewerOwn &&
@@ -551,6 +595,7 @@ export function Challenges() {
                     <LeaderboardRow
                       rank={viewerOwn.rank}
                       name={viewerOwn.streamer}
+                      avatarUrl={avatarFor(viewerOwn.streamer, viewerOwn.avatar_url)}
                       value={`${viewerOwn.avg_viewers.toLocaleString('de-DE', { maximumFractionDigits: 1 })} Ø`}
                       own
                       pinned
@@ -570,6 +615,7 @@ export function Challenges() {
                   key={`${row.rank}-${row.twitch_login}`}
                   rank={row.rank}
                   name={row.twitch_login}
+                  avatarUrl={avatarFor(row.twitch_login, row.avatar_url)}
                   value={`${row.points.toLocaleString('de-DE')} Punkte`}
                   own={row.is_self}
                   raidBoost={row.raid_boost}
@@ -581,6 +627,7 @@ export function Challenges() {
                   <LeaderboardRow
                     rank={effortOwn.rank}
                     name={effortOwn.twitch_login}
+                    avatarUrl={avatarFor(effortOwn.twitch_login, effortOwn.avatar_url)}
                     value={`${effortOwn.points.toLocaleString('de-DE')} Punkte`}
                     own
                     raidBoost={effortOwn.raid_boost}

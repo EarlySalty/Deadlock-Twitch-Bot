@@ -18,6 +18,8 @@ import { FeedbackBadge } from '@/components/feedback/FeedbackBadge';
 import {
   BarChart3,
   BookOpen,
+  BadgeCheck,
+  CircleHelp,
   FileText,
   Film,
   Home,
@@ -148,7 +150,7 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
     {
       href: PREVIEW_PRICING_ROUTE,
       label: `Plan: ${planName}`,
-      icon: Sparkles,
+      icon: BadgeCheck,
       active: activeRoute === 'pricing',
     },
     { href: PREVIEW_CHANGELOG_ROUTE, label: 'Changelog', icon: FileText },
@@ -300,7 +302,7 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
             Tour erneut zeigen
           </button>}
           <a href="/twitch/feedback" aria-current={activeRoute === 'feedback' ? 'page' : undefined} className="flex min-h-11 items-center gap-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-sm font-medium text-text-secondary hover:text-white"><MessageSquare className="h-4 w-4 shrink-0" /><span className="flex-1">Kritik &amp; Wünsche</span><FeedbackBadge isAdmin={adminMode} /></a>
-          <a href="/twitch/faq" className="block px-3 py-2 text-sm text-text-secondary hover:text-white">Häufige Fragen</a>
+          <a href="/twitch/faq" className="flex items-center gap-2 px-3 py-2 text-sm text-text-secondary hover:text-white"><CircleHelp className="h-4 w-4 shrink-0" />Häufige Fragen</a>
         </div>
       </div>
     </Rise>

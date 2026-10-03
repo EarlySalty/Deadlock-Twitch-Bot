@@ -50,8 +50,16 @@ test('Challenges zeigt Ziel, Wochenfortschritt, Erfolge und Werber', () => {
   }
   assert.match(PAGE, /data\.next_goal\.fastest_route/);
   assert.match(PAGE, /data\.streak\.current/);
-  assert.match(PAGE, /achievementBadges\(data\.achievements\)/);
+  assert.match(PAGE, /data\.achievements\.map\(achievement => <AchievementCard/);
   assert.match(PAGE, /recruiter\.qualified_invites/);
+  assert.doesNotMatch(PAGE, /Deine Punkte und Erfolge bleiben erhalten|Wegen einer Datenlücke|data\.category_data_complete/);
+  assert.doesNotMatch(PAGE, /achievementBadges|LockKeyhole|max-w-/);
+  for (const category of ['Werber', 'Teamspieler', 'Duo', 'Ausdauer', 'Talentscout', 'Clipjäger']) {
+    assert.ok(PAGE.includes(category), category);
+  }
+  assert.match(PAGE, /achievement\.tiers\.map/);
+  assert.match(PAGE, /achievement\.progress/);
+  assert.match(PAGE, /navigator\.clipboard\.writeText\(data\.referral_url\)/);
 });
 
 test('Rangliste hebt Platz eins und Raid Boost hervor und hält die eigene Position sichtbar', () => {
