@@ -46,7 +46,7 @@ paths = [
 description = "Öffentlicher TrustBox-Kennwert im HTML-Attribut data-token, unverändert aus origin/main. Trustpilot liefert die Einbettung für den Webseiten-Body: https://help.trustpilot.com/s/article/Add-a-product-review-TrustBox-widget?language=en_US"
 targetRules = ["generic-api-key"]
 condition = "AND"
-paths = ['''^website/src/components/partner-clean/Trustpilot\.tsx$''']
+paths = ['''(^|/)website/src/components/partner-clean/Trustpilot\.tsx$''']
 regexTarget = "line"
 regexes = ['''^\s*data-token="[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}"\s*$''']
 
