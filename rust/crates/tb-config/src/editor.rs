@@ -1,8 +1,8 @@
 use crate::{
-    BotConfigSnapshot,
     dashboard_options::BrainClientMode,
-    file::{ErrorKind, FileError, MAX_CONFIG_BYTES, Schema},
+    file::{ErrorKind, FileError, Schema, MAX_CONFIG_BYTES},
     global::Database,
+    BotConfigSnapshot,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
@@ -398,7 +398,7 @@ fn open_lock(directory: &Path, metadata: &Metadata) -> Result<File, EditError> {
                 Ok(lock) => {
                     #[cfg(unix)]
                     {
-                        use std::os::unix::fs::{MetadataExt, PermissionsExt, fchown};
+                        use std::os::unix::fs::{fchown, MetadataExt, PermissionsExt};
                         fchown(&lock, Some(metadata.uid()), Some(metadata.gid()))
                             .map_err(|_| EditError::Io)?;
                         let group = if metadata.mode() & 0o040 != 0 {
@@ -506,7 +506,7 @@ fn save_with(
         file.write_all(text.as_bytes()).map_err(|_| EditError::Io)?;
         #[cfg(unix)]
         {
-            use std::os::unix::fs::{MetadataExt, fchown};
+            use std::os::unix::fs::{fchown, MetadataExt};
             fchown(&file, Some(metadata.uid()), Some(metadata.gid())).map_err(|_| EditError::Io)?;
         }
         file.set_permissions(metadata.permissions())
@@ -652,11 +652,9 @@ pool_max=17
         );
         assert!(saved.snapshot.settings().bot.brain_chat.enabled);
         assert_eq!(unselected(&original.snapshot), unselected(&saved.snapshot));
-        assert!(
-            fs::read_to_string(fixture.path())
-                .unwrap()
-                .contains("# Ausgangsmodus")
-        );
+        assert!(fs::read_to_string(fixture.path())
+            .unwrap()
+            .contains("# Ausgangsmodus"));
         assert_eq!(
             original.snapshot.settings().bot.brain_client.mode,
             BrainClientMode::Legacy
@@ -800,11 +798,9 @@ pool_max=17
                 serde_json::to_value(saved.snapshot.settings()).unwrap(),
                 expected
             );
-            assert!(
-                fs::read_to_string(fixture.path())
-                    .unwrap()
-                    .contains("# Fremde Änderung")
-            );
+            assert!(fs::read_to_string(fixture.path())
+                .unwrap()
+                .contains("# Fremde Änderung"));
         }
     }
 
