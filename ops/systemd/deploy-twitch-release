@@ -224,15 +224,15 @@ for directory in /opt /opt/deadlock /opt/deadlock/twitch "$release_root"; do
 done
 if [[ -L "$current" ]]; then
   previous_link=$(readlink -- "$current")
-  if [[ "$previous_link" =~ ^releases/[0-9a-f]{8,40}$ ]]; then
+  if [[ "$previous_link" =~ ^releases/[0-9a-f]{8,40}(-dashboard-[0-9a-f]{8,40})?$ ]]; then
     previous_release="/opt/deadlock/twitch/$previous_link"
-  elif [[ "$previous_link" =~ ^/opt/deadlock/twitch/releases/[0-9a-f]{8,40}$ ]]; then
+  elif [[ "$previous_link" =~ ^/opt/deadlock/twitch/releases/[0-9a-f]{8,40}(-dashboard-[0-9a-f]{8,40})?$ ]]; then
     previous_release="$previous_link"
   else
     echo "Bisheriger Release-Link hat ein unerwartetes Ziel." >&2
     exit 1
   fi
-  if [[ $(stat -c %u "$current") != 0 || ! "$previous_release" =~ ^/opt/deadlock/twitch/releases/[0-9a-f]{8,40}$ ||
+  if [[ $(stat -c %u "$current") != 0 || ! "$previous_release" =~ ^/opt/deadlock/twitch/releases/[0-9a-f]{8,40}(-dashboard-[0-9a-f]{8,40})?$ ||
         ! -d "$previous_release" || -L "$previous_release" || $(stat -c %u "$previous_release") != 0 ]] ||
      [[ -n $(find "$previous_release" -maxdepth 0 -perm /022 -print) ]]; then
     echo "Bisheriger Release-Link ist nicht sicher rückstellbar." >&2
