@@ -691,7 +691,7 @@ pub fn pitch_injection_reject(reply: &str, target_login: &str) -> bool {
     })
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PitchJudgeInput {
     pub trigger_text: String,
     pub game: Option<String>,
@@ -950,6 +950,61 @@ mod tests {
     #[test]
     fn promo_pitch_steht_in_der_nur_fireworks_liste() {
         assert!(tb_llm::selection::FIREWORKS_ONLY_USE_CASES.contains(&USE_CASE));
+    }
+
+    #[tokio::test]
+    async fn screenshot_anfaenger_judge_vertrag_enthaelt_ernst_gemeint() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content":
+                    r#"{"occasion":"new_player","reply":"der erste tag hat es in sich. andere deadlock-spieler helfen bei deinen anfängerfragen.","ernst_gemeint":true,"confidence":0.95}"#}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 4}
+            })))
+            .mount(&server)
+            .await;
+        let endpoint = tb_llm::LlmEndpoint {
+            provider: "fireworks",
+            base_url: server.uri(),
+            model: tb_llm::selection::configured_fireworks_model().to_string(),
+            api_key: Some("test".to_string()),
+        };
+        let input = PitchJudgeInput {
+            trigger_text: "Sach ma' welche Rollen gibt es in diesem Spiel?".into(),
+            game: Some("Deadlock".into()),
+            title: None,
+            recent_chat: vec![
+                "Cryonix_Cluster: Habe heute auch mit diesem Spiel angefangen".into(),
+                "Cryonix_Cluster: Yoa' meistens bekomme ich auf's Maul".into(),
+            ],
+            target_login: "Cryonix_Cluster".into(),
+            beispiele: String::new(),
+        };
+        let response = FireworksPitchJudge
+            .decide_intern(input, Some(endpoint))
+            .await
+            .unwrap();
+        assert_eq!(response.occasion, Some(PitchOccasion::NewPlayer));
+        assert!(response.ernst_gemeint);
+        assert!(response.confidence >= PITCH_MIN_CONFIDENCE);
+        assert!(pitch_filter_reject(&response.reply).is_none());
+        assert!(community_value_filter_reject(&response.reply).is_none());
+        let requests = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        let system = body["messages"][0]["content"].as_str().unwrap();
+        let schema = system
+            .rsplit_once("Antworte ausschließlich mit diesem JSON:")
+            .unwrap()
+            .1;
+        assert!(schema.contains(r#""ernst_gemeint": true oder false"#));
+        let input: PitchJudgeInput =
+            serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();
+        assert_eq!(input.recent_chat.len(), 2);
+        assert!(input.trigger_text.contains("Rollen"));
     }
 
     #[tokio::test]
