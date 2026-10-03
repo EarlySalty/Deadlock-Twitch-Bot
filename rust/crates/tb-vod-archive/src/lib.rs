@@ -35,4 +35,4 @@ pub mod worker;
 
 pub use config::VodArchiveConfig;
 pub use error::VodArchiveError;
-pub use worker::VodArchiveWorker;
+pub use worker::{VodArchiveWorker, VodVerfuegbarkeit};

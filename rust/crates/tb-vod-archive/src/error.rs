@@ -4,6 +4,10 @@ use tb_social_media::uploaders::UploadError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum VodArchiveError {
+    #[error("yt-dlp meldet VOD {twitch_id} als nicht verfügbar")]
+    VideoNichtGefunden { twitch_id: String },
+    #[error("Twitch-Verfügbarkeit konnte nicht bestätigt werden")]
+    VerfuegbarkeitNichtBestaetigt,
     #[error("Upload-Sitzung konnte nicht geschützt gelesen oder gespeichert werden; Migration und Schlüssel prüfen.")]
     SessionCrypto,
     #[error("{programm} hat die Zeitgrenze von {sekunden}s ueberschritten")]

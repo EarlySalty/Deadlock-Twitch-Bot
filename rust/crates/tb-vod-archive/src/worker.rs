@@ -120,6 +120,11 @@ pub trait HochladerQuelle: Send + Sync {
     async fn fuer(&self, streamer_login: &str) -> Option<Arc<dyn TeilHochlader>>;
 }
 
+#[async_trait]
+pub trait VodVerfuegbarkeit: Send + Sync {
+    async fn ist_verfuegbar(&self, twitch_id: &str) -> Result<bool, VodArchiveError>;
+}
+
 /// Betriebsfassung: der Zugang kommt aus den Credentials **dieses** Streamers.
 ///
 /// Der globale Rueckfall von [`CredentialManager::get_credentials`] wird
@@ -160,6 +165,7 @@ pub struct VodArchiveWorker {
     config: VodArchiveConfig,
     zugang: Arc<dyn HochladerQuelle>,
     runner: Arc<dyn CommandRunner>,
+    verfuegbarkeit: Option<Arc<dyn VodVerfuegbarkeit>>,
     /// Zaehlt die Laeufe, damit der Startplatz der Warteschlange wandert.
     laeufe: AtomicUsize,
 }
@@ -246,6 +252,7 @@ impl VodArchiveWorker {
             config,
             zugang,
             runner: Arc::new(twitch::TokioCommandRunner),
+            verfuegbarkeit: None,
             laeufe: AtomicUsize::new(0),
         }
     }
@@ -254,6 +261,24 @@ impl VodArchiveWorker {
     pub fn with_runner(mut self, runner: Arc<dyn CommandRunner>) -> Self {
         self.runner = runner;
         self
+    }
+
+    pub fn with_verfuegbarkeit(mut self, pruefer: Option<Arc<dyn VodVerfuegbarkeit>>) -> Self {
+        self.verfuegbarkeit = pruefer;
+        self
+    }
+
+    async fn keine_vollstaendigen_teile(&self, vod_id: i64) -> Result<bool, VodArchiveError> {
+        let teile = store::teile(&self.pool, vod_id, &self.session_cipher).await?;
+        for teil in teile {
+            match std::fs::metadata(&teil.file_path) {
+                Ok(meta) if !meta.is_file() || meta.len() > 0 => return Ok(false),
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(true)
     }
 
     pub async fn run(&self) {
@@ -387,6 +412,33 @@ impl VodArchiveWorker {
                     break;
                 }
                 Err(fehler) => {
+                    if let VodArchiveError::VideoNichtGefunden { twitch_id } = &fehler {
+                        if braucht_download
+                            && twitch_id == &vod.twitch_id
+                            && vod.local_path.is_none()
+                        {
+                            let verzeichnis =
+                                self.config.verzeichnis_fuer(&einstellung.streamer_login);
+                            if let (Some(pruefer), Ok((false, restdaten))) = (
+                                self.verfuegbarkeit.as_ref(),
+                                lokale_vod_daten(&verzeichnis, &vod.twitch_id),
+                            ) {
+                                if matches!(self.keine_vollstaendigen_teile(vod.id).await, Ok(true))
+                                    && matches!(
+                                        pruefer.ist_verfuegbar(&vod.twitch_id).await,
+                                        Ok(false)
+                                    )
+                                {
+                                    if store::setze_nicht_verfuegbar(&self.pool, vod.id, restdaten)
+                                        .await?
+                                    {
+                                        tracing::warn!(vod = %vod.twitch_id, "VOD ist bei Twitch nicht mehr verfügbar und nicht vollständig gesichert");
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+                    }
                     let status = if braucht_download {
                         store::STATUS_DOWNLOAD_FEHLER
                     } else {
@@ -398,7 +450,13 @@ impl VodArchiveWorker {
                         %fehler,
                         "VOD fehlgeschlagen"
                     );
-                    store::setze_fehler(&self.pool, vod.id, status, &fehler.to_string()).await?;
+                    store::setze_bearbeitungsfehler(
+                        &self.pool,
+                        vod.id,
+                        status,
+                        &fehler.to_string(),
+                    )
+                    .await?;
                 }
             }
         }
@@ -547,13 +605,31 @@ impl VodArchiveWorker {
             tracing::info!(kanal = %kanal, vod = %vod.twitch_id, titel = %vod.title, "Lade VOD");
             store::setze_status(&self.pool, vod.id, store::STATUS_LAEDT).await?;
             let verzeichnis = self.config.verzeichnis_fuer(kanal);
-            let download = twitch::lade_vod(
-                self.runner.as_ref(),
-                &self.config,
-                &verzeichnis,
-                &vod.twitch_id,
-            )
-            .await?;
+            // local_path wird erst nach erfolgreichem Download geschrieben.
+            // Ein späterer Uploadfehler darf diese vollständige Kopie erneut nutzen.
+            let vorhanden = match vod.local_path.as_deref() {
+                Some(pfad) => match std::fs::metadata(pfad) {
+                    Ok(meta) if meta.is_file() && meta.len() > 0 => Some(twitch::Download {
+                        pfad: pfad.into(),
+                        aufgenommen_am: vod.recorded_at,
+                    }),
+                    Ok(_) => None,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(e) => return Err(e.into()),
+                },
+                None => None,
+            };
+            let download = if let Some(download) = vorhanden {
+                download
+            } else {
+                twitch::lade_vod(
+                    self.runner.as_ref(),
+                    &self.config,
+                    &verzeichnis,
+                    &vod.twitch_id,
+                )
+                .await?
+            };
             let laenge =
                 twitch::miss_laenge(self.runner.as_ref(), &self.config, &download.pfad).await;
             store::setze_geladen(
@@ -824,6 +900,39 @@ impl VodArchiveWorker {
     }
 }
 
+/// Vollständige Medien bleiben im bisherigen Pfad; Teilreste werden nur vermerkt.
+fn lokale_vod_daten(verzeichnis: &Path, twitch_id: &str) -> std::io::Result<(bool, bool)> {
+    let mut voll = false;
+    let mut reste = false;
+    let eintraege = match std::fs::read_dir(verzeichnis) {
+        Ok(eintraege) => eintraege,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((false, false)),
+        Err(e) => return Err(e),
+    };
+    for eintrag in eintraege {
+        let eintrag = eintrag?;
+        let name = eintrag.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with(&format!("{twitch_id}.")) {
+            continue;
+        }
+        let meta = eintrag.metadata()?;
+        if !meta.is_file() {
+            continue;
+        }
+        let medien = name.ends_with(".mp4") || name.ends_with(".mkv") || name.ends_with(".ts");
+        if medien && meta.len() > 0 {
+            voll = true;
+        }
+        if name.ends_with(".part") || medien {
+            reste = true;
+        }
+    }
+    Ok((voll, reste))
+}
+
 /// Verschraenkt die Warteschlangen mehrerer Streamer reihum: erst das aelteste
 /// VOD jedes Kanals, dann das zweitaelteste und so weiter. So verbraucht ein
 /// Kanal mit dreissig offenen VODs nicht das ganze Tageskontingent, waehrend
@@ -895,6 +1004,22 @@ fn loesche_dateien(verzeichnis: &Path, twitch_id: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn restdateien_bleiben_bei_der_verfuegbarkeitspruefung_erhalten() {
+        let dir = temp_verzeichnis("verfuegbarkeit_reste");
+        std::fs::create_dir_all(&dir).unwrap();
+        let rest = dir.join("v123.mp4.part");
+        std::fs::write(&rest, b"rest").unwrap();
+        assert_eq!(
+            super::lokale_vod_daten(&dir, "v123").unwrap(),
+            (false, true)
+        );
+        let voll = dir.join("v123.mp4");
+        std::fs::write(&voll, b"media").unwrap();
+        assert_eq!(super::lokale_vod_daten(&dir, "v123").unwrap(), (true, true));
+        assert!(rest.exists() && voll.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     use super::*;
     fn test_cipher() -> tb_crypto::FieldCipher {
         tb_crypto::FieldCipher::from_hex_key(&"11".repeat(32), "v1").unwrap()

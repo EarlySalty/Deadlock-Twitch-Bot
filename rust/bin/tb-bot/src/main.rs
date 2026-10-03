@@ -48,6 +48,7 @@ mod streamer_link;
 mod task_supervisor;
 mod token_lifecycle_wiring;
 mod user_id_backfill;
+mod vod_archive_wiring;
 mod wiring;
 
 /// Sucht das yt-dlp-Binary: `YT_DLP_PATH`, dann das Repo-venv im Arbeitsverzeichnis,
@@ -1787,7 +1788,8 @@ async fn main() {
                     vod_config,
                     vod_creds,
                     cipher,
-                );
+                )
+                .with_verfuegbarkeit(vod_archive_wiring::verfuegbarkeit(helix.as_ref().clone()));
                 supervisor.spawn("vod_archive_worker", async move { vod_archive.run().await });
             }
             Err(e) => {
