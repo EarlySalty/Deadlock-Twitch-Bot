@@ -15,6 +15,7 @@ import { HEALTH_SCORE_METRICS, healthScoreBand } from '@/utils/healthScoreContex
 import {
   ArrowRight,
   BarChart3,
+  ExternalLink,
   Heart,
   Info,
   Loader2,
@@ -415,6 +416,7 @@ export function InternalHomeLanding() {
   const [selectedStreamer, setSelectedStreamer] = useState<string | null>(
     initialInternalHomeStreamer
   );
+  const [showAllUpdates, setShowAllUpdates] = useState(false);
   const normalizedSelectedStreamer = selectedStreamer?.trim().toLowerCase() || null;
   const t = useT();
 
@@ -599,7 +601,7 @@ export function InternalHomeLanding() {
     community: 0,
   };
 
-  const changelogEntries = (home.changelog?.entries ?? []).slice(0, 3);
+  const changelogEntries = home.changelog?.entries ?? [];
   const scoreColorClass =
     score >= 70 ? 'text-success' : score >= 40 ? 'text-warning' : 'text-danger';
   const gaugeStrokeClass =
@@ -1057,7 +1059,7 @@ export function InternalHomeLanding() {
           step={{ seconds: 0.16 }}
           as="aside"
           id="changelog"
-          className="panel-card card-glow self-start rounded-2xl p-5 md:p-6"
+          className="panel-card self-start rounded-2xl p-4 md:p-5"
         >
             <div className="mb-4">
               <p className="mb-1 text-sm font-medium uppercase tracking-wider text-primary">
@@ -1070,11 +1072,16 @@ export function InternalHomeLanding() {
 
             {changelogEntries.length === 0 ? (
               <div className="rounded-xl border border-border bg-background/60 p-4 text-sm text-text-secondary">
-                Keine neuen Updates verfuegbar.
+                Keine neuen Updates verfügbar.
               </div>
             ) : (
-              <div className="space-y-2.5">
-                {changelogEntries.map((entry, index) => {
+              <div
+                id="home-news-list"
+                tabIndex={0}
+                aria-label="Neuigkeiten"
+                className="max-h-72 space-y-2 overflow-y-auto rounded-xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              >
+                {(showAllUpdates ? changelogEntries : changelogEntries.slice(0, 3)).map((entry, index) => {
                   const title = entry.title?.trim() || 'Update';
                   const content = entry.content?.trim() || 'Kein Beschreibungstext';
                   const primaryDate = entry.entryDate || entry.createdAt;
@@ -1082,26 +1089,67 @@ export function InternalHomeLanding() {
                   return (
                     <article
                       key={changelogKey(entry, index)}
-                      className="panel-card internal-home-changelog-entry rounded-xl p-3.5"
+                      className="internal-home-changelog-entry rounded-xl border border-border bg-background/60 p-3"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
                         <span className="rounded-full border border-border/70 bg-background/80 px-2.5 py-1 font-semibold text-white">
                           {formatCalendarDate(primaryDate)}
                         </span>
-                        {entry.createdAt ? (
+                        {showAllUpdates && entry.createdAt ? (
                           <span className="text-text-secondary">
                             {formatDateTime(entry.createdAt)}
                           </span>
                         ) : null}
                       </div>
                       <p className="mt-2 text-sm font-semibold text-white">{title}</p>
-                      <p className="mt-1 text-xs leading-5 text-text-secondary">{content}</p>
+                      <p className={`mt-1 text-xs leading-5 text-text-secondary ${showAllUpdates ? '' : 'line-clamp-2'}`}>{content}</p>
                     </article>
                   );
                 })}
               </div>
             )}
+            {changelogEntries.length > 0 && (
+              showAllUpdates ? (
+                <button
+                  type="button"
+                  onClick={() => setShowAllUpdates(false)}
+                  aria-expanded={true}
+                  aria-controls="home-news-list"
+                  className="mt-3 inline-flex min-h-11 items-center rounded-lg px-1 text-sm font-semibold text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                >
+                  Neuigkeiten einklappen
+                </button>
+              ) : (
+                <a
+                  href="#changelog"
+                  onClick={() => setShowAllUpdates(true)}
+                  aria-controls="home-news-list"
+                  className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-lg px-1 text-sm font-semibold text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                >
+                  Alle Neuigkeiten lesen
+                  <ArrowRight size={16} aria-hidden="true" />
+                </a>
+              )
+            )}
         </Rise>
+          <aside aria-labelledby="home-trustpilot-heading" className="panel-card rounded-2xl p-4 md:p-5">
+            <p className="mb-1 text-sm font-medium text-primary">Trustpilot</p>
+            <h2 id="home-trustpilot-heading" className="display-font text-lg font-bold text-white">
+              Wie läuft es für dich?
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-text-secondary">
+              Teile deine Erfahrung mit unserer Community. Ehrliches Feedback hilft uns weiter.
+            </p>
+            <a
+              href="https://de.trustpilot.com/evaluate/deutsche-deadlock-community.de"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl gradient-accent px-4 py-2.5 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
+            >
+              Community bewerten
+              <ExternalLink size={16} aria-hidden="true" />
+            </a>
+          </aside>
           <div id="feedback"><FeedbackBox area="Übersicht" /></div>
         </div>
       </div>

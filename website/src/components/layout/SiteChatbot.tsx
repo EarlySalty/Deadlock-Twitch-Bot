@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Bot, Loader2, MessageCircle, Send, X } from "lucide-react";
+import { Trustpilot, TrustpilotLauncher } from "@/components/partner-clean/Trustpilot";
 
 const ASK_URL = "/twitch/api/v2/self-explainer/ask";
 const OPEN_EVENT = "ddc:open-support-chat";
@@ -29,13 +30,14 @@ export function openSiteChatbot() {
   window.dispatchEvent(new Event(OPEN_EVENT));
 }
 
-export function SiteChatbot() {
+export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boolean }) {
   const [open, setOpen] = useState(false);
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const helpButtonRef = useRef<HTMLButtonElement>(null);
   const messageId = useRef(0);
 
   useEffect(() => {
@@ -52,7 +54,10 @@ export function SiteChatbot() {
       if (event.key === "Escape") setOpen(false);
     };
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      helpButtonRef.current?.focus();
+    };
   }, [open]);
 
   function addMessage(role: ChatMessage["role"], text: string, sources?: string[]) {
@@ -125,13 +130,14 @@ export function SiteChatbot() {
 
   return (
     <div className="fixed bottom-5 right-5 z-[100] sm:bottom-7 sm:right-7">
+      {showTrustpilot && !open && <TrustpilotLauncher />}
       {open && (
         <section
           role="dialog"
           aria-label="Hilfe zum Twitch-Bot"
-          className="mb-3 flex h-[min(620px,calc(100vh-7rem))] w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-border bg-[color:var(--theme-chatbot-bg,#241c11f2)] shadow-2xl backdrop-blur-xl sm:w-[410px]"
+          className="mb-3 flex h-[min(620px,calc(100dvh-7rem))] w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-border bg-[color:var(--theme-chatbot-bg,#241c11f2)] shadow-2xl backdrop-blur-xl sm:w-[410px] [@media(max-height:500px)]:mb-0 [@media(max-height:500px)]:h-[calc(100dvh-3.5rem)]"
         >
-          <header className="flex items-center justify-between border-b border-border px-5 py-4">
+          <header className="flex shrink-0 items-center justify-between border-b border-border px-5 py-4 [@media(max-height:500px)]:py-2">
             <div className="flex items-center gap-3">
               <span className="flex h-10 w-10 items-center justify-center rounded-full gradient-accent">
                 <Bot size={20} className="text-white" />
@@ -153,8 +159,10 @@ export function SiteChatbot() {
             </button>
           </header>
 
+          {showTrustpilot && <Trustpilot />}
+
           <div
-            className="flex-1 space-y-3 overflow-y-auto px-5 py-4"
+            className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4"
             aria-live="polite"
           >
             {!messages.length && (
@@ -215,7 +223,7 @@ export function SiteChatbot() {
             )}
           </div>
 
-          <form onSubmit={submit} className="flex gap-2 border-t border-border p-4">
+          <form onSubmit={submit} className="flex shrink-0 gap-2 border-t border-border p-4 [@media(max-height:500px)]:p-2">
             <input
               ref={inputRef}
               value={question}
@@ -239,11 +247,12 @@ export function SiteChatbot() {
       )}
 
       <button
+        ref={helpButtonRef}
         type="button"
         onClick={() => setOpen((current) => !current)}
         aria-label={open ? "Hilfe-Chat schließen" : "Hilfe bekommen"}
         aria-expanded={open}
-        className="ml-auto flex items-center gap-2 rounded-full gradient-accent px-5 py-3.5 font-semibold shadow-[0_12px_40px_rgba(201,168,106,0.3)] transition-transform hover:scale-[1.03]"
+        className={`ml-auto flex items-center gap-2 rounded-full gradient-accent px-5 py-3.5 font-semibold shadow-[0_12px_40px_rgba(201,168,106,0.3)] transition-transform hover:scale-[1.03] ${open ? '[@media(max-height:500px)]:hidden' : ''}`}
       >
         {open ? <X size={20} /> : <MessageCircle size={20} />}
         <span>{open ? "Schließen" : "Hilfe bekommen"}</span>

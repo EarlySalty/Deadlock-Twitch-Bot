@@ -205,6 +205,27 @@ const INTERNAL_HOME_FIXTURE: InternalHomeData = {
         content: 'Isolierte localhost-Sandbox für Theme-Iterationen ohne Produktivänderungen.',
         createdAt: NOW_ISO,
       },
+      {
+        id: 'preview-log-2',
+        entryDate: '2026-04-21',
+        title: 'Vorschau: ein längerer Neuigkeitentext',
+        content: 'Dieser Vorschautext prüft, ob lange Neuigkeiten in der schmalen rechten Spalte kompakt bleiben. In der kurzen Ansicht erscheinen nur die ersten Zeilen. Über den Link unter der Liste soll der gesamte Text lesbar werden, ohne die übrigen Karten aus der Spalte zu verdrängen.',
+        createdAt: NOW_ISO,
+      },
+      {
+        id: 'preview-log-3',
+        entryDate: '2026-04-20',
+        title: 'Vorschau: die dritte Neuigkeit',
+        content: 'Ein weiterer Testeintrag für die kompakte Liste auf großen und kleinen Bildschirmen.',
+        createdAt: NOW_ISO,
+      },
+      {
+        id: 'preview-log-4',
+        entryDate: '2026-04-19',
+        title: 'Vorschau: ältere Neuigkeit bleibt erreichbar',
+        content: 'Dieser vierte Testeintrag liegt außerhalb der kurzen Vorschau. Er muss nach einem Klick auf „Alle Neuigkeiten lesen“ vollständig in der Liste erscheinen.',
+        createdAt: NOW_ISO,
+      },
     ],
   },
   generatedAt: NOW_ISO,
@@ -356,6 +377,7 @@ export function getPreviewApiFixture(
   _params: Record<string, string | number | boolean> = {}
 ): unknown | undefined {
   if (endpoint === '/auth-status') return AUTH_STATUS_FIXTURE;
+  if (endpoint === '/streamers') return [{ login: 'midcore_live', twitchUserId: '123456789', isPartner: true }];
   if (endpoint === '/billing/catalog') return BILLING_CATALOG_FIXTURE;
   if (endpoint === '/internal-home') return INTERNAL_HOME_FIXTURE;
   if (endpoint === '/roadmap') return ROADMAP_FIXTURE;
