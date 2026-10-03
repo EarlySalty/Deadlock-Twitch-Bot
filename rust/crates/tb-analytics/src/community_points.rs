@@ -725,18 +725,29 @@ async fn load_seen_before(
     if pairs.is_empty() {
         return Ok(HashSet::new());
     }
-    let mut channel_logins: Vec<String> = pairs.iter().map(|p| p.1.to_lowercase()).collect();
-    channel_logins.sort();
-    channel_logins.dedup();
+    let mut channel_ids: Vec<String> = pairs.iter().map(|p| p.0.clone()).collect();
+    channel_ids.sort();
+    channel_ids.dedup();
     let viewer_ids: Vec<String> = pairs.iter().map(|p| p.2.clone()).collect();
     let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT LOWER(streamer_login), chatter_id
-           FROM twitch_chatter_rollup
-          WHERE streamer_login = ANY($1)
-            AND chatter_id = ANY($2)
-            AND first_seen_at < $3",
+        "SELECT s.twitch_user_id, c.chatter_id
+           FROM twitch_session_chatters c
+           JOIN twitch_stream_sessions s ON s.id = c.session_id
+          WHERE s.twitch_user_id = ANY($1)
+            AND c.chatter_id = ANY($2)
+            AND c.first_message_at::timestamptz < $3
+         UNION
+         SELECT s.twitch_user_id, r.chatter_id
+           FROM twitch_chatter_rollup r
+           JOIN twitch_stream_sessions s
+             ON LOWER(s.streamer_login) = LOWER(r.streamer_login)
+            AND r.first_seen_at >= s.started_at
+            AND (s.ended_at IS NULL OR r.first_seen_at < s.ended_at)
+          WHERE s.twitch_user_id = ANY($1)
+            AND r.chatter_id = ANY($2)
+            AND r.first_seen_at < $3",
     )
-    .bind(&channel_logins)
+    .bind(&channel_ids)
     .bind(&viewer_ids)
     .bind(day_start)
     .fetch_all(&mut *conn)
@@ -744,7 +755,7 @@ async fn load_seen_before(
     let by_id: HashSet<(String, String)> = rows.into_iter().collect();
     Ok(pairs
         .iter()
-        .filter(|(_, cl, vid, _)| by_id.contains(&(cl.clone(), vid.clone())))
+        .filter(|(cid, _, vid, _)| by_id.contains(&(cid.clone(), vid.clone())))
         .map(|(c, _, v, _)| (c.clone(), v.clone()))
         .collect())
 }

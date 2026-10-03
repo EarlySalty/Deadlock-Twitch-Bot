@@ -480,7 +480,9 @@ async fn aggregation_aus_rohdaten_ist_idempotent() {
     ticks(&pool, 1, "nightbot", "55", "2026-10-01T08:00:00Z", 50).await;
     // Zuschauer 2 war vor dem Tag schon bei alpha (Rollup), chattet nur.
     sqlx::raw_sql(
-        "INSERT INTO twitch_chatter_rollup (streamer_login, chatter_login, chatter_id, first_seen_at, last_seen_at)
+        "INSERT INTO twitch_stream_sessions (id, streamer_login, twitch_user_id, started_at, ended_at)
+             VALUES (3, 'alpha', '100', '2026-09-01 09:00Z', '2026-09-01 11:00Z');
+         INSERT INTO twitch_chatter_rollup (streamer_login, chatter_login, chatter_id, first_seen_at, last_seen_at)
              VALUES ('alpha', 'zwei', '2', '2026-09-01 10:00Z', '2026-09-01 10:00Z');
          INSERT INTO twitch_chat_messages (session_id, streamer_login, chatter_login, chatter_id, message_ts, is_command, content) VALUES
              (1, 'alpha', 'zwei', '2', '2026-10-01 10:00:00Z', FALSE, 'hallo zusammen alle'),
@@ -1357,4 +1359,111 @@ async fn presence_id_bleibt_bei_login_neuvergabe_und_bann_gebunden() {
     .await
     .unwrap();
     assert_eq!(old_points, 0);
+}
+
+#[tokio::test]
+async fn entdeckerhistorie_bleibt_an_kanal_id_gebunden() {
+    let db = db::migrated_pool("tb_cp_seen_channel_identity").await;
+    let pool = &db.pool;
+    db::seed_partners(pool).await;
+    sqlx::raw_sql(
+        "INSERT INTO twitch_stream_sessions(id, streamer_login, twitch_user_id, started_at, ended_at)
+             VALUES (3, 'alpha', '100', '2026-09-01 09:00Z', '2026-09-01 11:00Z');
+         INSERT INTO twitch_chatter_rollup(streamer_login, chatter_login, chatter_id, first_seen_at, last_seen_at)
+             VALUES ('alpha', 'viewer', '111', '2026-09-01 10:00Z', '2026-09-01 10:00Z');
+         INSERT INTO twitch_session_chatters(session_id, streamer_login, chatter_login, chatter_id, first_message_at)
+             VALUES (3, 'alpha', 'zweiter', '222', '2026-09-01 10:00Z');
+         UPDATE twitch_partners SET twitch_login='umbenannt' WHERE twitch_user_id='100';
+         UPDATE twitch_partners SET twitch_login='alpha' WHERE twitch_user_id='200';",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let pairs = vec![
+        (
+            "100".into(),
+            "umbenannt".into(),
+            "111".into(),
+            "viewer".into(),
+        ),
+        ("200".into(), "alpha".into(), "111".into(), "viewer".into()),
+        (
+            "100".into(),
+            "umbenannt".into(),
+            "222".into(),
+            "zweiter".into(),
+        ),
+        ("200".into(), "alpha".into(), "222".into(), "zweiter".into()),
+    ];
+    let mut conn = pool.acquire().await.unwrap();
+    let seen = load_seen_before(&mut conn, &pairs, ts("2026-10-01T00:00:00Z"))
+        .await
+        .unwrap();
+    assert_eq!(seen.len(), 2);
+    assert!(seen.contains(&("100".into(), "111".into())));
+    assert!(seen.contains(&("100".into(), "222".into())));
+}
+
+#[tokio::test]
+async fn bann_aenderungen_rechnen_historische_punkte_neu() {
+    let db = db::migrated_pool("tb_cp_historical_bans").await;
+    let pool = &db.pool;
+    db::seed_partners(pool).await;
+    for session in [1, 2] {
+        ticks(pool, session, "viewer", "111", "2026-10-01T08:00:00Z", 20).await;
+        ticks(pool, session, "zweiter", "222", "2026-10-01T08:00:00Z", 20).await;
+    }
+    let now = ts("2026-10-10T12:00:00Z");
+    run_aggregation(pool, now, false).await.unwrap();
+    let mut initial = list_viewer_points(pool, None, 100).await.unwrap().rows;
+    initial.retain(|r| r.day == "2026-10-01");
+    assert_eq!(initial.len(), 4);
+    assert!(initial.iter().all(|r| r.points_watch > 0));
+    let mut previous_stamp = initial.iter().map(|r| r.updated_at.clone()).max().unwrap();
+    for (statement, banned) in [
+        (
+            "INSERT INTO twitch_ban_events(twitch_user_id,event_type,target_id,received_at) VALUES ('100','ban','111','2026-10-10 12:00Z')",
+            vec![("100", "111")],
+        ),
+        (
+            "UPDATE twitch_ban_events SET target_id='222' WHERE twitch_user_id='100'",
+            vec![("100", "222")],
+        ),
+        (
+            "INSERT INTO twitch_ban_events(twitch_user_id,event_type,target_id,received_at) VALUES ('100','unban','222','2026-10-10 13:00Z')",
+            vec![],
+        ),
+        (
+            "UPDATE twitch_ban_events SET event_type='ban' WHERE event_type='unban'",
+            vec![("100", "222")],
+        ),
+        (
+            "DELETE FROM twitch_ban_events WHERE twitch_user_id='100'",
+            vec![],
+        ),
+        (
+            "INSERT INTO twitch_chatter_global_ban(chatter_login,chatter_id) VALUES ('viewer','111')",
+            vec![("100", "111"), ("200", "111")],
+        ),
+        (
+            "UPDATE twitch_chatter_global_ban SET chatter_id='222' WHERE chatter_login='viewer'",
+            vec![("100", "222"), ("200", "222")],
+        ),
+        (
+            "DELETE FROM twitch_chatter_global_ban WHERE chatter_login='viewer'",
+            vec![],
+        ),
+    ] {
+        sqlx::query(statement).execute(pool).await.unwrap();
+        let runs = run_aggregation(pool, now, false).await.unwrap();
+        assert!(runs.iter().any(|(d, _)| *d == day("2026-10-01")), "{statement}");
+        let rows = list_viewer_points(pool, None, 100).await.unwrap().rows;
+        for row in rows.iter().filter(|r| r.day == "2026-10-01") {
+            let is_banned = banned.contains(&(row.channel_twitch_user_id.as_str(), row.twitch_user_id.as_str()));
+            let points = row.points_watch + row.points_chat + row.points_discovery;
+            assert_eq!(points == 0, is_banned, "{statement}: {row:?}");
+            assert!(row.updated_at > previous_stamp);
+        }
+        previous_stamp = rows.iter().map(|r| r.updated_at.clone()).max().unwrap();
+    }
 }

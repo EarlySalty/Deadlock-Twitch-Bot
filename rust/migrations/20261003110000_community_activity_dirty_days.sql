@@ -77,6 +77,46 @@ CREATE TRIGGER community_raid_dirty_day
 AFTER INSERT OR DELETE OR UPDATE OF executed_at, success, from_broadcaster_id, to_broadcaster_id ON twitch_raid_history
 FOR EACH ROW EXECUTE FUNCTION twitch_community_mark_dirty_day('twitch_raid_history');
 
+CREATE FUNCTION twitch_community_mark_ban_dirty_days() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+DECLARE
+    viewer_ids text[] := ARRAY[]::text[];
+    channel_ids text[] := ARRAY[]::text[];
+BEGIN
+    IF TG_ARGV[0] = 'twitch_ban_events' THEN
+        IF TG_OP <> 'INSERT' THEN
+            viewer_ids := array_append(viewer_ids, OLD.target_id);
+            channel_ids := array_append(channel_ids, OLD.twitch_user_id);
+        END IF;
+        IF TG_OP <> 'DELETE' THEN
+            viewer_ids := array_append(viewer_ids, NEW.target_id);
+            channel_ids := array_append(channel_ids, NEW.twitch_user_id);
+        END IF;
+    ELSE
+        IF TG_OP <> 'INSERT' THEN
+            viewer_ids := array_append(viewer_ids, TRIM(OLD.chatter_id));
+        END IF;
+        IF TG_OP <> 'DELETE' THEN
+            viewer_ids := array_append(viewer_ids, TRIM(NEW.chatter_id));
+        END IF;
+    END IF;
+    INSERT INTO public.twitch_community_points_dirty_days(day)
+    SELECT DISTINCT day FROM public.twitch_community_points_viewer_daily
+     WHERE twitch_user_id = ANY(viewer_ids)
+       AND (TG_ARGV[0] = 'twitch_chatter_global_ban'
+            OR channel_twitch_user_id = ANY(channel_ids))
+     ORDER BY day;
+    RETURN NULL;
+END $$;
+REVOKE ALL ON FUNCTION twitch_community_mark_ban_dirty_days() FROM PUBLIC;
+
+CREATE TRIGGER community_channel_ban_dirty_days
+AFTER INSERT OR UPDATE OR DELETE ON twitch_ban_events
+FOR EACH ROW EXECUTE FUNCTION twitch_community_mark_ban_dirty_days('twitch_ban_events');
+CREATE TRIGGER community_global_ban_dirty_days
+AFTER INSERT OR UPDATE OR DELETE ON twitch_chatter_global_ban
+FOR EACH ROW EXECUTE FUNCTION twitch_community_mark_ban_dirty_days('twitch_chatter_global_ban');
+
 DO $$ BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='twitchbot') THEN
         GRANT SELECT, DELETE ON twitch_community_points_dirty_days TO twitchbot;

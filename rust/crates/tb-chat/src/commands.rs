@@ -3165,6 +3165,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn clipcontest_erreicht_dispatch_nach_namensaufloesung() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        apply_ddl(&database.pool).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(database.pool.clone(), api.clone());
+        assert!(
+            engine
+                .handle(&make_event("!clipcontest", true, false))
+                .await
+        );
+        assert_eq!(api.message_count().await, 1);
+        assert_eq!(
+            api.sent.lock().await[0].1,
+            crate::clip_contest_submit::REPLY_BROKER_UNAVAILABLE
+        );
+    }
+
+    #[tokio::test]
     async fn statistik_antwortet_ohne_livezustand() {
         let database = crate::test_postgres::TestPostgres::start().await;
         let pool = database.pool.clone();
