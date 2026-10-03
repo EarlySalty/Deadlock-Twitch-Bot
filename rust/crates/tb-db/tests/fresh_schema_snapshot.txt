@@ -940,6 +940,7 @@ twitch_clip_contest_forwards|clip_url|text|NO|
 twitch_clip_contest_forwards|created_at|timestamp with time zone|NO|clock_timestamp()
 twitch_clip_contest_forwards|reason|text|YES|
 twitch_clip_contest_forwards|status|text|NO|
+twitch_clip_contest_forwards|submitted_at|timestamp with time zone|YES|
 twitch_clip_contest_forwards|submitted_by_twitch_id|text|YES|
 twitch_clip_contest_forwards|updated_at|timestamp with time zone|NO|clock_timestamp()
 twitch_clip_contest_forwards|via|text|NO|
@@ -1124,6 +1125,7 @@ twitch_community_announcements|revision|bigint|NO|0
 twitch_community_announcements|settings|jsonb|NO|
 twitch_community_announcements|updated_at|timestamp with time zone|NO|now()
 twitch_community_points_dirty_days|day|date|NO|
+twitch_community_points_dirty_days|generation|uuid|NO|gen_random_uuid()
 twitch_community_points_discoveries|bonus_awarded|boolean|NO|
 twitch_community_points_discoveries|channel_twitch_user_id|text|NO|
 twitch_community_points_discoveries|created_at|timestamp with time zone|NO|now()
@@ -1929,6 +1931,7 @@ twitch_scout_community_privacy|operation_id|uuid|NO|
 twitch_scout_community_suggestions|created_at|timestamp with time zone|NO|clock_timestamp()
 twitch_scout_community_suggestions|idempotency_key|text|NO|
 twitch_scout_community_suggestions|id|bigint|NO|nextval('twitch_scout_community_suggestions_id_seq'::regclass)
+twitch_scout_community_suggestions|outcome_updated_at|timestamp with time zone|YES|
 twitch_scout_community_suggestions|privacy_epoch|bigint|YES|
 twitch_scout_community_suggestions|reason|text|YES|
 twitch_scout_community_suggestions|result_status|text|NO|

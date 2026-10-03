@@ -35,6 +35,11 @@ fn twitch_actor<'a>(
     .filter(|id| valid_twitch_id(id))
 }
 
+fn producer_url(config: &tb_config::global::InternalApi) -> Result<String, &'static str> {
+    let base = crate::uplink_config::local_origin(&config.client_base_url())?;
+    Ok(format!("{base}/internal/twitch/v1/clips/contest/submit"))
+}
+
 async fn submit_to_producer(
     url: &str,
     token: &str,
@@ -143,17 +148,13 @@ pub async fn submit_clip_contest_handler(
         return unavailable();
     };
     let config = &settings.internal_api;
-    if !config.host.is_loopback() {
+    let Ok(url) = producer_url(config) else {
         return unavailable();
-    }
+    };
     let Some(token) = crate::uplink_config::brain_service_token().filter(|t| !t.trim().is_empty())
     else {
         return unavailable();
     };
-    let url = format!(
-        "http://{}/internal/twitch/v1/clips/contest/submit",
-        std::net::SocketAddr::new(config.host, config.port)
-    );
     match submit_to_producer(&url, &token, clip_db_id, actor).await {
         Ok(response) => response,
         Err(()) => unavailable(),
@@ -243,8 +244,13 @@ mod tests {
             .and(body_json(json!({"clip_db_id":42,"actor_twitch_user_id":"456"})))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status":"already_in","message":"Der Clip wurde bereits eingereicht und wird nicht erneut gesendet.","clip_url":"https://clips.twitch.tv/AbcDef"})))
             .expect(1).mount(&server).await;
+        let config = tb_config::global::InternalApi {
+            host: std::net::Ipv4Addr::UNSPECIFIED.into(),
+            client_base_url: Some(server.uri()),
+            ..Default::default()
+        };
         let response = submit_to_producer(
-            &format!("{}/internal/twitch/v1/clips/contest/submit", server.uri()),
+            &producer_url(&config).unwrap(),
             "synthetischer-token",
             42,
             "456",
@@ -254,6 +260,21 @@ mod tests {
         let (status, value) = body(response).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(value["status"], "already_in");
+    }
+
+    #[test]
+    fn clientziel_bleibt_lokal_ohne_urlzugangsdaten() {
+        for base in [
+            "http://192.0.2.1:8776",
+            "http://127.0.0.1:8776/fremder-pfad",
+            "http://synthetisch@127.0.0.1:8776",
+        ] {
+            let config = tb_config::global::InternalApi {
+                client_base_url: Some(base.into()),
+                ..Default::default()
+            };
+            assert!(producer_url(&config).is_err());
+        }
     }
 
     #[tokio::test]

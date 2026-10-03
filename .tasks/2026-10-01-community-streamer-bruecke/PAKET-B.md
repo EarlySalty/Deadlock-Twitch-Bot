@@ -11,7 +11,7 @@ datum: 2026-10-01
   - `twitch_community_points_discoveries` je (`twitch_user_id`, `channel_twitch_user_id`): erstes Auftauchen, `bonus_awarded` endgültig
   - Cursor-Indizes `(updated_at, Schlüssel)` UNIQUE
 - Regeln und Aggregation: `rust/crates/tb-analytics/src/community_points.rs` (Tests in `community_points_tests.rs`). Alle Werte aus PLAN als Konstanten (5 min je Punkt, Deckel 72/144, Chat 30, 10 Zeichen, 60 s Cooldown, Duplikat, Entdecker 10 Punkte, max 3/Tag). Reine Funktionen für Tagesgrenze Berlin, Ausschlüsse, Deckel, Chat-Regeln, Entdecker-Auswahl und die komplette Tagesrechnung (`compute_day`).
-- Taktung: tb-bot-Task `community_points_aggregation` (`rust/bin/tb-bot/src/community_points_wiring.rs`), alle 300 s. Rechnet heute neu, den Vortag zusätzlich beim ersten Lauf nach dem Start und in der ersten Stunde nach Berliner Mitternacht. Markierte alte Tage werden bei Rohkorrekturen zusätzlich neu berechnet. Rohänderungen stempeln auch unveränderte gedeckelte Werte neu; Zeilen eines Tages, die nicht mehr vorkommen, werden genullt.
+- Taktung: tb-bot-Task `community_points_aggregation` (`rust/bin/tb-bot/src/community_points_wiring.rs`), im Bot-TOML-Takt `community_points_aggregation_interval_seconds` (Standard 300 s). Rechnet heute neu, den Vortag zusätzlich beim ersten Lauf nach dem Start und in der ersten Stunde nach Berliner Mitternacht. Markierte alte Tage werden bei Rohkorrekturen zusätzlich neu berechnet. Rohänderungen stempeln auch unveränderte gedeckelte Werte neu; Zeilen eines Tages, die nicht mehr vorkommen, werden genullt.
 - Endpunkte (`rust/crates/tb-internal-api/src/handlers/community_points.rs`, Router in `lib.rs`): `GET /internal/twitch/v1/community-points/viewers` und `/streamers`, JSON exakt nach PLAN, Auth/Loopback wie `/streamer-invites`, `limit` 1..5000 (Standard 1000), `updated_since` exklusiv.
 - Doku: `docs/DATABASE.md` (Abschnitt Community-Punkte), `docs/API.md` (Interne Twitch-API).
 
@@ -19,7 +19,7 @@ datum: 2026-10-01
 
 - Anwesenheit: `twitch_viewer_presence_ticks` (Chatters-Poller, 30 s) plus jede Chat-Nachricht. Ticks tragen nur den Login; die Twitch-User-ID kommt aus `twitch_session_chatters.chatter_id` derselben Session (vom Poller aus Helix gesetzt). Jede Stichprobe deckt `[t, t+60 s)` ab; Minuten = Vereinigung, geschnitten auf den Berliner Tag und `jetzt`.
 - Chat: `twitch_chat_messages` der Partner-Sessions; moderierte Nachrichten (`moderation_action`) zählen nie. Vorgeschichte 2 h vor Tagesbeginn für Duplikat/Cooldown über Mitternacht. `chat_messages` = Zahl zählender Nachrichten, `points_chat` = gedeckelt auf 30.
-- Partner: `twitch_streamers_partner_state.is_partner_active = 1`, Discord-ID aus derselben View (Streamer-Identität). Sessions über `twitch_user_id`, Fallback Login.
+- Partner: `twitch_streamers_partner_state.is_partner_active = 1`, Discord-ID aus derselben View (Streamer-Identität). Sessions ausschließlich über `twitch_user_id`; Logins dienen der Anzeige.
 - Raids: `twitch_raid_history` mit `success`, Ziel aktiver Partner, nicht an sich selbst.
 - Ausschlüsse: Broadcaster im eigenen Kanal, `tb_analytics::bekannte_bots` (`WHITELISTED_BOTS` = `KNOWN_CHAT_BOTS`, plus `justinfan*`), nicht numerische IDs, globaler Bann (`twitch_chatter_global_ban`), dauerhafter Kanal-Bann (letztes `twitch_ban_events`-Ereignis `ban` ohne `ends_at`).
 - Entdecker: neues Paar ohne Spur in `twitch_chatter_rollup` vor Tagesbeginn (per ID, oder per Login bei Rollup-Zeilen ohne ID); Vergabe in Reihenfolge des ersten Auftauchens, höchstens 3 je Tag.
@@ -35,7 +35,7 @@ Gegen Wegwerf-Timescale (`timescale/timescaledb:2.17.2-pg16`), `TB_TEST_DATABASE
 
 - `cargo test -p tb-analytics --lib community_points`: 18 passed (Regeln, Deckel, Cooldown, Duplikat, Befehle, Mindestlänge, Ausschlüsse, Entdecker max 3/Tag, Berliner Tagesgrenze inkl. Umstellungstage; DB: Aggregation aus Rohdaten, Idempotenz, nachträglicher Bann nullt Zeile, Cursor über 25 Zeilen ohne Verlust/Doppel).
 - `cargo test -p tb-internal-api --lib community_points`: 4 passed (Vertrags-JSON beider Endpunkte, Cursor-Folgeseiten, 401/403/400 über den echten Router).
-- `cargo test -p tb-db`: Schema-Snapshot aktualisiert, `fresh_migrations_schema`, `migrationsversionen_eindeutig`, `runtime_schema_contract` grün.
+- `cargo test -p tb-db --test fresh_migrations_schema`: Der endgültige Stand benötigt den echten vollständigen Migrationslauf in einer leeren Wegwerf-DB und den Vergleich mit dem committed Snapshot. Historische Paketprüfungen sind dafür kein Endstandnachweis.
 - Build `tb-bot`, `tb-internal-api`, `tb-analytics` grün; clippy ohne neue Warnungen in den geänderten Dateien.
 - Vorbestehende, nicht von Paket B verursachte Fehlschläge in der Umgebung: Tests mit isoliertem `initdb` (läuft hier als root), LLM-Freigabe-Tests, `session_detail`/`streamers::list_returns_200` (auf HEAD ohne Paket B identisch rot), parallele Migrationsläufe in `tb-db` (`tuple concurrently updated`, einzeln grün).
 

@@ -254,7 +254,8 @@ Outreach-Log fuer Partner-Ansprache.
 ### Community-Punkte (Community-Streamer-Brücke, Paket B)
 
 Migration `rust/migrations/20261001100000_community_points.sql`. Der tb-bot
-(`community_points_aggregation`, alle 5 Minuten) rechnet die Tageswerte
+(`community_points_aggregation`, Bot-TOML-Feld
+`community_points_aggregation_interval_seconds`, Standard 300 Sekunden) rechnet die Tageswerte
 (Tag nach Europe/Berlin) aus den Rohdaten neu. Markierte Rohdatenänderungen
 aktualisieren auch unveränderte gedeckelte Werte, damit der Consumer neue
 Rohaktivität hinter seinem Cursor erkennt; Logik und Regeln in `rust/crates/tb-analytics/src/community_points.rs`.
@@ -292,7 +293,18 @@ Migration `rust/migrations/20261001110000_scout_community_source.sql` (additiv).
 `idempotency_key` (UNIQUE), `twitch_user_id`, `twitch_login`,
 `suggested_by_discord_id`, `reason`, `result_status` (`created`,
 `already_known`, `already_partner`, `blocked`) und `created_at`. Rechte:
-`twitchbot` liest/schreibt, `twitchdash` liest.
+`twitchbot` liest/schreibt, `twitchdash` liest. `submitted_at` und
+`privacy_epoch` binden den Vorschlag an seine ursprüngliche Einreichung und
+die bewusste Einwilligung. `outcome_updated_at` ist der eindeutige Cursor der
+individuellen Ergebniszuordnung.
+
+`twitch_scout_community_privacy` enthält nur Identitätshash, monotone Epoche,
+Operations-UUID und Consent-Grenze. `twitch_scout_erased_replay_keys` sperrt
+gelöschte Replay-Schlüssel als domaingetrennte Hashes. Beide Tabellen sind
+für das Dashboard gesperrt. `twitch_community_points_dirty_days` enthält
+Tag und Rohgeneration (`generation`, UUID). Der Aggregator löscht nur die
+verarbeiteten Generationen; gleichzeitig neu erfasste Markierungen bleiben
+für den nächsten Lauf erhalten.
 
 ### twitch_clip_contest_forwards (Community-Streamer-Brücke, Paket E)
 

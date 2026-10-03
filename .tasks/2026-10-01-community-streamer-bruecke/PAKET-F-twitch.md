@@ -36,7 +36,7 @@ Gegen Wegwerf-Timescale (`timescale/timescaledb:2.17.2-pg16`), `TB_TEST_DATABASE
 - `cargo test -p tb-scout`: 6 Unit (inkl. neu: Statusreihenfolge, Login-Eingaben, Discord-ID/Schlüssel/Grund, Partnerzeit und Partnerstand) + 7 PG-Tests (bestehend, mit Prod-Spaltentypen) grün.
 - `cargo test -p tb-internal-api --lib scout_community`: 5 passed. Body-Prüfung; Auth 401/403, Formfehler 400, ohne Helix 503, Cursor-`limit` 400; Vorschlag legt Kandidaten an (Status, Quelle, Vorschlagender, Grund), Wiederholung idempotent, zweite Person zählt, gleiche Person nicht doppelt, Schlüssel-Konflikt 409, keine Outreach-Zeile und keine Freigabe, Scout-Scan gegen echtes Schema; Partner (auch archiviert), Denylist, globaler Bann, bekannter Kandidat bleibt `uebersprungen`/`auto`, unbekannter Login `not_found`; Ergebnisse mit Cursor über zwei Seiten, Partnerschaft erzeugt neue Zeile mit `partner_since` aus `partnered_at`, leere Folgeseite behält Cursor. Helix per wiremock.
 - `cargo test -p tb-dashboard-api --lib admin_scout`: 7 passed (neu: Quelle und Vorschlagender sichtbar).
-- `cargo test -p tb-db` (`--test-threads=1`): Schema-Snapshot ergänzt, alle grün.
+- `cargo test -p tb-db --test fresh_migrations_schema`: Der endgültige Stand benötigt den echten vollständigen Migrationslauf in einer leeren Wegwerf-DB und den Vergleich mit dem committed Snapshot. Historische Paketprüfungen sind dafür kein Endstandnachweis.
 
 ## Offene Punkte
 

@@ -40,7 +40,7 @@ Gegen Wegwerf-Timescale (`timescale/timescaledb:2.17.2-pg16`), `TB_TEST_DATABASE
 - `cargo test -p tb-chat --lib catalog`: Katalog eindeutig, Dispatch-Befehle registriert.
 - `cargo test -p tb-transport-discord`: neue Tests für `submit_twitch_clip` (Payload, Header, Envelope; 503 und unbekannter Status sind Fehler).
 - `cargo test -p tb-dashboard-api --lib clip_contest_forward`: HTTP-Abbildung der Ergebnisse, ohne Anmeldung 401.
-- `cargo test -p tb-db` (einzeln, `--test-threads=1`): Schema-Snapshot um `twitch_clip_contest_forwards` ergänzt, alle grün.
+- `cargo test -p tb-db --test fresh_migrations_schema`: Der endgültige Stand benötigt den echten vollständigen Migrationslauf in einer leeren Wegwerf-DB und den Vergleich mit dem committed Snapshot. Historische Paketprüfungen sind dafür kein Endstandnachweis.
 - Abgleich mit dem fertigen Broker (`Deadlock-Bots`, `rust/crates/dl-broker/src/clips.rs`): Felder, Envelope, `deny_unknown_fields`, Formregeln (Login klein, Twitch-IDs ohne führende Null, Titel bis 200 Zeichen ohne Steuerzeichen). Ungültige `submitted_by`-IDs schickt der Dienst als `null` statt einen 400 zu riskieren.
 
 ## Offene Punkte
