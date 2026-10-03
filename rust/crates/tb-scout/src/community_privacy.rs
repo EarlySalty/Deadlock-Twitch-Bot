@@ -10,7 +10,10 @@ fn hash(domain: &[u8], value: &str) -> String {
     let mut hash = Sha256::new();
     hash.update(domain);
     hash.update(value.as_bytes());
-    format!("{:x}", hash.finalize())
+    hash.finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 fn identity_hash(discord_id: &str) -> String {
     hash(b"community-scout-privacy-v1\0", discord_id)
@@ -193,4 +196,21 @@ pub async fn export(pool: &PgPool, discord_id: &str) -> Result<PrivacyExport, sq
         suggestions,
         candidates,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{identity_hash, key_hash};
+
+    #[test]
+    fn sha256_hashvertrag_bleibt_fuer_identity_und_replay_bytegleich() {
+        assert_eq!(
+            identity_hash("388772056717590539"),
+            "772d6fe15816f037ee0e6bff9927eac8de7db42a6ed10a20f55d23686efffdbd"
+        );
+        assert_eq!(
+            key_hash("community-scout-vector-01"),
+            "c53f7d0271203db0a4205541bbf5698641783b06f4ad6ba60a10b66444c6caea"
+        );
+    }
 }
