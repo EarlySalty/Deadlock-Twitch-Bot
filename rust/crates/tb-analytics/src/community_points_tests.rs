@@ -568,9 +568,13 @@ async fn aggregation_aus_rohdaten_ist_idempotent() {
     let third = aggregate_day(&pool, d, now).await.unwrap();
     assert_eq!(third.viewer_rows_zeroed, 1);
     let delta = list_viewer_points(&pool, Some(since), 100).await.unwrap();
-    assert_eq!(delta.rows.len(), 1);
-    assert_eq!(delta.rows[0].channel_twitch_user_id, "200");
-    assert_eq!(delta.rows[0].points_watch, 0);
+    assert_eq!(delta.rows.len(), 3);
+    let banned = delta
+        .rows
+        .iter()
+        .find(|row| row.twitch_user_id == "1" && row.channel_twitch_user_id == "200")
+        .unwrap();
+    assert_eq!(banned.points_watch, 0);
     // Entdeckung bleibt festgehalten, Bonus wird nicht neu vergeben.
     let discoveries: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM twitch_community_points_discoveries")
