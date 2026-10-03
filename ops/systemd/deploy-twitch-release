@@ -197,6 +197,69 @@ mv -- "$src" "$dest"
 chown -R root:root "$dest"
 chmod -R go-w "$dest"
 
+current=/opt/deadlock/twitch/current
+release_root=/opt/deadlock/twitch/releases
+previous_release=""
+previous_link=""
+candidate="$release_root/$sha"
+verification_pending=1
+
+# Der bestehende Installer aktiviert vor der Migration. Bei einem Fehler vor
+# unserer Abnahme wird der frühere Link wiederhergestellt. Ein automatischer
+# Dienststart im kurzen Aktivierungszeitraum wird dadurch nicht ausgeschlossen.
+for directory in /opt /opt/deadlock /opt/deadlock/twitch "$release_root"; do
+  if [[ ! -d "$directory" || -L "$directory" || $(stat -c %u "$directory") != 0 ]] ||
+     [[ -n $(find "$directory" -maxdepth 0 -perm /022 -print) ]]; then
+    echo "Release-Elternverzeichnis ist nicht ausschließlich rootkontrolliert: $directory" >&2
+    exit 1
+  fi
+done
+if [[ -L "$current" ]]; then
+  previous_link=$(readlink -- "$current")
+  if [[ "$previous_link" =~ ^releases/[0-9a-f]{40}$ ]]; then
+    previous_release="/opt/deadlock/twitch/$previous_link"
+  elif [[ "$previous_link" =~ ^/opt/deadlock/twitch/releases/[0-9a-f]{40}$ ]]; then
+    previous_release="$previous_link"
+  else
+    echo "Bisheriger Release-Link hat ein unerwartetes Ziel." >&2
+    exit 1
+  fi
+  if [[ $(stat -c %u "$current") != 0 || ! "$previous_release" =~ ^/opt/deadlock/twitch/releases/[0-9a-f]{40}$ ||
+        ! -d "$previous_release" || -L "$previous_release" || $(stat -c %u "$previous_release") != 0 ]] ||
+     [[ -n $(find "$previous_release" -maxdepth 0 -perm /022 -print) ]]; then
+    echo "Bisheriger Release-Link ist nicht sicher rückstellbar." >&2
+    exit 1
+  fi
+elif [[ -e "$current" ]]; then
+  echo "current ist kein Release-Symlink." >&2
+  exit 1
+fi
+
+restore_unverified_release() {
+  local result=$? temporary=""
+  trap - EXIT
+  if [[ $verification_pending -eq 1 && -L "$current" ]] &&
+     [[ $(readlink -- "$current") == "$candidate" || $(readlink -- "$current") == "releases/$sha" ]]; then
+    if [[ -n "$previous_release" ]]; then
+      temporary=$(mktemp -d /opt/deadlock/twitch/.rollback.XXXXXXXX) || exit 1
+      if ln -s -- "$previous_link" "$temporary/current" && mv -Tf -- "$temporary/current" "$current"; then
+        echo "Ungeprüfter Release-Link auf bisherigen Stand zurückgestellt; Migrationen bleiben erhalten." >&2
+      else
+        echo "FEHLER: Bisheriger Release-Link konnte nicht wiederhergestellt werden." >&2
+        result=1
+      fi
+      rmdir -- "$temporary" || result=1
+    else
+      rm -- "$current" || result=1
+      echo "Ungeprüfter Release-Link entfernt; vorher war kein Release aktiv." >&2
+    fi
+  fi
+  exit "$result"
+}
+trap restore_unverified_release EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 /usr/local/sbin/install-twitch-release "$dest" "$sha"
 
 # Das Release ist jetzt unter /opt/deadlock/twitch/current aktiv. Schema zuerst
@@ -212,7 +275,153 @@ if [[ ! -f "$peer_installer" || -L "$peer_installer" ]]; then
   echo "Geprüfter Peerinstaller fehlt im Release: $peer_installer" >&2
   exit 1
 fi
+
+# Feste Verbindungen ohne Nutzer-psqlrc, Passwortdatei oder geerbte PG-Optionen.
+# Alle SQL-Proben sind lesend und begrenzt; es werden keine Nutzerdaten abgefragt.
+local_psql() {
+  local os_user="$1" database="$2" database_user="$3"
+  shift 3
+  runuser -u "$os_user" -- /usr/bin/env -i /usr/bin/psql --no-psqlrc --no-password \
+    "host=/var/run/postgresql port=5432 dbname=$database user=$database_user passfile=/dev/null connect_timeout=5 options='-c statement_timeout=10000 -c default_transaction_read_only=on'" \
+    -v ON_ERROR_STOP=1 -At "$@"
+}
+before_reload=$(local_psql postgres twitch_analytics postgres -c "SELECT extract(epoch FROM pg_conf_load_time())")
+[[ "$before_reload" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "Ungültiger PostgreSQL-Ladezeitpunkt." >&2; exit 1; }
 /bin/bash "$peer_installer"
+
+reload_observed=0
+for ((attempt=0; attempt<30; attempt++)); do
+  if [[ $(local_psql postgres twitch_analytics postgres -c "SELECT extract(epoch FROM pg_conf_load_time()) > $before_reload") == t ]]; then
+    reload_observed=1
+    break
+  fi
+  sleep 1
+done
+[[ $reload_observed -eq 1 ]] || { echo "PostgreSQL hat die Peerregeln nicht nachweislich neu geladen." >&2; exit 1; }
+
+local_psql postgres twitch_analytics postgres <<'SQL'
+BEGIN READ ONLY;
+DO $verification$
+DECLARE r text; t text; p text;
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='twitchanalysis' AND rolcanlogin AND
+        NOT (rolsuper OR rolinherit OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls))
+        OR EXISTS (SELECT FROM pg_auth_members WHERE roleid='twitchanalysis'::regrole OR member='twitchanalysis'::regrole) THEN
+        RAISE EXCEPTION 'Analysewriter: Rollenattribute oder Mitgliedschaften falsch';
+    END IF;
+    IF NOT has_database_privilege('twitchanalysis','twitch_analytics','CONNECT') OR
+        NOT has_schema_privilege('twitchanalysis','public','USAGE') OR
+        EXISTS (SELECT FROM pg_namespace WHERE nspname NOT LIKE 'pg_%' AND nspname <> 'information_schema'
+            AND has_schema_privilege('twitchanalysis',oid,'CREATE')) THEN
+        RAISE EXCEPTION 'Analysewriter: Datenbank- oder Schemarechte falsch';
+    END IF;
+    FOREACH t IN ARRAY ARRAY['twitch_ai_chat_sessions','twitch_ai_chat_hourly','twitch_ai_chat_reservations'] LOOP
+        FOREACH p IN ARRAY ARRAY['SELECT','INSERT','UPDATE','DELETE'] LOOP
+            IF NOT has_table_privilege('twitchanalysis','public.'||t,p) THEN
+                RAISE EXCEPTION 'Analysewriter ohne % auf %',p,t;
+            END IF;
+        END LOOP;
+        FOREACH r IN ARRAY ARRAY['twitchbot','twitchdash','twitchlegacy','twitchcontest','twitchcollector'] LOOP
+            IF EXISTS (SELECT FROM pg_roles WHERE rolname=r) AND
+                (has_table_privilege(r,'public.'||t,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') OR
+                 has_any_column_privilege(r,'public.'||t,'SELECT,INSERT,UPDATE,REFERENCES')) THEN
+                RAISE EXCEPTION 'Fremdes Staterecht für % auf %',r,t;
+            END IF;
+        END LOOP;
+        IF has_table_privilege('twitchanalysis','public.'||t,'TRUNCATE,REFERENCES,TRIGGER') OR
+            (SELECT relowner='twitchanalysis'::regrole FROM pg_class WHERE oid=('public.'||t)::regclass) THEN
+            RAISE EXCEPTION 'Analysewriter hat zusätzliche Rechte auf %',t;
+        END IF;
+    END LOOP;
+    IF EXISTS (SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%'
+        AND c.relkind IN ('r','p','v','m','f')
+        AND NOT (n.nspname='public' AND c.relname=ANY(ARRAY['twitch_ai_chat_sessions','twitch_ai_chat_hourly','twitch_ai_chat_reservations']))
+        AND (has_table_privilege('twitchanalysis',c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') OR
+             has_any_column_privilege('twitchanalysis',c.oid,'SELECT,INSERT,UPDATE,REFERENCES'))) OR
+        EXISTS (SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND c.relkind='S'
+            AND has_sequence_privilege('twitchanalysis',c.oid,'USAGE,SELECT,UPDATE')) THEN
+        RAISE EXCEPTION 'Analysewriter besitzt fremde Tabellen-, Spalten- oder Sequenzrechte';
+    END IF;
+    FOREACH p IN ARRAY ARRAY['SELECT','INSERT','UPDATE','DELETE'] LOOP
+        IF NOT has_table_privilege('twitchbot','public.twitch_raid_ad_vorlauf',p) THEN
+            RAISE EXCEPTION 'Bot ohne Raidrecht %',p;
+        END IF;
+    END LOOP;
+    FOREACH r IN ARRAY ARRAY['twitchdash','twitchlegacy','twitchcontest','twitchcollector','twitchanalysis'] LOOP
+        IF EXISTS (SELECT FROM pg_roles WHERE rolname=r) AND
+            (has_table_privilege(r,'public.twitch_raid_ad_vorlauf','SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') OR
+             has_any_column_privilege(r,'public.twitch_raid_ad_vorlauf','SELECT,INSERT,UPDATE,REFERENCES')) THEN
+            RAISE EXCEPTION 'Fremdes Raidrecht für %',r;
+        END IF;
+    END LOOP;
+    IF NOT EXISTS (SELECT FROM pg_proc WHERE oid='public.finish_raid_ad_vorlauf_on_arrival()'::regprocedure
+        AND prosecdef AND proowner='postgres'::regrole AND proconfig @> ARRAY['search_path=pg_catalog']) OR
+        EXISTS (SELECT FROM pg_proc p CROSS JOIN LATERAL aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
+            WHERE p.oid='public.finish_raid_ad_vorlauf_on_arrival()'::regprocedure AND a.grantee=0 AND a.privilege_type='EXECUTE') THEN
+        RAISE EXCEPTION 'Arrivaltrigger ist nicht korrekt gehärtet';
+    END IF;
+    IF EXISTS (SELECT FROM pg_hba_file_rules WHERE error IS NOT NULL) OR
+       EXISTS (SELECT FROM pg_ident_file_mappings WHERE error IS NOT NULL) THEN
+        RAISE EXCEPTION 'PostgreSQL meldet HBA- oder Ident-Parsefehler';
+    END IF;
+    IF (SELECT count(*) FROM pg_ident_file_mappings WHERE map_name='twitch_analysis_writer') <> 1 OR
+        NOT EXISTS (SELECT FROM pg_ident_file_mappings WHERE map_name='twitch_analysis_writer'
+            AND sys_name='twitchdash' AND pg_username='twitchanalysis') THEN
+        RAISE EXCEPTION 'Analyse-Peermap ist nicht ausschließlich dem Dashboarddienst zugeordnet';
+    END IF;
+    IF (SELECT count(*) FROM pg_hba_file_rules WHERE 'twitchanalysis'=ANY(user_name)) <> 4 OR
+        NOT EXISTS (SELECT FROM pg_hba_file_rules WHERE rule_number=1 AND type='local'
+            AND database=ARRAY['twitch_analytics'] AND user_name=ARRAY['twitchanalysis']
+            AND auth_method='peer' AND options=ARRAY['map=twitch_analysis_writer']) OR
+        NOT EXISTS (SELECT FROM pg_hba_file_rules WHERE rule_number=2 AND type='local'
+            AND database=ARRAY['all'] AND user_name=ARRAY['twitchanalysis'] AND auth_method='reject') OR
+        (SELECT count(*) FROM pg_hba_file_rules WHERE rule_number IN (3,4) AND type='host'
+            AND database=ARRAY['all'] AND user_name=ARRAY['twitchanalysis'] AND auth_method='reject'
+            AND address IN ('::','::0','0.0.0.0') AND netmask IN ('::','::0','0.0.0.0')) <> 2 THEN
+        RAISE EXCEPTION 'Analyse-HBAregeln sind nicht zuerst und ausschließlich rollenbezogen';
+    END IF;
+END
+$verification$;
+ROLLBACK;
+SQL
+
+[[ $(local_psql twitchdash twitch_analytics twitchanalysis -c "SELECT current_user || '|' || current_database()") == 'twitchanalysis|twitch_analytics' ]] || {
+  echo "Dashboard-Peeridentität stimmt nicht." >&2; exit 1;
+}
+local_psql twitchdash twitch_analytics twitchanalysis -c \
+  "SELECT 1 FROM public.twitch_ai_chat_sessions LIMIT 0; SELECT 1 FROM public.twitch_ai_chat_hourly LIMIT 0; SELECT 1 FROM public.twitch_ai_chat_reservations LIMIT 0;"
+
+expect_hba_rejection() {
+  local output
+  if output=$("$@" 2>&1); then
+    echo "Unzulässiger Analysezugang wurde angenommen." >&2
+    exit 1
+  fi
+  if [[ "$output" != *'pg_hba.conf rejects connection'* ]]; then
+    echo "Analysezugang scheiterte ohne eindeutigen HBA-Ablehnungsbeleg." >&2
+    exit 1
+  fi
+}
+expect_hba_rejection local_psql twitchdash postgres twitchanalysis -c 'SELECT 1'
+listeners=$(local_psql postgres twitch_analytics postgres -c 'SHOW listen_addresses')
+if [[ -z "$listeners" ]]; then
+  echo "Analyse-TCPzugang: Listener deaktiviert, geladene rollenbezogene Rejectregeln separat geprüft."
+else
+  # Der Kontrollzugang nutzt einen Socket. Die tatsächliche TCPadresse wird
+  # deshalb aus dem fest konfigurierten Listener gewählt, ohne ihn zu ändern.
+  case ",$listeners," in
+    *,localhost,*|*,127.0.0.1,*|*,0.0.0.0,*|*,\*,*) tcp_address=127.0.0.1 ;;
+    *,::1,*|*,::,*) tcp_address=::1 ;;
+    *) echo "TCPlistener benötigt einen belegten konkreten Prüfpfad; Deploy gestoppt." >&2; exit 1 ;;
+  esac
+  expect_hba_rejection runuser -u twitchdash -- /usr/bin/env -i /usr/bin/psql --no-psqlrc --no-password \
+    "host=$tcp_address port=5432 dbname=twitch_analytics user=twitchanalysis passfile=/dev/null connect_timeout=5" \
+    -v ON_ERROR_STOP=1 -At -c 'SELECT 1'
+fi
+echo "Liveprüfung bestanden: Reload, rollenbegrenzter Peerzugang, Ablehnung und Rechte-Metadaten."
+verification_pending=0
 
 for target in "${restart_targets[@]}"; do
   case "$target" in
