@@ -356,10 +356,25 @@ async fn erstautor_erasure_erhaelt_fremde_outcomes_mit_eigener_consent_epoche() 
         .unwrap()
         .rows
         .is_empty());
+    let mut already_partner = entry(B, "other-consent-still-partner", "1001", "gemeinsam");
+    already_partner.privacy_epoch = Some(2);
+    already_partner.submitted_at = Some(floor);
+    assert_eq!(
+        vorschlag_einreichen(pool, &already_partner).await.unwrap(),
+        VorschlagStatus::AlreadyPartner
+    );
+    // Für den frischen berechtigten Vorschlag ist der Kanal noch kein Partner.
+    sqlx::query("DELETE FROM twitch_partners WHERE twitch_user_id='1001'")
+        .execute(pool)
+        .await
+        .unwrap();
     let mut fresh = entry(B, "other-new-consent", "1001", "gemeinsam");
     fresh.privacy_epoch = Some(2);
     fresh.submitted_at = Some(floor);
-    vorschlag_einreichen(pool, &fresh).await.unwrap();
+    assert_eq!(
+        vorschlag_einreichen(pool, &fresh).await.unwrap(),
+        VorschlagStatus::AlreadyKnown
+    );
     let page = liste_ergebnisse(pool, None, 10).await.unwrap();
     assert_eq!(page.rows.len(), 1);
     assert_eq!(page.rows[0].suggested_by_discord_id, B);
