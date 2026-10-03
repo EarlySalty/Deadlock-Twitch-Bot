@@ -19,6 +19,11 @@ impl Fixture {
             SEQ.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
         std::fs::write(directory.join("bot.toml"), CONFIG).unwrap();
         Self(directory)
     }
@@ -150,6 +155,87 @@ fn pool_editor_erhält_getrennte_retry_optionen() {
     options.pool_max = 21;
     let saved = save(&fixture.path(), &original.revision, &options).unwrap();
     assert_eq!(saved.snapshot.settings().database.retry.attempts, 7);
-    assert_eq!(saved.snapshot.settings().database.retry.base_delay_seconds, 0.2);
-    assert_eq!(saved.snapshot.settings().database.retry.max_delay_seconds, 0.9);
+    assert_eq!(
+        saved.snapshot.settings().database.retry.base_delay_seconds,
+        0.2
+    );
+    assert_eq!(
+        saved.snapshot.settings().database.retry.max_delay_seconds,
+        0.9
+    );
+}
+
+#[test]
+fn config_cli_bestehende_pruefung_und_begrenzte_brain_inspektion() {
+    let fixture = Fixture::new();
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_tb-config-check"))
+        .arg("--config")
+        .arg(fixture.path())
+        .output()
+        .unwrap();
+    assert!(check.status.success());
+    let expected = load_saved(&fixture.path()).unwrap();
+    let check_text = String::from_utf8(check.stdout).unwrap();
+    assert!(check_text.contains(expected.snapshot.fingerprint()));
+    let inspect = std::process::Command::new(env!("CARGO_BIN_EXE_tb-config-check"))
+        .arg("--config")
+        .arg(fixture.path())
+        .arg("--brain-inspect")
+        .output()
+        .unwrap();
+    assert!(inspect.status.success());
+    assert!(inspect.stderr.is_empty());
+    let value: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
+    assert_eq!(value.as_object().unwrap().len(), 4);
+    assert_eq!(value["revision"], expected.revision);
+    for field in ["bot_brain_client", "dashboard_brain_client"] {
+        assert_eq!(value[field].as_object().unwrap().len(), 2);
+        assert_eq!(value[field]["mode"], "legacy");
+        assert!(value[field]["endpoint"].is_null());
+    }
+    assert!(value["bot_brain_chat_enabled"].is_boolean());
+    assert_eq!(std::fs::read_to_string(fixture.path()).unwrap(), CONFIG);
+    assert!(!fixture.0.join(".bot.toml.lock").exists());
+}
+
+#[test]
+fn config_cli_schreibt_nicht_an_frei_gewaehlte_ziele() {
+    let fixture = Fixture::new();
+    let expected = load_saved(&fixture.path()).unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_tb-config-check"))
+        .arg("--config")
+        .arg(fixture.path())
+        .arg("--brain-apply")
+        .arg("--expected-revision")
+        .arg(&expected.revision)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(std::fs::read_to_string(fixture.path()).unwrap(), CONFIG);
+    assert!(!fixture.0.join(".bot.toml.lock").exists());
+}
+
+#[test]
+fn config_cli_verweigert_unbekannte_und_doppelte_argumente() {
+    let fixture = Fixture::new();
+    for extra in [
+        vec!["--brain-inspect", "--brain-inspect"],
+        vec!["--brain-apply"],
+        vec!["--brain-apply", "--expected-revision"],
+        vec!["synthetic-private-value"],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_tb-config-check"))
+            .arg("--config")
+            .arg(fixture.path())
+            .args(extra)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        assert!(!String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("synthetic-private-value"));
+    }
+    assert_eq!(std::fs::read_to_string(fixture.path()).unwrap(), CONFIG);
 }
