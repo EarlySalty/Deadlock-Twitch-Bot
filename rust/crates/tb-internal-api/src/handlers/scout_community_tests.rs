@@ -20,6 +20,8 @@ fn body_wird_geprueft_und_normalisiert() {
         suggested_by_discord_id: DISCORD_A.into(),
         reason: Some("Spielt stark".into()),
         idempotency_key: "discord-suggestion-1".into(),
+        submitted_at: None,
+        privacy_epoch: None,
     })
     .unwrap();
     assert_eq!(ok.login, "neuling");
@@ -36,6 +38,8 @@ fn body_wird_geprueft_und_normalisiert() {
                 suggested_by_discord_id: discord.into(),
                 reason: None,
                 idempotency_key: key.into(),
+                submitted_at: None,
+                privacy_epoch: None,
             })
             .is_none(),
             "{login} {discord} {key}"
@@ -43,7 +47,7 @@ fn body_wird_geprueft_und_normalisiert() {
     }
 }
 
-async fn migrated_pool(_db_name: &str) -> crate::test_postgres::TestPostgres {
+pub(super) async fn migrated_pool(_db_name: &str) -> crate::test_postgres::TestPostgres {
     let db = crate::test_postgres::TestPostgres::start_with_timescaledb().await;
     let pool = db.pool.clone();
     sqlx::query("CREATE EXTENSION IF NOT EXISTS timescaledb")
@@ -92,7 +96,7 @@ async fn helix_mock(users: &[(&str, &str)]) -> (MockServer, HelixClient) {
     (server, client)
 }
 
-fn router(pool: PgPool, helix: Option<HelixClient>) -> axum::Router {
+pub(super) fn router(pool: PgPool, helix: Option<HelixClient>) -> axum::Router {
     crate::build_internal_router(
         pool,
         TOKEN.to_string(),
@@ -111,7 +115,7 @@ fn router(pool: PgPool, helix: Option<HelixClient>) -> axum::Router {
     )
 }
 
-async fn call(router: &axum::Router, request: Request<Body>) -> (StatusCode, Value) {
+pub(super) async fn call(router: &axum::Router, request: Request<Body>) -> (StatusCode, Value) {
     let response = router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
@@ -495,6 +499,8 @@ async fn alle_guardpfade_unterscheiden_konten_mit_gleichem_login() {
                 discord_id: DISCORD_B.into(),
                 grund: None,
                 idempotency_key: format!("old-id-{i}"),
+                submitted_at: None,
+                privacy_epoch: None,
             },
         )
         .await
@@ -549,6 +555,8 @@ async fn outcome_cursor_hat_eindeutige_mikrosekunden_und_verliert_keine_zeile() 
                 discord_id: DISCORD_A.into(),
                 grund: None,
                 idempotency_key: format!("cursor-{i}"),
+                submitted_at: None,
+                privacy_epoch: None,
             },
         )
         .await

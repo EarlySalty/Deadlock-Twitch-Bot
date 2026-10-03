@@ -16,11 +16,12 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde_json::json;
 use sqlx::PgPool;
 use tb_analytics::community_points::{
-    list_streamer_points, list_viewer_points, DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT,
+    list_streamer_points, list_viewer_points, viewer_activity_since, DEFAULT_PAGE_LIMIT,
+    MAX_PAGE_LIMIT,
 };
 use tb_http_core::ApiError;
 
@@ -71,6 +72,62 @@ pub async fn viewers_handler(
     Ok(Json(page))
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ActivityParams {
+    twitch_user_id: String,
+    day: NaiveDate,
+    activity_since: DateTime<Utc>,
+}
+
+fn parse_activity_params(
+    params: &HashMap<String, String>,
+    now: DateTime<Utc>,
+) -> Result<ActivityParams, ApiError> {
+    let twitch_user_id = params
+        .get("twitch_user_id")
+        .filter(|id| tb_chat::clip_contest_submit::valid_twitch_id(id))
+        .ok_or_else(|| bad_request("twitch_user_id muss eine Twitch-ID sein"))?
+        .clone();
+    let day = params
+        .get("day")
+        .filter(|day| day.len() == 10)
+        .and_then(|day| NaiveDate::parse_from_str(day, "%Y-%m-%d").ok())
+        .ok_or_else(|| {
+            bad_request("day muss ein Berliner Kalendertag im Format YYYY-MM-DD sein")
+        })?;
+    let activity_since = params.get("activity_since")
+        .and_then(|since| DateTime::parse_from_rfc3339(since).ok()).map(|since| since.with_timezone(&Utc))
+        .filter(|since| since <= &now && since.timestamp_subsec_nanos() % 1000 == 0)
+        .ok_or_else(|| bad_request("activity_since muss eine vergangene RFC3339-Consent-Grenze mit höchstens Mikrosekundenauflösung sein"))?;
+    Ok(ActivityParams {
+        twitch_user_id,
+        day,
+        activity_since,
+    })
+}
+
+/// Authentifizierter Rohdatennachweis für erneute Einwilligung, ohne DB-Schreibpfad.
+pub async fn viewer_activity_handler(
+    State(pool): State<PgPool>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let now = Utc::now();
+    let params = parse_activity_params(&params, now)?;
+    let page = viewer_activity_since(
+        &pool,
+        &params.twitch_user_id,
+        params.day,
+        params.activity_since,
+        now,
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "Consent-gebundene Vieweraktivität konnte nicht gelesen werden");
+        ApiError::internal()
+    })?;
+    Ok(Json(page))
+}
+
 /// `GET /internal/twitch/v1/community-points/streamers`
 pub async fn streamers_handler(
     State(pool): State<PgPool>,
@@ -107,6 +164,42 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn consent_parameter_erfordern_identitaet_tag_und_mikrosekundengrenze() {
+        let now = DateTime::parse_from_rfc3339("2026-10-03T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let base = params(&[
+            ("twitch_user_id", "123"),
+            ("day", "2026-10-01"),
+            ("activity_since", "2026-10-01T10:00:00.000123Z"),
+        ]);
+        assert_eq!(
+            parse_activity_params(&base, now).unwrap().twitch_user_id,
+            "123"
+        );
+        for (key, value) in [
+            ("twitch_user_id", "anzeige"),
+            ("twitch_user_id", ""),
+            ("day", "2026-02-30"),
+            ("activity_since", "morgen"),
+            ("activity_since", "2026-10-04T00:00:00Z"),
+            ("activity_since", "2026-10-01T10:00:00.000123001Z"),
+        ] {
+            let mut invalid = base.clone();
+            invalid.insert(key.into(), value.into());
+            assert!(
+                parse_activity_params(&invalid, now).is_err(),
+                "{key}={value}"
+            );
+        }
+        for key in ["twitch_user_id", "day", "activity_since"] {
+            let mut invalid = base.clone();
+            invalid.remove(key);
+            assert!(parse_activity_params(&invalid, now).is_err());
+        }
     }
 
     #[test]
@@ -238,6 +331,42 @@ mod tests {
         )
         .await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn consent_route_erfordert_auth_und_bindet_leere_antwort() {
+        let db = migrated_pool("tb_cp_handler_consent").await;
+        let route="viewers/activity?twitch_user_id=123&day=2026-10-01&activity_since=2026-10-01T10:00:00Z";
+        assert_eq!(
+            call(&db.pool, req(route, None, "127.0.0.1:5000")).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            call(&db.pool, req(route, Some(TOKEN), "10.1.2.3:5000"))
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            call(
+                &db.pool,
+                req(
+                    "viewers/activity?twitch_user_id=123",
+                    Some(TOKEN),
+                    "127.0.0.1:5000"
+                )
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        let (status, body) = call(&db.pool, req(route, Some(TOKEN), "127.0.0.1:5000")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["twitch_user_id"], "123");
+        assert_eq!(body["day"], "2026-10-01");
+        assert_eq!(body["activity_since"], "2026-10-01T10:00:00Z");
+        assert!(DateTime::parse_from_rfc3339(body["computed_at"].as_str().unwrap()).is_ok());
+        assert_eq!(body["rows"], json!([]));
     }
 
     #[tokio::test]

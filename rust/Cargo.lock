@@ -3998,10 +3998,12 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "serde",
+ "sha2",
  "sqlx 0.9.0",
  "tb-raid",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

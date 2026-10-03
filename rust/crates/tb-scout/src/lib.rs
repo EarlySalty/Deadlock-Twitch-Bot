@@ -7,6 +7,7 @@
 //! (first_seen, dispatched_at) — nie auf Identitätsmerkmale.
 
 pub mod community;
+pub mod community_privacy;
 pub mod detector;
 pub mod store;
 

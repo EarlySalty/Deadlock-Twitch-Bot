@@ -109,6 +109,10 @@ pub fn build_internal_router(
             get(community_points::viewers_handler),
         )
         .route(
+            &format!("{base}/community-points/viewers/activity"),
+            get(community_points::viewer_activity_handler),
+        )
+        .route(
             &format!("{base}/community-points/streamers"),
             get(community_points::streamers_handler),
         )
@@ -117,6 +121,18 @@ pub fn build_internal_router(
         .route(
             &format!("{base}/scout/community-suggestion"),
             post(scout_community::suggestion_handler),
+        )
+        .route(
+            &format!("{base}/scout/community-privacy/export"),
+            get(scout_community::privacy_export_handler),
+        )
+        .route(
+            &format!("{base}/scout/community-privacy/erase"),
+            post(scout_community::privacy_erase_handler),
+        )
+        .route(
+            &format!("{base}/scout/community-privacy/consent"),
+            post(scout_community::privacy_consent_handler),
         )
         .route(
             &format!("{base}/scout/community-suggestions/outcomes"),

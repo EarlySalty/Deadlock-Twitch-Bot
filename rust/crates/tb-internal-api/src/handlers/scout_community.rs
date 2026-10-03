@@ -42,6 +42,10 @@ pub struct SuggestionBody {
     #[serde(default)]
     pub reason: Option<String>,
     pub idempotency_key: String,
+    #[serde(default)]
+    pub submitted_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub privacy_epoch: Option<i64>,
 }
 
 /// Geprüfte Eingabe ohne Helix-Auflösung.
@@ -51,20 +55,29 @@ pub struct GepruefterVorschlag {
     pub discord_id: String,
     pub reason: Option<String>,
     pub idempotency_key: String,
+    pub submitted_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub privacy_epoch: Option<i64>,
 }
 
 pub fn pruefe_body(body: SuggestionBody) -> Option<GepruefterVorschlag> {
     let login = normalisiere_vorschlag_login(&body.twitch_login)?;
     let discord_id = body.suggested_by_discord_id.trim().to_string();
     let idempotency_key = body.idempotency_key.trim().to_string();
-    (gueltige_discord_id(&discord_id) && gueltiger_idempotency_key(&idempotency_key)).then_some(
-        GepruefterVorschlag {
-            login,
-            discord_id,
-            reason: body.reason,
-            idempotency_key,
-        },
-    )
+    (gueltige_discord_id(&discord_id)
+        && gueltiger_idempotency_key(&idempotency_key)
+        && body.submitted_at.is_some() == body.privacy_epoch.is_some()
+        && body.privacy_epoch.is_none_or(|epoch| epoch >= 0)
+        && body
+            .submitted_at
+            .is_none_or(|at| at <= chrono::Utc::now() && at.timestamp_subsec_nanos() % 1000 == 0))
+    .then_some(GepruefterVorschlag {
+        login,
+        discord_id,
+        reason: body.reason,
+        idempotency_key,
+        submitted_at: body.submitted_at,
+        privacy_epoch: body.privacy_epoch,
+    })
 }
 
 fn antwort(status: VorschlagStatus, twitch_user_id: Option<&str>) -> Response {
@@ -105,6 +118,8 @@ pub async fn suggestion_handler(
         &eingabe.login,
         &eingabe.discord_id,
         eingabe.reason.as_deref(),
+        eingabe.submitted_at,
+        eingabe.privacy_epoch,
     )
     .await
     {
@@ -145,6 +160,8 @@ pub async fn suggestion_handler(
             discord_id: eingabe.discord_id,
             grund: eingabe.reason,
             idempotency_key: eingabe.idempotency_key,
+            submitted_at: eingabe.submitted_at,
+            privacy_epoch: eingabe.privacy_epoch,
         },
     )
     .await;
@@ -163,6 +180,11 @@ pub async fn suggestion_handler(
 
 fn vorschlag_fehler(error: VorschlagFehler) -> Response {
     match error {
+        VorschlagFehler::PrivacyGesperrt => fehler(
+            StatusCode::FORBIDDEN,
+            "privacy_blocked",
+            "Der Vorschlag ist durch eine Privacyentscheidung gesperrt",
+        ),
         VorschlagFehler::Konflikt => fehler(
             StatusCode::CONFLICT,
             "idempotency_conflict",
@@ -195,6 +217,95 @@ pub async fn outcomes_handler(
     Ok(Json(seite))
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivacyBody {
+    discord_user_id: String,
+    operation_id: uuid::Uuid,
+    epoch: i64,
+    #[serde(default)]
+    activity_since: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+pub async fn privacy_export_handler(
+    State(pool): State<PgPool>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let Some(id) = params
+        .get("discord_user_id")
+        .filter(|id| gueltige_discord_id(id))
+    else {
+        return fehler(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "discord_user_id muss eine Discord-ID sein",
+        );
+    };
+    match tb_scout::community_privacy::export(&pool, id).await {
+        Ok(export) => Json(export).into_response(),
+        Err(error) => vorschlag_fehler(error.into()),
+    }
+}
+pub async fn privacy_erase_handler(
+    State(pool): State<PgPool>,
+    body: Result<Json<PrivacyBody>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    privacy_operation(&pool, body, false).await
+}
+pub async fn privacy_consent_handler(
+    State(pool): State<PgPool>,
+    body: Result<Json<PrivacyBody>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    privacy_operation(&pool, body, true).await
+}
+async fn privacy_operation(
+    pool: &PgPool,
+    body: Result<Json<PrivacyBody>, axum::extract::rejection::JsonRejection>,
+    consent: bool,
+) -> Response {
+    let Ok(Json(body)) = body else {
+        return fehler(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "Ungültiger Privacyauftrag",
+        );
+    };
+    if !gueltige_discord_id(&body.discord_user_id)
+        || body.epoch <= 0
+        || consent != body.activity_since.is_some()
+        || body
+            .activity_since
+            .is_some_and(|at| at > chrono::Utc::now() || at.timestamp_subsec_nanos() % 1000 != 0)
+    {
+        return fehler(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "Privacyauftrag braucht Discord-ID, UUID, positive Epoche und passende Consent-Grenze",
+        );
+    }
+    match tb_scout::community_privacy::apply_operation(
+        pool,
+        &body.discord_user_id,
+        body.operation_id,
+        body.epoch,
+        body.activity_since,
+    )
+    .await
+    {
+        Ok(result) => Json(result).into_response(),
+        Err(VorschlagFehler::Konflikt) => fehler(
+            StatusCode::CONFLICT,
+            "privacy_epoch_conflict",
+            "Privacyepoche oder Operationsbindung widerspricht dem gespeicherten Auftrag",
+        ),
+        Err(error) => vorschlag_fehler(error),
+    }
+}
+
 #[cfg(test)]
 #[path = "scout_community_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "scout_community_privacy_tests.rs"]
+mod privacy_tests;

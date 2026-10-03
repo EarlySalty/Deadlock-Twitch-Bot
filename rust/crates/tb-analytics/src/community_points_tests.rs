@@ -687,6 +687,140 @@ async fn sessiongrenzen_sperren_watchtime_chat_und_entdeckerbonus() {
 }
 
 #[tokio::test]
+async fn consent_grenze_liefert_nur_neue_rohaktivitaet_ohne_alten_tagesbonus() {
+    let db = db::migrated_pool("tb_cp_consent").await;
+    let pool = &db.pool;
+    db::seed_partners(pool).await;
+    ticks(pool, 1, "viewer", "111", "2026-10-01T08:00:00Z", 12).await;
+    ticks(pool, 1, "viewer", "111", "2026-10-01T09:59:30Z", 1).await;
+    sqlx::query("INSERT INTO twitch_chat_messages(session_id,streamer_login,chatter_login,chatter_id,message_ts,content) VALUES (1,'alpha','viewer','111','2026-10-01 08:00Z','Alte Nachricht bleibt gelöscht'),(1,'alpha','viewer','111','2026-10-01 09:59:30Z','Neue Nachricht nach Consent')")
+        .execute(pool).await.unwrap();
+    let d = day("2026-10-01");
+    let consent = ts("2026-10-01T10:00:00Z");
+    let now = ts("2026-10-01T20:00:00Z");
+    aggregate_day(pool, d, now).await.unwrap();
+    let empty = viewer_activity_since(pool, "111", d, consent, now)
+        .await
+        .unwrap();
+    assert!(
+        empty.rows.is_empty(),
+        "Ein alter Tick über die Consent-Grenze zählt nicht erneut"
+    );
+    ticks(pool, 1, "viewer", "111", "2026-10-01T10:00:00Z", 10).await;
+    ticks(pool, 1, "andere_person", "222", "2026-10-01T10:00:00Z", 10).await;
+    sqlx::raw_sql("INSERT INTO twitch_chat_messages(session_id,streamer_login,chatter_login,chatter_id,message_ts,content) VALUES
+        (1,'alpha','viewer','111','2026-10-01 10:00Z','Neue Nachricht nach Consent'),
+        (1,'alpha','viewer','111','2026-10-01 10:00:30Z','Noch innerhalb des Cooldowns'),
+        (1,'alpha','viewer','111','2026-10-01 10:01Z','Neue Nachricht nach Consent'),
+        (1,'alpha','viewer','111','2026-10-01 10:02Z','Zweite Nachricht nach Consent');")
+        .execute(pool).await.unwrap();
+    aggregate_day(pool, d, now).await.unwrap();
+    let stored_before = list_viewer_points(pool, None, 100).await.unwrap();
+    let page = viewer_activity_since(pool, "111", d, consent, now)
+        .await
+        .unwrap();
+    assert_eq!(page.twitch_user_id, "111");
+    assert_eq!(page.day, "2026-10-01");
+    assert_eq!(page.activity_since, "2026-10-01T10:00:00Z");
+    assert_eq!(page.computed_at, "2026-10-01T20:00:00Z");
+    assert_eq!(page.rows.len(), 1);
+    let row = &page.rows[0];
+    assert_eq!(
+        (
+            row.watch_minutes,
+            row.points_watch,
+            row.chat_messages,
+            row.points_chat,
+            row.points_discovery
+        ),
+        (5, 1, 3, 3, 0)
+    );
+    assert_eq!(
+        list_viewer_points(pool, None, 100).await.unwrap(),
+        stored_before,
+        "Consent-Leseweg verändert keine Tageswerte"
+    );
+    let fresh = viewer_activity_since(pool, "222", d, consent, now)
+        .await
+        .unwrap();
+    assert_eq!(
+        fresh.rows[0].points_discovery, 10,
+        "Eine tatsächlich neue Entdeckung ab Consent bleibt gültig"
+    );
+    assert!(
+        viewer_activity_since(pool, "111", day("2026-09-30"), consent, now)
+            .await
+            .unwrap()
+            .rows
+            .is_empty()
+    );
+    assert!(viewer_activity_since(pool, "111", d, now, now)
+        .await
+        .unwrap()
+        .rows
+        .is_empty());
+}
+
+#[tokio::test]
+async fn historische_rohänderung_bleibt_bei_punktedeckel_hinter_cursor_sichtbar() {
+    let db = db::migrated_pool("tb_cp_dirty_day").await;
+    let pool = &db.pool;
+    db::seed_partners(pool).await;
+    ticks(pool, 1, "viewer", "111", "2026-10-01T08:00:00Z", 720).await;
+    let d = day("2026-10-01");
+    aggregate_day(pool, d, ts("2026-10-01T20:00:00Z"))
+        .await
+        .unwrap();
+    let before = list_viewer_points(pool, None, 100).await.unwrap();
+    assert_eq!(before.rows[0].points_watch, 72);
+    let since = ts(before.next_updated_since.as_deref().unwrap());
+    ticks(pool, 1, "viewer", "111", "2026-10-01T14:00:00Z", 10).await;
+    let days = run_aggregation(pool, ts("2026-10-03T20:00:00Z"), false)
+        .await
+        .unwrap();
+    assert!(
+        days.iter().any(|(day, _)| *day == d),
+        "Auch alte markierte Tage werden neu berechnet"
+    );
+    let after = list_viewer_points(pool, Some(since), 100).await.unwrap();
+    assert_eq!(after.rows.len(), 1);
+    assert_eq!(after.rows[0].points_watch, 72);
+    assert_eq!(after.rows[0].watch_minutes, before.rows[0].watch_minutes);
+    let new = viewer_activity_since(
+        pool,
+        "111",
+        d,
+        ts("2026-10-01T14:00:00Z"),
+        ts("2026-10-03T20:00:00Z"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(new.rows[0].watch_minutes, 5);
+    assert_eq!(
+        aggregate_day(pool, d, ts("2026-10-03T20:00:00Z"))
+            .await
+            .unwrap(),
+        DayWriteStats::default()
+    );
+    sqlx::query("DELETE FROM twitch_viewer_presence_ticks WHERE viewer_twitch_user_id='111' AND tick_at >= '2026-10-01 14:00Z'")
+        .execute(pool).await.unwrap();
+    run_aggregation(pool, ts("2026-10-03T20:00:00Z"), false)
+        .await
+        .unwrap();
+    assert!(viewer_activity_since(
+        pool,
+        "111",
+        d,
+        ts("2026-10-01T14:00:00Z"),
+        ts("2026-10-03T20:00:00Z")
+    )
+    .await
+    .unwrap()
+    .rows
+    .is_empty());
+}
+
+#[tokio::test]
 async fn aggregation_hält_laden_und_schreiben_auf_einer_pool_connection() {
     let _db = db::migrated_pool_with_max_connections("tb_cp_single_connection", 1).await;
     let pool = _db.pool.clone();

@@ -44,6 +44,17 @@ BEGIN
     IF NOT (has_table_privilege('twitchdash','twitch_clips_social_media','SELECT') AND has_table_privilege('twitchdash','twitch_clips_social_media','UPDATE')) THEN
         RAISE EXCEPTION 'Bestehende Clipverwaltung verlor legitime Rechte';
     END IF;
+    FOREACH community_table IN ARRAY ARRAY['twitch_community_points_dirty_days','twitch_scout_community_privacy','twitch_scout_erased_replay_keys'] LOOP
+        IF to_regclass(format('public.%I',community_table)) IS NULL
+            OR has_table_privilege('twitchdash',community_table,'SELECT,INSERT,UPDATE,DELETE') THEN
+            RAISE EXCEPTION 'Technische Community-/Privacytabelle % fehlt oder ist fürs Dashboard freigegeben',community_table;
+        END IF;
+    END LOOP;
+    IF NOT has_table_privilege('twitchbot','twitch_community_points_dirty_days','DELETE')
+        OR NOT has_table_privilege('twitchbot','twitch_scout_community_privacy','UPDATE')
+        OR NOT has_table_privilege('twitchbot','twitch_scout_erased_replay_keys','INSERT') THEN
+        RAISE EXCEPTION 'Producer fehlen technische Community-/Privacyrechte';
+    END IF;
 END $$;
 SET LOCAL ROLE twitchbot;
 INSERT INTO twitch_clip_contest_forwards(clip_id,clip_url,broadcaster_twitch_id,broadcaster_login,via,status)

@@ -7,7 +7,7 @@
 //!
 //! - Anwesenheit: `twitch_viewer_presence_ticks` (Chatters-Poller, 30 s) plus
 //!   jede Chat-Nachricht aus `twitch_chat_messages`. Die Twitch-User-ID der
-//!   Ticks kommt aus `twitch_session_chatters.chatter_id` derselben Session.
+//!   Ticks wird bei der Erfassung atomar aus der Helix-Antwort gespeichert.
 //! - Chat: `twitch_chat_messages` (Inhalt, Befehls-Flag, Moderationsaktion).
 //! - Raids: `twitch_raid_history` (`success`).
 //!
@@ -528,6 +528,8 @@ async fn load_presence(
     day_start: DateTime<Utc>,
     day_end: DateTime<Utc>,
     upper: DateTime<Utc>,
+    activity_since: Option<DateTime<Utc>>,
+    viewer_id: Option<&str>,
 ) -> Result<Vec<PresenceRow>, sqlx::Error> {
     let (ids, logins) = partner_arrays(partners);
     let window_start = day_start - Duration::seconds(PRESENCE_SAMPLE_COVERAGE_SECS);
@@ -541,6 +543,8 @@ async fn load_presence(
              WHERE t.tick_at >= $3 AND t.tick_at < $4
                AND t.tick_at >= ss.started_at
                AND (ss.ended_at IS NULL OR t.tick_at < ss.ended_at)
+               AND ($8::timestamptz IS NULL OR t.tick_at >= $8)
+               AND ($9::text IS NULL OR t.viewer_twitch_user_id = $9)
                AND COALESCE(TRIM(t.viewer_twitch_user_id), '') <> ''
             UNION ALL
             SELECT ss.channel_id, m.chatter_id, LOWER(m.chatter_login), m.message_ts,
@@ -550,6 +554,8 @@ async fn load_presence(
              WHERE m.message_ts >= $3 AND m.message_ts < $4
                AND m.message_ts >= ss.started_at
                AND (ss.ended_at IS NULL OR m.message_ts < ss.ended_at)
+               AND ($8::timestamptz IS NULL OR m.message_ts >= $8)
+               AND ($9::text IS NULL OR m.chatter_id = $9)
                AND COALESCE(TRIM(m.chatter_id), '') <> ''
         ),
         ordered AS (
@@ -583,6 +589,8 @@ async fn load_presence(
             .bind(day_start)
             .bind(PRESENCE_SAMPLE_COVERAGE_SECS as f64)
             .bind(upper)
+            .bind(activity_since)
+            .bind(viewer_id)
             .fetch_all(&mut *conn)
             .await?;
     Ok(rows
@@ -607,6 +615,8 @@ async fn load_chat(
     partners: &[Partner],
     day_start: DateTime<Utc>,
     upper: DateTime<Utc>,
+    activity_since: Option<DateTime<Utc>>,
+    viewer_id: Option<&str>,
 ) -> Result<HashMap<(String, String), Vec<ChatSample>>, sqlx::Error> {
     let (ids, logins) = partner_arrays(partners);
     let window_start = day_start - Duration::seconds(CHAT_RULE_LOOKBACK_SECS);
@@ -619,6 +629,8 @@ async fn load_chat(
          WHERE m.message_ts >= $3 AND m.message_ts < $4
            AND m.message_ts >= ss.started_at
            AND (ss.ended_at IS NULL OR m.message_ts < ss.ended_at)
+           AND ($5::timestamptz IS NULL OR m.message_ts >= $5)
+           AND ($6::text IS NULL OR m.chatter_id = $6)
            AND COALESCE(TRIM(m.chatter_id), '') <> ''
          ORDER BY ss.channel_id, TRIM(m.chatter_id), m.message_ts, m.id"
     );
@@ -627,6 +639,8 @@ async fn load_chat(
         .bind(&logins)
         .bind(window_start)
         .bind(upper)
+        .bind(activity_since)
+        .bind(viewer_id)
         .fetch_all(&mut *conn)
         .await?;
     let mut map: HashMap<(String, String), Vec<ChatSample>> = HashMap::new();
@@ -684,13 +698,16 @@ async fn load_bans(
 async fn load_discoveries(
     conn: &mut PgConnection,
     viewer_ids: &[String],
+    activity_since: Option<DateTime<Utc>>,
 ) -> Result<HashMap<(String, String), KnownDiscovery>, sqlx::Error> {
     let rows: Vec<(String, String, NaiveDate, bool)> = sqlx::query_as(
-        "SELECT twitch_user_id, channel_twitch_user_id, day, bonus_awarded
+        "SELECT twitch_user_id, channel_twitch_user_id, day,
+                bonus_awarded AND ($2::timestamptz IS NULL OR first_seen_at >= $2)
            FROM twitch_community_points_discoveries
           WHERE twitch_user_id = ANY($1)",
     )
     .bind(viewer_ids)
+    .bind(activity_since)
     .fetch_all(&mut *conn)
     .await?;
     Ok(rows
@@ -774,6 +791,16 @@ async fn load_day_input_on_conn(
     day: NaiveDate,
     now: DateTime<Utc>,
 ) -> Result<DayInput, sqlx::Error> {
+    load_day_input_scoped(conn, day, now, None, None).await
+}
+
+async fn load_day_input_scoped(
+    conn: &mut PgConnection,
+    day: NaiveDate,
+    now: DateTime<Utc>,
+    activity_since: Option<DateTime<Utc>>,
+    viewer_id: Option<&str>,
+) -> Result<DayInput, sqlx::Error> {
     let (day_start, day_end) = berlin_day_bounds(day);
     let upper = day_end.min(now);
     let partners = load_active_partners_on_conn(conn).await?;
@@ -781,18 +808,30 @@ async fn load_day_input_on_conn(
         day,
         ..DayInput::default()
     };
-    if partners.is_empty() || upper <= day_start {
+    if partners.is_empty()
+        || upper <= day_start
+        || activity_since.is_some_and(|since| since >= upper)
+    {
         input.partners = partners;
         return Ok(input);
     }
     let partner_ids: Vec<String> = partners.iter().map(|p| p.twitch_user_id.clone()).collect();
-    input.presence = load_presence(conn, &partners, day_start, day_end, upper).await?;
-    input.chat = load_chat(conn, &partners, day_start, upper).await?;
+    input.presence = load_presence(
+        conn,
+        &partners,
+        day_start,
+        day_end,
+        upper,
+        activity_since,
+        viewer_id,
+    )
+    .await?;
+    input.chat = load_chat(conn, &partners, day_start, upper, activity_since, viewer_id).await?;
     let mut viewer_ids: Vec<String> = input.presence.iter().map(|p| p.viewer_id.clone()).collect();
     viewer_ids.sort();
     viewer_ids.dedup();
     load_bans(conn, &partner_ids, &viewer_ids, &mut input).await?;
-    input.discoveries = load_discoveries(conn, &viewer_ids).await?;
+    input.discoveries = load_discoveries(conn, &viewer_ids, activity_since).await?;
 
     let login_of: HashMap<&str, &str> = partners
         .iter()
@@ -817,7 +856,12 @@ async fn load_day_input_on_conn(
             })
         })
         .collect();
-    input.seen_before = load_seen_before(conn, &new_pairs, day_start).await?;
+    input.seen_before = load_seen_before(
+        conn,
+        &new_pairs,
+        activity_since.map_or(day_start, |since| since.max(day_start)),
+    )
+    .await?;
     input.raids_to_partners = load_raids(conn, &partner_ids, day_start, day_end).await?;
     input.partners = partners;
     Ok(input)
@@ -862,7 +906,7 @@ pub async fn write_day(
         .bind(AGGREGATION_LOCK_KEY)
         .execute(&mut *tx)
         .await?;
-    let stats = write_day_on_conn(&mut tx, day, output).await?;
+    let stats = write_day_on_conn(&mut tx, day, output, false).await?;
     tx.commit().await?;
     Ok(stats)
 }
@@ -871,6 +915,7 @@ async fn write_day_on_conn(
     tx: &mut PgConnection,
     day: NaiveDate,
     output: &DayOutput,
+    raw_activity_changed: bool,
 ) -> Result<DayWriteStats, sqlx::Error> {
     let mut stats = DayWriteStats::default();
 
@@ -943,7 +988,7 @@ async fn write_day_on_conn(
              points_chat = EXCLUDED.points_chat,
              points_discovery = EXCLUDED.points_discovery,
              updated_at = EXCLUDED.updated_at
-         WHERE (t.twitch_login, t.watch_minutes, t.chat_messages, t.points_watch,
+         WHERE $11 OR (t.twitch_login, t.watch_minutes, t.chat_messages, t.points_watch,
                 t.points_chat, t.points_discovery)
                IS DISTINCT FROM
                (EXCLUDED.twitch_login, EXCLUDED.watch_minutes, EXCLUDED.chat_messages,
@@ -959,6 +1004,7 @@ async fn write_day_on_conn(
     .bind(&pd)
     .bind(day)
     .bind(base)
+    .bind(raw_activity_changed)
     .execute(&mut *tx)
     .await?
     .rows_affected();
@@ -1075,9 +1121,18 @@ pub async fn aggregate_day(
         .execute(&mut *tx)
         .await?;
 
+    // Die Tageszeile vor dem Lesen sperren. Gleichzeitige Rohschreiber setzen
+    // nach unserem Commit eine neue Markierung, statt ihre Änderung zu verlieren.
+    let raw_activity_changed =
+        sqlx::query("DELETE FROM twitch_community_points_dirty_days WHERE day=$1")
+            .bind(day)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected()
+            > 0;
     let input = load_day_input_on_conn(&mut tx, day, now).await?;
     let output = compute_day(&input);
-    let stats = write_day_on_conn(&mut tx, day, &output).await?;
+    let stats = write_day_on_conn(&mut tx, day, &output, raw_activity_changed).await?;
     tx.commit().await?;
     Ok(stats)
 }
@@ -1090,7 +1145,17 @@ pub async fn run_aggregation(
     first_run: bool,
 ) -> Result<Vec<(NaiveDate, DayWriteStats)>, sqlx::Error> {
     let mut out = Vec::new();
-    for day in days_to_aggregate(now, first_run) {
+    let mut days = days_to_aggregate(now, first_run);
+    let dirty: Vec<NaiveDate> = sqlx::query_scalar(
+        "SELECT day FROM twitch_community_points_dirty_days WHERE day <= $1 ORDER BY day",
+    )
+    .bind(berlin_day(now))
+    .fetch_all(pool)
+    .await?;
+    days.extend(dirty);
+    days.sort_unstable();
+    days.dedup();
+    for day in days {
         out.push((day, aggregate_day(pool, day, now).await?));
     }
     Ok(out)
@@ -1115,6 +1180,58 @@ pub struct ViewerPointsRow {
     pub points_chat: i32,
     pub points_discovery: i32,
     pub updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ViewerActivityPage {
+    pub twitch_user_id: String,
+    pub day: String,
+    pub activity_since: String,
+    pub computed_at: String,
+    pub rows: Vec<ViewerPointsRow>,
+}
+
+/// Berechnet einen Viewer-Tag ausschließlich aus Aktivität ab der Consent-Grenze.
+/// Die normale Tagesaggregation und ihre gespeicherten Werte bleiben unverändert.
+pub async fn viewer_activity_since(
+    pool: &PgPool,
+    viewer_id: &str,
+    day: NaiveDate,
+    activity_since: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<ViewerActivityPage, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    let input =
+        load_day_input_scoped(&mut tx, day, now, Some(activity_since), Some(viewer_id)).await?;
+    let day = day.format("%Y-%m-%d").to_string();
+    let computed_at = format_cursor(now);
+    let rows = compute_day(&input)
+        .viewers
+        .into_iter()
+        .map(|row| ViewerPointsRow {
+            twitch_user_id: row.twitch_user_id,
+            twitch_login: row.twitch_login,
+            channel_twitch_user_id: row.channel_twitch_user_id,
+            day: day.clone(),
+            watch_minutes: row.watch_minutes,
+            chat_messages: row.chat_messages,
+            points_watch: row.points_watch,
+            points_chat: row.points_chat,
+            points_discovery: row.points_discovery,
+            updated_at: computed_at.clone(),
+        })
+        .collect();
+    tx.commit().await?;
+    Ok(ViewerActivityPage {
+        twitch_user_id: viewer_id.to_string(),
+        day,
+        activity_since: format_cursor(activity_since),
+        computed_at,
+        rows,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

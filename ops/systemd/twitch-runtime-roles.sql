@@ -437,3 +437,28 @@ BEGIN
     END IF;
 END
 $community_leserechte$;
+
+-- Der technische Rohänderungshinweis gehört ausschließlich zum Aggregator.
+DO $community_dirty_days$
+BEGIN
+    IF to_regclass('public.twitch_community_points_dirty_days') IS NOT NULL THEN
+        REVOKE ALL ON TABLE public.twitch_community_points_dirty_days FROM twitchdash, twitchlegacy;
+        REVOKE ALL ON TABLE public.twitch_community_points_dirty_days FROM twitchbot;
+        GRANT SELECT, DELETE ON TABLE public.twitch_community_points_dirty_days TO twitchbot;
+    END IF;
+END
+$community_dirty_days$;
+
+-- Privacybarrieren enthalten nur Hashes und Auftragsgrenzen; kein Dashboardzugriff.
+DO $community_scout_privacy$
+BEGIN
+    IF to_regclass('public.twitch_scout_community_privacy') IS NOT NULL THEN
+        REVOKE ALL ON TABLE public.twitch_scout_community_privacy FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, INSERT, UPDATE ON TABLE public.twitch_scout_community_privacy TO twitchbot;
+    END IF;
+    IF to_regclass('public.twitch_scout_erased_replay_keys') IS NOT NULL THEN
+        REVOKE ALL ON TABLE public.twitch_scout_erased_replay_keys FROM twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, INSERT ON TABLE public.twitch_scout_erased_replay_keys TO twitchbot;
+    END IF;
+END
+$community_scout_privacy$;

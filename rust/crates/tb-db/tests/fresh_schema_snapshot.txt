@@ -1123,6 +1123,7 @@ twitch_community_announcements|broadcaster_id|text|NO|
 twitch_community_announcements|revision|bigint|NO|0
 twitch_community_announcements|settings|jsonb|NO|
 twitch_community_announcements|updated_at|timestamp with time zone|NO|now()
+twitch_community_points_dirty_days|day|date|NO|
 twitch_community_points_discoveries|bonus_awarded|boolean|NO|
 twitch_community_points_discoveries|channel_twitch_user_id|text|NO|
 twitch_community_points_discoveries|created_at|timestamp with time zone|NO|now()
@@ -1921,14 +1922,21 @@ twitch_scout_candidates|suggestion_count|integer|NO|0
 twitch_scout_candidates|suggestion_reason|text|YES|
 twitch_scout_candidates|twitch_user_id|text|YES|
 twitch_scout_candidates|visited_at|timestamp with time zone|YES|
+twitch_scout_community_privacy|activity_since|timestamp with time zone|YES|
+twitch_scout_community_privacy|epoch|bigint|NO|
+twitch_scout_community_privacy|identity_hash|text|NO|
+twitch_scout_community_privacy|operation_id|uuid|NO|
 twitch_scout_community_suggestions|created_at|timestamp with time zone|NO|clock_timestamp()
 twitch_scout_community_suggestions|idempotency_key|text|NO|
 twitch_scout_community_suggestions|id|bigint|NO|nextval('twitch_scout_community_suggestions_id_seq'::regclass)
+twitch_scout_community_suggestions|privacy_epoch|bigint|YES|
 twitch_scout_community_suggestions|reason|text|YES|
 twitch_scout_community_suggestions|result_status|text|NO|
+twitch_scout_community_suggestions|submitted_at|timestamp with time zone|YES|
 twitch_scout_community_suggestions|suggested_by_discord_id|text|NO|
 twitch_scout_community_suggestions|twitch_login|text|NO|
 twitch_scout_community_suggestions|twitch_user_id|text|NO|
+twitch_scout_erased_replay_keys|key_hash|text|NO|
 twitch_scout_pitch_blacklist|created_at|timestamp with time zone|YES|now()
 twitch_scout_pitch_blacklist|reason|text|YES|
 twitch_scout_pitch_blacklist|streamer_login|text|NO|

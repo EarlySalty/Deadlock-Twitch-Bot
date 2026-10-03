@@ -201,6 +201,8 @@ pub struct VorschlagEingabe {
     pub discord_id: String,
     pub grund: Option<String>,
     pub idempotency_key: String,
+    pub submitted_at: Option<DateTime<Utc>>,
+    pub privacy_epoch: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -209,6 +211,7 @@ pub enum VorschlagFehler {
     Konflikt,
     /// Ein Login lässt sich nicht eindeutig dem gespeicherten Konto zuordnen.
     IdentitaetUngeklaert,
+    PrivacyGesperrt,
     Db(sqlx::Error),
 }
 
@@ -218,7 +221,7 @@ impl From<sqlx::Error> for VorschlagFehler {
     }
 }
 
-async fn lock(tx: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
+pub(crate) async fn lock(tx: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(COMMUNITY_LOCK_KEY)
         .execute(&mut **tx)
@@ -227,7 +230,7 @@ async fn lock(tx: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
 }
 
 /// Nächster eindeutiger Cursor-Zeitpunkt (unter dem Advisory-Lock).
-async fn naechster_stempel(
+pub(crate) async fn naechster_stempel(
     tx: &mut Transaction<'_, Postgres>,
 ) -> Result<DateTime<Utc>, sqlx::Error> {
     sqlx::query_scalar(
@@ -286,9 +289,43 @@ pub async fn vorschlag_wiederholen(
     login: &str,
     discord_id: &str,
     grund: Option<&str>,
+    submitted_at: Option<DateTime<Utc>>,
+    privacy_epoch: Option<i64>,
 ) -> Result<Option<(VorschlagStatus, String)>, VorschlagFehler> {
     let grund = normalisiere_grund(grund);
-    vorschlag_wiederholen_mit_executor(pool, key, login, discord_id, grund.as_deref()).await
+    let mut tx = pool.begin().await?;
+    lock(&mut tx).await?;
+    crate::community_privacy::require_submission(
+        &mut tx,
+        discord_id,
+        key,
+        submitted_at,
+        privacy_epoch,
+    )
+    .await?;
+    let replay = vorschlag_wiederholen_mit_executor(
+        &mut *tx,
+        key,
+        login,
+        discord_id,
+        grund.as_deref(),
+        submitted_at,
+        privacy_epoch,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(replay)
+}
+
+#[derive(sqlx::FromRow)]
+struct StoredSuggestion {
+    twitch_user_id: String,
+    twitch_login: String,
+    suggested_by_discord_id: String,
+    reason: Option<String>,
+    result_status: String,
+    submitted_at: Option<DateTime<Utc>>,
+    privacy_epoch: Option<i64>,
 }
 
 async fn vorschlag_wiederholen_mit_executor<'e>(
@@ -297,24 +334,31 @@ async fn vorschlag_wiederholen_mit_executor<'e>(
     login: &str,
     discord_id: &str,
     grund: Option<&str>,
+    submitted_at: Option<DateTime<Utc>>,
+    privacy_epoch: Option<i64>,
 ) -> Result<Option<(VorschlagStatus, String)>, VorschlagFehler> {
-    let gespeichert: Option<(String, String, String, Option<String>, String)> = sqlx::query_as(
-        "SELECT twitch_user_id, twitch_login, suggested_by_discord_id, reason, result_status
+    let gespeichert: Option<StoredSuggestion> = sqlx::query_as(
+        "SELECT twitch_user_id, twitch_login, suggested_by_discord_id, reason, result_status,submitted_at,privacy_epoch
            FROM twitch_scout_community_suggestions WHERE idempotency_key = $1",
     )
     .bind(key)
     .fetch_optional(executor)
     .await?;
-    let Some((user_id, bisher_login, bisher_von, bisher_grund, status)) = gespeichert else {
+    let Some(row) = gespeichert else {
         return Ok(None);
     };
-    if bisher_login != login || bisher_von != discord_id || bisher_grund.as_deref() != grund {
+    if row.twitch_login != login
+        || row.suggested_by_discord_id != discord_id
+        || row.reason.as_deref() != grund
+        || row.submitted_at != submitted_at
+        || row.privacy_epoch != privacy_epoch
+    {
         return Err(VorschlagFehler::Konflikt);
     }
-    let status = VorschlagStatus::parse(&status).ok_or_else(|| {
+    let status = VorschlagStatus::parse(&row.result_status).ok_or_else(|| {
         VorschlagFehler::Db(sqlx::Error::Protocol("Unbekannter Vorschlagsstatus".into()))
     })?;
-    Ok(Some((status, user_id)))
+    Ok(Some((status, row.twitch_user_id)))
 }
 
 /// Legt einen Community-Vorschlag ab. Idempotent über `idempotency_key`:
@@ -330,12 +374,23 @@ pub async fn vorschlag_einreichen(
     let mut tx = pool.begin().await?;
     lock(&mut tx).await?;
 
+    crate::community_privacy::require_submission(
+        &mut tx,
+        &eingabe.discord_id,
+        &eingabe.idempotency_key,
+        eingabe.submitted_at,
+        eingabe.privacy_epoch,
+    )
+    .await?;
+
     if let Some((status, bisher_id)) = vorschlag_wiederholen_mit_executor(
         &mut *tx,
         &eingabe.idempotency_key,
         &login,
         &eingabe.discord_id,
         grund.as_deref(),
+        eingabe.submitted_at,
+        eingabe.privacy_epoch,
     )
     .await?
     {
@@ -380,8 +435,8 @@ pub async fn vorschlag_einreichen(
     sqlx::query(
         "INSERT INTO twitch_scout_community_suggestions
              (idempotency_key, twitch_user_id, twitch_login, suggested_by_discord_id, reason,
-              result_status)
-         VALUES ($1, $2, $3, $4, $5, $6)",
+              result_status,submitted_at,privacy_epoch)
+         VALUES ($1, $2, $3, $4, $5, $6,$7,$8)",
     )
     .bind(&eingabe.idempotency_key)
     .bind(user_id)
@@ -389,6 +444,8 @@ pub async fn vorschlag_einreichen(
     .bind(&eingabe.discord_id)
     .bind(grund.as_deref())
     .bind(status.as_str())
+    .bind(eingabe.submitted_at)
+    .bind(eingabe.privacy_epoch)
     .execute(&mut *tx)
     .await?;
 
@@ -540,6 +597,7 @@ pub async fn liste_ergebnisse(
            FROM twitch_scout_candidates
           WHERE source = 'community'
             AND community_updated_at IS NOT NULL
+            AND suggested_by_discord_id IS NOT NULL
             AND community_updated_at > COALESCE($1, '-infinity'::timestamptz)
           ORDER BY community_updated_at, streamer_login
           LIMIT $2",
