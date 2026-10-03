@@ -661,11 +661,17 @@ async fn verspaeteter_alter_abschluss_erhaelt_neueren_erfolg() {
         calls: AtomicUsize::new(0),
         requests: Mutex::new(Vec::new()),
     });
-    let submitter = Arc::new(ClipContestSubmitter::new(pool.clone(), lookup(), broker.clone()));
+    let submitter = Arc::new(ClipContestSubmitter::new(
+        pool.clone(),
+        lookup(),
+        broker.clone(),
+    ));
     let old = {
         let submitter = submitter.clone();
         tokio::spawn(async move {
-            submitter.submit(request(Some("https://clips.twitch.tv/ClipEins"))).await
+            submitter
+                .submit(request(Some("https://clips.twitch.tv/ClipEins")))
+                .await
         })
     };
     broker.started.notified().await;
@@ -673,7 +679,10 @@ async fn verspaeteter_alter_abschluss_erhaelt_neueren_erfolg() {
         .execute(pool).await.unwrap();
     let mut retry = request(Some("https://clips.twitch.tv/ClipEins"));
     retry.submitted_by = Some("9898".into());
-    assert!(matches!(submitter.submit(retry).await, SubmitOutcome::Accepted { .. }));
+    assert!(matches!(
+        submitter.submit(retry).await,
+        SubmitOutcome::Accepted { .. }
+    ));
     let success: (String, Option<i64>, DateTime<Utc>, Option<String>, DateTime<Utc>) = sqlx::query_as(
         "SELECT status, broker_submission_id, submitted_at, submitted_by_twitch_id, updated_at FROM twitch_clip_contest_forwards WHERE clip_id = 'ClipEins'",
     ).fetch_one(pool).await.unwrap();
@@ -686,7 +695,12 @@ async fn verspaeteter_alter_abschluss_erhaelt_neueren_erfolg() {
     assert_eq!(final_row.0, "accepted");
     assert_eq!(final_row.1, Some(87));
     assert_eq!(final_row.3.as_deref(), Some("4242"));
-    assert_eq!(ClipContestSubmitter::count_today(pool, "456", Utc::now()).await.unwrap(), 1);
+    assert_eq!(
+        ClipContestSubmitter::count_today(pool, "456", Utc::now())
+            .await
+            .unwrap(),
+        1
+    );
     let requests = broker.requests.lock().unwrap();
     assert_eq!(requests[0], requests[1]);
 }

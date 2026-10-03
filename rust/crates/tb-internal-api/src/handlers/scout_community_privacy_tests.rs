@@ -418,12 +418,18 @@ async fn frueherer_neuer_schluessel_stempelt_beide_paare_hinter_cursor() {
     assert!(!initial.rows[1].is_first_eligible);
     let cursor = initial.next_updated_since.unwrap().parse().unwrap();
     let earlier = entry(B, "earlier-new-key", "1001", "chronologie");
-    assert_eq!(vorschlag_einreichen(pool, &earlier).await.unwrap(), VorschlagStatus::AlreadyKnown);
+    assert_eq!(
+        vorschlag_einreichen(pool, &earlier).await.unwrap(),
+        VorschlagStatus::AlreadyKnown
+    );
     let changed = liste_ergebnisse(pool, Some(cursor), 1).await.unwrap();
     assert_eq!(changed.rows.len(), 1);
     assert_eq!(changed.rows[0].suggested_by_discord_id, B);
     assert!(changed.rows[0].is_first_eligible);
-    assert_eq!(changed.rows[0].submitted_at.as_deref(), Some("2026-10-01T10:00:00Z"));
+    assert_eq!(
+        changed.rows[0].submitted_at.as_deref(),
+        Some("2026-10-01T10:00:00Z")
+    );
     assert_eq!(changed.rows[0].privacy_epoch, Some(0));
     assert_eq!(changed.rows[0].suggestion_count, 2);
     assert!(changed.has_more);
@@ -437,9 +443,20 @@ async fn frueherer_neuer_schluessel_stempelt_beide_paare_hinter_cursor() {
     assert_eq!(displaced.rows[0].suggestion_count, 2);
     assert!(!displaced.has_more);
     let cursor = displaced.next_updated_since.unwrap().parse().unwrap();
-    assert!(liste_ergebnisse(pool, Some(cursor), 1).await.unwrap().rows.is_empty());
-    assert_eq!(vorschlag_einreichen(pool, &earlier).await.unwrap(), VorschlagStatus::AlreadyKnown);
-    assert!(liste_ergebnisse(pool, Some(cursor), 1).await.unwrap().rows.is_empty());
+    assert!(liste_ergebnisse(pool, Some(cursor), 1)
+        .await
+        .unwrap()
+        .rows
+        .is_empty());
+    assert_eq!(
+        vorschlag_einreichen(pool, &earlier).await.unwrap(),
+        VorschlagStatus::AlreadyKnown
+    );
+    assert!(liste_ergebnisse(pool, Some(cursor), 1)
+        .await
+        .unwrap()
+        .rows
+        .is_empty());
 }
 
 #[tokio::test]
