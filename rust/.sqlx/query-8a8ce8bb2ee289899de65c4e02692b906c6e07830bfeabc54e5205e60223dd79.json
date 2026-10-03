@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE clip_templates_streamer SET is_default = FALSE WHERE twitch_user_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8a8ce8bb2ee289899de65c4e02692b906c6e07830bfeabc54e5205e60223dd79"
+}

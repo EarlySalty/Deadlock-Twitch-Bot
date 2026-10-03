@@ -8,13 +8,10 @@ async fn resume_migration_preserves_offsets_and_rolls_back_on_invalid_ciphertext
         .await
         .expect("Wegwerf-Datenbank erforderlich");
     let cipher = test_cipher();
-    merke_vod(&pool, "synthetic-vod", "synthetic_owner", "Test", 120)
+    merke_vod(&pool, "synthetic-vod", "synthetic_owner", "42", "Test", 120)
         .await
         .unwrap();
-    let vod = offene_vods(&pool, "synthetic_owner", 1)
-        .await
-        .unwrap()
-        .remove(0);
+    let vod = offene_vods(&pool, "42", 1).await.unwrap().remove(0);
     setze_teile(
         &pool,
         vod.id,

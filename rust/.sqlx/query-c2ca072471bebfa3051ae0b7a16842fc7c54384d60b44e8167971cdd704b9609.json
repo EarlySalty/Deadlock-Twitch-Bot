@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.twitch_user_id, COALESCE(s.auto_post, FALSE) AS \"auto_post!\" FROM twitch_clips_social_media c LEFT JOIN social_media_category_settings s ON s.category_key = c.category_key AND s.twitch_user_id = c.twitch_user_id WHERE c.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_user_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "twitch_clips_social_media",
+            "name": "twitch_user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "auto_post!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      null
+    ]
+  },
+  "hash": "c2ca072471bebfa3051ae0b7a16842fc7c54384d60b44e8167971cdd704b9609"
+}

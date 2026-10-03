@@ -1789,7 +1789,8 @@ async fn main() {
                     vod_config,
                     vod_creds,
                     cipher,
-                );
+                )
+                .with_twitch_client(helix.as_ref().clone());
                 supervisor.spawn("vod_archive_worker", async move { vod_archive.run().await });
             }
             Err(e) => {

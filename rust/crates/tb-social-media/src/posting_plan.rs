@@ -181,17 +181,17 @@ pub fn berechne_vorrat(verfuegbare_clips: i64, schedules: &[PlatformSchedule]) -
 
 /// Legt fehlende Zeilen fuer einen Streamer an, damit alle Leser vollstaendige
 /// Daten sehen. Idempotent und nur additiv.
-pub async fn ensure_streamer_rows(pool: &PgPool, streamer_login: &str) -> Result<(), sqlx::Error> {
-    let login = streamer_login.trim().to_lowercase();
+pub async fn ensure_streamer_rows(pool: &PgPool, twitch_user_id: &str) -> Result<(), sqlx::Error> {
+    let login = twitch_user_id.to_string();
     if login.is_empty() {
         return Ok(());
     }
     let defaults = StreamerSettings::default();
     sqlx::query!(
-        "INSERT INTO social_media_streamer_settings (streamer_login, approval_mode, timezone, updated_by) \
-         SELECT $1, $2, $3, 'auto_default' \
-          WHERE EXISTS (SELECT 1 FROM twitch_streamers WHERE twitch_login = $1) \
-         ON CONFLICT (streamer_login) DO NOTHING",
+        "INSERT INTO social_media_streamer_settings (streamer_login, twitch_user_id, approval_mode, timezone, updated_by) \
+         SELECT twitch_login, twitch_user_id, $2, $3, 'auto_default' \
+          FROM twitch_streamers WHERE twitch_user_id = $1 \
+         ON CONFLICT (twitch_user_id) WHERE twitch_user_id IS NOT NULL DO NOTHING",
         login,
         defaults.approval_mode.as_str(),
         defaults.timezone
@@ -204,10 +204,10 @@ pub async fn ensure_streamer_rows(pool: &PgPool, streamer_login: &str) -> Result
         let times = serde_json::to_string(&row.post_times).unwrap_or_else(|_| "[]".to_string());
         sqlx::query!(
             "INSERT INTO social_media_platform_schedule \
-                 (streamer_login, platform, auto_post, posts_per_week, max_posts_per_day, post_times, updated_by) \
-             SELECT $1, $2, FALSE, $3, $4, $5::text::jsonb, 'auto_default' \
-              WHERE EXISTS (SELECT 1 FROM twitch_streamers WHERE twitch_login = $1) \
-             ON CONFLICT (streamer_login, platform) DO NOTHING",
+                 (streamer_login, twitch_user_id, platform, auto_post, posts_per_week, max_posts_per_day, post_times, updated_by) \
+             SELECT twitch_login, twitch_user_id, $2, FALSE, $3, $4, $5::text::jsonb, 'auto_default' \
+              FROM twitch_streamers WHERE twitch_user_id = $1 \
+             ON CONFLICT (twitch_user_id, platform) WHERE twitch_user_id IS NOT NULL DO NOTHING",
             login,
             platform,
             row.posts_per_week,
@@ -221,11 +221,10 @@ pub async fn ensure_streamer_rows(pool: &PgPool, streamer_login: &str) -> Result
     // Deadlock ist die einzige aktive Kategorie und startet eingeschaltet; der
     // scharfe Schalter bleibt das Auto-Posting der Plattform.
     sqlx::query!(
-        "INSERT INTO social_media_category_settings (streamer_login, category_key, auto_post, updated_by) \
-         SELECT $1, k.category_key, (k.category_key = $2), 'auto_default' \
-           FROM social_media_category k \
-          WHERE EXISTS (SELECT 1 FROM twitch_streamers WHERE twitch_login = $1) \
-         ON CONFLICT (streamer_login, category_key) DO NOTHING",
+        "INSERT INTO social_media_category_settings (streamer_login, twitch_user_id, category_key, auto_post, updated_by) \
+         SELECT s.twitch_login, s.twitch_user_id, k.category_key, (k.category_key = $2), 'auto_default' \
+           FROM social_media_category k CROSS JOIN twitch_streamers s WHERE s.twitch_user_id = $1 \
+         ON CONFLICT (twitch_user_id, category_key) WHERE twitch_user_id IS NOT NULL DO NOTHING",
         login,
         CATEGORY_DEADLOCK
     )
@@ -235,10 +234,10 @@ pub async fn ensure_streamer_rows(pool: &PgPool, streamer_login: &str) -> Result
 }
 
 /// Liest die Kanal-Einstellungen; fehlende Zeile ergibt den Default.
-pub async fn load_streamer_settings(pool: &PgPool, streamer_login: &str) -> StreamerSettings {
-    let login = streamer_login.trim().to_lowercase();
+pub async fn load_streamer_settings(pool: &PgPool, twitch_user_id: &str) -> StreamerSettings {
+    let login = twitch_user_id.to_string();
     let row = sqlx::query!(
-        "SELECT approval_mode, timezone, subtitles_enabled FROM social_media_streamer_settings WHERE streamer_login = $1",
+        "SELECT approval_mode, timezone, subtitles_enabled FROM social_media_streamer_settings WHERE twitch_user_id = $1",
         login
     )
     .fetch_optional(pool)
@@ -258,17 +257,17 @@ pub async fn load_streamer_settings(pool: &PgPool, streamer_login: &str) -> Stre
 /// Setzt Freigabe-Modus und Zeitzone.
 pub async fn save_streamer_settings(
     pool: &PgPool,
-    streamer_login: &str,
+    twitch_user_id: &str,
     settings: &StreamerSettings,
     updated_by: Option<&str>,
 ) -> Result<StreamerSettings, sqlx::Error> {
-    let login = streamer_login.trim().to_lowercase();
+    let login = twitch_user_id.to_string();
     let updated_by = updated_by.map(str::trim).filter(|s| !s.is_empty());
     sqlx::query!(
         "INSERT INTO social_media_streamer_settings \
-             (streamer_login, approval_mode, timezone, subtitles_enabled, updated_at, updated_by) \
-         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, $5) \
-         ON CONFLICT (streamer_login) DO UPDATE SET \
+             (streamer_login, twitch_user_id, approval_mode, timezone, subtitles_enabled, updated_at, updated_by) \
+         SELECT twitch_login, twitch_user_id, $2, $3, $4, CURRENT_TIMESTAMP, $5 FROM twitch_streamers WHERE twitch_user_id = $1 \
+         ON CONFLICT (twitch_user_id) WHERE twitch_user_id IS NOT NULL DO UPDATE SET streamer_login = EXCLUDED.streamer_login, \
              approval_mode = EXCLUDED.approval_mode, \
              timezone = EXCLUDED.timezone, \
              subtitles_enabled = EXCLUDED.subtitles_enabled, \
@@ -286,12 +285,12 @@ pub async fn save_streamer_settings(
 }
 
 /// Kadenz aller Plattformen, fehlende Zeilen als Default aufgefuellt.
-pub async fn load_platform_schedules(pool: &PgPool, streamer_login: &str) -> Vec<PlatformSchedule> {
-    let login = streamer_login.trim().to_lowercase();
+pub async fn load_platform_schedules(pool: &PgPool, twitch_user_id: &str) -> Vec<PlatformSchedule> {
+    let login = twitch_user_id.to_string();
     let rows = sqlx::query!(
         "SELECT platform, auto_post, posts_per_week, max_posts_per_day, \
                 post_times::text AS \"post_times?\" \
-           FROM social_media_platform_schedule WHERE streamer_login = $1",
+           FROM social_media_platform_schedule WHERE twitch_user_id = $1",
         login
     )
     .fetch_all(pool)
@@ -322,19 +321,19 @@ pub async fn load_platform_schedules(pool: &PgPool, streamer_login: &str) -> Vec
 /// Schreibt die Kadenz einer Plattform.
 pub async fn save_platform_schedule(
     pool: &PgPool,
-    streamer_login: &str,
+    twitch_user_id: &str,
     schedule: &PlatformSchedule,
     updated_by: Option<&str>,
 ) -> Result<(), sqlx::Error> {
-    let login = streamer_login.trim().to_lowercase();
+    let login = twitch_user_id.to_string();
     let updated_by = updated_by.map(str::trim).filter(|s| !s.is_empty());
     let times = serde_json::to_string(&schedule.post_times).unwrap_or_else(|_| "[]".to_string());
     sqlx::query!(
         "INSERT INTO social_media_platform_schedule \
-             (streamer_login, platform, auto_post, posts_per_week, max_posts_per_day, \
+             (streamer_login, twitch_user_id, platform, auto_post, posts_per_week, max_posts_per_day, \
               post_times, updated_at, updated_by) \
-         VALUES ($1, $2, $3, $4, $5, $6::text::jsonb, CURRENT_TIMESTAMP, $7) \
-         ON CONFLICT (streamer_login, platform) DO UPDATE SET \
+         SELECT twitch_login, twitch_user_id, $2, $3, $4, $5, $6::text::jsonb, CURRENT_TIMESTAMP, $7 FROM twitch_streamers WHERE twitch_user_id = $1 \
+         ON CONFLICT (twitch_user_id, platform) WHERE twitch_user_id IS NOT NULL DO UPDATE SET streamer_login = EXCLUDED.streamer_login, \
              auto_post = EXCLUDED.auto_post, \
              posts_per_week = EXCLUDED.posts_per_week, \
              max_posts_per_day = EXCLUDED.max_posts_per_day, \
@@ -355,14 +354,14 @@ pub async fn save_platform_schedule(
 }
 
 /// Kategorien samt Schalter des Streamers.
-pub async fn load_categories(pool: &PgPool, streamer_login: &str) -> Vec<CategoryOption> {
-    let login = streamer_login.trim().to_lowercase();
+pub async fn load_categories(pool: &PgPool, twitch_user_id: &str) -> Vec<CategoryOption> {
+    let login = twitch_user_id.to_string();
     sqlx::query!(
         "SELECT k.category_key, k.display_name, k.enrichment_enabled, k.sort_order, \
                 COALESCE(s.auto_post, FALSE) AS \"auto_post!\" \
            FROM social_media_category k \
            LEFT JOIN social_media_category_settings s \
-                  ON s.category_key = k.category_key AND s.streamer_login = $1 \
+                  ON s.category_key = k.category_key AND s.twitch_user_id = $1 \
           ORDER BY k.sort_order, k.category_key",
         login
     )
@@ -383,18 +382,18 @@ pub async fn load_categories(pool: &PgPool, streamer_login: &str) -> Vec<Categor
 /// Schaltet Auto-Posting fuer eine Kategorie.
 pub async fn save_category_setting(
     pool: &PgPool,
-    streamer_login: &str,
+    twitch_user_id: &str,
     category_key: &str,
     auto_post: bool,
     updated_by: Option<&str>,
 ) -> Result<(), sqlx::Error> {
-    let login = streamer_login.trim().to_lowercase();
+    let login = twitch_user_id.to_string();
     let updated_by = updated_by.map(str::trim).filter(|s| !s.is_empty());
     sqlx::query!(
         "INSERT INTO social_media_category_settings \
-             (streamer_login, category_key, auto_post, updated_at, updated_by) \
-         VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4) \
-         ON CONFLICT (streamer_login, category_key) DO UPDATE SET \
+             (streamer_login, twitch_user_id, category_key, auto_post, updated_at, updated_by) \
+         SELECT twitch_login, twitch_user_id, $2, $3, CURRENT_TIMESTAMP, $4 FROM twitch_streamers WHERE twitch_user_id = $1 \
+         ON CONFLICT (twitch_user_id, category_key) WHERE twitch_user_id IS NOT NULL DO UPDATE SET streamer_login = EXCLUDED.streamer_login, \
              auto_post = EXCLUDED.auto_post, \
              updated_at = CURRENT_TIMESTAMP, \
              updated_by = EXCLUDED.updated_by",
@@ -454,10 +453,10 @@ pub async fn enrichment_allowed_for_clip(pool: &PgPool, clip_db_id: i64) -> bool
 /// laesst es zu und die Kategorie des Clips ist eingeschaltet.
 pub async fn auto_schedule_allowed(pool: &PgPool, clip_db_id: i64) -> bool {
     let Some(row) = sqlx::query!(
-        "SELECT c.streamer_login, COALESCE(s.auto_post, FALSE) AS \"auto_post!\" \
+        "SELECT c.twitch_user_id, COALESCE(s.auto_post, FALSE) AS \"auto_post!\" \
            FROM twitch_clips_social_media c \
            LEFT JOIN social_media_category_settings s \
-                  ON s.category_key = c.category_key AND s.streamer_login = c.streamer_login \
+                  ON s.category_key = c.category_key AND s.twitch_user_id = c.twitch_user_id \
           WHERE c.id = $1",
         clip_db_id
     )
@@ -470,15 +469,15 @@ pub async fn auto_schedule_allowed(pool: &PgPool, clip_db_id: i64) -> bool {
     if !row.auto_post {
         return false;
     }
-    load_streamer_settings(pool, &row.streamer_login)
+    load_streamer_settings(pool, row.twitch_user_id.as_deref().unwrap_or(""))
         .await
         .approval_mode
         .schedules_without_review()
 }
 
 /// Plattformen, auf denen dieser Streamer automatisch posten laesst.
-pub async fn auto_post_platforms(pool: &PgPool, streamer_login: &str) -> Vec<String> {
-    load_platform_schedules(pool, streamer_login)
+pub async fn auto_post_platforms(pool: &PgPool, twitch_user_id: &str) -> Vec<String> {
+    load_platform_schedules(pool, twitch_user_id)
         .await
         .into_iter()
         .filter(|s| s.auto_post && !s.limits().blocks_everything())
@@ -490,8 +489,8 @@ pub async fn auto_post_platforms(pool: &PgPool, streamer_login: &str) -> Vec<Str
 ///
 /// Eine solche Plattform ist ausgeschaltet: sie bekommt nie einen Termin, also
 /// darf auch keine Freigabe auf ihr landen.
-pub async fn pausierte_plattformen(pool: &PgPool, streamer_login: &str) -> Vec<String> {
-    load_platform_schedules(pool, streamer_login)
+pub async fn pausierte_plattformen(pool: &PgPool, twitch_user_id: &str) -> Vec<String> {
+    load_platform_schedules(pool, twitch_user_id)
         .await
         .into_iter()
         .filter(|s| s.limits().blocks_everything())
@@ -521,11 +520,11 @@ pub enum SlotPlan {
 /// der schon eingeplanten Uploads.
 pub async fn plan_next_slot(
     pool: &PgPool,
-    streamer_login: &str,
+    twitch_user_id: &str,
     platform: &str,
     now: DateTime<Utc>,
 ) -> SlotPlan {
-    let login = streamer_login.trim().to_lowercase();
+    let login = twitch_user_id.to_string();
     let schedule = load_platform_schedules(pool, &login)
         .await
         .into_iter()
@@ -556,19 +555,19 @@ pub async fn plan_next_slot(
 /// im relevanten Zeitfenster.
 async fn belegte_termine(
     pool: &PgPool,
-    streamer_login: &str,
+    twitch_user_id: &str,
     platform: &str,
 ) -> Vec<DateTime<Utc>> {
     sqlx::query_scalar!(
         "SELECT COALESCE(q.scheduled_at, q.completed_at) AS \"termin!\" \
            FROM twitch_clips_upload_queue q \
            JOIN twitch_clips_social_media c ON c.id = q.clip_id \
-          WHERE LOWER(c.streamer_login) = $1 \
+          WHERE c.twitch_user_id = $1 \
             AND q.platform = $2 \
             AND q.status <> 'failed' \
             AND COALESCE(q.scheduled_at, q.completed_at) IS NOT NULL \
             AND COALESCE(q.scheduled_at, q.completed_at) > CURRENT_TIMESTAMP - INTERVAL '14 days'",
-        streamer_login,
+        twitch_user_id,
         platform
     )
     .fetch_all(pool)
@@ -578,13 +577,13 @@ async fn belegte_termine(
 
 /// Zaehlt die Clips, die noch fuer Posts zur Verfuegung stehen: nicht verworfen,
 /// nicht schon ueberall veroeffentlicht, und in einer eingeschalteten Kategorie.
-pub async fn verfuegbare_clips(pool: &PgPool, streamer_login: &str) -> i64 {
-    let login = streamer_login.trim().to_lowercase();
+pub async fn verfuegbare_clips(pool: &PgPool, twitch_user_id: &str) -> i64 {
+    let login = twitch_user_id.to_string();
     sqlx::query_scalar!(
         "SELECT COUNT(*) AS \"anzahl!\" FROM twitch_clips_social_media c \
            JOIN social_media_category_settings s \
-             ON s.category_key = c.category_key AND s.streamer_login = c.streamer_login \
-          WHERE LOWER(c.streamer_login) = $1 \
+             ON s.category_key = c.category_key AND s.twitch_user_id = c.twitch_user_id \
+          WHERE c.twitch_user_id = $1 \
             AND s.auto_post \
             AND c.discarded_at IS NULL \
             AND COALESCE(c.status, 'pending') NOT IN ('published_all', 'discarded', 'skipped')",
@@ -596,9 +595,9 @@ pub async fn verfuegbare_clips(pool: &PgPool, streamer_login: &str) -> i64 {
 }
 
 /// Vorratsrechnung fuer das Dashboard.
-pub async fn pool_forecast(pool: &PgPool, streamer_login: &str) -> PoolForecast {
-    let clips = verfuegbare_clips(pool, streamer_login).await;
-    let schedules = load_platform_schedules(pool, streamer_login).await;
+pub async fn pool_forecast(pool: &PgPool, twitch_user_id: &str) -> PoolForecast {
+    let clips = verfuegbare_clips(pool, twitch_user_id).await;
+    let schedules = load_platform_schedules(pool, twitch_user_id).await;
     berechne_vorrat(clips, &schedules)
 }
 

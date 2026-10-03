@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*) AS \"anzahl!\" FROM twitch_clips_social_media c JOIN social_media_category_settings s ON s.category_key = c.category_key AND s.twitch_user_id = c.twitch_user_id WHERE c.twitch_user_id = $1 AND s.auto_post AND c.discarded_at IS NULL AND COALESCE(c.status, 'pending') NOT IN ('published_all', 'discarded', 'skipped')",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "anzahl!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "af5e7b78a4894a65189046fbd72f948902777aabebfe7c4a7099ca67da6fa81a"
+}

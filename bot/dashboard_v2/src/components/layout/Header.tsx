@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Activity, ChevronDown, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { Activity, ChevronDown, Search, SlidersHorizontal } from 'lucide-react';
+import { DashboardHeader } from '@/components/layout/DashboardHeader';
 import { usePlan } from '@/context/PlanContext';
 import { useLanguage, useT } from '@/context/LanguageContext';
 import { LANGUAGES, LANGUAGE_LABELS, type Language } from '@/i18n/dictionary';
@@ -123,31 +124,14 @@ export function Header({
   const visibleOthers = canViewAllStreamers ? others : [];
 
   return (
-    <header className="panel-card rounded-2xl p-4 md:p-6 mb-8">
-      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-5">
-        {/* Logo & Title */}
-        <div className="flex items-start gap-4">
-          <div className="p-3 rounded-2xl bg-gradient-to-br from-primary/30 to-accent/25 border border-primary/25 shadow-lg shadow-primary/10">
-            <Activity className="w-6 h-6 text-primary" />
-          </div>
-          <div>
-            <div className="inline-flex items-center gap-2 rounded-full border border-border bg-black/20 px-3 py-1 text-[11px] uppercase tracking-[0.16em] text-text-secondary mb-2">
-              <Sparkles className="w-3 h-3 text-accent" />
-              {t('Partner Dashboard')}
-            </div>
-            <h1 className="display-font text-2xl md:text-3xl font-bold text-white flex items-center gap-2">
-              Channel Intelligence
-              {isLoading && <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />}
-            </h1>
-            <p className="text-text-secondary text-sm md:text-base mt-1">
-              {t('Fokus: {focus}', { focus: streamer || allLabel })}{' '}
-              <span className="mx-1 text-border">•</span> {t('Zeitraum: letzte {days} Tage', { days })}
-            </p>
-          </div>
-        </div>
-
+    <DashboardHeader
+      title="Channel Intelligence"
+      icon={<Activity className="w-6 h-6 text-primary" />}
+      isLoading={isLoading}
+      description={<>{t('Fokus: {focus}', { focus: streamer || allLabel })}{' '}<span className="mx-1 text-border">•</span> {t('Zeitraum: letzte {days} Tage', { days })}</>}
+    >
         {/* Controls */}
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+        <div className="flex w-full min-w-0 flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3">
           {canPreviewExtended && (
             <div className="flex items-center bg-background/70 rounded-xl border border-border p-1.5">
               {viewOptions.map(option => (
@@ -177,7 +161,7 @@ export function Header({
           <div className="relative">
             <button
               onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="w-full sm:w-auto min-w-[220px] flex items-center justify-between gap-2 px-4 py-2.5 rounded-xl border border-border bg-background/70 hover:border-border-hover soft-elevate"
+              className="w-full sm:w-auto min-w-0 sm:min-w-[220px] flex items-center justify-between gap-2 px-4 py-2.5 rounded-xl border border-border bg-background/70 hover:border-border-hover soft-elevate"
             >
               <span className="text-white font-medium truncate">{streamer || allLabel}</span>
               <ChevronDown className="w-4 h-4 text-text-secondary" />
@@ -284,7 +268,7 @@ export function Header({
           </div>
 
           {/* Time Range Selector */}
-          <div className="flex items-center bg-background/70 rounded-xl border border-border p-1.5">
+          <div className="flex flex-wrap items-center bg-background/70 rounded-xl border border-border p-1.5">
             <div className="px-2 text-text-secondary">
               <SlidersHorizontal className="w-4 h-4" />
             </div>
@@ -378,7 +362,6 @@ export function Header({
             ))}
           </div>
         </div>
-      </div>
-    </header>
+    </DashboardHeader>
   );
 }

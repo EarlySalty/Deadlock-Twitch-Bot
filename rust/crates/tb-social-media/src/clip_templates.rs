@@ -110,67 +110,51 @@ pub async fn get_global_templates(pool: &PgPool, category: Option<&str>) -> Vec<
 /// streamer_login+template_name). `is_default` setzt andere Defaults zurück.
 pub async fn create_streamer_template(
     pool: &PgPool,
-    streamer_login: &str,
+    twitch_user_id: &str,
     template_name: &str,
     description_template: &str,
     hashtags: &[String],
     is_default: bool,
 ) -> Result<i64, sqlx::Error> {
-    let now = chrono::Utc::now().to_rfc3339();
+    if twitch_user_id.is_empty() || !twitch_user_id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(sqlx::Error::Protocol("Ungültige Twitch-ID".into()));
+    }
+    let mut tx = pool.begin().await?;
+    let login: String = sqlx::query_scalar(
+        "SELECT twitch_login FROM twitch_streamers WHERE twitch_user_id = $1 FOR UPDATE",
+    )
+    .bind(twitch_user_id)
+    .fetch_one(&mut *tx)
+    .await?;
     if is_default {
         sqlx::query!(
-            "UPDATE clip_templates_streamer SET is_default = FALSE WHERE streamer_login = $1",
-            streamer_login
+            "UPDATE clip_templates_streamer SET is_default = FALSE WHERE twitch_user_id = $1",
+            twitch_user_id
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     }
-    let existing = sqlx::query_scalar!(
-        "SELECT id AS \"id!\" FROM clip_templates_streamer WHERE streamer_login = $1 AND template_name = $2",
-        streamer_login,
-        template_name
-    )
-    .fetch_optional(pool)
-    .await?;
-
-    if let Some(id) = existing {
-        sqlx::query!(
-            "UPDATE clip_templates_streamer SET description_template = $1, hashtags = $2, \
-             is_default = $3, updated_at = $4::text::timestamptz WHERE id = $5",
-            description_template,
-            dump_hashtags(hashtags),
-            is_default,
-            &now,
-            id
-        )
-        .execute(pool)
-        .await?;
-        Ok(id)
-    } else {
-        let id: i64 = sqlx::query_scalar!(
-            "INSERT INTO clip_templates_streamer \
-                (streamer_login, template_name, description_template, hashtags, is_default) \
-             VALUES ($1, $2, $3, $4, $5) RETURNING id AS \"id!\"",
-            streamer_login,
-            template_name,
-            description_template,
-            dump_hashtags(hashtags),
-            is_default
-        )
-        .fetch_one(pool)
-        .await?;
-        Ok(id)
-    }
+    let id = sqlx::query_scalar!(
+        "INSERT INTO clip_templates_streamer (twitch_user_id, streamer_login, template_name, description_template, hashtags, is_default)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (twitch_user_id, template_name) WHERE twitch_user_id IS NOT NULL
+         DO UPDATE SET streamer_login = EXCLUDED.streamer_login, description_template = EXCLUDED.description_template,
+                       hashtags = EXCLUDED.hashtags, is_default = EXCLUDED.is_default, updated_at = CURRENT_TIMESTAMP
+         RETURNING id AS \"id!\"",
+        twitch_user_id, login, template_name, description_template, dump_hashtags(hashtags), is_default
+    ).fetch_one(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(id)
 }
 
 /// Lädt alle Templates eines Streamers (Default zuerst).
-pub async fn get_streamer_templates(pool: &PgPool, streamer_login: &str) -> Vec<StreamerTemplate> {
+pub async fn get_streamer_templates(pool: &PgPool, twitch_user_id: &str) -> Vec<StreamerTemplate> {
     let rows = sqlx::query!(
         "SELECT id, streamer_login, template_name, COALESCE(description_template, '') AS \"description_template!\", \
                 hashtags, COALESCE(is_default, false) AS \"is_default!\", \
                 created_at::text, updated_at::text FROM clip_templates_streamer \
-         WHERE streamer_login = $1 ORDER BY is_default DESC, template_name ASC",
-        streamer_login
+         WHERE twitch_user_id = $1 ORDER BY is_default DESC, template_name ASC",
+        twitch_user_id
     )
     .fetch_all(pool)
     .await
@@ -273,24 +257,20 @@ pub async fn apply_template_to_clip(
 }
 
 /// Speichert zuletzt genutzte Hashtags eines Streamers (Upsert).
-pub async fn save_last_hashtags(pool: &PgPool, streamer_login: &str, hashtags: &[String]) {
-    let now = chrono::Utc::now().to_rfc3339();
+pub async fn save_last_hashtags(pool: &PgPool, twitch_user_id: &str, hashtags: &[String]) {
     let _ = sqlx::query!(
-        "INSERT INTO clip_last_hashtags (streamer_login, hashtags, last_used_at) VALUES ($1, $2, $3::text::timestamptz) \
-         ON CONFLICT (streamer_login) DO UPDATE SET hashtags = EXCLUDED.hashtags, last_used_at = EXCLUDED.last_used_at",
-        streamer_login,
-        dump_hashtags(hashtags),
-        &now
-    )
-    .execute(pool)
-    .await;
+        "INSERT INTO clip_last_hashtags (streamer_login, twitch_user_id, hashtags, last_used_at)
+         SELECT twitch_login, twitch_user_id, $2, CURRENT_TIMESTAMP FROM twitch_streamers WHERE twitch_user_id = $1
+         ON CONFLICT (twitch_user_id) WHERE twitch_user_id IS NOT NULL
+         DO UPDATE SET streamer_login = EXCLUDED.streamer_login, hashtags = EXCLUDED.hashtags, last_used_at = EXCLUDED.last_used_at",
+        twitch_user_id, dump_hashtags(hashtags)
+    ).execute(pool).await;
 }
 
-/// Lädt zuletzt genutzte Hashtags eines Streamers (leer wenn keine).
-pub async fn get_last_hashtags(pool: &PgPool, streamer_login: &str) -> Vec<String> {
-    let raw: Option<String> = sqlx::query_scalar!(
-        "SELECT hashtags FROM clip_last_hashtags WHERE streamer_login = $1",
-        streamer_login
+pub async fn get_last_hashtags(pool: &PgPool, twitch_user_id: &str) -> Vec<String> {
+    let raw = sqlx::query_scalar!(
+        "SELECT hashtags FROM clip_last_hashtags WHERE twitch_user_id = $1",
+        twitch_user_id
     )
     .fetch_optional(pool)
     .await
@@ -333,12 +313,22 @@ mod tests {
             .unwrap();
         for ddl in [
             "CREATE TABLE clip_templates_global (id BIGSERIAL PRIMARY KEY, template_name TEXT NOT NULL UNIQUE, description_template TEXT NOT NULL, hashtags TEXT NOT NULL, category TEXT, usage_count INTEGER DEFAULT 0, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, created_by TEXT)",
-            "CREATE TABLE clip_templates_streamer (id BIGSERIAL PRIMARY KEY, streamer_login TEXT NOT NULL, template_name TEXT NOT NULL, description_template TEXT NOT NULL, hashtags TEXT NOT NULL, is_default BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, UNIQUE (streamer_login, template_name))",
-            "CREATE TABLE clip_last_hashtags (streamer_login TEXT PRIMARY KEY, hashtags TEXT NOT NULL, last_used_at TIMESTAMPTZ NOT NULL)",
+            "CREATE TABLE clip_templates_streamer (twitch_user_id TEXT DEFAULT '42', id BIGSERIAL PRIMARY KEY, streamer_login TEXT NOT NULL, template_name TEXT NOT NULL, description_template TEXT NOT NULL, hashtags TEXT NOT NULL, is_default BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, UNIQUE (twitch_user_id, template_name))",
+            "CREATE TABLE clip_last_hashtags (twitch_user_id TEXT DEFAULT '42', streamer_login TEXT NOT NULL, hashtags TEXT NOT NULL, last_used_at TIMESTAMPTZ NOT NULL)",
             "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, clip_title TEXT, streamer_login TEXT NOT NULL, game_name TEXT, custom_description TEXT, hashtags TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), source_kind TEXT NOT NULL DEFAULT 'twitch')",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
+        sqlx::query("CREATE UNIQUE INDEX hashtags_identity ON clip_last_hashtags (twitch_user_id) WHERE twitch_user_id IS NOT NULL").execute(&pool).await.unwrap();
+        sqlx::query("CREATE UNIQUE INDEX templates_identity ON clip_templates_streamer (twitch_user_id, template_name) WHERE twitch_user_id IS NOT NULL").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE twitch_streamers (twitch_login TEXT, twitch_user_id TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO twitch_streamers VALUES ('nani', '42')")
+            .execute(&pool)
+            .await
+            .unwrap();
         Some(pool)
     }
 
@@ -397,25 +387,25 @@ mod tests {
         let Some(pool) = make_pool("t_sm_tpl_streamer").await else {
             return;
         };
-        let id1 = create_streamer_template(&pool, "nani", "main", "A", &tags(&["#a"]), true)
+        let id1 = create_streamer_template(&pool, "42", "main", "A", &tags(&["#a"]), true)
             .await
             .unwrap();
         // Zweites Default → erstes wird zurückgesetzt.
-        let id2 = create_streamer_template(&pool, "nani", "alt", "B", &tags(&["#b"]), true)
+        let id2 = create_streamer_template(&pool, "42", "alt", "B", &tags(&["#b"]), true)
             .await
             .unwrap();
-        let list = get_streamer_templates(&pool, "nani").await;
+        let list = get_streamer_templates(&pool, "42").await;
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].id, id2); // Default zuerst
         assert!(list[0].is_default);
         assert!(!list.iter().find(|t| t.id == id1).unwrap().is_default);
         // Upsert (gleicher Name) → Update, gleiche ID.
-        let id1b = create_streamer_template(&pool, "nani", "main", "A2", &tags(&["#a2"]), false)
+        let id1b = create_streamer_template(&pool, "42", "main", "A2", &tags(&["#a2"]), false)
             .await
             .unwrap();
         assert_eq!(id1, id1b);
         assert_eq!(
-            get_streamer_templates(&pool, "nani")
+            get_streamer_templates(&pool, "42")
                 .await
                 .iter()
                 .find(|t| t.id == id1)
@@ -430,13 +420,13 @@ mod tests {
         let Some(pool) = make_pool("t_sm_lasttags").await else {
             return;
         };
-        assert!(get_last_hashtags(&pool, "nani").await.is_empty());
-        save_last_hashtags(&pool, "nani", &tags(&["#deadlock", "#haze"])).await;
+        assert!(get_last_hashtags(&pool, "42").await.is_empty());
+        save_last_hashtags(&pool, "42", &tags(&["#deadlock", "#haze"])).await;
         assert_eq!(
-            get_last_hashtags(&pool, "nani").await,
+            get_last_hashtags(&pool, "42").await,
             tags(&["#deadlock", "#haze"])
         );
-        save_last_hashtags(&pool, "nani", &tags(&["#neu"])).await; // upsert
-        assert_eq!(get_last_hashtags(&pool, "nani").await, tags(&["#neu"]));
+        save_last_hashtags(&pool, "42", &tags(&["#neu"])).await;
+        assert_eq!(get_last_hashtags(&pool, "42").await, tags(&["#neu"]));
     }
 }

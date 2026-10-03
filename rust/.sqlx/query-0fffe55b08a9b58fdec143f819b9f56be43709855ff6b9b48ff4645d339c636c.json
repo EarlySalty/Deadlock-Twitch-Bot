@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT platform FROM social_media_platform_auth WHERE enabled = 1 AND (twitch_user_id = $1 OR (streamer_login IS NULL AND twitch_user_id IS NULL))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "platform",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "social_media_platform_auth",
+            "name": "platform"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0fffe55b08a9b58fdec143f819b9f56be43709855ff6b9b48ff4645d339c636c"
+}

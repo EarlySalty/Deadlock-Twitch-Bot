@@ -88,7 +88,7 @@ export interface SocialMediaAccess {
 
 /** Ein Eintrag der Freigabe-Liste (Admin-Sicht). */
 export interface PartnerAccessEntry {
-  twitch_user_id: string | null;
+  twitch_user_id: string;
   streamer_login: string;
   granted: boolean;
 }

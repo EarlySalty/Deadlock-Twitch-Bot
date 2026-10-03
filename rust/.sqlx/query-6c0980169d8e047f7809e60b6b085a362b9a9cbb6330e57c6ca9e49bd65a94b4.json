@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE social_media_platform_auth SET access_token_enc = $1, refresh_token_enc = $2, token_expires_at = $3, last_refreshed_at = CURRENT_TIMESTAMP WHERE id = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Bytea",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6c0980169d8e047f7809e60b6b085a362b9a9cbb6330e57c6ca9e49bd65a94b4"
+}

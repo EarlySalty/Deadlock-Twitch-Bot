@@ -84,6 +84,7 @@ use tb_social_media::{ClipFetchService, ClipRepository, HelixClipSource};
 use tb_transport_twitch::{HelixClient, HelixConfig};
 
 use crate::auth::level::DashboardAuthLevel;
+#[cfg(test)]
 use crate::auth::resolve_streamer_scope;
 
 fn forbidden(message: &str) -> Response {
@@ -219,6 +220,7 @@ fn credential_scope(scope: Option<&str>) -> Option<&str> {
 /// `?streamer=&status=&limit=` für die Clip-Liste.
 #[derive(Debug, Deserialize)]
 pub struct ClipsQuery {
+    pub twitch_user_id: Option<String>,
     pub streamer: Option<String>,
     pub status: Option<String>,
     pub limit: Option<String>,
@@ -251,7 +253,7 @@ pub async fn stats_handler(
     State(pool): State<PgPool>,
     Query(q): Query<StreamerQuery>,
 ) -> Response {
-    let scope = match require_sm_access(&auth, &pool, q.streamer.as_deref()).await {
+    let scope = match require_sm_access(&auth, &pool, q.twitch_user_id.as_deref()).await {
         Ok(s) => s,
         Err(e) => return e,
     };
@@ -268,18 +270,11 @@ pub async fn clips_handler(
         Ok(l) => l,
         Err(()) => return invalid_limit(),
     };
-    let scope = match require_sm_access(&auth, &pool, q.streamer.as_deref()).await {
+    let scope = match require_sm_access(&auth, &pool, q.twitch_user_id.as_deref()).await {
         Ok(s) => s,
         Err(e) => return e,
     };
-    let clips = get_clips_for_dashboard(
-        &pool,
-        scope.as_deref(),
-        partner_identity(&auth),
-        q.status.as_deref(),
-        limit,
-    )
-    .await;
+    let clips = get_clips_for_dashboard(&pool, scope.as_deref(), q.status.as_deref(), limit).await;
     Json(clips).into_response()
 }
 
@@ -289,7 +284,7 @@ pub async fn last_hashtags_handler(
     State(pool): State<PgPool>,
     Query(q): Query<StreamerQuery>,
 ) -> Response {
-    let scope = match require_sm_access(&auth, &pool, q.streamer.as_deref()).await {
+    let scope = match require_sm_access(&auth, &pool, q.twitch_user_id.as_deref()).await {
         Ok(s) => s,
         Err(e) => return e,
     };
@@ -333,36 +328,23 @@ async fn clip_owned_by_streamer(
     clip_id: i64,
     streamer: &str,
 ) -> bool {
-    if let DashboardAuthLevel::Partner { twitch_user_id, .. } = auth {
-        if twitch_user_id.is_empty() {
-            return false;
-        }
-        return sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM twitch_clips_social_media WHERE id = $1 AND twitch_user_id = $2)")
-            .bind(clip_id).bind(twitch_user_id).fetch_one(pool).await.unwrap_or(false);
-    }
-    sqlx::query_scalar::<_, i32>(
-        "SELECT 1 FROM twitch_clips_social_media WHERE id = $1 AND LOWER(streamer_login) = LOWER($2) LIMIT 1",
+    let Some(twitch_user_id) = partner_identity(auth)
+        .or(Some(streamer))
+        .filter(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+    else {
+        return false;
+    };
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM twitch_clips_social_media WHERE id = $1 AND twitch_user_id = $2)",
     )
-    .bind(clip_id)
-    .bind(streamer)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .is_some()
+    .bind(clip_id).bind(twitch_user_id).fetch_one(pool).await.unwrap_or(false)
 }
 
-async fn streamer_template_owned(pool: &PgPool, template_id: i64, streamer: &str) -> bool {
-    sqlx::query_scalar::<_, i32>(
-        "SELECT 1 FROM clip_templates_streamer WHERE id = $1 AND LOWER(streamer_login) = LOWER($2) LIMIT 1",
+async fn streamer_template_owned(pool: &PgPool, template_id: i64, twitch_user_id: &str) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM clip_templates_streamer WHERE id = $1 AND twitch_user_id = $2)",
     )
-    .bind(template_id)
-    .bind(streamer)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .is_some()
+    .bind(template_id).bind(twitch_user_id).fetch_one(pool).await.unwrap_or(false)
 }
 
 /// Partner-Freigabe-Guard für Clip-basierte Admin-Handler: lädt den
@@ -370,21 +352,9 @@ async fn streamer_template_owned(pool: &PgPool, template_id: i64, streamer: &str
 async fn guard_partner_access_for_clip(
     pool: &PgPool,
     auth: &DashboardAuthLevel,
-    clip_db_id: i64,
+    _clip_db_id: i64,
 ) -> Option<Response> {
-    let streamer_login: Option<String> = sqlx::query_scalar(
-        "SELECT streamer_login FROM twitch_clips_social_media WHERE id = $1 LIMIT 1",
-    )
-    .bind(clip_db_id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-    if let Some(ref login) = streamer_login {
-        check_partner_access_guard(pool, auth, login).await
-    } else {
-        None
-    }
+    check_partner_access_guard(pool, auth, "").await
 }
 
 /// `?category=` für die globalen Templates.
@@ -443,7 +413,7 @@ pub async fn templates_streamer_handler(
     State(pool): State<PgPool>,
     Query(q): Query<StreamerQuery>,
 ) -> Response {
-    let scope = match require_sm_access(&auth, &pool, q.streamer.as_deref()).await {
+    let scope = match require_sm_access(&auth, &pool, q.twitch_user_id.as_deref()).await {
         Ok(s) => s,
         Err(e) => return e,
     };
@@ -455,7 +425,7 @@ pub async fn templates_streamer_handler(
 /// POST-Body von `…/templates/streamer`.
 #[derive(Debug, Deserialize)]
 pub struct CreateTemplateBody {
-    pub streamer: Option<String>,
+    pub twitch_user_id: Option<String>,
     pub template_name: Option<String>,
     pub description: Option<String>,
     #[serde(default)]
@@ -474,7 +444,7 @@ pub async fn create_template_handler(
         return e;
     }
     // required=true: Admin muss `streamer` mitgeben, Partner bekommt eigenen.
-    let scope = match resolve_streamer_scope(&auth, body.streamer.as_deref(), true) {
+    let scope = match resolve_sm_scope(&auth, &pool, body.twitch_user_id.as_deref(), true).await {
         Ok(s) => s,
         Err(e) => return e,
     };
@@ -505,7 +475,7 @@ pub struct ApplyTemplateBody {
     pub template_id: Option<Value>,
     #[serde(default)]
     pub is_global: bool,
-    pub streamer: Option<String>,
+    pub twitch_user_id: Option<String>,
 }
 
 /// `POST /social-media/api/templates/apply` — Template auf einen Clip anwenden.
@@ -529,8 +499,11 @@ pub async fn apply_template_handler(
             .into_response();
     };
     // Streamer aus Body, sonst Query.
-    let requested = body.streamer.as_deref().or(q.streamer.as_deref());
-    let scope = match resolve_streamer_scope(&auth, requested, false) {
+    let requested = body
+        .twitch_user_id
+        .as_deref()
+        .or(q.twitch_user_id.as_deref());
+    let scope = match resolve_sm_scope(&auth, &pool, requested, false).await {
         Ok(s) => s,
         Err(e) => return e,
     };
@@ -587,14 +560,43 @@ async fn require_sm_access(
     pool: &PgPool,
     requested: Option<&str>,
 ) -> Result<Option<String>, Response> {
-    if let DashboardAuthLevel::Partner { twitch_user_id, .. } = auth {
-        if !is_partner_id_granted(pool, twitch_user_id).await {
-            return Err(forbidden(
-                "Social Media ist für deinen Kanal noch nicht freigeschaltet.",
-            ));
+    resolve_sm_scope(auth, pool, requested, false).await
+}
+
+#[allow(clippy::result_large_err)]
+async fn resolve_sm_scope(
+    auth: &DashboardAuthLevel,
+    pool: &PgPool,
+    requested: Option<&str>,
+    required: bool,
+) -> Result<Option<String>, Response> {
+    match auth {
+        DashboardAuthLevel::Partner { twitch_user_id, .. } => {
+            if !is_partner_id_granted(pool, twitch_user_id).await {
+                return Err(forbidden(
+                    "Social Media ist für deinen Kanal noch nicht freigeschaltet.",
+                ));
+            }
+            if requested.is_some_and(|id| id != twitch_user_id) {
+                return Err(forbidden(
+                    "Du kannst nur auf deinen eigenen Twitch-Account zugreifen.",
+                ));
+            }
+            Ok(Some(twitch_user_id.clone()))
         }
+        DashboardAuthLevel::Admin { .. } => match requested {
+            Some(id) if !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()) => {
+                Ok(Some(id.to_string()))
+            }
+            None if !required => Ok(None),
+            _ => Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "twitch_user_id_required" })),
+            )
+                .into_response()),
+        },
+        DashboardAuthLevel::None => Err(unauthorized()),
     }
-    resolve_streamer_scope(auth, requested, false)
 }
 
 /// Ownership-Prüfung für Endpoints, die nur eine `clip_db_id` kennen: Partner
@@ -1083,13 +1085,16 @@ pub async fn streamer_layout_get_handler(
         Ok(slug) => slug,
         Err(error) => return error,
     };
+    let id = partner_identity(&auth)
+        .or(q.twitch_user_id.as_deref())
+        .unwrap_or("");
     let stored = get_streamer_layout(&pool, &slug).await;
     let layout = stored.clone().unwrap_or_else(default_streamer_layout);
     let (updated_at, updated_by) = if stored.is_some() {
         sqlx::query_as::<_, (Option<String>, Option<String>)>(
-            "SELECT updated_at::text, updated_by FROM social_media_streamer_layout WHERE LOWER(streamer_login) = LOWER($1) LIMIT 1",
+            "SELECT updated_at::text, updated_by FROM social_media_streamer_layout WHERE twitch_user_id = $1 LIMIT 1",
         )
-        .bind(&slug)
+        .bind(id)
         .fetch_optional(&pool)
         .await
         .ok()
@@ -1099,7 +1104,8 @@ pub async fn streamer_layout_get_handler(
         (None, None)
     };
     Json(json!({
-        "streamer_login": slug,
+        "streamer_login": streamer_display_login(&pool, &slug).await,
+        "twitch_user_id": slug,
         "layout": layout.to_override_json(),
         "cam_enabled": layout.cam_enabled,
         "mode": layout.mode,
@@ -1136,9 +1142,20 @@ pub async fn streamer_layout_put_handler(
     };
     // updated_by (B15-FIX): Session-Actor (Partner→twitch_user_id, sonst NULL).
     let actor = editor_user_id(&auth);
-    let _ = upsert_streamer_layout(&pool, &slug, &layout, actor.as_deref()).await;
+    let id = partner_identity(&auth)
+        .or(payload.get("twitch_user_id").and_then(Value::as_str))
+        .unwrap_or("");
+    if let Err(error) = upsert_streamer_layout(&pool, id, &layout, actor.as_deref()).await {
+        tracing::error!(%error, "streamer layout write failed");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "layout_write_failed"})),
+        )
+            .into_response();
+    }
     Json(json!({
-        "streamer_login": slug,
+        "streamer_login": streamer_display_login(&pool, &slug).await,
+        "twitch_user_id": slug,
         "layout": layout.to_override_json(),
         "cam_enabled": layout.cam_enabled,
         "mode": layout.mode,
@@ -1217,7 +1234,7 @@ pub struct QueueUploadBody {
     pub hashtags: Option<Vec<String>>,
     #[serde(default)]
     pub priority: i32,
-    pub streamer: Option<String>,
+    pub twitch_user_id: Option<String>,
     pub schedule: Option<String>,
     #[serde(default)]
     pub forms: Vec<FormKey>,
@@ -1274,8 +1291,11 @@ pub async fn queue_upload_handler(
         )
             .into_response();
     };
-    let requested = body.streamer.as_deref().or(q.streamer.as_deref());
-    let scope = match resolve_streamer_scope(&auth, requested, false) {
+    let requested = body
+        .twitch_user_id
+        .as_deref()
+        .or(q.twitch_user_id.as_deref());
+    let scope = match resolve_sm_scope(&auth, &pool, requested, false).await {
         Ok(s) => s,
         Err(e) => return e,
     };
@@ -1498,7 +1518,7 @@ pub async fn fetch_clips_handler(
 /// POST-Body von `…/api/batch-upload`.
 #[derive(Debug, Deserialize)]
 pub struct BatchUploadBody {
-    pub streamer: Option<String>,
+    pub twitch_user_id: Option<String>,
     #[serde(default)]
     pub platforms: Value,
     pub apply_default_template: Option<bool>,
@@ -1514,9 +1534,12 @@ pub async fn batch_upload_handler(
     if let Err(e) = require_auth(&auth) {
         return e;
     }
-    let requested = body.streamer.as_deref().or(qs.streamer.as_deref());
+    let requested = body
+        .twitch_user_id
+        .as_deref()
+        .or(qs.twitch_user_id.as_deref());
     // required=true: Admin muss streamer angeben.
-    let scope = match resolve_streamer_scope(&auth, requested, true) {
+    let scope = match resolve_sm_scope(&auth, &pool, requested, true).await {
         Ok(s) => s,
         Err(e) => return e,
     };
@@ -1546,14 +1569,17 @@ pub async fn batch_upload_handler(
             .into_response();
     }
     let apply_default_template = body.apply_default_template.unwrap_or(true);
-    let stats = batch_upload_all_new(
+    let (_, id) = match crate::auth::streamer_scope::resolve_clip_upload_target(
         &pool,
-        &streamer,
-        partner_identity(&auth),
-        &platforms,
-        apply_default_template,
+        &auth,
+        Some(&streamer),
     )
-    .await;
+    .await
+    {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let stats = batch_upload_all_new(&pool, &id, &platforms, apply_default_template).await;
     Json(json!({
         "success": true,
         "stats": { "queued": stats.queued, "skipped": stats.skipped, "errors": stats.errors },
@@ -1568,7 +1594,7 @@ pub struct MarkUploadedBody {
     pub clip_id: Option<Value>,
     #[serde(default)]
     pub platforms: Value,
-    pub streamer: Option<String>,
+    pub twitch_user_id: Option<String>,
 }
 
 /// `POST /social-media/api/mark-uploaded` — Clip manuell als hochgeladen markieren.
@@ -1598,8 +1624,11 @@ pub async fn mark_uploaded_handler(
         )
             .into_response();
     };
-    let requested = body.streamer.as_deref().or(q.streamer.as_deref());
-    let scope = match resolve_streamer_scope(&auth, requested, false) {
+    let requested = body
+        .twitch_user_id
+        .as_deref()
+        .or(q.twitch_user_id.as_deref());
+    let scope = match resolve_sm_scope(&auth, &pool, requested, false).await {
         Ok(s) => s,
         Err(e) => return e,
     };
@@ -3090,7 +3119,7 @@ async fn belegte_termine_je_plattform(
         "SELECT q.platform, COALESCE(q.scheduled_at, q.completed_at) AS termin \
            FROM twitch_clips_upload_queue q \
            JOIN twitch_clips_social_media c ON c.id = q.clip_id \
-          WHERE LOWER(c.streamer_login) = $1 \
+          WHERE c.twitch_user_id = $1 \
             AND q.status <> 'failed' \
             AND COALESCE(q.scheduled_at, q.completed_at) IS NOT NULL \
             AND COALESCE(q.scheduled_at, q.completed_at) > CURRENT_TIMESTAMP - INTERVAL '14 days'",
@@ -3108,6 +3137,16 @@ async fn belegte_termine_je_plattform(
 }
 
 /// Baut die vollstaendige Antwort des Zeitplan-Endpoints.
+async fn streamer_display_login(pool: &PgPool, twitch_user_id: &str) -> String {
+    sqlx::query_scalar("SELECT twitch_login FROM twitch_streamers WHERE twitch_user_id = $1")
+        .bind(twitch_user_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
 async fn posting_plan_json(pool: &PgPool, streamer_login: &str) -> Value {
     // Feste Zahl an Abfragen, unabhaengig von der Zahl der Plattformen. Vorher
     // holte `plan_next_slot` je Plattform Zeitplan, Einstellungen und belegte
@@ -3139,7 +3178,8 @@ async fn posting_plan_json(pool: &PgPool, streamer_login: &str) -> Value {
     }
 
     json!({
-        "streamer_login": streamer_login,
+        "twitch_user_id": streamer_login,
+        "streamer_login": streamer_display_login(pool, streamer_login).await,
         "approval_mode": settings.approval_mode.as_str(),
         "approval_modes": APPROVAL_MODES,
         "timezone": settings.timezone,
@@ -3442,13 +3482,13 @@ async fn required_streamer_scope(
     requested_twitch_user_id: Option<&str>,
 ) -> Result<String, Response> {
     require_sm_access(auth, pool, None).await?;
-    let (login, _) = crate::auth::streamer_scope::resolve_clip_upload_target(
+    let (_, id) = crate::auth::streamer_scope::resolve_clip_upload_target(
         pool,
         auth,
         requested_twitch_user_id,
     )
     .await?;
-    Ok(login)
+    Ok(id)
 }
 
 /// Der bestehende globale Zugang bleibt eine ausdrückliche Admin-Auswahl.
@@ -3475,6 +3515,7 @@ async fn required_platform_scope(
 fn vod_archive_json(s: &VodArchiveSettings) -> Value {
     json!({
         "streamer_login": s.streamer_login,
+        "twitch_user_id": s.twitch_user_id,
         "enabled": s.enabled,
         "privacy": s.privacy,
         "privacy_options": VOD_ARCHIVE_PRIVACY_VALUES,
@@ -3560,7 +3601,8 @@ pub async fn vod_archive_put_handler(
             .into_response();
     }
     let values = VodArchiveSettings {
-        streamer_login: slug,
+        streamer_login: String::new(),
+        twitch_user_id: Some(slug),
         enabled: payload.get("enabled").map(coerce_bool).unwrap_or(false),
         privacy,
     };
@@ -3777,7 +3819,7 @@ pub async fn oauth_disconnect_handler(
     }
     let result = sqlx::query(
         "UPDATE social_media_platform_auth SET enabled = 0 \
-         WHERE platform = $1 AND (twitch_user_id = $2 OR (streamer_login IS NULL AND $2::text IS NULL))",
+         WHERE platform = $1 AND (twitch_user_id = $2 OR (twitch_user_id IS NULL AND streamer_login IS NULL AND $2::text IS NULL))",
     )
     .bind(&platform)
     .bind(target.as_ref().map(|(_, id)| id.as_str()))
@@ -4333,10 +4375,11 @@ mod tests {
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, description_tiktok TEXT, description_instagram TEXT, hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, cost_usd_estimate NUMERIC(10,6), status TEXT DEFAULT 'pending', error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",
             "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
-            "CREATE TABLE clip_templates_streamer (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, template_name TEXT, description_template TEXT NOT NULL, hashtags TEXT NOT NULL DEFAULT '[]', is_default BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, UNIQUE (streamer_login, template_name))",
+            "CREATE TABLE clip_templates_streamer (twitch_user_id TEXT DEFAULT '42', id BIGSERIAL PRIMARY KEY, streamer_login TEXT, template_name TEXT, description_template TEXT NOT NULL, hashtags TEXT NOT NULL DEFAULT '[]', is_default BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, UNIQUE (streamer_login, template_name))",
+            "CREATE TABLE clip_last_hashtags (streamer_login TEXT, twitch_user_id TEXT DEFAULT '42', hashtags TEXT NOT NULL, last_used_at TIMESTAMPTZ DEFAULT NOW())",
             "CREATE TABLE clip_templates_global (id BIGSERIAL PRIMARY KEY, template_name TEXT UNIQUE, description_template TEXT NOT NULL, hashtags TEXT NOT NULL DEFAULT '[]', category TEXT, usage_count INTEGER DEFAULT 0, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, created_by TEXT)",
             "CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT)",
-            "CREATE TABLE social_media_streamer_layout (streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
+            "CREATE TABLE social_media_streamer_layout (twitch_user_id TEXT DEFAULT '42', streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
             "CREATE TABLE deadlock_vocab (term TEXT PRIMARY KEY, canonical TEXT NOT NULL, category TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'manual', aliases JSONB NOT NULL DEFAULT '[]'::jsonb, weight INTEGER NOT NULL DEFAULT 1, updated_at TIMESTAMPTZ DEFAULT NOW())",
             "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMPTZ, updated_by TEXT)",
             "CREATE TABLE twitch_clip_form_submissions (id SERIAL PRIMARY KEY, clip_id INTEGER NOT NULL, form_key TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', http_status INTEGER, error TEXT, submitted_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE (clip_id, form_key))",
@@ -4346,13 +4389,21 @@ mod tests {
             "CREATE TABLE social_media_partner_access (streamer_login TEXT PRIMARY KEY, twitch_user_id TEXT DEFAULT '42', granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             "CREATE TABLE social_media_category (category_key TEXT PRIMARY KEY, display_name TEXT NOT NULL, twitch_game_id TEXT, match_game_names TEXT[] NOT NULL DEFAULT '{}', enrichment_enabled BOOLEAN NOT NULL DEFAULT FALSE, sort_order INTEGER NOT NULL DEFAULT 100, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             "INSERT INTO social_media_category (category_key, display_name, match_game_names, enrichment_enabled, sort_order) VALUES ('deadlock', 'Deadlock', ARRAY['deadlock'], TRUE, 10), ('other', 'Andere Spiele', ARRAY[]::TEXT[], FALSE, 900)",
-            "CREATE TABLE social_media_streamer_settings (streamer_login TEXT PRIMARY KEY, approval_mode TEXT NOT NULL DEFAULT 'manual', timezone TEXT NOT NULL DEFAULT 'Europe/Berlin', subtitles_enabled BOOLEAN NOT NULL DEFAULT TRUE, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT)",
-            "CREATE TABLE social_media_platform_schedule (streamer_login TEXT NOT NULL, platform TEXT NOT NULL, auto_post BOOLEAN NOT NULL DEFAULT FALSE, posts_per_week INTEGER NOT NULL DEFAULT 4, max_posts_per_day INTEGER NOT NULL DEFAULT 1, post_times JSONB NOT NULL DEFAULT '[\"18:00\"]'::jsonb, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT, PRIMARY KEY (streamer_login, platform))",
-            "CREATE TABLE social_media_category_settings (streamer_login TEXT NOT NULL, category_key TEXT NOT NULL, auto_post BOOLEAN NOT NULL DEFAULT FALSE, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT, PRIMARY KEY (streamer_login, category_key))",
-            "CREATE TABLE social_media_vod_archive (streamer_login TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT FALSE, privacy TEXT NOT NULL DEFAULT 'private', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT)",
+            "CREATE TABLE social_media_streamer_settings (twitch_user_id TEXT DEFAULT '42', streamer_login TEXT PRIMARY KEY, approval_mode TEXT NOT NULL DEFAULT 'manual', timezone TEXT NOT NULL DEFAULT 'Europe/Berlin', subtitles_enabled BOOLEAN NOT NULL DEFAULT TRUE, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT)",
+            "CREATE TABLE social_media_platform_schedule (twitch_user_id TEXT DEFAULT '42', streamer_login TEXT NOT NULL, platform TEXT NOT NULL, auto_post BOOLEAN NOT NULL DEFAULT FALSE, posts_per_week INTEGER NOT NULL DEFAULT 4, max_posts_per_day INTEGER NOT NULL DEFAULT 1, post_times JSONB NOT NULL DEFAULT '[\"18:00\"]'::jsonb, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT, PRIMARY KEY (streamer_login, platform))",
+            "CREATE TABLE social_media_category_settings (twitch_user_id TEXT DEFAULT '42', streamer_login TEXT NOT NULL, category_key TEXT NOT NULL, auto_post BOOLEAN NOT NULL DEFAULT FALSE, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT, PRIMARY KEY (streamer_login, category_key))",
+            "CREATE TABLE social_media_vod_archive (twitch_user_id TEXT DEFAULT '42', streamer_login TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT FALSE, privacy TEXT NOT NULL DEFAULT 'private', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
+        sqlx::query("CREATE UNIQUE INDEX fixture_social_media_partner_access_id ON social_media_partner_access (twitch_user_id)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE UNIQUE INDEX fixture_clip_templates_streamer_id ON clip_templates_streamer (twitch_user_id, template_name) WHERE twitch_user_id IS NOT NULL").execute(&pool).await.unwrap();
+        sqlx::query("CREATE UNIQUE INDEX fixture_clip_last_hashtags_id ON clip_last_hashtags (twitch_user_id) WHERE twitch_user_id IS NOT NULL").execute(&pool).await.unwrap();
+        sqlx::query("CREATE UNIQUE INDEX fixture_social_media_streamer_layout_id ON social_media_streamer_layout (twitch_user_id) WHERE twitch_user_id IS NOT NULL").execute(&pool).await.unwrap();
+        sqlx::query("CREATE UNIQUE INDEX fixture_social_media_streamer_settings_id ON social_media_streamer_settings (twitch_user_id) WHERE twitch_user_id IS NOT NULL").execute(&pool).await.unwrap();
+        sqlx::query("CREATE UNIQUE INDEX fixture_social_media_platform_schedule_id ON social_media_platform_schedule (twitch_user_id, platform) WHERE twitch_user_id IS NOT NULL").execute(&pool).await.unwrap();
+        sqlx::query("CREATE UNIQUE INDEX fixture_social_media_category_settings_id ON social_media_category_settings (twitch_user_id, category_key) WHERE twitch_user_id IS NOT NULL").execute(&pool).await.unwrap();
+        sqlx::query("CREATE UNIQUE INDEX fixture_social_media_vod_archive_id ON social_media_vod_archive (twitch_user_id) WHERE twitch_user_id IS NOT NULL").execute(&pool).await.unwrap();
         Some(pool)
     }
 
@@ -4409,6 +4460,7 @@ mod tests {
             owner.clone(),
             State(pool.clone()),
             Query(ClipsQuery {
+                twitch_user_id: None,
                 streamer: None,
                 status: None,
                 limit: None,
@@ -4420,6 +4472,7 @@ mod tests {
             attacker,
             State(pool.clone()),
             Query(ClipsQuery {
+                twitch_user_id: None,
                 streamer: None,
                 status: None,
                 limit: None,
@@ -4516,7 +4569,7 @@ mod tests {
         let scope = require_sm_access(&sm_partner("EarlySalty"), &pool, None)
             .await
             .unwrap();
-        assert_eq!(scope, Some("earlysalty".to_string()));
+        assert_eq!(scope, Some("42".to_string()));
 
         let err = require_sm_access(&sm_partner("earlysalty"), &pool, Some("ismile_e"))
             .await
@@ -4529,10 +4582,10 @@ mod tests {
         let Some(pool) = make_pool("t_dash_sm_access_admin").await else {
             return;
         };
-        let scope = require_sm_access(&DashboardAuthLevel::admin(), &pool, Some("ismile_e"))
+        let scope = require_sm_access(&DashboardAuthLevel::admin(), &pool, Some("99"))
             .await
             .unwrap();
-        assert_eq!(scope, Some("ismile_e".to_string()));
+        assert_eq!(scope, Some("99".to_string()));
 
         let err = require_sm_access(&DashboardAuthLevel::None, &pool, None)
             .await
@@ -4698,6 +4751,7 @@ mod tests {
             DashboardAuthLevel::admin(),
             State(pool.clone()),
             Query(ClipsQuery {
+                twitch_user_id: None,
                 streamer: None,
                 status: None,
                 limit: None,
@@ -4715,6 +4769,7 @@ mod tests {
             DashboardAuthLevel::admin(),
             State(pool.clone()),
             Query(ClipsQuery {
+                twitch_user_id: None,
                 streamer: None,
                 status: None,
                 limit: Some("999".into()),
@@ -4728,6 +4783,7 @@ mod tests {
             partner("nani"),
             State(pool.clone()),
             Query(ClipsQuery {
+                twitch_user_id: None,
                 streamer: Some("other".into()),
                 status: None,
                 limit: None,
@@ -4742,6 +4798,12 @@ mod tests {
         let Some(pool) = make_pool("t_dash_sm_tpl_create").await else {
             return;
         };
+        sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('nani', '42')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('nani', TRUE)")
             .execute(&pool)
             .await
@@ -4751,7 +4813,7 @@ mod tests {
             partner("nani"),
             State(pool.clone()),
             Json(CreateTemplateBody {
-                streamer: None,
+                twitch_user_id: None,
                 template_name: Some("Default".into()),
                 description: Some("Desc {{title}}".into()),
                 hashtags: vec!["deadlock".into()],
@@ -4771,7 +4833,7 @@ mod tests {
             partner("nani"),
             State(pool.clone()),
             Json(CreateTemplateBody {
-                streamer: None,
+                twitch_user_id: None,
                 template_name: Some("X".into()),
                 description: None,
                 hashtags: vec![],
@@ -4786,7 +4848,7 @@ mod tests {
             DashboardAuthLevel::admin(),
             State(pool.clone()),
             Json(CreateTemplateBody {
-                streamer: None,
+                twitch_user_id: None,
                 template_name: Some("X".into()),
                 description: Some("Y".into()),
                 hashtags: vec![],
@@ -4817,7 +4879,7 @@ mod tests {
                 clip_id: Some(json!(clip)),
                 template_id: Some(json!(tpl)),
                 is_global: false,
-                streamer: None,
+                twitch_user_id: None,
             }),
         )
         .await;
@@ -4841,7 +4903,7 @@ mod tests {
                 clip_id: Some(json!(clip)),
                 template_id: Some(json!(tpl)),
                 is_global: false,
-                streamer: None,
+                twitch_user_id: None,
             }),
         )
         .await;
@@ -4860,7 +4922,7 @@ mod tests {
                 clip_id: None,
                 template_id: Some(json!(tpl)),
                 is_global: false,
-                streamer: None,
+                twitch_user_id: None,
             }),
         )
         .await;
@@ -4878,7 +4940,7 @@ mod tests {
                 clip_id: Some(json!(clip)),
                 template_id: Some(json!(tpl)),
                 is_global: false,
-                streamer: None,
+                twitch_user_id: None,
             }),
         )
         .await;
@@ -5297,7 +5359,7 @@ mod tests {
             description: None,
             hashtags: None,
             priority: 0,
-            streamer: None,
+            twitch_user_id: None,
             schedule: None,
             forms: Vec::new(),
         }
@@ -5426,7 +5488,7 @@ mod tests {
                 description: None,
                 hashtags: None,
                 priority: 0,
-                streamer: None,
+                twitch_user_id: None,
                 schedule: None,
                 forms: Vec::new(),
             }),
@@ -5751,10 +5813,12 @@ mod tests {
         let Some(pool) = make_pool("t_dash_sm_approval").await else {
             return;
         };
-        sqlx::query("INSERT INTO twitch_streamers (twitch_login) VALUES ('nani')")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('nani', '42')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, status) VALUES ('a', 'nani', 'awaiting_approval') RETURNING id").fetch_one(&pool).await.unwrap();
         sqlx::query(
             "INSERT INTO social_media_clip_enrichment (clip_db_id, title_tiktok) VALUES ($1, 'TT')",
@@ -5808,7 +5872,7 @@ mod tests {
 
         // Zeitplan lesen: Defaults aus der Kadenz-Recherche, Freigabe manuell.
         let nani = Query(StreamerLoginQuery {
-            twitch_user_id: None,
+            twitch_user_id: Some("42".into()),
             streamer_login: Some("nani".into()),
         });
         let resp = posting_plan_get_handler(
@@ -6598,7 +6662,7 @@ mod tests {
         MarkUploadedBody {
             clip_id: clip_id.map(|c| json!(c)),
             platforms,
-            streamer: None,
+            twitch_user_id: None,
         }
     }
 
@@ -6912,6 +6976,12 @@ mod tests {
         let Some(pool) = make_pool("t_dash_sm_batch").await else {
             return;
         };
+        sqlx::query(
+            "INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('nani', '42')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, clip_title, created_at) VALUES ('a', 'nani', 'A', '2026-06-10')").execute(&pool).await.unwrap();
 
         // Admin mit streamer + tiktok → 1 eingereiht.
@@ -6923,7 +6993,7 @@ mod tests {
                 streamer: None,
             }),
             Json(BatchUploadBody {
-                streamer: Some("nani".into()),
+                twitch_user_id: Some("42".into()),
                 platforms: json!(["tiktok"]),
                 apply_default_template: None,
             }),
@@ -6943,7 +7013,7 @@ mod tests {
                 streamer: None,
             }),
             Json(BatchUploadBody {
-                streamer: Some("nani".into()),
+                twitch_user_id: Some("42".into()),
                 platforms: json!([]),
                 apply_default_template: None,
             }),
@@ -6959,7 +7029,7 @@ mod tests {
                 streamer: None,
             }),
             Json(BatchUploadBody {
-                streamer: None,
+                twitch_user_id: None,
                 platforms: json!(["tiktok"]),
                 apply_default_template: None,
             }),
@@ -6975,7 +7045,7 @@ mod tests {
                 streamer: None,
             }),
             Json(BatchUploadBody {
-                streamer: Some("other".into()),
+                twitch_user_id: Some("99".into()),
                 platforms: json!(["tiktok"]),
                 apply_default_template: None,
             }),
@@ -7123,6 +7193,11 @@ mod tests {
             "die Sammelverbindung und der fremde Kanal bleiben unberuehrt"
         );
 
+        sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login, twitch_user_id, enabled) VALUES ('youtube', NULL, '100', 1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
         // Die Sammelverbindung nur noch ueber den ausdruecklichen Marker.
         let resp = oauth_disconnect_handler(
             DashboardAuthLevel::admin(),
@@ -7136,12 +7211,19 @@ mod tests {
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
         let global_enabled: i32 = sqlx::query_scalar(
-            "SELECT enabled FROM social_media_platform_auth WHERE streamer_login IS NULL",
+            "SELECT enabled FROM social_media_platform_auth WHERE streamer_login IS NULL AND twitch_user_id IS NULL",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
         assert_eq!(global_enabled, 0);
+        let channel_enabled: i32 = sqlx::query_scalar(
+            "SELECT enabled FROM social_media_platform_auth WHERE twitch_user_id = '100'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(channel_enabled, 1);
 
         // Ein Partner kommt an den Marker nicht heran.
         let resp = oauth_disconnect_handler(
@@ -7400,7 +7482,7 @@ mod tests {
             .await
             .unwrap();
         let fremd: i64 = sqlx::query_scalar(
-            "INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('fremd', 'ismile_e') RETURNING id",
+            "INSERT INTO twitch_clips_social_media (clip_id, streamer_login, twitch_user_id) VALUES ('fremd', 'ismile_e', '99') RETURNING id",
         )
         .fetch_one(&pool)
         .await

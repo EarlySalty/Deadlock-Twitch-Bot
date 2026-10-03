@@ -51,7 +51,7 @@ if (!brandFontDir)
   );
 
 const dist = path.resolve(import.meta.dirname, '../../analytics/dashboard_v2/dist');
-const evidence = path.resolve(import.meta.dirname, '../../../.tasks/2026-09-22-social-dashboard-shell-size/browser');
+const evidence = process.env.STUDIO_ARTIFACT_DIR ?? path.resolve(import.meta.dirname, '../../../.tasks/2026-09-22-social-dashboard-shell-size/browser');
 const layout = {
   version: 1,
   source: { width: 1920, height: 1080 },
@@ -135,7 +135,7 @@ const makeClips = (streamer) =>
 
 test(
   'Social Studio: Produktionsbundle mit isoliertem API-Vertrag',
-  { timeout: 120000 },
+  { timeout: 180000 },
   async (t) => {
     const plans = { earlysalty: makePlan('earlysalty'), partner2: makePlan('partner2') };
     const clips = { earlysalty: makeClips('earlysalty'), partner2: makeClips('partner2') };
@@ -188,6 +188,7 @@ test(
             entitlements: [],
           },
         });
+      if (p === '/twitch/api/v2/overview') return json({ empty: true, sessions: [] });
       if (p === '/twitch/api/v2/streamers')
         return json([{ login: 'earlysalty', twitchUserId: '11' }, { login: 'partner2', twitchUserId: '22' }]);
       if (p === '/social-media/api/access/me')
@@ -376,20 +377,43 @@ test(
     await page.locator('.studio-clip').first().waitFor();
     const tab = (name) => page.getByRole('tab', { name, exact: true });
     await t.test(
-      'vollständige Kennzahlen, keine Vorschau-Requests beim Laden und echtes Logo',
+      'vollständige Kennzahlen und gemeinsame Kopfzeile ohne eigenen Logo-Block',
       async () => {
         assert.equal(await page.locator('.studio-clip').count(), 24);
         assert.ok(requests.some((r) => r.includes('page=2')));
         assert.ok(!requests.some((r) => r.includes('/preview')));
         assert.ok((await page.locator('.studio-metrics').innerText()).includes('2'));
-        assert.ok(
-          await page
-            .locator('.studio-brand img')
-            .evaluate((img) => img.complete && img.naturalWidth > 0),
-        );
+        assert.equal(await page.locator('.studio-brand').count(), 0);
+        assert.equal(await page.locator('main header.panel-card').count(), 1);
+        assert.equal(await page.getByRole('heading', { name: 'Social Media', exact: true }).count(), 1);
+        assert.equal(await page.getByText('Partner', { exact: true }).count(), 0);
         assert.ok(await page.evaluate(() => document.fonts.check('14px "Studio Manrope"')));
       },
     );
+    await t.test('Analyse und Social Media teilen die Kopfzeilenhöhe', async () => {
+      const analysis = await browser.newPage({ viewport: { width: 1440, height: 1080 }, reducedMotion: 'reduce' });
+      try {
+        await analysis.route('**/*', route => route.request().url().startsWith(base) ? route.continue() : route.abort());
+        await analysis.goto(base + '/analyse?streamer=earlysalty');
+        await analysis.locator('main header.panel-card').waitFor();
+        await analysis.evaluate(() => document.fonts.ready);
+        for (const width of [320, 390, 768, 1024, 1440]) {
+          await page.setViewportSize({ width, height: 1080 });
+          await analysis.setViewportSize({ width, height: 1080 });
+          const socialBox = await page.locator('main header.panel-card').boundingBox();
+          const analysisBox = await analysis.locator('main header.panel-card').boundingBox();
+          assert.equal(socialBox.height, analysisBox.height, `${width}px: Social ${socialBox.height}, Analyse ${analysisBox.height}`);
+          for (const [name, current] of [['Social Media', page], ['Analyse', analysis]]) {
+            const overflow = await current.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+            assert.equal(overflow, 0, `${name} @ ${width}px`);
+          }
+          await analysis.screenshot({ path: path.join(evidence, `analyse-${width}.png`), fullPage: true });
+        }
+      } finally {
+        await analysis.close();
+        await page.setViewportSize({ width: 1440, height: 1080 });
+      }
+    });
     await t.test('gemeinsamer Rahmen: volle Breite, 240px Navigation und gleiche Abstände', async () => {
       for (const width of [1024, 1280, 1440, 1920, 2560]) {
         await page.setViewportSize({ width, height: 1080 });
@@ -803,7 +827,7 @@ test('Social Studio: stabile Kanal-ID bei widersprüchlichen Links und Kanalwech
   await Promise.all([page.waitForResponse((response) => response.url().endsWith('/upload')), page.locator('input[type=file]').setInputFiles({ name: 'contract-2.mp4', mimeType: 'video/mp4', buffer: Buffer.from('local fixture') })]);
   assert.match(observed.find((entry) => entry.path.endsWith('/upload')).body, /name="twitch_user_id"\r\n\r\n22\r\n/);
   await page.getByRole('button', { name: 'Schließen', exact: true }).click();
-  const screenshotDir = path.resolve(import.meta.dirname, '../../../.tasks/2026-09-30-clip-channel-selection');
+  const screenshotDir = process.env.STUDIO_ARTIFACT_DIR ?? path.resolve(import.meta.dirname, '../../../.tasks/2026-09-30-clip-channel-selection');
   await fs.mkdir(screenshotDir, { recursive: true });
   await page.screenshot({ path: path.join(screenshotDir, 'channel-selection.png'), fullPage: true });
   assert.deepEqual(errors, []);

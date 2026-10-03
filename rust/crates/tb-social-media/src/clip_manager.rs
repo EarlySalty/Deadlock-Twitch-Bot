@@ -105,7 +105,6 @@ pub async fn register_manual_upload(
 /// optional nach Streamer/Status gefiltert.
 pub async fn get_clips_for_dashboard(
     pool: &PgPool,
-    streamer_login: Option<&str>,
     twitch_user_id: Option<&str>,
     status: Option<&str>,
     limit: i64,
@@ -115,15 +114,13 @@ pub async fn get_clips_for_dashboard(
                 COALESCE((SELECT COUNT(*) FROM twitch_clips_upload_queue q \
                           WHERE q.clip_id = c.id AND q.status = 'pending'), 0) AS pending_uploads \
            FROM twitch_clips_social_media c \
-          WHERE (($4::text IS NOT NULL AND c.twitch_user_id = $4) OR \
-                 ($4::text IS NULL AND ($1::text IS NULL OR LOWER(c.streamer_login) = LOWER($1)))) \
+          WHERE ($1::text IS NULL OR c.twitch_user_id = $1) \
             AND ($2::text IS NULL OR c.status = $2) \
           ORDER BY c.created_at DESC LIMIT $3",
     )
-    .bind(streamer_login)
+    .bind(twitch_user_id)
     .bind(status)
     .bind(limit)
-    .bind(twitch_user_id)
     .fetch_all(pool)
     .await
     {
@@ -131,7 +128,7 @@ pub async fn get_clips_for_dashboard(
         Err(error) => {
             tracing::warn!(
                 %error,
-                streamer_login = streamer_login.unwrap_or(""),
+                twitch_user_id = twitch_user_id.unwrap_or(""),
                 status = status.unwrap_or(""),
                 "Social-Media-Clips: Dashboard-Liste nicht ladbar"
             );
@@ -218,8 +215,7 @@ fn parse_json_strings(raw: Option<&str>) -> Vec<String> {
 /// (Platzhalter {{title}}/{{streamer}}/{{game}}). `skipped` bleibt 0 (mirror).
 pub async fn batch_upload_all_new(
     pool: &PgPool,
-    streamer_login: &str,
-    twitch_user_id: Option<&str>,
+    twitch_user_id: &str,
     platforms: &[String],
     apply_default_template: bool,
 ) -> BatchUploadStats {
@@ -232,8 +228,8 @@ pub async fn batch_upload_all_new(
     let default_template: Option<(String, Vec<String>)> = if apply_default_template {
         sqlx::query!(
             "SELECT description_template AS \"description_template!\", hashtags AS \"hashtags!\" \
-             FROM clip_templates_streamer WHERE streamer_login = $1 AND is_default LIMIT 1",
-            streamer_login
+             FROM clip_templates_streamer WHERE twitch_user_id = $1 AND is_default LIMIT 1",
+            twitch_user_id
         )
         .fetch_optional(pool)
         .await
@@ -258,9 +254,8 @@ pub async fn batch_upload_all_new(
         };
         let clips: Vec<PendingClipRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT id, clip_title, streamer_login, game_name, custom_description, hashtags \
-             FROM twitch_clips_social_media WHERE (($2::text IS NOT NULL AND twitch_user_id = $2) OR ($2::text IS NULL AND streamer_login = $1)) AND {col} = FALSE ORDER BY created_at DESC"
+             FROM twitch_clips_social_media WHERE twitch_user_id = $1 AND {col} = FALSE ORDER BY created_at DESC"
         )))
-        .bind(streamer_login)
         .bind(twitch_user_id)
         .fetch_all(pool)
         .await
@@ -348,11 +343,11 @@ mod tests {
             .unwrap();
         for ddl in [
             "CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT)",
-            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL UNIQUE, clip_url TEXT NOT NULL, clip_title TEXT, clip_thumbnail_url TEXT, streamer_login TEXT NOT NULL, twitch_user_id TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), duration_seconds DOUBLE PRECISION, view_count INTEGER DEFAULT 0, game_name TEXT, custom_description TEXT, hashtags TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, retention_until TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '14 days'), discarded_at TIMESTAMPTZ, kontingent_verbraucht_at TIMESTAMPTZ, layout_override_json JSONB, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ)",
-            "CREATE TABLE social_media_streamer_layout (streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL UNIQUE, clip_url TEXT NOT NULL, clip_title TEXT, clip_thumbnail_url TEXT, streamer_login TEXT NOT NULL, twitch_user_id TEXT DEFAULT '42', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), duration_seconds DOUBLE PRECISION, view_count INTEGER DEFAULT 0, game_name TEXT, custom_description TEXT, hashtags TEXT, status TEXT DEFAULT 'pending', source_kind TEXT NOT NULL DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, retention_until TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '14 days'), discarded_at TIMESTAMPTZ, kontingent_verbraucht_at TIMESTAMPTZ, layout_override_json JSONB, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ)",
+            "CREATE TABLE social_media_streamer_layout (twitch_user_id TEXT DEFAULT '42', streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ DEFAULT NOW(), updated_by TEXT)",
             "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
-            "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, enabled INTEGER DEFAULT 1)",
-            "CREATE TABLE clip_templates_streamer (id BIGSERIAL PRIMARY KEY, streamer_login TEXT NOT NULL, template_name TEXT NOT NULL, description_template TEXT NOT NULL, hashtags TEXT NOT NULL, is_default BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP)",
+            "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, twitch_user_id TEXT, enabled INTEGER DEFAULT 1)",
+            "CREATE TABLE clip_templates_streamer (twitch_user_id TEXT DEFAULT '42', id BIGSERIAL PRIMARY KEY, streamer_login TEXT NOT NULL, template_name TEXT NOT NULL, description_template TEXT NOT NULL, hashtags TEXT NOT NULL, is_default BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -395,13 +390,13 @@ mod tests {
         ));
 
         // Dashboard-Liste.
-        let clips = get_clips_for_dashboard(&pool, Some("nani"), None, None, 50).await;
+        let clips = get_clips_for_dashboard(&pool, Some("123"), None, 50).await;
         assert_eq!(clips.len(), 1);
         assert_eq!(clips[0]["clip_id"], "m1");
         assert_eq!(clips[0]["pending_uploads"], 0);
         // Status-Filter greift.
         assert_eq!(
-            get_clips_for_dashboard(&pool, None, None, Some("processing"), 50)
+            get_clips_for_dashboard(&pool, None, Some("processing"), 50)
                 .await
                 .len(),
             0
@@ -409,8 +404,7 @@ mod tests {
         // Pending-Upload erhöht den Zähler.
         sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) VALUES ($1, 'tiktok', 'pending')").bind(id).execute(&pool).await.unwrap();
         assert_eq!(
-            get_clips_for_dashboard(&pool, Some("nani"), None, None, 50).await[0]
-                ["pending_uploads"],
+            get_clips_for_dashboard(&pool, Some("123"), None, 50).await[0]["pending_uploads"],
             1
         );
     }
@@ -421,7 +415,7 @@ mod tests {
             return;
         };
         // tiktok ist die einzige aktive Plattform für nani.
-        sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login) VALUES ('tiktok', 'nani')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login, twitch_user_id) VALUES ('tiktok', 'nani', '42')").execute(&pool).await.unwrap();
         let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login) VALUES ('m1', 'https://clips.test/m1', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
 
         // tiktok markieren (+ unbekannte Plattform wird übersprungen).
@@ -447,7 +441,7 @@ mod tests {
         // Clip C: schon hochgeladen → nicht eingereiht.
         sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, uploaded_tiktok, created_at) VALUES ('c', 'https://clips.test/c', 'nani', TRUE, '2026-06-08')").execute(&pool).await.unwrap();
 
-        let stats = batch_upload_all_new(&pool, "nani", None, &["tiktok".into()], true).await;
+        let stats = batch_upload_all_new(&pool, "42", &["tiktok".into()], true).await;
         assert_eq!(stats.queued, 2);
         assert_eq!(stats.errors, 0);
         assert_eq!(stats.skipped, 0);

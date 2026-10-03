@@ -99,15 +99,20 @@ pub async fn merke_vod(
     pool: &PgPool,
     twitch_id: &str,
     streamer_login: &str,
+    twitch_user_id: &str,
     title: &str,
     duration_sec: i64,
 ) -> Result<bool, VodArchiveError> {
+    if twitch_user_id.is_empty() || !twitch_user_id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(sqlx::Error::Protocol("twitch_user_id fehlt".into()).into());
+    }
     let eingefuegt = sqlx::query(
-        "INSERT INTO twitch_vod_archive_vods (twitch_id, streamer_login, title, duration_sec) \
-         VALUES ($1, $2, $3, $4) ON CONFLICT (twitch_id) DO NOTHING",
+        "INSERT INTO twitch_vod_archive_vods (twitch_id, streamer_login, twitch_user_id, title, duration_sec) \
+         VALUES ($1, $2, $3, $4, $5) ON CONFLICT (twitch_id) DO NOTHING",
     )
     .bind(twitch_id)
     .bind(streamer_login)
+    .bind(twitch_user_id)
     .bind(title)
     .bind(duration_sec)
     .execute(pool)
@@ -120,16 +125,16 @@ pub async fn merke_vod(
 /// bleiben draussen.
 pub async fn offene_vods(
     pool: &PgPool,
-    streamer_login: &str,
+    twitch_user_id: &str,
     limit: i64,
 ) -> Result<Vec<Vod>, VodArchiveError> {
     let rows = sqlx::query(
         "SELECT id, twitch_id, title, duration_sec, recorded_at, status, local_path \
          FROM twitch_vod_archive_vods \
-         WHERE LOWER(streamer_login) = LOWER($1) AND status NOT IN ('uploaded', 'archived') \
+         WHERE twitch_user_id = $1 AND status NOT IN ('uploaded', 'archived') \
          ORDER BY discovered_at ASC, id ASC LIMIT $2",
     )
-    .bind(streamer_login)
+    .bind(twitch_user_id)
     .bind(limit)
     .fetch_all(pool)
     .await?;
@@ -436,18 +441,18 @@ pub struct FrischerUpload {
 /// Upload vor — der naechste Lauf holt ihn ein.
 pub async fn frisch_hochgeladene_teile(
     pool: &PgPool,
-    streamer_login: &str,
+    twitch_user_id: &str,
     tage: i32,
 ) -> Result<Vec<FrischerUpload>, VodArchiveError> {
     let rows = sqlx::query(
         "SELECT p.id AS teil_id, p.vod_id, p.part_index, p.youtube_video_id \
-         FROM twitch_vod_archive_parts p \
-         WHERE LOWER(p.streamer_login) = LOWER($1) \
+         FROM twitch_vod_archive_parts p JOIN twitch_vod_archive_vods v ON v.id = p.vod_id \
+         WHERE v.twitch_user_id = $1 \
            AND p.status = 'done' AND p.youtube_video_id IS NOT NULL \
            AND p.updated_at > CURRENT_TIMESTAMP - make_interval(days => $2) \
          ORDER BY p.updated_at ASC",
     )
-    .bind(streamer_login)
+    .bind(twitch_user_id)
     .bind(tage)
     .fetch_all(pool)
     .await?;
@@ -625,7 +630,7 @@ mod tests {
             .unwrap();
         for ddl in [
             "CREATE TABLE twitch_vod_archive_vods (id BIGSERIAL PRIMARY KEY, twitch_id TEXT NOT NULL UNIQUE, \
-             streamer_login TEXT NOT NULL, title TEXT NOT NULL, duration_sec BIGINT NOT NULL DEFAULT 0, \
+             streamer_login TEXT NOT NULL, twitch_user_id TEXT, title TEXT NOT NULL, duration_sec BIGINT NOT NULL DEFAULT 0, \
              recorded_at DATE, status TEXT NOT NULL DEFAULT 'new', local_path TEXT, last_error TEXT, \
              discovered_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, downloaded_at TIMESTAMPTZ, \
              uploaded_at TIMESTAMPTZ, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
@@ -647,25 +652,67 @@ mod tests {
         let Some(pool) = pool("t_vod_entdecken").await else {
             return;
         };
-        assert!(merke_vod(&pool, "v1", "earlysalty", "Erster", 100)
+        assert!(merke_vod(&pool, "v1", "earlysalty", "42", "Erster", 100)
             .await
             .unwrap());
         // Zweiter Lauf sieht dasselbe VOD und darf nichts anfassen.
-        assert!(!merke_vod(&pool, "v1", "earlysalty", "Anderer Titel", 999)
-            .await
-            .unwrap());
-        let offen = offene_vods(&pool, "earlysalty", 10).await.unwrap();
+        assert!(
+            !merke_vod(&pool, "v1", "earlysalty", "42", "Anderer Titel", 999)
+                .await
+                .unwrap()
+        );
+        let offen = offene_vods(&pool, "42", 10).await.unwrap();
         assert_eq!(offen.len(), 1);
         assert_eq!(offen[0].title, "Erster");
         assert!(offen[0].braucht_download());
 
         // Das VOD eines anderen Streamers taucht in seiner Warteschlange nicht
         // auf. Das ist der ganze Punkt der Umstellung.
-        merke_vod(&pool, "v9", "nani", "Fremd", 100).await.unwrap();
-        assert_eq!(offene_vods(&pool, "earlysalty", 10).await.unwrap().len(), 1);
-        let fremd = offene_vods(&pool, "nani", 10).await.unwrap();
+        merke_vod(&pool, "v9", "earlysalty", "99", "Fremd", 100)
+            .await
+            .unwrap();
+        assert_eq!(offene_vods(&pool, "42", 10).await.unwrap().len(), 1);
+        let fremd = offene_vods(&pool, "99", 10).await.unwrap();
         assert_eq!(fremd.len(), 1);
         assert_eq!(fremd[0].twitch_id, "v9");
+        sqlx::query("UPDATE twitch_vod_archive_vods SET streamer_login = 'old_name' WHERE twitch_user_id = '42'")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_vod_archive_vods (twitch_id, streamer_login, title) VALUES ('unresolved', 'earlysalty', 'Legacy')")
+            .execute(&pool).await.unwrap();
+        assert_eq!(offene_vods(&pool, "42", 10).await.unwrap().len(), 1);
+        assert_eq!(offene_vods(&pool, "99", 10).await.unwrap().len(), 1);
+        assert!(offene_vods(&pool, "earlysalty", 10)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(
+            merke_vod(&pool, "invalid", "earlysalty", "", "Missing", 100)
+                .await
+                .is_err()
+        );
+        setze_teile(
+            &pool,
+            offen[0].id,
+            "old_name",
+            &["/synthetic/part.mp4".into()],
+        )
+        .await
+        .unwrap();
+        let parts = teile(&pool, offen[0].id, &test_cipher()).await.unwrap();
+        setze_teil_fertig(&pool, parts[0].id, "video42")
+            .await
+            .unwrap();
+        assert_eq!(
+            frisch_hochgeladene_teile(&pool, "42", 7)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(frisch_hochgeladene_teile(&pool, "99", 7)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -673,10 +720,10 @@ mod tests {
         let Some(pool) = pool("t_vod_upload").await else {
             return;
         };
-        merke_vod(&pool, "v2", "earlysalty", "Langer Stream", 50_000)
+        merke_vod(&pool, "v2", "earlysalty", "42", "Langer Stream", 50_000)
             .await
             .unwrap();
-        let vod = offene_vods(&pool, "earlysalty", 10).await.unwrap()[0].clone();
+        let vod = offene_vods(&pool, "42", 10).await.unwrap()[0].clone();
         setze_geladen(
             &pool,
             vod.id,
@@ -746,10 +793,7 @@ mod tests {
         assert_eq!(danach[1].upload_offset, 0);
 
         setze_hochgeladen(&pool, vod.id).await.unwrap();
-        assert!(offene_vods(&pool, "earlysalty", 10)
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(offene_vods(&pool, "42", 10).await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -757,10 +801,10 @@ mod tests {
         let Some(pool) = pool("t_vod_abgelehnt_atomar").await else {
             return;
         };
-        merke_vod(&pool, "v2a", "earlysalty", "Langer Stream", 50_000)
+        merke_vod(&pool, "v2a", "earlysalty", "42", "Langer Stream", 50_000)
             .await
             .unwrap();
-        let vod = offene_vods(&pool, "earlysalty", 10).await.unwrap()[0].clone();
+        let vod = offene_vods(&pool, "42", 10).await.unwrap()[0].clone();
         setze_teile(&pool, vod.id, "earlysalty", &["/archiv/v2a.mp4".into()])
             .await
             .unwrap();
@@ -801,10 +845,10 @@ mod tests {
         let Some(pool) = pool("t_vod_abgelehnt_rollback").await else {
             return;
         };
-        merke_vod(&pool, "v2b", "earlysalty", "Langer Stream", 50_000)
+        merke_vod(&pool, "v2b", "earlysalty", "42", "Langer Stream", 50_000)
             .await
             .unwrap();
-        let vod = offene_vods(&pool, "earlysalty", 10).await.unwrap()[0].clone();
+        let vod = offene_vods(&pool, "42", 10).await.unwrap()[0].clone();
         setze_teile(&pool, vod.id, "earlysalty", &["/archiv/v2b.mp4".into()])
             .await
             .unwrap();
@@ -851,14 +895,14 @@ mod tests {
         let Some(pool) = pool("t_vod_fehler").await else {
             return;
         };
-        merke_vod(&pool, "v3", "earlysalty", "Kaputt", 10)
+        merke_vod(&pool, "v3", "earlysalty", "42", "Kaputt", 10)
             .await
             .unwrap();
-        let vod = offene_vods(&pool, "earlysalty", 10).await.unwrap()[0].clone();
+        let vod = offene_vods(&pool, "42", 10).await.unwrap()[0].clone();
         setze_fehler(&pool, vod.id, STATUS_DOWNLOAD_FEHLER, &"y".repeat(5000))
             .await
             .unwrap();
-        let offen = offene_vods(&pool, "earlysalty", 10).await.unwrap();
+        let offen = offene_vods(&pool, "42", 10).await.unwrap();
         assert_eq!(offen.len(), 1);
         assert!(offen[0].braucht_download());
     }
@@ -868,13 +912,13 @@ mod tests {
         let Some(pool) = pool("t_vod_aufraeumen").await else {
             return;
         };
-        merke_vod(&pool, "v4", "earlysalty", "Alt", 10)
+        merke_vod(&pool, "v4", "earlysalty", "42", "Alt", 10)
             .await
             .unwrap();
-        merke_vod(&pool, "v5", "earlysalty", "Neu", 10)
+        merke_vod(&pool, "v5", "earlysalty", "42", "Neu", 10)
             .await
             .unwrap();
-        let alle = offene_vods(&pool, "earlysalty", 10).await.unwrap();
+        let alle = offene_vods(&pool, "42", 10).await.unwrap();
         setze_hochgeladen(&pool, alle[0].id).await.unwrap();
         sqlx::query(
             "UPDATE twitch_vod_archive_vods SET uploaded_at = CURRENT_TIMESTAMP - INTERVAL '40 days' WHERE id = $1",

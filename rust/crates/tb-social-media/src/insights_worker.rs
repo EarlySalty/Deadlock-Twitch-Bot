@@ -24,14 +24,23 @@ const INTERVAL_SECS: u64 = 30 * 60;
 const INITIAL_DELAY_SECS: u64 = 75;
 const BATCH_SIZE: i64 = 18;
 
+type InsightsClientCache = HashMap<(String, Option<String>), Option<Arc<dyn PlatformUploader>>>;
+
 /// Ein fälliges Analytics-Ziel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalyticsTarget {
     pub clip_db_id: i64,
     pub streamer_login: String,
+    pub twitch_user_id: Option<String>,
     pub platform: String,
     pub platform_video_id: String,
     pub bucket: String,
+}
+
+impl AnalyticsTarget {
+    fn client_cache_key(&self) -> (String, Option<String>) {
+        (self.platform.clone(), self.twitch_user_id.clone())
+    }
 }
 
 /// Wartezeit bis zum nächsten Pull bei Erfolg (Python `SUCCESS_POLL_DELAYS`).
@@ -75,7 +84,7 @@ pub async fn collect_due_targets(pool: &PgPool, limit: i64) -> Vec<AnalyticsTarg
     let limit = limit.max(1);
     let clip_limit = (limit * 4).max(limit);
     let clip_rows = sqlx::query!(
-        "SELECT id AS \"id!\", streamer_login AS \"streamer_login!\", \
+        "SELECT id AS \"id!\", streamer_login AS \"streamer_login!\", twitch_user_id, \
                 COALESCE(uploaded_tiktok, false) AS \"uploaded_tiktok!\", \
                 COALESCE(uploaded_youtube, false) AS \"uploaded_youtube!\", \
                 COALESCE(uploaded_instagram, false) AS \"uploaded_instagram!\", \
@@ -138,6 +147,7 @@ pub async fn collect_due_targets(pool: &PgPool, limit: i64) -> Vec<AnalyticsTarg
                 due.push(AnalyticsTarget {
                     clip_db_id: id,
                     streamer_login: streamer_login.clone(),
+                    twitch_user_id: row.twitch_user_id.clone(),
                     platform: platform.to_string(),
                     platform_video_id: video_id.clone(),
                     bucket: bucket.to_string(),
@@ -172,24 +182,12 @@ impl InsightsWorker {
     async fn resolve_client(
         &self,
         platform: &str,
-        streamer_login: &str,
+        twitch_user_id: Option<&str>,
     ) -> Option<Arc<dyn PlatformUploader>> {
         let creds = self
             .credentials
-            .get_credentials(platform, Some(streamer_login))
+            .get_channel_credentials_for_id(platform, twitch_user_id?)
             .await?;
-        // Kein Rueckfall auf die Sammelverbindung. Der VOD-Worker sperrt ihn
-        // bewusst, hier fehlte er: ein privates oder ungelistetes Partner-Video
-        // wurde mit dem Betreiber-Token abgefragt, lieferte eine leere Trefferliste
-        // und wurde als "0 Views" verbucht.
-        if creds.streamer_login.as_deref() != Some(streamer_login) {
-            tracing::debug!(
-                platform = %platform,
-                streamer = %streamer_login,
-                "Insights uebersprungen: keine eigene Plattform-Verbindung"
-            );
-            return None;
-        }
         resolve_insights_client(platform, &creds)
     }
 
@@ -212,15 +210,14 @@ impl InsightsWorker {
         if targets.is_empty() {
             return;
         }
-        let mut client_cache: HashMap<(String, String), Option<Arc<dyn PlatformUploader>>> =
-            HashMap::new();
+        let mut client_cache = InsightsClientCache::new();
         for target in targets {
-            let key = (target.platform.clone(), target.streamer_login.clone());
+            let key = target.client_cache_key();
             let client = match client_cache.get(&key) {
                 Some(c) => c.clone(),
                 None => {
                     let c = self
-                        .resolve_client(&target.platform, &target.streamer_login)
+                        .resolve_client(&target.platform, target.twitch_user_id.as_deref())
                         .await;
                     client_cache.insert(key, c.clone());
                     c
@@ -290,6 +287,34 @@ mod tests {
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
 
+    #[test]
+    fn client_cache_trennt_ids_bei_gleichem_historischen_login() {
+        let mut owner = AnalyticsTarget {
+            clip_db_id: 1,
+            streamer_login: "alter_name".into(),
+            twitch_user_id: Some("42".into()),
+            platform: "tiktok".into(),
+            platform_video_id: "video".into(),
+            bucket: "24h".into(),
+        };
+        let mut other = owner.clone();
+        other.twitch_user_id = Some("99".into());
+        let mut cache = HashMap::new();
+        cache.insert(owner.client_cache_key(), None);
+        assert!(!cache.contains_key(&other.client_cache_key()));
+        let client: Arc<dyn PlatformUploader> = Arc::new(TikTokUploader::new("test"));
+        cache.insert(other.client_cache_key(), Some(client.clone()));
+        assert!(cache[&owner.client_cache_key()].is_none());
+        assert!(Arc::ptr_eq(
+            cache[&other.client_cache_key()].as_ref().unwrap(),
+            &client
+        ));
+        owner.streamer_login = "neuer_name".into();
+        assert!(cache.contains_key(&owner.client_cache_key()));
+        other.twitch_user_id = None;
+        assert!(!cache.contains_key(&other.client_cache_key()));
+    }
+
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = crate::test_support::test_dsn()?;
         let admin = PgPoolOptions::new()
@@ -315,7 +340,7 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, streamer_login TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), source_kind TEXT NOT NULL DEFAULT 'twitch', discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT NOT NULL, clip_url TEXT NOT NULL, streamer_login TEXT NOT NULL, twitch_user_id TEXT DEFAULT '42', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), source_kind TEXT NOT NULL DEFAULT 'twitch', discarded_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_video_id TEXT, youtube_video_id TEXT, instagram_media_id TEXT)",
             "CREATE TABLE twitch_clips_social_analytics (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL, bucket TEXT, synced_at TIMESTAMPTZ NOT NULL, next_pull_at TIMESTAMPTZ)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
