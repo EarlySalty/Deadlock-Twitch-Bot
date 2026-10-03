@@ -1,11 +1,16 @@
 # Prüfnachweise
 
-- Ausgangsbasis: `origin/main`, Commit `a8abcee2`.
+- Ausgangsbasis: `origin/main`, Commit `a8abcee2`. Vor der abschließenden Prüfung auf `da9a9264` nachgezogen.
 - Eigener Branch: `feat/trustpilot-20261003`, eigener Worktree `/home/nathanael/.worktrees/trustpilot-20261003`.
 - Bestehender Graphify-Graph abgefragt: `StreamerNetworkPage`, `commands`, `help`. Der Graph verweist auf Streamer-Seite, zentralen Befehls-Katalog und CommandEngine.
 - `npm run build`: erfolgreich. Vorhandene Warnungen zu externen Brand-Assets, großen Chunks und React-Keys sind unverändert.
 - `npm test`: 55 bestanden, 0 fehlgeschlagen. Drei gezielte Laufzeittests prüfen deduplizierte Registrierung, doppelte React-Effekte und SPA-Wechsel sowie erneutes Laden nach einem Skriptfehler.
 - Gebauter HTML-Stand enthält den dauerhaft sichtbaren Bewertungslink bereits vor der JavaScript-Ausführung.
-- Gebaute Vorschau: `http://127.0.0.1:4177/streamer/index.html#trustpilot`. Der vorhandene Vite-Preview-Redirect für `/streamer/` wird für die Sichtprüfung umgangen. Dev-Vorschau: `http://127.0.0.1:4178/streamer/#trustpilot`.
-- Rust-Prüfung und Review-Gate folgen vor Abschluss. Kein Cargo-Release-Build wurde parallel zum fremden Release-Lauf gestartet.
+- Rust auf `da9a9264` mit eigenem Debug-Target `/home/nathanael/.cache/trustpilot-rust-target`: drei betroffene Integrationstests bestanden. Vollständiger Befehl: `cargo test --manifest-path rust/Cargo.toml --target-dir /home/nathanael/.cache/trustpilot-rust-target -j 2 -p tb-chat --lib -- --exact commands::tests::commands_offline_und_andere_kategorie_mit_unveraenderten_schaltern commands::tests::bekannte_bots_erhalten_keine_neuen_befehle commands::tests::katalog_befehle_und_aliase_erreichen_den_dispatch`.
+- Zusätzlicher Command-Gesamtfilter vor dem Nachziehen: 74 bestanden, 25 fehlgeschlagen. Derselbe Filter auf unverändertem `a8abcee2` im isolierten Baseline-Worktree liefert 74 bestandene und genau dieselben 25 fehlgeschlagenen Tests. Kein neuer Fehlertest. Der temporäre Baseline-Worktree wurde entfernt.
+- Nach dem Nachziehen fanden sich zwei bereits in `da9a9264` enthaltene Formatabweichungen in `commands.rs` und `command_names.rs`. Auf interne Anweisung der Hauptsession ausschließlich diese Formatierung korrigiert. `cargo fmt --manifest-path rust/Cargo.toml -p tb-chat --check` und `git diff --check`: erfolgreich.
+- Erster Selbstreview über `/home/nathanael/Documents/.claude/gpt-workers/gate_hook.py --review` auf `357603c3`: ALLOW. Einziger Hinweis war die noch ausstehende Sichtprüfung. Der endgültige Stand wird erneut geprüft.
+- Eigene Brave-Prüfung der Hauptsession: Karte mit deutschem Review Collector sichtbar, genau ein Widget-Skript und ein Iframe, Bewertungsbutton öffnet die geprüfte `/evaluate/`-Seite. Einladungsskript wurde von Brave mit `net::ERR_BLOCKED_BY_CLIENT` blockiert; der sichtbare Bewertungslink bleibt nutzbar. Bei 390 Pixeln Breite kein horizontaler Überlauf.
+- Desktop-Screenshot: `/home/nathanael/.claude/sichtpruefung/trustpilot-20261003-vorschau.png`. Gebaute Vorschau: `http://127.0.0.1:4177/streamer/index.html#trustpilot`, Dev-Vorschau: `http://127.0.0.1:4178/streamer/#trustpilot`. Der vorhandene Vite-Preview-Redirect für `/streamer/` wird bei der Sichtprüfung umgangen.
 - Texte mit humanizer und no-em-dashes geprüft. Neue Nutzersätze enthalten echte Umlaute und keine Gedankenstriche.
+- Noch offen vor Auslieferung: unabhängige abschließende Rust-Abnahme, endgültiger Selbstreview, gemeinsame CSP-Abnahme, koordinierter Release nach den laufenden Peer-Cutovers, Neustart und Live-Prüfung. Kein Cargo-Release-Build wurde parallel zum fremden Release-Lauf gestartet.

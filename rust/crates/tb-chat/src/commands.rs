@@ -3131,9 +3131,7 @@ mod tests {
         let api = MockApi::new();
         let engine = make_engine_with_pool(database.pool.clone(), api.clone());
         assert!(engine.handle(&make_event("!dldc", false, false)).await);
-        assert!(api.sent.lock().await[0]
-            .1
-            .contains("Meinst du !community?"));
+        assert!(api.sent.lock().await[0].1.contains("Meinst du !community?"));
         let mut foreign = make_event("!dldc", false, false);
         foreign.broadcaster_user_id = "99".into();
         assert!(

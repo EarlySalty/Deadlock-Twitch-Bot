@@ -226,7 +226,10 @@ mod tests {
             assert!(resolve_command(trigger, &overrides).is_none());
         }
         assert!(conflicting_command("discord", "!community", &overrides).is_none());
-        assert_eq!(conflicting_command("raid", "!dldc", &overrides).map(key), Some("discord"));
+        assert_eq!(
+            conflicting_command("raid", "!dldc", &overrides).map(key),
+            Some("discord")
+        );
         assert!(conflicting_command("discord", "!dldc", &overrides).is_none());
         assert_eq!(
             conflicting_command("raid", "!community", &overrides).map(key),
