@@ -33,3 +33,9 @@ Der Regressionstest simuliert HTTP 404 und kaputtes JSON, verlangt jeweils null 
 ## Warnungen bei weiteren Ausfällen
 
 Die Abnahme fand zusätzlich ungebremste Warnungen im zentralen Connector und eine doppelte Warnung beim Gesprächswächter. Der Connector und die Antwortprüfung verwenden nun den bereits vorhandenen `tb_observability::warning_budget::warn`-Pfad. Dieser begrenzt gleiche Fehlerklassen im laufenden Prozess auf eine Meldung je 24 Stunden und zwei je sieben Tagen und führt die unterdrückten Wiederholungen bei der nächsten Meldung mit. Die lokale doppelte Aufrufmeldung steht nur noch auf Debug. Das bestehende Warnbudget ist ein Prozesszustand und wird bei einem Dienstneustart zurückgesetzt; der separate tägliche Modellresolver behält seine persistierte Begrenzung.
+
+## Stand der Abnahme
+
+Beide ursprünglichen Rust-Dateien und der zusätzliche Connector-Diff bestanden die gezielte `rustfmt --edition 2021 --check`-Prüfung. `git diff --check` war ebenfalls grün. Der Selbstreview über `gate_hook.py --review --base origin/main --head fix/scam-fallflut` lieferte für beide Durchgänge `ALLOW`.
+
+Der Testlauf `cargo test -p tb-chat --lib conversation_scam` wurde während der Abhängigkeitenkompilation nach der neu übermittelten Hostregel geordnet mit Exit 130 beendet. Es liegen daraus keine Testresultate vor. Der eigene Cargo-Prozess war danach beendet. Die abschließenden Compilerprüfungen müssen im integrierten Stand unter den beiden Sperren aus `Documents/.tasks/2026-10-02-offene-branches/HOSTPROBE.md` stattfinden. Der Worker startete keinen weiteren Compiler.
