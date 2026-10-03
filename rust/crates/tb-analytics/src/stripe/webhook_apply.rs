@@ -1653,7 +1653,7 @@ mod tests {
                  raid_boost_enabled INTEGER NOT NULL DEFAULT 0, plan_name TEXT, \
                  manual_plan_id TEXT, manual_plan_expires_at TEXT)",
             "CREATE TABLE twitch_stream_sessions (streamer_login TEXT, started_at TIMESTAMPTZ, duration_seconds BIGINT)",
-            "CREATE TABLE twitch_raid_history (from_broadcaster_id TEXT, to_broadcaster_id TEXT, executed_at TIMESTAMPTZ, success BOOLEAN)",
+            "CREATE TABLE twitch_raid_history (from_broadcaster_id TEXT, to_broadcaster_id TEXT, executed_at TIMESTAMPTZ, success BOOLEAN, viewer_count INTEGER DEFAULT 0)",
             "CREATE TABLE twitch_live_state (twitch_user_id TEXT, is_live INTEGER, last_started_at TIMESTAMPTZ)",
             r#"CREATE TABLE twitch_partner_raid_scores (
                    twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT,
@@ -1667,6 +1667,9 @@ mod tests {
                    today_received_raids INTEGER, last_computed_at TEXT,
                    internal_sent_raids_30d INTEGER, internal_received_raids_7d INTEGER,
                    internal_received_raids_30d INTEGER,
+                   viewer_fairness_score DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+                   sent_viewers_30d BIGINT NOT NULL DEFAULT 0,
+                   received_viewers_30d BIGINT NOT NULL DEFAULT 0,
                    courtesy_score DOUBLE PRECISION DEFAULT 1.0,
                    courtesy_class TEXT,
                    courtesy_observed INTEGER DEFAULT 0
