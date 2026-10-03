@@ -674,7 +674,11 @@ async fn verlorene_brokerantwort_und_unbelegter_altbestand_behalten_herkunft() {
     let db = migrated_pool("tb_clipcontest_origin").await;
     let pool = db.pool.clone();
     let broker = FakeBroker::new(Err("Antwort nach Remotecommit verloren".into()));
-    let submitter = ClipContestSubmitter::new(pool.clone(), lookup(), broker.clone());
+    let lookup = Arc::new(FakeLookup(Mutex::new(vec![
+        clip("LostResponse", "456"),
+        clip("LegacyOrigin", "456"),
+    ])));
+    let submitter = ClipContestSubmitter::new(pool.clone(), lookup, broker.clone());
     let url = Some("https://clips.twitch.tv/LostResponse");
     assert_eq!(
         submitter.submit(request(url)).await,
