@@ -77,3 +77,7 @@ pub mod category;
 #[cfg(test)]
 #[path = "../../../test-support/schema_sql.rs"]
 mod test_sql;
+
+#[cfg(test)]
+#[path = "../../../test-support/postgres.rs"]
+pub(crate) mod test_postgres;

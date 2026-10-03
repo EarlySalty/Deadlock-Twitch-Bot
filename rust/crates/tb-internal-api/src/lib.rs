@@ -427,3 +427,7 @@ pub fn build_internal_router(
                 ),
         )
 }
+
+#[cfg(test)]
+#[path = "../../../test-support/postgres.rs"]
+pub(crate) mod test_postgres;

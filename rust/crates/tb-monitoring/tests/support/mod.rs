@@ -461,6 +461,7 @@ pub async fn pool_with_chatters_schema(schema: &str) -> Option<PgPool> {
             session_id BIGINT NOT NULL,
             streamer_login TEXT NOT NULL,
             viewer_login TEXT NOT NULL,
+            viewer_twitch_user_id TEXT,
             tick_at TIMESTAMPTZ NOT NULL,
             PRIMARY KEY (session_id, viewer_login, tick_at)
         )",

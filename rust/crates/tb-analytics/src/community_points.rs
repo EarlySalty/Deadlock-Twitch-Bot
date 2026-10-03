@@ -294,8 +294,6 @@ pub struct DayInput {
     pub channel_bans: HashSet<(String, String)>,
     /// Global gebannte Twitch-User-IDs.
     pub global_ban_ids: HashSet<String>,
-    /// Global gebannte Logins ohne ID.
-    pub global_ban_logins: HashSet<String>,
     /// (Zuschauer, Kanal) → festgehaltene Entdeckung.
     pub discoveries: HashMap<(String, String), KnownDiscovery>,
     /// (Kanal, Zuschauer) mit Spuren vor Tagesbeginn (nur für neue Paare nötig).
@@ -356,9 +354,6 @@ pub fn compute_day(input: &DayInput) -> DayOutput {
         if !partner_ids.contains(row.channel_id.as_str())
             || is_excluded_viewer(&row.viewer_id, &row.viewer_login, &row.channel_id)
             || input.global_ban_ids.contains(&row.viewer_id)
-            || input
-                .global_ban_logins
-                .contains(&row.viewer_login.to_lowercase())
             || input
                 .channel_bans
                 .contains(&(row.channel_id.clone(), row.viewer_id.clone()))
@@ -520,8 +515,6 @@ const PARTNER_SESSIONS_CTE: &str = "partners AS (
           FROM twitch_stream_sessions s
           JOIN partners p
             ON s.twitch_user_id = p.channel_id
-            OR (COALESCE(s.twitch_user_id, '') = ''
-                AND LOWER(s.streamer_login) = p.channel_login)
          WHERE s.started_at < $4
            AND (s.ended_at IS NULL OR s.ended_at >= $3)
     )";
@@ -541,14 +534,12 @@ async fn load_presence(
     let sql = format!(
         "WITH {PARTNER_SESSIONS_CTE},
         samples AS (
-            SELECT ss.channel_id, sc.chatter_id AS viewer_id, t.viewer_login AS login,
+            SELECT ss.channel_id, t.viewer_twitch_user_id AS viewer_id, t.viewer_login AS login,
                    t.tick_at AS at, ss.ended_at AS session_ended_at
               FROM twitch_viewer_presence_ticks t
               JOIN sessions ss ON ss.id = t.session_id
-              JOIN twitch_session_chatters sc
-                ON sc.session_id = t.session_id AND sc.chatter_login = t.viewer_login
              WHERE t.tick_at >= $3 AND t.tick_at < $4
-               AND COALESCE(TRIM(sc.chatter_id), '') <> ''
+               AND COALESCE(TRIM(t.viewer_twitch_user_id), '') <> ''
             UNION ALL
             SELECT ss.channel_id, m.chatter_id, LOWER(m.chatter_login), m.message_ts,
                    ss.ended_at
@@ -674,22 +665,13 @@ async fn load_bans(
     .await?;
     input.channel_bans = channel_bans.into_iter().collect();
 
-    let global: Vec<(Option<String>, String)> = sqlx::query_as(
-        "SELECT NULLIF(TRIM(chatter_id), ''), LOWER(TRIM(chatter_login))
-           FROM twitch_chatter_global_ban",
+    let global: Vec<String> = sqlx::query_scalar(
+        "SELECT TRIM(chatter_id) FROM twitch_chatter_global_ban
+         WHERE COALESCE(TRIM(chatter_id), '') <> ''",
     )
     .fetch_all(&mut *conn)
     .await?;
-    for (id, login) in global {
-        match id {
-            Some(id) => {
-                input.global_ban_ids.insert(id);
-            }
-            None => {
-                input.global_ban_logins.insert(login);
-            }
-        }
-    }
+    input.global_ban_ids.extend(global);
     Ok(())
 }
 
@@ -711,49 +693,35 @@ async fn load_discoveries(
         .collect())
 }
 
-/// Spuren vor Tagesbeginn in `twitch_chatter_rollup`: Treffer über die ID,
-/// oder über den Login, wenn die Rollup-Zeile keine ID trägt.
+/// Spuren vor Tagesbeginn werden ausschließlich anhand der Zuschauer-ID zugeordnet.
 async fn load_seen_before(
     conn: &mut PgConnection,
-    pairs: &[(String, String, String, String)], // (channel_id, channel_login, viewer_id, viewer_login)
+    pairs: &[(String, String, String, String)],
     day_start: DateTime<Utc>,
 ) -> Result<HashSet<(String, String)>, sqlx::Error> {
     if pairs.is_empty() {
         return Ok(HashSet::new());
     }
-    let mut channel_logins: Vec<String> = pairs.iter().map(|p| p.1.clone()).collect();
+    let mut channel_logins: Vec<String> = pairs.iter().map(|p| p.1.to_lowercase()).collect();
     channel_logins.sort();
     channel_logins.dedup();
     let viewer_ids: Vec<String> = pairs.iter().map(|p| p.2.clone()).collect();
-    let viewer_logins: Vec<String> = pairs.iter().map(|p| p.3.to_lowercase()).collect();
-    let rows: Vec<(String, Option<String>, String)> = sqlx::query_as(
-        "SELECT LOWER(streamer_login), NULLIF(TRIM(chatter_id), ''), LOWER(chatter_login)
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT LOWER(streamer_login), chatter_id
            FROM twitch_chatter_rollup
           WHERE streamer_login = ANY($1)
-            AND (chatter_id = ANY($2) OR (chatter_id IS NULL AND chatter_login = ANY($3)))
-            AND first_seen_at < $4",
+            AND chatter_id = ANY($2)
+            AND first_seen_at < $3",
     )
     .bind(&channel_logins)
     .bind(&viewer_ids)
-    .bind(&viewer_logins)
     .bind(day_start)
     .fetch_all(&mut *conn)
     .await?;
-    let by_id: HashSet<(String, String)> = rows
-        .iter()
-        .filter_map(|(s, id, _)| id.clone().map(|id| (s.clone(), id)))
-        .collect();
-    let by_login: HashSet<(String, String)> = rows
-        .iter()
-        .filter(|(_, id, _)| id.is_none())
-        .map(|(s, _, l)| (s.clone(), l.clone()))
-        .collect();
+    let by_id: HashSet<(String, String)> = rows.into_iter().collect();
     Ok(pairs
         .iter()
-        .filter(|(_, cl, vid, vl)| {
-            by_id.contains(&(cl.clone(), vid.clone()))
-                || by_login.contains(&(cl.clone(), vl.to_lowercase()))
-        })
+        .filter(|(_, cl, vid, _)| by_id.contains(&(cl.clone(), vid.clone())))
         .map(|(c, _, v, _)| (c.clone(), v.clone()))
         .collect())
 }

@@ -1,9 +1,9 @@
 use super::*;
 use axum::{body::Body, extract::ConnectInfo, http::Request};
 use serde_json::Value;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+
 use std::net::SocketAddr;
-use std::str::FromStr;
+
 use tb_transport_twitch::HelixConfig;
 use tower::ServiceExt;
 use wiremock::matchers::{method, path, query_param};
@@ -43,46 +43,19 @@ fn body_wird_geprueft_und_normalisiert() {
     }
 }
 
-async fn migrated_pool(db_name: &str) -> Option<PgPool> {
-    let Ok(dsn) = std::env::var("TB_TEST_DATABASE_URL") else {
-        if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-            panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
-        }
-        eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-        return None;
-    };
-    let admin = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&dsn)
-        .await
-        .expect("admin connect");
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "DROP DATABASE IF EXISTS {db_name} WITH (FORCE)"
-    )))
-    .execute(&admin)
-    .await
-    .unwrap();
-    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db_name}")))
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
-    let opts = PgConnectOptions::from_str(&dsn).unwrap().database(db_name);
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect_with(opts)
-        .await
-        .expect("connect");
+async fn migrated_pool(_db_name: &str) -> crate::test_postgres::TestPostgres {
+    let db = crate::test_postgres::TestPostgres::start_with_timescaledb().await;
+    let pool = db.pool.clone();
     sqlx::query("CREATE EXTENSION IF NOT EXISTS timescaledb")
         .execute(&pool)
         .await
-        .ok();
+        .expect("TimescaleDB");
     let _guard = crate::handlers::TEST_MIGRATE_LOCK.lock().await;
     tb_db::migrate::MIGRATOR
         .run(&pool)
         .await
         .expect("Migrationen");
-    Some(pool)
+    db
 }
 
 async fn helix_mock(users: &[(&str, &str)]) -> (MockServer, HelixClient) {
@@ -186,9 +159,8 @@ fn outcomes(query: &str) -> Request<Body> {
 
 #[tokio::test]
 async fn auth_und_formfehler() {
-    let Some(pool) = migrated_pool("tb_scout_cs_auth").await else {
-        return;
-    };
+    let _db = migrated_pool("tb_scout_cs_auth").await;
+    let pool = _db.pool.clone();
     let r = router(pool, None);
     let body = json!({"twitch_login": "x", "suggested_by_discord_id": DISCORD_A,
                       "idempotency_key": "k"});
@@ -223,9 +195,8 @@ async fn auth_und_formfehler() {
 
 #[tokio::test]
 async fn vorschlag_legt_kandidat_an_idempotent_und_zaehlt_vorschlagende() {
-    let Some(pool) = migrated_pool("tb_scout_cs_flow").await else {
-        return;
-    };
+    let _db = migrated_pool("tb_scout_cs_flow").await;
+    let pool = _db.pool.clone();
     let (_server, helix) = helix_mock(&[("1001", "neuling")]).await;
     let r = router(pool.clone(), Some(helix));
 
@@ -305,9 +276,8 @@ async fn vorschlag_legt_kandidat_an_idempotent_und_zaehlt_vorschlagende() {
 
 #[tokio::test]
 async fn partner_sperren_und_unbekannte_kanaele() {
-    let Some(pool) = migrated_pool("tb_scout_cs_lists").await else {
-        return;
-    };
+    let _db = migrated_pool("tb_scout_cs_lists").await;
+    let pool = _db.pool.clone();
     sqlx::raw_sql(
         "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status)
              VALUES ('2002', 'partnerin', 'archived');
@@ -364,9 +334,8 @@ async fn partner_sperren_und_unbekannte_kanaele() {
 
 #[tokio::test]
 async fn ergebnisse_melden_partnerschaft_mit_stabilem_cursor() {
-    let Some(pool) = migrated_pool("tb_scout_cs_outcomes").await else {
-        return;
-    };
+    let _db = migrated_pool("tb_scout_cs_outcomes").await;
+    let pool = _db.pool.clone();
     let (_server, helix) = helix_mock(&[("1001", "neuling"), ("1002", "zweite")]).await;
     let r = router(pool.clone(), Some(helix));
     call(&r, suggest("neuling", DISCORD_A, "k1")).await;
@@ -417,9 +386,8 @@ async fn ergebnisse_melden_partnerschaft_mit_stabilem_cursor() {
 
 #[tokio::test]
 async fn replay_bleibt_nach_umbenennung_neuvergabe_und_helix_ausfall_gebunden() {
-    let Some(pool) = migrated_pool("tb_scout_cs_replay").await else {
-        return;
-    };
+    let _db = migrated_pool("tb_scout_cs_replay").await;
+    let pool = _db.pool.clone();
     let (_server, helix) = helix_mock(&[("1001", "neuling")]).await;
     let r = router(pool.clone(), Some(helix));
     let original = call(&r, suggest("neuling", DISCORD_A, "replay-k1")).await;
@@ -473,9 +441,8 @@ async fn replay_bleibt_nach_umbenennung_neuvergabe_und_helix_ausfall_gebunden() 
 
 #[tokio::test]
 async fn alle_guardpfade_unterscheiden_konten_mit_gleichem_login() {
-    let Some(pool) = migrated_pool("tb_scout_cs_ids").await else {
-        return;
-    };
+    let _db = migrated_pool("tb_scout_cs_ids").await;
+    let pool = _db.pool.clone();
     sqlx::raw_sql("INSERT INTO twitch_partners (twitch_user_id, twitch_login, status) VALUES ('9101','partner_alt','archived');
         INSERT INTO twitch_raid_blacklist (target_id,target_login) VALUES ('9102','raid_alt');
         INSERT INTO twitch_partner_signup_denylist (twitch_user_id,twitch_login,reason,added_by) VALUES ('9103','signup_alt','test','admin');
@@ -571,9 +538,8 @@ async fn alle_guardpfade_unterscheiden_konten_mit_gleichem_login() {
 
 #[tokio::test]
 async fn outcome_cursor_hat_eindeutige_mikrosekunden_und_verliert_keine_zeile() {
-    let Some(pool) = migrated_pool("tb_scout_cs_cursor").await else {
-        return;
-    };
+    let _db = migrated_pool("tb_scout_cs_cursor").await;
+    let pool = _db.pool.clone();
     for i in 0..25 {
         tb_scout::community::vorschlag_einreichen(
             &pool,

@@ -2287,6 +2287,7 @@ twitch_viewer_presence_ticks|streamer_login|text|NO|
 twitch_viewer_presence_ticks|tick_at|timestamp with time zone|NO|
 twitch_viewer_presence_ticks|twitch_user_id|text|YES|
 twitch_viewer_presence_ticks|viewer_login|text|NO|
+twitch_viewer_presence_ticks|viewer_twitch_user_id|text|YES|
 twitch_vod_archive_parts|file_path|text|NO|
 twitch_vod_archive_parts|id|bigint|NO|nextval('twitch_vod_archive_parts_id_seq'::regclass)
 twitch_vod_archive_parts|last_error|text|YES|

@@ -22,7 +22,6 @@ use tb_chat::WHITELISTED_BOTS;
 use tb_transport_twitch::HelixError;
 use tokio::sync::Mutex;
 
-use crate::record_presence_ticks;
 use crate::subscriptions::ModeratorProvisioner;
 
 /// Cooldown nach fehlgeschlagenem Mod-Self-Heal (Python `_mod_retry_cooldown`,
@@ -35,7 +34,6 @@ const SELF_HEAL_COOLDOWN: Duration = Duration::from_secs(600);
 /// damit ein frisch gemoddeter Bot nach spätestens einem Backoff-Fenster wieder
 /// versucht wird (ein Bot-Pfad-Erfolg löscht den Backoff sofort).
 const NOT_MOD_BACKOFF: Duration = Duration::from_secs(900);
-
 
 // ---------------------------------------------------------------------------
 // Injizierte Ports (Implementierung lebt im Composition-Root / Binary)
@@ -471,20 +469,24 @@ pub async fn record_chatters_for_streamer(
         )
         .execute(&mut *tx)
         .await?;
+        // Anwesenheit und Plattform-ID gemeinsam mit den übrigen Daten schreiben.
+        sqlx::query(
+            "INSERT INTO twitch_viewer_presence_ticks
+            (session_id, streamer_login, viewer_login, viewer_twitch_user_id, tick_at)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (session_id, viewer_login, tick_at) DO UPDATE SET
+                viewer_twitch_user_id = EXCLUDED.viewer_twitch_user_id",
+        )
+        .bind(streamer.active_session_id)
+        .bind(&streamer.streamer_login)
+        .bind(login)
+        .bind(chatter_id.as_deref())
+        .bind(tick_at)
+        .execute(&mut *tx)
+        .await?;
     }
 
     tx.commit().await?;
-
-    // 4) presence_ticks (fertige, idempotente fn aus irc_lurker.rs).
-    //    presence_ticks hat keine chatter_id-Spalte → nur die Logins.
-    record_presence_ticks(
-        pool,
-        streamer.active_session_id,
-        &streamer.streamer_login,
-        &logins,
-        tick_at,
-    )
-    .await;
 
     Ok((viewers.len() as u64, new_lurkers))
 }
@@ -603,8 +605,16 @@ impl ChattersCollector {
 
             let result = poll_streamer_once(
                 streamer,
-                if bot_usable { bot_token.as_deref() } else { None },
-                if bot_usable { bot_user_id.as_deref() } else { None },
+                if bot_usable {
+                    bot_token.as_deref()
+                } else {
+                    None
+                },
+                if bot_usable {
+                    bot_user_id.as_deref()
+                } else {
+                    None
+                },
                 streamer_token.as_deref(),
                 self.fetcher.as_ref(),
                 self.provisioner.as_ref(),

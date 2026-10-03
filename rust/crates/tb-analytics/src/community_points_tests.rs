@@ -378,55 +378,29 @@ fn cursor_format_ist_rfc3339_mit_mikrosekunden_wenn_noetig() {
 // ─── DB-Tests (Wegwerf-Timescale, alle Migrationen) ─────────────────────────
 
 pub(crate) mod db {
-    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use sqlx::postgres::PgPoolOptions;
     use sqlx::PgPool;
-    use std::str::FromStr;
 
-    /// Frische Datenbank mit allen Migrationen; `None` → Test überspringen.
-    pub async fn migrated_pool(db_name: &str) -> Option<PgPool> {
+    /// Isolierte Datenbank mit allen Migrationen; fehlende Infrastruktur ist ein Fehler.
+    pub async fn migrated_pool(db_name: &str) -> crate::test_postgres::TestPostgres {
         migrated_pool_with_max_connections(db_name, 3).await
     }
 
     pub async fn migrated_pool_with_max_connections(
-        db_name: &str,
+        _db_name: &str,
         max_connections: u32,
-    ) -> Option<PgPool> {
-        let Ok(dsn) = std::env::var("TB_TEST_DATABASE_URL") else {
-            if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
-            }
-            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-            return None;
-        };
-        assert!(db_name
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'));
-        let admin = PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&dsn)
-            .await
-            .expect("admin connect");
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "DROP DATABASE IF EXISTS {db_name} WITH (FORCE)"
-        )))
-        .execute(&admin)
-        .await
-        .unwrap();
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db_name}")))
-            .execute(&admin)
-            .await
-            .unwrap();
-        admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().database(db_name);
-        let pool = PgPoolOptions::new()
+    ) -> crate::test_postgres::TestPostgres {
+        let mut db = crate::test_postgres::TestPostgres::start_with_timescaledb().await;
+        db.pool = PgPoolOptions::new()
             .max_connections(max_connections)
-            .connect_with(opts)
+            .connect_with((*db.pool.connect_options()).clone())
             .await
-            .expect("connect");
+            .expect("Isolierter Pool");
+        let pool = db.pool.clone();
         sqlx::query("CREATE EXTENSION IF NOT EXISTS timescaledb")
             .execute(&pool)
             .await
-            .ok();
+            .expect("TimescaleDB");
         // Migrationen legen globale Rollen an: parallel laufende Tests würden
         // sich dabei gegenseitig stören ("tuple concurrently updated").
         static MIGRATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -435,7 +409,7 @@ pub(crate) mod db {
             .run(&pool)
             .await
             .expect("Migrationen");
-        Some(pool)
+        db
     }
 
     /// Partner 100 (alpha) und 200 (beta), beide aktiv; Session je Kanal.
@@ -473,14 +447,15 @@ async fn ticks(pool: &PgPool, session: i64, login: &str, id: &str, from: &str, n
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO twitch_viewer_presence_ticks (session_id, streamer_login, viewer_login, tick_at)
-         SELECT $1, s.streamer_login, $2, $3::timestamptz + g * INTERVAL '30 seconds'
+        "INSERT INTO twitch_viewer_presence_ticks (session_id, streamer_login, viewer_login, tick_at, viewer_twitch_user_id)
+         SELECT $1, s.streamer_login, $2, $3::timestamptz + g * INTERVAL '30 seconds', $5
            FROM twitch_stream_sessions s, generate_series(0, $4 - 1) g WHERE s.id = $1",
     )
     .bind(session)
     .bind(login)
     .bind(ts(from))
     .bind(n)
+    .bind(id)
     .execute(pool)
     .await
     .unwrap();
@@ -488,9 +463,8 @@ async fn ticks(pool: &PgPool, session: i64, login: &str, id: &str, from: &str, n
 
 #[tokio::test]
 async fn aggregation_aus_rohdaten_ist_idempotent() {
-    let Some(pool) = db::migrated_pool("tb_cp_aggregation").await else {
-        return;
-    };
+    let _db = db::migrated_pool("tb_cp_aggregation").await;
+    let pool = _db.pool.clone();
     db::seed_partners(&pool).await;
     let partners = load_active_partners(&pool).await.unwrap();
     assert_eq!(partners.len(), 2, "{partners:?}");
@@ -606,9 +580,8 @@ async fn aggregation_aus_rohdaten_ist_idempotent() {
 
 #[tokio::test]
 async fn beendete_session_begrenzt_tick_abdeckung() {
-    let Some(pool) = db::migrated_pool("tb_cp_ended_session").await else {
-        return;
-    };
+    let _db = db::migrated_pool("tb_cp_ended_session").await;
+    let pool = _db.pool.clone();
     db::seed_partners(&pool).await;
     ticks(&pool, 1, "viewer", "3", "2026-10-01T08:00:00Z", 10).await;
     sqlx::query("UPDATE twitch_stream_sessions SET ended_at = $2 WHERE id = $1")
@@ -640,10 +613,8 @@ async fn beendete_session_begrenzt_tick_abdeckung() {
 
 #[tokio::test]
 async fn aggregation_hält_laden_und_schreiben_auf_einer_pool_connection() {
-    let Some(pool) = db::migrated_pool_with_max_connections("tb_cp_single_connection", 1).await
-    else {
-        return;
-    };
+    let _db = db::migrated_pool_with_max_connections("tb_cp_single_connection", 1).await;
+    let pool = _db.pool.clone();
 
     let stats = aggregate_day(&pool, day("2026-10-01"), ts("2026-10-01T20:00:00Z"))
         .await
@@ -653,9 +624,8 @@ async fn aggregation_hält_laden_und_schreiben_auf_einer_pool_connection() {
 
 #[tokio::test]
 async fn cursor_ist_stabil_und_eindeutig() {
-    let Some(pool) = db::migrated_pool("tb_cp_cursor").await else {
-        return;
-    };
+    let _db = db::migrated_pool("tb_cp_cursor").await;
+    let pool = _db.pool.clone();
     db::seed_partners(&pool).await;
     for i in 0..25 {
         ticks(
@@ -694,9 +664,8 @@ async fn cursor_ist_stabil_und_eindeutig() {
 
 #[tokio::test]
 async fn streamer_cursor_verliert_bei_gleichzeitigem_tageslauf_keine_zeile() {
-    let Some(pool) = db::migrated_pool("tb_cp_streamer_cursor").await else {
-        return;
-    };
+    let _db = db::migrated_pool("tb_cp_streamer_cursor").await;
+    let pool = _db.pool.clone();
     for i in 0..25_i64 {
         let id = format!("{}", 5000 + i);
         let login = format!("kanal{i}");
@@ -732,4 +701,44 @@ async fn streamer_cursor_verliert_bei_gleichzeitigem_tageslauf_keine_zeile() {
         }
     }
     assert_eq!(seen.len(), 25);
+}
+
+#[tokio::test]
+async fn presence_id_bleibt_bei_login_neuvergabe_und_bann_gebunden() {
+    let _db = db::migrated_pool("tb_cp_identity").await;
+    let pool = _db.pool.clone();
+    db::seed_partners(&pool).await;
+    ticks(&pool, 1, "alter_login", "111", "2026-10-01T08:00:00Z", 10).await;
+    sqlx::query("UPDATE twitch_session_chatters SET chatter_id='222' WHERE session_id=1 AND chatter_login='alter_login'")
+        .execute(&pool).await.unwrap();
+    run_aggregation(&pool, ts("2026-10-01T12:00:00Z"), false)
+        .await
+        .unwrap();
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT twitch_user_id FROM twitch_community_points_viewer_daily WHERE points_watch > 0",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(ids, ["111"]);
+    sqlx::query("INSERT INTO twitch_chatter_global_ban(chatter_login,chatter_id) VALUES ('alter_login','111')")
+        .execute(&pool).await.unwrap();
+    ticks(&pool, 1, "alter_login", "333", "2026-10-01T09:00:00Z", 10).await;
+    run_aggregation(&pool, ts("2026-10-01T12:00:00Z"), false)
+        .await
+        .unwrap();
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT twitch_user_id FROM twitch_community_points_viewer_daily WHERE points_watch > 0",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(ids, ["333"]);
+    let old_points: i32 = sqlx::query_scalar(
+        "SELECT points_watch FROM twitch_community_points_viewer_daily WHERE twitch_user_id='111'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(old_points, 0);
 }

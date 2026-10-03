@@ -1,10 +1,9 @@
 use super::*;
 use axum::{body::Body, extract::ConnectInfo, http::Request};
 use serde_json::Value;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+
 use std::{
     net::SocketAddr,
-    str::FromStr,
     sync::atomic::{AtomicUsize, Ordering},
 };
 use tb_chat::clip_contest_submit::{
@@ -13,46 +12,19 @@ use tb_chat::clip_contest_submit::{
 };
 use tower::ServiceExt;
 
-async fn migrated_pool(db_name: &str) -> Option<PgPool> {
-    let Ok(dsn) = std::env::var("TB_TEST_DATABASE_URL") else {
-        if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-            panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
-        }
-        eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-        return None;
-    };
-    let admin = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&dsn)
-        .await
-        .expect("admin connect");
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "DROP DATABASE IF EXISTS {db_name} WITH (FORCE)"
-    )))
-    .execute(&admin)
-    .await
-    .unwrap();
-    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db_name}")))
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
-    let opts = PgConnectOptions::from_str(&dsn).unwrap().database(db_name);
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect_with(opts)
-        .await
-        .expect("connect");
+async fn migrated_pool(_db_name: &str) -> crate::test_postgres::TestPostgres {
+    let db = crate::test_postgres::TestPostgres::start_with_timescaledb().await;
+    let pool = db.pool.clone();
     sqlx::query("CREATE EXTENSION IF NOT EXISTS timescaledb")
         .execute(&pool)
         .await
-        .ok();
+        .expect("TimescaleDB");
     let _guard = crate::handlers::TEST_MIGRATE_LOCK.lock().await;
     tb_db::migrate::MIGRATOR
         .run(&pool)
         .await
         .expect("Migrationen");
-    Some(pool)
+    db
 }
 
 struct Lookup;
@@ -109,9 +81,8 @@ async fn call(router: &axum::Router, request: Request<Body>) -> (StatusCode, Val
 }
 #[tokio::test]
 async fn producer_prueft_auth_identitaet_helix_und_dauerhaften_drift_replay() {
-    let Some(pool) = migrated_pool("tb_clip_producer").await else {
-        return;
-    };
+    let _db = migrated_pool("tb_clip_producer").await;
+    let pool = _db.pool.clone();
     sqlx::raw_sql("INSERT INTO twitch_partners(twitch_user_id,twitch_login,status) VALUES ('456','authentischer_partner','active'),('457','inaktiv','archived');
         INSERT INTO twitch_clips_social_media(id,clip_id,clip_url,streamer_login,twitch_user_id,created_at) VALUES
         (1,'OwnClip','https://clips.twitch.tv/OwnClip','falscher_client_login','456',NOW()),

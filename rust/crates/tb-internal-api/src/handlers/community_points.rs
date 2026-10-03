@@ -94,9 +94,9 @@ mod tests {
         extract::ConnectInfo,
         http::{Request, StatusCode},
     };
-    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+
     use std::net::SocketAddr;
-    use std::str::FromStr;
+
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -137,46 +137,19 @@ mod tests {
         assert!(parse_cursor_params(&params(&[("updated_since", "gestern")])).is_err());
     }
 
-    async fn migrated_pool(db_name: &str) -> Option<PgPool> {
-        let Ok(dsn) = std::env::var("TB_TEST_DATABASE_URL") else {
-            if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
-            }
-            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-            return None;
-        };
-        let admin = PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&dsn)
-            .await
-            .expect("admin connect");
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "DROP DATABASE IF EXISTS {db_name} WITH (FORCE)"
-        )))
-        .execute(&admin)
-        .await
-        .unwrap();
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db_name}")))
-            .execute(&admin)
-            .await
-            .unwrap();
-        admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().database(db_name);
-        let pool = PgPoolOptions::new()
-            .max_connections(3)
-            .connect_with(opts)
-            .await
-            .expect("connect");
+    async fn migrated_pool(_db_name: &str) -> crate::test_postgres::TestPostgres {
+        let db = crate::test_postgres::TestPostgres::start_with_timescaledb().await;
+        let pool = db.pool.clone();
         sqlx::query("CREATE EXTENSION IF NOT EXISTS timescaledb")
             .execute(&pool)
             .await
-            .ok();
+            .expect("TimescaleDB");
         let _guard = crate::handlers::TEST_MIGRATE_LOCK.lock().await;
         tb_db::migrate::MIGRATOR
             .run(&pool)
             .await
             .expect("Migrationen");
-        Some(pool)
+        db
     }
 
     fn router(pool: PgPool) -> axum::Router {
@@ -245,9 +218,8 @@ mod tests {
 
     #[tokio::test]
     async fn auth_und_loopback_wie_streamer_invites() {
-        let Some(pool) = migrated_pool("tb_cp_handler_auth").await else {
-            return;
-        };
+        let _db = migrated_pool("tb_cp_handler_auth").await;
+        let pool = _db.pool.clone();
         let (s, _) = call(&pool, req("viewers", None, "127.0.0.1:5000")).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
         let (s, _) = call(&pool, req("streamers", Some("falsch"), "127.0.0.1:5000")).await;
@@ -270,9 +242,8 @@ mod tests {
 
     #[tokio::test]
     async fn viewers_liefert_vertragsform_und_stabilen_cursor() {
-        let Some(pool) = migrated_pool("tb_cp_handler_viewers").await else {
-            return;
-        };
+        let _db = migrated_pool("tb_cp_handler_viewers").await;
+        let pool = _db.pool.clone();
         seed(&pool).await;
         let (s, v) = call(&pool, req("viewers?limit=1", Some(TOKEN), "127.0.0.1:5000")).await;
         assert_eq!(s, StatusCode::OK);
@@ -327,9 +298,8 @@ mod tests {
 
     #[tokio::test]
     async fn streamers_liefert_vertragsform() {
-        let Some(pool) = migrated_pool("tb_cp_handler_streamers").await else {
-            return;
-        };
+        let _db = migrated_pool("tb_cp_handler_streamers").await;
+        let pool = _db.pool.clone();
         seed(&pool).await;
         let (s, v) = call(&pool, req("streamers", Some(TOKEN), "127.0.0.1:5000")).await;
         assert_eq!(s, StatusCode::OK);

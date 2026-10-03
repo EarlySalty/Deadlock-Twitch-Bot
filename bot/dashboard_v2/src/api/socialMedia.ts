@@ -1,4 +1,5 @@
 import { withCookieCredentials } from './core';
+import { fetchAuthStatus } from './auth';
 import type {
   ApprovalMode,
   ClipAnalyticsResponse,
@@ -354,9 +355,14 @@ export interface ClipContestResult {
  * lesbarer Satz zurück, deshalb hier ohne `fetchJson`.
  */
 export async function submitClipToContest(clipDbId: number): Promise<ClipContestResult> {
+  const auth = await fetchAuthStatus();
+  const csrf = auth.csrfToken ?? auth.csrf_token;
   const response = await fetch(
     `/social-media/api/clips/${clipDbId}/clip-contest`,
-    withCookieCredentials({ method: 'POST' }),
+    withCookieCredentials({
+      method: 'POST',
+      headers: csrf ? { 'X-CSRF-Token': csrf } : {},
+    }),
   );
   let data: Partial<ClipContestResult> = {};
   try {

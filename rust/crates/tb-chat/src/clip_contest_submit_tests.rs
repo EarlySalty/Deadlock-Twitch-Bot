@@ -304,42 +304,13 @@ fn request(url: Option<&str>) -> SubmitRequest {
     }
 }
 
-async fn migrated_pool(db_name: &str) -> Option<PgPool> {
-    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-    use std::str::FromStr;
-    let Ok(dsn) = std::env::var("TB_TEST_DATABASE_URL") else {
-        if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-            panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
-        }
-        eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-        return None;
-    };
-    let admin = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&dsn)
-        .await
-        .expect("admin connect");
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "DROP DATABASE IF EXISTS {db_name} WITH (FORCE)"
-    )))
-    .execute(&admin)
-    .await
-    .unwrap();
-    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db_name}")))
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
-    let opts = PgConnectOptions::from_str(&dsn).unwrap().database(db_name);
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect_with(opts)
-        .await
-        .expect("connect");
+async fn migrated_pool(_db_name: &str) -> crate::test_postgres::TestPostgres {
+    let db = crate::test_postgres::TestPostgres::start_with_timescaledb().await;
+    let pool = db.pool.clone();
     sqlx::query("CREATE EXTENSION IF NOT EXISTS timescaledb")
         .execute(&pool)
         .await
-        .ok();
+        .expect("TimescaleDB");
     static MIGRATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _guard = MIGRATE_LOCK.lock().await;
     tb_db::migrate::MIGRATOR
@@ -353,7 +324,7 @@ async fn migrated_pool(db_name: &str) -> Option<PgPool> {
     .execute(&pool)
     .await
     .unwrap();
-    Some(pool)
+    db
 }
 
 async fn status_of(pool: &PgPool, clip_id: &str) -> Option<(String, String, Option<String>)> {
@@ -368,9 +339,8 @@ async fn status_of(pool: &PgPool, clip_id: &str) -> Option<(String, String, Opti
 
 #[tokio::test]
 async fn einreichung_angenommen_dann_schon_drin_ohne_zweiten_brokeraufruf() {
-    let Some(pool) = migrated_pool("tb_clipcontest_flow").await else {
-        return;
-    };
+    let _db = migrated_pool("tb_clipcontest_flow").await;
+    let pool = _db.pool.clone();
     let broker = FakeBroker::new(accepted(123));
     let submitter = ClipContestSubmitter::new(pool.clone(), lookup(), broker.clone());
     let outcome = submitter
@@ -413,9 +383,8 @@ async fn einreichung_angenommen_dann_schon_drin_ohne_zweiten_brokeraufruf() {
 
 #[tokio::test]
 async fn drift_duplikat_bleibt_persistiert_und_verhindert_weiteren_brokeraufruf() {
-    let Some(pool) = migrated_pool("tb_clipcontest_drift").await else {
-        return;
-    };
+    let _db = migrated_pool("tb_clipcontest_drift").await;
+    let pool = _db.pool.clone();
     let broker = FakeBroker::new(Ok(BrokerClipResponse {
         status: BrokerClipStatus::Duplicate,
         submission_id: Some(77),
@@ -461,9 +430,8 @@ async fn drift_duplikat_bleibt_persistiert_und_verhindert_weiteren_brokeraufruf(
 
 #[tokio::test]
 async fn ablehnungen_vor_dem_broker() {
-    let Some(pool) = migrated_pool("tb_clipcontest_reject").await else {
-        return;
-    };
+    let _db = migrated_pool("tb_clipcontest_reject").await;
+    let pool = _db.pool.clone();
     let broker = FakeBroker::new(accepted(1));
     let submitter = ClipContestSubmitter::new(pool.clone(), lookup(), broker.clone());
     assert_eq!(
@@ -508,9 +476,8 @@ async fn ablehnungen_vor_dem_broker() {
 
 #[tokio::test]
 async fn tageslimit_drei_je_kanal_und_broker_status() {
-    let Some(pool) = migrated_pool("tb_clipcontest_limit").await else {
-        return;
-    };
+    let _db = migrated_pool("tb_clipcontest_limit").await;
+    let pool = _db.pool.clone();
     let broker = FakeBroker::new(accepted(1));
     let submitter = ClipContestSubmitter::new(pool.clone(), lookup(), broker.clone());
     // Duplikat aus dem Discord zählt nicht als neue Einreichung.
@@ -569,9 +536,8 @@ async fn tageslimit_drei_je_kanal_und_broker_status() {
 
 #[tokio::test]
 async fn broker_offline_dann_neuer_versuch_und_doppelsend_schutz() {
-    let Some(pool) = migrated_pool("tb_clipcontest_retry").await else {
-        return;
-    };
+    let _db = migrated_pool("tb_clipcontest_retry").await;
+    let pool = _db.pool.clone();
     let broker = FakeBroker::new(Err("connection refused".into()));
     let submitter = ClipContestSubmitter::new(pool.clone(), lookup(), broker.clone());
     let url = Some("https://clips.twitch.tv/ClipEins");
@@ -624,9 +590,8 @@ async fn broker_offline_dann_neuer_versuch_und_doppelsend_schutz() {
 
 #[tokio::test]
 async fn ohne_url_juengster_clip_der_laufenden_session() {
-    let Some(pool) = migrated_pool("tb_clipcontest_latest").await else {
-        return;
-    };
+    let _db = migrated_pool("tb_clipcontest_latest").await;
+    let pool = _db.pool.clone();
     sqlx::raw_sql(
         "INSERT INTO twitch_stream_sessions (id, streamer_login, started_at, twitch_user_id)
              VALUES (1, 'name', NOW() - INTERVAL '5 hours', '456');
