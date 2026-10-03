@@ -1571,3 +1571,51 @@ async fn bann_aenderungen_waehrend_erster_aggregation_bleiben_offen() {
         assert_eq!(aggregate_day(pool, d, now).await.unwrap(), DayWriteStats::default());
     }
 }
+
+#[tokio::test]
+async fn banntrigger_markieren_unveroeffentlichte_ticks_und_chatvorgeschichte() {
+    let db = db::migrated_pool("tb_cp_raw_ban_days").await;
+    let pool = &db.pool;
+    db::seed_partners(pool).await;
+    sqlx::raw_sql(
+        "UPDATE twitch_stream_sessions SET started_at='2026-09-29 06:00Z' WHERE id=2;
+         INSERT INTO twitch_viewer_presence_ticks(session_id,streamer_login,viewer_login,tick_at,viewer_twitch_user_id)
+         VALUES (1,'alpha','viewer','2026-10-01 21:59:30Z','111');
+         INSERT INTO twitch_chat_messages(session_id,streamer_login,chatter_login,chatter_id,message_ts,content)
+         VALUES (2,'beta','zweiter','222','2026-09-29 21:30Z','Historische Nachricht');",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let ticks_days = vec![day("2026-10-01"), day("2026-10-02")];
+    let chat_days = vec![day("2026-09-29"), day("2026-09-30")];
+    let mut both_days = chat_days.clone();
+    both_days.extend(&ticks_days);
+    for (statement, expected) in [
+        ("INSERT INTO twitch_ban_events(twitch_user_id,event_type,target_id,received_at) VALUES ('100','ban','111','2026-10-10 12:00Z')", &ticks_days),
+        ("UPDATE twitch_ban_events SET twitch_user_id='200',target_id='222'", &both_days),
+        ("DELETE FROM twitch_ban_events", &chat_days),
+        ("INSERT INTO twitch_chatter_global_ban(chatter_login,chatter_id) VALUES ('viewer','111')", &ticks_days),
+        ("UPDATE twitch_chatter_global_ban SET chatter_id='222'", &both_days),
+        ("DELETE FROM twitch_chatter_global_ban", &chat_days),
+    ] {
+        sqlx::query("DELETE FROM twitch_community_points_dirty_days")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(statement).execute(pool).await.unwrap();
+        let days: Vec<NaiveDate> = sqlx::query_scalar(
+            "SELECT DISTINCT day FROM twitch_community_points_dirty_days ORDER BY day",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        assert_eq!(&days, expected, "{statement}");
+    }
+    let published: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM twitch_community_points_viewer_daily")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(published, 0);
+}
