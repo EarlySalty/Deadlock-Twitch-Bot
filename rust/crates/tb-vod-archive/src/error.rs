@@ -6,6 +6,8 @@ use tb_social_media::uploaders::UploadError;
 pub enum VodArchiveError {
     #[error("Twitch: {0}")]
     Twitch(#[from] tb_transport_twitch::HelixError),
+    #[error("yt-dlp meldet VOD {twitch_id} als nicht verfügbar")]
+    VideoNichtGefunden { twitch_id: String },
     #[error("Upload-Sitzung konnte nicht geschützt gelesen oder gespeichert werden; Migration und Schlüssel prüfen.")]
     SessionCrypto,
     #[error("{programm} hat die Zeitgrenze von {sekunden}s ueberschritten")]

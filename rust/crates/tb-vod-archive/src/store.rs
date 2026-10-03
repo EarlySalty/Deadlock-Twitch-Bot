@@ -23,6 +23,7 @@ pub const STATUS_HOCHGELADEN: &str = "uploaded";
 pub const STATUS_DOWNLOAD_FEHLER: &str = "download_failed";
 pub const STATUS_UPLOAD_FEHLER: &str = "upload_failed";
 pub const STATUS_ARCHIVIERT: &str = "archived";
+pub const STATUS_NICHT_VERFUEGBAR: &str = "unavailable";
 
 pub const TEIL_OFFEN: &str = "pending";
 pub const TEIL_FERTIG: &str = "done";
@@ -131,7 +132,7 @@ pub async fn offene_vods(
     let rows = sqlx::query(
         "SELECT id, twitch_id, title, duration_sec, recorded_at, status, local_path \
          FROM twitch_vod_archive_vods \
-         WHERE twitch_user_id = $1 AND status NOT IN ('uploaded', 'archived') \
+         WHERE twitch_user_id = $1 AND status NOT IN ('uploaded', 'archived', 'unavailable') \
          ORDER BY discovered_at ASC, id ASC LIMIT $2",
     )
     .bind(twitch_user_id)
@@ -172,17 +173,67 @@ pub async fn setze_fehler(
     status: &str,
     fehler: &str,
 ) -> Result<(), VodArchiveError> {
+    schreibe_fehler(pool, id, status, fehler, false).await
+}
+
+/// Der äußere Workerfehler berücksichtigt einen inzwischen fertigen Download.
+pub async fn setze_bearbeitungsfehler(
+    pool: &PgPool,
+    id: i64,
+    status: &str,
+    fehler: &str,
+) -> Result<(), VodArchiveError> {
+    schreibe_fehler(pool, id, status, fehler, true).await
+}
+
+async fn schreibe_fehler(
+    pool: &PgPool,
+    id: i64,
+    status: &str,
+    fehler: &str,
+    nach_bearbeitung: bool,
+) -> Result<(), VodArchiveError> {
     let kurz: String = fehler.chars().take(1000).collect();
     sqlx::query(
         "UPDATE twitch_vod_archive_vods \
-         SET status = $2, last_error = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+         SET status = CASE WHEN $4 AND $2 = 'download_failed' AND status IN ('downloaded', 'upload_failed') \
+                          THEN 'upload_failed' ELSE $2 END, \
+             last_error = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $1 \
+         AND status NOT IN ('uploaded', 'archived', 'unavailable')",
     )
     .bind(id)
     .bind(status)
     .bind(&kurz)
+    .bind(nach_bearbeitung)
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Beendet nur einen ungesicherten Download nach bestätigter Twitch-Abwesenheit.
+pub async fn setze_nicht_verfuegbar(
+    pool: &PgPool,
+    id: i64,
+    restdaten: bool,
+) -> Result<bool, VodArchiveError> {
+    let notiz = if restdaten {
+        "Twitch bestätigt: VOD nicht mehr verfügbar. Restdaten vorhanden, nicht vollständig gesichert."
+    } else {
+        "Twitch bestätigt: VOD nicht mehr verfügbar. Keine vollständige Sicherung vorhanden."
+    };
+    let result = sqlx::query(
+        "UPDATE twitch_vod_archive_vods SET status = 'unavailable', last_error = $2, \
+         updated_at = CURRENT_TIMESTAMP WHERE id = $1 \
+         AND status IN ('downloading', 'download_failed') AND uploaded_at IS NULL \
+         AND downloaded_at IS NULL AND local_path IS NULL \
+         AND NOT EXISTS (SELECT 1 FROM twitch_vod_archive_parts p WHERE p.vod_id = $1 \
+                         AND (p.status = 'done' OR p.youtube_video_id IS NOT NULL))",
+    )
+    .bind(id)
+    .bind(notiz)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
 }
 
 pub async fn setze_geladen(
