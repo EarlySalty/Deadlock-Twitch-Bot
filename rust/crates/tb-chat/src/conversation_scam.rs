@@ -385,15 +385,15 @@ struct RawVerdict {
     pattern: Option<String>,
 }
 
-fn parse_verdict(raw: &str, channel: &str, chatter: &str) -> Verdict {
+fn parse_verdict(raw: &str, channel: &str, chatter: &str) -> Result<Verdict, &'static str> {
     match parse_verdict_result(raw) {
-        Ok(verdict) => verdict,
+        Ok(verdict) => Ok(verdict),
         Err(reason) => {
             warn!(
                 reason,
                 channel, chatter, "Conversation-Scam-Judge-Antwort unbrauchbar"
             );
-            Verdict::unsure()
+            Err(reason)
         }
     }
 }
@@ -465,7 +465,7 @@ fn extract_json_object(raw: &str) -> Option<&str> {
 
 #[async_trait]
 pub trait ScamJudge: Send + Sync {
-    async fn judge(&self, dialog: &mut DialogState) -> Verdict;
+    async fn judge(&self, dialog: &mut DialogState) -> Result<Verdict, &'static str>;
 }
 
 pub struct LlmScamJudge {
@@ -480,7 +480,7 @@ impl LlmScamJudge {
 
 #[async_trait]
 impl ScamJudge for LlmScamJudge {
-    async fn judge(&self, dialog: &mut DialogState) -> Verdict {
+    async fn judge(&self, dialog: &mut DialogState) -> Result<Verdict, &'static str> {
         let messages = Value::Array(
             dialog
                 .messages
@@ -499,8 +499,9 @@ impl ScamJudge for LlmScamJudge {
             .await
         {
             Ok(raw) => {
+                let verdict = parse_verdict(&raw, &dialog.channel_login, &dialog.chatter_login)?;
                 dialog.append_assistant(raw.clone());
-                parse_verdict(&raw, &dialog.channel_login, &dialog.chatter_login)
+                Ok(verdict)
             }
             Err(error) => {
                 warn!(
@@ -510,7 +511,7 @@ impl ScamJudge for LlmScamJudge {
                     %error,
                     "Conversation-Scam-Judge nicht verfügbar"
                 );
-                Verdict::unsure()
+                Err("llm_error")
             }
         }
     }
@@ -1061,7 +1062,12 @@ impl ConversationScamGuard {
             return;
         }
 
-        let verdict = self.judge.judge(&mut dialog).await;
+        let verdict = match self.judge.judge(&mut dialog).await {
+            Ok(verdict) => verdict,
+            // Ein technischer Fehler ist kein Urteil über den Chatter.
+            // Der Dialog bleibt für die nächste Nachricht offen.
+            Err(_) => return,
+        };
         let enforcement_threshold =
             effective_scam_enforcement_threshold(&settings, dialog.account_age_days);
         let regular_threshold = settings.threshold.max(settings.suggestion_floor);
@@ -2297,7 +2303,7 @@ mod tests {
             r#"{"verdict":"scam","confidence":0.93,"category":"social","reasoning":"clear pattern"}"#,
             "testchannel",
             "testchatter",
-        );
+        ).unwrap();
         assert_eq!(direct.verdict, VerdictKind::Scam);
         assert!((direct.confidence - 0.93).abs() < f32::EPSILON);
 
@@ -2305,22 +2311,80 @@ mod tests {
             "analysis follows\n```json\n{\"verdict\":\"clean\",\"confidence\":0.81,\"category\":\"viewer\",\"reasoning\":\"game-specific\"}\n```",
             "testchannel",
             "testchatter",
-        );
+        ).unwrap();
         assert_eq!(wrapped.verdict, VerdictKind::Clean);
         assert!((wrapped.confidence - 0.81).abs() < f32::EPSILON);
     }
 
     #[test]
-    fn verdict_parser_faellt_bei_muell_sicher_auf_unsure_zurueck() {
+    fn verdict_parser_liefert_bei_muell_keinen_fall() {
         for raw in [
             "not json",
             r#"{"verdict":"ban","confidence":1.0}"#,
             r#"{"verdict":"scam","confidence":"high"}"#,
         ] {
-            assert_eq!(
-                parse_verdict(raw, "testchannel", "testchatter").verdict,
-                VerdictKind::Unsure
+            assert!(parse_verdict(raw, "testchannel", "testchatter").is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn technische_judge_fehler_erzeugen_keinen_fall_und_erholen_sich() {
+        for response in [
+            ResponseTemplate::new(404),
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "kaputte Antwort"}}]
+            })),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/chat/completions"))
+                .respond_with(response)
+                .mount(&server)
+                .await;
+            let client = EngagementLlmClient::new(
+                Some("test-key".to_string()),
+                Some(server.uri()),
+                Some("deepseek-v4-flash".to_string()),
+                None,
             );
+            let judge = Arc::new(LlmScamJudge::new(client));
+            let (guard, store, api, moderation) =
+                build_guard_with_judge(GuardSettings::default(), judge);
+            feed(&guard, "fehler_user", &[REPORTED_BEFRIENDING_PIVOT]).await;
+            assert!(store.records.lock().unwrap().is_empty());
+            assert!(api.ban_reasons.lock().unwrap().is_empty());
+            assert!(moderation.reasons.lock().unwrap().is_empty());
+
+            server.reset().await;
+            Mock::given(method("POST"))
+                .and(path("/chat/completions"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "choices": [{"message": {"content":
+                        "{\"verdict\":\"clean\",\"confidence\":0.95,\"category\":\"viewer\",\"reasoning\":\"normaler Zuschauer\"}"
+                    }}]
+                })))
+                .mount(&server)
+                .await;
+            feed(
+                &guard,
+                "fehler_user",
+                &["Hier ist noch eine normale Nachricht."],
+            )
+            .await;
+            let records = store.records.lock().unwrap();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].verdict, VerdictKind::Clean);
+            drop(records);
+            let state = guard
+                .states
+                .get(&("testchannel".to_string(), "fehler_user".to_string()));
+            assert!(state.is_some());
+            let state = state.unwrap();
+            let dialog = state.lock().await;
+            assert!(!dialog
+                .messages()
+                .iter()
+                .any(|message| message.content == "kaputte Antwort"));
         }
     }
 
@@ -2348,7 +2412,7 @@ mod tests {
         let judge = LlmScamJudge::new(client);
         let mut dialog = DialogState::new(true);
         dialog.push_user_message("first substantial message with enough context");
-        let first = judge.judge(&mut dialog).await;
+        let first = judge.judge(&mut dialog).await.unwrap();
         assert_eq!(first.verdict, VerdictKind::Unsure);
         assert_eq!(
             dialog.messages().last().map(|m| m.role.as_str()),
@@ -2375,7 +2439,7 @@ mod tests {
             .mount(&server)
             .await;
         dialog.push_user_message("second message continues the conversation");
-        let second = judge.judge(&mut dialog).await;
+        let second = judge.judge(&mut dialog).await.unwrap();
         assert_eq!(second.verdict, VerdictKind::Scam);
     }
 
@@ -2506,13 +2570,14 @@ mod tests {
 
     #[async_trait]
     impl ScamJudge for MockJudge {
-        async fn judge(&self, _dialog: &mut DialogState) -> Verdict {
+        async fn judge(&self, _dialog: &mut DialogState) -> Result<Verdict, &'static str> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            self.verdicts
+            Ok(self
+                .verdicts
                 .lock()
                 .unwrap()
                 .pop_front()
-                .unwrap_or_else(Verdict::unsure)
+                .unwrap_or_else(Verdict::unsure))
         }
     }
 
@@ -2963,7 +3028,7 @@ mod tests {
             }
             assert!(dialog.has_enough_substance(), "Judge würde nie gefragt");
 
-            let verdict = judge.judge(&mut dialog).await;
+            let verdict = judge.judge(&mut dialog).await.unwrap();
             let bans =
                 verdict.verdict == VerdictKind::Scam && verdict.confidence >= enforcement_threshold;
             would_ban += usize::from(bans);
