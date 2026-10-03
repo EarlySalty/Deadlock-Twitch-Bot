@@ -1,6 +1,6 @@
 # Trustpilot bei Hilfe und Dashboard
 
-Der Bewertungsaufruf auf `/streamer` sitzt kompakt am rechten Bildschirmrand, mit seiner Mitte bei ungefähr 55 Prozent der Viewporthöhe auf Desktop und Mobilgeräten. Bei sehr geringer Höhe wird er so geklemmt, dass er oberhalb des Hilfe-Knopfs bleibt. Die bisherige große Karte am Seitenende entfällt.
+Der Bewertungsaufruf auf `/streamer` sitzt kompakt am rechten Bildschirmrand, auf Desktop mit seiner Mitte bei ungefähr 55 Prozent der Viewporthöhe. Bei sehr geringer Höhe wird er so geklemmt, dass er oberhalb des Hilfe-Knopfs bleibt. Unterhalb des `sm`-Breakpoints sitzt er direkt über dem Hilfe-Knopf, damit der Hero-Text auf Mobilgeräten lesbar bleibt. Die bisherige große Karte am Seitenende entfällt.
 
 Bei geöffneter Bot-Hilfe erscheint die Trustpilot-Einbindung unter dem Header, außerhalb von Chatverlauf und Formular. Der separate Aufruf wird dann ausgeblendet. Profil- und Bewertungslink bleiben auch bei blockierten Skripten erreichbar. Der gelieferte offizielle Review Collector, seine Einbindungswerte und die SDK-Registrierung bleiben erhalten. Auf niedrigen Bildschirmen wird der Collector zugunsten von Chat und Eingabe ausgeblendet; die beiden Links bleiben sichtbar.
 

@@ -16,7 +16,7 @@ export function TrustpilotLauncher() {
       target="_blank"
       rel="noopener noreferrer"
       aria-label="Community auf Trustpilot bewerten"
-      className="fixed right-5 top-[min(55dvh,calc(100dvh-8rem))] flex min-h-11 -translate-y-1/2 items-center gap-3 rounded-2xl border border-accent/60 bg-background px-4 py-3 text-text-primary shadow-xl sm:right-7 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+      className="fixed bottom-24 right-5 flex min-h-11 items-center gap-3 rounded-2xl border border-accent/60 bg-background px-4 py-3 text-text-primary shadow-xl sm:bottom-auto sm:right-7 sm:top-[min(55dvh,calc(100dvh-8rem))] sm:-translate-y-1/2 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
     >
       <span>
         <span className="block text-xs font-semibold text-accent">Trustpilot</span>

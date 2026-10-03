@@ -1109,27 +1109,21 @@ export function InternalHomeLanding() {
               </div>
             )}
             {changelogEntries.length > 0 && (
-              showAllUpdates ? (
-                <button
-                  type="button"
-                  onClick={() => setShowAllUpdates(false)}
-                  aria-expanded={true}
-                  aria-controls="home-news-list"
-                  className="mt-3 inline-flex min-h-11 items-center rounded-lg px-1 text-sm font-semibold text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-                >
-                  Neuigkeiten einklappen
-                </button>
-              ) : (
-                <a
-                  href="#changelog"
-                  onClick={() => setShowAllUpdates(true)}
-                  aria-controls="home-news-list"
-                  className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-lg px-1 text-sm font-semibold text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-                >
-                  Alle Neuigkeiten lesen
-                  <ArrowRight size={16} aria-hidden="true" />
-                </a>
-              )
+              <a
+                href="#changelog"
+                onClick={(event) => {
+                  if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+                  event.preventDefault();
+                  window.history.replaceState({}, '', '#changelog');
+                  setShowAllUpdates((current) => !current);
+                }}
+                aria-expanded={showAllUpdates}
+                aria-controls="home-news-list"
+                className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-lg px-1 text-sm font-semibold text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              >
+                {showAllUpdates ? 'Neuigkeiten einklappen' : 'Alle Neuigkeiten lesen'}
+                <ArrowRight size={16} aria-hidden="true" />
+              </a>
             )}
         </Rise>
           <aside aria-labelledby="home-trustpilot-heading" className="panel-card rounded-2xl p-4 md:p-5">
