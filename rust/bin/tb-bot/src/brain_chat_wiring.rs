@@ -781,7 +781,7 @@ mod tests {
                         "knowledge_release": "fixture",
                         "status": "answered",
                         "text": "Erstelle die Lane im Discord über den Lane-Befehl.",
-                        "citations": []
+                        "citations": [{"citation_id": "fixture", "label": "Lane-Hilfe"}]
                     }))
                     .set_delay(Duration::from_secs(18)),
                 "Answered",
