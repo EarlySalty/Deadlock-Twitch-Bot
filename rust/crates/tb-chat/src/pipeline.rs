@@ -673,7 +673,20 @@ impl MentionResolver for PgHelixMentionResolver {
 // ---------------------------------------------------------------------------
 
 #[async_trait]
-pub trait BrainChatPort: Send + Sync {
+pub trait BrainChatPort: Send + Sync + 'static {
+    fn accepts(&self, event: &ChatMessageEvent) -> bool;
+
+    fn dispatch(self: Arc<Self>, event: &ChatMessageEvent) -> bool {
+        if !self.accepts(event) {
+            return false;
+        }
+        let event = event.clone();
+        tokio::spawn(async move {
+            self.maybe_respond(&event).await;
+        });
+        true
+    }
+
     async fn maybe_respond(&self, event: &ChatMessageEvent) -> bool;
 }
 
@@ -1090,7 +1103,7 @@ impl ChatPipeline {
 
         if !scam_punished && !invite_punished {
             if let Some(brain_chat) = &p.brain_chat {
-                if brain_chat.maybe_respond(event).await {
+                if Arc::clone(brain_chat).dispatch(event) {
                     return false;
                 }
             }

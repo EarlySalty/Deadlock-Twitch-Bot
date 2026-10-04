@@ -365,6 +365,13 @@ impl BrainChatService {
 
 #[async_trait]
 impl BrainChatPort for BrainChatService {
+    fn accepts(&self, event: &ChatMessageEvent) -> bool {
+        event.chatter_user_id != self.bot_user_id
+            && !event.message_id.is_empty()
+            && !event.text().starts_with('!')
+            && question_for_bot(event.text(), &self.bot_login).is_some()
+    }
+
     async fn maybe_respond(&self, event: &ChatMessageEvent) -> bool {
         if event.chatter_user_id == self.bot_user_id
             || event.message_id.is_empty()
@@ -802,11 +809,31 @@ mod tests {
                 .expect(1)
                 .mount(&server)
                 .await;
-            assert!(
-                tokio::time::timeout(Duration::from_secs(35), service.maybe_respond(&event))
+            assert!(tokio::time::timeout(Duration::from_millis(100), async {
+                assert!(Arc::clone(&service).dispatch(&event));
+                std::future::pending::<()>().await;
+            })
+            .await
+            .is_err());
+            tokio::time::timeout(Duration::from_secs(35), async {
+                loop {
+                    let finished: bool = sqlx::query_scalar(
+                        "SELECT EXISTS (SELECT FROM public.tb_chat_brain_answers \
+                         WHERE message_id = $1 AND finished_at IS NOT NULL \
+                         AND delivery_status <> 'Pending')",
+                    )
+                    .bind(&event.message_id)
+                    .fetch_one(&db.pool)
                     .await
-                    .unwrap()
-            );
+                    .unwrap();
+                    if finished {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .unwrap();
             let result: (String, String, bool) = sqlx::query_as(
                 "SELECT status, delivery_status, finished_at IS NOT NULL \
                  FROM public.tb_chat_brain_answers WHERE message_id = $1",
