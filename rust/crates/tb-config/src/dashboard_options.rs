@@ -53,7 +53,7 @@ impl BrainClientOptions {
         }
         if self
             .timeout_ms
-            .is_some_and(|timeout| !(1..=60_000).contains(&timeout))
+            .is_some_and(|timeout| !(1..=65_000).contains(&timeout))
         {
             return Err(FileError::invalid(timeout_field));
         }

@@ -54,6 +54,8 @@ pub struct BrainClientPatch {
     pub endpoint: Option<String>,
     #[serde(default, deserialize_with = "supplied")]
     pub public_scopes: Option<[TwitchPublicScope; 1]>,
+    #[serde(default, deserialize_with = "supplied")]
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -71,6 +73,8 @@ pub struct BrainPatch {
 pub struct BrainClientInspection {
     mode: BrainClientMode,
     endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timeout_ms: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -205,11 +209,13 @@ fn inspect_saved(saved: &SavedConfig) -> Result<BrainInspection, EditError> {
         bot_brain_client: BrainClientInspection {
             mode: bot.mode,
             endpoint: bot.endpoint.clone(),
+            timeout_ms: bot.timeout_ms,
         },
         bot_brain_chat_enabled: settings.bot.brain_chat.enabled,
         dashboard_brain_client: BrainClientInspection {
             mode: dashboard.mode,
             endpoint: dashboard.endpoint.clone(),
+            timeout_ms: None,
         },
     })
 }
@@ -246,7 +252,7 @@ fn save_brain_at(
     if patch
         .dashboard_brain_client
         .as_ref()
-        .is_some_and(|client| client.public_scopes.is_some())
+        .is_some_and(|client| client.public_scopes.is_some() || client.timeout_ms.is_some())
     {
         return Err(FileError::invalid("dashboard.options.brain_client.public_scopes").into());
     }
@@ -258,7 +264,10 @@ fn save_brain_at(
         ),
     ] {
         if let Some(client) = client {
-            if client.mode.is_none() && client.endpoint.is_none() && client.public_scopes.is_none()
+            if client.mode.is_none()
+                && client.endpoint.is_none()
+                && client.public_scopes.is_none()
+                && client.timeout_ms.is_none()
             {
                 return Err(FileError::invalid("brain_patch").into());
             }
@@ -281,6 +290,21 @@ fn save_brain_at(
                 &["bot", "brain_client"],
                 "public_scopes",
                 toml_edit::value(scopes),
+            )?;
+        }
+        if let Some(timeout) = patch
+            .bot_brain_client
+            .as_ref()
+            .and_then(|client| client.timeout_ms)
+        {
+            if !(1..=65_000).contains(&timeout) {
+                return Err(FileError::invalid("bot.brain_client.timeout_ms").into());
+            }
+            replace_value(
+                document,
+                &["bot", "brain_client"],
+                "timeout_ms",
+                toml_edit::value(timeout as i64),
             )?;
         }
         for (client, path) in [
@@ -662,6 +686,45 @@ pool_max=17
     }
 
     #[test]
+    fn timeout_aendert_nur_das_botfeld_und_prueft_die_grenzen() {
+        let fixture = Fixture::new(CONFIG);
+        let original = load_saved(&fixture.path()).unwrap();
+        let inspection = fixture
+            .apply(r#"{"bot_brain_client":{"timeout_ms":65000}}"#)
+            .unwrap();
+        assert_eq!(inspection.bot_brain_client.timeout_ms, Some(65_000));
+        let saved = load_saved(&fixture.path()).unwrap();
+        let mut expected = serde_json::to_value(original.snapshot.settings()).unwrap();
+        expected["bot"]["brain_client"]["timeout_ms"] = 65_000.into();
+        assert_eq!(
+            expected,
+            serde_json::to_value(saved.snapshot.settings()).unwrap()
+        );
+        let text = fs::read_to_string(fixture.path()).unwrap();
+        for value in [0, 65_001, u64::MAX] {
+            let patch = format!(r#"{{"bot_brain_client":{{"timeout_ms":{value}}}}}"#);
+            assert!(fixture.apply(&patch).is_err());
+            assert_eq!(text, fs::read_to_string(fixture.path()).unwrap());
+        }
+        assert!(fixture
+            .apply(r#"{"dashboard_brain_client":{"timeout_ms":65000}}"#)
+            .is_err());
+        fixture
+            .apply(r#"{"bot_brain_client":{"timeout_ms":1}}"#)
+            .unwrap();
+        assert_eq!(
+            load_saved(&fixture.path())
+                .unwrap()
+                .snapshot
+                .settings()
+                .bot
+                .brain_client
+                .timeout_ms,
+            Some(1)
+        );
+    }
+
+    #[test]
     fn partielle_aenderung_erhaelt_nicht_ausgewaehlte_brain_felder() {
         let fixture = Fixture::new(CONFIG);
         let original = load_saved(&fixture.path()).unwrap();
@@ -707,7 +770,7 @@ pool_max=17
         for input in [
             r#"{"database":{}}"#,
             r#"{"bot_brain_client":{"public_scopes":["other"]}}"#,
-            r#"{"dashboard_brain_client":{"timeout_ms":1}}"#,
+            r#"{"bot_brain_client":{"timeout_ms":null}}"#,
             r#"{"bot_brain_client":{"mode":"remote"}}"#,
             r#"{"bot_brain_chat_enabled":"true"}"#,
             r#"{"bot_brain_chat_enabled":null}"#,
@@ -869,7 +932,10 @@ pool_max=17
             load_saved(&fixture.path()).unwrap().revision
         );
         for field in ["bot_brain_client", "dashboard_brain_client"] {
-            assert_eq!(value[field].as_object().unwrap().len(), 2);
+            assert_eq!(
+                value[field].as_object().unwrap().len(),
+                if field == "bot_brain_client" { 3 } else { 2 }
+            );
             assert_eq!(value[field]["mode"], "legacy");
             assert_eq!(value[field]["endpoint"], "http://127.0.0.1:8789");
         }
