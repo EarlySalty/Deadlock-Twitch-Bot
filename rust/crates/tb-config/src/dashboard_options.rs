@@ -385,7 +385,9 @@ mod brain_client_tests {
         config.public_scopes.clear();
         assert!(config.validate().is_err());
         config.public_scopes.push("bot.public".into());
-        config.timeout_ms = Some(60_001);
+        config.timeout_ms = Some(65_000);
+        assert!(config.validate().is_ok());
+        config.timeout_ms = Some(65_001);
         assert!(config.validate().is_err());
         config.timeout_ms = Some(60_000);
         assert!(config.validate().is_ok());
