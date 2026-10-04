@@ -370,15 +370,22 @@ impl BrainChatPort for BrainChatService {
             || event.message_id.is_empty()
             || event.text().starts_with('!')
         {
+            tracing::info!(
+                reason = "self_or_command_or_missing_id",
+                "Brain-Chat übersprungen"
+            );
             return false;
         }
         let Some(question) = question_for_bot(event.text(), &self.bot_login) else {
+            tracing::info!(reason = "no_bot_question", "Brain-Chat übersprungen");
             return false;
         };
         if self.timeout_guard.is_muted(&event.broadcaster_user_login) {
+            tracing::info!(reason = "muted", "Brain-Chat übersprungen");
             return true;
         }
         let Some(answerer) = &self.answerer else {
+            tracing::info!(reason = "backend_unavailable", "Brain-Chat übersprungen");
             self.backend_state(BackendState::Unavailable);
             return true;
         };
@@ -387,6 +394,7 @@ impl BrainChatPort for BrainChatService {
             &event.broadcaster_user_id,
             Utc::now(),
         ) else {
+            tracing::info!(reason = "rate_limit", "Brain-Chat übersprungen");
             return true;
         };
         let started = Instant::now();
@@ -399,8 +407,12 @@ impl BrainChatPort for BrainChatService {
         };
         let id = match self.log.begin(&record).await {
             Ok(Some(id)) => id,
-            Ok(None) => return true,
+            Ok(None) => {
+                tracing::info!(reason = "log_limit_or_duplicate", "Brain-Chat übersprungen");
+                return true;
+            }
             Err(_) => {
+                tracing::info!(reason = "log_begin_failed", "Brain-Chat übersprungen");
                 tb_observability::warning_budget::warn(
                     "brain_log_begin",
                     "Brain-Chat-Protokoll nicht verfügbar, Antwort unterdrückt",
@@ -426,6 +438,7 @@ impl BrainChatPort for BrainChatService {
                 (self.no_evidence_reply().to_string(), "NoEvidence")
             }
             Err(error) => {
+                tracing::info!(reason = "answer_failed", "Brain-Chat übersprungen");
                 if error == BrainAdapterError::Backend {
                     self.backend_state(BackendState::Unavailable);
                 } else {
@@ -439,6 +452,7 @@ impl BrainChatPort for BrainChatService {
             }
         };
         if !self.finish(id, &text, status, true, started).await {
+            tracing::info!(reason = "log_finish_failed", "Brain-Chat übersprungen");
             return true;
         }
         let send = self
@@ -447,6 +461,7 @@ impl BrainChatPort for BrainChatService {
             .await;
         let delivered = matches!(send, Ok(SendOutcome::Sent));
         if !delivered {
+            tracing::info!(reason = "delivery_failed", "Brain-Chat übersprungen");
             tb_observability::warning_budget::warn(
                 "brain_send",
                 "Brain-Chat-Antwort nicht zugestellt",
@@ -493,7 +508,7 @@ pub fn build(
         BrainKnowledgeAdapter::new(
             client.endpoint.as_deref().unwrap_or_default(),
             token,
-            Duration::from_millis(client.timeout_ms.unwrap_or(8_000)),
+            Duration::from_millis(client.timeout_ms.unwrap_or(30_000)),
             client.public_scopes.iter().cloned().collect(),
         )
         .map(|adapter| Arc::new(adapter) as Arc<dyn BrainAnswerPort>)
@@ -718,6 +733,96 @@ use crate::chat_wiring::invite_test_postgres as brain_test_postgres;
 mod tests {
     use super::*;
     use tb_chat::types::ChatMessageBody;
+
+    #[tokio::test]
+    async fn echte_lane_frage_erreicht_http_und_schliesst_das_protokoll_ab() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let db = brain_test_postgres::TestPostgres::start().await;
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/20260929113000_chat_brain_answers.sql"
+        ))
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let server = MockServer::start().await;
+        let chat = Arc::new(FakeChat::default());
+        let client = BrainClientOptions {
+            mode: BrainClientMode::Typed,
+            endpoint: Some(server.uri()),
+            public_scopes: vec!["bot.public".into()],
+            ..BrainClientOptions::default()
+        };
+        let service = build(BrainChatBuild {
+            client: &client,
+            options: &BrainChatOptions::default(),
+            token: "fixture-token",
+            bot_login: "deutschedeadlockcommunity",
+            bot_user_id: "1422558159",
+            api: chat.clone(),
+            timeout_guard: Arc::new(TimeoutGuard::new()),
+            pool: db.pool.clone(),
+        })
+        .unwrap();
+        let question = "Wie erstelle und verwalte ich eine Lane auf dem Discord-Server?";
+        let mut event = event(0);
+        event.broadcaster_user_id = "1186925760".into();
+        event.broadcaster_user_login = "earlysalty".into();
+        event.chatter_user_id = "1186925760".into();
+        event.message.text = format!("@deutschedeadlockcommunity {question}");
+        for (index, response, expected_status, expected_delivery) in [
+            (
+                0,
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({
+                        "contract_version": "brain.public.v1",
+                        "request_id": "message-0",
+                        "knowledge_release": "fixture",
+                        "status": "answered",
+                        "text": "Erstelle die Lane im Discord über den Lane-Befehl.",
+                        "citations": []
+                    }))
+                    .set_delay(Duration::from_secs(18)),
+                "Answered",
+                "Sent",
+            ),
+            (1, ResponseTemplate::new(503), "Fehler", "Fehler"),
+        ] {
+            event.message_id = format!("message-{index}");
+            event.chatter_user_id = (1186925760_u64 + index).to_string();
+            server.reset().await;
+            Mock::given(method("POST"))
+                .and(path("/v1/answer"))
+                .and(body_partial_json(serde_json::json!({
+                    "text": question,
+                    "requested_scopes": ["bot.public"]
+                })))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+            assert!(
+                tokio::time::timeout(Duration::from_secs(35), service.maybe_respond(&event))
+                    .await
+                    .unwrap()
+            );
+            let result: (String, String, bool) = sqlx::query_as(
+                "SELECT status, delivery_status, finished_at IS NOT NULL \
+                 FROM public.tb_chat_brain_answers WHERE message_id = $1",
+            )
+            .bind(&event.message_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                result,
+                (expected_status.into(), expected_delivery.into(), true)
+            );
+            server.verify().await;
+        }
+        assert_eq!(chat.sends.lock().unwrap().len(), 1);
+    }
 
     #[tokio::test]
     async fn postgres_protokoll_und_rollen_sind_wirksam() {
