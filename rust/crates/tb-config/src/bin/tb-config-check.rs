@@ -133,7 +133,7 @@ mod tests {
         );
         for input in [
             r#"{"bot_brain_chat_enabled":"true"}"#,
-            r#"{"bot_brain_client":{"timeout_ms":1000}}"#,
+            r#"{"bot_brain_client":{"timeout_ms":null}}"#,
             r#"{"bot_brain_chat_enabled":null}"#,
             r#"{"synthetic-private-value":"unterminated}"#,
             r#"{"bot_brain_chat_enabled":true} trailing"#,
