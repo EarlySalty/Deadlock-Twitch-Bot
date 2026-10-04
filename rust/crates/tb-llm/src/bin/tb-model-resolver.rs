@@ -10,8 +10,8 @@ async fn main() {
         Ok(config) => tb_llm::daily_model_resolver::run(config).await,
         Err(error) => Err(error),
     };
-    // Keine unkontrollierten Anbieter-/Credential-Fehlertexte protokollieren.
-    if result.is_err() {
+    if let Err(error) = result {
+        eprintln!("Resolverprüfung fehlgeschlagen: {error}");
         std::process::exit(1);
     }
 }

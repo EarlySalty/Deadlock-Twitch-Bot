@@ -80,9 +80,12 @@ fn protected_read(path: &Path, max: usize) -> Result<Vec<u8>, LlmError> {
     }
     Ok(bytes)
 }
-async fn bounded(mut response: reqwest::Response) -> Result<Vec<u8>, LlmError> {
+async fn bounded(mut response: reqwest::Response, stage: &str) -> Result<Vec<u8>, LlmError> {
     if !response.status().is_success() {
-        return Err(error("Dienst hat einen Fehlerstatus"));
+        return Err(error(&format!(
+            "{stage}: HTTP {}",
+            response.status().as_u16()
+        )));
     }
     let mut bytes = Vec::new();
     while let Some(chunk) = response
@@ -149,7 +152,7 @@ async fn credential(config: &Config) -> Result<Zeroizing<String>, LlmError> {
         .send()
         .await
         .map_err(|_| error("Infisical nicht erreichbar"))?;
-    let bytes = Zeroizing::new(bounded(response).await?);
+    let bytes = Zeroizing::new(bounded(response, "Infisical-Zugriff").await?);
     let values: Secrets =
         serde_json::from_slice(&bytes).map_err(|_| error("Infisical-Antwort ungültig"))?;
     values
@@ -213,7 +216,7 @@ fn ranked(mut entries: Vec<Candidate>) -> Result<Vec<Candidate>, LlmError> {
     }
     Ok(entries)
 }
-async fn catalog(key: &str) -> Result<Vec<Candidate>, LlmError> {
+async fn catalog(key: &str, url: &str) -> Result<Vec<Candidate>, LlmError> {
     let client = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -225,14 +228,15 @@ async fn catalog(key: &str) -> Result<Vec<Candidate>, LlmError> {
     let mut seen = std::collections::HashSet::new();
     for _ in 0..32 {
         let response = client
-            .get(CATALOG)
+            .get(url)
             .bearer_auth(key)
             .query(&[("pageSize", "200"), ("pageToken", token.as_str())])
             .send()
             .await
             .map_err(|_| error("Modellkatalog nicht erreichbar"))?;
-        let json: serde_json::Value = serde_json::from_slice(&bounded(response).await?)
-            .map_err(|_| error("Modellkatalog ungültig"))?;
+        let json: serde_json::Value =
+            serde_json::from_slice(&bounded(response, "Modellkatalog").await?)
+                .map_err(|_| error("Modellkatalog ungültig"))?;
         let models = json
             .get("models")
             .and_then(|v| v.as_array())
@@ -338,7 +342,22 @@ fn attempts(path: &Path) -> Result<Attempts, LlmError> {
 }
 /// Prozesslock plus persistente 24h-Frist, auch für manuell gestartete Läufe.
 pub async fn run(config: Config) -> Result<(), LlmError> {
-    let state = Path::new(STATE_PATH);
+    run_at(
+        &config,
+        Path::new(STATE_PATH),
+        &Utc::now,
+        CATALOG,
+        crate::selection::FIREWORKS_BASE_URL,
+    )
+    .await
+}
+async fn run_at(
+    config: &Config,
+    state: &Path,
+    time: &dyn Fn() -> DateTime<Utc>,
+    catalog_url: &str,
+    base_url: &str,
+) -> Result<(), LlmError> {
     let dir = state.parent().expect("constant absolute path");
     let metadata = std::fs::symlink_metadata(dir).map_err(|_| error("Stateverzeichnis fehlt"))?;
     if !metadata.is_dir()
@@ -370,18 +389,21 @@ pub async fn run(config: Config) -> Result<(), LlmError> {
     }
     let attempt_path = dir.join("llm-model-selection-attempts.json");
     let mut status = attempts(&attempt_path)?;
-    let now = Utc::now().timestamp();
+    let now = time().timestamp();
     if status.checked > now || status.notices.len() > 2 || status.notices.iter().any(|at| *at > now)
     {
         return Err(error("Prüfstatus liegt in der Zukunft"));
     }
+    let verified = fireworks_model_selection::read_selection(state, TRUSTED_UID)
+        .map(|s| s.checked_at.timestamp())
+        .unwrap_or(0);
+    status.checked = status.checked.min(verified);
     if !daily_due(status.checked, now) {
+        println!("Tagesprüfung bereits durch geprüfte Auswahl belegt");
         return Ok(());
     }
-    status.checked = now;
-    atomic(&attempt_path, &status)?;
-    let result = refresh(&config, state).await;
-    if result.is_err() {
+    let result = refresh(config, state, catalog_url, base_url, time).await;
+    if let Err(ref failure) = result {
         status.notices.retain(|at| now - *at < 7 * 86400);
         if status.notices.len() < 2 && status.notices.last().is_none_or(|at| now - *at >= 86400) {
             eprintln!("KI-Modellauswahl konnte nicht geprüft werden; letzter geprüfter Stand bleibt erhalten ({} Wiederholungen).", status.suppressed);
@@ -390,6 +412,10 @@ pub async fn run(config: Config) -> Result<(), LlmError> {
         } else {
             status.suppressed = status.suppressed.saturating_add(1);
         }
+        atomic(&attempt_path, &status)
+            .map_err(|status_error| error(&format!("{failure}; {status_error}")))?;
+    } else {
+        status.checked = time().timestamp();
         atomic(&attempt_path, &status)?;
     }
     result
@@ -397,9 +423,15 @@ pub async fn run(config: Config) -> Result<(), LlmError> {
 fn daily_due(previous: i64, now: i64) -> bool {
     previous.div_euclid(86400) < now.div_euclid(86400)
 }
-async fn refresh(config: &Config, path: &Path) -> Result<(), LlmError> {
+async fn refresh(
+    config: &Config,
+    path: &Path,
+    catalog_url: &str,
+    base_url: &str,
+    time: &dyn Fn() -> DateTime<Utc>,
+) -> Result<(), LlmError> {
     let key = credential(config).await?;
-    let entries = catalog(&key).await?;
+    let entries = catalog(&key, catalog_url).await?;
     let previous = fireworks_model_selection::read_selection(path, TRUSTED_UID).ok();
     for mut entry in entries.into_iter().take(3) {
         if !can_replace(previous.as_ref(), &entry) {
@@ -410,7 +442,7 @@ async fn refresh(config: &Config, path: &Path) -> Result<(), LlmError> {
         if let Some(old) = previous.as_ref().filter(|p| p.model == entry.model) {
             entry.release = entry.release.or(old.release);
         }
-        match probe_and_publish(&key, &entry, path, crate::selection::FIREWORKS_BASE_URL).await {
+        match probe_and_publish_at(&key, &entry, path, base_url, time).await {
             Ok(()) => {
                 println!("Geprüfte DeepSeek-Flash-Auswahl: {}", entry.model);
                 return Ok(());
@@ -418,7 +450,7 @@ async fn refresh(config: &Config, path: &Path) -> Result<(), LlmError> {
             Err(LlmError::Http {
                 status: 404 | 410, ..
             }) => continue,
-            Err(_) => return Err(error("Flash-Probe fehlgeschlagen; Auswahl unverändert")),
+            Err(failure) => return Err(failure),
         }
     }
     Err(error("Kein serverloses, geprüftes Flash-Modell verfügbar"))
@@ -440,14 +472,35 @@ fn can_replace(previous: Option<&Selection>, entry: &Candidate) -> bool {
         },
     }
 }
+#[cfg(test)]
 async fn probe_and_publish(
     key: &str,
     entry: &Candidate,
     path: &Path,
     base_url: &str,
 ) -> Result<(), LlmError> {
-    probe_at(key, &entry.model, base_url).await?;
-    let now = Utc::now();
+    probe_and_publish_at(key, entry, path, base_url, &Utc::now).await
+}
+async fn probe_and_publish_at(
+    key: &str,
+    entry: &Candidate,
+    path: &Path,
+    base_url: &str,
+    time: &dyn Fn() -> DateTime<Utc>,
+) -> Result<(), LlmError> {
+    probe_at(key, &entry.model, base_url)
+        .await
+        .map_err(|failure| match failure {
+            LlmError::Http { status, .. } => LlmError::Http {
+                status,
+                body: String::new(),
+            },
+            LlmError::Timeout(_) => error("Modellprobe: Zeitgrenze überschritten"),
+            LlmError::Transport(_) => error("Modellprobe: Transport fehlgeschlagen"),
+            LlmError::Unparsable(_) => error("Modellprobe: Antwort ungültig"),
+            LlmError::Unavailable(_) => error("Modellprobe: kein gültiges Prüfergebnis"),
+        })?;
+    let now = time();
     let selection = Selection {
         schema_version: 1,
         provider: "fireworks".into(),
@@ -464,6 +517,194 @@ async fn probe_and_publish(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+
+    struct Fixture {
+        dir: PathBuf,
+        config: Config,
+        server: MockServer,
+        bridge: tokio::task::JoinHandle<()>,
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            self.bridge.abort();
+            std::fs::remove_dir_all(&self.dir).unwrap();
+        }
+    }
+    impl Fixture {
+        async fn new(name: &str) -> Self {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let cwd = std::env::current_dir().unwrap();
+            let base = cwd
+                .ancestors()
+                .find(|p| {
+                    p.as_os_str().len() < 60
+                        && p.ancestors().all(|a| {
+                            std::fs::symlink_metadata(a).is_ok_and(|m| {
+                                m.is_dir()
+                                    && [0, TRUSTED_UID].contains(&m.uid())
+                                    && m.mode() & 0o022 == 0
+                            })
+                        })
+                })
+                .unwrap();
+            let dir = base.join(format!(".resolver-{}-{name}", std::process::id()));
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let credential_path = dir.join("credential");
+            std::fs::write(&credential_path, "synthetic-infisical-credential").unwrap();
+            std::fs::set_permissions(&credential_path, std::fs::Permissions::from_mode(0o600))
+                .unwrap();
+            let socket = dir.join("api.sock");
+            let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+            std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let bridge = tokio::spawn(async move {
+                loop {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let mut request = Vec::new();
+                    let mut chunk = [0; 4096];
+                    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                        let count = stream.read(&mut chunk).await.unwrap();
+                        if count == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&chunk[..count]);
+                    }
+                    let body = r#"{"secrets":[{"secretKey":"FIREWORKS_API_KEY","secretValue":"synthetic-fireworks-credential"}]}"#;
+                    let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                    stream.write_all(response.as_bytes()).await.unwrap();
+                }
+            });
+            Self {
+                config: Config {
+                    project_id: "synthetic-project".into(),
+                    environment: "test".into(),
+                    secret_path: "/test".into(),
+                    credential_path,
+                    infisical_socket: socket,
+                    infisical_socket_owner_uid: TRUSTED_UID,
+                },
+                dir,
+                server: MockServer::start().await,
+                bridge,
+            }
+        }
+        async fn respond(&self, status: u16) {
+            self.server.reset().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "models": [{"name":"accounts/fireworks/models/deepseek-v4p1-flash", "public":true, "state":"READY", "supportsServerless":true, "supportsImageInput":true, "supportsTools":true}]
+                })))
+                .mount(&self.server).await;
+            let body = if status == 200 {
+                serde_json::json!({"choices":[{"message":{"content":"{\"ready\":true}"}}]})
+            } else {
+                serde_json::json!({"error":"synthetic-fireworks-credential synthetic-infisical-credential"})
+            };
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(status).set_body_json(body))
+                .mount(&self.server)
+                .await;
+        }
+        async fn run(&self, time: DateTime<Utc>) -> Result<(), LlmError> {
+            run_at(
+                &self.config,
+                &self.dir.join("selection.json"),
+                &|| time,
+                &self.server.uri(),
+                &self.server.uri(),
+            )
+            .await
+        }
+        fn status(&self) -> Attempts {
+            attempts(&self.dir.join("llm-model-selection-attempts.json")).unwrap()
+        }
+        fn selection(&self) -> Vec<u8> {
+            std::fs::read(self.dir.join("selection.json")).unwrap()
+        }
+    }
+    fn test_time() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-10-02T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+    #[tokio::test]
+    async fn failed_refresh_then_regular_retry_records_only_success() {
+        let fixture = Fixture::new("retry").await;
+        let now = test_time();
+        let yesterday = now - chrono::Duration::days(1);
+        fixture.respond(200).await;
+        fixture.run(yesterday).await.unwrap();
+        let original = fixture.selection();
+        fixture.respond(503).await;
+        assert!(fixture.run(now).await.is_err());
+        assert_eq!(fixture.selection(), original);
+        assert_eq!(fixture.status().checked, yesterday.timestamp());
+        fixture.respond(200).await;
+        fixture.run(now).await.unwrap();
+        assert_eq!(fixture.server.received_requests().await.unwrap().len(), 2);
+        assert_eq!(fixture.status().checked, now.timestamp());
+        let selection = fireworks_model_selection::read_selection(
+            &fixture.dir.join("selection.json"),
+            TRUSTED_UID,
+        )
+        .unwrap();
+        assert_eq!(selection.checked_at, now);
+        assert_eq!(selection.probed_at, now);
+        assert_eq!(
+            selection.model,
+            "accounts/fireworks/models/deepseek-v4p1-flash"
+        );
+        fixture.run(now).await.unwrap();
+        assert_eq!(fixture.server.received_requests().await.unwrap().len(), 2);
+    }
+    #[tokio::test]
+    async fn refresh_error_preserves_http_status_without_credentials() {
+        let fixture = Fixture::new("diagnosis").await;
+        fixture.respond(200).await;
+        fixture
+            .run(test_time() - chrono::Duration::days(1))
+            .await
+            .unwrap();
+        let original = fixture.selection();
+        fixture.respond(503).await;
+        let failure = fixture.run(test_time()).await.unwrap_err();
+        assert_eq!(fixture.selection(), original);
+        assert_eq!(failure.code(), "http_status");
+        assert!(matches!(failure, LlmError::Http { status: 503, ref body } if body.is_empty()));
+        let text = failure.to_string();
+        assert!(!text.contains("synthetic-fireworks-credential"));
+        assert!(!text.contains("synthetic-infisical-credential"));
+    }
+    #[tokio::test]
+    async fn legacy_failed_day_marker_does_not_skip_actual_refresh() {
+        let fixture = Fixture::new("legacy").await;
+        let now = test_time();
+        fixture.respond(200).await;
+        fixture.run(now - chrono::Duration::days(1)).await.unwrap();
+        let legacy = Attempts {
+            checked: now.timestamp(),
+            notices: vec![now.timestamp()],
+            suppressed: 0,
+        };
+        atomic(
+            &fixture.dir.join("llm-model-selection-attempts.json"),
+            &legacy,
+        )
+        .unwrap();
+        fixture.respond(200).await;
+        fixture.run(now).await.unwrap();
+        assert_eq!(fixture.server.received_requests().await.unwrap().len(), 2);
+        assert_eq!(
+            fireworks_model_selection::read_selection(
+                &fixture.dir.join("selection.json"),
+                TRUSTED_UID
+            )
+            .unwrap()
+            .checked_at,
+            now
+        );
+    }
     #[test]
     fn family_availability_and_numeric_ranking() {
         let item = |name: &str, created: Option<&str>| serde_json::json!({"name":format!("accounts/fireworks/models/{name}"),"public":true,"state":"READY","supportsServerless":true,"supportsImageInput":true,"supportsTools":true,"createTime":created});
