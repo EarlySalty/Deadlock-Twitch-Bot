@@ -1,8 +1,19 @@
 #!/bin/bash
 set -euo pipefail
+replay_dir=$(mktemp -d)
+trap 'rm -rf "$replay_dir"' EXIT
+status=0
 journalctl --grep=LLM_USAGE_RECOVERY --output=json --since='30 days ago' --no-pager \
     _SYSTEMD_UNIT=deadlock-twitch-bot-rust.service + \
     _SYSTEMD_UNIT=deadlock-twitch-dashboard-rust.service + \
     _SYSTEMD_UNIT=deadlock-twitch-stream-coaching-watch.service + \
-    _SYSTEMD_USER_UNIT=deadlock-llm-model-resolver.service _UID=1000 |
-    runuser -u twitchbot -- /opt/deadlock/twitch/current/rust/target/release/tb-llm-usage-recover /etc/deadlock/twitch-llm-usage-recover.toml
+    _SYSTEMD_USER_UNIT=deadlock-llm-model-resolver.service _UID=1000 \
+    >"$replay_dir/entries" 2>"$replay_dir/errors" || status=$?
+# journalctl meldet eine leere Auswahl mit Exit 1. Lesefehler bleiben Fehler.
+if (( status != 0 )); then
+    if (( status != 1 )) || [[ -s "$replay_dir/entries" || -s "$replay_dir/errors" ]]; then
+        echo 'Verbrauchsjournal konnte nicht vollständig gelesen werden.' >&2
+        exit "$status"
+    fi
+fi
+runuser -u twitchbot -- /opt/deadlock/twitch/current/rust/target/release/tb-llm-usage-recover /etc/deadlock/twitch-llm-usage-recover.toml <"$replay_dir/entries"

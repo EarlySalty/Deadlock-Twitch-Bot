@@ -521,6 +521,7 @@ echo "Liveprüfung bestanden: Reload, rollenbegrenzter Peerzugang, Ablehnung und
 verification_pending=0
 
 install -m 0755 "$candidate/ops/systemd/recover-twitch-llm-usage" /usr/local/bin/recover-twitch-llm-usage
+install -d -o root -g root -m 0755 /etc/deadlock
 install -m 0644 "$candidate/ops/systemd/twitch-llm-usage-recover.toml" /etc/deadlock/twitch-llm-usage-recover.toml
 install -m 0644 "$candidate/ops/systemd/twitch-llm-usage-audit.toml" /etc/deadlock/twitch-llm-usage-audit.toml
 install -m 0644 "$candidate/ops/systemd/deadlock-twitch-llm-usage-recover.service" /etc/systemd/system/deadlock-twitch-llm-usage-recover.service
