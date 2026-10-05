@@ -1501,7 +1501,7 @@ async fn main() {
     // Block gespawnt — gleiches An/Aus-Gate. Backfill der letzten Sessions ohne
     // done-Report beim Start, Retry fehlgeschlagener Reports (alle 30 min nach
     // 1800s), nächtlicher Knowledge-Job (nach 300s, dann täglich) und
-    // wöchentlicher Insight-Job (nach 600s, dann alle 7 Tage).
+    // Insight-Fälligkeit stündlich prüfen (nach 600s, danach jede Stunde).
     {
         if tb_analytics::post_stream::post_stream_reports_enabled() {
             let backfill_pool = pool.clone();

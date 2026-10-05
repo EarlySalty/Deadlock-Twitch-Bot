@@ -604,6 +604,9 @@ title_generator_feedback|keywords|text|NO|''::text
 title_generator_feedback|primary_title|text|NO|
 title_generator_feedback|selected_title|text|YES|
 title_generator_feedback|twitch_user_id|text|NO|
+title_generator_insight_schedule|attempted_at|timestamp with time zone|NO|
+title_generator_insight_schedule|next_attempt_at|timestamp with time zone|NO|
+title_generator_insight_schedule|streamer_id|text|NO|
 title_generator_insights|generated_at|timestamp with time zone|NO|now()
 title_generator_insights|id|integer|NO|nextval('title_generator_insights_id_seq'::regclass)
 title_generator_insights|patterns|text|YES|
