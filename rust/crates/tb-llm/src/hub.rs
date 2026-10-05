@@ -1100,7 +1100,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn negative_und_fehlende_token_zahlen_werden_geklemmt() {
+    async fn negative_und_fehlende_token_zahlen_bleiben_unbekannt() {
         // Ein Anbieter, der Unsinn meldet, darf keine negativen Zeilen ins
         // Ledger schreiben.
         let server = MockServer::start().await;
@@ -1120,7 +1120,7 @@ mod tests {
         )
         .await
         .expect("Antwort");
-        assert_eq!(response.prompt_tokens, Some(0));
+        assert_eq!(response.prompt_tokens, None);
         assert_eq!(response.completion_tokens, None);
     }
 

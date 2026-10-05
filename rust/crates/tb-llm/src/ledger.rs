@@ -1,29 +1,14 @@
 //! Zentrale Postgres-Verbrauchserfassung ohne Prompts oder Chatinhalte.
 
-use std::time::{Duration, Instant};
-
 use chrono::{SecondsFormat, Utc};
 use sqlx::postgres::PgPool;
-use tokio::sync::{Mutex, OnceCell};
+use tokio::sync::OnceCell;
 
 /// Quellen-Kennung dieses Bots im geteilten Ledger (Python: `source="twitch-bot"`).
 pub const SOURCE: &str = "twitch-bot";
 
-/// Rollierendes 5h-Token-Budget (0 = aus). Fester Default, keine Env mehr.
-const TOKEN_BUDGET_5H: i64 = 0;
-/// Standard-Fensterbreite in Stunden (Python: `WINDOW_HOURS = 5`).
-const WINDOW_HOURS: i64 = 5;
-/// Mindestabstand zwischen zwei Budget-Prüfungen, damit nicht jeder Call die DB
-/// für die teurere `SUM`-Abfrage anfasst (siehe [`warn_if_over_budget`]).
-const BUDGET_CHECK_INTERVAL: Duration = Duration::from_secs(60);
-
 /// Dienststart übergibt denselben Pool wie den übrigen Schreibern.
 static POOL: OnceCell<PgPool> = OnceCell::const_new();
-
-/// Zeitpunkt der letzten Budget-Prüfung. `None` = noch nie geprüft. Drosselt
-/// [`warn_if_over_budget`] auf höchstens eine DB-Abfrage pro
-/// [`BUDGET_CHECK_INTERVAL`], damit das Fenster-`SUM` nicht bei jedem Call läuft.
-static LAST_BUDGET_CHECK: Mutex<Option<Instant>> = Mutex::const_new(None);
 
 /// Dienststart übergibt den vorhandenen Pool und die überprüfbare Herkunft.
 static IDENTITY: OnceCell<(&'static str, &'static str)> = OnceCell::const_new();
@@ -183,26 +168,7 @@ async fn record_with_pool(
     Ok(())
 }
 
-/// Summe der `total`-Tokens im rollierenden Fenster der letzten `hours` Stunden.
-///
-/// Nutzt dieselbe Bedingung wie der Python-Helfer
-/// (`ts >= datetime('now','-N hours')`), damit alle Seiten identisch zählen.
-/// **Best-effort:** bei jedem Fehler `0` + `warn`-Log.
-pub async fn window_tokens(hours: i64) -> i64 {
-    let Some(pool) = pool().await else {
-        return 0;
-    };
-    match window_tokens_with_pool(pool, hours).await {
-        Ok(sum) => sum,
-        Err(err) => {
-            tracing::warn!(error = %err, "LLM-Usage-Ledger: window_tokens fehlgeschlagen");
-            0
-        }
-    }
-}
-
-/// Kern-Abfrage des Fensters gegen einen expliziten Pool, von [`window_tokens`]
-/// (gecachter Pool) und den Tests (Temp-Pool) genutzt.
+#[cfg(test)]
 async fn window_tokens_with_pool(pool: &PgPool, hours: i64) -> sqlx::Result<i64> {
     let hours = i32::try_from(hours.max(0)).unwrap_or(i32::MAX);
     // Textbasiertes Fenster (ts ist TEXT, siehe Modul-Doc): der Schwellwert wird
@@ -221,40 +187,6 @@ async fn window_tokens_with_pool(pool: &PgPool, hours: i64) -> sqlx::Result<i64>
     .bind(hours)
     .fetch_one(pool)
     .await
-}
-
-/// Misst den 5h-Verbrauch und **warnt** bei Budget-Überschreitung. KEIN Block,
-/// KEIN Fehler. Budget aus der Konstante [`TOKEN_BUDGET_5H`] (0 = aus).
-///
-/// Damit nicht jeder Call die DB für das Fenster-`SUM` anfasst, ist die Prüfung
-/// auf höchstens einmal pro [`BUDGET_CHECK_INTERVAL`] (60 s) gedrosselt: liegt die
-/// letzte Prüfung näher zurück, kehrt die Funktion sofort zurück.
-pub async fn warn_if_over_budget() {
-    let budget = TOKEN_BUDGET_5H;
-    if budget <= 0 {
-        return;
-    }
-
-    {
-        let mut last = LAST_BUDGET_CHECK.lock().await;
-        let now = Instant::now();
-        if let Some(prev) = *last {
-            if now.duration_since(prev) < BUDGET_CHECK_INTERVAL {
-                return;
-            }
-        }
-        *last = Some(now);
-    }
-
-    let used = window_tokens(WINDOW_HOURS).await;
-    if used > budget {
-        tracing::warn!(
-            used,
-            budget,
-            window_hours = WINDOW_HOURS,
-            "5h-Token-Budget überschritten (nur Warnung, kein Block)"
-        );
-    }
 }
 
 #[cfg(test)]
