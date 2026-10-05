@@ -561,7 +561,7 @@ pub(crate) async fn call_endpoint(
                     Some(error.code().into()),
                     match error {
                         LlmError::Http { status, .. } => Some(i32::from(*status)),
-                        _ => None,
+                        _ => metadata.status,
                     },
                 ),
             };
