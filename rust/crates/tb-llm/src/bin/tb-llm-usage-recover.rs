@@ -111,7 +111,7 @@ fn strip_ansi(message: &str) -> String {
 mod tests {
     #[test]
     fn tracing_ansi_bleibt_lesbar() {
-        let text="\x1b[31mERROR\x1b[0m LLM_USAGE_RECOVERY \x1b[3mrecovery\x1b[0m\x1b[2m=\x1b[0m{\"project\":\"Deadlock-Twitch-Bot\"}";
+        let text = "\x1b[31mERROR\x1b[0m LLM_USAGE_RECOVERY \x1b[3mrecovery\x1b[0m\x1b[2m=\x1b[0m{\"project\":\"Deadlock-Twitch-Bot\"}";
         assert!(super::strip_ansi(text).contains("recovery={\"project\":"));
     }
 }
