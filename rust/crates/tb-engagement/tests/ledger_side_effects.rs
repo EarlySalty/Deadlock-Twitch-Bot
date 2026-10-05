@@ -75,6 +75,119 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
 
     tb_llm::ledger::initialize(verify.clone(), "twitch-test", "ledger-side-effects").unwrap();
 
+    let blockers = PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with(
+            sqlx::postgres::PgConnectOptions::new()
+                .host(&config.socket)
+                .database(&config.database)
+                .username(&config.user),
+        )
+        .await
+        .expect("Isolierter Sperrpool");
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let mut lock = blockers.begin().await.unwrap();
+    sqlx::query("LOCK TABLE public.llm_usage IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let start = std::time::Instant::now();
+    let result = tb_llm::complete(
+        "slow_start_test",
+        tb_llm::Request::prompt("Fixture")
+            .timeout(std::time::Duration::from_millis(100))
+            .endpoint(tb_llm::selection::LlmEndpoint {
+                provider: "fireworks",
+                base_url: server.uri(),
+                model: tb_llm::selection::configured_fireworks_model().into(),
+                api_key: Some("synthetic-key".into()),
+            }),
+    )
+    .await;
+    assert!(matches!(result, Err(tb_llm::LlmError::Timeout(_))));
+    assert!(start.elapsed() < std::time::Duration::from_secs(1));
+    lock.rollback().await.unwrap();
+    server.verify().await;
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(std::time::Duration::from_millis(150))
+                .set_body_json(serde_json::json!({
+                    "choices":[{"message":{"content":"Fixture"}}],
+                    "usage":{"prompt_tokens":31,"completion_tokens":5,"total_tokens":36}
+                })),
+        )
+        .mount(&server)
+        .await;
+    let start = std::time::Instant::now();
+    let task = tokio::spawn(async move {
+        tb_llm::complete(
+            "slow_finish_test",
+            tb_llm::Request::prompt("Fixture")
+                .timeout(std::time::Duration::from_millis(400))
+                .endpoint(tb_llm::selection::LlmEndpoint {
+                    provider: "fireworks",
+                    base_url: server.uri(),
+                    model: tb_llm::selection::configured_fireworks_model().into(),
+                    api_key: Some("synthetic-key".into()),
+                }),
+        )
+        .await
+    });
+    let id = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let id: Option<i64> = sqlx::query_scalar(
+                "SELECT id FROM public.llm_usage WHERE purpose='slow_finish_test'",
+            )
+            .fetch_optional(&blockers)
+            .await
+            .unwrap();
+            if let Some(id) = id {
+                break id;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("Start ist vor HTTP sichtbar");
+    let mut lock = blockers.begin().await.unwrap();
+    sqlx::query("SELECT id FROM public.llm_usage WHERE id=$1 FOR UPDATE")
+        .bind(id)
+        .fetch_one(&mut *lock)
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), task)
+        .await
+        .expect("Abschluss hält Caller nicht unbegrenzt")
+        .unwrap()
+        .expect("Erhaltene Antwort bleibt nutzbar");
+    assert!(start.elapsed() < std::time::Duration::from_secs(1));
+    lock.rollback().await.unwrap();
+    let total = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let total: Option<i64> =
+                sqlx::query_scalar("SELECT total FROM public.llm_usage WHERE id=$1")
+                    .bind(id)
+                    .fetch_one(&blockers)
+                    .await
+                    .unwrap();
+            if let Some(total) = total {
+                break total;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("Detached Abschluss trägt echte Fixtureusage nach");
+    assert_eq!(total, 36);
+
     // 1) generate() → engagement 777/333.
     {
         let server = MockServer::start().await;

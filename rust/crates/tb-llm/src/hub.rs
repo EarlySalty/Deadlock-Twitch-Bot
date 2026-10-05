@@ -497,35 +497,58 @@ pub(crate) async fn call_endpoint(
     let raw = loop {
         let started = Instant::now();
         let rest = ende.saturating_duration_since(started);
+        if rest.is_zero() {
+            return Err(LlmError::Timeout(
+                "Aufruffrist vor dem Versuch abgelaufen".into(),
+            ));
+        }
         // Ein lokaler Mock darf ohne Datenbank laufen; ein produktiver Versuch nie.
         let track = ledger::pool().await.is_some() || !is_loopback_endpoint(&endpoint.base_url);
         let attempt = if track {
             Some(
-                ledger::begin(
-                    purpose.unwrap_or("unknown"),
-                    &endpoint.model,
-                    endpoint.provider,
+                tokio::time::timeout(
+                    rest,
+                    ledger::begin(
+                        purpose.unwrap_or("unknown"),
+                        &endpoint.model,
+                        endpoint.provider,
+                    ),
                 )
-                .await?,
+                .await
+                .map_err(|_| {
+                    LlmError::Timeout("Verbrauchsstart überschreitet Aufruffrist".into())
+                })??,
             )
         } else {
             None
         };
+        let rest = ende.saturating_duration_since(Instant::now());
         let mut metadata = ResponseMetadata::default();
-        let senden = send_openai_compatible(
-            &client,
-            endpoint,
-            Some(api_key),
-            request,
-            Some(&mut metadata),
-        );
-        let outcome = match tokio::time::timeout(rest, senden).await {
-            Ok(outcome) => outcome,
-            Err(_) => Err(RawError::Fehler(LlmError::Timeout(format!(
+        let timeout_error = || {
+            RawError::Fehler(LlmError::Timeout(format!(
                 "{} antwortete nicht innerhalb von {} ms",
                 endpoint.provider,
                 frist.as_millis()
-            )))),
+            )))
+        };
+        let outcome = if rest.is_zero() {
+            Err(timeout_error())
+        } else {
+            match tokio::time::timeout(
+                rest,
+                send_openai_compatible(
+                    &client,
+                    endpoint,
+                    Some(api_key),
+                    request,
+                    Some(&mut metadata),
+                ),
+            )
+            .await
+            {
+                Ok(outcome) => outcome,
+                Err(_) => Err(timeout_error()),
+            }
         };
         if let Some(id) = attempt {
             let (ti, to, total, request_id, success, error_code, http_status) = match &outcome {
@@ -576,7 +599,12 @@ pub(crate) async fn call_endpoint(
                 http_status,
                 latency_ms: started.elapsed().as_millis() as i64,
             };
-            if tokio::spawn(ledger::finish(completion)).await.is_err() {
+            ledger::journal_completion(&completion);
+            let finish = tokio::spawn(ledger::finish(completion));
+            if matches!(
+                tokio::time::timeout(ende.saturating_duration_since(Instant::now()), finish).await,
+                Ok(Err(_))
+            ) {
                 tracing::error!(
                     "LLM_USAGE_RECOVERY: Abschlussaufgabe abgebrochen, Start bleibt ungeklärt"
                 );

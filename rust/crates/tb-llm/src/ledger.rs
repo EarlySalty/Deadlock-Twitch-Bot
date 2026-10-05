@@ -64,6 +64,17 @@ pub struct Completion {
 }
 /// Auch nach einem Abschlussfehler bleibt der bereits gespeicherte Start sichtbar.
 /// Die strukturierte Journalzeile enthält nur Zähler und technische IDs.
+pub(crate) fn journal_completion(completion: &Completion) {
+    let (project, service) = IDENTITY.get().expect("Erfasster Versuch besitzt Herkunft");
+    let recovery = serde_json::to_string(&Recovery {
+        project: (*project).into(),
+        service: (*service).into(),
+        completion: completion.clone(),
+    })
+    .expect("Zähler sind serialisierbar");
+    eprintln!("LLM_USAGE_RECOVERY recovery={recovery}");
+}
+
 pub async fn finish(completion: Completion) {
     if recover(&completion).await.is_err() {
         let (project, service) = IDENTITY.get().expect("Erfasster Versuch besitzt Herkunft");
@@ -194,6 +205,49 @@ mod tests {
     use super::*;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
+
+    #[test]
+    fn journalbeleg_bleibt_bei_error_filter_sichtbar() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "ledger::tests::journalbeleg_stderr_kind",
+                "--nocapture",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        let record = stderr
+            .lines()
+            .find_map(|line| line.strip_prefix("LLM_USAGE_RECOVERY recovery="))
+            .expect("Vorabbeleg wird unabhängig vom Tracingfilter geschrieben");
+        let recovery: Recovery = serde_json::from_str(record).unwrap();
+        assert_eq!(recovery.completion.total, Some(15));
+    }
+
+    #[tokio::test]
+    #[ignore = "Isolierter Kindprozess für den Error-Filter"]
+    async fn journalbeleg_stderr_kind() {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::ERROR)
+            .init();
+        let pool =
+            PgPoolOptions::new().connect_lazy_with(PgConnectOptions::new().database("fixture"));
+        initialize(pool, "twitch-test", "stderr-fixture").unwrap();
+        journal_completion(&Completion {
+            id: 7,
+            tokens_in: Some(12),
+            tokens_out: Some(3),
+            total: Some(15),
+            request_id: None,
+            success: true,
+            error_code: None,
+            http_status: Some(200),
+            latency_ms: 1,
+        });
+    }
 
     /// Öffnet einen frischen, isolierten Postgres-Schema-Pool mit Ledger-Tabelle —
     /// entkoppelt vom gecachten Prozess-Pool, damit jeder Test seine eigene Tabelle
