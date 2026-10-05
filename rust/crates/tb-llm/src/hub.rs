@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::ledger;
-use crate::selection::{endpoint_chain, endpoint_for, LlmEndpoint};
+use crate::selection::{LlmEndpoint, endpoint_chain, endpoint_for};
 
 #[cfg(feature = "local-eval")]
 mod replay;
@@ -599,7 +599,7 @@ pub(crate) async fn call_endpoint(
                 tokio::time::sleep(wartezeit).await;
             }
             Err(RawError::TooManyRequests { body, .. }) => {
-                return Err(LlmError::Http { status: 429, body })
+                return Err(LlmError::Http { status: 429, body });
             }
             Err(RawError::Fehler(error)) => return Err(error),
         }
@@ -785,9 +785,14 @@ async fn finish(response: reqwest::Response) -> Result<Value, RawError> {
             "Anbieterantwort ist kein gültiges JSON".into(),
         ))
     })?;
-    if payload.get("id").is_none() {
+    let object = payload.as_object_mut().ok_or_else(|| {
+        RawError::Fehler(LlmError::Unparsable(
+            "Anbieterantwort ist kein JSON-Objekt".into(),
+        ))
+    })?;
+    if !object.contains_key("id") {
         if let Some(request_id) = request_id {
-            payload["id"] = Value::String(request_id);
+            object.insert("id".into(), Value::String(request_id));
         }
     }
     Ok(payload)
@@ -1097,6 +1102,36 @@ mod tests {
 
         assert!(matches!(error, LlmError::Unavailable(_)));
         assert!(error.to_string().contains("nicht freigegeben"));
+    }
+
+    #[tokio::test]
+    async fn anbieterantwort_muss_auch_mit_request_id_ein_objekt_sein() {
+        for body in [
+            json!([]),
+            json!("text"),
+            json!(42),
+            json!(true),
+            Value::Null,
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("x-request-id", "synthetic-request")
+                        .set_body_json(body),
+                )
+                .mount(&server)
+                .await;
+            let response = reqwest::Client::new()
+                .get(server.uri())
+                .send()
+                .await
+                .expect("Lokale Mockantwort");
+            assert!(matches!(
+                finish(response).await,
+                Err(RawError::Fehler(LlmError::Unparsable(_)))
+            ));
+        }
     }
 
     #[tokio::test]

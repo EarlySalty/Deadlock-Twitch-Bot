@@ -116,7 +116,7 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
         assert_eq!(row.2, Some(tb_llm::selection::configured_fireworks_model()));
     }
 
-    // 3) raw_completion() (untracked) → schreibt KEINE Zeile (999/111 bleibt 0).
+    // Auch raw_completion() schreibt eine Verbrauchszeile mit 999/111.
     {
         let server = MockServer::start().await;
         mock_usage(&server, "x", 999, 111).await;
@@ -152,6 +152,46 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
             .await;
         let row:(String,Option<i64>,Option<i64>,Option<i64>)=sqlx::query_as("SELECT attempt_state,tokens_in,tokens_out,total FROM public.llm_usage WHERE purpose='missing_usage_test' ORDER BY id DESC LIMIT 1").fetch_one(&verify).await.unwrap();
         assert_eq!(row, (state.into(), None, None, None));
+    }
+    for body in [
+        serde_json::json!([]),
+        serde_json::json!("text"),
+        serde_json::json!(42),
+        serde_json::json!(true),
+        serde_json::Value::Null,
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("x-request-id", "synthetic-malformed-request")
+                    .set_body_json(body),
+            )
+            .mount(&server)
+            .await;
+        assert!(
+            client_for(&server)
+                .raw_completion_tracked("", "p", 10, 0.1, "malformed_response_test")
+                .await
+                .is_err()
+        );
+        let row: (String, Option<i64>, Option<String>, Option<i32>, bool) = sqlx::query_as(
+            "SELECT attempt_state,total,request_id,http_status,finished_at IS NOT NULL \
+             FROM public.llm_usage WHERE purpose='malformed_response_test' ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_one(&verify)
+        .await
+        .expect("Fehlerabschluss lesen");
+        assert_eq!(
+            row,
+            (
+                "failed".into(),
+                None,
+                Some("synthetic-malformed-request".into()),
+                Some(200),
+                true,
+            )
+        );
     }
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -200,14 +240,16 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
         http_status: Some(200),
         latency_ms: 1,
     };
-    assert!(tb_llm::ledger::recover_with_pool(
-        &verify,
-        &completion,
-        "falsches-projekt",
-        "ledger-side-effects"
-    )
-    .await
-    .is_err());
+    assert!(
+        tb_llm::ledger::recover_with_pool(
+            &verify,
+            &completion,
+            "falsches-projekt",
+            "ledger-side-effects"
+        )
+        .await
+        .is_err()
+    );
     let saved = serde_json::to_string(&tb_llm::ledger::Recovery {
         project: "twitch-test".into(),
         service: "ledger-side-effects".into(),
@@ -242,10 +284,12 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
         .expect(0)
         .mount(&server)
         .await;
-    assert!(client_for(&server)
-        .raw_completion_tracked("", "p", 10, 0.1, "blocked_test")
-        .await
-        .is_err());
+    assert!(
+        client_for(&server)
+            .raw_completion_tracked("", "p", 10, 0.1, "blocked_test")
+            .await
+            .is_err()
+    );
     sqlx::query("ALTER TABLE public.llm_usage_missing RENAME TO llm_usage")
         .execute(&verify)
         .await
