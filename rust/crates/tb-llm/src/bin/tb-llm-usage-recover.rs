@@ -1,4 +1,6 @@
 //! Liefert ausschließlich strukturierte Verbrauchszähler aus dem Systemjournal nach.
+include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
+
 use serde::Deserialize;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use std::{
@@ -14,6 +16,9 @@ struct Config {
 }
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if print_build_revision() {
+        return Ok(());
+    }
     let args: Vec<_> = std::env::args().collect();
     if args.len() != 2 {
         return Err("Normale Konfigurationsdatei fehlt".into());

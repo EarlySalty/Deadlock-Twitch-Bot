@@ -84,6 +84,7 @@ generated=(
   rust/target/release/tb-dashboard
   rust/target/release/tb-stream-audit
   rust/target/release/tb-config-check
+  rust/target/release/tb-llm-usage-recover
   bot/analytics/dashboard_v2/dist
   bot/admin_dashboard/dist
   website/dist
@@ -124,7 +125,7 @@ done
 # ausführen. Ein neuer Checkout-Name macht eine kopierte alte Binary nicht neu.
 check_binary_revisions() {
   local source_root="$1" binary embedded_revision
-  local binaries=(tb-bot tb-dashboard tb-stream-audit tb-config-check)
+  local binaries=(tb-bot tb-dashboard tb-stream-audit tb-config-check tb-llm-usage-recover)
   if [[ "$collector_expected" == 1 ]]; then binaries+=(tb-category-collector); fi
   if [[ "$clip_context_expected" == 1 ]]; then binaries+=(clip_context_learn); fi
   if [[ "$watchdog_expected" == 1 ]]; then binaries+=(tb-twitch-watchdog); fi
@@ -166,6 +167,7 @@ if [[ ! -e "$release" ]]; then
   install -m 0755 "$checkout/rust/target/release/tb-dashboard" "$stage/rust/target/release/tb-dashboard"
   install -m 0755 "$checkout/rust/target/release/tb-stream-audit" "$stage/rust/target/release/tb-stream-audit"
   install -m 0755 "$checkout/rust/target/release/tb-config-check" "$stage/rust/target/release/tb-config-check"
+  install -m 0755 "$checkout/rust/target/release/tb-llm-usage-recover" "$stage/rust/target/release/tb-llm-usage-recover"
   if [[ "$collector_expected" == 1 ]]; then
     install -m 0755 "$checkout/rust/target/release/tb-category-collector" "$stage/rust/target/release/tb-category-collector"
   fi
