@@ -276,15 +276,35 @@ pub async fn run_insight_job(pool: &PgPool) {
         if enriched.is_empty() {
             continue;
         }
+        let attempted_at = match title_db::claim_due_insight(pool, &streamer_id).await {
+            Ok(Some(attempted_at)) => attempted_at,
+            Ok(None) => continue,
+            Err(error) => {
+                tracing::error!(%error, streamer_id, "Titelanalyse: Fälligkeit konnte nicht reserviert werden");
+                continue;
+            }
+        };
         let period_label = format!(
-            "{} – {}",
+            "{} bis {}",
             period_start.format("%d.%m."),
             now.format("%d.%m.%Y")
         );
-        let Some(result) = generate_insight(&enriched, &period_label).await else {
-            continue;
+        let result = match generate_insight(&enriched, &period_label).await {
+            Some(result) => result,
+            None => {
+                tracing::warn!(
+                    streamer_id,
+                    "Titelanalyse ohne Ergebnis; nächster Versuch frühestens morgen"
+                );
+                if let Err(error) =
+                    title_db::defer_failed_insight(pool, &streamer_id, attempted_at).await
+                {
+                    tracing::error!(%error, streamer_id, "Titelanalyse: Aufschub konnte nicht gespeichert werden; Wochensperre bleibt bestehen");
+                }
+                continue;
+            }
         };
-        let _ = title_db::insert_insight(
+        let saved = title_db::insert_insight(
             pool,
             &streamer_id,
             period_start,
@@ -296,21 +316,27 @@ pub async fn run_insight_job(pool: &PgPool) {
             &result.raw,
         )
         .await;
-        tracing::info!(streamer_id, "title_generator: insight saved");
+        match saved {
+            Ok(()) => tracing::info!(streamer_id, "title_generator: insight saved"),
+            Err(error) => {
+                tracing::error!(%error, streamer_id, "Titelanalyse konnte nicht gespeichert werden; Wochensperre verhindert erneute Kosten");
+            }
+        }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
     tracing::info!("title_generator: insight job done");
 }
 
-/// Periodischer Job: wöchentlich `run_insight_job` (Python
-/// `schedule_weekly_insight_job`). Als tokio-Task starten (läuft endlos).
+/// Prüft stündlich die dauerhaft gespeicherte Fälligkeit. Pro Partner wird
+/// höchstens einmal pro Woche erfolgreich analysiert. Als tokio-Task starten.
 pub async fn schedule_weekly_insight_job(pool: PgPool, start_delay_s: u64) {
     if start_delay_s > 0 {
         tokio::time::sleep(Duration::from_secs(start_delay_s)).await;
     }
     loop {
         run_insight_job(&pool).await;
-        tokio::time::sleep(Duration::from_secs(7 * 86400)).await;
+        // Fälligkeit liegt dauerhaft in der DB, einschließlich Fehleraufschub.
+        tokio::time::sleep(Duration::from_secs(3600)).await;
     }
 }
 

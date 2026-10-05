@@ -356,6 +356,52 @@ pub async fn upsert_knowledge_entry(
     Ok(())
 }
 
+/// Reserviert eine fällige Analyse atomar je Twitch-ID. Bereits vorhandene
+/// Insights gelten sieben Tage. Die Reservierung überlebt auch einen Absturz,
+/// damit ein möglicherweise bezahlter Aufruf nicht beim Neustart wiederholt wird.
+pub async fn claim_due_insight(
+    pool: &PgPool,
+    streamer_id: &str,
+) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
+    sqlx::query_scalar::<_, DateTime<Utc>>(
+        "INSERT INTO title_generator_insight_schedule AS schedule \
+             (streamer_id, attempted_at, next_attempt_at) \
+         SELECT $1, clock_timestamp(), NOW() + INTERVAL '7 days' \
+         WHERE NOT EXISTS (SELECT 1 FROM title_generator_insights \
+             WHERE streamer_id = $1 AND generated_at > NOW() - INTERVAL '7 days') \
+         ON CONFLICT (streamer_id) DO UPDATE SET \
+             attempted_at = EXCLUDED.attempted_at, \
+             next_attempt_at = EXCLUDED.next_attempt_at \
+         WHERE schedule.next_attempt_at <= NOW() \
+         RETURNING attempted_at",
+    )
+    .bind(streamer_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Ein nachweislich erfolgloser Versuch darf frühestens am nächsten Tag wieder
+/// laufen. Die Versuchkennung verhindert Änderungen durch einen alten Lauf.
+pub async fn defer_failed_insight(
+    pool: &PgPool,
+    streamer_id: &str,
+    attempted_at: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE title_generator_insight_schedule \
+         SET next_attempt_at = NOW() + INTERVAL '1 day' \
+         WHERE streamer_id = $1 AND attempted_at = $2",
+    )
+    .bind(streamer_id)
+    .bind(attempted_at)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() != 1 {
+        return Err(sqlx::Error::RowNotFound);
+    }
+    Ok(())
+}
+
 /// Wöchentlichen Insight-Datensatz speichern (Python `insert_insight`).
 /// `raw_response` als JSON-Text → `::jsonb` (= Python `json.dumps`).
 #[allow(clippy::too_many_arguments)]
@@ -421,6 +467,80 @@ mod tests {
     use super::*;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
+
+    #[tokio::test]
+    async fn insight_faelligkeit_neustart_parallelitaet_und_fehleraufschub() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = &database.pool;
+        sqlx::query(
+            "CREATE TABLE title_generator_insights (streamer_id TEXT, generated_at TIMESTAMPTZ)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/20261005120000_title_insight_schedule.sql"
+        ))
+        .execute(pool)
+        .await
+        .unwrap();
+
+        // Vor dem Umbau gespeicherte Analysen bleiben nach einem Neustart frisch.
+        sqlx::query(
+            "INSERT INTO title_generator_insights VALUES ('frisch', NOW() - INTERVAL '6 days')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        assert!(claim_due_insight(pool, "frisch").await.unwrap().is_none());
+
+        // Zwei unabhängige Läufe reservieren dieselbe Plattform-ID nur einmal.
+        let (first, second) = tokio::join!(
+            claim_due_insight(pool, "parallel"),
+            claim_due_insight(pool, "parallel")
+        );
+        let first = first.unwrap();
+        let second = second.unwrap();
+        assert_ne!(first.is_some(), second.is_some());
+        let attempted_at = first.or(second).unwrap();
+        assert!(claim_due_insight(pool, "parallel").await.unwrap().is_none());
+        let blocked_for_days: bool = sqlx::query_scalar(
+            "SELECT next_attempt_at > NOW() + INTERVAL '6 days' FROM title_generator_insight_schedule WHERE streamer_id = 'parallel'",
+        ).fetch_one(pool).await.unwrap();
+        assert!(
+            blocked_for_days,
+            "Auch ein Absturz darf keinen Neustart-Aufruf auslösen"
+        );
+
+        defer_failed_insight(pool, "parallel", attempted_at)
+            .await
+            .unwrap();
+        assert!(claim_due_insight(pool, "parallel").await.unwrap().is_none());
+        let backoff: bool = sqlx::query_scalar(
+            "SELECT next_attempt_at > NOW() + INTERVAL '23 hours' AND next_attempt_at < NOW() + INTERVAL '25 hours' FROM title_generator_insight_schedule WHERE streamer_id = 'parallel'",
+        ).fetch_one(pool).await.unwrap();
+        assert!(backoff);
+
+        sqlx::query("UPDATE title_generator_insight_schedule SET next_attempt_at = NOW() - INTERVAL '1 second' WHERE streamer_id = 'parallel'")
+            .execute(pool).await.unwrap();
+        let new_attempt = claim_due_insight(pool, "parallel").await.unwrap().unwrap();
+        assert_ne!(new_attempt, attempted_at);
+        assert!(defer_failed_insight(pool, "parallel", attempted_at)
+            .await
+            .is_err());
+
+        // Ein inzwischen gespeicherter Erfolg bleibt trotz fälligem Schedule gültig.
+        sqlx::query("INSERT INTO title_generator_insights VALUES ('parallel', NOW())")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE title_generator_insight_schedule SET next_attempt_at = NOW() - INTERVAL '1 second' WHERE streamer_id = 'parallel'")
+            .execute(pool).await.unwrap();
+        assert!(claim_due_insight(pool, "parallel").await.unwrap().is_none());
+        sqlx::query("UPDATE title_generator_insights SET generated_at = NOW() - INTERVAL '8 days' WHERE streamer_id = 'parallel'")
+            .execute(pool).await.unwrap();
+        assert!(claim_due_insight(pool, "parallel").await.unwrap().is_some());
+    }
 
     macro_rules! pool_or_skip {
         ($schema:expr) => {{
