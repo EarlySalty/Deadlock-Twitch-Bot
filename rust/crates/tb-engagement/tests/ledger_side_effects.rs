@@ -169,12 +169,10 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
             )
             .mount(&server)
             .await;
-        assert!(
-            client_for(&server)
-                .raw_completion_tracked("", "p", 10, 0.1, "malformed_response_test")
-                .await
-                .is_err()
-        );
+        assert!(client_for(&server)
+            .raw_completion_tracked("", "p", 10, 0.1, "malformed_response_test")
+            .await
+            .is_err());
         let row: (String, Option<i64>, Option<String>, Option<i32>, bool) = sqlx::query_as(
             "SELECT attempt_state,total,request_id,http_status,finished_at IS NOT NULL \
              FROM public.llm_usage WHERE purpose='malformed_response_test' ORDER BY id DESC LIMIT 1",
@@ -240,16 +238,14 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
         http_status: Some(200),
         latency_ms: 1,
     };
-    assert!(
-        tb_llm::ledger::recover_with_pool(
-            &verify,
-            &completion,
-            "falsches-projekt",
-            "ledger-side-effects"
-        )
-        .await
-        .is_err()
-    );
+    assert!(tb_llm::ledger::recover_with_pool(
+        &verify,
+        &completion,
+        "falsches-projekt",
+        "ledger-side-effects"
+    )
+    .await
+    .is_err());
     let saved = serde_json::to_string(&tb_llm::ledger::Recovery {
         project: "twitch-test".into(),
         service: "ledger-side-effects".into(),
@@ -284,12 +280,10 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
         .expect(0)
         .mount(&server)
         .await;
-    assert!(
-        client_for(&server)
-            .raw_completion_tracked("", "p", 10, 0.1, "blocked_test")
-            .await
-            .is_err()
-    );
+    assert!(client_for(&server)
+        .raw_completion_tracked("", "p", 10, 0.1, "blocked_test")
+        .await
+        .is_err());
     sqlx::query("ALTER TABLE public.llm_usage_missing RENAME TO llm_usage")
         .execute(&verify)
         .await

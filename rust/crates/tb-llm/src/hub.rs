@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::ledger;
-use crate::selection::{LlmEndpoint, endpoint_chain, endpoint_for};
+use crate::selection::{endpoint_chain, endpoint_for, LlmEndpoint};
 
 #[cfg(feature = "local-eval")]
 mod replay;
