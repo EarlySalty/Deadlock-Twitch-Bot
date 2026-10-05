@@ -176,6 +176,7 @@ required_artifacts=(
   rust/target/release/tb-dashboard
   rust/target/release/tb-stream-audit
   rust/target/release/tb-config-check
+  rust/target/release/tb-llm-usage-recover
   bot/analytics/dashboard_v2/dist
   bot/admin_dashboard/dist
   website/dist
@@ -341,6 +342,41 @@ BEGIN
             RAISE EXCEPTION 'Analysewriter hat zusätzliche Rechte auf %',t;
         END IF;
     END LOOP;
+    FOREACH p IN ARRAY ARRAY['SELECT','INSERT','UPDATE'] LOOP
+        IF NOT has_table_privilege('twitchanalysis','public.llm_usage',p) THEN
+            RAISE EXCEPTION 'Verbrauchswriter ohne % auf llm_usage',p;
+        END IF;
+    END LOOP;
+    IF has_table_privilege('twitchanalysis','public.llm_usage','DELETE,TRUNCATE,REFERENCES,TRIGGER') OR
+        (SELECT relowner='twitchanalysis'::regrole FROM pg_class WHERE oid='public.llm_usage'::regclass) OR
+        NOT has_sequence_privilege('twitchanalysis','public.llm_usage_id_seq','USAGE') OR
+        NOT has_sequence_privilege('twitchanalysis','public.llm_usage_id_seq','SELECT') OR
+        has_sequence_privilege('twitchanalysis','public.llm_usage_id_seq','UPDATE') THEN
+        RAISE EXCEPTION 'Verbrauchswriter hat unzulässige Rechte';
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='twitchaudit' AND rolcanlogin AND
+        NOT(rolsuper OR rolinherit OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)) OR
+        EXISTS(SELECT FROM pg_auth_members WHERE roleid='twitchaudit'::regrole OR member='twitchaudit'::regrole) THEN
+        RAISE EXCEPTION 'Auditverbrauch: unzulässige Rollenattribute oder Mitgliedschaften';
+    END IF;
+    FOREACH p IN ARRAY ARRAY['SELECT','INSERT','UPDATE'] LOOP
+        IF NOT has_table_privilege('twitchaudit','public.llm_usage',p) THEN
+            RAISE EXCEPTION 'Auditverbrauch ohne % auf llm_usage',p;
+        END IF;
+    END LOOP;
+    IF
+        has_table_privilege('twitchaudit','public.llm_usage','DELETE,TRUNCATE,REFERENCES,TRIGGER') OR
+        NOT has_sequence_privilege('twitchaudit','public.llm_usage_id_seq','USAGE') OR
+        NOT has_sequence_privilege('twitchaudit','public.llm_usage_id_seq','SELECT') OR
+        has_sequence_privilege('twitchaudit','public.llm_usage_id_seq','UPDATE') OR
+        has_schema_privilege('twitchaudit','public','CREATE') THEN
+        RAISE EXCEPTION 'Auditverbrauch: Ledgerrechte falsch';
+    END IF;
+    IF EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND c.relkind IN('r','p','v','m','f') AND c.relname<>'llm_usage'
+        AND has_table_privilege('twitchaudit',c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')) THEN
+        RAISE EXCEPTION 'Auditverbrauch: fremde Schreibrechte';
+    END IF;
     -- Vorhandenes PUBLIC SELECT auf echte Timescale-Metadaten gehört zum
     -- Extensionbestand. Anwendungsdaten, Chunks, Direktgrants und sämtliche
     -- zusätzlichen Schreibrechte bleiben auch dort ausgeschlossen.
@@ -378,7 +414,8 @@ BEGIN
             WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%'
               AND c.relkind IN ('r','p','v','m','f','S')
               AND NOT (n.nspname='public' AND c.relname=ANY(ARRAY[
-                  'twitch_ai_chat_sessions','twitch_ai_chat_hourly','twitch_ai_chat_reservations']))
+                  'twitch_ai_chat_sessions','twitch_ai_chat_hourly','twitch_ai_chat_reservations',
+                  'llm_usage','llm_usage_id_seq']))
         )
         SELECT FROM relation_rights r WHERE r.direct_writer_grant OR CASE WHEN r.relkind='S' THEN
             has_sequence_privilege('twitchanalysis',r.oid,'USAGE,UPDATE') OR
@@ -436,6 +473,12 @@ BEGIN
             AND address IN ('::','::0','0.0.0.0') AND netmask IN ('::','::0','0.0.0.0')) <> 2 THEN
         RAISE EXCEPTION 'Analyse-HBAregeln sind nicht zuerst und ausschließlich rollenbezogen';
     END IF;
+    IF (SELECT count(*) FROM pg_hba_file_rules WHERE 'twitchaudit'=ANY(user_name))<>4 OR
+        NOT EXISTS(SELECT FROM pg_hba_file_rules WHERE rule_number=5 AND type='local' AND database=ARRAY['twitch_analytics'] AND user_name=ARRAY['twitchaudit'] AND auth_method='peer') OR
+        NOT EXISTS(SELECT FROM pg_hba_file_rules WHERE rule_number=6 AND type='local' AND database=ARRAY['all'] AND user_name=ARRAY['twitchaudit'] AND auth_method='reject') OR
+        (SELECT count(*) FROM pg_hba_file_rules WHERE rule_number IN(7,8) AND type='host' AND database=ARRAY['all'] AND user_name=ARRAY['twitchaudit'] AND auth_method='reject')<>2 THEN
+        RAISE EXCEPTION 'Auditverbrauch: Peersocket nicht ausschließlich rollenbezogen';
+    END IF;
 END
 $verification$;
 ROLLBACK;
@@ -476,6 +519,14 @@ else
 fi
 echo "Liveprüfung bestanden: Reload, rollenbegrenzter Peerzugang, Ablehnung und Rechte-Metadaten."
 verification_pending=0
+
+install -m 0755 "$dest/ops/systemd/recover-twitch-llm-usage" /usr/local/bin/recover-twitch-llm-usage
+install -m 0644 "$dest/ops/systemd/twitch-llm-usage-recover.toml" /etc/deadlock/twitch-llm-usage-recover.toml
+install -m 0644 "$dest/ops/systemd/twitch-llm-usage-audit.toml" /etc/deadlock/twitch-llm-usage-audit.toml
+install -m 0644 "$dest/ops/systemd/deadlock-twitch-llm-usage-recover.service" /etc/systemd/system/deadlock-twitch-llm-usage-recover.service
+install -m 0644 "$dest/ops/systemd/deadlock-twitch-llm-usage-recover.timer" /etc/systemd/system/deadlock-twitch-llm-usage-recover.timer
+systemctl daemon-reload
+systemctl enable --now deadlock-twitch-llm-usage-recover.timer
 
 for target in "${restart_targets[@]}"; do
   case "$target" in

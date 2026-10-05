@@ -148,7 +148,7 @@ async fn call_ai_analysis(ai_model: &str, prompt: &str) -> Result<Vec<Value>, St
     } else {
         let client = EngagementLlmClient::new(None, None, None, Some(Duration::from_secs(240)));
         let raw = client
-            .raw_completion("", prompt, 60000, 0.5)
+            .raw_completion_tracked("", prompt, 60000, 0.5, "dashboard_ai_analysis")
             .await
             .map_err(|e| e.to_string())?;
         Ok(parse_ai_analysis_points_with_context(

@@ -94,7 +94,7 @@ impl LocalClient {
         let started = Instant::now();
         let payload = tokio::time::timeout(
             request.timeout.ok_or(EvalError("request_limits"))?,
-            send_openai_compatible(&self.client, &self.endpoint, None, &request),
+            send_openai_compatible(&self.client, &self.endpoint, None, &request, None),
         )
         .await
         .map_err(|_| EvalError("timeout"))?

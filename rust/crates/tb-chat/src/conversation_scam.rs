@@ -499,7 +499,7 @@ impl ScamJudge for LlmScamJudge {
         );
         match self
             .client
-            .messages_completion_uncapped(messages, 0.0)
+            .messages_completion_uncapped(messages, 0.0, "conversation_scam_judge")
             .await
         {
             Ok(raw) => {
@@ -1455,7 +1455,7 @@ impl ScamGuardCommands {
 
         let text = match self
             .client
-            .messages_completion_uncapped(messages, 0.3)
+            .messages_completion_uncapped(messages, 0.3, "conversation_scam_followup")
             .await
         {
             Ok(text) if !text.trim().is_empty() => text,
@@ -1667,7 +1667,10 @@ pub async fn run_scam_learnings_once(pool: &PgPool, client: &EngagementLlmClient
         return;
     }
     let messages = build_distill_messages(&corpus);
-    let guidance = match client.messages_completion_uncapped(messages, 0.2).await {
+    let guidance = match client
+        .messages_completion_uncapped(messages, 0.2, "conversation_scam_guidance")
+        .await
+    {
         Ok(text) if !text.trim().is_empty() => text.trim().to_string(),
         Ok(_) => {
             debug!("Scam-Self-Learning: leere Antwort, übersprungen");

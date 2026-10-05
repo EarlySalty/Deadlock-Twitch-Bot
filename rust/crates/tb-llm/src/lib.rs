@@ -22,10 +22,10 @@
 //!
 //! # Ledger
 //!
-//! Jeder erfolgreiche Aufruf verbucht die echten Token-Zahlen best-effort ins
-//! gemeinsame Usage-Ledger (`source='twitch-bot'`, `purpose=` Name des
-//! Anwendungsfalls, falls der Aufrufer keinen eigenen Zweck nennt) — siehe
-//! [`ledger`]. Ein DB-Fehler kippt den Aufruf NIE.
+//! Jeder HTTP-Versuch steht vor dem Senden im Postgres-Ledger mit Projekt,
+//! Dienst und Zweck. Fehlende Tokenzahlen bleiben unbekannt. Ohne gespeicherten
+//! Start findet kein kostenpflichtiger Aufruf statt. Abschlüsse werden bei
+//! Schreibfehlern über das strukturierte Journal nachgeliefert.
 //!
 //! # Secrets
 //!

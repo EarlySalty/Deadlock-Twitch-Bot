@@ -386,7 +386,7 @@ impl InviteQuestionJudge for LlmInviteQuestionJudge {
 
         match self
             .client
-            .messages_completion_uncapped(messages, 0.0)
+            .messages_completion_uncapped(messages, 0.0, "invite_question")
             .await
         {
             Ok(raw) => parse_invite_verdict(&raw),

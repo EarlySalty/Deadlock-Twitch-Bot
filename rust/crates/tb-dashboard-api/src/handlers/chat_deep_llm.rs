@@ -108,7 +108,13 @@ pub async fn chat_deep_llm_handler(
     // Wie Python: einzelne User-Message, temperature 0.1, 240s-Timeout.
     let client = EngagementLlmClient::new(None, None, None, Some(Duration::from_secs(240)));
     match client
-        .raw_completion("", &prompt, MAX_DEEP_TOKENS, 0.1)
+        .raw_completion_tracked(
+            "",
+            &prompt,
+            MAX_DEEP_TOKENS,
+            0.1,
+            "dashboard_chat_deep_analysis",
+        )
         .await
     {
         Ok(content) => {

@@ -1,0 +1,2 @@
+socket = "/var/run/postgresql"
+database = "twitch_analytics"

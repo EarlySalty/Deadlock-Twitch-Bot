@@ -132,7 +132,13 @@ impl GlobalSentiment {
             return None;
         }
         let (raw, model) = llm
-            .raw_completion_with_model(SYS, &build_user_prompt(&lines), BUILD_MAX_TOKENS, 0.4)
+            .raw_completion_with_model(
+                SYS,
+                &build_user_prompt(&lines),
+                BUILD_MAX_TOKENS,
+                0.4,
+                "community_sentiment",
+            )
             .await
             .ok()?;
         let stripped = strip_think(&raw);

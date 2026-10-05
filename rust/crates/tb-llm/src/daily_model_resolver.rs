@@ -22,12 +22,30 @@ fn error(reason: &str) -> LlmError {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default)]
+    pub ledger: LedgerConfig,
     pub project_id: String,
     pub environment: String,
     pub secret_path: String,
     pub credential_path: PathBuf,
     pub infisical_socket: PathBuf,
     pub infisical_socket_owner_uid: u32,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LedgerConfig {
+    pub socket: PathBuf,
+    pub database: String,
+    pub user: String,
+}
+impl Default for LedgerConfig {
+    fn default() -> Self {
+        Self {
+            socket: "/var/run/postgresql".into(),
+            database: "twitch_analytics".into(),
+            user: "nathanael".into(),
+        }
+    }
 }
 impl Config {
     pub fn load(path: &Path) -> Result<Self, LlmError> {
@@ -119,7 +137,7 @@ struct Secrets {
     #[serde(default)]
     imports: Vec<Import>,
 }
-async fn credential(config: &Config) -> Result<Zeroizing<String>, LlmError> {
+async fn credential_named(config: &Config, name: &str) -> Result<Zeroizing<String>, LlmError> {
     let raw = Zeroizing::new(protected_read(&config.credential_path, 4096)?);
     let token = std::str::from_utf8(&raw)
         .map_err(|_| error("Infisical-Credential ungültig"))?
@@ -160,11 +178,11 @@ async fn credential(config: &Config) -> Result<Zeroizing<String>, LlmError> {
         .into_iter()
         .chain(values.imports.into_iter().flat_map(|i| i.secrets))
         .find(|s| {
-            matches!(s.name.as_str(), "FIREWORKS_API_KEY" | "FIREWORK_API_KEY")
+            (s.name == name || (name == "FIREWORKS_API_KEY" && s.name == "FIREWORK_API_KEY"))
                 && !s.value.trim().is_empty()
         })
         .map(|s| s.value)
-        .ok_or_else(|| error("Fireworks-Zugang fehlt"))
+        .ok_or_else(|| error("Benötigter Infisical-Zugang fehlt"))
 }
 #[derive(Clone, Debug)]
 struct Candidate {
@@ -274,7 +292,7 @@ async fn probe_at(key: &str, model: &str, base_url: &str) -> Result<(), LlmError
     .denken_aus()
     .strip_think()
     .max_tokens(32)
-    .no_ledger();
+    .ledger_purpose("model_selection_probe");
     let response = crate::hub::call_endpoint(
         &endpoint,
         &request,
@@ -430,7 +448,34 @@ async fn refresh(
     base_url: &str,
     time: &dyn Fn() -> DateTime<Utc>,
 ) -> Result<(), LlmError> {
-    let key = credential(config).await?;
+    let key = credential_named(config, "FIREWORKS_API_KEY").await?;
+    if !crate::hub::is_loopback_endpoint(base_url) && crate::ledger::pool().await.is_none() {
+        if !config.ledger.socket.is_absolute()
+            || config.ledger.database != "twitch_analytics"
+            || config.ledger.user.is_empty()
+        {
+            return Err(error("Verbrauchs-Peervertrag ungültig"));
+        }
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .acquire_timeout(Duration::from_secs(10))
+            .connect_with(
+                sqlx::postgres::PgConnectOptions::new()
+                    .host(
+                        config
+                            .ledger
+                            .socket
+                            .to_str()
+                            .ok_or_else(|| error("Socketpfad ungültig"))?,
+                    )
+                    .database(&config.ledger.database)
+                    .username(&config.ledger.user),
+            )
+            .await
+            .map_err(|_| error("Verbrauchsdatenbank nicht erreichbar"))?;
+        crate::ledger::initialize(pool, "Deadlock-Twitch-Bot", "deadlock-llm-model-resolver")
+            .map_err(error)?;
+    }
     let entries = catalog(&key, catalog_url).await?;
     let previous = fireworks_model_selection::read_selection(path, TRUSTED_UID).ok();
     for mut entry in entries.into_iter().take(3) {
@@ -577,6 +622,7 @@ mod tests {
             });
             Self {
                 config: Config {
+                    ledger: LedgerConfig::default(),
                     project_id: "synthetic-project".into(),
                     environment: "test".into(),
                     secret_path: "/test".into(),

@@ -1,22 +1,4 @@
-//! Prozess-isolierte Verifikation des KI-Usage-Ledger-Seiteneffekts.
-//!
-//! `generate()` und `raw_completion_tracked()` müssen den echten Token-Verbrauch
-//! best-effort in die zentrale `public.llm_usage` schreiben; `raw_completion()`
-//! (untracked) darf NICHTS schreiben. Parität zu Pythons `llm_usage.record(...)`
-//! bzw. `_track_completion(...)`.
-//!
-//! Warum ein EIGENES Test-Binary statt eines Unit-Tests: der Ledger-Pool von tb-llm
-//! ist ein prozessweiter `OnceCell<PgPool>`. Seine PG-Verbindungen sind an das
-//! tokio-Runtime des ERSTEN `record()` gebunden. Im Lib-Test-Binary baut jeder
-//! `#[tokio::test]` ein eigenes, kurzlebiges Runtime; sobald das Pool-bauende
-//! Runtime endet, hängt der nächste Acquire bis zum `acquire_timeout` und Zeilen
-//! gehen verloren. In diesem separaten Binary läuft NUR dieser eine Test, sein
-//! einziges Runtime baut UND nutzt den Pool und bleibt dabei am Leben → verlässlich.
-//!
-//! Alle Ledger-Schreiber im Prozess (`source='twitch-bot'`) teilen sich die Tabelle;
-//! die Assertions nutzen daher pro Fall eindeutige Token-Zahlen (777/333, 888/444,
-//! 999/111). Ohne `TB_TEST_DATABASE_URL`: Skip.
-
+//! Prüft Verbrauch und Abbrüche ausschließlich in einer isolierten Testdatenbank.
 use sqlx::postgres::PgPoolOptions;
 use tb_engagement::llm_chat::{ChatMessage, EngagementLlmClient};
 use wiremock::matchers::{method, path};
@@ -54,28 +36,44 @@ async fn mock_usage(server: &MockServer, content: &str, prompt: i64, completion:
 
 #[tokio::test]
 async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
-    let Ok(dsn) = std::env::var("TB_TEST_DATABASE_URL") else {
-        return; // ohne Wegwerf-Test-DB nicht verifizierbar
-    };
-    let dsn = dsn.trim().to_string();
-    if dsn.is_empty() {
-        return;
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct TestDatabase {
+        socket: String,
+        database: String,
+        user: String,
     }
-    // Den prozessweiten Ledger-Pool auf die Wegwerf-Test-DB zeigen lassen. Da NUR
-    // dieser Test im Binary läuft, baut sein Runtime den Pool und bleibt am Leben.
-    std::env::set_var("TWITCH_ANALYTICS_DSN", &dsn);
-    std::env::remove_var("DATABASE_URL");
-
+    let Ok(config_text) = std::fs::read_to_string("/tmp/tb-llm-ledger-test-database.json") else {
+        eprintln!("Ledger-DB-Test übersprungen: normale Testdatenbank-Konfigurationsdatei fehlt");
+        return;
+    };
+    let config: TestDatabase =
+        serde_json::from_str(&config_text).expect("Testdatenbankkonfiguration gültig");
+    assert!(
+        config.database.starts_with("fireworks_usage_test"),
+        "Ausschließlich isolierte Ledger-Testdatenbanken verwenden"
+    );
     let verify = PgPoolOptions::new()
         .max_connections(1)
-        .connect(&dsn)
+        .connect_with(
+            sqlx::postgres::PgConnectOptions::new()
+                .host(&config.socket)
+                .database(&config.database)
+                .username(&config.user),
+        )
         .await
         .expect("Test-DB verbinden");
 
+    sqlx::query("DROP TABLE IF EXISTS public.llm_usage")
+        .execute(&verify)
+        .await
+        .unwrap();
     sqlx::raw_sql(LLM_USAGE_SCHEMA)
         .execute(&verify)
         .await
         .expect("llm_usage-Schema anlegen");
+
+    tb_llm::ledger::initialize(verify.clone(), "twitch-test", "ledger-side-effects").unwrap();
 
     // 1) generate() → engagement 777/333.
     {
@@ -94,10 +92,7 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
         .expect("Ledger-Zeile mit 777/333 vorhanden");
         assert_eq!(row.0, "twitch-bot");
         assert_eq!(row.1.as_deref(), Some("engagement"));
-        assert_eq!(
-            row.2.as_deref(),
-            Some(tb_llm::selection::configured_fireworks_model())
-        );
+        assert_eq!(row.2, Some(tb_llm::selection::configured_fireworks_model()));
     }
 
     // 2) raw_completion_tracked() → chat-deep-analysis 888/444.
@@ -118,10 +113,7 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
         .expect("Ledger-Zeile mit 888/444 vorhanden");
         assert_eq!(row.0, "twitch-bot");
         assert_eq!(row.1.as_deref(), Some("chat-deep-analysis"));
-        assert_eq!(
-            row.2.as_deref(),
-            Some(tb_llm::selection::configured_fireworks_model())
-        );
+        assert_eq!(row.2, Some(tb_llm::selection::configured_fireworks_model()));
     }
 
     // 3) raw_completion() (untracked) → schreibt KEINE Zeile (999/111 bleibt 0).
@@ -139,8 +131,124 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
         .fetch_one(&verify)
         .await
         .expect("Count-Query");
-        assert_eq!(count.0, 0, "raw_completion darf nicht ins Ledger schreiben");
+        assert_eq!(count.0, 1, "Auch raw_completion muss im Ledger stehen");
     }
 
+    for (status, body, state) in [
+        (500, serde_json::json!({"error":"synthetic"}), "failed"),
+        (
+            200,
+            serde_json::json!({"choices":[{"message":{"content":"ok"}}]}),
+            "succeeded",
+        ),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .mount(&server)
+            .await;
+        let _ = client_for(&server)
+            .raw_completion_tracked("", "p", 10, 0.1, "missing_usage_test")
+            .await;
+        let row:(String,Option<i64>,Option<i64>,Option<i64>)=sqlx::query_as("SELECT attempt_state,tokens_in,tokens_out,total FROM public.llm_usage WHERE purpose='missing_usage_test' ORDER BY id DESC LIMIT 1").fetch_one(&verify).await.unwrap();
+        assert_eq!(row, (state.into(), None, None, None));
+    }
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(5)))
+        .mount(&server)
+        .await;
+    let task = tokio::spawn(async move {
+        client_for(&server)
+            .raw_completion_tracked("", "p", 10, 0.1, "cancelled_test")
+            .await
+    });
+    loop {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM public.llm_usage WHERE purpose='cancelled_test'",
+        )
+        .fetch_one(&verify)
+        .await
+        .unwrap();
+        if count > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    task.abort();
+    let _ = task.await;
+    let row: (String, Option<i64>) = sqlx::query_as(
+        "SELECT attempt_state,total FROM public.llm_usage WHERE purpose='cancelled_test'",
+    )
+    .fetch_one(&verify)
+    .await
+    .unwrap();
+    assert_eq!(row, ("started".into(), None));
+    let id: i64 =
+        sqlx::query_scalar("SELECT id FROM public.llm_usage WHERE purpose='cancelled_test'")
+            .fetch_one(&verify)
+            .await
+            .unwrap();
+    let completion = tb_llm::ledger::Completion {
+        id,
+        tokens_in: Some(12),
+        tokens_out: Some(3),
+        total: Some(15),
+        request_id: Some("synthetic-request".into()),
+        success: true,
+        error_code: None,
+        http_status: Some(200),
+        latency_ms: 1,
+    };
+    assert!(tb_llm::ledger::recover_with_pool(
+        &verify,
+        &completion,
+        "falsches-projekt",
+        "ledger-side-effects"
+    )
+    .await
+    .is_err());
+    let saved = serde_json::to_string(&tb_llm::ledger::Recovery {
+        project: "twitch-test".into(),
+        service: "ledger-side-effects".into(),
+        completion,
+    })
+    .unwrap();
+    let record: tb_llm::ledger::Recovery = serde_json::from_str(&saved).unwrap();
+    for _ in 0..2 {
+        tb_llm::ledger::recover_with_pool(
+            &verify,
+            &record.completion,
+            &record.project,
+            &record.service,
+        )
+        .await
+        .unwrap();
+    }
+    let count: (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*), SUM(total)::bigint FROM public.llm_usage WHERE purpose='cancelled_test'",
+    )
+    .fetch_one(&verify)
+    .await
+    .unwrap();
+    assert_eq!(count, (1, 15));
+    sqlx::query("ALTER TABLE public.llm_usage RENAME TO llm_usage_missing")
+        .execute(&verify)
+        .await
+        .unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    assert!(client_for(&server)
+        .raw_completion_tracked("", "p", 10, 0.1, "blocked_test")
+        .await
+        .is_err());
+    sqlx::query("ALTER TABLE public.llm_usage_missing RENAME TO llm_usage")
+        .execute(&verify)
+        .await
+        .unwrap();
     verify.close().await;
 }

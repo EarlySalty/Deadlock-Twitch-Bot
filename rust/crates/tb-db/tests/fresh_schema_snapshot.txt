@@ -287,10 +287,19 @@ llm_model_cache|model_created|bigint|YES|
 llm_model_cache|model|text|NO|
 llm_model_cache|provider|text|NO|
 llm_model_cache|resolved_at|timestamp with time zone|NO|now()
+llm_usage|attempt_state|text|NO|'legacy'::text
+llm_usage|error_code|text|YES|
+llm_usage|finished_at|timestamp with time zone|YES|
+llm_usage|http_status|integer|YES|
 llm_usage|id|bigint|NO|nextval('llm_usage_id_seq'::regclass)
+llm_usage|latency_ms|bigint|YES|
 llm_usage|meta|text|YES|
 llm_usage|model|text|YES|
+llm_usage|project|text|YES|
+llm_usage|provider|text|YES|
 llm_usage|purpose|text|YES|
+llm_usage|request_id|text|YES|
+llm_usage|service|text|YES|
 llm_usage|source|text|NO|
 llm_usage|success|bigint|YES|1
 llm_usage|tokens_in|bigint|YES|0

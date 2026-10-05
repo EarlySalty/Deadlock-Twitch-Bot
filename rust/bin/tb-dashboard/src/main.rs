@@ -453,6 +453,8 @@ async fn main() {
             tracing::error!("Analyse-Unterhaltungen: Schreibzugang konnte nicht aufgebaut werden");
             std::process::exit(1);
         });
+    tb_llm::ledger::initialize(analysis_writer.clone(), "Deadlock-Twitch-Bot", "deadlock-twitch-dashboard-rust").expect("Verbrauchserfassung initialisieren");
+
     let pause_loop_helix = pause_loop_helix_client_from_env();
     let brain_token = if config.dashboard.options.brain_client.mode
         == tb_config::dashboard_options::BrainClientMode::Legacy

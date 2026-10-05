@@ -136,7 +136,7 @@ async fn call_ai_chat(session: &ChatSession, message: &str) -> Result<String, Ch
         let client = EngagementLlmClient::new(None, None, None, Some(Duration::from_secs(240)));
         // raw_text bereits getrimmt (= extract_text_response auf String).
         client
-            .messages_completion(Value::Array(messages), 4000, 0.5)
+            .messages_completion(Value::Array(messages), 4000, 0.5, "dashboard_ai_chat")
             .await
             .map_err(ChatCallError::from)
     }

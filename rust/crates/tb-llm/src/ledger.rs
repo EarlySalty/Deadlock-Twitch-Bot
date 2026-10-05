@@ -1,46 +1,14 @@
-//! Gemeinsames LLM-Usage-Ledger (zentrale Postgres über alle Crates dieses Bots).
-//!
-//! Jeder KI-Call wird hier mit den **echten** Token-Zahlen aus der
-//! API-Antwort verbucht, pro Quelle (`source`) und Zweck (`purpose`). Die Tabelle
-//! `llm_usage` liegt in der **zentralen Postgres** (per Migration angelegt),
-//! nicht mehr in einer separaten SQLite-Datei.
-//!
-//! **Best-effort-Prinzip:** Tracking darf den eigentlichen LLM-Call NIE kippen.
-//! Jeder Fehler (Ledger nicht erreichbar, Schreibfehler) wird ausschließlich per
-//! [`tracing::warn`] geloggt und verschluckt — der Aufrufer läuft weiter. Secrets
-//! landen niemals im Ledger oder Log.
-//!
-//! **Verbindung:** DSN aus Env `TWITCH_ANALYTICS_DSN` (der kanonische zentrale
-//! DSN dieses Bots, siehe `tb-config`), sonst `DATABASE_URL`. `TWITCH_ANALYTICS_DSN`
-//! hat bewusst Vorrang: `DATABASE_URL` kann in manchen Prod/CI-Umgebungen auf eine
-//! andere/Test-DB zeigen — sonst schriebe das Ledger still in die falsche DB. Ohne
-//! DSN bleibt das Ledger still inaktiv (best-effort).
-//!
-//! **Zeitspalte:** `ts` bleibt bewusst `TEXT` (ISO-8601 UTC mit Sekunden und
-//! `+00:00`-Offset, byte-gleich zum Python-Stil `isoformat(timespec="seconds")`).
-//! Dadurch bleibt die rollierende Fensterabfrage **textbasiert**: der Schwellwert
-//! wird als ISO-String gebildet und lexikografisch verglichen — bei identischem
-//! Format/Offset ist die lexikografische Ordnung gleich der chronologischen.
-//!
-//! **Quelle:** dieser Bot schreibt durchgängig [`SOURCE`] (`twitch-bot`) — der
-//! Identifier, mit dem die rollierende 5h-Budget-Logik den Verbrauch dieses Bots
-//! vom Verbrauch anderer Bots trennt.
+//! Zentrale Postgres-Verbrauchserfassung ohne Prompts oder Chatinhalte.
 
 use std::time::{Duration, Instant};
 
 use chrono::{SecondsFormat, Utc};
-use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::postgres::PgPool;
 use tokio::sync::{Mutex, OnceCell};
 
 /// Quellen-Kennung dieses Bots im geteilten Ledger (Python: `source="twitch-bot"`).
 pub const SOURCE: &str = "twitch-bot";
 
-/// Primäre Env-Variable: der kanonische zentrale DSN dieses Bots (siehe
-/// `tb-config`, `TwitchConfig.dsn`). Bewusst VOR `DATABASE_URL`, damit das Ledger
-/// nicht versehentlich in eine abweichende `DATABASE_URL`-DB (z. B. Test) schreibt.
-const ENV_DSN_PRIMARY: &str = "TWITCH_ANALYTICS_DSN";
-/// Fallback-Env-Variable, falls `TWITCH_ANALYTICS_DSN` nicht gesetzt ist.
-const ENV_DSN_FALLBACK: &str = "DATABASE_URL";
 /// Rollierendes 5h-Token-Budget (0 = aus). Fester Default, keine Env mehr.
 const TOKEN_BUDGET_5H: i64 = 0;
 /// Standard-Fensterbreite in Stunden (Python: `WINDOW_HOURS = 5`).
@@ -49,12 +17,7 @@ const WINDOW_HOURS: i64 = 5;
 /// für die teurere `SUM`-Abfrage anfasst (siehe [`warn_if_over_budget`]).
 const BUDGET_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Lazy gebauter, prozessweit gecachter Pool auf die zentrale Postgres.
-///
-/// Der Pool wird beim ersten Zugriff einmal aufgebaut. Das Schema muss vorher
-/// über die SQLx-Migrationen installiert sein. Scheitert der Aufbau, bleibt der
-/// Cache leer und jeder Aufruf versucht es erneut (best-effort, kein dauerhaftes
-/// Vergiften).
+/// Dienststart übergibt denselben Pool wie den übrigen Schreibern.
 static POOL: OnceCell<PgPool> = OnceCell::const_new();
 
 /// Zeitpunkt der letzten Budget-Prüfung. `None` = noch nie geprüft. Drosselt
@@ -62,75 +25,116 @@ static POOL: OnceCell<PgPool> = OnceCell::const_new();
 /// [`BUDGET_CHECK_INTERVAL`], damit das Fenster-`SUM` nicht bei jedem Call läuft.
 static LAST_BUDGET_CHECK: Mutex<Option<Instant>> = Mutex::const_new(None);
 
-/// Liest den zentralen DSN: Env `TWITCH_ANALYTICS_DSN`, sonst `DATABASE_URL`.
-/// Leere/whitespace-Werte zählen als nicht gesetzt.
-fn dsn_from_env() -> Option<String> {
-    for key in [ENV_DSN_PRIMARY, ENV_DSN_FALLBACK] {
-        if let Ok(v) = std::env::var(key) {
-            let trimmed = v.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
+/// Dienststart übergibt den vorhandenen Pool und die überprüfbare Herkunft.
+static IDENTITY: OnceCell<(&'static str, &'static str)> = OnceCell::const_new();
+pub fn initialize(
+    pool: PgPool,
+    project: &'static str,
+    service: &'static str,
+) -> Result<(), &'static str> {
+    if project.is_empty() || service.is_empty() {
+        return Err("Verbrauchsherkunft fehlt");
+    }
+    POOL.set(pool)
+        .map_err(|_| "Verbrauchspool bereits gesetzt")?;
+    IDENTITY
+        .set((project, service))
+        .map_err(|_| "Verbrauchsherkunft bereits gesetzt")?;
+    Ok(())
+}
+pub(crate) async fn pool() -> Option<&'static PgPool> {
+    POOL.get()
+}
+
+/// Vor jedem kostenpflichtigen Versuch muss diese Zeile dauerhaft stehen.
+pub async fn begin(purpose: &str, model: &str, provider: &str) -> Result<i64, crate::LlmError> {
+    let fail = || {
+        crate::LlmError::Unavailable(
+            "Verbrauchserfassung nicht bereit; KI-Aufruf angehalten".into(),
+        )
+    };
+    let pool = POOL.get().ok_or_else(fail)?;
+    let (project, service) = IDENTITY.get().ok_or_else(fail)?;
+    sqlx::query_scalar("INSERT INTO public.llm_usage (ts,source,purpose,model,tokens_in,tokens_out,total,success,project,service,provider,attempt_state) VALUES ($1,$2,$3,$4,NULL,NULL,NULL,0,$5,$6,$7,'started') RETURNING id")
+        .bind(Utc::now().to_rfc3339_opts(SecondsFormat::Secs, false))
+        .bind(SOURCE).bind(purpose).bind(model).bind(project).bind(service).bind(provider)
+        .fetch_one(pool).await.map_err(|_| {
+            tracing::error!(purpose, provider, "LLM_USAGE_BLOCKED: Start konnte nicht gespeichert werden");
+            fail()
+        })
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Completion {
+    pub id: i64,
+    pub tokens_in: Option<i64>,
+    pub tokens_out: Option<i64>,
+    pub total: Option<i64>,
+    pub request_id: Option<String>,
+    pub success: bool,
+    pub error_code: Option<String>,
+    pub http_status: Option<i32>,
+    pub latency_ms: i64,
+}
+/// Auch nach einem Abschlussfehler bleibt der bereits gespeicherte Start sichtbar.
+/// Die strukturierte Journalzeile enthält nur Zähler und technische IDs.
+pub async fn finish(completion: Completion) {
+    if recover(&completion).await.is_err() {
+        let (project, service) = IDENTITY.get().expect("Erfasster Versuch besitzt Herkunft");
+        let recovery = serde_json::to_string(&Recovery {
+            project: (*project).into(),
+            service: (*service).into(),
+            completion,
+        })
+        .expect("Zähler sind serialisierbar");
+        tracing::error!(recovery = %recovery, "LLM_USAGE_RECOVERY: Abschluss aus dem Journal nachliefern");
+    }
+}
+/// Idempotente Wiederaufnahme eines Abschlusses aus LLM_USAGE_RECOVERY.
+pub async fn recover(c: &Completion) -> Result<(), RecoveryError> {
+    let pool = POOL.get().ok_or(RecoveryError)?;
+    let (project, service) = IDENTITY.get().ok_or(RecoveryError)?;
+    recover_with_pool(pool, c, project, service).await
+}
+
+#[derive(Debug)]
+pub struct RecoveryError;
+impl std::fmt::Display for RecoveryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Verbrauchsabschluss konnte nicht gespeichert werden")
+    }
+}
+impl std::error::Error for RecoveryError {}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Recovery {
+    pub project: String,
+    pub service: String,
+    pub completion: Completion,
+}
+pub async fn recover_with_pool(
+    pool: &PgPool,
+    c: &Completion,
+    project: &str,
+    service: &str,
+) -> Result<(), RecoveryError> {
+    let result = sqlx::query("UPDATE public.llm_usage SET tokens_in=$2,tokens_out=$3,total=$4,success=$5,attempt_state=$6,request_id=$7,error_code=$8,http_status=$9,latency_ms=$10,finished_at=now() WHERE id=$1 AND attempt_state='started' AND project=$11 AND service=$12")
+        .bind(c.id).bind(c.tokens_in).bind(c.tokens_out).bind(c.total)
+        .bind(i64::from(c.success)).bind(if c.success { "succeeded" } else { "failed" })
+        .bind(&c.request_id).bind(&c.error_code).bind(c.http_status).bind(c.latency_ms).bind(project).bind(service)
+        .execute(pool).await.map_err(|_| RecoveryError)?;
+    if result.rows_affected() == 0 {
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM public.llm_usage WHERE id=$1 AND project=$2 AND service=$3 AND attempt_state IN ('succeeded','failed'))")
+            .bind(c.id).bind(project).bind(service).fetch_one(pool).await.map_err(|_| RecoveryError)?;
+        if !exists {
+            return Err(RecoveryError);
         }
     }
-    None
+    Ok(())
 }
 
-/// Baut den Ledger-Pool gegen die zentrale Postgres.
-/// Ohne DSN (`TWITCH_ANALYTICS_DSN`/`DATABASE_URL`) scheitert der Aufbau bewusst —
-/// der Aufrufer loggt und macht best-effort weiter.
-async fn build_pool() -> sqlx::Result<PgPool> {
-    let dsn = dsn_from_env().ok_or_else(|| {
-        sqlx::Error::Configuration("kein DSN (TWITCH_ANALYTICS_DSN/DATABASE_URL) gesetzt".into())
-    })?;
-    // Wenige Verbindungen genügen — das Ledger wird nur sporadisch beschrieben.
-    PgPoolOptions::new()
-        .max_connections(2)
-        .acquire_timeout(Duration::from_secs(10))
-        .connect(&dsn)
-        .await
-}
-
-/// Holt den gecachten Pool oder baut ihn beim ersten Mal. `None`, wenn der Aufbau
-/// scheitert (z. B. kein DSN, DB nicht erreichbar) — dann loggt der Aufrufer und
-/// macht best-effort weiter.
-pub(crate) async fn pool() -> Option<&'static PgPool> {
-    POOL.get_or_try_init(build_pool).await.map_or_else(
-        |err| {
-            tracing::warn!(error = %err, "LLM-Usage-Ledger: Pool-Aufbau fehlgeschlagen");
-            None
-        },
-        Some,
-    )
-}
-
-/// Verbucht einen einzelnen KI-Call im Ledger unter [`SOURCE`]. **Best-effort:**
-/// wirft nie, blockiert den LLM-Call nicht und schluckt jeden Fehler in einen
-/// `warn`-Log.
-///
-/// - `purpose` — Verwendungszweck (z. B. `engagement`, `spam-review`, `title`);
-///   leer → `NULL` (wie Python).
-/// - `model`   — Modellname; leer → `NULL`.
-/// - `tokens_in`/`tokens_out` — echte Werte aus dem `usage`-Objekt der Antwort.
-/// - `success` — ob der Call erfolgreich war (1/0).
-///
-/// `ts` wird als ISO-8601 UTC mit Sekunden-Auflösung und `+00:00`-Offset
-/// geschrieben — byte-gleich zum Python-Stil
-/// `datetime.now(timezone.utc).isoformat(timespec="seconds")`. `total` =
-/// `tokens_in + tokens_out`.
-pub async fn record(purpose: &str, model: &str, tokens_in: i64, tokens_out: i64, success: bool) {
-    let Some(pool) = pool().await else {
-        return;
-    };
-    if let Err(err) =
-        record_with_pool(pool, SOURCE, purpose, model, tokens_in, tokens_out, success).await
-    {
-        tracing::warn!(error = %err, source = SOURCE, "LLM-Usage-Ledger: record fehlgeschlagen");
-    }
-}
-
-/// Kern-Insert gegen einen expliziten Pool — von [`record`] (gecachter Pool) und
-/// den Tests (Temp-Pool) genutzt. Trennt die SQL-Logik vom prozessweiten Cache.
+#[cfg(test)]
 async fn record_with_pool(
     pool: &PgPool,
     source: &str,
@@ -258,12 +262,6 @@ mod tests {
     use super::*;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
-    use std::sync::Mutex as StdMutex;
-
-    /// Serialisiert die Tests, die prozessglobale Env-Variablen anfassen
-    /// (`set_var`/`remove_var`), damit sie sich nicht gegenseitig sehen. Die
-    /// DB-Tests laufen über explizite Pools und brauchen diesen Lock nicht.
-    static ENV_LOCK: StdMutex<()> = StdMutex::new(());
 
     /// Öffnet einen frischen, isolierten Postgres-Schema-Pool mit Ledger-Tabelle —
     /// entkoppelt vom gecachten Prozess-Pool, damit jeder Test seine eigene Tabelle
@@ -483,30 +481,5 @@ mod tests {
             sum, 200,
             "nur die zwei aktuellen 100er zählen, nicht die alten 999"
         );
-    }
-
-    #[test]
-    fn dsn_from_env_bevorzugt_primary_dann_fallback() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        std::env::remove_var(ENV_DSN_PRIMARY);
-        std::env::remove_var(ENV_DSN_FALLBACK);
-        assert_eq!(dsn_from_env(), None, "ohne Env → None");
-
-        std::env::set_var(ENV_DSN_FALLBACK, "postgres://fallback");
-        assert_eq!(dsn_from_env().as_deref(), Some("postgres://fallback"));
-
-        std::env::set_var(ENV_DSN_PRIMARY, "postgres://primary");
-        assert_eq!(
-            dsn_from_env().as_deref(),
-            Some("postgres://primary"),
-            "TWITCH_ANALYTICS_DSN hat Vorrang"
-        );
-
-        // Whitespace-only zählt als nicht gesetzt → Fallback greift.
-        std::env::set_var(ENV_DSN_PRIMARY, "   ");
-        assert_eq!(dsn_from_env().as_deref(), Some("postgres://fallback"));
-
-        std::env::remove_var(ENV_DSN_PRIMARY);
-        std::env::remove_var(ENV_DSN_FALLBACK);
     }
 }

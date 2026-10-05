@@ -838,9 +838,8 @@ impl EngagementLlmClient {
     /// Roher Completion-Call (system + user) → getrimmter Antwort-Text OHNE
     /// [`process_response_text`] — für Jobs wie die Soul-Reflexion.
     ///
-    /// Verbucht KEINEN Token-Verbrauch im Ledger. Aufrufer, die ihren Verbrauch
-    /// kosten-attribuieren wollen (z. B. der Chat-Deep-Endpoint), nutzen
-    /// [`Self::raw_completion_tracked`].
+    /// Fachliche Aufrufer geben ihren Zweck über
+    /// [`Self::raw_completion_tracked`] ausdrücklich an.
     pub async fn raw_completion(
         &self,
         system: &str,
@@ -848,9 +847,15 @@ impl EngagementLlmClient {
         max_output_tokens: i64,
         temperature: f64,
     ) -> Result<String, GenerateError> {
-        self.raw_completion_with_model(system, user, max_output_tokens, temperature)
-            .await
-            .map(|(text, _)| text)
+        self.raw_completion_with_model(
+            system,
+            user,
+            max_output_tokens,
+            temperature,
+            "raw_completion",
+        )
+        .await
+        .map(|(text, _)| text)
     }
 
     /// Wie [`Self::raw_completion`], liefert zusätzlich das tatsächlich
@@ -861,13 +866,14 @@ impl EngagementLlmClient {
         user: &str,
         max_output_tokens: i64,
         temperature: f64,
+        purpose: &str,
     ) -> Result<(String, String), GenerateError> {
         let response = self
             .call(
                 tb_llm::Request::simple(system, user)
                     .max_tokens(max_output_tokens)
                     .temperature(temperature)
-                    .no_ledger(),
+                    .ledger_purpose(purpose),
             )
             .await?;
         Ok((response.text, response.model))
@@ -903,13 +909,14 @@ impl EngagementLlmClient {
         messages: serde_json::Value,
         max_output_tokens: i64,
         temperature: f64,
+        purpose: &str,
     ) -> Result<String, GenerateError> {
         let response = self
             .call(
                 request_from_messages(&messages)
                     .max_tokens(max_output_tokens)
                     .temperature(temperature)
-                    .no_ledger(),
+                    .ledger_purpose(purpose),
             )
             .await?;
         Ok(response.text)
@@ -921,12 +928,13 @@ impl EngagementLlmClient {
         &self,
         messages: serde_json::Value,
         temperature: f64,
+        purpose: &str,
     ) -> Result<String, GenerateError> {
         let response = self
             .call(
                 request_from_messages(&messages)
                     .temperature(temperature)
-                    .no_ledger(),
+                    .ledger_purpose(purpose),
             )
             .await?;
         Ok(response.text)
@@ -1434,8 +1442,7 @@ mod tests {
         assert_eq!(resp.completion_tokens, Some(1)); // Tokens trotzdem da
     }
 
-    // Die Ledger-Seiteneffekt-Verifikation (generate/raw_completion_tracked schreiben,
-    // raw_completion schreibt nicht) läuft PROZESS-ISOLIERT in
+    // Die Ledger-Seiteneffekte aller Aufrufwege werden prozessisoliert geprüft in
     // `tests/ledger_side_effects.rs` — siehe [`super::redirect_ledger_for_tests`] zur
     // Begründung (geteilter OnceCell-PG-Pool über viele `#[tokio::test]`-Runtimes).
 

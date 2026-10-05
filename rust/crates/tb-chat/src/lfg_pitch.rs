@@ -227,7 +227,7 @@ impl LfgJudge for LlmLfgJudge {
 
         match self
             .client
-            .messages_completion_uncapped(messages, 0.0)
+            .messages_completion_uncapped(messages, 0.0, "lfg_pitch")
             .await
         {
             Ok(raw) => parse_lfg_verdict(&raw),

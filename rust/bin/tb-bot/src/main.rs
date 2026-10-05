@@ -494,6 +494,13 @@ async fn main() {
         tracing::error!("DB-Verbindungsfehler: {e}");
         std::process::exit(1);
     });
+    tb_llm::ledger::initialize(
+        pool.clone(),
+        "Deadlock-Twitch-Bot",
+        "deadlock-twitch-bot-rust",
+    )
+    .expect("Verbrauchserfassung initialisieren");
+
 
     // Vorhandene Feldchiffre einmal laden und an die Verbraucher weiterreichen.
     let runtime_cipher = FieldCipher::from_env().map(Arc::new);

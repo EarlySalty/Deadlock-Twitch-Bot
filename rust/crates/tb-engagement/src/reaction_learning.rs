@@ -862,7 +862,13 @@ impl ReactionLearning {
         }
         let rendered = render_samples(&samples);
         let raw = llm
-            .raw_completion(PROFILE_SYS, &profile_user_prompt(&rendered), 2000, 0.4)
+            .raw_completion_tracked(
+                PROFILE_SYS,
+                &profile_user_prompt(&rendered),
+                2000,
+                0.4,
+                "reaction_profile",
+            )
             .await
             .ok()?;
         let profile = crate::llm_chat::strip_think(&raw).trim().to_string();

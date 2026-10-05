@@ -1,6 +1,7 @@
 use std::path::Path;
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt().with_ansi(false).init();
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 3 || args[1] != "--config" {
         eprintln!("Aufruf: tb-model-resolver --config /absoluter/pfad.toml");

@@ -59,8 +59,7 @@ impl Message {
 /// Ob und unter welchem Zweck der Verbrauch verbucht wird.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ledger {
-    /// Keine Verbuchung. Fuer Aufrufer, die selbst verbuchen, und fuer Pfade,
-    /// die es noch nie getan haben.
+    /// Für lokale Mock-Aufrufe. Produktive Aufrufe bleiben immer erfasst.
     Off,
     /// Verbuchung unter diesem Zweck.
     Purpose(String),
@@ -376,7 +375,7 @@ async fn complete_chain(
     }
 
     let purpose = match &request.ledger {
-        Some(Ledger::Off) => None,
+        Some(Ledger::Off) => Some(use_case.to_string()),
         Some(Ledger::Purpose(p)) => Some(p.clone()),
         None => Some(use_case.to_string()),
     };
@@ -452,7 +451,7 @@ async fn complete_chain(
     Err(last.expect("Kette ist nicht leer, also gab es mindestens einen Versuch"))
 }
 
-fn is_loopback_endpoint(base_url: &str) -> bool {
+pub(crate) fn is_loopback_endpoint(base_url: &str) -> bool {
     reqwest::Url::parse(base_url).ok().is_some_and(|url| {
         url.username().is_empty()
             && url.password().is_none()
@@ -498,19 +497,91 @@ pub(crate) async fn call_endpoint(
     let raw = loop {
         let started = Instant::now();
         let rest = ende.saturating_duration_since(started);
-        // Die Frist liegt um den ganzen Request (Senden, Warten, Body lesen),
-        // nicht im Client: so reicht ein einziger Client fuer alle Fristen.
-        let senden = send_openai_compatible(&client, endpoint, Some(api_key), request);
+        // Ein lokaler Mock darf ohne Datenbank laufen; ein produktiver Versuch nie.
+        let track = ledger::pool().await.is_some() || !is_loopback_endpoint(&endpoint.base_url);
+        let attempt = if track {
+            Some(
+                ledger::begin(
+                    purpose.unwrap_or("unknown"),
+                    &endpoint.model,
+                    endpoint.provider,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        let mut metadata = ResponseMetadata::default();
+        let senden = send_openai_compatible(
+            &client,
+            endpoint,
+            Some(api_key),
+            request,
+            Some(&mut metadata),
+        );
         let outcome = match tokio::time::timeout(rest, senden).await {
             Ok(outcome) => outcome,
-            Err(_) => {
-                return Err(LlmError::Timeout(format!(
-                    "{} antwortete nicht innerhalb von {} ms",
-                    endpoint.provider,
-                    frist.as_millis()
-                )))
-            }
+            Err(_) => Err(RawError::Fehler(LlmError::Timeout(format!(
+                "{} antwortete nicht innerhalb von {} ms",
+                endpoint.provider,
+                frist.as_millis()
+            )))),
         };
+        if let Some(id) = attempt {
+            let (ti, to, total, request_id, success, error_code, http_status) = match &outcome {
+                Ok(payload) => {
+                    let usage = payload.get("usage");
+                    let ti = usage_field(usage, &["prompt_tokens", "tokens_in"]);
+                    let to = usage_field(usage, &["completion_tokens", "tokens_out"]);
+                    let total = usage_field(usage, &["total_tokens"])
+                        .or_else(|| ti.zip(to).map(|(a, b)| a.saturating_add(b)));
+                    let request_id = metadata.request_id.clone().or_else(|| {
+                        payload
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .and_then(safe_request_id)
+                    });
+                    (ti, to, total, request_id, true, None, metadata.status)
+                }
+                Err(RawError::TooManyRequests { .. }) => (
+                    None,
+                    None,
+                    None,
+                    metadata.request_id.clone(),
+                    false,
+                    Some("http_status".into()),
+                    Some(429),
+                ),
+                Err(RawError::Fehler(error)) => (
+                    None,
+                    None,
+                    None,
+                    metadata.request_id.clone(),
+                    false,
+                    Some(error.code().into()),
+                    match error {
+                        LlmError::Http { status, .. } => Some(i32::from(*status)),
+                        _ => None,
+                    },
+                ),
+            };
+            let completion = ledger::Completion {
+                id,
+                tokens_in: ti,
+                tokens_out: to,
+                total,
+                request_id,
+                success,
+                error_code,
+                http_status,
+                latency_ms: started.elapsed().as_millis() as i64,
+            };
+            if tokio::spawn(ledger::finish(completion)).await.is_err() {
+                tracing::error!(
+                    "LLM_USAGE_RECOVERY: Abschlussaufgabe abgebrochen, Start bleibt ungeklärt"
+                );
+            }
+        }
         match outcome {
             Ok(payload) => break (payload, started.elapsed().as_millis() as i64),
             Err(RawError::TooManyRequests { retry_after, body })
@@ -522,8 +593,6 @@ pub(crate) async fn call_endpoint(
                         .unwrap_or(1u64 << (versuch - 1))
                         .min(MAX_RETRY_AFTER_SECS),
                 );
-                // Reicht die Frist nicht mehr fuer Warten plus Versuch, ist
-                // die Wiederholung sinnlos: 429 zurueckgeben statt ueberziehen.
                 if Instant::now() + wartezeit >= ende {
                     return Err(LlmError::Http { status: 429, body });
                 }
@@ -536,26 +605,10 @@ pub(crate) async fn call_endpoint(
         }
     };
     let (payload, latency_ms) = raw;
-
     let usage = payload.get("usage");
     let text = extract_openai_text(&payload, request.allow_reasoning_content);
     let prompt_tokens = usage_field(usage, &["prompt_tokens", "tokens_in"]);
     let completion_tokens = usage_field(usage, &["completion_tokens", "tokens_out"]);
-
-    // Verbucht direkt nach der Antwort, damit der Verbrauch auch dann zaehlt,
-    // wenn der Text unten am `accept`-Praedikat scheitert. Verbraucht sind die
-    // Tokens ohnehin. `record` verschluckt jeden DB-Fehler und kippt den Aufruf
-    // nie.
-    if let Some(purpose) = purpose {
-        ledger::record(
-            purpose,
-            &endpoint.model,
-            prompt_tokens.unwrap_or(0),
-            completion_tokens.unwrap_or(0),
-            true,
-        )
-        .await;
-    }
 
     let text = if request.strip_think {
         strip_think(&text)
@@ -630,11 +683,29 @@ fn openai_compatible_body(endpoint: &LlmEndpoint, request: &Request) -> Value {
     body
 }
 
+#[derive(Default)]
+struct ResponseMetadata {
+    request_id: Option<String>,
+    status: Option<i32>,
+}
+fn safe_request_id(id: &str) -> Option<String> {
+    if !id.is_empty()
+        && id.len() <= 256
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.:".contains(&b))
+    {
+        Some(id.into())
+    } else {
+        None
+    }
+}
 async fn send_openai_compatible(
     client: &reqwest::Client,
     endpoint: &LlmEndpoint,
     api_key: Option<&str>,
     request: &Request,
+    metadata: Option<&mut ResponseMetadata>,
 ) -> Result<Value, RawError> {
     let body = openai_compatible_body(endpoint, request);
     let url = format!(
@@ -650,6 +721,14 @@ async fn send_openai_compatible(
         .send()
         .await
         .map_err(|error| RawError::Fehler(transport_error(&error)))?;
+    if let Some(metadata) = metadata {
+        metadata.status = Some(i32::from(response.status().as_u16()));
+        metadata.request_id = response
+            .headers()
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok())
+            .and_then(safe_request_id);
+    }
     #[cfg(feature = "local-eval")]
     if api_key.is_none() {
         return replay::finish_local(response).await;
@@ -660,6 +739,11 @@ async fn send_openai_compatible(
 /// Status pruefen, Body lesen, JSON parsen.
 async fn finish(response: reqwest::Response) -> Result<Value, RawError> {
     let status = response.status();
+    let request_id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
     let retry_after = response
         .headers()
         .get(reqwest::header::RETRY_AFTER)
@@ -696,11 +780,17 @@ async fn finish(response: reqwest::Response) -> Result<Value, RawError> {
             body: kurz(&String::from_utf8_lossy(&bytes)),
         }));
     }
-    serde_json::from_slice(&bytes).map_err(|_| {
+    let mut payload: Value = serde_json::from_slice(&bytes).map_err(|_| {
         RawError::Fehler(LlmError::Unparsable(
             "Anbieterantwort ist kein gültiges JSON".into(),
         ))
-    })
+    })?;
+    if payload.get("id").is_none() {
+        if let Some(request_id) = request_id {
+            payload["id"] = Value::String(request_id);
+        }
+    }
+    Ok(payload)
 }
 async fn bounded_response(mut response: reqwest::Response) -> Result<Vec<u8>, LlmError> {
     const MAX_RESPONSE: usize = 8 * 1024 * 1024;
@@ -748,7 +838,7 @@ fn usage_field(usage: Option<&Value>, names: &[&str]) -> Option<i64> {
     names
         .iter()
         .find_map(|name| usage.get(name).and_then(Value::as_i64))
-        .map(|v| v.max(0))
+        .filter(|v| *v >= 0)
 }
 
 /// Antworttext aus einer OpenAI-kompatiblen Antwort.

@@ -275,7 +275,7 @@ impl OutreachReviewClient {
                 .json_object()
                 .denken_aus()
                 .timeout(FIREWORKS_TIMEOUT)
-                .no_ledger()
+                .ledger_purpose("outreach_shadow")
                 .endpoint(self.endpoint.clone()),
         )
         .await;

@@ -1,0 +1,8 @@
+#!/bin/bash
+set -euo pipefail
+journalctl --grep=LLM_USAGE_RECOVERY --output=json --since='30 days ago' --no-pager \
+    _SYSTEMD_UNIT=deadlock-twitch-bot-rust.service + \
+    _SYSTEMD_UNIT=deadlock-twitch-dashboard-rust.service + \
+    _SYSTEMD_UNIT=deadlock-twitch-stream-coaching-watch.service + \
+    _SYSTEMD_USER_UNIT=deadlock-llm-model-resolver.service _UID=1000 |
+    runuser -u twitchbot -- /opt/deadlock/twitch/current/rust/target/release/tb-llm-usage-recover /etc/deadlock/twitch-llm-usage-recover.toml

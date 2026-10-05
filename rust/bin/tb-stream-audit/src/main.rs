@@ -62,6 +62,38 @@ async fn main() {
         )
         .init();
 
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct UsageConfig {
+        socket: PathBuf,
+        database: String,
+    }
+    let usage_config: UsageConfig = toml::from_str(
+        &std::fs::read_to_string("/etc/deadlock/twitch-llm-usage-audit.toml")
+            .expect("Verbrauchskonfiguration für Audit fehlt"),
+    )
+    .expect("Verbrauchskonfiguration für Audit ungültig");
+    if !usage_config.socket.is_absolute() || usage_config.database != "twitch_analytics" {
+        tracing::error!("Verbrauchs-Peervertrag ungültig");
+        std::process::exit(2);
+    }
+    let usage_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(Duration::from_secs(10))
+        .connect_with(
+            sqlx::postgres::PgConnectOptions::new()
+                .host(usage_config.socket.to_str().expect("Socketpfad gültig"))
+                .database(&usage_config.database)
+                .username("twitchaudit"),
+        )
+        .await
+        .expect("Audit-Verbrauchsdatenbank nicht erreichbar");
+    tb_llm::ledger::initialize(
+        usage_pool,
+        "Deadlock-Twitch-Bot",
+        "deadlock-twitch-stream-coaching-watch",
+    )
+    .expect("Audit-Verbrauchserfassung initialisieren");
     let konfiguration = Konfiguration::from_env();
     if konfiguration.kanaele.is_empty() {
         tracing::error!(
@@ -2927,9 +2959,7 @@ async fn modellfunde(
                 .json_object()
                 .denken_aus()
                 .timeout(MODELL_ZEITGRENZE)
-                // Das Audit verbucht nichts: es laeuft ausserhalb des Bots und
-                // haengt an keinem Streamer-Budget.
-                .no_ledger()
+                .ledger_purpose("stream_audit")
                 .endpoint(endpunkt.clone()),
         )
         .await;

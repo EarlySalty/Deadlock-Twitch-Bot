@@ -139,7 +139,7 @@ impl ChannelBackground {
             return None;
         }
         let raw = llm
-            .raw_completion(SYS, &build_profile_prompt(channel_login, &lines), BUILD_MAX_TOKENS, 0.4)
+            .raw_completion_tracked(SYS, &build_profile_prompt(channel_login, &lines), BUILD_MAX_TOKENS, 0.4, "channel_profile")
             .await
             .ok()?;
         let stripped = strip_think(&raw);

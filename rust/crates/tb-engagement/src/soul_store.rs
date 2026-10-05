@@ -252,7 +252,13 @@ impl SoulStore {
         }
         let transcript = build_transcript(&rows);
         let raw = llm
-            .raw_completion(ANCHOR_SYS, &anchor_user_prompt(&transcript), 2000, 0.7)
+            .raw_completion_tracked(
+                ANCHOR_SYS,
+                &anchor_user_prompt(&transcript),
+                2000,
+                0.7,
+                "bot_memory",
+            )
             .await
             .ok()?;
         let last = self.last_anchor().await;

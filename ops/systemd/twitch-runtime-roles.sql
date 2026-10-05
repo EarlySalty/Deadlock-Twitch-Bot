@@ -393,6 +393,10 @@ BEGIN
             EXECUTE format('GRANT SELECT,INSERT,UPDATE,DELETE ON TABLE public.%I TO twitchanalysis',table_name);
         END IF;
     END LOOP;
+    IF to_regclass('public.llm_usage') IS NOT NULL THEN
+        GRANT SELECT,INSERT,UPDATE ON public.llm_usage TO twitchanalysis;
+        GRANT USAGE,SELECT ON SEQUENCE public.llm_usage_id_seq TO twitchanalysis;
+    END IF;
 END
 $analysis_writer$;
 ALTER ROLE twitchanalysis IN DATABASE twitch_analytics SET search_path=public,pg_catalog;
@@ -463,3 +467,27 @@ BEGIN
     END IF;
 END
 $community_scout_privacy$;
+
+-- Das Audit schreibt ausschließlich seine Verbrauchserfassung über lokalen Peerzugang.
+DO $audit_usage$
+DECLARE membership record;
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='twitchaudit') THEN
+        CREATE ROLE twitchaudit LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+    END IF;
+    ALTER ROLE twitchaudit LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD NULL;
+    ALTER ROLE twitchaudit RESET ALL;
+    FOR membership IN SELECT granted.rolname AS granted_role,members.rolname AS member_role
+        FROM pg_auth_members m JOIN pg_roles granted ON granted.oid=m.roleid JOIN pg_roles members ON members.oid=m.member
+        WHERE members.rolname='twitchaudit' OR granted.rolname='twitchaudit'
+    LOOP EXECUTE format('REVOKE %I FROM %I',membership.granted_role,membership.member_role); END LOOP;
+    GRANT CONNECT ON DATABASE twitch_analytics TO twitchaudit;
+    GRANT USAGE ON SCHEMA public TO twitchaudit;
+    REVOKE CREATE ON SCHEMA public FROM twitchaudit;
+    REVOKE ALL ON ALL TABLES IN SCHEMA public FROM twitchaudit;
+    REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM twitchaudit;
+    GRANT SELECT,INSERT,UPDATE ON public.llm_usage TO twitchaudit;
+    GRANT USAGE,SELECT ON SEQUENCE public.llm_usage_id_seq TO twitchaudit;
+END
+$audit_usage$;
+ALTER ROLE twitchaudit IN DATABASE twitch_analytics SET search_path=public,pg_catalog;
