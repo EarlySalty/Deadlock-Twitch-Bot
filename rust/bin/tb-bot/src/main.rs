@@ -501,7 +501,6 @@ async fn main() {
     )
     .expect("Verbrauchserfassung initialisieren");
 
-
     // Vorhandene Feldchiffre einmal laden und an die Verbraucher weiterreichen.
     let runtime_cipher = FieldCipher::from_env().map(Arc::new);
     // Expliziter Wartungslauf: keine normalen Writer oder Hintergrundjobs starten.
