@@ -3,7 +3,7 @@ title: Auto-Raid-Netzwerk
 namespace: bot
 category: faq
 audience: public
-last_updated: 2026-10-02
+last_updated: 2026-10-06
 source: manual
 tip_eligible: false
 ---
@@ -13,12 +13,16 @@ Wie die automatische Raid-Auswahl funktioniert.
 
 Beim Ende eines Deadlock-Streams prüft der Bot, ob er deine Zuschauer an einen passenden Live-Partner weiterleiten kann. Die Einstellung, gültige Twitch-Rechte und ein geeignetes Live-Ziel müssen passen.
 
-- Die automatische Auswahl läuft bei erfüllten Voraussetzungen. Im Dashboard kannst du den Auto-Raid abschalten.
+- Die automatische Auswahl läuft bei erfüllten Voraussetzungen.
 - Der Bot berücksichtigt mehrere Kriterien bei der Auswahl des Raid-Ziels.
 - So bleiben deine Zuschauer im Deadlock-Ökosystem und du hilfst gleichzeitig anderen Streamern.
 
 [Bot für deinen Kanal aktivieren](https://deutsche-deadlock-community.de/twitch/raid/auth?scope_profile=base&source=website_onboarding&ts=1782086400000)
 [Dashboard öffnen](https://deutsche-deadlock-community.de/twitch/auth/login?next=%2Ftwitch%2Fdashboard-v2)
+
+### Kann ich den Bot mit dem automatischen Raid deaktivieren?
+
+Den Auto-Raid separat abzuschalten und den Bot weiter zu nutzen, ist vorgesehen, aber noch nicht verfügbar. Einen Schalter oder Chat-Befehl dafür gibt es derzeit nicht. Den Bot vollständig vom Kanal trennen kannst du im Dashboard unter Verwaltung, „Bot & Schutz“, „Bot vom Kanal trennen“. Dabei endet auch deine Partnerschaft. Bei Fragen hilft dir Nani im [Community-Discord](https://discord.gg/z5TfVHuQq2).
 
 ### Wie wird das Ziel ausgewählt?
 

@@ -3,7 +3,7 @@ title: Auto-Raid
 namespace: bot
 category: feature
 audience: public
-last_updated: 2026-10-02
+last_updated: 2026-10-06
 source: manual
 tip_eligible: true
 tip_flags: [feature, costream]
@@ -16,6 +16,6 @@ Beim Raid schreibt der Bot in den Quellchat, wohin die Reise geht, und erinnert 
 
 ## Einstellungen und Hinweise
 
-Im Dashboard kannst du Auto-Raid abschalten. Manuelle Raids bleiben möglich. Ein bestimmtes Ziel, eine feste Reihenfolge oder zusätzlicher Zuschauerzuwachs sind nicht garantiert.
+Den Auto-Raid separat abzuschalten und den Bot weiter zu nutzen, ist vorgesehen, aber noch nicht verfügbar. Einen Schalter oder Chat-Befehl dafür gibt es derzeit nicht. Den Bot vollständig vom Kanal trennen kannst du im Dashboard unter Verwaltung, „Bot & Schutz“, „Bot vom Kanal trennen“. Dabei endet auch deine Partnerschaft. Bei Fragen hilft dir Nani im [Community-Discord](https://discord.gg/z5TfVHuQq2). Manuelle Raids bleiben möglich. Ein bestimmtes Ziel, eine feste Reihenfolge oder zusätzlicher Zuschauerzuwachs sind nicht garantiert.
 
 Streamst du auf mehreren Kanälen, melde dich beim Support zur Verknüpfung deiner Accounts.

@@ -19,6 +19,32 @@ fn produktive_basis_laedt() {
 }
 
 #[test]
+fn screenshot_fragen_finden_antworten_und_keine_erfundene_bedienung() {
+    let kb = KnowledgeBase::load_from_dir(&knowledge_root()).unwrap();
+    for question in [
+        "wer hat das erstellt",
+        "Kann man den Bot mit dem automatischen Raid deaktivieren?",
+    ] {
+        let hits = kb.select(question, Namespace::Bot, None, 4);
+        assert!(hits.iter().any(|doc| doc.slug == "ueber-den-bot"));
+        let grounding = tb_knowledge::assemble_grounding(&hits);
+        assert!(grounding.facts.contains("Nani (EarlySalty)"));
+        assert!(grounding.facts.contains("noch nicht verfügbar"));
+        assert!(grounding.facts.contains("Auto-Raid separat"));
+        assert!(grounding.facts.contains("Bot vom Kanal trennen"));
+        assert!(grounding
+            .facts
+            .contains("Dabei endet auch deine Partnerschaft"));
+        assert!(!grounding
+            .facts
+            .contains("Im Dashboard kannst du Auto-Raid abschalten"));
+        assert!(!grounding
+            .facts
+            .contains("Im Dashboard kannst du den Auto-Raid abschalten"));
+    }
+}
+
+#[test]
 fn keine_internen_mechanismen_in_hilfe_tipps_oder_grounding() {
     let kb =
         KnowledgeBase::load_from_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures"))
