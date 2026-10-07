@@ -48,6 +48,8 @@ enum WorkerError {
     Upload(#[from] UploadError),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    #[error("Die Videovorschau hat sich geändert. Bitte öffne die TikTok-Freigabe erneut.")]
+    PreviewChanged,
     #[error(transparent)]
     Db(#[from] sqlx::Error),
 }
@@ -216,6 +218,18 @@ impl UploadTask {
             }
         }
         if item.platform == "tiktok" {
+            if let Some(options) = uploader.tiktok_post_options() {
+                let current = crate::preview::get_preview(&self.pool, clip_db_id).await;
+                if !current.is_some_and(|preview| {
+                    preview.path.as_deref() == Some(options.video_path.as_str())
+                }) {
+                    if let Err(error) = sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'waiting_tiktok_approval', last_error = 'tiktok_preview_changed' WHERE id = $1 AND tiktok_publish_id IS NULL AND status IN ('pending', 'waiting_connection', 'waiting_schedule', 'waiting_tiktok_approval', 'failed')")
+                        .bind(item.id).execute(&self.pool).await {
+                        tracing::warn!(queue_id = item.id, %error, "TikTok-Freigabe konnte nicht zurückgestellt werden");
+                    }
+                    return false;
+                }
+            }
             match crate::tiktok_recovery::reserve_with_options(
                 &self.pool,
                 item.id,
@@ -375,6 +389,17 @@ impl UploadTask {
                         }
                     }
                 }
+                if matches!(e, WorkerError::PreviewChanged) {
+                    self.update_upload_status_logged(
+                        &item,
+                        "waiting_tiktok_approval",
+                        None,
+                        Some("tiktok_preview_changed"),
+                        "tiktok_preview_changed",
+                    )
+                    .await;
+                    return false;
+                }
                 let err = e.to_string();
                 self.update_upload_status_logged(
                     &item,
@@ -411,6 +436,12 @@ impl UploadTask {
                     serde_json::from_value(options).map_err(|_| {
                         UploadError::Validation("Bitte prüfe die TikTok-Freigabe erneut.".into())
                     })?;
+                let current = crate::preview::get_preview(&self.pool, item.clip_db_id).await;
+                if !current.is_some_and(|preview| {
+                    preview.path.as_deref() == Some(options.video_path.as_str())
+                }) {
+                    return Err(WorkerError::PreviewChanged);
+                }
                 tokio::fs::create_dir_all(&self.clips_dir).await?;
                 let path = format!("{}/tiktok-approved-{}.mp4", self.clips_dir, item.id);
                 tokio::fs::copy(&options.video_path, &path).await.map_err(|_| UploadError::Validation(
@@ -1621,6 +1652,7 @@ printf '%s\n' '{"streams":[{"codec_type":"video","width":1920,"height":1080,"dur
             return;
         };
         for ddl in [
+            "ALTER TABLE twitch_clips_social_media ADD COLUMN preview_status TEXT, ADD COLUMN preview_path TEXT, ADD COLUMN preview_error TEXT, ADD COLUMN preview_updated_at TIMESTAMPTZ",
             "CREATE TABLE social_media_streamer_layout (twitch_user_id TEXT DEFAULT '42', streamer_login TEXT PRIMARY KEY, layout_json JSONB, cam_enabled BOOLEAN, mode TEXT)",
             "CREATE TABLE social_media_streamer_settings (twitch_user_id TEXT DEFAULT '42', streamer_login TEXT PRIMARY KEY, subtitles_enabled BOOLEAN DEFAULT TRUE)",
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, description_tiktok TEXT, description_instagram TEXT, hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, cost_usd_estimate NUMERIC(10,6), status TEXT DEFAULT 'pending', error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",

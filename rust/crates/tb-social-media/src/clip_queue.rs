@@ -106,7 +106,7 @@ where
     } else {
         false
     };
-    sqlx::query("UPDATE twitch_clips_upload_queue SET status = CASE WHEN $3 THEN 'waiting_tiktok_approval' WHEN $2::text IS NULL THEN 'pending' ELSE 'waiting_connection' END, last_error = $2, last_attempt_at = CASE WHEN $2::text IS NULL THEN NULL ELSE NOW() END WHERE id = $1 AND (status IN ('pending', 'waiting_connection', 'waiting_tiktok_approval') OR (status = 'waiting_schedule' AND scheduled_at > NOW()))")
+    sqlx::query("UPDATE twitch_clips_upload_queue SET status = CASE WHEN $3 OR (platform = 'tiktok' AND status = 'waiting_tiktok_approval') THEN 'waiting_tiktok_approval' WHEN $2::text IS NULL THEN 'pending' ELSE 'waiting_connection' END, last_error = $2, last_attempt_at = CASE WHEN $2::text IS NULL THEN NULL ELSE NOW() END WHERE id = $1 AND (status IN ('pending', 'waiting_connection', 'waiting_tiktok_approval') OR (status = 'waiting_schedule' AND scheduled_at > NOW()))")
         .bind(queue_id).bind(reason).bind(awaiting_choice).execute(pool).await?;
     Ok(queue_id)
 }
@@ -681,6 +681,30 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(youtube_state, ("completed".into(), true));
+        sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'waiting_tiktok_approval', last_error = 'tiktok_preview_changed' WHERE id = $1")
+            .bind(future_id).execute(&pool).await.unwrap();
+        assert_eq!(
+            queue_upload(&pool, clip, "tiktok", None, None, None, None, 0)
+                .await
+                .unwrap(),
+            future_id
+        );
+        let held: (String, serde_json::Value, bool) = sqlx::query_as("SELECT status, tiktok_post_options, scheduled_at = $2::text::timestamptz FROM twitch_clips_upload_queue WHERE id = $1")
+            .bind(future_id).bind(&future).fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            held,
+            ("waiting_tiktok_approval".into(), options.clone(), true)
+        );
+        let mut tx = pool.begin().await.unwrap();
+        apply_tiktok_choice(&mut tx, clip, &options).await.unwrap();
+        tx.commit().await.unwrap();
+        let renewed: String =
+            sqlx::query_scalar("SELECT status FROM twitch_clips_upload_queue WHERE id = $1")
+                .bind(future_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(renewed, "pending");
     }
 
     #[tokio::test]

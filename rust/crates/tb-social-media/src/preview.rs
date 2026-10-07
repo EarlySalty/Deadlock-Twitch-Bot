@@ -27,6 +27,72 @@ pub struct PreviewStatus {
     pub path: Option<String>,
 }
 
+pub(crate) async fn invalidate_preview(
+    connection: &mut sqlx::PgConnection,
+    clip_db_id: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE twitch_clips_social_media SET preview_status = CASE WHEN preview_status IN ('pending', 'rendering') THEN 'pending' ELSE NULL END, preview_path = NULL, preview_error = NULL, preview_updated_at = clock_timestamp() WHERE id = $1")
+        .bind(clip_db_id).execute(&mut *connection).await?;
+    sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'waiting_tiktok_approval', last_error = 'tiktok_preview_changed' WHERE clip_id = $1 AND platform = 'tiktok' AND status IN ('pending', 'waiting_connection', 'waiting_tiktok_approval', 'waiting_schedule', 'failed') AND tiktok_publish_id IS NULL")
+        .bind(clip_db_id).execute(&mut *connection).await?;
+    Ok(())
+}
+
+async fn render_inputs(pool: &PgPool, clip_db_id: i64) -> Result<String, sqlx::Error> {
+    let mut connection = pool.acquire().await?;
+    render_inputs_on(&mut connection, clip_db_id).await
+}
+
+async fn render_inputs_on(
+    connection: &mut sqlx::PgConnection,
+    clip_db_id: i64,
+) -> Result<String, sqlx::Error> {
+    let (row, streamer): (serde_json::Value, Option<serde_json::Value>) = sqlx::query_as("SELECT to_jsonb(c), to_jsonb(l) FROM twitch_clips_social_media c LEFT JOIN social_media_streamer_layout l ON l.twitch_user_id = c.twitch_user_id WHERE c.id = $1")
+        .bind(clip_db_id).fetch_one(connection).await?;
+    let layout =
+        crate::layout::StreamerLayout::from_stored_value(&row["layout_override_json"], None, None)
+            .ok()
+            .or_else(|| {
+                let value = streamer?;
+                crate::layout::StreamerLayout::from_stored_value(
+                    &value["layout_json"],
+                    value["cam_enabled"].as_bool(),
+                    value["mode"].as_str(),
+                )
+                .ok()
+            });
+    let source = if let Some(path) = row["local_file_path"].as_str() {
+        tokio::fs::metadata(path).await.ok().map(|metadata| {
+            (
+                metadata.len(),
+                metadata
+                    .modified()
+                    .ok()
+                    .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|value| value.as_nanos().to_string()),
+            )
+        })
+    } else {
+        None
+    };
+    Ok(serde_json::json!({
+        "clip_url": row["clip_url"], "local_file_path": row["local_file_path"],
+        "streamer_login": row["streamer_login"], "clip_title": row["clip_title"],
+        "custom_title": row["custom_title"], "layout": layout.map(|value| value.to_override_json()),
+        "source": source,
+    })
+    .to_string())
+}
+
+async fn inputs_match(pool: &PgPool, clip_db_id: i64, path: &str) -> bool {
+    let Ok(stored) = tokio::fs::read_to_string(format!("{path}.inputs.json")).await else {
+        return false;
+    };
+    render_inputs(pool, clip_db_id)
+        .await
+        .is_ok_and(|current| current == stored)
+}
+
 pub async fn request_preview(pool: &PgPool, clip_db_id: i64) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     let (status, path): (Option<String>, Option<String>) = sqlx::query_as(
@@ -36,11 +102,21 @@ pub async fn request_preview(pool: &PgPool, clip_db_id: i64) -> Result<(), sqlx:
     .fetch_one(&mut *tx)
     .await?;
     let in_progress = matches!(status.as_deref(), Some(PREVIEW_PENDING | PREVIEW_RENDERING));
+    let ready_path = valid_preview_path(clip_db_id, path.as_deref()).await;
     let ready = status.as_deref() == Some(PREVIEW_READY)
-        && valid_preview_path(clip_db_id, path.as_deref())
-            .await
-            .is_some();
+        && match ready_path.as_deref() {
+            Some(path) => {
+                tokio::fs::read_to_string(format!("{path}.inputs.json"))
+                    .await
+                    .ok()
+                    == Some(render_inputs_on(&mut tx, clip_db_id).await?)
+            }
+            None => false,
+        };
     if !in_progress && !ready {
+        if status.as_deref() == Some(PREVIEW_READY) {
+            invalidate_preview(&mut tx, clip_db_id).await?;
+        }
         sqlx::query(
             "UPDATE twitch_clips_social_media SET preview_status = 'pending', preview_error = NULL, preview_path = NULL, preview_updated_at = NOW() WHERE id = $1",
         )
@@ -64,12 +140,12 @@ pub async fn get_preview(pool: &PgPool, clip_db_id: i64) -> Option<PreviewStatus
     if row.preview_status.as_deref() == Some(PREVIEW_READY) {
         return Some(
             match valid_preview_path(clip_db_id, row.preview_path.as_deref()).await {
-                Some(path) => PreviewStatus {
+                Some(path) if inputs_match(pool, clip_db_id, &path).await => PreviewStatus {
                     status: row.preview_status,
                     error: None,
                     path: Some(path),
                 },
-                None => PreviewStatus {
+                _ => PreviewStatus {
                     status: None,
                     error: None,
                     path: None,
@@ -118,12 +194,19 @@ fn resolve_preview_path(clip_db_id: i64, path: String) -> String {
     path
 }
 
+#[cfg(test)]
 async fn finish_ready(
     pool: &PgPool,
     clip_db_id: i64,
     path: &str,
     claimed_at: Option<&str>,
 ) -> Result<(), sqlx::Error> {
+    let inputs = render_inputs(pool, clip_db_id).await?;
+    if Path::new(path).exists() {
+        tokio::fs::write(format!("{path}.inputs.json"), inputs)
+            .await
+            .map_err(sqlx::Error::Io)?;
+    }
     sqlx::query(
         "UPDATE twitch_clips_social_media SET preview_status = 'ready', preview_path = $1, preview_error = NULL, preview_updated_at = NOW() WHERE id = $2 AND ($3::text IS NULL OR (preview_status = 'rendering' AND preview_updated_at = $3::text::timestamptz))",
     )
@@ -132,6 +215,36 @@ async fn finish_ready(
     .bind(claimed_at)
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+async fn publish_render(
+    pool: &PgPool,
+    job: &PreviewJob,
+    staged: &str,
+    output: &str,
+    inputs: &str,
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let current: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM twitch_clips_social_media WHERE id = $1 AND preview_status = 'rendering' AND preview_updated_at = $2::text::timestamptz FOR UPDATE)")
+        .bind(job.clip_db_id).bind(&job.claimed_at).fetch_one(&mut *tx).await?;
+    if !current {
+        return Ok(());
+    }
+    if render_inputs_on(&mut tx, job.clip_db_id).await? != inputs {
+        invalidate_preview(&mut tx, job.clip_db_id).await?;
+        tx.commit().await?;
+        return Ok(());
+    }
+    tokio::fs::write(format!("{output}.inputs.json"), inputs)
+        .await
+        .map_err(sqlx::Error::Io)?;
+    tokio::fs::rename(staged, output)
+        .await
+        .map_err(sqlx::Error::Io)?;
+    sqlx::query("UPDATE twitch_clips_social_media SET preview_status = 'ready', preview_path = $1, preview_error = NULL, preview_updated_at = clock_timestamp() WHERE id = $2")
+        .bind(output).bind(job.clip_db_id).execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -274,8 +387,43 @@ impl PreviewWorker {
                 return;
             }
         };
+        let inputs = match render_inputs(&self.pool, job.clip_db_id).await {
+            Ok(inputs) => inputs,
+            Err(error) => {
+                let _ = finish_error(
+                    &self.pool,
+                    job.clip_db_id,
+                    &error.to_string(),
+                    Some(&job.claimed_at),
+                )
+                .await;
+                return;
+            }
+        };
+        let snapshot: serde_json::Value = serde_json::from_str(&inputs).unwrap_or_default();
+        if snapshot["clip_url"].as_str() != Some(job.clip_url.as_str())
+            || snapshot["local_file_path"].as_str() != Some(input.as_str())
+        {
+            let _ = finish_error(
+                &self.pool,
+                job.clip_db_id,
+                "preview_source_changed",
+                Some(&job.claimed_at),
+            )
+            .await;
+            return;
+        }
         let output = format!(
             "{}/{}_preview_manual_v1.mp4",
+            self.clips_dir, job.clip_db_id
+        );
+        let generation: String = job
+            .claimed_at
+            .bytes()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let staged = format!(
+            "{}/{}_preview_{generation}.mp4",
             self.clips_dir, job.clip_db_id
         );
         match render_clip_vertical(
@@ -283,15 +431,13 @@ impl PreviewWorker {
             &self.pool,
             job.clip_db_id,
             &input,
-            &output,
+            &staged,
             PREVIEW_MAX_SECS,
         )
         .await
         {
             Ok(()) => {
-                if let Err(e) =
-                    finish_ready(&self.pool, job.clip_db_id, &output, Some(&job.claimed_at)).await
-                {
+                if let Err(e) = publish_render(&self.pool, job, &staged, &output, &inputs).await {
                     tracing::warn!(%e, clip_db_id = job.clip_db_id, "Vorschau: Ready-Status nicht gespeichert");
                 }
             }
@@ -305,6 +451,7 @@ impl PreviewWorker {
                 .await;
             }
         }
+        let _ = tokio::fs::remove_file(&staged).await;
     }
 
     pub async fn run_once(&self) {
@@ -354,11 +501,17 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_url TEXT, streamer_login TEXT, local_file_path TEXT, preview_path TEXT, preview_status TEXT, preview_error TEXT, preview_updated_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT DEFAULT '42', layout_override_json JSONB, clip_title TEXT, custom_title TEXT, clip_url TEXT, streamer_login TEXT, local_file_path TEXT, preview_path TEXT, preview_status TEXT, preview_error TEXT, preview_updated_at TIMESTAMPTZ)",
         )
         .execute(&pool)
         .await
         .unwrap();
+        for ddl in [
+            "CREATE TABLE social_media_streamer_layout (twitch_user_id TEXT PRIMARY KEY, layout_json JSONB, cam_enabled BOOLEAN, mode TEXT)",
+            "CREATE TABLE twitch_clips_upload_queue (clip_id BIGINT, platform TEXT, status TEXT, last_error TEXT, tiktok_publish_id TEXT, tiktok_post_options JSONB, scheduled_at TIMESTAMPTZ)",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
         Some(pool)
     }
 
@@ -415,6 +568,115 @@ mod tests {
         assert!(valid_preview_path(42, Some(&path)).await.is_none());
         tokio::fs::remove_file(&path).await.unwrap();
         assert!(valid_preview_path(42, Some(&path)).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn layout_aenderung_verwirft_alte_vorschau_und_erhaelt_freigaben() {
+        let Some(pool) = make_pool("t_sm_preview_inputs").await else {
+            return;
+        };
+        let id: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_url, streamer_login) VALUES ('https://clips.test/input', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
+        let layout = crate::layout::default_streamer_layout();
+        crate::layout::set_clip_layout_override(&pool, id, Some(&layout))
+            .await
+            .unwrap();
+        let options = serde_json::json!({"consent": true, "caption": "Historisch"});
+        for (platform, status, publish_id) in [
+            ("tiktok", "pending", None),
+            ("tiktok", "completed", Some("done")),
+            ("tiktok", "uploading", None),
+            ("youtube", "pending", None),
+        ] {
+            sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, tiktok_publish_id, tiktok_post_options, scheduled_at) VALUES ($1, $2, $3, $4, $5, '2030-01-01'::timestamptz)")
+                .bind(id).bind(platform).bind(status).bind(publish_id).bind(&options).execute(&pool).await.unwrap();
+        }
+        request_preview(&pool, id).await.unwrap();
+        let jobs = claim_pending(&pool, 1).await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = preview_file(dir.path(), id).await;
+        finish_ready(&pool, id, &path, Some(&jobs[0].claimed_at))
+            .await
+            .unwrap();
+        crate::layout::set_clip_layout_override(&pool, id, Some(&layout))
+            .await
+            .unwrap();
+        request_preview(&pool, id).await.unwrap();
+        assert_eq!(
+            get_preview(&pool, id).await.unwrap().path.as_deref(),
+            Some(path.as_str())
+        );
+        let mut changed = layout.clone();
+        changed.cam_enabled = false;
+        crate::layout::set_clip_layout_override(&pool, id, Some(&changed))
+            .await
+            .unwrap();
+        assert!(get_preview(&pool, id).await.unwrap().path.is_none());
+        let rows: Vec<(String, String, serde_json::Value, String)> = sqlx::query_as("SELECT platform, status, tiktok_post_options, scheduled_at::text FROM twitch_clips_upload_queue ORDER BY platform DESC, status")
+            .fetch_all(&pool).await.unwrap();
+        assert!(rows
+            .iter()
+            .any(|row| row.0 == "tiktok" && row.1 == "waiting_tiktok_approval"));
+        assert!(rows
+            .iter()
+            .any(|row| row.0 == "tiktok" && row.1 == "completed"));
+        assert!(rows
+            .iter()
+            .any(|row| row.0 == "tiktok" && row.1 == "uploading"));
+        assert!(rows
+            .iter()
+            .any(|row| row.0 == "youtube" && row.1 == "pending"));
+        assert!(rows
+            .iter()
+            .all(|row| row.2 == options && row.3.starts_with("2030-01-01")));
+        request_preview(&pool, id).await.unwrap();
+        let old = claim_pending(&pool, 1).await.remove(0);
+        let old_inputs = render_inputs(&pool, id).await.unwrap();
+        let staged = dir.path().join("staged.mp4").to_string_lossy().into_owned();
+        tokio::fs::write(&staged, b"obsolete").await.unwrap();
+        let original = tokio::fs::read(&path).await.unwrap();
+        crate::layout::set_clip_layout_override(&pool, id, Some(&layout))
+            .await
+            .unwrap();
+        let current = claim_pending(&pool, 1).await.remove(0);
+        publish_render(&pool, &old, &staged, &path, &old_inputs)
+            .await
+            .unwrap();
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), original);
+        assert_eq!(
+            get_preview(&pool, id).await.unwrap().status.as_deref(),
+            Some(PREVIEW_RENDERING)
+        );
+        let inputs = render_inputs(&pool, id).await.unwrap();
+        sqlx::query("UPDATE twitch_clips_social_media SET custom_title = 'Neu' WHERE id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        publish_render(&pool, &current, &staged, &path, &inputs)
+            .await
+            .unwrap();
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), original);
+        assert_eq!(
+            get_preview(&pool, id).await.unwrap().status.as_deref(),
+            Some(PREVIEW_PENDING)
+        );
+        let current = claim_pending(&pool, 1).await.remove(0);
+        let inputs = render_inputs(&pool, id).await.unwrap();
+        tokio::fs::copy(&path, &staged).await.unwrap();
+        publish_render(&pool, &current, &staged, &path, &inputs)
+            .await
+            .unwrap();
+        assert_eq!(
+            get_preview(&pool, id).await.unwrap().status.as_deref(),
+            Some(PREVIEW_READY)
+        );
+        sqlx::query("UPDATE twitch_clips_social_media SET clip_url = 'https://clips.test/changed' WHERE id = $1").bind(id).execute(&pool).await.unwrap();
+        assert!(get_preview(&pool, id).await.unwrap().path.is_none());
+        request_preview(&pool, id).await.unwrap();
+        assert_eq!(
+            get_preview(&pool, id).await.unwrap().status.as_deref(),
+            Some(PREVIEW_PENDING)
+        );
     }
 
     #[tokio::test]
