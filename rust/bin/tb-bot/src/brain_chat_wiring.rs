@@ -21,6 +21,9 @@ const NO_EVIDENCE_REPLIES: [&str; 3] = [
 ];
 const UNUSABLE_REPLY: &str =
     "Die Antwort kann ich hier nicht sicher wiedergeben. Frag bitte im Discord nach.";
+const UNAVAILABLE_REPLY: &str =
+    "Ich kann gerade keine Antwort abrufen. Versuch es bitte später noch einmal.";
+const COACHING_TARGET: &str = "https://deutsche-deadlock-community.de/coaching";
 
 #[async_trait]
 trait BrainAnswerPort: Send + Sync {
@@ -304,10 +307,10 @@ impl BrainChatService {
             .backend_state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if current == BackendState::Unavailable {
+        if current == BackendState::Unavailable && *previous != current {
             tb_observability::warning_budget::warn(
                 "brain_backend",
-                "Brain-Antwortdienst nicht erreichbar, Chat-Antworten bleiben aus",
+                "Brain-Antwortdienst nicht erreichbar, Chat meldet Ausfall",
             );
         }
         *previous = current;
@@ -391,11 +394,6 @@ impl BrainChatPort for BrainChatService {
             tracing::info!(reason = "muted", "Brain-Chat übersprungen");
             return true;
         }
-        let Some(answerer) = &self.answerer else {
-            tracing::info!(reason = "backend_unavailable", "Brain-Chat übersprungen");
-            self.backend_state(BackendState::Unavailable);
-            return true;
-        };
         let Some(reservation) = self.limit.reserve(
             &event.chatter_user_id,
             &event.broadcaster_user_id,
@@ -429,10 +427,15 @@ impl BrainChatPort for BrainChatService {
         };
         reservation.commit();
         let conversation_id = format!("{}-{}", record.channel_id, record.user_id);
-        let (text, status) = match answerer
-            .answer(record.message_id, &conversation_id, &question)
-            .await
-        {
+        let answer = match &self.answerer {
+            Some(answerer) => {
+                answerer
+                    .answer(record.message_id, &conversation_id, &question)
+                    .await
+            }
+            None => Err(BrainAdapterError::Backend),
+        };
+        let (text, status) = match answer {
             Ok(KnowledgeReply::Answered { text, .. }) => {
                 self.backend_state(BackendState::Available);
                 match safe_chat_answer(&text) {
@@ -445,7 +448,7 @@ impl BrainChatPort for BrainChatService {
                 (self.no_evidence_reply().to_string(), "NoEvidence")
             }
             Err(error) => {
-                tracing::info!(reason = "answer_failed", "Brain-Chat übersprungen");
+                tracing::info!(reason = "answer_failed", "Brain-Chat meldet Antwortausfall");
                 if error == BrainAdapterError::Backend {
                     self.backend_state(BackendState::Unavailable);
                 } else {
@@ -454,8 +457,7 @@ impl BrainChatPort for BrainChatService {
                         "Brain-Chat-Frage abgelehnt",
                     );
                 }
-                let _ = self.finish(id, "", "Fehler", false, started).await;
-                return true;
+                (UNAVAILABLE_REPLY.to_string(), "Fehler")
             }
         };
         if !self.finish(id, &text, status, true, started).await {
@@ -508,7 +510,7 @@ pub fn build(
     let answerer = if token.trim().is_empty() {
         tb_observability::warning_budget::warn(
             "brain_backend",
-            "Brain-Chat-Adapter ohne Dienstzugang, Antworten bleiben aus",
+            "Brain-Chat-Adapter ohne Dienstzugang, Chat meldet Ausfall",
         );
         None
     } else {
@@ -694,8 +696,6 @@ fn strip_markdown_links(input: &str) -> String {
 }
 
 fn safe_chat_answer(input: &str) -> Option<String> {
-    // Erst normalisieren: Nach der Linkprüfung entfernte Steuerzeichen könnten
-    // sonst aus einem ungültigen Token wieder eine gültige Domain machen.
     let normalized = input
         .chars()
         .filter(|character| !character.is_control() || character.is_whitespace())
@@ -711,7 +711,8 @@ fn safe_chat_answer(input: &str) -> Option<String> {
                 .collect::<String>()
         })
         .collect::<Vec<_>>()
-        .join(" ");
+        .join(" ")
+        .replace("[[coaching]]", COACHING_TARGET);
     let text = cleaned.trim();
     if !has_substantive_answer(text) {
         return None;
@@ -794,7 +795,7 @@ mod tests {
                 "Answered",
                 "Sent",
             ),
-            (1, ResponseTemplate::new(503), "Fehler", "Fehler"),
+            (1, ResponseTemplate::new(503), "Fehler", "Sent"),
         ] {
             event.message_id = format!("message-{index}");
             event.chatter_user_id = (1186925760_u64 + index).to_string();
@@ -848,7 +849,9 @@ mod tests {
             );
             server.verify().await;
         }
-        assert_eq!(chat.sends.lock().unwrap().len(), 1);
+        let sends = chat.sends.lock().unwrap();
+        assert_eq!(sends.len(), 2);
+        assert_eq!(sends[1].2, UNAVAILABLE_REPLY);
     }
 
     #[tokio::test]
@@ -1122,6 +1125,21 @@ mod tests {
     }
 
     #[test]
+    fn coachingziel_wird_erst_nach_dem_allgemeinen_linkfilter_projiziert() {
+        for (prefix, suffix) in [("", ""), ("Coaching findest du unter ", ".")] {
+            assert_eq!(
+                safe_chat_answer(&format!(
+                    "{prefix}[[coaching]]{suffix} https://example.invalid/coaching"
+                )),
+                Some(format!("{prefix}{COACHING_TARGET}{suffix}"))
+            );
+        }
+        assert_eq!(safe_chat_answer(COACHING_TARGET), None);
+        let long = format!("{} [[coaching]] {}", "A".repeat(400), "B".repeat(60));
+        assert_eq!(safe_chat_answer(&long), None);
+    }
+
+    #[test]
     fn limits_gelten_fuer_ids_und_utc_tag() {
         let options = BrainChatOptions {
             user_cooldown_seconds: 60,
@@ -1350,7 +1368,7 @@ mod tests {
             assert!(service.maybe_respond(&event(index)).await);
         }
         let sends = chat.sends.lock().unwrap().clone();
-        assert_eq!(sends.len(), 6);
+        assert_eq!(sends.len(), 7);
         assert_eq!(
             sends[0],
             (
@@ -1364,6 +1382,7 @@ mod tests {
         assert_eq!(sends[3].2, NO_EVIDENCE_REPLIES[0]);
         assert_eq!(sends[4].2, NO_EVIDENCE_REPLIES[1]);
         assert_eq!(sends[5].2, NO_EVIDENCE_REPLIES[2]);
+        assert_eq!(sends[6].2, UNAVAILABLE_REPLY);
         let records = log.results.lock().unwrap().clone();
         assert_eq!(
             records.iter().map(|row| row.1.as_str()).collect::<Vec<_>>(),
@@ -1378,7 +1397,7 @@ mod tests {
             ]
         );
         assert!(records.iter().all(|row| row.2 >= 0));
-        assert_eq!(log.deliveries.lock().unwrap().len(), 6);
+        assert_eq!(log.deliveries.lock().unwrap().len(), 7);
         assert!(log.deliveries.lock().unwrap().iter().all(|row| row.0));
         assert_eq!(log.questions.lock().unwrap().len(), 7);
         assert!(matches!(
@@ -1392,6 +1411,101 @@ mod tests {
         command.message.text = "!status @DeadlockBot".into();
         assert!(!service.maybe_respond(&command).await);
         assert_eq!(log.questions.lock().unwrap().len(), 7);
+    }
+
+    #[tokio::test]
+    async fn fehlender_adapter_meldet_ausfall_ueber_denselben_begrenzten_zustellweg() {
+        let log = Arc::new(FakeLog::default());
+        let chat = Arc::new(FakeChat {
+            audit: Some(log.clone()),
+            ..FakeChat::default()
+        });
+        let service = BrainChatService {
+            answerer: None,
+            log: log.clone(),
+            api: chat.clone(),
+            timeout_guard: Arc::new(TimeoutGuard::new()),
+            bot_user_id: "999".into(),
+            bot_login: "deadlockbot".into(),
+            limit: BrainRateLimit::new(BrainChatOptions {
+                channel_hourly_limit: 1,
+                ..BrainChatOptions::default()
+            }),
+            backend_state: Mutex::new(BackendState::Unavailable),
+            no_evidence_index: AtomicUsize::new(0),
+        };
+        assert!(service.accepts(&event(0)));
+        assert!(service.maybe_respond(&event(0)).await);
+        assert!(service.maybe_respond(&event(1)).await);
+        let sends = chat.sends.lock().unwrap();
+        assert_eq!(sends.len(), 1);
+        assert_eq!(
+            sends[0],
+            ("200".into(), "message-0".into(), UNAVAILABLE_REPLY.into())
+        );
+        assert_eq!(log.results.lock().unwrap()[0].1, "Fehler");
+        assert_eq!(log.questions.lock().unwrap().len(), 1);
+        assert_eq!(log.deliveries.lock().unwrap().len(), 1);
+        assert!(log.deliveries.lock().unwrap()[0].0);
+    }
+
+    #[tokio::test]
+    async fn echter_http_timeout_meldet_ausfall_ohne_zweiten_antwortpfad() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/answer"))
+            .respond_with(ResponseTemplate::new(503).set_delay(Duration::from_secs(5)))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let adapter = BrainKnowledgeAdapter::new(
+            &server.uri(),
+            "fixture-token",
+            Duration::from_secs(1),
+            ["bot.public".into()].into(),
+        )
+        .unwrap();
+        let log = Arc::new(FakeLog::default());
+        let chat = Arc::new(FakeChat {
+            audit: Some(log.clone()),
+            ..FakeChat::default()
+        });
+        let service = BrainChatService {
+            answerer: Some(Arc::new(adapter)),
+            log: log.clone(),
+            api: chat.clone(),
+            timeout_guard: Arc::new(TimeoutGuard::new()),
+            bot_user_id: "999".into(),
+            bot_login: "deadlockbot".into(),
+            limit: BrainRateLimit::new(BrainChatOptions::default()),
+            backend_state: Mutex::new(BackendState::Unknown),
+            no_evidence_index: AtomicUsize::new(0),
+        };
+        tokio::time::pause();
+        let clock_guard = tokio::spawn(async {
+            loop {
+                tokio::task::yield_now().await;
+            }
+        });
+        let response = tokio::spawn(async move { service.maybe_respond(&event(0)).await });
+        while server.received_requests().await.unwrap().is_empty() {
+            assert!(!response.is_finished());
+            tokio::task::yield_now().await;
+        }
+        tokio::time::advance(Duration::from_secs(2)).await;
+        assert!(response.await.unwrap());
+        clock_guard.abort();
+        tokio::time::resume();
+        let sends = chat.sends.lock().unwrap();
+        assert_eq!(sends.len(), 1);
+        assert_eq!(sends[0].2, UNAVAILABLE_REPLY);
+        assert_eq!(log.results.lock().unwrap()[0].1, "Fehler");
+        assert_eq!(log.deliveries.lock().unwrap().len(), 1);
+        assert!(log.deliveries.lock().unwrap()[0].0);
+        server.verify().await;
     }
 
     #[tokio::test]
