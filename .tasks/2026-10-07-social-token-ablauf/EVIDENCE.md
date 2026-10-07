@@ -2,7 +2,7 @@
 
 ## Stand am 7. Oktober 2026
 
-Implementierung im eigenen Worktree. Merge-Gate, Merge, Produktionsmigration und Live-Prüfung stehen aus. Produktionszugänge wurden nicht für eine Probe verändert. Es wurden keine weiteren Worker gestartet.
+Implementierung im eigenen Worktree. Der lokale Merge-Gate ist nach zwei technischen Fehlschlägen ohne Urteil blockiert. Merge, Produktionsmigration und Live-Prüfung stehen aus. Produktionszugänge wurden nicht für eine Probe verändert. Es wurden keine weiteren Worker gestartet.
 
 ## Abgeschlossene Prüfungen
 
@@ -10,12 +10,15 @@ Implementierung im eigenen Worktree. Merge-Gate, Merge, Produktionsmigration und
 | --- | --- |
 | `tb-social-media` vor der Änderung | 300 passed, 0 failed, 0 ignored |
 | `tb-dashboard-api` vor der Änderung | 1309 passed, 22 failed, 0 ignored |
+| `tb-dashboard-api` nach der Änderung | 1309 passed, 22 failed, 0 ignored, 0 filtered; dieselben 22 Fehler, keine neuen |
 | Neue Social-Media- und DB-Suites | 351 passed, 0 failed, 0 ignored, 0 filtered |
 | Frontend-Vertrag und i18n | 26 passed, 0 failed, 0 skipped |
 | Bot-DM-Adapter, echte DB und lokaler Test-Broker | 2 passed, 0 failed, 0 ignored, 322 filtered |
 | Clippy für `tb-social-media`, `tb-dashboard-api`, `tb-bot`, `tb-db`, alle Targets | Exit 0, vorhandene Warnungen bleiben |
 | Online-SQLx-Prüfung für `tb-social-media`, alle Targets | Exit 0, neue Offline-Metadaten erzeugt |
 | `npm ci` und `npm run build` im Dashboard | jeweils Exit 0 |
+| Admin-Dashboard und Website als erforderliche Release-Artefakte | Installation und Build jeweils Exit 0 |
+| Gebautes Dashboard `index-Ck4pHALD.js` | Neue Texte und Statusfelder vorhanden, SHA256 `b0eb867d1034108440a4286c3de8a6319c7bbf63fa37b150bf86472661f2bf2b` |
 | Formatprüfung der neun geänderten Rust-Dateien | Exit 0 |
 | `cargo fmt --all --check` | Exit 1, Abweichungen in 148 nicht geänderten Dateien |
 | Mechanischer UI-Detektor | 0 Befunde |
@@ -28,6 +31,16 @@ PATH=/home/nathanael/.cargo/bin:$PATH SQLX_OFFLINE=true \
 TB_TEST_DATABASE_URL=postgres://postgres:tbtest@127.0.0.1:33045/tb_social_token_ablauf \
 TEST_DATABASE_URL=postgres://postgres:tbtest@127.0.0.1:33045/tb_social_token_ablauf \
 cargo test -j 2 -p tb-social-media -p tb-db --no-fail-fast -- --include-ignored --test-threads=1
+
+PATH=/home/nathanael/.cargo/bin:$PATH SQLX_OFFLINE=true \
+TB_TEST_DATABASE_URL=postgres://postgres:tbtest@127.0.0.1:33045/tb_social_token_ablauf \
+TEST_DATABASE_URL=postgres://postgres:tbtest@127.0.0.1:33045/tb_social_token_ablauf \
+cargo test -j 2 -p tb-bot social_reauth -- --include-ignored --test-threads=1
+
+PATH=/home/nathanael/.cargo/bin:$PATH SQLX_OFFLINE=true \
+TB_TEST_DATABASE_URL=postgres://postgres:tbtest@127.0.0.1:33045/tb_social_token_ablauf \
+TEST_DATABASE_URL=postgres://postgres:tbtest@127.0.0.1:33045/tb_social_token_ablauf \
+cargo test -j 2 -p tb-dashboard-api --lib -- --include-ignored --test-threads=1
 
 PATH=/home/nathanael/.cargo/bin:$PATH SQLX_OFFLINE=true \
 cargo clippy -j 2 -p tb-social-media -p tb-dashboard-api -p tb-bot -p tb-db --all-targets
@@ -48,7 +61,7 @@ Es gibt keinen zusätzlichen Discord-Connector. Die sechs Anbieterpfade für Tau
 
 ## Bestehende rote API-Tests
 
-Die unveränderte Baseline enthält diese 22 Fehler. Der Nachlauf steht aus.
+Die unveränderte Baseline und der Nachlauf enthalten dieselben 22 Fehler. Beide Läufe haben 1309 bestandene Tests. Der Nachlauf endet mit Exit 101, Laufzeit 436,90 Sekunden. Die neuen und die aufgelösten Fehlerlisten sind leer. Die betroffenen Social-Media-Handler-Tests sind bestanden.
 
 ```text
 auth::idor_e2e_tests::discord_admin_ohne_mode_cookie_hat_im_public_dashboard_partner_scope
@@ -77,11 +90,11 @@ uplink_config::tests::migration_environment_probe_options_rejected
 
 ## Prüfzeilen
 
-TESTNACHWEIS[TW-1]: 379 passed, 0 ignored | Baseline: 22 rot
+TESTNACHWEIS[TW-1]: 1688 passed, 0 ignored | Baseline: 22 rot
 TEXTNACHWEIS[DR-1]: Gedankenstriche 0 | ae/oe/ue/ss-Ersatz 0 | Absolutwörter 0 belegt | Senke: Dashboard und Social-Media-DM
 WIRKUNGSPRUEFUNG[WP-1]: 0 offene Befunde | Zwillingssuche: grep-belegt | Fremddienst-Pfade: 7/7 geprüft
 
-Die Testsumme umfasst den abgeschlossenen Rust-Lauf, den Bot-DM-Adapter und die beiden Frontend-Dateien. Die technische Fremddienstprüfung ist keine Behauptung über einen erfolgreichen Produktionsversand.
+Die Testsumme umfasst den abgeschlossenen Rust-Lauf, den Bot-DM-Adapter, die beiden Frontend-Dateien und den API-Nachlauf. Die vollständige API-Suite ist wegen der unveränderten 22 Baseline-Fehler weiterhin rot. Die technische Fremddienstprüfung ist keine Behauptung über einen erfolgreichen Produktionsversand.
 
 ## Migration und Betrieb
 
