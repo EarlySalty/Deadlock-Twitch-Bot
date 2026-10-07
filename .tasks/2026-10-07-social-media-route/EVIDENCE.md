@@ -20,9 +20,9 @@ Rustfmt-Prüfung der sechs angefassten Rust-Dateien erfolgreich. Keine neuen Cod
 ## Prüfungen
 
 - Originale Dashboard-Suite: 432 bestanden, 5 fehlgeschlagen, 0 übersprungen. Unveränderter Ausgangscommit 85d8ec63: dieselben Zahlen und dieselben fünf Fehler. Betroffen: drei Farbpalettenprüfungen, Gesamtbreite der Analyse-Shell und OBS-Hilfe.
-- Dashboard nach Rebase: 434 bestanden, 5 fehlgeschlagen, 0 übersprungen. Baseline cc20a312 wird gesondert gemessen.
-- Social-Studio-Browserprüfung: 26 bestanden, 0 fehlgeschlagen, 0 übersprungen. Screenshots: `/home/nathanael/.claude/sichtpruefung/social-media-route/`. Desktop und Mobil zeigen den neuen Namen. Browserprüfung umfasst Breiten von 320 bis 2560 Pixeln.
-- Produktionsrouter mit gebautem Bundle: 1 bestanden, 0 fehlgeschlagen, 0 ignoriert. Root, Unterpfad, GET/POST-308 mit kodiertem Pfad und Query, Rechtstexte, OAuth, API, reservierte 404 und authentifizierte SPA geprüft. Wiederholung nach Rebase läuft.
+- Dashboard nach Rebase: 434 bestanden, 5 fehlgeschlagen, 0 übersprungen. Baseline cc20a312: 433 bestanden, dieselben 5 fehlgeschlagen, 0 übersprungen. Ein neuer Routingtest erklärt den zusätzlichen bestandenen Test.
+- Social-Studio-Browserprüfung vor und nach Rebase: 26 bestanden, 0 fehlgeschlagen, 0 übersprungen. Der zusätzliche Admin-Modus-Test des kombinierten Laufs startet nicht: `spawn geckodriver ENOENT`. Gesamtbrowserlauf deshalb 26 bestanden, 1 fehlgeschlagen. Screenshots: `/home/nathanael/.claude/sichtpruefung/social-media-route/`. Desktop und Mobil zeigen den neuen Namen. Browserprüfung umfasst Breiten von 320 bis 2560 Pixeln.
+- Produktionsrouter mit gebautem Bundle: 1 bestanden, 0 fehlgeschlagen, 0 ignoriert. Root, Unterpfad, GET/POST-308 mit kodiertem Pfad und Query, Rechtstexte, OAuth, API, reservierte 404 und authentifizierte SPA geprüft. Wiederholung nach Rebase ebenfalls 1 bestanden, 0 fehlgeschlagen, 0 ignoriert. Dashboard-Build nach Rebase erfolgreich.
 - Bot-Suite: 314 bestanden, 8 fehlgeschlagen, 0 ignoriert. Pristine 85d8ec63: dieselben 314 bestanden und dieselben acht Fehler. Sieben Patch-Feed-Tests scheitern an fehlendem `public.llm_usage`; zusätzlich scheitert der Silentban-Test.
 - API-Suite: 1314 bestanden, 22 fehlgeschlagen, 0 ignoriert. Vergleich auf pristine 85d8ec63 läuft. Dies ist kein grüner Gesamtlauf.
 - Striktes Clippy und pristine Baseline scheitern identisch bei `tb-raid/src/signup_denylist.rs:71` mit `result_unit_err`. Zusätzliche direkte Paketprüfung und Baseline: je 21 API-Lib- und acht Bot-Test-Lints. Clippy ist nicht grün.
