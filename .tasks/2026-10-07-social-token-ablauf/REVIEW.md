@@ -1,5 +1,17 @@
 # Merge-Gate
 
+## Viertes Codeurteil nach regulärer Main-Integration
+
+**ALLOW**, Exit 0, unverändertes Modell `gpt-6.1-sol`, geprüfter HEAD `8cc0efda`, Basis `origin/main` bei `9315b3cf`. Log `gate-current-main-round-4.log`.
+
+```text
+[gpt-6.1-sol] ALLOW: No blocking defect found in the supplied changes.
+
+1. .tasks/2026-10-07-social-token-ablauf/EVIDENCE.md:9 | NIT: Rust verification for the integrated HEAD remains pending. | Earlier results cover the preceding revision; rerun the affected Rust checks after resolving the merge conflicts.
+```
+
+Die aktuelle API-Prüfung hat einen Integrationsfehler im neuen Testaufbau gefunden: Die inzwischen erweiterte gemeinsame Fixture enthielt bereits die verschlüsselten Credential-Spalten; der zusätzliche `ALTER TABLE` scheiterte mit SQLSTATE `42701`. Ergebnis: 55 passed, 1 failed, 0 ignored, 1278 filtered. Der Test ergänzt jetzt ausschließlich die noch fehlenden Statusspalten und setzt die Verschlüsselungsversion im Datensatz ausdrücklich. Die Assertions für echte SQL-Fehler und HTTP 500 bleiben unverändert. Der Wiederholungslauf ist bestanden: 56 passed, 0 failed, 0 ignored, 1278 filtered, Exit 0. Die Bot-Prüfung läuft noch. Vor dem Main-Push folgt ein neues Gate für die korrigierte Fixture. Kein Produktionsschritt ist erfolgt.
+
 ## Drittes Codeurteil nach dem Statusfehler-Fix
 
 **ALLOW**, Exit 0, unverändertes Modell `gpt-6.1-sol`, geprüfter HEAD `4305407d`, Basis `origin/main` bei `e0b0dbaf`. Derselbe Aufruf wie in Runde 2, Log `gate-status-fixer-round-3.log`.

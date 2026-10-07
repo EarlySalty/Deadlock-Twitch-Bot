@@ -16,11 +16,9 @@ async fn platforms_status_read_errors_return_500_not_disconnected() {
     let cipher = FieldCipher::from_env().unwrap();
     sqlx::query(
         "ALTER TABLE social_media_platform_auth \
-         ADD COLUMN access_token_enc BYTEA, ADD COLUMN refresh_token_enc BYTEA, \
-         ADD COLUMN client_id TEXT, ADD COLUMN client_secret_enc BYTEA, \
          ADD COLUMN token_expires_at TEXT, ADD COLUMN scopes TEXT, \
          ADD COLUMN platform_user_id TEXT, ADD COLUMN platform_username TEXT, \
-         ADD COLUMN enc_version INTEGER DEFAULT 1, ADD COLUMN authorized_at TEXT, \
+         ADD COLUMN authorized_at TEXT, \
          ADD COLUMN refresh_expires_at TIMESTAMPTZ, \
          ADD COLUMN needs_reauth BOOLEAN NOT NULL DEFAULT FALSE",
     )
@@ -55,7 +53,7 @@ async fn platforms_status_read_errors_return_500_not_disconnected() {
             )
             .unwrap();
         sqlx::query(
-            "INSERT INTO social_media_platform_auth (platform, access_token_enc) VALUES ($1, $2)",
+            "INSERT INTO social_media_platform_auth (platform, access_token_enc, enc_version) VALUES ($1, $2, 1)",
         )
         .bind(platform)
         .bind(encrypted)
