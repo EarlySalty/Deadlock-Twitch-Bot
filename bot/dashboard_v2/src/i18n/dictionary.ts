@@ -187,6 +187,7 @@ const EN: Record<string, string> = {
   'Alle Kanäle': 'All channels',
   'Dein Kanal': 'Your channel',
   'Social Media': 'Social media',
+  'Social-Media-Manager': 'Social-Media-Manager',
   'Freigabe für diesen Streamer entziehen': 'Revoke access for this streamer',
   'Diesen Streamer für das eigene Social-Media-Dashboard freischalten':
     'Give this streamer access to their own social media dashboard',

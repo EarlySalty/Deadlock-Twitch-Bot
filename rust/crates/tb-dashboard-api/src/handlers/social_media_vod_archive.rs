@@ -24,7 +24,9 @@ pub async fn list_handler(
     };
     let page = q.page.unwrap_or(1).clamp(1, 100_000);
     let rows = sqlx::query(
-        "SELECT v.id, v.twitch_id, v.streamer_login, v.twitch_user_id, v.title, v.duration_sec, \
+        "WITH visible AS (SELECT * FROM twitch_vod_archive_vods \
+            WHERE hidden_at IS NULL AND ($1::text IS NULL OR twitch_user_id = $1)), \
+         paged AS (SELECT v.id, v.twitch_id, v.streamer_login, v.twitch_user_id, v.title, v.duration_sec, \
          v.recorded_at, v.discovered_at, v.status, v.last_error, v.drive_url, v.drive_requested, \
          v.last_attempt_at, v.updated_at, \
          COALESCE((SELECT jsonb_agg(jsonb_build_object('index', p.part_index, 'status', p.status, \
@@ -32,14 +34,14 @@ pub async fn list_handler(
             FROM twitch_vod_archive_parts p WHERE p.vod_id = v.id), '[]'::jsonb) AS parts, \
          COALESCE(NOT a.needs_reauth AND a.access_token_enc IS NOT NULL \
             AND string_to_array(COALESCE(a.scopes, ''), ' ') && ARRAY['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube', 'https://www.googleapis.com/auth/youtube.force-ssl'], FALSE) AS youtube_connected, \
-         CASE WHEN a.refresh_token_enc IS NOT NULL THEN a.refresh_expires_at::text ELSE a.token_expires_at END AS youtube_expires_at, \
-         COUNT(*) OVER() AS total \
-         FROM twitch_vod_archive_vods v \
+         CASE WHEN a.refresh_token_enc IS NOT NULL THEN a.refresh_expires_at::text ELSE a.token_expires_at END AS youtube_expires_at \
+         FROM visible v \
          LEFT JOIN LATERAL (SELECT a.* FROM social_media_platform_auth a \
             WHERE a.twitch_user_id=v.twitch_user_id AND a.platform='youtube' AND a.enabled=1 \
             ORDER BY a.authorized_at DESC, a.id DESC LIMIT 1) a ON TRUE \
-         WHERE v.hidden_at IS NULL AND ($1::text IS NULL OR v.twitch_user_id = $1) \
-         ORDER BY v.discovered_at DESC, v.id DESC LIMIT 50 OFFSET $2",
+         ORDER BY v.discovered_at DESC, v.id DESC LIMIT 50 OFFSET $2) \
+         SELECT paged.*, totals.total FROM (SELECT COUNT(*) AS total FROM visible) totals \
+         LEFT JOIN paged ON TRUE ORDER BY paged.discovered_at DESC, paged.id DESC",
     )
     .bind(scope)
     .bind((page - 1) * 50)
@@ -51,7 +53,7 @@ pub async fn list_handler(
                 .first()
                 .map(|row| row.get::<i64, _>("total"))
                 .unwrap_or(0);
-            let items: Vec<Value> = rows.into_iter().map(|row| {
+            let items: Vec<Value> = rows.into_iter().filter(|row| row.get::<Option<i64>, _>("id").is_some()).map(|row| {
                 let status: String = row.get("status");
                 let parts: Value = row.get("parts");
                 let expires: Option<String> = row.get("youtube_expires_at");

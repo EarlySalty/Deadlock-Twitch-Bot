@@ -596,3 +596,40 @@ test('Kanalwahl hält URL, sichtbaren Kanal und Uploadziel gemeinsam an derselbe
   assert.deepEqual(resolveSocialMediaChannel(renamed, '11'), renamed[0]);
   assert.equal(resolveSocialMediaChannel(renamed, '11', 'alpha'), undefined);
 });
+
+test('VOD-Archiv kehrt nach Ausblenden, Bestandsänderung und Kanalwechsel auf eine gültige Seite zurück', () => {
+  const source = lies('src/components/socialmedia/VodArchiveTab.tsx');
+  const start = source.indexOf('  useEffect(() => {');
+  const end = source.indexOf('  const settings = useQuery({', start);
+  assert.ok(start >= 0 && end > start);
+  const register = new Function('useEffect', 'setPage', 'list', 'scope', source.slice(start, end));
+  for (const [total, current, expected] of [[51, 2, 2], [50, 2, 1], [0, 2, 1], [149, 8, 3], [150, 1, 1]]) {
+    let page = current;
+    const data = { total };
+    const effects: Array<{ callback: () => void; dependencies: unknown[] }> = [];
+    register(
+      (callback: () => void, dependencies: unknown[]) => effects.push({ callback, dependencies }),
+      (update: number | ((current: number) => number)) => { page = typeof update === 'function' ? update(page) : update; },
+      { data }, '42',
+    );
+    assert.equal(effects.length, 2);
+    assert.deepEqual(effects[0].dependencies, ['42']);
+    assert.deepEqual(effects[1].dependencies, [data]);
+    effects[1].callback();
+    assert.equal(page, expected, `Gesamtzahl ${total}, vorher Seite ${current}`);
+    page = 2;
+    effects[0].callback();
+    assert.equal(page, 1, 'Ein anderer Kanal beginnt auf Seite 1.');
+  }
+  const emptyEffects: Array<() => void> = [];
+  register((callback: () => void) => emptyEffects.push(callback), () => assert.fail('Ohne Daten bleibt die Seite erhalten.'), {}, '99');
+  emptyEffects[1]();
+  assert.match(source, /invalidateQueries\(\{ queryKey: \['vod-archive'\] \}\)/);
+  const condition = source.match(/\{(list\.data && \(page > 1 \|\| list\.data\.total > 50\)) && <div/);
+  assert.ok(condition);
+  const navigation = new Function('list', 'page', `return Boolean(${condition[1]});`);
+  assert.equal(navigation({ data: { total: 50 } }, 2), true);
+  assert.equal(navigation({ data: { total: 0 } }, 2), true);
+  assert.equal(navigation({ data: { total: 50 } }, 1), false);
+  assert.equal(navigation({ data: { total: 51 } }, 1), true);
+});

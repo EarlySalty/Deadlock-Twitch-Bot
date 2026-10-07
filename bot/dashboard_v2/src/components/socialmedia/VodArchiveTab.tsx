@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, ExternalLink, Loader2 } from 'lucide-react';
 import { archiveAction, fetchArchivedVods, fetchVodArchiveSettings, saveVodArchiveSettings, oauthStartUrl, type ArchivedVod } from '@/api/socialMedia';
@@ -18,6 +18,15 @@ export function VodArchiveTab({ twitchUserId, isAdmin }: { twitchUserId?: string
     refetchInterval: 30_000,
     retry: false,
   });
+  useEffect(() => {
+    setPage(1);
+  }, [scope]);
+  useEffect(() => {
+    if (list.data) {
+      const lastPage = Math.max(1, Math.ceil(list.data.total / 50));
+      setPage((current) => Math.min(current, lastPage));
+    }
+  }, [list.data]);
   const settings = useQuery({
     queryKey: ['social-media', 'vod-archive-settings', twitchUserId],
     queryFn: () => fetchVodArchiveSettings(twitchUserId),
@@ -79,6 +88,6 @@ export function VodArchiveTab({ twitchUserId, isAdmin }: { twitchUserId?: string
         </div>
       </article>)}
     </div>}
-    {list.data && list.data.total > 50 && <div className="flex flex-wrap items-center justify-between gap-3"><button className="studio-button" disabled={page <= 1} onClick={() => setPage(page - 1)}>{t('Zurück')}</button><span className="text-sm text-text-secondary">{t('Seite {page}', { page })}</span><button className="studio-button" disabled={page * 50 >= list.data.total} onClick={() => setPage(page + 1)}>{t('Weiter')}</button></div>}
+    {list.data && (page > 1 || list.data.total > 50) && <div className="flex flex-wrap items-center justify-between gap-3"><button className="studio-button" disabled={page <= 1} onClick={() => setPage(page - 1)}>{t('Zurück')}</button><span className="text-sm text-text-secondary">{t('Seite {page}', { page })}</span><button className="studio-button" disabled={page * 50 >= list.data.total} onClick={() => setPage(page + 1)}>{t('Weiter')}</button></div>}
   </section>;
 }

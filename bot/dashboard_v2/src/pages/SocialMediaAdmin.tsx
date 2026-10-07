@@ -17,14 +17,6 @@ import { dashboardRuntimeConfig, resolveEffectiveDemoMode } from '@/runtimeConfi
 import { ZUGRIFF_LABELS } from '@/components/socialmedia/labels';
 import { resolveSocialMediaChannel } from '@/utils/socialMediaChannel';
 
-/**
- * Eigenständiges Social-Media-Admin-Dashboard.
- *
- * Bewusst nicht im Analyse-Dashboard: Social Media ist ein eigener Bereich
- * (Clip-Pipeline, Layout-Editor, Auto-Aufbereitung, Discord-Approval) und hat
- * mit den Streamer-Analytics keine Überschneidung. Wird unter `/social-media-admin`
- * gemountet, ist Admin-only und liefert dieselbe React-Bundle-Auslieferung.
- */
 export function SocialMediaAdminDashboard() {
   const t = useT();
   const [streamerUserId, setStreamerUserId] = useState('');
@@ -36,7 +28,6 @@ export function SocialMediaAdminDashboard() {
   const selectedChannel = resolveSocialMediaChannel(streamers, streamerUserId);
   const streamer = selectedChannel?.login.toLowerCase() ?? '';
 
-  // Was diese Session darf: Admin sieht alles, Partner nur nach Freigabe.
   const { data: access, isLoading: loadingAccess } = useQuery({
     queryKey: ['social-media-access', authStatus?.twitchUserId],
     queryFn: fetchMyAccess,
@@ -112,13 +103,13 @@ export function SocialMediaAdminDashboard() {
   return (
     <div className="space-y-6">
       <DashboardHeader
-        title={t('Social Media')}
+        title={t('Social-Media-Manager')}
         icon={<Clapperboard className="w-6 h-6 text-primary" />}
         isLoading={loadingStreamers}
         description={t('Fokus: {focus}', { focus: isAdminView ? streamer || t('Streamer wählen') : access?.streamer || authStatus?.twitchLogin || t('Dein Kanal') })}
       >
         {isAdminView && <div className="flex flex-wrap items-center gap-3">
-            <a href="/social-media-admin?view=archiv" className="studio-button">{t('VOD-Archiv')}</a>
+            <a href="/social-media?view=archiv" className="studio-button">{t('VOD-Archiv')}</a>
             {isAdminView && streamer && (
               <button
                 type="button"

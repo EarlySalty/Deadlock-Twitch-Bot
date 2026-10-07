@@ -304,19 +304,28 @@ impl YouTubeUploader {
             return Ok(());
         }
         let body = json!({"snippet": {"playlistId": playlist_id, "resourceId": {"kind": "youtube#video", "videoId": video_id}}});
-        let response = self
-            .call("YouTube playlist insert", |token| {
-                self.http
-                    .post(&url)
-                    .bearer_auth(token)
-                    .query(&[("part", "snippet")])
-                    .json(&body)
-            })
-            .await?;
-        if !response.status().is_success() {
-            return Err(fehler_aus_antwort(response, "YouTube playlist insert").await);
+        let mut token = self.token().await;
+        let mut refreshed = false;
+        loop {
+            let response = self
+                .http
+                .post(&url)
+                .bearer_auth(&token)
+                .query(&[("part", "snippet")])
+                .json(&body)
+                .send()
+                .await
+                .map_err(|error| UploadError::Request(error.without_url().to_string()))?;
+            if response.status().as_u16() == 401 && !refreshed && self.refresh.is_some() {
+                token = self.refresh_access_token().await?;
+                refreshed = true;
+                continue;
+            }
+            if !response.status().is_success() {
+                return Err(fehler_aus_antwort(response, "YouTube playlist insert").await);
+            }
+            return Ok(());
         }
-        Ok(())
     }
 
     async fn token(&self) -> String {
@@ -1123,10 +1132,142 @@ impl std::fmt::Debug for RefreshedToken {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{body_json, header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    /// Uploader ohne echte Wartezeiten (Backoff-Basis null).
+    #[tokio::test]
+    async fn playlist_server_error_is_not_blindly_retried_after_acceptance() {
+        let server = MockServer::start().await;
+        let inserted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let lookup_state = inserted.clone();
+        Mock::given(method("GET"))
+            .and(path("/playlistItems"))
+            .and(query_param("playlistId", "playlist"))
+            .and(query_param("videoId", "video"))
+            .respond_with(move |_: &wiremock::Request| {
+                let items = if lookup_state.load(std::sync::atomic::Ordering::SeqCst) {
+                    json!([{"id":"accepted"}])
+                } else {
+                    json!([])
+                };
+                ResponseTemplate::new(200).set_body_json(json!({"items": items}))
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/playlistItems"))
+            .and(query_param("part", "snippet"))
+            .and(body_json(json!({"snippet":{"playlistId":"playlist","resourceId":{"kind":"youtube#video","videoId":"video"}}})))
+            .respond_with(move |_: &wiremock::Request| {
+                inserted.store(true, std::sync::atomic::Ordering::SeqCst);
+                ResponseTemplate::new(500)
+            })
+            .expect(1)
+            .mount(&server).await;
+        let up = uploader(&server);
+        assert!(up.add_to_playlist("playlist", "video").await.is_err());
+        up.add_to_playlist("playlist", "video").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn playlist_lost_response_is_reconciled_by_the_next_lookup() {
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            for (method, body) in [
+                ("GET", Some(r#"{"items":[]}"#)),
+                ("POST", None),
+                ("GET", Some(r#"{"items":[{"id":"accepted"}]}"#)),
+            ] {
+                let (mut stream, _) =
+                    tokio::time::timeout(Duration::from_secs(5), listener.accept())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                let mut bytes = Vec::new();
+                let header_end = loop {
+                    let mut chunk = [0; 4096];
+                    let size = stream.read(&mut chunk).await.unwrap();
+                    assert!(size > 0);
+                    bytes.extend_from_slice(&chunk[..size]);
+                    if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                        break end + 4;
+                    }
+                };
+                let headers = std::str::from_utf8(&bytes[..header_end]).unwrap();
+                assert!(headers.starts_with(&format!("{method} /playlistItems?")));
+                let length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (key, value) = line.split_once(':')?;
+                        key.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                while bytes.len() < header_end + length {
+                    let mut chunk = [0; 4096];
+                    let size = stream.read(&mut chunk).await.unwrap();
+                    assert!(size > 0);
+                    bytes.extend_from_slice(&chunk[..size]);
+                }
+                if method == "POST" {
+                    let input: Value =
+                        serde_json::from_slice(&bytes[header_end..header_end + length]).unwrap();
+                    assert_eq!(input["snippet"]["playlistId"], "playlist");
+                    assert_eq!(input["snippet"]["resourceId"]["videoId"], "video");
+                }
+                if let Some(body) = body {
+                    let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                    stream.write_all(response.as_bytes()).await.unwrap();
+                }
+            }
+        });
+        let up = YouTubeUploader::new("synthetic-access")
+            .with_bases(&base, &base)
+            .with_retry(3, Duration::ZERO);
+        assert!(matches!(
+            up.add_to_playlist("playlist", "video").await,
+            Err(UploadError::Request(_))
+        ));
+        up.add_to_playlist("playlist", "video").await.unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn playlist_insert_refreshes_once_only_after_explicit_401() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/playlistItems"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":[]})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/playlistItems"))
+            .and(header("authorization", "Bearer tok"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"access_token":"fresh"})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/playlistItems"))
+            .and(header("authorization", "Bearer fresh"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id":"accepted"})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let up = uploader(&server).with_refresh(refresh_creds(format!("{}/token", server.uri())));
+        up.add_to_playlist("playlist", "video").await.unwrap();
+    }
+
     fn uploader(server: &MockServer) -> YouTubeUploader {
         YouTubeUploader::new("tok")
             .with_bases(server.uri(), server.uri())

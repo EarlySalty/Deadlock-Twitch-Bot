@@ -149,6 +149,90 @@ async fn retry_drive_hide_and_active_lock_keep_completed_parts() {
     assert_eq!(video, "video99");
 }
 
+#[tokio::test]
+async fn empty_pages_keep_visible_totals_within_the_authorized_scope() {
+    let database = database().await;
+    let pool = &database.pool;
+    sqlx::query("INSERT INTO twitch_vod_archive_vods (id, twitch_id, streamer_login, twitch_user_id, title, duration_sec, status) SELECT id, 'v' || id, 'renamed', '42', 'Stream ' || id, 3600, 'new' FROM generate_series(3,52) id")
+        .execute(pool)
+        .await
+        .unwrap();
+    let response = list_handler(
+        partner(),
+        State(pool.clone()),
+        Query(ArchiveQuery {
+            twitch_user_id: None,
+            page: Some(2),
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let data = json(response).await;
+    assert_eq!(data["total"], 51);
+    assert_eq!(data["page"], 2);
+    assert_eq!(data["items"].as_array().unwrap().len(), 1);
+    assert_eq!(data["items"][0]["id"], 1);
+    let response = action_handler(
+        partner(),
+        State(pool.clone()),
+        Json(ArchiveAction {
+            id: 1,
+            action: "hide".into(),
+            twitch_user_id: None,
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    for (auth, scope, page, total) in [
+        (partner(), None, 2, 50),
+        (partner(), None, 100_000, 50),
+        (DashboardAuthLevel::admin(), Some("42"), 2, 50),
+        (DashboardAuthLevel::admin(), Some("99"), 2, 1),
+        (DashboardAuthLevel::admin(), None, 3, 51),
+        (DashboardAuthLevel::admin(), Some("101"), 1, 0),
+    ] {
+        let response = list_handler(
+            auth,
+            State(pool.clone()),
+            Query(ArchiveQuery {
+                twitch_user_id: scope.map(str::to_string),
+                page: Some(page),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let data = json(response).await;
+        assert_eq!(data["total"], total);
+        assert_eq!(data["page"], page);
+        assert!(data["items"].as_array().unwrap().is_empty());
+    }
+    let response = list_handler(
+        partner(),
+        State(pool.clone()),
+        Query(ArchiveQuery {
+            twitch_user_id: None,
+            page: Some(1),
+        }),
+    )
+    .await;
+    let data = json(response).await;
+    assert_eq!(data["total"], 50);
+    let items = data["items"].as_array().unwrap();
+    assert_eq!(items.len(), 50);
+    assert!(items.iter().all(|item| item["twitch_user_id"] == "42"));
+    assert_eq!(items[0]["id"], 52);
+    assert_eq!(items[49]["id"], 3);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM twitch_vod_archive_parts WHERE vod_id=1"
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap(),
+        1
+    );
+}
+
 #[test]
 fn incomplete_archived_records_are_not_reported_as_clean_uploads() {
     assert_eq!(
