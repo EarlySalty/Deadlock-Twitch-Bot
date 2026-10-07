@@ -1,4 +1,4 @@
-# Nachweise vor Integration
+# Nachweise und Übergabe
 
 ## Bestand und Vertrag
 
@@ -31,9 +31,9 @@ Arbeitsverzeichnis: `/home/nathanael/.worktrees/tb-social-tiktok-direct/bot/dash
 
 Der vollständige Frontendlauf ist nicht grün: Kalender 9 bestanden; Hauptlauf 421 bestanden, 5 fehlgeschlagen. Dieselben drei betroffenen Testdateien gegen unveränderten Ausgangsquelltext: 18 bestanden, dieselben 5 fehlgeschlagen, 23 insgesamt. Nur diese fünf Fehler besitzen eine gemessene Baseline.
 
-TESTNACHWEIS[TW-1]: 418 passed, 0 ignored | Baseline: 5 rot
+TESTNACHWEIS[TW-1]: 419 passed, 0 ignored | Baseline: 5 rot
 
-Die 418 beziehen sich auf 304 Social-Media-Rusttests, 53 betroffene API-Tests, 1 frischen Schema-Test, 36 betroffene Frontend-Verträge und 24 Browsertests. Breite rote Läufe werden oben separat ausgewiesen.
+Der abschließende Nachlauf nach Rebase auf origin/main e0b0dbaf bestand mit 304 Bibliothekstests und 1 Integrationstest in tb-social-media, 53 betroffenen API-Tests, 36 Frontend-Verträgen und 24 Browsertests. Dazu kommt der oben dokumentierte frische Schema-Test. Insgesamt 419 bestanden, 0 fehlgeschlagen, 0 ignoriert. Der API-Nachlauf benötigte 5m 37s Kompilierung und 26.87s Laufzeit. `npm run build` nach der Integration ebenfalls Exit 0. TypeScript-Verträge liefen mit dem etablierten `node --import tsx --test`; ein vorheriger Versuch ohne tsx scheiterte an der Modulauflösung und wird nicht als Produktfehler oder erfolgreicher Test gezählt. Breite rote Läufe werden oben separat ausgewiesen.
 
 ## Nur lesende Live-Abfrage
 
@@ -41,6 +41,14 @@ Am 7. Oktober 2026 wurde mit dem Rust-Beispiel `tiktok_creator_probe` unter der 
 
 Tatsächliche Antwort: Konto `earlysalty`, Anzeigename `EarlySalty`; Sichtbarkeit `PUBLIC_TO_EVERYONE`, `MUTUAL_FOLLOW_FRIENDS`, `SELF_ONLY`; Kommentare, Duett und Stitch nicht kontoseitig gesperrt; Höchstdauer 3600 Sekunden. Diese Kontoeinstellungen ersetzen keine Freigabe für öffentliche Posts. Erlaubt bleibt ausschließlich der gesondert bestätigte eine SELF_ONLY-Test nach ALLOW, Merge und Deploy.
 
-## Noch offen
+## Gate und verbleibender Abschluss
 
-Integration auf frisches origin/main, Gate, Merge und Push, produktive Migration, Release und Neustarts, Auswahl und Ansicht eines eigenen vorbereiteten Deadlock-Clips, genau ein genehmigter privater Test, finaler Live-Beweis und Aufräumen. Bis zu diesem Nachweis kein Fertigstatus.
+Integration auf origin/main e0b0dbaf ist abgeschlossen; Commit 601142ae. Die Übersetzungskollision wurde durch Erhaltung beider Pakete und genau eines Reload-Schlüssels gelöst. Die erneuten betroffenen Prüfungen sind oben dokumentiert.
+
+Gate Runde 1: gpt-6.1-sol BLOCK, drei blockierende Befunde zu abgelehnter Zeitplanung, früheren NULL-Freigaben und erneuter Freigabe nach bestätigtem FAILED. Vollständige Liste und Übergabe in REVIEW.md und BRIEFING-FIXER.md. Keine Eigenkorrektur des Implementierers. Keine weiteren Threads gestartet.
+
+Merge und Push nach main, produktive Migration, Release und Neustarts, Auswahl und Ansicht eines eigenen vorbereiteten Deadlock-Clips, genau ein genehmigter privater Test, finaler Live-Beweis und Branch-/Worktree-Cleanup bleiben für den neuen Fixer offen. Der einzig gefundene ready-Eintrag für Clip 124589 verweist auf eine fehlende Datei, auch der current-Fallback fehlt. Er wurde nicht als geeigneter Test bestätigt. Kein Post ausgeführt.
+
+LIVEBEWEIS[DV-1]: PID nicht neu gestartet | exe ungeprüft | journal -p err ungeprüft | Anker nicht geprüft | Funktion: kein Deploy und kein Post | Ort: noch kein produktiver Funktionsbeweis
+
+Worktree und Branch bleiben ausdrücklich zur Fixer-Übernahme erhalten. Der eigene isolierte Testcluster wird vor der Übergabe geordnet gestoppt. Seine Daten unter /tmp/tb-tiktok-db-666eaa47 können für Folgeprüfungen wiederverwendet werden.
