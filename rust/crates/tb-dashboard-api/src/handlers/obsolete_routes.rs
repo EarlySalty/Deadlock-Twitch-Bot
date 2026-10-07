@@ -5,7 +5,7 @@
 
 use axum::{
     http::{header, StatusCode},
-    response::{IntoResponse, Redirect, Response},
+    response::{IntoResponse, Response},
     Json,
 };
 use serde_json::json;
@@ -39,14 +39,6 @@ pub async fn raid_requirements_gone_handler() -> Response {
         ),
     )
         .into_response()
-}
-
-/// `GET /social-media-admin` und Unterpfade — Feature bewusst zurueckgestellt.
-///
-/// Kein SPA-Bundle und keine Clip-Logik; der alte Einstieg fällt nur sauber auf
-/// das aktuelle Dashboard zurück.
-pub async fn social_media_admin_stub_redirect_handler() -> Response {
-    Redirect::to("/twitch/dashboard").into_response()
 }
 
 /// `/twitch/api/live-announcement/{config,preview,test}` — der alte Builder ist

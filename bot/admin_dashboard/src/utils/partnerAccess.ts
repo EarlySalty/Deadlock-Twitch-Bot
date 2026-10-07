@@ -1,16 +1,14 @@
 import type { PartnerAccessEntry } from '@/api/types';
 
-/**
- * Sucht den Eintrag eines Streamers in der Partner-Access-Liste.
- *
- * Case-insensitive, weil das Backend `social_media_partner_access` ebenfalls
- * über `LOWER(streamer_login)` vergleicht. Einzige Stelle, die diese
- * Zuordnung kennt — Anzeige und Status lesen beide hier.
- */
 export function findPartnerAccessEntry(
   entries: PartnerAccessEntry[] | undefined | null,
   login: string | undefined | null,
+  twitchUserId?: string,
 ): PartnerAccessEntry | undefined {
+  if (!Array.isArray(entries)) return undefined;
+  if (twitchUserId) {
+    return entries.find((entry) => entry.twitch_user_id === twitchUserId);
+  }
   const wanted = String(login ?? '')
     .trim()
     .toLowerCase();

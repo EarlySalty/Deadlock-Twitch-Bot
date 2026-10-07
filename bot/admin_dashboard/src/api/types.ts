@@ -592,6 +592,7 @@ export interface EngagementSettings {
  * weil das Backend die Struktur unverändert serialisiert.
  */
 export interface PartnerAccessEntry {
+  twitch_user_id: string;
   streamer_login: string;
   granted: boolean;
   granted_by: string | null;

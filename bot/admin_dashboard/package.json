@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "node --experimental-strip-types --test src/utils/commissionRate.test.mjs src/utils/partnerAccess.test.mjs src/utils/brainLab.test.mjs src/components/layout/sidebarState.test.mjs",
+    "test": "node --experimental-strip-types --test src/api/partnerAccess.test.mjs src/utils/commissionRate.test.mjs src/utils/partnerAccess.test.mjs src/utils/brainLab.test.mjs src/components/layout/sidebarState.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

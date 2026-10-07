@@ -28,6 +28,11 @@ describe('resolvePartnerGranted', () => {
 });
 
 describe('findPartnerAccessEntry', () => {
+  it('behält die Freigabe nach einer Umbenennung über die Twitch-ID', () => {
+    const entries = [{ ...ENTRIES[0], twitch_user_id: '123' }];
+    assert.equal(findPartnerAccessEntry(entries, 'neuer_name', '123')?.granted, true);
+    assert.equal(findPartnerAccessEntry(entries, 'earlysalty', '456'), undefined);
+  });
   it('liefert den ganzen Eintrag, damit die Anzeige granted_by und granted_at zeigen kann', () => {
     const entry = findPartnerAccessEntry(ENTRIES, 'EarlySalty');
     assert.equal(entry?.granted_by, 'admin');

@@ -7,7 +7,6 @@
 //! - `clip::task`       — Tokio-Hintergrundtask (Freigabe durch die Bot-Konfiguration)
 //!
 //! Sowie die Anfänge der vollen Posting-Pipeline (Port von `bot/social_media/`):
-//! - `schema`      — idempotente Tabellen-Erstellung (Port von `storage.py`).
 //! - `settings`    — Key/Value-Settings (`social_media_settings`, Consent +
 //!   Auto-Approve je Plattform).
 //! - `credentials` — verschlüsselte Plattform-OAuth-Credentials (Lese-Pfad).
@@ -38,15 +37,6 @@
 //! - `insights_worker` — Pollt Plattform-Statistiken (24h/7d/30d).
 //! - `report_writer` — Report-Aggregation + Markdown (social_media_reports).
 //! - `report_dispatcher` — wöchentlicher Admin-Report-Generator (DM=B10 aus).
-//!
-//! # Live
-//! Seit dem Pipeline-Cutover startet `tb-bot` den Clip-Fetcher **bedingungslos**
-//! (`ClipFetchTask::start`, sobald ein Helix-Client vorhanden ist) gemeinsam mit
-//! den sechs Pipeline-Workern (Upload/Retention/Enrichment/Approval-Queue/
-//! Insights/Report-Dispatcher) — 1:1 zu Pythons `runtime_bootstrap`. Auto-Uploads
-//! bleiben datengetrieben über `social_media_settings` (Consent + Auto-Approve je
-//! Plattform) gegated. Der Start in der Bot-Composition-Root (`bot.clip_fetcher_enabled`)
-//! bleibt als Pre-Cutover-Einstieg erhalten.
 
 pub mod analytics;
 pub mod approval;
@@ -85,7 +75,6 @@ pub mod report_writer;
 pub mod retention;
 pub mod retention_worker;
 pub mod scheduler;
-pub mod schema;
 pub mod seed_vocab;
 pub mod settings;
 pub mod subtitles;

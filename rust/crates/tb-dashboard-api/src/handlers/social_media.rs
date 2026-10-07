@@ -1517,15 +1517,39 @@ pub async fn fetch_clips_handler(
     let result = service
         .fetch_for_broadcaster(&twitch_user_id, &streamer)
         .await;
-    let clips_found = result.clips_found.max(0);
     // Nach dem Fetch neu zaehlen: der Stand von vorhin ist bereits verbraucht,
     // und das Dashboard soll nicht die alte Zahl anzeigen.
     let kontingent = tb_analytics::stufe::clip_kontingent(&pool, kontingent.stufe, &streamer).await;
+    clip_fetch_response(result, kontingent.als_json())
+}
+
+#[cfg(test)]
+#[path = "social_media_fetch_tests.rs"]
+mod fetch_tests;
+
+fn clip_fetch_response(
+    result: tb_social_media::clip::model::StreamerFetchResult,
+    kontingent: Value,
+) -> Response {
+    let clips_found = result.clips_found.max(0);
+    if let Some(error) = result.error {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({
+                "success": false,
+                "error": error,
+                "clips_found": clips_found,
+                "message": "Die Twitch-Clips konnten nicht geladen werden. Bitte versuche es später erneut.",
+                "kontingent": kontingent,
+            })),
+        )
+            .into_response();
+    }
     Json(json!({
         "success": true,
         "clips_found": clips_found,
-        "message": format!("Fetched {clips_found} clips"),
-        "kontingent": kontingent.als_json(),
+        "message": format!("{clips_found} Clips gefunden"),
+        "kontingent": kontingent,
     }))
     .into_response()
 }
