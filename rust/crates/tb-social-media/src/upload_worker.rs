@@ -395,7 +395,7 @@ impl UploadTask {
     async fn do_upload(&self, item: &UploadQueueItem) -> Result<Converted, WorkerError> {
         if item.platform == "tiktok" {
             let options: Option<Value> = sqlx::query_scalar(
-                "SELECT to_jsonb(q)->'tiktok_post_options' FROM twitch_clips_upload_queue q WHERE id = $1",
+                "SELECT NULLIF(to_jsonb(q)->'tiktok_post_options', 'null'::jsonb) FROM twitch_clips_upload_queue q WHERE id = $1",
             ).bind(item.id).fetch_one(&self.pool).await.map_err(|_| UploadError::Validation(
                 "Die TikTok-Freigabe konnte nicht geladen werden.".into(),
             ))?;
@@ -838,7 +838,7 @@ impl UploadWorker {
     /// hochladen.
     async fn refresh_tiktok_inbox(&self) {
         let rows: Vec<(i64, i64, Option<String>, String, Option<Value>)> = match sqlx::query_as(
-            "SELECT q.id, c.id, q.tiktok_publish_id, q.status, to_jsonb(q)->'tiktok_post_options' \
+            "SELECT q.id, c.id, q.tiktok_publish_id, q.status, NULLIF(to_jsonb(q)->'tiktok_post_options', 'null'::jsonb) \
              FROM twitch_clips_upload_queue q \
              JOIN twitch_clips_social_media c ON c.id = q.clip_id \
              WHERE q.platform = 'tiktok' AND q.status IN ('inbox', 'inbox_pending') \
@@ -1801,6 +1801,10 @@ printf '%s\n' '{"streams":[{"codec_type":"video","width":1920,"height":1080,"dur
         let Some(pool) = make_pool("t_sm_upload_inbox_fairness").await else {
             return;
         };
+        sqlx::query("ALTER TABLE twitch_clips_upload_queue ADD COLUMN tiktok_post_options JSONB")
+            .execute(&pool)
+            .await
+            .unwrap();
         let mut queue_ids = Vec::new();
         for (index, age) in ["3 hours", "2 hours", "1 hour"].iter().enumerate() {
             let publish_id = (index > 0).then(|| format!("publish_{index}"));
@@ -1845,6 +1849,13 @@ printf '%s\n' '{"streams":[{"codec_type":"video","width":1920,"height":1080,"dur
         .await
         .unwrap();
         assert!(second_updated);
+        let legacy_error: Option<String> =
+            sqlx::query_scalar("SELECT last_error FROM twitch_clips_upload_queue WHERE id = $1")
+                .bind(queue_ids[1])
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(legacy_error.is_none());
         worker.refresh_tiktok_inbox().await;
         let third_updated: bool = sqlx::query_scalar(
             "SELECT last_attempt_at > NOW() - INTERVAL '1 minute' FROM twitch_clips_upload_queue WHERE id = $1",
@@ -1854,6 +1865,37 @@ printf '%s\n' '{"streams":[{"codec_type":"video","width":1920,"height":1080,"dur
         .await
         .unwrap();
         assert!(third_updated);
+    }
+
+    #[tokio::test]
+    async fn new_tiktok_job_without_complete_choice_never_uses_legacy_upload() {
+        let Some(pool) = make_pool("t_sm_upload_no_choice").await else {
+            return;
+        };
+        sqlx::query("ALTER TABLE twitch_clips_upload_queue ADD COLUMN tiktok_post_options JSONB")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login) VALUES ('no-choice', 'https://clips.test/no-choice', 'nani') RETURNING id")
+            .fetch_one(&pool).await.unwrap();
+        approve_tiktok(&pool, i32::try_from(clip).unwrap()).await;
+        let cipher =
+            Arc::new(tb_crypto::FieldCipher::from_hex_key(&"ab".repeat(32), "v1").unwrap());
+        let worker = UploadWorker::new(pool.clone(), CredentialManager::new(pool.clone(), cipher));
+        for options in [
+            None,
+            Some(Value::Null),
+            Some(serde_json::json!({"consent": true})),
+        ] {
+            let queue_id: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id, platform, tiktok_post_options) VALUES ($1, 'tiktok', $2) RETURNING id")
+                .bind(clip).bind(options).fetch_one(&pool).await.unwrap();
+            worker.run_once().await;
+            let result: (String, Option<String>, Option<String>) = sqlx::query_as("SELECT status, tiktok_publish_id, last_error FROM twitch_clips_upload_queue WHERE id = $1")
+                .bind(queue_id).fetch_one(&pool).await.unwrap();
+            assert_eq!(result.0, "failed");
+            assert!(result.1.is_none());
+            assert!(result.2.is_some());
+        }
     }
 
     #[tokio::test]

@@ -1361,13 +1361,6 @@ pub async fn queue_upload_handler(
             return resp;
         }
     }
-    if platforms.iter().any(|platform| platform == "tiktok") {
-        if let Err(response) =
-            tiktok_direct::save_choice(&pool, clip_id, body.tiktok_options.as_ref()).await
-        {
-            return response;
-        }
-    }
     let (already_taken, posting_schedule) = if body.schedule.as_deref() == Some("auto") {
         let taken = match sqlx::query_scalar::<_, DateTime<Utc>>(
             "SELECT scheduled_at FROM twitch_clips_upload_queue \
@@ -1400,6 +1393,13 @@ pub async fn queue_upload_handler(
             return (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response();
         }
     };
+    if platforms.iter().any(|platform| platform == "tiktok") {
+        if let Err(response) =
+            tiktok_direct::save_choice(&pool, clip_id, body.tiktok_options.as_ref()).await
+        {
+            return response;
+        }
+    }
     let mut queued: Vec<Value> = Vec::new();
     for platform in &platforms {
         match queue_upload(
@@ -5507,6 +5507,113 @@ mod tests {
             &tb_social_media::settings::PostingSchedule::default(),
         )
         .is_err());
+    }
+
+    #[tokio::test]
+    async fn rejected_tiktok_schedule_keeps_existing_choice_and_job() {
+        let Some(pool) = make_pool("t_dash_sm_tiktok_schedule").await else {
+            return;
+        };
+        sqlx::raw_sql("ALTER TABLE twitch_clips_social_media ADD COLUMN tiktok_post_options JSONB; ALTER TABLE twitch_clips_upload_queue ADD COLUMN tiktok_post_options JSONB")
+            .execute(&pool).await.unwrap();
+        let choice = json!({"caption": "Unverändert", "privacy_level": "SELF_ONLY"});
+        let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, tiktok_post_options) VALUES ('schedule', 'nani', $1) RETURNING id")
+            .bind(&choice).fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, platform, tiktok_post_options, scheduled_at) VALUES ($1, 'tiktok', $2, '2030-01-01T12:00:00Z')")
+            .bind(clip).bind(&choice).execute(&pool).await.unwrap();
+        let mut body = queue_body(clip, json!(["tiktok"]));
+        body.schedule = Some("invalid".into());
+        body.tiktok_options = Some(json!({"caption": "Nicht übernehmen"}));
+        let response = queue_upload_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
+            Json(body),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(body_json(response).await["error"], "invalid_schedule");
+        let result: (Value, Value, bool, i64) = sqlx::query_as("SELECT c.tiktok_post_options, q.tiktok_post_options, q.scheduled_at = '2030-01-01T12:00:00Z'::timestamptz, (SELECT COUNT(*) FROM twitch_clips_upload_queue) FROM twitch_clips_social_media c JOIN twitch_clips_upload_queue q ON q.clip_id = c.id WHERE c.id = $1")
+            .bind(clip).fetch_one(&pool).await.unwrap();
+        assert_eq!(result, (choice.clone(), choice, true, 1));
+    }
+
+    #[tokio::test]
+    async fn tiktok_new_choice_after_confirmed_failed_preserves_history_and_snapshot() {
+        let Some(pool) = make_pool("t_dash_sm_tiktok_retry").await else {
+            return;
+        };
+        sqlx::raw_sql("ALTER TABLE twitch_clips_upload_queue ADD COLUMN tiktok_publish_id TEXT; ALTER TABLE twitch_clips_upload_queue ADD COLUMN tiktok_publish_status TEXT")
+            .execute(&pool).await.unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/20261007042000_social_media_tiktok_direct_post.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('retry', 'nani') RETURNING id")
+            .fetch_one(&pool).await.unwrap();
+        let old = json!({"caption": "Alt", "privacy_level": "PUBLIC_TO_EVERYONE"});
+        sqlx::query("UPDATE twitch_clips_social_media SET tiktok_post_options = $1 WHERE id = $2")
+            .bind(&old)
+            .bind(clip)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let rejected: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, tiktok_publish_id, tiktok_publish_status, tiktok_post_options) VALUES ($1, 'tiktok', 'failed', 'old-operation', 'FAILED', $2) RETURNING id")
+            .bind(clip).bind(&old).fetch_one(&pool).await.unwrap();
+        let corrected = json!({"caption": "Korrigiert", "privacy_level": "SELF_ONLY"});
+        tiktok_direct::persist_choice(&pool, clip, corrected.clone())
+            .await
+            .unwrap();
+        let new_id = queue_upload(&pool, clip, "tiktok", None, None, None, None, 0)
+            .await
+            .unwrap();
+        assert_ne!(new_id, rejected);
+        let historical: (String, String, Value) = sqlx::query_as("SELECT tiktok_publish_id, tiktok_publish_status, tiktok_post_options FROM twitch_clips_upload_queue WHERE id = $1")
+            .bind(rejected).fetch_one(&pool).await.unwrap();
+        assert_eq!(historical, ("old-operation".into(), "FAILED".into(), old));
+        let snapshot: Value = sqlx::query_scalar(
+            "SELECT tiktok_post_options FROM twitch_clips_upload_queue WHERE id = $1",
+        )
+        .bind(new_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(snapshot, corrected);
+        for (state, publish_status) in [
+            ("failed", None),
+            ("failed", Some("STATUS_UNAVAILABLE")),
+            ("failed", Some("PROCESSING_UPLOAD")),
+            ("failed", Some("PUBLISH_COMPLETE")),
+            ("processing", Some("FAILED")),
+            ("inbox_pending", Some("FAILED")),
+            ("inbox", Some("FAILED")),
+            ("completed", Some("FAILED")),
+        ] {
+            sqlx::query("UPDATE twitch_clips_upload_queue SET status = $1, tiktok_publish_status = $2 WHERE id = $3")
+                .bind(state).bind(publish_status).bind(rejected).execute(&pool).await.unwrap();
+            let response =
+                tiktok_direct::persist_choice(&pool, clip, json!({"caption": "Gesperrt"}))
+                    .await
+                    .unwrap_err();
+            assert_eq!(
+                response.status(),
+                StatusCode::CONFLICT,
+                "{state} {publish_status:?}"
+            );
+            let snapshot: Value = sqlx::query_scalar(
+                "SELECT tiktok_post_options FROM twitch_clips_upload_queue WHERE id = $1",
+            )
+            .bind(new_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(snapshot, corrected);
+        }
     }
 
     #[tokio::test]

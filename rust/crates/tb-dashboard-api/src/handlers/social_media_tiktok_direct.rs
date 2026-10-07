@@ -244,6 +244,15 @@ pub(super) async fn save_choice(
             )
         }
     })?;
+    let options = serde_json::to_value(options).map_err(|_| invalid_payload())?;
+    persist_choice(pool, clip_id, options).await
+}
+
+pub(super) async fn persist_choice(
+    pool: &PgPool,
+    clip_id: i64,
+    options: Value,
+) -> Result<(), Response> {
     let mut tx = pool.begin().await.map_err(|_| clip_load_failed())?;
     sqlx::query("SELECT id FROM twitch_clips_social_media WHERE id = $1 FOR UPDATE")
         .bind(clip_id)
@@ -251,12 +260,11 @@ pub(super) async fn save_choice(
         .await
         .map_err(|_| clip_load_failed())?;
     let active: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM twitch_clips_upload_queue WHERE clip_id = $1 AND platform = 'tiktok' AND (status IN ('processing', 'inbox', 'inbox_pending', 'completed') OR tiktok_publish_id IS NOT NULL))",
+        "SELECT EXISTS(SELECT 1 FROM twitch_clips_upload_queue WHERE clip_id = $1 AND platform = 'tiktok' AND (status IN ('processing', 'inbox', 'inbox_pending', 'completed') OR (tiktok_publish_id IS NOT NULL AND NOT (status = 'failed' AND COALESCE(tiktok_publish_status = 'FAILED', FALSE)))))",
     ).bind(clip_id).fetch_one(&mut *tx).await.map_err(|_| clip_load_failed())?;
     if active {
         return Err(error(StatusCode::CONFLICT, "Für diesen Clip hat die TikTok-Übertragung bereits begonnen. Ein weiterer Upload bleibt gesperrt."));
     }
-    let options = serde_json::to_value(options).map_err(|_| invalid_payload())?;
     sqlx::query("UPDATE twitch_clips_social_media SET tiktok_post_options = $1 WHERE id = $2")
         .bind(&options)
         .bind(clip_id)
