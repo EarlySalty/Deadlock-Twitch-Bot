@@ -549,8 +549,11 @@ export interface PlatformStatus {
   username: string | null;
   user_id?: string | null;
   expired: boolean;
-  /** Ablauf des Zugangs, ISO-Zeit. `null`, wenn der Anbieter keinen liefert. */
   expires_at?: string | null;
+  refresh_expires_at?: string | null;
+  needs_reauth?: boolean;
+  reauth_soon?: boolean;
+  automatically_renewed?: boolean;
   /**
    * Der Kanal haengt an der Sammelverbindung statt an einem eigenen Zugang.
    * Wichtig, weil ein Trennen dann alle Kanaele treffen wuerde.

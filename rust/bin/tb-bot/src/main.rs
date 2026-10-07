@@ -45,6 +45,7 @@ mod score_refresh;
 mod scout_chat;
 mod shadow_review_wiring;
 mod smalltalk_loop_wiring;
+mod social_reauth;
 mod streamer_link;
 mod task_supervisor;
 mod token_lifecycle_wiring;
@@ -1751,11 +1752,23 @@ async fn main() {
 
                 let refresh_oauth =
                     tb_social_media::oauth::OAuthManager::new(pool.clone(), cipher.clone());
-                let refresh = tb_social_media::refresh_worker::TokenRefreshWorker::new(
+                let mut refresh = tb_social_media::refresh_worker::TokenRefreshWorker::new(
                     pool.clone(),
                     cipher.clone(),
                     refresh_oauth,
                 );
+                match BrokerRelay::new(&settings.broker) {
+                    Ok(relay) => {
+                        let dm = token_lifecycle_wiring::BrokerTokenLifecycleNotifier::from_config(
+                            Some(relay),
+                            &config.discord.token_lifecycle,
+                        );
+                        refresh = refresh.with_notifier(Arc::new(
+                            social_reauth::SocialConnectionNotifier::new(pool.clone(), dm),
+                        ));
+                    }
+                    Err(error) => tracing::warn!(%error, "Social reauth DM broker unavailable"),
+                }
                 supervisor.spawn(
                     "social_token_refresh_worker",
                     async move { refresh.run().await },

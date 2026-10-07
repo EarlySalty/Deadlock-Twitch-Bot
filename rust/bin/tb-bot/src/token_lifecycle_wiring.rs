@@ -68,7 +68,7 @@ pub(crate) struct BrokerTokenLifecycleNotifier {
 }
 
 impl BrokerTokenLifecycleNotifier {
-    fn from_config(
+    pub(crate) fn from_config(
         relay: Option<BrokerRelay>,
         config: &tb_config::discord::TokenLifecycle,
     ) -> Self {
@@ -117,7 +117,11 @@ impl TokenLifecycleNotifier for BrokerTokenLifecycleNotifier {
             content: content.to_string(),
         };
         match relay.send_user_dm(payload).await {
-            Ok(_) => true,
+            Ok(result) if result.ok && !result.result.message_id.is_empty() => true,
+            Ok(_) => {
+                tracing::warn!("Discord DM broker returned no successful delivery");
+                false
+            }
             Err(e) => {
                 // DMs geschlossen / User unbekannt etc. → nur Debug, kein Alarm.
                 tracing::debug!("Token-Lifecycle: User-DM nicht zustellbar: {e}");
