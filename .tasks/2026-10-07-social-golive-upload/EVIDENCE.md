@@ -13,7 +13,7 @@
 - Offline-Compilerprüfung nach Integration: `cargo check -p tb-social-media -p tb-dashboard-api -p tb-bot --all-targets -j2`, `PATH=/home/nathanael/.cargo/bin:$PATH SQLX_OFFLINE=true`, Exit 0, Dauer 3 Minuten 38 Sekunden. Nur bestehende Deprecation-Warnungen.
 - Isolierte PostgreSQL-16-Instanz auf 127.0.0.1:55437. Datenbank `tb_social_upload_test`, UTF8, lokale TimescaleDB 2.29.1. Der ursprünglich vorgesehene Dockerlauf mit TimescaleDB 2.17.2 konnte wegen eines devpts-Mountfehlers nicht starten. Kein Test lief gegen die Produktionsdatenbank.
 - Migrationen auf der isolierten Datenbank angewendet. Das SQLx-Metadatenartefakt des geänderten Insights-Queries stammt aus dieser echten Datenbank. Andere Metadaten wurden nicht entfernt.
-- Social-Media-Bibliothek nach Integration seriell: 309 bestanden, 0 fehlgeschlagen, 0 ignoriert (`--include-ignored --test-threads=1`). Im vorherigen Parallellauf bestand die Suite 308 Tests, ein bestehender TikTok-Timeouttest scheiterte vor seinem Checkpoint; der vollständige serielle Nachlauf bestätigt auch diesen Test. Er wurde nicht verändert oder übersprungen. Vor Integration: 308 bestanden, 0 fehlgeschlagen, 0 ignoriert. API-Handler vor Integration: 48 bestanden, 0 fehlgeschlagen, 0 ignoriert. Fresh-Schema-Vertrag: 1 bestanden, 0 fehlgeschlagen, 0 ignoriert. Der eigene Zugang ohne historischen Kanalnamen und die Wiederaufnahme aus dem Wartezustand sind enthalten.
+- Social-Media-Bibliothek nach Integration seriell: 309 bestanden, 0 fehlgeschlagen, 0 ignoriert (`--include-ignored --test-threads=1`). Im vorherigen Parallellauf bestand die Suite 308 Tests, ein bestehender TikTok-Timeouttest scheiterte vor seinem Checkpoint; der vollständige serielle Nachlauf bestätigt auch diesen Test. Er wurde nicht verändert oder übersprungen. Vor Integration: 308 bestanden, 0 fehlgeschlagen, 0 ignoriert. API-Handler nach Integration: 48 bestanden, 0 fehlgeschlagen, 0 ignoriert. Fresh-Schema-Vertrag: 1 bestanden, 0 fehlgeschlagen, 0 ignoriert. Der eigene Zugang ohne historischen Kanalnamen und die Wiederaufnahme aus dem Wartezustand sind enthalten.
 - Dashboard nach Integration: Produktionsbuild Exit 0, Verträge 45 bestanden, 0 fehlgeschlagen, Chromium 25 bestanden, 0 fehlgeschlagen. Der echte Recovery-Button öffnet die Konteneinstellungen. Ein abgelaufenes eigenes Konto bietet Neu verbinden und Trennen, die Sammelverbindung nur das eigene Konto. Sichtprüfung mit 1440 und 390 Pixel bestätigt die Aktionen.
 - Sichtprüfung: `/home/nathanael/.claude/sichtpruefung/social-golive-upload/`. Viewportaufnahmen für 1440 und 390 Pixel zeigen Wartezustand, Verbindungsweg, private YouTube-Sichtbarkeit, eigenes Konto statt Trennen bei Sammelverbindung und nicht angebotene Instagram-Verbindung. Kein horizontaler Dokumentüberlauf im Browserlauf.
 - Die vollständige API-Bibliothek: Änderungsstand 1309 bestanden, 22 fehlgeschlagen, 0 ignoriert. Unveränderte Basis ebenfalls 1309 bestanden, 22 fehlgeschlagen, 0 ignoriert. Die sortierten Namen aller 22 Fehler sind identisch. Kein Social-Media-Handler gehört zur Fehlermenge. Diese Suite wird nicht als grün gemeldet.
@@ -39,10 +39,16 @@ TEXTNACHWEIS[DR-1]: Gedankenstriche 0 | ae/oe/ue/ss-Ersatz 0 | Absolutwörter 1 
 
 Neue Produkttexte enthalten echte Umlaute. Die einzige neu geprüfte absolute Formulierung erklärt, dass ein Anbieterwiderruf nicht sämtliche lokalen Daten löscht; der Löschpfad entfernt ausschließlich die Kontoverbindung und nicht Clips oder Statistiken. Das gebaute Dashboard und die Viewportaufnahmen belegen die neuen Hinweise. Der Patch enthält keine neuen Code-Kommentare und keine Gedankenstriche in neuem Produkttext.
 
-WIRKUNGSPRUEFUNG[WP-1]: 0 Befunde | Zwillingssuche: grep-belegt | Fremddienst-Pfade: 4/4 geprüft
+WIRKUNGSPRUEFUNG[WP-1]: 3 Befunde | Zwillingssuche: grep-belegt | Fremddienst-Pfade: 4/4 geprüft
 
-Geprüfte Pfade: Google-Widerruf, TikTok-Widerruf, YouTube-Uploadantwort und YouTube-Statusabfrage. Queue-Eingang und Worker wurden beide geprüft, ebenso beide YouTube-Erfolgspfade. Kein offener Befund; Fehlermeldungen unterscheiden bestätigten Erfolg und ausstehende Bestätigung.
+Geprüfte Fremddienstpfade: Google-Widerruf, TikTok-Widerruf, YouTube-Uploadantwort und YouTube-Statusabfrage. Queue-Eingang und Worker wurden beide geprüft, ebenso beide YouTube-Erfolgspfade. Der anschließende Merge-Gate fand einen bestätigten Blocker zur Fairness der gemeinsamen Queue-Auswahl sowie zwei Nits. Die Mängelliste und beide betroffenen Queue-Stellen stehen in REVIEW.md. Fehlermeldungen der Provider unterscheiden bestätigten Erfolg und ausstehende Bestätigung.
 
-## Noch offen
+## Gate-Protokoll
 
-Gate, Push, Release, Migration, Neustart, Live-Beweis und Cleanup. Keine Fertigmeldung und kein Deploy-Nachweis liegt vor.
+MERGEPROTOKOLL[MS-1]: 33 Git-Schritte einzeln | Anläufe: 1 | Gate: BLOCK gpt-6.1-sol
+
+Die Git-Zählung ist der Transcriptstand bis zur Gate-Entscheidung, vor dem anschließenden reinen Dokumentationscommit für die Übergabe. Kein Gate wurde umgangen und kein Urteil bei einem anderen Modell neu angefordert.
+
+## Blockiert
+
+Gate-Runde 1: BLOCK durch `gpt-6.1-sol`, Kandidat f2b64b39706417ca63071e5fcf8cc857ab9dff01. Ein frischer Fixer ist gemäß Ablauf nötig, zusätzliche Threads sind diesem Blatt-Worker untersagt. Der Auftrag wird mit allen Artefakten an den vorhandenen Auftraggeber zurückgegeben. Release-Build gestoppt; Frontend-Builds erfolgreich, Rust-Release unvollständig. Keine Produktionsmigration, kein Merge oder Push auf main, kein Deploy, kein Neustart. Branch und Worktree bleiben zur Übernahme erhalten.

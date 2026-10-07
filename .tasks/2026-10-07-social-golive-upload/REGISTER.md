@@ -7,12 +7,14 @@
 - Grundlage: 923b0024, Go-Live-Bericht B6/B7/B8/C2/C4
 - Abgrenzung: keine Anreicherung, keine TikTok-Postfachtexte, kein Direct Post
 - Integration: origin/main e0b0dbaf, Auftrag F übernommen; Startzählung angepasst
-- Status: Umsetzung committed und integriert, integrierte Prüfungen laufen; Gate, Push, Deploy und Cleanup offen
+- Status: Gate-Runde 1 BLOCK durch gpt-6.1-sol; frischer Fixer durch Auftraggeber erforderlich. Kein Merge, Push oder Deploy. Branch und Worktree zur Übernahme erhalten.
+- Geprüfter Codekandidat: f2b64b39706417ca63071e5fcf8cc857ab9dff01
+- Übergabe: BRIEFING-FIXER.md, REVIEW.md und EVIDENCE.md. Diese Session behebt keine Gate-Funde selbst und startet keinen neuen Thread.
 
 ## Session-Register
 
 | Paket | Session-ID | Ersteller | Startnachweis | Harness | Modell | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| D | e710c6ef-4476-46d8-acd1-f172fe20005e | Intent-Thread oben | ursprünglicher Auftrag im eigenen Transcript | Claude Code in T3 | GPT 6.1 Sol | Abschlussprüfung |
+| D | e710c6ef-4476-46d8-acd1-f172fe20005e | Intent-Thread oben | ursprünglicher Auftrag im eigenen Transcript | Claude Code in T3 | GPT 6.1 Sol | Gate BLOCK, Übernahme durch frischen Fixer nötig |
 
 Nachweise: EVIDENCE.md und isolierte Prüfungslogs `/tmp/tb-upload-*`. Eigene Baseline-Sicherung: Stash c336249afcfbb2f11f5b8dad6cbad3021815651f, erfolgreich wiederhergestellt; nach gesichertem Abschluss entfernen. Fremde Stashes unverändert lassen.
