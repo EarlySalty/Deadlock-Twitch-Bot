@@ -3,7 +3,16 @@ use sqlx::PgPool;
 
 use crate::uploaders::{UploadCheckpoint, UploadError};
 
+#[cfg(test)]
 pub(crate) async fn reserve(pool: &PgPool, queue_id: i64) -> Result<bool, sqlx::Error> {
+    reserve_with_options(pool, queue_id, None).await
+}
+
+pub(crate) async fn reserve_with_options(
+    pool: &PgPool,
+    queue_id: i64,
+    options: Option<&crate::uploaders::tiktok::TikTokPostOptions>,
+) -> Result<bool, sqlx::Error> {
     let mut tx = pool.begin().await?;
     let clip: Option<(i64, bool)> = sqlx::query_as(
         "SELECT c.id, COALESCE(c.uploaded_tiktok, FALSE) \
@@ -17,6 +26,19 @@ pub(crate) async fn reserve(pool: &PgPool, queue_id: i64) -> Result<bool, sqlx::
     let Some((clip_id, false)) = clip else {
         return Ok(false);
     };
+    if let Some(options) = options {
+        let current: Option<serde_json::Value> = sqlx::query_scalar(
+            "SELECT tiktok_post_options FROM twitch_clips_upload_queue WHERE id = $1 FOR UPDATE",
+        )
+        .bind(queue_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        let expected =
+            serde_json::to_value(options).map_err(|error| sqlx::Error::Encode(Box::new(error)))?;
+        if current.as_ref() != Some(&expected) {
+            return Ok(false);
+        }
+    }
     let active: Option<i64> = sqlx::query_scalar(
         "SELECT id FROM twitch_clips_upload_queue \
          WHERE clip_id = $1 AND platform = 'tiktok' AND status IN ('inbox', 'inbox_pending') \
@@ -85,6 +107,34 @@ impl UploadCheckpoint for Checkpoint<'_> {
     }
 }
 
+pub(crate) async fn record_status(
+    pool: &PgPool,
+    queue_id: i64,
+    response: &serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    let status = response
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("STATUS_UNAVAILABLE");
+    let reason = if status == "FAILED" {
+        Some(match response.get("fail_reason").and_then(serde_json::Value::as_str).unwrap_or("") {
+            "spam_risk_user_banned_from_posting" => "TikTok erlaubt diesem Konto gerade keine Veröffentlichung. Bitte prüfe dein Konto bei TikTok.",
+            "spam_risk_too_many_posts" => "TikTok hat die Tagesgrenze für dieses Konto erreicht. Bitte plane den Clip später erneut ein.",
+            "duration_check_failed" => "TikTok hat den Clip wegen seiner Dauer abgelehnt. Bitte kürze ihn.",
+            "auth_removed" => "Die TikTok-Verbindung wurde getrennt. Bitte verbinde dein Konto erneut.",
+            "unaudited_client_can_only_post_to_private_accounts" => "TikTok erlaubt für diese App derzeit nur die Sichtbarkeit „Nur ich“. Bitte prüfe die Veröffentlichungseinstellungen.",
+            _ => "TikTok hat die Veröffentlichung abgelehnt. Bitte prüfe den Clip und die Einstellungen bei TikTok.",
+        })
+    } else if status == "STATUS_UNAVAILABLE" {
+        Some("TikTok hat den Veröffentlichungsstand noch nicht bestätigt. Wir prüfen denselben Vorgang weiter.")
+    } else {
+        None
+    };
+    sqlx::query("UPDATE twitch_clips_upload_queue SET tiktok_publish_status = $1, last_error = $2 WHERE id = $3 AND platform = 'tiktok'")
+        .bind(status).bind(reason).bind(queue_id).execute(pool).await?;
+    Ok(())
+}
+
 pub(crate) async fn rejected(
     pool: &PgPool,
     queue_id: i64,
@@ -92,7 +142,7 @@ pub(crate) async fn rejected(
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         "UPDATE twitch_clips_upload_queue SET status = 'failed', last_attempt_at = NOW(), \
-         last_error = 'TikTok hat diese Übertragung endgültig abgelehnt.' \
+         last_error = COALESCE(last_error, 'TikTok hat diese Übertragung endgültig abgelehnt.') \
          WHERE id = $1 AND platform = 'tiktok' AND tiktok_publish_id = $2 \
          AND status IN ('inbox', 'inbox_pending')",
     )
@@ -171,7 +221,81 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/20261007042000_social_media_tiktok_direct_post.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
+    }
+
+    #[tokio::test]
+    async fn posting_options_are_snapshotted_and_cannot_change_during_reservation() {
+        let Some(pool) = pool("t_sm_tiktok_choice").await else {
+            return;
+        };
+        let options = crate::uploaders::tiktok::TikTokPostOptions {
+            caption: "Caption".into(),
+            privacy_level: "SELF_ONLY".into(),
+            allow_comment: false,
+            allow_duet: false,
+            allow_stitch: false,
+            commercial_content: false,
+            brand_organic_toggle: false,
+            brand_content_toggle: false,
+            consent: true,
+            creator_username: "creator".into(),
+            credential_id: 1,
+            platform_user_id: "account".into(),
+            approved_video_sha256: "digest".into(),
+            video_path: "preview".into(),
+        };
+        let raw = serde_json::to_value(&options).unwrap();
+        sqlx::query("UPDATE twitch_clips_social_media SET tiktok_post_options = $1 WHERE id = 1")
+            .bind(&raw)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO twitch_clips_upload_queue (id, clip_id) VALUES (3, 1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let snapshot: serde_json::Value = sqlx::query_scalar(
+            "SELECT tiktok_post_options FROM twitch_clips_upload_queue WHERE id = 3",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(snapshot, raw);
+        let mut changed = options.clone();
+        changed.caption = "Changed".into();
+        assert!(!reserve_with_options(&pool, 3, Some(&changed))
+            .await
+            .unwrap());
+        assert!(reserve_with_options(&pool, 3, Some(&options))
+            .await
+            .unwrap());
+        Checkpoint {
+            pool: &pool,
+            queue_id: 3,
+        }
+        .record_publish_id("operation")
+        .await
+        .unwrap();
+        record_status(
+            &pool,
+            3,
+            &serde_json::json!({"status": "FAILED", "fail_reason": "duration_check_failed"}),
+        )
+        .await
+        .unwrap();
+        rejected(&pool, 3, "operation").await.unwrap();
+        let result: (String, String, String) = sqlx::query_as("SELECT status, tiktok_publish_status, last_error FROM twitch_clips_upload_queue WHERE id = 3")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(result.0, "failed");
+        assert_eq!(result.1, "FAILED");
+        assert!(!result.2.is_empty());
     }
 
     #[tokio::test]

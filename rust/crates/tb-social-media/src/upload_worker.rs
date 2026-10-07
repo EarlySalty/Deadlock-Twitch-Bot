@@ -208,17 +208,25 @@ impl UploadTask {
                 return false;
             }
         }
+        if item.platform == "tiktok" {
+            match crate::tiktok_recovery::reserve_with_options(
+                &self.pool,
+                item.id,
+                uploader.tiktok_post_options(),
+            )
+            .await
+            {
+                Ok(true) => {}
+                Ok(false) => return false,
+                Err(error) => {
+                    tracing::warn!(queue_id = item.id, %error, "TikTok-Übertragung konnte nicht reserviert werden");
+                    return false;
+                }
+            }
+        }
         match self.do_upload(&item).await {
             Ok(converted) => {
                 let uploaded = if item.platform == "tiktok" {
-                    match crate::tiktok_recovery::reserve(&self.pool, item.id).await {
-                        Ok(true) => {}
-                        Ok(false) => return false,
-                        Err(error) => {
-                            tracing::warn!(queue_id = item.id, %error, "TikTok-Übertragung konnte nicht reserviert werden");
-                            return false;
-                        }
-                    }
                     uploader
                         .upload_video_checkpointed(
                             &converted.path,
@@ -241,6 +249,9 @@ impl UploadTask {
                         )
                         .await
                 };
+                if item.platform == "tiktok" {
+                    self.cleanup_tiktok_copy(item.id).await;
+                }
                 match uploaded {
                     Ok(external_id) => {
                         let external_id = if item.platform == "tiktok" {
@@ -346,6 +357,17 @@ impl UploadTask {
                 }
             }
             Err(e) => {
+                if item.platform == "tiktok" {
+                    self.cleanup_tiktok_copy(item.id).await;
+                    match crate::tiktok_recovery::release_not_started(&self.pool, item.id).await {
+                        Ok(true) => {}
+                        Ok(false) => return false,
+                        Err(error) => {
+                            tracing::warn!(queue_id = item.id, %error, "TikTok-Reservierung konnte nicht freigegeben werden");
+                            return false;
+                        }
+                    }
+                }
                 let err = e.to_string();
                 self.update_upload_status_logged(
                     &item,
@@ -360,8 +382,41 @@ impl UploadTask {
         }
     }
 
+    async fn cleanup_tiktok_copy(&self, queue_id: i64) {
+        let path = format!("{}/tiktok-approved-{queue_id}.mp4", self.clips_dir);
+        if let Err(error) = tokio::fs::remove_file(&path).await {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(queue_id, %error, "TikTok-Arbeitskopie konnte nicht entfernt werden");
+            }
+        }
+    }
+
     /// Lädt (falls nötig) den Clip und konvertiert ihn; liefert die Upload-Daten.
     async fn do_upload(&self, item: &UploadQueueItem) -> Result<Converted, WorkerError> {
+        if item.platform == "tiktok" {
+            let options: Option<Value> = sqlx::query_scalar(
+                "SELECT NULLIF(to_jsonb(q)->'tiktok_post_options', 'null'::jsonb) FROM twitch_clips_upload_queue q WHERE id = $1",
+            ).bind(item.id).fetch_one(&self.pool).await.map_err(|_| UploadError::Validation(
+                "Die TikTok-Freigabe konnte nicht geladen werden.".into(),
+            ))?;
+            if let Some(options) = options {
+                let options: crate::uploaders::tiktok::TikTokPostOptions =
+                    serde_json::from_value(options).map_err(|_| {
+                        UploadError::Validation("Bitte prüfe die TikTok-Freigabe erneut.".into())
+                    })?;
+                tokio::fs::create_dir_all(&self.clips_dir).await?;
+                let path = format!("{}/tiktok-approved-{}.mp4", self.clips_dir, item.id);
+                tokio::fs::copy(&options.video_path, &path).await.map_err(|_| UploadError::Validation(
+                    "Die freigegebene Vorschau fehlt. Bitte erstelle die Vorschau und plane den Clip erneut ein.".into(),
+                ))?;
+                return Ok(Converted {
+                    path,
+                    title: options.caption,
+                    description: String::new(),
+                    hashtags: Vec::new(),
+                });
+            }
+        }
         if item.platform != "tiktok" {
             self.update_upload_status_logged(item, "processing", None, None, "processing_start")
                 .await;
@@ -491,6 +546,11 @@ impl UploadTask {
         let start = std::time::Instant::now();
         loop {
             let status = uploader.get_video_status(publish_id).await;
+            if let Err(error) =
+                crate::tiktok_recovery::record_status(&self.pool, item.id, &status).await
+            {
+                tracing::warn!(queue_id = item.id, %error, "TikTok-Veröffentlichungsstand konnte nicht gespeichert werden");
+            }
             let zustand = status
                 .get("status")
                 .and_then(|v| v.as_str())
@@ -777,8 +837,8 @@ impl UploadWorker {
     /// Ein Durchlauf: Queue scannen, Batch (max_parallel) bilden, nebenläufig
     /// hochladen.
     async fn refresh_tiktok_inbox(&self) {
-        let rows: Vec<(i64, i64, Option<String>, String)> = match sqlx::query_as(
-            "SELECT q.id, c.id, q.tiktok_publish_id, q.status \
+        let rows: Vec<(i64, i64, Option<String>, String, Option<Value>)> = match sqlx::query_as(
+            "SELECT q.id, c.id, q.tiktok_publish_id, q.status, NULLIF(to_jsonb(q)->'tiktok_post_options', 'null'::jsonb) \
              FROM twitch_clips_upload_queue q \
              JOIN twitch_clips_social_media c ON c.id = q.clip_id \
              WHERE q.platform = 'tiktok' AND q.status IN ('inbox', 'inbox_pending') \
@@ -795,7 +855,7 @@ impl UploadWorker {
             }
         };
         let mut cache = HashMap::new();
-        for (queue_id, clip_db_id, publish_id, previous) in rows {
+        for (queue_id, clip_db_id, publish_id, previous, options) in rows {
             let Some(publish_id) = publish_id else {
                 let next_check = (Utc::now() + chrono::Duration::days(1)).to_rfc3339();
                 if let Err(error) = sqlx::query(
@@ -811,10 +871,31 @@ impl UploadWorker {
                 }
                 continue;
             };
-            let Some(uploader) = self
-                .resolve_uploader("tiktok", clip_db_id, &mut cache)
-                .await
-            else {
+            let uploader = if options.is_some() {
+                match self.resolve_tiktok_uploader(queue_id).await {
+                    Ok(uploader) => Some(uploader),
+                    Err(error) => {
+                        let message = match error {
+                            UploadError::Validation(message) => message,
+                            _ => {
+                                "Bitte verbinde das ursprünglich freigegebene TikTok-Konto erneut."
+                                    .into()
+                            }
+                        };
+                        if let Err(db_error) = sqlx::query(
+                            "UPDATE twitch_clips_upload_queue SET last_error = $1, last_attempt_at = NOW() WHERE id = $2",
+                        ).bind(format!("Der Veröffentlichungsstand konnte nicht geprüft werden. {message} Ein zweiter Upload bleibt gesperrt."))
+                            .bind(queue_id).execute(&self.task.pool).await {
+                            tracing::warn!(queue_id, %db_error, "TikTok-Statusprüfung konnte nicht vertagt werden");
+                        }
+                        continue;
+                    }
+                }
+            } else {
+                self.resolve_uploader("tiktok", clip_db_id, &mut cache)
+                    .await
+            };
+            let Some(uploader) = uploader else {
                 if let Err(error) = update_upload_status(
                     &self.task.pool,
                     queue_id,
@@ -829,6 +910,11 @@ impl UploadWorker {
                 continue;
             };
             let response = uploader.get_video_status(&publish_id).await;
+            if let Err(error) =
+                crate::tiktok_recovery::record_status(&self.task.pool, queue_id, &response).await
+            {
+                tracing::warn!(queue_id, %error, "TikTok-Veröffentlichungsstand konnte nicht gespeichert werden");
+            }
             let status = response.get("status").and_then(Value::as_str).unwrap_or("");
             let (next, external_id, reason) = match status {
                 "PUBLISH_COMPLETE" => {
@@ -896,6 +982,51 @@ impl UploadWorker {
         }
     }
 
+    async fn resolve_tiktok_uploader(
+        &self,
+        queue_id: i64,
+    ) -> Result<Arc<dyn PlatformUploader>, UploadError> {
+        let row: (Option<String>, Option<Value>) = sqlx::query_as(
+            "SELECT c.twitch_user_id, q.tiktok_post_options FROM twitch_clips_upload_queue q JOIN twitch_clips_social_media c ON c.id = q.clip_id WHERE q.id = $1 AND q.platform = 'tiktok'",
+        ).bind(queue_id).fetch_one(&self.task.pool).await.map_err(|_| UploadError::Validation(
+            "Die TikTok-Freigabe konnte nicht geladen werden. Bitte plane den Clip erneut ein.".into(),
+        ))?;
+        let options: crate::uploaders::tiktok::TikTokPostOptions = row.1
+            .and_then(|raw| serde_json::from_value(raw).ok())
+            .filter(|options: &crate::uploaders::tiktok::TikTokPostOptions| options.consent)
+            .ok_or_else(|| UploadError::Validation(
+                "Bitte öffne die TikTok-Freigabe am Clip und wähle die Veröffentlichungseinstellungen.".into(),
+            ))?;
+        let user = row.0.ok_or(UploadError::NotAuthenticated)?;
+        let credentials = self
+            .credentials
+            .get_channel_credentials_for_id("tiktok", &user)
+            .await
+            .ok_or(UploadError::NotAuthenticated)?;
+        if options.credential_id != credentials.id
+            || Some(options.platform_user_id.as_str()) != credentials.platform_user_id.as_deref()
+        {
+            return Err(UploadError::Validation(
+                "Das TikTok-Konto hat sich geändert. Bitte plane den Clip erneut ein.".into(),
+            ));
+        }
+        if !credentials
+            .scopes
+            .as_deref()
+            .unwrap_or("")
+            .split([',', ' '])
+            .any(|scope| scope == "video.publish")
+        {
+            return Err(UploadError::Validation(
+                "Bitte verbinde TikTok erneut, damit Clips direkt veröffentlicht werden können."
+                    .into(),
+            ));
+        }
+        Ok(Arc::new(
+            TikTokUploader::new(credentials.access_token).with_post_options(options),
+        ))
+    }
+
     pub async fn run_once(&self) {
         self.refresh_tiktok_inbox().await;
         let scan_limit = (self.max_parallel * 10).max(self.max_parallel) as i64;
@@ -917,22 +1048,48 @@ impl UploadWorker {
 
         let mut batch: Vec<(UploadQueueItem, Arc<dyn PlatformUploader>)> = Vec::new();
         for item in queue {
-            match self
-                .resolve_upload(&item.platform, item.clip_db_id, &mut cache)
-                .await
-            {
-                Ok(uploader) => {
-                    batch.push((item, uploader));
-                    if batch.len() >= self.max_parallel {
-                        break;
+            let uploader = if item.platform == "tiktok" {
+                match self.resolve_tiktok_uploader(item.id).await {
+                    Ok(uploader) => Some(uploader),
+                    Err(UploadError::NotAuthenticated) => {
+                        if let Err(error) = wait_for_connection(
+                            &self.task.pool,
+                            item.id,
+                            crate::capabilities::UploadWaitReason::ConnectionMissing.code(),
+                        )
+                        .await
+                        {
+                            tracing::warn!(queue_id = item.id, %error, "Upload-Wartezustand konnte nicht gespeichert werden");
+                        }
+                        None
+                    }
+                    Err(error) => {
+                        self.task
+                            .handle_upload_error(&item, &error, "tiktok_post_choice")
+                            .await;
+                        None
                     }
                 }
-                Err(reason) => {
-                    if let Err(error) =
-                        wait_for_connection(&self.task.pool, item.id, reason.code()).await
-                    {
-                        tracing::warn!(queue_id = item.id, %error, "Upload-Wartezustand konnte nicht gespeichert werden");
+            } else {
+                match self
+                    .resolve_upload(&item.platform, item.clip_db_id, &mut cache)
+                    .await
+                {
+                    Ok(uploader) => Some(uploader),
+                    Err(reason) => {
+                        if let Err(error) =
+                            wait_for_connection(&self.task.pool, item.id, reason.code()).await
+                        {
+                            tracing::warn!(queue_id = item.id, %error, "Upload-Wartezustand konnte nicht gespeichert werden");
+                        }
+                        None
                     }
+                }
+            };
+            if let Some(uploader) = uploader {
+                batch.push((item, uploader));
+                if batch.len() >= self.max_parallel {
+                    break;
                 }
             }
         }
@@ -1654,6 +1811,10 @@ printf '%s\n' '{"streams":[{"codec_type":"video","width":1920,"height":1080,"dur
         let Some(pool) = make_pool("t_sm_upload_inbox_fairness").await else {
             return;
         };
+        sqlx::query("ALTER TABLE twitch_clips_upload_queue ADD COLUMN tiktok_post_options JSONB")
+            .execute(&pool)
+            .await
+            .unwrap();
         let mut queue_ids = Vec::new();
         for (index, age) in ["3 hours", "2 hours", "1 hour"].iter().enumerate() {
             let publish_id = (index > 0).then(|| format!("publish_{index}"));
@@ -1698,6 +1859,13 @@ printf '%s\n' '{"streams":[{"codec_type":"video","width":1920,"height":1080,"dur
         .await
         .unwrap();
         assert!(second_updated);
+        let legacy_error: Option<String> =
+            sqlx::query_scalar("SELECT last_error FROM twitch_clips_upload_queue WHERE id = $1")
+                .bind(queue_ids[1])
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(legacy_error.is_none());
         worker.refresh_tiktok_inbox().await;
         let third_updated: bool = sqlx::query_scalar(
             "SELECT last_attempt_at > NOW() - INTERVAL '1 minute' FROM twitch_clips_upload_queue WHERE id = $1",
@@ -1707,6 +1875,37 @@ printf '%s\n' '{"streams":[{"codec_type":"video","width":1920,"height":1080,"dur
         .await
         .unwrap();
         assert!(third_updated);
+    }
+
+    #[tokio::test]
+    async fn new_tiktok_job_without_complete_choice_never_uses_legacy_upload() {
+        let Some(pool) = make_pool("t_sm_upload_no_choice").await else {
+            return;
+        };
+        sqlx::query("ALTER TABLE twitch_clips_upload_queue ADD COLUMN tiktok_post_options JSONB")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login) VALUES ('no-choice', 'https://clips.test/no-choice', 'nani') RETURNING id")
+            .fetch_one(&pool).await.unwrap();
+        approve_tiktok(&pool, i32::try_from(clip).unwrap()).await;
+        let cipher =
+            Arc::new(tb_crypto::FieldCipher::from_hex_key(&"ab".repeat(32), "v1").unwrap());
+        let worker = UploadWorker::new(pool.clone(), CredentialManager::new(pool.clone(), cipher));
+        for options in [
+            None,
+            Some(Value::Null),
+            Some(serde_json::json!({"consent": true})),
+        ] {
+            let queue_id: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id, platform, tiktok_post_options) VALUES ($1, 'tiktok', $2) RETURNING id")
+                .bind(clip).bind(options).fetch_one(&pool).await.unwrap();
+            worker.run_once().await;
+            let result: (String, Option<String>, Option<String>) = sqlx::query_as("SELECT status, tiktok_publish_id, last_error FROM twitch_clips_upload_queue WHERE id = $1")
+                .bind(queue_id).fetch_one(&pool).await.unwrap();
+            assert_eq!(result.0, "failed");
+            assert!(result.1.is_none());
+            assert!(result.2.is_some());
+        }
     }
 
     #[tokio::test]
@@ -1946,6 +2145,33 @@ printf '%s\n' '{"streams":[{"codec_type":"video","width":1920,"height":1080,"dur
         assert_eq!(vertagungen, UploadTask::MAX_KONTINGENT_VERTAGUNGEN - 1);
     }
 
+    async fn test_tiktok_choice(pool: &PgPool, queue_id: i64) {
+        sqlx::query("ALTER TABLE twitch_clips_upload_queue ADD COLUMN IF NOT EXISTS tiktok_post_options JSONB")
+            .execute(pool).await.unwrap();
+        let options = crate::uploaders::tiktok::TikTokPostOptions {
+            caption: "Synthetic".into(),
+            privacy_level: "SELF_ONLY".into(),
+            allow_comment: false,
+            allow_duet: false,
+            allow_stitch: false,
+            commercial_content: false,
+            brand_organic_toggle: false,
+            brand_content_toggle: false,
+            consent: true,
+            creator_username: "synthetic".into(),
+            credential_id: 1,
+            platform_user_id: "synthetic-account".into(),
+            approved_video_sha256: "synthetic-digest".into(),
+            video_path: "synthetic-preview".into(),
+        };
+        sqlx::query("UPDATE twitch_clips_upload_queue SET tiktok_post_options = $1 WHERE id = $2")
+            .bind(serde_json::to_value(options).unwrap())
+            .bind(queue_id)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn waiting_job_recovers_after_own_connection_is_saved() {
         let Some(pool) = make_pool("t_sm_upload_connection_recovery").await else {
@@ -1956,6 +2182,7 @@ printf '%s\n' '{"streams":[{"codec_type":"video","width":1920,"height":1080,"dur
         approve_tiktok(&pool, i32::try_from(clip).unwrap()).await;
         let queue_id: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) VALUES ($1, 'tiktok', 'pending') RETURNING id")
             .bind(clip).fetch_one(&pool).await.unwrap();
+        test_tiktok_choice(&pool, queue_id).await;
         let cipher =
             Arc::new(tb_crypto::FieldCipher::from_hex_key(&"ab".repeat(32), "v1").unwrap());
         let worker = UploadWorker::new(
@@ -1976,7 +2203,7 @@ printf '%s\n' '{"streams":[{"codec_type":"video","width":1920,"height":1080,"dur
                 &tb_crypto::aad::social_media("access_token", "tiktok", Some("nani"), 1),
             )
             .unwrap();
-        sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login, twitch_user_id, access_token_enc, client_id, enc_version) VALUES ('tiktok', 'nani', '42', $1, 'synthetic-client', 1)")
+        sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login, twitch_user_id, access_token_enc, client_id, enc_version, scopes, platform_user_id) VALUES ('tiktok', 'nani', '42', $1, 'synthetic-client', 1, 'video.publish', 'synthetic-account')")
             .bind(encrypted).execute(&pool).await.unwrap();
         sqlx::query("UPDATE twitch_clips_upload_queue SET last_attempt_at = NOW() - INTERVAL '6 minutes' WHERE id = $1")
             .bind(queue_id).execute(&pool).await.unwrap();
@@ -2003,7 +2230,7 @@ printf '%s\n' '{"streams":[{"codec_type":"video","width":1920,"height":1080,"dur
                 &tb_crypto::aad::social_media("access_token", "tiktok", Some("connected"), 1),
             )
             .unwrap();
-        sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login, twitch_user_id, access_token_enc, client_id, enc_version) VALUES ('tiktok', 'connected', '42', $1, 'synthetic-client', 1)")
+        sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login, twitch_user_id, access_token_enc, client_id, enc_version, scopes, platform_user_id) VALUES ('tiktok', 'connected', '42', $1, 'synthetic-client', 1, 'video.publish', 'synthetic-account')")
             .bind(encrypted).execute(&pool).await.unwrap();
         let worker = UploadWorker::new(pool.clone(), CredentialManager::new(pool.clone(), cipher));
         sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, twitch_user_id) SELECT 'wait-' || n, 'https://clips.test/wait', 'unconnected', '43' FROM generate_series(1, 100) n")
@@ -2020,6 +2247,7 @@ printf '%s\n' '{"streams":[{"codec_type":"video","width":1920,"height":1080,"dur
             approve_tiktok(&pool, i32::try_from(clip).unwrap()).await;
             let queue_id: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) VALUES ($1, 'tiktok', $2) RETURNING id")
                 .bind(clip).bind(status).fetch_one(&pool).await.unwrap();
+            test_tiktok_choice(&pool, queue_id).await;
             connected_jobs.push(queue_id);
         }
         for tick in 0..6 {

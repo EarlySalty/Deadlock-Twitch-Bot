@@ -99,6 +99,10 @@ pub trait PlatformUploader: Send + Sync {
     /// Plattformname (tiktok/youtube/instagram).
     fn platform_name(&self) -> &str;
 
+    fn tiktok_post_options(&self) -> Option<&tiktok::TikTokPostOptions> {
+        None
+    }
+
     /// Prüft, ob das Video die Plattform-Anforderungen erfüllt.
     fn validate_video(&self, video_path: &str) -> Result<(), UploadError>;
 

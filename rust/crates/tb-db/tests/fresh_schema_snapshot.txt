@@ -1108,6 +1108,7 @@ twitch_clips_social_media|retention_until|timestamp with time zone|YES|
 twitch_clips_social_media|source_kind|text|NO|'twitch'::text
 twitch_clips_social_media|status|text|YES|'pending'::text
 twitch_clips_social_media|streamer_login|text|NO|
+twitch_clips_social_media|tiktok_post_options|jsonb|YES|
 twitch_clips_social_media|tiktok_uploaded_at|timestamp with time zone|YES|
 twitch_clips_social_media|tiktok_video_id|text|YES|
 twitch_clips_social_media|twitch_user_id|text|YES|
@@ -1134,7 +1135,9 @@ twitch_clips_upload_queue|priority|integer|YES|0
 twitch_clips_upload_queue|quota_deferrals|integer|NO|0
 twitch_clips_upload_queue|scheduled_at|timestamp with time zone|YES|
 twitch_clips_upload_queue|status|text|YES|'pending'::text
+twitch_clips_upload_queue|tiktok_post_options|jsonb|YES|
 twitch_clips_upload_queue|tiktok_publish_id|text|YES|
+twitch_clips_upload_queue|tiktok_publish_status|text|YES|
 twitch_clips_upload_queue|title|text|YES|
 twitch_clips_upload_queue|youtube_visibility|text|YES|
 twitch_community_announcements|broadcaster_id|text|NO|

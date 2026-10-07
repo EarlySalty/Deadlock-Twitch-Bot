@@ -90,6 +90,10 @@ use crate::auth::resolve_streamer_scope;
 mod clip_contest_forward;
 pub use clip_contest_forward::submit_clip_contest_handler;
 
+#[path = "social_media_tiktok_direct.rs"]
+mod tiktok_direct;
+pub use tiktok_direct::creator_info_handler as tiktok_creator_info_handler;
+
 fn forbidden(message: &str) -> Response {
     (StatusCode::FORBIDDEN, message.to_string()).into_response()
 }
@@ -1239,6 +1243,7 @@ pub struct QueueUploadBody {
     pub priority: i32,
     pub twitch_user_id: Option<String>,
     pub schedule: Option<String>,
+    pub tiktok_options: Option<Value>,
     #[serde(default)]
     pub forms: Vec<FormKey>,
 }
@@ -1388,6 +1393,13 @@ pub async fn queue_upload_handler(
             return (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response();
         }
     };
+    if platforms.iter().any(|platform| platform == "tiktok") {
+        if let Err(response) =
+            tiktok_direct::save_choice(&pool, clip_id, body.tiktok_options.as_ref()).await
+        {
+            return response;
+        }
+    }
     let mut queued: Vec<Value> = Vec::new();
     for platform in &platforms {
         match queue_upload(
@@ -1993,6 +2005,7 @@ struct UploadQueueEntry {
     scheduled_at: Option<String>,
     last_error: Option<String>,
     status: Option<String>,
+    publish_status: Option<String>,
 }
 
 /// Queue-Stand einer Clip-Seite: Clip-ID → Plattform → Zeile.
@@ -2010,7 +2023,8 @@ async fn load_upload_queue_info(pool: &PgPool, clip_ids: &[i64]) -> UploadQueueI
         return info;
     }
     let rows = sqlx::query(
-        "SELECT DISTINCT ON (clip_id, platform) clip_id, platform, scheduled_at, last_error, status, youtube_visibility \
+        "SELECT DISTINCT ON (clip_id, platform) clip_id, platform, scheduled_at, last_error, status, youtube_visibility, \
+         to_jsonb(twitch_clips_upload_queue)->>'tiktok_publish_status' AS publish_status \
          FROM twitch_clips_upload_queue WHERE clip_id = ANY($1) \
          ORDER BY clip_id, platform, CASE WHEN platform = 'tiktok' AND status IN ('inbox', 'inbox_pending') THEN 3 \
              WHEN platform = 'tiktok' AND status = 'completed' THEN 2 ELSE 0 END DESC, id DESC",
@@ -2051,6 +2065,9 @@ async fn load_upload_queue_info(pool: &PgPool, clip_ids: &[i64]) -> UploadQueueI
                 scheduled_at,
                 last_error,
                 status: r.try_get::<Option<String>, _>("status").unwrap_or(None),
+                publish_status: r
+                    .try_get::<Option<String>, _>("publish_status")
+                    .unwrap_or(None),
             },
         );
     }
@@ -2182,6 +2199,7 @@ async fn serialize_clip_record_with(
         "upload_errors": platform_value_map(queue, |e| e.last_error.as_deref()),
         "upload_states": platform_value_map(queue, |e| e.status.as_deref()),
         "youtube_visibility": queue.and_then(|entries| entries.get("youtube")).and_then(|entry| entry.youtube_visibility.as_deref()),
+        "publish_states": platform_value_map(queue, |e| e.publish_status.as_deref()),
     })
 }
 
@@ -3029,6 +3047,13 @@ pub async fn approval_decision_handler(
     if normalize_decision(&decision) == DECISION_APPROVE {
         if let Some(resp) = auto_posting_guard(&pool, &auth).await {
             return resp;
+        }
+        if platforms.iter().any(|platform| platform == "tiktok") {
+            if let Err(response) =
+                tiktok_direct::save_choice(&pool, clip_db_id, payload.get("tiktok_options")).await
+            {
+                return response;
+            }
         }
     }
     // user_id (B15-FIX): Session-Actor für das Approval-Audit (sonst NULL).
@@ -5442,6 +5467,7 @@ mod tests {
             priority: 0,
             twitch_user_id: None,
             schedule: None,
+            tiktok_options: None,
             forms: Vec::new(),
         }
     }
@@ -5505,13 +5531,119 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rejected_tiktok_schedule_keeps_existing_choice_and_job() {
+        let Some(pool) = make_pool("t_dash_sm_tiktok_schedule").await else {
+            return;
+        };
+        sqlx::raw_sql("ALTER TABLE twitch_clips_social_media ADD COLUMN tiktok_post_options JSONB; ALTER TABLE twitch_clips_upload_queue ADD COLUMN tiktok_post_options JSONB")
+            .execute(&pool).await.unwrap();
+        let choice = json!({"caption": "Unverändert", "privacy_level": "SELF_ONLY"});
+        let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, tiktok_post_options) VALUES ('schedule', 'nani', $1) RETURNING id")
+            .bind(&choice).fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, platform, tiktok_post_options, scheduled_at) VALUES ($1, 'tiktok', $2, '2030-01-01T12:00:00Z')")
+            .bind(clip).bind(&choice).execute(&pool).await.unwrap();
+        let mut body = queue_body(clip, json!(["tiktok"]));
+        body.schedule = Some("invalid".into());
+        body.tiktok_options = Some(json!({"caption": "Nicht übernehmen"}));
+        let response = queue_upload_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
+            Json(body),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(body_json(response).await["error"], "invalid_schedule");
+        let result: (Value, Value, bool, i64) = sqlx::query_as("SELECT c.tiktok_post_options, q.tiktok_post_options, q.scheduled_at = '2030-01-01T12:00:00Z'::timestamptz, (SELECT COUNT(*) FROM twitch_clips_upload_queue) FROM twitch_clips_social_media c JOIN twitch_clips_upload_queue q ON q.clip_id = c.id WHERE c.id = $1")
+            .bind(clip).fetch_one(&pool).await.unwrap();
+        assert_eq!(result, (choice.clone(), choice, true, 1));
+    }
+
+    #[tokio::test]
+    async fn tiktok_new_choice_after_confirmed_failed_preserves_history_and_snapshot() {
+        let Some(pool) = make_pool("t_dash_sm_tiktok_retry").await else {
+            return;
+        };
+        sqlx::raw_sql("ALTER TABLE twitch_clips_upload_queue ADD COLUMN tiktok_publish_id TEXT; ALTER TABLE twitch_clips_upload_queue ADD COLUMN tiktok_publish_status TEXT")
+            .execute(&pool).await.unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/20261007042000_social_media_tiktok_direct_post.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('retry', 'nani') RETURNING id")
+            .fetch_one(&pool).await.unwrap();
+        let old = json!({"caption": "Alt", "privacy_level": "PUBLIC_TO_EVERYONE"});
+        sqlx::query("UPDATE twitch_clips_social_media SET tiktok_post_options = $1 WHERE id = $2")
+            .bind(&old)
+            .bind(clip)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let rejected: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, tiktok_publish_id, tiktok_publish_status, tiktok_post_options) VALUES ($1, 'tiktok', 'failed', 'old-operation', 'FAILED', $2) RETURNING id")
+            .bind(clip).bind(&old).fetch_one(&pool).await.unwrap();
+        let corrected = json!({"caption": "Korrigiert", "privacy_level": "SELF_ONLY"});
+        tiktok_direct::persist_choice(&pool, clip, corrected.clone())
+            .await
+            .unwrap();
+        let new_id = queue_upload(&pool, clip, "tiktok", None, None, None, None, 0)
+            .await
+            .unwrap();
+        assert_ne!(new_id, rejected);
+        let historical: (String, String, Value) = sqlx::query_as("SELECT tiktok_publish_id, tiktok_publish_status, tiktok_post_options FROM twitch_clips_upload_queue WHERE id = $1")
+            .bind(rejected).fetch_one(&pool).await.unwrap();
+        assert_eq!(historical, ("old-operation".into(), "FAILED".into(), old));
+        let snapshot: Value = sqlx::query_scalar(
+            "SELECT tiktok_post_options FROM twitch_clips_upload_queue WHERE id = $1",
+        )
+        .bind(new_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(snapshot, corrected);
+        for (state, publish_status) in [
+            ("failed", None),
+            ("failed", Some("STATUS_UNAVAILABLE")),
+            ("failed", Some("PROCESSING_UPLOAD")),
+            ("failed", Some("PUBLISH_COMPLETE")),
+            ("processing", Some("FAILED")),
+            ("inbox_pending", Some("FAILED")),
+            ("inbox", Some("FAILED")),
+            ("completed", Some("FAILED")),
+        ] {
+            sqlx::query("UPDATE twitch_clips_upload_queue SET status = $1, tiktok_publish_status = $2 WHERE id = $3")
+                .bind(state).bind(publish_status).bind(rejected).execute(&pool).await.unwrap();
+            let response =
+                tiktok_direct::persist_choice(&pool, clip, json!({"caption": "Gesperrt"}))
+                    .await
+                    .unwrap_err();
+            assert_eq!(
+                response.status(),
+                StatusCode::CONFLICT,
+                "{state} {publish_status:?}"
+            );
+            let snapshot: Value = sqlx::query_scalar(
+                "SELECT tiktok_post_options FROM twitch_clips_upload_queue WHERE id = $1",
+            )
+            .bind(new_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(snapshot, corrected);
+        }
+    }
+
+    #[tokio::test]
     async fn queue_upload_handler_paths() {
         let Some(pool) = make_pool("t_dash_sm_queue").await else {
             return;
         };
         let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('c1', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
 
-        // Admin, eine Plattform → ein queue_id.
         let resp = queue_upload_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
@@ -5522,13 +5654,29 @@ mod tests {
             Json(queue_body(clip, json!(["tiktok"]))),
         )
         .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+
+        let resp = queue_upload_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(StreamerQuery {
+                twitch_user_id: None,
+                streamer: None,
+            }),
+            Json(queue_body(clip, json!(["youtube"]))),
+        )
+        .await;
         assert_eq!(resp.status(), StatusCode::OK);
         let v = body_json(resp).await;
         assert_eq!(v["queued"].as_array().unwrap().len(), 1);
-        assert_eq!(v["queued"][0]["platform"], "tiktok");
+        assert_eq!(v["queued"][0]["platform"], "youtube");
         assert!(v["queued"][0]["queue_id"].is_number());
 
-        // "all" → 3 Plattformen.
         let resp = queue_upload_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
@@ -5539,7 +5687,12 @@ mod tests {
             Json(queue_body(clip, json!("all"))),
         )
         .await;
-        assert_eq!(body_json(resp).await["queued"].as_array().unwrap().len(), 3);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
 
         // Ungültige Plattform → error queue_failed (kein Crash).
         let resp = queue_upload_handler(
@@ -5571,6 +5724,7 @@ mod tests {
                 priority: 0,
                 twitch_user_id: None,
                 schedule: None,
+                tiktok_options: None,
                 forms: Vec::new(),
             }),
         )
@@ -5918,7 +6072,6 @@ mod tests {
         .await;
         assert!(body_json(resp).await["approval"].is_null());
 
-        // decision approve mit tiktok → state approved + Queue.
         let resp = approval_decision_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
@@ -5926,10 +6079,23 @@ mod tests {
             "{\"decision\":\"approve\",\"platforms\":[\"tiktok\"]}".into(),
         )
         .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        let resp = approval_decision_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Path(clip.to_string()),
+            "{\"decision\":\"approve\",\"platforms\":[\"youtube\"]}".into(),
+        )
+        .await;
         assert_eq!(resp.status(), StatusCode::OK);
         let v = body_json(resp).await;
         assert_eq!(v["approval"]["state"], "approved");
-        assert_eq!(v["approval"]["approved_platforms"], json!(["tiktok"]));
+        assert_eq!(v["approval"]["approved_platforms"], json!(["youtube"]));
         assert!(!v["clip"].is_null());
 
         // decision approve ohne Plattform + ohne Auto-Approve → 400 invalid_decision.

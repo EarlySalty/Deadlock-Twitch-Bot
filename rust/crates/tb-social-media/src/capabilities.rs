@@ -22,7 +22,7 @@ fn capabilities_for(platform: &str, instagram_ready: bool) -> PlatformCapabiliti
         "tiktok" => PlatformCapabilities {
             upload: true,
             statistics: false,
-            upload_mode: "inbox",
+            upload_mode: "direct_post",
             reason: None,
         },
         "youtube" => PlatformCapabilities {
@@ -108,7 +108,7 @@ mod tests {
         let tiktok = capabilities_for("tiktok", false);
         assert!(tiktok.upload);
         assert!(!tiktok.statistics);
-        assert_eq!(tiktok.upload_mode, "inbox");
+        assert_eq!(tiktok.upload_mode, "direct_post");
         assert!(!capabilities_for("instagram", false).upload);
         assert!(capabilities_for("instagram", true).upload);
         assert!(capabilities_for("youtube", false).statistics);
