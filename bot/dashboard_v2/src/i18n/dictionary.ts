@@ -48,7 +48,6 @@ export const MESSAGE_TYPE_LABELS: Record<string, string> = {
 
 const EN: Record<string, string> = {
   ...VOD_ARCHIVE_EN,
-  'Social-Media-Manager': 'Social media manager',
   'Diesen Streamer für den eigenen Social-Media-Manager freischalten': 'Enable this streamer’s own social media manager',
   'Titel, Beschreibung & Hashtags': 'Title, description & hashtags',
   'Titel, Beschreibung und Hashtags bearbeitest du im Clip-Editor.': 'Edit the title, description and hashtags in the clip editor.',
@@ -188,7 +187,7 @@ const EN: Record<string, string> = {
   'Alle Kanäle': 'All channels',
   'Dein Kanal': 'Your channel',
   'Social Media': 'Social media',
-  'Social-Media-Manager': 'Social-Media-Manager',
+  'Social-Media-Manager': 'Social media manager',
   'Freigabe für diesen Streamer entziehen': 'Revoke access for this streamer',
   'Diesen Streamer für das eigene Social-Media-Dashboard freischalten':
     'Give this streamer access to their own social media dashboard',
