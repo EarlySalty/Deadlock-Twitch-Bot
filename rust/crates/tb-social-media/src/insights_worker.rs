@@ -90,7 +90,7 @@ pub async fn collect_due_targets(pool: &PgPool, limit: i64) -> Vec<AnalyticsTarg
                 COALESCE(uploaded_instagram, false) AS \"uploaded_instagram!\", \
                 tiktok_video_id, youtube_video_id, instagram_media_id \
            FROM twitch_clips_social_media \
-          WHERE discarded_at IS NULL AND ( \
+          WHERE discarded_at IS NULL AND (uploaded_youtube OR uploaded_instagram) AND ( \
                 (uploaded_tiktok AND tiktok_video_id IS NOT NULL) \
              OR (uploaded_youtube AND youtube_video_id IS NOT NULL) \
              OR (uploaded_instagram AND instagram_media_id IS NOT NULL)) \
@@ -134,6 +134,9 @@ pub async fn collect_due_targets(pool: &PgPool, limit: i64) -> Vec<AnalyticsTarg
         };
 
         for platform in PLATFORMS {
+            if !crate::capabilities::platform_capabilities(platform).statistics {
+                continue;
+            }
             let Some(video_id) = video_id_for(platform) else {
                 continue;
             };
@@ -353,16 +356,15 @@ mod tests {
         let Some(pool) = make_pool("t_sm_insights").await else {
             return;
         };
-        // A: tiktok veröffentlicht, keine Analytics → 3 Buckets fällig.
-        let a: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, uploaded_tiktok, tiktok_video_id) VALUES ('a', 'https://clips.test/a', 'nani', TRUE, 'tt1') RETURNING id").fetch_one(&pool).await.unwrap();
+        let a: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, uploaded_youtube, youtube_video_id) VALUES ('a', 'https://clips.test/a', 'nani', TRUE, 'tt1') RETURNING id").fetch_one(&pool).await.unwrap();
         // B: youtube uploaded aber video_id NULL → gar kein Kandidat.
         sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, uploaded_youtube) VALUES ('b', 'https://clips.test/b', 'nani', TRUE)").execute(&pool).await.unwrap();
-        // C: tiktok veröffentlicht, 24h hat next_pull in der Zukunft → nur 7d/30d fällig.
-        let c: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, uploaded_tiktok, tiktok_video_id) VALUES ('c', 'https://clips.test/c', 'nani', TRUE, 'tt3') RETURNING id").fetch_one(&pool).await.unwrap();
-        sqlx::query("INSERT INTO twitch_clips_social_analytics (clip_id, platform, bucket, synced_at, next_pull_at) VALUES ($1, 'tiktok', '24h', NOW(), NOW() + INTERVAL '1 day')").bind(c).execute(&pool).await.unwrap();
+        let c: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, uploaded_youtube, youtube_video_id) VALUES ('c', 'https://clips.test/c', 'nani', TRUE, 'tt3') RETURNING id").fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_clips_social_analytics (clip_id, platform, bucket, synced_at, next_pull_at) VALUES ($1, 'youtube', '24h', NOW(), NOW() + INTERVAL '1 day')").bind(c).execute(&pool).await.unwrap();
         // D: verworfen → kein Kandidat.
-        sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, uploaded_tiktok, tiktok_video_id, discarded_at) VALUES ('d', 'https://clips.test/d', 'nani', TRUE, 'tt4', NOW())").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, uploaded_youtube, youtube_video_id, discarded_at) VALUES ('d', 'https://clips.test/d', 'nani', TRUE, 'tt4', NOW())").execute(&pool).await.unwrap();
 
+        sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, uploaded_tiktok, tiktok_video_id, created_at) VALUES ('tiktok-only', 'https://clips.test/tiktok', 'nani', TRUE, 'synthetic-tiktok', NOW() + INTERVAL '1 day')").execute(&pool).await.unwrap();
         let targets = collect_due_targets(&pool, 100).await;
         let keys: Vec<(i64, String)> = targets
             .iter()
@@ -381,7 +383,7 @@ mod tests {
         assert_eq!(targets.len(), 5);
         assert!(targets
             .iter()
-            .all(|t| t.platform == "tiktok" && t.platform_video_id.starts_with("tt")));
+            .all(|t| t.platform == "youtube" && t.platform_video_id.starts_with("tt")));
 
         // Limit greift.
         assert_eq!(collect_due_targets(&pool, 2).await.len(), 2);

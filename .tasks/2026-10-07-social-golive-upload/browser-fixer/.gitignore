@@ -1,0 +1,5 @@
+*
+!.gitignore
+!upload-*.png
+!browser-state.json
+!waiting-i18n-dom.json

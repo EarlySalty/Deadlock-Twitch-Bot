@@ -1,0 +1,23 @@
+<sichtpruefung>
+Auftrag D, Gate-Folgerunde: echte Chromium-Viewportaufnahmen aus dem gebauten Produktionsdashboard mit ausschließlich lokalen, synthetischen API-Fixtures. Kein Produktionskonto wurde verändert.
+
+Die Dateien sind im geprüften Branch versioniert und für die Gestaltung lesbar. Basisverzeichnis: /home/nathanael/.worktrees/tb-social-golive-upload/.tasks/2026-10-07-social-golive-upload/browser-fixer/
+
+Deutsch, Pipeline und Kontoverbindungen:
+- upload-wait-1440.png
+- upload-wait-390.png
+- upload-connections-1440.png
+- upload-connections-390.png
+
+Englisch, fehlende und unvollständige Verbindung sowie gespeicherter deutscher Altgrund:
+- upload-wait-en-connection_missing-1440.png
+- upload-wait-en-connection_missing-390.png
+- upload-wait-en-connection_incomplete-1440.png
+- upload-wait-en-connection_incomplete-390.png
+- upload-wait-en-legacy-1440.png
+- upload-wait-en-legacy-390.png
+
+waiting-i18n-dom.json enthält die tatsächlichen Texte und Dokumentbreiten der sechs englischen Aufnahmen. browser-state.json enthält die lokalen API-Aufrufe und Browserfehler. Kein horizontaler Dokumentüberlauf bei den aufgenommenen 1440- und 390-Pixel-Viewports. Die Recovery-Aktion öffnet die Konteneinstellungen. Die Bilder wurden tatsächlich erzeugt und die Desktop-/Mobilansichten betrachtet; der Nachweis beruht nicht allein auf Screenshot-Assertions.
+
+Der bestätigte Fairness-Fund wird durch getrennte Queue-Auswahl behoben: pending enthält keine Warteaufträge mehr. Warteaufträge werden in einem unabhängigen Scan nach letztem Prüfzeitpunkt ausgewählt. Das konkrete Szenario mit 100 älteren Warteaufträgen erreicht den neueren verbundenen Auftrag im ersten Durchlauf und einen zurückgestellten verbundenen Auftrag trotz erneut fälliger älterer Aufträge innerhalb von sechs Durchläufen. Echte isolierte PostgreSQL-Datenbank; keine Provideruploads.
+</sichtpruefung>

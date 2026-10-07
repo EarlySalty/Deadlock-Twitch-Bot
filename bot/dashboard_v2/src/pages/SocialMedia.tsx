@@ -79,6 +79,7 @@ import {
   APPROVAL_MODE_TEXTE,
   FELD_FEHLER,
   fehlerText,
+  uploadWaitText,
   kategorieLabel,
   PLATFORM_LABELS,
   SOCIAL_MEDIA_TABS,
@@ -328,9 +329,12 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
   });
 
   const disconnectMutation = useMutation({
-    mutationFn: (platform: string) => disconnectPlatform(platform, twitchUserId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'platform-status', twitchUserId] });
+    mutationFn: async (platform: string) => ({
+      ...await disconnectPlatform(platform, twitchUserId),
+      twitchUserId,
+    }),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['social-media', 'platform-status', result.twitchUserId] });
     },
   });
 
@@ -513,6 +517,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
                     }
                   />
                   <PostingScheduleCard
+                    availablePlatforms={platformStatusQuery.data?.platforms.filter((status) => status.capabilities?.upload).map((status) => status.platform) ?? []}
                     plan={draft}
                     isLoading={postingPlanQuery.isLoading}
                     ladeFehler={postingPlanQuery.error}
@@ -654,6 +659,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
               onDisconnect={(platform) => disconnectMutation.mutate(platform)}
               isDisconnecting={disconnectMutation.isPending}
               error={disconnectMutation.error}
+              disconnectResult={disconnectMutation.data?.twitchUserId === twitchUserId ? disconnectMutation.data ?? null : null}
             />
             <VodArchiveCard
               streamer={streamer}
@@ -823,6 +829,8 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
                         clip={clip}
                         timezone={postingPlanQuery.data?.timezone ?? 'Europe/Berlin'}
                         defaultPlatforms={defaultApprovalPlatforms}
+                        availablePlatforms={(platformStatusQuery.data?.platforms ?? []).filter((p) => p.capabilities?.upload).map((p) => p.platform as SocialPlatform)}
+                        onOpenConnections={() => changeView('konten')}
                         onOpenEditor={(mode) => (
                           overrideMutation.reset(),
                           setEditingClip({ clip, mode })
@@ -993,7 +1001,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
           title={t('Auswertung')}
           onClose={() => setShowAnalytics(false)}
         >
-          <AnalyticsTab streamer={streamer} twitchUserId={twitchUserId} isAdmin={isAdmin} />
+          <AnalyticsTab streamer={streamer} twitchUserId={twitchUserId} isAdmin={isAdmin} statisticsPlatforms={(platformStatusQuery.data?.platforms ?? []).filter((p) => p.capabilities?.statistics).map((p) => p.platform)} />
         </WorkspaceDialog>
       )}
     </div>
@@ -1391,6 +1399,7 @@ function zeitzonenListe(aktuelle: string): string[] {
 }
 
 function PostingScheduleCard({
+  availablePlatforms,
   plan,
   isLoading,
   ladeFehler,
@@ -1401,6 +1410,7 @@ function PostingScheduleCard({
   zeitzoneError,
   onTimezoneChange,
 }: {
+  availablePlatforms: string[];
   plan: PostingPlan | null;
   isLoading: boolean;
   /** Fehler des Zeitplan-Abrufs: dann sind Zeitzone und Kadenz unbekannt. */
@@ -1538,6 +1548,13 @@ function PostingScheduleCard({
             zeiten: eintrag.post_times.join(', '),
           };
           const zeitenFehler = feldFehler[`${eintrag.platform}:zeiten`];
+          if (!availablePlatforms.includes(eintrag.platform)) {
+            return (
+              <div key={eintrag.platform} className="rounded-xl border border-border px-4 py-3 text-sm text-ui-muted">
+                {t('{platform}: Noch nicht verfügbar. Automatisches Posten ist hier gesperrt.', { platform: PLATFORM_LABELS[eintrag.platform] ?? eintrag.platform })}
+              </div>
+            );
+          }
           // Die Kadenz bleibt sichtbar und aenderbar, auch wenn Auto-Posting
           // aus ist: sonst laesst sie sich nicht vorbereiten und wirkt beim
           // naechsten Einschalten wie aus dem Nichts.
@@ -1865,6 +1882,7 @@ function PlatformConnectionsCard({
   onDisconnect,
   isDisconnecting,
   error,
+  disconnectResult,
 }: {
   streamer: string;
   twitchUserId?: string;
@@ -1875,6 +1893,7 @@ function PlatformConnectionsCard({
   onDisconnect: (platform: string) => void;
   isDisconnecting: boolean;
   error: unknown;
+  disconnectResult: { success: boolean; revocation_pending: boolean } | null;
 }) {
   const { t, locale } = useLanguage();
   const byName = new Map(platforms.map((p) => [p.platform, p]));
@@ -1914,12 +1933,20 @@ function PlatformConnectionsCard({
         </div>
       )}
 
+      {disconnectResult && (
+        <p role="status" className="text-sm text-text-secondary">
+          {disconnectResult.revocation_pending
+            ? t('Der gespeicherte Kontozugang wurde gelöscht. Entferne die App zusätzlich in den Einstellungen deines Plattformkontos; der Widerruf dort ist noch nicht bestätigt.')
+            : t('Der gespeicherte Kontozugang wurde gelöscht und die Berechtigung beim Anbieter widerrufen.')}
+        </p>
+      )}
       <LadeFehlerHinweis fehler={ladeFehler} />
 
       <div className="space-y-2">
         {PLATTFORMEN.map((platform) => {
           const status = byName.get(platform);
           const connected = status?.connected ?? false;
+          const uploadAvailable = status?.capabilities?.upload ?? false;
           // Ein abgelaufener Zugang, dessen Erneuerung dauerhaft scheitert,
           // sieht sonst aus wie eine gesunde Verbindung, waehrend jeder Upload
           // ins Leere laeuft.
@@ -1944,13 +1971,15 @@ function PlatformConnectionsCard({
           if (standUnbekannt) {
             zeile = t('Zustand unbekannt');
             tonKlasse = 'text-danger';
+          } else if (!uploadAvailable) {
+            zeile = t(status?.capabilities.reason ?? 'Noch nicht verfügbar');
           } else if (!connected) {
             zeile = t('nicht verbunden');
           } else if (abgelaufen) {
             zeile = t('Zugang abgelaufen, bitte neu verbinden');
             tonKlasse = 'text-warning';
           } else if (sammelverbindung) {
-            zeile = t('nutzt die Sammelverbindung');
+            zeile = t('Dieser Kanal nutzt ein gemeinsames Konto. Verbinde ein eigenes Konto, um es hier verwalten zu können.');
             tonKlasse = 'text-warning';
           } else {
             zeile = status?.username ?? t('verbunden');
@@ -1959,13 +1988,13 @@ function PlatformConnectionsCard({
           return (
             <div
               key={platform}
-              className="flex items-center justify-between gap-3 rounded-xl border border-border bg-white/[0.02] px-3 py-2.5"
+              className="flex flex-col items-start justify-between gap-3 rounded-xl border border-border bg-white/[0.02] px-3 py-2.5 sm:flex-row sm:items-center"
             >
               <div className="min-w-0">
                 <div className="text-sm font-medium text-ui-text">
                   {PLATFORM_LABELS[platform] ?? platform}
                 </div>
-                <div className={`text-xs truncate ${tonKlasse}`}>{zeile}</div>
+                <div className={`text-xs ${tonKlasse}`}>{zeile}</div>
                 {!standUnbekannt && connected && !abgelaufen && (
                   <div className="text-[11px] text-text-secondary">
                     {ablauf
@@ -1975,39 +2004,38 @@ function PlatformConnectionsCard({
                         : null}
                   </div>
                 )}
+                {!standUnbekannt && platform === 'tiktok' && (
+                  <p className="mt-1 text-xs text-text-secondary">{t('TikTok-Statistiken sind in dieser Beta nicht verfügbar.')}</p>
+                )}
               </div>
-              {standUnbekannt ? null : connected && !abgelaufen ? (
-                <button
-                  type="button"
-                  disabled={gesperrt}
-                  onClick={() => {
-                    // Der Kanalname gehoert in die Frage: es gibt eine
-                    // Sammelverbindung, und niemand soll aus Versehen alle
-                    // Kanaele kappen.
-                    const frage = sammelverbindung
-                      ? t(
-                          '{platform} für {streamer} trennen? Der Kanal nutzt die Sammelverbindung.',
-                          {
-                            platform: PLATFORM_LABELS[platform] ?? platform,
-                            streamer,
-                          },
-                        )
-                      : t('{platform} für {streamer} trennen?', {
-                          platform: PLATFORM_LABELS[platform] ?? platform,
-                          streamer,
-                        });
-                    if (window.confirm(frage)) onDisconnect(platform);
-                  }}
-                  className="rounded-lg border border-border bg-white/[0.03] px-3 py-1.5 text-sm font-medium text-ui-muted transition-colors hover:bg-white/[0.07] hover:text-white disabled:opacity-40"
-                >
-                  {t('Trennen')}
-                </button>
-              ) : (
+              {standUnbekannt ? null : connected && !status?.uses_global_fallback ? (
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  {abgelaufen && uploadAvailable && (
+                    <a href={oauthStartUrl(platform, twitchUserId)} className="rounded-lg border border-ui-accent-strong/25 px-3 py-1.5 text-sm text-ui-accent-ink">
+                      {t('Neu verbinden')}
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    disabled={gesperrt}
+                    onClick={() => {
+                      const frage = t('{platform} für {streamer} trennen und den gespeicherten Kontozugang löschen? Uploads brauchen danach eine verfügbare Verbindung.', {
+                        platform: PLATFORM_LABELS[platform] ?? platform,
+                        streamer,
+                      });
+                      if (window.confirm(frage)) onDisconnect(platform);
+                    }}
+                    className="rounded-lg border border-border bg-white/[0.03] px-3 py-1.5 text-sm font-medium text-ui-muted transition-colors hover:bg-white/[0.07] hover:text-white disabled:opacity-40"
+                  >
+                    {t('Trennen')}
+                  </button>
+                </div>
+              ) : !uploadAvailable ? null : (
                 <a
                   href={oauthStartUrl(platform, twitchUserId)}
                   className="shrink-0 rounded-lg border border-ui-accent-strong/25 bg-ui-accent-strong/12 px-3 py-1.5 text-sm font-medium text-ui-accent-ink transition-colors hover:bg-ui-accent-strong/18"
                 >
-                  {abgelaufen ? t('Neu verbinden') : t('Verbinden')}
+                  {status?.uses_global_fallback ? t('Eigenes Konto verbinden') : abgelaufen ? t('Neu verbinden') : t('Verbinden')}
                 </a>
               )}
             </div>
@@ -2157,6 +2185,8 @@ interface ClipCardProps {
   timezone: string;
   /** Vorauswahl aus dem Auto-Pilot, falls am Clip noch keine Zielplattformen stehen. */
   defaultPlatforms: SocialPlatform[];
+  availablePlatforms: SocialPlatform[];
+  onOpenConnections: () => void;
   onOpenEditor: (mode: EditMode) => void;
   onDiscard: () => void;
   onApprovalDecision: (decision: 'approve' | 'skip' | 'edit', platforms: SocialPlatform[]) => void;
@@ -2173,6 +2203,8 @@ function ClipCard({
   clip,
   timezone,
   defaultPlatforms,
+  availablePlatforms,
+  onOpenConnections,
   onOpenEditor,
   onDiscard,
   onApprovalDecision,
@@ -2192,11 +2224,12 @@ function ClipCard({
       ? [{ platform, zeit: clip.scheduled_at[platform] as string }]
       : [],
   );
-  const stoppbar = clip.status === 'approved' && termine.length > 0;
+  const waitingPlatforms = PLATTFORMEN.filter((platform) => clip.upload_states?.[platform] === 'waiting_connection');
+  const stoppbar = clip.status === 'approved' && (termine.length > 0 || waitingPlatforms.length > 0);
   const terminal =
     clip.status === 'discarded' || clip.status === 'skipped' || Boolean(clip.discarded_at);
   const uploadFehler = PLATTFORMEN.flatMap((platform) =>
-    clip.upload_errors?.[platform] ? [{ platform, text: clip.upload_errors[platform] }] : [],
+    clip.upload_errors?.[platform] && clip.upload_states?.[platform] !== 'waiting_connection' ? [{ platform, text: clip.upload_errors[platform] }] : [],
   );
   const tiktokInbox = clip.upload_states?.tiktok === 'inbox';
   const tiktokPending = clip.upload_states?.tiktok === 'inbox_pending';
@@ -2204,6 +2237,7 @@ function ClipCard({
     ? clip.approval.approved_platforms
     : defaultPlatforms;
   const [selectedPlatforms, setSelectedPlatforms] = useState<SocialPlatform[]>(initialPlatforms);
+  const eligiblePlatforms = selectedPlatforms.filter((platform) => availablePlatforms.includes(platform));
   const touchedPlatforms = useRef(false);
   const platformKey = JSON.stringify(initialPlatforms);
   useEffect(() => {
@@ -2315,7 +2349,7 @@ function ClipCard({
         </div>
         <div className="min-w-0 space-y-2.5">
           <span className={`studio-status ${tone}`}>
-            {stoppbar ? t('Geplant') : t(status.label)}
+            {waitingPlatforms.length > 0 ? t('Wartet auf Verbindung') : stoppbar ? t('Geplant') : t(status.label)}
           </span>
           <h3 className="break-words text-sm font-semibold leading-6">
             {clip.title || t('Clip ohne Titel')}
@@ -2331,7 +2365,8 @@ function ClipCard({
                 <label key={platform} className="studio-platform-choice">
                   <input
                     type="checkbox"
-                    checked={selectedPlatforms.includes(platform)}
+                    checked={eligiblePlatforms.includes(platform)}
+                    disabled={!availablePlatforms.includes(platform)}
                     onChange={(event) => {
                       touchedPlatforms.current = true;
                       setSelectedPlatforms((current) =>
@@ -2344,7 +2379,7 @@ function ClipCard({
                   {PLATFORM_LABELS[platform]}
                 </label>
               ))}
-              {selectedPlatforms.length === 0 && (
+              {eligiblePlatforms.length === 0 && (
                 <span className="w-full text-warning">
                   {t('Wähle zuerst mindestens eine Zielplattform.')}
                 </span>
@@ -2376,6 +2411,25 @@ function ClipCard({
           {tiktokPending && (
             <p role="status" className="text-sm text-text-secondary">
               {t('Die TikTok-Übertragung ist noch nicht bestätigt. Wir prüfen den Vorgang weiter; ein zweiter Upload bleibt gesperrt.')}
+            </p>
+          )}
+          {waitingPlatforms.length > 0 && (
+            <div role="status" className="space-y-2 text-sm text-warning">
+              {waitingPlatforms.map((platform) => (
+                <p key={platform}>{uploadWaitText(clip.upload_errors?.[platform], platform, t)}</p>
+              ))}
+              <button type="button" className="studio-button" onClick={onOpenConnections}>{t('Verbindungen öffnen')}</button>
+            </div>
+          )}
+          {clip.platform_status.youtube && (
+            <p role="status" className="text-sm text-text-secondary">
+              {clip.youtube_visibility === 'private'
+                ? t('YouTube hat dieses Video privat gespeichert. Es ist nicht öffentlich sichtbar.')
+                : clip.youtube_visibility === 'unlisted'
+                  ? t('YouTube: Nicht gelistet. Das Video ist über den Link erreichbar.')
+                  : clip.youtube_visibility === 'public'
+                    ? t('YouTube: Öffentlich sichtbar.')
+                    : t('YouTube: Upload abgeschlossen, Sichtbarkeit noch nicht bestätigt.')}
             </p>
           )}
           {clip.layout_override && <p className="text-xs text-accent">{t('Eigenes Layout')}</p>}
@@ -2436,8 +2490,8 @@ function ClipCard({
               <button
                 type="button"
                 className="studio-primary"
-                disabled={approvalPending || selectedPlatforms.length === 0}
-                onClick={() => onApprovalDecision('approve', selectedPlatforms)}
+                disabled={approvalPending || eligiblePlatforms.length === 0}
+                onClick={() => onApprovalDecision('approve', eligiblePlatforms)}
               >
                 <CheckCircle2 className="h-4 w-4" />
                 {t('Clip freigeben')}

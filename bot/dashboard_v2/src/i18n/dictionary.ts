@@ -558,6 +558,38 @@ const EN: Record<string, string> = {
     'The scheduled post could not be stopped.',
   'Diesen Clip gibt es nicht mehr.': 'That clip no longer exists.',
   'Die Verbindung konnte nicht getrennt werden.': 'The connection could not be removed.',
+  'Dieser Kanal nutzt ein gemeinsames Konto. Verbinde ein eigenes Konto, um es hier verwalten zu können.':
+    'This channel uses a shared account. Connect your own account to manage it here.',
+  'Diese Plattform ist in dieser Beta noch nicht verfügbar.': 'This platform is not available in this beta yet.',
+  'TikTok-Statistiken sind in dieser Beta nicht verfügbar.': 'TikTok statistics are not available in this beta.',
+  'Instagram ist in dieser Beta noch nicht verfügbar.': 'Instagram is not yet available in this beta.',
+  'Eigenes Konto verbinden': 'Connect your own account',
+  'Wartet auf Verbindung': 'Waiting for a connection',
+  '{platform} nicht verbunden. Öffne Verbindungen und verbinde dein Konto.':
+    '{platform} is not connected. Open Connections and connect your account.',
+  'Die Verbindung zu {platform} ist unvollständig. Öffne Verbindungen und verbinde dein Konto erneut.':
+    'Your connection to {platform} is incomplete. Open Connections and reconnect your account.',
+  '{platform} ist in dieser Beta noch nicht verfügbar.': '{platform} is not available in this beta yet.',
+  'Der Upload auf {platform} wartet auf eine verfügbare Verbindung. Öffne Verbindungen und prüfe dein Konto.':
+    'Your upload to {platform} is waiting for an available connection. Open Connections and check your account.',
+  'Der gespeicherte Kontozugang wurde gelöscht. Entferne die App zusätzlich in den Einstellungen deines Plattformkontos; der Widerruf dort ist noch nicht bestätigt.':
+    'The saved account credentials have been deleted. Also remove the app in your platform account settings; revocation there has not been confirmed yet.',
+  'Der gespeicherte Kontozugang wurde gelöscht und die Berechtigung beim Anbieter widerrufen.':
+    'The saved account credentials have been deleted and the provider permission has been revoked.',
+  '{platform} nicht verbunden.': '{platform} is not connected.',
+  'YouTube hat dieses Video privat gespeichert. Es ist nicht öffentlich sichtbar.':
+    'YouTube saved this video as private. It is not publicly visible.',
+  'YouTube: Nicht gelistet. Das Video ist über den Link erreichbar.':
+    'YouTube: Unlisted. The video can be accessed using its link.',
+  'YouTube: Öffentlich sichtbar.': 'YouTube: Publicly visible.',
+  'YouTube: Upload abgeschlossen, Sichtbarkeit noch nicht bestätigt.':
+    'YouTube: Upload complete, visibility not confirmed yet.',
+  'Verbindungen öffnen': 'Open connections',
+  'Noch nicht verfügbar': 'Not available yet',
+  '{platform}: Noch nicht verfügbar. Automatisches Posten ist hier gesperrt.':
+    '{platform}: Not available yet. Automatic posting is disabled here.',
+  '{platform} für {streamer} trennen und den gespeicherten Kontozugang löschen? Uploads brauchen danach eine verfügbare Verbindung.':
+    'Disconnect {platform} for {streamer} and delete the saved account credentials? Uploads will need an available connection afterwards.',
   'Der Verbindungsstatus ist gerade nicht abrufbar.':
     'The connection status cannot be loaded right now.',
   'Das Speichern hat nicht geklappt.': 'Saving did not work.',

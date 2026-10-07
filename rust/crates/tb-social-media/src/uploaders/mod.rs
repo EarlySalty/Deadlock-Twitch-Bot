@@ -111,6 +111,10 @@ pub trait PlatformUploader: Send + Sync {
         hashtags: &[String],
     ) -> Result<String, UploadError>;
 
+    async fn uploaded_visibility(&self, _video_id: &str) -> Option<String> {
+        None
+    }
+
     async fn upload_video_checkpointed(
         &self,
         _video_path: &str,

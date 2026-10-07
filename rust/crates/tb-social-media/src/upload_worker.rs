@@ -17,7 +17,8 @@ use sqlx::PgPool;
 
 use crate::approval::is_clip_approved_for;
 use crate::clip_queue::{
-    get_upload_queue, reschedule_upload, update_upload_status, UploadQueueItem, VertagungsKonto,
+    get_upload_queue, reschedule_upload, update_upload_status,
+    update_upload_status_with_visibility, wait_for_connection, UploadQueueItem, VertagungsKonto,
 };
 use crate::credentials::{CredentialManager, SocialMediaCredentials};
 use crate::render::render_clip_vertical;
@@ -286,12 +287,18 @@ impl UploadTask {
                         } else {
                             external_id
                         };
-                        if let Err(e) = update_upload_status(
+                        let visibility = if item.platform == "youtube" {
+                            uploader.uploaded_visibility(&external_id).await
+                        } else {
+                            None
+                        };
+                        if let Err(e) = update_upload_status_with_visibility(
                             &self.pool,
                             item.id,
                             "completed",
                             Some(&external_id),
                             None,
+                            visibility.as_deref(),
                         )
                         .await
                         {
@@ -727,6 +734,19 @@ impl UploadWorker {
         clip_db_id: i64,
         cache: &mut HashMap<(String, i32), Option<Arc<dyn PlatformUploader>>>,
     ) -> Option<Arc<dyn PlatformUploader>> {
+        self.resolve_upload(platform, clip_db_id, cache).await.ok()
+    }
+
+    async fn resolve_upload(
+        &self,
+        platform: &str,
+        clip_db_id: i64,
+        cache: &mut HashMap<(String, i32), Option<Arc<dyn PlatformUploader>>>,
+    ) -> Result<Arc<dyn PlatformUploader>, crate::capabilities::UploadWaitReason> {
+        use crate::capabilities::UploadWaitReason;
+        if !crate::capabilities::platform_capabilities(platform).upload {
+            return Err(UploadWaitReason::PlatformUnavailable);
+        }
         let twitch_user_id = sqlx::query_scalar::<_, Option<String>>(
             "SELECT twitch_user_id FROM twitch_clips_social_media WHERE id = $1",
         )
@@ -735,18 +755,23 @@ impl UploadWorker {
         .await
         .ok()
         .flatten()
-        .flatten()?;
+        .flatten()
+        .ok_or(UploadWaitReason::ConnectionMissing)?;
         let creds = self
             .credentials
             .get_credentials_for_id(platform, Some(&twitch_user_id))
-            .await?;
+            .await
+            .ok_or(UploadWaitReason::ConnectionMissing)?;
+        if let Some(reason) = crate::capabilities::upload_wait_reason_kind(platform, Some(&creds)) {
+            return Err(reason);
+        }
         let key = (platform.to_string(), creds.id);
         if let Some(cached) = cache.get(&key) {
-            return cached.clone();
+            return cached.clone().ok_or(UploadWaitReason::ConnectionIncomplete);
         }
         let uploader = build_uploader(platform, &creds);
         cache.insert(key, uploader.clone());
-        uploader
+        uploader.ok_or(UploadWaitReason::ConnectionIncomplete)
     }
 
     /// Ein Durchlauf: Queue scannen, Batch (max_parallel) bilden, nebenläufig
@@ -835,9 +860,48 @@ impl UploadWorker {
         }
     }
 
+    async fn refresh_waiting_connections(
+        &self,
+        scan_limit: i64,
+        cache: &mut HashMap<(String, i32), Option<Arc<dyn PlatformUploader>>>,
+    ) {
+        let waiting = get_upload_queue(
+            &self.task.pool,
+            None,
+            "waiting_connection",
+            scan_limit,
+            None,
+        )
+        .await;
+        for item in waiting {
+            match self.resolve_upload(&item.platform, item.clip_db_id, cache).await {
+                Ok(_) => {
+                    match sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'pending', last_error = NULL WHERE id = $1 AND status = 'waiting_connection'")
+                        .bind(item.id).execute(&self.task.pool).await {
+                        Ok(result) if result.rows_affected() == 1 => {
+                            tracing::info!(queue_id = item.id, platform = %item.platform, "Upload wird nach dem Verbinden fortgesetzt");
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            tracing::warn!(queue_id = item.id, %error, "Upload konnte nach dem Verbinden nicht fortgesetzt werden");
+                        }
+                    }
+                }
+                Err(reason) => {
+                    if let Err(error) = wait_for_connection(&self.task.pool, item.id, reason.code()).await {
+                        tracing::warn!(queue_id = item.id, %error, "Upload-Wartezustand konnte nicht gespeichert werden");
+                    }
+                }
+            }
+        }
+    }
+
     pub async fn run_once(&self) {
         self.refresh_tiktok_inbox().await;
         let scan_limit = (self.max_parallel * 10).max(self.max_parallel) as i64;
+        let mut cache: HashMap<(String, i32), Option<Arc<dyn PlatformUploader>>> = HashMap::new();
+        self.refresh_waiting_connections(scan_limit, &mut cache)
+            .await;
         let stale_cutoff = (Utc::now() - chrono::Duration::seconds(STALE_AFTER_SECS)).to_rfc3339();
         let queue = get_upload_queue(
             &self.task.pool,
@@ -851,16 +915,24 @@ impl UploadWorker {
             return;
         }
 
-        let mut cache: HashMap<(String, i32), Option<Arc<dyn PlatformUploader>>> = HashMap::new();
         let mut batch: Vec<(UploadQueueItem, Arc<dyn PlatformUploader>)> = Vec::new();
         for item in queue {
-            if let Some(uploader) = self
-                .resolve_uploader(&item.platform, item.clip_db_id, &mut cache)
+            match self
+                .resolve_upload(&item.platform, item.clip_db_id, &mut cache)
                 .await
             {
-                batch.push((item, uploader));
-                if batch.len() >= self.max_parallel {
-                    break;
+                Ok(uploader) => {
+                    batch.push((item, uploader));
+                    if batch.len() >= self.max_parallel {
+                        break;
+                    }
+                }
+                Err(reason) => {
+                    if let Err(error) =
+                        wait_for_connection(&self.task.pool, item.id, reason.code()).await
+                    {
+                        tracing::warn!(queue_id = item.id, %error, "Upload-Wartezustand konnte nicht gespeichert werden");
+                    }
                 }
             }
         }
@@ -1872,6 +1944,102 @@ printf '%s\n' '{"streams":[{"codec_type":"video","width":1920,"height":1080,"dur
              die 29 Vertagungen davor nicht"
         );
         assert_eq!(vertagungen, UploadTask::MAX_KONTINGENT_VERTAGUNGEN - 1);
+    }
+
+    #[tokio::test]
+    async fn waiting_job_recovers_after_own_connection_is_saved() {
+        let Some(pool) = make_pool("t_sm_upload_connection_recovery").await else {
+            return;
+        };
+        let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, uploaded_tiktok, tiktok_video_id) VALUES ('synthetic-recovery', 'https://clips.test/recovery', 'nani', TRUE, 'existing') RETURNING id")
+            .fetch_one(&pool).await.unwrap();
+        approve_tiktok(&pool, i32::try_from(clip).unwrap()).await;
+        let queue_id: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) VALUES ($1, 'tiktok', 'pending') RETURNING id")
+            .bind(clip).fetch_one(&pool).await.unwrap();
+        let cipher =
+            Arc::new(tb_crypto::FieldCipher::from_hex_key(&"ab".repeat(32), "v1").unwrap());
+        let worker = UploadWorker::new(
+            pool.clone(),
+            CredentialManager::new(pool.clone(), cipher.clone()),
+        );
+        worker.run_once().await;
+        let waiting: (String, i32) =
+            sqlx::query_as("SELECT status, attempts FROM twitch_clips_upload_queue WHERE id = $1")
+                .bind(queue_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(waiting, ("waiting_connection".into(), 0));
+        let encrypted = cipher
+            .encrypt_field(
+                "synthetic",
+                &tb_crypto::aad::social_media("access_token", "tiktok", Some("nani"), 1),
+            )
+            .unwrap();
+        sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login, twitch_user_id, access_token_enc, client_id, enc_version) VALUES ('tiktok', 'nani', '42', $1, 'synthetic-client', 1)")
+            .bind(encrypted).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE twitch_clips_upload_queue SET last_attempt_at = NOW() - INTERVAL '6 minutes' WHERE id = $1")
+            .bind(queue_id).execute(&pool).await.unwrap();
+        worker.run_once().await;
+        let recovered: (String, i32) =
+            sqlx::query_as("SELECT status, attempts FROM twitch_clips_upload_queue WHERE id = $1")
+                .bind(queue_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(recovered, ("completed".into(), 0));
+    }
+
+    #[tokio::test]
+    async fn waiting_poll_is_fair_and_cannot_starve_connected_uploads() {
+        let Some(pool) = make_pool("t_sm_upload_wait_fairness").await else {
+            return;
+        };
+        let cipher =
+            Arc::new(tb_crypto::FieldCipher::from_hex_key(&"ab".repeat(32), "v1").unwrap());
+        let encrypted = cipher
+            .encrypt_field(
+                "synthetic",
+                &tb_crypto::aad::social_media("access_token", "tiktok", Some("connected"), 1),
+            )
+            .unwrap();
+        sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login, twitch_user_id, access_token_enc, client_id, enc_version) VALUES ('tiktok', 'connected', '42', $1, 'synthetic-client', 1)")
+            .bind(encrypted).execute(&pool).await.unwrap();
+        let worker = UploadWorker::new(pool.clone(), CredentialManager::new(pool.clone(), cipher));
+        sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, twitch_user_id) SELECT 'wait-' || n, 'https://clips.test/wait', 'unconnected', '43' FROM generate_series(1, 100) n")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, priority, created_at) SELECT id, 'tiktok', 'waiting_connection', 100, NOW() - INTERVAL '1 day' FROM twitch_clips_social_media")
+            .execute(&pool).await.unwrap();
+        let mut connected_jobs = Vec::new();
+        for (name, status) in [
+            ("old-recovery", "waiting_connection"),
+            ("new-pending", "pending"),
+        ] {
+            let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, twitch_user_id, uploaded_tiktok, tiktok_video_id) VALUES ($1, 'https://clips.test/connected', 'connected', '42', TRUE, 'existing') RETURNING id")
+                .bind(name).fetch_one(&pool).await.unwrap();
+            approve_tiktok(&pool, i32::try_from(clip).unwrap()).await;
+            let queue_id: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) VALUES ($1, 'tiktok', $2) RETURNING id")
+                .bind(clip).bind(status).fetch_one(&pool).await.unwrap();
+            connected_jobs.push(queue_id);
+        }
+        for tick in 0..6 {
+            worker.run_once().await;
+            let states: Vec<(String, i32, i32)> = sqlx::query_as("SELECT status, attempts, quota_deferrals FROM twitch_clips_upload_queue WHERE id = ANY($1) ORDER BY id")
+                .bind(&connected_jobs).fetch_all(&pool).await.unwrap();
+            assert_eq!(
+                states[1],
+                ("completed".into(), 0, 0),
+                "pending job at tick {tick}"
+            );
+            if tick == 5 {
+                assert_eq!(states[0], ("completed".into(), 0, 0));
+            }
+            sqlx::query("UPDATE twitch_clips_upload_queue SET last_attempt_at = last_attempt_at - INTERVAL '1 minute' WHERE status = 'waiting_connection'")
+                .execute(&pool).await.unwrap();
+        }
+        let untouched: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE status = 'waiting_connection' AND attempts = 0 AND quota_deferrals = 0")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(untouched, 100);
     }
 
     #[tokio::test]

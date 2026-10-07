@@ -186,6 +186,7 @@ pub struct YouTubeRefreshCreds {
 pub struct YouTubeUploader {
     /// Mutable, da der inline-Refresh es bei 401 ersetzt.
     access_token: Mutex<String>,
+    visibility: Mutex<std::collections::HashMap<String, String>>,
     refresh: Option<Arc<YouTubeRefreshCreds>>,
     token_sink: Option<TokenSink>,
     fortschritt: Option<FortschrittSink>,
@@ -201,6 +202,7 @@ impl YouTubeUploader {
     pub fn new(access_token: impl Into<String>) -> Self {
         Self {
             access_token: Mutex::new(access_token.into()),
+            visibility: Mutex::new(std::collections::HashMap::new()),
             refresh: None,
             token_sink: None,
             fortschritt: None,
@@ -256,6 +258,21 @@ impl YouTubeUploader {
     pub fn with_ffprobe(mut self, ffprobe: impl Into<String>) -> Self {
         self.ffprobe = ffprobe.into();
         self
+    }
+
+    async fn record_visibility(&self, data: &Value) {
+        if let (Some(id), Some(visibility)) = (
+            data["id"].as_str(),
+            data.pointer("/status/privacyStatus")
+                .and_then(Value::as_str),
+        ) {
+            if ["public", "private", "unlisted"].contains(&visibility) {
+                self.visibility
+                    .lock()
+                    .await
+                    .insert(id.to_string(), visibility.to_string());
+            }
+        }
     }
 
     async fn token(&self) -> String {
@@ -521,6 +538,7 @@ impl YouTubeUploader {
                 .json()
                 .await
                 .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
+            self.record_visibility(&data).await;
             return data["id"]
                 .as_str()
                 .map(|id| ResumeStand::Fertig(id.to_string()))
@@ -587,6 +605,7 @@ impl YouTubeUploader {
                 .json()
                 .await
                 .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
+            self.record_visibility(&data).await;
             return data["id"]
                 .as_str()
                 .map(|id| ChunkOutcome::Fertig(id.to_string()))
@@ -955,6 +974,18 @@ impl PlatformUploader for YouTubeUploader {
             .map(|fertig| fertig.video_id)
     }
 
+    async fn uploaded_visibility(&self, video_id: &str) -> Option<String> {
+        if let Some(visibility) = self.visibility.lock().await.remove(video_id) {
+            return Some(visibility);
+        }
+        self.get_video_status(video_id)
+            .await
+            .get("privacy_status")
+            .and_then(Value::as_str)
+            .filter(|value| ["public", "private", "unlisted"].contains(value))
+            .map(str::to_string)
+    }
+
     async fn get_video_status(&self, video_id: &str) -> Value {
         let result = async {
             let resp = self
@@ -967,6 +998,7 @@ impl PlatformUploader for YouTubeUploader {
             }
             Ok(json!({
                 "status": item["status"]["uploadStatus"],
+                "privacy_status": item["status"]["privacyStatus"],
                 "processing_status": item["processingDetails"]["processingStatus"],
             }))
         }
@@ -1064,6 +1096,50 @@ mod tests {
             std::env::temp_dir().join(format!("tb_youtube_test_{}_{}.mp4", std::process::id(), id));
         tokio::fs::write(&p, b"fake-video-bytes").await.unwrap();
         p.to_string_lossy().into_owned()
+    }
+
+    #[tokio::test]
+    async fn upload_response_visibility_is_recorded_per_video() {
+        let server = MockServer::start().await;
+        let up = uploader(&server);
+        for visibility in ["private", "unlisted", "public"] {
+            let session = format!("{}/session/{visibility}", server.uri());
+            Mock::given(method("PUT"))
+                .and(path(format!("/session/{visibility}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "id": visibility,
+                    "status": {"privacyStatus": visibility}
+                })))
+                .mount(&server)
+                .await;
+            let video = temp_video().await;
+            let result = up
+                .upload_chunk(&session, Path::new(&video), 0)
+                .await
+                .unwrap();
+            assert!(matches!(result, ChunkOutcome::Fertig(id) if id == visibility));
+            tokio::fs::remove_file(video).await.unwrap();
+        }
+        for visibility in ["public", "private", "unlisted"] {
+            assert_eq!(
+                up.uploaded_visibility(visibility).await.as_deref(),
+                Some(visibility)
+            );
+        }
+        assert!(up.visibility.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn missing_visibility_is_not_assumed_public() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/videos"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items": []})))
+            .mount(&server)
+            .await;
+        let up = uploader(&server);
+        up.record_visibility(&json!({"id": "unknown"})).await;
+        assert!(up.uploaded_visibility("unknown").await.is_none());
     }
 
     #[tokio::test]

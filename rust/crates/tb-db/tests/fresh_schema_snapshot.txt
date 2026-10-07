@@ -1136,6 +1136,7 @@ twitch_clips_upload_queue|scheduled_at|timestamp with time zone|YES|
 twitch_clips_upload_queue|status|text|YES|'pending'::text
 twitch_clips_upload_queue|tiktok_publish_id|text|YES|
 twitch_clips_upload_queue|title|text|YES|
+twitch_clips_upload_queue|youtube_visibility|text|YES|
 twitch_community_announcements|broadcaster_id|text|NO|
 twitch_community_announcements|revision|bigint|NO|0
 twitch_community_announcements|settings|jsonb|NO|

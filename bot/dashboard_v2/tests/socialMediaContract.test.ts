@@ -43,6 +43,8 @@ import {
   FEHLER_TEXTE,
   FELD_FEHLER,
   fehlerText,
+  uploadWaitText,
+  UPLOAD_WAIT_TEXTE,
   KATEGORIE_LABELS,
   plattformnamenLesbar,
   REPORT_KIND_LABELS,
@@ -112,6 +114,7 @@ const TABELLEN: Record<string, string[]> = {
   REPORT_KIND_LABELS: Object.values(REPORT_KIND_LABELS),
   FELD_FEHLER: Object.values(FELD_FEHLER),
   FEHLER_TEXTE: Object.values(FEHLER_TEXTE),
+  UPLOAD_WAIT_TEXTE: Object.values(UPLOAD_WAIT_TEXTE),
 };
 
 test('jeder Schluessel der Oberflaeche hat eine englische Fassung', () => {
@@ -132,6 +135,26 @@ test('jeder Schluessel der Oberflaeche hat eine englische Fassung', () => {
     [],
     `Ohne englischen Eintrag steht der deutsche Text im englischen Dashboard:\n${fehlend.join('\n')}`,
   );
+});
+
+test('Wartecodes und Altaufträge nutzen übersetzbare Vorlagen statt Servertext', () => {
+  for (const code of ['connection_missing', 'connection_incomplete', 'platform_unavailable']) {
+    const calls: Array<[string, Record<string, string | number> | undefined]> = [];
+    const result = uploadWaitText(code, 'youtube', (key, params) => {
+      calls.push([key, params]);
+      return translate('en', key, params);
+    });
+    assert.deepEqual(calls, [[UPLOAD_WAIT_TEXTE[code], { platform: 'YouTube' }]]);
+    assert.equal(result, translate('en', UPLOAD_WAIT_TEXTE[code], { platform: 'YouTube' }));
+    assert.notEqual(result, translate('de', UPLOAD_WAIT_TEXTE[code], { platform: 'YouTube' }));
+  }
+  for (const legacy of [null, undefined, 'YouTube nicht verbunden. Öffne Verbindungen im Social-Media-Dashboard und verbinde dein Konto.', 'Die Verbindung zu YouTube ist unvollständig. Öffne Verbindungen im Social-Media-Dashboard und verbinde dein Konto erneut.', 'unknown_wait_code']) {
+    assert.equal(
+      uploadWaitText(legacy, 'youtube', (key, params) => translate('en', key, params)),
+      translate('en', UPLOAD_WAIT_TEXTE.connection_required, { platform: 'YouTube' }),
+    );
+  }
+  assert.match(lies('src/pages/SocialMedia.tsx'), /uploadWaitText\(clip\.upload_errors\?\.\[platform\], platform, t\)/);
 });
 
 test('der Regex findet ueberhaupt Schluessel', () => {

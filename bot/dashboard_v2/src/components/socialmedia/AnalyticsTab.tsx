@@ -44,6 +44,7 @@ interface AnalyticsTabProps {
   streamer: string;
   twitchUserId?: string;
   /** Die Report-Knoepfe sind admin-only; ein Partner bekaeme nur 403. */
+  statisticsPlatforms: string[];
   isAdmin: boolean;
 }
 
@@ -70,17 +71,15 @@ function normalizeChartRows(items: ClipAnalytics[]) {
     const byPlatform = Object.fromEntries(current.map((item) => [item.platform, item]));
     return {
       bucket,
-      youtube_views: byPlatform.youtube?.views ?? 0,
-      tiktok_views: byPlatform.tiktok?.views ?? 0,
-      instagram_views: byPlatform.instagram?.views ?? 0,
+      youtube_views: byPlatform.youtube?.views ?? null,
+      instagram_views: byPlatform.instagram?.views ?? null,
       youtube_er: byPlatform.youtube?.engagement_rate ?? null,
-      tiktok_er: byPlatform.tiktok?.engagement_rate ?? null,
       instagram_er: byPlatform.instagram?.engagement_rate ?? null,
     };
   });
 }
 
-export function AnalyticsTab({ streamer, twitchUserId, isAdmin }: AnalyticsTabProps) {
+export function AnalyticsTab({ streamer, twitchUserId, isAdmin, statisticsPlatforms }: AnalyticsTabProps) {
   const queryClient = useQueryClient();
   const { t, locale } = useLanguage();
   const [selectedClipId, setSelectedClipId] = useState<number | null>(null);
@@ -113,10 +112,10 @@ export function AnalyticsTab({ streamer, twitchUserId, isAdmin }: AnalyticsTabPr
     const items = publishedQueries.flatMap((abfrage) => abfrage.data?.items ?? []);
     return items.filter(
       (clip) =>
-        clip.platform_status.youtube || clip.platform_status.tiktok || clip.platform_status.instagram,
+        ['youtube', 'instagram'].some((platform) => statisticsPlatforms.includes(platform) && clip.platform_status[platform as 'youtube' | 'instagram']),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [publishedStand]);
+  }, [publishedStand, statisticsPlatforms]);
 
   useEffect(() => {
     if (!eligibleClips.length) {
@@ -203,6 +202,7 @@ export function AnalyticsTab({ streamer, twitchUserId, isAdmin }: AnalyticsTabPr
             </div>
           </div>
 
+          <p className="text-sm text-text-secondary">{t('TikTok-Statistiken sind in dieser Beta nicht verfügbar.')}</p>
           {publishedLoading ? (
             <div className="h-[320px] flex items-center justify-center">
               <Loader2 className="w-5 h-5 text-orange animate-spin" />
@@ -236,8 +236,7 @@ export function AnalyticsTab({ streamer, twitchUserId, isAdmin }: AnalyticsTabPr
                       />
                       <Legend />
                       <Bar dataKey="youtube_views" name="YouTube" fill="#C5A059" radius={[8, 8, 0, 0]} />
-                      <Bar dataKey="tiktok_views" name="TikTok" fill="#00D9FF" radius={[8, 8, 0, 0]} />
-                      <Bar dataKey="instagram_views" name="Instagram" fill="#FF5A3C" radius={[8, 8, 0, 0]} />
+                      {statisticsPlatforms.includes('instagram') && <Bar dataKey="instagram_views" name="Instagram" fill="#FF5A3C" radius={[8, 8, 0, 0]} />}
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -259,8 +258,7 @@ export function AnalyticsTab({ streamer, twitchUserId, isAdmin }: AnalyticsTabPr
                       />
                       <Legend />
                       <Line type="monotone" dataKey="youtube_er" name="YouTube" stroke="#C5A059" strokeWidth={2.5} dot={{ r: 4 }} />
-                      <Line type="monotone" dataKey="tiktok_er" name="TikTok" stroke="#00D9FF" strokeWidth={2.5} dot={{ r: 4 }} />
-                      <Line type="monotone" dataKey="instagram_er" name="Instagram" stroke="#FF5A3C" strokeWidth={2.5} dot={{ r: 4 }} />
+                      {statisticsPlatforms.includes('instagram') && <Line type="monotone" dataKey="instagram_er" name="Instagram" stroke="#FF5A3C" strokeWidth={2.5} dot={{ r: 4 }} />}
                     </LineChart>
                   </ResponsiveContainer>
                 </div>

@@ -116,12 +116,15 @@ const makeClips = (streamer) =>
     duration_seconds: 34,
     view_count: 2800,
     game_name: 'Deadlock',
-    status: i < 3 ? 'awaiting_approval' : i === 3 ? 'failed' : i === 104 ? 'approved' : 'pending',
+    status: i < 3 ? 'awaiting_approval' : i === 3 ? 'failed' : i === 4 || i === 104 ? 'approved' : 'pending',
     source_kind: 'twitch',
     upload_local_path: null,
     retention_until: '2026-10-01T12:00:00Z',
     discarded_at: null,
-    platform_status: { youtube: false, tiktok: false, instagram: false },
+    platform_status: { youtube: i === 5, tiktok: false, instagram: false },
+    youtube_visibility: i === 5 ? 'private' : null,
+    upload_states: i === 4 ? { youtube: 'waiting_connection' } : {},
+    upload_errors: i === 4 ? { youtube: 'YouTube nicht verbunden. Öffne Verbindungen im Social-Media-Dashboard und verbinde dein Konto.' } : {},
     effective_layout: layout,
     layout_override: null,
     approval: {
@@ -253,9 +256,16 @@ test(
         return json({
           platforms: platforms.map((platform) => ({
             platform,
+            capabilities: {
+              upload: platform !== 'instagram',
+              statistics: platform === 'youtube',
+              upload_mode: platform === 'tiktok' ? 'inbox' : 'upload',
+              reason: platform === 'instagram' ? 'Instagram ist in dieser Beta noch nicht verfügbar.' : null,
+            },
             connected: platform !== 'instagram',
+            uses_global_fallback: platform === 'tiktok',
             username: streamer,
-            expired: false,
+            expired: platform === 'youtube',
           })),
         });
       if (/\/approval\/\d+\/decision$/.test(p)) {
@@ -376,6 +386,65 @@ test(
     await page.goto(base + '/social-media-admin?streamer=earlysalty&twitch_user_id=11');
     await page.locator('.studio-clip').first().waitFor();
     const tab = (name) => page.getByRole('tab', { name, exact: true });
+    await fs.mkdir(evidence, { recursive: true });
+    await t.test('Go-live: Wartezustand und verfügbare Kontoverbindungen', async () => {
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({ width, height: 1080 });
+        await page.locator('.studio-clip').nth(4).scrollIntoViewIfNeeded();
+        await page.screenshot({ path: path.join(evidence, `upload-wait-${width}.png`) });
+        const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        assert.equal(overflow, 0);
+      }
+      await page.setViewportSize({ width: 1440, height: 1080 });
+      await page.locator('.studio-clip').nth(4).getByRole('status').getByRole('button').click();
+      assert.equal(await tab('Konten & Einstellungen').getAttribute('aria-selected'), 'true');
+      assert.equal(await page.locator('a[href*="/oauth/start/instagram"]').count(), 0);
+      const ownAccount = page.locator('a[href*="/oauth/start/youtube"]');
+      assert.equal(await ownAccount.count(), 1);
+      assert.equal(await ownAccount.locator('..').getByRole('button').count(), 1);
+      const sharedAccount = page.locator('a[href*="/oauth/start/tiktok"]');
+      assert.equal(await sharedAccount.count(), 1);
+      assert.equal(await sharedAccount.locator('..').getByRole('button').count(), 0);
+      await page.locator('a[href*="/oauth/start/tiktok"]').scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(evidence, 'upload-connections-1440.png') });
+      await page.setViewportSize({ width: 390, height: 1080 });
+      await page.locator('a[href*="/oauth/start/tiktok"]').scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(evidence, 'upload-connections-390.png') });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), 0);
+      await page.setViewportSize({ width: 1440, height: 1080 });
+      await tab('Pipeline').click();
+    });
+    await t.test('Wartezustände bleiben im englischen Dashboard lesbar', async () => {
+      const legacy = clips.earlysalty[4].upload_errors.youtube;
+      const states = [];
+      await page.evaluate(() => localStorage.setItem('dashboard.language', 'en'));
+      for (const reason of ['connection_missing', 'connection_incomplete', legacy]) {
+        clips.earlysalty[4].upload_errors.youtube = reason;
+        await page.reload();
+        const waiting = page.locator('.studio-clip').nth(4).getByRole('status');
+        await waiting.getByRole('button').waitFor();
+        await page.evaluate(() => document.fonts.ready);
+        const text = await waiting.locator('p').innerText();
+        assert.notEqual(text, reason);
+        assert.ok(text.includes('YouTube'));
+        assert.equal(await waiting.getByRole('button').count(), 1);
+        for (const width of [1440, 390]) {
+          await page.setViewportSize({ width, height: 1080 });
+          await waiting.scrollIntoViewIfNeeded();
+          const geometry = await page.evaluate(() => ({ width: document.documentElement.clientWidth, doc: document.documentElement.scrollWidth }));
+          assert.ok(geometry.doc <= geometry.width);
+          const kind = reason === legacy ? 'legacy' : reason;
+          await page.screenshot({ path: path.join(evidence, `upload-wait-en-${kind}-${width}.png`) });
+          states.push({ kind, width, text, ...geometry });
+        }
+      }
+      await fs.writeFile(path.join(evidence, 'waiting-i18n-dom.json'), JSON.stringify(states, null, 2));
+      clips.earlysalty[4].upload_errors.youtube = legacy;
+      await page.evaluate(() => localStorage.setItem('dashboard.language', 'de'));
+      await page.setViewportSize({ width: 1440, height: 1080 });
+      await page.reload();
+      await page.locator('.studio-clip').first().waitFor();
+    });
     await t.test(
       'vollständige Kennzahlen und gemeinsame Kopfzeile ohne eigenen Logo-Block',
       async () => {
