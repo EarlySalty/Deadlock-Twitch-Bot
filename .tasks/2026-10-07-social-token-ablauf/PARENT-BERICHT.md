@@ -1,17 +1,17 @@
-# Übergabe an den Haupt-Orchestrator
+# Übergabe nach dem ersten inhaltlichen Gate-Urteil
 
-ABWEICHUNG: Der Bauauftrag ist implementiert und geprüft, der Abschluss bleibt wegen des lokalen Merge-Gates offen. Zwei Aufrufe enden mit Exit 2, weil `bwrap` und `unshare` keine Namespace-Prüfumgebung anlegen können: `Cannot allocate memory`. Es gibt kein ALLOW und keinen inhaltlichen BLOCK. Die Schutz-Hooks wurden nicht geändert.
+**BLOCK, Modell `gpt-6.1-sol`, Exit 1.** Host-Prüfumgebung durch den Orchestrator wiederhergestellt. Fetch und Rebase auf aktuelles `origin/main` waren erfolgreich, ohne Änderungen am Branch. Das Gate prüfte `a062d624` und fand einen bestätigten Fehler: TikTok-/YouTube-Zugänge ohne Refresh-Möglichkeit werden im Ablauf-Sweep übersehen und erhalten keine DM. Das Dashboard kann sie bereits als abgelaufen melden.
 
-Codecommit: `0ee53ca2`, Branch `fix/social-token-ablauf`, Worktree `/home/nathanael/.worktrees/tb-social-token-ablauf`. Weiterarbeit erfolgt an diesen Artefakten. Der schmutzige Haupt-Checkout blieb unangetastet; keine zusätzlichen Threads.
+Ein frischer Fixer aus der Pyramide muss den Befund und seine Zwillinge in Statusberechnung und Datumsanzeige beheben. Der ursprüngliche Blatt-Worker startet keine weiteren Threads und schreibt keinen eigenen Folgefix. Briefing: `BRIEFING-FIXER.md`. Urteil und historische Hostausfälle: `REVIEW.md`.
 
-TikTok-Verbindungsfrist, dauerhafter Neu-Verbinden-Zustand, strukturierte Anbieterfehler, ID-gebundene und entprellte Discord-DM sowie Dashboard/API/i18n und SQLx-Metadaten sind umgesetzt. Die vorhandene Verschlüsselung und der Discord-DM-Port bleiben erhalten. Die gespeicherte Nachricht bleibt pro Vorfall gleich, auch bei Eskalation. Eine negative Broker-Antwort wird nicht als Erfolg behandelt.
+Codecommit `0ee53ca2`, Branch `fix/social-token-ablauf`, Worktree `/home/nathanael/.worktrees/tb-social-token-ablauf`. Quellen und Nachweise sind erhalten. Der schmutzige Haupt-Checkout blieb unangetastet. Die nicht blockierende Instagram-Anmerkung zum 30-Tage-Hinweis wird im Briefing gegen die verbindliche Nutzerspezifikation eingeordnet.
 
-Prüfung: 351 Social-/DB-Tests, 2 Bot-DM-Tests und 26 Frontend-Tests bestanden. API-Nachlauf: 1309 bestanden, dieselben 22 Fehler wie vor dem Fix, keine neuen. Clippy und drei Frontend-Builds erfolgreich. Formatprüfung der geänderten Rust-Dateien bestanden; Workspace-Formatprüfung hat Abweichungen in 148 nicht geänderten Dateien. Die neue Anzeige wurde im gebauten Dashboard-Artefakt belegt, noch nicht in Produktion.
+Bisherige Prüfungen: 351 Social-/DB-Tests, 2 Bot-DM-Tests und 26 Frontend-Tests bestanden. API-Nachlauf: 1309 bestanden, dieselben 22 Fehler wie vor dem Fix, keine neuen. Der vom Gate gefundene Fall ist damit noch nicht belegt. Clippy und drei Frontend-Builds erfolgreich. Formatprüfung der geänderten Rust-Dateien bestanden; Workspace-Formatprüfung hat Abweichungen in 148 nicht geänderten Dateien.
 
-Nachweise: `EVIDENCE.md`, `REVIEW.md`, `CONTRACT.md`. Die Wiederaufnahme einschließlich manueller Produktionsmigration, Release-Verifikation, Live-Beweis und Cleanup steht in `TODO.md`. Produktionsmigration, Merge, Deploy und Neustart wurden nicht ausgeführt. Ein echter Zugang wurde nicht für eine DM-Probe entwertet. Branch, Worktree und die eigene Test-DB bleiben erhalten. Der Thread wird nicht als fertig gesettelt.
+Merge, Produktionsmigration, Deploy, Neustart und Live-Abnahme stehen aus. Ein echter Zugang wurde nicht als DM-Probe entwertet. Branch und Worktree bleiben für den frischen Fixer erhalten. Der Thread wird nicht als fertig gesettelt. Nach ALLOW gilt der ursprüngliche Abschluss aus `TODO.md`, einschließlich eigener Testcontainer, Branch- und Worktree-Cleanup.
 
 TESTNACHWEIS[TW-1]: 1688 passed, 0 ignored | Baseline: 22 rot
 TEXTNACHWEIS[DR-1]: Gedankenstriche 0 | ae/oe/ue/ss-Ersatz 0 | Absolutwörter 0 belegt | Senke: Dashboard und Social-Media-DM
-WIRKUNGSPRUEFUNG[WP-1]: 0 offene Befunde | Zwillingssuche: grep-belegt | Fremddienst-Pfade: 7/7 geprüft
+WIRKUNGSPRUEFUNG[WP-1]: 1 Befund | Zwillingssuche: grep-belegt | Fremddienst-Pfade: 7/7 geprüft
 
-Kein LIVEBEWEIS: Produktion ist unverändert. Nächste Aktion für die Bereichsführung: `REVIEW.md` öffnen und den Hostfehler der Prüfumgebung beheben lassen, ohne den Gate zu umgehen.
+Kein LIVEBEWEIS: Produktion ist unverändert. Nächste Aktion für den Haupt-Orchestrator: `BRIEFING-FIXER.md` einem frischen Fixer zuweisen.

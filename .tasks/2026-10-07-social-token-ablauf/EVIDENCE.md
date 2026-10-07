@@ -2,7 +2,7 @@
 
 ## Stand am 7. Oktober 2026
 
-Implementierung im eigenen Worktree. Der lokale Merge-Gate ist nach zwei technischen Fehlschlägen ohne Urteil blockiert. Merge, Produktionsmigration und Live-Prüfung stehen aus. Produktionszugänge wurden nicht für eine Probe verändert. Es wurden keine weiteren Worker gestartet.
+Implementierung im eigenen Worktree. Nach Host-Reparatur und unverändertem Rebase hat der lokale Merge-Gate ein inhaltliches BLOCK gefällt: Verbindungen ohne Refresh-Möglichkeit erzeugen noch keinen Ablaufvorfall. Der bestätigte Befund und das Modell `gpt-6.1-sol` stehen in `REVIEW.md`; ein frischer Fixer ist erforderlich. Die folgenden Testzahlen bleiben gültig, decken diesen Fall aber noch nicht ab. Merge, Produktionsmigration und Live-Prüfung stehen aus. Produktionszugänge wurden nicht für eine Probe verändert. Es wurden keine weiteren Worker gestartet.
 
 ## Abgeschlossene Prüfungen
 
@@ -92,7 +92,7 @@ uplink_config::tests::migration_environment_probe_options_rejected
 
 TESTNACHWEIS[TW-1]: 1688 passed, 0 ignored | Baseline: 22 rot
 TEXTNACHWEIS[DR-1]: Gedankenstriche 0 | ae/oe/ue/ss-Ersatz 0 | Absolutwörter 0 belegt | Senke: Dashboard und Social-Media-DM
-WIRKUNGSPRUEFUNG[WP-1]: 0 offene Befunde | Zwillingssuche: grep-belegt | Fremddienst-Pfade: 7/7 geprüft
+WIRKUNGSPRUEFUNG[WP-1]: 1 Befund | Zwillingssuche: grep-belegt | Fremddienst-Pfade: 7/7 geprüft
 
 Die Testsumme umfasst den abgeschlossenen Rust-Lauf, den Bot-DM-Adapter, die beiden Frontend-Dateien und den API-Nachlauf. Die vollständige API-Suite ist wegen der unveränderten 22 Baseline-Fehler weiterhin rot. Die technische Fremddienstprüfung ist keine Behauptung über einen erfolgreichen Produktionsversand.
 
