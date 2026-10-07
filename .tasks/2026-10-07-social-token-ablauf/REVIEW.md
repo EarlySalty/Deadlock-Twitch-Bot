@@ -4,7 +4,7 @@
 
 Der bestätigte zweite Blocking-Fund ist umgesetzt: SQL-Fehler im Metadata-Leser und seinem vorgeschalteten Credential-Leser werden bis zur vorhandenen API-Fehlerantwort weitergegeben. Ein erfolgreicher leerer Lesezugriff bleibt von einem SQL-Fehler unterscheidbar. Der vorherige Ablauf-Fix und die Migration bleiben erhalten. PostgreSQL-Proben prüfen alle drei Plattformen und die beiden SQL-Fehlerstellen. Die neue Bildprobe `metadata-read-error.png` zeigt den bereits vorhandenen unbekannten Zustand ohne Verbinden- oder Trennaktionen; die vier Ablaufproben sind erneut geprüft. Details stehen oben in `EVIDENCE.md`.
 
-Die nächste unveränderte Runde von `gate_hook.py --review` steht aus; das Modell muss `gpt-6.1-sol` bleiben. Ein weiterer BLOCK geht an einen neuen Fixer durch den Haupt-Orchestrator. Dieser Blatt-Fixer startet keinen zusätzlichen Worker oder Review-Thread. Kein Merge, keine Produktionsmigration und kein Deploy vor ALLOW.
+Die nächste unveränderte Runde von `gate_hook.py --review` steht aus; das Modell muss `gpt-6.1-sol` bleiben. Gemäß neuer Nutzerregel vom 7. Oktober 2026 (`claude-config` main `60137bf`, Ablauf Schritt 7) fährt diese Session weitere BLOCK-Runden autonom mit jeweils einem frischen nativen Fixer-Subagenten. Kein neuer T3-Fixer oder alternativer Review-Thread. Nach spätestens fünf erfolglosen Runden wird ein echter Blocker gemeldet. Kein Merge, keine Produktionsmigration und kein Deploy vor ALLOW.
 
 ## Zweites Codeurteil nach dem Ablauf-Fix
 

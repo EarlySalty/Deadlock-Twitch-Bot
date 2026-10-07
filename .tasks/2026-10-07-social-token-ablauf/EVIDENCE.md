@@ -9,9 +9,11 @@ Die PostgreSQL-Regressionen entfernen gezielt die Metadata-Spalte `refresh_expir
 | Prüfung | Ergebnis |
 | --- | --- |
 | Social-Media- und DB-Suites | 357 passed, 0 failed, 0 ignored, 0 filtered, Exit 0 |
-| Vollständige API-Suite | Läuft mit beiden Test-DSNs und den Pflichtflags; Endergebnis noch offen |
-| Bot-Adapter mit PostgreSQL und lokalem Broker | Läuft; Endergebnis noch offen |
-| Clippy, dieselben vier Pakete, alle Targets | Läuft; Endergebnis noch offen |
+| Vollständige API-Suite | 1310 passed, 22 failed, 0 ignored, 0 filtered, Exit 101, Laufzeit 1011,28 Sekunden; identische Fehlerliste zur erhaltenen Baseline 1309/22, ein neuer bestandener API-Test |
+| Betroffene Social-Media-Handler in der Vollsuite | 54 passed, 0 failed; einschließlich gezielt fehlgeschlagenem Metadata-Lesezugriff |
+| Bot-Adapter mit PostgreSQL und lokalem Broker | 2 passed, 0 failed, 0 ignored, 322 filtered, Exit 0 |
+| Online-SQLx-Prüfung für tb-social-media, alle Targets | Exit 0 gegen dieselbe Wegwerf-DB |
+| Clippy, dieselben vier Pakete, alle Targets | Exit 0, Laufzeit 7 Minuten 20 Sekunden; vorhandene Warnungen bleiben |
 | Dashboard-Vertrag und i18n | 27 passed, 0 failed, 0 skipped, Exit 0 |
 | Formatprüfung der drei betroffenen Rust-Dateien | Exit 0 |
 | Workspace `cargo fmt --all --check` | Exit 1, dieselben 148 nicht geänderten Dateien; keine der drei betroffenen Dateien |
@@ -22,9 +24,11 @@ Neue Browserprobe: `metadata-read-error.png`. Die vier bisherigen Ablaufproben w
 
 Die Rust-Aufrufe entsprechen den unten erhaltenen Prüfzeilen mit `/home/nathanael/.cargo/bin/cargo --manifest-path rust/Cargo.toml`, `SQLX_OFFLINE=true`, beiden DSNs für `tb_social_token_ablauf` auf Port 33045, `-j 2`, `--include-ignored --test-threads=1`. Neue Logs beginnen mit `status-fixer-`. Die DB-Verfügbarkeit wurde vor dem Start mit `SELECT current_database(), current_user` geprüft. Migration und `PROD-MIGRATION.sql` sind bytegleich zum übernommenen Stand. SHA384 der Migration: `8b50646d1227c0276ea13fe20bd6315d9703aaf20b35b268daaad9424b646b6e82981ef65f70f861099aac9032e13ca0`.
 
-Die nächste Gate-Runde muss unverändert mit `gpt-6.1-sol` urteilen. Kein ALLOW, Merge, Produktionsmigration oder Deploy in diesem Status. Der abweichende Remote-Feature-Branch wird nicht überschrieben; Sicherung erfolgt auf `fix/social-token-ablauf-r2`.
+Die nächste Gate-Runde muss unverändert mit `gpt-6.1-sol` urteilen. Die neue Nutzerregel vom 7. Oktober 2026 (`claude-config` main `60137bf`, Ablauf Schritt 7) wird angewendet: Bei einem weiteren BLOCK fährt diese Session die Fixschleife mit je einem frischen nativen Subagenten und demselben Gate-Modell selbst, ohne neuen T3-Thread. Nach spätestens fünf erfolglosen Runden wird ein echter Blocker gemeldet. Kein ALLOW, Merge, Produktionsmigration oder Deploy in diesem Status. Der abweichende Remote-Feature-Branch wird nicht überschrieben; Fix `c11ea51e` ist auf `fix/social-token-ablauf-r2` gesichert.
 
+TESTNACHWEIS[TW-1]: 1696 passed, 0 ignored | Baseline: 22 rot
 WIRKUNGSPRUEFUNG[WP-1]: 1 Befund behoben | Zwillingssuche: grep-belegt | Fremddienst-Pfade: 1/1 geprüft
+TEXTNACHWEIS[DR-1]: Gedankenstriche 0 | ae/oe/ue/ss-Ersatz 0 | Absolutwörter 0 belegt | Senke: technische Nachweise und Commit
 
 ## Folgefix nach dem ersten Code-BLOCK
 
