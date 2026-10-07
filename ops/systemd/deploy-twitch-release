@@ -6,6 +6,7 @@ export PATH
 usage() {
   cat >&2 <<'EOF'
 Aufruf:
+  deploy-twitch-release --pruefen
   deploy-twitch-release <40-stelliger-git-sha> [quell-checkout]
   deploy-twitch-release <40-stelliger-git-sha> [quell-checkout] --restart <dienst> [--restart <dienst> ...]
 
@@ -22,10 +23,97 @@ Erlaubte Restart-Ziele:
 EOF
 }
 
-# Hebt sich bei Bedarf genau einmal per sudo nach root. So braucht die
-# codex-mcp-Allowlist nur diesen einen Befehl statt generisches sudo.
+pruefen() {
+  local current=/opt/deadlock/twitch/current
+  local current_target="" current_sha="" result=0
+  local unit properties key value pid state restarts exe deleted release_sha observed
+  local -a units=(
+    deadlock-twitch-bot-rust
+    deadlock-twitch-dashboard-rust
+    deadlock-twitch-stream-coaching-watch
+    tb-category-collector
+  )
+
+  if ! current_target=$(readlink -e -- "$current"); then
+    printf 'FEHLER: current ist nicht auflösbar.\n' >&2
+    result=1
+  elif [[ "$current_target" =~ ^/opt/deadlock/twitch/releases/([0-9a-f]{40})$ ]]; then
+    current_sha="${BASH_REMATCH[1]}"
+  else
+    printf 'FEHLER: current hat keinen eindeutigen Release-SHA: %s\n' "$current_target" >&2
+    result=1
+  fi
+  printf 'current=%s Release-SHA=%s\n' "${current_target:-unbekannt}" "${current_sha:-unbekannt}"
+
+  for unit in "${units[@]}"; do
+    pid="" state="" restarts="" exe="" deleted=nein release_sha=""
+    if properties=$(systemctl show "$unit.service" --property=MainPID,NRestarts,ActiveState); then
+      while IFS='=' read -r key value; do
+        case "$key" in
+          MainPID) pid="$value" ;;
+          NRestarts) restarts="$value" ;;
+          ActiveState) state="$value" ;;
+        esac
+      done <<< "$properties"
+    else
+      printf 'FEHLER: %s: systemctl show fehlgeschlagen.\n' "$unit" >&2
+      result=1
+    fi
+    if [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then
+      if ! exe=$(readlink -- "/proc/$pid/exe"); then
+        printf 'FEHLER: %s: exe für PID %s nicht lesbar.\n' "$unit" "$pid" >&2
+        result=1
+      fi
+    else
+      printf 'FEHLER: %s: kein laufender MainPID.\n' "$unit" >&2
+      result=1
+    fi
+    if [[ "$exe" == *' (deleted)' ]]; then
+      deleted=ja
+      printf 'FEHLER: %s: exe ist (deleted).\n' "$unit" >&2
+      result=1
+    fi
+    if [[ "$exe" =~ ^/opt/deadlock/twitch/releases/([0-9a-f]{40})/ ]]; then
+      release_sha="${BASH_REMATCH[1]}"
+    else
+      printf 'FEHLER: %s: exe liegt nicht in einem SHA-Release.\n' "$unit" >&2
+      result=1
+    fi
+    if [[ -z "$current_sha" || "$release_sha" != "$current_sha" ]]; then
+      printf 'FEHLER: %s: Release-SHA stimmt nicht mit current überein.\n' "$unit" >&2
+      result=1
+    fi
+    if [[ "$state" != active || ! "$restarts" =~ ^[0-9]+$ ]]; then
+      printf 'FEHLER: %s: ActiveState oder NRestarts ungültig.\n' "$unit" >&2
+      result=1
+    fi
+    if ! observed=$(systemctl show "$unit.service" --property=MainPID,NRestarts,ActiveState) ||
+       [[ "$observed" != "$properties" ]]; then
+      printf 'FEHLER: %s: Prozesszustand hat sich während der Prüfung geändert.\n' "$unit" >&2
+      result=1
+    fi
+    printf 'Unit=%s MainPID=%s exe=%s deleted=%s Release-SHA=%s NRestarts=%s ActiveState=%s\n' \
+      "$unit" "${pid:-unbekannt}" "${exe:-unbekannt}" "$deleted" "${release_sha:-unbekannt}" \
+      "${restarts:-unbekannt}" "${state:-unbekannt}"
+  done
+  if ! observed=$(readlink -e -- "$current") || [[ "$observed" != "$current_target" ]]; then
+    printf 'FEHLER: current hat sich während der Prüfung geändert.\n' >&2
+    result=1
+  fi
+  return "$result"
+}
+
 if [[ $EUID -ne 0 ]]; then
   exec sudo -n /usr/local/bin/deploy-twitch-release "$@"
+fi
+
+if [[ "${1:-}" == --pruefen ]]; then
+  if [[ $# -ne 1 ]]; then
+    usage
+    exit 1
+  fi
+  pruefen
+  exit $?
 fi
 
 if [[ $# -eq 1 && "$1" == --brain-inspect ]]; then
