@@ -1,0 +1,302 @@
+{
+  "asOf": "2026-10-07T22:24:13.078Z",
+  "browser": "moli 1.1.14 --layout --image --font",
+  "synthetic": true,
+  "command": "node /home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/prove.mjs",
+  "componentPath": "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/bot/dashboard_v2/src/components/socialmedia/TikTokPostDialog.tsx",
+  "componentSha256Start": "4c79cd2adc7269577d7b71df02818faac1eae74eebda119f078267e85a28ec46",
+  "limitations": [
+    "Nur synthetische API-Antworten, kein echter Renderlauf oder TikTok-Aufruf.",
+    "Keine Zustimmung und keine Veröffentlichung ausgeführt.",
+    "Keine Videodatei geliefert, Medienwiedergabe nicht nachgewiesen.",
+    "Moli-Layout ist kein Chrome-, Firefox- oder Safari-Kompatibilitätsnachweis.",
+    "Beobachteter Polling-Lauf mit echten Zeitabständen, keine Suite oder Baseline-Bewertung."
+  ],
+  "cases": [
+    {
+      "name": "missing requests preview exactly once, creator blocked",
+      "success": true,
+      "details": {
+        "state": "pending",
+        "requests": [
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": null
+          },
+          {
+            "method": "POST",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": null
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": "pending"
+          }
+        ],
+        "confirmations": 0,
+        "statusGets": 2,
+        "renderPosts": 1,
+        "creatorGets": 0,
+        "dialogOpen": true,
+        "text": "TikTok-VeröffentlichungDie Videovorschau ist angefordert und wird gleich erstellt.",
+        "options": [],
+        "selectedPrivacy": null,
+        "checkboxes": [],
+        "submitDisabled": null
+      }
+    },
+    {
+      "name": "rendering polls without another preview request",
+      "success": true,
+      "details": {
+        "state": "rendering",
+        "requests": [
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": null
+          },
+          {
+            "method": "POST",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": null
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": "pending"
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": "rendering"
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": "rendering"
+          }
+        ],
+        "confirmations": 0,
+        "statusGets": 4,
+        "renderPosts": 1,
+        "creatorGets": 0,
+        "dialogOpen": true,
+        "text": "TikTok-VeröffentlichungDie Videovorschau wird erstellt. Du kannst dieses Fenster schließen und später wieder öffnen.",
+        "options": [],
+        "selectedPrivacy": null,
+        "checkboxes": [],
+        "submitDisabled": null
+      }
+    },
+    {
+      "name": "ready exposes creator choices with no preselected privacy or consent",
+      "success": true,
+      "details": {
+        "state": "ready",
+        "requests": [
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": null
+          },
+          {
+            "method": "POST",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": null
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": "pending"
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": "rendering"
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": "rendering"
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": "ready"
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/clips/999001/tiktok/creator-info",
+            "state": "ready"
+          }
+        ],
+        "confirmations": 0,
+        "statusGets": 5,
+        "renderPosts": 1,
+        "creatorGets": 1,
+        "dialogOpen": true,
+        "text": "TikTok-VeröffentlichungVeröffentlichung auf Isoliertes Testkonto (@fixture_only)24 Sekunden, für dieses Konto höchstens 60 Sekunden.Beschreibung für TikTokSynthetischer Clip für den isolierten Vorschaunachweis54/2200Wer darf den Clip sehen?Sichtbarkeit wählenAlleNur ichInteraktionen erlaubenKommentareDuettBei TikTok ausgeschaltetStitchWerbung kennzeichnenDieser Clip enthält WerbungKennzeichne Inhalte, die deine eigene Marke oder Produkte und Leistungen anderer Unternehmen bewerben.Mit der Veröffentlichung stimmst du TikToks Bestätigung zur Musiknutzung zu.Der Clip wird zum geplanten Termin direkt veröffentlicht. TikTok kann danach einige Minuten für die Verarbeitung benötigen. Den Stand siehst du an der Clipkarte.AbbrechenClip mit TikTok einplanen",
+        "options": [
+          {
+            "value": "",
+            "text": "Sichtbarkeit wählen"
+          },
+          {
+            "value": "PUBLIC_TO_EVERYONE",
+            "text": "Alle"
+          },
+          {
+            "value": "SELF_ONLY",
+            "text": "Nur ich"
+          }
+        ],
+        "selectedPrivacy": "",
+        "checkboxes": [
+          {
+            "checked": false,
+            "disabled": false
+          },
+          {
+            "checked": false,
+            "disabled": true
+          },
+          {
+            "checked": false,
+            "disabled": false
+          },
+          {
+            "checked": false,
+            "disabled": false
+          },
+          {
+            "checked": false,
+            "disabled": false
+          }
+        ],
+        "submitDisabled": true
+      }
+    },
+    {
+      "name": "error retry performs new render request",
+      "success": true,
+      "details": {
+        "retry": {
+          "text": "Vorschau erneut erstellen",
+          "disabled": false
+        },
+        "summary": {
+          "state": "pending",
+          "requests": [
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "error"
+            },
+            {
+              "method": "POST",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "error"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "pending"
+            }
+          ],
+          "confirmations": 0,
+          "statusGets": 2,
+          "renderPosts": 1,
+          "creatorGets": 0,
+          "dialogOpen": true,
+          "text": "TikTok-VeröffentlichungDie Videovorschau ist angefordert und wird gleich erstellt.",
+          "options": [],
+          "selectedPrivacy": null,
+          "checkboxes": [],
+          "submitDisabled": null
+        }
+      }
+    },
+    {
+      "name": "closing stops polling across two intervals",
+      "success": true,
+      "details": {
+        "closed": {
+          "state": "rendering",
+          "requests": [
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "error"
+            },
+            {
+              "method": "POST",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "error"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "pending"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "rendering"
+            }
+          ],
+          "confirmations": 0,
+          "statusGets": 3,
+          "renderPosts": 1,
+          "creatorGets": 0,
+          "dialogOpen": false,
+          "text": null,
+          "options": [],
+          "selectedPrivacy": null,
+          "checkboxes": [],
+          "submitDisabled": null
+        },
+        "later": {
+          "state": "rendering",
+          "requests": [
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "error"
+            },
+            {
+              "method": "POST",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "error"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "pending"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "rendering"
+            }
+          ],
+          "confirmations": 0,
+          "statusGets": 3,
+          "renderPosts": 1,
+          "creatorGets": 0,
+          "dialogOpen": false,
+          "text": null,
+          "options": [],
+          "selectedPrivacy": null,
+          "checkboxes": [],
+          "submitDisabled": null
+        }
+      }
+    }
+  ],
+  "componentSha256End": "4c79cd2adc7269577d7b71df02818faac1eae74eebda119f078267e85a28ec46",
+  "componentUnchangedDuringRun": true,
+  "exitCode": 0
+}

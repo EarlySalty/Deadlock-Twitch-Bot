@@ -1045,6 +1045,15 @@ impl UploadWorker {
                         }
                         None
                     }
+                    Err(UploadError::Validation(_)) => {
+                        if let Err(error) =
+                            crate::clip_queue::wait_for_tiktok_approval(&self.task.pool, item.id)
+                                .await
+                        {
+                            tracing::warn!(queue_id = item.id, %error, "TikTok-Wartezustand konnte nicht gespeichert werden");
+                        }
+                        None
+                    }
                     Err(error) => {
                         self.task
                             .handle_upload_error(&item, &error, "tiktok_post_choice")
@@ -1884,9 +1893,18 @@ printf '%s\n' '{"streams":[{"codec_type":"video","width":1920,"height":1080,"dur
             worker.run_once().await;
             let result: (String, Option<String>, Option<String>) = sqlx::query_as("SELECT status, tiktok_publish_id, last_error FROM twitch_clips_upload_queue WHERE id = $1")
                 .bind(queue_id).fetch_one(&pool).await.unwrap();
-            assert_eq!(result.0, "failed");
+            assert!(matches!(
+                result.0.as_str(),
+                "pending" | "waiting_tiktok_approval"
+            ));
             assert!(result.1.is_none());
-            assert!(result.2.is_some());
+            let attempts: i32 =
+                sqlx::query_scalar("SELECT attempts FROM twitch_clips_upload_queue WHERE id = $1")
+                    .bind(queue_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(attempts, 0);
         }
     }
 

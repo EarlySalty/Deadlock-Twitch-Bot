@@ -2250,16 +2250,17 @@ function ClipCard({
   const status = STATUS_LABELS[clip.status] ?? STATUS_LABELS.pending;
   const canDecide = queueStage(clip) === 'review';
   const termine = PLATTFORMEN.flatMap((platform) =>
-    clip.scheduled_at?.[platform] && !clip.platform_status[platform] && !['inbox', 'inbox_pending'].includes(clip.upload_states?.[platform] ?? '')
+    clip.scheduled_at?.[platform] && !clip.platform_status[platform] && !['inbox', 'inbox_pending', 'waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.[platform] ?? '')
       ? [{ platform, zeit: clip.scheduled_at[platform] as string }]
       : [],
   );
   const waitingPlatforms = PLATTFORMEN.filter((platform) => clip.upload_states?.[platform] === 'waiting_connection');
-  const stoppbar = clip.status === 'approved' && (termine.length > 0 || waitingPlatforms.length > 0);
+  const stoppbar = clip.status === 'approved' && (termine.length > 0 || waitingPlatforms.length > 0
+    || ['waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.tiktok ?? ''));
   const terminal =
     clip.status === 'discarded' || clip.status === 'skipped' || Boolean(clip.discarded_at);
   const uploadFehler = PLATTFORMEN.flatMap((platform) =>
-    clip.upload_errors?.[platform] && clip.upload_states?.[platform] !== 'waiting_connection' ? [{ platform, text: clip.upload_errors[platform] }] : [],
+    clip.upload_errors?.[platform] && !['waiting_connection', 'waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.[platform] ?? '') ? [{ platform, text: clip.upload_errors[platform] }] : [],
   );
   const tiktokInbox = clip.upload_states?.tiktok === 'inbox';
   const tiktokPending = clip.upload_states?.tiktok === 'inbox_pending';
@@ -2443,6 +2444,11 @@ function ClipCard({
               {t('Die TikTok-Übertragung ist noch nicht bestätigt. Wir prüfen den Vorgang weiter; ein zweiter Upload bleibt gesperrt.')}
             </p>
           )}
+          {['waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.tiktok ?? '') && (
+            <p role="status" className="text-sm text-warning">
+              {clip.upload_errors?.tiktok}
+            </p>
+          )}
           {waitingPlatforms.length > 0 && (
             <div role="status" className="space-y-2 text-sm text-warning">
               {waitingPlatforms.map((platform) => (
@@ -2481,7 +2487,7 @@ function ClipCard({
                 <p key={platform}>
                   {PLATFORM_LABELS[platform]}: {platform === 'tiktok' && text?.includes('unaudited_client_can_only_post_to_private_accounts')
                     ? t('TikTok erlaubt für diese App derzeit nur „Nur ich“. Prüfe die TikTok-Freigabe und plane den Clip erneut ein.')
-                    : text}
+                    : text?.replace(/^validation failed:\s*/i, '')}
                 </p>
               ))}
             </div>
@@ -2529,10 +2535,14 @@ function ClipCard({
         <div className="studio-clip-actions">
           {!canDecide && !terminal && !clip.platform_status.tiktok
             && clip.approval?.approved_platforms.includes('tiktok')
-            && ['pending', 'failed'].includes(clip.upload_states?.tiktok ?? 'pending') && (
+            && ['pending', 'failed', 'waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.tiktok ?? 'pending') && (
             <button type="button" className="studio-button" disabled={approvalPending}
               onClick={() => onApprovalDecision('approve', clip.approval?.approved_platforms ?? ['tiktok'])}>
-              {t('TikTok-Freigabe prüfen')}
+              {clip.upload_states?.tiktok === 'waiting_schedule'
+                || (clip.upload_states?.tiktok === 'waiting_tiktok_approval'
+                  && (!clip.scheduled_at?.tiktok || Date.parse(clip.scheduled_at.tiktok) <= Date.now()))
+                ? t('TikTok erneut einplanen')
+                : t('TikTok-Freigabe prüfen')}
             </button>
           )}
           {canDecide ? (

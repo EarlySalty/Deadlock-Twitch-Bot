@@ -90,11 +90,32 @@ async fn duration(pool: &PgPool, clip_id: i64) -> Result<(String, f64, String), 
             "Bitte erstelle zuerst die Videovorschau für diesen Clip.",
         )
     })?;
-    if preview.status.as_deref() != Some(PREVIEW_READY) {
-        return Err(error(
-            StatusCode::BAD_REQUEST,
-            "Bitte warte, bis die Videovorschau fertig ist.",
-        ));
+    match preview.status.as_deref() {
+        Some(tb_social_media::preview::PREVIEW_PENDING) => {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "Die Videovorschau ist angefordert. Bitte warte, bis sie fertig ist.",
+            ));
+        }
+        Some(tb_social_media::preview::PREVIEW_RENDERING) => {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "Die Videovorschau wird gerade erstellt. Bitte warte, bis sie fertig ist.",
+            ));
+        }
+        Some(tb_social_media::preview::PREVIEW_ERROR) => {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "Die Videovorschau konnte nicht erstellt werden. Bitte fordere sie erneut an.",
+            ));
+        }
+        Some(PREVIEW_READY) => {}
+        _ => {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "Für diesen Clip fehlt eine gültige Videovorschau. Bitte erstelle sie erneut.",
+            ));
+        }
     }
     let path = preview.path.ok_or_else(|| {
         error(
@@ -271,8 +292,9 @@ pub(super) async fn persist_choice(
         .execute(&mut *tx)
         .await
         .map_err(|_| clip_load_failed())?;
-    sqlx::query("UPDATE twitch_clips_upload_queue SET tiktok_post_options = $1 WHERE clip_id = $2 AND platform = 'tiktok' AND status = 'pending' AND tiktok_publish_id IS NULL")
-        .bind(&options).bind(clip_id).execute(&mut *tx).await.map_err(|_| clip_load_failed())?;
+    tb_social_media::clip_queue::apply_tiktok_choice(&mut tx, clip_id, &options)
+        .await
+        .map_err(|_| clip_load_failed())?;
     tx.commit().await.map_err(|_| clip_load_failed())?;
     Ok(())
 }

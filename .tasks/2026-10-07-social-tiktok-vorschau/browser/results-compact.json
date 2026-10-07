@@ -1,0 +1,115 @@
+{
+  "asOf": "2026-10-07T22:24:13.078Z",
+  "command": "node /home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/prove.mjs",
+  "browser": "moli 1.1.14 --layout --image --font",
+  "componentPath": "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/bot/dashboard_v2/src/components/socialmedia/TikTokPostDialog.tsx",
+  "componentSha256": "4c79cd2adc7269577d7b71df02818faac1eae74eebda119f078267e85a28ec46",
+  "componentUnchangedDuringRun": true,
+  "exitCode": 0,
+  "passed": 5,
+  "failed": 0,
+  "ignored": 0,
+  "baseline": "nicht gemessen",
+  "limitations": [
+    "Nur synthetische API-Antworten, kein echter Renderlauf oder TikTok-Aufruf.",
+    "Keine Zustimmung und keine Veröffentlichung ausgeführt.",
+    "Keine Videodatei geliefert, Medienwiedergabe nicht nachgewiesen.",
+    "Moli-Layout ist kein Chrome-, Firefox- oder Safari-Kompatibilitätsnachweis.",
+    "Beobachteter Polling-Lauf mit echten Zeitabständen, keine Suite oder Baseline-Bewertung."
+  ],
+  "cases": [
+    {
+      "name": "missing requests preview exactly once, creator blocked",
+      "success": true,
+      "state": "pending",
+      "statusGets": 2,
+      "renderPosts": 1,
+      "creatorGets": 0,
+      "confirmations": 0,
+      "selectedPrivacy": null,
+      "submitDisabled": null,
+      "checkboxes": []
+    },
+    {
+      "name": "rendering polls without another preview request",
+      "success": true,
+      "state": "rendering",
+      "statusGets": 4,
+      "renderPosts": 1,
+      "creatorGets": 0,
+      "confirmations": 0,
+      "selectedPrivacy": null,
+      "submitDisabled": null,
+      "checkboxes": []
+    },
+    {
+      "name": "ready exposes creator choices with no preselected privacy or consent",
+      "success": true,
+      "state": "ready",
+      "statusGets": 5,
+      "renderPosts": 1,
+      "creatorGets": 1,
+      "confirmations": 0,
+      "selectedPrivacy": "",
+      "submitDisabled": true,
+      "checkboxes": [
+        {
+          "checked": false,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": true
+        },
+        {
+          "checked": false,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": false
+        }
+      ]
+    },
+    {
+      "name": "error retry performs new render request",
+      "success": true,
+      "state": "pending",
+      "statusGets": 2,
+      "renderPosts": 1,
+      "creatorGets": 0,
+      "confirmations": 0,
+      "selectedPrivacy": null,
+      "submitDisabled": null,
+      "checkboxes": [],
+      "retry": {
+        "text": "Vorschau erneut erstellen",
+        "disabled": false
+      }
+    },
+    {
+      "name": "closing stops polling across two intervals",
+      "success": true,
+      "state": "rendering",
+      "statusGets": 3,
+      "renderPosts": 1,
+      "creatorGets": 0,
+      "confirmations": 0,
+      "selectedPrivacy": null,
+      "submitDisabled": null,
+      "checkboxes": [],
+      "closedStatusGets": 3
+    }
+  ],
+  "evidencePaths": [
+    "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/missing-pending.png",
+    "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/rendering.png",
+    "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/ready.png",
+    "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/error.png",
+    "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/error-retry-pending.png"
+  ]
+}

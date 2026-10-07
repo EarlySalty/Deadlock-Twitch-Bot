@@ -2,7 +2,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
 use sqlx::PgPool;
 
 use crate::clip_prep_worker::{
@@ -28,18 +27,28 @@ pub struct PreviewStatus {
     pub path: Option<String>,
 }
 
-/// Stoesst den Vorschau-Render fuer einen Clip an: Status auf `pending`, alter
-/// Fehler und Pfad geloescht. Der Vorschau-Worker uebernimmt das Rendern.
 pub async fn request_preview(pool: &PgPool, clip_db_id: i64) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        "UPDATE twitch_clips_social_media \
-            SET preview_status = 'pending', preview_error = NULL, \
-                preview_updated_at = $1::text::timestamptz WHERE id = $2",
-        Utc::now().to_rfc3339(),
-        clip_db_id
+    let mut tx = pool.begin().await?;
+    let (status, path): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT preview_status, preview_path FROM twitch_clips_social_media WHERE id = $1 FOR UPDATE",
     )
-    .execute(pool)
+    .bind(clip_db_id)
+    .fetch_one(&mut *tx)
     .await?;
+    let in_progress = matches!(status.as_deref(), Some(PREVIEW_PENDING | PREVIEW_RENDERING));
+    let ready = status.as_deref() == Some(PREVIEW_READY)
+        && valid_preview_path(clip_db_id, path.as_deref())
+            .await
+            .is_some();
+    if !in_progress && !ready {
+        sqlx::query(
+            "UPDATE twitch_clips_social_media SET preview_status = 'pending', preview_error = NULL, preview_path = NULL, preview_updated_at = NOW() WHERE id = $1",
+        )
+        .bind(clip_db_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -52,26 +61,43 @@ pub async fn get_preview(pool: &PgPool, clip_db_id: i64) -> Option<PreviewStatus
     .await
     .ok()
     .flatten()?;
-    let expected = format!("{clip_db_id}_preview_manual_v1.mp4");
-    let current_render = row.preview_path.as_deref().is_some_and(|path| {
-        Path::new(path)
-            .file_name()
-            .is_some_and(|name| name == expected.as_str())
-    });
-    if row.preview_status.as_deref() == Some(PREVIEW_READY) && !current_render {
-        return Some(PreviewStatus {
-            status: None,
-            error: None,
-            path: None,
-        });
+    if row.preview_status.as_deref() == Some(PREVIEW_READY) {
+        return Some(
+            match valid_preview_path(clip_db_id, row.preview_path.as_deref()).await {
+                Some(path) => PreviewStatus {
+                    status: row.preview_status,
+                    error: None,
+                    path: Some(path),
+                },
+                None => PreviewStatus {
+                    status: None,
+                    error: None,
+                    path: None,
+                },
+            },
+        );
     }
     Some(PreviewStatus {
         status: row.preview_status,
         error: row.preview_error,
-        path: row
-            .preview_path
-            .map(|path| resolve_preview_path(clip_db_id, path)),
+        path: None,
     })
+}
+
+async fn valid_preview_path(clip_db_id: i64, path: Option<&str>) -> Option<String> {
+    let path = path?;
+    let expected = format!("{clip_db_id}_preview_manual_v1.mp4");
+    if Path::new(path).file_name()? != expected.as_str() {
+        return None;
+    }
+    let path = resolve_preview_path(clip_db_id, path.to_string());
+    let file = tokio::fs::File::open(&path).await.ok()?;
+    let metadata = file.metadata().await.ok()?;
+    if !metadata.is_file() || metadata.len() == 0 {
+        return None;
+    }
+    let info = VideoProcessor::default().get_video_info(&path).await.ok()?;
+    (info.duration.is_finite() && info.duration > 0.0).then_some(path)
 }
 
 fn resolve_preview_path(clip_db_id: i64, path: String) -> String {
@@ -92,29 +118,35 @@ fn resolve_preview_path(clip_db_id: i64, path: String) -> String {
     path
 }
 
-async fn finish_ready(pool: &PgPool, clip_db_id: i64, path: &str) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        "UPDATE twitch_clips_social_media \
-            SET preview_status = 'ready', preview_path = $1, preview_error = NULL, \
-                preview_updated_at = $2::text::timestamptz WHERE id = $3",
-        path,
-        Utc::now().to_rfc3339(),
-        clip_db_id
+async fn finish_ready(
+    pool: &PgPool,
+    clip_db_id: i64,
+    path: &str,
+    claimed_at: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE twitch_clips_social_media SET preview_status = 'ready', preview_path = $1, preview_error = NULL, preview_updated_at = NOW() WHERE id = $2 AND ($3::text IS NULL OR (preview_status = 'rendering' AND preview_updated_at = $3::text::timestamptz))",
     )
+    .bind(path)
+    .bind(clip_db_id)
+    .bind(claimed_at)
     .execute(pool)
     .await?;
     Ok(())
 }
 
-async fn finish_error(pool: &PgPool, clip_db_id: i64, message: &str) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        "UPDATE twitch_clips_social_media \
-            SET preview_status = 'error', preview_error = $1, \
-                preview_updated_at = $2::text::timestamptz WHERE id = $3",
-        message,
-        Utc::now().to_rfc3339(),
-        clip_db_id
+async fn finish_error(
+    pool: &PgPool,
+    clip_db_id: i64,
+    message: &str,
+    claimed_at: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE twitch_clips_social_media SET preview_status = 'error', preview_error = $1, preview_updated_at = NOW() WHERE id = $2 AND ($3::text IS NULL OR (preview_status = 'rendering' AND preview_updated_at = $3::text::timestamptz))",
     )
+    .bind(message)
+    .bind(clip_db_id)
+    .bind(claimed_at)
     .execute(pool)
     .await?;
     Ok(())
@@ -124,29 +156,34 @@ struct PreviewJob {
     clip_db_id: i64,
     clip_url: String,
     local_file_path: Option<String>,
+    claimed_at: String,
 }
 
 async fn claim_pending(pool: &PgPool, limit: i64) -> Vec<PreviewJob> {
-    let rows = sqlx::query!(
+    let rows: Vec<(i64, String, Option<String>, String)> = sqlx::query_as(
         "UPDATE twitch_clips_social_media \
             SET preview_status = 'rendering', preview_updated_at = NOW() \
           WHERE id IN ( \
               SELECT id FROM twitch_clips_social_media \
-               WHERE preview_status = 'pending' \
-                  OR (preview_status = 'rendering' AND preview_updated_at < NOW() - INTERVAL '15 minutes') \
+               WHERE (preview_status = 'pending' \
+                  OR (preview_status = 'rendering' AND (preview_updated_at IS NULL OR preview_updated_at < NOW() - INTERVAL '15 minutes'))) \
+                 AND pg_try_advisory_xact_lock(hashtext('tb-social-media-preview'), hashtext(id::text)) \
                ORDER BY preview_updated_at ASC NULLS FIRST LIMIT $1 FOR UPDATE SKIP LOCKED) \
-          RETURNING id AS \"id!\", clip_url, local_file_path",
-        limit.max(1)
+          RETURNING id, clip_url, local_file_path, preview_updated_at::text",
     )
+    .bind(limit.max(1))
     .fetch_all(pool)
     .await
     .unwrap_or_default();
     rows.into_iter()
-        .map(|r| PreviewJob {
-            clip_db_id: r.id,
-            clip_url: r.clip_url,
-            local_file_path: r.local_file_path,
-        })
+        .map(
+            |(clip_db_id, clip_url, local_file_path, claimed_at)| PreviewJob {
+                clip_db_id,
+                clip_url,
+                local_file_path,
+                claimed_at,
+            },
+        )
         .collect()
 }
 
@@ -189,9 +226,6 @@ impl PreviewWorker {
         }
         let dest = format!("{}/{}.mp4", self.clips_dir, job.clip_db_id);
         download_atomic(self.downloader.as_ref(), &job.clip_url, &dest).await?;
-        // Auch der Vorschau-Download registriert die Quelldatei, sonst bliebe sie
-        // fuer einen Clip, den der Prep-Worker nie anfasst (Kategorie other), nach
-        // dem Retention-Lauf verwaist liegen (INV-07).
         if let Err(e) = register_local_file(&self.pool, job.clip_db_id, &dest).await {
             tracing::warn!(%e, clip_db_id = job.clip_db_id, "Vorschau: local_file_path nicht gespeichert");
         }
@@ -199,10 +233,44 @@ impl PreviewWorker {
     }
 
     async fn render_one(&self, job: &PreviewJob) {
+        let mut tx = match self.pool.begin().await {
+            Ok(tx) => tx,
+            Err(error) => {
+                tracing::warn!(%error, clip_db_id = job.clip_db_id, "Vorschau: Rendersperre nicht verfügbar");
+                return;
+            }
+        };
+        let locked: bool = sqlx::query_scalar(
+            "SELECT pg_try_advisory_xact_lock(hashtext('tb-social-media-preview'), hashtext($1))",
+        )
+        .bind(job.clip_db_id.to_string())
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap_or(false);
+        if !locked {
+            return;
+        }
+        let current: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM twitch_clips_social_media WHERE id = $1 AND preview_status = 'rendering' AND preview_updated_at = $2::text::timestamptz)",
+        )
+        .bind(job.clip_db_id)
+        .bind(&job.claimed_at)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap_or(false);
+        if !current {
+            return;
+        }
         let input = match self.ensure_local_file(job).await {
             Ok(path) => path,
             Err(e) => {
-                let _ = finish_error(&self.pool, job.clip_db_id, &format!("download: {e}")).await;
+                let _ = finish_error(
+                    &self.pool,
+                    job.clip_db_id,
+                    &format!("download: {e}"),
+                    Some(&job.claimed_at),
+                )
+                .await;
                 return;
             }
         };
@@ -221,12 +289,20 @@ impl PreviewWorker {
         .await
         {
             Ok(()) => {
-                if let Err(e) = finish_ready(&self.pool, job.clip_db_id, &output).await {
+                if let Err(e) =
+                    finish_ready(&self.pool, job.clip_db_id, &output, Some(&job.claimed_at)).await
+                {
                     tracing::warn!(%e, clip_db_id = job.clip_db_id, "Vorschau: Ready-Status nicht gespeichert");
                 }
             }
             Err(e) => {
-                let _ = finish_error(&self.pool, job.clip_db_id, &format!("render: {e}")).await;
+                let _ = finish_error(
+                    &self.pool,
+                    job.clip_db_id,
+                    &format!("render: {e}"),
+                    Some(&job.claimed_at),
+                )
+                .await;
             }
         }
     }
@@ -296,33 +372,93 @@ mod tests {
         assert_eq!(resolve_preview_path(43, old.to_string()), old);
     }
 
+    async fn preview_file(dir: &Path, id: i64) -> String {
+        let path = dir.join(format!("{id}_preview_manual_v1.mp4"));
+        let output = tokio::process::Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=size=16x16:rate=1",
+                "-t",
+                "1",
+                "-c:v",
+                "libx264",
+                "-y",
+            ])
+            .arg(&path)
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        path.to_string_lossy().into_owned()
+    }
+
+    #[tokio::test]
+    async fn vorschau_prueft_echte_artefakte() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = preview_file(dir.path(), 42).await;
+        assert_eq!(
+            valid_preview_path(42, Some(&path)).await,
+            Some(path.clone())
+        );
+        assert!(valid_preview_path(43, Some(&path)).await.is_none());
+        tokio::fs::write(&path, b"broken").await.unwrap();
+        assert!(valid_preview_path(42, Some(&path)).await.is_none());
+        tokio::fs::write(&path, b"").await.unwrap();
+        assert!(valid_preview_path(42, Some(&path)).await.is_none());
+        tokio::fs::remove_file(&path).await.unwrap();
+        assert!(valid_preview_path(42, Some(&path)).await.is_none());
+    }
+
     #[tokio::test]
     async fn vorschau_zustandsmaschine() {
         let Some(pool) = make_pool("t_sm_preview_state").await else {
             return;
         };
         let id: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_url, streamer_login) VALUES ('https://clips.twitch.tv/x', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
-
-        // Angestossen -> pending.
         request_preview(&pool, id).await.unwrap();
+        let first: String = sqlx::query_scalar(
+            "SELECT preview_updated_at::text FROM twitch_clips_social_media WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let (a, b) = tokio::join!(request_preview(&pool, id), request_preview(&pool, id));
+        a.unwrap();
+        b.unwrap();
+        let unchanged: String = sqlx::query_scalar(
+            "SELECT preview_updated_at::text FROM twitch_clips_social_media WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(first, unchanged);
         assert_eq!(
             get_preview(&pool, id).await.unwrap().status.as_deref(),
             Some(PREVIEW_PENDING)
         );
-
-        // Vom Worker beansprucht -> rendering.
         let jobs = claim_pending(&pool, 5).await;
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].clip_db_id, id);
+        request_preview(&pool, id).await.unwrap();
         assert_eq!(
             get_preview(&pool, id).await.unwrap().status.as_deref(),
             Some(PREVIEW_RENDERING)
         );
-        // Ein zweiter Claim findet nichts mehr.
         assert!(claim_pending(&pool, 5).await.is_empty());
-
         let legacy_path = format!("/clips/{id}_preview.mp4");
-        finish_ready(&pool, id, &legacy_path).await.unwrap();
+        finish_ready(&pool, id, &legacy_path, Some(&jobs[0].claimed_at))
+            .await
+            .unwrap();
         let stale = get_preview(&pool, id).await.unwrap();
         assert!(stale.status.is_none());
         assert!(stale.path.is_none());
@@ -333,16 +469,53 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(stored, legacy_path);
-        let path = format!("/clips/{id}_preview_manual_v1.mp4");
-        finish_ready(&pool, id, &path).await.unwrap();
-        let st = get_preview(&pool, id).await.unwrap();
-        assert_eq!(st.status.as_deref(), Some(PREVIEW_READY));
-        assert_eq!(st.path.as_deref(), Some(path.as_str()));
-
-        // Fehlerpfad.
-        finish_error(&pool, id, "boom").await.unwrap();
-        let st = get_preview(&pool, id).await.unwrap();
-        assert_eq!(st.status.as_deref(), Some(PREVIEW_ERROR));
-        assert_eq!(st.error.as_deref(), Some("boom"));
+        request_preview(&pool, id).await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = preview_file(dir.path(), id).await;
+        finish_ready(&pool, id, &path, Some(&jobs[0].claimed_at))
+            .await
+            .unwrap();
+        assert_eq!(
+            get_preview(&pool, id).await.unwrap().status.as_deref(),
+            Some(PREVIEW_PENDING)
+        );
+        let current = claim_pending(&pool, 1).await;
+        finish_ready(&pool, id, &path, Some(&current[0].claimed_at))
+            .await
+            .unwrap();
+        request_preview(&pool, id).await.unwrap();
+        let state = get_preview(&pool, id).await.unwrap();
+        assert_eq!(state.status.as_deref(), Some(PREVIEW_READY));
+        assert_eq!(state.path.as_deref(), Some(path.as_str()));
+        assert!(claim_pending(&pool, 1).await.is_empty());
+        tokio::fs::remove_file(&path).await.unwrap();
+        assert!(get_preview(&pool, id).await.unwrap().status.is_none());
+        request_preview(&pool, id).await.unwrap();
+        let current = claim_pending(&pool, 1).await;
+        finish_error(&pool, id, "boom", Some(&current[0].claimed_at))
+            .await
+            .unwrap();
+        let state = get_preview(&pool, id).await.unwrap();
+        assert_eq!(state.status.as_deref(), Some(PREVIEW_ERROR));
+        assert_eq!(state.error.as_deref(), Some("boom"));
+        request_preview(&pool, id).await.unwrap();
+        assert_eq!(
+            get_preview(&pool, id).await.unwrap().status.as_deref(),
+            Some(PREVIEW_PENDING)
+        );
+        sqlx::query("UPDATE twitch_clips_social_media SET preview_status = 'rendering', preview_updated_at = NULL WHERE id = $1").bind(id).execute(&pool).await.unwrap();
+        assert_eq!(claim_pending(&pool, 1).await.len(), 1);
+        sqlx::query("UPDATE twitch_clips_social_media SET preview_updated_at = '2000-01-01'::timestamptz WHERE id = $1").bind(id).execute(&pool).await.unwrap();
+        let mut lock = pool.begin().await.unwrap();
+        sqlx::query(
+            "SELECT pg_advisory_xact_lock(hashtext('tb-social-media-preview'), hashtext($1))",
+        )
+        .bind(id.to_string())
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+        assert!(claim_pending(&pool, 1).await.is_empty());
+        lock.commit().await.unwrap();
+        assert_eq!(claim_pending(&pool, 1).await.len(), 1);
     }
 }
