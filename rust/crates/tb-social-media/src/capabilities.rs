@@ -47,27 +47,39 @@ fn capabilities_for(platform: &str, instagram_ready: bool) -> PlatformCapabiliti
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UploadWaitReason {
+    PlatformUnavailable,
+    ConnectionMissing,
+    ConnectionIncomplete,
+}
+
+impl UploadWaitReason {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::PlatformUnavailable => "platform_unavailable",
+            Self::ConnectionMissing => "connection_missing",
+            Self::ConnectionIncomplete => "connection_incomplete",
+        }
+    }
+}
+
 pub fn upload_wait_reason(
     platform: &str,
     creds: Option<&SocialMediaCredentials>,
 ) -> Option<String> {
-    let capabilities = platform_capabilities(platform);
-    if !capabilities.upload {
-        return Some(
-            capabilities
-                .reason
-                .unwrap_or("Upload nicht verfügbar")
-                .to_string(),
-        );
+    upload_wait_reason_kind(platform, creds).map(|reason| reason.code().to_string())
+}
+
+pub fn upload_wait_reason_kind(
+    platform: &str,
+    creds: Option<&SocialMediaCredentials>,
+) -> Option<UploadWaitReason> {
+    if !platform_capabilities(platform).upload {
+        return Some(UploadWaitReason::PlatformUnavailable);
     }
-    let name = match platform {
-        "tiktok" => "TikTok",
-        "youtube" => "YouTube",
-        "instagram" => "Instagram",
-        _ => platform,
-    };
     let Some(creds) = creds else {
-        return Some(format!("{name} nicht verbunden. Öffne Verbindungen im Social-Media-Dashboard und verbinde dein Konto."));
+        return Some(UploadWaitReason::ConnectionMissing);
     };
     let complete = !creds.access_token.trim().is_empty()
         && match platform {
@@ -82,7 +94,7 @@ pub fn upload_wait_reason(
             _ => false,
         };
     if !complete {
-        return Some(format!("Die Verbindung zu {name} ist unvollständig. Öffne Verbindungen im Social-Media-Dashboard und verbinde dein Konto erneut."));
+        return Some(UploadWaitReason::ConnectionIncomplete);
     }
     None
 }
@@ -100,6 +112,41 @@ mod tests {
         assert!(!capabilities_for("instagram", false).upload);
         assert!(capabilities_for("instagram", true).upload);
         assert!(capabilities_for("youtube", false).statistics);
-        assert!(upload_wait_reason("tiktok", None).is_some());
+        assert_eq!(
+            upload_wait_reason_kind("tiktok", None),
+            Some(UploadWaitReason::ConnectionMissing)
+        );
+    }
+
+    #[test]
+    fn incomplete_connection_has_a_structured_reason() {
+        let mut creds = SocialMediaCredentials {
+            id: 1,
+            platform: "youtube".into(),
+            streamer_login: None,
+            access_token: "synthetic".into(),
+            refresh_token: None,
+            client_id: None,
+            client_secret: None,
+            expires_at: None,
+            scopes: None,
+            platform_user_id: None,
+            platform_username: None,
+        };
+        assert_eq!(
+            upload_wait_reason_kind("youtube", Some(&creds)),
+            Some(UploadWaitReason::ConnectionIncomplete)
+        );
+        creds.client_id = Some("client".into());
+        assert_eq!(upload_wait_reason_kind("youtube", Some(&creds)), None);
+        creds.access_token = " ".into();
+        assert_eq!(
+            upload_wait_reason_kind("youtube", Some(&creds)),
+            Some(UploadWaitReason::ConnectionIncomplete)
+        );
+        assert_eq!(
+            upload_wait_reason_kind("unknown", Some(&creds)),
+            Some(UploadWaitReason::PlatformUnavailable)
+        );
     }
 }

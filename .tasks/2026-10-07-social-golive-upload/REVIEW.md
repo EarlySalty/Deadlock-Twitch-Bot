@@ -20,8 +20,8 @@ Gate-Runde 1 am 7. Oktober 2026: **BLOCK**, Modell `gpt-6.1-sol`. Geprüfter Kan
 3. bot/dashboard_v2/src/pages/SocialMedia.tsx:1985 | NIT: Appearance is unverified. No registered visual-review project or supplied screenshots establish the changed layouts’ appearance; the screenshot assertions in the diff do not settle that check.
 ```
 
-## Übergabe
+## Historische Übergabe
 
-Ein frischer Fixer aus der Pyramide ist nötig. Der Blattauftrag verbietet zusätzliche Threads; diese Session startet deshalb keinen Fixer und repariert die Gate-Funde nicht selbst. Auftraggeber entscheidet die Zuweisung. Branch und Worktree bleiben für die Übernahme erhalten. Die nächste Gate-Runde verwendet dasselbe Modell wie Runde 1. Kein Modellwechsel nach inhaltlichem BLOCK.
+Ein frischer Fixer aus der Pyramide übernahm den ursprünglichen Blattauftrag. Die folgende Fixrunde behebt die drei oben dokumentierten Funde. Seit der Nutzerregeländerung vom 7. Oktober 2026 laufen weitere BLOCK-Fixrunden autonom mit einem neuen nativen Fixer-Subagenten pro Runde. Keine neuen T3-Threads für diese Schleife. Die nächste Gate-Runde verwendet dasselbe Modell wie Runde 1. Kein Modellwechsel nach inhaltlichem BLOCK.
 
 Release-Build des abgelehnten Kandidaten gestoppt, nur Teilcache vorhanden. Frontends aus dem sauberen Kandidaten wurden gebaut. Keine alten oder unvollständigen Binaries ausliefern. Echte Streamer-Verbindungen blieben unangetastet.

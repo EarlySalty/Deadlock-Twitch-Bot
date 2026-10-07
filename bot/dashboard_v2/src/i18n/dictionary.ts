@@ -564,6 +564,13 @@ const EN: Record<string, string> = {
   'Instagram ist in dieser Beta noch nicht verfügbar.': 'Instagram is not yet available in this beta.',
   'Eigenes Konto verbinden': 'Connect your own account',
   'Wartet auf Verbindung': 'Waiting for a connection',
+  '{platform} nicht verbunden. Öffne Verbindungen und verbinde dein Konto.':
+    '{platform} is not connected. Open Connections and connect your account.',
+  'Die Verbindung zu {platform} ist unvollständig. Öffne Verbindungen und verbinde dein Konto erneut.':
+    'Your connection to {platform} is incomplete. Open Connections and reconnect your account.',
+  '{platform} ist in dieser Beta noch nicht verfügbar.': '{platform} is not available in this beta yet.',
+  'Der Upload auf {platform} wartet auf eine verfügbare Verbindung. Öffne Verbindungen und prüfe dein Konto.':
+    'Your upload to {platform} is waiting for an available connection. Open Connections and check your account.',
   'Der gespeicherte Kontozugang wurde gelöscht. Entferne die App zusätzlich in den Einstellungen deines Plattformkontos; der Widerruf dort ist noch nicht bestätigt.':
     'The saved account credentials have been deleted. Also remove the app in your platform account settings; revocation there has not been confirmed yet.',
   'Der gespeicherte Kontozugang wurde gelöscht und die Berechtigung beim Anbieter widerrufen.':

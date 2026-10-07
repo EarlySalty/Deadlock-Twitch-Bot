@@ -1,0 +1,38 @@
+[
+  {
+    "kind": "connection_missing",
+    "width": 1440,
+    "text": "YouTube is not connected. Open Connections and connect your account.",
+    "doc": 1440
+  },
+  {
+    "kind": "connection_missing",
+    "width": 390,
+    "text": "YouTube is not connected. Open Connections and connect your account.",
+    "doc": 390
+  },
+  {
+    "kind": "connection_incomplete",
+    "width": 1440,
+    "text": "Your connection to YouTube is incomplete. Open Connections and reconnect your account.",
+    "doc": 1440
+  },
+  {
+    "kind": "connection_incomplete",
+    "width": 390,
+    "text": "Your connection to YouTube is incomplete. Open Connections and reconnect your account.",
+    "doc": 390
+  },
+  {
+    "kind": "legacy",
+    "width": 1440,
+    "text": "Your upload to YouTube is waiting for an available connection. Open Connections and check your account.",
+    "doc": 1440
+  },
+  {
+    "kind": "legacy",
+    "width": 390,
+    "text": "Your upload to YouTube is waiting for an available connection. Open Connections and check your account.",
+    "doc": 390
+  }
+]

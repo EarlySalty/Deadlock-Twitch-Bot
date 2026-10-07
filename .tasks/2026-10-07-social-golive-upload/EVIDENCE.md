@@ -49,6 +49,38 @@ MERGEPROTOKOLL[MS-1]: 33 Git-Schritte einzeln | Anläufe: 1 | Gate: BLOCK gpt-6.
 
 Die Git-Zählung ist der Transcriptstand bis zur Gate-Entscheidung, vor dem anschließenden reinen Dokumentationscommit für die Übergabe. Kein Gate wurde umgangen und kein Urteil bei einem anderen Modell neu angefordert.
 
-## Blockiert
+## Historischer Übergabestand
 
-Gate-Runde 1: BLOCK durch `gpt-6.1-sol`, Kandidat f2b64b39706417ca63071e5fcf8cc857ab9dff01. Ein frischer Fixer ist gemäß Ablauf nötig, zusätzliche Threads sind diesem Blatt-Worker untersagt. Der Auftrag wird mit allen Artefakten an den vorhandenen Auftraggeber zurückgegeben. Release-Build gestoppt; Frontend-Builds erfolgreich, Rust-Release unvollständig. Keine Produktionsmigration, kein Merge oder Push auf main, kein Deploy, kein Neustart. Branch und Worktree bleiben zur Übernahme erhalten.
+Gate-Runde 1: BLOCK durch `gpt-6.1-sol`, Kandidat f2b64b39706417ca63071e5fcf8cc857ab9dff01. Der ursprüngliche Worker übergab an einen frischen Fixer. Sein Release-Build wurde gestoppt. Keine Produktionsmigration, kein Merge oder Push auf main, kein Deploy und kein Neustart in dieser Runde.
+
+## Fixer und Gate-Folgerunde
+
+Der unveränderte Übergabecommit ac08dba4ceb5406c62ad512341bc9ca6eadafb58 wurde zuerst mit normalem Push auf `origin/fix/social-golive-upload-texte` gesichert. Kein Force-Push. `origin/main` wurde erneut geholt; es steht weiterhin auf e0b0dbaf662d7680c4ceaa210bf15f1443693cd8.
+
+Die Uploadauswahl und die Verbindungsprüfung sind getrennt. `pending` wählt keine Warteaufträge aus. Ein unabhängiger Scan prüft fällige Warteaufträge nach `last_attempt_at ASC NULLS FIRST`, danach Erstellungszeit und ID. Wiederaufnahme und bestehendes Scanlimit bleiben erhalten. Der echte Worker erreicht im isolierten PostgreSQL-Test bei 100 älteren unverbundenen Aufträgen den neueren verbundenen Auftrag im ersten Durchlauf und den wartenden verbundenen Auftrag im sechsten Durchlauf. Die übrigen Warteaufträge behalten null Versuche und null Kontingentvertagungen.
+
+Fehlende und unvollständige Verbindungen liefern strukturierte Gründe. Das Dashboard übersetzt die gemeinsamen Vorlagen mit Plattformnamen. Gespeicherte deutsche Altgründe erhalten einen übersetzten allgemeinen Verbindungshinweis. Kein neuer Test hängt an unabhängig dupliziertem Produktwortlaut.
+
+### Tatsächlich abgeschlossene Fixerprüfungen
+
+Gemeinsame Rust-Umgebung: `PATH=/home/nathanael/.cargo/bin:/usr/local/bin:/usr/bin:/bin SQLX_OFFLINE=true`. Testdatenbank: `TB_TEST_DATABASE_URL=postgresql://nathanael@127.0.0.1:55437/tb_social_upload_test`. Manifest: `/home/nathanael/.worktrees/tb-social-golive-upload/rust/Cargo.toml`.
+
+- `cargo test --manifest-path <Manifest> -p tb-social-media --lib -- --include-ignored --test-threads=1`: 311 bestanden, 0 fehlgeschlagen, 0 ignoriert, 0 gefiltert. Echte Datenbankprüfung, keine Provideruploads. Log `/tmp/tb-upload-fixer-social-tests.log`, Exit 0.
+- `cargo test --manifest-path <Manifest> -p tb-dashboard-api --lib handlers::social_media:: -- --include-ignored --test-threads=1`: 53 bestanden, 0 fehlgeschlagen, 0 ignoriert, 1278 gefiltert. Log `/tmp/tb-upload-fixer-api-tests.log`, Exit 0.
+- `cargo check --manifest-path <Manifest> -p tb-social-media -p tb-dashboard-api -p tb-bot --all-targets -j 2`: Exit 0, 5 Minuten 47 Sekunden. Log `/tmp/tb-upload-fixer-check.log`. Dateiweises `rustfmt --edition 2021 --config skip_children=true --check` für die drei geänderten Rust-Dateien: Exit 0.
+- Im Dashboard: `node --import tsx --test tests/socialMediaContract.test.ts tests/i18n.test.ts tests/socialMediaLayout.test.ts tests/socialStudioRedesign.test.ts`: 46 bestanden, 0 fehlgeschlagen, 0 ignoriert. `npm run build`: Exit 0. Logs `/tmp/tb-upload-fixer-dashboard-tests.log` und `/tmp/tb-upload-fixer-dashboard-build.log`.
+- `STUDIO_ARTIFACT_DIR=/home/nathanael/.worktrees/tb-social-golive-upload/.tasks/2026-10-07-social-golive-upload/browser-fixer node --test /home/nathanael/.worktrees/tb-social-golive-upload/bot/dashboard_v2/tests/socialStudio.browser.test.mjs`: 26 bestanden, 0 fehlgeschlagen, 0 übersprungen, Exit 0. Log `/tmp/tb-upload-fixer-browser-tests.log`. `browser-state.json` enthält keine Browserfehler.
+
+Die historischen roten Gesamt-API- und Clippy-Baselines oben wurden in der Fixerprüfung nicht neu ausgeführt. Sie werden nicht als neue grüne Läufe ausgegeben.
+
+### Zugänglicher Sichtnachweis
+
+Zehn tatsächliche Chromium-Viewportaufnahmen, `browser-state.json` und `waiting-i18n-dom.json` liegen versionierbar in `browser-fixer/`. Deutsche Pipeline und Kontoverbindungen sowie englische fehlende, unvollständige und alte Verbindungsgründe wurden bei 1440 und 390 Pixel aufgenommen. In den englischen DOM-Messungen entspricht die Dokumentbreite jeweils der Viewportbreite. Der Recovery-Knopf öffnet die Konteneinstellungen. Desktop- und Mobilaufnahmen wurden betrachtet. `SICHTPRUEFUNG.txt` ist der explizite Eingabeblock für `GATE_SICHTPRUEFUNG_BLOCK` beim manuellen Gate.
+
+TESTNACHWEIS[TW-1]: 311 passed, 0 ignored | Baseline: 22 rot
+
+Die Pflichtzeile zählt den neuen Social-Media-Lauf. Die 22 roten Fehler bezeichnen ausdrücklich die historische, zahlenmäßig verglichene vollständige API-Baseline. Der neue API-Teillauf mit 53 Tests ist grün.
+
+TEXTNACHWEIS[DR-1]: Gedankenstriche 0 | ae/oe/ue/ss-Ersatz 0 | Absolutwörter 0 belegt | Senke: übersetzte Wartegründe im Produktionsbundle
+
+Die Regeländerung des Nutzers vom 7. Oktober 2026 gilt für die Folgerunden: Bei BLOCK startet diese Session einen frischen nativen Fixer-Subagenten mit den offenen Funden, Verträgen und dem Worktreestand. Der Gate behält `gpt-6.1-sol`. Keine neuen T3-Threads für die Fixschleife. Eskalation bei tatsächlichem Blocker oder spätestens nach fünf erfolglosen Runden. Merge, Release, Migration, Deploy und Cleanup sind vor dem ausstehenden ALLOW noch nicht erfolgt.

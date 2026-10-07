@@ -414,6 +414,37 @@ test(
       await page.setViewportSize({ width: 1440, height: 1080 });
       await tab('Pipeline').click();
     });
+    await t.test('Wartezustände bleiben im englischen Dashboard lesbar', async () => {
+      const legacy = clips.earlysalty[4].upload_errors.youtube;
+      const states = [];
+      await page.evaluate(() => localStorage.setItem('dashboard.language', 'en'));
+      for (const reason of ['connection_missing', 'connection_incomplete', legacy]) {
+        clips.earlysalty[4].upload_errors.youtube = reason;
+        await page.reload();
+        const waiting = page.locator('.studio-clip').nth(4).getByRole('status');
+        await waiting.getByRole('button').waitFor();
+        await page.evaluate(() => document.fonts.ready);
+        const text = await waiting.locator('p').innerText();
+        assert.notEqual(text, reason);
+        assert.ok(text.includes('YouTube'));
+        assert.equal(await waiting.getByRole('button').count(), 1);
+        for (const width of [1440, 390]) {
+          await page.setViewportSize({ width, height: 1080 });
+          await waiting.scrollIntoViewIfNeeded();
+          const geometry = await page.evaluate(() => ({ width: document.documentElement.clientWidth, doc: document.documentElement.scrollWidth }));
+          assert.ok(geometry.doc <= geometry.width);
+          const kind = reason === legacy ? 'legacy' : reason;
+          await page.screenshot({ path: path.join(evidence, `upload-wait-en-${kind}-${width}.png`) });
+          states.push({ kind, width, text, ...geometry });
+        }
+      }
+      await fs.writeFile(path.join(evidence, 'waiting-i18n-dom.json'), JSON.stringify(states, null, 2));
+      clips.earlysalty[4].upload_errors.youtube = legacy;
+      await page.evaluate(() => localStorage.setItem('dashboard.language', 'de'));
+      await page.setViewportSize({ width: 1440, height: 1080 });
+      await page.reload();
+      await page.locator('.studio-clip').first().waitFor();
+    });
     await t.test(
       'vollständige Kennzahlen und gemeinsame Kopfzeile ohne eigenen Logo-Block',
       async () => {

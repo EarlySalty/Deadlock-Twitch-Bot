@@ -79,6 +79,7 @@ import {
   APPROVAL_MODE_TEXTE,
   FELD_FEHLER,
   fehlerText,
+  uploadWaitText,
   kategorieLabel,
   PLATFORM_LABELS,
   SOCIAL_MEDIA_TABS,
@@ -2406,7 +2407,7 @@ function ClipCard({
           {waitingPlatforms.length > 0 && (
             <div role="status" className="space-y-2 text-sm text-warning">
               {waitingPlatforms.map((platform) => (
-                <p key={platform}>{clip.upload_errors?.[platform] ?? t('{platform} nicht verbunden.', { platform: PLATFORM_LABELS[platform] })}</p>
+                <p key={platform}>{uploadWaitText(clip.upload_errors?.[platform], platform, t)}</p>
               ))}
               <button type="button" className="studio-button" onClick={onOpenConnections}>{t('Verbindungen öffnen')}</button>
             </div>

@@ -153,6 +153,23 @@ export const PLATFORM_LABELS: Record<string, string> = {
  * Meldungen, die direkt am Eingabefeld stehen. Als Tabelle, damit der
  * Vertragstest sie mitprueft; ein Satz mitten im Code faellt dabei durch.
  */
+export const UPLOAD_WAIT_TEXTE: Record<string, string> = {
+  connection_missing: '{platform} nicht verbunden. Öffne Verbindungen und verbinde dein Konto.',
+  connection_incomplete: 'Die Verbindung zu {platform} ist unvollständig. Öffne Verbindungen und verbinde dein Konto erneut.',
+  platform_unavailable: '{platform} ist in dieser Beta noch nicht verfügbar.',
+  connection_required: 'Der Upload auf {platform} wartet auf eine verfügbare Verbindung. Öffne Verbindungen und prüfe dein Konto.',
+};
+
+export function uploadWaitText(
+  reason: string | null | undefined,
+  platform: string,
+  t: (text: string, params?: Record<string, string | number>) => string,
+): string {
+  return t(UPLOAD_WAIT_TEXTE[reason ?? ''] ?? UPLOAD_WAIT_TEXTE.connection_required, {
+    platform: PLATFORM_LABELS[platform] ?? platform,
+  });
+}
+
 export const FELD_FEHLER = {
   zeitLeer: 'Mindestens eine Uhrzeit angeben.',
   zuVieleZeiten: 'Höchstens zwölf Uhrzeiten.',

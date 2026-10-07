@@ -281,18 +281,25 @@ pub async fn get_upload_queue(
          FROM twitch_clips_upload_queue q \
          JOIN twitch_clips_social_media c ON c.id = q.clip_id WHERE ",
     );
-    if status == "pending" {
-        sql.push_str("(q.status = $1 OR (q.status = 'waiting_connection' AND (q.last_attempt_at IS NULL OR q.last_attempt_at <= NOW() - INTERVAL '5 minutes')))");
-    } else {
-        sql.push_str("q.status = $1");
+    sql.push_str("q.status = $1");
+    if status == "waiting_connection" {
+        sql.push_str(
+            " AND (q.last_attempt_at IS NULL OR q.last_attempt_at <= NOW() - INTERVAL '5 minutes')",
+        );
     }
     if platform.is_some() {
         sql.push_str(" AND q.platform = $2");
     }
-    if status == "pending" {
+    if matches!(status, "pending" | "waiting_connection") {
         sql.push_str(" AND (q.scheduled_at IS NULL OR q.scheduled_at <= now())");
     }
-    sql.push_str(" ORDER BY q.priority DESC, q.created_at ASC LIMIT ");
+    if status == "waiting_connection" {
+        sql.push_str(
+            " ORDER BY q.last_attempt_at ASC NULLS FIRST, q.created_at ASC, q.id ASC LIMIT ",
+        );
+    } else {
+        sql.push_str(" ORDER BY q.priority DESC, q.created_at ASC, q.id ASC LIMIT ");
+    }
     sql.push_str(&limit.max(0).to_string());
 
     let mut query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(status);
@@ -580,7 +587,10 @@ mod tests {
             .is_empty());
         sqlx::query("UPDATE twitch_clips_upload_queue SET last_attempt_at = NOW() - INTERVAL '6 minutes' WHERE id = $1")
             .bind(queue_id).execute(&pool).await.unwrap();
-        let due = get_upload_queue(&pool, None, "pending", 10, None).await;
+        assert!(get_upload_queue(&pool, None, "pending", 10, None)
+            .await
+            .is_empty());
+        let due = get_upload_queue(&pool, None, "waiting_connection", 10, None).await;
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].id, queue_id);
         assert_eq!(due[0].attempts, 0);
