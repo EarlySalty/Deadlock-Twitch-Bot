@@ -868,7 +868,9 @@ async fn main() {
     let suppression = Arc::new(std::sync::Mutex::new(ManualRaidSuppression::new()));
     let chat_subscription_reconcile = Arc::new(tokio::sync::Notify::new());
     let mut manual_raid_port: Option<Arc<dyn tb_internal_api::ManualRaidPort>> = None;
-    let raid_ad_vorlauf = Arc::new(tb_analytics::ad_manager::raid_vorlauf::RaidAdVorlauf::new(pool.clone()));
+    let raid_ad_vorlauf = Arc::new(tb_analytics::ad_manager::raid_vorlauf::RaidAdVorlauf::new(
+        pool.clone(),
+    ));
     let mut raid_oauth_port: Option<Arc<dyn tb_internal_api::RaidOAuthPort>> = None;
     let mut poll_offline_raid_handler: Option<Arc<OfflineRaidHandler>> = None;
     let vod_export = helix.as_ref().clone().and_then(|helix_client| {
@@ -1036,7 +1038,10 @@ async fn main() {
                 token_provider.clone(),
                 RaidHistoryStore::new(pool.clone()),
                 RaidBlacklistStore::new(pool.clone()),
-            ).with_ad_protection(Arc::new(ad_manager_wiring::RaidAdProtectionAdapter(raid_ad_vorlauf.clone())));
+            )
+            .with_ad_protection(Arc::new(ad_manager_wiring::RaidAdProtectionAdapter(
+                raid_ad_vorlauf.clone(),
+            )));
             let sink = Arc::new(RaidArrivalSinkImpl::new(
                 pool.clone(),
                 pending.clone(),
@@ -1215,10 +1220,13 @@ async fn main() {
             let flip_unraid = Arc::new(flip_unraid::FlipUnraidHandler::new(
                 pending.clone(),
                 suppression.clone(),
-                Arc::new(flip_unraid::HelixSourceRaidCanceller::new(
-                    token_provider.clone(),
-                    helix_client.clone(),
-                ).with_ad_vorlauf(raid_ad_vorlauf.clone())),
+                Arc::new(
+                    flip_unraid::HelixSourceRaidCanceller::new(
+                        token_provider.clone(),
+                        helix_client.clone(),
+                    )
+                    .with_ad_vorlauf(raid_ad_vorlauf.clone()),
+                ),
                 chat_api_handle.as_ref().map(|h| h.api()),
                 &config.bot,
             ));
@@ -1231,7 +1239,8 @@ async fn main() {
                 RaidBlacklistStore::new(pool.clone()),
                 token_provider,
                 helix_client,
-            ).with_ad_vorlauf(raid_ad_vorlauf.clone());
+            )
+            .with_ad_vorlauf(raid_ad_vorlauf.clone());
             manual_raid_port = Some(Arc::new(ManualRaidAdapter {
                 handler: offline.clone(),
             }));
@@ -1720,24 +1729,7 @@ async fn main() {
             async move { preview.run().await },
         );
 
-        // Enrichment: LLM-Dispatcher (Consent aus Settings) plus lokaler
-        // STT-Transcriber (ops/stt-server, loopback). Liegt eine lokale
-        // Clip-Datei vor, transkribiert der Worker sie und die Vokabel-Korrektur
-        // greift; ohne loopback-STT bleibt die Stage aus (None-Pfad).
-        let llm: Arc<dyn tb_social_media::enrich_pipeline::EnrichmentLlm> = Arc::new(
-            tb_social_media::llm_dispatch::LlmDispatcher::new(pool.clone()),
-        );
-        let mut enrichment =
-            tb_social_media::enrichment_worker::EnrichmentWorker::new(pool.clone(), llm);
-        if let Some(transcriber) = tb_social_media::transcription::SttTranscriber::from_default() {
-            let transcriber: Arc<dyn tb_social_media::enrich_pipeline::Transcriber> =
-                Arc::new(transcriber);
-            enrichment = enrichment.with_transcriber(transcriber);
-        }
-        supervisor.spawn(
-            "social_enrichment_worker",
-            async move { enrichment.run().await },
-        );
+        tracing::info!("Clip-Anreicherung und Transkription abgeschaltet");
 
         // Upload + Token-Refresh + Insights brauchen den Field-Cipher
         // (verschlüsselte Plattform-Tokens). Fehlt DB_MASTER_KEY_V1, laufen nur

@@ -1442,7 +1442,7 @@ printf '%s\n' '{"streams":[{"codec_type":"video","width":1920,"height":1080,"dur
         let next = std::fs::read_to_string(&output).unwrap();
         assert!(next.contains("Neuer Titel"));
         assert!(!next.contains("Alter Titel"));
-        assert!(next.contains("Neue Worte"));
+        assert!(!next.contains("Neue Worte"));
         assert!(next.contains("1080:500"));
         std::fs::remove_dir_all(dir).unwrap();
     }

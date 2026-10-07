@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
@@ -6,24 +6,19 @@ import {
   Hash,
   Loader2,
   Camera,
-  RefreshCw,
   Save,
-  Sparkles,
   X,
   Video,
   Music2,
-  ScrollText,
-  Wand2,
+  Pencil,
 } from 'lucide-react';
 import {
   fetchClipEnrichment,
-  runClipEnrichment,
   saveClipEnrichment,
   type EnrichmentEditPayload,
 } from '@/api/socialMedia';
 import type { ClipEnrichment, SocialPlatform } from '@/types/socialMedia';
 import { useT } from '@/context/LanguageContext';
-import { STATUS_META, TONE_BADGE as TONE } from './labels';
 
 const PLATFORMS: Array<{
   id: SocialPlatform;
@@ -55,24 +50,9 @@ interface EditState {
   hashtags_instagram: string[];
 }
 
-/**
- * Ein Satz mit einer hervorgehobenen Stelle in der Mitte, aber nur einem
- * Uebersetzungsschluessel. Vorher war der Satz auf zwei Schluessel aufgeteilt
- * ('... gesetzt ist (' und '). Setze einen Key ...'); eine Sprache mit anderer
- * Wortstellung konnte ihn damit nicht uebersetzen. Die Marke sagt jetzt nur,
- * wo der hervorgehobene Teil landet, und darf in jeder Sprache anderswo
- * stehen.
- */
-function mitEinschub(satz: string, marke: string, einschub: ReactNode): ReactNode {
-  const teile = satz.split(marke);
-  if (teile.length < 2) return satz;
-  return (
-    <>
-      {teile[0]}
-      {einschub}
-      {teile.slice(1).join(marke)}
-    </>
-  );
+function normalizeHashtag(tag: string): string {
+  const cleaned = tag.trim().replace(/^#+/, '').replace(/\s+/g, '').toLowerCase();
+  return cleaned ? `#${cleaned}` : '';
 }
 
 function fromEnrichment(e: ClipEnrichment): EditState {
@@ -112,14 +92,6 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
   const enrichmentQuery = useQuery({
     queryKey: ['social-media', 'enrichment', clipDbId],
     queryFn: () => fetchClipEnrichment(clipDbId),
-    refetchInterval: (q) => {
-      const data = q.state.data as ClipEnrichment | undefined;
-      if (!data) return 5000;
-      if (data.status === 'transcribing' || data.status === 'correcting' || data.status === 'llm') {
-        return 4000;
-      }
-      return false;
-    },
   });
 
   useEffect(() => {
@@ -137,14 +109,16 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
     },
   });
 
-  const runMutation = useMutation({
-    mutationFn: (force: boolean) => runClipEnrichment(clipDbId, force),
-    onSuccess: (data) => {
-      queryClient.setQueryData(['social-media', 'enrichment', clipDbId], data);
-      queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
-      setEdit(fromEnrichment(data));
-    },
-  });
+  if (enrichmentQuery.isError) {
+    return (
+      <div role="alert" className="space-y-3 text-sm text-danger">
+        <p>{t('Die Cliptexte konnten nicht geladen werden.')}</p>
+        <button type="button" onClick={() => enrichmentQuery.refetch()} className="studio-button">
+          {t('Erneut laden')}
+        </button>
+      </div>
+    );
+  }
 
   if (enrichmentQuery.isLoading || !edit) {
     return (
@@ -155,51 +129,22 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
   }
 
   const enrichment = enrichmentQuery.data!;
-  const status = STATUS_META[enrichment.status] ?? STATUS_META.pending;
   const dirty = JSON.stringify(toPayload(enrichment, edit)) !== '{}';
-  const isProcessing =
-    enrichment.status === 'transcribing' ||
-    enrichment.status === 'correcting' ||
-    enrichment.status === 'llm' ||
-    runMutation.isPending;
 
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-3 border-b border-border pb-3">
         <div className="flex items-center gap-2">
-          <Wand2 className="w-4 h-4 text-orange" />
-          <h4 className="text-sm font-bold uppercase tracking-[0.16em] text-white">{t('Metadaten')}</h4>
+          <Pencil className="w-4 h-4 text-orange" />
+          <h4 className="text-sm font-bold uppercase tracking-[0.16em] text-white">{t('Titel, Beschreibung & Hashtags')}</h4>
         </div>
-        <span className={`text-[10px] font-bold uppercase tracking-[0.14em] px-2 py-1 rounded-md border ${TONE[status.tone]}`}>
-          {t(status.label)}
-        </span>
-        {enrichment.llm_provider && (
-          <span className="text-[10px] font-mono text-text-secondary bg-bg/60 px-2 py-1 rounded-md border border-border">
-            {enrichment.llm_provider}
-            {enrichment.llm_model ? ` · ${enrichment.llm_model}` : ''}
-          </span>
-        )}
-        {typeof enrichment.cost_usd_estimate === 'number' && enrichment.cost_usd_estimate > 0 && (
-          <span className="text-[10px] font-mono text-text-secondary">
-            ≈ ${enrichment.cost_usd_estimate.toFixed(4)}
-          </span>
-        )}
         <div className="ml-auto flex items-center gap-2">
-          <button
-            type="button"
-            disabled={isProcessing}
-            onClick={() => runMutation.mutate(true)}
-            className="text-xs font-semibold text-text-secondary hover:text-white inline-flex items-center gap-1.5 disabled:opacity-40"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${runMutation.isPending ? 'animate-spin' : ''}`} />
-            {t('Neu generieren')}
-          </button>
           {onClose && (
             <button
               type="button"
               onClick={onClose}
               className="p-1.5 rounded-lg hover:bg-bg/60 text-text-secondary hover:text-white"
-              aria-label={t('Enrichment-Panel schließen')}
+              aria-label={t('Editor schließen')}
             >
               <X className="w-4 h-4" />
             </button>
@@ -207,48 +152,6 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
         </div>
       </div>
 
-      {enrichment.error_message && (
-        <div className="flex items-start gap-2 text-xs text-danger bg-danger/10 border border-danger/30 rounded-lg p-2.5">
-          <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-          <span>{enrichment.error_message}</span>
-        </div>
-      )}
-
-      {enrichment.status === 'skipped_no_key' && (
-        <div className="text-xs text-text-secondary bg-bg/40 border border-border rounded-lg p-3 leading-relaxed">
-          {mitEinschub(
-            t(
-              'Enrichment wurde übersprungen, weil kein LLM-Key gesetzt ist ({keys}). Setze einen Key und drücke „Neu generieren".',
-            ),
-            '{keys}',
-            <>
-              <code className="font-mono text-orange">FIREWORKS_API_KEY</code> /{' '}
-              <code className="font-mono text-orange">ANTHROPIC_API_KEY</code>
-            </>,
-          )}
-        </div>
-      )}
-
-      {/* Detected terms */}
-      {enrichment.detected_terms.length > 0 && (
-        <div className="space-y-2">
-          <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary inline-flex items-center gap-1.5">
-            <Sparkles className="w-3 h-3 text-accent" /> {t('Erkannte Begriffe')}
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {enrichment.detected_terms.map((term) => (
-              <span
-                key={term}
-                className="text-[11px] font-semibold px-2 py-1 rounded-md bg-accent/10 text-accent border border-accent/30"
-              >
-                {term}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Platform tabs */}
       <div className="flex flex-wrap gap-1.5">
         {PLATFORMS.map(({ id, label, Icon, tone }) => {
           const active = activePlatform === id;
@@ -274,21 +177,9 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
         platform={activePlatform}
         edit={edit}
         onChange={setEdit}
+        lastHashtags={enrichment.last_hashtags ?? []}
       />
 
-      {/* Transcript collapsible */}
-      {enrichment.transcript_corrected && (
-        <details className="rounded-xl border border-border bg-bg/40 p-3">
-          <summary className="cursor-pointer text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary inline-flex items-center gap-1.5">
-            <ScrollText className="w-3 h-3" /> {t('Transkript anzeigen')}
-          </summary>
-          <div className="text-xs text-text-secondary leading-relaxed mt-3 whitespace-pre-wrap font-mono">
-            {enrichment.transcript_corrected}
-          </div>
-        </details>
-      )}
-
-      {/* Actions */}
       <div className="flex items-center gap-3 border-t border-border pt-3">
         <div className="text-[11px] text-text-secondary">
           {dirty ? t('Ungesicherte Änderungen') : t('Synchron mit Server')}
@@ -313,6 +204,12 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
           </button>
         </div>
       </div>
+      {saveMutation.isError && (
+        <div role="alert" className="text-sm text-danger inline-flex items-center gap-2">
+          <AlertCircle className="w-4 h-4" />
+          {t('Speichern hat nicht geklappt. Versuch es nochmal.')}
+        </div>
+      )}
       {saveMutation.isSuccess && !dirty && (
         <div className="text-xs text-success inline-flex items-center gap-1.5">
           <CheckCircle2 className="w-3.5 h-3.5" /> {t('Gespeichert.')}
@@ -326,9 +223,10 @@ interface PlatformEditorProps {
   platform: SocialPlatform;
   edit: EditState;
   onChange: (next: EditState) => void;
+  lastHashtags: string[];
 }
 
-function PlatformEditor({ platform, edit, onChange }: PlatformEditorProps) {
+function PlatformEditor({ platform, edit, onChange, lastHashtags }: PlatformEditorProps) {
   const t = useT();
   const config = PLATFORMS.find((p) => p.id === platform)!;
   const titleKey = `title_${platform}` as const;
@@ -338,6 +236,8 @@ function PlatformEditor({ platform, edit, onChange }: PlatformEditorProps) {
   const title = edit[titleKey];
   const desc = edit[descKey];
   const tags = edit[tagsKey];
+  const savedTags = [...new Set(lastHashtags.map(normalizeHashtag).filter(Boolean))];
+  const containsTag = (tag: string) => tags.some((current) => normalizeHashtag(current) === tag);
   const titleLen = title.length;
 
   return (
@@ -383,6 +283,31 @@ function PlatformEditor({ platform, edit, onChange }: PlatformEditorProps) {
           tags={tags}
           onChange={(next) => onChange({ ...edit, [tagsKey]: next })}
         />
+        {savedTags.length > 0 && (
+          <div className="mt-3 space-y-2">
+            <p className="text-xs text-text-secondary">{t('Zuletzt gespeicherte Hashtags')}</p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="studio-button text-xs"
+                onClick={() => onChange({ ...edit, [tagsKey]: [...tags, ...savedTags.filter((tag) => !containsTag(tag))] })}
+              >
+                {t('Gespeicherte Hashtags einfügen')}
+              </button>
+              {savedTags.map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  className="studio-button text-xs"
+                  disabled={containsTag(tag)}
+                  onClick={() => onChange({ ...edit, [tagsKey]: [...tags, tag] })}
+                >
+                  {tag.startsWith('#') ? tag : `#${tag}`}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -399,14 +324,9 @@ function HashtagsEditor({
   const [input, setInput] = useState('');
 
   const addTag = (raw: string) => {
-    const cleaned = raw
-      .trim()
-      .replace(/^#+/, '')
-      .replace(/\s+/g, '')
-      .toLowerCase();
-    if (!cleaned) return;
-    if (tags.includes(cleaned)) return;
-    onChange([...tags, cleaned]);
+    const tag = normalizeHashtag(raw);
+    if (!tag || tags.some((current) => normalizeHashtag(current) === tag)) return;
+    onChange([...tags, tag]);
   };
 
   const removeTag = (tag: string) => {
@@ -430,12 +350,12 @@ function HashtagsEditor({
           key={tag}
           className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-md bg-orange/10 text-orange border border-orange/30"
         >
-          #{tag}
+          {tag.startsWith('#') ? tag : `#${tag}`}
           <button
             type="button"
             onClick={() => removeTag(tag)}
             className="hover:text-white"
-            aria-label={t('Hashtag #{tag} entfernen', { tag })}
+            aria-label={t('Hashtag #{tag} entfernen', { tag: tag.replace(/^#+/, '') })}
           >
             <X className="w-3 h-3" />
           </button>

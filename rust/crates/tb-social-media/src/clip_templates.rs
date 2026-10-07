@@ -257,14 +257,22 @@ pub async fn apply_template_to_clip(
 }
 
 /// Speichert zuletzt genutzte Hashtags eines Streamers (Upsert).
-pub async fn save_last_hashtags(pool: &PgPool, twitch_user_id: &str, hashtags: &[String]) {
-    let _ = sqlx::query!(
+pub async fn save_last_hashtags(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    hashtags: &[String],
+) -> Result<(), sqlx::Error> {
+    let result = sqlx::query!(
         "INSERT INTO clip_last_hashtags (streamer_login, twitch_user_id, hashtags, last_used_at)
          SELECT twitch_login, twitch_user_id, $2, CURRENT_TIMESTAMP FROM twitch_streamers WHERE twitch_user_id = $1
          ON CONFLICT (twitch_user_id) WHERE twitch_user_id IS NOT NULL
          DO UPDATE SET streamer_login = EXCLUDED.streamer_login, hashtags = EXCLUDED.hashtags, last_used_at = EXCLUDED.last_used_at",
         twitch_user_id, dump_hashtags(hashtags)
-    ).execute(pool).await;
+    ).execute(pool).await?;
+    if result.rows_affected() == 0 {
+        return Err(sqlx::Error::RowNotFound);
+    }
+    Ok(())
 }
 
 pub async fn get_last_hashtags(pool: &PgPool, twitch_user_id: &str) -> Vec<String> {
@@ -421,12 +429,20 @@ mod tests {
             return;
         };
         assert!(get_last_hashtags(&pool, "42").await.is_empty());
-        save_last_hashtags(&pool, "42", &tags(&["#deadlock", "#haze"])).await;
+        save_last_hashtags(&pool, "42", &tags(&["#deadlock", "#haze"]))
+            .await
+            .unwrap();
         assert_eq!(
             get_last_hashtags(&pool, "42").await,
             tags(&["#deadlock", "#haze"])
         );
-        save_last_hashtags(&pool, "42", &tags(&["#neu"])).await;
+        save_last_hashtags(&pool, "42", &tags(&["#neu"]))
+            .await
+            .unwrap();
         assert_eq!(get_last_hashtags(&pool, "42").await, tags(&["#neu"]));
+        assert!(get_last_hashtags(&pool, "99").await.is_empty());
+        assert!(save_last_hashtags(&pool, "99", &tags(&["#fremd"]))
+            .await
+            .is_err());
     }
 }

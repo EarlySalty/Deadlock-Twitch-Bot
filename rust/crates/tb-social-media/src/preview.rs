@@ -52,6 +52,19 @@ pub async fn get_preview(pool: &PgPool, clip_db_id: i64) -> Option<PreviewStatus
     .await
     .ok()
     .flatten()?;
+    let expected = format!("{clip_db_id}_preview_manual_v1.mp4");
+    let current_render = row.preview_path.as_deref().is_some_and(|path| {
+        Path::new(path)
+            .file_name()
+            .is_some_and(|name| name == expected.as_str())
+    });
+    if row.preview_status.as_deref() == Some(PREVIEW_READY) && !current_render {
+        return Some(PreviewStatus {
+            status: None,
+            error: None,
+            path: None,
+        });
+    }
     Some(PreviewStatus {
         status: row.preview_status,
         error: row.preview_error,
@@ -65,7 +78,7 @@ fn resolve_preview_path(clip_db_id: i64, path: String) -> String {
     if Path::new(&path).exists() {
         return path;
     }
-    let expected = format!("{clip_db_id}_preview.mp4");
+    let expected = format!("{clip_db_id}_preview_manual_v1.mp4");
     let stored = Path::new(&path);
     if stored
         .file_name()
@@ -193,7 +206,10 @@ impl PreviewWorker {
                 return;
             }
         };
-        let output = format!("{}/{}_preview.mp4", self.clips_dir, job.clip_db_id);
+        let output = format!(
+            "{}/{}_preview_manual_v1.mp4",
+            self.clips_dir, job.clip_db_id
+        );
         match render_clip_vertical(
             &self.video_processor,
             &self.pool,
@@ -272,10 +288,10 @@ mod tests {
 
     #[test]
     fn alter_release_pfad_zeigt_auf_den_aktuellen_clips_mount() {
-        let old = "/opt/deadlock/twitch/releases/obsolete/data/clips/42_preview.mp4";
+        let old = "/opt/deadlock/twitch/releases/obsolete/data/clips/42_preview_manual_v1.mp4";
         assert_eq!(
             resolve_preview_path(42, old.to_string()),
-            "data/clips/42_preview.mp4"
+            "data/clips/42_preview_manual_v1.mp4"
         );
         assert_eq!(resolve_preview_path(43, old.to_string()), old);
     }
@@ -305,13 +321,23 @@ mod tests {
         // Ein zweiter Claim findet nichts mehr.
         assert!(claim_pending(&pool, 5).await.is_empty());
 
-        // Fertig -> ready + Pfad.
-        finish_ready(&pool, id, "/clips/1_preview.mp4")
-            .await
-            .unwrap();
+        let legacy_path = format!("/clips/{id}_preview.mp4");
+        finish_ready(&pool, id, &legacy_path).await.unwrap();
+        let stale = get_preview(&pool, id).await.unwrap();
+        assert!(stale.status.is_none());
+        assert!(stale.path.is_none());
+        let stored: String =
+            sqlx::query_scalar("SELECT preview_path FROM twitch_clips_social_media WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stored, legacy_path);
+        let path = format!("/clips/{id}_preview_manual_v1.mp4");
+        finish_ready(&pool, id, &path).await.unwrap();
         let st = get_preview(&pool, id).await.unwrap();
         assert_eq!(st.status.as_deref(), Some(PREVIEW_READY));
-        assert_eq!(st.path.as_deref(), Some("/clips/1_preview.mp4"));
+        assert_eq!(st.path.as_deref(), Some(path.as_str()));
 
         // Fehlerpfad.
         finish_error(&pool, id, "boom").await.unwrap();

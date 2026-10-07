@@ -44,10 +44,9 @@ use tb_social_media::clip_manager::{
 use tb_social_media::clip_queue::queue_upload;
 use tb_social_media::clip_templates::{
     apply_template_to_clip, create_streamer_template, get_global_templates, get_last_hashtags,
-    get_streamer_templates, GlobalTemplate, StreamerTemplate,
+    get_streamer_templates, save_last_hashtags, GlobalTemplate, StreamerTemplate,
 };
 use tb_social_media::credentials::{CredentialManager, PlatformStatus};
-use tb_social_media::enrich_pipeline::{ClipEnrichmentPipeline, PipelineError};
 use tb_social_media::enrichment::{
     ensure_enrichment_row, get_enrichment, update_manual_edit, EnrichmentRecord,
 };
@@ -56,7 +55,6 @@ use tb_social_media::layout::{
     default_streamer_layout, get_clip_effective_layout, get_streamer_layout,
     set_clip_layout_override, upsert_streamer_layout, StreamerLayout,
 };
-use tb_social_media::llm_dispatch::LlmDispatcher;
 use tb_social_media::oauth::{OAuthError, OAuthManager};
 use tb_social_media::partner_access::{
     is_partner_id_granted, list_partner_access, set_partner_access,
@@ -2451,6 +2449,26 @@ fn enrichment_record_json(e: &EnrichmentRecord) -> Value {
     })
 }
 
+async fn clip_metadata_json(pool: &PgPool, record: &EnrichmentRecord) -> Result<Value, Response> {
+    let identity: Option<String> = sqlx::query_scalar(
+        "SELECT twitch_user_id FROM twitch_clips_social_media WHERE id = $1",
+    )
+    .bind(i64::from(record.clip_db_id))
+    .fetch_one(pool)
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, clip_db_id = record.clip_db_id, "Clip-Zugehörigkeit konnte nicht geladen werden");
+        clip_load_failed()
+    })?;
+    let hashtags = match identity.as_deref().filter(|id| !id.is_empty()) {
+        Some(id) => get_last_hashtags(pool, id).await,
+        None => Vec::new(),
+    };
+    let mut metadata = enrichment_record_json(record);
+    metadata["last_hashtags"] = json!(hashtags);
+    Ok(metadata)
+}
+
 /// Serialisiert einen Analytics-Snapshot (Python `_serialize_clip_analytics_record`).
 fn clip_analytics_json(a: &ClipAnalyticsSnapshot) -> Value {
     json!({
@@ -2621,8 +2639,49 @@ pub async fn enrichment_put_handler(
             .into_response();
     }
     match get_enrichment(&pool, child_clip_db_id).await {
-        Some(r) => Json(enrichment_record_json(&r)).into_response(),
-        None => Json(json!({})).into_response(),
+        Some(r) => {
+            let changed_tags = if hy.is_some() {
+                Some(&r.hashtags_youtube)
+            } else if ht.is_some() {
+                Some(&r.hashtags_tiktok)
+            } else if hi.is_some() {
+                Some(&r.hashtags_instagram)
+            } else {
+                None
+            };
+            if let Some(hashtags) = changed_tags {
+                let identity = sqlx::query_scalar::<_, Option<String>>(
+                    "SELECT twitch_user_id FROM twitch_clips_social_media WHERE id = $1",
+                )
+                .bind(clip_db_id)
+                .fetch_one(&pool)
+                .await;
+                let result = match identity {
+                    Ok(Some(id)) if !id.is_empty() => {
+                        save_last_hashtags(&pool, &id, hashtags).await
+                    }
+                    Ok(_) => Err(sqlx::Error::RowNotFound),
+                    Err(error) => Err(error),
+                };
+                if let Err(error) = result {
+                    tracing::error!(%error, clip_db_id, "Hashtags zur Wiederverwendung konnten nicht gespeichert werden");
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": "save_failed" })),
+                    )
+                        .into_response();
+                }
+            }
+            match clip_metadata_json(&pool, &r).await {
+                Ok(value) => Json(value).into_response(),
+                Err(response) => response,
+            }
+        }
+        None => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "save_failed" })),
+        )
+            .into_response(),
     }
 }
 
@@ -2647,20 +2706,17 @@ pub async fn enrichment_get_handler(
         Err(e) => return e,
     };
     let record = ensure_enrichment_row(&pool, child_clip_db_id).await;
-    Json(enrichment_record_json(&record)).into_response()
+    match clip_metadata_json(&pool, &record).await {
+        Ok(value) => Json(value).into_response(),
+        Err(response) => response,
+    }
 }
 
-/// `POST /social-media/api/admin/clips/{clip_db_id}/enrichment/run` — Enrichment
-/// manuell anstoßen (Admin). Optionaler Body `{ "force": true }` reichert auch
-/// bereits fertige Clips neu an. Baut den LLM-Dispatcher inline. Transkription
-/// ist per Grillme-Entscheidung (Block 15) deaktiviert — es wird KEIN Transcriber
-/// injiziert (tb-social-media hat das whisper/OpenAI-Modul entfernt), die Pipeline
-/// läuft ohne Transkription weiter.
 pub async fn enrichment_run_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Path(raw): Path<String>,
-    body: String,
+    _body: String,
 ) -> Response {
     let scope = match require_sm_access(&auth, &pool, None).await {
         Ok(s) => s,
@@ -2676,38 +2732,17 @@ pub async fn enrichment_run_handler(
     if let Some(guard_response) = guard_partner_access_for_clip(&pool, &auth, clip_db_id).await {
         return guard_response;
     }
-    let child_clip_db_id = match require_clip_child_id(&pool, clip_db_id, "enrichment_run").await {
-        Ok(id) => id,
-        Err(e) => return e,
-    };
-    // Optionaler Body: ungültiges/leeres JSON → force=false (Python schluckt Fehler).
-    let force = serde_json::from_str::<Value>(&body)
-        .ok()
-        .and_then(|v| v.get("force").map(coerce_bool))
-        .unwrap_or(false);
-
-    let llm = LlmDispatcher::new(pool.clone());
-    let pipeline = ClipEnrichmentPipeline::new(pool.clone());
-    let outcome = match pipeline.run(child_clip_db_id, None, &llm, force).await {
-        Ok(o) => o,
-        Err(PipelineError::ClipNotFound(_)) => return clip_not_found(),
-    };
-
-    let enrichment = match get_enrichment(&pool, child_clip_db_id).await {
-        Some(r) => enrichment_record_json(&r),
-        None => json!({}),
-    };
-    Json(json!({
-        "clip_db_id": clip_db_id,
-        "outcome": {
-            "status": outcome.status,
-            "provider": outcome.provider,
-            "model": outcome.model,
-            "error_message": outcome.error_message,
-        },
-        "enrichment": enrichment,
-    }))
-    .into_response()
+    if let Err(e) = require_clip_child_id(&pool, clip_db_id, "enrichment_run").await {
+        return e;
+    }
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "error": "clip_enrichment_disabled",
+            "message": "Automatische Cliptexte und Transkripte sind abgeschaltet. Du kannst Titel, Beschreibung und Hashtags selbst bearbeiten.",
+        })),
+    )
+        .into_response()
 }
 
 /// `GET /social-media/api/admin/analytics/clips/{clip_db_id}` — Analytics (Admin).
@@ -6249,6 +6284,8 @@ mod tests {
         let Some(pool) = make_pool("t_dash_sm_reads").await else {
             return;
         };
+        sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('nani', '42'), ('other', '99')")
+            .execute(&pool).await.unwrap();
         let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('a', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
 
         // enrichment-get: ensure_enrichment_row legt pending an.
@@ -6357,8 +6394,31 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let v = body_json(resp).await;
         assert_eq!(v["title_youtube"], "YT");
-        assert_eq!(v["hashtags_youtube"], json!(["#a", "#b"])); // #-Präfix + dedup
-                                                                // ungültiges Feld (Zahl) → 400 invalid_field.
+        assert_eq!(v["hashtags_youtube"], json!(["#a", "#b"]));
+        assert_eq!(v["last_hashtags"], json!(["#a", "#b"]));
+        assert_eq!(get_last_hashtags(&pool, "42").await, vec!["#a", "#b"]);
+        assert!(get_last_hashtags(&pool, "99").await.is_empty());
+        let second: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, twitch_user_id) VALUES ('second', 'nani_renamed', '42') RETURNING id")
+            .fetch_one(&pool).await.unwrap();
+        let reused = enrichment_get_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Path(second.to_string()),
+        )
+        .await;
+        assert_eq!(
+            body_json(reused).await["last_hashtags"],
+            json!(["#a", "#b"])
+        );
+        let foreign: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login, twitch_user_id) VALUES ('foreign', 'other', '99') RETURNING id")
+            .fetch_one(&pool).await.unwrap();
+        let isolated = enrichment_get_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Path(foreign.to_string()),
+        )
+        .await;
+        assert_eq!(body_json(isolated).await["last_hashtags"], json!([]));
         let resp = enrichment_put_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
@@ -6382,16 +6442,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn enrichment_run_skips_without_transcriber_and_llm() {
-        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    async fn enrichment_run_disabled_without_side_effects() {
         let Some(pool) = make_pool("t_dash_sm_enrich_run").await else {
             return;
         };
-        std::env::set_var("OLLAMA_HOST", "127.0.0.1:59999"); // LLM → Fallback (schnell, deterministisch)
-
-        // Clip ohne Video-Pfad → Transkription übersprungen; LLM scheitert →
-        // Pipeline endet bei skipped_no_key.
         let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, streamer_login) VALUES ('r', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
 
         let resp = enrichment_run_handler(
@@ -6401,13 +6455,12 @@ mod tests {
             String::new(),
         )
         .await;
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         let v = body_json(resp).await;
-        assert_eq!(v["clip_db_id"], clip);
-        assert_eq!(v["outcome"]["status"], "skipped_no_key");
-        assert_eq!(v["enrichment"]["clip_db_id"], clip);
+        assert_eq!(v["error"], "clip_enrichment_disabled");
+        assert!(v["message"].is_string());
+        assert!(v.get("enrichment").is_none());
 
-        // force im Body wird akzeptiert (kein Parse-Fehler) → weiterhin OK.
         let resp = enrichment_run_handler(
             DashboardAuthLevel::admin(),
             State(pool.clone()),
@@ -6415,7 +6468,12 @@ mod tests {
             "{\"force\":true}".into(),
         )
         .await;
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM social_media_clip_enrichment")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
 
         // Fehlerpfade: ungültige ID → 400, fehlender Clip → 404, Partner → 403.
         assert_eq!(

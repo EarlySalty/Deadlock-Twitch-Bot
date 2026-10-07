@@ -6,9 +6,7 @@ use chrono::{DateTime, Utc};
 
 use tb_config::{file::ConfigArguments, BotConfigSnapshot};
 use tb_social_media::clip::helix::HelixClipSource;
-use tb_social_media::clip_context_harvest::{
-    available_stt, harvest, learn_and_store, load_clips, recommend_for_clip,
-};
+use tb_social_media::clip_context_harvest::{learn_and_store, recommend_for_clip};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -45,9 +43,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let write_pool = runtime.write_pool;
 
     let mut limit = 25_i64;
-    let mut clip_id = None;
+    let mut _clip_id = None;
     let mut backfill = false;
-    let mut force = false;
+    let mut _force = false;
     let mut learn_only = false;
     let mut recommend_id = None;
     let mut args = operation_arguments.into_iter();
@@ -63,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .parse()?
             }
             "--clip-id" => {
-                clip_id = Some(
+                _clip_id = Some(
                     args.next()
                         .ok_or("--clip-id braucht eine ID")?
                         .into_string()
@@ -71,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
             }
             "--backfill" => backfill = true,
-            "--force" => force = true,
+            "--force" => _force = true,
             "--learn-only" => learn_only = true,
             "--recommend" => {
                 recommend_id = Some(
@@ -141,22 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if !learn_only {
-        let stt = available_stt(&stt_config).await;
-        let clips = load_clips(&read_pool, limit, clip_id.as_deref(), stt, force).await?;
-        println!("candidates={} stt_available={stt}", clips.len());
-        for clip in clips {
-            match harvest(&read_pool, &write_pool, &clip, stt, &stt_config).await {
-                Ok(result) => println!(
-                    "clip={} status={} seconds={} stt={} visual={}",
-                    result.clip_id,
-                    result.status,
-                    result.seconds,
-                    result.stt_status,
-                    result.visual_status
-                ),
-                Err(error) => eprintln!("clip={} error={error}", clip.clip_id),
-            }
-        }
+        return Err("Clip-Anreicherung und Transkription sind abgeschaltet.".into());
     }
     match learn_and_store(&write_pool).await? {
         Some(template) => println!(

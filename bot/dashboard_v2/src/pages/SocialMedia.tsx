@@ -12,7 +12,7 @@ import {
   Calendar,
   Gamepad2,
   ExternalLink,
-  Wand2,
+  Pencil,
   SlidersHorizontal,
   Languages,
   DownloadCloud,
@@ -1282,7 +1282,6 @@ function ApprovalModeCard({
   isSaving,
   error,
   onChange,
-  onSubtitlesChange,
 }: {
   plan: PostingPlan | null;
   isLoading: boolean;
@@ -1343,25 +1342,6 @@ function ApprovalModeCard({
         })}
       </div>
 
-      <div className="rounded-xl border border-border bg-white/[0.02] px-3 py-2.5">
-        <label className="flex items-center justify-between gap-3">
-          <span>
-            <span className="block text-sm font-medium text-ui-text">
-              {t('Untertitel einbrennen')}
-            </span>
-            <span className="mt-0.5 block text-xs leading-5 text-ui-faint">
-              {t('Brennt gesprochene Wörter als Untertitel ins Hochformat-Video.')}
-            </span>
-          </span>
-          <input
-            type="checkbox"
-            disabled={gesperrt}
-            checked={plan?.subtitles_enabled ?? true}
-            onChange={(event) => onSubtitlesChange(event.target.checked)}
-            className="h-4 w-4 accent-primary disabled:opacity-60"
-          />
-        </label>
-      </div>
       {error ? <div className="text-xs text-danger">{fehlerText(error, t)}</div> : null}
     </div>
   );
@@ -1767,9 +1747,7 @@ function CategoryCard({
                 {t(kategorieLabel(kategorie.category_key, kategorie.display_name))}
               </span>
               <span className="mt-0.5 block text-xs leading-5 text-ui-faint">
-                {kategorie.enrichment_enabled
-                  ? t('Mit Titel- und Hashtag-Vorschlägen.')
-                  : t('Ohne Vorschläge, Clip geht so raus.')}
+                {t('Titel, Beschreibung und Hashtags bearbeitest du im Clip-Editor.')}
               </span>
             </span>
             <input
@@ -2514,8 +2492,8 @@ function ClipCard({
                 onClick={() => runMenu(() => onOpenEditor('enrichment'))}
                 className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-white/5"
               >
-                <Wand2 className="h-4 w-4" />
-                {t('Transkript & Metadaten')}
+                <Pencil className="h-4 w-4" />
+                {t('Titel, Beschreibung & Hashtags')}
               </button>
               <button
                 type="button"

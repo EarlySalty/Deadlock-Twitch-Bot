@@ -227,18 +227,11 @@ pub async fn mark_clip_awaiting_approval(pool: &PgPool, clip_db_id: i32) {
     }
 }
 
-/// Clips, die ohne Enrichment direkt in den Approval-Workflow gehoeren.
-///
-/// Die LLM-Anreicherung laeuft nur fuer Kategorien mit `enrichment_enabled`, und
-/// erst an ihrem Ende landet ein Clip in `awaiting_approval`. Clips anderer
-/// Kategorien wuerden sonst nie auftauchen; die holt diese Abfrage ab.
 pub async fn iter_clips_ohne_enrichment(pool: &PgPool, limit: i64) -> Vec<i32> {
     sqlx::query_scalar!(
         "SELECT c.id::int AS \"id!\" FROM twitch_clips_social_media c \
-         JOIN social_media_category k ON k.category_key = c.category_key \
          LEFT JOIN social_media_clip_approval a ON a.clip_db_id = c.id \
          WHERE c.discarded_at IS NULL \
-           AND NOT k.enrichment_enabled \
            AND a.clip_db_id IS NULL \
            AND COALESCE(c.status, 'pending') = 'pending' \
            AND c.id BETWEEN 0 AND 2147483647 \
@@ -918,6 +911,52 @@ mod tests {
             .fetch_one(pool)
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn deadlock_pending_ohne_transkript_erreicht_freigabe_und_upload_queue() {
+        let Some(pool) = make_pool("t_sm_manual_approval").await else {
+            return;
+        };
+        sqlx::query("ALTER TABLE twitch_clips_social_media ADD COLUMN category_key TEXT DEFAULT 'deadlock', ADD COLUMN discarded_at TIMESTAMPTZ, ADD COLUMN created_at TIMESTAMPTZ DEFAULT NOW()")
+            .execute(&pool).await.unwrap();
+        let clip = seed_clip(&pool).await;
+        sqlx::query(
+            "INSERT INTO social_media_clip_enrichment (clip_db_id, status) VALUES ($1, 'pending')",
+        )
+        .bind(clip)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(iter_clips_ohne_enrichment(&pool, 10).await, vec![clip]);
+        mark_clip_awaiting_approval(&pool, clip).await;
+        assert!(iter_clips_ohne_enrichment(&pool, 10).await.is_empty());
+        let record = handle_decision(
+            &pool,
+            clip,
+            DECISION_APPROVE,
+            &["youtube".into()],
+            Some("admin"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(record.state, STATE_APPROVED);
+        let queue: Vec<(String, Option<String>)> = sqlx::query_as(
+            "SELECT platform, title FROM twitch_clips_upload_queue WHERE clip_id = $1",
+        )
+        .bind(i64::from(clip))
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(queue, vec![("youtube".into(), None)]);
+        let transcript: Option<String> = sqlx::query_scalar(
+            "SELECT transcript_raw FROM social_media_clip_enrichment WHERE clip_db_id = $1",
+        )
+        .bind(clip)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(transcript.is_none());
     }
 
     #[tokio::test]

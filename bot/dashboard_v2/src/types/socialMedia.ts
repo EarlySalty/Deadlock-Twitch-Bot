@@ -189,6 +189,7 @@ export interface ClipEnrichment {
   hashtags_youtube: string[];
   hashtags_tiktok: string[];
   hashtags_instagram: string[];
+  last_hashtags?: string[];
   llm_provider: string | null;
   llm_model: string | null;
   cost_usd_estimate: number | null;

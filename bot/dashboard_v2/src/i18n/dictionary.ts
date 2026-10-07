@@ -46,6 +46,14 @@ export const MESSAGE_TYPE_LABELS: Record<string, string> = {
 };
 
 const EN: Record<string, string> = {
+  'Titel, Beschreibung & Hashtags': 'Title, description & hashtags',
+  'Titel, Beschreibung und Hashtags bearbeitest du im Clip-Editor.': 'Edit the title, description and hashtags in the clip editor.',
+  'Die Cliptexte konnten nicht geladen werden.': 'The clip text could not be loaded.',
+  'Erneut laden': 'Reload',
+  'Editor schließen': 'Close editor',
+  'Zuletzt gespeicherte Hashtags': 'Last saved hashtags',
+  'Gespeicherte Hashtags einfügen': 'Insert saved hashtags',
+  'Speichern hat nicht geklappt. Versuch es nochmal.': 'Saving failed. Please try again.',
   'Der aktuelle Stand ist nicht erreichbar. Dein Entwurf bleibt erhalten.': 'The current server state is unavailable. Your draft has been kept.',
   'Serverstand erneut laden': 'Reload server state',
   "Ungespeicherte Änderungen verwerfen?": "Discard unsaved changes?",

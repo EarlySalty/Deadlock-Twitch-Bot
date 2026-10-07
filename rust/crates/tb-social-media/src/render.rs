@@ -2,9 +2,7 @@ use sqlx::PgPool;
 
 use crate::enrichment::get_enrichment;
 use crate::layout::get_clip_stored_layout;
-use crate::subtitles::{
-    ass_from_segments, build_branded_ass, correct_segments, segment_subtitles, SubtitleSegment,
-};
+use crate::subtitles::{ass_from_segments, build_branded_ass};
 use crate::video_processor::{VideoProcessor, VideoProcessorError};
 use crate::vocab::load_all_vocab;
 
@@ -55,25 +53,6 @@ pub async fn render_clip_vertical(
         .fetch_one(pool)
         .await
         .map_err(|error| VideoProcessorError::Parse(error.to_string()))?;
-    let cues = if subtitles_enabled_for_clip(pool, clip_db_id).await {
-        if let Ok(id) = i32::try_from(clip_db_id) {
-            if let Some(enrichment) = get_enrichment(pool, id).await {
-                let segments: Vec<SubtitleSegment> = enrichment
-                    .transcript_segments
-                    .iter()
-                    .filter_map(SubtitleSegment::from_json)
-                    .collect();
-                let vocab = load_all_vocab(pool).await;
-                segment_subtitles(&correct_segments(&segments, &vocab))
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
-    };
     let source_duration = vp.get_video_info(input_path).await?.duration;
     let duration = if source_duration > 0.0 {
         source_duration.min(max_duration as f64)
@@ -86,7 +65,7 @@ pub async fn render_clip_vertical(
         .map(|value| value.cam_position.clamped_to_target().h)
         .unwrap_or(600);
     let ass = build_branded_ass(
-        &cues,
+        &[],
         custom_title
             .as_deref()
             .filter(|s| !s.trim().is_empty())
