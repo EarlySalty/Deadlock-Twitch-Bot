@@ -161,6 +161,7 @@ export interface ClipPostingInfo {
   upload_errors?: PlattformFehler | null;
   scheduled_at?: PlattformTermine | null;
   upload_states?: Partial<Record<SocialPlatform, string | null>> | null;
+  publish_states?: Partial<Record<SocialPlatform, string | null>> | null;
 }
 
 export type SocialClipMitPosting = SocialClip & ClipPostingInfo;
@@ -306,10 +307,48 @@ export async function fetchClipApproval(
   );
 }
 
+export interface TikTokPostOptions {
+  caption: string;
+  privacy_level: string;
+  allow_comment: boolean;
+  allow_duet: boolean;
+  allow_stitch: boolean;
+  commercial_content: boolean;
+  brand_organic_toggle: boolean;
+  brand_content_toggle: boolean;
+  consent: boolean;
+  creator_username: string;
+  credential_id: number;
+  platform_user_id: string;
+  approved_video_sha256: string;
+}
+
+export interface TikTokPostingContext {
+  creator: {
+    creator_username: string;
+    creator_nickname: string;
+    privacy_level_options: string[];
+    comment_disabled: boolean;
+    duet_disabled: boolean;
+    stitch_disabled: boolean;
+    max_video_post_duration_sec: number;
+  };
+  caption: string;
+  duration_seconds: number;
+  approved_video_sha256: string;
+  credential_id: number;
+  platform_user_id: string;
+}
+
+export function fetchTikTokCreatorInfo(clipDbId: number): Promise<TikTokPostingContext> {
+  return fetchJson(`/social-media/api/clips/${clipDbId}/tiktok/creator-info`, { cache: 'no-store' });
+}
+
 export async function decideClipApproval(input: {
   clipDbId: number;
   decision: 'approve' | 'skip' | 'edit';
   platforms: SocialPlatform[];
+  tiktokOptions?: TikTokPostOptions;
 }): Promise<{ clip_db_id: number; approval: ClipApprovalRecord | null; clip: SocialClip | null }> {
   return fetchJson<{ clip_db_id: number; approval: ClipApprovalRecord | null; clip: SocialClip | null }>(
     `${ADMIN_PREFIX}/approval/${input.clipDbId}/decision`,
@@ -319,6 +358,7 @@ export async function decideClipApproval(input: {
       body: JSON.stringify({
         decision: input.decision,
         platforms: input.platforms,
+        tiktok_options: input.tiktokOptions,
       }),
     },
   );

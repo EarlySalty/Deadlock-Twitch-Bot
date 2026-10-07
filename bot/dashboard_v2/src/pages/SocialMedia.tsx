@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { useLanguage, useT } from '@/context/LanguageContext';
 import { LANGUAGES, LANGUAGE_LABELS, type Language } from '@/i18n/dictionary';
+import { TikTokPostDialog } from '@/components/socialmedia/TikTokPostDialog';
 import { WorkspaceDialog } from '@/components/socialmedia/WorkspaceDialog';
 import { PostingPlanDraft } from '@/components/socialmedia/PostingPlanDraft';
 import {
@@ -54,6 +55,7 @@ import {
 import {
   cancelScheduledPost,
   decideClipApproval,
+  type TikTokPostOptions,
   SocialMediaForbiddenError,
   discardClip,
   fetchPostingPlan,
@@ -183,6 +185,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
     /oauth/.test(window.location.search) ? 'konten' : 'pool',
   );
   const [showAnalytics, setShowAnalytics] = useState(false);
+  const [tiktokPost, setTikTokPost] = useState<{ clipDbId: number; platforms: SocialPlatform[] } | null>(null);
 
   const layoutQuery = useQuery<StreamerLayoutResponse, Error>({
     queryKey: ['social-media', 'streamer-layout', twitchUserId],
@@ -371,11 +374,13 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
       clipDbId,
       decision,
       platforms,
+      tiktokOptions,
     }: {
       clipDbId: number;
       decision: 'approve' | 'skip' | 'edit';
       platforms: SocialPlatform[];
-    }) => decideClipApproval({ clipDbId, decision, platforms }),
+      tiktokOptions?: TikTokPostOptions;
+    }) => decideClipApproval({ clipDbId, decision, platforms, tiktokOptions }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-media', 'clips'] });
       queryClient.invalidateQueries({ queryKey: ['social-media', 'posting-plan', twitchUserId] });
@@ -843,6 +848,11 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
                           }
                         }}
                         onApprovalDecision={(decision, platforms) => {
+                          if (decision === 'approve' && platforms.includes('tiktok')) {
+                            approvalMutation.reset();
+                            setTikTokPost({ clipDbId: clip.clip_db_id, platforms });
+                            return;
+                          }
                           approvalMutation.mutate({
                             clipDbId: clip.clip_db_id,
                             decision,
@@ -995,6 +1005,18 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
         />
       )}
 
+      {tiktokPost && (
+        <TikTokPostDialog
+          clipDbId={tiktokPost.clipDbId}
+          pending={approvalMutation.isPending}
+          error={approvalMutation.error}
+          onClose={() => setTikTokPost(null)}
+          onConfirm={(tiktokOptions) => approvalMutation.mutate(
+            { ...tiktokPost, decision: 'approve', tiktokOptions },
+            { onSuccess: () => setTikTokPost(null) },
+          )}
+        />
+      )}
       {showAnalytics && (
         <WorkspaceDialog
           eyebrow={t('Performance')}
@@ -2423,13 +2445,25 @@ function ClipCard({
                     : t('YouTube: Upload abgeschlossen, Sichtbarkeit noch nicht bestätigt.')}
             </p>
           )}
+          {clip.publish_states?.tiktok && (
+            <p role="status" className="text-sm text-text-secondary">
+              {t(({
+                PROCESSING_UPLOAD: 'TikTok: Die Videodatei wird verarbeitet.',
+                PROCESSING_DOWNLOAD: 'TikTok: Die Videodatei wird geladen.',
+                PUBLISH_COMPLETE: 'TikTok: Veröffentlichung bestätigt.',
+                FAILED: 'TikTok: Veröffentlichung abgelehnt.',
+                STATUS_UNAVAILABLE: 'TikTok: Bestätigung steht noch aus.',
+                SEND_TO_USER_INBOX: 'TikTok: Frühere Übertragung ins Postfach.',
+              } as Record<string, string>)[clip.publish_states.tiktok] ?? 'TikTok: Bestätigung steht noch aus.')}
+            </p>
+          )}
           {clip.layout_override && <p className="text-xs text-accent">{t('Eigenes Layout')}</p>}
           {uploadFehler.length > 0 && (
             <div role="alert" className="break-words text-sm text-danger">
               {uploadFehler.map(({ platform, text }) => (
                 <p key={platform}>
                   {PLATFORM_LABELS[platform]}: {platform === 'tiktok' && text?.includes('unaudited_client_can_only_post_to_private_accounts')
-                    ? t('TikTok hat den direkten Post abgelehnt. Neue Clips gehen jetzt in dein TikTok-Postfach, wo du sie selbst veröffentlichen kannst.')
+                    ? t('TikTok erlaubt für diese App derzeit nur „Nur ich“. Prüfe die TikTok-Freigabe und plane den Clip erneut ein.')
                     : text}
                 </p>
               ))}
@@ -2476,6 +2510,14 @@ function ClipCard({
           )}
         </div>
         <div className="studio-clip-actions">
+          {!canDecide && !terminal && !clip.platform_status.tiktok
+            && clip.approval?.approved_platforms.includes('tiktok')
+            && ['pending', 'failed'].includes(clip.upload_states?.tiktok ?? 'pending') && (
+            <button type="button" className="studio-button" disabled={approvalPending}
+              onClick={() => onApprovalDecision('approve', clip.approval?.approved_platforms ?? ['tiktok'])}>
+              {t('TikTok-Freigabe prüfen')}
+            </button>
+          )}
           {canDecide ? (
             <>
               <button

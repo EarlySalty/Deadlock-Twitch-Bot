@@ -291,6 +291,10 @@ fn build_authed_router_with_analysis_store(pool: PgPool, token: String, rate_lim
             get(social_media::stats_handler),
         )
         .route(
+            "/social-media/api/clips/{clip_db_id}/tiktok/creator-info",
+            get(social_media::tiktok_creator_info_handler),
+        )
+        .route(
             "/social-media/api/upload",
             post(social_media::queue_upload_handler),
         )

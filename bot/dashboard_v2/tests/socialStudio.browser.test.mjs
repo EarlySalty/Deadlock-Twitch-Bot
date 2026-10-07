@@ -268,6 +268,13 @@ test(
             expired: platform === 'youtube',
           })),
         });
+      if (/\/clips\/\d+\/tiktok\/creator-info$/.test(p)) return json({
+        creator: { creator_username: 'earlysalty', creator_nickname: 'EarlySalty',
+          privacy_level_options: ['PUBLIC_TO_EVERYONE', 'SELF_ONLY'], comment_disabled: true,
+          duet_disabled: false, stitch_disabled: false, max_video_post_duration_sec: 300 },
+        caption: 'Freigegebene Beschreibung #deadlock', duration_seconds: 34,
+        credential_id: 1, platform_user_id: 'fixture-account', approved_video_sha256: 'fixture-digest',
+      });
       if (/\/approval\/\d+\/decision$/.test(p)) {
         const id = Number(p.split('/').at(-2));
         const clip = clips.earlysalty.find((c) => c.clip_db_id === id);
@@ -275,6 +282,11 @@ test(
         clip.approval.state = clip.status;
         clip.approval.approved_platforms = input.platforms;
         return json({ clip_db_id: id, clip, approval: clip.approval });
+      }
+      if (p.endsWith('/preview/file') && process.env.STUDIO_TIKTOK_VIDEO) {
+        res.writeHead(200, { 'content-type': 'video/mp4' });
+        res.end(await fs.readFile(process.env.STUDIO_TIKTOK_VIDEO));
+        return;
       }
       if (p.endsWith('/preview')) return json({ clip_db_id: 1, status: 'ready', ready: true });
       if (p.endsWith('/enrichment'))
@@ -525,9 +537,41 @@ test(
         .locator('.studio-clip')
         .getByRole('button', { name: 'Clip freigeben', exact: true })
         .click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByLabel('Beschreibung für TikTok').waitFor();
+      if (process.env.STUDIO_TIKTOK_VIDEO) {
+        await dialog.locator('video').evaluate(async (video) => {
+          await video.play();
+          await new Promise((resolve) => video.requestVideoFrameCallback(resolve));
+          video.pause();
+        });
+      }
+      assert.equal(writes.filter((w) => w.p.endsWith('/decision')).length, 0);
+      assert.equal(await dialog.getByLabel('Wer darf den Clip sehen?').inputValue(), '');
+      assert.equal(await dialog.getByLabel(/Kommentare/).isEnabled(), false);
+      assert.equal(await dialog.getByLabel('Duett', { exact: true }).isChecked(), false);
+      assert.equal(await dialog.getByRole('button', { name: 'Clip mit TikTok einplanen', exact: true }).isEnabled(), false);
+      await page.screenshot({ path: path.join(evidence, 'tiktok-desktop.png') });
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), 0);
+      await page.screenshot({ path: path.join(evidence, 'tiktok-mobile-top.png') });
+      await dialog.getByRole('button', { name: 'Clip mit TikTok einplanen', exact: true }).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(evidence, 'tiktok-mobile-bottom.png') });
+      await page.setViewportSize({ width: 1440, height: 1080 });
+      await dialog.getByLabel('Wer darf den Clip sehen?').selectOption('SELF_ONLY');
+      await dialog.getByLabel('Dieser Clip enthält Werbung', { exact: true }).check();
+      await dialog.getByLabel('Markenpartner', { exact: true }).check();
+      assert.equal(await dialog.getByRole('button', { name: 'Clip mit TikTok einplanen', exact: true }).isEnabled(), false);
+      await page.waitForFunction(() => document.querySelector('dialog option[value="SELF_ONLY"]')?.disabled === true);
+      await dialog.getByLabel('Dieser Clip enthält Werbung', { exact: true }).uncheck();
+      await dialog.getByLabel('Beschreibung für TikTok').fill('Individuell bestätigte Beschreibung');
+      await dialog.getByRole('checkbox').last().check();
+      await dialog.getByRole('button', { name: 'Clip mit TikTok einplanen', exact: true }).click();
       await page.waitForFunction(
         () => !document.querySelector('.studio-clip button.studio-primary'),
       );
+      assert.equal(writes.find((w) => w.p.endsWith('/decision')).input.tiktok_options.caption, 'Individuell bestätigte Beschreibung');
+      assert.equal(writes.find((w) => w.p.endsWith('/decision')).input.tiktok_options.privacy_level, 'SELF_ONLY');
       assert.deepEqual(writes.find((w) => w.p.endsWith('/decision')).input.platforms, [
         'youtube',
         'tiktok',
