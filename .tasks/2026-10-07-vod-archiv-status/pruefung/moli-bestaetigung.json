@@ -1,0 +1,204 @@
+{
+  "sha": "e5c04f4d8c8ce42cd7faa27ab43ab1499b9f71cf",
+  "hashes": {
+    "index.html": "c0ad0f2fb7baef636a52f93283b6948db45ff6ba41e93b4deabef67545ca0749",
+    "assets/charts-BGgtzR2C.js": "fcc08fcf381d9b4f01e4dabbf13dd8708ef3a7e65c1ad1eb0fc9a3614784b05f",
+    "assets/index-B6aFuwHy.js": "b51439dee90a1e57514f09c886cb2219eace67d26206d9f6f45b31b04b68cecd",
+    "assets/index-x3LVghQ4.css": "cf067cff2a405be83a9c0c07acd20f2ddddab78c3d9d3c789dff7fcae068b49d",
+    "assets/query-FwnJxEWc.js": "3355524e18c965fb34fae3c19d166e6a1b46b66ec9d72b96904bd812396046af",
+    "assets/react-BKtprR8h.js": "bd5b828cc30b1cc9ed9491d7c103d91ac6a7989d7a7fa64cc1dbb2bedaaa274d",
+    "assets/rolldown-runtime-hePW80VL.js": "580ad8c58061a4dde99bde0a56905e382f0568516ee2f5b84dbfb52085709021"
+  },
+  "results": [
+    {
+      "name": "desktop",
+      "width": 1440,
+      "height": 1100,
+      "metrics": {
+        "viewport": 1440,
+        "document": 1440,
+        "articles": [
+          {
+            "title": "Älterer Upload ohne Abschlusszeit",
+            "status": "YouTube-Upload abgeschlossen",
+            "titleLeft": 305,
+            "statusLeft": 305,
+            "statusRight": 533.734375,
+            "icon": true,
+            "time": null,
+            "buttons": 1
+          },
+          {
+            "title": "Wartet auf Upload",
+            "status": "Wartet",
+            "titleLeft": 305,
+            "statusLeft": 305,
+            "statusRight": 372.296875,
+            "icon": true,
+            "time": null,
+            "buttons": 3
+          },
+          {
+            "title": "Upload läuft",
+            "status": "Lädt hoch",
+            "titleLeft": 305,
+            "statusLeft": 305,
+            "statusRight": 392.0625,
+            "icon": true,
+            "time": "2026-10-01T13:00:00Z",
+            "buttons": 1
+          },
+          {
+            "title": "Bestätigte Drive-Kopie",
+            "status": "Auf Drive gesichert",
+            "titleLeft": 305,
+            "statusLeft": 305,
+            "statusRight": 448.265625,
+            "icon": true,
+            "time": "2026-10-01T13:00:00Z",
+            "buttons": 1
+          },
+          {
+            "title": "Unklarer älterer Abschluss",
+            "status": "Abschluss unklar",
+            "titleLeft": 305,
+            "statusLeft": 305,
+            "statusRight": 435.4375,
+            "icon": true,
+            "time": null,
+            "buttons": 1
+          },
+          {
+            "title": "Teilweise hochgeladen",
+            "status": "Teilweise auf YouTube",
+            "titleLeft": 305,
+            "statusLeft": 305,
+            "statusRight": 467.609375,
+            "icon": true,
+            "time": "2026-10-01T13:00:00Z",
+            "buttons": 3
+          },
+          {
+            "title": "Bestätigter älterer Upload",
+            "status": "YouTube-Upload abgeschlossen",
+            "titleLeft": 305,
+            "statusLeft": 305,
+            "statusRight": 533.734375,
+            "icon": true,
+            "time": "2026-09-01T12:00:00Z",
+            "buttons": 1
+          },
+          {
+            "title": "Eigener Stream",
+            "status": "Fehlgeschlagen",
+            "titleLeft": 305,
+            "statusLeft": 305,
+            "statusRight": 428.859375,
+            "icon": true,
+            "time": null,
+            "buttons": 3
+          }
+        ],
+        "forbiddenAttempt": false,
+        "text": "T\ntestkanal\nFREE\nMAIN\nHome\nRangliste & Erfolge\nAnalyse\nSocial-Media-Manager\nUplink\nTOOLS\nVerwaltung\nStream-Overlay\nTitel-Studio\nPlan: Free\nChangelog\nHILFE\nHilfe & Einrichtung\nKritik & Wünsche\nHäufige Fragen\nPARTNER DASHBOARD\nSocial-Media-Manager\n\nFokus: testkanal\n\nVOD-Archiv\nFreigeben\nStreamer wählen\ntestkanal\nVOD-Archiv\n\ntestkanal · Aus guten Momenten werden deine nächsten Posts.\n\nAuswertung\nClip hinzufügen\nPipeline\nAuto-Pilot & Zeitplan\nTemplates & Layouts\nKonten & Einstellungen\nVOD-Archiv\nVOD-Archiv\n\nHier findest du deine gesicherten Streams und offene Uploads. Nach bestätigtem Upload werden die temporären Dateien gelöscht.\n\nAbschlüsse beruhen auf gespeicherten Uploadbestätigungen. Die heutige Verfügbarkeit und Sichtbarkeit prüfst du über die Ziellinks.\n\nVOD-Archiv: an\nAlle Kanäle anzeigen\nÄlterer Upload ohne Abschlusszeit\nYouTube-Upload abgeschlossen\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nAuf YouTube öffnen\nAus der Liste ausblenden\nWartet auf Upload\nWartet\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden\nUpload läuft\nLädt hoch\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nLetzter Versuch: 01.10.2026, 15:00\nAus der Liste ausblenden\nBestätigte Drive-Kopie\nAuf Drive gesichert\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nAbgeschlossen: 01.10.2026, 15:00\nAuf Drive öffnen\nAus der Liste ausblenden\nUnklarer älterer Abschluss\nAbschluss unklar\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\n\nDer frühere Abschluss ist nicht ausreichend dokumentiert. Prüfe vorhandene Ziellinks; ein erneuter Upload wird nicht automatisch gestartet.\n\nAuf YouTube öffnen\n(unbestätigt)\nAus der Liste ausblenden\nTeilweise hochgeladen\nTeilweise auf YouTube\nYouTube: 1 von 2 Teilen bestätigt\ntestkanal\nAufnahmedatum unbekannt\n13:53 h\nLetzter Versuch: 01.10.2026, 15:00\n\nDer Upload ist fehlgeschlagen. Prüfe die YouTube-Verbindung und versuche es erneut.\n\nYouTube: Teil 1\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden\nBestätigter älterer Upload\nYouTube-Upload abgeschlossen\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nAbgeschlossen: 01.09.2026, 14:00\nAuf YouTube öffnen\nAus der Liste ausblenden\nEigener Stream\nFehlgeschlagen\nrenamed\nAufnahmedatum unbekannt\n1:00 h\n\nDer Upload ist fehlgeschlagen. Prüfe die YouTube-Verbindung und versuche es erneut.\n\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden\nHilfe bekommen",
+        "geometrySupported": true
+      },
+      "errors": []
+    },
+    {
+      "name": "mobil",
+      "width": 390,
+      "height": 844,
+      "metrics": {
+        "viewport": 390,
+        "document": 390,
+        "articles": [
+          {
+            "title": "Älterer Upload ohne Abschlusszeit",
+            "status": "YouTube-Upload abgeschlossen",
+            "titleLeft": 29,
+            "statusLeft": 29,
+            "statusRight": 257.734375,
+            "icon": true,
+            "time": null,
+            "buttons": 1
+          },
+          {
+            "title": "Wartet auf Upload",
+            "status": "Wartet",
+            "titleLeft": 29,
+            "statusLeft": 29,
+            "statusRight": 96.296875,
+            "icon": true,
+            "time": null,
+            "buttons": 3
+          },
+          {
+            "title": "Upload läuft",
+            "status": "Lädt hoch",
+            "titleLeft": 29,
+            "statusLeft": 29,
+            "statusRight": 116.0625,
+            "icon": true,
+            "time": "2026-10-01T13:00:00Z",
+            "buttons": 1
+          },
+          {
+            "title": "Bestätigte Drive-Kopie",
+            "status": "Auf Drive gesichert",
+            "titleLeft": 29,
+            "statusLeft": 29,
+            "statusRight": 172.265625,
+            "icon": true,
+            "time": "2026-10-01T13:00:00Z",
+            "buttons": 1
+          },
+          {
+            "title": "Unklarer älterer Abschluss",
+            "status": "Abschluss unklar",
+            "titleLeft": 29,
+            "statusLeft": 29,
+            "statusRight": 159.4375,
+            "icon": true,
+            "time": null,
+            "buttons": 1
+          },
+          {
+            "title": "Teilweise hochgeladen",
+            "status": "Teilweise auf YouTube",
+            "titleLeft": 29,
+            "statusLeft": 29,
+            "statusRight": 191.609375,
+            "icon": true,
+            "time": "2026-10-01T13:00:00Z",
+            "buttons": 3
+          },
+          {
+            "title": "Bestätigter älterer Upload",
+            "status": "YouTube-Upload abgeschlossen",
+            "titleLeft": 29,
+            "statusLeft": 29,
+            "statusRight": 257.734375,
+            "icon": true,
+            "time": "2026-09-01T12:00:00Z",
+            "buttons": 1
+          },
+          {
+            "title": "Eigener Stream",
+            "status": "Fehlgeschlagen",
+            "titleLeft": 29,
+            "statusLeft": 29,
+            "statusRight": 152.859375,
+            "icon": true,
+            "time": null,
+            "buttons": 3
+          }
+        ],
+        "forbiddenAttempt": false,
+        "text": "T\ntestkanal\nFREE\nMAIN\nHome\nRangliste & Erfolge\nAnalyse\nSocial-Media-Manager\nUplink\nTOOLS\nVerwaltung\nStream-Overlay\nTitel-Studio\nPlan: Free\nChangelog\nHILFE\nHilfe & Einrichtung\nKritik & Wünsche\nHäufige Fragen\nPARTNER DASHBOARD\nSocial-Media-Manager\n\nFokus: testkanal\n\nVOD-Archiv\nFreigeben\nStreamer wählen\ntestkanal\nVOD-Archiv\n\ntestkanal · Aus guten Momenten werden deine nächsten Posts.\n\nAuswertung\nClip hinzufügen\nPipeline\nAuto-Pilot & Zeitplan\nTemplates & Layouts\nKonten & Einstellungen\nVOD-Archiv\nVOD-Archiv\n\nHier findest du deine gesicherten Streams und offene Uploads. Nach bestätigtem Upload werden die temporären Dateien gelöscht.\n\nAbschlüsse beruhen auf gespeicherten Uploadbestätigungen. Die heutige Verfügbarkeit und Sichtbarkeit prüfst du über die Ziellinks.\n\nVOD-Archiv: an\nAlle Kanäle anzeigen\nÄlterer Upload ohne Abschlusszeit\nYouTube-Upload abgeschlossen\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nAuf YouTube öffnen\nAus der Liste ausblenden\nWartet auf Upload\nWartet\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden\nUpload läuft\nLädt hoch\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nLetzter Versuch: 01.10.2026, 15:00\nAus der Liste ausblenden\nBestätigte Drive-Kopie\nAuf Drive gesichert\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nAbgeschlossen: 01.10.2026, 15:00\nAuf Drive öffnen\nAus der Liste ausblenden\nUnklarer älterer Abschluss\nAbschluss unklar\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\n\nDer frühere Abschluss ist nicht ausreichend dokumentiert. Prüfe vorhandene Ziellinks; ein erneuter Upload wird nicht automatisch gestartet.\n\nAuf YouTube öffnen\n(unbestätigt)\nAus der Liste ausblenden\nTeilweise hochgeladen\nTeilweise auf YouTube\nYouTube: 1 von 2 Teilen bestätigt\ntestkanal\nAufnahmedatum unbekannt\n13:53 h\nLetzter Versuch: 01.10.2026, 15:00\n\nDer Upload ist fehlgeschlagen. Prüfe die YouTube-Verbindung und versuche es erneut.\n\nYouTube: Teil 1\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden\nBestätigter älterer Upload\nYouTube-Upload abgeschlossen\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nAbgeschlossen: 01.09.2026, 14:00\nAuf YouTube öffnen\nAus der Liste ausblenden\nEigener Stream\nFehlgeschlagen\nrenamed\nAufnahmedatum unbekannt\n1:00 h\n\nDer Upload ist fehlgeschlagen. Prüfe die YouTube-Verbindung und versuche es erneut.\n\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden\nHilfe bekommen",
+        "geometrySupported": true
+      },
+      "errors": []
+    }
+  ]
+}
