@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Datenschutzhinweis – Deutsche Deadlock Community Bot</title>
+<title>Datenschutzhinweis: Deutsche Deadlock Community Bot</title>
 <link rel="icon" type="image/png" sizes="64x64" href="/brand/logo/favicon-64.png">
 <style>
   body { font-family: sans-serif; max-width: 800px; margin: 60px auto; padding: 0 24px; color: #222; line-height: 1.7; }
@@ -24,38 +24,40 @@
   </a>
 </header>
 <h1>Datenschutzhinweis</h1>
-<p><strong>Deutsche Deadlock Community Bot</strong> – zuletzt aktualisiert: Februar 2026</p>
+<p><strong>Deutsche Deadlock Community Bot</strong>, zuletzt aktualisiert: 7. Oktober 2026</p>
 
 <h2>1. Verantwortliche Stelle</h2>
 <p>Betrieben wird der Bot durch die Deutsche Deadlock Community (Discord-Server).
 Kontakt über den Discord-Server.</p>
 
 <h2>2. Erhobene Daten</h2>
-<p>Der Bot verarbeitet ausschließlich öffentlich verfügbare Daten von der Twitch-API:</p>
+<p>Für Social-Media-Clips werden folgende Daten verarbeitet:</p>
 <ul>
   <li>Twitch-Benutzernamen und -IDs der Community-Streamer</li>
   <li>Öffentliche Clip-Metadaten (Titel, URL, Vorschaubild, Spieldauer, Zuschauerzahl)</li>
-  <li>OAuth-Zugangsdaten für verbundene Social-Media-Konten (verschlüsselt gespeichert)</li>
+  <li>Zugangsdaten für verbundene Social-Media-Konten (verschlüsselt gespeichert)</li>
+  <li>Hochgeladene Videodateien, Vorschauen, Freigaben, geplante Uploads und verfügbare Plattformstatistiken</li>
 </ul>
-<p>Es werden keine personenbezogenen Daten von Zuschauern oder Dritten gespeichert.</p>
+<p>Videoinhalte können Stimmen und andere Angaben zu Personen enthalten. Lade Clips mit den erforderlichen Rechten und Einwilligungen hoch.</p>
 
 <h2>3. Zweck der Verarbeitung</h2>
 <p>Die Daten werden ausschließlich zur automatischen Veröffentlichung von
 Community-Clips auf TikTok, YouTube und Instagram verwendet.</p>
 
 <h2>4. Speicherung & Sicherheit</h2>
-<p>Clip-Metadaten und OAuth-Tokens werden in der gemeinsamen PostgreSQL-Datenbank gespeichert.
-Zugangsdaten werden mit AES-256-GCM verschlüsselt. Ein Zugriff von außen auf die
-Datenbank besteht nicht.</p>
+<p>Clip-Metadaten und Zugangsdaten werden in einer PostgreSQL-Datenbank gespeichert.
+Zugangsdaten werden mit AES-256-GCM verschlüsselt.</p>
 
 <h2>5. Weitergabe an Dritte</h2>
-<p>Daten werden nicht an Dritte weitergegeben. Für den Upload wird die jeweilige
+<p>Für den Upload wird die jeweilige
 Plattform-API (TikTok, YouTube, Instagram) verwendet; dabei gelten deren
 Datenschutzbestimmungen.</p>
 
 <h2>6. Dauer der Speicherung</h2>
-<p>Clip-Einträge werden intern gespeichert bis sie manuell gelöscht werden.
-OAuth-Tokens werden bei Widerruf der App-Berechtigung sofort deaktiviert.</p>
+<p>Die automatische Bereinigung prüft Clips ab 14 Tagen nach ihrer Aufnahme.
+Ein Clip-Eintrag wird gelöscht, wenn der Clip verworfen wurde oder die Übertragung auf die aktiven verbundenen Plattformen abgeschlossen ist. Noch offene Clips können länger gespeichert bleiben.
+Dabei werden die gespeicherte Originaldatei und die Vorschau entfernt, soweit vorhanden und löschbar.</p>
+<p>Beim Trennen einer Verbindung im Dashboard werden die gespeicherten Zugangsdaten entfernt. Ein Widerruf direkt bei einer Plattform beendet deren Berechtigung, entfernt aber nicht automatisch sämtliche hier gespeicherten Daten.</p>
 
 <h2>7. Betroffenenrechte</h2>
 <p>Autorisierte Streamer können jederzeit die Löschung ihrer Daten per Discord-Nachricht

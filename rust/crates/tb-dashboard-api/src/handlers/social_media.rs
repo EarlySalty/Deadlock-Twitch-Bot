@@ -1359,7 +1359,7 @@ pub async fn queue_upload_handler(
     let (already_taken, posting_schedule) = if body.schedule.as_deref() == Some("auto") {
         let taken = match sqlx::query_scalar::<_, DateTime<Utc>>(
             "SELECT scheduled_at FROM twitch_clips_upload_queue \
-             WHERE status = 'pending' AND scheduled_at IS NOT NULL",
+             WHERE status IN ('pending', 'waiting_connection') AND scheduled_at IS NOT NULL",
         )
         .fetch_all(&pool)
         .await
@@ -1863,6 +1863,7 @@ fn platform_status_json(s: &PlatformStatus, has_scope: bool) -> Value {
         "expires_at": s.expires_at,
         "expired": s.expired,
         "uses_global_fallback": s.uses_global_fallback,
+        "capabilities": tb_social_media::capabilities::platform_capabilities(&s.platform),
     })
 }
 
@@ -1973,6 +1974,7 @@ async fn load_clip_row(pool: &PgPool, clip_db_id: i64) -> Result<Option<ClipRow>
 /// Stand einer Plattform-Zeile in `twitch_clips_upload_queue`.
 #[derive(Debug, Default, Clone)]
 struct UploadQueueEntry {
+    youtube_visibility: Option<String>,
     scheduled_at: Option<String>,
     last_error: Option<String>,
     status: Option<String>,
@@ -1993,7 +1995,7 @@ async fn load_upload_queue_info(pool: &PgPool, clip_ids: &[i64]) -> UploadQueueI
         return info;
     }
     let rows = sqlx::query(
-        "SELECT DISTINCT ON (clip_id, platform) clip_id, platform, scheduled_at, last_error, status \
+        "SELECT DISTINCT ON (clip_id, platform) clip_id, platform, scheduled_at, last_error, status, youtube_visibility \
          FROM twitch_clips_upload_queue WHERE clip_id = ANY($1) \
          ORDER BY clip_id, platform, CASE WHEN platform = 'tiktok' AND status IN ('inbox', 'inbox_pending') THEN 3 \
              WHEN platform = 'tiktok' AND status = 'completed' THEN 2 ELSE 0 END DESC, id DESC",
@@ -2028,6 +2030,9 @@ async fn load_upload_queue_info(pool: &PgPool, clip_ids: &[i64]) -> UploadQueueI
         info.entry(clip_id).or_default().insert(
             platform.trim().to_lowercase(),
             UploadQueueEntry {
+                youtube_visibility: r
+                    .try_get::<Option<String>, _>("youtube_visibility")
+                    .unwrap_or(None),
                 scheduled_at,
                 last_error,
                 status: r.try_get::<Option<String>, _>("status").unwrap_or(None),
@@ -2161,6 +2166,7 @@ async fn serialize_clip_record_with(
         "scheduled_at": platform_value_map(queue, |e| e.scheduled_at.as_deref()),
         "upload_errors": platform_value_map(queue, |e| e.last_error.as_deref()),
         "upload_states": platform_value_map(queue, |e| e.status.as_deref()),
+        "youtube_visibility": queue.and_then(|entries| entries.get("youtube")).and_then(|entry| entry.youtube_visibility.as_deref()),
     })
 }
 
@@ -3732,6 +3738,9 @@ pub async fn oauth_start_handler(
     if !is_supported_platform(&platform) {
         return (StatusCode::BAD_REQUEST, "Invalid platform").into_response();
     }
+    if !tb_social_media::capabilities::platform_capabilities(&platform).upload {
+        return redirect_found(&dashboard_url("oauth_error", "platform_unavailable"));
+    }
     let Some(mgr) = build_oauth_manager(pool) else {
         return redirect_found(&dashboard_url("oauth_error", "oauth_start_failed"));
     };
@@ -3857,16 +3866,27 @@ pub async fn oauth_disconnect_handler(
         )
             .into_response();
     }
-    let result = sqlx::query(
-        "UPDATE social_media_platform_auth SET enabled = 0 \
-         WHERE platform = $1 AND (twitch_user_id = $2 OR (twitch_user_id IS NULL AND streamer_login IS NULL AND $2::text IS NULL))",
+    if target.is_none() {
+        if let Err(response) = require_admin(&auth) {
+            return response;
+        }
+    }
+    let result = tb_social_media::disconnect::disconnect_platform(
+        &pool,
+        &platform,
+        target.as_ref().map(|(_, id)| id.as_str()),
     )
-    .bind(&platform)
-    .bind(target.as_ref().map(|(_, id)| id.as_str()))
-    .execute(&pool)
     .await;
     match result {
-        Ok(_) => Json(json!({ "success": true })).into_response(),
+        Ok(outcome) if outcome.deleted == 0 => (
+            StatusCode::CONFLICT,
+            Json(json!({"error":"own_connection_required"})),
+        )
+            .into_response(),
+        Ok(outcome) => {
+            Json(json!({ "success": true, "revocation_pending": outcome.revocation_pending }))
+                .into_response()
+        }
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": "disconnect_failed" })),
@@ -4414,7 +4434,7 @@ mod tests {
             "CREATE TABLE twitch_clips_social_media (id BIGSERIAL PRIMARY KEY, clip_id TEXT UNIQUE NOT NULL, clip_url TEXT NOT NULL DEFAULT '', clip_thumbnail_url TEXT, streamer_login TEXT NOT NULL, twitch_user_id TEXT DEFAULT '42', status TEXT DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), duration_seconds DOUBLE PRECISION, view_count INTEGER, clip_title TEXT, game_name TEXT, game_id TEXT, category_key TEXT NOT NULL DEFAULT 'other', source_kind TEXT NOT NULL DEFAULT 'twitch', upload_local_path TEXT, local_file_path TEXT, custom_description TEXT, hashtags TEXT, layout_override_json JSONB, retention_until TIMESTAMPTZ, discarded_at TIMESTAMPTZ, kontingent_verbraucht_at TIMESTAMPTZ, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE, tiktok_uploaded_at TIMESTAMPTZ, youtube_uploaded_at TIMESTAMPTZ, instagram_uploaded_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, description_tiktok TEXT, description_instagram TEXT, hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, cost_usd_estimate NUMERIC(10,6), status TEXT DEFAULT 'pending', error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",
-            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, youtube_visibility TEXT, clip_id BIGINT, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, quota_deferrals INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
             "CREATE TABLE clip_templates_streamer (twitch_user_id TEXT DEFAULT '42', id BIGSERIAL PRIMARY KEY, streamer_login TEXT, template_name TEXT, description_template TEXT NOT NULL, hashtags TEXT NOT NULL DEFAULT '[]', is_default BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, UNIQUE (streamer_login, template_name))",
             "CREATE TABLE clip_last_hashtags (streamer_login TEXT, twitch_user_id TEXT DEFAULT '42', hashtags TEXT NOT NULL, last_used_at TIMESTAMPTZ DEFAULT NOW())",
             "CREATE TABLE clip_templates_global (id BIGSERIAL PRIMARY KEY, template_name TEXT UNIQUE, description_template TEXT NOT NULL, hashtags TEXT NOT NULL DEFAULT '[]', category TEXT, usage_count INTEGER DEFAULT 0, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, created_by TEXT)",
@@ -4425,7 +4445,7 @@ mod tests {
             "CREATE TABLE twitch_clip_form_submissions (id SERIAL PRIMARY KEY, clip_id INTEGER NOT NULL, form_key TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', http_status INTEGER, error TEXT, submitted_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE (clip_id, form_key))",
             "CREATE TABLE twitch_clips_social_analytics (id BIGSERIAL PRIMARY KEY, clip_id BIGINT, platform TEXT, bucket TEXT, views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, watch_time_seconds INTEGER, ctr_percent NUMERIC(5,2), engagement_rate DOUBLE PRECISION, provider TEXT, synced_at TIMESTAMPTZ, next_pull_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_reports (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, streamer_login TEXT, twitch_user_id TEXT, period_start TIMESTAMPTZ NOT NULL, period_end TIMESTAMPTZ NOT NULL, content_md TEXT NOT NULL, model TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
-            "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, twitch_user_id TEXT, enabled INTEGER DEFAULT 1)",
+            "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, streamer_login TEXT, twitch_user_id TEXT, enabled INTEGER DEFAULT 1, access_token_enc BYTEA, refresh_token_enc BYTEA, client_id TEXT, client_secret_enc BYTEA, enc_version INTEGER)",
             "CREATE TABLE social_media_partner_access (streamer_login TEXT PRIMARY KEY, twitch_user_id TEXT DEFAULT '42', granted BOOLEAN NOT NULL DEFAULT FALSE, granted_by TEXT, granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             "CREATE TABLE social_media_category (category_key TEXT PRIMARY KEY, display_name TEXT NOT NULL, twitch_game_id TEXT, match_game_names TEXT[] NOT NULL DEFAULT '{}', enrichment_enabled BOOLEAN NOT NULL DEFAULT FALSE, sort_order INTEGER NOT NULL DEFAULT 100, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             "INSERT INTO social_media_category (category_key, display_name, match_game_names, enrichment_enabled, sort_order) VALUES ('deadlock', 'Deadlock', ARRAY['deadlock'], TRUE, 10), ('other', 'Andere Spiele', ARRAY[]::TEXT[], FALSE, 900)",
@@ -6688,7 +6708,6 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
 
-        // disconnect: setzt enabled=0 (kein Cipher nötig).
         sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login, twitch_user_id, enabled) VALUES ('tiktok', 'nani', '42', 1)").execute(&pool).await.unwrap();
         let resp = oauth_disconnect_handler(
             DashboardAuthLevel::admin(),
@@ -6702,8 +6721,8 @@ mod tests {
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(body_json(resp).await["success"], true);
-        let enabled: i32 = sqlx::query_scalar("SELECT enabled FROM social_media_platform_auth WHERE platform='tiktok' AND streamer_login='nani'").fetch_one(&pool).await.unwrap();
-        assert_eq!(enabled, 0);
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM social_media_platform_auth WHERE platform='tiktok' AND streamer_login='nani'").fetch_one(&pool).await.unwrap();
+        assert_eq!(remaining, 0);
         // disconnect: ungültige Plattform → 400.
         assert_eq!(
             oauth_disconnect_handler(
@@ -7239,7 +7258,8 @@ mod tests {
             }),
         )
         .await;
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        assert_eq!(body_json(resp).await["error"], "own_connection_required");
         let rows: Vec<(Option<String>, i32)> = sqlx::query_as(
             "SELECT streamer_login, enabled FROM social_media_platform_auth ORDER BY id",
         )
@@ -7248,11 +7268,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             rows,
-            vec![
-                (None, 1),
-                (Some("earlysalty".to_string()), 0),
-                (Some("ismile_e".to_string()), 1),
-            ],
+            vec![(None, 1), (Some("ismile_e".to_string()), 1),],
             "die Sammelverbindung und der fremde Kanal bleiben unberuehrt"
         );
 
@@ -7273,13 +7289,13 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let global_enabled: i32 = sqlx::query_scalar(
-            "SELECT enabled FROM social_media_platform_auth WHERE streamer_login IS NULL AND twitch_user_id IS NULL",
+        let global_remaining: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM social_media_platform_auth WHERE streamer_login IS NULL AND twitch_user_id IS NULL",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(global_enabled, 0);
+        assert_eq!(global_remaining, 0);
         let channel_enabled: i32 = sqlx::query_scalar(
             "SELECT enabled FROM social_media_platform_auth WHERE twitch_user_id = '100'",
         )

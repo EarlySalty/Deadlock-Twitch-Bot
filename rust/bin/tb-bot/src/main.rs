@@ -1735,7 +1735,7 @@ async fn main() {
         // (verschlüsselte Plattform-Tokens). Fehlt DB_MASTER_KEY_V1, laufen nur
         // die cipher-freien Worker — die Token-abhängigen bleiben aus statt zu
         // paniken.
-        match tb_crypto::FieldCipher::from_env() {
+        let cipher_workers_started = match tb_crypto::FieldCipher::from_env() {
             Ok(cipher) => {
                 let cipher = Arc::new(cipher);
                 let upload_creds = tb_social_media::credentials::CredentialManager::new(
@@ -1796,14 +1796,17 @@ async fn main() {
                 )
                 .with_twitch_client(helix.as_ref().clone());
                 supervisor.spawn("vod_archive_worker", async move { vod_archive.run().await });
+                true
             }
             Err(e) => {
                 tracing::warn!(
-                    "Social-Media Upload/Refresh/Insights und VOD-Archiv: kein Field-Cipher ({e}) — Worker aus"
+                    "Social-Media Upload/Refresh/Insights und VOD-Archiv: kein Field-Cipher ({e}), Worker aus"
                 );
+                false
             }
-        }
-        tracing::info!("Social-Media-Pipeline-Worker gestartet (8 Loops inkl. VOD-Archiv)");
+        };
+        let worker_count = 6 + if cipher_workers_started { 4 } else { 0 };
+        tracing::info!(worker_count, "Social-Media-Pipeline-Worker gestartet");
     }
 
     // Poll-Loop: das Cutover-Gate. Default AUS — Python bleibt alleiniger

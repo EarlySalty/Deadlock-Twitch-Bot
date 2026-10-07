@@ -183,6 +183,8 @@ export const FEHLER_TEXTE: Record<string, string> = {
   clip_not_found: 'Diesen Clip gibt es nicht mehr.',
   // Verbindungen
   disconnect_failed: 'Die Verbindung konnte nicht getrennt werden.',
+  own_connection_required: 'Dieser Kanal nutzt ein gemeinsames Konto. Verbinde ein eigenes Konto, um es hier verwalten zu können.',
+  platform_unavailable: 'Diese Plattform ist in dieser Beta noch nicht verfügbar.',
   platform_status_failed: 'Der Verbindungsstatus ist gerade nicht abrufbar.',
   // Rueckmeldung des OAuth-Umwegs, als `?oauth_error=` an der Rueckkehr-URL.
   provider_error: 'Die Plattform hat die Verbindung abgelehnt.',

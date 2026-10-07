@@ -157,6 +157,7 @@ export type PlattformTermine = Partial<Record<SocialPlatform, string | null>>;
  * `types/socialMedia.ts`, damit die Antwortform beim Aufrufer bleibt.
  */
 export interface ClipPostingInfo {
+  youtube_visibility?: 'public' | 'private' | 'unlisted' | null;
   upload_errors?: PlattformFehler | null;
   scheduled_at?: PlattformTermine | null;
   upload_states?: Partial<Record<SocialPlatform, string | null>> | null;
@@ -543,7 +544,15 @@ export async function uploadClip(input: {
   return (await response.json()) as UploadResponse;
 }
 
+export interface PlatformCapabilities {
+  upload: boolean;
+  statistics: boolean;
+  upload_mode: string;
+  reason: string | null;
+}
+
 export interface PlatformStatus {
+  capabilities: PlatformCapabilities;
   platform: string;
   connected: boolean;
   username: string | null;
@@ -582,7 +591,7 @@ export function oauthStartUrl(platform: string, twitchUserId: string | undefined
  * Zugang eines Kanals kappen. `streamer` ist Pflicht, sonst trifft es die
  * Sammelverbindung und damit jeden Kanal.
  */
-export async function disconnectPlatform(platform: string, twitchUserId: string | undefined): Promise<void> {
+export async function disconnectPlatform(platform: string, twitchUserId: string | undefined): Promise<{ success: boolean; revocation_pending: boolean }> {
   const qs = buildQuery({ twitch_user_id: twitchUserId });
-  await fetchJson(`/social-media/oauth/disconnect/${platform}${qs}`, { method: 'POST' });
+  return fetchJson(`/social-media/oauth/disconnect/${platform}${qs}`, { method: 'POST' });
 }

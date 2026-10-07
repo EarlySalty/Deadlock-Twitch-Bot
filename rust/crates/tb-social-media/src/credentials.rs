@@ -190,8 +190,13 @@ impl CredentialManager {
         for platform in PLATFORMS {
             let status = match self.get_credentials_for_id(platform, twitch_user_id).await {
                 Some(creds) => {
-                    let uses_global_fallback =
-                        twitch_user_id.is_some() && creds.streamer_login.is_none();
+                    let uses_global_fallback = if let Some(id) = twitch_user_id {
+                        self.get_channel_credentials_for_id(platform, id)
+                            .await
+                            .is_none()
+                    } else {
+                        false
+                    };
                     PlatformStatus {
                         platform: platform.to_string(),
                         connected: true,
@@ -389,6 +394,26 @@ mod tests {
         .execute(pool)
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn own_account_without_historical_login_is_not_global_fallback() {
+        let Some(pool) = make_pool("t_sm_creds_own_scope").await else {
+            return;
+        };
+        let cipher = Arc::new(FieldCipher::from_hex_key(&"ab".repeat(32), "v1").unwrap());
+        seed(&pool, &cipher, "youtube", None, "synthetic-own", None).await;
+        seed(&pool, &cipher, "tiktok", None, "synthetic-global", None).await;
+        sqlx::query("UPDATE social_media_platform_auth SET twitch_user_id = '42' WHERE platform = 'youtube'")
+            .execute(&pool).await.unwrap();
+        let manager = CredentialManager::new(pool, cipher);
+        let status = manager.get_all_platforms_status(Some("42")).await;
+        let youtube = status.iter().find(|s| s.platform == "youtube").unwrap();
+        assert!(youtube.connected);
+        assert!(!youtube.uses_global_fallback);
+        let tiktok = status.iter().find(|s| s.platform == "tiktok").unwrap();
+        assert!(tiktok.connected);
+        assert!(tiktok.uses_global_fallback);
     }
 
     #[tokio::test]

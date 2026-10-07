@@ -17,7 +17,8 @@ use sqlx::PgPool;
 
 use crate::approval::is_clip_approved_for;
 use crate::clip_queue::{
-    get_upload_queue, reschedule_upload, update_upload_status, UploadQueueItem, VertagungsKonto,
+    get_upload_queue, reschedule_upload, update_upload_status,
+    update_upload_status_with_visibility, wait_for_connection, UploadQueueItem, VertagungsKonto,
 };
 use crate::credentials::{CredentialManager, SocialMediaCredentials};
 use crate::render::render_clip_vertical;
@@ -286,12 +287,18 @@ impl UploadTask {
                         } else {
                             external_id
                         };
-                        if let Err(e) = update_upload_status(
+                        let visibility = if item.platform == "youtube" {
+                            uploader.uploaded_visibility(&external_id).await
+                        } else {
+                            None
+                        };
+                        if let Err(e) = update_upload_status_with_visibility(
                             &self.pool,
                             item.id,
                             "completed",
                             Some(&external_id),
                             None,
+                            visibility.as_deref(),
                         )
                         .await
                         {
@@ -740,6 +747,9 @@ impl UploadWorker {
             .credentials
             .get_credentials_for_id(platform, Some(&twitch_user_id))
             .await?;
+        if crate::capabilities::upload_wait_reason(platform, Some(&creds)).is_some() {
+            return None;
+        }
         let key = (platform.to_string(), creds.id);
         if let Some(cached) = cache.get(&key) {
             return cached.clone();
@@ -858,9 +868,30 @@ impl UploadWorker {
                 .resolve_uploader(&item.platform, item.clip_db_id, &mut cache)
                 .await
             {
+                if item.status == "waiting_connection" {
+                    match sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'pending', last_error = NULL WHERE id = $1 AND status = 'waiting_connection'")
+                        .bind(item.id).execute(&self.task.pool).await {
+                        Ok(result) if result.rows_affected() == 1 => {
+                            tracing::info!(queue_id = item.id, platform = %item.platform, "Upload wird nach dem Verbinden fortgesetzt");
+                        }
+                        Ok(_) => continue,
+                        Err(error) => {
+                            tracing::warn!(queue_id = item.id, %error, "Upload konnte nach dem Verbinden nicht fortgesetzt werden");
+                            continue;
+                        }
+                    }
+                }
                 batch.push((item, uploader));
                 if batch.len() >= self.max_parallel {
                     break;
+                }
+            } else {
+                let reason = crate::capabilities::upload_wait_reason(&item.platform, None)
+                    .unwrap_or_else(|| {
+                        "Bitte prüfe die Verbindung im Social-Media-Dashboard.".into()
+                    });
+                if let Err(error) = wait_for_connection(&self.task.pool, item.id, &reason).await {
+                    tracing::warn!(queue_id = item.id, %error, "Upload-Wartezustand konnte nicht gespeichert werden");
                 }
             }
         }
@@ -1872,6 +1903,50 @@ printf '%s\n' '{"streams":[{"codec_type":"video","width":1920,"height":1080,"dur
              die 29 Vertagungen davor nicht"
         );
         assert_eq!(vertagungen, UploadTask::MAX_KONTINGENT_VERTAGUNGEN - 1);
+    }
+
+    #[tokio::test]
+    async fn waiting_job_recovers_after_own_connection_is_saved() {
+        let Some(pool) = make_pool("t_sm_upload_connection_recovery").await else {
+            return;
+        };
+        let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, uploaded_tiktok, tiktok_video_id) VALUES ('synthetic-recovery', 'https://clips.test/recovery', 'nani', TRUE, 'existing') RETURNING id")
+            .fetch_one(&pool).await.unwrap();
+        approve_tiktok(&pool, i32::try_from(clip).unwrap()).await;
+        let queue_id: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status) VALUES ($1, 'tiktok', 'pending') RETURNING id")
+            .bind(clip).fetch_one(&pool).await.unwrap();
+        let cipher =
+            Arc::new(tb_crypto::FieldCipher::from_hex_key(&"ab".repeat(32), "v1").unwrap());
+        let worker = UploadWorker::new(
+            pool.clone(),
+            CredentialManager::new(pool.clone(), cipher.clone()),
+        );
+        worker.run_once().await;
+        let waiting: (String, i32) =
+            sqlx::query_as("SELECT status, attempts FROM twitch_clips_upload_queue WHERE id = $1")
+                .bind(queue_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(waiting, ("waiting_connection".into(), 0));
+        let encrypted = cipher
+            .encrypt_field(
+                "synthetic",
+                &tb_crypto::aad::social_media("access_token", "tiktok", Some("nani"), 1),
+            )
+            .unwrap();
+        sqlx::query("INSERT INTO social_media_platform_auth (platform, streamer_login, twitch_user_id, access_token_enc, client_id, enc_version) VALUES ('tiktok', 'nani', '42', $1, 'synthetic-client', 1)")
+            .bind(encrypted).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE twitch_clips_upload_queue SET last_attempt_at = NOW() - INTERVAL '6 minutes' WHERE id = $1")
+            .bind(queue_id).execute(&pool).await.unwrap();
+        worker.run_once().await;
+        let recovered: (String, i32) =
+            sqlx::query_as("SELECT status, attempts FROM twitch_clips_upload_queue WHERE id = $1")
+                .bind(queue_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(recovered, ("completed".into(), 0));
     }
 
     #[tokio::test]

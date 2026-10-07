@@ -775,7 +775,7 @@ pub async fn cancel_scheduled_uploads(
     .await?;
 
     let cancelled = sqlx::query(
-        "DELETE FROM twitch_clips_upload_queue WHERE clip_id = $1 AND status = 'pending'",
+        "DELETE FROM twitch_clips_upload_queue WHERE clip_id = $1 AND status IN ('pending', 'waiting_connection')",
     )
     .bind(i64::from(clip_db_id))
     .execute(&mut *tx)
@@ -1098,7 +1098,7 @@ mod tests {
         .await
         .unwrap();
         let offen: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE clip_id = $1 AND status = 'pending'",
+            "SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE clip_id = $1 AND status IN ('pending', 'waiting_connection')",
         )
         .bind(clip)
         .fetch_one(&pool)

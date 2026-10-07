@@ -1,0 +1,105 @@
+use crate::credentials::SocialMediaCredentials;
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PlatformCapabilities {
+    pub upload: bool,
+    pub statistics: bool,
+    pub upload_mode: &'static str,
+    pub reason: Option<&'static str>,
+}
+
+pub fn platform_capabilities(platform: &str) -> PlatformCapabilities {
+    let instagram_ready = std::env::var("INSTAGRAM_APP_APPROVED")
+        .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        && ["INSTAGRAM_CLIENT_ID", "INSTAGRAM_CLIENT_SECRET"]
+            .iter()
+            .all(|key| std::env::var(key).is_ok_and(|value| !value.trim().is_empty()));
+    capabilities_for(platform, instagram_ready)
+}
+
+fn capabilities_for(platform: &str, instagram_ready: bool) -> PlatformCapabilities {
+    match platform {
+        "tiktok" => PlatformCapabilities {
+            upload: true,
+            statistics: false,
+            upload_mode: "inbox",
+            reason: None,
+        },
+        "youtube" => PlatformCapabilities {
+            upload: true,
+            statistics: true,
+            upload_mode: "upload",
+            reason: None,
+        },
+        "instagram" => PlatformCapabilities {
+            upload: instagram_ready,
+            statistics: instagram_ready,
+            upload_mode: "reel",
+            reason: (!instagram_ready)
+                .then_some("Instagram ist in dieser Beta noch nicht verfügbar."),
+        },
+        _ => PlatformCapabilities {
+            upload: false,
+            statistics: false,
+            upload_mode: "unavailable",
+            reason: Some("Diese Plattform ist nicht verfügbar."),
+        },
+    }
+}
+
+pub fn upload_wait_reason(
+    platform: &str,
+    creds: Option<&SocialMediaCredentials>,
+) -> Option<String> {
+    let capabilities = platform_capabilities(platform);
+    if !capabilities.upload {
+        return Some(
+            capabilities
+                .reason
+                .unwrap_or("Upload nicht verfügbar")
+                .to_string(),
+        );
+    }
+    let name = match platform {
+        "tiktok" => "TikTok",
+        "youtube" => "YouTube",
+        "instagram" => "Instagram",
+        _ => platform,
+    };
+    let Some(creds) = creds else {
+        return Some(format!("{name} nicht verbunden. Öffne Verbindungen im Social-Media-Dashboard und verbinde dein Konto."));
+    };
+    let complete = !creds.access_token.trim().is_empty()
+        && match platform {
+            "tiktok" | "youtube" => creds
+                .client_id
+                .as_deref()
+                .is_some_and(|id| !id.trim().is_empty()),
+            "instagram" => creds
+                .platform_user_id
+                .as_deref()
+                .is_some_and(|id| !id.trim().is_empty()),
+            _ => false,
+        };
+    if !complete {
+        return Some(format!("Die Verbindung zu {name} ist unvollständig. Öffne Verbindungen im Social-Media-Dashboard und verbinde dein Konto erneut."));
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn beta_capabilities_are_explicit() {
+        let tiktok = capabilities_for("tiktok", false);
+        assert!(tiktok.upload);
+        assert!(!tiktok.statistics);
+        assert_eq!(tiktok.upload_mode, "inbox");
+        assert!(!capabilities_for("instagram", false).upload);
+        assert!(capabilities_for("instagram", true).upload);
+        assert!(capabilities_for("youtube", false).statistics);
+        assert!(upload_wait_reason("tiktok", None).is_some());
+    }
+}
