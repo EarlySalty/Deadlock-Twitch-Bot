@@ -2333,8 +2333,12 @@ twitch_vod_archive_parts|vod_id|bigint|NO|
 twitch_vod_archive_parts|youtube_video_id|text|YES|
 twitch_vod_archive_vods|discovered_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 twitch_vod_archive_vods|downloaded_at|timestamp with time zone|YES|
+twitch_vod_archive_vods|drive_requested|boolean|NO|false
+twitch_vod_archive_vods|drive_url|text|YES|
 twitch_vod_archive_vods|duration_sec|bigint|NO|0
+twitch_vod_archive_vods|hidden_at|timestamp with time zone|YES|
 twitch_vod_archive_vods|id|bigint|NO|nextval('twitch_vod_archive_vods_id_seq'::regclass)
+twitch_vod_archive_vods|last_attempt_at|timestamp with time zone|YES|
 twitch_vod_archive_vods|last_error|text|YES|
 twitch_vod_archive_vods|local_path|text|YES|
 twitch_vod_archive_vods|recorded_at|date|YES|

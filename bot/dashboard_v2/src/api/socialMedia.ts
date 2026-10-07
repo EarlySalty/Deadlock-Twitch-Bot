@@ -24,6 +24,37 @@ import type {
 const ADMIN_PREFIX = '/social-media/api/admin';
 const UPLOAD_PATH = '/social-media/api/clips/upload';
 
+export interface ArchivedVod {
+  id: number;
+  twitch_id: string;
+  channel: string;
+  twitch_user_id: string | null;
+  title: string;
+  duration_sec: number;
+  recorded_at: string | null;
+  discovered_at: string;
+  status: string;
+  status_label: string;
+  reason: string | null;
+  drive_url: string | null;
+  drive_requested: boolean;
+  last_attempt_at: string | null;
+  parts: { index: number; status: string; youtube_video_id: string | null }[];
+  needs_connection: boolean;
+}
+
+export async function fetchArchivedVods(twitchUserId: string | undefined, page = 1): Promise<{ items: ArchivedVod[]; total: number }> {
+  const qs = buildQuery({ twitch_user_id: twitchUserId, page });
+  return fetchJson(`/social-media/api/vod-archive${qs}`);
+}
+
+export async function archiveAction(id: number, action: 'retry' | 'drive' | 'hide', twitchUserId?: string): Promise<void> {
+  await fetchJson('/social-media/api/vod-archive', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, action, twitch_user_id: twitchUserId }),
+  });
+}
+
 /**
  * Fehler mit stabilem Code. Der Code kommt aus dem Backend (`error`-Feld) und
  * wird erst an der Anzeigestelle in einen Satz uebersetzt: ein deutscher Text,

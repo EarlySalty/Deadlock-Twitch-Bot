@@ -79,6 +79,13 @@ pub trait TeilHochlader: Send + Sync {
     /// Verarbeitungsstand eines bereits hochgeladenen Videos. `None`, wenn
     /// YouTube die Video-ID nicht mehr kennt.
     async fn video_status(&self, video_id: &str) -> Result<Option<VideoZustand>, UploadError>;
+    async fn add_to_playlist(
+        &self,
+        _playlist_id: &str,
+        _video_id: &str,
+    ) -> Result<(), UploadError> {
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -111,6 +118,10 @@ impl TeilHochlader for YouTubeUploader {
     async fn video_status(&self, video_id: &str) -> Result<Option<VideoZustand>, UploadError> {
         YouTubeUploader::video_status(self, video_id).await
     }
+
+    async fn add_to_playlist(&self, playlist_id: &str, video_id: &str) -> Result<(), UploadError> {
+        YouTubeUploader::add_to_playlist(self, playlist_id, video_id).await
+    }
 }
 
 /// Woher der YouTube-Zugang eines Kanals kommt. `None` heisst: keine
@@ -136,6 +147,15 @@ impl HochladerQuelle for StreamerZugang {
             .credentials
             .get_channel_credentials_for_id("youtube", twitch_user_id)
             .await?;
+        if !creds.scopes.as_deref().is_some_and(|scopes| {
+            scopes.split_whitespace().any(|scope| {
+                scope == "https://www.googleapis.com/auth/youtube.upload"
+                    || scope == "https://www.googleapis.com/auth/youtube"
+                    || scope == "https://www.googleapis.com/auth/youtube.force-ssl"
+            })
+        }) {
+            return None;
+        }
         Some(Arc::new(youtube_uploader(&creds)))
     }
 }
@@ -273,6 +293,9 @@ impl VodArchiveWorker {
     /// Ein vollstaendiger Lauf. Faengt alle Fehler ab, weil der Worker sonst
     /// nach dem ersten kaputten VOD fuer immer schweigt.
     pub async fn run_once(&self) {
+        if let Err(error) = self.raeume_auf().await {
+            tracing::error!(%error, "Temporäre VOD-Dateien konnten nicht entfernt werden");
+        }
         let streamer = match aktive_vod_archive_streamer(&self.pool).await {
             Ok(liste) => liste,
             Err(fehler) => {
@@ -358,7 +381,29 @@ impl VodArchiveWorker {
         }
 
         let versatz = self.laeufe.fetch_add(1, Ordering::Relaxed);
-        for (einstellung, vod) in verschraenke(warteschlangen, versatz) {
+        for (einstellung, mut vod) in verschraenke(warteschlangen, versatz) {
+            let mut guard = self.pool.begin().await?;
+            let Some(lock_id) = i32::try_from(vod.id).ok() else {
+                continue;
+            };
+            let locked: bool =
+                sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(186976768, $1)")
+                    .bind(lock_id)
+                    .fetch_one(&mut *guard)
+                    .await?;
+            if !locked {
+                continue;
+            }
+            let state: (String, Option<String>, bool) = sqlx::query_as("SELECT status, local_path, drive_requested FROM twitch_vod_archive_vods WHERE id=$1")
+                .bind(vod.id).fetch_one(&self.pool).await?;
+            vod.status = state.0;
+            vod.local_path = state.1;
+            if matches!(
+                vod.status.as_str(),
+                "uploaded" | "archived" | "unavailable" | "drive_uploaded"
+            ) {
+                continue;
+            }
             let braucht_download = vod.braucht_download();
             match naechste_aktion(&self.config, &bilanz, braucht_download) {
                 Aktion::Beende => {
@@ -396,6 +441,13 @@ impl VodArchiveWorker {
                         %fehler,
                         "YouTube-Tageskontingent erschoepft, Abbruch bis morgen"
                     );
+                    store::setze_fehler(
+                        &self.pool,
+                        vod.id,
+                        store::STATUS_UPLOAD_FEHLER,
+                        "quotaExceeded",
+                    )
+                    .await?;
                     break;
                 }
                 Err(fehler) => {
@@ -619,6 +671,10 @@ impl VodArchiveWorker {
     ) -> Result<(), VodArchiveError> {
         let kanal = einstellung.streamer_login.as_str();
         let mut aufgenommen_am = vod.recorded_at;
+        sqlx::query("UPDATE twitch_vod_archive_vods SET last_attempt_at=NOW() WHERE id=$1")
+            .bind(vod.id)
+            .execute(&self.pool)
+            .await?;
 
         if vod.braucht_download() {
             tracing::info!(kanal = %kanal, vod = %vod.twitch_id, titel = %vod.title, "Lade VOD");
@@ -674,8 +730,18 @@ impl VodArchiveWorker {
             tracing::info!(kanal = %kanal, vod = %vod.twitch_id, teile = dateien.len(), "VOD liegt lokal");
         }
 
+        let drive: bool =
+            sqlx::query_scalar("SELECT drive_requested FROM twitch_vod_archive_vods WHERE id=$1")
+                .bind(vod.id)
+                .fetch_one(&self.pool)
+                .await?;
+        if drive {
+            self.lade_drive_hoch(vod, einstellung, aufgenommen_am)
+                .await?;
+            return Ok(());
+        }
+
         let Some(uploader) = uploader else {
-            // Kein Login: das VOD bleibt offen und wartet auf die Verbindung.
             return Ok(());
         };
 
@@ -725,6 +791,7 @@ impl VodArchiveWorker {
                 offen += 1;
                 continue;
             }
+            store::setze_status(&self.pool, vod.id, "uploading").await?;
             self.lade_teil_hoch(vod, teil, anzahl, aufgenommen_am, uploader, einstellung)
                 .await?;
             bilanz.hochgeladen += 1;
@@ -742,7 +809,15 @@ impl VodArchiveWorker {
 
         // Erst jetzt: jeder Teil liegt wirklich bei YouTube. Danach darf die
         // lokale Kopie weg.
+        if let Some(playlist) = &self.config.playlist_id {
+            for part in store::teile(&self.pool, vod.id, &self.session_cipher).await? {
+                if let Some(video) = part.youtube_video_id {
+                    uploader.add_to_playlist(playlist, &video).await?;
+                }
+            }
+        }
         store::setze_hochgeladen(&self.pool, vod.id).await?;
+        self.raeume_auf().await?;
         Ok(())
     }
 
@@ -888,20 +963,142 @@ impl VodArchiveWorker {
         Ok(uri)
     }
 
-    /// Loescht lokale Dateien nach der eingestellten Frist. 0 heisst nie.
-    async fn raeume_auf(&self) -> Result<(), VodArchiveError> {
-        if self.config.keep_local_days <= 0 {
-            return Ok(());
+    async fn lade_drive_hoch(
+        &self,
+        vod: &store::Vod,
+        settings: &VodArchiveSettings,
+        recorded_at: Option<chrono::NaiveDate>,
+    ) -> Result<(), VodArchiveError> {
+        let parts = store::teile(&self.pool, vod.id, &self.session_cipher).await?;
+        if parts.is_empty() {
+            return Err(VodArchiveError::DateiFehlt(vod.twitch_id.clone()));
         }
-        for faellig in store::abgelaufen_lokal(&self.pool, self.config.keep_local_days).await? {
-            let verzeichnis = self.config.verzeichnis_fuer(&faellig.streamer_login);
-            loesche_dateien(&verzeichnis, &faellig.twitch_id);
-            store::markiere_archiviert(&self.pool, faellig.id).await?;
-            tracing::info!(
-                kanal = %faellig.streamer_login,
-                vod = %faellig.twitch_id,
-                "Lokale Dateien geloescht"
-            );
+        let date = recorded_at.unwrap_or_else(|| chrono::Utc::now().date_naive());
+        let remote = format!(
+            "{}/{}/{}/{}",
+            self.config.drive_remote_base.trim_end_matches('/'),
+            date,
+            settings.twitch_user_id.as_deref().unwrap_or("unknown"),
+            vod.twitch_id
+        );
+        for part in &parts {
+            let path = Path::new(&part.file_path);
+            let file = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| VodArchiveError::DateiFehlt(part.file_path.clone()))?;
+            let target = format!("{remote}/{file}");
+            let result = self
+                .runner
+                .run(
+                    &self.config.rclone,
+                    &["copyto".into(), part.file_path.clone(), target.clone()],
+                    self.config.download_timeout,
+                )
+                .await?;
+            if !result.success {
+                return Err(VodArchiveError::Werkzeug {
+                    schritt: "Drive-Upload".into(),
+                    meldung: "Die Datei konnte nicht auf Drive gespeichert werden.".into(),
+                });
+            }
+            let check = self
+                .runner
+                .run(
+                    &self.config.rclone,
+                    &["lsjson".into(), target, "--stat".into()],
+                    std::time::Duration::from_secs(60),
+                )
+                .await?;
+            let size = tokio::fs::metadata(path).await?.len();
+            if !check.success
+                || serde_json::from_str::<Value>(&check.stdout)
+                    .ok()
+                    .and_then(|value| value["Size"].as_u64())
+                    != Some(size)
+            {
+                return Err(VodArchiveError::Werkzeug {
+                    schritt: "Drive-Prüfung".into(),
+                    meldung: "Die Kopie auf Drive konnte nicht bestätigt werden.".into(),
+                });
+            }
+        }
+        let link = self
+            .runner
+            .run(
+                &self.config.rclone,
+                &["link".into(), remote],
+                std::time::Duration::from_secs(60),
+            )
+            .await?;
+        let url = link.stdout.trim();
+        if !link.success
+            || !url.starts_with("https://drive.google.com/")
+            || url.chars().any(char::is_control)
+        {
+            return Err(VodArchiveError::Werkzeug {
+                schritt: "Drive-Link".into(),
+                meldung: "Der Link zur Drive-Kopie fehlt. Die Dateien bleiben vorerst erhalten."
+                    .into(),
+            });
+        }
+        sqlx::query("UPDATE twitch_vod_archive_vods SET status='drive_uploaded', drive_url=$2, uploaded_at=NOW(), last_error=NULL, updated_at=NOW() WHERE id=$1")
+            .bind(vod.id).bind(url).execute(&self.pool).await?;
+        self.raeume_auf().await?;
+        Ok(())
+    }
+
+    async fn raeume_auf(&self) -> Result<(), VodArchiveError> {
+        let rows: Vec<(i64, String, String, Option<String>, String)> = sqlx::query_as(
+            "SELECT id, twitch_id, local_path, twitch_user_id, status FROM twitch_vod_archive_vods WHERE status IN ('uploaded','drive_uploaded') AND local_path IS NOT NULL"
+        ).fetch_all(&self.pool).await?;
+        for (id, twitch_id, local_path, user_id, status) in rows {
+            if status == "uploaded" {
+                let Some(user_id) = user_id else {
+                    continue;
+                };
+                let Some(uploader) = self.zugang.fuer(&user_id).await else {
+                    continue;
+                };
+                let parts = store::teile(&self.pool, id, &self.session_cipher).await?;
+                let mut confirmed = !parts.is_empty();
+                for part in parts {
+                    if part.status != store::TEIL_FERTIG {
+                        confirmed = false;
+                        break;
+                    }
+                    let Some(video) = part.youtube_video_id else {
+                        confirmed = false;
+                        break;
+                    };
+                    if !matches!(uploader.video_status(&video).await, Ok(Some(state)) if state.upload_status == "processed")
+                    {
+                        confirmed = false;
+                        break;
+                    }
+                }
+                if !confirmed {
+                    continue;
+                }
+            }
+            let root = std::fs::canonicalize(&self.config.download_dir)?;
+            let directory = Path::new(&local_path).parent().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "VOD-Dateipfad ohne Verzeichnis",
+                )
+            })?;
+            let directory = std::fs::canonicalize(directory)?;
+            if !directory.starts_with(root) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "VOD-Datei liegt außerhalb des temporären Archivverzeichnisses",
+                )
+                .into());
+            }
+            loesche_dateien(&directory, &twitch_id)?;
+            sqlx::query("UPDATE twitch_vod_archive_vods SET local_path=NULL, status=CASE WHEN status='uploaded' THEN 'archived' ELSE status END, updated_at=NOW() WHERE id=$1")
+                .bind(id).execute(&self.pool).await?;
         }
         Ok(())
     }
@@ -1009,16 +1206,26 @@ pub fn parse_df(ausgabe: &str) -> Option<u64> {
 }
 
 /// Entfernt alle Dateien eines VOD, also Quelle, Teile und info.json.
-fn loesche_dateien(verzeichnis: &Path, twitch_id: &str) {
-    let Ok(eintraege) = std::fs::read_dir(verzeichnis) else {
-        return;
+fn loesche_dateien(verzeichnis: &Path, twitch_id: &str) -> std::io::Result<()> {
+    if twitch_id.is_empty() || !twitch_id.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Ungültige VOD-ID",
+        ));
+    }
+    let eintraege = match std::fs::read_dir(verzeichnis) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
     };
     let praefix = format!("{twitch_id}.");
-    for eintrag in eintraege.filter_map(|e| e.ok()) {
+    for eintrag in eintraege {
+        let eintrag = eintrag?;
         if eintrag.file_name().to_string_lossy().starts_with(&praefix) {
-            let _ = std::fs::remove_file(eintrag.path());
+            std::fs::remove_file(eintrag.path())?;
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1195,7 +1402,8 @@ mod tests {
              streamer_login TEXT NOT NULL, twitch_user_id TEXT, title TEXT NOT NULL, duration_sec BIGINT NOT NULL DEFAULT 0, \
              recorded_at DATE, status TEXT NOT NULL DEFAULT 'new', local_path TEXT, last_error TEXT, \
              discovered_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, downloaded_at TIMESTAMPTZ, \
-             uploaded_at TIMESTAMPTZ, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+             uploaded_at TIMESTAMPTZ, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, \
+             hidden_at TIMESTAMPTZ, drive_requested BOOLEAN NOT NULL DEFAULT FALSE, drive_url TEXT, last_attempt_at TIMESTAMPTZ)",
             "CREATE TABLE twitch_vod_archive_parts (id BIGSERIAL PRIMARY KEY, vod_id BIGINT NOT NULL \
              REFERENCES twitch_vod_archive_vods (id) ON DELETE CASCADE, streamer_login TEXT, \
              part_index INTEGER NOT NULL, \
@@ -1216,6 +1424,7 @@ mod tests {
     struct ZaehlenderHochlader {
         uploads: AtomicUsize,
         verwerfen: Mutex<bool>,
+        verarbeitet: Mutex<bool>,
     }
 
     #[async_trait]
@@ -1251,7 +1460,12 @@ mod tests {
                 return Ok(None);
             }
             Ok(Some(VideoZustand {
-                upload_status: "processed".to_string(),
+                upload_status: if *self.verarbeitet.lock().unwrap() {
+                    "processed"
+                } else {
+                    "uploaded"
+                }
+                .to_string(),
                 rejection_reason: None,
             }))
         }
@@ -1339,6 +1553,7 @@ mod tests {
     fn config(verzeichnis: &Path) -> VodArchiveConfig {
         VodArchiveConfig {
             download_dir: verzeichnis.to_path_buf(),
+            max_uploads_per_run: 2,
             // Der Plattenplatz ist hier nicht das Thema.
             min_free_gb: 0,
             ..VodArchiveConfig::default()
@@ -1517,6 +1732,52 @@ mod tests {
         assert!(offen[0].braucht_download());
 
         let _ = std::fs::remove_dir_all(verzeichnis);
+    }
+
+    #[tokio::test]
+    async fn dateien_bleiben_bis_zur_bestaetigten_verarbeitung() {
+        let Some(pool) = pool("t_vod_confirmed_cleanup").await else {
+            return;
+        };
+        let directory = temp_verzeichnis("confirmed_cleanup");
+        let path = directory.join("v1.mp4");
+        let other = directory.join("v10.mp4");
+        std::fs::write(&path, b"media").unwrap();
+        std::fs::write(&other, b"other").unwrap();
+        store::merke_vod(&pool, "v1", "renamed", "42", "Stream", 60)
+            .await
+            .unwrap();
+        let vod = store::offene_vods(&pool, "42", 1).await.unwrap().remove(0);
+        store::setze_geladen(&pool, vod.id, &path.display().to_string(), None, 60)
+            .await
+            .unwrap();
+        store::setze_teile(&pool, vod.id, "renamed", &[path.display().to_string()])
+            .await
+            .unwrap();
+        let part = store::teile(&pool, vod.id, &test_cipher())
+            .await
+            .unwrap()
+            .remove(0);
+        store::setze_teil_fertig(&pool, part.id, "confirmed_video")
+            .await
+            .unwrap();
+        store::setze_hochgeladen(&pool, vod.id).await.unwrap();
+        let uploader = Arc::new(ZaehlenderHochlader::default());
+        let worker = worker(&pool, config(&directory), &uploader);
+        worker.raeume_auf().await.unwrap();
+        assert!(path.exists());
+        *uploader.verarbeitet.lock().unwrap() = true;
+        worker.raeume_auf().await.unwrap();
+        assert!(!path.exists());
+        assert!(other.exists());
+        let state: (String, Option<String>) =
+            sqlx::query_as("SELECT status, local_path FROM twitch_vod_archive_vods WHERE id=$1")
+                .bind(vod.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(state, (store::STATUS_ARCHIVIERT.into(), None));
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     /// Der resumable Upload meldet nur angekommene Bytes. Verwirft YouTube

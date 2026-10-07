@@ -275,6 +275,50 @@ impl YouTubeUploader {
         }
     }
 
+    pub async fn add_to_playlist(
+        &self,
+        playlist_id: &str,
+        video_id: &str,
+    ) -> Result<(), UploadError> {
+        let url = format!("{}/playlistItems", self.api_base);
+        let response = self
+            .call("YouTube playlist lookup", |token| {
+                self.http.get(&url).bearer_auth(token).query(&[
+                    ("part", "id"),
+                    ("playlistId", playlist_id),
+                    ("videoId", video_id),
+                ])
+            })
+            .await?;
+        if !response.status().is_success() {
+            return Err(fehler_aus_antwort(response, "YouTube playlist lookup").await);
+        }
+        let data: Value = response
+            .json()
+            .await
+            .map_err(|error| UploadError::Request(error.without_url().to_string()))?;
+        if data["items"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+        {
+            return Ok(());
+        }
+        let body = json!({"snippet": {"playlistId": playlist_id, "resourceId": {"kind": "youtube#video", "videoId": video_id}}});
+        let response = self
+            .call("YouTube playlist insert", |token| {
+                self.http
+                    .post(&url)
+                    .bearer_auth(token)
+                    .query(&[("part", "snippet")])
+                    .json(&body)
+            })
+            .await?;
+        if !response.status().is_success() {
+            return Err(fehler_aus_antwort(response, "YouTube playlist insert").await);
+        }
+        Ok(())
+    }
+
     async fn token(&self) -> String {
         self.access_token.lock().await.clone()
     }

@@ -132,7 +132,7 @@ pub async fn offene_vods(
     let rows = sqlx::query(
         "SELECT id, twitch_id, title, duration_sec, recorded_at, status, local_path \
          FROM twitch_vod_archive_vods \
-         WHERE twitch_user_id = $1 AND status NOT IN ('uploaded', 'archived', 'unavailable') \
+         WHERE twitch_user_id = $1 AND status NOT IN ('uploaded', 'archived', 'unavailable', 'drive_uploaded') \
          ORDER BY discovered_at ASC, id ASC LIMIT $2",
     )
     .bind(twitch_user_id)
@@ -196,10 +196,10 @@ async fn schreibe_fehler(
     let kurz: String = fehler.chars().take(1000).collect();
     sqlx::query(
         "UPDATE twitch_vod_archive_vods \
-         SET status = CASE WHEN $4 AND $2 = 'download_failed' AND status IN ('downloaded', 'upload_failed') \
+         SET status = CASE WHEN $4 AND $2 = 'download_failed' AND status IN ('downloaded', 'upload_failed', 'uploading') \
                           THEN 'upload_failed' ELSE $2 END, \
              last_error = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $1 \
-         AND status NOT IN ('uploaded', 'archived', 'unavailable')",
+         AND status NOT IN ('uploaded', 'archived', 'unavailable', 'drive_uploaded')",
     )
     .bind(id)
     .bind(status)
@@ -684,7 +684,8 @@ mod tests {
              streamer_login TEXT NOT NULL, twitch_user_id TEXT, title TEXT NOT NULL, duration_sec BIGINT NOT NULL DEFAULT 0, \
              recorded_at DATE, status TEXT NOT NULL DEFAULT 'new', local_path TEXT, last_error TEXT, \
              discovered_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, downloaded_at TIMESTAMPTZ, \
-             uploaded_at TIMESTAMPTZ, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+             uploaded_at TIMESTAMPTZ, hidden_at TIMESTAMPTZ, drive_requested BOOLEAN NOT NULL DEFAULT FALSE, \
+             drive_url TEXT, last_attempt_at TIMESTAMPTZ, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
             "CREATE TABLE twitch_vod_archive_parts (id BIGSERIAL PRIMARY KEY, vod_id BIGINT NOT NULL \
              REFERENCES twitch_vod_archive_vods (id) ON DELETE CASCADE, streamer_login TEXT, \
              part_index INTEGER NOT NULL, \

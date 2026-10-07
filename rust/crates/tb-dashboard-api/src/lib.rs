@@ -406,6 +406,11 @@ fn build_authed_router_with_analysis_store(pool: PgPool, token: String, rate_lim
             put(social_media::posting_plan_category_put_handler),
         )
         .route(
+            "/social-media/api/vod-archive",
+            get(social_media::vod_archive_list_handler)
+                .post(social_media::vod_archive_action_handler),
+        )
+        .route(
             "/social-media/api/admin/settings/vod-archive",
             get(social_media::vod_archive_get_handler).put(social_media::vod_archive_put_handler),
         )

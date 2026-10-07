@@ -94,6 +94,12 @@ pub use clip_contest_forward::submit_clip_contest_handler;
 mod tiktok_direct;
 pub use tiktok_direct::creator_info_handler as tiktok_creator_info_handler;
 
+#[path = "social_media_vod_archive.rs"]
+mod vod_archive_management;
+pub use vod_archive_management::{
+    action_handler as vod_archive_action_handler, list_handler as vod_archive_list_handler,
+};
+
 fn forbidden(message: &str) -> Response {
     (StatusCode::FORBIDDEN, message.to_string()).into_response()
 }

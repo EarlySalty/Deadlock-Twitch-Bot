@@ -15,6 +15,7 @@ pub mod reliability;
 pub mod runtime;
 pub mod shared_options;
 pub mod stt;
+pub mod vod_archive;
 
 pub use global::{BotConfig, BotConfigSnapshot};
 

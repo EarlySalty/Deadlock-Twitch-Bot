@@ -90,6 +90,7 @@ pub struct BotOperations {
     pub yt_dlp_binary: Option<PathBuf>,
     pub outreach_yt_dlp_binary: Option<PathBuf>,
     pub vod_export_remote_base: String,
+    pub vod_archive: crate::vod_archive::VodArchiveOptions,
 }
 
 impl Default for BotOperations {
@@ -133,6 +134,7 @@ impl Default for BotOperations {
             yt_dlp_binary: None,
             outreach_yt_dlp_binary: None,
             vod_export_remote_base: "gdrive:Deadlock/Twitch-VODs".into(),
+            vod_archive: crate::vod_archive::VodArchiveOptions::default(),
         }
     }
 }
@@ -146,6 +148,7 @@ impl BotOperations {
             "bot.brain_client.timeout_ms",
         )?;
         self.brain_chat.validate()?;
+        self.vod_archive.validate()?;
         range(
             self.community_points_aggregation_interval_seconds,
             1,

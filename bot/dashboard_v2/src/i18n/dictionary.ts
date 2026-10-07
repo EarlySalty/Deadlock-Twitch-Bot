@@ -11,6 +11,8 @@
  * Platzhalter sind `{name}` und werden von `translate` ersetzt.
  */
 
+import { VOD_ARCHIVE_EN } from './vodArchive';
+
 export type Language = 'de' | 'en';
 
 export const LANGUAGES: Language[] = ['de', 'en'];
@@ -46,6 +48,7 @@ export const MESSAGE_TYPE_LABELS: Record<string, string> = {
 };
 
 const EN: Record<string, string> = {
+  ...VOD_ARCHIVE_EN,
   'Titel, Beschreibung & Hashtags': 'Title, description & hashtags',
   'Titel, Beschreibung und Hashtags bearbeitest du im Clip-Editor.': 'Edit the title, description and hashtags in the clip editor.',
   'Die Cliptexte konnten nicht geladen werden.': 'The clip text could not be loaded.',
