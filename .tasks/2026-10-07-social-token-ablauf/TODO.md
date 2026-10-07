@@ -2,9 +2,9 @@
 
 ## Stand am 7. Oktober 2026
 
-Ablauf-Fix und SQL-Statusfehler-Fix sind umgesetzt und geprüft. Der unveränderte Merge-Gate hat `4305407d` gegen `origin/main` mit `gpt-6.1-sol` freigegeben: `[gpt-6.1-sol] ALLOW: No blocking defect found in the supplied changes.` Der Metadata-Lesefehler erzeugt jetzt HTTP 500; die vorhandene Dashboard-Karte zeigt drei unbekannte Plattformzustände ohne Verbindungsaktionen. Es wird kein weiterer Fixer für diesen behobenen Befund benötigt. Gate-Nachweis: `gate-status-fixer-round-3.log`, Prüfungen: `EVIDENCE.md`, Bild: `metadata-read-error.png`.
+Ablauf-Fix und SQL-Statusfehler-Fix sind umgesetzt. Der bisherige Stand `4305407d` erhielt mit `gpt-6.1-sol` ALLOW; sein geschützter Main-Push wurde wegen verändertem `origin/main` abgewiesen. Die neue Basis `07f511a3` ist regulär in `merge/social-token-ablauf-r2` integriert (`e5d0613e`). ID-gebundene Kontozuordnung und Upload-Funktionen bleiben erhalten. Prüfungen und ein neues Gate müssen diese Integration freigeben; das bisherige ALLOW ersetzt sie nicht. Am neu gebauten Dashboard sind fünf Ablauf- und Fehlerzustände geprüft, darunter drei unbekannte Plattformzustände ohne Verbindungsaktionen nach HTTP 500.
 
-Implementierung: `fix/social-token-ablauf`, gesichert auf `origin/fix/social-token-ablauf-r2`, Worktree `/home/nathanael/.worktrees/tb-social-token-ablauf`. Der alte Remote-Feature-Branch wurde nicht überschrieben. Der fremd veränderte Haupt-Checkout bleibt unangetastet. Migration und Produktionshilfe bleiben unverändert.
+Implementierung: `fix/social-token-ablauf`, Integration: `merge/social-token-ablauf-r2`, bisherige Sicherung: `origin/fix/social-token-ablauf-r2`, Worktree `/home/nathanael/.worktrees/tb-social-token-ablauf`. Der alte Remote-Feature-Branch wurde nicht überschrieben, seine Historie wurde regulär integriert. Der fremd veränderte Haupt-Checkout bleibt unangetastet. Migration und Produktionshilfe bleiben unverändert.
 
 ## Offene Schritte
 

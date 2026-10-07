@@ -14,7 +14,7 @@
     },
     {
       "name": "instagram-20-days",
-      "text": "Verbindungen · fixture\nYouTube\nfixture\nVerlängert sich automatisch.\nTrennen\nTikTok\nfixture\nVerlängert sich automatisch.\nTrennen\nInstagram\nfixture\nBitte bis 27.10.2026 neu verbinden.\nTrennen",
+      "text": "Verbindungen · fixture\nYouTube\nfixture\nVerlängert sich automatisch.\nTrennen\nTikTok\nfixture\nVerlängert sich automatisch.\n\nTikTok-Statistiken sind in dieser Beta nicht verfügbar.\n\nTrennen\nInstagram\nInstagram ist in dieser Beta noch nicht verfügbar.\nBitte bis 27.10.2026 neu verbinden.\nTrennen",
       "dates": [
         "27.10.2026"
       ],
@@ -26,7 +26,7 @@
     },
     {
       "name": "nonrenewable-6-days",
-      "text": "Verbindungen · fixture\nYouTube\nfixture\nBitte bis 13.10.2026 neu verbinden.\nTrennen\nTikTok\nfixture\nBitte bis 13.10.2026 neu verbinden.\nTrennen\nInstagram\nfixture\nVerlängert sich automatisch.\nTrennen",
+      "text": "Verbindungen · fixture\nYouTube\nfixture\nBitte bis 13.10.2026 neu verbinden.\nTrennen\nTikTok\nfixture\nBitte bis 13.10.2026 neu verbinden.\n\nTikTok-Statistiken sind in dieser Beta nicht verfügbar.\n\nTrennen\nInstagram\nInstagram ist in dieser Beta noch nicht verfügbar.\nVerlängert sich automatisch.\nTrennen",
       "dates": [
         "13.10.2026",
         "13.10.2026"
@@ -39,7 +39,7 @@
     },
     {
       "name": "renewable-access-ended",
-      "text": "Verbindungen · fixture\nYouTube\nfixture\nVerlängert sich automatisch.\nTrennen\nTikTok\nfixture\nVerlängert sich automatisch.\nTrennen\nInstagram\nfixture\nVerlängert sich automatisch.\nTrennen",
+      "text": "Verbindungen · fixture\nYouTube\nfixture\nVerlängert sich automatisch.\nTrennen\nTikTok\nfixture\nVerlängert sich automatisch.\n\nTikTok-Statistiken sind in dieser Beta nicht verfügbar.\n\nTrennen\nInstagram\nInstagram ist in dieser Beta noch nicht verfügbar.\nVerlängert sich automatisch.\nTrennen",
       "dates": [],
       "reconnects": 0,
       "geometry": {
@@ -49,7 +49,7 @@
     },
     {
       "name": "nonrenewable-ended",
-      "text": "Verbindungen · fixture\nYouTube\nZugang abgelaufen, bitte neu verbinden\nNeu verbinden\nTikTok\nZugang abgelaufen, bitte neu verbinden\nNeu verbinden\nInstagram\nfixture\nVerlängert sich automatisch.\nTrennen",
+      "text": "Verbindungen · fixture\nYouTube\nZugang abgelaufen, bitte neu verbinden\nNeu verbinden\nTrennen\nTikTok\nZugang abgelaufen, bitte neu verbinden\n\nTikTok-Statistiken sind in dieser Beta nicht verfügbar.\n\nNeu verbinden\nTrennen\nInstagram\nInstagram ist in dieser Beta noch nicht verfügbar.\nVerlängert sich automatisch.\nTrennen",
       "dates": [],
       "reconnects": 2,
       "geometry": {

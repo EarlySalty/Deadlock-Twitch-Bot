@@ -1,5 +1,15 @@
 # Prüfnachweise
 
+## Reguläre Integration des neuen Main-Stands
+
+Der geschützte Main-Push wurde abgewiesen, weil `origin/main` während des Reviews von `e0b0dbaf` auf `07f511a3` vorgerückt war. Der fremd veränderte Haupt-Checkout blieb unangetastet. Die alte Remote-Feature-Historie wurde regulär integriert; `ba9bd07c` hatte einen bytegleichen Baum zu `31044228`. Danach entstand der Main-basierte Integrationsbranch `merge/social-token-ablauf-r2`. Der reguläre Merge des neuen Main-Stands ist `e5d0613e`.
+
+Die beiden Konflikte wurden zusammengeführt: Der Rust-Statusleser behält die fallible Credential- und Metadata-Abfrage sowie die neue ID-gebundene Erkennung gemeinsamer Konten. Die Karte behält die neuen Upload-Funktionen und ungekürzten Kontohinweise sowie die Ablaufwahl und den Hinweis zur automatischen Verlängerung. Neue UI oder Versandstrecken wurden nicht gebaut. Das frühere ALLOW deckt diese neue Integration nicht ab.
+
+Dashboard-Vertrag und i18n: 28 passed, 0 failed, 0 skipped, Exit 0. Der erste Dashboard-Build wurde nach 120 Sekunden vom Harness beendet und zählt nicht als Erfolg. Der Wiederholungslauf mit ausreichendem Zeitlimit hat Exit 0; Artefakt `index-CGJC471q.js`. Die fünf Chromium-Proben am neuen Artefakt haben Exit 0, keine Seitenfehler und Dokumentbreite 1440 bei Viewport 1440. Fixtures enthalten jetzt die vom API gelieferten Upload-Fähigkeiten einschließlich der gesperrten Instagram-Beta. Bilder und `ui-proof.json` wurden erneuert. `metadata-read-error.png` und `nonrenewable-6-days.png` wurden visuell geprüft. Formatprüfung der drei Statusdateien: Exit 0. Weitere Rust-Prüfungen und das neue Gate stehen noch aus.
+
+Migration und Produktionshilfe sind unverändert mit denselben SHA384-Werten. Die reine Produktionsleseprobe `PROD-STATE-INTEGRATION.sql` bestätigt Datenbank `twitch_analytics`, Rolle `postgres` und noch keinen Eintrag für `20261007120000` oder `20261007213000`. Der direkte Dateizugriff durch `postgres` war wegen der privaten Home-Verzeichnisse nicht lesbar; die unveränderte Leseprobe wurde als Standardinput übergeben. Keine Produktionsdaten wurden geändert. Der Deploy-Wrapper enthält den One-shot-Migrator für den aktuellen Release-Stand, damit auch die neue Upload-Migration vor dem Dienstneustart berücksichtigt wird.
+
 ## Statusfehler-Fix nach dem zweiten Code-BLOCK
 
 Der weitere frische Fixer hat den vorhandenen Worktree bei `21631a2d` übernommen. Graphify wurde zuerst im Worktree versucht; dort fehlt der lokale Graph. Die globale Graphify-Abfrage und die anschließende Aufrufersuche belegen den Dashboard-Handler als einzigen produktiven Aufrufer des Statuslesers. Der gemeinsame interne Credential-Leser reicht SQL-Fehler als `Result` weiter. Die bestehenden optionalen Credential-Aufrufer behalten ihren Vertrag, der Statusleser reicht dagegen Fehler aus beiden SQL-Abfragen bis zur API durch. Der Handler protokolliert den SQL-Fehler und liefert die vorhandene Antwort HTTP 500 mit `platform_status_failed`, ohne Plattformliste. Kein neuer UI-Pfad und keine neue Versandstrecke.

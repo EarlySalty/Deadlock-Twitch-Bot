@@ -61,7 +61,7 @@ try {
     };
     localStorage.setItem('ddc-language', 'de');
   }, now);
-  const status = (platform, overrides) => ({ platform, connected: true, username: 'fixture', expired: false, needs_reauth: false, automatically_renewed: true, expires_at: iso(-1), refresh_expires_at: null, ...overrides });
+  const status = (platform, overrides) => ({ platform, connected: true, username: 'fixture', expired: false, needs_reauth: false, automatically_renewed: true, expires_at: iso(-1), refresh_expires_at: null, capabilities: { upload: platform !== 'instagram', statistics: platform === 'youtube', upload_mode: platform === 'tiktok' ? 'inbox' : platform === 'instagram' ? 'reel' : 'upload', reason: platform === 'instagram' ? 'Instagram ist in dieser Beta noch nicht verfügbar.' : null }, ...overrides });
   const cases = [
     ['metadata-read-error', null, [], 0],
     ['instagram-20-days', [status('youtube', {}), status('tiktok', { refresh_expires_at: iso(365) }), status('instagram', { expires_at: iso(20) })], ['27.10.2026'], 0],
