@@ -71,8 +71,10 @@ Elf öffentliche Live-Prüfungen bestanden:
 - Unbekannter API-Pfad: 404, keine SPA.
 - Öffentlich ausgeliefertes Release-JS: JavaScript 200, neuer Titel und kanonischer Navigationslink enthalten. SHA256 `11bf83089343126287be57bde2fc96345c258d2188fe916a1d68074dab2bc775`.
 
-## Formeller Abschlussblocker
+## Abschlussfreigabe
 
-Unprivilegierte `readlink /proc/<PID>/exe`-Aufrufe schlagen mit Exit 1 fehl, auch bei den aktuell laufenden PIDs 3816589 und 3818143. Deshalb ist `exe ohne (deleted)` nicht direkt belegt. Kein generisches sudo dafür, keine Rechteänderung und keine Weitergabe des blockierten Aufrufs an andere Agenten.
+Unprivilegierte `readlink /proc/<PID>/exe`-Aufrufe der Worker-Sitzung schlugen mit Exit 1 fehl. Die Sitzung änderte dafür keine Rechte und nutzte kein generisches sudo.
 
-Die ausdrückliche Ersatzfreigabe für andere Worker gilt nicht automatisch für diesen Auftrag. Entscheidung zum Ersatznachweis steht beim Auftraggeber an; Bot-Branch und Bot-Worktree bleiben bis dahin erhalten, kein Selbst-Settle. Caddy-Branch und -Worktree nach bestätigter master-Abstammung entfernt. Beide Baseline-Worktrees und Testcontainer entfernt; Docker-Volumes nicht gelöscht. Test-Caddy ausschließlich über eigenen Admin-Port 20196 gestoppt.
+Der Auftraggeber hat am 2026-10-07 den Ersatznachweis ausdrücklich für diesen Auftrag freigegeben und den `/proc`-Abgleich selbst vorgenommen: Bot PID 3816589, Dashboard PID 3818143, Audit PID 3821592, Collector PID 3796733. Alle vier exe-Links zeigen nach dessen eigener Prüfung auf `/opt/deadlock/twitch/releases/10dacbc2376a63f6d91869afe83b1ac8bb615eec/rust/target/release/`, ohne `(deleted)`. Current zeigt auf denselben SHA. Dieser Teilnachweis wird als freigegebener Nachweis des Auftraggebers übernommen, nicht als eigene privilegierte Messung ausgegeben.
+
+Kein erneuter Deploy erforderlich oder beauftragt. Verbleibend: reine Nachweiscommits nach main bringen, Branch-Abstammung prüfen, eigenen Bot-Branch samt Remote-Branch und Worktree entfernen und selbst settlen. Caddy-Branch und -Worktree, beide Baseline-Worktrees und Testcontainer sind bereits entfernt; Docker-Volumes erhalten. Test-Caddy ausschließlich über eigenen Admin-Port 20196 gestoppt.
