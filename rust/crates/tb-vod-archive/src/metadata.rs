@@ -40,8 +40,15 @@ pub fn baue_titel(
         .replace("{title}", title)
         .replace("{date}", &datum_text)
         .replace("{channel}", channel)
-        .replace("{part}", &teil);
-    bereinige_text(&titel).chars().take(TITEL_MAX).collect()
+        .replace("{part}", "");
+    let budget = TITEL_MAX.saturating_sub(teil.chars().count());
+    format!(
+        "{}{teil}",
+        bereinige_text(&titel)
+            .chars()
+            .take(budget)
+            .collect::<String>()
+    )
 }
 
 pub fn baue_beschreibung(
@@ -54,7 +61,7 @@ pub fn baue_beschreibung(
         .map(|d| d.to_string())
         .unwrap_or_else(|| "unbekannt".to_string());
     let mut beschreibung = bereinige_text(&format!(
-        "{title}\n\nTwitch-Stream vom {datum_text}\nOriginal: {}\nLive: https://www.twitch.tv/{channel}",
+        "Twitch-Stream vom {datum_text}\nOriginal: {}\nLive: https://www.twitch.tv/{channel}\n\n{title}",
         vod_url(twitch_id)
     ));
     if beschreibung.len() > BESCHREIBUNG_MAX_BYTES {
@@ -79,6 +86,18 @@ pub fn baue_metadaten(
     teil_anzahl: usize,
     privacy: &str,
 ) -> Value {
+    let mut description = format!(
+        "Archivquelle: Twitch-VOD {}; Teil {}/{}\n{}",
+        twitch_id.trim_start_matches('v'),
+        teil_index + 1,
+        teil_anzahl,
+        baue_beschreibung(kanal, title, twitch_id, datum)
+    );
+    let mut end = description.len().min(BESCHREIBUNG_MAX_BYTES);
+    while !description.is_char_boundary(end) {
+        end -= 1;
+    }
+    description.truncate(end);
     json!({
         "snippet": {
             "title": baue_titel(
@@ -89,7 +108,7 @@ pub fn baue_metadaten(
                 teil_index,
                 teil_anzahl,
             ),
-            "description": baue_beschreibung(kanal, title, twitch_id, datum),
+            "description": description,
             "categoryId": cfg.category_id,
             "tags": ["Twitch", "VOD", kanal],
         },
@@ -172,7 +191,25 @@ mod tests {
     fn beschreibung_begrenzt_utf8_bytes_nach_der_bereinigung() {
         let titel = format!("{}<3{}", "ä".repeat(2499), "🎮".repeat(100));
         let beschreibung = baue_beschreibung("earlysalty", &titel, "v42", datum());
-        assert_eq!(beschreibung, "ä".repeat(2499));
+        assert!(beschreibung.contains("https://www.twitch.tv/videos/42"));
+        let meta = baue_metadaten(
+            &VodArchiveConfig::default(),
+            "earlysalty",
+            &titel,
+            "v42",
+            datum(),
+            1,
+            3,
+            "private",
+        );
+        let description = meta["snippet"]["description"].as_str().unwrap();
+        assert!(description.contains("Archivquelle: Twitch-VOD 42; Teil 2/3"));
+        assert!(description.contains("https://www.twitch.tv/videos/42"));
+        assert!(description.len() <= BESCHREIBUNG_MAX_BYTES);
+        assert!(meta["snippet"]["title"]
+            .as_str()
+            .unwrap()
+            .ends_with("(Teil 2/3)"));
         assert!(beschreibung.len() <= BESCHREIBUNG_MAX_BYTES);
         assert!(!beschreibung.contains(['<', '>']));
     }

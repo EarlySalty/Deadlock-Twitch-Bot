@@ -21,6 +21,7 @@ pub struct VodArchiveConfig {
     pub playlist_id: Option<String>,
     pub category_id: String,
     pub title_template: String,
+    pub youtube: tb_config::vod_archive::VodArchiveOptions,
 }
 
 impl Default for VodArchiveConfig {
@@ -48,6 +49,7 @@ impl VodArchiveConfig {
             playlist_id: options.playlist_id.clone(),
             category_id: options.category_id.clone(),
             title_template: options.title_template.clone(),
+            youtube: options.clone(),
         }
     }
 

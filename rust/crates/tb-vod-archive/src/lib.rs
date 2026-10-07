@@ -29,6 +29,7 @@ pub mod metadata;
 pub mod store;
 pub mod twitch;
 pub mod worker;
+pub mod youtube_check;
 
 pub use config::VodArchiveConfig;
 pub use error::VodArchiveError;

@@ -35,8 +35,20 @@ export interface ArchivedVod {
   discovered_at: string;
   status: string;
   status_label: string;
-  display_status: 'youtube_uploaded' | 'drive_uploaded' | 'uploading' | 'downloading' | 'waiting' | 'partial' | 'failed' | 'unknown';
+  display_status: 'youtube_uploaded' | 'youtube_confirmed' | 'youtube_processing' | 'youtube_unavailable' | 'youtube_error' | 'drive_uploaded' | 'uploading' | 'downloading' | 'waiting' | 'partial' | 'failed' | 'unknown';
   youtube_complete: boolean;
+  youtube_verified_complete?: boolean;
+  can_check_youtube?: boolean;
+  youtube_check?: {
+    state: string;
+    complete: boolean;
+    pending: boolean;
+    can_request: boolean;
+    error: string | null;
+    last_attempt_at: string | null;
+    last_success_at: string | null;
+    observations: { video_id: string; part_index: number | null; part_total: number | null; state: string; privacy: string | null; observed_at: string }[];
+  } | null;
   drive_complete: boolean;
   confirmed_parts: number;
   total_parts: number;
@@ -55,7 +67,7 @@ export async function fetchArchivedVods(twitchUserId: string | undefined, page =
   return fetchJson(`/twitch/social-media/api/vod-archive${qs}`);
 }
 
-export async function archiveAction(id: number, action: 'retry' | 'drive' | 'hide', twitchUserId?: string): Promise<void> {
+export async function archiveAction(id: number, action: 'retry' | 'drive' | 'hide' | 'check', twitchUserId?: string): Promise<void> {
   await fetchJson('/twitch/social-media/api/vod-archive', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id, action, twitch_user_id: twitchUserId }),

@@ -29,6 +29,8 @@ pub async fn list_handler(
          paged AS (SELECT v.id, v.twitch_id, v.streamer_login, v.twitch_user_id, v.title, v.duration_sec, \
          v.recorded_at, v.discovered_at, v.status, v.last_error, v.drive_url, v.drive_requested, \
          v.last_attempt_at, v.uploaded_at, \
+         CASE WHEN c.vod_id IS NOT NULL THEN jsonb_build_object('state',c.state,'complete',c.complete,'observations',c.observations,'last_attempt_at',c.last_attempt_at,'last_success_at',c.last_success_at,'error',c.last_error,'pending',c.requested_at IS NOT NULL,'can_request',c.requested_at IS NULL AND (c.last_attempt_at IS NULL OR c.last_attempt_at<NOW()-INTERVAL '10 minutes') AND (c.last_error IS DISTINCT FROM 'quota' OR c.next_check_at<=NOW())) END AS youtube_check, \
+         a.id IS NOT NULL AS can_check_youtube, \
          COALESCE((SELECT jsonb_agg(jsonb_build_object('index', p.part_index, 'status', p.status, \
             'youtube_video_id', p.youtube_video_id) ORDER BY p.part_index) \
             FROM twitch_vod_archive_parts p WHERE p.vod_id = v.id), '[]'::jsonb) AS parts, \
@@ -39,6 +41,9 @@ pub async fn list_handler(
          LEFT JOIN LATERAL (SELECT a.* FROM social_media_platform_auth a \
             WHERE a.twitch_user_id=v.twitch_user_id AND a.platform='youtube' AND a.enabled=1 \
             ORDER BY a.authorized_at DESC, a.id DESC LIMIT 1) a ON TRUE \
+         LEFT JOIN twitch_vod_youtube_checks c ON c.vod_id=v.id AND c.auth_id=a.id \
+           AND c.auth_revision=md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')) \
+           AND c.upload_snapshot=(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index),'[]'::jsonb) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id) \
          ORDER BY v.discovered_at DESC, v.id DESC LIMIT 50 OFFSET $2) \
          SELECT paged.*, totals.total FROM (SELECT COUNT(*) AS total FROM visible) totals \
          LEFT JOIN paged ON TRUE ORDER BY paged.discovered_at DESC, paged.id DESC",
@@ -66,7 +71,13 @@ pub async fn list_handler(
                 let drive_url: Option<String> = row.get("drive_url");
                 let uploaded_at: Option<chrono::DateTime<chrono::Utc>> = row.get("uploaded_at");
                 let progress = archive_progress(&status, &parts, drive_url.as_deref(), uploaded_at.is_some());
+                let check: Option<Value> = row.get("youtube_check");
+                let check_state = check.as_ref().and_then(|c| c["state"].as_str());
+                let checked_status = youtube_check_label(check_state);
                 json!({
+                    "youtube_check": check,
+                    "can_check_youtube": row.get::<bool, _>("can_check_youtube"),
+                    "youtube_verified_complete": check.as_ref().is_some_and(|c| c["complete"] == true && c["state"] == "confirmed"),
                     "id": row.get::<i64, _>("id"),
                     "twitch_id": row.get::<String, _>("twitch_id"),
                     "channel": row.get::<String, _>("streamer_login"),
@@ -75,14 +86,14 @@ pub async fn list_handler(
                     "duration_sec": row.get::<i64, _>("duration_sec"),
                     "recorded_at": row.get::<Option<chrono::NaiveDate>, _>("recorded_at"),
                     "discovered_at": row.get::<chrono::DateTime<chrono::Utc>, _>("discovered_at"),
-                    "status": status, "status_label": progress.label,
-                    "display_status": progress.state,
+                    "status": status, "status_label": checked_status.map_or(progress.label, |(_,label)| label),
+                    "display_status": checked_status.map_or(progress.state, |(state,_)| state),
                     "youtube_complete": progress.youtube_complete,
                     "drive_complete": progress.drive_complete,
                     "confirmed_parts": progress.confirmed_parts,
                     "total_parts": progress.total_parts,
                     "can_retry": progress.can_retry,
-                    "reason": if parts.as_array().is_some_and(|parts| parts.iter().any(|part| part["status"] == "rejected")) && !progress.drive_complete { Some("YouTube hat einen Upload abgelehnt oder entfernt. Prüfe das Ziel und die YouTube-Verbindung.") } else if progress.state == "unknown" { Some("Der frühere Abschluss ist nicht ausreichend dokumentiert. Prüfe vorhandene Ziellinks; ein erneuter Upload wird nicht automatisch gestartet.") } else { error_label(&status, last_error.as_deref(), drive_requested) },
+                    "reason": if check.is_some() { None } else if parts.as_array().is_some_and(|parts| parts.iter().any(|part| part["status"] == "rejected")) && !progress.drive_complete { Some("YouTube hat einen Upload abgelehnt oder entfernt. Prüfe das Ziel und die YouTube-Verbindung.") } else if progress.state == "unknown" { Some("Für diesen früheren Upload fehlt ein vollständiger Nachweis. Der YouTube-Abgleich kann vorhandene Videos zuordnen.") } else { error_label(&status, last_error.as_deref(), drive_requested) },
                     "drive_url": drive_url,
                     "drive_requested": drive_requested,
                     "last_attempt_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_attempt_at"),
@@ -101,6 +112,20 @@ pub async fn list_handler(
             )
                 .into_response()
         }
+    }
+}
+
+fn youtube_check_label(state: Option<&str>) -> Option<(&'static str, &'static str)> {
+    match state? {
+        "confirmed" => Some(("youtube_confirmed", "Auf YouTube bestätigt")),
+        "processing" => Some(("youtube_processing", "YouTube verarbeitet das Video")),
+        "rejected" => Some(("failed", "YouTube hat das Video abgelehnt")),
+        "unavailable" => Some(("youtube_unavailable", "Bei YouTube nicht abrufbar")),
+        "error" => Some(("youtube_error", "Prüfung gerade nicht möglich")),
+        "partial" => Some(("partial", "YouTube-Zuordnung noch unvollständig")),
+        "unresolved" => Some(("unknown", "Bei YouTube nicht eindeutig zugeordnet")),
+        "searching" => Some(("waiting", "YouTube-Abgleich läuft")),
+        _ => None,
     }
 }
 
@@ -216,7 +241,7 @@ pub async fn action_handler(
         Ok(scope) => scope,
         Err(response) => return response,
     };
-    if body.id <= 0 || !matches!(body.action.as_str(), "retry" | "drive" | "hide") {
+    if body.id <= 0 || !matches!(body.action.as_str(), "retry" | "drive" | "hide" | "check") {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "Diese Aktion ist nicht verfügbar."})),
@@ -265,6 +290,12 @@ async fn apply_action(
         return Ok(Some(false));
     }
     let status: String = row.get("status");
+    if action == "check" {
+        let queued = sqlx::query("INSERT INTO twitch_vod_youtube_checks (vod_id,auth_id,auth_revision,channel_id,requested_at,upload_snapshot) SELECT v.id,a.id,md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')),a.platform_user_id,NOW(),(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index),'[]'::jsonb) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id) FROM twitch_vod_archive_vods v JOIN LATERAL (SELECT a.* FROM social_media_platform_auth a WHERE a.twitch_user_id=v.twitch_user_id AND a.platform='youtube' AND a.enabled=1 ORDER BY a.authorized_at DESC,a.id DESC LIMIT 1) a ON TRUE WHERE v.id=$1 AND (v.status IN ('uploaded','archived') OR EXISTS (SELECT 1 FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id AND p.youtube_video_id IS NOT NULL)) ON CONFLICT (vod_id) DO UPDATE SET requested_at=COALESCE(twitch_vod_youtube_checks.requested_at,NOW()),next_check_at=NOW() WHERE twitch_vod_youtube_checks.requested_at IS NULL AND (twitch_vod_youtube_checks.last_attempt_at IS NULL OR twitch_vod_youtube_checks.last_attempt_at<NOW()-INTERVAL '10 minutes') AND (twitch_vod_youtube_checks.last_error IS DISTINCT FROM 'quota' OR twitch_vod_youtube_checks.next_check_at<=NOW())")
+            .bind(id).execute(&mut *tx).await?.rows_affected();
+        tx.commit().await?;
+        return Ok(Some(queued == 1));
+    }
     if action != "hide" && matches!(status.as_str(), "uploaded" | "archived" | "drive_uploaded") {
         return Ok(Some(false));
     }

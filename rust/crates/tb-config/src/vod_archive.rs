@@ -18,6 +18,12 @@ pub struct VodArchiveOptions {
     pub category_id: String,
     pub title_template: String,
     pub playlist_id: Option<String>,
+    pub youtube_poll_seconds: u64,
+    pub youtube_check_hours: u64,
+    pub youtube_processing_minutes: u64,
+    pub youtube_error_minutes: u64,
+    pub youtube_quota_hours: u64,
+    pub youtube_requests_per_run: usize,
 }
 
 impl Default for VodArchiveOptions {
@@ -36,6 +42,12 @@ impl Default for VodArchiveOptions {
             category_id: "20".into(),
             title_template: "{title} [{date}]{part}".into(),
             playlist_id: None,
+            youtube_poll_seconds: 60,
+            youtube_check_hours: 24,
+            youtube_processing_minutes: 10,
+            youtube_error_minutes: 60,
+            youtube_quota_hours: 24,
+            youtube_requests_per_run: 20,
         }
     }
 }
@@ -66,6 +78,31 @@ impl VodArchiveOptions {
             86_400,
             "bot.vod_archive.download_timeout_seconds",
         )?;
+        for (value, min, max, name) in [
+            (self.youtube_poll_seconds, 30, 3600, "youtube_poll_seconds"),
+            (self.youtube_check_hours, 1, 168, "youtube_check_hours"),
+            (
+                self.youtube_processing_minutes,
+                5,
+                1440,
+                "youtube_processing_minutes",
+            ),
+            (
+                self.youtube_error_minutes,
+                10,
+                1440,
+                "youtube_error_minutes",
+            ),
+            (self.youtube_quota_hours, 1, 168, "youtube_quota_hours"),
+            (
+                self.youtube_requests_per_run as u64,
+                3,
+                100,
+                "youtube_requests_per_run",
+            ),
+        ] {
+            range(value, min, max, name)?;
+        }
         for path in [
             &self.download_dir,
             &self.ffmpeg,

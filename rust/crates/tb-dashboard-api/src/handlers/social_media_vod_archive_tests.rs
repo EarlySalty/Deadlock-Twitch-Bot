@@ -19,6 +19,20 @@ async fn database() -> crate::test_postgres::TestPostgres {
     .execute(&database.pool)
     .await
     .unwrap();
+    sqlx::query("ALTER TABLE twitch_vod_archive_parts ADD COLUMN id BIGSERIAL")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    sqlx::query("ALTER TABLE social_media_platform_auth ADD COLUMN platform_user_id TEXT")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261008003000_vod_youtube_checks.sql"
+    ))
+    .execute(&database.pool)
+    .await
+    .unwrap();
     database
 }
 
@@ -119,14 +133,12 @@ async fn retry_drive_hide_and_active_lock_keep_completed_parts() {
         apply_action(pool, 1, Some("42"), "drive").await.unwrap(),
         Some(true)
     );
-    assert!(
-        sqlx::query_scalar::<_, bool>(
-            "SELECT drive_requested FROM twitch_vod_archive_vods WHERE id=1"
-        )
-        .fetch_one(pool)
-        .await
-        .unwrap()
-    );
+    assert!(sqlx::query_scalar::<_, bool>(
+        "SELECT drive_requested FROM twitch_vod_archive_vods WHERE id=1"
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap());
     assert_eq!(
         apply_action(pool, 2, None, "retry").await.unwrap(),
         Some(false)
@@ -235,6 +247,73 @@ async fn empty_pages_keep_visible_totals_within_the_authorized_scope() {
         .unwrap(),
         1
     );
+}
+
+#[tokio::test]
+async fn youtube_check_is_scoped_debounced_read_only_and_visible() {
+    let database = database().await;
+    let pool = &database.pool;
+    sqlx::query("INSERT INTO social_media_platform_auth(twitch_user_id,platform,platform_user_id,access_token_enc,scopes) VALUES ('99','youtube','own',decode('01','hex'),'https://www.googleapis.com/auth/youtube.readonly')").execute(pool).await.unwrap();
+    assert_eq!(
+        apply_action(pool, 2, Some("42"), "check").await.unwrap(),
+        None
+    );
+    assert_eq!(
+        apply_action(pool, 2, Some("99"), "check").await.unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        apply_action(pool, 2, Some("99"), "check").await.unwrap(),
+        Some(false)
+    );
+    let before: Value=sqlx::query_scalar("SELECT jsonb_build_array(v.status,v.uploaded_at,(SELECT jsonb_agg(p) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id)) FROM twitch_vod_archive_vods v WHERE v.id=2").fetch_one(pool).await.unwrap();
+    let observations = json!([{"video_id":"video99","part_index":0,"part_total":1,"state":"processed","privacy":"private","observed_at":"2026-10-08T01:00:00Z"}]);
+    sqlx::query("UPDATE twitch_vod_youtube_checks SET state='confirmed',complete=TRUE,observations=$1,requested_at=NULL,last_attempt_at=NOW(),last_success_at=NOW(),channel_id='own' WHERE vod_id=2").bind(observations).execute(pool).await.unwrap();
+    assert_eq!(
+        apply_action(pool, 2, Some("99"), "check").await.unwrap(),
+        Some(false)
+    );
+    let data = json(
+        list_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(ArchiveQuery {
+                twitch_user_id: Some("99".into()),
+                page: None,
+            }),
+        )
+        .await,
+    )
+    .await;
+    let item = &data["items"][0];
+    assert_eq!(item["display_status"], "youtube_confirmed");
+    assert_eq!(item["youtube_verified_complete"], true);
+    assert_eq!(
+        item["youtube_check"]["observations"][0]["privacy"],
+        "private"
+    );
+    assert!(item["youtube_check"]["last_success_at"].is_string());
+    if let Ok(path) = std::env::var("VOD_ARCHIVE_PROOF_PATH") {
+        let path = std::path::Path::new(&path).with_file_name("youtube-current.json");
+        std::fs::write(path, serde_json::to_vec_pretty(&data).unwrap()).unwrap();
+    }
+    let after:Value=sqlx::query_scalar("SELECT jsonb_build_array(v.status,v.uploaded_at,(SELECT jsonb_agg(p) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id)) FROM twitch_vod_archive_vods v WHERE v.id=2").fetch_one(pool).await.unwrap();
+    assert_eq!(before, after);
+    sqlx::query("UPDATE social_media_platform_auth SET platform_user_id='changed' WHERE twitch_user_id='99'").execute(pool).await.unwrap();
+    let changed = json(
+        list_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(ArchiveQuery {
+                twitch_user_id: Some("99".into()),
+                page: None,
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert!(changed["items"][0]["youtube_check"].is_null());
+    eprintln!("YOUTUBE_API_DB_PROOF: queue write debounced and session-scoped, current private evidence returned, historical upload untouched, switched channel hides old evidence");
 }
 
 #[test]

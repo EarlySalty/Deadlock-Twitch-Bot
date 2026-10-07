@@ -18,21 +18,21 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
 use sqlx::PgPool;
 use tb_social_media::credentials::CredentialManager;
 use tb_social_media::upload_worker::youtube_uploader;
-use tb_social_media::uploaders::UploadError;
 use tb_social_media::uploaders::youtube::{
     ChunkOutcome, ResumeStand, VideoZustand, YouTubeUploader,
 };
-use tb_social_media::vod_archive::{VodArchiveSettings, aktive_vod_archive_streamer};
+use tb_social_media::uploaders::UploadError;
+use tb_social_media::vod_archive::{aktive_vod_archive_streamer, VodArchiveSettings};
 
-use crate::config::{VodArchiveConfig, wurzel_oder_elternteil};
+use crate::config::{wurzel_oder_elternteil, VodArchiveConfig};
 use crate::error::VodArchiveError;
 use crate::metadata::baue_metadaten;
 use crate::store;
@@ -41,12 +41,6 @@ use crate::twitch::{self, CommandRunner};
 /// Erster Lauf erst nach dieser Frist, damit der Bot-Start nicht sofort einen
 /// mehrstuendigen Download anwirft.
 const INITIAL_DELAY_SECS: u64 = 300;
-
-/// Wie weit zurueck fertige Uploads bei YouTube nachgeprueft werden. Der
-/// Befund (abgelehnt, entfernt) liegt oft erst Stunden nach dem Upload vor,
-/// also weit genug ueber den Tag hinaus, aber begrenzt, damit alte Laeufe
-/// nicht ewig nachgefragt werden.
-const PRUEF_FENSTER_TAGE: i32 = 14;
 
 /// Auszeit fuer ein von YouTube verworfenes Teil, bevor es erneut
 /// hochgeladen wird. Sonst zieht jeder Lauf dieselbe Ablehnung mit einem
@@ -179,6 +173,7 @@ pub struct VodArchiveWorker {
     pool: PgPool,
     config: VodArchiveConfig,
     zugang: Arc<dyn HochladerQuelle>,
+    check_credentials: Option<CredentialManager>,
     runner: Arc<dyn CommandRunner>,
     twitch_client: Option<tb_transport_twitch::HelixClient>,
     /// Zaehlt die Laeufe, damit der Startplatz der Warteschlange wandert.
@@ -245,12 +240,15 @@ impl VodArchiveWorker {
         credentials: CredentialManager,
         session_cipher: Arc<tb_crypto::FieldCipher>,
     ) -> Self {
-        Self::mit_zugang(
+        let checks = CredentialManager::new(pool.clone(), session_cipher.clone());
+        let mut worker = Self::mit_zugang(
             pool,
             config,
             Arc::new(StreamerZugang { credentials }),
             session_cipher,
-        )
+        );
+        worker.check_credentials = Some(checks);
+        worker
     }
 
     /// Wie [`Self::new`], aber mit fertiger Upload-Quelle statt der
@@ -266,6 +264,7 @@ impl VodArchiveWorker {
             pool,
             config,
             zugang,
+            check_credentials: None,
             runner: Arc::new(twitch::TokioCommandRunner),
             twitch_client: None,
             laeufe: AtomicUsize::new(0),
@@ -297,11 +296,33 @@ impl VodArchiveWorker {
     }
 
     pub async fn run(&self) {
-        tokio::time::sleep(std::time::Duration::from_secs(INITIAL_DELAY_SECS)).await;
-        loop {
-            self.run_once().await;
-            tokio::time::sleep(self.config.interval).await;
-        }
+        let checking = async {
+            loop {
+                if let Some(credentials) = &self.check_credentials {
+                    if let Err(error) = crate::youtube_check::run_once(
+                        &self.pool,
+                        credentials,
+                        &self.config.youtube,
+                    )
+                    .await
+                    {
+                        tracing::error!(%error, "YouTube-Abgleich fehlgeschlagen");
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(
+                    self.config.youtube.youtube_poll_seconds,
+                ))
+                .await;
+            }
+        };
+        let archiving = async {
+            tokio::time::sleep(std::time::Duration::from_secs(INITIAL_DELAY_SECS)).await;
+            loop {
+                self.run_once().await;
+                tokio::time::sleep(self.config.interval).await;
+            }
+        };
+        tokio::join!(checking, archiving);
     }
 
     /// Ein vollstaendiger Lauf. Faengt alle Fehler ab, weil der Worker sonst
@@ -372,12 +393,6 @@ impl VodArchiveWorker {
             }
             uploader.insert(twitch_user_id.to_owned(), zugang);
         }
-
-        // Der resumable Upload meldet nur angekommene Bytes, nicht den
-        // Verbleib. Befunde wie "Video ist zu lang" liegen erst Stunden
-        // spaeter vor und werden hier eingesammelt, bevor neue Uploads
-        // starten.
-        self.pruefe_fruehe_uploads(streamer, &uploader).await;
 
         // Reserve auf beide Grenzen, damit nach einem Download im selben Lauf
         // noch Uploads gefunden werden.
@@ -569,107 +584,6 @@ impl VodArchiveWorker {
             }
         }
         Ok(())
-    }
-
-    /// Holt den Befund ueber frische Uploads ein. YouTube nimmt einen
-    /// fertigen resumable Upload erstmal an und wirft ihn spaeter wieder
-    /// raus, etwa beim 15-Minuten-Limit eines nicht verifizierten Kanals.
-    /// Ohne diese Nachfrage bliebe so ein Verlust als "Fertig" stehen, und
-    /// das Aufraeumen wuerde irgendwann die letzte lokale Kopie loeschen.
-    async fn pruefe_fruehe_uploads(
-        &self,
-        streamer: &[VodArchiveSettings],
-        uploader: &HashMap<String, Option<Arc<dyn TeilHochlader>>>,
-    ) {
-        for einstellung in streamer {
-            let login = einstellung.streamer_login.as_str();
-            let Some(twitch_user_id) = einstellung.twitch_user_id.as_deref() else {
-                continue;
-            };
-            let Some(hochlader) = uploader.get(twitch_user_id).cloned().flatten() else {
-                continue;
-            };
-            let frische = match store::frisch_hochgeladene_teile(
-                &self.pool,
-                twitch_user_id,
-                PRUEF_FENSTER_TAGE,
-            )
-            .await
-            {
-                Ok(frische) if frische.is_empty() => continue,
-                Ok(frische) => frische,
-                Err(fehler) => {
-                    tracing::warn!(kanal = login, %fehler, "Upload-Nachpruefung nicht lesbar");
-                    continue;
-                }
-            };
-            tracing::info!(kanal = login, teile = frische.len(), "Upload-Nachpruefung");
-            for eintrag in frische {
-                match hochlader.video_status(&eintrag.video_id).await {
-                    Ok(None) => {
-                        self.markiere_verworfen(
-                            login,
-                            &eintrag,
-                            "YouTube kennt die Video-ID nicht mehr (entfernt oder abgelehnt)",
-                        )
-                        .await;
-                    }
-                    Ok(Some(stand))
-                        if matches!(stand.upload_status.as_str(), "rejected" | "failed") =>
-                    {
-                        let grund = match stand.rejection_reason.as_deref() {
-                            Some(reason) => format!(
-                                "YouTube hat den Upload verworfen: uploadStatus={}, rejectionReason={}",
-                                stand.upload_status, reason
-                            ),
-                            None => format!(
-                                "YouTube hat den Upload verworfen: uploadStatus={}",
-                                stand.upload_status
-                            ),
-                        };
-                        self.markiere_verworfen(login, &eintrag, &grund).await;
-                    }
-                    Ok(Some(_)) => {}
-                    Err(UploadError::QuotaExceeded(_)) => {
-                        // Das Tageskontingent haengt am Google-Projekt: ist
-                        // es leer, lohnt weder die Nachpruefung noch der
-                        // restliche Lauf.
-                        tracing::warn!(
-                            kanal = login,
-                            "YouTube-Tageskontingent erschoepft, Upload-Nachpruefung endet"
-                        );
-                        return;
-                    }
-                    Err(fehler) => {
-                        tracing::warn!(
-                            kanal = login,
-                            video = %eintrag.video_id,
-                            %fehler,
-                            "Upload-Nachpruefung fehlgeschlagen"
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    /// Trägt einen von YouTube wieder verworfenen Upload als solchen fest:
-    /// das Teil geht in die Auszeit und das VOD aus "hochgeladen" zurueck in
-    /// die Warteschlange, damit die lokale Kopie nicht aufgeräumt wird, solange
-    /// bei YouTube nichts liegt.
-    async fn markiere_verworfen(&self, kanal: &str, eintrag: &store::FrischerUpload, grund: &str) {
-        tracing::error!(
-            kanal = %kanal,
-            video = %eintrag.video_id,
-            teil = eintrag.part_index,
-            grund,
-            "Upload von YouTube verworfen; häufigste Ursache ist das 15-Minuten-Limit eines nicht verifizierten Kanals (youtube.com/verify). Das Teil pausiert und geht erneut hinaus, danach folgt der Upload von selbst."
-        );
-        if let Err(fehler) =
-            store::setze_upload_abgelehnt(&self.pool, eintrag.teil_id, eintrag.vod_id, grund).await
-        {
-            tracing::error!(%fehler, "Verworfener Upload konnte nicht atomar zurückgesetzt werden");
-        }
     }
 
     /// Laedt das VOD (falls noetig) und schiebt seine Teile hoch. Alles, was
@@ -1071,31 +985,19 @@ impl VodArchiveWorker {
             "SELECT id, twitch_id, local_path, twitch_user_id, status FROM twitch_vod_archive_vods WHERE status IN ('uploaded','drive_uploaded') AND local_path IS NOT NULL"
         ).fetch_all(&self.pool).await?;
         for (id, twitch_id, local_path, user_id, status) in rows {
+            let mut cleanup_guard = None;
             if status == "uploaded" {
                 let Some(user_id) = user_id else {
                     continue;
                 };
-                let Some(uploader) = self.zugang.fuer(&user_id).await else {
-                    continue;
-                };
-                let parts = store::teile(&self.pool, id, &self.session_cipher).await?;
-                let mut confirmed = !parts.is_empty();
-                for part in parts {
-                    if part.status != store::TEIL_FERTIG {
-                        confirmed = false;
-                        break;
-                    }
-                    let Some(video) = part.youtube_video_id else {
-                        confirmed = false;
-                        break;
-                    };
-                    if !matches!(uploader.video_status(&video).await, Ok(Some(state)) if state.upload_status == "processed")
-                    {
-                        confirmed = false;
-                        break;
-                    }
-                }
-                if !confirmed {
+                cleanup_guard = crate::youtube_check::cleanup_proof(
+                    &self.pool,
+                    &user_id,
+                    id,
+                    self.config.youtube.youtube_check_hours,
+                )
+                .await?;
+                if cleanup_guard.is_none() {
                     continue;
                 }
             }
@@ -1115,8 +1017,13 @@ impl VodArchiveWorker {
                 .into());
             }
             loesche_dateien(&directory, &twitch_id)?;
-            sqlx::query("UPDATE twitch_vod_archive_vods SET local_path=NULL, status=CASE WHEN status='uploaded' THEN 'archived' ELSE status END, updated_at=NOW() WHERE id=$1")
-                .bind(id).execute(&self.pool).await?;
+            let update = sqlx::query("UPDATE twitch_vod_archive_vods SET local_path=NULL, status=CASE WHEN status='uploaded' THEN 'archived' ELSE status END, updated_at=NOW() WHERE id=$1").bind(id);
+            if let Some(mut guard) = cleanup_guard {
+                update.execute(&mut *guard).await?;
+                guard.commit().await?;
+            } else {
+                update.execute(&self.pool).await?;
+            }
         }
         Ok(())
     }
@@ -1435,6 +1342,7 @@ mod tests {
                 .await
                 .unwrap();
         }
+        crate::youtube_check::test_schema(&pool).await;
         static NEXT_ID: AtomicUsize = AtomicUsize::new(100_000);
         let first_id = NEXT_ID.fetch_add(1_000, Ordering::SeqCst) as i64;
         sqlx::query("SELECT setval('twitch_vod_archive_vods_id_seq', $1, false)")
@@ -1736,12 +1644,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(
-            store::teile(&pool, vod.id, &test_cipher())
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        assert!(store::teile(&pool, vod.id, &test_cipher())
+            .await
+            .unwrap()
+            .is_empty());
 
         let hochlader = Arc::new(ZaehlenderHochlader::default());
         let bilanz = worker(&pool, config(&verzeichnis), &hochlader)
@@ -1796,7 +1702,7 @@ mod tests {
         let worker = worker(&pool, config(&directory), &uploader);
         worker.raeume_auf().await.unwrap();
         assert!(path.exists());
-        *uploader.verarbeitet.lock().unwrap() = true;
+        crate::youtube_check::test_confirm(&pool, "42", vod.id).await;
         worker.raeume_auf().await.unwrap();
         assert!(!path.exists());
         assert!(other.exists());
@@ -1849,47 +1755,21 @@ mod tests {
 
         // Jetzt sammelt YouTube den Upload wieder ein.
         *hochlader.verwerfen.lock().unwrap() = true;
-        worker.lauf(&[einstellung("earlysalty")]).await.unwrap();
+        for _ in 0..3 {
+            worker.lauf(&[einstellung("earlysalty")]).await.unwrap();
+        }
         let teile = store::teile(&pool, vod.id, &test_cipher()).await.unwrap();
-        assert_eq!(teile[0].status, store::TEIL_ABGELEHNT);
-        assert!(teile[0].upload_session_uri.is_none());
-        assert_eq!(teile[0].upload_offset, 0);
-        assert!(teile[0].youtube_video_id.is_none());
+        assert_eq!(teile[0].status, store::TEIL_FERTIG);
+        assert!(teile[0].youtube_video_id.is_some());
+        assert_eq!(hochlader.uploads.load(Ordering::SeqCst), 1);
+        assert!(pfad.exists());
         let vod_status: String =
-            sqlx::query_scalar("SELECT status FROM twitch_vod_archive_vods WHERE id = $1")
+            sqlx::query_scalar("SELECT status FROM twitch_vod_archive_vods WHERE id=$1")
                 .bind(vod.id)
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(
-            vod_status,
-            store::STATUS_UPLOAD_FEHLER,
-            "das VOD muss aus 'uploaded' zurueckfallen, sonst raeumt das Archiv die letzte Kopie weg"
-        );
-
-        // Die Auszeit greift: kein neuer Upload, das VOD bleibt offen.
-        worker.lauf(&[einstellung("earlysalty")]).await.unwrap();
-        assert_eq!(hochlader.uploads.load(Ordering::SeqCst), 1);
-        assert_eq!(store::offene_vods(&pool, "42", 10).await.unwrap().len(), 1);
-
-        // Auszeit vorbei: der Upload geht erneut hinaus, der Grund ist weg.
-        sqlx::query(
-            "UPDATE twitch_vod_archive_parts SET updated_at = CURRENT_TIMESTAMP - INTERVAL '13 hours'",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        *hochlader.verwerfen.lock().unwrap() = false;
-        worker.lauf(&[einstellung("earlysalty")]).await.unwrap();
-        assert_eq!(
-            hochlader.uploads.load(Ordering::SeqCst),
-            2,
-            "nach der Auszeit und ohne neuen Verwerfungsgrund muss erneut hochgeladen werden"
-        );
-        let teile = store::teile(&pool, vod.id, &test_cipher()).await.unwrap();
-        assert_eq!(teile[0].status, store::TEIL_FERTIG);
-        let offen = store::offene_vods(&pool, "42", 10).await.unwrap();
-        assert_eq!(offen.len(), 0);
+        assert_eq!(vod_status, store::STATUS_HOCHGELADEN);
 
         let _ = std::fs::remove_dir_all(verzeichnis);
     }

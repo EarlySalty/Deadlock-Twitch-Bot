@@ -1,0 +1,622 @@
+use std::collections::{BTreeSet, HashMap};
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use sqlx::{PgPool, Row};
+use tb_config::vod_archive::VodArchiveOptions;
+use tb_social_media::credentials::CredentialManager;
+use tb_social_media::upload_worker::youtube_uploader;
+use tb_social_media::uploaders::youtube::ArchivVideo;
+use tb_social_media::uploaders::UploadError;
+
+use crate::error::VodArchiveError;
+
+#[derive(Clone, sqlx::FromRow)]
+struct Ziel {
+    id: i32,
+    revision: String,
+    channel_id: Option<String>,
+}
+
+#[derive(Clone, sqlx::FromRow)]
+struct PruefVod {
+    id: i64,
+    twitch_id: String,
+    duration_sec: i64,
+    snapshot: Value,
+    parts: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Beobachtung {
+    pub video_id: String,
+    pub part_index: Option<i32>,
+    pub part_total: Option<i32>,
+    pub duration_sec: Option<i64>,
+    pub state: String,
+    pub privacy: Option<String>,
+    pub observed_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+#[path = "youtube_check_tests.rs"]
+mod tests;
+
+#[cfg(test)]
+pub(crate) async fn test_schema(pool: &PgPool) {
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20261008003000_vod_youtube_checks.sql"
+    ))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query("CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT, twitch_user_id TEXT, platform_user_id TEXT, authorized_at TEXT DEFAULT CURRENT_TIMESTAMP, refresh_token_enc BYTEA, enabled INTEGER DEFAULT 1, streamer_login TEXT, access_token_enc BYTEA, client_id TEXT, client_secret_enc BYTEA, token_expires_at TEXT, scopes TEXT, platform_username TEXT, enc_version INTEGER DEFAULT 1)").execute(pool).await.unwrap();
+}
+
+#[cfg(test)]
+pub(crate) async fn test_confirm(pool: &PgPool, user: &str, id: i64) {
+    sqlx::query("INSERT INTO social_media_platform_auth(platform,twitch_user_id,platform_user_id) VALUES ('youtube',$1,'synthetic-channel')").bind(user).execute(pool).await.unwrap();
+    let target = ziel(pool, user).await.unwrap().unwrap();
+    let vod = vods(pool, user, &target)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|v| v.id == id)
+        .unwrap();
+    let observations = vod
+        .parts
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|part| Beobachtung {
+            video_id: part["video_id"].as_str().unwrap().into(),
+            part_index: part["index"].as_i64().map(|i| i as i32),
+            part_total: Some(vod.parts.as_array().unwrap().len() as i32),
+            duration_sec: None,
+            state: "processed".into(),
+            privacy: Some("private".into()),
+            observed_at: Utc::now(),
+        })
+        .collect::<Vec<_>>();
+    assert!(save(
+        pool,
+        user,
+        &target,
+        Some("synthetic-channel"),
+        &vod,
+        &observations,
+        "confirmed",
+        true,
+        None,
+        86400
+    )
+    .await
+    .unwrap());
+}
+
+const REVISION: &str = "md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,''))";
+
+async fn ziel(pool: &PgPool, user: &str) -> Result<Option<Ziel>, sqlx::Error> {
+    let query = format!("SELECT a.id, {REVISION} AS revision, a.platform_user_id AS channel_id FROM social_media_platform_auth a WHERE a.platform='youtube' AND a.twitch_user_id=$1 AND a.enabled=1 ORDER BY a.authorized_at DESC, a.id DESC LIMIT 1");
+    sqlx::query_as(sqlx::AssertSqlSafe(query))
+        .bind(user)
+        .fetch_optional(pool)
+        .await
+}
+
+async fn ziel_guard(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user: &str,
+    expected: &Ziel,
+) -> Result<bool, sqlx::Error> {
+    let query = format!("SELECT a.id, {REVISION} AS revision, a.platform_user_id AS channel_id FROM social_media_platform_auth a WHERE a.platform='youtube' AND a.twitch_user_id=$1 AND a.enabled=1 ORDER BY a.authorized_at DESC, a.id DESC LIMIT 1 FOR UPDATE");
+    let current: Option<Ziel> = sqlx::query_as(sqlx::AssertSqlSafe(query))
+        .bind(user)
+        .fetch_optional(&mut **tx)
+        .await?;
+    Ok(current.is_some_and(|current| {
+        current.id == expected.id
+            && current.revision == expected.revision
+            && current.channel_id == expected.channel_id
+    }))
+}
+
+async fn vods(pool: &PgPool, user: &str, target: &Ziel) -> Result<Vec<PruefVod>, sqlx::Error> {
+    sqlx::query_as("SELECT v.id, v.twitch_id, v.duration_sec, jsonb_build_array(v.status,v.updated_at) AS snapshot, COALESCE((SELECT jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id),'[]'::jsonb) AS parts FROM twitch_vod_archive_vods v LEFT JOIN twitch_vod_youtube_checks c ON c.vod_id=v.id WHERE v.twitch_user_id=$1 AND (v.status IN ('uploaded','archived') OR EXISTS (SELECT 1 FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id AND p.youtube_video_id IS NOT NULL)) AND (c.vod_id IS NULL OR c.auth_id<>$2 OR c.auth_revision<>$3 OR c.next_check_at<=NOW() OR c.requested_at IS NOT NULL OR c.upload_snapshot<>COALESCE((SELECT jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id),'[]'::jsonb)) ORDER BY c.requested_at ASC NULLS LAST, CASE WHEN c.state='processing' THEN 0 WHEN c.vod_id IS NULL THEN 1 ELSE 2 END, c.next_check_at ASC NULLS FIRST, v.id LIMIT 500")
+        .bind(user).bind(target.id).bind(&target.revision).fetch_all(pool).await
+}
+
+fn source(video: &ArchivVideo) -> Option<(String, Option<(i32, i32)>)> {
+    let mut ids = BTreeSet::new();
+    for tail in video
+        .description
+        .split("https://www.twitch.tv/videos/")
+        .skip(1)
+    {
+        let number: String = tail.chars().take_while(char::is_ascii_digit).collect();
+        let suffix = &tail[number.len()..];
+        if number.is_empty()
+            || suffix
+                .chars()
+                .next()
+                .is_some_and(|c| !c.is_whitespace() && !['?', '#', '/', ')', '.'].contains(&c))
+        {
+            return None;
+        }
+        ids.insert(number);
+    }
+    if ids.len() != 1 {
+        return None;
+    }
+    let id = ids.into_iter().next()?;
+    let mut marker = None;
+    for line in video
+        .description
+        .lines()
+        .filter(|line| line.starts_with("Archivquelle: Twitch-VOD "))
+    {
+        let rest = line.strip_prefix(&format!("Archivquelle: Twitch-VOD {id}; Teil "))?;
+        let current = part_marker(rest)?;
+        if marker.is_some_and(|previous| previous != current) {
+            return None;
+        }
+        marker = Some(current);
+    }
+    if let Some((_, part)) = video
+        .title
+        .strip_suffix(')')
+        .and_then(|title| title.rsplit_once("(Teil "))
+    {
+        let current = part_marker(part)?;
+        if marker.is_some_and(|previous| previous != current) {
+            return None;
+        }
+        marker = Some(current);
+    }
+    Some((id, marker))
+}
+
+fn part_marker(text: &str) -> Option<(i32, i32)> {
+    let (index, total) = text.split_once('/')?;
+    let index: i32 = index.parse().ok()?;
+    let total: i32 = total.parse().ok()?;
+    (index > 0 && index <= total && total <= 1000).then_some((index - 1, total))
+}
+
+fn read_error(error: &UploadError) -> &'static str {
+    match error {
+        UploadError::QuotaExceeded(_) => "quota",
+        UploadError::NotAuthenticated => "connection",
+        UploadError::Api(message)
+            if message.contains("HTTP 401")
+                || message.contains("HTTP 403")
+                || message.contains("Token-Refresh abgelehnt") =>
+        {
+            "connection"
+        }
+        _ => "request",
+    }
+}
+
+fn decision(
+    vod: &PruefVod,
+    observations: &[Beobachtung],
+    scan_complete: bool,
+    known: bool,
+) -> (&'static str, bool) {
+    if observations.is_empty() {
+        return (
+            if scan_complete {
+                "unresolved"
+            } else {
+                "searching"
+            },
+            false,
+        );
+    }
+    let mut indexes = BTreeSet::new();
+    let mut videos = BTreeSet::new();
+    let expected = if known {
+        vod.parts.as_array().map_or(0, Vec::len) as i32
+    } else {
+        observations.first().and_then(|o| o.part_total).unwrap_or(1)
+    };
+    let consistent = expected > 0
+        && observations.len() == expected as usize
+        && observations.iter().all(|o| {
+            let index = o.part_index.unwrap_or(0);
+            index >= 0
+                && index < expected
+                && indexes.insert(index)
+                && videos.insert(&o.video_id)
+                && (known || o.part_total.unwrap_or(1) == expected)
+        });
+    let duration: Option<i64> = observations
+        .iter()
+        .try_fold(0i64, |sum, o| sum.checked_add(o.duration_sec?));
+    let covered = known
+        || (scan_complete
+            && vod.duration_sec > 0
+            && duration.is_some_and(|duration| {
+                duration >= vod.duration_sec
+                    && duration - vod.duration_sec <= 5 * i64::from(expected)
+            }));
+    let all_processed = observations.iter().all(|o| o.state == "processed");
+    if consistent && covered && all_processed {
+        return ("confirmed", true);
+    }
+    if observations.iter().any(|o| o.state == "rejected") {
+        return ("rejected", false);
+    }
+    if observations.iter().any(|o| o.state == "unavailable") {
+        return ("unavailable", false);
+    }
+    if observations.iter().any(|o| o.state == "processing") {
+        return ("processing", false);
+    }
+    ("partial", false)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn save(
+    pool: &PgPool,
+    user: &str,
+    target: &Ziel,
+    channel: Option<&str>,
+    vod: &PruefVod,
+    observations: &[Beobachtung],
+    state: &str,
+    complete: bool,
+    error: Option<&str>,
+    seconds: i64,
+) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    if !ziel_guard(&mut tx, user, target).await? {
+        return Ok(false);
+    }
+    let current: Option<Value> = sqlx::query_scalar("SELECT jsonb_build_array(status,updated_at) FROM twitch_vod_archive_vods WHERE id=$1 AND twitch_user_id=$2 FOR UPDATE")
+        .bind(vod.id).bind(user).fetch_optional(&mut *tx).await?;
+    let rows = sqlx::query(
+        "SELECT id FROM twitch_vod_archive_parts WHERE vod_id=$1 ORDER BY part_index FOR UPDATE",
+    )
+    .bind(vod.id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let _ = rows;
+    let parts: Value = sqlx::query_scalar("SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id,'index',part_index,'status',status,'video_id',youtube_video_id,'updated_at',updated_at) ORDER BY part_index),'[]'::jsonb) FROM twitch_vod_archive_parts WHERE vod_id=$1")
+        .bind(vod.id).fetch_one(&mut *tx).await?;
+    if current.as_ref() != Some(&vod.snapshot) || parts != vod.parts {
+        return Ok(false);
+    }
+    sqlx::query("INSERT INTO twitch_vod_youtube_checks (vod_id,auth_id,auth_revision,channel_id,state,complete,observations,last_attempt_at,last_success_at,last_error,next_check_at,upload_snapshot) VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),CASE WHEN $8::text IS NULL THEN NOW() END,$8,NOW()+make_interval(secs=>$9::double precision),$10) ON CONFLICT (vod_id) DO UPDATE SET auth_id=EXCLUDED.auth_id,auth_revision=EXCLUDED.auth_revision,channel_id=EXCLUDED.channel_id,state=EXCLUDED.state,complete=EXCLUDED.complete,observations=CASE WHEN $8::text IS NOT NULL AND twitch_vod_youtube_checks.auth_id=$2 AND twitch_vod_youtube_checks.auth_revision=$3 THEN twitch_vod_youtube_checks.observations ELSE EXCLUDED.observations END,last_attempt_at=NOW(),last_success_at=CASE WHEN $8::text IS NULL THEN NOW() WHEN twitch_vod_youtube_checks.auth_id=$2 AND twitch_vod_youtube_checks.auth_revision=$3 THEN twitch_vod_youtube_checks.last_success_at END,last_error=$8,requested_at=NULL,next_check_at=EXCLUDED.next_check_at,upload_snapshot=EXCLUDED.upload_snapshot")
+        .bind(vod.id).bind(target.id).bind(&target.revision).bind(channel).bind(state).bind(complete).bind(json!(observations)).bind(error).bind(seconds as f64).bind(&vod.parts).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+pub async fn cleanup_proof<'a>(
+    pool: &'a PgPool,
+    user: &str,
+    vod_id: i64,
+    hours: u64,
+) -> Result<Option<sqlx::Transaction<'a, sqlx::Postgres>>, sqlx::Error> {
+    let Some(target) = ziel(pool, user).await? else {
+        return Ok(None);
+    };
+    let mut tx = pool.begin().await?;
+    if !ziel_guard(&mut tx, user, &target).await? {
+        return Ok(None);
+    }
+    let Some(lock_id) = i32::try_from(vod_id).ok() else {
+        return Ok(None);
+    };
+    let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(186976768,$1)")
+        .bind(lock_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if !locked {
+        return Ok(None);
+    }
+    sqlx::query("SELECT id FROM twitch_vod_archive_vods WHERE id=$1 FOR UPDATE")
+        .bind(vod_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    sqlx::query("SELECT id FROM twitch_vod_archive_parts WHERE vod_id=$1 FOR UPDATE")
+        .bind(vod_id)
+        .fetch_all(&mut *tx)
+        .await?;
+    let valid: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM twitch_vod_youtube_checks c JOIN twitch_vod_archive_vods v ON v.id=c.vod_id WHERE c.vod_id=$1 AND v.twitch_user_id=$2 AND v.status='uploaded' AND c.auth_id=$3 AND c.auth_revision=$4 AND c.channel_id IS NOT NULL AND c.state='confirmed' AND c.complete AND c.last_error IS NULL AND c.last_success_at>NOW()-make_interval(hours=>$5) AND jsonb_array_length(c.observations)>0 AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(c.observations) o WHERE o->>'state'<>'processed' OR (o->>'observed_at')::timestamptz<=NOW()-make_interval(hours=>$5)) AND c.upload_snapshot=(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index),'[]'::jsonb) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id))")
+        .bind(vod_id).bind(user).bind(target.id).bind(&target.revision).bind(hours as i32).fetch_one(&mut *tx).await?;
+    Ok(valid.then_some(tx))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn run_once(
+    pool: &PgPool,
+    credentials: &CredentialManager,
+    config: &VodArchiveOptions,
+) -> Result<(), VodArchiveError> {
+    run_with(pool, credentials, config, youtube_uploader).await
+}
+
+async fn run_with(
+    pool: &PgPool,
+    credentials: &CredentialManager,
+    config: &VodArchiveOptions,
+    client_factory: impl Fn(
+        &tb_social_media::credentials::SocialMediaCredentials,
+    ) -> tb_social_media::uploaders::youtube::YouTubeUploader,
+) -> Result<(), VodArchiveError> {
+    let users: Vec<String> = sqlx::query_scalar("SELECT DISTINCT v.twitch_user_id FROM twitch_vod_archive_vods v WHERE v.twitch_user_id IS NOT NULL AND (v.status IN ('uploaded','archived') OR EXISTS (SELECT 1 FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id AND p.youtube_video_id IS NOT NULL)) ORDER BY v.twitch_user_id")
+        .fetch_all(pool).await?;
+    let mut budget = config.youtube_requests_per_run;
+    for user in users {
+        if budget < 3 {
+            break;
+        }
+        let Some(target) = ziel(pool, &user).await? else {
+            continue;
+        };
+        let mut guard = pool.begin().await?;
+        let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(186976769,$1)")
+            .bind(target.id)
+            .fetch_one(&mut *guard)
+            .await?;
+        if !locked {
+            continue;
+        }
+        let pending = vods(pool, &user, &target).await?;
+        if pending.is_empty() {
+            continue;
+        }
+        let Some(creds) = credentials
+            .get_channel_credentials_for_id("youtube", &user)
+            .await
+        else {
+            for vod in &pending {
+                save(
+                    pool,
+                    &user,
+                    &target,
+                    None,
+                    vod,
+                    &[],
+                    "error",
+                    false,
+                    Some("connection"),
+                    config.youtube_error_minutes as i64 * 60,
+                )
+                .await?;
+            }
+            tracing::warn!(user, "YouTube-Abgleich: eigener Zugang fehlt");
+            continue;
+        };
+        if creds.id != target.id {
+            continue;
+        }
+        let client = client_factory(&creds).with_retry(1, std::time::Duration::ZERO);
+        budget -= 1;
+        let channel = match client.upload_kanal().await {
+            Ok(channel)
+                if target
+                    .channel_id
+                    .as_deref()
+                    .is_none_or(|expected| expected == channel.id) =>
+            {
+                channel
+            }
+            result => {
+                let error = match result {
+                    Err(error) => read_error(&error),
+                    Ok(_) => "channel_changed",
+                };
+                let seconds = if error == "quota" {
+                    config.youtube_quota_hours * 3600
+                } else {
+                    config.youtube_error_minutes * 60
+                };
+                for vod in &pending {
+                    save(
+                        pool,
+                        &user,
+                        &target,
+                        None,
+                        vod,
+                        &[],
+                        "error",
+                        false,
+                        Some(error),
+                        seconds as i64,
+                    )
+                    .await?;
+                }
+                tracing::warn!(user, error, "YouTube-Abgleich: Kanal nicht lesbar");
+                if error == "quota" {
+                    break;
+                }
+                continue;
+            }
+        };
+        let known: Vec<String> = pending
+            .iter()
+            .flat_map(|v| {
+                v.parts.as_array().into_iter().flatten().filter_map(|p| {
+                    p["video_id"]
+                        .as_str()
+                        .filter(|id| !id.is_empty())
+                        .map(str::to_owned)
+                })
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let mut found = HashMap::new();
+        let mut failed = None;
+        let mut queried = BTreeSet::new();
+        for batch in known.chunks(50) {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            match client.archiv_videos(batch).await {
+                Ok(videos) => {
+                    queried.extend(batch.iter().cloned());
+                    for video in videos {
+                        found.insert(video.id.clone(), video);
+                    }
+                }
+                Err(error) => {
+                    failed = Some(read_error(&error));
+                    break;
+                }
+            }
+        }
+        let historical = pending.iter().any(|v| {
+            v.parts.as_array().is_none_or(|p| {
+                p.is_empty()
+                    || p.iter()
+                        .any(|p| p["video_id"].as_str().is_none_or(str::is_empty))
+            })
+        });
+        let mut scan_complete = false;
+        if failed.is_none() && historical && budget >= 2 {
+            let mut tx = pool.begin().await?;
+            if !ziel_guard(&mut tx, &user, &target).await? {
+                continue;
+            }
+            sqlx::query("INSERT INTO twitch_vod_youtube_scans (twitch_user_id,auth_id,auth_revision,channel_id,playlist_id) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (twitch_user_id) DO UPDATE SET auth_id=$2,auth_revision=$3,channel_id=$4,playlist_id=$5,cursor=NULL,generation=twitch_vod_youtube_scans.generation+1,complete=FALSE,next_scan_at=NOW(),last_error=NULL WHERE twitch_vod_youtube_scans.auth_id<>$2 OR twitch_vod_youtube_scans.auth_revision<>$3 OR twitch_vod_youtube_scans.channel_id<>$4 OR twitch_vod_youtube_scans.playlist_id<>$5")
+                .bind(&user).bind(target.id).bind(&target.revision).bind(&channel.id).bind(&channel.playlist_id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE twitch_vod_youtube_scans SET cursor=NULL,generation=generation+1,complete=FALSE WHERE twitch_user_id=$1 AND complete")
+                .bind(&user).execute(&mut *tx).await?;
+            tx.commit().await?;
+            loop {
+                let (cursor,generation,complete): (Option<String>,i64,bool) = sqlx::query_as("SELECT cursor,generation,complete FROM twitch_vod_youtube_scans WHERE twitch_user_id=$1").bind(&user).fetch_one(pool).await?;
+                scan_complete = complete;
+                if complete || budget < 2 {
+                    break;
+                }
+                budget -= 1;
+                let page = match client
+                    .upload_seite(&channel.playlist_id, cursor.as_deref())
+                    .await
+                {
+                    Ok(page) => page,
+                    Err(error) => {
+                        failed = Some(read_error(&error));
+                        break;
+                    }
+                };
+                budget -= 1;
+                let videos = match client.archiv_videos(&page.ids).await {
+                    Ok(videos) => videos,
+                    Err(error) => {
+                        failed = Some(read_error(&error));
+                        break;
+                    }
+                };
+                if videos.iter().any(|video| video.channel_id != channel.id) {
+                    failed = Some("channel_changed");
+                    break;
+                }
+                let mut tx = pool.begin().await?;
+                if !ziel_guard(&mut tx, &user, &target).await? {
+                    break;
+                }
+                for video in videos {
+                    let Some((twitch_id, marker)) = source(&video) else {
+                        continue;
+                    };
+                    sqlx::query("INSERT INTO twitch_vod_youtube_inventory (twitch_user_id,video_id,generation,twitch_id,part_index,part_total,duration_sec,state,privacy) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (twitch_user_id,video_id) DO UPDATE SET generation=$3,twitch_id=$4,part_index=$5,part_total=$6,duration_sec=$7,state=$8,privacy=$9,observed_at=NOW()")
+                        .bind(&user).bind(&video.id).bind(generation).bind(twitch_id).bind(marker.map(|p|p.0)).bind(marker.map(|p|p.1)).bind(video.duration_sec).bind(&video.state).bind(&video.privacy).execute(&mut *tx).await?;
+                }
+                sqlx::query("UPDATE twitch_vod_youtube_scans SET cursor=$2,complete=$2::text IS NULL,last_attempt_at=NOW(),last_success_at=CASE WHEN $2::text IS NULL THEN NOW() ELSE last_success_at END,last_error=NULL,next_scan_at=NOW()+make_interval(secs=>$3::double precision) WHERE twitch_user_id=$1 AND generation=$4")
+                    .bind(&user).bind(&page.next).bind((config.youtube_check_hours*3600) as f64).bind(generation).execute(&mut *tx).await?;
+                tx.commit().await?;
+            }
+        }
+        for vod in &pending {
+            let parts = vod.parts.as_array().unwrap();
+            let known_complete = !parts.is_empty()
+                && parts.iter().all(|p| {
+                    p["status"] == "done" && p["video_id"].as_str().is_some_and(|id| !id.is_empty())
+                });
+            let observations: Vec<Beobachtung> = if known_complete {
+                if parts
+                    .iter()
+                    .any(|p| !queried.contains(p["video_id"].as_str().unwrap()))
+                    && failed.is_none()
+                {
+                    continue;
+                }
+                parts
+                    .iter()
+                    .map(|part| {
+                        let id = part["video_id"].as_str().unwrap();
+                        let video = found.get(id).filter(|v| v.channel_id == channel.id);
+                        Beobachtung {
+                            video_id: id.into(),
+                            part_index: part["index"].as_i64().map(|i| i as i32),
+                            part_total: Some(parts.len() as i32),
+                            duration_sec: video.and_then(|v| v.duration_sec),
+                            state: video.map_or("unavailable", |v| v.state.as_str()).into(),
+                            privacy: video.and_then(|v| v.privacy.clone()),
+                            observed_at: Utc::now(),
+                        }
+                    })
+                    .collect()
+            } else {
+                let rows=sqlx::query("SELECT i.* FROM twitch_vod_youtube_inventory i JOIN twitch_vod_youtube_scans s USING(twitch_user_id) WHERE i.twitch_user_id=$1 AND i.twitch_id=$2 AND i.generation=s.generation AND s.auth_id=$3 AND s.auth_revision=$4 AND s.channel_id=$5 ORDER BY i.part_index,i.video_id")
+                    .bind(&user).bind(vod.twitch_id.trim_start_matches('v')).bind(target.id).bind(&target.revision).bind(&channel.id).fetch_all(pool).await?;
+                rows.iter()
+                    .map(|r| Beobachtung {
+                        video_id: r.get("video_id"),
+                        part_index: r.get("part_index"),
+                        part_total: r.get("part_total"),
+                        duration_sec: r.get("duration_sec"),
+                        state: r.get("state"),
+                        privacy: r.get("privacy"),
+                        observed_at: r.get("observed_at"),
+                    })
+                    .collect()
+            };
+            let (state, complete) = decision(vod, &observations, scan_complete, known_complete);
+            let seconds = match failed {
+                Some("quota") => config.youtube_quota_hours * 3600,
+                Some(_) => config.youtube_error_minutes * 60,
+                None if state == "processing"
+                    || state == "searching"
+                    || (!known_complete && !scan_complete) =>
+                {
+                    config.youtube_processing_minutes * 60
+                }
+                None => config.youtube_check_hours * 3600,
+            };
+            let saved = save(
+                pool,
+                &user,
+                &target,
+                Some(&channel.id),
+                vod,
+                &observations,
+                if failed.is_some() { "error" } else { state },
+                complete && failed.is_none(),
+                failed,
+                seconds as i64,
+            )
+            .await?;
+            tracing::info!(
+                vod_id = vod.id,
+                state = if failed.is_some() { "error" } else { state },
+                complete = complete && failed.is_none(),
+                saved,
+                scan_complete,
+                "youtube_archive_reconciled"
+            );
+        }
+        if failed == Some("quota") {
+            break;
+        }
+    }
+    Ok(())
+}

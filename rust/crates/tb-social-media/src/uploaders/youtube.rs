@@ -144,6 +144,29 @@ pub struct VideoZustand {
     pub rejection_reason: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ArchivVideo {
+    pub id: String,
+    pub channel_id: String,
+    pub title: String,
+    pub description: String,
+    pub duration_sec: Option<i64>,
+    pub state: String,
+    pub privacy: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadKanal {
+    pub id: String,
+    pub playlist_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadSeite {
+    pub ids: Vec<String>,
+    pub next: Option<String>,
+}
+
 /// Zwischenstand waehrend des Uploads. Geht an die Fortschrittssenke, damit der
 /// Aufrufer Sitzung und Byte-Position dauerhaft festhalten kann; ohne das
 /// beginnt jeder Abbruch wieder bei null.
@@ -545,6 +568,181 @@ impl YouTubeUploader {
         }))
     }
 
+    async fn archiv_lesen(
+        &self,
+        endpoint: &str,
+        query: &[(&str, &str)],
+    ) -> Result<Value, UploadError> {
+        let response = self
+            .call("YouTube archive read", |token| {
+                self.http
+                    .get(format!("{}/{endpoint}", self.api_base))
+                    .query(query)
+                    .bearer_auth(token)
+                    .timeout(Duration::from_secs(30))
+            })
+            .await?;
+        if !response.status().is_success() {
+            return Err(fehler_aus_antwort(response, "YouTube archive read").await);
+        }
+        let data: Value = response
+            .json()
+            .await
+            .map_err(|e| UploadError::Request(e.without_url().to_string()))?;
+        if !data["items"].is_array() {
+            return Err(UploadError::Api(
+                "YouTube archive read: invalid items".into(),
+            ));
+        }
+        Ok(data)
+    }
+
+    pub async fn upload_kanal(&self) -> Result<UploadKanal, UploadError> {
+        let data = self
+            .archiv_lesen("channels", &[("part", "contentDetails"), ("mine", "true")])
+            .await?;
+        let items = data["items"].as_array().unwrap();
+        if items.len() != 1 {
+            return Err(UploadError::Api(
+                "YouTube archive read: channel ambiguous or unavailable".into(),
+            ));
+        }
+        let id = items[0]["id"].as_str().filter(|s| !s.is_empty());
+        let playlist = items[0]
+            .pointer("/contentDetails/relatedPlaylists/uploads")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty());
+        match (id, playlist) {
+            (Some(id), Some(playlist)) => Ok(UploadKanal {
+                id: id.into(),
+                playlist_id: playlist.into(),
+            }),
+            _ => Err(UploadError::Api(
+                "YouTube archive read: uploads playlist unavailable".into(),
+            )),
+        }
+    }
+
+    pub async fn upload_seite(
+        &self,
+        playlist: &str,
+        cursor: Option<&str>,
+    ) -> Result<UploadSeite, UploadError> {
+        let mut query = vec![
+            ("part", "contentDetails"),
+            ("playlistId", playlist),
+            ("maxResults", "50"),
+        ];
+        if let Some(cursor) = cursor {
+            query.push(("pageToken", cursor));
+        }
+        let data = self.archiv_lesen("playlistItems", &query).await?;
+        let ids = data["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| {
+                item.pointer("/contentDetails/videoId")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .ok_or_else(|| {
+                        UploadError::Api("YouTube archive read: missing video ID".into())
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let next = match data.get("nextPageToken") {
+            None => None,
+            Some(Value::String(next)) if !next.is_empty() => Some(next.clone()),
+            _ => {
+                return Err(UploadError::Api(
+                    "YouTube archive read: invalid cursor".into(),
+                ))
+            }
+        };
+        if next.as_deref().is_some_and(|next| Some(next) == cursor) {
+            return Err(UploadError::Api(
+                "YouTube archive read: repeated cursor".into(),
+            ));
+        }
+        Ok(UploadSeite { ids, next })
+    }
+
+    pub async fn archiv_videos(&self, ids: &[String]) -> Result<Vec<ArchivVideo>, UploadError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        if ids.len() > 50 {
+            return Err(UploadError::Validation(
+                "YouTube archive read: batch exceeds 50".into(),
+            ));
+        }
+        let joined = ids.join(",");
+        let data = self
+            .archiv_lesen(
+                "videos",
+                &[
+                    ("part", "snippet,status,processingDetails,contentDetails"),
+                    ("id", &joined),
+                ],
+            )
+            .await?;
+        data["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| {
+                let id = item["id"]
+                    .as_str()
+                    .filter(|id| ids.iter().any(|wanted| wanted == id));
+                let channel = item
+                    .pointer("/snippet/channelId")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty());
+                let (Some(id), Some(channel)) = (id, channel) else {
+                    return Err(UploadError::Api(
+                        "YouTube archive read: invalid video identity".into(),
+                    ));
+                };
+                let upload = item.pointer("/status/uploadStatus").and_then(Value::as_str);
+                let processing = item
+                    .pointer("/processingDetails/processingStatus")
+                    .and_then(Value::as_str);
+                let state = match (upload, processing) {
+                    (Some("rejected" | "failed" | "deleted"), _)
+                    | (_, Some("failed" | "terminated")) => "rejected",
+                    (Some("processed"), None | Some("succeeded")) => "processed",
+                    (Some("uploaded"), _) | (_, Some("processing")) => "processing",
+                    _ => "unavailable",
+                };
+                Ok(ArchivVideo {
+                    id: id.into(),
+                    channel_id: channel.into(),
+                    title: item
+                        .pointer("/snippet/title")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .into(),
+                    description: item
+                        .pointer("/snippet/description")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .into(),
+                    duration_sec: item
+                        .pointer("/contentDetails/duration")
+                        .and_then(Value::as_str)
+                        .and_then(iso_dauer),
+                    state: state.into(),
+                    privacy: item
+                        .pointer("/status/privacyStatus")
+                        .and_then(Value::as_str)
+                        .filter(|v| ["public", "private", "unlisted"].contains(v))
+                        .map(str::to_owned),
+                })
+            })
+            .collect()
+    }
+
     // ------------------------------------------------------------------
     // Stueckweiser resumable Upload
     //
@@ -817,6 +1015,29 @@ impl YouTubeUploader {
         }
         Ok(())
     }
+}
+
+fn iso_dauer(text: &str) -> Option<i64> {
+    let mut rest = text.strip_prefix("PT")?;
+    let mut total = 0i64;
+    let mut previous = 0;
+    while !rest.is_empty() {
+        let end = rest.find(|c: char| !c.is_ascii_digit())?;
+        let number = rest[..end].parse::<i64>().ok()?;
+        let (rank, factor) = match rest.as_bytes()[end] {
+            b'H' => (1, 3600),
+            b'M' => (2, 60),
+            b'S' => (3, 1),
+            _ => return None,
+        };
+        if rank <= previous {
+            return None;
+        }
+        previous = rank;
+        total = total.checked_add(number.checked_mul(factor)?)?;
+        rest = &rest[end + 1..];
+    }
+    (previous > 0).then_some(total)
 }
 
 /// Baut den `snippet`/`status`-Teil des Upload-Bodys und lehnt ab, was YouTube
@@ -1266,6 +1487,91 @@ mod tests {
             .await;
         let up = uploader(&server).with_refresh(refresh_creds(format!("{}/token", server.uri())));
         up.add_to_playlist("playlist", "video").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn archive_read_batches_private_processing_and_missing_videos() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).and(path("/channels")).and(query_param("mine", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":[{"id":"own","contentDetails":{"relatedPlaylists":{"uploads":"uploads"}}}]})))
+            .expect(1).mount(&server).await;
+        Mock::given(method("GET")).and(path("/playlistItems")).and(query_param("playlistId","uploads"))
+            .and(query_param("pageToken","next"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":[{"contentDetails":{"videoId":"processed"}},{"contentDetails":{"videoId":"processing"}}]})))
+            .expect(1).mount(&server).await;
+        Mock::given(method("GET")).and(path("/videos")).and(query_param("id","processed,processing,missing"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":[
+                {"id":"processed","snippet":{"channelId":"own","title":"Same title","description":"Original: https://www.twitch.tv/videos/123"},"status":{"uploadStatus":"processed","privacyStatus":"private"},"contentDetails":{"duration":"PT1H2M3S"}},
+                {"id":"processing","snippet":{"channelId":"own"},"status":{"uploadStatus":"uploaded","privacyStatus":"unlisted"},"processingDetails":{"processingStatus":"processing"}}
+            ]}))).expect(1).mount(&server).await;
+        let up = uploader(&server);
+        assert_eq!(
+            up.upload_kanal().await.unwrap(),
+            UploadKanal {
+                id: "own".into(),
+                playlist_id: "uploads".into()
+            }
+        );
+        assert_eq!(
+            up.upload_seite("uploads", Some("next")).await.unwrap().next,
+            None
+        );
+        let videos = up
+            .archiv_videos(&["processed".into(), "processing".into(), "missing".into()])
+            .await
+            .unwrap();
+        assert_eq!(videos.len(), 2);
+        assert_eq!(
+            (
+                videos[0].state.as_str(),
+                videos[0].privacy.as_deref(),
+                videos[0].duration_sec
+            ),
+            ("processed", Some("private"), Some(3723))
+        );
+        assert_eq!(videos[1].state, "processing");
+    }
+
+    #[tokio::test]
+    async fn archive_read_does_not_treat_auth_quota_or_invalid_pagination_as_absence() {
+        for (status, body, quota) in [
+            (401, json!({}), false),
+            (
+                403,
+                json!({"error":{"errors":[{"reason":"insufficientPermissions"}]}}),
+                false,
+            ),
+            (
+                403,
+                json!({"error":{"errors":[{"reason":"quotaExceeded"}]}}),
+                true,
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/channels"))
+                .respond_with(ResponseTemplate::new(status).set_body_json(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let error = uploader(&server).upload_kanal().await.unwrap_err();
+            assert_eq!(matches!(error, UploadError::QuotaExceeded(_)), quota);
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/playlistItems"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"items":[],"nextPageToken":"again"})),
+            )
+            .mount(&server)
+            .await;
+        assert!(uploader(&server)
+            .upload_seite("uploads", Some("again"))
+            .await
+            .is_err());
+        assert_eq!(iso_dauer("PT2M"), Some(120));
+        assert_eq!(iso_dauer("P1D"), None);
     }
 
     fn uploader(server: &MockServer) -> YouTubeUploader {

@@ -64,8 +64,22 @@ test('partial, failed, running and waiting states have distinct icons and timest
   }
 });
 
+test('current private proof renders checked time and an independent debounced read action', () => {
+  const checked = '2026-10-08T01:00:00Z';
+  const proof = { state: 'confirmed', complete: true, pending: false, can_request: false, error: null, last_attempt_at: checked, last_success_at: checked, observations: [{ video_id: 'matched', part_index: null, part_total: null, state: 'processed', privacy: 'private', observed_at: checked }] };
+  const html = render({ display_status: 'youtube_confirmed', status_label: 'Auf YouTube bestätigt', can_check_youtube: true, youtube_complete: false, youtube_verified_complete: true, parts: [], uploaded_at: null, youtube_check: proof });
+  assert.match(html, /watch\?v=matched/);
+  assert.match(html, /<time dateTime="2026-10-08T01:00:00Z">/);
+  assert.match(html, /disabled=""/);
+  assert.equal((html.match(/<button/g) ?? []).length, 2);
+  assert.doesNotMatch(html, /dateTime="2026-09-01/);
+  const error = render({ display_status: 'youtube_error', youtube_check: { ...proof, state: 'error', complete: false, error: 'connection' } });
+  assert.match(error, /oauth\/start\/youtube/);
+  assert.match(error, /watch\?v=matched/);
+});
+
 test('archive status and new UI copy have translations', () => {
-  for (const text of ['YouTube-Upload abgeschlossen', 'Auf Drive gesichert', 'Teilweise auf YouTube', 'Abschluss unklar', 'Status unklar', 'YouTube-Upload abgelehnt', 'Auf YouTube öffnen', 'unbestätigt', 'Drive-Sicherung läuft.']) {
+  for (const text of ['YouTube-Upload abgeschlossen', 'Auf Drive gesichert', 'Teilweise auf YouTube', 'Abschluss unklar', 'Status unklar', 'YouTube-Upload abgelehnt', 'Auf YouTube öffnen', 'unbestätigt', 'Drive-Sicherung läuft.', 'Auf YouTube bestätigt', 'YouTube verarbeitet das Video', 'Bei YouTube nicht abrufbar', 'Prüfung gerade nicht möglich', 'Bei YouTube prüfen', 'Nicht gelistet', 'Öffentlich']) {
     assert.notEqual(translate('en', text), text);
   }
 });

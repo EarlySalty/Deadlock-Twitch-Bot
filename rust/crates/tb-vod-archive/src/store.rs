@@ -646,7 +646,7 @@ pub async fn migrate_resume_sessions(
 mod resume_migration_tests;
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     pub(super) fn test_cipher() -> FieldCipher {
         FieldCipher::from_hex_key(&"11".repeat(32), "v1").unwrap()
@@ -655,7 +655,7 @@ mod tests {
     use std::str::FromStr;
 
     /// Explizite Wegwerf-DB aus normaler Testkonfiguration, keine ENV.
-    pub(super) async fn pool(schema: &str) -> Option<PgPool> {
+    pub(crate) async fn pool(schema: &str) -> Option<PgPool> {
         let dsn = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../token-db-tests.conf"
@@ -710,6 +710,7 @@ mod tests {
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
+        crate::youtube_check::test_schema(&pool).await;
         Some(pool)
     }
 
