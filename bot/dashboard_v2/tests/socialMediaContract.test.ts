@@ -235,8 +235,8 @@ function gebautePfade(): string[] {
   const rumpf = quelle.replace(konstantenMuster, '');
 
   const roh = new Set<string>();
-  // Sowohl '/social-media/...' als auch `${ADMIN_PREFIX}/...`.
-  const pfadMuster = /['"`](\/social-media[^'"`]*)['"`]|`\$\{([A-Z_]+)\}([^`]*)`/g;
+  // Sowohl '/twitch/social-media/...' als auch `${ADMIN_PREFIX}/...`.
+  const pfadMuster = /['"`](\/twitch\/social-media[^'"`]*)['"`]|`\$\{([A-Z_]+)\}([^`]*)`/g;
   let m: RegExpExecArray | null;
   while ((m = pfadMuster.exec(rumpf))) {
     if (m[1]) roh.add(m[1]);
@@ -256,18 +256,19 @@ function gebautePfade(): string[] {
       .replace(/\$\{[^}]*\}/g, ':p');
     const fragezeichen = pfad.indexOf('?');
     if (fragezeichen >= 0) pfad = pfad.slice(0, fragezeichen);
-    if (pfad.startsWith('/social-media')) pfade.add(normalisiere(pfad));
+    if (pfad.startsWith('/twitch/social-media')) pfade.add(normalisiere(pfad));
   }
   return [...pfade].sort();
 }
 
-/** Alle `/social-media`-Routen aus der Axum-Registrierung. Nur lesen. */
+/** Alle `/twitch/social-media`-Routen aus der Axum-Registrierung. Nur lesen. */
 function registrierteRouten(): string[] {
   const quelle = fs.readFileSync(RUST_ROUTEN, 'utf8');
   const routen = new Set<string>();
+  assert.match(quelle, /\.nest\("\/twitch", social_routes\.clone\(\)\)/);
   const muster = /\.route\(\s*"(\/social-media[^"]*)"/g;
   let m: RegExpExecArray | null;
-  while ((m = muster.exec(quelle))) routen.add(normalisiere(m[1]));
+  while ((m = muster.exec(quelle))) routen.add(normalisiere(`/twitch${m[1]}`));
   return [...routen].sort();
 }
 
@@ -276,16 +277,16 @@ function registrierteRouten(): string[] {
  * Das sind durchweg Vorgaenger des Admin-Pfades aus der Python-Zeit.
  */
 const BEWUSST_OHNE_UI = new Set([
-  '/social-media/api/stats',
-  '/social-media/api/clips',
-  '/social-media/api/last-hashtags',
-  '/social-media/api/analytics',
-  '/social-media/api/upload',
-  '/social-media/api/mark-uploaded',
-  '/social-media/api/batch-upload',
-  '/social-media/api/templates/global',
-  '/social-media/api/templates/streamer',
-  '/social-media/api/templates/apply',
+  '/twitch/social-media/api/stats',
+  '/twitch/social-media/api/clips',
+  '/twitch/social-media/api/last-hashtags',
+  '/twitch/social-media/api/analytics',
+  '/twitch/social-media/api/upload',
+  '/twitch/social-media/api/mark-uploaded',
+  '/twitch/social-media/api/batch-upload',
+  '/twitch/social-media/api/templates/global',
+  '/twitch/social-media/api/templates/streamer',
+  '/twitch/social-media/api/templates/apply',
 ]);
 
 test('jede gebaute URL gibt es als Route', () => {
@@ -296,10 +297,10 @@ test('jede gebaute URL gibt es als Route', () => {
   assert.deepEqual(ohneRoute, [], `URL ohne Route im Backend:\n${ohneRoute.join('\n')}`);
 });
 
-test('jede /social-media/api-Route hat einen Aufrufer oder einen Grund', () => {
+test('jede /twitch/social-media/api-Route hat einen Aufrufer oder einen Grund', () => {
   const gebaut = new Set(gebautePfade());
   const verwaist = registrierteRouten()
-    .filter((route) => route.startsWith('/social-media/api/'))
+    .filter((route) => route.startsWith('/twitch/social-media/api/'))
     .filter((route) => !gebaut.has(route) && !BEWUSST_OHNE_UI.has(route));
   assert.deepEqual(
     verwaist,

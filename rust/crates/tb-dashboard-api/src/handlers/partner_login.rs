@@ -71,7 +71,7 @@ pub struct LinkBody {
     /// Ziel-Partner-Login, für den der Einmal-Link gilt.
     #[serde(default)]
     pub login: Option<String>,
-    /// Redirect-Pfad nach erfolgreichem Login (Default `/analyse`).
+    /// Redirect-Pfad nach erfolgreichem Login (Default `/twitch/analyse`).
     #[serde(default)]
     pub next: Option<String>,
 }
@@ -243,7 +243,7 @@ pub async fn login_handler(
     // aufs Dashboard um — kein neuer Token-Verbrauch, kein neues Set-Cookie, keine
     // neue Session-Row (Python `auth_partner_login`-Short-Circuit).
     if has_active_dashboard_session(&state, &headers).await {
-        return no_store(Redirect::to("/analyse").into_response());
+        return no_store(Redirect::to("/twitch/analyse").into_response());
     }
 
     let Some(token) = extract_token(&body) else {
@@ -555,7 +555,7 @@ mod route_tests {
         let sid = tb_crypto::random_urlsafe_token(STATE_ID_BYTES);
         let token = PartnerLoginToken::new(
             sid.clone(),
-            "/analyse".to_string(),
+            "/twitch/analyse".to_string(),
             now,
             PARTNER_LOGIN_TOKEN_TTL_SECS,
         );
@@ -565,7 +565,7 @@ mod route_tests {
                 &sid,
                 "linkpartner",
                 "5551",
-                "/analyse",
+                "/twitch/analyse",
                 PARTNER_LOGIN_TOKEN_TTL_SECS,
             )
             .await

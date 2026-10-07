@@ -1,6 +1,6 @@
 # VOD-Archiv im Social-Media-Manager
 
-Im [Social-Media-Manager](https://deutsche-deadlock-community.de/social-media?view=archiv) stehen im Tab **VOD-Archiv** fertige Sicherungen und offene Uploads. Für einen eigenen Kanal gilt die bestehende Social-Media-Freigabe; die Verwaltung kann mehrere Kanäle sehen. **Erneut versuchen** merkt den Upload für den nächsten Archivlauf vor, **Auf Drive ausweichen** wählt Drive ausdrücklich, **Aus der Liste ausblenden** entfernt den Eintrag aus der Ansicht und erhält die Sicherung.
+Im [Social-Media-Manager](https://deutsche-deadlock-community.de/twitch/social-media?view=archiv) stehen im Tab **VOD-Archiv** fertige Sicherungen und offene Uploads. Für einen eigenen Kanal gilt die bestehende Social-Media-Freigabe; die Verwaltung kann mehrere Kanäle sehen. **Erneut versuchen** merkt den Upload für den nächsten Archivlauf vor, **Auf Drive ausweichen** wählt Drive ausdrücklich, **Aus der Liste ausblenden** entfernt den Eintrag aus der Ansicht und erhält die Sicherung.
 
 ## Routenübergang
 

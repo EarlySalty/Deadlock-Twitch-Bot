@@ -116,7 +116,9 @@ fn valid_result_path(path: &str) -> bool {
             | "/twitch/verwaltung"
             | "/twitch/uplink"
             | "/analyse"
+            | "/twitch/analyse"
             | "/twitch/abbo"
+            | "/twitch/social-media"
             | "/social-media"
     ) && anchor
         .chars()

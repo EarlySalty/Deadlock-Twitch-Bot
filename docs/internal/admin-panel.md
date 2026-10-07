@@ -79,4 +79,4 @@ Die Dateistruktur lebt schon in `bot/admin_dashboard/`. Beim Review immer unters
 - Schreibende Admin-Routen nicht ohne Host-/Session-Kontext erweitern.
 - Fremde Streamer-Daten nur ueber echte Admin-Level oeffnen, nie ueber Partner-Session plus URL-Parameter.
 - Plan-Overrides sparsam einsetzen; Billing-Sync bleibt die primaere Quelle.
-- Social-Media-Admin-Endpunkte leben separat unter `/social-media/api/admin/*` und sind kein Ersatz fuer das Haupt-Admin-Panel.
+- Social-Media-Admin-Endpunkte leben separat unter `/twitch/social-media/api/admin/*` und sind kein Ersatz fuer das Haupt-Admin-Panel.

@@ -4,11 +4,19 @@
 > ein für alle Mal nachschlagbar machen. Wer einen Redirect, eine OAuth-Redirect-URI oder
 > einen Caddy-Block anfasst, liest **zuerst hier**.
 
+## Pfadregel seit 7. Oktober 2026
+
+Neue Twitch-Bot-Seiten liegen ausschließlich unter `/twitch/<name>`. Analyse: `/twitch/analyse`. Manager einschließlich API: `/twitch/social-media`.
+
+`/analyse`, `/social-media` und `/social-media-admin` leiten samt Unterpfad und Query mit 308 auf die neuen Adressen. Ausnahmen werden direkt bedient: `/social-media/api/*`, `/social-media/oauth/start/*`, `/social-media/oauth/disconnect/*`, `/social-media/oauth/callback`, `/social-media/oauth/callback/{platform}`, `/social-media/terms`, `/social-media/privacy` und `/privacy`. Bestehende Plattform-Rücksprünge bleiben unverändert. Neue Callback- und Manager-Rechtsadressen sind zusätzliche Aliase. Die OAuth-Starts verwenden weiterhin die bei den Plattformen registrierten alten Rücksprünge.
+
+Weitere Wurzelpfade bleiben bis zur Entscheidung des Betreibers bestehen. Bestandsliste und Betreiber-Schritte: [Twitch-Pfadmigration](TWITCH_PATH_MIGRATION.md).
+
 ## TL;DR
 
 Es gibt **zwei Hosts**, die auf **dasselbe** Backend (`tb-dashboard`, `127.0.0.1:8769`) zeigen:
 
-| Host | Rolle | `/analyse`, `/social-media`, generisches `/twitch/*` |
+| Host | Rolle | `/twitch/analyse`, `/twitch/social-media`, generisches `/twitch/*` |
 |------|-------|------------------------------------------------------|
 | `deutsche-deadlock-community.de` | öffentlich / Partner | **erlaubt** |
 | `admin.deutsche-deadlock-community.de` | Admin-Dashboard | **bewusst 404** |
@@ -19,16 +27,16 @@ beziehungsweise `X-Dashboard-Context: admin` für Admin-Flows. **Derselbe Pfad v
 sich je nach Host unterschiedlich.** Darum gilt die eine goldene Regel:
 
 > **Jeder Redirect, den ein Handler erzeugt, der vom Admin-Host erreichbar ist, muss
-> host-bewusst sein. Ein nackter relativer Pfad (`/analyse`) wird vom Browser gegen den
+> host-bewusst sein. Ein nackter relativer Pfad (`/twitch/analyse`) wird vom Browser gegen den
 > *aktuellen* Host aufgelöst — auf `admin.*` ist das ein 404.**
 
-## Warum `/analyse` auf dem Admin-Host 404 ist (kein Pfusch, Absicht)
+## Warum `/twitch/analyse` auf dem Admin-Host 404 ist (kein Pfusch, Absicht)
 
 User-sichtbare Dashboard-Seiten dürfen nicht unter der Admin-Subdomain leben. Das ist an
 **zwei** Stellen abgesichert (defense in depth):
 
 1. **Caddy** — `admin.deutsche-deadlock-community.de`-Block, Matcher `@admin_block_nonadmin`:
-   `path /analyse /analyse/* /twitch/* /social-media* /demo*` → `respond "Not Found" 404`.
+   `path /twitch/analyse /twitch/analyse/* /twitch/* /twitch/social-media* /demo*` → `respond "Not Found" 404`.
 2. **Backend** — `handlers/spa.rs::admin_dashboard_host_page_gate()` → liefert `404` für
    user-facing Seiten, wenn `is_admin_dashboard_host_request(headers)` wahr ist.
 
@@ -66,15 +74,15 @@ dedizierte Forward-Auth-Pfad `/twitch/auth/validate` zählt ebenfalls als Admin-
 ## Die wiederkehrende Bug-Klasse
 
 > **„1:1 aus Python portierter Relativ-Redirect."** Das Python-Dashboard lief auf **einem**
-> Host, dort war `/analyse` immer gültig. Beim Rust-Cutover wurden Redirect-Ziele wörtlich
-> übernommen (`LOGOUT_REDIRECT = "/analyse"`). Sobald derselbe Handler über die
+> Host, dort war `/twitch/analyse` immer gültig. Beim Rust-Cutover wurden Redirect-Ziele wörtlich
+> übernommen (`LOGOUT_REDIRECT = "/twitch/analyse"`). Sobald derselbe Handler über die
 > Admin-Subdomain erreichbar ist, zeigt der Relativpfad ins Leere (404).
 
 **Gegenmittel beim Anfassen eines Redirects:**
 
 1. Kann dieser Handler vom **Admin-Host** erreicht werden? (Caddy-Allowlist prüfen:
    `/twitch/auth/*` und `@twitch_admin_support` → **ja**.)
-2. Wenn ja und das Ziel ist eine **öffentliche** Seite (`/analyse` etc.): **absolute URL**
+2. Wenn ja und das Ziel ist eine **öffentliche** Seite (`/twitch/analyse` etc.): **absolute URL**
    auf `https://deutsche-deadlock-community.de` ausgeben, nicht relativ.
 3. Wenn das Ziel auf dem Admin-Host gültig ist (`/twitch/admin`, `/twitch/auth/discord/login`):
    Relativpfad ist ok.
@@ -85,7 +93,7 @@ dedizierte Forward-Auth-Pfad `/twitch/auth/validate` zählt ebenfalls als Admin-
 
 | Stelle | Datei | Host-bewusst? |
 |--------|-------|---------------|
-| Partner-Logout `/twitch/auth/logout` | `handlers/auth_login.rs::logout_handler` | **ja** (host-aware: öffentliche `/analyse` absolut, sonst relativ) |
+| Partner-Logout `/twitch/auth/logout` | `handlers/auth_login.rs::logout_handler` | **ja** (host-aware: öffentliche `/twitch/analyse` absolut, sonst relativ) |
 | Discord-Admin-Logout `/twitch/auth/discord/logout` | `auth/discord_admin_login.rs::logout_handler` | ja (`admin_route_url(base, ADMIN_LOGIN_PATH)`) |
 | Admin-Login-Redirects | `auth/discord_admin_login.rs` | ja (`DEFAULT_ADMIN_BASE_URL` + ENV) |
 | OAuth-Redirect-URIs | siehe Memory `dashboard_oauth_redirect_migration` | ENV-gesteuert, pro Host getrennt |

@@ -21,7 +21,7 @@
 
 use axum::{
     extract::{Path, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode, Uri},
+    http::{header, HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Redirect, Response},
 };
 use sqlx::PgPool;
@@ -31,7 +31,7 @@ use crate::auth::level::DashboardAuthLevel;
 
 // ── Konstanten ──────────────────────────────────────────────────────────────
 
-const LOGIN_URL: &str = "/twitch/auth/login?next=%2Fanalyse";
+const LOGIN_URL: &str = "/twitch/auth/login?next=%2Ftwitch%2Fanalyse";
 /// Vite baut das dashboard_v2-Bundle mit genau diesem Prefix; die
 /// Main-Domain-Shells duerfen ihn deshalb nicht umschreiben.
 const MAIN_DOMAIN_ASSET_PREFIX: &str = "/twitch/dashboard-v2/";
@@ -79,7 +79,7 @@ pub async fn analyse_handler(
 
 /// Liefert die dashboard_v2-SPA-Shell ohne Host- oder Auth-Gate.
 pub(crate) async fn serve_dashboard_v2_index() -> Response {
-    serve_dashboard_v2_index_with_asset_prefix("/analyse/").await
+    serve_dashboard_v2_index_with_asset_prefix("/twitch/analyse/").await
 }
 
 /// Liefert die dashboard_v2-SPA-Shell fuer die oeffentliche Main-Domain-Seite
@@ -299,30 +299,17 @@ pub async fn dashboard_v2_public_assets_handler(Path(asset_path): Path<String>) 
     serve_asset(asset_path.trim_start_matches('/')).await
 }
 
-/// `GET /twitch/analyse` — Legacy-Redirect auf `/analyse` (301, Query erhalten).
 pub async fn legacy_analyse_root_redirect_handler(uri: Uri) -> Response {
-    moved_permanently(with_query("/analyse".to_string(), &uri))
+    Redirect::permanent(&with_query("/twitch/analyse".to_string(), &uri)).into_response()
 }
 
-/// `GET /twitch/analyse/{path:.*}` — Legacy-Redirect auf `/analyse/{path}`
-/// (301, Query erhalten).
-pub async fn legacy_analyse_path_redirect_handler(
-    Path(raw_path): Path<String>,
-    uri: Uri,
-) -> Response {
-    let normalized = raw_path.trim_start_matches('/');
-    let location = if normalized.is_empty() {
-        "/analyse".to_string()
-    } else {
-        format!("/analyse/{normalized}")
-    };
-    moved_permanently(with_query(location, &uri))
+pub async fn legacy_analyse_path_redirect_handler(uri: Uri) -> Response {
+    let suffix = uri.path().strip_prefix("/analyse").unwrap_or("");
+    Redirect::permanent(&with_query(format!("/twitch/analyse{suffix}"), &uri)).into_response()
 }
 
-/// `GET /twitch/dashboard-v2` und weitere alte Main-Domain-Seiten — 301 auf
-/// `/analyse` (Query erhalten).
 pub async fn analyse_root_redirect_handler(uri: Uri) -> Response {
-    moved_permanently(with_query("/analyse".to_string(), &uri))
+    Redirect::permanent(&with_query("/twitch/analyse".to_string(), &uri)).into_response()
 }
 
 fn with_query(location: String, uri: &Uri) -> String {
@@ -332,23 +319,16 @@ fn with_query(location: String, uri: &Uri) -> String {
     }
 }
 
-fn moved_permanently(location: String) -> Response {
-    let value = match HeaderValue::from_str(&location) {
-        Ok(value) => value,
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid redirect target").into_response(),
-    };
-    let mut response = StatusCode::MOVED_PERMANENTLY.into_response();
-    response.headers_mut().insert(header::LOCATION, value);
-    response
-}
-
 pub async fn social_media_manager_handler(
     headers: HeaderMap,
     uri: Uri,
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
 ) -> Response {
-    let subpath = uri.path().strip_prefix("/social-media/").unwrap_or("");
+    let subpath = uri
+        .path()
+        .strip_prefix("/twitch/social-media/")
+        .unwrap_or("");
     if matches!(
         subpath.split('/').next(),
         Some("api" | "oauth" | "terms" | "privacy")
@@ -371,8 +351,12 @@ pub async fn social_media_manager_handler(
 }
 
 pub async fn legacy_social_media_redirect_handler(uri: Uri) -> Response {
-    let suffix = uri.path().strip_prefix("/social-media-admin").unwrap_or("");
-    Redirect::permanent(&with_query(format!("/social-media{suffix}"), &uri)).into_response()
+    let suffix = uri
+        .path()
+        .strip_prefix("/social-media-admin")
+        .or_else(|| uri.path().strip_prefix("/social-media"))
+        .unwrap_or("");
+    Redirect::permanent(&with_query(format!("/twitch/social-media{suffix}"), &uri)).into_response()
 }
 
 // ── Auth-Prüfung ─────────────────────────────────────────────────────────────
@@ -651,12 +635,18 @@ mod tests {
     #[tokio::test]
     async fn social_media_alias_behaelt_unterpfad_und_query() {
         for (pfad, ziel) in [
-            ("/social-media-admin", "/social-media"),
-            ("/social-media-admin/", "/social-media/"),
-            ("/social-media-admin/xyz", "/social-media/xyz"),
+            ("/social-media", "/twitch/social-media"),
+            ("/social-media/", "/twitch/social-media/"),
+            (
+                "/social-media/clips/a%2Fb?tab=konten",
+                "/twitch/social-media/clips/a%2Fb?tab=konten",
+            ),
+            ("/social-media-admin", "/twitch/social-media"),
+            ("/social-media-admin/", "/twitch/social-media/"),
+            ("/social-media-admin/xyz", "/twitch/social-media/xyz"),
             (
                 "/social-media-admin/clips/a%2Fb?tab=konten&oauth_success=youtube",
-                "/social-media/clips/a%2Fb?tab=konten&oauth_success=youtube",
+                "/twitch/social-media/clips/a%2Fb?tab=konten&oauth_success=youtube",
             ),
         ] {
             let response = legacy_social_media_redirect_handler(pfad.parse().unwrap()).await;
@@ -671,8 +661,8 @@ mod tests {
             .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
             .unwrap();
         for pfad in [
-            "/social-media",
-            "/social-media/clips?oauth_success=youtube&twitch_user_id=42",
+            "/twitch/social-media",
+            "/twitch/social-media/clips?oauth_success=youtube&twitch_user_id=42",
         ] {
             let response = social_media_manager_handler(
                 HeaderMap::new(),
@@ -689,10 +679,10 @@ mod tests {
             );
         }
         for pfad in [
-            "/social-media/api/unbekannt",
-            "/social-media/oauth/unbekannt",
-            "/social-media/terms/unbekannt",
-            "/social-media/privacy/unbekannt",
+            "/twitch/social-media/api/unbekannt",
+            "/twitch/social-media/oauth/unbekannt",
+            "/twitch/social-media/terms/unbekannt",
+            "/twitch/social-media/privacy/unbekannt",
         ] {
             let response = social_media_manager_handler(
                 HeaderMap::new(),

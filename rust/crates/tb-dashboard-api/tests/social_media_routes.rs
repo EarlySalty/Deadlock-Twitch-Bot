@@ -14,9 +14,9 @@ async fn manager_routes_keep_login_aliases_and_reserved_handlers_separate() {
         .unwrap();
     let app = build_router(pool.clone(), "route-test".into());
     for path in [
-        "/social-media",
-        "/social-media/",
-        "/social-media/clips?oauth_success=youtube&twitch_user_id=42",
+        "/twitch/social-media",
+        "/twitch/social-media/",
+        "/twitch/social-media/clips?oauth_success=youtube&twitch_user_id=42",
     ] {
         let response = app
             .clone()
@@ -37,13 +37,13 @@ async fn manager_routes_keep_login_aliases_and_reserved_handlers_separate() {
         );
     }
     for (method, path, target) in [
-        ("GET", "/social-media-admin", "/social-media"),
-        ("GET", "/social-media-admin/", "/social-media/"),
-        ("GET", "/social-media-admin/xyz", "/social-media/xyz"),
+        ("GET", "/social-media-admin", "/twitch/social-media"),
+        ("GET", "/social-media-admin/", "/twitch/social-media/"),
+        ("GET", "/social-media-admin/xyz", "/twitch/social-media/xyz"),
         (
             "POST",
             "/social-media-admin/clips/a%2Fb?tab=konten",
-            "/social-media/clips/a%2Fb?tab=konten",
+            "/twitch/social-media/clips/a%2Fb?tab=konten",
         ),
     ] {
         let response = app
@@ -61,7 +61,7 @@ async fn manager_routes_keep_login_aliases_and_reserved_handlers_separate() {
         assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT, "{path}");
         assert_eq!(response.headers()[header::LOCATION], target);
     }
-    for path in ["/social-media/terms", "/social-media/privacy"] {
+    for path in ["/twitch/social-media/terms", "/twitch/social-media/privacy"] {
         let response = app
             .clone()
             .oneshot(
@@ -81,8 +81,8 @@ async fn manager_routes_keep_login_aliases_and_reserved_handlers_separate() {
         assert!(response.headers().get(header::LOCATION).is_none());
     }
     for path in [
-        "/social-media/api/stats",
-        "/social-media/oauth/start/youtube",
+        "/twitch/social-media/api/stats",
+        "/twitch/social-media/oauth/start/youtube",
     ] {
         let response = app
             .clone()
@@ -97,7 +97,10 @@ async fn manager_routes_keep_login_aliases_and_reserved_handlers_separate() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
     }
-    for path in ["/social-media/api/missing", "/social-media/oauth/missing"] {
+    for path in [
+        "/twitch/social-media/api/missing",
+        "/twitch/social-media/oauth/missing",
+    ] {
         let response = app
             .clone()
             .oneshot(
@@ -111,7 +114,10 @@ async fn manager_routes_keep_login_aliases_and_reserved_handlers_separate() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
     }
-    for path in ["/social-media", "/social-media/clips?oauth_success=youtube"] {
+    for path in [
+        "/twitch/social-media",
+        "/twitch/social-media/clips?oauth_success=youtube",
+    ] {
         let response = spa::social_media_manager_handler(
             HeaderMap::new(),
             path.parse().unwrap(),

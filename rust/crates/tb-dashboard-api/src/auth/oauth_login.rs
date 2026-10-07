@@ -41,6 +41,8 @@ const ALLOWED_NEXT_PREFIXES: &[&str] = &[
     "/twitch/uplink",
     "/twitch/pricing",
     "/twitch/raid/auth",
+    "/twitch/analyse",
+    "/twitch/social-media",
     "/analyse",
     "/social-media",
     "/clips",

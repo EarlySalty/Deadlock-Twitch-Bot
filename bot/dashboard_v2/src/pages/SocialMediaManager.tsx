@@ -113,7 +113,7 @@ export function SocialMediaManager() {
         description={t('Fokus: {focus}', { focus: isAdminView ? streamer || t('Streamer wählen') : access?.streamer || authStatus?.twitchLogin || t('Dein Kanal') })}
       >
         {isAdminView && <div className="flex flex-wrap items-center gap-3">
-            <a href="/social-media?view=archiv" className="studio-button">{t('VOD-Archiv')}</a>
+            <a href="/twitch/social-media?view=archiv" className="studio-button">{t('VOD-Archiv')}</a>
             {isAdminView && streamer && (
               <button
                 type="button"

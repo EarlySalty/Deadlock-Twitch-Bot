@@ -226,7 +226,7 @@ Wichtig:
 
 ### Surface
 
-- `/social-media`
+- `/twitch/social-media`
 
 ### Tabs und Kernfunktionen
 
@@ -246,22 +246,22 @@ Wichtig:
 
 ### Relevante Endpunkte
 
-- `GET /social-media/api/stats`
-- `GET /social-media/api/clips`
-- `POST /social-media/api/upload`
-- `GET /social-media/api/analytics`
-- `GET /social-media/api/templates/global`
-- `GET /social-media/api/templates/streamer`
-- `POST /social-media/api/templates/streamer`
-- `POST /social-media/api/templates/apply`
-- `POST /social-media/api/batch-upload`
-- `POST /social-media/api/mark-uploaded`
-- `POST /social-media/api/fetch-clips`
-- `GET /social-media/api/last-hashtags`
-- `GET /social-media/oauth/start/{platform}`
-- `GET /social-media/oauth/callback`
-- `POST /social-media/oauth/disconnect/{platform}`
-- `GET /social-media/api/platforms/status`
+- `GET /twitch/social-media/api/stats`
+- `GET /twitch/social-media/api/clips`
+- `POST /twitch/social-media/api/upload`
+- `GET /twitch/social-media/api/analytics`
+- `GET /twitch/social-media/api/templates/global`
+- `GET /twitch/social-media/api/templates/streamer`
+- `POST /twitch/social-media/api/templates/streamer`
+- `POST /twitch/social-media/api/templates/apply`
+- `POST /twitch/social-media/api/batch-upload`
+- `POST /twitch/social-media/api/mark-uploaded`
+- `POST /twitch/social-media/api/fetch-clips`
+- `GET /twitch/social-media/api/last-hashtags`
+- `GET /twitch/social-media/oauth/start/{platform}`
+- `GET /twitch/social-media/oauth/callback`
+- `POST /twitch/social-media/oauth/disconnect/{platform}`
+- `GET /twitch/social-media/api/platforms/status`
 
 ### Sicherheits- und Ownership-Regeln
 

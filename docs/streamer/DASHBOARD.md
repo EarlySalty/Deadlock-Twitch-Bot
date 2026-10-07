@@ -13,7 +13,7 @@ Stand: `2026-03-13`
 | `/twitch/affiliate/portal` | Affiliate-Zusammenfassung | Ja |
 | `/twitch/abbo` | Billing, Rechnungen, Lurker Steuer, Promo-Einstellungen | Ja |
 | `/twitch/live-announcement` | Go-Live Builder fuer Discord | Ja |
-| `/social-media` | Clip- und Upload-Dashboard | Ja |
+| `/twitch/social-media` | Clip- und Upload-Dashboard | Ja |
 | `/twitch/demo` | Oeffentliche Demo mit Demodaten | Eher Preview |
 
 ## `/twitch/dashboard`
@@ -172,7 +172,7 @@ Wenn kein Affiliate-Account hinterlegt ist, zeigt die Seite "Du bist noch kein A
 - Builder fuer Discord-Go-Live-Posts
 - Preview, Validierung, Testsendung und Rollenverwaltung
 
-### `/social-media`
+### `/twitch/social-media`
 
 - Tabs fuer `Dashboard`, `Clips`, `Templates` und `Settings`
 - Clip-Listing, Upload-Queue, Batch-Upload, Plattform-Verbindungen

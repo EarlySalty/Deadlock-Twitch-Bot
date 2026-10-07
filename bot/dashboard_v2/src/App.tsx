@@ -403,10 +403,10 @@ export default function App() {
   const isTitleRoute = path === PREVIEW_TITLE_ROUTE;
   const isPricingRoute = path === PREVIEW_PRICING_ROUTE;
   const isUplinkRoute = path === PREVIEW_UPLINK_ROUTE;
-  const isSocialMediaManagerRoute = path === '/social-media' || path.startsWith('/social-media/');
+  const isSocialMediaManagerRoute = path === '/twitch/social-media' || path.startsWith('/twitch/social-media/');
   const isAnalyticsRoute =
     path === PREVIEW_ANALYTICS_ROUTE ||
-    path === '/analyse' ||
+    path === '/twitch/analyse' ||
     path === '/dashboard-v2' ||
     path === '/twitch/dashboard-v2';
   const isCategoryRoute =

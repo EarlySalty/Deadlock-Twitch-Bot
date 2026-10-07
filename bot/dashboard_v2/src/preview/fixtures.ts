@@ -258,7 +258,7 @@ const ROADMAP_FIXTURE = {
     {
       id: 3,
       title: 'Analyse Routing fix',
-      description: 'Legacy /twitch/analyse leitet sauber auf /analyse um.',
+      description: 'Alte Analyseadressen leiten sauber auf /twitch/analyse um.',
       status: 'done',
       priority: 1,
       created_at: NOW_ISO,

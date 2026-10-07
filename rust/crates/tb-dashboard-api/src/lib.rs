@@ -190,8 +190,25 @@ pub fn build_public_router_with_brain(
             get(crate::handlers::caster_overlay::camera_ws_handler),
         )
         // Social-Media Rechtstexte — öffentlich für die Plattform-OAuth-Reviews.
+        .route(
+            "/twitch/social-media/terms",
+            get(social_media::terms_handler),
+        )
+        .route(
+            "/twitch/social-media/privacy",
+            get(social_media::privacy_handler),
+        )
+        .route(
+            "/twitch/social-media/oauth/callback",
+            get(social_media::oauth_callback_handler),
+        )
+        .route(
+            "/twitch/social-media/oauth/callback/{platform}",
+            get(social_media::oauth_callback_handler),
+        )
         .route("/social-media/terms", get(social_media::terms_handler))
         .route("/social-media/privacy", get(social_media::privacy_handler))
+        .route("/privacy", get(social_media::privacy_handler))
         // OAuth-Callback — öffentlich (Provider-Redirect, Security via State-Token).
         .route(
             "/social-media/oauth/callback",
@@ -244,33 +261,7 @@ fn build_authed_router_with_analysis_store(
     let uplink_connect_rl =
         RateLimitLayerConfig::new(rate_limiter.clone(), "uplink_connect", 30, 60);
 
-    Router::new()
-        .route(
-            "/twitch/api/v2/streamer/profile",
-            get(handlers::partner_profiles::get_handler)
-                .put(handlers::partner_profiles::put_handler)
-                .layer(axum::extract::DefaultBodyLimit::max(512 * 1024)),
-        )
-        .route(
-            "/twitch/api/v2/challenges/me",
-            get(handlers::challenges::me_handler),
-        )
-        .route(
-            "/twitch/api/v2/challenges/viewers",
-            get(handlers::challenges::viewers_handler),
-        )
-        .route(
-            "/twitch/api/v2/community",
-            get(handlers::community::get_handler).layer(axum::middleware::from_fn_with_state(
-                RateLimitLayerConfig::new(rate_limiter.clone(), "community", 30, 60),
-                rate_limit_middleware,
-            )),
-        )
-        .route(
-            "/twitch/api/v2/auth-status",
-            get(auth_status::auth_status_handler),
-        )
-        // Social-Media Read-API (scope-gefiltert).
+    let social_routes = Router::new()
         .route("/social-media/api/stats", get(social_media::stats_handler))
         .route("/social-media/api/clips", get(social_media::clips_handler))
         .route(
@@ -454,6 +445,35 @@ fn build_authed_router_with_analysis_store(
         .route(
             "/social-media/oauth/disconnect/{platform}",
             post(social_media::oauth_disconnect_handler),
+        );
+
+    Router::new()
+        .nest("/twitch", social_routes.clone())
+        .merge(social_routes)
+        .route(
+            "/twitch/api/v2/streamer/profile",
+            get(handlers::partner_profiles::get_handler)
+                .put(handlers::partner_profiles::put_handler)
+                .layer(axum::extract::DefaultBodyLimit::max(512 * 1024)),
+        )
+        .route(
+            "/twitch/api/v2/challenges/me",
+            get(handlers::challenges::me_handler),
+        )
+        .route(
+            "/twitch/api/v2/challenges/viewers",
+            get(handlers::challenges::viewers_handler),
+        )
+        .route(
+            "/twitch/api/v2/community",
+            get(handlers::community::get_handler).layer(axum::middleware::from_fn_with_state(
+                RateLimitLayerConfig::new(rate_limiter.clone(), "community", 30, 60),
+                rate_limit_middleware,
+            )),
+        )
+        .route(
+            "/twitch/api/v2/auth-status",
+            get(auth_status::auth_status_handler),
         )
         // Internal-Home: gebündelte Dashboard-Startseite (Profil, KPIs, Bot-Events,
         // Changelog). GET liest, POST legt einen Changelog-Eintrag an (Admin-only).
@@ -977,8 +997,9 @@ fn build_authed_router_with_analysis_store(
             "/twitch/api/v2/category-collector",
             get(handlers::category_collector::handler),
         )
-        .route("/analyse", get(spa::analyse_handler))
-        .route("/analyse/{*path}", get(spa::analyse_assets_handler))
+        .route("/twitch/analyse", get(spa::analyse_handler))
+        .route("/twitch/analyse/", get(spa::analyse_handler))
+        .route("/twitch/analyse/{*path}", get(spa::analyse_assets_handler))
         .with_state(pool)
         .layer(Extension(ExpectedToken(token)))
         .layer(axum::middleware::from_fn(
@@ -1785,11 +1806,29 @@ pub fn build_social_media_manager_router(pool: PgPool) -> Router {
     use handlers::spa;
 
     Router::new()
-        .route("/social-media", get(spa::social_media_manager_handler))
-        .route("/social-media/", get(spa::social_media_manager_handler))
+        .route(
+            "/twitch/social-media",
+            get(spa::social_media_manager_handler),
+        )
+        .route(
+            "/twitch/social-media/",
+            get(spa::social_media_manager_handler),
+        )
+        .route(
+            "/twitch/social-media/{*path}",
+            get(spa::social_media_manager_handler),
+        )
+        .route(
+            "/social-media",
+            axum::routing::any(spa::legacy_social_media_redirect_handler),
+        )
+        .route(
+            "/social-media/",
+            axum::routing::any(spa::legacy_social_media_redirect_handler),
+        )
         .route(
             "/social-media/{*path}",
-            get(spa::social_media_manager_handler),
+            axum::routing::any(spa::legacy_social_media_redirect_handler),
         )
         .route(
             "/social-media-admin",
@@ -1850,12 +1889,16 @@ pub fn build_v2_spa_pages_router(pool: PgPool) -> Router {
         )
         .route("/twitch/pricing", get(spa::main_domain_spa_shell_handler))
         .route(
-            "/twitch/analyse",
-            get(spa::legacy_analyse_root_redirect_handler),
+            "/analyse",
+            axum::routing::any(spa::legacy_analyse_root_redirect_handler),
         )
         .route(
-            "/twitch/analyse/{*path}",
-            get(spa::legacy_analyse_path_redirect_handler),
+            "/analyse/",
+            axum::routing::any(spa::legacy_analyse_path_redirect_handler),
+        )
+        .route(
+            "/analyse/{*path}",
+            axum::routing::any(spa::legacy_analyse_path_redirect_handler),
         )
         .route(
             "/twitch/dashboard-v2",

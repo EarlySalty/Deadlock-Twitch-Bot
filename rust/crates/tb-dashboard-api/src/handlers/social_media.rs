@@ -3672,7 +3672,7 @@ fn oauth_public_origin() -> String {
 
 /// Internes Dashboard-Redirect-Ziel (Python `_dashboard_url`).
 fn dashboard_url(key: &str, value: &str) -> String {
-    format!("/social-media?{key}={value}")
+    format!("/twitch/social-media?{key}={value}")
 }
 
 fn oauth_success_dashboard_url(platform: &str, twitch_user_id: Option<&str>) -> String {
@@ -4284,15 +4284,15 @@ mod tests {
     fn oauth_rueckmeldung_geht_direkt_zum_manager() {
         assert_eq!(
             oauth_success_dashboard_url("youtube", None),
-            "/social-media?oauth_success=youtube"
+            "/twitch/social-media?oauth_success=youtube"
         );
         assert_eq!(
             oauth_success_dashboard_url("youtube", Some("42")),
-            "/social-media?oauth_success=youtube&twitch_user_id=42"
+            "/twitch/social-media?oauth_success=youtube&twitch_user_id=42"
         );
         assert_eq!(
             oauth_success_dashboard_url("youtube", Some("42&next=foreign")),
-            "/social-media?oauth_success=youtube"
+            "/twitch/social-media?oauth_success=youtube"
         );
     }
 

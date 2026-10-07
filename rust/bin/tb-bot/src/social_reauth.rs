@@ -9,7 +9,7 @@ use crate::token_lifecycle_wiring::BrokerTokenLifecycleNotifier;
 #[path = "../../../test-support/database.rs"]
 mod test_database;
 
-const SOCIAL_DASHBOARD_URL: &str = "https://deutsche-deadlock-community.de/social-media";
+const SOCIAL_DASHBOARD_URL: &str = "https://deutsche-deadlock-community.de/twitch/social-media";
 
 pub(crate) struct SocialConnectionNotifier {
     pool: PgPool,

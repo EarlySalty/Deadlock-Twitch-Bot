@@ -3,7 +3,7 @@ import test from 'node:test';
 
 Object.defineProperty(globalThis, 'window', {
   configurable: true,
-  value: { location: new URL('https://dashboard.example/analyse') },
+  value: { location: new URL('https://dashboard.example/twitch/analyse') },
 });
 const { fetchApi } = await import('../src/api/core');
 const { fetchViewerDirectory } = await import('../src/api/analytics');

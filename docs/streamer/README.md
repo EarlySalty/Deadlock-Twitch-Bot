@@ -21,7 +21,7 @@ Dieser Guide wurde gegen den aktuellen Codebestand geprueft. Er beschreibt die S
 4. In `/twitch/dashboard-v2` die Analytics nutzen.
 5. Ueber `/twitch/raid/auth` oder Discord `/traid` den Raid-Bot autorisieren.
 6. In `/twitch/abbo` Plan, Rechnungsdaten und Zusatzfeatures verwalten.
-7. Optional `/twitch/live-announcement`, `/social-media` und `/twitch/affiliate/portal` nutzen.
+7. Optional `/twitch/live-announcement`, `/twitch/social-media` und `/twitch/affiliate/portal` nutzen.
 
 ## Wichtige Realitaeten
 

@@ -6,7 +6,7 @@
 
 ## 1. Zweck & Abgrenzung
 
-`dashboard_v2/` ist die **Streamer-Analytics-SPA** unter `/analyse` — die React-Oberfläche, die die Analytics-v2-API visualisiert (Overview, Audience, Growth, Coaching, AI-Analyse, Social-Media, Title-Generator, Sessions, Monetization …). Sie ist **tab-basiert** (kein React-Router) und kann im **Live-** oder **Demo-Modus** laufen (öffentliches Demo-Dashboard).
+`dashboard_v2/` ist die **Streamer-Analytics-SPA** unter `/twitch/analyse` — die React-Oberfläche, die die Analytics-v2-API visualisiert (Overview, Audience, Growth, Coaching, AI-Analyse, Social-Media, Title-Generator, Sessions, Monetization …). Sie ist **tab-basiert** (kein React-Router) und kann im **Live-** oder **Demo-Modus** laufen (öffentliches Demo-Dashboard).
 
 Abgrenzung: Die Daten kommen aus [analytics.md](analytics.md); das Frontend rendert nur. `dashboard_preview/` ist die lokale Vorschau-Variante (eigene Build-Skripte + Fixtures, kein Live-Backend).
 

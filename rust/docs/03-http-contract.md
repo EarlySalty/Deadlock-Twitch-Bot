@@ -37,10 +37,10 @@ Drei Stabilitätsklassen:
 
 `settings`, `toggle` (POST), `update` (POST), `log`
 
-### social-media — `/social-media/api/admin/*` (~30) + Upload
+### social-media — `/twitch/social-media/api/admin/*` (~30) + Upload
 
 `streamer-layout`, `clips` (+ `detail`/`layout`/`discard`/`enrichment`/`approval`/`analytics`),
-`auto-approve`, `reports`, `vocab`, `templates`; Upload `POST /social-media/api/clips/upload`
+`auto-approve`, `reports`, `vocab`, `templates`; Upload `POST /twitch/social-media/api/clips/upload`
 *(multipart, bis 200 MB)*; OAuth `/social-media/oauth/start|callback|disconnect/{platform}`.
 
 ### Legacy-Form-Actions (admin_dashboard, `x-www-form-urlencoded` + HTML-CSRF)

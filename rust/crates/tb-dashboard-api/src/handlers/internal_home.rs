@@ -798,7 +798,7 @@ pub async fn get_handler(
         "bot_activity": { "events": bot_events },
         "links": {
             "dashboard": "/twitch/dashboard",
-            "dashboard_v2": if can_access_analytics { "/analyse" } else { "/twitch/dashboard" },
+            "dashboard_v2": if can_access_analytics { "/twitch/analyse" } else { "/twitch/dashboard" },
             "raid_history": "/twitch/raid/history",
             "raid_requirements": "/twitch/raid/requirements",
             "billing": "/twitch/abbo",

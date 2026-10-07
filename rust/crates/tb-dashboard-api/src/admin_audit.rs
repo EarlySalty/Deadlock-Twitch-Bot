@@ -17,6 +17,7 @@ fn is_admin_path(path: &str) -> bool {
     path.starts_with("/twitch/api/admin/")
         || path.starts_with("/twitch/api/v2/admin/")
         || path.starts_with("/social-media/api/admin/")
+        || path.starts_with("/twitch/social-media/api/admin/")
         || path == "/twitch/api/v2/internal-home/changelog"
         || path == "/twitch/api/v2/roadmap"
         || path.starts_with("/twitch/api/v2/roadmap/")

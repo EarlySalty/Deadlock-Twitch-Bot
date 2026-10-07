@@ -33,8 +33,8 @@ use crate::auth::session::{
 use crate::handlers::auth_status::ADMIN_MODE_COOKIE;
 use crate::handlers::spa::is_admin_dashboard_host_request;
 
-/// Logout-Redirect-Ziel (Python `auth_logout`: 302 → `/analyse`).
-const LOGOUT_REDIRECT: &str = "/analyse";
+/// Logout-Redirect-Ziel (Python `auth_logout`: 302 → `/twitch/analyse`).
+const LOGOUT_REDIRECT: &str = "/twitch/analyse";
 /// Admin-Logout-Ziel: zurück in den Discord-Admin-Login auf demselben Host.
 const ADMIN_LOGOUT_REDIRECT: &str = "/twitch/auth/discord/login";
 /// Cookie-Name des OAuth-Kontext-CSRF-Tokens (P2.139). Kurzlebig, HttpOnly,
@@ -350,9 +350,15 @@ async fn callback_handler_inner(
 
     // Same OAuth state, client, token exchange and identity validation as the
     // dashboard. A viewer login for /clips must not activate or grant a partnership.
-    if login_state.next_path.split(['?', '#']).next().is_some_and(|path| matches!(path, "/clips" | "/clips/")) {
-        let response = super::clip_contest::complete_twitch_login(
-            &state, &identity, config.cookie_secure).await;
+    if login_state
+        .next_path
+        .split(['?', '#'])
+        .next()
+        .is_some_and(|path| matches!(path, "/clips" | "/clips/"))
+    {
+        let response =
+            super::clip_contest::complete_twitch_login(&state, &identity, config.cookie_secure)
+                .await;
         return no_store(clear_context_and_respond(config.cookie_secure, response));
     }
 
@@ -718,7 +724,7 @@ fn html_escape(value: &str) -> String {
 /// `GET /twitch/auth/logout` — invalidiert die Partner-Session.
 ///
 /// Löscht die Session-Row + Cache (`invalidate_session`), entfernt das Cookie
-/// (`clear_session_cookie`) und leitet auf [`LOGOUT_REDIRECT`] (`/analyse`).
+/// (`clear_session_cookie`) und leitet auf [`LOGOUT_REDIRECT`] (`/twitch/analyse`).
 /// Kommt der Logout vom Admin-Host, ist das Ziel der relative Admin-Login-Pfad.
 pub async fn logout_handler(
     state: Option<Extension<DashboardAuthState>>,
@@ -1029,11 +1035,11 @@ mod tests {
 
     #[test]
     fn redirect_with_cookie_setzt_location_und_set_cookie_und_no_store() {
-        let resp = redirect_with_cookie("/analyse", "twitch_dash_session=xyz; Path=/");
+        let resp = redirect_with_cookie("/twitch/analyse", "twitch_dash_session=xyz; Path=/");
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
         assert_eq!(
             resp.headers().get(axum::http::header::LOCATION).unwrap(),
-            "/analyse"
+            "/twitch/analyse"
         );
         assert_eq!(
             resp.headers().get(SET_COOKIE).unwrap(),
@@ -1498,7 +1504,7 @@ mod tests {
             .save_oauth_login_state(
                 &token,
                 &OAuthLoginState {
-                    next_path: "/analyse".to_string(),
+                    next_path: "/twitch/analyse".to_string(),
                     redirect_uri: cfg.redirect_uri.clone(),
                     context_token: "the-context-secret".to_string(),
                 },
@@ -1557,7 +1563,7 @@ mod tests {
             .save_oauth_login_state(
                 &token,
                 &OAuthLoginState {
-                    next_path: "/analyse".to_string(),
+                    next_path: "/twitch/analyse".to_string(),
                     redirect_uri: cfg.redirect_uri.clone(),
                     context_token: "matching-ctx".to_string(),
                 },
@@ -1806,7 +1812,7 @@ mod tests {
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
 
         let cfg = config_with(Ok(identity("fremder_nicht_partner", "999002")));
-        let token = seed_state(&state, &cfg.redirect_uri, "/analyse").await;
+        let token = seed_state(&state, &cfg.redirect_uri, "/twitch/analyse").await;
 
         let resp = callback_handler(
             Some(Extension(state.clone())),
@@ -1860,7 +1866,7 @@ mod tests {
         ensure_tables(&pool).await;
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
         let cfg = config_with(Err(())); // Exchange schlägt fehl.
-        let token = seed_state(&state, &cfg.redirect_uri, "/analyse").await;
+        let token = seed_state(&state, &cfg.redirect_uri, "/twitch/analyse").await;
 
         let resp = callback_handler(
             Some(Extension(state)),
@@ -1908,7 +1914,7 @@ mod tests {
         assert!(!loc.contains("scope="));
     }
 
-    /// Logout löscht das Cookie (Max-Age=0) und redirectet auf /analyse.
+    /// Logout löscht das Cookie (Max-Age=0) und redirectet auf /twitch/analyse.
     #[tokio::test]
     async fn logout_loescht_cookie_und_redirectet() {
         let Some(pool) = maybe_pool().await else {
@@ -1948,7 +1954,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
         assert_eq!(
             resp.headers().get(axum::http::header::LOCATION).unwrap(),
-            "/analyse"
+            "/twitch/analyse"
         );
         let cookies: Vec<&str> = resp
             .headers()
