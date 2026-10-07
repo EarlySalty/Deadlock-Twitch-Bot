@@ -42,7 +42,15 @@ impl YtDlpDownloader {
 impl ClipDownloader for YtDlpDownloader {
     async fn download(&self, clip_url: &str, dest: &Path) -> Result<(), String> {
         let output = tokio::process::Command::new(&self.yt_dlp_path)
-            .args(["-f", "best", "-o", &dest.to_string_lossy(), clip_url])
+            .args([
+                "--no-part",
+                "-f",
+                "best",
+                "-o",
+                &dest.to_string_lossy(),
+                "--",
+                clip_url,
+            ])
             .output()
             .await
             .map_err(|e| e.to_string())?;
@@ -70,8 +78,11 @@ pub async fn download_atomic(
             .await
             .map_err(|e| e.to_string())?;
     }
-    let tmp = format!("{dest_path}.dl-{}.part", tb_crypto::random_hex_token(8));
-    downloader.download(clip_url, Path::new(&tmp)).await?;
+    let tmp = format!("{dest_path}.dl-{}.tmp.mp4", tb_crypto::random_hex_token(8));
+    if let Err(error) = downloader.download(clip_url, Path::new(&tmp)).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(error);
+    }
     if !Path::new(&tmp).exists() {
         return Err(format!("Downloaded file not found: {tmp}"));
     }
@@ -211,6 +222,66 @@ mod tests {
     use crate::enrichment::iter_pending_enrichments;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
+
+    struct FailingDownloader;
+
+    #[async_trait]
+    impl ClipDownloader for FailingDownloader {
+        async fn download(&self, _clip_url: &str, dest: &Path) -> Result<(), String> {
+            tokio::fs::write(dest, b"incomplete").await.unwrap();
+            Err("interrupted".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn atomic_failure_removes_partial_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("clip.mp4");
+        assert!(
+            download_atomic(&FailingDownloader, "", &target.to_string_lossy())
+                .await
+                .is_err()
+        );
+        assert!(!target.exists());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    struct ConcurrentDownloader {
+        barrier: tokio::sync::Barrier,
+        destinations: tokio::sync::Mutex<Vec<std::path::PathBuf>>,
+    }
+
+    #[async_trait]
+    impl ClipDownloader for ConcurrentDownloader {
+        async fn download(&self, _clip_url: &str, dest: &Path) -> Result<(), String> {
+            self.destinations.lock().await.push(dest.to_path_buf());
+            tokio::fs::write(dest, b"complete").await.unwrap();
+            self.barrier.wait().await;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn atomic_concurrent_downloads_use_distinct_temporary_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("clip.mp4").to_string_lossy().into_owned();
+        let downloader = ConcurrentDownloader {
+            barrier: tokio::sync::Barrier::new(2),
+            destinations: tokio::sync::Mutex::new(Vec::new()),
+        };
+        let (first, second) = tokio::join!(
+            download_atomic(&downloader, "", &target),
+            download_atomic(&downloader, "", &target),
+        );
+        first.unwrap();
+        second.unwrap();
+        let paths = downloader.destinations.lock().await;
+        assert_eq!(paths.len(), 2);
+        assert_ne!(paths[0], paths[1]);
+        assert!(paths.iter().all(|path| path != Path::new(&target)));
+        assert_eq!(tokio::fs::read(&target).await.unwrap(), b"complete");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
 
     struct FakeDownloader;
     #[async_trait]

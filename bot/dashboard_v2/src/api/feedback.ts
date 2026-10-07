@@ -42,7 +42,7 @@ export function feedbackHref(kind?: FeedbackKind, area?: string): string {
 export function validFeedbackResultPath(path: string): boolean {
   if (/[?%\\]/.test(path) || [...path].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127) || path.length > 200) return false;
   const [base, anchor = '', extra] = path.split('#');
-  return extra === undefined && ['/twitch/dashboard', '/twitch/verwaltung', '/twitch/uplink', '/analyse', '/twitch/abbo', '/social-media'].includes(base)
+  return extra === undefined && ['/twitch/dashboard', '/twitch/verwaltung', '/twitch/uplink', '/twitch/analyse', '/analyse', '/twitch/abbo', '/twitch/social-media', '/social-media'].includes(base)
     && /^[a-zA-Z0-9_-]*$/.test(anchor);
 }
 /** Bleibt nach Netzfehlern gleich; eine bewusste Textänderung ist ein neuer Auftrag. */

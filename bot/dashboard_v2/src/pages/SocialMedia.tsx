@@ -40,6 +40,7 @@ import {
 } from '@/components/socialmedia/queuePresentation';
 import '@/components/socialmedia/studio.css';
 import { AnalyticsTab } from '@/components/socialmedia/AnalyticsTab';
+import { VodArchiveTab } from '@/components/socialmedia/VodArchiveTab';
 import { LayoutEditor, type VorschauClip } from '@/components/socialmedia/LayoutEditor';
 import { EnrichmentPanel } from '@/components/socialmedia/EnrichmentPanel';
 import { LadeFehlerHinweis } from '@/components/socialmedia/LadeFehlerHinweis';
@@ -165,6 +166,7 @@ const TAB_ICONS: Record<SocialMediaView, React.ComponentType<{ className?: strin
   plan: Calendar,
   layout: Crop,
   konten: SlidersHorizontal,
+  archiv: Archive,
 };
 
 export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialMediaProps) {
@@ -182,7 +184,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
     mode: EditMode;
   } | null>(null);
   const [activeView, setActiveView] = useState<SocialMediaView>(() =>
-    /oauth/.test(window.location.search) ? 'konten' : 'pool',
+    new URLSearchParams(window.location.search).get('view') === 'archiv' ? 'archiv' : /oauth/.test(window.location.search) ? 'konten' : 'pool',
   );
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [tiktokPost, setTikTokPost] = useState<{ clipDbId: number; platforms: SocialPlatform[] } | null>(null);
@@ -409,6 +411,9 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
     )
       return;
     setActiveView(next);
+    const params = new URLSearchParams(window.location.search);
+    params.set('view', next);
+    window.history.replaceState({}, '', `${window.location.pathname}?${params}`);
   };
 
   const defaultApprovalPlatforms = useMemo(
@@ -433,7 +438,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
     );
   }
 
-  if (!streamer) {
+  if (!streamer && !(isAdmin && activeView === 'archiv')) {
     return (
       <div className="panel-card rounded-2xl p-12 text-center max-w-2xl mx-auto mt-12">
         <Film className="w-12 h-12 text-text-secondary mx-auto mb-4" />
@@ -497,7 +502,9 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
         aria-labelledby={`studio-tab-${activeView}`}
         className={activeView === 'pool' ? 'studio-pipeline min-w-0 space-y-4' : 'min-w-0'}
       >
-        {activeView === 'plan' ? (
+        {activeView === 'archiv' ? (
+          <VodArchiveTab twitchUserId={twitchUserId} isAdmin={isAdmin} />
+        ) : activeView === 'plan' ? (
           <PostingPlanDraft
             twitchUserId={twitchUserId}
             key={twitchUserId}
@@ -1047,6 +1054,7 @@ function SocialHero({
     plan: 'Auto-Pilot & Zeitplan',
     layout: 'Templates & Layouts',
     konten: 'Konten & Einstellungen',
+    archiv: 'VOD-Archiv',
   };
   return (
     <header className="flex flex-wrap items-center justify-between gap-4 py-2">

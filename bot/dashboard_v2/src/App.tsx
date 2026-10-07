@@ -5,7 +5,7 @@ import { TabNavigation, type TabId } from '@/components/layout/TabNavigation';
 import { Overview } from '@/pages/Overview';
 import { Tagesform } from '@/pages/Tagesform';
 import { Sessions } from '@/pages/Sessions';
-import { SocialMediaAdminDashboard } from '@/pages/SocialMediaAdmin';
+import { SocialMediaManager } from '@/pages/SocialMediaManager';
 import { Monetization } from '@/pages/Monetization';
 import { Publikum } from '@/pages/Publikum';
 import { Wachstum } from '@/pages/Wachstum';
@@ -403,10 +403,10 @@ export default function App() {
   const isTitleRoute = path === PREVIEW_TITLE_ROUTE;
   const isPricingRoute = path === PREVIEW_PRICING_ROUTE;
   const isUplinkRoute = path === PREVIEW_UPLINK_ROUTE;
-  const isSocialMediaAdminRoute = path === '/social-media-admin';
+  const isSocialMediaManagerRoute = path === '/twitch/social-media' || path.startsWith('/twitch/social-media/');
   const isAnalyticsRoute =
     path === PREVIEW_ANALYTICS_ROUTE ||
-    path === '/analyse' ||
+    path === '/twitch/analyse' ||
     path === '/dashboard-v2' ||
     path === '/twitch/dashboard-v2';
   const isCategoryRoute =
@@ -430,9 +430,9 @@ export default function App() {
         <OnboardingProvider>
           {isCategoryRoute ? (
             <DashboardShell activeRoute="category"><CategoryCollector /></DashboardShell>
-          ) : isSocialMediaAdminRoute ? (
+          ) : isSocialMediaManagerRoute ? (
             <DashboardShell activeRoute="social">
-              <SocialMediaAdminDashboard />
+              <SocialMediaManager />
             </DashboardShell>
           ) : isHelpRoute ? (
             <DashboardShell activeRoute="hilfe"><EinrichtungCard help /><FeedbackBox area="Hilfe" /></DashboardShell>

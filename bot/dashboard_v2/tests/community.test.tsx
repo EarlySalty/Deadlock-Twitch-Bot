@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PlanProvider } from '../src/context/PlanContext';
-Object.defineProperty(globalThis, 'window', { configurable: true, value: { location: new URL('https://example.test/analyse'), __TWITCH_DASHBOARD_RUNTIME__: {} } });
+Object.defineProperty(globalThis, 'window', { configurable: true, value: { location: new URL('https://example.test/twitch/analyse'), __TWITCH_DASHBOARD_RUNTIME__: {} } });
 const { Community, CommunityView, LobbyCard, RecommendationCard, StreamerMeeting } = await import('../src/pages/Community');
 import { canOpenLobby, directoryFresh, lobbyFit, voiceLink, STREAMER_VC, windowLabel, twitchLink } from '../src/utils/community';
 import { resolveTabParam } from '../src/tabAliases';

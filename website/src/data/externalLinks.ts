@@ -11,7 +11,7 @@ export const TWITCH_LIVE_ANNOUNCEMENT_URL =
   `${TWITCH_PUBLIC_ORIGIN}/twitch/live-announcement`;
 export const TWITCH_ABBO_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/abbo`;
 export const TWITCH_AFFILIATE_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/affiliate`;
-export const TWITCH_SOCIAL_MEDIA_URL = `${TWITCH_PUBLIC_ORIGIN}/social-media`;
+export const TWITCH_SOCIAL_MEDIA_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/social-media`;
 export const TWITCH_IMPRESSUM_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/impressum`;
 export const TWITCH_DATENSCHUTZ_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/datenschutz`;
 export const TWITCH_AGB_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/agb`;

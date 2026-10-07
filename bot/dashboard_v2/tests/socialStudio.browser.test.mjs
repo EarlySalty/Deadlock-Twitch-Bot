@@ -194,9 +194,9 @@ test(
       if (p === '/twitch/api/v2/overview') return json({ empty: true, sessions: [] });
       if (p === '/twitch/api/v2/streamers')
         return json([{ login: 'earlysalty', twitchUserId: '11' }, { login: 'partner2', twitchUserId: '22' }]);
-      if (p === '/social-media/api/access/me')
+      if (p === '/twitch/social-media/api/access/me')
         return json({ allowed: true, streamer: 'earlysalty', isAdmin: true });
-      if (p === '/social-media/api/access')
+      if (p === '/twitch/social-media/api/access')
         return json({ items: [{ streamer_login: 'earlysalty', granted: true }] });
       if (p.endsWith('/streamer-layout'))
         return json({
@@ -206,7 +206,7 @@ test(
           mode: 'pip',
           is_default: false,
         });
-      if (p === '/social-media/api/admin/clips') {
+      if (p === '/twitch/social-media/api/admin/clips') {
         if (failQueue) return json({ error: 'offline' }, 503);
         const page = Number(url.searchParams.get('page') || 1),
           size = Number(url.searchParams.get('page_size') || 100);
@@ -355,7 +355,7 @@ test(
       await new Promise((resolve) => server.close(resolve));
     });
     await t.test('Fixture-API weist fremde Konten ab und kopiert keine Prototyp-Schlüssel', async () => {
-      const endpoint = base + '/social-media/api/settings/posting-plan';
+      const endpoint = base + '/twitch/social-media/api/settings/posting-plan';
       const before = JSON.stringify(plans.earlysalty);
       const malicious = '{"__proto__":{"fixturePolluted":true},"constructor":{"prototype":{"fixturePolluted":true}}}';
       const patched = await fetch(endpoint + '?streamer=earlysalty', {
@@ -395,7 +395,7 @@ test(
     await page.route('**/*', (route) =>
       route.request().url().startsWith(base) ? route.continue() : route.abort(),
     );
-    await page.goto(base + '/social-media-admin?streamer=earlysalty&twitch_user_id=11');
+    await page.goto(base + '/twitch/social-media?streamer=earlysalty&twitch_user_id=11');
     await page.locator('.studio-clip').first().waitFor();
     const tab = (name) => page.getByRole('tab', { name, exact: true });
     await fs.mkdir(evidence, { recursive: true });
@@ -466,7 +466,10 @@ test(
         assert.ok((await page.locator('.studio-metrics').innerText()).includes('2'));
         assert.equal(await page.locator('.studio-brand').count(), 0);
         assert.equal(await page.locator('main header.panel-card').count(), 1);
-        assert.equal(await page.getByRole('heading', { name: 'Social Media', exact: true }).count(), 1);
+        const heading = page.locator('main h1').first();
+        assert.equal(await heading.count(), 1);
+        assert.equal(await page.title(), await heading.textContent());
+        assert.equal(await page.locator('aside a[aria-current="page"]').getAttribute('href'), '/twitch/social-media');
         assert.equal(await page.getByText('Partner', { exact: true }).count(), 0);
         assert.ok(await page.evaluate(() => document.fonts.check('14px "Studio Manrope"')));
       },
@@ -475,7 +478,7 @@ test(
       const analysis = await browser.newPage({ viewport: { width: 1440, height: 1080 }, reducedMotion: 'reduce' });
       try {
         await analysis.route('**/*', route => route.request().url().startsWith(base) ? route.continue() : route.abort());
-        await analysis.goto(base + '/analyse?streamer=earlysalty');
+        await analysis.goto(base + '/twitch/analyse?streamer=earlysalty');
         await analysis.locator('main header.panel-card').waitFor();
         await analysis.evaluate(() => document.fonts.ready);
         for (const width of [320, 390, 768, 1024, 1440]) {
@@ -783,7 +786,7 @@ test(
         for (const width of [390, 1024, 1440, 1920]) {
           await page.setViewportSize({ width, height: 1080 });
           let reference;
-          for (const route of ['/twitch/dashboard?streamer=earlysalty', '/twitch/uplink', '/social-media-admin?streamer=earlysalty&twitch_user_id=11']) {
+          for (const route of ['/twitch/dashboard?streamer=earlysalty', '/twitch/uplink', '/twitch/social-media?streamer=earlysalty&twitch_user_id=11']) {
             await page.goto(base + route);
             await page.locator('aside [data-tour-id="tour-nav"]').waitFor();
             await page.evaluate(() => document.fonts.ready);
@@ -802,7 +805,7 @@ test(
         }
       } finally {
         await fs.writeFile(path.join(evidence, 'shell-geometry.json'), JSON.stringify(measurements, null, 2));
-        await page.goto(base + '/social-media-admin?streamer=earlysalty&twitch_user_id=11');
+        await page.goto(base + '/twitch/social-media?streamer=earlysalty&twitch_user_id=11');
         await page.locator('.studio-clip').first().waitFor();
       }
     });
@@ -818,7 +821,7 @@ test(
         probe.remove();
         return color;
       });
-      await page.goto(base + '/social-media-admin?streamer=earlysalty&twitch_user_id=11');
+      await page.goto(base + '/twitch/social-media?streamer=earlysalty&twitch_user_id=11');
       await page.locator('aside [data-tour-id="tour-nav"]').waitFor();
       const social = await activeBackground();
       assert.equal(social, goldTint, 'Gold-Aktivzustand erwartet, erhalten: ' + social);
@@ -826,7 +829,7 @@ test(
       await page.locator('aside [data-tour-id="tour-nav"]').waitFor();
       const home = await activeBackground();
       assert.equal(home, goldTint, 'Home traegt denselben Gold-Aktivzustand: ' + home);
-      await page.goto(base + '/social-media-admin?streamer=earlysalty&twitch_user_id=11');
+      await page.goto(base + '/twitch/social-media?streamer=earlysalty&twitch_user_id=11');
       await page.locator('.studio-clip').first().waitFor();
     });
     await t.test('Lange Clip-Titel lassen mobile Dialoge und Schließen erreichbar', async () => {
@@ -912,7 +915,7 @@ test('Social Studio: stabile Kanal-ID bei widersprüchlichen Links und Kanalwech
   const clipRequests = () => observed.filter((entry) => entry.path.endsWith('/admin/clips'));
   for (const query of ['?streamer=partner2&twitch_user_id=11', '?streamer=earlysalty']) {
     observed.length = 0;
-    await page.goto(base + '/social-media-admin' + query);
+    await page.goto(base + '/twitch/social-media' + query);
     await page.getByRole('heading', { name: 'Streamer auswählen' }).waitFor();
     await page.waitForFunction(() => !document.querySelector('select[aria-label="Streamer wählen"]').disabled);
     assert.equal(await select.inputValue(), '');
@@ -921,7 +924,7 @@ test('Social Studio: stabile Kanal-ID bei widersprüchlichen Links und Kanalwech
   }
   observed.length = 0;
   const initialClips = page.waitForResponse((response) => response.url().includes('/admin/clips?'));
-  await page.goto(base + '/social-media-admin?twitch_user_id=11');
+  await page.goto(base + '/twitch/social-media?twitch_user_id=11');
   await page.waitForFunction(() => document.querySelector('select[aria-label="Streamer wählen"]')?.value === '11');
   await initialClips;
   assert.ok(clipRequests().every((entry) => new URLSearchParams(entry.query).get('twitch_user_id') === '11'));

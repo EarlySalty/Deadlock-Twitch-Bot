@@ -105,7 +105,7 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
   );
 
   const mainNavItems: SidebarNavItem[] = [
-    ...(adminEligible && adminMode ? [{ href: '/analyse?view=category', label: 'Deadlock weltweit', icon: BarChart3, active: activeRoute === 'category' }] : []),
+    ...(adminEligible && adminMode ? [{ href: '/twitch/analyse?view=category', label: 'Deadlock weltweit', icon: BarChart3, active: activeRoute === 'category' }] : []),
     { href: PREVIEW_HOME_ROUTE, label: 'Home', icon: Home, active: activeRoute === 'home' },
     ...(canSeeChallenges
       ? [{ href: '/twitch/challenges', label: 'Rangliste & Erfolge', icon: Trophy, active: activeRoute === 'challenges' }]
@@ -121,8 +121,8 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
         ]
       : []),
     {
-      href: '/social-media-admin',
-      label: 'Social Media Dashboard',
+      href: '/twitch/social-media',
+      label: 'Social-Media-Manager',
       icon: Film,
       active: activeRoute === 'social',
     },

@@ -28,3 +28,31 @@ Kein Merge, kein Push nach main, keine produktive Migration, kein Deploy und kei
 MERGEPROTOKOLL[MS-1]: 9 Git-Schritte einzeln | Anläufe: 1 | Gate: gpt-6.1-sol BLOCK, drei blockierende Befunde
 
 Die neun verändernden Schritte dieser Integrationsrunde sind Fetch, Add, Commit, Attribution-Amend, Rebase, Konflikt-Add, Rebase-Continue, Dokumentations-Add und Dokumentationscommit. Reine lesende Git-Abfragen sind nicht mitgezählt.
+
+## Folgeprüfung, Runde 2
+
+- Modell: gpt-6.1-sol, ausdrücklich mit `--model` gewählt.
+- Head: 59c904d8.
+- Exit: 0.
+- Urteil: ALLOW: All previous blockers are fixed; no blocking regression found in the supplied fix-diff.
+- Die drei ursprünglichen Befunde wurden als FIXED bestätigt.
+- Log: /tmp/tb-tiktok-gate-round-2.log.
+
+## Integrierte Folgeprüfung, Runde 3
+
+Origin/main hatte sich danach auf 07f511a3 weiterbewegt. D2 wurde durch Rebase integriert und beide Verarbeitungswege erhalten. Runde 2 galt nicht als Freigabe dieses neuen Standes.
+
+- Modell: gpt-6.1-sol, ausdrücklich mit `--model` gewählt.
+- Basis: origin/main 07f511a3.
+- Head: 9315b3cf7e4a6feeffc32b603db26eca78b03a2c.
+- Exit: 0.
+- Urteil: ALLOW: No blocking defect is established by the supplied source.
+- Log: /tmp/tb-tiktok-gate-round-3.log.
+
+Nicht blockierende Hinweise: Ein fehlgeschlagener Statusschreibvorgang lässt einen failed-Job ohne bestätigtes FAILED konservativ gesperrt. Der nicht mitgelieferte waiting-to-pending-Pfad wurde in refresh_waiting_connections nachgelesen; die integrierten Recovery- und Fairness-Tests bestanden.
+
+Nach ALLOW erfolgten Fast-Forward in /home/nathanael/.worktrees/tb-social-tiktok-merge und normaler Push origin HEAD:main, beide Exit 0. Eine erste Pushform mit Logumleitung wurde vom Hook wegen seiner RefSpec-Auswertung abgewiesen; der einzelne literale Push ohne Umleitung wurde zugelassen. Kein Hook wurde umgangen. Frisch geholtes origin/main bestätigte den vollständigen Head-SHA.
+
+MERGEPROTOKOLL[MS-1]: 27 Git-Schritte einzeln | Anläufe: 2 | Gate: gpt-6.1-sol ALLOW in Runde 2 und Runde 3
+
+Zählstand vor dem Dokumentationsabschluss: Das aus dem tatsächlichen Sessiontranskript abgeleitete Protokoll `/tmp/tb-tiktok-git-audit-before-docs.jsonl` enthält 27 einzelne Git-Aufrufe. Darin sind der abgewiesene Main-Push und der reine Clean-Dry-Run enthalten, nicht als erfolgreiche Änderungen gezählt. Die zwei Main-Push-Anläufe gehören zur Implementierungsintegration. Die nachfolgende Dokumentationsprüfung und das Cleanup werden getrennt protokolliert; der tatsächlich ausgelieferte Anwendungsstand bleibt 0452e03cb7eab42d9e08ee5d39bde380514f1cd3.

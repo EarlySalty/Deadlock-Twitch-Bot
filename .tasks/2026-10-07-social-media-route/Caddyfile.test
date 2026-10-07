@@ -1,0 +1,16 @@
+{
+	admin 127.0.0.1:20196
+	auto_https off
+}
+http://127.0.0.1:4186 {
+	@legacy_social_media path /social-media-admin /social-media-admin/*
+	handle @legacy_social_media {
+		route {
+			uri path_regexp ^/social-media-admin /social-media
+			redir {uri} 308
+		}
+	}
+	handle {
+		respond "Not Found" 404
+	}
+}

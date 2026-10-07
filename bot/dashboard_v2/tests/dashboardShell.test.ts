@@ -17,7 +17,7 @@ const PAGES = [
   'pages/Uplink.tsx',
   'pages/Verwaltung.tsx',
   'pages/OverlayBuilder.tsx',
-  'pages/SocialMediaAdmin.tsx',
+  'pages/SocialMediaManager.tsx',
   'pages/Pricing.tsx',
 ] as const;
 
@@ -43,7 +43,7 @@ test('App.tsx importiert die Shell und wickelt jede der sieben Routen darin ein'
 test('Deadlock weltweit nutzt die bereits veröffentlichte Analyse-Route statt eines separaten Caddy-Pfads', () => {
   assert.match(
     SIDEBAR,
-    /href: '\/analyse\?view=category'.*label: 'Deadlock weltweit'/,
+    /href: '\/twitch\/analyse\?view=category'.*label: 'Deadlock weltweit'/,
     'Die Admin-Navigation darf nicht von einer separaten /twitch/kategorie-Caddyfreigabe abhängen',
   );
   assert.doesNotMatch(
@@ -91,7 +91,7 @@ test('Social Media nutzt dieselbe farbige Shell und Navigation wie Home und Upli
 test('Studio-CSS bleibt im Inhalt und definiert keinen zweiten Dashboard-Rahmen', () => {
   const studio = read('components/socialmedia/studio.css');
   assert.doesNotMatch(studio, /\.studio-shell|\.studio-navigation/);
-  assert.match(read('pages/SocialMediaAdmin.tsx'), /className="space-y-6"/);
+  assert.match(read('pages/SocialMediaManager.tsx'), /className="space-y-6"/);
 });
 
 test('der Shell-Profil-Hook gatet den Fetch gegen anonyme und Admin-Sitzungen ohne eigenes Konto', () => {

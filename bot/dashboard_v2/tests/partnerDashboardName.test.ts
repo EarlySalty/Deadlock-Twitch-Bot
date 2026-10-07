@@ -29,18 +29,21 @@ test('kein Quelltext nennt noch Twitch Analytics oder Analyse Dashboard', () => 
     const src = readFileSync(join(SRC, rel), 'utf8');
     assert.doesNotMatch(src, /Twitch Analytics/, `${rel} nennt noch Twitch Analytics`);
     assert.doesNotMatch(src, /Analyse Dashboard/, `${rel} nennt noch Analyse Dashboard`);
-    if (rel === 'pages/SocialMediaAdmin.tsx') {
-      continue;
-    }
     assert.doesNotMatch(src, /Analyse-Dashboard/, `${rel} nennt noch Analyse-Dashboard`);
   }
 });
 
-test('SocialMediaAdmin nennt Analyse-Dashboard nur im Kommentar', () => {
-  const src = read('src/pages/SocialMediaAdmin.tsx');
-  const zeilen = src.split('\n').filter((zeile) => zeile.includes('Analyse-Dashboard'));
-  assert.equal(zeilen.length, 1);
-  assert.match(zeilen[0], /^\s*\*/);
+test('der Archiv-Einstieg bleibt im Social-Media-Manager', () => {
+  const src = read('src/pages/SocialMediaManager.tsx');
+  assert.match(src, /href="\/twitch\/social-media\?view=archiv"/);
+  assert.doesNotMatch(src, /\/social-media-admin\?view=archiv|Analyse-Dashboard/);
+});
+
+test('die Managerseite liegt unter ihrem eigenen Pfad', () => {
+  const app = read('src/App.tsx');
+  assert.ok(app.includes("path === '/twitch/social-media' || path.startsWith('/twitch/social-media/')"));
+  assert.ok(app.includes('<SocialMediaManager />'));
+  assert.doesNotMatch(app, /SocialMediaAdmin|social-media-admin/);
 });
 
 test('Home und Hilfe verwenden dieselbe Einrichtung statt unabhängiger Dialoge', () => {

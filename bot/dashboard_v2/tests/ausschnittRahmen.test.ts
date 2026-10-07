@@ -64,7 +64,7 @@ test('grossesStandbild hebt Twitch-Standbilder auf 1920x1080', () => {
 
 test('grossesStandbild laesst URLs ohne Groessensuffix unveraendert', () => {
   for (const url of [
-    '/social-media/api/clips/12/thumb.jpg',
+    '/twitch/social-media/api/clips/12/thumb.jpg',
     'https://beispiel.de/bild.png?w=480x272',
     'https://beispiel.de/1920x1080/bild.webp',
     'https://beispiel.de/bild.jpg',

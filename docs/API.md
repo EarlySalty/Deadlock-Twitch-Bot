@@ -19,16 +19,16 @@ Alle HTTP-Routes des Systems. Zugriffslevel: **A** = Admin only, **S** = Streame
 |---------|------|-------|-------|-----------|
 | GET | `/twitch/` | P | routes_mixin.py | |
 | GET | `/twitch/dashboard` | S | analytics/api_overview.py | Landing, liefert V2-Bundle |
-| GET | `/analyse` | S | analytics/api_overview.py | Kanonische Analytics-SPA |
-| GET | `/analyse/{path:.*}` | S | analytics/api_overview.py | SPA-Asset-Pfade |
-| GET | `/twitch/dashboard-v2` | S | analytics/api_overview.py | Legacy-Alias → 301 auf `/analyse` |
-| GET | `/twitch/dashboard-v2/{path:.*}` | S | analytics/api_overview.py | Asset-Durchleitung (kein Redirect) |
-| GET | `/twitch/analyse` | S | analytics/api_overview.py | Legacy-Alias → 301 auf `/analyse` |
-| GET | `/twitch/analyse/{path:.*}` | S | analytics/api_overview.py | Legacy-Alias → 301 auf `/analyse/{path}` |
+| GET | `/twitch/analyse` | S | rust/crates/tb-dashboard-api/src/handlers/spa.rs | Kanonische Analytics-SPA |
+| GET | `/twitch/analyse/{path:.*}` | S | rust/crates/tb-dashboard-api/src/handlers/spa.rs | SPA-Asset-Pfade |
+| Alle | `/analyse` und `/analyse/{path:.*}` | P | rust/crates/tb-dashboard-api/src/handlers/spa.rs | 308 unmittelbar auf `/twitch/analyse` samt Unterpfad und Query |
+| GET | `/twitch/dashboard-v2` | P | rust/crates/tb-dashboard-api/src/handlers/spa.rs | 308 auf `/twitch/analyse` |
+| GET | `/twitch/dashboard-v2/{path:.*}` | S | rust/crates/tb-dashboard-api/src/handlers/spa.rs | Asset-Durchleitung (kein Redirect) |
 | GET | `/twitch/verwaltung` | S | analytics/api_overview.py | |
 | GET | `/twitch/pricing` | P | analytics/api_overview.py | |
-| GET | `/social-media-admin` | A | analytics/api_overview.py | Eigene SPA |
-| GET | `/social-media-admin/{path:.*}` | A | analytics/api_overview.py | Asset-Durchleitung |
+| GET | `/twitch/social-media` | S | rust/crates/tb-dashboard-api/src/handlers/spa.rs | Social-Media-Manager; ohne Session 303 zum Login |
+| GET | `/twitch/social-media/{path:.*}` | S | rust/crates/tb-dashboard-api/src/handlers/spa.rs | SPA-Unterpfade; API, OAuth und Rechtstexte bleiben separat |
+| Alle | `/social-media` und `/social-media-admin` samt Unterpfaden | P | rust/crates/tb-dashboard-api/src/handlers/spa.rs | 308 auf `/twitch/social-media` samt Unterpfad und Query; direkte Ausnahmen siehe [Pfadmigration](TWITCH_PATH_MIGRATION.md) |
 | GET | `/twitch/stats` | A | routes_mixin.py | |
 | GET | `/twitch/partners` | A | routes_mixin.py | |
 | GET | `/twitch/market` | A | routes_mixin.py | |
@@ -344,7 +344,7 @@ Discord ein. Ein Dienst für beide Wege:
 |-----|----------|-------|
 | Chat | `!clipcontest [clip-url]` im eigenen Kanal (nur Broadcaster und Mods) | rust/crates/tb-chat/src/commands.rs |
 | Interner Producer | `POST /internal/twitch/v1/clips/contest/submit` mit `clip_db_id` und serverseitiger `actor_twitch_user_id` | rust/crates/tb-internal-api/src/handlers/clip_contest.rs |
-| Dashboard | `POST /social-media/api/clips/{clip_db_id}/clip-contest` (Social-Studio, Knopf "Für Clip-Contest einreichen") | rust/crates/tb-dashboard-api/src/handlers/social_media_clip_contest.rs |
+| Dashboard | `POST /twitch/social-media/api/clips/{clip_db_id}/clip-contest` (Social-Studio, Knopf "Für Clip-Contest einreichen") | rust/crates/tb-dashboard-api/src/handlers/social_media_clip_contest.rs |
 
 Weitergabe an den Master-Broker von Deadlock-Bots über den vorhandenen
 `BrokerRelay` im Producer (Basis-URL der Bot-TOML, bestehendes internes Token).

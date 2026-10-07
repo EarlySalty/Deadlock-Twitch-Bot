@@ -33,7 +33,7 @@ function seiteSlug(): string {
     slug = 'verwaltung';
   } else if (path === PREVIEW_UPLINK_ROUTE || path === '/twitch/uplink') {
     slug = 'uplink';
-  } else if (path === '/social-media-admin') {
+  } else if (path === '/twitch/social-media' || path.startsWith('/twitch/social-media/')) {
     slug = 'social-media';
   } else if (path === PREVIEW_OVERLAY_ROUTE || path === '/twitch/overlay') {
     slug = 'overlay';
@@ -41,7 +41,7 @@ function seiteSlug(): string {
     slug = 'pricing';
   } else if (
     path === PREVIEW_ANALYTICS_ROUTE ||
-    path === '/analyse' ||
+    path === '/twitch/analyse' ||
     path === '/twitch/onboarding' ||
     path === '/dashboard-v2' ||
     path === '/twitch/dashboard-v2'

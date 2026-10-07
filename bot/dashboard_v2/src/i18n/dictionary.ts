@@ -11,13 +11,14 @@
  * Platzhalter sind `{name}` und werden von `translate` ersetzt.
  */
 
+import { VOD_ARCHIVE_EN } from './vodArchive';
+
 export type Language = 'de' | 'en';
 
 export const LANGUAGES: Language[] = ['de', 'en'];
 
 export const DEFAULT_LANGUAGE: Language = 'de';
 
-/** Eine Wahl pro Browser, geteilt ueber alle Routen (/analyse, /social-media-admin). */
 export const LANGUAGE_STORAGE_KEY = 'dashboard.language';
 
 /** Fuer toLocaleString & Co., damit Datum und Zahlen mitwandern. */
@@ -46,6 +47,8 @@ export const MESSAGE_TYPE_LABELS: Record<string, string> = {
 };
 
 const EN: Record<string, string> = {
+  ...VOD_ARCHIVE_EN,
+  'Diesen Streamer für den eigenen Social-Media-Manager freischalten': 'Enable this streamer’s own social media manager',
   'Titel, Beschreibung & Hashtags': 'Title, description & hashtags',
   'Titel, Beschreibung und Hashtags bearbeitest du im Clip-Editor.': 'Edit the title, description and hashtags in the clip editor.',
   'Die Cliptexte konnten nicht geladen werden.': 'The clip text could not be loaded.',
@@ -184,6 +187,7 @@ const EN: Record<string, string> = {
   'Alle Kanäle': 'All channels',
   'Dein Kanal': 'Your channel',
   'Social Media': 'Social media',
+  'Social-Media-Manager': 'Social media manager',
   'Freigabe für diesen Streamer entziehen': 'Revoke access for this streamer',
   'Diesen Streamer für das eigene Social-Media-Dashboard freischalten':
     'Give this streamer access to their own social media dashboard',

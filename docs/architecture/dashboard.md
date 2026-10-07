@@ -113,7 +113,7 @@ Registrieren die Route-Gruppen (Entry/Market/Billing/Title/Settings/Self-Explain
 ## 6. Datenbank & externe Schnittstellen
 
 - **DB:** `dashboard_sessions`, `oauth_state_tokens`, `streamer_plans` + Billing-/Entitlement-Tabellen, Affiliate-/Gutschrift-/PII-Tabellen, Streamer-Tabellen.
-- **HTTP-Routen:** vollständige Liste in [../API.md](../API.md) (`/twitch/dashboard`, `/analyse`, `/twitch/admin`, `/twitch/abo`, Affiliate-Portal, `/twitch/impressum|datenschutz|agb`).
+- **HTTP-Routen:** vollständige Liste in [../API.md](../API.md) (`/twitch/dashboard`, `/twitch/analyse`, `/twitch/admin`, `/twitch/abo`, Affiliate-Portal, `/twitch/impressum|datenschutz|agb`).
 - **Extern:** Discord-OAuth (Admin + Link), Twitch-OAuth (Raid), Stripe (Checkout/Connect/Invoices/Webhooks), E-Mail (Affiliate).
 
 ## 7. Stolperfallen / Besonderheiten

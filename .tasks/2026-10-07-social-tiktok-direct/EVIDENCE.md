@@ -52,3 +52,11 @@ Merge und Push nach main, produktive Migration, Release und Neustarts, Auswahl u
 LIVEBEWEIS[DV-1]: PID nicht neu gestartet | exe ungeprüft | journal -p err ungeprüft | Anker nicht geprüft | Funktion: kein Deploy und kein Post | Ort: noch kein produktiver Funktionsbeweis
 
 Worktree und Branch bleiben ausdrücklich zur Fixer-Übernahme erhalten. Der eigene isolierte Testcluster wird vor der Übergabe geordnet gestoppt. Seine Daten unter /tmp/tb-tiktok-db-666eaa47 können für Folgeprüfungen wiederverwendet werden.
+
+## Fortschreibung durch den frischen Fixer
+
+Die Angaben unter „Gate und verbleibender Abschluss“ beschreiben die ursprüngliche Übergabe. Der Fixer korrigierte die drei Befunde, integrierte D2 auf aktuellem origin/main und erhielt ALLOW in Runde 2 und Runde 3, beide mit gpt-6.1-sol. 9315b3cf wurde anschließend per Fast-Forward und normalem HEAD:main-Push integriert. Die vier integrierten Prüfläufe bestanden mit 434 Tests. Einzelbelege stehen in FIXER-EVIDENCE.md und REVIEW.md.
+
+Die frühere Dateifehlmeldung zu Clip 124589 war falsch: Quelle und Vorschau liegen im tatsächlichen Dienst-Bind-Mount. Die autorisierte lokale Administrationsabfrage bestätigt earlysalty und eine fertige Vorschau. Das Video wurde nicht gepostet; eine Hörprüfung wird nicht durch Metadaten ersetzt. Der eigene Testcluster wurde vom Fixer geordnet gestoppt.
+
+Release 0452e03cb7eab42d9e08ee5d39bde380514f1cd3 wurde nach frischem Origin-Abgleich über den Deploy-Wrapper ausgeliefert. Journalbeleg der neuen TikTok-Migration vor den Neustarts, neue Prozessnummern, tatsächliche Programmdateien, eingebettete Revisionen und Anker sowie die fehlerfreien Journale stehen in FIXER-EVIDENCE.md. Die alte Vorschau wurde mit dem vorhandenen gespeicherten Ausschnitt in das aktuelle Format neu gerendert. Produktive API bestätigt ready=true, Konto earlysalty und zur gesicherten Datei passende TikTok-Videobindung. Der genau eine private Test bleibt wegen fehlender Hörprüfung und Dashboard-Browsersitzung offen. Keine TikTok-Freigabe und keine neue Vorgangsnummer gespeichert.

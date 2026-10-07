@@ -2,9 +2,6 @@
 //!
 //! Zentraler Guard, der prüft ob ein Streamer für Social-Media-Posts
 //! freigegeben ist. Jeder Schreibpfad muss durch diesen einen Guard.
-//!
-//! Die Tabelle `social_media_partner_access` wird von [`ensure_schema`]
-//! in [`crate::schema`] angelegt.
 
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;

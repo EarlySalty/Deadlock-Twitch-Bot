@@ -182,7 +182,7 @@ export function StreamerDetailPage() {
   const engagementToggle = useEngagementToggle();
   const partnerAccessQuery = usePartnerAccess();
   const partnerAccessMutation = useSetPartnerAccess();
-  const partnerAccessEntry = findPartnerAccessEntry(partnerAccessQuery.data, login);
+  const partnerAccessEntry = findPartnerAccessEntry(partnerAccessQuery.data, login, detail?.twitchUserId);
   const partnerAccessGranted = Boolean(partnerAccessEntry?.granted);
 
   const [verifyMode, setVerifyMode] = useState<LegacyVerifyMode>('permanent');
@@ -668,15 +668,15 @@ export function StreamerDetailPage() {
           <button
             className={`relative inline-flex h-7 w-12 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${
               partnerAccessGranted ? 'bg-success' : 'bg-white/20'
-            } ${partnerAccessMutation.isPending || partnerAccessQuery.isError ? 'opacity-50 cursor-not-allowed' : ''}`}
-            disabled={partnerAccessMutation.isPending || partnerAccessQuery.isError}
+            } ${partnerAccessMutation.isPending || partnerAccessQuery.isLoading || partnerAccessQuery.isError || !detail.twitchUserId ? 'opacity-50 cursor-not-allowed' : ''}`}
+            disabled={partnerAccessMutation.isPending || partnerAccessQuery.isLoading || partnerAccessQuery.isError || !detail.twitchUserId}
             role="switch"
             aria-checked={partnerAccessGranted}
             aria-label={partnerAccessGranted ? 'Partner-Freigabe entfernen' : 'Partner-Freigabe erteilen'}
             onClick={async () => {
-              if (!login) return;
+              if (!detail.twitchUserId) return;
               const result = await partnerAccessMutation.mutateAsync({
-                login,
+                twitchUserId: detail.twitchUserId,
                 granted: !partnerAccessGranted,
               });
               setToast({ open: true, tone: result.ok ? 'success' : 'error', message: result.message });

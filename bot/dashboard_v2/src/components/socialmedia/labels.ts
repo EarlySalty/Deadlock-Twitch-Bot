@@ -133,13 +133,14 @@ export function kategorieLabel(categoryKey: string, displayName: string): string
 }
 
 /** Die vier Arbeitsbereiche der Social-Media-Verwaltung. */
-export type SocialMediaView = 'pool' | 'plan' | 'layout' | 'konten';
+export type SocialMediaView = 'pool' | 'plan' | 'layout' | 'konten' | 'archiv';
 
 export const SOCIAL_MEDIA_TABS: Array<{ id: SocialMediaView; label: string }> = [
   { id: 'pool', label: 'Pipeline' },
   { id: 'plan', label: 'Auto-Pilot & Zeitplan' },
   { id: 'layout', label: 'Templates & Layouts' },
   { id: 'konten', label: 'Konten & Einstellungen' },
+  { id: 'archiv', label: 'VOD-Archiv' },
 ];
 
 /** Markennamen, deshalb ohne Uebersetzung. */

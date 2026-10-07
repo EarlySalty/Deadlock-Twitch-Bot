@@ -26,8 +26,7 @@ use tb_highlight::{
     twitch_vod::TwitchVodApi,
     vod_export::{
         export_latest_vod, export_log_description, export_log_title, format_bytes, format_duration,
-        should_export, CommandRunner, ExportTargets, TokioCommandRunner, VodExportError,
-        VodExportReport, TARGET_LOGIN,
+        should_export, CommandRunner, ExportTargets, VodExportError, VodExportReport, TARGET_LOGIN,
     },
 };
 use tb_monitoring::{
@@ -73,22 +72,6 @@ pub struct VodExportOfflineHandler {
 }
 
 impl VodExportOfflineHandler {
-    pub fn new(
-        api: Arc<dyn TwitchVodApi>,
-        relay: BrokerRelay,
-        yt_dlp_path: PathBuf,
-        remote_base: String,
-    ) -> Self {
-        Self {
-            api,
-            runner: Arc::new(TokioCommandRunner),
-            relay,
-            yt_dlp_path,
-            remote_base,
-            temp_dir: std::env::temp_dir().join("tb-vod-export"),
-        }
-    }
-
     pub fn spawn_for_offline(&self, twitch_user_id: &str, login: Option<&str>) {
         if !should_export(login) {
             return;
@@ -739,11 +722,13 @@ impl BlacklistRaidGuard {
         }
     }
 
-    pub fn with_ad_vorlauf(mut self, registry: Arc<tb_analytics::ad_manager::raid_vorlauf::RaidAdVorlauf>) -> Self {
+    pub fn with_ad_vorlauf(
+        mut self,
+        registry: Arc<tb_analytics::ad_manager::raid_vorlauf::RaidAdVorlauf>,
+    ) -> Self {
         self.ad_vorlauf = Some(registry);
         self
     }
-
 
     pub async fn handle(&self, broadcaster_id: &str, login: &str, event: &Value) {
         if !event_str(event, "action").eq_ignore_ascii_case("raid") {
@@ -812,7 +797,9 @@ impl BlacklistRaidGuard {
             }
         };
         let cancel_cutoff = Utc::now();
-        let attempts = self.ad_vorlauf.as_ref()
+        let attempts = self
+            .ad_vorlauf
+            .as_ref()
             .map(|registry| registry.source_attempt_ids(broadcaster_id, cancel_cutoff))
             .unwrap_or_default();
         match self.helix.cancel_raid(broadcaster_id, &token).await {
@@ -822,12 +809,13 @@ impl BlacklistRaidGuard {
                         .cancel_source_before(broadcaster_id.to_owned(), cancel_cutoff);
                     for id in attempts {
                         if let Some(attempt) = registry.complete(&id, false, Utc::now()) {
-                            crate::ad_manager_wiring::RaidAdProtectionAdapter(registry.clone()).persist(attempt);
+                            crate::ad_manager_wiring::RaidAdProtectionAdapter(registry.clone())
+                                .persist(attempt);
                         }
                     }
                 }
                 true
-            },
+            }
             Ok(Err(api_error)) => {
                 tracing::warn!(broadcaster_id, %api_error, "Cancel-Raid abgelehnt");
                 false

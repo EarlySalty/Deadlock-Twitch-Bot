@@ -603,8 +603,8 @@ export function usePartnerAccess() {
 export function useSetPartnerAccess() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ login, granted }: { login: string; granted: boolean }) =>
-      setPartnerAccess(login, granted),
+    mutationFn: ({ twitchUserId, granted }: { twitchUserId: string; granted: boolean }) =>
+      setPartnerAccess(twitchUserId, granted),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['admin-partner-access'] });
     },

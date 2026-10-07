@@ -874,27 +874,7 @@ async fn main() {
     ));
     let mut raid_oauth_port: Option<Arc<dyn tb_internal_api::RaidOAuthPort>> = None;
     let mut poll_offline_raid_handler: Option<Arc<OfflineRaidHandler>> = None;
-    let vod_export = helix.as_ref().clone().and_then(|helix_client| {
-        let relay = match BrokerRelay::new(&settings.broker) {
-            Ok(relay) => relay,
-            Err(error) => {
-                tracing::warn!(%error, "VOD-Export deaktiviert: BrokerRelay nicht verfügbar");
-                return None;
-            }
-        };
-        // Ziel ist der Google-Drive-Ordner hinter dem rclone-Remote `gdrive:`.
-        let remote_base = config.bot.vod_export_remote_base.trim().to_string();
-        let yt_dlp_path = yt_dlp_path(snapshot);
-        let api: Arc<dyn tb_highlight::twitch_vod::TwitchVodApi> = Arc::new(HelixVodSource {
-            helix: helix_client,
-        });
-        Some(Arc::new(VodExportOfflineHandler::new(
-            api,
-            relay,
-            yt_dlp_path,
-            remote_base,
-        )))
-    });
+    let vod_export: Option<Arc<VodExportOfflineHandler>> = None;
     let eventsub_hooks: Arc<dyn EventSubHooks> = match (
         &subscription_manager,
         helix.as_ref().clone(),
@@ -1797,7 +1777,9 @@ async fn main() {
                     pool.clone(),
                     cipher.clone(),
                 );
-                let mut vod_config = tb_vod_archive::VodArchiveConfig::from_env();
+                let mut vod_config =
+                    tb_vod_archive::VodArchiveConfig::from_options(&config.bot.vod_archive);
+                vod_config.drive_remote_base = config.bot.vod_export_remote_base.clone();
                 // yt-dlp wie bei Highlight-Clipper und Upload-Worker zentral
                 // aufloesen statt jede Crate eigene Pfade raten zu lassen.
                 vod_config.yt_dlp = yt_dlp_path(snapshot);

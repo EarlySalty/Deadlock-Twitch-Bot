@@ -1,0 +1,17 @@
+{
+  "date": "2026-10-07",
+  "feature_commit": "d563543a95d507187dd82904698757d679edae65",
+  "running_code_commit": "10dacbc2376a63f6d91869afe83b1ac8bb615eec",
+  "gate": {"model": "gpt-6.1-sol", "round": 2, "verdict": "ALLOW"},
+  "own_deploy_wrapper": {"exit_code": 1, "reason": "SHA build destination already exists", "active_exact_sha_verified": true, "existing_destination_not_removed": true},
+  "migration": {"version": 20261007220000, "success": true, "checksum_sha384": "fcf62533b1a70148e523ef81158db0dc7f5e0558eaf6aef0fa64eab3ea623090f8563bb4250ac2e5db2af24744d360fe"},
+  "configuration": {"typed_archive_section_installed": true, "sha256": "9a334456d098d067b1827e07a0ab2d47e627722157fc55b8f1a304dcca429b5d", "old_archive_environment_names_in_final_bot": []},
+  "bot": {"before_pid": 3795772, "final_pid": 3874592, "exe_deleted": false, "new_anchor": "Drive-Kopie fehlt", "anchor_present": true, "restarts": 0, "archive_heartbeat_utc": "2026-10-07T10:26:10.637976Z", "archive_enabled_channels": 2, "archive_downloads": 0, "archive_uploads": 0, "archive_skipped": 0},
+  "dashboard": {"before_pid": 3795639, "final_pid": 3874704, "exe_deleted": false, "new_anchor": "VOD-Liste nicht lesbar", "anchor_present": true, "restarts": 0},
+  "api": {"status": 200, "content_type": "application/json", "total_vods": 82, "page_items": 50, "real_database": true},
+  "visual": {"source": "activated release HTML/assets with genuine internally authorized live API", "real_browser_login_verified": false, "desktop_width": 1440, "mobile_width": 390, "youtube_links_each": 47, "finished_statuses_each": 46, "horizontal_overflow": false, "page_errors": [], "temporary_probe_stopped": true},
+  "retry": {"owned_fixture_id": 3890, "before": "download_failed", "after": "new", "fixture_deleted": true, "real_accounts_modified": false},
+  "retirement": {"service_removed": true, "timer_removed": true, "legacy_python_files_removed": 2, "standalone_git_and_rust_retained": true, "sqlite_retained_sha256": "41cb3e061acc740b04c7d489c9fa9bd7cc34dde13068757675840cc296488be1", "restore_checked_backup_sha256": "77d6a8f5809240e844ec7541b6f3765a3492d4122eeba901bd216b5553b2de98"},
+  "tests": {"disjoint_passed": 609, "ignored": 0, "unchanged_frontend_failures": 5, "full_external_sqlx_cache_check_confirmed": false},
+  "route": {"verified_current": "/social-media?view=archiv", "target_after_task_P": "/twitch/social-media?view=archiv", "task_P_merged_at_last_fetch": false, "existing_spa_preserved_for_P": true}
+}

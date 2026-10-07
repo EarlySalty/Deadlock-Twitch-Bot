@@ -190,8 +190,25 @@ pub fn build_public_router_with_brain(
             get(crate::handlers::caster_overlay::camera_ws_handler),
         )
         // Social-Media Rechtstexte — öffentlich für die Plattform-OAuth-Reviews.
+        .route(
+            "/twitch/social-media/terms",
+            get(social_media::terms_handler),
+        )
+        .route(
+            "/twitch/social-media/privacy",
+            get(social_media::privacy_handler),
+        )
+        .route(
+            "/twitch/social-media/oauth/callback",
+            get(social_media::oauth_callback_handler),
+        )
+        .route(
+            "/twitch/social-media/oauth/callback/{platform}",
+            get(social_media::oauth_callback_handler),
+        )
         .route("/social-media/terms", get(social_media::terms_handler))
         .route("/social-media/privacy", get(social_media::privacy_handler))
+        .route("/privacy", get(social_media::privacy_handler))
         // OAuth-Callback — öffentlich (Provider-Redirect, Security via State-Token).
         .route(
             "/social-media/oauth/callback",
@@ -215,7 +232,12 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
     build_authed_router_with_analysis_store(pool, token, rate_limiter, ai_store)
 }
 
-fn build_authed_router_with_analysis_store(pool: PgPool, token: String, rate_limiter: RateLimiter, ai_store: ai_store::AiStore) -> Router {
+fn build_authed_router_with_analysis_store(
+    pool: PgPool,
+    token: String,
+    rate_limiter: RateLimiter,
+    ai_store: ai_store::AiStore,
+) -> Router {
     use handlers::scam_guard_enforce;
     use handlers::{
         ad_manager, ads_schedule, affiliate_portal, ai_analysis, ai_chat, ai_history, audience,
@@ -239,35 +261,7 @@ fn build_authed_router_with_analysis_store(pool: PgPool, token: String, rate_lim
     let uplink_connect_rl =
         RateLimitLayerConfig::new(rate_limiter.clone(), "uplink_connect", 30, 60);
 
-    Router::new()
-        .route(
-            "/twitch/api/v2/streamer/profile",
-            get(handlers::partner_profiles::get_handler)
-                .put(handlers::partner_profiles::put_handler)
-                .layer(axum::extract::DefaultBodyLimit::max(512 * 1024)),
-        )
-        .route(
-            "/twitch/api/v2/challenges/me",
-            get(handlers::challenges::me_handler),
-        )
-        .route(
-            "/twitch/api/v2/challenges/viewers",
-            get(handlers::challenges::viewers_handler),
-        )
-        .route(
-            "/twitch/api/v2/community",
-            get(handlers::community::get_handler).layer(axum::middleware::from_fn_with_state(
-                RateLimitLayerConfig::new(rate_limiter.clone(), "community", 30, 60),
-                rate_limit_middleware,
-            )),
-        )
-        .route(
-            "/twitch/api/v2/auth-status",
-            get(auth_status::auth_status_handler),
-        )
-        // Social-Media-Dashboard-SPA (Auth erforderlich).
-        .route("/social-media", get(social_media::index_handler))
-        // Social-Media Read-API (scope-gefiltert).
+    let social_routes = Router::new()
         .route("/social-media/api/stats", get(social_media::stats_handler))
         .route("/social-media/api/clips", get(social_media::clips_handler))
         .route(
@@ -406,6 +400,11 @@ fn build_authed_router_with_analysis_store(pool: PgPool, token: String, rate_lim
             put(social_media::posting_plan_category_put_handler),
         )
         .route(
+            "/social-media/api/vod-archive",
+            get(social_media::vod_archive_list_handler)
+                .post(social_media::vod_archive_action_handler),
+        )
+        .route(
             "/social-media/api/admin/settings/vod-archive",
             get(social_media::vod_archive_get_handler).put(social_media::vod_archive_put_handler),
         )
@@ -446,6 +445,35 @@ fn build_authed_router_with_analysis_store(pool: PgPool, token: String, rate_lim
         .route(
             "/social-media/oauth/disconnect/{platform}",
             post(social_media::oauth_disconnect_handler),
+        );
+
+    Router::new()
+        .nest("/twitch", social_routes.clone())
+        .merge(social_routes)
+        .route(
+            "/twitch/api/v2/streamer/profile",
+            get(handlers::partner_profiles::get_handler)
+                .put(handlers::partner_profiles::put_handler)
+                .layer(axum::extract::DefaultBodyLimit::max(512 * 1024)),
+        )
+        .route(
+            "/twitch/api/v2/challenges/me",
+            get(handlers::challenges::me_handler),
+        )
+        .route(
+            "/twitch/api/v2/challenges/viewers",
+            get(handlers::challenges::viewers_handler),
+        )
+        .route(
+            "/twitch/api/v2/community",
+            get(handlers::community::get_handler).layer(axum::middleware::from_fn_with_state(
+                RateLimitLayerConfig::new(rate_limiter.clone(), "community", 30, 60),
+                rate_limit_middleware,
+            )),
+        )
+        .route(
+            "/twitch/api/v2/auth-status",
+            get(auth_status::auth_status_handler),
         )
         // Internal-Home: gebündelte Dashboard-Startseite (Profil, KPIs, Bot-Events,
         // Changelog). GET liest, POST legt einen Changelog-Eintrag an (Admin-only).
@@ -969,8 +997,9 @@ fn build_authed_router_with_analysis_store(pool: PgPool, token: String, rate_lim
             "/twitch/api/v2/category-collector",
             get(handlers::category_collector::handler),
         )
-        .route("/analyse", get(spa::analyse_handler))
-        .route("/analyse/{*path}", get(spa::analyse_assets_handler))
+        .route("/twitch/analyse", get(spa::analyse_handler))
+        .route("/twitch/analyse/", get(spa::analyse_handler))
+        .route("/twitch/analyse/{*path}", get(spa::analyse_assets_handler))
         .with_state(pool)
         .layer(Extension(ExpectedToken(token)))
         .layer(axum::middleware::from_fn(
@@ -1773,19 +1802,45 @@ pub fn build_affiliate_portal_router() -> Router {
     )
 }
 
-/// Baut den Router für die Social-Media-Admin-SPA (P2.66).
-///
-/// Die Handler nutzen denselben Auth-/Host-Gate-Pfad wie `/analyse`: der
-/// `DashboardAuthLevel`-Extractor liest `DashboardAuthState` aus der globalen
-/// Extension, und der `PgPool`-State wird fuer Partner-Access-Checks benötigt.
-pub fn build_social_media_admin_router(pool: PgPool) -> Router {
+pub fn build_social_media_manager_router(pool: PgPool) -> Router {
     use handlers::spa;
 
     Router::new()
-        .route("/social-media-admin", get(spa::social_media_admin_handler))
+        .route(
+            "/twitch/social-media",
+            get(spa::social_media_manager_handler),
+        )
+        .route(
+            "/twitch/social-media/",
+            get(spa::social_media_manager_handler),
+        )
+        .route(
+            "/twitch/social-media/{*path}",
+            get(spa::social_media_manager_handler),
+        )
+        .route(
+            "/social-media",
+            axum::routing::any(spa::legacy_social_media_redirect_handler),
+        )
+        .route(
+            "/social-media/",
+            axum::routing::any(spa::legacy_social_media_redirect_handler),
+        )
+        .route(
+            "/social-media/{*path}",
+            axum::routing::any(spa::legacy_social_media_redirect_handler),
+        )
+        .route(
+            "/social-media-admin",
+            axum::routing::any(spa::legacy_social_media_redirect_handler),
+        )
+        .route(
+            "/social-media-admin/",
+            axum::routing::any(spa::legacy_social_media_redirect_handler),
+        )
         .route(
             "/social-media-admin/{*path}",
-            get(spa::social_media_admin_assets_handler),
+            axum::routing::any(spa::legacy_social_media_redirect_handler),
         )
         .with_state(pool)
 }
@@ -1834,12 +1889,16 @@ pub fn build_v2_spa_pages_router(pool: PgPool) -> Router {
         )
         .route("/twitch/pricing", get(spa::main_domain_spa_shell_handler))
         .route(
-            "/twitch/analyse",
-            get(spa::legacy_analyse_root_redirect_handler),
+            "/analyse",
+            axum::routing::any(spa::legacy_analyse_root_redirect_handler),
         )
         .route(
-            "/twitch/analyse/{*path}",
-            get(spa::legacy_analyse_path_redirect_handler),
+            "/analyse/",
+            axum::routing::any(spa::legacy_analyse_path_redirect_handler),
+        )
+        .route(
+            "/analyse/{*path}",
+            axum::routing::any(spa::legacy_analyse_path_redirect_handler),
         )
         .route(
             "/twitch/dashboard-v2",
@@ -1983,7 +2042,9 @@ pub async fn analysis_writer_pool(config: &tb_config::DbConfig) -> Result<PgPool
     use std::str::FromStr;
     let options = sqlx::postgres::PgConnectOptions::from_str(&config.dsn)?;
     if !options.get_host().starts_with('/') || options.get_database() != Some("twitch_analytics") {
-        return Err(sqlx::Error::Configuration("Analyse-Schreibzugang benötigt den lokalen Peer-Socket und twitch_analytics".into()));
+        return Err(sqlx::Error::Configuration(
+            "Analyse-Schreibzugang benötigt den lokalen Peer-Socket und twitch_analytics".into(),
+        ));
     }
     sqlx::postgres::PgPoolOptions::new()
         .max_connections(2)
@@ -2082,7 +2143,14 @@ pub fn build_router_with_contest_writer(
     helix: Option<HelixClient>,
     brain_runtime: handlers::self_explainer::SelfExplainerBrainRuntime,
 ) -> Router {
-    build_router_with_analysis_writer(pool.clone(), contest_writer, pool, token, helix, brain_runtime)
+    build_router_with_analysis_writer(
+        pool.clone(),
+        contest_writer,
+        pool,
+        token,
+        helix,
+        brain_runtime,
+    )
 }
 
 /// Produktiver Einstieg mit getrennten Schreibrollen für Wettbewerb und Analyse.
@@ -2145,7 +2213,7 @@ pub fn build_router_with_analysis_writer(
         .merge(build_market_router(pool.clone(), token.clone()))
         .merge(build_raid_pages_router(pool.clone()))
         .merge(build_affiliate_portal_router())
-        .merge(build_social_media_admin_router(pool.clone()))
+        .merge(build_social_media_manager_router(pool.clone()))
         .merge(build_v2_spa_pages_router(pool.clone()))
         .merge(build_obs_ws_router(pool.clone(), token.clone()))
         .merge(build_platform_token_router(pool.clone(), token.clone()))

@@ -16,6 +16,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 
 use crate::approval::is_clip_approved_for;
+use crate::clip_prep_worker::{download_atomic, register_local_file, YtDlpDownloader};
 use crate::clip_queue::{
     get_upload_queue, reschedule_upload, update_upload_status,
     update_upload_status_with_visibility, wait_for_connection, UploadQueueItem, VertagungsKonto,
@@ -27,6 +28,10 @@ use crate::uploaders::tiktok::TikTokUploader;
 use crate::uploaders::youtube::{YouTubeRefreshCreds, YouTubeUploader, GOOGLE_TOKEN_URL};
 use crate::uploaders::{PlatformUploader, UploadError};
 use crate::video_processor::{VideoProcessor, VideoProcessorError};
+
+#[cfg(test)]
+#[path = "upload_download_tests.rs"]
+mod download_tests;
 
 const STALE_AFTER_SECS: i64 = 30 * 60;
 const INITIAL_DELAY_SECS: u64 = 10;
@@ -43,6 +48,8 @@ enum WorkerError {
     Upload(#[from] UploadError),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
 }
 
 /// Baut den passenden Uploader aus den Credentials (mirror `_build_uploader`).
@@ -117,7 +124,7 @@ fn max_duration_for(platform: &str) -> i64 {
     }
 }
 
-fn vertical_output_path(input_path: &str, platform: &str) -> String {
+pub(crate) fn vertical_output_path(input_path: &str, platform: &str) -> String {
     input_path.replace(".mp4", &format!("_{platform}_branded_v2.mp4"))
 }
 
@@ -489,41 +496,16 @@ impl UploadTask {
     }
 
     async fn download_clip(&self, clip_url: &str, clip_db_id: i64) -> Result<String, WorkerError> {
-        tokio::fs::create_dir_all(&self.clips_dir).await?;
         let output_path = format!("{}/{}.mp4", self.clips_dir, clip_db_id);
-        if Path::new(&output_path).exists() {
-            return Ok(output_path);
-        }
-        let output = tokio::process::Command::new(&self.yt_dlp_path)
-            .args(["-f", "best", "-o", &output_path, clip_url])
-            .output()
-            .await?;
-        if !output.status.success() {
-            return Err(WorkerError::Download(
-                String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            ));
-        }
-        if !Path::new(&output_path).exists() {
-            return Err(WorkerError::Download(format!(
-                "Downloaded file not found: {output_path}"
-            )));
-        }
-        if let Err(error) = sqlx::query!(
-            "UPDATE twitch_clips_social_media SET local_file_path = $1, downloaded_at = $2::text::timestamptz WHERE id = $3",
+        download_atomic(
+            &YtDlpDownloader::new(&self.yt_dlp_path),
+            clip_url,
             &output_path,
-            Utc::now().to_rfc3339(),
-            clip_db_id
         )
-            .execute(&self.pool)
-            .await
-        {
-            tracing::warn!(
-                %error,
-                clip_db_id,
-                path = %output_path,
-                "Upload-Worker: lokaler Clip-Pfad konnte nicht gespeichert werden"
-            );
-        }
+        .await
+        .map_err(WorkerError::Download)?;
+        register_local_file(&self.pool, clip_db_id, &output_path).await?;
+        tracing::info!(clip_db_id, path = %output_path, "Upload-Worker: atomic_clip_download_ready");
         Ok(output_path)
     }
 

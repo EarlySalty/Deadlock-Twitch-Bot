@@ -16,7 +16,7 @@
 use axum::{
     body::Body,
     extract::{Multipart, Path, Query, State},
-    http::{header, HeaderMap, StatusCode, Uri},
+    http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
     Json,
 };
@@ -94,6 +94,14 @@ pub use clip_contest_forward::submit_clip_contest_handler;
 mod tiktok_direct;
 pub use tiktok_direct::creator_info_handler as tiktok_creator_info_handler;
 
+#[path = "social_media_vod_archive.rs"]
+mod vod_archive_management;
+pub use vod_archive_management::{
+    action_handler as vod_archive_action_handler, list_handler as vod_archive_list_handler,
+};
+
+const MAX_PARAMETER_LAENGE: usize = 64;
+
 fn forbidden(message: &str) -> Response {
     (StatusCode::FORBIDDEN, message.to_string()).into_response()
 }
@@ -114,83 +122,6 @@ pub async fn terms_handler() -> Html<String> {
 /// `GET /social-media/privacy` — öffentlich.
 pub async fn privacy_handler() -> Html<String> {
     Html(render_privacy())
-}
-
-/// Twitch-Login-Redirect-Ziel der unauthentifizierten HTML-Index-Seite
-/// (B15-FIX-index-redirect / finding social_media-2).
-const SOCIAL_MEDIA_LOGIN_URL: &str = "/twitch/auth/login?next=%2Fsocial-media";
-
-/// `GET /social-media` — Dashboard-SPA (Auth erforderlich).
-///
-/// B15-FIX-index-redirect: Unauthentifiziert liefert die **HTML-Seite** keinen
-/// 401-JSON mehr, sondern einen 302-Redirect auf den Twitch-Login (Browser-UX,
-/// Python-Parität). Die JSON-Daten-Endpoints behalten ihr 401 (kein Redirect).
-pub async fn index_handler(auth: DashboardAuthLevel, uri: Uri) -> Response {
-    if matches!(auth, DashboardAuthLevel::None) {
-        return axum::response::Redirect::to(SOCIAL_MEDIA_LOGIN_URL).into_response();
-    }
-    // Die alte HTML-Seite ist abgeloest. Bestehende Links landen auf der SPA,
-    // statt ins Leere zu laufen.
-    //
-    // Der Query-String muss mit: `oauth_callback_handler` schickt den Browser
-    // auf `/social-media?oauth_success=youtube` beziehungsweise
-    // `?oauth_error=<code>` zurueck. Ohne Weitergabe verliert der Umweg genau
-    // die eine Information, wegen der er stattfindet, und ein gescheiterter
-    // Verbindungsversuch endet wortlos auf der Kontenseite.
-    match weitergereichte_query(&uri) {
-        Some(query) => {
-            axum::response::Redirect::to(&format!("/social-media-admin?{query}")).into_response()
-        }
-        None => axum::response::Redirect::to("/social-media-admin").into_response(),
-    }
-}
-
-/// Status und das bereits im OAuth-State validierte Kanalziel der Rückkehr.
-const WEITERGEREICHTE_PARAMETER: [&str; 3] = ["oauth_success", "oauth_error", "twitch_user_id"];
-
-/// Laengstens so lang darf ein weitergereichter Wert sein. Plattformnamen und
-/// Fehlerkuerzel bleiben weit darunter.
-const MAX_PARAMETER_LAENGE: usize = 64;
-
-/// Query-String, der an die SPA weitergereicht werden darf.
-///
-/// Erlaubnisliste statt Zeichenklassenfilter: der Wert landet in einem
-/// `Location`-Header, und dorthin gehoert nur, was wir selbst gesetzt haben.
-/// Frueher wanderte jeder beliebige, nutzerkontrollierte Query-String
-/// unveraendert mit; das war zwar nicht ausnutzbar, aber deutlich weiter
-/// gefasst als noetig.
-///
-/// Werte muessen die Form haben, die wir selbst erzeugen (Plattformname oder
-/// Fehlerkuerzel). Alles andere faellt weg, damit ohne Neukodierung nichts
-/// Fremdes in den Header kommt.
-fn weitergereichte_query(uri: &Uri) -> Option<String> {
-    let query = uri.query()?;
-    let erlaubt: Vec<String> = query
-        .split('&')
-        .filter_map(|paar| {
-            let (schluessel, wert) = paar.split_once('=')?;
-            if !WEITERGEREICHTE_PARAMETER.contains(&schluessel) {
-                return None;
-            }
-            if wert.is_empty() || wert.len() > MAX_PARAMETER_LAENGE {
-                return None;
-            }
-            if schluessel == "twitch_user_id" && !wert.bytes().all(|b| b.is_ascii_digit()) {
-                return None;
-            }
-            if !wert
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-            {
-                return None;
-            }
-            Some(format!("{schluessel}={wert}"))
-        })
-        .collect();
-    if erlaubt.is_empty() {
-        return None;
-    }
-    Some(erlaubt.join("&"))
 }
 
 /// `?streamer=` (für scope-gefilterte Endpoints).
@@ -1517,15 +1448,39 @@ pub async fn fetch_clips_handler(
     let result = service
         .fetch_for_broadcaster(&twitch_user_id, &streamer)
         .await;
-    let clips_found = result.clips_found.max(0);
     // Nach dem Fetch neu zaehlen: der Stand von vorhin ist bereits verbraucht,
     // und das Dashboard soll nicht die alte Zahl anzeigen.
     let kontingent = tb_analytics::stufe::clip_kontingent(&pool, kontingent.stufe, &streamer).await;
+    clip_fetch_response(result, kontingent.als_json())
+}
+
+#[cfg(test)]
+#[path = "social_media_fetch_tests.rs"]
+mod fetch_tests;
+
+fn clip_fetch_response(
+    result: tb_social_media::clip::model::StreamerFetchResult,
+    kontingent: Value,
+) -> Response {
+    let clips_found = result.clips_found.max(0);
+    if let Some(error) = result.error {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({
+                "success": false,
+                "error": error,
+                "clips_found": clips_found,
+                "message": "Die Twitch-Clips konnten nicht geladen werden. Bitte versuche es später erneut.",
+                "kontingent": kontingent,
+            })),
+        )
+            .into_response();
+    }
     Json(json!({
         "success": true,
         "clips_found": clips_found,
-        "message": format!("Fetched {clips_found} clips"),
-        "kontingent": kontingent.als_json(),
+        "message": format!("{clips_found} Clips gefunden"),
+        "kontingent": kontingent,
     }))
     .into_response()
 }
@@ -3717,7 +3672,7 @@ fn oauth_public_origin() -> String {
 
 /// Internes Dashboard-Redirect-Ziel (Python `_dashboard_url`).
 fn dashboard_url(key: &str, value: &str) -> String {
-    format!("/social-media?{key}={value}")
+    format!("/twitch/social-media?{key}={value}")
 }
 
 fn oauth_success_dashboard_url(platform: &str, twitch_user_id: Option<&str>) -> String {
@@ -4325,91 +4280,20 @@ mod tests {
         assert!(resolve_streamer_scope(&DashboardAuthLevel::None, None, false).is_err());
     }
 
-    #[tokio::test]
-    async fn index_unauth_redirectet_zum_login() {
-        // B15-FIX-index-redirect: None → 302/303-Redirect, kein 401-JSON.
-        let resp = index_handler(DashboardAuthLevel::None, "/social-media".parse().unwrap()).await;
-        assert!(
-            resp.status().is_redirection(),
-            "unauth HTML-Index muss redirecten, war {}",
-            resp.status()
-        );
-        assert_eq!(
-            resp.headers().get(axum::http::header::LOCATION).unwrap(),
-            SOCIAL_MEDIA_LOGIN_URL
-        );
-    }
-
-    /// Der OAuth-Umweg endet auf `/social-media?oauth_success=…`. Faellt der
-    /// Query-String bei der Weiterleitung auf die SPA weg, gibt es nach einem
-    /// Verbindungsversuch ueberhaupt keine Rueckmeldung mehr.
-    #[tokio::test]
-    async fn index_reicht_die_oauth_rueckmeldung_weiter() {
-        async fn ziel(pfad: &str) -> String {
-            let resp = index_handler(DashboardAuthLevel::admin(), pfad.parse().unwrap()).await;
-            resp.headers()
-                .get(axum::http::header::LOCATION)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or_default()
-                .to_string()
-        }
-
-        assert_eq!(
-            ziel("/social-media?oauth_success=youtube").await,
-            "/social-media-admin?oauth_success=youtube"
-        );
-        let return_url = oauth_success_dashboard_url("youtube", Some("42"));
-        assert_eq!(
-            ziel(&return_url).await,
-            "/social-media-admin?oauth_success=youtube&twitch_user_id=42"
-        );
+    #[test]
+    fn oauth_rueckmeldung_geht_direkt_zum_manager() {
         assert_eq!(
             oauth_success_dashboard_url("youtube", None),
-            "/social-media?oauth_success=youtube"
+            "/twitch/social-media?oauth_success=youtube"
+        );
+        assert_eq!(
+            oauth_success_dashboard_url("youtube", Some("42")),
+            "/twitch/social-media?oauth_success=youtube&twitch_user_id=42"
         );
         assert_eq!(
             oauth_success_dashboard_url("youtube", Some("42&next=foreign")),
-            "/social-media?oauth_success=youtube"
+            "/twitch/social-media?oauth_success=youtube"
         );
-        assert_eq!(
-            ziel("/social-media?oauth_error=token_exchange_failed").await,
-            "/social-media-admin?oauth_error=token_exchange_failed"
-        );
-        assert_eq!(ziel("/social-media").await, "/social-media-admin");
-        // Leerer Query-String haengt kein nacktes '?' an.
-        assert_eq!(ziel("/social-media?").await, "/social-media-admin");
-    }
-
-    #[test]
-    fn weitergereichte_query_nimmt_nur_die_erlaubnisliste() {
-        let q = |p: &str| weitergereichte_query(&p.parse::<Uri>().unwrap());
-        assert_eq!(
-            q("/x?oauth_success=youtube"),
-            Some("oauth_success=youtube".to_string())
-        );
-        assert_eq!(
-            q("/x?oauth_error=token_exchange_failed"),
-            Some("oauth_error=token_exchange_failed".to_string())
-        );
-        // Fremde Parameter fallen weg, auch neben einem erlaubten.
-        assert_eq!(
-            q("/x?next=%2Fboese&oauth_success=tiktok&a=1"),
-            Some("oauth_success=tiktok".to_string())
-        );
-        assert_eq!(q("/x?a=1&b=2"), None);
-        assert_eq!(
-            q("/x?oauth_success=youtube&twitch_user_id=42"),
-            Some("oauth_success=youtube&twitch_user_id=42".into())
-        );
-        assert_eq!(q("/x?twitch_user_id=nani"), None);
-        assert_eq!(q("/x?twitch_user_id=42%26next%3Devil"), None);
-        assert_eq!(q("/x"), None);
-        assert_eq!(q("/x?"), None);
-        // Werte ausserhalb der erwarteten Form fallen weg.
-        assert_eq!(q("/x?oauth_success=you%20tube"), None);
-        assert_eq!(q("/x?oauth_success="), None);
-        let lang = format!("/x?oauth_success={}", "b".repeat(600));
-        assert_eq!(q(&lang), None);
     }
 
     #[tokio::test]

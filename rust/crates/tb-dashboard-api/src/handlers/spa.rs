@@ -21,7 +21,7 @@
 
 use axum::{
     extract::{Path, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode, Uri},
+    http::{header, HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Redirect, Response},
 };
 use sqlx::PgPool;
@@ -31,7 +31,7 @@ use crate::auth::level::DashboardAuthLevel;
 
 // ── Konstanten ──────────────────────────────────────────────────────────────
 
-const LOGIN_URL: &str = "/twitch/auth/login?next=%2Fanalyse";
+const LOGIN_URL: &str = "/twitch/auth/login?next=%2Ftwitch%2Fanalyse";
 /// Vite baut das dashboard_v2-Bundle mit genau diesem Prefix; die
 /// Main-Domain-Shells duerfen ihn deshalb nicht umschreiben.
 const MAIN_DOMAIN_ASSET_PREFIX: &str = "/twitch/dashboard-v2/";
@@ -79,7 +79,7 @@ pub async fn analyse_handler(
 
 /// Liefert die dashboard_v2-SPA-Shell ohne Host- oder Auth-Gate.
 pub(crate) async fn serve_dashboard_v2_index() -> Response {
-    serve_dashboard_v2_index_with_asset_prefix("/analyse/").await
+    serve_dashboard_v2_index_with_asset_prefix("/twitch/analyse/").await
 }
 
 /// Liefert die dashboard_v2-SPA-Shell fuer die oeffentliche Main-Domain-Seite
@@ -299,30 +299,30 @@ pub async fn dashboard_v2_public_assets_handler(Path(asset_path): Path<String>) 
     serve_asset(asset_path.trim_start_matches('/')).await
 }
 
-/// `GET /twitch/analyse` — Legacy-Redirect auf `/analyse` (301, Query erhalten).
 pub async fn legacy_analyse_root_redirect_handler(uri: Uri) -> Response {
-    moved_permanently(with_query("/analyse".to_string(), &uri))
+    legacy_analyse_redirect_response("/twitch/analyse".to_string(), &uri)
 }
 
-/// `GET /twitch/analyse/{path:.*}` — Legacy-Redirect auf `/analyse/{path}`
-/// (301, Query erhalten).
-pub async fn legacy_analyse_path_redirect_handler(
-    Path(raw_path): Path<String>,
-    uri: Uri,
-) -> Response {
-    let normalized = raw_path.trim_start_matches('/');
-    let location = if normalized.is_empty() {
-        "/analyse".to_string()
-    } else {
-        format!("/analyse/{normalized}")
-    };
-    moved_permanently(with_query(location, &uri))
+pub async fn legacy_analyse_path_redirect_handler(uri: Uri) -> Response {
+    let suffix = uri.path().strip_prefix("/analyse").unwrap_or("");
+    legacy_analyse_redirect_response(format!("/twitch/analyse{suffix}"), &uri)
 }
 
-/// `GET /twitch/dashboard-v2` und weitere alte Main-Domain-Seiten — 301 auf
-/// `/analyse` (Query erhalten).
+fn legacy_analyse_redirect_response(location: String, uri: &Uri) -> Response {
+    let mut response = Redirect::permanent(&with_query(location, uri)).into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response.headers_mut().insert(
+        "clear-site-data",
+        axum::http::HeaderValue::from_static("\"cache\""),
+    );
+    response
+}
+
 pub async fn analyse_root_redirect_handler(uri: Uri) -> Response {
-    moved_permanently(with_query("/analyse".to_string(), &uri))
+    Redirect::permanent(&with_query("/twitch/analyse".to_string(), &uri)).into_response()
 }
 
 fn with_query(location: String, uri: &Uri) -> String {
@@ -332,83 +332,44 @@ fn with_query(location: String, uri: &Uri) -> String {
     }
 }
 
-fn moved_permanently(location: String) -> Response {
-    let value = match HeaderValue::from_str(&location) {
-        Ok(value) => value,
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid redirect target").into_response(),
-    };
-    let mut response = StatusCode::MOVED_PERMANENTLY.into_response();
-    response.headers_mut().insert(header::LOCATION, value);
-    response
-}
-
-// ── Social-Media-Admin-SPA (P2.66) ────────────────────────────────────────────
-
-/// `GET /social-media-admin` — dedizierte Social-Media-Admin-SPA-Shell.
-///
-/// Port von `api_overview.py:_serve_social_media_admin`. Nutzt dasselbe
-/// dashboard_v2-Bundle wie `/analyse`; der Client-Router rendert anhand des
-/// Pfads das Social-Media-Admin-Dashboard. Anders als `/analyse` wird der
-/// Asset-Prefix `/twitch/dashboard-v2/` NICHT umgeschrieben (Python-Parität:
-/// `_inject_dashboard_runtime_config(..., asset_prefix="/twitch/dashboard-v2/")`),
-/// die Assets liefert die `*path`-Route über den geteilten Dist.
-///
-/// Auth wie die Admin-SPA: Host-Gate VOR der Auth (admin-Host → 404), dann
-/// Login-Gate (None → Redirect, Partner → landing/analytics-Access, Admin/
-/// Localhost → frei).
-pub async fn social_media_admin_handler(
+pub async fn social_media_manager_handler(
     headers: HeaderMap,
+    uri: Uri,
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
 ) -> Response {
+    let subpath = uri
+        .path()
+        .strip_prefix("/twitch/social-media/")
+        .unwrap_or("");
+    if matches!(
+        subpath.split('/').next(),
+        Some("api" | "oauth" | "terms" | "privacy")
+    ) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     if let Some(r) = admin_dashboard_host_page_gate(&headers) {
         return r;
+    }
+    if matches!(auth, DashboardAuthLevel::None) {
+        return Redirect::to(&shell_login_url(&shell_next_target(&uri))).into_response();
     }
     if let Some(r) = check_spa_auth(&auth, &pool).await {
         return r;
     }
-
-    let index = dist_root().join("index.html");
-    let html = match tokio::fs::read_to_string(&index).await {
-        Ok(s) => s,
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                "Dashboard not built. Run npm run build in dashboard_v2/",
-            )
-                .into_response()
-        }
-    };
-    // Asset-Prefix bleibt /twitch/dashboard-v2/ (kein Rewrite); nur Runtime-
-    // Script injizieren.
-    let html = html.replacen("</head>", &format!("{RUNTIME_SCRIPT}\n  </head>"), 1);
-
-    (
-        [
-            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
-            (header::CACHE_CONTROL, "no-cache"),
-        ],
-        html,
-    )
-        .into_response()
+    if subpath.starts_with("assets/") {
+        return serve_asset(subpath).await;
+    }
+    serve_dashboard_v2_index_with_asset_prefix(MAIN_DOMAIN_ASSET_PREFIX).await
 }
 
-/// `GET /social-media-admin/{path:.*}` — statische Assets aus dem dashboard_v2-
-/// Dist (geteilt mit `/analyse`). Gleiche Auth- + Host-Gate-Kaskade wie die
-/// Shell. Python: `_serve_dashboard_v2_assets`.
-pub async fn social_media_admin_assets_handler(
-    headers: HeaderMap,
-    auth: DashboardAuthLevel,
-    State(pool): State<PgPool>,
-    Path(asset_path): Path<String>,
-) -> Response {
-    if let Some(r) = admin_dashboard_host_page_gate(&headers) {
-        return r;
-    }
-    if let Some(r) = check_spa_auth(&auth, &pool).await {
-        return r;
-    }
-    serve_asset(asset_path.trim_start_matches('/')).await
+pub async fn legacy_social_media_redirect_handler(uri: Uri) -> Response {
+    let suffix = uri
+        .path()
+        .strip_prefix("/social-media-admin")
+        .or_else(|| uri.path().strip_prefix("/social-media"))
+        .unwrap_or("");
+    Redirect::permanent(&with_query(format!("/twitch/social-media{suffix}"), &uri)).into_response()
 }
 
 // ── Auth-Prüfung ─────────────────────────────────────────────────────────────
@@ -423,17 +384,20 @@ async fn check_spa_auth(auth: &DashboardAuthLevel, pool: &PgPool) -> Option<Resp
             twitch_user_id,
             ..
         } => {
-            let access =
-                tb_analytics::partner_access::load_partner_access_state(pool, twitch_login, twitch_user_id)
-                    .await
-                    .unwrap_or_else(|e| {
-                        tracing::warn!("spa: Partner-Access-Fehler für {twitch_login}: {e}");
-                        tb_analytics::partner_access::AccessState {
-                            analytics_access_allowed: true,
-                            landing_access_allowed: true,
-                            ..Default::default()
-                        }
-                    });
+            let access = tb_analytics::partner_access::load_partner_access_state(
+                pool,
+                twitch_login,
+                twitch_user_id,
+            )
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("spa: Partner-Access-Fehler für {twitch_login}: {e}");
+                tb_analytics::partner_access::AccessState {
+                    analytics_access_allowed: true,
+                    landing_access_allowed: true,
+                    ..Default::default()
+                }
+            });
 
             if !access.landing_access_allowed {
                 return Some(
@@ -600,8 +564,8 @@ fn parse_url_hostname(candidate: &str) -> String {
 
 /// Dist-Wurzel des Dashboard-Builds (von `/analyse` und `/twitch/demo` geteilt).
 pub(crate) fn dist_root() -> PathBuf {
-    let base = std::env::var("DASHBOARD_V2_DIST_PATH")
-        .unwrap_or_else(|_| DEFAULT_DIST_PATH.to_string());
+    let base =
+        std::env::var("DASHBOARD_V2_DIST_PATH").unwrap_or_else(|_| DEFAULT_DIST_PATH.to_string());
     PathBuf::from(base)
 }
 
@@ -635,7 +599,8 @@ async fn serve_asset_from_root(dist: PathBuf, raw_path: &str) -> Response {
             (header::CACHE_CONTROL, cache_control_for_asset(raw_path)),
         ],
         data,
-    ).into_response()
+    )
+        .into_response()
 }
 
 fn cache_control_for_asset(raw_path: &str) -> &'static str {
@@ -680,6 +645,69 @@ mod tests {
 
     /// Die Hilfe-Fragmente tragen keinen Hash im Dateinamen, ein Deploy tauscht
     /// sie unter demselben Pfad aus.
+    #[tokio::test]
+    async fn social_media_alias_behaelt_unterpfad_und_query() {
+        for (pfad, ziel) in [
+            ("/social-media", "/twitch/social-media"),
+            ("/social-media/", "/twitch/social-media/"),
+            (
+                "/social-media/clips/a%2Fb?tab=konten",
+                "/twitch/social-media/clips/a%2Fb?tab=konten",
+            ),
+            ("/social-media-admin", "/twitch/social-media"),
+            ("/social-media-admin/", "/twitch/social-media/"),
+            ("/social-media-admin/xyz", "/twitch/social-media/xyz"),
+            (
+                "/social-media-admin/clips/a%2Fb?tab=konten&oauth_success=youtube",
+                "/twitch/social-media/clips/a%2Fb?tab=konten&oauth_success=youtube",
+            ),
+        ] {
+            let response = legacy_social_media_redirect_handler(pfad.parse().unwrap()).await;
+            assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
+            assert_eq!(response.headers()[header::LOCATION], ziel);
+        }
+    }
+
+    #[tokio::test]
+    async fn manager_login_behaelt_rueckkehrziel_und_reservierte_pfade_bleiben_frei() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/none")
+            .unwrap();
+        for pfad in [
+            "/twitch/social-media",
+            "/twitch/social-media/clips?oauth_success=youtube&twitch_user_id=42",
+        ] {
+            let response = social_media_manager_handler(
+                HeaderMap::new(),
+                pfad.parse().unwrap(),
+                DashboardAuthLevel::None,
+                State(pool.clone()),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::SEE_OTHER);
+            assert_eq!(response.headers()[header::LOCATION], shell_login_url(pfad));
+            assert_eq!(
+                crate::auth::oauth_login::sanitize_next_path(Some(pfad)),
+                pfad
+            );
+        }
+        for pfad in [
+            "/twitch/social-media/api/unbekannt",
+            "/twitch/social-media/oauth/unbekannt",
+            "/twitch/social-media/terms/unbekannt",
+            "/twitch/social-media/privacy/unbekannt",
+        ] {
+            let response = social_media_manager_handler(
+                HeaderMap::new(),
+                pfad.parse().unwrap(),
+                DashboardAuthLevel::None,
+                State(pool.clone()),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
+    }
+
     #[test]
     fn hilfe_fragmente_werden_nicht_gecacht() {
         assert_eq!(cache_control_for_asset("uplink/obs.html"), "no-cache");
@@ -687,7 +715,10 @@ mod tests {
             cache_control_for_asset("assets/index-a1b2c3.js"),
             "public, max-age=31536000, immutable"
         );
-        assert_eq!(cache_control_for_asset("favicon.ico"), "public, max-age=3600");
+        assert_eq!(
+            cache_control_for_asset("favicon.ico"),
+            "public, max-age=3600"
+        );
     }
 
     #[test]
@@ -757,7 +788,10 @@ mod tests {
     fn nicht_admin_host_abgelehnt() {
         // Regulärer Nutzer-Host → kein Admin-Host.
         let mut user = HeaderMap::new();
-        user.insert(header::HOST, "deutsche-deadlock-community.de".parse().unwrap());
+        user.insert(
+            header::HOST,
+            "deutsche-deadlock-community.de".parse().unwrap(),
+        );
         assert!(!is_admin_dashboard_host_request(&user));
 
         // Localhost → kein Admin-Host.
@@ -784,27 +818,39 @@ mod tests {
 
         // Nutzer-Host → kein Gate, Request läuft weiter.
         let mut user = HeaderMap::new();
-        user.insert(header::HOST, "deutsche-deadlock-community.de".parse().unwrap());
+        user.insert(
+            header::HOST,
+            "deutsche-deadlock-community.de".parse().unwrap(),
+        );
         assert!(admin_dashboard_host_page_gate(&user).is_none());
     }
 
     #[tokio::test]
     async fn asset_handler_setzt_cache_header() {
-        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let root = std::env::temp_dir().join(format!("tb_spa_asset_test_{unique}"));
         let assets = root.join("assets");
         tokio::fs::create_dir_all(&assets).await.unwrap();
-        tokio::fs::write(assets.join("index-abc123.js"), b"console.log('ok');").await.unwrap();
+        tokio::fs::write(assets.join("index-abc123.js"), b"console.log('ok');")
+            .await
+            .unwrap();
 
         let resp = serve_asset_from_root(root.clone(), "assets/index-abc123.js").await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
             resp.headers().get(header::CACHE_CONTROL),
-            Some(&HeaderValue::from_static("public, max-age=31536000, immutable"))
+            Some(&HeaderValue::from_static(
+                "public, max-age=31536000, immutable"
+            ))
         );
         assert_eq!(
             resp.headers().get(header::CONTENT_TYPE),
-            Some(&HeaderValue::from_static("application/javascript; charset=utf-8"))
+            Some(&HeaderValue::from_static(
+                "application/javascript; charset=utf-8"
+            ))
         );
         let body = body::to_bytes(resp.into_body(), 1024).await.unwrap();
         assert_eq!(&body[..], b"console.log('ok');");

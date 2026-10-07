@@ -17,16 +17,12 @@ import { dashboardRuntimeConfig, resolveEffectiveDemoMode } from '@/runtimeConfi
 import { ZUGRIFF_LABELS } from '@/components/socialmedia/labels';
 import { resolveSocialMediaChannel } from '@/utils/socialMediaChannel';
 
-/**
- * Eigenständiges Social-Media-Admin-Dashboard.
- *
- * Bewusst nicht im Analyse-Dashboard: Social Media ist ein eigener Bereich
- * (Clip-Pipeline, Layout-Editor, Auto-Aufbereitung, Discord-Approval) und hat
- * mit den Streamer-Analytics keine Überschneidung. Wird unter `/social-media-admin`
- * gemountet, ist Admin-only und liefert dieselbe React-Bundle-Auslieferung.
- */
-export function SocialMediaAdminDashboard() {
+export function SocialMediaManager() {
   const t = useT();
+  useEffect(() => {
+    document.title = 'Social-Media-Manager';
+  }, []);
+
   const [streamerUserId, setStreamerUserId] = useState('');
   const requestedChannel = useRef(new URLSearchParams(window.location.search));
   const hasAutoSetStreamer = useRef(false);
@@ -36,7 +32,6 @@ export function SocialMediaAdminDashboard() {
   const selectedChannel = resolveSocialMediaChannel(streamers, streamerUserId);
   const streamer = selectedChannel?.login.toLowerCase() ?? '';
 
-  // Was diese Session darf: Admin sieht alles, Partner nur nach Freigabe.
   const { data: access, isLoading: loadingAccess } = useQuery({
     queryKey: ['social-media-access', authStatus?.twitchUserId],
     queryFn: fetchMyAccess,
@@ -112,12 +107,13 @@ export function SocialMediaAdminDashboard() {
   return (
     <div className="space-y-6">
       <DashboardHeader
-        title={t('Social Media')}
+        title={t('Social-Media-Manager')}
         icon={<Clapperboard className="w-6 h-6 text-primary" />}
         isLoading={loadingStreamers}
         description={t('Fokus: {focus}', { focus: isAdminView ? streamer || t('Streamer wählen') : access?.streamer || authStatus?.twitchLogin || t('Dein Kanal') })}
       >
         {isAdminView && <div className="flex flex-wrap items-center gap-3">
+            <a href="/twitch/social-media?view=archiv" className="studio-button">{t('VOD-Archiv')}</a>
             {isAdminView && streamer && (
               <button
                 type="button"
@@ -128,7 +124,7 @@ export function SocialMediaAdminDashboard() {
                 title={
                   selectedGranted
                     ? t('Freigabe für diesen Streamer entziehen')
-                    : t('Diesen Streamer für das eigene Social-Media-Dashboard freischalten')
+                    : t('Diesen Streamer für den eigenen Social-Media-Manager freischalten')
                 }
                 className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
                   selectedGranted

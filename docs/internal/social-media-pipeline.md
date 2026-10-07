@@ -85,7 +85,7 @@ Der Modus steht in `social_media_streamer_settings.approval_mode`:
 - `manual`: jeder Clip braucht eine ausdrueckliche Freigabe (Default)
 - `veto_window`: Clip wird eingeplant und geht raus, wenn bis zum Termin niemand
   widerspricht. Der Widerspruch laeuft ueber
-  `POST /social-media/api/approval/:clip_db_id/cancel`: die Route raeumt die noch
+  `POST /twitch/social-media/api/approval/:clip_db_id/cancel`: die Route raeumt die noch
   nicht angefassten Queue-Zeilen ab und setzt den Clip zurueck auf
   `awaiting_approval`. Zeilen, die schon in `processing` oder `completed` stehen,
   bleiben unangetastet und werden in der Antwort als `already_running` gemeldet,

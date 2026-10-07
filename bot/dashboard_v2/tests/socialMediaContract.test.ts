@@ -71,7 +71,7 @@ const OBERFLAECHE = [
   'src/components/socialmedia/PostingPlanDraft.tsx',
   'src/components/socialmedia/WorkspaceDialog.tsx',
   'src/components/socialmedia/TikTokPostDialog.tsx',
-  'src/pages/SocialMediaAdmin.tsx',
+  'src/pages/SocialMediaManager.tsx',
   'src/components/socialmedia/AnalyticsTab.tsx',
   'src/components/socialmedia/EnrichmentPanel.tsx',
   'src/components/socialmedia/LayoutEditor.tsx',
@@ -235,8 +235,8 @@ function gebautePfade(): string[] {
   const rumpf = quelle.replace(konstantenMuster, '');
 
   const roh = new Set<string>();
-  // Sowohl '/social-media/...' als auch `${ADMIN_PREFIX}/...`.
-  const pfadMuster = /['"`](\/social-media[^'"`]*)['"`]|`\$\{([A-Z_]+)\}([^`]*)`/g;
+  // Sowohl '/twitch/social-media/...' als auch `${ADMIN_PREFIX}/...`.
+  const pfadMuster = /['"`](\/twitch\/social-media[^'"`]*)['"`]|`\$\{([A-Z_]+)\}([^`]*)`/g;
   let m: RegExpExecArray | null;
   while ((m = pfadMuster.exec(rumpf))) {
     if (m[1]) roh.add(m[1]);
@@ -256,18 +256,19 @@ function gebautePfade(): string[] {
       .replace(/\$\{[^}]*\}/g, ':p');
     const fragezeichen = pfad.indexOf('?');
     if (fragezeichen >= 0) pfad = pfad.slice(0, fragezeichen);
-    if (pfad.startsWith('/social-media')) pfade.add(normalisiere(pfad));
+    if (pfad.startsWith('/twitch/social-media')) pfade.add(normalisiere(pfad));
   }
   return [...pfade].sort();
 }
 
-/** Alle `/social-media`-Routen aus der Axum-Registrierung. Nur lesen. */
+/** Alle `/twitch/social-media`-Routen aus der Axum-Registrierung. Nur lesen. */
 function registrierteRouten(): string[] {
   const quelle = fs.readFileSync(RUST_ROUTEN, 'utf8');
   const routen = new Set<string>();
+  assert.match(quelle, /\.nest\("\/twitch", social_routes\.clone\(\)\)/);
   const muster = /\.route\(\s*"(\/social-media[^"]*)"/g;
   let m: RegExpExecArray | null;
-  while ((m = muster.exec(quelle))) routen.add(normalisiere(m[1]));
+  while ((m = muster.exec(quelle))) routen.add(normalisiere(`/twitch${m[1]}`));
   return [...routen].sort();
 }
 
@@ -276,16 +277,16 @@ function registrierteRouten(): string[] {
  * Das sind durchweg Vorgaenger des Admin-Pfades aus der Python-Zeit.
  */
 const BEWUSST_OHNE_UI = new Set([
-  '/social-media/api/stats',
-  '/social-media/api/clips',
-  '/social-media/api/last-hashtags',
-  '/social-media/api/analytics',
-  '/social-media/api/upload',
-  '/social-media/api/mark-uploaded',
-  '/social-media/api/batch-upload',
-  '/social-media/api/templates/global',
-  '/social-media/api/templates/streamer',
-  '/social-media/api/templates/apply',
+  '/twitch/social-media/api/stats',
+  '/twitch/social-media/api/clips',
+  '/twitch/social-media/api/last-hashtags',
+  '/twitch/social-media/api/analytics',
+  '/twitch/social-media/api/upload',
+  '/twitch/social-media/api/mark-uploaded',
+  '/twitch/social-media/api/batch-upload',
+  '/twitch/social-media/api/templates/global',
+  '/twitch/social-media/api/templates/streamer',
+  '/twitch/social-media/api/templates/apply',
 ]);
 
 test('jede gebaute URL gibt es als Route', () => {
@@ -296,10 +297,10 @@ test('jede gebaute URL gibt es als Route', () => {
   assert.deepEqual(ohneRoute, [], `URL ohne Route im Backend:\n${ohneRoute.join('\n')}`);
 });
 
-test('jede /social-media/api-Route hat einen Aufrufer oder einen Grund', () => {
+test('jede /twitch/social-media/api-Route hat einen Aufrufer oder einen Grund', () => {
   const gebaut = new Set(gebautePfade());
   const verwaist = registrierteRouten()
-    .filter((route) => route.startsWith('/social-media/api/'))
+    .filter((route) => route.startsWith('/twitch/social-media/api/'))
     .filter((route) => !gebaut.has(route) && !BEWUSST_OHNE_UI.has(route));
   assert.deepEqual(
     verwaist,
@@ -572,7 +573,7 @@ test('ein Code ohne Meldung landet nicht als Platzhalterinhalt im Satz', () => {
 });
 
 test('Admin-Upload hält die ausgewählte Twitch-ID statt des veränderlichen Namens fest', () => {
-  const admin = lies('src/pages/SocialMediaAdmin.tsx');
+  const admin = lies('src/pages/SocialMediaManager.tsx');
   const studio = lies('src/pages/SocialMedia.tsx');
   const api = lies('src/api/socialMedia.ts');
   assert.match(admin, /value=\{selectedChannel\?\.twitchUserId \?\? ''\}/);
@@ -595,4 +596,41 @@ test('Kanalwahl hält URL, sichtbaren Kanal und Uploadziel gemeinsam an derselbe
   const renamed = [{ login: 'old_alpha', twitchUserId: '11' }, { login: 'alpha', twitchUserId: '22' }];
   assert.deepEqual(resolveSocialMediaChannel(renamed, '11'), renamed[0]);
   assert.equal(resolveSocialMediaChannel(renamed, '11', 'alpha'), undefined);
+});
+
+test('VOD-Archiv kehrt nach Ausblenden, Bestandsänderung und Kanalwechsel auf eine gültige Seite zurück', () => {
+  const source = lies('src/components/socialmedia/VodArchiveTab.tsx');
+  const start = source.indexOf('  useEffect(() => {');
+  const end = source.indexOf('  const settings = useQuery({', start);
+  assert.ok(start >= 0 && end > start);
+  const register = new Function('useEffect', 'setPage', 'list', 'scope', source.slice(start, end));
+  for (const [total, current, expected] of [[51, 2, 2], [50, 2, 1], [0, 2, 1], [149, 8, 3], [150, 1, 1]]) {
+    let page = current;
+    const data = { total };
+    const effects: Array<{ callback: () => void; dependencies: unknown[] }> = [];
+    register(
+      (callback: () => void, dependencies: unknown[]) => effects.push({ callback, dependencies }),
+      (update: number | ((current: number) => number)) => { page = typeof update === 'function' ? update(page) : update; },
+      { data }, '42',
+    );
+    assert.equal(effects.length, 2);
+    assert.deepEqual(effects[0].dependencies, ['42']);
+    assert.deepEqual(effects[1].dependencies, [data]);
+    effects[1].callback();
+    assert.equal(page, expected, `Gesamtzahl ${total}, vorher Seite ${current}`);
+    page = 2;
+    effects[0].callback();
+    assert.equal(page, 1, 'Ein anderer Kanal beginnt auf Seite 1.');
+  }
+  const emptyEffects: Array<() => void> = [];
+  register((callback: () => void) => emptyEffects.push(callback), () => assert.fail('Ohne Daten bleibt die Seite erhalten.'), {}, '99');
+  emptyEffects[1]();
+  assert.match(source, /invalidateQueries\(\{ queryKey: \['vod-archive'\] \}\)/);
+  const condition = source.match(/\{(list\.data && \(page > 1 \|\| list\.data\.total > 50\)) && <div/);
+  assert.ok(condition);
+  const navigation = new Function('list', 'page', `return Boolean(${condition[1]});`);
+  assert.equal(navigation({ data: { total: 50 } }, 2), true);
+  assert.equal(navigation({ data: { total: 0 } }, 2), true);
+  assert.equal(navigation({ data: { total: 50 } }, 1), false);
+  assert.equal(navigation({ data: { total: 51 } }, 1), true);
 });

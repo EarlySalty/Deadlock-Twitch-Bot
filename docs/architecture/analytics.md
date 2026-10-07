@@ -97,13 +97,13 @@ Baut den strukturierten Post-Stream-Report (Kennzahlen + Vergleich), den `api_po
 ## 6. Datenbank & externe Schnittstellen
 
 - **DB (lesend, vieles):** Sessions/Stats/Viewer-Presence/Chat-Messages/Subs/Ads/Raids + `exp_*` — Spalten in [DATABASE.md](../DATABASE.md).
-- **HTTP:** `/twitch/api/v2/*` (Liste in [../API.md](../API.md)) + SPA-Serving (`/analyse`, `/twitch/dashboard`, Demo).
+- **HTTP:** `/twitch/api/v2/*` (Liste in [../API.md](../API.md)) + SPA-Serving (`/twitch/analyse`, `/twitch/dashboard`, Demo).
 - **Extern:** Twitch-Helix (Sammeln), MiniMax (Post-Stream/AI).
 
 ## 7. Stolperfallen / Besonderheiten
 
 - **Zwei Laufzeiten, ein Modul:** `mixin.py` läuft in der BotRuntime (schreibt), die API-Mixins in der DashboardRuntime (lesen). Wer „warum kommen keine Daten an?“ debuggt, muss wissen, **welche** Seite betroffen ist.
-- **`api_overview` serviert auch die Frontends:** Static-Asset-Serving + Auth-/Host-Gates liegen hier, nicht in `dashboard/`. Ein 404 auf `/analyse`-Assets ist oft ein Overview-Mixin-Thema.
+- **`api_overview` serviert auch die Frontends:** Static-Asset-Serving + Auth-/Host-Gates liegen hier, nicht in `dashboard/`. Ein 404 auf `/twitch/analyse`-Assets ist oft ein Overview-Mixin-Thema.
 - **Coaching ≠ KI:** `coaching_engine` rechnet deterministisch (Korrelationen, Heuristiken). Nur `api_post_stream`/`api_ai` rufen MiniMax. Nicht verwechseln, wenn „die KI sagt …“ debuggt wird.
 - **Demo-Daten dürfen nie mit echten gemischt werden:** `demo_data.py` ist eine eigene Antwortquelle fürs öffentliche Demo — Änderungen an den v2-Antwortformen müssen hier nachgezogen werden, sonst bricht das Demo.
 - **Internal-Home ist gecacht:** Die KPIs der Startseite werden zwischengespeichert (Stunden-Cache); der Live-Status wird separat/öfter abgefragt. Beim Ändern beide Pfade bedenken.

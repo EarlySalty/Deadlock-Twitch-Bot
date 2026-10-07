@@ -129,8 +129,8 @@ engagement-aktive Partner. Der Lernmodus braucht das Gegenteil.
 | `ENGAGEMENT_LEARN_RETENTION_HOURS` | 168 | Aufbewahrung des Zeitstrahls |
 | `ENGAGEMENT_PERSONA_MODE` | `veteran` | `rookie` schaltet auf die Neuling-Persona |
 
-**Transkription läuft lokal, und zwar per Default.** `ops/stt-server/stt_server.py`
-hält ein `large-v3-turbo`-Modell im Speicher und spricht dieselbe Schnittstelle
+**Transkription läuft lokal, und zwar per Default.** Das Rust-Binary `tb-stt-server`
+lädt das konfigurierte Whisper-Modell und spricht dieselbe Schnittstelle
 wie OpenAI; der eingebaute Endpunkt zeigt auf ihn. Es geht also kein
 Stream-Audio an einen Fremdanbieter, auch nicht versehentlich, nur weil ein
 `OPENAI_API_KEY` in der Umgebung steht. Wer OpenAI trotzdem will, setzt

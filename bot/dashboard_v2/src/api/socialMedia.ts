@@ -21,8 +21,39 @@ import type {
   VodArchiveSettings,
 } from '@/types/socialMedia';
 
-const ADMIN_PREFIX = '/social-media/api/admin';
-const UPLOAD_PATH = '/social-media/api/clips/upload';
+const ADMIN_PREFIX = '/twitch/social-media/api/admin';
+const UPLOAD_PATH = '/twitch/social-media/api/clips/upload';
+
+export interface ArchivedVod {
+  id: number;
+  twitch_id: string;
+  channel: string;
+  twitch_user_id: string | null;
+  title: string;
+  duration_sec: number;
+  recorded_at: string | null;
+  discovered_at: string;
+  status: string;
+  status_label: string;
+  reason: string | null;
+  drive_url: string | null;
+  drive_requested: boolean;
+  last_attempt_at: string | null;
+  parts: { index: number; status: string; youtube_video_id: string | null }[];
+  needs_connection: boolean;
+}
+
+export async function fetchArchivedVods(twitchUserId: string | undefined, page = 1): Promise<{ items: ArchivedVod[]; total: number }> {
+  const qs = buildQuery({ twitch_user_id: twitchUserId, page });
+  return fetchJson(`/twitch/social-media/api/vod-archive${qs}`);
+}
+
+export async function archiveAction(id: number, action: 'retry' | 'drive' | 'hide', twitchUserId?: string): Promise<void> {
+  await fetchJson('/twitch/social-media/api/vod-archive', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, action, twitch_user_id: twitchUserId }),
+  });
+}
 
 /**
  * Fehler mit stabilem Code. Der Code kommt aus dem Backend (`error`-Feld) und
@@ -95,11 +126,11 @@ export interface PartnerAccessEntry {
 }
 
 export async function fetchMyAccess(): Promise<SocialMediaAccess> {
-  return fetchJson<SocialMediaAccess>('/social-media/api/access/me');
+  return fetchJson<SocialMediaAccess>('/twitch/social-media/api/access/me');
 }
 
 export async function fetchPartnerAccessList(): Promise<PartnerAccessEntry[]> {
-  const data = await fetchJson<{ items: PartnerAccessEntry[] }>('/social-media/api/access');
+  const data = await fetchJson<{ items: PartnerAccessEntry[] }>('/twitch/social-media/api/access');
   return data.items ?? [];
 }
 
@@ -107,7 +138,7 @@ export async function setPartnerAccess(
   twitchUserId: string,
   granted: boolean,
 ): Promise<void> {
-  await fetchJson('/social-media/api/access', {
+  await fetchJson('/twitch/social-media/api/access', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ twitch_user_id: twitchUserId, granted }),
@@ -341,7 +372,7 @@ export interface TikTokPostingContext {
 }
 
 export function fetchTikTokCreatorInfo(clipDbId: number): Promise<TikTokPostingContext> {
-  return fetchJson(`/social-media/api/clips/${clipDbId}/tiktok/creator-info`, { cache: 'no-store' });
+  return fetchJson(`/twitch/social-media/api/clips/${clipDbId}/tiktok/creator-info`, { cache: 'no-store' });
 }
 
 export async function decideClipApproval(input: {
@@ -375,12 +406,12 @@ export async function cancelScheduledPost(
   clipDbId: number,
 ): Promise<{ cancelled: number; already_running: number }> {
   return fetchJson<{ cancelled: number; already_running: number }>(
-    `/social-media/api/approval/${clipDbId}/cancel`,
+    `/twitch/social-media/api/approval/${clipDbId}/cancel`,
     { method: 'POST' },
   );
 }
 
-/** Antwort von `POST /social-media/api/clips/{id}/clip-contest`. */
+/** Antwort von `POST /twitch/social-media/api/clips/{id}/clip-contest`. */
 export interface ClipContestResult {
   /** `accepted`, `already_in`, `rejected`, `rate_limited`, `broker_unavailable` … */
   status: string;
@@ -399,7 +430,7 @@ export async function submitClipToContest(clipDbId: number): Promise<ClipContest
   const auth = await fetchAuthStatus();
   const csrf = auth.csrfToken ?? auth.csrf_token;
   const response = await fetch(
-    `/social-media/api/clips/${clipDbId}/clip-contest`,
+    `/twitch/social-media/api/clips/${clipDbId}/clip-contest`,
     withCookieCredentials({
       method: 'POST',
       headers: csrf ? { 'X-CSRF-Token': csrf } : {},
@@ -428,7 +459,7 @@ export async function fetchTwitchClips(
   limit = 20,
 ): Promise<{ success: boolean; clips_found: number; message?: string }> {
   return fetchJson<{ success: boolean; clips_found: number; message?: string }>(
-    '/social-media/api/fetch-clips',
+    '/twitch/social-media/api/fetch-clips',
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -622,12 +653,12 @@ export async function fetchPlatformStatus(
   twitchUserId: string | undefined,
 ): Promise<{ platforms: PlatformStatus[] }> {
   const qs = buildQuery({ twitch_user_id: twitchUserId });
-  return fetchJson<{ platforms: PlatformStatus[] }>(`/social-media/api/platforms/status${qs}`);
+  return fetchJson<{ platforms: PlatformStatus[] }>(`/twitch/social-media/api/platforms/status${qs}`);
 }
 
 export function oauthStartUrl(platform: string, twitchUserId: string | undefined): string {
   const qs = buildQuery({ twitch_user_id: twitchUserId });
-  return `/social-media/oauth/start/${platform}${qs}`;
+  return `/twitch/social-media/oauth/start/${platform}${qs}`;
 }
 
 /**
@@ -636,5 +667,5 @@ export function oauthStartUrl(platform: string, twitchUserId: string | undefined
  */
 export async function disconnectPlatform(platform: string, twitchUserId: string | undefined): Promise<{ success: boolean; revocation_pending: boolean }> {
   const qs = buildQuery({ twitch_user_id: twitchUserId });
-  return fetchJson(`/social-media/oauth/disconnect/${platform}${qs}`, { method: 'POST' });
+  return fetchJson(`/twitch/social-media/oauth/disconnect/${platform}${qs}`, { method: 'POST' });
 }

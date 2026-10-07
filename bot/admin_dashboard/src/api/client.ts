@@ -1362,7 +1362,7 @@ export async function fetchPartnerAccess(): Promise<PartnerAccessEntry[]> {
 
 /** Freigabe für einen Streamer setzen oder entziehen (`PUT`, admin-only). */
 export async function setPartnerAccess(
-  login: string,
+  twitchUserId: string,
   granted: boolean,
 ): Promise<AdminActionResult> {
   try {
@@ -1373,7 +1373,7 @@ export async function setPartnerAccess(
         'Content-Type': 'application/json',
         'X-CSRF-Token': csrfToken,
       },
-      body: JSON.stringify({ streamer_login: login, granted }),
+      body: JSON.stringify({ twitch_user_id: twitchUserId, granted }),
     });
     return {
       ok: true,
