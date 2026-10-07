@@ -78,7 +78,7 @@ pub async fn download_atomic(
             .await
             .map_err(|e| e.to_string())?;
     }
-    let tmp = format!("{dest_path}.dl-{}.part", tb_crypto::random_hex_token(8));
+    let tmp = format!("{dest_path}.dl-{}.tmp.mp4", tb_crypto::random_hex_token(8));
     if let Err(error) = downloader.download(clip_url, Path::new(&tmp)).await {
         let _ = tokio::fs::remove_file(&tmp).await;
         return Err(error);
