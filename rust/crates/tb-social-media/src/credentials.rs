@@ -96,6 +96,8 @@ impl CredentialManager {
     ) -> Option<SocialMediaCredentials> {
         self.get_credentials_scoped(platform, twitch_user_id, true)
             .await
+            .ok()
+            .flatten()
     }
 
     pub async fn get_channel_credentials_for_id(
@@ -105,6 +107,8 @@ impl CredentialManager {
     ) -> Option<SocialMediaCredentials> {
         self.get_credentials_scoped(platform, Some(twitch_user_id), false)
             .await
+            .ok()
+            .flatten()
     }
 
     async fn get_credentials_scoped(
@@ -112,13 +116,13 @@ impl CredentialManager {
         platform: &str,
         twitch_user_id: Option<&str>,
         include_global: bool,
-    ) -> Option<SocialMediaCredentials> {
+    ) -> Result<Option<SocialMediaCredentials>, sqlx::Error> {
         if twitch_user_id
             .is_some_and(|id| id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_digit()))
         {
-            return None;
+            return Ok(None);
         }
-        let row = sqlx::query_as::<_, CredentialRow>(
+        let Some(row) = sqlx::query_as::<_, CredentialRow>(
             "SELECT id, platform, streamer_login, access_token_enc, refresh_token_enc, client_id, client_secret_enc, token_expires_at, scopes, platform_user_id, platform_username, enc_version
              FROM social_media_platform_auth
              WHERE platform = $1 AND enabled = 1 AND (
@@ -127,7 +131,9 @@ impl CredentialManager {
              ORDER BY CASE WHEN twitch_user_id = $2 THEN 1 ELSE 0 END DESC, authorized_at DESC, id DESC LIMIT 1",
         )
         .bind(platform).bind(twitch_user_id).bind(include_global)
-        .fetch_optional(&self.pool).await.ok().flatten()?;
+        .fetch_optional(&self.pool).await? else {
+            return Ok(None);
+        };
 
         let id = row.id;
         let row_platform = row.platform;
@@ -149,7 +155,7 @@ impl CredentialManager {
                     streamer = %sanitize(streamer_ref.unwrap_or("<none>")),
                     "Decrypt des Auth-Records fehlgeschlagen"
                 );
-                return None;
+                return Ok(None);
             }
         };
         let refresh_token = refresh_enc.and_then(|b| {
@@ -169,7 +175,7 @@ impl CredentialManager {
                 .ok()
         });
 
-        Some(SocialMediaCredentials {
+        Ok(Some(SocialMediaCredentials {
             id,
             platform: row_platform,
             streamer_login: row_streamer,
@@ -181,7 +187,7 @@ impl CredentialManager {
             scopes: row.scopes,
             platform_user_id: row.platform_user_id,
             platform_username: row.platform_username,
-        })
+        }))
     }
 
     /// Verbindungs-Status aller drei Plattformen (Python
@@ -189,7 +195,7 @@ impl CredentialManager {
     pub async fn get_all_platforms_status(
         &self,
         twitch_user_id: Option<&str>,
-    ) -> Vec<PlatformStatus> {
+    ) -> Result<Vec<PlatformStatus>, sqlx::Error> {
         self.get_all_platforms_status_at(twitch_user_id, now_ts())
             .await
     }
@@ -198,21 +204,18 @@ impl CredentialManager {
         &self,
         twitch_user_id: Option<&str>,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> Vec<PlatformStatus> {
+    ) -> Result<Vec<PlatformStatus>, sqlx::Error> {
         let mut out = Vec::with_capacity(PLATFORMS.len());
         for platform in PLATFORMS {
-            let connection = if let Some(creds) =
-                self.get_credentials_for_id(platform, twitch_user_id).await
+            let connection = if let Some(creds) = self
+                .get_credentials_scoped(platform, twitch_user_id, true)
+                .await?
             {
                 match sqlx::query_as::<_, (Option<chrono::DateTime<chrono::Utc>>, bool)>(
                     "SELECT refresh_expires_at, needs_reauth FROM social_media_platform_auth WHERE id = $1 AND enabled = 1",
-                ).bind(creds.id).fetch_optional(&self.pool).await {
-                    Ok(Some(metadata)) => Some((creds, metadata)),
-                    Ok(None) => None,
-                    Err(error) => {
-                        tracing::error!(%error, "Social connection status failed");
-                        None
-                    }
+                ).bind(creds.id).fetch_optional(&self.pool).await? {
+                    Some(metadata) => Some((creds, metadata)),
+                    None => None,
                 }
             } else {
                 None
@@ -268,7 +271,7 @@ impl CredentialManager {
             };
             out.push(status);
         }
-        out
+        Ok(out)
     }
 
     /// True, wenn der Token abgelaufen ist oder binnen 1h abläuft.
@@ -507,7 +510,10 @@ mod tests {
         sqlx::query("UPDATE social_media_platform_auth SET refresh_expires_at = $1 WHERE platform = 'tiktok'")
             .bind(now + Duration::days(6)).execute(&pool).await.unwrap();
         let manager = CredentialManager::new(pool.clone(), cipher);
-        let statuses = manager.get_all_platforms_status_at(None, now).await;
+        let statuses = manager
+            .get_all_platforms_status_at(None, now)
+            .await
+            .unwrap();
         let youtube = statuses
             .iter()
             .find(|status| status.platform == "youtube")
@@ -531,7 +537,10 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let statuses = manager.get_all_platforms_status_at(None, now).await;
+        let statuses = manager
+            .get_all_platforms_status_at(None, now)
+            .await
+            .unwrap();
         assert!(
             statuses
                 .iter()
@@ -563,7 +572,7 @@ mod tests {
             (now + Duration::days(1), false, true),
             (access_expiry, true, true),
         ] {
-            let statuses = manager.get_all_platforms_status_at(None, at).await;
+            let statuses = manager.get_all_platforms_status_at(None, at).await.unwrap();
             for platform in ["tiktok", "youtube"] {
                 let status = statuses
                     .iter()
@@ -585,7 +594,8 @@ mod tests {
             .unwrap();
         let statuses = manager
             .get_all_platforms_status_at(None, access_expiry)
-            .await;
+            .await
+            .unwrap();
         for status in statuses.iter().filter(|status| status.connected) {
             assert!(status.expired);
             assert!(status.reauth_soon);
@@ -597,6 +607,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn status_read_errors_are_not_missing_connections() {
+        let pool = make_pool("t_sm_creds_status_errors").await.unwrap();
+        let cipher = cipher();
+        let manager = CredentialManager::new(pool.clone(), cipher.clone());
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-07T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let statuses = manager
+            .get_all_platforms_status_at(None, now)
+            .await
+            .unwrap();
+        assert_eq!(statuses.len(), PLATFORMS.len());
+        assert!(statuses.iter().all(|status| !status.connected));
+
+        for platform in PLATFORMS {
+            seed(&pool, &cipher, platform, None, "local-access", None).await;
+            sqlx::query("ALTER TABLE social_media_platform_auth DROP COLUMN refresh_expires_at")
+                .execute(&pool)
+                .await
+                .unwrap();
+            assert!(manager.get_credentials(platform, None).await.is_some());
+            let error = manager
+                .get_all_platforms_status_at(None, now)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.as_database_error().unwrap().code().as_deref(),
+                Some("42703")
+            );
+            sqlx::query(
+                "ALTER TABLE social_media_platform_auth ADD COLUMN refresh_expires_at TIMESTAMPTZ",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query("TRUNCATE social_media_platform_auth")
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("DROP TABLE social_media_platform_auth")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let error = manager
+            .get_all_platforms_status_at(None, now)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.as_database_error().unwrap().code().as_deref(),
+            Some("42P01")
+        );
+    }
+
+    #[tokio::test]
     async fn all_platforms_status() {
         let Some(pool) = make_pool("t_sm_creds_status").await else {
             return;
@@ -604,7 +669,7 @@ mod tests {
         let c = cipher();
         seed(&pool, &c, "youtube", None, "yt-access", None).await;
         let mgr = CredentialManager::new(pool, c);
-        let status = mgr.get_all_platforms_status(None).await;
+        let status = mgr.get_all_platforms_status(None).await.unwrap();
         assert_eq!(status.len(), 3);
         let yt = status.iter().find(|s| s.platform == "youtube").unwrap();
         assert!(yt.connected);

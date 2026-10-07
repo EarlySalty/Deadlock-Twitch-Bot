@@ -1,5 +1,11 @@
 # Merge-Gate
 
+## Statusfehler-Fix durch weiteren frischen Fixer
+
+Der bestätigte zweite Blocking-Fund ist umgesetzt: SQL-Fehler im Metadata-Leser und seinem vorgeschalteten Credential-Leser werden bis zur vorhandenen API-Fehlerantwort weitergegeben. Ein erfolgreicher leerer Lesezugriff bleibt von einem SQL-Fehler unterscheidbar. Der vorherige Ablauf-Fix und die Migration bleiben erhalten. PostgreSQL-Proben prüfen alle drei Plattformen und die beiden SQL-Fehlerstellen. Die neue Bildprobe `metadata-read-error.png` zeigt den bereits vorhandenen unbekannten Zustand ohne Verbinden- oder Trennaktionen; die vier Ablaufproben sind erneut geprüft. Details stehen oben in `EVIDENCE.md`.
+
+Die nächste unveränderte Runde von `gate_hook.py --review` steht aus; das Modell muss `gpt-6.1-sol` bleiben. Ein weiterer BLOCK geht an einen neuen Fixer durch den Haupt-Orchestrator. Dieser Blatt-Fixer startet keinen zusätzlichen Worker oder Review-Thread. Kein Merge, keine Produktionsmigration und kein Deploy vor ALLOW.
+
 ## Zweites Codeurteil nach dem Ablauf-Fix
 
 Aktuelles Urteil: **BLOCK**, Exit 1, unverändertes Modell `gpt-6.1-sol`, geprüfter HEAD `260bdfdc`. Aufruf über den unveränderten `gate_hook.py --review --repo /home/nathanael/.worktrees/tb-social-token-ablauf --base origin/main --head fix/social-token-ablauf`. Der Branch wurde vorher regulär auf `origin/main` bei `e0b0dbaf` rebased.

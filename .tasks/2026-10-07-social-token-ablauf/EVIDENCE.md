@@ -1,5 +1,31 @@
 # Prüfnachweise
 
+## Statusfehler-Fix nach dem zweiten Code-BLOCK
+
+Der weitere frische Fixer hat den vorhandenen Worktree bei `21631a2d` übernommen. Graphify wurde zuerst im Worktree versucht; dort fehlt der lokale Graph. Die globale Graphify-Abfrage und die anschließende Aufrufersuche belegen den Dashboard-Handler als einzigen produktiven Aufrufer des Statuslesers. Der gemeinsame interne Credential-Leser reicht SQL-Fehler als `Result` weiter. Die bestehenden optionalen Credential-Aufrufer behalten ihren Vertrag, der Statusleser reicht dagegen Fehler aus beiden SQL-Abfragen bis zur API durch. Der Handler protokolliert den SQL-Fehler und liefert die vorhandene Antwort HTTP 500 mit `platform_status_failed`, ohne Plattformliste. Kein neuer UI-Pfad und keine neue Versandstrecke.
+
+Die PostgreSQL-Regressionen entfernen gezielt die Metadata-Spalte `refresh_expires_at`, nachdem ein verschlüsselter Zugang erfolgreich gelesen wurde. Für TikTok, YouTube und Instagram bleibt der erste Credential-Zugriff erfolgreich; der Metadata-Zugriff liefert SQLSTATE `42703`, und der echte API-Handler liefert HTTP 500 statt `connected: false`. Ein leeres, lesbares Auth-Verzeichnis bleibt HTTP 200 mit drei getrennten Plattformen. Ein fehlendes Auth-Verzeichnis scheitert bereits beim ersten SQL-Zugriff mit SQLSTATE `42P01` und ebenfalls HTTP 500. Die feste Prüfuhr des Rust-Statuslesers bleibt `2026-10-07T12:00:00Z`.
+
+| Prüfung | Ergebnis |
+| --- | --- |
+| Social-Media- und DB-Suites | 357 passed, 0 failed, 0 ignored, 0 filtered, Exit 0 |
+| Vollständige API-Suite | Läuft mit beiden Test-DSNs und den Pflichtflags; Endergebnis noch offen |
+| Bot-Adapter mit PostgreSQL und lokalem Broker | Läuft; Endergebnis noch offen |
+| Clippy, dieselben vier Pakete, alle Targets | Läuft; Endergebnis noch offen |
+| Dashboard-Vertrag und i18n | 27 passed, 0 failed, 0 skipped, Exit 0 |
+| Formatprüfung der drei betroffenen Rust-Dateien | Exit 0 |
+| Workspace `cargo fmt --all --check` | Exit 1, dieselben 148 nicht geänderten Dateien; keine der drei betroffenen Dateien |
+| Dashboard-Build | Exit 0, Artefakt `index-C1sEecg0.js` |
+| Chromium am gebauten Dashboard, fünf Zustände | Exit 0; drei unbekannte Plattformzustände nach HTTP 500, keine Verbindungs- oder Trennaktionen, keine Seitenfehler, Dokumentbreite 1440 bei Viewport 1440 |
+
+Neue Browserprobe: `metadata-read-error.png`. Die vier bisherigen Ablaufproben wurden mit demselben Skript erneut geprüft und gespeichert. `ui-proof.json` enthält fünf DOM-Proben; kein Produktionszugang wurde verändert. Reproduktion: `node .tasks/2026-10-07-social-token-ablauf/ui-proof.mjs`.
+
+Die Rust-Aufrufe entsprechen den unten erhaltenen Prüfzeilen mit `/home/nathanael/.cargo/bin/cargo --manifest-path rust/Cargo.toml`, `SQLX_OFFLINE=true`, beiden DSNs für `tb_social_token_ablauf` auf Port 33045, `-j 2`, `--include-ignored --test-threads=1`. Neue Logs beginnen mit `status-fixer-`. Die DB-Verfügbarkeit wurde vor dem Start mit `SELECT current_database(), current_user` geprüft. Migration und `PROD-MIGRATION.sql` sind bytegleich zum übernommenen Stand. SHA384 der Migration: `8b50646d1227c0276ea13fe20bd6315d9703aaf20b35b268daaad9424b646b6e82981ef65f70f861099aac9032e13ca0`.
+
+Die nächste Gate-Runde muss unverändert mit `gpt-6.1-sol` urteilen. Kein ALLOW, Merge, Produktionsmigration oder Deploy in diesem Status. Der abweichende Remote-Feature-Branch wird nicht überschrieben; Sicherung erfolgt auf `fix/social-token-ablauf-r2`.
+
+WIRKUNGSPRUEFUNG[WP-1]: 1 Befund behoben | Zwillingssuche: grep-belegt | Fremddienst-Pfade: 1/1 geprüft
+
 ## Folgefix nach dem ersten Code-BLOCK
 
 Der frische Fixer hat den bestehenden Worktree übernommen. Sweep, Statusleser und Dashboard verwenden für nicht erneuerbare TikTok-/YouTube-Verbindungen das Access-Ende. Das Anbieterfeld `refresh_expires_at` wird nicht ersetzt. Migration und Produktionshilfe sind unverändert. Die Folgerunde des bestehenden Merge-Gates hat mit demselben Modell `gpt-6.1-sol` erneut BLOCK geurteilt, diesmal wegen versteckter Datenbankfehler im Metadata-Statusleser. Der bestätigte Befund steht in `REVIEW.md`, die Übergabe an einen weiteren frischen Fixer in `BRIEFING-FIXER-STATUS.md`. Produktion ist noch unverändert.

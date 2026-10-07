@@ -20,7 +20,13 @@ const server = http.createServer(async (req, res) => {
     plan: { planId: 'analysis_dashboard', planName: 'Admin', tier: 'extended', isExtended: true, entitlements: [] },
   };
   else if (p === '/twitch/api/v2/streamers') data = [{ login: 'fixture', twitchUserId: '11' }];
-  else if (p.endsWith('/platforms/status')) data = { platforms: statuses };
+  else if (p.endsWith('/platforms/status')) {
+    if (statuses === null) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'platform_status_failed' }));
+    }
+    data = { platforms: statuses };
+  }
   else if (p.endsWith('/access/me')) data = { allowed: true, streamer: 'fixture', isAdmin: true };
   else if (p.endsWith('/access')) data = { items: [{ streamer_login: 'fixture', granted: true }] };
   else if (p.includes('vod-archive')) data = { streamer_login: 'fixture', enabled: false, privacy: 'private', privacy_options: ['private'] };
@@ -57,6 +63,7 @@ try {
   }, now);
   const status = (platform, overrides) => ({ platform, connected: true, username: 'fixture', expired: false, needs_reauth: false, automatically_renewed: true, expires_at: iso(-1), refresh_expires_at: null, ...overrides });
   const cases = [
+    ['metadata-read-error', null, [], 0],
     ['instagram-20-days', [status('youtube', {}), status('tiktok', { refresh_expires_at: iso(365) }), status('instagram', { expires_at: iso(20) })], ['27.10.2026'], 0],
     ['nonrenewable-6-days', [status('youtube', { automatically_renewed: false, expires_at: iso(6) }), status('tiktok', { automatically_renewed: false, expires_at: iso(6) }), status('instagram', { expires_at: iso(30) })], ['13.10.2026', '13.10.2026'], 0],
     ['renewable-access-ended', [status('youtube', {}), status('tiktok', { refresh_expires_at: iso(365) }), status('instagram', { expires_at: iso(60) })], [], 0],
@@ -74,6 +81,12 @@ try {
     await page.evaluate(() => document.fonts.ready);
     const card = page.getByRole('heading', { name: /Verbindungen/ }).locator('..').locator('..');
     await page.waitForFunction(() => !document.querySelector('.animate-spin'));
+    if (platforms === null) {
+      await card.getByText('Zustand unbekannt', { exact: true }).first().waitFor();
+      assert.equal(await card.getByText('Zustand unbekannt', { exact: true }).count(), 3);
+      assert.equal(await card.getByRole('link').count(), 0);
+      assert.equal(await card.getByRole('button', { name: 'Trennen', exact: true }).count(), 0);
+    }
     const text = await card.innerText();
     const shownDates = text.match(/\d{2}\.\d{2}\.\d{4}/g) ?? [];
     assert.deepEqual(shownDates, dates, name);

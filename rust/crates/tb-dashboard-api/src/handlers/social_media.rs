@@ -1895,9 +1895,20 @@ pub async fn platforms_status_handler(
     };
     let db_scope = credential_scope(scope.as_deref());
     let has_scope = db_scope.is_some();
-    let statuses = cred_mgr
+    let statuses = match cred_mgr
         .get_all_platforms_status(target.as_ref().map(|(_, id)| id.as_str()))
-        .await;
+        .await
+    {
+        Ok(statuses) => statuses,
+        Err(error) => {
+            tracing::error!(%error, "Social connection status failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "platform_status_failed" })),
+            )
+                .into_response();
+        }
+    };
     let platforms: Vec<Value> = statuses
         .iter()
         .map(|s| platform_status_json(s, has_scope))
@@ -4457,6 +4468,8 @@ mod tests {
             .unwrap();
         serde_json::from_slice(&bytes).unwrap()
     }
+
+    include!("social_media_status_tests.rs");
 
     fn sm_partner(login: &str) -> DashboardAuthLevel {
         DashboardAuthLevel::Partner {
