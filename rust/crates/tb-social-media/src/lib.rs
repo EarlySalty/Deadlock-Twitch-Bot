@@ -75,6 +75,7 @@ pub mod oauth;
 pub mod partner_access;
 pub mod posting_plan;
 pub mod preview;
+pub mod reauth;
 pub mod refresh_worker;
 pub mod render;
 pub mod rendering;

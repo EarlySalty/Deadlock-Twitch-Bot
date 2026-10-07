@@ -1862,6 +1862,10 @@ fn platform_status_json(s: &PlatformStatus, has_scope: bool) -> Value {
         "user_id": if mask { Value::Null } else { json!(s.user_id) },
         "expires_at": s.expires_at,
         "expired": s.expired,
+        "refresh_expires_at": s.refresh_expires_at,
+        "needs_reauth": s.needs_reauth,
+        "reauth_soon": s.reauth_soon,
+        "automatically_renewed": s.automatically_renewed,
         "uses_global_fallback": s.uses_global_fallback,
     })
 }
@@ -5355,6 +5359,10 @@ mod tests {
             user_id: Some("42".into()),
             expires_at: None,
             expired: false,
+            refresh_expires_at: None,
+            needs_reauth: false,
+            reauth_soon: false,
+            automatically_renewed: true,
             scopes: None,
             uses_global_fallback: true,
         };

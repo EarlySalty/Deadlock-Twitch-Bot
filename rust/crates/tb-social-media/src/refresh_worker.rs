@@ -1,12 +1,3 @@
-//! Token-Refresh-Worker (Port von `bot/social_media/token_refresh_worker.py`).
-//!
-//! Refresht Plattform-Tokens **bevor** sie ablaufen (alle 5 min, Threshold 1h).
-//! `run_once` ist ohne Loop testbar. Der periodische [`TokenRefreshWorker::run`]
-//! wird vom Pipeline-Cutover gespawnt (noch nicht verdrahtet).
-//!
-//! Der Admin-Reauth-Hinweis bei nicht-transienten Refresh-Fehlern ist in Python
-//! eine **Discord-DM** (B10, von Nani ausgeschlossen) → hier nur geloggt.
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,7 +5,8 @@ use chrono::Utc;
 use sqlx::PgPool;
 use tb_crypto::{aad, FieldCipher};
 
-use crate::oauth::OAuthManager;
+use crate::oauth::{OAuthError, OAuthManager};
+use crate::reauth::{ReauthState, SocialReauthNotifier};
 
 const INTERVAL_SECONDS: u64 = 5 * 60;
 const INITIAL_DELAY_SECONDS: u64 = 60;
@@ -30,15 +22,22 @@ pub struct TokenRefreshWorker {
     pool: PgPool,
     cipher: Arc<FieldCipher>,
     oauth: OAuthManager,
+    reauth: ReauthState,
 }
 
 impl TokenRefreshWorker {
     pub fn new(pool: PgPool, cipher: Arc<FieldCipher>, oauth: OAuthManager) -> Self {
         Self {
+            reauth: ReauthState::new(pool.clone()),
             pool,
             cipher,
             oauth,
         }
+    }
+
+    pub fn with_notifier(mut self, notifier: Arc<dyn SocialReauthNotifier>) -> Self {
+        self.reauth = self.reauth.with_notifier(notifier);
+        self
     }
 
     /// Loop: 60s Initial-Delay, dann alle 5 min. Best-effort.
@@ -53,30 +52,57 @@ impl TokenRefreshWorker {
     /// Eine Refresh-Runde: alle binnen 1h ablaufenden Tokens mit Refresh-Token
     /// erneuern (Python `_refresh_expiring_tokens`).
     pub async fn run_once(&self) {
-        let jetzt = Utc::now();
+        self.run_once_at(Utc::now()).await;
+    }
+
+    async fn run_once_at(&self, jetzt: chrono::DateTime<Utc>) {
         let kurz = (jetzt + chrono::Duration::hours(REFRESH_THRESHOLD_HOURS)).to_rfc3339();
         let lang = (jetzt + chrono::Duration::days(INSTAGRAM_THRESHOLD_DAYS)).to_rfc3339();
         // Instagram hat keinen Refresh-Token, das Langzeit-Token verlaengert
         // sich selbst. Die alte Bedingung `refresh_token_enc IS NOT NULL` hat
         // Instagram deshalb nie ausgewaehlt: der Zugang starb nach 60 Tagen,
         // ohne dass irgendwo etwas passierte.
-        let rows = sqlx::query!(
+        let rows = match sqlx::query!(
             "SELECT id AS \"id!\", platform AS \"platform!\", streamer_login, access_token_enc AS \"access_token_enc!\", \
                     refresh_token_enc, client_id, client_secret_enc, \
-                    token_expires_at, enc_version \
+                    token_expires_at, refresh_expires_at, enc_version \
              FROM social_media_platform_auth \
-             WHERE enabled = 1 AND token_expires_at IS NOT NULL \
-               AND ( (platform = 'instagram' AND token_expires_at < $2) \
+             WHERE enabled = 1 AND NOT needs_reauth AND token_expires_at IS NOT NULL \
+               AND ( refresh_expires_at <= $3 \
+                     OR (platform = 'tiktok' AND refresh_token_enc IS NOT NULL AND refresh_expires_at IS NULL) \
+                     OR (platform = 'instagram' AND token_expires_at < $2) \
                      OR (platform <> 'instagram' AND refresh_token_enc IS NOT NULL AND token_expires_at < $1) ) \
              ORDER BY token_expires_at ASC",
             &kurz,
-            &lang
+            &lang,
+            jetzt,
         )
         .fetch_all(&self.pool)
-        .await
-        .unwrap_or_default();
+        .await {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::error!(%error, "Social refresh selection failed");
+                return;
+            }
+        };
 
         for row in rows {
+            let instagram_expired = row.platform == "instagram"
+                && row
+                    .token_expires_at
+                    .as_deref()
+                    .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+                    .is_some_and(|expiry| expiry <= jetzt);
+            if instagram_expired || row.refresh_expires_at.is_some_and(|expiry| expiry <= jetzt) {
+                if let Err(error) = self
+                    .reauth
+                    .mark_required(row.id, &row.access_token_enc)
+                    .await
+                {
+                    tracing::error!(%error, "Social reauth state failed");
+                }
+                continue;
+            }
             self.refresh_one(
                 row.platform,
                 row.id,
@@ -88,6 +114,9 @@ impl TokenRefreshWorker {
                 row.enc_version.unwrap_or(1) as i64,
             )
             .await;
+        }
+        if let Err(error) = self.reauth.sweep(jetzt).await {
+            tracing::error!(%error, "Social reauth sweep failed");
         }
     }
 
@@ -147,47 +176,25 @@ impl TokenRefreshWorker {
         {
             Ok(t) => t,
             Err(error) => {
-                let text = error.to_string();
-                // `invalid_grant` heisst: der Nutzer hat den Zugriff entzogen,
-                // das Token ist zu lange ungenutzt oder das Passwort wurde
-                // gewechselt. Das heilt kein Retry. Frueher blieb der Eintrag
-                // dabei auf "gueltig bis irgendwann", das Dashboard meldete
-                // gruen und jeder Upload lief ins Leere. Wir setzen den Ablauf
-                // deshalb auf jetzt, damit die Oberflaeche "abgelaufen" zeigt
-                // und der Streamer neu verbinden kann.
-                //
-                // Nur `invalid_grant`. `invalid_request` sagt nichts ueber den
-                // Zugang aus, sondern nur, dass diese eine Anfrage falsch
-                // geformt war; daran haette ein Streamer einen intakten Zugang
-                // neu verbunden, obwohl der Fehler bei uns lag.
-                if text.contains("invalid_grant") {
-                    self.markiere_abgelaufen(auth_id, &platform).await;
+                if matches!(error, OAuthError::ReauthRequired { .. }) {
+                    if let Err(error) = self.reauth.mark_required(auth_id, &access_enc).await {
+                        tracing::error!(%error, "Social reauth state failed");
+                    }
                 }
-                tracing::error!(platform = %platform, error = %text, "Token-Refresh fehlgeschlagen");
+                tracing::error!(platform = %platform, %error, "Token-Refresh fehlgeschlagen");
                 return;
             }
         };
 
-        self.save_refreshed(auth_id, &platform, streamer_ref, &new_tokens)
-            .await;
-    }
-
-    /// Setzt den Ablauf auf jetzt, damit der Zustand im Dashboard als
-    /// "abgelaufen" sichtbar wird. Der Eintrag bleibt `enabled = 1`, damit ein
-    /// erneutes Verbinden dieselbe Zeile aktualisiert.
-    async fn markiere_abgelaufen(&self, auth_id: i32, platform: &str) {
-        let jetzt = Utc::now().to_rfc3339();
-        let result = sqlx::query!(
-            "UPDATE social_media_platform_auth SET token_expires_at = $1 \
-             WHERE id = $2",
-            &jetzt,
-            auth_id
+        self.save_refreshed(
+            auth_id,
+            &platform,
+            streamer_ref,
+            enc_version,
+            &access_enc,
+            &new_tokens,
         )
-        .execute(&self.pool)
         .await;
-        if let Err(error) = result {
-            tracing::error!(platform = %platform, %error, "Ablauf-Markierung fehlgeschlagen");
-        }
     }
 
     async fn save_refreshed(
@@ -195,50 +202,51 @@ impl TokenRefreshWorker {
         auth_id: i32,
         platform: &str,
         streamer: Option<&str>,
+        enc_version: i64,
+        previous_access_enc: &[u8],
         new_tokens: &crate::oauth::RefreshedTokens,
     ) {
         let Ok(access_enc) = self.cipher.encrypt_field(
             &new_tokens.access_token,
-            &aad::social_media("access_token", platform, streamer, 1),
+            &aad::social_media("access_token", platform, streamer, enc_version),
         ) else {
             tracing::error!(platform = %platform, "Refresh-Persist: encrypt access fehlgeschlagen");
             return;
         };
-        let refresh_enc = new_tokens.refresh_token.as_ref().and_then(|t| {
-            self.cipher
-                .encrypt_field(
-                    t,
-                    &aad::social_media("refresh_token", platform, streamer, 1),
+        let refresh_enc = match new_tokens
+            .refresh_token
+            .as_ref()
+            .map(|token| {
+                self.cipher.encrypt_field(
+                    token,
+                    &aad::social_media("refresh_token", platform, streamer, enc_version),
                 )
-                .ok()
-        });
+            })
+            .transpose()
+        {
+            Ok(value) => value,
+            Err(_) => {
+                tracing::error!(platform = %platform, "Refresh-Persist: encrypt refresh failed");
+                return;
+            }
+        };
         let expires_iso = new_tokens.expires_at.to_rfc3339();
 
-        let result = if let Some(refresh_enc) = refresh_enc {
-            sqlx::query!(
-                "UPDATE social_media_platform_auth \
-                 SET access_token_enc = $1, refresh_token_enc = $2, token_expires_at = $3, \
-                     last_refreshed_at = CURRENT_TIMESTAMP \
-                 WHERE id = $4",
-                access_enc,
-                refresh_enc,
-                &expires_iso,
-                auth_id
-            )
-            .execute(&self.pool)
-            .await
-        } else {
-            sqlx::query!(
-                "UPDATE social_media_platform_auth \
-                 SET access_token_enc = $1, token_expires_at = $2, last_refreshed_at = CURRENT_TIMESTAMP \
-                 WHERE id = $3",
-                access_enc,
-                &expires_iso,
-                auth_id
-            )
-            .execute(&self.pool)
-            .await
-        };
+        let result = sqlx::query!(
+            "UPDATE social_media_platform_auth \
+             SET access_token_enc = $1, refresh_token_enc = COALESCE($2, refresh_token_enc), token_expires_at = $3, \
+                 refresh_expires_at = CASE WHEN platform = 'tiktok' THEN COALESCE($4, refresh_expires_at) ELSE NULL END, \
+                 last_refreshed_at = CURRENT_TIMESTAMP \
+             WHERE id = $5 AND access_token_enc = $6 AND enabled = 1 AND NOT needs_reauth",
+            access_enc,
+            refresh_enc,
+            &expires_iso,
+            new_tokens.refresh_expires_at,
+            auth_id,
+            previous_access_enc,
+        )
+        .execute(&self.pool)
+        .await;
         if let Err(error) = result {
             tracing::error!(platform = %platform, %error, "Refresh-Persist fehlgeschlagen");
         }
@@ -287,12 +295,141 @@ mod tests {
                 streamer_login TEXT, access_token_enc BYTEA NOT NULL, refresh_token_enc BYTEA, \
                 client_id TEXT, client_secret_enc BYTEA, token_expires_at TEXT, scopes TEXT, \
                 platform_user_id TEXT, platform_username TEXT, enc_version INTEGER DEFAULT 1, \
-                enc_kid TEXT DEFAULT 'v1', last_refreshed_at TEXT, enabled INTEGER DEFAULT 1)",
+                enc_kid TEXT DEFAULT 'v1', last_refreshed_at TEXT, enabled INTEGER DEFAULT 1, \
+                twitch_user_id TEXT, refresh_expires_at TIMESTAMPTZ, needs_reauth BOOLEAN NOT NULL DEFAULT FALSE, \
+                reauth_required_at TIMESTAMPTZ, reauth_notified_at TIMESTAMPTZ)",
         )
         .execute(&pool)
         .await
         .unwrap();
         Some(pool)
+    }
+
+    fn fixed_now() -> chrono::DateTime<Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-10-07T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    async fn seed_refresh(pool: &PgPool, c: &FieldCipher, platform: &str) {
+        let access = c
+            .encrypt_field(
+                "local-access",
+                &aad::social_media("access_token", platform, None, 1),
+            )
+            .unwrap();
+        let refresh = c
+            .encrypt_field(
+                "local-refresh",
+                &aad::social_media("refresh_token", platform, None, 1),
+            )
+            .unwrap();
+        sqlx::query("INSERT INTO social_media_platform_auth (platform, access_token_enc, refresh_token_enc, token_expires_at, twitch_user_id) VALUES ($1, $2, $3, $4, '42')")
+            .bind(platform).bind(access).bind(refresh).bind((fixed_now() + chrono::Duration::minutes(10)).to_rfc3339())
+            .execute(pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn permanent_refresh_error_marks_once_while_transient_errors_keep_access() {
+        for (status, required) in [(400, true), (429, false), (503, false)] {
+            let pool = make_pool(&format!("t_sm_worker_error_{status}"))
+                .await
+                .unwrap();
+            let cipher = cipher();
+            seed_refresh(&pool, &cipher, "youtube").await;
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/token"))
+                .respond_with(
+                    ResponseTemplate::new(status)
+                        .set_body_json(serde_json::json!({"error": "invalid_grant"})),
+                )
+                .expect(if required { 1 } else { 2 })
+                .mount(&server)
+                .await;
+            let oauth = OAuthManager::new(pool.clone(), cipher.clone()).with_token_urls(
+                "http://127.0.0.1:1".into(),
+                format!("{}/token", server.uri()),
+                "http://127.0.0.1:1".into(),
+            );
+            let worker = TokenRefreshWorker::new(pool.clone(), cipher, oauth);
+            worker.run_once_at(fixed_now()).await;
+            worker.run_once_at(fixed_now()).await;
+            let state: (bool, bool, String) = sqlx::query_as(
+                "SELECT needs_reauth, reauth_required_at IS NOT NULL, token_expires_at FROM social_media_platform_auth",
+            ).fetch_one(&pool).await.unwrap();
+            assert_eq!(state.0, required);
+            assert_eq!(state.1, required);
+            assert_eq!(
+                state.2,
+                (fixed_now() + chrono::Duration::minutes(10)).to_rfc3339()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn first_tiktok_refresh_backfills_real_refresh_expiry() {
+        let pool = make_pool("t_sm_worker_tiktok_expiry").await.unwrap();
+        let cipher = cipher();
+        seed_refresh(&pool, &cipher, "tiktok").await;
+        sqlx::query("UPDATE social_media_platform_auth SET token_expires_at = $1")
+            .bind((fixed_now() + chrono::Duration::days(1)).to_rfc3339())
+            .execute(&pool)
+            .await
+            .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "new-local-access", "refresh_token": "new-local-refresh",
+                "expires_in": 86400, "refresh_expires_in": 31536000
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let oauth = OAuthManager::new(pool.clone(), cipher.clone()).with_token_urls(
+            format!("{}/token", server.uri()),
+            "http://127.0.0.1:1".into(),
+            "http://127.0.0.1:1".into(),
+        );
+        let worker = TokenRefreshWorker::new(pool.clone(), cipher, oauth);
+        worker.run_once_at(fixed_now()).await;
+        let stored: bool = sqlx::query_scalar(
+            "SELECT refresh_expires_at > token_expires_at::timestamptz AND NOT needs_reauth AND reauth_required_at IS NULL FROM social_media_platform_auth",
+        ).fetch_one(&pool).await.unwrap();
+        assert!(stored);
+    }
+
+    #[tokio::test]
+    async fn expired_instagram_does_not_attempt_impossible_refresh() {
+        let pool = make_pool("t_sm_worker_instagram_expired").await.unwrap();
+        let cipher = cipher();
+        seed_refresh(&pool, &cipher, "instagram").await;
+        sqlx::query(
+            "UPDATE social_media_platform_auth SET token_expires_at = $1, refresh_token_enc = NULL",
+        )
+        .bind((fixed_now() - chrono::Duration::days(1)).to_rfc3339())
+        .execute(&pool)
+        .await
+        .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/refresh_access_token"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let oauth =
+            OAuthManager::new(pool.clone(), cipher.clone()).with_instagram_graph(server.uri());
+        TokenRefreshWorker::new(pool.clone(), cipher, oauth)
+            .run_once_at(fixed_now())
+            .await;
+        let required: bool =
+            sqlx::query_scalar("SELECT needs_reauth FROM social_media_platform_auth")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(required);
     }
 
     #[tokio::test]

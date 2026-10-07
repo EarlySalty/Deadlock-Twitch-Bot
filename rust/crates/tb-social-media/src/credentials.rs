@@ -43,6 +43,10 @@ pub struct PlatformStatus {
     pub user_id: Option<String>,
     pub expires_at: Option<String>,
     pub expired: bool,
+    pub refresh_expires_at: Option<String>,
+    pub needs_reauth: bool,
+    pub reauth_soon: bool,
+    pub automatically_renewed: bool,
     pub scopes: Option<String>,
     pub uses_global_fallback: bool,
 }
@@ -186,24 +190,63 @@ impl CredentialManager {
         &self,
         twitch_user_id: Option<&str>,
     ) -> Vec<PlatformStatus> {
+        self.get_all_platforms_status_at(twitch_user_id, now_ts())
+            .await
+    }
+
+    async fn get_all_platforms_status_at(
+        &self,
+        twitch_user_id: Option<&str>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Vec<PlatformStatus> {
         let mut out = Vec::with_capacity(PLATFORMS.len());
         for platform in PLATFORMS {
-            let status = match self.get_credentials_for_id(platform, twitch_user_id).await {
-                Some(creds) => {
+            let connection = if let Some(creds) =
+                self.get_credentials_for_id(platform, twitch_user_id).await
+            {
+                match sqlx::query_as::<_, (Option<chrono::DateTime<chrono::Utc>>, bool)>(
+                    "SELECT refresh_expires_at, needs_reauth FROM social_media_platform_auth WHERE id = $1 AND enabled = 1",
+                ).bind(creds.id).fetch_optional(&self.pool).await {
+                    Ok(Some(metadata)) => Some((creds, metadata)),
+                    Ok(None) => None,
+                    Err(error) => {
+                        tracing::error!(%error, "Social connection status failed");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let status = match connection {
+                Some((creds, (refresh_expires_at, needs_reauth))) => {
                     let uses_global_fallback =
                         twitch_user_id.is_some() && creds.streamer_login.is_none();
+                    let automatically_renewed =
+                        platform == "instagram" || creds.refresh_token.is_some();
+                    let connection_expiry = if platform == "instagram" {
+                        creds
+                            .expires_at
+                            .as_deref()
+                            .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+                            .map(|expiry| expiry.with_timezone(&chrono::Utc))
+                    } else {
+                        refresh_expires_at
+                    };
                     PlatformStatus {
                         platform: platform.to_string(),
                         connected: true,
                         username: creds.platform_username.clone(),
                         user_id: creds.platform_user_id.clone(),
                         expires_at: creds.expires_at.clone(),
-                        // Dashboard-Status und Refresh-Fenster sind zwei verschiedene Dinge:
-                        // YouTube stellt Access-Tokens typischerweise fuer ~1h aus. Die
-                        // Refresh-Logik darf sie innerhalb dieses Fensters proaktiv erneuern,
-                        // aber direkt nach einem erfolgreichen OAuth-Callback als
-                        // "abgelaufen" zu markieren ist falsch.
-                        expired: token_actually_expired(creds.expires_at.as_deref(), now_ts()),
+                        expired: needs_reauth
+                            || connection_expiry.is_some_and(|expiry| expiry <= now)
+                            || (!automatically_renewed
+                                && token_actually_expired(creds.expires_at.as_deref(), now)),
+                        refresh_expires_at: refresh_expires_at.map(|expiry| expiry.to_rfc3339()),
+                        needs_reauth,
+                        reauth_soon: connection_expiry
+                            .is_some_and(|expiry| expiry < now + chrono::Duration::days(7)),
+                        automatically_renewed,
                         scopes: creds.scopes.clone(),
                         uses_global_fallback,
                     }
@@ -215,6 +258,10 @@ impl CredentialManager {
                     user_id: None,
                     expires_at: None,
                     expired: false,
+                    refresh_expires_at: None,
+                    needs_reauth: false,
+                    reauth_soon: false,
+                    automatically_renewed: false,
                     scopes: None,
                     uses_global_fallback: false,
                 },
@@ -348,7 +395,7 @@ mod tests {
                 client_id TEXT, client_secret_enc BYTEA, token_expires_at TEXT, scopes TEXT, \
                 platform_user_id TEXT, platform_username TEXT, enc_version INTEGER DEFAULT 1, \
                 enc_kid TEXT DEFAULT 'v1', authorized_at TEXT DEFAULT CURRENT_TIMESTAMP, \
-                enabled INTEGER DEFAULT 1)",
+                enabled INTEGER DEFAULT 1, refresh_expires_at TIMESTAMPTZ, needs_reauth BOOLEAN NOT NULL DEFAULT FALSE)",
         )
         .execute(&pool)
         .await
@@ -425,6 +472,73 @@ mod tests {
 
         // Plattform ohne Eintrag → None.
         assert!(mgr.get_credentials("youtube", None).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn status_reports_connection_expiry_not_renewable_access_expiry() {
+        let pool = make_pool("t_sm_creds_connection_status").await.unwrap();
+        let cipher = cipher();
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-07T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        seed(
+            &pool,
+            &cipher,
+            "youtube",
+            None,
+            "local-access",
+            Some("local-refresh"),
+        )
+        .await;
+        seed(
+            &pool,
+            &cipher,
+            "tiktok",
+            None,
+            "local-access",
+            Some("local-refresh"),
+        )
+        .await;
+        sqlx::query("UPDATE social_media_platform_auth SET token_expires_at = $1")
+            .bind((now - Duration::hours(1)).to_rfc3339())
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE social_media_platform_auth SET refresh_expires_at = $1 WHERE platform = 'tiktok'")
+            .bind(now + Duration::days(6)).execute(&pool).await.unwrap();
+        let manager = CredentialManager::new(pool.clone(), cipher);
+        let statuses = manager.get_all_platforms_status_at(None, now).await;
+        let youtube = statuses
+            .iter()
+            .find(|status| status.platform == "youtube")
+            .unwrap();
+        assert!(youtube.automatically_renewed);
+        assert!(!youtube.expired);
+        assert!(youtube.refresh_expires_at.is_none());
+        let tiktok = statuses
+            .iter()
+            .find(|status| status.platform == "tiktok")
+            .unwrap();
+        assert!(tiktok.reauth_soon);
+        assert!(!tiktok.expired);
+        assert_eq!(
+            tiktok.refresh_expires_at,
+            Some((now + Duration::days(6)).to_rfc3339())
+        );
+        sqlx::query(
+            "UPDATE social_media_platform_auth SET needs_reauth = TRUE WHERE platform = 'youtube'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let statuses = manager.get_all_platforms_status_at(None, now).await;
+        assert!(
+            statuses
+                .iter()
+                .find(|status| status.platform == "youtube")
+                .unwrap()
+                .expired
+        );
     }
 
     #[tokio::test]

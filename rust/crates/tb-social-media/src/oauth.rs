@@ -36,6 +36,8 @@ pub enum OAuthError {
     StateInvalid,
     #[error("OAuth redirect URI mismatch")]
     RedirectMismatch,
+    #[error("{platform}: reconnect required")]
+    ReauthRequired { platform: &'static str },
     #[error("{platform}-Token-Exchange fehlgeschlagen: {detail}")]
     Exchange {
         platform: &'static str,
@@ -72,6 +74,7 @@ struct ExchangedTokens {
     access_token: String,
     refresh_token: Option<String>,
     expires_at: DateTime<Utc>,
+    refresh_expires_at: Option<DateTime<Utc>>,
     scopes: Option<String>,
     user_id: Option<String>,
     username: Option<String>,
@@ -307,6 +310,7 @@ impl OAuthManager {
             access_token,
             refresh_token: opt_field(&d, "refresh_token"),
             expires_at: Utc::now() + Duration::seconds(expires_in),
+            refresh_expires_at: refresh_expiry(&d),
             scopes: opt_field(&d, "scope"),
             user_id: opt_field(&d, "open_id"),
             username: None,
@@ -343,15 +347,22 @@ impl OAuthManager {
                 detail: error_detail(&data),
             });
         }
+        let access_token = str_field(&data, "access_token");
+        let expires_in = data
+            .get("expires_in")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        if access_token.is_empty() || expires_in <= 0 {
+            return Err(OAuthError::Exchange {
+                platform: "YouTube",
+                detail: "invalid_response".into(),
+            });
+        }
         Ok(ExchangedTokens {
-            access_token: str_field(&data, "access_token"),
+            access_token,
             refresh_token: opt_field(&data, "refresh_token"), // nur bei Erst-Auth
-            expires_at: Utc::now()
-                + Duration::seconds(
-                    data.get("expires_in")
-                        .and_then(serde_json::Value::as_i64)
-                        .unwrap_or(0),
-                ),
+            expires_at: Utc::now() + Duration::seconds(expires_in),
+            refresh_expires_at: None,
             scopes: opt_field(&data, "scope"),
             user_id: None,
             username: None,
@@ -410,6 +421,7 @@ impl OAuthManager {
             access_token,
             refresh_token: None,
             expires_at,
+            refresh_expires_at: None,
             scopes: opt_field(&data, "permissions"),
             user_id,
             username: None,
@@ -481,6 +493,7 @@ impl OAuthManager {
             access_token: new_token,
             refresh_token: None,
             expires_at: Utc::now() + Duration::seconds(expires_in),
+            refresh_expires_at: None,
         })
     }
 
@@ -507,12 +520,7 @@ impl OAuthManager {
                     platform,
                     detail: e.without_url().to_string(),
                 })?;
-        resp.json::<serde_json::Value>()
-            .await
-            .map_err(|e| OAuthError::Exchange {
-                platform,
-                detail: e.without_url().to_string(),
-            })
+        token_response(platform, resp).await
     }
 
     /// Form-POST an einen Token-Endpoint → JSON-Body. Nicht-2xx wird trotzdem als
@@ -537,12 +545,7 @@ impl OAuthManager {
                     platform,
                     detail: e.without_url().to_string(),
                 })?;
-        resp.json::<serde_json::Value>()
-            .await
-            .map_err(|e| OAuthError::Exchange {
-                platform,
-                detail: e.without_url().to_string(),
-            })
+        token_response(platform, resp).await
     }
 
     /// Verschlüsselt + persistiert die Tokens (Python `save_encrypted_tokens`).
@@ -575,6 +578,7 @@ impl OAuthManager {
             struct OwnedTokens {
                 streamer_login: String,
                 refresh_token_enc: Option<Vec<u8>>,
+                refresh_expires_at: Option<DateTime<Utc>>,
                 client_secret_enc: Option<Vec<u8>>,
                 enc_version: Option<i32>,
                 client_id: Option<String>,
@@ -585,7 +589,7 @@ impl OAuthManager {
             // Nur nachweislich derselben Plattform-ID gehörende Daten dürfen
             // einen Rename überleben. Der alte Login ist ausschließlich AAD.
             let previous = sqlx::query_as::<_, OwnedTokens>(
-                "SELECT streamer_login, refresh_token_enc, client_secret_enc, enc_version,
+                "SELECT streamer_login, refresh_token_enc, refresh_expires_at, client_secret_enc, enc_version,
                         client_id, scopes, platform_user_id, platform_username
                  FROM social_media_platform_auth
                  WHERE platform = $1 AND twitch_user_id = $2 AND streamer_login IS NOT NULL
@@ -619,6 +623,10 @@ impl OAuthManager {
                 };
                 if tokens.refresh_token.is_none() {
                     tokens.refresh_token = decrypt("refresh_token", previous.refresh_token_enc)?;
+                    if platform == "tiktok" {
+                        tokens.refresh_expires_at =
+                            tokens.refresh_expires_at.or(previous.refresh_expires_at);
+                    }
                 }
                 if tokens
                     .client_secret
@@ -690,8 +698,8 @@ impl OAuthManager {
             "INSERT INTO social_media_platform_auth \
                 (platform, streamer_login, twitch_user_id, access_token_enc, refresh_token_enc, client_id, \
                  client_secret_enc, token_expires_at, scopes, platform_user_id, platform_username, \
-                 enc_version, enc_kid) \
-             VALUES ($1, $2, $11, $3, $4, $5, $6, $7, $8, $9, $10, 1, 'v1') \
+                 enc_version, enc_kid, refresh_expires_at) \
+             VALUES ($1, $2, $11, $3, $4, $5, $6, $7, $8, $9, $10, 1, 'v1', $12) \
              {conflict} DO UPDATE SET \
                 twitch_user_id = EXCLUDED.twitch_user_id, access_token_enc = EXCLUDED.access_token_enc, \
                 refresh_token_enc = CASE WHEN social_media_platform_auth.twitch_user_id IS NOT DISTINCT FROM EXCLUDED.twitch_user_id THEN COALESCE(EXCLUDED.refresh_token_enc, social_media_platform_auth.refresh_token_enc) ELSE EXCLUDED.refresh_token_enc END, \
@@ -702,7 +710,8 @@ impl OAuthManager {
                 platform_user_id = CASE WHEN social_media_platform_auth.twitch_user_id IS NOT DISTINCT FROM EXCLUDED.twitch_user_id THEN COALESCE(EXCLUDED.platform_user_id, social_media_platform_auth.platform_user_id) ELSE EXCLUDED.platform_user_id END, \
                 platform_username = CASE WHEN social_media_platform_auth.twitch_user_id IS NOT DISTINCT FROM EXCLUDED.twitch_user_id THEN COALESCE(EXCLUDED.platform_username, social_media_platform_auth.platform_username) ELSE EXCLUDED.platform_username END, \
                 enc_version = EXCLUDED.enc_version, enc_kid = EXCLUDED.enc_kid, \
-                enabled = 1, last_refreshed_at = CURRENT_TIMESTAMP \
+                enabled = 1, last_refreshed_at = CURRENT_TIMESTAMP, refresh_expires_at = EXCLUDED.refresh_expires_at, \
+                needs_reauth = FALSE, reauth_required_at = NULL, reauth_notified_at = NULL \
              WHERE social_media_platform_auth.twitch_user_id IS NOT DISTINCT FROM EXCLUDED.twitch_user_id \
                 OR social_media_platform_auth.twitch_user_id IS NULL"
         );
@@ -718,6 +727,7 @@ impl OAuthManager {
             .bind(tokens.user_id.as_deref())
             .bind(tokens.username.as_deref())
             .bind(twitch_user_id)
+            .bind(tokens.refresh_expires_at)
             .execute(&mut *tx)
             .await?;
         if changed.rows_affected() != 1 {
@@ -796,6 +806,7 @@ impl OAuthManager {
             access_token,
             refresh_token: opt_field(&d, "refresh_token"),
             expires_at: Utc::now() + Duration::seconds(expires_in),
+            refresh_expires_at: refresh_expiry(&d),
         })
     }
 
@@ -823,18 +834,25 @@ impl OAuthManager {
                 detail: error_detail(&data),
             });
         }
+        let access_token = str_field(&data, "access_token");
+        let expires_in = data
+            .get("expires_in")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        if access_token.is_empty() || expires_in <= 0 {
+            return Err(OAuthError::Exchange {
+                platform: "youtube-refresh",
+                detail: "invalid_response".into(),
+            });
+        }
         Ok(RefreshedTokens {
-            access_token: str_field(&data, "access_token"),
+            access_token,
             // Meist liefert Google keinen neuen Refresh-Token. In den Faellen,
             // in denen er rotiert wird, ginge er hier sonst verloren; das
             // COALESCE beim Persistieren behaelt den alten, wenn None kommt.
             refresh_token: opt_field(&data, "refresh_token"),
-            expires_at: Utc::now()
-                + Duration::seconds(
-                    data.get("expires_in")
-                        .and_then(serde_json::Value::as_i64)
-                        .unwrap_or(0),
-                ),
+            expires_at: Utc::now() + Duration::seconds(expires_in),
+            refresh_expires_at: None,
         })
     }
 }
@@ -844,6 +862,7 @@ pub struct RefreshedTokens {
     pub access_token: String,
     pub refresh_token: Option<String>,
     pub expires_at: DateTime<Utc>,
+    pub refresh_expires_at: Option<DateTime<Utc>>,
 }
 
 /// Normalisiert eine Redirect-URI für den Vergleich (trim + lowercase Schema/Host).
@@ -874,8 +893,75 @@ fn opt_field(v: &serde_json::Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn error_detail(v: &serde_json::Value) -> String {
-    v.to_string().chars().take(200).collect()
+fn refresh_expiry(value: &serde_json::Value) -> Option<DateTime<Utc>> {
+    value
+        .get("refresh_expires_in")?
+        .as_i64()
+        .filter(|seconds| *seconds >= 0)
+        .and_then(Duration::try_seconds)
+        .and_then(|duration| Utc::now().checked_add_signed(duration))
+}
+
+fn requires_reauth(value: &serde_json::Value) -> bool {
+    if value
+        .get("data")
+        .is_some_and(|inner| inner.is_object() && requires_reauth(inner))
+    {
+        return true;
+    }
+    let error = &value["error"];
+    if error["is_transient"].as_bool() == Some(true) {
+        return false;
+    }
+    let code = error
+        .as_str()
+        .or_else(|| error["code"].as_str())
+        .unwrap_or("");
+    matches!(
+        code,
+        "invalid_grant"
+            | "invalid_token"
+            | "access_denied"
+            | "refresh_token_expired"
+            | "refresh_token_invalid"
+            | "invalid_refresh_token"
+            | "access_token_invalid"
+    ) || error["code"].as_i64() == Some(190)
+        || value["error_code"].as_i64() == Some(190)
+}
+
+async fn token_response(
+    platform: &'static str,
+    response: reqwest::Response,
+) -> Result<serde_json::Value, OAuthError> {
+    let status = response.status();
+    if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(OAuthError::Exchange {
+            platform,
+            detail: format!("HTTP {}", status.as_u16()),
+        });
+    }
+    let value = response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|_| OAuthError::Exchange {
+            platform,
+            detail: "invalid_response".into(),
+        })?;
+    if requires_reauth(&value) {
+        return Err(OAuthError::ReauthRequired { platform });
+    }
+    if !status.is_success() {
+        return Err(OAuthError::Exchange {
+            platform,
+            detail: format!("HTTP {}", status.as_u16()),
+        });
+    }
+    Ok(value)
+}
+
+fn error_detail(_v: &serde_json::Value) -> String {
+    "invalid_response".into()
 }
 
 fn pkce_aad(platform: &str, state_lookup_key: &str) -> String {
@@ -1100,6 +1186,7 @@ mod tests {
         assert_eq!(tokens.refresh_token.as_deref(), Some("rft-1"));
         assert_eq!(tokens.user_id.as_deref(), Some("open-1"));
         assert!(tokens.expires_at > Utc::now() + Duration::hours(23));
+        assert!(tokens.refresh_expires_at.is_some());
     }
 
     #[tokio::test]
@@ -1137,7 +1224,8 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "access_token": "act-neu",
                 "expires_in": 86400,
-                "refresh_token": "rft-neu"
+                "refresh_token": "rft-neu",
+                "refresh_expires_in": 31536000
             })))
             .expect(1)
             .mount(&server)
@@ -1153,6 +1241,7 @@ mod tests {
             .expect("Refresh muss gelingen");
         assert_eq!(neu.access_token, "act-neu");
         assert_eq!(neu.refresh_token.as_deref(), Some("rft-neu"));
+        assert!(neu.refresh_expires_at.is_some());
     }
 
     #[tokio::test]
@@ -1220,6 +1309,86 @@ mod tests {
             .expect("Refresh muss gelingen");
         assert_eq!(neu.access_token, "lang-2");
         assert!(neu.expires_at > Utc::now() + Duration::days(59));
+    }
+
+    #[test]
+    fn reauth_classification_uses_machine_codes_not_descriptions() {
+        for value in [
+            serde_json::json!({"error": "invalid_grant"}),
+            serde_json::json!({"data": {"error": "refresh_token_expired"}}),
+            serde_json::json!({"error": {"code": 190}}),
+        ] {
+            assert!(requires_reauth(&value));
+        }
+        for value in [
+            serde_json::json!({"error": "invalid_request", "error_description": "invalid_grant"}),
+            serde_json::json!({"error": {"code": 190, "is_transient": true}}),
+            serde_json::json!({"error": "invalid_client"}),
+        ] {
+            assert!(!requires_reauth(&value));
+        }
+    }
+
+    #[tokio::test]
+    async fn http_transient_status_does_not_invalidate_connection_or_leak_response() {
+        let server = MockServer::start().await;
+        for (status, permanent) in [(400, true), (200, true), (429, false), (503, false)] {
+            let endpoint = format!("/token/{status}");
+            Mock::given(method("POST")).and(path(endpoint.clone()))
+                .respond_with(ResponseTemplate::new(status).set_body_json(serde_json::json!({
+                    "error": "invalid_grant", "error_description": "private-response-data", "refresh_token": "secret-value"
+                }))).mount(&server).await;
+            let manager = OAuthManager::new(lazy_pool(), test_cipher()).with_token_urls(
+                format!("{}{endpoint}", server.uri()),
+                "http://127.0.0.1:1".into(),
+                "http://127.0.0.1:1".into(),
+            );
+            let error = manager
+                .refresh_token("tiktok", "local-refresh", "ck", "cs")
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(
+                matches!(error, OAuthError::ReauthRequired { .. }),
+                permanent
+            );
+            assert!(!error.to_string().contains("secret-value"));
+            assert!(!error.to_string().contains("private-response-data"));
+        }
+    }
+
+    #[tokio::test]
+    async fn tiktok_persist_stores_connection_expiry_and_clears_incident() {
+        let pool = make_pool("t_sm_oauth_connection_expiry").await.unwrap();
+        let manager = OAuthManager::new(pool.clone(), test_cipher());
+        let expiry = DateTime::parse_from_rfc3339("2027-10-07T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let tokens = ExchangedTokens {
+            access_token: "test-access".into(),
+            refresh_token: Some("test-refresh".into()),
+            expires_at: expiry,
+            refresh_expires_at: Some(expiry),
+            scopes: None,
+            user_id: None,
+            username: None,
+            client_id: Some("test-client".into()),
+            client_secret: None,
+        };
+        manager
+            .save_encrypted_tokens("tiktok", Some("42"), &tokens)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE social_media_platform_auth SET needs_reauth = TRUE, reauth_required_at = NOW(), reauth_notified_at = NOW()")
+            .execute(&pool).await.unwrap();
+        manager
+            .save_encrypted_tokens("tiktok", Some("42"), &tokens)
+            .await
+            .unwrap();
+        let stored: (DateTime<Utc>, bool) = sqlx::query_as(
+            "SELECT refresh_expires_at, NOT needs_reauth AND reauth_required_at IS NULL AND reauth_notified_at IS NULL FROM social_media_platform_auth",
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(stored, (expiry, true));
     }
 
     /// Wie `with_env`, aber fuer einen await-Punkt zwischen Setzen und Aufraeumen.
@@ -1306,7 +1475,8 @@ mod tests {
                 client_id TEXT, client_secret_enc BYTEA, token_expires_at TEXT, scopes TEXT, \
                 platform_user_id TEXT, platform_username TEXT, enc_version INTEGER DEFAULT 1, \
                 enc_kid TEXT DEFAULT 'v1', authorized_at TEXT DEFAULT CURRENT_TIMESTAMP, \
-                last_refreshed_at TEXT, enabled INTEGER DEFAULT 1)",
+                last_refreshed_at TEXT, enabled INTEGER DEFAULT 1, refresh_expires_at TIMESTAMPTZ, \
+                needs_reauth BOOLEAN NOT NULL DEFAULT FALSE, reauth_required_at TIMESTAMPTZ, reauth_notified_at TIMESTAMPTZ)",
         )
         .execute(&pool)
         .await
@@ -1514,9 +1684,14 @@ mod tests {
             Some("v2"),
         )
         .await;
+        sqlx::query("UPDATE social_media_platform_auth SET needs_reauth = TRUE, reauth_required_at = NOW(), reauth_notified_at = NOW() WHERE platform = 'youtube'")
+            .execute(&pool).await.unwrap();
         mgr2.handle_callback("code2", "stc2", None, None)
             .await
             .unwrap();
+        let recovered: bool = sqlx::query_scalar("SELECT NOT needs_reauth AND reauth_required_at IS NULL AND reauth_notified_at IS NULL AND refresh_expires_at IS NULL FROM social_media_platform_auth WHERE platform = 'youtube'")
+            .fetch_one(&pool).await.unwrap();
+        assert!(recovered);
         let refresh_present: bool = sqlx::query_scalar(
             "SELECT refresh_token_enc IS NOT NULL FROM social_media_platform_auth WHERE platform='youtube'",
         )
@@ -1626,6 +1801,7 @@ mod tests {
                 access_token: "old-local-access".into(),
                 refresh_token: Some("owned-local-refresh".into()),
                 expires_at: Utc::now() + Duration::hours(1),
+                refresh_expires_at: None,
                 scopes: Some("youtube.upload".into()),
                 user_id: Some("owned-platform-id".into()),
                 username: Some("owned-platform-name".into()),
