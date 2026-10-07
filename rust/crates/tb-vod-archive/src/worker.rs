@@ -143,6 +143,20 @@ pub struct StreamerZugang {
 #[async_trait]
 impl HochladerQuelle for StreamerZugang {
     async fn fuer(&self, twitch_user_id: &str) -> Option<Arc<dyn TeilHochlader>> {
+        let status = self
+            .credentials
+            .get_all_platforms_status(Some(twitch_user_id))
+            .await
+            .ok()?;
+        if !status.iter().any(|status| {
+            status.platform == "youtube"
+                && status.connected
+                && !status.expired
+                && !status.needs_reauth
+                && !status.uses_global_fallback
+        }) {
+            return None;
+        }
         let creds = self
             .credentials
             .get_channel_credentials_for_id("youtube", twitch_user_id)
@@ -1414,6 +1428,13 @@ mod tests {
         ] {
             sqlx::query(sqlx::AssertSqlSafe(ddl)).execute(&pool).await.unwrap();
         }
+        static NEXT_ID: AtomicUsize = AtomicUsize::new(100_000);
+        let first_id = NEXT_ID.fetch_add(1_000, Ordering::SeqCst) as i64;
+        sqlx::query("SELECT setval('twitch_vod_archive_vods_id_seq', $1, false)")
+            .bind(first_id)
+            .execute(&pool)
+            .await
+            .unwrap();
         Some(pool)
     }
 
