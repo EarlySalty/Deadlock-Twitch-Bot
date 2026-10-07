@@ -344,7 +344,7 @@ Discord ein. Ein Dienst für beide Wege:
 |-----|----------|-------|
 | Chat | `!clipcontest [clip-url]` im eigenen Kanal (nur Broadcaster und Mods) | rust/crates/tb-chat/src/commands.rs |
 | Interner Producer | `POST /internal/twitch/v1/clips/contest/submit` mit `clip_db_id` und serverseitiger `actor_twitch_user_id` | rust/crates/tb-internal-api/src/handlers/clip_contest.rs |
-| Dashboard | `POST /social-media/api/clips/{clip_db_id}/clip-contest` (Social-Studio, Knopf "Für Clip-Contest einreichen") | rust/crates/tb-dashboard-api/src/handlers/social_media_clip_contest.rs |
+| Dashboard | `POST /twitch/social-media/api/clips/{clip_db_id}/clip-contest` (Social-Studio, Knopf "Für Clip-Contest einreichen") | rust/crates/tb-dashboard-api/src/handlers/social_media_clip_contest.rs |
 
 Weitergabe an den Master-Broker von Deadlock-Bots über den vorhandenen
 `BrokerRelay` im Producer (Basis-URL der Bot-TOML, bestehendes internes Token).

@@ -61,6 +61,10 @@ async fn legacy_pages_redirect_once_with_suffix_query_and_method_preserved() {
                 "{method} {source}"
             );
             assert_eq!(response.headers()[header::LOCATION], target, "{source}");
+            if source.starts_with("/analyse") {
+                assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+                assert_eq!(response.headers()["clear-site-data"], "\"cache\"");
+            }
         }
     }
 }

@@ -4,7 +4,7 @@ Im [Social-Media-Manager](https://deutsche-deadlock-community.de/twitch/social-m
 
 ## Routenübergang
 
-Das Ziel nach Aufgabe P ist `/twitch/social-media?view=archiv`, innerhalb des Twitch-Bereichs. Bis diese gemeinsame Routenverschiebung gemergt ist, bleibt der oben verlinkte Einstieg in der bestehenden Manager-SPA aktiv; P übernimmt den Archivtab mit dem Manager.
+Der Archivtab liegt mit dem Manager unter `/twitch/social-media?view=archiv`. Die bisherigen Manageradressen leiten direkt dorthin weiter; offene Tabs können ihre bisherige API weiter verwenden. Verträge und geschützte Plattformadressen stehen in [Twitch-Pfadmigration](TWITCH_PATH_MIGRATION.md).
 
 ## Betriebsdatei
 

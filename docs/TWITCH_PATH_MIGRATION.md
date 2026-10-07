@@ -1,6 +1,6 @@
 # Twitch-Pfade seit 7. Oktober 2026
 
-Neue Twitch-Bot-Seiten gehören ausschließlich unter `/twitch/<name>`. Die Analyse liegt unter `/twitch/analyse`, der Social-Media-Manager unter `/twitch/social-media`. Beide verwenden weiterhin das gemeinsame Dashboard-Bundle unter `/twitch/dashboard-v2/assets/`.
+Neue Twitch-Bot-Seiten gehören ausschließlich unter `/twitch/<name>`. Die Analyse liegt unter `/twitch/analyse`, der Social-Media-Manager unter `/twitch/social-media`. Beide verwenden weiterhin dasselbe Dashboard-Bundle. Der Manager lädt Assets unter `/twitch/dashboard-v2/assets/`, die Analyse unter `/twitch/analyse/assets/`.
 
 ## Umstellung und Verträglichkeit
 
@@ -28,6 +28,10 @@ Die Plattformkonsolen wurden nicht verändert. Es ist für diese Auslieferung ke
 3. In Google Auth Platform die App-Startseite auf `https://deutsche-deadlock-community.de/twitch/social-media` aktualisieren; bestehende Nutzungsbedingungen und Datenschutzadressen weiter beibehalten oder die neuen Rechtsaliase zusätzlich verwenden. Domainprüfung und Freigabestatus prüfen.
 4. Im betreffenden Google-OAuth-Webclient `https://deutsche-deadlock-community.de/social-media/oauth/callback/youtube` beibehalten. Einen neuen Rücksprung unter `/twitch/social-media/oauth/callback/youtube` gegebenenfalls zusätzlich registrieren, nicht den alten ersetzen. Andere vorhandene Callback-Registrierungen, insbesondere Drive, bleiben unverändert.
 5. Nach Änderungen der Produktdarstellung die Plattformprüfung erneut abschließen und je Plattform eine Verbindung im Manager prüfen. Bestehende registrierte Callback-Adressen erst nach einer gesonderten, abgestimmten Umstellung entfernen.
+
+## Zwischengespeicherte alte Analyseweiterleitungen
+
+Vor der Umstellung antworteten `/twitch/analyse` und Unterpfade live mit 301 nach `/analyse`, ohne `Cache-Control` oder Ablaufdatum. Bereits gespeicherte Browserweiterleitungen sind deshalb möglich. Die neuen Weiterleitungen von `/analyse` tragen `Cache-Control: no-store` und `Clear-Site-Data: "cache"`, um den alten HTTP-Cache auf unterstützenden Browsern vor der Rückkehr zu leeren. Cookies und Website-Speicher werden dabei nicht gelöscht. Ein Browser ohne Unterstützung muss bei einer Schleife den Cache dieser Website leeren und die neue Analyseadresse erneut laden. Der Server selbst liefert auf der kanonischen Adresse keine Rückweiterleitung.
 
 ## Übrige Wurzelpfade: Bestand, nicht verschoben
 

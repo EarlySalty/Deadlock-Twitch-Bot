@@ -300,12 +300,25 @@ pub async fn dashboard_v2_public_assets_handler(Path(asset_path): Path<String>) 
 }
 
 pub async fn legacy_analyse_root_redirect_handler(uri: Uri) -> Response {
-    Redirect::permanent(&with_query("/twitch/analyse".to_string(), &uri)).into_response()
+    legacy_analyse_redirect_response("/twitch/analyse".to_string(), &uri)
 }
 
 pub async fn legacy_analyse_path_redirect_handler(uri: Uri) -> Response {
     let suffix = uri.path().strip_prefix("/analyse").unwrap_or("");
-    Redirect::permanent(&with_query(format!("/twitch/analyse{suffix}"), &uri)).into_response()
+    legacy_analyse_redirect_response(format!("/twitch/analyse{suffix}"), &uri)
+}
+
+fn legacy_analyse_redirect_response(location: String, uri: &Uri) -> Response {
+    let mut response = Redirect::permanent(&with_query(location, uri)).into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response.headers_mut().insert(
+        "clear-site-data",
+        axum::http::HeaderValue::from_static("\"cache\""),
+    );
+    response
 }
 
 pub async fn analyse_root_redirect_handler(uri: Uri) -> Response {
