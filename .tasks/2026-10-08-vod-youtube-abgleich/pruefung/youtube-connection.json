@@ -1,0 +1,58 @@
+{
+  "items": [
+    {
+      "can_check_youtube": true,
+      "can_retry": false,
+      "channel": "other",
+      "confirmed_parts": 1,
+      "discovered_at": "2026-10-07T23:28:46.579677Z",
+      "display_status": "youtube_error",
+      "drive_complete": false,
+      "drive_requested": false,
+      "drive_url": null,
+      "duration_sec": 1800,
+      "id": 2,
+      "last_attempt_at": null,
+      "needs_connection": true,
+      "parts": [
+        {
+          "index": 0,
+          "status": "done",
+          "youtube_video_id": "video99"
+        }
+      ],
+      "reason": null,
+      "recorded_at": null,
+      "status": "uploaded",
+      "status_label": "Prüfung gerade nicht möglich",
+      "title": "Fremder Stream",
+      "total_parts": 1,
+      "twitch_id": "v2",
+      "twitch_user_id": "99",
+      "uploaded_at": null,
+      "youtube_check": {
+        "can_request": false,
+        "complete": false,
+        "error": "connection",
+        "last_attempt_at": "2026-10-07T23:28:46.645133+00:00",
+        "last_success_at": "2026-10-07T23:28:46.618657+00:00",
+        "observations": [
+          {
+            "observed_at": "2026-10-08T01:00:00Z",
+            "part_index": 0,
+            "part_total": 2,
+            "privacy": "private",
+            "state": "processed",
+            "video_id": "video99"
+          }
+        ],
+        "pending": false,
+        "state": "error"
+      },
+      "youtube_complete": true,
+      "youtube_verified_complete": false
+    }
+  ],
+  "page": 1,
+  "total": 1
+}

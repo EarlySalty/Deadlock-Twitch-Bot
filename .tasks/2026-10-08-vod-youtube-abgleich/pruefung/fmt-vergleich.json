@@ -1,0 +1,17 @@
+{
+  "baseline_sha": "0ecae1370f1a80d1a101249b5c932663d69be8af",
+  "file": "rust/crates/tb-vod-archive/src/store.rs",
+  "results": [
+    {
+      "state": "baseline",
+      "format_hunks": 4,
+      "changed_lines": 36
+    },
+    {
+      "state": "current",
+      "format_hunks": 4,
+      "changed_lines": 36
+    }
+  ],
+  "identical_formatting_changes": true
+}

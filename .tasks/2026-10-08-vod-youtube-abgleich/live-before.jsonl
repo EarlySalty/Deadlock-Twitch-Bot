@@ -1,0 +1,7 @@
+{"case_id" : 10, "duration_sec" : 24750, "parts" : []}
+{"case_id" : 11, "duration_sec" : 19510, "parts" : []}
+{"case_id" : 2941, "duration_sec" : 13830, "parts" : [{"index" : 0, "status" : "pending", "has_video_id" : false}]}
+{"case_id" : 2995, "duration_sec" : 14663, "parts" : [{"index" : 0, "status" : "pending", "has_video_id" : false}]}
+{"case_id" : 2996, "duration_sec" : 2830, "parts" : [{"index" : 0, "status" : "pending", "has_video_id" : false}]}
+{"auth_id" : 5, "channel_id_present" : false, "scopes" : "https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.upload", "needs_reauth" : false, "enabled" : 1}
+{"auth_id" : 1, "channel_id_present" : false, "scopes" : "https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.upload", "needs_reauth" : false, "enabled" : 1}

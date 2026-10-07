@@ -1,0 +1,283 @@
+{
+  "items": [
+    {
+      "can_check_youtube": false,
+      "can_retry": false,
+      "channel": "testkanal",
+      "confirmed_parts": 1,
+      "discovered_at": "2026-10-07T23:28:44.728266Z",
+      "display_status": "youtube_uploaded",
+      "drive_complete": false,
+      "drive_requested": false,
+      "drive_url": null,
+      "duration_sec": 3600,
+      "id": 9,
+      "last_attempt_at": null,
+      "needs_connection": true,
+      "parts": [
+        {
+          "index": 0,
+          "status": "done",
+          "youtube_video_id": "synthetic9"
+        }
+      ],
+      "reason": null,
+      "recorded_at": null,
+      "status": "archived",
+      "status_label": "YouTube-Upload abgeschlossen",
+      "title": "Älterer Upload ohne Abschlusszeit",
+      "total_parts": 1,
+      "twitch_id": "v9",
+      "twitch_user_id": "42",
+      "uploaded_at": null,
+      "youtube_check": null,
+      "youtube_complete": true,
+      "youtube_verified_complete": false
+    },
+    {
+      "can_check_youtube": false,
+      "can_retry": true,
+      "channel": "testkanal",
+      "confirmed_parts": 0,
+      "discovered_at": "2026-10-07T23:28:44.728266Z",
+      "display_status": "waiting",
+      "drive_complete": false,
+      "drive_requested": false,
+      "drive_url": null,
+      "duration_sec": 3600,
+      "id": 8,
+      "last_attempt_at": null,
+      "needs_connection": true,
+      "parts": [
+        {
+          "index": 0,
+          "status": "pending",
+          "youtube_video_id": null
+        }
+      ],
+      "reason": null,
+      "recorded_at": null,
+      "status": "downloaded",
+      "status_label": "Wartet",
+      "title": "Wartet auf Upload",
+      "total_parts": 1,
+      "twitch_id": "v8",
+      "twitch_user_id": "42",
+      "uploaded_at": null,
+      "youtube_check": null,
+      "youtube_complete": false,
+      "youtube_verified_complete": false
+    },
+    {
+      "can_check_youtube": false,
+      "can_retry": false,
+      "channel": "testkanal",
+      "confirmed_parts": 0,
+      "discovered_at": "2026-10-07T23:28:44.728266Z",
+      "display_status": "uploading",
+      "drive_complete": false,
+      "drive_requested": false,
+      "drive_url": null,
+      "duration_sec": 3600,
+      "id": 7,
+      "last_attempt_at": "2026-10-01T13:00:00Z",
+      "needs_connection": true,
+      "parts": [
+        {
+          "index": 0,
+          "status": "uploading",
+          "youtube_video_id": null
+        }
+      ],
+      "reason": null,
+      "recorded_at": null,
+      "status": "uploading",
+      "status_label": "Lädt hoch",
+      "title": "Upload läuft",
+      "total_parts": 1,
+      "twitch_id": "v7",
+      "twitch_user_id": "42",
+      "uploaded_at": null,
+      "youtube_check": null,
+      "youtube_complete": false,
+      "youtube_verified_complete": false
+    },
+    {
+      "can_check_youtube": false,
+      "can_retry": false,
+      "channel": "testkanal",
+      "confirmed_parts": 0,
+      "discovered_at": "2026-10-07T23:28:44.728266Z",
+      "display_status": "drive_uploaded",
+      "drive_complete": true,
+      "drive_requested": false,
+      "drive_url": "https://drive.google.com/drive/folders/synthetic",
+      "duration_sec": 3600,
+      "id": 6,
+      "last_attempt_at": null,
+      "needs_connection": true,
+      "parts": [
+        {
+          "index": 0,
+          "status": "pending",
+          "youtube_video_id": null
+        }
+      ],
+      "reason": null,
+      "recorded_at": null,
+      "status": "drive_uploaded",
+      "status_label": "Auf Drive gesichert",
+      "title": "Bestätigte Drive-Kopie",
+      "total_parts": 1,
+      "twitch_id": "v6",
+      "twitch_user_id": "42",
+      "uploaded_at": "2026-10-01T13:00:00Z",
+      "youtube_check": null,
+      "youtube_complete": false,
+      "youtube_verified_complete": false
+    },
+    {
+      "can_check_youtube": false,
+      "can_retry": false,
+      "channel": "testkanal",
+      "confirmed_parts": 0,
+      "discovered_at": "2026-10-07T23:28:44.728266Z",
+      "display_status": "unknown",
+      "drive_complete": false,
+      "drive_requested": false,
+      "drive_url": null,
+      "duration_sec": 3600,
+      "id": 5,
+      "last_attempt_at": null,
+      "needs_connection": true,
+      "parts": [
+        {
+          "index": 0,
+          "status": "pending",
+          "youtube_video_id": "link-only"
+        }
+      ],
+      "reason": "Für diesen früheren Upload fehlt ein vollständiger Nachweis. Der YouTube-Abgleich kann vorhandene Videos zuordnen.",
+      "recorded_at": null,
+      "status": "archived",
+      "status_label": "Abschluss unklar",
+      "title": "Unklarer älterer Abschluss",
+      "total_parts": 1,
+      "twitch_id": "v5",
+      "twitch_user_id": "42",
+      "uploaded_at": null,
+      "youtube_check": null,
+      "youtube_complete": false,
+      "youtube_verified_complete": false
+    },
+    {
+      "can_check_youtube": false,
+      "can_retry": true,
+      "channel": "testkanal",
+      "confirmed_parts": 1,
+      "discovered_at": "2026-10-07T23:28:44.728266Z",
+      "display_status": "partial",
+      "drive_complete": false,
+      "drive_requested": false,
+      "drive_url": null,
+      "duration_sec": 50000,
+      "id": 4,
+      "last_attempt_at": "2026-10-01T13:00:00Z",
+      "needs_connection": true,
+      "parts": [
+        {
+          "index": 0,
+          "status": "done",
+          "youtube_video_id": "synthetic4"
+        },
+        {
+          "index": 1,
+          "status": "failed",
+          "youtube_video_id": null
+        }
+      ],
+      "reason": "Der Upload ist fehlgeschlagen. Prüfe die YouTube-Verbindung und versuche es erneut.",
+      "recorded_at": null,
+      "status": "upload_failed",
+      "status_label": "Teilweise auf YouTube",
+      "title": "Teilweise hochgeladen",
+      "total_parts": 2,
+      "twitch_id": "v4",
+      "twitch_user_id": "42",
+      "uploaded_at": null,
+      "youtube_check": null,
+      "youtube_complete": false,
+      "youtube_verified_complete": false
+    },
+    {
+      "can_check_youtube": false,
+      "can_retry": false,
+      "channel": "testkanal",
+      "confirmed_parts": 1,
+      "discovered_at": "2026-10-07T23:28:44.728266Z",
+      "display_status": "youtube_uploaded",
+      "drive_complete": false,
+      "drive_requested": false,
+      "drive_url": null,
+      "duration_sec": 3600,
+      "id": 3,
+      "last_attempt_at": null,
+      "needs_connection": true,
+      "parts": [
+        {
+          "index": 0,
+          "status": "done",
+          "youtube_video_id": "synthetic3"
+        }
+      ],
+      "reason": null,
+      "recorded_at": null,
+      "status": "archived",
+      "status_label": "YouTube-Upload abgeschlossen",
+      "title": "Bestätigter älterer Upload",
+      "total_parts": 1,
+      "twitch_id": "v3",
+      "twitch_user_id": "42",
+      "uploaded_at": "2026-09-01T12:00:00Z",
+      "youtube_check": null,
+      "youtube_complete": true,
+      "youtube_verified_complete": false
+    },
+    {
+      "can_check_youtube": false,
+      "can_retry": true,
+      "channel": "renamed",
+      "confirmed_parts": 0,
+      "discovered_at": "2026-10-07T23:28:44.719751Z",
+      "display_status": "failed",
+      "drive_complete": false,
+      "drive_requested": false,
+      "drive_url": null,
+      "duration_sec": 3600,
+      "id": 1,
+      "last_attempt_at": null,
+      "needs_connection": true,
+      "parts": [
+        {
+          "index": 0,
+          "status": "failed",
+          "youtube_video_id": null
+        }
+      ],
+      "reason": "Der Upload ist fehlgeschlagen. Prüfe die YouTube-Verbindung und versuche es erneut.",
+      "recorded_at": null,
+      "status": "upload_failed",
+      "status_label": "Fehlgeschlagen",
+      "title": "Eigener Stream",
+      "total_parts": 1,
+      "twitch_id": "v1",
+      "twitch_user_id": "42",
+      "uploaded_at": null,
+      "youtube_check": null,
+      "youtube_complete": false,
+      "youtube_verified_complete": false
+    }
+  ],
+  "page": 1,
+  "total": 8
+}
