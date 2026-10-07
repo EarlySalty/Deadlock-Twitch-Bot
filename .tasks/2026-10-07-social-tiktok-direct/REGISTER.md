@@ -4,9 +4,10 @@
 - Rolle: Blatt-Worker, keine weiteren Threads
 - Branch: feat/social-tiktok-direct-post
 - Worktree: /home/nathanael/.worktrees/tb-social-tiktok-direct
-- Basis: origin/main, 67786ba2
-- Status: Gate Runde 1 BLOCK durch gpt-6.1-sol. Drei blockierende Befunde in REVIEW.md. Übergabe an Haupt-Orchestrator für neuen Fixer; Implementierer korrigiert diese Befunde nicht selbst. Kein Merge oder Deploy.
-- Integrierter Implementierungscommit: 601142ae, Basis origin/main e0b0dbaf662d7680c4ceaa210bf15f1443693cd8.
+- Basis: origin/main, 07f511a3
+- Status: Frischer Fixer korrigierte die drei Funde. Gate Runde 2 ALLOW mit gpt-6.1-sol auf 59c904d8. Anschließend D2 auf aktuellem origin/main integriert; erneute Prüfung vor Merge erforderlich. Noch kein Deploy oder Post.
+- Autonome Fixschleife ausdrücklich freigegeben: bei BLOCK frischer nativer Fixer-Subagent pro Runde, keine neuen T3-Threads; Rückmeldung bei Abschluss oder echtem Blocker, spätestens nach fünf erfolglosen Runden.
+- Integrierter Fixcommit nach Rebase: 4c830249, zusätzlich dokumentierte D2-Integration in FIXER-EVIDENCE.md.
 - Nachweise: EVIDENCE.md, REVIEW.md. Eigene Sichtprüfung unter /home/nathanael/.claude/sichtpruefung/tb-social-tiktok-direct/.
 - Nur lesende Live-Abfrage erfolgreich: earlysalty, PUBLIC_TO_EVERYONE / MUTUAL_FOLLOW_FRIENDS / SELF_ONLY, Interaktionen verfügbar, Höchstdauer 3600 Sekunden.
 - Live-Test noch nicht begonnen. Ein gespeicherter ready-Vorschaueintrag für Clip 124589 zeigt auf eine fehlende Datei; dieser Clip ist nicht als Testvideo freigegeben oder gepostet worden.
