@@ -479,9 +479,13 @@ social_media_platform_auth|enc_kid|text|YES|'v1'::text
 social_media_platform_auth|enc_version|integer|YES|1
 social_media_platform_auth|id|integer|NO|
 social_media_platform_auth|last_refreshed_at|text|YES|
+social_media_platform_auth|needs_reauth|boolean|NO|false
 social_media_platform_auth|platform_user_id|text|YES|
 social_media_platform_auth|platform_username|text|YES|
 social_media_platform_auth|platform|text|NO|
+social_media_platform_auth|reauth_notified_at|timestamp with time zone|YES|
+social_media_platform_auth|reauth_required_at|timestamp with time zone|YES|
+social_media_platform_auth|refresh_expires_at|timestamp with time zone|YES|
 social_media_platform_auth|refresh_token_enc|bytea|YES|
 social_media_platform_auth|scopes|text|YES|
 social_media_platform_auth|streamer_login|text|YES|

@@ -1,0 +1,61 @@
+{
+  "now": "2026-10-07T12:00:00.000Z",
+  "dist": "/home/nathanael/.worktrees/tb-social-token-ablauf/bot/analytics/dashboard_v2/dist",
+  "evidence": [
+    {
+      "name": "metadata-read-error",
+      "text": "Verbindungen · fixture\nGespeicherter Stand nicht abrufbar\nDer Verbindungsstatus ist gerade nicht abrufbar.\nSolange bleibt diese Karte gesperrt, damit nichts Falsches gespeichert wird. Bitte die Seite neu laden.\nYouTube\nZustand unbekannt\nTikTok\nZustand unbekannt\nInstagram\nZustand unbekannt",
+      "dates": [],
+      "reconnects": 0,
+      "geometry": {
+        "document": 1440,
+        "viewport": 1440
+      }
+    },
+    {
+      "name": "instagram-20-days",
+      "text": "Verbindungen · fixture\nYouTube\nfixture\nVerlängert sich automatisch.\nTrennen\nTikTok\nfixture\nVerlängert sich automatisch.\n\nTikTok-Statistiken sind in dieser Beta nicht verfügbar.\n\nTrennen\nInstagram\nInstagram ist in dieser Beta noch nicht verfügbar.\nBitte bis 27.10.2026 neu verbinden.\nTrennen",
+      "dates": [
+        "27.10.2026"
+      ],
+      "reconnects": 0,
+      "geometry": {
+        "document": 1440,
+        "viewport": 1440
+      }
+    },
+    {
+      "name": "nonrenewable-6-days",
+      "text": "Verbindungen · fixture\nYouTube\nfixture\nBitte bis 13.10.2026 neu verbinden.\nTrennen\nTikTok\nfixture\nBitte bis 13.10.2026 neu verbinden.\n\nTikTok-Statistiken sind in dieser Beta nicht verfügbar.\n\nTrennen\nInstagram\nInstagram ist in dieser Beta noch nicht verfügbar.\nVerlängert sich automatisch.\nTrennen",
+      "dates": [
+        "13.10.2026",
+        "13.10.2026"
+      ],
+      "reconnects": 0,
+      "geometry": {
+        "document": 1440,
+        "viewport": 1440
+      }
+    },
+    {
+      "name": "renewable-access-ended",
+      "text": "Verbindungen · fixture\nYouTube\nfixture\nVerlängert sich automatisch.\nTrennen\nTikTok\nfixture\nVerlängert sich automatisch.\n\nTikTok-Statistiken sind in dieser Beta nicht verfügbar.\n\nTrennen\nInstagram\nInstagram ist in dieser Beta noch nicht verfügbar.\nVerlängert sich automatisch.\nTrennen",
+      "dates": [],
+      "reconnects": 0,
+      "geometry": {
+        "document": 1440,
+        "viewport": 1440
+      }
+    },
+    {
+      "name": "nonrenewable-ended",
+      "text": "Verbindungen · fixture\nYouTube\nZugang abgelaufen, bitte neu verbinden\nNeu verbinden\nTrennen\nTikTok\nZugang abgelaufen, bitte neu verbinden\n\nTikTok-Statistiken sind in dieser Beta nicht verfügbar.\n\nNeu verbinden\nTrennen\nInstagram\nInstagram ist in dieser Beta noch nicht verfügbar.\nVerlängert sich automatisch.\nTrennen",
+      "dates": [],
+      "reconnects": 2,
+      "geometry": {
+        "document": 1440,
+        "viewport": 1440
+      }
+    }
+  ]
+}

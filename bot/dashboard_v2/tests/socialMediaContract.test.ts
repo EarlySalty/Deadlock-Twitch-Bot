@@ -445,6 +445,22 @@ test('Befund 5: die Verbindungskarte erfindet keinen Verbindungszustand', () => 
   }
 });
 
+test('Verbindungsdatum nutzt das Access-Ende nur ohne automatische Erneuerung', () => {
+  const rumpf = komponentenRumpf(lies(SEITE), 'PlatformConnectionsCard');
+  const zuweisung = rumpf.match(/const verbindungsablauf = ([\s\S]*?);/);
+  assert.ok(zuweisung, 'Die Auswahl des Verbindungsdatums fehlt.');
+  const datum = new Function('platform', 'status', `return (${zuweisung[1]});`);
+  const access = '2026-10-13T12:00:00Z';
+  const refresh = '2027-10-07T12:00:00Z';
+  for (const platform of ['tiktok', 'youtube']) {
+    assert.equal(datum(platform, { expires_at: access, refresh_expires_at: null, automatically_renewed: false }), access);
+    assert.equal(datum(platform, { expires_at: access, refresh_expires_at: refresh, automatically_renewed: false }), access);
+    assert.equal(datum(platform, { expires_at: access, refresh_expires_at: refresh, automatically_renewed: true }), refresh);
+    assert.equal(datum(platform, { expires_at: access, refresh_expires_at: null, automatically_renewed: true }), null);
+  }
+  assert.equal(datum('instagram', { expires_at: access, refresh_expires_at: refresh, automatically_renewed: true }), access);
+});
+
 test('Befund 6: die drei Zeitplan-Karten sperren nach gescheitertem GET', () => {
   const quelle = lies(SEITE);
   for (const karte of ['ApprovalModeCard', 'CategoryCard', 'PostingScheduleCard']) {

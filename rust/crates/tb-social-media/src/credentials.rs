@@ -43,6 +43,10 @@ pub struct PlatformStatus {
     pub user_id: Option<String>,
     pub expires_at: Option<String>,
     pub expired: bool,
+    pub refresh_expires_at: Option<String>,
+    pub needs_reauth: bool,
+    pub reauth_soon: bool,
+    pub automatically_renewed: bool,
     pub scopes: Option<String>,
     pub uses_global_fallback: bool,
 }
@@ -92,6 +96,8 @@ impl CredentialManager {
     ) -> Option<SocialMediaCredentials> {
         self.get_credentials_scoped(platform, twitch_user_id, true)
             .await
+            .ok()
+            .flatten()
     }
 
     pub async fn get_channel_credentials_for_id(
@@ -101,6 +107,8 @@ impl CredentialManager {
     ) -> Option<SocialMediaCredentials> {
         self.get_credentials_scoped(platform, Some(twitch_user_id), false)
             .await
+            .ok()
+            .flatten()
     }
 
     async fn get_credentials_scoped(
@@ -108,13 +116,13 @@ impl CredentialManager {
         platform: &str,
         twitch_user_id: Option<&str>,
         include_global: bool,
-    ) -> Option<SocialMediaCredentials> {
+    ) -> Result<Option<SocialMediaCredentials>, sqlx::Error> {
         if twitch_user_id
             .is_some_and(|id| id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_digit()))
         {
-            return None;
+            return Ok(None);
         }
-        let row = sqlx::query_as::<_, CredentialRow>(
+        let Some(row) = sqlx::query_as::<_, CredentialRow>(
             "SELECT id, platform, streamer_login, access_token_enc, refresh_token_enc, client_id, client_secret_enc, token_expires_at, scopes, platform_user_id, platform_username, enc_version
              FROM social_media_platform_auth
              WHERE platform = $1 AND enabled = 1 AND (
@@ -123,7 +131,9 @@ impl CredentialManager {
              ORDER BY CASE WHEN twitch_user_id = $2 THEN 1 ELSE 0 END DESC, authorized_at DESC, id DESC LIMIT 1",
         )
         .bind(platform).bind(twitch_user_id).bind(include_global)
-        .fetch_optional(&self.pool).await.ok().flatten()?;
+        .fetch_optional(&self.pool).await? else {
+            return Ok(None);
+        };
 
         let id = row.id;
         let row_platform = row.platform;
@@ -145,7 +155,7 @@ impl CredentialManager {
                     streamer = %sanitize(streamer_ref.unwrap_or("<none>")),
                     "Decrypt des Auth-Records fehlgeschlagen"
                 );
-                return None;
+                return Ok(None);
             }
         };
         let refresh_token = refresh_enc.and_then(|b| {
@@ -165,7 +175,7 @@ impl CredentialManager {
                 .ok()
         });
 
-        Some(SocialMediaCredentials {
+        Ok(Some(SocialMediaCredentials {
             id,
             platform: row_platform,
             streamer_login: row_streamer,
@@ -177,7 +187,7 @@ impl CredentialManager {
             scopes: row.scopes,
             platform_user_id: row.platform_user_id,
             platform_username: row.platform_username,
-        })
+        }))
     }
 
     /// Verbindungs-Status aller drei Plattformen (Python
@@ -185,17 +195,50 @@ impl CredentialManager {
     pub async fn get_all_platforms_status(
         &self,
         twitch_user_id: Option<&str>,
-    ) -> Vec<PlatformStatus> {
+    ) -> Result<Vec<PlatformStatus>, sqlx::Error> {
+        self.get_all_platforms_status_at(twitch_user_id, now_ts())
+            .await
+    }
+
+    async fn get_all_platforms_status_at(
+        &self,
+        twitch_user_id: Option<&str>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<PlatformStatus>, sqlx::Error> {
         let mut out = Vec::with_capacity(PLATFORMS.len());
         for platform in PLATFORMS {
-            let status = match self.get_credentials_for_id(platform, twitch_user_id).await {
-                Some(creds) => {
+            let connection = if let Some(creds) = self
+                .get_credentials_scoped(platform, twitch_user_id, true)
+                .await?
+            {
+                match sqlx::query_as::<_, (Option<chrono::DateTime<chrono::Utc>>, bool)>(
+                    "SELECT refresh_expires_at, needs_reauth FROM social_media_platform_auth WHERE id = $1 AND enabled = 1",
+                ).bind(creds.id).fetch_optional(&self.pool).await? {
+                    Some(metadata) => Some((creds, metadata)),
+                    None => None,
+                }
+            } else {
+                None
+            };
+            let status = match connection {
+                Some((creds, (refresh_expires_at, needs_reauth))) => {
                     let uses_global_fallback = if let Some(id) = twitch_user_id {
-                        self.get_channel_credentials_for_id(platform, id)
-                            .await
+                        self.get_credentials_scoped(platform, Some(id), false)
+                            .await?
                             .is_none()
                     } else {
                         false
+                    };
+                    let automatically_renewed =
+                        platform == "instagram" || creds.refresh_token.is_some();
+                    let connection_expiry = if platform == "instagram" || !automatically_renewed {
+                        creds
+                            .expires_at
+                            .as_deref()
+                            .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+                            .map(|expiry| expiry.with_timezone(&chrono::Utc))
+                    } else {
+                        refresh_expires_at
                     };
                     PlatformStatus {
                         platform: platform.to_string(),
@@ -203,12 +246,15 @@ impl CredentialManager {
                         username: creds.platform_username.clone(),
                         user_id: creds.platform_user_id.clone(),
                         expires_at: creds.expires_at.clone(),
-                        // Dashboard-Status und Refresh-Fenster sind zwei verschiedene Dinge:
-                        // YouTube stellt Access-Tokens typischerweise fuer ~1h aus. Die
-                        // Refresh-Logik darf sie innerhalb dieses Fensters proaktiv erneuern,
-                        // aber direkt nach einem erfolgreichen OAuth-Callback als
-                        // "abgelaufen" zu markieren ist falsch.
-                        expired: token_actually_expired(creds.expires_at.as_deref(), now_ts()),
+                        expired: needs_reauth
+                            || connection_expiry.is_some_and(|expiry| expiry <= now)
+                            || (!automatically_renewed
+                                && token_actually_expired(creds.expires_at.as_deref(), now)),
+                        refresh_expires_at: refresh_expires_at.map(|expiry| expiry.to_rfc3339()),
+                        needs_reauth,
+                        reauth_soon: connection_expiry
+                            .is_some_and(|expiry| expiry < now + chrono::Duration::days(7)),
+                        automatically_renewed,
                         scopes: creds.scopes.clone(),
                         uses_global_fallback,
                     }
@@ -220,13 +266,17 @@ impl CredentialManager {
                     user_id: None,
                     expires_at: None,
                     expired: false,
+                    refresh_expires_at: None,
+                    needs_reauth: false,
+                    reauth_soon: false,
+                    automatically_renewed: false,
                     scopes: None,
                     uses_global_fallback: false,
                 },
             };
             out.push(status);
         }
-        out
+        Ok(out)
     }
 
     /// True, wenn der Token abgelaufen ist oder binnen 1h abläuft.
@@ -353,7 +403,7 @@ mod tests {
                 client_id TEXT, client_secret_enc BYTEA, token_expires_at TEXT, scopes TEXT, \
                 platform_user_id TEXT, platform_username TEXT, enc_version INTEGER DEFAULT 1, \
                 enc_kid TEXT DEFAULT 'v1', authorized_at TEXT DEFAULT CURRENT_TIMESTAMP, \
-                enabled INTEGER DEFAULT 1)",
+                enabled INTEGER DEFAULT 1, refresh_expires_at TIMESTAMPTZ, needs_reauth BOOLEAN NOT NULL DEFAULT FALSE)",
         )
         .execute(&pool)
         .await
@@ -407,7 +457,7 @@ mod tests {
         sqlx::query("UPDATE social_media_platform_auth SET twitch_user_id = '42' WHERE platform = 'youtube'")
             .execute(&pool).await.unwrap();
         let manager = CredentialManager::new(pool, cipher);
-        let status = manager.get_all_platforms_status(Some("42")).await;
+        let status = manager.get_all_platforms_status(Some("42")).await.unwrap();
         let youtube = status.iter().find(|s| s.platform == "youtube").unwrap();
         assert!(youtube.connected);
         assert!(!youtube.uses_global_fallback);
@@ -453,6 +503,190 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn status_reports_connection_expiry_not_renewable_access_expiry() {
+        let pool = make_pool("t_sm_creds_connection_status").await.unwrap();
+        let cipher = cipher();
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-07T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        seed(
+            &pool,
+            &cipher,
+            "youtube",
+            None,
+            "local-access",
+            Some("local-refresh"),
+        )
+        .await;
+        seed(
+            &pool,
+            &cipher,
+            "tiktok",
+            None,
+            "local-access",
+            Some("local-refresh"),
+        )
+        .await;
+        sqlx::query("UPDATE social_media_platform_auth SET token_expires_at = $1")
+            .bind((now - Duration::hours(1)).to_rfc3339())
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE social_media_platform_auth SET refresh_expires_at = $1 WHERE platform = 'tiktok'")
+            .bind(now + Duration::days(6)).execute(&pool).await.unwrap();
+        let manager = CredentialManager::new(pool.clone(), cipher);
+        let statuses = manager
+            .get_all_platforms_status_at(None, now)
+            .await
+            .unwrap();
+        let youtube = statuses
+            .iter()
+            .find(|status| status.platform == "youtube")
+            .unwrap();
+        assert!(youtube.automatically_renewed);
+        assert!(!youtube.expired);
+        assert!(youtube.refresh_expires_at.is_none());
+        let tiktok = statuses
+            .iter()
+            .find(|status| status.platform == "tiktok")
+            .unwrap();
+        assert!(tiktok.reauth_soon);
+        assert!(!tiktok.expired);
+        assert_eq!(
+            tiktok.refresh_expires_at,
+            Some((now + Duration::days(6)).to_rfc3339())
+        );
+        sqlx::query(
+            "UPDATE social_media_platform_auth SET needs_reauth = TRUE WHERE platform = 'youtube'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let statuses = manager
+            .get_all_platforms_status_at(None, now)
+            .await
+            .unwrap();
+        assert!(
+            statuses
+                .iter()
+                .find(|status| status.platform == "youtube")
+                .unwrap()
+                .expired
+        );
+    }
+
+    #[tokio::test]
+    async fn nonrenewable_status_uses_access_deadline_without_fabricating_refresh_expiry() {
+        let pool = make_pool("t_sm_creds_nonrenewable_status").await.unwrap();
+        let cipher = cipher();
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-07T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        for platform in ["tiktok", "youtube"] {
+            seed(&pool, &cipher, platform, None, "local-access", None).await;
+        }
+        let access_expiry = now + Duration::days(7);
+        sqlx::query("UPDATE social_media_platform_auth SET token_expires_at = $1")
+            .bind(access_expiry.to_rfc3339())
+            .execute(&pool)
+            .await
+            .unwrap();
+        let manager = CredentialManager::new(pool.clone(), cipher);
+        for (at, expired, soon) in [
+            (now, false, false),
+            (now + Duration::days(1), false, true),
+            (access_expiry, true, true),
+        ] {
+            let statuses = manager.get_all_platforms_status_at(None, at).await.unwrap();
+            for platform in ["tiktok", "youtube"] {
+                let status = statuses
+                    .iter()
+                    .find(|status| status.platform == platform)
+                    .unwrap();
+                assert!(status.connected);
+                assert!(!status.automatically_renewed);
+                assert_eq!(status.expired, expired);
+                assert_eq!(status.reauth_soon, soon);
+                assert_eq!(status.expires_at, Some(access_expiry.to_rfc3339()));
+                assert!(status.refresh_expires_at.is_none());
+            }
+        }
+        let provider_refresh_expiry = now + Duration::days(365);
+        sqlx::query("UPDATE social_media_platform_auth SET refresh_expires_at = $1")
+            .bind(provider_refresh_expiry)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let statuses = manager
+            .get_all_platforms_status_at(None, access_expiry)
+            .await
+            .unwrap();
+        for status in statuses.iter().filter(|status| status.connected) {
+            assert!(status.expired);
+            assert!(status.reauth_soon);
+            assert_eq!(
+                status.refresh_expires_at,
+                Some(provider_refresh_expiry.to_rfc3339())
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn status_read_errors_are_not_missing_connections() {
+        let pool = make_pool("t_sm_creds_status_errors").await.unwrap();
+        let cipher = cipher();
+        let manager = CredentialManager::new(pool.clone(), cipher.clone());
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-07T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let statuses = manager
+            .get_all_platforms_status_at(None, now)
+            .await
+            .unwrap();
+        assert_eq!(statuses.len(), PLATFORMS.len());
+        assert!(statuses.iter().all(|status| !status.connected));
+
+        for platform in PLATFORMS {
+            seed(&pool, &cipher, platform, None, "local-access", None).await;
+            sqlx::query("ALTER TABLE social_media_platform_auth DROP COLUMN refresh_expires_at")
+                .execute(&pool)
+                .await
+                .unwrap();
+            assert!(manager.get_credentials(platform, None).await.is_some());
+            let error = manager
+                .get_all_platforms_status_at(None, now)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.as_database_error().unwrap().code().as_deref(),
+                Some("42703")
+            );
+            sqlx::query(
+                "ALTER TABLE social_media_platform_auth ADD COLUMN refresh_expires_at TIMESTAMPTZ",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query("TRUNCATE social_media_platform_auth")
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("DROP TABLE social_media_platform_auth")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let error = manager
+            .get_all_platforms_status_at(None, now)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.as_database_error().unwrap().code().as_deref(),
+            Some("42P01")
+        );
+    }
+
+    #[tokio::test]
     async fn all_platforms_status() {
         let Some(pool) = make_pool("t_sm_creds_status").await else {
             return;
@@ -460,7 +694,7 @@ mod tests {
         let c = cipher();
         seed(&pool, &c, "youtube", None, "yt-access", None).await;
         let mgr = CredentialManager::new(pool, c);
-        let status = mgr.get_all_platforms_status(None).await;
+        let status = mgr.get_all_platforms_status(None).await.unwrap();
         assert_eq!(status.len(), 3);
         let yt = status.iter().find(|s| s.platform == "youtube").unwrap();
         assert!(yt.connected);
