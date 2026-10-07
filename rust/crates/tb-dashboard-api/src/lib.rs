@@ -215,7 +215,12 @@ pub fn build_authed_router(pool: PgPool, token: String, rate_limiter: RateLimite
     build_authed_router_with_analysis_store(pool, token, rate_limiter, ai_store)
 }
 
-fn build_authed_router_with_analysis_store(pool: PgPool, token: String, rate_limiter: RateLimiter, ai_store: ai_store::AiStore) -> Router {
+fn build_authed_router_with_analysis_store(
+    pool: PgPool,
+    token: String,
+    rate_limiter: RateLimiter,
+    ai_store: ai_store::AiStore,
+) -> Router {
     use handlers::scam_guard_enforce;
     use handlers::{
         ad_manager, ads_schedule, affiliate_portal, ai_analysis, ai_chat, ai_history, audience,
@@ -265,8 +270,6 @@ fn build_authed_router_with_analysis_store(pool: PgPool, token: String, rate_lim
             "/twitch/api/v2/auth-status",
             get(auth_status::auth_status_handler),
         )
-        // Social-Media-Dashboard-SPA (Auth erforderlich).
-        .route("/social-media", get(social_media::index_handler))
         // Social-Media Read-API (scope-gefiltert).
         .route("/social-media/api/stats", get(social_media::stats_handler))
         .route("/social-media/api/clips", get(social_media::clips_handler))
@@ -1778,19 +1781,27 @@ pub fn build_affiliate_portal_router() -> Router {
     )
 }
 
-/// Baut den Router für die Social-Media-Admin-SPA (P2.66).
-///
-/// Die Handler nutzen denselben Auth-/Host-Gate-Pfad wie `/analyse`: der
-/// `DashboardAuthLevel`-Extractor liest `DashboardAuthState` aus der globalen
-/// Extension, und der `PgPool`-State wird fuer Partner-Access-Checks benötigt.
-pub fn build_social_media_admin_router(pool: PgPool) -> Router {
+pub fn build_social_media_manager_router(pool: PgPool) -> Router {
     use handlers::spa;
 
     Router::new()
-        .route("/social-media-admin", get(spa::social_media_admin_handler))
+        .route("/social-media", get(spa::social_media_manager_handler))
+        .route("/social-media/", get(spa::social_media_manager_handler))
+        .route(
+            "/social-media/{*path}",
+            get(spa::social_media_manager_handler),
+        )
+        .route(
+            "/social-media-admin",
+            axum::routing::any(spa::legacy_social_media_redirect_handler),
+        )
+        .route(
+            "/social-media-admin/",
+            axum::routing::any(spa::legacy_social_media_redirect_handler),
+        )
         .route(
             "/social-media-admin/{*path}",
-            get(spa::social_media_admin_assets_handler),
+            axum::routing::any(spa::legacy_social_media_redirect_handler),
         )
         .with_state(pool)
 }
@@ -1988,7 +1999,9 @@ pub async fn analysis_writer_pool(config: &tb_config::DbConfig) -> Result<PgPool
     use std::str::FromStr;
     let options = sqlx::postgres::PgConnectOptions::from_str(&config.dsn)?;
     if !options.get_host().starts_with('/') || options.get_database() != Some("twitch_analytics") {
-        return Err(sqlx::Error::Configuration("Analyse-Schreibzugang benötigt den lokalen Peer-Socket und twitch_analytics".into()));
+        return Err(sqlx::Error::Configuration(
+            "Analyse-Schreibzugang benötigt den lokalen Peer-Socket und twitch_analytics".into(),
+        ));
     }
     sqlx::postgres::PgPoolOptions::new()
         .max_connections(2)
@@ -2087,7 +2100,14 @@ pub fn build_router_with_contest_writer(
     helix: Option<HelixClient>,
     brain_runtime: handlers::self_explainer::SelfExplainerBrainRuntime,
 ) -> Router {
-    build_router_with_analysis_writer(pool.clone(), contest_writer, pool, token, helix, brain_runtime)
+    build_router_with_analysis_writer(
+        pool.clone(),
+        contest_writer,
+        pool,
+        token,
+        helix,
+        brain_runtime,
+    )
 }
 
 /// Produktiver Einstieg mit getrennten Schreibrollen für Wettbewerb und Analyse.
@@ -2150,7 +2170,7 @@ pub fn build_router_with_analysis_writer(
         .merge(build_market_router(pool.clone(), token.clone()))
         .merge(build_raid_pages_router(pool.clone()))
         .merge(build_affiliate_portal_router())
-        .merge(build_social_media_admin_router(pool.clone()))
+        .merge(build_social_media_manager_router(pool.clone()))
         .merge(build_v2_spa_pages_router(pool.clone()))
         .merge(build_obs_ws_router(pool.clone(), token.clone()))
         .merge(build_platform_token_router(pool.clone(), token.clone()))

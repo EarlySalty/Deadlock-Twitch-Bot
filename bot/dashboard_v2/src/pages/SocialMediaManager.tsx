@@ -17,8 +17,12 @@ import { dashboardRuntimeConfig, resolveEffectiveDemoMode } from '@/runtimeConfi
 import { ZUGRIFF_LABELS } from '@/components/socialmedia/labels';
 import { resolveSocialMediaChannel } from '@/utils/socialMediaChannel';
 
-export function SocialMediaAdminDashboard() {
+export function SocialMediaManager() {
   const t = useT();
+  useEffect(() => {
+    document.title = 'Social-Media-Manager';
+  }, []);
+
   const [streamerUserId, setStreamerUserId] = useState('');
   const requestedChannel = useRef(new URLSearchParams(window.location.search));
   const hasAutoSetStreamer = useRef(false);
@@ -120,7 +124,7 @@ export function SocialMediaAdminDashboard() {
                 title={
                   selectedGranted
                     ? t('Freigabe für diesen Streamer entziehen')
-                    : t('Diesen Streamer für das eigene Social-Media-Dashboard freischalten')
+                    : t('Diesen Streamer für den eigenen Social-Media-Manager freischalten')
                 }
                 className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
                   selectedGranted

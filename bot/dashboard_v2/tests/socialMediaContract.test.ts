@@ -71,7 +71,7 @@ const OBERFLAECHE = [
   'src/components/socialmedia/PostingPlanDraft.tsx',
   'src/components/socialmedia/WorkspaceDialog.tsx',
   'src/components/socialmedia/TikTokPostDialog.tsx',
-  'src/pages/SocialMediaAdmin.tsx',
+  'src/pages/SocialMediaManager.tsx',
   'src/components/socialmedia/AnalyticsTab.tsx',
   'src/components/socialmedia/EnrichmentPanel.tsx',
   'src/components/socialmedia/LayoutEditor.tsx',
@@ -572,7 +572,7 @@ test('ein Code ohne Meldung landet nicht als Platzhalterinhalt im Satz', () => {
 });
 
 test('Admin-Upload hält die ausgewählte Twitch-ID statt des veränderlichen Namens fest', () => {
-  const admin = lies('src/pages/SocialMediaAdmin.tsx');
+  const admin = lies('src/pages/SocialMediaManager.tsx');
   const studio = lies('src/pages/SocialMedia.tsx');
   const api = lies('src/api/socialMedia.ts');
   assert.match(admin, /value=\{selectedChannel\?\.twitchUserId \?\? ''\}/);

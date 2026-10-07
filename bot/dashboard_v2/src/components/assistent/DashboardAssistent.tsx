@@ -33,7 +33,7 @@ function seiteSlug(): string {
     slug = 'verwaltung';
   } else if (path === PREVIEW_UPLINK_ROUTE || path === '/twitch/uplink') {
     slug = 'uplink';
-  } else if (path === '/social-media-admin') {
+  } else if (path === '/social-media' || path.startsWith('/social-media/')) {
     slug = 'social-media';
   } else if (path === PREVIEW_OVERLAY_ROUTE || path === '/twitch/overlay') {
     slug = 'overlay';

@@ -34,9 +34,16 @@ test('kein Quelltext nennt noch Twitch Analytics oder Analyse Dashboard', () => 
 });
 
 test('der Archiv-Einstieg bleibt im Social-Media-Manager', () => {
-  const src = read('src/pages/SocialMediaAdmin.tsx');
+  const src = read('src/pages/SocialMediaManager.tsx');
   assert.match(src, /href="\/social-media\?view=archiv"/);
   assert.doesNotMatch(src, /\/social-media-admin\?view=archiv|Analyse-Dashboard/);
+});
+
+test('die Managerseite liegt unter ihrem eigenen Pfad', () => {
+  const app = read('src/App.tsx');
+  assert.ok(app.includes("path === '/social-media' || path.startsWith('/social-media/')"));
+  assert.ok(app.includes('<SocialMediaManager />'));
+  assert.doesNotMatch(app, /SocialMediaAdmin|social-media-admin/);
 });
 
 test('Home und Hilfe verwenden dieselbe Einrichtung statt unabhängiger Dialoge', () => {

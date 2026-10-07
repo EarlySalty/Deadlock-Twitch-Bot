@@ -121,8 +121,8 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
         ]
       : []),
     {
-      href: '/social-media-admin',
-      label: 'Social Media Dashboard',
+      href: '/social-media',
+      label: 'Social-Media-Manager',
       icon: Film,
       active: activeRoute === 'social',
     },

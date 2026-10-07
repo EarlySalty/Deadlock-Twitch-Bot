@@ -27,7 +27,7 @@ Die folgenden Pfade liegen unter `rust/crates/tb-social-media/src/`:
 
 ## Bedienung und Verträge
 
-Das Studio liegt unter `/social-media-admin`; die Oberfläche stammt aus `bot/dashboard_v2/`. Die Rust-API liegt in `rust/crates/tb-dashboard-api/src/handlers/social_media.rs`. Die Kanal-Freigabe kann auch im Admin-Dashboard unter der Streamer-Detailseite gesetzt werden. Der Adminalias `/twitch/api/admin/partner-access` verwendet denselben Handler wie `/social-media/api/access`. Beide Schreibwege erwarten `twitch_user_id`, nicht den veränderlichen Login.
+Der Social-Media-Manager liegt unter `/social-media`; die Oberfläche stammt aus `bot/dashboard_v2/src/pages/SocialMediaManager.tsx`. Unterpfade öffnen dieselbe SPA. `/social-media-admin` und dessen Unterpfade leiten mit HTTP 308 auf den passenden neuen Pfad weiter, einschließlich Query-String. `/social-media/terms`, `/social-media/privacy`, `/social-media/oauth/*` und `/social-media/api/*` behalten ihre eigenen Handler. Die Rust-API liegt in `rust/crates/tb-dashboard-api/src/handlers/social_media.rs`. Die Kanal-Freigabe kann auch im Admin-Dashboard unter der Streamer-Detailseite gesetzt werden. Der Adminalias `/twitch/api/admin/partner-access` verwendet denselben Handler wie `/social-media/api/access`. Beide Schreibwege erwarten `twitch_user_id`, nicht den veränderlichen Login.
 
 Ein fehlgeschlagener manueller Clip-Fetch liefert HTTP 502 mit `success: false` und dem Fehler des Fetchdiensts. Eine leere, erfolgreiche Suche bleibt ein Erfolg mit null Clips.
 

@@ -66,7 +66,7 @@ Abgrenzung: Die Daten kommen aus [analytics.md](analytics.md); das Frontend rend
 - `socialmedia/` — `LayoutEditor`, `EnrichmentPanel`, `AnalyticsTab`. `banners/`/`modals/` — `TrialBanner`, `TrialExpiryModal`. `scopes/`, `roadmap/`, `verwaltung/` (AI-Engagement-Settings).
 
 ### pages/
-Je Tab eine Page-Komponente, u. a.: `Overview`, `Audience`, `Growth`, `Schedule`, `Sessions`/`SessionDetail`, `Category`, `Comparison`, `Coaching` (mit Empfehlungs-Sektionen), `AIAnalysis`, `Monetization`, `Viewers`/`ViewerTimeline`, `Experimental`, `SocialMedia`/`SocialMediaAdmin`, `TitleGenerator`, `StreamReports`, `Pricing`, `Verwaltung`, `AuthScopes`, `InternalHomeLanding` (die Startseite). Chat-Analytics ist in Subpages (`chatAnalyticsContent`, `chatAnalyticsDeepSections`, `chatSubPages`, `chatAnalyticsViewModel`) aufgeteilt. Deutsche Alias-Pages (`Publikum`, `Wachstum`, `Planung`, `WasTun`) leiten weiter.
+Je Tab eine Page-Komponente, u. a.: `Overview`, `Audience`, `Growth`, `Schedule`, `Sessions`/`SessionDetail`, `Category`, `Comparison`, `Coaching` (mit Empfehlungs-Sektionen), `AIAnalysis`, `Monetization`, `Viewers`/`ViewerTimeline`, `Experimental`, `SocialMedia`/`SocialMediaManager`, `TitleGenerator`, `StreamReports`, `Pricing`, `Verwaltung`, `AuthScopes`, `InternalHomeLanding` (die Startseite). Chat-Analytics ist in Subpages (`chatAnalyticsContent`, `chatAnalyticsDeepSections`, `chatSubPages`, `chatAnalyticsViewModel`) aufgeteilt. Deutsche Alias-Pages (`Publikum`, `Wachstum`, `Planung`, `WasTun`) leiten weiter.
 
 ### types/ + preview/ + utils/
 - `types/analytics.ts` — die TS-Spiegelung aller v2-Antworten; `types/billing.ts` — `PlanTier`/`EntitlementId`/`TabId`/`ALL_ENTITLEMENTS`; `types/scopes.ts`, `types/socialMedia.ts`.

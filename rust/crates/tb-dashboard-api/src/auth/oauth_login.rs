@@ -42,6 +42,7 @@ const ALLOWED_NEXT_PREFIXES: &[&str] = &[
     "/twitch/pricing",
     "/twitch/raid/auth",
     "/analyse",
+    "/social-media",
     "/clips",
 ];
 
@@ -53,14 +54,19 @@ const ALLOWED_NEXT_PREFIXES: &[&str] = &[
 pub fn sanitize_next_path(raw: Option<&str>) -> String {
     let candidate = raw.map(str::trim).unwrap_or("");
     // Protocol-relative (`//evil`) und absolute (`http://…`) URLs sind nie intern.
-    if candidate.is_empty() || candidate.starts_with("//") || !candidate.starts_with('/') || candidate.contains('\\') || candidate.chars().any(char::is_control) {
+    if candidate.is_empty()
+        || candidate.starts_with("//")
+        || !candidate.starts_with('/')
+        || candidate.contains('\\')
+        || candidate.chars().any(char::is_control)
+    {
         return DEFAULT_POST_LOGIN_PATH.to_string();
     }
     // Pfadteil (vor `?`) gegen die Whitelist prüfen.
     let path_only = candidate.split(['?', '#']).next().unwrap_or("");
-    let allowed = ALLOWED_NEXT_PREFIXES.iter().any(|prefix| {
-        path_only == *prefix || path_only.starts_with(&format!("{prefix}/"))
-    });
+    let allowed = ALLOWED_NEXT_PREFIXES
+        .iter()
+        .any(|prefix| path_only == *prefix || path_only.starts_with(&format!("{prefix}/")));
     if allowed {
         candidate.to_string()
     } else {
@@ -72,8 +78,8 @@ pub fn sanitize_next_path(raw: Option<&str>) -> String {
 ///
 /// Genau vier Parameter, keine Scopes, kein `force_verify` (siehe Modul-Doku).
 pub fn build_login_authorize_url(client_id: &str, redirect_uri: &str, state: &str) -> String {
-    let mut url =
-        Url::parse(TWITCH_AUTHORIZE_URL).expect("TWITCH_AUTHORIZE_URL ist eine valide statische URL");
+    let mut url = Url::parse(TWITCH_AUTHORIZE_URL)
+        .expect("TWITCH_AUTHORIZE_URL ist eine valide statische URL");
     {
         let mut q = url.query_pairs_mut();
         q.append_pair("client_id", client_id);
@@ -124,7 +130,9 @@ impl HelixOAuthClient {
 
     /// Baut den Client mit überschriebenen Twitch-URLs (für Tests via wiremock).
     pub fn from_config(config: HelixConfig) -> Result<Self, reqwest::Error> {
-        Ok(Self { helix: HelixClient::new(config)? })
+        Ok(Self {
+            helix: HelixClient::new(config)?,
+        })
     }
 }
 
@@ -179,9 +187,18 @@ mod tests {
         assert_eq!(sanitize_next_path(Some("")), DEFAULT_POST_LOGIN_PATH);
         assert_eq!(sanitize_next_path(Some("   ")), DEFAULT_POST_LOGIN_PATH);
         // Open-Redirect-Versuche:
-        assert_eq!(sanitize_next_path(Some("https://evil.test")), DEFAULT_POST_LOGIN_PATH);
-        assert_eq!(sanitize_next_path(Some("//evil.test")), DEFAULT_POST_LOGIN_PATH);
-        assert_eq!(sanitize_next_path(Some("/etc/passwd")), DEFAULT_POST_LOGIN_PATH);
+        assert_eq!(
+            sanitize_next_path(Some("https://evil.test")),
+            DEFAULT_POST_LOGIN_PATH
+        );
+        assert_eq!(
+            sanitize_next_path(Some("//evil.test")),
+            DEFAULT_POST_LOGIN_PATH
+        );
+        assert_eq!(
+            sanitize_next_path(Some("/etc/passwd")),
+            DEFAULT_POST_LOGIN_PATH
+        );
     }
 
     #[test]
@@ -193,6 +210,9 @@ mod tests {
             "/twitch/abbo/rechnungen?x=1"
         );
         // Präfix-Grenze: /twitch/statszzz ist NICHT /twitch/stats.
-        assert_eq!(sanitize_next_path(Some("/twitch/statszzz")), DEFAULT_POST_LOGIN_PATH);
+        assert_eq!(
+            sanitize_next_path(Some("/twitch/statszzz")),
+            DEFAULT_POST_LOGIN_PATH
+        );
     }
 }

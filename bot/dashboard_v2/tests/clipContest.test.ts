@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 Object.defineProperty(globalThis, 'window', {
   configurable: true,
-  value: { location: new URL('https://example.com/twitch/social-media-admin') },
+  value: { location: new URL('https://example.com/social-media') },
 });
 const { submitClipToContest } = await import('../src/api/socialMedia');
 

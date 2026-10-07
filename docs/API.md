@@ -27,8 +27,10 @@ Alle HTTP-Routes des Systems. Zugriffslevel: **A** = Admin only, **S** = Streame
 | GET | `/twitch/analyse/{path:.*}` | S | analytics/api_overview.py | Legacy-Alias → 301 auf `/analyse/{path}` |
 | GET | `/twitch/verwaltung` | S | analytics/api_overview.py | |
 | GET | `/twitch/pricing` | P | analytics/api_overview.py | |
-| GET | `/social-media-admin` | A | analytics/api_overview.py | Eigene SPA |
-| GET | `/social-media-admin/{path:.*}` | A | analytics/api_overview.py | Asset-Durchleitung |
+| GET | `/social-media` | S | rust/crates/tb-dashboard-api/src/handlers/spa.rs | Social-Media-Manager; ohne Session 303 zum Login |
+| GET | `/social-media/{path:.*}` | S | rust/crates/tb-dashboard-api/src/handlers/spa.rs | SPA-Unterpfade; API, OAuth und Rechtstexte bleiben separat |
+| Alle | `/social-media-admin` | P | rust/crates/tb-dashboard-api/src/handlers/spa.rs | 308 auf `/social-media`, Query bleibt erhalten |
+| Alle | `/social-media-admin/{path:.*}` | P | rust/crates/tb-dashboard-api/src/handlers/spa.rs | 308 auf `/social-media/{path}`, Query bleibt erhalten |
 | GET | `/twitch/stats` | A | routes_mixin.py | |
 | GET | `/twitch/partners` | A | routes_mixin.py | |
 | GET | `/twitch/market` | A | routes_mixin.py | |
