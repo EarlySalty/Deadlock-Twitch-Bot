@@ -45,6 +45,7 @@ mod score_refresh;
 mod scout_chat;
 mod shadow_review_wiring;
 mod smalltalk_loop_wiring;
+mod social_reauth;
 mod streamer_link;
 mod task_supervisor;
 mod token_lifecycle_wiring;
@@ -868,7 +869,9 @@ async fn main() {
     let suppression = Arc::new(std::sync::Mutex::new(ManualRaidSuppression::new()));
     let chat_subscription_reconcile = Arc::new(tokio::sync::Notify::new());
     let mut manual_raid_port: Option<Arc<dyn tb_internal_api::ManualRaidPort>> = None;
-    let raid_ad_vorlauf = Arc::new(tb_analytics::ad_manager::raid_vorlauf::RaidAdVorlauf::new(pool.clone()));
+    let raid_ad_vorlauf = Arc::new(tb_analytics::ad_manager::raid_vorlauf::RaidAdVorlauf::new(
+        pool.clone(),
+    ));
     let mut raid_oauth_port: Option<Arc<dyn tb_internal_api::RaidOAuthPort>> = None;
     let mut poll_offline_raid_handler: Option<Arc<OfflineRaidHandler>> = None;
     let vod_export = helix.as_ref().clone().and_then(|helix_client| {
@@ -1036,7 +1039,10 @@ async fn main() {
                 token_provider.clone(),
                 RaidHistoryStore::new(pool.clone()),
                 RaidBlacklistStore::new(pool.clone()),
-            ).with_ad_protection(Arc::new(ad_manager_wiring::RaidAdProtectionAdapter(raid_ad_vorlauf.clone())));
+            )
+            .with_ad_protection(Arc::new(ad_manager_wiring::RaidAdProtectionAdapter(
+                raid_ad_vorlauf.clone(),
+            )));
             let sink = Arc::new(RaidArrivalSinkImpl::new(
                 pool.clone(),
                 pending.clone(),
@@ -1215,10 +1221,13 @@ async fn main() {
             let flip_unraid = Arc::new(flip_unraid::FlipUnraidHandler::new(
                 pending.clone(),
                 suppression.clone(),
-                Arc::new(flip_unraid::HelixSourceRaidCanceller::new(
-                    token_provider.clone(),
-                    helix_client.clone(),
-                ).with_ad_vorlauf(raid_ad_vorlauf.clone())),
+                Arc::new(
+                    flip_unraid::HelixSourceRaidCanceller::new(
+                        token_provider.clone(),
+                        helix_client.clone(),
+                    )
+                    .with_ad_vorlauf(raid_ad_vorlauf.clone()),
+                ),
                 chat_api_handle.as_ref().map(|h| h.api()),
                 &config.bot,
             ));
@@ -1231,7 +1240,8 @@ async fn main() {
                 RaidBlacklistStore::new(pool.clone()),
                 token_provider,
                 helix_client,
-            ).with_ad_vorlauf(raid_ad_vorlauf.clone());
+            )
+            .with_ad_vorlauf(raid_ad_vorlauf.clone());
             manual_raid_port = Some(Arc::new(ManualRaidAdapter {
                 handler: offline.clone(),
             }));
@@ -1759,11 +1769,23 @@ async fn main() {
 
                 let refresh_oauth =
                     tb_social_media::oauth::OAuthManager::new(pool.clone(), cipher.clone());
-                let refresh = tb_social_media::refresh_worker::TokenRefreshWorker::new(
+                let mut refresh = tb_social_media::refresh_worker::TokenRefreshWorker::new(
                     pool.clone(),
                     cipher.clone(),
                     refresh_oauth,
                 );
+                match BrokerRelay::new(&settings.broker) {
+                    Ok(relay) => {
+                        let dm = token_lifecycle_wiring::BrokerTokenLifecycleNotifier::from_config(
+                            Some(relay),
+                            &config.discord.token_lifecycle,
+                        );
+                        refresh = refresh.with_notifier(Arc::new(
+                            social_reauth::SocialConnectionNotifier::new(pool.clone(), dm),
+                        ));
+                    }
+                    Err(error) => tracing::warn!(%error, "Social reauth DM broker unavailable"),
+                }
                 supervisor.spawn(
                     "social_token_refresh_worker",
                     async move { refresh.run().await },

@@ -1945,11 +1945,16 @@ function PlatformConnectionsCard({
           // Ein abgelaufener Zugang, dessen Erneuerung dauerhaft scheitert,
           // sieht sonst aus wie eine gesunde Verbindung, waehrend jeder Upload
           // ins Leere laeuft.
-          const abgelaufen = connected && (status?.expired ?? false);
+          const abgelaufen = connected && ((status?.needs_reauth ?? false) || (status?.expired ?? false));
           const sammelverbindung =
             connected && !abgelaufen && (status?.uses_global_fallback ?? false);
-          const ablauf = status?.expires_at
-            ? new Date(status.expires_at).toLocaleDateString(locale, {
+          const verbindungsablauf = platform === 'instagram'
+            ? status?.expires_at
+            : status?.refresh_expires_at;
+          const ablaufZeit = verbindungsablauf ? new Date(verbindungsablauf).getTime() : NaN;
+          const baldAbgelaufen = Number.isFinite(ablaufZeit) && ablaufZeit < Date.now() + 30 * 24 * 60 * 60 * 1000;
+          const ablauf = baldAbgelaufen
+            ? new Date(ablaufZeit).toLocaleDateString(locale, {
                 day: '2-digit',
                 month: '2-digit',
                 year: 'numeric',
@@ -1983,9 +1988,13 @@ function PlatformConnectionsCard({
                   {PLATFORM_LABELS[platform] ?? platform}
                 </div>
                 <div className={`text-xs truncate ${tonKlasse}`}>{zeile}</div>
-                {!standUnbekannt && connected && !abgelaufen && ablauf && (
+                {!standUnbekannt && connected && !abgelaufen && (
                   <div className="text-[11px] text-text-secondary">
-                    {t('Zugang läuft am {datum} ab.', { datum: ablauf })}
+                    {ablauf
+                      ? t('Bitte bis {datum} neu verbinden.', { datum: ablauf })
+                      : status?.automatically_renewed
+                        ? t('Verlängert sich automatisch.')
+                        : null}
                   </div>
                 )}
               </div>

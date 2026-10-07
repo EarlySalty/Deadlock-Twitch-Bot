@@ -516,7 +516,8 @@ const EN: Record<string, string> = {
   // -- Verbindungen: Ablauf und Sammelverbindung ----------------------------
   'Zugang abgelaufen, bitte neu verbinden': 'Access expired, please reconnect',
   'nutzt die Sammelverbindung': 'uses the shared connection',
-  'Zugang läuft am {datum} ab.': 'Access expires on {datum}.',
+  'Verlängert sich automatisch.': 'Renews automatically.',
+  'Bitte bis {datum} neu verbinden.': 'Please reconnect by {datum}.',
   'Neu verbinden': 'Reconnect',
   '{platform} für {streamer} trennen?': 'Disconnect {platform} for {streamer}?',
   '{platform} für {streamer} trennen? Der Kanal nutzt die Sammelverbindung.':
