@@ -22,3 +22,13 @@ HEAD 850a7e5f, unveränderter Produktcode. Derselbe Kritiker gpt-6.1-sol, geziel
 
 1. NIT, Testkonfiguration: Der neue Versuchszeittest folgt dem vorhandenen optionalen DB-Muster und kann ohne Konfiguration still zurückkehren. In diesem Auftrag ist der echte SQL-Lauf gesondert belegt: `db-execution-proof.log` zeigt genau einen Datensatz mit gespeicherter Versuchszeit und beendetem Status im eigenen Testschema. Der Abschlussdatensatz im Uploadschema ist ebenfalls tatsächlich gespeichert. Kein Null-Lauf als Nachweis gewertet.
 
+## Integrationsprüfung
+
+HEAD d29bd6ee5a09ee83d0925a44447b6f5fa59e7498, gleicher Kritiker, Exit 0:
+
+> ALLOW: No merge-blocking defect found in the supplied diff.
+
+Der NIT zum optionalen Testaufbau bleibt als bestehende Konventionsgrenze benannt. Dieser Lauf ist durch echte SQL-Datensätze bewiesen; künftige Läufe ohne Testkonfiguration sind damit nicht automatisch bewiesen.
+
+Mechanische Hinweise vor Push: R10 verlangte nach dem Kontextwechsel erneut die Merge-Akte, sie wurde gelesen. Eine Push-Ausgabeumleitung wurde vom Hook als mehrere RefSpecs erkannt und vor Ausführung abgelehnt. HEAD blieb unverändert. Geschützter Push erfolgt daher als einzelner unveränderter Git-Befehl ohne Umleitung. Keine Übersteuerung.
+

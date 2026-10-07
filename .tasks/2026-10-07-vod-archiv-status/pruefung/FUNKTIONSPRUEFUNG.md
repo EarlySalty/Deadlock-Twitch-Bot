@@ -20,6 +20,14 @@ Produktionsbuild mit `npm ... run build` erfolgreich, einschließlich TypeScript
 
 TESTNACHWEIS[TW-1]: 439 passed, 0 ignored | Baseline: 5 rot
 
+## Format und Clippy
+
+`rustfmt --check --edition 2024 --config skip_children=true` über die vier geänderten Rust-Dateien: Exit 0. `git diff --check`: Exit 0.
+
+`cargo-slot clippy --manifest-path <eigener Worktree>/rust/Cargo.toml -p tb-vod-archive --all-targets --no-deps --jobs 3 -- -D warnings`: Exit 0. Der Archivcrate ist strikt grün.
+
+Strikter gemeinsamer Clippy-Lauf mit `-p tb-vod-archive -p tb-dashboard-api --all-targets --no-deps --jobs 3 -- -D warnings`: Exit 101, 25 API-Fundstellen. Ausgangsstand mit `-p tb-dashboard-api` und denselben Prüfungsflags: ebenfalls 25 API-Fundstellen, exakt dieselben Meldungen an denselben Orten. Keine neue API-Fundstelle. Ein erster gemeinsamer Baseline-Lauf stoppte vorher an zwei alten needless_borrow-Funden im Store-Testhelfer; diese sind im Fix korrigiert. Der unveränderte tb-raid-Dependency-Lint aus dem anfänglichen Lauf wurde getrennt reproduziert. Keine Behauptung eines grünen API-Clippy-Laufs.
+
 ## Statusquellen und Wirkung
 
 1. YouTube: `done` mit nichtleerer Video-ID je Teil plus finaler VOD-Status. Die gemeinsame Abschlussfunktion verweigert leere oder unbestätigte Teile. Wiederholte Bestätigung erhält die Zeit, ein neuer Abschluss übernimmt keine veraltete Zeit.
