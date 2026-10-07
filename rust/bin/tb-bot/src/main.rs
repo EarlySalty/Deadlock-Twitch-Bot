@@ -1805,7 +1805,7 @@ async fn main() {
                 false
             }
         };
-        let worker_count = 6 + if cipher_workers_started { 4 } else { 0 };
+        let worker_count = 5 + if cipher_workers_started { 4 } else { 0 };
         tracing::info!(worker_count, "Social-Media-Pipeline-Worker gestartet");
     }
 

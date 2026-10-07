@@ -10,14 +10,16 @@
 
 ## Bisher abgeschlossene Prüfungen
 
-- Offline-Compilerprüfung: `cargo check -p tb-social-media -p tb-dashboard-api --all-targets -j 2`, Exit 0.
+- Offline-Compilerprüfung nach Integration: `cargo check -p tb-social-media -p tb-dashboard-api -p tb-bot --all-targets -j2`, `PATH=/home/nathanael/.cargo/bin:$PATH SQLX_OFFLINE=true`, Exit 0, Dauer 3 Minuten 38 Sekunden. Nur bestehende Deprecation-Warnungen.
 - Isolierte PostgreSQL-16-Instanz auf 127.0.0.1:55437. Datenbank `tb_social_upload_test`, UTF8, lokale TimescaleDB 2.29.1. Der ursprünglich vorgesehene Dockerlauf mit TimescaleDB 2.17.2 konnte wegen eines devpts-Mountfehlers nicht starten. Kein Test lief gegen die Produktionsdatenbank.
 - Migrationen auf der isolierten Datenbank angewendet. Das SQLx-Metadatenartefakt des geänderten Insights-Queries stammt aus dieser echten Datenbank. Andere Metadaten wurden nicht entfernt.
-- Social-Media-Bibliothek: 307 bestanden, 0 fehlgeschlagen, 0 ignoriert. API-Handler Social Media: 48 bestanden, 0 fehlgeschlagen, 0 ignoriert. Fresh-Schema-Vertrag: 1 bestanden, 0 fehlgeschlagen, 0 ignoriert. Diese Läufe enthalten noch nicht den zuletzt ergänzten Test zur eigenen Verbindung ohne historischen Kanalnamen; ein abschließender Lauf steht aus.
-- Dashboard-Verträge: 45 bestanden, 0 fehlgeschlagen. Chromium mit Produktionsbundle und isoliertem API-Vertrag: 25 bestanden, 0 fehlgeschlagen. Änderungen seit diesem Browserlauf: Abbruchmöglichkeit für einen freigegebenen Warteauftrag ohne Termin. Ein abschließender Build und Browserlauf steht aus.
+- Social-Media-Bibliothek nach Integration seriell: 309 bestanden, 0 fehlgeschlagen, 0 ignoriert (`--include-ignored --test-threads=1`). Im vorherigen Parallellauf bestand die Suite 308 Tests, ein bestehender TikTok-Timeouttest scheiterte vor seinem Checkpoint; der vollständige serielle Nachlauf bestätigt auch diesen Test. Er wurde nicht verändert oder übersprungen. Vor Integration: 308 bestanden, 0 fehlgeschlagen, 0 ignoriert. API-Handler vor Integration: 48 bestanden, 0 fehlgeschlagen, 0 ignoriert. Fresh-Schema-Vertrag: 1 bestanden, 0 fehlgeschlagen, 0 ignoriert. Der eigene Zugang ohne historischen Kanalnamen und die Wiederaufnahme aus dem Wartezustand sind enthalten.
+- Dashboard nach Integration: Produktionsbuild Exit 0, Verträge 45 bestanden, 0 fehlgeschlagen, Chromium 25 bestanden, 0 fehlgeschlagen. Der echte Recovery-Button öffnet die Konteneinstellungen. Ein abgelaufenes eigenes Konto bietet Neu verbinden und Trennen, die Sammelverbindung nur das eigene Konto. Sichtprüfung mit 1440 und 390 Pixel bestätigt die Aktionen.
 - Sichtprüfung: `/home/nathanael/.claude/sichtpruefung/social-golive-upload/`. Viewportaufnahmen für 1440 und 390 Pixel zeigen Wartezustand, Verbindungsweg, private YouTube-Sichtbarkeit, eigenes Konto statt Trennen bei Sammelverbindung und nicht angebotene Instagram-Verbindung. Kein horizontaler Dokumentüberlauf im Browserlauf.
-- Die vollständige API-Bibliothek wurde zusätzlich ausgeführt: 1309 bestanden, 22 fehlgeschlagen, 0 ignoriert. Kein Social-Media-Handler gehört zur Fehlermenge. Eine Baseline-Messung zur Zuordnung steht noch aus; diese Suite wird nicht als grün gemeldet.
-- Clippy mit Abhängigkeiten wurde ausgeführt und scheitert bei `tb-raid/src/signup_denylist.rs:71` an `clippy::result_unit_err`. Der geänderte Code dort gehört nicht zu Auftrag D. Die Prüfung der betroffenen Pakete ohne Abhängigkeitslint läuft separat; es wurde kein Lint unterdrückt.
+- Die vollständige API-Bibliothek: Änderungsstand 1309 bestanden, 22 fehlgeschlagen, 0 ignoriert. Unveränderte Basis ebenfalls 1309 bestanden, 22 fehlgeschlagen, 0 ignoriert. Die sortierten Namen aller 22 Fehler sind identisch. Kein Social-Media-Handler gehört zur Fehlermenge. Diese Suite wird nicht als grün gemeldet.
+- Clippy mit Abhängigkeiten scheitert bei `tb-raid/src/signup_denylist.rs:71` an `clippy::result_unit_err`. Ohne Abhängigkeitslint scheitern Basis und Änderungsstand an denselben zwei Befunden: `analytics.rs:321` (`too_many_arguments`) und `vocab.rs:164` (`needless_borrows_for_generic_args`). Kein Lint wurde unterdrückt.
+- Formatierung: workspaceweite Basis 43 Dateien mit Abweichungen, Änderungsstand 42; keine neue fehlschlagende Datei. Dateiweises `rustfmt --edition 2021 --config skip_children=true --check` für alle eigenen Rust-Dateien endet mit Exit 0. Ein versehentlicher Prüflauf mit Edition 2024 wurde nicht mutierend ausgeführt und durch die korrekte Workspace-Edition ersetzt.
+- Frisches `origin/main` e0b0dbaf integriert. Auftrag F hat die Anreicherung abgeschaltet; die tatsächliche Startzählung ist entsprechend fünf unabhängige Worker plus vier bei verfügbarer Verschlüsselung. TikTok Direct Post ist auf diesem Basisstand noch nicht integriert; das API-Merkmal bleibt deshalb `inbox`.
 
 ## Wirkungsprüfung
 
@@ -27,6 +29,20 @@
 - Produktionsschema vor Deploy: `youtube_visibility` und Migration 20261007213000 fehlen. Die Migration muss vor Aktivierung des neuen Codes angewendet werden.
 - Echte Streamer-Zugänge wurden nicht getrennt. Providerproben benutzen synthetische Zugangsdaten und lokale HTTP-Server.
 
+## Prüfprotokoll
+
+TESTNACHWEIS[TW-1]: 309 passed, 0 ignored | Baseline: 22 rot
+
+Die Pflichtzeile zählt die integrierte Social-Media-Bibliothek. Die 22 Baselinefehler gehören zur vollständigen API-Suite und sind oben mit Zahl und identischer Fehlermenge belegt. Die API-Teilprüfung, das Schema und das Dashboard sind separat gezählt.
+
+TEXTNACHWEIS[DR-1]: Gedankenstriche 0 | ae/oe/ue/ss-Ersatz 0 | Absolutwörter 1 belegt | Senke: Produktionsbundle und Social-Media-Rechtstexte
+
+Neue Produkttexte enthalten echte Umlaute. Die einzige neu geprüfte absolute Formulierung erklärt, dass ein Anbieterwiderruf nicht sämtliche lokalen Daten löscht; der Löschpfad entfernt ausschließlich die Kontoverbindung und nicht Clips oder Statistiken. Das gebaute Dashboard und die Viewportaufnahmen belegen die neuen Hinweise. Der Patch enthält keine neuen Code-Kommentare und keine Gedankenstriche in neuem Produkttext.
+
+WIRKUNGSPRUEFUNG[WP-1]: 0 Befunde | Zwillingssuche: grep-belegt | Fremddienst-Pfade: 4/4 geprüft
+
+Geprüfte Pfade: Google-Widerruf, TikTok-Widerruf, YouTube-Uploadantwort und YouTube-Statusabfrage. Queue-Eingang und Worker wurden beide geprüft, ebenso beide YouTube-Erfolgspfade. Kein offener Befund; Fehlermeldungen unterscheiden bestätigten Erfolg und ausstehende Bestätigung.
+
 ## Noch offen
 
-Abschließende Prüfungen, Baseline, frisches origin/main, Gate, Merge, Push, Release, Migration, Neustart, Live-Beweis und Cleanup. Keine Fertigmeldung und kein Deploy-Nachweis liegt vor.
+Gate, Push, Release, Migration, Neustart, Live-Beweis und Cleanup. Keine Fertigmeldung und kein Deploy-Nachweis liegt vor.
