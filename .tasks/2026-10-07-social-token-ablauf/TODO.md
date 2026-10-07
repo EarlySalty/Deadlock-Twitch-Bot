@@ -1,23 +1,22 @@
 # Offener Abschluss
 
-## Blocker
+## Stand am 7. Oktober 2026
 
-Der erste Ablaufbefund ist durch den frischen Fixer behoben und geprüft. Die zweite inhaltliche Merge-Gate-Runde hat erneut BLOCK durch dasselbe Modell `gpt-6.1-sol` geurteilt. Ein SQL-Fehler im neuen Metadata-Lesepfad wird zu `connected: false`, und der API-Handler liefert HTTP 200 statt des vorhandenen unbekannten Zustands. Der neue Befund ist bestätigt. Ein weiterer frischer Fixer muss ihn vor dem nächsten regulären Gate beheben; dieser Ablauf-Fixer schreibt keinen eigenen Folgefix. Übergabe: `BRIEFING-FIXER-STATUS.md`, Urteil: `REVIEW.md`.
+Ablauf-Fix und SQL-Statusfehler-Fix sind umgesetzt und geprüft. Der unveränderte Merge-Gate hat `4305407d` gegen `origin/main` mit `gpt-6.1-sol` freigegeben: `[gpt-6.1-sol] ALLOW: No blocking defect found in the supplied changes.` Der Metadata-Lesefehler erzeugt jetzt HTTP 500; die vorhandene Dashboard-Karte zeigt drei unbekannte Plattformzustände ohne Verbindungsaktionen. Es wird kein weiterer Fixer für diesen behobenen Befund benötigt. Gate-Nachweis: `gate-status-fixer-round-3.log`, Prüfungen: `EVIDENCE.md`, Bild: `metadata-read-error.png`.
 
-Implementierung: Branch `fix/social-token-ablauf`, Codecommit `260bdfdc`, Worktree `/home/nathanael/.worktrees/tb-social-token-ablauf`, nach Rebase auf `origin/main` bei `e0b0dbaf`. Quellen, unveränderte Migration, Bildproben und Nachweise sind erhalten. Der schmutzige Haupt-Checkout wurde nicht angefasst. Weitere Worker wurden nicht gestartet.
+Implementierung: `fix/social-token-ablauf`, gesichert auf `origin/fix/social-token-ablauf-r2`, Worktree `/home/nathanael/.worktrees/tb-social-token-ablauf`. Der alte Remote-Feature-Branch wurde nicht überschrieben. Der fremd veränderte Haupt-Checkout bleibt unangetastet. Migration und Produktionshilfe bleiben unverändert.
 
-## Wiederaufnahme
+## Offene Schritte
 
-1. Der Haupt-Orchestrator weist `BRIEFING-FIXER-STATUS.md` einem weiteren frischen Fixer aus der Pyramide zu. Dieser reicht den bestätigten Metadata-Lesefehler bis zur vorhandenen API-Fehlerantwort durch, prüft die Zwillinge und zieht betroffene Prüfungen nach. Den behobenen Ablauf-Fix beibehalten. Danach den bestehenden Branch mit dem regulären `gate_hook.py --review` durch die Folgerunde mit Modell `gpt-6.1-sol` fahren. Kein eigener alternativer Reviewer und kein ungeschützter Prüflauf.
-2. Nach ALLOW den Branch nach `main` bringen und mit `git push origin HEAD:main` pushen. Git-Schritte einzeln mit literalem Worktree-Pfad.
-3. Die beauftragte Produktionsmigration als `postgres` mit `PROD-MIGRATION.sql` anwenden. Die neue Migration und ihre SHA384-Checksumme bleiben unverändert. Danach acht erforderliche Rust-Binaries aus dem eigenen sauberen Worktree bauen, `.twitch_build` gegen den aktuellen `origin/main`-SHA prüfen und mit den drei gebauten Frontends in einen eigenständigen Release-Clone übernehmen. `deploy-twitch-release <sha> <clone>` bleibt der Deploy-Weg.
-4. Bot, Dashboard und weitere durch den Wrapper betroffene Dienste am laufenden Prozess nachweisen. TikTok soll beim echten Backfill-Refresh `refresh_expires_at` schreiben. Das ausgelieferte Dashboard-Artefakt muss die neue Anzeige enthalten. Der Discord-Pfad ist gegen die Wegwerf-DB und den lokalen Test-Broker belegt; kein echter Zugang wird als Probe entwertet.
-5. Nach Live-Beweis Nachweise sichern, die eigene Test-DB und den fehlgeschlagenen eigenen Testcontainer prüfen und aufräumen. Branch erst nach erfolgreichem Ancestor-Check löschen, Worktree entfernen, den Hauptthread informieren und zuletzt den eigenen Thread settlen.
+1. Nach frischem Fetch regulär nach `main` integrieren und mit `git push origin HEAD:main` pushen. Git-Schritte einzeln mit literalem Worktree-Pfad. Die historische Remote-Feature-Historie vor ihrer späteren Löschung regulär integrieren und prüfen. Weitere inhaltliche BLOCK-Runden nach neuer Nutzerregel autonom mit je einem frischen nativen Fixer und demselben Gate-Modell fahren; nach spätestens fünf erfolglosen Runden einen echten Blocker melden.
+2. Die freigegebene Produktionsmigration als `postgres` mit `PROD-MIGRATION.sql` anwenden. Danach acht erforderliche Rust-Binaries im eigenen sauberen Worktree mit `-j 2` bauen, `.twitch_build` gegen den frisch gefetchten `origin/main`-SHA prüfen und mit drei gebauten Frontends in einen eigenständigen Release-Clone übernehmen. `deploy-twitch-release <sha> <clone>` bleibt der Deploy-Weg.
+3. Bot, Dashboard und weitere betroffene Dienste am laufenden Prozess prüfen. TikTok soll beim echten Backfill-Refresh `refresh_expires_at` schreiben. Das ausgelieferte Dashboard-Artefakt muss die neue Anzeige enthalten. Der Discord-Pfad ist gegen die Wegwerf-DB und den lokalen Broker belegt; kein echter Zugang wird als Probe entwertet.
+4. Nach Live-Beweis Nachweise und ignorierte Logs sichern. Eigene Test-DB und den fehlgeschlagenen eigenen Testcontainer prüfen und aufräumen. Beide Remote-Feature-Branches und lokale Arbeitsbranches nach erfolgreichem Ancestor-Check löschen, Worktree entfernen, Hauptthread informieren und erst nach belegtem Abschluss settlen.
 
 ## Erhaltene Betriebsmittel
 
-- Eigene Test-DB `tb_social_token_ablauf` im Wegwerf-Cluster auf Port 33045 bleibt zur Wiederaufnahme erhalten.
-- Der zusätzlich für historische Migrationen angelegte Datenbankname `twitch_analytics` im Wegwerf-Cluster ist keine Produktionsdatenbank und wird nicht ungeprüft gelöscht.
-- Der fehlgeschlagene Containername `tb-social-token-ablauf-db` muss beim endgültigen Cleanup auf Existenz und Zustand geprüft werden.
-- Test- und Buildlogs sind im Task-Ordner ignoriert. Wertvolle Logs vor einer späteren Worktree-Löschung sichern.
-- Der T3-Browserhost war nicht verfügbar. Eine tatsächliche Produktionsanzeige ist noch nicht bewiesen.
+- Eigene Test-DB `tb_social_token_ablauf` im Wegwerf-Cluster auf Port 33045 bleibt bis zum Abschluss erhalten.
+- Der zusätzliche Datenbankname `twitch_analytics` im Wegwerf-Cluster ist keine Produktionsdatenbank und wird nicht ungeprüft gelöscht.
+- Eigener fehlgeschlagener Container: `tb-social-token-ablauf-db`. Kein fremder Container wird gestartet oder gestoppt.
+- Test- und Buildlogs sind im Task-Ordner ignoriert und müssen vor Worktree-Löschung gesichert werden.
+- Die gebaute Dashboard-Probe ist belegt; Produktionsanzeige, Deploy und Cleanup bleiben offen.

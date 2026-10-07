@@ -1,5 +1,17 @@
 # Merge-Gate
 
+## Drittes Codeurteil nach dem Statusfehler-Fix
+
+**ALLOW**, Exit 0, unverändertes Modell `gpt-6.1-sol`, geprüfter HEAD `4305407d`, Basis `origin/main` bei `e0b0dbaf`. Derselbe Aufruf wie in Runde 2, Log `gate-status-fixer-round-3.log`.
+
+```text
+[gpt-6.1-sol] ALLOW: No blocking defect found in the supplied changes.
+
+1. .tasks/2026-10-07-social-token-ablauf/TODO.md:5 | NIT: The TODO still describes the metadata error as unfixed and requests another fixer, repeated at line 11. | This revision already returns HTTP 500 for those SQL failures; the stale handoff invites duplicate work.
+```
+
+Die nicht blockierende Dokumentationsanmerkung ist durch Aktualisierung von `TODO.md` behoben. Es wurde kein weiterer Worker gestartet. Regulärer Merge und betrieblicher Abschluss folgen jetzt gemäß Auftrag; Migration, Deploy und Live-Beweis sind noch nicht erfolgt.
+
 ## Statusfehler-Fix durch weiteren frischen Fixer
 
 Der bestätigte zweite Blocking-Fund ist umgesetzt: SQL-Fehler im Metadata-Leser und seinem vorgeschalteten Credential-Leser werden bis zur vorhandenen API-Fehlerantwort weitergegeben. Ein erfolgreicher leerer Lesezugriff bleibt von einem SQL-Fehler unterscheidbar. Der vorherige Ablauf-Fix und die Migration bleiben erhalten. PostgreSQL-Proben prüfen alle drei Plattformen und die beiden SQL-Fehlerstellen. Die neue Bildprobe `metadata-read-error.png` zeigt den bereits vorhandenen unbekannten Zustand ohne Verbinden- oder Trennaktionen; die vier Ablaufproben sind erneut geprüft. Details stehen oben in `EVIDENCE.md`.
