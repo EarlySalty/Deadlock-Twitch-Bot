@@ -2,6 +2,10 @@
 
 Im [Social-Media-Manager](https://deutsche-deadlock-community.de/social-media?view=archiv) stehen im Tab **VOD-Archiv** fertige Sicherungen und offene Uploads. Für einen eigenen Kanal gilt die bestehende Social-Media-Freigabe; die Verwaltung kann mehrere Kanäle sehen. **Erneut versuchen** merkt den Upload für den nächsten Archivlauf vor, **Auf Drive ausweichen** wählt Drive ausdrücklich, **Aus der Liste ausblenden** entfernt den Eintrag aus der Ansicht und erhält die Sicherung.
 
+## Routenübergang
+
+Das Ziel nach Aufgabe P ist `/twitch/social-media?view=archiv`, innerhalb des Twitch-Bereichs. Bis diese gemeinsame Routenverschiebung gemergt ist, bleibt der oben verlinkte Einstieg in der bestehenden Manager-SPA aktiv; P übernimmt den Archivtab mit dem Manager.
+
 ## Betriebsdatei
 
 Die Archiveinstellungen stehen unter `[bot.vod_archive]` in der normalen TOML-Betriebsdatei. Ohne eigenen Abschnitt gelten diese Defaults:

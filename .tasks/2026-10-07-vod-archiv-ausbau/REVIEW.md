@@ -34,8 +34,18 @@ Der erste API-Filter `social_media_vod_archive` führte null Tests aus und zähl
 
 TESTNACHWEIS[TW-1]: 472 passed, 0 ignored | Baseline: 5 rot
 
-Bereit für die nächste Gate-Runde mit `gpt-6.1-sol`. Der Fixer hat keinen Gate-Aufruf, Commit, Push, Rebase oder Deploy ausgeführt. Die private Wegwerfkonfiguration `rust/token-db-tests.conf` bleibt unverändert und ungestaged.
+Nach dem Fixer bereit für die nächste Gate-Runde mit `gpt-6.1-sol`. Der Fixer hat keinen Gate-Aufruf, Commit, Push, Rebase oder Deploy ausgeführt. Die private Wegwerfkonfiguration `rust/token-db-tests.conf` blieb während der Verifikation unverändert und ungestaged; sie wurde danach entfernt.
 
 ## Vorprüfung
 
-Der Compilerlauf und der frische Schema-Vertrag waren erfolgreich. Die Dashboard-Suite hat dieselben fünf Fehler wie die gemessene Baseline. Die Sichtprüfung des gebauten Dashboards ist abgeschlossen. Die noch laufenden Rust-Abschlussprüfungen und die Produktionsnachweise stehen in EVIDENCE.md.
+Der Compilerlauf und der frische Schema-Vertrag waren erfolgreich. Die Dashboard-Suite hat dieselben fünf Fehler wie die gemessene Baseline. Die Sichtprüfung des gebauten Dashboards ist abgeschlossen. Die vollständigen Produktionsnachweise und die verbleibenden Prüfgrenzen stehen in EVIDENCE.md.
+
+## Runde 2
+
+`gate_hook.py --review --repo /home/nathanael/.worktrees/Deadlock-Twitch-Bot-vod-archiv-ausbau --base origin/main --head feat/vod-archiv-ausbau --model gpt-6.1-sol --effort high` urteilte über d563543a:
+
+`ALLOW: Pagination blocker is fixed; no blocking regression is established by the supplied code.`
+
+Die beiden gemeldeten FIXED-Anker liegen in VodArchiveTab.tsx:82 und SocialMedia.tsx:907. Protokoll: `/tmp/vod-archive-gate-round-2.log`. Der anschließende geschützte Push `HEAD:main` bestand mit Exit 0. Kein Gate wurde umgangen.
+
+Der eigene saubere Arbeitsbaum wurde danach per Fast-Forward auf 10dacbc2 gebracht, einschließlich der gemergten Managerroute aus S. Die erneut gebauten Release-Artefakte tragen diesen exakten Stand. Die abschließenden Änderungen an diesem Arbeitsbaum dokumentieren Betrieb und die spätere Präfix-Übernahme durch P; sie ändern keinen Laufzeitcode. Die Arbeitskopie der privaten Testkonfiguration wurde entfernt.
