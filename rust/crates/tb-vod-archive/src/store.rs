@@ -156,7 +156,10 @@ pub async fn offene_vods(
 pub async fn setze_status(pool: &PgPool, id: i64, status: &str) -> Result<(), VodArchiveError> {
     sqlx::query(
         "UPDATE twitch_vod_archive_vods \
-         SET status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+         SET status = $2, updated_at = CURRENT_TIMESTAMP, \
+             last_attempt_at = CASE WHEN $2 IN ('downloading', 'uploading') \
+                 THEN CURRENT_TIMESTAMP ELSE last_attempt_at END \
+         WHERE id = $1",
     )
     .bind(id)
     .bind(status)
@@ -401,6 +404,9 @@ pub async fn setze_teil_fertig(
     teil_id: i64,
     youtube_video_id: &str,
 ) -> Result<(), VodArchiveError> {
+    if youtube_video_id.trim().is_empty() {
+        return Err(sqlx::Error::Protocol("Uploadabschluss ohne Video-ID".into()).into());
+    }
     sqlx::query(
         "UPDATE twitch_vod_archive_parts \
          SET status = 'done', youtube_video_id = $2, upload_session_uri = NULL, last_error = NULL, \
@@ -520,15 +526,23 @@ pub async fn frisch_hochgeladene_teile(
 
 /// Markiert das VOD als vollstaendig hochgeladen.
 pub async fn setze_hochgeladen(pool: &PgPool, id: i64) -> Result<(), VodArchiveError> {
-    sqlx::query(
+    let changed = sqlx::query(
         "UPDATE twitch_vod_archive_vods \
-         SET status = 'uploaded', uploaded_at = CURRENT_TIMESTAMP, last_error = NULL, \
+         SET status = 'uploaded', uploaded_at = CASE WHEN status = 'uploaded' \
+                 THEN COALESCE(uploaded_at, CURRENT_TIMESTAMP) ELSE CURRENT_TIMESTAMP END, last_error = NULL, \
              updated_at = CURRENT_TIMESTAMP \
-         WHERE id = $1",
+         WHERE id = $1 AND status NOT IN ('archived', 'drive_uploaded') \
+           AND EXISTS (SELECT 1 FROM twitch_vod_archive_parts WHERE vod_id = $1) \
+           AND NOT EXISTS (SELECT 1 FROM twitch_vod_archive_parts WHERE vod_id = $1 \
+               AND (status <> 'done' OR NULLIF(BTRIM(youtube_video_id), '') IS NULL))",
     )
     .bind(id)
     .execute(pool)
-    .await?;
+    .await?
+    .rows_affected();
+    if changed != 1 {
+        return Err(sqlx::Error::Protocol("VOD-Abschluss ohne bestätigte Teile".into()).into());
+    }
     Ok(())
 }
 
@@ -657,7 +671,7 @@ mod tests {
         }
         let admin = PgPoolOptions::new()
             .max_connections(1)
-            .connect(&dsn)
+            .connect(dsn)
             .await
             .ok()?;
         sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -671,7 +685,7 @@ mod tests {
             .await
             .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn)
+        let opts = PgConnectOptions::from_str(dsn)
             .unwrap()
             .options([("search_path", schema)]);
         let pool = PgPoolOptions::new()
@@ -704,9 +718,11 @@ mod tests {
         let Some(pool) = pool("t_vod_entdecken").await else {
             return;
         };
-        assert!(merke_vod(&pool, "v1", "earlysalty", "42", "Erster", 100)
-            .await
-            .unwrap());
+        assert!(
+            merke_vod(&pool, "v1", "earlysalty", "42", "Erster", 100)
+                .await
+                .unwrap()
+        );
         // Zweiter Lauf sieht dasselbe VOD und darf nichts anfassen.
         assert!(
             !merke_vod(&pool, "v1", "earlysalty", "42", "Anderer Titel", 999)
@@ -733,10 +749,12 @@ mod tests {
             .execute(&pool).await.unwrap();
         assert_eq!(offene_vods(&pool, "42", 10).await.unwrap().len(), 1);
         assert_eq!(offene_vods(&pool, "99", 10).await.unwrap().len(), 1);
-        assert!(offene_vods(&pool, "earlysalty", 10)
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            offene_vods(&pool, "earlysalty", 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
         assert!(
             merke_vod(&pool, "invalid", "earlysalty", "", "Missing", 100)
                 .await
@@ -761,10 +779,12 @@ mod tests {
                 .len(),
             1
         );
-        assert!(frisch_hochgeladene_teile(&pool, "99", 7)
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            frisch_hochgeladene_teile(&pool, "99", 7)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -844,7 +864,34 @@ mod tests {
         assert!(danach[1].upload_session_uri.is_none());
         assert_eq!(danach[1].upload_offset, 0);
 
+        assert!(setze_hochgeladen(&pool, vod.id).await.is_err());
+        assert!(setze_teil_fertig(&pool, nachher[1].id, " ").await.is_err());
+        setze_teil_fertig(&pool, nachher[1].id, "yt-b")
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE twitch_vod_archive_vods SET uploaded_at='2000-01-01T00:00:00Z' WHERE id=$1",
+        )
+        .bind(vod.id)
+        .execute(&pool)
+        .await
+        .unwrap();
         setze_hochgeladen(&pool, vod.id).await.unwrap();
+        let completed: DateTime<Utc> =
+            sqlx::query_scalar("SELECT uploaded_at FROM twitch_vod_archive_vods WHERE id=$1")
+                .bind(vod.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        setze_hochgeladen(&pool, vod.id).await.unwrap();
+        let repeated: DateTime<Utc> =
+            sqlx::query_scalar("SELECT uploaded_at FROM twitch_vod_archive_vods WHERE id=$1")
+                .bind(vod.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_ne!(completed.to_rfc3339(), "2000-01-01T00:00:00+00:00");
+        assert_eq!(completed, repeated);
         assert!(offene_vods(&pool, "42", 10).await.unwrap().is_empty());
     }
 
@@ -928,9 +975,11 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(setze_upload_abgelehnt(&pool, teil.id, vod.id, "verworfen")
-            .await
-            .is_err());
+        assert!(
+            setze_upload_abgelehnt(&pool, teil.id, vod.id, "verworfen")
+                .await
+                .is_err()
+        );
         let teil = teile(&pool, vod.id, &test_cipher())
             .await
             .unwrap()
@@ -960,6 +1009,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn versuchszeit_entsteht_am_aktiven_uebergang() {
+        let Some(pool) = pool("t_vod_attempt_transition").await else {
+            return;
+        };
+        merke_vod(&pool, "attempt", "testkanal", "42", "Synthetisch", 60)
+            .await
+            .unwrap();
+        let vod = offene_vods(&pool, "42", 1).await.unwrap().remove(0);
+        setze_status(&pool, vod.id, STATUS_GELADEN).await.unwrap();
+        let missing: Option<DateTime<Utc>> =
+            sqlx::query_scalar("SELECT last_attempt_at FROM twitch_vod_archive_vods WHERE id=$1")
+                .bind(vod.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(missing.is_none());
+        for active in [STATUS_LAEDT, "uploading"] {
+            setze_status(&pool, vod.id, active).await.unwrap();
+            let attempt: Option<DateTime<Utc>> = sqlx::query_scalar(
+                "SELECT last_attempt_at FROM twitch_vod_archive_vods WHERE id=$1",
+            )
+            .bind(vod.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert!(attempt.is_some());
+            setze_status(&pool, vod.id, STATUS_GELADEN).await.unwrap();
+            let paused: Option<DateTime<Utc>> = sqlx::query_scalar(
+                "SELECT last_attempt_at FROM twitch_vod_archive_vods WHERE id=$1",
+            )
+            .bind(vod.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(attempt, paused);
+        }
+    }
+
+    #[tokio::test]
     async fn nur_hochgeladene_vods_werden_aufgeraeumt() {
         let Some(pool) = pool("t_vod_aufraeumen").await else {
             return;
@@ -971,6 +1059,22 @@ mod tests {
             .await
             .unwrap();
         let alle = offene_vods(&pool, "42", 10).await.unwrap();
+        assert!(setze_hochgeladen(&pool, alle[0].id).await.is_err());
+        setze_teile(
+            &pool,
+            alle[0].id,
+            "earlysalty",
+            &["/synthetic/part.mp4".into()],
+        )
+        .await
+        .unwrap();
+        let part = teile(&pool, alle[0].id, &test_cipher())
+            .await
+            .unwrap()
+            .remove(0);
+        setze_teil_fertig(&pool, part.id, "yt-cleanup")
+            .await
+            .unwrap();
         setze_hochgeladen(&pool, alle[0].id).await.unwrap();
         sqlx::query(
             "UPDATE twitch_vod_archive_vods SET uploaded_at = CURRENT_TIMESTAMP - INTERVAL '40 days' WHERE id = $1",

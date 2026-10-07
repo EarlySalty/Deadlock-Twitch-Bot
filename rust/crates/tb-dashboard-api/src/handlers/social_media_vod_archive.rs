@@ -28,7 +28,7 @@ pub async fn list_handler(
             WHERE hidden_at IS NULL AND ($1::text IS NULL OR twitch_user_id = $1)), \
          paged AS (SELECT v.id, v.twitch_id, v.streamer_login, v.twitch_user_id, v.title, v.duration_sec, \
          v.recorded_at, v.discovered_at, v.status, v.last_error, v.drive_url, v.drive_requested, \
-         v.last_attempt_at, v.updated_at, \
+         v.last_attempt_at, v.uploaded_at, \
          COALESCE((SELECT jsonb_agg(jsonb_build_object('index', p.part_index, 'status', p.status, \
             'youtube_video_id', p.youtube_video_id) ORDER BY p.part_index) \
             FROM twitch_vod_archive_parts p WHERE p.vod_id = v.id), '[]'::jsonb) AS parts, \
@@ -61,9 +61,11 @@ pub async fn list_handler(
                     chrono::DateTime::parse_from_rfc3339(value).or_else(|_| chrono::DateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f%#z"))
                         .is_ok_and(|expires| expires > chrono::Utc::now())
                 });
-                let label = status_label(&status, &parts);
                 let last_error: Option<String> = row.get("last_error");
                 let drive_requested: bool = row.get("drive_requested");
+                let drive_url: Option<String> = row.get("drive_url");
+                let uploaded_at: Option<chrono::DateTime<chrono::Utc>> = row.get("uploaded_at");
+                let progress = archive_progress(&status, &parts, drive_url.as_deref(), uploaded_at.is_some());
                 json!({
                     "id": row.get::<i64, _>("id"),
                     "twitch_id": row.get::<String, _>("twitch_id"),
@@ -73,11 +75,18 @@ pub async fn list_handler(
                     "duration_sec": row.get::<i64, _>("duration_sec"),
                     "recorded_at": row.get::<Option<chrono::NaiveDate>, _>("recorded_at"),
                     "discovered_at": row.get::<chrono::DateTime<chrono::Utc>, _>("discovered_at"),
-                    "status": status, "status_label": label,
-                    "reason": if label == "Fehlgeschlagen" && matches!(status.as_str(), "uploaded" | "archived") { Some("Für diese Sicherung fehlt ein bestätigter Upload. Bitte prüfe das Ziel, bevor du sie erneut startest.") } else { error_label(&status, last_error.as_deref(), drive_requested) },
-                    "drive_url": row.get::<Option<String>, _>("drive_url"),
-                    "drive_requested": row.get::<bool, _>("drive_requested"),
+                    "status": status, "status_label": progress.label,
+                    "display_status": progress.state,
+                    "youtube_complete": progress.youtube_complete,
+                    "drive_complete": progress.drive_complete,
+                    "confirmed_parts": progress.confirmed_parts,
+                    "total_parts": progress.total_parts,
+                    "can_retry": progress.can_retry,
+                    "reason": if parts.as_array().is_some_and(|parts| parts.iter().any(|part| part["status"] == "rejected")) && !progress.drive_complete { Some("YouTube hat einen Upload abgelehnt oder entfernt. Prüfe das Ziel und die YouTube-Verbindung.") } else if progress.state == "unknown" { Some("Der frühere Abschluss ist nicht ausreichend dokumentiert. Prüfe vorhandene Ziellinks; ein erneuter Upload wird nicht automatisch gestartet.") } else { error_label(&status, last_error.as_deref(), drive_requested) },
+                    "drive_url": drive_url,
+                    "drive_requested": drive_requested,
                     "last_attempt_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_attempt_at"),
+                    "uploaded_at": uploaded_at,
                     "parts": parts,
                     "needs_connection": !connected,
                 })
@@ -95,30 +104,76 @@ pub async fn list_handler(
     }
 }
 
-fn status_label(status: &str, parts: &Value) -> &'static str {
-    match status {
-        "uploaded" | "archived"
-            if parts.as_array().is_none_or(|parts| {
-                parts.is_empty()
-                    || parts
-                        .iter()
-                        .any(|part| part["status"] != "done" || part["youtube_video_id"].is_null())
-            }) =>
-        {
-            "Fehlgeschlagen"
-        }
-        "uploaded" | "archived" => "Fertig",
-        "uploading" => "Lädt hoch",
-        "drive_uploaded" => "Ausweichweg Drive",
-        "downloading" => "Lädt herunter",
-        "download_failed" | "upload_failed" | "unavailable" => "Fehlgeschlagen",
-        _ if parts
-            .as_array()
-            .is_some_and(|parts| parts.iter().any(|part| part["status"] == "uploading")) =>
-        {
-            "Lädt hoch"
-        }
-        _ => "Wartet",
+struct ArchiveProgress {
+    state: &'static str,
+    label: &'static str,
+    youtube_complete: bool,
+    drive_complete: bool,
+    confirmed_parts: usize,
+    total_parts: usize,
+    can_retry: bool,
+}
+
+fn archive_progress(
+    status: &str,
+    parts: &Value,
+    drive_url: Option<&str>,
+    has_uploaded_at: bool,
+) -> ArchiveProgress {
+    let parts = parts.as_array().map(Vec::as_slice).unwrap_or_default();
+    let confirmed_parts = parts
+        .iter()
+        .filter(|part| {
+            part["status"] == "done"
+                && part["youtube_video_id"]
+                    .as_str()
+                    .is_some_and(|id| !id.trim().is_empty())
+        })
+        .count();
+    let youtube_complete = matches!(status, "uploaded" | "archived")
+        && !parts.is_empty()
+        && confirmed_parts == parts.len();
+    let drive_complete = status == "drive_uploaded"
+        && has_uploaded_at
+        && drive_url.is_some_and(|url| {
+            url.starts_with("https://drive.google.com/") && !url.chars().any(char::is_control)
+        });
+    let terminal = matches!(status, "uploaded" | "archived" | "drive_uploaded");
+    let (state, label) = if youtube_complete {
+        ("youtube_uploaded", "YouTube-Upload abgeschlossen")
+    } else if drive_complete {
+        ("drive_uploaded", "Auf Drive gesichert")
+    } else if terminal && parts.iter().any(|part| part["status"] == "rejected") {
+        ("failed", "YouTube-Upload abgelehnt")
+    } else if terminal {
+        ("unknown", "Abschluss unklar")
+    } else if status == "downloading" {
+        ("downloading", "Lädt herunter")
+    } else if status == "uploading" {
+        ("uploading", "Lädt hoch")
+    } else if confirmed_parts > 0 {
+        ("partial", "Teilweise auf YouTube")
+    } else if matches!(status, "download_failed" | "upload_failed" | "unavailable")
+        || parts
+            .iter()
+            .any(|part| matches!(part["status"].as_str(), Some("failed" | "rejected")))
+    {
+        ("failed", "Fehlgeschlagen")
+    } else if matches!(status, "new" | "downloaded") {
+        ("waiting", "Wartet")
+    } else {
+        ("unknown", "Status unklar")
+    };
+    ArchiveProgress {
+        state,
+        label,
+        youtube_complete,
+        drive_complete,
+        confirmed_parts,
+        total_parts: parts.len(),
+        can_retry: !terminal
+            && matches!(state, "waiting" | "partial" | "failed")
+            && status != "unavailable",
     }
 }
 
@@ -128,8 +183,12 @@ fn error_label(
     drive_requested: bool,
 ) -> Option<&'static str> {
     match status {
-        "upload_failed" if drive_requested => Some("Die Sicherung auf Drive ist fehlgeschlagen. Du kannst sie erneut versuchen."),
-        "upload_failed" if last_error.is_some_and(|error| error.contains("quotaExceeded")) => Some("YouTube nimmt heute keine weiteren Uploads an. Das Archiv versucht es bei einem späteren Lauf erneut."),
+        "upload_failed" if drive_requested => {
+            Some("Die Sicherung auf Drive ist fehlgeschlagen. Du kannst sie erneut versuchen.")
+        }
+        "upload_failed" if last_error.is_some_and(|error| error.contains("quotaExceeded")) => Some(
+            "YouTube nimmt heute keine weiteren Uploads an. Das Archiv versucht es bei einem späteren Lauf erneut.",
+        ),
         "download_failed" => {
             Some("Der Download ist fehlgeschlagen. Du kannst ihn erneut versuchen.")
         }

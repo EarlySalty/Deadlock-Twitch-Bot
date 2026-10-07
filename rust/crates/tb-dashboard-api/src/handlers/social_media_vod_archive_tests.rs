@@ -3,14 +3,16 @@ use super::*;
 async fn database() -> crate::test_postgres::TestPostgres {
     let database = crate::test_postgres::TestPostgres::start().await;
     for sql in [
-        "CREATE TABLE twitch_vod_archive_vods (id BIGINT PRIMARY KEY, twitch_id TEXT, streamer_login TEXT, twitch_user_id TEXT, title TEXT, duration_sec BIGINT, recorded_at DATE, discovered_at TIMESTAMPTZ DEFAULT NOW(), status TEXT, local_path TEXT, last_error TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
+        "CREATE TABLE twitch_vod_archive_vods (id BIGINT PRIMARY KEY, twitch_id TEXT, streamer_login TEXT, twitch_user_id TEXT, title TEXT, duration_sec BIGINT, recorded_at DATE, discovered_at TIMESTAMPTZ DEFAULT NOW(), status TEXT, local_path TEXT, last_error TEXT, uploaded_at TIMESTAMPTZ, updated_at TIMESTAMPTZ DEFAULT NOW())",
         "CREATE TABLE twitch_vod_archive_parts (vod_id BIGINT, part_index INT, status TEXT, youtube_video_id TEXT, last_error TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
         "CREATE TABLE social_media_partner_access (twitch_user_id TEXT PRIMARY KEY, granted BOOLEAN)",
         "CREATE TABLE social_media_platform_auth (id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT, platform TEXT, access_token_enc BYTEA, refresh_token_enc BYTEA, scopes TEXT, token_expires_at TEXT, enabled INTEGER DEFAULT 1, needs_reauth BOOLEAN DEFAULT FALSE, refresh_expires_at TIMESTAMPTZ, authorized_at TIMESTAMPTZ DEFAULT NOW())",
         "INSERT INTO social_media_partner_access VALUES ('42', TRUE), ('99', TRUE)",
         "INSERT INTO twitch_vod_archive_vods (id, twitch_id, streamer_login, twitch_user_id, title, duration_sec, status) VALUES (1,'v1','renamed','42','Eigener Stream',3600,'upload_failed'), (2,'v2','other','99','Fremder Stream',1800,'uploaded')",
         "INSERT INTO twitch_vod_archive_parts VALUES (1,0,'failed',NULL,NULL,NOW()), (2,0,'done','video99',NULL,NOW())",
-    ] { sqlx::query(sql).execute(&database.pool).await.unwrap(); }
+    ] {
+        sqlx::query(sql).execute(&database.pool).await.unwrap();
+    }
     sqlx::raw_sql(include_str!(
         "../../../../migrations/20261007220000_vod_archive_management.sql"
     ))
@@ -117,12 +119,14 @@ async fn retry_drive_hide_and_active_lock_keep_completed_parts() {
         apply_action(pool, 1, Some("42"), "drive").await.unwrap(),
         Some(true)
     );
-    assert!(sqlx::query_scalar::<_, bool>(
-        "SELECT drive_requested FROM twitch_vod_archive_vods WHERE id=1"
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap());
+    assert!(
+        sqlx::query_scalar::<_, bool>(
+            "SELECT drive_requested FROM twitch_vod_archive_vods WHERE id=1"
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    );
     assert_eq!(
         apply_action(pool, 2, None, "retry").await.unwrap(),
         Some(false)
@@ -234,19 +238,108 @@ async fn empty_pages_keep_visible_totals_within_the_authorized_scope() {
 }
 
 #[test]
-fn incomplete_archived_records_are_not_reported_as_clean_uploads() {
-    assert_eq!(
-        status_label(
-            "archived",
-            &json!([{"status":"pending", "youtube_video_id":null}])
-        ),
-        status_label("upload_failed", &json!([]))
+fn progress_requires_confirmation_and_keeps_targets_separate() {
+    for parts in [
+        json!([]),
+        json!([{"status":"pending", "youtube_video_id":null}]),
+        json!([{"status":"pending", "youtube_video_id":"link-only"}]),
+        json!([{"status":"done", "youtube_video_id":""}]),
+        json!([{"status":"done", "youtube_video_id":"video"}, {"status":"pending", "youtube_video_id":null}]),
+    ] {
+        let progress = archive_progress("archived", &parts, None, true);
+        assert_eq!(progress.state, "unknown");
+        assert!(!progress.youtube_complete && !progress.drive_complete && !progress.can_retry);
+    }
+    let parts = json!([{"status":"done", "youtube_video_id":"video"}]);
+    for has_time in [false, true] {
+        let progress = archive_progress("archived", &parts, None, has_time);
+        assert_eq!(progress.state, "youtube_uploaded");
+        assert!(progress.youtube_complete && !progress.drive_complete);
+    }
+    let progress = archive_progress("upload_failed", &parts, None, false);
+    assert_eq!(progress.state, "partial");
+    assert!(!progress.youtube_complete && progress.can_retry);
+    let progress = archive_progress(
+        "drive_uploaded",
+        &json!([]),
+        Some("https://drive.google.com/drive/folders/synthetic"),
+        true,
     );
-    assert_ne!(
-        status_label(
-            "archived",
-            &json!([{"status":"done", "youtube_video_id":"video"}])
-        ),
-        status_label("upload_failed", &json!([]))
+    assert!(progress.drive_complete && !progress.youtube_complete);
+    assert_eq!(progress.confirmed_parts, 0);
+    let progress = archive_progress("drive_uploaded", &parts, None, true);
+    assert_eq!(progress.state, "unknown");
+    let progress = archive_progress("future_state", &json!([]), None, false);
+    assert_eq!(progress.state, "unknown");
+    let progress = archive_progress(
+        "downloaded",
+        &json!([{"status":"uploading", "youtube_video_id":null}]),
+        None,
+        false,
     );
+    assert_eq!(progress.state, "waiting");
+}
+
+#[tokio::test]
+async fn list_exposes_confirmed_historical_partial_failed_and_unknown_states() {
+    let database = database().await;
+    let pool = &database.pool;
+    sqlx::query("INSERT INTO twitch_vod_archive_vods (id,twitch_id,streamer_login,twitch_user_id,title,duration_sec,status,uploaded_at,last_attempt_at,drive_url) VALUES \
+        (3,'v3','testkanal','42','Bestätigter älterer Upload',3600,'archived','2026-09-01T12:00:00Z',NULL,NULL), \
+        (4,'v4','testkanal','42','Teilweise hochgeladen',50000,'upload_failed',NULL,'2026-10-01T13:00:00Z',NULL), \
+        (5,'v5','testkanal','42','Unklarer älterer Abschluss',3600,'archived',NULL,NULL,NULL), \
+        (6,'v6','testkanal','42','Bestätigte Drive-Kopie',3600,'drive_uploaded','2026-10-01T13:00:00Z',NULL,'https://drive.google.com/drive/folders/synthetic'), \
+        (7,'v7','testkanal','42','Upload läuft',3600,'uploading',NULL,'2026-10-01T13:00:00Z',NULL), \
+        (8,'v8','testkanal','42','Wartet auf Upload',3600,'downloaded',NULL,NULL,NULL), \
+        (9,'v9','testkanal','42','Älterer Upload ohne Abschlusszeit',3600,'archived',NULL,NULL,NULL)")
+        .execute(pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO twitch_vod_archive_parts VALUES \
+        (3,0,'done','synthetic3',NULL,NOW()), \
+        (4,0,'done','synthetic4',NULL,NOW()),(4,1,'failed',NULL,'synthetic failure',NOW()), \
+        (5,0,'pending','link-only',NULL,NOW()), \
+        (6,0,'pending',NULL,NULL,NOW()), \
+        (7,0,'uploading',NULL,NULL,NOW()), \
+        (8,0,'pending',NULL,NULL,NOW()), \
+        (9,0,'done','synthetic9',NULL,NOW())",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let response = list_handler(
+        partner(),
+        State(pool.clone()),
+        Query(ArchiveQuery {
+            twitch_user_id: None,
+            page: None,
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let data = json(response).await;
+    let items = data["items"].as_array().unwrap();
+    for (id, state, confirmed, youtube, drive) in [
+        (1, "failed", 0, false, false),
+        (3, "youtube_uploaded", 1, true, false),
+        (4, "partial", 1, false, false),
+        (5, "unknown", 0, false, false),
+        (6, "drive_uploaded", 0, false, true),
+        (7, "uploading", 0, false, false),
+        (8, "waiting", 0, false, false),
+        (9, "youtube_uploaded", 1, true, false),
+    ] {
+        let item = items.iter().find(|item| item["id"] == id).unwrap();
+        assert_eq!(item["display_status"], state);
+        assert_eq!(item["confirmed_parts"], confirmed);
+        assert_eq!(item["youtube_complete"], youtube);
+        assert_eq!(item["drive_complete"], drive);
+    }
+    let historical = items.iter().find(|item| item["id"] == 3).unwrap();
+    assert!(historical["last_attempt_at"].is_null());
+    assert!(historical["uploaded_at"].is_string());
+    let no_time = items.iter().find(|item| item["id"] == 9).unwrap();
+    assert!(no_time["uploaded_at"].is_null());
+    if let Ok(path) = std::env::var("VOD_ARCHIVE_PROOF_PATH") {
+        std::fs::write(path, serde_json::to_vec_pretty(&data).unwrap()).unwrap();
+    }
 }

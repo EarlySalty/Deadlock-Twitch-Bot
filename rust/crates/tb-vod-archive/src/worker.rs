@@ -18,21 +18,21 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use serde_json::Value;
 use sqlx::PgPool;
 use tb_social_media::credentials::CredentialManager;
 use tb_social_media::upload_worker::youtube_uploader;
+use tb_social_media::uploaders::UploadError;
 use tb_social_media::uploaders::youtube::{
     ChunkOutcome, ResumeStand, VideoZustand, YouTubeUploader,
 };
-use tb_social_media::uploaders::UploadError;
-use tb_social_media::vod_archive::{aktive_vod_archive_streamer, VodArchiveSettings};
+use tb_social_media::vod_archive::{VodArchiveSettings, aktive_vod_archive_streamer};
 
-use crate::config::{wurzel_oder_elternteil, VodArchiveConfig};
+use crate::config::{VodArchiveConfig, wurzel_oder_elternteil};
 use crate::error::VodArchiveError;
 use crate::metadata::baue_metadaten;
 use crate::store;
@@ -685,10 +685,6 @@ impl VodArchiveWorker {
     ) -> Result<(), VodArchiveError> {
         let kanal = einstellung.streamer_login.as_str();
         let mut aufgenommen_am = vod.recorded_at;
-        sqlx::query("UPDATE twitch_vod_archive_vods SET last_attempt_at=NOW() WHERE id=$1")
-            .bind(vod.id)
-            .execute(&self.pool)
-            .await?;
 
         if vod.braucht_download() {
             tracing::info!(kanal = %kanal, vod = %vod.twitch_id, titel = %vod.title, "Lade VOD");
@@ -806,12 +802,19 @@ impl VodArchiveWorker {
                 continue;
             }
             store::setze_status(&self.pool, vod.id, "uploading").await?;
-            self.lade_teil_hoch(vod, teil, anzahl, aufgenommen_am, uploader, einstellung)
-                .await?;
+            if let Err(error) = self
+                .lade_teil_hoch(vod, teil, anzahl, aufgenommen_am, uploader, einstellung)
+                .await
+            {
+                store::setze_teil_fehler(&self.pool, teil.id, &error.to_string()).await?;
+                return Err(error);
+            }
             bilanz.hochgeladen += 1;
         }
 
         if offen > 0 {
+            sqlx::query("UPDATE twitch_vod_archive_vods SET status=CASE WHEN EXISTS (SELECT 1 FROM twitch_vod_archive_parts WHERE vod_id=$1 AND status IN ('failed','rejected')) THEN 'upload_failed' ELSE 'downloaded' END, updated_at=NOW() WHERE id=$1 AND status='uploading'")
+                .bind(vod.id).execute(&self.pool).await?;
             tracing::info!(
                 kanal = %kanal,
                 vod = %vod.twitch_id,
@@ -995,6 +998,7 @@ impl VodArchiveWorker {
             settings.twitch_user_id.as_deref().unwrap_or("unknown"),
             vod.twitch_id
         );
+        store::setze_status(&self.pool, vod.id, "uploading").await?;
         for part in &parts {
             let path = Path::new(&part.file_path);
             let file = path
@@ -1426,7 +1430,10 @@ mod tests {
              last_error TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, \
              UNIQUE (vod_id, part_index))",
         ] {
-            sqlx::query(sqlx::AssertSqlSafe(ddl)).execute(&pool).await.unwrap();
+            sqlx::query(sqlx::AssertSqlSafe(ddl))
+                .execute(&pool)
+                .await
+                .unwrap();
         }
         static NEXT_ID: AtomicUsize = AtomicUsize::new(100_000);
         let first_id = NEXT_ID.fetch_add(1_000, Ordering::SeqCst) as i64;
@@ -1729,10 +1736,12 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(store::teile(&pool, vod.id, &test_cipher())
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            store::teile(&pool, vod.id, &test_cipher())
+                .await
+                .unwrap()
+                .is_empty()
+        );
 
         let hochlader = Arc::new(ZaehlenderHochlader::default());
         let bilanz = worker(&pool, config(&verzeichnis), &hochlader)

@@ -35,10 +35,17 @@ export interface ArchivedVod {
   discovered_at: string;
   status: string;
   status_label: string;
+  display_status: 'youtube_uploaded' | 'drive_uploaded' | 'uploading' | 'downloading' | 'waiting' | 'partial' | 'failed' | 'unknown';
+  youtube_complete: boolean;
+  drive_complete: boolean;
+  confirmed_parts: number;
+  total_parts: number;
+  can_retry: boolean;
   reason: string | null;
   drive_url: string | null;
   drive_requested: boolean;
   last_attempt_at: string | null;
+  uploaded_at: string | null;
   parts: { index: number; status: string; youtube_video_id: string | null }[];
   needs_connection: boolean;
 }

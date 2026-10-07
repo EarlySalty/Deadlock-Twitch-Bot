@@ -1,0 +1,190 @@
+[
+  {
+    "name": "desktop",
+    "width": 1440,
+    "height": 1100,
+    "metrics": {
+      "viewport": 1440,
+      "document": 1440,
+      "articles": [
+        {
+          "title": "Älterer Upload ohne Abschlusszeit",
+          "status": "YouTube-Upload abgeschlossen",
+          "titleLeft": 0,
+          "statusLeft": 0,
+          "statusRight": 0,
+          "icon": true,
+          "time": null,
+          "buttons": 1
+        },
+        {
+          "title": "Wartet auf Upload",
+          "status": "Wartet",
+          "titleLeft": 0,
+          "statusLeft": 0,
+          "statusRight": 0,
+          "icon": true,
+          "time": null,
+          "buttons": 3
+        },
+        {
+          "title": "Upload läuft",
+          "status": "Lädt hoch",
+          "titleLeft": 0,
+          "statusLeft": 0,
+          "statusRight": 0,
+          "icon": true,
+          "time": "2026-10-01T13:00:00Z",
+          "buttons": 1
+        },
+        {
+          "title": "Bestätigte Drive-Kopie",
+          "status": "Auf Drive gesichert",
+          "titleLeft": 0,
+          "statusLeft": 0,
+          "statusRight": 0,
+          "icon": true,
+          "time": "2026-10-01T13:00:00Z",
+          "buttons": 1
+        },
+        {
+          "title": "Unklarer älterer Abschluss",
+          "status": "Abschluss unklar",
+          "titleLeft": 0,
+          "statusLeft": 0,
+          "statusRight": 0,
+          "icon": true,
+          "time": null,
+          "buttons": 1
+        },
+        {
+          "title": "Teilweise hochgeladen",
+          "status": "Teilweise auf YouTube",
+          "titleLeft": 0,
+          "statusLeft": 0,
+          "statusRight": 0,
+          "icon": true,
+          "time": "2026-10-01T13:00:00Z",
+          "buttons": 3
+        },
+        {
+          "title": "Bestätigter älterer Upload",
+          "status": "YouTube-Upload abgeschlossen",
+          "titleLeft": 0,
+          "statusLeft": 0,
+          "statusRight": 0,
+          "icon": true,
+          "time": "2026-09-01T12:00:00Z",
+          "buttons": 1
+        },
+        {
+          "title": "Eigener Stream",
+          "status": "Fehlgeschlagen",
+          "titleLeft": 0,
+          "statusLeft": 0,
+          "statusRight": 0,
+          "icon": true,
+          "time": null,
+          "buttons": 3
+        }
+      ],
+      "forbiddenAttempt": false,
+      "text": "testkanal\nFREE\nMAIN\nHome\nRangliste & Erfolge\nAnalyse\nSocial-Media-Manager\nUplink\nTOOLS\nVerwaltung\nStream-Overlay\nTitel-Studio\nPlan: Free\nChangelog\nHILFE\nHilfe & Einrichtung\nKritik & Wünsche\nHäufige Fragen\nPARTNER DASHBOARD\nSocial-Media-Manager\n\nFokus: testkanal\n\nVOD-Archiv\nStreamer wählen\ntestkanal\n\nHilfe bekommen"
+    },
+    "errors": []
+  },
+  {
+    "name": "mobil",
+    "width": 390,
+    "height": 844,
+    "metrics": {
+      "viewport": 390,
+      "document": 390,
+      "articles": [
+        {
+          "title": "Älterer Upload ohne Abschlusszeit",
+          "status": "YouTube-Upload abgeschlossen",
+          "titleLeft": 0,
+          "statusLeft": 0,
+          "statusRight": 0,
+          "icon": true,
+          "time": null,
+          "buttons": 1
+        },
+        {
+          "title": "Wartet auf Upload",
+          "status": "Wartet",
+          "titleLeft": 0,
+          "statusLeft": 0,
+          "statusRight": 0,
+          "icon": true,
+          "time": null,
+          "buttons": 3
+        },
+        {
+          "title": "Upload läuft",
+          "status": "Lädt hoch",
+          "titleLeft": 0,
+          "statusLeft": 0,
+          "statusRight": 0,
+          "icon": true,
+          "time": "2026-10-01T13:00:00Z",
+          "buttons": 1
+        },
+        {
+          "title": "Bestätigte Drive-Kopie",
+          "status": "Auf Drive gesichert",
+          "titleLeft": 0,
+          "statusLeft": 0,
+          "statusRight": 0,
+          "icon": true,
+          "time": "2026-10-01T13:00:00Z",
+          "buttons": 1
+        },
+        {
+          "title": "Unklarer älterer Abschluss",
+          "status": "Abschluss unklar",
+          "titleLeft": 0,
+          "statusLeft": 0,
+          "statusRight": 0,
+          "icon": true,
+          "time": null,
+          "buttons": 1
+        },
+        {
+          "title": "Teilweise hochgeladen",
+          "status": "Teilweise auf YouTube",
+          "titleLeft": 0,
+          "statusLeft": 0,
+          "statusRight": 0,
+          "icon": true,
+          "time": "2026-10-01T13:00:00Z",
+          "buttons": 3
+        },
+        {
+          "title": "Bestätigter älterer Upload",
+          "status": "YouTube-Upload abgeschlossen",
+          "titleLeft": 0,
+          "statusLeft": 0,
+          "statusRight": 0,
+          "icon": true,
+          "time": "2026-09-01T12:00:00Z",
+          "buttons": 1
+        },
+        {
+          "title": "Eigener Stream",
+          "status": "Fehlgeschlagen",
+          "titleLeft": 0,
+          "statusLeft": 0,
+          "statusRight": 0,
+          "icon": true,
+          "time": null,
+          "buttons": 3
+        }
+      ],
+      "forbiddenAttempt": false,
+      "text": "testkanal\nFREE\nMAIN\nHome\nRangliste & Erfolge\nAnalyse\nSocial-Media-Manager\nUplink\nTOOLS\nVerwaltung\nStream-Overlay\nTitel-Studio\nPlan: Free\nChangelog\nHILFE\nHilfe & Einrichtung\nKritik & Wünsche\nHäufige Fragen\nPARTNER DASHBOARD\nSocial-Media-Manager\n\nFokus: testkanal\n\nVOD-Archiv\nStreamer wählen\ntestkanal\n\nHilfe bekommen"
+    },
+    "errors": []
+  }
+]
