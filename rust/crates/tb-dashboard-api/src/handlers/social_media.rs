@@ -5498,7 +5498,22 @@ mod tests {
             .unwrap();
         let rejected: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, tiktok_publish_id, tiktok_publish_status, tiktok_post_options) VALUES ($1, 'tiktok', 'failed', 'old-operation', 'FAILED', $2) RETURNING id")
             .bind(clip).bind(&old).fetch_one(&pool).await.unwrap();
-        let corrected = json!({"caption": "Korrigiert", "privacy_level": "SELF_ONLY"});
+        let corrected = json!({
+            "caption": "Korrigiert",
+            "privacy_level": "SELF_ONLY",
+            "allow_comment": false,
+            "allow_duet": false,
+            "allow_stitch": false,
+            "commercial_content": false,
+            "brand_organic_toggle": false,
+            "brand_content_toggle": false,
+            "consent": true,
+            "creator_username": "nani",
+            "credential_id": 1,
+            "platform_user_id": "fixture-tiktok-user",
+            "approved_video_sha256": "fixture-approved-video",
+            "video_path": "/fixture/approved-preview.mp4",
+        });
         tiktok_direct::persist_choice(&pool, clip, corrected.clone())
             .await
             .unwrap();

@@ -845,7 +845,6 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        // Zweiter Aufruf für denselben pending → gleiche ID mit aktualisierten Werten.
         let new_tags = vec!["#deadlock".to_string()];
         let id2 = queue_upload_record(
             &pool,
@@ -871,7 +870,7 @@ mod tests {
         assert_eq!(n, 1);
         let row = sqlx::query(
             "SELECT title, description, hashtags, \
-             scheduled_at = '2031-02-03T04:05:06Z'::timestamptz AS scheduled_matches, \
+             scheduled_at = '2030-01-01T00:00:00Z'::timestamptz AS scheduled_matches, \
              priority, last_error \
              FROM twitch_clips_upload_queue WHERE id = $1",
         )
@@ -906,6 +905,42 @@ mod tests {
             row.try_get::<Option<String>, _>("last_error").unwrap(),
             None
         );
+        let youtube_id = queue_upload_record(
+            &pool,
+            clip,
+            "youtube",
+            None,
+            None,
+            None,
+            Some("2030-01-01T00:00:00Z"),
+            0,
+        )
+        .await
+        .unwrap();
+        assert_ne!(youtube_id, id1);
+        assert_eq!(
+            queue_upload_record(
+                &pool,
+                clip,
+                "youtube",
+                None,
+                None,
+                None,
+                Some("2031-02-03T04:05:06Z"),
+                0,
+            )
+            .await
+            .unwrap(),
+            youtube_id
+        );
+        let youtube_schedule: bool = sqlx::query_scalar(
+            "SELECT scheduled_at = '2031-02-03T04:05:06Z'::timestamptz FROM twitch_clips_upload_queue WHERE id = $1",
+        )
+        .bind(youtube_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(youtube_schedule);
     }
 
     #[tokio::test]

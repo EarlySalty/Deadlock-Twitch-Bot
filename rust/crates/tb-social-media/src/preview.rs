@@ -439,6 +439,16 @@ impl PreviewWorker {
             Ok(()) => {
                 if let Err(e) = publish_render(&self.pool, job, &staged, &output, &inputs).await {
                     tracing::warn!(%e, clip_db_id = job.clip_db_id, "Vorschau: Ready-Status nicht gespeichert");
+                    if let Err(error) = finish_error(
+                        &self.pool,
+                        job.clip_db_id,
+                        &format!("publish: {e}"),
+                        Some(&job.claimed_at),
+                    )
+                    .await
+                    {
+                        tracing::warn!(%error, clip_db_id = job.clip_db_id, "Vorschau: Fehlerstatus nicht gespeichert");
+                    }
                 }
             }
             Err(e) => {
@@ -575,7 +585,7 @@ mod tests {
         let Some(pool) = make_pool("t_sm_preview_inputs").await else {
             return;
         };
-        let id: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_url, streamer_login) VALUES ('https://clips.test/input', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
+        let id: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (id, clip_url, streamer_login) VALUES (932900002, 'https://clips.test/input', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
         let layout = crate::layout::default_streamer_layout();
         crate::layout::set_clip_layout_override(&pool, id, Some(&layout))
             .await
@@ -680,11 +690,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn vorschau_dateifehler_erlauben_retry_ohne_neue_generation_zu_ersetzen() {
+        let Some(pool) = make_pool("t_sm_preview_publish_error").await else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let source = preview_file(dir.path(), 0).await;
+        let id: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (id, clip_url, streamer_login, local_file_path) VALUES (932900001, 'https://clips.test/publish-error', 'nani', $1) RETURNING id")
+            .bind(&source).fetch_one(&pool).await.unwrap();
+        let output = dir.path().join(format!("{id}_preview_manual_v1.mp4"));
+        let sidecar = dir
+            .path()
+            .join(format!("{id}_preview_manual_v1.mp4.inputs.json"));
+        let worker = PreviewWorker::new(pool.clone(), "yt-dlp", dir.path().to_string_lossy());
+        for blocked in [&sidecar, &output] {
+            tokio::fs::create_dir(blocked).await.unwrap();
+            request_preview(&pool, id).await.unwrap();
+            let job = claim_pending(&pool, 1).await.remove(0);
+            worker.render_one(&job).await;
+            let state = get_preview(&pool, id).await.unwrap();
+            assert_eq!(state.status.as_deref(), Some(PREVIEW_ERROR));
+            assert!(state.error.as_deref().unwrap().starts_with("publish: "));
+            assert!(state.path.is_none());
+            tokio::fs::remove_dir(blocked).await.unwrap();
+            request_preview(&pool, id).await.unwrap();
+            let current = claim_pending(&pool, 1).await.remove(0);
+            finish_error(&pool, id, "obsolete failure", Some(&job.claimed_at))
+                .await
+                .unwrap();
+            let unchanged: String = sqlx::query_scalar(
+                "SELECT preview_updated_at::text FROM twitch_clips_social_media WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(unchanged, current.claimed_at);
+            assert_eq!(
+                get_preview(&pool, id).await.unwrap().status.as_deref(),
+                Some(PREVIEW_RENDERING)
+            );
+            worker.render_one(&current).await;
+            let ready = get_preview(&pool, id).await.unwrap();
+            assert_eq!(ready.status.as_deref(), Some(PREVIEW_READY));
+            assert_eq!(ready.path.as_deref(), output.to_str());
+            assert!(ready.error.is_none());
+            tokio::fs::remove_file(&output).await.unwrap();
+            tokio::fs::remove_file(&sidecar).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn vorschau_zustandsmaschine() {
         let Some(pool) = make_pool("t_sm_preview_state").await else {
             return;
         };
-        let id: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_url, streamer_login) VALUES ('https://clips.twitch.tv/x', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
+        let id: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (id, clip_url, streamer_login) VALUES (932900003, 'https://clips.twitch.tv/x', 'nani') RETURNING id").fetch_one(&pool).await.unwrap();
         request_preview(&pool, id).await.unwrap();
         let first: String = sqlx::query_scalar(
             "SELECT preview_updated_at::text FROM twitch_clips_social_media WHERE id = $1",
