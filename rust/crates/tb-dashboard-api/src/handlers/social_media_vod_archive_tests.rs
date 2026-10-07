@@ -297,6 +297,64 @@ async fn youtube_check_is_scoped_debounced_read_only_and_visible() {
         let path = std::path::Path::new(&path).with_file_name("youtube-current.json");
         std::fs::write(path, serde_json::to_vec_pretty(&data).unwrap()).unwrap();
     }
+    sqlx::query("UPDATE twitch_vod_youtube_checks SET state='partial',complete=FALSE,observations=jsonb_set(observations,'{0,part_total}','2'::jsonb) WHERE vod_id=2")
+        .execute(pool).await.unwrap();
+    let partial = json(
+        list_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(ArchiveQuery {
+                twitch_user_id: Some("99".into()),
+                page: None,
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(partial["items"][0]["display_status"], "partial");
+    assert_eq!(partial["items"][0]["youtube_verified_complete"], false);
+    assert_eq!(
+        partial["items"][0]["youtube_check"]["observations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    if let Ok(path) = std::env::var("VOD_ARCHIVE_PROOF_PATH") {
+        let path = std::path::Path::new(&path).with_file_name("youtube-partial.json");
+        std::fs::write(path, serde_json::to_vec_pretty(&partial).unwrap()).unwrap();
+    }
+    sqlx::query("UPDATE twitch_vod_youtube_checks SET state='error',last_error='connection',last_attempt_at=NOW() WHERE vod_id=2")
+        .execute(pool).await.unwrap();
+    let connection = json(
+        list_handler(
+            DashboardAuthLevel::admin(),
+            State(pool.clone()),
+            Query(ArchiveQuery {
+                twitch_user_id: Some("99".into()),
+                page: None,
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(connection["items"][0]["display_status"], "youtube_error");
+    assert_eq!(
+        connection["items"][0]["youtube_check"]["error"],
+        "connection"
+    );
+    assert_eq!(
+        connection["items"][0]["youtube_check"]["observations"],
+        partial["items"][0]["youtube_check"]["observations"]
+    );
+    assert_eq!(
+        connection["items"][0]["youtube_check"]["last_success_at"],
+        data["items"][0]["youtube_check"]["last_success_at"]
+    );
+    if let Ok(path) = std::env::var("VOD_ARCHIVE_PROOF_PATH") {
+        let path = std::path::Path::new(&path).with_file_name("youtube-connection.json");
+        std::fs::write(path, serde_json::to_vec_pretty(&connection).unwrap()).unwrap();
+    }
     let after:Value=sqlx::query_scalar("SELECT jsonb_build_array(v.status,v.uploaded_at,(SELECT jsonb_agg(p) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id)) FROM twitch_vod_archive_vods v WHERE v.id=2").fetch_one(pool).await.unwrap();
     assert_eq!(before, after);
     sqlx::query("UPDATE social_media_platform_auth SET platform_user_id='changed' WHERE twitch_user_id='99'").execute(pool).await.unwrap();
@@ -314,6 +372,66 @@ async fn youtube_check_is_scoped_debounced_read_only_and_visible() {
     .await;
     assert!(changed["items"][0]["youtube_check"].is_null());
     eprintln!("YOUTUBE_API_DB_PROOF: queue write debounced and session-scoped, current private evidence returned, historical upload untouched, switched channel hides old evidence");
+}
+
+#[tokio::test]
+async fn youtube_evidence_keeps_drive_success_and_upload_recovery_visible() {
+    let database = database().await;
+    let pool = &database.pool;
+    sqlx::query("INSERT INTO social_media_platform_auth(twitch_user_id,platform,platform_user_id,access_token_enc,scopes) VALUES ('42','youtube','own',decode('01','hex'),'https://www.googleapis.com/auth/youtube.readonly')")
+        .execute(pool).await.unwrap();
+    sqlx::query(
+        "UPDATE twitch_vod_archive_parts SET youtube_video_id='synthetic-existing' WHERE vod_id=1",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO twitch_vod_archive_vods (id,twitch_id,streamer_login,twitch_user_id,title,duration_sec,status,uploaded_at,drive_url) VALUES (3,'v3','synthetic','42','Drive-Kopie',120,'drive_uploaded','2026-10-01T13:00:00Z','https://drive.google.com/drive/folders/synthetic')")
+        .execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO twitch_vod_archive_parts(vod_id,part_index,status,youtube_video_id) VALUES (3,0,'pending','synthetic-drive')")
+        .execute(pool).await.unwrap();
+    for id in [1, 3] {
+        assert_eq!(
+            apply_action(pool, id, Some("42"), "check").await.unwrap(),
+            Some(true)
+        );
+    }
+    for state in ["error", "partial", "processing", "rejected", "confirmed"] {
+        sqlx::query("UPDATE twitch_vod_youtube_checks SET state=$1,complete=$1='confirmed',requested_at=NULL,last_error=CASE WHEN $1='error' THEN 'connection' END")
+            .bind(state).execute(pool).await.unwrap();
+        for drive_requested in [false, true] {
+            sqlx::query("UPDATE twitch_vod_archive_vods SET drive_requested=$1 WHERE id=1")
+                .bind(drive_requested)
+                .execute(pool)
+                .await
+                .unwrap();
+            let data = json(
+                list_handler(
+                    partner(),
+                    State(pool.clone()),
+                    Query(ArchiveQuery {
+                        twitch_user_id: None,
+                        page: None,
+                    }),
+                )
+                .await,
+            )
+            .await;
+            let items = data["items"].as_array().unwrap();
+            let drive = items.iter().find(|item| item["id"] == 3).unwrap();
+            assert_eq!(drive["display_status"], "drive_uploaded");
+            assert_eq!(drive["drive_complete"], true);
+            assert_eq!(drive["youtube_check"]["state"], state);
+            let recovery = items.iter().find(|item| item["id"] == 1).unwrap();
+            assert_eq!(
+                recovery["reason"],
+                json!(error_label("upload_failed", None, drive_requested))
+            );
+            assert_eq!(recovery["can_retry"], true);
+            assert_eq!(recovery["youtube_check"]["state"], state);
+        }
+    }
+    eprintln!("YOUTUBE_API_DB_PROOF: all YouTube states preserve independent Drive success and relevant recovery explanations for YouTube and Drive uploads");
 }
 
 #[test]

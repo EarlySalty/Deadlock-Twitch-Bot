@@ -73,7 +73,7 @@ pub async fn list_handler(
                 let progress = archive_progress(&status, &parts, drive_url.as_deref(), uploaded_at.is_some());
                 let check: Option<Value> = row.get("youtube_check");
                 let check_state = check.as_ref().and_then(|c| c["state"].as_str());
-                let checked_status = youtube_check_label(check_state);
+                let checked_status = if progress.drive_complete { None } else { youtube_check_label(check_state) };
                 json!({
                     "youtube_check": check,
                     "can_check_youtube": row.get::<bool, _>("can_check_youtube"),
@@ -93,7 +93,7 @@ pub async fn list_handler(
                     "confirmed_parts": progress.confirmed_parts,
                     "total_parts": progress.total_parts,
                     "can_retry": progress.can_retry,
-                    "reason": if check.is_some() { None } else if parts.as_array().is_some_and(|parts| parts.iter().any(|part| part["status"] == "rejected")) && !progress.drive_complete { Some("YouTube hat einen Upload abgelehnt oder entfernt. Prüfe das Ziel und die YouTube-Verbindung.") } else if progress.state == "unknown" { Some("Für diesen früheren Upload fehlt ein vollständiger Nachweis. Der YouTube-Abgleich kann vorhandene Videos zuordnen.") } else { error_label(&status, last_error.as_deref(), drive_requested) },
+                    "reason": error_label(&status, last_error.as_deref(), drive_requested).or_else(|| if check.is_some() { None } else if parts.as_array().is_some_and(|parts| parts.iter().any(|part| part["status"] == "rejected")) && !progress.drive_complete { Some("YouTube hat einen Upload abgelehnt oder entfernt. Prüfe das Ziel und die YouTube-Verbindung.") } else if progress.state == "unknown" { Some("Für diesen früheren Upload fehlt ein vollständiger Nachweis. Der YouTube-Abgleich kann vorhandene Videos zuordnen.") } else { None }),
                     "drive_url": drive_url,
                     "drive_requested": drive_requested,
                     "last_attempt_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_attempt_at"),

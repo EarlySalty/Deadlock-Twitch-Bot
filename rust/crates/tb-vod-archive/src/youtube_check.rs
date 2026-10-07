@@ -217,10 +217,11 @@ fn decision(
     }
     let mut indexes = BTreeSet::new();
     let mut videos = BTreeSet::new();
-    let expected = if known {
-        vod.parts.as_array().map_or(0, Vec::len) as i32
-    } else {
+    let parts = vod.parts.as_array().map(Vec::as_slice).unwrap_or_default();
+    let expected = if parts.is_empty() {
         observations.first().and_then(|o| o.part_total).unwrap_or(1)
+    } else {
+        parts.len() as i32
     };
     let consistent = expected > 0
         && observations.len() == expected as usize
@@ -231,6 +232,16 @@ fn decision(
                 && indexes.insert(index)
                 && videos.insert(&o.video_id)
                 && (known || o.part_total.unwrap_or(1) == expected)
+        })
+        && parts.iter().all(|part| {
+            part["video_id"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .is_none_or(|id| {
+                    observations.iter().any(|o| {
+                        o.video_id == id && o.part_index.map(i64::from) == part["index"].as_i64()
+                    })
+                })
         });
     let duration: Option<i64> = observations
         .iter()
@@ -451,11 +462,37 @@ async fn run_with(
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
+        let historical = pending.iter().any(|v| {
+            v.parts.as_array().is_none_or(|p| {
+                p.is_empty()
+                    || p.iter()
+                        .any(|p| p["video_id"].as_str().is_none_or(str::is_empty))
+            })
+        });
+        let mut scan_complete = false;
+        if historical {
+            let mut tx = pool.begin().await?;
+            if !ziel_guard(&mut tx, &user, &target).await? {
+                continue;
+            }
+            sqlx::query("INSERT INTO twitch_vod_youtube_scans (twitch_user_id,auth_id,auth_revision,channel_id,playlist_id) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (twitch_user_id) DO UPDATE SET auth_id=$2,auth_revision=$3,channel_id=$4,playlist_id=$5,cursor=NULL,generation=twitch_vod_youtube_scans.generation+1,complete=FALSE,next_scan_at=NOW(),last_error=NULL WHERE twitch_vod_youtube_scans.auth_id<>$2 OR twitch_vod_youtube_scans.auth_revision<>$3 OR twitch_vod_youtube_scans.channel_id<>$4 OR twitch_vod_youtube_scans.playlist_id<>$5")
+                .bind(&user).bind(target.id).bind(&target.revision).bind(&channel.id).bind(&channel.playlist_id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE twitch_vod_youtube_scans SET cursor=NULL,generation=generation+1,complete=FALSE WHERE twitch_user_id=$1 AND complete AND next_scan_at<=NOW()")
+                .bind(&user).execute(&mut *tx).await?;
+            scan_complete = sqlx::query_scalar(
+                "SELECT complete FROM twitch_vod_youtube_scans WHERE twitch_user_id=$1",
+            )
+            .bind(&user)
+            .fetch_one(&mut *tx)
+            .await?;
+            tx.commit().await?;
+        }
+        let reserved = if historical && !scan_complete { 2 } else { 0 };
         let mut found = HashMap::new();
         let mut failed = None;
         let mut queried = BTreeSet::new();
         for batch in known.chunks(50) {
-            if budget == 0 {
+            if budget <= reserved {
                 break;
             }
             budget -= 1;
@@ -472,24 +509,7 @@ async fn run_with(
                 }
             }
         }
-        let historical = pending.iter().any(|v| {
-            v.parts.as_array().is_none_or(|p| {
-                p.is_empty()
-                    || p.iter()
-                        .any(|p| p["video_id"].as_str().is_none_or(str::is_empty))
-            })
-        });
-        let mut scan_complete = false;
-        if failed.is_none() && historical && budget >= 2 {
-            let mut tx = pool.begin().await?;
-            if !ziel_guard(&mut tx, &user, &target).await? {
-                continue;
-            }
-            sqlx::query("INSERT INTO twitch_vod_youtube_scans (twitch_user_id,auth_id,auth_revision,channel_id,playlist_id) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (twitch_user_id) DO UPDATE SET auth_id=$2,auth_revision=$3,channel_id=$4,playlist_id=$5,cursor=NULL,generation=twitch_vod_youtube_scans.generation+1,complete=FALSE,next_scan_at=NOW(),last_error=NULL WHERE twitch_vod_youtube_scans.auth_id<>$2 OR twitch_vod_youtube_scans.auth_revision<>$3 OR twitch_vod_youtube_scans.channel_id<>$4 OR twitch_vod_youtube_scans.playlist_id<>$5")
-                .bind(&user).bind(target.id).bind(&target.revision).bind(&channel.id).bind(&channel.playlist_id).execute(&mut *tx).await?;
-            sqlx::query("UPDATE twitch_vod_youtube_scans SET cursor=NULL,generation=generation+1,complete=FALSE WHERE twitch_user_id=$1 AND complete")
-                .bind(&user).execute(&mut *tx).await?;
-            tx.commit().await?;
+        if failed.is_none() && historical && !scan_complete && budget >= 2 {
             loop {
                 let (cursor,generation,complete): (Option<String>,i64,bool) = sqlx::query_as("SELECT cursor,generation,complete FROM twitch_vod_youtube_scans WHERE twitch_user_id=$1").bind(&user).fetch_one(pool).await?;
                 scan_complete = complete;
@@ -523,7 +543,9 @@ async fn run_with(
                 if !ziel_guard(&mut tx, &user, &target).await? {
                     break;
                 }
+                queried.extend(page.ids.iter().cloned());
                 for video in videos {
+                    found.insert(video.id.clone(), video.clone());
                     let Some((twitch_id, marker)) = source(&video) else {
                         continue;
                     };
@@ -538,54 +560,72 @@ async fn run_with(
         for vod in &pending {
             let parts = vod.parts.as_array().unwrap();
             let known_complete = !parts.is_empty()
-                && parts.iter().all(|p| {
-                    p["status"] == "done" && p["video_id"].as_str().is_some_and(|id| !id.is_empty())
-                });
-            let observations: Vec<Beobachtung> = if known_complete {
-                if parts
+                && parts
+                    .iter()
+                    .all(|p| p["video_id"].as_str().is_some_and(|id| !id.is_empty()));
+            if known_complete
+                && parts
                     .iter()
                     .any(|p| !queried.contains(p["video_id"].as_str().unwrap()))
-                    && failed.is_none()
-                {
-                    continue;
-                }
-                parts
-                    .iter()
-                    .map(|part| {
-                        let id = part["video_id"].as_str().unwrap();
-                        let video = found.get(id).filter(|v| v.channel_id == channel.id);
-                        Beobachtung {
-                            video_id: id.into(),
-                            part_index: part["index"].as_i64().map(|i| i as i32),
-                            part_total: Some(parts.len() as i32),
-                            duration_sec: video.and_then(|v| v.duration_sec),
-                            state: video.map_or("unavailable", |v| v.state.as_str()).into(),
-                            privacy: video.and_then(|v| v.privacy.clone()),
-                            observed_at: Utc::now(),
-                        }
+                && failed.is_none()
+            {
+                continue;
+            }
+            let mut observations: Vec<Beobachtung> = parts
+                .iter()
+                .filter_map(|part| {
+                    let id = part["video_id"]
+                        .as_str()
+                        .filter(|id| queried.contains(*id))?;
+                    let video = found.get(id).filter(|v| v.channel_id == channel.id);
+                    Some(Beobachtung {
+                        video_id: id.into(),
+                        part_index: part["index"].as_i64().map(|i| i as i32),
+                        part_total: Some(parts.len() as i32),
+                        duration_sec: video.and_then(|v| v.duration_sec),
+                        state: video.map_or("unavailable", |v| v.state.as_str()).into(),
+                        privacy: video.and_then(|v| v.privacy.clone()),
+                        observed_at: Utc::now(),
                     })
-                    .collect()
-            } else {
+                })
+                .collect();
+            if !known_complete {
                 let rows=sqlx::query("SELECT i.* FROM twitch_vod_youtube_inventory i JOIN twitch_vod_youtube_scans s USING(twitch_user_id) WHERE i.twitch_user_id=$1 AND i.twitch_id=$2 AND i.generation=s.generation AND s.auth_id=$3 AND s.auth_revision=$4 AND s.channel_id=$5 ORDER BY i.part_index,i.video_id")
                     .bind(&user).bind(vod.twitch_id.trim_start_matches('v')).bind(target.id).bind(&target.revision).bind(&channel.id).fetch_all(pool).await?;
-                rows.iter()
-                    .map(|r| Beobachtung {
-                        video_id: r.get("video_id"),
-                        part_index: r.get("part_index"),
-                        part_total: r.get("part_total"),
-                        duration_sec: r.get("duration_sec"),
-                        state: r.get("state"),
-                        privacy: r.get("privacy"),
-                        observed_at: r.get("observed_at"),
-                    })
-                    .collect()
-            };
+                for row in rows {
+                    let video_id: String = row.get("video_id");
+                    if observations.iter().any(|o| o.video_id == video_id) {
+                        continue;
+                    }
+                    let part = parts.iter().find(|part| part["video_id"] == video_id);
+                    observations.push(Beobachtung {
+                        video_id,
+                        part_index: part.map_or_else(
+                            || row.get("part_index"),
+                            |p| p["index"].as_i64().map(|i| i as i32),
+                        ),
+                        part_total: part
+                            .map_or_else(|| row.get("part_total"), |_| Some(parts.len() as i32)),
+                        duration_sec: row.get("duration_sec"),
+                        state: row.get("state"),
+                        privacy: row.get("privacy"),
+                        observed_at: row.get("observed_at"),
+                    });
+                }
+            }
+            let awaiting_known = parts.iter().any(|part| {
+                part["video_id"]
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .is_some_and(|id| !observations.iter().any(|o| o.video_id == id))
+            });
             let (state, complete) = decision(vod, &observations, scan_complete, known_complete);
             let seconds = match failed {
                 Some("quota") => config.youtube_quota_hours * 3600,
                 Some(_) => config.youtube_error_minutes * 60,
                 None if state == "processing"
                     || state == "searching"
+                    || awaiting_known
                     || (!known_complete && !scan_complete) =>
                 {
                     config.youtube_processing_minutes * 60
