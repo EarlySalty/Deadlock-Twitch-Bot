@@ -1,5 +1,15 @@
 # Merge-Gate
 
+## Folgefix im frischen Fixer
+
+Der blockierende Befund ist im bestehenden Branch behoben. Der gemeinsame Sweep verwendet das Access-Ende bei Instagram und bei TikTok/YouTube ohne verschlüsseltes Refresh-Feld. Verlängerbare TikTok-/YouTube-Verbindungen behalten ihre Anbieter-Refresh-Frist. Der Statusleser berechnet `reauth_soon` nach derselben Fallunterscheidung, und die Verbindungskarte zeigt für nicht erneuerbare Zugänge das Access-Datum. `refresh_expires_at` bleibt das tatsächliche Anbieterfeld.
+
+PostgreSQL-Proben mit fester Uhr prüfen beide nicht erneuerbaren Plattformen: bei genau sieben Tagen keine Vorwarnung, bei sechs Tagen ein Vorfall und eine DM, beim Ablauf Eskalation mit unverändertem Vorfalls- und Versandzeitpunkt. Auch ein Erstlauf direkt beim Ablauf wird geprüft. Verlängerbare Fälle mit abgelaufenem Access-Ende bleiben gesund. Der echte Bot-Adapter wurde mit demselben Sweep gegen PostgreSQL und den lokalen Broker geprüft: zwei Plattformen, je ein Request, keine Wiederholung nach Neustart oder Eskalation.
+
+Die nicht blockierende Instagram-Anmerkung ist per gebautem Dashboard und Chromium geprüft. `instagram-20-days.png` und `ui-proof.json` zeigen eine gesunde Verbindung mit Hinweis zum 27. Oktober 2026 bei fester Uhr am 7. Oktober 2026. Das ausdrücklich beauftragte Fenster von weniger als 30 Tagen bleibt unverändert. Eine zweite Probe prüft die Grenze von genau 30 Tagen ohne Datumshinweis. Es wurden keine Produktionszugänge für eine DM-Probe verwendet.
+
+Das erste Codeurteil von `gpt-6.1-sol` bleibt unten erhalten. Die Folgerunde steht noch aus; kein Merge oder Deploy vor ALLOW.
+
 ## Erstes Codeurteil nach Host-Reparatur
 
 Aktuelles Urteil: **BLOCK**, Exit 1, Modell `gpt-6.1-sol`, Branch-HEAD `a062d624`. Fetch und Rebase auf aktuelles `origin/main` waren erfolgreich; der Rebase hatte keine Änderungen. Der Orchestrator hat den Hostfehler als erschöpftes Container-Mount-Limit behoben. Die frühere Namespace-Meldung ist kein aktueller Blocker mehr.

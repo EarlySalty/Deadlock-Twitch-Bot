@@ -1926,7 +1926,7 @@ function PlatformConnectionsCard({
           const abgelaufen = connected && ((status?.needs_reauth ?? false) || (status?.expired ?? false));
           const sammelverbindung =
             connected && !abgelaufen && (status?.uses_global_fallback ?? false);
-          const verbindungsablauf = platform === 'instagram'
+          const verbindungsablauf = platform === 'instagram' || !status?.automatically_renewed
             ? status?.expires_at
             : status?.refresh_expires_at;
           const ablaufZeit = verbindungsablauf ? new Date(verbindungsablauf).getTime() : NaN;

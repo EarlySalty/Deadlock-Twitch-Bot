@@ -1,6 +1,28 @@
 # Prüfnachweise
 
-## Stand am 7. Oktober 2026
+## Folgefix nach dem ersten Code-BLOCK
+
+Der frische Fixer hat den bestehenden Worktree übernommen. Sweep, Statusleser und Dashboard verwenden für nicht erneuerbare TikTok-/YouTube-Verbindungen das Access-Ende. Das Anbieterfeld `refresh_expires_at` wird nicht ersetzt. Migration und Produktionshilfe sind unverändert. Die Folgerunde des bestehenden Merge-Gates steht aus; Produktion ist noch unverändert.
+
+| Prüfung | Ergebnis |
+| --- | --- |
+| Social-Media- und DB-Suites | 355 passed, 0 failed, 0 ignored, 0 filtered; vier zusätzliche Tests |
+| Bot-Adapter mit Sweep, PostgreSQL und lokalem Broker | 2 passed, 0 failed, 0 ignored, 322 filtered über beide Test-Binaries |
+| Dashboard-Vertrag und i18n | 27 passed, 0 failed, 0 skipped |
+| Clippy für dieselben vier Pakete, alle Targets | Exit 0 |
+| Formatprüfung der drei im Folgefix geänderten Rust-Dateien | Exit 0 |
+| Dashboard-Build | Exit 0, gebautes Artefakt `index-DPWU250b.js` |
+| Chromium am gebauten Artefakt, vier Zustände | Exit 0, keine Seitenfehler, keine horizontale Überbreite |
+| Vollständige API-Suite | Nachlauf noch offen; historische Baseline unten bleibt erhalten |
+
+Rust-Prüfbefehle und Datenbank entsprechen den unten dokumentierten Aufrufen, Cargo wurde über `/home/nathanael/.cargo/bin/cargo` gestartet. Logs: `fixer-social-tests.log`, `fixer-bot-tests.log`, `fixer-clippy.log`, `fixer-dashboard-tests.log`, `fixer-dashboard-build.log`, `fixer-api-tests.log`. Browseraufruf: `node .tasks/2026-10-07-social-token-ablauf/ui-proof.mjs`.
+
+Die feste Uhr lautet `2026-10-07T12:00:00Z`. Beide Plattformen ohne Refresh-Wert warnen bei sechs Tagen, eskalieren genau beim Ablauf und behalten über Neustart denselben Vorfall und Versandnachweis. Der Broker bekommt pro Plattform einen Request. Ein gesunder Instagram-Zugang mit 20 Tagen Restzeit zeigt das beauftragte Datum; das 30-Tage-Fenster bleibt unverändert. Screenshots und DOM: `instagram-20-days.png`, `nonrenewable-6-days.png`, `renewable-access-ended.png`, `nonrenewable-ended.png`, `ui-proof.json`. Die Proben verwenden eigene Fixtures und keine Produktionszugänge.
+
+TESTNACHWEIS[TW-1]: 384 passed, 0 ignored | Baseline: 22 rot, API-Nachlauf offen
+WIRKUNGSPRUEFUNG[WP-1]: 1 Befund behoben | Zwillingssuche: grep-belegt | Fremddienst-Pfade: 1/1 im Folgefix geprüft
+
+## Stand des ersten Implementierers am 7. Oktober 2026
 
 Implementierung im eigenen Worktree. Nach Host-Reparatur und unverändertem Rebase hat der lokale Merge-Gate ein inhaltliches BLOCK gefällt: Verbindungen ohne Refresh-Möglichkeit erzeugen noch keinen Ablaufvorfall. Der bestätigte Befund und das Modell `gpt-6.1-sol` stehen in `REVIEW.md`; ein frischer Fixer ist erforderlich. Die folgenden Testzahlen bleiben gültig, decken diesen Fall aber noch nicht ab. Merge, Produktionsmigration und Live-Prüfung stehen aus. Produktionszugänge wurden nicht für eine Probe verändert. Es wurden keine weiteren Worker gestartet.
 

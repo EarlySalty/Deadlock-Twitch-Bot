@@ -69,6 +69,8 @@ mod tests {
     async fn dm_uses_twitch_identity_and_existing_broker_port() {
         use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
         use std::str::FromStr;
+        use std::sync::Arc;
+        use tb_social_media::reauth::ReauthState;
         use tb_transport_discord::BrokerRelay;
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -117,7 +119,7 @@ mod tests {
             Some(relay),
             &tb_config::discord::TokenLifecycle::default(),
         );
-        let notifier = SocialConnectionNotifier::new(pool, dm);
+        let notifier = Arc::new(SocialConnectionNotifier::new(pool.clone(), dm));
         assert!(notifier.notify("42", "tiktok", true, incident()).await);
         assert!(!notifier.notify("404", "tiktok", true, incident()).await);
         let requests = server.received_requests().await.unwrap();
@@ -138,6 +140,46 @@ mod tests {
             .mount(&server)
             .await;
         assert!(!notifier.notify("42", "tiktok", false, incident()).await);
+        server.reset().await;
+        Mock::given(method("POST"))
+            .and(path("/internal/master/v1/discord/send-dm"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true, "result": {"message_id": "test-sweep-dm"}
+            })))
+            .mount(&server)
+            .await;
+        sqlx::query("CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT NOT NULL, twitch_user_id TEXT, access_token_enc BYTEA NOT NULL, refresh_token_enc BYTEA, enabled INTEGER DEFAULT 1, token_expires_at TEXT, refresh_expires_at TIMESTAMPTZ, needs_reauth BOOLEAN NOT NULL DEFAULT FALSE, reauth_required_at TIMESTAMPTZ, reauth_notified_at TIMESTAMPTZ)")
+            .execute(&pool).await.unwrap();
+        let expiry = incident() + chrono::Duration::days(6);
+        for (platform, id) in [("tiktok", "42"), ("youtube", "99")] {
+            sqlx::query("INSERT INTO social_media_platform_auth (platform, twitch_user_id, access_token_enc, token_expires_at) VALUES ($1, $2, decode('01','hex'), $3)")
+                .bind(platform).bind(id).bind(expiry.to_rfc3339()).execute(&pool).await.unwrap();
+        }
+        ReauthState::new(pool.clone())
+            .with_notifier(notifier.clone())
+            .sweep(incident())
+            .await
+            .unwrap();
+        let restarted = ReauthState::new(pool.clone()).with_notifier(notifier);
+        restarted.sweep(incident()).await.unwrap();
+        restarted.sweep(expiry).await.unwrap();
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2);
+        let mut recipients = Vec::new();
+        for request in &requests {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            recipients.push(body["user_id"].as_u64().unwrap());
+            assert!(body["content"]
+                .as_str()
+                .unwrap()
+                .contains(SOCIAL_DASHBOARD_URL));
+            assert!(request.headers.contains_key("x-idempotency-key"));
+        }
+        recipients.sort();
+        assert_eq!(recipients, vec![555, 777]);
+        let escalated: bool = sqlx::query_scalar("SELECT bool_and(needs_reauth AND reauth_required_at = $1 AND reauth_notified_at IS NOT NULL) FROM social_media_platform_auth")
+            .bind(incident()).fetch_one(&pool).await.unwrap();
+        assert!(escalated);
     }
 
     #[test]

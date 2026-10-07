@@ -223,7 +223,7 @@ impl CredentialManager {
                         twitch_user_id.is_some() && creds.streamer_login.is_none();
                     let automatically_renewed =
                         platform == "instagram" || creds.refresh_token.is_some();
-                    let connection_expiry = if platform == "instagram" {
+                    let connection_expiry = if platform == "instagram" || !automatically_renewed {
                         creds
                             .expires_at
                             .as_deref()
@@ -539,6 +539,61 @@ mod tests {
                 .unwrap()
                 .expired
         );
+    }
+
+    #[tokio::test]
+    async fn nonrenewable_status_uses_access_deadline_without_fabricating_refresh_expiry() {
+        let pool = make_pool("t_sm_creds_nonrenewable_status").await.unwrap();
+        let cipher = cipher();
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-07T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        for platform in ["tiktok", "youtube"] {
+            seed(&pool, &cipher, platform, None, "local-access", None).await;
+        }
+        let access_expiry = now + Duration::days(7);
+        sqlx::query("UPDATE social_media_platform_auth SET token_expires_at = $1")
+            .bind(access_expiry.to_rfc3339())
+            .execute(&pool)
+            .await
+            .unwrap();
+        let manager = CredentialManager::new(pool.clone(), cipher);
+        for (at, expired, soon) in [
+            (now, false, false),
+            (now + Duration::days(1), false, true),
+            (access_expiry, true, true),
+        ] {
+            let statuses = manager.get_all_platforms_status_at(None, at).await;
+            for platform in ["tiktok", "youtube"] {
+                let status = statuses
+                    .iter()
+                    .find(|status| status.platform == platform)
+                    .unwrap();
+                assert!(status.connected);
+                assert!(!status.automatically_renewed);
+                assert_eq!(status.expired, expired);
+                assert_eq!(status.reauth_soon, soon);
+                assert_eq!(status.expires_at, Some(access_expiry.to_rfc3339()));
+                assert!(status.refresh_expires_at.is_none());
+            }
+        }
+        let provider_refresh_expiry = now + Duration::days(365);
+        sqlx::query("UPDATE social_media_platform_auth SET refresh_expires_at = $1")
+            .bind(provider_refresh_expiry)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let statuses = manager
+            .get_all_platforms_status_at(None, access_expiry)
+            .await;
+        for status in statuses.iter().filter(|status| status.connected) {
+            assert!(status.expired);
+            assert!(status.reauth_soon);
+            assert_eq!(
+                status.refresh_expires_at,
+                Some(provider_refresh_expiry.to_rfc3339())
+            );
+        }
     }
 
     #[tokio::test]

@@ -25,6 +25,7 @@ struct Connection {
     id: i32,
     platform: String,
     access_token_enc: Vec<u8>,
+    has_refresh_token: bool,
     token_expires_at: Option<String>,
     refresh_expires_at: Option<DateTime<Utc>>,
     needs_reauth: bool,
@@ -58,13 +59,14 @@ impl ReauthState {
 
     pub async fn sweep(&self, now: DateTime<Utc>) -> Result<(), sqlx::Error> {
         let connections = sqlx::query_as::<_, Connection>(
-            "SELECT id, platform, access_token_enc, token_expires_at, refresh_expires_at, needs_reauth \
+            "SELECT id, platform, access_token_enc, refresh_token_enc IS NOT NULL AS has_refresh_token, \
+             token_expires_at, refresh_expires_at, needs_reauth \
              FROM social_media_platform_auth WHERE enabled = 1",
         )
         .fetch_all(&self.pool)
         .await?;
         for connection in connections {
-            let expiry = if connection.platform == "instagram" {
+            let expiry = if connection.platform == "instagram" || !connection.has_refresh_token {
                 connection.token_expires_at.as_deref().and_then(|raw| {
                     DateTime::parse_from_rfc3339(raw)
                         .ok()
@@ -197,7 +199,7 @@ mod tests {
             .unwrap();
         sqlx::query(
             "CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT NOT NULL, \
-             twitch_user_id TEXT, access_token_enc BYTEA NOT NULL, enabled INTEGER DEFAULT 1, \
+             twitch_user_id TEXT, access_token_enc BYTEA NOT NULL, refresh_token_enc BYTEA, enabled INTEGER DEFAULT 1, \
              token_expires_at TEXT, refresh_expires_at TIMESTAMPTZ, needs_reauth BOOLEAN NOT NULL DEFAULT FALSE, \
              reauth_required_at TIMESTAMPTZ, reauth_notified_at TIMESTAMPTZ)",
         ).execute(&pool).await.unwrap();
@@ -206,9 +208,100 @@ mod tests {
 
     async fn seed(pool: &PgPool, platform: &str, expiry: Option<DateTime<Utc>>) -> i32 {
         sqlx::query_scalar(
-            "INSERT INTO social_media_platform_auth (platform, twitch_user_id, access_token_enc, refresh_expires_at) \
-             VALUES ($1, '42', decode('01','hex'), $2) RETURNING id",
+            "INSERT INTO social_media_platform_auth (platform, twitch_user_id, access_token_enc, refresh_token_enc, refresh_expires_at) \
+             VALUES ($1, '42', decode('01','hex'), decode('02','hex'), $2) RETURNING id",
         ).bind(platform).bind(expiry).fetch_one(pool).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn nonrenewable_access_expiry_warns_once_and_escalates_at_deadline() {
+        let pool = pool("t_sm_reauth_nonrenewable").await;
+        for platform in ["tiktok", "youtube"] {
+            let id = seed(&pool, platform, None).await;
+            sqlx::query("UPDATE social_media_platform_auth SET refresh_token_enc = NULL, token_expires_at = $1 WHERE id = $2")
+                .bind((now() + Duration::days(7)).to_rfc3339()).bind(id).execute(&pool).await.unwrap();
+        }
+        let sent = Arc::new(Notifications::default());
+        let state = ReauthState::new(pool.clone()).with_notifier(sent.clone());
+        state.sweep(now()).await.unwrap();
+        assert!(sent.0.lock().await.is_empty());
+        let warning_at = now() + Duration::days(1);
+        state.sweep(warning_at).await.unwrap();
+        let incidents = sqlx::query_as::<_, (i32, bool, DateTime<Utc>, DateTime<Utc>)>(
+            "SELECT id, needs_reauth, reauth_required_at, reauth_notified_at FROM social_media_platform_auth ORDER BY id",
+        ).fetch_all(&pool).await.unwrap();
+        assert_eq!(incidents.len(), 2);
+        assert!(incidents.iter().all(|row| !row.1 && row.2 == warning_at));
+        let restarted = ReauthState::new(pool.clone()).with_notifier(sent.clone());
+        restarted.sweep(warning_at).await.unwrap();
+        restarted.sweep(now() + Duration::days(7)).await.unwrap();
+        restarted.sweep(now() + Duration::days(8)).await.unwrap();
+        let escalated = sqlx::query_as::<_, (i32, bool, DateTime<Utc>, DateTime<Utc>)>(
+            "SELECT id, needs_reauth, reauth_required_at, reauth_notified_at FROM social_media_platform_auth ORDER BY id",
+        ).fetch_all(&pool).await.unwrap();
+        for (before, after) in incidents.iter().zip(&escalated) {
+            assert_eq!(before.0, after.0);
+            assert!(after.1);
+            assert_eq!(before.2, after.2);
+            assert_eq!(before.3, after.3);
+        }
+        assert_eq!(
+            *sent.0.lock().await,
+            vec![
+                ("42".into(), "tiktok".into(), false),
+                ("42".into(), "youtube".into(), false)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn nonrenewable_first_sweep_at_access_deadline_requires_reconnect() {
+        let pool = pool("t_sm_reauth_nonrenewable_expired").await;
+        for platform in ["tiktok", "youtube"] {
+            let id = seed(&pool, platform, None).await;
+            sqlx::query("UPDATE social_media_platform_auth SET refresh_token_enc = NULL, token_expires_at = $1 WHERE id = $2")
+                .bind(now().to_rfc3339()).bind(id).execute(&pool).await.unwrap();
+        }
+        let sent = Arc::new(Notifications::default());
+        ReauthState::new(pool.clone())
+            .with_notifier(sent.clone())
+            .sweep(now())
+            .await
+            .unwrap();
+        ReauthState::new(pool)
+            .with_notifier(sent.clone())
+            .sweep(now())
+            .await
+            .unwrap();
+        assert_eq!(
+            *sent.0.lock().await,
+            vec![
+                ("42".into(), "tiktok".into(), true),
+                ("42".into(), "youtube".into(), true)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn renewable_access_expiry_does_not_end_connection() {
+        let pool = pool("t_sm_reauth_renewable").await;
+        seed(&pool, "youtube", None).await;
+        seed(&pool, "tiktok", Some(now() + Duration::days(365))).await;
+        sqlx::query("UPDATE social_media_platform_auth SET token_expires_at = $1")
+            .bind((now() - Duration::hours(1)).to_rfc3339())
+            .execute(&pool)
+            .await
+            .unwrap();
+        let sent = Arc::new(Notifications::default());
+        ReauthState::new(pool.clone())
+            .with_notifier(sent.clone())
+            .sweep(now())
+            .await
+            .unwrap();
+        assert!(sent.0.lock().await.is_empty());
+        let healthy: bool = sqlx::query_scalar("SELECT bool_and(NOT needs_reauth AND reauth_required_at IS NULL) FROM social_media_platform_auth")
+            .fetch_one(&pool).await.unwrap();
+        assert!(healthy);
     }
 
     #[tokio::test]
