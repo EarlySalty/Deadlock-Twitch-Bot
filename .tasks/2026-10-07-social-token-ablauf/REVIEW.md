@@ -1,5 +1,22 @@
 # Merge-Gate
 
+## Zweites Codeurteil nach dem Ablauf-Fix
+
+Aktuelles Urteil: **BLOCK**, Exit 1, unverändertes Modell `gpt-6.1-sol`, geprüfter HEAD `260bdfdc`. Aufruf über den unveränderten `gate_hook.py --review --repo /home/nathanael/.worktrees/tb-social-token-ablauf --base origin/main --head fix/social-token-ablauf`. Der Branch wurde vorher regulär auf `origin/main` bei `e0b0dbaf` rebased.
+
+```text
+[gpt-6.1-sol] BLOCK: The new status query hides database failures as disconnected accounts.
+
+1. rust/crates/tb-social-media/src/credentials.rs:212 | BLOCKING: Metadata-query errors become `None`, producing `connected: false` for TikTok, YouTube, and Instagram. `platforms_status_handler` then returns HTTP 200 (`social_media.rs:1905`). The dashboard consequently offers “Connect” instead of showing an unknown state. Propagate this query failure to the API error response.
+2. bot/dashboard_v2/src/pages/SocialMedia.tsx:1929 | NIT: Connection dates and renewal instructions visibly change, but no images accompany this review. Inspect the screenshots named in `EVIDENCE.md` to confirm the rendered states.
+```
+
+Befund 1 ist bestätigt. Der neue Metadata-Lesepfad macht bei `Err(error)` trotz Log aus dem Zustand `None`; daraus wird `connected: false`. Der API-Handler nimmt die Statusliste ohne Fehlerzweig und liefert HTTP 200. Ein weiterer frischer Fixer muss den Fehler bis zur API durchreichen und den vorhandenen unbekannten UI-Zustand nutzen. Dieser Ablauf-Fixer schreibt keinen eigenen Folgefix und startet keine weiteren Worker. Übergabe: `BRIEFING-FIXER-STATUS.md`.
+
+Die Bildproben waren beim Gate-Aufruf unversionierte Dateien und damit nicht Teil des Diffs. Sie sind jetzt geprüft und werden mit dem Übergabecommit versioniert. `instagram-20-days.png` zeigt den verlangten Hinweis bei gesunder Instagram-Verbindung. `ui-proof.json` enthält vier DOM-Proben am nach dem Rebase gebauten Artefakt `index-C1sEecg0.js`.
+
+Kein ALLOW, kein Merge, keine Produktionsmigration, kein Deploy oder Selbst-Settle. Die ursprünglichen Abschlussbedingungen in `TODO.md` bleiben bestehen.
+
 ## Folgefix im frischen Fixer
 
 Der blockierende Befund ist im bestehenden Branch behoben. Der gemeinsame Sweep verwendet das Access-Ende bei Instagram und bei TikTok/YouTube ohne verschlüsseltes Refresh-Feld. Verlängerbare TikTok-/YouTube-Verbindungen behalten ihre Anbieter-Refresh-Frist. Der Statusleser berechnet `reauth_soon` nach derselben Fallunterscheidung, und die Verbindungskarte zeigt für nicht erneuerbare Zugänge das Access-Datum. `refresh_expires_at` bleibt das tatsächliche Anbieterfeld.
@@ -8,7 +25,7 @@ PostgreSQL-Proben mit fester Uhr prüfen beide nicht erneuerbaren Plattformen: b
 
 Die nicht blockierende Instagram-Anmerkung ist per gebautem Dashboard und Chromium geprüft. `instagram-20-days.png` und `ui-proof.json` zeigen eine gesunde Verbindung mit Hinweis zum 27. Oktober 2026 bei fester Uhr am 7. Oktober 2026. Das ausdrücklich beauftragte Fenster von weniger als 30 Tagen bleibt unverändert. Eine zweite Probe prüft die Grenze von genau 30 Tagen ohne Datumshinweis. Es wurden keine Produktionszugänge für eine DM-Probe verwendet.
 
-Das erste Codeurteil von `gpt-6.1-sol` bleibt unten erhalten. Die Folgerunde steht noch aus; kein Merge oder Deploy vor ALLOW.
+Das erste Codeurteil von `gpt-6.1-sol` bleibt unten erhalten. Die Folgerunde steht oben; sie hat wegen des neuen Statusfehler-Befunds erneut BLOCK geurteilt.
 
 ## Erstes Codeurteil nach Host-Reparatur
 

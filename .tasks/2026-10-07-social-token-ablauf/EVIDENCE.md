@@ -2,24 +2,25 @@
 
 ## Folgefix nach dem ersten Code-BLOCK
 
-Der frische Fixer hat den bestehenden Worktree übernommen. Sweep, Statusleser und Dashboard verwenden für nicht erneuerbare TikTok-/YouTube-Verbindungen das Access-Ende. Das Anbieterfeld `refresh_expires_at` wird nicht ersetzt. Migration und Produktionshilfe sind unverändert. Die Folgerunde des bestehenden Merge-Gates steht aus; Produktion ist noch unverändert.
+Der frische Fixer hat den bestehenden Worktree übernommen. Sweep, Statusleser und Dashboard verwenden für nicht erneuerbare TikTok-/YouTube-Verbindungen das Access-Ende. Das Anbieterfeld `refresh_expires_at` wird nicht ersetzt. Migration und Produktionshilfe sind unverändert. Die Folgerunde des bestehenden Merge-Gates hat mit demselben Modell `gpt-6.1-sol` erneut BLOCK geurteilt, diesmal wegen versteckter Datenbankfehler im Metadata-Statusleser. Der bestätigte Befund steht in `REVIEW.md`, die Übergabe an einen weiteren frischen Fixer in `BRIEFING-FIXER-STATUS.md`. Produktion ist noch unverändert.
 
 | Prüfung | Ergebnis |
 | --- | --- |
-| Social-Media- und DB-Suites | 355 passed, 0 failed, 0 ignored, 0 filtered; vier zusätzliche Tests |
+| Social-Media- und DB-Suites vor und nach Rebase | 355 bzw. 356 passed, jeweils 0 failed, 0 ignored, 0 filtered; vier zusätzliche Tests im Folgefix, ein weiterer Test aus aktuellem main |
 | Bot-Adapter mit Sweep, PostgreSQL und lokalem Broker | 2 passed, 0 failed, 0 ignored, 322 filtered über beide Test-Binaries |
 | Dashboard-Vertrag und i18n | 27 passed, 0 failed, 0 skipped |
-| Clippy für dieselben vier Pakete, alle Targets | Exit 0 |
+| Clippy für dieselben vier Pakete, alle Targets, vor und nach Rebase | jeweils Exit 0; Nachlauf 6 Minuten 9 Sekunden |
 | Formatprüfung der drei im Folgefix geänderten Rust-Dateien | Exit 0 |
-| Dashboard-Build | Exit 0, gebautes Artefakt `index-DPWU250b.js` |
+| Dashboard-Build vor und nach Rebase | jeweils Exit 0; aktuelle Bild- und DOM-Probe am Artefakt `index-C1sEecg0.js` |
 | Chromium am gebauten Artefakt, vier Zustände | Exit 0, keine Seitenfehler, keine horizontale Überbreite |
-| Vollständige API-Suite | Nachlauf noch offen; historische Baseline unten bleibt erhalten |
+| Vollständige API-Suite | Nachlauf nach 600 Sekunden vom Harness beendet, ohne Endergebnis; keine neue Vollsuite-Baseline behauptet |
+| Betroffene API-Handler nach Rebase | 53 passed, 0 failed, 0 ignored, 1278 filtered, Exit 0 |
 
-Rust-Prüfbefehle und Datenbank entsprechen den unten dokumentierten Aufrufen, Cargo wurde über `/home/nathanael/.cargo/bin/cargo` gestartet. Logs: `fixer-social-tests.log`, `fixer-bot-tests.log`, `fixer-clippy.log`, `fixer-dashboard-tests.log`, `fixer-dashboard-build.log`, `fixer-api-tests.log`. Browseraufruf: `node .tasks/2026-10-07-social-token-ablauf/ui-proof.mjs`.
+Rust-Prüfbefehle und Datenbank entsprechen den unten dokumentierten Aufrufen, Cargo wurde über `/home/nathanael/.cargo/bin/cargo` gestartet. Der abgeschlossene API-Lauf war `cargo test -j 2 -p tb-dashboard-api --lib handlers::social_media -- --include-ignored --test-threads=1` mit denselben beiden Test-DSNs und `SQLX_OFFLINE=true`. Logs: `fixer-social-tests.log`, `fixer-rebased-social-tests.log`, `fixer-bot-tests.log`, `fixer-clippy.log`, `fixer-rebased-clippy.log`, `fixer-dashboard-tests.log`, `fixer-rebased-dashboard-tests.log`, `fixer-dashboard-build.log`, `fixer-rebased-dashboard-build.log`, `fixer-api-tests.log`, `fixer-api-social-tests.log`. Browseraufruf: `node .tasks/2026-10-07-social-token-ablauf/ui-proof.mjs`. Der SHA256 des aktuellen Dashboard-Artefakts lautet `17c4057764469637d1d8dacfd41578c3b7ff9a5cf1529864bf5f1566e4fed464`.
 
 Die feste Uhr lautet `2026-10-07T12:00:00Z`. Beide Plattformen ohne Refresh-Wert warnen bei sechs Tagen, eskalieren genau beim Ablauf und behalten über Neustart denselben Vorfall und Versandnachweis. Der Broker bekommt pro Plattform einen Request. Ein gesunder Instagram-Zugang mit 20 Tagen Restzeit zeigt das beauftragte Datum; das 30-Tage-Fenster bleibt unverändert. Screenshots und DOM: `instagram-20-days.png`, `nonrenewable-6-days.png`, `renewable-access-ended.png`, `nonrenewable-ended.png`, `ui-proof.json`. Die Proben verwenden eigene Fixtures und keine Produktionszugänge.
 
-TESTNACHWEIS[TW-1]: 384 passed, 0 ignored | Baseline: 22 rot, API-Nachlauf offen
+TESTNACHWEIS[TW-1]: 438 passed, 0 ignored | Baseline: 22 rot
 WIRKUNGSPRUEFUNG[WP-1]: 1 Befund behoben | Zwillingssuche: grep-belegt | Fremddienst-Pfade: 1/1 im Folgefix geprüft
 
 ## Stand des ersten Implementierers am 7. Oktober 2026
