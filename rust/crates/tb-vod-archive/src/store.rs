@@ -525,7 +525,14 @@ pub async fn frisch_hochgeladene_teile(
         .collect())
 }
 
-/// Markiert das VOD als vollstaendig hochgeladen.
+pub(crate) async fn setze_bestaetigt_abgeschlossen(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: i64,
+) -> Result<bool, sqlx::Error> {
+    Ok(sqlx::query("UPDATE twitch_vod_archive_vods SET status='uploaded',last_error=NULL,updated_at=NOW() WHERE id=$1 AND status IN ('new','downloading','download_failed','downloaded','uploading','upload_failed') AND NOT drive_requested")
+        .bind(id).execute(&mut **tx).await?.rows_affected() == 1)
+}
+
 pub async fn setze_hochgeladen(pool: &PgPool, id: i64) -> Result<(), VodArchiveError> {
     let changed = sqlx::query(
         "UPDATE twitch_vod_archive_vods \

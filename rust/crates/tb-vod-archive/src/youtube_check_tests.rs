@@ -827,6 +827,156 @@ async fn changed_parts_provider_error_retains_original_evidence_snapshot() {
 }
 
 #[tokio::test]
+async fn failed_channel_reads_and_unfinished_search_preserve_processed_part_evidence() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    use tb_social_media::uploaders::youtube::YouTubeUploader;
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    let pool = crate::store::tests::pool("t_youtube_retained_processed")
+        .await
+        .unwrap();
+    let manager = synthetic_manager(&pool, 109).await;
+    crate::store::merke_vod(&pool, "123", "synthetic", "42", "Synthetic", 120)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE twitch_vod_archive_vods SET status='archived'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO twitch_vod_archive_parts(vod_id,part_index,file_path,status,youtube_video_id) SELECT id,i,'/synthetic/part','failed',CASE WHEN i=0 THEN 'original' END FROM twitch_vod_archive_vods CROSS JOIN generate_series(0,1) i").execute(&pool).await.unwrap();
+    let target = ziel(&pool, "42").await.unwrap().unwrap();
+    let vod = vods(&pool, "42", &target).await.unwrap().remove(0);
+    let proof = observation("original", Some(0), Some(2), 60);
+    assert!(save(
+        &pool,
+        "42",
+        &target,
+        Some("channel"),
+        &vod,
+        &[proof],
+        "partial",
+        false,
+        None,
+        600
+    )
+    .await
+    .unwrap());
+    let evidence: Value = sqlx::query_scalar("SELECT jsonb_build_array(observations,last_success_at,upload_snapshot,channel_id) FROM twitch_vod_youtube_checks").fetch_one(&pool).await.unwrap();
+    sqlx::query(
+        "UPDATE twitch_vod_archive_parts SET status='pending',updated_at=NOW() WHERE part_index=1",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = MockServer::start().await;
+    let phase = Arc::new(AtomicUsize::new(0));
+    let channel_phase = phase.clone();
+    Mock::given(method("GET")).and(path("/channels")).respond_with(move |_: &wiremock::Request| {
+        match channel_phase.load(Ordering::SeqCst) {
+            0 => ResponseTemplate::new(403),
+            1 => ResponseTemplate::new(429).set_body_json(json!({"error":{"errors":[{"reason":"quotaExceeded"}]}})),
+            2 => ResponseTemplate::new(500),
+            3 => ResponseTemplate::new(200).set_body_json(json!({"items":[{"id":"other","contentDetails":{"relatedPlaylists":{"uploads":"other"}}}]})),
+            _ => ResponseTemplate::new(200).set_body_json(json!({"items":[{"id":"channel","contentDetails":{"relatedPlaylists":{"uploads":"uploads"}}}]})),
+        }
+    }).expect(5).mount(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/playlistItems"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({"items":[{"contentDetails":{"videoId":"unrelated"}}],"nextPageToken":"later"}),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET")).and(path("/videos")).respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":[provider_video("unrelated","Original: https://www.twitch.tv/videos/999",60,"processed")]}))).expect(1).mount(&server).await;
+    let config = VodArchiveOptions {
+        youtube_requests_per_run: 3,
+        ..Default::default()
+    };
+    let factory = |credentials: &tb_social_media::credentials::SocialMediaCredentials| {
+        YouTubeUploader::new(&credentials.access_token).with_bases(server.uri(), server.uri())
+    };
+    for (index, error) in ["connection", "quota", "request", "channel_changed"]
+        .into_iter()
+        .enumerate()
+    {
+        phase.store(index, Ordering::SeqCst);
+        sqlx::query("UPDATE twitch_vod_youtube_checks SET requested_at=NOW()")
+            .execute(&pool)
+            .await
+            .unwrap();
+        run_with(&pool, &manager, &config, &factory).await.unwrap();
+        let saved: Value = sqlx::query_scalar("SELECT jsonb_build_array(observations,last_success_at,upload_snapshot,channel_id) FROM twitch_vod_youtube_checks").fetch_one(&pool).await.unwrap();
+        assert_eq!(saved, evidence, "{error}");
+        let saved_error: String =
+            sqlx::query_scalar("SELECT last_error FROM twitch_vod_youtube_checks")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(saved_error, error);
+    }
+    let encrypted: Vec<u8> =
+        sqlx::query_scalar("SELECT access_token_enc FROM social_media_platform_auth")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    sqlx::query("UPDATE social_media_platform_auth SET access_token_enc=NULL")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE twitch_vod_youtube_checks SET requested_at=NOW()")
+        .execute(&pool)
+        .await
+        .unwrap();
+    run_with(&pool, &manager, &config, &factory).await.unwrap();
+    assert!(sqlx::query_scalar::<_, bool>("SELECT last_error='connection' AND last_attempt_at IS NOT NULL FROM twitch_vod_youtube_checks").fetch_one(&pool).await.unwrap());
+    sqlx::query("UPDATE social_media_platform_auth SET access_token_enc=$1")
+        .bind(encrypted)
+        .execute(&pool)
+        .await
+        .unwrap();
+    phase.store(4, Ordering::SeqCst);
+    sqlx::query("UPDATE twitch_vod_youtube_checks SET requested_at=NOW()")
+        .execute(&pool)
+        .await
+        .unwrap();
+    run_with(&pool, &manager, &config, &factory).await.unwrap();
+    let saved: Value = sqlx::query_scalar("SELECT jsonb_build_array(observations,last_success_at,upload_snapshot,channel_id) FROM twitch_vod_youtube_checks").fetch_one(&pool).await.unwrap();
+    assert_eq!(saved, evidence);
+    assert!(sqlx::query_scalar::<_, bool>(
+        "SELECT NOT complete AND cursor='later' FROM twitch_vod_youtube_scans"
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap());
+    for (index, expected) in [(0, true), (1, false)] {
+        let id: i64 =
+            sqlx::query_scalar("SELECT id FROM twitch_vod_archive_parts WHERE part_index=$1")
+                .bind(index)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            part_processed(&pool, "42", vod.id, id).await.unwrap(),
+            expected
+        );
+    }
+    assert!(server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .all(|request| request.method.as_str() == "GET"));
+    eprintln!("YOUTUBE_DB_PROOF: failed channel reads, missing synthetic credentials and unfinished pagination preserve original source-bound processed evidence, channel, snapshot and observation time; changed retry part is not protected");
+}
+
+#[tokio::test]
 async fn failed_attempt_snapshots_apply_backoff_without_relabeling_evidence_or_hiding_changes() {
     let pool = crate::store::tests::pool("t_youtube_attempt_backoff")
         .await

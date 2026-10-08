@@ -38,6 +38,20 @@ async fn database() -> crate::test_postgres::TestPostgres {
     database
 }
 
+async fn source_bound(pool: &PgPool, id: i64, mut observations: Value) -> Value {
+    let (source, duration): (String, i64) =
+        sqlx::query_as("SELECT twitch_id,duration_sec FROM twitch_vod_archive_vods WHERE id=$1")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    for observation in observations.as_array_mut().unwrap() {
+        observation["source_twitch_id"] = json!(source);
+        observation["source_duration_sec"] = json!(duration);
+    }
+    observations
+}
+
 fn partner() -> DashboardAuthLevel {
     DashboardAuthLevel::Partner {
         twitch_user_id: "42".into(),
@@ -270,7 +284,7 @@ async fn youtube_check_is_scoped_debounced_read_only_and_visible() {
     );
     let before: Value=sqlx::query_scalar("SELECT jsonb_build_array(v.status,v.uploaded_at,(SELECT jsonb_agg(p) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id)) FROM twitch_vod_archive_vods v WHERE v.id=2").fetch_one(pool).await.unwrap();
     let observations = json!([{"video_id":"video99","part_index":0,"part_total":1,"state":"processed","privacy":"private","observed_at":"2026-10-08T01:00:00Z"}]);
-    sqlx::query("UPDATE twitch_vod_youtube_checks SET state='confirmed',complete=TRUE,observations=$1,requested_at=NULL,last_attempt_at=NOW(),last_success_at=NOW(),channel_id='own' WHERE vod_id=2").bind(observations).execute(pool).await.unwrap();
+    sqlx::query("UPDATE twitch_vod_youtube_checks SET state='confirmed',complete=TRUE,observations=$1,requested_at=NULL,last_attempt_at=NOW(),last_success_at=NOW(),channel_id='own' WHERE vod_id=2").bind(source_bound(pool, 2, observations).await).execute(pool).await.unwrap();
     assert_eq!(
         apply_action(pool, 2, Some("99"), "check").await.unwrap(),
         Some(false)
@@ -454,7 +468,7 @@ async fn explicit_terminal_retry_is_scoped_and_preserves_successful_parts_and_hi
         apply_action(pool, 1, Some("42"), "check").await.unwrap(),
         Some(true)
     );
-    sqlx::query("UPDATE twitch_vod_youtube_checks SET state='rejected',channel_id='own',requested_at=NULL,last_success_at=NOW(),observations=$1 WHERE vod_id=1").bind(json!([{"video_id":"rejected","part_index":0,"state":"rejected"},{"video_id":"successful","part_index":1,"state":"processed"}])).execute(pool).await.unwrap();
+    sqlx::query("UPDATE twitch_vod_youtube_checks SET state='rejected',channel_id='own',requested_at=NULL,last_success_at=NOW(),observations=$1 WHERE vod_id=1").bind(source_bound(pool, 1, json!([{"video_id":"rejected","part_index":0,"state":"rejected"},{"video_id":"successful","part_index":1,"state":"processed"}])).await).execute(pool).await.unwrap();
     let data = json(
         list_handler(
             partner(),
@@ -573,7 +587,7 @@ async fn unavailable_terminal_drive_recovery_never_resets_accepted_targets_or_in
         apply_action(pool, 1, Some("42"), "check").await.unwrap(),
         Some(true)
     );
-    sqlx::query("UPDATE twitch_vod_youtube_checks SET state='unavailable',channel_id='own',requested_at=NULL,last_success_at=NOW(),observations=$1 WHERE vod_id=1").bind(json!([{"video_id":"accepted","part_index":0,"state":"unavailable"}])).execute(pool).await.unwrap();
+    sqlx::query("UPDATE twitch_vod_youtube_checks SET state='unavailable',channel_id='own',requested_at=NULL,last_success_at=NOW(),observations=$1 WHERE vod_id=1").bind(source_bound(pool, 1, json!([{"video_id":"accepted","part_index":0,"state":"unavailable"}])).await).execute(pool).await.unwrap();
     let data = json(
         list_handler(
             partner(),
@@ -714,7 +728,7 @@ async fn archive_actions_lock_auth_before_vod_and_parts_like_reconciliation_writ
 
 async fn save_recovery_check(pool: &PgPool, state: &str, complete: bool, observations: Value) {
     sqlx::query("INSERT INTO twitch_vod_youtube_checks(vod_id,auth_id,auth_revision,channel_id,state,complete,observations,upload_snapshot) SELECT 1,a.id,md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')),'own',$1,$2,$3,(SELECT jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index) FROM twitch_vod_archive_parts p WHERE p.vod_id=1) FROM social_media_platform_auth a WHERE a.twitch_user_id='42' AND a.platform='youtube' ON CONFLICT(vod_id) DO UPDATE SET state=EXCLUDED.state,complete=EXCLUDED.complete,observations=EXCLUDED.observations,upload_snapshot=EXCLUDED.upload_snapshot")
-        .bind(state).bind(complete).bind(observations).execute(pool).await.unwrap();
+        .bind(state).bind(complete).bind(source_bound(pool, 1, observations).await).execute(pool).await.unwrap();
 }
 
 async fn recovery_item(pool: &PgPool) -> Value {
@@ -870,6 +884,68 @@ async fn partial_processed_proof_excludes_exact_parts_from_both_resets_and_repea
 }
 
 #[tokio::test]
+async fn current_attempt_errors_remain_visible_without_a_valid_success_snapshot_or_channel() {
+    let database = database().await;
+    let pool = &database.pool;
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("source.mp4");
+    std::fs::write(&file, b"synthetic media").unwrap();
+    sqlx::query("INSERT INTO social_media_platform_auth(twitch_user_id,platform,platform_user_id) VALUES ('42','youtube','own')").execute(pool).await.unwrap();
+    for status in ["uploaded", "upload_failed"] {
+        sqlx::query("UPDATE twitch_vod_archive_vods SET status=$1,local_path=$2 WHERE id=1")
+            .bind(status)
+            .bind(file.to_str().unwrap())
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE twitch_vod_archive_parts SET status='rejected',youtube_video_id=NULL,file_path=$1 WHERE vod_id=1").bind(file.to_str().unwrap()).execute(pool).await.unwrap();
+        save_recovery_check(
+            pool,
+            "confirmed",
+            true,
+            json!([{"video_id":"found","part_index":0,"state":"processed"}]),
+        )
+        .await;
+        for error in ["connection", "quota", "request", "channel_changed"] {
+            sqlx::query("UPDATE twitch_vod_youtube_checks SET state='error',complete=FALSE,last_error=$1,last_attempt_at=NOW(),last_success_at='2026-10-01T13:00:00Z' WHERE vod_id=1").bind(error).execute(pool).await.unwrap();
+            let item = recovery_item(pool).await;
+            assert_eq!(item["youtube_check"]["error"], error);
+            assert!(item["youtube_check"]["last_attempt_at"].is_string());
+            assert!(item["youtube_check"]["last_success_at"].is_string());
+            assert_eq!(item["display_status"], "youtube_error");
+            assert_eq!(item["youtube_verified_complete"], false);
+            assert_eq!(item["can_retry"], false);
+            assert_eq!(
+                apply_action(pool, 1, Some("42"), "retry").await.unwrap(),
+                Some(false)
+            );
+        }
+        for mutation in [
+            "UPDATE twitch_vod_youtube_checks SET channel_id=NULL WHERE vod_id=1",
+            "UPDATE twitch_vod_youtube_checks SET channel_id='different' WHERE vod_id=1",
+            "UPDATE twitch_vod_youtube_checks SET channel_id='own',upload_snapshot='[]'::jsonb WHERE vod_id=1",
+        ] {
+            sqlx::query(mutation).execute(pool).await.unwrap();
+            let item = recovery_item(pool).await;
+            assert_eq!(item["display_status"], "youtube_error");
+            assert_eq!(item["youtube_check"]["error"], "channel_changed");
+            assert!(item["youtube_check"]["last_attempt_at"].is_string());
+            assert!(item["youtube_check"]["last_success_at"].is_null());
+            assert_eq!(item["youtube_check"]["observations"], json!([]));
+            assert_eq!(item["youtube_verified_complete"], false);
+            assert_eq!(item["needs_connection"], true);
+        }
+    }
+    sqlx::query("UPDATE twitch_vod_youtube_checks SET observations='[]'::jsonb,channel_id=NULL,last_success_at=NULL,last_error='connection' WHERE vod_id=1").execute(pool).await.unwrap();
+    let item = recovery_item(pool).await;
+    assert_eq!(item["youtube_check"]["error"], "connection");
+    assert_eq!(item["display_status"], "youtube_error");
+    sqlx::query("UPDATE social_media_platform_auth SET authorized_at=authorized_at+INTERVAL '1 second' WHERE twitch_user_id='42'").execute(pool).await.unwrap();
+    assert!(recovery_item(pool).await["youtube_check"].is_null());
+    eprintln!("YOUTUBE_API_DB_PROOF: current identity-bound failed attempts stay visible for four error classes, absent/mismatched channel and changed parts; previous source-bound processed parts block GET/POST retries; changed identity hides old attempts");
+}
+
+#[tokio::test]
 async fn recovery_get_and_post_reject_stale_binding_as_confirmation() {
     let database = database().await;
     let pool = &database.pool;
@@ -882,6 +958,8 @@ async fn recovery_get_and_post_reject_stale_binding_as_confirmation() {
         "auth_revision='stale'",
         "channel_id=NULL",
         "channel_id='different'",
+        "observations=jsonb_set(observations,'{0,source_twitch_id}','\"different\"'::jsonb)",
+        "observations=jsonb_set(observations,'{0,source_duration_sec}','1'::jsonb)",
         "upload_snapshot='[]'::jsonb",
     ] {
         sqlx::query(

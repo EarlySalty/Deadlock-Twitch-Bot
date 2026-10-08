@@ -52,6 +52,7 @@ export const VOD_ARCHIVE_EN: Record<string, string> = {
   'Die lokale Kopie fehlt. Prüfe das vorhandene Video und die YouTube-Verbindung; ein erneuter Upload ist derzeit nicht möglich.': 'The local copy is missing. Check the existing video and the YouTube connection; uploading again is not possible right now.',
   'Das vorhandene YouTube-Video bleibt unverändert. Du kannst die lokale Kopie auf Drive sichern.': 'The existing YouTube video is left unchanged. You can back up the local copy to Drive.',
   'Du kannst abgelehnte Teile ausdrücklich erneut hochladen oder die lokale Kopie auf Drive sichern. Bereits erfolgreiche Teile bleiben erhalten.': 'You can explicitly upload rejected parts again or back up the local copy to Drive. Parts already uploaded successfully are preserved.',
+  'Du kannst abgelehnte Teile ausdrücklich erneut hochladen. Bereits erfolgreiche Teile bleiben erhalten.': 'You can explicitly upload rejected parts again. Parts already uploaded successfully are preserved.',
   'Auf YouTube bestätigt': 'Confirmed on YouTube',
   'YouTube verarbeitet das Video': 'YouTube is processing the video',
   'YouTube hat das Video abgelehnt': 'YouTube rejected the video',

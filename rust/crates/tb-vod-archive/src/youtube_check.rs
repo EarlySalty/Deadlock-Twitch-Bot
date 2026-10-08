@@ -183,6 +183,47 @@ pub(crate) async fn test_confirm(pool: &PgPool, user: &str, id: i64) {
     .unwrap());
 }
 
+#[cfg(test)]
+pub(crate) async fn test_save_recovery(
+    pool: &PgPool,
+    id: i64,
+    observations: &[Beobachtung],
+    state: &str,
+    complete: bool,
+    error: Option<&str>,
+) {
+    sqlx::query("UPDATE twitch_vod_youtube_checks SET next_check_at=NOW() WHERE vod_id=$1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
+    let target = ziel(pool, "42").await.unwrap().unwrap();
+    let vod = vods(pool, "42", &target)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|vod| vod.id == id)
+        .unwrap();
+    assert!(save(
+        pool,
+        "42",
+        &target,
+        if error.is_some() {
+            None
+        } else {
+            target.channel_id.as_deref()
+        },
+        &vod,
+        observations,
+        state,
+        complete,
+        error,
+        600
+    )
+    .await
+    .unwrap());
+}
+
 const REVISION: &str = "md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,''))";
 
 async fn ziel(pool: &PgPool, user: &str) -> Result<Option<Ziel>, sqlx::Error> {
@@ -456,8 +497,23 @@ async fn save(
         success_at = searched_at
             .map(|searched| success_at.map_or(searched, |observed| observed.min(searched)));
     }
-    sqlx::query("INSERT INTO twitch_vod_youtube_checks (vod_id,auth_id,auth_revision,channel_id,state,complete,observations,last_attempt_at,last_success_at,last_error,next_check_at,upload_snapshot,attempt_snapshot) VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),CASE WHEN $8::text IS NULL THEN $11 END,$8,NOW()+make_interval(secs=>$9::double precision),$10,$10) ON CONFLICT (vod_id) DO UPDATE SET auth_id=EXCLUDED.auth_id,auth_revision=EXCLUDED.auth_revision,channel_id=EXCLUDED.channel_id,state=EXCLUDED.state,complete=EXCLUDED.complete,observations=CASE WHEN $8::text IS NOT NULL AND twitch_vod_youtube_checks.auth_id=$2 AND twitch_vod_youtube_checks.auth_revision=$3 THEN twitch_vod_youtube_checks.observations ELSE EXCLUDED.observations END,last_attempt_at=NOW(),last_success_at=CASE WHEN $8::text IS NULL THEN $11 WHEN twitch_vod_youtube_checks.auth_id=$2 AND twitch_vod_youtube_checks.auth_revision=$3 THEN twitch_vod_youtube_checks.last_success_at END,last_error=$8,requested_at=NULL,next_check_at=EXCLUDED.next_check_at,attempt_snapshot=EXCLUDED.attempt_snapshot,upload_snapshot=CASE WHEN $8::text IS NOT NULL AND twitch_vod_youtube_checks.auth_id=$2 AND twitch_vod_youtube_checks.auth_revision=$3 THEN twitch_vod_youtube_checks.upload_snapshot ELSE EXCLUDED.upload_snapshot END")
-        .bind(vod.id).bind(target.id).bind(&target.revision).bind(channel).bind(state).bind(complete).bind(json!(observations)).bind(error).bind(seconds as f64).bind(&vod.parts).bind(success_at).execute(&mut *tx).await?;
+    let known = vod.parts.as_array().is_some_and(|parts| {
+        !parts.is_empty()
+            && parts
+                .iter()
+                .all(|part| part["video_id"].as_str().is_some_and(|id| !id.is_empty()))
+    });
+    let search_complete: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM twitch_vod_youtube_scans WHERE twitch_user_id=$1 AND auth_id=$2 AND auth_revision=$3 AND channel_id=$4 AND complete)")
+        .bind(user).bind(target.id).bind(&target.revision).bind(channel).fetch_one(&mut *tx).await?;
+    let retain: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM twitch_vod_youtube_checks WHERE vod_id=$1 AND auth_id=$2 AND auth_revision=$3 AND ($4::text IS NULL OR channel_id=$4) AND ($5 OR ($6 AND EXISTS (SELECT 1 FROM jsonb_array_elements(observations) o WHERE o->>'state'='processed'))))")
+        .bind(vod.id).bind(target.id).bind(&target.revision).bind(channel).bind(error.is_some()).bind(!known && !search_complete).fetch_one(&mut *tx).await?;
+    let mut stored = json!(observations);
+    for observation in stored.as_array_mut().unwrap() {
+        observation["source_twitch_id"] = json!(vod.twitch_id);
+        observation["source_duration_sec"] = json!(vod.duration_sec);
+    }
+    sqlx::query("INSERT INTO twitch_vod_youtube_checks (vod_id,auth_id,auth_revision,channel_id,state,complete,observations,last_attempt_at,last_success_at,last_error,next_check_at,upload_snapshot,attempt_snapshot) VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),CASE WHEN $8::text IS NULL THEN $11 END,$8,NOW()+make_interval(secs=>$9::double precision),$10,$10) ON CONFLICT (vod_id) DO UPDATE SET auth_id=EXCLUDED.auth_id,auth_revision=EXCLUDED.auth_revision,channel_id=CASE WHEN $12 THEN twitch_vod_youtube_checks.channel_id ELSE EXCLUDED.channel_id END,state=EXCLUDED.state,complete=EXCLUDED.complete AND NOT $12,observations=CASE WHEN $12 THEN twitch_vod_youtube_checks.observations ELSE EXCLUDED.observations END,last_attempt_at=NOW(),last_success_at=CASE WHEN $12 THEN twitch_vod_youtube_checks.last_success_at WHEN $8::text IS NULL THEN $11 END,last_error=$8,requested_at=NULL,next_check_at=EXCLUDED.next_check_at,attempt_snapshot=EXCLUDED.attempt_snapshot,upload_snapshot=CASE WHEN $12 THEN twitch_vod_youtube_checks.upload_snapshot ELSE EXCLUDED.upload_snapshot END")
+        .bind(vod.id).bind(target.id).bind(&target.revision).bind(channel).bind(state).bind(complete).bind(stored).bind(error).bind(seconds as f64).bind(&vod.parts).bind(success_at).bind(retain).execute(&mut *tx).await?;
     if error.is_none() {
         sqlx::query("DELETE FROM twitch_vod_youtube_continuations WHERE vod_id=$1")
             .bind(vod.id)
@@ -474,15 +530,16 @@ pub(crate) async fn part_processed(
     vod_id: i64,
     part_id: i64,
 ) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM twitch_vod_archive_vods v JOIN twitch_vod_archive_parts p ON p.vod_id=v.id JOIN twitch_vod_youtube_checks c ON c.vod_id=v.id JOIN LATERAL (SELECT a.* FROM social_media_platform_auth a WHERE a.twitch_user_id=v.twitch_user_id AND a.platform='youtube' AND a.enabled=1 ORDER BY a.authorized_at DESC,a.id DESC LIMIT 1) a ON TRUE WHERE v.id=$1 AND v.twitch_user_id=$2 AND p.id=$3 AND c.auth_id=a.id AND c.auth_revision=md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')) AND c.channel_id IS NOT NULL AND (a.platform_user_id IS NULL OR c.channel_id=a.platform_user_id) AND c.last_error IS NULL AND EXISTS (SELECT 1 FROM jsonb_array_elements(c.upload_snapshot) saved WHERE saved=jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at)) AND EXISTS (SELECT 1 FROM jsonb_array_elements(c.observations) o WHERE o->>'state'='processed' AND COALESCE(o->>'video_id','')<>'' AND (NULLIF(p.youtube_video_id,'') IS NULL OR o->>'video_id'=p.youtube_video_id) AND (o->'part_index'=to_jsonb(p.part_index) OR ((o->'part_index' IS NULL OR o->'part_index'='null'::jsonb) AND p.part_index=0 AND (SELECT COUNT(*) FROM twitch_vod_archive_parts WHERE vod_id=v.id)=1))))")
+    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM twitch_vod_archive_vods v JOIN twitch_vod_archive_parts p ON p.vod_id=v.id JOIN twitch_vod_youtube_checks c ON c.vod_id=v.id JOIN LATERAL (SELECT a.* FROM social_media_platform_auth a WHERE a.twitch_user_id=v.twitch_user_id AND a.platform='youtube' AND a.enabled=1 ORDER BY a.authorized_at DESC,a.id DESC LIMIT 1) a ON TRUE WHERE v.id=$1 AND v.twitch_user_id=$2 AND p.id=$3 AND c.auth_id=a.id AND c.auth_revision=md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')) AND c.channel_id IS NOT NULL AND (a.platform_user_id IS NULL OR c.channel_id=a.platform_user_id) AND EXISTS (SELECT 1 FROM jsonb_array_elements(c.upload_snapshot) saved WHERE saved=jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at)) AND EXISTS (SELECT 1 FROM jsonb_array_elements(c.observations) o WHERE o->>'state'='processed' AND o->>'source_twitch_id'=v.twitch_id AND o->'source_duration_sec'=to_jsonb(v.duration_sec) AND COALESCE(o->>'video_id','')<>'' AND (NULLIF(p.youtube_video_id,'') IS NULL OR o->>'video_id'=p.youtube_video_id) AND (o->'part_index'=to_jsonb(p.part_index) OR ((o->'part_index' IS NULL OR o->'part_index'='null'::jsonb) AND p.part_index=0 AND (SELECT COUNT(*) FROM twitch_vod_archive_parts WHERE vod_id=v.id)=1))))")
         .bind(vod_id).bind(user).bind(part_id).fetch_one(pool).await
 }
 
-pub async fn cleanup_proof<'a>(
+async fn completion_proof<'a>(
     pool: &'a PgPool,
     user: &str,
     vod_id: i64,
     hours: u64,
+    recovery: bool,
 ) -> Result<Option<sqlx::Transaction<'a, sqlx::Postgres>>, sqlx::Error> {
     let Some(target) = ziel(pool, user).await? else {
         return Ok(None);
@@ -491,15 +548,19 @@ pub async fn cleanup_proof<'a>(
     if !ziel_guard(&mut tx, user, &target).await? {
         return Ok(None);
     }
-    let Some(lock_id) = i32::try_from(vod_id).ok() else {
-        return Ok(None);
-    };
-    let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(186976768,$1)")
-        .bind(lock_id)
-        .fetch_one(&mut *tx)
-        .await?;
-    if !locked {
-        return Ok(None);
+    if !recovery {
+        let Some(lock_id) = i32::try_from(vod_id).ok() else {
+            tx.rollback().await?;
+            return Ok(None);
+        };
+        let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(186976768,$1)")
+            .bind(lock_id)
+            .fetch_one(&mut *tx)
+            .await?;
+        if !locked {
+            tx.rollback().await?;
+            return Ok(None);
+        }
     }
     sqlx::query("SELECT id FROM twitch_vod_archive_vods WHERE id=$1 FOR UPDATE")
         .bind(vod_id)
@@ -511,12 +572,39 @@ pub async fn cleanup_proof<'a>(
     .bind(vod_id)
     .fetch_all(&mut *tx)
     .await?;
-    let valid: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM twitch_vod_youtube_checks c JOIN twitch_vod_archive_vods v ON v.id=c.vod_id WHERE c.vod_id=$1 AND v.twitch_user_id=$2 AND v.status='uploaded' AND c.auth_id=$3 AND c.auth_revision=$4 AND c.channel_id IS NOT NULL AND c.state='confirmed' AND c.complete AND c.last_error IS NULL AND c.last_success_at>NOW()-make_interval(hours=>$5) AND jsonb_array_length(c.observations)>0 AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(c.observations) o WHERE o->>'state'<>'processed' OR (o->>'observed_at')::timestamptz<=NOW()-make_interval(hours=>$5)) AND c.upload_snapshot=(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index),'[]'::jsonb) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id))")
-        .bind(vod_id).bind(user).bind(target.id).bind(&target.revision).bind(hours as i32).fetch_one(&mut *tx).await?;
-    Ok(valid.then_some(tx))
+    let valid: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM twitch_vod_youtube_checks c JOIN twitch_vod_archive_vods v ON v.id=c.vod_id WHERE c.vod_id=$1 AND v.twitch_user_id=$2 AND ($6 OR v.status='uploaded') AND c.auth_id=$3 AND c.auth_revision=$4 AND c.channel_id IS NOT NULL AND ($7::text IS NULL OR c.channel_id=$7) AND c.state='confirmed' AND c.complete AND c.last_error IS NULL AND c.last_success_at>NOW()-make_interval(hours=>$5) AND jsonb_array_length(c.observations)>0 AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(c.observations) o WHERE o->>'state' IS DISTINCT FROM 'processed' OR o->>'source_twitch_id' IS DISTINCT FROM v.twitch_id OR o->'source_duration_sec' IS DISTINCT FROM to_jsonb(v.duration_sec) OR o->>'observed_at' IS NULL OR (o->>'observed_at')::timestamptz<=NOW()-make_interval(hours=>$5)) AND c.upload_snapshot=(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index),'[]'::jsonb) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id))")
+        .bind(vod_id).bind(user).bind(target.id).bind(&target.revision).bind(hours as i32).bind(recovery).bind(&target.channel_id).fetch_one(&mut *tx).await?;
+    if valid {
+        Ok(Some(tx))
+    } else {
+        tx.rollback().await?;
+        Ok(None)
+    }
 }
 
-#[allow(clippy::too_many_arguments)]
+pub async fn cleanup_proof<'a>(
+    pool: &'a PgPool,
+    user: &str,
+    vod_id: i64,
+    hours: u64,
+) -> Result<Option<sqlx::Transaction<'a, sqlx::Postgres>>, sqlx::Error> {
+    completion_proof(pool, user, vod_id, hours, false).await
+}
+
+pub(crate) async fn complete_recovery(
+    pool: &PgPool,
+    user: &str,
+    vod_id: i64,
+    hours: u64,
+) -> Result<bool, VodArchiveError> {
+    let Some(mut tx) = completion_proof(pool, user, vod_id, hours, true).await? else {
+        return Ok(false);
+    };
+    let completed = crate::store::setze_bestaetigt_abgeschlossen(&mut tx, vod_id).await?;
+    tx.commit().await?;
+    Ok(completed)
+}
+
 pub async fn run_once(
     pool: &PgPool,
     credentials: &CredentialManager,

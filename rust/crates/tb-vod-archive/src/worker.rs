@@ -598,6 +598,17 @@ impl VodArchiveWorker {
         bilanz: &mut LaufBilanz,
     ) -> Result<(), VodArchiveError> {
         let kanal = einstellung.streamer_login.as_str();
+        if crate::youtube_check::complete_recovery(
+            &self.pool,
+            einstellung.twitch_user_id.as_deref().unwrap_or_default(),
+            vod.id,
+            self.config.youtube.youtube_check_hours,
+        )
+        .await?
+        {
+            tracing::info!(vod = %vod.twitch_id, "Vollständig bestätigte Wiederherstellung ist abgeschlossen");
+            return Ok(());
+        }
         let mut aufgenommen_am = vod.recorded_at;
 
         if vod.braucht_download() {
@@ -1528,6 +1539,15 @@ mod tests {
         .with_runner(Arc::new(WerkzeugAttrappe::neu()))
     }
 
+    fn recovery_observations(mut observations: Value) -> Value {
+        for observation in observations.as_array_mut().unwrap() {
+            observation["source_twitch_id"] = serde_json::json!("v1");
+            observation["source_duration_sec"] = serde_json::json!(60);
+            observation["observed_at"] = serde_json::json!("2026-10-01T13:00:00Z");
+        }
+        observations
+    }
+
     #[tokio::test]
     async fn processed_recovery_parts_keep_history_through_preparation_and_upload_entry() {
         for (schema, original) in [
@@ -1558,24 +1578,22 @@ mod tests {
             store::setze_teile(&pool, id, "earlysalty", &files)
                 .await
                 .unwrap();
-            sqlx::query(
-                "UPDATE twitch_vod_archive_vods SET uploaded_at='2026-10-01T13:00:00Z' WHERE id=$1",
-            )
-            .bind(id)
+            sqlx::query("UPDATE twitch_vod_archive_vods SET uploaded_at=CASE WHEN $2 THEN NULL ELSE '2026-10-01T13:00:00Z'::timestamptz END WHERE id=$1")
+            .bind(id).bind(original)
             .execute(&pool)
             .await
             .unwrap();
             sqlx::query("UPDATE twitch_vod_archive_parts SET status=CASE part_index WHEN 0 THEN 'rejected' WHEN 1 THEN 'failed' WHEN 2 THEN 'pending' ELSE 'failed' END,youtube_video_id=CASE WHEN part_index=0 THEN 'found0' END,last_error='historical',updated_at='2026-10-01T13:00:00Z' WHERE vod_id=$1").bind(id).execute(&pool).await.unwrap();
             sqlx::query("INSERT INTO social_media_platform_auth(platform,twitch_user_id,platform_user_id) VALUES ('youtube','42','own')").execute(&pool).await.unwrap();
             sqlx::query("INSERT INTO twitch_vod_youtube_checks(vod_id,auth_id,auth_revision,channel_id,state,observations,upload_snapshot) SELECT $1,a.id,md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')),'own','rejected',$2,(SELECT jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index) FROM twitch_vod_archive_parts p WHERE p.vod_id=$1) FROM social_media_platform_auth a WHERE twitch_user_id='42'")
-                .bind(id).bind(serde_json::json!([
+                .bind(id).bind(recovery_observations(serde_json::json!([
                     {"video_id":"found0","part_index":0,"state":"processed"},
                     {"video_id":"found1","part_index":1,"state":"processed"},
                     {"video_id":"found2","part_index":2,"state":"processed"}
-                ])).execute(&pool).await.unwrap();
+                ]))).execute(&pool).await.unwrap();
             let protected: Value = sqlx::query_scalar("SELECT jsonb_agg(to_jsonb(p) ORDER BY part_index) FROM twitch_vod_archive_parts p WHERE vod_id=$1 AND part_index<3").bind(id).fetch_one(&pool).await.unwrap();
             let proof: Value = sqlx::query_scalar(
-                "SELECT to_jsonb(c) FROM twitch_vod_youtube_checks c WHERE vod_id=$1",
+                "SELECT jsonb_build_array(observations,upload_snapshot,last_success_at,channel_id) FROM twitch_vod_youtube_checks c WHERE vod_id=$1",
             )
             .bind(id)
             .fetch_one(&pool)
@@ -1585,13 +1603,37 @@ mod tests {
             store::setze_status(&pool, id, if original { "new" } else { "downloaded" })
                 .await
                 .unwrap();
+            crate::youtube_check::test_save_recovery(
+                &pool,
+                id,
+                &[],
+                "error",
+                false,
+                Some("connection"),
+            )
+            .await;
+            crate::youtube_check::test_save_recovery(&pool, id, &[], "searching", false, None)
+                .await;
+            crate::youtube_check::test_save_recovery(
+                &pool,
+                id,
+                &[],
+                "error",
+                false,
+                Some("connection"),
+            )
+            .await;
             let uploader = Arc::new(ZaehlenderHochlader::default());
             let archive = worker(&pool, config(&directory), &uploader);
             let balance = archive.lauf(&[einstellung("earlysalty")]).await.unwrap();
             assert_eq!(balance.hochgeladen, 2);
             assert_eq!(balance.geladen, usize::from(original));
             assert_eq!(uploader.uploads.load(Ordering::SeqCst), 2);
-            let state: (String, Option<String>, chrono::DateTime<chrono::Utc>) = sqlx::query_as(
+            let state: (
+                String,
+                Option<String>,
+                Option<chrono::DateTime<chrono::Utc>>,
+            ) = sqlx::query_as(
                 "SELECT status,last_error,uploaded_at FROM twitch_vod_archive_vods WHERE id=$1",
             )
             .bind(id)
@@ -1600,11 +1642,14 @@ mod tests {
             .unwrap();
             assert_eq!(state.0, "downloaded");
             assert!(state.1.is_none());
-            assert_eq!(state.2.to_rfc3339(), "2026-10-01T13:00:00+00:00");
+            assert_eq!(
+                state.2.as_ref().map(chrono::DateTime::to_rfc3339),
+                (!original).then(|| "2026-10-01T13:00:00+00:00".to_string())
+            );
             let preserved: Value = sqlx::query_scalar("SELECT jsonb_agg(to_jsonb(p) ORDER BY part_index) FROM twitch_vod_archive_parts p WHERE vod_id=$1 AND part_index<3").bind(id).fetch_one(&pool).await.unwrap();
             assert_eq!(protected, preserved);
             let unchanged: Value = sqlx::query_scalar(
-                "SELECT to_jsonb(c) FROM twitch_vod_youtube_checks c WHERE vod_id=$1",
+                "SELECT jsonb_build_array(observations,upload_snapshot,last_success_at,channel_id) FROM twitch_vod_youtube_checks c WHERE vod_id=$1",
             )
             .bind(id)
             .fetch_one(&pool)
@@ -1615,6 +1660,69 @@ mod tests {
             assert_eq!(balance.hochgeladen, 0);
             assert_eq!(uploader.uploads.load(Ordering::SeqCst), 2);
             assert!(source.exists());
+            assert!(crate::youtube_check::cleanup_proof(&pool, "42", id, 24)
+                .await
+                .unwrap()
+                .is_none());
+            let before_check: Value =
+                sqlx::query_scalar("SELECT to_jsonb(v) FROM twitch_vod_archive_vods v WHERE id=$1")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            sqlx::query("INSERT INTO twitch_vod_youtube_scans(twitch_user_id,auth_id,auth_revision,channel_id,playlist_id,complete,last_success_at) SELECT '42',id,md5(COALESCE(refresh_token_enc::text,'') || COALESCE(platform_user_id,'') || COALESCE(authorized_at::text,'')),'own','synthetic',TRUE,NOW() FROM social_media_platform_auth").execute(&pool).await.unwrap();
+            let observations = (0..5)
+                .map(|index| crate::youtube_check::Beobachtung {
+                    video_id: if index < 3 {
+                        format!("found{index}")
+                    } else {
+                        format!("yt-{}", index - 3)
+                    },
+                    part_index: Some(index),
+                    part_total: Some(5),
+                    duration_sec: Some(12),
+                    state: "processed".into(),
+                    privacy: Some("private".into()),
+                    observed_at: chrono::Utc::now(),
+                })
+                .collect::<Vec<_>>();
+            crate::youtube_check::test_save_recovery(
+                &pool,
+                id,
+                &observations,
+                "confirmed",
+                true,
+                None,
+            )
+            .await;
+            let after_check: Value =
+                sqlx::query_scalar("SELECT to_jsonb(v) FROM twitch_vod_archive_vods v WHERE id=$1")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(before_check, after_check);
+            let balance = archive.lauf(&[einstellung("earlysalty")]).await.unwrap();
+            assert_eq!(balance.hochgeladen, 0);
+            assert!(store::offene_vods(&pool, "42", 10)
+                .await
+                .unwrap()
+                .is_empty());
+            assert!(!source.exists());
+            let completed: (String, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as(
+                "SELECT status,uploaded_at FROM twitch_vod_archive_vods WHERE id=$1",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(completed.0, "archived");
+            assert_eq!(completed.1, state.2);
+            let final_parts: Value = sqlx::query_scalar("SELECT jsonb_agg(to_jsonb(p) ORDER BY part_index) FROM twitch_vod_archive_parts p WHERE vod_id=$1 AND part_index<3").bind(id).fetch_one(&pool).await.unwrap();
+            assert_eq!(protected, final_parts);
+            let balance = archive.lauf(&[einstellung("earlysalty")]).await.unwrap();
+            assert_eq!(balance.hochgeladen, 0);
+            assert_eq!(uploader.uploads.load(Ordering::SeqCst), 2);
             std::fs::remove_dir_all(directory).unwrap();
             pool.close().await;
         }
@@ -1651,7 +1759,7 @@ mod tests {
                 .await
                 .unwrap();
         sqlx::query("INSERT INTO twitch_vod_youtube_checks(vod_id,auth_id,auth_revision,channel_id,state,complete,observations,upload_snapshot) SELECT $1,a.id,md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')),'own','confirmed',TRUE,$2,(SELECT jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index) FROM twitch_vod_archive_parts p WHERE p.vod_id=$1) FROM social_media_platform_auth a WHERE twitch_user_id='42'")
-            .bind(id).bind(serde_json::json!([{"video_id":"found","part_index":null,"state":"processed"}])).execute(&pool).await.unwrap();
+            .bind(id).bind(recovery_observations(serde_json::json!([{"video_id":"found","part_index":null,"state":"processed"}]))).execute(&pool).await.unwrap();
         assert!(
             crate::youtube_check::part_processed(&pool, "42", id, part_id)
                 .await
@@ -1693,6 +1801,24 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(part, preserved);
+        sqlx::query("UPDATE twitch_vod_youtube_checks SET last_error='connection',state='error',complete=FALSE").execute(&pool).await.unwrap();
+        assert!(
+            crate::youtube_check::part_processed(&pool, "42", id, part_id)
+                .await
+                .unwrap()
+        );
+        let balance = worker(&pool, config(&directory), &uploader)
+            .lauf(&[einstellung("earlysalty")])
+            .await
+            .unwrap();
+        assert_eq!(balance.hochgeladen, 0);
+        assert_eq!(uploader.uploads.load(Ordering::SeqCst), 0);
+        sqlx::query(
+            "UPDATE twitch_vod_youtube_checks SET last_error=NULL,state='confirmed',complete=TRUE",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         for mutation in [
             "UPDATE social_media_platform_auth SET platform_user_id='different'",
             "UPDATE social_media_platform_auth SET authorized_at='2026-10-01'",
@@ -1700,9 +1826,10 @@ mod tests {
             "UPDATE twitch_vod_youtube_checks SET auth_id=auth_id+100",
             "UPDATE twitch_vod_youtube_checks SET auth_revision='stale'",
             "UPDATE twitch_vod_youtube_checks SET channel_id=NULL",
-            "UPDATE twitch_vod_youtube_checks SET last_error='connection'",
             "UPDATE twitch_vod_youtube_checks SET observations=jsonb_set(observations,'{0,part_index}','9'::jsonb)",
             "UPDATE twitch_vod_youtube_checks SET observations=jsonb_set(observations,'{0,state}','\"rejected\"'::jsonb)",
+            "UPDATE twitch_vod_archive_vods SET twitch_id='different'",
+            "UPDATE twitch_vod_archive_vods SET duration_sec=61",
             "UPDATE twitch_vod_archive_parts SET youtube_video_id='different'",
             "UPDATE twitch_vod_archive_parts SET status='failed'",
             "UPDATE twitch_vod_archive_parts SET updated_at='2026-10-01T00:00:00Z'",
