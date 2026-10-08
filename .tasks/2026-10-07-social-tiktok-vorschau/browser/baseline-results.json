@@ -1,0 +1,44 @@
+{
+  "baselineCommit": "0ecae1370f1a80d1a101249b5c932663d69be8af",
+  "measuredSourceCommit": "f1275b27732308650042b1d752de34d963052391",
+  "baselineWorktree": "/home/nathanael/.worktrees/tb-tiktok-f4-baseline-20261008",
+  "dependencyReuse": "Symlink auf node_modules des eigenen Integrationsworktrees, keine Installation und keine Kopie. package.json und package-lock.json sind zwischen den gemessenen Ständen unverändert.",
+  "npm": {
+    "command": "npm test",
+    "baselineCwd": "/home/nathanael/.worktrees/tb-tiktok-f4-baseline-20261008/bot/dashboard_v2",
+    "finalCwd": "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/bot/dashboard_v2",
+    "baseline": { "passed": 439, "failed": 5, "skipped": 0, "exitCode": 1, "log": "/tmp/tb-tiktok-f4-npm-original.log", "logSha256": "165e1cb7fcf722f9be4584dff612d5b03736d28cb1a23dde276c8fabe6eaf0de" },
+    "final": { "passed": 439, "failed": 5, "skipped": 0, "exitCode": 1, "log": "/tmp/tb-tiktok-f4-npm-final.log", "logSha256": "4ab77ff8ab854d103529bca2230a3d593302a96343da1a10847eadd6c2035c87" },
+    "subRuns": [{ "tests": 5, "passed": 5, "failed": 0 }, { "tests": 9, "passed": 9, "failed": 0 }, { "tests": 430, "passed": 425, "failed": 5 }],
+    "errorComparison": "Für jeden der fünf Fehler wurde der vollständige error-Block verglichen. Ausschließlich der absolute Worktree-Präfix wurde entfernt; Inhalte und Reihenfolge sind identisch.",
+    "failures": [
+      { "testId": 42, "category": "Industrial-Gold-Hexpalette", "normalizedErrorSha256": "492a36cba2f42cb4360822297dbd1ebad181e19aa3a3b3c5691514135f3cd07b", "baselineOffenders": 50, "finalOffenders": 50, "addedOffenders": [], "removedOffenders": [], "touchedUiOffenders": [] },
+      { "testId": 43, "category": "Tailwind-Standardfarben", "normalizedErrorSha256": "97f13f8ff0564a4439e1d39b6f8be50751ffd25540f32aeaa4fff992fef79a81", "baselineOffenders": 98, "finalOffenders": 98, "addedOffenders": [], "removedOffenders": [], "touchedUiOffenders": [] },
+      { "testId": 44, "category": "Weiß auf heller Markenfläche", "normalizedErrorSha256": "0129ab7301e162772705b919ef2afe2ff97ed8689bf133e2cd4ec3684df8d5f1", "baselineOffenders": 4, "finalOffenders": 4, "addedOffenders": [], "removedOffenders": [], "touchedUiOffenders": [] },
+      { "testId": 126, "category": "Analytics-Gesamtbreite in App.tsx", "normalizedErrorSha256": "e0a41e4e7d581bdcf03bfcaf329a85e23cf422e2c0eb1b50f0dcd42a03cf49ca", "sameError": true },
+      { "testId": 313, "category": "OBS-Hilfe: Uploadbudget und Plattformausgabe", "normalizedErrorSha256": "ebd708dccf3472a3dce08b3b1f6f30d23f3dc1eca3e166b243285f9d16fe2385", "sameError": true }
+    ]
+  },
+  "eslint": {
+    "baselineCommand": "./node_modules/.bin/eslint src/pages/SocialMedia.tsx --format json",
+    "finalCommand": "./node_modules/.bin/eslint src/pages/SocialMedia.tsx src/components/socialmedia/TikTokPostDialog.tsx --format json",
+    "baseline": { "errors": 1, "warnings": 0, "exitCode": 1, "log": "/tmp/tb-tiktok-f4-eslint-original.json", "logSha256": "a77cd9949d52fdb25aef3de3ebb50a53a46229450eba28393a5cf683d9094d1b", "purityLines": [1990] },
+    "final": { "errors": 2, "warnings": 0, "exitCode": 1, "log": "/tmp/tb-tiktok-f4-eslint-current.json", "logSha256": "733dc65ae1179b33a31f80773b72a6cf5eec2cd9846b5980f528a136f3dc2b4d", "purityLines": [1990, 2543], "tiktokDialogErrors": 0 },
+    "introducedFinding": "SocialMedia.tsx:2543, react-hooks/purity, Date.now während der Beschriftung des TikTok-Buttons. Dieser zweite Lintfehler ist gegenüber dem ursprünglichen Stand neu und darf nicht als vorbestehend bezeichnet werden.",
+    "scopeDecision": "Keine produktive Funktionsregression nachgewiesen. Entsprechend dem F4-Auftrag keine spekulative Implementierungsänderung und keine Umgestaltung alter fremder Fehler. Der zusätzliche Lintbefund bleibt ausdrücklich sichtbar."
+  },
+  "browser": {
+    "command": "node /home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/prove.mjs",
+    "passed": 15,
+    "failed": 0,
+    "ignored": 0,
+    "exitCode": 0,
+    "observedMoliCases": 14,
+    "staticWiringCases": 1,
+    "componentSha256BeforeAndAfter": "887c1cbc93cf05a468196900b2473d490ffaa846249ab4ccad70cff0fcc2f6f2",
+    "inspectedScreenshots": ["ready.png", "consent-reset-ready.png", "account-consent-reset-ready.png"],
+    "consentReset": "Explizit gesetzte synthetische Zustimmung wurde beim Vorschau-Retry mit neuem Video, beim reinen Wechsel des freigegebenen Videodigests und beim Kontowechsel mit neuer Zugangs-ID zurückgesetzt. Sichtbarkeit SELF_ONLY, erlaubte Kommentare und Beschreibung blieben erhalten. Der Absenden-Button war danach gesperrt, confirmations blieb 0.",
+    "fixtureCorrection": "Die erste erweiterte Probe wartete nach einem initial fertigen Clip irrtümlich auf einen Retry-Button, obwohl die erste fehlende Vorschau automatisch angefordert wird. Fixture-Ablauf auf initial fehlend, angefordert, fertig korrigiert; Produktivcode unverändert. Die vollständige Wiederholung bestand.",
+    "limits": "Synthetische API-Antworten an der tatsächlichen Komponente, keine echte Videodatei, keine Medienwiedergabe, keine TikTok-Verbindung, kein Absenden, kein Speichern und keine Veröffentlichung. Kein browserübergreifender Kompatibilitätsnachweis."
+  }
+}

@@ -1,6 +1,6 @@
-import { useEffect, useId, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { fetchTikTokCreatorInfo, previewFileUrl, SocialMediaApiError, type TikTokPostOptions } from '@/api/socialMedia';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { fetchTikTokCreatorInfo, getPreviewStatus, requestPreview, previewFileUrl, SocialMediaApiError, type TikTokPostOptions } from '@/api/socialMedia';
 import { WorkspaceDialog } from './WorkspaceDialog';
 import { useT } from '@/context/LanguageContext';
 
@@ -20,9 +20,49 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
 }) {
   const t = useT();
   const id = useId();
+  const queryClient = useQueryClient();
+  const previewKey = ['social-media', 'preview', clipDbId];
+  const requested = useRef<number | null>(null);
+  const session = useRef(0);
+  const inFlight = useRef<number | null>(null);
+  useEffect(() => {
+    session.current += 1;
+    requested.current = null;
+    inFlight.current = null;
+    return () => { session.current += 1; };
+  }, [clipDbId]);
+  const preview = useQuery({
+    queryKey: previewKey,
+    queryFn: () => getPreviewStatus(clipDbId),
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: false,
+    retry: false,
+    refetchInterval: (query) => !query.state.error
+      && ['pending', 'rendering'].includes(query.state.data?.status ?? '') ? 3000 : false,
+  });
+  const render = useMutation({
+    mutationFn: ({ clip }: { clip: number; session: number }) => requestPreview(clip),
+    onSuccess: (response, request) => {
+      if (request.session !== session.current) return;
+      const key = ['social-media', 'preview', request.clip];
+      queryClient.setQueryData(key, {
+        clip_db_id: request.clip,
+        status: response.status,
+        ready: response.status === 'ready',
+      });
+      void queryClient.invalidateQueries({ queryKey: key });
+    },
+    onSettled: (_response, _error, request) => {
+      if (inFlight.current === request.session) inFlight.current = null;
+    },
+  });
+  const previewReady = preview.data?.status === 'ready' && !preview.isError && !preview.isFetching && !render.isPending;
   const context = useQuery({
     queryKey: ['social-media', 'tiktok-creator', clipDbId],
     queryFn: () => fetchTikTokCreatorInfo(clipDbId),
+    enabled: previewReady,
     staleTime: 0,
     gcTime: 0,
     refetchOnMount: 'always',
@@ -38,21 +78,49 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
   const [ownBrand, setOwnBrand] = useState(false);
   const [partnerBrand, setPartnerBrand] = useState(false);
   const [consent, setConsent] = useState(false);
-  useEffect(() => {
-    if (!context.data) return;
-    setCaption(context.data.caption);
-    setPrivacy('');
-    setComment(false);
-    setDuet(false);
-    setStitch(false);
-    setCommercial(false);
-    setOwnBrand(false);
-    setPartnerBrand(false);
+  const mutateRender = render.mutate;
+  const requestRender = useCallback(() => {
+    if (inFlight.current !== null || pending) return;
+    inFlight.current = session.current;
+    requested.current = clipDbId;
     setConsent(false);
-  }, [context.data]);
+    mutateRender({ clip: clipDbId, session: session.current });
+  }, [clipDbId, pending, mutateRender]);
+  useEffect(() => {
+    if (!preview.isSuccess || preview.data.status !== null || requested.current === clipDbId) return;
+    requestRender();
+  }, [clipDbId, preview.isSuccess, preview.data?.status, requestRender]);
+  const initializedClip = useRef<number | null>(null);
+  const approvedContext = useRef('');
+  useEffect(() => {
+    const data = context.data;
+    if (!data) return;
+    if (initializedClip.current !== clipDbId) {
+      initializedClip.current = clipDbId;
+      setCaption(data.caption);
+      setPrivacy('');
+      setComment(false);
+      setDuet(false);
+      setStitch(false);
+      setCommercial(false);
+      setOwnBrand(false);
+      setPartnerBrand(false);
+    }
+    const identity = JSON.stringify([
+      clipDbId, data.credential_id, data.platform_user_id, data.approved_video_sha256, data.creator,
+    ]);
+    if (approvedContext.current !== identity) {
+      approvedContext.current = identity;
+      setConsent(false);
+      setPrivacy((value) => data.creator.privacy_level_options.includes(value) ? value : '');
+      if (data.creator.comment_disabled) setComment(false);
+      if (data.creator.duet_disabled) setDuet(false);
+      if (data.creator.stitch_disabled) setStitch(false);
+    }
+  }, [clipDbId, context.data]);
   const data = context.data;
-  const issue = error ?? context.error;
-  const valid = data && !context.isFetching && privacy && caption.length <= 2200 && consent
+  const issue = error ?? render.error ?? preview.error ?? context.error;
+  const valid = data && previewReady && !context.isError && !context.isFetching && privacy && caption.length <= 2200 && consent
     && (!commercial || ownBrand || partnerBrand)
     && !(partnerBrand && privacy === 'SELF_ONLY');
   const change = (action: () => void) => { action(); setConsent(false); };
@@ -71,16 +139,30 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
           approved_video_sha256: data.approved_video_sha256,
         });
       }}>
-        {context.isFetching && <p role="status">{t('Aktuelle TikTok-Einstellungen werden geladen.')}</p>}
-        {issue && <div role="alert" className="space-y-2 text-danger">
-          <p>{issue instanceof SocialMediaApiError ? issue.message : t('Die TikTok-Freigabe konnte nicht geladen werden. Bitte versuche es erneut.')}</p>
-          {context.isError && <button type="button" className="studio-button" onClick={() => context.refetch()}>{t('Erneut laden')}</button>}
+        {!preview.data && preview.isFetching && <p role="status">{t('Die Videovorschau wird geprüft.')}</p>}
+        {render.isPending && <p role="status">{t('Die Videovorschau wird angefordert.')}</p>}
+        {preview.data?.status === null && !render.isPending && !render.isError && <div role="status" className="space-y-2">
+          <p>{t('Die Videovorschau ist nicht mehr verfügbar. Bitte erstelle sie erneut.')}</p>
+          <button type="button" className="studio-button" disabled={pending || preview.isFetching} onClick={requestRender}>{t('Vorschau erneut erstellen')}</button>
         </div>}
-        {data && !context.isFetching && <>
+        {preview.data?.status === 'pending' && !render.isPending && <p role="status">{t('Die Videovorschau ist angefordert und wird gleich erstellt.')}</p>}
+        {preview.data?.status === 'rendering' && <p role="status">{t('Die Videovorschau wird erstellt. Du kannst dieses Fenster schließen und später wieder öffnen.')}</p>}
+        {preview.data?.status === 'error' && !render.isPending && <div role="alert" className="space-y-2 text-danger">
+          <p>{t('Die Videovorschau konnte nicht erstellt werden. Bitte versuche es erneut.')}</p>
+          <button type="button" className="studio-button" disabled={pending || render.isPending} onClick={() => requestRender()}>{t('Vorschau erneut erstellen')}</button>
+        </div>}
+        {previewReady && context.isFetching && <p role="status">{t('Aktuelle TikTok-Einstellungen werden geladen.')}</p>}
+        {issue && <div role="alert" className="space-y-2 text-danger">
+          <p>{issue instanceof SocialMediaApiError && issue.code === 'tiktok_posting' ? issue.message : t('Die TikTok-Freigabe konnte nicht geladen werden. Bitte versuche es erneut.')}</p>
+          {render.isError && <button type="button" className="studio-button" disabled={pending || render.isPending} onClick={() => requestRender()}>{t('Vorschau erneut anfordern')}</button>}
+          {preview.isError && <button type="button" className="studio-button" disabled={pending || preview.isFetching} onClick={() => preview.refetch()}>{t('Vorschau erneut prüfen')}</button>}
+          {context.isError && previewReady && <button type="button" className="studio-button" disabled={pending || context.isFetching} onClick={() => context.refetch()}>{t('Erneut laden')}</button>}
+        </div>}
+        {data && previewReady && !context.isError && !context.isFetching && <>
           <p className="text-sm">{t('Veröffentlichung auf')} <strong>{data.creator.creator_nickname}</strong> (@{data.creator.creator_username})</p>
           <div className="grid gap-5 md:grid-cols-[minmax(0,180px)_minmax(0,1fr)]">
             <div>
-              <video className="max-h-72 w-full rounded-lg bg-black" src={previewFileUrl(clipDbId)} controls preload="metadata" aria-label={t('TikTok-Videovorschau')} />
+              <video className="max-h-72 w-full rounded-lg bg-black" src={`${previewFileUrl(clipDbId)}?v=${encodeURIComponent(data.approved_video_sha256)}`} controls preload="metadata" aria-label={t('TikTok-Videovorschau')} />
               <p className="mt-2 text-xs text-text-secondary">{t('{duration} Sekunden, für dieses Konto höchstens {max} Sekunden.', { duration: Math.ceil(data.duration_seconds), max: data.creator.max_video_post_duration_sec })}</p>
             </div>
             <div className="space-y-4">
