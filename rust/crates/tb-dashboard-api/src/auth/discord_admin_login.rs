@@ -1575,13 +1575,16 @@ mod tests {
                 .await,
             erwartet.is_privileged()
         );
-        let expires_after: f64 =
+        let expires_after: Option<f64> =
             sqlx::query_scalar("SELECT expires_at FROM dashboard_sessions WHERE session_id = $1")
                 .bind(crate::auth::session::session_lookup_key(&local.session_id))
-                .fetch_one(&pool)
+                .fetch_optional(&pool)
                 .await
                 .unwrap();
-        assert_eq!(expires_before, expires_after);
+        assert_eq!(
+            expires_after,
+            erwartet.is_privileged().then_some(expires_before)
+        );
         server.abort();
     }
 
@@ -1603,6 +1606,131 @@ mod tests {
             crate::auth::level::DashboardAuthLevel::admin(),
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn zentral_abgelehnter_spiegel_bleibt_beim_spaeteren_broker_ausfall_widerrufen() {
+        use axum::{extract::FromRequestParts, routing::post, Json, Router};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let pool = maybe_pool("broker_rejected_then_unavailable")
+            .await
+            .expect("Testdatenbank muss erreichbar sein");
+        ensure_sessions_table(&pool).await;
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        let rejected = state.create_admin_session("42", "Admin").await.unwrap();
+        let valid = state
+            .create_admin_session("43", "Anderer Admin")
+            .await
+            .unwrap();
+        for session in [&rejected, &valid] {
+            assert_eq!(
+                state.load_admin_session(&session.session_id).await.unwrap(),
+                Some(true)
+            );
+        }
+
+        let unavailable = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let broker_unavailable = unavailable.clone();
+        let broker_calls = calls.clone();
+        let app = Router::new().route(
+            BROKER_VALIDATE_SESSION_PATH,
+            post(move || {
+                let unavailable = broker_unavailable.clone();
+                let calls = broker_calls.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    if unavailable.load(Ordering::SeqCst) {
+                        (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            Json(json!({"error": "unavailable"})),
+                        )
+                    } else {
+                        (StatusCode::OK, Json(json!({"valid": false})))
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let cfg = config(Arc::new(
+            BrokerDiscordAdminOAuthClient::new(
+                format!("http://{addr}"),
+                "test-broker-header".into(),
+            )
+            .unwrap(),
+        ));
+
+        for (session, outage, expected) in [
+            (
+                &rejected,
+                false,
+                crate::auth::level::DashboardAuthLevel::None,
+            ),
+            (
+                &rejected,
+                true,
+                crate::auth::level::DashboardAuthLevel::None,
+            ),
+            (
+                &valid,
+                true,
+                crate::auth::level::DashboardAuthLevel::admin(),
+            ),
+        ] {
+            unavailable.store(outage, Ordering::SeqCst);
+            let request = axum::http::Request::builder()
+                .header("x-dashboard-context", "admin")
+                .header(
+                    header::COOKIE,
+                    format!("{ADMIN_COOKIE_NAME}={}", session.session_id),
+                )
+                .body(())
+                .unwrap();
+            let (mut parts, _) = request.into_parts();
+            parts.extensions.insert(state.clone());
+            parts.extensions.insert(cfg.clone());
+            let auth = crate::auth::level::DashboardAuthLevel::from_request_parts(&mut parts, &())
+                .await
+                .unwrap();
+            assert_eq!(auth, expected);
+            assert_eq!(
+                parts
+                    .extensions
+                    .get::<crate::auth::level::AuthenticatedAdminSessionId>()
+                    .is_some(),
+                expected.is_privileged()
+            );
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert!(
+            !state
+                .central_admin_validation_cached(&rejected.session_id)
+                .await
+        );
+        assert_eq!(
+            state
+                .load_admin_session(&rejected.session_id)
+                .await
+                .unwrap(),
+            None
+        );
+        let remaining: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM dashboard_sessions WHERE session_id = $1")
+                .bind(crate::auth::session::session_lookup_key(
+                    &rejected.session_id,
+                ))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(remaining, 0);
+        assert_eq!(
+            state.load_admin_session(&valid.session_id).await.unwrap(),
+            Some(true)
+        );
+        server.abort();
     }
 
     #[test]

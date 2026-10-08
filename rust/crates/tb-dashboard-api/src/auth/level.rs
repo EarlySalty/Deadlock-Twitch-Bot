@@ -441,7 +441,10 @@ where
                                 }
                                 state.cache_central_admin_validation(&session_id).await;
                             }
-                            Ok(None) => continue,
+                            Ok(None) => {
+                                state.invalidate_session(&session_id).await;
+                                continue;
+                            }
                             Err(_) => {
                                 if !matches!(
                                     state.load_admin_session(&session_id).await,
