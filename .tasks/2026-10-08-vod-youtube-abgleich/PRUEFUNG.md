@@ -18,7 +18,7 @@ Diese ersten Läufe wurden nach der Gate-Fixrunde für die betroffenen Rust-Pfad
 - Gesamtumfang dieser unterschiedlichen Proben: 72 passed, 0 ignored. Keine vollständige Workspace- oder Dashboard-Gesamtsuite behauptet.
 - Dashboard erneut gebaut nach dem Fixercommit: `frontend-build2.log`, Exit 0. Admin und Website gebaut: `admin-build.log` und `website-build.log`, beide Exit 0.
 
-TESTNACHWEIS[TW-1]: 76 passed, 0 ignored | Baseline: 0 rot
+TESTNACHWEIS[TW-1]: 82 passed, 0 ignored | Baseline: 0 rot
 
 Aktueller zusammengezählter Umfang: 59 Archivtests und acht Frontendtests auf 89bfd5fa, sieben API- und zwei direkte Clienttests auf den seit deren Lauf unveränderten relevanten Quellen. Kein neuer API-/Client-Abschluss im zweiten Fixerauftrag behauptet: zusätzliche Nachläufe wurden während der Neukompilierung gestoppt und zählen nicht.
 
@@ -66,6 +66,32 @@ Der produktive SQL-Nachweis wurde bereits an dieselben Authrevision- und Teil-Sn
 
 Nach neuem Frontendbuild auf 89bfd5fa wurden dieselben sechs Desktop-/Mobilkombinationen einmal gebündelt bestätigt. Ausgangsbilder bleiben erhalten. Neue Bilder und Messwerte in pruefung/bestaetigung, sieben neue Assethashes, wieder neun Karten pro Lauf, keine Überbreite und keine pageerrors. Die sechs Detailbilder wurden tatsächlich betrachtet. Keine weitere UI-Korrektur oder Sichtpolitur. Eigene Moli- und Fixture-Prozesse anschließend beendet.
 
+## Gate-Runde 5
+
+Finaler Gate auf 6dd214a2: BLOCK wegen fehlender dauerhafter Fortsetzung bei mehr als 100 IDs, erneuerter Suchzeit trotz altem leeren oder unvollständigem Inventar und fehlender ausdrücklich ausgelöster Wiederherstellung. Das ALLOW der Runde 4 ist überholt. Ein dritter frischer nativer Fixer bearbeitet die Rust-/API-Funde, ohne weitere UI-Änderung. Kein Main-Push und kein Deploy erfolgt.
+
+## Eigene Platzbereinigung
+
+Nach Ende eigener Prüfprozesse und erneuter lesender Prozess-/Releaseprüfung wurde ausschließlich das eigene nicht mehr verwendete Debug-Profil bereinigt. Trockenlauf: 8778 Dateien, 11.2 GiB. Tatsächlicher identischer Aufruf ohne --dry-run: 8778 Dateien, 11.2 GiB entfernt, Exit 0. Beide über cargo-slot, explizites Profil dev, eigener Baseline-Manifestpfad und eigener Hauptworktree als target-dir. Keine Releasebinaries, fremden Caches, Modelle oder Container entfernt. Der eigene saubere Baselineworktree wurde danach entfernt. Die erneute aktuelle Fixrunde darf ihre benötigten Artefakte regulär neu bauen.
+
+## Wiederanlauf, Versuch 2
+
+Am 2026-10-08T02:02:13Z HEAD 6dd214a2 und erhaltene Runde-5-Fixes bestätigt. Kein Doppelwriter und kein laufender Gate. Der bisherige Fixer-Testlauf endete vor Tests mit Exit 101 wegen fehlendem Speicherplatz; keine Tests daraus gezählt. Beim Wiederanlauf 233 GiB frei, keine weitere Cache- oder Baselinebereinigung. Eigene synthetische PostgreSQL auf ihrem ursprünglichen Loopback-Port 55683 wieder gestartet. Ein erster Start ohne explizite ursprüngliche Portoption scheiterte an der Standardportbelegung; korrigierter Start erfolgreich.
+
+Erhaltene Änderungen gezielt formatiert. Notwendige Archiv-/API-Proben neu gestartet. Die fehlenden echten Providerrechte werden vor Release über den normalen CredentialManager und YouTube-Client geprüft: fokussiertes Rust-Example, Datenbankverbindungen lesend, nur eigener verbundener Kanal, ausschließlich aggregierte Ausgabe. Keine Entscheidung der Altfälle aus der ersten Playlist-Seite ableiten; dauerhafte Ergebnisse bleiben Aufgabe des regulären Workers.
+
+Echte Provider-Vorprobe vor Release: am 2026-10-08T02:34:28.993209799Z normaler CredentialManager und vorhandener Infisical-Startweg, eigener verbundener Kanal. channels.list, erste Upload-Playlist-Seite und videos.list tatsächlich erfolgreich; 50 IDs, 50 Videos, weitere Seiten vorhanden. Exit 0, kein fehlendes Leserecht festgestellt. Alle fünf Fälle gehören zu diesem geprüften Zugang. Nur Aggregate im Beleg `pruefung/provider-vor-release.log`; keine Altfallsentscheidung aus dieser Teilseite und keine Produktionsschreiboperation.
+
+API-Wiederanlauf: neun fokussierte Tests bestanden, 0 failed, 0 ignored, 1336 filtered im Bibliothekslauf. Exit 0, `restart-api-tests.log`. Vier weitere Bibliotheks-/Binärläufe mit null passenden Tests zählen nicht zusätzlich.
+
+Archiv-Wiederanlauf: Exit 101, 60 passed, drei failed, 0 ignored, `restart-archive-tests.log`. Betroffen: Mindestbudget mit 101 lokalen IDs, bisherige Aktualitätsannahmen bei unvollständigen Inventaren und Null-Erfolgszeit nach unvollständiger Suche. Nicht als grüner Testnachweis gezählt. Frischer nativer Fixkontext `ad1360b9c5a31929f` ausschließlich für diese tatsächlich offenen Runde-5-Funde, keine Neuimplementierung.
+
+Bei der ersten Prozessprüfung wurde versehentlich ein temporärer Harness-Zugangswert im Werkzeugoutput sichtbar. Nicht in Task-Dateien oder Git übernommen; weitere Prozessproben ohne Kommandoargumente. Keine dauerhaften Bot-Secrets gelesen oder ausgegeben.
+
+Die reguläre lesende Produktionsrolle twitchlegacy darf _sqlx_migrations nicht lesen, tatsächlich mit has_table_privilege geprüft. Keine Rechtserweiterung und kein privilegierter Ausweichzugang. Der Datenbeleg bleibt eine wiederholbar lesende Transaktion; Migrationsnachweis erfolgt getrennt über die vorhandene Migrationsunit, deren Result/Journal und den identischen Release-Migrationshash, nicht über eine behauptete direkte Checksummentabellenabfrage.
+
+Aktueller Umfang Versuch 2: 63 Archivtests, neun API-Tests, acht unveränderte Frontendtests und zwei unveränderte Clienttests, insgesamt 82. Archiv und API im Wiederanlauf vollständig abgeschlossen; bestehende Archivbaseline weiterhin tatsächlich gemessene 50 mit 0 Fehlern auf 0ecae137. Die drei roten Zwischenfälle sind keine alte Codebaseline: ein Auth-ID-Sperrkonflikt zwischen beiden parallelen synthetischen 101-ID-Proben sowie zwei Erwartungen, die fälschlich eine neue Erfolgszeit aus alten oder fehlenden Suchbelegen verlangten. Unterschiede eng korrigiert, echte Beobachtungen weiter geprüft. Abschließender Archivlauf Exit 0, 63 passed, 0 failed, 0 ignored; striktes Archiv-Clippy Exit 0. Logs fixer-restart-archive.log und fixer-restart-archive-clippy.log. Gezielter rustfmt-Check und Diff-Check Exit 0. Eigene temporäre Testkonfiguration anschließend entfernt.
+
 ## Noch offen
 
-Main-Integration, sauberer Releasebuild und produktive API-Abfragen. Bisher wurde kein neuer Nachweis in der Produktionsdatenbank geschrieben und keine Produktionsmigration angewendet. Die fünf historischen Fälle sind noch nicht entschieden. Testdatenbank, Moli und Fixture-Server sind eigene temporäre Ressourcen und werden nach Sicherung der Belege beendet.
+Neue betroffene Nachweise und Gatefreigabe, Main-Integration, sauberer Releasebuild und produktive API-Abfragen. Bisher wurde kein neuer Nachweis in der Produktionsdatenbank geschrieben und keine Produktionsmigration angewendet. Die fünf historischen Fälle sind noch nicht entschieden. Testdatenbank, Moli und Fixture-Server sind eigene temporäre Ressourcen und werden nach Sicherung der Belege beendet.

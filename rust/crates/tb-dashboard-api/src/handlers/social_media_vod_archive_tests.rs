@@ -23,6 +23,8 @@ async fn database() -> crate::test_postgres::TestPostgres {
         .execute(&database.pool)
         .await
         .unwrap();
+    sqlx::query("ALTER TABLE twitch_vod_archive_parts ADD COLUMN file_path TEXT, ADD COLUMN upload_session_uri TEXT, ADD COLUMN upload_offset BIGINT DEFAULT 0")
+        .execute(&database.pool).await.unwrap();
     sqlx::query("ALTER TABLE social_media_platform_auth ADD COLUMN platform_user_id TEXT")
         .execute(&database.pool)
         .await
@@ -432,6 +434,192 @@ async fn youtube_evidence_keeps_drive_success_and_upload_recovery_visible() {
         }
     }
     eprintln!("YOUTUBE_API_DB_PROOF: all YouTube states preserve independent Drive success and relevant recovery explanations for YouTube and Drive uploads");
+}
+
+#[tokio::test]
+async fn explicit_terminal_retry_is_scoped_and_preserves_successful_parts_and_history() {
+    let database = database().await;
+    let pool = &database.pool;
+    let directory =
+        std::env::temp_dir().join(format!("vod-recovery-rejected-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let file = directory.join("rejected.mp4");
+    std::fs::write(&file, b"synthetic media").unwrap();
+    sqlx::query("INSERT INTO social_media_platform_auth(twitch_user_id,platform,platform_user_id) VALUES ('42','youtube','own')").execute(pool).await.unwrap();
+    sqlx::query("UPDATE twitch_vod_archive_vods SET status='uploaded',uploaded_at='2026-10-01T13:00:00Z' WHERE id=1").execute(pool).await.unwrap();
+    sqlx::query("UPDATE twitch_vod_archive_parts SET status='done',youtube_video_id='rejected',file_path=$1 WHERE vod_id=1").bind(file.to_str().unwrap()).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO twitch_vod_archive_parts(vod_id,part_index,status,youtube_video_id,file_path,last_error) VALUES (1,1,'done','successful','/synthetic/absent-success','old history')").execute(pool).await.unwrap();
+    let before:Value=sqlx::query_scalar("SELECT jsonb_build_array(to_jsonb(v),(SELECT jsonb_agg(to_jsonb(p) ORDER BY p.part_index) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id)) FROM twitch_vod_archive_vods v WHERE id=1").fetch_one(pool).await.unwrap();
+    assert_eq!(
+        apply_action(pool, 1, Some("42"), "check").await.unwrap(),
+        Some(true)
+    );
+    sqlx::query("UPDATE twitch_vod_youtube_checks SET state='rejected',requested_at=NULL,last_success_at=NOW(),observations=$1 WHERE vod_id=1").bind(json!([{"video_id":"rejected","part_index":0,"state":"rejected"},{"video_id":"successful","part_index":1,"state":"processed"}])).execute(pool).await.unwrap();
+    let data = json(
+        list_handler(
+            partner(),
+            State(pool.clone()),
+            Query(ArchiveQuery {
+                twitch_user_id: None,
+                page: None,
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(data["items"][0]["can_retry"], true);
+    assert!(data["items"][0]["parts"][0].get("file_path").is_none());
+    let after:Value=sqlx::query_scalar("SELECT jsonb_build_array(to_jsonb(v),(SELECT jsonb_agg(to_jsonb(p) ORDER BY p.part_index) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id)) FROM twitch_vod_archive_vods v WHERE id=1").fetch_one(pool).await.unwrap();
+    assert_eq!(before, after);
+    assert_eq!(
+        apply_action(pool, 1, Some("99"), "retry").await.unwrap(),
+        None
+    );
+    let mut guard = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(186976768,1)")
+        .execute(&mut *guard)
+        .await
+        .unwrap();
+    assert_eq!(
+        apply_action(pool, 1, Some("42"), "retry").await.unwrap(),
+        Some(false)
+    );
+    guard.rollback().await.unwrap();
+    let good_before: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(p) FROM twitch_vod_archive_parts p WHERE vod_id=1 AND part_index=1",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        apply_action(pool, 1, Some("42"), "retry").await.unwrap(),
+        Some(true)
+    );
+    let state: (String, bool, String) = sqlx::query_as(
+        "SELECT status,drive_requested,uploaded_at::text FROM twitch_vod_archive_vods WHERE id=1",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(state.0, "downloaded");
+    assert!(!state.1);
+    assert!(state.2.starts_with("2026-10-01"));
+    let good_after: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(p) FROM twitch_vod_archive_parts p WHERE vod_id=1 AND part_index=1",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(good_before, good_after);
+    let part:(String,String)=sqlx::query_as("SELECT status,youtube_video_id FROM twitch_vod_archive_parts WHERE vod_id=1 AND part_index=0").fetch_one(pool).await.unwrap();
+    assert_eq!(part, ("pending".into(), "rejected".into()));
+    assert!(file.exists());
+    std::fs::remove_dir_all(directory).unwrap();
+    eprintln!("YOUTUBE_API_DB_PROOF: read/check mutate no uploads; protected explicit rejected-part retry accepts local source, preserves successful part and original IDs/history, no provider operation");
+}
+
+#[tokio::test]
+async fn unavailable_terminal_drive_recovery_never_resets_accepted_targets_or_independent_drive() {
+    let database = database().await;
+    let pool = &database.pool;
+    let directory =
+        std::env::temp_dir().join(format!("vod-recovery-drive-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let file = directory.join("source.mp4");
+    std::fs::write(&file, b"synthetic media").unwrap();
+    sqlx::query("INSERT INTO social_media_platform_auth(twitch_user_id,platform,platform_user_id) VALUES ('42','youtube','own')").execute(pool).await.unwrap();
+    sqlx::query("UPDATE twitch_vod_archive_vods SET status='archived',uploaded_at='2026-10-01T13:00:00Z' WHERE id=1").execute(pool).await.unwrap();
+    sqlx::query("UPDATE twitch_vod_archive_parts SET status='done',youtube_video_id='accepted',file_path=$1 WHERE vod_id=1").bind(file.to_str().unwrap()).execute(pool).await.unwrap();
+    assert_eq!(
+        apply_action(pool, 1, Some("42"), "check").await.unwrap(),
+        Some(true)
+    );
+    sqlx::query("UPDATE twitch_vod_youtube_checks SET state='unavailable',requested_at=NULL,last_success_at=NOW(),observations=$1 WHERE vod_id=1").bind(json!([{"video_id":"accepted","part_index":0,"state":"unavailable"}])).execute(pool).await.unwrap();
+    let data = json(
+        list_handler(
+            partner(),
+            State(pool.clone()),
+            Query(ArchiveQuery {
+                twitch_user_id: None,
+                page: None,
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(data["items"][0]["can_retry"], true);
+    let parts_before: Value = sqlx::query_scalar(
+        "SELECT jsonb_agg(to_jsonb(p)) FROM twitch_vod_archive_parts p WHERE vod_id=1",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        apply_action(pool, 1, Some("42"), "retry").await.unwrap(),
+        Some(false)
+    );
+    assert_eq!(
+        apply_action(pool, 1, Some("42"), "drive").await.unwrap(),
+        Some(true)
+    );
+    let parts_after: Value = sqlx::query_scalar(
+        "SELECT jsonb_agg(to_jsonb(p)) FROM twitch_vod_archive_parts p WHERE vod_id=1",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(parts_before, parts_after);
+    let state: (String, bool) =
+        sqlx::query_as("SELECT status,drive_requested FROM twitch_vod_archive_vods WHERE id=1")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(state, ("downloaded".into(), true));
+    sqlx::query("UPDATE twitch_vod_archive_vods SET status='drive_uploaded',drive_url='https://drive.google.com/drive/folders/synthetic' WHERE id=1").execute(pool).await.unwrap();
+    let saved: Value =
+        sqlx::query_scalar("SELECT to_jsonb(v) FROM twitch_vod_archive_vods v WHERE id=1")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    for action in ["retry", "drive"] {
+        assert_eq!(
+            apply_action(pool, 1, Some("42"), action).await.unwrap(),
+            Some(false)
+        );
+    }
+    let preserved: Value =
+        sqlx::query_scalar("SELECT to_jsonb(v) FROM twitch_vod_archive_vods v WHERE id=1")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(saved, preserved);
+    std::fs::remove_file(&file).unwrap();
+    sqlx::query("UPDATE twitch_vod_archive_vods SET status='archived',drive_url=NULL WHERE id=1")
+        .execute(pool)
+        .await
+        .unwrap();
+    let absent = json(
+        list_handler(
+            partner(),
+            State(pool.clone()),
+            Query(ArchiveQuery {
+                twitch_user_id: None,
+                page: None,
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(absent["items"][0]["can_retry"], false);
+    assert!(absent["items"][0]["reason"].is_string());
+    for action in ["retry", "drive"] {
+        assert_eq!(
+            apply_action(pool, 1, Some("42"), action).await.unwrap(),
+            Some(false)
+        );
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+    eprintln!("YOUTUBE_API_DB_PROOF: unavailable does not imply deletion; existing Drive recovery can queue available local source without resetting accepted YouTube data; absent source and independent Drive success reject recovery honestly, no provider writes");
 }
 
 #[test]

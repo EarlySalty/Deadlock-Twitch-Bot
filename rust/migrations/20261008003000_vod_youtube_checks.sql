@@ -15,6 +15,19 @@ CREATE TABLE twitch_vod_youtube_checks (
 );
 CREATE INDEX twitch_vod_youtube_checks_due ON twitch_vod_youtube_checks(next_check_at);
 
+CREATE TABLE twitch_vod_youtube_continuations (
+    vod_id BIGINT PRIMARY KEY REFERENCES twitch_vod_archive_vods(id) ON DELETE CASCADE,
+    auth_id INTEGER NOT NULL,
+    auth_revision TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    vod_snapshot JSONB NOT NULL,
+    upload_snapshot JSONB NOT NULL,
+    source_snapshot JSONB NOT NULL,
+    refreshed JSONB NOT NULL,
+    observations JSONB NOT NULL,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE twitch_vod_youtube_scans (
     twitch_user_id TEXT PRIMARY KEY,
     auth_id INTEGER NOT NULL,

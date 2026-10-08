@@ -75,4 +75,24 @@ Striktes Clippy auf tb-vod-archive, --all-targets --no-deps -- -D warnings, kein
 
 Testsumme des gültigen aktuellen Auftragsumfangs: 76 passed, 0 ignored (59 Archiv, 8 Oberfläche, 7 unveränderte API-Quellen, 2 unveränderte Client-Quellen). Testbaseline 50 Archivtests mit 0 Fehlern tatsächlich gemessen, keine Workspace-Testbaseline behauptet.
 
+## Versuch 2: tatsächlich abgeschlossene Prüfungen
+
+```text
+fixer-restart-archive.log
+test result: ok. 63 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.42s
+cargo-slot: EXIT=0
+
+restart-api-tests.log
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 1336 filtered out; finished in 6.10s
+cargo-slot: EXIT=0
+
+fixer-restart-archive-clippy.log
+cargo-slot: EXIT=0
+
+provider-vor-release.log
+Own connected channel: 50 first-page IDs, 50 returned videos, more pages present. Exit 0 at 2026-10-08T02:34:28.993209799Z.
+```
+
+Aktueller unterschiedlicher Prüfumfang 82 passed, 0 ignored: 63 Archiv, neun API, acht unveränderte Oberfläche, zwei unveränderter direkter Client. Keine vollständige Workspace-Suite behauptet. Die drei korrigierten roten Zwischenproben werden nicht als alte Codebaseline gezählt. Baseline bleibt der tatsächlich gemessene ursprüngliche Archivumfang 50 passed, 0 failed, 0 ignored.
+
 Erster Archiv-Baselineversuch ohne die zusätzlich erforderliche lokale Testkonfiguration: 49 passed, ein Konfigurationsfehler, danach behoben und vollständig wiederholt. Zusätzliche API-/Client-Versuche des Fixers und die API-Baseline wurden vor Testabschluss während der Neukompilierung gestoppt und nicht als Nachweis gezählt. Vollständiger Gate-Runde-4-Output in gate-round4.txt.

@@ -344,15 +344,25 @@ async fn completed_inventory_rechecks_refresh_deletions_processing_and_manual_re
     assert_eq!(
         states,
         vec![
-            ("100".into(), "unavailable".into(), false, true),
+            ("100".into(), "unavailable".into(), false, false),
             ("200".into(), "confirmed".into(), true, true),
             ("300".into(), "processing".into(), false, true),
-            ("400".into(), "unresolved".into(), false, true)
+            ("400".into(), "unresolved".into(), false, false)
         ]
     );
     let gone: Value = sqlx::query_scalar("SELECT c.observations FROM twitch_vod_youtube_checks c JOIN twitch_vod_archive_vods v ON v.id=c.vod_id WHERE v.twitch_id='100'").fetch_one(&pool).await.unwrap();
     assert_eq!(gone[0]["state"], "unavailable");
     assert!(gone[0]["privacy"].is_null());
+    assert!(
+        gone[0]["observed_at"]
+            .as_str()
+            .unwrap()
+            .parse::<DateTime<Utc>>()
+            .unwrap()
+            >= fresh_after
+    );
+    let absence_time: Value = sqlx::query_scalar("SELECT to_jsonb(c.last_success_at) FROM twitch_vod_youtube_checks c JOIN twitch_vod_archive_vods v ON v.id=c.vod_id WHERE v.twitch_id='400'").fetch_one(&pool).await.unwrap();
+    assert_eq!(absence_time, scan_before["last_success_at"]);
     phase.store(2, Ordering::SeqCst);
     sqlx::query(
         "UPDATE twitch_vod_youtube_checks SET next_check_at=NOW() WHERE state='processing'",
@@ -385,14 +395,22 @@ async fn completed_inventory_rechecks_refresh_deletions_processing_and_manual_re
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(scan_before, scan_after);
+    assert_eq!(scan_after["complete"], false);
+    assert_eq!(
+        scan_after["generation"].as_i64().unwrap(),
+        scan_before["generation"].as_i64().unwrap() + 1
+    );
+    assert_eq!(
+        scan_after["last_success_at"],
+        scan_before["last_success_at"]
+    );
     assert_eq!(before, local_snapshot(&pool).await);
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 10);
     assert!(requests
         .iter()
         .all(|request| request.method.as_str() == "GET"));
-    eprintln!("YOUTUBE_DB_PROOF: completed inventory supplies identities only; manual rechecks read deleted, processed, mixed processing and changed-source videos freshly; automatic processing retry refreshes all parts; read errors preserve previous success; playlist and local legacy rows unchanged");
+    eprintln!("YOUTUBE_DB_PROOF: completed inventory supplies identities only; manual rechecks read unavailable, processed, mixed processing and changed-source videos freshly; unresolved search times remain tied to the completed scan; automatic processing retry refreshes all parts; read errors preserve previous success while a new absence search remains incomplete; local legacy rows unchanged");
 }
 
 #[tokio::test]
@@ -479,17 +497,321 @@ async fn bounded_refresh_keeps_unfetched_inventory_proofs_and_requests_unchanged
     assert_eq!(skipped_before, skipped_after);
     let confirmed: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_vod_youtube_checks WHERE complete AND state='confirmed' AND requested_at IS NULL").fetch_one(&pool).await.unwrap();
     assert_eq!(confirmed, 100);
+    let second_read_at: DateTime<Utc> = sqlx::query_scalar("SELECT NOW()")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     run_with(&pool, &manager, &config, &factory).await.unwrap();
-    let deleted: (String, bool, bool, bool) = sqlx::query_as("SELECT c.state,c.complete,c.requested_at IS NULL,c.last_success_at>$1 FROM twitch_vod_youtube_checks c JOIN twitch_vod_archive_vods v ON v.id=c.vod_id WHERE v.twitch_id='1100'")
-        .bind(skipped_before["last_success_at"].as_str().unwrap().parse::<DateTime<Utc>>().unwrap()).fetch_one(&pool).await.unwrap();
-    assert_eq!(deleted, ("unavailable".into(), false, true, true));
+    let unavailable: (String, bool, bool, Option<DateTime<Utc>>, bool) = sqlx::query_as("SELECT c.state,c.complete,c.requested_at IS NULL,c.last_success_at,(c.observations->0->>'observed_at')::timestamptz>=$1 FROM twitch_vod_youtube_checks c JOIN twitch_vod_archive_vods v ON v.id=c.vod_id WHERE v.twitch_id='1100'")
+        .bind(second_read_at).fetch_one(&pool).await.unwrap();
+    assert_eq!(unavailable, ("unavailable".into(), false, true, None, true));
     assert_eq!(before, local_snapshot(&pool).await);
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 5);
     assert!(requests
         .iter()
         .all(|request| request.method.as_str() == "GET"));
-    eprintln!("YOUTUBE_DB_PROOF: 101 completed-inventory candidates refreshed in batches of at most 50 under a three-request budget; unfetched processing proof, success time and manual request unchanged; later fresh read proves deletion without changing local rows");
+    eprintln!("YOUTUBE_DB_PROOF: 101 completed-inventory candidates refreshed in batches of at most 50 under a three-request budget; unfetched processing proof, success time and manual request unchanged; later fresh read records unavailability without inventing a completed-search time or changing local rows");
+}
+
+async fn oversized_vod(recovered: bool) {
+    use tb_social_media::uploaders::youtube::YouTubeUploader;
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    let pool = crate::store::tests::pool(if recovered {
+        "t_youtube_large_recovered"
+    } else {
+        "t_youtube_large_local"
+    })
+    .await
+    .unwrap();
+    let manager = synthetic_manager(&pool, if recovered { 108 } else { 105 }).await;
+    crate::store::merke_vod(&pool, "123", "synthetic", "42", "Synthetic", 101)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE twitch_vod_archive_vods SET status='archived'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    if recovered {
+        let target = ziel(&pool, "42").await.unwrap().unwrap();
+        sqlx::query("INSERT INTO twitch_vod_youtube_scans(twitch_user_id,auth_id,auth_revision,channel_id,playlist_id,complete,last_success_at,next_scan_at) VALUES ('42',$1,$2,'channel','uploads',TRUE,NOW(),NOW()+INTERVAL '1 day')")
+            .bind(target.id).bind(&target.revision).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_vod_youtube_inventory(twitch_user_id,video_id,twitch_id,generation,part_index,part_total,duration_sec,state) SELECT '42','video'||lpad(i::text,3,'0'),'123',1,0,1,1,'processed' FROM generate_series(0,100) i")
+            .execute(&pool).await.unwrap();
+    } else {
+        sqlx::query("INSERT INTO twitch_vod_archive_parts(vod_id,part_index,file_path,status,youtube_video_id) SELECT v.id,i,'/synthetic/part','done','video'||lpad(i::text,3,'0') FROM twitch_vod_archive_vods v CROSS JOIN generate_series(0,100) i")
+            .execute(&pool).await.unwrap();
+    }
+    let before = local_snapshot(&pool).await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/channels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":[{"id":"channel","contentDetails":{"relatedPlaylists":{"uploads":"uploads"}}}]}))).expect(2).mount(&server).await;
+    Mock::given(method("GET")).and(path("/videos")).respond_with(move |request: &wiremock::Request| {
+        let ids = request.url.query_pairs().find(|(key,_)| key == "id").unwrap().1;
+        let items: Vec<_> = ids.split(',').map(|id| provider_video(id, if recovered { "Archivquelle: Twitch-VOD 123; Teil 1/1\nOriginal: https://www.twitch.tv/videos/123" } else { "" }, 1, "processed")).collect();
+        ResponseTemplate::new(200).set_body_json(json!({"items":items}))
+    }).expect(3).mount(&server).await;
+    let config = VodArchiveOptions {
+        youtube_requests_per_run: 3,
+        ..Default::default()
+    };
+    let factory = |credentials: &tb_social_media::credentials::SocialMediaCredentials| {
+        YouTubeUploader::new(&credentials.access_token).with_bases(server.uri(), server.uri())
+    };
+    run_with(&pool, &manager, &config, &factory).await.unwrap();
+    assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    let progress: (i32, i32) = sqlx::query_as("SELECT jsonb_array_length(refreshed),jsonb_array_length(observations) FROM twitch_vod_youtube_continuations").fetch_one(&pool).await.unwrap();
+    assert_eq!(progress, (100, 100));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM twitch_vod_youtube_checks")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+    let first_time: DateTime<Utc> = sqlx::query_scalar("SELECT MIN((o->>'observed_at')::timestamptz) FROM twitch_vod_youtube_continuations p CROSS JOIN LATERAL jsonb_array_elements(p.observations) o").fetch_one(&pool).await.unwrap();
+    run_with(&pool, &manager, &config, &factory).await.unwrap();
+    let outcome: (String,bool,i32,DateTime<Utc>) = sqlx::query_as("SELECT state,complete,jsonb_array_length(observations),last_success_at FROM twitch_vod_youtube_checks").fetch_one(&pool).await.unwrap();
+    assert_eq!(outcome.0, if recovered { "partial" } else { "confirmed" });
+    assert_eq!(outcome.1, !recovered);
+    assert_eq!(outcome.2, 101);
+    assert!(outcome.3 <= first_time);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM twitch_vod_youtube_continuations")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(before, local_snapshot(&pool).await);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 5);
+    assert!(requests.iter().all(|r| r.method.as_str() == "GET"));
+    let ids: Vec<_> = requests
+        .iter()
+        .filter(|r| r.url.path() == "/videos")
+        .flat_map(|r| {
+            r.url
+                .query_pairs()
+                .find(|(key, _)| key == "id")
+                .unwrap()
+                .1
+                .split(',')
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(ids.len(), 101);
+    assert_eq!(ids.iter().collect::<BTreeSet<_>>().len(), 101);
+    eprintln!("YOUTUBE_DB_PROOF: 101 distinct IDs in one VOD advance durably in two minimum-budget runs, original per-batch observation times retained, ambiguous recovered candidates finish as partial, no upload mutation");
+}
+
+#[tokio::test]
+async fn minimum_budget_finishes_one_vod_with_101_local_ids() {
+    oversized_vod(false).await;
+}
+
+#[tokio::test]
+async fn minimum_budget_finishes_one_vod_with_101_ambiguous_recovered_candidates() {
+    oversized_vod(true).await;
+}
+
+#[tokio::test]
+async fn manual_incomplete_search_refreshes_empty_and_mixed_inventory_and_processing_retries() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    use tb_social_media::uploaders::youtube::YouTubeUploader;
+    use wiremock::{
+        matchers::{method, path, query_param},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    let pool = crate::store::tests::pool("t_youtube_search_refresh")
+        .await
+        .unwrap();
+    let manager = synthetic_manager(&pool, 106).await;
+    for id in ["100", "200", "300"] {
+        crate::store::merke_vod(
+            &pool,
+            id,
+            "synthetic",
+            "42",
+            "Synthetic",
+            if id == "300" { 180 } else { 120 },
+        )
+        .await
+        .unwrap();
+    }
+    sqlx::query("UPDATE twitch_vod_archive_vods SET status='archived'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO twitch_vod_archive_parts(vod_id,part_index,file_path,status,youtube_video_id) SELECT id,i,'/synthetic/part','done',CASE WHEN i=0 THEN 'mixed-known' END FROM twitch_vod_archive_vods CROSS JOIN generate_series(0,2) i WHERE twitch_id='300'").execute(&pool).await.unwrap();
+    let target = ziel(&pool, "42").await.unwrap().unwrap();
+    sqlx::query("INSERT INTO twitch_vod_youtube_scans(twitch_user_id,auth_id,auth_revision,channel_id,playlist_id,complete,last_success_at,next_scan_at) VALUES ('42',$1,$2,'channel','uploads',TRUE,NOW()-INTERVAL '1 hour',NOW()+INTERVAL '1 day')").bind(target.id).bind(&target.revision).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO twitch_vod_youtube_inventory(twitch_user_id,video_id,generation,twitch_id,part_index,part_total,duration_sec,state) VALUES ('42','old200',1,'200',0,2,60,'processing')").execute(&pool).await.unwrap();
+    for vod in vods(&pool, "42", &target).await.unwrap() {
+        let old = if vod.twitch_id == "200" {
+            vec![Beobachtung {
+                state: "processing".into(),
+                observed_at: Utc::now() - chrono::Duration::hours(1),
+                ..observation("old200", Some(0), Some(2), 60)
+            }]
+        } else {
+            vec![]
+        };
+        sqlx::query("INSERT INTO twitch_vod_youtube_checks(vod_id,auth_id,auth_revision,channel_id,state,observations,upload_snapshot,last_success_at,last_attempt_at,requested_at,next_check_at) VALUES ($1,$2,$3,'channel',$4,$5,$6,NOW()-INTERVAL '1 hour',NOW()-INTERVAL '1 hour',NOW(),NOW()+INTERVAL '1 day')")
+            .bind(vod.id).bind(target.id).bind(&target.revision).bind(if vod.twitch_id=="200" { "processing" } else { "unresolved" }).bind(json!(old)).bind(vod.parts).execute(&pool).await.unwrap();
+    }
+    let before = local_snapshot(&pool).await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/channels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":[{"id":"channel","contentDetails":{"relatedPlaylists":{"uploads":"uploads"}}}]}))).mount(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/playlistItems"))
+        .and(|r: &wiremock::Request| !r.url.query_pairs().any(|(k, _)| k == "pageToken"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({"items":[{"contentDetails":{"videoId":"old200"}}],"nextPageToken":"next"}),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET")).and(path("/playlistItems")).and(query_param("pageToken","next"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":[{"contentDetails":{"videoId":"new100"}},{"contentDetails":{"videoId":"new200"}},{"contentDetails":{"videoId":"mixed1"}},{"contentDetails":{"videoId":"mixed2"}}]}))).expect(1).mount(&server).await;
+    let processed = Arc::new(AtomicBool::new(false));
+    let phase = processed.clone();
+    Mock::given(method("GET")).and(path("/videos")).respond_with(move |r:&wiremock::Request| {
+        let ids=r.url.query_pairs().find(|(k,_)| k=="id").unwrap().1;
+        let items:Vec<_>=ids.split(',').map(|id| {
+            let (vod,index,total,seconds) = match id { "old200"=>("200",0,2,60),"new200"=>("200",1,2,60),"mixed1"=>("300",1,3,60),"mixed2"=>("300",2,3,60),"mixed-known"=>("300",0,3,60),"new100"=>("100",0,1,120),_=>panic!("unexpected synthetic ID") };
+            provider_video(id,&format!("Archivquelle: Twitch-VOD {vod}; Teil {}/{}\nOriginal: https://www.twitch.tv/videos/{vod}",index+1,total),seconds,if id=="old200" && !phase.load(Ordering::SeqCst) { "uploaded" } else { "processed" })
+        }).collect();
+        ResponseTemplate::new(200).set_body_json(json!({"items":items}))
+    }).mount(&server).await;
+    let config = VodArchiveOptions {
+        youtube_requests_per_run: 3,
+        ..Default::default()
+    };
+    let factory = |c: &tb_social_media::credentials::SocialMediaCredentials| {
+        YouTubeUploader::new(&c.access_token).with_bases(server.uri(), server.uri())
+    };
+    let mut previous = 0;
+    for round in 0..3 {
+        run_with(&pool, &manager, &config, &factory).await.unwrap();
+        let requests = server.received_requests().await.unwrap();
+        assert!(requests.len() - previous <= 3);
+        previous = requests.len();
+        if round == 0 {
+            let scan: (Option<String>, bool) =
+                sqlx::query_as("SELECT cursor,complete FROM twitch_vod_youtube_scans")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(scan, (Some("next".into()), false));
+            assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM twitch_vod_youtube_checks WHERE complete OR state='unresolved' AND last_success_at>NOW()-INTERVAL '30 minutes'").fetch_one(&pool).await.unwrap(),0);
+        }
+        sqlx::query("UPDATE twitch_vod_youtube_checks SET next_check_at=NOW() WHERE NOT complete")
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let states:Vec<(String,String,bool)>=sqlx::query_as("SELECT v.twitch_id,c.state,c.complete FROM twitch_vod_archive_vods v JOIN twitch_vod_youtube_checks c ON c.vod_id=v.id ORDER BY v.twitch_id").fetch_all(&pool).await.unwrap();
+    assert_eq!(
+        states,
+        vec![
+            ("100".into(), "confirmed".into(), true),
+            ("200".into(), "processing".into(), false),
+            ("300".into(), "confirmed".into(), true)
+        ]
+    );
+    processed.store(true, Ordering::SeqCst);
+    run_with(&pool, &manager, &config, &factory).await.unwrap();
+    assert!(sqlx::query_scalar::<_, bool>(
+        "SELECT bool_and(complete AND state='confirmed') FROM twitch_vod_youtube_checks"
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap());
+    assert_eq!(before, local_snapshot(&pool).await);
+    assert!(server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .all(|r| r.method.as_str() == "GET"));
+    eprintln!("YOUTUBE_DB_PROOF: manual request replaces completed empty/incomplete search, paginated continuation discovers new uploads for ID-less and missing mixed parts; unfinished search never final absence; processing retry confirms fresh provider state without upload mutation");
+}
+
+#[tokio::test]
+async fn changed_parts_provider_error_retains_original_evidence_snapshot() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    use tb_social_media::uploaders::youtube::YouTubeUploader;
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+    let pool = crate::store::tests::pool("t_youtube_changed_error")
+        .await
+        .unwrap();
+    let manager = synthetic_manager(&pool, 107).await;
+    crate::store::merke_vod(&pool, "123", "synthetic", "42", "Synthetic", 120)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE twitch_vod_archive_vods SET status='archived'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO twitch_vod_archive_parts(vod_id,part_index,file_path,status,youtube_video_id) SELECT id,0,'/synthetic/part','done','original' FROM twitch_vod_archive_vods").execute(&pool).await.unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/channels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":[{"id":"channel","contentDetails":{"relatedPlaylists":{"uploads":"uploads"}}}]}))).expect(2).mount(&server).await;
+    let failing = Arc::new(AtomicBool::new(false));
+    let phase = failing.clone();
+    Mock::given(method("GET"))
+        .and(path("/videos"))
+        .respond_with(move |_: &wiremock::Request| {
+            if phase.load(Ordering::SeqCst) {
+                ResponseTemplate::new(403)
+            } else {
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"items":[provider_video("original","",120,"processed")]}))
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let config = VodArchiveOptions {
+        youtube_requests_per_run: 3,
+        ..Default::default()
+    };
+    let factory = |c: &tb_social_media::credentials::SocialMediaCredentials| {
+        YouTubeUploader::new(&c.access_token).with_bases(server.uri(), server.uri())
+    };
+    run_with(&pool, &manager, &config, &factory).await.unwrap();
+    let evidence:Value=sqlx::query_scalar("SELECT jsonb_build_array(observations,last_success_at,upload_snapshot) FROM twitch_vod_youtube_checks").fetch_one(&pool).await.unwrap();
+    sqlx::query("UPDATE twitch_vod_archive_parts SET youtube_video_id='new',updated_at=NOW()")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let before = local_snapshot(&pool).await;
+    failing.store(true, Ordering::SeqCst);
+    run_with(&pool, &manager, &config, &factory).await.unwrap();
+    let retained:Value=sqlx::query_scalar("SELECT jsonb_build_array(observations,last_success_at,upload_snapshot) FROM twitch_vod_youtube_checks").fetch_one(&pool).await.unwrap();
+    assert_eq!(evidence, retained);
+    let current:bool=sqlx::query_scalar("SELECT c.upload_snapshot=(SELECT jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index) FROM twitch_vod_archive_parts p WHERE p.vod_id=c.vod_id) FROM twitch_vod_youtube_checks c").fetch_one(&pool).await.unwrap();
+    assert!(!current);
+    assert_eq!(before, local_snapshot(&pool).await);
+    assert!(sqlx::query_scalar::<_,bool>("SELECT state='error' AND last_error='connection' AND NOT complete FROM twitch_vod_youtube_checks").fetch_one(&pool).await.unwrap());
+    eprintln!("YOUTUBE_DB_PROOF: changed parts plus real provider HTTP error retain original observation snapshot and success time; stale evidence does not match current API/cleanup guard");
 }
 
 fn observation(id: &str, index: Option<i32>, total: Option<i32>, seconds: i64) -> Beobachtung {
@@ -513,6 +835,7 @@ fn synthetic_vod() -> PruefVod {
         duration_sec: 120,
         snapshot: json!([]),
         parts: json!([]),
+        check: None,
     }
 }
 

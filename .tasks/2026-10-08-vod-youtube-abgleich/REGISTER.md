@@ -11,12 +11,19 @@ Stufe mittel, ein zusammenhängendes Paket. Pyramide worker_mittel liefert sol.
 
 | Paket | Thread/Session | Ersteller-ID | Startnachweis | Harness | Modell | Status | Worktree | Branch | HEAD |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| youtube, Versuch 1 | Thread 022314b5-fac1-41c2-abe7-e6c7673b0762; Session c5d0a48e-64b8-4232-9b24-fa23316782b7 | d264f838-4a47-4b9e-9bf2-12efa37223f7 | erster Werkzeugaufruf und bestätigtes CWD/HEAD am 2026-10-07T22:27:50Z; eigener Thread running | claudeAgent | gpt-6.1-sol | aktiv, Integration und Release | /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008 | feat/vod-youtube-abgleich-20261008 | 89bfd5fa7da8b06b5fe8967051c577b940236260 |
+| youtube, Versuch 2 | Thread 022314b5-fac1-41c2-abe7-e6c7673b0762; Session c5d0a48e-64b8-4232-9b24-fa23316782b7 | d264f838-4a47-4b9e-9bf2-12efa37223f7 | eigener Wiederanlauf und Prozess-/HEAD-Prüfung 2026-10-08T02:02:13Z | claudeAgent | gpt-6.1-sol | aktiv, erhaltene Runde-5-Fixes abschließen | /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008 | feat/vod-youtube-abgleich-20261008 | 6dd214a27ece1aa6ba783e9aa0c742efcdc6b3cb |
+| youtube, Versuch 1 | Thread 022314b5-fac1-41c2-abe7-e6c7673b0762; Session c5d0a48e-64b8-4232-9b24-fa23316782b7 | d264f838-4a47-4b9e-9bf2-12efa37223f7 | erster Werkzeugaufruf und bestätigtes CWD/HEAD am 2026-10-07T22:27:50Z; eigener Thread running | claudeAgent | gpt-6.1-sol | durch Serverneustart unterbrochen; in Versuch 2 fortgesetzt | /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008 | feat/vod-youtube-abgleich-20261008 | 6dd214a27ece1aa6ba783e9aa0c742efcdc6b3cb |
 
 Ausschließliche Schreibhoheit ab Threadstart einmalig an den Paket-Worker übergeben, wie in AUFTRAG.md festgelegt. Der Hauptorchestrator schreibt danach nichts in diesen Worktree und prüft read-only. Hauptorchestrator überwacht aktive Arbeit nach etwa 20 Minuten, spätestens 30 Minuten.
 
-Statuskanal: `.tasks/2026-10-08-vod-youtube-abgleich/status/youtube/1/`.
-Gebaut: ja, SHA 89bfd5fa, 59 Archivtests und acht Frontendtests bestanden, Frontend neu gebaut. Reviewt: ja, Gate-Runde 4 ALLOW mit gpt-6.1-sol. Gemergt: nein. Live: nein.
+Statuskanal Versuch 2: `.tasks/2026-10-08-vod-youtube-abgleich/status/youtube/2/`. Versuch 1 bleibt unverändert erhalten.
+
+Wiederanlauf am 2026-10-08T02:02:13Z nach ausdrücklichem Fortsetzungsauftrag. HEAD und erhaltene Runde-5-Änderungen tatsächlich bestätigt. Prozessprüfung: ausschließlich eigene Hauptsession und Zustandsprobe im Worktree, kein weiterer Fixer, Compiler oder Gateprozess. Alleiniger Schreiber und Statusproduzent bleibt Session `c5d0a48e-64b8-4232-9b24-fa23316782b7` im bestehenden Thread. Versuch 2 aktiv; gebaut/reviewt/gemergt/live jeweils nein für den aktuellen geänderten Rust-Stand.
+Gebaut: ja, 59 Archivtests und acht Frontendtests bestanden, Frontend neu gebaut. Reviewt: nein, Gate-Runde 5 auf 6dd214a2 BLOCK. Gemergt: nein. Live: nein.
+
+Nativer Fixer Versuch 2: `ad1360b9c5a31929f`, frischer Kontext ausschließlich für tatsächlich offene Runde-5-Funde nach 60 bestandenen und drei fehlgeschlagenen Archivtests. Erhält erhaltene Fixes, kein neuer T3-Thread. Schreibbereich Rust-Abgleich/API/Tests, gegebenenfalls noch nicht angewandte Migration. Eltern besitzt Register, Belege und Provider-Vorprobe. Kein paralleler Schreiber derselben Dateien. Status: abgeschlossen, 63 Archivtests und striktes Archiv-Clippy Exit 0, keine Commits oder Provideraufrufe durch diesen Fixer.
+
+Nativer Fixer der Runde 5: `aab8bdbb6241427b2`, gestartet von Session `c5d0a48e-64b8-4232-9b24-fa23316782b7`, frischer Kontext. Enger Rust-/API-/Persistenzbereich, keine weitere UI-Korrektur. Elternsession besitzt Nachweise und Register. Status: beim Serverneustart unterbrochen, kein Abschlussrecord. Erhaltene Änderungen werden im ausdrücklich beauftragten Versuch 2 abgeschlossen; nicht parallel wiederaufnehmen. Die UI-Sichtprüfung auf 89bfd5fa bleibt für unveränderte Frontendquellen gültig.
 
 Nativer Fixer der Runde 3: `a5ec69ec1742e7a0b`, gestartet von Session `c5d0a48e-64b8-4232-9b24-fa23316782b7`, frischer Kontext, enger Rust-/UI-Schreibbereich. Elternsession besitzt Nachweise und Register. Status: abgeschlossen mit 89bfd5fa und ALLOW, nicht wiederaufnehmen. Die einzelne erlaubte gebündelte Moli-Bestätigungsrunde ist nach diesem Commit erfolgreich abgeschlossen.
 

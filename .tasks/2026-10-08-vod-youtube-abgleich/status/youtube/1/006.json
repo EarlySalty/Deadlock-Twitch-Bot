@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 1,
+  "sequenz": 6,
+  "zeit": "2026-10-08T01:02:53Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "aktiv",
+  "gebaut": "ja",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "6dd214a27ece1aa6ba783e9aa0c742efcdc6b3cb",
+  "nachweise": ["PRUEFUNG.md", "REVIEW.md", "pruefung/bestaetigung/moli-layout.json", "pruefung/diagnosen.md"],
+  "blocker": [],
+  "naechster_schritt": "Frischer nativer Fixer korrigiert begrenzte Fortsetzung, veraltete Suchzeiten und ausdrücklich ausgelöste bestehende Wiederherstellung. Kein Main-Push oder Deploy vor erneuter Gatefreigabe."
+}

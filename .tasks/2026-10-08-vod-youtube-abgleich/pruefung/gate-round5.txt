@@ -1,0 +1,9 @@
+BLOCK: Reconciliation can stall indefinitely, report stale absence as fresh, and strand rejected uploads.
+
+1. rust/crates/tb-vod-archive/src/youtube_check.rs:620 | BLOCKING: Oversized VODs never advance through bounded reads. With the valid three-request budget, one VOD requiring 101 IDs repeatedly fetches the same first 100 and skips saving. Both twins are affected: local part IDs and recovered inventory candidates. | There is no per-VOD continuation; these checks remain pending forever, including ambiguous historical matches that should become partial.
+
+2. rust/crates/tb-vod-archive/src/youtube_check.rs:553 | BLOCKING: Completed inventory suppresses playlist reads during manual checks, but save renews last_success_at. Affects ID-less VODs with no candidates, incomplete historical matches, and missing-ID parts of mixed VODs. | Newly available matches remain undiscovered while Zuletzt geprüft advances. Refresh the relevant search or preserve its actual evidence time.
+
+3. rust/crates/tb-dashboard-api/src/handlers/social_media_vod_archive.rs:95 | BLOCKING: Current rejected and unavailable results retain terminal upload status, so can_retry stays false; the action guard at line 299 also rejects both retry and drive for uploaded and archived. The previous automatic recovery was removed. | Failed destinations now have neither retry nor Drive recovery through the dashboard. Preserve explicit recovery without making reconciliation itself upload.
+
+4. rust/crates/tb-vod-archive/src/youtube_check.rs:334 | NIT: Error saves preserve observations and success time based only on auth identity, while replacing upload_snapshot with the new parts snapshot. | After parts change and a read fails, the API exposes old observations under the new snapshot. Preserve the evidence's original snapshot too.

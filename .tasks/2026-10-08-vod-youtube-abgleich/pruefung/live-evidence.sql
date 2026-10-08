@@ -88,13 +88,4 @@ LEFT JOIN LATERAL (
 ) a ON TRUE
 ORDER BY s.auth_id;
 
-SELECT jsonb_build_object(
-    'proof', 'migration',
-    'version', version,
-    'success', success,
-    'checksum_sha384', encode(checksum,'hex')
-)
-FROM _sqlx_migrations
-WHERE version=20261008003000;
-
 COMMIT;

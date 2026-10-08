@@ -42,4 +42,21 @@ Gleicher Gate-Befehl und Kritiker gpt-6.1-sol, Exit 0:
 
 59 Archivtests und acht Frontendtests bestanden. Die erlaubte gebündelte Bestätigungsrunde nach der Korrektur ist abgeschlossen: sechs Desktop-/Mobilkombinationen, keine Überbreite, geladene Schriften, keine pageerrors. Sechs Detailbilder tatsächlich betrachtet. Belege in pruefung/bestaetigung. Keine weitere UI-Polierschleife.
 
+## Runde 5 auf 6dd214a2
+
+Derselbe Kritiker, Exit 1, BLOCK: `Reconciliation can stall indefinitely, report stale absence as fresh, and strand rejected uploads.`
+
+1. BLOCKING, youtube_check.rs:620: Eine Zuordnung mit 101 IDs macht bei gültigem Mindestbudget drei keinen Fortschritt, weil dieselben ersten 100 IDs erneut gelesen werden. Gilt für lokale IDs und wiedergefundene Inventarkandidaten. Dauerhafte Fortsetzung erforderlich, auch für schließlich uneindeutige Zuordnungen.
+2. BLOCKING, youtube_check.rs:553: Ein altes abgeschlossenes Inventar verhindert bei manuellen Prüfungen neue Playlist-Leseabfragen. Leere oder unvollständige historische Zuordnungen dürfen keine neue Erfolgszeit erhalten, wenn ihre Suche nicht erneuert wurde. Suche erneuern oder tatsächliche Suchzeit beibehalten.
+3. BLOCKING, social_media_vod_archive.rs:95 und :299: Aktuelle abgelehnte oder nicht abrufbare Ziele bleiben wegen terminaler historischer Zustände ohne ausdrücklich ausgelöste Wiederholung oder bestehenden Drive-Weg. Manuelle bestehende Wiederherstellung erhalten, ohne dass Abgleich oder Prüfen einen Upload auslösen. Keine automatische Wiederholung, keine Drive-Erweiterung.
+4. NIT, youtube_check.rs:334: Bei Fehlern und verändertem Teil-Snapshot werden alte Beobachtungen mit neuem Snapshot verbunden. Nachweis und ursprünglichen Snapshot zusammenhalten oder den nicht mehr passenden Nachweis nicht als aktuell ausgeben.
+
+Neuer frischer nativer Fixkontext. Kein Main-Push und kein Deploy vor erneuter Freigabe. Die UI-Sichtgrenze ist ausgeschöpft; bestehende UI nicht umgestalten, weitere Korrekturen auf Rust, Persistenz und vorhandene Aktionen begrenzen.
+
+## Wiederanlauf und Abschluss der erhaltenen Runde-5-Fixes
+
+Versuch 2 übernimmt die erhaltene dauerhafte Fortsetzung mit Auth-, Kanal-, VOD-, Teil- und Kandidatenbindung. Einzelbeobachtungszeiten bleiben erhalten; unvollständige oder leere Suchnachweise werden nicht künstlich frisch datiert. Fehler halten ursprünglichen Nachweis und Snapshot zusammen. Bestehende geschützte Aktionen erlauben ausdrücklich angeforderte Wiederherstellung mit verfügbarer lokaler Quelle; nicht abrufbare akzeptierte Videos werden nicht automatisch erneut hochgeladen. Keine UI-Änderung.
+
+Frischer nativer Kontext ad1360b9c5a31929f erledigte die tatsächlich offenen Testfälle, keine neue Hierarchie. Produktivfix unverändert erhalten, Auth-ID-Sperrkollision zwischen synthetischen Großfallproben und veraltete Suchzeit-Erwartungen korrigiert. 63 Archivtests und neun API-Tests bestanden, striktes Archiv-Clippy Exit 0. Reguläre nächste Gateentscheidung steht noch aus.
+
 Der Sichtnachweis für NIT 4 aus Runde 1 wurde anschließend in einer gebündelten Runde erbracht: bestätigt, teilweise und Verbindungsfehler jeweils auf Desktop und Mobil. Sechs betrachtete Detailbilder und `pruefung/moli-layout.json` sind gesichert. Keine weitere UI-Korrekturrunde.
