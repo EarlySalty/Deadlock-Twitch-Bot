@@ -10,7 +10,7 @@
 
 Diese ersten Läufe wurden nach der Gate-Fixrunde für die betroffenen Rust-Pfade wiederholt. Die beiden Gate-Funde zeigten konkrete nicht abgedeckte Fortschrittsfälle trotz zuvor grüner Tests.
 
-## Aktueller Stand 76332e3d
+## Historischer Stand 76332e3d
 
 - Archiv: derselbe Archivbefehl mit `--include-ignored --nocapture`, Exit 0, 57 passed, 0 failed, 0 ignored, 0 filtered. `archive-gatefix2.log`.
 - API: derselbe Filter `vod_archive_management`, Exit 0, 7 passed, 0 failed, 0 ignored, 1336 filtered im Bibliothekslauf. `api-gatefix.log`.
@@ -18,9 +18,7 @@ Diese ersten Läufe wurden nach der Gate-Fixrunde für die betroffenen Rust-Pfad
 - Gesamtumfang dieser unterschiedlichen Proben: 72 passed, 0 ignored. Keine vollständige Workspace- oder Dashboard-Gesamtsuite behauptet.
 - Dashboard erneut gebaut nach dem Fixercommit: `frontend-build2.log`, Exit 0. Admin und Website gebaut: `admin-build.log` und `website-build.log`, beide Exit 0.
 
-TESTNACHWEIS[TW-1]: 82 passed, 0 ignored | Baseline: 0 rot
-
-Aktueller zusammengezählter Umfang: 59 Archivtests und acht Frontendtests auf 89bfd5fa, sieben API- und zwei direkte Clienttests auf den seit deren Lauf unveränderten relevanten Quellen. Kein neuer API-/Client-Abschluss im zweiten Fixerauftrag behauptet: zusätzliche Nachläufe wurden während der Neukompilierung gestoppt und zählen nicht.
+Historischer zusammengezählter Umfang nach Runde 4: 59 Archivtests und acht Frontendtests auf 89bfd5fa, sieben API- und zwei direkte Clienttests auf den seit deren Lauf unveränderten relevanten Quellen, insgesamt 76. Kein neuer API-/Client-Abschluss im zweiten Fixerauftrag behauptet: zusätzliche Nachläufe wurden während der Neukompilierung gestoppt und zählen nicht.
 
 Die Testbaseline wurde jetzt tatsächlich erneut auf 0ecae137 gemessen: 50 Archivtests, 0 failed, 0 ignored, Exit 0 in eigener separater token_db_youtube_baseline_c5d0. Der erste Versuch ohne die vom alten Resume-Migrationstest zusätzlich verlangte token-db-tests.conf ergab 49 passed und einen Konfigurationsfehler. Nach Bereitstellung der eigenen temporären Testkonfiguration derselbe Befehl erfolgreich, keine Skipmarker. Dieser erste Einrichtungsfehler ist keine rote Codebaseline. Die fokussierte API-Baseline wurde vor einem Testabschluss während der langen Neukompilierung gestoppt; sie wird nicht mit null Fehlern gezählt. Baseline 0 bezieht sich deshalb ausdrücklich auf den gemessenen Archivumfang, nicht auf eine vollständige Workspace-Suite.
 
@@ -92,6 +90,16 @@ Die reguläre lesende Produktionsrolle twitchlegacy darf _sqlx_migrations nicht 
 
 Aktueller Umfang Versuch 2: 63 Archivtests, neun API-Tests, acht unveränderte Frontendtests und zwei unveränderte Clienttests, insgesamt 82. Archiv und API im Wiederanlauf vollständig abgeschlossen; bestehende Archivbaseline weiterhin tatsächlich gemessene 50 mit 0 Fehlern auf 0ecae137. Die drei roten Zwischenfälle sind keine alte Codebaseline: ein Auth-ID-Sperrkonflikt zwischen beiden parallelen synthetischen 101-ID-Proben sowie zwei Erwartungen, die fälschlich eine neue Erfolgszeit aus alten oder fehlenden Suchbelegen verlangten. Unterschiede eng korrigiert, echte Beobachtungen weiter geprüft. Abschließender Archivlauf Exit 0, 63 passed, 0 failed, 0 ignored; striktes Archiv-Clippy Exit 0. Logs fixer-restart-archive.log und fixer-restart-archive-clippy.log. Gezielter rustfmt-Check und Diff-Check Exit 0. Eigene temporäre Testkonfiguration anschließend entfernt.
 
+## Aktueller Wiederanlauf, Versuch 3
+
+Der Ressourcenblocker im ersten frischen Runde-6-Kontext war tatsächlich ohne Compilerlauf. Dessen neun Frontendtests bestanden, 0 failed, 0 skipped, fixer-r6-ui.log; Frontendbuild fixer-r6-ui-build.log erfolgreich. Die geänderten Rust-Dateien waren damit noch nicht verifiziert. Die 82 grünen Proben aus Versuch 2 bleiben ein historischer Nachweis und werden nicht unverändert dem neuesten Rust-Stand zugerechnet.
+
+Der einzelne eingereihte Elternlauf bgiqvfbes erhielt anschließend regulär Slot 3 und kompilierte tatsächlich. Befehl: `/home/nathanael/.local/bin/cargo-slot test --jobs 3 --manifest-path /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.toml -p tb-vod-archive -- --include-ignored --nocapture`. parent-r6-archive.log, Exit 101: 63 passed, 1 failed, 0 ignored, 0 filtered. Nicht als grüner Lauf gezählt. Fehlfall: completed_inventory_rechecks_refresh_deletions_processing_and_manual_requests, Assertion errors in youtube_check_tests.rs:391. Neue Backoffprobe und beide 101-ID-Proben bestanden tatsächlich. Frischer Kontext a65dd8a23a59c1c66 übernimmt ausschließlich den offenen Fehlfall und fehlende fokussierte Rust-Nachweise, bewahrt die bestehenden Fixes. Noch kein neuer Gate und keine weitere inhaltliche BLOCK-Runde.
+
+TESTNACHWEIS[TW-1]: 9 passed, 0 ignored | Baseline: 0 rot
+
+Diese Pflichtzeile beschreibt ausschließlich den aktuellen grünen Frontendlauf, keine grüne Rust-Suite. Die tatsächlich gemessene Archivbaseline bleibt historisch 50 passed, 0 failed, 0 ignored auf 0ecae137; kein zusätzlicher Baselinelauf gestartet.
+
 ## Noch offen
 
-Neue betroffene Nachweise und Gatefreigabe, Main-Integration, sauberer Releasebuild und produktive API-Abfragen. Bisher wurde kein neuer Nachweis in der Produktionsdatenbank geschrieben und keine Produktionsmigration angewendet. Die fünf historischen Fälle sind noch nicht entschieden. Testdatenbank, Moli und Fixture-Server sind eigene temporäre Ressourcen und werden nach Sicherung der Belege beendet.
+Aktuellen Fehlfall abschließen, fehlende fokussierte Rust-Nachweise und Gatefreigabe, Main-Integration, sauberer Releasebuild und produktive API-Abfragen. Bisher wurde kein neuer Nachweis in der Produktionsdatenbank geschrieben und keine Produktionsmigration angewendet. Die fünf historischen Fälle sind noch nicht entschieden. Eigene Testdatenbank und temporäre Testkonfiguration bleiben für den fehlenden Nachweis; Moli und Fixture-Server sind bereits beendet.

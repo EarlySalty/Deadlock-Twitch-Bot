@@ -40,3 +40,17 @@ Eigene synthetische PostgreSQL /tmp/tb-youtube-pg-c5d0, Port 55683 läuft wieder
 ## Sitzungszugang
 
 Betroffen ist ausschließlich der eigene threadgebundene T3-MCP-Zugang. Letzte bereinigte Funktionsprüfung erfolgreich. Implementierung hat ein 24-Stunden-Fenster seit letzter Aktivität; aktive Aufrufe erneuern dieses Fenster. Unterstützter Widerruf: thread.session.stop für Thread 022314b5-fac1-41c2-abe7-e6c7673b0762, vorhandener Verwaltungsweg t3-thread.py dispatch. Dieser stoppt die eigene Sitzung und ruft clearMcpSession/revokeThread auf. Nicht revokeAll benutzen. Keine Geheimnisse erneut lesen, ausgeben, zitieren oder kopieren. Orchestrator übernimmt denselben Thread anschließend mit neuem Sitzungszugang.
+
+## Aktuelle Fortsetzung Versuch 3, 2026-10-08T03:39:14Z
+
+Der eigene gezielte Stopp wurde am 03:07:45Z mit HTTP 200 bestätigt. Versuch 3 nutzt den neuen Harness-Zugang, der alte wurde nicht gelesen oder wiederverwendet. Tatsächlicher HEAD jetzt 40a88e2efee22b1c20ebe11629a504168844c66d, vorherige Sicherheits-/Wiederanlaufakten committed.
+
+Frischer Fixer a416a113c573896ad ist abgeschlossen, nicht erneut parallel starten. Alle drei Runde-6-Fixes und zwei minimale Funktions-NITs liegen in neun uncommittierten Quelldateien. Neun Frontendtests und Frontendbuild erfolgreich; noch keine Rust-Verifikation und kein neuer Gate. Vorgeschriebene Buildslots waren während seiner Versuche belegt. Wartende eigene Fixeraufrufe beendet, temporäre Testkonfiguration entfernt. Eltern hat Quellen wieder übernommen und genau einen Archivtest über unveränderten cargo-slot eingereiht: Werkzeug bgiqvfbes, Log parent-r6-archive.log, höchstens 30 Minuten. rust/token-db-tests.conf dafür wiederhergestellt, ausschließlich synthetischer PostgreSQL auf Port 55683. Bei erneutem Wiederanlauf zuerst tatsächlichen Zustand dieses eigenen Aufrufs prüfen und keinen Doppelwriter starten.
+
+Kein Main-Push, keine Migration, kein Release und kein Deploy. Ressourcenblocker zählt nicht als zusätzlicher inhaltlicher Gate-BLOCK. Nach tatsächlichem Archivabschluss fehlen gegebenenfalls API-/Clippy-Nachweise und der reguläre gpt-6.1-sol-Gate. Status Versuch 3/002 und REGISTER.md enthalten denselben Stand.
+
+Eigener einmaliger SQL-Aufrufhelfer /tmp/tb-youtube-live-evidence-c5d0.py wurde nur auf eigenem synthetischem PostgreSQL mit read_only=on geprüft. Verbindungsdaten bleiben im vorhandenen Infisical-/libpq-Pfad und werden nicht ausgegeben. Keine neue YouTube-Vorprobe und noch keine Produktionsabfrage. /tmp/tb-youtube-pg-c5d0/live-evidence.sql und Helfer beim eigenen Cleanup entfernen.
+
+### Nachtrag 2026-10-08T03:54:42Z
+
+Elternlauf bgiqvfbes ist tatsächlich abgeschlossen: regulärer Slot 3, Rust kompiliert, 63 passed, ein failed, 0 ignored, Exit 101. parent-r6-archive.log. Fehlfall completed_inventory_rechecks_refresh_deletions_processing_and_manual_requests, Assertion errors, youtube_check_tests.rs:391. Der Ressourcenblocker verhinderte diesen späteren Lauf nicht mehr. Quellen nicht als Rust-verifiziert behandeln. Neuer frischer nativer Fixkontext a65dd8a23a59c1c66 aktiv für genau diesen Fehlfall und fehlende fokussierte Rust-Nachweise. Kein Doppelwriter, keine Wiederaufnahme des abgeschlossenen ersten Runde-6-Fixers. Der neue Kontext besitzt nur dieselben neun eigenen Quelldateien, Eltern weiter Taskberichte und Status. Testkonfiguration für synthetisches PostgreSQL besteht. Status Versuch 3/003. Kein neuer Gate, Main-Push oder Deploy. Bei Wiederanlauf zuerst diesen neuen eigenen Fixkontext prüfen, nicht parallel neu starten.
