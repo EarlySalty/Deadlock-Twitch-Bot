@@ -309,6 +309,7 @@ struct CacheEntry<T: Clone> {
 #[derive(Default)]
 struct TimedCache<T: Clone> {
     entries: std::collections::HashMap<String, CacheEntry<T>>,
+    generation: u64,
 }
 
 impl<T: Clone> TimedCache<T> {
@@ -1515,10 +1516,12 @@ impl DashboardAuthState {
         self.delete_session(session_id).await;
         {
             let mut cache = self.partner_cache.lock().await;
+            cache.generation = cache.generation.wrapping_add(1);
             cache.entries.remove(session_id);
         }
         {
             let mut cache = self.admin_cache.lock().await;
+            cache.generation = cache.generation.wrapping_add(1);
             cache.entries.remove(session_id);
         }
         {
@@ -1570,45 +1573,58 @@ impl DashboardAuthState {
     pub async fn load_admin_session(&self, session_id: &str) -> Result<Option<bool>, sqlx::Error> {
         let now = unix_now();
 
-        {
+        let cache_generation = {
             let cache = self.admin_cache.lock().await;
             if let Some(&valid) = cache.get(session_id, now) {
                 return Ok(Some(valid));
             }
-        }
+            cache.generation
+        };
 
-        let Some(mut payload) = self
+        let Some(payload) = self
             .fetch_session_payload(session_id, "discord_admin", now)
             .await?
         else {
             return Ok(None);
         };
 
-        // Payload-expires_at zusätzlich zur DB-Spalte prüfen (Python: 981-987)
+        self.admin_session_from_payload(session_id, payload, now, cache_generation)
+            .await
+    }
+
+    async fn admin_session_from_payload(
+        &self,
+        session_id: &str,
+        mut payload: serde_json::Value,
+        now: u64,
+        cache_generation: u64,
+    ) -> Result<Option<bool>, sqlx::Error> {
         if payload_expired(&payload, now) {
             self.delete_session(session_id).await;
             return Ok(None);
         }
 
-        // Sliding-Refresh: Python setzt zusätzlich last_seen_at + auth_type
         if let Some(obj) = payload.as_object_mut() {
             obj.insert("last_seen_at".into(), serde_json::json!(now as f64));
             obj.entry("auth_type")
                 .or_insert_with(|| serde_json::json!("discord_admin"));
         }
-        self.maybe_refresh_session(
-            session_id,
-            "discord_admin",
-            &mut payload,
-            ADMIN_SESSION_TTL_SECS,
-            now,
-        )
-        .await;
+        let cacheable = self
+            .maybe_refresh_session(
+                session_id,
+                "discord_admin",
+                &mut payload,
+                ADMIN_SESSION_TTL_SECS,
+                now,
+            )
+            .await;
 
-        {
+        if cacheable {
             let mut cache = self.admin_cache.lock().await;
             cache.prune(now);
-            cache.insert(session_id.to_string(), true, CACHE_TTL_SECS, now);
+            if cache.generation == cache_generation {
+                cache.insert(session_id.to_string(), true, CACHE_TTL_SECS, now);
+            }
         }
 
         Ok(Some(true))
@@ -1770,23 +1786,32 @@ impl DashboardAuthState {
     ) -> Result<Option<PartnerSession>, sqlx::Error> {
         let now = unix_now();
 
-        {
+        let cache_generation = {
             let cache = self.partner_cache.lock().await;
             if let Some(partner) = cache.get(session_id, now) {
                 return Ok(Some(partner.clone()));
             }
-        }
+            cache.generation
+        };
 
-        let Some(mut payload) = self
+        let Some(payload) = self
             .fetch_session_payload(session_id, "twitch", now)
             .await?
         else {
             return Ok(None);
         };
 
-        // Payload-expires_at zusätzlich zur DB-Spalte prüfen (Python: services.py:213-220)
-        // Vor der ID-Härtung konnte ein Login-Nachschlag eine fremde ID speichern.
-        // Alte Payloads werden nie beim Lesen zu verifizierten Sessions aufgewertet.
+        self.partner_session_from_payload(session_id, payload, now, cache_generation)
+            .await
+    }
+
+    async fn partner_session_from_payload(
+        &self,
+        session_id: &str,
+        mut payload: serde_json::Value,
+        now: u64,
+        cache_generation: u64,
+    ) -> Result<Option<PartnerSession>, sqlx::Error> {
         if payload.get("identity_version").and_then(|v| v.as_u64()) != Some(1) {
             self.delete_session(session_id).await;
             return Ok(None);
@@ -1796,15 +1821,15 @@ impl DashboardAuthState {
             return Ok(None);
         }
 
-        // Sliding-Refresh auf now + 6h (Python: services.py:222-231)
-        self.maybe_refresh_session(
-            session_id,
-            "twitch",
-            &mut payload,
-            PARTNER_SESSION_TTL_SECS,
-            now,
-        )
-        .await;
+        let cacheable = self
+            .maybe_refresh_session(
+                session_id,
+                "twitch",
+                &mut payload,
+                PARTNER_SESSION_TTL_SECS,
+                now,
+            )
+            .await;
 
         let login = payload
             .get("twitch_login")
@@ -1851,10 +1876,12 @@ impl DashboardAuthState {
             display_name,
         };
 
-        {
+        if cacheable {
             let mut cache = self.partner_cache.lock().await;
             cache.prune(now);
-            cache.insert(session_id.to_string(), partner.clone(), CACHE_TTL_SECS, now);
+            if cache.generation == cache_generation {
+                cache.insert(session_id.to_string(), partner.clone(), CACHE_TTL_SECS, now);
+            }
         }
 
         Ok(Some(partner))
@@ -2053,11 +2080,6 @@ impl DashboardAuthState {
         }
     }
 
-    /// Sliding-Refresh: setzt `payload.expires_at = now + ttl` und persistiert
-    /// die neu verschlüsselte Session, wenn die Verlängerung >1800s Drift hat.
-    ///
-    /// Python-Pendant: services.py:222-231 (Partner) / auth_mixin.py:989-1003
-    /// (Admin). Persist-Fehler sind nicht fatal — nur Debug-Log wie in Python.
     async fn maybe_refresh_session(
         &self,
         session_id: &str,
@@ -2065,9 +2087,9 @@ impl DashboardAuthState {
         payload: &mut serde_json::Value,
         ttl_secs: u64,
         now: u64,
-    ) {
+    ) -> bool {
         let Some(obj) = payload.as_object_mut() else {
-            return;
+            return false;
         };
         let old_expires = obj
             .get("expires_at")
@@ -2077,44 +2099,37 @@ impl DashboardAuthState {
         obj.insert("expires_at".into(), serde_json::json!(new_expires));
 
         if new_expires - old_expires <= REFRESH_PERSIST_DRIFT_SECS {
-            return;
+            return true;
         }
-
-        let created_at = obj
-            .get("created_at")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(now as f64);
 
         let token = match fernet::encrypt(&self.fernet_key, payload.to_string().as_bytes()) {
             Ok(t) => t,
             Err(e) => {
                 debug!(%e, "Session-Refresh-Encrypt fehlgeschlagen");
-                return;
+                return false;
             }
         };
 
-        // Gleiche Semantik wie Python upsert_session (sessions_db.py:123-143):
-        // bei Konflikt nur payload_enc + expires_at aktualisieren.
         let session_key = session_lookup_key(session_id);
-        if let Err(e) = sqlx::query!(
+        match sqlx::query(
             r#"
-            INSERT INTO dashboard_sessions
-                (session_id, session_type, payload_enc, created_at, expires_at)
-            VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (session_id) DO UPDATE SET
-                payload_enc = EXCLUDED.payload_enc,
-                expires_at  = EXCLUDED.expires_at
+            UPDATE dashboard_sessions
+            SET payload_enc = $3, expires_at = $4
+            WHERE session_id = $1 AND session_type = $2
             "#,
-            session_key,
-            session_type,
-            token.as_bytes(),
-            created_at,
-            new_expires
         )
+        .bind(session_key)
+        .bind(session_type)
+        .bind(token.as_bytes())
+        .bind(new_expires)
         .execute(&self.pool)
         .await
         {
-            debug!(%e, "Session-Refresh-Persist fehlgeschlagen");
+            Ok(result) => result.rows_affected() > 0,
+            Err(e) => {
+                debug!(%e, "Session-Refresh-Persist fehlgeschlagen");
+                false
+            }
         }
     }
 }
@@ -3501,6 +3516,217 @@ print(f.encrypt(payload.encode()).decode(), end='')
         .execute(&pool)
         .await
         .ok();
+    }
+
+    #[tokio::test]
+    async fn logout_zwischen_lesen_und_refresh_legt_keine_session_oder_cache_an() {
+        if std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1") {
+            return;
+        }
+        let pool = maybe_pool()
+            .await
+            .expect("Testdatenbank muss erreichbar sein");
+        ensure_sessions_table(&pool).await;
+        ensure_partners_table(&pool).await;
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status)
+             VALUES ('refresh_user', '888004', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        let now = 3_000_000_000;
+
+        for (kind, ttl) in [
+            ("twitch", PARTNER_SESSION_TTL_SECS),
+            ("discord_admin", ADMIN_SESSION_TTL_SECS),
+        ] {
+            for drift in [0.0, REFRESH_PERSIST_DRIFT_SECS + 1.0] {
+                let sid = format!("read-logout-refresh-{kind}-{drift}");
+                let expires_at = now as f64 + ttl as f64 - drift;
+                let payload = serde_json::json!({
+                    "twitch_login": "refresh_user", "twitch_user_id": "888004",
+                    "identity_version": 1, "created_at": now - 3600,
+                    "expires_at": expires_at,
+                });
+                state
+                    .persist_new_session(&sid, kind, &payload, (now - 3600) as f64, expires_at)
+                    .await
+                    .unwrap();
+                let generation = if kind == "twitch" {
+                    state.partner_cache.lock().await.generation
+                } else {
+                    state.admin_cache.lock().await.generation
+                };
+                let read = state
+                    .fetch_session_payload(&sid, kind, now)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                state.invalidate_session(&sid).await;
+                if kind == "twitch" {
+                    assert!(state
+                        .partner_session_from_payload(&sid, read, now, generation)
+                        .await
+                        .unwrap()
+                        .is_some());
+                    assert!(!state.partner_cache.lock().await.entries.contains_key(&sid));
+                    assert!(state.load_partner_session(&sid).await.unwrap().is_none());
+                } else {
+                    assert_eq!(
+                        state
+                            .admin_session_from_payload(&sid, read, now, generation)
+                            .await
+                            .unwrap(),
+                        Some(true),
+                    );
+                    assert!(!state.admin_cache.lock().await.entries.contains_key(&sid));
+                    assert!(state.load_admin_session(&sid).await.unwrap().is_none());
+                }
+                let count: i64 = sqlx::query_scalar(
+                    "SELECT count(*) FROM dashboard_sessions WHERE session_id = $1",
+                )
+                .bind(session_lookup_key(&sid))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(count, 0);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_nach_logout_legt_keine_partner_access_session_an() {
+        if std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1") {
+            return;
+        }
+        let pool = maybe_pool()
+            .await
+            .expect("Testdatenbank muss erreichbar sein");
+        ensure_sessions_table(&pool).await;
+        let state = DashboardAuthState::new(pool, test_fernet_key());
+        let now = 3_000_000_000;
+        let expires_at = now as f64 + PARTNER_SESSION_TTL_SECS as f64 - 3600.0;
+        state
+            .persist_new_session(
+                "access-refresh",
+                PARTNER_ACCESS_SESSION_TYPE,
+                &serde_json::json!({"expires_at": expires_at}),
+                now as f64,
+                expires_at,
+            )
+            .await
+            .unwrap();
+        let mut read = state
+            .fetch_session_payload("access-refresh", PARTNER_ACCESS_SESSION_TYPE, now)
+            .await
+            .unwrap()
+            .unwrap();
+        state.invalidate_session("access-refresh").await;
+        assert!(
+            !state
+                .maybe_refresh_session(
+                    "access-refresh",
+                    PARTNER_ACCESS_SESSION_TYPE,
+                    &mut read,
+                    PARTNER_SESSION_TTL_SECS,
+                    now,
+                )
+                .await
+        );
+        assert!(state
+            .fetch_session_payload("access-refresh", PARTNER_ACCESS_SESSION_TYPE, now)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn gueltiger_refresh_behaelt_ttl_payload_und_kurzzeit_cache() {
+        if std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1") {
+            return;
+        }
+        let pool = maybe_pool()
+            .await
+            .expect("Testdatenbank muss erreichbar sein");
+        ensure_sessions_table(&pool).await;
+        ensure_partners_table(&pool).await;
+        sqlx::query(
+            "INSERT INTO twitch_partners (twitch_login, twitch_user_id, status)
+             VALUES ('refresh_valid', '888005', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        let now = 3_000_000_000;
+        for (kind, ttl) in [
+            ("twitch", PARTNER_SESSION_TTL_SECS),
+            ("discord_admin", ADMIN_SESSION_TTL_SECS),
+        ] {
+            for drift in [REFRESH_PERSIST_DRIFT_SECS, REFRESH_PERSIST_DRIFT_SECS + 1.0] {
+                let sid = format!("valid-refresh-{kind}-{drift}");
+                let expires_at = now as f64 + ttl as f64 - drift;
+                let payload = serde_json::json!({
+                    "twitch_login": "refresh_valid", "twitch_user_id": "888005",
+                    "identity_version": 1, "display_name": "Refresh Tester",
+                    "csrf_token": "test-csrf", "created_at": now - 3600,
+                    "expires_at": expires_at,
+                });
+                state
+                    .persist_new_session(&sid, kind, &payload, (now - 3600) as f64, expires_at)
+                    .await
+                    .unwrap();
+                if kind == "twitch" {
+                    let partner = state
+                        .partner_session_from_payload(&sid, payload, now, 0)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(partner.twitch_user_id, "888005");
+                    assert_eq!(partner.display_name, "Refresh Tester");
+                    let cache = state.partner_cache.lock().await;
+                    assert_eq!(cache.get(&sid, now + CACHE_TTL_SECS - 1), Some(&partner));
+                    assert!(cache.get(&sid, now + CACHE_TTL_SECS).is_none());
+                } else {
+                    assert_eq!(
+                        state
+                            .admin_session_from_payload(&sid, payload, now, 0)
+                            .await
+                            .unwrap(),
+                        Some(true)
+                    );
+                    let cache = state.admin_cache.lock().await;
+                    assert_eq!(cache.get(&sid, now + CACHE_TTL_SECS - 1), Some(&true));
+                    assert!(cache.get(&sid, now + CACHE_TTL_SECS).is_none());
+                }
+                let (created, expires): (f64, f64) = sqlx::query_as(
+                    "SELECT created_at, expires_at FROM dashboard_sessions WHERE session_id = $1",
+                )
+                .bind(session_lookup_key(&sid))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(created, (now - 3600) as f64);
+                assert_eq!(
+                    expires,
+                    if drift > REFRESH_PERSIST_DRIFT_SECS {
+                        now as f64 + ttl as f64
+                    } else {
+                        expires_at
+                    }
+                );
+                let stored = state
+                    .fetch_session_payload(&sid, kind, now)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(stored["csrf_token"], "test-csrf");
+                assert_eq!(stored["identity_version"], 1);
+                assert_eq!(stored["expires_at"], expires);
+            }
+        }
     }
 
     /// Logout: invalidate_session löscht die Row → load_partner_session → None.

@@ -418,8 +418,8 @@ where
                             continue;
                         }
                     } else {
-                        match config.client.validate_session(&session_id).await {
-                            Ok(session) => {
+                        match config.client.validate_session_outcome(&session_id).await {
+                            Ok(Some(session)) => {
                                 match state.load_admin_session(&session_id).await {
                                     Ok(Some(_)) => {}
                                     Ok(None) => {
@@ -441,19 +441,17 @@ where
                                 }
                                 state.cache_central_admin_validation(&session_id).await;
                             }
+                            Ok(None) => {
+                                state.invalidate_session(&session_id).await;
+                                continue;
+                            }
                             Err(_) => {
-                                // Der lokale Spiegel hält das Dashboard bei einem
-                                // kurzzeitigen Broker-Ausfall verfügbar. Ungültige
-                                // oder abgelaufene lokale Sessions bleiben fail-closed.
                                 if !matches!(
                                     state.load_admin_session(&session_id).await,
                                     Ok(Some(_))
                                 ) {
                                     continue;
                                 }
-                                // Auch den lokalen Fallback kurz cachen, damit bei
-                                // einem Broker-Ausfall nicht jeder parallele Tab
-                                // erneut zwei Sekunden auf denselben Timeout wartet.
                                 state.cache_central_admin_validation(&session_id).await;
                             }
                         }
