@@ -10,10 +10,10 @@ SELECT jsonb_build_object(
         AND NOT EXISTS (SELECT 1 FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id AND (p.status IS DISTINCT FROM 'done' OR NULLIF(p.youtube_video_id,'') IS NULL))
     ),
     'current_checks', COUNT(c.vod_id),
-    'confirmed_current', COUNT(*) FILTER (WHERE c.state='confirmed' AND c.complete),
+    'confirmed_current', COUNT(*) FILTER (WHERE c.state='confirmed' AND c.complete AND attempt.last_error IS NULL),
     'processing', COUNT(*) FILTER (WHERE c.state='processing'),
     'unresolved', COUNT(*) FILTER (WHERE c.state='unresolved'),
-    'errors', COUNT(*) FILTER (WHERE c.state='error')
+    'errors', COUNT(*) FILTER (WHERE attempt.last_error IS NOT NULL)
 )
 FROM twitch_vod_archive_vods v
 LEFT JOIN LATERAL (
@@ -22,8 +22,10 @@ LEFT JOIN LATERAL (
     WHERE a.twitch_user_id=v.twitch_user_id AND a.platform='youtube' AND a.enabled=1
     ORDER BY a.authorized_at DESC,a.id DESC LIMIT 1
 ) a ON TRUE
+LEFT JOIN twitch_vod_youtube_checks attempt ON attempt.vod_id=v.id AND attempt.auth_id=a.id AND attempt.auth_revision=a.revision
 LEFT JOIN twitch_vod_youtube_checks c ON c.vod_id=v.id AND c.auth_id=a.id AND c.auth_revision=a.revision
     AND c.channel_id IS NOT NULL AND (a.platform_user_id IS NULL OR c.channel_id=a.platform_user_id)
+    AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(c.observations) o WHERE o->>'source_twitch_id' IS DISTINCT FROM v.twitch_id OR o->'source_duration_sec' IS DISTINCT FROM to_jsonb(v.duration_sec))
     AND c.upload_snapshot=(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index),'[]'::jsonb) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id);
 
 SELECT jsonb_build_object(
@@ -36,12 +38,13 @@ SELECT jsonb_build_object(
     'accepted_parts', (SELECT COUNT(*) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id AND p.status='done' AND NULLIF(p.youtube_video_id,'') IS NOT NULL),
     'current_check', c.vod_id IS NOT NULL,
     'stored_check_present', EXISTS(SELECT 1 FROM twitch_vod_youtube_checks old WHERE old.vod_id=v.id),
-    'state', c.state,
-    'complete', c.complete,
-    'error_present', c.last_error IS NOT NULL,
+    'state', CASE WHEN attempt.last_error IS NOT NULL THEN 'error' ELSE c.state END,
+    'complete', CASE WHEN attempt.last_error IS NOT NULL THEN FALSE ELSE c.complete END,
+    'error_present', attempt.last_error IS NOT NULL,
+    'current_attempt_present', attempt.vod_id IS NOT NULL,
     'auth_id', c.auth_id,
     'actual_channel_observed', c.channel_id IS NOT NULL,
-    'last_attempt_at', c.last_attempt_at,
+    'last_attempt_at', attempt.last_attempt_at,
     'last_success_at', c.last_success_at,
     'observations', COALESCE(jsonb_array_length(c.observations),0),
     'processed_observations', (SELECT COUNT(*) FROM jsonb_array_elements(COALESCE(c.observations,'[]'::jsonb)) o WHERE o->>'state'='processed'),
@@ -62,8 +65,10 @@ LEFT JOIN LATERAL (
     WHERE a.twitch_user_id=v.twitch_user_id AND a.platform='youtube' AND a.enabled=1
     ORDER BY a.authorized_at DESC,a.id DESC LIMIT 1
 ) a ON TRUE
+LEFT JOIN twitch_vod_youtube_checks attempt ON attempt.vod_id=v.id AND attempt.auth_id=a.id AND attempt.auth_revision=a.revision
 LEFT JOIN twitch_vod_youtube_checks c ON c.vod_id=v.id AND c.auth_id=a.id AND c.auth_revision=a.revision
     AND c.channel_id IS NOT NULL AND (a.platform_user_id IS NULL OR c.channel_id=a.platform_user_id)
+    AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(c.observations) o WHERE o->>'source_twitch_id' IS DISTINCT FROM v.twitch_id OR o->'source_duration_sec' IS DISTINCT FROM to_jsonb(v.duration_sec))
     AND c.upload_snapshot=(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index),'[]'::jsonb) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id)
 LEFT JOIN twitch_vod_youtube_scans s ON s.twitch_user_id=v.twitch_user_id AND s.auth_id=a.id AND s.auth_revision=a.revision
     AND s.channel_id IS NOT NULL AND (a.platform_user_id IS NULL OR s.channel_id=a.platform_user_id)

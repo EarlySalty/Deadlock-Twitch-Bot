@@ -1,0 +1,10 @@
+Ausschließlich synthetische Prüfung der elterneigenen Nachweis-SQL nach neuer Quellbindung. Keine Produktion oder YouTube abgefragt.
+
+Befehl:
+TWITCH_ANALYTICS_DSN="host=127.0.0.1 port=55683 user=nathanael dbname=token_db_youtube options='-c search_path=t_token_resume_migration'" python3 -I /tmp/tb-youtube-live-evidence-c5d0.py /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/.tasks/2026-10-08-vod-youtube-abgleich/pruefung/live-evidence.sql
+
+Exit 0. Alle drei SELECT-Abfragen in READ ONLY ausgeführt. Vorhandenes Fixture enthält ein VOD, keine fünf historischen Fälle und keine Scan-Zeile. Die beiden letzteren SELECTs lieferten keine Zeilen. Kein Nachweis tatsächlicher YouTube-Bestätigung oder produktiver Fehlerzustände.
+
+BEGIN
+{"vods": 1, "proof": "archive_totals", "errors": 0, "processing": 0, "unresolved": 0, "observed_at": "2026-10-08T15:42:15.65293+02:00", "current_checks": 0, "confirmed_current": 0, "historical_completed": 0}
+COMMIT

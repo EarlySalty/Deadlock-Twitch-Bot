@@ -1,0 +1,5 @@
+BLOCK: Partial video matches can suppress uploads of content that remains unbacked up.
+
+1. rust/crates/tb-dashboard-api/src/handlers/social_media_vod_archive.rs:268 | BLOCKING: For ID-less parts, `youtube_part_confirmed` accepts a processed observation by index alone, ignoring contradictory `part_total` or insufficient single-video duration. Twin: `rust/crates/tb-vod-archive/src/youtube_check.rs:534` (`part_processed`). These predicates feed both API reset branches, GET/POST retry guards, `store.rs:275` preparation, and the worker’s `part_processed` upload guard. | A recovered “Teil 1/3” can suppress uploading local part 0 of a two-part backup, although `decision` correctly refuses complete coverage. Explicit recovery then skips needed content and can remain queued indefinitely. Require sufficient part correspondence before suppressing an ID-less upload.
+
+2. .tasks/2026-10-08-vod-youtube-abgleich/pruefung/live-evidence.sql:25 | NIT: Both check joins, here and at line 65, omit the observation source-ID/duration binding enforced by the API. | The release evidence can count a proof as current after its source changes. Apply the same source guards to both joins.

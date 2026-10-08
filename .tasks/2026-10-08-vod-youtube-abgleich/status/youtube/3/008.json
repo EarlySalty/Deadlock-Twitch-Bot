@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 8,
+  "zeit": "2026-10-08T13:07:37Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "blockiert",
+  "gebaut": "ja",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "91fccc695b7e5821bfa92186f7a551d8a9e632c3",
+  "nachweise": ["REVIEW.md", "REGISTER.md", "pruefung/gate-round9.txt", "pruefung/r8-archive.txt", "pruefung/r8-api.txt", "pruefung/r8-archive-clippy.txt", "pruefung/r8-api-clippy.txt", "pruefung/r8-db-sequence.txt", "pruefung/r8-source-sha256.txt"],
+  "blocker": ["Derselbe reguläre gpt-6.1-sol-Gate Runde 9, Exit 1: Beide Teil-Schutzprädikate akzeptieren bei fehlender lokaler Video-ID einen passenden Index ohne ausreichende Teilzuordnung. Widersprüchliche Gesamtteilzahl beziehungsweise unzureichende Einzelvideodauer können nötige Inhalte vom Upload ausschließen. NIT: Beide elterneigenen Live-SQL-Erfolgs-Joins brauchen die neue Quellen-ID-/Dauerbindung. 67 Archiv- und 14 API-Proben tatsächlich bestanden, 0 failed/ignored, beide Clippy-Läufe erfolgreich; ursprüngliche Historie und terminaler Abschluss synthetisch belegt. Kein ALLOW, Main-Push, Release, Migration, Deploy oder produktiver Abschluss der fünf Altfälle."],
+  "naechster_schritt": "Wie ausdrücklich beauftragt neuen BLOCK mit Ursache und kleinstem Lösungsweg an Auftraggeber melden. Beide vorhandenen Prädikate an passende Gesamtteilzahl und ausreichende Einzelvideodauer gemäß bestehendem Vollständigkeitsvertrag binden; bestehende SQL-/Workerproben um genau diese negativen Fälle ergänzen. Noch nicht umgesetzt. Keine weitere automatische Fixrunde, kein neuer Fixer oder Reviewerwechsel. Quellencommit 61c57d33 und integrierter Stand 91fccc69 samt geprüften Hashes erhalten. origin/main inzwischen f04c0ef0, nach BLOCK nicht erneut integriert. Entscheidung abwarten, Task nicht settlen und ungemergte Quellen nicht bereinigen."
+}
