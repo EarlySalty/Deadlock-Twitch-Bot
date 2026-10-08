@@ -544,16 +544,8 @@ where
                 (status, Json(body)).into_response()
             }
             Err(e) => {
-                let resp = e.into_response();
-                // Fehler nicht cachen (Python owner_cacheable=False), aber Waiter
-                // mit dem Fehler-Status auflösen.
-                let status = resp.status().as_u16();
-                slot.complete(
-                    status,
-                    &serde_json::json!({"error": "internal_error"}),
-                    false,
-                );
-                resp
+                slot.complete(e.status.as_u16(), &e.payload_json(), false);
+                e.into_response()
             }
         },
     }
@@ -1620,6 +1612,84 @@ mod tests {
     use std::net::SocketAddr;
     use tb_http_core::{internal_auth, loopback_only, ExpectedToken, INTERNAL_API_BASE_PATH};
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn idempotency_waiter_erhaelt_originalen_fehlerbody_ohne_caching() {
+        use std::future::{poll_fn, Future};
+        use std::task::Poll;
+
+        for error in [
+            ApiError::not_found(),
+            ApiError::bad_request_with_body(json!({
+                "error": "bad_request",
+                "message": "Konflikt",
+                "details": {"login": "nichtvorhanden"},
+            })),
+            ApiError::internal(),
+        ] {
+            let idem = IdempotencyState::new();
+            let mut headers = HeaderMap::new();
+            headers.insert(IDEMPOTENCY_KEY_HEADER, "idem-error".parse().unwrap());
+            let uri = "/internal/twitch/v1/streamers/nichtvorhanden/archive"
+                .parse()
+                .unwrap();
+            let payload = json!({"mode": "archive"});
+            let expected_status = error.status;
+            let expected_body = error.payload_json();
+            let (release, released) = tokio::sync::oneshot::channel();
+            let mut owner = Box::pin(with_idempotency(
+                &idem,
+                &headers,
+                &uri,
+                "POST",
+                &payload,
+                || async move {
+                    released.await.unwrap();
+                    Err(error)
+                },
+            ));
+            poll_fn(|cx| {
+                assert!(owner.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+
+            let mut waiter = Box::pin(with_idempotency(
+                &idem,
+                &headers,
+                &uri,
+                "POST",
+                &payload,
+                || async { panic!("Wartende Anfrage darf nicht erneut ausführen") },
+            ));
+            poll_fn(|cx| {
+                assert!(waiter.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+
+            release.send(()).unwrap();
+            let owner_response = owner.await;
+            let waiter_response = waiter.await;
+            assert_eq!(owner_response.status(), expected_status);
+            assert_eq!(waiter_response.status(), expected_status);
+            assert!(!owner_response
+                .headers()
+                .contains_key("X-Idempotency-Replayed"));
+            assert_eq!(waiter_response.headers()["X-Idempotency-Replayed"], "1");
+            assert_eq!(json_body(owner_response).await, expected_body);
+            assert_eq!(json_body(waiter_response).await, expected_body);
+
+            let retry_body = json!({"ok": true});
+            let retry = with_idempotency(&idem, &headers, &uri, "POST", &payload, || async {
+                Ok((StatusCode::CREATED, retry_body.clone()))
+            })
+            .await;
+            assert_eq!(retry.status(), StatusCode::CREATED);
+            assert!(!retry.headers().contains_key("X-Idempotency-Replayed"));
+            assert_eq!(json_body(retry).await, retry_body);
+        }
+    }
 
     // ── P2.142: mark_member Loose-Coercion ────────────────────────────────────
 
