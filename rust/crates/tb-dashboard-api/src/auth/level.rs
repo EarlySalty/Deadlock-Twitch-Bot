@@ -45,6 +45,11 @@ pub struct AuthenticatedAdminSessionId(pub String);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthenticatedPartnerSessionId(pub String);
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AuditSessionSelection(
+    pub(crate) std::sync::Arc<tokio::sync::Mutex<Option<String>>>,
+);
+
 /// Auth-Level eines eingehenden Dashboard-Requests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DashboardAuthLevel {
@@ -356,6 +361,11 @@ where
                 {
                     if !session_id.is_empty() {
                         if let Ok(Some(partner)) = state.load_partner_session(session_id).await {
+                            if let Some(selection) = parts.extensions.get::<AuditSessionSelection>()
+                            {
+                                *selection.0.lock().await =
+                                    Some(partner.twitch_login.trim().to_lowercase());
+                            }
                             parts
                                 .extensions
                                 .insert(AuthenticatedPartnerSessionId(session_id.to_string()));
@@ -386,6 +396,11 @@ where
                             .load_partner_access_session(session_id, user_agent)
                             .await
                         {
+                            if let Some(selection) = parts.extensions.get::<AuditSessionSelection>()
+                            {
+                                *selection.0.lock().await =
+                                    Some(partner.twitch_login.trim().to_lowercase());
+                            }
                             return Ok(partner_or_admin(
                                 partner,
                                 admin_mode_active,
@@ -460,6 +475,16 @@ where
                     continue;
                 }
 
+                if let Some(selection) = parts.extensions.get::<AuditSessionSelection>() {
+                    let actor = state
+                        .load_admin_session_user_id(&session_id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|user_id| format!("discord:{user_id}"))
+                        .unwrap_or_else(|| "admin".to_string());
+                    *selection.0.lock().await = Some(actor);
+                }
                 parts
                     .extensions
                     .insert(AuthenticatedAdminSessionId(session_id));
