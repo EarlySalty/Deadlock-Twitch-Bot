@@ -491,8 +491,6 @@ struct ScoreResult {
     features: HashSet<String>,
 }
 
-/// Scoring einer einzelnen Nachricht gegen alle Gruppen.
-/// service_pitch_warning.py Z. 340–394
 fn score_message(raw: &str, p: &Patterns) -> ScoreResult {
     if raw.is_empty() {
         return ScoreResult {
@@ -502,16 +500,25 @@ fn score_message(raw: &str, p: &Patterns) -> ScoreResult {
         };
     }
 
-    let has_contact_label = p.contact_label.is_match(raw);
+    let contacts: Vec<_> = p.contact_label.find_iter(raw).collect();
+    let has_contact_label = !contacts.is_empty();
+    let mut message_parts = Vec::with_capacity(contacts.len() + 1);
+    let mut start = 0;
+    for contact in &contacts {
+        message_parts.push(&raw[start..contact.start()]);
+        start = contact.end();
+    }
+    message_parts.push(&raw[start..]);
+    let matches_message = |pattern: &Regex| message_parts.iter().any(|part| pattern.is_match(part));
     let has_pitch = p
         .growth_pitch
         .iter()
         .chain(&p.design_pitch)
         .chain(&p.crew_threat)
-        .any(|pattern| pattern.is_match(raw));
+        .any(matches_message);
     if has_contact_label
         && !has_pitch
-        && (p.requested_contact.is_match(raw) || p.stream_context.is_match(raw))
+        && (matches_message(&p.requested_contact) || matches_message(&p.stream_context))
     {
         return ScoreResult {
             score: 0,
@@ -524,12 +531,11 @@ fn score_message(raw: &str, p: &Patterns) -> ScoreResult {
     let mut reasons = Vec::new();
     let mut features: HashSet<String> = HashSet::new();
 
-    // _SERVICE_PATTERNS-Gruppen (Z. 349–357)
     macro_rules! check_group {
         ($name:expr, $pts:expr, $patterns:expr) => {
             if !features.contains($name) {
                 for re in &$patterns {
-                    if re.is_match(raw) {
+                    if matches_message(re) {
                         features.insert($name.to_string());
                         score += $pts;
                         reasons.push(format!("feature:{}", $name));
@@ -547,17 +553,31 @@ fn score_message(raw: &str, p: &Patterns) -> ScoreResult {
     check_group!("crew_threat", 5, p.crew_threat);
     check_group!("design_pitch", 4, p.design_pitch);
     check_group!("offplatform", 4, p.offplatform);
+    let contact_platforms: Vec<_> = contacts
+        .iter()
+        .filter_map(|contact| {
+            contact
+                .as_str()
+                .split_once([':', '：'])
+                .map(|(label, _)| label)
+        })
+        .collect();
+    if !features.contains("offplatform")
+        && contact_platforms
+            .iter()
+            .any(|label| p.offplatform.iter().any(|pattern| pattern.is_match(label)))
+    {
+        score += 4;
+        features.insert("offplatform".to_string());
+        reasons.push("feature:offplatform".to_string());
+    }
     check_group!("urgency_probe", 2, p.urgency_probe);
     check_group!("intrusive_probe", 2, p.intrusive_probe);
     check_group!("greeting", 1, p.greeting);
     check_group!("wellbeing", 1, p.wellbeing);
 
-    let lowered = raw.to_lowercase();
-
-    // generic_praise (Z. 360–365)
-    if p.generic_praise.is_match(raw) {
-        let tokens: Vec<&str> = lowered.split_whitespace().collect();
-        let praise_score = if tokens.len() <= 5 && !p.stream_context.is_match(raw) {
+    if matches_message(&p.generic_praise) {
+        let praise_score = if token_count(raw) <= 5 && !matches_message(&p.stream_context) {
             2i32
         } else {
             1
@@ -567,30 +587,33 @@ fn score_message(raw: &str, p: &Patterns) -> ScoreResult {
         reasons.push(format!("feature:generic_praise({praise_score})"));
     }
 
-    if has_contact_label && p.generic_praise.is_match(raw) && p.support_promise.is_match(raw) {
+    if has_contact_label
+        && matches_message(&p.generic_praise)
+        && matches_message(&p.support_promise)
+    {
         score += 4;
         features.insert("contact_bait".to_string());
         reasons.push("combo:praise_support_unsolicited_contact".to_string());
     }
 
-    // discord_teamup_pitch (Z. 367–371)
-    if p.discord_teamup.is_match(raw) {
+    if matches_message(&p.discord_teamup) {
         score += 3;
         features.insert("discord_teamup_pitch".to_string());
         reasons.push("feature:discord_teamup_pitch".to_string());
     }
 
-    // discord_handle_drop (Z. 373–377)
     if p.discord_handle_drop.is_match(raw) {
         score += 4;
         features.insert("discord_handle_drop".to_string());
         reasons.push("feature:discord_handle_drop".to_string());
     }
 
-    // external_link_or_handle / trusted_twitch_collab_invite (Z. 379–392)
-    let has_link = p.link.is_match(raw);
-    let has_twitch_collab = p.twitch_collab_invite.is_match(raw);
-    let has_platform_ref = p.platform_ref.is_match(&lowered);
+    let has_link = matches_message(&p.link);
+    let has_twitch_collab = matches_message(&p.twitch_collab_invite);
+    let has_platform_ref = matches_message(&p.platform_ref)
+        || contact_platforms
+            .iter()
+            .any(|label| p.platform_ref.is_match(label));
     let has_handle = p.handle.is_match(raw);
     let has_discord_handle_drop = features.contains("discord_handle_drop");
     let has_external_profile_drop = has_platform_ref && (has_handle || has_discord_handle_drop);
@@ -3399,6 +3422,8 @@ mod tests {
         let p = Patterns::build();
         for message in [
             CONTACT_BAIT_REPLAY.to_string(),
+            CONTACT_BAIT_REPLAY.replace("united_247", "deadlock.player"),
+            CONTACT_BAIT_REPLAY.replace("united_247", "cool.gefollowt"),
             "Toller Stream, bin dir gefolgt. Disscord: different.name".to_string(),
             "Nice Stream, komme nächstes Mal wieder! Disscord: another_handle".to_string(),
         ] {
@@ -3426,14 +3451,62 @@ mod tests {
     }
 
     #[test]
+    fn contact_handles_do_not_supply_or_suppress_message_signals() {
+        let p = Patterns::build();
+        for label in ["Disscord", "Discord"] {
+            for body in [
+                "Nice Stream! Hab gefollowt.",
+                "Nice Stream!",
+                "Hab gefollowt.",
+                "Hallo zusammen!",
+                "Wie gefragt: nice Stream! Hab gefollowt.",
+                "Nice Stream! Hab gefollowt. Für die Deadlock-Runde",
+            ] {
+                let baseline = score_message(&format!("{body} {label}: normal_handle"), &p);
+                for handle in [
+                    "deadlock.player",
+                    "cool.gefollowt",
+                    "affiliate.overlays",
+                    "instagram.www.player",
+                ] {
+                    let message = format!("{body} {label}: {handle}");
+                    let result = score_message(&message, &p);
+                    assert_eq!(result.score, baseline.score, "{message}");
+                    assert_eq!(result.features, baseline.features, "{message}");
+                    assert_eq!(result.reasons, baseline.reasons, "{message}");
+                }
+            }
+        }
+        for message in [
+            "Nice Stream! Hab gefollowt. Disscord: wie gefragt",
+            "Nice Stream! Hab gefollowt. Disscord: normal_handle Discord: deadlock.player",
+            "Nice Stream! Hab gefollowt. Disscord: deadlock.player Disscord: cool.gefollowt",
+        ] {
+            let result = score_message(message, &p);
+            assert!(result.features.contains("contact_bait"), "{message}");
+        }
+    }
+
+    #[test]
     fn contact_context_does_not_hide_growth_pitch() {
         let p = Patterns::build();
-        let result = score_message(
-            "Nice Stream, hab gefollowt. Deadlock! I can help you grow. Discord: seller_name",
-            &p,
-        );
-        assert!(result.features.contains("growth_pitch"));
-        assert!(result.features.contains("discord_handle_drop"));
+        for pitch in [
+            "I can help you grow",
+            "Brauchst du ein Logo",
+            "pull up with my crew",
+        ] {
+            let message = format!(
+                "Wie gefragt: Nice Stream, hab gefollowt. Deadlock! {pitch}. Discord: deadlock.player"
+            );
+            let result = score_message(&message, &p);
+            assert!(
+                result.features.contains("growth_pitch")
+                    || result.features.contains("design_pitch")
+                    || result.features.contains("crew_threat"),
+                "{message}"
+            );
+            assert!(result.features.contains("discord_handle_drop"));
+        }
     }
 
     #[tokio::test]

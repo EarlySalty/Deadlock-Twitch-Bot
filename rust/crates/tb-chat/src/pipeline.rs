@@ -3826,12 +3826,26 @@ mod tests {
         }
         set_moderation_flags(&pool, "broadcaster-id", false, true, false, false).await;
         let api = Arc::new(RecordingChatApi::default());
+        let context_handle_replay =
+            crate::scam_pitch::CONTACT_BAIT_REPLAY.replace("united_247", "deadlock.player");
+        let promise_handle_replay =
+            crate::scam_pitch::CONTACT_BAIT_REPLAY.replace("united_247", "cool.gefollowt");
         let cases = [
             (crate::scam_pitch::CONTACT_BAIT_REPLAY, true, ""),
+            (context_handle_replay.as_str(), true, ""),
+            (promise_handle_replay.as_str(), true, ""),
+            ("Nice Stream! Hab gefollowt. Disscord: wie gefragt", true, ""),
+            ("Nice Stream! Hab gefollowt. Disscord: normal_handle Discord: deadlock.player", true, ""),
             ("Toller Stream! Hab dir gefolgt. Disscord: unrelated_handle", true, ""),
             ("Richtig nice Stream! Hab direkt gefollowt. Komme nächstes Mal gerne wieder", false, ""),
             ("Wie gefragt: nice Stream, hab gefollowt. Discord: normal_handle", false, ""),
+            ("Wie gefragt: nice Stream, hab gefollowt. Discord: deadlock.player", false, ""),
+            ("Wie gefragt: nice Stream, hab gefollowt. Disscord: cool.gefollowt", false, ""),
+            ("Nice Stream! Disscord: cool.gefollowt", false, ""),
+            ("Hab gefollowt. Disscord: cool.gefollowt", false, ""),
+            ("Disscord: cool.gefollowt", false, ""),
             ("Nice Stream, hab gefollowt. Für die Deadlock-Runde bin ich im Community-Discord: normal_handle", false, ""),
+            ("Nice Stream, hab gefollowt. Für die Deadlock-Runde bin ich im Community-Discord: cool.gefollowt", false, ""),
             ("Im Disscord reden wir über den Haze-Build, guter Match-Abend", false, ""),
             (crate::scam_pitch::CONTACT_BAIT_REPLAY, false, "moderator"),
             (crate::scam_pitch::CONTACT_BAIT_REPLAY, false, "broadcaster"),
