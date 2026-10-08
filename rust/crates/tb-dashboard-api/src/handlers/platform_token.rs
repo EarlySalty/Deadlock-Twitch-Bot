@@ -43,6 +43,7 @@ use tb_raid::{
 };
 use tb_transport_twitch::{user_token::UserTokenError, HelixClient, HelixConfig};
 
+use super::platform_store::RefreshAusgang;
 use crate::auth::security::{require_internal, OptionalConnectInfo};
 
 /// Einzige Plattform mit fertigem Verbinden-Weg. Andere Namen kommen ueber
@@ -358,10 +359,10 @@ pub async fn plattform_refresh_all_due(
         if platform != "kick" && platform != "youtube" {
             continue;
         }
-        if plattform_refresh(&store, config, streamer_id, &platform, jetzt)
-            .await
-            .is_ok()
-        {
+        if matches!(
+            plattform_refresh(&store, config, streamer_id, &platform, jetzt).await,
+            Ok(RefreshAusgang::Erneuert)
+        ) {
             erneuert += 1;
         }
     }
@@ -531,17 +532,24 @@ pub async fn plattform_refresh(
     streamer_id: i64,
     platform: &str,
     jetzt: DateTime<Utc>,
-) -> Result<(), TokenFehler> {
-    use super::platform_store::{NeuerToken, RefreshAbbruch, RefreshAusgang};
+) -> Result<RefreshAusgang, TokenFehler> {
+    use super::platform_store::{NeuerToken, RefreshAbbruch};
     use super::plattform_oauth::{OAuthFehler, OAuthToken};
 
-    fn in_neuer_token(token: OAuthToken, jetzt: DateTime<Utc>) -> NeuerToken {
-        NeuerToken {
+    fn in_neuer_token(
+        token: OAuthToken,
+        jetzt: DateTime<Utc>,
+    ) -> Result<NeuerToken, RefreshAbbruch> {
+        let dauer = Duration::try_seconds(token.expires_in.max(0)).ok_or(RefreshAbbruch::Fehler)?;
+        let expires_at = jetzt
+            .checked_add_signed(dauer)
+            .ok_or(RefreshAbbruch::Fehler)?;
+        Ok(NeuerToken {
             access_token: token.access_token,
             refresh_token: token.refresh_token,
-            expires_at: jetzt + Duration::seconds(token.expires_in.max(0)),
+            expires_at,
             scopes: token.scopes,
-        }
+        })
     }
     fn in_abbruch(fehler: OAuthFehler) -> RefreshAbbruch {
         match fehler {
@@ -553,7 +561,7 @@ pub async fn plattform_refresh(
     let ausgang = match platform {
         "kick" => {
             let Some(client) = config.kick.clone() else {
-                return Ok(());
+                return Ok(RefreshAusgang::NichtNoetig);
             };
             store
                 .refresh_and_store(
@@ -565,15 +573,15 @@ pub async fn plattform_refresh(
                         client
                             .refresh(&rt)
                             .await
-                            .map(|t| in_neuer_token(t, jetzt))
                             .map_err(in_abbruch)
+                            .and_then(|t| in_neuer_token(t, jetzt))
                     },
                 )
                 .await
         }
         "youtube" => {
             let Some(client) = config.youtube.clone() else {
-                return Ok(());
+                return Ok(RefreshAusgang::NichtNoetig);
             };
             store
                 .refresh_and_store(
@@ -585,16 +593,16 @@ pub async fn plattform_refresh(
                         client
                             .refresh(&rt)
                             .await
-                            .map(|t| in_neuer_token(t, jetzt))
                             .map_err(in_abbruch)
+                            .and_then(|t| in_neuer_token(t, jetzt))
                     },
                 )
                 .await
         }
-        _ => return Ok(()),
+        _ => return Ok(RefreshAusgang::NichtNoetig),
     };
     match ausgang {
-        Ok(RefreshAusgang::Erneuert) | Ok(RefreshAusgang::NichtNoetig) => Ok(()),
+        Ok(ausgang @ (RefreshAusgang::Erneuert | RefreshAusgang::NichtNoetig)) => Ok(ausgang),
         Ok(RefreshAusgang::NeuAnmeldungNoetig) => Err(TokenFehler::NeuVerbinden),
         Ok(RefreshAusgang::Fehlgeschlagen) => Err(TokenFehler::NichtLieferbar),
         Err(e) => {
@@ -868,10 +876,7 @@ mod tests {
             headers.insert(INTERNAL_TOKEN_HEADER, "synthetisch".parse().unwrap());
             let response = internal_platform_token_handler(
                 State(pool.clone()),
-                OptionalConnectInfo(Some(ConnectInfo(SocketAddr::from((
-                    [127, 0, 0, 1],
-                    40000,
-                ))))),
+                OptionalConnectInfo(Some(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 40000))))),
                 Some(Extension(ExpectedToken("synthetisch".into()))),
                 Some(Extension(config_mit(Arc::new(FakeTokenClient::neu())))),
                 headers,
@@ -1334,6 +1339,197 @@ mod tests {
             platform_token_antwort(&pool, &config, 5109, "kick", jetzt).await,
             Err(TokenFehler::KeineVerbindung)
         );
+    }
+
+    fn plattform_verbindung(
+        streamer_id: i64,
+        platform: &str,
+        jetzt: DateTime<Utc>,
+    ) -> super::super::platform_store::PlatformConnection {
+        super::super::platform_store::PlatformConnection {
+            streamer_id,
+            platform: platform.into(),
+            platform_user_id: "synthetisches-konto".into(),
+            platform_login: "streamerin".into(),
+            access_token: "acc-alt".into(),
+            refresh_token: format!("ref-{streamer_id}"),
+            scopes: vec!["chat:write".into()],
+            expires_at: jetzt + Duration::minutes(2),
+            needs_reauth: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn plattform_refresh_ohne_client_zaehlt_keine_erneuerung() {
+        let (pool, _database) = test_pool().await;
+        let config = config_mit(Arc::new(FakeTokenClient::neu()));
+        let store = super::super::platform_store::PlatformConnectionStore::new(
+            pool.clone(),
+            config.cipher.clone(),
+        );
+        let jetzt = zeit("2026-08-28T10:00:00Z");
+        for platform in ["kick", "youtube"] {
+            let verbindung = plattform_verbindung(5301, platform, jetzt);
+            store.upsert(&verbindung).await.unwrap();
+            assert_eq!(
+                plattform_refresh(&store, &config, 5301, platform, jetzt).await,
+                Ok(RefreshAusgang::NichtNoetig)
+            );
+        }
+        assert_eq!(
+            plattform_refresh_all_due(&pool, &config, jetzt)
+                .await
+                .unwrap(),
+            0
+        );
+        for platform in ["kick", "youtube"] {
+            let geladen = store.load(5301, platform).await.unwrap().unwrap();
+            assert_eq!(geladen.access_token, "acc-alt");
+            assert_eq!(geladen.refresh_token, "ref-5301");
+            assert_eq!(geladen.expires_at, jetzt + Duration::minutes(2));
+            assert_eq!(geladen.scopes, vec!["chat:write"]);
+            assert!(!geladen.needs_reauth);
+        }
+    }
+
+    #[tokio::test]
+    async fn plattform_refresh_extremer_ablaufwert_stoppt_weder_verbindungen_noch_ticks() {
+        use super::super::plattform_oauth::{GoogleOAuth, KickOAuth};
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let (pool, _database) = test_pool().await;
+        let server = MockServer::start().await;
+        let mut config = config_mit(Arc::new(FakeTokenClient::neu()));
+        config.kick = Some(Arc::new(KickOAuth::fuer_test(&server.uri(), &server.uri())));
+        config.youtube = Some(Arc::new(GoogleOAuth::fuer_test(
+            &server.uri(),
+            &server.uri(),
+        )));
+        let store = super::super::platform_store::PlatformConnectionStore::new(
+            pool.clone(),
+            config.cipher.clone(),
+        );
+        let jetzt = zeit("2026-08-28T10:00:00Z");
+        for expires_in in [9_223_372_036_854_776_i64, 9_223_372_036_854_775, i64::MAX] {
+            server.reset().await;
+            for (platform, endpoint) in [("kick", "/oauth/token"), ("youtube", "/token")] {
+                for streamer_id in [5301, 5302] {
+                    store
+                        .upsert(&plattform_verbindung(streamer_id, platform, jetzt))
+                        .await
+                        .unwrap();
+                    Mock::given(method("POST"))
+                        .and(path(endpoint))
+                        .and(body_string_contains(format!(
+                            "refresh_token=ref-{streamer_id}"
+                        )))
+                        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                            "access_token": "acc-frisch",
+                            "expires_in": if streamer_id == 5301 { expires_in } else { 7200 }
+                        })))
+                        .expect(1)
+                        .mount(&server)
+                        .await;
+                }
+            }
+            assert_eq!(
+                plattform_refresh_all_due(&pool, &config, jetzt)
+                    .await
+                    .unwrap(),
+                2
+            );
+            for platform in ["kick", "youtube"] {
+                let alt = store.load(5301, platform).await.unwrap().unwrap();
+                assert_eq!(alt.access_token, "acc-alt");
+                assert_eq!(alt.refresh_token, "ref-5301");
+                assert_eq!(alt.expires_at, jetzt + Duration::minutes(2));
+                assert!(!alt.needs_reauth);
+                let frisch = store.load(5302, platform).await.unwrap().unwrap();
+                assert_eq!(frisch.access_token, "acc-frisch");
+                assert_eq!(frisch.expires_at, jetzt + Duration::hours(2));
+            }
+            server.reset().await;
+            for endpoint in ["/oauth/token", "/token"] {
+                Mock::given(method("POST"))
+                    .and(path(endpoint))
+                    .and(body_string_contains("refresh_token=ref-5301"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                        "access_token": "acc-spaeter", "expires_in": 7200
+                    })))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+            }
+            assert_eq!(
+                plattform_refresh_all_due(&pool, &config, jetzt + Duration::minutes(1))
+                    .await
+                    .unwrap(),
+                2
+            );
+            for platform in ["kick", "youtube"] {
+                let frisch = store.load(5301, platform).await.unwrap().unwrap();
+                assert_eq!(frisch.access_token, "acc-spaeter");
+                assert_eq!(frisch.expires_at, jetzt + Duration::minutes(121));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn plattform_refresh_erhaelt_normale_und_negative_ablaufwerte() {
+        use super::super::plattform_oauth::{GoogleOAuth, KickOAuth};
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let (pool, _database) = test_pool().await;
+        let server = MockServer::start().await;
+        let mut config = config_mit(Arc::new(FakeTokenClient::neu()));
+        config.kick = Some(Arc::new(KickOAuth::fuer_test(&server.uri(), &server.uri())));
+        config.youtube = Some(Arc::new(GoogleOAuth::fuer_test(
+            &server.uri(),
+            &server.uri(),
+        )));
+        let store = super::super::platform_store::PlatformConnectionStore::new(
+            pool.clone(),
+            config.cipher.clone(),
+        );
+        let jetzt = zeit("2026-08-28T10:00:00Z");
+        for expires_in in [7200_i64, 0, -1, i64::MIN] {
+            server.reset().await;
+            for (platform, endpoint) in [("kick", "/oauth/token"), ("youtube", "/token")] {
+                store
+                    .upsert(&plattform_verbindung(5303, platform, jetzt))
+                    .await
+                    .unwrap();
+                Mock::given(method("POST"))
+                    .and(path(endpoint))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                        "access_token": "acc-frisch", "expires_in": expires_in
+                    })))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                assert_eq!(
+                    plattform_refresh(&store, &config, 5303, platform, jetzt).await,
+                    Ok(RefreshAusgang::Erneuert)
+                );
+                let geladen = store.load(5303, platform).await.unwrap().unwrap();
+                assert_eq!(geladen.access_token, "acc-frisch");
+                assert_eq!(
+                    geladen.expires_at,
+                    jetzt + Duration::seconds(expires_in.max(0))
+                );
+                assert_eq!(geladen.refresh_token, "ref-5303");
+                assert_eq!(geladen.scopes, vec!["chat:write"]);
+                assert!(!geladen.needs_reauth);
+                if expires_in == 7200 {
+                    assert_eq!(
+                        plattform_refresh(&store, &config, 5303, platform, jetzt).await,
+                        Ok(RefreshAusgang::NichtNoetig)
+                    );
+                }
+            }
+        }
     }
 
     struct FakeKick {
