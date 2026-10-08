@@ -253,7 +253,7 @@ fn youtube_verified_complete(check: Option<&Value>) -> bool {
     })
 }
 
-fn youtube_part_confirmed(part: &Value, check: Option<&Value>, total: usize) -> bool {
+fn youtube_part_observed(part: &Value, check: Option<&Value>, total: usize, state: &str) -> bool {
     check
         .filter(|check| {
             check["upload_snapshot"].as_array().is_some_and(|snapshot| {
@@ -265,7 +265,8 @@ fn youtube_part_confirmed(part: &Value, check: Option<&Value>, total: usize) -> 
         .and_then(|check| check["observations"].as_array())
         .is_some_and(|observations| {
             observations.iter().any(|observation| {
-                observation["state"] == "processed"
+                (observation["state"] == state
+                    || (state == "rejected" && observation["state"] == "failed"))
                     && observation["video_id"].as_str().is_some_and(|id| !id.is_empty())
                     && observation["part_index"]
                         .as_i64()
@@ -300,7 +301,7 @@ fn youtube_retry_available(parts: &Value, check: Option<&Value>) -> bool {
     parts.is_empty()
         || parts
             .iter()
-            .any(|part| !youtube_part_confirmed(part, check, parts.len()))
+            .any(|part| !youtube_part_observed(part, check, parts.len(), "processed"))
 }
 
 struct TerminalRecovery {
@@ -354,7 +355,7 @@ fn terminal_recovery(
         .iter()
         .filter(|part| {
             !youtube_verified_complete(current)
-                && !youtube_part_confirmed(part, check, parts.len())
+                && !youtube_part_observed(part, check, parts.len(), "processed")
                 && (rejected(part)
                     || (matches!(part["status"].as_str(), Some("failed" | "pending"))
                         && part["youtube_video_id"].as_str().is_none_or(str::is_empty)))
@@ -550,8 +551,16 @@ async fn apply_action(
             let reset: Vec<i32> = parts
                 .iter()
                 .filter(|part| {
-                    matches!(part["status"].as_str(), Some("failed" | "rejected"))
-                        && !youtube_part_confirmed(part, check.as_ref(), parts.len())
+                    (matches!(part["status"].as_str(), Some("failed" | "rejected"))
+                        || youtube_part_observed(
+                            part,
+                            check.as_ref().filter(|check| {
+                                check["error"].is_null() && check["snapshot_current"] == true
+                            }),
+                            parts.len(),
+                            "rejected",
+                        ))
+                        && !youtube_part_observed(part, check.as_ref(), parts.len(), "processed")
                 })
                 .filter_map(|part| part["index"].as_i64().and_then(|i| i32::try_from(i).ok()))
                 .collect();

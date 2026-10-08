@@ -884,6 +884,235 @@ async fn partial_processed_proof_excludes_exact_parts_from_both_resets_and_repea
 }
 
 #[tokio::test]
+async fn ordinary_provider_rejection_retries_the_actual_worker_and_preserves_processed_parts() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tb_social_media::uploaders::youtube::{ChunkOutcome, ResumeStand, VideoZustand};
+    use tb_social_media::uploaders::UploadError;
+    use tb_vod_archive::worker::{HochladerQuelle, TeilHochlader};
+
+    #[derive(Default)]
+    struct Uploads(AtomicUsize);
+
+    #[async_trait::async_trait]
+    impl TeilHochlader for Uploads {
+        async fn resumable_offset(&self, _: &str, _: u64) -> Result<ResumeStand, UploadError> {
+            panic!("Ein abgeschlossener Upload darf keine alte Sitzung wiederaufnehmen")
+        }
+
+        async fn start_resumable_upload(&self, _: &Value, _: u64) -> Result<String, UploadError> {
+            Ok("https://synthetic.test/retry".into())
+        }
+
+        async fn upload_chunk(
+            &self,
+            _: &str,
+            _: &std::path::Path,
+            _: u64,
+        ) -> Result<ChunkOutcome, UploadError> {
+            let count = self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(ChunkOutcome::Fertig(format!("retry-{count}")))
+        }
+
+        async fn video_status(&self, _: &str) -> Result<Option<VideoZustand>, UploadError> {
+            panic!("Der Archivlauf darf keine separate Video-Prüfung ausführen")
+        }
+    }
+
+    struct Source(Arc<Uploads>);
+
+    #[async_trait::async_trait]
+    impl HochladerQuelle for Source {
+        async fn fuer(&self, user: &str) -> Option<Arc<dyn TeilHochlader>> {
+            assert_eq!(user, "42");
+            Some(self.0.clone())
+        }
+    }
+
+    struct Duration;
+
+    #[async_trait::async_trait]
+    impl tb_vod_archive::twitch::CommandRunner for Duration {
+        async fn run(
+            &self,
+            _: &std::path::Path,
+            args: &[String],
+            _: std::time::Duration,
+        ) -> Result<tb_vod_archive::twitch::CommandOutput, tb_vod_archive::VodArchiveError>
+        {
+            assert!(args.iter().any(|arg| arg == "format=duration"));
+            Ok(tb_vod_archive::twitch::CommandOutput {
+                success: true,
+                stdout: "60".into(),
+                stderr: String::new(),
+            })
+        }
+    }
+
+    let database = database().await;
+    let pool = &database.pool;
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("v1.mp4");
+    std::fs::write(&file, b"synthetic media").unwrap();
+    for ddl in [
+        "ALTER TABLE twitch_vod_archive_vods ADD COLUMN downloaded_at TIMESTAMPTZ",
+        "ALTER TABLE social_media_platform_auth ALTER COLUMN id TYPE INTEGER",
+        "ALTER TABLE twitch_vod_archive_parts ADD COLUMN streamer_login TEXT, ADD COLUMN size_bytes BIGINT DEFAULT 0, ADD UNIQUE(vod_id,part_index)",
+        "CREATE TABLE twitch_streamers(twitch_user_id TEXT, twitch_login TEXT)",
+        "CREATE TABLE social_media_vod_archive(twitch_user_id TEXT, enabled BOOLEAN, privacy TEXT)",
+        "INSERT INTO twitch_streamers VALUES('42','renamed')",
+        "INSERT INTO social_media_vod_archive VALUES('42',TRUE,'private')",
+        "INSERT INTO social_media_platform_auth(twitch_user_id,platform,platform_user_id) VALUES ('42','youtube','own')",
+        "UPDATE twitch_vod_archive_vods SET duration_sec=60 WHERE id=1",
+    ] {
+        sqlx::query(ddl).execute(pool).await.unwrap();
+    }
+    for (state, mutation, expected) in [
+        ("rejected", "last_error=NULL", 1),
+        ("failed", "last_error=NULL", 1),
+        ("unavailable", "last_error=NULL", 0),
+        ("rejected", "state='error',last_error='connection'", 0),
+        ("rejected", "auth_id=auth_id+100", 0),
+        ("rejected", "auth_revision='stale'", 0),
+        ("rejected", "channel_id='different'", 0),
+        ("rejected", "upload_snapshot='[]'::jsonb", 0),
+        (
+            "rejected",
+            "observations=jsonb_set(observations,'{0,source_twitch_id}','\"different\"'::jsonb)",
+            0,
+        ),
+        (
+            "rejected",
+            "observations=jsonb_set(observations,'{0,source_duration_sec}','61'::jsonb)",
+            0,
+        ),
+        (
+            "rejected",
+            "observations=jsonb_set(observations,'{0,video_id}','\"different\"'::jsonb)",
+            0,
+        ),
+        (
+            "rejected",
+            "observations=jsonb_set(observations,'{0,part_index}','9'::jsonb)",
+            0,
+        ),
+    ] {
+        sqlx::query("UPDATE twitch_vod_archive_vods SET status='upload_failed',local_path=$1,uploaded_at='2026-10-01T13:00:00Z' WHERE id=1").bind(file.to_str().unwrap()).execute(pool).await.unwrap();
+        sqlx::query("DELETE FROM twitch_vod_archive_parts WHERE vod_id=1")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO twitch_vod_archive_parts(vod_id,part_index,status,youtube_video_id,file_path,last_error) VALUES(1,0,'done','bad',$1,NULL),(1,1,'failed','good',$1,'legacy failure')").bind(file.to_str().unwrap()).execute(pool).await.unwrap();
+        sqlx::query("DELETE FROM twitch_vod_youtube_checks WHERE vod_id=1")
+            .execute(pool)
+            .await
+            .unwrap();
+        save_recovery_check(
+            pool,
+            "rejected",
+            false,
+            json!([
+                {"video_id":"bad","part_index":0,"state":state},
+                {"video_id":"good","part_index":1,"state":"processed"}
+            ]),
+        )
+        .await;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE twitch_vod_youtube_checks SET {mutation} WHERE vod_id=1"
+        )))
+        .execute(pool)
+        .await
+        .unwrap();
+        let proof: Value = sqlx::query_scalar(
+            "SELECT to_jsonb(c) FROM twitch_vod_youtube_checks c WHERE vod_id=1",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let protected: Value = sqlx::query_scalar(
+            "SELECT to_jsonb(p) FROM twitch_vod_archive_parts p WHERE vod_id=1 AND part_index=1",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let uploads = Arc::new(Uploads::default());
+        let cipher =
+            Arc::new(tb_crypto::FieldCipher::from_hex_key(&"11".repeat(32), "v1").unwrap());
+        let worker = tb_vod_archive::VodArchiveWorker::mit_zugang(
+            pool.clone(),
+            tb_vod_archive::VodArchiveConfig {
+                download_dir: directory.path().to_path_buf(),
+                min_free_gb: 0,
+                ..Default::default()
+            },
+            Arc::new(Source(uploads.clone())),
+            cipher,
+        )
+        .with_runner(Arc::new(Duration));
+        assert_eq!(
+            apply_action(pool, 1, Some("99"), "retry").await.unwrap(),
+            None
+        );
+        if expected == 1 {
+            worker.run_once().await;
+            assert_eq!(uploads.0.load(Ordering::SeqCst), 0);
+        }
+        assert_eq!(
+            apply_action(pool, 1, Some("42"), "retry").await.unwrap(),
+            Some(true)
+        );
+        let reset: String = sqlx::query_scalar(
+            "SELECT status FROM twitch_vod_archive_parts WHERE vod_id=1 AND part_index=0",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            reset,
+            if expected == 1 { "pending" } else { "done" },
+            "{state}/{mutation}"
+        );
+        if expected == 1 || state == "unavailable" || mutation.contains("last_error") {
+            worker.run_once().await;
+            assert_eq!(
+                uploads.0.load(Ordering::SeqCst),
+                expected,
+                "{state}/{mutation}"
+            );
+            worker.run_once().await;
+            assert_eq!(uploads.0.load(Ordering::SeqCst), expected);
+            let completed: (String, String) = sqlx::query_as("SELECT status,youtube_video_id FROM twitch_vod_archive_parts WHERE vod_id=1 AND part_index=0").fetch_one(pool).await.unwrap();
+            assert_eq!(
+                completed,
+                (
+                    "done".into(),
+                    if expected == 1 { "retry-0" } else { "bad" }.into()
+                )
+            );
+            let state: (String, String) = sqlx::query_as(
+                "SELECT status,uploaded_at::text FROM twitch_vod_archive_vods WHERE id=1",
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            assert_eq!(state.0, "downloaded");
+            assert!(state.1.starts_with("2026-10-01"));
+            let preserved: Value = sqlx::query_scalar("SELECT to_jsonb(p) FROM twitch_vod_archive_parts p WHERE vod_id=1 AND part_index=1").fetch_one(pool).await.unwrap();
+            assert_eq!(protected, preserved);
+        }
+        let unchanged: Value = sqlx::query_scalar(
+            "SELECT to_jsonb(c) FROM twitch_vod_youtube_checks c WHERE vod_id=1",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(proof, unchanged);
+        assert!(file.exists());
+    }
+    eprintln!("YOUTUBE_API_WORKER_DB_PROOF: persisted rejected/failed observations reset locally done parts through genuine ordinary retry and worker preparation, exactly one counted upload each; processed legacy failures remain byte-identical, repeat adds zero uploads; unavailable, check errors and stale identity/source/part snapshots grant no new upload");
+}
+
+#[tokio::test]
 async fn idless_partial_matches_with_wrong_total_or_single_duration_allow_both_resets() {
     let database = database().await;
     let pool = &database.pool;

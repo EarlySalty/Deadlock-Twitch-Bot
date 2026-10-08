@@ -1382,14 +1382,9 @@ mod tests {
         Some(pool)
     }
 
-    /// Zaehlt, wie oft wirklich ein Teil zu YouTube geschoben wurde. Genau
-    /// diese Zahl kostet Tageskontingent. Mit `verwerfen` kann der Test
-    /// simulieren, dass YouTube die fertigen Uploads wieder einsammelt.
     #[derive(Default)]
     struct ZaehlenderHochlader {
         uploads: AtomicUsize,
-        verwerfen: Mutex<bool>,
-        verarbeitet: Mutex<bool>,
     }
 
     #[async_trait]
@@ -1421,18 +1416,7 @@ mod tests {
         }
 
         async fn video_status(&self, _video_id: &str) -> Result<Option<VideoZustand>, UploadError> {
-            if *self.verwerfen.lock().unwrap() {
-                return Ok(None);
-            }
-            Ok(Some(VideoZustand {
-                upload_status: if *self.verarbeitet.lock().unwrap() {
-                    "processed"
-                } else {
-                    "uploaded"
-                }
-                .to_string(),
-                rejection_reason: None,
-            }))
+            panic!("Der Archivlauf darf keine separate Video-Prüfung ausführen")
         }
     }
 
@@ -2185,16 +2169,11 @@ mod tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
 
-    /// Der resumable Upload meldet nur angekommene Bytes. Verwirft YouTube
-    /// das Video erst spaeter (15-Minuten-Limit), darf das nicht als
-    /// "Fertig" stehen bleiben: der Befund muss zum Teil und VOD durchschlagen
-    /// und der Upload nach einer Auszeit erneut laufen, sobald der Grund weg
-    /// ist.
     #[tokio::test]
     async fn verworfene_uploads_fallen_nicht_unter_den_tisch() {
-        let Some(pool) = pool("t_vod_verworfen").await else {
-            return;
-        };
+        let pool = pool("t_vod_verworfen")
+            .await
+            .expect("synthetic PostgreSQL required");
         let verzeichnis = temp_verzeichnis("verworfen");
         let pfad = verzeichnis.join("v1.mp4");
         std::fs::write(&pfad, b"videodaten").unwrap();
@@ -2213,7 +2192,6 @@ mod tests {
         let hochlader = Arc::new(ZaehlenderHochlader::default());
         let worker = worker(&pool, config(&verzeichnis), &hochlader);
 
-        // Lauf eins: der Upload geht raus, alles gilt als fertig.
         worker.lauf(&[einstellung("earlysalty")]).await.unwrap();
         assert_eq!(hochlader.uploads.load(Ordering::SeqCst), 1);
         assert_eq!(
@@ -2222,8 +2200,27 @@ mod tests {
             "der Lauf kennt nur erfolgreiche Uploads, das VOD ist abgeschlossen"
         );
 
-        // Jetzt sammelt YouTube den Upload wieder ein.
-        *hochlader.verwerfen.lock().unwrap() = true;
+        sqlx::query("INSERT INTO social_media_platform_auth(platform,twitch_user_id,platform_user_id) VALUES ('youtube','42','own')").execute(&pool).await.unwrap();
+        crate::youtube_check::test_save_recovery(
+            &pool,
+            vod.id,
+            &[crate::youtube_check::Beobachtung {
+                video_id: "yt-0".into(),
+                part_index: Some(0),
+                part_total: Some(1),
+                duration_sec: None,
+                state: "rejected".into(),
+                privacy: Some("private".into()),
+                observed_at: chrono::Utc::now(),
+            }],
+            "rejected",
+            false,
+            None,
+        )
+        .await;
+        let check: Value = sqlx::query_scalar("SELECT jsonb_build_array(state,observations) FROM twitch_vod_youtube_checks WHERE vod_id=$1").bind(vod.id).fetch_one(&pool).await.unwrap();
+        assert_eq!(check[0], "rejected");
+        assert_eq!(check[1][0]["state"], "rejected");
         for _ in 0..3 {
             worker.lauf(&[einstellung("earlysalty")]).await.unwrap();
         }
@@ -2240,6 +2237,8 @@ mod tests {
                 .unwrap();
         assert_eq!(vod_status, store::STATUS_HOCHGELADEN);
 
-        let _ = std::fs::remove_dir_all(verzeichnis);
+        std::fs::remove_dir_all(verzeichnis).unwrap();
+        pool.close().await;
+        eprintln!("YOUTUBE_WORKER_DB_PROOF: reconciliation persists a real rejection, repeated archive execution uploads nothing and preserves the completed part and local source until explicit retry");
     }
 }

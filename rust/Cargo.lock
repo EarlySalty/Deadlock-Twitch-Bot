@@ -3725,6 +3725,7 @@ dependencies = [
  "tb-scout",
  "tb-social-media",
  "tb-transport-twitch",
+ "tb-vod-archive",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
