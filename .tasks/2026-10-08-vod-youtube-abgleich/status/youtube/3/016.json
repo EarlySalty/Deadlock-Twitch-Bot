@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 16,
+  "zeit": "2026-10-08T19:41:33Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "blocker",
+  "gebaut": "nein",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "30f970674199c6099604e329d6a5648fc012f8f8",
+  "nachweise": ["REGISTER.md", "REVIEW.md", "pruefung/r12-datenvertrag.txt", "pruefung/r10-clippy.txt", "pruefung/gate-round12.txt"],
+  "blocker": ["Erfolgreicher rejected/failed-Folgeabruf überschreibt den früheren ausreichenden Ganzbeleg samt tatsächlichen Dauern und Original-Provider-/Teilbindungen. complete allein ersetzt diese fehlenden Originalinformationen nicht. Eine reine bestehende Prädikatsentscheidung kann unverändert bestätigte ID-lose Nachbarteile danach nicht sicher von vorher unvollständigen Treffern unterscheiden."],
+  "naechster_schritt": "Genau belegte Datenlücke und kleinsten kompatiblen Weg melden: echten ursprünglichen Ganzbeleg mit Originalbeobachtungen und Originalsnapshot im vorhandenen Beobachtungs-JSON erhalten, aktuelle Ablehnung separat vorrangig; gemeinsame Entscheidung durch API/Worker, vorhandene API-Archivabhängigkeit vom Test- in Produktivbereich verschieben. Nicht umgesetzt. Frischer Kontext beendet ohne Quellenänderung, Probe oder Gate. Alter Clippy b8zb1ayz9 beendet Exit2 vor Cargo-Start, kein Quellenstand geprüft; aktuelle unveränderte Wrapper-Syntaxprüfung Exit0. Keine aktive eigene Prüfqueue. Letzter Gate bleibt Runde12 BLOCK, keine neue Gate-Runde. Kein Main-Push, Release, Migration, Deploy oder produktiver Abschluss."
+}

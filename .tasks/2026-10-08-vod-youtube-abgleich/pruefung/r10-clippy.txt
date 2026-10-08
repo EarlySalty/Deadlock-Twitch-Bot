@@ -1,0 +1,3 @@
+/home/nathanael/.local/bin/cargo-slot: line 66: break: only meaningful in a `for', `while', or `until' loop
+/home/nathanael/.local/bin/cargo-slot: line 67: syntax error near unexpected token `fi'
+/home/nathanael/.local/bin/cargo-slot: line 67: `    fi'

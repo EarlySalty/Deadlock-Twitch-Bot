@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 15,
+  "zeit": "2026-10-08T19:28:06Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "implementierung",
+  "gebaut": "nein",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "30f970674199c6099604e329d6a5648fc012f8f8",
+  "nachweise": ["REGISTER.md", "REVIEW.md", "pruefung/gate-round12.txt", "pruefung/r11-freeze.txt"],
+  "blocker": [],
+  "naechster_schritt": "Ausdrücklich freigegebene gemeinsame Evidenzentscheidung durch frischen nativen Fixkontext a28182a72e19ad2d7 aktiv. Kurze/widersprüchliche ID-lose Teiltreffer ablehnen, vorher vollständig belegtes unverändert gebundenes 60+60-Archiv bei bloßem Folgefehler schützen, echte Providerablehnung über ausdrücklichen Retry reparieren und unverändert bestätigte Teile erhalten. Keine erfundene Teildauer; bei vorhandenem Gesamtbeleg dessen echte Vollständigkeit verwenden. Nächster gleicher regulärer Gate erst nach tatsächlich bestandenen positiven und negativen geänderten SQL-/Workerproben. Alter Clippy b8zb1ayz9 nicht doppeln, Ergebnis nur tatsächlichem Quellstand zurechnen. Bei ALLOW autorisierter Abschluss bis Main/live ohne zusätzliche interne Freigabe."
+}
