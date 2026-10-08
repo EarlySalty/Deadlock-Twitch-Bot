@@ -41,7 +41,7 @@ const results = {
   command: `node ${fileURLToPath(import.meta.url)}`,
   componentPath,
   componentSha256Start: await hashComponent(),
-  limitations: ['Nur synthetische API-Antworten, kein echter Renderlauf oder TikTok-Aufruf.', 'Keine Zustimmung und keine Veröffentlichung ausgeführt.', 'Keine Videodatei geliefert, Medienwiedergabe nicht nachgewiesen.', 'Moli-Layout ist kein Chrome-, Firefox- oder Safari-Kompatibilitätsnachweis.', 'Beobachteter Polling-Lauf mit echten Zeitabständen, keine Suite oder Baseline-Bewertung.'],
+  limitations: ['Nur synthetische API-Antworten, kein echter Renderlauf oder TikTok-Aufruf.', 'Zustimmung nur im isolierten Formular gesetzt und zurückgesetzt. Kein Absenden, Speichern oder Veröffentlichen.', 'Keine Videodatei geliefert, Medienwiedergabe nicht nachgewiesen.', 'Moli-Layout ist kein Chrome-, Firefox- oder Safari-Kompatibilitätsnachweis.', 'Beobachteter Polling-Lauf mit echten Zeitabständen, keine Suite oder Baseline-Bewertung.'],
   cases: [],
 };
 function check(name, success, details) {
@@ -92,6 +92,41 @@ try {
   summary = await run('return window.previewEvidence.summary();');
   check('changed video retains valid visibility but requires unchecked consent', summary.selectedPrivacy === 'SELF_ONLY' && summary.checkboxes.every(c => !c.checked) && summary.submitDisabled && summary.confirmations === 0, summary);
   await screenshot('changed-video-ready.png');
+  await navigate('missing');
+  await until('window.previewEvidence.summary().renderPosts === 1');
+  await run('window.previewEvidence.setState("ready"); window.previewEvidence.refresh(); return true;');
+  await until('document.querySelector("select") && window.previewEvidence.summary().creatorGets > 0');
+  await run('const s = document.querySelector("select"); s.value = "SELF_ONLY"; s.dispatchEvent(new Event("change", { bubbles: true })); return true;');
+  await until('window.previewEvidence.summary().selectedPrivacy === "SELF_ONLY"');
+  await run('document.querySelectorAll("dialog input[type=checkbox]")[0].click(); return true;');
+  await until('window.previewEvidence.summary().checkboxes[0].checked');
+  await run('Array.from(document.querySelectorAll("dialog input[type=checkbox]")).at(-1).click(); return true;');
+  await until('window.previewEvidence.summary().checkboxes.at(-1).checked && window.previewEvidence.summary().submitDisabled === false');
+  const checked = await run('return window.previewEvidence.summary();');
+  check('synthetic consent explicitly checked makes valid form eligible without submitting', checked.checkboxes.at(-1).checked && !checked.submitDisabled && checked.confirmations === 0 && checked.selectedPrivacy === 'SELF_ONLY' && checked.checkboxes[0].checked, checked);
+  await run('window.previewEvidence.setDigest("2".repeat(64)); window.previewEvidence.setState(null); window.previewEvidence.setPostState("ready"); window.previewEvidence.refresh(); return true;');
+  await until('window.previewEvidence.summary().retry.some(b => !b.disabled)');
+  await run('Array.from(document.querySelectorAll("dialog button")).find(b => b.textContent === "Vorschau erneut erstellen").click(); return true;');
+  await until('window.previewEvidence.summary().renderPosts === 2 && window.previewEvidence.summary().videoSrc?.includes("2".repeat(64)) && document.querySelector("select")');
+  await until('window.previewEvidence.summary().checkboxes.at(-1)?.checked === false && window.previewEvidence.summary().submitDisabled === true');
+  const reset = await run('return window.previewEvidence.summary();');
+  check('retry with replacement video clears checked consent and preserves valid form choices', checked.checkboxes.at(-1).checked && !reset.checkboxes.at(-1).checked && reset.submitDisabled && reset.confirmations === 0 && reset.caption === checked.caption && reset.selectedPrivacy === checked.selectedPrivacy && reset.checkboxes[0].checked && reset.creatorIdentity.approvedVideoSha256 !== checked.creatorIdentity.approvedVideoSha256, { before: checked, summary: reset });
+  await screenshot('consent-reset-ready.png');
+  await run('Array.from(document.querySelectorAll("dialog input[type=checkbox]")).at(-1).click(); return true;');
+  await until('window.previewEvidence.summary().checkboxes.at(-1).checked && window.previewEvidence.summary().submitDisabled === false');
+  const digestChecked = await run('return window.previewEvidence.summary();');
+  await run('window.previewEvidence.setDigest("3".repeat(64)); window.previewEvidence.refreshCreator(); return true;');
+  await until('window.previewEvidence.summary().videoSrc?.includes("3".repeat(64)) && window.previewEvidence.summary().checkboxes.at(-1)?.checked === false && window.previewEvidence.summary().submitDisabled === true');
+  const digestReset = await run('return window.previewEvidence.summary();');
+  check('creator refresh changing approved video alone clears checked consent without retry', digestChecked.checkboxes.at(-1).checked && !digestReset.checkboxes.at(-1).checked && digestReset.submitDisabled && digestReset.confirmations === 0 && digestReset.renderPosts === 2 && digestReset.selectedPrivacy === checked.selectedPrivacy && digestReset.caption === checked.caption && digestReset.checkboxes[0].checked, { before: digestChecked, summary: digestReset });
+  await run('Array.from(document.querySelectorAll("dialog input[type=checkbox]")).at(-1).click(); return true;');
+  await until('window.previewEvidence.summary().checkboxes.at(-1).checked && window.previewEvidence.summary().submitDisabled === false');
+  const accountChecked = await run('return window.previewEvidence.summary();');
+  await run('window.previewEvidence.setAccount(999002, "synthetic-replacement-only"); window.previewEvidence.refreshCreator(); return true;');
+  await until('window.previewEvidence.summary().text.includes("Isoliertes Testkonto") && window.previewEvidence.summary().checkboxes.at(-1)?.checked === false && window.previewEvidence.summary().submitDisabled === true');
+  const accountReset = await run('return window.previewEvidence.summary();');
+  check('account and credential identity replacement clears checked consent with valid choices retained', accountChecked.checkboxes.at(-1).checked && !accountReset.checkboxes.at(-1).checked && accountReset.submitDisabled && accountReset.confirmations === 0 && accountReset.selectedPrivacy === checked.selectedPrivacy && accountReset.caption === checked.caption && accountReset.checkboxes[0].checked && accountReset.creatorIdentity.credentialId !== accountChecked.creatorIdentity.credentialId && accountReset.creatorIdentity.platformUserId !== accountChecked.creatorIdentity.platformUserId && accountReset.creatorIdentity.approvedVideoSha256 === accountChecked.creatorIdentity.approvedVideoSha256, { before: accountChecked, summary: accountReset });
+  await screenshot('account-consent-reset-ready.png');
   await navigate('error');
   await until('document.querySelector("dialog [role=alert]") || document.querySelector("dialog button[data-retry]")');
   await screenshot('error.png');
@@ -129,7 +164,7 @@ try {
 } finally {
   results.componentSha256End = await hashComponent();
   results.componentUnchangedDuringRun = results.componentSha256Start === results.componentSha256End;
-  results.exitCode = results.failure || results.cases.some(c => !c.success) || results.cases.length !== 11 || !results.componentUnchangedDuringRun ? 1 : 0;
+  results.exitCode = results.failure || results.cases.some(c => !c.success) || results.cases.length !== 15 || !results.componentUnchangedDuringRun ? 1 : 0;
   await fs.writeFile(path.join(root, 'results.json'), JSON.stringify(results, null, 2));
   const compact = {
     asOf: results.asOf, command: results.command, browser: results.browser,
@@ -145,12 +180,13 @@ try {
         statusGets: data.statusGets, renderPosts: data.renderPosts,
         creatorGets: data.creatorGets, confirmations: data.confirmations,
         selectedPrivacy: data.selectedPrivacy, submitDisabled: data.submitDisabled,
-        checkboxes: data.checkboxes,
+        checkboxes: data.checkboxes, caption: data.caption, creatorIdentity: data.creatorIdentity,
+        before: c.details.before ? { checkboxes: c.details.before.checkboxes, submitDisabled: c.details.before.submitDisabled, selectedPrivacy: c.details.before.selectedPrivacy, caption: c.details.before.caption, creatorIdentity: c.details.before.creatorIdentity } : undefined,
         closedStatusGets: c.details.closed?.statusGets,
         retry: c.details.retry ?? data.retry, kind: c.details.kind,
         sourcePath: c.details.sourcePath, sourceSha256: c.details.sourceSha256 };
     }),
-    evidencePaths: ['missing-pending.png', 'rendering.png', 'ready.png', 'invalidated-retry.png', 'changed-video-ready.png', 'reopened-ready.png', 'error.png', 'error-retry-pending.png'].map(name => path.join(root, name)),
+    evidencePaths: ['missing-pending.png', 'rendering.png', 'ready.png', 'invalidated-retry.png', 'changed-video-ready.png', 'consent-reset-ready.png', 'account-consent-reset-ready.png', 'reopened-ready.png', 'error.png', 'error-retry-pending.png'].map(name => path.join(root, name)),
   };
   await fs.writeFile(path.join(root, 'results-compact.json'), JSON.stringify(compact, null, 2));
   await request(prefix, undefined, 'DELETE');

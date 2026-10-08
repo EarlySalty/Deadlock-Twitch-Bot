@@ -1,18 +1,18 @@
 {
-  "asOf": "2026-10-08T00:18:59.906Z",
+  "asOf": "2026-10-08T01:09:38.667Z",
   "command": "node /home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/prove.mjs",
   "browser": "moli 1.1.14 --layout --image --font",
   "componentPath": "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/bot/dashboard_v2/src/components/socialmedia/TikTokPostDialog.tsx",
   "componentSha256": "887c1cbc93cf05a468196900b2473d490ffaa846249ab4ccad70cff0fcc2f6f2",
   "componentUnchangedDuringRun": true,
   "exitCode": 0,
-  "passed": 11,
+  "passed": 15,
   "failed": 0,
   "ignored": 0,
   "baseline": "nicht gemessen",
   "limitations": [
     "Nur synthetische API-Antworten, kein echter Renderlauf oder TikTok-Aufruf.",
-    "Keine Zustimmung und keine Veröffentlichung ausgeführt.",
+    "Zustimmung nur im isolierten Formular gesetzt und zurückgesetzt. Kein Absenden, Speichern oder Veröffentlichen.",
     "Keine Videodatei geliefert, Medienwiedergabe nicht nachgewiesen.",
     "Moli-Layout ist kein Chrome-, Firefox- oder Safari-Kompatibilitätsnachweis.",
     "Beobachteter Polling-Lauf mit echten Zeitabständen, keine Suite oder Baseline-Bewertung."
@@ -29,6 +29,12 @@
       "selectedPrivacy": null,
       "submitDisabled": null,
       "checkboxes": [],
+      "caption": null,
+      "creatorIdentity": {
+        "credentialId": 999001,
+        "platformUserId": "synthetic-only",
+        "approvedVideoSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
       "retry": []
     },
     {
@@ -42,6 +48,12 @@
       "selectedPrivacy": null,
       "submitDisabled": null,
       "checkboxes": [],
+      "caption": null,
+      "creatorIdentity": {
+        "credentialId": 999001,
+        "platformUserId": "synthetic-only",
+        "approvedVideoSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
       "retry": []
     },
     {
@@ -55,6 +67,12 @@
       "selectedPrivacy": null,
       "submitDisabled": null,
       "checkboxes": [],
+      "caption": null,
+      "creatorIdentity": {
+        "credentialId": 999001,
+        "platformUserId": "synthetic-only",
+        "approvedVideoSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
       "retry": [
         {
           "text": "Vorschau erneut erstellen",
@@ -73,6 +91,12 @@
       "selectedPrivacy": null,
       "submitDisabled": null,
       "checkboxes": [],
+      "caption": null,
+      "creatorIdentity": {
+        "credentialId": 999001,
+        "platformUserId": "synthetic-only",
+        "approvedVideoSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
       "retry": []
     },
     {
@@ -107,6 +131,12 @@
           "disabled": false
         }
       ],
+      "caption": "Synthetischer Clip für den isolierten Vorschaunachweis",
+      "creatorIdentity": {
+        "credentialId": 999001,
+        "platformUserId": "synthetic-only",
+        "approvedVideoSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
       "retry": []
     },
     {
@@ -120,6 +150,12 @@
       "selectedPrivacy": null,
       "submitDisabled": null,
       "checkboxes": [],
+      "caption": null,
+      "creatorIdentity": {
+        "credentialId": 999001,
+        "platformUserId": "synthetic-only",
+        "approvedVideoSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
       "retry": [
         {
           "text": "Vorschau erneut erstellen",
@@ -159,6 +195,268 @@
           "disabled": false
         }
       ],
+      "caption": "Synthetischer Clip für den isolierten Vorschaunachweis",
+      "creatorIdentity": {
+        "credentialId": 999001,
+        "platformUserId": "synthetic-only",
+        "approvedVideoSha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "retry": []
+    },
+    {
+      "name": "synthetic consent explicitly checked makes valid form eligible without submitting",
+      "success": true,
+      "state": "ready",
+      "statusGets": 3,
+      "renderPosts": 1,
+      "creatorGets": 1,
+      "confirmations": 0,
+      "selectedPrivacy": "SELF_ONLY",
+      "submitDisabled": false,
+      "checkboxes": [
+        {
+          "checked": true,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": true
+        },
+        {
+          "checked": false,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": false
+        },
+        {
+          "checked": true,
+          "disabled": false
+        }
+      ],
+      "caption": "Synthetischer Clip für den isolierten Vorschaunachweis",
+      "creatorIdentity": {
+        "credentialId": 999001,
+        "platformUserId": "synthetic-only",
+        "approvedVideoSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "retry": []
+    },
+    {
+      "name": "retry with replacement video clears checked consent and preserves valid form choices",
+      "success": true,
+      "state": "ready",
+      "statusGets": 5,
+      "renderPosts": 2,
+      "creatorGets": 2,
+      "confirmations": 0,
+      "selectedPrivacy": "SELF_ONLY",
+      "submitDisabled": true,
+      "checkboxes": [
+        {
+          "checked": true,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": true
+        },
+        {
+          "checked": false,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": false
+        }
+      ],
+      "caption": "Synthetischer Clip für den isolierten Vorschaunachweis",
+      "creatorIdentity": {
+        "credentialId": 999001,
+        "platformUserId": "synthetic-only",
+        "approvedVideoSha256": "2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "before": {
+        "checkboxes": [
+          {
+            "checked": true,
+            "disabled": false
+          },
+          {
+            "checked": false,
+            "disabled": true
+          },
+          {
+            "checked": false,
+            "disabled": false
+          },
+          {
+            "checked": false,
+            "disabled": false
+          },
+          {
+            "checked": true,
+            "disabled": false
+          }
+        ],
+        "submitDisabled": false,
+        "selectedPrivacy": "SELF_ONLY",
+        "caption": "Synthetischer Clip für den isolierten Vorschaunachweis",
+        "creatorIdentity": {
+          "credentialId": 999001,
+          "platformUserId": "synthetic-only",
+          "approvedVideoSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      },
+      "retry": []
+    },
+    {
+      "name": "creator refresh changing approved video alone clears checked consent without retry",
+      "success": true,
+      "state": "ready",
+      "statusGets": 5,
+      "renderPosts": 2,
+      "creatorGets": 3,
+      "confirmations": 0,
+      "selectedPrivacy": "SELF_ONLY",
+      "submitDisabled": true,
+      "checkboxes": [
+        {
+          "checked": true,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": true
+        },
+        {
+          "checked": false,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": false
+        }
+      ],
+      "caption": "Synthetischer Clip für den isolierten Vorschaunachweis",
+      "creatorIdentity": {
+        "credentialId": 999001,
+        "platformUserId": "synthetic-only",
+        "approvedVideoSha256": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "before": {
+        "checkboxes": [
+          {
+            "checked": true,
+            "disabled": false
+          },
+          {
+            "checked": false,
+            "disabled": true
+          },
+          {
+            "checked": false,
+            "disabled": false
+          },
+          {
+            "checked": false,
+            "disabled": false
+          },
+          {
+            "checked": true,
+            "disabled": false
+          }
+        ],
+        "submitDisabled": false,
+        "selectedPrivacy": "SELF_ONLY",
+        "caption": "Synthetischer Clip für den isolierten Vorschaunachweis",
+        "creatorIdentity": {
+          "credentialId": 999001,
+          "platformUserId": "synthetic-only",
+          "approvedVideoSha256": "2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      },
+      "retry": []
+    },
+    {
+      "name": "account and credential identity replacement clears checked consent with valid choices retained",
+      "success": true,
+      "state": "ready",
+      "statusGets": 5,
+      "renderPosts": 2,
+      "creatorGets": 4,
+      "confirmations": 0,
+      "selectedPrivacy": "SELF_ONLY",
+      "submitDisabled": true,
+      "checkboxes": [
+        {
+          "checked": true,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": true
+        },
+        {
+          "checked": false,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": false
+        }
+      ],
+      "caption": "Synthetischer Clip für den isolierten Vorschaunachweis",
+      "creatorIdentity": {
+        "credentialId": 999002,
+        "platformUserId": "synthetic-replacement-only",
+        "approvedVideoSha256": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "before": {
+        "checkboxes": [
+          {
+            "checked": true,
+            "disabled": false
+          },
+          {
+            "checked": false,
+            "disabled": true
+          },
+          {
+            "checked": false,
+            "disabled": false
+          },
+          {
+            "checked": false,
+            "disabled": false
+          },
+          {
+            "checked": true,
+            "disabled": false
+          }
+        ],
+        "submitDisabled": false,
+        "selectedPrivacy": "SELF_ONLY",
+        "caption": "Synthetischer Clip für den isolierten Vorschaunachweis",
+        "creatorIdentity": {
+          "credentialId": 999001,
+          "platformUserId": "synthetic-only",
+          "approvedVideoSha256": "3333333333333333333333333333333333333333333333333333333333333333"
+        }
+      },
       "retry": []
     },
     {
@@ -172,6 +470,12 @@
       "selectedPrivacy": null,
       "submitDisabled": null,
       "checkboxes": [],
+      "caption": null,
+      "creatorIdentity": {
+        "credentialId": 999001,
+        "platformUserId": "synthetic-only",
+        "approvedVideoSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
       "retry": {
         "text": "Vorschau erneut erstellen",
         "disabled": false
@@ -188,6 +492,12 @@
       "selectedPrivacy": null,
       "submitDisabled": null,
       "checkboxes": [],
+      "caption": null,
+      "creatorIdentity": {
+        "credentialId": 999001,
+        "platformUserId": "synthetic-only",
+        "approvedVideoSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
       "closedStatusGets": 3,
       "retry": []
     },
@@ -223,6 +533,12 @@
           "disabled": false
         }
       ],
+      "caption": "Synthetischer Clip für den isolierten Vorschaunachweis",
+      "creatorIdentity": {
+        "credentialId": 999001,
+        "platformUserId": "synthetic-only",
+        "approvedVideoSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
       "retry": []
     },
     {
@@ -239,6 +555,8 @@
     "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/ready.png",
     "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/invalidated-retry.png",
     "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/changed-video-ready.png",
+    "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/consent-reset-ready.png",
+    "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/account-consent-reset-ready.png",
     "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/reopened-ready.png",
     "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/error.png",
     "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/error-retry-pending.png"

@@ -66,12 +66,15 @@ function summary() {
     submitDisabled: (document.querySelector('button[type=submit]') as HTMLButtonElement | null)?.disabled,
     caption: (document.querySelector('textarea') as HTMLTextAreaElement | null)?.value,
     videoSrc: document.querySelector('video')?.getAttribute('src'),
+    creatorIdentity: { credentialId: creator.credential_id, platformUserId: creator.platform_user_id, approvedVideoSha256: creator.approved_video_sha256 },
     retry: Array.from(document.querySelectorAll('dialog button')).filter(n => n.textContent?.includes('Vorschau erneut')).map(n => ({ text: n.textContent, disabled: (n as HTMLButtonElement).disabled })),
   };
 }
 Object.assign(window, { previewEvidence: {
   setState: (next: PreviewState) => { state = next; },
   setDigest: (digest: string) => { creator.approved_video_sha256 = digest; },
+  setAccount: (credentialId: number, platformUserId: string) => { creator.credential_id = credentialId; creator.platform_user_id = platformUserId; },
+  refreshCreator: () => client.invalidateQueries({ queryKey: ['social-media', 'tiktok-creator', 999001] }),
   refresh: () => client.invalidateQueries({ queryKey: ['social-media', 'preview', 999001] }),
   holdNextPost: () => { holdPost = true; },
   releasePost: () => releasePost?.(),
