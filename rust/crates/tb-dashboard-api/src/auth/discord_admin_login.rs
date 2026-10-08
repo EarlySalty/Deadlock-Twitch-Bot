@@ -130,6 +130,13 @@ pub trait DiscordAdminOAuthClient: Send + Sync {
         session_id: &str,
     ) -> Result<ValidatedAdminSession, DiscordAdminOAuthError>;
 
+    async fn validate_session_outcome(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<ValidatedAdminSession>, DiscordAdminOAuthError> {
+        self.validate_session(session_id).await.map(Some)
+    }
+
     async fn import_session(
         &self,
         session_id: &str,
@@ -251,14 +258,25 @@ impl DiscordAdminOAuthClient for BrokerDiscordAdminOAuthClient {
         &self,
         session_id: &str,
     ) -> Result<ValidatedAdminSession, DiscordAdminOAuthError> {
+        self.validate_session_outcome(session_id)
+            .await?
+            .ok_or(DiscordAdminOAuthError)
+    }
+
+    async fn validate_session_outcome(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<ValidatedAdminSession>, DiscordAdminOAuthError> {
         let data = self
             .post(
                 BROKER_VALIDATE_SESSION_PATH,
                 &json!({ "session_id": session_id }),
             )
             .await?;
-        if data.get("valid").and_then(Value::as_bool) != Some(true) {
-            return Err(DiscordAdminOAuthError);
+        match data.get("valid").and_then(Value::as_bool) {
+            Some(true) => {}
+            Some(false) => return Ok(None),
+            None => return Err(DiscordAdminOAuthError),
         }
         let user_id = data
             .get("user_id")
@@ -284,12 +302,12 @@ impl DiscordAdminOAuthClient for BrokerDiscordAdminOAuthClient {
             .get("expires_at")
             .and_then(Value::as_f64)
             .ok_or(DiscordAdminOAuthError)?;
-        Ok(ValidatedAdminSession {
+        Ok(Some(ValidatedAdminSession {
             user_id,
             username,
             display_name,
             expires_at,
-        })
+        }))
     }
 
     async fn import_session(
@@ -1471,6 +1489,120 @@ mod tests {
                     .map(str::to_string)
             })
             .unwrap_or_default()
+    }
+
+    async fn pruefe_broker_antwort_mit_lokalem_spiegel(
+        status: StatusCode,
+        antwort: Value,
+        erwartet: crate::auth::level::DashboardAuthLevel,
+    ) {
+        use axum::{extract::FromRequestParts, routing::post, Json, Router};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let pool = maybe_pool("broker_session_outcome")
+            .await
+            .expect("Testdatenbank muss erreichbar sein");
+        ensure_sessions_table(&pool).await;
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        let local = state.create_admin_session("42", "Admin").await.unwrap();
+        assert_eq!(
+            state.load_admin_session(&local.session_id).await.unwrap(),
+            Some(true)
+        );
+        let expires_before: f64 =
+            sqlx::query_scalar("SELECT expires_at FROM dashboard_sessions WHERE session_id = $1")
+                .bind(crate::auth::session::session_lookup_key(&local.session_id))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let received = calls.clone();
+        let app = Router::new().route(
+            BROKER_VALIDATE_SESSION_PATH,
+            post(move || {
+                let antwort = antwort.clone();
+                let received = received.clone();
+                async move {
+                    received.fetch_add(1, Ordering::SeqCst);
+                    (status, Json(antwort))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = Arc::new(
+            BrokerDiscordAdminOAuthClient::new(
+                format!("http://{addr}"),
+                "test-broker-header".into(),
+            )
+            .unwrap(),
+        );
+        let cfg = config(client);
+
+        for _ in 0..2 {
+            let request = axum::http::Request::builder()
+                .header("x-dashboard-context", "admin")
+                .header(
+                    header::COOKIE,
+                    format!("{ADMIN_COOKIE_NAME}={}", local.session_id),
+                )
+                .body(())
+                .unwrap();
+            let (mut parts, _) = request.into_parts();
+            parts.extensions.insert(state.clone());
+            parts.extensions.insert(cfg.clone());
+            let auth = crate::auth::level::DashboardAuthLevel::from_request_parts(&mut parts, &())
+                .await
+                .unwrap();
+            assert_eq!(auth, erwartet);
+            assert_eq!(
+                parts
+                    .extensions
+                    .get::<crate::auth::level::AuthenticatedAdminSessionId>()
+                    .is_some(),
+                erwartet.is_privileged()
+            );
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            if erwartet.is_privileged() { 1 } else { 2 }
+        );
+        assert_eq!(
+            state
+                .central_admin_validation_cached(&local.session_id)
+                .await,
+            erwartet.is_privileged()
+        );
+        let expires_after: f64 =
+            sqlx::query_scalar("SELECT expires_at FROM dashboard_sessions WHERE session_id = $1")
+                .bind(crate::auth::session::session_lookup_key(&local.session_id))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(expires_before, expires_after);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn broker_valid_false_lehnt_lokalen_admin_spiegel_ab() {
+        pruefe_broker_antwort_mit_lokalem_spiegel(
+            StatusCode::OK,
+            json!({"valid": false}),
+            crate::auth::level::DashboardAuthLevel::None,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn technischer_broker_ausfall_erhaelt_lokalen_admin_fallback() {
+        pruefe_broker_antwort_mit_lokalem_spiegel(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error": "unavailable"}),
+            crate::auth::level::DashboardAuthLevel::admin(),
+        )
+        .await;
     }
 
     #[test]
