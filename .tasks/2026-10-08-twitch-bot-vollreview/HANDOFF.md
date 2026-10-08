@@ -1,5 +1,32 @@
 # Wiederaufnahme des Vollreviews
 
+## Neueste Ergänzung: bedingte Deployfreigabe und wiederaufgenommene Fixaufgaben
+
+Der Nutzer hat inzwischen die konkrete Prüfung der Datenbankänderungen und Dienstrechte beauftragt und die Ausführung bei belegter positiver Wirkung ohne ungeklärte Schäden bedingt erlaubt. BRIEFING-DEPLOYPRUEFUNG-02.md enthält die genaue Grenze. Es fehlt somit keine pauschale Nutzerantwort mehr; es fehlen die konkreten positiven Voraussetzungen. Rein lesende Vorprüfung wf_3adaf342-5f6, Task wtx0f5jph, Script tb-vollreview-konkrete-deployvorpruefung-wf_3adaf342-5f6.js, ohne args. Exklusiv DEPLOY-PRUEFUNG-02.md und .json. Kein Deploy durch diese Rolle. Keine neue allgemeine Reviewwelle.
+
+Vier alte Fix-/Integrations-Tasks waren im aktuellen Harness nicht mehr registriert; TaskStop meldete jeweils No task found with ID. Ihre Journale und Dateien blieben erhalten. Genau diese bestehenden Workflows wurden mit ihren ursprünglichen Scripts, Args und resumeFromRunId fortgesetzt, keine breite Reviewwelle neu gestartet:
+
+| Zweck | Run-ID bleibt gleich | Neue Task-ID |
+|---|---|---|
+| B05/B09/B08 seriell integrieren | wf_beeac761-2c8 | w9jlpqv0f |
+| A02 bestehende Fixrunde 2 | wf_8d15f5fe-eff | w75e2km8o |
+| B03 bestehende Fixrunde 4 | wf_e6ba5fe6-44e | wvbwquocy |
+| B01/B04/B06/B07/B10 bestehende Vorbereitung | wf_f7342e70-084 | wtggh2ch4 |
+
+AUSLAUF-REGISTER.json hält alte und neue Kennungen getrennt. Die früheren Reviewwellen wurden nicht wieder gestartet; ihre tatsächliche Aktivität ist aus alten Starts allein nicht bewiesen. Erhaltene ursprüngliche Transcripts und neue Fortsetzungsabgaben getrennt prüfen. Eine Fortsetzung ist kein Fixabschluss. Der Dokumentationsworkflow wf_a65e7fe1-77c bleibt unverändert. Zuerst START-HIER.md und diese Ergänzung lesen; ältere Formulierungen ohne Deployantwort sind historisch.
+
+## Vorrangiger neuer Nutzerauftrag: Auslaufen und Wiederaufnahme sichern
+
+Der Nutzer möchte wegen seines Kontingents später weiterarbeiten: keine neuen Reviews anfangen, vorhandene Aufträge auslaufen lassen, bestätigte Fixes fertigstellen und eine private HTML-Seite zu Erkenntnissen, Sicherheitsproblemen und Status erhalten. Details und Grenzen stehen in PAUSENAUFTRAG.md. Die Bitte umfasst ausdrücklich die bisher bestätigten 13 A- und 25 B-Befunde; noch nicht zugewiesene bestätigte Fälle nicht stillschweigend als erledigt behandeln. C bleibt ohne Umsetzung. Keine neuen Reviewwellen oder Skeptikeraufträge starten; notwendige Fixkritiken und lokaler Gate bleiben erhalten.
+
+Neue reine Dokumentationsrolle: wf_a65e7fe1-77c, Task wmuk4yen3, Script tb-vollreview-private-erkenntnisse-wf_a65e7fe1-77c.js, ohne args. Ausschließlich Sol, keine Delegation, Anwendungscode- oder Git-Mutation. Exklusiv ERKENNTNISSE.html, ERKENNTNISSE-DATEN.json und FIX-RESTLISTE.md im Taskordner. Keine neue Reviewrolle. Sie führt vorhandene Quellen zusammen und ordnet die 38 bestätigten A/B-IDs zu bestehenden oder noch offenen Fixpaketen. Ergebnis vor Nutzung auf Vollständigkeit prüfen; aktuell noch keine Rückgabe.
+
+Letzter remote bestätigter Artefaktcheckpoint 3ca3c5f0195602175c4a52819dc136bd3f34b94b. Der Worktree war danach sauber; neue Dateien und diese Nachträge benötigen den nächsten Checkpoint. Keine neue Main-Integration seit der unten dokumentierten Remoteprüfung nachgewiesen.
+
+DEPLOY-ERKLAERUNG.md erläutert den tatsächlich gelesenen Wrapper: ausstehende Migrationen, erneute Rechtezuordnung, Peerregeln und Reload, Verbrauchsnachlieferungstimer und ausgewählte Neustarts. Programm-Rollback lässt Migrationen bestehen. Die konkreten noch ausstehenden Servermigrationen sind unbekannt. Nutzerfrage nach der Wirkung ist keine Freigabe; empfohlen ist zunächst kein Deploy. Originale Produktionsgrenzen bleiben bestehen.
+
+Die bestehende serielle Integrationskette behält exklusiv die Main-Push-Reihenfolge. Bei späterem Einstieg zuerst diesen Abschnitt, PAUSENAUFTRAG.md und AUFTRAG.md lesen, dann Journale und tatsächliche Worktree-/Remotezustände prüfen. Nicht neue Wellen starten, weil ältere Tabellen noch allgemeine nächste Schritte nennen.
+
 ## Aktueller Wiederaufnahmestand nach der Zwölf-Stunden-Auskunft
 
 Am 2026-10-08 erneut per ls-remote bestätigt: main f04c0ef03d47ce4893ee4d17cb98eeb4c2f6c473 und Artefaktbranch 1adb7e802ffe89a5597073f92481bdae8383dfb1. B02 und A01 bleiben die zwei nachgewiesenen Anwendungscode-Integrationen. Kein Deploy, Neustart oder Live-Nachweis. Die folgende aktuelle Tabelle ersetzt abweichende Aktivmeldungen im historischen Stand darunter.

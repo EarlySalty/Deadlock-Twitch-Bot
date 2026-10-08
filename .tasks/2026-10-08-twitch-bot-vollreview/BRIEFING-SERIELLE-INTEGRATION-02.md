@@ -1,5 +1,9 @@
 # Serielle kleine Integrationen: B05, B09, B08
 
+## Wiederaufnahme nach nicht mehr registrierter Hintergrundaufgabe
+
+Der Nutzer hat am 8. Oktober 2026 das breite Review zum Auslaufen begrenzt und die Fertigstellung der bestätigten Fixes erneut beauftragt. PAUSENAUFTRAG.md gilt. Der bisherige Task wpx113kdx ist im aktuellen Harness nicht mehr registriert: TaskStop meldete No task found with ID. Das Journal wf_beeac761-2c8 enthält einen B05-Start ohne Rückgabe; das letzte erhaltene Transcriptwerkzeug endete um 14:06 UTC. Keine abgeschlossene Integration daraus behaupten. Vor Fortsetzung vorhandene Quellen, Worktreezustand und eigene möglicherweise erhaltene Prüfprozesse feststellen. Abgeschlossene belegte identische Prüfungen wiederverwenden, nicht pauschal wiederholen. Kein zusätzliches Review außerhalb der erforderlichen Fixabnahme und des bestehenden lokalen Gates. Die ursprünglichen Integrations- und Schreibgrenzen unten bleiben erhalten.
+
 Dieser neue Auftrag ist eine Integrationsrolle, keine Fortsetzung der früheren nur vorbereitenden Rollen. Der ursprüngliche Nutzerauftrag in AUFTRAG.md, Abschnitt 6, beauftragt kleine Merges und Pushes. Hier sind genau die drei folgenden bereits fachlich abgenommenen Patches zur mechanischen Integration freigegeben, wenn ihre aktuellen Nachweise und der lokale Gate stimmen. Kein neuer Anwendungscode. Deploy bleibt gesperrt.
 
 Die Rollen laufen streng nacheinander: zuerst B05, nach dessen belegtem Main-Push B09, danach B08. Je Paket frischer Sol-Kontext. Bei echter Blockade hält die Kette an; weitere Pakete werden nicht gestartet. Astra führt während dieser Kette keinen anderen eigenen Main-Push aus. Artefaktsicherungen auf dem eigenen Auditbranch sind davon unabhängig.

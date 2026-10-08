@@ -1,0 +1,92 @@
+{
+  "date": "2026-10-08",
+  "mode": "no-new-reviews; finish-confirmed-fixes; preserve-for-resumption",
+  "native_session_id": "f61905e7-f7ff-405b-a6d7-090dec371fcb",
+  "deployment_authorized": false,
+  "conditional_deployment_permission": {
+    "user_permission_given": true,
+    "conditions_verified": false,
+    "scope": "Verify concrete pending database and service permission changes; execute only if positive and sufficiently safeguarded, without unresolved harmful effects.",
+    "preflight_run_id": "wf_3adaf342-5f6",
+    "preflight_task_id": "wtx0f5jph",
+    "preflight_script": "tb-vollreview-konkrete-deployvorpruefung-wf_3adaf342-5f6.js",
+    "preflight_args": null,
+    "preflight_is_read_only": true
+  },
+  "latest_verified_artifact_sha_before_this_file": "3ca3c5f0195602175c4a52819dc136bd3f34b94b",
+  "latest_verified_remote_main_before_this_file": "f04c0ef03d47ce4893ee4d17cb98eeb4c2f6c473",
+  "workflow_script_root": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/workflows/scripts",
+  "workflow_journal_root": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows",
+  "current_work": [
+    {
+      "purpose": "Private HTML documentation and exact remaining confirmed finding assignment",
+      "run_id": "wf_a65e7fe1-77c",
+      "task_id": "wmuk4yen3",
+      "script": "tb-vollreview-private-erkenntnisse-wf_a65e7fe1-77c.js",
+      "args": null,
+      "is_new_review": false,
+      "outputs": ["ERKENNTNISSE.html", "ERKENNTNISSE-DATEN.json", "FIX-RESTLISTE.md"]
+    },
+    {
+      "purpose": "Resume existing serial B05 then B09 then B08 integration",
+      "run_id": "wf_beeac761-2c8",
+      "task_id": "w9jlpqv0f",
+      "previous_task_id": "wpx113kdx",
+      "previous_task_check": "TaskStop returned No task found with ID",
+      "script": "tb-vollreview-serielle-integration-02-wf_beeac761-2c8.js",
+      "args": ["B05", "B09", "B08"],
+      "main_push_owner": true,
+      "is_new_review": false
+    },
+    {
+      "purpose": "Resume existing A02 optional database-test correction and required fix critique",
+      "run_id": "wf_8d15f5fe-eff",
+      "task_id": "w75e2km8o",
+      "previous_task_id": "wx57xab14",
+      "previous_task_check": "TaskStop returned No task found with ID",
+      "script": "tb-vollreview-a02-fixrunde-2-wf_8d15f5fe-eff.js",
+      "args": null,
+      "main_push_owner": false,
+      "is_new_broad_review": false
+    },
+    {
+      "purpose": "Resume existing B03 audit identity correction and required fix critique",
+      "run_id": "wf_e6ba5fe6-44e",
+      "task_id": "wvbwquocy",
+      "previous_task_id": "wgefq8ej9",
+      "previous_task_check": "TaskStop returned No task found with ID",
+      "script": "tb-vollreview-b03-fixrunde-4-wf_e6ba5fe6-44e.js",
+      "args": null,
+      "main_push_owner": false,
+      "is_new_broad_review": false
+    },
+    {
+      "purpose": "Resume existing B01 B04 B06 B07 B10 integration preparation without source correction",
+      "run_id": "wf_f7342e70-084",
+      "task_id": "wtggh2ch4",
+      "previous_task_id": "wq0ls3kxm",
+      "previous_task_check": "TaskStop returned No task found with ID",
+      "script": "tb-vollreview-integrationsvorbereitung-03-wf_f7342e70-084.js",
+      "args": ["B01", "B04", "B06", "B07", "B10"],
+      "main_push_owner": false,
+      "is_new_review": false
+    }
+  ],
+  "existing_review_work_not_restarted": [
+    {"run_id": "wf_b01ff274-9fa", "task_id": "wyiyzgmff", "purpose": "W04", "last_observed_results": 109, "planned_reviews": 230},
+    {"run_id": "wf_a9db9baa-10f", "task_id": "wanhv3338", "purpose": "W05", "last_observed_results": 80, "planned_reviews": 485},
+    {"run_id": "wf_d11f7416-b1a", "task_id": "wa8zdhmi2", "purpose": "W06", "last_observed_results": 51, "planned_reviews": 440},
+    {"run_id": "wf_7417fa2e-5e9", "task_id": "wi8qh46vu", "purpose": "W07", "last_observed_results": 45, "last_observed_failures": 1, "planned_reviews": 835},
+    {"run_id": "wf_16dfb9cb-031", "task_id": "wc1nrzzig", "purpose": "W03-REST", "last_observed_results": 36, "planned_reviews": 180},
+    {"run_id": "wf_287d5302-dbb", "task_id": "w3c9l4lav", "purpose": "Previously assigned missing SM04 critic and one missing skeptic", "last_observed_results": 0},
+    {"run_id": "wf_874d1dcd-995", "task_id": "wg0cyy3ty", "purpose": "Previously assigned Q04 metadata parts 1, 2 and 4", "last_observed_results": 0}
+  ],
+  "limits": [
+    "Journal starts and file timestamps do not establish whether a previous process is still running.",
+    "Do not restart broad review waves or missing skeptics during the requested budget pause.",
+    "Existing reviews that genuinely remain running may finish; preserve their original results.",
+    "Astra must not perform another main push while the serial integration chain owns main integration.",
+    "Completed fix results, actual model evidence, tests, remote integration and live impact remain separate proofs.",
+    "No automatic resumption of this file is scheduled. Read it together with HANDOFF.md and the actual journals."
+  ]
+}

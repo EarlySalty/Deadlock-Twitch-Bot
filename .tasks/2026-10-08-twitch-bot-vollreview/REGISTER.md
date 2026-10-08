@@ -1,5 +1,19 @@
 # Register: Twitch-Bot Vollreview
 
+## Neueste Nutzerentscheidung und aktuelle Laufkennungen
+
+Bedingte Deployfreigabe nach konkreter positiver Prüfung liegt jetzt vor. Keine pauschale Freigabe unbekannter Migrationen. Lesende Vorprüfung wf_3adaf342-5f6, Task wtx0f5jph, ohne args; BRIEFING-DEPLOYPRUEFUNG-02.md. Ausgaben DEPLOY-PRUEFUNG-02.md und .json, keine produktiven Aktionen durch diese Rolle. Frühere Angaben über eine unbeantwortete Deployfrage sind historisch; die konkreten Bedingungen bleiben noch zu belegen.
+
+Die bisherigen vier Fix-/Integrations-Tasks waren laut TaskStop nicht mehr registriert. Fortsetzung mit den unveränderten ursprünglichen Scripts/Args und jeweiligem resumeFromRunId: wf_beeac761-2c8 jetzt w9jlpqv0f, wf_8d15f5fe-eff jetzt w75e2km8o, wf_e6ba5fe6-44e jetzt wvbwquocy, wf_f7342e70-084 jetzt wtggh2ch4. Keine neue breite Reviewwelle. Schriftliche Einzelgrenzen und exklusive serielle Main-Integration gelten weiter. AUSLAUF-REGISTER.json hält die Wiederaufnahme fest; bisherige Abgaben und Transcripts nicht überschreiben oder als neue Abschlüsse zählen.
+
+## Vorrang: keine neuen Reviews, bestätigte Fixes und private HTML-Übersicht
+
+Neuer Nutzerauftrag vom 8. Oktober 2026: für spätere Wiederaufnahme sichern, keine neuen Reviews beginnen, bereits beauftragte Arbeiten auslaufen lassen und bestätigte Fixes fertigstellen. PAUSENAUFTRAG.md ist zusammen mit den ursprünglichen Schutzgrenzen maßgeblich. Der Nutzer bittet auch um Erklärung des Deploys, erteilt keine Freigabe. DEPLOY-ERKLAERUNG.md dokumentiert die lesend ermittelten Auswirkungen und die noch unbekannte Liste ausstehender Servermigrationen.
+
+Reine Dokumentationsrolle wf_a65e7fe1-77c, Task wmuk4yen3, Script tb-vollreview-private-erkenntnisse-wf_a65e7fe1-77c.js, ohne args. Modell gpt-6.1-sol, ausschließlich ERKENNTNISSE.html, ERKENNTNISSE-DATEN.json und FIX-RESTLISTE.md. Kein neuer Reviewer, keine Anwendungscodeänderung, keine Git-Mutation. Sie dokumentiert vorhandene Befunde und ordnet die 38 abgeschlossenen A/B-IDs zu, startet aber keine Fixer. Noch keine Rückgabe.
+
+Artefaktsicherung 3ca3c5f0195602175c4a52819dc136bd3f34b94b erfolgreich gepusht und remote bestätigt. Die elf gesicherten Dateien umfassen Q04-Originale, W03-Urteile und Paarzuordnung, B08-Prüfabschluss sowie aktualisierte Wiederaufnahme. Die laufenden Fixketten und exklusive Main-Push-Reihenfolge bleiben unverändert. Aktuelle Wiederaufnahme zuerst über den ersten Abschnitt HANDOFF.md; ältere allgemeine Reviewaufträge nicht neu starten.
+
 ## Aktuell: Statusauskunft, erhaltene Ergebnisse und serielle Integration
 
 Dieser Abschnitt und der neue erste Abschnitt in HANDOFF.md gehen älteren Aktivmeldungen vor. Am 2026-10-08 erneut remote bestätigt: Artefaktcheckpoint 1adb7e802ffe89a5597073f92481bdae8383dfb1, main f04c0ef03d47ce4893ee4d17cb98eeb4c2f6c473. Zwei Anwendungscodepakete integriert, kein Deploy oder Live-Nachweis.
