@@ -1567,7 +1567,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-            sqlx::query("UPDATE twitch_vod_archive_parts SET status=CASE part_index WHEN 0 THEN 'rejected' WHEN 1 THEN 'failed' WHEN 2 THEN 'pending' ELSE 'failed' END,youtube_video_id=CASE WHEN part_index=0 THEN 'found0' END,last_error='historical',updated_at='2026-10-01T13:00:00Z' WHERE vod_id=$1").bind(id).execute(&pool).await.unwrap();
+            sqlx::query("UPDATE twitch_vod_archive_parts SET status=CASE part_index WHEN 0 THEN 'rejected' WHEN 1 THEN 'failed' WHEN 2 THEN 'pending' ELSE 'failed' END,youtube_video_id=CASE WHEN part_index<3 THEN 'found' || part_index END,last_error='historical',updated_at='2026-10-01T13:00:00Z' WHERE vod_id=$1").bind(id).execute(&pool).await.unwrap();
             sqlx::query("INSERT INTO social_media_platform_auth(platform,twitch_user_id,platform_user_id) VALUES ('youtube','42','own')").execute(&pool).await.unwrap();
             sqlx::query("INSERT INTO twitch_vod_youtube_checks(vod_id,auth_id,auth_revision,channel_id,state,observations,upload_snapshot) SELECT $1,a.id,md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')),'own','rejected',$2,(SELECT jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index) FROM twitch_vod_archive_parts p WHERE p.vod_id=$1) FROM social_media_platform_auth a WHERE twitch_user_id='42'")
                 .bind(id).bind(recovery_observations(serde_json::json!([
@@ -1710,13 +1710,13 @@ mod tests {
             std::fs::remove_dir_all(directory).unwrap();
             pool.close().await;
         }
-        eprintln!("YOUTUBE_WORKER_DB_PROOF: prepared-part and original-source paths keep processed legacy rejected/failed/ID-less pending rows and original evidence unchanged; only two genuinely unconfirmed parts upload, repeated execution adds zero uploads");
+        eprintln!("YOUTUBE_WORKER_DB_PROOF: prepared-part and original-source paths keep processed known-ID legacy rejected/failed/pending rows and original evidence unchanged; only two genuinely unconfirmed parts upload, repeated execution adds zero uploads");
     }
 
     #[tokio::test]
     async fn idless_mismatched_parts_reach_preparation_and_actual_upload_after_read_failure() {
         for original in [false, true] {
-            for (parts, total, seconds) in [(2, 3, 60), (1, 1, 59)] {
+            for (parts, total, seconds) in [(2, 3, 60), (2, 2, 1), (2, 2, 60), (1, 1, 59)] {
                 let pool = pool("t_vod_idless_correspondence")
                     .await
                     .expect("synthetic PostgreSQL required");

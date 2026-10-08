@@ -849,7 +849,7 @@ async fn failed_channel_reads_and_unfinished_search_preserve_processed_part_evid
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO twitch_vod_archive_parts(vod_id,part_index,file_path,status) SELECT id,i,'/synthetic/part','failed' FROM twitch_vod_archive_vods CROSS JOIN generate_series(0,1) i").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO twitch_vod_archive_parts(vod_id,part_index,file_path,status,youtube_video_id) SELECT id,i,'/synthetic/part','failed',CASE WHEN i=0 THEN 'original' END FROM twitch_vod_archive_vods CROSS JOIN generate_series(0,1) i").execute(&pool).await.unwrap();
     let target = ziel(&pool, "42").await.unwrap().unwrap();
     let vod = vods(&pool, "42", &target).await.unwrap().remove(0);
     let proof = observation("original", Some(0), Some(2), 60);
@@ -1137,6 +1137,16 @@ fn full_coverage_requires_completed_scan_unique_parts_and_duration() {
         observation("abc", Some(0), Some(2), 60),
         observation("def", Some(1), Some(2), 60),
     ];
+    let mut local = synthetic_vod();
+    local.parts = json!([{"index":0,"video_id":null},{"index":1,"video_id":null}]);
+    let mut short = parts.clone();
+    short[0].duration_sec = Some(1);
+    assert_eq!(
+        decision(&local, &short[..1], true, false),
+        ("partial", false)
+    );
+    assert_eq!(decision(&local, &short, true, false), ("partial", false));
+    assert_eq!(decision(&local, &parts, true, false), ("confirmed", true));
     assert_eq!(decision(&vod, &parts, true, false), ("confirmed", true));
     assert_eq!(decision(&vod, &parts[..1], true, false), ("partial", false));
     let duplicate = vec![parts[0].clone(), parts[0].clone()];

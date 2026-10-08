@@ -278,14 +278,14 @@ fn youtube_part_observed(part: &Value, check: Option<&Value>, total: usize, stat
                         .map_or_else(
                             || {
                                 observation["part_total"].as_i64().unwrap_or(1) == total as i64
-                                    && (total > 1
-                                        || observation["source_duration_sec"]
-                                            .as_i64()
-                                            .filter(|source| *source > 0)
-                                            .zip(observation["duration_sec"].as_i64())
-                                            .is_some_and(|(source, duration)| {
-                                                duration >= source && duration - source <= 5
-                                            }))
+                                    && total == 1
+                                    && observation["source_duration_sec"]
+                                        .as_i64()
+                                        .filter(|source| *source > 0)
+                                        .zip(observation["duration_sec"].as_i64())
+                                        .is_some_and(|(source, duration)| {
+                                            duration >= source && duration - source <= 5
+                                        })
                             },
                             |id| observation["video_id"] == id,
                         )
