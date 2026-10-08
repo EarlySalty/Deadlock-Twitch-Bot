@@ -849,7 +849,7 @@ async fn failed_channel_reads_and_unfinished_search_preserve_processed_part_evid
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO twitch_vod_archive_parts(vod_id,part_index,file_path,status,youtube_video_id) SELECT id,i,'/synthetic/part','failed',CASE WHEN i=0 THEN 'original' END FROM twitch_vod_archive_vods CROSS JOIN generate_series(0,1) i").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO twitch_vod_archive_parts(vod_id,part_index,file_path,status) SELECT id,i,'/synthetic/part','failed' FROM twitch_vod_archive_vods CROSS JOIN generate_series(0,1) i").execute(&pool).await.unwrap();
     let target = ziel(&pool, "42").await.unwrap().unwrap();
     let vod = vods(&pool, "42", &target).await.unwrap().remove(0);
     let proof = observation("original", Some(0), Some(2), 60);

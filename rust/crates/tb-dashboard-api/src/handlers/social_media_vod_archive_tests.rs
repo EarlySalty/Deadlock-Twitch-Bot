@@ -763,7 +763,7 @@ async fn complete_current_proof_blocks_both_retry_branches_and_preserves_drive_o
                 pool,
                 "confirmed",
                 true,
-                json!([{"video_id":"found","part_index":0,"state":"processed"}]),
+                json!([{"video_id":"found","part_index":0,"duration_sec":3600,"state":"processed"}]),
             )
             .await;
             let before: Value = sqlx::query_scalar("SELECT jsonb_build_array(to_jsonb(v),(SELECT jsonb_agg(to_jsonb(p)) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id)) FROM twitch_vod_archive_vods v WHERE id=1").fetch_one(pool).await.unwrap();
@@ -828,8 +828,8 @@ async fn partial_processed_proof_excludes_exact_parts_from_both_resets_and_repea
             false,
             json!([
                 {"video_id":"found0","part_index":0,"state":"processed"},
-                {"video_id":"found1","part_index":1,"state":"processed"},
-                {"video_id":"found2","part_index":2,"state":"processed"},
+                {"video_id":"found1","part_index":1,"part_total":5,"state":"processed"},
+                {"video_id":"found2","part_index":2,"part_total":5,"state":"processed"},
                 {"video_id":"bad3","part_index":3,"state":"rejected"},
                 {"video_id":"unrelated","part_index":9,"state":"processed"}
             ]),
@@ -884,6 +884,66 @@ async fn partial_processed_proof_excludes_exact_parts_from_both_resets_and_repea
 }
 
 #[tokio::test]
+async fn idless_partial_matches_with_wrong_total_or_single_duration_allow_both_resets() {
+    let database = database().await;
+    let pool = &database.pool;
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("source.mp4");
+    std::fs::write(&file, b"synthetic media").unwrap();
+    sqlx::query("INSERT INTO social_media_platform_auth(twitch_user_id,platform,platform_user_id) VALUES ('42','youtube','own')").execute(pool).await.unwrap();
+    for status in ["uploaded", "upload_failed"] {
+        for (parts, total, duration) in [
+            (2, Some(3), Some(3600)),
+            (2, None, Some(3600)),
+            (1, Some(2), Some(3600)),
+            (1, Some(1), Some(3599)),
+            (1, None, None),
+            (1, Some(1), Some(3606)),
+        ] {
+            for failed_read in [false, true] {
+                sqlx::query("UPDATE twitch_vod_archive_vods SET status=$1,local_path=$2,drive_requested=FALSE WHERE id=1").bind(status).bind(file.to_str().unwrap()).execute(pool).await.unwrap();
+                sqlx::query("DELETE FROM twitch_vod_archive_parts WHERE vod_id=1")
+                    .execute(pool)
+                    .await
+                    .unwrap();
+                sqlx::query("INSERT INTO twitch_vod_archive_parts(vod_id,part_index,status,file_path,last_error,upload_offset) SELECT 1,i,'rejected',$1,'history',7 FROM generate_series(0,$2::integer-1) i")
+                    .bind(file.to_str().unwrap()).bind(parts).execute(pool).await.unwrap();
+                save_recovery_check(
+                    pool,
+                    "partial",
+                    false,
+                    json!([{"video_id":"found","part_index":0,"part_total":total,"duration_sec":duration,"state":"processed"}]),
+                )
+                .await;
+                sqlx::query("UPDATE twitch_vod_youtube_checks SET last_error=CASE WHEN $1 THEN 'connection' END,state=CASE WHEN $1 THEN 'error' ELSE 'partial' END WHERE vod_id=1")
+                    .bind(failed_read).execute(pool).await.unwrap();
+                let item = recovery_item(pool).await;
+                assert_eq!(
+                    item["can_retry"], true,
+                    "{status}/{parts}/{total:?}/{duration:?}/{failed_read}"
+                );
+                assert_eq!(item["youtube_verified_complete"], false);
+                let response = action_handler(
+                    partner(),
+                    State(pool.clone()),
+                    Json(ArchiveAction {
+                        id: 1,
+                        action: "retry".into(),
+                        twitch_user_id: None,
+                    }),
+                )
+                .await;
+                assert_eq!(response.status(), StatusCode::OK);
+                let reset: Vec<String> = sqlx::query_scalar("SELECT status FROM twitch_vod_archive_parts WHERE vod_id=1 ORDER BY part_index")
+                    .fetch_all(pool).await.unwrap();
+                assert_eq!(reset, vec!["pending"; parts as usize]);
+            }
+        }
+    }
+    eprintln!("YOUTUBE_API_DB_PROOF: ID-less wrong/missing total and short/missing/overlong singleton durations cannot suppress GET/POST recovery or either reset branch, including retained observations after a failed read");
+}
+
+#[tokio::test]
 async fn current_attempt_errors_remain_visible_without_a_valid_success_snapshot_or_channel() {
     let database = database().await;
     let pool = &database.pool;
@@ -903,7 +963,7 @@ async fn current_attempt_errors_remain_visible_without_a_valid_success_snapshot_
             pool,
             "confirmed",
             true,
-            json!([{"video_id":"found","part_index":0,"state":"processed"}]),
+            json!([{"video_id":"found","part_index":0,"duration_sec":3600,"state":"processed"}]),
         )
         .await;
         for error in ["connection", "quota", "request", "channel_changed"] {
@@ -978,7 +1038,7 @@ async fn recovery_get_and_post_reject_stale_binding_as_confirmation() {
             pool,
             "confirmed",
             true,
-            json!([{"video_id":"found","part_index":0,"state":"processed"}]),
+            json!([{"video_id":"found","part_index":0,"duration_sec":3600,"state":"processed"}]),
         )
         .await;
         let item = recovery_item(pool).await;
