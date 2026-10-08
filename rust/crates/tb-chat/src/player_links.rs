@@ -52,14 +52,14 @@ pub async fn accounts(
 /// Revision invalidates Steam callbacks started before this command.
 pub async fn disconnect(pool: &PgPool, twitch_user_id: &str) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
-    sqlx::query("DELETE FROM twitch_player_steam_accounts WHERE twitch_user_id = $1")
-        .bind(twitch_user_id)
-        .execute(&mut *tx)
-        .await?;
     sqlx::query("INSERT INTO twitch_player_steam_links (twitch_user_id, lookup_enabled, revision) VALUES ($1, FALSE, 1)
         ON CONFLICT (twitch_user_id) DO UPDATE SET lookup_enabled = FALSE,
         revision = twitch_player_steam_links.revision + 1, updated_at = NOW()")
         .bind(twitch_user_id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM twitch_player_steam_accounts WHERE twitch_user_id = $1")
+        .bind(twitch_user_id)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(())
 }
@@ -144,6 +144,12 @@ pub async fn set_primary(
     steam_id64: i64,
 ) -> Result<bool, sqlx::Error> {
     let mut tx = pool.begin().await?;
+    sqlx::query(
+        "SELECT twitch_user_id FROM twitch_player_steam_links WHERE twitch_user_id = $1 FOR UPDATE",
+    )
+    .bind(twitch_user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(
             SELECT 1 FROM twitch_player_steam_accounts
@@ -191,6 +197,12 @@ pub async fn remove_account(
     steam_id64: i64,
 ) -> Result<bool, sqlx::Error> {
     let mut tx = pool.begin().await?;
+    sqlx::query(
+        "SELECT twitch_user_id FROM twitch_player_steam_links WHERE twitch_user_id = $1 FOR UPDATE",
+    )
+    .bind(twitch_user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     let removed_primary: Option<bool> = sqlx::query_scalar(
         "DELETE FROM twitch_player_steam_accounts
          WHERE twitch_user_id = $1 AND steam_id64 = $2
@@ -249,6 +261,125 @@ pub async fn remove_account(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn two_accounts(pool: &PgPool) -> i64 {
+        let rev = prepare(pool, "111").await.unwrap();
+        assert!(complete(pool, "111", rev, STEAM64_BASE + 42, "first")
+            .await
+            .unwrap());
+        let rev = prepare(pool, "111").await.unwrap();
+        assert!(complete(pool, "111", rev, STEAM64_BASE + 84, "second")
+            .await
+            .unwrap());
+        prepare(pool, "111").await.unwrap()
+    }
+
+    async fn parent_lock(pool: &PgPool) -> sqlx::Transaction<'_, sqlx::Postgres> {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("SELECT twitch_user_id FROM twitch_player_steam_links WHERE twitch_user_id = '111' FOR UPDATE")
+            .execute(&mut *tx).await.unwrap();
+        tx
+    }
+
+    async fn waits_for_parent<T>(task: &mut tokio::task::JoinHandle<T>) {
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), task)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn primary_selection_waits_for_unlink_before_checking_account() {
+        let db = fixture().await;
+        two_accounts(&db.pool).await;
+        let mut tx = parent_lock(&db.pool).await;
+        let pool = db.pool.clone();
+        let mut task =
+            tokio::spawn(async move { set_primary(&pool, "111", STEAM64_BASE + 42).await });
+        waits_for_parent(&mut task).await;
+        sqlx::query("UPDATE twitch_player_steam_links SET lookup_enabled = FALSE, revision = revision + 1 WHERE twitch_user_id = '111'").execute(&mut *tx).await.unwrap();
+        sqlx::query("DELETE FROM twitch_player_steam_accounts WHERE twitch_user_id = '111'")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        assert!(!task.await.unwrap().unwrap());
+        let link = load(&db.pool, "111").await.unwrap().unwrap();
+        assert!(!link.lookup_enabled);
+        assert_eq!(link.steam_id64, None);
+        assert!(accounts(&db.pool, "111").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn removal_waits_for_other_removal_before_choosing_replacement() {
+        let db = fixture().await;
+        two_accounts(&db.pool).await;
+        let mut tx = parent_lock(&db.pool).await;
+        let pool = db.pool.clone();
+        let mut task =
+            tokio::spawn(async move { remove_account(&pool, "111", STEAM64_BASE + 84).await });
+        waits_for_parent(&mut task).await;
+        sqlx::query("DELETE FROM twitch_player_steam_accounts WHERE twitch_user_id = '111' AND steam_id64 = $1")
+            .bind(STEAM64_BASE + 42).execute(&mut *tx).await.unwrap();
+        sqlx::query("UPDATE twitch_player_steam_links SET revision = revision + 1 WHERE twitch_user_id = '111'").execute(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+        assert!(task.await.unwrap().unwrap());
+        assert!(accounts(&db.pool, "111").await.unwrap().is_empty());
+        assert_eq!(
+            load(&db.pool, "111").await.unwrap().unwrap().steam_id64,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnect_waits_for_completion_before_deleting_accounts() {
+        let db = fixture().await;
+        prepare(&db.pool, "111").await.unwrap();
+        let mut tx = parent_lock(&db.pool).await;
+        let pool = db.pool.clone();
+        let mut task = tokio::spawn(async move { disconnect(&pool, "111").await });
+        waits_for_parent(&mut task).await;
+        sqlx::query("UPDATE twitch_player_steam_links SET steam_id64 = $1, lookup_enabled = TRUE, revision = revision + 1 WHERE twitch_user_id = '111'")
+            .bind(STEAM64_BASE + 42).execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO twitch_player_steam_accounts (twitch_user_id, steam_id64, is_primary) VALUES ('111', $1, TRUE)")
+            .bind(STEAM64_BASE + 42).execute(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+        task.await.unwrap().unwrap();
+        assert!(accounts(&db.pool, "111").await.unwrap().is_empty());
+        let link = load(&db.pool, "111").await.unwrap().unwrap();
+        assert!(!link.lookup_enabled);
+        assert_eq!(link.steam_id64, None);
+        disconnect(&db.pool, "222").await.unwrap();
+        assert_eq!(load(&db.pool, "222").await.unwrap().unwrap().revision, 1);
+    }
+
+    #[tokio::test]
+    async fn primary_selection_does_not_lock_accounts_before_parent() {
+        let db = fixture().await;
+        two_accounts(&db.pool).await;
+        let mut tx = parent_lock(&db.pool).await;
+        let pool = db.pool.clone();
+        let mut task =
+            tokio::spawn(async move { set_primary(&pool, "111", STEAM64_BASE + 42).await });
+        waits_for_parent(&mut task).await;
+        sqlx::query("SET LOCAL lock_timeout = '500ms'")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE twitch_player_steam_accounts SET is_primary = FALSE WHERE twitch_user_id = '111'").execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO twitch_player_steam_accounts (twitch_user_id, steam_id64, is_primary) VALUES ('111', $1, TRUE)")
+            .bind(STEAM64_BASE + 126).execute(&mut *tx).await.unwrap();
+        sqlx::query("UPDATE twitch_player_steam_links SET steam_id64 = $1, revision = revision + 1 WHERE twitch_user_id = '111'")
+            .bind(STEAM64_BASE + 126).execute(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+        assert!(task.await.unwrap().unwrap());
+        assert_eq!(
+            load(&db.pool, "111").await.unwrap().unwrap().account_id(),
+            Some(42)
+        );
+        assert_eq!(accounts(&db.pool, "111").await.unwrap().len(), 3);
+    }
 
     async fn fixture() -> crate::test_postgres::TestPostgres {
         let db = crate::test_postgres::TestPostgres::start().await;
