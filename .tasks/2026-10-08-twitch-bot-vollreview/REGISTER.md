@@ -1,5 +1,56 @@
 # Register: Twitch-Bot Vollreview
 
+## Neuester Nachtrag: abgeschlossene Fixkritiken und erhaltene Arbeit
+
+Dieser Nachtrag geht den folgenden Abschnitten vor. B02 bleibt der einzige nachgewiesene Anwendungscode-Merge, kein Deploy/Live.
+
+Ereignis 7 liegt vor und wird durch wf_f1a93c64-6ee, Task wbmne3oiy, Script tb-vollreview-status-s7-wf_f1a93c64-6ee.js übernommen. B01-Prüfbindung wf_e099cf2a-fc9 inzwischen beendet, Ergebnis meldet gebundene Regression und historischen Quellstandsbeweis; Modell-/Artefaktabnahme noch offen. Nicht erneut starten.
+
+A01-Abschluss wf_5c114a47-0a8 ist beendet und auf Sol geprüft, Kritik ALLOW für 1080b730. Ursprünglicher Quellstand rekonstruiert, sieben Regressionen bestanden, 35 gleiche Baselinefehler, frischer Clippy mit derselben fremden Diagnose. A02/B05-Prüfabschluss wf_b6076a3e-97b ebenfalls beendet: beide Kritiker ALLOW. A02 3365e6b2 mit vollständigen passenden Bestandsfehlernachweisen; B05 9c11bf6c mit 40 bestandenen Fokusfällen, eigene volle Baseline und Baseline-Clippy noch offen. Eine passende A02-Baseline steht jetzt zum belastbaren Vergleich bereit. Originale mit Modell-/Hashbelegen in ABSCHLUESSE-08.json und ABSCHLUESSE-09.json.
+
+B03 Runde 3 wf_7f393473-8ca ist ohne Quelländerung beendet. Head aa450978 nach konfliktfreiem Basisabgleich. Bestätigter Abhängigkeitsblocker: tatsächliche Auswahl über request-lokalen gemeinsamen Träger aus auth/level.rs ins Audit übertragen. Dateieigentum bleibt zunächst bei A01; B03 erst nach dessen Integration seriell mit erweitertem Umfang neu beauftragen. Keine vierte Codekorrektur gestartet.
+
+B08-Abbruch rekonstruiert: sauberer Commit 0e3ea423 und Logs /tmp/tb-b08-r2-evidence/ erhalten. 131 Sol-Datensätze und ein synthetischer Datensatz geprüft. Neuer Abschluss ohne Codeänderung und frische Kritik gestartet. Vorhandenes ALLOW benötigt korrekte Basisbindung nach B02-Fortschritt.
+
+| Neue Ausführung | Run-ID | Task-ID | Script |
+|---|---|---|---|
+| A01 Integrationsvorbereitung | wf_06169aa7-139 | w0axf2bba | tb-vollreview-a01-integrationsvorbereitung-wf_06169aa7-139.js, ohne args |
+| A02/B05/B09 Integrationsvorbereitung | wf_a21871df-c4d | wdr88j8sx | tb-vollreview-integrationsvorbereitung-02-wf_a21871df-c4d.js, args gespeichert |
+| B08 erhaltener Abschluss und Kritik | wf_58a43069-334 | w4qi2a6tt | tb-vollreview-b08-r2-abschluss-wf_58a43069-334.js, ohne args |
+
+B01-Prüfbindung, B04/B06/B07-Prüfabschluss, B10, Skeptiker DA04/DA05/DA06, W04, W05 und Q04 bleiben in bestehenden Ausführungen. Aktive Tabelle in HANDOFF.md. Keine Quelländerung in den neuen Integrationsprüfrollen; tatsächliche Main-Pushes später durch Astra.
+
+W03-Restkonsolidierung wf_1ff0fd6e-a0d ist inzwischen beendet und liefert fünf Dateien. 105 Reviews, 166 Rohmeldungen laut Rollenrückgaben. Modelle, Originalität und Gruppenmitgliedschaft dieser fünf Artefakte sind durch Astra noch abzugleichen; keine neuen bestätigten Zahlen oder zusätzliche Abdeckung abgenommen.
+
+## Aktueller Stand nach erster Anwendungscode-Integration
+
+Dieser Abschnitt geht älteren Statusangaben unten vor. B02 ist als `e98b7f016dbab373a5a8dd9490d158b136c97fec` nach main integriert, Remote-Ref nach Push bestätigt. Astra führte sieben Git-Schritte einzeln aus, prüfte frische Basis, unveränderten Diff und Sol-Gate. Regulärer Push Exit 0. Kein Deploy oder Live-Nachweis; Wrapper-Konflikt bleibt gesperrt. Belege in NACHWEIS-ABSCHLUESSE-07.md.
+
+Artefakte bis `eed9782e209827e019f75fec9ecf049665b47c2f` auf audit/tb-vollreview-20261008 remote gesichert. Voriger Push von `416851e6` scheiterte an zwei Fehlalarmen auf Workflowreferenzen; Feldnamen präzisiert, unveränderte Urteile und Hashwechsel dokumentiert. Beide Treffer betreffen bekannte Workflow-IDs, Scanner und Hooks bleiben unverändert. SICHERUNG-02.md. Neuere Dokumente zunächst lokal.
+
+Neue abgeschlossene Rückgaben mit Modellen, Transcript-Hashes und exakten StructuredOutput-Vergleichen in ABSCHLUESSE-07.json und NACHWEIS-ABSCHLUESSE-07.md:
+
+- B01 fachliche Kritik ALLOW, aber eindeutige Quellbindung der historischen Testlogs offen. B01-Abgleichworkflow beendet.
+- B02 Integrationsworker beendete ohne Push wegen eigener Auslegung der Nutzerfreigabe. Kein menschlicher Deny, kein Hook-Deny. Ursprünglicher Mergeauftrag durch Astra anschließend regelkonform ausgeführt.
+- B03 Runde 2 beendet: `3a01d0c3`, Gate ALLOW, Kritik BLOCK wegen abweichender erneuter Auth-Auswahl nach der Aktion. Frischer Fixer Runde 3 beauftragt.
+- B09 Fixer und Kritiker beendet: `02f98b8b`, beide ALLOW. Originale abgenommen, Laufzeitbelege und aktuelle Integration noch gesondert zu prüfen.
+- W03-Ergänzung beendet: DA07-S001:security und DA15-S002:resources vorhanden und auf Sol geprüft. 183 alte Rückgaben bleiben erhalten. Ereignis 6 ebenfalls durch Sol-Statusrolle übernommen, TODO-Diff geprüft.
+
+| Neue Ausführung | Run-ID | Task-ID | Script und Grenzen |
+|---|---|---|---|
+| W03 fünf Restbereiche konsolidieren | wf_1ff0fd6e-a0d | wgxo23el5 | tb-vollreview-w03-restkonsolidierung-wf_1ff0fd6e-a0d.js; DA07, DA15, DA17, MO01, IA01, 105 Reviews einschließlich Ergänzungen. Args gespeichert. |
+| B03 frische Runde 3 | wf_7f393473-8ca | whk0bw651 | tb-vollreview-b03-fixrunde-3-wf_7f393473-8ca.js; nur admin_audit.rs, sonst Abhängigkeit melden. BRIEFING-B03-R3.md. Ohne args. |
+| B01 tatsächliche Prüfbindung | wf_e099cf2a-fc9 | wvn9nj909 | tb-vollreview-b01-pruefbindung-wf_e099cf2a-fc9.js; keine Quelländerung oder Git-Mutation. BRIEFING-B01-PRUEFBINDUNG.md. Ohne args. |
+| W05 priorisierte Rust-Bereiche | wf_a9db9baa-10f | wanhv3338 | tb-vollreview-defektwelle-w05-wf_a9db9baa-10f.js; 22 Bereiche, 97 Abschnitte, 485 statische Reviews. Args gespeichert. |
+
+W05 umfasst AN02, BI01, BI04, BO01 bis BO04, CH01 bis CH08, EN01, MO03, R19, RA01 bis RA03 und SM01. Insgesamt 47 von 108 Bereichen beauftragt, 61 noch zu verteilen. Starts sind keine Abnahmen. Bisherige 13 A, 25 B, 30 C sowie 67 ungeprüfte A/B-Vorschläge bleiben unverändert.
+
+B08 Runde 2 `wf_2b7d67c4-23f`, Task wti12vgrf, ist inzwischen ohne Rückgabe durch Kontextlimit beendet. Vor Wiederaufnahme Journal, erhaltenen Worktree und eigene Prüfprozesse feststellen; keine neue Korrekturrunde unterstellen und keine aktive Kompilierung doppelt starten. Noch keine Ergebnisabnahme.
+
+A01-Abschluss, A02/B05-Prüfabschluss, B04/B06/B07-Prüfabschluss, B10, DA04/DA05/DA06-Skeptiker, W04 und Q04 behalten ihre bestehenden Ausführungen. Nicht duplizieren. TODO.md enthält Ereignis 6 und benötigt für die hier belegten Änderungen Ereignis 7.
+
+## Historische Registerstände
+
 Stand: 2026-10-08, nach Start von W03. Auftraggeber: `819f0d87-8d3f-4fbf-8c4c-ada2bf290f5b`.
 
 ORCHESTRIERUNG[OR-1]: Stufe riesig | Schritt review | Artefakt: .tasks/2026-10-08-twitch-bot-vollreview/AUFTRAG.md

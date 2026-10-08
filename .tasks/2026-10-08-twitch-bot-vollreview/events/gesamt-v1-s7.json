@@ -1,0 +1,42 @@
+{
+  "auftrag": "2026-10-08-twitch-bot-vollreview",
+  "paket": "gesamt",
+  "versuch": 1,
+  "sequenz": 7,
+  "zeit": "2026-10-08T10:22:13Z",
+  "produzent": "astra-f61905e7",
+  "phase": "aktiv",
+  "gebaut": "nein",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "eed9782e209827e019f75fec9ecf049665b47c2f",
+  "nachweise": [
+    "B02 ist als erstes Anwendungscode-Paket nach main integriert: e98b7f016dbab373a5a8dd9490d158b136c97fec. Astra prüfte frisches main a8b5b5e9, sauberen Worktree, unveränderten Diffhash und passenden Sol-Gate. Sieben Git-Schritte einzeln, ein regulärer Pushanlauf, Exit 0, anschließendes ls-remote bestätigt den Fix-SHA. Kein Deploy, Restart oder Live-Nachweis.",
+    "B02-Prüfbindung unverändert: 50 OBS-Tests bestanden, Gesamtsuite 1334 bestanden und dieselben 35 Baselinefehler, eigene Dateien formatiert, fremde Paketformat-/Clippyfehler identisch. Echte Kritik ALLOW. NACHWEIS-ABSCHLUESSE-07.md dokumentiert Integration, Testgrenzen und regulären Push.",
+    "Artefaktsicherung eed9782e erfolgreich remote bestätigt. Voriger Push von 416851e6 war wegen zweier Gitleaks-Fehlalarme auf nachweislich bekannte Workflow-IDs blockiert. Zwei Metadatenfeldnamen präzisiert, Werte und Originalurteile unverändert, keine Hook-/Scanneränderung. SICHERUNG-02.md. Neuer DA03-Exporthash 46a472cf3d741405fff02cfcc0e0617fb9da0d649f80db33d06e37b7db38febe; historische Ereignishashes bleiben historisch korrekt.",
+    "ABSCHLUESSE-07.json erhält elf originale Rückgaben samt durch Astra geprüften Modellfeldern, Transcript-Hashes und exakter StructuredOutput-/Journalgleichheit. ABSCHLUESSE-08.json ergänzt den abgeschlossenen Prüfworkflow A02/B05/B02; ABSCHLUESSE-09.json A01-Abschluss und B03-Abhängigkeit. Keine Rohtranscripts ins Repo übernommen.",
+    "A01-Abschluss wf_5c114a47-0a8 beendet und auf Sol geprüft, echte Kritik ALLOW für 1080b730. Quellbindung rekonstruiert, sieben funktionale Regressionen bestanden, Opt-in-Vertrag geprüft, 35 gleiche Baselinefehler und frischer Clippy mit identischer fremder Diagnose. Integrationsvorbereitung ohne neue Codekorrektur wf_06169aa7-139, Task w0axf2bba. Kein A01-Merge.",
+    "A02/B05-Prüfabschluss wf_b6076a3e-97b beendet. Beide echten Kritiker ALLOW und auf Sol geprüft. A02 3365e6b2: drei Eigentumsregressionen bestanden, Suite 1336 bestanden/35 gleiche Baselinefehler, Clippy Exit 0. B05 9c11bf6c: 40 Fokusfälle bestanden, Fixsuite 1336 bestanden/35 rot, eigene volle Baseline und Baseline-Clippy fehlen. Passende inzwischen vorhandene A02-Baseline muss exakt verglichen werden.",
+    "B09 02f98b8b: Fixer und Kritiker ALLOW, Modelle/Originale geprüft. Zwei Fokustests bestanden, aus alter Suite genau zwei IDOR-Fehler entfernt, keine neuen benannten Fehler. Alte Suite ohne include-ignored: 31 Baselinefehler, 29 Fixfehler. Separater Doctestlauf null ausgeführt/zwei ignoriert, kein funktionaler Doctestnachweis. Neue Integrationsvorbereitung A02/B05/B09 in wf_a21871df-c4d, Task wdr88j8sx, args gespeichert; keine Quelländerung oder Main-Push durch diese Rollen.",
+    "B01-Kritiker ALLOW, jedoch historische Testlogs nicht eindeutig an den Fix c3aa3cc9 gebunden. Neuer finaler Log leer. Frische Prüfrolle wf_e099cf2a-fc9, Task wvn9nj909, schließt Bindung ohne Quelländerung. Keine Integration.",
+    "B03 Runde 2: 3a01d0c3, Gate ALLOW, frische Kritik BLOCK wegen erneuter Auth-Auswahl nach der Aktion. Frischer Versuch wf_7f393473-8ca beendet ohne Quelländerung mit belegtem Abhängigkeitsblocker. Head aa450978 nach konfliktfreiem Abgleich auf e98b7f01. Zusätzlich auth/level.rs nötig, tatsächliche Auswahl muss zum Audit übertragen werden. Erst A01 integrieren, danach B03 seriell neu zuordnen. Kein Gate-Neuwürfeln.",
+    "B08 Runde 2 wf_2b7d67c4-23f am Kontextlimit ohne Abgabe beendet. Sauberer Commit 0e3ea423 und Logs erhalten, 131 Sol-Datensätze plus ein synthetischer geprüft. Neuer Abschluss ohne Codeänderung und danach frische Kritik wf_58a43069-334, Task w4qi2a6tt. Vorhandenes Gate-ALLOW benötigt korrekte Basisbindung nach B02-Fortschritt.",
+    "W03-Ergänzung wf_6efbb8b3-653 vollständig beendet und auf Sol geprüft: DA07-S001:security und DA15-S002:resources ergänzen die 183 erhaltenen Originale. Restkonsolidierung wf_1ff0fd6e-a0d inzwischen ebenfalls beendet, fünf neue Artefakte mit zusammen 105 Reviews und 166 Rohmeldungen laut Rückgaben. Astra-Abnahme von Modellen, Originalität und Gruppenmitgliedschaft dieser fünf Artefakte noch offen. Weiterhin sieben abgenommene konsolidierte Bereiche.",
+    "Bestätigte Befundzahlen unverändert: R09/W02/DA03 13 A, 25 B, 30 C. DA04/DA05/DA06 weiter 67 ungeprüfte A/B-Vorschläge und 29 ursprüngliche C-Vorschläge, Skeptiker wf_655679bf-2b7 aktiv. Keine neuen bestätigten Zahlen aus Konsolidiererrückgaben.",
+    "W04 wf_b01ff274-9fa aktiv: DA08, DA09, DA10, DA11, DA12, DA13, DA14, DA16, DA18, DA19, IA02, IA03, IA04; 46 Abschnitte, 230 Reviews. W05 wf_a9db9baa-10f, Task wanhv3338 gestartet: AN02, BI01, BI04, BO01 bis BO04, CH01 bis CH08, EN01, MO03, R19, RA01 bis RA03, SM01; 22 Bereiche, 97 Abschnitte, 485 Reviews. Insgesamt 47 von 108 Defektbereichen beauftragt, 61 noch nicht verteilt. Starts sind keine Abnahmen.",
+    "B04/B06/B07-Prüfabschluss wf_961bca08-8d7 und B10 wf_b1cabe6f-009 behalten bestehende Ausführungen. Zwölf Qualitätsbereiche abgenommen, Q04 wf_e3b6f95d-94c weiter aktiv; keine Gesamtnote. Aktive Rollen nicht duplizieren. Genaue Scripts und Eigentum in HANDOFF.md und REGISTER.md."
+  ],
+  "blocker": [
+    "Deploy bleibt gesperrt: vorgeschriebener Wrapper startet Migrationen und verändert PostgreSQL-Konfiguration. Keine menschliche Antwort auf die Freigabefrage. B02-Merge ist keine Deployfreigabe; kein Ersatzweg, Restart oder Aufräumen.",
+    "B03 benötigt seriellen Zugriff auf die noch A01 zugeordnete Auth-Datei. Kein paralleler Writer und keine fachfremde Ein-Datei-Umgehung.",
+    "B01-Prüfbindung und B05-Baselineabgleich noch offen. Mehrere Gesamtsuiten bleiben mit belegten oder noch abzugleichenden Bestandsfehlern rot; keine grüne Gesamtsuite behauptet.",
+    "Weitere Reviewwellen, neue Konsolidierungsabnahmen, Gegenprüfungen und Qualitätskritiken sind nicht abgeschlossen. Gesamtfelder bleiben nein, obwohl B02 als Einzelpaket nachweislich integriert ist."
+  ],
+  "naechster_schritt": "Neue W03-Konsolidierungen unabhängig abnehmen, laufende Fixprüfungen erhalten und Ereignis 7 samt neuer Artefakte sichern",
+  "hinweise": [
+    "Der Gesamt-SHA bezeichnet die letzte bestätigte Artefaktsicherung, nicht den B02-Integrations-SHA und keinen Deploy-SHA.",
+    "Historische Angaben wie noch kein Anwendungscode-Merge gelten seit dem belegten B02-Push nicht mehr. Der Gesamtauftrag bleibt unvollständig.",
+    "Die Modelle je Rolle, technische ALLOW-Nachweise, ausgeführte Prüfungen, tatsächliche Integration und Livewirkung bleiben getrennte Nachweise."
+  ]
+}

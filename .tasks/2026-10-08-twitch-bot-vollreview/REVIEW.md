@@ -1,5 +1,33 @@
 # Review-Runden: Twitch-Bot Vollreview
 
+## Ergänzung nach weiteren abgeschlossenen Kritiken
+
+A01 Runde 3 hat jetzt echte fachliche Kritik ALLOW für 1080b730. Abschlussrolle und Kritiker durch Astra auf Sol, fertige Hashes und exakte Originalgleichheit geprüft; ABSCHLUESSE-09.json. Sieben Regressionen, passende 35 Bestandsfehler und Opt-in-Vertrag belegt, Clippy bleibt an identischer fremder Diagnose stehen. Neue Integrationsvorbereitung wf_06169aa7-139, keine vierte Codekorrektur.
+
+A02 und B05 besitzen echte Kritiken ALLOW für 3365e6b2 beziehungsweise 9c11bf6c. Modelle und Originale in ABSCHLUESSE-08.json abgenommen. A02s volle Baseline entspricht den 35 Fehlern des Fixes. Bei B05 fehlen eigene vollständige Baseline und Baseline-Clippy; passende inzwischen vorhandene A02-Belege müssen exakt verglichen werden. Neue Integrationsvorbereitung A02/B05/B09 in wf_a21871df-c4d, noch kein Merge dieser Pakete.
+
+B03 Runde 3 bestätigte ohne Quelländerung die Abhängigkeit zu auth/level.rs. Neuer Head aa450978 nach konfliktfreiem Basisabgleich, kein erneutes Gate. Nach A01-Integration seriell neue Schreibgrenze vergeben. Dieser Umfangsblocker ist keine weitere fehlerhafte Codekorrektur.
+
+B08 Runde 2 hat Commit 0e3ea423 und Prüfprotokolle hinterlassen. Neuer Abschluss und frische Kritik in wf_58a43069-334. Noch keine fachliche Abnahme und keine neue Codekorrektur.
+
+## Neuester Stand nach B02-Integration
+
+Dieser Nachtrag geht abweichenden historischen Angaben unten vor. Vollständige originale Rückgaben und Modellbeweise in ABSCHLUESSE-07.json, Einordnung und Integrationsprotokoll in NACHWEIS-ABSCHLUESSE-07.md.
+
+| Paket | Fester Stand | Urteil und offene Arbeit |
+|---|---|---|
+| B02 | e98b7f016dbab373a5a8dd9490d158b136c97fec | Prüfabschluss, echte Kritik und Sol-Gate abgenommen. Astra integrierte den identischen Diff regulär nach Remote-main; ls-remote bestätigte den SHA. Kein Deploy/Live. |
+| B01 | c3aa3cc94fec60aa365dcc9ca9f54b4bd3f1539a | Kritiker ALLOW. Historische Testlogs aber nicht eindeutig an den Fix gebunden: 3341098f enthält selbst keinen Fix oder neuen Test, finaler Log leer. Frühere Übernahmebehauptung unten ist damit eingeschränkt. Frische Prüfrolle wf_e099cf2a-fc9 ohne Quelländerung. |
+| B03 Runde 2 | 3a01d0c3b67ecc6ebc20bee2cc2140660276ecbb | Gate ALLOW, frischer Kritiker BLOCK. Erneute Auth-Auflösung nach Aktion kann bei wechselndem Brokerausgang einen anderen Akteur wählen. Runde 3 wf_7f393473-8ca, ausschließlich admin_audit.rs; sonst Abhängigkeitsblocker. |
+| B09 | 02f98b8bc1f2e9de170558284926064ad3dbb9d8 | Fixer und Kritik ALLOW; beide Modelle/Originale geprüft. Laufzeitlogs und aktuelle Integration noch gesondert abnehmen. Kein Merge. |
+| B08 Runde 2 | noch zu rekonstruieren | wf_2b7d67c4-23f am Kontextlimit ohne Rückgabe beendet. Erhaltene Arbeit zuerst prüfen, kein fachliches BLOCK und kein verlorener Fix daraus ableiten. |
+
+B01-Kritiker a014f2fa4705be9bd: 45 echte Sol-Datensätze, ein synthetischer, Hash 613e26fedf508bb5fe5324737c068769f02cc338616da4055d4e9cd65dfe196e. B03-Kritiker a7e3bce057453012a: 45 echte Sol-Datensätze, Hash bd770e27bdb4ee9abd82bce24f6029d55e0e45b8f9dd6e89725f5faedf01367d. B09-Kritiker abbe7617ff0ff86f5: 38 echte Sol-Datensätze, Hash cbe007a9686c6322b7207b635acae15c6f2764829e5e34218f4f9c8f606ebd1b.
+
+B02-Integration: sieben Git-Schritte einzeln, ein Pushanlauf, Gate `ALLOW: this SHA already passed review_gate [reviewer_model=gpt-6.1-sol]`, regulärer Push Exit 0. 50 OBS-Tests bestanden, Gesamtsuite 1334 bestanden/35 identische Baselinefehler, unveränderte Prüfbindung. Deploykonflikt bleibt offen.
+
+## Historische Runden
+
 Stand: 2026-10-08. B01 ist lokal implementiert, aber noch nicht integrationsbereit. Ein frischer Sol-Worker gleicht die Basis ab und ergänzt Nachweise; danach folgt ein frischer Fix-Kritiker.
 
 ## Dokumentationscheckpoint 1

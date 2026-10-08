@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "workflow_id": "wf_5c114a47-0a8",
+      "agent_id": "aab0cb692b0292fec",
+      "label": "A01 Runde 3: Sol-Abschluss nach Kontextlimit",
+      "model_counts": {
+        "gpt-6.1-sol": 122
+      },
+      "transcript_sha256": "fb6fe58491906870c850f3e36c00b98ac2a25d4cbe38910c1be74a5011814601",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_5c114a47-0a8/agent-aab0cb692b0292fec.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "id": "A01-R3-ABSCHLUSS",
+        "status": "VERIFIED_WITH_BASELINE_LIMITATIONS; ready for the independent read-only Sol critic",
+        "base_sha": "a8b5b5e986a1de0b8e2f981651f83bda9cf400dd",
+        "head_sha": "1080b73007fde10ea18580bf07e5b4e9bdc1f549",
+        "source_changed": false,
+        "worktree_clean": true,
+        "gate": "ALLOW: No merge-blocking defect found in the supplied diff. Retained explicit Sol-only review, exit 0; not rerun.",
+        "gate_evidence": [
+          "Original command: python3 /home/nathanael/Documents/.claude/gpt-workers/gate_hook.py --review --repo /home/nathanael/.worktrees/tb-vollreview-session-widerruf --base origin/main --head HEAD --model gpt-6.1-sol --effort high --timeout 1080. Invocation independently recovered from the prior transcript.",
+          "/tmp/tb-a01-r3.zUKcHC/sol-gate.log contains ALLOW; /tmp/tb-a01-r3.zUKcHC/sol-gate.exit contains EXIT=0.",
+          "/home/nathanael/Documents/.claude/gpt-workers/review-state/19b54f18f2300192.json binds reviewer_model and phase1_model gpt-6.1-sol, allow_phase phase1, allow_sha/head_sha 1080b73007fde10ea18580bf07e5b4e9bdc1f549, base_sha a8b5b5e986a1de0b8e2f981651f83bda9cf400dd, the correct worktree and branch, all three auth files, and diff_bytes 36780. Created at 2026-10-08T06:20:25.230081+00:00; no blocking findings.",
+          "The full nonempty diff is exactly 36780 bytes, SHA256 96f93acb45671d66431172fb225213a64664c895dc22fb3058d647c328d1e013. This is not a no-changes ALLOW.",
+          "MERGEPROTOKOLL[MS-1]: 20 Git-Schritte einzeln | Anläufe: 0 | Gate: ALLOW"
+        ],
+        "original_diff_equivalence": [
+          "Preserved commits 8fa79c80, e16fab5b and 1080b730 unchanged. Final source tree 29dd233a5e152c8108692dff0bdd1ad52a097c5c. Two remote fetches confirmed unchanged origin/main; no rebase was necessary.",
+          "Full A01 diff remains limited to /home/nathanael/.worktrees/tb-vollreview-session-widerruf/rust/crates/tb-dashboard-api/src/auth/session.rs, /home/nathanael/.worktrees/tb-vollreview-session-widerruf/rust/crates/tb-dashboard-api/src/auth/level.rs and /home/nathanael/.worktrees/tb-vollreview-session-widerruf/rust/crates/tb-dashboard-api/src/auth/discord_admin_login.rs: 633 insertions, 87 deletions.",
+          "Exact in-memory reconstruction from e16fab5b, the prior worker's ten recorded edits and prescribed rustfmt matched both round-three files byte-for-byte. Last application edit 05:50:47 UTC, final formatting 05:59:22 UTC, retained test invocation 06:05:21 UTC. Evidence: /tmp/tb-a01-r3-verification.XDaiqU/source-binding-check.txt.",
+          "Preserved correction retains UPDATE-only session refresh and cache generations. Both actual central-validation callers now invalidate the local mirror and admission caches on explicit rejection, while technical-outage fallback remains available for other valid sessions. New database tests preserve the opt-in guard and retain hard setup failures when explicitly enabled.",
+          "Prior transcript SHA256 808b2f20b192234471c92adf2dfa79509430d545b9ef7979721342f48661a415 verified: 163 gpt-6.1-sol records and one synthetic record. Exact original commands and completion records extracted to /tmp/tb-a01-r3-verification.XDaiqU/prior-command-binding.txt and /tmp/tb-a01-r3-verification.XDaiqU/prior-results-binding.txt."
+        ],
+        "checks": [
+          "Retained full-suite command: RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 TB_TEST_DATABASE_URL='postgres:///tb_bb_test?host=/var/run/postgresql' TB_TEST_REQUIRE_DB=1 /home/nathanael/.local/bin/cargo-slot test --manifest-path /home/nathanael/.worktrees/tb-vollreview-session-widerruf/rust/Cargo.toml --locked -p tb-dashboard-api --no-fail-fast --jobs 1 -- --include-ignored --test-threads=1. /tmp/tb-a01-r3.zUKcHC/fix-tests.log: exit 101, 1340 passed, 35 failed, 0 ignored, 0 filtered across six result summaries. Completed compilation and retained evidence reused, not recompiled.",
+          "Seven A01 regressions passed in the full suite and the retained single-process database run: 7 passed, 0 failed, 0 ignored, 1341 filtered, exit 0. Actual binary and complete invocation are bound in /tmp/tb-a01-r3-verification.XDaiqU/prior-command-binding.txt; results in /tmp/tb-a01-r3.zUKcHC/regressions-db-single-process.log.",
+          "Retained command: python3 -I /tmp/tb-a01-r3.zUKcHC/check_opt_in.py /home/nathanael/.cache/rust-build/62/fd1ba600945d33/debug/deps/tb_dashboard_api-794d098c1b73289c. Harness exit 0. It removes both database variables: without opt-in, all seven tests safely return and each exits 0. With TB_TEST_REQUIRE_DB=1 but no setup, each intentionally exits 101 at the expected setup assertion. These expected failures are not the original no-opt-in regression; the no-opt-in passes are skips, not functional database evidence.",
+          "Fresh owned-file rustfmt --edition 2021 --config skip_children=true --check on all three auth files: exit 0. Full fixed base-to-head git diff --check: exit 0.",
+          "Retained package formatting: RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 /home/nathanael/.local/bin/cargo-slot fmt --manifest-path /home/nathanael/.worktrees/tb-vollreview-session-widerruf/rust/Cargo.toml --package tb-dashboard-api -- --check. Exit 1, 265 differences; entire output exactly matches baseline after worktree-prefix normalization.",
+          "Fresh Clippy: RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 /home/nathanael/.local/bin/cargo-slot clippy --manifest-path /home/nathanael/.worktrees/tb-vollreview-session-widerruf/rust/Cargo.toml --locked -p tb-dashboard-api --all-targets --jobs 1 -- -D warnings. Exit 101; log /tmp/tb-a01-r3-verification.XDaiqU/fix-clippy.log. Matching baseline ran sequentially and completed normally.",
+          "Independent evidence assertions and exact source/Clippy comparison both exited 0. Results: /tmp/tb-a01-r3-verification.XDaiqU/final-evidence-check.txt and /tmp/tb-a01-r3-verification.XDaiqU/source-binding-check.txt. Rust and Cargo 1.97.1 confirmed; test-database.json is absent in both worktrees, checked without reading credentials.",
+          "One malformed own Clippy request included an undeclared testing feature. Its empty-log slot wait was cancelled before compiler admission, then replaced by the correct sequential checks. No running compilation or foreign process was stopped. Completed job blyycon1y returned 101; no own background work remains.",
+          "TESTNACHWEIS[TW-1]: 1340 passed, 0 ignored | Baseline: 35 rot",
+          "Independent fixed-diff Sol critic remains the caller's next step; none was spawned here. No application changes, commits, merge, push, release, deploy, restart, production-database access, migration, browser work or account actions were performed."
+        ],
+        "baseline": [
+          "/home/nathanael/.worktrees/tb-vollreview-session-widerruf-baseline-r2 remains clean at a8b5b5e986a1de0b8e2f981651f83bda9cf400dd, identical to freshly fetched origin/main.",
+          "Retained baseline tests used the same complete environment and test flags as the fix command, with --manifest-path /home/nathanael/.worktrees/tb-vollreview-session-widerruf-baseline-r2/rust/Cargo.toml. /tmp/tb-a01-r3.zUKcHC/baseline-tests.log: exit 101, 1333 passed, 35 failed, 0 ignored, 0 filtered. All 35 failing test names exactly match the fix; the fix adds seven passing regressions.",
+          "Baseline package fmt used the same flags with the baseline manifest: exit 1, 265 differences. Exact normalized output equality verified, not merely equal totals. Normalized SHA256 4d13d4d26790a79bdc71f6ca29126e2a29f42293f6bfaed3c5210c092162c3bf.",
+          "Fresh baseline Clippy used the same environment and --locked -p tb-dashboard-api --all-targets --jobs 1 -- -D warnings flags, with the baseline manifest. /tmp/tb-a01-r3-verification.XDaiqU/baseline-clippy.log and baseline-clippy.exit: exit 101, one identical needless_borrows_for_generic_args error in unchanged tb-chat/src/scam_pitch.rs:1502. Entire normalized Clippy output matches the fix; SHA256 987b04850588a946849f0ff9c4a0e82110354dec97c61550a51e8d941c52c9cf."
+        ],
+        "blockers": [
+          "Target-crate Clippy cannot finish because the unchanged tb-chat dependency fails first. Both fix and baseline reproduce that error; no out-of-scope source correction was attempted.",
+          "The full suite and package formatting remain red with exactly matched baseline failures. No claim of fully green validation or final independent acceptance is made."
+        ],
+        "background_tasks": []
+      }
+    },
+    {
+      "workflow_id": "wf_5c114a47-0a8",
+      "agent_id": "a201453ec3bb4cf30",
+      "label": "A01 Runde 3: echter frischer Sol-Kritiker",
+      "model_counts": {
+        "gpt-6.1-sol": 64
+      },
+      "transcript_sha256": "d69ae5bd7e9ce2e2e9a8922bd4e002b408c0ffc778f012a6630498f26f16ae8a",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_5c114a47-0a8/agent-a201453ec3bb4cf30.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "id": "A01-R3",
+        "head_sha": "1080b73007fde10ea18580bf07e5b4e9bdc1f549",
+        "verdict": "ALLOW",
+        "rationale": "Independent static inspection finds both original A01 claims and both round-2 defects resolved in the requested fixed diff. Technical broker-failure fallback and successful authentication behavior are preserved. No blocking in-scope defect remains. ALLOW is substantive acceptance of this diff only, not merge, deployment or restart approval.",
+        "findings": [],
+        "evidence": [
+          "Reviewed a8b5b5e986a1de0b8e2f981651f83bda9cf400dd..1080b73007fde10ea18580bf07e5b4e9bdc1f549 in /home/nathanael/.worktrees/tb-vollreview-session-widerruf. Only the three assigned auth files changed. Complete diff SHA256 matches retained evidence: 96f93acb45671d66431172fb225213a64664c895dc22fb3058d647c328d1e013. Worktree is clean; branch currently reports ahead 3, behind 1.",
+          "A01a: read valid payload, finish logout, then resume refresh cannot recreate the deleted row. /home/nathanael/.worktrees/tb-vollreview-session-widerruf/rust/crates/tb-dashboard-api/src/auth/session.rs:2114-2128 uses UPDATE constrained by session ID and type. Zero affected rows or persistence failure prevents cache insertion; generation checks at :1622-1627 and :1879-1885 also prevent stale insertion when persistence is unnecessary or completed before logout. Invalidation increments generations at :1516-1529. Partner-access refresh shares the UPDATE without introducing a cache.",
+          "A01b and login remainder: /home/nathanael/.worktrees/tb-vollreview-session-widerruf/rust/crates/tb-dashboard-api/src/auth/discord_admin_login.rs:266-279 distinguishes explicit valid=false as Ok(None) from technical errors. Both actual callers revoke the local mirror: login at :397-407 and /home/nathanael/.worktrees/tb-vollreview-session-widerruf/rust/crates/tb-dashboard-api/src/auth/level.rs:421-455. Shared invalidation deletes the row and removes partner, admin and central-validation cache entries. With working database deletion, replaying the rejected cookie during a later broker outage cannot recover local admin access.",
+          "Technical-failure preservation: /home/nathanael/.worktrees/tb-vollreview-session-widerruf/rust/crates/tb-dashboard-api/src/auth/level.rs:448-455 retains valid local fallback and its central-validation cache. /home/nathanael/.worktrees/tb-vollreview-session-widerruf/rust/crates/tb-dashboard-api/src/auth/discord_admin_login.rs:398-407 preserves successful redirects and does not invalidate another valid session on technical failure. Refresh TTLs, identity checks and successful persistence behavior remain unchanged.",
+          "Test opt-in remainder: /home/nathanael/.worktrees/tb-vollreview-session-widerruf/rust/crates/tb-dashboard-api/src/auth/session.rs:3523-3528,3601-3606,3647-3652 and /home/nathanael/.worktrees/tb-vollreview-session-widerruf/rust/crates/tb-dashboard-api/src/auth/discord_admin_login.rs:1499-1504,1625-1630 return before setup unless TB_TEST_REQUIRE_DB=1. Once explicitly enabled, failed setup still reaches expect and fails hard. These guards cover all seven new regressions without weakening older tests.",
+          "Retained evidence, not my test execution: /tmp/tb-a01-r3.zUKcHC/regressions-db-single-process.log records seven functional passes. /tmp/tb-a01-r3.zUKcHC/check_opt_in.py removes both database variables; /tmp/tb-a01-r3.zUKcHC/opt-in-vertrag.log records seven safe skips and seven expected setup failures after explicit activation. Reviewed sources and these artifacts match the hashes recorded in /tmp/tb-a01-r3-verification.XDaiqU/source-binding-check.txt and /tmp/tb-a01-r3-verification.XDaiqU/final-evidence-check.txt.",
+          "Prior Sol gate is separately bound to the same base, head and three paths in /home/nathanael/Documents/.claude/gpt-workers/review-state/19b54f18f2300192.json. /tmp/tb-a01-r3.zUKcHC/sol-gate.log records ALLOW and /tmp/tb-a01-r3.zUKcHC/sol-gate.exit records exit 0. My verdict derives from the inspected code, not that prior verdict."
+        ],
+        "test_gaps": [
+          "This critic executed no builds, tests, Cargo commands, database, network or browser probes. Worker reports and retained logs are supporting evidence, not independently executed tests; no-opt-in successes are skips.",
+          "Full-suite validation remains red: retained fix reports 1340 passed and 35 failed; baseline reports 1333 passed with the same 35 failures. Package formatting retains 265 baseline-matched differences. Clippy fails in unchanged tb-chat before checking the target crate, as shown in /tmp/tb-a01-r3-verification.XDaiqU/fix-clippy.log and /tmp/tb-a01-r3-verification.XDaiqU/baseline-clippy.log.",
+          "Concurrent local DELETE failure remains the explicitly excluded pre-existing boundary, not a newly established defect of this diff. Other unassigned auth claims and integration with newer origin/main are outside this fixed-diff acceptance."
+        ]
+      }
+    },
+    {
+      "workflow_id": "wf_7f393473-8ca",
+      "agent_id": "aa30321ff726336f4",
+      "label": "B03 R3: frischer Sol-Fixer",
+      "model_counts": {
+        "gpt-6.1-sol": 51
+      },
+      "transcript_sha256": "b123af10d849886ecd70d78ebc17451e80e93f04e49f704f35613a90aea572dd",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_7f393473-8ca/agent-aa30321ff726336f4.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "base_sha": "e98b7f016dbab373a5a8dd9490d158b136c97fec",
+        "head_sha": "aa4509784c0e689dfc4e45b892222a6e01a5f8cc",
+        "status": "blocked_dependency",
+        "source_changed": false,
+        "changed_files": [],
+        "worktree_clean": true,
+        "gate": "NOT_RUN",
+        "gate_evidence": [
+          "Round-2 criticism confirmed by current source inspection, not runtime reproduction. /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/crates/tb-dashboard-api/src/admin_audit.rs:120-125 clones request parts before downstream authentication; :69-78 independently authenticates that clone after success.",
+          "/home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/crates/tb-dashboard-api/src/auth/level.rs:421-467 can skip the first cookie on broker failure without a local mirror, select the second cookie, and later select the first after recovery. The selected identity remains in downstream request extensions. CSRF consumes that selection at /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/crates/tb-dashboard-api/src/auth/csrf.rs:55-67; no production path returns it to the enclosing audit.",
+          "Inspected HEAD tree: 640dc387130a6bcede337f316474564c601b9d1e. SHA256 of /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/crates/tb-dashboard-api/src/admin_audit.rs: d956f6ed891e7ad3c0fd7c4b012ac07f32294d5527bc84cee1e33bf875d72293. No new gate attempted to reroll the BLOCK."
+        ],
+        "checks": [
+          "Fetched origin/main and rebased the owned branch successfully, exit 0. Previous HEAD 3a01d0c3b67ecc6ebc20bee2cc2140660276ecbb; aligned HEAD aa4509784c0e689dfc4e45b892222a6e01a5f8cc.",
+          "Audit-source comparison against previous HEAD: identical, exit 0. Round 3 made no source edits or new fix commit. Inherited branch diff only: /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/crates/tb-dashboard-api/src/admin_audit.rs, +325/-33.",
+          "git diff --check against current origin/main: exit 0. Final worktree clean, two inherited commits ahead.",
+          "Tests, formatting, Clippy and changing-broker regression not executed: stopped at the explicit cross-file dependency boundary. Previous-round results are not claimed for this HEAD.",
+          "MERGEPROTOKOLL[MS-1]: 11 Git-Schritte einzeln | Anläufe: 0 | Gate: nicht ausgeführt, Abhängigkeitsblocker"
+        ],
+        "blockers": [
+          "ABWEICHUNG: A correct fix requires the A01-owned /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/crates/tb-dashboard-api/src/auth/level.rs in addition to the permitted /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/crates/tb-dashboard-api/src/admin_audit.rs. Minimum data contract: publish the session kind and identity selected by the actual successful authentication into a request-scoped shared carrier visible to the enclosing audit; audit consumes that selection after success without authenticating again. Preserve existing authorization, broker-outage fallback and internal/anonymous actor fallbacks. Serial ownership assignment is required; no foreign auth file or lib.rs was changed and no one-file workaround was applied."
+        ]
+      }
+    }
+  ]
+}

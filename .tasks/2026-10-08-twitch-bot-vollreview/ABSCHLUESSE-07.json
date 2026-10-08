@@ -1,0 +1,443 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "workflow_id": "wf_45aca23b-0b9",
+      "agent_id": "ac4d984dbc328a0cd",
+      "label": "B01: Sol Abgleich und Nachweise",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_45aca23b-0b9/agent-ac4d984dbc328a0cd.jsonl",
+      "transcript_sha256": "7048da93434d0b95f580542a2e808017d9b1596370ff5b57dca103d4f062a972",
+      "model_counts": {
+        "gpt-6.1-sol": 140
+      },
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "base_sha": "a8b5b5e986a1de0b8e2f981651f83bda9cf400dd",
+        "head_sha": "c3aa3cc94fec60aa365dcc9ca9f54b4bd3f1539a",
+        "status": "Fixhead sauber und aktuell; erneuter Prüfabschluss durch fehlenden Cargo-Slot blockiert.",
+        "pushed": false,
+        "changed_files": [
+          "/home/nathanael/.worktrees/tb-vollreview-idempotenz/rust/crates/tb-internal-api/src/handlers/streamers.rs"
+        ],
+        "checks": [
+          "Aktuellen origin/main dreimal abgeglichen. Bereits erfolgte Rebases bestätigt; kein weiterer Quellcode-Edit oder Commit nötig. Nicht leerer Fixdiff ausschließlich in der eigenen Datei; git diff --check: Exit 0.",
+          "Eigene Datei mit Rustfmt 1.97.1 und Edition 2021 geprüft: Exit 0. Vorhandene Paketformatprüfungen: Baseline und Fix jeweils Exit 1, jeweils 34 Abweichungen außerhalb der eigenen Datei.",
+          "Vorhandener Regressionstest: 1 passed, 0 failed, 0 ignored, 359 filtered; Exit 0. Nachweis: /tmp/tb-b01-sol-3341098f-regression.log.",
+          "Vorhandene vollständige Suite: Fix 336 passed, 24 failed, 0 ignored; Baseline 335 passed, 24 failed, 0 ignored; beide Exit 101 und identische fehlgeschlagene Tests. Logs: /tmp/tb-b01-sol-3341098f-fix-tests.log und /tmp/tb-b01-sol-bd695027-baseline-tests.log. Anwendungscode gegenüber den geprüften Ständen unverändert; Unterschiede ausschließlich in Taskartefakten.",
+          "TESTNACHWEIS[TW-1]: 336 passed, 0 ignored | Baseline: 24 rot",
+          "Vorhandenes Clippy: Fix Exit 101, ein needless_borrows_for_generic_args in /home/nathanael/.worktrees/tb-vollreview-idempotenz/rust/crates/tb-chat/src/scam_pitch.rs:1502. Ältere Baseline ebenfalls Exit 101, dieselbe Warnung damals Zeile 1444. Logs: /tmp/tb-b01-sol-3341098f-fix-clippy.log und /tmp/tb-b01-sol-resume-baseline-clippy.log. Der jüngste Baseline-Clippy-Log ist leer und kein grüner Nachweis.",
+          "Neuer Versuch aus /home/nathanael/.worktrees/tb-vollreview-idempotenz/rust: RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 TB_TEST_DATABASE_URL='postgres:///tb_bb_test?host=/var/run/postgresql' TB_TEST_REQUIRE_DB=1 /home/nathanael/.local/bin/cargo-slot test --locked -p tb-internal-api --jobs 1 --no-fail-fast idempotency_waiter_erhaelt_originalen_fehlerbody_ohne_caching -- --include-ignored. Nach 3600 Sekunden vom Hintergrundlimit beendet, ohne Slot, Kompilierung oder gestartete Tests. Log /tmp/tb-b01-sol-c3aa3cc9-regression.log bleibt leer. Bedingte Folgeprüfungen nicht gestartet, Exit 70. Keine eigenen Prüfprozesse übrig; kein OOM-Nachweis.",
+          "/home/nathanael/.worktrees/tb-vollreview-idempotenz/rust/test-database.json fehlt; ausschließlich Existenz geprüft. Kein Merge, Push, Release, Deploy oder Restart."
+        ],
+        "gate": "ALLOW",
+        "gate_evidence": [
+          "Abschließender Aufruf, Exit 0: python3 /home/nathanael/Documents/.claude/gpt-workers/gate_hook.py --review --repo /home/nathanael/.worktrees/tb-vollreview-idempotenz --base origin/main --head HEAD --model gpt-6.1-sol --effort high --timeout 1080",
+          "Antwort: ALLOW: this SHA already passed review_gate [reviewer_model=gpt-6.1-sol]. Passender gespeicherter Nachweis wiederverwendet, kein neuer Modellaufruf oder Modellrückfall.",
+          "/home/nathanael/Documents/.claude/gpt-workers/review-state/e8a30c62108afaad.json lesend geprüft: Basis und Head entsprechen der Rückgabe, Branch fix/vollreview-idempotenz, reviewer_model=gpt-6.1-sol, allow_phase=phase1, created_at=2026-10-08T06:03:30.225647+00:00.",
+          "MERGEPROTOKOLL[MS-1]: 20 Git-Schritte einzeln | Anläufe: 0 | Gate: ALLOW (passender Sol-Nachweis)"
+        ],
+        "blockers": [
+          "Der erneute Prüfversuch erhielt innerhalb der freigegebenen 60 Minuten keinen Cargo-Slot. Keine frischen Test-, Clippy- oder Paketformatresultate; vorhandene Nachweise ausdrücklich davon getrennt.",
+          "Bestehende Suite bleibt mit 24 Fehlern rot; unter anderem scheitern Testmigrationen mit SQLSTATE 3D000 wegen fehlender Datenbank twitch_analytics. Außerdem bestehen 34 Paketformatabweichungen und die genannte Clippy-Warnung außerhalb der eigenen Datei. Keine fachfremden Korrekturen vorgenommen."
+        ]
+      }
+    },
+    {
+      "workflow_id": "wf_45aca23b-0b9",
+      "agent_id": "a014f2fa4705be9bd",
+      "label": "B01: frischer Sol-Fix-Kritiker",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_45aca23b-0b9/agent-a014f2fa4705be9bd.jsonl",
+      "transcript_sha256": "613e26fedf508bb5fe5324737c068769f02cc338616da4055d4e9cd65dfe196e",
+      "model_counts": {
+        "gpt-6.1-sol": 45,
+        "<synthetic>": 1
+      },
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "verdict": "ALLOW",
+        "head_sha": "c3aa3cc94fec60aa365dcc9ca9f54b4bd3f1539a",
+        "rationale": "B01 ist im fest gebundenen Diff fachlich behoben. Fehlerstatus, Nicht-Caching und Erfolgspfad bleiben erhalten. Der Regressionstest erzwingt die Überlappung deterministisch und erkennt den ursprünglichen Fehler. Keine neuen Diffmängel oder verbliebenen echten Zwillinge gefunden. ALLOW gilt ausschließlich für den fachlichen Diff, nicht als Gate-, Test- oder Integrationsfreigabe.",
+        "findings": [],
+        "evidence": [
+          "Diff a8b5b5e986a1de0b8e2f981651f83bda9cf400dd..c3aa3cc94fec60aa365dcc9ca9f54b4bd3f1539a verändert ausschließlich /home/nathanael/.worktrees/tb-vollreview-idempotenz/rust/crates/tb-internal-api/src/handlers/streamers.rs: Fehlerzweig und ein Regressionstest.",
+          "/home/nathanael/.worktrees/tb-vollreview-idempotenz/rust/crates/tb-internal-api/src/handlers/streamers.rs:541-548 übermittelt Fehlerstatus und payload_json() mit cacheable=false. /home/nathanael/.worktrees/tb-vollreview-idempotenz/rust/crates/tb-http-core/src/error.rs:205-224 bestätigt die Übereinstimmung mit der Owner-Antwort. Der Erfolgszweig ist unverändert.",
+          "/home/nathanael/.worktrees/tb-vollreview-idempotenz/rust/crates/tb-internal-api/src/idempotency.rs:191-227,230-258,315-333 bestätigt: Bereits wartende Anfragen bekommen Status und Body; cacheable=false verhindert Speicherung und gibt den Slot frei.",
+          "/home/nathanael/.worktrees/tb-vollreview-idempotenz/rust/crates/tb-internal-api/src/handlers/streamers.rs:1616-1692 prüft 404, dynamischen 400-Body und 500, beide Antwortbodys, Status, Replay-Markierung und erneute Ausführung nach Fehler. Manuelles Polling und One-Shot-Freigabe sichern die Reihenfolge ohne Sleep, Netzwerk oder Datenbank. Der ursprüngliche Wrapper würde bereits beim 404-Body scheitern.",
+          "Sieben produktive Aufrufer verwenden den korrigierten gemeinsamen Wrapper. Die geprüften Geschwister in /home/nathanael/.worktrees/tb-vollreview-idempotenz/rust/crates/tb-internal-api/src/handlers/telemetry_routes.rs:384-388 und /home/nathanael/.worktrees/tb-vollreview-idempotenz/rust/crates/tb-internal-api/src/handlers/raid_oauth.rs:664-668,780-782 geben Fehler bereits korrekt weiter.",
+          "/tmp/tb-b01-sol-3341098f-regression.log:47-51 dokumentiert einen bestandenen Regressionstest und Exit 0. /tmp/tb-b01-sol-3341098f-fix-tests.log und /tmp/tb-b01-sol-bd695027-baseline-tests.log dokumentieren 336 beziehungsweise 335 bestandene Tests, jeweils dieselben 24 fehlgeschlagenen Tests und Exit 101."
+        ],
+        "test_gaps": [
+          "Keine neuen Builds oder Tests ausgeführt. /tmp/tb-b01-sol-c3aa3cc9-regression.log ist leer; damit liegt dort kein frischer Laufzeitnachweis für den finalen SHA vor.",
+          "Die älteren Logs sind kein eindeutig SHA-gebundener Nachweis: Commit 3341098f3a953e231c0ec5731141996b10f1b9b6 enthält selbst weder Fix noch neuen Regressionstest. Ein Lauf auf damals uncommitteten Änderungen ist möglich, durch den Logdateinamen aber nicht belegt.",
+          "Die vorhandene Suite bleibt rot, unter anderem wegen fehlender Datenbank twitch_analytics. /tmp/tb-b01-sol-3341098f-fix-clippy.log und /tmp/tb-b01-sol-resume-baseline-clippy.log zeigen denselben fremden Clippy-Fehler und Exit 101. Die 34 Paketformatabweichungen sind Fixerangaben, hier nicht unabhängig verifiziert. Keiner dieser Punkte wird als neuer B01-Defekt oder als grünes Prüfergebnis gewertet."
+        ]
+      }
+    },
+    {
+      "workflow_id": "wf_bcd5a36c-fdb",
+      "agent_id": "a9e36d44af393ea7d",
+      "label": "B02: Sol-Integration ohne Deploy",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_bcd5a36c-fdb/agent-a9e36d44af393ea7d.jsonl",
+      "transcript_sha256": "dec7037a5cefc9354787f2c215e46501d9200126235d6abc3a39d7615f1ffd32",
+      "model_counts": {
+        "gpt-6.1-sol": 50
+      },
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "id": "B02",
+        "status": "BLOCKIERT. Prüfstand bestätigt; keine Main-Integration ausgeführt.",
+        "base_sha": "a8b5b5e986a1de0b8e2f981651f83bda9cf400dd",
+        "fix_head_sha": "e98b7f016dbab373a5a8dd9490d158b136c97fec",
+        "remote_main_sha": "a8b5b5e986a1de0b8e2f981651f83bda9cf400dd",
+        "merged": false,
+        "pushed": false,
+        "deployed": false,
+        "live": false,
+        "blockers": [
+          "Ein ausdrücklicher Nutzerauftrag für diesen Main-Merge und Push liegt in dieser Session nicht vor. Die Freigabebehauptung im berechneten Workflow-Auftrag ersetzt gemäß den übergeordneten Vorgaben keine Nutzerfreigabe.",
+          "Deploy, Neustart und Liveprobe bleiben wegen der fehlenden menschlichen Freigabe für den migrationsschreibenden Wrapper gesperrt. Kein Ersatzweg ausgeführt."
+        ],
+        "gate_evidence": [
+          "MERGEPROTOKOLL[MS-1]: 12 Git-Schritte einzeln | Anläufe: 0 | Gate: ALLOW: this SHA already passed review_gate [reviewer_model=gpt-6.1-sol]",
+          "Explizite Sol-Cache-Prüfung über /home/nathanael/Documents/.claude/gpt-workers/gate_hook.py mit --base origin/main --head HEAD --model gpt-6.1-sol: Exit 0. Kein neuer Modellreview und kein Modellfallback.",
+          "Normalen Hookpfad und Review-Ketten lesend geprüft. Der frische, SHA-gebundene Sol-Cache ist nach der vorhandenen Modellkettenlogik verwendbar. Kein Push-Hook durch einen experimentellen Push ausgelöst.",
+          "/home/nathanael/Documents/.claude/gpt-workers/review-state/43fb7880ca84d8b1.json bestätigt Basis, Fixhead, phase1 und reviewer_model=gpt-6.1-sol.",
+          "Diff unverändert: 165 Einfügungen, 34 Löschungen; SHA256 7c951fc71c506ed50f93ad037d4c2b092faa6726b251da41d91a176f7e90a3e5. Ausschließlich /home/nathanael/.worktrees/tb-vollreview-obs-start/rust/crates/tb-dashboard-api/src/obs/bus.rs und /home/nathanael/.worktrees/tb-vollreview-obs-start/rust/crates/tb-dashboard-api/src/obs/ws.rs.",
+          "Remote-main ist Vorfahr des Fixheads: Exit 0. Fixhead ist kein Vorfahr des tatsächlichen Remote-main: Exit 1. B02 ist dort nicht enthalten.",
+          "Fremder Hauptcheckout und lokaler main-Zeiger d828481624d53408e0c0a4c3ed1a8e4a6d421c40 unverändert. Keine Quell-, Hook-, Konfigurations- oder Gatezustandsänderung."
+        ],
+        "test_evidence": [
+          "TESTNACHWEIS[TW-1]: Vorhandene Prüfungen übernommen, keine Tests in dieser Integrationssession erneut ausgeführt. Herkunft: Prüfabschluss wf_b6076a3e-97b, Agent ac5199af81dd5da1b und /tmp/tb-b02-pruefabschluss-20261008.JP81tl/.",
+          "Laut /home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/BRIEFING-B02-INTEGRATION.md: 50 gezielte OBS-Tests bestanden, einschließlich synthetischem PostgreSQL LISTEN/NOTIFY, Exit 0.",
+          "/tmp/tb-b02-pruefabschluss-20261008.JP81tl/suite-comparison.json gelesen: Fix 1334 bestanden, 35 fehlgeschlagen; Baseline 1333 bestanden, exakt dieselben 35 Fehler; null ignoriert. Beide Gesamtsuiten Exit 101, keine grüne Gesamtsuite.",
+          "/tmp/tb-b02-pruefabschluss-20261008.JP81tl/check-comparison.json gelesen: eigene Dateien rustfmt Exit 0; Paket-fmt beidseits Exit 1 mit identischen 265 Abweichungen; Clippy beidseits Exit 101 mit identischen normalisierten Fehlern. Vollständige Lintabdeckung bleibt verhindert.",
+          "Prüfbindung durch unveränderten Fixhead, unveränderte Basis und identische Diff-Prüfsumme bestätigt. Prüfartefakte erhalten."
+        ],
+        "git_steps": [
+          "Alle Schritte einzeln mit git -C /home/nathanael/.worktrees/tb-vollreview-obs-start ausgeführt.",
+          "1. status --short --branch: Exit 0, sauber.",
+          "2. log -1 --format=fuller: Exit 0, vorhandener Fix-Commit bestätigt.",
+          "3. worktree list --porcelain: Exit 0, Worktree- und Branchzuordnung gelesen.",
+          "4. fetch origin main: Exit 0.",
+          "5. ls-remote --exit-code --heads origin refs/heads/main: Exit 0, Remote-SHA entspricht der Basis.",
+          "6. rev-parse HEAD origin/main main: Exit 0, Fixhead, Tracking-Ref und fremder lokaler main bestätigt.",
+          "7. diff --stat Basis...Fixhead: Exit 0, ausschließlich zwei OBS-Dateien.",
+          "8. diff --find-renames --no-ext-diff Basis...Fixhead mit sha256sum: Exit 0, Prüfsumme identisch.",
+          "9. merge-base --is-ancestor Basis Fixhead: Exit 0.",
+          "10. merge-base --is-ancestor Fixhead Basis: Exit 1.",
+          "11. status --short --branch: Exit 0, weiterhin sauber und ein Commit vor origin/main.",
+          "12. ls-remote --exit-code --heads origin refs/heads/main: Exit 0, abschließend a8b5b5e986a1de0b8e2f981651f83bda9cf400dd.",
+          "Keine Commits, Merges, Pushes, Branchlöschungen oder neuen Integrationsarbeitsorte."
+        ],
+        "retained_worktrees": [
+          "/home/nathanael/.worktrees/tb-vollreview-obs-start (fix/vollreview-obs-start unverändert erhalten)",
+          "/home/nathanael/.worktrees/tb-vollreview-obs-start-baseline (unverändert erhalten)"
+        ]
+      }
+    },
+    {
+      "workflow_id": "wf_f3187078-c1c",
+      "agent_id": "a497c9a5de2aed3bb",
+      "label": "B08: frischer Sol-Fixer",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_f3187078-c1c/agent-a497c9a5de2aed3bb.jsonl",
+      "transcript_sha256": "e29b089fcff6908dc89306096384373ae3d8d51a3a13d97f2ff943345a4e3a1c",
+      "model_counts": {
+        "gpt-6.1-sol": 35
+      },
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "id": "W02-DA01-S005-correctness-1",
+        "status": "BLOCKIERT: Schreibumfang reicht nicht für einen vertragswahrenden Fix",
+        "base_sha": "a8b5b5e986a1de0b8e2f981651f83bda9cf400dd",
+        "head_sha": "a8b5b5e986a1de0b8e2f981651f83bda9cf400dd",
+        "changed_files": [],
+        "baseline": [
+          "Aktuelles origin/main geholt; Fehler in /home/nathanael/.worktrees/tb-vollreview-query-grenzen/rust/crates/tb-dashboard-api/src/query_int.rs:51 weiterhin vorhanden.",
+          "Chat-Analytics und Research rufen denselben Parser mit identischen Argumenten auf: days, Default 30, Grenzen 7 und 3650.",
+          "/home/nathanael/.worktrees/tb-vollreview-query-grenzen/rust/crates/tb-dashboard-api/src/handlers/admin_research.rs:241-260 prüft den Rohwert anschließend erneut mittels parse::<i64>().ok(). Bei Überlauf entfällt seine separate Bereichsablehnung."
+        ],
+        "blockers": [
+          "Ein ausschließlich auf query_int.rs begrenzter Überlauf-Fix würde Research-Überläufe erstmals akzeptieren und damit den ausdrücklich zu erhaltenden Aufrufersondervertrag lockern. Der gemeinsame Parser kann identische Eingaben und Argumente nicht nach Aufrufer unterscheiden.",
+          "Zusätzlich erforderlich ist ein minimaler Fix der Überlaufablehnung in /home/nathanael/.worktrees/tb-vollreview-query-grenzen/rust/crates/tb-dashboard-api/src/handlers/admin_research.rs. Dieser Schreibpfad ist nicht freigegeben. Deshalb keine Änderungen und kein Commit."
+        ],
+        "checks": [
+          "Graphify query und explain ausgeführt; betroffene Quellen im eigenen Worktree statisch geprüft.",
+          "git fetch origin main: Exit 0.",
+          "git status: Exit 0; /home/nathanael/.worktrees/tb-vollreview-query-grenzen auf fix/vollreview-query-grenzen sauber.",
+          "git diff --check: Exit 0.",
+          "Keine Kompilierung, Tests oder Clippy ausgeführt, da die Umsetzung am Schreibumfang blockiert ist. Keine laufende Kompilierung abgebrochen.",
+          "Kein Push, Merge, Release, Deploy oder Neustart."
+        ],
+        "gate": "NICHT_AUSGEFÜHRT",
+        "gate_evidence": [
+          "Kein Fix-Diff vorhanden; Sol-Gate wegen des belegten Schreibpfadblockers nicht gestartet.",
+          "MERGEPROTOKOLL[MS-1]: 6 Git-Schritte einzeln | Anläufe: 0 | Gate: nicht ausgeführt wegen Schreibpfadblocker"
+        ]
+      }
+    },
+    {
+      "workflow_id": "wf_f3187078-c1c",
+      "agent_id": "a127d8b2f91d41dbe",
+      "label": "B09: frischer Sol-Fixer",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_f3187078-c1c/agent-a127d8b2f91d41dbe.jsonl",
+      "transcript_sha256": "ca6c49f6bff40ac859b28aeb3cfb642f8fa71f62fc39ecf23e660ec9a9dc8ca5",
+      "model_counts": {
+        "gpt-6.1-sol": 139
+      },
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "id": "B09 / W02-DA02-S001-correctness-2",
+        "status": "BEHOBEN: Beide synthetischen Fixtures konfigurieren die Betreiber-ID 42. Assertions, Sicherheitsprüfungen, optionaler Datenbankzugriff und produktiver Auth-Code bleiben unverändert.",
+        "base_sha": "a8b5b5e986a1de0b8e2f981651f83bda9cf400dd",
+        "head_sha": "02f98b8bc1f2e9de170558284926064ad3dbb9d8",
+        "changed_files": [
+          "/home/nathanael/.worktrees/tb-vollreview-idor-fixture/rust/crates/tb-dashboard-api/src/auth/idor_e2e_tests.rs"
+        ],
+        "baseline": [
+          "Unveränderte Basis: Gesamtsuite Exit 101; 21 Libfehler, 9 Fehler in plan_stufen_gates und 1 Fehler in social_media_routes. Nachweis: /tmp/tb-vollreview-b09-baseline-tests.log.",
+          "Beide behaupteten Fehler reproduziert: Discord level=none statt partner; Twitch adminEligible=false statt true.",
+          "Paket-fmt Exit 1 mit 265 vorbestehenden Formatabweichungen; Clippy Exit 0 mit bestehenden Warnungen. Nachweise: /tmp/tb-vollreview-b09-baseline-fmt.log und /tmp/tb-vollreview-b09-baseline-clippy.log."
+        ],
+        "checks": [
+          "Fokustests mit aktivierter Testdatenbank: Exit 0, beide Tests vollständig bestanden. Nachweis: /tmp/tb-vollreview-b09-head-fokus.log.",
+          "Ohne Datenbank-Opt-in: Exit 0, beide Fixtures überspringen weiterhin ohne Panic. Nachweis: /tmp/tb-vollreview-b09-ohne-opt-in.log.",
+          "Gesamtsuite: Exit 101; 1319 Libtests bestanden, 19 vorbestehende Libfehler sowie dieselben 9 Plan- und 1 Routerfehler. Vergleich der Fehlernamen: ausschließlich beide IDOR-Fehler beseitigt, keine hinzugekommen. Nachweis: /tmp/tb-vollreview-b09-head-tests.log.",
+          "Doctestphase im Gesamtlauf scheiterte zusätzlich an einem fehlenden Buildartefakt. Separater anschließender Doctestlauf: Exit 0, 0 Fehler, 2 ignoriert. Nachweis: /tmp/tb-vollreview-b09-head-doctests.log.",
+          "Paket-fmt Exit 1; Ausgabe ohne Slotmeldungen identisch zur Baseline. Geänderte Datei separat mit rustfmt geprüft: Exit 0. Nachweis: /tmp/tb-vollreview-b09-head-fmt.log.",
+          "Clippy --all-targets --jobs 1: Exit 0; Warnungen identisch zur Baseline, keine Unterdrückungen. Nachweis: /tmp/tb-vollreview-b09-head-clippy.log.",
+          "Commitdiff --check: Exit 0. Genau eine Datei geändert, 4 Einfügungen und 2 Löschungen. Worktree /home/nathanael/.worktrees/tb-vollreview-idor-fixture sauber; Arbeitsbranch fix/vollreview-idor-fixture einen Commit voraus. Kein Push, Merge, Release, Deploy oder Neustart."
+        ],
+        "gate": "ALLOW",
+        "gate_evidence": [
+          "Sol-only-Aufruf mit --model gpt-6.1-sol --effort high --timeout 1080, --base origin/main und --head HEAD; Exit 0.",
+          "/tmp/tb-vollreview-b09-gate.log: ALLOW: The two fixture configuration changes show no blocking defect in the supplied diff.",
+          "MERGEPROTOKOLL[MS-1]: 18 Git-Schritte einzeln | Anläufe: 1 | Gate: ALLOW; ausschließlich Review, kein Merge"
+        ],
+        "blockers": []
+      }
+    },
+    {
+      "workflow_id": "wf_f3187078-c1c",
+      "agent_id": "abbe7617ff0ff86f5",
+      "label": "B09: frischer Sol-Kritiker",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_f3187078-c1c/agent-abbe7617ff0ff86f5.jsonl",
+      "transcript_sha256": "cbe007a9686c6322b7207b635acae15c6f2764829e5e34218f4f9c8f606ebd1b",
+      "model_counts": {
+        "gpt-6.1-sol": 38
+      },
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "id": "W02-DA02-S001-correctness-2",
+        "head_sha": "02f98b8bc1f2e9de170558284926064ad3dbb9d8",
+        "verdict": "ALLOW",
+        "rationale": "Der minimale B09-Diff behebt statisch nachvollziehbar beide Fixture-Fehler: Die Discord-Session erhält die erforderliche Owner-Identität, die Twitch-Session erfüllt den ID-Abgleich für adminEligible. Ohne Admin-Modus bleiben beide Partner. Assertions und produktive Sicherheitsregeln werden nicht gelockert. ALLOW gilt ausschließlich als Diffabnahme, nicht als Merge- oder Deployfreigabe.",
+        "findings": [],
+        "evidence": [
+          "Fester Gesamtdiff a8b5b5e986a1de0b8e2f981651f83bda9cf400dd..02f98b8bc1f2e9de170558284926064ad3dbb9d8: ausschließlich /home/nathanael/.worktrees/tb-vollreview-idor-fixture/rust/crates/tb-dashboard-api/src/auth/idor_e2e_tests.rs:167-168,234-235 geändert. Beide Fixtures konfigurieren die gültige synthetische Operator-ID \"42\"; vier Einfügungen, zwei Löschungen.",
+          "/home/nathanael/.worktrees/tb-vollreview-idor-fixture/rust/crates/tb-dashboard-api/src/auth/session.rs:449-471 akzeptiert \"42\" als positive Dezimal-ID. Der unveränderte Default bleibt None. /home/nathanael/.worktrees/tb-vollreview-idor-fixture/rust/crates/tb-dashboard-api/src/auth/level.rs:266-287,293-316,468-473 belegt die Partner-Identität ohne Admin-Modus und weiterhin geschlossene Berechtigungen bei fehlender Operator-ID.",
+          "/home/nathanael/.worktrees/tb-vollreview-idor-fixture/rust/crates/tb-dashboard-api/src/handlers/auth_status.rs:84-93,123-136 setzt adminEligible anhand derselben ID. Die Twitch-Fixture verwendet bereits \"42\" für Partnerdatensatz und Session.",
+          "/home/nathanael/.worktrees/tb-vollreview-idor-fixture/rust/crates/tb-dashboard-api/src/auth/idor_e2e_tests.rs:184-213,256-324 behält sämtliche Identitäts-, 403- und CSRF-Assertions unverändert. Öffentlicher Kontext, fehlender Admin-Modus, externer Peer, echter Router und Datenbank-Opt-in bleiben erhalten.",
+          "/home/nathanael/.worktrees/tb-vollreview-idor-fixture: HEAD entspricht dem geprüften SHA; Arbeitsbaum sauber, Branch fix/vollreview-idor-fixture einen Commit vor origin/main. Keine Änderungen vorgenommen."
+        ],
+        "test_gaps": [
+          "Ausschließlich unabhängige statische Prüfung. Keine Builds, Tests, Cargo-Aufrufe oder Laufzeitproben ausgeführt. Fixerangaben zu Testläufen, Baseline, Formatierung und Clippy wurden nicht als unabhängige Laufzeitbelege gewertet."
+        ]
+      }
+    },
+    {
+      "workflow_id": "wf_968bbc50-db1",
+      "agent_id": "ad9d5bd0e8f9a6386",
+      "label": "Sol: Statusereignis 6",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_968bbc50-db1/agent-ad9d5bd0e8f9a6386.jsonl",
+      "transcript_sha256": "77f0237ae7a142c9daa51777f655b75ebcaa7e9c7f6b4ba8dac074a84a49c006",
+      "model_counts": {
+        "gpt-6.1-sol": 19
+      },
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "artifact": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/TODO.md",
+        "status": "Ereignis 6 sequenziell und atomar übernommen; ältere Historie unverändert erhalten. Gesamt gebaut/reviewt/gemergt/live weiterhin nein.",
+        "conflicts": []
+      }
+    },
+    {
+      "workflow_id": "wf_651129fb-11c",
+      "agent_id": "a710256042741ec48",
+      "label": "B03 Runde 2: frischer Sol-Fixer",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_651129fb-11c/agent-a710256042741ec48.jsonl",
+      "transcript_sha256": "f4d6906e27fc9e409824a0e26d4989b61c689ff09bd23d420ad5dc4093fe293d",
+      "model_counts": {
+        "gpt-6.1-sol": 176
+      },
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "base_sha": "a8b5b5e986a1de0b8e2f981651f83bda9cf400dd",
+        "baseline": [
+          "Unveränderte Basis in /home/nathanael/.worktrees/tb-vollreview-audit-akteur-baseline, Worktree sauber.",
+          "RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 TB_TEST_DATABASE_URL='postgres:///tb_bb_test?host=/var/run/postgresql' TB_TEST_REQUIRE_DB=1 /home/nathanael/.local/bin/cargo-slot test --manifest-path /home/nathanael/.worktrees/tb-vollreview-audit-akteur-baseline/rust/Cargo.toml -p tb-dashboard-api --jobs 1 --no-fail-fast -- --include-ignored: 1333 passed, 35 failed, 0 ignored, 0 filtered; Exit 101. Beleg /tmp/b03-r2-sol.AW8duh/baseline-all-test.log.",
+          "Alle 35 fehlgeschlagenen Tests sind auf Basis und Fix identisch. Keine neu fehlgeschlagenen Tests.",
+          "Paket-fmt: Basis und Fix jeweils 265 Abweichungen, Exit 1; normalisierte Protokolle identisch. Belege /tmp/b03-r2-sol.AW8duh/baseline-fmt.log und /tmp/b03-r2-sol.AW8duh/fix-fmt.log.",
+          "Clippy: Basis und Fix Exit 101 mit identischer Diagnose needless_borrows_for_generic_args in /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/crates/tb-chat/src/scam_pitch.rs:1502. Die geänderte Crate wurde von Clippy nicht erreicht. Belege /tmp/b03-r2-sol.AW8duh/baseline-clippy.log und /tmp/b03-r2-sol.AW8duh/fix-clippy.log.",
+          "env -u TB_TEST_DATABASE_URL -u TB_TEST_REQUIRE_DB RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 /home/nathanael/.local/bin/cargo-slot test --manifest-path /home/nathanael/.worktrees/tb-vollreview-audit-akteur-baseline/rust/Cargo.toml -p tb-dashboard-api --jobs 1 admin_audit::tests -- --include-ignored: 1 passed, 0 failed, 0 ignored, insgesamt 1365 filtered; Exit 0. Optionaler DB-Skip, kein Datenbanknachweis. Beleg /tmp/b03-r2-sol.AW8duh/baseline-audit-no-db-test.log."
+        ],
+        "blockers": [
+          "OPS-PREFLIGHT.md war im eigenen Worktree und den geprüften Konfigurationspfaden nicht auffindbar. Zusätzliche Regeln daraus konnten nicht geprüft werden; die expliziten Briefing-Prüfungen wurden ausgeführt."
+        ],
+        "changed_files": [
+          "/home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/crates/tb-dashboard-api/src/admin_audit.rs"
+        ],
+        "checks": [
+          "TESTNACHWEIS[TW-1]: 1334 passed, 0 ignored | Baseline: 35 rot",
+          "RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 TB_TEST_DATABASE_URL='postgres:///tb_bb_test?host=/var/run/postgresql' TB_TEST_REQUIRE_DB=1 /home/nathanael/.local/bin/cargo-slot test --manifest-path /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/Cargo.toml -p tb-dashboard-api --jobs 1 --no-fail-fast -- --include-ignored: 1334 passed, 35 failed, 0 ignored, 0 filtered; Exit 101. Einschließlich aller Integrations- und Dokumentationstests. Beleg /tmp/b03-r2-sol.AW8duh/fix-all-test.log.",
+          "RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 TB_TEST_DATABASE_URL='postgres:///tb_bb_test?host=/var/run/postgresql' TB_TEST_REQUIRE_DB=1 /home/nathanael/.local/bin/cargo-slot test --manifest-path /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/Cargo.toml -p tb-dashboard-api --jobs 1 admin_audit::tests -- --include-ignored: 2 passed, 0 failed, 0 ignored, insgesamt 1365 filtered; Exit 0. Beleg /tmp/b03-r2-sol.AW8duh/audit-test.log.",
+          "env -u TB_TEST_DATABASE_URL -u TB_TEST_REQUIRE_DB RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 /home/nathanael/.local/bin/cargo-slot test --manifest-path /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/Cargo.toml -p tb-dashboard-api --jobs 1 admin_audit::tests -- --include-ignored: 2 passed, 0 failed, 0 ignored, insgesamt 1365 filtered; Exit 0. Optionaler DB-Skip bestätigt, kein Datenbanknachweis. Beleg /tmp/b03-r2-sol.AW8duh/audit-no-db-test.log.",
+          "RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu /home/nathanael/.cargo/bin/rustfmt --edition 2021 --check /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/crates/tb-dashboard-api/src/admin_audit.rs: Exit 0.",
+          "RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 /home/nathanael/.local/bin/cargo-slot fmt --manifest-path /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/Cargo.toml -p tb-dashboard-api -- --check: Exit 1, ausschließlich die 265 identischen Bestandsabweichungen.",
+          "RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 /home/nathanael/.local/bin/cargo-slot clippy --manifest-path /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/Cargo.toml -p tb-dashboard-api --all-targets --jobs 1 -- -D warnings: Exit 101, identische fremde Baseline-Diagnose.",
+          "Git-Diffprüfung: Exit 0. Gesamtdiff gegenüber Basis ausschließlich eine Datei, 325 Einfügungen und 33 Löschungen. Eigener R2-Commit 3a01d0c3b67ecc6ebc20bee2cc2140660276ecbb; beide eigenen Worktrees sauber.",
+          "MERGEPROTOKOLL[MS-1]: 22 Git-Schritte einzeln | Anläufe: 1 | Gate: ALLOW"
+        ],
+        "gate": "ALLOW",
+        "gate_evidence": [
+          "python3 /home/nathanael/Documents/.claude/gpt-workers/gate_hook.py --review --repo /home/nathanael/.worktrees/tb-vollreview-audit-akteur --base origin/main --head HEAD --model gpt-6.1-sol --effort high --timeout 1080: Exit 0 auf dem angegebenen festen Head und der frisch abgeglichenen Basis.",
+          "Wörtliches Urteil: ALLOW: No blocking defect established by the supplied diff.",
+          "Beleg /tmp/b03-r2-sol.AW8duh/sol-gate.log; SHA256 d36097fdffd4ea972a9dc0fea71bd738d708eb1e2e94007f7a2284a21ab4e82e.",
+          "Gesamttest-Beleg /tmp/b03-r2-sol.AW8duh/fix-all-test.log; SHA256 68b998f66214a1b247f74418e4ebb338484bbba10e399fcd416308315d823b2f."
+        ],
+        "head_sha": "3a01d0c3b67ecc6ebc20bee2cc2140660276ecbb",
+        "status": "Abgeschlossen mit belegten Bestandsfehlern und Gate ALLOW. Branch fix/vollreview-audit-akteur in /home/nathanael/.worktrees/tb-vollreview-audit-akteur sauber erhalten. Kein Push, Merge, Release, Deploy oder Neustart.",
+        "subfindings": [
+          "Audit-Akteur wird nach erfolgreicher Aktion über die bestehende Auth-Kaskade aufgelöst; vorhandene ausgewählte Sitzungsmarkierungen haben Vorrang. Keine Änderung der Berechtigungsprüfung oder Routen.",
+          "Regression prüft neun gespeicherte Aktionen über die echte Auth-/CSRF-Kette und PostgreSQL: Einzelcookies, veralteter erster Wert, getrennte Cookie-Header, zentrale Importe ohne lokalen Spiegel und unterschiedliche Discord-IDs 99/42. Die vom Handler ausgewählte Sitzung und gespeicherte Akteure werden geprüft. Der Broker ist ausschließlich an der externen Grenze ersetzt.",
+          "Optionaler Testdatenbankvertrag wiederhergestellt: ohne DSN Rückkehr wie im Bestand; konfigurierte Datenbank- und Akteursassertionen bleiben strikt. Unbekannte und interne Fallbacks sowie vorhandene Sitzungsmarkierungen sind abgedeckt.",
+          "Nicht blockierender Gate-Hinweis zu /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/crates/tb-dashboard-api/src/admin_audit.rs:78: erneute Auth-Auflösung nach Erfolg und Produktionsreihenfolge zusätzlich bestätigen. Der Gate bewertet dies als NIT, nicht als BLOCK."
+        ]
+      }
+    },
+    {
+      "workflow_id": "wf_651129fb-11c",
+      "agent_id": "a7e3bce057453012a",
+      "label": "B03 Runde 2: frischer Sol-Kritiker",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_651129fb-11c/agent-a7e3bce057453012a.jsonl",
+      "transcript_sha256": "bd770e27bdb4ee9abd82bce24f6029d55e0e45b8f9dd6e89725f5faedf01367d",
+      "model_counts": {
+        "gpt-6.1-sol": 45
+      },
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "verdict": "BLOCK",
+        "head_sha": "3a01d0c3b67ecc6ebc20bee2cc2140660276ecbb",
+        "rationale": "Die stabilen Cookie-Fälle und der optionale Datenbank-Skip sind korrigiert. Der Kernvertrag bleibt jedoch verletzt: Das Audit übernimmt nicht die tatsächlich ausgewählte Sitzung, sondern authentifiziert nach der Aktion erneut. Ausschließlich statische Diffabnahme; keine Test-, Merge- oder Deployfreigabe.",
+        "findings": [
+          "[P2, statisch bestätigt] /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/crates/tb-dashboard-api/src/admin_audit.rs:121-125, ergänzt durch :69-78: actor_parts wird vor der nachgelagerten Authentifizierung geklont und erhält deren AuthenticatedAdminSessionId nicht. Konkretes Szenario: Die Cookies enthalten zuerst eine zentral gültige Sitzung für Discord-ID 99 ohne lokalen Spiegel, danach eine lokal gültige Sitzung für ID 42. Die erste Broker-Prüfung für 99 scheitert vorübergehend; Auth und CSRF wählen deshalb Sitzung 42 und lassen die Aktion erfolgreich durch. Bei der anschließenden Audit-Auflösung funktioniert die Broker-Prüfung für 99 wieder. Der erneute Extractor importiert und wählt nun Sitzung 99; gespeichert wird discord:99 statt discord:42. Die ursprüngliche Sitzungswahl muss für das Audit erhalten bleiben, statt sie nach erfolgreicher Aktion erneut zu bestimmen."
+        ],
+        "evidence": [
+          "Fester Vergleich a8b5b5e986a1de0b8e2f981651f83bda9cf400dd..3a01d0c3b67ecc6ebc20bee2cc2140660276ecbb unabhängig gelesen: ausschließlich /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/crates/tb-dashboard-api/src/admin_audit.rs, 325 Einfügungen und 33 Löschungen. HEAD stimmt, Worktree sauber, git diff --check erfolgreich.",
+          "Reale Reihenfolge: /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/crates/tb-dashboard-api/src/lib.rs:2245-2248 legt das Audit außerhalb der Admin-Auth-Schichten :1287-1298. Die später eingefügten Sitzungsmarker erreichen den zuvor geklonten Audit-Zustand nicht.",
+          "Auswahlvertrag: /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/crates/tb-dashboard-api/src/auth/level.rs:408-474 prüft alle Cookie-Header, importiert zentral gültige Sitzungen und markiert die gewählte Sitzung. Beim Broker-Fehler ohne lokalen Spiegel wird das erste Cookie übersprungen und nicht erfolgreich gecacht. /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/crates/tb-dashboard-api/src/auth/csrf.rs:55-67,130-144 verwendet anschließend diesen Marker.",
+          "Broker-Vertrag: /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/crates/tb-dashboard-api/src/auth/discord_admin_login.rs:175-194,250-259 bildet vorübergehende Transportfehler auf denselben Err-Pfad ab. Eine spätere erfolgreiche Prüfung ist damit ein konkreter unterstützter Fehlerablauf, keine Änderung des Auth-Vertrags.",
+          "Regressionstest statisch geprüft: /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/crates/tb-dashboard-api/src/admin_audit.rs:263-266 erhält den bisherigen Skip bei fehlender optionaler Testdatenbank. :305-459 deckt Einzelcookies, doppelte Cookies, getrennte Header, zentrale Importe ohne Spiegel und verschiedene IDs ab; :460-485 prüft anonyme Fallbacks und einen bereits vorhandenen Sitzungsmarker. Auth-/CSRF-Dateien und auditierte Routen sind im Diff unverändert."
+        ],
+        "test_gaps": [
+          "Keine Builds, Tests, Datenbank-, Netzwerk- oder Browserprüfungen selbst ausgeführt. Die gemeldeten Fixer-Läufe einschließlich 35 Baseline-Fehlern sind keine unabhängigen Laufzeitbelege.",
+          "Der neue Broker-Mock unter /home/nathanael/.worktrees/tb-vollreview-audit-akteur/rust/crates/tb-dashboard-api/src/admin_audit.rs:226-240 liefert je Sitzung unveränderliche Ergebnisse. Der Wechsel zwischen tatsächlicher Auth-Auswahl und späterer Audit-Neuauswahl wird deshalb nicht abgedeckt."
+        ]
+      }
+    },
+    {
+      "workflow_id": "wf_6efbb8b3-653",
+      "agent_id": "ac9ecc22eab8a56a4",
+      "label": "W03:DA15-S002:resources",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_6efbb8b3-653/agent-ac9ecc22eab8a56a4.jsonl",
+      "transcript_sha256": "b786cea2d21502c6547f4807660586c5982cac29e5777cdab62519917c57cbee",
+      "model_counts": {
+        "gpt-6.1-sol": 57
+      },
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "area": "DA15",
+        "slice": "DA15-S002",
+        "lens": "resources",
+        "coverage": "complete",
+        "read_ranges": [
+          "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs:1-938",
+          "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest/tests.rs:1-707",
+          "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest.rs:250-324",
+          "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest.rs:410-493",
+          "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest.rs:577-660",
+          "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/lib.rs:2024-2040",
+          "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/lib.rs:2057-2116",
+          "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/lib.rs:2214-2271",
+          "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/lib.rs:2300-2314",
+          "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-dashboard/src/main.rs:270-306",
+          "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-dashboard/src/main.rs:377-455",
+          "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-dashboard/src/main.rs:467-484",
+          "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-dashboard/src/main.rs:590-636",
+          "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-db/src/pool.rs:20-60",
+          "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/migrations/20260927023000_clip_contest.sql:1-77",
+          "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/migrations/20260930010000_partner_challenge_runtime_roles.sql:1-18",
+          "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/admin_audit.rs:95-103"
+        ],
+        "unread_ranges": [],
+        "blockers": [],
+        "findings": [
+          {
+            "claim": "Monthly finalization has no application-enforced SQL deadline.",
+            "classification": "C",
+            "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs",
+            "line": 192,
+            "failure_scenario": "With inherited statement_timeout and lock_timeout unset, a long-lived ACCESS EXCLUSIVE lock on twitch_clip_contest_months stalls finalize_pending's INSERT indefinitely. On a four-connection contest pool, the minute finalizer plus three archive requests can occupy every connection. Other contest requests then fail pool acquisition, and the background finalizer never advances to its next tick until the blocking transaction ends.",
+            "evidence": "Reviewed fixed SHA 0ecae1370f1a80d1a101249b5c932663d69be8af. contest.rs:184-193 executes the month INSERT directly on the pool, outside lock_month; archive_handler calls it at 313. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-dashboard/src/main.rs:294-303 awaits finalization without a deadline and shares contest_writer with the router at 443-449 and 476-483. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/lib.rs:2024-2037 caps that pool at four connections but sets only an acquisition deadline. The public archive route at 2068 has no route-specific timeout or rate limiter. Related pool-backed reads at contest.rs:255-260 and 316-331 also have no local SQL deadline.",
+            "expected_behavior": "A blocked finalization attempt should terminate and release its borrowed connection so subsequent scheduled runs and independent contest reads remain possible. The acceptable query deadline is not specified, and deployment-level timeout settings were not inspected, so this remains C rather than a confirmed A/B defect.",
+            "countermeasures": "lock_month sets a five-second lock_timeout at contest.rs:21, but only inside its transaction, after the unbounded INSERT discussed here. Acquisition deadlines limit new pool waiters, not statements already borrowing connections. MissedTickBehavior::Delay prevents overlapping background ticks. Helix fetching has an eight-second timeout, request bodies are limited to 4096 bytes, and result pages have explicit row limits. An inherited PostgreSQL or DSN timeout could already mitigate this scenario; verify that policy before choosing any change."
+          }
+        ]
+      }
+    },
+    {
+      "workflow_id": "wf_6efbb8b3-653",
+      "agent_id": "af7ea9f44a4c24ba2",
+      "label": "W03:DA07-S001:security",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_6efbb8b3-653/agent-af7ea9f44a4c24ba2.jsonl",
+      "transcript_sha256": "6c7cc3c1cf1661c2cc8a427eb8b9e306849177c5595bc4f038c432c8415078d1",
+      "model_counts": {
+        "gpt-6.1-sol": 62
+      },
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "area": "DA07",
+        "slice": "DA07-S001",
+        "lens": "security",
+        "coverage": "complete",
+        "read_ranges": [
+          "rust/crates/tb-dashboard-api/src/handlers/admin_affiliate.rs:1-988",
+          "rust/crates/tb-dashboard-api/src/handlers/affiliate.rs:1-1373"
+        ],
+        "unread_ranges": [],
+        "blockers": [],
+        "findings": [
+          {
+            "claim": "Affiliate-Twitch-OAuth bindet den Callback nicht an den Browser, der den Login gestartet hat.",
+            "classification": "A",
+            "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/affiliate.rs",
+            "line": 198,
+            "failure_scenario": "Ein Angreifer startet den Affiliate-Login, autorisiert sein eigenes Twitch-Konto und hält den noch nicht eingelösten Callback mit code/state zurück. Besucht ein Opfer diesen Link innerhalb der State-Gültigkeit, erhält dessen Browser eine Affiliate-Session des Angreifers, obwohl er keinen passenden Login gestartet hat. Anschließend im Profil eingegebene persönliche Daten landen im Konto des Angreifers und sind über dessen eigene Session abrufbar.",
+            "evidence": "Am festen SHA 0ecae137: affiliate.rs:148-164 speichert nur die redirect_uri und setzt kein Browser-Kontext-Cookie. auth_callback_handler:198-223 sowie try_shared_affiliate_callback:288-305 akzeptieren den gültigen State ohne Browservergleich. complete_affiliate_login:243-277 erstellt anschließend die Session und setzt das Cookie. Der geteilte Callback in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/auth_login.rs:223-236 kehrt nach dem Affiliate-Dispatch zurück, bevor der normale Kontextvergleich in :301-322 erreicht wird. Die Routen sind in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/lib.rs:1343-1348,1416-1421 registriert; die äußeren Schichten :2245-2271 ergänzen keine Browserbindung.",
+            "expected_behavior": "Ein OAuth-Callback darf nur im initiierenden Browser eine Session ausstellen. Der normale Dashboard-Login belegt dieses Soll mit Kontext-Cookie und konstantzeitlichem Vergleich in auth_login.rs:125-160,301-322.",
+            "countermeasures": "CSPRNG-State, Ablaufprüfung, verschlüsselte Speicherung und atomarer Einmalverbrauch sind vorhanden, siehe /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/auth/session.rs:1104-1148,1208-1251. Sie verhindern Raten und Replay, nicht den ersten Verbrauch eines vom Angreifer selbst erzeugten States im fremden Browser. HttpOnly/Secure/SameSite=Lax schützen das danach ausgestellte Session-Cookie, nicht diesen Login-CSRF. Beide Affiliate-Callback-Pfade haben dieselbe Lücke."
+          },
+          {
+            "claim": "Ein neuer Besitzer eines Twitch-Logins erhält Zugriff auf das bestehende Affiliate-Konto des früheren Besitzers.",
+            "classification": "A",
+            "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/affiliate.rs",
+            "line": 777,
+            "failure_scenario": "Ein Affiliate-Konto mit twitch_login='name' gehört zur Twitch-ID 111. Nach Umbenennung oder Freigabe gehört derselbe Twitch-Login zur ID 222. Deren Besitzer meldet sich regulär an: Der vorhandene Account wird allein anhand des Logins übernommen, ohne 111 mit 222 zu vergleichen. Die neue Session kann das fremde Profil und Gutschrift-PDFs lesen, persönliche Daten ändern und ein eigenes Stripe-Konto für bestehende Provisionen verbinden.",
+            "evidence": "Am festen SHA 0ecae137: affiliate.rs:243-277 stellt eine Session mit der neuen Twitch-ID aus. upsert_account_and_pii:773-804 prüft ausschließlich, ob der Login existiert, und validiert bei bestehenden Konten deren twitch_user_id nicht. load_account:1080-1089 selektiert nach Login und lädt die gespeicherte Twitch-ID nicht. Profilzugriff :521-524, Profiländerung :575-624 und PDF-Zugriff :740-741 verwenden ebenfalls nur session.twitch_login. Der Stripe-Callback :386-427 vergleicht nur Logins. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-analytics/src/affiliate_commission.rs:207-224 aktualisiert das Auszahlungskonto anhand des Logins und replayt bestehende Provisionen. Die ursprüngliche Besitzer-ID existiert bereits im Schema, siehe /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/migrations/20260617030000_baseline_missing_tables.sql:21-40.",
+            "expected_behavior": "Zugriff auf ein vorhandenes Affiliate-Konto muss an dessen gespeicherte Twitch-User-ID gebunden bleiben; ein gleichlautender Login einer anderen ID ist kein Eigentumsnachweis. Die erforderliche Besitzer-ID ist bereits vorhanden, eine zusätzliche Schema-Migration ist für eine ablehnende Identitätsprüfung nicht erforderlich.",
+            "countermeasures": "Twitch bestätigt die neue Identität korrekt, und /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/auth/session.rs:643-677,1713-1756 erhält die authentifizierte ID in der Session. Die Affiliate-Handler verwenden sie jedoch nicht zur Besitzprüfung. get_pdf und dessen Fallback in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-analytics/src/affiliate_gutschrift.rs:666-719 filtern korrekt nach Affiliate-Login, können dessen falsche Zuordnung aber nicht erkennen. Die Rename-Tabellen in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-monitoring/src/streamer_login.rs:58-163 enthalten keine Affiliate-Konten. Die Betriebsrollen erlauben dem Dashboard die notwendigen Affiliate-Zugriffe, siehe /home/nathanael/.worktrees/tb-vollreview-artefakte/ops/systemd/twitch-runtime-roles.sql:59-107; ein generell nur lesender Dashboard-Pool ist damit keine belegte Abwehr."
+          }
+        ]
+      }
+    }
+  ]
+}
