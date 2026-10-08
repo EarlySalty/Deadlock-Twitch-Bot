@@ -2248,7 +2248,7 @@ function ClipCard({
   const { t, locale } = useLanguage();
   const queryClient = useQueryClient();
   const status = STATUS_LABELS[clip.status] ?? STATUS_LABELS.pending;
-  const canDecide = queueStage(clip) === 'review';
+  const canDecide = clip.status !== 'approved' && queueStage(clip) === 'review';
   const termine = PLATTFORMEN.flatMap((platform) =>
     clip.scheduled_at?.[platform] && !clip.platform_status[platform] && !['inbox', 'inbox_pending', 'waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.[platform] ?? '')
       ? [{ platform, zeit: clip.scheduled_at[platform] as string }]

@@ -66,6 +66,7 @@ const EN: Record<string, string> = {
   'Aktuelle TikTok-Einstellungen werden geladen.': 'Loading current TikTok settings.',
   'Die Videovorschau wird geprüft.': 'Checking the video preview.',
   'Die Videovorschau wird angefordert.': 'Requesting the video preview.',
+  'Die Videovorschau ist nicht mehr verfügbar. Bitte erstelle sie erneut.': 'The video preview is no longer available. Please create it again.',
   'Die Videovorschau ist angefordert und wird gleich erstellt.': 'The video preview is queued and will be created shortly.',
   'Die Videovorschau wird erstellt. Du kannst dieses Fenster schließen und später wieder öffnen.': 'The video preview is being created. You can close this window and reopen it later.',
   'Die Videovorschau konnte nicht erstellt werden. Bitte versuche es erneut.': 'The video preview could not be created. Please try again.',

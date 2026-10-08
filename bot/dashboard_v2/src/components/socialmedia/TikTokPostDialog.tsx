@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchTikTokCreatorInfo, getPreviewStatus, requestPreview, previewFileUrl, SocialMediaApiError, type TikTokPostOptions } from '@/api/socialMedia';
 import { WorkspaceDialog } from './WorkspaceDialog';
@@ -23,6 +23,14 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
   const queryClient = useQueryClient();
   const previewKey = ['social-media', 'preview', clipDbId];
   const requested = useRef<number | null>(null);
+  const session = useRef(0);
+  const inFlight = useRef<number | null>(null);
+  useEffect(() => {
+    session.current += 1;
+    requested.current = null;
+    inFlight.current = null;
+    return () => { session.current += 1; };
+  }, [clipDbId]);
   const preview = useQuery({
     queryKey: previewKey,
     queryFn: () => getPreviewStatus(clipDbId),
@@ -35,22 +43,21 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
       && ['pending', 'rendering'].includes(query.state.data?.status ?? '') ? 3000 : false,
   });
   const render = useMutation({
-    mutationFn: () => requestPreview(clipDbId),
-    onSuccess: (response) => {
-      queryClient.setQueryData(previewKey, {
-        clip_db_id: clipDbId,
+    mutationFn: ({ clip }: { clip: number; session: number }) => requestPreview(clip),
+    onSuccess: (response, request) => {
+      if (request.session !== session.current) return;
+      const key = ['social-media', 'preview', request.clip];
+      queryClient.setQueryData(key, {
+        clip_db_id: request.clip,
         status: response.status,
         ready: response.status === 'ready',
       });
-      void queryClient.invalidateQueries({ queryKey: previewKey });
+      void queryClient.invalidateQueries({ queryKey: key });
+    },
+    onSettled: (_response, _error, request) => {
+      if (inFlight.current === request.session) inFlight.current = null;
     },
   });
-  const requestRender = render.mutate;
-  useEffect(() => {
-    if (!preview.isSuccess || preview.data.status !== null || requested.current === clipDbId) return;
-    requested.current = clipDbId;
-    requestRender();
-  }, [clipDbId, preview.isSuccess, preview.data?.status, requestRender]);
   const previewReady = preview.data?.status === 'ready' && !preview.isError && !preview.isFetching && !render.isPending;
   const context = useQuery({
     queryKey: ['social-media', 'tiktok-creator', clipDbId],
@@ -71,6 +78,18 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
   const [ownBrand, setOwnBrand] = useState(false);
   const [partnerBrand, setPartnerBrand] = useState(false);
   const [consent, setConsent] = useState(false);
+  const mutateRender = render.mutate;
+  const requestRender = useCallback(() => {
+    if (inFlight.current !== null || pending) return;
+    inFlight.current = session.current;
+    requested.current = clipDbId;
+    setConsent(false);
+    mutateRender({ clip: clipDbId, session: session.current });
+  }, [clipDbId, pending, mutateRender]);
+  useEffect(() => {
+    if (!preview.isSuccess || preview.data.status !== null || requested.current === clipDbId) return;
+    requestRender();
+  }, [clipDbId, preview.isSuccess, preview.data?.status, requestRender]);
   const initializedClip = useRef<number | null>(null);
   const approvedContext = useRef('');
   useEffect(() => {
@@ -121,7 +140,11 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
         });
       }}>
         {!preview.data && preview.isFetching && <p role="status">{t('Die Videovorschau wird geprüft.')}</p>}
-        {(preview.data?.status === null || render.isPending) && !render.isError && <p role="status">{t('Die Videovorschau wird angefordert.')}</p>}
+        {render.isPending && <p role="status">{t('Die Videovorschau wird angefordert.')}</p>}
+        {preview.data?.status === null && !render.isPending && !render.isError && <div role="status" className="space-y-2">
+          <p>{t('Die Videovorschau ist nicht mehr verfügbar. Bitte erstelle sie erneut.')}</p>
+          <button type="button" className="studio-button" disabled={pending || preview.isFetching} onClick={requestRender}>{t('Vorschau erneut erstellen')}</button>
+        </div>}
         {preview.data?.status === 'pending' && !render.isPending && <p role="status">{t('Die Videovorschau ist angefordert und wird gleich erstellt.')}</p>}
         {preview.data?.status === 'rendering' && <p role="status">{t('Die Videovorschau wird erstellt. Du kannst dieses Fenster schließen und später wieder öffnen.')}</p>}
         {preview.data?.status === 'error' && !render.isPending && <div role="alert" className="space-y-2 text-danger">

@@ -1,12 +1,12 @@
 {
-  "asOf": "2026-10-07T22:24:13.078Z",
+  "asOf": "2026-10-08T00:18:59.906Z",
   "command": "node /home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/prove.mjs",
   "browser": "moli 1.1.14 --layout --image --font",
   "componentPath": "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/bot/dashboard_v2/src/components/socialmedia/TikTokPostDialog.tsx",
-  "componentSha256": "4c79cd2adc7269577d7b71df02818faac1eae74eebda119f078267e85a28ec46",
+  "componentSha256": "887c1cbc93cf05a468196900b2473d490ffaa846249ab4ccad70cff0fcc2f6f2",
   "componentUnchangedDuringRun": true,
   "exitCode": 0,
-  "passed": 5,
+  "passed": 11,
   "failed": 0,
   "ignored": 0,
   "baseline": "nicht gemessen",
@@ -28,7 +28,8 @@
       "confirmations": 0,
       "selectedPrivacy": null,
       "submitDisabled": null,
-      "checkboxes": []
+      "checkboxes": [],
+      "retry": []
     },
     {
       "name": "rendering polls without another preview request",
@@ -40,14 +41,46 @@
       "confirmations": 0,
       "selectedPrivacy": null,
       "submitDisabled": null,
-      "checkboxes": []
+      "checkboxes": [],
+      "retry": []
+    },
+    {
+      "name": "invalidated generation offers enabled retry and stops polling without auto loop",
+      "success": true,
+      "state": null,
+      "statusGets": 5,
+      "renderPosts": 1,
+      "creatorGets": 0,
+      "confirmations": 0,
+      "selectedPrivacy": null,
+      "submitDisabled": null,
+      "checkboxes": [],
+      "retry": [
+        {
+          "text": "Vorschau erneut erstellen",
+          "disabled": false
+        }
+      ]
+    },
+    {
+      "name": "concurrent retry clicks request one replacement generation",
+      "success": true,
+      "state": "pending",
+      "statusGets": 5,
+      "renderPosts": 2,
+      "creatorGets": 0,
+      "confirmations": 0,
+      "selectedPrivacy": null,
+      "submitDisabled": null,
+      "checkboxes": [],
+      "retry": []
     },
     {
       "name": "ready exposes creator choices with no preselected privacy or consent",
       "success": true,
       "state": "ready",
-      "statusGets": 5,
-      "renderPosts": 1,
+      "statusGets": 7,
+      "renderPosts": 2,
       "creatorGets": 1,
       "confirmations": 0,
       "selectedPrivacy": "",
@@ -73,7 +106,60 @@
           "checked": false,
           "disabled": false
         }
+      ],
+      "retry": []
+    },
+    {
+      "name": "replacement returning null remains explicitly retryable without repeated POST or GET",
+      "success": true,
+      "state": null,
+      "statusGets": 9,
+      "renderPosts": 3,
+      "creatorGets": 1,
+      "confirmations": 0,
+      "selectedPrivacy": null,
+      "submitDisabled": null,
+      "checkboxes": [],
+      "retry": [
+        {
+          "text": "Vorschau erneut erstellen",
+          "disabled": false
+        }
       ]
+    },
+    {
+      "name": "changed video retains valid visibility but requires unchecked consent",
+      "success": true,
+      "state": "ready",
+      "statusGets": 10,
+      "renderPosts": 3,
+      "creatorGets": 2,
+      "confirmations": 0,
+      "selectedPrivacy": "SELF_ONLY",
+      "submitDisabled": true,
+      "checkboxes": [
+        {
+          "checked": false,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": true
+        },
+        {
+          "checked": false,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": false
+        }
+      ],
+      "retry": []
     },
     {
       "name": "error retry performs new render request",
@@ -102,13 +188,58 @@
       "selectedPrivacy": null,
       "submitDisabled": null,
       "checkboxes": [],
-      "closedStatusGets": 3
+      "closedStatusGets": 3,
+      "retry": []
+    },
+    {
+      "name": "late prepare callback cannot overwrite ready data or restart polling after reopening",
+      "success": true,
+      "state": "ready",
+      "statusGets": 2,
+      "renderPosts": 1,
+      "creatorGets": 1,
+      "confirmations": 0,
+      "selectedPrivacy": "",
+      "submitDisabled": true,
+      "checkboxes": [
+        {
+          "checked": false,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": true
+        },
+        {
+          "checked": false,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": false
+        },
+        {
+          "checked": false,
+          "disabled": false
+        }
+      ],
+      "retry": []
+    },
+    {
+      "name": "approved review clips retain existing explicit stop wiring, initial review retains approve and skip",
+      "success": true,
+      "kind": "Source wiring assertion, not browser DOM proof",
+      "sourcePath": "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/bot/dashboard_v2/src/pages/SocialMedia.tsx",
+      "sourceSha256": "75741d0655c943596576a30409e68ca5208f9ddaa4b35c20deafd4997e406c69"
     }
   ],
   "evidencePaths": [
     "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/missing-pending.png",
     "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/rendering.png",
     "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/ready.png",
+    "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/invalidated-retry.png",
+    "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/changed-video-ready.png",
+    "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/reopened-ready.png",
     "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/error.png",
     "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/error-retry-pending.png"
   ]

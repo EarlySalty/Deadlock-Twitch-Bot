@@ -1,10 +1,10 @@
 {
-  "asOf": "2026-10-07T22:24:13.078Z",
+  "asOf": "2026-10-08T00:18:59.906Z",
   "browser": "moli 1.1.14 --layout --image --font",
   "synthetic": true,
   "command": "node /home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/.tasks/2026-10-07-social-tiktok-vorschau/browser/prove.mjs",
   "componentPath": "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/bot/dashboard_v2/src/components/socialmedia/TikTokPostDialog.tsx",
-  "componentSha256Start": "4c79cd2adc7269577d7b71df02818faac1eae74eebda119f078267e85a28ec46",
+  "componentSha256Start": "887c1cbc93cf05a468196900b2473d490ffaa846249ab4ccad70cff0fcc2f6f2",
   "limitations": [
     "Nur synthetische API-Antworten, kein echter Renderlauf oder TikTok-Aufruf.",
     "Keine Zustimmung und keine Veröffentlichung ausgeführt.",
@@ -44,7 +44,10 @@
         "options": [],
         "selectedPrivacy": null,
         "checkboxes": [],
-        "submitDisabled": null
+        "submitDisabled": null,
+        "caption": null,
+        "videoSrc": null,
+        "retry": []
       }
     },
     {
@@ -88,7 +91,179 @@
         "options": [],
         "selectedPrivacy": null,
         "checkboxes": [],
-        "submitDisabled": null
+        "submitDisabled": null,
+        "caption": null,
+        "videoSrc": null,
+        "retry": []
+      }
+    },
+    {
+      "name": "invalidated generation offers enabled retry and stops polling without auto loop",
+      "success": true,
+      "details": {
+        "invalidated": {
+          "state": null,
+          "requests": [
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "POST",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "pending"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "rendering"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "rendering"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            }
+          ],
+          "confirmations": 0,
+          "statusGets": 5,
+          "renderPosts": 1,
+          "creatorGets": 0,
+          "dialogOpen": true,
+          "text": "TikTok-VeröffentlichungDie Videovorschau ist nicht mehr verfügbar. Bitte erstelle sie erneut.Vorschau erneut erstellen",
+          "options": [],
+          "selectedPrivacy": null,
+          "checkboxes": [],
+          "submitDisabled": null,
+          "caption": null,
+          "videoSrc": null,
+          "retry": [
+            {
+              "text": "Vorschau erneut erstellen",
+              "disabled": false
+            }
+          ]
+        },
+        "summary": {
+          "state": null,
+          "requests": [
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "POST",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "pending"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "rendering"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "rendering"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            }
+          ],
+          "confirmations": 0,
+          "statusGets": 5,
+          "renderPosts": 1,
+          "creatorGets": 0,
+          "dialogOpen": true,
+          "text": "TikTok-VeröffentlichungDie Videovorschau ist nicht mehr verfügbar. Bitte erstelle sie erneut.Vorschau erneut erstellen",
+          "options": [],
+          "selectedPrivacy": null,
+          "checkboxes": [],
+          "submitDisabled": null,
+          "caption": null,
+          "videoSrc": null,
+          "retry": [
+            {
+              "text": "Vorschau erneut erstellen",
+              "disabled": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "concurrent retry clicks request one replacement generation",
+      "success": true,
+      "details": {
+        "state": "pending",
+        "requests": [
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": null
+          },
+          {
+            "method": "POST",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": null
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": "pending"
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": "rendering"
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": "rendering"
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": null
+          },
+          {
+            "method": "POST",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": null
+          }
+        ],
+        "confirmations": 0,
+        "statusGets": 5,
+        "renderPosts": 2,
+        "creatorGets": 0,
+        "dialogOpen": true,
+        "text": "TikTok-VeröffentlichungDie Videovorschau wird angefordert.",
+        "options": [],
+        "selectedPrivacy": null,
+        "checkboxes": [],
+        "submitDisabled": null,
+        "caption": null,
+        "videoSrc": null,
+        "retry": []
       }
     },
     {
@@ -125,6 +300,21 @@
           {
             "method": "GET",
             "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": null
+          },
+          {
+            "method": "POST",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": null
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": "pending"
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
             "state": "ready"
           },
           {
@@ -134,8 +324,8 @@
           }
         ],
         "confirmations": 0,
-        "statusGets": 5,
-        "renderPosts": 1,
+        "statusGets": 7,
+        "renderPosts": 2,
         "creatorGets": 1,
         "dialogOpen": true,
         "text": "TikTok-VeröffentlichungVeröffentlichung auf Isoliertes Testkonto (@fixture_only)24 Sekunden, für dieses Konto höchstens 60 Sekunden.Beschreibung für TikTokSynthetischer Clip für den isolierten Vorschaunachweis54/2200Wer darf den Clip sehen?Sichtbarkeit wählenAlleNur ichInteraktionen erlaubenKommentareDuettBei TikTok ausgeschaltetStitchWerbung kennzeichnenDieser Clip enthält WerbungKennzeichne Inhalte, die deine eigene Marke oder Produkte und Leistungen anderer Unternehmen bewerben.Mit der Veröffentlichung stimmst du TikToks Bestätigung zur Musiknutzung zu.Der Clip wird zum geplanten Termin direkt veröffentlicht. TikTok kann danach einige Minuten für die Verarbeitung benötigen. Den Stand siehst du an der Clipkarte.AbbrechenClip mit TikTok einplanen",
@@ -176,7 +366,323 @@
             "disabled": false
           }
         ],
-        "submitDisabled": true
+        "submitDisabled": true,
+        "caption": "Synthetischer Clip für den isolierten Vorschaunachweis",
+        "videoSrc": "/twitch/social-media/api/admin/clips/999001/preview/file?v=0000000000000000000000000000000000000000000000000000000000000000",
+        "retry": []
+      }
+    },
+    {
+      "name": "replacement returning null remains explicitly retryable without repeated POST or GET",
+      "success": true,
+      "details": {
+        "stillMissing": {
+          "state": null,
+          "requests": [
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "POST",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "pending"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "rendering"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "rendering"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "POST",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "pending"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "ready"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/clips/999001/tiktok/creator-info",
+              "state": "ready"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "POST",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            }
+          ],
+          "confirmations": 0,
+          "statusGets": 9,
+          "renderPosts": 3,
+          "creatorGets": 1,
+          "dialogOpen": true,
+          "text": "TikTok-VeröffentlichungDie Videovorschau ist nicht mehr verfügbar. Bitte erstelle sie erneut.Vorschau erneut erstellen",
+          "options": [],
+          "selectedPrivacy": null,
+          "checkboxes": [],
+          "submitDisabled": null,
+          "caption": null,
+          "videoSrc": null,
+          "retry": [
+            {
+              "text": "Vorschau erneut erstellen",
+              "disabled": false
+            }
+          ]
+        },
+        "summary": {
+          "state": null,
+          "requests": [
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "POST",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "pending"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "rendering"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "rendering"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "POST",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "pending"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "ready"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/clips/999001/tiktok/creator-info",
+              "state": "ready"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "POST",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            }
+          ],
+          "confirmations": 0,
+          "statusGets": 9,
+          "renderPosts": 3,
+          "creatorGets": 1,
+          "dialogOpen": true,
+          "text": "TikTok-VeröffentlichungDie Videovorschau ist nicht mehr verfügbar. Bitte erstelle sie erneut.Vorschau erneut erstellen",
+          "options": [],
+          "selectedPrivacy": null,
+          "checkboxes": [],
+          "submitDisabled": null,
+          "caption": null,
+          "videoSrc": null,
+          "retry": [
+            {
+              "text": "Vorschau erneut erstellen",
+              "disabled": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "changed video retains valid visibility but requires unchecked consent",
+      "success": true,
+      "details": {
+        "state": "ready",
+        "requests": [
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": null
+          },
+          {
+            "method": "POST",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": null
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": "pending"
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": "rendering"
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": "rendering"
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": null
+          },
+          {
+            "method": "POST",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": null
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": "pending"
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": "ready"
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/clips/999001/tiktok/creator-info",
+            "state": "ready"
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": null
+          },
+          {
+            "method": "POST",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": null
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": null
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/admin/clips/999001/preview",
+            "state": "ready"
+          },
+          {
+            "method": "GET",
+            "path": "/twitch/social-media/api/clips/999001/tiktok/creator-info",
+            "state": "ready"
+          }
+        ],
+        "confirmations": 0,
+        "statusGets": 10,
+        "renderPosts": 3,
+        "creatorGets": 2,
+        "dialogOpen": true,
+        "text": "TikTok-VeröffentlichungVeröffentlichung auf Isoliertes Testkonto (@fixture_only)24 Sekunden, für dieses Konto höchstens 60 Sekunden.Beschreibung für TikTokSynthetischer Clip für den isolierten Vorschaunachweis54/2200Wer darf den Clip sehen?Sichtbarkeit wählenAlleNur ichInteraktionen erlaubenKommentareDuettBei TikTok ausgeschaltetStitchWerbung kennzeichnenDieser Clip enthält WerbungKennzeichne Inhalte, die deine eigene Marke oder Produkte und Leistungen anderer Unternehmen bewerben.Mit der Veröffentlichung stimmst du TikToks Bestätigung zur Musiknutzung zu.Der Clip wird zum geplanten Termin direkt veröffentlicht. TikTok kann danach einige Minuten für die Verarbeitung benötigen. Den Stand siehst du an der Clipkarte.AbbrechenClip mit TikTok einplanen",
+        "options": [
+          {
+            "value": "",
+            "text": "Sichtbarkeit wählen"
+          },
+          {
+            "value": "PUBLIC_TO_EVERYONE",
+            "text": "Alle"
+          },
+          {
+            "value": "SELF_ONLY",
+            "text": "Nur ich"
+          }
+        ],
+        "selectedPrivacy": "SELF_ONLY",
+        "checkboxes": [
+          {
+            "checked": false,
+            "disabled": false
+          },
+          {
+            "checked": false,
+            "disabled": true
+          },
+          {
+            "checked": false,
+            "disabled": false
+          },
+          {
+            "checked": false,
+            "disabled": false
+          },
+          {
+            "checked": false,
+            "disabled": false
+          }
+        ],
+        "submitDisabled": true,
+        "caption": "Synthetischer Clip für den isolierten Vorschaunachweis",
+        "videoSrc": "/twitch/social-media/api/admin/clips/999001/preview/file?v=1111111111111111111111111111111111111111111111111111111111111111",
+        "retry": []
       }
     },
     {
@@ -215,7 +721,10 @@
           "options": [],
           "selectedPrivacy": null,
           "checkboxes": [],
-          "submitDisabled": null
+          "submitDisabled": null,
+          "caption": null,
+          "videoSrc": null,
+          "retry": []
         }
       }
     },
@@ -256,7 +765,10 @@
           "options": [],
           "selectedPrivacy": null,
           "checkboxes": [],
-          "submitDisabled": null
+          "submitDisabled": null,
+          "caption": null,
+          "videoSrc": null,
+          "retry": []
         },
         "later": {
           "state": "rendering",
@@ -291,12 +803,174 @@
           "options": [],
           "selectedPrivacy": null,
           "checkboxes": [],
-          "submitDisabled": null
+          "submitDisabled": null,
+          "caption": null,
+          "videoSrc": null,
+          "retry": []
         }
+      }
+    },
+    {
+      "name": "late prepare callback cannot overwrite ready data or restart polling after reopening",
+      "success": true,
+      "details": {
+        "reopened": {
+          "state": "ready",
+          "requests": [
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "POST",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "ready"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/clips/999001/tiktok/creator-info",
+              "state": "ready"
+            }
+          ],
+          "confirmations": 0,
+          "statusGets": 2,
+          "renderPosts": 1,
+          "creatorGets": 1,
+          "dialogOpen": true,
+          "text": "TikTok-VeröffentlichungVeröffentlichung auf Isoliertes Testkonto (@fixture_only)24 Sekunden, für dieses Konto höchstens 60 Sekunden.Beschreibung für TikTokSynthetischer Clip für den isolierten Vorschaunachweis54/2200Wer darf den Clip sehen?Sichtbarkeit wählenAlleNur ichInteraktionen erlaubenKommentareDuettBei TikTok ausgeschaltetStitchWerbung kennzeichnenDieser Clip enthält WerbungKennzeichne Inhalte, die deine eigene Marke oder Produkte und Leistungen anderer Unternehmen bewerben.Mit der Veröffentlichung stimmst du TikToks Bestätigung zur Musiknutzung zu.Der Clip wird zum geplanten Termin direkt veröffentlicht. TikTok kann danach einige Minuten für die Verarbeitung benötigen. Den Stand siehst du an der Clipkarte.AbbrechenClip mit TikTok einplanen",
+          "options": [
+            {
+              "value": "",
+              "text": "Sichtbarkeit wählen"
+            },
+            {
+              "value": "PUBLIC_TO_EVERYONE",
+              "text": "Alle"
+            },
+            {
+              "value": "SELF_ONLY",
+              "text": "Nur ich"
+            }
+          ],
+          "selectedPrivacy": "",
+          "checkboxes": [
+            {
+              "checked": false,
+              "disabled": false
+            },
+            {
+              "checked": false,
+              "disabled": true
+            },
+            {
+              "checked": false,
+              "disabled": false
+            },
+            {
+              "checked": false,
+              "disabled": false
+            },
+            {
+              "checked": false,
+              "disabled": false
+            }
+          ],
+          "submitDisabled": true,
+          "caption": "Synthetischer Clip für den isolierten Vorschaunachweis",
+          "videoSrc": "/twitch/social-media/api/admin/clips/999001/preview/file?v=0000000000000000000000000000000000000000000000000000000000000000",
+          "retry": []
+        },
+        "summary": {
+          "state": "ready",
+          "requests": [
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "POST",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": null
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/admin/clips/999001/preview",
+              "state": "ready"
+            },
+            {
+              "method": "GET",
+              "path": "/twitch/social-media/api/clips/999001/tiktok/creator-info",
+              "state": "ready"
+            }
+          ],
+          "confirmations": 0,
+          "statusGets": 2,
+          "renderPosts": 1,
+          "creatorGets": 1,
+          "dialogOpen": true,
+          "text": "TikTok-VeröffentlichungVeröffentlichung auf Isoliertes Testkonto (@fixture_only)24 Sekunden, für dieses Konto höchstens 60 Sekunden.Beschreibung für TikTokSynthetischer Clip für den isolierten Vorschaunachweis54/2200Wer darf den Clip sehen?Sichtbarkeit wählenAlleNur ichInteraktionen erlaubenKommentareDuettBei TikTok ausgeschaltetStitchWerbung kennzeichnenDieser Clip enthält WerbungKennzeichne Inhalte, die deine eigene Marke oder Produkte und Leistungen anderer Unternehmen bewerben.Mit der Veröffentlichung stimmst du TikToks Bestätigung zur Musiknutzung zu.Der Clip wird zum geplanten Termin direkt veröffentlicht. TikTok kann danach einige Minuten für die Verarbeitung benötigen. Den Stand siehst du an der Clipkarte.AbbrechenClip mit TikTok einplanen",
+          "options": [
+            {
+              "value": "",
+              "text": "Sichtbarkeit wählen"
+            },
+            {
+              "value": "PUBLIC_TO_EVERYONE",
+              "text": "Alle"
+            },
+            {
+              "value": "SELF_ONLY",
+              "text": "Nur ich"
+            }
+          ],
+          "selectedPrivacy": "",
+          "checkboxes": [
+            {
+              "checked": false,
+              "disabled": false
+            },
+            {
+              "checked": false,
+              "disabled": true
+            },
+            {
+              "checked": false,
+              "disabled": false
+            },
+            {
+              "checked": false,
+              "disabled": false
+            },
+            {
+              "checked": false,
+              "disabled": false
+            }
+          ],
+          "submitDisabled": true,
+          "caption": "Synthetischer Clip für den isolierten Vorschaunachweis",
+          "videoSrc": "/twitch/social-media/api/admin/clips/999001/preview/file?v=0000000000000000000000000000000000000000000000000000000000000000",
+          "retry": []
+        }
+      }
+    },
+    {
+      "name": "approved review clips retain existing explicit stop wiring, initial review retains approve and skip",
+      "success": true,
+      "details": {
+        "sourcePath": "/home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/bot/dashboard_v2/src/pages/SocialMedia.tsx",
+        "sourceSha256": "75741d0655c943596576a30409e68ca5208f9ddaa4b35c20deafd4997e406c69",
+        "kind": "Source wiring assertion, not browser DOM proof"
       }
     }
   ],
-  "componentSha256End": "4c79cd2adc7269577d7b71df02818faac1eae74eebda119f078267e85a28ec46",
+  "componentSha256End": "887c1cbc93cf05a468196900b2473d490ffaa846249ab4ccad70cff0fcc2f6f2",
   "componentUnchangedDuringRun": true,
   "exitCode": 0
 }

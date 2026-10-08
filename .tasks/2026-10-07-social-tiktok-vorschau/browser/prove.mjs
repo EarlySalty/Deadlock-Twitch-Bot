@@ -61,11 +61,37 @@ try {
   summary = await run('return window.previewEvidence.summary();');
   check('rendering polls without another preview request', summary.renderPosts === 1 && summary.creatorGets === 0 && summary.statusGets >= before + 2, summary);
   await screenshot('rendering.png');
+  await run('window.previewEvidence.setState(null); return true;');
+  await until('window.previewEvidence.summary().retry.some(b => !b.disabled) && window.previewEvidence.summary().state === null', 10000);
+  const invalidated = await run('return window.previewEvidence.summary();');
+  await wait(6500);
+  summary = await run('return window.previewEvidence.summary();');
+  check('invalidated generation offers enabled retry and stops polling without auto loop', summary.renderPosts === 1 && summary.creatorGets === 0 && summary.statusGets === invalidated.statusGets && summary.retry.some(b => !b.disabled), { invalidated, summary });
+  await screenshot('invalidated-retry.png');
+  await run('window.previewEvidence.holdNextPost(); const b = Array.from(document.querySelectorAll("dialog button")).find(b => b.textContent === "Vorschau erneut erstellen"); b.click(); b.click(); return true;');
+  await until('window.previewEvidence.summary().renderPosts === 2');
+  summary = await run('return window.previewEvidence.summary();');
+  check('concurrent retry clicks request one replacement generation', summary.renderPosts === 2 && summary.creatorGets === 0, summary);
+  await run('window.previewEvidence.releasePost(); return true;');
+  await until('window.previewEvidence.summary().text.includes("gleich erstellt")');
   await run('window.previewEvidence.setState("ready"); return true;');
   await until('window.previewEvidence.summary().creatorGets > 0 && document.querySelector("select")', 10000);
   summary = await run('return window.previewEvidence.summary();');
   check('ready exposes creator choices with no preselected privacy or consent', summary.options?.length === 3 && summary.selectedPrivacy === '' && summary.checkboxes?.length >= 5 && summary.checkboxes.every(c => !c.checked) && summary.submitDisabled && summary.confirmations === 0, summary);
   await screenshot('ready.png');
+  await run('const s = document.querySelector("select"); s.value = "SELF_ONLY"; s.dispatchEvent(new Event("change", { bubbles: true })); window.previewEvidence.setState(null); window.previewEvidence.setPostState(null); window.previewEvidence.refresh(); return true;');
+  await until('window.previewEvidence.summary().retry.some(b => !b.disabled)');
+  await run('Array.from(document.querySelectorAll("dialog button")).find(b => b.textContent === "Vorschau erneut erstellen").click(); return true;');
+  await until('window.previewEvidence.summary().renderPosts === 3 && window.previewEvidence.summary().retry.some(b => !b.disabled)');
+  const stillMissing = await run('return window.previewEvidence.summary();');
+  await wait(6500);
+  summary = await run('return window.previewEvidence.summary();');
+  check('replacement returning null remains explicitly retryable without repeated POST or GET', summary.renderPosts === 3 && summary.statusGets === stillMissing.statusGets && summary.retry.some(b => !b.disabled), { stillMissing, summary });
+  await run('window.previewEvidence.setDigest("1".repeat(64)); window.previewEvidence.setState("ready"); window.previewEvidence.refresh(); return true;');
+  await until('window.previewEvidence.summary().videoSrc?.includes("1".repeat(64)) && document.querySelector("select")');
+  summary = await run('return window.previewEvidence.summary();');
+  check('changed video retains valid visibility but requires unchecked consent', summary.selectedPrivacy === 'SELF_ONLY' && summary.checkboxes.every(c => !c.checked) && summary.submitDisabled && summary.confirmations === 0, summary);
+  await screenshot('changed-video-ready.png');
   await navigate('error');
   await until('document.querySelector("dialog [role=alert]") || document.querySelector("dialog button[data-retry]")');
   await screenshot('error.png');
@@ -82,13 +108,28 @@ try {
   await wait(6500);
   summary = await run('return window.previewEvidence.summary();');
   check('closing stops polling across two intervals', !summary.dialogOpen && summary.statusGets === closed.statusGets && summary.renderPosts === closed.renderPosts && summary.confirmations === 0, { closed, later: summary });
+  await navigate('missing&hold=1');
+  await until('window.previewEvidence.summary().renderPosts === 1');
+  await run('document.querySelector("dialog button[aria-label=Schließen]").click(); window.previewEvidence.setState("ready"); return true;');
+  await until('!document.querySelector("dialog[open]")');
+  await run('Array.from(document.querySelectorAll("main button")).find(b => b.textContent === "Dialog öffnen").click(); return true;');
+  await until('document.querySelector("select") && window.previewEvidence.summary().creatorGets > 0');
+  const reopened = await run('return window.previewEvidence.summary();');
+  await run('window.previewEvidence.releasePost(); return true;');
+  await wait(6500);
+  summary = await run('return window.previewEvidence.summary();');
+  check('late prepare callback cannot overwrite ready data or restart polling after reopening', summary.statusGets === reopened.statusGets && summary.renderPosts === 1 && summary.creatorGets === reopened.creatorGets && summary.selectedPrivacy === '' && summary.checkboxes.every(c => !c.checked) && summary.submitDisabled, { reopened, summary });
+  await screenshot('reopened-ready.png');
+  const socialMediaPath = path.resolve(root, '../../../bot/dashboard_v2/src/pages/SocialMedia.tsx');
+  const socialMediaSource = await fs.readFile(socialMediaPath, 'utf8');
+  check('approved review clips retain existing explicit stop wiring, initial review retains approve and skip', socialMediaSource.includes("const canDecide = clip.status !== 'approved' && queueStage(clip) === 'review';") && socialMediaSource.includes(') : stoppbar ? (') && socialMediaSource.includes('onClick={onCancelScheduled}') && socialMediaSource.includes("onApprovalDecision('skip', selectedPlatforms)"), { sourcePath: socialMediaPath, sourceSha256: createHash('sha256').update(socialMediaSource).digest('hex'), kind: 'Source wiring assertion, not browser DOM proof' });
 } catch (error) {
   results.failure = String(error);
   console.error(error);
 } finally {
   results.componentSha256End = await hashComponent();
   results.componentUnchangedDuringRun = results.componentSha256Start === results.componentSha256End;
-  results.exitCode = results.failure || results.cases.some(c => !c.success) || results.cases.length !== 5 || !results.componentUnchangedDuringRun ? 1 : 0;
+  results.exitCode = results.failure || results.cases.some(c => !c.success) || results.cases.length !== 11 || !results.componentUnchangedDuringRun ? 1 : 0;
   await fs.writeFile(path.join(root, 'results.json'), JSON.stringify(results, null, 2));
   const compact = {
     asOf: results.asOf, command: results.command, browser: results.browser,
@@ -106,9 +147,10 @@ try {
         selectedPrivacy: data.selectedPrivacy, submitDisabled: data.submitDisabled,
         checkboxes: data.checkboxes,
         closedStatusGets: c.details.closed?.statusGets,
-        retry: c.details.retry };
+        retry: c.details.retry ?? data.retry, kind: c.details.kind,
+        sourcePath: c.details.sourcePath, sourceSha256: c.details.sourceSha256 };
     }),
-    evidencePaths: ['missing-pending.png', 'rendering.png', 'ready.png', 'error.png', 'error-retry-pending.png'].map(name => path.join(root, name)),
+    evidencePaths: ['missing-pending.png', 'rendering.png', 'ready.png', 'invalidated-retry.png', 'changed-video-ready.png', 'reopened-ready.png', 'error.png', 'error-retry-pending.png'].map(name => path.join(root, name)),
   };
   await fs.writeFile(path.join(root, 'results-compact.json'), JSON.stringify(compact, null, 2));
   await request(prefix, undefined, 'DELETE');

@@ -10,6 +10,9 @@ const initial = new URLSearchParams(location.search).get('state');
 let state: PreviewState = initial === 'missing' || !initial ? null : initial as PreviewState;
 const requests: { method: string; path: string; state: PreviewState }[] = [];
 let confirmations = 0;
+let nextPostState: PreviewState = 'pending';
+let holdPost = new URLSearchParams(location.search).get('hold') === '1';
+let releasePost: (() => void) | null = null;
 const creator = {
   caption: 'Synthetischer Clip für den isolierten Vorschaunachweis',
   duration_seconds: 24,
@@ -31,8 +34,17 @@ window.fetch = async (input, init) => {
   const method = init?.method ?? 'GET';
   requests.push({ method, path, state });
   if (path === '/twitch/social-media/api/admin/clips/999001/preview') {
-    if (method === 'POST') state = 'pending';
-    return new Response(JSON.stringify({ clip_db_id: 999001, status: state, ready: state === 'ready', error: state === 'error' ? 'Synthetischer Renderfehler' : null }), { headers: { 'Content-Type': 'application/json' } });
+    let responseState = state;
+    if (method === 'POST') {
+      responseState = nextPostState;
+      state = nextPostState;
+      if (holdPost) {
+        holdPost = false;
+        await new Promise<void>(resolve => { releasePost = resolve; });
+        releasePost = null;
+      }
+    }
+    return new Response(JSON.stringify({ clip_db_id: 999001, status: responseState, ready: responseState === 'ready', error: responseState === 'error' ? 'Synthetischer Renderfehler' : null }), { headers: { 'Content-Type': 'application/json' } });
   }
   if (path === '/twitch/social-media/api/clips/999001/tiktok/creator-info' && method === 'GET') {
     return new Response(JSON.stringify(creator), { headers: { 'Content-Type': 'application/json' } });
@@ -52,9 +64,20 @@ function summary() {
     selectedPrivacy: (document.querySelector('select') as HTMLSelectElement | null)?.value,
     checkboxes: Array.from(document.querySelectorAll('dialog input[type=checkbox]')).map(n => ({ checked: (n as HTMLInputElement).checked, disabled: (n as HTMLInputElement).disabled })),
     submitDisabled: (document.querySelector('button[type=submit]') as HTMLButtonElement | null)?.disabled,
+    caption: (document.querySelector('textarea') as HTMLTextAreaElement | null)?.value,
+    videoSrc: document.querySelector('video')?.getAttribute('src'),
+    retry: Array.from(document.querySelectorAll('dialog button')).filter(n => n.textContent?.includes('Vorschau erneut')).map(n => ({ text: n.textContent, disabled: (n as HTMLButtonElement).disabled })),
   };
 }
-Object.assign(window, { previewEvidence: { setState: (next: PreviewState) => { state = next; }, summary } });
+Object.assign(window, { previewEvidence: {
+  setState: (next: PreviewState) => { state = next; },
+  setDigest: (digest: string) => { creator.approved_video_sha256 = digest; },
+  refresh: () => client.invalidateQueries({ queryKey: ['social-media', 'preview', 999001] }),
+  holdNextPost: () => { holdPost = true; },
+  releasePost: () => releasePost?.(),
+  setPostState: (next: PreviewState) => { nextPostState = next; },
+  summary,
+} });
 function Fixture() {
   const [visible, setVisible] = useState(true);
   const [label, setLabel] = useState(state ?? 'missing');

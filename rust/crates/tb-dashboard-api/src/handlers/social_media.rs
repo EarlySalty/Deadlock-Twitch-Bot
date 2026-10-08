@@ -1331,17 +1331,26 @@ pub async fn queue_upload_handler(
             return response;
         }
     }
+    let schedule = match (body.schedule.as_deref(), scheduled_at.as_deref()) {
+        (Some("now"), Some(value)) => tb_social_media::clip_queue::UploadSchedule::Replace(value),
+        (Some(timestamp), Some(value)) if DateTime::parse_from_rfc3339(timestamp).is_ok() => {
+            tb_social_media::clip_queue::UploadSchedule::Replace(value)
+        }
+        _ => tb_social_media::clip_queue::UploadSchedule::Preserve(scheduled_at.as_deref()),
+    };
     let mut queued: Vec<Value> = Vec::new();
     for platform in &platforms {
-        match queue_upload(
+        match tb_social_media::clip_queue::queue_upload_with_schedule(
             &pool,
-            clip_id,
-            platform,
-            body.title.as_deref(),
-            body.description.as_deref(),
-            body.hashtags.as_deref(),
-            scheduled_at.as_deref(),
-            body.priority,
+            tb_social_media::clip_queue::QueueUploadRequest {
+                clip_db_id: clip_id,
+                platform,
+                title: body.title.as_deref(),
+                description: body.description.as_deref(),
+                hashtags: body.hashtags.as_deref(),
+                schedule,
+                priority: body.priority,
+            },
         )
         .await
         {
