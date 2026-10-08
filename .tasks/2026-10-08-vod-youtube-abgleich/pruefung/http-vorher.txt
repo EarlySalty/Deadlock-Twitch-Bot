@@ -1,0 +1,22 @@
+{
+  "proof": "anonymous_before_deploy",
+  "observed_at": "2026-10-08T00:14:34.404482+00:00",
+  "responses": [
+    {
+      "path": "/twitch/social-media?view=archiv",
+      "status": 303,
+      "content_type": null,
+      "location": "/twitch/auth/login?next=%2Ftwitch%2Fsocial-media%3Fview%3Darchiv",
+      "body_bytes": 0,
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/twitch/social-media/api/vod-archive",
+      "status": 401,
+      "content_type": "application/json",
+      "location": null,
+      "body_bytes": 36,
+      "body_sha256": "7524c211c44ed1507a420de4edf6c8eb9dacee04a5ea1dc02d7092ba7f62b8f5"
+    }
+  ]
+}

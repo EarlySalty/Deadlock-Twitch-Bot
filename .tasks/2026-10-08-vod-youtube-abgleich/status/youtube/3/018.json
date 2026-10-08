@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 18,
+  "zeit": "2026-10-08T21:12:49Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "pruefung",
+  "gebaut": "nein",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "b38e20518970bddbc56104ddc7eadf6436b84425",
+  "nachweise": ["REGISTER.md", "pruefung/r13-source-sha256.txt", "pruefung/r13-archive-first.txt"],
+  "blocker": [],
+  "naechster_schritt": "Fortschrittswache belegt sechs committed unveränderte Quellen und echte Archivkompilation: 66 passed, 5 Worker failed wegen fehlendem synthetischem Testparameter, Exit101. Korrigierter einziger Worker-Nachlauf b5udz3z9w wartet tatsächlich im normalen cargo-slot; nur eigene Logbesitzer und Prozessmetadaten geprüft, keine Argumente/ENV. Kein Modellstillstand und kein paralleler Ersatz. Original-Ganzbeleg intern verschachtelt, öffentliche Beobachtungsliste kompatibel. API und Clippy fehlen; nächster gleicher Gate erst nach tatsächlich bestandenen positiven und negativen geänderten SQL-/Workerproben. Keine neuen Uploads, kein Main-Push/Release/Deploy oder produktiver Abschluss."
+}

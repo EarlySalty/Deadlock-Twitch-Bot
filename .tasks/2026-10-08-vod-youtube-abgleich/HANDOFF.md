@@ -1,0 +1,33 @@
+# Handoff: offener YouTube-Abgleich
+
+Stand 2026-10-09. Eigentum, vollständige Session-/Fixer-IDs, Versuche, SHAs und Chronik: [REGISTER.md](REGISTER.md). Prüfscopes und Originalbelege: [PRUEFUNG.md](PRUEFUNG.md). Ausführliche frühere Fassungen bleiben in Git am Checkpoint31e8c4557aec156de06c27945186eaae3e887442. AUFTRAG.md und PLAN.md sind unverändert verbindlich.
+
+## Aktuelle Übergabe
+
+Gemeinsamer Original-Ganzbelegvertrag implementiert, drei verlangte tatsächliche Gegenfolgen belegt, fokussiert31 passed/0 ignored, kombinierter Clippy Exit0. Quellen/Gate-/Clippy-HEAD und sechs abschließende Hashes im Register und pruefung/r13-final-source-sha256.txt. Keine eigene aktive Queue oder lebender Fixer.
+
+Gate13: technischer Eingabegrößenfehler vor Modellstart, kein ALLOW/BLOCK. Freigegebene reine Notizverdichtung durchgeführt, mindestens20KB-Ziel überschritten. Anschließende lesende Größenzerlegung belegt, dass schon der unveränderte Eingabeanteil außerhalb dieser drei Notizen das Limit übersteigt. Messwerte in PRUEFUNG.md. Daher kein blindes Wiederholen und kein neuer Gateaufruf; vollständige reguläre Prüfung weiterhin technisch blockiert. Keine Quellen-/Originalbeleg-/Gateänderung, Filterung, Modellwechsel, neue Hierarchie oder erneute Planfreigabe.
+
+Kein Main-Push, Release, Migration, Deploy oder produktiver Abschluss der fünf Altfälle. Bei Wiederaufnahme zuerst eigenen HEAD/Arbeitsbaum und tatsächliche eigene Restprozesse prüfen, keine Doppelwriter und keine nominell laufenden Kontexte ungeprüft übernehmen.
+
+## Bereits autorisierter Abschluss nach tatsächlichem ALLOW
+
+1. Reguläre Main-Integration und Push HEAD:main, vorhandene Hooks ohne Umgehung. Git-Schritte einzeln, literale eigene Pfade, einzelne Dateien adden. Release aus sauberem eigenen Checkout des dann tatsächlich aktuellen origin/main, keine fremden Quellen oder Artefakte übernehmen.
+2. Acht ELF-.twitch_build-Anker exakt derselben SHA ohne dirty und drei Assetbäume samt Herkunft prüfen. Eigenständiger Stagingclone mit internem .git, Arbeitsworktree nicht verschieben. Vor Deploy frischer `/usr/local/bin/deploy-twitch-release --pruefen`; regulärer serialisierter Deploy-Wrapper. Migration über vorhandene Migrationsunit vor Neustart des neuen Codes, nach erster produktiver Anwendung Migrationsdatei einfrieren.
+3. Datenbeleg [live-evidence.sql](pruefung/live-evidence.sql) über bestehenden Infisical-/libpq-Pfad READ ONLY ausführen. twitchlegacy hat tatsächlich kein SELECT auf _sqlx_migrations. Keine Rechteausweitung/privilegierte Umgehung; Migration durch Unit-Result, Journal und identischen Release-Migrationshash belegen. Vollständigen regulären Workerabgleich abwarten, Fälle10,11,2941,2995,2996 einzeln ehrlich bewerten, nicht aus erster Playlist-Seite entscheiden.
+4. Prozess-/SHA-/PID-Wechsel, exe ohne(deleted), NRestarts, journal -p err, Binaryanker und echten Funktionsbeweis sichern. Historische Uploadannahme, tatsächliche Verarbeitung/Abrufbarkeit und öffentliche Sichtbarkeit getrennt. Keine Uploads durch Prüfknopf/Abgleich, keine echten VOD-Schreibaktionen und keine manuellen Produktionskorrekturen. Erst dann ABSCHLUSS.md mit Pflichtzeilen und getrennten Quellen-/Release-/Berichts-SHAs.
+5. Wertvolle eigene Artefakte sichern und Berichte pushen; eigene Ressourcen erst nach Nutzungsprüfung bereinigen. Branch-Ancestor samt Exit-Code vor Löschung prüfen. Nur eigenen gemergten Branch/Worktree entfernen. Allerletzter operativer Schritt: t3-thread.py settle --selbst. Offenen Auftrag nicht settlen/archivieren.
+
+## Erhaltene Ressourcen und Grenzen
+
+- Eigene synthetische PostgreSQL: `/tmp/tb-youtube-pg-c5d0`, Loopback55683, token_db_youtube; Schemas einschließlich t_token_resume_migration und t_vod_idless_correspondence. Temporäre rust/token-db-tests.conf und synthetische DSN-Datei nach Prüfungen entfernt. DB bleibt bis Sicherung eigener Belege. Kein zusätzlicher Cachecleanup beauftragt; beim Wiederanlauf233GiB frei.
+- Eigene lesende Einmalhelfer: `/tmp/tb-youtube-live-evidence-c5d0.py`, `/tmp/tb-youtube-pg-c5d0/live-evidence.sql`. Nur synthetisch geprüft; keine Verbindungsdetails ausgegeben. Beim eigenen Abschluss entfernen, ebenso nur nachweislich eigene weitere SQL-/PID-/Inotify-Helfer.
+- Stagingclone: `/home/nathanael/repos/twitch-release-youtube-c5d0-20261008`, intern .git, ursprünglicher HEAD3341098f3a953e231c0ec5731141996b10f1b9b6. Noch ohne neue Releaseartefakte. Vier damals geprüfte Liveprozesse liefen ebenfalls auf dieser SHA, exe nicht gelöscht/NRestarts0; kein Beleg dieses offenen Fixes. Installierter Deploy-Wrapper und Repoquelle damals gleicher SHA256:15fc5400d38955c7baa3a77762c04ec1bdc379ce3b3d9f6e7c47c19c9beca223. Vor Verwendung aktuelle Herkunft neu prüfen, niemals Dateialter als Beleg.
+- Releasebinaries: tb-bot, tb-dashboard, tb-stream-audit, tb-config-check, tb-llm-usage-recover, tb-category-collector, tb-twitch-watchdog, clip_context_learn. Assetbäume: bot/analytics/dashboard_v2/dist, bot/admin_dashboard/dist, website/dist. Fremde TikTok-Änderungen im Gesamtbundle sind keine eigene UI-Änderung; Quellgleichheit der Admin-/Websiteassets vor Release belegen.
+- Moli-/Fixture-Prozesse beendet. Desktop-/Mobilprüfung und einzige Bestätigungsrunde auf89bfd5fa ausgeschöpft, unveränderte Archivoberfläche/Fonts erhalten. Kein Brave, keine weitere UI-Politur/Sichtprüfung oder neue YouTube-Vorprobe. Echte erfolgreiche Leseprobe02:34:28UTC ist bereits vorhanden, ersetzt keinen vollständigen Altfallsabgleich.
+
+Cargo ausschließlich über unveränderten cargo-slot, --jobs3, genau ein normal wartender eigener Aufruf. Keine selbst gesetzte Slot-Abbruchgrenze; echtes Werkzeuglimit maximal7.200.000ms melden. Keine eigenen Locks, Targetkopien, globales CARGO_TARGET_DIR oder Eingriffe in fremde Prozesse/Locks.
+
+## Sicherheitsunterbrechung, abgeschlossen
+
+Historischer Handoff03:05:34Z betraf ausschließlich eigenen threadgebundenen T3-MCP-Zugang; aktives24-Stunden-Fenster wurde durch Aktivität verlängert. Unterstützter Widerruf über vorhandenes t3-thread.py dispatch/thread.session.stop, clearMcpSession/revokeThread, kein revokeAll. Eigener Stopp03:07:45Z HTTP200/status stopped bestätigt; Versuch3 übernimmt mit neuem Harness-Zugang. Geheimnis nicht in Task/Git übernommen und niemals erneut lesen, ausgeben, kopieren oder rekonstruieren. Keine Bot-/Google-Zugänge rotiert oder fremden Sessions verändert. Damaliger API-Nachlauf ohne Abschluss zählt nicht; historischer Gate6-BLOCK ist im Register samt Originalbeleg erhalten, keine aktuelle Freigabe.

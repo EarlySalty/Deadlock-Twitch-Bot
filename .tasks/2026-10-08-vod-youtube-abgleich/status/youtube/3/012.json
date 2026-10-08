@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 12,
+  "zeit": "2026-10-08T18:22:33Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "blocker",
+  "gebaut": "ja",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "7fb7c6f262e4393a61dd121f6640a7c66c39e7aa",
+  "nachweise": ["REGISTER.md", "REVIEW.md", "pruefung/gate-round11.txt", "pruefung/gate-round11-base.txt", "pruefung/r10-source-sha256.txt", "pruefung/r10-api-worker.txt", "pruefung/r10-api-resets.txt", "pruefung/r10-archive-rejection.txt", "pruefung/r10-pruefungen.txt"],
+  "blocker": ["Gate 11, gpt-6.1-sol, Exit 1: ID-lose Mehrteiler umgehen in beiden bestehenden Schutzprädikaten die hinreichende Dauerabdeckung durch total > 1. Zu kurze processed-Zuordnung schützt fehlenden Inhalt; vollständiger Abschluss wird verweigert, weitere Wiederholung bleibt blockiert."],
+  "naechster_schritt": "Kleinsten Folgeweg an Auftraggeber melden: ausreichende Mehrteiler-Dauerbindung in beiden bestehenden Prädikaten und gezielte vorhandene SQL-/Workerfolge. Nicht umgesetzt, kein neuer Fixer oder Gate. Gewöhnlicher Retry-Fix committed; drei fokussierte echte Prüfungen jeweils 1 passed, 0 failed, 0 ignored. Compiler tatsächlich ausgeführt, aber genau ein kombinierter Clippy b8zb1ayz9 wartet noch regulär ohne Ergebnis. Quellen eingefroren, fünf Hashes bei Elternübernahme unverändert. Kein Main-Push, Release, Migration, Deploy oder produktiver Abschluss der fünf Altfälle. Kein Settlen oder Cleanup ungemergter Quellen."
+}

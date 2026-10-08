@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 1,
+  "sequenz": 4,
+  "zeit": "2026-10-08T00:06:05Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "aktiv",
+  "gebaut": "ja",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "fb89fe692de9ad67253651bc88862354b1fe05e3",
+  "nachweise": ["PRUEFUNG.md", "REVIEW.md", "pruefung/moli-layout.json"],
+  "blocker": [],
+  "naechster_schritt": "Frischer nativer Fixer korrigiert die erneuerte Erfolgszeit bei alten Inventarbeobachtungen. Danach betroffene Tests und denselben Gate erneut ausführen."
+}

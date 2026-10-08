@@ -1,0 +1,35 @@
+cargo-slot: Slot 3, optimiert=0
+   Compiling tb-config v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-config)
+   Compiling tb-llm v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-llm)
+   Compiling tb-transport-twitch v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-transport-twitch)
+   Compiling tb-analytics v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-analytics)
+   Compiling tb-engagement v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-engagement)
+   Compiling tb-social-media v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-social-media)
+   Compiling tb-vod-archive v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-vod-archive)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 54s
+     Running unittests src/lib.rs (/home/nathanael/.cache/rust-build/cc/fbcfe1d0264353/debug/deps/tb_vod_archive-4375c79f36c27180)
+
+running 15 tests
+test worker::tests::der_download_pfad_haengt_nicht_am_upload_budget ... ok
+test worker::tests::df_ausgabe_wird_gelesen ... ok
+test worker::tests::der_startplatz_wandert_von_lauf_zu_lauf ... ok
+test worker::tests::kein_kanal_frisst_das_ganze_kontingent ... ok
+test worker::tests::leere_warteschlange_bleibt_leer ... ok
+test worker::tests::restdateien_bleiben_bei_der_verfuegbarkeitspruefung_erhalten ... ok
+test worker::tests::dateien_bleiben_bis_zur_bestaetigten_verarbeitung ... ok
+test worker::tests::ein_vod_ohne_teile_gilt_nicht_als_hochgeladen ... ok
+test worker::tests::jeder_teil_zaehlt_einzeln_gegen_den_upload_deckel ... ok
+YOUTUBE_WORKER_DB_PROOF: reconciliation persists a real rejection, repeated archive execution uploads nothing and preserves the completed part and local source until explicit retry
+test worker::tests::verworfene_uploads_fallen_nicht_unter_den_tisch ... ok
+test worker::tests::der_upload_deckel_gilt_auch_auf_dem_download_pfad ... ok
+YOUTUBE_WORKER_DB_PROOF: actual save keeps bound 60+60 proof and original times after connection failure and duration-less rejection; preparation protects unchanged parts, explicit recovery uploads only the rejected part, repetition uploads nothing
+test worker::tests::whole_recovery_proof_survives_connection_error_and_prioritizes_actual_rejection ... ok
+YOUTUBE_WORKER_DB_PROOF: prepared-part and original-source paths keep processed known-ID legacy rejected/failed/pending rows and original evidence unchanged; only two genuinely unconfirmed parts upload, repeated execution adds zero uploads
+test worker::tests::processed_recovery_parts_keep_history_through_preparation_and_upload_entry ... ok
+test worker::tests::processed_recovery_guard_rejects_changed_targets_parts_and_mismatched_observations ... ok
+YOUTUBE_WORKER_DB_PROOF: ID-less 1/3 match for two local parts and short singleton remain unconfirmed after read failure; both preparation paths reach actual counted uploads, repeat adds zero uploads and local source remains protected
+test worker::tests::idless_mismatched_parts_reach_preparation_and_actual_upload_after_read_failure ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 56 filtered out; finished in 3.22s
+
+cargo-slot: EXIT=0

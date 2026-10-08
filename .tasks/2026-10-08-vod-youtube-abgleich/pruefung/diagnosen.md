@@ -1,0 +1,98 @@
+# Gesicherte Prüfausgaben
+
+Code-SHA: 76332e3d26e80e48e013e92ddddb429acf068652. Aus tatsächlich ausgeführten Logs abgeleitet, keine vollständige Workspace-Suite.
+
+```text
+archive-gatefix2.log
+test result: ok. 57 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.82s
+cargo-slot: EXIT=0
+
+api-gatefix.log
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1336 filtered out; finished in 2.85s
+cargo-slot: EXIT=0
+
+youtube-client-tests.log
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 339 filtered out; finished in 0.01s
+cargo-slot: EXIT=0
+
+frontend-tests.log
+1..6
+# tests 6
+# pass 6
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+```
+
+Die API- und Client-Binärtests mit null passenden Tests sind keine zusätzlichen bestandenen Proben. Der frühere API-Null-Lauf zählt nicht.
+
+## Tatsächlich gemessene Lintbaseline
+
+Ausgangscommit: 0ecae1370f1a80d1a101249b5c932663d69be8af, eigener detached Worktree.
+
+| Umfang | Ausgangsstand | Aktuell |
+| --- | --- | --- |
+| Strikt, mit Dependencies | Exit 101, eine eindeutige Fundstelle | Exit 101, dieselbe eine Fundstelle |
+| Strikt, ausgewählte Ziele mit --no-deps | Exit 101, vier eindeutige Fundstellen | Exit 101, dieselben vier Fundstellen |
+| Ausgewählte Ziele ohne -D warnings | nicht zusätzlich gemessen | Exit 0, vier bestehende Warnungen |
+
+Dependencyfund: tb-raid/src/signup_denylist.rs:71, result_unit_err.
+
+Vier identische Fundstellen bei --no-deps: analytics.rs:321, too_many_arguments; credentials.rs:214, manual_map; upload_worker.rs:822, type_complexity; vocab.rs:164, needless_borrows_for_generic_args. Lib und lib-test melden teilweise dieselben Funde doppelt.
+
+```text
+clippy-warnings.log
+warning: tb-social-media (lib) generated 4 warnings
+warning: tb-social-media (lib test) generated 4 warnings (4 duplicates)
+Finished dev profile [unoptimized + debuginfo] target(s) in 34.49s
+cargo-slot: EXIT=0
+```
+
+Der genaue vollständige Gate-Runde-2-Output liegt in gate-round2.txt. Formatvergleich und Moli-Messwerte liegen neben dieser Datei als JSON. Die wörtlichen Prüfbefehle stehen in ../PRUEFUNG.md.
+
+## Neuester Code-SHA 89bfd5fa
+
+```text
+fixer-r3-archive.log
+test result: ok. 59 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.97s
+cargo-slot: EXIT=0
+
+fixer-r3-frontend-test.log
+# pass 8
+# fail 0
+
+archive-test-baseline2.log, Ausgangscommit 0ecae137
+test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.50s
+cargo-slot: EXIT=0
+
+clippy-final-archive.log
+Finished dev profile [unoptimized + debuginfo] target(s) in 1m 01s
+cargo-slot: EXIT=0
+```
+
+Striktes Clippy auf tb-vod-archive, --all-targets --no-deps -- -D warnings, keine neue Warnung. Die zuvor gemessenen breiteren roten Lintbaselines bleiben separat dokumentiert.
+
+Testsumme des gültigen aktuellen Auftragsumfangs: 76 passed, 0 ignored (59 Archiv, 8 Oberfläche, 7 unveränderte API-Quellen, 2 unveränderte Client-Quellen). Testbaseline 50 Archivtests mit 0 Fehlern tatsächlich gemessen, keine Workspace-Testbaseline behauptet.
+
+## Versuch 2: tatsächlich abgeschlossene Prüfungen
+
+```text
+fixer-restart-archive.log
+test result: ok. 63 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.42s
+cargo-slot: EXIT=0
+
+restart-api-tests.log
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 1336 filtered out; finished in 6.10s
+cargo-slot: EXIT=0
+
+fixer-restart-archive-clippy.log
+cargo-slot: EXIT=0
+
+provider-vor-release.log
+Own connected channel: 50 first-page IDs, 50 returned videos, more pages present. Exit 0 at 2026-10-08T02:34:28.993209799Z.
+```
+
+Aktueller unterschiedlicher Prüfumfang 82 passed, 0 ignored: 63 Archiv, neun API, acht unveränderte Oberfläche, zwei unveränderter direkter Client. Keine vollständige Workspace-Suite behauptet. Die drei korrigierten roten Zwischenproben werden nicht als alte Codebaseline gezählt. Baseline bleibt der tatsächlich gemessene ursprüngliche Archivumfang 50 passed, 0 failed, 0 ignored.
+
+Erster Archiv-Baselineversuch ohne die zusätzlich erforderliche lokale Testkonfiguration: 49 passed, ein Konfigurationsfehler, danach behoben und vollständig wiederholt. Zusätzliche API-/Client-Versuche des Fixers und die API-Baseline wurden vor Testabschluss während der Neukompilierung gestoppt und nicht als Nachweis gezählt. Vollständiger Gate-Runde-4-Output in gate-round4.txt.

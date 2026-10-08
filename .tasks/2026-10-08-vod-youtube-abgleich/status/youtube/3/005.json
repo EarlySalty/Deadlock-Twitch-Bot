@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 5,
+  "zeit": "2026-10-08T05:19:33Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "aktiv",
+  "gebaut": "ja",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "328a8a416659f8420195c2d2b88d8d528a089820",
+  "nachweise": ["REVIEW.md", "REGISTER.md", "HANDOFF.md", "PRUEFUNG.md", "pruefung/gate-round7.txt"],
+  "blocker": ["Gate 7, gpt-6.1-sol, Exit 1: Wiederherstellung kann bereits verarbeitet bestätigte Teile erneut einreihen. Fünfter inhaltlicher BLOCK; nach Eskalation ausdrücklich eng begrenzte Fortsetzung autorisiert."],
+  "naechster_schritt": "Genau ein frischer Fixkontext ab1304491e0d292d5 für vollständigen/teilweisen Nachweisschutz in beiden vorhandenen Reset-Zweigen, gleiche Ziel-/Snapshotbindung für Anzeige und POST, bestehende SQL-Proben; NIT nur zielgerechter Text. Kein neuer Bereich, kein Umbau, keine neue Provider-/Browserrunde. Bei erneutem BLOCK Ursachenbewertung statt unbesprochener Ausweitung. Nach ALLOW direkt regulärer Main-/Release-/Liveabschluss."
+}

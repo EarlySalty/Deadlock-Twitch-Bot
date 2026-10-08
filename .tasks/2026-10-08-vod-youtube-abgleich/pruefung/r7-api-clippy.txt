@@ -1,0 +1,455 @@
+cargo-slot: Slot 4, optimiert=0
+    Checking libc v0.2.189
+    Checking serde_core v1.0.229
+    Checking futures-util v0.3.34
+    Checking socket2 v0.6.4
+    Checking errno v0.3.14
+    Checking mio v1.2.1
+    Checking signal-hook-registry v1.4.8
+    Checking getrandom v0.4.2
+    Checking tokio v1.53.1
+    Checking crypto-common v0.2.2
+    Checking getrandom v0.2.17
+    Checking bitflags v2.13.0
+    Checking crypto-common v0.1.7
+   Compiling serde v1.0.229
+    Checking ring v0.17.14
+    Checking digest v0.10.7
+   Compiling smallvec v1.15.1
+    Checking serde_json v1.0.151
+    Checking digest v0.11.3
+   Compiling icu_normalizer v2.2.0
+    Checking zeroize v1.9.0
+    Checking rustls-pki-types v1.14.1
+   Compiling idna_adapter v1.2.2
+   Compiling parking_lot_core v0.9.12
+    Checking rustls-webpki v0.103.15
+    Checking idna v1.1.0
+    Checking webpki-roots v1.0.7
+    Checking tokio-util v0.7.18
+    Checking rustls v0.23.45
+    Checking url v2.5.8
+   Compiling parking_lot v0.12.5
+   Compiling sha2 v0.10.9
+   Compiling crossbeam-queue v0.3.12
+   Compiling futures-intrusive v0.5.0
+   Compiling tokio-stream v0.1.18
+   Compiling either v1.16.0
+   Compiling thiserror v2.0.21
+    Checking h2 v0.4.16
+    Checking chrono v0.4.45
+    Checking hyper v1.10.1
+    Checking crossbeam-utils v0.8.21
+    Checking brotli v8.0.4
+    Checking compression-core v0.4.32
+    Checking compression-codecs v0.4.38
+    Checking async-compression v0.4.42
+    Checking tower v0.5.3
+    Checking hyper-util v0.1.20
+    Checking serde_urlencoded v0.7.1
+    Checking tokio-rustls v0.26.4
+    Checking rand v0.10.3
+    Checking tower-http v0.6.11
+    Checking sha2 v0.11.0
+    Checking zerocopy v0.8.50
+   Compiling sqlx-core v0.9.0
+    Checking hyper-rustls v0.27.9
+    Checking reqwest v0.12.28
+    Checking ppv-lite86 v0.2.21
+    Checking cipher v0.5.2
+    Checking hmac v0.13.0
+    Checking md-5 v0.11.0
+    Checking uuid v1.26.1
+    Checking hkdf v0.13.0
+    Checking whoami v2.1.3
+    Checking tb-error v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-error)
+   Compiling foldhash v0.1.5
+   Compiling hashbrown v0.15.5
+    Checking aes v0.9.3
+   Compiling sqlx-postgres v0.9.0
+    Checking tb-domain v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-domain)
+    Checking toml_datetime v1.1.1+spec-1.1.0
+   Compiling rand_core v0.6.4
+    Checking universal-hash v0.6.1
+    Checking tracing-subscriber v0.3.23
+    Checking thiserror v1.0.69
+    Checking polyval v0.7.3
+   Compiling rand_chacha v0.3.1
+   Compiling hashlink v0.10.0
+   Compiling webpki-roots v0.26.11
+   Compiling hmac v0.12.1
+    Checking serde_spanned v1.1.1
+   Compiling tb-config v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-config)
+    Checking toml v1.1.6+spec-1.1.0
+   Compiling hkdf v0.12.4
+   Compiling sqlx-core v0.8.6
+   Compiling rand v0.8.8
+    Checking ghash v0.6.0
+    Checking getrandom v0.3.4
+    Checking toml_edit v0.25.15+spec-1.1.0
+    Checking ctr v0.10.1
+    Checking aead v0.6.1
+   Compiling md-5 v0.10.6
+   Compiling whoami v1.6.1
+   Compiling home v0.5.12
+    Checking aes-gcm v0.11.1
+   Compiling sqlx-macros-core v0.9.0
+   Compiling sqlx-postgres v0.8.6
+    Checking chrono-tz v0.10.4
+   Compiling sqlx-macros v0.9.0
+    Checking sqlx v0.9.0
+    Checking tb-observability v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-observability)
+    Checking toml_datetime v0.6.11
+    Checking serde_spanned v0.6.9
+    Checking blake2 v0.11.0
+    Checking toml_edit v0.22.27
+   Compiling sqlx-macros-core v0.8.6
+    Checking tb-crypto v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-crypto)
+    Checking rand_core v0.9.5
+    Checking ecb v0.2.1
+    Checking cbc v0.2.1
+    Checking utf8parse v0.2.2
+   Compiling tb-llm v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-llm)
+    Checking data-encoding v2.11.1
+    Checking allsorts-azul v0.17.2
+    Checking lopdf v0.44.0
+    Checking anstyle-parse v1.0.0
+    Checking rand_chacha v0.9.0
+   Compiling sqlx-macros v0.8.6
+    Checking tb-raid v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-raid)
+    Checking toml v0.8.23
+    Checking tb-transport-twitch v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-transport-twitch)
+    Checking uplink-infisical-transport v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/vendor/uplink-infisical-transport)
+    Checking fireworks-model-selection v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/fireworks-model-selection)
+    Checking fs2 v0.4.3
+    Checking hostname v0.4.2
+    Checking colorchoice v1.0.5
+    Checking anstyle v1.0.14
+    Checking anstyle-query v1.1.5
+    Checking is_terminal_polyfill v1.70.2
+    Checking strsim v0.11.1
+    Checking anstream v1.0.0
+    Checking lettre v0.11.23
+    Checking printpdf v0.12.8
+    Checking sqlx v0.8.6
+    Checking rand v0.9.5
+    Checking anyhow v1.0.103
+    Checking sha1 v0.10.6
+    Checking clap_lex v1.1.1
+    Checking clap_builder v4.6.7
+    Checking tungstenite v0.29.0
+    Checking dbrain-builds v0.1.0 (https://github.com/EarlySalty/Deadlock-Brain.git?rev=d8c34270868e129098e12243f53f5b52ee507b8b#d8c34270)
+    Checking nix v0.29.0
+    Checking filedescriptor v0.8.3
+    Checking brain-contracts v0.1.0 (https://github.com/EarlySalty/Deadlock-Brain.git?rev=d2028d8b0c96c2097dc9b92882bb96b73bf19fd0#d2028d8b)
+    Checking uplink-infisical-transport v0.1.1 (https://github.com/EarlySalty/Deadlock-Brain.git?rev=d2028d8b0c96c2097dc9b92882bb96b73bf19fd0#d2028d8b)
+    Checking uplink-infisical-transport v0.1.0 (https://github.com/EarlySalty/Deadlock-Brain.git?rev=d8c34270868e129098e12243f53f5b52ee507b8b#d8c34270)
+    Checking spin v0.9.8
+    Checking base64ct v1.8.3
+    Checking phc v0.6.1
+    Checking multer v3.1.0
+    Checking tb-analytics v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-analytics)
+    Checking clap v4.6.7
+    Checking deadlock-brain-core v0.1.0 (https://github.com/EarlySalty/Deadlock-Brain.git?rev=d8c34270868e129098e12243f53f5b52ee507b8b#d8c34270)
+    Checking tokio-tungstenite v0.29.0
+    Checking axum-core v0.5.6
+    Checking serde_path_to_error v0.1.20
+   Compiling tb-db v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-db)
+    Checking matchit v0.8.4
+    Checking hashbrown v0.14.5
+    Checking dashmap v6.2.1
+    Checking brain-client v0.1.0 (https://github.com/EarlySalty/Deadlock-Brain.git?rev=d2028d8b0c96c2097dc9b92882bb96b73bf19fd0#d2028d8b)
+    Checking axum v0.8.9
+    Checking tb-knowledge v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-knowledge)
+    Checking arc-swap v1.9.2
+    Checking dbrain-population v0.1.0 (https://github.com/EarlySalty/Deadlock-Brain.git?rev=d8c34270868e129098e12243f53f5b52ee507b8b#d8c34270)
+    Checking password-hash v0.6.1
+    Checking tower-http v0.7.1
+    Checking sha1 v0.11.0
+    Checking futures-executor v0.3.32
+    Checking num_cpus v1.17.0
+    Checking linux-raw-sys v0.12.1
+    Checking pulldown-cmark-escape v0.11.0
+    Checking pulldown-cmark v0.13.4
+    Checking deadpool v0.12.3
+    Checking rustix v1.1.4
+    Checking futures v0.3.32
+    Checking tungstenite v0.30.0
+    Checking argon2 v0.6.0
+    Checking tb-http-core v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-http-core)
+    Checking dbrain-reasoner v0.1.0 (https://github.com/EarlySalty/Deadlock-Brain.git?rev=d8c34270868e129098e12243f53f5b52ee507b8b#d8c34270)
+    Checking nix v0.31.3
+    Checking tb-scout v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-scout)
+    Checking tb-effort v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-effort)
+    Checking tb-engagement v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-engagement)
+    Checking pbkdf2 v0.13.0
+    Checking assert-json-diff v2.0.2
+    Checking wiremock v0.6.5
+    Checking tokio-tungstenite v0.30.0
+    Checking tempfile v3.27.0
+    Checking tb-social-media v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-social-media)
+    Checking tb-chat v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-chat)
+    Checking tb-dashboard-api v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-dashboard-api)
+warning: use of deprecated type alias `nix::sys::memfd::MemFdCreateFlag`: Use `MFdFlags instead`
+   --> crates/tb-dashboard-api/src/uplink_config.rs:847:30
+    |
+847 |             nix::sys::memfd::MemFdCreateFlag::empty(),
+    |                              ^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: the `Err`-variant returned from this function is very large
+  --> crates/tb-dashboard-api/src/auth/streamer_scope.rs:37:6
+   |
+37 | ) -> Result<(String, String), Response> {
+   |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+   |
+   = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+   = note: `#[warn(clippy::result_large_err)]` on by default
+
+warning: the `Err`-variant returned from this function is very large
+   --> crates/tb-dashboard-api/src/auth/streamer_scope.rs:182:6
+    |
+182 | ) -> Result<(String, String), Response> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+   --> crates/tb-dashboard-api/src/handlers/affiliate.rs:840:48
+    |
+840 | async fn verified_claim_target(login: &str) -> Result<String, Response> {
+    |                                                ^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: this function has too many arguments (8/7)
+   --> crates/tb-dashboard-api/src/handlers/ai_analysis.rs:162:1
+    |
+162 | / async fn run_ai_analysis(
+163 | |     pool: &PgPool,
+164 | |     guard: &mut SessionGuard,
+165 | |     twitch_user_id: &str,
+...   |
+170 | |     user_context: &str,
+171 | | ) -> Response {
+    | |_____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#too_many_arguments
+    = note: `#[warn(clippy::too_many_arguments)]` on by default
+
+warning: the `Err`-variant returned from this function is very large
+   --> crates/tb-dashboard-api/src/handlers/clip_contest.rs:416:45
+    |
+416 | async fn fetch_helix_clip(clip_id: &str) -> Result<HelixClip, Response> {
+    |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+   --> crates/tb-dashboard-api/src/handlers/clip_contest.rs:422:51
+    |
+422 | async fn fetch_helix_clip_inner(clip_id: &str) -> Result<HelixClip, Response> {
+    |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+   --> crates/tb-dashboard-api/src/handlers/clip_contest.rs:519:45
+    |
+519 | async fn deadlock_game_id(pool: &PgPool) -> Result<String, Response> {
+    |                                             ^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+   --> crates/tb-dashboard-api/src/handlers/clip_contest.rs:580:6
+    |
+580 | ) -> Result<DiscordEligibility, Response> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+  --> crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs:45:6
+   |
+45 | ) -> Result<Transaction<'static, Postgres>, Response> {
+   |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+   |
+   = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+   --> crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs:429:6
+    |
+429 | ) -> Result<i64, Response> {
+    |      ^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+   --> crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs:674:6
+    |
+674 | ) -> Result<i64, Response> {
+    |      ^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+  --> crates/tb-dashboard-api/src/handlers/engagement_settings.rs:63:69
+   |
+63 | async fn resolve_actor(auth: &DashboardAuthLevel, pool: &PgPool) -> Result<Actor, Response> {
+   |                                                                     ^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+   |
+   = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+  --> crates/tb-dashboard-api/src/handlers/moderation_settings.rs:78:6
+   |
+78 | ) -> Result<String, Response> {
+   |      ^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+   |
+   = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: useless use of `format!`
+   --> crates/tb-dashboard-api/src/handlers/player_connect.rs:250:13
+    |
+250 | /             format!(
+251 | |                 "<aside class=side-card><h3>So nutzt du es</h3><ul class=side-list><li><span class=check>✓</span><span>Im Chat ei...
+252 | |             )
+    | |_____________^ help: consider using `.to_string()`: `"<aside class=side-card><h3>So nutzt du es</h3><ul class=side-list><li><span class=check>✓</span><span>Im Chat einfach <code>!rank me</code> schreiben.</span></li><li><span class=check>✓</span><span>Du kannst mehrere Steam-Konten verbinden und eines als Standard wählen.</span></li><li><span class=check>✓</span><span>Einzelne Konten oder die komplette Verknüpfung lassen sich jederzeit entfernen.</span></li></ul></aside>".to_string()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#useless_format
+    = note: `#[warn(clippy::useless_format)]` on by default
+
+warning: the borrowed expression implements the required traits
+    --> crates/tb-dashboard-api/src/handlers/social_media.rs:2344:48
+     |
+2344 |       let mut qb = QueryBuilder::<Postgres>::new(&format!(
+     |  ________________________________________________^
+2345 | |         "SELECT {CLIP_COLUMNS} FROM twitch_clips_social_media WHERE 1=1"
+2346 | |     ));
+     | |_____^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#needless_borrows_for_generic_args
+     = note: `#[warn(clippy::needless_borrows_for_generic_args)]` on by default
+help: change this to
+     |
+2344 ~     let mut qb = QueryBuilder::<Postgres>::new(format!(
+2345 +         "SELECT {CLIP_COLUMNS} FROM twitch_clips_social_media WHERE 1=1"
+2346 ~     ));
+     |
+
+warning: doc list item without indentation
+  --> crates/tb-dashboard-api/src/handlers/system/query.rs:10:5
+   |
+10 | //! Die Konsole führt absichtlich SQL von authentifizierten Admins aus. Die
+   |     ^
+   |
+   = help: if this is supposed to be its own paragraph, add a blank line
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#doc_lazy_continuation
+   = note: `#[warn(clippy::doc_lazy_continuation)]` on by default
+help: indent this line
+   |
+10 | //!   Die Konsole führt absichtlich SQL von authentifizierten Admins aus. Die
+   |     ++
+
+warning: doc list item without indentation
+  --> crates/tb-dashboard-api/src/handlers/system/query.rs:11:5
+   |
+11 | //! Keyword-Prüfung ist keine SQL-Sandbox; PostgreSQL erzwingt READ ONLY.
+   |     ^
+   |
+   = help: if this is supposed to be its own paragraph, add a blank line
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#doc_lazy_continuation
+help: indent this line
+   |
+11 | //!   Keyword-Prüfung ist keine SQL-Sandbox; PostgreSQL erzwingt READ ONLY.
+   |     ++
+
+warning: the `Err`-variant returned from this function is very large
+  --> crates/tb-dashboard-api/src/handlers/brain_lab.rs:35:26
+   |
+35 | async fn brain_pool() -> Result<PgPool, Response> {
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+   |
+   = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+   --> crates/tb-dashboard-api/src/obs/ws.rs:236:6
+    |
+236 | ) -> Result<String, Response> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the borrowed expression implements the required traits
+   --> crates/tb-dashboard-api/src/uplink_config.rs:213:15
+    |
+213 |         fcntl(&borrowed, FcntlArg::F_GETFD).map_err(|_| "Infisical-FD ist nicht verfügbar.")?;
+    |               ^^^^^^^^^ help: change this to: `borrowed`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#needless_borrows_for_generic_args
+
+warning: the borrowed expression implements the required traits
+   --> crates/tb-dashboard-api/src/uplink_config.rs:215:9
+    |
+215 |         &borrowed,
+    |         ^^^^^^^^^ help: change this to: `borrowed`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#needless_borrows_for_generic_args
+
+warning: `tb-dashboard-api` (lib) generated 21 warnings (run `cargo clippy --fix --lib -p tb-dashboard-api -- --no-deps` to apply 4 suggestions)
+warning: use of deprecated type alias `nix::sys::memfd::MemFdCreateFlag`: Use `MFdFlags instead`
+  --> crates/tb-dashboard-api/examples/uplink_start_probe.rs:43:26
+   |
+43 |         nix::sys::memfd::MemFdCreateFlag::MFD_CLOEXEC,
+   |                          ^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: `tb-dashboard-api` (example "uplink_start_probe") generated 1 warning
+warning: this assertion has a constant value
+    --> crates/tb-dashboard-api/src/handlers/self_explainer.rs:1135:9
+     |
+1135 |         assert!(MODEL_TIMEOUT_SEC < ANSWER_TIMEOUT_SEC);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider moving this into a const block: `const { assert!(..) }`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assertions_on_constants
+     = note: `#[warn(clippy::assertions_on_constants)]` on by default
+
+warning: this assertion has a constant value
+    --> crates/tb-dashboard-api/src/handlers/self_explainer.rs:1136:9
+     |
+1136 |         assert!(ANSWER_TIMEOUT_SEC < 120);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider moving this into a const block: `const { assert!(..) }`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assertions_on_constants
+
+warning: unnecessary use of `clone` to create a slice from a reference
+   --> crates/tb-dashboard-api/src/handlers/community/matching.rs:232:29
+    |
+232 |         let single=schedule(&[s.clone()],at("2026-09-01T00:00:00Z"),at("2026-09-18T00:00:00Z"));
+    |                             ^^^^^^^^^^^^ help: try: `std::slice::from_ref(&s)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#cloned_ref_to_slice_refs
+    = note: `#[warn(clippy::cloned_ref_to_slice_refs)]` on by default
+
+warning: `tb-dashboard-api` (lib test) generated 25 warnings (21 duplicates) (run `cargo clippy --fix --lib -p tb-dashboard-api --tests -- --no-deps` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 22s
+cargo-slot: EXIT=0

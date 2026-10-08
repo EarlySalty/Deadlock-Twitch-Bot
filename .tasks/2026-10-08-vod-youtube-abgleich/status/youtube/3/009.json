@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 9,
+  "zeit": "2026-10-08T14:08:21Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "implementierung",
+  "gebaut": "nein",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "1db437379745b9d11d1859fc4307bd589951ed9a",
+  "nachweise": ["FIX-GATE9.md", "REGISTER.md", "pruefung/gate-round9.txt", "pruefung/r8-source-sha256.txt", "pruefung/r9-live-query-synthetic.txt"],
+  "blocker": [],
+  "naechster_schritt": "Ausdrücklich autorisierter enger Restfix durch frischen nativen Kontext ae9044facf4a0a173 aktiv. Gleiche sichere Quellen-, Dauer- und Gesamtteilbindung für beide ID-losen Teil-Guards, Schutz nach bloßem Folgefehler und vorhandener tatsächlicher-ID-Vertrag erhalten. Korrigierte Live-SQL-Quellenbindung nur synthetisch ausgeführt und committed. Gezielte vorhandene SQL-/Workerproben, reguläre fehlende Rust-Prüfungen, frische Main-Integration und derselbe Gate. Keine neue Architektur, Funktion, Provider-/UI-Probe oder weitere Threads. Bei ALLOW bereits autorisierter Main-/Release-/Liveabschluss mit fünf Altfällen und Cleanup, bei erneutem BLOCK Ursachenbericht und kleinster Lösungsweg."
+}

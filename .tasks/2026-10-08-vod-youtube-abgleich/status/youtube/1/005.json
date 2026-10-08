@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 1,
+  "sequenz": 5,
+  "zeit": "2026-10-08T00:48:00Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "aktiv",
+  "gebaut": "ja",
+  "reviewt": "ja",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "89bfd5fa7da8b06b5fe8967051c577b940236260",
+  "nachweise": ["PRUEFUNG.md", "REVIEW.md", "pruefung/gate-round4.txt", "pruefung/bestaetigung/moli-layout.json", "pruefung/diagnosen.md"],
+  "blocker": [],
+  "naechster_schritt": "Bestätigte Quellen und Belege nach main bringen, sauberen Release bauen und den produktiven Leseabgleich nachweisen."
+}

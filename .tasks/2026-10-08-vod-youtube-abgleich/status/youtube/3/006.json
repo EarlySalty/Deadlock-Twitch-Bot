@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 6,
+  "zeit": "2026-10-08T09:20:24Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "blockiert",
+  "gebaut": "ja",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "4de559835dcded44aaa700491910d4270f132523",
+  "nachweise": ["REVIEW.md", "REGISTER.md", "pruefung/gate-round8.txt", "pruefung/r7-archive.txt", "pruefung/r7-api.txt", "pruefung/r7-archive-clippy.txt", "pruefung/r7-api-clippy.txt", "pruefung/r7-source-sha256.txt"],
+  "blocker": ["Regulärer gleicher gpt-6.1-sol-Gate Runde 8, Exit 1: Leseausfälle und unvollständige Suche heben Schutz positiver Teilnachweise auf; vollständige Wiederherstellung bleibt in downloaded/Queue ohne Cleanup; fehlende Kanalbeobachtung oder veränderter Teilstand blenden Fehlversuche und Wiederverbindungsweg aus. NIT: neue englische Wiederholungserklärung fehlt. Tatsächlich 66 Archiv-/Worker- und 13 API-Tests, 0 failed/ignored; mit erhaltenen UI9/Client2 insgesamt 90 unterschiedliche Proben. Archiv-Clippy strikt und API-Clippy mit gemeldeten Warnungen Exit 0. Grünes Prüfen ersetzt kein ALLOW. Kein Main-Push, keine Migration oder Deploy; fünf Altfälle nicht produktiv abgeglichen."],
+  "naechster_schritt": "Wie ausdrücklich beauftragt Ursachen und Empfehlungen an den Auftraggeber melden, Entscheidung abwarten. Positive ziel-/quellen-/teilgebundene Evidenz von gescheiterten oder unvollständigen Leseversuchen trennen; vollständigen aktuellen Nachweis für Queue-Ende und sicheren Cleanup nutzen ohne erfundene Historie; aktuelle Fehlversuche separat sichtbar machen. Kein neuer Unteragent, keine automatische Fixrunde, kein Review-Neuwürfeln, keine unbesprochene Erweiterung. Quellen und echte Nachweise erhalten, kein Settlen oder Cleanup ungemergter Arbeit."
+}

@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 11,
+  "zeit": "2026-10-08T15:31:37Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "implementierung",
+  "gebaut": "nein",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "39f74ed1d0f62736c4a9fb14d7cd6f285a793859",
+  "nachweise": ["REGISTER.md", "REVIEW.md", "pruefung/gate-round10.txt", "pruefung/r9-source-sha256.txt"],
+  "blocker": [],
+  "naechster_schritt": "Ausdrücklich freigegebener kleinster Gate-10-Fix durch frischen nativen Kontext a7b9b39701c07e091 aktiv. Sicher zugeordnete provider-rejected/failed-Teile im bestehenden gewöhnlichen Retry berücksichtigen, processed-Teile erhalten; fehlende Erreichbarkeit und bloßer Prüffehler bleiben keine Freigabe. Bestehende Ablehnungsprobe mit gespeichertem Nachweis, echter Retry-Funktion und Worker-Ausführung wirksam machen. Keine zusätzliche Dokumentations-/Vorprüfungsrunde, nur geänderten Ausführungspfad und benötigten Build/Clippy prüfen. Derselbe Gate, bei ALLOW direkt autorisierter Main-/Release-/Liveabschluss inklusive fünf Altfällen, bei erneutem BLOCK Ursachenbericht."
+}

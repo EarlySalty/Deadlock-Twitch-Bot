@@ -1,0 +1,8 @@
+BLOCK: Explicit retries can leave YouTube-rejected parts permanently skipped.
+
+1. rust/crates/tb-dashboard-api/src/handlers/social_media_vod_archive.rs:553 | BLOCKING: Nonterminal retries reset only locally `failed`/`rejected` parts, ignoring current YouTube rejection of a locally `done` part. Complete affected list: this reset; `rust/crates/tb-vod-archive/src/store.rs:291`, which preserves `done` during preparation; `rust/crates/tb-vod-archive/src/worker.rs:709`, which skips `done` during upload. | For an `upload_failed` VOD containing one such rejected part and another legacy `failed` part proven processed, retry succeeds but uploads nothing and repeatedly returns to `downloaded`. Reset the provider-rejected part in ordinary recovery too.
+
+2. rust/crates/tb-vod-archive/src/worker.rs:2226 | NIT: The rejection test toggles `verwerfen`, but `lauf` no longer calls the mock’s `video_status`. | The supposed rejection never reaches the worker. Exercise a persisted reconciliation rejection followed by retry to cover the defect above.
+HOOK-TWIN: rust/crates/tb-dashboard-api/src/handlers/social_media_vod_archive.rs:203 | same token `].as_str(), Some(` as rust/crates/tb-dashboard-api/src/handlers/social_media_vod_archive.rs:553
+HOOK-TWIN: rust/crates/tb-dashboard-api/src/handlers/social_media_vod_archive.rs:334 | same token `].as_str(), Some(` as rust/crates/tb-dashboard-api/src/handlers/social_media_vod_archive.rs:553
+HOOK-TWIN: rust/crates/tb-dashboard-api/src/handlers/social_media_vod_archive.rs:359 | same token `].as_str(), Some(` as rust/crates/tb-dashboard-api/src/handlers/social_media_vod_archive.rs:553

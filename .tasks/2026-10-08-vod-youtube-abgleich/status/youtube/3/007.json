@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 7,
+  "zeit": "2026-10-08T10:45:21Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "implementierung",
+  "gebaut": "nein",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "e36dd53240c8373c0a5e439aaf9c94d116415dd0",
+  "nachweise": ["FIX-GATE8.md", "REGISTER.md", "REVIEW.md", "pruefung/gate-round8.txt"],
+  "blocker": [],
+  "naechster_schritt": "Ausdrücklich autorisierte gemeinsame Gate-8-Zustandskorrektur durch genau einen frischen nativen Fixer a6b10cb55b192ca0f aktiv. Quellenänderungen auf freigegebene vorhandene Pfade begrenzt; bisherige Fixes und Nachweise erhalten. Eigene Aktivität am Monitoringzeitpunkt per Dateimetadaten und Arbeitsbaum bestätigt, noch kein neuer Prüflauf als Erfolg gemeldet. Gemeinsame SQL-/Worker-Sequenz und fehlende gezielte Rust-Prüfungen, danach derselbe Gate auf committed integriertem Stand. Keine neue Tabelle, OAuth-/Providerstrecke, Browserrunde oder zusätzliche T3-Threads. Bei ALLOW regulärer Main-/Release-/Liveabschluss und fünf Altfälle, bei erneutem BLOCK Ursachenbericht und kleinster Lösungsweg ohne automatische Erweiterung."
+}

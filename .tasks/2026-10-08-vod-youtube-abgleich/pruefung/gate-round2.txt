@@ -1,0 +1,3 @@
+ALLOW: Both previous blockers are fixed; no blocking regression shown.
+FIXED: rust/crates/tb-vod-archive/src/youtube_check.rs:540
+FIXED: rust/crates/tb-vod-archive/src/youtube_check.rs:483

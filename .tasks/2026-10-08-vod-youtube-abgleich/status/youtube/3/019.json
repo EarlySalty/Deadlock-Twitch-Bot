@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 19,
+  "zeit": "2026-10-08T23:01:13Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "blocker",
+  "gebaut": "ja",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "863ff0ffb289b1a18ae5cedbad5d27966bc84feb",
+  "nachweise": ["REGISTER.md", "REVIEW.md", "pruefung/r13-pruefungen.txt", "pruefung/r13-final-source-sha256.txt", "pruefung/r13-worker.txt", "pruefung/r13-api-contract.txt", "pruefung/r13-api-fixture.txt", "pruefung/r13-clippy.txt", "pruefung/gate-round13-tool.txt", "pruefung/gate-round13-base.txt"],
+  "blocker": ["Einziger regulärer gpt-6.1-sol-Gate Exit2 vor Modellstart: input_too_large, 1058627 Zeichen bei maximal1048576, 10051 Zeichen darüber. Kein ALLOW/BLOCK. Vorhandene CLI bietet kein Kontextbudget-Flag; keine Gateänderung, Kriterien-/Codeausblendung oder Wiederholung vorgenommen."],
+  "naechster_schritt": "Gemeinsame Original-Ganzbelegentscheidung und drei tatsächliche synthetische SQL-/Client-/Workerfolgen belegt, Worker15 plus API15 und korrigierter Einzeltest1 =31 fokussierte passed, 0 ignored. Rote Zwischenläufe und Null-Lauf ehrlich erhalten. Beide Pakete kombinierter Clippy Exit0, keine Diagnose in eigenen sechs Quellen; aktuelle Hashes von Eltern bestätigt. Kleinster Folgeweg ist technische Budgetkorrektur des regulären Gate-Eingangs ohne Quellcode-/Kriterienausblendung, danach derselbe Gate. Keine aktive eigene Queue. Kein Main-Push, Release, Migration, Deploy oder produktiver Fünf-Fälle-Abgleich, kein Settlen/Cleanup ungemergter Arbeit."
+}

@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 3,
+  "zeit": "2026-10-08T03:54:42Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "aktiv",
+  "gebaut": "ja",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "40a88e2efee22b1c20ebe11629a504168844c66d",
+  "nachweise": ["REGISTER.md", "HANDOFF.md", "PRUEFUNG.md", "parent-r6-archive.log", "fixer-r6-ui.log"],
+  "blocker": ["Archivlauf tatsächlich kompiliert, Exit 101: 63 passed, ein failed, 0 ignored. Fehlfall completed_inventory_rechecks_refresh_deletions_processing_and_manual_requests, youtube_check_tests.rs:391. Kein neuer Gate-BLOCK."],
+  "naechster_schritt": "Frischer nativer Fixkontext a65dd8a23a59c1c66 bearbeitet genau den Fehlfall und fehlende fokussierte Rust-Nachweise, erhält alle bisherigen Fixes. Danach gleicher regulärer gpt-6.1-sol-Gate. Kein Main-Push oder Deploy, keine neue Vorprobe oder UI-Politur."
+}

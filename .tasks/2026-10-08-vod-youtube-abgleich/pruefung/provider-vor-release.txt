@@ -1,0 +1,8 @@
+# Echte YouTube-Vorprobe
+
+Am 2026-10-08T02:34:28.993209799Z, Exit 0. Fälle 10, 11, 2941, 2995, 2996 gehören zum geprüften eigenen verbundenen Zugang. Vorhandener Infisical-Startweg, normaler CredentialManager, bestehender YouTube-Client. Datenbankverbindungen mit default_transaction_read_only=on.
+
+channels.list, erste Upload-Playlist-Seite und videos.list erfolgreich. 50 IDs und 50 zurückgegebene Videos; weitere Seiten vorhanden. Keine fehlenden Leserechte festgestellt. Keine Uploads, Löschungen oder Änderungen an vorhandenen Videos. Keine Entscheidungen der fünf historischen Fälle aus dieser Teilseite abgeleitet.
+
+Bereinigte tatsächliche Ausgabe:
+{"cases":[10,11,2941,2995,2996],"historical_decisions":"pending_regular_worker","observed_at":"2026-10-08T02:34:28.993209799Z","provider":{"first_page_ids":50,"more_pages":true,"result":"readable","returned_videos":50}}

@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 2,
+  "zeit": "2026-10-08T03:39:14Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "blockiert",
+  "gebaut": "nein",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "40a88e2efee22b1c20ebe11629a504168844c66d",
+  "nachweise": ["REVIEW.md", "REGISTER.md", "fixer-r6-ui.log", "fixer-r6-ui-build.log", "parent-r6-archive.log"],
+  "blocker": ["Vorgeschriebene Buildslots nicht verfügbar. Fixer hat keinen Rust-Compiler gestartet. Quellenänderungen erhalten, noch nicht Rust-verifiziert; kein neuer Gate-BLOCK."],
+  "naechster_schritt": "Eigener Archivtest bgiqvfbes über unveränderten cargo-slot eingereiht, höchstens 30 Minuten Laufzeit. Danach fehlende gezielte API-/Clippy-Prüfung und regulärer Gate mit gpt-6.1-sol. Neun Frontendtests tatsächlich bestanden; kein Main-Push, keine Migration und kein Deploy. Keine Sperre oder fremde Sitzung verändern."
+}

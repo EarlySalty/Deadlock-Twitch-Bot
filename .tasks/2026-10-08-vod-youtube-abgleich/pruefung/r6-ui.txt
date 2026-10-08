@@ -1,0 +1,68 @@
+
+> dashboard_v2@0.0.0 test:vod-archive
+> tsx --tsconfig tsconfig.app.json --test tests/vodArchive.test.tsx
+
+TAP version 13
+# Subtest: historical confirmation renders its completion time without inventing an attempt
+ok 1 - historical confirmation renders its completion time without inventing an attempt
+  ---
+  duration_ms: 47.430139
+  type: 'test'
+  ...
+# Subtest: unknown historical state keeps links unconfirmed and suppresses retry
+ok 2 - unknown historical state keeps links unconfirmed and suppresses retry
+  ---
+  duration_ms: 2.986304
+  type: 'test'
+  ...
+# Subtest: Drive completion does not count pending YouTube parts as confirmed
+ok 3 - Drive completion does not count pending YouTube parts as confirmed
+  ---
+  duration_ms: 3.750972
+  type: 'test'
+  ...
+# Subtest: partial, failed, running and waiting states have distinct icons and timestamps
+ok 4 - partial, failed, running and waiting states have distinct icons and timestamps
+  ---
+  duration_ms: 19.576455
+  type: 'test'
+  ...
+# Subtest: current private proof renders checked time and an independent debounced read action
+ok 5 - current private proof renders checked time and an independent debounced read action
+  ---
+  duration_ms: 8.429197
+  type: 'test'
+  ...
+# Subtest: YouTube reconnect errors keep their recovery link alongside independent Drive success
+ok 6 - YouTube reconnect errors keep their recovery link alongside independent Drive success
+  ---
+  duration_ms: 11.293267
+  type: 'test'
+  ...
+# Subtest: current multipart proof and historical upload coverage remain explicitly separate
+ok 7 - current multipart proof and historical upload coverage remain explicitly separate
+  ---
+  duration_ms: 5.422192
+  type: 'test'
+  ...
+# Subtest: terminal recovery exposes retry and Drive independently
+ok 8 - terminal recovery exposes retry and Drive independently
+  ---
+  duration_ms: 17.470513
+  type: 'test'
+  ...
+# Subtest: archive status and new UI copy have translations
+ok 9 - archive status and new UI copy have translations
+  ---
+  duration_ms: 0.731248
+  type: 'test'
+  ...
+1..9
+# tests 9
+# suites 0
+# pass 9
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2040.909925

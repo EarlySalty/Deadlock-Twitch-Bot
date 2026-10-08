@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 14,
+  "zeit": "2026-10-08T19:09:58Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "blocker",
+  "gebaut": "nein",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "c3dbabc973d2caaab99730d516ddd05a2fc6ae44",
+  "nachweise": ["REGISTER.md", "REVIEW.md", "pruefung/gate-round12.txt", "pruefung/r11-freeze.txt", "pruefung/r11-hashcheck.txt", "pruefung/r11-source-sha256.txt"],
+  "blocker": ["Gate 12, gpt-6.1-sol, Exit 1: total == 1 in beiden ID-losen Schutzprädikaten verliert nach Verbindungsfehler den Schutz vorher vollständig bestätigter Mehrteiler und kann bereits gesicherte Inhalte erneut hochladen."],
+  "naechster_schritt": "Ursache und kleinsten Folgeweg melden: unbelegte partielle Mehrteiler nicht schützen, ausreichend belegten vollständigen Mehrteilernachweis bei unveränderter Bindung unabhängig vom letzten Prüffehler erhalten; vorhandenen Vollständigkeitsvertrag nutzen, keine Teilung erfinden. Folge ausreichende 60+60-Bestätigung, Fehler, Retry/Worker ohne weiteren Upload prüfen. Nicht umgesetzt, kein neuer Fixer oder Gate. Aktuelle Proben nur in Quellen ergänzt, kein Cargo-Test gestartet. Alter einzelner Clippy b8zb1ayz9 ohne bestätigte Beendigung, nicht gedoppelt oder abgebrochen, keinem neuen Quellstand zugerechnet. Fünf Quellenhashes bei Elternübernahme OK. Kein Main-Push, Release, Migration, Deploy oder produktiver Abschluss."
+}

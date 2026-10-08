@@ -1,0 +1,9 @@
+BLOCK: Historical rechecks reuse stale video evidence and report a fresh check time.
+
+1. rust/crates/tb-vod-archive/src/youtube_check.rs:303 | BLOCKING: `save` renews `last_success_at` although `run_with` reuses completed inventory until `next_scan_at`. Both ID-less VODs and missing-ID parts of mixed VODs are affected, including manual checks and processing retries. | A deleted or newly processed video can retain its old status for the default 24 hours while “Zuletzt geprüft” advances. Refresh those video observations before recording success.
+
+2. .tasks/2026-10-08-vod-youtube-abgleich/pruefung/live-evidence.sql:10 | NIT: `confirmed_current` counts proofs without the API’s auth-revision and upload-snapshot guards; historical-case joins likewise expose stale proofs. | Reconnected accounts or changed parts can inflate the claimed current confirmation count.
+
+3. bot/dashboard_v2/src/components/socialmedia/VodArchiveTab.tsx:74 | NIT: `drive_requested` suppresses the reconnect link for both `connection` and `channel_changed` check errors. | These cards instruct users to reconnect without providing the recovery link.
+
+4. bot/dashboard_v2/src/components/socialmedia/VodArchiveTab.tsx:51 | NIT: The part counter still uses historical upload confirmations beneath the new verified status. | A fully reconciled multipart VOD can display “Auf YouTube bestätigt” alongside “0 von 2 Teilen bestätigt.” Label historical counts explicitly or show verified coverage.

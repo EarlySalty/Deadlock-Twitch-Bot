@@ -1,0 +1,6 @@
+   path   |  status  |      uploaded_at       | local_removed |   state   | complete | observations | new_uploads | preserved_history 
+----------+----------+------------------------+---------------+-----------+----------+--------------+-------------+-------------------
+ prepared | archived | 2026-10-01 15:00:00+02 | t             | confirmed | t        |            5 |           2 |                 3
+ original | archived |                        | t             | confirmed | t        |            5 |           2 |                 3
+(2 rows)
+

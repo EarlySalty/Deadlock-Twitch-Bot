@@ -1,0 +1,6 @@
+Ausschließlich synthetische SQL-Probe, kein Produktions- oder YouTube-Beleg.
+Schema t_token_resume_migration auf eigenem PostgreSQL, Port 55683. Exit 0, read-only. Alle drei Abfragen ausgeführt; dieser vorhandene Prüffall enthält keine der fünf historischen Fälle und keinen Scan-Datensatz.
+
+BEGIN
+{"vods": 1, "proof": "archive_totals", "errors": 0, "processing": 0, "unresolved": 0, "observed_at": "2026-10-08T08:33:07.271677+02:00", "current_checks": 0, "confirmed_current": 0, "historical_completed": 0}
+COMMIT

@@ -1,0 +1,29 @@
+# Tatsächliche Prüfungen des gemeinsamen Belegvertrags
+
+Quellen: b38e20518970bddbc56104ddc7eadf6436b84425. Ausschließliche Fixture-Korrektur: 1bfab48999fe894f980a398178a38df59f7af4d8. Integrierter eingefrorener Gate-/Clippy-HEAD: 863ff0ffb289b1a18ae5cedbad5d27966bc84feb, Basis 4ddf37032050c2b8cbe74bb921d7ed1c055514b4. Sechs abschließende Quellenhashes von Eltern bestätigt. Erster Hashbeleg r13-source-sha256.txt gehört zum ursprünglichen b38-Stand, abschließender Beleg r13-final-source-sha256.txt enthält die korrigierte Testdatei.
+
+Wörtliche Testbefehle aus Fixerabschluss:
+
+/home/nathanael/.local/bin/cargo-slot test --manifest-path /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.toml -p tb-vod-archive --jobs 3 -- --include-ignored --nocapture
+Exit101: 66 passed, 5 failed, 0 ignored, 0 filtered. Fünf Workerfälle meldeten synthetic PostgreSQL required; fehlender zusätzlicher TB_TEST_DATABASE_URL-Testparameter laut Fixer. Neue echte Rust-Clientfolge mit synthetischem Provider 60+60, HTTP503 und dauerloser Ablehnung bestand. r13-archive-first.txt.
+
+TB_TEST_DATABASE_URL='postgresql://nathanael@127.0.0.1:55683/token_db_youtube' /home/nathanael/.local/bin/cargo-slot test --manifest-path /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.toml -p tb-vod-archive worker::tests --jobs 3 -- --include-ignored --nocapture
+Exit0: 15 passed, 0 failed, 0 ignored, 56 filtered. Echte DB-/Vorbereitungs-/Workerfolgen für ausreichenden Originalbeleg, Folgefehler, vorrangige dauerlose Ablehnung, ausdrücklich ausgelösten Einzelteil-Upload und geschützten unveränderten anderen Teil; Wiederholung ohne Zusatzupload. r13-worker.txt.
+
+/home/nathanael/.local/bin/cargo-slot test --manifest-path /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.toml -p tb-dashboard-api social_media_vod_archive::tests --jobs 3 -- --include-ignored --nocapture
+Exit0, Null-Lauf: 0 passed, 0 failed, 0 ignored, insgesamt 1385 filtered. Kein Testnachweis. r13-api-zero.txt.
+
+/home/nathanael/.local/bin/cargo-slot test --manifest-path /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.toml -p tb-dashboard-api vod_archive_management::tests --jobs 3 -- --include-ignored --nocapture
+Exit101: 15 passed, 1 failed, 0 ignored, 1344 filtered. Echter API→Worker-Fall belegt 1s+60s-Unvollständigkeit, tatsächlichen Retry/Upload, ausreichend vollständige 60+60-Gegenprobe und Wiederholung ohne Zusatzupload. Rote Anzeige-Fixture behauptete complete ohne Beobachtungen; genau diese ungültige Erwartung korrigiert, Produktivcode unverändert. r13-api-contract.txt.
+
+/home/nathanael/.local/bin/cargo-slot test --manifest-path /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.toml -p tb-dashboard-api youtube_evidence_keeps_drive_success_and_upload_recovery_visible --jobs 3 -- --include-ignored --nocapture
+Exit0: 1 passed, 0 failed, 0 ignored, 1359 Bibliothekstests und 25 zusätzliche Ziele filtered. Negativer Fall ohne Beleg, positiver Fall mit tatsächlicher Quellen-/bekannter-ID-Bindung. r13-api-fixture.txt.
+
+/home/nathanael/.local/bin/cargo-slot clippy --manifest-path /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.toml -p tb-dashboard-api -p tb-vod-archive --all-targets --no-deps --jobs 3
+Exit0, tatsächlicher Slot4, Laufzeit3m31s. 21 API-lib-Warnungen, 25 lib-test-Warnungen einschließlich21 Duplikaten und eine Beispielwarnung; keine Diagnose in sechs eigenen Quellen. Kein neuer separater strikter Archiv-Clippy-Lauf. r13-clippy.txt.
+
+Gezählte fokussierte Fälle: Worker15 und API15 plus korrigierter Einzeltest1 =31 verschiedene bestandene fokussierte Fälle. Keine Behauptung einer nochmals vollständig grünen Workspace- oder Paket-Suite. Rote Zwischenläufe und Null-Lauf bleiben ausdrücklich erhalten. Keine Baseline gemessen. Temporäre synthetische Konfiguration entfernt; keine eigene Cargo-/Gate-Queue mehr aktiv.
+
+Gate einmal regulär mit gpt-6.1-sol auf eingefrorenem HEAD: Exit2 vor Modellstart, input_too_large, 1058627 statt maximal1048576 Zeichen. Kein inhaltliches ALLOW/BLOCK. Unveränderter Retry nicht ausgeführt. Eltern hat etablierte review_parse_args-Schnittstelle read-only geprüft: kein Kontextbudget-Schalter vorhanden. Globaler --help-Versuch fiel lediglich in Hook-JSON-Eingabe und war kein Reviewaufruf. Keine Gate-/Wrapper-/Modell-/Kriterienänderung. Technische Budgetkorrektur außerhalb dieser Fachquellen ist nötig, ohne Quellcode oder Reviewkriterien auszublenden. gate-round13-tool.txt und gate-round13-base.txt.
+
+TESTNACHWEIS[TW-1]: 31 passed, 0 ignored | Baseline: nicht gemessen, keine Altfehlerbehauptung

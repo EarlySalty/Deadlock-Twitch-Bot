@@ -1,0 +1,1322 @@
+{
+  "fixtureOnly": true,
+  "sha": "76332e3d26e80e48e013e92ddddb429acf068652",
+  "dirty": true,
+  "hashes": {
+    "index.html": "94d579ff63b4fc00d168dded457d822c93386789960967c601eee5ab45030637",
+    "assets/charts-BGgtzR2C.js": "fcc08fcf381d9b4f01e4dabbf13dd8708ef3a7e65c1ad1eb0fc9a3614784b05f",
+    "assets/index-BiE-plvn.js": "e594bfcba79db4bed9426177d70658b5e177bfc7594b07e17f9881f3c310b71e",
+    "assets/index-x3LVghQ4.css": "cf067cff2a405be83a9c0c07acd20f2ddddab78c3d9d3c789dff7fcae068b49d",
+    "assets/query-FwnJxEWc.js": "3355524e18c965fb34fae3c19d166e6a1b46b66ec9d72b96904bd812396046af",
+    "assets/react-BKtprR8h.js": "bd5b828cc30b1cc9ed9491d7c103d91ac6a7989d7a7fa64cc1dbb2bedaaa274d",
+    "assets/rolldown-runtime-hePW80VL.js": "580ad8c58061a4dde99bde0a56905e382f0568516ee2f5b84dbfb52085709021"
+  },
+  "results": [
+    {
+      "name": "desktop-current",
+      "width": 1440,
+      "height": 1100,
+      "metrics": {
+        "viewport": 1440,
+        "document": 1440,
+        "fonts": {
+          "status": "loaded",
+          "manrope": true,
+          "sora": true
+        },
+        "images": [],
+        "articles": [
+          {
+            "title": "Fremder Stream",
+            "status": "Auf YouTube bestätigt",
+            "left": 305,
+            "right": 479.234375,
+            "icon": true,
+            "times": [
+              "2026-10-07T23:28:46.618657+00:00"
+            ],
+            "links": [
+              "https://www.youtube.com/watch?v=video99"
+            ],
+            "buttons": [
+              {
+                "text": "Bei YouTube prüfen",
+                "disabled": true
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Fremder Stream\nAuf YouTube bestätigt\nother\nAufnahmedatum unbekannt\n0:30 h\n\nZuletzt geprüft: 08.10.2026, 01:28\n\nAuf YouTube öffnen\n(Privat)\nBei YouTube prüfen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Älterer Upload ohne Abschlusszeit",
+            "status": "YouTube-Upload abgeschlossen",
+            "left": 305,
+            "right": 546.09375,
+            "icon": true,
+            "times": [],
+            "links": [
+              "https://www.youtube.com/watch?v=synthetic9"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Älterer Upload ohne Abschlusszeit\nYouTube-Upload abgeschlossen\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\n\nUploadabschluss gespeichert, noch nicht bei YouTube nachgeprüft.\n\nAuf YouTube öffnen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Wartet auf Upload",
+            "status": "Wartet",
+            "left": 305,
+            "right": 375.5625,
+            "icon": true,
+            "times": [],
+            "links": [
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=42"
+            ],
+            "buttons": [
+              {
+                "text": "Erneut versuchen",
+                "disabled": false
+              },
+              {
+                "text": "Auf Drive ausweichen",
+                "disabled": false
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Wartet auf Upload\nWartet\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Upload läuft",
+            "status": "Lädt hoch",
+            "left": 305,
+            "right": 396.03125,
+            "icon": true,
+            "times": [
+              "2026-10-01T13:00:00Z"
+            ],
+            "links": [],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Upload läuft\nLädt hoch\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nLetzter Versuch: 01.10.2026, 15:00\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Bestätigte Drive-Kopie",
+            "status": "Auf Drive gesichert",
+            "left": 305,
+            "right": 457.90625,
+            "icon": true,
+            "times": [
+              "2026-10-01T13:00:00Z"
+            ],
+            "links": [
+              "https://drive.google.com/drive/folders/synthetic"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Bestätigte Drive-Kopie\nAuf Drive gesichert\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nAbgeschlossen: 01.10.2026, 15:00\nAuf Drive öffnen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Unklarer älterer Abschluss",
+            "status": "Abschluss unklar",
+            "left": 305,
+            "right": 443.765625,
+            "icon": true,
+            "times": [],
+            "links": [
+              "https://www.youtube.com/watch?v=link-only"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Unklarer älterer Abschluss\nAbschluss unklar\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\n\nFür diesen früheren Upload fehlt ein vollständiger Nachweis. Der YouTube-Abgleich kann vorhandene Videos zuordnen.\n\nAuf YouTube öffnen\n(unbestätigt)\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Teilweise hochgeladen",
+            "status": "Teilweise auf YouTube",
+            "left": 305,
+            "right": 477.46875,
+            "icon": true,
+            "times": [
+              "2026-10-01T13:00:00Z"
+            ],
+            "links": [
+              "https://www.youtube.com/watch?v=synthetic4",
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=42"
+            ],
+            "buttons": [
+              {
+                "text": "Erneut versuchen",
+                "disabled": false
+              },
+              {
+                "text": "Auf Drive ausweichen",
+                "disabled": false
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Teilweise hochgeladen\nTeilweise auf YouTube\nYouTube: 1 von 2 Teilen bestätigt\ntestkanal\nAufnahmedatum unbekannt\n13:53 h\nLetzter Versuch: 01.10.2026, 15:00\n\nDer Upload ist fehlgeschlagen. Prüfe die YouTube-Verbindung und versuche es erneut.\n\nAuf YouTube öffnen\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Bestätigter älterer Upload",
+            "status": "YouTube-Upload abgeschlossen",
+            "left": 305,
+            "right": 546.09375,
+            "icon": true,
+            "times": [
+              "2026-09-01T12:00:00Z"
+            ],
+            "links": [
+              "https://www.youtube.com/watch?v=synthetic3"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Bestätigter älterer Upload\nYouTube-Upload abgeschlossen\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nAbgeschlossen: 01.09.2026, 14:00\n\nUploadabschluss gespeichert, noch nicht bei YouTube nachgeprüft.\n\nAuf YouTube öffnen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Eigener Stream",
+            "status": "Fehlgeschlagen",
+            "left": 305,
+            "right": 435.734375,
+            "icon": true,
+            "times": [],
+            "links": [
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=42"
+            ],
+            "buttons": [
+              {
+                "text": "Erneut versuchen",
+                "disabled": false
+              },
+              {
+                "text": "Auf Drive ausweichen",
+                "disabled": false
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Eigener Stream\nFehlgeschlagen\nrenamed\nAufnahmedatum unbekannt\n1:00 h\n\nDer Upload ist fehlgeschlagen. Prüfe die YouTube-Verbindung und versuche es erneut.\n\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden"
+          }
+        ]
+      },
+      "errors": []
+    },
+    {
+      "name": "mobil-current",
+      "width": 390,
+      "height": 844,
+      "metrics": {
+        "viewport": 390,
+        "document": 390,
+        "fonts": {
+          "status": "loaded",
+          "manrope": true,
+          "sora": true
+        },
+        "images": [],
+        "articles": [
+          {
+            "title": "Fremder Stream",
+            "status": "Auf YouTube bestätigt",
+            "left": 29,
+            "right": 203.234375,
+            "icon": true,
+            "times": [
+              "2026-10-07T23:28:46.618657+00:00"
+            ],
+            "links": [
+              "https://www.youtube.com/watch?v=video99"
+            ],
+            "buttons": [
+              {
+                "text": "Bei YouTube prüfen",
+                "disabled": true
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Fremder Stream\nAuf YouTube bestätigt\nother\nAufnahmedatum unbekannt\n0:30 h\n\nZuletzt geprüft: 08.10.2026, 01:28\n\nAuf YouTube öffnen\n(Privat)\nBei YouTube prüfen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Älterer Upload ohne Abschlusszeit",
+            "status": "YouTube-Upload abgeschlossen",
+            "left": 29,
+            "right": 270.09375,
+            "icon": true,
+            "times": [],
+            "links": [
+              "https://www.youtube.com/watch?v=synthetic9"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Älterer Upload ohne Abschlusszeit\nYouTube-Upload abgeschlossen\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\n\nUploadabschluss gespeichert, noch nicht bei YouTube nachgeprüft.\n\nAuf YouTube öffnen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Wartet auf Upload",
+            "status": "Wartet",
+            "left": 29,
+            "right": 99.5625,
+            "icon": true,
+            "times": [],
+            "links": [
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=42"
+            ],
+            "buttons": [
+              {
+                "text": "Erneut versuchen",
+                "disabled": false
+              },
+              {
+                "text": "Auf Drive ausweichen",
+                "disabled": false
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Wartet auf Upload\nWartet\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Upload läuft",
+            "status": "Lädt hoch",
+            "left": 29,
+            "right": 120.03125,
+            "icon": true,
+            "times": [
+              "2026-10-01T13:00:00Z"
+            ],
+            "links": [],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Upload läuft\nLädt hoch\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nLetzter Versuch: 01.10.2026, 15:00\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Bestätigte Drive-Kopie",
+            "status": "Auf Drive gesichert",
+            "left": 29,
+            "right": 181.90625,
+            "icon": true,
+            "times": [
+              "2026-10-01T13:00:00Z"
+            ],
+            "links": [
+              "https://drive.google.com/drive/folders/synthetic"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Bestätigte Drive-Kopie\nAuf Drive gesichert\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nAbgeschlossen: 01.10.2026, 15:00\nAuf Drive öffnen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Unklarer älterer Abschluss",
+            "status": "Abschluss unklar",
+            "left": 29,
+            "right": 167.765625,
+            "icon": true,
+            "times": [],
+            "links": [
+              "https://www.youtube.com/watch?v=link-only"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Unklarer älterer Abschluss\nAbschluss unklar\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\n\nFür diesen früheren Upload fehlt ein vollständiger Nachweis. Der YouTube-Abgleich kann vorhandene Videos zuordnen.\n\nAuf YouTube öffnen\n(unbestätigt)\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Teilweise hochgeladen",
+            "status": "Teilweise auf YouTube",
+            "left": 29,
+            "right": 201.46875,
+            "icon": true,
+            "times": [
+              "2026-10-01T13:00:00Z"
+            ],
+            "links": [
+              "https://www.youtube.com/watch?v=synthetic4",
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=42"
+            ],
+            "buttons": [
+              {
+                "text": "Erneut versuchen",
+                "disabled": false
+              },
+              {
+                "text": "Auf Drive ausweichen",
+                "disabled": false
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Teilweise hochgeladen\nTeilweise auf YouTube\nYouTube: 1 von 2 Teilen bestätigt\ntestkanal\nAufnahmedatum unbekannt\n13:53 h\nLetzter Versuch: 01.10.2026, 15:00\n\nDer Upload ist fehlgeschlagen. Prüfe die YouTube-Verbindung und versuche es erneut.\n\nAuf YouTube öffnen\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Bestätigter älterer Upload",
+            "status": "YouTube-Upload abgeschlossen",
+            "left": 29,
+            "right": 270.09375,
+            "icon": true,
+            "times": [
+              "2026-09-01T12:00:00Z"
+            ],
+            "links": [
+              "https://www.youtube.com/watch?v=synthetic3"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Bestätigter älterer Upload\nYouTube-Upload abgeschlossen\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nAbgeschlossen: 01.09.2026, 14:00\n\nUploadabschluss gespeichert, noch nicht bei YouTube nachgeprüft.\n\nAuf YouTube öffnen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Eigener Stream",
+            "status": "Fehlgeschlagen",
+            "left": 29,
+            "right": 159.734375,
+            "icon": true,
+            "times": [],
+            "links": [
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=42"
+            ],
+            "buttons": [
+              {
+                "text": "Erneut versuchen",
+                "disabled": false
+              },
+              {
+                "text": "Auf Drive ausweichen",
+                "disabled": false
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Eigener Stream\nFehlgeschlagen\nrenamed\nAufnahmedatum unbekannt\n1:00 h\n\nDer Upload ist fehlgeschlagen. Prüfe die YouTube-Verbindung und versuche es erneut.\n\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden"
+          }
+        ]
+      },
+      "errors": []
+    },
+    {
+      "name": "desktop-partial",
+      "width": 1440,
+      "height": 1100,
+      "metrics": {
+        "viewport": 1440,
+        "document": 1440,
+        "fonts": {
+          "status": "loaded",
+          "manrope": true,
+          "sora": true
+        },
+        "images": [],
+        "articles": [
+          {
+            "title": "Fremder Stream",
+            "status": "YouTube-Zuordnung noch unvollständig",
+            "left": 305,
+            "right": 600.0625,
+            "icon": true,
+            "times": [
+              "2026-10-07T23:28:46.618657+00:00"
+            ],
+            "links": [
+              "https://www.youtube.com/watch?v=video99"
+            ],
+            "buttons": [
+              {
+                "text": "Bei YouTube prüfen",
+                "disabled": true
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Fremder Stream\nYouTube-Zuordnung noch unvollständig\nother\nAufnahmedatum unbekannt\n0:30 h\n\nZuletzt geprüft: 08.10.2026, 01:28\n\nVideos gefunden, aber die vollständige Zuordnung aller Teile ist noch nicht belegt.\n\nAuf YouTube öffnen\n(Privat)\nBei YouTube prüfen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Älterer Upload ohne Abschlusszeit",
+            "status": "YouTube-Upload abgeschlossen",
+            "left": 305,
+            "right": 546.09375,
+            "icon": true,
+            "times": [],
+            "links": [
+              "https://www.youtube.com/watch?v=synthetic9"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Älterer Upload ohne Abschlusszeit\nYouTube-Upload abgeschlossen\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\n\nUploadabschluss gespeichert, noch nicht bei YouTube nachgeprüft.\n\nAuf YouTube öffnen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Wartet auf Upload",
+            "status": "Wartet",
+            "left": 305,
+            "right": 375.5625,
+            "icon": true,
+            "times": [],
+            "links": [
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=42"
+            ],
+            "buttons": [
+              {
+                "text": "Erneut versuchen",
+                "disabled": false
+              },
+              {
+                "text": "Auf Drive ausweichen",
+                "disabled": false
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Wartet auf Upload\nWartet\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Upload läuft",
+            "status": "Lädt hoch",
+            "left": 305,
+            "right": 396.03125,
+            "icon": true,
+            "times": [
+              "2026-10-01T13:00:00Z"
+            ],
+            "links": [],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Upload läuft\nLädt hoch\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nLetzter Versuch: 01.10.2026, 15:00\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Bestätigte Drive-Kopie",
+            "status": "Auf Drive gesichert",
+            "left": 305,
+            "right": 457.90625,
+            "icon": true,
+            "times": [
+              "2026-10-01T13:00:00Z"
+            ],
+            "links": [
+              "https://drive.google.com/drive/folders/synthetic"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Bestätigte Drive-Kopie\nAuf Drive gesichert\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nAbgeschlossen: 01.10.2026, 15:00\nAuf Drive öffnen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Unklarer älterer Abschluss",
+            "status": "Abschluss unklar",
+            "left": 305,
+            "right": 443.765625,
+            "icon": true,
+            "times": [],
+            "links": [
+              "https://www.youtube.com/watch?v=link-only"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Unklarer älterer Abschluss\nAbschluss unklar\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\n\nFür diesen früheren Upload fehlt ein vollständiger Nachweis. Der YouTube-Abgleich kann vorhandene Videos zuordnen.\n\nAuf YouTube öffnen\n(unbestätigt)\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Teilweise hochgeladen",
+            "status": "Teilweise auf YouTube",
+            "left": 305,
+            "right": 477.46875,
+            "icon": true,
+            "times": [
+              "2026-10-01T13:00:00Z"
+            ],
+            "links": [
+              "https://www.youtube.com/watch?v=synthetic4",
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=42"
+            ],
+            "buttons": [
+              {
+                "text": "Erneut versuchen",
+                "disabled": false
+              },
+              {
+                "text": "Auf Drive ausweichen",
+                "disabled": false
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Teilweise hochgeladen\nTeilweise auf YouTube\nYouTube: 1 von 2 Teilen bestätigt\ntestkanal\nAufnahmedatum unbekannt\n13:53 h\nLetzter Versuch: 01.10.2026, 15:00\n\nDer Upload ist fehlgeschlagen. Prüfe die YouTube-Verbindung und versuche es erneut.\n\nAuf YouTube öffnen\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Bestätigter älterer Upload",
+            "status": "YouTube-Upload abgeschlossen",
+            "left": 305,
+            "right": 546.09375,
+            "icon": true,
+            "times": [
+              "2026-09-01T12:00:00Z"
+            ],
+            "links": [
+              "https://www.youtube.com/watch?v=synthetic3"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Bestätigter älterer Upload\nYouTube-Upload abgeschlossen\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nAbgeschlossen: 01.09.2026, 14:00\n\nUploadabschluss gespeichert, noch nicht bei YouTube nachgeprüft.\n\nAuf YouTube öffnen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Eigener Stream",
+            "status": "Fehlgeschlagen",
+            "left": 305,
+            "right": 435.734375,
+            "icon": true,
+            "times": [],
+            "links": [
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=42"
+            ],
+            "buttons": [
+              {
+                "text": "Erneut versuchen",
+                "disabled": false
+              },
+              {
+                "text": "Auf Drive ausweichen",
+                "disabled": false
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Eigener Stream\nFehlgeschlagen\nrenamed\nAufnahmedatum unbekannt\n1:00 h\n\nDer Upload ist fehlgeschlagen. Prüfe die YouTube-Verbindung und versuche es erneut.\n\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden"
+          }
+        ]
+      },
+      "errors": []
+    },
+    {
+      "name": "mobil-partial",
+      "width": 390,
+      "height": 844,
+      "metrics": {
+        "viewport": 390,
+        "document": 390,
+        "fonts": {
+          "status": "loaded",
+          "manrope": true,
+          "sora": true
+        },
+        "images": [],
+        "articles": [
+          {
+            "title": "Fremder Stream",
+            "status": "YouTube-Zuordnung noch unvollständig",
+            "left": 29,
+            "right": 324.0625,
+            "icon": true,
+            "times": [
+              "2026-10-07T23:28:46.618657+00:00"
+            ],
+            "links": [
+              "https://www.youtube.com/watch?v=video99"
+            ],
+            "buttons": [
+              {
+                "text": "Bei YouTube prüfen",
+                "disabled": true
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Fremder Stream\nYouTube-Zuordnung noch unvollständig\nother\nAufnahmedatum unbekannt\n0:30 h\n\nZuletzt geprüft: 08.10.2026, 01:28\n\nVideos gefunden, aber die vollständige Zuordnung aller Teile ist noch nicht belegt.\n\nAuf YouTube öffnen\n(Privat)\nBei YouTube prüfen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Älterer Upload ohne Abschlusszeit",
+            "status": "YouTube-Upload abgeschlossen",
+            "left": 29,
+            "right": 270.09375,
+            "icon": true,
+            "times": [],
+            "links": [
+              "https://www.youtube.com/watch?v=synthetic9"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Älterer Upload ohne Abschlusszeit\nYouTube-Upload abgeschlossen\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\n\nUploadabschluss gespeichert, noch nicht bei YouTube nachgeprüft.\n\nAuf YouTube öffnen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Wartet auf Upload",
+            "status": "Wartet",
+            "left": 29,
+            "right": 99.5625,
+            "icon": true,
+            "times": [],
+            "links": [
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=42"
+            ],
+            "buttons": [
+              {
+                "text": "Erneut versuchen",
+                "disabled": false
+              },
+              {
+                "text": "Auf Drive ausweichen",
+                "disabled": false
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Wartet auf Upload\nWartet\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Upload läuft",
+            "status": "Lädt hoch",
+            "left": 29,
+            "right": 120.03125,
+            "icon": true,
+            "times": [
+              "2026-10-01T13:00:00Z"
+            ],
+            "links": [],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Upload läuft\nLädt hoch\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nLetzter Versuch: 01.10.2026, 15:00\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Bestätigte Drive-Kopie",
+            "status": "Auf Drive gesichert",
+            "left": 29,
+            "right": 181.90625,
+            "icon": true,
+            "times": [
+              "2026-10-01T13:00:00Z"
+            ],
+            "links": [
+              "https://drive.google.com/drive/folders/synthetic"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Bestätigte Drive-Kopie\nAuf Drive gesichert\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nAbgeschlossen: 01.10.2026, 15:00\nAuf Drive öffnen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Unklarer älterer Abschluss",
+            "status": "Abschluss unklar",
+            "left": 29,
+            "right": 167.765625,
+            "icon": true,
+            "times": [],
+            "links": [
+              "https://www.youtube.com/watch?v=link-only"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Unklarer älterer Abschluss\nAbschluss unklar\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\n\nFür diesen früheren Upload fehlt ein vollständiger Nachweis. Der YouTube-Abgleich kann vorhandene Videos zuordnen.\n\nAuf YouTube öffnen\n(unbestätigt)\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Teilweise hochgeladen",
+            "status": "Teilweise auf YouTube",
+            "left": 29,
+            "right": 201.46875,
+            "icon": true,
+            "times": [
+              "2026-10-01T13:00:00Z"
+            ],
+            "links": [
+              "https://www.youtube.com/watch?v=synthetic4",
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=42"
+            ],
+            "buttons": [
+              {
+                "text": "Erneut versuchen",
+                "disabled": false
+              },
+              {
+                "text": "Auf Drive ausweichen",
+                "disabled": false
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Teilweise hochgeladen\nTeilweise auf YouTube\nYouTube: 1 von 2 Teilen bestätigt\ntestkanal\nAufnahmedatum unbekannt\n13:53 h\nLetzter Versuch: 01.10.2026, 15:00\n\nDer Upload ist fehlgeschlagen. Prüfe die YouTube-Verbindung und versuche es erneut.\n\nAuf YouTube öffnen\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Bestätigter älterer Upload",
+            "status": "YouTube-Upload abgeschlossen",
+            "left": 29,
+            "right": 270.09375,
+            "icon": true,
+            "times": [
+              "2026-09-01T12:00:00Z"
+            ],
+            "links": [
+              "https://www.youtube.com/watch?v=synthetic3"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Bestätigter älterer Upload\nYouTube-Upload abgeschlossen\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nAbgeschlossen: 01.09.2026, 14:00\n\nUploadabschluss gespeichert, noch nicht bei YouTube nachgeprüft.\n\nAuf YouTube öffnen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Eigener Stream",
+            "status": "Fehlgeschlagen",
+            "left": 29,
+            "right": 159.734375,
+            "icon": true,
+            "times": [],
+            "links": [
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=42"
+            ],
+            "buttons": [
+              {
+                "text": "Erneut versuchen",
+                "disabled": false
+              },
+              {
+                "text": "Auf Drive ausweichen",
+                "disabled": false
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Eigener Stream\nFehlgeschlagen\nrenamed\nAufnahmedatum unbekannt\n1:00 h\n\nDer Upload ist fehlgeschlagen. Prüfe die YouTube-Verbindung und versuche es erneut.\n\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden"
+          }
+        ]
+      },
+      "errors": []
+    },
+    {
+      "name": "desktop-connection",
+      "width": 1440,
+      "height": 1100,
+      "metrics": {
+        "viewport": 1440,
+        "document": 1440,
+        "fonts": {
+          "status": "loaded",
+          "manrope": true,
+          "sora": true
+        },
+        "images": [],
+        "articles": [
+          {
+            "title": "Fremder Stream",
+            "status": "Prüfung gerade nicht möglich",
+            "left": 305,
+            "right": 528.453125,
+            "icon": true,
+            "times": [
+              "2026-10-07T23:28:46.618657+00:00",
+              "2026-10-07T23:28:46.645133+00:00"
+            ],
+            "links": [
+              "https://www.youtube.com/watch?v=video99",
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=99"
+            ],
+            "buttons": [
+              {
+                "text": "Bei YouTube prüfen",
+                "disabled": true
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Fremder Stream\nPrüfung gerade nicht möglich\nother\nAufnahmedatum unbekannt\n0:30 h\n\nZuletzt geprüft: 08.10.2026, 01:28\n\nFür den Abgleich braucht YouTube eine erneute Verbindung mit deinem Kanal. Prüfversuch: 08.10.2026, 01:28\n\nAuf YouTube öffnen\n(Privat)\nYouTube neu verbinden\nBei YouTube prüfen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Älterer Upload ohne Abschlusszeit",
+            "status": "YouTube-Upload abgeschlossen",
+            "left": 305,
+            "right": 546.09375,
+            "icon": true,
+            "times": [],
+            "links": [
+              "https://www.youtube.com/watch?v=synthetic9"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Älterer Upload ohne Abschlusszeit\nYouTube-Upload abgeschlossen\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\n\nUploadabschluss gespeichert, noch nicht bei YouTube nachgeprüft.\n\nAuf YouTube öffnen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Wartet auf Upload",
+            "status": "Wartet",
+            "left": 305,
+            "right": 375.5625,
+            "icon": true,
+            "times": [],
+            "links": [
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=42"
+            ],
+            "buttons": [
+              {
+                "text": "Erneut versuchen",
+                "disabled": false
+              },
+              {
+                "text": "Auf Drive ausweichen",
+                "disabled": false
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Wartet auf Upload\nWartet\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Upload läuft",
+            "status": "Lädt hoch",
+            "left": 305,
+            "right": 396.03125,
+            "icon": true,
+            "times": [
+              "2026-10-01T13:00:00Z"
+            ],
+            "links": [],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Upload läuft\nLädt hoch\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nLetzter Versuch: 01.10.2026, 15:00\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Bestätigte Drive-Kopie",
+            "status": "Auf Drive gesichert",
+            "left": 305,
+            "right": 457.90625,
+            "icon": true,
+            "times": [
+              "2026-10-01T13:00:00Z"
+            ],
+            "links": [
+              "https://drive.google.com/drive/folders/synthetic"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Bestätigte Drive-Kopie\nAuf Drive gesichert\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nAbgeschlossen: 01.10.2026, 15:00\nAuf Drive öffnen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Unklarer älterer Abschluss",
+            "status": "Abschluss unklar",
+            "left": 305,
+            "right": 443.765625,
+            "icon": true,
+            "times": [],
+            "links": [
+              "https://www.youtube.com/watch?v=link-only"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Unklarer älterer Abschluss\nAbschluss unklar\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\n\nFür diesen früheren Upload fehlt ein vollständiger Nachweis. Der YouTube-Abgleich kann vorhandene Videos zuordnen.\n\nAuf YouTube öffnen\n(unbestätigt)\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Teilweise hochgeladen",
+            "status": "Teilweise auf YouTube",
+            "left": 305,
+            "right": 477.46875,
+            "icon": true,
+            "times": [
+              "2026-10-01T13:00:00Z"
+            ],
+            "links": [
+              "https://www.youtube.com/watch?v=synthetic4",
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=42"
+            ],
+            "buttons": [
+              {
+                "text": "Erneut versuchen",
+                "disabled": false
+              },
+              {
+                "text": "Auf Drive ausweichen",
+                "disabled": false
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Teilweise hochgeladen\nTeilweise auf YouTube\nYouTube: 1 von 2 Teilen bestätigt\ntestkanal\nAufnahmedatum unbekannt\n13:53 h\nLetzter Versuch: 01.10.2026, 15:00\n\nDer Upload ist fehlgeschlagen. Prüfe die YouTube-Verbindung und versuche es erneut.\n\nAuf YouTube öffnen\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Bestätigter älterer Upload",
+            "status": "YouTube-Upload abgeschlossen",
+            "left": 305,
+            "right": 546.09375,
+            "icon": true,
+            "times": [
+              "2026-09-01T12:00:00Z"
+            ],
+            "links": [
+              "https://www.youtube.com/watch?v=synthetic3"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Bestätigter älterer Upload\nYouTube-Upload abgeschlossen\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nAbgeschlossen: 01.09.2026, 14:00\n\nUploadabschluss gespeichert, noch nicht bei YouTube nachgeprüft.\n\nAuf YouTube öffnen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Eigener Stream",
+            "status": "Fehlgeschlagen",
+            "left": 305,
+            "right": 435.734375,
+            "icon": true,
+            "times": [],
+            "links": [
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=42"
+            ],
+            "buttons": [
+              {
+                "text": "Erneut versuchen",
+                "disabled": false
+              },
+              {
+                "text": "Auf Drive ausweichen",
+                "disabled": false
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Eigener Stream\nFehlgeschlagen\nrenamed\nAufnahmedatum unbekannt\n1:00 h\n\nDer Upload ist fehlgeschlagen. Prüfe die YouTube-Verbindung und versuche es erneut.\n\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden"
+          }
+        ]
+      },
+      "errors": []
+    },
+    {
+      "name": "mobil-connection",
+      "width": 390,
+      "height": 844,
+      "metrics": {
+        "viewport": 390,
+        "document": 390,
+        "fonts": {
+          "status": "loaded",
+          "manrope": true,
+          "sora": true
+        },
+        "images": [],
+        "articles": [
+          {
+            "title": "Fremder Stream",
+            "status": "Prüfung gerade nicht möglich",
+            "left": 29,
+            "right": 252.453125,
+            "icon": true,
+            "times": [
+              "2026-10-07T23:28:46.618657+00:00",
+              "2026-10-07T23:28:46.645133+00:00"
+            ],
+            "links": [
+              "https://www.youtube.com/watch?v=video99",
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=99"
+            ],
+            "buttons": [
+              {
+                "text": "Bei YouTube prüfen",
+                "disabled": true
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Fremder Stream\nPrüfung gerade nicht möglich\nother\nAufnahmedatum unbekannt\n0:30 h\n\nZuletzt geprüft: 08.10.2026, 01:28\n\nFür den Abgleich braucht YouTube eine erneute Verbindung mit deinem Kanal. Prüfversuch: 08.10.2026, 01:28\n\nAuf YouTube öffnen\n(Privat)\nYouTube neu verbinden\nBei YouTube prüfen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Älterer Upload ohne Abschlusszeit",
+            "status": "YouTube-Upload abgeschlossen",
+            "left": 29,
+            "right": 270.09375,
+            "icon": true,
+            "times": [],
+            "links": [
+              "https://www.youtube.com/watch?v=synthetic9"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Älterer Upload ohne Abschlusszeit\nYouTube-Upload abgeschlossen\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\n\nUploadabschluss gespeichert, noch nicht bei YouTube nachgeprüft.\n\nAuf YouTube öffnen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Wartet auf Upload",
+            "status": "Wartet",
+            "left": 29,
+            "right": 99.5625,
+            "icon": true,
+            "times": [],
+            "links": [
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=42"
+            ],
+            "buttons": [
+              {
+                "text": "Erneut versuchen",
+                "disabled": false
+              },
+              {
+                "text": "Auf Drive ausweichen",
+                "disabled": false
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Wartet auf Upload\nWartet\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Upload läuft",
+            "status": "Lädt hoch",
+            "left": 29,
+            "right": 120.03125,
+            "icon": true,
+            "times": [
+              "2026-10-01T13:00:00Z"
+            ],
+            "links": [],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Upload läuft\nLädt hoch\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nLetzter Versuch: 01.10.2026, 15:00\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Bestätigte Drive-Kopie",
+            "status": "Auf Drive gesichert",
+            "left": 29,
+            "right": 181.90625,
+            "icon": true,
+            "times": [
+              "2026-10-01T13:00:00Z"
+            ],
+            "links": [
+              "https://drive.google.com/drive/folders/synthetic"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Bestätigte Drive-Kopie\nAuf Drive gesichert\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nAbgeschlossen: 01.10.2026, 15:00\nAuf Drive öffnen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Unklarer älterer Abschluss",
+            "status": "Abschluss unklar",
+            "left": 29,
+            "right": 167.765625,
+            "icon": true,
+            "times": [],
+            "links": [
+              "https://www.youtube.com/watch?v=link-only"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Unklarer älterer Abschluss\nAbschluss unklar\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\n\nFür diesen früheren Upload fehlt ein vollständiger Nachweis. Der YouTube-Abgleich kann vorhandene Videos zuordnen.\n\nAuf YouTube öffnen\n(unbestätigt)\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Teilweise hochgeladen",
+            "status": "Teilweise auf YouTube",
+            "left": 29,
+            "right": 201.46875,
+            "icon": true,
+            "times": [
+              "2026-10-01T13:00:00Z"
+            ],
+            "links": [
+              "https://www.youtube.com/watch?v=synthetic4",
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=42"
+            ],
+            "buttons": [
+              {
+                "text": "Erneut versuchen",
+                "disabled": false
+              },
+              {
+                "text": "Auf Drive ausweichen",
+                "disabled": false
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Teilweise hochgeladen\nTeilweise auf YouTube\nYouTube: 1 von 2 Teilen bestätigt\ntestkanal\nAufnahmedatum unbekannt\n13:53 h\nLetzter Versuch: 01.10.2026, 15:00\n\nDer Upload ist fehlgeschlagen. Prüfe die YouTube-Verbindung und versuche es erneut.\n\nAuf YouTube öffnen\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Bestätigter älterer Upload",
+            "status": "YouTube-Upload abgeschlossen",
+            "left": 29,
+            "right": 270.09375,
+            "icon": true,
+            "times": [
+              "2026-09-01T12:00:00Z"
+            ],
+            "links": [
+              "https://www.youtube.com/watch?v=synthetic3"
+            ],
+            "buttons": [
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Bestätigter älterer Upload\nYouTube-Upload abgeschlossen\ntestkanal\nAufnahmedatum unbekannt\n1:00 h\nAbgeschlossen: 01.09.2026, 14:00\n\nUploadabschluss gespeichert, noch nicht bei YouTube nachgeprüft.\n\nAuf YouTube öffnen\nAus der Liste ausblenden"
+          },
+          {
+            "title": "Eigener Stream",
+            "status": "Fehlgeschlagen",
+            "left": 29,
+            "right": 159.734375,
+            "icon": true,
+            "times": [],
+            "links": [
+              "/twitch/social-media/oauth/start/youtube?twitch_user_id=42"
+            ],
+            "buttons": [
+              {
+                "text": "Erneut versuchen",
+                "disabled": false
+              },
+              {
+                "text": "Auf Drive ausweichen",
+                "disabled": false
+              },
+              {
+                "text": "Aus der Liste ausblenden",
+                "disabled": false
+              }
+            ],
+            "text": "Eigener Stream\nFehlgeschlagen\nrenamed\nAufnahmedatum unbekannt\n1:00 h\n\nDer Upload ist fehlgeschlagen. Prüfe die YouTube-Verbindung und versuche es erneut.\n\nYouTube neu verbinden\nErneut versuchen\nAuf Drive ausweichen\nAus der Liste ausblenden"
+          }
+        ]
+      },
+      "errors": []
+    }
+  ]
+}

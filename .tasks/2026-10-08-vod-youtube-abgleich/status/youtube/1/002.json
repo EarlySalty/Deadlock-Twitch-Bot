@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 1,
+  "sequenz": 2,
+  "zeit": "2026-10-07T23:16:20Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "aktiv",
+  "gebaut": "ja",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "84e3f58d69adc418a4d2245546b6fa506101b644",
+  "nachweise": ["PRUEFUNG.md", "archive-tests3.log", "frontend-tests.log", "frontend-build.log", "api-tests2.log", "youtube-client-tests.log", "gate-round1.log", "REVIEW.md"],
+  "blocker": [],
+  "naechster_schritt": "Frischer nativer Fixer bearbeitet die beiden Gate-Funde. Danach denselben Gate erneut ausführen und die gebündelte Sichtprüfung abschließen."
+}

@@ -1,0 +1,5 @@
+BLOCK: Recovery can requeue parts already confirmed on YouTube.
+
+1. rust/crates/tb-dashboard-api/src/handlers/social_media_vod_archive.rs:264 | BLOCKING: Recovery ignores current successful evidence in both reset branches: local `rejected` flags at lines 259/264 override even a confirmed check; ID-less `pending`/`failed` parts at line 281 are reset despite processed observations for those parts. This affects fully recovered historical VODs and mixed multipart VODs. | With available files, `apply_action` queues these parts again as `downloaded`/`pending`. Preserve parts proven processed and suppress recovery when the current proof confirms the whole VOD.
+
+2. rust/crates/tb-dashboard-api/src/handlers/social_media_vod_archive.rs:312 | NIT: The recovery explanation advertises Drive whenever retry is available, including `retry=true, drive=false`. | The new rejected-part test explicitly exercises that combination; the UI promises an unavailable action.

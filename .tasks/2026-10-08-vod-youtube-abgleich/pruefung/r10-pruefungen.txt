@@ -1,0 +1,18 @@
+Enger Gate-10-Fix: tatsächliche fokussierte Prüfungen laut Fixerabschluss, zugehörige vollständige Ausgaben separat gesichert. Keine ganze Suite erneut gefahren.
+
+TB_TEST_DATABASE_URL=postgresql://nathanael@127.0.0.1:55683/token_db_youtube /home/nathanael/.local/bin/cargo-slot test --jobs 3 --manifest-path /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.toml -p tb-dashboard-api vod_archive_management::tests::ordinary_provider_rejection -- --include-ignored --nocapture
+Exit 0: 1 passed, 0 failed, 0 ignored, 1359 Bibliothekstests filtered, weitere Ziele 25 filtered. Echte gespeicherte rejected-/failed-Beobachtung, apply_action und Worker-Ausführung, jeweils ein gezählter Upload; Wiederholung ohne zusätzlichen Upload. r10-api-worker.txt.
+
+TB_TEST_DATABASE_URL=postgresql://nathanael@127.0.0.1:55683/token_db_youtube /home/nathanael/.local/bin/cargo-slot test --jobs 3 --manifest-path /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.toml -p tb-dashboard-api vod_archive_management::tests::partial_processed -- --include-ignored --nocapture
+Exit 0: 1 passed, 0 failed, 0 ignored, 1359 Bibliothekstests filtered, weitere Ziele 25 filtered. Beide Resetzweige schützen gültige processed-Teile bei Wiederholung. Der zuvor werkzeugseitig während Slot-Wartezeit beendete Aufruf hatte keinen Test-Exit und zählt nicht. Ersatz ohne weiterlebende eigene ursprüngliche Prozessfamilie erfolgreich. r10-api-resets.txt.
+
+TB_TEST_DATABASE_URL=postgresql://nathanael@127.0.0.1:55683/token_db_youtube /home/nathanael/.local/bin/cargo-slot test --jobs 3 --manifest-path /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.toml -p tb-vod-archive worker::tests::verworfene_uploads_fallen_nicht_unter_den_tisch -- --include-ignored --nocapture
+Exit 0: 1 passed, 0 failed, 0 ignored, 67 filtered. Tatsächlich gespeicherte Abgleichsablehnung bleibt ohne ausdrücklichen Retry ohne Upload; lokale Quelle und Teilhistorie erhalten. r10-archive-rejection.txt.
+
+API-Kompilation meldete MemFdCreateFlag-Abkündigung in uplink_config.rs:847. Keine neue Baselinebehauptung. Gezieltes rustfmt und git diff --check laut Fixer Exit 0. Eltern bestätigte fünf unveränderte eingefrorene Quellenhashes.
+
+Noch aktiver einziger Aufruf b8zb1ayz9, zum BLOCK-Bericht ohne Ergebnis:
+/home/nathanael/.local/bin/cargo-slot clippy --jobs 3 --manifest-path /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.toml -p tb-dashboard-api -p tb-vod-archive --all-targets --no-deps
+Kein neuer separater strikter Archiv-Clippy-Nachweis. Den wartenden Lauf nicht abgebrochen oder dupliziert.
+
+TESTNACHWEIS[TW-1]: 3 passed, 0 ignored | Baseline: nicht erneut gemessen, keine Altfehlerbehauptung
