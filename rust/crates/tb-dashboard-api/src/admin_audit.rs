@@ -62,31 +62,7 @@ fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 }
 
 async fn actor_from_request(parts: &mut Parts) -> String {
-    use crate::auth::level::{
-        AuditSessionId, AuditSessionSelection, AuthenticatedAdminSessionId,
-        AuthenticatedPartnerSessionId,
-    };
-
-    let selection = if let Some(selection) = parts.extensions.get::<AuditSessionSelection>() {
-        selection.0.lock().await.clone()
-    } else {
-        None
-    };
-    match selection {
-        Some(AuditSessionId::Admin(session_id)) => {
-            parts.extensions.remove::<AuthenticatedPartnerSessionId>();
-            parts
-                .extensions
-                .insert(AuthenticatedAdminSessionId(session_id));
-        }
-        Some(AuditSessionId::Partner(session_id)) => {
-            parts.extensions.remove::<AuthenticatedAdminSessionId>();
-            parts
-                .extensions
-                .insert(AuthenticatedPartnerSessionId(session_id));
-        }
-        None => {}
-    }
+    use crate::auth::level::{AuthenticatedAdminSessionId, AuthenticatedPartnerSessionId};
     if let Some(state) = parts
         .extensions
         .get::<crate::auth::session::DashboardAuthState>()
@@ -128,14 +104,13 @@ pub async fn audit_admin_mutations(
     let method = request.method().as_str().to_string();
     let path: String = request.uri().path().chars().take(512).collect();
     let (mut parts, body) = request.into_parts();
-    parts
-        .extensions
-        .insert(crate::auth::level::AuditSessionSelection::default());
-    let mut actor_parts = parts.clone();
+    let selection = crate::auth::level::AuditSessionSelection::default();
+    parts.extensions.insert(selection.clone());
+    let fallback_actor = actor_from_request(&mut parts).await;
     let response = next.run(Request::from_parts(parts, body)).await;
     let status = response.status();
     if response_marks_success(&path, &response) {
-        let actor = actor_from_request(&mut actor_parts).await;
+        let actor = selection.0.lock().await.clone().unwrap_or(fallback_actor);
         if let Err(error) = sqlx::query(
             r#"INSERT INTO dashboard_admin_audit_events
                 (actor, method, path, status_code)
@@ -580,6 +555,14 @@ mod tests {
                                 .get::<AuthenticatedAdminSessionId>()
                                 .unwrap()
                                 .clone();
+                            if request.headers().contains_key("x-test-logout") {
+                                request
+                                    .extensions()
+                                    .get::<DashboardAuthState>()
+                                    .unwrap()
+                                    .invalidate_session(&selected.0)
+                                    .await;
+                            }
                             let mut response = StatusCode::NO_CONTENT.into_response();
                             response.extensions_mut().insert(selected);
                             response
@@ -648,6 +631,67 @@ mod tests {
                 .unwrap();
                 assert_eq!(actors, ["discord:42", "discord:99"][..=index]);
             }
+            sqlx::query(
+                "CREATE TABLE twitch_partners (
+                    id BIGINT PRIMARY KEY, twitch_login TEXT NOT NULL,
+                    twitch_user_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active',
+                    technical_pause_reason TEXT, admin_archived_at TEXT,
+                    departnered_at TEXT, partnered_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO twitch_partners (id, twitch_login, twitch_user_id)
+                 VALUES (777, 'fremderpartner', '777')",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            let foreign = state
+                .create_partner_session("fremderpartner", "777", "Fremder Partner")
+                .await
+                .unwrap();
+            assert!(state
+                .load_partner_session(&foreign.session_id)
+                .await
+                .unwrap()
+                .is_some());
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/twitch/api/admin/test")
+                        .header("host", "admin.test")
+                        .header("origin", "https://admin.test")
+                        .header("x-dashboard-context", "admin")
+                        .header("x-test-logout", "1")
+                        .header(
+                            "cookie",
+                            format!(
+                                "{ADMIN_COOKIE_NAME}={central_id}; {}={}",
+                                crate::auth::session::PARTNER_COOKIE_NAME,
+                                foreign.session_id,
+                            ),
+                        )
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NO_CONTENT);
+            assert!(state
+                .load_admin_session(central_id)
+                .await
+                .unwrap()
+                .is_none());
+            let actors: Vec<String> =
+                sqlx::query_scalar("SELECT actor FROM dashboard_admin_audit_events ORDER BY id")
+                    .fetch_all(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(actors, ["discord:42", "discord:99", "discord:99"]);
             pool.close().await;
         }
     }
