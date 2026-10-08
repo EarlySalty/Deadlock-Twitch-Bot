@@ -479,9 +479,7 @@ pub async fn obs_ws_handler(
         SessionWaechter::bauen(&auth, auth_state.map(|Extension(state)| state), &headers);
     let seit = abfrage.seit();
 
-    // Der Listener startet beim ersten Dock des Prozesses, nicht beim
-    // Router-Bau: ohne offenes Dock soll keine Postgres-Verbindung liegen.
-    bus.listener_sicherstellen();
+    bus.listener_sicherstellen().await;
 
     upgrade.on_upgrade(move |socket| async move {
         // Anmelden erst hier, nicht schon bei den Upgrade-Kopfzeilen: die

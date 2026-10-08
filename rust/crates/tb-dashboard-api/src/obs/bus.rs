@@ -385,15 +385,22 @@ impl ObsDockBus {
             .unwrap_or(0)
     }
 
-    /// Startet den Listener beim ersten Socket, danach nie wieder.
-    ///
-    /// Traege statt beim Router-Bau, damit ein Prozess ohne offenes Dock keine
-    /// Postgres-Verbindung dauerhaft belegt und ein Testlauf keine
-    /// Reconnect-Schleife gegen eine fehlende Datenbank faehrt.
-    pub fn listener_sicherstellen(self: &Arc<Self>) {
+    pub async fn listener_sicherstellen(self: &Arc<Self>) {
         let Some(pool) = self.pool.clone() else {
             return;
         };
+        if self.listener_gestartet.load(Ordering::SeqCst) {
+            return;
+        }
+        if let Err(fehler) = self.wasserstand_sicherstellen(&pool).await {
+            let _ = self.wasserstand.compare_exchange(
+                WASSERSTAND_UNBEKANNT,
+                0,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
+            warn!(%fehler, "OBS-Dock: Startstand nicht lesbar, Ereignisse werden nachgezogen");
+        }
         if self
             .listener_gestartet
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -403,6 +410,22 @@ impl ObsDockBus {
         }
         let bus = Arc::clone(self);
         tokio::spawn(async move { bus.listener_schleife(pool).await });
+    }
+
+    async fn wasserstand_sicherstellen(&self, pool: &PgPool) -> Result<(), sqlx::Error> {
+        if self.wasserstand.load(Ordering::SeqCst) != WASSERSTAND_UNBEKANNT {
+            return Ok(());
+        }
+        let hoechste: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM obs_dock_events")
+            .fetch_one(pool)
+            .await?;
+        let _ = self.wasserstand.compare_exchange(
+            WASSERSTAND_UNBEKANNT,
+            hoechste,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+        Ok(())
     }
 
     /// Horcht auf `obs_dock`, mit Wiederaufbau und Backoff.
@@ -432,31 +455,15 @@ impl ObsDockBus {
         }
     }
 
-    /// Ein Durchlauf: verbinden, Wasserstand setzen, Luecke schliessen,
-    /// horchen bis die Verbindung abreisst.
-    ///
-    /// Der Rueckgabetyp sagt es ausdruecklich: hier kommt nur ein Fehler
-    /// heraus, nie ein regulaeres Ende.
-    async fn horchen(&self, pool: &PgPool) -> Result<std::convert::Infallible, sqlx::Error> {
+    async fn listener_aufbauen(&self, pool: &PgPool) -> Result<PgListener, sqlx::Error> {
         let mut listener = PgListener::connect_with(pool).await?;
         listener.listen(NOTIFY_KANAL).await?;
+        self.luecke_nachziehen(pool).await?;
+        Ok(listener)
+    }
 
-        if self.wasserstand.load(Ordering::SeqCst) == WASSERSTAND_UNBEKANNT {
-            // Erster Start: alles, was vor dem Prozess passiert ist, gilt als
-            // erledigt. Den Vorlauf holt sich jeder Socket selbst aus der
-            // Tabelle, dafuer ist der Wasserstand nicht zustaendig.
-            let hoechste: Option<i64> =
-                sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM obs_dock_events")
-                    .fetch_optional(pool)
-                    .await?
-                    .flatten();
-            self.wasserstand
-                .store(hoechste.unwrap_or(0), Ordering::SeqCst);
-        } else {
-            // Wiederaufbau: was waehrend des Abrisses geschrieben wurde,
-            // nachziehen.
-            self.luecke_nachziehen(pool).await?;
-        }
+    async fn horchen(&self, pool: &PgPool) -> Result<std::convert::Infallible, sqlx::Error> {
+        let mut listener = self.listener_aufbauen(pool).await?;
 
         loop {
             match listener.try_recv().await? {
@@ -464,9 +471,6 @@ impl ObsDockBus {
                     self.benachrichtigung_verarbeiten(pool, benachrichtigung.payload())
                         .await?;
                 }
-                // `None` heisst: sqlx hat die Verbindung im Hintergrund neu
-                // aufgebaut. Alles dazwischen ist verloren und wird aus der
-                // Tabelle nachgezogen.
                 None => self.luecke_nachziehen(pool).await?,
             }
         }
@@ -1032,6 +1036,135 @@ mod tests {
         assert_eq!(von_a.id, 900);
         assert!(von_a.json.is_none(), "Lueckenhinweis traegt keine Nutzlast");
         assert_eq!(von_b, von_a);
+    }
+
+    #[tokio::test]
+    async fn erststart_zieht_ereignisse_zwischen_nachlauf_und_listen_nach() {
+        let Ok(dsn) = std::env::var("TB_TEST_DATABASE_URL") else {
+            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
+            return;
+        };
+        let schema = "obs_bus_erststart";
+        let aufbau = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .expect("Test-DB erreichbar");
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&aufbau)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+            .execute(&aufbau)
+            .await
+            .unwrap();
+        aufbau.close().await;
+
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(3)
+            .after_connect(move |conn, _| {
+                Box::pin(async move {
+                    sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
+                        .execute(conn)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect(&dsn)
+            .await
+            .expect("Testpool");
+        sqlx::query(
+            "CREATE TABLE obs_dock_events (
+                 id BIGINT PRIMARY KEY,
+                 channel_id TEXT NOT NULL,
+                 payload JSONB NOT NULL
+             )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO obs_dock_events VALUES (1001, 'kanal-a', '{\"typ\":\"chat\"}'::jsonb)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let bus = ObsDockBus::neu(pool.clone());
+        bus.wasserstand_sicherstellen(&pool).await.unwrap();
+        let mut dock = bus.anmelden("kanal-a");
+        let nachlauf: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM obs_dock_events WHERE channel_id = 'kanal-a' ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(nachlauf, vec![1001]);
+        let mut buch = Auslieferung::neu(None);
+        buch.untergrenze_setzen(nachlauf[0] - 1);
+        for id in nachlauf {
+            buch.nachlauf(id);
+        }
+
+        sqlx::query(
+            "INSERT INTO obs_dock_events VALUES
+                 (1002, 'kanal-a', '{\"typ\":\"chat\"}'::jsonb),
+                 (5000, 'kanal-a', '{\"typ\":\"chat\"}'::jsonb)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("SELECT pg_notify($1, $2)")
+            .bind(NOTIFY_KANAL)
+            .bind(r#"{"channel_id":"kanal-a","id":1002}"#)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mut listener = bus.listener_aufbauen(&pool).await.unwrap();
+        let mut gesendet = Vec::new();
+        while let Ok(rahmen) = dock.rahmen.try_recv() {
+            assert!(rahmen.json.is_some());
+            if buch.live(rahmen.id) {
+                gesendet.push(rahmen.id);
+            }
+        }
+        assert_eq!(gesendet, vec![1002, 5000]);
+        assert_eq!(bus.wasserstand.load(Ordering::SeqCst), 5000);
+
+        sqlx::query(
+            "INSERT INTO obs_dock_events VALUES (5001, 'kanal-a', '{\"typ\":\"chat\"}'::jsonb)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("SELECT pg_notify($1, $2)")
+            .bind(NOTIFY_KANAL)
+            .bind(r#"{"channel_id":"kanal-a","id":5001}"#)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let hinweis = loop {
+            let hinweis = listener.recv().await.unwrap();
+            if hinweis.payload() == r#"{"channel_id":"kanal-a","id":5001}"# {
+                break hinweis;
+            }
+        };
+        bus.benachrichtigung_verarbeiten(&pool, hinweis.payload())
+            .await
+            .unwrap();
+        let live = dock.rahmen.try_recv().unwrap();
+        assert_eq!(live.id, 5001);
+        assert!(buch.live(live.id));
+        assert!(dock.rahmen.try_recv().is_err());
+        drop(listener);
+
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     /// Der Nachzug nach einem Listener-Abriss darf nicht am Abfragedeckel
