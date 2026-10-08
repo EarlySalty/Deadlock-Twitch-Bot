@@ -1,26 +1,9 @@
-\set ON_ERROR_STOP on
-DO $$ BEGIN
-    IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='twitchcollector') THEN
-        CREATE ROLE twitchcollector LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-    END IF;
-END $$;
-ALTER ROLE twitchcollector LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-ALTER ROLE twitchcollector PASSWORD NULL;
-ALTER ROLE twitchcollector RESET ALL;
-ALTER ROLE twitchcollector IN DATABASE twitch_analytics SET search_path=pg_catalog,public;
-GRANT CONNECT ON DATABASE twitch_analytics TO twitchcollector;
-GRANT USAGE ON SCHEMA public TO twitchcollector;
-REVOKE CREATE ON SCHEMA public FROM twitchcollector;
-REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM twitchcollector;
-REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM twitchcollector;
-DO $$
-DECLARE membership record;
-BEGIN
-    FOR membership IN SELECT granted.rolname FROM pg_auth_members m
-        JOIN pg_roles granted ON granted.oid=m.roleid
-        JOIN pg_roles member ON member.oid=m.member WHERE member.rolname='twitchcollector'
-    LOOP EXECUTE format('REVOKE %I FROM twitchcollector',membership.rolname); END LOOP;
-END $$;
+CREATE TABLE category_native_runtime (
+    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    heartbeat_at timestamptz NOT NULL,
+    details jsonb NOT NULL
+);
+
 CREATE OR REPLACE FUNCTION category_prepare_partitions() RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 DECLARE d date; n text; role_name text;
@@ -73,7 +56,7 @@ BEGIN
             EXECUTE format('GRANT EXECUTE ON FUNCTION public.category_prepare_partitions(),public.category_lock_chat_rooms(text[]),public.category_redact_chat_event(text,text,text,timestamptz) TO %I',role_name);
         END IF;
     END LOOP;
-    IF to_regclass('public.category_native_runtime') IS NOT NULL THEN
+    IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='twitchbot') THEN
         GRANT SELECT,INSERT,UPDATE ON TABLE public.category_native_runtime TO twitchbot;
     END IF;
     IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='twitchdash') THEN

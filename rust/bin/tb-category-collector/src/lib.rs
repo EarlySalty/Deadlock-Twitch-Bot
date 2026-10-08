@@ -1,12 +1,8 @@
-include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
-
-mod config;
 mod metadata;
 
 use chrono::{DateTime, Utc};
-use config::Config;
 use serde_json::{json, Value};
-use sqlx::{postgres::PgPoolOptions, Connection, PgConnection, PgPool};
+use sqlx::{Connection, PgConnection, PgPool};
 use std::{
     collections::HashMap,
     sync::{
@@ -17,9 +13,9 @@ use std::{
 };
 use tb_analytics::category;
 use tb_monitoring::anonymous_chat::{command_channel, AnonymousChat, ReadEvent, ReadStats};
-use tb_transport_twitch::{HelixClient, HelixConfig};
+use tb_transport_twitch::HelixClient;
 use tokio::{
-    sync::{mpsc, Mutex, RwLock},
+    sync::{mpsc, watch, Mutex, RwLock},
     task::JoinSet,
 };
 
@@ -35,69 +31,121 @@ struct Counters {
     details: Mutex<Value>,
 }
 
-#[tokio::main(worker_threads = 2)]
-async fn main() -> Result<(), Error> {
-    if print_build_revision() {
-        return Ok(());
+pub async fn run(pool: PgPool, helix: Arc<HelixClient>, mut stop: watch::Receiver<bool>) {
+    let started_at = Utc::now();
+    let identity = json!({"runtime":"tb-bot","process_id":std::process::id(),
+        "process_started_at":started_at,"lease_id":format!("{}-{}",std::process::id(),started_at.timestamp_micros())});
+    while !*stop.borrow() {
+        let outcome = tokio::select! {
+            biased;
+            _ = stopped(&mut stop) => return,
+            result = acquire_lease(&pool, &identity) => result,
+        };
+        match outcome {
+            Ok(mut leader) => {
+                tracing::info!(
+                    runtime = "tb-bot",
+                    "category native database lease acquired"
+                );
+                if let Err(error) =
+                    run_active(&pool, helix.clone(), &mut leader, stop.clone(), &identity).await
+                {
+                    tracing::error!(%error, runtime = "tb-bot", "category runtime stopped; retry pending");
+                }
+                if leader.ping().await.is_ok() {
+                    if let Err(error) = sqlx::query("UPDATE category_collector_status SET details=details || '{\"native_lease_active\":false,\"lease_state\":\"inactive\"}'::jsonb WHERE singleton AND details->>'runtime'='tb-bot'")
+                        .execute(&mut leader).await {
+                        tracing::warn!(%error, "category lease status shutdown failed");
+                    }
+                }
+                if let Err(error) = leader.close().await {
+                    tracing::warn!(%error, "category database lease close failed");
+                }
+            }
+            Err(error) => tracing::warn!(%error, "category lease unavailable; bot continues"),
+        }
+        tokio::select! {
+            biased;
+            _ = stopped(&mut stop) => return,
+            _ = tokio::time::sleep(Duration::from_secs(5)) => {},
+        }
     }
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .with_target(false)
-        .init();
-    let args: Vec<_> = std::env::args().collect();
-    if args.len() != 3 || args[1] != "--config" {
-        return Err("usage: tb-category-collector --config /absolute/config.json".into());
+}
+
+async fn stopped(stop: &mut watch::Receiver<bool>) {
+    loop {
+        if *stop.borrow_and_update() || stop.changed().await.is_err() {
+            return;
+        }
     }
-    let config = Arc::new(Config::load(std::path::Path::new(&args[2]))?);
-    let credentials = config.credentials().await?;
-    let helix = Arc::new(HelixClient::new(HelixConfig::new(
-        credentials.client_id.clone(),
-        credentials.client_secret.clone(),
-    ))?);
-    drop(credentials);
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .acquire_timeout(Duration::from_secs(10))
-        .after_connect(|connection, _| {
-            Box::pin(async move {
-                sqlx::query("SET timezone='UTC';")
-                    .execute(&mut *connection)
-                    .await?;
-                sqlx::query("SET statement_timeout='30s';")
-                    .execute(&mut *connection)
-                    .await?;
-                Ok(())
-            })
-        })
-        .connect(&config.database_url)
-        .await?;
-    let mut leader = PgConnection::connect(&config.database_url).await?;
-    let elected: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(782363991806)")
-        .fetch_one(&mut leader)
-        .await?;
-    if !elected {
-        return Err("another category collector already owns the database lease".into());
+}
+
+async fn acquire_lease(pool: &PgPool, identity: &Value) -> Result<PgConnection, Error> {
+    category::collector_config(pool).await?;
+    let mut leader = pool.acquire().await?.detach();
+    let mut waiting = false;
+    loop {
+        let elected: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(782363991806)")
+            .fetch_one(&mut leader)
+            .await?;
+        sqlx::query("INSERT INTO category_native_runtime(singleton,heartbeat_at,details) VALUES(true,now(),$1)
+            ON CONFLICT(singleton) DO UPDATE SET heartbeat_at=excluded.heartbeat_at,details=excluded.details")
+            .bind(json!({"process_id":identity["process_id"],"process_started_at":identity["process_started_at"],
+                "lease_id":identity["lease_id"],"lease_state":if elected { "active" } else { "waiting" }}))
+            .execute(&mut leader).await?;
+        if elected {
+            return Ok(leader);
+        }
+        if !waiting {
+            tracing::info!(
+                runtime = "tb-bot",
+                "category lease held by existing collector; waiting for takeover"
+            );
+            waiting = true;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
-    // Migrations are operator-owned. Missing schema fails startup, never creates
-    // unrelated tables or upgrades the bot's grants.
-    sqlx::query("SELECT category_prepare_partitions()")
-        .execute(&pool)
-        .await?;
+}
+
+async fn monitor_lease(leader: &mut PgConnection) -> Result<(), Error> {
+    loop {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        leader.ping().await?;
+        sqlx::query("UPDATE category_native_runtime SET heartbeat_at=now() WHERE singleton")
+            .execute(&mut *leader)
+            .await?;
+    }
+}
+
+async fn run_active(
+    pool: &PgPool,
+    helix: Arc<HelixClient>,
+    leader: &mut PgConnection,
+    mut stop: watch::Receiver<bool>,
+    identity: &Value,
+) -> Result<(), Error> {
     let game_id = helix
         .search_category_id("Deadlock")
         .await?
         .ok_or("Deadlock category unavailable")?;
     let roster: Roster = Arc::new(RwLock::new(HashMap::new()));
-    let settings = category::collector_config(&pool).await?;
+    let settings = category::collector_config(pool).await?;
+    let previous: Option<(bool, bool)> = sqlx::query_as("SELECT COALESCE((details->>'raw_paused')::boolean,FALSE),
+        COALESCE((details->>'disk_paused')::boolean,FALSE) FROM category_collector_status WHERE singleton")
+        .fetch_optional(pool).await?;
+    let previous = previous.unwrap_or((false, false));
     let counters = Arc::new(Counters {
-        raw_paused: AtomicBool::new(true),
-        disk_paused: AtomicBool::new(true),
+        raw_paused: AtomicBool::new(previous.0),
+        disk_paused: AtomicBool::new(previous.1),
         ..Counters::default()
     });
     *counters.details.lock().await = json!({"game_id":game_id,"mode":"anonymous_read_only","desired_channels":0,
         "poll_seconds":settings.poll_seconds,"retention_days":null,"preserve_raw_data":true,
         "raw_budget_bytes":settings.raw_budget_bytes,"media_enabled":settings.media_enabled,
-        "language_detector":category::DETECTOR,"discovery_state":"starting"});
+        "language_detector":category::DETECTOR,"discovery_state":"starting","runtime":"tb-bot",
+        "process_id":identity["process_id"],"process_started_at":identity["process_started_at"],"lease_id":identity["lease_id"],
+        "native_lease_active":true,"lease_state":"active"});
+    check_storage(pool, &counters, 0, true).await?;
     let (chat, events) = AnonymousChat::start(20_000);
     let chat = Arc::new(chat);
     let mut tasks: JoinSet<Result<(), Error>> = JoinSet::new();
@@ -121,43 +169,29 @@ async fn main() -> Result<(), Error> {
         counters.clone(),
         game_id,
     ));
-    tasks.spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_secs(10)).await;
-            leader.ping().await?;
-        }
-        #[allow(unreachable_code)]
-        Ok(())
-    });
-    let mut writer = tokio::spawn(write_chat(pool, events, roster, counters));
+    let mut writer = tokio::spawn(write_chat(pool.clone(), events, roster, counters));
     tracing::info!(
+        runtime = "tb-bot",
         "category collector started: anonymous chat, public Helix reads, no outbound actions"
     );
-    let outcome: Result<(), Error> = tokio::select! {
-        _=shutdown_signal()=>Ok(()),
-        result=tasks.join_next()=>Err(format!("collector worker exited: {result:?}").into()),
-        result=&mut writer=>Err(format!("chat storage worker exited: {result:?}").into()),
+    let (outcome, writer_finished, lease_lost): (Result<(), Error>, bool, bool) = tokio::select! {
+        biased;
+        _ = stopped(&mut stop) => (Ok(()), false, false),
+        result = tasks.join_next() => (Err(format!("collector worker exited: {result:?}").into()), false, false),
+        result = &mut writer => (Err(format!("chat storage worker exited: {result:?}").into()), true, false),
+        result = monitor_lease(leader) => (result, false, true),
     };
     tasks.shutdown().await;
     drop(chat);
-    if !writer.is_finished() {
-        match tokio::time::timeout(Duration::from_secs(20), &mut writer).await {
-            Ok(result) => {
-                result??;
-            }
-            Err(_) => {
-                writer.abort();
-                return Err("chat drain exceeded shutdown deadline".into());
-            }
+    if !writer_finished {
+        if lease_lost {
+            writer.abort();
+            let _ = writer.await;
+        } else {
+            writer.await??;
         }
     }
     outcome
-}
-
-async fn shutdown_signal() {
-    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .expect("SIGTERM handler");
-    tokio::select! { _=tokio::signal::ctrl_c()=>{}, _=term.recv()=>{} }
 }
 
 async fn discover(
@@ -175,6 +209,7 @@ async fn discover(
         timer.tick().await;
         let settings = category::collector_config(&pool).await?;
         let seconds = settings.poll_seconds as u64;
+        counters.details.lock().await["poll_seconds"] = json!(settings.poll_seconds);
         if timer.period().as_secs() != seconds {
             timer = tokio::time::interval_at(
                 tokio::time::Instant::now() + Duration::from_secs(seconds),
@@ -313,61 +348,62 @@ async fn flush(
 async fn maintenance(pool: PgPool, counters: Arc<Counters>) -> Result<(), Error> {
     let mut timer = tokio::time::interval(Duration::from_secs(30));
     timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut iteration = 0u64;
-    let mut last_paused = None;
+    let mut iteration = 1u64;
     loop {
         timer.tick().await;
-        let settings = category::collector_config(&pool).await?;
-        let bytes = category::raw_storage_bytes(&pool).await?;
-        // PostgreSQL is on this host. Measure its filesystem, not process RSS.
-        // An unavailable measurement pauses ingestion rather than guessing safety.
-        let free = nix::sys::statvfs::statvfs("/var/lib/postgresql")
-            .ok()
-            .map(|disk| disk.blocks_available().saturating_mul(disk.fragment_size()));
-        let (raw_paused, disk_paused, warning) = storage_state(bytes, &settings, free);
-        // A pause can span UTC midnight. Ensure today's partition exists before
-        // releasing either writer, not up to ten minutes after collection resumes.
-        if partitions_due(
-            counters.disk_paused.load(Ordering::Relaxed),
-            disk_paused,
-            iteration,
-        ) {
-            sqlx::query("SELECT category_prepare_partitions()")
-                .execute(&pool)
-                .await?;
-        }
-        counters.raw_paused.store(raw_paused, Ordering::Relaxed);
-        counters.disk_paused.store(disk_paused, Ordering::Relaxed);
-        if last_paused != Some((raw_paused, disk_paused)) {
-            tracing::info!(
-                raw_paused,
-                disk_paused,
-                "category storage state changed; archive unchanged"
-            );
-            last_paused = Some((raw_paused, disk_paused));
-        }
-        {
-            let mut status = counters.details.lock().await;
-            status["raw_bytes"] = json!(bytes);
-            status["raw_budget_bytes"] = json!(settings.raw_budget_bytes);
-            status["free_disk_bytes"] = json!(free);
-            status["min_free_bytes"] = json!(settings.min_free_bytes);
-            status["storage_warning"] = json!(warning);
-            status["storage_checked_at"] = json!(Utc::now());
-            status["raw_paused"] = json!(raw_paused);
-            status["disk_paused"] = json!(disk_paused);
-            status["retention_days"] = Value::Null;
-            status["preserve_raw_data"] = json!(true);
-            status["poll_seconds"] = json!(settings.poll_seconds);
-            status["media_enabled"] = json!(settings.media_enabled);
-        }
-        // Free-space protection also covers new snapshot/media writes. Existing
-        // aggregates and partitions are retained, never pruned to make room.
-        if !disk_paused {
+        check_storage(&pool, &counters, iteration, true).await?;
+        if !counters.disk_paused.load(Ordering::Relaxed) {
             category::flush_rollups(&pool, 2000).await?;
         }
         iteration += 1;
     }
+}
+
+async fn check_storage(
+    pool: &PgPool,
+    counters: &Counters,
+    iteration: u64,
+    hysteresis: bool,
+) -> Result<(), Error> {
+    let settings = category::collector_config(pool).await?;
+    let bytes = category::raw_storage_bytes(pool).await?;
+    let free = nix::sys::statvfs::statvfs("/var/lib/postgresql")
+        .ok()
+        .map(|disk| disk.blocks_available().saturating_mul(disk.fragment_size()));
+    let previous = (
+        counters.raw_paused.load(Ordering::Relaxed),
+        counters.disk_paused.load(Ordering::Relaxed),
+    );
+    let (raw_paused, disk_paused, warning) =
+        storage_state(bytes, &settings, free, previous, hysteresis);
+    if partitions_due(previous.1, disk_paused, iteration) {
+        sqlx::query("SELECT category_prepare_partitions()")
+            .execute(pool)
+            .await?;
+    }
+    counters.raw_paused.store(raw_paused, Ordering::Relaxed);
+    counters.disk_paused.store(disk_paused, Ordering::Relaxed);
+    if previous != (raw_paused, disk_paused) {
+        tracing::info!(
+            raw_paused,
+            disk_paused,
+            "category storage state changed; archive unchanged"
+        );
+    }
+    let mut status = counters.details.lock().await;
+    status["raw_bytes"] = json!(bytes);
+    status["raw_budget_bytes"] = json!(settings.raw_budget_bytes);
+    status["free_disk_bytes"] = json!(free);
+    status["min_free_bytes"] = json!(settings.min_free_bytes);
+    status["storage_warning"] = json!(warning);
+    status["storage_checked_at"] = json!(Utc::now());
+    status["raw_paused"] = json!(raw_paused);
+    status["disk_paused"] = json!(disk_paused);
+    status["retention_days"] = Value::Null;
+    status["preserve_raw_data"] = json!(true);
+    status["poll_seconds"] = json!(settings.poll_seconds);
+    status["media_enabled"] = json!(settings.media_enabled);
+    Ok(())
 }
 
 fn partitions_due(was_disk_paused: bool, disk_paused: bool, iteration: u64) -> bool {
@@ -378,9 +414,24 @@ fn storage_state(
     bytes: i64,
     settings: &category::CollectorConfig,
     free: Option<u64>,
+    previous: (bool, bool),
+    hysteresis: bool,
 ) -> (bool, bool, bool) {
-    let disk_paused = free.is_none_or(|available| available < settings.min_free_bytes as u64);
-    let raw_paused = !settings.enabled || disk_paused || bytes >= settings.raw_budget_bytes;
+    let reserve = settings.min_free_bytes as u64;
+    let resume_reserve = reserve.saturating_add((reserve / 5).max(1024 * 1024 * 1024));
+    let disk_paused = free.is_none_or(|available| {
+        available
+            < if hysteresis && previous.1 {
+                resume_reserve
+            } else {
+                reserve
+            }
+    });
+    let budget_paused = bytes >= settings.raw_budget_bytes
+        || (hysteresis
+            && previous.0
+            && bytes > settings.raw_budget_bytes - settings.raw_budget_bytes / 10);
+    let raw_paused = !settings.enabled || disk_paused || budget_paused;
     let warning = disk_paused
         || bytes as f64 >= settings.raw_budget_bytes as f64 * 0.8
         || free.is_some_and(|available| {
@@ -436,11 +487,26 @@ mod storage_tests {
     #[test]
     fn storage_limits_pause_ingestion_without_requesting_deletion() {
         let cfg = settings();
-        assert_eq!(storage_state(0, &cfg, Some(1000)), (false, false, false));
-        assert_eq!(storage_state(800, &cfg, Some(1000)), (false, false, true));
-        assert_eq!(storage_state(1000, &cfg, Some(1000)), (true, false, true));
-        assert_eq!(storage_state(0, &cfg, Some(99)), (true, true, true));
-        assert_eq!(storage_state(0, &cfg, None), (true, true, true));
+        assert_eq!(
+            storage_state(0, &cfg, Some(1000), (false, false), false),
+            (false, false, false)
+        );
+        assert_eq!(
+            storage_state(800, &cfg, Some(1000), (false, false), false),
+            (false, false, true)
+        );
+        assert_eq!(
+            storage_state(1000, &cfg, Some(1000), (false, false), false),
+            (true, false, true)
+        );
+        assert_eq!(
+            storage_state(0, &cfg, Some(99), (false, false), false),
+            (true, true, true)
+        );
+        assert_eq!(
+            storage_state(0, &cfg, None, (false, false), false),
+            (true, true, true)
+        );
     }
 
     #[test]
@@ -452,10 +518,23 @@ mod storage_tests {
     }
 
     #[test]
+    fn pauses_resume_only_after_the_recovery_threshold() {
+        let mut cfg = settings();
+        assert!(storage_state(901, &cfg, Some(10_000_000_000), (true, false), true).0);
+        assert!(!storage_state(900, &cfg, Some(10_000_000_000), (true, false), true).0);
+        let gib = 1024 * 1024 * 1024;
+        cfg.min_free_bytes = 10 * gib;
+        assert!(storage_state(0, &cfg, Some(11 * gib as u64), (true, true), true).1);
+        assert!(!storage_state(0, &cfg, Some(12 * gib as u64), (true, true), true).1);
+        assert!(!storage_state(0, &cfg, Some(11 * gib as u64), (false, false), true).1);
+    }
+
+    #[test]
     fn disabled_collection_does_not_accept_inflight_chat() {
         let mut cfg = settings();
         cfg.enabled = false;
-        let (raw_paused, disk_paused, _) = storage_state(0, &cfg, Some(1000));
+        let (raw_paused, disk_paused, _) =
+            storage_state(0, &cfg, Some(1000), (false, false), false);
         assert!(raw_paused);
         assert!(!disk_paused);
     }

@@ -18,7 +18,6 @@ Erlaubte Restart-Ziele:
   twitch-bot
   twitch-audit
   coaching-watch
-  category-collector
   all
 EOF
 }
@@ -31,7 +30,6 @@ pruefen() {
     deadlock-twitch-bot-rust
     deadlock-twitch-dashboard-rust
     deadlock-twitch-stream-coaching-watch
-    tb-category-collector
   )
 
   if ! current_target=$(readlink -e -- "$current"); then
@@ -157,14 +155,10 @@ add_restart_target() {
     twitch-audit|coaching-watch|twitch-coaching-watch|deadlock-twitch-stream-coaching-watch|deadlock-twitch-stream-coaching-watch.service)
       canonical="coaching-watch"
       ;;
-    category-collector|tb-category-collector|tb-category-collector.service)
-      canonical="category-collector"
-      ;;
     all)
       add_restart_target twitch-dashboard
       add_restart_target twitch-bot
       add_restart_target coaching-watch
-      if [[ -f /etc/systemd/system/tb-category-collector.service ]]; then add_restart_target category-collector; fi
       return
       ;;
     *)
@@ -259,19 +253,25 @@ if [[ -L "$src/.git" || ! -d "$src/.git" ]]; then
   exit 1
 fi
 
+native_expected=0
+if [[ -f "$src/rust/bin/tb-category-collector/src/lib.rs" ]]; then
+  native_expected=1
+  if [[ -z "${restart_seen[twitch-bot]:-}" ]] &&
+     [[ $(systemctl show tb-category-collector.service --property=LoadState --value) != not-found ]]; then
+    printf 'Die Umschaltung des bisherigen Sammlers benötigt --restart twitch-bot.\n' >&2
+    exit 1
+  fi
+fi
 required_artifacts=(
   rust/target/release/tb-bot
   rust/target/release/tb-dashboard
   rust/target/release/tb-stream-audit
   rust/target/release/tb-config-check
   rust/target/release/tb-llm-usage-recover
-  bot/analytics/dashboard_v2/dist
+  bot/dashboard_v2/dist
   bot/admin_dashboard/dist
   website/dist
 )
-if [[ -f "$src/rust/bin/tb-category-collector/Cargo.toml" ]]; then
-  required_artifacts+=(rust/target/release/tb-category-collector)
-fi
 if [[ -f "$src/rust/bin/tb-category-collector/src/bin/tb-twitch-watchdog.rs" ]]; then
   required_artifacts+=(rust/target/release/tb-twitch-watchdog)
 fi
@@ -605,6 +605,37 @@ else
     "host=$tcp_address port=5432 dbname=twitch_analytics user=twitchanalysis passfile=/dev/null connect_timeout=5 sslmode=disable" \
     -v ON_ERROR_STOP=1 -At -c 'SELECT 1'
 fi
+if [[ $native_expected -eq 1 ]]; then
+  local_psql postgres twitch_analytics postgres <<'SQL'
+DO $verification$
+DECLARE r text; t record;
+BEGIN
+    IF to_regclass('public.category_native_runtime') IS NULL OR
+        to_regclass('public.category_watchdog_storage_notifications') IS NULL OR
+        NOT EXISTS(SELECT FROM _sqlx_migrations WHERE version=20261008160000 AND success) OR
+        NOT EXISTS(SELECT FROM _sqlx_migrations WHERE version=20261008161000 AND success) THEN
+        RAISE EXCEPTION 'Native Sammlermigrationen fehlen';
+    END IF;
+    FOR t IN SELECT oid FROM pg_class WHERE oid='public.category_chat_messages'::regclass OR
+        oid IN(SELECT inhrelid FROM pg_inherits WHERE inhparent='public.category_chat_messages'::regclass) LOOP
+        IF has_table_privilege('twitchbot',t.oid,'UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') THEN
+            RAISE EXCEPTION 'Bot besitzt unzulässige Rohchatrechte';
+        END IF;
+        FOREACH r IN ARRAY ARRAY['twitchdash','twitchlegacy'] LOOP
+            IF has_table_privilege(r,t.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') THEN
+                RAISE EXCEPTION 'Fremder Rohchatzugriff für %',r;
+            END IF;
+        END LOOP;
+    END LOOP;
+    IF NOT has_table_privilege('twitchbot','public.category_chat_messages','SELECT') OR
+        NOT has_table_privilege('twitchbot','public.category_chat_messages','INSERT') THEN
+        RAISE EXCEPTION 'Bot besitzt keinen nativen Rohchatzugang';
+    END IF;
+END
+$verification$;
+SQL
+fi
+
 echo "Liveprüfung bestanden: Reload, rollenbegrenzter Peerzugang, Ablehnung und Rechte-Metadaten."
 verification_pending=0
 
@@ -614,8 +645,79 @@ install -m 0644 "$candidate/ops/systemd/twitch-llm-usage-recover.toml" /etc/dead
 install -m 0644 "$candidate/ops/systemd/twitch-llm-usage-audit.toml" /etc/deadlock/twitch-llm-usage-audit.toml
 install -m 0644 "$candidate/ops/systemd/deadlock-twitch-llm-usage-recover.service" /etc/systemd/system/deadlock-twitch-llm-usage-recover.service
 install -m 0644 "$candidate/ops/systemd/deadlock-twitch-llm-usage-recover.timer" /etc/systemd/system/deadlock-twitch-llm-usage-recover.timer
+if [[ $native_expected -eq 1 ]]; then
+  install -m 0644 "$candidate/ops/systemd/deadlock-twitch-bot-watchdog.service" /etc/systemd/system/deadlock-twitch-bot-watchdog.service
+  install -m 0644 "$candidate/ops/systemd/deadlock-twitch-bot-watchdog.timer" /etc/systemd/system/deadlock-twitch-bot-watchdog.timer
+  if [[ ! -e /etc/deadlock-twitch/bot-watchdog.conf ]]; then
+    install -m 0644 "$candidate/ops/systemd/deadlock-twitch-bot-watchdog.conf" /etc/deadlock-twitch/bot-watchdog.conf
+  fi
+fi
 systemctl daemon-reload
 systemctl enable --now deadlock-twitch-llm-usage-recover.timer
+
+native_cutover() {
+  local pid ready=0 active=0 cutoff poll attempts lease_id
+  pid=$(systemctl show deadlock-twitch-bot-rust.service --property=MainPID --value)
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || { printf 'Bot hat keine gültige Prozess-ID.\n' >&2; return 1; }
+  for ((attempt=0; attempt<90; attempt++)); do
+    lease_id=$(local_psql postgres twitch_analytics postgres -c "SELECT details->>'lease_id' FROM category_native_runtime WHERE singleton AND heartbeat_at > now()-interval '30 seconds' AND details->>'process_id'='$pid' AND details->>'lease_state' IN('waiting','active')")
+    if [[ "$lease_id" =~ ^[0-9]+-[0-9]+$ ]]; then
+      ready=1
+      break
+    fi
+    sleep 1
+  done
+  [[ $ready -eq 1 ]] || { printf 'Native Bereitschaft fehlt; bisheriger Sammler und Zugänge bleiben unverändert.\n' >&2; return 1; }
+  cutoff=$(local_psql postgres twitch_analytics postgres -c 'SELECT now()')
+  poll=$(local_psql postgres twitch_analytics postgres -c 'SELECT poll_seconds FROM category_collector_config WHERE singleton')
+  [[ "$poll" =~ ^[0-9]+$ && $poll -ge 15 && $poll -le 3600 ]] || { printf 'Ungültiges Messintervall.\n' >&2; return 1; }
+  if [[ $(systemctl show tb-category-collector.service --property=LoadState --value) != not-found ]]; then
+    systemctl stop tb-category-collector.service
+    systemctl disable tb-category-collector.service
+    if systemctl is-active --quiet tb-category-collector.service; then
+      printf 'Bisheriger Sammler ist weiterhin aktiv; Umschaltung gestoppt.\n' >&2
+      return 1
+    fi
+  fi
+  attempts=$((poll * 3 + 90))
+  for ((attempt=0; attempt<attempts; attempt++)); do
+    if [[ $(local_psql postgres twitch_analytics postgres -v cutoff="$cutoff" -v pid="$pid" -v lease_id="$lease_id" <<'SQL'
+SELECT EXISTS(SELECT FROM category_collector_status s JOIN category_native_runtime n USING(singleton)
+    WHERE s.heartbeat_at > now()-interval '30 seconds' AND n.heartbeat_at > now()-interval '30 seconds'
+    AND s.details->>'runtime'='tb-bot' AND s.details->>'process_id'=:'pid'
+    AND s.details->>'lease_id'=:'lease_id' AND n.details->>'lease_id'=:'lease_id'
+    AND s.details->>'native_lease_active'='true' AND n.details->>'lease_state'='active'
+    AND EXISTS(SELECT FROM category_collection_runs WHERE snapshot_at > :'cutoff'::timestamptz)
+    AND EXISTS(SELECT FROM category_stream_snapshots WHERE snapshot_at > :'cutoff'::timestamptz));
+SQL
+    ) == t ]]; then
+      active=1
+      break
+    fi
+    sleep 1
+  done
+  [[ $active -eq 1 ]] || { printf 'Native Messungen nicht belegt; alte Dateien und Zugänge bleiben erhalten. Alten Sammler nicht mit dem neuen Release starten.\n' >&2; return 1; }
+  rm -f -- /etc/systemd/system/tb-category-collector.service \
+    /etc/systemd/system/tb-category-collector-failure.service \
+    /etc/deadlock-twitch/category-collector.json \
+    /etc/credstore.encrypted/deadlock-category-twitch.cred \
+    /usr/local/libexec/provision-category-credentials \
+    /usr/local/libexec/tb-category-notify.py \
+    /usr/local/libexec/install-category-collector
+  systemctl daemon-reload
+  systemctl enable --now deadlock-twitch-bot-watchdog.timer
+  systemctl start deadlock-twitch-bot-watchdog.service
+  printf 'Native Sammlung belegt: PID=%s Lease=%s neue Messungen nach %s.\n' "$pid" "$lease_id" "$cutoff"
+}
+
+if [[ -n "${restart_seen[twitch-bot]:-}" ]]; then
+  systemctl restart deadlock-twitch-bot-rust.service
+  if [[ $native_expected -eq 1 ]] &&
+     { [[ $(systemctl show tb-category-collector.service --property=LoadState --value) != not-found ]] ||
+       [[ -e /etc/deadlock-twitch/category-collector.json ]]; }; then
+    native_cutover
+  fi
+fi
 
 for target in "${restart_targets[@]}"; do
   case "$target" in
@@ -623,13 +725,9 @@ for target in "${restart_targets[@]}"; do
       systemctl restart deadlock-twitch-dashboard-rust.service
       ;;
     twitch-bot)
-      systemctl restart deadlock-twitch-bot-rust.service
       ;;
     coaching-watch)
       systemctl restart deadlock-twitch-stream-coaching-watch.service
-      ;;
-    category-collector)
-      systemctl restart tb-category-collector.service
       ;;
   esac
 done

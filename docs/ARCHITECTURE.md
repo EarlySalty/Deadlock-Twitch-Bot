@@ -47,6 +47,16 @@ Dashboard-only-Beispiele:
 - Bot/Internal API Clients
 - Dashboard-Startpfad und Routenregistrierung
 
+## Nativer Kategoriesammler im Rust-Bot
+
+Der Deadlock-Kategoriesammler gehört zum `tb-bot`-Prozess (`deadlock-twitch-bot-rust.service`). Seine Rust-Bibliothek führt eigene Tasks mit dem PostgreSQL-Pool, Helix-Client und geschützten Zugangspfad des Bots aus. Ein Leader-Lock verhindert doppelte native Sammlung. Anonymes `justinfan`-IRC nutzt die vorhandene Lesekomponente ohne Sende- oder Moderationsschnittstelle; der Sammler übernimmt dafür nicht das Bot-Konto.
+
+Das Dashboard liest den bestehenden Kategoriebericht aus PostgreSQL. Speicherpausen lassen den Archivbestand bestehen und werden von veralteten Heartbeats oder fehlenden aktuellen Messungen unterschieden. Speicherhysterese trennt Pause und Wiederaufnahme. Es gibt keine Archiv-Alterslöschung im nativen Umbau.
+
+`tb-twitch-watchdog` bleibt das bestehende separate kurze Prüfprogramm, kein Sammlerprozess. Bei der Umschaltung zuerst den Bot bereitstellen, dann den alten Sammlerdienst stoppen und native Snapshots nachweisen. Externe Unit, Credential und Bootstrap werden nach dem Live-Nachweis entfernt. Migrationen sind für diese Umschaltung vorab manuell als `postgres` einzuspielen und korrekt in `_sqlx_migrations` zu führen. Zusätzlich startet der Deploy-Wrapper `deadlock-twitch-migrate.service` und prüft den angewandten Sammlerstand vor dem Neustart. Einzelheiten stehen in [category-collector.md](category-collector.md).
+
+Die folgenden Python-Startpfade beschreiben die Legacy-Trennung von Bot und Dashboard, nicht die Rust-Laufzeit des Kategoriesammlers.
+
 ## Startpfade
 
 Bot service:

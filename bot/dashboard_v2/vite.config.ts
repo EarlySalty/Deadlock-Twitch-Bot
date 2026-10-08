@@ -3,14 +3,12 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
 
-// https://vite.dev/config/
 export default defineConfig(({ mode }) => {
   const isPreviewMode = mode === 'preview'
 
   return {
     plugins: [react(), tailwindcss()].flat(),
     resolve: {
-      // Hooks und Renderer müssen auch bei verlinkten Abhängigkeiten dieselbe React-Instanz verwenden.
       dedupe: ['react', 'react-dom'],
       alias: {
         '@': path.resolve(__dirname, './src'),
@@ -18,7 +16,7 @@ export default defineConfig(({ mode }) => {
     },
     base: isPreviewMode ? '/' : '/twitch/dashboard-v2/',
     build: {
-      outDir: isPreviewMode ? './dist-preview' : '../analytics/dashboard_v2/dist',
+      outDir: isPreviewMode ? './dist-preview' : './dist',
       emptyOutDir: true,
       chunkSizeWarningLimit: 1000,
       rollupOptions: {
