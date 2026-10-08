@@ -15,6 +15,7 @@ Nachweismethode: Jede JSONL-Zeile wird geparst und jedes vorhandene Feld `messag
 | R09 Nebenläufigkeit | wf_b0f0e2fe-347 | agent-a3cb8641e6e6a68df.jsonl | gpt-6.1-sol | 33 | vollständig geprüft | 436a1a19984392e83e5a86eccd6e6771f6dabdfed5ced7637e026f20de8e619a |
 | R09 Fehlerbehandlung | wf_b0f0e2fe-347 | agent-a669cb6a850016ec9.jsonl | gpt-6.1-sol | 50 | vollständig geprüft | 4eba416e28f93496ffa504b5ef321a37485418eb369f957f52ab5b35da08f126 |
 | R09 Bauqualität | wf_b0f0e2fe-347 | agent-a88b3416857fc4d40.jsonl | gpt-6.1-sol | 57 | vollständig geprüft | 6a7f112fb981458d689446b19aa7ae4be33af08ebce572e21c203747e9f448e2 |
+| Aufgabenstand 3 | wf_0361a8c8-72a | agent-a4af41ddf98061ee5.jsonl | gpt-6.1-sol | 16 | vollständig geprüft | 37768c17bf83808ae7e2d115b28e40559df53df56b8378fd0db45ea9b0b7527a |
 
 ## Laufende Prüfungen
 

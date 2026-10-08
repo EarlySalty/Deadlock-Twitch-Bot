@@ -40,13 +40,16 @@ Der erste Inventar-Agent hat Sol im Transcript bestätigt. Seine drei Inventarar
 | Fix B01, Versuch 1 | wqpkes5zr | wf_6d010be4-da1 | W01-R09-errors-1 | Sitzung abgebrochen, kein Abschlussresultat; Worktree sauber erhalten |
 | Review W02, Wiederaufnahme | w1cnx43bt | wf_cdc4c5ac-9bb | DA01 und DA02: 14 Leseabschnitte, fünf Defektblicke, 70 Reviewer | mit neutraler nativer Reviewerrolle neu gestartet; Rollenfehler unten dokumentiert |
 | Fix B01, Versuch 2 | wb7i1seh3 | wf_b4f81318-dac | derselbe doppelt bestätigte B-Befund | frischer Sol-Fixer übernimmt vorhandenen Worktree; Merge und Deploy gesperrt |
+| Bauqualität W02 | wd8u0h36q | wf_67858741-57f | DA01 und DA02, je Reviewer und frischer Qualitätskritiker | läuft, ausschließlich Empfehlungen der Klasse C |
+| Skeptiker W02, Gruppe 1 | w97tmlx5i | wf_3b16d4aa-68e | OBS-Startfenster und Audit-Identität, je zwei unabhängige Skeptiker | läuft; noch keine Bestätigung oder Fixfreigabe |
+| Aufgabenstand, Ereignis 3 | wme4kuu61 | wf_0361a8c8-72a | TODO.md | abgeschlossen, Sol-Nachweis geprüft, keine Schemakonflikte |
 | Aufgabenstand | wost9hinu | wf_f46218a0-dd2 | TODO.md | beendet; informelle Eingangsmeldungen waren nicht schemavollständig, gültiges Ereignis gesamt-v1-s1.json nachgelegt |
 
 R09 ist in allen fünf Defektblickwinkeln sowie in Bauqualität samt frischer Kritik abgeschlossen. Ein bestätigter B-Befund ist in der Fixkette, ein A-Kandidat blieb mangels zweier Bestätigungen C. Die elf übrigen ursprünglich für W01 vorgesehenen Pakete werden abschnittsweise nachgeholt. W02 beginnt mit DA01 und DA02. Weitere 96 Pakete sind eingeplant, aber noch nicht als geprüft gewertet. Details: W01-WIEDERAUFNAHME.md und QUALITAET.md. Keine Fixfreigabe vor finalem Sol-Transcriptnachweis und Deduplizierung. Die Ops-Vorprüfung löste keinen Gate-Review und keinen Deploy aus.
 
 ## Dokumentationscheckpoints
 
-Der Artefaktbranch ist bis `c26b7cdfa4f3fd07b16ec7b5deacc0d912ff20a9` auf origin gesichert. Markdown-Inventar (`3be5cbe7`) und JSON-Manifest (`c26b7cdf`) sind getrennte Commits für kleine Gate-Diffs.
+Der Artefaktbranch ist bis `956e6097` auf origin gesichert. Der Push bestand den lokalen Secret- und RustSec-Scan. Markdown-Inventar (`3be5cbe7`) und JSON-Manifest (`c26b7cdf`) sind getrennte Commits. `956e6097` ergänzt die bestätigten R09-Befunde, ihre Qualitätskritik und die Wiederaufnahmen.
 
 Checkpoint 1 enthielt unter `6937e4a61f43a9c08174fa95c96f49da149ca859` nur drei Taskdokumente. Die ursprünglichen Worker stoppten vor dem Push: zunächst wegen fehlendem Modellzustand bei `ALLOW: no reviewable changes`, danach bei einer manuellen Hook-Vorprüfung wegen `GIT_EDITOR`. REVIEW.md dokumentiert den anschließend erfolgreichen normalen Push durch Astra und das Aufräumen ohne Umgebungsänderung. Bei Wiederaufnahme erneut geprüft: Der frühere Worktree ist entfernt, frischer Fetch zeigt `origin/main = 6937e4a61f43a9c08174fa95c96f49da149ca859`, und `git merge-base --is-ancestor 6937e4a61f43a9c08174fa95c96f49da149ca859 origin/main` endet mit Exit 0. Kein Deploy für diesen Dokumentationscheckpoint.
 
