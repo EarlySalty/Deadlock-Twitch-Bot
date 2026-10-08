@@ -33,6 +33,12 @@ Verdichtung durchgeführt, Ziel überschritten. Lesende Offline-Messung reproduz
 
 Kein Main-Push, Release, Migration, Deploy, produktiver Fünf-Fälle-Abgleich, Settlen oder ungemergter Cleanup. Nach tatsächlichem ALLOW übernimmt Eltern den bereits autorisierten vollständigen Abschluss gemäß [HANDOFF.md](HANDOFF.md).
 
+## Autorisierte Mergepakete
+
+Entscheidung2026-10-09: Paket1 übernimmt exakt die gesicherten eigenen Taskakten/Originalbelege, ohne Produktivquellen, in den bereits eigenen sauberen Stagingclone `/home/nathanael/repos/twitch-release-youtube-c5d0-20261008`. Eigener Hilfsbranch `docs/vod-youtube-belege-20261009-c5d0`, frisch geholte Basis `29e35550d9c00692d4af64fb30fecee4a985f953`. Gleicher vollständiger regulärer gpt-6.1-sol-Gate, danach bei ALLOW einzelner regulärer Main-Merge/Push; kein Produktivdeploy dieses Dokumentationspakets.
+
+Paket2 bleibt gesamter Produktivcode einschließlich Migration, Frontend und aller Tests im bestehenden Featurebranch. Nach Paket1 neues Main regulär integrieren, sämtliche eigenen Quellenhashes vergleichen, vollständigen verbleibenden Diff mit gleichem Gate prüfen. Vor beiden Aufrufen einmal offline messen; keine Auslassung/Filterung oder Gateänderung, keine neuen Threads/Implementierer. Hilfsbranch und Clone gehören dieser Elternsession; finales Cleanup erst nach eigenem Abschluss und dokumentierter Ancestor-Prüfung. Frühere Verdichtungsdiagnose oben ist der vor dieser Entscheidung gemessene Stand.
+
 ## Native Fixkontexte
 
 Alle folgenden Kontexte sind beendet oder unterbrochen. Nicht ungefragt wiederaufnehmen oder duplizieren. Eltern blieb Status-/Berichtsproduzent; Fixer erhielten nur die angegebenen Quellen-/Testbereiche.
