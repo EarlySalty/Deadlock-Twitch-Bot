@@ -164,7 +164,8 @@ async fn discord_admin_ohne_mode_cookie_hat_im_public_dashboard_partner_scope() 
         return;
     };
 
-    let auth_state = DashboardAuthState::new(pool.clone(), TEST_FERNET_KEY.to_string());
+    let auth_state = DashboardAuthState::new(pool.clone(), TEST_FERNET_KEY.to_string())
+        .with_admin_twitch_user_id(Some("42".to_string()));
     let session = auth_state
         .create_admin_session("discord-owner", "Discord Owner")
         .await
@@ -230,7 +231,8 @@ async fn partner_pfad_e2e_auth_status_scope_und_csrf() {
     .await
     .unwrap();
 
-    let auth_state = DashboardAuthState::new(pool.clone(), TEST_FERNET_KEY.to_string());
+    let auth_state = DashboardAuthState::new(pool.clone(), TEST_FERNET_KEY.to_string())
+        .with_admin_twitch_user_id(Some("42".to_string()));
     let session = auth_state
         .create_partner_session("earlysalty", "42", "EarlySalty")
         .await
