@@ -77,6 +77,8 @@ const EN: Record<string, string> = {
   'Die TikTok-Freigabe konnte nicht geladen werden. Bitte versuche es erneut.': 'TikTok approval could not be loaded. Please try again.',
   'Veröffentlichung auf': 'Publish to',
   'TikTok-Videovorschau': 'TikTok video preview',
+  'Vollbild': 'Fullscreen',
+  'Vollbild konnte nicht geöffnet werden. Nutze die Videosteuerung oder versuche es erneut.': 'Fullscreen could not be opened. Use the video controls or try again.',
   '{duration} Sekunden, für dieses Konto höchstens {max} Sekunden.': '{duration} seconds, up to {max} seconds for this account.',
   'Beschreibung für TikTok': 'TikTok description',
   'Wer darf den Clip sehen?': 'Who can see this clip?',

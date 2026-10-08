@@ -13,8 +13,8 @@ use serde_json::Value;
 
 use crate::layout::{LayoutBox, StreamerLayout, TARGET_HEIGHT, TARGET_WIDTH};
 
-const VIDEO_PRESET: &str = "medium";
-const VIDEO_CRF: &str = "18";
+const VIDEO_PRESET: &str = "veryfast";
+const VIDEO_CRF: &str = "20";
 const VIDEO_PROFILE: &str = "high";
 const PIXEL_FORMAT: &str = "yuv420p";
 const AUDIO_BITRATE: &str = "192k";
@@ -275,10 +275,12 @@ pub fn build_crop_filter(
 pub fn build_fallback_filter() -> String {
     format!(
         "[0:v]setsar=1,split=2[bg][fg];\
-         [bg]scale={tw}:{th}:force_original_aspect_ratio=increase,\
-         crop={tw}:{th},boxblur=20:1[blur];\
+         [bg]scale={bw}:{bh}:force_original_aspect_ratio=increase,\
+         crop={bw}:{bh},boxblur=5:1,scale={tw}:{th}[blur];\
          [fg]scale={tw}:{th}:force_original_aspect_ratio=decrease[front];\
          [blur][front]overlay=(W-w)/2:(H-h)/2[vout]",
+        bw = TARGET_WIDTH / 4,
+        bh = TARGET_HEIGHT / 4,
         tw = TARGET_WIDTH,
         th = TARGET_HEIGHT,
     )
@@ -332,6 +334,7 @@ impl VideoProcessor {
         layout: Option<&StreamerLayout>,
         ass: &str,
     ) -> Result<(), VideoProcessorError> {
+        let started = std::time::Instant::now();
         let input = std::fs::canonicalize(input_path)?;
         let output = if Path::new(output_path).is_absolute() {
             Path::new(output_path).to_path_buf()
@@ -375,6 +378,12 @@ impl VideoProcessor {
             }
             ensure_output(&render_temp.to_string_lossy())?;
             tokio::fs::rename(&render_temp, &output).await?;
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                preset = VIDEO_PRESET,
+                crf = VIDEO_CRF,
+                "social_media_render_complete"
+            );
             Ok(())
         }
         .await;
@@ -845,6 +854,13 @@ mod tests {
         .expect("Eigener FFmpeg-Prozess wurde beendet und geerntet");
         assert_eq!(std::fs::read(&output).unwrap(), b"complete");
         assert_eq!(std::fs::read(&untouched).unwrap(), b"untouched");
+    }
+
+    #[test]
+    fn fallback_blur_rechnet_klein_und_erhaelt_den_vordergrund() {
+        let filter = build_fallback_filter();
+        assert!(filter.contains("scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=5:1,scale=1080:1920[blur]"));
+        assert!(filter.contains("[fg]scale=1080:1920:force_original_aspect_ratio=decrease[front]"));
     }
 
     #[test]

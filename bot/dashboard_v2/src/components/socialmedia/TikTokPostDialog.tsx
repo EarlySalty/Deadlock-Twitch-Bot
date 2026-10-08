@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchTikTokCreatorInfo, getPreviewStatus, requestPreview, previewFileUrl, SocialMediaApiError, type TikTokPostOptions } from '@/api/socialMedia';
 import { WorkspaceDialog } from './WorkspaceDialog';
+import { VideoFullscreenButton } from './VideoFullscreenButton';
 import { useT } from '@/context/LanguageContext';
 
 const PRIVACY_LABELS: Record<string, string> = {
@@ -20,6 +21,7 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
 }) {
   const t = useT();
   const id = useId();
+  const videoRef = useRef<HTMLVideoElement>(null);
   const queryClient = useQueryClient();
   const previewKey = ['social-media', 'preview', clipDbId];
   const requested = useRef<number | null>(null);
@@ -162,7 +164,8 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
           <p className="text-sm">{t('Veröffentlichung auf')} <strong>{data.creator.creator_nickname}</strong> (@{data.creator.creator_username})</p>
           <div className="grid gap-5 md:grid-cols-[minmax(0,180px)_minmax(0,1fr)]">
             <div>
-              <video className="max-h-72 w-full rounded-lg bg-black" src={`${previewFileUrl(clipDbId)}?v=${encodeURIComponent(data.approved_video_sha256)}`} controls preload="metadata" aria-label={t('TikTok-Videovorschau')} />
+              <video ref={videoRef} className="max-h-72 w-full rounded-lg bg-black" src={`${previewFileUrl(clipDbId)}?v=${encodeURIComponent(data.approved_video_sha256)}`} controls preload="metadata" aria-label={t('TikTok-Videovorschau')} />
+              <VideoFullscreenButton videoRef={videoRef} className="mt-2" />
               <p className="mt-2 text-xs text-text-secondary">{t('{duration} Sekunden, für dieses Konto höchstens {max} Sekunden.', { duration: Math.ceil(data.duration_seconds), max: data.creator.max_video_post_duration_sec })}</p>
             </div>
             <div className="space-y-4">

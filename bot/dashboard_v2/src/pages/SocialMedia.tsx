@@ -28,6 +28,7 @@ import {
 import { useLanguage, useT } from '@/context/LanguageContext';
 import { LANGUAGES, LANGUAGE_LABELS, type Language } from '@/i18n/dictionary';
 import { TikTokPostDialog } from '@/components/socialmedia/TikTokPostDialog';
+import { VideoFullscreenButton } from '@/components/socialmedia/VideoFullscreenButton';
 import { WorkspaceDialog } from '@/components/socialmedia/WorkspaceDialog';
 import { PostingPlanDraft } from '@/components/socialmedia/PostingPlanDraft';
 import {
@@ -2296,6 +2297,7 @@ function ClipCard({
     };
   }, [menuOpen]);
   const [previewActive, setPreviewActive] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const previewKey = ['social-media', 'preview', clip.clip_db_id];
   const preview = useQuery({
     queryKey: previewKey,
@@ -2346,6 +2348,7 @@ function ClipCard({
         <div className="studio-clip-media">
           {ready ? (
             <video
+              ref={videoRef}
               controls
               preload="metadata"
               src={previewFileUrl(clip.clip_db_id)}
@@ -2379,6 +2382,7 @@ function ClipCard({
           )}
         </div>
         <div className="min-w-0 space-y-2.5">
+          {ready && <VideoFullscreenButton videoRef={videoRef} />}
           <span className={`studio-status ${tone}`}>
             {waitingPlatforms.length > 0 ? t('Wartet auf Verbindung') : stoppbar ? t('Geplant') : t(status.label)}
           </span>
