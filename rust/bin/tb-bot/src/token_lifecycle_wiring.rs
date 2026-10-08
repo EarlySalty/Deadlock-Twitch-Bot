@@ -65,17 +65,20 @@ pub(crate) struct BrokerTokenLifecycleNotifier {
     relay: Option<BrokerRelay>,
     guild_id: Option<u64>,
     role_id: u64,
+    pool: PgPool,
 }
 
 impl BrokerTokenLifecycleNotifier {
     pub(crate) fn from_config(
         relay: Option<BrokerRelay>,
         config: &tb_config::discord::TokenLifecycle,
+        pool: PgPool,
     ) -> Self {
         Self {
             relay,
             guild_id: config.guild_id,
             role_id: config.streamer_role_id,
+            pool,
         }
     }
 }
@@ -143,12 +146,27 @@ impl TokenLifecycleNotifier for BrokerTokenLifecycleNotifier {
         let Ok(user_id) = discord_user_id.parse::<u64>() else {
             return false;
         };
-        match DiscordBackend::remove_member_role(relay, guild_id, user_id, self.role_id, reason)
-            .await
+        match crate::streamer_role_sync::reconcile(
+            &self.pool,
+            relay,
+            guild_id,
+            self.role_id,
+            Some(user_id),
+        )
+        .await
         {
-            Ok(()) => true,
-            Err(e) => {
-                tracing::warn!("Token-Lifecycle: Streamer-Rollen-Entzug fehlgeschlagen: {e}");
+            Ok(Some(false)) => true,
+            Ok(state) => {
+                tracing::info!(
+                    user_id,
+                    ?state,
+                    reason,
+                    "Streamer-Rolle bleibt nach Zustandsprüfung erhalten"
+                );
+                false
+            }
+            Err(error) => {
+                tracing::warn!(%error, user_id, "Streamer-Rollenabgleich wird später wiederholt");
                 false
             }
         }
@@ -191,12 +209,12 @@ pub(crate) fn build_bot_ban_handler(
     options: &tb_config::discord::TokenLifecycle,
 ) -> Arc<dyn BotBannedChannelHandler> {
     let notifier = match BrokerRelay::new(broker) {
-        Ok(relay) => BrokerTokenLifecycleNotifier::from_config(Some(relay), options),
+        Ok(relay) => BrokerTokenLifecycleNotifier::from_config(Some(relay), options, pool.clone()),
         Err(error) => {
             tracing::warn!(
                 "Bot-Ban-Lifecycle: BrokerRelay nicht initialisierbar, Recovery-DM deaktiviert: {error}"
             );
-            BrokerTokenLifecycleNotifier::from_config(None, options)
+            BrokerTokenLifecycleNotifier::from_config(None, options, pool.clone())
         }
     };
     Arc::new(BrokerBotBanLifecycleHandler {
@@ -216,7 +234,7 @@ pub fn spawn_token_lifecycle_schedulers(
 ) {
     let (notifier, discord_enabled) = match BrokerRelay::new(broker) {
         Ok(relay) => (
-            BrokerTokenLifecycleNotifier::from_config(Some(relay), options),
+            BrokerTokenLifecycleNotifier::from_config(Some(relay), options, pool.clone()),
             true,
         ),
         Err(e) => {
@@ -224,7 +242,7 @@ pub fn spawn_token_lifecycle_schedulers(
                 "Token-Lifecycle-Scheduler ohne Discord-Broker gestartet: BrokerRelay nicht initialisierbar: {e}"
             );
             (
-                BrokerTokenLifecycleNotifier::from_config(None, options),
+                BrokerTokenLifecycleNotifier::from_config(None, options, pool.clone()),
                 false,
             )
         }
@@ -348,12 +366,12 @@ pub(crate) fn spawn_deadlock_pause_scheduler(
         return None;
     };
     let notifier = match BrokerRelay::new(broker) {
-        Ok(relay) => BrokerTokenLifecycleNotifier::from_config(Some(relay), options),
+        Ok(relay) => BrokerTokenLifecycleNotifier::from_config(Some(relay), options, pool.clone()),
         Err(error) => {
             tracing::warn!(
                 "Deadlock-Pause-Sweep ohne Discord-Broker gestartet: BrokerRelay nicht initialisierbar: {error}"
             );
-            BrokerTokenLifecycleNotifier::from_config(None, options)
+            BrokerTokenLifecycleNotifier::from_config(None, options, pool.clone())
         }
     };
     let reactor = Arc::new(tb_raid::DeadlockPauseReactor::new(

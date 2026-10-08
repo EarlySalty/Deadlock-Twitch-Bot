@@ -130,16 +130,17 @@ pub fn admin_grace_expired_text(
         Some(id) if !id.is_empty() => format!("<@{id}>"),
         _ => format!("`{twitch_login}`"),
     };
-    let title = "🚨 Grace-Period abgelaufen, Streamer-Rolle entzogen".to_string();
+    let title = "🚨 Twitch-Verbindung weiterhin unterbrochen".to_string();
     let description = format!(
-        "Der Streamer **{twitch_login}** hat seinen Token innerhalb von \
-         **{GRACE_PERIOD_DAYS} Tagen** nicht erneuert. Die Streamer-Rolle wurde \
-         automatisch entzogen.\n\n\
+        "Die Twitch-Verbindung für **{twitch_login}** wurde innerhalb von \
+         **{GRACE_PERIOD_DAYS} Tagen** nicht erneuert. Der Bot bleibt für diesen \
+         Kanal ausgeschaltet. Die Streamer-Rolle wird anhand aller verbundenen \
+         Kanäle automatisch abgeglichen.\n\n\
          Streamer: [{twitch_login}](https://twitch.tv/{twitch_login})\n\
          Discord: {mention}\n\
          User ID: `{twitch_user_id}`\n\
-         Bitte kontaktiere {mention} direkt. Ein Re-Auth über die Website stellt die \
-         Rolle automatisch wieder her."
+         Bitte kontaktiere {mention} direkt. Die Twitch-Verbindung lässt sich \
+         über die Website wiederherstellen."
     );
     (title, description)
 }
@@ -518,6 +519,13 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
 
         let mut processed = 0u64;
         for row in expired {
+            if let Err(error) = self
+                .mark_grace_expired(&row.twitch_user_id, &row.twitch_login)
+                .await
+            {
+                tracing::warn!(%error, user = %mask(&row.twitch_user_id), "Grace-Expiry-State nicht setzbar");
+                continue;
+            }
             let discord_user_id = self
                 .discord_user_id_for(&row.twitch_user_id, &row.twitch_login)
                 .await;
@@ -547,19 +555,11 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                 self.notifier.revoke_streamer_role(did, &reason).await;
             }
 
-            // 3. DB-State: abgelaufener Token-Error + manueller Opt-out + role_removed.
-            if let Err(error) = self
-                .mark_grace_expired(&row.twitch_user_id, &row.twitch_login)
-                .await
-            {
-                tracing::warn!(%error, user = %mask(&row.twitch_user_id), "Grace-Expiry-State nicht setzbar");
-            } else {
-                processed += 1;
-                tracing::info!(
-                    user = %mask(&row.twitch_user_id),
-                    "Grace-Period abgelaufen: Rolle entzogen, token_error_expired gesetzt"
-                );
-            }
+            processed += 1;
+            tracing::info!(
+                user = %mask(&row.twitch_user_id),
+                "Grace-Period abgelaufen: token_error_expired gesetzt, Rollenabgleich angefordert"
+            );
         }
         processed
     }
@@ -1955,8 +1955,7 @@ mod tests {
     // im CI ohne DB). Muster: isoliertes Schema pro Test (wie score_store).
 
     fn test_db_url() -> Option<String> {
-        crate::test_database::database_url()
-            .filter(|v| !v.trim().is_empty())
+        crate::test_database::database_url().filter(|v| !v.trim().is_empty())
     }
 
     async fn setup_db(schema: &str) -> PgPool {

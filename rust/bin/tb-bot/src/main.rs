@@ -47,6 +47,7 @@ mod shadow_review_wiring;
 mod smalltalk_loop_wiring;
 mod social_reauth;
 mod streamer_link;
+mod streamer_role_sync;
 mod task_supervisor;
 mod token_lifecycle_wiring;
 mod user_id_backfill;
@@ -1742,6 +1743,7 @@ async fn main() {
                         let dm = token_lifecycle_wiring::BrokerTokenLifecycleNotifier::from_config(
                             Some(relay),
                             &config.discord.token_lifecycle,
+                            pool.clone(),
                         );
                         refresh = refresh.with_notifier(Arc::new(
                             social_reauth::SocialConnectionNotifier::new(pool.clone(), dm),
@@ -1980,6 +1982,14 @@ async fn main() {
     // Streamer-Link-Matcher: verknüpft neue Twitch-Partner mit ihrem Discord-Account.
     // Läuft alle 6h, ist still wenn keine neuen Kandidaten vorhanden.
     if let Ok(sl_relay) = BrokerRelay::new(&settings.broker) {
+        supervisor.spawn(
+            "streamer_role_sync",
+            streamer_role_sync::task(
+                pool.clone(),
+                sl_relay.clone(),
+                config.discord.oauth_followup.clone(),
+            ),
+        );
         let sl_config = Arc::new(
             streamer_link::StreamerLinkConfig::from_config(snapshot)
                 .expect("Streamer-Link-Pfad wurde beim Konfigurationsstart geprüft"),
@@ -2073,6 +2083,7 @@ async fn main() {
         oauth_followups::BrokerDiscordDirectory::from_config(
             BrokerRelay::new(&settings.broker).ok(),
             &config.discord.oauth_followup,
+            pool.clone(),
         ),
     )
         as Arc<dyn tb_internal_api::DiscordRolePort>);
@@ -2638,3 +2649,7 @@ mod tests {
 #[cfg(test)]
 #[path = "../../../test-support/schema_sql.rs"]
 mod test_sql;
+
+#[cfg(test)]
+#[path = "../../../test-support/postgres.rs"]
+mod role_test_postgres;

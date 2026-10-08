@@ -230,7 +230,153 @@ pub struct PersonalInvite {
     pub personal: bool,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct TwitchLink {
+    pub discord_id: String,
+    pub twitch_user_id: String,
+    pub verified: bool,
+}
+
 impl BrokerRelay {
+    pub async fn live_role_members(
+        &self,
+        guild_id: u64,
+        role_id: u64,
+    ) -> Result<std::collections::BTreeSet<u64>, DiscordError> {
+        #[derive(serde::Deserialize)]
+        struct Member {
+            id: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct Snapshot {
+            ok: bool,
+            complete: bool,
+            guild_id: String,
+            role_id: String,
+            members: Vec<Member>,
+        }
+        let response = self
+            .client
+            .get(self.request_url("/internal/master/v1/discord/role-members")?)
+            .header("X-Internal-Token", &self.token)
+            .query(&[
+                ("guild_id", guild_id.to_string()),
+                ("role_id", role_id.to_string()),
+                ("live", "true".into()),
+            ])
+            .timeout(Duration::from_secs(60))
+            .send()
+            .await?;
+        let invalid = || DiscordError::BrokerError {
+            status: 502,
+            body: "Unvollständiger Live-Rollenabruf".into(),
+        };
+        if !response.status().is_success() {
+            return Err(invalid());
+        }
+        let snapshot: Snapshot = response.json().await?;
+        if !snapshot.ok
+            || !snapshot.complete
+            || snapshot.guild_id != guild_id.to_string()
+            || snapshot.role_id != role_id.to_string()
+        {
+            return Err(invalid());
+        }
+        snapshot
+            .members
+            .into_iter()
+            .map(|member| {
+                member
+                    .id
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|id| *id > 0)
+                    .ok_or_else(invalid)
+            })
+            .collect()
+    }
+
+    pub async fn twitch_links(&self) -> Result<Vec<TwitchLink>, DiscordError> {
+        #[derive(serde::Deserialize)]
+        struct Links {
+            ok: bool,
+            links: Vec<TwitchLink>,
+        }
+        let response = self
+            .client
+            .get(self.request_url("/internal/master/v1/discord/twitch-links")?)
+            .header("X-Internal-Token", &self.token)
+            .send()
+            .await?;
+        let invalid = || DiscordError::BrokerError {
+            status: 502,
+            body: "Twitch-Verknüpfungen nicht verfügbar".into(),
+        };
+        if !response.status().is_success() {
+            return Err(invalid());
+        }
+        let links: Links = response.json().await?;
+        if !links.ok
+            || links.links.iter().any(|link| {
+                link.discord_id.parse::<u64>().map_or(true, |id| id == 0)
+                    || link
+                        .twitch_user_id
+                        .parse::<u64>()
+                        .map_or(true, |id| id == 0)
+            })
+        {
+            return Err(invalid());
+        }
+        Ok(links.links)
+    }
+
+    pub async fn set_member_role_current(
+        &self,
+        guild_id: u64,
+        user_id: u64,
+        role_id: u64,
+        enabled: bool,
+        reason: &str,
+    ) -> Result<(), DiscordError> {
+        let payload = AddRoleRequest {
+            guild_id,
+            user_id,
+            role_id,
+            reason: reason.into(),
+        };
+        let path = if enabled {
+            ADD_ROLE_PATH
+        } else {
+            REMOVE_ROLE_PATH
+        };
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| DiscordError::BrokerError {
+                status: 500,
+                body: "Uhrzeit für Rollenabgleich nicht verfügbar".into(),
+            })?
+            .as_nanos();
+        let key = format!(
+            "role-sync-{nonce}-{}",
+            Self::idempotency_key("current", &payload)
+        );
+        let response = self.post_with_retry(path, &payload, &key).await?;
+        if !response.status().is_success() {
+            return Err(DiscordError::BrokerError {
+                status: response.status().as_u16(),
+                body: "Rollenabgleich fehlgeschlagen".into(),
+            });
+        }
+        let envelope: BrokerEnvelope<serde_json::Value> = response.json().await?;
+        if !envelope.ok || envelope.result.is_none() {
+            return Err(DiscordError::BrokerError {
+                status: 502,
+                body: "Rollenabgleich nicht bestätigt".into(),
+            });
+        }
+        Ok(())
+    }
+
     /// Erstellt einen neuen BrokerRelay aus der übergebenen Konfiguration.
     pub fn new(config: &BrokerConfig) -> Result<Self, reqwest::Error> {
         let client = Client::builder()

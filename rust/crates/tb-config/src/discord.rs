@@ -29,13 +29,24 @@ pub struct DiscordChat {
     pub promo_invite: Option<String>,
 }
 impl Default for DiscordChat {
-    fn default() -> Self { Self { moderation_alert_channel_id: 1374364800817303632, promo_invite: None } }
+    fn default() -> Self {
+        Self {
+            moderation_alert_channel_id: 1374364800817303632,
+            promo_invite: None,
+        }
+    }
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct DiscordInternal { pub owner_id: String }
+pub struct DiscordInternal {
+    pub owner_id: String,
+}
 impl Default for DiscordInternal {
-    fn default() -> Self { Self { owner_id: "662995601738170389".into() } }
+    fn default() -> Self {
+        Self {
+            owner_id: "662995601738170389".into(),
+        }
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -65,12 +76,14 @@ impl Default for StreamerLink {
 pub struct OAuthFollowup {
     pub guild_id: u64,
     pub streamer_role_id: u64,
+    pub role_sync_interval_secs: u64,
 }
 impl Default for OAuthFollowup {
     fn default() -> Self {
         Self {
             guild_id: COMMUNITY,
             streamer_role_id: STREAMER_ROLE,
+            role_sync_interval_secs: 60,
         }
     }
 }
@@ -113,8 +126,15 @@ impl Default for RaidOAuth {
 impl DiscordOperations {
     pub fn validate(&self) -> Result<(), FileError> {
         crate::global::positive_id(&self.internal.owner_id, "discord.internal.owner_id")?;
-        range(self.chat.moderation_alert_channel_id, 1, u64::MAX, "discord.chat.moderation_alert_channel_id")?;
-        if let Some(url) = &self.chat.promo_invite { public_url(url, "discord.chat.promo_invite", false)?; }
+        range(
+            self.chat.moderation_alert_channel_id,
+            1,
+            u64::MAX,
+            "discord.chat.moderation_alert_channel_id",
+        )?;
+        if let Some(url) = &self.chat.promo_invite {
+            public_url(url, "discord.chat.promo_invite", false)?;
+        }
         for (id, field) in [
             (
                 self.streamer_link.notify_channel_id,
@@ -143,6 +163,12 @@ impl DiscordOperations {
         ] {
             range(id, 1, u64::MAX, field)?;
         }
+        range(
+            self.oauth_followup.role_sync_interval_secs,
+            15,
+            3600,
+            "discord.oauth_followup.role_sync_interval_secs",
+        )?;
         if let Some(id) = self.token_lifecycle.guild_id {
             range(id, 1, u64::MAX, "discord.token_lifecycle.guild_id")?;
         }
