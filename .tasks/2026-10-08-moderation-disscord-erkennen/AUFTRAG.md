@@ -2,8 +2,9 @@
 
 # Discord-Kontaktköder zuverlässig erkennen
 
-status: aktiv
+status: erledigt
 Datum: 2026-10-08
+Abschluss: Release 3341098f live geprüft; Belege in status/M/1/004-deployment.md, Ressourcen- und Threadabschluss im REGISTER.md.
 Stufe: mittel
 Paket: M
 Versuch: 1
