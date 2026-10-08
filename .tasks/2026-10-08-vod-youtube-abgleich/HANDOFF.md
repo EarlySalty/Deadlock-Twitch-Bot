@@ -51,6 +51,12 @@ Kein Main-Push, keine Migration, kein Release und kein Deploy. Ressourcenblocker
 
 Eigener einmaliger SQL-Aufrufhelfer /tmp/tb-youtube-live-evidence-c5d0.py wurde nur auf eigenem synthetischem PostgreSQL mit read_only=on geprüft. Verbindungsdaten bleiben im vorhandenen Infisical-/libpq-Pfad und werden nicht ausgegeben. Keine neue YouTube-Vorprobe und noch keine Produktionsabfrage. /tmp/tb-youtube-pg-c5d0/live-evidence.sql und Helfer beim eigenen Cleanup entfernen.
 
+### Aktuell vor Gate, 2026-10-08T04:45:53Z
+
+Fixkontext a65dd8a23a59c1c66 abgeschlossen. Quellencommit 672e90afa427f5cfe93dc6eeea2db8e291f7cd88, alle neun Quellenpfade committed. Kontosperrenfreigabe ausdrücklich abgewartet, gültige Tests nicht abgeschwächt. Archiv 64 und API zehn Proben grün, 0 failed, 0 ignored, Archiv-Clippy strikt Exit 0. Mit neun Frontend- und zwei unveränderten Clientproben 85 unterschiedliche Proben. Dauerhafte Nachweise pruefung/r6b-archive.txt, r6b-api.txt, r6b-clippy.txt. Temporäre Testkonfiguration entfernt, eigene Prüfläufe beendet.
+
+Frisches origin/main bd69502728861f8279e8b044592ecac9058fc732 regulär nur im eigenen Worktree integriert: HEAD 240e621499ff0fb1feffe7f7530fe4ccd6d052f6. Kanon und fremde Worktrees nicht geändert. Nächster regulärer Gate mit demselben gpt-6.1-sol nach Sicherung dieser Elternakten. Noch kein ALLOW, kein Main-Push oder Deploy. Eigener Stagingclone /home/nathanael/repos/twitch-release-youtube-c5d0-20261008 existiert mit internem .git, noch ohne neue Releaseartefakte; vor Einsatz auf tatsächlichen freigegebenen Main bringen. Status Versuch 3/004.
+
 ### Nachtrag 2026-10-08T03:54:42Z
 
 Elternlauf bgiqvfbes ist tatsächlich abgeschlossen: regulärer Slot 3, Rust kompiliert, 63 passed, ein failed, 0 ignored, Exit 101. parent-r6-archive.log. Fehlfall completed_inventory_rechecks_refresh_deletions_processing_and_manual_requests, Assertion errors, youtube_check_tests.rs:391. Der Ressourcenblocker verhinderte diesen späteren Lauf nicht mehr. Quellen nicht als Rust-verifiziert behandeln. Neuer frischer nativer Fixkontext a65dd8a23a59c1c66 aktiv für genau diesen Fehlfall und fehlende fokussierte Rust-Nachweise. Kein Doppelwriter, keine Wiederaufnahme des abgeschlossenen ersten Runde-6-Fixers. Der neue Kontext besitzt nur dieselben neun eigenen Quelldateien, Eltern weiter Taskberichte und Status. Testkonfiguration für synthetisches PostgreSQL besteht. Status Versuch 3/003. Kein neuer Gate, Main-Push oder Deploy. Bei Wiederanlauf zuerst diesen neuen eigenen Fixkontext prüfen, nicht parallel neu starten.

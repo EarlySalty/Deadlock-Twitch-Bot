@@ -72,3 +72,9 @@ Nach regulärer Integration von origin/main, gleicher Kritiker gpt-6.1-sol, Exit
 5. NIT, social_media_vod_archive.rs:307: Drei Wiederherstellungserklärungen fehlen im englischen Wörterbuch.
 
 Versuch 3 erhält sämtliche abgeschlossenen Fixes und Nachweise. Frischer nativer Fixer a416a113c573896ad bearbeitet gemeinsam die drei BLOCK-Funde und nötiges enges Funktionswiring. Kein weiterer Browserlauf, keine neue Vorprobe, kein Merge oder Deploy vor ALLOW. Die bisherigen inhaltlichen BLOCK-Runden sind 1, 3, 5 und 6; ALLOW-Runden 2 und 4 zählen nicht als gescheiterte Fixrunden.
+
+## Quellenabschluss der Runde-6-Fixes
+
+Der erste frische Kontext endete am Ressourcenblocker ohne Rust-Compilerlauf. Elternnachlauf kompilierte später regulär und zeigte 63 bestandene Tests sowie einen echten Fehlfall. Zusätzlicher frischer Kontext a65dd8a23a59c1c66 korrigierte die verzögerte Freigabe der Kontosperre nach Transaktions-Drop, ohne Fehler- oder Frischebedingungen abzuschwächen. Quellencommit 672e90afa427f5cfe93dc6eeea2db8e291f7cd88. Legacy-Kanalbindung, separater Versuchssnapshot für Wartezeiten, einheitliche Sperrfolge und beide eng begrenzten Funktions-NITs erhalten. 64 Archiv- und zehn API-Tests bestanden, Archiv-Clippy strikt Exit 0. Kein neuer Gate-BLOCK und keine zusätzliche erfolglose inhaltliche Runde aus Ressourcen- oder Testzwischenlauf abgeleitet.
+
+Gate bis zur nötigen regulären Integration von neuerem Main pausiert. Frisches origin/main bd69502728861f8279e8b044592ecac9058fc732 anschließend im eigenen Worktree integriert, HEAD 240e621499ff0fb1feffe7f7530fe4ccd6d052f6. Nächster Gate bleibt gpt-6.1-sol. Noch kein ALLOW behauptet, kein Main-Push oder Deploy.

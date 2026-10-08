@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 4,
+  "zeit": "2026-10-08T04:45:53Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "aktiv",
+  "gebaut": "ja",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "240e621499ff0fb1feffe7f7530fe4ccd6d052f6",
+  "nachweise": ["PRUEFUNG.md", "REVIEW.md", "REGISTER.md", "pruefung/r6b-archive.txt", "pruefung/r6b-api.txt", "pruefung/r6b-clippy.txt"],
+  "blocker": [],
+  "naechster_schritt": "Derselbe reguläre gpt-6.1-sol-Gate auf integriertem Stand. Quellencommit 672e90af, 64 Archiv- und zehn API-Proben tatsächlich grün, Archiv-Clippy Exit 0; insgesamt 85 verschiedene Proben mit Frontend und unverändertem Client. Frisches Main bd695027 regulär integriert. Noch kein Main-Push, keine Migration und kein Deploy. Fünf Altfälle weiterhin offen."
+}
