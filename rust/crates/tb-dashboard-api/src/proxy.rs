@@ -57,12 +57,6 @@ use axum::{
 
 use crate::auth::security::OptionalConnectInfo;
 
-/// Analytics-Responses können groß sein (Viewer-Profiles, Chat-Graph etc.) —
-/// 16 MiB ist großzügig aber verhindert OOM bei normalen API-Antworten.
-/// Streaming wäre schöner; reqwest `.bytes()` buffert leider auf Client-Seite.
-/// Für eine echte Streaming-Lösung bräuchten wir `reqwest::Response::bytes_stream()`
-/// und `axum::body::Body::from_stream()` — TODO wenn Analytics-Payloads > 10 MiB
-/// in der Praxis auftreten.
 const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 /// Analytics-Endpunkte können langsam sein (DB-Aggregationen, KI-AI-Chat).
@@ -199,7 +193,13 @@ pub async fn dashboard_fallback_handler(
                 }
                 builder = builder.header(name, value);
             }
-            let bytes = match resp.bytes().await {
+            let body = Body::from_stream(futures_util::stream::try_unfold(
+                resp,
+                |mut resp| async move {
+                    Ok::<_, reqwest::Error>(resp.chunk().await?.map(|chunk| (chunk, resp)))
+                },
+            ));
+            let bytes = match axum::body::to_bytes(body, MAX_BODY_BYTES).await {
                 Ok(bytes) => bytes,
                 Err(err) => {
                     tracing::warn!(
@@ -279,15 +279,13 @@ mod tests {
             .and(path("/twitch/api/v2/overview"))
             .and(query_param("streamer", "nanikeks"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "ok": true })),
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })),
             )
             .mount(&mock_server)
             .await;
 
-        let app = make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(
-            mock_server.uri(),
-        ))));
+        let app =
+            make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(mock_server.uri()))));
         let resp = app
             .oneshot(
                 axum::http::Request::builder()
@@ -319,9 +317,8 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let app = make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(
-            mock_server.uri(),
-        ))));
+        let app =
+            make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(mock_server.uri()))));
         let resp = app
             .oneshot(
                 axum::http::Request::builder()
@@ -347,15 +344,15 @@ mod tests {
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/twitch/api/v2/lurker-analysis"))
-            .respond_with(ResponseTemplate::new(401).set_body_json(
-                serde_json::json!({ "error": "unauthorized" }),
-            ))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .set_body_json(serde_json::json!({ "error": "unauthorized" })),
+            )
             .mount(&mock_server)
             .await;
 
-        let app = make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(
-            mock_server.uri(),
-        ))));
+        let app =
+            make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(mock_server.uri()))));
         let resp = app
             .oneshot(
                 axum::http::Request::builder()
@@ -508,7 +505,10 @@ mod tests {
             .unwrap();
         let bytes = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
         let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(val["received_host"].as_str().unwrap_or(""), "127.0.0.1:8769");
+        assert_eq!(
+            val["received_host"].as_str().unwrap_or(""),
+            "127.0.0.1:8769"
+        );
     }
 
     // ─── 8. x-forwarded-host wird transparent durchgereicht (Parität) ─────
@@ -580,9 +580,8 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let app = make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(
-            mock_server.uri(),
-        ))));
+        let app =
+            make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(mock_server.uri()))));
         let resp = app
             .oneshot(
                 axum::http::Request::builder()
@@ -594,9 +593,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FOUND);
         assert_eq!(
-            resp.headers()
-                .get("location")
-                .and_then(|v| v.to_str().ok()),
+            resp.headers().get("location").and_then(|v| v.to_str().ok()),
             Some("https://id.twitch.tv/oauth2/authorize?x=1"),
             "Location muss unverändert beim Client ankommen"
         );
@@ -606,14 +603,13 @@ mod tests {
 
     #[tokio::test]
     async fn patch_und_delete_werden_weitergereicht() {
-        let upstream = Router::new()
-            .route(
-                "/twitch/api/v2/roadmap/{id}",
-                any(|req: axum::http::Request<Body>| async move {
-                    let method = req.method().to_string();
-                    axum::Json(serde_json::json!({ "method": method }))
-                }),
-            );
+        let upstream = Router::new().route(
+            "/twitch/api/v2/roadmap/{id}",
+            any(|req: axum::http::Request<Body>| async move {
+                let method = req.method().to_string();
+                axum::Json(serde_json::json!({ "method": method }))
+            }),
+        );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -643,7 +639,108 @@ mod tests {
         }
     }
 
-    // ─── 10. Response-Header werden korrekt durchgereicht ────────────────
+    async fn pruefe_antwortgrenze(size: usize, chunked: bool, content_length: Option<usize>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let upstream = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).await.unwrap();
+                assert_ne!(read, 0);
+                request.extend_from_slice(&buffer[..read]);
+            }
+
+            let mut headers = String::from(
+                "HTTP/1.1 201 Created\r\nConnection: close\r\nX-Proxy-Test: erhalten\r\n",
+            );
+            if chunked {
+                headers.push_str("Transfer-Encoding: chunked\r\n");
+            }
+            if let Some(length) = content_length {
+                headers.push_str(&format!("Content-Length: {length}\r\n"));
+            }
+            headers.push_str("\r\n");
+            stream.write_all(headers.as_bytes()).await.unwrap();
+
+            let payload = vec![b'x'; 64 * 1024];
+            let mut remaining = size;
+            while remaining > 0 {
+                let length = remaining.min(payload.len());
+                if chunked
+                    && stream
+                        .write_all(format!("{length:x}\r\n").as_bytes())
+                        .await
+                        .is_err()
+                {
+                    return;
+                }
+                if stream.write_all(&payload[..length]).await.is_err() {
+                    return;
+                }
+                if chunked && stream.write_all(b"\r\n").await.is_err() {
+                    return;
+                }
+                remaining -= length;
+            }
+            if chunked {
+                let _ = stream.write_all(b"0\r\n\r\n").await;
+            }
+        });
+
+        let app = make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(format!(
+            "http://{addr}"
+        )))));
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/__legacy_body_limit")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        upstream.await.unwrap();
+
+        if size <= MAX_BODY_BYTES {
+            assert_eq!(resp.status(), StatusCode::CREATED);
+            assert_eq!(resp.headers()["x-proxy-test"], "erhalten");
+            let bytes = axum::body::to_bytes(resp.into_body(), MAX_BODY_BYTES)
+                .await
+                .unwrap();
+            assert_eq!(bytes.len(), size);
+            assert!(bytes.iter().all(|byte| *byte == b'x'));
+        } else {
+            assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+            let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["error"], "legacy_upstream_unavailable");
+        }
+    }
+
+    #[tokio::test]
+    async fn antwortgrenze_mit_content_length() {
+        for size in [MAX_BODY_BYTES, MAX_BODY_BYTES + 1] {
+            pruefe_antwortgrenze(size, false, Some(size)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn antwortgrenze_ohne_content_length() {
+        for size in [MAX_BODY_BYTES, MAX_BODY_BYTES + 1] {
+            pruefe_antwortgrenze(size, true, None).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn antwortgrenze_mit_falschem_content_length() {
+        for size in [MAX_BODY_BYTES, MAX_BODY_BYTES + 1] {
+            pruefe_antwortgrenze(size, true, Some(1)).await;
+        }
+    }
 
     #[tokio::test]
     async fn response_header_werden_weitergereicht() {
@@ -658,9 +755,8 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let app = make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(
-            mock_server.uri(),
-        ))));
+        let app =
+            make_fallback_router(Some(Arc::new(DashboardLegacyProxy::new(mock_server.uri()))));
         let resp = app
             .oneshot(
                 axum::http::Request::builder()
