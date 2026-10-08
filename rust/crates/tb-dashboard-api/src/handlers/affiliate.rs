@@ -102,7 +102,6 @@ pub fn affiliate_stripe_config_from_env() -> Option<AffiliateStripeConfig> {
     })
 }
 
-/// Gemeinsamer Affiliate-Session-Lookup für Affiliate-Handler und Portal-API.
 pub async fn affiliate_session_from_headers(
     state: Option<&DashboardAuthState>,
     headers: &HeaderMap,
@@ -112,11 +111,28 @@ pub async fn affiliate_session_from_headers(
     if session_id.trim().is_empty() {
         return None;
     }
-    state
+    let session = state
         .load_affiliate_session(&session_id)
         .await
         .ok()
-        .flatten()
+        .flatten()?;
+    if session.twitch_login.trim().is_empty() || session.twitch_user_id.trim().is_empty() {
+        return None;
+    }
+    match affiliate_account_matches_identity(
+        state.pool(),
+        &session.twitch_login,
+        &session.twitch_user_id,
+    )
+    .await
+    {
+        Ok(true) => Some(session),
+        Ok(false) => None,
+        Err(error) => {
+            tracing::warn!(%error, "Affiliate-Eigentümer-Lookup fehlgeschlagen");
+            None
+        }
+    }
 }
 
 /// `GET /twitch/auth/affiliate/login`.
@@ -240,6 +256,23 @@ pub(crate) async fn complete_affiliate_login(
         }
     };
 
+    match upsert_account_and_pii(state, &identity).await {
+        Ok(()) => {}
+        Err(AffiliatePersistError::Ownership) => {
+            return text(
+                StatusCode::FORBIDDEN,
+                "Dieses Affiliate-Konto gehört nicht zu deinem Twitch-Konto.",
+            );
+        }
+        Err(error) => {
+            tracing::warn!(?error, "Affiliate-Konto/PII-Upsert fehlgeschlagen");
+            return text(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "OAuth-Status konnte nicht sicher gespeichert werden. Bitte erneut versuchen.",
+            );
+        }
+    }
+
     let session = match state
         .create_affiliate_session(
             &identity.twitch_login,
@@ -258,14 +291,6 @@ pub(crate) async fn complete_affiliate_login(
             );
         }
     };
-
-    if let Err(error) = upsert_account_and_pii(state, &identity).await {
-        tracing::warn!(?error, "Affiliate-Konto/PII-Upsert fehlgeschlagen");
-        return text(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "OAuth-Status konnte nicht sicher gespeichert werden. Bitte erneut versuchen.",
-        );
-    }
 
     let cookie = build_session_cookie(
         AFFILIATE_COOKIE_NAME,
@@ -771,29 +796,33 @@ async fn upsert_account_and_pii(
 ) -> Result<(), AffiliatePersistError> {
     let pool = state.pool();
     let login = identity.twitch_login.trim().to_lowercase();
-    if login.is_empty() {
-        return Ok(());
+    let user_id = identity.twitch_user_id.trim();
+    if login.is_empty()
+        || user_id.is_empty()
+        || !affiliate_account_matches_identity(pool, &login, user_id).await?
+    {
+        return Err(AffiliatePersistError::Ownership);
     }
-    let exists = load_account(pool, &login).await?.is_some();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
-    if !exists {
-        sqlx::query(
-            r#"
-            INSERT INTO affiliate_accounts
-                (twitch_login, twitch_user_id, display_name, email, full_name,
-                 address_line1, address_city, address_zip, address_country,
-                 created_at, updated_at)
-            VALUES ($1, $2, $3, '', '', '', '', '', 'DE', $4, $5)
-            ON CONFLICT (twitch_login) DO NOTHING
-            "#,
-        )
-        .bind(&login)
-        .bind(identity.twitch_user_id.trim())
-        .bind(display_or_login(identity))
-        .bind(&now)
-        .bind(&now)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO affiliate_accounts
+            (twitch_login, twitch_user_id, display_name, email, full_name,
+             address_line1, address_city, address_zip, address_country,
+             created_at, updated_at)
+        VALUES ($1, $2, $3, '', '', '', '', '', 'DE', $4, $5)
+        ON CONFLICT (twitch_login) DO NOTHING
+        "#,
+    )
+    .bind(&login)
+    .bind(user_id)
+    .bind(display_or_login(identity))
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    if !affiliate_account_matches_identity(pool, &login, user_id).await? {
+        return Err(AffiliatePersistError::Ownership);
     }
     if !identity.email.trim().is_empty() {
         let cipher = FieldCipher::from_env().map_err(AffiliatePersistError::Crypto)?;
@@ -1077,6 +1106,23 @@ async fn load_claims(pool: &PgPool, twitch_login: &str) -> Result<Vec<Value>, sq
         .collect())
 }
 
+async fn affiliate_account_matches_identity(
+    pool: &PgPool,
+    login: &str,
+    user_id: &str,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT NOT EXISTS (
+            SELECT 1 FROM affiliate_accounts
+            WHERE LOWER(twitch_login) = $1 AND BTRIM(twitch_user_id) IS DISTINCT FROM $2
+        )",
+    )
+    .bind(login.trim().to_lowercase())
+    .bind(user_id.trim())
+    .fetch_one(pool)
+    .await
+}
+
 async fn load_account(pool: &PgPool, login: &str) -> Result<Option<AffiliateAccount>, sqlx::Error> {
     let row = sqlx::query(
         r#"
@@ -1357,6 +1403,8 @@ fn parse_rfc3339_utc(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
 
 #[derive(Debug, thiserror::Error)]
 enum AffiliatePersistError {
+    #[error("ownership")]
+    Ownership,
     #[error("db")]
     Db(#[from] sqlx::Error),
     #[error("pii")]
@@ -1790,6 +1838,176 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(pii.email, "partner@example.test");
+    }
+
+    #[tokio::test]
+    async fn callback_verweigert_wiedervergebenen_login_ohne_fremde_aenderungen() {
+        let pool = pool("t_affiliate_a02_callback")
+            .await
+            .expect("Testdatenbank");
+        create_tables(&pool).await;
+        let state = state(pool.clone());
+        let owner = TwitchIdentity {
+            twitch_login: "affiliate_one".into(),
+            twitch_user_id: "111".into(),
+            display_name: "Affiliate One".into(),
+            email: String::new(),
+        };
+        upsert_account_and_pii(&state, &owner).await.unwrap();
+        let cipher = test_cipher();
+        save_affiliate_pii(
+            &pool,
+            &cipher,
+            &owner.twitch_login,
+            &PiiInput {
+                email: Some("owner@example.test".into()),
+                full_name: Some("Original Owner".into()),
+                ..PiiInput::default()
+            },
+        )
+        .await
+        .unwrap();
+        let old_pii = load_affiliate_pii(&pool, &cipher, &owner.twitch_login)
+            .await
+            .unwrap();
+        let impostor = TwitchIdentity {
+            twitch_user_id: "222".into(),
+            email: "other@example.test".into(),
+            ..owner.clone()
+        };
+        let oauth_state = AffiliateOAuthState {
+            redirect_uri: "https://example.test/callback".into(),
+        };
+        let response = complete_affiliate_login(
+            &state,
+            &FakeOAuth { identity: impostor },
+            oauth_state.clone(),
+            false,
+            "code",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(!response.headers().contains_key(SET_COOKIE));
+        let sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dashboard_sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(sessions, 0);
+        let stored_owner: String = sqlx::query_scalar(
+            "SELECT twitch_user_id FROM affiliate_accounts WHERE twitch_login = $1",
+        )
+        .bind(&owner.twitch_login)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stored_owner, "111");
+        let pii = load_affiliate_pii(&pool, &cipher, &owner.twitch_login)
+            .await
+            .unwrap();
+        assert_eq!(pii.email, old_pii.email);
+        assert_eq!(pii.full_name, old_pii.full_name);
+        assert_eq!(pii.updated_at, old_pii.updated_at);
+        let response = complete_affiliate_login(
+            &state,
+            &FakeOAuth { identity: owner },
+            oauth_state,
+            false,
+            "code",
+        )
+        .await;
+        assert!(response.status().is_redirection());
+        assert!(response.headers().contains_key(SET_COOKIE));
+    }
+
+    #[tokio::test]
+    async fn bestehende_fremde_session_oeffnet_und_aendert_keine_affiliate_daten() {
+        let pool = pool("t_affiliate_a02_session")
+            .await
+            .expect("Testdatenbank");
+        create_tables(&pool).await;
+        let state = state(pool.clone());
+        let owner = TwitchIdentity {
+            twitch_login: "affiliate_one".into(),
+            twitch_user_id: "111".into(),
+            display_name: "Affiliate One".into(),
+            email: String::new(),
+        };
+        upsert_account_and_pii(&state, &owner).await.unwrap();
+        let cipher = Arc::new(test_cipher());
+        save_affiliate_pii(
+            &pool,
+            &cipher,
+            &owner.twitch_login,
+            &PiiInput {
+                email: Some("owner@example.test".into()),
+                ..PiiInput::default()
+            },
+        )
+        .await
+        .unwrap();
+        for user_id in ["222", ""] {
+            let session = state
+                .create_affiliate_session(&owner.twitch_login, user_id, "Other", "")
+                .await
+                .unwrap();
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                COOKIE,
+                format!("{}={}", AFFILIATE_COOKIE_NAME, session.session_id)
+                    .parse()
+                    .unwrap(),
+            );
+            let response = api_me_handler(
+                Some(Extension(state.clone())),
+                Some(Extension(cipher.clone())),
+                headers.clone(),
+                State(pool.clone()),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let value: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            assert_eq!(value, json!({"error": "unauthorized"}));
+            let response = api_profile_update_handler(
+                Some(Extension(state.clone())),
+                Some(Extension(cipher.clone())),
+                headers.clone(),
+                State(pool.clone()),
+                Bytes::from_static(br#"{"email":"other@example.test"}"#),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let response = api_claims_handler(
+                Some(Extension(state.clone())),
+                headers.clone(),
+                State(pool.clone()),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let response = api_gutschrift_pdf_handler(
+                Some(Extension(state.clone())),
+                headers.clone(),
+                State(pool.clone()),
+                Path("1".into()),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let response = connect_stripe_handler(
+                Some(Extension(state.clone())),
+                Some(Extension(AffiliateStripeConfig::default())),
+                headers,
+            )
+            .await;
+            assert_eq!(
+                response.headers().get(LOCATION).unwrap(),
+                "/twitch/auth/affiliate/login"
+            );
+        }
+        let pii = load_affiliate_pii(&pool, &cipher, &owner.twitch_login)
+            .await
+            .unwrap();
+        assert_eq!(pii.email, "owner@example.test");
     }
 
     #[tokio::test]
@@ -2485,8 +2703,8 @@ mod tests {
             "INSERT INTO affiliate_accounts \
              (twitch_login, twitch_user_id, email, full_name, address_line1, address_city, \
               address_zip, created_at, updated_at, is_active) \
-             SELECT login, login, '', '', '', '', '', '', '', 1 \
-             FROM unnest(ARRAY['aff_one', 'aff_new', 'aff_a', 'aff_b']) AS login",
+             SELECT login, (1000 + ord)::text, '', '', '', '', '', '', '', 1 \
+             FROM unnest(ARRAY['aff_one', 'aff_new', 'aff_a', 'aff_b']) WITH ORDINALITY AS account(login, ord)",
         )
         .execute(pool)
         .await

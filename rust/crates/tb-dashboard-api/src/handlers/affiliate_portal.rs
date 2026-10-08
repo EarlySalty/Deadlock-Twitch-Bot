@@ -378,7 +378,7 @@ mod tests {
             .ok()?;
         for ddl in [
             "CREATE TABLE dashboard_sessions (session_id TEXT PRIMARY KEY, session_type TEXT NOT NULL, payload_enc BYTEA NOT NULL, created_at DOUBLE PRECISION NOT NULL, expires_at DOUBLE PRECISION NOT NULL)",
-            "CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, display_name TEXT, is_active INTEGER)",
+            "CREATE TABLE affiliate_accounts (twitch_login TEXT PRIMARY KEY, display_name TEXT, is_active INTEGER, twitch_user_id TEXT NOT NULL)",
             "CREATE TABLE affiliate_streamer_claims (affiliate_twitch_login TEXT, claimed_streamer_login TEXT, claimed_at TEXT)",
             "CREATE TABLE affiliate_commissions (id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, affiliate_twitch_login TEXT NOT NULL, streamer_login TEXT NOT NULL, stripe_event_id TEXT, stripe_invoice_id TEXT, stripe_customer_id TEXT, stripe_transfer_id TEXT, brutto_cents INTEGER NOT NULL DEFAULT 0, commission_cents INTEGER NOT NULL, currency TEXT NOT NULL DEFAULT 'eur', status TEXT NOT NULL DEFAULT 'pending', period_start TEXT, period_end TEXT, created_at TEXT NOT NULL, transferred_at TEXT, error_message TEXT)",
             "CREATE TABLE twitch_streamers (twitch_login TEXT, twitch_user_id TEXT, display_name TEXT)",
@@ -420,7 +420,7 @@ mod tests {
         let Some(pool) = pool("t_affiliate_portal_auth").await else {
             return;
         };
-        sqlx::query("INSERT INTO affiliate_accounts VALUES ('nani','Nani',1)")
+        sqlx::query("INSERT INTO affiliate_accounts VALUES ('nani','Nani',1,'1')")
             .execute(&pool)
             .await
             .unwrap();
@@ -449,11 +449,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fremde_affiliate_session_desselben_logins_wird_abgewiesen() {
+        let pool = pool("t_affiliate_a02_portal").await.expect("Testdatenbank");
+        sqlx::query("INSERT INTO affiliate_accounts VALUES ('NANI','Nani',1,'2')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let auth_state = state(pool.clone());
+        let headers = affiliate_cookie_headers(&auth_state).await;
+        let response = portal_handler(
+            partner_auth(),
+            Some(Extension(auth_state.clone())),
+            headers.clone(),
+            State(pool.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let response = commissions_handler(
+            partner_auth(),
+            Some(Extension(auth_state)),
+            headers,
+            State(pool),
+            Query(CommissionsQuery::default()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn portal_liefert_claims_und_provisionen() {
         let Some(pool) = pool("t_affiliate_portal_stats").await else {
             return;
         };
-        sqlx::query("INSERT INTO affiliate_accounts VALUES ('nani','Nani',1)")
+        sqlx::query("INSERT INTO affiliate_accounts VALUES ('nani','Nani',1,'1')")
             .execute(&pool)
             .await
             .unwrap();
@@ -493,7 +523,7 @@ mod tests {
         let Some(pool) = pool("t_affiliate_portal_commissions").await else {
             return;
         };
-        sqlx::query("INSERT INTO affiliate_accounts VALUES ('nani','Nani',1)")
+        sqlx::query("INSERT INTO affiliate_accounts VALUES ('nani','Nani',1,'1')")
             .execute(&pool)
             .await
             .unwrap();
