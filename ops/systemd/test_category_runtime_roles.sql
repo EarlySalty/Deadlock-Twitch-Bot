@@ -53,7 +53,7 @@ BEGIN
     IF has_function_privilege('twitchbot','category_prune_partitions(integer,bigint)','EXECUTE') THEN RAISE EXCEPTION 'bot can prune raw data'; END IF;
     IF has_table_privilege('twitchbot','category_chat_messages','UPDATE') OR has_table_privilege('twitchbot','category_chat_messages','DELETE') OR has_table_privilege('twitchbot','category_chat_messages','TRUNCATE') THEN RAISE EXCEPTION 'bot can change raw archive'; END IF;
     IF has_table_privilege('twitchbot','category_stream_snapshots','UPDATE') OR has_table_privilege('twitchbot','category_stream_snapshots','DELETE') THEN RAISE EXCEPTION 'bot can change stream archive'; END IF;
-    FOREACH relation_name IN ARRAY ARRAY['category_native_runtime','twitch_watchdog_incidents',
+    FOREACH relation_name IN ARRAY ARRAY['category_native_runtime','category_native_processes','twitch_watchdog_incidents',
         'category_watchdog_suspensions','category_watchdog_storage_incidents','category_watchdog_storage_notifications'] LOOP
         IF NOT has_table_privilege('twitchbot',relation_name,'SELECT') OR
             NOT has_table_privilege('twitchbot',relation_name,'INSERT') OR

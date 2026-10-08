@@ -1,3 +1,9 @@
+CREATE TABLE category_native_processes (
+    process_id bigint PRIMARY KEY,
+    heartbeat_at timestamptz NOT NULL,
+    details jsonb NOT NULL
+);
+
 CREATE TABLE category_native_runtime (
     singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
     heartbeat_at timestamptz NOT NULL,
@@ -57,7 +63,7 @@ BEGIN
         END IF;
     END LOOP;
     IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='twitchbot') THEN
-        GRANT SELECT,INSERT,UPDATE ON TABLE public.category_native_runtime TO twitchbot;
+        GRANT SELECT,INSERT,UPDATE ON TABLE public.category_native_runtime,public.category_native_processes TO twitchbot;
     END IF;
     IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='twitchdash') THEN
         GRANT SELECT ON TABLE public.category_channels,public.category_collection_runs,

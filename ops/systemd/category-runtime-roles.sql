@@ -73,9 +73,11 @@ BEGIN
             EXECUTE format('GRANT EXECUTE ON FUNCTION public.category_prepare_partitions(),public.category_lock_chat_rooms(text[]),public.category_redact_chat_event(text,text,text,timestamptz) TO %I',role_name);
         END IF;
     END LOOP;
-    IF to_regclass('public.category_native_runtime') IS NOT NULL THEN
-        GRANT SELECT,INSERT,UPDATE ON TABLE public.category_native_runtime TO twitchbot;
-    END IF;
+    FOREACH signature IN ARRAY ARRAY['category_native_runtime','category_native_processes'] LOOP
+        IF to_regclass('public.'||signature) IS NOT NULL THEN
+            EXECUTE format('GRANT SELECT,INSERT,UPDATE ON TABLE public.%I TO twitchbot',signature);
+        END IF;
+    END LOOP;
     IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='twitchdash') THEN
         GRANT SELECT ON TABLE public.category_channels,public.category_collection_runs,
             public.category_stream_snapshots,public.category_chat_rollup,

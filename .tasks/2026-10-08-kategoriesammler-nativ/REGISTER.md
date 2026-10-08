@@ -8,6 +8,17 @@
 | A, erster Workflow | wbqfebm6h; Agenten a83f7cb1694d77d7a, a831ec2b49f2f2fb2, af22906ab85024cef | Teil-Orchestrator 0712a6dd-cf2a-4a39-907a-f50b19e7930c | Native Workflow-Transkripte | Claude Code | gpt-6.1-sol, xhigh | gestoppt, nicht wieder aufnehmen | /home/nathanael/.worktrees/tb-kategoriesammler-nativ | feat/kategoriesammler-nativ | d782ab2b | Schreibkollision nach Nachrichten an laufende Workflow-Agenten. Eigene Läufe am 2026-10-08 gestoppt, Änderungen erhalten. |
 | A, Integration | w2z142fw3; wf_893f538e-efc; af3c6aedac0ce8e8c | Teil-Orchestrator 0712a6dd-cf2a-4a39-907a-f50b19e7930c | Workflow-Journal und Agenttranskript, Start 2026-10-08 16:21 CEST | Claude Code | gpt-6.1-sol, xhigh | angehalten, Änderungen und Belege übernommen | /home/nathanael/.worktrees/tb-kategoriesammler-nativ | feat/kategoriesammler-nativ | d782ab2b | 8 Collector-/Watchdog-Tests und 4 Supervisor-Tests bestanden, 0 ignoriert; Wrapper: 7 Tests bestanden. Eine zusätzliche wartende Abschlussprüfung wurde gestoppt. Der Teil-Orchestrator übernimmt Gate und Release. Kein Commit oder Produktiveingriff durch den Worker. |
 
+## Gate Runde 1
+
+Kandidat `fd0dbebdc391b05dbccecec1bd384e567b352237`, Basis `origin/main`, Kritiker `gpt-6.1-sol`: BLOCK. Kein Merge oder Deploy.
+
+1. Budget-Hysterese von Abschaltung und Plattenpause trennen; Budgetpause darf nicht irrtümlich dauerhaft einrasten.
+2. Historische Messlücken nur um die tatsächlich erklärten Pausezeiten kürzen; eine kurze Pause darf keinen längeren Ausfall verdecken.
+3. Wartende native Prozesse dürfen die Identität des aktiven Lease-Inhabers nicht überschreiben.
+4. Hinweise mitprüfen: komplette Rollenmatrix, leere Kategorie bei der Umschaltung, Zählerlebensdauer und Moli-Bildnachweis für Pause beziehungsweise veraltete Daten.
+
+Ein frischer nativer Fixer übernimmt diese Runde. Folgeprüfung mit demselben Kritiker, keine Produktivschreibrechte für den Fixer.
+
 ## Reihenfolge und Freigaben
 
 1. AUFTRAG.md: Native Integration fertigstellen, Merge-Gate ALLOW, Merge und Deploy, Live-Beweis. NACHTRAG-1-SPEICHER.md wird als beauftragte Datei mitgesichert. Ungenutzte Legacy-Quellen werden für einen kleineren Gate-Diff separat entfernt; die Produktivumschaltung und Entfernung alter Zugänge erfolgen erst nach dem nativen Messbeweis.

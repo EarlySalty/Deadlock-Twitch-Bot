@@ -156,6 +156,9 @@ category_media|last_seen|timestamp with time zone|NO|now()
 category_media|media_id|text|NO|
 category_media|metadata|jsonb|NO|
 category_media|user_id|text|NO|
+category_native_processes|details|jsonb|NO|
+category_native_processes|heartbeat_at|timestamp with time zone|NO|
+category_native_processes|process_id|bigint|NO|
 category_native_runtime|details|jsonb|NO|
 category_native_runtime|heartbeat_at|timestamp with time zone|NO|
 category_native_runtime|singleton|boolean|NO|true

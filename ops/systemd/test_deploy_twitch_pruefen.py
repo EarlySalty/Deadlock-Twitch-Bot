@@ -106,7 +106,7 @@ systemctl() {
 }
 local_psql() {
   case "$*" in
-    *"FROM category_native_runtime"*)
+    *"FROM category_native_processes"*)
       if [[ "$SCENARIO" != not_ready ]]; then printf '123-1000000\n'; fi ;;
     *"SELECT now()"*) printf '2026-10-08 12:00:00+00\n' ;;
     *"SELECT poll_seconds"*) printf '60\n' ;;

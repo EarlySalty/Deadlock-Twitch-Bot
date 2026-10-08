@@ -611,6 +611,7 @@ DO $verification$
 DECLARE r text; t record;
 BEGIN
     IF to_regclass('public.category_native_runtime') IS NULL OR
+        to_regclass('public.category_native_processes') IS NULL OR
         to_regclass('public.category_watchdog_storage_notifications') IS NULL OR
         NOT EXISTS(SELECT FROM _sqlx_migrations WHERE version=20261008160000 AND success) OR
         NOT EXISTS(SELECT FROM _sqlx_migrations WHERE version=20261008161000 AND success) THEN
@@ -660,7 +661,7 @@ native_cutover() {
   pid=$(systemctl show deadlock-twitch-bot-rust.service --property=MainPID --value)
   [[ "$pid" =~ ^[1-9][0-9]*$ ]] || { printf 'Bot hat keine gültige Prozess-ID.\n' >&2; return 1; }
   for ((attempt=0; attempt<90; attempt++)); do
-    lease_id=$(local_psql postgres twitch_analytics postgres -c "SELECT details->>'lease_id' FROM category_native_runtime WHERE singleton AND heartbeat_at > now()-interval '30 seconds' AND details->>'process_id'='$pid' AND details->>'lease_state' IN('waiting','active')")
+    lease_id=$(local_psql postgres twitch_analytics postgres -c "SELECT details->>'lease_id' FROM category_native_processes WHERE heartbeat_at > now()-interval '30 seconds' AND process_id=$pid AND details->>'process_id'='$pid' AND details->>'lease_state' IN('waiting','active')")
     if [[ "$lease_id" =~ ^[0-9]+-[0-9]+$ ]]; then
       ready=1
       break
@@ -686,9 +687,10 @@ SELECT EXISTS(SELECT FROM category_collector_status s JOIN category_native_runti
     WHERE s.heartbeat_at > now()-interval '30 seconds' AND n.heartbeat_at > now()-interval '30 seconds'
     AND s.details->>'runtime'='tb-bot' AND s.details->>'process_id'=:'pid'
     AND s.details->>'lease_id'=:'lease_id' AND n.details->>'lease_id'=:'lease_id'
+    AND n.details->>'process_id'=:'pid'
     AND s.details->>'native_lease_active'='true' AND n.details->>'lease_state'='active'
-    AND EXISTS(SELECT FROM category_collection_runs WHERE snapshot_at > :'cutoff'::timestamptz)
-    AND EXISTS(SELECT FROM category_stream_snapshots WHERE snapshot_at > :'cutoff'::timestamptz));
+    AND EXISTS(SELECT FROM category_collection_runs WHERE snapshot_at > :'cutoff'::timestamptz
+        AND snapshot_at=(s.details->>'last_discovery_snapshot_at')::timestamptz));
 SQL
     ) == t ]]; then
       active=1

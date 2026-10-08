@@ -18,18 +18,33 @@ type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 const BOT: &str = "deadlock-twitch-bot-rust.service";
 const COLLECTOR: &str = "category-collector";
 const BROKER: &str = "http://127.0.0.1:8770/internal/master/v1/discord/send-message";
-const GAP_QUERY: &str = "INSERT INTO twitch_watchdog_incidents(service,started_at,recovered_at)
-    SELECT $1,previous_at,snapshot_at FROM (
+const GAP_QUERY: &str = "WITH runs AS (
       SELECT snapshot_at,poll_seconds,lag(snapshot_at) OVER(ORDER BY snapshot_at) AS previous_at,
         lag(poll_seconds) OVER(ORDER BY snapshot_at) AS previous_poll
       FROM category_collection_runs WHERE snapshot_at >= $2 - interval '2 days'
         OR snapshot_at = (SELECT MAX(snapshot_at) FROM category_collection_runs WHERE snapshot_at < $2 - interval '2 days')
-    ) r WHERE snapshot_at - previous_at > make_interval(secs => 3*GREATEST(poll_seconds,previous_poll))
-    AND NOT EXISTS(SELECT 1 FROM category_watchdog_suspensions p
-        WHERE p.started_at < r.snapshot_at
-            AND LEAST(COALESCE(p.ended_at,$2),p.last_seen_at + interval '90 seconds') > r.previous_at)
-    AND NOT EXISTS(SELECT 1 FROM twitch_watchdog_incidents i WHERE i.service=$1
-        AND i.started_at < r.snapshot_at AND COALESCE(i.recovered_at,$2) > r.previous_at)
+    ), gaps AS (
+      SELECT tstzrange(previous_at,snapshot_at,'[)') AS span,
+        make_interval(secs => 3*GREATEST(poll_seconds,previous_poll)) AS grace
+      FROM runs WHERE snapshot_at - previous_at > make_interval(secs => 3*GREATEST(poll_seconds,previous_poll))
+    ), unexplained AS (
+      SELECT remainder,grace FROM gaps
+      CROSS JOIN LATERAL unnest(tstzmultirange(span) - COALESCE((
+        SELECT range_agg(span * tstzrange(p.started_at,
+            LEAST(COALESCE(p.ended_at,$2),p.last_seen_at + interval '90 seconds'),'[)'))
+        FROM category_watchdog_suspensions p WHERE p.started_at < upper(span)
+          AND LEAST(COALESCE(p.ended_at,$2),p.last_seen_at + interval '90 seconds') > lower(span)
+      ),'{}'::tstzmultirange)) AS residual(remainder)
+    ), candidates AS (
+      SELECT remainder FROM unexplained WHERE upper(remainder)-lower(remainder) > grace
+    )
+    INSERT INTO twitch_watchdog_incidents(service,started_at,recovered_at)
+    SELECT $1,lower(unrecorded),upper(unrecorded) FROM candidates
+    CROSS JOIN LATERAL unnest(tstzmultirange(remainder) - COALESCE((
+      SELECT range_agg(remainder * tstzrange(i.started_at,COALESCE(i.recovered_at,$2),'[)'))
+      FROM twitch_watchdog_incidents i WHERE i.service=$1 AND i.started_at < upper(remainder)
+        AND COALESCE(i.recovered_at,$2) > lower(remainder)
+    ),'{}'::tstzmultirange)) AS new_gaps(unrecorded)
     ON CONFLICT DO NOTHING";
 
 #[cfg(test)]
@@ -119,6 +134,14 @@ async fn record_suspensions(
         ("disabled", !state.enabled),
         ("disk", state.enabled && state.disk_paused),
     ] {
+        sqlx::query(
+            "UPDATE category_watchdog_suspensions SET ended_at=last_seen_at + interval '90 seconds'
+            WHERE reason=$1 AND ended_at IS NULL AND last_seen_at < $2 - interval '90 seconds'",
+        )
+        .bind(reason)
+        .bind(now)
+        .execute(pool)
+        .await?;
         if active {
             sqlx::query("INSERT INTO category_watchdog_suspensions(reason,started_at,last_seen_at) VALUES($1,$2,$3)
                 ON CONFLICT(reason) WHERE ended_at IS NULL DO UPDATE SET last_seen_at=excluded.last_seen_at")
@@ -590,6 +613,150 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn historical_gaps_subtract_only_observed_union_and_existing_incidents() {
+        use std::str::FromStr;
+        let dsn =
+            test_database::database_url().expect("isolated Postgres test configuration required");
+        let options = PgConnectOptions::from_str(&dsn).unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options.clone())
+            .await
+            .unwrap();
+        let schema = format!(
+            "gaps_{}_{}",
+            std::process::id(),
+            Utc::now().timestamp_subsec_nanos()
+        );
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+            .execute(&admin)
+            .await
+            .unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(options.options([("search_path", schema.as_str())]))
+            .await
+            .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/20261001220000_twitch_watchdog_incidents.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/20261008161000_category_watchdog_native.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql("TRUNCATE category_watchdog_suspensions; CREATE TABLE category_collection_runs(snapshot_at timestamptz PRIMARY KEY,poll_seconds integer NOT NULL)")
+            .execute(&pool).await.unwrap();
+        let now = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+        let end = now + chrono::Duration::hours(1);
+        sqlx::query("INSERT INTO category_collection_runs VALUES($1,60),($2,60)")
+            .bind(now)
+            .bind(end)
+            .execute(&pool)
+            .await
+            .unwrap();
+        for reason in ["disabled", "disk", "unobserved"] {
+            sqlx::query("TRUNCATE category_watchdog_suspensions,twitch_watchdog_incidents")
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO category_watchdog_suspensions(reason,started_at,last_seen_at,ended_at) VALUES($1,$2,$3,$3)")
+                .bind(reason).bind(now + chrono::Duration::minutes(30)).bind(now + chrono::Duration::minutes(31))
+                .execute(&pool).await.unwrap();
+            for _ in 0..2 {
+                sqlx::query(GAP_QUERY)
+                    .bind(COLLECTOR)
+                    .bind(end)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+            let incidents: (i64, f64) = sqlx::query_as("SELECT count(*),extract(epoch FROM sum(recovered_at-started_at))::float8 FROM twitch_watchdog_incidents")
+                .fetch_one(&pool).await.unwrap();
+            assert_eq!(incidents, (2, 3540.0), "{reason}");
+        }
+        sqlx::query("TRUNCATE category_watchdog_suspensions,twitch_watchdog_incidents")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for (reason, start, finish) in [
+            ("disabled", 10, 30),
+            ("disk", 20, 40),
+            ("unobserved", 25, 35),
+        ] {
+            sqlx::query("INSERT INTO category_watchdog_suspensions(reason,started_at,last_seen_at,ended_at) VALUES($1,$2,$3,$3)")
+                .bind(reason).bind(now + chrono::Duration::minutes(start)).bind(now + chrono::Duration::minutes(finish))
+                .execute(&pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO twitch_watchdog_incidents(service,started_at,recovered_at) VALUES($1,$2,$3)")
+            .bind(COLLECTOR).bind(now).bind(now + chrono::Duration::minutes(5)).execute(&pool).await.unwrap();
+        for _ in 0..2 {
+            sqlx::query(GAP_QUERY)
+                .bind(COLLECTOR)
+                .bind(end)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let incidents: (i64, f64) = sqlx::query_as("SELECT count(*),extract(epoch FROM sum(recovered_at-started_at))::float8 FROM twitch_watchdog_incidents")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(incidents, (3, 1800.0));
+        sqlx::query("TRUNCATE category_watchdog_suspensions,twitch_watchdog_incidents")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut paused = CollectorState {
+            enabled: true,
+            poll_seconds: 60,
+            heartbeat_at: Some(now),
+            disk_paused: true,
+            raw_paused: true,
+            latest: Some(now),
+            resumed_at: None,
+        };
+        record_suspensions(&pool, &paused, now).await.unwrap();
+        paused.heartbeat_at = Some(end);
+        record_suspensions(&pool, &paused, end).await.unwrap();
+        for _ in 0..2 {
+            sqlx::query(GAP_QUERY)
+                .bind(COLLECTOR)
+                .bind(end)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let missed: (i64, f64) = sqlx::query_as("SELECT count(*),extract(epoch FROM sum(recovered_at-started_at))::float8 FROM twitch_watchdog_incidents")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(missed, (1, 3510.0));
+        sqlx::query("TRUNCATE category_watchdog_suspensions,twitch_watchdog_incidents")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO category_watchdog_suspensions(reason,started_at,last_seen_at,ended_at) VALUES('unobserved',$1,$2,$2)")
+            .bind(now - chrono::Duration::hours(1)).bind(now + chrono::Duration::minutes(1))
+            .execute(&pool).await.unwrap();
+        sqlx::query(GAP_QUERY)
+            .bind(COLLECTOR)
+            .bind(end)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let rest: f64 = sqlx::query_scalar("SELECT extract(epoch FROM sum(recovered_at-started_at))::float8 FROM twitch_watchdog_incidents")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(rest, 3540.0);
+        pool.close().await;
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+    }
+
+    #[tokio::test]
     async fn incidents_survive_retries_and_recovery_opens_a_new_incident() {
         use sqlx::postgres::PgConnectOptions;
         use std::str::FromStr;
@@ -813,10 +980,11 @@ mod tests {
             resumed_at: None,
         };
         record_suspensions(&pool, &paused, now).await.unwrap();
-        paused.heartbeat_at = Some(now + chrono::Duration::hours(1));
-        record_suspensions(&pool, &paused, now + chrono::Duration::hours(1))
-            .await
-            .unwrap();
+        for minute in 1..=60 {
+            let observed = now + chrono::Duration::minutes(minute);
+            paused.heartbeat_at = Some(observed);
+            record_suspensions(&pool, &paused, observed).await.unwrap();
+        }
         sqlx::query(GAP_QUERY)
             .bind(COLLECTOR)
             .bind(now + chrono::Duration::hours(1))
