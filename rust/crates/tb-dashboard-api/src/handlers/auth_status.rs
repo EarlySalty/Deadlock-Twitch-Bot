@@ -20,8 +20,8 @@ use tokio::sync::Mutex;
 
 use crate::auth::{
     level::{
-        AdminActor, AuthenticatedAdminSessionId, AuthenticatedPartnerSessionId, DashboardAuthLevel,
-        DEFAULT_ADMIN_LOGIN,
+        cookie_values, AdminActor, AuthenticatedAdminSessionId, AuthenticatedPartnerSessionId,
+        DashboardAuthLevel, DEFAULT_ADMIN_LOGIN,
     },
     session::DashboardAuthState,
 };
@@ -139,24 +139,15 @@ pub async fn auth_status_handler(
 }
 
 fn admin_mode_header_active(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::COOKIE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|cookie| {
-            cookie.split(';').find_map(|pair| {
-                let (name, value) = pair.trim().split_once('=')?;
-                (name.trim() == ADMIN_MODE_COOKIE).then_some(value.trim())
-            })
-        })
-        == Some("2")
+    cookie_values(headers, ADMIN_MODE_COOKIE).into_iter().next() == Some("2")
 }
 
 // ── Unauthentifiziert ───────────────────────────────────────────────────────
 
 async fn unauth_response() -> Response {
-    let now = now_secs();
     {
         let mut cache = unauth_cache().lock().await;
+        let now = now_secs();
         if let Some(ref payload) = cache.payload {
             if now - cache.created_at < UNAUTH_CACHE_TTL_SECS {
                 return cached_json_response(payload.clone(), UNAUTH_CACHE_CONTROL);
@@ -464,6 +455,134 @@ mod tests {
         assert!(entitlements.iter().any(|e| e == "social.auto_post"));
         assert!(entitlements.iter().any(|e| e == "raid.priority"));
         assert!(entitlements.iter().any(|e| e == "analytics"));
+    }
+
+    #[test]
+    fn moduscookie_beachtet_header_und_wertreihenfolge() {
+        let cases: &[(&[&str], bool)] = &[
+            (&[], false),
+            (&["tb_admin_mode=2"], true),
+            (&["twitch_dash_session=test", "tb_admin_mode=2"], true),
+            (&["other=1", " tb_admin_mode = 2 ; other=3"], true),
+            (&["tb_admin_mode=1; tb_admin_mode=2"], false),
+            (&["tb_admin_mode=2; tb_admin_mode=1"], true),
+            (&["tb_admin_mode=1", "tb_admin_mode=2"], false),
+            (&["tb_admin_mode=2", "tb_admin_mode=1"], true),
+            (&["tb_admin_mode=", "tb_admin_mode=2"], false),
+            (&["tb_admin_mode=02"], false),
+            (&["tb_admin_mode=2=other"], false),
+            (&["tb_admin_mode_other=2"], false),
+        ];
+        for &(cookies, expected) in cases {
+            let mut headers = HeaderMap::new();
+            for cookie in cookies {
+                headers.append(header::COOKIE, cookie.parse().unwrap());
+            }
+            assert_eq!(admin_mode_header_active(&headers), expected, "{cookies:?}");
+        }
+
+        let mut headers = HeaderMap::new();
+        headers.append(
+            header::COOKIE,
+            axum::http::HeaderValue::from_bytes(b"other=\x80").unwrap(),
+        );
+        headers.append(
+            header::COOKIE,
+            axum::http::HeaderValue::from_static("tb_admin_mode=2"),
+        );
+        assert!(admin_mode_header_active(&headers));
+    }
+
+    #[tokio::test]
+    async fn twitch_admin_sieht_admin_praesentation_mit_zweitem_cookie_header() {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            header::COOKIE,
+            axum::http::HeaderValue::from_static("twitch_dash_session=test"),
+        );
+        headers.append(
+            header::COOKIE,
+            axum::http::HeaderValue::from_static("tb_admin_mode=2"),
+        );
+        let response = auth_status_handler(
+            twitch_admin(),
+            None,
+            None,
+            None,
+            State(unavailable_pool()),
+            headers,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = json_body(response).await;
+
+        assert_eq!(value["level"], "admin");
+        assert_eq!(value["isAdmin"], true);
+        assert_eq!(value["adminEligible"], true);
+        assert_eq!(value["adminMode"], true);
+        assert_eq!(value["twitchUserId"], "42");
+        assert_eq!(value["twitchLogin"], "earlysalty");
+    }
+
+    #[tokio::test]
+    async fn moduscookie_aendert_keine_fremde_oder_interne_identitaet() {
+        for (auth, level, is_admin) in [
+            (DashboardAuthLevel::None, "none", false),
+            (
+                DashboardAuthLevel::Partner {
+                    twitch_login: "partner".into(),
+                    twitch_user_id: "99".into(),
+                    display_name: "Partner".into(),
+                },
+                "partner",
+                false,
+            ),
+            (DashboardAuthLevel::admin(), "admin", true),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.append(
+                header::COOKIE,
+                axum::http::HeaderValue::from_static("other=1"),
+            );
+            headers.append(
+                header::COOKIE,
+                axum::http::HeaderValue::from_static("tb_admin_mode=2"),
+            );
+            let response =
+                auth_status_handler(auth, None, None, None, State(unavailable_pool()), headers)
+                    .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let value = json_body(response).await;
+            assert_eq!(value["level"], level);
+            assert_eq!(value["isAdmin"], is_admin);
+            assert_eq!(value["adminMode"], is_admin);
+            assert_eq!(value["adminEligible"], false);
+        }
+    }
+
+    #[tokio::test]
+    async fn unauth_wartender_request_vertraegt_neueren_cachezeitpunkt() {
+        let mut cache = unauth_cache().lock().await;
+        let queued_at = now_secs();
+        let mut response = std::pin::pin!(unauth_response());
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(std::future::Future::poll(response.as_mut(), &mut context).is_pending());
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let refreshed_at = now_secs();
+        assert!(refreshed_at > queued_at);
+        cache.payload = Some(unauth_payload());
+        cache.created_at = refreshed_at;
+        drop(cache);
+
+        let response = response.await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            UNAUTH_CACHE_CONTROL
+        );
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+        assert_eq!(json_body(response).await, unauth_payload());
     }
 
     #[tokio::test]
