@@ -953,8 +953,8 @@
   "canonical_inputs": {
     "arguments_file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/WORKFLOW-ARGS.json",
     "arguments_sha256": "155a68009d7c584205ca448034e63c9fe8574a30faf64cda0c078e44fdccd535",
-    "canonical_claims_key": "wf_97f7401d-6c8",
-    "replacement_slots_key": "wf_e359d631-ed4",
+    "canonical_claims_workflow_id": "wf_97f7401d-6c8",
+    "replacement_slots_workflow_id": "wf_e359d631-ed4",
     "replacement_slots": [
       {
         "claim": "HTTP-URLs mit IPv6-Loopback [::1] werden beim Dashboard-OAuth fälschlich abgelehnt.",
