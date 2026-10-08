@@ -450,6 +450,11 @@ mod tests {
 
     #[tokio::test]
     async fn fremde_affiliate_session_desselben_logins_wird_abgewiesen() {
+        if std::env::var_os("TB_TEST_DATABASE_URL").is_none()
+            && std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1")
+        {
+            return;
+        }
         let pool = pool("t_affiliate_a02_portal").await.expect("Testdatenbank");
         sqlx::query("INSERT INTO affiliate_accounts VALUES ('NANI','Nani',1,'2')")
             .execute(&pool)

@@ -1493,13 +1493,14 @@ mod tests {
         }
     }
 
+    mod test_database {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-support/database.rs"
+        ));
+    }
+
     async fn pool(schema: &str) -> Option<PgPool> {
-        mod test_database {
-            include!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../test-support/database.rs"
-            ));
-        }
         let dsn = test_database::database_url()?;
         let admin = PgPoolOptions::new()
             .max_connections(1)
@@ -1842,6 +1843,9 @@ mod tests {
 
     #[tokio::test]
     async fn callback_verweigert_wiedervergebenen_login_ohne_fremde_aenderungen() {
+        if test_database::database_url().is_none() && !test_database::required() {
+            return;
+        }
         let pool = pool("t_affiliate_a02_callback")
             .await
             .expect("Testdatenbank");
@@ -1921,6 +1925,9 @@ mod tests {
 
     #[tokio::test]
     async fn bestehende_fremde_session_oeffnet_und_aendert_keine_affiliate_daten() {
+        if test_database::database_url().is_none() && !test_database::required() {
+            return;
+        }
         let pool = pool("t_affiliate_a02_session")
             .await
             .expect("Testdatenbank");
