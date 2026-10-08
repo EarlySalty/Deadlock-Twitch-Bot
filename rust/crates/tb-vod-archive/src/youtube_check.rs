@@ -468,6 +468,16 @@ async fn save(
     Ok(true)
 }
 
+pub(crate) async fn part_processed(
+    pool: &PgPool,
+    user: &str,
+    vod_id: i64,
+    part_id: i64,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM twitch_vod_archive_vods v JOIN twitch_vod_archive_parts p ON p.vod_id=v.id JOIN twitch_vod_youtube_checks c ON c.vod_id=v.id JOIN LATERAL (SELECT a.* FROM social_media_platform_auth a WHERE a.twitch_user_id=v.twitch_user_id AND a.platform='youtube' AND a.enabled=1 ORDER BY a.authorized_at DESC,a.id DESC LIMIT 1) a ON TRUE WHERE v.id=$1 AND v.twitch_user_id=$2 AND p.id=$3 AND c.auth_id=a.id AND c.auth_revision=md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')) AND c.channel_id IS NOT NULL AND (a.platform_user_id IS NULL OR c.channel_id=a.platform_user_id) AND c.last_error IS NULL AND EXISTS (SELECT 1 FROM jsonb_array_elements(c.upload_snapshot) saved WHERE saved=jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at)) AND EXISTS (SELECT 1 FROM jsonb_array_elements(c.observations) o WHERE o->>'state'='processed' AND COALESCE(o->>'video_id','')<>'' AND (NULLIF(p.youtube_video_id,'') IS NULL OR o->>'video_id'=p.youtube_video_id) AND (o->'part_index'=to_jsonb(p.part_index) OR ((o->'part_index' IS NULL OR o->'part_index'='null'::jsonb) AND p.part_index=0 AND (SELECT COUNT(*) FROM twitch_vod_archive_parts WHERE vod_id=v.id)=1))))")
+        .bind(vod_id).bind(user).bind(part_id).fetch_one(pool).await
+}
+
 pub async fn cleanup_proof<'a>(
     pool: &'a PgPool,
     user: &str,

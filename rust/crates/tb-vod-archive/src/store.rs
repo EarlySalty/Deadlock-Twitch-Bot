@@ -262,12 +262,6 @@ pub async fn setze_geladen(
     Ok(())
 }
 
-/// Legt die Teile eines VOD an. Bereits hochgeladene Teile bleiben stehen,
-/// damit ein wiederholter Download keinen fertigen Upload vergisst.
-///
-/// Der Streamer steht auch am Teil: hochgeladen wird je Teil, und ohne die
-/// Spalte braeuchte jede Frage nach dem Upload-Aufkommen eines Kanals einen
-/// Join auf die VOD-Tabelle.
 pub async fn setze_teile(
     pool: &PgPool,
     vod_id: i64,
@@ -275,6 +269,13 @@ pub async fn setze_teile(
     dateien: &[String],
 ) -> Result<(), VodArchiveError> {
     for (index, datei) in dateien.iter().enumerate() {
+        let existing: Option<(i64, Option<String>)> = sqlx::query_as("SELECT p.id,v.twitch_user_id FROM twitch_vod_archive_parts p JOIN twitch_vod_archive_vods v ON v.id=p.vod_id WHERE p.vod_id=$1 AND p.part_index=$2")
+            .bind(vod_id).bind(index as i32).fetch_optional(pool).await?;
+        if let Some((id, Some(user))) = existing {
+            if crate::youtube_check::part_processed(pool, &user, vod_id, id).await? {
+                continue;
+            }
+        }
         let groesse = tokio::fs::metadata(datei)
             .await
             .map(|meta| meta.len() as i64)
@@ -719,11 +720,9 @@ pub(crate) mod tests {
         let Some(pool) = pool("t_vod_entdecken").await else {
             return;
         };
-        assert!(
-            merke_vod(&pool, "v1", "earlysalty", "42", "Erster", 100)
-                .await
-                .unwrap()
-        );
+        assert!(merke_vod(&pool, "v1", "earlysalty", "42", "Erster", 100)
+            .await
+            .unwrap());
         // Zweiter Lauf sieht dasselbe VOD und darf nichts anfassen.
         assert!(
             !merke_vod(&pool, "v1", "earlysalty", "42", "Anderer Titel", 999)
@@ -750,12 +749,10 @@ pub(crate) mod tests {
             .execute(&pool).await.unwrap();
         assert_eq!(offene_vods(&pool, "42", 10).await.unwrap().len(), 1);
         assert_eq!(offene_vods(&pool, "99", 10).await.unwrap().len(), 1);
-        assert!(
-            offene_vods(&pool, "earlysalty", 10)
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        assert!(offene_vods(&pool, "earlysalty", 10)
+            .await
+            .unwrap()
+            .is_empty());
         assert!(
             merke_vod(&pool, "invalid", "earlysalty", "", "Missing", 100)
                 .await
@@ -780,12 +777,10 @@ pub(crate) mod tests {
                 .len(),
             1
         );
-        assert!(
-            frisch_hochgeladene_teile(&pool, "99", 7)
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        assert!(frisch_hochgeladene_teile(&pool, "99", 7)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -976,11 +971,9 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        assert!(
-            setze_upload_abgelehnt(&pool, teil.id, vod.id, "verworfen")
-                .await
-                .is_err()
-        );
+        assert!(setze_upload_abgelehnt(&pool, teil.id, vod.id, "verworfen")
+            .await
+            .is_err());
         let teil = teile(&pool, vod.id, &test_cipher())
             .await
             .unwrap()

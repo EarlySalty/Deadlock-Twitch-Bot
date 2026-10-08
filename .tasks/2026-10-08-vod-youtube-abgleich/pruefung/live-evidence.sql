@@ -17,12 +17,13 @@ SELECT jsonb_build_object(
 )
 FROM twitch_vod_archive_vods v
 LEFT JOIN LATERAL (
-    SELECT a.id, md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')) AS revision
+    SELECT a.id, a.platform_user_id, md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')) AS revision
     FROM social_media_platform_auth a
     WHERE a.twitch_user_id=v.twitch_user_id AND a.platform='youtube' AND a.enabled=1
     ORDER BY a.authorized_at DESC,a.id DESC LIMIT 1
 ) a ON TRUE
 LEFT JOIN twitch_vod_youtube_checks c ON c.vod_id=v.id AND c.auth_id=a.id AND c.auth_revision=a.revision
+    AND c.channel_id IS NOT NULL AND (a.platform_user_id IS NULL OR c.channel_id=a.platform_user_id)
     AND c.upload_snapshot=(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index),'[]'::jsonb) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id);
 
 SELECT jsonb_build_object(
@@ -37,7 +38,7 @@ SELECT jsonb_build_object(
     'stored_check_present', EXISTS(SELECT 1 FROM twitch_vod_youtube_checks old WHERE old.vod_id=v.id),
     'state', c.state,
     'complete', c.complete,
-    'error', c.last_error,
+    'error_present', c.last_error IS NOT NULL,
     'auth_id', c.auth_id,
     'actual_channel_observed', c.channel_id IS NOT NULL,
     'last_attempt_at', c.last_attempt_at,
@@ -56,32 +57,35 @@ SELECT jsonb_build_object(
 )
 FROM twitch_vod_archive_vods v
 LEFT JOIN LATERAL (
-    SELECT a.id, md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')) AS revision
+    SELECT a.id, a.platform_user_id, md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')) AS revision
     FROM social_media_platform_auth a
     WHERE a.twitch_user_id=v.twitch_user_id AND a.platform='youtube' AND a.enabled=1
     ORDER BY a.authorized_at DESC,a.id DESC LIMIT 1
 ) a ON TRUE
 LEFT JOIN twitch_vod_youtube_checks c ON c.vod_id=v.id AND c.auth_id=a.id AND c.auth_revision=a.revision
+    AND c.channel_id IS NOT NULL AND (a.platform_user_id IS NULL OR c.channel_id=a.platform_user_id)
     AND c.upload_snapshot=(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index),'[]'::jsonb) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id)
 LEFT JOIN twitch_vod_youtube_scans s ON s.twitch_user_id=v.twitch_user_id AND s.auth_id=a.id AND s.auth_revision=a.revision
+    AND s.channel_id IS NOT NULL AND (a.platform_user_id IS NULL OR s.channel_id=a.platform_user_id)
+    AND (c.channel_id IS NULL OR s.channel_id=c.channel_id)
 WHERE v.id IN (10,11,2941,2995,2996)
 ORDER BY v.id;
 
 SELECT jsonb_build_object(
     'proof', 'scan_account',
     'auth_id', s.auth_id,
-    'current_account', s.auth_id=a.id AND s.auth_revision=a.revision,
+    'current_account', s.auth_id=a.id AND s.auth_revision=a.revision AND s.channel_id IS NOT NULL AND (a.platform_user_id IS NULL OR s.channel_id=a.platform_user_id),
     'generation', s.generation,
     'complete', s.complete,
     'pending_page', s.cursor IS NOT NULL,
     'last_attempt_at', s.last_attempt_at,
     'last_success_at', s.last_success_at,
-    'last_error', s.last_error,
+    'last_error_present', s.last_error IS NOT NULL,
     'source_marked_inventory', (SELECT COUNT(*) FROM twitch_vod_youtube_inventory i WHERE i.twitch_user_id=s.twitch_user_id AND i.generation=s.generation)
 )
 FROM twitch_vod_youtube_scans s
 LEFT JOIN LATERAL (
-    SELECT a.id, md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')) AS revision
+    SELECT a.id, a.platform_user_id, md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')) AS revision
     FROM social_media_platform_auth a
     WHERE a.twitch_user_id=s.twitch_user_id AND a.platform='youtube' AND a.enabled=1
     ORDER BY a.authorized_at DESC,a.id DESC LIMIT 1

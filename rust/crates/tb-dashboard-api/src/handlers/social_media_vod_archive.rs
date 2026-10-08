@@ -29,9 +29,9 @@ pub async fn list_handler(
          paged AS (SELECT v.id, v.twitch_id, v.streamer_login, v.twitch_user_id, v.title, v.duration_sec, \
          v.recorded_at, v.discovered_at, v.status, v.last_error, v.drive_url, v.drive_requested, \
          v.last_attempt_at, v.uploaded_at, v.local_path, \
-         CASE WHEN c.vod_id IS NOT NULL THEN jsonb_build_object('state',c.state,'complete',c.complete,'observations',c.observations,'last_attempt_at',c.last_attempt_at,'last_success_at',c.last_success_at,'error',c.last_error,'pending',c.requested_at IS NOT NULL,'can_request',c.requested_at IS NULL AND (c.last_attempt_at IS NULL OR c.last_attempt_at<NOW()-INTERVAL '10 minutes') AND (c.last_error IS DISTINCT FROM 'quota' OR c.next_check_at<=NOW())) END AS youtube_check, \
+         CASE WHEN c.vod_id IS NOT NULL THEN jsonb_build_object('upload_snapshot',c.upload_snapshot,'snapshot_current',c.upload_snapshot=(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index),'[]'::jsonb) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id),'state',c.state,'complete',c.complete,'observations',c.observations,'last_attempt_at',c.last_attempt_at,'last_success_at',c.last_success_at,'error',c.last_error,'pending',c.requested_at IS NOT NULL,'can_request',c.requested_at IS NULL AND (c.last_attempt_at IS NULL OR c.last_attempt_at<NOW()-INTERVAL '10 minutes') AND (c.last_error IS DISTINCT FROM 'quota' OR c.next_check_at<=NOW())) END AS youtube_check, \
          a.id IS NOT NULL AS can_check_youtube, \
-         COALESCE((SELECT jsonb_agg(jsonb_build_object('index', p.part_index, 'status', p.status, \
+         COALESCE((SELECT jsonb_agg(jsonb_build_object('id',p.id,'updated_at',p.updated_at,'index', p.part_index, 'status', p.status, \
             'youtube_video_id', p.youtube_video_id, 'file_path', p.file_path) ORDER BY p.part_index) \
             FROM twitch_vod_archive_parts p WHERE p.vod_id = v.id), '[]'::jsonb) AS parts, \
          COALESCE(NOT a.needs_reauth AND a.access_token_enc IS NOT NULL \
@@ -43,7 +43,7 @@ pub async fn list_handler(
             ORDER BY a.authorized_at DESC, a.id DESC LIMIT 1) a ON TRUE \
          LEFT JOIN twitch_vod_youtube_checks c ON c.vod_id=v.id AND c.auth_id=a.id \
            AND c.auth_revision=md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')) \
-           AND c.upload_snapshot=(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index),'[]'::jsonb) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id) \
+           AND c.channel_id IS NOT NULL AND (a.platform_user_id IS NULL OR c.channel_id=a.platform_user_id) \
          ORDER BY v.discovered_at DESC, v.id DESC LIMIT 50 OFFSET $2) \
          SELECT paged.*, totals.total FROM (SELECT COUNT(*) AS total FROM visible) totals \
          LEFT JOIN paged ON TRUE ORDER BY paged.discovered_at DESC, paged.id DESC",
@@ -72,14 +72,20 @@ pub async fn list_handler(
                 let uploaded_at: Option<chrono::DateTime<chrono::Utc>> = row.get("uploaded_at");
                 let progress = archive_progress(&status, &parts, drive_url.as_deref(), uploaded_at.is_some());
                 let check: Option<Value> = row.get("youtube_check");
-                let check_state = check.as_ref().and_then(|c| c["state"].as_str());
+                let visible_check = check.as_ref().filter(|check| check["snapshot_current"] == true).map(|check| {
+                    let mut check = check.clone();
+                    check.as_object_mut().unwrap().remove("upload_snapshot");
+                    check.as_object_mut().unwrap().remove("snapshot_current");
+                    check
+                });
+                let check_state = visible_check.as_ref().and_then(|c| c["state"].as_str());
                 let local_path: Option<String> = row.get("local_path");
                 let recovery = terminal_recovery(&status, &parts, check.as_ref(), local_path.as_deref(), progress.drive_complete);
                 let checked_status = if progress.drive_complete { None } else { youtube_check_label(check_state) };
                 json!({
-                    "youtube_check": check,
+                    "youtube_check": visible_check,
                     "can_check_youtube": row.get::<bool, _>("can_check_youtube"),
-                    "youtube_verified_complete": check.as_ref().is_some_and(|c| c["complete"] == true && c["state"] == "confirmed"),
+                    "youtube_verified_complete": youtube_verified_complete(check.as_ref()),
                     "id": row.get::<i64, _>("id"),
                     "twitch_id": row.get::<String, _>("twitch_id"),
                     "channel": row.get::<String, _>("streamer_login"),
@@ -94,9 +100,9 @@ pub async fn list_handler(
                     "drive_complete": progress.drive_complete,
                     "confirmed_parts": progress.confirmed_parts,
                     "total_parts": progress.total_parts,
-                    "can_retry": progress.can_retry || recovery.as_ref().is_some_and(|r| r.retry),
+                    "can_retry": (progress.can_retry || recovery.as_ref().is_some_and(|r| r.retry)) && youtube_retry_available(&parts, check.as_ref()),
                     "can_drive": progress.can_retry || recovery.as_ref().is_some_and(|r| r.drive),
-                    "reason": error_label(&status, last_error.as_deref(), drive_requested).or_else(|| recovery.as_ref().map(|r| r.reason)).or_else(|| if check.is_some() { None } else if parts.as_array().is_some_and(|parts| parts.iter().any(|part| part["status"] == "rejected")) && !progress.drive_complete { Some("YouTube hat einen Upload abgelehnt oder entfernt. Prüfe das Ziel und die YouTube-Verbindung.") } else if progress.state == "unknown" { Some("Für diesen früheren Upload fehlt ein vollständiger Nachweis. Der YouTube-Abgleich kann vorhandene Videos zuordnen.") } else { None }),
+                    "reason": error_label(&status, last_error.as_deref(), drive_requested).or_else(|| recovery.as_ref().map(|r| r.reason)).or_else(|| if visible_check.is_some() { None } else if parts.as_array().is_some_and(|parts| parts.iter().any(|part| part["status"] == "rejected")) && !progress.drive_complete { Some("YouTube hat einen Upload abgelehnt oder entfernt. Prüfe das Ziel und die YouTube-Verbindung.") } else if progress.state == "unknown" { Some("Für diesen früheren Upload fehlt ein vollständiger Nachweis. Der YouTube-Abgleich kann vorhandene Videos zuordnen.") } else { None }),
                     "drive_url": drive_url,
                     "drive_requested": drive_requested,
                     "last_attempt_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_attempt_at"),
@@ -228,6 +234,53 @@ fn error_label(
     }
 }
 
+fn youtube_verified_complete(check: Option<&Value>) -> bool {
+    check.is_some_and(|check| {
+        check["error"].is_null()
+            && check["snapshot_current"] == true
+            && check["state"] == "confirmed"
+            && check["complete"] == true
+    })
+}
+
+fn youtube_part_confirmed(part: &Value, check: Option<&Value>, total: usize) -> bool {
+    check
+        .filter(|check| {
+            check["error"].is_null()
+                && check["upload_snapshot"].as_array().is_some_and(|snapshot| {
+                    snapshot.iter().any(|saved| {
+                        *saved == json!({"id":part["id"],"index":part["index"],"status":part["status"],"video_id":part["youtube_video_id"],"updated_at":part["updated_at"]})
+                    })
+                })
+        })
+        .and_then(|check| check["observations"].as_array())
+        .is_some_and(|observations| {
+            observations.iter().any(|observation| {
+                observation["state"] == "processed"
+                    && observation["video_id"].as_str().is_some_and(|id| !id.is_empty())
+                    && observation["part_index"]
+                        .as_i64()
+                        .or_else(|| (total == 1 && observation["part_index"].is_null()).then_some(0))
+                        == part["index"].as_i64()
+                    && part["youtube_video_id"]
+                        .as_str()
+                        .filter(|id| !id.is_empty())
+                        .is_none_or(|id| observation["video_id"] == id)
+            })
+        })
+}
+
+fn youtube_retry_available(parts: &Value, check: Option<&Value>) -> bool {
+    if youtube_verified_complete(check) {
+        return false;
+    }
+    let parts = parts.as_array().map(Vec::as_slice).unwrap_or_default();
+    parts.is_empty()
+        || parts
+            .iter()
+            .any(|part| !youtube_part_confirmed(part, check, parts.len()))
+}
+
 struct TerminalRecovery {
     retry: bool,
     drive: bool,
@@ -253,7 +306,8 @@ fn terminal_recovery(
         return None;
     }
     let parts = parts.as_array().map(Vec::as_slice).unwrap_or_default();
-    let current = check.filter(|check| check["error"].is_null());
+    let current =
+        check.filter(|check| check["error"].is_null() && check["snapshot_current"] == true);
     let affected = current
         .is_some_and(|check| matches!(check["state"].as_str(), Some("rejected" | "unavailable")))
         || parts.iter().any(|part| part["status"] == "rejected");
@@ -277,9 +331,11 @@ fn terminal_recovery(
     let reset: Vec<_> = parts
         .iter()
         .filter(|part| {
-            rejected(part)
-                || (matches!(part["status"].as_str(), Some("failed" | "pending"))
-                    && part["youtube_video_id"].as_str().is_none_or(str::is_empty))
+            !youtube_verified_complete(current)
+                && !youtube_part_confirmed(part, check, parts.len())
+                && (rejected(part)
+                    || (matches!(part["status"].as_str(), Some("failed" | "pending"))
+                        && part["youtube_video_id"].as_str().is_none_or(str::is_empty)))
         })
         .filter_map(|part| {
             part["index"]
@@ -308,8 +364,10 @@ fn terminal_recovery(
             "Die lokale Kopie fehlt. Prüfe das vorhandene Video und die YouTube-Verbindung; ein erneuter Upload ist derzeit nicht möglich."
         } else if !retry {
             "Das vorhandene YouTube-Video bleibt unverändert. Du kannst die lokale Kopie auf Drive sichern."
-        } else {
+        } else if drive {
             "Du kannst abgelehnte Teile ausdrücklich erneut hochladen oder die lokale Kopie auf Drive sichern. Bereits erfolgreiche Teile bleiben erhalten."
+        } else {
+            "Du kannst abgelehnte Teile ausdrücklich erneut hochladen. Bereits erfolgreiche Teile bleiben erhalten."
         },
     })
 }
@@ -399,15 +457,26 @@ async fn apply_action(
         tx.commit().await?;
         return Ok(Some(queued == 1));
     }
-    if action != "hide" && matches!(status.as_str(), "uploaded" | "archived" | "drive_uploaded") {
-        let parts: Value = sqlx::query_scalar("SELECT COALESCE(jsonb_agg(jsonb_build_object('index',part_index,'status',status,'youtube_video_id',youtube_video_id,'file_path',file_path) ORDER BY part_index),'[]'::jsonb) FROM twitch_vod_archive_parts WHERE vod_id=$1")
-            .bind(id).fetch_one(&mut *tx).await?;
-        let check: Option<Value> = if let Some((auth_id, revision, channel)) = target.as_ref() {
-            sqlx::query_scalar("SELECT jsonb_build_object('state',c.state,'error',c.last_error,'observations',c.observations) FROM twitch_vod_youtube_checks c WHERE c.vod_id=$1 AND c.auth_id=$2 AND c.auth_revision=$3 AND c.channel_id IS NOT NULL AND ($4::text IS NULL OR c.channel_id=$4) AND c.upload_snapshot=(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index),'[]'::jsonb) FROM twitch_vod_archive_parts p WHERE p.vod_id=$1)")
+    let parts: Value = if action != "hide" {
+        sqlx::query_scalar("SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id,'updated_at',updated_at,'index',part_index,'status',status,'youtube_video_id',youtube_video_id,'file_path',file_path) ORDER BY part_index),'[]'::jsonb) FROM twitch_vod_archive_parts WHERE vod_id=$1")
+            .bind(id).fetch_one(&mut *tx).await?
+    } else {
+        json!([])
+    };
+    let check: Option<Value> = if action != "hide" {
+        if let Some((auth_id, revision, channel)) = target.as_ref() {
+            sqlx::query_scalar("SELECT jsonb_build_object('upload_snapshot',c.upload_snapshot,'snapshot_current',c.upload_snapshot=(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index),'[]'::jsonb) FROM twitch_vod_archive_parts p WHERE p.vod_id=$1),'state',c.state,'complete',c.complete,'error',c.last_error,'observations',c.observations) FROM twitch_vod_youtube_checks c WHERE c.vod_id=$1 AND c.auth_id=$2 AND c.auth_revision=$3 AND c.channel_id IS NOT NULL AND ($4::text IS NULL OR c.channel_id=$4)")
                 .bind(id).bind(auth_id).bind(revision).bind(channel).fetch_optional(&mut *tx).await?
         } else {
             None
-        };
+        }
+    } else {
+        None
+    };
+    if action == "retry" && !youtube_retry_available(&parts, check.as_ref()) {
+        return Ok(Some(false));
+    }
+    if action != "hide" && matches!(status.as_str(), "uploaded" | "archived" | "drive_uploaded") {
         let local_path: Option<String> = row.get("local_path");
         let Some(recovery) = terminal_recovery(
             &status,
@@ -446,8 +515,19 @@ async fn apply_action(
     } else {
         sqlx::query("UPDATE twitch_vod_archive_vods SET status='new', drive_requested=$2, last_error=NULL, updated_at=NOW() WHERE id=$1")
             .bind(id).bind(action == "drive").execute(&mut *tx).await?;
-        sqlx::query("UPDATE twitch_vod_archive_parts SET status='pending', last_error=NULL, updated_at=NOW() WHERE vod_id=$1 AND status IN ('failed','rejected')")
-            .bind(id).execute(&mut *tx).await?;
+        if action == "retry" {
+            let parts = parts.as_array().unwrap();
+            let reset: Vec<i32> = parts
+                .iter()
+                .filter(|part| {
+                    matches!(part["status"].as_str(), Some("failed" | "rejected"))
+                        && !youtube_part_confirmed(part, check.as_ref(), parts.len())
+                })
+                .filter_map(|part| part["index"].as_i64().and_then(|i| i32::try_from(i).ok()))
+                .collect();
+            sqlx::query("UPDATE twitch_vod_archive_parts SET status='pending', last_error=NULL, updated_at=NOW() WHERE vod_id=$1 AND part_index=ANY($2)")
+                .bind(id).bind(reset).execute(&mut *tx).await?;
+        }
     }
     tx.commit().await?;
     Ok(Some(true))
