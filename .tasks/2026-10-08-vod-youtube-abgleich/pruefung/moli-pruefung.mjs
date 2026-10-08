@@ -5,6 +5,7 @@ import { chromium } from '/home/nathanael/.worktrees/tb-vod-youtube-abgleich-202
 
 const root = '/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008';
 const folder = `${root}/.tasks/2026-10-08-vod-youtube-abgleich/pruefung`;
+const output = process.argv[2] ?? folder;
 const dist = `${root}/bot/analytics/dashboard_v2/dist`;
 const browser = await chromium.connectOverCDP('http://127.0.0.1:9338');
 const context = browser.contexts()[0];
@@ -26,7 +27,7 @@ try {
     await page.locator('#vod-archive-title').waitFor();
     await page.waitForFunction(() => document.querySelectorAll('article').length >= 9);
     await page.evaluate(() => document.fonts.ready);
-    await page.screenshot({ path: `${folder}/${name}-oben.png` });
+    await page.screenshot({ path: `${output}/${name}-oben.png` });
     const metrics = await page.evaluate(() => ({
       viewport: innerWidth,
       document: document.documentElement.scrollWidth,
@@ -44,14 +45,14 @@ try {
     if (metrics.document > metrics.viewport || metrics.articles.some(article => !article.icon || article.left < 0 || article.right > metrics.viewport || article.right <= article.left) || !proof?.times.length || !proof.text.includes(expected.status_label) || !proof.buttons.some(button => button.disabled) || errors.length) throw new Error(JSON.stringify({ metrics, errors, scenario }));
     if (scenario === 'connection' && !proof.links.some(link => link.includes('oauth/start/youtube'))) throw new Error('Existing reconnect path missing from connection fixture');
     await page.getByRole('heading', { name: 'Fremder Stream', exact: true }).scrollIntoViewIfNeeded();
-    await page.screenshot({ path: `${folder}/${name}-youtube.png` });
+    await page.screenshot({ path: `${output}/${name}-youtube.png` });
     await page.getByRole('heading', { name: 'Unklarer älterer Abschluss', exact: true }).scrollIntoViewIfNeeded();
-    await page.screenshot({ path: `${folder}/${name}-unklar.png` });
+    await page.screenshot({ path: `${output}/${name}-unklar.png` });
     results.push({ name, width, height, metrics, errors });
     await page.close();
   }
   }
-  fs.writeFileSync(`${folder}/moli-layout.json`, JSON.stringify({ fixtureOnly: true, sha, dirty, hashes, results }, null, 2));
+  fs.writeFileSync(`${output}/moli-layout.json`, JSON.stringify({ fixtureOnly: true, sha, dirty, hashes, results }, null, 2));
   console.log(JSON.stringify({ fixtureOnly: true, sha, dirty, results: results.map(({ name, metrics, errors }) => ({ name, viewport: metrics.viewport, document: metrics.document, articles: metrics.articles.length, errors })) }));
 } finally {
   await browser.close();

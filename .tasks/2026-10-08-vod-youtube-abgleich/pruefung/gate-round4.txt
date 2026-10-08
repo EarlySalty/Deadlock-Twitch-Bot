@@ -1,0 +1,2 @@
+ALLOW: Inventory matches are freshly queried before success is recorded; no blocking regression shown.
+FIXED: rust/crates/tb-vod-archive/src/youtube_check.rs:303

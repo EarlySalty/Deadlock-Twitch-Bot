@@ -40,6 +40,7 @@ for folder in ['bot/analytics/dashboard_v2/dist', 'bot/admin_dashboard/dist', 'w
     assets[folder] = {str(file.relative_to(directory)): digest(file) for file in sorted(directory.rglob('*')) if file.is_file()}
 if args.moli_proof:
     proof = json.loads(Path(args.moli_proof).read_text())
+    subprocess.run(['git', '-C', str(root), 'diff', '--quiet', proof['sha'], args.expected, '--', 'bot/dashboard_v2', 'website/public/fonts'], check=True)
     dashboard = assets['bot/analytics/dashboard_v2/dist']
     assert all(dashboard.get(name) == value for name, value in proof['hashes'].items()), 'Release assets differ from inspected dashboard'
 migration = root / 'rust/migrations/20261008003000_vod_youtube_checks.sql'

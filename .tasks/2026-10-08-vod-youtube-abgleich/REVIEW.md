@@ -21,4 +21,25 @@ Befehl: `python3 /home/nathanael/Documents/.claude/gpt-workers/gate_hook.py --re
 
 Exit 0. Urteil: `ALLOW: Both previous blockers are fixed; no blocking regression shown.` Beide BLOCK-Funde wurden als FIXED ausgewiesen. Derselbe Kritiker wie Runde 1, kein Modellwechsel und keine Übersteuerung.
 
-Der Sichtnachweis für NIT 4 wurde anschließend in einer gebündelten Runde erbracht: bestätigt, teilweise und Verbindungsfehler jeweils auf Desktop und Mobil. Sechs betrachtete Detailbilder und `pruefung/moli-layout.json` sind gesichert. Keine weitere UI-Korrekturrunde.
+## Runde 3 auf gesichertem Stand fb89fe69
+
+Befehl wie Runde 2 mit demselben Kritiker. Exit 1, BLOCK: `Historical rechecks reuse stale video evidence and report a fresh check time.`
+
+1. BLOCKING, youtube_check.rs:303: Abgeschlossene Zuordnungsinventare werden bis zur nächsten Playlist-Suche wiederverwendet, aber save erneuert die Erfolgszeit. Historische Fälle ohne IDs und fehlende IDs gemischter Fälle brauchen frische Videoabfragen vor einer neuen Erfolgsmeldung, auch bei manuellem Prüfen und laufender Verarbeitung.
+2. NIT, pruefung/live-evidence.sql:10: Produktiver Nachweis muss wie die API Authrevision und Upload-Snapshot prüfen, sonst zählen veraltete Nachweise als aktuell.
+3. NIT, VodArchiveTab.tsx:74: Der Wiederverbindungslink fehlt bei Drive-Anforderung trotz sichtbarem YouTube-Verbindungsfehler.
+4. NIT, VodArchiveTab.tsx:51: Historische Teilzählung braucht eine eindeutige Beschriftung, damit sie nicht einer aktuellen vollständigen YouTube-Bestätigung widerspricht.
+
+Erneut frischer nativer Fixkontext für den BLOCK-Fund. Elternsession bearbeitet ausschließlich Nachweis-SQL und Register.
+
+## Runde 4
+
+Frischer Fixer a5ec69ec1742e7a0b, Commit 89bfd5fa7da8b06b5fe8967051c577b940236260. Vorhandene und über Inventar zugeordnete IDs werden vor neuer Bestätigung frisch gesammelt abgefragt. Bei übersprungenen Kandidaten bleibt die bisherige Prüfzeit erhalten. Zwei neue PostgreSQL-Proben decken manuelles Prüfen, verschwundene Videos, Verarbeitungswechsel und das Abfragebudget ab. Die beiden UI-Hinweise wurden eng begrenzt korrigiert und mit zwei zusätzlichen bestehenden Frontendproben gesichert.
+
+Gleicher Gate-Befehl und Kritiker gpt-6.1-sol, Exit 0:
+`ALLOW: Inventory matches are freshly queried before success is recorded; no blocking regression shown.`
+`FIXED: rust/crates/tb-vod-archive/src/youtube_check.rs:303`.
+
+59 Archivtests und acht Frontendtests bestanden. Die erlaubte gebündelte Bestätigungsrunde nach der Korrektur ist abgeschlossen: sechs Desktop-/Mobilkombinationen, keine Überbreite, geladene Schriften, keine pageerrors. Sechs Detailbilder tatsächlich betrachtet. Belege in pruefung/bestaetigung. Keine weitere UI-Polierschleife.
+
+Der Sichtnachweis für NIT 4 aus Runde 1 wurde anschließend in einer gebündelten Runde erbracht: bestätigt, teilweise und Verbindungsfehler jeweils auf Desktop und Mobil. Sechs betrachtete Detailbilder und `pruefung/moli-layout.json` sind gesichert. Keine weitere UI-Korrekturrunde.

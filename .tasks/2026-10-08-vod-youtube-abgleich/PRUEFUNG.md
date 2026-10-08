@@ -18,7 +18,11 @@ Diese ersten Läufe wurden nach der Gate-Fixrunde für die betroffenen Rust-Pfad
 - Gesamtumfang dieser unterschiedlichen Proben: 72 passed, 0 ignored. Keine vollständige Workspace- oder Dashboard-Gesamtsuite behauptet.
 - Dashboard erneut gebaut nach dem Fixercommit: `frontend-build2.log`, Exit 0. Admin und Website gebaut: `admin-build.log` und `website-build.log`, beide Exit 0.
 
-TESTNACHWEIS[TW-1]: 72 passed, 0 ignored | Baseline: nicht als vollständige Testsuite gemessen
+TESTNACHWEIS[TW-1]: 76 passed, 0 ignored | Baseline: 0 rot
+
+Aktueller zusammengezählter Umfang: 59 Archivtests und acht Frontendtests auf 89bfd5fa, sieben API- und zwei direkte Clienttests auf den seit deren Lauf unveränderten relevanten Quellen. Kein neuer API-/Client-Abschluss im zweiten Fixerauftrag behauptet: zusätzliche Nachläufe wurden während der Neukompilierung gestoppt und zählen nicht.
+
+Die Testbaseline wurde jetzt tatsächlich erneut auf 0ecae137 gemessen: 50 Archivtests, 0 failed, 0 ignored, Exit 0 in eigener separater token_db_youtube_baseline_c5d0. Der erste Versuch ohne die vom alten Resume-Migrationstest zusätzlich verlangte token-db-tests.conf ergab 49 passed und einen Konfigurationsfehler. Nach Bereitstellung der eigenen temporären Testkonfiguration derselbe Befehl erfolgreich, keine Skipmarker. Dieser erste Einrichtungsfehler ist keine rote Codebaseline. Die fokussierte API-Baseline wurde vor einem Testabschluss während der langen Neukompilierung gestoppt; sie wird nicht mit null Fehlern gezählt. Baseline 0 bezieht sich deshalb ausdrücklich auf den gemessenen Archivumfang, nicht auf eine vollständige Workspace-Suite.
 
 ## Clippy
 
@@ -51,6 +55,16 @@ Die Metadatenprobe prüft jetzt, dass Originalquelle und Teilnummer trotz langer
 Moli 1.1.14 auf eigenem Loopback-Port 9338, synthetischer lesender Fixture-Server auf 4198. Keine Produktionsanmeldung und keine Provider-Schreibaktionen. Reale synthetische PostgreSQL-Handlerantworten, dieselben gebauten Dashboardassets wie im Hashnachweis. Der erste Aufruf scheiterte vor der Sichtprüfung am falschen Ausgabeordner und zählt nicht als visueller Nachweis.
 
 Eine erfolgreiche gebündelte Runde: current, partial und connection jeweils 1440×1100 und 390×844. Je neun Karten, Dokumentbreite entspricht Viewportbreite, Statusicons und Zeiten sichtbar, Prüfbutton entprellt, Verbindungsweg erhalten. Manrope und Sora geladen, keine Bilder auf dieser Oberfläche, keine pageerrors. Sechs Detailbilder tatsächlich betrachtet. 18 Viewportbilder und sieben Assethashes in `pruefung/moli-layout.json` gesichert. Quell-SHA 76332e3d; dirty=true stammt von noch uncommitteten Auftragsartefakten und Testkonfiguration, nicht von später geändertem UI-Code.
+
+## Gate-Runde 3
+
+Der Gate auf dem gesicherten Stand fb89fe69 hat einen weiteren echten Aktualitätsfehler erkannt: alte Inventarbeobachtungen konnten eine neue Erfolgszeit erhalten. Das ALLOW der Runde 2 war dadurch überholt. Der frische native Fixer hat den Fund und die beiden eng begrenzten UI-Hinweise korrigiert, Commit 89bfd5fa. Runde 4 mit demselben Kritiker gpt-6.1-sol: ALLOW, Inventarzuordnungen werden vor neuer Erfolgsmeldung frisch abgefragt. 59 Archivtests und acht Frontendtests bestanden. Striktes Clippy für den tatsächlich neu geänderten Rust-Zielumfang `cargo-slot clippy --jobs 3 --manifest-path /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.toml -p tb-vod-archive --all-targets --no-deps -- -D warnings`: Exit 0.
+
+Der produktive SQL-Nachweis wurde bereits an dieselben Authrevision- und Teil-Snapshot-Guards wie die API angepasst. Veraltete Kontonachweise zählen nicht als aktuell. Zusätzlich werden älteste und neueste Beobachtungszeiten ausgegeben, ohne Video-IDs oder private Inhalte.
+
+## Einzige Bestätigungsrunde nach Runde 3
+
+Nach neuem Frontendbuild auf 89bfd5fa wurden dieselben sechs Desktop-/Mobilkombinationen einmal gebündelt bestätigt. Ausgangsbilder bleiben erhalten. Neue Bilder und Messwerte in pruefung/bestaetigung, sieben neue Assethashes, wieder neun Karten pro Lauf, keine Überbreite und keine pageerrors. Die sechs Detailbilder wurden tatsächlich betrachtet. Keine weitere UI-Korrektur oder Sichtpolitur. Eigene Moli- und Fixture-Prozesse anschließend beendet.
 
 ## Noch offen
 

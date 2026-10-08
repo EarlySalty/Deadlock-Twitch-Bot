@@ -50,3 +50,29 @@ cargo-slot: EXIT=0
 ```
 
 Der genaue vollständige Gate-Runde-2-Output liegt in gate-round2.txt. Formatvergleich und Moli-Messwerte liegen neben dieser Datei als JSON. Die wörtlichen Prüfbefehle stehen in ../PRUEFUNG.md.
+
+## Neuester Code-SHA 89bfd5fa
+
+```text
+fixer-r3-archive.log
+test result: ok. 59 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.97s
+cargo-slot: EXIT=0
+
+fixer-r3-frontend-test.log
+# pass 8
+# fail 0
+
+archive-test-baseline2.log, Ausgangscommit 0ecae137
+test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.50s
+cargo-slot: EXIT=0
+
+clippy-final-archive.log
+Finished dev profile [unoptimized + debuginfo] target(s) in 1m 01s
+cargo-slot: EXIT=0
+```
+
+Striktes Clippy auf tb-vod-archive, --all-targets --no-deps -- -D warnings, keine neue Warnung. Die zuvor gemessenen breiteren roten Lintbaselines bleiben separat dokumentiert.
+
+Testsumme des gültigen aktuellen Auftragsumfangs: 76 passed, 0 ignored (59 Archiv, 8 Oberfläche, 7 unveränderte API-Quellen, 2 unveränderte Client-Quellen). Testbaseline 50 Archivtests mit 0 Fehlern tatsächlich gemessen, keine Workspace-Testbaseline behauptet.
+
+Erster Archiv-Baselineversuch ohne die zusätzlich erforderliche lokale Testkonfiguration: 49 passed, ein Konfigurationsfehler, danach behoben und vollständig wiederholt. Zusätzliche API-/Client-Versuche des Fixers und die API-Baseline wurden vor Testabschluss während der Neukompilierung gestoppt und nicht als Nachweis gezählt. Vollständiger Gate-Runde-4-Output in gate-round4.txt.
