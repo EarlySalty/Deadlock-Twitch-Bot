@@ -1,0 +1,542 @@
+[
+  {
+    "id": "W03-DA07-S001-correctness-2",
+    "claim": "The recurring affiliate credit-note job permanently starves due periods beyond its first 100.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/admin_affiliate.rs",
+    "line": 203
+  },
+  {
+    "id": "W03-DA07-S001-correctness-3",
+    "claim": "OAuth login prevents existing plaintext affiliate profile data from being migrated.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/affiliate.rs",
+    "line": 804
+  },
+  {
+    "id": "W03-DA07-S001-correctness-4",
+    "claim": "A Twitch rename allows a second affiliate to reserve an already freshly claimed streamer.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/affiliate.rs",
+    "line": 968
+  },
+  {
+    "id": "W03-DA07-S001-correctness-5",
+    "claim": "IPv6 loopback configuration is incorrectly changed from HTTP to HTTPS in affiliate callback URLs.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/affiliate.rs",
+    "line": 1265
+  },
+  {
+    "id": "W03-DA07-S001-errors-1",
+    "claim": "Affiliate profile serialization panics when a stored Stripe account ID crosses a UTF-8 byte boundary.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/affiliate.rs",
+    "line": 1117
+  },
+  {
+    "id": "W03-DA07-S001-concurrency-1",
+    "claim": "Concurrent affiliate OAuth login can revert a successfully saved profile.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/affiliate.rs",
+    "line": 804
+  },
+  {
+    "id": "W03-DA07-S001-concurrency-2",
+    "claim": "Affiliate profile migration can overwrite encrypted data saved after its initial selection.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/affiliate.rs",
+    "line": 825
+  },
+  {
+    "id": "W03-DA07-S001-concurrency-3",
+    "claim": "Concurrent admin affiliate toggles lose one of the requested flips.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/admin_affiliate.rs",
+    "line": 458
+  },
+  {
+    "id": "W03-DA07-S002-security-1",
+    "claim": "Affiliate APIs authorize account ownership by reusable Twitch login instead of immutable Twitch user ID.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/affiliate_portal.rs",
+    "line": 30
+  },
+  {
+    "id": "W03-DA07-S002-correctness-2",
+    "claim": "The default commission page silently truncates the affiliate portal's lifetime earnings and commission history.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/affiliate_portal.rs",
+    "line": 191
+  },
+  {
+    "id": "W03-DA07-S002-correctness-3",
+    "claim": "Affiliate recent-claim plan names are wrong for plans stored against a Twitch user ID.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/affiliate_portal.rs",
+    "line": 123
+  },
+  {
+    "id": "W03-DA07-S002-correctness-4",
+    "claim": "Commission pagination overflows its signed offset and can return page one for an enormous page number.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/affiliate_portal.rs",
+    "line": 192
+  },
+  {
+    "id": "W03-DA07-S002-errors-1",
+    "claim": "Die Affiliate-Portal-API meldet fehlgeschlagene Statistikabfragen als erfolgreiche Nullsummen und leere Listen.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/affiliate_portal.rs",
+    "line": 80
+  },
+  {
+    "id": "W03-DA07-S002-errors-3",
+    "claim": "Der Affiliate-Konto-Lookup meldet Datenbankfehler fälschlich als HTTP 404 not_found.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/affiliate_portal.rs",
+    "line": 64
+  },
+  {
+    "id": "W03-DA07-S002-concurrency-1",
+    "claim": "The Stripe-connect redirect test races with the redirect configuration tests and can fail on correct code.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/affiliate.rs",
+    "line": 1834
+  },
+  {
+    "id": "W03-DA07-S002-concurrency-2",
+    "claim": "The affiliate OAuth callback test races with another test's master-key restoration and can unexpectedly return HTTP 503.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/affiliate.rs",
+    "line": 1731
+  },
+  {
+    "id": "W03-DA07-S003-correctness-1",
+    "claim": "Profile lookup can select inactive partner history instead of the current active partner.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/partner_profiles.rs",
+    "line": 535
+  },
+  {
+    "id": "W03-DA07-S003-errors-1",
+    "claim": "Bei fehlgeschlagenem Twitch-Streamplanabruf meldet der Profilimport trotzdem Erfolg.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/partner_profiles.rs",
+    "line": 311
+  },
+  {
+    "id": "W03-DA07-S003-concurrency-1",
+    "claim": "The final public-profile visibility check can validate a different Twitch account and render the withdrawn original profile.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/partner_profiles.rs",
+    "line": 842
+  },
+  {
+    "id": "W03-DA07-S004-correctness-1",
+    "claim": "Upcoming stream dates use English weekday names on the German profile page.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/partner_profiles/html.rs",
+    "line": 100
+  },
+  {
+    "id": "W03-DA15-S001-errors-1",
+    "claim": "Failed clip-contest session reads silently select a fallback Twitch submitter or report successful logged-out status.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest.rs",
+    "line": 236
+  },
+  {
+    "id": "W03-DA15-S002-errors-1",
+    "claim": "Contest identity lookup failures are misreported as signed-out sessions and login-required errors.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs",
+    "line": 373
+  },
+  {
+    "id": "W03-DA15-S002-concurrency-2",
+    "claim": "A Discord vote can be accepted for an own clip when account linking completes while the vote waits for the month lock.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs",
+    "line": 767
+  },
+  {
+    "id": "W03-DA15-S002-concurrency-3",
+    "claim": "Rebinding a Discord account can make a below-quota submission collide with an occupied submission_slot.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs",
+    "line": 456
+  },
+  {
+    "id": "W03-DA15-S003-concurrency-1",
+    "claim": "A concurrent roadmap update can mark an unseen private reply to a bundled feedback entry as read.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/feedback/mod.rs",
+    "line": 164
+  },
+  {
+    "id": "W03-DA17-S001-concurrency-2",
+    "claim": "Preauthorized camera peers can recreate a signaling room after permanent revocation.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/caster_overlay.rs",
+    "line": 655
+  },
+  {
+    "id": "W03-DA17-S001-concurrency-3",
+    "claim": "Publisher-side permanent revocation can leave a replacement publisher streaming.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/caster_overlay.rs",
+    "line": 723
+  },
+  {
+    "id": "W03-DA17-S001-concurrency-4",
+    "claim": "Stopping the camera can be undone by an in-flight device switch.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/caster_camera.html",
+    "line": 14
+  },
+  {
+    "id": "W03-DA17-S001-concurrency-5",
+    "claim": "A stale WebSocket close callback can erase the replacement camera's video.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/caster_overlay.html",
+    "line": 7
+  },
+  {
+    "id": "W03-DA17-S001-concurrency-7",
+    "claim": "Overlapping overlay polls can replace newer statistics with an older response.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/overlay.html",
+    "line": 1122
+  },
+  {
+    "id": "W03-DA17-S001-correctness-1",
+    "claim": "Caster cameras opened before initial consent remain black after consent is granted unless the scene is reloaded or reassigned.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/caster_overlay.html",
+    "line": 7
+  },
+  {
+    "id": "W03-DA17-S001-correctness-2",
+    "claim": "Noncanonical external camera URLs cause the iframe to reload on every scene refresh.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/caster_overlay.html",
+    "line": 9
+  },
+  {
+    "id": "W03-DA17-S001-correctness-3",
+    "claim": "Clearing the observer selection creates a false POV label in the caster preview.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/caster_overlay.html",
+    "line": 12
+  },
+  {
+    "id": "W03-DA17-S001-correctness-5",
+    "claim": "Selecting a nondefault camera resets the selector to Standardkamera while retaining the selected camera stream.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/caster_camera.html",
+    "line": 13
+  },
+  {
+    "id": "W03-DA17-S001-errors-2",
+    "claim": "Publisher setup sends ready even when saving camera consent fails.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/caster_overlay.rs",
+    "line": 634
+  },
+  {
+    "id": "W03-DA17-S001-errors-4",
+    "claim": "Asynchronous initial camera connection failures leave the publish button disabled.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/caster_camera.html",
+    "line": 21
+  },
+  {
+    "id": "W03-DA17-S001-resources-1",
+    "claim": "A slow camera subscriber permits unbounded signaling queues and dashboard-process memory exhaustion.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/caster_overlay.rs",
+    "line": 648
+  },
+  {
+    "id": "W03-DA17-S001-resources-2",
+    "claim": "Uncapped public camera subscriptions exhaust the publisher's WebRTC peer resources.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/caster_overlay.rs",
+    "line": 684
+  },
+  {
+    "id": "W03-DA17-S001-resources-3",
+    "claim": "Administrative camera revocation leaves normal subscriber WebSockets open indefinitely.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/caster_overlay.rs",
+    "line": 542
+  },
+  {
+    "id": "W03-DA17-S001-security-1",
+    "claim": "A concurrent publisher connection can undo permanent camera revocation and reactivate the revoked invitation.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/caster_overlay.rs",
+    "line": 635
+  },
+  {
+    "id": "W03-DA17-S001-security-2",
+    "claim": "Publisher self-revocation reports permanent success even when the database revocation fails.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/caster_overlay.rs",
+    "line": 723
+  },
+  {
+    "id": "W03-DA17-S002-concurrency-1",
+    "claim": "A concurrent failed hero-icon refresh overwrites a successful cache and suppresses icons for six hours.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/overlay.rs",
+    "line": 257
+  },
+  {
+    "id": "W03-DA17-S002-errors-1",
+    "claim": "A null timestamp or KDA field in one Steam match discards the overlay's entire match history.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/overlay.rs",
+    "line": 143
+  },
+  {
+    "id": "W03-DA17-S002-errors-2",
+    "claim": "The overlay reports available history and a zero daily balance for Steam friendship errors.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/overlay.rs",
+    "line": 437
+  },
+  {
+    "id": "W03-DA17-S002-security-1",
+    "claim": "Unauthenticated overlay requests can exhaust dashboard memory by creating cache entries that are never evicted.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/overlay.rs",
+    "line": 375
+  },
+  {
+    "id": "W03-DA17-S003-concurrency-1",
+    "claim": "Slow Kick/YouTube refresh responses lose newly issued credentials because the database transaction expires before the refresh deadline.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/platform_store.rs",
+    "line": 391
+  },
+  {
+    "id": "W03-DA17-S003-errors-2",
+    "claim": "The Twitch token broker can return HTTP 200 with an already expired token after a slow failed refresh.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/platform_token.rs",
+    "line": 342
+  },
+  {
+    "id": "W03-DA17-S003-resources-1",
+    "claim": "Twitch token snapshot reads can wait indefinitely outside the refresh timeout and exhaust the dashboard database pool.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/platform_token.rs",
+    "line": 279
+  },
+  {
+    "id": "W03-DA17-S004-correctness-1",
+    "claim": "The YouTube Uplink callback accepts Social Studio states and interprets numeric Twitch logins as another user's Twitch ID.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/plattform_connect.rs",
+    "line": 215
+  },
+  {
+    "id": "W03-DA17-S004-correctness-2",
+    "claim": "An acknowledged missing relay destination prevents platform disconnection and leaves it permanently pending.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/plattform_connect.rs",
+    "line": 719
+  },
+  {
+    "id": "W03-DA17-S004-correctness-3",
+    "claim": "YouTube stream selection ignores pagination and can choose a custom stream instead of the default stream.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/plattform_oauth.rs",
+    "line": 499
+  },
+  {
+    "id": "W03-DA17-S004-errors-1",
+    "claim": "Provider-controlled expires_in can panic in Kick and YouTube OAuth callbacks.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/plattform_connect.rs",
+    "line": 349
+  },
+  {
+    "id": "W03-DA17-S004-errors-2",
+    "claim": "Stream-key generation-check database errors are incorrectly reported as no connection.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/plattform_connect.rs",
+    "line": 564
+  },
+  {
+    "id": "W03-DA17-S004-resources-1",
+    "claim": "Kick and YouTube connection callbacks and stream-key requests can wait indefinitely for upstream HTTP responses.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/plattform_oauth.rs",
+    "line": 138
+  },
+  {
+    "id": "W03-DA17-S004-security-1",
+    "claim": "Kick and YouTube OAuth callbacks permit account-linking CSRF because state is not bound to the initiating browser or session.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/plattform_connect.rs",
+    "line": 659
+  },
+  {
+    "id": "W03-MO01-S001-concurrency-1",
+    "claim": "A persisted MessageId claim can acknowledge a notification that was never enqueued.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-monitoring/src/dispatch.rs",
+    "line": 717
+  },
+  {
+    "id": "W03-MO01-S001-correctness-1",
+    "claim": "A failed stream.offline job is acknowledged on retry because its own offline throttle remains active.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-monitoring/src/handlers.rs",
+    "line": 485
+  },
+  {
+    "id": "W03-MO01-S002-concurrency-1",
+    "claim": "An in-flight subscription-create response can overwrite a processed revocation and suppress subsequent resubscription.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-monitoring/src/subscriptions.rs",
+    "line": 1513
+  },
+  {
+    "id": "W03-MO01-S002-correctness-1",
+    "claim": "Cleanup preserves disabled subscriptions and leaves their in-memory tracking active.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-monitoring/src/subscriptions.rs",
+    "line": 2066
+  },
+  {
+    "id": "W03-MO01-S006-correctness-1",
+    "claim": "Deleting an old-callback subscription also untracks its retained current-callback twin.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-monitoring/src/subscriptions.rs",
+    "line": 2075
+  },
+  {
+    "id": "W03-MO01-S001-concurrency-4",
+    "claim": "Redelivery of stream.online overwrites a later completed stream.offline transition.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-monitoring/src/handlers.rs",
+    "line": 245
+  },
+  {
+    "id": "W03-MO01-S001-concurrency-5",
+    "claim": "claim_or_extend exposes a deletion gap that can trigger a duplicate live announcement during an active cooldown.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-monitoring/src/guard.rs",
+    "line": 159
+  },
+  {
+    "id": "W03-MO01-S001-errors-3",
+    "claim": "stream.offline acknowledges failed session finalization and clears the session's recovery link.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-monitoring/src/handlers.rs",
+    "line": 506
+  },
+  {
+    "id": "W03-MO01-S002-correctness-2",
+    "claim": "Rehydration mistakes outgoing raid subscriptions for incoming raid subscriptions.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-monitoring/src/subscriptions.rs",
+    "line": 883
+  },
+  {
+    "id": "W03-MO01-S002-errors-2",
+    "claim": "Database lookup failures can misclassify authorized chat channels as passive lurkers and skip both subscriptions.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-monitoring/src/subscriptions.rs",
+    "line": 1095
+  },
+  {
+    "id": "W03-MO01-S002-resources-1",
+    "claim": "Capacity snapshot database waits can stop the monitoring poller indefinitely.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-monitoring/src/subscriptions.rs",
+    "line": 2208
+  },
+  {
+    "id": "W03-MO01-S003-correctness-1",
+    "claim": "Repeated webhook revocations can untrack an enabled replacement subscription.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-monitoring/src/webhook_receiver.rs",
+    "line": 273
+  },
+  {
+    "id": "W03-MO01-S003-correctness-2",
+    "claim": "Webhook timestamp validation accepts messages outside the declared 600-second window.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-monitoring/src/webhook_receiver.rs",
+    "line": 135
+  },
+  {
+    "id": "W03-MO01-S004-concurrency-1",
+    "claim": "Expired inbox workers can resurrect delivered work as a dead-letter or overwrite newer retry state.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-monitoring/src/inbox_store/mod.rs",
+    "line": 218
+  },
+  {
+    "id": "W03-MO01-S004-correctness-1",
+    "claim": "lease_due can return stream lifecycle events in reversed chronological order, leaving an offline broadcaster marked live.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-monitoring/src/inbox_store/mod.rs",
+    "line": 141
+  },
+  {
+    "id": "W03-MO01-S004-resources-1",
+    "claim": "Eine blockierte Inbox-Bestätigung kann den einzigen EventSub-Worker unbegrenzt anhalten.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-monitoring/src/inbox_store/mod.rs",
+    "line": 161
+  },
+  {
+    "id": "W03-MO01-S005-concurrency-1",
+    "claim": "The message-ID guard can acknowledge an EventSub delivery before durable acceptance, losing the event if the original attempt fails or crashes.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-monitoring/src/dispatch.rs",
+    "line": 726
+  },
+  {
+    "id": "W03-MO01-S005-errors-1",
+    "claim": "Unban cleanup errors are acknowledged without retry, leaving stale applied-ban entries that suppress subsequent offline sweeps.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-monitoring/src/telemetry.rs",
+    "line": 579
+  },
+  {
+    "id": "W03-IA01-S002-concurrency-1",
+    "claim": "An expired idempotency owner can delete a replacement owner's slot and overwrite its cached result.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/idempotency.rs",
+    "line": 330
+  },
+  {
+    "id": "W03-IA01-S002-correctness-2",
+    "claim": "Expiring an in-flight idempotency entry never publishes its timeout result to existing waiters.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/idempotency.rs",
+    "line": 289
+  },
+  {
+    "id": "W03-IA01-S002-correctness-3",
+    "claim": "An Origin host such as localhost,attacker.example is incorrectly classified as loopback.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/security.rs",
+    "line": 132
+  },
+  {
+    "id": "W03-IA01-S002-security-1",
+    "claim": "The internal API origin guard accepts present Origin headers containing non-ASCII bytes.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/security.rs",
+    "line": 155
+  },
+  {
+    "id": "W03-IA01-S003-concurrency-1",
+    "claim": "Verify promotion and history reactivation can activate a partner after a concurrent signup block has committed.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/streamer_lifecycle.rs",
+    "line": 480
+  },
+  {
+    "id": "W03-IA01-S003-concurrency-2",
+    "claim": "Departnering can overwrite a concurrently saved Discord identity with stale profile data.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/streamer_lifecycle.rs",
+    "line": 232
+  },
+  {
+    "id": "W03-IA01-S003-concurrency-6",
+    "claim": "Concurrent verification backfills insert duplicate historical statistics despite the idempotency contract.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/streamer_lifecycle.rs",
+    "line": 815
+  },
+  {
+    "id": "W03-IA01-S003-concurrency-7",
+    "claim": "Concurrent archive or block toggles lose one of the requested state changes.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/streamer_lifecycle.rs",
+    "line": 1013
+  },
+  {
+    "id": "W03-IA01-S003-correctness-1",
+    "claim": "Verify promotion allocates partner IDs without advancing the sequence, causing subsequent OAuth signup to fail.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/streamer_lifecycle.rs",
+    "line": 572
+  },
+  {
+    "id": "W03-IA01-S003-errors-1",
+    "claim": "Departner retries skip raid-auth cleanup after a partial database failure.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/streamer_lifecycle.rs",
+    "line": 283
+  },
+  {
+    "id": "W03-IA01-S003-errors-2",
+    "claim": "Archived-partner retries cannot restore raid auth after partial reactivation.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/streamer_lifecycle.rs",
+    "line": 721
+  },
+  {
+    "id": "W03-IA01-S003-security-1",
+    "claim": "Verify promotion can activate a streamer after a concurrent signup-denylist addition has committed.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/streamer_lifecycle.rs",
+    "line": 480
+  },
+  {
+    "id": "W03-IA01-S004-correctness-1",
+    "claim": "Database fingerprints ignore SQLx host, port and dbname query overrides.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/handlers/healthz.rs",
+    "line": 68
+  },
+  {
+    "id": "W03-IA01-S004-correctness-2",
+    "claim": "Leading whitespace in an accepted database URL causes a false fingerprint mismatch.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/handlers/healthz.rs",
+    "line": 66
+  },
+  {
+    "id": "W03-IA01-S004-correctness-3",
+    "claim": "The internal legacy proxy follows redirects instead of forwarding their responses.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/handlers/legacy_proxy.rs",
+    "line": 54
+  },
+  {
+    "id": "W03-IA01-S004-errors-1",
+    "claim": "A failed current-session lookup makes chatters debug return historical-session chatters with HTTP 200.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/handlers/python_stubs.rs",
+    "line": 99
+  },
+  {
+    "id": "W03-IA01-S004-errors-2",
+    "claim": "Observability reports activeSessionCount=0 with HTTP 200 when the session-count query fails.",
+    "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/handlers/python_stubs.rs",
+    "line": 32
+  }
+]

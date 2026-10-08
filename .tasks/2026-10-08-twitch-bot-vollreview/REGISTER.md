@@ -1,5 +1,40 @@
 # Register: Twitch-Bot Vollreview
 
+## Neuester Abschluss: A01 integriert, B03 seriell freigegeben
+
+A01 ist als f04c0ef03d47ce4893ee4d17cb98eeb4c2f6c473 nach main integriert, regulärer Push Exit 0 und anschließendes ls-remote bestätigt. B02 und A01 sind damit zwei integrierte Anwendungscodepakete, kein Deploy, Neustart oder Live-Nachweis. Sieben Git-Schritte durch Astra einzeln, unveränderter 36780-Byte-Diff, Sol-Gate ALLOW. A01-Vorbereitungsrolle a55303cd25a62b63a, 130 echte Sol-Datensätze, fertiger Transcript-Hash c9515afe465bd141352d39d20895580184b7bcfd9d9f5da4f23118ded68dcc2b. ABSCHLUESSE-12.json; finale Suite 1341/35 gegen 1334/35, sieben funktionale Regressionen, 50 OBS-Fälle und beide optionalen DB-Testverträge belegt.
+
+B03 ist nach beendetem A01-Writer jetzt seriell für admin_audit.rs und auth/level.rs freigegeben. Frischer Fixer und Kritiker wf_e6ba5fe6-44e, Task wgefq8ej9, Script tb-vollreview-b03-fixrunde-4-wf_e6ba5fe6-44e.js, ohne args. BRIEFING-B03-R4.md. Vorherige Runde 3 war ein reiner Abhängigkeitsblocker, kein zusätzlicher misslungener Quellfix.
+
+A02/B05/B09-Vorbereitung wf_a21871df-c4d ist beendet, Modelle/Originale in ABSCHLUESSE-11.json geprüft. A02 e6765a5d hat aktuellen Gate-BLOCK wegen dreier neuer bedingungsloser DB-Fixture-Erwartungen ohne freiwillige Aktivierung. Frische Runde 2 wf_8d15f5fe-eff, Task wx57xab14, Script tb-vollreview-a02-fixrunde-2-wf_8d15f5fe-eff.js, ohne args; BRIEFING-A02-R2.md. Frühere ALLOWs bleiben historisch, kein A02-Merge.
+
+B05 6383a00f und B09 fa01de7b besitzen auf e98b7f01 gebundene finale Nachweise und Sol-Gate ALLOW. B05s historische Baselinebindung ist geschlossen. Vor eigener Integration müssen beide das durch A01 fortgeschrittene main berücksichtigen; keine aktuellen Ancestry- oder Testbelege aus dem alten Paar unterstellen. Keine laufende B05-/B09-Vorbereitungsrolle mehr.
+
+W03-Restclaimabgleich ist abgenommen. 90 exakte neutrale Objekte aus 126 Originalgruppen, zwölf Quellhashes, 166 Mitglieder und C-Ausschlüsse durch Astra geprüft. ABSCHLUESSE-11.json und W03-NACHWEIS-03.md. Neue unabhängige Gegenprüfung wf_16dfb9cb-031, Task wc1nrzzig, Script tb-vollreview-w03-rest-gegenpruefung-wf_16dfb9cb-031.js, args und neutraler Dateihash gespeichert. Je zwei Skeptiker, noch keine bestätigten Befundzahlen daraus. Alte 67-Claim-Gegenprüfung läuft separat.
+
+Die darunterstehenden Zwischenstände sind historisch. Aktuelle Ausführungstabelle in HANDOFF.md.
+
+## Neuester Stand: restliche Bereiche verteilt und weitere Fixkritiken abgenommen
+
+Dieser Abschnitt geht historischen Nachträgen unten vor. Remote am 2026-10-08 bestätigt: Artefaktbranch b47669f408ba5f00e7d9eec9703bc006ef05aa5d, main e98b7f016dbab373a5a8dd9490d158b136c97fec. B02 bleibt das einzige integrierte Anwendungscodepaket; kein Deploy, Neustart oder Live-Nachweis.
+
+W06 und W07 sind gestartet. Damit sind 108 disjunkte Defektbereiche beauftragt, nicht abgeschlossen. Args in WORKFLOW-ARGS.json gesichert. W06: elf Bereiche, 88 Abschnitte, 440 Reviews. W07: 50 Bereiche, 167 Abschnitte, 835 Reviews. Beide verwenden dasselbe generische Script mit unterschiedlichen args und Run-IDs. Zusammen mit früheren Wellen sind die geplanten 450 Abschnitte verteilt; Start und deklarierte Leseintervalle sind keine tatsächliche Volllektüre.
+
+| Neue Ausführung | Run-ID | Task-ID | Script |
+|---|---|---|---|
+| W06 verbleibende Web-/Betriebsbereiche | wf_d11f7416-b1a | wa8zdhmi2 | tb-vollreview-restliche-defektbereiche-wf_d11f7416-b1a.js |
+| W07 verbleibende Rust-/Frontendbereiche | wf_7417fa2e-5e9 | wi8qh46vu | tb-vollreview-restliche-defektbereiche-wf_d11f7416-b1a.js |
+| W03 Restclaimabgleich | wf_3c0cb7ee-5b4 | wzydtulh7 | tb-vollreview-w03-rest-claimabgleich-wf_3c0cb7ee-5b4.js, ohne args |
+| B01/B04/B06/B07/B10 Integrationsvorbereitung | wf_f7342e70-084 | wq0ls3kxm | tb-vollreview-integrationsvorbereitung-03-wf_f7342e70-084.js, args gespeichert |
+
+W03 DA07/DA15/DA17/MO01/IA01 technisch abgenommen: 105 fertige Reviewertranscripts, 5001 echte Sol-Datensätze, 166 exakt erhaltene Rohbefunde und vollständige disjunkte Mitgliedschaft. Fünf Konsolidierer ebenfalls geprüft. Zusammen zwölf Bereichskonsolidierungen mit geprüfter Herkunft. Vor Quervergleich 126 neue Gruppen: 90 reine A/B-Vorschläge und 36 konservative C-Gruppen; vier gemischte B/C-Gruppen bleiben C. Kein neuer bestätigter Befund daraus. W03-NACHWEIS-03.md und W03-REST-VERIFIKATION.json. Restclaimabgleich läuft; noch keine anschließenden neuen Skeptiker gestartet. Bestehende 67-Claim-Gegenprüfung nicht duplizieren.
+
+ABSCHLUESSE-10.json enthält zehn geprüfte originale Rückgaben, 824 echte Sol-Datensätze: B01-Prüfbindung, Status 7, B04/B06/B07-Prüfabschlüsse und echte Kritiken sowie B10-Fix/Kritik. NACHWEIS-ABSCHLUESSE-10.md hält die Abnahmegrenzen fest. Status-7-TODO-Diff geprüft, ältere Historie erhalten. Historisches Ereignis 7 bleibt unverändert.
+
+B01-Bindungslücke geschlossen, c3aa3cc9 unverändert; passende Baseline-Clippybindung noch präzise zu schließen. B04 d760300d, B06 46c52a92, B07 9ec607b3 und B10 9bce62f1 besitzen echte fachliche Kritiken ALLOW. B04/B06 haben vollständige gebundene Crate-Suiten mit 35 Bestandsfehlern. B07 hat bisher ein Integrationstestziel mit verbleibendem getrennten TikTok-Eingabefehler. B10s Paketaufruf brach nach dem Bibliotheksziel ab, da --no-fail-fast fehlte. Diese beiden Teilprüfungen sind keine vollständigen Crate-Suiten. Neue Integrationsvorbereitung schließt genau diese Lücken ohne Quellkorrektur; BRIEFING-INTEGRATIONSVORBEREITUNG-03.md.
+
+A01, A02/B05/B09, B08, W04, W05, Q04 und DA04/DA05/DA06 behalten ihre bestehenden Ausführungen. B03 wartet weiterhin auf A01-Integration, kein aktiver Fixer und keine überlappenden Schreibrechte. Aktuelle Tabelle und Pfade in HANDOFF.md. Keine laufenden Aufgaben wiederholen.
+
 ## Neuester Nachtrag: abgeschlossene Fixkritiken und erhaltene Arbeit
 
 Dieser Nachtrag geht den folgenden Abschnitten vor. B02 bleibt der einzige nachgewiesene Anwendungscode-Merge, kein Deploy/Live.

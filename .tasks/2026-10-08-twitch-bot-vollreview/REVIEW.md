@@ -1,5 +1,35 @@
 # Review-Runden: Twitch-Bot Vollreview
 
+## A01 integriert, aktueller A02-BLOCK und neue serielle B03-Runde
+
+A01 f04c0ef03d47ce4893ee4d17cb98eeb4c2f6c473 ist regulär nach main gepusht, Exit 0, Remote-Ref bestätigt. Basis e98b7f01, unveränderter 36780-Byte-Gesamtdiff, SHA256 96f93acb45671d66431172fb225213a64664c895dc22fb3058d647c328d1e013. ABSCHLUESSE-12.json und A01-INTEGRATIONSVORBEREITUNG.md. Astra prüfte 130 Sol-Datensätze, fertigen Transcript-Hash, Originalgleichheit und zehn Loghashes. Finale Suite 1341/35 gegen 1334/35, sieben funktionale Regressionen und 50 OBS-Fälle bestanden. Sieben sichere Skips ohne DB-Aktivierung, sieben erwartete harte aktive Einrichtungsfehler. Keine grüne Gesamtsuite oder vollständige Lintabdeckung. Sieben Git-Schritte einzeln, ein Main-Pushanlauf, Sol-Gate ALLOW. B02 und A01 sind integriert, beide ohne Deploy oder Live-Nachweis.
+
+A02-Vorbereitung ergibt dagegen aktuellen Gate-BLOCK für e6765a5d auf e98b7f01: drei neue Tests verwenden bedingungsloses expect auf optionalen DB-Pools. Früheres fachliches ALLOW und positive DB-Ausführung heben den aktuellen BLOCK nicht auf. Vorbereitungsrolle durch Astra geprüft, ABSCHLUESSE-11.json. Frischer Fixer Runde 2 und danach neue Kritik wf_8d15f5fe-eff, Task wx57xab14, BRIEFING-A02-R2.md. Skip ohne Aktivierung erhalten, aktivierte Setupfehler nicht verstecken; keine Produktänderung.
+
+B03 erhält nach dem beendeten A01-Writer seriell auth/level.rs zusätzlich zu admin_audit.rs. Frischer Fixer und Kritiker wf_e6ba5fe6-44e, Task wgefq8ej9, BRIEFING-B03-R4.md. Vorherige Runde 3 war ein Abhängigkeitsblocker ohne Codekorrektur. Keine neuen Urteile dieser Runde vorhanden.
+
+B05 6383a00f und B09 fa01de7b haben abgeschlossene Vorbereitungen mit unveränderten Patches, gebundenen Prüfungen und Sol-ALLOW auf e98b7f01. Nach A01 muss ihre neue Integrationsbasis erneut berücksichtigt werden. Noch kein Main-Push dieser Pakete.
+
+MERGEPROTOKOLL[MS-1]: 7 Git-Schritte einzeln | Anläufe: 1 | Gate: ALLOW: this SHA already passed review_gate [reviewer_model=gpt-6.1-sol]
+
+TESTNACHWEIS[TW-1]: A01 1341 passed, 0 ignored | Baseline: 35 rot | Sieben funktionale Regressionen bestanden
+
+## Neuester Nachtrag: B01-Prüfbindung und vier echte Fixkritiken
+
+ABSCHLUESSE-10.json enthält zehn durch Astra auf Sol, fertige Transcript-Hashes und exakte Originalgleichheit geprüfte Rückgaben. 824 echte Sol-Datensätze, keine synthetischen. Einordnung in NACHWEIS-ABSCHLUESSE-10.md. Dieser Nachtrag geht älteren Angaben zu fehlenden Kritiken und der B01-Bindungslücke vor.
+
+| Paket | Abgenommener fachlicher Stand | Tatsächlicher Prüfumfang |
+|---|---|---|
+| B01 | c3aa3cc9, vorhandene Kritik ALLOW | Neue Regression bestanden, historische Suite an tatsächlichen Fixhead 307c09e6 gebunden. 336/24 gegen 335/24, unveränderte Rust-Bäume. Passende vollständige Baseline-Clippybindung bleibt offen. |
+| B04 | d760300d, neue echte Kritik ALLOW | Nichtleerer Originalpatch erhalten, neun Routerfälle bestanden, vollständige Suite 1336/35 gegen 1333/35. Clippy beidseitig Exit 0. |
+| B06 | 46c52a92, neue echte Kritik ALLOW | 14 Proxytests bestanden, vollständige Suite 1336/35 gegen 1333/35. Clippy beidseitig Exit 0; 255 unveränderte fremde Formatblöcke. |
+| B07 | 9ec607b3, neue echte Kritik ALLOW | Fokusziel 11/1 gegen 3/9; getrennt fehlende TikTok-Eingaben bleiben. Noch keine vollständige Crate-Suite. |
+| B10 | 9bce62f1, Fixer und echte Kritik ALLOW | 13 Fokusfälle bestanden. Paketaufruf ohne --no-fail-fast endet nach Bibliotheksziel: 1321/21/3 ignoriert gegen 1317/21/3. Keine vollständige Crate-Suite. |
+
+Astra prüfte reale Logs und Kommandos und übernimmt deshalb B10s allgemeine Bezeichnung Pakettests nicht als Vollsuitennachweis. B07s verbleibender TikTok-Testfehler ist kein neuer Fixauftrag. Vorhandene Originalurteile bleiben unverändert. Keine Quelländerung durch die Prüfrollen.
+
+Neue Integrationsvorbereitung für diese fünf Pakete: wf_f7342e70-084, Task wq0ls3kxm. Aktuelles main, exakte Patchgleichheit, konkrete Prüflücken und gültigen Sol-Gate herstellen, nicht erneut eine fachliche Kritik desselben Patches würfeln. B02 bleibt einziges integriertes Anwendungscodepaket; Deploy und Livewirkung fehlen.
+
 ## Ergänzung nach weiteren abgeschlossenen Kritiken
 
 A01 Runde 3 hat jetzt echte fachliche Kritik ALLOW für 1080b730. Abschlussrolle und Kritiker durch Astra auf Sol, fertige Hashes und exakte Originalgleichheit geprüft; ABSCHLUESSE-09.json. Sieben Regressionen, passende 35 Bestandsfehler und Opt-in-Vertrag belegt, Clippy bleibt an identischer fremder Diagnose stehen. Neue Integrationsvorbereitung wf_06169aa7-139, keine vierte Codekorrektur.

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "workflow_id": "wf_06169aa7-139",
+      "agent_id": "a55303cd25a62b63a",
+      "model_counts": {
+        "gpt-6.1-sol": 130
+      },
+      "transcript_sha256": "c9515afe465bd141352d39d20895580184b7bcfd9d9f5da4f23118ded68dcc2b",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_06169aa7-139/agent-a55303cd25a62b63a.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "artifact": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/A01-INTEGRATIONSVORBEREITUNG.md",
+        "background_tasks": [],
+        "base_sha": "e98b7f016dbab373a5a8dd9490d158b136c97fec",
+        "baseline": [
+          "Aktuelle Basis: 1334 bestanden, 35 fehlgeschlagen. Final exakt dieselben 35 Fehler.",
+          "Paket-fmt: 265 identische Bestandsabweichungen.",
+          "Clippy scheitert identisch vor der Zielcrate an /home/nathanael/.worktrees/tb-vollreview-session-widerruf/rust/crates/tb-chat/src/scam_pitch.rs:1502. Keine vollständige Lintabdeckung."
+        ],
+        "blockers": [],
+        "checks": [
+          "Konfliktfreier Rebase; alle drei range-diff-Einträge identisch. Gesamtdiff byteidentisch, 36780 Bytes, SHA256 96f93acb45671d66431172fb225213a64664c895dc22fb3058d647c328d1e013.",
+          "Finale Suite: 1341 bestanden, 35 identische Baselinefehler, 0 ignoriert. Sieben A01-Regressionen und 50 OBS-Tests bestanden.",
+          "Eigene Authdateien rustfmt Exit 0; Opt-in-Verträge: sieben sichere Skips und sieben erwartete Einrichtungsfehler bestätigt.",
+          "Quell-, Basis-, Befehls- und Logbindung geprüft. Belege unter /tmp/tb-a01-integration.qw1biK/.",
+          "Keine neue Anwendungskorrektur, keine B03-Implementierung, kein Push, Merge, Deploy oder Neustart. Eigener Code-Worktree sauber erhalten.",
+          "MERGEPROTOKOLL[MS-1]: 22 Git-Schritte einzeln | Anläufe: 0 | Gate: ALLOW: No merge-blocking defect found in the supplied diff.",
+          "TESTNACHWEIS[TW-1]: 1341 passed, 0 ignored | Baseline: 35 rot"
+        ],
+        "checks_complete": true,
+        "gate": "ALLOW",
+        "gate_evidence": [
+          "Expliziter Einzelmodelllauf gpt-6.1-sol, effort high, timeout 1080, Exit 0; kein Fallback.",
+          "/home/nathanael/Documents/.claude/gpt-workers/review-state/532938b2026b04ee.json bindet ALLOW an tatsächliche Basis und finalen Head, nichtleeren Diff und drei Authpfade.",
+          "/tmp/tb-a01-integration.qw1biK/final-sol-gate.log sowie /tmp/tb-a01-integration.qw1biK/final-sol-gate-state.json; Basis, Head und Baum vor/nach Gate identisch."
+        ],
+        "head_sha": "f04c0ef03d47ce4893ee4d17cb98eeb4c2f6c473",
+        "patch_equivalent": true,
+        "source_changed": false,
+        "worktree_clean": true
+      }
+    }
+  ]
+}

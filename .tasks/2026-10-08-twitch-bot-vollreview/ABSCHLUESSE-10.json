@@ -1,0 +1,388 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "workflow_id": "wf_e099cf2a-fc9",
+      "agent_id": "a15610373434996f3",
+      "label": "B01: Sol-Prüfbindung ohne Quelländerung",
+      "model_counts": {
+        "gpt-6.1-sol": 79
+      },
+      "transcript_sha256": "6299044fb7c5caf5f40f4da2bb3490d98b4b96880db4b1c66fabaf644a7247f0",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_e099cf2a-fc9/agent-a15610373434996f3.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "artifact": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/B01-PRUEFBINDUNG.md",
+        "binding_complete": true,
+        "blockers": [
+          "Vollsuite weiterhin 24 exakt gleiche Baselinefehler, kein vollständiger DB-Nachweis.",
+          "Paketformatierung: Exit 1, 34 unveränderte Bestandsabweichungen.",
+          "Clippy: Exit 101 im unveränderten tb-chat/src/scam_pitch.rs:1502. Kein vollständiger Zielpaket-Clippy-Nachweis.",
+          "Integration auf aktuelles main bleibt separat; keine Integrations- oder Deployfreigabe erteilt."
+        ],
+        "checks": [
+          "Neue SHA-gebundene Regression: Exit 0, 1 passed, 0 failed, 0 ignored, 359 filtered.",
+          "Eigene Rustfmt-Prüfung: Exit 0. HEAD, sauberer Arbeitsbaum und Quell-/Diffhashes vor und nach jeder Prüfung identisch.",
+          "Befehle, tatsächliche Exitcodes und Loghashes: /tmp/tb-b01-pruefbindung-vFV7lm8L/checks.json.",
+          "TESTNACHWEIS[TW-1]: 336 passed, 0 ignored | Baseline: 24 rot"
+        ],
+        "head_sha": "c3aa3cc94fec60aa365dcc9ca9f54b4bd3f1539a",
+        "historical_proof": [
+          "Die damalige Werkzeugfolge belegt tatsächlichen Fixhead 307c09e64528699364036780eb9f6623192be1d8, nicht den Lognamen 3341098f. Prüfungen waren vor dem nächsten Quellstandswechsel abgeschlossen.",
+          "Historischer Fix und aktueller Head besitzen identischen Rust-Baum 67c189f417131aacbb77fa899d861e91bf5e8ce8; historische Baseline bd695027 und aktuelle Basis a8b5b5e9 besitzen identischen Rust-Baum da48b906659042b04e9166f184868bd85e72bb2e. Auch außerhalb von .tasks sind die jeweiligen vollständigen Repo-Stände identisch.",
+          "Historische Suite: Fix 336/24, Baseline 335/24, jeweils Exit 101 und exakt identische Fehlerlisten. Beleg: /tmp/tb-b01-pruefbindung-vFV7lm8L/historical-proof.json, SHA256 ae805f87bff68906f26a016377c666f279ee61de3bb1427cf5d13bf24ab76ea3."
+        ],
+        "source_unchanged": true,
+        "worktree_clean": true
+      }
+    },
+    {
+      "workflow_id": "wf_f1a93c64-6ee",
+      "agent_id": "a0cc0b43c7d37e191",
+      "label": "Sol: Statusereignis 7",
+      "model_counts": {
+        "gpt-6.1-sol": 17
+      },
+      "transcript_sha256": "4417a190cf977be7784bb3e27b1769206f413dcf714714c90410a875a77416a8",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_f1a93c64-6ee/agent-a0cc0b43c7d37e191.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "artifact": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/TODO.md",
+        "conflicts": [],
+        "status": "Aktiv. Ereignis 7 atomar übernommen, ältere Historie unverändert erhalten."
+      }
+    },
+    {
+      "workflow_id": "wf_961bca08-8d7",
+      "agent_id": "a5b9b153cdc8c3794",
+      "label": "B07: Sol-Prüfabschluss",
+      "model_counts": {
+        "gpt-6.1-sol": 82
+      },
+      "transcript_sha256": "7cef0c57365d1fa19fb71896af530f9fe3815aee11a5ae94943d3e84cd6d4d1f",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_961bca08-8d7/agent-a5b9b153cdc8c3794.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "id": "B07",
+        "status": "Prüfabschluss erledigt. W02-DA01-S007-correctness-1 bestätigt; bereit für die nachgelagerte frische Read-only-Kritik. Getrennte Altfehler bleiben, kein grüner Gesamtlauf behauptet.",
+        "base_sha": "a8b5b5e986a1de0b8e2f981651f83bda9cf400dd",
+        "head_sha": "9ec607b31a68d2721f6c8905d4268fd5d4290ca6",
+        "worktree_clean": true,
+        "source_changed": false,
+        "original_diff_equivalence": [
+          "HEAD unverändert gegenüber dem Prüfcheckpoint. Zweimal origin/main geholt; finale Basis entspricht HEAD^ und FETCH_HEAD. Kein Rebase nötig.",
+          "Nichtleerer Gesamtdiff ausschließlich /home/nathanael/.worktrees/tb-vollreview-plan-fixture/rust/crates/tb-dashboard-api/tests/plan_stufen_gates.rs: 32 Einfügungen, 15 Löschungen. Keine produktiven Guards oder Assertions geändert.",
+          "Getesteter Commit c419c0d4b3c5dc8148ce2c5f4f1dc05aef0cc6b6 und HEAD besitzen denselben Rust-Baum 1aeacf7abe1c4f79debeedb8b25abcf775b08ffc. Sie unterscheiden sich ausschließlich in zwei Taskdokumenten.",
+          "Gemessene Baseline bd69502728861f8279e8b044592ecac9058fc732, ursprünglicher Fix-Elterncommit und aktuelles origin/main besitzen denselben Rust-Baum da48b906659042b04e9166f184868bd85e72bb2e. Historische Prüfungen deshalb wiederverwendet.",
+          "Originaltranscript /home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_3e7d57bd-7ac/agent-ad671d5f3f2756d20.jsonl: SHA256 51523fb2f574c091a99dd2374ba183e73fe9cf374d35fccb66c3b8fd96ee1641, 184 Sol-Modellnachrichten. Quelledits endeten vor Teststart; Kommandos und Abschlussereignisse stimmen mit den Logs überein."
+        ],
+        "checks": [
+          "TESTNACHWEIS[TW-1]: 11 passed, 0 ignored | Baseline: 9 rot",
+          "Wiederverwendeter Vorher-/Nachherbefehl: env -u TWITCH_CLIENT_ID -u TWITCH_CLIENT_SECRET RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 TB_TEST_DATABASE_URL='postgres:///tb_bb_test?host=/var/run/postgresql' TB_TEST_REQUIRE_DB=1 /home/nathanael/.local/bin/cargo-slot test --manifest-path /home/nathanael/.worktrees/tb-vollreview-plan-fixture/rust/Cargo.toml --locked -p tb-dashboard-api --test plan_stufen_gates --no-fail-fast --jobs 1 -- --include-ignored. Beide Exit 101. Fix: 11 bestanden, 1 fehlgeschlagen, 0 ignoriert, 0 herausgefiltert. /tmp/tb-b07-plan-fix.log, SHA256 74bedc99ef3e20ddee55da37bbab14645562b8c1ed37e440eb6d85688ac4dfa3. Keine erneute Testkompilierung.",
+          "Wiederverwendet: RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu /home/nathanael/.cargo/bin/rustfmt --edition 2021 --check /home/nathanael/.worktrees/tb-vollreview-plan-fixture/rust/crates/tb-dashboard-api/tests/plan_stufen_gates.rs. Fix und gemessene Baseline jeweils Exit 0.",
+          "Neue Formatbaseline: RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 /home/nathanael/.local/bin/cargo-slot fmt --manifest-path /home/nathanael/.worktrees/tb-vollreview-plan-fixture-baseline/rust/Cargo.toml --package tb-dashboard-api -- --check. Exit 1; /tmp/tb-b07-pruefabschluss-bhh6gq/fmt-baseline.log.",
+          "Wiederverwendeter Fix-Paketformatbefehl: RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 /home/nathanael/.local/bin/cargo-slot fmt --manifest-path /home/nathanael/.worktrees/tb-vollreview-plan-fixture/rust/Cargo.toml --package tb-dashboard-api -- --check. Exit 1; /tmp/tb-b07-fmt-fix.log. Jeweils 265 Diffblöcke, nach Pfadnormalisierung vollständig identisch; eigener Testpfad ohne Formatabweichung. Normalisierter SHA256 406306f46bb0e2c5bdf2fd98b06378d103446868e5c896721e68ea299d5137e1.",
+          "Neue Clippy-Baseline: RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 /home/nathanael/.local/bin/cargo-slot clippy --manifest-path /home/nathanael/.worktrees/tb-vollreview-plan-fixture-baseline/rust/Cargo.toml --target-dir /home/nathanael/.worktrees/tb-vollreview-plan-fixture/rust/target --locked -p tb-dashboard-api --all-targets --jobs 1. Exit 0; /tmp/tb-b07-pruefabschluss-bhh6gq/clippy-baseline.log.",
+          "Neues Fix-Clippy: RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 /home/nathanael/.local/bin/cargo-slot clippy --manifest-path /home/nathanael/.worktrees/tb-vollreview-plan-fixture/rust/Cargo.toml --target-dir /home/nathanael/.worktrees/tb-vollreview-plan-fixture/rust/target --locked -p tb-dashboard-api --all-targets --jobs 1. Exit 0; /tmp/tb-b07-pruefabschluss-bhh6gq/clippy-fix.log. Beide 17 nach Pfadnormalisierung identische Warnungsblöcke; keine Warnung im eigenen Testpfad. Normalisierter SHA256 66901cab5af5535737990c44cf07040d33f17b502c724d33ba053ca4c72aa7e0.",
+          "git -C /home/nathanael/.worktrees/tb-vollreview-plan-fixture diff --check origin/main HEAD: Exit 0. Fix- und Baselineworktree abschließend sauber. Testdatenbank-Konfigurationsdateien ausschließlich auf Existenz geprüft, beide fehlen.",
+          "Eigene Hintergrundaufgaben blkpky4js und b9ac1y0kc vollständig abgeschlossen, jeweils Exit 0. Keine Kompilierung abgebrochen oder Doppelprüfung gestartet. Kein Anwendungscode oder Taskdokument geändert; kein Merge, Push, Release, Deploy oder Restart.",
+          "MERGEPROTOKOLL[MS-1]: 15 Git-Schritte einzeln | Anläufe: 1 | Gate: ALLOW aus exakt gebundenem Sol-Nachweis; kein Merge"
+        ],
+        "baseline": [
+          "Fokus-Suite am unveränderten bd69502728861f8279e8b044592ecac9058fc732: 3 bestanden, 9 fehlgeschlagen, 0 ignoriert, 0 herausgefiltert; Exit 101. /tmp/tb-b07-plan-baseline.log, SHA256 025df2672ef15a9d4e945dc898376cc3d7a2db177d09d289780b3883f7fb63dd.",
+          "Alle drei vorher bestandenen Tests bleiben bestanden; acht vorher fehlgeschlagene bestehen zusätzlich. Der verbleibende Auto-Posting-Test scheiterte vorher am Identitätsguard und erreicht jetzt den getrennten TikTok-Vertrag.",
+          "Paketformatierung: 265 unveränderte fremde Diffblöcke vor und nach Fix, jeweils Exit 1. Clippy: beide Exit 0 mit identischen 17 Warnungsblöcken."
+        ],
+        "gate": "ALLOW; bestehender nichtleerer Sol-Patchreview exakt wiederverwendet",
+        "gate_evidence": [
+          "Ausgeführt: python3 /home/nathanael/Documents/.claude/gpt-workers/gate_hook.py --review --repo /home/nathanael/.worktrees/tb-vollreview-plan-fixture --base origin/main --head HEAD --model gpt-6.1-sol --effort high --timeout 1080. Exit 0; /tmp/tb-b07-pruefabschluss-bhh6gq/gate.log.",
+          "Tatsächliche Antwort: ALLOW: this SHA already passed review_gate [reviewer_model=gpt-6.1-sol]. Kein neuer Modellaufruf und kein Fallback; kein Leerdiff-ALLOW.",
+          "/home/nathanael/Documents/.claude/gpt-workers/review-state/7dbce9b52973fd1f.json bindet reviewer_model und phase1_model gpt-6.1-sol, allow_phase phase1, richtigen Worktree/Branch, base_sha a8b5b5e986a1de0b8e2f981651f83bda9cf400dd und allow_sha/head_sha 9ec607b31a68d2721f6c8905d4268fd5d4290ca6. blocking leer. Zeitstempel 2026-10-08T05:32:21.444759+00:00; SHA256 96d5d358fae603821db320804d88ddc69eafe692dc62c94cd04d9d183fd887d2.",
+          "Ursprünglicher tatsächlicher Patchreview /tmp/tb-b07-gate-final.log: ALLOW: No confirmed merge-blocking defect in the supplied diff. Enthält einen nichtblockierenden Hinweis zur Free-Fixture, kein BLOCK."
+        ],
+        "background_tasks": [],
+        "blockers": [
+          "Die Fokus-Suite bleibt mit auto_posting_offen_solange_pro_nicht_buchbar rot. Bestehende Testinputs enthalten keine tiktok_options; der unveränderte Guard in /home/nathanael/.worktrees/tb-vollreview-plan-fixture/rust/crates/tb-dashboard-api/src/handlers/social_media_tiktok_direct.rs:232-239 liefert deshalb 400. Dieser vom ursprünglichen Identitätsfehler getrennte Restvertrag ist kein Zusatzfixauftrag und wurde nicht verändert.",
+          "Paket-fmt bleibt wegen der exakt belegten 265 vorbestehenden fremden Abweichungen rot. Kein grüner Paketformat- oder Gesamtsuitennachweis behauptet. Die nachgelagerte frische Read-only-Kritik bleibt Sache des Orchestrators; Commit und Worktrees bleiben lokal erhalten."
+        ]
+      }
+    },
+    {
+      "workflow_id": "wf_961bca08-8d7",
+      "agent_id": "a81e0946686b17121",
+      "label": "B06: Sol-Prüfabschluss",
+      "model_counts": {
+        "gpt-6.1-sol": 152
+      },
+      "transcript_sha256": "eceba3a908a230f96d6d4937dbb33ba604e939f314d64e3ebe53bab94a2af4f7",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_961bca08-8d7/agent-a81e0946686b17121.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "id": "B06",
+        "status": "VERIFIED_READY_FOR_CRITIC. No application changes or rebase were needed. Independent read-only criticism is still pending; no merge, push, release, deploy or restart was performed.",
+        "base_sha": "a8b5b5e986a1de0b8e2f981651f83bda9cf400dd",
+        "head_sha": "46c52a928b47444b10364d024a632ca00226d6c4",
+        "worktree_clean": true,
+        "source_changed": false,
+        "original_diff_equivalence": [
+          "Current origin/main was fetched twice and remains a8b5b5e986a1de0b8e2f981651f83bda9cf400dd. Both /home/nathanael/.worktrees/tb-vollreview-proxy-antwort and /home/nathanael/.worktrees/tb-vollreview-proxy-antwort-baseline remain clean.",
+          "Baseline worktree HEAD is bd69502728861f8279e8b044592ecac9058fc732. Its Rust tree and current origin/main Rust tree are identical: da48b906659042b04e9166f184868bd85e72bb2e. Their only differences are two task documents.",
+          "Fixed Rust tree: 37ee655963ef2a05f5163508191bf20c3a0c7a75. Only /home/nathanael/.worktrees/tb-vollreview-proxy-antwort/rust/crates/tb-dashboard-api/src/proxy.rs differs from origin/main: 136 insertions, 40 deletions. Fixed proxy blob b6345e5baadc904000f3659a98c14b4cde78f5d0; baseline blob 277a84467a71471664c4eded32ca11b39551a353.",
+          "Extracted the originally tested patch from the native fixer transcript. cmp returned 0 against the current committed patch. Both /tmp/b06-pruefabschluss-tTvlYY/original-fixer.diff and /tmp/b06-pruefabschluss-tTvlYY/current.diff contain 10668 bytes and have SHA256 43b42f2f4d7a9a520c5629db352c333e6cab1f2307b53ccd1f5548b648e51fa6.",
+          "Verified /home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_3e7d57bd-7ac/agent-a8751a0f816a56a4c.jsonl: SHA256 45e27d4b4201ea2a4bb4e1bb1428840f6e95d726406c6acd6af063ad9c62d914, exactly 178 model records, exclusively gpt-6.1-sol. Reused checks are bound to this transcript's exact commands and unchanged source."
+        ],
+        "checks": [
+          "RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 TB_TEST_DATABASE_URL='postgres:///tb_bb_test?host=/var/run/postgresql' TB_TEST_REQUIRE_DB=1 /home/nathanael/.local/bin/cargo-slot test --manifest-path /home/nathanael/.worktrees/tb-vollreview-proxy-antwort-baseline/rust/Cargo.toml --locked -p tb-dashboard-api --jobs 1 --no-fail-fast -- --include-ignored --test-threads=1: exit 101; 1333 passed, 35 failed, 0 ignored, 0 filtered. /tmp/b06-pruefabschluss-tTvlYY/baseline-all-flags-test.log, SHA256 097101c4d92bbc0dbd43b5715bd2969033ac9ccdc032780a619598fadcb15c7e.",
+          "RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 TB_TEST_DATABASE_URL='postgres:///tb_bb_test?host=/var/run/postgresql' TB_TEST_REQUIRE_DB=1 /home/nathanael/.local/bin/cargo-slot test --manifest-path /home/nathanael/.worktrees/tb-vollreview-proxy-antwort/rust/Cargo.toml --target-dir /home/nathanael/.worktrees/tb-vollreview-proxy-antwort-baseline/rust/target --locked -p tb-dashboard-api --jobs 1 --no-fail-fast -- --include-ignored --test-threads=1: final exit 101; 1336 passed, the same 35 failed, 0 ignored, 0 filtered; all 14 proxy tests passed. /tmp/b06-pruefabschluss-tTvlYY/fix-all-flags-test-retry.log, SHA256 ec5cdc2e09337f74d17b0d4fee657e446c417ad7f0e50ecd3fe7b6c6d7d27d82.",
+          "The first identical fix-suite invocation completed all tests with 1336 passed and 35 failed, but its wrapper returned 70 with 'Release-Sperre nicht erhalten' instead of an EXIT marker. /home/nathanael/.local/bin/cargo-slot changed externally during this session. /tmp/b06-pruefabschluss-tTvlYY/fix-all-flags-test.log preserves that attempt. One sequential retry obtained the normal exit 101. No wrapper, locks or other processes were changed by this worker.",
+          "RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 /home/nathanael/.local/bin/cargo-slot clippy --manifest-path /home/nathanael/.worktrees/tb-vollreview-proxy-antwort/rust/Cargo.toml --target-dir /home/nathanael/.worktrees/tb-vollreview-proxy-antwort-baseline/rust/target --locked -p tb-dashboard-api --all-targets --jobs 1: exit 0. /tmp/b06-pruefabschluss-tTvlYY/fix-clippy.log.",
+          "RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 /home/nathanael/.local/bin/cargo-slot clippy --manifest-path /home/nathanael/.worktrees/tb-vollreview-proxy-antwort-baseline/rust/Cargo.toml --locked -p tb-dashboard-api --all-targets --jobs 1: exit 0. /tmp/b06-pruefabschluss-tTvlYY/baseline-clippy.log. Both Clippy logs have exactly the same 22 warning messages; no new warnings.",
+          "Reused RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu /home/nathanael/.cargo/bin/rustfmt --check --edition 2021 /home/nathanael/.worktrees/tb-vollreview-proxy-antwort/rust/crates/tb-dashboard-api/src/proxy.rs: exit 0, bound to the verified native transcript and byte-identical patch.",
+          "Reused RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 /home/nathanael/.local/bin/cargo-slot fmt --manifest-path /home/nathanael/.worktrees/tb-vollreview-proxy-antwort/rust/Cargo.toml --package tb-dashboard-api -- --check: exit 1. /tmp/tb-b06-fmt.log. All 255 remaining hunks are outside the owned proxy file.",
+          "Reused RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 /home/nathanael/.local/bin/cargo-slot fmt --manifest-path /home/nathanael/.worktrees/tb-vollreview-proxy-antwort-baseline/rust/Cargo.toml --package tb-dashboard-api -- --check: exit 1. /tmp/tb-b06-baseline-fmt.log. All foreign formatting hunks are exactly identical after worktree-root normalization.",
+          "Reused RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 TB_TEST_DATABASE_URL='postgres:///tb_bb_test?host=/var/run/postgresql' TB_TEST_REQUIRE_DB=1 /home/nathanael/.local/bin/cargo-slot test --manifest-path /home/nathanael/.worktrees/tb-vollreview-proxy-antwort/rust/Cargo.toml --target-dir /home/nathanael/.worktrees/tb-vollreview-proxy-antwort-baseline/rust/target --locked -p tb-dashboard-api --jobs 1 --lib proxy::tests --no-fail-fast -- --include-ignored: exit 0; 14 passed, 0 failed, 0 ignored, 1330 filtered. /tmp/tb-b06-proxy-test.log.",
+          "git -C /home/nathanael/.worktrees/tb-vollreview-proxy-antwort diff --check origin/main HEAD: exit 0.",
+          "Database configuration files were checked only for absence in both worktrees. TB_LIVE_READONLY_DATABASE_URL was checked only for absence; the included live-schema test failed on missing configuration before connecting. No production database, secrets, migrations, browser or real-account actions were used.",
+          "TESTNACHWEIS[TW-1]: 1336 passed, 0 ignored | Baseline: 35 rot",
+          "MERGEPROTOKOLL[MS-1]: 17 Git-Schritte einzeln | Anläufe: 0 | Gate: ALLOW"
+        ],
+        "baseline": [
+          "The new matched --include-ignored --test-threads=1 runs establish 1333 passed / 35 failed / 0 ignored before the fix and 1336 passed / 35 failed / 0 ignored afterward. All 35 failure identities match, including both doctests after normalizing their shifted source-line annotations. No additional failure.",
+          "Previously completed default-flag runs were independently rebound, not mislabeled as include-ignored runs: /tmp/tb-b06-baseline-isoliert-test.log has 1331 passed / 31 failed / 6 ignored; /tmp/tb-b06-test-cache.log has 1334 passed / the same 31 failed / 6 ignored. Both exit 101. The new runs complete the previously omitted coverage rather than repeating checks because of their age.",
+          "Package-format baseline: 265 hunks in 34 files, including 10 proxy hunks. Fixed package: 255 hunks in the same 33 foreign files, zero proxy hunks; foreign hunk contents are unchanged.",
+          "Clippy baseline and fix both exit 0 with identical warnings. Normal own compilations were allowed to finish; all verification tasks have ended."
+        ],
+        "gate": "ALLOW",
+        "gate_evidence": [
+          "python3 /home/nathanael/Documents/.claude/gpt-workers/gate_hook.py --review --repo /home/nathanael/.worktrees/tb-vollreview-proxy-antwort --base origin/main --head HEAD --model gpt-6.1-sol --effort high --timeout 1080: exit 0. /tmp/b06-pruefabschluss-tTvlYY/gate.log says 'ALLOW: this SHA already passed review_gate [reviewer_model=gpt-6.1-sol]'. This invocation reused the existing exact-SHA judgment; it did not perform a new model review.",
+          "Unchanged /home/nathanael/Documents/.claude/gpt-workers/review-state/7510de26b74f4c6f.json binds reviewer_model and phase1_model gpt-6.1-sol, allow_sha/head_sha 46c52a928b47444b10364d024a632ca00226d6c4, base_sha a8b5b5e986a1de0b8e2f981651f83bda9cf400dd, branch fix/vollreview-proxy-antwort, allow_phase phase1, diff_bytes 10668, created_at 2026-10-08T05:43:19.462467+00:00.",
+          "The substantive original review in /tmp/tb-b06-gate.log allowed the actual response-boundary patch, not an empty diff. Its nonblocking dependency-context concern is covered by successful package compilation and all-target Clippy. No fallback model, --chain or hook bypass was used."
+        ],
+        "background_tasks": [],
+        "blockers": []
+      }
+    },
+    {
+      "workflow_id": "wf_961bca08-8d7",
+      "agent_id": "a9c07a6300a45762a",
+      "label": "B07: echter Sol-Fix-Kritiker",
+      "model_counts": {
+        "gpt-6.1-sol": 72
+      },
+      "transcript_sha256": "f51f04b496e39ad306b0039b9b259014f6d0992164f1a71591cf7f0607f99ed7",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_961bca08-8d7/agent-a9c07a6300a45762a.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "id": "B07",
+        "head_sha": "9ec607b31a68d2721f6c8905d4268fd5d4290ca6",
+        "verdict": "ALLOW",
+        "rationale": "Fachliche Diffabnahme: W02-DA01-S007-correctness-1 ist behoben. Die synthetischen Identitäten sind konsistent; die bisherigen Free-/Plus-Erwartungen, Assertions und produktiven Guards bleiben erhalten. Kein neuer Fehler oder übersehener Zwilling im Paket festgestellt. Dies ist keine Merge-, Test- oder Deployfreigabe.",
+        "findings": [],
+        "evidence": [
+          "Festen Gesamtdiff a8b5b5e986a1de0b8e2f981651f83bda9cf400dd..9ec607b31a68d2721f6c8905d4268fd5d4290ca6 vollständig geprüft: ausschließlich /home/nathanael/.worktrees/tb-vollreview-plan-fixture/rust/crates/tb-dashboard-api/tests/plan_stufen_gates.rs, 32 Einfügungen und 15 Löschungen. HEAD und Parent stimmen; Worktree sauber.",
+          "Der geprüfte Commit c419c0d4b3c5dc8148ce2c5f4f1dc05aef0cc6b6 und der endgültige Head unterscheiden sich ausschließlich in zwei Taskdokumenten. Ebenso unterscheidet sich die gemessene Baseline bd69502728861f8279e8b044592ecac9058fc732 von der festen Basis nur in diesen Dokumenten. Die Rust-Bäume sind jeweils identisch.",
+          "Originalreview und beide BESTÄTIGT-Skeptikerresultate gefiltert gelesen. /home/nathanael/.worktrees/tb-vollreview-plan-fixture/rust/crates/tb-dashboard-api/tests/plan_stufen_gates.rs:72-76,135-170,297-313,417,478 konfigurieren gültige, unterschiedliche IDs für Sessions, Streamerzuordnung, Planzeilen, Freigaben und betroffene Clip-Eigentümer. Alle Partneraufrufe verwenden die gemeinsame korrigierte Fixture.",
+          "Die Trial-Spalten in /home/nathanael/.worktrees/tb-vollreview-plan-fixture/rust/crates/tb-dashboard-api/tests/plan_stufen_gates.rs:30-33 erhalten die bisher beabsichtigte Trennung von Trial und manuell gesetzter Stufe. Der unveränderte Resolver in /home/nathanael/.worktrees/tb-vollreview-plan-fixture/rust/crates/tb-analytics/src/trial.rs:303-318 vergibt ohne Planzeile, bei gesetztem Einmalflag oder fehlendem first_login_at keinen Trial.",
+          "Übernommene Testlogs gelesen und SHA256 selbst geprüft: /tmp/tb-b07-plan-baseline.log, 025df2672ef15a9d4e945dc898376cc3d7a2db177d09d289780b3883f7fb63dd, dokumentiert 3 bestanden und 9 fehlgeschlagen; /tmp/tb-b07-plan-fix.log, 74bedc99ef3e20ddee55da37bbab14645562b8c1ed37e440eb6d85688ac4dfa3, dokumentiert 11 bestanden und 1 fehlgeschlagen. Beide Exit 101, keine ignorierten Tests. Alle drei vorher bestandenen Tests bleiben bestanden.",
+          "Ausschließlich lokale, lesende Prüfung durchgeführt. Keine Dateien geändert, keine Builds, Tests, Cargo-Aufrufe, Datenbank-, Netzwerk- oder Browserprobes; keine Delegation und kein eigener Gate-Lauf."
+        ],
+        "test_gaps": [
+          "Die Fokus-Suite bleibt rot: auto_posting_offen_solange_pro_nicht_buchbar. Unveränderte Eingaben ohne tiktok_options in /home/nathanael/.worktrees/tb-vollreview-plan-fixture/rust/crates/tb-dashboard-api/tests/plan_stufen_gates.rs:343-353 erreichen jetzt den bestehenden 400-Guard in /home/nathanael/.worktrees/tb-vollreview-plan-fixture/rust/crates/tb-dashboard-api/src/handlers/social_media_tiktok_direct.rs:232-239. Das ist ein zuvor verdeckter Restfehler, keine neue Regression; kein Zusatzfix verlangt.",
+          "Gemeldete Paketformatprüfung bleibt mit 265 identischen vorbestehenden Diffblöcken rot. Gemeldetes Clippy besteht vor und nach dem Fix mit denselben 17 Warnungsblöcken. Diese Prüfungen wurden hier nicht erneut ausgeführt.",
+          "Kein grüner Gesamt-Suitennachweis und keine Live-/Deployprüfung durch diesen Kritiker."
+        ]
+      }
+    },
+    {
+      "workflow_id": "wf_961bca08-8d7",
+      "agent_id": "a44d7746bcf0182bc",
+      "label": "B04: Sol-Prüfabschluss",
+      "model_counts": {
+        "gpt-6.1-sol": 142
+      },
+      "transcript_sha256": "1ed34b50bcc82eb3fee880450f02a23f3b6851649ea9a5697a0d0bfbe3295e20",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_961bca08-8d7/agent-a44d7746bcf0182bc.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "id": "B04",
+        "status": "Prüfabschluss vollständig, bereit für den frischen Read-only-Kritiker. Beide Router-Regressionen bestätigt; bestehende Baselinefehler unverändert.",
+        "base_sha": "a8b5b5e986a1de0b8e2f981651f83bda9cf400dd",
+        "head_sha": "d760300d8100b8bf283fee2888c758e6934f3bad",
+        "worktree_clean": true,
+        "source_changed": false,
+        "original_diff_equivalence": [
+          "Prüfcheckpoint c03835317c70a127da2c57681d0ef1b7cb2fb349 auf bd69502728861f8279e8b044592ecac9058fc732 konfliktfrei auf das frisch geholte origin/main rebasiert. Abschließender Fetch bestätigt dieselbe Basis.",
+          "Gesamtdiff weiterhin ausschließlich /home/nathanael/.worktrees/tb-vollreview-router-vertraege/rust/crates/tb-dashboard-api/src/lib.rs: 180 Einfügungen, sechs Löschungen, 8519 Bytes. Originaler protokollierter Sol-Diff, Checkpoint und endgültiger Diff bytegleich; SHA256 c6bec73321afa74d3235e84068b38042b82e1a4cd23dc83a7347933f0bd5c4c4. Vergleich Exit 0.",
+          "Rust-Basisbaum vor und nach Basisabgleich identisch: da48b906659042b04e9166f184868bd85e72bb2e. Rust-Fixbaum am Prüfcheckpoint und endgültigen Head identisch: 544b6abc75ccba2f1703c00833d5bafc4ce4e835. Unterschiede zwischen Checkpoint und endgültigem Head betreffen nur zwei geerbte Taskdokumente.",
+          "Originaltranscript /home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_3e7d57bd-7ac/agent-aed18ccb4194e9d4c.jsonl unabhängig geprüft: 162 Modellnachrichten ausschließlich gpt-6.1-sol, SHA256 c7aff3e1231adfb8d78252566516d95155d1ee991a615d13d2ca362c7a73831e. Prüfkommandos, abgeschlossene Exit-Codes und Quellstand gebunden; passende Nachweise wiederverwendet."
+        ],
+        "checks": [
+          "Wiederverwendet: RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 TB_TEST_DATABASE_URL='postgres:///tb_bb_test?host=/var/run/postgresql' TB_TEST_REQUIRE_DB=1 /home/nathanael/.local/bin/cargo-slot test --manifest-path /home/nathanael/.worktrees/tb-vollreview-router-vertraege/rust/Cargo.toml --locked -p tb-dashboard-api --jobs 1 --no-fail-fast -- --include-ignored --test-threads=1. Baseline Exit 101: 1333 passed, 35 failed, 0 ignored. Fix Exit 101: 1336 passed, 35 failed, 0 ignored. Logs /tmp/tb-b04-router-pruefungen/baseline-test.log und /tmp/tb-b04-router-pruefungen/post-fix-test.log unabhängig nachgezählt; exakt dieselben 35 Fehlernamen. Sämtliche neun Routerfälle einschließlich drei neuer Regressionen bestanden.",
+          "TESTNACHWEIS[TW-1]: 1336 passed, 0 ignored | Baseline: 35 rot",
+          "Wiederverwendet: RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu /home/nathanael/.cargo/bin/rustfmt --edition 2021 --config skip_children=true --check /home/nathanael/.worktrees/tb-vollreview-router-vertraege/rust/crates/tb-dashboard-api/src/lib.rs. Vor und nach Fix Exit 0; identische Datei-Blobs belegt.",
+          "RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu /home/nathanael/.local/bin/cargo-slot fmt --manifest-path /home/nathanael/.worktrees/tb-vollreview-router-vertraege/rust/Cargo.toml --package tb-dashboard-api -- --check. Exit 1; /tmp/tb-b04-pruefabschluss-20261008.dliASa/final-package-fmt.log. Nach Entfernen ausschließlich der Slotmeldungen exakt dieselben 265 Formatabweichungen wie /tmp/tb-b04-router-pruefungen/baseline-package-fmt.log; keine Abweichung in lib.rs.",
+          "RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 /home/nathanael/.local/bin/cargo-slot clippy --manifest-path /home/nathanael/.worktrees/tb-vollreview-router-vertraege-pruefbaseline-20261008/rust/Cargo.toml --target-dir /home/nathanael/.worktrees/tb-vollreview-router-vertraege/rust/target --locked -p tb-dashboard-api --all-targets --jobs 1. Baseline Exit 0, normale Kompilierung abgeschlossen; /tmp/tb-b04-pruefabschluss-20261008.dliASa/baseline-clippy.log.",
+          "RUSTUP_TOOLCHAIN=1.97.1-x86_64-unknown-linux-gnu SQLX_OFFLINE=1 /home/nathanael/.local/bin/cargo-slot clippy --manifest-path /home/nathanael/.worktrees/tb-vollreview-router-vertraege/rust/Cargo.toml --locked -p tb-dashboard-api --all-targets --jobs 1. Abschließender Lauf Exit 0; /tmp/tb-b04-pruefabschluss-20261008.dliASa/final-clippy-retry.log. Keine Fehlerdiagnosen; Warnungstitel und Häufigkeiten identisch zur Baseline. Keine Lints abgeschwächt.",
+          "Erster Clippy-Start endete vor Kompilierung mit Exit 2 durch einen Syntaxfehler im zwischenzeitlich geänderten vorhandenen cargo-slot; /tmp/tb-b04-pruefabschluss-20261008.dliASa/final-clippy.log. Wrapper ausschließlich gelesen und mit bash -n geprüft, Exit 0. Genau ein erneuter Final-Lauf nach Abschluss der eigenen Baseline; keine Doppelkompilierung, keine eigenen regulären Kompilierungen abgebrochen.",
+          "Keine Datenbank-Konfigurationsinhalte gelesen; /home/nathanael/.worktrees/tb-vollreview-router-vertraege/rust/test-database.json nicht vorhanden. Eigener sauberer temporärer Baseline-Worktree nach Prüfung entfernt. Keine Anwendungscodeänderung, kein Push, Main-Merge, Release, Deploy oder Restart; keine fremden Prozesse oder Dienste verändert."
+        ],
+        "baseline": [
+          "Unveränderter Rust-Ausgangsstand bd69502728861f8279e8b044592ecac9058fc732 ist rustbaumgleich zu a8b5b5e986a1de0b8e2f981651f83bda9cf400dd. Bestehende Tests: 1333 bestanden, 35 fehlgeschlagen, null ignoriert; Fix: 1336 bestanden mit denselben 35 Fehlern.",
+          "Paketformatierung vor und nach Fix: Exit 1, exakt dieselben 265 fremden Formatabweichungen. Eigene lib.rs besteht ihre isolierte Formatprüfung.",
+          "Clippy auf tatsächlicher Basis und endgültigem Fix: jeweils Exit 0, keine zusätzlichen Warnungstitel oder erhöhten Warnungshäufigkeiten."
+        ],
+        "gate": "ALLOW",
+        "gate_evidence": [
+          "python3 /home/nathanael/Documents/.claude/gpt-workers/gate_hook.py --review --repo /home/nathanael/.worktrees/tb-vollreview-router-vertraege --base origin/main --head HEAD --model gpt-6.1-sol --effort high --timeout 1080. Exit 0. Tatsächlicher nichtleerer Commit-Diff geprüft; kein --chain, Modellfallback oder Hook-Bypass.",
+          "/tmp/tb-b04-pruefabschluss-20261008.dliASa/sol-gate.log: ALLOW: No grounded merge-blocking defect found in the supplied diff and revision snapshots.",
+          "/home/nathanael/Documents/.claude/gpt-workers/review-state/f102f2ac161b535b.json abschließend geprüft: allow_sha=d760300d8100b8bf283fee2888c758e6934f3bad, base_sha=a8b5b5e986a1de0b8e2f981651f83bda9cf400dd, branch=fix/vollreview-router-vertraege, reviewer_model=phase1_model=gpt-6.1-sol, allow_phase=phase1, diff_bytes=8519, blocking=[], created_at=2026-10-08T07:45:36.117032+00:00. SHA256 5fdbe830cc5eb1487c004b44f5f5816596bd4c74f775db6791d0c326c2beaff6.",
+          "MERGEPROTOKOLL[MS-1]: 23 Git-Schritte einzeln | Anläufe: 0 | Gate: ALLOW (gpt-6.1-sol, echter Commit-Diff)"
+        ],
+        "background_tasks": [],
+        "blockers": [
+          "Die vollständige Paketsuite bleibt mit 35 belegten, unveränderten Baselinefehlern rot. Kein vollständig grüner Pakettestnachweis.",
+          "Paketformatprüfung bleibt wegen 265 belegter, unveränderter fremder Formatabweichungen rot. Keine offenen Ausführungsnachweise; unabhängiger abschließender Kritiker folgt außerhalb dieses Prüfauftrags."
+        ]
+      }
+    },
+    {
+      "workflow_id": "wf_961bca08-8d7",
+      "agent_id": "a63540e27e22e47a2",
+      "label": "B06: echter Sol-Fix-Kritiker",
+      "model_counts": {
+        "gpt-6.1-sol": 44
+      },
+      "transcript_sha256": "38098c4388550d1eb2fbf41520f947917f1ab5df116f9872fec659ee4ed0bec4",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_961bca08-8d7/agent-a63540e27e22e47a2.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "id": "B06",
+        "head_sha": "46c52a928b47444b10364d024a632ca00226d6c4",
+        "verdict": "ALLOW",
+        "rationale": "Der feste Gesamtdiff behebt W02-DA01-S005-errors-1 minimal: Die vorhandene 16-MiB-Grenze begrenzt tatsächlich gelieferte Antwortbytes während der Pufferung, unabhängig von Content-Length. Korrekte Antworten, Status, Header und Requestgrenze bleiben erhalten. Keine belegte neue Regression oder ausgelassener vertragsgleicher Zwilling. Fachliche Diffabnahme, keine Merge- oder Deployfreigabe.",
+        "findings": [],
+        "evidence": [
+          "Basis a8b5b5e986a1de0b8e2f981651f83bda9cf400dd; Head und sauberer Worktree unabhängig bestätigt. Gesamtdiff: ausschließlich /home/nathanael/.worktrees/tb-vollreview-proxy-antwort/rust/crates/tb-dashboard-api/src/proxy.rs, 136 Einfügungen und 40 Löschungen. git diff --check: Exit 0.",
+          "/home/nathanael/.worktrees/tb-vollreview-proxy-antwort/rust/crates/tb-dashboard-api/src/proxy.rs:186-213 liest reqwest-Chunks über einen begrenzten Body-Collector. Überschreitung nutzt den vorhandenen 502-Fehlerpfad; erfolgreiche Antworten behalten die bisherige Konstruktion.",
+          "/home/nathanael/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/axum-0.8.9/src/body/mod.rs:48-53 und /home/nathanael/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/http-body-util-0.1.3/src/limited.rs:45-61 bestätigen die kumulative Byteprüfung vor Aufnahme überschreitender Frames.",
+          "/home/nathanael/.worktrees/tb-vollreview-proxy-antwort/rust/crates/tb-dashboard-api/src/proxy.rs:642-743 prüft Grenzwert und Grenzwert plus eins mit korrekter, fehlender und falscher Content-Length. Vorhandene Assertions wurden nicht abgeschwächt.",
+          "Bestehende Prüflogs gelesen, nicht selbst Tests ausgeführt: /tmp/b06-pruefabschluss-tTvlYY/baseline-all-flags-test.log und /tmp/b06-pruefabschluss-tTvlYY/fix-all-flags-test-retry.log. Beide SHA256 stimmen mit den gemeldeten Werten überein. Baseline 1333 bestanden, Fix 1336 bestanden; jeweils 35 identische Fehler nach Normalisierung der Doctest-Zeilenangaben. Alle 14 Proxytests bestanden.",
+          "Zwilling geprüft: /home/nathanael/.worktrees/tb-vollreview-proxy-antwort/rust/crates/tb-internal-api/src/handlers/legacy_proxy.rs:24-25,112-132 enthält ähnliches Puffern, aber keinen belegten gleichen 16-MiB-Antwortvertrag. Daraus folgt kein zusätzlicher B06-Fixauftrag."
+        ],
+        "test_gaps": [
+          "Keine eigenen Builds, Tests oder Laufzeitprobes im Read-only-Auftrag. Die 35 bekannten Suitefehler bleiben bestehen; gemeldete fremde Paketformatabweichungen sind keine neue B06-Regression. Live- und Deployverifikation nicht Gegenstand dieser Abnahme."
+        ]
+      }
+    },
+    {
+      "workflow_id": "wf_961bca08-8d7",
+      "agent_id": "a8f33093b29ca2add",
+      "label": "B04: echter Sol-Fix-Kritiker",
+      "model_counts": {
+        "gpt-6.1-sol": 75
+      },
+      "transcript_sha256": "c2ea911ab06253099ed86d9b2fbc2dca3352529745c325344a07fd16260fa568",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_961bca08-8d7/agent-a8f33093b29ca2add.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "id": "B04",
+        "head_sha": "d760300d8100b8bf283fee2888c758e6934f3bad",
+        "verdict": "ALLOW",
+        "rationale": "Beide bestätigten Routerfehler sind minimal behoben. Bestehende korrekte Routen und Schutzprüfungen bleiben erhalten. Keine neue Regression oder übersehener auftragsrelevanter Zwilling festgestellt. ALLOW gilt ausschließlich als fachliche Diffabnahme, nicht als Merge-, Test- oder Deployfreigabe.",
+        "findings": [],
+        "evidence": [
+          "Fester Gesamtdiff a8b5b5e986a1de0b8e2f981651f83bda9cf400dd..d760300d8100b8bf283fee2888c758e6934f3bad: ausschließlich /home/nathanael/.worktrees/tb-vollreview-router-vertraege/rust/crates/tb-dashboard-api/src/lib.rs, 180 Einfügungen und sechs Löschungen. Worktree vor und nach Prüfung sauber. Finale Datei blobgleich zum Prüfcheckpoint c03835317c70a127da2c57681d0ef1b7cb2fb349; dessen Basis und die feste Reviewbasis besitzen denselben Rust-Baum.",
+          "/home/nathanael/.worktrees/tb-vollreview-router-vertraege/rust/crates/tb-dashboard-api/src/lib.rs:1662-1669 ergänzt den browserkodierten Kündigungspfad für GET und POST und erhält die ursprüngliche Route. Beide verwenden denselben unveränderten Handler. Dessen Auth-, Methoden- und CSRF-Prüfungen bleiben in /home/nathanael/.worktrees/tb-vollreview-router-vertraege/rust/crates/tb-dashboard-api/src/handlers/billing_page.rs:326-351 erhalten.",
+          "/home/nathanael/.worktrees/tb-vollreview-router-vertraege/rust/crates/tb-dashboard-api/src/lib.rs:2211-2214 verdrahtet ExpectedToken ausschließlich am Partner-Teilrouter. Der bestehende nichtleere Schlüsselvergleich bleibt in /home/nathanael/.worktrees/tb-vollreview-router-vertraege/rust/crates/tb-http-core/src/middleware/auth.rs:97-106; Admin- und Origin-Guards bleiben in /home/nathanael/.worktrees/tb-vollreview-router-vertraege/rust/crates/tb-dashboard-api/src/handlers/partner_login.rs:102-118 unverändert.",
+          "Graphify-Aufrufbeziehungen und aktuelle Quellstellen geprüft: sämtliche produktiven Router-Einstiege führen durch die korrigierte Zusammenführung. Im betroffenen Routermodul keine weitere unterschiedliche Unicode-Routenregistrierung gefunden. Partner-Login-Verbrauch und Rate-Limits werden durch die neue Extension nicht verändert.",
+          "Vorhandene Logs /tmp/tb-b04-router-pruefungen/baseline-test.log und /tmp/tb-b04-router-pruefungen/post-fix-test.log gelesen und verglichen: 1333 gegenüber 1336 bestandenen Tests, jeweils null ignoriert und exakt dieselben 35 Fehlernamen. Alle neun Routertests einschließlich der drei neuen Regressionen bestanden.",
+          "Vorhandene Clippy-Logs /tmp/tb-b04-pruefabschluss-20261008.dliASa/baseline-clippy.log und /tmp/tb-b04-pruefabschluss-20261008.dliASa/final-clippy-retry.log enthalten jeweils EXIT=0; Warnungstitel und Häufigkeiten sind identisch. /tmp/tb-b04-router-pruefungen/baseline-package-fmt.log und /tmp/tb-b04-pruefabschluss-20261008.dliASa/final-package-fmt.log sind nach Entfernen der Slotmeldungen identisch und enthalten jeweils 265 Formatabweichungen."
+        ],
+        "test_gaps": [
+          "Keine eigenen Builds, Tests oder Laufzeitprobes ausgeführt. Vorhandene Prüfungen wurden nur gelesen und verglichen.",
+          "Die vollständige Paketsuite und Paketformatprüfung bleiben wegen belegter unveränderter Baselinefehler rot; kein vollständig grüner Paketnachweis.",
+          "Die neue positive Link-Regression belegt das passierte Admin-Gate bis auth_unavailable, nicht eine vollständige Linkausstellung. Die Kündigungsregression prüft unangemeldete GET/POST-Aufrufe, keine echte Kündigung. Keine Live-Abnahme."
+        ]
+      }
+    },
+    {
+      "workflow_id": "wf_b1cabe6f-009",
+      "agent_id": "aa2dbe7b4f28508b4",
+      "label": "B10: frischer Sol-Fixer",
+      "model_counts": {
+        "gpt-6.1-sol": 122
+      },
+      "transcript_sha256": "5ecf67d8dcf41bc70e30e840d06da6b9479adacf347af84e7c973cec3752293f",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_b1cabe6f-009/agent-aa2dbe7b4f28508b4.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "id": "B10",
+        "status": "Lokal abgeschlossen und committet; keine Integration oder Bereitstellung ausgeführt.",
+        "base_sha": "a8b5b5e986a1de0b8e2f981651f83bda9cf400dd",
+        "head_sha": "9bce62f1daf52006bb543edc6192769f5971b364",
+        "worktree_clean": true,
+        "changed_files": [
+          "/home/nathanael/.worktrees/tb-vollreview-authstatus/rust/crates/tb-dashboard-api/src/handlers/auth_status.rs"
+        ],
+        "claim_status": [
+          "B10a behoben: gemeinsamer Cookie-Parser berücksichtigt sämtliche Header und behält die erste Wertauswahl bei.",
+          "B10b behoben: Zeitmessung erfolgt nach Übernahme der Cache-Sperre. Konkurrenzregression vor dem Fix mit Zeitunterlauf, danach erfolgreich.",
+          "Identitätsprüfung, Cache-TTL, Header und Antwortdaten unverändert. Gesperrter HTTP-Cacheclaim nicht bearbeitet."
+        ],
+        "checks": [
+          "Gezielte Authstatus-Tests: Exit 0, 13 erfolgreich. /tmp/tb-b10-pruefung.O7HqMk/regression-nach-fix.log",
+          "Pakettests: Exit 101, 1321 erfolgreich, 21 fehlgeschlagen, 3 ignoriert. Fehlermenge exakt wie Baseline, Vergleich Exit 0. /tmp/tb-b10-pruefung.O7HqMk/head-test.log",
+          "Clippy mit --all-targets und -D warnings: Exit 101, identischer vorbestehender Abhängigkeitsfehler. /tmp/tb-b10-pruefung.O7HqMk/head-clippy.log",
+          "Paket-fmt: Exit 1, Ausgabe vollständig identisch zur Baseline. Zieldatei-rustfmt und git diff --check: jeweils Exit 0.",
+          "Rust 1.97.1, SQLX_OFFLINE=1, cargo-slot, --jobs 1; Tests mit synthetischer Datenbank tb_bb_test und TB_TEST_REQUIRE_DB=1."
+        ],
+        "baseline": [
+          "Unveränderte Basis: Pakettests Exit 101, 1317 erfolgreich, dieselben 21 Fehler, 3 ignoriert. /tmp/tb-b10-pruefung.O7HqMk/baseline-test-r2.log",
+          "Neue Regressionen vor dem Fix: Exit 101, drei erwartete Fehler einschließlich späterem Moduscookie und Konkurrenz-Zeitunterlauf. /tmp/tb-b10-pruefung.O7HqMk/regression-vor-fix.log",
+          "Baseline-Clippy: Exit 101 wegen needless_borrows_for_generic_args in unverändertem tb-chat/src/scam_pitch.rs:1502. /tmp/tb-b10-pruefung.O7HqMk/baseline-clippy.log",
+          "Baseline-Paket-fmt: Exit 1; Zieldatei bereits korrekt formatiert. /tmp/tb-b10-pruefung.O7HqMk/baseline-fmt.log",
+          "Erster Baseline-Testlauf: nach denselben 21 Testfehlern zusätzlicher Wrapperfehler, Exit 70. Wiederholung abgeschlossen mit Exit 101. /tmp/tb-b10-pruefung.O7HqMk/baseline-test.log"
+        ],
+        "gate": "ALLOW",
+        "gate_evidence": [
+          "Sol-only-Gate mit --base origin/main --head HEAD --model gpt-6.1-sol --effort high --timeout 1080: Exit 0. /tmp/tb-b10-pruefung.O7HqMk/gate.log",
+          "Gespeicherter Gate-Beleg bestätigt Modell, Basis, Head und ausschließlich auth_status.rs. /home/nathanael/Documents/.claude/gpt-workers/review-state/2dd58ca6296dd215.json",
+          "Nichtblockierender Hinweis zur ausgelassenen Cookie-Parser-Implementierung geprüft: /home/nathanael/.worktrees/tb-vollreview-authstatus/rust/crates/tb-dashboard-api/src/auth/level.rs erhält Header-/Wertreihenfolge und leere Werte.",
+          "MERGEPROTOKOLL[MS-1]: 15 Git-Schritte einzeln | Anläufe: 1 | Gate: ALLOW; kein Merge"
+        ],
+        "blockers": []
+      }
+    },
+    {
+      "workflow_id": "wf_b1cabe6f-009",
+      "agent_id": "a7a778931a5022056",
+      "label": "B10: frischer Sol-Fix-Kritiker",
+      "model_counts": {
+        "gpt-6.1-sol": 39
+      },
+      "transcript_sha256": "e3c2c321a210ed43127c4b9dc2281d2ff8879c7b76c8aa019a256601051bce52",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_b1cabe6f-009/agent-a7a778931a5022056.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "id": "B10",
+        "head_sha": "9bce62f1daf52006bb543edc6192769f5971b364",
+        "verdict": "ALLOW",
+        "rationale": "Beide Claims sind behoben. Der gemeinsame Cookieparser erhält Reihenfolge, ersten passenden Wert und den exakten Moduswert „2“. Die Auth-Policy bleibt unverändert. Der Zeitwert wird erst unter dem Cachelock erfasst; ein überholender Request verursacht damit keinen Subtraktionsüberlauf. Cache-TTL, Payload und HTTP-Header bleiben erhalten. Keine neuen Fehler im festen Diff gefunden. ALLOW gilt ausschließlich als fachliche Diffabnahme, nicht als Integrations- oder Deployfreigabe.",
+        "findings": [],
+        "evidence": [
+          "Fester Diff a8b5b5e986a1de0b8e2f981651f83bda9cf400dd..9bce62f1daf52006bb543edc6192769f5971b364: ausschließlich /home/nathanael/.worktrees/tb-vollreview-authstatus/rust/crates/tb-dashboard-api/src/handlers/auth_status.rs geändert. HEAD entspricht dem Prüfziel; Worktree sauber.",
+          "B10a: /home/nathanael/.worktrees/tb-vollreview-authstatus/rust/crates/tb-dashboard-api/src/handlers/auth_status.rs:141-142 nutzt dieselbe Auswertung wie /home/nathanael/.worktrees/tb-vollreview-authstatus/rust/crates/tb-dashboard-api/src/auth/level.rs:212-240. Ein späterer Modusheader wird berücksichtigt; Duplikate bleiben first-match. None, Nichtbetreiber und actor=None behalten ihre bestehenden Handlerzweige.",
+          "B10b: /home/nathanael/.worktrees/tb-vollreview-authstatus/rust/crates/tb-dashboard-api/src/handlers/auth_status.rs:149-158 liest und schreibt den Zeitwert unter demselben Mutex. Das Szenario A wartet, B aktualisiert auf N+1, A übernimmt den Lock verwendet keinen vorher erfassten Wert N mehr.",
+          "Bereitgestellte Regressionsevidenz, keine eigenen Testläufe: /tmp/tb-b10-pruefung.O7HqMk/regression-vor-fix.log zeigt drei passende Fehlschläge; /tmp/tb-b10-pruefung.O7HqMk/regression-nach-fix.log zeigt 13 erfolgreiche Tests und Exit 0.",
+          "Bereitgestellte Paketlogs /tmp/tb-b10-pruefung.O7HqMk/baseline-test-r2.log und /tmp/tb-b10-pruefung.O7HqMk/head-test.log: 1317 beziehungsweise 1321 erfolgreich, jeweils 21 fehlgeschlagen und 3 ignoriert, Exit 101. Eigener read-only Vergleich der Fehlernamen: Exit 0. Clippylogs /tmp/tb-b10-pruefung.O7HqMk/baseline-clippy.log und /tmp/tb-b10-pruefung.O7HqMk/head-clippy.log zeigen denselben vorbestehenden Abhängigkeitsfehler.",
+          "Eigener read-only Vergleich von /tmp/tb-b10-pruefung.O7HqMk/baseline-fmt.log und /tmp/tb-b10-pruefung.O7HqMk/head-fmt.log: bytegleich, Exit 0. Zieldatei-rustfmt und git diff --check wurden mit Exit 0 gemeldet."
+        ],
+        "test_gaps": [
+          "Keine eigenen Builds, Tests oder Laufzeitprobes. Pakettests, Paket-fmt und vollständiges Clippy bleiben wegen vorbestehender Probleme nicht grün.",
+          "Die Zeitkorrektur deckt Request-Überholung ab, nicht rückwärts springende Systemzeit. Ein produktiver Panic in der normalen Releasekonfiguration wird nicht behauptet.",
+          "Kein Nachweis über einen öffentlichen Proxy. Der gesperrte Cache-Control-/Vary-Nachbarclaim bleibt außerhalb dieser Abnahme."
+        ]
+      }
+    }
+  ]
+}

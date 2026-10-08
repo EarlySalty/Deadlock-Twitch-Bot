@@ -1,0 +1,556 @@
+{
+  "schema_version": 2,
+  "code_sha": "0ecae1370f1a80d1a101249b5c932663d69be8af",
+  "workflow_id": "wf_bd410bd5-531",
+  "scope": "Mechanical consolidation of DA15-S001 through DA15-S003 across security, correctness, errors, concurrency and resources. Fourteen original returns are retained unchanged; only the failed DA15-S002:resources slot uses the designated supplementary workflow. No source rereading, defect search, tests, builds, probes, Git mutations or application-code changes.",
+  "source": {
+    "manifest": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/review-slices.json",
+    "manifest_sha256": "6c856808bfecc5a5784cba3c8d45fbd523fa39030745d30261ef0fea453f950c",
+    "manifest_sha_field": "c26b7cdfa4f3fd07b16ec7b5deacc0d912ff20a9",
+    "selected_records_digest_encoding": "SHA256 of UTF-8 json.dumps([{line,record},...], sort_keys=True, ensure_ascii=False, separators=(',',':')), ordered by one-based journal line. Selected records contain DA15 starts and their joined result or failed records only. Observation hashes are not future immutability guarantees.",
+    "input_digest_encoding": "SHA256 of UTF-8 json.dumps(input, sort_keys=True, ensure_ascii=False, separators=(',',':')). Equality checks compare complete parsed objects, not just digests.",
+    "transcript_name_rule": "agent-<agent_id>.jsonl within the run's workflow directory",
+    "code_sha_validation": "The manifest and all compared artifacts identify the instructed fixed SHA. No Git inspection or independent source-content identity check was performed.",
+    "workflows": [
+      {
+        "workflow_id": "wf_bd410bd5-531",
+        "journal": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_bd410bd5-531/journal.jsonl",
+        "journal_sha256_at_observation": "d42053ac136cebea998277a9863a7cc5e1651cd64c90f127a306f6f696797eab",
+        "journal_is_appendable": true,
+        "global_started": 185,
+        "global_results": 183,
+        "global_failed": 2,
+        "selected_records_count": 30,
+        "selected_records_sha256": "275d0f0876a9d536b22ceb3ac449a43612180a4f6fa6408d067d3c67a591af35",
+        "selected_starts": 15,
+        "selected_results": 14,
+        "selected_failed": 1,
+        "all_failed_attempt_records_count": 4,
+        "all_failed_attempt_records_sha256": "72c23c0940490c75fa1a20b69f81b9e91d929797608f6b2d2ed405e8b359f06e",
+        "all_failed_attempt_records_digest_scope": "Both original failed roles' started and failed records, ordered by journal line and encoded using selected_records_digest_encoding. The unrelated DA07 role is documented but is not a DA15 return or vote.",
+        "transcript_directory": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_bd410bd5-531"
+      },
+      {
+        "workflow_id": "wf_6efbb8b3-653",
+        "journal": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_6efbb8b3-653/journal.jsonl",
+        "journal_sha256_at_observation": "b041c784410386298ad7e57ed0cba09e8ec9917b617d48e8b686a77fbb83f2ed",
+        "journal_is_appendable": true,
+        "global_started": 2,
+        "global_results": 2,
+        "global_failed": 0,
+        "allowed_supplementary_labels": ["W03:DA07-S001:security", "W03:DA15-S002:resources"],
+        "selected_records_count": 2,
+        "selected_records_sha256": "6993beaa7a42a9f2b80323b1fe6572ec5e924b10535a43de570ee2ed9a537cfe",
+        "selected_starts": 1,
+        "selected_results": 1,
+        "selected_failed": 0,
+        "excluded_return": "W03:DA07-S001:security",
+        "transcript_directory": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_6efbb8b3-653"
+      }
+    ],
+    "prior_artifacts": [
+      {"file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/W02-KANDIDATEN.json", "sha256": "07b829884269be94562d3cca780db4a18f0a235b3cdec0b4ef90b64a2fa72ce6"},
+      {"file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/W02-GEGENPRUEFUNG-03.json", "sha256": "3fff60d3d22e7af33e929c2f5aedb3a11d1ffc44daf327d981a0a7b2006bee7f"},
+      {"file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/W03-DA03-KANDIDATEN.json", "sha256": "da3be76b8b844cd342facfe4777283362c393bc3f10353225531df54b673f69d"},
+      {"file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/W03-DA04-KANDIDATEN.json", "sha256": "02e9c9603941985d02c5994a5da044aa4b3cebc549ed28e44ac5d7c6498c6f9c"},
+      {"file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/W03-DA05-KANDIDATEN.json", "sha256": "d928d0ad85b8b055a3cbffc5cd4657b71cc35f842e882d4748cf673cdd2244ac"},
+      {"file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/W03-DA06-KANDIDATEN.json", "sha256": "b2e6065b7c22af8c389b298071a1b5642e272d8ebb38231a296ee89b11386fa1"},
+      {"file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/W03-DA03-GEGENPRUEFUNG.json", "sha256": "46a472cf3d741405fff02cfcc0e0617fb9da0d649f80db33d06e37b7db38febe", "metadata_revision": "Matches the instructed revised digest; existing judgments and C restrictions remain authoritative metadata."}
+    ]
+  },
+  "selection": {
+    "started_label_regex": "^W03:DA15-S00[1-3]:(security|correctness|errors|concurrency|resources)$",
+    "result_join": "Within each workflow, match result or failed to started by both journal key and agentId. Select labels from started records, not freeform result area strings. Require the result's area, slice and lens to match its label.",
+    "expected_combinations": 15,
+    "selected_starts_including_failed_original": 16,
+    "selected_completed_results": 15,
+    "retained_original_DA15_results": 14,
+    "supplementary_DA15_results": 1,
+    "selected_failed_original_attempts": 1,
+    "missing_combinations": [],
+    "duplicate_completed_combinations": [],
+    "duplicate_starts_or_results_within_workflow": [],
+    "global_original_completed_results_not_replaced": 183,
+    "supplementary_labels_exactly_match_original_failed_labels": true,
+    "successful_original_results_replaced": 0,
+    "raw_id_rule": "W03-<slice>-<lens>-<one-based finding index>. Each run row lists its ordered raw IDs; the journal result at that row's workflow_id and result line supplies the original finding objects.",
+    "unrelated_original_records_excluded_from_DA15_selection": 341,
+    "unrelated_supplementary_records_excluded_from_DA15_selection": 3,
+    "failed_attempts_are_votes": false
+  },
+  "failed_attempts": [
+    {
+      "started_label": "W03:DA15-S002:resources",
+      "workflow_id": "wf_bd410bd5-531",
+      "agent_id": "a42f049687e5c4ab9",
+      "journal_started_line": 207,
+      "journal_failed_line": 224,
+      "original_failed_record": {"type": "failed", "key": "v2:b3a8532f543d6dc0c3d4385ec0bdf229b5fb423a66452cb50018338fa1fd2699", "agentId": "a42f049687e5c4ab9"},
+      "transcript_sha256": "57a3c80f4df828add173ed26b17bc1a9f15b02e9bb7149de63fb2735f7401289",
+      "genuine_message_model_counts": {"gpt-6.1-sol": 21},
+      "structured_output_calls": 0,
+      "has_journal_result": false,
+      "included_in_verified_reviews": false,
+      "votes": 0,
+      "synthetic_records": [{"record": 72, "message_model": "<synthetic>", "error": "authentication_failed", "text": "Failed to authenticate. API Error: 403 WebSocket upgrade was rejected"}],
+      "completed_slot_reference": "W03:DA15-S002:resources in wf_6efbb8b3-653, agent ac9ecc22eab8a56a4"
+    },
+    {
+      "started_label": "W03:DA07-S001:security",
+      "workflow_id": "wf_bd410bd5-531",
+      "agent_id": "a7443069a46415924",
+      "journal_started_line": 149,
+      "journal_failed_line": 176,
+      "original_failed_record": {"type": "failed", "key": "v2:2d3d93fc7bb6f6ed5941b2afbd96e95c33dcd07d5ce25db836ed574dba53b6e0", "agentId": "a7443069a46415924"},
+      "transcript_sha256": "701b071d88a344894bf18fb6dd4c15b032058647d485aacf1cef53a5394d26a1",
+      "genuine_message_model_counts": {"gpt-6.1-sol": 29},
+      "structured_output_calls": 0,
+      "has_journal_result": false,
+      "included_in_verified_reviews": false,
+      "votes": 0,
+      "synthetic_records": [{"record": 83, "message_model": "<synthetic>", "error": "invalid_request", "text": "Prompt is too long · automatic compaction failed: summarization produced empty response"}],
+      "scope_limit": "Global failure documentation only. Its supplementary result is outside DA15 and is not consolidated or counted here."
+    }
+  ],
+  "model_proofs": {
+    "expected_model": "gpt-6.1-sol",
+    "verified_transcripts": 15,
+    "genuine_message_model_counts": {"gpt-6.1-sol": 693},
+    "unexpected_genuine_models": [],
+    "assistant_records_missing_message_model": 0,
+    "synthetic_record_count_in_completed_reviews": 0,
+    "synthetic_records_in_completed_reviews": [],
+    "failed_attempt_genuine_model_counts_excluded_from_completed_reviews": {"gpt-6.1-sol": 50},
+    "failed_attempt_synthetic_record_count_excluded_from_completed_reviews": 2,
+    "model_field_only": "Count genuine message.model fields only. Prompt/model declarations, provider mentions, tool output and synthetic API-error records are not model proof. Counts are transcript assistant API-call records, not distinct conversations or votes.",
+    "structured_output_calls": 15,
+    "last_structured_outputs_matching_journal": 15,
+    "last_structured_output_equality_method": "For every completed run, compare the complete last StructuredOutput tool-use input to the complete joined journal result using parsed JSON object equality. Recompute transcript and canonical-input SHA256 digests.",
+    "run_columns": ["started_label", "workflow_id", "agent_id", "journal_started_line", "journal_result_line", "transcript_sha256", "genuine_message_model_counts", "structured_output_calls", "last_structured_output_record", "last_input_sha256", "declared_coverage", "declared_range_count", "raw_finding_ids"],
+    "runs": [
+      ["W03:DA15-S001:security", "wf_bd410bd5-531", "aa9d627ebca5b4956", 189, 214, "d002cf601398f2224f53b9a27fef56db772509b4b8d097e7a05ff86f87cefb3b", {"gpt-6.1-sol": 34}, 1, 98, "61c72a4fac07982cb81fc471a01f19d2d6e5c924423386150f24d228dc31b50e", "complete", 3, []],
+      ["W03:DA15-S001:correctness", "wf_bd410bd5-531", "aebe5782316eb06d3", 191, 218, "ac8c3817f84101125ca92ecab1f317581248f5b35d811b254b1c0f04f61dd293", {"gpt-6.1-sol": 37}, 1, 111, "08f55ec71d63c4e1722956f76ed47b07733e1384fe571be1014687531c838eb6", "complete", 3, []],
+      ["W03:DA15-S001:errors", "wf_bd410bd5-531", "a7f0688354a433210", 193, 220, "55eb9998221db84c920c9b12ac2daca7bca95f44cd7327e893c17f4b0de90d0a", {"gpt-6.1-sol": 39}, 1, 107, "cd5e356628f8db2036a585a07650ae3fd5a1335e63f85ea46b67bf0eb8849f5f", "complete", 3, ["W03-DA15-S001-errors-1"]],
+      ["W03:DA15-S001:concurrency", "wf_bd410bd5-531", "a9b7f66d9d8189422", 195, 230, "5473d57e0d5013876e5af7ed883f6ab1f779207a93d22dfab8ec0844999ece4c", {"gpt-6.1-sol": 53}, 1, 139, "db239952808e2963a44b9e7011eb9aaa40eb69a088b9821a9af1a36e01c9aeb8", "complete", 3, ["W03-DA15-S001-concurrency-1"]],
+      ["W03:DA15-S001:resources", "wf_bd410bd5-531", "a338f430e59452cb7", 197, 222, "348694692056c91acc1f864b5c55873e613d5aa68c8cc50601ffbf7d32ed4b6a", {"gpt-6.1-sol": 46}, 1, 120, "cf84bd45f67614c02ee02fd62b58b6da2230d2ff5a8f8e34f993262c994391b9", "complete", 3, ["W03-DA15-S001-resources-1"]],
+      ["W03:DA15-S002:security", "wf_bd410bd5-531", "a272db29d302d605b", 199, 226, "f75a98d1a1289abecc88c6a511566a470de9cbeb8e7c8901d668a0455e531057", {"gpt-6.1-sol": 41}, 1, 121, "6ade23a1c585e314c63fb1b3dc2907a192d7a0cdbef7c3654c16b43c39ece323", "complete", 13, []],
+      ["W03:DA15-S002:correctness", "wf_bd410bd5-531", "ab7ffd5b5fc378e78", 201, 228, "d19851af480a8a71ac3528514d772f1461f27d062bb91f53619e2ce5088d0e57", {"gpt-6.1-sol": 45}, 1, 123, "bcbcf7e99f09c9d2ba24614a74141fd624cf12a3fba3a2b95d58fc20cfe570ec", "complete", 8, []],
+      ["W03:DA15-S002:errors", "wf_bd410bd5-531", "a6036c26ba61eda05", 203, 232, "265cc26c87bfa229e25e590553e89e7ae7960ff6860fe50955ef2438797818e1", {"gpt-6.1-sol": 42}, 1, 110, "f27eeba66cfc97c5d725a651fe7a4e0cf91eb9152cd6e97b039fceb3e5a3d198", "complete", 7, ["W03-DA15-S002-errors-1"]],
+      ["W03:DA15-S002:concurrency", "wf_bd410bd5-531", "a71d9cf98398c90b9", 205, 238, "05ac80f9b7e4aa8f0ac4cab402a512bd24b437141f6714f9dfd7c37293906da2", {"gpt-6.1-sol": 58}, 1, 144, "52b9b7c6fcbbb27fc2decfa87c187b482986775aa21e3ef0a88fd053ca0a9f92", "complete", 18, ["W03-DA15-S002-concurrency-1", "W03-DA15-S002-concurrency-2", "W03-DA15-S002-concurrency-3"]],
+      ["W03:DA15-S002:resources", "wf_6efbb8b3-653", "ac9ecc22eab8a56a4", 3, 4, "b786cea2d21502c6547f4807660586c5982cac29e5777cdab62519917c57cbee", {"gpt-6.1-sol": 57}, 1, 143, "9ce3c38641e3d38f62b8a3b570370a2e459e9de25c5e668e61acf0a2b3807836", "complete", 17, ["W03-DA15-S002-resources-1"]],
+      ["W03:DA15-S003:security", "wf_bd410bd5-531", "a7d309307b798b267", 209, 236, "f7a6e52bf9b8a5dbe3855646484088173e95b6f4a68658137bd0408054dc7fda", {"gpt-6.1-sol": 47}, 1, 127, "4d5bc7a9bf65eb6ff4a73ac9f09cb6dfd54b99fe123bfd997c57a0502accdade", "complete", 2, []],
+      ["W03:DA15-S003:correctness", "wf_bd410bd5-531", "a3e8b48a93e98c99a", 211, 240, "18518160619311cf6ef3fb45fc566161c7bae3a6ce5ca633267ded8aba760c9a", {"gpt-6.1-sol": 55}, 1, 141, "09f05d8b5d00be012ef4ff1ec23cdcff1440aaf8237f3b85f8a72fdc1b6be595", "complete", 2, []],
+      ["W03:DA15-S003:errors", "wf_bd410bd5-531", "abca8067b656c7131", 213, 234, "91ac4a016979b56a1064b66f19cc1f6bf3eb14b6bd69c0f98afc66b2e0a90bd0", {"gpt-6.1-sol": 39}, 1, 109, "d363d9752196a6395bbaca40f82f182186b22c1d5ba84f982575d99b70297183", "complete", 2, []],
+      ["W03:DA15-S003:concurrency", "wf_bd410bd5-531", "a4df921559484ff02", 215, 244, "7f1ce2e5a047c86e5814d50ae709aff96d73e7fc1f19ca2e5497d24884536a03", {"gpt-6.1-sol": 52}, 1, 130, "f58774676c1ed25a20995bf3fef395f17e639f204b43da302b0de093f1abf97e", "complete", 4, ["W03-DA15-S003-concurrency-1"]],
+      ["W03:DA15-S003:resources", "wf_bd410bd5-531", "a0a914ed7fbcc3fa4", 217, 242, "8ea237135a2dc9e992207454347c1b3d5db4e62ef9962867b7f847246296b17b", {"gpt-6.1-sol": 48}, 1, 122, "2d1d7652c7aca9756b47aa951190a3e45c82e5bbba769bff1dfc72154dc1ab01", "complete", 2, ["W03-DA15-S003-resources-1", "W03-DA15-S003-resources-2"]]
+    ]
+  },
+  "coverage": {
+    "status": "DECLARED_PRIMARY_INTERVALS_RECONCILED_NOT_ACTUAL_FULL_READING_PROVEN",
+    "area": "DA15",
+    "file_count": 7,
+    "primary_lines": 4183,
+    "lens_weighted_primary_lines": 20915,
+    "all_15_results_declare_complete": true,
+    "all_15_unread_and_blockers_empty": true,
+    "all_15_primary_interval_unions_cover_manifest": true,
+    "primary_interval_declarations": 42,
+    "primary_file_lens_pairs": 35,
+    "declared_range_count_total": 90,
+    "excluded_context_range_count_total": 48,
+    "unparseable_declared_ranges": [],
+    "missing_primary_intervals": [],
+    "primary_requirements_columns": ["file", "inclusive_start", "inclusive_end"],
+    "primary_requirements": {
+      "DA15-S001": [["rust/crates/tb-dashboard-api/src/handlers/challenges.rs", 1, 212], ["rust/crates/tb-dashboard-api/src/handlers/clip_contest.rs", 1, 867], ["rust/crates/tb-dashboard-api/src/handlers/onboarding.rs", 1, 379]],
+      "DA15-S002": [["rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs", 1, 938], ["rust/crates/tb-dashboard-api/src/handlers/clip_contest/tests.rs", 1, 707]],
+      "DA15-S003": [["rust/crates/tb-dashboard-api/src/handlers/feedback/mod.rs", 1, 539], ["rust/crates/tb-dashboard-api/src/handlers/feedback/tests.rs", 1, 541]]
+    },
+    "declared_primary_intervals": {
+      "W03:DA15-S001:security": {"$ref": "#/coverage/primary_requirements/DA15-S001"},
+      "W03:DA15-S001:correctness": {"$ref": "#/coverage/primary_requirements/DA15-S001"},
+      "W03:DA15-S001:errors": {"$ref": "#/coverage/primary_requirements/DA15-S001"},
+      "W03:DA15-S001:concurrency": {"$ref": "#/coverage/primary_requirements/DA15-S001"},
+      "W03:DA15-S001:resources": {"$ref": "#/coverage/primary_requirements/DA15-S001"},
+      "W03:DA15-S002:security": {"$ref": "#/coverage/primary_requirements/DA15-S002"},
+      "W03:DA15-S002:correctness": {"$ref": "#/coverage/primary_requirements/DA15-S002"},
+      "W03:DA15-S002:errors": [["rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs", 1, 260], ["rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs", 261, 500], ["rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs", 501, 730], ["rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs", 731, 938], ["rust/crates/tb-dashboard-api/src/handlers/clip_contest/tests.rs", 1, 245], ["rust/crates/tb-dashboard-api/src/handlers/clip_contest/tests.rs", 246, 475], ["rust/crates/tb-dashboard-api/src/handlers/clip_contest/tests.rs", 476, 707]],
+      "W03:DA15-S002:concurrency": {"$ref": "#/coverage/primary_requirements/DA15-S002"},
+      "W03:DA15-S002:resources": {"$ref": "#/coverage/primary_requirements/DA15-S002"},
+      "W03:DA15-S003:security": {"$ref": "#/coverage/primary_requirements/DA15-S003"},
+      "W03:DA15-S003:correctness": {"$ref": "#/coverage/primary_requirements/DA15-S003"},
+      "W03:DA15-S003:errors": {"$ref": "#/coverage/primary_requirements/DA15-S003"},
+      "W03:DA15-S003:concurrency": [["rust/crates/tb-dashboard-api/src/handlers/feedback/mod.rs", 1, 280], ["rust/crates/tb-dashboard-api/src/handlers/feedback/mod.rs", 281, 539], ["rust/crates/tb-dashboard-api/src/handlers/feedback/tests.rs", 1, 270], ["rust/crates/tb-dashboard-api/src/handlers/feedback/tests.rs", 271, 541]],
+      "W03:DA15-S003:resources": {"$ref": "#/coverage/primary_requirements/DA15-S003"}
+    },
+    "excluded_context_range_counts": {
+      "W03:DA15-S001:security": 0, "W03:DA15-S001:correctness": 0, "W03:DA15-S001:errors": 0, "W03:DA15-S001:concurrency": 0, "W03:DA15-S001:resources": 0,
+      "W03:DA15-S002:security": 11, "W03:DA15-S002:correctness": 6, "W03:DA15-S002:errors": 0, "W03:DA15-S002:concurrency": 16, "W03:DA15-S002:resources": 15,
+      "W03:DA15-S003:security": 0, "W03:DA15-S003:correctness": 0, "W03:DA15-S003:errors": 0, "W03:DA15-S003:concurrency": 0, "W03:DA15-S003:resources": 0
+    },
+    "method": "Parse declared path:start-end strings, strip only the known worktree prefix for comparison, and compare each assigned primary file's inclusive interval union with its manifest requirement. Preserve split primary declarations. Exclude paths not assigned to that slice, including other DA15 files used as context, from primary accounting.",
+    "limits": [
+      "Declared ranges and complete labels prove only metadata reconciliation, not actual full reading, sound reasoning or defect freedom.",
+      "Context declarations do not create primary coverage in this or another slice.",
+      "The source evidence's code reads and revision claims are original reviewer statements, not independently repeated code inspection by this consolidator."
+    ]
+  },
+  "counts": {
+    "raw_findings": 11,
+    "raw_proposed_classes": {"B": 6, "C": 5},
+    "internally_consolidated_groups": 10,
+    "internal_duplicate_groups": 1,
+    "internal_duplicate_reports": 1,
+    "linked_existing_groups": 0,
+    "linked_existing_reports": 0,
+    "new_groups": 10,
+    "new_proposed_classes": {"B": 5, "C": 5},
+    "new_proposed_classes_rule": "Count each group's conservative consolidation classification once. Original member classes remain unchanged. The duplicate quota group has original C and B proposals, so its consolidation classification remains C and is excluded from new_AB_groups.",
+    "new_AB_groups": 5,
+    "new_AB_ids": ["W03-DA15-S001-errors-1", "W03-DA15-S002-errors-1", "W03-DA15-S002-concurrency-2", "W03-DA15-S002-concurrency-3", "W03-DA15-S003-concurrency-1"],
+    "new_verified_groups": 0,
+    "new_countercheck_judgments": 0
+  },
+  "consolidation_policy": {
+    "path_normalization_prefix": "/home/nathanael/.worktrees/tb-vollreview-artefakte/",
+    "path_normalization": "Normalize group locator paths only by stripping this known prefix. Original finding fields, including evidence paths and any source typos, remain unchanged.",
+    "original_fields": "Each complete original finding object occurs exactly once under raw_findings. Groups refer to original objects and their fields through local JSON references. Ordered raw IDs in each run row provide an unambiguous source result and finding-index locator.",
+    "grouping": "Require equivalent failure input/interleaving, violated contract and affected operation. Shared files, helpers, pools, writers or timeout symptoms alone do not justify deduplication. Separate session lookup from alias lookup, quota from self-vote, alias slot allocation from stale aliases, and independent database-wait entrypoints.",
+    "new_group_verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"},
+    "no_new_counterchecks": true,
+    "no_fix_approval": true,
+    "C_policy": "Do not promote original or countercheck C restrictions. In the quota duplicate, retain both unchanged C/B proposals and the original admission-policy gap; the group's conservative class is C until the gap is resolved through the proper review process. No skeptics are replaced or invented.",
+    "decision_owner": "Astra"
+  },
+  "internal_duplicates": [
+    {
+      "group_id": "W03-DA15-S001-concurrency-1",
+      "member_ids": ["W03-DA15-S001-concurrency-1", "W03-DA15-S002-concurrency-1"],
+      "basis": "Both describe D already having three Discord submissions, T resolving only twitch:T before external I/O, verified D-to-T linking committing before the contest month lock, and persist_submission reusing stale aliases to insert a fourth submission. They identify the same snapshot-to-write interleaving and monthly linked-person quota.",
+      "classification_conflict": "The S001 reviewer leaves concurrent-link admission policy unspecified and proposes C; the S002 reviewer proposes B using the historical-link quota test. Preserve both proposals and evidence without judging the disagreement. C remains the conservative consolidation class."
+    }
+  ],
+  "prior_comparison": {
+    "W02_canonical_groups_compared": 40,
+    "DA03_new_groups_compared": 26,
+    "DA03_linked_groups_compared": 6,
+    "DA04_new_groups_compared": 42,
+    "DA04_linked_groups_compared": 2,
+    "DA05_new_groups_compared": 21,
+    "DA05_linked_groups_compared": 0,
+    "DA06_new_groups_compared": 33,
+    "DA06_linked_groups_compared": 2,
+    "total_group_entries_compared": 172,
+    "exact_semantic_links_found": 0,
+    "completed_W02_countercheck_pairs_available_as_metadata": 22,
+    "completed_DA03_countercheck_pairs_available_as_metadata": 19,
+    "prior_countercheck_transcripts_reverified_here": 0,
+    "prior_counterchecks_are_artifact_references_only": true,
+    "preserved_W02_original_C_group_ids": ["W02-DA01-S003-resources-1", "W02-DA01-S003-resources-2", "W02-DA01-S004-correctness-2", "W02-DA01-S004-errors-3", "W02-DA01-S005-resources-2", "W02-DA01-S007-concurrency-1", "W02-DA02-S001-correctness-3", "W02-DA02-S001-errors-3", "W02-DA02-S001-resources-1", "W02-DA02-S002-resources-1", "W02-DA02-S003-errors-1", "W02-DA02-S004-errors-1", "W02-DA02-S004-resources-2", "W02-DA02-S005-resources-1"],
+    "preserved_W02_countercheck_C_group_ids": ["W02-DA02-S001-errors-2", "W02-DA02-S003-resources-1", "W02-DA02-S003-resources-2", "W02-DA02-S004-resources-1"],
+    "preserved_DA03_original_C_group_ids": ["W03-DA03-S001-resources-1", "W03-DA03-S003-errors-4", "W03-DA03-S003-errors-5", "W03-DA03-S003-concurrency-2", "W03-DA03-S004-resources-1", "W03-DA03-S005-correctness-1", "W03-DA03-S005-resources-1"],
+    "preserved_DA03_countercheck_C_group_ids": ["W03-DA03-S001-security-1", "W03-DA03-S001-correctness-2", "W03-DA03-S004-correctness-1", "W03-DA03-S005-security-1"],
+    "limit": "This compares existing claim metadata and relevant original member contracts. It neither creates new independent votes nor imports a favorable prior class into a different DA15 contract. All earlier restrictions remain unchanged."
+  },
+  "related_not_equivalent": [
+    {
+      "group_ids": ["W03-DA15-S001-errors-1", "W03-DA15-S002-errors-1"],
+      "basis": "The first finding centers on a failed contest-session load selecting another authenticated Twitch identity and successful fallback submission. The second centers on a successfully loaded Discord session followed by failed alias-storage resolution, falsely returning signed-out data or login_required. Evidence overlaps, but the discarded operation and attribution/error-response contracts differ. Retain separately rather than merge merely because submit_identity participates in both."
+    },
+    {
+      "group_ids": ["W03-DA15-S001-concurrency-1", "W03-DA15-S002-concurrency-2", "W03-DA15-S002-concurrency-3"],
+      "basis": "Monthly linked-person submission quota, own-clip voting rejection, and slot allocation after legitimate rebinding are separate contracts. The quota and self-vote share stale alias resolution, but invoke different persistence operations and require different rejection rules. The slot collision is deterministic after rebinding and needs no overlapping contest writer."
+    },
+    {
+      "group_ids": ["W03-DA15-S001-resources-1", "W03-DA15-S002-resources-1", "W03-DA15-S003-resources-2"],
+      "basis": "Onboarding upsert row locks, contest month finalization outside lock_month on the four-connection contest pool, and feedback advisory/roadmap locks on the shared dashboard pool have different entrances, operations and pool domains. A general absence of local SQL execution deadlines is not an equivalence proof."
+    },
+    {
+      "group_ids": ["W03-DA15-S001-errors-1", "W03-DA15-S002-errors-1"],
+      "prior_group_ids": ["W02-DA02-S001-errors-3", "W03-DA06-S001-errors-1"],
+      "basis": "CSRF middleware masking database errors as invalid_csrf and billing trial admission after a paid-subscription lookup failure concern distinct stores and contracts. They are not contest-session identity fallback or contest anonymous/login response mapping. Earlier C restrictions, including the CSRF diagnostic policy gap, remain unchanged."
+    },
+    {
+      "group_ids": ["W03-DA15-S001-resources-1", "W03-DA15-S002-resources-1", "W03-DA15-S003-resources-2"],
+      "prior_group_ids": ["W02-DA02-S003-resources-1", "W02-DA02-S004-resources-2", "W03-DA03-S004-resources-1", "W03-DA04-S002-resources-1", "W03-DA05-S002-resources-3", "W03-DA06-S001-resources-1"],
+      "basis": "Authentication limiter, session refresh, Discord-link completion, admin bulk flags, database statistics and billing reads are separate deadline/lock-wait entrances. Do not fold the DA15 claims into them or borrow their proposed B class. The limiter's existing W02 countercheck C block is specifically preserved."
+    },
+    {
+      "group_ids": ["W03-DA15-S001-concurrency-1", "W03-DA15-S002-concurrency-2", "W03-DA15-S002-concurrency-3"],
+      "prior_group_ids": ["W03-DA03-S004-concurrency-1"],
+      "basis": "The prior Discord-link finding is callback swap deadlock with a discarded completed link. DA15 assumes a successfully committed link and examines downstream quota, own-vote or slot behavior. Sharing the identity writer does not establish a duplicate."
+    },
+    {
+      "group_ids": ["W03-DA15-S003-concurrency-1"],
+      "prior_group_ids": ["W03-DA04-S004-errors-1", "W03-DA04-S004-concurrency-1"],
+      "basis": "DA15 concerns read acknowledgement of an unseen private reply masked by an independently committed SQL roadmap timestamp. Prior admin-roadmap findings concern JSON-file overwrite loss and interleaved file corruption, not feedback snapshot acknowledgement."
+    },
+    {
+      "group_ids": ["W03-DA15-S003-resources-1", "W03-DA15-S003-resources-2", "W03-DA15-S003-concurrency-1"],
+      "basis": "The same feedback file contains unbounded history materialization, lock-wait pool occupation, and snapshot acknowledgement. Their inputs, resource/state effects and expected contracts differ, so they remain three groups."
+    }
+  ],
+  "pending_cross_area_comparisons": {
+    "status": "PENDING",
+    "other_simultaneously_consolidated_area_artifacts_read": [],
+    "possible_overlap_topics": ["Contest identity resolution and Discord-to-Twitch account linking", "Feedback read markers and independently updated SQL roadmap metadata", "Pool execution deadlines and contest finalizer scheduling"],
+    "limit": "The other four simultaneously consolidated areas were not compared here. Possible overlaps remain open; no unverified cross-links to those areas are asserted. The completed DA03 through DA06 artifacts listed above were compared separately."
+  },
+  "linked_existing_groups": [],
+  "new_groups": [
+    {
+      "id": "W03-DA15-S001-errors-1",
+      "member_ids": ["W03-DA15-S001-errors-1"],
+      "proposed_classes": ["B"],
+      "classification": "B",
+      "claim": {"$ref": "#/raw_findings/W03-DA15-S001-errors-1/claim"},
+      "file": "rust/crates/tb-dashboard-api/src/handlers/clip_contest.rs",
+      "line": 236,
+      "original_members": [{"$ref": "#/raw_findings/W03-DA15-S001-errors-1"}],
+      "verification_status": {"$ref": "#/consolidation_policy/new_group_verification_status"}
+    },
+    {
+      "id": "W03-DA15-S001-concurrency-1",
+      "member_ids": ["W03-DA15-S001-concurrency-1", "W03-DA15-S002-concurrency-1"],
+      "proposed_classes": ["C", "B"],
+      "classification": "C",
+      "claim": {"$ref": "#/raw_findings/W03-DA15-S001-concurrency-1/claim"},
+      "file": "rust/crates/tb-dashboard-api/src/handlers/clip_contest.rs",
+      "line": 328,
+      "original_members": [{"$ref": "#/raw_findings/W03-DA15-S001-concurrency-1"}, {"$ref": "#/raw_findings/W03-DA15-S002-concurrency-1"}],
+      "C_block_rule": "The unchanged S001 C proposal explicitly leaves concurrent-link admission/linearization policy unspecified. The S002 B proposal is an additional raw review, not a skeptic judgment or permission to remove that limit.",
+      "verification_status": {"$ref": "#/consolidation_policy/new_group_verification_status"}
+    },
+    {
+      "id": "W03-DA15-S001-resources-1",
+      "member_ids": ["W03-DA15-S001-resources-1"],
+      "proposed_classes": ["C"],
+      "classification": "C",
+      "claim": {"$ref": "#/raw_findings/W03-DA15-S001-resources-1/claim"},
+      "file": "rust/crates/tb-dashboard-api/src/handlers/onboarding.rs",
+      "line": 226,
+      "original_members": [{"$ref": "#/raw_findings/W03-DA15-S001-resources-1"}],
+      "verification_status": {"$ref": "#/consolidation_policy/new_group_verification_status"}
+    },
+    {
+      "id": "W03-DA15-S002-errors-1",
+      "member_ids": ["W03-DA15-S002-errors-1"],
+      "proposed_classes": ["B"],
+      "classification": "B",
+      "claim": {"$ref": "#/raw_findings/W03-DA15-S002-errors-1/claim"},
+      "file": "rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs",
+      "line": 373,
+      "original_members": [{"$ref": "#/raw_findings/W03-DA15-S002-errors-1"}],
+      "verification_status": {"$ref": "#/consolidation_policy/new_group_verification_status"}
+    },
+    {
+      "id": "W03-DA15-S002-concurrency-2",
+      "member_ids": ["W03-DA15-S002-concurrency-2"],
+      "proposed_classes": ["B"],
+      "classification": "B",
+      "claim": {"$ref": "#/raw_findings/W03-DA15-S002-concurrency-2/claim"},
+      "file": "rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs",
+      "line": 767,
+      "original_members": [{"$ref": "#/raw_findings/W03-DA15-S002-concurrency-2"}],
+      "verification_status": {"$ref": "#/consolidation_policy/new_group_verification_status"}
+    },
+    {
+      "id": "W03-DA15-S002-concurrency-3",
+      "member_ids": ["W03-DA15-S002-concurrency-3"],
+      "proposed_classes": ["B"],
+      "classification": "B",
+      "claim": {"$ref": "#/raw_findings/W03-DA15-S002-concurrency-3/claim"},
+      "file": "rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs",
+      "line": 456,
+      "original_members": [{"$ref": "#/raw_findings/W03-DA15-S002-concurrency-3"}],
+      "verification_status": {"$ref": "#/consolidation_policy/new_group_verification_status"}
+    },
+    {
+      "id": "W03-DA15-S002-resources-1",
+      "member_ids": ["W03-DA15-S002-resources-1"],
+      "proposed_classes": ["C"],
+      "classification": "C",
+      "claim": {"$ref": "#/raw_findings/W03-DA15-S002-resources-1/claim"},
+      "file": "rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs",
+      "line": 192,
+      "original_members": [{"$ref": "#/raw_findings/W03-DA15-S002-resources-1"}],
+      "verification_status": {"$ref": "#/consolidation_policy/new_group_verification_status"}
+    },
+    {
+      "id": "W03-DA15-S003-concurrency-1",
+      "member_ids": ["W03-DA15-S003-concurrency-1"],
+      "proposed_classes": ["B"],
+      "classification": "B",
+      "claim": {"$ref": "#/raw_findings/W03-DA15-S003-concurrency-1/claim"},
+      "file": "rust/crates/tb-dashboard-api/src/handlers/feedback/mod.rs",
+      "line": 164,
+      "original_members": [{"$ref": "#/raw_findings/W03-DA15-S003-concurrency-1"}],
+      "verification_status": {"$ref": "#/consolidation_policy/new_group_verification_status"}
+    },
+    {
+      "id": "W03-DA15-S003-resources-1",
+      "member_ids": ["W03-DA15-S003-resources-1"],
+      "proposed_classes": ["C"],
+      "classification": "C",
+      "claim": {"$ref": "#/raw_findings/W03-DA15-S003-resources-1/claim"},
+      "file": "rust/crates/tb-dashboard-api/src/handlers/feedback/mod.rs",
+      "line": 282,
+      "original_members": [{"$ref": "#/raw_findings/W03-DA15-S003-resources-1"}],
+      "verification_status": {"$ref": "#/consolidation_policy/new_group_verification_status"}
+    },
+    {
+      "id": "W03-DA15-S003-resources-2",
+      "member_ids": ["W03-DA15-S003-resources-2"],
+      "proposed_classes": ["C"],
+      "classification": "C",
+      "claim": {"$ref": "#/raw_findings/W03-DA15-S003-resources-2/claim"},
+      "file": "rust/crates/tb-dashboard-api/src/handlers/feedback/mod.rs",
+      "line": 438,
+      "original_members": [{"$ref": "#/raw_findings/W03-DA15-S003-resources-2"}],
+      "verification_status": {"$ref": "#/consolidation_policy/new_group_verification_status"}
+    }
+  ],
+  "raw_findings": {
+    "W03-DA15-S001-errors-1": {
+      "claim": "Failed clip-contest session reads silently select a fallback Twitch submitter or report successful logged-out status.",
+      "classification": "B",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest.rs",
+      "line": 236,
+      "failure_scenario": "During the submission phase, a browser has a valid Discord contest session and a separately authenticated Twitch dashboard account without linked aliases. After dashboard authentication succeeds, the contest-session SQL lookup temporarily fails. Subsequent database queries recover. The lookup error becomes None, so submit_identity selects the Twitch account and a valid clip submission succeeds under that account instead of the active Discord identity. With only the contest cookie and a persistent database failure, GET /clips/api/session instead returns HTTP 200 with authenticated=false and zero usage; submit and vote return login-required errors.",
+      "evidence": "At fixed revision 0ecae1370f1a80d1a101249b5c932663d69be8af, /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest.rs:225-238 discards load_clip_contest_session errors through .ok().flatten(). Lines 292-328 interpret None as permission to select the dashboard identity. The alias query at line 328 similarly discards SQL failures. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/auth/session.rs:569-581 and 1993-2014 explicitly propagate lookup SQL errors. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs:373-407 returns successful anonymous session data when identity is None; lines 503-509 and 739-744 map it to authentication errors. Lines 449-456 persist the selected identity, and 647-664 commit and report submission success.",
+      "expected_behavior": "Keep a failed identity lookup distinct from an absent or expired session. Return contest_unavailable without changing the selected identity or persisting a fallback submission. Successful contest-session resolution already takes precedence over dashboard authentication in clip_contest.rs:292-326. The same contest implementation propagates other identity-related database failures as unavailable at contest.rs:767-770.",
+      "countermeasures": "Cookie uniqueness, session expiry/provider validation, CSRF, phase checks, quota checks, and the write transaction do not preserve the discarded lookup error. DashboardAuthLevel extraction is infallible at /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/auth/level.rs:323-327, and contest routes have no identity-error middleware at /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/lib.rs:2057-2108. There is no contest-identity revalidation before persistence. The eligibility_unavailable flag covers Discord membership failures, not these identity failures. Both selected accounts remain authenticated, so this is an error-handling and attribution bug, not a demonstrated authorization bypass."
+    },
+    "W03-DA15-S001-concurrency-1": {
+      "claim": "A concurrent Discord account link can bypass the clip contest's linked-person submission quota.",
+      "classification": "C",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest.rs",
+      "line": 328,
+      "failure_scenario": "During submission phase, Discord account D already has three submissions saved with aliases [discord:D]. Unlinked Twitch account T starts submitting another valid clip and resolves aliases to [twitch:T]. While its Helix/repository operations await, the authenticated Discord-link callback commits the verified T-to-D connection. The submission subsequently acquires the month lock but retains its old aliases. Its authoritative quota query matches none of D's submissions, and it commits a fourth submission for the now-linked person using person_key twitch:T and slot 1.",
+      "evidence": "Fixed revision 0ecae1370f1a80d1a101249b5c932663d69be8af. The assigned clip_contest.rs:250-280 resolves aliases using pool reads; :328-335 stores that snapshot. Context /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs:502-518 obtains identity before external I/O; :605-655 revalidates phase and partner but reuses identity; :430-458 counts and inserts using those stale aliases. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/discord_link.rs:236-244 reaches the real writer. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-analytics/src/streamers_crud.rs:877-907 commits the linkage independently.",
+      "expected_behavior": "Existing contract evidence is /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest/tests.rs:302-315: a later verified link must count historical submissions toward the same quota. However, the admission/linearization policy for submissions overlapping an account link is not specified. This remains C rather than asserting an unambiguous B fix.",
+      "countermeasures": "The contest month advisory lock serializes contest writes, but the identity writer uses a different advisory-lock namespace and does not acquire that lock. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/migrations/20260927023000_clip_contest.sql:40-45 limits slots per exact person_key, so discord:D and twitch:T do not conflict. The preflight quota check also uses stale aliases. Existing concurrent vote tests and onboarding's atomic upsert address other races, not this interleaving. Related stale-alias use exists in contest.rs:767-782 before self-vote checks, but no separate finding or broader coverage is claimed. No tests, requests, or mutations were performed."
+    },
+    "W03-DA15-S001-resources-1": {
+      "claim": "Onboarding writes can exhaust the shared dashboard pool indefinitely while waiting for a database row lock.",
+      "classification": "C",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/onboarding.rs",
+      "line": 226,
+      "failure_scenario": "With PostgreSQL statement_timeout and lock_timeout disabled, another transaction retains a lock on an existing streamer_onboarding row. pool_max authenticated POST requests for that partner reach the upsert and wait indefinitely, occupying every shared pool connection. Subsequent dashboard requests fail pool acquisition instead of serving normally.",
+      "evidence": "At fixed SHA 0ecae137, onboarding.rs:209-226 awaits the upsert without an execution deadline. lib.rs:508-510 registers the route; main.rs:400 and 476-483 supply the shared tb_db::connect pool. tb-db/src/pool.rs:20-58 limits connection acquisition but sets statement_timeout only for read_only=true; connect uses false. The composed router has no request timeout. ops/systemd/twitch-runtime-roles.sql:62-65 grants dashboard writes, so permission denial does not prevent this wait. The same unbounded database-await pattern appears in clip_contest.rs:803-806 for logout.",
+      "expected_behavior": "A stalled database operation should release request and pool resources within a finite execution budget and return an error. No exact database execution budget is specified, and deployed database timeout settings were not inspected, so this remains C rather than an automatic-fix B.",
+      "countermeasures": "The pool's acquisition timeout bounds only waiting for a connection, not an executing statement. Existing HTTP bounds are effective elsewhere: challenges has an eight-second wrapper, clip verification has eight seconds, Steam status has five seconds, and Discord broker requests have twenty seconds. None bounds the onboarding upsert. Server-side statement_timeout or lock_timeout could mitigate this conditional scenario; their deployed values are unverified."
+    },
+    "W03-DA15-S002-errors-1": {
+      "claim": "Contest identity lookup failures are misreported as signed-out sessions and login-required errors.",
+      "classification": "B",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs",
+      "line": 373,
+      "failure_scenario": "A viewer has a valid, unexpired Discord contest session. Loading that session succeeds, but the subsequent twitch_streamer_identities lookup fails, for example because a table lock causes its statement timeout while other tables remain accessible. GET /clips/api/session returns HTTP 200 with authenticated=false, discord_authenticated=false, submissions_used=0 and eligibility_unavailable=false. The page consequently asks this already signed-in viewer to sign in again. POST /clips/api/submit under the same condition returns HTTP 401 login_required instead of a temporary service error.",
+      "evidence": "At the fixed review SHA, /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest.rs:328 converts identity_aliases(...).await into Option with .ok()?, losing the SQL error. The assigned contest.rs:373-407 then treats None as a genuinely absent session and returns a successful signed-out response; contest.rs:502-509 returns login_required for the same None. The related helper clip_contest.rs:225-237 also discards session-store errors, affecting contest.rs:739-744. /home/nathanael/.worktrees/tb-vollreview-artefakte/website/src/clips.tsx:174-175 and 225-235 use these flags to display login instructions. Primary files match commit 0ecae1370f1a80d1a101249b5c932663d69be8af; contextual evidence was read with git show at that commit.",
+      "expected_behavior": "Unavailable identity storage must be distinguished from an absent or invalid login. The existing unavailable() response in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest.rs:402-407 explicitly provides HTTP 503 and retry guidance. The same alias lookup already returns unavailable() on failure in contest.rs:767-770, and session quota lookup failures return unavailable() at 379-389. Identity lookup failures should follow that error contract rather than assert successful logout or require another login.",
+      "countermeasures": "The public routes in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/lib.rs:2057-2108 do not intercept these failures. DashboardAuthLevel extraction is infallible and does not authenticate the contest cookie, so a viewer with only that cookie reaches these handlers. Origin checks and phase checks can pass for a legitimate submission and do not preserve the discarded error. Denying writes remains fail-closed, so this is not a security bypass. eligibility_unavailable covers community eligibility failures only and remains false after identity lookup failure. The read tests cover expiry and revocation, but do not exercise session or alias storage failures. Twins were checked in current_handler, submit_handler and vote_handler; no coverage outside this assigned slice is claimed."
+    },
+    "W03-DA15-S002-concurrency-1": {
+      "claim": "A Twitch submission can exceed the linked-account monthly quota when account linking completes during the request.",
+      "classification": "B",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs",
+      "line": 650,
+      "failure_scenario": "During the submission phase, Discord account D already has three submissions and Twitch account T has none. An authenticated T request resolves aliases as [twitch:T] at lines 502-504, then performs Helix/shared-repository I/O. The verified Discord-link callback commits D-to-T linking before the request acquires its month lock. persist_submission still receives the old identity, counts zero matching submissions, and successfully inserts a fourth submission for the now-linked person.",
+      "evidence": "At the fixed review SHA, submit_identity resolves aliases only once through /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest.rs:250-280,328-335. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs:605-650 revalidates phase, partner and clip age, but passes that unchanged identity to persist_submission. Its quota query at 430-438 uses only identity.aliases. Verified linking is reachable through /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/discord_link.rs:192-246 and commits in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-analytics/src/streamers_crud.rs:877-907.",
+      "expected_behavior": "Once the verified link is committed before the contest transaction starts, both accounts' historical submissions must count toward the three-submission quota. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest/tests.rs:302-315 explicitly establishes historical quota accounting after a later verified link.",
+      "countermeasures": "The month advisory lock serializes contest writers, not identity-link updates. Linking uses a separate Discord-ID advisory lock with seed 92301, whereas contest writes lock clip-contest:<month> with seed 0. The partner row lock does not lock twitch_streamer_identities. Database uniqueness on (contest_month,submitter_person_key,submission_slot) cannot stop this example because the stale key twitch:T differs from discord:D. Origin, authentication, phase and rate-limit checks can all pass."
+    },
+    "W03-DA15-S002-concurrency-2": {
+      "claim": "A Discord vote can be accepted for an own clip when account linking completes while the vote waits for the month lock.",
+      "classification": "B",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs",
+      "line": 767,
+      "failure_scenario": "An eligible Discord account D votes for a clip submitted by its currently unlinked Twitch account T. The submission was saved while unlinked, so its submitter key and aliases contain twitch:T, not discord:D. The vote resolves aliases as [discord:D], then waits behind another contest transaction. The verified D-to-T link commits before the vote obtains the month lock. persist_vote nevertheless uses the old aliases, is_own returns false, and the vote commits.",
+      "evidence": "At the fixed review SHA, aliases are read at /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs:767-770 before begin_write at 771. The unchanged vector is passed at 775-779. is_own at 213-228 only compares the supplied aliases with saved identity, broadcaster and creator identifiers; persist_vote at 675-684 performs no fresh identity lookup. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-analytics/src/streamers_crud.rs:877-907 can commit linking independently while the contest lock is held.",
+      "expected_behavior": "A linked Discord identity must not vote for its own submission, broadcaster or creator clip. The own_clip rejection at lines 678-684 and linked-identity tests at /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest/tests.rs:316-345 establish this rule. Resolving the committed link would include twitch:T and reject the scenario.",
+      "countermeasures": "Saved submitter_aliases protect clips submitted after linking, so the example specifically uses a submission saved before linking. The shared month lock protects submission visibility and vote quotas but does not coordinate with the separate identity-link lock. Vote uniqueness and slot constraints prevent duplicates and more than five votes, not self-votes. Valid Discord membership, origin and rate limits do not eliminate this interleaving."
+    },
+    "W03-DA15-S002-concurrency-3": {
+      "claim": "Rebinding a Discord account can make a below-quota submission collide with an occupied submission_slot.",
+      "classification": "B",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs",
+      "line": 456,
+      "failure_scenario": "In one submission month, unlinked accounts D and T each submit one clip, producing discord:D slot 1 and twitch:T slot 1. After linking D to T, D submits another clip: the merged count is two, so the new discord:D row receives slot 3. D is then legitimately linked to a different Twitch account T2, which removes the D-to-T link. D's current aliases are discord:D and twitch:T2. Its quota query now counts only its two discord:D rows, so can_submit is true, but the next insertion computes slot 3 again and hits the existing (month,discord:D,3) unique constraint. All further otherwise-valid attempts fail.",
+      "evidence": "At the fixed review SHA, /home/nathanael/.worktrees/tb-dashboard-api/src/handlers/clip_contest/contest.rs:430-438 counts rows across all aliases, while 456 uses used+1 as a slot under the single canonical person_key. The unique key is defined in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/migrations/20260927023000_clip_contest.sql:40-45. ON CONFLICT at contest.rs:452 handles only duplicate clip IDs, so this separate uniqueness violation maps to unavailable at 458. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-analytics/src/streamers_crud.rs:883-892 explicitly supports removing a Discord ID from its previous Twitch identity when it is rebound.",
+      "expected_behavior": "An authenticated person with submissions_used=2 must be able to submit a third otherwise-valid clip during the submission phase. session_handler explicitly advertises this at contest.rs:385-401, and persist_submission only rejects quota usage at or above three at 439-445. A slot allocation must not reject an allowed submission merely because alias membership changed.",
+      "countermeasures": "The month lock cannot fix this deterministic gap: there is no concurrent contest writer in the example. The unique constraint correctly detects the repeated slot but does not allocate the unused slot 2. Hidden submissions still count and no deletions are needed. The analogous vote allocation does not share this problem because votes are counted under the same fixed voter_discord_id used by their slot uniqueness constraint, and votes are append-only."
+    },
+    "W03-DA15-S002-resources-1": {
+      "claim": "Monthly finalization has no application-enforced SQL deadline.",
+      "classification": "C",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs",
+      "line": 192,
+      "failure_scenario": "With inherited statement_timeout and lock_timeout unset, a long-lived ACCESS EXCLUSIVE lock on twitch_clip_contest_months stalls finalize_pending's INSERT indefinitely. On a four-connection contest pool, the minute finalizer plus three archive requests can occupy every connection. Other contest requests then fail pool acquisition, and the background finalizer never advances to its next tick until the blocking transaction ends.",
+      "evidence": "Reviewed fixed SHA 0ecae1370f1a80d1a101249b5c932663d69be8af. contest.rs:184-193 executes the month INSERT directly on the pool, outside lock_month; archive_handler calls it at 313. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-dashboard/src/main.rs:294-303 awaits finalization without a deadline and shares contest_writer with the router at 443-449 and 476-483. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/lib.rs:2024-2037 caps that pool at four connections but sets only an acquisition deadline. The public archive route at 2068 has no route-specific timeout or rate limiter. Related pool-backed reads at contest.rs:255-260 and 316-331 also have no local SQL deadline.",
+      "expected_behavior": "A blocked finalization attempt should terminate and release its borrowed connection so subsequent scheduled runs and independent contest reads remain possible. The acceptable query deadline is not specified, and deployment-level timeout settings were not inspected, so this remains C rather than a confirmed A/B defect.",
+      "countermeasures": "lock_month sets a five-second lock_timeout at contest.rs:21, but only inside its transaction, after the unbounded INSERT discussed here. Acquisition deadlines limit new pool waiters, not statements already borrowing connections. MissedTickBehavior::Delay prevents overlapping background ticks. Helix fetching has an eight-second timeout, request bodies are limited to 4096 bytes, and result pages have explicit row limits. An inherited PostgreSQL or DSN timeout could already mitigate this scenario; verify that policy before choosing any change."
+    },
+    "W03-DA15-S003-concurrency-1": {
+      "claim": "A concurrent roadmap update can mark an unseen private reply to a bundled feedback entry as read.",
+      "classification": "B",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/feedback/mod.rs",
+      "line": 164,
+      "failure_scenario": "Entry B is bundled under root A, which links to roadmap R. An admin updates B with a new private reply: B.updated_at becomes t1, but the transaction pauses before committing. A separate roadmap PATCH commits a change to R with updated_at=t2, where t2>t1. The owner opens B before the reply transaction commits. Detail sees the new roadmap but the old B and old reply history, returning observed_at=t2. The normal read-marker request waits for B's row lock, then stores owner_seen_at=t2 after the reply commits. Subsequent list/detail/counts return unread=false because GREATEST(B.updated_at, A.shared_updated_at, R.updated_at)=t2. The new private reply was never displayed before being marked read.",
+      "evidence": "Sources match fixed review SHA 0ecae1370f1a80d1a101249b5c932663d69be8af. The primary file collapses three independently committed sources into one timestamp at lines 164-166 and advances owner_seen_at without checking the observed revision at line 303. B's row timestamp is assigned before event insertion and transaction commit at lines 531-534 and 446-449. The duplicate branch reads its root and roadmap without locking the roadmap at lines 499-506. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/roadmap.rs:267-282 independently writes roadmap.updated_at and commits its statement. /home/nathanael/.worktrees/tb-vollreview-artefakte/bot/dashboard_v2/src/pages/feedback/FeedbackPage.tsx:95-105 automatically sends exactly the detail's observed_at, so the scenario requires no forged client timestamp.",
+      "expected_behavior": "Reading a snapshot must not acknowledge a private reply absent from that snapshot. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/feedback/tests.rs:172-274 explicitly establishes that an older read marker must preserve unread status for a later reply.",
+      "countermeasures": "REPEATABLE READ keeps detail and history mutually consistent, but does not make timestamps from different rows follow commit order. The global feedback advisory lock serializes feedback edits only; the roadmap PATCH does not acquire it. FOR SHARE protects direct roadmap assignments, but is skipped when editing a duplicate with roadmap_id=None. The feedback revision guard protects admin edits, not read acknowledgements. GREATEST prevents stale markers from moving backwards, but cannot distinguish the unseen reply from the already observed roadmap update. The checked feedback migration provides uniqueness and foreign-key constraints, not a snapshot-aware acknowledgement guard. Static review only; no tests, database requests, or mutations were performed."
+    },
+    "W03-DA15-S003-resources-1": {
+      "claim": "Feedback-Details materialisieren den unbegrenzt wachsenden Antwortverlauf vollständig im Arbeitsspeicher.",
+      "classification": "C",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/feedback/mod.rs",
+      "line": 282,
+      "failure_scenario": "Ein Betreiber speichert für einen Eintrag 100.000 gültige Updates mit jeweils neuer request_id, passender Revision und 4.000 ASCII-Zeichen Antwort. Ein anschließender Detailaufruf lädt mindestens 400 MB Antworttexte und erzeugt zusätzlich deren JSON-Abbild. Hat der Prozess beispielsweise nur 512 MiB verfügbaren Speicher, übersteigt bereits das gleichzeitige Halten von SQL-Zeilen und JSON diesen Rahmen; der Detailaufruf kann den Prozess durch Speichermangel beenden.",
+      "evidence": "Codebasis 0ecae1370f1a80d1a101249b5c932663d69be8af: L282-284 verwendet SELECT ohne LIMIT, fetch_all und eine vollständig gesammelte JSON-Liste. L410-411 begrenzt nur die einzelne Antwort; L459-468 verhindert lediglich Wiederholungen derselben request_id. L531-534 erhöht die Revision und legt bei jedem weiteren gültigen Update ein Ereignis an. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/migrations/20260909211000_dashboard_feedback.sql:37-49 enthält keine Begrenzung der Ereigniszahl. Der Consumer unter /home/nathanael/.worktrees/tb-vollreview-artefakte/bot/dashboard_v2/src/pages/feedback/FeedbackPage.tsx:124-125 rendert ebenfalls den gesamten Verlauf.",
+      "expected_behavior": "Ein großer, gültiger Verlauf sollte lesbar bleiben, ohne den verfügbaren Prozessspeicher zu überschreiten. Eine maximale Verlaufslänge oder ein Vertrag für paginierte Detailantworten ist nicht belegt; deshalb C und keine automatische Fixfreigabe.",
+      "countermeasures": "Updates sind Betreiberaktionen, Antworten sind einzeln auf 4.000 Zeichen begrenzt und identische request_id werden dedupliziert. Die Erstellungsgrenze von fünf Rückmeldungen pro Stunde und zwanzig pro Tag gilt nicht für Antworten. Die 24-KiB-Grenze in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/lib.rs:524-526 begrenzt nur eingehende Update-Requests. Eine reale Speichergrenze und dieses Datenvolumen wurden nicht produktiv überprüft. Pagination oder eine Aufbewahrungsgrenze wären Vertragsentscheidungen."
+    },
+    "W03-DA15-S003-resources-2": {
+      "claim": "Blockierte Feedback-Transaktionen können über unbefristete Advisory-Lock-Wartezeiten den gemeinsamen Dashboard-Pool belegen.",
+      "classification": "C",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/feedback/mod.rs",
+      "line": 438,
+      "failure_scenario": "PostgreSQL hat keine wirksamen statement_timeout- oder lock_timeout-Grenzen. Eine andere offene Transaktion hält die Schreibsperre auf einem Roadmap-Eintrag. Ein gültiges Feedback-Update erwirbt den globalen Advisory-Lock und wartet anschließend bei SELECT FOR SHARE auf diesen Roadmap-Eintrag. Weitere Betreiber-Updates erwerben jeweils eine Poolverbindung und warten auf denselben Advisory-Lock. Bei entsprechend vielen parallelen Requests sind sämtliche Poolverbindungen belegt; weitere Dashboard-Abfragen scheitern beim Erwerb einer Verbindung, solange die ursprüngliche Sperre bestehen bleibt.",
+      "evidence": "Am festen Review-SHA erwirbt L433-440 eine Transaktion und den globalen pg_advisory_xact_lock ohne lokale Zeitgrenze. L508-513 wartet innerhalb dieser Transaktion auf einen Roadmap-Datensatz mit FOR SHARE. Der ähnliche Create-Pfad wartet in L348-355 auf einen kontobezogenen Advisory-Lock. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-dashboard/src/main.rs:400 und 476-483 verbindet und übergibt den gemeinsam genutzten Pool. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-db/src/pool.rs:20-57 begrenzt den Verbindungserwerb, setzt statement_timeout aber ausschließlich für connect_readonly, nicht für den hier verwendeten connect-Pfad. Die Feedback-Routen und globalen Router-Layer enthalten keinen Request-Timeout.",
+      "expected_behavior": "Eine blockierte Rückmeldungsaktion sollte nach einer begrenzten Wartezeit scheitern und ihre Verbindung freigeben, statt andere Dashboard-Abfragen dauerhaft zu verdrängen. Eine konkrete verbindliche Wartezeit ist nicht belegt; produktive PostgreSQL- und Proxy-Grenzen sind unbekannt. Daher C.",
+      "countermeasures": "Poolgröße und Erwerbszeit sind begrenzt; Erwerbszeitüberschreitungen beenden jedoch nicht bereits laufende Sperrwartezeiten. Betreiberprüfung und CSRF-Schutz begrenzen den Update-Zugang, beseitigen aber keine blockierte Transaktion. Transaktionsende gibt die Advisory-Locks frei, tritt beim beschriebenen unbegrenzten Warten jedoch nicht ein. Externe PostgreSQL-, DSN- oder Proxy-Zeitgrenzen könnten den Fall abfangen und wurden wegen der read-only Grenzen ohne Laufzeitabfragen nicht verifiziert."
+    }
+  },
+  "mechanical_validation": {
+    "status": "COMPLETE",
+    "errors": [],
+    "selected_started_result_key_and_agent_joins_checked": true,
+    "supplementation_only_for_original_failed_slots_checked": true,
+    "final_structured_inputs_exactly_match_journal_results": true,
+    "embedded_raw_findings_exactly_match_source_finding_objects": true,
+    "run_raw_ids_form_exact_partition_of_raw_findings": true,
+    "new_plus_linked_groups_form_exact_partition_of_raw_ids": true,
+    "new_group_required_fields_and_lossless_member_refs_checked": true,
+    "transcript_and_final_input_hashes_recomputed": true,
+    "stable_selected_journal_digests_recomputed": true,
+    "source_artifact_hashes_recomputed": true,
+    "primary_declarations_and_context_exclusions_checked": true,
+    "all_local_JSON_refs_resolve": true,
+    "related_prior_group_ID_refs_resolve": true,
+    "prior_C_restrictions_preserved": true,
+    "synthetic_failures_excluded_from_models_and_votes": true,
+    "no_placeholders": true,
+    "scope": "JSON syntax, source identity, transcript models and digests, exact original-object fidelity, membership partition, references, declarations and conservative metadata policy only. No behavioral verification, skepticism round or acceptance."
+  },
+  "blockers": [],
+  "limits": [
+    "All ten new groups, including the five conservative B proposals, are UNGEPRÜFT; no new skeptic judgments or fix approval.",
+    "The linked-person quota duplicate retains a C/B disagreement and the original admission-policy gap. It is counted as C, not as an additional B candidate.",
+    "All fifteen declared primary interval unions match the manifest, but actual full reading and defect freedom are not established.",
+    "Original failed roles have no final output and are not votes. Only the designated DA15 resource replacement is selected; all fourteen successful original DA15 returns remain unchanged.",
+    "Prior W02 and DA03 counterchecks are bound artifact metadata only. Their transcripts were not independently reverified in this consolidation, and their C restrictions remain intact.",
+    "Possible overlaps with the other four simultaneous areas remain pending, with no asserted unverified cross-area links.",
+    "No source rereading, tests, builds, runtime/browser/network probes, Git mutations, scanner/hook changes, secrets or environment inspection."
+  ]
+}

@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "workflow_id": "wf_3c0cb7ee-5b4",
+      "agent_id": "a8c9640c27fd10cb0",
+      "label": "W03 Rest: Sol-Claimabgleich",
+      "model_counts": {
+        "gpt-6.1-sol": 58
+      },
+      "transcript_sha256": "65bb959665d2ea8f28da74cc16c0366cb0d03a6f1c28bec11638323aa345eda5",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_3c0cb7ee-5b4/agent-a8c9640c27fd10cb0.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "artifact": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/W03-REST-CLAIMS.json",
+        "blockers": [],
+        "c_count": 36,
+        "eligible_before_dedup": 90,
+        "linked_count": 5,
+        "neutral_claim_count": 90,
+        "source_groups": 126,
+        "unresolved_overlaps": [
+          "U01: IA01 verify-only claim partially overlaps verify plus history reactivation; both retained.",
+          "U02: MO01 sequential crash admission partially overlaps concurrent and non-core admission; both retained.",
+          "U03: IA01 and DA04 lifecycle twins have separate implementations and retry contracts.",
+          "U04: IA01/DA05 fingerprint producer-consumer alignment remains open; existing C restriction preserved.",
+          "U05: DA07 profile-cache claim cites an unbound AvatarCache counterpart; no invented link.",
+          "U06: DA07 commission pagination cites unbound social-media counterparts; no invented link."
+        ]
+      }
+    },
+    {
+      "workflow_id": "wf_a21871df-c4d",
+      "agent_id": "aae9b47ffea978cb3",
+      "label": "A02: Sol-Integrationsvorbereitung",
+      "model_counts": {
+        "gpt-6.1-sol": 114
+      },
+      "transcript_sha256": "a33709bb6f8608fea63bfdc95260d7fb960e09a5cad8717a02b93887ac0ecdc7",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_a21871df-c4d/agent-aae9b47ffea978cb3.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "id": "A02",
+        "artifact": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/A02-INTEGRATIONSVORBEREITUNG.md",
+        "base_sha": "e98b7f016dbab373a5a8dd9490d158b136c97fec",
+        "head_sha": "e6765a5dd5440fe32dbd4896d1c85db1af3a54ef",
+        "patch_equivalent": true,
+        "source_changed": false,
+        "worktree_clean": true,
+        "checks_complete": true,
+        "checks": [
+          "Conflict-free rebase; original and final patches are byte-identical. SHA256 27eaa85109dd31670bfc58300d9b8bd0d6c79a3382edeb835cd1e2d585bd6592; range-diff confirms equality.",
+          "Final-source suite: exit 101, 1337 passed/35 baseline failures; all three ownership regressions passed. Log /tmp/tb-a02-integration-20261008.GocqTo/final-suite.log.",
+          "Final and matching current-baseline Clippy: exit 0, identical detailed warning multisets. Package formatting: identical 265 existing deviations; own-file formatting and diff whitespace checks passed.",
+          "Before/after source identities and physical hashes remained unchanged; both owned worktrees are clean.",
+          "TESTNACHWEIS[TW-1]: 1337 passed, 0 ignored | Baseline: 35 rot"
+        ],
+        "baseline": [
+          "Reused B02's completed full suite only after verifying the exact e98b7f01 head, complete Rust/package trees, lockfile, toolchain, DB setup, flags and original Sol transcript. Baseline: 1334 passed/35 failed, exit 101.",
+          "All 35 individual failure bodies match the final suite, not merely names or counts. Includes 33 normal failures and two actually executed, failing doctests under --include-ignored.",
+          "Evidence: /tmp/tb-a02-integration-20261008.GocqTo/reused-baseline-binding.json and /tmp/tb-a02-integration-20261008.GocqTo/suite-comparison.json. Original a8b5b5e9 A02 baseline logs remain available; no B05 or B09 equivalence is asserted."
+        ],
+        "gate": "BLOCK",
+        "gate_evidence": [
+          "Exact response: BLOCK: New tests break database-free test runs. Exit 1; gpt-6.1-sol, effort high, timeout 1080, fixed final base/head pair.",
+          "Log /tmp/tb-a02-integration-20261008.GocqTo/sol-gate.log; SHA256 ad78d762778d468fb1b2b4b6210707ba5e62bf8901081210c067fe71bfe5a1ae.",
+          "Current gate state /home/nathanael/Documents/.claude/gpt-workers/review-state/cfef2f5df6d1e813.json confirms exact pair, Sol-only review, local_verdict=block, phase2_count=0 and no current approval. Before/after pair unchanged.",
+          "MERGEPROTOKOLL[MS-1]: 23 Git-Schritte einzeln | Anläufe: 0 | Gate: BLOCK"
+        ],
+        "blockers": [
+          "Integration is not approved. The gate identifies unconditional optional-DB fixture expectations at /home/nathanael/.worktrees/tb-vollreview-affiliate-eigentuemer/rust/crates/tb-dashboard-api/src/handlers/affiliate.rs:1847,1926 and /home/nathanael/.worktrees/tb-vollreview-affiliate-eigentuemer/rust/crates/tb-dashboard-api/src/handlers/affiliate_portal.rs:453. Changing the accepted patch is outside this role; Astra must assign a fresh fixer and subsequent criticism. No gate reroll or bypass occurred."
+        ],
+        "background_tasks": []
+      }
+    },
+    {
+      "workflow_id": "wf_a21871df-c4d",
+      "agent_id": "a4b8afb3ceb6d6834",
+      "label": "B05: Sol-Integrationsvorbereitung",
+      "model_counts": {
+        "gpt-6.1-sol": 119
+      },
+      "transcript_sha256": "67c0d29903dbb025c54962442f44231e5ae8278992966022bbbec9e5c5dbed6c",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_a21871df-c4d/agent-a4b8afb3ceb6d6834.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "id": "B05",
+        "artifact": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/B05-INTEGRATIONSVORBEREITUNG.md",
+        "base_sha": "e98b7f016dbab373a5a8dd9490d158b136c97fec",
+        "head_sha": "6383a00f031750095a38ff25809aee75a95cf25d",
+        "patch_equivalent": true,
+        "source_changed": false,
+        "worktree_clean": true,
+        "checks_complete": true,
+        "checks": [
+          "Conflict-free rebase preserved the complete approved patch byte-for-byte; range-diff reports equality. Integrated OBS changes remain intact.",
+          "Final suite: 1337 passed, 35 failed, exit 101. All 24 platform_token, nine plattform_oauth, seven platform_store and 50 OBS tests passed.",
+          "Final Clippy: exit 0; all 22 warning headers and normalized diagnostic bodies match baseline. Own-file rustfmt and git diff --check passed.",
+          "Package fmt remains preexisting red: fix 264 hunks, baseline 265; out-of-scope hunks identical, no B05-file deviations.",
+          "Actual final inputs match committed blobs at both recorded filesystem checkpoints; 1984 inputs per tree, zero mismatches. Expected source trees were recorded before the batch.",
+          "TESTNACHWEIS[TW-1]: 1337 passed, 0 ignored | Baseline: 35 rot",
+          "Detailed commands, source identities and log hashes: /tmp/tb-b05-integration-20261008.5BrF9U/"
+        ],
+        "baseline": [
+          "Fresh integration baseline: 1334 passed, 35 failed, exit 101. All 35 names and complete normalized failure bodies match the final fix and historical A02/B05 logs. The full suite is not green.",
+          "Matching historical A02 baseline closes the old B05 evidence gap; final-source tests and Clippy were nevertheless executed afresh.",
+          "Two doctests fail with identical preexisting compiler diagnostics under --include-ignored. B09's skipped-doctest results were not substituted; no successful doctest coverage claimed."
+        ],
+        "gate": "ALLOW",
+        "gate_evidence": [
+          "Pinned local gate used gpt-6.1-sol, high effort, timeout 1080; exit 0. Actual base/head stayed unchanged, and a final fetch confirmed the integration base.",
+          "Verified /home/nathanael/Documents/.claude/gpt-workers/review-state/c5ac8e47a368f784.json: exact fixed pair, 14454-byte nonempty B05 diff, Sol phase-one approval, no fallback.",
+          "Gate log: /tmp/tb-b05-integration-20261008.5BrF9U/final-sol-gate.log; SHA256 d9527bc2669ab09297dd18befbf5f7624bc4f8ba2f22305047e1193c69afd538.",
+          "MERGEPROTOKOLL[MS-1]: 28 Git-Schritte einzeln | Anläufe: 0 | Gate: ALLOW",
+          "No merge, push, deployment, restart, cleanup or application-code editing performed. Astra retains later integration."
+        ],
+        "background_tasks": [],
+        "blockers": []
+      }
+    },
+    {
+      "workflow_id": "wf_a21871df-c4d",
+      "agent_id": "a0312a5f93405be98",
+      "label": "B09: Sol-Integrationsvorbereitung",
+      "model_counts": {
+        "gpt-6.1-sol": 127
+      },
+      "transcript_sha256": "6abcf2c84507f0186f009b4c7452755f56f82a2859f2d2d2ec404bfc9376e1f3",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_a21871df-c4d/agent-a0312a5f93405be98.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "id": "B09",
+        "artifact": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/B09-INTEGRATIONSVORBEREITUNG.md",
+        "base_sha": "e98b7f016dbab373a5a8dd9490d158b136c97fec",
+        "head_sha": "fa01de7b12f51bde4a9af922ae3e3bcf7ee72598",
+        "patch_equivalent": true,
+        "source_changed": false,
+        "worktree_clean": true,
+        "checks_complete": true,
+        "baseline": [
+          "Frische Baseline vollständig ausgeführt: 31 Fehler; final 29. Ausschließlich beide IDOR-Fehler entfernt, sämtliche verbleibenden Fehlerkörper identisch.",
+          "Crate-Formatprüfung bleibt mit 265 bytegleich belegten Baselineabweichungen rot. Vier gewöhnliche Tests und zwei Doctests bleiben ignoriert."
+        ],
+        "checks": [
+          "Konfliktfreier Rebase; vollständiger Patch bytegleich, range-diff unverändert. Keine neue Quelländerung.",
+          "Finaler Quellbaum ece455b6b98ee6ce4ea72104df58d805135ba333; 1797 verfolgte Rust-Quellen und Buildinputs gegen Git-Blobs geprüft, keine Abweichungen.",
+          "Neue Gesamtsuite auf finalem Head: Exit 101 wegen bestätigter Baselinefehler; beide IDOR-Tests und sämtliche OBS-Bus-Tests bestanden.",
+          "DB-Fokus 2/2 vollständig bestanden; ohne DB ausdrücklich übersprungen. Doctests: null ausgeführt, zwei ignoriert.",
+          "Frisches Clippy Exit 0 mit identischen vollständigen Baselinewarnungen; Fixture-rustfmt Exit 0.",
+          "Kommandos, Setup, Quellbindungen, Exitcodes und Loghashes unter /tmp/tb-b09-integration-20261008-sol dokumentiert."
+        ],
+        "gate": "ALLOW",
+        "gate_evidence": [
+          "Sol-only: --model gpt-6.1-sol --effort high --timeout 1080; festes Basis-/Headpaar vor und nach Gate identisch, Exit 0.",
+          "/tmp/tb-b09-integration-20261008-sol/gate.log: ALLOW: The supplied diff establishes no blocking defect in either test-fixture change. SHA256 4072f776110afab82d6bf8f47d0caa38bdc33f8f3c48c197d89cee06503ad248.",
+          "MERGEPROTOKOLL[MS-1]: 31 Git-Schritte einzeln | Anläufe: 1 | Gate: ALLOW"
+        ],
+        "blockers": [],
+        "background_tasks": []
+      }
+    }
+  ]
+}

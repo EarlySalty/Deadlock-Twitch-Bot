@@ -1,0 +1,123 @@
+[
+  {
+    "area": "DA07",
+    "artifact_sha256": "7fb0a4b3a289725429298e3809aa352b5753b925e3726a73e779137a74ced65b",
+    "reviews": 20,
+    "models": {
+      "gpt-6.1-sol": 1060
+    },
+    "raw_originals_exact": 37,
+    "exact_member_partition": true,
+    "new_groups": 29,
+    "linked_groups": 2,
+    "mixed_classes": [],
+    "primary_range_gaps": [],
+    "unparsed_ranges": [],
+    "declared_blockers": [],
+    "consolidator_agent": "aabcd90279af39af7",
+    "consolidator_models": {
+      "gpt-6.1-sol": 49
+    },
+    "consolidator_sha256": "6bb9ed2df5a709c61cf4f2cc5a489d48bbc301ba372ee3987764792289389bb5"
+  },
+  {
+    "area": "DA15",
+    "artifact_sha256": "85c8621304dae39e06bb6d35f8e0809b6bebbba9ad7cfd8ffb2dbbbfdb62a134",
+    "reviews": 15,
+    "models": {
+      "gpt-6.1-sol": 693
+    },
+    "raw_originals_exact": 11,
+    "exact_member_partition": true,
+    "new_groups": 10,
+    "linked_groups": 0,
+    "mixed_classes": [
+      "W03-DA15-S001-concurrency-1"
+    ],
+    "primary_range_gaps": [],
+    "unparsed_ranges": [],
+    "declared_blockers": [],
+    "consolidator_agent": "a2145a3c2d0110ff8",
+    "consolidator_models": {
+      "gpt-6.1-sol": 37
+    },
+    "consolidator_sha256": "20f568fa801efb4487b6ffa9fa9cf5f37ddc849013564391e822183e38e80235"
+  },
+  {
+    "area": "DA17",
+    "artifact_sha256": "504bbe737dfb90790a5e1040bde13588aa6ad75654bc418a44d0d7bf0705d7d9",
+    "reviews": 20,
+    "models": {
+      "gpt-6.1-sol": 1024
+    },
+    "raw_originals_exact": 47,
+    "exact_member_partition": true,
+    "new_groups": 37,
+    "linked_groups": 3,
+    "mixed_classes": [
+      "W03-DA17-S001-correctness-4"
+    ],
+    "primary_range_gaps": [],
+    "unparsed_ranges": [],
+    "declared_blockers": [],
+    "consolidator_agent": "ac677584b70d06bd3",
+    "consolidator_models": {
+      "gpt-6.1-sol": 52
+    },
+    "consolidator_sha256": "06665f660d69577053c7c8b738ccb407ba8c55ec73d01de10fdd93300af52494"
+  },
+  {
+    "area": "MO01",
+    "artifact_sha256": "b3fe6388ad7f878fce80227b301ea3739de694467553f2b6d6781bf25684ad33",
+    "reviews": 30,
+    "models": {
+      "gpt-6.1-sol": 1265
+    },
+    "raw_originals_exact": 36,
+    "exact_member_partition": true,
+    "new_groups": 25,
+    "linked_groups": 0,
+    "mixed_classes": [
+      "W03-MO01-S001-concurrency-2"
+    ],
+    "primary_range_gaps": [],
+    "unparsed_ranges": [],
+    "declared_blockers": [],
+    "consolidator_agent": "a93b1684479eede15",
+    "consolidator_models": {
+      "gpt-6.1-sol": 42
+    },
+    "consolidator_sha256": "99618ca3838e835848e58811947e34e37c3322cd7d266ad67b8081ed5796c80f"
+  },
+  {
+    "area": "IA01",
+    "artifact_sha256": "583973f5b66adee48e47d98d59e0ed0be0b928a4fb67a2350f83367aac53c585",
+    "reviews": 20,
+    "models": {
+      "gpt-6.1-sol": 959
+    },
+    "raw_originals_exact": 35,
+    "exact_member_partition": true,
+    "new_groups": 25,
+    "linked_groups": 0,
+    "mixed_classes": [
+      "W03-IA01-S002-errors-1"
+    ],
+    "primary_range_gaps": [],
+    "unparsed_ranges": [],
+    "declared_blockers": [
+      {
+        "label": "W03:IA01-S002:resources",
+        "unread": [],
+        "blockers": [
+          "Context-only legacy reference /home/nathanael/.worktrees/tb-vollreview-artefakte/bot/internal_api/app.py is absent at review SHA 0ecae1370f1a80d1a101249b5c932663d69be8af. Primary coverage is complete; findings use Rust sources, not assumed legacy behavior."
+        ]
+      }
+    ],
+    "consolidator_agent": "a7731177d42c3713e",
+    "consolidator_models": {
+      "gpt-6.1-sol": 59
+    },
+    "consolidator_sha256": "e7bc2e58272693ee733441d4ea3fdff04551882bb7eb478a7110028be69f926f"
+  }
+]
