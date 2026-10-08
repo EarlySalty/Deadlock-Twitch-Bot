@@ -10,7 +10,8 @@
 | A, Fixrunde 1 | a8bc3a25cc3536cdd | Teil-Orchestrator 0712a6dd-cf2a-4a39-907a-f50b19e7930c | Native Agent-Werkzeugbestätigung | Claude Code | gpt-6.1-sol | abgeschlossen | /home/nathanael/.worktrees/tb-kategoriesammler-nativ | detached | a1a49e95 | 34 Tests bestanden, 0 ignoriert; Gate mit gpt-6.1-sol ALLOW. Nach Integration des aktuellen origin/main ist eine erneute Prüfung nötig. |
 | A, Fixrunde 2 | a0de6619afa3de140 | Teil-Orchestrator 0712a6dd-cf2a-4a39-907a-f50b19e7930c | Native Agent-Werkzeugbestätigung und Abschlussmeldung | Claude Code | gpt-6.1-sol | abgeschlossen, neuer BLOCK | /home/nathanael/.worktrees/tb-kategoriesammler-nativ | detached | ac8c61b5 | Rollenmatrix und Schreibrechte korrigiert, 11 Archivtests bestanden, 0 ignoriert. Gate beanstandet Beobachtungsfenster und Meldungen bereits beendeter Ausfälle. Kein Push oder Deploy. |
 | A, Fixrunde 3 | a721e85d50a2232f8 | Teil-Orchestrator 0712a6dd-cf2a-4a39-907a-f50b19e7930c | Native Agent-Werkzeugbestätigung und Abschlussmeldung | Claude Code | gpt-6.1-sol | abgeschlossen, neuer BLOCK | /home/nathanael/.worktrees/tb-kategoriesammler-nativ | detached | 181645db | Beobachtungsfenster, Erholungsmeldung, Queue-Spaltenrecht und Frontend-Artefaktpfade korrigiert. 11 Wrappertests bestanden, 0 ignoriert. Gate beanstandet fehlende Collector-Verpackung älterer Zielrevisionen. Rustläufe ohne Testresultat beendet. Kein Push oder Deploy. |
-| A, Fixrunde 4 | ae68c09fba84ba53c | Teil-Orchestrator 0712a6dd-cf2a-4a39-907a-f50b19e7930c | Native Agent-Werkzeugbestätigung | Claude Code | gpt-6.1-sol | läuft | /home/nathanael/.worktrees/tb-kategoriesammler-nativ | detached | 181645db | Sichere Verpackung älterer Zielrevisionen, Writer-Abschaltung prüfen. Einziger Produktivschreiber, keine produktiven Eingriffe. |
+| A, Fixrunde 4 | ae68c09fba84ba53c | Teil-Orchestrator 0712a6dd-cf2a-4a39-907a-f50b19e7930c | Native Agent-Werkzeugbestätigung und Abschlussmeldung | Claude Code | gpt-6.1-sol | abgeschlossen, ALLOW, Prüflücke entdeckt | /home/nathanael/.worktrees/tb-kategoriesammler-nativ | detached | 89ef72da | Legacy-Verpackung und begrenzte Abschaltung korrigiert, 16 Wrappertests bestanden. Gate ALLOW. Anschließender echter Rustlauf: 6 bestanden, 2 fehlgeschlagen; fehlende Test-DSN und 1-ms-Timerauflösung. Kein Push oder Deploy. |
+| A, Fixrunde 5 | a768fdc0b25ad29ee | Teil-Orchestrator 0712a6dd-cf2a-4a39-907a-f50b19e7930c | Native Agent-Werkzeugbestätigung | Claude Code | gpt-6.1-sol | läuft | /home/nathanael/.worktrees/tb-kategoriesammler-nativ | detached | 89ef72da | Deterministische Abschaltprüfung, unveränderte produktive Frist, vollständiger Rustlauf mit vorhandener Test-DSN und erneuter Gate. Keine produktiven Eingriffe. |
 
 ## Gate Runde 1
 
@@ -51,6 +52,12 @@ Kandidat `181645db51f279a7a8f9c1dd2ad95367270f09ec`, Kritiker `gpt-6.1-sol`: BLO
 2. Hinweis: Writer-Drain hat keine Frist. Tatsächliche IRC-Abschaltung und DB-Timeouts auf verlässlichen Abschluss prüfen.
 
 Die vierte Fixrunde erhält wieder einen frischen nativen Kontext. Die Elternprüfung für Bot und Sammler all-targets ist inzwischen mit Exit 0 abgeschlossen; sie lief während Runde 3 und ersetzt keinen sauberen finalen Release-Build.
+
+## Prüfung nach ALLOW auf 89ef72da
+
+Gate `/tmp/tb-category-fix4-gate.log`: ALLOW, nicht blockierender Hinweis zu blockierter Startvorbereitung. Alle drei Frontends gebaut, Elternlauf der Wrappertests: 16 bestanden. Der echte Collector-Rustlauf ist kompiliert, aber mit 6 bestandenen und 2 fehlgeschlagenen Tests beendet. Die fehlende Test-DSN ist Werkzeugkonfiguration; die neue Zeitgleichheitsprüfung erwartet 15 s, Tokio liefert 15,001 s. Ein frischer Fixer übernimmt diese bestehende Testprüfung, ohne die produktive Frist zu verlängern.
+
+Die breite Clippy-Prüfung scheitert an acht Bot-Lintstellen außerhalb des Sammlerumbaus. Eine identische Prüfung von unverändertem main läuft in einem separaten eigenen Testclone; noch keine Behauptung über vorbestehende Fehler. Release und enges Clippy im Auftragsworktree wurden vor der nächsten Änderung gestoppt. Kein Push, keine produktive Migration und kein Deploy.
 
 ## Reihenfolge und Freigaben
 

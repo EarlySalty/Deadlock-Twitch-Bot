@@ -901,7 +901,9 @@ mod storage_tests {
         tokio::time::pause();
         let started = tokio::time::Instant::now();
         let error = drain_writer(writer).await.unwrap_err();
-        assert_eq!(started.elapsed(), Duration::from_secs(15));
+        let elapsed = started.elapsed();
+        assert!(elapsed >= Duration::from_secs(15));
+        assert!(elapsed <= Duration::from_secs(15) + Duration::from_millis(1));
         assert!(abort.is_finished());
         assert!(error.to_string().contains("uncommitted queued chat"));
         tokio::time::resume();
