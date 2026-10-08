@@ -1,6 +1,6 @@
 use axum::{
-    extract::{Request, State},
-    http::{header::LOCATION, HeaderMap, Method},
+    extract::{FromRequestParts, Request, State},
+    http::{header::LOCATION, request::Parts, HeaderMap, Method},
     middleware::Next,
     response::Response,
 };
@@ -61,27 +61,45 @@ fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     })
 }
 
-async fn actor_from_request(
-    state: Option<crate::auth::session::DashboardAuthState>,
-    admin_session_ids: Vec<String>,
-    partner_session_id: Option<String>,
-    internal: bool,
-) -> String {
-    if let Some(state) = state {
-        for session_id in admin_session_ids {
-            if let Ok(Some(user_id)) = state.load_admin_session_user_id(&session_id).await {
+async fn actor_from_request(parts: &mut Parts) -> String {
+    use crate::auth::level::{
+        AuthenticatedAdminSessionId, AuthenticatedPartnerSessionId, DashboardAuthLevel,
+    };
+
+    if parts
+        .extensions
+        .get::<AuthenticatedAdminSessionId>()
+        .is_none()
+        && parts
+            .extensions
+            .get::<AuthenticatedPartnerSessionId>()
+            .is_none()
+    {
+        let _ = DashboardAuthLevel::from_request_parts(parts, &()).await;
+    }
+    if let Some(state) = parts
+        .extensions
+        .get::<crate::auth::session::DashboardAuthState>()
+    {
+        if let Some(session_id) = parts.extensions.get::<AuthenticatedAdminSessionId>() {
+            if let Ok(Some(user_id)) = state.load_admin_session_user_id(&session_id.0).await {
                 return format!("discord:{user_id}");
             }
         }
+        let partner_session_id = parts
+            .extensions
+            .get::<AuthenticatedPartnerSessionId>()
+            .map(|session| session.0.as_str())
+            .or_else(|| cookie_value(&parts.headers, crate::auth::session::PARTNER_COOKIE_NAME));
         if let Some(session_id) = partner_session_id {
-            if let Ok(Some(session)) = state.load_partner_session(&session_id).await {
+            if let Ok(Some(session)) = state.load_partner_session(session_id).await {
                 if !session.twitch_login.trim().is_empty() {
                     return session.twitch_login.trim().to_lowercase();
                 }
             }
         }
     }
-    if internal {
+    if parts.headers.contains_key("x-internal-token") {
         "internal".to_string()
     } else {
         "admin".to_string()
@@ -99,27 +117,12 @@ pub async fn audit_admin_mutations(
 
     let method = request.method().as_str().to_string();
     let path: String = request.uri().path().chars().take(512).collect();
-    let auth_state = request
-        .extensions()
-        .get::<crate::auth::session::DashboardAuthState>()
-        .cloned();
-    let admin_session_ids = crate::auth::level::cookie_values(
-        request.headers(),
-        crate::auth::session::ADMIN_COOKIE_NAME,
-    )
-    .into_iter()
-    .filter(|session_id| !session_id.is_empty())
-    .map(str::to_string)
-    .collect();
-    let partner_session_id =
-        cookie_value(request.headers(), crate::auth::session::PARTNER_COOKIE_NAME)
-            .map(str::to_string);
-    let internal = request.headers().contains_key("x-internal-token");
-    let actor =
-        actor_from_request(auth_state, admin_session_ids, partner_session_id, internal).await;
-    let response = next.run(request).await;
+    let (parts, body) = request.into_parts();
+    let mut actor_parts = parts.clone();
+    let response = next.run(Request::from_parts(parts, body)).await;
     let status = response.status();
     if response_marks_success(&path, &response) {
+        let actor = actor_from_request(&mut actor_parts).await;
         if let Err(error) = sqlx::query(
             r#"INSERT INTO dashboard_admin_audit_events
                 (actor, method, path, status_code)
@@ -141,11 +144,15 @@ pub async fn audit_admin_mutations(
 #[cfg(test)]
 mod tests {
     use super::audit_admin_mutations;
+    use crate::auth::discord_admin_login::{
+        DiscordAdminLoginConfig, DiscordAdminOAuthClient, DiscordAdminOAuthError,
+        DiscordAdminSession, DiscordAuthorize, ValidatedAdminSession,
+    };
     use axum::{
         body::Body,
         http::{Request, StatusCode},
-        middleware::from_fn_with_state,
-        response::Redirect,
+        middleware::{from_fn, from_fn_with_state},
+        response::{IntoResponse, Redirect},
         routing::{get, post},
         Extension, Router,
     };
@@ -195,17 +202,68 @@ mod tests {
         Some(pool)
     }
 
+    struct CentralSessionClient;
+
+    #[async_trait::async_trait]
+    impl DiscordAdminOAuthClient for CentralSessionClient {
+        async fn initiate(
+            &self,
+            _scope: &str,
+            _redirect_after: &str,
+            _requesting_service: &str,
+            _metadata: serde_json::Value,
+        ) -> Result<DiscordAuthorize, DiscordAdminOAuthError> {
+            panic!("Audit startet keine Anmeldung");
+        }
+
+        async fn consume_result(
+            &self,
+            _state_id: &str,
+        ) -> Result<DiscordAdminSession, DiscordAdminOAuthError> {
+            panic!("Audit konsumiert keine Anmeldung");
+        }
+
+        async fn validate_session(
+            &self,
+            session_id: &str,
+        ) -> Result<ValidatedAdminSession, DiscordAdminOAuthError> {
+            let user_id = match session_id {
+                "zentral-42-einzel" | "zentral-42-doppelt" | "zentral-42-getrennt" => 42,
+                "zentral-99-doppelt" | "zentral-99-getrennt" => 99,
+                _ => return Err(DiscordAdminOAuthError),
+            };
+            Ok(ValidatedAdminSession {
+                user_id,
+                username: "admin".into(),
+                display_name: "Admin".into(),
+                expires_at: 9_999_999_999.0,
+            })
+        }
+
+        async fn import_session(
+            &self,
+            _session_id: &str,
+            _session: &ValidatedAdminSession,
+        ) -> Result<(), DiscordAdminOAuthError> {
+            panic!("Audit überträgt keine Sitzung zum Broker");
+        }
+
+        async fn revoke_session(&self, _session_id: &str) -> Result<(), DiscordAdminOAuthError> {
+            panic!("Audit widerruft keine Sitzung");
+        }
+    }
+
     #[tokio::test]
     async fn audit_ordnet_einzel_doppelte_und_getrennte_admin_cookies_zu() {
         use crate::auth::{
-            level::DashboardAuthLevel,
+            level::{AuthenticatedAdminSessionId, DashboardAuthLevel},
             session::{DashboardAuthState, ADMIN_COOKIE_NAME},
         };
 
         let schema = crate::auth::session::test_schema_name("admin_audit_actor");
-        let pool = pool_or_skip(&schema)
-            .await
-            .expect("Audit-Test benötigt eine Testdatenbank");
+        let Some(pool) = pool_or_skip(&schema).await else {
+            return;
+        };
         sqlx::query(
             r#"CREATE TABLE dashboard_sessions (
                 session_id TEXT PRIMARY KEY,
@@ -230,27 +288,128 @@ mod tests {
             .create_admin_session("42", "Audit Admin")
             .await
             .unwrap();
+        let other_session = state
+            .create_admin_session("99", "Zweiter Admin")
+            .await
+            .unwrap();
+        let config = DiscordAdminLoginConfig {
+            admin_base_url: "https://admin.test".into(),
+            cookie_secure: true,
+            cookie_domain: None,
+            owner_user_id: None,
+            moderator_role_id: 1,
+            admin_role_ids: Vec::new(),
+            admin_guild_ids: Vec::new(),
+            client: std::sync::Arc::new(CentralSessionClient),
+        };
         let app = Router::new()
             .route(
                 "/twitch/api/admin/test",
-                post(|auth: DashboardAuthLevel| async move {
-                    assert!(auth.is_privileged());
-                    StatusCode::NO_CONTENT
-                }),
+                post(
+                    |auth: DashboardAuthLevel, request: Request<Body>| async move {
+                        assert!(auth.is_privileged());
+                        let selected = request
+                            .extensions()
+                            .get::<AuthenticatedAdminSessionId>()
+                            .unwrap()
+                            .clone();
+                        let mut response = StatusCode::NO_CONTENT.into_response();
+                        response.extensions_mut().insert(selected);
+                        response
+                    },
+                ),
             )
+            .layer(from_fn(crate::auth::csrf::csrf_protect))
+            .layer(from_fn(crate::auth::require_admin_before_csrf))
+            .layer(from_fn(crate::auth::level::promote_dashboard_admin_session))
+            .layer(Extension(tb_http_core::ExpectedToken(
+                "test-internal".into(),
+            )))
             .layer(from_fn_with_state(pool.clone(), audit_admin_mutations))
+            .layer(Extension(config))
             .layer(Extension(state.clone()));
 
         let valid_cookie = format!("{ADMIN_COOKIE_NAME}={}", session.session_id);
+        let other_cookie = format!("{ADMIN_COOKIE_NAME}={}", other_session.session_id);
         let stale_cookie = format!("{ADMIN_COOKIE_NAME}=veraltet");
-        for cookies in [
-            vec![valid_cookie.clone()],
-            vec![format!("{stale_cookie}; {valid_cookie}")],
-            vec![stale_cookie, valid_cookie],
+        let mut cases = vec![
+            (
+                vec![valid_cookie.clone()],
+                "discord:42",
+                session.session_id.clone(),
+            ),
+            (
+                vec![format!("{stale_cookie}; {valid_cookie}")],
+                "discord:42",
+                session.session_id.clone(),
+            ),
+            (
+                vec![stale_cookie.clone(), valid_cookie.clone()],
+                "discord:42",
+                session.session_id.clone(),
+            ),
+            (
+                vec![format!("{other_cookie}; {valid_cookie}")],
+                "discord:99",
+                other_session.session_id.clone(),
+            ),
+        ];
+        for (central_id, first_cookie, last_cookie, separated, actor) in [
+            ("zentral-42-einzel", None, None, false, "discord:42"),
+            (
+                "zentral-42-doppelt",
+                Some(&stale_cookie),
+                None,
+                false,
+                "discord:42",
+            ),
+            (
+                "zentral-42-getrennt",
+                Some(&stale_cookie),
+                None,
+                true,
+                "discord:42",
+            ),
+            (
+                "zentral-99-doppelt",
+                None,
+                Some(&valid_cookie),
+                false,
+                "discord:99",
+            ),
+            (
+                "zentral-99-getrennt",
+                None,
+                Some(&valid_cookie),
+                true,
+                "discord:99",
+            ),
         ] {
+            assert!(state
+                .load_admin_session(central_id)
+                .await
+                .unwrap()
+                .is_none());
+            let mut cookies = Vec::new();
+            if let Some(cookie) = first_cookie {
+                cookies.push(cookie.clone());
+            }
+            cookies.push(format!("{ADMIN_COOKIE_NAME}={central_id}"));
+            if let Some(cookie) = last_cookie {
+                cookies.push(cookie.clone());
+            }
+            if !separated {
+                cookies = vec![cookies.join("; ")];
+            }
+            cases.push((cookies, actor, central_id.to_string()));
+        }
+        let expected_actors: Vec<_> = cases.iter().map(|(_, actor, _)| *actor).collect();
+        for (cookies, _, selected_id) in &cases {
             let mut request = Request::builder()
                 .method("POST")
                 .uri("/twitch/api/admin/test")
+                .header("host", "admin.test")
+                .header("origin", "https://admin.test")
                 .header("x-dashboard-context", "admin");
             for cookie in cookies {
                 request = request.header(axum::http::header::COOKIE, cookie);
@@ -261,6 +420,35 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(response.status(), StatusCode::NO_CONTENT);
+            assert_eq!(
+                &response
+                    .extensions()
+                    .get::<AuthenticatedAdminSessionId>()
+                    .unwrap()
+                    .0,
+                selected_id,
+            );
+            assert!(state
+                .load_admin_session(selected_id)
+                .await
+                .unwrap()
+                .is_some());
+        }
+        for cookies in [vec![], vec![format!("{ADMIN_COOKIE_NAME}=unbekannt")]] {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/twitch/api/admin/test")
+                .header("host", "admin.test")
+                .header("x-dashboard-context", "admin");
+            for cookie in cookies {
+                request = request.header(axum::http::header::COOKIE, cookie);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         }
 
         let actors: Vec<String> =
@@ -268,23 +456,33 @@ mod tests {
                 .fetch_all(&pool)
                 .await
                 .unwrap();
-        assert_eq!(actors, vec!["discord:42"; 3]);
+        assert_eq!(actors, expected_actors);
         for internal in [false, true] {
-            assert_eq!(
-                super::actor_from_request(
-                    Some(state.clone()),
-                    vec!["unbekannt".to_string()],
-                    None,
-                    internal,
-                )
-                .await,
-                if internal { "internal" } else { "admin" },
-            );
-            assert_eq!(
-                super::actor_from_request(None, Vec::new(), None, internal).await,
-                if internal { "internal" } else { "admin" },
-            );
+            for with_state in [false, true] {
+                let mut request = Request::builder()
+                    .header("x-dashboard-context", "admin")
+                    .header("cookie", format!("{ADMIN_COOKIE_NAME}=unbekannt"));
+                if with_state {
+                    request = request.extension(state.clone());
+                }
+                if internal {
+                    request = request.header("x-internal-token", "test-internal");
+                }
+                let (mut parts, _) = request.body(()).unwrap().into_parts();
+                assert_eq!(
+                    super::actor_from_request(&mut parts).await,
+                    if internal { "internal" } else { "admin" },
+                );
+            }
         }
+        let (mut parts, _) = Request::builder()
+            .header("cookie", format!("{other_cookie}; {valid_cookie}"))
+            .extension(state)
+            .extension(AuthenticatedAdminSessionId(session.session_id))
+            .body(())
+            .unwrap()
+            .into_parts();
+        assert_eq!(super::actor_from_request(&mut parts).await, "discord:42");
     }
 
     #[tokio::test]
