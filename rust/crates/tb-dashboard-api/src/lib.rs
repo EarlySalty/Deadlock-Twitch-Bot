@@ -1664,6 +1664,10 @@ pub fn build_billing_page_router(pool: PgPool) -> Router {
             get(billing_page::cancel_handler).post(billing_page::cancel_handler),
         )
         .route(
+            "/twitch/abbo/k%C3%BCndigen",
+            get(billing_page::cancel_handler).post(billing_page::cancel_handler),
+        )
+        .route(
             "/twitch/abbo/rechnungen",
             get(billing_page::legacy_invoices_redirect_handler),
         )
@@ -2204,10 +2208,10 @@ pub fn build_router_with_analysis_writer(
     let mut app = build_public_router_with_brain(pool.clone(), brain_runtime)
         .merge(pause_loop_router)
         .merge(build_auth_router(rate_limiter.clone()))
-        .merge(build_partner_login_router(
-            pool.clone(),
-            rate_limiter.clone(),
-        ))
+        .merge(
+            build_partner_login_router(pool.clone(), rate_limiter.clone())
+                .layer(Extension(ExpectedToken(token.clone()))),
+        )
         .merge(build_affiliate_router(pool.clone(), rate_limiter.clone()))
         .merge(build_roadmap_router(pool.clone(), token.clone()))
         .merge(build_market_router(pool.clone(), token.clone()))
@@ -2446,8 +2450,178 @@ mod router_wiring_tests {
             .expect("lazy pool")
     }
 
-    /// build_router darf NICHT paniccen (kein doppelter Pfad in zwei Routern).
-    /// Async, weil der lazy PgPool einen Tokio-Kontext für seinen Reaper braucht.
+    #[tokio::test]
+    async fn kuendigungsroute_erreicht_handler_mit_browserkodierter_uri() {
+        let app = build_billing_page_router(lazy_pool());
+        for method in ["GET", "POST"] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri("/twitch/abbo/k%C3%BCndigen?source=router-test")
+                        .header(header::HOST, "dashboard.example.com")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::SEE_OTHER, "{method}");
+            assert_eq!(
+                resp.headers().get(header::LOCATION).unwrap(),
+                "/twitch/auth/login?next=%2Ftwitch%2Fpricing",
+                "{method}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn partner_link_prueft_konfigurierten_internen_schluessel_und_origin() {
+        let pool = lazy_pool();
+        pool.close().await;
+        for (configured, provided, origin, status, error) in [
+            (
+                "router-test-token",
+                Some("router-test-token"),
+                None,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_unavailable",
+            ),
+            (
+                "router-test-token",
+                None,
+                None,
+                StatusCode::FORBIDDEN,
+                "admin_required",
+            ),
+            (
+                "router-test-token",
+                Some("wrong-test-token"),
+                None,
+                StatusCode::FORBIDDEN,
+                "admin_required",
+            ),
+            (
+                "router-test-token",
+                Some(""),
+                None,
+                StatusCode::FORBIDDEN,
+                "admin_required",
+            ),
+            (
+                "",
+                Some("router-test-token"),
+                None,
+                StatusCode::FORBIDDEN,
+                "admin_required",
+            ),
+            ("", Some(""), None, StatusCode::FORBIDDEN, "admin_required"),
+            (
+                "router-test-token",
+                Some("router-test-token"),
+                Some("https://evil.example"),
+                StatusCode::FORBIDDEN,
+                "invalid_csrf",
+            ),
+            (
+                "router-test-token",
+                Some("router-test-token"),
+                Some("https://dashboard.example.com"),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_unavailable",
+            ),
+        ] {
+            let app = build_router(pool.clone(), configured.into());
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/twitch/auth/partner/link")
+                .header(header::HOST, "dashboard.example.com")
+                .header(header::CONTENT_TYPE, "application/json");
+            if let Some(provided) = provided {
+                request = request.header(tb_http_core::INTERNAL_TOKEN_HEADER, provided);
+            }
+            if let Some(origin) = origin {
+                request = request.header(header::ORIGIN, origin);
+            }
+            let resp = app
+                .oneshot(
+                    request
+                        .body(Body::from(r#"{"login":"router-test-partner"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), status, "{provided:?} {origin:?}");
+            let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(json["error"], error, "{provided:?} {origin:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn partner_link_lehnt_gueltige_nicht_berechtigte_partner_session_ab() {
+        let db = test_database::Database::new().await;
+        sqlx::raw_sql(
+            "CREATE TABLE dashboard_sessions (
+                session_id TEXT PRIMARY KEY, session_type TEXT NOT NULL,
+                payload_enc BYTEA NOT NULL, created_at DOUBLE PRECISION NOT NULL,
+                expires_at DOUBLE PRECISION NOT NULL
+             );
+             CREATE TABLE twitch_partners (
+                twitch_login TEXT, twitch_user_id TEXT, status TEXT,
+                technical_pause_reason TEXT, departnered_at TEXT,
+                admin_archived_at TEXT, partnered_at TEXT
+             );
+             INSERT INTO twitch_partners (twitch_login, twitch_user_id, status)
+             VALUES ('router-test-partner', '4242', 'active');",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let state = DashboardAuthState::new(
+            db.pool.clone(),
+            "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".into(),
+        );
+        let session = state
+            .create_partner_session("router-test-partner", "4242", "Testpartner")
+            .await
+            .unwrap();
+        assert_eq!(
+            state
+                .load_partner_session(&session.session_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .twitch_user_id,
+            "4242"
+        );
+        let app = build_router(db.pool.clone(), "router-test-token".into()).layer(Extension(state));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/twitch/auth/partner/link")
+                    .header(header::HOST, "dashboard.example.com")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(
+                        header::COOKIE,
+                        format!(
+                            "{PARTNER_COOKIE_NAME}={}; tb_admin_mode=2",
+                            session.session_id
+                        ),
+                    )
+                    .body(Body::from(r#"{"login":"router-test-partner"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "admin_required");
+        db.close().await;
+    }
+
     #[tokio::test]
     async fn build_router_konstruiert_ohne_overlap_panic() {
         let _app = build_router(lazy_pool(), "smoke-token".into());
