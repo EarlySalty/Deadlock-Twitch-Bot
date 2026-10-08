@@ -93,3 +93,62 @@ Der vorgeschriebene Wrapper startet Migrationen und installiert PostgreSQL-Peerr
 3. W03 erhalten, seine Ergebnisse und Qualitätskritiken auswerten, danach verbleibende Bereiche abarbeiten.
 4. Statusereignis nachführen und durch die Statusrolle in TODO.md übernehmen lassen; Taskartefakte gezielt committen und sichern.
 5. Erlaubte Pakete nach vollständiger Freigabe integrieren; Deploy bis zur tatsächlichen Freigabe gesperrt lassen.
+
+## Aktualisierung nach Sicherung b3850cbd
+
+Der Artefaktbranch wurde mit `b3850cbd` erfolgreich auf origin gesichert. Der unveränderte Push bestand gitleaks und cargo-audit. Nachfolgende Artefakte sind bis zum nächsten Checkpoint lokal. Kein Anwendungscode-Merge daraus ableiten.
+
+- W03-Bauqualität `wf_461b0370-4c3` ist abgeschlossen. 18 Transcripts, 957 echte Sol-Datensätze und Hashes geprüft. Zwölf Bereiche sind nun bewertet, 96 fehlen. QUALITAET.md, QUALITAET-W03.md und MODELLE-W03-QUALITAET.md enthalten die korrigierten Urteile. W03-Defektreviews laufen unabhängig weiter.
+- W02-Gegenprüfung `wf_f9b737d9-fe8` ist abgeschlossen: 44 Urteile zu 22 Claims. 18 Paare sind nach den zurückgegebenen Urteilen geeignet, vier bleiben C/gesperrt. Der Export mit vollständigen Modell-/Urteilsnachweisen und begrenzter Unabhängigkeitsprüfung läuft in `wf_54f7b776-e4b`, Task `w3r7af3xa`, Script `tb-vollreview-w02-urteile-sichern-wf_54f7b776-e4b.js`. Einfache Rückgabezählung ersetzt keine Modell- und Freigabeprüfung.
+- A01-Runde 1 ist mit Gate BLOCK und Kritiker BLOCK abgeschlossen. Der Kritiker bestätigt den erhaltenen lokalen Spiegel und eine neue Opt-in-Regressionslücke in fünf Tests. `aeb74dc60de92176d`, 52 Sol-Datensätze, SHA256 `494c133778701fe08f8b14f8d9918300d82f9643c9eb1117ff89c8ab11374718`. Grundbriefing der laufenden frischen Runde 2 wurde ergänzt; tatsächliche Kenntnisnahme durch den schon gestarteten Fixer nicht unterstellt. Der neue Kritiker prüft beide Mängel.
+- Sieben weitere Claims mit bereits einzeln geprüfter Reviewer-/Skeptiker-Kette sind in fünf zusätzlichen Paketen beauftragt: A02, B04, B05, B06 und B07. Workflow `wf_3e7d57bd-7ac`, Task `wgtb6k4c0`, Script `tb-vollreview-w02-fixgruppe-02-wf_3e7d57bd-7ac.js`, Eingaben in WORKFLOW-ARGS.json. Briefing BRIEFING-W02-FIXGRUPPE-02.md enthält sämtliche Einzelbelege und Eigentumsgrenzen.
+
+| Neues Paket | Worktree unter /home/nathanael/.worktrees/ | Branch | Schreibpfade unter rust/crates/tb-dashboard-api/ |
+|---|---|---|---|
+| A02 | tb-vollreview-affiliate-eigentuemer | fix/vollreview-affiliate-eigentuemer | src/handlers/affiliate.rs, src/handlers/affiliate_portal.rs |
+| B04 | tb-vollreview-router-vertraege | fix/vollreview-router-vertraege | src/lib.rs |
+| B05 | tb-vollreview-plattform-refresh | fix/vollreview-plattform-refresh | src/handlers/platform_token.rs, src/handlers/platform_store.rs, src/handlers/plattform_oauth.rs |
+| B06 | tb-vollreview-proxy-antwort | fix/vollreview-proxy-antwort | src/proxy.rs |
+| B07 | tb-vollreview-plan-fixture | fix/vollreview-plan-fixture | tests/plan_stufen_gates.rs |
+
+Weitere bestätigte Kandidaten mit Überschneidung zu A01 oder A02 werden nicht parallel in denselben Dateien umgesetzt. Aktuelle Integrations- und Prüfstände erst nach fertiger Rückgabe übernehmen. Die Statusrolle hat bisher Ereignis 4 verarbeitet; die hier genannten späteren Ergebnisse sind noch nicht in TODO.md übernommen.
+
+## Aktualisierung nach neuen Fixerabgaben
+
+- B03 Runde 1 abgeschlossen: Head `1ce4fae5cf1e91bb2d7aa42beaf6724d3c3e4a5b`, Gate BLOCK und Kritiker BLOCK. Restfehler bei zentraler Akteursauswahl und neuer DB-Opt-in-Testregression. Modelle/Hashes beider Rollen geprüft, Nachweise in REVIEW.md und BRIEFING-B03-R2.md. Frische Runde 2 läuft in `wf_651129fb-11c`, Task `w0yu02483`, Script `tb-vollreview-b03-fixrunde-2-wf_651129fb-11c.js`. Schreibrecht weiterhin ausschließlich admin_audit.rs.
+- A01 Runde 2: Fixer beendet, Head `e16fab5b337283b748b2549b93ca11a042f7fee0`, Basis `a8b5b5e986a1de0b8e2f981651f83bda9cf400dd`, Sol-Gate ALLOW. Frischer Kritiker ist gestartet und noch nicht abgenommen. Sechs Regressionen bestanden, Gesamtsuite mit 22 identischen Baselinefehlern rot. Opt-in-Vertrag und DB-Ausfallgrenze bleiben Prüfgegenstand. Modellbeleg des Fixers in REVIEW.md. Kein Merge oder Deploy.
+- DA03-Konsolidierung läuft separat in `wf_7839ce50-df2`, Task `wke326kr2`, Script `tb-vollreview-w03-da03-konsolidieren-wf_7839ce50-df2.js`. Umfang: 30 fertige DA03-Reviews mit 37 Rohmeldungen, Deduplizierung einschließlich W02, Ausgabe W03-DA03-KANDIDATEN.json. Noch kein abgenommenes Ergebnis. Andere W03-Bereiche laufen weiter.
+- W02-Skeptikerexport `wf_54f7b776-e4b` bleibt aktiv. Nicht erneut starten. B01, B02 und die neue Fünfer-Fixgruppe ebenfalls nicht duplizieren.
+
+Alle genannten neuen Fixstände sind lokal. Ein ALLOW allein ersetzt keine vollständige Freigabekette. Der ungelöste Wrapper-Konflikt sperrt weiterhin Deploys.
+
+## Aktueller Nachtrag: Gegenprüfung und weitere Ausführungen
+
+Dieser Nachtrag ersetzt abweichende ältere Statusangaben oben.
+
+| Ausführung | Run-ID | Task-ID | Stand |
+|---|---|---|---|
+| A01 frische Runde 3 | wf_b79d23f0-572 | wde98fd7l | Runde-2-Kritiker BLOCK: echter Login-Aufrufer bleibt offen, sechs Testregressionen ohne DB-Opt-in. Beide Rollen der Runde 2 beendet und auf Sol geprüft. BRIEFING-A01-R3.md, REVIEW.md. |
+| B03 frische Runde 2 | wf_651129fb-11c | w0yu02483 | Nach zwei konkreten Mängeln aus Runde 1 aktiv, danach neuer Kritiker. |
+| W02 Nachweisexport vervollständigen | wf_670191de-48b | wyak0gek4 | Vorgänger wf_54f7b776-e4b nach Kontextabbruch beendet. Zwölf echte Paare und zehn Platzhalter erhalten, fehlende zehn werden ergänzt. Keine neue Gegenprüfung. |
+| DA03 neue Gegenprüfung | wf_97f7401d-6c8 | w4yxi8vtu | 19 neue kanonische A/B-Claims, je zwei frische Skeptiker. Noch keine neuen Bestätigungen daraus. |
+| Q04 verbleibende Bauqualität | wf_e3b6f95d-94c | wy6nc2611 | 96 weitere Bereiche, je Bewertung und frischer Kritiker. Zwölf frühere Bereiche bleiben abgeschlossen und werden nicht wiederholt. |
+| B08/B09 Fixgruppe | wf_f3187078-c1c | w5zc6gdgl | Zwei weitere bestätigte B-Claims auf getrennten Pfaden, je Fixer und frischer Kritiker. |
+
+W02: Astra prüfte selbst sämtliche 44 fertigen Skeptikertranscripts mit 1703 echten Sol-Datensätzen, passenden Hashes und identischen finalen StructuredOutputs. Die 22 Paare ergeben sieben A, elf B mit belegtem Soll und vier C-Sperren. Zusammen mit früheren W02-Gruppen: 9 A, 13 B, 18 C. R09 ergänzt ein B und ein C. BEFUNDE.md enthält den aktuellen Stand. Der unterbrochene Metadatenexport macht die ursprünglichen abgeschlossenen Urteile nicht ungeschehen, ist aber noch kein vollständiges Nachweisartefakt.
+
+DA03-Konsolidierung `wf_7839ce50-df2` ist abgenommen. 30 Reviewertranscripts mit 1393 echten Sol-Datensätzen durch Astra erneut geprüft; 37 Roh-IDs genau einmal zugeordnet. 26 neue Gruppen und sechs Verknüpfungen zu W02. Quellen, Einzelhashes und Grenzen in W03-DA03-KANDIDATEN.json und W03-DA03-NACHWEIS.md. Konsolidierer a120b32523dd1f51a: 68 Sol-Datensätze, SHA256 e89fb771f74eadb7bdff9baa12ab55d07bc5f4fdb0550381325caf3defed7334.
+
+B08: Worktree `/home/nathanael/.worktrees/tb-vollreview-query-grenzen`, Branch `fix/vollreview-query-grenzen`, ausschließlich `rust/crates/tb-dashboard-api/src/query_int.rs`. B09: Worktree `/home/nathanael/.worktrees/tb-vollreview-idor-fixture`, Branch `fix/vollreview-idor-fixture`, ausschließlich `rust/crates/tb-dashboard-api/src/auth/idor_e2e_tests.rs`. Briefing BRIEFING-W02-FIXGRUPPE-03.md enthält die geprüften Freigabeketten. Die tatsächliche Anlage/Commits sind noch nicht durch fertige Abgaben belegt.
+
+Scripts liegen unter dem bekannten Sessionpfad, genaue Namen und Eingaben in HANDOFF.md beziehungsweise WORKFLOW-ARGS.json. Aktive Ausführungen nicht doppelt starten. Kein Anwendungscode-Merge oder Deploy ist in diesem Nachtrag belegt.
+
+## Nachtrag zum Prüfabschluss und Ereignis 5
+
+W02-Nachweisexport wf_670191de-48b ist beendet und abgenommen: 22 echte Paare, 44 unveränderte Originalurteile, keine Platzhalter. Artefakt-SHA256 `3fff60d3d22e7af33e929c2f5aedb3a11d1ffc44daf327d981a0a7b2006bee7f`. Exporter af3a6b9cdc02d658a, 34 Sol-Datensätze, Transcript-SHA256 `2210024ef83808e3c43962e29d7474c6f2f9319fe5067abb88fcee86520be16e`. Astra prüfte Modelle und fertiges Artefakt; Einzelbelege in MODELLE-W02.md.
+
+B02/B03-Workflow wf_586b3f73-0dc ist vollständig beendet. B02 erhält fachlich ALLOW für e98b7f01, aber finale Tests und Fix-Clippy fehlen. B03 bleibt in seiner bereits gestarteten frischen Runde 2. B01-Abgleich endete mit API 403 ohne Ergebnis; genau eine Wiederaufnahme desselben wf_45aca23b-0b9 läuft als Task w1g2kmoxn. Keine alten Teilstände als abgeschlossene Prüfung werten.
+
+A02 und B05 gaben ihre vorbereiteten Änderungen ohne Commit ab. Automatische Kritiken des leeren Basis-/Head-Vergleichs sind keine fachlichen Fixabnahmen. Astra sicherte die vorbereiteten Sol-Dateien ohne Quelländerung lokal als WIP `864e70f6` und `131a45ab`. Zehn Git-Schritte einzeln, kein Push/Merge/Deploy. Neuer Prüfabschluss A02/B05/B02: wf_b6076a3e-97b, Task wza5o93rn, Script tb-vollreview-pruefabschluss-01-wf_b6076a3e-97b.js, args in WORKFLOW-ARGS.json. Anwendungscode bleibt unverändert; bei konkretem Korrekturbedarf folgt ein frischer Fixer. A02/B05 erhalten danach echte neue Fix-Kritik.
+
+Ereignis `events/gesamt-v1-s5.json` erfasst den Stand vom 2026-10-08T06:32:21Z mit konkreten Paket- und Workflow-IDs. Statusrolle wf_29523a56-cba, Task wmk2dvdb2, Script tb-vollreview-status-s5-wf_29523a56-cba.js ist abgeschlossen. Ereignis 5 in TODO.md übernommen, ältere Historie erhalten, keine Schemakonflikte. Agent a9401bc7364f239e2: 21 Sol-Datensätze, SHA256 02799ad50aa8f1b3f2c2533c0348855b1f25aa069967915a72aa8472e43414ac, durch Astra geprüft. Gesamt gebaut/reviewt/gemergt/live bleibt nein.

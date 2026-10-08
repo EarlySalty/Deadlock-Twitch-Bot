@@ -1,0 +1,43 @@
+{
+  "auftrag": "2026-10-08-twitch-bot-vollreview",
+  "paket": "gesamt",
+  "versuch": 1,
+  "sequenz": 5,
+  "zeit": "2026-10-08T06:32:21Z",
+  "produzent": "astra-f61905e7",
+  "phase": "aktiv",
+  "gebaut": "nein",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "b3850cbda9bc7b8b9a4fb304e1c24a63eda6e17f",
+  "nachweise": [
+    "Abgenommene Defektkonsolidierungen: R09, DA01, DA02, DA03. Vier von 108 Bereichen. Deklarierte Intervallabdeckung ist kein unabhängiger Nachweis tatsächlicher vollständiger Werkzeuglektüre.",
+    "W02-Gegenprüfung abgeschlossen: 44 Sol-Transcripts, 1703 echte Modell-Datensätze, Hashes und finale Rückgaben durch Astra geprüft. 22 Paare ergeben 7 zusätzliche A, 11 B mit belegtem Soll und 4 C-Sperren. W02 insgesamt 9 A, 13 B, 18 C; mit R09 9 A, 14 B, 19 C. Keine erledigten Fixzahlen.",
+    "W02-GEGENPRUEFUNG-03.json ist nach unterbrochenem Metadatenexport vollständig: 22 echte Paare, 44 Originalurteile, keine Platzhalter, SHA256 3fff60d3d22e7af33e929c2f5aedb3a11d1ffc44daf327d981a0a7b2006bee7f. Fortsetzungsrolle wf_670191de-48b abgeschlossen und auf Sol geprüft.",
+    "W03-DA03-KANDIDATEN.json: 30 fertige Reviewer, 1393 Sol-Datensätze erneut geprüft. 37 Rohmeldungen in 32 Gruppen, davon 6 W02-Verknüpfungen und 26 neue ungeprüfte Gruppen. 19 neue A/B-Claims mit je zwei Skeptikern in wf_97f7401d-6c8, Task w4yxi8vtu.",
+    "Zwölf Qualitätsbereiche samt Kritik abgeschlossen: R09, DA01, DA02, DA03, DA04, DA05, DA06, DA07, DA15, DA17, MO01, IA01. QUALITAET.md und QUALITAET-W03.md. Die übrigen 96 in Q04 wf_e3b6f95d-94c, Task wy6nc2611 gestartet; keine Gesamtnote.",
+    "W03-Defektwelle wf_bd410bd5-531, Task weh6ttwrs läuft für DA03, DA04, DA05, DA06, DA07, DA15, DA17, MO01, IA01 mit 185 geplanten Reviews. DA03 abgenommen; übrige Rückgaben noch nicht vollständig konsolidiert.",
+    "A01: Runde 2 Head e16fab5b, Gate ALLOW, Kritiker BLOCK wegen echtem Login-Widerrufspfad und sechs neuen Tests ohne DB-Opt-in. Frische Runde 3 wf_b79d23f0-572, Task wde98fd7l. Sechs positive Regressionen mit aktivierter DB, Gesamtsuite mit 22 identischen gemeldeten Baselinefehlern rot.",
+    "B03: Runde 1 Head 1ce4fae5, Gate BLOCK und Kritiker BLOCK wegen zentraler Akteursauswahl und Test-Opt-in. Frische Runde 2 wf_651129fb-11c, Task w0yu02483. Gezielt zwei Audit-Tests bestanden, Gesamtsuite mit 35 identischen gemeldeten Baselinefehlern rot.",
+    "B02: Head e98b7f016dbab373a5a8dd9490d158b136c97fec, echte fachliche Kritik ALLOW und Sol-Gate ALLOW. Tests nach Basisabgleich und Fix-Clippy fehlen. Prüfabschluss in wf_b6076a3e-97b, Task wza5o93rn. Kein Merge.",
+    "A02/B05: erste Worker ließen vorbereitete Änderungen uncommittet. Leerdiff-Kritiken bewerteten diese Fixes nicht. Astra sicherte die vorbereiteten Sol-Dateien ohne Quelländerung lokal als WIP 864e70f6 und 131a45ab. Prüfabschluss und danach echte frische Kritik in wf_b6076a3e-97b. Noch keine Kompilierungs-/Test-/Gateabnahme.",
+    "A02, B04, B05, B06, B07 gehören zur ersten Fünfer-Fixgruppe wf_3e7d57bd-7ac. A02/B05 haben nun den separaten Prüfabschluss. B07 meldet Head 9ec607b3 und Gate ALLOW, aber noch offene Kritik und Prüfungen. B04/B06-Ergebnisse nicht vorwegnehmen.",
+    "B08/B09 sind mit vollständiger geprüfter Freigabekette beauftragt: wf_f3187078-c1c, Task w5zc6gdgl, Query-Grenzen und IDOR-Testfixtures, getrennte Dateien. Briefing BRIEFING-W02-FIXGRUPPE-03.md.",
+    "B01-Abgleich wf_45aca23b-0b9 brach ohne Ergebnis mit API 403 ab. Journal geprüft; einmal im selben Workflow mit neuem frischen Sol-Kontext fortgesetzt, neue Task-ID w1g2kmoxn. Eigenen vorhandenen Stand und laufende Prüfungen erhalten, kein Modellrückfall."
+  ],
+  "blocker": [
+    "Deploy bleibt gesperrt: Wrapper startet Migrationen und verändert PostgreSQL-Konfiguration. Keine menschliche Freigabe erhalten.",
+    "A01 und B03 haben konkrete blockierende Kritik, frische Fixrunden laufen. Kein ALLOW des Gates überschreibt diese offenen Mängel.",
+    "Mehrere Prüfungen fehlen wegen Cargo-Slotwartezeit; ausgeführte Gesamtsuiten haben belegte oder gemeldete Baselinefehler. Keine grüne Gesamtprüfung behauptet.",
+    "B01 hatte einen API-403-Abbruch. Die einmalige Wiederaufnahme ist noch nicht abgeschlossen. Andere erfolgreiche Sol-Rückgaben belegen keinen Erfolg dieser Wiederaufnahme."
+  ],
+  "naechster_schritt": "Fertige Fixketten und weitere W03-Ergebnisse mit Modellnachweisen abnehmen, gesperrte Runden frisch weiterführen und den neuen Artefaktstand sichern",
+  "hinweise": [
+    "Paket-IDs dieser Phase: B01, B02, B03, A01, A02, B04, B05, B06, B07, B08, B09. Schreibgrenzen stehen in REGISTER.md und den Briefings; keine überlappenden Writer.",
+    "Die SHA oben ist der zuletzt gesicherte Artefaktcommit b3850cbd, kein Fix-, Merge- oder Deploy-SHA. Die neuen Dokumente werden erst mit dem nächsten Checkpoint gesichert.",
+    "Nur der frühere reine Dokumentationscheckpoint 6937e4a6 ist auf main nachgewiesen. Kein Anwendungscode-Merge, Deploy oder Live-Nachweis.",
+    "Originale Skeptikerurteile bleiben gültige abgeschlossene Ergebnisse; der behobene Metadatenexportfehler ist kein Grund für erneute Gegenprüfungen.",
+    "Neue DA03-Vorschläge und laufende Q04-Bewertungen zählen nicht zu bestätigten Fehlern oder abgeschlossenen Qualitätsbereichen."
+  ]
+}

@@ -2,7 +2,7 @@
 
 Codebasis: `0ecae1370f1a80d1a101249b5c932663d69be8af`. Stand: 2026-10-08.
 
-R09 ist in den fünf Defektblickwinkeln vollständig geprüft. W02 hat 70 vollständige Reviews für DA01 und DA02 zurückgegeben; die deklarierten Leseintervalle sind rechnerisch geprüft und 59 Rohmeldungen zu 40 Gruppen zusammengeführt. Drei B-Befunde und zwei A-Befunde sind jeweils doppelt bestätigt und in vier Fixpaketen. Der frühere Loopback-Kandidat bleibt nach zwei PLAUSIBEL-Urteilen C. Die übrigen Bereiche sind noch offen.
+R09, DA01, DA02 und DA03 haben vollständige Rückgaben aus fünf Defektblickwinkeln. Deklarierte Leseintervalle ersetzen keinen unabhängigen Nachweis vollständiger Werkzeuglektüre. Für R09/W02 sind nach Gegenprüfung 9 A- und 14 B-Befunde bestätigt; 19 Gruppen bleiben C. Noch kein Anwendungscode-Merge oder Deploy ist belegt. DA03 ergänzt 26 neue ungeprüfte Gruppen und sechs Verknüpfungen zu W02. Die weitere W03-Welle läuft.
 
 ## Aufnahmebedingungen
 
@@ -47,7 +47,7 @@ A01 erster Fixstand `3718481e9d58c94d1864012fd6c6d6acc55cb10c`: Gate BLOCK wegen
 
 ## Weitere kanonische W02-Kandidaten
 
-Die folgenden 22 Behauptungen sind ungeprüfte Vorschläge. Je zwei frische Skeptiker laufen in `wf_f9b737d9-fe8`. Ihre Urteile stehen noch aus; kein Fix ist freigegeben. Die vier bereits bestätigten Hauptbefunde stehen oben. Vollständige Szenarien, Reviewerbelege und die Zuordnung der 59 Roh-IDs zu 40 Gruppen sind in W02-KANDIDATEN.json erhalten. Modell- und Abdeckungsnachweis: W02-NACHWEIS.md.
+Die folgenden 22 Behauptungen waren die ursprünglichen Vorschläge. Ihre 44 unabhängigen Urteile sind inzwischen abgeschlossen. Astra hat die Modellfelder, Transcript-Hashes und die Übereinstimmung der letzten strukturierten Rückgabe mit dem Journal für sämtliche 44 Skeptiker geprüft: 1703 echte Sol-Datensätze, keine Abweichung. Die nachfolgende Tabelle erhält die ursprünglichen Vorschlagsklassen; maßgeblich ist die endgültige Einstufung im Abschnitt „W02: abgeschlossene Gegenprüfung“. Vollständige Ausgangsszenarien und Reviewerbelege stehen in W02-KANDIDATEN.json. Der Nachweisexport W02-GEGENPRUEFUNG-03.json ist nach dem Metadaten-Kontextabbruch vervollständigt und abgenommen: 22 echte Paare, 44 unveränderte Originalurteile, keine Platzhalter. Diese Unterbrechung betraf nicht die fertigen Skeptikerurteile.
 
 Fundorte in den Tabellen sind relativ zu `rust/crates/tb-dashboard-api/` und beziehen sich auf den festen Review-SHA.
 
@@ -94,6 +94,45 @@ Diese zwölf Gruppen ergänzen die beiden bereits dokumentierten Timeout-Szenari
 | W02-DA02-S004-errors-1 | `src/auth/session.rs:2045` | Verschlucktes DELETE-Versagen beim Logout lässt den alten Sitzungswert nach Datenbankerholung verwendbar. Gewünschtes Verhalten bei Speicherausfall gesondert entscheiden. |
 | W02-DA02-S004-resources-2 | `src/auth/session.rs:2115` | Ein Refresh wartet ohne wirksame PostgreSQL-Zeitgrenze auf einer Zeilensperre. Reale Grenzen zuerst belegen, keine produktive DB-Konfiguration ändern. |
 | W02-DA02-S005-resources-1 | `src/auth/session.rs:2618` | Sitzungs-Testfixtures behalten erzeugte Datenbankschemata. Aufräumstrategie als separaten Testinfrastruktur-Umbau behandeln. |
+
+## W02: abgeschlossene Gegenprüfung
+
+Quelle: fertiges Journal `wf_f9b737d9-fe8`, 22 Paare. Sieben Paare bestätigen A, elf bestätigen B mit jeweils eindeutig belegtem Soll; vier bleiben C. Zusammen mit den vier früher bestätigten W02-Gruppen und den 14 ursprünglichen C-Gruppen ergibt W02 9 A, 13 B und 18 C. Diese Zahlen bezeichnen Befunde, keine erledigten Fixes. Die spätere Umsetzung muss zusätzlich ohne Migration, Produktentscheidung oder Änderung korrekten Verhaltens möglich sein.
+
+| Kanonische ID | Endklasse und Urteile | Umsetzung |
+|---|---|---|
+| W02-DA02-S002-concurrency-1 | A, zweimal BESTÄTIGT | Separater Import-Race, überschneidet sich mit A01-Dateien; noch nicht beauftragt. |
+| W02-DA02-S004-concurrency-2 | A, zweimal BESTÄTIGT | Mögliche Abdeckung durch A01-Cachegenerationen gezielt prüfen; noch nicht als erledigt gewertet. |
+| W02-DA02-S004-correctness-1 | A, zweimal BESTÄTIGT | A02, Eigentümerprüfung in Affiliate; Fix und Kritik laufen. |
+| W02-DA02-S004-security-4 | A, zweimal BESTÄTIGT | Browserbindung bei Affiliate-OAuth; wartet auf getrennte Schreibrechte zu A01/A02. |
+| W02-DA02-S005-correctness-1 | A, zweimal BESTÄTIGT | Historische Analytics-Identität, Umsetzung noch offen. |
+| W02-DA02-S005-security-1 | A, zweimal BESTÄTIGT | Historische KI-Analyseidentität, Umsetzung noch offen; ai-coach bleibt ausgeschlossen. |
+| W02-DA01-S004-correctness-1 | B, zweimal BESTÄTIGT und Soll belegt | B04, Routervertrag. |
+| W02-DA01-S004-errors-1 | B, zweimal BESTÄTIGT und Soll belegt | B05, übergroßer Ablaufwert. |
+| W02-DA01-S004-errors-2 | B, zweimal BESTÄTIGT und Soll belegt | B05, übersprungene Verbindung nicht als erneuert zählen. |
+| W02-DA01-S004-security-1 | B, zweimal BESTÄTIGT und Soll belegt | Dauerhafte Partner-Link-Sitzung im CSRF-Pfad; noch offen. |
+| W02-DA01-S004-security-2 | B, zweimal BESTÄTIGT und Soll belegt | B04, interne Zugangsdaten korrekt verdrahten. |
+| W02-DA01-S005-correctness-1 | B, zweimal BESTÄTIGT und Soll belegt | B08, Begrenzung großer Query-Ganzzahlen. |
+| W02-DA01-S005-errors-1 | B, zweimal BESTÄTIGT und Soll belegt | B06, 16-MiB-Antwortgrenze. |
+| W02-DA01-S007-correctness-1 | B, zweimal BESTÄTIGT und Soll belegt | B07, Plan-Testfixture. |
+| W02-DA02-S001-correctness-2 | B, zweimal BESTÄTIGT und Soll belegt | B09, zwei IDOR-Testfixtures; keine produktive IDOR-Lücke behauptet. |
+| W02-DA02-S001-errors-2 | C, BESTÄTIGT-C ohne Soll und BESTÄTIGT-B mit Soll | Keine Fixfreigabe. Unterschiedlicher Nachweis des beabsichtigten Setupvertrags bleibt offen. |
+| W02-DA02-S003-resources-1 | C, zweimal PLAUSIBEL, Soll unbelegt | Datenbankwartezeit nur dokumentiert, keine neue Zeitregel. |
+| W02-DA02-S003-resources-2 | C, zweimal BESTÄTIGT-C, Soll unbelegt | Aufbewahrungsregel nur dokumentiert, kein Cleanup-Fix. |
+| W02-DA02-S004-concurrency-3 | B, zweimal BESTÄTIGT und Soll belegt | Fingerprint-Refresh-Race, wegen Überschneidung mit A01 noch offen. |
+| W02-DA02-S004-correctness-4 | A, zweimal BESTÄTIGT-A | Partner-Link-Logout; beide Skeptiker korrigieren den ursprünglichen B-Vorschlag zu A. Noch offen. |
+| W02-DA02-S004-resources-1 | C, zweimal PLAUSIBEL-C, Soll unbelegt | Sitzungs-/State-Aufbewahrung nur dokumentiert. |
+| W02-DA02-S005-errors-1 | B, zweimal BESTÄTIGT und Soll belegt | Aktiviertes Auth-Testsetup; wegen Überschneidung mit A01 noch offen. |
+
+Die vier gesperrten Paare erhalten keine dritte Gegenprüfung, um fehlende Freigabe durch ein günstigeres Urteil zu ersetzen. Kein WIDERLEGT-Urteil in dieser Gruppe. Der Export prüft explizite Werkzeugeingaben auf fremde Befundquellen, beweist aber keine vollständige Unabhängigkeit gegenüber indirekt eingeblendeten Inhalten. Vollständige Originalurteile bleiben im nativen Journal erhalten.
+
+A01 Runde 2 ist trotz Gate-ALLOW durch den frischen Kritiker blockiert: verbleibender Login-Aufrufer und sechs Testregressionen. Frische Runde 3 läuft. B03 Runde 1 ist ebenfalls durch Gate und Kritiker blockiert; Runde 2 läuft. Details und Modellnachweise in REVIEW.md.
+
+## W03: Loginbereich DA03
+
+30 fertige Reviews aus sechs Abschnitten und fünf Linsen, 37 Rohmeldungen. Konsolidiert zu 32 Gruppen: sechs Verknüpfungen zu bestehenden W02-Claims sowie 26 neue Gruppen, davon sechs A-, 13 B- und sieben C-Vorschläge. Die 19 neuen A/B-Vorschläge sind keine bestätigten Befunde; je zwei unabhängige Skeptiker laufen in `wf_97f7401d-6c8`. Die sieben neuen C-Gruppen bleiben dokumentiert. Vorhandene W02-C-Sperren werden durch erneute Reviewerbehauptungen nicht aufgehoben.
+
+Verlustfreies Register einschließlich Szenarien, Orte, Belege und ursprünglicher IDs: W03-DA03-KANDIDATEN.json. Zusammenfassung und Modellabnahme: W03-DA03-NACHWEIS.md. Astra prüfte die 30 Reviewertranscripts erneut: 1393 echte Sol-Datensätze, passende Hashes und identische letzte StructuredOutputs, keine Abweichung. 37 Roh-IDs sind genau einmal zugeordnet. Die weiteren acht W03-Bereiche werden dadurch nicht als abgeschlossen gewertet.
 
 ## Grenzen
 

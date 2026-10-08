@@ -2,7 +2,7 @@
 
 Stand: 2026-10-08. Codebasis: `0ecae1370f1a80d1a101249b5c932663d69be8af`.
 
-Drei Bereiche von 108 sind bewertet und unabhängig gegengeprüft. Eine Gesamtnote und eine bereichsübergreifende Rangfolge wären derzeit unbelegt. Alle Empfehlungen sind Klasse C und werden in diesem Auftrag nicht umgesetzt. Qualitätsnoten ersetzen keine Sicherheits- oder Fixfreigabe.
+Zwölf Bereiche von 108 sind bewertet und unabhängig gegengeprüft. Eine Gesamtnote und eine bereichsübergreifende Rangfolge wären derzeit unbelegt. Alle Empfehlungen sind Klasse C und werden in diesem Auftrag nicht umgesetzt. Qualitätsnoten ersetzen keine Sicherheits- oder Fixfreigabe. Die neun W03-Qualitätsbewertungen sind abgeschlossen; ihre Defektreviews laufen getrennt weiter.
 
 Skala: 1 mangelhaft, 2 schwach, 3 solide mit deutlichen Grenzen, 4 gut, 5 sehr gut.
 
@@ -67,6 +67,22 @@ C-Empfehlungen: Test-Voraussetzungen und echte Einrichtungsfehler unterscheidbar
 
 Gezielte Produktionsausschnitte und Stichproben im Testcode, keine vollständige erneute Lektüre aller zugeordneten Quellen durch den Kritiker. Kein Testlauf, keine gemessene Coverage und keine Live-Konfigurationsprüfung. Reviewer `a49d3c978a85ec7f3`, Kritiker `a69cce616175f3ffb`, Workflow `wf_67858741-57f`, Urteil `BESTÄTIGT`. Modellnachweise in MODELLE-W02.md.
 
+## W03: neun weitere Bereiche
+
+Der Workflow `wf_461b0370-4c3` ist abgeschlossen. Alle 18 Modellnachweise sind geprüft; 957 echte Sol-Datensätze, Einzelhashes in MODELLE-W03-QUALITAET.md. Vollständige korrigierte Kurzbewertungen und C-Empfehlungen stehen in QUALITAET-W03.md. Zielgerichtete statische Lektüre, keine grünen Testläufe oder Live-Nachweise.
+
+| Bereich | Note | Kritiker | Begründung und exemplarischer Beleg |
+|---|---:|---|---|
+| DA03, Anmeldungen | 3/5 | BESTÄTIGT | Injizierbare Anbieter und atomarer State-Verbrauch; konzentrierter Callback und uneinheitliche Testvoraussetzungen. `rust/crates/tb-dashboard-api/src/handlers/auth_login.rs:199-453,1346-1365`. |
+| DA04, Admin-Aktionen | 3/5 | BESTÄTIGT | Gemeinsame Fachmutationen und typisierter Betriebseditor; kopierte Dienstkonfiguration und veraltete Schutztexte. `rust/crates/tb-dashboard-api/src/handlers/admin_streamers.rs:525,708,780`. |
+| DA05, Diagnose | 3/5 | KORRIGIERT | Gemeinsame Lader und begrenzte SQL-Ausführung; dreifacher Fingerprint-Vertrag. Vorhandene Konfigurations- und Testbausteine anerkannt. `rust/crates/tb-dashboard-api/src/handlers/system/health.rs:57-109`. |
+| DA06, Billing/Stripe | 3/5 | BESTÄTIGT | Gemeinsamer Transport und transaktionaler Webhook; widersprüchliche Katalogannahmen und unwirksame einzelne Testzweige. `rust/crates/tb-dashboard-api/src/handlers/billing_stripe_sync.rs:123-125,193-200,335-359`. |
+| DA07, Affiliate/Profile | 3/5 | KORRIGIERT | Explizite Sichtbarkeits- und Revisionsregeln; gemischte HTTP-/Persistenzlogik. Vorhandene isolierte Tests und Helix-Testzugänge berücksichtigt. `rust/crates/tb-dashboard-api/src/handlers/partner_profiles.rs:659-675,834-842`. |
+| DA15, Formulare/Wettbewerb | 4/5 | BESTÄTIGT | Monatssperre, Outbox, Feedback-Idempotenz und substanzielle DB-Tests; Lücken der vollständigen Wettbewerbs-Handlerkette. `rust/crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs:421-477,605-663`. |
+| DA17, Plattformen/Overlays | 3/5 | BESTÄTIGT | Klare OAuth-Testnähte und bestehende Lifecycle-Bausteine; globaler Caster-Hub und dünnere Integrationsprüfung. `rust/crates/tb-dashboard-api/src/handlers/caster_overlay.rs:399,610,968`. |
+| MO01, EventSub | 3/5 | BESTÄTIGT | Dauerhafte Inbox und getrennte Annahmeschichten; breite Subscription-Orchestrierung und begrenzte Rückmeldungen einiger Hooks. `rust/crates/tb-monitoring/src/inbox_store/mod.rs:119,214,300`. |
+| IA01, interner API-Kern | 3/5 | KORRIGIERT | Explizite Ports und zentrale Guards; doppelte Partner-Persistenz. Vorhandener Startsnapshot und Routertests begrenzen die Kritik. `rust/crates/tb-internal-api/src/streamer_lifecycle.rs:201,256`. |
+
 ## Noch offen
 
-105 Bereichsbewertungen samt unabhängigen Qualitätskritiken; danach Gesamteinschätzung und die fünf Empfehlungen mit dem größten bereichsübergreifenden Nutzen.
+96 Bereichsbewertungen samt unabhängigen Qualitätskritiken; danach Gesamteinschätzung und die fünf Empfehlungen mit dem größten bereichsübergreifenden Nutzen.

@@ -26,7 +26,17 @@ Die abgeschlossenen Transcripts wurden vollständig nach `message.model` ausgewe
 
 W02 ist abgeschlossen: 70 erfolgreiche aktuelle Reviewer, 2694 echte Sol-Modellnachrichten. Die konsolidierte Liste mit 70 Transcript-Hashes steht in W02-KANDIDATEN.json unter model_proofs.reviews; W02-NACHWEIS.md beschreibt die Abdeckung und Grenzen. Astra wiederholte die Hash- und Modellfeldprüfung ohne Abweichung. Die obige Tabelle ist eine ergänzende Auswahl einschließlich Skeptikern und Qualitätsrollen, keine Hochrechnung auf 70 Agents.
 
-Konsolidierer `a1e800f1adc3bca82`, Workflow `wf_83c5b894-715`: 57 Sol-Datensätze, SHA256 `d784b90ecac5fe8f124d1a1fcc677de59635362fbff93f923c7bd0ea24237a5f`, vollständig durch Astra geprüft. 22 weitere kanonische A/B-Kandidaten werden in `wf_f9b737d9-fe8` gegengeprüft; Modellbelege dieser noch laufenden Agents folgen erst nach deren Abschluss.
+Konsolidierer `a1e800f1adc3bca82`, Workflow `wf_83c5b894-715`: 57 Sol-Datensätze, SHA256 `d784b90ecac5fe8f124d1a1fcc677de59635362fbff93f923c7bd0ea24237a5f`, vollständig durch Astra geprüft.
+
+## Weitere 44 Skeptiker
+
+`wf_f9b737d9-fe8` ist abgeschlossen. 22 kanonische Claims, je zwei frische Sol-Skeptiker, 1703 echte Modell-Datensätze und 1025 verschiedene Message-IDs innerhalb der Transcripts. Keine synthetischen oder fremden Modelldatensätze. Astra prüfte sämtliche 44 Transcript-Hashes, Modellfelder und die exakte Übereinstimmung des letzten StructuredOutput mit dem jeweiligen Journalresultat erneut; keine Abweichung.
+
+Die vollständigen Einzelbelege stehen in W02-GEGENPRUEFUNG-03.json unter model_proofs.transcripts. results enthält 22 echte Paare und die 44 unveränderten Urteile samt Herkunft. Artefakt-SHA256 bei Abnahme: `3fff60d3d22e7af33e929c2f5aedb3a11d1ffc44daf327d981a0a7b2006bee7f`. Astra bestätigte zusätzlich 22 eindeutige IDs und exakte JSON-Gleichheit aller eingebetteten Urteile zum Originaljournal.
+
+Der erste Exportagent `ac6f7abe268912f3f` in wf_54f7b776-e4b brach im Kontextlimit ab; sein Teilstand mit zehn Platzhaltern wurde nicht abgenommen. Frischer Metadatenagent `af3a6b9cdc02d658a` in wf_670191de-48b ergänzte diese zehn Paare und validierte den Datensatz. 34 echte Sol-Datensätze, SHA256 `2210024ef83808e3c43962e29d7474c6f2f9319fe5067abb88fcee86520be16e`, durch Astra geprüft. Keine erneute Verhaltensprüfung oder Änderung eines Urteils.
+
+Sieben zusätzliche A-Paare, elf B-Paare mit belegtem Soll, vier C-Sperren. Die begrenzte Prüfung expliziter Werkzeugeingaben fand keinen benannten Zugriff auf fremde Befunddateien, beweist aber keine vollständige Unabhängigkeit von indirekten Inhalten. Diese Grenze ist im JSON erhalten. Modelle/Hashes sind Transcript-Belege, keine darüber hinausgehende Anbieterattestierung.
 
 ## Abgrenzung der Wiederaufnahmen
 

@@ -14,7 +14,9 @@ Der explizite Sol-Gate endete mit Exit 1:
 
 Fundort: `rust/crates/tb-dashboard-api/src/auth/level.rs:444` am ersten Fixstand. Die direkte zentrale Antwort `valid=false` wird zwar jetzt abgewiesen, ihre lokale Sitzungskopie bleibt jedoch erhalten. Bei einem späteren technischen Brokerausfall erhält derselbe bereits abgelehnte Sitzungswert über den lokalen Fallback wieder Adminrechte. Damit ist A01b nicht vollständig beseitigt.
 
-Der frische Kritiker der ersten Runde liest ausschließlich den festen ersten Commit und kann noch weitere belegte Mängel liefern. Seine laufende Read-only-Prüfung blockiert deine Korrektur des bereits belegten Gate-Befunds nicht. Keine Dateien oder Referenzen des Kritikers ändern; endgültige Kritik dieser zweiten Runde erfolgt anschließend neu.
+Der frische Kritiker der ersten Runde ist inzwischen mit BLOCK beendet. Er bestätigt den beschriebenen Sicherheitsrestfehler und belegt zusätzlich eine neue Testregression: Die fünf neu ergänzten Tests rufen auf `maybe_pool=None` unconditional expect auf, obwohl ohne `TB_TEST_REQUIRE_DB=1` der bestehende Testvertrag ausdrücklich keinen Pool liefert. Fundorte am ersten Fixstand: `auth/session.rs:3523-3525` und `auth/discord_admin_login.rs:1502-1504`. Den bisherigen Opt-in-Vertrag erhalten; bei ausdrücklich aktivierten Datenbanktests darf fehlgeschlagenes Setup weiter hart scheitern. Keine fremden Testfixtures oder allgemeine Testpolitik ändern.
+
+Kritiker `aeb74dc60de92176d`: 52 echte Sol-Datensätze, Transcript-SHA256 `494c133778701fe08f8b14f8d9918300d82f9643c9eb1117ff89c8ab11374718`, durch Astra geprüft. Seine Abgabe erfolgt nach Start dieser zweiten Runde; eine spätere Kenntnisnahme durch den laufenden Fixer wird nicht unterstellt. Der neue Kritiker muss beide Punkte am endgültigen zweiten Commit prüfen. Ein noch offener Punkt erhält anschließend eine weitere frische Fixrunde.
 
 ## Minimales Ziel
 

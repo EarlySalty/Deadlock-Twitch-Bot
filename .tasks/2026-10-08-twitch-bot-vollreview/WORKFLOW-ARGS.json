@@ -13,6 +13,13 @@
       "line": 444
     }
   ],
+  "wf_3e7d57bd-7ac": [
+    {"claims": ["W02-DA02-S004-correctness-1"], "id": "A02", "worktree": "/home/nathanael/.worktrees/tb-vollreview-affiliate-eigentuemer"},
+    {"claims": ["W02-DA01-S004-correctness-1", "W02-DA01-S004-security-2"], "id": "B04", "worktree": "/home/nathanael/.worktrees/tb-vollreview-router-vertraege"},
+    {"claims": ["W02-DA01-S004-errors-1", "W02-DA01-S004-errors-2"], "id": "B05", "worktree": "/home/nathanael/.worktrees/tb-vollreview-plattform-refresh"},
+    {"claims": ["W02-DA01-S005-errors-1"], "id": "B06", "worktree": "/home/nathanael/.worktrees/tb-vollreview-proxy-antwort"},
+    {"claims": ["W02-DA01-S007-correctness-1"], "id": "B07", "worktree": "/home/nathanael/.worktrees/tb-vollreview-plan-fixture"}
+  ],
   "wf_f9b737d9-fe8": [
     {"claim": "A concurrent central admin session import can restore an admin session after successful logout.", "file": "rust/crates/tb-dashboard-api/src/auth/level.rs", "id": "W02-DA02-S002-concurrency-1", "line": 427},
     {"claim": "An in-flight cache fill can restore authenticated access after logout.", "file": "rust/crates/tb-dashboard-api/src/auth/session.rs", "id": "W02-DA02-S004-concurrency-2", "line": 1857},
@@ -37,6 +44,40 @@
     {"claim": "Expired dashboard sessions and abandoned OAuth states are not reclaimed from the database.", "file": "rust/crates/tb-dashboard-api/src/auth/session.rs", "id": "W02-DA02-S004-resources-1", "line": 2007},
     {"claim": "Enabled auth-session integration tests silently pass when database setup fails.", "file": "rust/crates/tb-dashboard-api/src/auth/session.rs", "id": "W02-DA02-S005-errors-1", "line": 2617}
   ],
+  "wf_b6076a3e-97b": [
+    {"id": "A02", "worktree": "/home/nathanael/.worktrees/tb-vollreview-affiliate-eigentuemer"},
+    {"id": "B05", "worktree": "/home/nathanael/.worktrees/tb-vollreview-plattform-refresh"},
+    {"id": "B02", "worktree": "/home/nathanael/.worktrees/tb-vollreview-obs-start"}
+  ],
+  "wf_f3187078-c1c": [
+    {"claim": "W02-DA01-S005-correctness-1", "id": "B08", "worktree": "/home/nathanael/.worktrees/tb-vollreview-query-grenzen"},
+    {"claim": "W02-DA02-S001-correctness-2", "id": "B09", "worktree": "/home/nathanael/.worktrees/tb-vollreview-idor-fixture"}
+  ],
+  "wf_97f7401d-6c8": [
+    {"claim": "Discord admin completion lets another browser redeem an OAuth identity using state_id alone.", "file": "rust/crates/tb-dashboard-api/src/auth/discord_admin_login.rs", "id": "W03-DA03-S001-security-1", "line": 512},
+    {"claim": "IPv6-Adressen werden beim Discord-Admin-Login abgeschnitten und verursachen eine Redirect-Schleife.", "file": "rust/crates/tb-dashboard-api/src/auth/discord_admin_login.rs", "id": "W03-DA03-S001-correctness-1", "line": 1029},
+    {"claim": "Steuerzeichen im Discord-Admin-Parameter next führen trotz gültiger Sitzung zu HTTP 500.", "file": "rust/crates/tb-dashboard-api/src/auth/discord_admin_login.rs", "id": "W03-DA03-S001-correctness-2", "line": 811},
+    {"claim": "Discord logout reports success after failed broker revocation, allowing the old admin cookie to restore the session.", "file": "rust/crates/tb-dashboard-api/src/auth/discord_admin_login.rs", "id": "W03-DA03-S001-errors-1", "line": 666},
+    {"claim": "Concurrent fingerprint requests can resurrect an admin session after completed logout.", "file": "rust/crates/tb-dashboard-api/src/auth/discord_admin_login.rs", "id": "W03-DA03-S001-concurrency-1", "line": 703},
+    {"claim": "The GET /twitch/auth/logout endpoint permits cross-site requests to invalidate dashboard sessions.", "file": "rust/crates/tb-dashboard-api/src/handlers/auth_login.rs", "id": "W03-DA03-S003-security-2", "line": 740},
+    {"claim": "Die OAuth-Konfiguration akzeptiert /twitch/auth/login/callback, obwohl dieser Callback nicht registriert ist.", "file": "rust/crates/tb-dashboard-api/src/handlers/auth_login.rs", "id": "W03-DA03-S003-correctness-1", "line": 911},
+    {"claim": "HTTP-URLs mit IPv6-Loopback [::1] werden beim Dashboard-OAuth fälschlich abgelehnt.", "file": "rust/crates/tb-dashboard-api/src/handlers/auth_login.rs", "id": "W03-DA03-S003-correctness-2", "line": 936},
+    {"claim": "The reviewer password login permits cross-site forms to overwrite the victim's dashboard session.", "file": "rust/crates/tb-dashboard-api/src/handlers/demo_login.rs", "id": "W03-DA03-S004-security-1", "line": 138},
+    {"claim": "Unauthenticated auth-status responses remain cacheable across session-cookie changes.", "file": "rust/crates/tb-dashboard-api/src/handlers/auth_status.rs", "id": "W03-DA03-S004-correctness-1", "line": 32},
+    {"claim": "Auth-status ignores an admin-mode cookie supplied in a later Cookie header.", "file": "rust/crates/tb-dashboard-api/src/handlers/auth_status.rs", "id": "W03-DA03-S004-correctness-2", "line": 143},
+    {"claim": "Discord linking replaces an explicit next=/twitch/dashboard with /twitch/verwaltung.", "file": "rust/crates/tb-dashboard-api/src/handlers/discord_link.rs", "id": "W03-DA03-S004-correctness-3", "line": 350},
+    {"claim": "Concurrent Discord-link callbacks swapping two linked accounts can deadlock and discard one completed link.", "file": "rust/crates/tb-dashboard-api/src/handlers/discord_link.rs", "id": "W03-DA03-S004-concurrency-1", "line": 236},
+    {"claim": "Concurrent unauthenticated auth-status requests can panic in overflow-checked builds because cache timestamps are sampled before locking.", "file": "rust/crates/tb-dashboard-api/src/handlers/auth_status.rs", "id": "W03-DA03-S004-concurrency-2", "line": 161},
+    {"claim": "Partner token login accepts cross-site POSTs that overwrite the victim's durable partner session.", "file": "rust/crates/tb-dashboard-api/src/handlers/partner_login.rs", "id": "W03-DA03-S005-security-1", "line": 219},
+    {"claim": "Changing the Steam default can reactivate an association already removed by a concurrent unlink.", "file": "rust/crates/tb-dashboard-api/src/handlers/player_connect.rs", "id": "W03-DA03-S005-concurrency-1", "line": 489},
+    {"claim": "Concurrent removal of two Steam accounts can retain a deleted account as the enabled default.", "file": "rust/crates/tb-dashboard-api/src/handlers/player_connect.rs", "id": "W03-DA03-S005-concurrency-2", "line": 527},
+    {"claim": "Unlink can report success while retaining a Steam account inserted by a concurrent callback.", "file": "rust/crates/tb-dashboard-api/src/handlers/player_connect.rs", "id": "W03-DA03-S005-concurrency-3", "line": 563},
+    {"claim": "Steam completion and primary selection acquire row locks in opposite orders and can deadlock.", "file": "rust/crates/tb-chat/src/player_links.rs", "id": "W03-DA03-S006-concurrency-4", "line": 160}
+  ],
+  "wf_e3b6f95d-94c": {
+    "areas": ["R01", "R02", "R03", "R04", "R05", "R06", "R07", "R08", "R10", "R11", "R12", "R13", "R14", "R15", "R16", "R17", "R18", "R19", "R20", "R21", "K01", "DA08", "DA09", "DA10", "DA11", "DA12", "DA13", "DA14", "DA16", "DA18", "DA19", "AN01", "AN02", "AN03", "AN04", "AN05", "AN06", "AN07", "AN08", "CH01", "CH02", "CH03", "CH04", "CH05", "CH06", "CH07", "CH08", "RA01", "RA02", "RA03", "RA04", "SM01", "SM02", "SM03", "SM04", "MO02", "MO03", "MO04", "EN01", "EN02", "EN03", "IA02", "IA03", "IA04", "BO01", "BO02", "BO03", "BO04", "BO05", "BO06", "BI01", "BI02", "BI03", "BI04", "FE01", "FE02", "FE03", "FE04", "FE05", "FE06", "FE07", "FE08", "FE09", "FE10", "AD01", "AD02", "AD03", "WE01", "WE02", "WE03", "DB01", "DB02", "OP01", "OP02", "TO01", "BU01"],
+    "wave": "Q04"
+  },
   "wf_461b0370-4c3": {
     "areas": ["DA03", "DA04", "DA05", "DA06", "DA07", "DA15", "DA17", "MO01", "IA01"],
     "wave": "W03"
