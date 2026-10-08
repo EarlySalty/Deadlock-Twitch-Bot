@@ -41,7 +41,6 @@ use tb_social_media::clip_manager::{
     batch_upload_all_new, get_clips_for_dashboard, mark_clip_uploaded, register_manual_upload,
     ManualUploadError,
 };
-use tb_social_media::clip_queue::queue_upload;
 use tb_social_media::clip_templates::{
     apply_template_to_clip, create_streamer_template, get_global_templates, get_last_hashtags,
     get_streamer_templates, save_last_hashtags, GlobalTemplate, StreamerTemplate,
@@ -1331,17 +1330,26 @@ pub async fn queue_upload_handler(
             return response;
         }
     }
+    let schedule = match (body.schedule.as_deref(), scheduled_at.as_deref()) {
+        (Some("now"), Some(value)) => tb_social_media::clip_queue::UploadSchedule::Replace(value),
+        (Some(timestamp), Some(value)) if DateTime::parse_from_rfc3339(timestamp).is_ok() => {
+            tb_social_media::clip_queue::UploadSchedule::Replace(value)
+        }
+        _ => tb_social_media::clip_queue::UploadSchedule::Preserve(scheduled_at.as_deref()),
+    };
     let mut queued: Vec<Value> = Vec::new();
     for platform in &platforms {
-        match queue_upload(
+        match tb_social_media::clip_queue::queue_upload_with_schedule(
             &pool,
-            clip_id,
-            platform,
-            body.title.as_deref(),
-            body.description.as_deref(),
-            body.hashtags.as_deref(),
-            scheduled_at.as_deref(),
-            body.priority,
+            tb_social_media::clip_queue::QueueUploadRequest {
+                clip_db_id: clip_id,
+                platform,
+                title: body.title.as_deref(),
+                description: body.description.as_deref(),
+                hashtags: body.hashtags.as_deref(),
+                schedule,
+                priority: body.priority,
+            },
         )
         .await
         {
@@ -1979,7 +1987,8 @@ async fn load_upload_queue_info(pool: &PgPool, clip_ids: &[i64]) -> UploadQueueI
     }
     let rows = sqlx::query(
         "SELECT DISTINCT ON (clip_id, platform) clip_id, platform, scheduled_at, last_error, status, youtube_visibility, \
-         to_jsonb(twitch_clips_upload_queue)->>'tiktok_publish_status' AS publish_status \
+         to_jsonb(twitch_clips_upload_queue)->>'tiktok_publish_status' AS publish_status, \
+         to_jsonb(twitch_clips_upload_queue)->'tiktok_post_options' AS tiktok_options \
          FROM twitch_clips_upload_queue WHERE clip_id = ANY($1) \
          ORDER BY clip_id, platform, CASE WHEN platform = 'tiktok' AND status IN ('inbox', 'inbox_pending') THEN 3 \
              WHEN platform = 'tiktok' AND status = 'completed' THEN 2 ELSE 0 END DESC, id DESC",
@@ -2007,10 +2016,28 @@ async fn load_upload_queue_info(pool: &PgPool, clip_ids: &[i64]) -> UploadQueueI
             .try_get::<Option<DateTime<Utc>>, _>("scheduled_at")
             .unwrap_or(None)
             .map(|ts| ts.to_rfc3339());
-        let last_error = r
+        let mut status = r.try_get::<Option<String>, _>("status").unwrap_or(None);
+        let mut last_error = r
             .try_get::<Option<String>, _>("last_error")
             .unwrap_or(None)
             .filter(|s| !s.trim().is_empty());
+        let options = r
+            .try_get::<Option<Value>, _>("tiktok_options")
+            .unwrap_or(None);
+        if platform == "tiktok"
+            && matches!(
+                status.as_deref(),
+                Some("pending" | "failed" | "waiting_connection")
+            )
+            && !tb_social_media::clip_queue::tiktok_choice_is_complete(options.as_ref())
+        {
+            status = Some("waiting_tiktok_approval".into());
+        }
+        if status.as_deref() == Some("waiting_tiktok_approval") {
+            last_error = Some("Öffne die TikTok-Freigabe und wähle die Veröffentlichungseinstellungen. Bis dahin wird der Clip nicht veröffentlicht.".into());
+        } else if status.as_deref() == Some("waiting_schedule") {
+            last_error = Some("Der bisherige Termin ist verstrichen oder fehlt. Plane TikTok erneut ein, damit der Clip einen neuen Termin bekommt.".into());
+        }
         info.entry(clip_id).or_default().insert(
             platform.trim().to_lowercase(),
             UploadQueueEntry {
@@ -2019,7 +2046,7 @@ async fn load_upload_queue_info(pool: &PgPool, clip_ids: &[i64]) -> UploadQueueI
                     .unwrap_or(None),
                 scheduled_at,
                 last_error,
-                status: r.try_get::<Option<String>, _>("status").unwrap_or(None),
+                status,
                 publish_status: r
                     .try_get::<Option<String>, _>("publish_status")
                     .unwrap_or(None),
@@ -4028,7 +4055,16 @@ pub async fn preview_request_handler(
         )
             .into_response();
     }
-    Json(json!({ "clip_db_id": clip_db_id, "status": "pending" })).into_response()
+    let Some(preview) = get_preview(&pool, child).await else {
+        return clip_load_failed();
+    };
+    Json(json!({
+        "clip_db_id": clip_db_id,
+        "status": preview.status,
+        "error": preview.error,
+        "ready": preview.status.as_deref() == Some(PREVIEW_READY),
+    }))
+    .into_response()
 }
 
 /// `GET /social-media/api/admin/clips/:clip_db_id/preview` — Status des
@@ -4149,6 +4185,7 @@ fn serve_mp4_range(bytes: Vec<u8>, range: Option<&str>) -> Response {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+    use tb_social_media::clip_queue::queue_upload;
 
     #[test]
     fn form_submission_response_maps_all_outcomes() {
@@ -5470,7 +5507,22 @@ mod tests {
             .unwrap();
         let rejected: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, tiktok_publish_id, tiktok_publish_status, tiktok_post_options) VALUES ($1, 'tiktok', 'failed', 'old-operation', 'FAILED', $2) RETURNING id")
             .bind(clip).bind(&old).fetch_one(&pool).await.unwrap();
-        let corrected = json!({"caption": "Korrigiert", "privacy_level": "SELF_ONLY"});
+        let corrected = json!({
+            "caption": "Korrigiert",
+            "privacy_level": "SELF_ONLY",
+            "allow_comment": false,
+            "allow_duet": false,
+            "allow_stitch": false,
+            "commercial_content": false,
+            "brand_organic_toggle": false,
+            "brand_content_toggle": false,
+            "consent": true,
+            "creator_username": "nani",
+            "credential_id": 1,
+            "platform_user_id": "fixture-tiktok-user",
+            "approved_video_sha256": "fixture-approved-video",
+            "video_path": "/fixture/approved-preview.mp4",
+        });
         tiktok_direct::persist_choice(&pool, clip, corrected.clone())
             .await
             .unwrap();
@@ -7467,10 +7519,8 @@ mod tests {
         assert!(detail["scheduled_at"]["tiktok"].is_null());
         assert!(detail["scheduled_at"]["instagram"].is_null());
         assert!(detail["upload_errors"]["youtube"].is_null());
-        assert_eq!(
-            detail["upload_errors"]["tiktok"],
-            "quota exceeded: daily limit"
-        );
+        assert_eq!(detail["upload_states"]["tiktok"], "waiting_tiktok_approval");
+        assert!(detail["upload_errors"]["tiktok"].as_str().is_some());
         assert!(detail["upload_errors"]["instagram"].is_null());
 
         // Die Liste liefert dieselben Felder (eine Abfrage fuer die ganze Seite).
@@ -7491,9 +7541,10 @@ mod tests {
         .await;
         let item = &liste["items"][0];
         assert_eq!(item["scheduled_at"]["youtube"], "2026-08-24T18:00:00+00:00");
+        assert_eq!(item["upload_states"]["tiktok"], "waiting_tiktok_approval");
         assert_eq!(
             item["upload_errors"]["tiktok"],
-            "quota exceeded: daily limit"
+            detail["upload_errors"]["tiktok"]
         );
 
         // Ein Clip ganz ohne Queue-Zeilen bekommt drei ausdrueckliche Nullwerte.

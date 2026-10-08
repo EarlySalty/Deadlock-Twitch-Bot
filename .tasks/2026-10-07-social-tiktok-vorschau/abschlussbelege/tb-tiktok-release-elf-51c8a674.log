@@ -1,0 +1,48 @@
+
+File: /home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/rust/target/release/tb-bot
+
+String dump of section '.twitch_build':
+  [     0]  51c8a674a371d0e623687940e6b8ca3492f96c92
+
+
+File: /home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/rust/target/release/tb-dashboard
+
+String dump of section '.twitch_build':
+  [     0]  51c8a674a371d0e623687940e6b8ca3492f96c92
+
+
+File: /home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/rust/target/release/tb-stream-audit
+
+String dump of section '.twitch_build':
+  [     0]  51c8a674a371d0e623687940e6b8ca3492f96c92
+
+
+File: /home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/rust/target/release/tb-config-check
+
+String dump of section '.twitch_build':
+  [     0]  51c8a674a371d0e623687940e6b8ca3492f96c92
+
+
+File: /home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/rust/target/release/tb-llm-usage-recover
+
+String dump of section '.twitch_build':
+  [     0]  51c8a674a371d0e623687940e6b8ca3492f96c92
+
+
+File: /home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/rust/target/release/tb-category-collector
+
+String dump of section '.twitch_build':
+  [     0]  51c8a674a371d0e623687940e6b8ca3492f96c92
+
+
+File: /home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/rust/target/release/tb-twitch-watchdog
+
+String dump of section '.twitch_build':
+  [     0]  51c8a674a371d0e623687940e6b8ca3492f96c92
+
+
+File: /home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/rust/target/release/clip_context_learn
+
+String dump of section '.twitch_build':
+  [     0]  51c8a674a371d0e623687940e6b8ca3492f96c92
+

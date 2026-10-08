@@ -1,0 +1,12 @@
+BEGIN
+SET
+{"id": 124767, "status": "approved", "preview_status": null, "uploaded_tiktok": false, "has_preview_path": false, "uploaded_youtube": false, "has_preview_error": false, "has_tiktok_options": false}
+{"id": 124768, "status": "approved", "preview_status": "ready", "uploaded_tiktok": false, "has_preview_path": true, "uploaded_youtube": true, "has_preview_error": false, "has_tiktok_options": false}
+{"id": 5, "status": "completed", "attempts": 0, "platform": "youtube", "completed_at": "2026-10-07T16:02:01.465486+00:00", "scheduled_at": "2026-10-07T16:00:00+00:00", "has_tiktok_options": false}
+{"id": 6, "status": "failed", "attempts": 1, "platform": "tiktok", "completed_at": null, "scheduled_at": "2026-10-07T16:00:00+00:00", "has_tiktok_options": false}
+{"id": 7, "status": "pending", "attempts": 0, "platform": "youtube", "completed_at": null, "scheduled_at": "2026-10-08T16:00:00+00:00", "has_tiktok_options": false}
+{"id": 8, "status": "pending", "attempts": 0, "platform": "tiktok", "completed_at": null, "scheduled_at": "2026-10-08T16:00:00+00:00", "has_tiktok_options": false}
+{"count": 4, "tiktok_without_options_status": "failed"}
+{"count": 26, "tiktok_without_options_status": "pending"}
+{"count": 2, "tiktok_without_options_status": "waiting_tiktok_approval"}
+COMMIT

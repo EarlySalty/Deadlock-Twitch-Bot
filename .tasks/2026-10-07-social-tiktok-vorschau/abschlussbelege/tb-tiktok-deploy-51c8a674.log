@@ -1,0 +1,14 @@
+Twitch-Release aktiviert: 51c8a674a371d0e623687940e6b8ca3492f96c92
+WARNING: password file "/dev/null" is not a plain file
+Contest-Peer-Konfiguration geprüft; Sicherung: /var/backups/twitch-contest-peer.bZu4xS0g
+WARNING: password file "/dev/null" is not a plain file
+WARNING: password file "/dev/null" is not a plain file
+BEGIN
+DO
+ROLLBACK
+WARNING: password file "/dev/null" is not a plain file
+WARNING: password file "/dev/null" is not a plain file
+WARNING: password file "/dev/null" is not a plain file
+Liveprüfung bestanden: Reload, rollenbegrenzter Peerzugang, Ablehnung und Rechte-Metadaten.
+Twitch-Deploy fertig: 51c8a674a371d0e623687940e6b8ca3492f96c92
+Neu gestartet: twitch-dashboard twitch-bot coaching-watch category-collector

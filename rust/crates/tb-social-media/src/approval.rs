@@ -775,7 +775,7 @@ pub async fn cancel_scheduled_uploads(
     .await?;
 
     let cancelled = sqlx::query(
-        "DELETE FROM twitch_clips_upload_queue WHERE clip_id = $1 AND status IN ('pending', 'waiting_connection')",
+        "DELETE FROM twitch_clips_upload_queue WHERE clip_id = $1 AND status IN ('pending', 'waiting_connection', 'waiting_tiktok_approval', 'waiting_schedule')",
     )
     .bind(i64::from(clip_db_id))
     .execute(&mut *tx)
@@ -846,7 +846,8 @@ async fn upload_already_exists(pool: &PgPool, clip_db_id: i32, platform: &str) -
     };
     let row: Option<(Option<bool>, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {column}, EXISTS(SELECT 1 FROM twitch_clips_upload_queue \
-         WHERE clip_id = $1 AND platform = $2 AND status <> 'failed') \
+         WHERE clip_id = $1 AND platform = $2 AND status <> 'failed' \
+           AND NOT (platform = 'tiktok' AND status = 'waiting_schedule')) \
          FROM twitch_clips_social_media WHERE id = $3 LIMIT 1"
     )))
     .bind(clip_db_id as i64)
@@ -957,6 +958,41 @@ mod tests {
         .await
         .unwrap();
         assert!(transcript.is_none());
+    }
+
+    #[tokio::test]
+    async fn tiktok_neuplanung_laesst_erfolgreiches_youtube_unveraendert() {
+        let Some(pool) = make_pool("t_sm_tiktok_replan_youtube").await else {
+            return;
+        };
+        zeitplan_tabellen(&pool).await;
+        let clip = seed_clip(&pool).await;
+        sqlx::query("UPDATE twitch_clips_social_media SET uploaded_youtube = TRUE WHERE id = $1")
+            .bind(clip)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, scheduled_at, completed_at) VALUES ($1, 'youtube', 'completed', NOW() - INTERVAL '1 day', NOW())")
+            .bind(clip).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, scheduled_at) VALUES ($1, 'tiktok', 'waiting_schedule', NOW() - INTERVAL '1 day')")
+            .bind(clip).execute(&pool).await.unwrap();
+        let youtube_before: (i32, String, String, String) = sqlx::query_as("SELECT id, status, scheduled_at::text, completed_at::text FROM twitch_clips_upload_queue WHERE clip_id = $1 AND platform = 'youtube'")
+            .bind(clip).fetch_one(&pool).await.unwrap();
+        handle_decision(
+            &pool,
+            clip,
+            "approve",
+            &["youtube".into(), "tiktok".into()],
+            Some("admin"),
+        )
+        .await
+        .unwrap();
+        let youtube_after: (i32, String, String, String) = sqlx::query_as("SELECT id, status, scheduled_at::text, completed_at::text FROM twitch_clips_upload_queue WHERE clip_id = $1 AND platform = 'youtube'")
+            .bind(clip).fetch_one(&pool).await.unwrap();
+        assert_eq!(youtube_before, youtube_after);
+        let tiktok: (i64, bool) = sqlx::query_as("SELECT COUNT(*), BOOL_AND(scheduled_at > NOW()) FROM twitch_clips_upload_queue WHERE clip_id = $1 AND platform = 'tiktok'")
+            .bind(clip).fetch_one(&pool).await.unwrap();
+        assert_eq!(tiktok, (1, true));
     }
 
     #[tokio::test]

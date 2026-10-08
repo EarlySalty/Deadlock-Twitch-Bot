@@ -15,7 +15,8 @@ export const QUEUE_FILTERS: Array<{ id: QueueStage; label: string }> = [
 export function queuedSlots(clip: SocialClipMitPosting): number {
   if (clip.status !== 'approved' && clip.status !== 'publishing') return 0;
   return Object.entries(clip.scheduled_at ?? {}).filter(
-    ([platform, time]) => Boolean(time) && !clip.platform_status[platform as SocialPlatform],
+    ([platform, time]) => Boolean(time) && !clip.platform_status[platform as SocialPlatform]
+      && !['waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.[platform as SocialPlatform] ?? ''),
   ).length;
 }
 
@@ -23,6 +24,8 @@ export function queueStage(clip: SocialClipMitPosting): Exclude<QueueStage, 'all
   if (clip.status === 'discarded' || clip.status === 'skipped' || clip.discarded_at)
     return 'archive';
   if (clip.status === 'published_all') return 'posted';
+  if (['waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.tiktok ?? ''))
+    return 'review';
   if (clip.status === 'failed' || clip.status === 'published_partial') return 'failed';
   if (clip.status === 'publishing' || queuedSlots(clip) > 0) return 'planned';
   if (clip.status === 'awaiting_approval') return 'review';

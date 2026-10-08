@@ -551,13 +551,19 @@ pub async fn set_clip_layout_override(
     let clip_db_id = clip_db_id.into();
     let payload = layout
         .map(|l| serde_json::to_string(&l.to_override_json()).unwrap_or_else(|_| "{}".to_string()));
-    sqlx::query!(
-        "UPDATE twitch_clips_social_media SET layout_override_json = $1::text::jsonb WHERE id = $2",
-        payload.as_deref(),
-        clip_db_id
+    let mut tx = pool.begin().await?;
+    let changed = sqlx::query(
+        "UPDATE twitch_clips_social_media SET layout_override_json = $1::text::jsonb WHERE id = $2 AND layout_override_json IS DISTINCT FROM $1::text::jsonb",
     )
-    .execute(pool)
-    .await?;
+    .bind(payload.as_deref())
+    .bind(clip_db_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if changed > 0 {
+        crate::preview::invalidate_preview(&mut tx, clip_db_id).await?;
+    }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -869,7 +875,8 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, twitch_user_id TEXT DEFAULT '42', streamer_login TEXT, layout_override_json JSONB)",
+            "CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, twitch_user_id TEXT DEFAULT '42', streamer_login TEXT, layout_override_json JSONB, preview_status TEXT, preview_path TEXT, preview_error TEXT, preview_updated_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_upload_queue (clip_id BIGINT, platform TEXT, status TEXT, last_error TEXT, tiktok_publish_id TEXT)",
             "CREATE TABLE social_media_streamer_layout (twitch_user_id TEXT DEFAULT '42', streamer_login TEXT PRIMARY KEY, layout_json JSONB NOT NULL, cam_enabled BOOLEAN NOT NULL DEFAULT TRUE, mode TEXT NOT NULL DEFAULT 'pip', updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_by TEXT)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
