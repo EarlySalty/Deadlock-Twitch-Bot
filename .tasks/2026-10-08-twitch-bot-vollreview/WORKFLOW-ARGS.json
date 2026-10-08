@@ -1,0 +1,70 @@
+{
+  "wf_9eb7b672-f97": [
+    {
+      "claim": "A concurrent sliding refresh can recreate a partner session after logout.",
+      "file": "rust/crates/tb-dashboard-api/src/auth/session.rs",
+      "id": "W02-DA02-S001-concurrency-1",
+      "line": 2101
+    },
+    {
+      "claim": "A centrally rejected Discord admin session remains authorized through its local mirror.",
+      "file": "rust/crates/tb-dashboard-api/src/auth/level.rs",
+      "id": "W02-DA02-S002-errors-1",
+      "line": 444
+    }
+  ],
+  "wf_f9b737d9-fe8": [
+    {"claim": "A concurrent central admin session import can restore an admin session after successful logout.", "file": "rust/crates/tb-dashboard-api/src/auth/level.rs", "id": "W02-DA02-S002-concurrency-1", "line": 427},
+    {"claim": "An in-flight cache fill can restore authenticated access after logout.", "file": "rust/crates/tb-dashboard-api/src/auth/session.rs", "id": "W02-DA02-S004-concurrency-2", "line": 1857},
+    {"claim": "A recycled Twitch login grants access to its previous owner's affiliate account without an immutable owner-ID check.", "file": "rust/crates/tb-dashboard-api/src/handlers/affiliate.rs", "id": "W02-DA02-S004-correctness-1", "line": 521},
+    {"claim": "Affiliate OAuth state is not bound to the initiating browser, allowing login CSRF.", "file": "rust/crates/tb-dashboard-api/src/auth/session.rs", "id": "W02-DA02-S004-security-4", "line": 1113},
+    {"claim": "Login-based historical analytics can return a previous owner's data to a new owner of the same Twitch login.", "file": "rust/crates/tb-dashboard-api/src/auth/streamer_scope.rs", "id": "W02-DA02-S005-correctness-1", "line": 155},
+    {"claim": "Login-based Partner scope allows a reused Twitch login to access the previous account owner's AI analysis history.", "file": "rust/crates/tb-dashboard-api/src/auth/streamer_scope.rs", "id": "W02-DA02-S005-security-1", "line": 163},
+    {"claim": "The cancellation route uses a literal ü and does not match browser requests to /twitch/abbo/k%C3%BCndigen.", "file": "rust/crates/tb-dashboard-api/src/lib.rs", "id": "W02-DA01-S004-correctness-1", "line": 1663},
+    {"claim": "An oversized OAuth expires_in permanently terminates the unsupervised proactive refresh task.", "file": "rust/crates/tb-dashboard-api/src/lib.rs", "id": "W02-DA01-S004-errors-1", "line": 2276},
+    {"claim": "The proactive refresh loop reports credentials renewed when their provider client is absent.", "file": "rust/crates/tb-dashboard-api/src/lib.rs", "id": "W02-DA01-S004-errors-2", "line": 2289},
+    {"claim": "The shared CSRF layer rejects valid one-time partner-login sessions.", "file": "rust/crates/tb-dashboard-api/src/lib.rs", "id": "W02-DA01-S004-security-1", "line": 1015},
+    {"claim": "The partner-link route ignores valid configured internal admin credentials.", "file": "rust/crates/tb-dashboard-api/src/lib.rs", "id": "W02-DA01-S004-security-2", "line": 1485},
+    {"claim": "Bounded query integers outside i64 return 400 instead of clamping.", "file": "rust/crates/tb-dashboard-api/src/query_int.rs", "id": "W02-DA01-S005-correctness-1", "line": 51},
+    {"claim": "Dashboard fallback responses bypass the documented 16 MiB body limit.", "file": "rust/crates/tb-dashboard-api/src/proxy.rs", "id": "W02-DA01-S005-errors-1", "line": 202},
+    {"claim": "The empty Twitch ID in the shared partner fixture makes plan acceptance tests fail identity guards before their intended feature gates.", "file": "rust/crates/tb-dashboard-api/tests/plan_stufen_gates.rs", "id": "W02-DA01-S007-correctness-1", "line": 141},
+    {"claim": "Both IDOR E2E fixtures leave their required operator Twitch ID unconfigured.", "file": "rust/crates/tb-dashboard-api/src/auth/idor_e2e_tests.rs", "id": "W02-DA02-S001-correctness-2", "line": 233},
+    {"claim": "Configured database setup failures silently pass all four database-backed CSRF regression tests.", "file": "rust/crates/tb-dashboard-api/src/auth/csrf.rs", "id": "W02-DA02-S001-errors-2", "line": 472},
+    {"claim": "The authentication rate limiter can indefinitely occupy every shared database connection while waiting for a database lock.", "file": "rust/crates/tb-dashboard-api/src/auth/security.rs", "id": "W02-DA02-S003-resources-1", "line": 108},
+    {"claim": "Expired authentication rate-limit hit rows accumulate indefinitely instead of being reclaimed.", "file": "rust/crates/tb-dashboard-api/src/auth/security.rs", "id": "W02-DA02-S003-resources-2", "line": 133},
+    {"claim": "Sliding refresh can undo a completed admin fingerprint step.", "file": "rust/crates/tb-dashboard-api/src/auth/session.rs", "id": "W02-DA02-S004-concurrency-3", "line": 2105},
+    {"claim": "Dashboard logout does not end a partner one-time-login session.", "file": "rust/crates/tb-dashboard-api/src/handlers/auth_login.rs", "id": "W02-DA02-S004-correctness-4", "line": 738},
+    {"claim": "Expired dashboard sessions and abandoned OAuth states are not reclaimed from the database.", "file": "rust/crates/tb-dashboard-api/src/auth/session.rs", "id": "W02-DA02-S004-resources-1", "line": 2007},
+    {"claim": "Enabled auth-session integration tests silently pass when database setup fails.", "file": "rust/crates/tb-dashboard-api/src/auth/session.rs", "id": "W02-DA02-S005-errors-1", "line": 2617}
+  ],
+  "wf_461b0370-4c3": {
+    "areas": ["DA03", "DA04", "DA05", "DA06", "DA07", "DA15", "DA17", "MO01", "IA01"],
+    "wave": "W03"
+  },
+  "wf_bd410bd5-531": {
+    "areas": [
+      {"id": "DA03", "slices": 6},
+      {"id": "DA04", "slices": 5},
+      {"id": "DA05", "slices": 2},
+      {"id": "DA06", "slices": 3},
+      {"id": "DA07", "slices": 4},
+      {"id": "DA15", "slices": 3},
+      {"id": "DA17", "slices": 4},
+      {"id": "MO01", "slices": 6},
+      {"id": "IA01", "slices": 4}
+    ],
+    "wave": "W03"
+  },
+  "wf_586b3f73-0dc": [
+    {
+      "brief": "BRIEFING-B02.md",
+      "id": "B02",
+      "worktree": "/home/nathanael/.worktrees/tb-vollreview-obs-start"
+    },
+    {
+      "brief": "BRIEFING-B03.md",
+      "id": "B03",
+      "worktree": "/home/nathanael/.worktrees/tb-vollreview-audit-akteur"
+    }
+  ]
+}

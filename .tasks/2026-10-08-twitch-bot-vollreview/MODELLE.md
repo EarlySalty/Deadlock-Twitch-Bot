@@ -16,6 +16,7 @@ Nachweismethode: Jede JSONL-Zeile wird geparst und jedes vorhandene Feld `messag
 | R09 Fehlerbehandlung | wf_b0f0e2fe-347 | agent-a669cb6a850016ec9.jsonl | gpt-6.1-sol | 50 | vollständig geprüft | 4eba416e28f93496ffa504b5ef321a37485418eb369f957f52ab5b35da08f126 |
 | R09 Bauqualität | wf_b0f0e2fe-347 | agent-a88b3416857fc4d40.jsonl | gpt-6.1-sol | 57 | vollständig geprüft | 6a7f112fb981458d689446b19aa7ae4be33af08ebce572e21c203747e9f448e2 |
 | Aufgabenstand 3 | wf_0361a8c8-72a | agent-a4af41ddf98061ee5.jsonl | gpt-6.1-sol | 16 | vollständig geprüft | 37768c17bf83808ae7e2d115b28e40559df53df56b8378fd0db45ea9b0b7527a |
+| B01 Fixer 2 | wf_b4f81318-dac | agent-a50c2d6b8221a18b2.jsonl | gpt-6.1-sol | 90 | vollständig geprüft | 5a6f6e991716e7ef735bdfa674f76e3225a99f1b1792471eb228850ff08527f3 |
 
 ## Laufende Prüfungen
 
