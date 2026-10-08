@@ -53,6 +53,7 @@ export interface ArchivedVod {
   confirmed_parts: number;
   total_parts: number;
   can_retry: boolean;
+  can_drive: boolean;
   reason: string | null;
   drive_url: string | null;
   drive_requested: boolean;

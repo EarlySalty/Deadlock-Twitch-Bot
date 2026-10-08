@@ -7,6 +7,7 @@ CREATE TABLE twitch_vod_youtube_checks (
     complete BOOLEAN NOT NULL DEFAULT FALSE,
     observations JSONB NOT NULL DEFAULT '[]'::jsonb,
     upload_snapshot JSONB NOT NULL DEFAULT '[]'::jsonb,
+    attempt_snapshot JSONB,
     last_attempt_at TIMESTAMPTZ,
     last_success_at TIMESTAMPTZ,
     last_error TEXT,

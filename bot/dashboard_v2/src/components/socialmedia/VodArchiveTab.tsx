@@ -77,7 +77,8 @@ export function VodArchiveEntry({ vod, pending, onAction }: {
     {vod.drive_requested && !finished && <p className="mt-3 text-sm text-text-secondary">{t(vod.display_status === 'uploading' ? 'Drive-Sicherung läuft.' : 'Drive-Sicherung vorgemerkt.')}</p>}
     <div className="mt-3 flex flex-wrap items-center gap-3">
       {vod.can_check_youtube && (['uploaded', 'archived'].includes(vod.status) || vod.parts.some((p) => p.youtube_video_id)) && <button type="button" className="studio-button" disabled={pending || check?.pending || check?.can_request === false} onClick={() => onAction(vod, 'check')}>{t(check?.pending ? 'YouTube-Prüfung vorgemerkt' : 'Bei YouTube prüfen')}</button>}
-      {vod.can_retry && <><button type="button" className="studio-button" disabled={pending} onClick={() => onAction(vod, 'retry')}>{t('Erneut versuchen')}</button><button type="button" className="studio-button" disabled={pending} onClick={() => onAction(vod, 'drive')}>{t('Auf Drive ausweichen')}</button></>}
+      {vod.can_retry && <button type="button" className="studio-button" disabled={pending} onClick={() => onAction(vod, 'retry')}>{t('Erneut versuchen')}</button>}
+      {vod.can_drive && <button type="button" className="studio-button" disabled={pending} onClick={() => onAction(vod, 'drive')}>{t('Auf Drive ausweichen')}</button>}
       <button type="button" className="min-h-11 rounded-md px-2 text-sm text-text-secondary underline underline-offset-4 hover:text-text-primary focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50" disabled={pending} onClick={() => onAction(vod, 'hide')}>{t('Aus der Liste ausblenden')}</button>
     </div>
   </article>;

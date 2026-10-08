@@ -94,7 +94,8 @@ pub async fn list_handler(
                     "drive_complete": progress.drive_complete,
                     "confirmed_parts": progress.confirmed_parts,
                     "total_parts": progress.total_parts,
-                    "can_retry": progress.can_retry || recovery.as_ref().is_some_and(|r| r.retry || r.drive),
+                    "can_retry": progress.can_retry || recovery.as_ref().is_some_and(|r| r.retry),
+                    "can_drive": progress.can_retry || recovery.as_ref().is_some_and(|r| r.drive),
                     "reason": error_label(&status, last_error.as_deref(), drive_requested).or_else(|| recovery.as_ref().map(|r| r.reason)).or_else(|| if check.is_some() { None } else if parts.as_array().is_some_and(|parts| parts.iter().any(|part| part["status"] == "rejected")) && !progress.drive_complete { Some("YouTube hat einen Upload abgelehnt oder entfernt. Prüfe das Ziel und die YouTube-Verbindung.") } else if progress.state == "unknown" { Some("Für diesen früheren Upload fehlt ein vollständiger Nachweis. Der YouTube-Abgleich kann vorhandene Videos zuordnen.") } else { None }),
                     "drive_url": drive_url,
                     "drive_requested": drive_requested,
@@ -362,11 +363,13 @@ async fn apply_action(
     action: &str,
 ) -> Result<Option<bool>, sqlx::Error> {
     let mut tx = pool.begin().await?;
-    let row = sqlx::query("SELECT status, local_path FROM twitch_vod_archive_vods WHERE id=$1 AND ($2::text IS NULL OR twitch_user_id=$2) FOR UPDATE")
+    let owner: Option<Option<String>> = sqlx::query_scalar("SELECT twitch_user_id FROM twitch_vod_archive_vods WHERE id=$1 AND ($2::text IS NULL OR twitch_user_id=$2)")
         .bind(id).bind(scope).fetch_optional(&mut *tx).await?;
-    let Some(row) = row else {
+    let Some(owner) = owner else {
         return Ok(None);
     };
+    let target: Option<(i64, String, Option<String>)> = sqlx::query_as("SELECT a.id::bigint,md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')),a.platform_user_id FROM social_media_platform_auth a WHERE a.twitch_user_id=$1 AND a.platform='youtube' AND a.enabled=1 ORDER BY a.authorized_at DESC,a.id DESC LIMIT 1 FOR UPDATE")
+        .bind(&owner).fetch_optional(&mut *tx).await?;
     let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(186976768, $1::int)")
         .bind(
             i32::try_from(id)
@@ -377,22 +380,34 @@ async fn apply_action(
     if !locked {
         return Ok(Some(false));
     }
+    let row = sqlx::query("SELECT status, local_path FROM twitch_vod_archive_vods WHERE id=$1 AND ($2::text IS NULL OR twitch_user_id=$2) AND twitch_user_id IS NOT DISTINCT FROM $3 FOR UPDATE")
+        .bind(id).bind(scope).bind(&owner).fetch_optional(&mut *tx).await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
     let status: String = row.get("status");
+    if action != "hide" {
+        sqlx::query("SELECT id FROM twitch_vod_archive_parts WHERE vod_id=$1 ORDER BY part_index FOR UPDATE")
+            .bind(id).fetch_all(&mut *tx).await?;
+    }
     if action == "check" {
-        let queued = sqlx::query("INSERT INTO twitch_vod_youtube_checks (vod_id,auth_id,auth_revision,channel_id,requested_at,upload_snapshot) SELECT v.id,a.id,md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')),a.platform_user_id,NOW(),(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index),'[]'::jsonb) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id) FROM twitch_vod_archive_vods v JOIN LATERAL (SELECT a.* FROM social_media_platform_auth a WHERE a.twitch_user_id=v.twitch_user_id AND a.platform='youtube' AND a.enabled=1 ORDER BY a.authorized_at DESC,a.id DESC LIMIT 1) a ON TRUE WHERE v.id=$1 AND (v.status IN ('uploaded','archived') OR EXISTS (SELECT 1 FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id AND p.youtube_video_id IS NOT NULL)) ON CONFLICT (vod_id) DO UPDATE SET requested_at=COALESCE(twitch_vod_youtube_checks.requested_at,NOW()),next_check_at=NOW() WHERE twitch_vod_youtube_checks.requested_at IS NULL AND (twitch_vod_youtube_checks.last_attempt_at IS NULL OR twitch_vod_youtube_checks.last_attempt_at<NOW()-INTERVAL '10 minutes') AND (twitch_vod_youtube_checks.last_error IS DISTINCT FROM 'quota' OR twitch_vod_youtube_checks.next_check_at<=NOW())")
-            .bind(id).execute(&mut *tx).await?.rows_affected();
+        let Some((auth_id, revision, channel)) = target.as_ref() else {
+            return Ok(Some(false));
+        };
+        let queued = sqlx::query("INSERT INTO twitch_vod_youtube_checks (vod_id,auth_id,auth_revision,channel_id,requested_at,upload_snapshot) SELECT v.id,$2,$3,$4,NOW(),(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index),'[]'::jsonb) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id) FROM twitch_vod_archive_vods v WHERE v.id=$1 AND (v.status IN ('uploaded','archived') OR EXISTS (SELECT 1 FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id AND p.youtube_video_id IS NOT NULL)) ON CONFLICT (vod_id) DO UPDATE SET requested_at=COALESCE(twitch_vod_youtube_checks.requested_at,NOW()),next_check_at=NOW() WHERE twitch_vod_youtube_checks.requested_at IS NULL AND (twitch_vod_youtube_checks.last_attempt_at IS NULL OR twitch_vod_youtube_checks.last_attempt_at<NOW()-INTERVAL '10 minutes') AND (twitch_vod_youtube_checks.last_error IS DISTINCT FROM 'quota' OR twitch_vod_youtube_checks.next_check_at<=NOW())")
+            .bind(id).bind(auth_id).bind(revision).bind(channel).execute(&mut *tx).await?.rows_affected();
         tx.commit().await?;
         return Ok(Some(queued == 1));
     }
     if action != "hide" && matches!(status.as_str(), "uploaded" | "archived" | "drive_uploaded") {
-        sqlx::query("SELECT id FROM twitch_vod_archive_parts WHERE vod_id=$1 FOR UPDATE")
-            .bind(id)
-            .fetch_all(&mut *tx)
-            .await?;
         let parts: Value = sqlx::query_scalar("SELECT COALESCE(jsonb_agg(jsonb_build_object('index',part_index,'status',status,'youtube_video_id',youtube_video_id,'file_path',file_path) ORDER BY part_index),'[]'::jsonb) FROM twitch_vod_archive_parts WHERE vod_id=$1")
             .bind(id).fetch_one(&mut *tx).await?;
-        let check: Option<Value> = sqlx::query_scalar("SELECT jsonb_build_object('state',c.state,'error',c.last_error,'observations',c.observations) FROM twitch_vod_youtube_checks c JOIN twitch_vod_archive_vods v ON v.id=c.vod_id JOIN LATERAL (SELECT a.* FROM social_media_platform_auth a WHERE a.twitch_user_id=v.twitch_user_id AND a.platform='youtube' AND a.enabled=1 ORDER BY a.authorized_at DESC,a.id DESC LIMIT 1 FOR UPDATE) a ON TRUE WHERE v.id=$1 AND c.auth_id=a.id AND c.auth_revision=md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')) AND c.channel_id=a.platform_user_id AND c.upload_snapshot=(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index),'[]'::jsonb) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id)")
-            .bind(id).fetch_optional(&mut *tx).await?;
+        let check: Option<Value> = if let Some((auth_id, revision, channel)) = target.as_ref() {
+            sqlx::query_scalar("SELECT jsonb_build_object('state',c.state,'error',c.last_error,'observations',c.observations) FROM twitch_vod_youtube_checks c WHERE c.vod_id=$1 AND c.auth_id=$2 AND c.auth_revision=$3 AND c.channel_id IS NOT NULL AND ($4::text IS NULL OR c.channel_id=$4) AND c.upload_snapshot=(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index),'[]'::jsonb) FROM twitch_vod_archive_parts p WHERE p.vod_id=$1)")
+                .bind(id).bind(auth_id).bind(revision).bind(channel).fetch_optional(&mut *tx).await?
+        } else {
+            None
+        };
         let local_path: Option<String> = row.get("local_path");
         let Some(recovery) = terminal_recovery(
             &status,

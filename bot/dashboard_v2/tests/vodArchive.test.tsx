@@ -16,7 +16,7 @@ const base: ArchivedVod = {
   discovered_at: '2026-09-01T12:00:00Z', status: 'archived',
   display_status: 'youtube_uploaded', status_label: 'YouTube-Upload abgeschlossen',
   youtube_complete: true, drive_complete: false, confirmed_parts: 1, total_parts: 1,
-  can_retry: false, reason: null, drive_url: null, drive_requested: false,
+  can_retry: false, can_drive: false, reason: null, drive_url: null, drive_requested: false,
   uploaded_at: '2026-09-01T13:00:00Z', last_attempt_at: null,
   parts: [{ index: 0, status: 'done', youtube_video_id: 'synthetic' }], needs_connection: false,
 };
@@ -57,7 +57,7 @@ test('partial, failed, running and waiting states have distinct icons and timest
     ['partial', 'circle-dashed'], ['failed', 'circle-x'],
     ['uploading', 'loader-circle'], ['downloading', 'download'], ['waiting', 'clock'],
   ] as const) {
-    const html = render({ display_status, status: 'upload_failed', youtube_complete: false, can_retry: ['partial', 'failed', 'waiting'].includes(display_status), uploaded_at: null, last_attempt_at: '2026-10-01T13:00:00Z', total_parts: 2 });
+    const html = render({ display_status, status: 'upload_failed', youtube_complete: false, can_retry: ['partial', 'failed', 'waiting'].includes(display_status), can_drive: ['partial', 'failed', 'waiting'].includes(display_status), uploaded_at: null, last_attempt_at: '2026-10-01T13:00:00Z', total_parts: 2 });
     assert.ok(html.includes(`lucide-${icon}`), display_status);
     assert.match(html, /<time dateTime="2026-10-01T13:00:00Z">/);
     assert.equal((html.match(/<button/g) ?? []).length, ['partial', 'failed', 'waiting'].includes(display_status) ? 3 : 1);
@@ -101,8 +101,15 @@ test('current multipart proof and historical upload coverage remain explicitly s
   assert.notEqual(translate('en', VOD_UPLOAD_PARTS_LABEL), VOD_UPLOAD_PARTS_LABEL);
 });
 
+test('terminal recovery exposes retry and Drive independently', () => {
+  for (const [can_retry, can_drive, count] of [[false, false, 1], [true, false, 2], [false, true, 2], [true, true, 3]] as const) {
+    const html = render({ can_retry, can_drive, display_status: 'failed' });
+    assert.equal((html.match(/<button/g) ?? []).length, count);
+  }
+});
+
 test('archive status and new UI copy have translations', () => {
-  for (const text of ['YouTube-Upload abgeschlossen', 'Auf Drive gesichert', 'Teilweise auf YouTube', 'Abschluss unklar', 'Status unklar', 'YouTube-Upload abgelehnt', 'Auf YouTube öffnen', 'unbestätigt', 'Drive-Sicherung läuft.', 'Auf YouTube bestätigt', 'YouTube verarbeitet das Video', 'Bei YouTube nicht abrufbar', 'Prüfung gerade nicht möglich', 'Bei YouTube prüfen', 'Nicht gelistet', 'Öffentlich']) {
+  for (const text of ['YouTube-Upload abgeschlossen', 'Auf Drive gesichert', 'Teilweise auf YouTube', 'Abschluss unklar', 'Status unklar', 'YouTube-Upload abgelehnt', 'Auf YouTube öffnen', 'unbestätigt', 'Drive-Sicherung läuft.', 'Auf YouTube bestätigt', 'YouTube verarbeitet das Video', 'Bei YouTube nicht abrufbar', 'Prüfung gerade nicht möglich', 'Bei YouTube prüfen', 'Nicht gelistet', 'Öffentlich', 'Die lokale Kopie fehlt. Prüfe das vorhandene Video und die YouTube-Verbindung; ein erneuter Upload ist derzeit nicht möglich.', 'Das vorhandene YouTube-Video bleibt unverändert. Du kannst die lokale Kopie auf Drive sichern.', 'Du kannst abgelehnte Teile ausdrücklich erneut hochladen oder die lokale Kopie auf Drive sichern. Bereits erfolgreiche Teile bleiben erhalten.']) {
     assert.notEqual(translate('en', text), text);
   }
 });

@@ -445,7 +445,7 @@ async fn explicit_terminal_retry_is_scoped_and_preserves_successful_parts_and_hi
     std::fs::create_dir_all(&directory).unwrap();
     let file = directory.join("rejected.mp4");
     std::fs::write(&file, b"synthetic media").unwrap();
-    sqlx::query("INSERT INTO social_media_platform_auth(twitch_user_id,platform,platform_user_id) VALUES ('42','youtube','own')").execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO social_media_platform_auth(twitch_user_id,platform,platform_user_id) VALUES ('42','youtube',NULL)").execute(pool).await.unwrap();
     sqlx::query("UPDATE twitch_vod_archive_vods SET status='uploaded',uploaded_at='2026-10-01T13:00:00Z' WHERE id=1").execute(pool).await.unwrap();
     sqlx::query("UPDATE twitch_vod_archive_parts SET status='done',youtube_video_id='rejected',file_path=$1 WHERE vod_id=1").bind(file.to_str().unwrap()).execute(pool).await.unwrap();
     sqlx::query("INSERT INTO twitch_vod_archive_parts(vod_id,part_index,status,youtube_video_id,file_path,last_error) VALUES (1,1,'done','successful','/synthetic/absent-success','old history')").execute(pool).await.unwrap();
@@ -454,7 +454,7 @@ async fn explicit_terminal_retry_is_scoped_and_preserves_successful_parts_and_hi
         apply_action(pool, 1, Some("42"), "check").await.unwrap(),
         Some(true)
     );
-    sqlx::query("UPDATE twitch_vod_youtube_checks SET state='rejected',requested_at=NULL,last_success_at=NOW(),observations=$1 WHERE vod_id=1").bind(json!([{"video_id":"rejected","part_index":0,"state":"rejected"},{"video_id":"successful","part_index":1,"state":"processed"}])).execute(pool).await.unwrap();
+    sqlx::query("UPDATE twitch_vod_youtube_checks SET state='rejected',channel_id='own',requested_at=NULL,last_success_at=NOW(),observations=$1 WHERE vod_id=1").bind(json!([{"video_id":"rejected","part_index":0,"state":"rejected"},{"video_id":"successful","part_index":1,"state":"processed"}])).execute(pool).await.unwrap();
     let data = json(
         list_handler(
             partner(),
@@ -468,6 +468,7 @@ async fn explicit_terminal_retry_is_scoped_and_preserves_successful_parts_and_hi
     )
     .await;
     assert_eq!(data["items"][0]["can_retry"], true);
+    assert_eq!(data["items"][0]["can_drive"], false);
     assert!(data["items"][0]["parts"][0].get("file_path").is_none());
     let after:Value=sqlx::query_scalar("SELECT jsonb_build_array(to_jsonb(v),(SELECT jsonb_agg(to_jsonb(p) ORDER BY p.part_index) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id)) FROM twitch_vod_archive_vods v WHERE id=1").fetch_one(pool).await.unwrap();
     assert_eq!(before, after);
@@ -489,6 +490,44 @@ async fn explicit_terminal_retry_is_scoped_and_preserves_successful_parts_and_hi
         "SELECT to_jsonb(p) FROM twitch_vod_archive_parts p WHERE vod_id=1 AND part_index=1",
     )
     .fetch_one(pool)
+    .await
+    .unwrap();
+    let saved: Value =
+        sqlx::query_scalar("SELECT to_jsonb(c) FROM twitch_vod_youtube_checks c WHERE vod_id=1")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    for mutation in [
+        "auth_id=auth_id+100",
+        "auth_revision='stale'",
+        "channel_id=NULL",
+        "upload_snapshot='[]'::jsonb",
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE twitch_vod_youtube_checks SET {mutation} WHERE vod_id=1"
+        )))
+        .execute(pool)
+        .await
+        .unwrap();
+        for action in ["retry", "drive"] {
+            assert_eq!(
+                apply_action(pool, 1, Some("42"), action).await.unwrap(),
+                Some(false)
+            );
+        }
+        sqlx::query("UPDATE twitch_vod_youtube_checks SET auth_id=($1->>'auth_id')::integer,auth_revision=$1->>'auth_revision',channel_id=$1->>'channel_id',upload_snapshot=$1->'upload_snapshot' WHERE vod_id=1").bind(&saved).execute(pool).await.unwrap();
+    }
+    sqlx::query("UPDATE social_media_platform_auth SET platform_user_id='different' WHERE twitch_user_id='42'").execute(pool).await.unwrap();
+    for action in ["retry", "drive"] {
+        assert_eq!(
+            apply_action(pool, 1, Some("42"), action).await.unwrap(),
+            Some(false)
+        );
+    }
+    sqlx::query(
+        "UPDATE social_media_platform_auth SET platform_user_id=NULL WHERE twitch_user_id='42'",
+    )
+    .execute(pool)
     .await
     .unwrap();
     assert_eq!(
@@ -527,14 +566,14 @@ async fn unavailable_terminal_drive_recovery_never_resets_accepted_targets_or_in
     std::fs::create_dir_all(&directory).unwrap();
     let file = directory.join("source.mp4");
     std::fs::write(&file, b"synthetic media").unwrap();
-    sqlx::query("INSERT INTO social_media_platform_auth(twitch_user_id,platform,platform_user_id) VALUES ('42','youtube','own')").execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO social_media_platform_auth(twitch_user_id,platform,platform_user_id) VALUES ('42','youtube',NULL)").execute(pool).await.unwrap();
     sqlx::query("UPDATE twitch_vod_archive_vods SET status='archived',uploaded_at='2026-10-01T13:00:00Z' WHERE id=1").execute(pool).await.unwrap();
     sqlx::query("UPDATE twitch_vod_archive_parts SET status='done',youtube_video_id='accepted',file_path=$1 WHERE vod_id=1").bind(file.to_str().unwrap()).execute(pool).await.unwrap();
     assert_eq!(
         apply_action(pool, 1, Some("42"), "check").await.unwrap(),
         Some(true)
     );
-    sqlx::query("UPDATE twitch_vod_youtube_checks SET state='unavailable',requested_at=NULL,last_success_at=NOW(),observations=$1 WHERE vod_id=1").bind(json!([{"video_id":"accepted","part_index":0,"state":"unavailable"}])).execute(pool).await.unwrap();
+    sqlx::query("UPDATE twitch_vod_youtube_checks SET state='unavailable',channel_id='own',requested_at=NULL,last_success_at=NOW(),observations=$1 WHERE vod_id=1").bind(json!([{"video_id":"accepted","part_index":0,"state":"unavailable"}])).execute(pool).await.unwrap();
     let data = json(
         list_handler(
             partner(),
@@ -547,7 +586,8 @@ async fn unavailable_terminal_drive_recovery_never_resets_accepted_targets_or_in
         .await,
     )
     .await;
-    assert_eq!(data["items"][0]["can_retry"], true);
+    assert_eq!(data["items"][0]["can_retry"], false);
+    assert_eq!(data["items"][0]["can_drive"], true);
     let parts_before: Value = sqlx::query_scalar(
         "SELECT jsonb_agg(to_jsonb(p)) FROM twitch_vod_archive_parts p WHERE vod_id=1",
     )
@@ -620,6 +660,56 @@ async fn unavailable_terminal_drive_recovery_never_resets_accepted_targets_or_in
     }
     std::fs::remove_dir_all(directory).unwrap();
     eprintln!("YOUTUBE_API_DB_PROOF: unavailable does not imply deletion; existing Drive recovery can queue available local source without resetting accepted YouTube data; absent source and independent Drive success reject recovery honestly, no provider writes");
+}
+
+#[tokio::test]
+async fn archive_actions_lock_auth_before_vod_and_parts_like_reconciliation_writers() {
+    let database = database().await;
+    let pool = &database.pool;
+    sqlx::query("INSERT INTO social_media_platform_auth(twitch_user_id,platform,platform_user_id) VALUES ('42','youtube',NULL)").execute(pool).await.unwrap();
+    sqlx::query("UPDATE twitch_vod_archive_vods SET status='uploaded' WHERE id=1")
+        .execute(pool)
+        .await
+        .unwrap();
+    for action in ["retry", "drive", "check"] {
+        let mut writer = pool.begin().await.unwrap();
+        let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *writer)
+            .await
+            .unwrap();
+        sqlx::query(
+            "SELECT id FROM social_media_platform_auth WHERE twitch_user_id='42' FOR UPDATE",
+        )
+        .fetch_all(&mut *writer)
+        .await
+        .unwrap();
+        let action_pool = pool.clone();
+        let operation =
+            tokio::spawn(async move { apply_action(&action_pool, 1, Some("42"), action).await });
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let waiting: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pg_blocking_pids(pid) @> ARRAY[$1] AND query LIKE '%social_media_platform_auth%')").bind(pid).fetch_one(pool).await.unwrap();
+                if waiting {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        }).await.expect("action must wait for authorization before touching archive rows");
+        sqlx::query("SELECT id FROM twitch_vod_archive_vods WHERE id=1 FOR UPDATE NOWAIT")
+            .fetch_one(&mut *writer)
+            .await
+            .unwrap();
+        sqlx::query("SELECT id FROM twitch_vod_archive_parts WHERE vod_id=1 ORDER BY part_index FOR UPDATE NOWAIT").fetch_all(&mut *writer).await.unwrap();
+        writer.commit().await.unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), operation)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_ok()
+        );
+    }
+    eprintln!("YOUTUBE_API_DB_PROOF: retry, Drive and check wait on auth before VOD/parts; concurrent auth-first reconciliation transaction finishes without deadlock");
 }
 
 #[test]

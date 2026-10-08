@@ -396,6 +396,14 @@ async fn completed_inventory_rechecks_refresh_deletions_processing_and_manual_re
     .await
     .unwrap();
     assert_eq!(scan_after["complete"], false);
+    let mut released_guard = pool.begin().await.unwrap();
+    let released: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(186976769,$1)")
+        .bind(103i32)
+        .fetch_one(&mut *released_guard)
+        .await
+        .unwrap();
+    assert!(released);
+    released_guard.rollback().await.unwrap();
     assert_eq!(
         scan_after["generation"].as_i64().unwrap(),
         scan_before["generation"].as_i64().unwrap() + 1
@@ -805,6 +813,10 @@ async fn changed_parts_provider_error_retains_original_evidence_snapshot() {
     let before = local_snapshot(&pool).await;
     failing.store(true, Ordering::SeqCst);
     run_with(&pool, &manager, &config, &factory).await.unwrap();
+    run_with(&pool, &manager, &config, &factory).await.unwrap();
+    run_with(&pool, &manager, &config, &factory).await.unwrap();
+    let target = ziel(&pool, "42").await.unwrap().unwrap();
+    assert!(vods(&pool, "42", &target).await.unwrap().is_empty());
     let retained:Value=sqlx::query_scalar("SELECT jsonb_build_array(observations,last_success_at,upload_snapshot) FROM twitch_vod_youtube_checks").fetch_one(&pool).await.unwrap();
     assert_eq!(evidence, retained);
     let current:bool=sqlx::query_scalar("SELECT c.upload_snapshot=(SELECT jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index) FROM twitch_vod_archive_parts p WHERE p.vod_id=c.vod_id) FROM twitch_vod_youtube_checks c").fetch_one(&pool).await.unwrap();
@@ -812,6 +824,90 @@ async fn changed_parts_provider_error_retains_original_evidence_snapshot() {
     assert_eq!(before, local_snapshot(&pool).await);
     assert!(sqlx::query_scalar::<_,bool>("SELECT state='error' AND last_error='connection' AND NOT complete FROM twitch_vod_youtube_checks").fetch_one(&pool).await.unwrap());
     eprintln!("YOUTUBE_DB_PROOF: changed parts plus real provider HTTP error retain original observation snapshot and success time; stale evidence does not match current API/cleanup guard");
+}
+
+#[tokio::test]
+async fn failed_attempt_snapshots_apply_backoff_without_relabeling_evidence_or_hiding_changes() {
+    let pool = crate::store::tests::pool("t_youtube_attempt_backoff")
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO social_media_platform_auth(platform,twitch_user_id,platform_user_id) VALUES ('youtube','42','channel')").execute(&pool).await.unwrap();
+    crate::store::merke_vod(&pool, "123", "synthetic", "42", "Synthetic", 120)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE twitch_vod_archive_vods SET status='archived'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO twitch_vod_archive_parts(vod_id,part_index,file_path,status,youtube_video_id) SELECT id,0,'/synthetic/part','done','original' FROM twitch_vod_archive_vods").execute(&pool).await.unwrap();
+    let target = ziel(&pool, "42").await.unwrap().unwrap();
+    let vod = vods(&pool, "42", &target).await.unwrap().remove(0);
+    let proof = observation("original", Some(0), Some(1), 120);
+    assert!(save(
+        &pool,
+        "42",
+        &target,
+        Some("channel"),
+        &vod,
+        &[proof],
+        "confirmed",
+        true,
+        None,
+        86400
+    )
+    .await
+    .unwrap());
+    let evidence: Value = sqlx::query_scalar("SELECT jsonb_build_array(observations,last_success_at,upload_snapshot) FROM twitch_vod_youtube_checks").fetch_one(&pool).await.unwrap();
+    for (index, error) in ["connection", "channel_changed", "request", "quota"]
+        .into_iter()
+        .enumerate()
+    {
+        sqlx::query("UPDATE twitch_vod_archive_parts SET youtube_video_id=$1,updated_at=updated_at+INTERVAL '1 second'").bind(format!("new-{index}")).execute(&pool).await.unwrap();
+        let changed = vods(&pool, "42", &target).await.unwrap().remove(0);
+        assert!(save(
+            &pool,
+            "42",
+            &target,
+            None,
+            &changed,
+            &[],
+            "error",
+            false,
+            Some(error),
+            86400
+        )
+        .await
+        .unwrap());
+        assert!(
+            vods(&pool, "42", &target).await.unwrap().is_empty(),
+            "{error}"
+        );
+        let saved: Value = sqlx::query_scalar("SELECT jsonb_build_array(observations,last_success_at,upload_snapshot) FROM twitch_vod_youtube_checks").fetch_one(&pool).await.unwrap();
+        assert_eq!(evidence, saved);
+        let attempt: Value =
+            sqlx::query_scalar("SELECT attempt_snapshot FROM twitch_vod_youtube_checks")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(attempt, changed.parts);
+        sqlx::query("UPDATE twitch_vod_youtube_checks SET next_check_at=NOW()-INTERVAL '1 second'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(vods(&pool, "42", &target).await.unwrap().len(), 1);
+        sqlx::query("UPDATE twitch_vod_youtube_checks SET next_check_at=NOW()+INTERVAL '1 day'")
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query("UPDATE social_media_platform_auth SET authorized_at='2099-01-01' WHERE id=$1")
+        .bind(target.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let new_target = ziel(&pool, "42").await.unwrap().unwrap();
+    assert_eq!(vods(&pool, "42", &new_target).await.unwrap().len(), 1);
+    eprintln!("YOUTUBE_DB_PROOF: four error classes honor attempt-bound backoff, original evidence remains unchanged, fresh parts and changed authorization remain eligible and due attempts resume");
 }
 
 fn observation(id: &str, index: Option<i32>, total: Option<i32>, seconds: i64) -> Beobachtung {
