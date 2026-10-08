@@ -103,7 +103,20 @@ fn entitlements(
             .iter()
             .filter(|channel| channel.twitch_user_id == link.twitch_user_id)
             .collect();
-        if !link.verified || matching.is_empty() {
+        let reliably_linked = link.verified
+            || matching.iter().any(|channel| {
+                channel
+                    .discord_user_id
+                    .as_deref()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    == Some(id)
+            })
+            || links.iter().any(|other| {
+                other.verified
+                    && other.twitch_user_id == link.twitch_user_id
+                    && other.discord_id.parse::<u64>().ok() == Some(id)
+            });
+        if !reliably_linked || matching.is_empty() {
             merge(id, Entitlement::Unknown);
         } else {
             for channel in matching {

@@ -185,6 +185,70 @@ async fn multiple_mappings_verified_fallback_and_legacy_drift() {
 }
 
 #[tokio::test]
+async fn redundant_unverified_links_do_not_override_reliable_inactivity() {
+    let (db, _server, relay, discord) = fixture().await;
+    sqlx::raw_sql(
+        "UPDATE twitch_partners SET status='departnered',manual_partner_opt_out=1;
+        INSERT INTO twitch_partners VALUES
+            ('101','departnered',true,0,1,NULL,NULL,NULL),
+            ('103','archived',true,0,1,NULL,NULL,NULL),
+            ('104','blocked',true,0,1,NULL,NULL,NULL),
+            ('105','departnered',true,0,1,NULL,NULL,NULL),
+            ('106','departnered',true,0,1,NULL,NULL,NULL),
+            ('107','active',true,1,0,NULL,NULL,NULL),
+            ('200','active',true,1,0,NULL,NULL,NULL);
+        INSERT INTO twitch_streamer_identities VALUES
+            ('103','13'),('104','14'),('105','15'),('106','16'),('107','16');
+        INSERT INTO twitch_raid_auth VALUES ('107'),('200');",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    {
+        let mut state = discord.0.lock().unwrap();
+        state.holders = BTreeSet::from([10, 11, 12, 13, 14, 15, 16]);
+        state.links = vec![
+            serde_json::json!({"discord_id":"10","twitch_user_id":"100","verified":false}),
+            serde_json::json!({"discord_id":"11","twitch_user_id":"101","verified":false}),
+            serde_json::json!({"discord_id":"12","twitch_user_id":"100","verified":false}),
+            serde_json::json!({"discord_id":"13","twitch_user_id":"999","verified":false}),
+            serde_json::json!({"discord_id":"14","twitch_user_id":"200","verified":false}),
+            serde_json::json!({"discord_id":"15","twitch_user_id":"200","verified":true}),
+            serde_json::json!({"discord_id":"16","twitch_user_id":"106","verified":false}),
+            serde_json::json!({"discord_id":"11","twitch_user_id":"101","verified":true}),
+        ];
+    }
+    reconcile(&db.pool, &relay, 1, 2, None).await.unwrap();
+    {
+        let state = discord.0.lock().unwrap();
+        assert_eq!(state.holders, BTreeSet::from([12, 13, 14, 15, 16]));
+        assert_eq!(
+            state
+                .writes
+                .iter()
+                .map(|(id, enabled, _)| (*id, *enabled))
+                .collect::<Vec<_>>(),
+            vec![(10, false), (11, false)]
+        );
+    }
+    discord.0.lock().unwrap().links.reverse();
+    for id in [10, 11] {
+        assert_eq!(
+            reconcile(&db.pool, &relay, 1, 2, Some(id)).await.unwrap(),
+            Some(false)
+        );
+    }
+    for id in [12, 13, 14] {
+        assert_eq!(
+            reconcile(&db.pool, &relay, 1, 2, Some(id)).await.unwrap(),
+            None
+        );
+    }
+    reconcile(&db.pool, &relay, 1, 2, None).await.unwrap();
+    assert_eq!(discord.0.lock().unwrap().writes.len(), 2);
+}
+
+#[tokio::test]
 async fn missing_state_temporary_pause_unverified_links_and_failures_do_not_revoke() {
     let (db, _server, relay, discord) = fixture().await;
     sqlx::raw_sql(
