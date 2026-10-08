@@ -45,6 +45,17 @@ pub struct AuthenticatedAdminSessionId(pub String);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthenticatedPartnerSessionId(pub String);
 
+#[derive(Debug, Clone)]
+pub(crate) enum AuditSessionId {
+    Admin(String),
+    Partner(String),
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AuditSessionSelection(
+    pub(crate) std::sync::Arc<tokio::sync::Mutex<Option<AuditSessionId>>>,
+);
+
 /// Auth-Level eines eingehenden Dashboard-Requests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DashboardAuthLevel {
@@ -356,6 +367,11 @@ where
                 {
                     if !session_id.is_empty() {
                         if let Ok(Some(partner)) = state.load_partner_session(session_id).await {
+                            if let Some(selection) = parts.extensions.get::<AuditSessionSelection>()
+                            {
+                                *selection.0.lock().await =
+                                    Some(AuditSessionId::Partner(session_id.to_string()));
+                            }
                             parts
                                 .extensions
                                 .insert(AuthenticatedPartnerSessionId(session_id.to_string()));
@@ -460,6 +476,9 @@ where
                     continue;
                 }
 
+                if let Some(selection) = parts.extensions.get::<AuditSessionSelection>() {
+                    *selection.0.lock().await = Some(AuditSessionId::Admin(session_id.clone()));
+                }
                 parts
                     .extensions
                     .insert(AuthenticatedAdminSessionId(session_id));
