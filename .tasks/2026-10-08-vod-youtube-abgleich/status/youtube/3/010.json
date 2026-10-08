@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 10,
+  "zeit": "2026-10-08T15:10:07Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "blockiert",
+  "gebaut": "ja",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "1345a55fed1e20d8865d3c8c9451e6352089102e",
+  "nachweise": ["REVIEW.md", "REGISTER.md", "pruefung/gate-round10.txt", "pruefung/gate-round10-base.txt", "pruefung/r9-archive.txt", "pruefung/r9-api.txt", "pruefung/r9-archive-clippy.txt", "pruefung/r9-api-clippy.txt", "pruefung/r9-source-sha256.txt"],
+  "blocker": ["Derselbe gpt-6.1-sol-Gate Runde 10 auf cd1d49a0, Exit 1: Nichtterminaler Retry lässt lokal done gebliebene, aktuell bei YouTube abgelehnte Teile erhalten, sodass Vorbereitung und Worker den nötigen Upload überspringen. NIT: bisherige Ablehnungsprobe erreicht den Zustand nicht. 68 Archiv- und 15 API-Proben tatsächlich grün, 0 failed/ignored, beide Clippy-Läufe erfolgreich. Kein ALLOW, Main-Push, Release, Migration, Deploy oder produktiver Abschluss der fünf Altfälle."],
+  "naechster_schritt": "Wie ausdrücklich beauftragt Ursache und kleinsten Lösungsweg melden: im vorhandenen gewöhnlichen Reset passend bei YouTube abgelehnten done-Teil berücksichtigen, processed-bestätigten Teil erhalten, vorhandene Probe über gespeicherte Ablehnung, ausdrücklichen Retry und gezählten Worker-Upload führen. Noch nicht umgesetzt. Keine weitere automatische Fixrunde oder neuer Fixer/Gate. Quellen d928e8cc und sämtliche geprüften Fixes erhalten. Nach Gate nur fehlende Attribution des eigenen ungepushten Integrationscommits korrigiert, alle sieben Quellenhashes unverändert. Entscheidung abwarten, nicht settlen und ungemergte Arbeit nicht bereinigen."
+}

@@ -1,0 +1,278 @@
+cargo-slot: Slot 4, optimiert=0
+    Checking tb-error v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-error)
+   Compiling tb-config v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-config)
+   Compiling tb-llm v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-llm)
+    Checking tb-crypto v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-crypto)
+    Checking tb-raid v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-raid)
+    Checking tb-transport-twitch v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-transport-twitch)
+    Checking tb-db v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-db)
+    Checking tb-effort v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-effort)
+    Checking tb-analytics v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-analytics)
+    Checking tb-scout v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-scout)
+    Checking tb-engagement v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-engagement)
+    Checking tb-social-media v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-social-media)
+    Checking tb-chat v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-chat)
+    Checking tb-dashboard-api v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-dashboard-api)
+warning: use of deprecated type alias `nix::sys::memfd::MemFdCreateFlag`: Use `MFdFlags instead`
+   --> crates/tb-dashboard-api/src/uplink_config.rs:847:30
+    |
+847 |             nix::sys::memfd::MemFdCreateFlag::empty(),
+    |                              ^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: the `Err`-variant returned from this function is very large
+  --> crates/tb-dashboard-api/src/auth/streamer_scope.rs:37:6
+   |
+37 | ) -> Result<(String, String), Response> {
+   |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+   |
+   = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+   = note: `#[warn(clippy::result_large_err)]` on by default
+
+warning: the `Err`-variant returned from this function is very large
+   --> crates/tb-dashboard-api/src/auth/streamer_scope.rs:182:6
+    |
+182 | ) -> Result<(String, String), Response> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+   --> crates/tb-dashboard-api/src/handlers/affiliate.rs:840:48
+    |
+840 | async fn verified_claim_target(login: &str) -> Result<String, Response> {
+    |                                                ^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: this function has too many arguments (8/7)
+   --> crates/tb-dashboard-api/src/handlers/ai_analysis.rs:162:1
+    |
+162 | / async fn run_ai_analysis(
+163 | |     pool: &PgPool,
+164 | |     guard: &mut SessionGuard,
+165 | |     twitch_user_id: &str,
+...   |
+170 | |     user_context: &str,
+171 | | ) -> Response {
+    | |_____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#too_many_arguments
+    = note: `#[warn(clippy::too_many_arguments)]` on by default
+
+warning: the `Err`-variant returned from this function is very large
+   --> crates/tb-dashboard-api/src/handlers/clip_contest.rs:416:45
+    |
+416 | async fn fetch_helix_clip(clip_id: &str) -> Result<HelixClip, Response> {
+    |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+   --> crates/tb-dashboard-api/src/handlers/clip_contest.rs:422:51
+    |
+422 | async fn fetch_helix_clip_inner(clip_id: &str) -> Result<HelixClip, Response> {
+    |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+   --> crates/tb-dashboard-api/src/handlers/clip_contest.rs:519:45
+    |
+519 | async fn deadlock_game_id(pool: &PgPool) -> Result<String, Response> {
+    |                                             ^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+   --> crates/tb-dashboard-api/src/handlers/clip_contest.rs:580:6
+    |
+580 | ) -> Result<DiscordEligibility, Response> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+  --> crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs:45:6
+   |
+45 | ) -> Result<Transaction<'static, Postgres>, Response> {
+   |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+   |
+   = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+   --> crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs:429:6
+    |
+429 | ) -> Result<i64, Response> {
+    |      ^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+   --> crates/tb-dashboard-api/src/handlers/clip_contest/contest.rs:674:6
+    |
+674 | ) -> Result<i64, Response> {
+    |      ^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+  --> crates/tb-dashboard-api/src/handlers/engagement_settings.rs:63:69
+   |
+63 | async fn resolve_actor(auth: &DashboardAuthLevel, pool: &PgPool) -> Result<Actor, Response> {
+   |                                                                     ^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+   |
+   = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+  --> crates/tb-dashboard-api/src/handlers/moderation_settings.rs:78:6
+   |
+78 | ) -> Result<String, Response> {
+   |      ^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+   |
+   = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: useless use of `format!`
+   --> crates/tb-dashboard-api/src/handlers/player_connect.rs:250:13
+    |
+250 | /             format!(
+251 | |                 "<aside class=side-card><h3>So nutzt du es</h3><ul class=side-list><li><span class=check>✓</span><span>Im Chat ei...
+252 | |             )
+    | |_____________^ help: consider using `.to_string()`: `"<aside class=side-card><h3>So nutzt du es</h3><ul class=side-list><li><span class=check>✓</span><span>Im Chat einfach <code>!rank me</code> schreiben.</span></li><li><span class=check>✓</span><span>Du kannst mehrere Steam-Konten verbinden und eines als Standard wählen.</span></li><li><span class=check>✓</span><span>Einzelne Konten oder die komplette Verknüpfung lassen sich jederzeit entfernen.</span></li></ul></aside>".to_string()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#useless_format
+    = note: `#[warn(clippy::useless_format)]` on by default
+
+warning: the borrowed expression implements the required traits
+    --> crates/tb-dashboard-api/src/handlers/social_media.rs:2344:48
+     |
+2344 |       let mut qb = QueryBuilder::<Postgres>::new(&format!(
+     |  ________________________________________________^
+2345 | |         "SELECT {CLIP_COLUMNS} FROM twitch_clips_social_media WHERE 1=1"
+2346 | |     ));
+     | |_____^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#needless_borrows_for_generic_args
+     = note: `#[warn(clippy::needless_borrows_for_generic_args)]` on by default
+help: change this to
+     |
+2344 ~     let mut qb = QueryBuilder::<Postgres>::new(format!(
+2345 +         "SELECT {CLIP_COLUMNS} FROM twitch_clips_social_media WHERE 1=1"
+2346 ~     ));
+     |
+
+warning: doc list item without indentation
+  --> crates/tb-dashboard-api/src/handlers/system/query.rs:10:5
+   |
+10 | //! Die Konsole führt absichtlich SQL von authentifizierten Admins aus. Die
+   |     ^
+   |
+   = help: if this is supposed to be its own paragraph, add a blank line
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#doc_lazy_continuation
+   = note: `#[warn(clippy::doc_lazy_continuation)]` on by default
+help: indent this line
+   |
+10 | //!   Die Konsole führt absichtlich SQL von authentifizierten Admins aus. Die
+   |     ++
+
+warning: doc list item without indentation
+  --> crates/tb-dashboard-api/src/handlers/system/query.rs:11:5
+   |
+11 | //! Keyword-Prüfung ist keine SQL-Sandbox; PostgreSQL erzwingt READ ONLY.
+   |     ^
+   |
+   = help: if this is supposed to be its own paragraph, add a blank line
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#doc_lazy_continuation
+help: indent this line
+   |
+11 | //!   Keyword-Prüfung ist keine SQL-Sandbox; PostgreSQL erzwingt READ ONLY.
+   |     ++
+
+warning: the `Err`-variant returned from this function is very large
+  --> crates/tb-dashboard-api/src/handlers/brain_lab.rs:35:26
+   |
+35 | async fn brain_pool() -> Result<PgPool, Response> {
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+   |
+   = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the `Err`-variant returned from this function is very large
+   --> crates/tb-dashboard-api/src/obs/ws.rs:236:6
+    |
+236 | ) -> Result<String, Response> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `axum::http::Response<axum::body::Body>`, for example by boxing large elements or replacing it with `Box<axum::http::Response<axum::body::Body>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#result_large_err
+
+warning: the borrowed expression implements the required traits
+   --> crates/tb-dashboard-api/src/uplink_config.rs:213:15
+    |
+213 |         fcntl(&borrowed, FcntlArg::F_GETFD).map_err(|_| "Infisical-FD ist nicht verfügbar.")?;
+    |               ^^^^^^^^^ help: change this to: `borrowed`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#needless_borrows_for_generic_args
+
+warning: the borrowed expression implements the required traits
+   --> crates/tb-dashboard-api/src/uplink_config.rs:215:9
+    |
+215 |         &borrowed,
+    |         ^^^^^^^^^ help: change this to: `borrowed`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#needless_borrows_for_generic_args
+
+warning: `tb-dashboard-api` (lib) generated 21 warnings (run `cargo clippy --fix --lib -p tb-dashboard-api -- --no-deps` to apply 4 suggestions)
+warning: use of deprecated type alias `nix::sys::memfd::MemFdCreateFlag`: Use `MFdFlags instead`
+  --> crates/tb-dashboard-api/examples/uplink_start_probe.rs:43:26
+   |
+43 |         nix::sys::memfd::MemFdCreateFlag::MFD_CLOEXEC,
+   |                          ^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: `tb-dashboard-api` (example "uplink_start_probe") generated 1 warning
+warning: this assertion has a constant value
+    --> crates/tb-dashboard-api/src/handlers/self_explainer.rs:1135:9
+     |
+1135 |         assert!(MODEL_TIMEOUT_SEC < ANSWER_TIMEOUT_SEC);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider moving this into a const block: `const { assert!(..) }`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assertions_on_constants
+     = note: `#[warn(clippy::assertions_on_constants)]` on by default
+
+warning: this assertion has a constant value
+    --> crates/tb-dashboard-api/src/handlers/self_explainer.rs:1136:9
+     |
+1136 |         assert!(ANSWER_TIMEOUT_SEC < 120);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider moving this into a const block: `const { assert!(..) }`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assertions_on_constants
+
+warning: unnecessary use of `clone` to create a slice from a reference
+   --> crates/tb-dashboard-api/src/handlers/community/matching.rs:232:29
+    |
+232 |         let single=schedule(&[s.clone()],at("2026-09-01T00:00:00Z"),at("2026-09-18T00:00:00Z"));
+    |                             ^^^^^^^^^^^^ help: try: `std::slice::from_ref(&s)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#cloned_ref_to_slice_refs
+    = note: `#[warn(clippy::cloned_ref_to_slice_refs)]` on by default
+
+warning: `tb-dashboard-api` (lib test) generated 25 warnings (21 duplicates) (run `cargo clippy --fix --lib -p tb-dashboard-api --tests -- --no-deps` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 13s
+cargo-slot: EXIT=0
