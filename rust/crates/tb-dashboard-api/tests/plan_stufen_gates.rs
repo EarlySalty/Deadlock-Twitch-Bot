@@ -29,7 +29,8 @@ use tb_dashboard_api::handlers::{
 const DDL: &[&str] = &[
     "CREATE TABLE streamer_plans (twitch_user_id TEXT, twitch_login TEXT, manual_plan_id TEXT, \
      manual_plan_expires_at TEXT, manual_plan_notes TEXT, manual_plan_updated_at TEXT, \
-     clip_command_enabled INTEGER DEFAULT 1)",
+     clip_command_enabled INTEGER DEFAULT 1, first_login_at TEXT, \
+     trial_ever_granted INTEGER DEFAULT 1)",
     "CREATE TABLE twitch_billing_subscriptions (customer_reference TEXT, plan_id TEXT, \
      status TEXT, current_period_end TEXT, updated_at TEXT)",
     "CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, \
@@ -68,7 +69,9 @@ const DDL: &[&str] = &[
      discarded_at TIMESTAMPTZ, kontingent_verbraucht_at TIMESTAMPTZ, layout_override_json JSONB, \
      uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, \
      uploaded_instagram BOOLEAN DEFAULT FALSE)",
+    "CREATE TABLE twitch_streamers (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT)",
     "CREATE TABLE social_media_partner_access (streamer_login TEXT PRIMARY KEY, \
+     twitch_user_id TEXT NOT NULL UNIQUE, \
      granted BOOLEAN NOT NULL DEFAULT TRUE, updated_at TIMESTAMPTZ DEFAULT NOW(), \
      updated_by TEXT)",
     "CREATE TABLE twitch_raid_history (from_broadcaster_login TEXT, to_broadcaster_login TEXT, \
@@ -129,24 +132,37 @@ async fn pool(schema: &str) -> Option<PgPool> {
             .await
             .unwrap();
     }
+    for login in ["freistreamer", "plusstreamer", "prostreamer"] {
+        sqlx::query("INSERT INTO twitch_streamers (twitch_user_id, twitch_login) VALUES ($1, $2)")
+            .bind(partner_id(login))
+            .bind(login)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
     Some(pool)
 }
 
-/// Partner-Session ohne `twitch_user_id`: der Trial-Auto-Grant im Resolver
-/// braucht beide Werte und springt so nicht an, die Stufe kommt allein aus dem
-/// Manual-Override.
+fn partner_id(login: &str) -> &'static str {
+    match login {
+        "freistreamer" => "101",
+        "plusstreamer" => "102",
+        "prostreamer" => "103",
+        _ => panic!("Unbekannte Partnerfixture: {login}"),
+    }
+}
+
 fn partner(login: &str) -> DashboardAuthLevel {
     DashboardAuthLevel::Partner {
         twitch_login: login.to_string(),
-        twitch_user_id: String::new(),
+        twitch_user_id: partner_id(login).to_string(),
         display_name: login.to_string(),
     }
 }
 
-/// Traegt eine Stufe als Manual-Override ein. Ohne Aufruf steht der Streamer
-/// auf dem Default und ist damit Free.
 async fn stufe_setzen(pool: &PgPool, login: &str, plan_id: &str) {
-    sqlx::query("INSERT INTO streamer_plans (twitch_login, manual_plan_id) VALUES ($1, $2)")
+    sqlx::query("INSERT INTO streamer_plans (twitch_user_id, twitch_login, manual_plan_id) VALUES ($1, $2, $3)")
+        .bind(partner_id(login))
         .bind(login)
         .bind(plan_id)
         .execute(pool)
@@ -280,9 +296,10 @@ async fn auto_posting_offen_solange_pro_nicht_buchbar() {
     };
     for login in ["freistreamer", "plusstreamer", "prostreamer"] {
         sqlx::query(
-            "INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ($1, TRUE)",
+            "INSERT INTO social_media_partner_access (streamer_login, twitch_user_id, granted) VALUES ($1, $2, TRUE)",
         )
         .bind(login)
+        .bind(partner_id(login))
         .execute(&pool)
         .await
         .unwrap();
@@ -290,10 +307,10 @@ async fn auto_posting_offen_solange_pro_nicht_buchbar() {
     stufe_setzen(&pool, "plusstreamer", "plus").await;
     stufe_setzen(&pool, "prostreamer", "pro").await;
     sqlx::query(
-        "INSERT INTO twitch_clips_social_media (id, clip_id, clip_url, streamer_login) \
-         VALUES (1, 'c1', 'https://clips.twitch.tv/c1', 'freistreamer'), \
-                (2, 'c2', 'https://clips.twitch.tv/c2', 'plusstreamer'), \
-                (3, 'c3', 'https://clips.twitch.tv/c3', 'prostreamer')",
+        "INSERT INTO twitch_clips_social_media (id, clip_id, clip_url, streamer_login, twitch_user_id) \
+         VALUES (1, 'c1', 'https://clips.twitch.tv/c1', 'freistreamer', '101'), \
+                (2, 'c2', 'https://clips.twitch.tv/c2', 'plusstreamer', '102'), \
+                (3, 'c3', 'https://clips.twitch.tv/c3', 'prostreamer', '103')",
     )
     .execute(&pool)
     .await
@@ -397,7 +414,7 @@ async fn clip_kontingent_zaehlt_ohne_zu_sperren() {
     let Some(pool) = pool("t_gate_clipfetch").await else {
         return;
     };
-    sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('freistreamer', TRUE)")
+    sqlx::query("INSERT INTO social_media_partner_access (streamer_login, twitch_user_id, granted) VALUES ('freistreamer', '101', TRUE)")
         .execute(&pool)
         .await
         .unwrap();
@@ -458,7 +475,7 @@ async fn kontingent_zaehlt_aufnahme_nicht_twitch_datum() {
     let Some(pool) = pool("t_gate_clipzaehlung").await else {
         return;
     };
-    sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('freistreamer', TRUE)")
+    sqlx::query("INSERT INTO social_media_partner_access (streamer_login, twitch_user_id, granted) VALUES ('freistreamer', '101', TRUE)")
         .execute(&pool)
         .await
         .unwrap();
