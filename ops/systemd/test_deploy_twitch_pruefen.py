@@ -7,6 +7,7 @@ import unittest
 
 WRAPPER = Path(__file__).with_name("deploy-twitch-release")
 SHA = "a" * 40
+LEGACY_SHA = "12987b689642b630f9b62b786f2002a6843add73"
 MOCKS = r'''
 systemctl() {
   [[ "$1" == show ]] || exit 90
@@ -179,7 +180,7 @@ class ArtifactPathTests(unittest.TestCase):
             package.parent.mkdir(parents=True, exist_ok=True)
             package.write_text('{}')
             wrapper_result = subprocess.run(
-                ["/bin/bash", "-c", 'set -euo pipefail\nsrc="$1"\ndashboard_source=bot/dashboard_v2/dist\n' + preflight + '\nprintf "%s\\n" "${required_artifacts[@]}"', "wrapper", str(checkout)],
+                ["/bin/bash", "-c", 'set -euo pipefail\nsrc="$1"\nnative_expected=0\ndashboard_source=bot/dashboard_v2/dist\n' + preflight + '\nprintf "%s\\n" "${required_artifacts[@]}"', "wrapper", str(checkout)],
                 capture_output=True, text=True, timeout=5,
             )
             if not dashboards:
@@ -211,6 +212,103 @@ class ArtifactPathTests(unittest.TestCase):
 
     def test_missing_dashboard_is_rejected_before_installation(self):
         self.check_layout(())
+
+
+class CollectorPackagingTests(unittest.TestCase):
+    def check_target(self, revision, native, scenario="complete"):
+        repository = WRAPPER.parents[2]
+        sha = subprocess.check_output(
+            ["git", "-C", str(repository), "rev-parse", revision], text=True,
+        ).strip()
+        wrapper = WRAPPER.read_text()
+        preflight = "native_expected=0\n" + wrapper.split("native_expected=0\n", 1)[1].split('\nif [[ -e "$dest"', 1)[0]
+        installer = WRAPPER.with_name("install-twitch-release.sh").read_text()
+        selection = "dashboard_source=bot/dashboard_v2/dist\n" + installer.split("dashboard_source=bot/dashboard_v2/dist\n", 1)[1].split("\ncheck_binary_revisions() {", 1)[0]
+        selection = selection.replace("! -user root", f"! -user {os.getuid()}")
+        revisions = "check_binary_revisions() {" + installer.split("check_binary_revisions() {", 1)[1].split('\ncheck_binary_revisions "$checkout"', 1)[0]
+        copies = '  install -m 0755 "$checkout/rust/target/release/tb-bot"' + installer.split('  install -m 0755 "$checkout/rust/target/release/tb-bot"', 1)[1].split('\n  "${git_safe[@]}" -C "$checkout" archive', 1)[0]
+        with tempfile.TemporaryDirectory(prefix="twitch-collector-packaging-") as directory:
+            checkout = Path(directory) / "checkout"
+            stage = Path(directory) / "stage"
+            (stage / "rust/target/release").mkdir(parents=True)
+            for relative in (
+                "rust/bin/tb-category-collector/Cargo.toml",
+                "rust/bin/tb-category-collector/src/lib.rs",
+                "rust/bin/tb-category-collector/src/bin/tb-twitch-watchdog.rs",
+                "rust/bin/tb-dashboard/src/bin/clip_context_learn.rs",
+            ):
+                exists = subprocess.run(
+                    ["git", "-C", str(repository), "cat-file", "-e", f"{sha}:{relative}"],
+                    capture_output=True,
+                ).returncode == 0
+                if exists:
+                    source = checkout / relative
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    source.write_text("synthetic source marker")
+            for relative in ("bot/dashboard_v2/dist", "bot/admin_dashboard/dist", "website/dist"):
+                (checkout / relative).mkdir(parents=True)
+            stamp = Path(directory) / "revision"
+            for binary in (
+                "tb-bot", "tb-dashboard", "tb-stream-audit", "tb-config-check",
+                "tb-llm-usage-recover", "tb-category-collector", "tb-twitch-watchdog", "clip_context_learn",
+            ):
+                if binary == "tb-category-collector" and scenario == "missing":
+                    continue
+                stamp.write_bytes((("0" * 40 if scenario == "wrong_revision" and binary == "tb-category-collector" else sha) + "\0").encode())
+                artifact = checkout / "rust/target/release" / binary
+                artifact.parent.mkdir(parents=True, exist_ok=True)
+                subprocess.run(
+                    ["objcopy", "--add-section", f".twitch_build={stamp}", "/usr/bin/true", str(artifact)],
+                    check=True, capture_output=True,
+                )
+            for path in checkout.rglob("*"):
+                path.chmod(path.stat().st_mode & ~0o022)
+            wrapper_result = subprocess.run(
+                ["/bin/bash", "-c", 'set -euo pipefail\nsrc="$1"\ndeclare -A restart_seen=([twitch-bot]=1)\n' + preflight + '\nprintf "%s\\n" "${required_artifacts[@]}"', "wrapper", str(checkout)],
+                capture_output=True, text=True, timeout=5,
+            )
+            prefix = 'set -euo pipefail\ncheckout="$1"\nstage="$2"\ngit_sha="$3"\nrepository="$4"\ntarget_git() { shift 2; /usr/bin/git -C "$repository" "$@"; }\ngit_safe=(target_git)\n'
+            command = prefix + selection + "\n" + revisions + '\ncheck_binary_revisions "$checkout"\n' + copies
+            if scenario == "incomplete_release":
+                command += '\nrm -- "$stage/rust/target/release/tb-category-collector"'
+            command += '\ncheck_binary_revisions "$stage"\nprintf "%s\\n" "${generated[@]}"'
+            installer_result = subprocess.run(
+                ["/bin/bash", "-c", command, "installer", str(checkout), str(stage), sha, str(repository)],
+                capture_output=True, text=True, timeout=5,
+            )
+            collector = "rust/target/release/tb-category-collector"
+            if scenario == "missing":
+                self.assertEqual(wrapper_result.returncode, 1, wrapper_result.stderr)
+                self.assertEqual(installer_result.returncode, 1, installer_result.stderr)
+                self.assertIn(collector, wrapper_result.stderr)
+                self.assertIn(collector, installer_result.stderr)
+            elif scenario in ("wrong_revision", "incomplete_release"):
+                self.assertEqual(wrapper_result.returncode, 0, wrapper_result.stderr)
+                self.assertEqual(installer_result.returncode, 1, installer_result.stderr)
+                self.assertIn("tb-category-collector", installer_result.stderr)
+            else:
+                self.assertEqual(wrapper_result.returncode, 0, wrapper_result.stderr)
+                self.assertEqual(installer_result.returncode, 0, installer_result.stderr)
+                self.assertEqual(wrapper_result.stdout.splitlines(), installer_result.stdout.splitlines())
+                self.assertEqual(collector in installer_result.stdout.splitlines(), not native)
+                self.assertEqual((stage / collector).exists(), not native)
+                if not native:
+                    self.assertEqual((checkout / collector).read_bytes(), (stage / collector).read_bytes())
+
+    def test_base_revision_requires_checks_and_copies_standalone_collector(self):
+        self.check_target(LEGACY_SHA, native=False)
+
+    def test_native_revision_never_packages_a_stale_standalone_binary(self):
+        self.check_target("HEAD", native=True)
+
+    def test_missing_legacy_collector_is_rejected_by_both_scripts(self):
+        self.check_target(LEGACY_SHA, native=False, scenario="missing")
+
+    def test_legacy_collector_from_another_revision_is_rejected(self):
+        self.check_target(LEGACY_SHA, native=False, scenario="wrong_revision")
+
+    def test_existing_release_without_expected_collector_is_rejected(self):
+        self.check_target(LEGACY_SHA, native=False, scenario="incomplete_release")
 
 
 if __name__ == "__main__":

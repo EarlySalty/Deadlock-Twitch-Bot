@@ -23,5 +23,6 @@ zeroize = { workspace = true }
 nix = { version = "0.31", features = ["fs", "user"] }
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 wiremock = { workspace = true }
 tempfile = "3"

@@ -58,6 +58,8 @@ Die Anzeige unterscheidet deaktivierte Sammlung, Plattenpause, Rohchatbudget-Pau
 
 Die Integration bringt den Sammler mit dem Bot-Release. `tb-category-collector` ist danach eine Bibliothek, kein eigenes Sammlerbinary. `tb-twitch-watchdog` bleibt ein separates, kurz laufendes Rust-Prüfprogramm im bestehenden `deadlock-twitch-bot-watchdog.timer`; es sammelt selbst keine Kategorie- oder Chatdaten. Der Herkunftsnachweis der Release-Artefakte steht in der ELF-Sektion `.twitch_build`.
 
+Die Verpackung richtet sich nach der Zielrevision: Stände mit Collector-Crate ohne native Bibliothek benötigen weiterhin `tb-category-collector`. Der Wrapper verlangt diese Binary vor dem Verschieben des Builds; der Installer prüft ihren eingebetteten Git-SHA im Build und im fertigen Release und kopiert sie in den Release-Baum. Native Zielrevisionen verpacken keine externe Sammlerbinary. Eine Rückkehr zu einem älteren Stand stellt bereits entfernte Units und Zugänge nicht wieder her; vor dessen Nutzung muss der Betreiber die getrennte Sammlung und die Übergangssperre erneut einrichten.
+
 `deploy-twitch-release` startet tatsächlich `deadlock-twitch-migrate.service`. Für diese Umschaltung spielt die Integration die neuen additiven Migrationen vor dem Release manuell als `postgres` in `twitch_analytics` ein. Die passenden Grants für Bot und Dashboard sowie Einträge in `_sqlx_migrations` müssen mit Version, Beschreibung, Erfolg und passender SQLx-Prüfsumme korrekt geführt werden. Der Wrapper prüft den angewandten Stand vor dem Bot-Neustart. Der Schema-Snapshot gehört zum integrierten Stand; zusätzliche `.sqlx`-Metadaten sind für die dynamischen Sammlerabfragen nicht erforderlich.
 
 Für die Umschaltung gilt diese Reihenfolge:
@@ -80,6 +82,8 @@ sudo -u postgres psql -d twitch_analytics -c "SELECT max(snapshot_at) FROM categ
 sudo -u postgres psql -d twitch_analytics -c "SELECT heartbeat_at,details FROM category_collector_status"
 systemctl status deadlock-twitch-bot-watchdog.timer
 ```
+
+Beim Beenden werden zuerst die Erzeuger-Tasks gestoppt und die anonyme IRC-Steuerung freigegeben. Der Chatwriter darf die geschlossene Eingangsqueue anschließend bis zu 15 Sekunden leeren; danach wird er abgebrochen und ein möglicher Verlust noch nicht bestätigter Chatzeilen im Bot-Journal gemeldet. Die nachfolgende Lease-Abmeldung und das Schließen ihrer Verbindung haben zusammen drei Sekunden Zeit. Der schreibende Bot-Pool begrenzt den Verbindungsaufbau, setzt aber selbst keine allgemeine Abfragefrist; ein blockierter Datenbankaufruf darf die Writer-Abschaltung deshalb nicht unbegrenzt aufhalten. Bereits bestätigte Archivdaten werden beim Abbruch nicht gelöscht.
 
 Ein Bot-Neustart startet auch die Sammler-Tasks neu. `enabled=false` pausiert die Sammlung ohne Bot-Stopp. Deploy-Wrapper und Installer verwenden bevorzugt `bot/dashboard_v2/dist`, wenn dieses Build-Verzeichnis vorliegt, andernfalls `bot/analytics/dashboard_v2/dist` für ältere Vite-Builds. Der Speicherort von `package.json` entscheidet nicht über den Ausgabepfad. Im installierten Release liegt das Dashboard in beiden Fällen unter `bot/analytics/dashboard_v2/dist`. Beim Rollback muss die Übergangssperre erneut geprüft werden; der externe Sammler darf nicht gleichzeitig mit dem nativen Pfad laufen. Die Archiv-Löschsperre bleibt bestehen.
 

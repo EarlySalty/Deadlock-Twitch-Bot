@@ -94,6 +94,12 @@ generated=(
   bot/admin_dashboard/dist
   website/dist
 )
+collector_expected=0
+if "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:rust/bin/tb-category-collector/Cargo.toml" 2>/dev/null &&
+   ! "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:rust/bin/tb-category-collector/src/lib.rs" 2>/dev/null; then
+  collector_expected=1
+  generated+=(rust/target/release/tb-category-collector)
+fi
 clip_context_expected=0
 watchdog_expected=0
 if "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:rust/bin/tb-category-collector/src/bin/tb-twitch-watchdog.rs" 2>/dev/null; then
@@ -126,6 +132,7 @@ done
 check_binary_revisions() {
   local source_root="$1" binary embedded_revision
   local binaries=(tb-bot tb-dashboard tb-stream-audit tb-config-check tb-llm-usage-recover)
+  if [[ "$collector_expected" == 1 ]]; then binaries+=(tb-category-collector); fi
   if [[ "$clip_context_expected" == 1 ]]; then binaries+=(clip_context_learn); fi
   if [[ "$watchdog_expected" == 1 ]]; then binaries+=(tb-twitch-watchdog); fi
   for binary in "${binaries[@]}"; do
@@ -167,6 +174,9 @@ if [[ ! -e "$release" ]]; then
   install -m 0755 "$checkout/rust/target/release/tb-stream-audit" "$stage/rust/target/release/tb-stream-audit"
   install -m 0755 "$checkout/rust/target/release/tb-config-check" "$stage/rust/target/release/tb-config-check"
   install -m 0755 "$checkout/rust/target/release/tb-llm-usage-recover" "$stage/rust/target/release/tb-llm-usage-recover"
+  if [[ "$collector_expected" == 1 ]]; then
+    install -m 0755 "$checkout/rust/target/release/tb-category-collector" "$stage/rust/target/release/tb-category-collector"
+  fi
   if [[ "$clip_context_expected" == 1 ]]; then
     install -m 0755 "$checkout/rust/target/release/clip_context_learn" "$stage/rust/target/release/clip_context_learn"
   fi

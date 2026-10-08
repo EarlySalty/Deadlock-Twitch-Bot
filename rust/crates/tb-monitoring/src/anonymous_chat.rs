@@ -419,6 +419,51 @@ mod tests {
         );
     }
     #[tokio::test]
+    async fn active_socket_producer_stops_when_its_controller_is_dropped() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        let (read, write) = client.into_split();
+        let (server_read, mut server_write) = server.into_split();
+        let mut commands = BufReader::new(server_read).lines();
+        let (roster, mut desired) = watch::channel(vec!["safe".into()]);
+        let (events, mut received) = mpsc::channel(10);
+        let stats = Arc::new(ReadStats::default());
+        let task_stats = stats.clone();
+        let task = tokio::spawn(async move {
+            serve(
+                BufReader::new(read),
+                write,
+                &mut desired,
+                &events,
+                &task_stats,
+                &Mutex::new(Instant::now()),
+            )
+            .await;
+        });
+        assert_eq!(
+            commands.next_line().await.unwrap().as_deref(),
+            Some("JOIN #safe")
+        );
+        server_write.write_all(b"@room-id=1 :tmi.twitch.tv ROOMSTATE #safe\r\n@room-id=1;user-id=2;id=shutdown :user!u@u PRIVMSG #safe :shutdown fixture\r\n").await.unwrap();
+        assert!(received.recv().await.is_some());
+        assert_eq!(stats.connected_shards.load(Ordering::Relaxed), 1);
+        tokio::time::pause();
+        drop(roster);
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(received.recv().await.is_none());
+        assert_eq!(stats.connected_shards.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.confirmed_channels.load(Ordering::Relaxed), 0);
+        tokio::time::resume();
+        assert!(commands.next_line().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn socket_transport_only_sends_membership_and_pong() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let client = TcpStream::connect(listener.local_addr().unwrap())

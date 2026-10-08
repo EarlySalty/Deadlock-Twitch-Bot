@@ -276,6 +276,9 @@ required_artifacts=(
   bot/admin_dashboard/dist
   website/dist
 )
+if [[ $native_expected -eq 0 && -f "$src/rust/bin/tb-category-collector/Cargo.toml" ]]; then
+  required_artifacts+=(rust/target/release/tb-category-collector)
+fi
 if [[ -f "$src/rust/bin/tb-category-collector/src/bin/tb-twitch-watchdog.rs" ]]; then
   required_artifacts+=(rust/target/release/tb-twitch-watchdog)
 fi

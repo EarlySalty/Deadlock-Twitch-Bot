@@ -9,7 +9,8 @@
 | A, Integration | w2z142fw3; wf_893f538e-efc; af3c6aedac0ce8e8c | Teil-Orchestrator 0712a6dd-cf2a-4a39-907a-f50b19e7930c | Workflow-Journal und Agenttranskript, Start 2026-10-08 16:21 CEST | Claude Code | gpt-6.1-sol, xhigh | angehalten, Änderungen und Belege übernommen | /home/nathanael/.worktrees/tb-kategoriesammler-nativ | feat/kategoriesammler-nativ | d782ab2b | 8 Collector-/Watchdog-Tests und 4 Supervisor-Tests bestanden, 0 ignoriert; Wrapper: 7 Tests bestanden. Eine zusätzliche wartende Abschlussprüfung wurde gestoppt. Der Teil-Orchestrator übernimmt Gate und Release. Kein Commit oder Produktiveingriff durch den Worker. |
 | A, Fixrunde 1 | a8bc3a25cc3536cdd | Teil-Orchestrator 0712a6dd-cf2a-4a39-907a-f50b19e7930c | Native Agent-Werkzeugbestätigung | Claude Code | gpt-6.1-sol | abgeschlossen | /home/nathanael/.worktrees/tb-kategoriesammler-nativ | detached | a1a49e95 | 34 Tests bestanden, 0 ignoriert; Gate mit gpt-6.1-sol ALLOW. Nach Integration des aktuellen origin/main ist eine erneute Prüfung nötig. |
 | A, Fixrunde 2 | a0de6619afa3de140 | Teil-Orchestrator 0712a6dd-cf2a-4a39-907a-f50b19e7930c | Native Agent-Werkzeugbestätigung und Abschlussmeldung | Claude Code | gpt-6.1-sol | abgeschlossen, neuer BLOCK | /home/nathanael/.worktrees/tb-kategoriesammler-nativ | detached | ac8c61b5 | Rollenmatrix und Schreibrechte korrigiert, 11 Archivtests bestanden, 0 ignoriert. Gate beanstandet Beobachtungsfenster und Meldungen bereits beendeter Ausfälle. Kein Push oder Deploy. |
-| A, Fixrunde 3 | a721e85d50a2232f8 | Teil-Orchestrator 0712a6dd-cf2a-4a39-907a-f50b19e7930c | Native Agent-Werkzeugbestätigung | Claude Code | gpt-6.1-sol | läuft | /home/nathanael/.worktrees/tb-kategoriesammler-nativ | detached | ac8c61b5 | Beobachtungsfenster, ehrliche Erholungsmeldung und zugehörige Rechte-/Artefaktpfad-Hinweise. Einziger Produktivschreiber, keine produktiven Eingriffe. |
+| A, Fixrunde 3 | a721e85d50a2232f8 | Teil-Orchestrator 0712a6dd-cf2a-4a39-907a-f50b19e7930c | Native Agent-Werkzeugbestätigung und Abschlussmeldung | Claude Code | gpt-6.1-sol | abgeschlossen, neuer BLOCK | /home/nathanael/.worktrees/tb-kategoriesammler-nativ | detached | 181645db | Beobachtungsfenster, Erholungsmeldung, Queue-Spaltenrecht und Frontend-Artefaktpfade korrigiert. 11 Wrappertests bestanden, 0 ignoriert. Gate beanstandet fehlende Collector-Verpackung älterer Zielrevisionen. Rustläufe ohne Testresultat beendet. Kein Push oder Deploy. |
+| A, Fixrunde 4 | ae68c09fba84ba53c | Teil-Orchestrator 0712a6dd-cf2a-4a39-907a-f50b19e7930c | Native Agent-Werkzeugbestätigung | Claude Code | gpt-6.1-sol | läuft | /home/nathanael/.worktrees/tb-kategoriesammler-nativ | detached | 181645db | Sichere Verpackung älterer Zielrevisionen, Writer-Abschaltung prüfen. Einziger Produktivschreiber, keine produktiven Eingriffe. |
 
 ## Gate Runde 1
 
@@ -41,6 +42,15 @@ Kandidat `ac8c61b58e1e28dcec312b4bb4f1d0ba2da1684a`, Basis `origin/main`, Kritik
 3. Hinweise prüfen: enges `UPDATE(hour_at)` in der noch nicht angewandten Native-Migration sowie Artefaktpfade bei Rückkehr zu einer älteren Release-Version.
 
 Nachweis: `/tmp/tb-category-gate-fix2-gate.log`. Die dritte Fixrunde erhält einen frischen nativen Kontext und denselben Kritiker.
+
+## Gate nach Fixrunde 3
+
+Kandidat `181645db51f279a7a8f9c1dd2ad95367270f09ec`, Kritiker `gpt-6.1-sol`: BLOCK. Nachweis `/tmp/tb-category-fix3-gate.log`.
+
+1. Installer und Deploy-Wrapper akzeptieren ältere Zielrevisionen ohne native Sammlung, verpacken deren externen Sammler aber nicht mehr. Vor Aktivierung muss entweder die vollständige Legacy-Verpackung abhängig von der Zielrevision bestehen oder eine ausdrücklich nicht unterstützte Revision sicher abgewiesen werden.
+2. Hinweis: Writer-Drain hat keine Frist. Tatsächliche IRC-Abschaltung und DB-Timeouts auf verlässlichen Abschluss prüfen.
+
+Die vierte Fixrunde erhält wieder einen frischen nativen Kontext. Die Elternprüfung für Bot und Sammler all-targets ist inzwischen mit Exit 0 abgeschlossen; sie lief während Runde 3 und ersetzt keinen sauberen finalen Release-Build.
 
 ## Reihenfolge und Freigaben
 

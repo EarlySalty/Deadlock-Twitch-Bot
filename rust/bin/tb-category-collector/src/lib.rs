@@ -61,17 +61,27 @@ pub async fn run(pool: PgPool, helix: Arc<HelixClient>, mut stop: watch::Receive
                 {
                     tracing::error!(%error, runtime = "tb-bot", "category runtime stopped; retry pending");
                 }
-                if leader.ping().await.is_ok() {
-                    if let Err(error) = sqlx::query("UPDATE category_collector_status SET details=details || '{\"native_lease_active\":false,\"lease_state\":\"inactive\"}'::jsonb WHERE singleton AND details->>'lease_id'=$1")
-                        .bind(identity["lease_id"].as_str()).execute(&mut leader).await {
-                        tracing::warn!(%error, "category lease status shutdown failed");
+                let cleanup = async {
+                    if leader.ping().await.is_ok() {
+                        if let Err(error) = sqlx::query("UPDATE category_collector_status SET details=details || '{\"native_lease_active\":false,\"lease_state\":\"inactive\"}'::jsonb WHERE singleton AND details->>'lease_id'=$1")
+                            .bind(identity["lease_id"].as_str()).execute(&mut leader).await {
+                            tracing::warn!(%error, "category lease status shutdown failed");
+                        }
+                        if let Err(error) =
+                            publish_presence(&mut leader, &identity, "inactive").await
+                        {
+                            tracing::warn!(%error, "category native presence shutdown failed");
+                        }
                     }
-                    if let Err(error) = publish_presence(&mut leader, &identity, "inactive").await {
-                        tracing::warn!(%error, "category native presence shutdown failed");
+                    if let Err(error) = leader.close().await {
+                        tracing::warn!(%error, "category database lease close failed");
                     }
-                }
-                if let Err(error) = leader.close().await {
-                    tracing::warn!(%error, "category database lease close failed");
+                };
+                if tokio::time::timeout(Duration::from_secs(3), cleanup)
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!("category lease cleanup timed out; database connection dropped");
                 }
             }
             Err(error) => tracing::warn!(%error, "category lease unavailable; bot continues"),
@@ -227,10 +237,21 @@ async fn run_active(
             writer.abort();
             let _ = writer.await;
         } else {
-            writer.await??;
+            drain_writer(writer).await?;
         }
     }
     outcome
+}
+
+async fn drain_writer(mut writer: tokio::task::JoinHandle<Result<(), Error>>) -> Result<(), Error> {
+    match tokio::time::timeout(Duration::from_secs(15), &mut writer).await {
+        Ok(result) => result?,
+        Err(_) => {
+            writer.abort();
+            let _ = writer.await;
+            Err("category chat drain timed out; uncommitted queued chat may be lost".into())
+        }
+    }
 }
 
 async fn discover(
@@ -530,6 +551,10 @@ async fn heartbeat(
 mod test_database;
 
 #[cfg(test)]
+#[path = "../../../test-support/postgres.rs"]
+mod test_postgres;
+
+#[cfg(test)]
 mod storage_tests {
     use super::*;
 
@@ -786,6 +811,113 @@ mod storage_tests {
             .await
             .unwrap();
         admin.close().await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_drains_chat_and_bounds_a_database_lock() {
+        let db = test_postgres::TestPostgres::start().await;
+        for migration in [
+            include_str!("../../../migrations/20260918123000_category_collector.sql"),
+            include_str!("../../../migrations/20260918170000_category_permanent_archive.sql"),
+        ] {
+            sqlx::raw_sql(migration).execute(&db.pool).await.unwrap();
+        }
+        sqlx::raw_sql(
+            "CREATE TABLE IF NOT EXISTS category_chat_messages_p20261008
+            PARTITION OF category_chat_messages FOR VALUES FROM ('2026-10-08') TO ('2026-10-09')",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let at = DateTime::parse_from_rfc3339("2026-10-08T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let roster: Roster = Arc::new(RwLock::new(HashMap::from([(
+            "sample".into(),
+            ("100".into(), "de".into()),
+        )])));
+        let counters = Arc::new(Counters::default());
+        let queued = |prefix: &str| {
+            let (events, received) = mpsc::channel(500);
+            for index in 0..500 {
+                events.try_send(ReadEvent {
+                    received_at: at,
+                    channel: "sample".into(),
+                    line: format!("@room-id=100;user-id=200;id={prefix}{index};tmi-sent-ts={} :viewer!v@v PRIVMSG #sample :Diese Nachricht wird im isolierten Archiv gespeichert.", at.timestamp_millis()),
+                }).unwrap();
+            }
+            drop(events);
+            received
+        };
+        let writer = tokio::spawn(write_chat(
+            db.pool.clone(),
+            queued("healthy"),
+            roster.clone(),
+            counters.clone(),
+        ));
+        drain_writer(writer).await.unwrap();
+        assert_eq!(counters.stored.load(Ordering::Relaxed), 500);
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM category_chat_messages")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 500);
+        let mut blocker = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT category_lock_chat_rooms(ARRAY['100'])")
+            .execute(&mut *blocker)
+            .await
+            .unwrap();
+        let statement_timeout: String = sqlx::query_scalar("SHOW statement_timeout")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(statement_timeout, "0");
+        let writer = tokio::spawn(write_chat(
+            db.pool.clone(),
+            queued("blocked"),
+            roster,
+            counters.clone(),
+        ));
+        let abort = writer.abort_handle();
+        let mut blocked = false;
+        for _ in 0..100 {
+            blocked = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT FROM pg_stat_activity
+                WHERE datname=current_database() AND wait_event_type='Lock'
+                AND query LIKE 'SELECT category_lock_chat_rooms%')",
+            )
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+            if blocked {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            blocked,
+            "actual chat writer must be waiting for the database lock"
+        );
+        tokio::time::pause();
+        let started = tokio::time::Instant::now();
+        let error = drain_writer(writer).await.unwrap_err();
+        assert_eq!(started.elapsed(), Duration::from_secs(15));
+        assert!(abort.is_finished());
+        assert!(error.to_string().contains("uncommitted queued chat"));
+        tokio::time::resume();
+        blocker.rollback().await.unwrap();
+        assert_eq!(counters.stored.load(Ordering::Relaxed), 500);
+        db.pool.close().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dropping_anonymous_chat_closes_the_writer_input() {
+        let (chat, mut events) = AnonymousChat::start(100);
+        drop(chat);
+        assert!(tokio::time::timeout(Duration::from_secs(1), events.recv())
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[test]

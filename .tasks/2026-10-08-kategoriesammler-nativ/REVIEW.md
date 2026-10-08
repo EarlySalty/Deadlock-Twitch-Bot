@@ -27,3 +27,12 @@ Gate: `/tmp/tb-category-gate-fix2-gate.log`.
 2. BLOCK: `rust/bin/tb-category-collector/src/bin/tb-twitch-watchdog.rs:330`. Bereits beendete Ausfälle werden als weiterhin fehlende aktuelle Daten angekündigt. Die ausgewählten Vorfälle tragen keine Erholungsinformation bis zur Meldung.
 3. NIT: `rust/migrations/20261008160000_category_native_bot.sql:60`. Enges `UPDATE(hour_at)` auf `category_chat_dirty` fehlt gegenüber der Rollenmatrix. Migration-only-Pfad einschließlich Konfliktupdate und Zeilensperre prüfen.
 4. NIT: `ops/systemd/deploy-twitch-release`, `required_artifacts`. Basis-Build und Installer wählen unterschiedliche Dashboard-Artefaktpfade. Rückkehr zu einer älteren Release-Version gegen beide Skripte belegen.
+
+Fixrunde 3: `181645db`. Die vier Funde korrigiert, 11 Wrappertests bestanden. Basis-Dashboard tatsächlich gebaut, 22 kopierte Frontend-Artefakte mit identischen SHA256-Werten belegt. Kein vollständiger Rust-Release-Nachweis für die Basisrevision. Folge-Gate BLOCK.
+
+## Offene Funde auf 181645db
+
+Gate: `/tmp/tb-category-fix3-gate.log`.
+
+1. BLOCK: `ops/systemd/install-twitch-release.sh:87`, `:128`, `:165` und `ops/systemd/deploy-twitch-release`, `required_artifacts`. Ältere Zielrevisionen ohne native Sammlung verlieren beim Neuverpacken ihren externen Collector. Die Skripte akzeptieren diese Stände trotzdem. Bedingte Legacy-Verpackung wiederherstellen oder nicht unterstützte Revisionen vor Aktivierung sicher ablehnen.
+2. NIT: `rust/bin/tb-category-collector/src/lib.rs:230`. Writer-Drain ohne Frist. Echte Abschaltung anonymer IRC-Produzenten und bestehende DB-Timeouts auf terminierenden Shutdown prüfen. Ein fehlender Nachweis ist kein bereits bestätigter Datenverlust.
