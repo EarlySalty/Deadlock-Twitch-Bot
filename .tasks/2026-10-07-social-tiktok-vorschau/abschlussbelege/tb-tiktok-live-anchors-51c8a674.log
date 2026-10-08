@@ -1,0 +1,2 @@
+tb-bot {'preview_source_changed': True, 'waiting_tiktok_approval': True, 'waiting_schedule': True}
+tb-dashboard {'preview_source_changed': False, 'waiting_tiktok_approval': True, 'waiting_schedule': True}

@@ -1,0 +1,5 @@
+current=/opt/deadlock/twitch/releases/b0bd68248c3accc1771e938e6166c3a122ac154e Release-SHA=b0bd68248c3accc1771e938e6166c3a122ac154e
+Unit=deadlock-twitch-bot-rust MainPID=3022811 exe=/opt/deadlock/twitch/releases/b0bd68248c3accc1771e938e6166c3a122ac154e/rust/target/release/tb-bot deleted=nein Release-SHA=b0bd68248c3accc1771e938e6166c3a122ac154e NRestarts=0 ActiveState=active
+Unit=deadlock-twitch-dashboard-rust MainPID=3022680 exe=/opt/deadlock/twitch/releases/b0bd68248c3accc1771e938e6166c3a122ac154e/rust/target/release/tb-dashboard deleted=nein Release-SHA=b0bd68248c3accc1771e938e6166c3a122ac154e NRestarts=0 ActiveState=active
+Unit=deadlock-twitch-stream-coaching-watch MainPID=3023797 exe=/opt/deadlock/twitch/releases/b0bd68248c3accc1771e938e6166c3a122ac154e/rust/target/release/tb-stream-audit deleted=nein Release-SHA=b0bd68248c3accc1771e938e6166c3a122ac154e NRestarts=0 ActiveState=active
+Unit=tb-category-collector MainPID=3023840 exe=/opt/deadlock/twitch/releases/b0bd68248c3accc1771e938e6166c3a122ac154e/rust/target/release/tb-category-collector deleted=nein Release-SHA=b0bd68248c3accc1771e938e6166c3a122ac154e NRestarts=0 ActiveState=active

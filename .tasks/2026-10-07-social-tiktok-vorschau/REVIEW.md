@@ -1,6 +1,6 @@
 # Gemeinsame Abnahme und Merge-Gate
 
-status: aktiv, 2026-10-08
+status: erledigt, 2026-10-08
 
 ## Integrierter Stand vor Intent-Abnahme
 
@@ -59,3 +59,9 @@ F4: `b9e284c5d03583b093ddb9324168949bf1775b12`. Zentraler Gate ALLOW, `/tmp/tb-t
 Der vor dem Neustart gesicherte Intent-Bericht zu f127 bestätigt keine notwendige Intent-Korrektur. Renderer-Abgleich: Quellpfade, Dateigröße und nanosekundengenaue Änderungszeit, Kanalname, Clip-/Customtitel und wirksames Layout sind abgedeckt. Assets und Renderkonstanten sind kompiliert. Kein fehlender veränderlicher DB-Eingang festgestellt. Grenze: gleich große Quelldateien mit identischer Änderungszeit werden nicht durch einen Inhaltsdigest unterschieden.
 
 F4-Moli-Belege enthalten gesetzte Zustimmung vor dem Wechsel von Video und Konto sowie anschließend gelöschte Zustimmung. Synthetische API, keine reale Zustimmung oder Veröffentlichung. Abschließende unabhängige Intent-Abnahme nach dem belegten Abbruch des alten Abnehmers durch I2. Neue main-Commits bis 6937e4a6 betreffen ausschließlich die separate Vollreview-Akte. Gemeinsame Schlussabnahme und Gate werden für den endgültigen Integrations-SHA gesichert.
+
+## Endgültiger integrierter SHA
+
+`51c8a674a371d0e623687940e6b8ca3492f96c92`: unabhängige Intent-Abnahme I2 bestätigt ja, notwendiger Fix nein. Delta seit b9 umfasst elf Akten, keine Produktivdateien. Danach zentraler Gate mit gpt-6.1-sol/high, Base 6937e4a61f43a9c08174fa95c96f49da149ca859, Exit 0: `ALLOW: No merge-blocking defect is established by the supplied code.` Rohbeleg `/tmp/tb-tiktok-final-gate-51c8a674.log`. NITs zu Queue-Deduplizierung, Abbruch auf anderen Clipzuständen, im Reviewauszug fehlendem Renderer und neuem Purity-Lint sind keine Gate-Sperre. Kein weiterer optionaler Umbau angeordnet.
+
+Lokaler Fast-forward im eigenen detached main-Integrationsworktree, Push HEAD:main erfolgreich. Hook lief unverändert: gitleaks ohne Fund, RustSec ohne blockierenden Fund, restliche Checks mit gemeldeten Warnungen. GitHub meldet drei High-Advisories separat; das lokale Security-Gate ließ den Push zu. Geteilter Checkout und fremde Branches/Worktrees unverändert.

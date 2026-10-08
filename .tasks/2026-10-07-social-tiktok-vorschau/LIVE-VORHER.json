@@ -1,0 +1,25 @@
+{
+  "phase": "vor Fixdeploy",
+  "release_sha": "b0bd68248c3accc1771e938e6166c3a122ac154e",
+  "provenance_exit": 0,
+  "processes": {
+    "deadlock-twitch-bot-rust": {"pid": 3022811, "nrestarts": 0, "active": true, "deleted": false},
+    "deadlock-twitch-dashboard-rust": {"pid": 3022680, "nrestarts": 0, "active": true, "deleted": false},
+    "deadlock-twitch-stream-coaching-watch": {"pid": 3023797, "nrestarts": 0, "active": true, "deleted": false},
+    "tb-category-collector": {"pid": 3023840, "nrestarts": 0, "active": true, "deleted": false}
+  },
+  "authenticated_status": {"clip_db_id": 124768, "http_status": 200, "content_type": "application/json", "preview_status": null, "ready": false, "has_error": false, "launcher_exit": 0},
+  "clips": [
+    {"id": 124767, "preview_status": null, "has_preview_path": false, "has_preview_error": false, "has_tiktok_options": false, "uploaded_youtube": false, "uploaded_tiktok": false},
+    {"id": 124768, "preview_status": null, "has_preview_path": false, "has_preview_error": false, "has_tiktok_options": false, "uploaded_youtube": true, "uploaded_tiktok": false}
+  ],
+  "queue": [
+    {"id": 5, "platform": "youtube", "status": "completed", "scheduled_at": "2026-10-07T16:00:00Z", "completed_at": "2026-10-07T16:02:01.465486Z", "attempts": 0, "has_tiktok_options": false},
+    {"id": 6, "platform": "tiktok", "status": "failed", "scheduled_at": "2026-10-07T16:00:00Z", "completed_at": null, "attempts": 1, "has_tiktok_options": false},
+    {"id": 7, "platform": "youtube", "status": "pending", "scheduled_at": "2026-10-08T16:00:00Z", "completed_at": null, "attempts": 0, "has_tiktok_options": false},
+    {"id": 8, "platform": "tiktok", "status": "pending", "scheduled_at": "2026-10-08T16:00:00Z", "completed_at": null, "attempts": 0, "has_tiktok_options": false}
+  ],
+  "preview_post_executed": false,
+  "user_consent_changed": false,
+  "tiktok_publication_executed": false
+}

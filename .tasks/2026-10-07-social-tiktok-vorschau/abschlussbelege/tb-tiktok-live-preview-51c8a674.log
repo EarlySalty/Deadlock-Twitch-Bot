@@ -1,0 +1,6 @@
+TIKTOK_PROOF {"method": "GET", "http_status": 200, "content_type": "application/json", "clip_db_id": 124768, "preview_status": null, "ready": false, "has_error": false, "error_stage": null}
+TIKTOK_PROOF {"method": "POST", "http_status": 200, "content_type": "application/json", "clip_db_id": 124768, "preview_status": "pending", "ready": false, "has_error": false, "error_stage": null}
+TIKTOK_PROOF {"method": "GET", "http_status": 200, "content_type": "application/json", "clip_db_id": 124768, "preview_status": "pending", "ready": false, "has_error": false, "error_stage": null}
+TIKTOK_PROOF {"method": "GET", "http_status": 200, "content_type": "application/json", "clip_db_id": 124768, "preview_status": "rendering", "ready": false, "has_error": false, "error_stage": null}
+TIKTOK_PROOF {"method": "GET", "http_status": 200, "content_type": "application/json", "clip_db_id": 124768, "preview_status": "ready", "ready": true, "has_error": false, "error_stage": null}
+LAUNCHER_EXIT 0
