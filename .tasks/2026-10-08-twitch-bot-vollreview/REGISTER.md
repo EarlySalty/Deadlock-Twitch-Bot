@@ -20,11 +20,20 @@ ORCHESTRIERUNG[OR-1]: Stufe riesig | Schritt eingang | Artefakt: .tasks/2026-10-
 
 ## Workflows und Modellnachweise
 
-Noch kein Agent gestartet. Jeder Agent erhält ausdrücklich `model: gpt-6.1-sol`. Vor Verwertung eines Ergebnisses wird `message.model` im nativen Transcript geprüft. Eine Selbstauskunft des Agenten genügt nicht.
+Jeder Agent erhält ausdrücklich `model: gpt-6.1-sol`. Vor Verwertung eines Ergebnisses wird `message.model` im nativen Transcript geprüft. Eine Selbstauskunft des Agenten genügt nicht.
+
+Eigene native Session: `f61905e7-f7ff-405b-a6d7-090dec371fcb`. Transcript-Basis: `/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/`.
+
+| Workflow | Task-ID | Run-ID | Agent | Status | Modellbeleg |
+|---|---|---|---|---|---|
+| Inventar und Paketschnitt | wbx0b59l4 | wf_63f9910c-f6d | a64e7b385898441c0 | läuft | agent-a64e7b385898441c0.jsonl: erste 7 Modellnachrichten ausschließlich gpt-6.1-sol; Abschlussprüfung ausstehend |
+| Gate-, Build- und Deploy-Vorprüfung | w7lpxe69c | wf_8b989b1c-1e8 | noch auszulesen | läuft | noch zu prüfen |
+
+Der erste Inventar-Agent hat Sol im Transcript bestätigt. Weitere Review-Starts erfolgen nach vollständigem Paketschnitt. Die Ops-Vorprüfung löst keinen Gate-Review und keinen Deploy aus.
 
 ## Nächste Schritte
 
-1. Auftrag und Register committen.
+1. Auftrag und Register sind mit `e8801a02` committed. Folgeartefakte gezielt sichern.
 2. Inventar erstellen, Pakete schneiden und Modellnachweis des ersten Sol-Agenten prüfen.
 3. Read-only-Reviews je Paket und Blickwinkel ausführen.
 4. A/B-Kandidaten mit zwei frischen Skeptikern prüfen; nur doppelt bestätigte Befunde zur Fixkette geben.
