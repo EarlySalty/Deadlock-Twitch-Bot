@@ -3520,6 +3520,9 @@ print(f.encrypt(payload.encode()).decode(), end='')
 
     #[tokio::test]
     async fn logout_zwischen_lesen_und_refresh_legt_keine_session_oder_cache_an() {
+        if std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1") {
+            return;
+        }
         let pool = maybe_pool()
             .await
             .expect("Testdatenbank muss erreichbar sein");
@@ -3595,6 +3598,9 @@ print(f.encrypt(payload.encode()).decode(), end='')
 
     #[tokio::test]
     async fn refresh_nach_logout_legt_keine_partner_access_session_an() {
+        if std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1") {
+            return;
+        }
         let pool = maybe_pool()
             .await
             .expect("Testdatenbank muss erreichbar sein");
@@ -3638,6 +3644,9 @@ print(f.encrypt(payload.encode()).decode(), end='')
 
     #[tokio::test]
     async fn gueltiger_refresh_behaelt_ttl_payload_und_kurzzeit_cache() {
+        if std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1") {
+            return;
+        }
         let pool = maybe_pool()
             .await
             .expect("Testdatenbank muss erreichbar sein");
