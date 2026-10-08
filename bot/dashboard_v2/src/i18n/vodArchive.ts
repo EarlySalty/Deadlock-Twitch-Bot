@@ -45,7 +45,7 @@ export const VOD_ARCHIVE_EN: Record<string, string> = {
   'Abschlüsse beruhen auf gespeicherten Uploadbestätigungen. Die heutige Verfügbarkeit und Sichtbarkeit prüfst du über die Ziellinks.': 'Completion is based on saved upload confirmations. Use the destination links to check current availability and visibility.',
   'Abgeschlossen: {date}': 'Completed: {date}',
   'Auf YouTube öffnen': 'Open on YouTube',
-  'YouTube: {done} von {total} Teilen bestätigt': 'YouTube: {done} of {total} parts confirmed',
+  'Frühere Uploadbestätigung: {done} von {total} Teilen': 'Earlier upload confirmation: {done} of {total} parts',
   'unbestätigt': 'unconfirmed',
   'Drive-Sicherung läuft.': 'Drive backup in progress.',
   'Dieses VOD ist auf Twitch nicht mehr verfügbar.': 'This VOD is no longer available on Twitch.',

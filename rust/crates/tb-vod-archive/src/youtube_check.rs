@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use tb_config::vod_archive::VodArchiveOptions;
 use tb_social_media::credentials::CredentialManager;
 use tb_social_media::upload_worker::youtube_uploader;
@@ -26,6 +26,14 @@ struct PruefVod {
     duration_sec: i64,
     snapshot: Value,
     parts: Value,
+}
+
+#[derive(sqlx::FromRow)]
+struct Kandidat {
+    twitch_id: String,
+    video_id: String,
+    part_index: Option<i32>,
+    part_total: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -125,6 +133,29 @@ async fn ziel_guard(
 async fn vods(pool: &PgPool, user: &str, target: &Ziel) -> Result<Vec<PruefVod>, sqlx::Error> {
     sqlx::query_as("SELECT v.id, v.twitch_id, v.duration_sec, jsonb_build_array(v.status,v.updated_at) AS snapshot, COALESCE((SELECT jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id),'[]'::jsonb) AS parts FROM twitch_vod_archive_vods v LEFT JOIN twitch_vod_youtube_checks c ON c.vod_id=v.id WHERE v.twitch_user_id=$1 AND (v.status IN ('uploaded','archived') OR EXISTS (SELECT 1 FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id AND p.youtube_video_id IS NOT NULL)) AND (c.vod_id IS NULL OR c.auth_id<>$2 OR c.auth_revision<>$3 OR c.next_check_at<=NOW() OR c.requested_at IS NOT NULL OR c.upload_snapshot<>COALESCE((SELECT jsonb_agg(jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at) ORDER BY p.part_index) FROM twitch_vod_archive_parts p WHERE p.vod_id=v.id),'[]'::jsonb)) ORDER BY c.requested_at ASC NULLS LAST, CASE WHEN c.state='processing' THEN 0 WHEN c.vod_id IS NULL THEN 1 ELSE 2 END, c.next_check_at ASC NULLS FIRST, v.id LIMIT 500")
         .bind(user).bind(target.id).bind(&target.revision).fetch_all(pool).await
+}
+
+async fn kandidaten(
+    pool: &PgPool,
+    user: &str,
+    target: &Ziel,
+    channel: &str,
+    pending: &[PruefVod],
+) -> Result<Vec<Kandidat>, sqlx::Error> {
+    let ids: Vec<_> = pending
+        .iter()
+        .filter(|vod| {
+            vod.parts.as_array().is_none_or(|parts| {
+                parts.is_empty()
+                    || parts
+                        .iter()
+                        .any(|part| part["video_id"].as_str().is_none_or(str::is_empty))
+            })
+        })
+        .map(|vod| vod.twitch_id.trim_start_matches('v').to_owned())
+        .collect();
+    sqlx::query_as("SELECT i.twitch_id,i.video_id,i.part_index,i.part_total FROM twitch_vod_youtube_inventory i JOIN twitch_vod_youtube_scans s USING(twitch_user_id) WHERE i.twitch_user_id=$1 AND i.twitch_id=ANY($2) AND i.generation=s.generation AND s.auth_id=$3 AND s.auth_revision=$4 AND s.channel_id=$5 ORDER BY i.part_index,i.video_id")
+        .bind(user).bind(ids).bind(target.id).bind(&target.revision).bind(channel).fetch_all(pool).await
 }
 
 fn source(video: &ArchivVideo) -> Option<(String, Option<(i32, i32)>)> {
@@ -449,19 +480,6 @@ async fn run_with(
                 continue;
             }
         };
-        let known: Vec<String> = pending
-            .iter()
-            .flat_map(|v| {
-                v.parts.as_array().into_iter().flatten().filter_map(|p| {
-                    p["video_id"]
-                        .as_str()
-                        .filter(|id| !id.is_empty())
-                        .map(str::to_owned)
-                })
-            })
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
         let historical = pending.iter().any(|v| {
             v.parts.as_array().is_none_or(|p| {
                 p.is_empty()
@@ -487,6 +505,25 @@ async fn run_with(
             .await?;
             tx.commit().await?;
         }
+        let candidates = kandidaten(pool, &user, &target, &channel.id, &pending).await?;
+        let known: Vec<String> = pending
+            .iter()
+            .flat_map(|v| {
+                v.parts.as_array().into_iter().flatten().filter_map(|p| {
+                    p["video_id"]
+                        .as_str()
+                        .filter(|id| !id.is_empty())
+                        .map(str::to_owned)
+                })
+            })
+            .chain(
+                candidates
+                    .iter()
+                    .map(|candidate| candidate.video_id.clone()),
+            )
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
         let reserved = if historical && !scan_complete { 2 } else { 0 };
         let mut found = HashMap::new();
         let mut failed = None;
@@ -498,6 +535,10 @@ async fn run_with(
             budget -= 1;
             match client.archiv_videos(batch).await {
                 Ok(videos) => {
+                    if videos.iter().any(|video| video.channel_id != channel.id) {
+                        failed = Some("channel_changed");
+                        break;
+                    }
                     queried.extend(batch.iter().cloned());
                     for video in videos {
                         found.insert(video.id.clone(), video);
@@ -557,18 +598,26 @@ async fn run_with(
                 tx.commit().await?;
             }
         }
+        let candidates = kandidaten(pool, &user, &target, &channel.id, &pending).await?;
         for vod in &pending {
             let parts = vod.parts.as_array().unwrap();
             let known_complete = !parts.is_empty()
                 && parts
                     .iter()
                     .all(|p| p["video_id"].as_str().is_some_and(|id| !id.is_empty()));
-            if known_complete
-                && parts
-                    .iter()
-                    .any(|p| !queried.contains(p["video_id"].as_str().unwrap()))
-                && failed.is_none()
-            {
+            let recovered: Vec<_> = candidates
+                .iter()
+                .filter(|candidate| candidate.twitch_id == vod.twitch_id.trim_start_matches('v'))
+                .collect();
+            let awaiting = parts.iter().any(|part| {
+                part["video_id"]
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .is_some_and(|id| !queried.contains(id))
+            }) || recovered
+                .iter()
+                .any(|candidate| !queried.contains(&candidate.video_id));
+            if awaiting && failed.is_none() {
                 continue;
             }
             let mut observations: Vec<Beobachtung> = parts
@@ -590,26 +639,39 @@ async fn run_with(
                 })
                 .collect();
             if !known_complete {
-                let rows=sqlx::query("SELECT i.* FROM twitch_vod_youtube_inventory i JOIN twitch_vod_youtube_scans s USING(twitch_user_id) WHERE i.twitch_user_id=$1 AND i.twitch_id=$2 AND i.generation=s.generation AND s.auth_id=$3 AND s.auth_revision=$4 AND s.channel_id=$5 ORDER BY i.part_index,i.video_id")
-                    .bind(&user).bind(vod.twitch_id.trim_start_matches('v')).bind(target.id).bind(&target.revision).bind(&channel.id).fetch_all(pool).await?;
-                for row in rows {
-                    let video_id: String = row.get("video_id");
-                    if observations.iter().any(|o| o.video_id == video_id) {
+                for candidate in recovered {
+                    let video_id = &candidate.video_id;
+                    if !queried.contains(video_id)
+                        || observations.iter().any(|o| o.video_id == *video_id)
+                    {
                         continue;
                     }
-                    let part = parts.iter().find(|part| part["video_id"] == video_id);
+                    let video = found.get(video_id);
+                    let marker = match video {
+                        Some(video) => {
+                            let Some((twitch_id, marker)) = source(video) else {
+                                continue;
+                            };
+                            if twitch_id != vod.twitch_id.trim_start_matches('v') {
+                                continue;
+                            }
+                            marker
+                        }
+                        None => candidate.part_index.zip(candidate.part_total),
+                    };
+                    let part = parts.iter().find(|part| part["video_id"] == *video_id);
                     observations.push(Beobachtung {
-                        video_id,
+                        video_id: video_id.clone(),
                         part_index: part.map_or_else(
-                            || row.get("part_index"),
+                            || marker.map(|m| m.0),
                             |p| p["index"].as_i64().map(|i| i as i32),
                         ),
                         part_total: part
-                            .map_or_else(|| row.get("part_total"), |_| Some(parts.len() as i32)),
-                        duration_sec: row.get("duration_sec"),
-                        state: row.get("state"),
-                        privacy: row.get("privacy"),
-                        observed_at: row.get("observed_at"),
+                            .map_or_else(|| marker.map(|m| m.1), |_| Some(parts.len() as i32)),
+                        duration_sec: video.and_then(|v| v.duration_sec),
+                        state: video.map_or("unavailable", |v| v.state.as_str()).into(),
+                        privacy: video.and_then(|v| v.privacy.clone()),
+                        observed_at: Utc::now(),
                     });
                 }
             }

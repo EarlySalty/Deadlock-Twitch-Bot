@@ -8,7 +8,7 @@ import { translate } from '../src/i18n/dictionary';
 
 (globalThis as { React?: typeof React }).React = React;
 Object.assign(globalThis, { window: { location: { pathname: '/', hostname: 'localhost' }, localStorage: { getItem: () => null, setItem: () => {} } } });
-const { VodArchiveEntry } = await import('../src/components/socialmedia/VodArchiveTab');
+const { VodArchiveEntry, VOD_UPLOAD_PARTS_LABEL } = await import('../src/components/socialmedia/VodArchiveTab');
 
 const base: ArchivedVod = {
   id: 1, twitch_id: 'synthetic', channel: 'testkanal', twitch_user_id: '42',
@@ -76,6 +76,29 @@ test('current private proof renders checked time and an independent debounced re
   const error = render({ display_status: 'youtube_error', youtube_check: { ...proof, state: 'error', complete: false, error: 'connection' } });
   assert.match(error, /oauth\/start\/youtube/);
   assert.match(error, /watch\?v=matched/);
+});
+
+test('YouTube reconnect errors keep their recovery link alongside independent Drive success', () => {
+  for (const error of ['connection', 'channel_changed']) {
+    const html = render({ display_status: 'drive_uploaded', status_label: 'Auf Drive gesichert', drive_requested: true, drive_complete: true, drive_url: 'https://drive.google.com/drive/folders/synthetic', youtube_complete: false, youtube_check: { state: 'error', complete: false, pending: false, error, last_attempt_at: null, last_success_at: null, observations: [] } });
+    assert.match(html, /oauth\/start\/youtube/);
+    assert.match(html, /drive\.google\.com/);
+    assert.match(html, /lucide-hard-drive/);
+    assert.equal((html.match(/<button/g) ?? []).length, 1);
+  }
+  assert.doesNotMatch(render({ drive_requested: true, needs_connection: true, can_retry: true }), /oauth\/start\/youtube/);
+  assert.doesNotMatch(render({ twitch_user_id: null, youtube_check: { state: 'error', complete: false, pending: false, error: 'connection', last_attempt_at: null, last_success_at: null, observations: [] } }), /oauth\/start\/youtube/);
+});
+
+test('current multipart proof and historical upload coverage remain explicitly separate', () => {
+  const checked = '2026-10-08T01:00:00Z';
+  const proof = { state: 'confirmed', complete: true, pending: false, error: null, last_attempt_at: checked, last_success_at: checked, observations: [0, 1].map((part_index) => ({ video_id: `matched-${part_index}`, part_index, part_total: 2, state: 'processed', privacy: 'private', observed_at: checked })) };
+  const html = render({ display_status: 'youtube_confirmed', status_label: 'Auf YouTube bestätigt', youtube_complete: false, youtube_verified_complete: true, confirmed_parts: 0, total_parts: 2, parts: [], uploaded_at: null, youtube_check: proof });
+  assert.ok(html.includes(VOD_UPLOAD_PARTS_LABEL.replace('{done}', '0').replace('{total}', '2')));
+  assert.match(html, /lucide-circle-check/);
+  assert.equal((html.match(/watch\?v=matched-/g) ?? []).length, 2);
+  assert.doesNotMatch(html, /dateTime="2026-09-01/);
+  assert.notEqual(translate('en', VOD_UPLOAD_PARTS_LABEL), VOD_UPLOAD_PARTS_LABEL);
 });
 
 test('archive status and new UI copy have translations', () => {
