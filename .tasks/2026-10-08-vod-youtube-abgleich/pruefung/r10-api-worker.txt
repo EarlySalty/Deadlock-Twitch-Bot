@@ -1,0 +1,55 @@
+cargo-slot: Slot 3, optimiert=0
+   Compiling tb-config v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-config)
+   Compiling tb-llm v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-llm)
+   Compiling tb-transport-twitch v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-transport-twitch)
+   Compiling tb-db v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-db)
+   Compiling tb-analytics v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-analytics)
+   Compiling tb-effort v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-effort)
+   Compiling tb-engagement v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-engagement)
+   Compiling tb-social-media v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-social-media)
+   Compiling tb-chat v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-chat)
+   Compiling tb-vod-archive v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-vod-archive)
+   Compiling tb-dashboard-api v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-dashboard-api)
+warning: use of deprecated type alias `nix::sys::memfd::MemFdCreateFlag`: Use `MFdFlags instead`
+   --> crates/tb-dashboard-api/src/uplink_config.rs:847:30
+    |
+847 |             nix::sys::memfd::MemFdCreateFlag::empty(),
+    |                              ^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: `tb-dashboard-api` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4m 52s
+     Running unittests src/lib.rs (/home/nathanael/.cache/rust-build/cc/fbcfe1d0264353/debug/deps/tb_dashboard_api-6b3830a6c5e6039f)
+
+running 1 test
+YOUTUBE_API_WORKER_DB_PROOF: persisted rejected/failed observations reset locally done parts through genuine ordinary retry and worker preparation, exactly one counted upload each; processed legacy failures remain byte-identical, repeat adds zero uploads; unavailable, check errors and stale identity/source/part snapshots grant no new upload
+test handlers::social_media::vod_archive_management::tests::ordinary_provider_rejection_retries_the_actual_worker_and_preserves_processed_parts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1359 filtered out; finished in 2.20s
+
+     Running tests/plan_stufen_gates.rs (/home/nathanael/.cache/rust-build/cc/fbcfe1d0264353/debug/deps/plan_stufen_gates-880525e1045e674e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+     Running tests/public_streamer_comparison.rs (/home/nathanael/.cache/rust-build/cc/fbcfe1d0264353/debug/deps/public_streamer_comparison-1f5885c9f8e50b3f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/social_media_routes.rs (/home/nathanael/.cache/rust-build/cc/fbcfe1d0264353/debug/deps/social_media_routes-4611275c713ce681)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/twitch_paths.rs (/home/nathanael/.cache/rust-build/cc/fbcfe1d0264353/debug/deps/twitch_paths-d06a12027b992b13)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+cargo-slot: EXIT=0

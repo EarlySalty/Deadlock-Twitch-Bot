@@ -1,0 +1,18 @@
+cargo-slot: Slot 3, optimiert=0
+   Compiling tb-config v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-config)
+   Compiling tb-llm v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-llm)
+   Compiling tb-transport-twitch v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-transport-twitch)
+   Compiling tb-analytics v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-analytics)
+   Compiling tb-engagement v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-engagement)
+   Compiling tb-social-media v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-social-media)
+   Compiling tb-vod-archive v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-vod-archive)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 26s
+     Running unittests src/lib.rs (/home/nathanael/.cache/rust-build/cc/fbcfe1d0264353/debug/deps/tb_vod_archive-4375c79f36c27180)
+
+running 1 test
+YOUTUBE_WORKER_DB_PROOF: reconciliation persists a real rejection, repeated archive execution uploads nothing and preserves the completed part and local source until explicit retry
+test worker::tests::verworfene_uploads_fallen_nicht_unter_den_tisch ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 67 filtered out; finished in 0.32s
+
+cargo-slot: EXIT=0
