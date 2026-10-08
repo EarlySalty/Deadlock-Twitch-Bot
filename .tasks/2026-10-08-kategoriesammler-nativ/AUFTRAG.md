@@ -31,6 +31,12 @@ Auslöser: zwei Discord-DMs des Watchdogs (03:33 und 15:37 am 2026-10-08):
 - Abschluss nach CLAUDE.md: Merge-Gate (`gate_hook.py --review`), bei BLOCK frische Fixer-Subagenten bis ALLOW; dann `git push origin HEAD:main` als Einzelschritt, Deploy über `deploy-twitch-release <sha>` (Skill `deploy-restart-selbstdienst`), Bot-Neustart, Live-Beweis (Snapshots im Bot-Journal, neue Zeilen in `category_stream_snapshots`, alte Unit gestoppt und disabled, Watchdog grün), Branch und Worktree aufräumen, danach `t3-thread.py settle --selbst`.
 - Rücksprache nur bei echter Architekturfrage oder Datenverlustrisiko, dann als `FRAGE AN ORCHESTRATOR:` mit Empfehlung.
 
+## Fixrunde 6: Begrenzter Watchdog-Abschluss
+
+Der native Kern `4ddf37032050c2b8cbe74bb921d7ed1c055514b4` ist bereits auf main und produktiv umgeschaltet. Die Migrationen sind angewandt und eingefroren. Die Hauptsession hat die alte Sammlung nach dem nativen Messbeweis entfernt; der Watchdog-Start und eine bestehende Watchdog-Prüfung sind noch fehlerhaft.
+
+Dieses Paket korrigiert den Watchdog-Rollenwechsel für die gemeinsame Bot-Konfiguration und zieht die belegte fehlgeschlagene Prüfung ohne schwächere Schutzbedingungen nach. Eigentum, Prüfbefehle und Freigaben stehen in `FIXRUNDE-6.md`. Freigabepunkt ist ein sauberer eigener Commit mit vollständigem Collector-/Watchdog-Testresultat und lokalem Gate ALLOW durch `gpt-6.1-sol`. Kein Push, Deploy, Neustart, produktiver Eingriff oder Cleanup durch den Fixer. Der Speichernachtrag bleibt zurückgestellt.
+
 ## Bericht
 
-Kurz: was umgebaut wurde, Commits/Merge-SHA, Deploy-SHA, Live-Beweise, entfernte Altteile, offene Punkte.
+Kurz: Ursachen, enger Fix, eigener SHA, tatsächliche Prüfzahlen, Gate-Urteil und Nachweisorte. Den produktiven Watchdog-Start und den abschließenden Deploy prüft die Hauptsession.

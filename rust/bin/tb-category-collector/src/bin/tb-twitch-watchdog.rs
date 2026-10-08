@@ -437,7 +437,9 @@ async fn main() -> Result<()> {
     }
     let notification = notify_credential().await;
     let identity = nix::unistd::User::from_name("twitchbot")?.ok_or("Bot-Dienstkonto fehlt")?;
-    nix::unistd::setgroups(&[])?;
+    let shared_config =
+        nix::unistd::Group::from_name("twitchmedia")?.ok_or("Bot-Konfigurationsgruppe fehlt")?;
+    nix::unistd::setgroups(&[shared_config.gid])?;
     nix::unistd::setgid(identity.gid)?;
     nix::unistd::setuid(identity.uid)?;
     let operating = BotConfigSnapshot::load(Path::new(&arguments.path))?;
@@ -581,6 +583,26 @@ mod tests {
         assert_eq!(seconds(&config, "dm_after_seconds").unwrap(), 3600);
         assert!(parse_config(&input.replace(BROKER, "http://example.org/send")).is_err());
         assert!(parse_config(&input.replace(BOT, "other.service")).is_err());
+    }
+
+    #[test]
+    fn installed_unit_passes_shared_bot_config_as_cli_argument() {
+        let unit = include_str!("../../../../../ops/systemd/deadlock-twitch-bot-watchdog.service");
+        let mut command = unit
+            .lines()
+            .find_map(|line| line.strip_prefix("ExecStart="))
+            .unwrap()
+            .split_whitespace();
+        assert_eq!(
+            command.next(),
+            Some("/opt/deadlock/twitch/current/rust/target/release/tb-twitch-watchdog")
+        );
+        let arguments = ConfigArguments::parse(command.map(std::ffi::OsString::from)).unwrap();
+        assert_eq!(
+            arguments.path,
+            Path::new("/var/lib/deadlock-twitch/config/bot.toml")
+        );
+        assert!(arguments.remaining.is_empty());
     }
 
     #[test]
@@ -1133,11 +1155,31 @@ mod tests {
                 .fetch_all(&pool)
                 .await
                 .unwrap();
+        let restarted_at: DateTime<Utc> =
+            sqlx::query_scalar("SELECT started_at FROM twitch_watchdog_incidents WHERE id=$1")
+                .bind(ids[1])
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            restarted_at,
+            now + chrono::Duration::seconds(90) + chrono::Duration::microseconds(1)
+        );
         assert!(first_delivery_error(&pool, ids[0], now).await.unwrap());
         assert!(!first_delivery_error(&pool, ids[0], now).await.unwrap());
         assert!(first_delivery_error(&pool, ids[1], now).await.unwrap());
-        let selected: Vec<Incident> = sqlx::query_as(NOTIFICATION_QUERY)
+        let boundary: Vec<Incident> = sqlx::query_as(NOTIFICATION_QUERY)
             .bind(now + chrono::Duration::seconds(180))
+            .bind(BOT)
+            .bind(3600_i32)
+            .bind(60_i32)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(boundary.len(), 1);
+        assert_eq!(boundary[0].id, ids[0]);
+        let selected: Vec<Incident> = sqlx::query_as(NOTIFICATION_QUERY)
+            .bind(now + chrono::Duration::seconds(181))
             .bind(BOT)
             .bind(3600_i32)
             .bind(60_i32)

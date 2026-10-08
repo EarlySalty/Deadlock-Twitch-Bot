@@ -1,7 +1,0 @@
-{
-  "database_url": "postgresql:///twitch_analytics?host=/var/run/postgresql&user=twitchcollector",
-  "secrets": {
-    "type": "file",
-    "path": "/run/credentials/tb-category-collector.service/category-twitch"
-  }
-}
