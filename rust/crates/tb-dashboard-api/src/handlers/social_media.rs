@@ -41,7 +41,6 @@ use tb_social_media::clip_manager::{
     batch_upload_all_new, get_clips_for_dashboard, mark_clip_uploaded, register_manual_upload,
     ManualUploadError,
 };
-use tb_social_media::clip_queue::queue_upload;
 use tb_social_media::clip_templates::{
     apply_template_to_clip, create_streamer_template, get_global_templates, get_last_hashtags,
     get_streamer_templates, save_last_hashtags, GlobalTemplate, StreamerTemplate,
@@ -4186,6 +4185,7 @@ fn serve_mp4_range(bytes: Vec<u8>, range: Option<&str>) -> Response {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+    use tb_social_media::clip_queue::queue_upload;
 
     #[test]
     fn form_submission_response_maps_all_outcomes() {
