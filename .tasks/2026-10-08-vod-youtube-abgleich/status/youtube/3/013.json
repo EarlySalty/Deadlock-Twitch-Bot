@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 13,
+  "zeit": "2026-10-08T18:47:41Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "implementierung",
+  "gebaut": "nein",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "a2a2774b22756cbc751f16005f83534293d48038",
+  "nachweise": ["REGISTER.md", "REVIEW.md", "pruefung/gate-round11.txt", "pruefung/gate-round11-base.txt", "pruefung/r10-source-sha256.txt"],
+  "blocker": [],
+  "naechster_schritt": "Ausdrücklich freigegebener vollständiger Mehrteiler-Dauerguard durch frischen nativen Fixkontext aec2e565ac92170c0 aktiv. total>1-Durchlass in beiden vorhandenen ID-losen Schutzprädikaten beseitigen, nur belegte Dauer-/Teilinformationen verwenden; bekannte IDs und Fehler-/Kontobindung erhalten. Vorhandene echte 60s/60s-Workerfolge mit 1s Teil 1/2, ausdrücklichem Retry und ausreichender positiver Gegenprobe prüfen. Bereits laufenden Clippy b8zb1ayz9 weder doppeln noch abbrechen und nur tatsächlichem Quellstand zurechnen. Danach Quellen einfrieren und gleichen regulären Gate parallel zu fehlenden passenden Prüfungen. Bei ALLOW autorisierter vollständiger Main-/Release-/Liveabschluss ohne weitere Freigabefrage."
+}

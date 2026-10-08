@@ -1,0 +1,5 @@
+/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-dashboard-api/src/handlers/social_media_vod_archive.rs: OK
+/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-dashboard-api/src/handlers/social_media_vod_archive_tests.rs: OK
+/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-vod-archive/src/youtube_check.rs: OK
+/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-vod-archive/src/youtube_check_tests.rs: OK
+/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-vod-archive/src/worker.rs: OK
