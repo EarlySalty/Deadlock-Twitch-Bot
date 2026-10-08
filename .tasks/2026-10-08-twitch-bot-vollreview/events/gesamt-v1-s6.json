@@ -1,0 +1,42 @@
+{
+  "auftrag": "2026-10-08-twitch-bot-vollreview",
+  "paket": "gesamt",
+  "versuch": 1,
+  "sequenz": 6,
+  "zeit": "2026-10-08T08:19:48Z",
+  "produzent": "astra-f61905e7",
+  "phase": "aktiv",
+  "gebaut": "nein",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "f8c0ae31",
+  "nachweise": [
+    "Sieben Defektbereiche konsolidiert: R09, DA01, DA02, DA03, DA04, DA05, DA06. Deklarierte Intervalle beweisen keine vollständige tatsächliche Werkzeuglektüre oder Fehlerfreiheit.",
+    "DA03-Gegenprüfung vollständig: 38 Originalurteile, 1543 echte Sol-Datensätze, ein synthetischer Datensatz getrennt. Vier ursprüngliche API-Ausfälle genau einmal ergänzt. Modelle, Hashes und StructuredOutput-Gleichheit geprüft. 4 A, 11 B, vier C-Sperren; mit sieben ursprünglichen C-Gruppen DA03 insgesamt 4 A, 11 B, 11 C.",
+    "R09, W02 und DA03 zusammen 13 A, 25 B, 30 C. Keine erledigten Fixzahlen. DA04/DA05/DA06 ergänzen 67 ungeprüfte A/B-Vorschläge und 29 ursprüngliche C-Vorschläge.",
+    "W03-DA03-GEGENPRUEFUNG.json abgenommen, SHA256 658fea9e12a905451ce2162807b3cdd2e0c34d19734758ac5a09146a948fe32e. Export wf_fb383924-e58 beendet. Vier C-Sperren bleiben bestehen, keine weiteren günstigen Ersatzurteile.",
+    "DA04/DA05/DA06-Konsolidierung wf_af2d23c2-851 beendet und abgenommen: 50 Reviewertranscripts, 2829 echte Sol-Datensätze, zwei synthetische Datensätze getrennt, 118 Originalbefunde exakt erhalten. Gegenprüfung der 67 neutralen Claims in wf_655679bf-2b7, Task w1e6f5s6i, je zwei unabhängige Skeptiker.",
+    "W03 wf_bd410bd5-531 ist inzwischen beendet: 183 von 185 Rückgaben, 318 rohe Meldungen, keine bestätigten Zahlen daraus. Fehlend DA07-S001:security nach Kontextlimit und DA15-S002:resources nach API 403. Genau diese beiden Rollen in wf_6efbb8b3-653, Task wwucjq6g5 nachbeauftragt; 183 Originale bleiben erhalten. W04 wf_b01ff274-9fa, Task wyiyzgmff gestartet: weitere 13 Bereiche, 46 Abschnitte, 230 geplante Reviews. Insgesamt 25 Bereiche beauftragt, 83 weitere Defektbereiche noch zu verteilen.",
+    "Zwölf Qualitätsbereiche samt Kritik abgenommen. Q04 wf_e3b6f95d-94c, Task wy6nc2611 weiter aktiv, um 08:04 UTC 90 Starts und 76 einzelne Ergebnisse. Keine Gesamtnote oder Abnahme von 76 Bereichen.",
+    "B02 Prüfabschluss abgenommen: unveränderter Head e98b7f016dbab373a5a8dd9490d158b136c97fec auf a8b5b5e9. 50 finale OBS-Tests bestanden, Gesamtsuite 1334 bestanden und dieselben 35 Fehler wie neu ausgeführte Baseline. Eigene Dateien formatiert, fremde Paketformat-/Clippyfehler identisch. Echte Kritik und passender Sol-Gate ALLOW. Kleine Integration in wf_bcd5a36c-fdb, Task wty4n1c23 beauftragt, noch kein Merge belegt.",
+    "A01 Runde-3-Fixer wf_b79d23f0-572 durch Kontextlimit ohne Rückgabe beendet. Sauberer lokaler Commit 1080b730 und Logs erhalten: sieben gemeldete positive Regressionen, Suite 1340 bestanden und 35 identische Baselinefehler, ALLOW-Gatelog; Clippy offen. Neuer Abschluss ohne Quelländerung und frische Kritik wf_5c114a47-0a8, Task wu3qyyarz. Keine vierte Codekorrektur unterstellt.",
+    "B01-Abgleich beendet und auf Sol geprüft, Head c3aa3cc94fec60aa365dcc9ca9f54b4bd3f1539a. Vorhandene Regression grün, Suite 336 bestanden und 24 identische Baselinefehler; neuer Versuch nach 3600 Sekunden ohne Cargo-Slot beendet. Passender Sol-Gate ALLOW, frischer Kritiker im selben wf_45aca23b-0b9 aktiv.",
+    "B04 vorbereiteter Sol-Diff durch Astra ohne Quelländerung lokal als c0383531 gesichert. Früherer Kritiker sah leeren Commitvergleich. B06/B07-Kritiker ohne Urteil durch API 403 ausgefallen. Neuer Prüfabschluss und echte Kritik B04/B06/B07 in wf_961bca08-8d7, Task wo3n55x8t. Erste Fünfergruppe wf_3e7d57bd-7ac beendet.",
+    "A02/B05 weiter im eigenen Prüfabschluss wf_b6076a3e-97b. B03 Runde 2 in wf_651129fb-11c, B09 im ursprünglichen wf_f3187078-c1c. Aktive Rollen nicht duplizieren.",
+    "B08 erste Rolle ohne Änderung wegen Schreibumfang beendet. Enger Zusatzpfad admin_research.rs erhält bestehenden Research-Vertrag desselben bestätigten Parserfixes. Frischer Fixer und Kritiker in wf_2b7d67c4-23f, Task wti12vgrf, BRIEFING-B08-R2.md.",
+    "B10 für zwei bestätigte Authstatus-Befunde gestartet: wf_b1cabe6f-009, Task wo6s9aj11, eigener Worktree tb-vollreview-authstatus, ausschließlich handlers/auth_status.rs. C-gesperrte HTTP-Cachepolitik ausdrücklich ausgeschlossen. Noch kein Fixergebnis."
+  ],
+  "blocker": [
+    "Deploy bleibt gesperrt: vorgeschriebener Wrapper startet Migrationen und verändert PostgreSQL-Konfiguration. Keine menschliche Freigabe erhalten. Auch B02-Integration erlaubt keinen Releasebau, Deploy, Neustart oder Aufräumen.",
+    "Mehrere fehlende Prüfungen wegen Cargo-Slotwartezeit; ausgeführte Gesamtsuiten haben belegte Bestandsfehler. Keine grüne Gesamtprüfung behauptet.",
+    "B03 und A01 haben noch keine abgenommene frische fachliche Kritik ihrer aktuellen Korrekturen. Fehlende oder abgebrochene Kritiker sind weder ALLOW noch BLOCK.",
+    "W03 fehlen noch Ergebnisse einschließlich zweier gescheiterter Rollen. Restliche Defektbereiche und Q04-Kritiken nicht abgeschlossen."
+  ],
+  "naechster_schritt": "Erhaltene Rückgaben und B02-Integration prüfen, fehlende Reviewkombinationen gezielt ergänzen und den neuen Artefaktstand sichern",
+  "hinweise": [
+    "Die SHA bezeichnet die letzte bereits bestätigte Artefaktsicherung, keinen Fix-, Merge- oder Deploy-SHA. Spätere Dokumente werden mit dem nächsten Checkpoint gesichert.",
+    "Nur der frühere reine Dokumentationscheckpoint 6937e4a6 ist auf main abgenommen. Kein Anwendungscode-Merge oder Live-Nachweis vorweggenommen.",
+    "Gesamt gebaut/reviewt/gemergt/live bleibt nein, obwohl einzelne Pakete erfolgreiche Prüfungen besitzen. Schreibgrenzen und genaue Scriptpfade in HANDOFF.md und REGISTER.md."
+  ]
+}

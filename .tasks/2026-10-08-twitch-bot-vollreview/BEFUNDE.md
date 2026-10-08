@@ -2,7 +2,7 @@
 
 Codebasis: `0ecae1370f1a80d1a101249b5c932663d69be8af`. Stand: 2026-10-08.
 
-R09, DA01, DA02 und DA03 haben vollständige Rückgaben aus fünf Defektblickwinkeln. Deklarierte Leseintervalle ersetzen keinen unabhängigen Nachweis vollständiger Werkzeuglektüre. Für R09/W02 sind nach Gegenprüfung 9 A- und 14 B-Befunde bestätigt; 19 Gruppen bleiben C. Noch kein Anwendungscode-Merge oder Deploy ist belegt. DA03 ergänzt 26 neue ungeprüfte Gruppen und sechs Verknüpfungen zu W02. Die weitere W03-Welle läuft.
+Sieben Bereiche sind konsolidiert: R09 und DA01 bis DA06. Deklarierte Leseintervalle ersetzen keinen unabhängigen Nachweis vollständiger Werkzeuglektüre. R09, W02 und DA03 ergeben nach Gegenprüfung 13 A, 25 B und 30 C. DA04/DA05/DA06 ergänzen 67 noch ungeprüfte A/B-Vorschläge und 29 ursprüngliche C-Vorschläge. Kein Anwendungscode-Merge oder Deploy ist belegt. Weitere W03- und W04-Reviews sowie Q04-Bauqualität laufen.
 
 ## Aufnahmebedingungen
 
@@ -130,9 +130,37 @@ A01 Runde 2 ist trotz Gate-ALLOW durch den frischen Kritiker blockiert: verbleib
 
 ## W03: Loginbereich DA03
 
-30 fertige Reviews aus sechs Abschnitten und fünf Linsen, 37 Rohmeldungen. Konsolidiert zu 32 Gruppen: sechs Verknüpfungen zu bestehenden W02-Claims sowie 26 neue Gruppen, davon sechs A-, 13 B- und sieben C-Vorschläge. Die 19 neuen A/B-Vorschläge sind keine bestätigten Befunde; je zwei unabhängige Skeptiker laufen in `wf_97f7401d-6c8`. Die sieben neuen C-Gruppen bleiben dokumentiert. Vorhandene W02-C-Sperren werden durch erneute Reviewerbehauptungen nicht aufgehoben.
+30 fertige Reviews aus sechs Abschnitten und fünf Linsen, 37 Rohmeldungen. Konsolidiert zu 32 Gruppen: sechs Verknüpfungen zu bestehenden W02-Claims sowie 26 neue Gruppen. Die Gegenprüfung der 19 neuen A/B-Vorschläge ist abgeschlossen: 4 A, 11 B und vier C-Sperren. Zusammen mit sieben ursprünglichen C-Gruppen ergibt DA03 4 A, 11 B und 11 C. Vorhandene W02-C-Sperren werden durch erneute Reviewerbehauptungen nicht aufgehoben.
 
-Verlustfreies Register einschließlich Szenarien, Orte, Belege und ursprünglicher IDs: W03-DA03-KANDIDATEN.json. Zusammenfassung und Modellabnahme: W03-DA03-NACHWEIS.md. Astra prüfte die 30 Reviewertranscripts erneut: 1393 echte Sol-Datensätze, passende Hashes und identische letzte StructuredOutputs, keine Abweichung. 37 Roh-IDs sind genau einmal zugeordnet. Die weiteren acht W03-Bereiche werden dadurch nicht als abgeschlossen gewertet.
+Verlustfreies Register einschließlich Szenarien, Orte, Belege und ursprünglicher IDs: W03-DA03-KANDIDATEN.json. Originalurteile: W03-DA03-GEGENPRUEFUNG.json. Astra prüfte 30 Reviewertranscripts mit 1393 echten Sol-Datensätzen und die 38 fertigen Skeptikertranscripts mit 1543 echten Sol-Datensätzen. Hashes und letzte StructuredOutputs stimmen mit den Journalen überein. Ein synthetischer Datensatz gesondert gezählt. Vier API-Ausfälle lieferten keine Stimmen und wurden genau einmal ersetzt. Nachweise und Grenzen in W03-NACHWEIS-02.md.
+
+| Kanonische ID | Endklasse und Urteile | Szenario und Umsetzung |
+|---|---|---|
+| W03-DA03-S001-security-1 | C, zweimal PLAUSIBEL-C | Browserfremde Einlösung braucht Kenntnis eines noch gültigen fremden state_id; diese Voraussetzung ist nicht belegt. Kein Fix. |
+| W03-DA03-S001-correctness-1 | B, zweimal BESTÄTIGT, Soll belegt | Abgeschnittene IPv6-Adresse erzeugt Login-Redirectschleife. Wartet wegen A01-Dateieigentum. |
+| W03-DA03-S001-correctness-2 | C, BESTÄTIGT-B und PLAUSIBEL-C | Steuerzeichen im next-Ziel: HTTP-500-Vertrag unterschiedlich belegt. Kein Fix. |
+| W03-DA03-S001-errors-1 | A, zweimal BESTÄTIGT | Fehlgeschlagener zentraler Logout-Widerruf lässt alten Adminwert erneut importieren. Eigener Claim, wegen A01-Dateieigentum offen. |
+| W03-DA03-S001-concurrency-1 | A, zweimal BESTÄTIGT | Überlappender Fingerprint-Request stellt Sitzung nach Logout wieder her. Wegen A01-Dateieigentum offen. |
+| W03-DA03-S003-security-2 | A, zweimal BESTÄTIGT | Fremdseitiger GET-Logout beendet Sitzung. Umsetzung muss zusätzlich die bestehenden korrekten Aufrufer erhalten. Noch offen. |
+| W03-DA03-S003-correctness-1 | B, zweimal BESTÄTIGT, Soll belegt | Akzeptierter Callback /twitch/auth/login/callback ist nicht registriert. Noch offen. |
+| W03-DA03-S003-correctness-2 | B, zweimal BESTÄTIGT, Soll belegt | HTTP-Redirect zu IPv6-Loopback wird trotz vorgesehener Ausnahme abgelehnt. Noch offen. |
+| W03-DA03-S004-security-1 | A, zweimal BESTÄTIGT | Fremdseitiges Formular des Reviewer-Passwortlogins überschreibt eine Browsersitzung. Noch offen. |
+| W03-DA03-S004-correctness-1 | C, BESTÄTIGT-B und PLAUSIBEL-B | Cache kann unangemeldeten Status über Cookiewechsel erhalten; vollständiger äußerer Proxyvertrag nicht doppelt belegt. Kein Fix. |
+| W03-DA03-S004-correctness-2 | B, zweimal BESTÄTIGT, Soll belegt | Späterer Cookie-Header aktiviert Auth, wird aber in der Statusdarstellung übersehen. Fix B10 beauftragt. |
+| W03-DA03-S004-correctness-3 | B, zweimal BESTÄTIGT, Soll belegt | Discord-Verknüpfung ersetzt ausdrücklich gewünschtes Dashboard-Rückkehrziel. Noch offen. |
+| W03-DA03-S004-concurrency-1 | B, zweimal BESTÄTIGT, Soll belegt | Gleichzeitiger Tausch zweier Discord-Zuordnungen kann verklemmen und einen Abschluss verlieren. Noch offen. |
+| W03-DA03-S004-concurrency-2 | B, zweimal BESTÄTIGT, Soll belegt | Vor dem Cachelock erfasste Zeit unterläuft nach Überholung in Builds mit Überlaufprüfung. Fix B10 beauftragt; kein produktiver Release-Panic behauptet. |
+| W03-DA03-S005-security-1 | C, BESTÄTIGT-A und PLAUSIBEL-C | Partner-Link-Login-CSRF im Anwendungscode nachvollziehbar, öffentlicher Proxyzugang nicht doppelt belegt. Kein Fix. |
+| W03-DA03-S005-concurrency-1 | B, zweimal BESTÄTIGT, Soll belegt | Steam-Defaultwechsel reaktiviert parallel entfernte Zuordnung. Noch offen. |
+| W03-DA03-S005-concurrency-2 | B, zweimal BESTÄTIGT, Soll belegt | Gleichzeitiges Entfernen zweier Steam-Konten behält gelöschtes Konto als Standard. Noch offen. |
+| W03-DA03-S005-concurrency-3 | B, zweimal BESTÄTIGT, Soll belegt | Unlink meldet Erfolg, obwohl parallel eingefügtes Konto erhalten bleibt. Noch offen. |
+| W03-DA03-S006-concurrency-4 | B, zweimal BESTÄTIGT, Soll belegt | Steam-Abschluss und Standardauswahl sperren Zeilen in entgegengesetzter Reihenfolge. Noch offen. |
+
+Orte, vollständige Fehlerszenarien, Soll- und Schutzbelege sowie individuelle Modellnachweise stehen in den beiden DA03-JSON-Artefakten. Die vier gesperrten Paare bekommen keinen weiteren Skeptiker zur Suche nach günstigeren Urteilen. Bestätigte Befunde bleiben vor Umsetzung an Migrations-, Produkt- und Eigentumsgrenzen gebunden.
+
+## W03: DA04, DA05 und DA06
+
+Drei Konsolidierungen mit zusammen 50 Reviews, 118 unveränderten Rohmeldungen, 96 neuen Gruppen und vier W02-Verknüpfungen abgenommen. 67 neue A/B-Vorschläge erhalten je zwei unabhängige Skeptiker in wf_655679bf-2b7. 29 weitere Gruppen bleiben ursprüngliche C-Vorschläge. Noch keine bestätigten A/B-Zahlen aus diesen Bereichen. Verlustfreie Einzelregister W03-DA04-KANDIDATEN.json, W03-DA05-KANDIDATEN.json und W03-DA06-KANDIDATEN.json; Modelle und Grenzen in W03-NACHWEIS-02.md.
 
 ## Grenzen
 

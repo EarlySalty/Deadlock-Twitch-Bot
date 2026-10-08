@@ -152,3 +152,53 @@ B02/B03-Workflow wf_586b3f73-0dc ist vollständig beendet. B02 erhält fachlich 
 A02 und B05 gaben ihre vorbereiteten Änderungen ohne Commit ab. Automatische Kritiken des leeren Basis-/Head-Vergleichs sind keine fachlichen Fixabnahmen. Astra sicherte die vorbereiteten Sol-Dateien ohne Quelländerung lokal als WIP `864e70f6` und `131a45ab`. Zehn Git-Schritte einzeln, kein Push/Merge/Deploy. Neuer Prüfabschluss A02/B05/B02: wf_b6076a3e-97b, Task wza5o93rn, Script tb-vollreview-pruefabschluss-01-wf_b6076a3e-97b.js, args in WORKFLOW-ARGS.json. Anwendungscode bleibt unverändert; bei konkretem Korrekturbedarf folgt ein frischer Fixer. A02/B05 erhalten danach echte neue Fix-Kritik.
 
 Ereignis `events/gesamt-v1-s5.json` erfasst den Stand vom 2026-10-08T06:32:21Z mit konkreten Paket- und Workflow-IDs. Statusrolle wf_29523a56-cba, Task wmk2dvdb2, Script tb-vollreview-status-s5-wf_29523a56-cba.js ist abgeschlossen. Ereignis 5 in TODO.md übernommen, ältere Historie erhalten, keine Schemakonflikte. Agent a9401bc7364f239e2: 21 Sol-Datensätze, SHA256 02799ad50aa8f1b3f2c2533c0348855b1f25aa069967915a72aa8472e43414ac, durch Astra geprüft. Gesamt gebaut/reviewt/gemergt/live bleibt nein.
+
+## Nachtrag 07:14 UTC: Sicherung und erhaltene Rückgaben
+
+Artefaktcommit f8c0ae31 ist erfolgreich nach audit/tb-vollreview-20261008 gepusht. Neuere Änderungen bleiben bis zum nächsten Checkpoint lokal. Kein Anwendungscode-Merge, Deploy oder Live-Nachweis.
+
+| Ausführung | Run-ID | Task-ID | Stand |
+|---|---|---|---|
+| W03 DA04/DA05/DA06 konsolidieren | wf_af2d23c2-851 | wjk1bm7vw | Drei getrennte JSON-Dateien, 25/10/15 Reviews. DA05 fertig zurückgegeben, noch nicht abgenommen. |
+| DA03 vier fehlende Skeptiker | wf_e359d631-ed4 | wzwid0lvh | Genau vier API-Ausfälle aus dem beendeten Lauf wf_97f7401d-6c8 ersetzen. Zwei Rückgaben vorhanden. Vorhandene 34 Urteile unverändert erhalten. |
+| Erste Fünfer-Fixgruppe | wf_3e7d57bd-7ac | wgtb6k4c0 | Beendet. B04 uncommittierter Fix mit Leerdiff-Kritik; B06/B07 Kritiker durch API 403 ohne Urteil. A02/B05 bereits im separaten Prüfabschluss. |
+
+Eingaben der beiden neuen Workflows in WORKFLOW-ARGS.json, Scriptnamen in HANDOFF.md. B08 hat eine noch nicht abgenommene Rückgabe. B09, B01-Wiederaufnahme, A01 Runde 3, B03 Runde 2 und Prüfabschluss A02/B05/B02 ohne fertige Rückgabe zum Beobachtungszeitpunkt. Aktive Aufgaben nicht duplizieren.
+
+B04: Astra hat den unveränderten Sol-Diff lokal als WIP c0383531 gesichert, eine Datei mit 180 Einfügungen und sechs Löschungen. Fünf Git-Schritte einzeln, kein Main-Merge oder Push. Erstfixer-/Kritiker-Modellbelege für B04 und Fixerbelege für B06/B07 sind geprüft und stehen in REVIEW.md. Neue echte Kritik und fehlende Prüfungen sind noch auszuführen.
+
+Journalbeobachtung 07:13:47 UTC: W03 159 Starts, 143 Resultate, zwei Ausfälle; Q04 64 Starts, 50 einzelne Resultate. Resultatzahlen sind keine Abnahme vollständiger Wellen oder Qualitätsbereiche.
+
+Prüfabschluss B04/B06/B07 gestartet: wf_961bca08-8d7, Task wo3n55x8t, Script tb-vollreview-pruefabschluss-02-wf_961bca08-8d7.js. Args gesichert. BRIEFING-PRUEFABSCHLUSS-02.md bindet erlaubte unveränderte Quellstände, vorhandene Nachweise und offene Prüfungen. Je Paket eine frische Prüfrolle, danach echte frische Kritik; keine Kritik leerer oder unsauberer Diffs. Keine Quelländerung, Integration oder produktive Aktion erlaubt.
+
+B08 Runde 1 beendet, sauber ohne Quelländerung. Erster Fixer a497c9a5de2aed3bb: 35 Sol-Datensätze, SHA256 e29b089fcff6908dc89306096384373ae3d8d51a3a13d97f2ff943345a4e3a1c, geprüft. Ein alleiniger Parserfix würde den vorhandenen Research-Sondervertrag lockern. Der Schreibumfang ist deshalb für denselben bestätigten Claim um `rust/crates/tb-dashboard-api/src/handlers/admin_research.rs` erweitert. Keine Produktänderung und kein neuer Research-Claim. Frischer Fixer und Kritiker in wf_2b7d67c4-23f, Task wti12vgrf, Script tb-vollreview-b08-fixrunde-2-wf_2b7d67c4-23f.js, ohne args. BRIEFING-B08-R2.md ist maßgeblich. B09 bleibt unabhängig im ursprünglichen Workflow.
+
+## Nachtrag 08:04 UTC: DA03 abgeschlossen, weitere Wellen und Integration
+
+DA03-Gegenprüfung mit vier nachgeholten API-Ausfällen abgeschlossen. Astra prüfte 38 fertige Transcripts, 1543 echte Sol-Datensätze und einen getrennten synthetischen Datensatz. 19 Paare ergeben 4 A, 11 B, vier C-Sperren; mit sieben ursprünglichen C-Gruppen ergibt DA03 4 A, 11 B, 11 C. R09/W02/DA03 zusammen: 13 A, 25 B, 30 C. Kein Fixstatus daraus ableiten. Export wf_fb383924-e58, Task wp0uobgce beendet und abgenommen; W03-DA03-GEGENPRUEFUNG.json, Belege W03-NACHWEIS-02.md.
+
+DA04/DA05/DA06-Konsolidierung wf_af2d23c2-851 vollständig beendet und abgenommen. 50 Reviewertranscripts, 2829 echte Sol-Datensätze und zwei synthetische Datensätze geprüft, 118 Originalbefunde exakt erhalten. 96 neue Gruppen: 67 A/B-Vorschläge und 29 C-Vorschläge. Vier W02-Verknüpfungen nicht erneut gezählt. Sieben Bereiche sind nun konsolidiert.
+
+| Neue Ausführung | Run-ID | Task-ID | Script und Stand |
+|---|---|---|---|
+| DA04/DA05/DA06 Gegenprüfung | wf_655679bf-2b7 | w1e6f5s6i | tb-vollreview-da04-da06-gegenpruefung-wf_655679bf-2b7.js; 67 neutrale Claims, je zwei frische Skeptiker. Args gespeichert. |
+| W04 Defektreviews | wf_b01ff274-9fa | wyiyzgmff | tb-vollreview-defektwelle-w04-wf_b01ff274-9fa.js; 13 weitere Bereiche, 46 Abschnitte, 230 geplante Reviews. Args gespeichert. |
+| A01 Runde 3 Abschluss | wf_5c114a47-0a8 | wu3qyyarz | tb-vollreview-a01-r3-abschluss-wf_5c114a47-0a8.js; ohne args, erhaltenen Commit prüfen, danach neuer Kritiker. |
+| B10 Authstatus | wf_b1cabe6f-009 | wo6s9aj11 | tb-vollreview-b10-fixkette-wf_b1cabe6f-009.js; ohne args, Fixer und Kritiker. |
+| B02 kleine Integration | wf_bcd5a36c-fdb | wty4n1c23 | tb-vollreview-b02-integration-wf_bcd5a36c-fdb.js; ohne args, Main-Integration über unveränderten Gate, kein Deploy. |
+
+A01-Fixer Runde 3 ist mit Kontextlimit ohne Ergebnis beendet, nicht mehr aktiv. Sauberer lokaler Commit 1080b730, sieben gemeldete positive Regressionen, passende Baseline und ALLOW-Gatelog erhalten. Clippy offen. BRIEFING-A01-R3-ABSCHLUSS.md verlangt Rekonstruktion ohne Quelländerung; keine doppelte Fixrunde.
+
+B02-Prüfabschluss beendet und abgenommen: Head e98b7f01 unverändert, 50 finale OBS-Tests bestanden, Gesamtsuite dieselben 35 Baselinefehler; Format- und Clippy-Diagnosen identisch zur neu ausgeführten Basis. Echte Kritik und gültiger Sol-Nachweis vorhanden. Integration beauftragt, noch kein Merge belegt. Andere Pakete des wf_b6076a3e-97b bleiben aktiv. B01-Abgleich ebenfalls beendet, c3aa3cc9, vorhandene Testbelege und Slotgrenze dokumentiert; frischer Kritiker läuft.
+
+B10 besitzt ausschließlich rust/crates/tb-dashboard-api/src/handlers/auth_status.rs, Worktree /home/nathanael/.worktrees/tb-vollreview-authstatus, Branch fix/vollreview-authstatus. Beide Freigabeketten in BRIEFING-B10.md, C-Nachbarclaim ausdrücklich ausgeschlossen. Keine Überschneidung mit A01.
+
+W04: DA08, DA09, DA10, DA11, DA12, DA13, DA14, DA16, DA18, DA19, IA02, IA03, IA04. Zusammen mit bisherigen Wellen sind 25 von 108 Bereichen beauftragt, nicht abgeschlossen; 83 weitere Defektbereiche bleiben zu verteilen. Q04-Qualität deckt unabhängig die übrigen 96 Bereiche ab.
+
+Journalbeobachtung 08:04:08 UTC: W03 185 Starts, 178 Ergebnisse, zwei Ausfälle; Q04 90 Starts, 76 einzelne Ergebnisse. Offene Kombinationen nicht als negative Reviews werten. Kein Anwendungscode-Merge, Deploy oder Live-Nachweis abgenommen. TODO.md enthält weiterhin Ereignis 5 und benötigt das nächste gültige Ereignis.
+
+## Nachtrag: W03-Erstlauf beendet und Ereignis 6
+
+W03 wf_bd410bd5-531 ist beendet: 183 von 185 Rückgaben, jeweils complete gemeldet, 318 rohe Meldungen mit Duplikaten und ungeprüften Vorschlägen. Fehlende Kombinationen: DA07-S001:security nach Kontextlimit, DA15-S002:resources nach API 403. Genau zwei frische Ersatzrollen in wf_6efbb8b3-653, Task wwucjq6g5, Script tb-vollreview-w03-fehlende-reviews-wf_6efbb8b3-653.js. Args gesichert. 183 fertige Originale bleiben unverändert; neue Ergebnisse später mit dem ersten Journal verbinden.
+
+Ereignis events/gesamt-v1-s6.json liegt vor. Statusrolle wf_968bbc50-db1, Task wyh7wrbd0, Script tb-vollreview-status-s6-wf_968bbc50-db1.js übernimmt es in TODO.md. Noch keine abgeschlossene Statusrückgabe. Weitere W03-Konsolidierungen für DA17, MO01 und IA01 sind anhand vollständig vorliegender Bereiche möglich; DA07/DA15 warten auf ihre fehlenden Rollen.

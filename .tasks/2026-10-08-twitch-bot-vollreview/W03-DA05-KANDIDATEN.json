@@ -1,0 +1,627 @@
+{
+  "schema_version": 1,
+  "code_sha": "0ecae1370f1a80d1a101249b5c932663d69be8af",
+  "workflow_id": "wf_bd410bd5-531",
+  "scope": "Mechanical consolidation of exactly DA05-S001 and DA05-S002 across security, correctness, errors, concurrency and resources. No new defect search, source rereading, independent countercheck or application change.",
+  "source": {
+    "journal": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_bd410bd5-531/journal.jsonl",
+    "journal_sha256_at_observation": "debb5bac9c954e9da3142f83ac3d6038009a56d65a2671a49dd30fc87fa95a2e",
+    "journal_is_appendable": true,
+    "selected_records_sha256": "0e093259994c29e2c88fc410378b7ced2b24d34faf97cd7ee8f512731fe5a738",
+    "selected_records_digest_encoding": "SHA256 of UTF-8 json.dumps([{line,record},...], sort_keys=True, ensure_ascii=False, separators=(',',':')), ordered by one-based journal line, containing only the selected 10 started and 10 result records.",
+    "transcript_directory": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_bd410bd5-531",
+    "transcript_name_rule": "agent-<agent_id>.jsonl",
+    "manifest": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/review-slices.json",
+    "manifest_sha256": "6c856808bfecc5a5784cba3c8d45fbd523fa39030745d30261ef0fea453f950c",
+    "manifest_sha_field": "c26b7cdfa4f3fd07b16ec7b5deacc0d912ff20a9",
+    "code_sha_validation": "Manifest and all three compared prior artifacts have the instructed code_sha. No Git inspection or independent source-content identity verification was performed.",
+    "prior_candidates": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/W02-KANDIDATEN.json",
+    "prior_candidates_sha256": "07b829884269be94562d3cca780db4a18f0a235b3cdec0b4ef90b64a2fa72ce6",
+    "prior_skeptic_artifact": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/W02-GEGENPRUEFUNG-03.json",
+    "prior_skeptic_artifact_sha256": "3fff60d3d22e7af33e929c2f5aedb3a11d1ffc44daf327d981a0a7b2006bee7f",
+    "prior_DA03_candidates": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/W03-DA03-KANDIDATEN.json",
+    "prior_DA03_candidates_sha256": "da3be76b8b844cd342facfe4777283362c393bc3f10353225531df54b673f69d",
+    "prior_artifact_limit": "Prior candidates and completed W02 judgments were compared as recorded data. No DA05 group matches an existing canonical claim, so no prior judgment is inherited and no prior skeptic transcript is claimed as verified by this consolidation. The DA03 example supplies a format, not new verification evidence."
+  },
+  "selection": {
+    "started_label_regex": "^W03:DA05-S00[12]:(security|correctness|errors|concurrency|resources)$",
+    "result_join": "started.key == result.key and started.agentId == result.agentId; result.slice and result.lens additionally match the started label",
+    "not_selected_by_freeform_area": true,
+    "expected_combinations": 10,
+    "selected_starts": 10,
+    "selected_results": 10,
+    "missing_combinations": [],
+    "duplicate_starts_or_results": [],
+    "failed_selected_records": [],
+    "unrelated_W03_records_excluded": true,
+    "raw_id_rule": "W03-<slice>-<lens>-<one-based index in the matched result findings array>"
+  },
+  "model_proofs": {
+    "expected_model": "gpt-6.1-sol",
+    "verified_DA05_transcripts": 10,
+    "genuine_message_model_counts": {"gpt-6.1-sol": 612},
+    "unexpected_genuine_models": [],
+    "assistant_records_missing_message_model": [],
+    "synthetic_records": [
+      {"started_label": "W03:DA05-S001:resources", "agent_id": "a6abf963efaf22441", "record": 99, "model": "<synthetic>", "isApiErrorMessage": true, "error": "server_error"}
+    ],
+    "synthetic_record_count": 1,
+    "model_field_only": "Only actual message.model fields count. Quoted model names and metadata claims are not model evidence. The one synthetic API-error record is counted separately and excluded from the 612 genuine model records; its transcript subsequently completed.",
+    "structured_output_calls_per_DA05_transcript": 1,
+    "last_structured_output_matches_journal": 10,
+    "input_digest_encoding": "UTF-8 json.dumps(input, sort_keys=True, ensure_ascii=False, separators=(',',':'))",
+    "run_columns": ["started_label", "journal_key", "agent_id", "journal_started_line", "journal_result_line", "transcript_sha256", "genuine_message_model_counts", "synthetic_count", "structured_output_calls", "last_structured_output_record", "last_input_sha256", "declared_range_count", "raw_finding_count"],
+    "runs": [
+      ["W03:DA05-S001:security", "v2:2b13c6f62b614189d762f56c3f02c718f71bee7003f8dbab263eee46f454f8d2", "aa3dc117cbd259d39", 99, 122, "d0fbcad98cbaf2775ff95d5305ac529574cad16204994d441ba7e6b209780b47", {"gpt-6.1-sol": 56}, 0, 1, 142, "02bff209b8b36b0c4991384d952b8c68e40fa5cb231dd2040fac3f43dc137aa0", 16, 1],
+      ["W03:DA05-S001:correctness", "v2:4e4f0d7214ecb4a553e5474b42026cb0f84821e13f98e4930e0d40b0ada89446", "a23bde76fcb2cc570", 101, 136, "af273465354d14aa7bbfd244a32a16857efd764939e2abf20737860b22799a63", {"gpt-6.1-sol": 77}, 0, 1, 183, "19a6c3e1e920542f88e5672a774f8a3f5bca1f122d6f843afb7f15554c1705f6", 2, 5],
+      ["W03:DA05-S001:errors", "v2:461a01be2249348148cbaaa641f20eb8ea461b440b6b70811278503683487987", "a7d757e7f5578f4c9", 103, 132, "3afa3f983f63f11d4b7022f514ac1974e4b0f3bb54d7aa87f450e0c103862a00", {"gpt-6.1-sol": 62}, 0, 1, 154, "9b9f9307f25585b1b343fc3e407c334d0e793f78e8b2c8e54da6bd5ca34e15dc", 2, 4],
+      ["W03:DA05-S001:concurrency", "v2:ca079a1e9c89dada1788c257994140c287c4b2a917cd1fd913fb52e11a559abe", "a94994b1d26eb44dc", 105, 128, "9d8d46eafb449e4ae1144f78766c1cc435ff84bc343db1aaadf0318e15b736fa", {"gpt-6.1-sol": 60}, 0, 1, 148, "a647d0e45032e9b426f3621ce282b31968c120d590ed3be7e14db694130f8049", 2, 1],
+      ["W03:DA05-S001:resources", "v2:78d47964a13f4d6b5cb4fe0218fdd9f7183f14e1497064cc25cdcff9eaf1a379", "a6abf963efaf22441", 107, 134, "806a45c4519b7922834a555f5901109427388573ab2e35cf4b55f4becf71b6cc", {"gpt-6.1-sol": 64}, 1, 1, 155, "e903c59c15068de31297bfcbd1abb03b337c76e8bec4d1d9766bb5d264bc13c1", 14, 2],
+      ["W03:DA05-S002:security", "v2:574a2e7a42ffa660ddad7f71b43d53364d70f9d96fe4f3822efbe10270628134", "a51617520b481c179", 109, 124, "ecdcece6153c78868a3af0c026c58e7234bee3afc1367d2a2310cfe764b6cb24", {"gpt-6.1-sol": 41}, 0, 1, 115, "a61db4132a16a5e70ab3d1211836904ea4a3ee0c5a8a1dd44f27fd56858cc7bf", 17, 1],
+      ["W03:DA05-S002:correctness", "v2:9b1afef8e420305e4265a159be895f81e46fc1c4a3d1a10e655a5b404f1a0a1d", "add33228275871d7e", 111, 158, "7a416c04deb090c5853e3040d43ddb507b3481bfc6a3fa6fb5d6c6d55ab8e3aa", {"gpt-6.1-sol": 99}, 0, 1, 235, "9cc80d399b694aaa219d63a54dc4c16cba9c1791764ab9f294f86d667532927e", 7, 5],
+      ["W03:DA05-S002:errors", "v2:e9e85d2dd59da0a61b9b54ff35344a3c17bea1397ff32b3ee06f12371a0b1dae", "a47a98d886c09940f", 113, 138, "cf8dc9e47c6e887132b294edd6e632c2de7a7166348cb38f2a2dbc989017000d", {"gpt-6.1-sol": 51}, 0, 1, 129, "917eba94b8401d818624f27c0bde91b0778c2156c5cb4644f88b6bcd7d22ceb9", 7, 1],
+      ["W03:DA05-S002:concurrency", "v2:dd3dac6a55d1ea946ccfe148625c0645d8de2cc8b82dd2c34d87eb0f71e88936", "a19c8c90b2e8df4c3", 115, 140, "4d5ecdcf7b31944f8632619584c982709229fefdc9e4461650cf22ad4c731858", {"gpt-6.1-sol": 54}, 0, 1, 140, "7c3c678aeed010811caa27c3f55f88b6988ce0b35c29aec79ccc1ab91e087a6f", 7, 1],
+      ["W03:DA05-S002:resources", "v2:2be2a12eddc7fff9d551e8440057cf5a871b23ff678aaf775c77648b9089affa", "ac4a308df70389c26", 117, 142, "1ed45912e54ae62ad2804e0d640b739cd2920b506852b596d4777f75167d6c58", {"gpt-6.1-sol": 48}, 0, 1, 124, "aa7534cdc5e244a74944042e5595daf0415d40ad34a78745f784ef622f03f53f", 7, 3]
+    ]
+  },
+  "coverage": {
+    "status": "DECLARED_INTERVALS_COMPLETE_NOT_SOURCE_READING_PROOF",
+    "area": "DA05",
+    "file_count": 9,
+    "primary_lines": 4014,
+    "lens_weighted_primary_lines": 20070,
+    "all_10_results_declare_complete": true,
+    "all_10_unread_and_blockers_empty": true,
+    "all_10_primary_interval_unions_cover_manifest": true,
+    "all_10_declared_primary_intervals_equal_manifest": true,
+    "primary_interval_declarations": 45,
+    "context_interval_declarations_excluded_from_primary": 36,
+    "unparseable_declared_ranges": [],
+    "missing_primary_intervals": [],
+    "primary_requirements_columns": ["slice", "file", "inclusive_start", "inclusive_end"],
+    "primary_requirements": [
+      ["DA05-S001", "rust/crates/tb-dashboard-api/src/handlers/health_probe.rs", 1, 660],
+      ["DA05-S001", "rust/crates/tb-dashboard-api/src/handlers/self_explainer.rs", 1, 1250],
+      ["DA05-S002", "rust/crates/tb-dashboard-api/src/handlers/system/database.rs", 1, 168],
+      ["DA05-S002", "rust/crates/tb-dashboard-api/src/handlers/system/errors.rs", 1, 417],
+      ["DA05-S002", "rust/crates/tb-dashboard-api/src/handlers/system/eventsub.rs", 1, 339],
+      ["DA05-S002", "rust/crates/tb-dashboard-api/src/handlers/system/health.rs", 1, 472],
+      ["DA05-S002", "rust/crates/tb-dashboard-api/src/handlers/system/mod.rs", 1, 7],
+      ["DA05-S002", "rust/crates/tb-dashboard-api/src/handlers/system/oauth_scopes.rs", 1, 271],
+      ["DA05-S002", "rust/crates/tb-dashboard-api/src/handlers/system/query.rs", 1, 430]
+    ],
+    "declared_primary_intervals": {
+      "encoding": "For every selected started label, select primary_requirements rows whose slice equals the label's slice and remove the slice column. These are exactly that run's normalized declared primary intervals, without overrides.",
+      "overrides": []
+    },
+    "method": "Parse declared file:start-end strings, remove only the known artifact-worktree prefix, union inclusive intervals per file, and compare each selected lens against its label-selected manifest slice. Context files do not substitute for primary files. Complete original declarations remain in the SHA256-bound final inputs in model_proofs.runs.",
+    "limits": [
+      "Declared intervals do not prove actual full reading or defect freedom.",
+      "No source files, tests, builds, database, network or browser probes were used for this consolidation.",
+      "Context references are excluded from primary coverage and do not certify other areas.",
+      "Fixed code_sha is matched against artifact metadata, not independently against source contents."
+    ]
+  },
+  "counts": {
+    "raw_findings": 24,
+    "raw_proposed_classes": {"A": 1, "B": 13, "C": 10},
+    "internally_consolidated_groups": 21,
+    "internal_duplicate_reports": 3,
+    "linked_existing_groups": 0,
+    "linked_existing_reports": 0,
+    "new_groups": 21,
+    "new_proposed_classes": {"A": 1, "B": 11, "C": 9},
+    "new_proposed_classes_rule": "Count each group once by strongest original reviewer proposal; the A/B rate-limit group counts as A. These are not verified or accepted classifications.",
+    "new_AB_groups": 12,
+    "new_verified_groups": 0,
+    "new_AB_ids": [
+      "W03-DA05-S001-security-1",
+      "W03-DA05-S001-correctness-1",
+      "W03-DA05-S001-correctness-2",
+      "W03-DA05-S001-correctness-3",
+      "W03-DA05-S001-correctness-4",
+      "W03-DA05-S001-errors-1",
+      "W03-DA05-S001-errors-2",
+      "W03-DA05-S002-security-1",
+      "W03-DA05-S002-correctness-1",
+      "W03-DA05-S002-correctness-2",
+      "W03-DA05-S002-correctness-3",
+      "W03-DA05-S002-correctness-4"
+    ]
+  },
+  "consolidation_policy": {
+    "path_normalization_prefix": "/home/nathanael/.worktrees/tb-vollreview-artefakte/",
+    "path_normalization": "Only group anchor paths and interval comparisons are normalized. Original finding objects remain unchanged.",
+    "original_fields": "Each complete original finding object occurs once in raw_findings. Group scenario, evidence, expected-behavior and countermeasure fields are JSON references to those objects.",
+    "grouping": "Merge only the same demonstrated cause, access path and contract. Same file, shared helper or broad error category is insufficient. Distinct readiness versus admin-health paths remain separate and explicitly related.",
+    "new_verification_status": "UNGEPRÜFT",
+    "no_new_counterchecks": true,
+    "no_fix_approval": true,
+    "C_policy": "C remains without a fix. Stronger reviewer suggestions do not establish an intended contract or lift existing C restrictions. The fingerprint-contract concern in S001-correctness-5 is not upgraded by the distinct S002-correctness-1 B proposal.",
+    "decision_owner": "Astra"
+  },
+  "internal_duplicates": [
+    {"canonical_id": "W03-DA05-S001-security-1", "member_ids": ["W03-DA05-S001-security-1", "W03-DA05-S001-concurrency-1"], "basis": "Same public self-explainer endpoint, socket-peer limiter key, loopback proxy bucket and cross-client quota exhaustion. A versus B is a reviewer-proposal difference, not a separate mechanism."},
+    {"canonical_id": "W03-DA05-S001-errors-1", "member_ids": ["W03-DA05-S001-errors-1", "W03-DA05-S001-resources-1"], "basis": "Same readiness response.text error suppression, empty-object acceptance and false successful readiness. Body timeout is one instance of the same body-read failure."},
+    {"canonical_id": "W03-DA05-S002-correctness-5", "member_ids": ["W03-DA05-S002-correctness-5", "W03-DA05-S002-errors-1"], "basis": "Same admin error-log endpoint, legacy file-only source and shipped stdout/systemd logging contract. Both proposals are C; different language and adjacent anchors do not create another defect."}
+  ],
+  "related_not_equivalent": [
+    {"group_ids": ["W03-DA05-S001-correctness-1", "W03-DA05-S002-correctness-2"], "reason": "Both report ignoring the active internal API target, but readiness/Discord relay and admin live system-health requests have different resolver implementations, access paths and failure outputs. Retained separately."},
+    {"group_ids": ["W03-DA05-S001-correctness-5", "W03-DA05-S002-correctness-1"], "reason": "Related DSN-normalization twins, but readiness/startup identity and admin live identity comparison are different paths. Retained separately. The first original explicitly cites a deliberately pinned legacy fingerprint contract and stays C; the second B proposal has no independent countercheck and cannot authorize a fingerprint-contract change."},
+    {"group_ids": ["W03-DA05-S001-correctness-4"], "prior_groups": [{"artifact": "W02-KANDIDATEN.json", "id": "W02-DA02-S001-correctness-3"}, {"artifact": "W03-DA03-KANDIDATEN.json", "id": "W03-DA03-S003-correctness-2"}], "reason": "IPv6 textual-host handling is related, but CSRF origin comparison, OAuth redirect acceptance and internal HTTP health URL acceptance are different guards and contracts. No duplicate link or prior classification transfer."},
+    {"group_ids": ["W03-DA05-S001-resources-2", "W03-DA05-S002-resources-3"], "prior_groups": [{"artifact": "W02-KANDIDATEN.json", "id": "W02-DA02-S003-resources-1"}, {"artifact": "W03-DA03-KANDIDATEN.json", "id": "W03-DA03-S004-resources-1"}], "reason": "Unbounded database waits affect different queries, tables and request contracts: readiness SELECT 1, system statistics COUNT, authentication limiter and Discord linking. No grouping by timeout category. The W02 limiter remains C-blocked; both DA05 deadline-policy proposals remain C."},
+    {"group_ids": ["W03-DA05-S002-security-1", "W03-DA05-S002-correctness-5", "W03-DA05-S002-resources-2"], "reason": "Same error-log file but distinct causes: unredacted derived metadata, missing native logging source, and synchronous unbounded file scanning."},
+    {"group_ids": ["W03-DA05-S002-correctness-3", "W03-DA05-S002-correctness-4", "W03-DA05-S002-concurrency-1", "W03-DA05-S002-resources-1"], "reason": "Same SQL-console file but distinct scalar decoding, empty-result metadata, session advisory-lock lifetime and result-byte-budget contracts."},
+    {"group_ids": ["W03-DA05-S001-errors-3", "W03-DA05-S002-correctness-5"], "reason": "Discarded self-explainer INSERT diagnostics are not the missing stdout/systemd source of the admin runtime-error view."},
+    {"group_ids": ["W03-DA05-S001-errors-4", "W03-DA05-S001-correctness-5"], "reason": "Startup-only recovery policy and DSN identity normalization are different causes even though both can miss a database mismatch. Both retain their C proposals."}
+  ],
+  "prior_comparison": {
+    "W02_candidate_groups_compared": 40,
+    "finished_W02_skeptic_pairs_available": 22,
+    "DA03_groups_compared": 32,
+    "exact_semantic_duplicates_found": 0,
+    "inherited_skeptic_judgments": 0,
+    "W02_C_blocks_preserved": [
+      "W02-DA02-S001-errors-2",
+      "W02-DA02-S003-resources-1",
+      "W02-DA02-S003-resources-2",
+      "W02-DA02-S004-resources-1"
+    ],
+    "limits": "No W03 skeptic judgment exists for these new DA05 groups. Comparing recorded claims and existing classifications is not an independent verification of a new claim."
+  },
+  "cross_area_overlap_candidates_for_Astra": [
+    {"raw_ids": ["W03-DA05-S001-correctness-2", "W03-DA05-S001-correctness-3", "W03-DA05-S001-errors-3"], "reason": "Original reports name dashboard_assistent imports/calls as targeted twins. Compare completed artifacts of other concurrently consolidated areas later; no cross-area duplicate or verification link is asserted here."},
+    {"raw_ids": ["W03-DA05-S001-correctness-1", "W03-DA05-S001-errors-2", "W03-DA05-S002-correctness-2"], "reason": "Original reports name admin_chat_action as a resolver or path-normalization twin. This is an overlap candidate for later artifact comparison, not a checked cross-area relationship."}
+  ],
+  "linked_existing_groups": [],
+  "new_groups": [
+    {
+      "id": "W03-DA05-S001-security-1", "member_ids": ["W03-DA05-S001-security-1", "W03-DA05-S001-concurrency-1"], "proposed_classes": ["A", "B"],
+      "claim": "Behind a loopback reverse proxy, one unauthenticated visitor can exhaust the Self-Explainer quota for every visitor.", "file": "rust/crates/tb-dashboard-api/src/handlers/self_explainer.rs", "line": 816,
+      "failure_scenarios": [{"member_id": "W03-DA05-S001-security-1", "$ref": "#/raw_findings/W03-DA05-S001-security-1/failure_scenario"}, {"member_id": "W03-DA05-S001-concurrency-1", "$ref": "#/raw_findings/W03-DA05-S001-concurrency-1/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S001-security-1", "$ref": "#/raw_findings/W03-DA05-S001-security-1/evidence"}, {"member_id": "W03-DA05-S001-concurrency-1", "$ref": "#/raw_findings/W03-DA05-S001-concurrency-1/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S001-security-1", "$ref": "#/raw_findings/W03-DA05-S001-security-1/expected_behavior"}, {"member_id": "W03-DA05-S001-concurrency-1", "$ref": "#/raw_findings/W03-DA05-S001-concurrency-1/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S001-security-1", "$ref": "#/raw_findings/W03-DA05-S001-security-1/countermeasures"}, {"member_id": "W03-DA05-S001-concurrency-1", "$ref": "#/raw_findings/W03-DA05-S001-concurrency-1/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    },
+    {
+      "id": "W03-DA05-S001-correctness-1", "member_ids": ["W03-DA05-S001-correctness-1"], "proposed_classes": ["B"],
+      "claim": "Readiness ignores the internal API destination configured in the active snapshot.", "file": "rust/crates/tb-dashboard-api/src/handlers/health_probe.rs", "line": 230,
+      "failure_scenarios": [{"member_id": "W03-DA05-S001-correctness-1", "$ref": "#/raw_findings/W03-DA05-S001-correctness-1/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S001-correctness-1", "$ref": "#/raw_findings/W03-DA05-S001-correctness-1/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S001-correctness-1", "$ref": "#/raw_findings/W03-DA05-S001-correctness-1/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S001-correctness-1", "$ref": "#/raw_findings/W03-DA05-S001-correctness-1/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    },
+    {
+      "id": "W03-DA05-S001-correctness-2", "member_ids": ["W03-DA05-S001-correctness-2"], "proposed_classes": ["B"],
+      "claim": "The self-explainer ignores the configured knowledge directory.", "file": "rust/crates/tb-dashboard-api/src/handlers/self_explainer.rs", "line": 354,
+      "failure_scenarios": [{"member_id": "W03-DA05-S001-correctness-2", "$ref": "#/raw_findings/W03-DA05-S001-correctness-2/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S001-correctness-2", "$ref": "#/raw_findings/W03-DA05-S001-correctness-2/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S001-correctness-2", "$ref": "#/raw_findings/W03-DA05-S001-correctness-2/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S001-correctness-2", "$ref": "#/raw_findings/W03-DA05-S001-correctness-2/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    },
+    {
+      "id": "W03-DA05-S001-correctness-3", "member_ids": ["W03-DA05-S001-correctness-3"], "proposed_classes": ["B"],
+      "claim": "Long conversation history can remove the current question from document retrieval.", "file": "rust/crates/tb-dashboard-api/src/handlers/self_explainer.rs", "line": 419,
+      "failure_scenarios": [{"member_id": "W03-DA05-S001-correctness-3", "$ref": "#/raw_findings/W03-DA05-S001-correctness-3/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S001-correctness-3", "$ref": "#/raw_findings/W03-DA05-S001-correctness-3/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S001-correctness-3", "$ref": "#/raw_findings/W03-DA05-S001-correctness-3/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S001-correctness-3", "$ref": "#/raw_findings/W03-DA05-S001-correctness-3/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    },
+    {
+      "id": "W03-DA05-S001-correctness-4", "member_ids": ["W03-DA05-S001-correctness-4"], "proposed_classes": ["B"],
+      "claim": "The health probe rejects valid IPv6 loopback HTTP URLs.", "file": "rust/crates/tb-dashboard-api/src/handlers/health_probe.rs", "line": 289,
+      "failure_scenarios": [{"member_id": "W03-DA05-S001-correctness-4", "$ref": "#/raw_findings/W03-DA05-S001-correctness-4/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S001-correctness-4", "$ref": "#/raw_findings/W03-DA05-S001-correctness-4/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S001-correctness-4", "$ref": "#/raw_findings/W03-DA05-S001-correctness-4/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S001-correctness-4", "$ref": "#/raw_findings/W03-DA05-S001-correctness-4/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    },
+    {
+      "id": "W03-DA05-S001-correctness-5", "member_ids": ["W03-DA05-S001-correctness-5"], "proposed_classes": ["C"],
+      "claim": "Analytics database fingerprints ignore PostgreSQL DSN host overrides.", "file": "rust/crates/tb-dashboard-api/src/handlers/health_probe.rs", "line": 465,
+      "failure_scenarios": [{"member_id": "W03-DA05-S001-correctness-5", "$ref": "#/raw_findings/W03-DA05-S001-correctness-5/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S001-correctness-5", "$ref": "#/raw_findings/W03-DA05-S001-correctness-5/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S001-correctness-5", "$ref": "#/raw_findings/W03-DA05-S001-correctness-5/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S001-correctness-5", "$ref": "#/raw_findings/W03-DA05-S001-correctness-5/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    },
+    {
+      "id": "W03-DA05-S001-errors-1", "member_ids": ["W03-DA05-S001-errors-1", "W03-DA05-S001-resources-1"], "proposed_classes": ["B"],
+      "claim": "Readiness reports success when reading an HTTP 200 upstream health response body fails.", "file": "rust/crates/tb-dashboard-api/src/handlers/health_probe.rs", "line": 317,
+      "failure_scenarios": [{"member_id": "W03-DA05-S001-errors-1", "$ref": "#/raw_findings/W03-DA05-S001-errors-1/failure_scenario"}, {"member_id": "W03-DA05-S001-resources-1", "$ref": "#/raw_findings/W03-DA05-S001-resources-1/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S001-errors-1", "$ref": "#/raw_findings/W03-DA05-S001-errors-1/evidence"}, {"member_id": "W03-DA05-S001-resources-1", "$ref": "#/raw_findings/W03-DA05-S001-resources-1/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S001-errors-1", "$ref": "#/raw_findings/W03-DA05-S001-errors-1/expected_behavior"}, {"member_id": "W03-DA05-S001-resources-1", "$ref": "#/raw_findings/W03-DA05-S001-resources-1/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S001-errors-1", "$ref": "#/raw_findings/W03-DA05-S001-errors-1/countermeasures"}, {"member_id": "W03-DA05-S001-resources-1", "$ref": "#/raw_findings/W03-DA05-S001-resources-1/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    },
+    {
+      "id": "W03-DA05-S001-errors-2", "member_ids": ["W03-DA05-S001-errors-2"], "proposed_classes": ["B"],
+      "claim": "An internal API base URL ending in /internal/twitch/v1 produces a duplicated path in self-explainer Discord logging.", "file": "rust/crates/tb-dashboard-api/src/handlers/self_explainer.rs", "line": 719,
+      "failure_scenarios": [{"member_id": "W03-DA05-S001-errors-2", "$ref": "#/raw_findings/W03-DA05-S001-errors-2/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S001-errors-2", "$ref": "#/raw_findings/W03-DA05-S001-errors-2/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S001-errors-2", "$ref": "#/raw_findings/W03-DA05-S001-errors-2/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S001-errors-2", "$ref": "#/raw_findings/W03-DA05-S001-errors-2/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    },
+    {
+      "id": "W03-DA05-S001-errors-3", "member_ids": ["W03-DA05-S001-errors-3"], "proposed_classes": ["C"],
+      "claim": "Self-explainer database logging discards both SQL failures and logging timeouts without diagnostics.", "file": "rust/crates/tb-dashboard-api/src/handlers/self_explainer.rs", "line": 898,
+      "failure_scenarios": [{"member_id": "W03-DA05-S001-errors-3", "$ref": "#/raw_findings/W03-DA05-S001-errors-3/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S001-errors-3", "$ref": "#/raw_findings/W03-DA05-S001-errors-3/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S001-errors-3", "$ref": "#/raw_findings/W03-DA05-S001-errors-3/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S001-errors-3", "$ref": "#/raw_findings/W03-DA05-S001-errors-3/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    },
+    {
+      "id": "W03-DA05-S001-errors-4", "member_ids": ["W03-DA05-S001-errors-4"], "proposed_classes": ["C"],
+      "claim": "A failed startup fingerprint check is never completed after the internal API recovers.", "file": "rust/crates/tb-dashboard-api/src/handlers/health_probe.rs", "line": 155,
+      "failure_scenarios": [{"member_id": "W03-DA05-S001-errors-4", "$ref": "#/raw_findings/W03-DA05-S001-errors-4/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S001-errors-4", "$ref": "#/raw_findings/W03-DA05-S001-errors-4/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S001-errors-4", "$ref": "#/raw_findings/W03-DA05-S001-errors-4/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S001-errors-4", "$ref": "#/raw_findings/W03-DA05-S001-errors-4/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    },
+    {
+      "id": "W03-DA05-S001-resources-2", "member_ids": ["W03-DA05-S001-resources-2"], "proposed_classes": ["C"],
+      "claim": "The readiness database query can hold a pool connection indefinitely.", "file": "rust/crates/tb-dashboard-api/src/handlers/health_probe.rs", "line": 117,
+      "failure_scenarios": [{"member_id": "W03-DA05-S001-resources-2", "$ref": "#/raw_findings/W03-DA05-S001-resources-2/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S001-resources-2", "$ref": "#/raw_findings/W03-DA05-S001-resources-2/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S001-resources-2", "$ref": "#/raw_findings/W03-DA05-S001-resources-2/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S001-resources-2", "$ref": "#/raw_findings/W03-DA05-S001-resources-2/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    },
+    {
+      "id": "W03-DA05-S002-security-1", "member_ids": ["W03-DA05-S002-security-1"], "proposed_classes": ["B"],
+      "claim": "The error-log API returns secrets unredacted in its timestamp and level fields.", "file": "rust/crates/tb-dashboard-api/src/handlers/system/errors.rs", "line": 223,
+      "failure_scenarios": [{"member_id": "W03-DA05-S002-security-1", "$ref": "#/raw_findings/W03-DA05-S002-security-1/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S002-security-1", "$ref": "#/raw_findings/W03-DA05-S002-security-1/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S002-security-1", "$ref": "#/raw_findings/W03-DA05-S002-security-1/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S002-security-1", "$ref": "#/raw_findings/W03-DA05-S002-security-1/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    },
+    {
+      "id": "W03-DA05-S002-correctness-1", "member_ids": ["W03-DA05-S002-correctness-1"], "proposed_classes": ["B"],
+      "claim": "Database fingerprint ignores PostgreSQL URI connection overrides, allowing different databases to compare equal.", "file": "rust/crates/tb-dashboard-api/src/handlers/system/health.rs", "line": 75,
+      "failure_scenarios": [{"member_id": "W03-DA05-S002-correctness-1", "$ref": "#/raw_findings/W03-DA05-S002-correctness-1/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S002-correctness-1", "$ref": "#/raw_findings/W03-DA05-S002-correctness-1/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S002-correctness-1", "$ref": "#/raw_findings/W03-DA05-S002-correctness-1/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S002-correctness-1", "$ref": "#/raw_findings/W03-DA05-S002-correctness-1/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra", "contract_caution_ref": "#/raw_findings/W03-DA05-S001-correctness-5/countermeasures"}
+    },
+    {
+      "id": "W03-DA05-S002-correctness-2", "member_ids": ["W03-DA05-S002-correctness-2"], "proposed_classes": ["B"],
+      "claim": "System health ignores the active configuration's internal API target.", "file": "rust/crates/tb-dashboard-api/src/handlers/system/health.rs", "line": 112,
+      "failure_scenarios": [{"member_id": "W03-DA05-S002-correctness-2", "$ref": "#/raw_findings/W03-DA05-S002-correctness-2/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S002-correctness-2", "$ref": "#/raw_findings/W03-DA05-S002-correctness-2/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S002-correctness-2", "$ref": "#/raw_findings/W03-DA05-S002-correctness-2/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S002-correctness-2", "$ref": "#/raw_findings/W03-DA05-S002-correctness-2/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    },
+    {
+      "id": "W03-DA05-S002-correctness-3", "member_ids": ["W03-DA05-S002-correctness-3"], "proposed_classes": ["B"],
+      "claim": "SQL console replaces standard NUMERIC and naive timestamp values with type placeholders.", "file": "rust/crates/tb-dashboard-api/src/handlers/system/query.rs", "line": 243,
+      "failure_scenarios": [{"member_id": "W03-DA05-S002-correctness-3", "$ref": "#/raw_findings/W03-DA05-S002-correctness-3/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S002-correctness-3", "$ref": "#/raw_findings/W03-DA05-S002-correctness-3/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S002-correctness-3", "$ref": "#/raw_findings/W03-DA05-S002-correctness-3/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S002-correctness-3", "$ref": "#/raw_findings/W03-DA05-S002-correctness-3/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    },
+    {
+      "id": "W03-DA05-S002-correctness-4", "member_ids": ["W03-DA05-S002-correctness-4"], "proposed_classes": ["B"],
+      "claim": "SQL console loses result-column metadata when a SELECT returns no rows.", "file": "rust/crates/tb-dashboard-api/src/handlers/system/query.rs", "line": 191,
+      "failure_scenarios": [{"member_id": "W03-DA05-S002-correctness-4", "$ref": "#/raw_findings/W03-DA05-S002-correctness-4/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S002-correctness-4", "$ref": "#/raw_findings/W03-DA05-S002-correctness-4/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S002-correctness-4", "$ref": "#/raw_findings/W03-DA05-S002-correctness-4/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S002-correctness-4", "$ref": "#/raw_findings/W03-DA05-S002-correctness-4/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    },
+    {
+      "id": "W03-DA05-S002-correctness-5", "member_ids": ["W03-DA05-S002-correctness-5", "W03-DA05-S002-errors-1"], "proposed_classes": ["C"],
+      "claim": "Admin error log endpoint cannot see native service errors in the shipped systemd deployment.", "file": "rust/crates/tb-dashboard-api/src/handlers/system/errors.rs", "line": 155,
+      "failure_scenarios": [{"member_id": "W03-DA05-S002-correctness-5", "$ref": "#/raw_findings/W03-DA05-S002-correctness-5/failure_scenario"}, {"member_id": "W03-DA05-S002-errors-1", "$ref": "#/raw_findings/W03-DA05-S002-errors-1/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S002-correctness-5", "$ref": "#/raw_findings/W03-DA05-S002-correctness-5/evidence"}, {"member_id": "W03-DA05-S002-errors-1", "$ref": "#/raw_findings/W03-DA05-S002-errors-1/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S002-correctness-5", "$ref": "#/raw_findings/W03-DA05-S002-correctness-5/expected_behavior"}, {"member_id": "W03-DA05-S002-errors-1", "$ref": "#/raw_findings/W03-DA05-S002-errors-1/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S002-correctness-5", "$ref": "#/raw_findings/W03-DA05-S002-correctness-5/countermeasures"}, {"member_id": "W03-DA05-S002-errors-1", "$ref": "#/raw_findings/W03-DA05-S002-errors-1/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    },
+    {
+      "id": "W03-DA05-S002-concurrency-1", "member_ids": ["W03-DA05-S002-concurrency-1"], "proposed_classes": ["C"],
+      "claim": "Admin-console session advisory locks survive request rollback and can block the bot's monthly season closure.", "file": "rust/crates/tb-dashboard-api/src/handlers/system/query.rs", "line": 187,
+      "failure_scenarios": [{"member_id": "W03-DA05-S002-concurrency-1", "$ref": "#/raw_findings/W03-DA05-S002-concurrency-1/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S002-concurrency-1", "$ref": "#/raw_findings/W03-DA05-S002-concurrency-1/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S002-concurrency-1", "$ref": "#/raw_findings/W03-DA05-S002-concurrency-1/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S002-concurrency-1", "$ref": "#/raw_findings/W03-DA05-S002-concurrency-1/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    },
+    {
+      "id": "W03-DA05-S002-resources-1", "member_ids": ["W03-DA05-S002-resources-1"], "proposed_classes": ["C"],
+      "claim": "Admin SQL results have no byte bound despite the 200-row limit.", "file": "rust/crates/tb-dashboard-api/src/handlers/system/query.rs", "line": 183,
+      "failure_scenarios": [{"member_id": "W03-DA05-S002-resources-1", "$ref": "#/raw_findings/W03-DA05-S002-resources-1/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S002-resources-1", "$ref": "#/raw_findings/W03-DA05-S002-resources-1/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S002-resources-1", "$ref": "#/raw_findings/W03-DA05-S002-resources-1/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S002-resources-1", "$ref": "#/raw_findings/W03-DA05-S002-resources-1/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    },
+    {
+      "id": "W03-DA05-S002-resources-2", "member_ids": ["W03-DA05-S002-resources-2"], "proposed_classes": ["C"],
+      "claim": "Error-log requests scan complete files synchronously on Tokio workers.", "file": "rust/crates/tb-dashboard-api/src/handlers/system/errors.rs", "line": 161,
+      "failure_scenarios": [{"member_id": "W03-DA05-S002-resources-2", "$ref": "#/raw_findings/W03-DA05-S002-resources-2/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S002-resources-2", "$ref": "#/raw_findings/W03-DA05-S002-resources-2/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S002-resources-2", "$ref": "#/raw_findings/W03-DA05-S002-resources-2/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S002-resources-2", "$ref": "#/raw_findings/W03-DA05-S002-resources-2/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    },
+    {
+      "id": "W03-DA05-S002-resources-3", "member_ids": ["W03-DA05-S002-resources-3"], "proposed_classes": ["C"],
+      "claim": "Database-stat requests can retain shared pool connections indefinitely behind a table lock.", "file": "rust/crates/tb-dashboard-api/src/handlers/system/database.rs", "line": 48,
+      "failure_scenarios": [{"member_id": "W03-DA05-S002-resources-3", "$ref": "#/raw_findings/W03-DA05-S002-resources-3/failure_scenario"}],
+      "evidence": [{"member_id": "W03-DA05-S002-resources-3", "$ref": "#/raw_findings/W03-DA05-S002-resources-3/evidence"}],
+      "expected_behavior": [{"member_id": "W03-DA05-S002-resources-3", "$ref": "#/raw_findings/W03-DA05-S002-resources-3/expected_behavior"}],
+      "countermeasures": [{"member_id": "W03-DA05-S002-resources-3", "$ref": "#/raw_findings/W03-DA05-S002-resources-3/countermeasures"}],
+      "verification_status": {"state": "UNGEPRÜFT", "independent_counterchecks": 0, "fix_approval": false, "decision_owner": "Astra"}
+    }
+  ],
+  "raw_findings": {
+    "W03-DA05-S001-security-1": {
+      "claim": "Behind a loopback reverse proxy, one unauthenticated visitor can exhaust the Self-Explainer quota for every visitor.",
+      "classification": "A",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/self_explainer.rs",
+      "line": 816,
+      "failure_scenario": "With the public dashboard behind a local reverse proxy, visitors with different client IPs all arrive with the same socket peer, such as 127.0.0.1. An attacker sends ten POST requests with malformed JSON, for example the body '{', within 60 seconds. Each reserves a slot before returning 400. Every legitimate visitor routed through that proxy subsequently receives 429 until slots expire. Repeating the bursts denies service without authentication or model calls.",
+      "evidence": "At fixed SHA 0ecae1370f1a80d1a101249b5c932663d69be8af, the finding file lines 816-820 uses only ConnectInfo.ip() as the limiter key; lines 50-51 set ten hits per 60 seconds; lines 585-600 reserve hits, and lines 828-836 parse JSON afterward. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/auth/security.rs:234-237 copies the original socket ConnectInfo unchanged. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-dashboard/src/main.rs:604-607 installs socket-derived ConnectInfo. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/lib.rs:124-128 registers the endpoint publicly. The tracked local-proxy topology is shown by /home/nathanael/.worktrees/tb-vollreview-artefakte/ops/caddy/partner-profiles.caddy:8-10, which forwards to 127.0.0.1:8769 and carries client identity in X-Forwarded-For instead.",
+      "expected_behavior": "A visitor's quota must not consume unrelated visitors' quotas. The finding file documents a per-peer public limiter at lines 13-15 and tests independent peer buckets at lines 1140-1149. The existing proxy-aware client-key implementation in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/auth/security.rs:309-338 explicitly handles loopback proxy peers using forwarded client identity. Such identity must be accepted only from a trusted proxy.",
+      "countermeasures": "The public subrouter has no authentication or proxy-aware rate-limit layer; its CORS and extensions do not change ConnectInfo. The shared audit middleware passes this non-admin path through unchanged. Model deadlines, input truncation and knowledge scope guards occur after the exhausted quota and cannot prevent the denial. The authenticated sibling assistant uses server-derived Twitch user IDs instead, so that targeted twin does not share this defect. Full live Caddy site configuration was not inspected or probed; this finding applies to the documented loopback reverse-proxy deployment."
+    },
+    "W03-DA05-S001-correctness-1": {
+      "claim": "Readiness ignores the internal API destination configured in the active snapshot.",
+      "classification": "B",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/health_probe.rs",
+      "line": 230,
+      "failure_scenario": "Configure internal_api.host as 127.0.0.2 and port as 8776, with the required credential environment variables but without legacy destination environment variables. The worker binds 127.0.0.2:8776, while readiness requests 127.0.0.1:8776. With no listener there, /readyz returns 503 despite the configured worker being available. Self-explainer Discord logging also targets the wrong address.",
+      "evidence": "At fixed SHA 0ecae1370f1a80d1a101249b5c932663d69be8af, health_probe.rs:228-239 constructs the destination exclusively from legacy environment variables or constants. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-config/src/global.rs:99-125 defines the active internal API destination, validates loopback hosts at 305-307, and projects host/port into runtime settings at 386-390. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-bot/src/main.rs:2053,2183 binds the configured host. The reachable probe path is health_probe.rs:113-130,154-170.",
+      "expected_behavior": "The probe must honor the configured internal API client destination and its configured non-loopback permission, rather than silently querying a different endpoint.",
+      "countermeasures": "Runtime startup installs the snapshot without exporting legacy destination variables: /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-config/src/runtime.rs:33-51. Worker runtime hardening checks role/port, not a requirement to use 127.0.0.1, so the scenario remains reachable. Duplicate legacy environment settings can mask the defect. Targeted twins use the same stale destination builder in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/self_explainer.rs:699-719 and /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/admin_chat_action.rs:317-323."
+    },
+    "W03-DA05-S001-correctness-2": {
+      "claim": "The self-explainer ignores the configured knowledge directory.",
+      "classification": "B",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/self_explainer.rs",
+      "line": 354,
+      "failure_scenario": "Start in Legacy mode with knowledge.directory pointing to a valid absolute documentation directory, no KNOWLEDGE_DIR environment variable, and a working directory without rust/knowledge. A documented Auto-Raid question receives the not-documented fallback because the self-explainer loads the nonexistent working-directory-relative path and permanently caches an empty knowledge base.",
+      "evidence": "self_explainer.rs:354-375 ignores the active snapshot and selects KNOWLEDGE_DIR or rust/knowledge. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-knowledge/src/base.rs:42-73 explicitly skips missing namespace directories and returns an empty successful load. self_explainer.rs:453-461 then returns FALLBACK_NOT_DOCUMENTED without generation. The configured directory is part of /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-config/src/shared_options.rs:8-27 and is resolved during runtime startup at /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-config/src/runtime.rs:39-40.",
+      "expected_behavior": "Load the knowledge.directory selected by the active configuration, resolved relative to its configuration source, as the other knowledge consumers already do.",
+      "countermeasures": "A legacy KNOWLEDGE_DIR variable or matching working directory masks the defect; Typed mode avoids this local loader. No production startup code propagates the configured directory into KNOWLEDGE_DIR. The adjacent help loader correctly resolves the snapshot in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/help_page.rs:15-27, and the bot does so in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-bot/src/chat_wiring.rs:79-104. The personalized dashboard assistant shares the defective loader through its import and call at /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/dashboard_assistent.rs:25-27,575-576."
+    },
+    "W03-DA05-S001-correctness-3": {
+      "claim": "Long conversation history can remove the current question from document retrieval.",
+      "classification": "B",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/self_explainer.rs",
+      "line": 419,
+      "failure_scenario": "Send question Auto-Raid with two user-history entries containing respectively 500 consecutive x characters and 500 consecutive y characters. Both entries are accepted unchanged. The 1000-character retrieval budget is exhausted by history, so Auto-Raid disappears completely. Lexical retrieval has no matching tokens and the Legacy or Shadow route returns the not-documented fallback even though public Auto-Raid documentation exists.",
+      "evidence": "self_explainer.rs:181-204 permits these bounded user-history entries. At 409-419 the helper places two historical user messages before the current question and truncates the combined string from the front. The historical prefix alone is 1001 characters. At 453-461 empty retrieval results bypass generation. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-knowledge/src/base.rs:87-105,109-141 selects only documents with matching query tokens. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/knowledge/bot/auto-raid.md:1-19 is public documentation matching the omitted question.",
+      "expected_behavior": "The current question must remain in the retrieval query; historical context may supplement it but must not consume its entire budget.",
+      "countermeasures": "The eight-message and 500-character history limits do not prevent two messages from exhausting this separate 1000-character budget. Passing the question separately to the model cannot compensate because the empty-hit branch returns before invoking the model. Typed mode builds a different context and is not affected by this truncation. A targeted twin reuses retrieval_query in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/dashboard_assistent.rs:575-578."
+    },
+    "W03-DA05-S001-correctness-4": {
+      "claim": "The health probe rejects valid IPv6 loopback HTTP URLs.",
+      "classification": "B",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/health_probe.rs",
+      "line": 289,
+      "failure_scenario": "Provide a nonempty internal credential and TWITCH_INTERNAL_API_BASE_URL=http://[::1]:8776 for a worker bound to IPv6 loopback. URL parsing succeeds, but host_str returns [::1]. Parsing that bracketed string as IpAddr fails, so normalization treats it as non-loopback and rejects it. /readyz reports internal_api_not_configured instead of checking the valid loopback worker.",
+      "evidence": "health_probe.rs:258-267 passes Url::host_str directly to is_loopback_host; 284-292 does not remove IPv6 brackets before IpAddr parsing. Rejection makes internal_api_config return None at 238, leading to the readiness reason at 172-174. The fixed dependency is url 2.5.8, whose /home/nathanael/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/url-2.5.8/src/lib.rs:1130,1162-1167 documents and implements bracketed IPv6 host serialization.",
+      "expected_behavior": "IPv6 loopback must qualify for the same HTTP loopback allowance as IPv4 loopback. The active configuration accepts loopback IpAddr values and its client URL builder correctly brackets IPv6 socket addresses.",
+      "countermeasures": "Even enabling the non-loopback override does not allow this HTTP URL, because the incorrectly classified host subsequently requires HTTPS at 266-267. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-config/src/global.rs:305-307 accepts ::1, so configuration validation does not make the scenario unreachable. The neighboring Discord-login loopback helper receives separately normalized Host-header input and does not establish a guard for this probe."
+    },
+    "W03-DA05-S001-correctness-5": {
+      "claim": "Analytics database fingerprints ignore PostgreSQL DSN host overrides.",
+      "classification": "C",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/health_probe.rs",
+      "line": 465,
+      "failure_scenario": "Dashboard and worker use postgres:///analytics?host=/var/run/pg-a and postgres:///analytics?host=/var/run/pg-b, respectively, with those sockets serving distinct PostgreSQL instances. Actual connections use different servers, but both fingerprints hash the same ||analytics input. The startup check cannot detect the database mismatch and readiness remains successful when its other dependencies pass.",
+      "evidence": "health_probe.rs:460-481 extracts only URL authority host, explicit authority port, and path, ignoring query overrides. Its fingerprint at 491-495 therefore receives identical fields for both DSNs. The twin analytics_identity_fields in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/handlers/healthz.rs uses the same algorithm. Actual pools connect using the full DSN at /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-db/src/pool.rs:57. Installed SQLx PostgreSQL parsers explicitly apply query host values to socket/host options at /home/nathanael/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-postgres-0.8.6/src/options/parse.rs:69-74 and the corresponding 0.9.0 implementation.",
+      "expected_behavior": "A database-identity check should distinguish different effective PostgreSQL servers, including servers selected through supported DSN query parameters.",
+      "countermeasures": "The SELECT 1 readiness check establishes only that the dashboard database responds; it does not establish identity with the worker database. Startup comparison checks hash equality only. Classified C because the upstream fingerprint documentation and reference tests explicitly pin legacy field normalization and interoperability; correcting effective identity requires a coordinated fingerprint-contract change rather than an isolated automatic fix."
+    },
+    "W03-DA05-S001-errors-1": {
+      "claim": "Readiness reports success when reading an HTTP 200 upstream health response body fails.",
+      "classification": "B",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/health_probe.rs",
+      "line": 317,
+      "failure_scenario": "The internal API sends HTTP 200 headers, then its connection breaks or the response body times out. With a healthy dashboard database, configured OAuth and no cached fingerprint mismatch, /readyz returns HTTP 200 with ok=true and internalApiHealth={} despite the failed upstream health request.",
+      "evidence": "Sources checked against review SHA 0ecae1370f1a80d1a101249b5c932663d69be8af. Line 317 replaces response.text() errors with an empty string. Lines 354-358 convert that empty string into Some({}); lines 329-336 accept any JSON object. Lines 154-170 therefore take the success branch, and lines 184-200 emit ready/HTTP 200. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/lib.rs:117-119 registers /readyz and /health directly to this handler.",
+      "expected_behavior": "An upstream body transport failure must follow the existing upstream-error path and make readiness HTTP 503, just as connection failures do; an unreadable body is not a successful health payload.",
+      "countermeasures": "The ten-second request timeout and disabled redirects do not help because the body error is subsequently discarded. HTTP statuses >=400 and non-object JSON are rejected, but neither guard rejects the synthetic empty object. Other readiness checks can independently fail, so the false success requires them to pass."
+    },
+    "W03-DA05-S001-errors-2": {
+      "claim": "An internal API base URL ending in /internal/twitch/v1 produces a duplicated path in self-explainer Discord logging.",
+      "classification": "B",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/self_explainer.rs",
+      "line": 719,
+      "failure_scenario": "Set TWITCH_INTERNAL_API_BASE_URL to http://127.0.0.1:8776/internal/twitch/v1 with a valid internal credential and the native internal API router. Every answered question posts its Discord log to /internal/twitch/v1/internal/twitch/v1/discord/self-explainer-log, receives 404, and never reaches the relay. The same configured base URL works for readiness.",
+      "evidence": "Lines 699-702 preserve the configured path, while lines 55 and 719 append a complete /internal/twitch/v1/... path. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/health_probe.rs:228-239,270-281 explicitly accept and normalize this same configuration by stripping the internal API suffix. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/lib.rs:224-228 registers only the canonical relay path. All context was read at the fixed review SHA.",
+      "expected_behavior": "A base URL already accepted by the dashboard's internal API configuration should reach the canonical Discord relay endpoint without duplicating its namespace.",
+      "countermeasures": "Lines 737-749 warn about the failed request but do not correct or retry it. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/handlers/legacy_proxy.rs:74-101 returns 404 without a proxy or forwards the unchanged malformed path with one. A focused twin check found the same unnormalized helper in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/admin_chat_action.rs:264-266,317-323; no broader coverage is claimed."
+    },
+    "W03-DA05-S001-errors-3": {
+      "claim": "Self-explainer database logging discards both SQL failures and logging timeouts without diagnostics.",
+      "classification": "C",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/self_explainer.rs",
+      "line": 898,
+      "failure_scenario": "The logging INSERT fails because its database role lacks INSERT permission, or database acquisition/execution exceeds three seconds. The visitor still receives an answer, but no question-and-answer row is stored and this handler emits no diagnostic identifying the lost database log.",
+      "evidence": "Lines 897-909 discard the complete timeout result, including both Ok(Err(sqlx::Error)) and Err(Elapsed). /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-analytics/src/self_explainer_log.rs:41-63 returns SQL errors with await? and performs no internal error logging. The response at lines 913-919 does not observe the logging task. The module header describes durable database logging while permitting logging failures not to abort answers.",
+      "expected_behavior": "Keep answers independent of best-effort logging, but make a failed INSERT or elapsed logging deadline observable. A stronger durability or retry guarantee is not established, so this remains C.",
+      "countermeasures": "The three-second timeout protects response latency, and the independent Discord relay may preserve a copy, but neither exposes the database logging failure. The focused twin /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/dashboard_assistent.rs:386-394 also discards its background logging result."
+    },
+    "W03-DA05-S001-errors-4": {
+      "claim": "A failed startup fingerprint check is never completed after the internal API recovers.",
+      "classification": "C",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/health_probe.rs",
+      "line": 155,
+      "failure_scenario": "The internal API is unavailable during dashboard startup, leaving the cached upstream fingerprint absent and mismatch=false. It later becomes available with a fingerprint different from the dashboard's database. Subsequent readiness requests fetch that differing fingerprint but still return ready if the other checks pass; the initial failed comparison remains unperformed for the process lifetime.",
+      "evidence": "Lines 43-48 initialize an absent upstream fingerprint and false mismatch; lines 75-81 only warn after a failed startup request. Lines 154-158 retain fresh health data without comparing fingerprints, and lines 180-181 consult only the startup mismatch flag. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-dashboard/src/main.rs:441,484 performs the check once and installs its result as an immutable extension. The test at health_probe.rs:626-658 explicitly confirms that a fresh mismatch does not change cached readiness.",
+      "expected_behavior": "A recovery policy could complete an initially failed identity check once the upstream returns, preventing ready status with unverified database identity. Because the existing test deliberately preserves startup-only comparison semantics, changing this policy requires a C decision rather than an automatic fix.",
+      "countermeasures": "Startup failures are warned, live upstream availability is checked on every readiness request, and a mismatch detected at startup does block readiness. None completes a comparison that failed initially. The explicit cached-only test is evidence against classifying this behavior as an obvious B bug."
+    },
+    "W03-DA05-S001-concurrency-1": {
+      "claim": "The self-explainer shares one rate-limit bucket across all visitors behind a loopback reverse proxy.",
+      "classification": "B",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/self_explainer.rs",
+      "line": 816,
+      "failure_scenario": "Two distinct visitors access the public endpoint through the same loopback reverse proxy. Visitor A sends ten requests within 60 seconds, even malformed JSON requests. Visitor B's first question then receives HTTP 429 because both visitors are recorded as 127.0.0.1, regardless of their distinct forwarded client addresses.",
+      "evidence": "At the fixed review SHA, lines 816-820 derive the limiter key exclusively from ConnectInfo's socket IP. Lines 622-625 share one process-wide limiter with a ten-hit, 60-second window; lines 820-837 consume allowance before JSON validation. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/auth/security.rs:228-238 copies socket ConnectInfo without interpreting forwarded addresses. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-dashboard/src/main.rs:604-607 installs socket-based ConnectInfo. The public route is registered without authentication in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/lib.rs:124-127.",
+      "expected_behavior": "Distinct public clients should have independent allowances. The primary limiter test at lines 1140-1149 explicitly verifies peer independence. The existing client-key implementation in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/auth/security.rs:309-337 explicitly accounts for loopback reverse proxies by using the forwarded client address.",
+      "countermeasures": "The mutex correctly serializes allowance updates, but cannot isolate clients mapped to the same key. OptionalConnectInfo does not replace the socket address, and the public handler does not call the existing proxy-aware client-key helper. Proxy-provided X-Forwarded-For therefore does not prevent bucket sharing. Targeted neighboring OptionalConnectInfo consumers use socket identity for internal loopback guards rather than this public limiter; no additional twin is claimed."
+    },
+    "W03-DA05-S001-resources-1": {
+      "claim": "Internal health response-body timeouts can produce successful readiness responses.",
+      "classification": "B",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/health_probe.rs",
+      "line": 317,
+      "failure_scenario": "The internal API sends HTTP 200 headers but leaves the response body unfinished until the ten-second request deadline expires. With a successful database check, configured OAuth and no cached fingerprint mismatch, GET /readyz or /health nevertheless returns HTTP 200 with status ready.",
+      "evidence": "At review SHA 0ecae1370f1a80d1a101249b5c932663d69be8af, response.text().await.unwrap_or_default() at line 317 turns a body-read timeout into an empty string. parse_json at lines 354-359 converts that string into an empty JSON object, which passes the object check at lines 329-336. readyz_response at lines 154-170 therefore records successful upstream health without adding an error reason; lines 184-189 select HTTP 200. The same helper also serves the startup fingerprint check at line 52.",
+      "expected_behavior": "A health request that exceeds INTERNAL_HEALTH_TIMEOUT must be treated as failed. map_reqwest_error at lines 339-345 already defines upstream_timeout, and readyz_response at lines 159-170 and 184-189 converts upstream failures into degraded HTTP 503 responses. Body-read timeouts should follow that failure path rather than become successful empty health payloads.",
+      "countermeasures": "The ten-second reqwest timeout and disabled redirects are present and bound the upstream wait, but the body-read error is discarded after the deadline fires. Other readiness failures can mask the false success, so the scenario explicitly requires those checks to pass. Within this slice, the Discord relay's similar body-error suppression only formats an already unsuccessful response for logging; it does not create another successful health verdict."
+    },
+    "W03-DA05-S001-resources-2": {
+      "claim": "The readiness database query can hold a pool connection indefinitely.",
+      "classification": "C",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/health_probe.rs",
+      "line": 117,
+      "failure_scenario": "A readiness request successfully acquires a database connection, then its PostgreSQL backend stops responding while the socket remains open. The SELECT 1 await has no execution deadline. The request does not reach the degraded response or the upstream check and retains its connection until cancellation or database recovery. Repeated probes can occupy the available pool connections.",
+      "evidence": "At the fixed review SHA, health_probe.rs:117-123 awaits fetch_one without a timeout. Dashboard startup uses tb_db::connect at rust/bin/tb-dashboard/src/main.rs:400. In rust/crates/tb-db/src/pool.rs:10-11 and 20-58, that selects read_only=false; acquire_timeout bounds acquisition, while the statement_timeout configuration at lines 47-53 applies only to the unused readonly mode. The public route registrations and serving wrappers inspected in tb-dashboard-api/src/lib.rs and tb-dashboard/src/main.rs contain no request timeout covering this query.",
+      "expected_behavior": "A stalled database should eventually yield a degraded readiness result rather than indefinitely retain a probe and connection. health_probe.rs:149-151 and 184-189 already define database_unavailable and HTTP 503 for database failures, but no database execution budget is specified. Selecting that budget is therefore classified C, not an automatic fix recommendation.",
+      "countermeasures": "The pool-size limit caps database connections, and acquisition/connect deadlines bound callers waiting for a connection; neither bounds a query after acquisition. The readonly pool's twenty-second statement timeout is not installed on the production dashboard pool. The internal API's ten-second timeout begins only after the database query finishes. Caller-side cancellation can end an individual probe, but the handler has no independent deadline."
+    },
+    "W03-DA05-S002-security-1": {
+      "claim": "The error-log API returns secrets unredacted in its timestamp and level fields.",
+      "classification": "B",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/system/errors.rs",
+      "line": 223,
+      "failure_scenario": "A scanned logs/*.log file contains the nonstandard error line `ERROR access_token=example123 - request failed`. The supported two-part fallback returns timestamp=`ERROR access_token=example123`, exposing the value in GET /twitch/api/admin/system/errors even though context is redacted. A four-part line with a secret in its third part similarly exposes it through level. These examples use synthetic values, not actual credentials.",
+      "evidence": "In errors.rs, lines 139-168 collect and read log candidates; lines 183-185 accept the example because it contains ERROR. Lines 193-202 copy raw split fields into timestamp and level. Lines 205-206 sanitize only message and context, while lines 221-227 retain timestamp and level unchanged. Lines 88-100 serialize those entries in the API response.",
+      "expected_behavior": "The explicit contract in errors.rs:11-12 says secrets in log lines are masked before output. Secret-bearing derived metadata must not retain the original value while message and context redact it.",
+      "countermeasures": "require_admin at errors.rs:81-83 limits exposure to authenticated admins, so this is a redaction-contract bug rather than a demonstrated authentication bypass. Existing secret patterns cover access_token, but they are never applied to timestamp or level. Strict metadata validation or applying the existing redactor to those fields would close this specific bypass."
+    },
+    "W03-DA05-S002-correctness-1": {
+      "claim": "Database fingerprint ignores PostgreSQL URI connection overrides, allowing different databases to compare equal.",
+      "classification": "B",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/system/health.rs",
+      "line": 75,
+      "failure_scenario": "Dashboard DSN is postgres://127.0.0.1/deadlock?port=5432 and bot DSN is postgres://127.0.0.1/deadlock?port=5433, with separate PostgreSQL clusters on those ports. Both connections are valid. Both fingerprint implementations extract the same authority host, absent authority port, and path database, ignoring the differing query ports. A successful internal health request therefore produces equal fingerprints and analyticsDbFingerprintMismatch=false despite the services using different databases. Query-parameter host and dbname overrides have the same defect.",
+      "evidence": "Fixed review SHA 0ecae1370f1a80d1a101249b5c932663d69be8af. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/system/health.rs:71-109 extracts only URL authority/path fields; lines 226-238 compare the resulting hashes. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-db/src/pool.rs:41-58 passes the actual DSN to SQLx. The pinned SQLx 0.9.0 parser at /home/nathanael/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-postgres-0.9.0/src/options/parse.rs:50-84 applies query-parameter host, port, and dbname overrides.",
+      "expected_behavior": "The database-identity comparison must distinguish effective connection hosts, ports, and database names. Separate clusters selected by URI connection overrides must not produce equal identity fingerprints.",
+      "countermeasures": "The internal API repeats the same incomplete parser at /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/handlers/healthz.rs:64-86, so the comparison does not compensate. The startup/readiness fingerprint path is another twin at /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/health_probe.rs:460-495. Admin authentication and the two-present-fingerprints guard do not validate the effective PostgreSQL target."
+    },
+    "W03-DA05-S002-correctness-2": {
+      "claim": "System health ignores the active configuration's internal API target.",
+      "classification": "B",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/system/health.rs",
+      "line": 112,
+      "failure_scenario": "The active configuration binds the bot to ::1:8776 and sets internal_api.client_base_url to http://[::1]:8776. The required internal credential is present, but legacy TWITCH_INTERNAL_API_BASE_URL/HOST/PORT variables are absent. The bot is healthy on IPv6 loopback, while the system-health handler requests 127.0.0.1:8776. That request fails, internalAnalyticsDbFingerprint becomes null, and a real database mismatch is suppressed.",
+      "evidence": "The resolver at /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/system/health.rs:111-156 exclusively uses legacy environment variables and IPv4/default-port fallbacks. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-config/src/global.rs:97-105 defines the explicit client target; lines 302-312 permit IPv6 loopback. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-bot/src/main.rs:2053 and 2182-2195 bind the configured listener. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-config/src/runtime.rs:33-52 installs the snapshot without exporting those legacy variables.",
+      "expected_behavior": "The health request must use the active internal_api client target, with the configured listener address as the appropriate fallback, rather than an unrelated legacy/default target.",
+      "countermeasures": "The runtime-hardening check at /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-internal-api/src/security.rs:310-338 accepts the normal 8776 port and does not prohibit IPv6 loopback. The three-second timeout limits waiting but silently converts the routing defect to missing health data. Targeted twins remain in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/health_probe.rs:228-239 and /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/admin_chat_action.rs:317-323; neither supplies a corrective routing layer."
+    },
+    "W03-DA05-S002-correctness-3": {
+      "claim": "SQL console replaces standard NUMERIC and naive timestamp values with type placeholders.",
+      "classification": "B",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/system/query.rs",
+      "line": 243,
+      "failure_scenario": "An authenticated administrator submits SELECT 12.34 AS amount. Validation accepts it and PostgreSQL returns a non-null NUMERIC value, but every attempted decoder is incompatible, so the successful API response contains rows=[[\"<NUMERIC>\"]] instead of [[\"12.34\"]]. SELECT TIMESTAMP '2026-10-08 12:00:00' AS t similarly returns <TIMESTAMP> instead of the timestamp value.",
+      "evidence": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/system/query.rs:212-245 promises scalar stringification but handles neither NUMERIC nor NaiveDateTime. SQLx type checks reject incompatible decoders before decoding: /home/nathanael/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-core-0.9.0/src/row.rs:112-133. Its String compatibility list excludes NUMERIC/TIMESTAMP, and DateTime uses TIMESTAMPTZ: /home/nathanael/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-postgres-0.9.0/src/types/str.rs:11-36 and /home/nathanael/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-postgres-0.9.0/src/types/chrono/datetime.rs:11-21.",
+      "expected_behavior": "Successful SELECT results must retain standard scalar values as strings, preserving their value and precision, as specified by the scalar-stringification contract.",
+      "countermeasures": "The placeholder prevents a panic but discards the actual result. READ ONLY, timeouts, and the 200-row limit do not affect decoding. SQL NULL is handled separately by SQLx's nullable extraction and is not the reported defect. /home/nathanael/.worktrees/tb-vollreview-artefakte/bot/admin_dashboard/src/pages/monitoring/DatabaseQuery.tsx:62-69 displays the returned strings directly without recovering lost values."
+    },
+    "W03-DA05-S002-correctness-4": {
+      "claim": "SQL console loses result-column metadata when a SELECT returns no rows.",
+      "classification": "B",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/system/query.rs",
+      "line": 191,
+      "failure_scenario": "An authenticated administrator submits SELECT 1 AS n WHERE FALSE. The query succeeds and has one result column, but the handler derives metadata only from rows.first(), which is absent. It returns columns=[], rows=[], rowCount=0, and the dashboard incorrectly reports zero columns.",
+      "evidence": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/system/query.rs:179-199 collects fetched rows and substitutes an empty column vector when no first row exists. Lines 127-139 serialize that vector unchanged. /home/nathanael/.worktrees/tb-vollreview-artefakte/bot/admin_dashboard/src/pages/monitoring/DatabaseQuery.tsx:22-39 consumes the result shape, and lines 130-138 display result.columns.length as the number of columns.",
+      "expected_behavior": "An empty SELECT result must preserve its selected column names independently of row count: columns=[\"n\"], rows=[], rowCount=0.",
+      "countermeasures": "The SELECT validator accepts this query and no router or frontend layer supplies missing metadata. The frontend explicitly trusts the returned column array. The existing SELECT-1 test covers only a nonempty result."
+    },
+    "W03-DA05-S002-correctness-5": {
+      "claim": "Admin error log endpoint cannot see native service errors in the shipped systemd deployment.",
+      "classification": "C",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/system/errors.rs",
+      "line": 155,
+      "failure_scenario": "Using the shipped service units on a fresh deployment, a system-health database read fails and health_handler emits a tracing ERROR. Native tracing writes to the process output captured by systemd, not to the legacy files scanned by errors_handler. A subsequent authenticated request to /system/errors returns no entry for that error, potentially total=0 despite a real service failure.",
+      "evidence": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/system/errors.rs:34-39 and 139-169 scan only relative logs/*.log files and silently skip absent files. Native logging is initialized with the default formatter at /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-dashboard/src/main.rs:373-375 and /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-bot/src/main.rs:482-484. The complete shipped units at /home/nathanael/.worktrees/tb-vollreview-artefakte/ops/systemd/deadlock-twitch-dashboard-rust.service:1-72 and /home/nathanael/.worktrees/tb-vollreview-artefakte/ops/systemd/deadlock-twitch-bot-rust.service:1-74 do not redirect process output into these files. Their logs bind mounts also point to separate service-private directories.",
+      "expected_behavior": "The admin error view should expose native service errors or clearly distinguish an unavailable log source from an error-free service. The exact supported logging source after the Rust cutover is not specified clearly enough for an automatic fix.",
+      "countermeasures": "LogsDirectory and BindPaths create accessible directories but do not populate the scanned files or expose the bot's private log directory to the dashboard. The deployed wrappers have no output-to-file bridge. Classified C because choosing journal access, shared files, or a new native logging sink requires an operational logging-contract decision."
+    },
+    "W03-DA05-S002-errors-1": {
+      "claim": "Der System-Errors-Endpunkt erfasst unter den ausgelieferten systemd-Units nicht die Fehlerausgabe der Rust-Dienste.",
+      "classification": "C",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/system/errors.rs",
+      "line": 156,
+      "failure_scenario": "Die ausgelieferte Dashboard-Unit läuft ohne alte Logdateien. Eine Datenbankabfrage scheitert beispielsweise wegen einer fehlenden Tabelle und der Handler schreibt tracing::error!. Ein anschließender berechtigter GET auf /twitch/api/admin/system/errors liefert trotzdem HTTP 200 mit entries=[] und total=0, weil diese Fehlerausgabe nicht in den gelesenen Dateien landet. Bot-Fehler sind aus demselben Grund ebenfalls unsichtbar.",
+      "evidence": "Codebasis 0ecae1370f1a80d1a101249b5c932663d69be8af; keine Abweichung der Primärdateien. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/system/errors.rs:109-169 liest ausschließlich logs/*.log und überspringt nicht vorhandene Dateien; 88-101 beantwortet das als erfolgreichen leeren Befund. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-dashboard/src/main.rs:373-375 und /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-bot/src/main.rs:482-484 initialisieren den standardmäßigen stdout-Tracing-Subscriber ohne Dateischreiber. /home/nathanael/.worktrees/tb-vollreview-artefakte/ops/systemd/deadlock-twitch-dashboard-rust.service:38-41 und /home/nathanael/.worktrees/tb-vollreview-artefakte/ops/systemd/deadlock-twitch-bot-rust.service:38-43 binden zudem unterschiedliche dienstprivate Logverzeichnisse ein; beide Units enthalten keine stdout-Dateiumleitung. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/scripts/run_tb_dashboard_service.sh:123-126 und /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/scripts/run_tb_bot_service.sh:159 starten die Binaries ohne Logumleitung. Ein konkreter Fehlerproduzent ist /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/system/database.rs:48-51. Der Router registriert den Errors-Endpunkt in /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/lib.rs:1035-1038 und bindet den System-Router bei 2239 ein. Statischer Nachweis für den ausgelieferten Startvertrag, keine Aussage über außerhalb des Repos eingerichtete Logweiterleitungen.",
+      "expected_behavior": "Die Fehleransicht soll Laufzeitfehler aus dem Monitoring-Endpoint anzeigen, wie /home/nathanael/.worktrees/tb-vollreview-artefakte/bot/admin_dashboard/src/pages/monitoring/ErrorLogs.tsx:49-60 beschreibt. Fehlende Anbindung der tatsächlichen Fehlerquelle sollte nicht als fehlende Fehlereinträge erscheinen. C, weil der Handler ausdrücklich einen Legacy-Dateivertrag nachbildet und die Auswahl einer neuen Fehlerquelle samt dienstübergreifender Leserechte über einen eindeutigen lokalen Fehlerfix hinausgeht.",
+      "countermeasures": "Admin-Prüfung, Maskierung und die Suche nach weiteren *.log-Dateien sind vorhanden, stellen jedoch keine Verbindung zur stdout-/Journal-Ausgabe her. Das tolerierte Fehlen alter Logdateien verhindert Panics, verdeckt aber die fehlende Quelle. Beide Rust-Logger und beide Startskripte wurden gezielt als Zwillinge geprüft. Empfehlung nur dokumentieren: tatsächliche Fehlerquelle und sichere Freigabe an das Dashboard festlegen; keine Änderung ausgeführt."
+    },
+    "W03-DA05-S002-concurrency-1": {
+      "claim": "Admin-console session advisory locks survive request rollback and can block the bot's monthly season closure.",
+      "classification": "C",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/system/query.rs",
+      "line": 187,
+      "failure_scenario": "An authenticated admin submits SELECT pg_advisory_lock(713219, 27) while that lock is free. Validation accepts it, FETCH evaluates it, and the request succeeds. PostgreSQL session advisory locks survive ROLLBACK, so the dashboard's pooled connection retains the lock. A subsequent due monthly season closure waits on the identical transaction advisory lock until the dashboard connection closes or the lock is explicitly released.",
+      "evidence": "At fixed SHA 0ecae1370f1a80d1a101249b5c932663d69be8af, the assigned query.rs lines 55-86 accept this SELECT; lines 151-185 execute it on a pooled transaction; lines 187-209 only roll back before returning. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-db/src/pool.rs:41-58 configures reusable connections without a release/reset hook. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-raid/src/monthly_raid_boost.rs:143-153 waits on pg_advisory_xact_lock(713219, 27). /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-bot/src/monthly_raid_boost.rs:22-35,54-61 reaches that method from the periodic scheduler; /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-bot/src/main.rs:546 starts it. Static review only, as required.",
+      "expected_behavior": "Diagnostic SQL should not leave locks blocking unrelated bot operations after a request finishes. However, query.rs lines 10-11 explicitly permit arbitrary authenticated-admin SQL and disclaim a SQL sandbox. The policy for side-effecting SELECT functions is therefore unclear; this is C, not an automatically authorized behavior change.",
+      "countermeasures": "require_admin restricts reachability to admins. SELECT validation, READ ONLY, statement_timeout and lock_timeout do not release successfully acquired session advisory locks. The inspected role configuration at /home/nathanael/.worktrees/tb-vollreview-artefakte/ops/systemd/twitch-runtime-roles.sql does not revoke these built-in functions. Connection retirement eventually releases the lock. No public privilege escalation is claimed; any restriction or disposable-connection isolation needs an explicit contract decision."
+    },
+    "W03-DA05-S002-resources-1": {
+      "claim": "Admin SQL results have no byte bound despite the 200-row limit.",
+      "classification": "C",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/system/query.rs",
+      "line": 183,
+      "failure_scenario": "On a dashboard with less than 1 GB of available memory, an authenticated admin submits SELECT repeat('x', 10000000) FROM generate_series(1, 200). This short, SELECT-only query passes validation and requests exactly 200 rows, but its text cells total 2 GB. If the local database supplies enough rows before the five-second statement deadline, fetch_all exhausts dashboard memory before result conversion or serialization completes.",
+      "evidence": "At review SHA 0ecae1370f1a80d1a101249b5c932663d69be8af, query.rs:179-185 buffers complete PostgreSQL rows with fetch_all. Lines 201-217 create additional owned strings, and lines 128-138 serialize the entire result. Neither validation nor fetching limits cell size or cumulative result bytes.",
+      "expected_behavior": "The documented resource hardening at query.rs:8-9 bounds row count, SQL input size and statement duration. A byte budget would also prevent a small valid query from exhausting service memory, but no existing maximum result-byte contract was found. Selecting that limit changes accepted query behavior, so this remains C.",
+      "countermeasures": "Admin authentication, the 16 KiB input cap, READ ONLY, a non-held cursor, MAX_ROWS=200, statement_timeout=5s and lock_timeout=1s are present. None bounds bytes per fetched row. This is not an unauthenticated vulnerability; no probe or test was executed."
+    },
+    "W03-DA05-S002-resources-2": {
+      "claim": "Error-log requests scan complete files synchronously on Tokio workers.",
+      "classification": "C",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/system/errors.rs",
+      "line": 161,
+      "failure_scenario": "Persistent logs contain multi-gigabyte files on slow storage. Authorized error-log requests occupying all runtime workers each read those files from their beginning before returning even the first page. Unrelated dashboard requests and background tasks cannot progress on those workers during the synchronous scans. An exceptionally large unterminated log line additionally causes allocation proportional to that entire line, despite the later message-length caps.",
+      "evidence": "errors.rs:88 calls load_error_log_entries directly from the async handler. Lines 155-169 synchronously iterate BufReader::lines until EOF; max_lines only controls deque eviction, not bytes read or line allocation. The 200-entry early return happens at lines 124-130 after a complete file has already been read. The deployed service binds persistent logs at /home/nathanael/.worktrees/tb-vollreview-artefakte/ops/systemd/deadlock-twitch-dashboard-rust.service:38-41.",
+      "expected_behavior": "errors.rs:27-28 and 106-108 describe scanning the latest 4,000 lines. Log retrieval should not monopolize the shared async runtime or allocate unbounded input lines. A bounded reader must also preserve the existing entry-ID semantics; the byte budget and compatible reading strategy are not specified, so this remains C.",
+      "countermeasures": "require_admin, the 4,000-line deque, the 200 returned-entry cap and the 1,200/2,000-character output caps were checked. These limit retained line count or final output, not full-file I/O or raw-line size. Router composition has no blocking-task offload for this handler. External log rotation could reduce exposure, but its live configuration was not inspected."
+    },
+    "W03-DA05-S002-resources-3": {
+      "claim": "Database-stat requests can retain shared pool connections indefinitely behind a table lock.",
+      "classification": "C",
+      "file": "/home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/handlers/system/database.rs",
+      "line": 48,
+      "failure_scenario": "With PostgreSQL statement_timeout and lock_timeout unset, a maintenance transaction holds ACCESS EXCLUSIVE on twitch_streamers. Concurrent authorized database-stat requests reach COUNT(*) and wait while retaining every connection in the shared dashboard pool. Other database-backed dashboard requests then fail pool acquisition, although PostgreSQL remains reachable.",
+      "evidence": "database.rs:48 awaits database_stats without a deadline. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-analytics/src/system_database.rs:55-65 performs COUNT(*) without a statement or lock timeout. /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/bin/tb-dashboard/src/main.rs:400 uses tb_db::connect; /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-db/src/pool.rs:20-55 sets SQL statement_timeout only for connect_readonly, not this production path. System routes share this pool through /home/nathanael/.worktrees/tb-vollreview-artefakte/rust/crates/tb-dashboard-api/src/lib.rs:2239.",
+      "expected_behavior": "A blocked monitoring query should terminate and release its connection rather than disable unrelated dashboard operations. No explicit deadline contract for this endpoint was found, and live PostgreSQL defaults were not inspected. Choosing the timeout policy therefore remains C.",
+      "countermeasures": "Admin authentication and bounded tracked-table count are present. acquire_timeout bounds obtaining a connection, not execution after acquisition. The SQL-console handler's separate 5s/1s transaction limits do not protect database_stats. Production router composition has no request timeout; externally configured PostgreSQL deadlines could prevent this scenario."
+    }
+  },
+  "mechanical_validation": {
+    "errors": [],
+    "selected_started_result_key_and_agent_joins_checked": true,
+    "final_structured_inputs_exactly_match_journal_results": true,
+    "embedded_raw_findings_exactly_match_source_finding_objects": true,
+    "new_group_required_fields_and_lossless_member_refs_checked": true,
+    "new_plus_linked_groups_form_exact_partition_of_raw_ids": true,
+    "transcript_and_final_input_hashes_recomputed": true,
+    "selected_journal_record_hash_recomputed": true,
+    "prior_candidate_groups_compared": 40,
+    "prior_DA03_groups_compared": 32,
+    "finished_prior_skeptic_pairs_compared_as_recorded_metadata": 22,
+    "all_declared_primary_intervals_match_manifest": true,
+    "placeholder_check_scope": "No placeholders in authored metadata or group structures. Type-placeholder strings in original SQL-decoding findings and literal path ellipses in quoted source descriptions are preserved source evidence, not unresolved artifact content.",
+    "scope": "Mechanical integrity only. Semantic consolidation is based on the recorded findings; no independent claim validation or acceptance."
+  },
+  "blockers": []
+}

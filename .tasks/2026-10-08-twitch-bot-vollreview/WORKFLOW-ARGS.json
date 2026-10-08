@@ -1,4 +1,26 @@
 {
+  "wf_6efbb8b3-653": [{"area": "DA07", "lens": "security", "slice": "DA07-S001"}, {"area": "DA15", "lens": "resources", "slice": "DA15-S002"}],
+  "wf_655679bf-2b7": {"areas": [{"area": "DA04", "expected": 29}, {"area": "DA05", "expected": 12}, {"area": "DA06", "expected": 26}]},
+  "wf_b01ff274-9fa": {
+    "areas": [{"id": "DA08", "slices": 4}, {"id": "DA09", "slices": 1}, {"id": "DA10", "slices": 4}, {"id": "DA11", "slices": 5}, {"id": "DA12", "slices": 4}, {"id": "DA13", "slices": 5}, {"id": "DA14", "slices": 2}, {"id": "DA16", "slices": 5}, {"id": "DA18", "slices": 4}, {"id": "DA19", "slices": 1}, {"id": "IA02", "slices": 4}, {"id": "IA03", "slices": 3}, {"id": "IA04", "slices": 4}],
+    "wave": "W04"
+  },
+  "wf_961bca08-8d7": [
+    {"id": "B04", "worktree": "/home/nathanael/.worktrees/tb-vollreview-router-vertraege"},
+    {"id": "B06", "worktree": "/home/nathanael/.worktrees/tb-vollreview-proxy-antwort"},
+    {"id": "B07", "worktree": "/home/nathanael/.worktrees/tb-vollreview-plan-fixture"}
+  ],
+  "wf_af2d23c2-851": [
+    {"area": "DA04", "reviews": 25, "slices": 5},
+    {"area": "DA05", "reviews": 10, "slices": 2},
+    {"area": "DA06", "reviews": 15, "slices": 3}
+  ],
+  "wf_e359d631-ed4": [
+    {"claim": "HTTP-URLs mit IPv6-Loopback [::1] werden beim Dashboard-OAuth fälschlich abgelehnt.", "file": "rust/crates/tb-dashboard-api/src/handlers/auth_login.rs", "id": "W03-DA03-S003-correctness-2", "line": 936, "slot": 2},
+    {"claim": "Unauthenticated auth-status responses remain cacheable across session-cookie changes.", "file": "rust/crates/tb-dashboard-api/src/handlers/auth_status.rs", "id": "W03-DA03-S004-correctness-1", "line": 32, "slot": 1},
+    {"claim": "Concurrent Discord-link callbacks swapping two linked accounts can deadlock and discard one completed link.", "file": "rust/crates/tb-dashboard-api/src/handlers/discord_link.rs", "id": "W03-DA03-S004-concurrency-1", "line": 236, "slot": 1},
+    {"claim": "Partner token login accepts cross-site POSTs that overwrite the victim's durable partner session.", "file": "rust/crates/tb-dashboard-api/src/handlers/partner_login.rs", "id": "W03-DA03-S005-security-1", "line": 219, "slot": 2}
+  ],
   "wf_9eb7b672-f97": [
     {
       "claim": "A concurrent sliding refresh can recreate a partner session after logout.",

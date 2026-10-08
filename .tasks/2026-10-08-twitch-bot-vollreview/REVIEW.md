@@ -128,6 +128,62 @@ MERGEPROTOKOLL[MS-1]: 10 Git-Schritte einzeln | Anläufe: 0 | Gate: nicht ausgef
 
 Der Abgleich-Worker a85cf61377bbe9481 in wf_45aca23b-0b9 endete ohne StructuredOutput mit API 403: WebSocket upgrade was rejected. Das Journal enthält failed, keine Ergebnisabgabe. Keine Prüf- oder Gatefreigabe aus Teilaktivität ableiten. Nach bestätigtem Abbruch wurde genau einmal derselbe Workflow mit erhaltener Worktreearbeit und frischem Sol-Kontext fortgesetzt; neue Task-ID w1g2kmoxn. Das angepasste Briefing verlangt Prüfung bereits laufender eigener Aufgaben, keine doppelten Kompilierungen und keinen Modellrückfall.
 
+## B04, B06 und B07: Erstgruppe beendet
+
+Die drei Fixer sind beendet. Astra prüfte die fertigen Transcripts am 2026-10-08: B04 aed18ccb4194e9d4c, 162 Sol-Datensätze, SHA256 c7aff3e1231adfb8d78252566516d95155d1ee991a615d13d2ca362c7a73831e; B04-Leerdiff-Kritiker a324f168560f348e8, 54, SHA256 03247f3f251ea53a088872eaf99dbc5ec36f8379f39f972348d56aae82cc1d51; B06 a8751a0f816a56a4c, 178, SHA256 45e27d4b4201ea2a4bb4e1bb1428840f6e95d726406c6acd6af063ad9c62d914; B07 ad671d5f3f2756d20, 184, SHA256 51523fb2f574c091a99dd2374ba183e73fe9cf374d35fccb66c3b8fd96ee1641. Vollständige Rückgaben stehen im Journal wf_3e7d57bd-7ac.
+
+### B04
+
+Der Erstfixer ließ 180 Einfügungen und sechs Löschungen in lib.rs uncommittet. Der Kritiker sah ausdrücklich den leeren Vergleich bd695027..bd695027 und meldete die unveränderten ursprünglichen Fehler. Das ist keine fachliche Prüfung des tatsächlichen Fixes. Nach beendetem Worker und Kritiker prüfte Astra Status, Umfang und diff --check und sicherte den unveränderten Sol-Diff lokal als WIP c0383531. Kein Anwendungscode wurde durch Astra editiert.
+
+Gemeldete Tests: Baseline 1333 bestanden, 35 fehlgeschlagen; Fix 1336 bestanden, dieselben 35 fehlgeschlagen. Drei neue Regressionen und alle neun Routerfälle bestanden im Gesamtlauf. Eigene Datei vor und nach Fix formatiert. Paketformat-Baseline 265 Abweichungen, nachgelagerter Paketformatlauf und Clippy ohne Slot und ohne Ergebnis. Früheres ALLOW: no reviewable changes betrifft den leeren Commitvergleich, nicht den Patch. Wirksamer Gate und echte Kritik fehlen.
+
+MERGEPROTOKOLL[MS-1]: 5 Git-Schritte einzeln | Anläufe: 0 | Gate: nicht ausgeführt; lokaler WIP-Checkpoint, keine Integration
+
+### B06
+
+Head 46c52a928b47444b10364d024a632ca00226d6c4, Basis a8b5b5e986a1de0b8e2f981651f83bda9cf400dd. Datei proxy.rs. Fixer meldet Begrenzung der tatsächlich gelesenen Antwortbytes auf die bereits vorhandenen 16 MiB. 14 gezielte Proxytests bestanden inklusive drei neuer Fälle. Gesamtlauf 1334 bestanden, dieselben 31 Fehler wie Baseline mit 1331 bestandenen Tests; sechs ignoriert. Unterschiedliche Flags erklären, warum diese Zahlen nicht mit den 35 Fehlern anderer Pakete gleichgesetzt werden dürfen.
+
+Eigene Datei formatiert. Format-Baseline 265 Abweichungen in 34 Dateien, nachher 255 in 33 fremden Dateien. Clippy vor Kompilierungsbeginn im Slotwarten beendet, bleibt offen. Sol-Gate ALLOW für den genannten Head und die Basis, gespeicherter Reviewzustand 7510de26b74f4c6f.json. Kritiker durch API 403 ohne Urteil ausgefallen, daher keine fachliche Freigabe.
+
+### B07
+
+Head 9ec607b31a68d2721f6c8905d4268fd5d4290ca6, Basis a8b5b5e986a1de0b8e2f981651f83bda9cf400dd. Datei tests/plan_stufen_gates.rs. Elf Fokusfälle bestanden, ein Fehler bleibt; vorher drei bestanden und neun fehlgeschlagen. Konsistente numerische Twitch-IDs beheben acht Identitätsfehler. Verbliebener TikTok-Test enthält keine tiktok_options und erreicht nach dem Identitätsfix eine bestehende 400-Antwort statt der erwarteten Warteschlange. Kein separater Fixauftrag dafür.
+
+Eigene Datei vor und nach Fix formatiert. Paketformat 265 Abweichungen, passende vollständige Format-Baseline und Clippy fehlen. Sol-Gate ALLOW für den genannten Head, gespeicherter Reviewzustand 7dbce9b52973fd1f.json. Kritiker durch API 403 ohne Urteil ausgefallen. Tests wurden vor einem reinen Dokumentationsbasisabgleich ausgeführt; der Fixer meldet identischen Rust-Baum. Diese Bindung vor Wiederverwendung prüfen.
+
+Kein Main-Merge, Push, Release, Deploy oder Restart dieser Pakete. Frische Prüfung fehlender Nachweise und echte Kritiker folgen auf den festen nichtleeren Commit-Diffs. API-Ausfälle sind weder ALLOW noch BLOCK.
+
+## A01: dritte Korrektur erhalten, Abschluss unterbrochen
+
+wf_b79d23f0-572 endete ohne Rückgabe am Kontextlimit. Sauberer lokaler Commit 1080b730 ist erhalten. Fixer ae308fa8c5802e704: 163 echte Sol-Datensätze, ein synthetischer Datensatz, Transcript-SHA256 808b2f20b192234471c92adf2dfa79509430d545b9ef7979721342f48661a415, durch Astra geprüft. Kein fachliches BLOCK der dritten Fassung liegt vor; der fehlende Abschluss wird nicht als vierte Codekorrektur gezählt.
+
+Erhaltene Logs melden sieben erfolgreiche A01-Regressionen, Gesamtsuite 1340 bestanden und dieselben 35 Fehler wie Baseline mit 1333 bestandenen Tests, null ignoriert. Paket-fmt vor/nach Fix 265 Abweichungen. Ein zusätzlicher Opt-in-Prüfweg ist erhalten und muss korrekt zugeordnet werden: fehlende freiwillige Aktivierung soll skippen, ausdrücklich aktivierte fehlende Einrichtung soll hart scheitern. Sol-Gatelog enthält ALLOW. Clippy wurde mangels Slot nicht ausgeführt. Diese Belege ersetzen noch keine abgeschlossene Abgabe oder frische Kritik.
+
+Frischer Abschlussworker ohne Quelländerung und anschließender Kritiker: wf_5c114a47-0a8, Task wu3qyyarz, Script tb-vollreview-a01-r3-abschluss-wf_5c114a47-0a8.js. BRIEFING-A01-R3-ABSCHLUSS.md bindet Commit, Logs und Grenzen. Kein Doppelstart der alten Fixrunde.
+
+## B02: Prüfabschluss abgenommen, Integration beauftragt
+
+Prüfworker ac5199af81dd5da1b beendet: 95 Sol-Datensätze, SHA256 2c2be879cc9d4cfeb81760641f1cf7f5f8ffcd35eb8021f1686e3eb7a541eacb, durch Astra geprüft. Head e98b7f016dbab373a5a8dd9490d158b136c97fec und Basis a8b5b5e986a1de0b8e2f981651f83bda9cf400dd blieben unverändert. Der echte 9951-Byte-Diff entspricht der bereits fachlich freigegebenen Fassung, SHA256 7c951fc71c506ed50f93ad037d4c2b092faa6726b251da41d91a176f7e90a3e5.
+
+Am finalen SHA 50 OBS-Tests bestanden, inklusive LISTEN/NOTIFY. Gesamtsuite 1334 bestanden und dieselben 35 Fehler wie neu ausgeführte passende Baseline mit 1333 bestandenen Tests, jeweils null ignoriert. Eigene Dateien formatiert. Paket-fmt hat 265 identische Bestandsabweichungen. Clippy scheitert vor vollständiger Paketprüfung an identischer fremder tb-chat-Warnung. Keine grüne Gesamtsuite oder vollständige Lintabdeckung behauptet. Logs und Vergleichsnachweise in /tmp/tb-b02-pruefabschluss-20261008.JP81tl/.
+
+Sol-Gate bestätigt den exakt passenden vorhandenen ALLOW-Nachweis, Exit 0, ohne neuen Modellaufruf. Keine Quelländerung, keine offenen eigenen Hintergrundjobs. Ausgeführte geforderte Prüfungen mit passenden Bestandsfehlern und echte Kritik liegen damit vor. Kleine Integration in wf_bcd5a36c-fdb, Task wty4n1c23, Script tb-vollreview-b02-integration-wf_bcd5a36c-fdb.js beauftragt, noch nicht als gemergt gewertet. BRIEFING-B02-INTEGRATION.md verlangt unveränderte Hookmechanik ohne Modellfallback; bei unzulässigem Gatepfad zurückgeben. Deploy, Neustart und Aufräumen bleiben gesperrt.
+
+TESTNACHWEIS[TW-1]: 1334 bestanden, 35 fehlgeschlagen, 0 ignoriert | Baseline: 1333 bestanden, dieselben 35 Fehler | OBS-Fokus: 50 bestanden
+
+## B01: Wiederaufnahme mit erhaltenen Belegen
+
+Abgleichworker ac4d984dbc328a0cd beendet: 140 Sol-Datensätze, SHA256 7048da93434d0b95f580542a2e808017d9b1596370ff5b57dca103d4f062a972, durch Astra geprüft. Head c3aa3cc94fec60aa365dcc9ca9f54b4bd3f1539a, Basis a8b5b5e9, sauberer nichtleerer Fixdiff. Frischer Kritiker im selben wf_45aca23b-0b9 gestartet, Urteil offen.
+
+Erhaltene eigene Regression bestanden. Vollständige vorhandene Suite 336 bestanden und dieselben 24 Fehler wie Baseline mit 335 bestandenen Tests. Der Worker weist identischen Anwendungscode gegenüber den geprüften Ständen nach; zwischenzeitliche Unterschiede betreffen Taskartefakte. Eigene Datei formatiert, Paket-fmt 34 fremde Abweichungen. Fix-Clippy und ältere Baseline zeigen dieselbe tb-chat-Diagnose; jüngster Baseline-Clippy-Log leer. Ein neuer Prüfversuch endete nach 3600 Sekunden ohne Slot oder begonnene Kompilierung; keine frischen Ergebnisse daraus. Sol-Gate bestätigt vorhandenen passenden ALLOW-Nachweis. Kein Merge oder Deploy.
+
+## B08 und B10
+
+B08 Runde 1 meldet sauberen unveränderten Stand und einen Schreibumfangsblocker: Ein isolierter Parserfix würde Research-Überläufe neu zulassen. Erster Fixer a497c9a5de2aed3bb, 35 Sol-Datensätze, SHA256 e29b089fcff6908dc89306096384373ae3d8d51a3a13d97f2ff943345a4e3a1c, geprüft. Der zusätzliche eng begrenzte Pfad handlers/admin_research.rs erhält denselben vorhandenen Vertrag. Frischer Fixer und Kritiker in wf_2b7d67c4-23f, Briefing BRIEFING-B08-R2.md; kein neuer Research-Claim.
+
+B10 behebt zwei neue doppelt bestätigte B-Claims in auth_status.rs: späteres Moduscookie und Cachezeitunterlauf. Reviewer-/Skeptikerbelege in BRIEFING-B10.md vollständig geprüft. Neuer eigener Worktree tb-vollreview-authstatus, Workflow wf_b1cabe6f-009, Task wo6s9aj11. Der benachbarte C-gesperrte HTTP-Cacheclaim bleibt ausgeschlossen. Noch kein Ergebnis.
+
 ## Vorbedingungen
 
 Der erlaubte Sol-Gate-Aufruf wird lesend geprüft, bevor ein Gate ausgelöst wird. Die vorbestehende Abweichung zwischen lokalem `main` und `origin/main` darf keinen Review fremder Änderungen auslösen. Der fremde Hauptcheckout bleibt unangetastet.
