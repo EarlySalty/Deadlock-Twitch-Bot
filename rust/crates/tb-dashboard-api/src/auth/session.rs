@@ -791,6 +791,35 @@ impl DashboardAuthState {
         display_name: &str,
         expires_at: f64,
     ) -> Result<SessionCreation, sqlx::Error> {
+        let generation = self.admin_session_generation().await;
+        self.import_central_admin_session_if_current(
+            session_id,
+            user_id,
+            username,
+            display_name,
+            expires_at,
+            generation,
+        )
+        .await
+    }
+
+    pub(crate) async fn admin_session_generation(&self) -> u64 {
+        self.admin_cache.lock().await.generation
+    }
+
+    pub(crate) async fn import_central_admin_session_if_current(
+        &self,
+        session_id: &str,
+        user_id: &str,
+        username: &str,
+        display_name: &str,
+        expires_at: f64,
+        generation: u64,
+    ) -> Result<SessionCreation, sqlx::Error> {
+        let mut cache = self.admin_cache.lock().await;
+        if cache.generation != generation {
+            return Err(sqlx::Error::RowNotFound);
+        }
         let now = unix_now() as f64;
         let expires_at = expires_at.min(now + ADMIN_SESSION_TTL_SECS as f64);
         let csrf_token = tb_crypto::random_urlsafe_token(SESSION_ID_BYTES);
@@ -813,7 +842,7 @@ impl DashboardAuthState {
 
         self.persist_new_session(session_id, "discord_admin", &payload, now, expires_at)
             .await?;
-        self.admin_cache.lock().await.entries.remove(session_id);
+        cache.entries.remove(session_id);
 
         Ok(SessionCreation {
             session_id: session_id.to_string(),
@@ -934,34 +963,39 @@ impl DashboardAuthState {
             .unwrap_or("/twitch/admin")
             .trim()
             .to_string();
-        let created_at = payload
-            .get("created_at")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(now as f64);
-        let expires_at = payload
-            .get("expires_at")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(now as f64);
-
         if let Some(obj) = payload.as_object_mut() {
             obj.insert("js_fp".into(), serde_json::json!(js_fp.trim()));
             obj.insert("fp_pending".into(), serde_json::json!(false));
             obj.insert("last_seen_at".into(), serde_json::json!(now as f64));
         }
 
-        self.persist_new_session(
-            session_id,
-            "discord_admin",
-            &payload,
-            created_at,
-            expires_at,
-        )
-        .await?;
+        if !self
+            .persist_admin_fingerprint(session_id, &payload, now)
+            .await?
         {
-            let mut cache = self.admin_cache.lock().await;
-            cache.entries.remove(session_id);
+            return Ok(None);
         }
+        self.admin_cache.lock().await.entries.remove(session_id);
         Ok(Some(destination))
+    }
+
+    async fn persist_admin_fingerprint(
+        &self,
+        session_id: &str,
+        payload: &serde_json::Value,
+        now: u64,
+    ) -> Result<bool, sqlx::Error> {
+        let token = fernet::encrypt(&self.fernet_key, payload.to_string().as_bytes())
+            .map_err(|e| sqlx::Error::Encode(Box::new(SessionEncryptError(e.to_string()))))?;
+        let updated = sqlx::query(
+            "UPDATE dashboard_sessions SET payload_enc = $2 WHERE session_id = $1 AND session_type = 'discord_admin' AND expires_at > $3",
+        )
+        .bind(session_lookup_key(session_id))
+        .bind(token.as_bytes())
+        .bind(now as f64)
+        .execute(&self.pool)
+        .await?;
+        Ok(updated.rows_affected() > 0)
     }
 
     /// Verschlüsselt einen frischen Session-Payload und schreibt ihn in
@@ -1513,17 +1547,16 @@ impl DashboardAuthState {
         if session_id.is_empty() {
             return;
         }
+        let mut admin_cache = self.admin_cache.lock().await;
+        admin_cache.generation = admin_cache.generation.wrapping_add(1);
+        admin_cache.entries.remove(session_id);
         self.delete_session(session_id).await;
         {
             let mut cache = self.partner_cache.lock().await;
             cache.generation = cache.generation.wrapping_add(1);
             cache.entries.remove(session_id);
         }
-        {
-            let mut cache = self.admin_cache.lock().await;
-            cache.generation = cache.generation.wrapping_add(1);
-            cache.entries.remove(session_id);
-        }
+        drop(admin_cache);
         {
             let mut cache = self.central_admin_validation_cache.lock().await;
             cache.entries.remove(session_id);
@@ -2102,16 +2135,64 @@ impl DashboardAuthState {
             return true;
         }
 
-        let token = match fernet::encrypt(&self.fernet_key, payload.to_string().as_bytes()) {
+        let persisted = self
+            .persist_session_refresh(session_id, session_type, new_expires, now)
+            .await;
+        match persisted {
+            Ok(updated) => updated,
+            Err(e) => {
+                debug!(%e, "Session-Refresh-Persist fehlgeschlagen");
+                false
+            }
+        }
+    }
+
+    async fn persist_session_refresh(
+        &self,
+        session_id: &str,
+        session_type: &str,
+        new_expires: f64,
+        now: u64,
+    ) -> Result<bool, sqlx::Error> {
+        let mut transaction = self.pool.begin().await?;
+        let session_key = session_lookup_key(session_id);
+        let current: Option<Vec<u8>> = sqlx::query_scalar(
+            "SELECT payload_enc FROM dashboard_sessions WHERE session_id = $1 AND session_type = $2 AND expires_at > $3 FOR UPDATE",
+        )
+        .bind(&session_key)
+        .bind(session_type)
+        .bind(now as f64)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let Some(current) = current else {
+            return Ok(false);
+        };
+        let plaintext = match fernet::decrypt(&self.fernet_key, &encode_b64(&current), None) {
+            Ok(plaintext) => plaintext,
+            Err(e) => {
+                debug!(%e, "Session-Refresh-Decrypt fehlgeschlagen");
+                return Ok(false);
+            }
+        };
+        let mut current: serde_json::Value =
+            serde_json::from_slice(&plaintext).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+        let Some(current) = current.as_object_mut() else {
+            return Ok(false);
+        };
+        current.insert("expires_at".into(), serde_json::json!(new_expires));
+        current.insert("last_seen_at".into(), serde_json::json!(now as f64));
+        let token = match fernet::encrypt(
+            &self.fernet_key,
+            serde_json::to_string(current).unwrap().as_bytes(),
+        ) {
             Ok(t) => t,
             Err(e) => {
                 debug!(%e, "Session-Refresh-Encrypt fehlgeschlagen");
-                return false;
+                return Ok(false);
             }
         };
 
-        let session_key = session_lookup_key(session_id);
-        match sqlx::query(
+        let updated = sqlx::query(
             r#"
             UPDATE dashboard_sessions
             SET payload_enc = $3, expires_at = $4
@@ -2122,15 +2203,10 @@ impl DashboardAuthState {
         .bind(session_type)
         .bind(token.as_bytes())
         .bind(new_expires)
-        .execute(&self.pool)
-        .await
-        {
-            Ok(result) => result.rows_affected() > 0,
-            Err(e) => {
-                debug!(%e, "Session-Refresh-Persist fehlgeschlagen");
-                false
-            }
-        }
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(updated.rows_affected() > 0)
     }
 }
 
@@ -2627,22 +2703,37 @@ mod integration_tests {
         if std::env::var("TB_TEST_REQUIRE_DB").as_deref() != Ok("1") {
             return None;
         }
-        let url = std::env::var("TB_TEST_DATABASE_URL").ok()?;
+        let url = std::env::var("TB_TEST_DATABASE_URL")
+            .expect("Aktivierte Auth-DB-Tests brauchen TB_TEST_DATABASE_URL");
+        Some(activated_pool(&url).await)
+    }
+
+    async fn activated_pool(url: &str) -> PgPool {
         let schema = test_schema_name("auth_session");
-        let admin_pool = sqlx::PgPool::connect(&url).await.ok()?;
+        let admin_pool = sqlx::PgPool::connect(url)
+            .await
+            .expect("Aktivierte Auth-DB-Tests können die Testdatenbank nicht erreichen");
         sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
             .execute(&admin_pool)
             .await
-            .ok()?;
+            .expect("Schema für aktivierte Auth-DB-Tests konnte nicht angelegt werden");
         admin_pool.close().await;
 
-        let opts: sqlx::postgres::PgConnectOptions = url.parse().ok()?;
+        let opts: sqlx::postgres::PgConnectOptions = url
+            .parse()
+            .expect("Ungültige Adresse für aktivierte Auth-DB-Tests");
         let opts = opts.options([("search_path", schema.as_str())]);
         sqlx::postgres::PgPoolOptions::new()
             .max_connections(2)
             .connect_with(opts)
             .await
-            .ok()
+            .expect("Pool für aktivierte Auth-DB-Tests konnte nicht aufgebaut werden")
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "Aktivierte Auth-DB-Tests können die Testdatenbank nicht erreichen")]
+    async fn sitzungsabschluss_aktiviertes_testsetup_verschluckt_keinen_fehler() {
+        activated_pool("keine-postgres-adresse").await;
     }
 
     /// Fernet-Key für Integrations-Tests (Testkey, kein Prod-Secret).
@@ -3868,6 +3959,97 @@ print(f.encrypt(payload.encode()).decode(), end='')
 #[cfg(test)]
 mod identity_regression_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn sitzungsabschluss_import_fingerprint_und_refresh_bleiben_widerrufen() {
+        let db = crate::test_database::Database::new().await;
+        sqlx::raw_sql("CREATE TABLE dashboard_sessions(session_id TEXT PRIMARY KEY, session_type TEXT NOT NULL, payload_enc BYTEA NOT NULL, created_at DOUBLE PRECISION NOT NULL, expires_at DOUBLE PRECISION NOT NULL);")
+            .execute(&db.pool).await.unwrap();
+        let state = DashboardAuthState::new(
+            db.pool.clone(),
+            "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".into(),
+        );
+        let now = unix_now();
+        let generation = state.admin_session_generation().await;
+        state.invalidate_session("delayed-import").await;
+        assert!(matches!(
+            state
+                .import_central_admin_session_if_current(
+                    "delayed-import",
+                    "42",
+                    "admin",
+                    "Admin",
+                    now as f64 + 3600.0,
+                    generation,
+                )
+                .await,
+            Err(sqlx::Error::RowNotFound)
+        ));
+        let current_generation = state.admin_session_generation().await;
+        state
+            .import_central_admin_session_if_current(
+                "valid-import",
+                "42",
+                "admin",
+                "Admin",
+                now as f64 + 3600.0,
+                current_generation,
+            )
+            .await
+            .unwrap();
+        let mut stale = state
+            .fetch_session_payload("valid-import", "discord_admin", now)
+            .await
+            .unwrap()
+            .unwrap();
+        state
+            .complete_admin_session_fingerprint("valid-import", "permanent-fingerprint")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            state
+                .maybe_refresh_session(
+                    "valid-import",
+                    "discord_admin",
+                    &mut stale,
+                    ADMIN_SESSION_TTL_SECS,
+                    now
+                )
+                .await
+        );
+        let latest = state
+            .fetch_session_payload("valid-import", "discord_admin", now)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(latest["js_fp"], "permanent-fingerprint");
+        assert_eq!(latest["fp_pending"], false);
+        assert_eq!(
+            latest["expires_at"],
+            now as f64 + ADMIN_SESSION_TTL_SECS as f64
+        );
+        state.invalidate_session("valid-import").await;
+        assert!(!state
+            .persist_admin_fingerprint("valid-import", &latest, now)
+            .await
+            .unwrap());
+        assert!(!state
+            .persist_session_refresh(
+                "valid-import",
+                "discord_admin",
+                now as f64 + ADMIN_SESSION_TTL_SECS as f64,
+                now
+            )
+            .await
+            .unwrap());
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dashboard_sessions")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        db.close().await;
+    }
 
     #[tokio::test]
     async fn recycled_login_never_changes_authenticated_id_in_either_session_type() {

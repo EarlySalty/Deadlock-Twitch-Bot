@@ -676,9 +676,14 @@ pub async fn logout_handler(
         .filter(|session_id| !session_id.is_empty())
         .map(str::to_string)
         .collect();
+    let mut revoke_failed = false;
     for session_id in session_ids {
+        if let Some(Extension(state)) = state.as_ref() {
+            state.invalidate_session(&session_id).await;
+        }
         if let Some(Extension(config)) = config.as_ref() {
             if config.client.revoke_session(&session_id).await.is_err() {
+                revoke_failed = true;
                 tracing::warn!("Zentrale Admin-Session konnte beim Logout nicht widerrufen werden");
             }
         }
@@ -694,6 +699,16 @@ pub async fn logout_handler(
     let target = admin_route_url(&base_url, ADMIN_LOGIN_PATH, &[]);
     let cookie = clear_admin_cookie(cookie_secure, cookie_domain.as_deref());
     let mut response = redirect_with_cookie(&target, &cookie);
+    if revoke_failed {
+        response = (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Die zentrale Sitzung konnte nicht abgemeldet werden. Bitte versuche es erneut.",
+        )
+            .into_response();
+        if let Ok(value) = HeaderValue::from_str(&cookie) {
+            response.headers_mut().append(header::SET_COOKIE, value);
+        }
+    }
     if cookie_domain.is_some() {
         let legacy_cookie = clear_admin_cookie(cookie_secure, None);
         if let Ok(value) = HeaderValue::from_str(&legacy_cookie) {
@@ -1301,6 +1316,7 @@ mod tests {
         central_session_valid: bool,
         imported: Arc<Mutex<Vec<String>>>,
         revoked: Arc<Mutex<Vec<String>>>,
+        revoke_fails: bool,
     }
 
     #[async_trait]
@@ -1356,7 +1372,11 @@ mod tests {
 
         async fn revoke_session(&self, session_id: &str) -> Result<(), DiscordAdminOAuthError> {
             self.revoked.lock().await.push(session_id.to_string());
-            Ok(())
+            if self.revoke_fails {
+                Err(DiscordAdminOAuthError)
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -1381,6 +1401,7 @@ mod tests {
             central_session_valid,
             imported: Arc::new(Mutex::new(Vec::new())),
             revoked: Arc::new(Mutex::new(Vec::new())),
+            revoke_fails: false,
         })
     }
 
@@ -2332,5 +2353,25 @@ mod tests {
             client.revoked.lock().await.as_slice(),
             &["veraltet".to_string(), created.session_id]
         );
+    }
+
+    #[tokio::test]
+    async fn sitzungsabschluss_zentraler_widerrufsfehler_liefert_keinen_erfolgsredirect() {
+        let mut client = (*fake_client(Vec::new())).clone();
+        client.revoke_fails = true;
+        let client = Arc::new(client);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_static("master_dash_session=central-session"),
+        );
+        let response = logout_handler(None, Some(Extension(config(client.clone()))), headers).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(response.headers().get(header::LOCATION).is_none());
+        assert_eq!(cookies(&response).len(), 2);
+        assert!(cookies(&response)
+            .iter()
+            .all(|cookie| cookie.contains("Max-Age=0")));
+        assert_eq!(client.revoked.lock().await.as_slice(), &["central-session"]);
     }
 }

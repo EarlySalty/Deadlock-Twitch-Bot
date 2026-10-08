@@ -433,18 +433,20 @@ where
                             continue;
                         }
                     } else {
+                        let generation = state.admin_session_generation().await;
                         match config.client.validate_session_outcome(&session_id).await {
                             Ok(Some(session)) => {
                                 match state.load_admin_session(&session_id).await {
                                     Ok(Some(_)) => {}
                                     Ok(None) => {
                                         if state
-                                            .import_central_admin_session(
+                                            .import_central_admin_session_if_current(
                                                 &session_id,
                                                 &session.user_id.to_string(),
                                                 &session.username,
                                                 &session.display_name,
                                                 session.expires_at,
+                                                generation,
                                             )
                                             .await
                                             .is_err()
