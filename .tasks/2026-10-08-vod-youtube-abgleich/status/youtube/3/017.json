@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 17,
+  "zeit": "2026-10-08T19:48:39Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "implementierung",
+  "gebaut": "nein",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "35a93bfbbdc14ad0bd67419820d2055eca528df8",
+  "nachweise": ["REGISTER.md", "REVIEW.md", "pruefung/r12-datenvertrag.txt", "pruefung/gate-round12.txt"],
+  "blocker": [],
+  "naechster_schritt": "Original-Ganzbeleg und Originalbindung im vorhandenen Beobachtungs-JSON erhalten, aktuelle sicher zugeordnete Ablehnung für betroffenen Teil vorrangig; bloßer Folgefehler bleibt keine Entwertung. Vorhandene Archiv-Abhängigkeit ausdrücklich vom Test- in Produktivbereich verschieben, ohne Zyklus, eine gemeinsame Rust-Entscheidung statt doppelter Prädikate. Frischer nativer Fixkontext ae0c9a423be25ed19 aktiv. Keine erfundenen Zeiten/Belege oder künstliche vollständige Altzustände. Drei besprochene echte SQL-/Workerfolgen gemeinsam nachweisen; vor gleichem Gate negative und positive geänderte Gegenproben tatsächlich bestehen. Bei ALLOW direkt autorisierter Main-/Release-/Liveabschluss inklusive fünf Altfällen und Cleanup ohne weitere Planfreigabe."
+}

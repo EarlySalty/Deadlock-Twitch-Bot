@@ -1,0 +1,128 @@
+cargo-slot: Slot 2, optimiert=0
+   Compiling tb-config v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-config)
+   Compiling tb-llm v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-llm)
+   Compiling tb-raid v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-raid)
+   Compiling tb-transport-twitch v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-transport-twitch)
+   Compiling tb-analytics v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-analytics)
+   Compiling tb-engagement v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-engagement)
+   Compiling tb-social-media v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-social-media)
+   Compiling tb-vod-archive v0.1.0 (/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-vod-archive)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6m 06s
+     Running unittests src/lib.rs (/home/nathanael/.cache/rust-build/cc/fbcfe1d0264353/debug/deps/tb_vod_archive-4375c79f36c27180)
+
+running 71 tests
+test config::tests::zentraler_config_stand_und_sichere_ordner ... ok
+test error::tests::kontingent_wird_erkannt ... ok
+test discovery::tests::vod_dauer_ist_geprueft ... ok
+test metadata::tests::einteiliges_vod_bekommt_keinen_teil_zusatz ... ok
+test metadata::tests::der_kanal_kommt_vom_streamer_nicht_aus_der_konfiguration ... ok
+test metadata::tests::geschnittenes_vod_zaehlt_ab_eins ... ok
+test metadata::tests::fehlendes_datum_bricht_nichts ... ok
+test metadata::tests::sichtbarkeit_landet_im_status ... ok
+test metadata::tests::beschreibung_begrenzt_utf8_bytes_nach_der_bereinigung ... ok
+test metadata::tests::titel_wird_auf_hundert_zeichen_gekuerzt ... ok
+test metadata::tests::titelgrenze_gilt_nach_der_herz_umwandlung ... ok
+test metadata::tests::metadaten_erhalten_herzen_ohne_verbotene_klammern ... ok
+test twitch::tests::download_args_tragen_datum_und_bremse ... ok
+test twitch::tests::fehlendes_video_ist_nur_ein_id_genauer_kandidat ... ok
+test twitch::tests::leere_playlist_ist_kein_fehler ... ok
+test twitch::tests::aufnahmedatum_aus_zeitstempel_und_textdatum ... ok
+test twitch::tests::live_pruefung_ist_im_zweifel_vorsichtig ... ok
+test twitch::tests::offline_meldungen_werden_erkannt ... ok
+test twitch::tests::kurze_vods_werden_nicht_geschnitten ... ok
+test discovery::tests::wiederholter_cursor_und_ungueltige_id_brechen_ab ... ok
+test twitch::tests::liste_meldet_fehlerausgabe_gekuerzt ... ok
+test discovery::tests::archiv_liste_bleibt_auf_id_und_paginiert ... ok
+test twitch::tests::teil_muster_haengt_am_dateinamen ... ok
+test discovery::tests::fremde_fehlende_id_und_api_fehler_geben_keine_vods_frei ... ok
+test twitch::tests::playlist_ueberlebt_fehlende_felder ... ok
+test twitch::tests::nur_eine_eindeutige_offline_meldung_zaehlt_als_nicht_live ... ok
+test worker::tests::der_download_pfad_haengt_nicht_am_upload_budget ... ok
+test worker::tests::der_upload_deckel_gilt_auch_auf_dem_download_pfad ... ok
+test worker::tests::df_ausgabe_wird_gelesen ... ok
+test worker::tests::ein_vod_ohne_teile_gilt_nicht_als_hochgeladen ... ok
+
+thread 'worker::tests::idless_mismatched_parts_reach_preparation_and_actual_upload_after_read_failure' (688420) panicked at crates/tb-vod-archive/src/worker.rs:1860:22:
+synthetic PostgreSQL required
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test worker::tests::idless_mismatched_parts_reach_preparation_and_actual_upload_after_read_failure ... FAILED
+test worker::tests::jeder_teil_zaehlt_einzeln_gegen_den_upload_deckel ... ok
+test worker::tests::kein_kanal_frisst_das_ganze_kontingent ... ok
+test worker::tests::leere_warteschlange_bleibt_leer ... ok
+test worker::tests::der_startplatz_wandert_von_lauf_zu_lauf ... ok
+
+thread 'worker::tests::processed_recovery_guard_rejects_changed_targets_parts_and_mismatched_observations' (688426) panicked at crates/tb-vod-archive/src/worker.rs:1976:14:
+synthetic PostgreSQL required
+test worker::tests::processed_recovery_guard_rejects_changed_targets_parts_and_mismatched_observations ... FAILED
+test worker::tests::restdateien_bleiben_bei_der_verfuegbarkeitspruefung_erhalten ... ok
+test worker::tests::dateien_bleiben_bis_zur_bestaetigten_verarbeitung ... ok
+
+thread 'worker::tests::whole_recovery_proof_survives_connection_error_and_prioritizes_actual_rejection' (688432) panicked at crates/tb-vod-archive/src/worker.rs:1721:18:
+synthetic PostgreSQL required
+test worker::tests::whole_recovery_proof_survives_connection_error_and_prioritizes_actual_rejection ... FAILED
+
+thread 'worker::tests::verworfene_uploads_fallen_nicht_unter_den_tisch' (688431) panicked at crates/tb-vod-archive/src/worker.rs:2314:14:
+synthetic PostgreSQL required
+test worker::tests::verworfene_uploads_fallen_nicht_unter_den_tisch ... FAILED
+
+thread 'worker::tests::processed_recovery_parts_keep_history_through_preparation_and_upload_entry' (688429) panicked at crates/tb-vod-archive/src/worker.rs:1541:43:
+synthetic PostgreSQL required
+test twitch::tests::anderer_fehler_loest_keinen_zweiten_versuch_aus ... ok
+test worker::tests::processed_recovery_parts_keep_history_through_preparation_and_upload_entry ... FAILED
+test twitch::tests::vod_url_entfernt_das_v ... ok
+test twitch::tests::sauberer_mp4_download_wird_nicht_remuxt ... ok
+test twitch::tests::remux_fehler_bleibt_download_fehler ... ok
+test twitch::tests::zweiter_ext_x_map_loest_ffmpeg_fallback_aus ... ok
+test youtube_check::tests::full_coverage_requires_completed_scan_unique_parts_and_duration ... ok
+test store::tests::fehler_behaelt_das_vod_in_der_warteschlange ... ok
+test store::tests::nur_hochgeladene_vods_werden_aufgeraeumt ... ok
+test store::tests::upload_stand_ueberlebt_und_fertige_teile_bleiben ... ok
+test store::tests::entdecken_ist_wiederholbar ... ok
+test store::tests::versuchszeit_entsteht_am_aktiven_uebergang ... ok
+test store::tests::abgelehnter_upload_wird_atomar_zurueckgesetzt ... ok
+test youtube_check::tests::source_identity_rejects_titles_and_conflicting_sources ... ok
+test store::tests::abgelehnter_upload_rollt_bei_vod_fehler_zurueck ... ok
+test youtube_check::tests::whole_recovery_binding_keeps_original_identity_and_rejects_short_or_changed_evidence ... ok
+test store::resume_migration_tests::resume_migration_preserves_offsets_and_rolls_back_on_invalid_ciphertext ... ok
+YOUTUBE_DB_PROOF: existing IDs with pending, failed, uploading and done legacy states persist processed, processing, rejected and unavailable observations; multipart coverage independent of local completion; all local rows and queues unchanged
+test youtube_check::tests::existing_ids_are_reconciled_independently_of_all_legacy_part_states ... ok
+YOUTUBE_DB_PROOF: four error classes honor attempt-bound backoff, original evidence remains unchanged, fresh parts and changed authorization remain eligible and due attempts resume
+test youtube_check::tests::failed_attempt_snapshots_apply_backoff_without_relabeling_evidence_or_hiding_changes ... ok
+YOUTUBE_DB_PROOF: cleanup denied without current complete evidence, allowed after processed proof, denied on request failure and processing
+test youtube_check::tests::cleanup_requires_current_target_fresh_complete_processed_evidence ... ok
+YOUTUBE_DB_PROOF: changed parts plus real provider HTTP error retain original observation snapshot and success time; stale evidence does not match current API/cleanup guard
+test youtube_check::tests::changed_parts_provider_error_retains_original_evidence_snapshot ... ok
+YOUTUBE_DB_PROOF: failed channel reads, missing synthetic credentials and unfinished pagination preserve original source-bound processed evidence, channel, snapshot and observation time; changed retry part is not protected
+test youtube_check::tests::failed_channel_reads_and_unfinished_search_preserve_processed_part_evidence ... ok
+YOUTUBE_DB_PROOF: manual request replaces completed empty/incomplete search, paginated continuation discovers new uploads for ID-less and missing mixed parts; unfinished search never final absence; processing retry confirms fresh provider state without upload mutation
+test youtube_check::tests::manual_incomplete_search_refreshes_empty_and_mixed_inventory_and_processing_retries ... ok
+YOUTUBE_DB_PROOF: completed inventory supplies identities only; manual rechecks read unavailable, processed, mixed processing and changed-source videos freshly; unresolved search times remain tied to the completed scan; automatic processing retry refreshes all parts; read errors preserve previous success while a new absence search remains incomplete; local legacy rows unchanged
+YOUTUBE_DB_PROOF: 101 distinct IDs in one VOD advance durably in two minimum-budget runs, original per-batch observation times retained, ambiguous recovered candidates finish as partial, no upload mutation
+test youtube_check::tests::completed_inventory_rechecks_refresh_deletions_processing_and_manual_requests ... ok
+test youtube_check::tests::minimum_budget_finishes_one_vod_with_101_ambiguous_recovered_candidates ... ok
+YOUTUBE_DB_PROOF: real client reads create bound 60+60 proof, transient 503 retains original proof and timestamps, actual duration-less provider rejection takes priority only for its original part; no local mutation or cleanup permission
+test youtube_check::tests::whole_recovery_provider_reads_retain_original_proof_after_error_and_durationless_rejection ... ok
+YOUTUBE_DB_PROOF: encrypted credential path, eight read-only calls, durable two-page scan and fresh prior-page recheck, no premature absence or completion, identical titles separated by source ID, historical rows unchanged
+YOUTUBE_DB_PROOF: successful observation write, historical timestamp untouched, zero synthetic parts, quota preserves success, channel and concurrent upload guards reject stale writes
+test youtube_check::tests::postgres_evidence_errors_and_stale_writers_are_separate_from_uploads ... ok
+YOUTUBE_DB_PROOF: 101 distinct IDs in one VOD advance durably in two minimum-budget runs, original per-batch observation times retained, ambiguous recovered candidates finish as partial, no upload mutation
+test youtube_check::tests::reconciliation_resumes_real_database_cursor_with_encrypted_credentials_and_read_only_requests ... ok
+test youtube_check::tests::minimum_budget_finishes_one_vod_with_101_local_ids ... ok
+YOUTUBE_DB_PROOF: 101 completed-inventory candidates refreshed in batches of at most 50 under a three-request budget; unfetched processing proof, success time and manual request unchanged; later fresh read records unavailability without inventing a completed-search time or changing local rows
+test youtube_check::tests::bounded_refresh_keeps_unfetched_inventory_proofs_and_requests_unchanged ... ok
+YOUTUBE_DB_PROOF: minimum three-read budget reserves durable playlist progress despite 52 known IDs; two-page scan completed, inventory retained for subsequent direct-ID batches, mixed known/missing parts confirmed without fabricating local completion or timestamps; nine GETs in three bounded runs
+test youtube_check::tests::minimum_budget_advances_mixed_ids_and_preserves_completed_inventory_for_known_reads ... ok
+
+failures:
+
+failures:
+    worker::tests::idless_mismatched_parts_reach_preparation_and_actual_upload_after_read_failure
+    worker::tests::processed_recovery_guard_rejects_changed_targets_parts_and_mismatched_observations
+    worker::tests::processed_recovery_parts_keep_history_through_preparation_and_upload_entry
+    worker::tests::verworfene_uploads_fallen_nicht_unter_den_tisch
+    worker::tests::whole_recovery_proof_survives_connection_error_and_prioritizes_actual_rejection
+
+test result: FAILED. 66 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.45s
+
+error: test failed, to rerun pass `-p tb-vod-archive --lib`
+cargo-slot: EXIT=101

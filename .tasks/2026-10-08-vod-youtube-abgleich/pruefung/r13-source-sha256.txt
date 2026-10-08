@@ -1,0 +1,6 @@
+4eb653e2ea2a2f986c9401da837a3d9cbfc54dac4e40d0340cc44592c1f7a05b  /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-vod-archive/src/youtube_check.rs
+b51e397ba981b1795a33a0a967e4441508d0546ed9beabdd36d478c11d63f79f  /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-vod-archive/src/youtube_check_tests.rs
+fb0cd7abfaf654ba1589ef4e3195fbafebebe581d19169ac32f2d8bea3895fb6  /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-vod-archive/src/worker.rs
+59d92c9918271e50d503ab7f4ef4114d2a5a43ade48dc29d309ed067c8668136  /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-dashboard-api/src/handlers/social_media_vod_archive.rs
+c32e25854e54d844be116a56f226f15f0ad32bdade4b5bd1e74030377bfe50f7  /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-dashboard-api/src/handlers/social_media_vod_archive_tests.rs
+846354db23b8298468ca7ff2d9ad2c5745958f16ea124cecab05828142aea6d1  /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/crates/tb-dashboard-api/Cargo.toml
