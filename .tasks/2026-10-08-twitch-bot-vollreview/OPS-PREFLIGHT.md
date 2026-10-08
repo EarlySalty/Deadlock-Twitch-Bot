@@ -30,7 +30,11 @@ Der Einzelmodelllauf ohne Rückfall ist in Zeilen 5482 bis 5499 belegt; der Code
 
 Vor einem automatischen Merge-/Push-Hook muss der explizite Sol-Lauf am endgültigen Commit ALLOW ergeben und dessen unverändert gespeicherter Zustand lesend geprüft werden: `reviewer_model=gpt-6.1-sol`, `allow_sha=HEAD`, richtige Basis und Branchbindung, `allow_phase=phase1|phase2`, frischer Zeitstempel. Bindung und Modellübernahme: Zeilen 2217, 4363 bis 4410 und 5518 bis 5529. Ein fehlgeschlagenes Speichern entwertet den Nachweis (5668 bis 5692).
 
-Ohne passenden Zustand startet der automatische Hook die globale Kette Sol, Opus, Grok. Dafür besteht in diesem Auftrag keine Freigabe. Bei geändertem SHA, Drift, fehlendem oder altem Zustand wieder ausdrücklich Sol prüfen; keinen Standardlauf, keinen `--chain`-Aufruf und keinen ungeprüften Push nach main. Hookzustand und Pyramide nicht von Hand ändern. Der aktuelle Hook begrenzt erfolglose Runden auf vier.
+Ohne passenden Zustand startet der automatische Hook bei reviewbarem Code die globale Kette Sol, Opus, Grok. Dafür besteht in diesem Auftrag keine Freigabe. Bei geändertem SHA, Drift, fehlendem oder altem Zustand wieder ausdrücklich Sol prüfen; keinen Standardlauf, keinen `--chain`-Aufruf und keinen ungeprüften Code-Push nach main. Hookzustand und Pyramide nicht von Hand ändern. Der aktuelle Hook begrenzt erfolglose Runden auf vier.
+
+Ausnahme für reine Markdown-Taskdokumente: Der native Gate kehrt mit `ALLOW: no reviewable changes` vor einem Modellaufruf und vor Zustandsspeicherung zurück (5540 bis 5542). Der automatische Push-Pfad tut dies ebenfalls (1458 bis 1468, vor der Kette ab 1487; Filter 2008 und 2063 bis 2072). Dafür ist kein nicht vorhandener Sol-Modellaufruf zu erfinden. Der Doku-Checkpoint 6937e4a6 wurde am 2026-10-08 über den normalen Bash-Push-Hook erfolgreich nach main gebracht.
+
+Eine manuelle Simulation des PreToolUse-Hooks innerhalb eines Bash-Prozesses wurde zuvor wegen des dort vorhandenen Variablennamens `GIT_EDITOR` abgewiesen (945 bis 953). Es wurden ausschließlich Variablennamen geprüft, keine Werte oder Secrets. Der normale, unverändert geschützte Bash-Werkzeugaufruf war erfolgreich. Keine Umgebung, Hookdatei oder Gatezustandsdatei wurde dafür verändert. Solche manuellen Simulationen ersetzen nicht den tatsächlichen Werkzeug-Hook.
 
 ## Isolierte Integration
 

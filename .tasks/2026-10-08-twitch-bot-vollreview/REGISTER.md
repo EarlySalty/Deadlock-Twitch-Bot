@@ -33,10 +33,22 @@ Der erste Inventar-Agent hat Sol im Transcript bestätigt. Seine drei Inventarar
 
 | Workflow | Task-ID | Run-ID | Umfang | Status |
 |---|---|---|---|---|
-| Review-Welle W01 | ws4brcmz8 | wf_b0f0e2fe-347 | R09, DA01, DA02, DA03, DA04, DA05, DA06, DA07, DA15, DA17, MO01, IA01 | läuft: je sechs Reviewer, Qualitätskritiker und je A/B-Kandidat zwei unabhängige Skeptiker |
+| Review-Welle W01 | ws4brcmz8 | wf_b0f0e2fe-347 | R09, DA01, DA02, DA03, DA04, DA05, DA06, DA07, DA15, DA17, MO01, IA01 | gestoppt nach sechs Kontextabbrüchen; drei R09-Ergebnisse erhalten |
+| W01, Wiederaufnahme 2 | wafkirvk6 | wf_c2fafb5b-bac | R09/security, correctness, resources; beide Skeptikerketten | abgeschlossen, acht Sol-Agenten nachgewiesen; R09-Defektblicke vollständig |
+| R09-Qualitätskritik, Wiederaufnahme | wbkw2mlfb | wf_37ee8d9d-602 | Kritik der ursprünglichen Bewertung | abgeschlossen, Note 3 bestätigt; Sol-Modellnachweis geprüft |
+| Review-Leseabschnitte | wgcqv8w6a | wf_9252ea77-9ce | vollständige Teilabdeckung der 108 Bereiche | abgeschlossen: 450 Abschnitte, keine unzugeordneten oder überlappenden Primärzeilen |
+| Fix B01, Versuch 1 | wqpkes5zr | wf_6d010be4-da1 | W01-R09-errors-1 | Sitzung abgebrochen, kein Abschlussresultat; Worktree sauber erhalten |
+| Review W02, Wiederaufnahme | w1cnx43bt | wf_cdc4c5ac-9bb | DA01 und DA02: 14 Leseabschnitte, fünf Defektblicke, 70 Reviewer | mit neutraler nativer Reviewerrolle neu gestartet; Rollenfehler unten dokumentiert |
+| Fix B01, Versuch 2 | wb7i1seh3 | wf_b4f81318-dac | derselbe doppelt bestätigte B-Befund | frischer Sol-Fixer übernimmt vorhandenen Worktree; Merge und Deploy gesperrt |
 | Aufgabenstand | wost9hinu | wf_f46218a0-dd2 | TODO.md | beendet; informelle Eingangsmeldungen waren nicht schemavollständig, gültiges Ereignis gesamt-v1-s1.json nachgelegt |
 
-W01 deckt 12 von 108 Paketen ab. Die übrigen 96 Pakete sind eingeplant, noch nicht gestartet und nicht als geprüft gewertet. Keine Fixfreigabe vor finalem Sol-Transcriptnachweis und Deduplizierung. Die Ops-Vorprüfung löst keinen Gate-Review und keinen Deploy aus.
+R09 ist in allen fünf Defektblickwinkeln sowie in Bauqualität samt frischer Kritik abgeschlossen. Ein bestätigter B-Befund ist in der Fixkette, ein A-Kandidat blieb mangels zweier Bestätigungen C. Die elf übrigen ursprünglich für W01 vorgesehenen Pakete werden abschnittsweise nachgeholt. W02 beginnt mit DA01 und DA02. Weitere 96 Pakete sind eingeplant, aber noch nicht als geprüft gewertet. Details: W01-WIEDERAUFNAHME.md und QUALITAET.md. Keine Fixfreigabe vor finalem Sol-Transcriptnachweis und Deduplizierung. Die Ops-Vorprüfung löste keinen Gate-Review und keinen Deploy aus.
+
+## Dokumentationscheckpoints
+
+Der Artefaktbranch ist bis `c26b7cdfa4f3fd07b16ec7b5deacc0d912ff20a9` auf origin gesichert. Markdown-Inventar (`3be5cbe7`) und JSON-Manifest (`c26b7cdf`) sind getrennte Commits für kleine Gate-Diffs.
+
+Checkpoint 1 enthielt unter `6937e4a61f43a9c08174fa95c96f49da149ca859` nur drei Taskdokumente. Die ursprünglichen Worker stoppten vor dem Push: zunächst wegen fehlendem Modellzustand bei `ALLOW: no reviewable changes`, danach bei einer manuellen Hook-Vorprüfung wegen `GIT_EDITOR`. REVIEW.md dokumentiert den anschließend erfolgreichen normalen Push durch Astra und das Aufräumen ohne Umgebungsänderung. Bei Wiederaufnahme erneut geprüft: Der frühere Worktree ist entfernt, frischer Fetch zeigt `origin/main = 6937e4a61f43a9c08174fa95c96f49da149ca859`, und `git merge-base --is-ancestor 6937e4a61f43a9c08174fa95c96f49da149ca859 origin/main` endet mit Exit 0. Kein Deploy für diesen Dokumentationscheckpoint.
 
 ## Nachtrag: Bauqualität
 
@@ -53,6 +65,12 @@ Die Ops-Vorprüfung belegt, dass der vorgeschriebene Wrapper neben dem Release a
 3. Read-only-Reviews je Paket und Blickwinkel ausführen.
 4. A/B-Kandidaten mit zwei frischen Skeptikern prüfen; nur doppelt bestätigte Befunde zur Fixkette geben.
 5. Freigegebene Fixes paketweise mergen, deployen und live prüfen; C dokumentieren.
+
+## Wiederaufnahme und Rollenfehler
+
+Die erste W02-Wiederaufnahme verwendete `rust-reviewer`. Dessen eigene Anweisung verlangte entgegen dem Read-only-Briefing einen Cargo-Vorlauf. Mehrere Agenten führten deshalb `cargo check` mit dem veralteten Standard-Cargo aus und stoppten beim Lockfile-Format 4. Diese Resultate zählen nicht als Reviews. Der Workflow wurde mit TaskStop beendet, die Rollenauswahl im gespeicherten Script auf `general-purpose` geändert und mit unverändertem Sol-Modell erneut gestartet. Das ausdrückliche Build- und Testverbot bleibt im Briefing. Keine Hook-, Toolchain- oder Konfigurationsänderung wurde vorgenommen.
+
+B01-Versuch 1 hinterließ keine Codeänderung. Baseline-Clippy endete mit Exit 101, der Testlauf mit Exit 137. Der frische Fixer prüft die Ursachen im bestehenden Worktree und darf nur den bereits doppelt bestätigten B01-Defekt ändern.
 
 ## Git-Protokoll
 
