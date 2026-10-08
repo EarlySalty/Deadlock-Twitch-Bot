@@ -7,10 +7,7 @@ edition.workspace = true
 tb-effort = { workspace = true }
 tb-config = { workspace = true }
 tb-db     = { workspace = true }
-# Exact experimental Brain revision; shared Rust engine, no duplicated scorer.
 dbrain-reasoner = { git = "https://github.com/EarlySalty/Deadlock-Brain.git", rev = "d8c34270868e129098e12243f53f5b52ee507b8b" }
-# ws: WebSocket-Upgrade fuer das OBS-Dock-Gateway (`GET /obs/ws`). axum bringt
-# den Upgrade selbst mit, tokio-tungstenite braucht es dafuer nicht.
 axum         = { workspace = true, features = ["multipart", "ws"] }
 futures-util = { workspace = true }
 tower        = { workspace = true }
@@ -33,8 +30,6 @@ sha2         = { workspace = true }
 hex          = { workspace = true }
 reqwest      = { workspace = true }
 uplink-infisical-transport = { path = "../../vendor/uplink-infisical-transport" }
-# time/rt/macros: Heartbeat-Intervalle, der Listener-Task und `select!` im
-# OBS-Dock-Gateway.
 tokio        = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 url          = { workspace = true }
 percent-encoding = "2.3.2"
@@ -59,15 +54,11 @@ tb-raid       = { workspace = true }
 tb-scout      = { workspace = true }
 tb-social-media = { workspace = true }
 tb-transport-twitch = { workspace = true }
+tb-vod-archive = { workspace = true }
 
 [dev-dependencies]
-tb-vod-archive = { workspace = true }
 tempfile = "3"
-# net/rt-multi-thread: die OBS-Dock-Tests fahren einen echten Server auf einem
-# echten TCP-Port, damit der Socket-Weg wirklich durchlaufen wird.
 tokio     = { workspace = true, features = ["net", "rt-multi-thread"] }
-# WebSocket-Client fuer eben diese Tests. Steht ueber `axum/ws` ohnehin schon im
-# Abhaengigkeitsbaum, kostet also keine neue Abhaengigkeit.
 tokio-tungstenite = "0.30"
 tower     = { workspace = true, features = ["util"] }
 wiremock  = { workspace = true }

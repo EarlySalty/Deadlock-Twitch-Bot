@@ -506,11 +506,40 @@ async fn save(
     let search_complete: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM twitch_vod_youtube_scans WHERE twitch_user_id=$1 AND auth_id=$2 AND auth_revision=$3 AND channel_id=$4 AND complete)")
         .bind(user).bind(target.id).bind(&target.revision).bind(channel).fetch_one(&mut *tx).await?;
     let retain: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM twitch_vod_youtube_checks WHERE vod_id=$1 AND auth_id=$2 AND auth_revision=$3 AND ($4::text IS NULL OR channel_id=$4) AND ($5 OR ($6 AND EXISTS (SELECT 1 FROM jsonb_array_elements(observations) o WHERE o->>'state'='processed'))))")
-        .bind(vod.id).bind(target.id).bind(&target.revision).bind(channel).bind(error.is_some()).bind(!known && !search_complete).fetch_one(&mut *tx).await?;
+        .bind(vod.id).bind(target.id).bind(&target.revision).bind(channel).bind(error.is_some()).bind(!known && !search_complete && !observations.iter().any(|o| matches!(o.state.as_str(), "rejected" | "failed"))).fetch_one(&mut *tx).await?;
     let mut stored = json!(observations);
     for observation in stored.as_array_mut().unwrap() {
         observation["source_twitch_id"] = json!(vod.twitch_id);
         observation["source_duration_sec"] = json!(vod.duration_sec);
+    }
+    let previous: Option<Value> = sqlx::query_scalar("SELECT jsonb_build_object('auth_id',auth_id,'auth_revision',auth_revision,'channel_id',channel_id,'source_twitch_id',$5::text,'source_duration_sec',$6::bigint,'observations',observations) FROM twitch_vod_youtube_checks WHERE vod_id=$1 AND auth_id=$2 AND auth_revision=$3 AND ($4::text IS NULL OR channel_id=$4)")
+        .bind(vod.id).bind(target.id).bind(&target.revision).bind(channel).bind(&vod.twitch_id).bind(vod.duration_sec).fetch_optional(&mut *tx).await?;
+    let proof = if error.is_none()
+        && complete
+        && (known || search_complete)
+        && whole_observations(&vod.parts, &stored)
+    {
+        Some(
+            json!({"auth_id":target.id,"auth_revision":target.revision,"channel_id":channel,"source_twitch_id":vod.twitch_id,"source_duration_sec":vod.duration_sec,"upload_snapshot":vod.parts,"observations":stored}),
+        )
+    } else {
+        previous
+            .as_ref()
+            .and_then(|check| whole_proof(check, vod.parts.as_array().map_or(0, Vec::len)))
+            .cloned()
+    };
+    if let Some(proof) = proof {
+        if stored.as_array().is_some_and(Vec::is_empty) {
+            if let Some(previous) = previous.as_ref() {
+                stored = previous["observations"].clone();
+            }
+        }
+        if let Some(first) = stored
+            .as_array_mut()
+            .and_then(|observations| observations.first_mut())
+        {
+            first["whole_proof"] = proof;
+        }
     }
     sqlx::query("INSERT INTO twitch_vod_youtube_checks (vod_id,auth_id,auth_revision,channel_id,state,complete,observations,last_attempt_at,last_success_at,last_error,next_check_at,upload_snapshot,attempt_snapshot) VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),CASE WHEN $8::text IS NULL THEN $11 END,$8,NOW()+make_interval(secs=>$9::double precision),$10,$10) ON CONFLICT (vod_id) DO UPDATE SET auth_id=EXCLUDED.auth_id,auth_revision=EXCLUDED.auth_revision,channel_id=CASE WHEN $12 THEN twitch_vod_youtube_checks.channel_id ELSE EXCLUDED.channel_id END,state=EXCLUDED.state,complete=EXCLUDED.complete AND NOT $12,observations=CASE WHEN $12 THEN twitch_vod_youtube_checks.observations ELSE EXCLUDED.observations END,last_attempt_at=NOW(),last_success_at=CASE WHEN $12 THEN twitch_vod_youtube_checks.last_success_at WHEN $8::text IS NULL THEN $11 END,last_error=$8,requested_at=NULL,next_check_at=EXCLUDED.next_check_at,attempt_snapshot=EXCLUDED.attempt_snapshot,upload_snapshot=CASE WHEN $12 THEN twitch_vod_youtube_checks.upload_snapshot ELSE EXCLUDED.upload_snapshot END")
         .bind(vod.id).bind(target.id).bind(&target.revision).bind(channel).bind(state).bind(complete).bind(stored).bind(error).bind(seconds as f64).bind(&vod.parts).bind(success_at).bind(retain).execute(&mut *tx).await?;
@@ -524,14 +553,162 @@ async fn save(
     Ok(true)
 }
 
+pub fn whole_observations(snapshot: &Value, observations: &Value) -> bool {
+    let Some(raw) = observations.as_array().filter(|raw| !raw.is_empty()) else {
+        return false;
+    };
+    let Ok(observations) = serde_json::from_value::<Vec<Beobachtung>>(observations.clone()) else {
+        return false;
+    };
+    let Some(source) = raw[0]["source_twitch_id"].as_str() else {
+        return false;
+    };
+    let Some(duration) = raw[0]["source_duration_sec"].as_i64() else {
+        return false;
+    };
+    if raw
+        .iter()
+        .any(|o| o["source_twitch_id"] != source || o["source_duration_sec"] != duration)
+        || observations.iter().any(|o| o.video_id.is_empty())
+    {
+        return false;
+    }
+    let vod = PruefVod {
+        id: 0,
+        twitch_id: source.into(),
+        duration_sec: duration,
+        snapshot: Value::Null,
+        parts: snapshot.clone(),
+        check: None,
+    };
+    let known = snapshot.as_array().is_some_and(|parts| {
+        !parts.is_empty()
+            && parts
+                .iter()
+                .all(|p| p["video_id"].as_str().is_some_and(|id| !id.is_empty()))
+    });
+    decision(&vod, &observations, true, known).1
+}
+
+fn whole_proof(check: &Value, total: usize) -> Option<&Value> {
+    check["observations"].as_array()?.iter().find_map(|o| {
+        let proof = &o["whole_proof"];
+        (proof.is_object()
+            && proof["auth_id"].as_i64().is_some()
+            && proof["auth_revision"]
+                .as_str()
+                .is_some_and(|revision| !revision.is_empty())
+            && proof["channel_id"]
+                .as_str()
+                .is_some_and(|channel| !channel.is_empty())
+            && proof["observations"][0]["source_twitch_id"] == proof["source_twitch_id"]
+            && proof["observations"][0]["source_duration_sec"] == proof["source_duration_sec"]
+            && proof["auth_id"] == check["auth_id"]
+            && proof["auth_revision"] == check["auth_revision"]
+            && proof["channel_id"] == check["channel_id"]
+            && proof["source_twitch_id"] == check["source_twitch_id"]
+            && proof["source_duration_sec"] == check["source_duration_sec"]
+            && proof["upload_snapshot"]
+                .as_array()
+                .is_some_and(|parts| parts.len() == total)
+            && whole_observations(&proof["upload_snapshot"], &proof["observations"]))
+        .then_some(proof)
+    })
+}
+
+pub fn part_observed(part: &Value, check: Option<&Value>, total: usize, state: &str) -> bool {
+    let Some(check) = check else {
+        return false;
+    };
+    let saved = json!({"id":part["id"],"index":part["index"],"status":part["status"],"video_id":part["youtube_video_id"],"updated_at":part["updated_at"]});
+    let snapshot_matches = |snapshot: &Value| {
+        snapshot
+            .as_array()
+            .is_some_and(|rows| rows.contains(&saved))
+    };
+    let index_matches = |o: &Value| {
+        o["part_index"]
+            .as_i64()
+            .or_else(|| (total == 1 && o["part_index"].is_null()).then_some(0))
+            == part["index"].as_i64()
+            && o["video_id"].as_str().is_some_and(|id| !id.is_empty())
+    };
+    let proof =
+        whole_proof(check, total).filter(|proof| snapshot_matches(&proof["upload_snapshot"]));
+    let certified = |o: &Value| {
+        proof.is_some_and(|proof| {
+            proof["observations"]
+                .as_array()
+                .is_some_and(|observations| {
+                    observations.iter().any(|original| {
+                        index_matches(original) && original["video_id"] == o["video_id"]
+                    })
+                })
+        })
+    };
+    let current = check["observations"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let binds = |o: &Value| {
+        index_matches(o)
+            && part["youtube_video_id"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .map_or_else(
+                    || {
+                        certified(o)
+                            || (o["part_total"].as_i64().unwrap_or(1) == total as i64
+                                && ((check["complete"] == true
+                                    && whole_observations(
+                                        &check["upload_snapshot"],
+                                        &check["observations"],
+                                    ))
+                                    || (total == 1
+                                        && o["source_duration_sec"]
+                                            .as_i64()
+                                            .filter(|source| *source > 0)
+                                            .zip(o["duration_sec"].as_i64())
+                                            .is_some_and(|(source, duration)| {
+                                                duration >= source && duration - source <= 5
+                                            }))))
+                    },
+                    |id| o["video_id"] == id,
+                )
+    };
+    let current_bound = snapshot_matches(&check["upload_snapshot"]);
+    let rejected = current_bound
+        && current.iter().any(|o| {
+            matches!(o["state"].as_str(), Some("rejected" | "failed"))
+                && binds(o)
+                && (check["error"].is_null() || certified(o))
+        });
+    if state == "rejected" {
+        return rejected && check["error"].is_null();
+    }
+    if rejected {
+        return false;
+    }
+    (current_bound && current.iter().any(|o| o["state"] == state && binds(o)))
+        || (state == "processed"
+            && proof.is_some_and(|proof| {
+                proof["observations"]
+                    .as_array()
+                    .is_some_and(|observations| observations.iter().any(index_matches))
+            }))
+}
+
 pub(crate) async fn part_processed(
     pool: &PgPool,
     user: &str,
     vod_id: i64,
     part_id: i64,
 ) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM twitch_vod_archive_vods v JOIN twitch_vod_archive_parts p ON p.vod_id=v.id JOIN twitch_vod_youtube_checks c ON c.vod_id=v.id JOIN LATERAL (SELECT a.* FROM social_media_platform_auth a WHERE a.twitch_user_id=v.twitch_user_id AND a.platform='youtube' AND a.enabled=1 ORDER BY a.authorized_at DESC,a.id DESC LIMIT 1) a ON TRUE WHERE v.id=$1 AND v.twitch_user_id=$2 AND p.id=$3 AND c.auth_id=a.id AND c.auth_revision=md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')) AND c.channel_id IS NOT NULL AND (a.platform_user_id IS NULL OR c.channel_id=a.platform_user_id) AND EXISTS (SELECT 1 FROM jsonb_array_elements(c.upload_snapshot) saved WHERE saved=jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'video_id',p.youtube_video_id,'updated_at',p.updated_at)) AND EXISTS (SELECT 1 FROM jsonb_array_elements(c.observations) o WHERE o->>'state'='processed' AND o->>'source_twitch_id'=v.twitch_id AND o->'source_duration_sec'=to_jsonb(v.duration_sec) AND COALESCE(o->>'video_id','')<>'' AND (o->>'video_id'=NULLIF(p.youtube_video_id,'') OR (NULLIF(p.youtube_video_id,'') IS NULL AND COALESCE(NULLIF(o->'part_total','null'::jsonb),'1'::jsonb)=to_jsonb((SELECT COUNT(*) FROM twitch_vod_archive_parts WHERE vod_id=v.id)) AND (SELECT COUNT(*) FROM twitch_vod_archive_parts WHERE vod_id=v.id)=1 AND v.duration_sec>0 AND (o->>'duration_sec')::bigint>=v.duration_sec AND (o->>'duration_sec')::bigint-v.duration_sec<=5)) AND (o->'part_index'=to_jsonb(p.part_index) OR ((o->'part_index' IS NULL OR o->'part_index'='null'::jsonb) AND p.part_index=0 AND (SELECT COUNT(*) FROM twitch_vod_archive_parts WHERE vod_id=v.id)=1))))")
-        .bind(vod_id).bind(user).bind(part_id).fetch_one(pool).await
+    let row: Option<(Value, Value, i64)> = sqlx::query_as("SELECT jsonb_build_object('id',p.id,'index',p.part_index,'status',p.status,'youtube_video_id',p.youtube_video_id,'updated_at',p.updated_at),jsonb_build_object('auth_id',c.auth_id,'auth_revision',c.auth_revision,'channel_id',c.channel_id,'source_twitch_id',v.twitch_id,'source_duration_sec',v.duration_sec,'upload_snapshot',c.upload_snapshot,'complete',c.complete,'error',c.last_error,'observations',c.observations),(SELECT COUNT(*) FROM twitch_vod_archive_parts WHERE vod_id=v.id) FROM twitch_vod_archive_vods v JOIN twitch_vod_archive_parts p ON p.vod_id=v.id JOIN twitch_vod_youtube_checks c ON c.vod_id=v.id JOIN LATERAL (SELECT a.* FROM social_media_platform_auth a WHERE a.twitch_user_id=v.twitch_user_id AND a.platform='youtube' AND a.enabled=1 ORDER BY a.authorized_at DESC,a.id DESC LIMIT 1) a ON TRUE WHERE v.id=$1 AND v.twitch_user_id=$2 AND p.id=$3 AND c.auth_id=a.id AND c.auth_revision=md5(COALESCE(a.refresh_token_enc::text,'') || COALESCE(a.platform_user_id,'') || COALESCE(a.authorized_at::text,'')) AND c.channel_id IS NOT NULL AND (a.platform_user_id IS NULL OR c.channel_id=a.platform_user_id) AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(c.observations) o WHERE o->>'source_twitch_id' IS DISTINCT FROM v.twitch_id OR o->'source_duration_sec' IS DISTINCT FROM to_jsonb(v.duration_sec))")
+        .bind(vod_id).bind(user).bind(part_id).fetch_optional(pool).await?;
+    Ok(row.is_some_and(|(part, check, total)| {
+        part_observed(&part, Some(&check), total as usize, "processed")
+    }))
 }
 
 async fn completion_proof<'a>(

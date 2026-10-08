@@ -48,6 +48,9 @@ async fn source_bound(pool: &PgPool, id: i64, mut observations: Value) -> Value 
     for observation in observations.as_array_mut().unwrap() {
         observation["source_twitch_id"] = json!(source);
         observation["source_duration_sec"] = json!(duration);
+        if observation["observed_at"].is_null() {
+            observation["observed_at"] = json!("2026-10-08T01:00:00Z");
+        }
     }
     observations
 }
@@ -1111,7 +1114,14 @@ async fn ordinary_provider_rejection_retries_the_actual_worker_and_preserves_pro
     }
     let second = directory.path().join("v1.part1.mp4");
     std::fs::write(&second, b"synthetic 60-second part").unwrap();
-    for seconds in [1, 60] {
+    for (seconds, rejection, total) in [
+        (1, false, 2),
+        (1, false, 3),
+        (60, false, 3),
+        (60, false, 2),
+        (60, true, 2),
+    ] {
+        let full = seconds == 60 && total == 2;
         sqlx::query("UPDATE twitch_vod_archive_vods SET status='uploaded',duration_sec=120,local_path=$1 WHERE id=1")
             .bind(file.to_str().unwrap()).execute(pool).await.unwrap();
         sqlx::query("DELETE FROM twitch_vod_archive_parts WHERE vod_id=1")
@@ -1124,10 +1134,30 @@ async fn ordinary_provider_rejection_retries_the_actual_worker_and_preserves_pro
             .execute(pool)
             .await
             .unwrap();
-        save_recovery_check(pool, if seconds == 60 { "confirmed" } else { "partial" }, seconds == 60, json!([
-            {"video_id":"short","part_index":0,"part_total":2,"duration_sec":seconds,"state":"processed"},
+        save_recovery_check(pool, if full { "confirmed" } else { "partial" }, full, json!([
+            {"video_id":"short","part_index":0,"part_total":total,"duration_sec":seconds,"state":"processed"},
             {"video_id":"good","part_index":1,"part_total":2,"duration_sec":60,"state":"processed"}
         ])).await;
+        if full {
+            sqlx::query("UPDATE twitch_vod_youtube_checks c SET observations=jsonb_set(observations,'{0,whole_proof}',jsonb_build_object('auth_id',auth_id,'auth_revision',auth_revision,'channel_id',channel_id,'source_twitch_id','v1','source_duration_sec',120,'upload_snapshot',upload_snapshot,'observations',observations)) WHERE vod_id=1").execute(pool).await.unwrap();
+            let proof: Value = sqlx::query_scalar("SELECT observations->0->'whole_proof' FROM twitch_vod_youtube_checks WHERE vod_id=1").fetch_one(pool).await.unwrap();
+            assert_eq!(recovery_item(pool).await["youtube_verified_complete"], true);
+            sqlx::query("UPDATE twitch_vod_youtube_checks SET state='error',complete=FALSE,last_error='connection' WHERE vod_id=1").execute(pool).await.unwrap();
+            assert_eq!(recovery_item(pool).await["can_retry"], false);
+            assert_eq!(
+                apply_action(pool, 1, Some("42"), "retry").await.unwrap(),
+                Some(false)
+            );
+            if rejection {
+                sqlx::query("UPDATE twitch_vod_youtube_checks SET state='rejected',last_error=NULL,observations=jsonb_set(observations,'{0,state}','\"rejected\"'::jsonb)#-'{0,duration_sec}'#-'{1,duration_sec}' WHERE vod_id=1").execute(pool).await.unwrap();
+            }
+            let retained: Value = sqlx::query_scalar("SELECT observations->0->'whole_proof' FROM twitch_vod_youtube_checks WHERE vod_id=1").fetch_one(pool).await.unwrap();
+            assert_eq!(proof, retained);
+            let visible = recovery_item(pool).await;
+            assert!(visible["youtube_check"]["auth_revision"].is_null());
+            assert!(visible["youtube_check"]["observations"][0]["whole_proof"].is_null());
+        }
+        let retry = !full || rejection;
         let protected: Value = sqlx::query_scalar(
             "SELECT to_jsonb(p) FROM twitch_vod_archive_parts p WHERE vod_id=1 AND part_index=1",
         )
@@ -1135,8 +1165,8 @@ async fn ordinary_provider_rejection_retries_the_actual_worker_and_preserves_pro
         .await
         .unwrap();
         let item = recovery_item(pool).await;
-        assert_eq!(item["youtube_verified_complete"], seconds == 60);
-        assert_eq!(item["can_retry"], seconds == 1);
+        assert_eq!(item["youtube_verified_complete"], false);
+        assert_eq!(item["can_retry"], retry);
         let uploads = Arc::new(Uploads::default());
         let worker = tb_vod_archive::VodArchiveWorker::mit_zugang(
             pool.clone(),
@@ -1161,15 +1191,15 @@ async fn ordinary_provider_rejection_retries_the_actual_worker_and_preserves_pro
         .await;
         assert_eq!(
             response.status(),
-            if seconds == 1 {
+            if retry {
                 StatusCode::OK
             } else {
                 StatusCode::CONFLICT
             }
         );
         worker.run_once().await;
-        assert_eq!(uploads.0.load(Ordering::SeqCst), usize::from(seconds == 1));
-        if seconds == 1 {
+        assert_eq!(uploads.0.load(Ordering::SeqCst), usize::from(retry));
+        if retry {
             let completed: (String, String, String) = sqlx::query_as("SELECT v.status,p.status,p.youtube_video_id FROM twitch_vod_archive_vods v JOIN twitch_vod_archive_parts p ON p.vod_id=v.id WHERE v.id=1 AND p.part_index=0")
                 .fetch_one(pool).await.unwrap();
             assert_eq!(
@@ -1182,6 +1212,8 @@ async fn ordinary_provider_rejection_retries_the_actual_worker_and_preserves_pro
             );
             assert!(file.exists());
         }
+        worker.run_once().await;
+        assert_eq!(uploads.0.load(Ordering::SeqCst), usize::from(retry));
         let preserved: Value = sqlx::query_scalar(
             "SELECT to_jsonb(p) FROM twitch_vod_archive_parts p WHERE vod_id=1 AND part_index=1",
         )
@@ -1190,7 +1222,7 @@ async fn ordinary_provider_rejection_retries_the_actual_worker_and_preserves_pro
         .unwrap();
         assert_eq!(protected, preserved);
         worker.run_once().await;
-        assert_eq!(uploads.0.load(Ordering::SeqCst), usize::from(seconds == 1));
+        assert_eq!(uploads.0.load(Ordering::SeqCst), usize::from(retry));
     }
     eprintln!("YOUTUBE_API_WORKER_DB_PROOF: ordinary rejected/failed retry preserves processed known IDs and binding; two local 60-second parts with a one-second ID-less 1/2 match plus a completed 60-second second upload still permit explicit GET/POST retry and one actual worker upload, no false complete proof or protected stall; sufficient 60+60 complete proof blocks retry and causes zero uploads; repeat adds zero uploads");
 }

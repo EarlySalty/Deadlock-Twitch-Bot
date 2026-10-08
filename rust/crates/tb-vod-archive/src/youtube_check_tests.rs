@@ -31,6 +31,122 @@ fn provider_video(id: &str, description: &str, seconds: u32, state: &str) -> Val
 }
 
 #[tokio::test]
+async fn whole_recovery_provider_reads_retain_original_proof_after_error_and_durationless_rejection(
+) {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    use tb_social_media::uploaders::youtube::YouTubeUploader;
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    let pool = crate::store::tests::pool("t_youtube_whole_provider")
+        .await
+        .expect("synthetic PostgreSQL required");
+    let manager = synthetic_manager(&pool, 110).await;
+    crate::store::merke_vod(&pool, "123", "synthetic", "42", "Synthetic whole", 120)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE twitch_vod_archive_vods SET status='archived'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO twitch_vod_archive_parts(vod_id,part_index,file_path,status) SELECT id,i,'/synthetic/part','rejected' FROM twitch_vod_archive_vods CROSS JOIN generate_series(0,1) i").execute(&pool).await.unwrap();
+    let id: i64 = sqlx::query_scalar("SELECT id FROM twitch_vod_archive_vods")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let before = local_snapshot(&pool).await;
+    let phase = Arc::new(AtomicUsize::new(0));
+    let server = MockServer::start().await;
+    let channel_phase = phase.clone();
+    Mock::given(method("GET")).and(path("/channels")).respond_with(move |_: &wiremock::Request| {
+        if channel_phase.load(Ordering::SeqCst) == 1 {
+            ResponseTemplate::new(503)
+        } else {
+            ResponseTemplate::new(200).set_body_json(json!({"items":[{"id":"channel","contentDetails":{"relatedPlaylists":{"uploads":"uploads"}}}]}))
+        }
+    }).mount(&server).await;
+    Mock::given(method("GET")).and(path("/playlistItems")).respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":[{"contentDetails":{"videoId":"one"}},{"contentDetails":{"videoId":"two"}}]}))).mount(&server).await;
+    let video_phase = phase.clone();
+    Mock::given(method("GET")).and(path("/videos")).respond_with(move |request: &wiremock::Request| {
+        let ids = request.url.query_pairs().find(|(key,_)| key == "id").unwrap().1;
+        let items = ids.split(',').map(|id| {
+            let part = if id == "one" { 1 } else { 2 };
+            let rejected = video_phase.load(Ordering::SeqCst) == 2 && id == "one";
+            let mut video = provider_video(id, &format!("Archivquelle: Twitch-VOD 123; Teil {part}/2\nOriginal: https://www.twitch.tv/videos/123"), 60, if rejected { "rejected" } else { "processed" });
+            if rejected {
+                video.as_object_mut().unwrap().remove("contentDetails");
+            }
+            video
+        }).collect::<Vec<_>>();
+        ResponseTemplate::new(200).set_body_json(json!({"items":items}))
+    }).mount(&server).await;
+    let config = VodArchiveOptions {
+        youtube_requests_per_run: 6,
+        ..Default::default()
+    };
+    let factory = |credentials: &tb_social_media::credentials::SocialMediaCredentials| {
+        YouTubeUploader::new(&credentials.access_token).with_bases(server.uri(), server.uri())
+    };
+    run_with(&pool, &manager, &config, &factory).await.unwrap();
+    let proof: Value = sqlx::query_scalar(
+        "SELECT observations->0->'whole_proof' FROM twitch_vod_youtube_checks WHERE vod_id=$1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(proof.is_object());
+    let parts: Vec<i64> =
+        sqlx::query_scalar("SELECT id FROM twitch_vod_archive_parts ORDER BY part_index")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    for next in [1, 2] {
+        phase.store(next, Ordering::SeqCst);
+        sqlx::query("UPDATE twitch_vod_youtube_checks SET next_check_at=NOW()")
+            .execute(&pool)
+            .await
+            .unwrap();
+        run_with(&pool, &manager, &config, &factory).await.unwrap();
+        let retained: Value = sqlx::query_scalar(
+            "SELECT observations->0->'whole_proof' FROM twitch_vod_youtube_checks WHERE vod_id=$1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(proof, retained);
+        assert_eq!(
+            part_processed(&pool, "42", id, parts[0]).await.unwrap(),
+            next == 1
+        );
+        assert!(part_processed(&pool, "42", id, parts[1]).await.unwrap());
+        assert_eq!(before, local_snapshot(&pool).await);
+        assert!(cleanup_proof(&pool, "42", id, 24).await.unwrap().is_none());
+    }
+    let current: Value =
+        sqlx::query_scalar("SELECT observations FROM twitch_vod_youtube_checks WHERE vod_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(current[0]["state"], "rejected");
+    assert!(current[0]["duration_sec"].is_null());
+    assert!(server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .all(|request| request.method.as_str() == "GET"));
+    eprintln!("YOUTUBE_DB_PROOF: real client reads create bound 60+60 proof, transient 503 retains original proof and timestamps, actual duration-less provider rejection takes priority only for its original part; no local mutation or cleanup permission");
+}
+
+#[tokio::test]
 async fn existing_ids_are_reconciled_independently_of_all_legacy_part_states() {
     use tb_social_media::uploaders::youtube::YouTubeUploader;
     use wiremock::{
@@ -1072,6 +1188,79 @@ fn observation(id: &str, index: Option<i32>, total: Option<i32>, seconds: i64) -
             .unwrap()
             .with_timezone(&Utc),
     }
+}
+
+#[test]
+fn whole_recovery_binding_keeps_original_identity_and_rejects_short_or_changed_evidence() {
+    let part = json!({"id":1,"index":0,"status":"rejected","youtube_video_id":null,"updated_at":"original"});
+    let snapshot = json!([
+        {"id":1,"index":0,"status":"rejected","video_id":null,"updated_at":"original"},
+        {"id":2,"index":1,"status":"pending","video_id":null,"updated_at":"original"}
+    ]);
+    let mut observations = json!([
+        observation("one", Some(0), Some(2), 60),
+        observation("two", Some(1), Some(2), 60)
+    ]);
+    for observation in observations.as_array_mut().unwrap() {
+        observation["source_twitch_id"] = json!("source");
+        observation["source_duration_sec"] = json!(120);
+    }
+    let proof = json!({"auth_id":1,"auth_revision":"original","channel_id":"own","source_twitch_id":"source","source_duration_sec":120,"upload_snapshot":snapshot,"observations":observations});
+    observations[0]["whole_proof"] = proof;
+    let check = json!({"auth_id":1,"auth_revision":"original","channel_id":"own","source_twitch_id":"source","source_duration_sec":120,"upload_snapshot":snapshot,"observations":observations,"complete":false,"error":"connection"});
+    assert!(part_observed(&part, Some(&check), 2, "processed"));
+    for (key, value) in [
+        ("auth_id", json!(2)),
+        ("auth_revision", json!("changed")),
+        ("channel_id", json!("other")),
+        ("source_twitch_id", json!("other")),
+        ("source_duration_sec", json!(121)),
+    ] {
+        let mut changed = check.clone();
+        changed[key] = value;
+        assert!(
+            !part_observed(&part, Some(&changed), 2, "processed"),
+            "{key}"
+        );
+    }
+    for (key, value) in [
+        ("id", json!(3)),
+        ("index", json!(9)),
+        ("updated_at", json!("changed")),
+        ("youtube_video_id", json!("changed")),
+    ] {
+        let mut changed = part.clone();
+        changed[key] = value;
+        assert!(
+            !part_observed(&changed, Some(&check), 2, "processed"),
+            "{key}"
+        );
+    }
+    let mut short = check.clone();
+    short["observations"][0]["whole_proof"]["observations"][0]["duration_sec"] = json!(1);
+    assert!(!part_observed(&part, Some(&short), 2, "processed"));
+    let mut contradictory = check.clone();
+    contradictory["observations"][0]["whole_proof"]["observations"][0]["part_total"] = json!(3);
+    assert!(!part_observed(&part, Some(&contradictory), 2, "processed"));
+    let mut legacy = check.clone();
+    legacy["observations"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("whole_proof");
+    assert!(!part_observed(&part, Some(&legacy), 2, "processed"));
+    let mut rejected = check.clone();
+    rejected["error"] = Value::Null;
+    rejected["observations"][0]["state"] = json!("failed");
+    rejected["observations"][0]["duration_sec"] = Value::Null;
+    assert!(part_observed(&part, Some(&rejected), 2, "rejected"));
+    assert!(!part_observed(&part, Some(&rejected), 2, "processed"));
+    rejected["error"] = json!("connection");
+    assert!(!part_observed(&part, Some(&rejected), 2, "processed"));
+    assert!(!part_observed(&part, Some(&rejected), 2, "rejected"));
+    rejected["error"] = Value::Null;
+    rejected["observations"][0]["video_id"] = json!("different");
+    assert!(!part_observed(&part, Some(&rejected), 2, "rejected"));
+    assert!(part_observed(&part, Some(&rejected), 2, "processed"));
 }
 
 fn synthetic_vod() -> PruefVod {
