@@ -1,0 +1,89 @@
+{
+  "kind": "Technisch geprüfte erhaltene Rückgaben; kein neuer Review oder Merge",
+  "records": [
+    {
+      "run_id": "wf_3adaf342-5f6",
+      "label": "Sol: konkrete Deployvorprüfung ohne Änderungen",
+      "agent_id": "afdbb1ca18cead2ca",
+      "transcript_sha256": "6f9dde9d15fab6276cb19472ec2586d598ed7833b8301bde6259ab032da349b8",
+      "model_counts": {
+        "gpt-6.1-sol": 105
+      },
+      "last_structured_output_matches": true,
+      "result": {
+        "verdict": "BLOCKIERT",
+        "summary": "Keine ausstehenden Migrationen: Alle 180 SQLx-Versionen sind erfolgreich und checksummengleich zum geprüften SHA. Rechte-Neuvergabe bei laufenden Diensten und unvollständiger Rückstellweg bleiben Blocker. Kein Deploy oder Produktionsschreibzugriff ausgeführt.",
+        "planned_sha": "f04c0ef03d47ce4893ee4d17cb98eeb4c2f6c473",
+        "live_sha": "3341098f3a953e231c0ec5731141996b10f1b9b6",
+        "pending_migrations_known": true,
+        "pending_migrations": [],
+        "permission_changes": [
+          "Rollenattribute, Einstellungen und Tabellen-/Sequenzrechte werden trotz null ausstehender Migrationen erneut gesetzt. Die Quellen entsprechen bereits dem laufenden Release.",
+          "Peerregeln und eindeutige Dienstzuordnungen passen bereits zum geplanten Stand. Neue Dienstanmeldungen wurden nicht durchgeführt.",
+          "Verbrauchsnachlieferung ist bereits installiert. Der Wrapper installiert ihre Dateien erneut und aktiviert den Timer; ausgewählte Neustarts unterdrücken diese Schritte nicht."
+        ],
+        "rollback_evidence": [
+          "Altes root-eigenes Release unter /opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6 vorhanden. Acht Binaries und 180 Migrationsdateien stimmen mit dem Release-Prüfsummenmanifest überein.",
+          "/usr/local/bin/deploy-twitch-release stellt bei frühen Fehlern nur current zurück, nicht Datenbankrechte oder Migrationen.",
+          "36 Peer-Sicherungsverzeichnisse vorhanden, zuletzt /var/backups/twitch-contest-peer.8vVP6H1g. Inhalte und Wiederherstellbarkeit ungeprüft.",
+          "ACL-Metadaten von 371 Relationen und 45 Spaltenrechten unter /tmp/tb-deploy-pruefung-02-emf9nl_2/acl-snapshot.json gesichert. Kein vollständiger oder erprobter Restore.",
+          "Kein konkret wiederherstellbares Datenbanksicherungsartefakt für twitch_analytics belegt. Das beweist nicht, dass außerhalb der geprüften Pfade keine Sicherung existiert."
+        ],
+        "blockers": [
+          "Das Rollenskript entzieht und vergibt Rechte ohne Gesamttransaktion, während die alten Dienste weiterlaufen. Fehlende oder vorübergehend erweiterte Zwischenrechte sowie Teilzustände bei Fehlern sind nicht ausreichend abgesichert.",
+          "Kein belegter zulässiger Gesamt-Rückstellweg nach Wrapper-Abnahme: Die automatische Linkrückstellung endet vor Timerinstallation und Neustarts. Das vorhandene alte Buildziel verhindert einen erneuten regulären Wrapper-Aufruf für den alten SHA."
+        ],
+        "artifacts": [
+          "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/DEPLOY-PRUEFUNG-02.md",
+          "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/DEPLOY-PRUEFUNG-02.json",
+          "/tmp/tb-deploy-pruefung-02-emf9nl_2"
+        ]
+      }
+    },
+    {
+      "run_id": "wf_f7342e70-084",
+      "label": "B06: Sol-Integrationsvorbereitung",
+      "agent_id": "aa5f184c09877d7b3",
+      "transcript_sha256": "1899c096c229fbb5c3da0c7b48e096292f630336201be5a2beb2bdae05233444",
+      "model_counts": {
+        "gpt-6.1-sol": 108
+      },
+      "last_structured_output_matches": true,
+      "result": {
+        "id": "B06",
+        "artifact": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/B06-INTEGRATIONSVORBEREITUNG.md",
+        "base_sha": "f04c0ef03d47ce4893ee4d17cb98eeb4c2f6c473",
+        "head_sha": "c0adafdc34fd01ac14271fbae61127e739efd47f",
+        "worktree_clean": true,
+        "source_changed": false,
+        "patch_equivalent": true,
+        "checks_complete": true,
+        "checks": [
+          "Preserved conflict-free alignment verified; freshly fetched origin/main is the direct parent of the final head. Ancestor checks returned 0 before and after verification.",
+          "Original and final nonempty patches are byte-identical: 10668 bytes, SHA256 43b42f2f4d7a9a520c5629db352c333e6cab1f2307b53ccd1f5548b648e51fa6. range-diff reports equality; diff --check passed.",
+          "Reused complete final-source suites only after independently verifying executed commands, flags, transcript model, hashes and before/after source snapshots. Rust 1.97.1, SQLX_OFFLINE=1, synthetic test database, cargo-slot, --jobs 1, --no-fail-fast, --include-ignored and --test-threads=1.",
+          "All six crate test targets completed: library, four integration targets and doctests. Fixed suite: 1344 passed/35 failed; baseline: 1341 passed/35 failed. Both exited 101, with zero ignored or filtered tests. All 14 proxy tests passed.",
+          "Incomplete preceding Clippy evidence was rejected. One replacement owned invocation completed normally with exit 0. Baseline and final all-target Clippy have identical 22 warning lines and normalized diagnostic blocks. This was without -D warnings.",
+          "Owned proxy rustfmt passed. Package format remains red: baseline 265 blocks versus final 255; all 255 foreign blocks are unchanged.",
+          "Source identities remained byte-identical through gate, completed Clippy and final fetch. No application edit, additional commit, merge, push, deploy, restart, cleanup or delegated work occurred."
+        ],
+        "baseline": [
+          "All 35 failure identities and normalized diagnostic blocks match exactly; no new failure or changed cause. Full comparison: /tmp/b06-integrationsvorbereitung-abschluss-20261008.Y6GrGS/failure-comparison.json.",
+          "Matched failures include auth/identity HTTP assertions, RowNotFound, PostgreSQL missing columns live_test and ps.twitch_user_id, title-context None assertions, existing plan fixtures, the missing social-media route and two uncompilable doctest snippets.",
+          "Opaque baseline HTTP 500/503 failures remain opaque; no unsupported deeper root cause was asserted.",
+          "The included live-schema smoke test failed before connection because production configuration was absent. No production database evidence is claimed.",
+          "Historical 1336/35 versus 1333/35 results were not reused for the changed final Rust tree. Final suites cover the integrated OBS and authentication changes.",
+          "The complete suite remains red. Known baseline failures, inherited warnings and foreign formatting debt were not modified."
+        ],
+        "gate": "ALLOW",
+        "gate_evidence": [
+          "Preserved genuine B06 Sol criticism verified: transcript SHA256 38098c4388550d1eb2fbf41520f947917f1ab5df116f9872fec659ee4ed0bec4, 44 model records exclusively gpt-6.1-sol. No criticism reroll.",
+          "Exact prescribed gate invocation used --model gpt-6.1-sol --effort high --timeout 1080, without --chain or bypass. Exit 0: ALLOW: this SHA already passed review_gate [reviewer_model=gpt-6.1-sol].",
+          "Unchanged /home/nathanael/Documents/.claude/gpt-workers/review-state/df36f2dcb30346fc.json binds the final ancestor base, final head, Sol model and 10668-byte nonempty diff. Current invocation log: /tmp/b06-integrationsvorbereitung-abschluss-20261008.Y6GrGS/gate.log."
+        ],
+        "background_tasks": [],
+        "blockers": []
+      }
+    }
+  ]
+}

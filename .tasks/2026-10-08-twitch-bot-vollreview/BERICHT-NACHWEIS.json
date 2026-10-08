@@ -1,0 +1,83 @@
+{
+  "counts": {
+    "confirmed_a": 13,
+    "confirmed_b": 25,
+    "confirmed_ab": 38,
+    "historical_c": 30,
+    "assigned_confirmed_ids": 16,
+    "unassigned_confirmed_ids": 22,
+    "integrated_confirmed_ids": 3,
+    "integrated_packages": 2,
+    "live_fixed_confirmed_ids_evidenced": 0,
+    "possible_indirect_coverage_unproven": 1,
+    "received_pair_claims": 67,
+    "received_pair_classes": {
+      "A": 5,
+      "B": 57,
+      "C": 4,
+      "PENDING": 1
+    },
+    "original_c_da04_da06": 29,
+    "rest_neutral_claims": 90,
+    "rest_conservative_c": 36,
+    "normalized_canonical_records": 290,
+    "quality_areas": 108,
+    "early_quality_reviews": 12,
+    "q04_reviews": 96,
+    "q04_critics": 95,
+    "q04_originals": 191,
+    "q04_critic_confirmed": 43,
+    "q04_critic_corrected": 52,
+    "missing_quality_critics": 1,
+    "inventory_primary_files": 1745,
+    "inventory_primary_lines": 597180,
+    "planned_sections": 450,
+    "defect_consolidations_accepted": 12
+  },
+  "validation": {
+    "confirmed_id_set_from_existing_classifications_matches_editorial": true,
+    "confirmed_restlist_rows_expected": 38,
+    "each_confirmed_id_once_in_restlist": true,
+    "all_expected_cohorts_separate_and_complete": true,
+    "json_structure_valid": true,
+    "no_network_resources_or_javascript": true,
+    "source_texts_escaped_in_html": true,
+    "browser_visual_validation": false,
+    "application_tests_run": false,
+    "new_findings_confirmed": false,
+    "original_source_hashes_unchanged_at_generation": true,
+    "original_source_dash_characters_preserved_not_own_prose": {},
+    "own_editorial_dash_characters": 0,
+    "external_links_or_resources": 0,
+    "html_unique_confirmed_articles": 38,
+    "html_quality_rows": 108,
+    "html_separate_cohort_rows": {
+      "historische_c": 30,
+      "eingegangene_mechanische_paare": 67,
+      "urspruengliche_c_da04_da06": 29,
+      "rest_claims_gegenpruefung_beauftragt": 90,
+      "rest_konservative_c": 36
+    },
+    "normalization_internal_references_resolved": true
+  },
+  "artifacts": [
+    {
+      "path": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/ERKENNTNISSE.html",
+      "sha256": "93b40d216d4252995fc70497a4f0c53aded25d43b96d2415f885e978291e8394",
+      "bytes": 338998
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/ERKENNTNISSE-DATEN.json",
+      "sha256": "110425d70dd4c246cbff446aa8de01ed79101dd7b7ed109c8a8287fe04beb9de",
+      "bytes": 7884703
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/FIX-RESTLISTE.md",
+      "sha256": "e5154464eddc6fb368f95c761f6e955a8ab5a7dd289d3164a6840e025e4d7075",
+      "bytes": 20373
+    }
+  ],
+  "completion_method": "Recovered editorial draft, mechanically completed by main session; no completed Sol documentation review",
+  "browser_check_performed": false,
+  "application_tests_performed_by_documentation_step": false
+}

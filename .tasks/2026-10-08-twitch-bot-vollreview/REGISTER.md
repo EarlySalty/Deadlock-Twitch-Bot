@@ -1,5 +1,15 @@
 # Register: Twitch-Bot Vollreview
 
+## Vorrangiger Pausenstand nach Deployvorprüfung und Kontextabbrüchen
+
+ERKENNTNISSE.html, ERKENNTNISSE-DATEN.json und FIX-RESTLISTE.md sind lokal erzeugt und strukturell geprüft. Keine Browserprüfung oder Sol-Dokumentationsabnahme. AUSLAUF-ABSCHLUESSE.json erhält zwei technisch geprüfte Originalrückgaben: Deployvorprüfung und abgeschlossene B06-Vorbereitung. B06 ist noch nicht integriert. B05-INTEGRATION-02.md bleibt ausdrücklich ein Zwischenbericht ohne fertige Abgabe; seine neueren lokalen Prüfstände nicht verlieren oder als Merge zählen.
+
+Deployvorprüfung wf_3adaf342-5f6 abgeschlossen und technisch auf Sol/Originalgleichheit geprüft: BLOCKIERT. Keine ausstehenden Migrationen am geprüften f04c0ef03d47ce4893ee4d17cb98eeb4c2f6c473. Nicht atomare Rechte-Neuvergabe bei laufenden Diensten und fehlender abgesicherter Gesamt-Rückweg verhindern die Ausführung trotz bedingter Nutzerfreigabe. Kein Deploy. Belege: DEPLOY-PRUEFUNG-02.md und .json; Modellnachweis im ersten Abschnitt HANDOFF.md.
+
+B05-Integration wf_beeac761-2c8, Task w9jlpqv0f, am Kontextlimit ohne Rückgabe beendet; B09/B08 nicht gestartet. Anschließend Remote-main unverändert f04c0ef03d47ce4893ee4d17cb98eeb4c2f6c473 und Auditbranch ee81a0b1cce2bca9f87266d9883d80b36c8b01ba bestätigt. Vor späterem Start erhaltene Arbeit und eigene Prozesse feststellen, keine laufende Integrationsrolle behaupten.
+
+Dokumentationsrolle wf_a65e7fe1-77c ebenfalls fehlgeschlagen. Die Hauptsession übernimmt die gerettete redaktionelle Zwischenarbeit mechanisch; keine fertige Sol-Abnahme erfinden und keinen weiteren Dokumentationsagenten starten. ERKENNTNISSE.html, ERKENNTNISSE-DATEN.json und FIX-RESTLISTE.md sind die Zielartefakte. BERICHT-NACHWEIS.json hält die tatsächliche erfolgreiche Erzeugung und Strukturprüfung fest. A02/B03 und bestehende Vorbereiter separat auslaufen lassen. Ältere Aktiv- und Freigabesätze darunter sind historische Ereignisse.
+
 ## Neueste Nutzerentscheidung und aktuelle Laufkennungen
 
 Bedingte Deployfreigabe nach konkreter positiver Prüfung liegt jetzt vor. Keine pauschale Freigabe unbekannter Migrationen. Lesende Vorprüfung wf_3adaf342-5f6, Task wtx0f5jph, ohne args; BRIEFING-DEPLOYPRUEFUNG-02.md. Ausgaben DEPLOY-PRUEFUNG-02.md und .json, keine produktiven Aktionen durch diese Rolle. Frühere Angaben über eine unbeantwortete Deployfrage sind historisch; die konkreten Bedingungen bleiben noch zu belegen.

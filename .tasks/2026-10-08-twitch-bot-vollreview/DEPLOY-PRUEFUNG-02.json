@@ -1,0 +1,3403 @@
+{
+  "verdict": "BLOCKIERT",
+  "summary": "Keine ausstehenden Migrationen: alle 180 tatsächlich angewandten SQLx-Versionen sind erfolgreich und checksummengleich zum fest geprüften SHA. Betriebsquellen und vorhandene Peerregeln passen bereits, aber nicht atomare Rechte-Neuvergabe bei laufenden Diensten und der unvollständige Rückstellweg verhindern eine positive Ausführungsfreigabe. Kein Deploy oder anderer Produktionsschreibzugriff ausgeführt.",
+  "model": "gpt-6.1-sol",
+  "created_at_utc": "2026-10-08T15:05:38.340840+00:00",
+  "planned_sha": "f04c0ef03d47ce4893ee4d17cb98eeb4c2f6c473",
+  "live_sha": "3341098f3a953e231c0ec5731141996b10f1b9b6",
+  "pending_migrations_known": true,
+  "pending_migrations": [],
+  "permission_changes": [
+    "Erneutes Setzen von Rollenattributen, PASSWORD NULL und RESET ALL für Bot, Dashboard, Collector, Analyse und Audit; Legacyattribute und -einstellungen sowie Wettbewerbsrechte werden ebenfalls erneut gesetzt. Aktuell sind Dienstrollen eingeschränkt, Mitgliedschaften und globale Rolleneinstellungen leer.",
+    "Erneuter Tabellen-/Sequenzrechteentzug und Neuvergabe einschließlich privater Dashboard-, Analyse-, Wettbewerbs-, Kategorie- und Verbrauchsbereiche. Quellen entsprechen dem laufenden Release, aber die Ausführung ist nicht als Ganzes atomar.",
+    "Peerinstaller sichert und bearbeitet Haupt-HBA, Twitch-Includedatei und Identdatei; aktuelle eindeutige Peermaps, Bot-/Dashboardzugänge zu deadlock und die Analyse-/Audit-Rejectregeln passen bereits zu den geplanten Regeln.",
+    "Verbrauchsnachlieferungsdateien sind bereits installiert und bytegleich. Der Wrapper installiert sie trotzdem erneut, lädt Systemdienstdefinitionen neu und aktiviert den vorhandenen Timer. Dieser schreibt begrenzt Verbrauchsabschlüsse nach.",
+    "Explizite Restart-Ziele twitch-bot und twitch-dashboard begrenzen nur Neustarts, nicht Migrationseinheit, Rechte, Peerinstaller oder Timer. Audit und Kategorieerfassung dürfen nicht zusätzlich neu gestartet werden, nur um den Vier-Dienste-Prüfmodus grün zu machen."
+  ],
+  "rollback_evidence": [
+    "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6 ist als root-eigenes Release vorhanden. Alle acht ELF-Revisionsanker passen zum SHA; acht Binaries und 180 Migrationsdateien stimmen mit dem vorhandenen SHA256SUMS-Manifest überein.",
+    "/usr/local/bin/deploy-twitch-release:335-354 stellt bei frühen Fehlern nur current zurück; bereits angewandte Migrationen und Rechte bleiben erhalten. Zeile 609 beendet diese Rückstellung vor späteren Betriebsschritten.",
+    "/opt/deadlock/twitch/builds/3341098f3a953e231c0ec5731141996b10f1b9b6 existiert. Wegen der Zielprüfung in /usr/local/bin/deploy-twitch-release:288-290 ist ein erneuter regulärer Aufruf für diesen SHA kein belegter Rückstellweg.",
+    "/var/backups/twitch-contest-peer.8vVP6H1g ist das zuletzt beobachtete von 36 root-eigenen Peer-Sicherungsverzeichnissen. Inhalte und Restorefähigkeit sind ungeprüft. Der Peerinstaller stellt seine Regeldateien nur bei seinem eigenen Fehler zurück.",
+    "/tmp/tb-deploy-pruefung-02-emf9nl_2/acl-snapshot.json enthält ausschließlich ACL-Metadaten von 371 Relationen und 45 Spaltenrechten. Das ist weder eine vollständige Rechte-/Passwortsicherung noch ein getesteter Wiederherstellungsweg.",
+    "Kein konkretes wiederherstellbares twitch_analytics-Datenbanksicherungsartefakt belegt; archive_mode ist off. Dies ist kein Nachweis, dass außerhalb der geprüften Pfade keine Sicherungen existieren."
+  ],
+  "blockers": [
+    "Nicht atomare Rechte-Neuvergabe bei weiterlaufenden Diensten: Entzug, breite Zwischenrechte und spätere Einschränkungen sind einzeln wirksam; ein Fehler stellt vorherige Statements nicht zurück. Schutz oder Wiederherstellung dieses konkreten Betriebsrisikos ist nicht belegt.",
+    "Kein ausreichend belegter zulässiger Gesamt-Rückstellweg nach Wrapper-Abnahme: verification_pending endet vor Timerinstallation und Neustarts. Der automatische Rückweg setzt nur current zurück, nicht Datenbankrechte. Das vorhandene alte Buildziel blockiert einen erneuten regulären Wrapper-Aufruf für den alten SHA."
+  ],
+  "artifacts": [
+    "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/DEPLOY-PRUEFUNG-02.md",
+    "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/DEPLOY-PRUEFUNG-02.json",
+    "/tmp/tb-deploy-pruefung-02-emf9nl_2"
+  ],
+  "observations": [
+    {
+      "kind": "remote_main",
+      "observed_at_utc": "2026-10-08T14:59:11.159483+00:00",
+      "command": [
+        "git",
+        "-C",
+        "/home/nathanael/.worktrees/tb-vollreview-artefakte",
+        "ls-remote",
+        "--exit-code",
+        "origin",
+        "refs/heads/main"
+      ],
+      "exit_code": 0,
+      "stdout": "f04c0ef03d47ce4893ee4d17cb98eeb4c2f6c473\trefs/heads/main\n",
+      "stderr": ""
+    },
+    {
+      "kind": "release_processes",
+      "observed_at_utc": "2026-10-08T14:59:14.807316+00:00",
+      "command": [
+        "/usr/local/bin/deploy-twitch-release",
+        "--pruefen"
+      ],
+      "exit_code": 0,
+      "stdout": "current=/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6 Release-SHA=3341098f3a953e231c0ec5731141996b10f1b9b6\nUnit=deadlock-twitch-bot-rust MainPID=1830251 exe=/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/target/release/tb-bot deleted=nein Release-SHA=3341098f3a953e231c0ec5731141996b10f1b9b6 NRestarts=0 ActiveState=active\nUnit=deadlock-twitch-dashboard-rust MainPID=1830151 exe=/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/target/release/tb-dashboard deleted=nein Release-SHA=3341098f3a953e231c0ec5731141996b10f1b9b6 NRestarts=0 ActiveState=active\nUnit=deadlock-twitch-stream-coaching-watch MainPID=1830765 exe=/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/target/release/tb-stream-audit deleted=nein Release-SHA=3341098f3a953e231c0ec5731141996b10f1b9b6 NRestarts=0 ActiveState=active\nUnit=tb-category-collector MainPID=1830776 exe=/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/target/release/tb-category-collector deleted=nein Release-SHA=3341098f3a953e231c0ec5731141996b10f1b9b6 NRestarts=0 ActiveState=active\n",
+      "stderr": ""
+    }
+  ],
+  "atomic_snapshot": false,
+  "migration_comparison": {
+    "planned_sha": "f04c0ef03d47ce4893ee4d17cb98eeb4c2f6c473",
+    "query_sql": "BEGIN READ ONLY; SELECT version, success, encode(checksum, 'hex') FROM public._sqlx_migrations ORDER BY version; ROLLBACK;",
+    "applied_count": 180,
+    "planned_count": 180,
+    "failed": [],
+    "checksum_mismatches": [],
+    "applied_not_in_release": [],
+    "matched_count": 180,
+    "pending": [],
+    "checksum_algorithm": "SHA-384 of exact git blob bytes",
+    "metadata_query": {
+      "command": [
+        "/usr/bin/psql",
+        "--no-psqlrc",
+        "--no-password",
+        "host=/var/run/postgresql port=5432 dbname=twitch_analytics user=nathanael passfile=/dev/null connect_timeout=5 options='-c statement_timeout=10000 -c default_transaction_read_only=on'",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-At",
+        "-c",
+        "BEGIN READ ONLY; SELECT version, success, encode(checksum, 'hex') FROM public._sqlx_migrations ORDER BY version; ROLLBACK;"
+      ],
+      "sql": "BEGIN READ ONLY; SELECT version, success, encode(checksum, 'hex') FROM public._sqlx_migrations ORDER BY version; ROLLBACK;",
+      "observed_at_utc": "2026-10-08T14:45:31.146343+00:00",
+      "exit_code": 0,
+      "stderr": "WARNING: password file \"/dev/null\" is not a plain file\n"
+    },
+    "entries": [
+      {
+        "version": 20260601000000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260601000000_baseline_schema.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260601000000_baseline_schema.sql",
+        "planned_sha384": "93180c7554c8bc524dffc44285c48c110ed2ef9acbfa9f528d4be90d1c0407cf299b7116b9c437239444eb2051fa980f",
+        "actual_sha384": "93180c7554c8bc524dffc44285c48c110ed2ef9acbfa9f528d4be90d1c0407cf299b7116b9c437239444eb2051fa980f",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260601000100,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260601000100_observability_hypertable.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260601000100_observability_hypertable.sql",
+        "planned_sha384": "fd8ebef83b4926c0736ebd4ceb36cb363890947dee3a5c6c678472af0f7abbf5c5f11ba18054e27589ffa280138777b6",
+        "actual_sha384": "fd8ebef83b4926c0736ebd4ceb36cb363890947dee3a5c6c678472af0f7abbf5c5f11ba18054e27589ffa280138777b6",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260612120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260612120000_add_stats_leaderboard_indexes.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260612120000_add_stats_leaderboard_indexes.sql",
+        "planned_sha384": "b3f15b2ac7d2f6d7957439c8464a2c018cf132df19c98fc3fea21bceee8d57ad128144aefd942f808d722069bcaa202c",
+        "actual_sha384": "b3f15b2ac7d2f6d7957439c8464a2c018cf132df19c98fc3fea21bceee8d57ad128144aefd942f808d722069bcaa202c",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260616000000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260616000000_add_engagement_output_mode.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260616000000_add_engagement_output_mode.sql",
+        "planned_sha384": "0f7f04bc7a52737de054e79d32f40cf54d2e4b42cb5a220b0a3d40f91019c4aea189cdd77b0e3a1a49895ff8cb0072fb",
+        "actual_sha384": "0f7f04bc7a52737de054e79d32f40cf54d2e4b42cb5a220b0a3d40f91019c4aea189cdd77b0e3a1a49895ff8cb0072fb",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260617000000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260617000000_seed_social_media_auto_approve.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260617000000_seed_social_media_auto_approve.sql",
+        "planned_sha384": "cb001447c8aae3909f64857f9376ab22b9c1849bec9d704667a3144b5d3a8d0a7c88fa0356aedfe5e8c2ac791f53e965",
+        "actual_sha384": "cb001447c8aae3909f64857f9376ab22b9c1849bec9d704667a3144b5d3a8d0a7c88fa0356aedfe5e8c2ac791f53e965",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260617010000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260617010000_tb_dashboard_api_billing_profiles.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260617010000_tb_dashboard_api_billing_profiles.sql",
+        "planned_sha384": "8783495eaacb72e084aa57b961150bbc5029b195a4a36ad1589a8a79c0b83a8a36fb171a34c6126789bb53235c2d365c",
+        "actual_sha384": "8783495eaacb72e084aa57b961150bbc5029b195a4a36ad1589a8a79c0b83a8a36fb171a34c6126789bb53235c2d365c",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260617020000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260617020000_add_engagement_shadow_forwarded.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260617020000_add_engagement_shadow_forwarded.sql",
+        "planned_sha384": "e43d2b24fce15ba9e9fb9e0635ba06de577eacf760a455f4f81c06757da034c4a4a3895485cd88aa0ff12f4321e54f7a",
+        "actual_sha384": "e43d2b24fce15ba9e9fb9e0635ba06de577eacf760a455f4f81c06757da034c4a4a3895485cd88aa0ff12f4321e54f7a",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260617030000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260617030000_baseline_missing_tables.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260617030000_baseline_missing_tables.sql",
+        "planned_sha384": "92c4386dca72bd31ff0a926a6f68d7c2ffb01858e1a4e216d54aaab7bc825591a84db0cadec3e19136b04af4363e9a03",
+        "actual_sha384": "92c4386dca72bd31ff0a926a6f68d7c2ffb01858e1a4e216d54aaab7bc825591a84db0cadec3e19136b04af4363e9a03",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260617040000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260617040000_self_explainer_and_irc_read.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260617040000_self_explainer_and_irc_read.sql",
+        "planned_sha384": "24ba8d337a31cf1b30eae76d05705e7825068eacaf373e2944d2ab1bf6f67d3f378fa0ee3d65fdb356e1bd45db5766c3",
+        "actual_sha384": "24ba8d337a31cf1b30eae76d05705e7825068eacaf373e2944d2ab1bf6f67d3f378fa0ee3d65fdb356e1bd45db5766c3",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260618000000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260618000000_schema_cleanup_streamers.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260618000000_schema_cleanup_streamers.sql",
+        "planned_sha384": "87e53d0f20f52ac26b0cd8dd2229b9760ce8b16dc2b97b10e99a2ddbe98dbcf1b35a849fc216df6b87665137639da4fd",
+        "actual_sha384": "87e53d0f20f52ac26b0cd8dd2229b9760ce8b16dc2b97b10e99a2ddbe98dbcf1b35a849fc216df6b87665137639da4fd",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260618010000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260618010000_conversation_scam_guard.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260618010000_conversation_scam_guard.sql",
+        "planned_sha384": "4fe605096fee79439dcb86e7496e9573ae56b553b2e725c77d220d074f5dfba3106f34cd77ebf6c1ba3f7a8287abe961",
+        "actual_sha384": "4fe605096fee79439dcb86e7496e9573ae56b553b2e725c77d220d074f5dfba3106f34cd77ebf6c1ba3f7a8287abe961",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260618020000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260618020000_conversation_scam_learnings.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260618020000_conversation_scam_learnings.sql",
+        "planned_sha384": "425ee7e66d2a2d1b3b23d7b7dec55179109a9024f80c226718b9f1bac17ddbab00e449f8562aea9bfc4097734013b97f",
+        "actual_sha384": "425ee7e66d2a2d1b3b23d7b7dec55179109a9024f80c226718b9f1bac17ddbab00e449f8562aea9bfc4097734013b97f",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260619010000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260619010000_runtime_type_contract.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260619010000_runtime_type_contract.sql",
+        "planned_sha384": "a98c4fda61ae03099d78610f0754e279f1f4735d747c7256aa325d5426eb016f37cb14bcd6319a1b761950c5ac7db1de",
+        "actual_sha384": "a98c4fda61ae03099d78610f0754e279f1f4735d747c7256aa325d5426eb016f37cb14bcd6319a1b761950c5ac7db1de",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260621055701,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260621055701_presence_tick_timestamptz_contract.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260621055701_presence_tick_timestamptz_contract.sql",
+        "planned_sha384": "83d46b19f86a01a9eb2290360cd1260dab63418e54deec15f0a394f9222d42f442e7c015b25d599e27733257f5b68d0d",
+        "actual_sha384": "83d46b19f86a01a9eb2290360cd1260dab63418e54deec15f0a394f9222d42f442e7c015b25d599e27733257f5b68d0d",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260621060000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260621060000_performance_timestamptz_contract.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260621060000_performance_timestamptz_contract.sql",
+        "planned_sha384": "9712bccf9f28da41e7449e13cf2341554ad748422d83c8aa46d65db48d45efac5221ba85117a021546cf28196054e78a",
+        "actual_sha384": "9712bccf9f28da41e7449e13cf2341554ad748422d83c8aa46d65db48d45efac5221ba85117a021546cf28196054e78a",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260621070000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260621070000_golive_tips.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260621070000_golive_tips.sql",
+        "planned_sha384": "68e8a05cc43c1f2697bebbbbc181449b6bf3d9752eb8c4c266da8fddfe762652ca652083aa811cdd7a219eb948c2359e",
+        "actual_sha384": "68e8a05cc43c1f2697bebbbbc181449b6bf3d9752eb8c4c266da8fddfe762652ca652083aa811cdd7a219eb948c2359e",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260621080000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260621080000_streamer_onboarding.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260621080000_streamer_onboarding.sql",
+        "planned_sha384": "926bae4daab06dc337d4d8c42cf3d9707aac5e4271b2e44b8a37c93e2dd2f115ff0a72473150f597502963fc9dcf1691",
+        "actual_sha384": "926bae4daab06dc337d4d8c42cf3d9707aac5e4271b2e44b8a37c93e2dd2f115ff0a72473150f597502963fc9dcf1691",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260622120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260622120000_irc_lurker_timestamptz_contract.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260622120000_irc_lurker_timestamptz_contract.sql",
+        "planned_sha384": "fb61bc9c9985427ba498347c112d4f8d4426df4b9c589c1b6e3c299ee5f3515555bdaa56e6293a8ff722f2d4fb51e51e",
+        "actual_sha384": "fb61bc9c9985427ba498347c112d4f8d4426df4b9c589c1b6e3c299ee5f3515555bdaa56e6293a8ff722f2d4fb51e51e",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260622130000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260622130000_partner_state_keystone.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260622130000_partner_state_keystone.sql",
+        "planned_sha384": "a7b74851958d6c4ebe907c6984a11740b149d99389ff2561218d54dba39b2e156d58caa248cd7e2acd97d336541ab397",
+        "actual_sha384": "a7b74851958d6c4ebe907c6984a11740b149d99389ff2561218d54dba39b2e156d58caa248cd7e2acd97d336541ab397",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260622130001,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260622130001_session_boolean_flags.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260622130001_session_boolean_flags.sql",
+        "planned_sha384": "4cc28c8c80de00e368cfac17d840f57da5f9a3d8334d2e40040a13042d537ae6bab0531d884121b544a788d9f7a11fa2",
+        "actual_sha384": "4cc28c8c80de00e368cfac17d840f57da5f9a3d8334d2e40040a13042d537ae6bab0531d884121b544a788d9f7a11fa2",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260622140000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260622140000_b2_session_id_bigint.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260622140000_b2_session_id_bigint.sql",
+        "planned_sha384": "f50a70bf6e718a30c542e51273f8b4ab8d73daf96e13beb6535a6bf64c532b5a64734661b55eed46874a4c58a8aa2b53",
+        "actual_sha384": "f50a70bf6e718a30c542e51273f8b4ab8d73daf96e13beb6535a6bf64c532b5a64734661b55eed46874a4c58a8aa2b53",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260622150000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260622150000_chatter_rollup_timestamptz_contract.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260622150000_chatter_rollup_timestamptz_contract.sql",
+        "planned_sha384": "79b981f785f7f1ff8e8385d280608ba6fdfd0acf356a139b145ed242fb6624498f11dd18681ff163f1a4ddb2a81e581d",
+        "actual_sha384": "79b981f785f7f1ff8e8385d280608ba6fdfd0acf356a139b145ed242fb6624498f11dd18681ff163f1a4ddb2a81e581d",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260623150000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260623150000_drop_manual_verified_columns.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260623150000_drop_manual_verified_columns.sql",
+        "planned_sha384": "6622c7b1c2868601270f7f7b25d206c9cabb46d945f0e8eb1b3fb10e6eda47266dbaaf3881cc08d94727463b3ea57858",
+        "actual_sha384": "6622c7b1c2868601270f7f7b25d206c9cabb46d945f0e8eb1b3fb10e6eda47266dbaaf3881cc08d94727463b3ea57858",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260627120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260627120000_analytics_schema_type_fix.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260627120000_analytics_schema_type_fix.sql",
+        "planned_sha384": "a338bdb5fee4efc1968a7fc4651607b7bd51ae184464b6d21c8201193e30b4e4bfada13fd9406327ddc1ccb14880f604",
+        "actual_sha384": "a338bdb5fee4efc1968a7fc4651607b7bd51ae184464b6d21c8201193e30b4e4bfada13fd9406327ddc1ccb14880f604",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260628130000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260628130000_engagement_sender_auth.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260628130000_engagement_sender_auth.sql",
+        "planned_sha384": "d4951d2f7693bb972f71273685647664eb410e10b289cd43bb920d8e74fa5f806a4592380e6256a13e45651194bd92ce",
+        "actual_sha384": "d4951d2f7693bb972f71273685647664eb410e10b289cd43bb920d8e74fa5f806a4592380e6256a13e45651194bd92ce",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260629120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260629120000_live_schema_type_reconcile.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260629120000_live_schema_type_reconcile.sql",
+        "planned_sha384": "3c5e450478359e5b37669108012f4f8c44de0fc84cfad292821d033bdd2715341a950ced49d99eb6b87aa0a6e4d99e64",
+        "actual_sha384": "3c5e450478359e5b37669108012f4f8c44de0fc84cfad292821d033bdd2715341a950ced49d99eb6b87aa0a6e4d99e64",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260629130000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260629130000_add_stats_language_columns.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260629130000_add_stats_language_columns.sql",
+        "planned_sha384": "e47e1eb2a83540f152934632d137955f962ec7bb5aa561cdbcd5fcc446cf8b52ac6e9495be29da27d89e7e27036abccc",
+        "actual_sha384": "e47e1eb2a83540f152934632d137955f962ec7bb5aa561cdbcd5fcc446cf8b52ac6e9495be29da27d89e7e27036abccc",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260630120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260630120000_drop_legacy_backup_tables.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260630120000_drop_legacy_backup_tables.sql",
+        "planned_sha384": "2458c833e6f24743ebcb2e9d0d295fd3e155b17685ee0cd3c6c2477591a5d7a0160e4ef02281e33dab8830661e463902",
+        "actual_sha384": "2458c833e6f24743ebcb2e9d0d295fd3e155b17685ee0cd3c6c2477591a5d7a0160e4ef02281e33dab8830661e463902",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260630130000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260630130000_reconcile_event_hypertables.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260630130000_reconcile_event_hypertables.sql",
+        "planned_sha384": "e22d5b05655f36b905b8bb5b0b1f6f705a73a40e1b9475e82e1231ab5d092b813a9f606fc81a5614e90ce236c597ffc5",
+        "actual_sha384": "e22d5b05655f36b905b8bb5b0b1f6f705a73a40e1b9475e82e1231ab5d092b813a9f606fc81a5614e90ce236c597ffc5",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260630140000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260630140000_streamers_drop_legacy_id.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260630140000_streamers_drop_legacy_id.sql",
+        "planned_sha384": "7106b626b7aa3998de223e59775d4be56aa7d570ebf526c6dd1fd690a32e923b7bf9e33b7505298574a62203dcbf7434",
+        "actual_sha384": "7106b626b7aa3998de223e59775d4be56aa7d570ebf526c6dd1fd690a32e923b7bf9e33b7505298574a62203dcbf7434",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260630141000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260630141000_chat_moderation_runtime_tables.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260630141000_chat_moderation_runtime_tables.sql",
+        "planned_sha384": "9582d6cfe7f2e5c711ed6a727f76daf08788593dd3fe05c351433f2c3ff9a21259a3c8b252001f2c5d1cc5a62a77b473",
+        "actual_sha384": "9582d6cfe7f2e5c711ed6a727f76daf08788593dd3fe05c351433f2c3ff9a21259a3c8b252001f2c5d1cc5a62a77b473",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260630142000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260630142000_dashboard_content_runtime_tables.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260630142000_dashboard_content_runtime_tables.sql",
+        "planned_sha384": "9b1ce2fc15579ef42373495747aeb49819af998d11c673ffe12c1fca3aea6f15d9a63213e5a88404c30849e4c1dbbc49",
+        "actual_sha384": "9b1ce2fc15579ef42373495747aeb49819af998d11c673ffe12c1fca3aea6f15d9a63213e5a88404c30849e4c1dbbc49",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260630143000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260630143000_analytics_report_feedback_runtime_tables.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260630143000_analytics_report_feedback_runtime_tables.sql",
+        "planned_sha384": "e58c82a49873197f63c2582ff4e8df8a9455c087c69e04aa25acf8848cd0718f374e8a51b0ac8d73609ea6407c3fdd71",
+        "actual_sha384": "e58c82a49873197f63c2582ff4e8df8a9455c087c69e04aa25acf8848cd0718f374e8a51b0ac8d73609ea6407c3fdd71",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260630144000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260630144000_billing_events_runtime_table.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260630144000_billing_events_runtime_table.sql",
+        "planned_sha384": "4465e3f0d0d44459035d99b7c53ff98cd11bdc2143ea9502348a341b9f731fa4459394ccc61b3013e98b2be2baeccaf9",
+        "actual_sha384": "4465e3f0d0d44459035d99b7c53ff98cd11bdc2143ea9502348a341b9f731fa4459394ccc61b3013e98b2be2baeccaf9",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260702090000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260702090000_schema_ownership_marker.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260702090000_schema_ownership_marker.sql",
+        "planned_sha384": "669c66d458b75fbf5b7a6ee202709f628cff12164da4fd317dcc69e1cec64dd0ec87bfe9654e94baec011e1413743f61",
+        "actual_sha384": "669c66d458b75fbf5b7a6ee202709f628cff12164da4fd317dcc69e1cec64dd0ec87bfe9654e94baec011e1413743f61",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260703000000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260703000000_minimax_usage_ledger.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260703000000_minimax_usage_ledger.sql",
+        "planned_sha384": "fc9343c2a6c00fd5546cfa8e13bb06b303bb54ef12b3bec23d8d9c37977cc2dc786404cb5e856283e7181eb1b31a8efb",
+        "actual_sha384": "fc9343c2a6c00fd5546cfa8e13bb06b303bb54ef12b3bec23d8d9c37977cc2dc786404cb5e856283e7181eb1b31a8efb",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260710150000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260710150000_global_ban_full_sweep_state.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260710150000_global_ban_full_sweep_state.sql",
+        "planned_sha384": "a0d120bd50e921c6ba6bd31bc0c6c80f5df3563a2b72d93d2b7e009cc8a2320ec87993d3966e6275e1ddff3264420a42",
+        "actual_sha384": "a0d120bd50e921c6ba6bd31bc0c6c80f5df3563a2b72d93d2b7e009cc8a2320ec87993d3966e6275e1ddff3264420a42",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260711170000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260711170000_spam_pattern_ids.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260711170000_spam_pattern_ids.sql",
+        "planned_sha384": "d37ed17f330bbeb731927ad3331ea537b73add0e710e4ac11c61fd211562f379ff2c9ad31855fac340b9e375a26674ef",
+        "actual_sha384": "d37ed17f330bbeb731927ad3331ea537b73add0e710e4ac11c61fd211562f379ff2c9ad31855fac340b9e375a26674ef",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260712120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260712120000_affiliate_commission_rate_per_account.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260712120000_affiliate_commission_rate_per_account.sql",
+        "planned_sha384": "420e1b23940e7f7a4dc52d2874470896a95ab19963968fa62e11b7e5c1041037f7c2019354ecb9ed72e01eb1af4ad64a",
+        "actual_sha384": "420e1b23940e7f7a4dc52d2874470896a95ab19963968fa62e11b7e5c1041037f7c2019354ecb9ed72e01eb1af4ad64a",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260712130000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260712130000_spam_review_decisions.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260712130000_spam_review_decisions.sql",
+        "planned_sha384": "39c8e4567566d8bb0ecb1896cfb522bff162e35ff742dac78038570579ffb33e78102ed03d64d76a73d316788d91d4fe",
+        "actual_sha384": "39c8e4567566d8bb0ecb1896cfb522bff162e35ff742dac78038570579ffb33e78102ed03d64d76a73d316788d91d4fe",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260713120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260713120000_dashboard_admin_audit_events.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260713120000_dashboard_admin_audit_events.sql",
+        "planned_sha384": "63ddd1950047aa220b24b72d37e481e9285ea2211417385a1d56d48b3bd67165ae8b074d75e33523eb6f8a09ce3fa75d",
+        "actual_sha384": "63ddd1950047aa220b24b72d37e481e9285ea2211417385a1d56d48b3bd67165ae8b074d75e33523eb6f8a09ce3fa75d",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260714120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260714120000_twitch_crew_radar_log.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260714120000_twitch_crew_radar_log.sql",
+        "planned_sha384": "8f735d52ac7a959d9a1f4d83c52f8f3c2bd1a263b0ea61baca6868587519899483f3e156decae10eec7fb4ad956fcee0",
+        "actual_sha384": "8f735d52ac7a959d9a1f4d83c52f8f3c2bd1a263b0ea61baca6868587519899483f3e156decae10eec7fb4ad956fcee0",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260714160000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260714160000_chat_moderation_evidence.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260714160000_chat_moderation_evidence.sql",
+        "planned_sha384": "f4246353b1f489c1469794eddd6523eed1adc6a15135b3c26bc0bcb5705255d52e52ff88793776957506f00c4e61f143",
+        "actual_sha384": "f4246353b1f489c1469794eddd6523eed1adc6a15135b3c26bc0bcb5705255d52e52ff88793776957506f00c4e61f143",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260714210000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260714210000_twitch_scout_pitch.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260714210000_twitch_scout_pitch.sql",
+        "planned_sha384": "1f814f88c237d909b234cab8011978b50e96fdff95b11bb7269d6d502fc1d0ba21b90e7daca66ae13278ca025230ba2d",
+        "actual_sha384": "1f814f88c237d909b234cab8011978b50e96fdff95b11bb7269d6d502fc1d0ba21b90e7daca66ae13278ca025230ba2d",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260715120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260715120000_twitch_scout_pitch_feedback.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260715120000_twitch_scout_pitch_feedback.sql",
+        "planned_sha384": "708219a18492b6a474ac2b06300bfadb0952499f0de5988fd459720d177f90503019eaa556aabaf179af0d935e5668c3",
+        "actual_sha384": "708219a18492b6a474ac2b06300bfadb0952499f0de5988fd459720d177f90503019eaa556aabaf179af0d935e5668c3",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260716120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260716120000_clip_form_submissions.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260716120000_clip_form_submissions.sql",
+        "planned_sha384": "293fe18d40021d71894fc490962d678baaf7da5562a73312a6ccea9fb49778472024df178663a4bbb2033ba47cd183db",
+        "actual_sha384": "293fe18d40021d71894fc490962d678baaf7da5562a73312a6ccea9fb49778472024df178663a4bbb2033ba47cd183db",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260716130000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260716130000_repair_epoch_duration_rows.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260716130000_repair_epoch_duration_rows.sql",
+        "planned_sha384": "b862636e91f56ad827817fc06f1d6ff21fcb63558f5a070ad2f56c04cab22c7d67da9c974aec543fc8320960c5fcd921",
+        "actual_sha384": "b862636e91f56ad827817fc06f1d6ff21fcb63558f5a070ad2f56c04cab22c7d67da9c974aec543fc8320960c5fcd921",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260717120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260717120000_globalban_channel_optout.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260717120000_globalban_channel_optout.sql",
+        "planned_sha384": "6e8c24a9a6c8ea7a449fd1ed711310f299473f83083884a8de2082f9c0433499454b1b5918df69747759c6fb108bde75",
+        "actual_sha384": "6e8c24a9a6c8ea7a449fd1ed711310f299473f83083884a8de2082f9c0433499454b1b5918df69747759c6fb108bde75",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260717121000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260717121000_twitch_crew_review_events.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260717121000_twitch_crew_review_events.sql",
+        "planned_sha384": "6fd7c20fd4b15da32c4ae4ebb751f55019d657da9948176a6ef03523fecd465eb289fb0e078776a00565e939c227b9f3",
+        "actual_sha384": "6fd7c20fd4b15da32c4ae4ebb751f55019d657da9948176a6ef03523fecd465eb289fb0e078776a00565e939c227b9f3",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260717121500,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260717121500_twitch_crew_review_discord_channel.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260717121500_twitch_crew_review_discord_channel.sql",
+        "planned_sha384": "3ce1d541dade25a07416cc878875b35c645dab92593355115a712d3902628215465439fb29d8a2a794cb01f8da945123",
+        "actual_sha384": "3ce1d541dade25a07416cc878875b35c645dab92593355115a712d3902628215465439fb29d8a2a794cb01f8da945123",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260717130000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260717130000_add_lurk_command_enabled.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260717130000_add_lurk_command_enabled.sql",
+        "planned_sha384": "3c796b3f9b5463f8723bd4cca98c0af333ee470304bb3beb5063f40582b6ceae10b4763d4dbf8866e695bebbe23f5a46",
+        "actual_sha384": "3c796b3f9b5463f8723bd4cca98c0af333ee470304bb3beb5063f40582b6ceae10b4763d4dbf8866e695bebbe23f5a46",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260718063000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260718063000_exp_snapshot_conflict_index.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260718063000_exp_snapshot_conflict_index.sql",
+        "planned_sha384": "b13a5536729d776d12c1d91ff667101cb5c617d2f6ebccaaefcbbc87291ec0f6c9a1020a1ea7498dc043c83b94af748a",
+        "actual_sha384": "b13a5536729d776d12c1d91ff667101cb5c617d2f6ebccaaefcbbc87291ec0f6c9a1020a1ea7498dc043c83b94af748a",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260719120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260719120000_public_streamer_comparison_indexes.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260719120000_public_streamer_comparison_indexes.sql",
+        "planned_sha384": "c6cc5241f6e320b5d248e7261ff7130069c0173ba3965d4840b1c0b997d0ef2930d74f5611d3ba30dbddcfa6d11892d7",
+        "actual_sha384": "c6cc5241f6e320b5d248e7261ff7130069c0173ba3965d4840b1c0b997d0ef2930d74f5611d3ba30dbddcfa6d11892d7",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260719120050,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260719120050_repair_streamer_comparison_session_index.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260719120050_repair_streamer_comparison_session_index.sql",
+        "planned_sha384": "523cae46e637bb721e0397ded73109df9eaa0429cb12223d0a3c3d96be23a1295b0ac26fee20057b59b639900e71f4e6",
+        "actual_sha384": "523cae46e637bb721e0397ded73109df9eaa0429cb12223d0a3c3d96be23a1295b0ac26fee20057b59b639900e71f4e6",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260719120100,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260719120100_public_streamer_comparison_raid_index.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260719120100_public_streamer_comparison_raid_index.sql",
+        "planned_sha384": "cb3fc64cad9e2869ff169617054a02485b4913054ffd7f04da7aa5be76a1447a35767ef7e19866a738202fa4f6b89c25",
+        "actual_sha384": "cb3fc64cad9e2869ff169617054a02485b4913054ffd7f04da7aa5be76a1447a35767ef7e19866a738202fa4f6b89c25",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260719120150,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260719120150_repair_streamer_comparison_raid_index.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260719120150_repair_streamer_comparison_raid_index.sql",
+        "planned_sha384": "c0232f90a9610809269e2afcb75e66d3fbe298b22b92d2eded01279b8283d0c48defa793d8d816f4e459320740d00cfd",
+        "actual_sha384": "c0232f90a9610809269e2afcb75e66d3fbe298b22b92d2eded01279b8283d0c48defa793d8d816f4e459320740d00cfd",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260719120300,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260719120300_validate_streamer_comparison_indexes.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260719120300_validate_streamer_comparison_indexes.sql",
+        "planned_sha384": "2dc5b29241a70d72d9533f6193e010f6f03349637612d92fa70767f7e0cd867d00e4ae361f7d612527bc5140a5427f30",
+        "actual_sha384": "2dc5b29241a70d72d9533f6193e010f6f03349637612d92fa70767f7e0cd867d00e4ae361f7d612527bc5140a5427f30",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260727120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260727120000_twitch_outreach_shadow.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260727120000_twitch_outreach_shadow.sql",
+        "planned_sha384": "898dcb9ffb88f02f7dae30090eaa4f45b4255fd140a59221206fa2271cc2ce98b79999add5e6803cfefd9a76215ffbea",
+        "actual_sha384": "898dcb9ffb88f02f7dae30090eaa4f45b4255fd140a59221206fa2271cc2ce98b79999add5e6803cfefd9a76215ffbea",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260727150000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260727150000_twitch_smalltalk_loop.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260727150000_twitch_smalltalk_loop.sql",
+        "planned_sha384": "c1ce7343d27a1cef9f0afe7d3a0ce05888f4757ee18e3e4250fc5de1f837eddabf26589ee7eb36fba92bb88e1e202ec6",
+        "actual_sha384": "c1ce7343d27a1cef9f0afe7d3a0ce05888f4757ee18e3e4250fc5de1f837eddabf26589ee7eb36fba92bb88e1e202ec6",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260728120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260728120000_drop_unused_indexes.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260728120000_drop_unused_indexes.sql",
+        "planned_sha384": "fc93297ed29230b529039486c621da4b550e0b2a81295b036ab10cb03a597a2f21ceae4e648c5efa8fabdcfba21f08c4",
+        "actual_sha384": "fc93297ed29230b529039486c621da4b550e0b2a81295b036ab10cb03a597a2f21ceae4e648c5efa8fabdcfba21f08c4",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260728120100,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260728120100_presence_ticks_hypertable.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260728120100_presence_ticks_hypertable.sql",
+        "planned_sha384": "000880b7cbec66a25ae2f2c452834d0686cb79af7a07198e15e193b28ffec7b4a42bf964ea7550db9b306cead1f7519c",
+        "actual_sha384": "000880b7cbec66a25ae2f2c452834d0686cb79af7a07198e15e193b28ffec7b4a42bf964ea7550db9b306cead1f7519c",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260728120200,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260728120200_presence_ticks_orderby_viewer_login.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260728120200_presence_ticks_orderby_viewer_login.sql",
+        "planned_sha384": "a13625a730efc6575a9fd5eb37385dc0070ed0087bafa70cbe33b799ce02737e07e290481d720efa659667eb2be95221",
+        "actual_sha384": "a13625a730efc6575a9fd5eb37385dc0070ed0087bafa70cbe33b799ce02737e07e290481d720efa659667eb2be95221",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260801120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260801120000_twitch_login_aliases.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260801120000_twitch_login_aliases.sql",
+        "planned_sha384": "e025a948f87c96de01ea20ae95f30d927b600fac02324c548d1600bce4078814ef25cc80668d2d7e273f384b6c99d2d4",
+        "actual_sha384": "e025a948f87c96de01ea20ae95f30d927b600fac02324c548d1600bce4078814ef25cc80668d2d7e273f384b6c99d2d4",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260801170000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260801170000_streamer_login_on_update_cascade.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260801170000_streamer_login_on_update_cascade.sql",
+        "planned_sha384": "750816819171fed7cbe6f67de4290fb14a20dba7c26923c5a3be5026b27e37a786b62af6070b1f06f49c1fd4206436d7",
+        "actual_sha384": "750816819171fed7cbe6f67de4290fb14a20dba7c26923c5a3be5026b27e37a786b62af6070b1f06f49c1fd4206436d7",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260801190000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260801190000_betriebstabellen_twitch_user_id.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260801190000_betriebstabellen_twitch_user_id.sql",
+        "planned_sha384": "c9cfced4c37053d9aa06643b11057ff3071c7ab152ec9857723c8208cc931597f721e9d1951959d9a16ba6441f1adebf",
+        "actual_sha384": "c9cfced4c37053d9aa06643b11057ff3071c7ab152ec9857723c8208cc931597f721e9d1951959d9a16ba6441f1adebf",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260801200000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260801200000_betriebstabellen_id_trigger.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260801200000_betriebstabellen_id_trigger.sql",
+        "planned_sha384": "3223802179d30d1640358fd8556a880cb4054c81a611c0d07f3ac80724cb75f3c469211820fe176eb86e7ea93811e4b7",
+        "actual_sha384": "3223802179d30d1640358fd8556a880cb4054c81a611c0d07f3ac80724cb75f3c469211820fe176eb86e7ea93811e4b7",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260802010000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260802010000_tb_twitch_user_id_lookup.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260802010000_tb_twitch_user_id_lookup.sql",
+        "planned_sha384": "1797f25530a5adda629066921f38838debdcc509f1a2d8994a77e045ba4f4873619463f850f364cb6eed00d86e520988",
+        "actual_sha384": "1797f25530a5adda629066921f38838debdcc509f1a2d8994a77e045ba4f4873619463f850f364cb6eed00d86e520988",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260802120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260802120000_tb_twitch_user_id_search_path.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260802120000_tb_twitch_user_id_search_path.sql",
+        "planned_sha384": "52df519ab7ef82a6eca975244e128b9c72ee45f2c44471ebc648da718fcf65a4c0c8414ed884aff1f60ee037363a9753",
+        "actual_sha384": "52df519ab7ef82a6eca975244e128b9c72ee45f2c44471ebc648da718fcf65a4c0c8414ed884aff1f60ee037363a9753",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260802130000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260802130000_invites_ingest_health_user_id.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260802130000_invites_ingest_health_user_id.sql",
+        "planned_sha384": "dcd6f0c6c6ae287e2f5b7eaadb53df5c1fbf706b80b9e817a46db73fa97d3d18e6c141e28ebaac868bc552334b2a1ed4",
+        "actual_sha384": "dcd6f0c6c6ae287e2f5b7eaadb53df5c1fbf706b80b9e817a46db73fa97d3d18e6c141e28ebaac868bc552334b2a1ed4",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260802140000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260802140000_kanal_id_spalten_historientabellen.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260802140000_kanal_id_spalten_historientabellen.sql",
+        "planned_sha384": "1efa0c0d07264c802c890e9b7877d4c232f4a2f4832d2659ef48844c6898f65969589348b8caecf1c5fdc557abf8dc09",
+        "actual_sha384": "1efa0c0d07264c802c890e9b7877d4c232f4a2f4832d2659ef48844c6898f65969589348b8caecf1c5fdc557abf8dc09",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260803120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260803120000_add_greeting_reply_enabled.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260803120000_add_greeting_reply_enabled.sql",
+        "planned_sha384": "afefe1530d611eeda6c5d6b701771e0feeb61150c5ecfb3a163ffb3bb24ca5fd7e2c1a8bdf5cdcd9cbbf07e17a52a7be",
+        "actual_sha384": "afefe1530d611eeda6c5d6b701771e0feeb61150c5ecfb3a163ffb3bb24ca5fd7e2c1a8bdf5cdcd9cbbf07e17a52a7be",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260803220000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260803220000_add_clip_command_enabled.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260803220000_add_clip_command_enabled.sql",
+        "planned_sha384": "2067d1b23cf560961e224bb52b42f935e147bd40dbaefcad7e6e891d5b52003febd683fc7e8beac27b1b647e6051fdbc",
+        "actual_sha384": "2067d1b23cf560961e224bb52b42f935e147bd40dbaefcad7e6e891d5b52003febd683fc7e8beac27b1b647e6051fdbc",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260806060000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260806060000_partner_signup_denylist.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260806060000_partner_signup_denylist.sql",
+        "planned_sha384": "7d39059aecf423f0b62caef330cb2c0d447abe364ccadfaf1d941874fa6c2d83f98ea78313c02a9dc7294e2fda1246fc",
+        "actual_sha384": "7d39059aecf423f0b62caef330cb2c0d447abe364ccadfaf1d941874fa6c2d83f98ea78313c02a9dc7294e2fda1246fc",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260806119000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260806119000_seed_streamer_fuer_partner_access.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260806119000_seed_streamer_fuer_partner_access.sql",
+        "planned_sha384": "480c630c66708243549725b8f645f6db40b0bd1ff7e838fd82603774c2aa8df1027457f18988998e4fa7d02d4295429a",
+        "actual_sha384": "480c630c66708243549725b8f645f6db40b0bd1ff7e838fd82603774c2aa8df1027457f18988998e4fa7d02d4295429a",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260806120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260806120000_social_media_partner_access.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260806120000_social_media_partner_access.sql",
+        "planned_sha384": "4e41204469bcc3d0f120ca229843f67b5862c7e47dcdbe69e5032eafce9e947b00c4cca8f94d9ae792c7b0ee3cd89b7d",
+        "actual_sha384": "4e41204469bcc3d0f120ca229843f67b5862c7e47dcdbe69e5032eafce9e947b00c4cca8f94d9ae792c7b0ee3cd89b7d",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260813120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260813120000_engagement_reaction_learning.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260813120000_engagement_reaction_learning.sql",
+        "planned_sha384": "f165884f79fd7e05879c11acc0c2af9db256ec43385cf5d75cdf5b4c6d1c616e33c01e0b8d534b8be3a0242edf70e145",
+        "actual_sha384": "f165884f79fd7e05879c11acc0c2af9db256ec43385cf5d75cdf5b4c6d1c616e33c01e0b8d534b8be3a0242edf70e145",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260813140000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260813140000_twitch_greeted_chatters.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260813140000_twitch_greeted_chatters.sql",
+        "planned_sha384": "69e55a09296bc24e7d24f18e0e0db5237af7ebe50938a882967e425965093a299e36c75a7ad1207e654d6ffdce2707f7",
+        "actual_sha384": "69e55a09296bc24e7d24f18e0e0db5237af7ebe50938a882967e425965093a299e36c75a7ad1207e654d6ffdce2707f7",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260813150000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260813150000_raid_courtesy.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260813150000_raid_courtesy.sql",
+        "planned_sha384": "065d9750f113489b2f231aac3ad49cbd6cac17473e22fb313683668ee511541ca5a6228717f32638cbceb5d5940266c3",
+        "actual_sha384": "065d9750f113489b2f231aac3ad49cbd6cac17473e22fb313683668ee511541ca5a6228717f32638cbceb5d5940266c3",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260813160000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260813160000_streamer_aliases.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260813160000_streamer_aliases.sql",
+        "planned_sha384": "8c4233b4a5b6b09b011d76eecc0b279e3e0206fe5ad06ae6b22ff5b76e54e297db567be46c7e643babb1066bd1d18a3d",
+        "actual_sha384": "8c4233b4a5b6b09b011d76eecc0b279e3e0206fe5ad06ae6b22ff5b76e54e297db567be46c7e643babb1066bd1d18a3d",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260813210000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260813210000_learn_timeline_dedup.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260813210000_learn_timeline_dedup.sql",
+        "planned_sha384": "85fd124a8ced39080aa3c2d6d33e2ab9e2dd15b43382a69e4688b616bf07619ec02fac16f0cbec7ec9863b971ac046e2",
+        "actual_sha384": "85fd124a8ced39080aa3c2d6d33e2ab9e2dd15b43382a69e4688b616bf07619ec02fac16f0cbec7ec9863b971ac046e2",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260813220000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260813220000_twitch_smalltalk_transcripts.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260813220000_twitch_smalltalk_transcripts.sql",
+        "planned_sha384": "eb64b15aa2c77c24987ee489c9a593283dda9bdaea663c7b15d6ffca8623ae8affa7e12f60209f903126aad1daea4072",
+        "actual_sha384": "eb64b15aa2c77c24987ee489c9a593283dda9bdaea663c7b15d6ffca8623ae8affa7e12f60209f903126aad1daea4072",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260814100000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260814100000_twitch_vod_archive.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260814100000_twitch_vod_archive.sql",
+        "planned_sha384": "ae6d3e5d1f161c6f90d73e0d77de44b3ba5ba28f256bb96a0ad9196721a166997a6dfa516b10b579f475ff800d66183b",
+        "actual_sha384": "ae6d3e5d1f161c6f90d73e0d77de44b3ba5ba28f256bb96a0ad9196721a166997a6dfa516b10b579f475ff800d66183b",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260814150000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260814150000_vod_archive_pro_streamer.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260814150000_vod_archive_pro_streamer.sql",
+        "planned_sha384": "678afa493dcc777da8c9408b50889df3bf7ffc4bb368303b21a1c45f0b5f9db7f9002da34ee682622272310496e78d69",
+        "actual_sha384": "678afa493dcc777da8c9408b50889df3bf7ffc4bb368303b21a1c45f0b5f9db7f9002da34ee682622272310496e78d69",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260814180000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260814180000_smalltalk_v1_bench.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260814180000_smalltalk_v1_bench.sql",
+        "planned_sha384": "67a44e9f9810b91d5d4af61e58bc80a38dbd8f054f446713910d88d1379a7115460190d18d2b0e23c2978ac78ad9cdaf",
+        "actual_sha384": "67a44e9f9810b91d5d4af61e58bc80a38dbd8f054f446713910d88d1379a7115460190d18d2b0e23c2978ac78ad9cdaf",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260815120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260815120000_social_media_scheduling.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260815120000_social_media_scheduling.sql",
+        "planned_sha384": "266c1cce2e149a0049364d0185c4317e2de445ce3d57722cd0b6d270d86ad8037da9de2a7b6f65d7449b7a26fb324801",
+        "actual_sha384": "266c1cce2e149a0049364d0185c4317e2de445ce3d57722cd0b6d270d86ad8037da9de2a7b6f65d7449b7a26fb324801",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260815160000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260815160000_deadlock_pause_unmod.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260815160000_deadlock_pause_unmod.sql",
+        "planned_sha384": "d23a6a23865969171190676bc738b7625c2ae3ba66317ea549b30621a7e597a2b91636e3b58babd9f9ed168bd20dd577",
+        "actual_sha384": "d23a6a23865969171190676bc738b7625c2ae3ba66317ea549b30621a7e597a2b91636e3b58babd9f9ed168bd20dd577",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260815170000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260815170000_ban_probe_zustand.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260815170000_ban_probe_zustand.sql",
+        "planned_sha384": "a5219419353ec5f53b4012724687e11a8849707544a0f82c1d21f4f76c833c95a38c3ac3ea1114167fbebc8681a355d7",
+        "actual_sha384": "a5219419353ec5f53b4012724687e11a8849707544a0f82c1d21f4f76c833c95a38c3ac3ea1114167fbebc8681a355d7",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260816090000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260816090000_llm_model_cache.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260816090000_llm_model_cache.sql",
+        "planned_sha384": "7924ee9327ab7c985ae136932e997acffaf1ff904a0c18bc95ddd425988bb56f3c9ba19f7afc286a19806aad3cd48bc4",
+        "actual_sha384": "7924ee9327ab7c985ae136932e997acffaf1ff904a0c18bc95ddd425988bb56f3c9ba19f7afc286a19806aad3cd48bc4",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260816120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260816120000_bot_ban_klassifikation.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260816120000_bot_ban_klassifikation.sql",
+        "planned_sha384": "0fa508fc7ca7a86805c32fc75efe4f454f010144ceefe1c303752c4b23d3ce18e820a3447c0c9cdc1266fa2e287667d4",
+        "actual_sha384": "0fa508fc7ca7a86805c32fc75efe4f454f010144ceefe1c303752c4b23d3ce18e820a3447c0c9cdc1266fa2e287667d4",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260818120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260818120000_auto_raid_pause.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260818120000_auto_raid_pause.sql",
+        "planned_sha384": "c8f98d23862f97f8381c1afa0334921a4c890fb016e1d0a1901da6a71de1c796523bdd7dd10e2717715144b99c0d4531",
+        "actual_sha384": "c8f98d23862f97f8381c1afa0334921a4c890fb016e1d0a1901da6a71de1c796523bdd7dd10e2717715144b99c0d4531",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260823120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260823120000_upload_queue_quota_deferrals.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260823120000_upload_queue_quota_deferrals.sql",
+        "planned_sha384": "ed1337675b01f19011406cb9af489f06361f4599e2922bf1319b78994d2ce22e72333c3b9cc95f76a80b25e903f5d921",
+        "actual_sha384": "ed1337675b01f19011406cb9af489f06361f4599e2922bf1319b78994d2ce22e72333c3b9cc95f76a80b25e903f5d921",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260823130000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260823130000_social_media_nachreih_fairness.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260823130000_social_media_nachreih_fairness.sql",
+        "planned_sha384": "c6c9de816cf87df22692d019041aa41a8a4488b81d04a56f3753d6d4bfe003835ead31fd0342e917f59ec51e0af10f2d",
+        "actual_sha384": "c6c9de816cf87df22692d019041aa41a8a4488b81d04a56f3753d6d4bfe003835ead31fd0342e917f59ec51e0af10f2d",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260823140000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260823140000_clip_kontingent_verbrauch.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260823140000_clip_kontingent_verbrauch.sql",
+        "planned_sha384": "2921c4f08446c91d20d5f72b3b52b7f6a388461e82a23986d4c46f113fedc40427b003cc02d081915f5b84efadf3b91c",
+        "actual_sha384": "2921c4f08446c91d20d5f72b3b52b7f6a388461e82a23986d4c46f113fedc40427b003cc02d081915f5b84efadf3b91c",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260824090000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260824090000_obs_dock_events.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260824090000_obs_dock_events.sql",
+        "planned_sha384": "c80a39dddae0b467f1f703997b6a4e529c8861114feedce7e1aa592105392e5a6b4051ad4b1fea7a3fc52031c8e4058b",
+        "actual_sha384": "c80a39dddae0b467f1f703997b6a4e529c8861114feedce7e1aa592105392e5a6b4051ad4b1fea7a3fc52031c8e4058b",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260827090000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260827090000_platform_connections.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260827090000_platform_connections.sql",
+        "planned_sha384": "154ca831a236c086c7c5aef63a6f1a38ea4953ae022b0b6c80b1f32bcf2a111fd99c1fef7ca187d004e6cacc04df5395",
+        "actual_sha384": "154ca831a236c086c7c5aef63a6f1a38ea4953ae022b0b6c80b1f32bcf2a111fd99c1fef7ca187d004e6cacc04df5395",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260828090000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260828090000_platform_connections_rueckbau.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260828090000_platform_connections_rueckbau.sql",
+        "planned_sha384": "6ac87b2de774390b9265cfe0c8657fdadfaa9a04e34c3a0b73b04376f80244aed88271265b95033365de580f58eb050e",
+        "actual_sha384": "6ac87b2de774390b9265cfe0c8657fdadfaa9a04e34c3a0b73b04376f80244aed88271265b95033365de580f58eb050e",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260829090000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260829090000_twitch_scout_candidates.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260829090000_twitch_scout_candidates.sql",
+        "planned_sha384": "1feeab774072ea0c57f891178a8401bd7e42685a0dac858cf2a5ad99aa94aa7f5c81dd3f195f42b8cbcc877d157b46b8",
+        "actual_sha384": "1feeab774072ea0c57f891178a8401bd7e42685a0dac858cf2a5ad99aa94aa7f5c81dd3f195f42b8cbcc877d157b46b8",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260831090000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260831090000_dashboard_session_ids_sha256.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260831090000_dashboard_session_ids_sha256.sql",
+        "planned_sha384": "186366f0288456788ddae75a23af3202294a78cf3a49de24380b22846fd726e1516f271923e136475c126df3989b58f0",
+        "actual_sha384": "186366f0288456788ddae75a23af3202294a78cf3a49de24380b22846fd726e1516f271923e136475c126df3989b58f0",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260831100000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260831100000_raid_requirements_dm_dedupe.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260831100000_raid_requirements_dm_dedupe.sql",
+        "planned_sha384": "31ed62dec28615da58815c08cadd4b4053410afa9b549f5a856486823d17ec3da923b5d4e597254f84986e6d3de42baa",
+        "actual_sha384": "31ed62dec28615da58815c08cadd4b4053410afa9b549f5a856486823d17ec3da923b5d4e597254f84986e6d3de42baa",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260901100000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260901100000_twitch_ad_manager.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260901100000_twitch_ad_manager.sql",
+        "planned_sha384": "ecda2ef7c706878c8e4493513154c9185d44707294fd28c2c453aa12796338ae458f4479b085713b4996b587b0be386a",
+        "actual_sha384": "ecda2ef7c706878c8e4493513154c9185d44707294fd28c2c453aa12796338ae458f4479b085713b4996b587b0be386a",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260903090000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260903090000_twitch_moderation_settings.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260903090000_twitch_moderation_settings.sql",
+        "planned_sha384": "7b243f215f73a9f84033f195aaa6fbef26ecba15ecc5ef653d4ea809842f122ed0fcb2454b087b76389f2e22032914d2",
+        "actual_sha384": "7b243f215f73a9f84033f195aaa6fbef26ecba15ecc5ef653d4ea809842f122ed0fcb2454b087b76389f2e22032914d2",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260904120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260904120000_twitch_dashboard_assistent_log.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260904120000_twitch_dashboard_assistent_log.sql",
+        "planned_sha384": "81d425a8be5b4eb4a357dd60f9a1fc1def97b8af174475bca592b7b08b720625bff09f3523c1866348d8e4128ec59668",
+        "actual_sha384": "81d425a8be5b4eb4a357dd60f9a1fc1def97b8af174475bca592b7b08b720625bff09f3523c1866348d8e4128ec59668",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260905090000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260905090000_twitch_promo_pitch_log.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260905090000_twitch_promo_pitch_log.sql",
+        "planned_sha384": "6f105aaf3f12fab0a872247a57be72e83a74fa7bfe677a56ef9f2df21df806a110534ab140ac04e10da9f44344bd7862",
+        "actual_sha384": "6f105aaf3f12fab0a872247a57be72e83a74fa7bfe677a56ef9f2df21df806a110534ab140ac04e10da9f44344bd7862",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260905120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260905120000_twitch_chat_message_labels.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260905120000_twitch_chat_message_labels.sql",
+        "planned_sha384": "78559ceab10d7bfb39452e2f3dfda618540b56b231cc8acfdc6630aa14b7764d1d5126d3b5d66406c65291b21bf1dc20",
+        "actual_sha384": "78559ceab10d7bfb39452e2f3dfda618540b56b231cc8acfdc6630aa14b7764d1d5126d3b5d66406c65291b21bf1dc20",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260905130000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260905130000_llm_usage_rename.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260905130000_llm_usage_rename.sql",
+        "planned_sha384": "c1bc1f82cb91a42f73a358d22176b734e3137910d932a673aa1932012516060ff3d963fa7a0c8913b1ae0ee704903cdc",
+        "actual_sha384": "c1bc1f82cb91a42f73a358d22176b734e3137910d932a673aa1932012516060ff3d963fa7a0c8913b1ae0ee704903cdc",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260905130001,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260905130001_llm_usage_drop_compat_view.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260905130001_llm_usage_drop_compat_view.sql",
+        "planned_sha384": "ec24b0d9e0307550f8fb0616c057eb42450d59d5707868049b577071169f5d912f28db680ef0379347888f67edc11e91",
+        "actual_sha384": "ec24b0d9e0307550f8fb0616c057eb42450d59d5707868049b577071169f5d912f28db680ef0379347888f67edc11e91",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260906120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260906120000_social_media_deadlock_game_id.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260906120000_social_media_deadlock_game_id.sql",
+        "planned_sha384": "319f64859e5bdc6f0241ae3bcab2ffc45f884814a2cfe801b3c14f0a0a327af5d6df4afad155d26368bad4ab1d2e6041",
+        "actual_sha384": "319f64859e5bdc6f0241ae3bcab2ffc45f884814a2cfe801b3c14f0a0a327af5d6df4afad155d26368bad4ab1d2e6041",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260906121000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260906121000_social_media_subtitles_enabled.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260906121000_social_media_subtitles_enabled.sql",
+        "planned_sha384": "ac9792777fde30545c6d2b3516b87d98afc55b1b34265fab121bc6fca1deca35d066f0c17f8e8e990f05c0ad2798321d",
+        "actual_sha384": "ac9792777fde30545c6d2b3516b87d98afc55b1b34265fab121bc6fca1deca35d066f0c17f8e8e990f05c0ad2798321d",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260906122000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260906122000_social_media_clip_preview.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260906122000_social_media_clip_preview.sql",
+        "planned_sha384": "b9411c82c12b8fd6c22a8d38ff3f345f8b98567bda03e880bb400bc5e2a38d0563a635c06409552ca820463c8b13b4d0",
+        "actual_sha384": "b9411c82c12b8fd6c22a8d38ff3f345f8b98567bda03e880bb400bc5e2a38d0563a635c06409552ca820463c8b13b4d0",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260906123000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260906123000_social_media_clip_download_failed.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260906123000_social_media_clip_download_failed.sql",
+        "planned_sha384": "b56ffc4052ee836bb41362bce070fd25a79e2cc077773f0248d2152738fa167c8055f82e1dd2b8a50551af1e0ef17542",
+        "actual_sha384": "b56ffc4052ee836bb41362bce070fd25a79e2cc077773f0248d2152738fa167c8055f82e1dd2b8a50551af1e0ef17542",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260906130000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260906130000_clip_vod_offset.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260906130000_clip_vod_offset.sql",
+        "planned_sha384": "dc78700790db83cda0d8e746388e91cdd4467940c48e2fa2f881ed2bc8e6f855317728e515900b4d5989328ffe334aaa",
+        "actual_sha384": "dc78700790db83cda0d8e746388e91cdd4467940c48e2fa2f881ed2bc8e6f855317728e515900b4d5989328ffe334aaa",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260906130001,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260906130001_twitch_clip_merkmale.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260906130001_twitch_clip_merkmale.sql",
+        "planned_sha384": "7cfa65be1e292768a10d63d90d4228b6bdf5f829a0db5f205e82d2fabd50863b6f6e34acf2ab169a55e816eea501dd88",
+        "actual_sha384": "7cfa65be1e292768a10d63d90d4228b6bdf5f829a0db5f205e82d2fabd50863b6f6e34acf2ab169a55e816eea501dd88",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260906130002,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260906130002_twitch_vod_highlights.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260906130002_twitch_vod_highlights.sql",
+        "planned_sha384": "499a1c5ad056a484f306c65d3db87dc876f3920a77c621684209c2e45260a48ac893e51cd1d38437d3a70c7111dbfbce",
+        "actual_sha384": "499a1c5ad056a484f306c65d3db87dc876f3920a77c621684209c2e45260a48ac893e51cd1d38437d3a70c7111dbfbce",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260906140000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260906140000_twitch_zuschauer_register.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260906140000_twitch_zuschauer_register.sql",
+        "planned_sha384": "2ec3bee42b324a7a0e8a77425f4bdd74789763d7f092e894af7724d653ce145444b2d034aa13c2af8ad53777c63249f4",
+        "actual_sha384": "2ec3bee42b324a7a0e8a77425f4bdd74789763d7f092e894af7724d653ce145444b2d034aa13c2af8ad53777c63249f4",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260906150000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260906150000_twitch_promo_pitch_log_limits.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260906150000_twitch_promo_pitch_log_limits.sql",
+        "planned_sha384": "4e2a1328646b964fba836f9c6d2113b16cfb6b39268370ab368b3deb113059b8c006e0164d32d30cda01b5773ee7de30",
+        "actual_sha384": "4e2a1328646b964fba836f9c6d2113b16cfb6b39268370ab368b3deb113059b8c006e0164d32d30cda01b5773ee7de30",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260908210000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260908210000_twitch_uplink_intent.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260908210000_twitch_uplink_intent.sql",
+        "planned_sha384": "88a58d36e71a872d7c529feef535c3eb14e48f135437be9f2cef81797c1cf3fec02b818ccee3064e7ae1863494ecefa2",
+        "actual_sha384": "88a58d36e71a872d7c529feef535c3eb14e48f135437be9f2cef81797c1cf3fec02b818ccee3064e7ae1863494ecefa2",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260908220000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260908220000_uplink_target_generations.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260908220000_uplink_target_generations.sql",
+        "planned_sha384": "edaa4a4a2bcb37623d6baf375555e15e744498d7d950eac11d2f78c981410fd3636a15562fdaa6edddf2cca663ff4c89",
+        "actual_sha384": "edaa4a4a2bcb37623d6baf375555e15e744498d7d950eac11d2f78c981410fd3636a15562fdaa6edddf2cca663ff4c89",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260909120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260909120000_twitch_bot_capabilities.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260909120000_twitch_bot_capabilities.sql",
+        "planned_sha384": "9e1afc4d43314aa56de07f5b0532b5cd7740c387d194268c1eba297ef9563917d56237e740e4926883fe4eee1730863c",
+        "actual_sha384": "9e1afc4d43314aa56de07f5b0532b5cd7740c387d194268c1eba297ef9563917d56237e740e4926883fe4eee1730863c",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260909150000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260909150000_twitch_promo_pitch_log_bewertung.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260909150000_twitch_promo_pitch_log_bewertung.sql",
+        "planned_sha384": "6409a60a5dabe10f7a8dbd06a227ad0f3768051ba7aacc6f30af8da4e0a3d5f4c4a70ff729834f55162741738c29cd37",
+        "actual_sha384": "6409a60a5dabe10f7a8dbd06a227ad0f3768051ba7aacc6f30af8da4e0a3d5f4c4a70ff729834f55162741738c29cd37",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260909170000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260909170000_add_title_command_enabled.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260909170000_add_title_command_enabled.sql",
+        "planned_sha384": "6b1c7bb6104de4592d3ebefb27e97c85ac14ae7b6a33fc4b6ccd477c8fc21e1da3296ff40f5f9f5bb689535a26ec902f",
+        "actual_sha384": "6b1c7bb6104de4592d3ebefb27e97c85ac14ae7b6a33fc4b6ccd477c8fc21e1da3296ff40f5f9f5bb689535a26ec902f",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260909210000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260909210000_add_stat_command_settings.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260909210000_add_stat_command_settings.sql",
+        "planned_sha384": "69dded66e3aabb1b85cd905abbe7632619e592bd844d12630456389cb3d8f25caf0692b889a9bb7f2df4354fd06def72",
+        "actual_sha384": "69dded66e3aabb1b85cd905abbe7632619e592bd844d12630456389cb3d8f25caf0692b889a9bb7f2df4354fd06def72",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260909211000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260909211000_dashboard_feedback.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260909211000_dashboard_feedback.sql",
+        "planned_sha384": "792d33b48ba528946633fad2881881156b2ecb951d223cdeb12f422f44a6ee704fb946e1517b70cff499fc0c277b664e",
+        "actual_sha384": "792d33b48ba528946633fad2881881156b2ecb951d223cdeb12f422f44a6ee704fb946e1517b70cff499fc0c277b664e",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260909220000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260909220000_sub_reminders.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260909220000_sub_reminders.sql",
+        "planned_sha384": "fe96ef1ca3a47771a9fca6ea5bba19267a25db8885923e1bf512e3e69dd4db2d4640b212a62420bb90381fd7d3e831c8",
+        "actual_sha384": "fe96ef1ca3a47771a9fca6ea5bba19267a25db8885923e1bf512e3e69dd4db2d4640b212a62420bb90381fd7d3e831c8",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260909230000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260909230000_dashboard_onboarding_steps.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260909230000_dashboard_onboarding_steps.sql",
+        "planned_sha384": "e82276f922498f9bb39c7c8939a134276a0f1dd89f5f1dd2bcae807b5707c14a4a5c97c5d86662409aca55fda97a28ed",
+        "actual_sha384": "e82276f922498f9bb39c7c8939a134276a0f1dd89f5f1dd2bcae807b5707c14a4a5c97c5d86662409aca55fda97a28ed",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260912090000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260912090000_promo_timer_settings.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260912090000_promo_timer_settings.sql",
+        "planned_sha384": "3ae84f52d26a297efb135dbcd5ccb5e9fb0116f51564e96ff701ec1d7789f19fb295f7e1db5050dfdf41d5b6c9423ec1",
+        "actual_sha384": "3ae84f52d26a297efb135dbcd5ccb5e9fb0116f51564e96ff701ec1d7789f19fb295f7e1db5050dfdf41d5b6c9423ec1",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260912170000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260912170000_announcement_color.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260912170000_announcement_color.sql",
+        "planned_sha384": "e9776057bb140fd36faa2b1a49e49449c53af7846583205a8ff2150852e50f3ab847528b5c2c113ba51aca507b3ca1c2",
+        "actual_sha384": "e9776057bb140fd36faa2b1a49e49449c53af7846583205a8ff2150852e50f3ab847528b5c2c113ba51aca507b3ca1c2",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260912180000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260912180000_disable_greeting_reply_by_default.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260912180000_disable_greeting_reply_by_default.sql",
+        "planned_sha384": "a380351e6506e6572e954c384035b2c7c499bdb277192aa6725bb59b97818b5ddb1bab875dfddb065e5b8e83acd072bd",
+        "actual_sha384": "a380351e6506e6572e954c384035b2c7c499bdb277192aa6725bb59b97818b5ddb1bab875dfddb065e5b8e83acd072bd",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260912190000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260912190000_caster_overlay.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260912190000_caster_overlay.sql",
+        "planned_sha384": "b09523207f94584f8a2b4340c29a2047cfcbbfa04cbcb75b4906dd3b2415a5298340212652823d4b6b9cd9a0b50a4e87",
+        "actual_sha384": "b09523207f94584f8a2b4340c29a2047cfcbbfa04cbcb75b4906dd3b2415a5298340212652823d4b6b9cd9a0b50a4e87",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260912204500,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260912204500_community_announcements.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260912204500_community_announcements.sql",
+        "planned_sha384": "1a8b494bc976da565b4d823d99d9a78265d3d30e19bd1cb0200c6f630371a974960ea917a42062a6ce6992a22d3c809d",
+        "actual_sha384": "1a8b494bc976da565b4d823d99d9a78265d3d30e19bd1cb0200c6f630371a974960ea917a42062a6ce6992a22d3c809d",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260913153000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260913153000_admin_raid_wunsch.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260913153000_admin_raid_wunsch.sql",
+        "planned_sha384": "a6dcced8d21af9e2b8e79840e0beecb1010ad54e859dd34588fd0b03da8cdc38751da0c03cd1c18e54b0608fc8b2d1b1",
+        "actual_sha384": "a6dcced8d21af9e2b8e79840e0beecb1010ad54e859dd34588fd0b03da8cdc38751da0c03cd1c18e54b0608fc8b2d1b1",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260913190000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260913190000_passives_kontoregister.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260913190000_passives_kontoregister.sql",
+        "planned_sha384": "2b1cfdbf518cc70db98b575edae9aa22985c955c55a3356521e3671f7fde82cfc02ca523b50745acb9c24a7e8cec61fe",
+        "actual_sha384": "2b1cfdbf518cc70db98b575edae9aa22985c955c55a3356521e3671f7fde82cfc02ca523b50745acb9c24a7e8cec61fe",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260913193000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260913193000_community_announcement_value_pitches.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260913193000_community_announcement_value_pitches.sql",
+        "planned_sha384": "523f2478e15ae05e4856cf2af7a95d335671f2523f68f815a913276aae64599b4f5153e7feb830cbdca235ad73de27f9",
+        "actual_sha384": "523f2478e15ae05e4856cf2af7a95d335671f2523f68f815a913276aae64599b4f5153e7feb830cbdca235ad73de27f9",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260914120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260914120000_partner_signup_tag_blocks.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260914120000_partner_signup_tag_blocks.sql",
+        "planned_sha384": "06263784089df157d907e26fbf243ab2be5a2c8f31138a174d2080e1661231c03bed188124b0c4a1638dafd7fab0c3e3",
+        "actual_sha384": "06263784089df157d907e26fbf243ab2be5a2c8f31138a174d2080e1661231c03bed188124b0c4a1638dafd7fab0c3e3",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260914203000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260914203000_title_generator_preferences.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260914203000_title_generator_preferences.sql",
+        "planned_sha384": "99c688703ec48048f2cddc5fb6881a2b86f0ab14fb26d1df74925821dbd9ae56d116758f3e7c24e7dae83f3e76942654",
+        "actual_sha384": "99c688703ec48048f2cddc5fb6881a2b86f0ab14fb26d1df74925821dbd9ae56d116758f3e7c24e7dae83f3e76942654",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260916000000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260916000000_caster_cameras.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260916000000_caster_cameras.sql",
+        "planned_sha384": "bfbf944560e31d1749efb846b160d2ed47c6c6f55ef9b7a9aeb2c18746a1081c0ffed8a9871cfd67c70655bdfe9d46bc",
+        "actual_sha384": "bfbf944560e31d1749efb846b160d2ed47c6c6f55ef9b7a9aeb2c18746a1081c0ffed8a9871cfd67c70655bdfe9d46bc",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260916013000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260916013000_smalltalk_live_mode.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260916013000_smalltalk_live_mode.sql",
+        "planned_sha384": "4482233b91c2b478117e460381432a09625cf2c3dfb9b6247738116078663525c2726753f4411c1cb3db2eaf8fcee0da",
+        "actual_sha384": "4482233b91c2b478117e460381432a09625cf2c3dfb9b6247738116078663525c2726753f4411c1cb3db2eaf8fcee0da",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260918024500,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260918024500_smalltalk_candidate_state.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260918024500_smalltalk_candidate_state.sql",
+        "planned_sha384": "14aff9ab65fc3395234db5269d371af40b2d018092d2acbe7bcf0b51a57784a8a974139c12355d537a91dce332b31ede",
+        "actual_sha384": "14aff9ab65fc3395234db5269d371af40b2d018092d2acbe7bcf0b51a57784a8a974139c12355d537a91dce332b31ede",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260918100000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260918100000_twitch_player_steam_links.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260918100000_twitch_player_steam_links.sql",
+        "planned_sha384": "be4492b89eae56568154370adcc82a5ec04ebcef57a3f90e237b1efae1142380b8540f7254c7bb7b1b0980444f27320c",
+        "actual_sha384": "be4492b89eae56568154370adcc82a5ec04ebcef57a3f90e237b1efae1142380b8540f7254c7bb7b1b0980444f27320c",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260918120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260918120000_werbemanager_budget_smart.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260918120000_werbemanager_budget_smart.sql",
+        "planned_sha384": "24b6681f0418d1baff94419f8d587d29624f23252d50bf8a86f9a4a21afbd1e77a2afa9bd546548745788b120c220814",
+        "actual_sha384": "24b6681f0418d1baff94419f8d587d29624f23252d50bf8a86f9a4a21afbd1e77a2afa9bd546548745788b120c220814",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260918123000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260918123000_category_collector.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260918123000_category_collector.sql",
+        "planned_sha384": "f4da41d21fc3bffb3ddd7e8c7eb19effa38c4685c2ecf77031af05b0aa34c5f7114474dc32145f7b9433bb10c109369a",
+        "actual_sha384": "f4da41d21fc3bffb3ddd7e8c7eb19effa38c4685c2ecf77031af05b0aa34c5f7114474dc32145f7b9433bb10c109369a",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260918124000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260918124000_viewer_fairness_score.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260918124000_viewer_fairness_score.sql",
+        "planned_sha384": "29b2e544b2e5176b0ad31a72806e86038961609771c04fa254eb2a1bee0e72a18318899e48b8b0533a855b651ee2d46d",
+        "actual_sha384": "29b2e544b2e5176b0ad31a72806e86038961609771c04fa254eb2a1bee0e72a18318899e48b8b0533a855b651ee2d46d",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260918140000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260918140000_werbemanager_telemetrie.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260918140000_werbemanager_telemetrie.sql",
+        "planned_sha384": "3ca5ceed9e23dc4a15e65ec10e48e84286cc8ecdb2ff1e729b0ccefebe1d951ca3363c620cb45428f79bea92e66a40c5",
+        "actual_sha384": "3ca5ceed9e23dc4a15e65ec10e48e84286cc8ecdb2ff1e729b0ccefebe1d951ca3363c620cb45428f79bea92e66a40c5",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260918150000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260918150000_werbemanager_chat_hinweis.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260918150000_werbemanager_chat_hinweis.sql",
+        "planned_sha384": "7da9607cc66d63b58bcd97eeefd6fbe52c77818fa43e3b5a3cd857f460655eb21ac049f657bebda724b26c5ce5e53a0c",
+        "actual_sha384": "7da9607cc66d63b58bcd97eeefd6fbe52c77818fa43e3b5a3cd857f460655eb21ac049f657bebda724b26c5ce5e53a0c",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260918164500,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260918164500_title_generator_never_words.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260918164500_title_generator_never_words.sql",
+        "planned_sha384": "0cbf8336dd7f5ed32a78a0a06cfd856b7f51e8f43fe2fc5a157c6fe4fc9fc96675081caa010309dd70f1de46e7d46c31",
+        "actual_sha384": "0cbf8336dd7f5ed32a78a0a06cfd856b7f51e8f43fe2fc5a157c6fe4fc9fc96675081caa010309dd70f1de46e7d46c31",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260918170000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260918170000_category_permanent_archive.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260918170000_category_permanent_archive.sql",
+        "planned_sha384": "55e6f12c7d1e82da252b20efa19c67dedba237cb718fe0229b16a1a2be847c2786dc10b2063c014fb53a52aa40c42ce1",
+        "actual_sha384": "55e6f12c7d1e82da252b20efa19c67dedba237cb718fe0229b16a1a2be847c2786dc10b2063c014fb53a52aa40c42ce1",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260918210000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260918210000_partner_profiles.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260918210000_partner_profiles.sql",
+        "planned_sha384": "d9fa18c78f02935a735b23b74089bee16ebc11fa92afb3aada4ac151e5966322f78f30dd1dd4599508cfbe7b83567005",
+        "actual_sha384": "d9fa18c78f02935a735b23b74089bee16ebc11fa92afb3aada4ac151e5966322f78f30dd1dd4599508cfbe7b83567005",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260920170000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260920170000_twitch_player_multi_steam.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260920170000_twitch_player_multi_steam.sql",
+        "planned_sha384": "2d546e504a1e25a8ce159ab64b4f0639fa776273339a8cf61a506a44e4c5edfa7168f0c6d7a1776fc9b9321f94394924",
+        "actual_sha384": "2d546e504a1e25a8ce159ab64b4f0639fa776273339a8cf61a506a44e4c5edfa7168f0c6d7a1776fc9b9321f94394924",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260925191500,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260925191500_add_command_name_overrides.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260925191500_add_command_name_overrides.sql",
+        "planned_sha384": "2f148bf89c8ecfeb05da8803a3efdaacd77f04e55f26281b15e4728f0b44e15a740aeb2358145fa3ffb8412da9fd57dc",
+        "actual_sha384": "2f148bf89c8ecfeb05da8803a3efdaacd77f04e55f26281b15e4728f0b44e15a740aeb2358145fa3ffb8412da9fd57dc",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260926230500,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260926230500_monthly_effort_raid_boost.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260926230500_monthly_effort_raid_boost.sql",
+        "planned_sha384": "892dff135cf87c543edd84caada25f0ce24a7840e97480ee45553248b6d224f89dbd285ca09061f0b8e8c00ba34b32e7",
+        "actual_sha384": "892dff135cf87c543edd84caada25f0ce24a7840e97480ee45553248b6d224f89dbd285ca09061f0b8e8c00ba34b32e7",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260927010000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260927010000_streamer_referral_credits.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260927010000_streamer_referral_credits.sql",
+        "planned_sha384": "5a3bf4249a7fb471c6402455ae1a36b5446883142863074889c4c2ea81077845f506b2d7388db6531bbdd621eeccc373",
+        "actual_sha384": "5a3bf4249a7fb471c6402455ae1a36b5446883142863074889c4c2ea81077845f506b2d7388db6531bbdd621eeccc373",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260927023000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260927023000_clip_contest.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260927023000_clip_contest.sql",
+        "planned_sha384": "15c6e6a5c9d85f501e396c79a43b8353ac1720eaecf64c157e75ff009604715a39158d8a0360b112e8bc6af0d30cce17",
+        "actual_sha384": "15c6e6a5c9d85f501e396c79a43b8353ac1720eaecf64c157e75ff009604715a39158d8a0360b112e8bc6af0d30cce17",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260927110000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260927110000_partner_effort_engine.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260927110000_partner_effort_engine.sql",
+        "planned_sha384": "e6f335111568409ff2a46237a005aab91da85b60570ca92447f6074b1b8b53464c990f586cd33a61938619c564aef0f5",
+        "actual_sha384": "e6f335111568409ff2a46237a005aab91da85b60570ca92447f6074b1b8b53464c990f586cd33a61938619c564aef0f5",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260928120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260928120000_patch_announcements.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260928120000_patch_announcements.sql",
+        "planned_sha384": "84283d4c97d8e6d7963e1f6c5f2e9012b7399b6826649f6aee5ec01e983898019c83145c763b144702c43215a4d8b638",
+        "actual_sha384": "84283d4c97d8e6d7963e1f6c5f2e9012b7399b6826649f6aee5ec01e983898019c83145c763b144702c43215a4d8b638",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260929000000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260929000000_social_media_stacked_brand.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260929000000_social_media_stacked_brand.sql",
+        "planned_sha384": "3639a738797b4173d720a9289fce90bbd988e1115aed7a6116ab4cd94fd3239bdf7da5a3c1a61c309b9c59d53c7d6fad",
+        "actual_sha384": "3639a738797b4173d720a9289fce90bbd988e1115aed7a6116ab4cd94fd3239bdf7da5a3c1a61c309b9c59d53c7d6fad",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260929113000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260929113000_chat_brain_answers.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260929113000_chat_brain_answers.sql",
+        "planned_sha384": "e58fea7b13f0df2ef0fa147aaef67084b9088fd33645da01a36fbe8752b663dbca7fa39e9b4d04ed877896e6237e7e77",
+        "actual_sha384": "e58fea7b13f0df2ef0fa147aaef67084b9088fd33645da01a36fbe8752b663dbca7fa39e9b4d04ed877896e6237e7e77",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260929120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260929120000_clip_context_learning.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260929120000_clip_context_learning.sql",
+        "planned_sha384": "32fea5aae76b28719c287034f4066f19553b443dbef66c89e6f98b91cbadd51b69067b6667981eb4bf8dd0ae2fc576aa",
+        "actual_sha384": "32fea5aae76b28719c287034f4066f19553b443dbef66c89e6f98b91cbadd51b69067b6667981eb4bf8dd0ae2fc576aa",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260930010000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260930010000_partner_challenge_runtime_roles.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260930010000_partner_challenge_runtime_roles.sql",
+        "planned_sha384": "8a3f02ff829f7322686f8c4e73b619d09acd483462a2a4cfabd5f4058f996ba9d6f98294128b615f26d3650ef34ad04c",
+        "actual_sha384": "8a3f02ff829f7322686f8c4e73b619d09acd483462a2a4cfabd5f4058f996ba9d6f98294128b615f26d3650ef34ad04c",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260930020000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260930020000_partner_effort_weekly_quest_evaluations.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260930020000_partner_effort_weekly_quest_evaluations.sql",
+        "planned_sha384": "200377d89d8f96c041e82ba1701c91482d5bd478597537780415c4cc357a61806a79d4e51cc1d53c749e904086b5adfc",
+        "actual_sha384": "200377d89d8f96c041e82ba1701c91482d5bd478597537780415c4cc357a61806a79d4e51cc1d53c749e904086b5adfc",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260930030000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260930030000_social_media_tiktok_recovery.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260930030000_social_media_tiktok_recovery.sql",
+        "planned_sha384": "4b879d9c28680384878253940281dd5f0cda6431e05ed8d4f2ed9fb096bb2227995a6f86e085d6b23af92f0d33b951e0",
+        "actual_sha384": "4b879d9c28680384878253940281dd5f0cda6431e05ed8d4f2ed9fb096bb2227995a6f86e085d6b23af92f0d33b951e0",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260930040000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260930040000_social_media_access_identity.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260930040000_social_media_access_identity.sql",
+        "planned_sha384": "8354569c237284a597fd27b1b0f1a82bbcca556693961387dbbd26997d17d8aba838a3e7fd85ff84a8658dae9972ac72",
+        "actual_sha384": "8354569c237284a597fd27b1b0f1a82bbcca556693961387dbbd26997d17d8aba838a3e7fd85ff84a8658dae9972ac72",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260930140000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260930140000_category_evidence_readiness_roles.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260930140000_category_evidence_readiness_roles.sql",
+        "planned_sha384": "8b24f7417f5c27791d503d10d9997cb1a906f5c556539fc82c597aa366529cee8a1a46db7acbd5c305134568c5d7ee51",
+        "actual_sha384": "8b24f7417f5c27791d503d10d9997cb1a906f5c556539fc82c597aa366529cee8a1a46db7acbd5c305134568c5d7ee51",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20260930220200,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20260930220200_token_storage.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20260930220200_token_storage.sql",
+        "planned_sha384": "ac81cf2c22d83eaca886ce4da7b661389810cb182f5097595e4b8bbe7b304d1853b9454e96cfb00437184e6b5ceae1ba",
+        "actual_sha384": "ac81cf2c22d83eaca886ce4da7b661389810cb182f5097595e4b8bbe7b304d1853b9454e96cfb00437184e6b5ceae1ba",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20261001090000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20261001090000_social_media_partner_ids_required.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20261001090000_social_media_partner_ids_required.sql",
+        "planned_sha384": "31cda589137ab6760c186eda16c65f4afe67fb96aedb91d6aadfbebe99430674f499f4052c704c062c148f115c25d9a8",
+        "actual_sha384": "31cda589137ab6760c186eda16c65f4afe67fb96aedb91d6aadfbebe99430674f499f4052c704c062c148f115c25d9a8",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20261001100000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20261001100000_community_points.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20261001100000_community_points.sql",
+        "planned_sha384": "c2047e86b0e7c0dc154ba87f504b00e868eae08a00d4bd3947afb4bc36191c1280b2333e493cbcd8e3eea19e809d2653",
+        "actual_sha384": "c2047e86b0e7c0dc154ba87f504b00e868eae08a00d4bd3947afb4bc36191c1280b2333e493cbcd8e3eea19e809d2653",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20261001105000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20261001105000_clip_contest_twitch_forwarding.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20261001105000_clip_contest_twitch_forwarding.sql",
+        "planned_sha384": "928dec3f3afe3504ad36b7cf198625129594e1abba09e1455c3ba8f633e8992b2c9bdc8d81f89993b50a46e570165a39",
+        "actual_sha384": "928dec3f3afe3504ad36b7cf198625129594e1abba09e1455c3ba8f633e8992b2c9bdc8d81f89993b50a46e570165a39",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20261001110000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20261001110000_scout_community_source.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20261001110000_scout_community_source.sql",
+        "planned_sha384": "0d2bdc5b731e62522dc6b0260f73509b18e754ddf3c753b0588b7bd12585818db5df1b6edfb6ea3f41ca0d953907368a",
+        "actual_sha384": "0d2bdc5b731e62522dc6b0260f73509b18e754ddf3c753b0588b7bd12585818db5df1b6edfb6ea3f41ca0d953907368a",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20261001220000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20261001220000_twitch_watchdog_incidents.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20261001220000_twitch_watchdog_incidents.sql",
+        "planned_sha384": "18ccc1e87f98be5584be359e26f53b1e597c8527824bab834eddf795e96b6a2724ef1180afe6486e8951967f69641d70",
+        "actual_sha384": "18ccc1e87f98be5584be359e26f53b1e597c8527824bab834eddf795e96b6a2724ef1180afe6486e8951967f69641d70",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20261003010000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20261003010000_ai_chat_persistenz.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20261003010000_ai_chat_persistenz.sql",
+        "planned_sha384": "381a646b8cdae9e8058c4f1d049759510f5ace5d53356ea0c7bf120df296a315696c2f40114761027e3c5b8362aec439",
+        "actual_sha384": "381a646b8cdae9e8058c4f1d049759510f5ace5d53356ea0c7bf120df296a315696c2f40114761027e3c5b8362aec439",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20261003010100,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20261003010100_raid_ad_vorlauf.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20261003010100_raid_ad_vorlauf.sql",
+        "planned_sha384": "680cc376f6be626fde81dfc6c020c80599d3ad5be77f3dc066c49d8c2f6c32d26508d5ebaeaedb5c7cb3ae7c7056391d",
+        "actual_sha384": "680cc376f6be626fde81dfc6c020c80599d3ad5be77f3dc066c49d8c2f6c32d26508d5ebaeaedb5c7cb3ae7c7056391d",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20261003105000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20261003105000_presence_viewer_platform_id.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20261003105000_presence_viewer_platform_id.sql",
+        "planned_sha384": "0c3031a64d2b63e84502f855a0f2e6d44d38cbe2e23f70c7141de5ba48212d15e32a7db9cd3512e9a2ce25b84646290e",
+        "actual_sha384": "0c3031a64d2b63e84502f855a0f2e6d44d38cbe2e23f70c7141de5ba48212d15e32a7db9cd3512e9a2ce25b84646290e",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20261003110000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20261003110000_community_activity_dirty_days.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20261003110000_community_activity_dirty_days.sql",
+        "planned_sha384": "1ecda85c6a1c11792e71ee7930d11a5cecd7d262b7c62e3e7f2bb27aedf6b6c0002c1e0e10218f27cf7461adc05034f5",
+        "actual_sha384": "1ecda85c6a1c11792e71ee7930d11a5cecd7d262b7c62e3e7f2bb27aedf6b6c0002c1e0e10218f27cf7461adc05034f5",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20261003113000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20261003113000_community_scout_privacy.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20261003113000_community_scout_privacy.sql",
+        "planned_sha384": "944213d17b19f70d4c1a5ca13419546de8d63780625ee64499eb5fa2cfc1cced37205d2845e92545360052009daff050",
+        "actual_sha384": "944213d17b19f70d4c1a5ca13419546de8d63780625ee64499eb5fa2cfc1cced37205d2845e92545360052009daff050",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20261003114000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20261003114000_clip_forward_origin.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20261003114000_clip_forward_origin.sql",
+        "planned_sha384": "1d33a20d4e274747750bb53323aeb60a73abceff28d7a8cbad9f2e41f8cad85317599cb2e2212dcc02bef7d1e87e8ca4",
+        "actual_sha384": "1d33a20d4e274747750bb53323aeb60a73abceff28d7a8cbad9f2e41f8cad85317599cb2e2212dcc02bef7d1e87e8ca4",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20261003115000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20261003115000_scout_individual_outcome_cursor.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20261003115000_scout_individual_outcome_cursor.sql",
+        "planned_sha384": "d199e71b9b3f41d3fd47137b0fd27f841afea02494600ee741fb7489db3d07394e95921f80ca4e0b5041e2c7717cd7ca",
+        "actual_sha384": "d199e71b9b3f41d3fd47137b0fd27f841afea02494600ee741fb7489db3d07394e95921f80ca4e0b5041e2c7717cd7ca",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20261005120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20261005120000_title_insight_schedule.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20261005120000_title_insight_schedule.sql",
+        "planned_sha384": "6d4963ea66a6fb72c49b2589ef2fcd39abe64da697019d048d392c8f234a35d8b10caa15586e1e66370c3e499a96ea6d",
+        "actual_sha384": "6d4963ea66a6fb72c49b2589ef2fcd39abe64da697019d048d392c8f234a35d8b10caa15586e1e66370c3e499a96ea6d",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20261005120100,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20261005120100_llm_usage_attempts.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20261005120100_llm_usage_attempts.sql",
+        "planned_sha384": "4ec13916cbf194c955b55e3cd4b19348cc2d3789b2785181ac00c0bb78b380feb32585b63bacdb93025ce91fd4e201bb",
+        "actual_sha384": "4ec13916cbf194c955b55e3cd4b19348cc2d3789b2785181ac00c0bb78b380feb32585b63bacdb93025ce91fd4e201bb",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20261007042000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20261007042000_social_media_tiktok_direct_post.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20261007042000_social_media_tiktok_direct_post.sql",
+        "planned_sha384": "9f2f0f981d232e9fe392266dd0952c5960283c0c4f013e9f31e55c6fd283c9fe4f1714e7bd9fcd0883cddd1eb43dd85c",
+        "actual_sha384": "9f2f0f981d232e9fe392266dd0952c5960283c0c4f013e9f31e55c6fd283c9fe4f1714e7bd9fcd0883cddd1eb43dd85c",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20261007120000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20261007120000_social_connection_expiry.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20261007120000_social_connection_expiry.sql",
+        "planned_sha384": "8b50646d1227c0276ea13fe20bd6315d9703aaf20b35b268daaad9424b646b6e82981ef65f70f861099aac9032e13ca0",
+        "actual_sha384": "8b50646d1227c0276ea13fe20bd6315d9703aaf20b35b268daaad9424b646b6e82981ef65f70f861099aac9032e13ca0",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20261007213000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20261007213000_social_upload_visibility.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20261007213000_social_upload_visibility.sql",
+        "planned_sha384": "39c08032174b2b69e3a27b027b5f81722cf1f78054394ee23613abde3f2c5e6a32111fe2e15a926bae3a4807f2d99e94",
+        "actual_sha384": "39c08032174b2b69e3a27b027b5f81722cf1f78054394ee23613abde3f2c5e6a32111fe2e15a926bae3a4807f2d99e94",
+        "actual_success": true,
+        "matches": true
+      },
+      {
+        "version": 20261007220000,
+        "source_file": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned/rust/migrations/20261007220000_vod_archive_management.sql",
+        "live_source_file": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/migrations/20261007220000_vod_archive_management.sql",
+        "planned_sha384": "fcf62533b1a70148e523ef81158db0dc7f5e0558eaf6aef0fa64eab3ea623090f8563bb4250ac2e5db2af24744d360fe",
+        "actual_sha384": "fcf62533b1a70148e523ef81158db0dc7f5e0558eaf6aef0fa64eab3ea623090f8563bb4250ac2e5db2af24744d360fe",
+        "actual_success": true,
+        "matches": true
+      }
+    ]
+  },
+  "current_runtime_metadata": {
+    "identity": {
+      "current_user": "nathanael",
+      "current_database": "twitch_analytics",
+      "server_version": "16.14 (Ubuntu 16.14-1.pgdg24.04+1)",
+      "started_at": "2026-09-20T00:13:40.374244+00:00",
+      "config_loaded_at": "2026-10-08T04:02:49.169587+00:00"
+    },
+    "roles": [
+      {
+        "rolname": "nathanael",
+        "rolcanlogin": true,
+        "rolsuper": true,
+        "rolinherit": true,
+        "rolcreatedb": false,
+        "rolcreaterole": false,
+        "rolreplication": false,
+        "rolbypassrls": false,
+        "safe_role_settings": []
+      },
+      {
+        "rolname": "twitchanalysis",
+        "rolcanlogin": true,
+        "rolsuper": false,
+        "rolinherit": false,
+        "rolcreatedb": false,
+        "rolcreaterole": false,
+        "rolreplication": false,
+        "rolbypassrls": false,
+        "safe_role_settings": []
+      },
+      {
+        "rolname": "twitchaudit",
+        "rolcanlogin": true,
+        "rolsuper": false,
+        "rolinherit": false,
+        "rolcreatedb": false,
+        "rolcreaterole": false,
+        "rolreplication": false,
+        "rolbypassrls": false,
+        "safe_role_settings": []
+      },
+      {
+        "rolname": "twitchbot",
+        "rolcanlogin": true,
+        "rolsuper": false,
+        "rolinherit": false,
+        "rolcreatedb": false,
+        "rolcreaterole": false,
+        "rolreplication": false,
+        "rolbypassrls": false,
+        "safe_role_settings": []
+      },
+      {
+        "rolname": "twitchcollector",
+        "rolcanlogin": true,
+        "rolsuper": false,
+        "rolinherit": false,
+        "rolcreatedb": false,
+        "rolcreaterole": false,
+        "rolreplication": false,
+        "rolbypassrls": false,
+        "safe_role_settings": []
+      },
+      {
+        "rolname": "twitchcontest",
+        "rolcanlogin": true,
+        "rolsuper": false,
+        "rolinherit": false,
+        "rolcreatedb": false,
+        "rolcreaterole": false,
+        "rolreplication": false,
+        "rolbypassrls": false,
+        "safe_role_settings": []
+      },
+      {
+        "rolname": "twitchdash",
+        "rolcanlogin": true,
+        "rolsuper": false,
+        "rolinherit": false,
+        "rolcreatedb": false,
+        "rolcreaterole": false,
+        "rolreplication": false,
+        "rolbypassrls": false,
+        "safe_role_settings": []
+      },
+      {
+        "rolname": "twitchlegacy",
+        "rolcanlogin": true,
+        "rolsuper": false,
+        "rolinherit": false,
+        "rolcreatedb": false,
+        "rolcreaterole": false,
+        "rolreplication": false,
+        "rolbypassrls": false,
+        "safe_role_settings": []
+      }
+    ],
+    "memberships": [],
+    "database_settings": [
+      {
+        "rolname": "twitchbot",
+        "datname": "twitch_analytics",
+        "safe_database_settings": [
+          "search_path=public, pg_catalog"
+        ]
+      },
+      {
+        "rolname": "twitchdash",
+        "datname": "twitch_analytics",
+        "safe_database_settings": [
+          "search_path=public, pg_catalog"
+        ]
+      },
+      {
+        "rolname": "twitchlegacy",
+        "datname": "twitch_analytics",
+        "safe_database_settings": [
+          "search_path=public, pg_catalog"
+        ]
+      },
+      {
+        "rolname": "twitchcollector",
+        "datname": "twitch_analytics",
+        "safe_database_settings": [
+          "search_path=pg_catalog, public"
+        ]
+      },
+      {
+        "rolname": "twitchanalysis",
+        "datname": "twitch_analytics",
+        "safe_database_settings": [
+          "search_path=public, pg_catalog"
+        ]
+      },
+      {
+        "rolname": "twitchaudit",
+        "datname": "twitch_analytics",
+        "safe_database_settings": [
+          "search_path=public, pg_catalog"
+        ]
+      }
+    ],
+    "connection_role_counts": [
+      {
+        "usename": "nathanael",
+        "local_socket": true,
+        "backends": 1
+      },
+      {
+        "usename": "postgres",
+        "local_socket": true,
+        "backends": 1
+      },
+      {
+        "usename": "twitchbot",
+        "local_socket": true,
+        "backends": 11
+      },
+      {
+        "usename": "twitchcollector",
+        "local_socket": true,
+        "backends": 6
+      },
+      {
+        "usename": "twitchcontest",
+        "local_socket": true,
+        "backends": 3
+      },
+      {
+        "usename": "twitchdash",
+        "local_socket": true,
+        "backends": 7
+      }
+    ],
+    "database_schema_rights": [
+      {
+        "rolname": "twitchcollector",
+        "connect_twitch_analytics": true,
+        "public_usage": true,
+        "public_create": false
+      },
+      {
+        "rolname": "twitchcontest",
+        "connect_twitch_analytics": true,
+        "public_usage": true,
+        "public_create": false
+      },
+      {
+        "rolname": "twitchanalysis",
+        "connect_twitch_analytics": true,
+        "public_usage": true,
+        "public_create": false
+      },
+      {
+        "rolname": "twitchaudit",
+        "connect_twitch_analytics": true,
+        "public_usage": true,
+        "public_create": false
+      },
+      {
+        "rolname": "twitchbot",
+        "connect_twitch_analytics": true,
+        "public_usage": true,
+        "public_create": false
+      },
+      {
+        "rolname": "twitchdash",
+        "connect_twitch_analytics": true,
+        "public_usage": true,
+        "public_create": false
+      },
+      {
+        "rolname": "twitchlegacy",
+        "connect_twitch_analytics": true,
+        "public_usage": true,
+        "public_create": false
+      }
+    ],
+    "hba_files": {
+      "main": "/etc/postgresql/16/main/pg_hba.conf",
+      "ident": "/etc/postgresql/16/main/pg_ident.conf",
+      "config": "/etc/postgresql/16/main/postgresql.conf",
+      "listen_addresses": "localhost"
+    },
+    "hba_parse_error_count": 0,
+    "ident_parse_error_count": 0,
+    "hba_rules": [
+      {
+        "rule_number": 1,
+        "file_name": "/etc/postgresql/16/main/pg_hba.conf",
+        "line_number": 1,
+        "type": "local",
+        "database": [
+          "twitch_analytics"
+        ],
+        "user_name": [
+          "twitchanalysis"
+        ],
+        "address": null,
+        "netmask": null,
+        "auth_method": "peer",
+        "peer_map_options": [
+          "map=twitch_analysis_writer"
+        ]
+      },
+      {
+        "rule_number": 2,
+        "file_name": "/etc/postgresql/16/main/pg_hba.conf",
+        "line_number": 2,
+        "type": "local",
+        "database": [
+          "all"
+        ],
+        "user_name": [
+          "twitchanalysis"
+        ],
+        "address": null,
+        "netmask": null,
+        "auth_method": "reject",
+        "peer_map_options": []
+      },
+      {
+        "rule_number": 3,
+        "file_name": "/etc/postgresql/16/main/pg_hba.conf",
+        "line_number": 3,
+        "type": "host",
+        "database": [
+          "all"
+        ],
+        "user_name": [
+          "twitchanalysis"
+        ],
+        "address": "::",
+        "netmask": "::",
+        "auth_method": "reject",
+        "peer_map_options": []
+      },
+      {
+        "rule_number": 4,
+        "file_name": "/etc/postgresql/16/main/pg_hba.conf",
+        "line_number": 4,
+        "type": "host",
+        "database": [
+          "all"
+        ],
+        "user_name": [
+          "twitchanalysis"
+        ],
+        "address": "0.0.0.0",
+        "netmask": "0.0.0.0",
+        "auth_method": "reject",
+        "peer_map_options": []
+      },
+      {
+        "rule_number": 5,
+        "file_name": "/etc/postgresql/16/main/pg_hba.conf",
+        "line_number": 5,
+        "type": "local",
+        "database": [
+          "twitch_analytics"
+        ],
+        "user_name": [
+          "twitchaudit"
+        ],
+        "address": null,
+        "netmask": null,
+        "auth_method": "peer",
+        "peer_map_options": []
+      },
+      {
+        "rule_number": 6,
+        "file_name": "/etc/postgresql/16/main/pg_hba.conf",
+        "line_number": 6,
+        "type": "local",
+        "database": [
+          "all"
+        ],
+        "user_name": [
+          "twitchaudit"
+        ],
+        "address": null,
+        "netmask": null,
+        "auth_method": "reject",
+        "peer_map_options": []
+      },
+      {
+        "rule_number": 7,
+        "file_name": "/etc/postgresql/16/main/pg_hba.conf",
+        "line_number": 7,
+        "type": "host",
+        "database": [
+          "all"
+        ],
+        "user_name": [
+          "twitchaudit"
+        ],
+        "address": "::",
+        "netmask": "::",
+        "auth_method": "reject",
+        "peer_map_options": []
+      },
+      {
+        "rule_number": 8,
+        "file_name": "/etc/postgresql/16/main/pg_hba.conf",
+        "line_number": 8,
+        "type": "host",
+        "database": [
+          "all"
+        ],
+        "user_name": [
+          "twitchaudit"
+        ],
+        "address": "0.0.0.0",
+        "netmask": "0.0.0.0",
+        "auth_method": "reject",
+        "peer_map_options": []
+      },
+      {
+        "rule_number": 9,
+        "file_name": "/etc/postgresql/16/main/pg_hba.conf",
+        "line_number": 9,
+        "type": "local",
+        "database": [
+          "twitch_analytics"
+        ],
+        "user_name": [
+          "twitchcontest"
+        ],
+        "address": null,
+        "netmask": null,
+        "auth_method": "peer",
+        "peer_map_options": [
+          "map=twitch_contest_writer"
+        ]
+      },
+      {
+        "rule_number": 10,
+        "file_name": "/etc/postgresql/16/main/pg_hba.conf",
+        "line_number": 11,
+        "type": "local",
+        "database": [
+          "twitch_analytics"
+        ],
+        "user_name": [
+          "twitchcollector"
+        ],
+        "address": null,
+        "netmask": null,
+        "auth_method": "peer",
+        "peer_map_options": []
+      },
+      {
+        "rule_number": 11,
+        "file_name": "/etc/postgresql/16/main/pg_hba.conf",
+        "line_number": 12,
+        "type": "local",
+        "database": [
+          "all"
+        ],
+        "user_name": [
+          "twitchcollector"
+        ],
+        "address": null,
+        "netmask": null,
+        "auth_method": "reject",
+        "peer_map_options": []
+      },
+      {
+        "rule_number": 13,
+        "file_name": "/etc/postgresql/16/main/pg_hba-twitch.conf",
+        "line_number": 3,
+        "type": "local",
+        "database": [
+          "twitch_analytics"
+        ],
+        "user_name": [
+          "twitchbot"
+        ],
+        "address": null,
+        "netmask": null,
+        "auth_method": "peer",
+        "peer_map_options": []
+      },
+      {
+        "rule_number": 14,
+        "file_name": "/etc/postgresql/16/main/pg_hba-twitch.conf",
+        "line_number": 4,
+        "type": "local",
+        "database": [
+          "deadlock"
+        ],
+        "user_name": [
+          "twitchbot"
+        ],
+        "address": null,
+        "netmask": null,
+        "auth_method": "peer",
+        "peer_map_options": []
+      },
+      {
+        "rule_number": 15,
+        "file_name": "/etc/postgresql/16/main/pg_hba-twitch.conf",
+        "line_number": 5,
+        "type": "local",
+        "database": [
+          "all"
+        ],
+        "user_name": [
+          "twitchbot"
+        ],
+        "address": null,
+        "netmask": null,
+        "auth_method": "reject",
+        "peer_map_options": []
+      },
+      {
+        "rule_number": 16,
+        "file_name": "/etc/postgresql/16/main/pg_hba-twitch.conf",
+        "line_number": 6,
+        "type": "local",
+        "database": [
+          "twitch_analytics"
+        ],
+        "user_name": [
+          "twitchdash"
+        ],
+        "address": null,
+        "netmask": null,
+        "auth_method": "peer",
+        "peer_map_options": []
+      },
+      {
+        "rule_number": 17,
+        "file_name": "/etc/postgresql/16/main/pg_hba-twitch.conf",
+        "line_number": 7,
+        "type": "local",
+        "database": [
+          "deadlock"
+        ],
+        "user_name": [
+          "twitchdash"
+        ],
+        "address": null,
+        "netmask": null,
+        "auth_method": "peer",
+        "peer_map_options": []
+      },
+      {
+        "rule_number": 18,
+        "file_name": "/etc/postgresql/16/main/pg_hba-twitch.conf",
+        "line_number": 8,
+        "type": "local",
+        "database": [
+          "all"
+        ],
+        "user_name": [
+          "twitchdash"
+        ],
+        "address": null,
+        "netmask": null,
+        "auth_method": "reject",
+        "peer_map_options": []
+      },
+      {
+        "rule_number": 19,
+        "file_name": "/etc/postgresql/16/main/pg_hba-twitch.conf",
+        "line_number": 12,
+        "type": "host",
+        "database": [
+          "twitch_analytics"
+        ],
+        "user_name": [
+          "twitchlegacy"
+        ],
+        "address": "127.0.0.1",
+        "netmask": "255.255.255.255",
+        "auth_method": "scram-sha-256",
+        "peer_map_options": []
+      },
+      {
+        "rule_number": 20,
+        "file_name": "/etc/postgresql/16/main/pg_hba-twitch.conf",
+        "line_number": 13,
+        "type": "host",
+        "database": [
+          "all"
+        ],
+        "user_name": [
+          "twitchlegacy"
+        ],
+        "address": "127.0.0.1",
+        "netmask": "255.255.255.255",
+        "auth_method": "reject",
+        "peer_map_options": []
+      },
+      {
+        "rule_number": 21,
+        "file_name": "/etc/postgresql/16/main/pg_hba-twitch.conf",
+        "line_number": 14,
+        "type": "host",
+        "database": [
+          "twitch_analytics"
+        ],
+        "user_name": [
+          "twitchlegacy"
+        ],
+        "address": "::1",
+        "netmask": "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+        "auth_method": "scram-sha-256",
+        "peer_map_options": []
+      },
+      {
+        "rule_number": 22,
+        "file_name": "/etc/postgresql/16/main/pg_hba-twitch.conf",
+        "line_number": 15,
+        "type": "host",
+        "database": [
+          "all"
+        ],
+        "user_name": [
+          "twitchlegacy"
+        ],
+        "address": "::1",
+        "netmask": "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+        "auth_method": "reject",
+        "peer_map_options": []
+      }
+    ],
+    "ident_maps": [
+      {
+        "map_name": "twitch_analysis_writer",
+        "sys_name": "twitchdash",
+        "pg_username": "twitchanalysis"
+      },
+      {
+        "map_name": "twitch_contest_writer",
+        "sys_name": "twitchdash",
+        "pg_username": "twitchcontest"
+      }
+    ],
+    "critical_rights": [
+      {
+        "relname": "_sqlx_migrations",
+        "rolname": "twitchanalysis",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "_sqlx_migrations",
+        "rolname": "twitchaudit",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "_sqlx_migrations",
+        "rolname": "twitchbot",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "_sqlx_migrations",
+        "rolname": "twitchcollector",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "_sqlx_migrations",
+        "rolname": "twitchcontest",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "_sqlx_migrations",
+        "rolname": "twitchdash",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "_sqlx_migrations",
+        "rolname": "twitchlegacy",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "dashboard_feedback",
+        "rolname": "twitchanalysis",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "dashboard_feedback",
+        "rolname": "twitchaudit",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "dashboard_feedback",
+        "rolname": "twitchbot",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "dashboard_feedback",
+        "rolname": "twitchcollector",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "dashboard_feedback",
+        "rolname": "twitchcontest",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "dashboard_feedback",
+        "rolname": "twitchdash",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE"
+        ]
+      },
+      {
+        "relname": "dashboard_feedback",
+        "rolname": "twitchlegacy",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "dashboard_sessions",
+        "rolname": "twitchanalysis",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "dashboard_sessions",
+        "rolname": "twitchaudit",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "dashboard_sessions",
+        "rolname": "twitchbot",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "dashboard_sessions",
+        "rolname": "twitchcollector",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "dashboard_sessions",
+        "rolname": "twitchcontest",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "dashboard_sessions",
+        "rolname": "twitchdash",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE"
+        ]
+      },
+      {
+        "relname": "dashboard_sessions",
+        "rolname": "twitchlegacy",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE"
+        ]
+      },
+      {
+        "relname": "llm_usage",
+        "rolname": "twitchanalysis",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE"
+        ]
+      },
+      {
+        "relname": "llm_usage",
+        "rolname": "twitchaudit",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE"
+        ]
+      },
+      {
+        "relname": "llm_usage",
+        "rolname": "twitchbot",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE"
+        ]
+      },
+      {
+        "relname": "llm_usage",
+        "rolname": "twitchcollector",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "llm_usage",
+        "rolname": "twitchcontest",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "llm_usage",
+        "rolname": "twitchdash",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE"
+        ]
+      },
+      {
+        "relname": "llm_usage",
+        "rolname": "twitchlegacy",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE"
+        ]
+      },
+      {
+        "relname": "partner_effort_weekly_quest_evaluations",
+        "rolname": "twitchanalysis",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "partner_effort_weekly_quest_evaluations",
+        "rolname": "twitchaudit",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "partner_effort_weekly_quest_evaluations",
+        "rolname": "twitchbot",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT"
+        ]
+      },
+      {
+        "relname": "partner_effort_weekly_quest_evaluations",
+        "rolname": "twitchcollector",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "partner_effort_weekly_quest_evaluations",
+        "rolname": "twitchcontest",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "partner_effort_weekly_quest_evaluations",
+        "rolname": "twitchdash",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT"
+        ]
+      },
+      {
+        "relname": "partner_effort_weekly_quest_evaluations",
+        "rolname": "twitchlegacy",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT"
+        ]
+      },
+      {
+        "relname": "twitch_ai_chat_hourly",
+        "rolname": "twitchanalysis",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE"
+        ]
+      },
+      {
+        "relname": "twitch_ai_chat_hourly",
+        "rolname": "twitchaudit",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_ai_chat_hourly",
+        "rolname": "twitchbot",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_ai_chat_hourly",
+        "rolname": "twitchcollector",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_ai_chat_hourly",
+        "rolname": "twitchcontest",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_ai_chat_hourly",
+        "rolname": "twitchdash",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_ai_chat_hourly",
+        "rolname": "twitchlegacy",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_ai_chat_reservations",
+        "rolname": "twitchanalysis",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE"
+        ]
+      },
+      {
+        "relname": "twitch_ai_chat_reservations",
+        "rolname": "twitchaudit",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_ai_chat_reservations",
+        "rolname": "twitchbot",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_ai_chat_reservations",
+        "rolname": "twitchcollector",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_ai_chat_reservations",
+        "rolname": "twitchcontest",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_ai_chat_reservations",
+        "rolname": "twitchdash",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_ai_chat_reservations",
+        "rolname": "twitchlegacy",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_ai_chat_sessions",
+        "rolname": "twitchanalysis",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE"
+        ]
+      },
+      {
+        "relname": "twitch_ai_chat_sessions",
+        "rolname": "twitchaudit",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_ai_chat_sessions",
+        "rolname": "twitchbot",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_ai_chat_sessions",
+        "rolname": "twitchcollector",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_ai_chat_sessions",
+        "rolname": "twitchcontest",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_ai_chat_sessions",
+        "rolname": "twitchdash",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_ai_chat_sessions",
+        "rolname": "twitchlegacy",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_bot_tokens",
+        "rolname": "twitchanalysis",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_bot_tokens",
+        "rolname": "twitchaudit",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_bot_tokens",
+        "rolname": "twitchbot",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE"
+        ]
+      },
+      {
+        "relname": "twitch_bot_tokens",
+        "rolname": "twitchcollector",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_bot_tokens",
+        "rolname": "twitchcontest",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_bot_tokens",
+        "rolname": "twitchdash",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_bot_tokens",
+        "rolname": "twitchlegacy",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_clip_contest_forwards",
+        "rolname": "twitchanalysis",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_clip_contest_forwards",
+        "rolname": "twitchaudit",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_clip_contest_forwards",
+        "rolname": "twitchbot",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE"
+        ]
+      },
+      {
+        "relname": "twitch_clip_contest_forwards",
+        "rolname": "twitchcollector",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_clip_contest_forwards",
+        "rolname": "twitchcontest",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_clip_contest_forwards",
+        "rolname": "twitchdash",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT"
+        ]
+      },
+      {
+        "relname": "twitch_clip_contest_forwards",
+        "rolname": "twitchlegacy",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE"
+        ]
+      },
+      {
+        "relname": "twitch_community_points_dirty_days",
+        "rolname": "twitchanalysis",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_community_points_dirty_days",
+        "rolname": "twitchaudit",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_community_points_dirty_days",
+        "rolname": "twitchbot",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "DELETE"
+        ]
+      },
+      {
+        "relname": "twitch_community_points_dirty_days",
+        "rolname": "twitchcollector",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_community_points_dirty_days",
+        "rolname": "twitchcontest",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_community_points_dirty_days",
+        "rolname": "twitchdash",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_community_points_dirty_days",
+        "rolname": "twitchlegacy",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_community_points_streamer_daily",
+        "rolname": "twitchanalysis",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_community_points_streamer_daily",
+        "rolname": "twitchaudit",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_community_points_streamer_daily",
+        "rolname": "twitchbot",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE"
+        ]
+      },
+      {
+        "relname": "twitch_community_points_streamer_daily",
+        "rolname": "twitchcollector",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_community_points_streamer_daily",
+        "rolname": "twitchcontest",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_community_points_streamer_daily",
+        "rolname": "twitchdash",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT"
+        ]
+      },
+      {
+        "relname": "twitch_community_points_streamer_daily",
+        "rolname": "twitchlegacy",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE"
+        ]
+      },
+      {
+        "relname": "twitch_community_points_viewer_daily",
+        "rolname": "twitchanalysis",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_community_points_viewer_daily",
+        "rolname": "twitchaudit",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_community_points_viewer_daily",
+        "rolname": "twitchbot",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE"
+        ]
+      },
+      {
+        "relname": "twitch_community_points_viewer_daily",
+        "rolname": "twitchcollector",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_community_points_viewer_daily",
+        "rolname": "twitchcontest",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_community_points_viewer_daily",
+        "rolname": "twitchdash",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT"
+        ]
+      },
+      {
+        "relname": "twitch_community_points_viewer_daily",
+        "rolname": "twitchlegacy",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE"
+        ]
+      },
+      {
+        "relname": "twitch_raid_ad_vorlauf",
+        "rolname": "twitchanalysis",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_raid_ad_vorlauf",
+        "rolname": "twitchaudit",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_raid_ad_vorlauf",
+        "rolname": "twitchbot",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE"
+        ]
+      },
+      {
+        "relname": "twitch_raid_ad_vorlauf",
+        "rolname": "twitchcollector",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_raid_ad_vorlauf",
+        "rolname": "twitchcontest",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_raid_ad_vorlauf",
+        "rolname": "twitchdash",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_raid_ad_vorlauf",
+        "rolname": "twitchlegacy",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_raid_arrival_tracking",
+        "rolname": "twitchanalysis",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_raid_arrival_tracking",
+        "rolname": "twitchaudit",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_raid_arrival_tracking",
+        "rolname": "twitchbot",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE"
+        ]
+      },
+      {
+        "relname": "twitch_raid_arrival_tracking",
+        "rolname": "twitchcollector",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_raid_arrival_tracking",
+        "rolname": "twitchcontest",
+        "owner": "postgres",
+        "privileges": []
+      },
+      {
+        "relname": "twitch_raid_arrival_tracking",
+        "rolname": "twitchdash",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE"
+        ]
+      },
+      {
+        "relname": "twitch_raid_arrival_tracking",
+        "rolname": "twitchlegacy",
+        "owner": "postgres",
+        "privileges": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE"
+        ]
+      }
+    ],
+    "usage_sequence_rights": [
+      {
+        "rolname": "twitchcollector",
+        "privileges": []
+      },
+      {
+        "rolname": "twitchcontest",
+        "privileges": []
+      },
+      {
+        "rolname": "twitchanalysis",
+        "privileges": [
+          "USAGE",
+          "SELECT"
+        ]
+      },
+      {
+        "rolname": "twitchaudit",
+        "privileges": [
+          "USAGE",
+          "SELECT"
+        ]
+      },
+      {
+        "rolname": "twitchbot",
+        "privileges": [
+          "USAGE",
+          "SELECT"
+        ]
+      },
+      {
+        "rolname": "twitchdash",
+        "privileges": [
+          "USAGE",
+          "SELECT"
+        ]
+      },
+      {
+        "rolname": "twitchlegacy",
+        "privileges": [
+          "USAGE",
+          "SELECT"
+        ]
+      }
+    ],
+    "raid_function": [
+      {
+        "name": "finish_raid_ad_vorlauf_on_arrival()",
+        "prosecdef": true,
+        "owner": "postgres",
+        "safe_function_settings": [
+          "search_path=pg_catalog"
+        ],
+        "acl": "{postgres=X/postgres}"
+      }
+    ],
+    "raid_trigger": [
+      {
+        "tgname": "finish_raid_ad_vorlauf_on_arrival",
+        "tgenabled": "O",
+        "tgtype": 5,
+        "no_condition": true,
+        "tgnargs": 0,
+        "tgisinternal": false
+      }
+    ],
+    "partner_role_function": [
+      {
+        "name": "twitch_apply_partner_challenge_roles()",
+        "owner": "postgres",
+        "prosecdef": false,
+        "safe_function_settings": [
+          "search_path=pg_catalog, public"
+        ]
+      }
+    ],
+    "wal_safety_settings": {
+      "archive_mode": "off",
+      "wal_level": "replica",
+      "data_checksums": "off"
+    }
+  },
+  "service_process_identities": [
+    {
+      "unit": "deadlock-twitch-bot-rust",
+      "pid": 1830251,
+      "expected_os_user": "twitchbot",
+      "expected_uid": 995,
+      "process_uid": [
+        995,
+        995,
+        995,
+        995
+      ],
+      "process_gid": [
+        984,
+        984,
+        984,
+        984
+      ],
+      "identity_matches": true
+    },
+    {
+      "unit": "deadlock-twitch-dashboard-rust",
+      "pid": 1830151,
+      "expected_os_user": "twitchdash",
+      "expected_uid": 991,
+      "process_uid": [
+        991,
+        991,
+        991,
+        991
+      ],
+      "process_gid": [
+        983,
+        983,
+        983,
+        983
+      ],
+      "identity_matches": true
+    },
+    {
+      "unit": "deadlock-twitch-stream-coaching-watch",
+      "pid": 1830765,
+      "expected_os_user": "twitchaudit",
+      "expected_uid": 987,
+      "process_uid": [
+        987,
+        987,
+        987,
+        987
+      ],
+      "process_gid": [
+        980,
+        980,
+        980,
+        980
+      ],
+      "identity_matches": true
+    },
+    {
+      "unit": "tb-category-collector",
+      "pid": 1830776,
+      "expected_os_user": "twitchcollector",
+      "expected_uid": 985,
+      "process_uid": [
+        985,
+        985,
+        985,
+        985
+      ],
+      "process_gid": [
+        977,
+        977,
+        977,
+        977
+      ],
+      "identity_matches": true
+    }
+  ],
+  "source_bindings": {
+    "installed_wrapper": {
+      "path": "/usr/local/bin/deploy-twitch-release",
+      "matches_planned": true,
+      "sha256": "15fc5400d38955c7baa3a77762c04ec1bdc379ce3b3d9f6e7c47c19c9beca223"
+    },
+    "installed_installer": {
+      "path": "/usr/local/sbin/install-twitch-release",
+      "matches_planned": true,
+      "sha256": "f6fcd9fa45b47498b4df36a4fbcf7984acb90402013147927961ce1270679fe3"
+    },
+    "installed_migration_unit": {
+      "path": "/etc/systemd/system/deadlock-twitch-migrate.service",
+      "matches_planned": true,
+      "sha256": "e284023474722deaaf1ca90219df8c98f2367b6294ac9a7f6c35cd0a4a977132"
+    },
+    "live_source_matches": 195,
+    "live_source_mismatches": 0,
+    "additional_live_source_checks": [
+      {
+        "planned_source": "ops/systemd/category-runtime-roles.sql",
+        "live_path": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/ops/systemd/category-runtime-roles.sql",
+        "matches_planned": true,
+        "sha256": "96c84ff16017b5fafc60f2e0db7b20088d78e0e48dfea6b8e01d4a1a1ec7d040"
+      },
+      {
+        "planned_source": "rust/scripts/run_tb_bot_service.sh",
+        "live_path": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/scripts/run_tb_bot_service.sh",
+        "matches_planned": true,
+        "sha256": "b49b8047a653dd655f5f000adf50591f02f2f6592433a5edab6b3dd8a0336ed7"
+      },
+      {
+        "planned_source": "rust/scripts/run_tb_dashboard_service.sh",
+        "live_path": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/scripts/run_tb_dashboard_service.sh",
+        "matches_planned": true,
+        "sha256": "962e30ac6ab3dba411b7af718fcb5ba71bb1c2e24828545d2ee18c39fe9b03a7"
+      },
+      {
+        "planned_source": "rust/scripts/run_stream_audit_service.sh",
+        "live_path": "/opt/deadlock/twitch/releases/3341098f3a953e231c0ec5731141996b10f1b9b6/rust/scripts/run_stream_audit_service.sh",
+        "matches_planned": true,
+        "sha256": "5fcb003de149ee1cbaeef8f54b50b0b3f753abdc9fcba9859bc8fc28572fcca0"
+      }
+    ],
+    "recovery_setup": [
+      {
+        "path": "/usr/local/bin/recover-twitch-llm-usage",
+        "matches_planned": true,
+        "sha256": "9557c22646e762990281997c229c24609fc5d62598b8400c5747504f433bf7b3"
+      },
+      {
+        "path": "/etc/systemd/system/deadlock-twitch-llm-usage-recover.service",
+        "matches_planned": true,
+        "sha256": "235320d30e8c570c4bb03c9a08c53ceadd3926aa74e4138e6d73ef93b1a73f70"
+      },
+      {
+        "path": "/etc/systemd/system/deadlock-twitch-llm-usage-recover.timer",
+        "matches_planned": true,
+        "sha256": "e62d49213c2b7238726f1e3266028ee14fe100c9c29b8044ed024c0e98984224"
+      },
+      {
+        "path": "/etc/deadlock/twitch-llm-usage-recover.toml",
+        "matches_planned": true,
+        "sha256": "036db402bbaa1f6432b0b1244b17d63832ebcde1e71849fb00e1f14d2b09a116"
+      },
+      {
+        "path": "/etc/deadlock/twitch-llm-usage-audit.toml",
+        "matches_planned": true,
+        "sha256": "036db402bbaa1f6432b0b1244b17d63832ebcde1e71849fb00e1f14d2b09a116"
+      }
+    ]
+  },
+  "limits": [
+    "Neue Peer-Verbindungen unter den Linux-Dienstidentitäten wurden nicht hergestellt. Eine vorhandene Regel ist allein kein erfolgreicher Neuanmeldungsbeweis.",
+    "Installierte geschützte ENV-Konfigurationen, Geheimnisse, Passwörter und Nutzerdaten wurden nicht gelesen. Rolleneinstellungen wurden ausschließlich über sichere ausgewählte Werte und Anzahlen geprüft.",
+    "Timerdateien und Aktivierungslink sind vorhanden; aktueller Timer-Aktivitätszustand und erfolgreicher Lauf sind hier nicht belegt.",
+    "Keine neuen Builds, Tests oder allgemeine Code-Reviewrunde. Keine positive Livewirkung der Anwendungskorrekturen behauptet.",
+    "Keine Wiederherstellung ausgeführt oder garantiert. Prüfung ist an den geplanten SHA und die zeitgestempelten Metadatenschnappschüsse gebunden."
+  ],
+  "required_later_checks": [
+    "Unmittelbar vor einer späteren Entscheidung frisches Remote-main und relevante Metadaten vergleichen; Änderungen dieses Berichts nicht auf andere SHAs übertragen.",
+    "Alle neuen Releaseartefakte am festen SHA prüfen. Nur explizit ausgewählte Dienste neu starten; PID-Wechsel, exe, SHA und NRestarts anschließend belegen.",
+    "Neue Fehler ausschließlich aggregiert mit Journalpriorität err nachweisen, keine Rohlogs oder Nutzerdaten ausgeben.",
+    "Frische erlaubte Peer-Verbindungen und Metadatenrechte für Bot, Dashboard, Wettbewerb, Analyse und Auditverbrauch positiv sowie unzulässige Zugänge negativ prüfen.",
+    "Kontofreie Dashboardwege http://127.0.0.1:8769/healthz und http://127.0.0.1:8769/readyz mit Content-Type und JSON-Inhalt prüfen, ohne Kontenaktionen.",
+    "SQLx-Versionen und Checksummen erneut prüfen; Verbrauchsnachlieferungserfolg nur über begrenzte Metadaten nachweisen."
+  ],
+  "live_deploy_proof": {
+    "performed": false,
+    "reason": "Kein Deploy, kein Neustart und kein Nachher-Funktionsbeweis. Kein LIVEBEWEIS[DV-1] behauptet."
+  },
+  "evidence_files": [
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/acl-query.json",
+      "sha256": "389c0fe982d2eb0a5b76edb7f55cb6cdfeb64c909eb5632f7459f22ebdda0235",
+      "bytes": 541
+    },
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/acl-snapshot.json",
+      "sha256": "e7baf10d838a3ec0dc622098d31b571f6e31568babfd7b6bb0a5fc92a6bbf457",
+      "bytes": 97808
+    },
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/acl-snapshot.sql",
+      "sha256": "0d39275d7dd222391db64fd1cce0f4db0b9f13cc5fdbf150792e96c2d89dd450",
+      "bytes": 1598
+    },
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/backup-release-file-metadata.json",
+      "sha256": "75e8eec6e33bc5f10da92d5128c84c58df6bb1ae761ff253fc2d9b44e1e09980",
+      "bytes": 12113
+    },
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/closing-observations.json",
+      "sha256": "6d5f22c318f7cad3d3d296dc04235c21143d1f348dec81ecfbaa119401563630",
+      "bytes": 1808
+    },
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/installed-path-metadata.json",
+      "sha256": "73233eb6ac084f339ca9521ed39664b4683c3c037144e604947f3340918949b0",
+      "bytes": 1275
+    },
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/installed-recovery-comparison.json",
+      "sha256": "f4ffa60fbdb316d40f0b236fcc0ae09689d0d83c236128bf2258e27b191cf769",
+      "bytes": 921
+    },
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/live-elf-revisions.json",
+      "sha256": "62e5aad16b504b08b05ebfecc8bb9fad7dda3cbcf47c33ba4d13d84b87012161",
+      "bytes": 2264
+    },
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/live-extra-source-comparison.json",
+      "sha256": "8a8c18f454d98b7ebe1c471eff58da1d859f69cb5b4ea5d2185681f5087534e0",
+      "bytes": 1255
+    },
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/live-source-comparison.json",
+      "sha256": "f9144a5638620381ad6bf71fe8250d3b3f1c25857bece46bdc4071a740f692cc",
+      "bytes": 74416
+    },
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/planned-source-manifest.json",
+      "sha256": "195d6a2d9ea64610ef81bfafce5b1e6cdf369f2f2f728ae7c56d468ede538786",
+      "bytes": 65470
+    },
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/rollback-artifact-integrity.json",
+      "sha256": "a2f72b26e95d63987f4d3b23c72042323c88dee5a0da7c236ad5b16309ecc106",
+      "bytes": 69557
+    },
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/runtime-metadata-executed.sql",
+      "sha256": "6cd370bae98e3330dab2c49d6b07e704ed2d3e6ae17f8398bd3a3d397e07df57",
+      "bytes": 5998
+    },
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/runtime-metadata.json",
+      "sha256": "c7c97cb92acd181d590a214e1ea7438fceaf2a8c7827f790c1cbe4baf63b51ec",
+      "bytes": 31678
+    },
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/runtime-metadata.sql",
+      "sha256": "1493ced6020dfe345b90180b5b3cf01ddb6cbe4e9d6fa89e07f972bd03c16d84",
+      "bytes": 5506
+    },
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/runtime-query.json",
+      "sha256": "259f5a836abbbd2604e2db41afc1063a7ca496c145e4610724ef9a2b1745fc29",
+      "bytes": 554
+    },
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/service-process-identities.json",
+      "sha256": "0ec3b095af24d4692c77643074433b83e09ecca195d78e15b3a06e6d59db70e9",
+      "bytes": 1236
+    },
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/sqlx-comparison.json",
+      "sha256": "7c2ea35afca4625f064118c907953db9f20b7b4f9f86d63e40e0d6e48b8e6f5d",
+      "bytes": 371
+    },
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/sqlx-metadata.txt",
+      "sha256": "6d4c833e983dac51e6416e363cc5f19b1446fa96b9f372a18586380566f59f9a",
+      "bytes": 20535
+    },
+    {
+      "path": "/tmp/tb-deploy-pruefung-02-emf9nl_2/sqlx-query.json",
+      "sha256": "b35decde292a5b8fd5e7f095c838d7a8a1cbd761edf61e411203513775421b9c",
+      "bytes": 742
+    }
+  ]
+}
