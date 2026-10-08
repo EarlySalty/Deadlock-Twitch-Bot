@@ -347,7 +347,9 @@ pub(crate) async fn broker_post(path: &str, token: &str, payload: &Value) -> Opt
 /// Fallback. Spiegelt Pythons `_safe_internal_redirect`/`_canonical_post_login`.
 fn normalize_next(raw: Option<&str>) -> String {
     let path = crate::auth::oauth_login::sanitize_next_path(raw);
-    if path == crate::auth::oauth_login::DEFAULT_POST_LOGIN_PATH {
+    if path == crate::auth::oauth_login::DEFAULT_POST_LOGIN_PATH
+        && raw.map(str::trim) != Some(crate::auth::oauth_login::DEFAULT_POST_LOGIN_PATH)
+    {
         FALLBACK_PATH.to_string()
     } else {
         path
@@ -391,6 +393,14 @@ mod tests {
 
     #[test]
     fn next_normalisierung_blockt_offene_redirects() {
+        assert_eq!(
+            normalize_next(Some("/twitch/dashboard")),
+            "/twitch/dashboard"
+        );
+        assert_eq!(
+            normalize_next(Some(" /twitch/dashboard ")),
+            "/twitch/dashboard"
+        );
         assert_eq!(
             normalize_next(Some("/twitch/verwaltung")),
             "/twitch/verwaltung"

@@ -874,6 +874,9 @@ pub async fn set_discord_profile(
     if uid.is_empty() || !uid.bytes().all(|c| c.is_ascii_digit()) {
         return Ok(false);
     }
+    sqlx::query("SELECT pg_advisory_xact_lock(92301, 0)")
+        .execute(&mut *tx)
+        .await?;
     if let Some(did) = discord_user_id.filter(|id| !id.is_empty()) {
         // Gleiche Discord-ID auch bei gleichzeitigem Rücksprung aus zwei Tabs nur einmal binden.
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 92301))")
@@ -1880,6 +1883,49 @@ mod tests {
         assert_eq!(row.0, Some(1));
     }
 
+    #[tokio::test]
+    async fn discord_profile_swaps_serialize_before_identity_locks() {
+        let db = crate::test_postgres::TestPostgres::start().await;
+        sqlx::raw_sql("CREATE TABLE twitch_streamers (twitch_login TEXT PRIMARY KEY, twitch_user_id TEXT);
+            CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT,
+                discord_user_id TEXT UNIQUE, discord_display_name TEXT, is_on_discord INTEGER,
+                created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ);
+            INSERT INTO twitch_streamers VALUES ('first', '111'), ('second', '222');
+            INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id)
+                VALUES ('111', 'first', '11'), ('222', 'second', '22');")
+            .execute(&db.pool).await.unwrap();
+        let mut blocker = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT pg_advisory_xact_lock(92301, 0)")
+            .execute(&mut *blocker)
+            .await
+            .unwrap();
+        let pool = db.pool.clone();
+        let mut first = tokio::spawn(async move {
+            set_discord_profile(&pool, "first", Some("22"), Some("D2"), true, Some("111")).await
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut first)
+                .await
+                .is_err()
+        );
+        sqlx::query("SELECT twitch_user_id FROM twitch_streamer_identities ORDER BY twitch_user_id FOR UPDATE NOWAIT")
+            .execute(&mut *blocker).await.unwrap();
+        blocker.commit().await.unwrap();
+        let second = set_discord_profile(&db.pool, "second", Some("11"), Some("D1"), true, None);
+        let (first, second) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(first, second)
+        })
+        .await
+        .unwrap();
+        assert!(first.unwrap().unwrap());
+        assert!(second.unwrap());
+        let rows: Vec<(String, String)> = sqlx::query_as("SELECT twitch_user_id, discord_user_id FROM twitch_streamer_identities ORDER BY twitch_user_id")
+            .fetch_all(&db.pool).await.unwrap();
+        assert_eq!(
+            rows,
+            vec![("111".into(), "22".into()), ("222".into(), "11".into())]
+        );
+    }
     #[tokio::test]
     async fn set_discord_profile_setzt_felder() {
         let dsn = db_dsn_or_skip!();
