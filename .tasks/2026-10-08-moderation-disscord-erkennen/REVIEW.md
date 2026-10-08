@@ -44,4 +44,12 @@ Gate-Protokoll: `/tmp/claude-1000/-home-nathanael--worktrees-tb-moderation-dissc
 
 - Clippy: `SQLX_OFFLINE=true /home/nathanael/.local/bin/cargo-slot clippy --manifest-path /home/nathanael/.worktrees/tb-moderation-disscord-erkennen/rust/Cargo.toml -p tb-chat --lib --no-deps --jobs 3`. Exit 0, eine Warnung zum bestehenden `std::fs::create_dir_all(&dir)` in scam_pitch.rs. Keine Warnung unterdrückt und keine sachfremde Änderung vorgenommen. Protokoll: `/tmp/claude-1000/-home-nathanael--worktrees-tb-moderation-disscord-erkennen/6447a5b0-e8d1-4d44-8a24-04633736070f/tasks/b51goossx.output`.
 
-Runde 2 abgeschlossen. Kein Merge, Push, Deploy oder Worktree-Cleanup durch den Fixer. Das nach dem Gate ergänzte Prüfprotokoll bleibt als eigene Änderung in REVIEW.md für den übernehmenden Implementierer liegen.
+Runde 2 abgeschlossen. Kein Merge, Push, Deploy oder Worktree-Cleanup durch den Fixer. Das nach dem Gate ergänzte Prüfprotokoll wurde vom übernehmenden Implementierer in 897e749b gesichert.
+
+## Integrationsprüfung
+
+Origin/main bd7dd1d4 wurde konfliktfrei in den eigenen Fixbranch integriert. Geprüfter Integrationscommit: 0b9b6c2e. Aufruf: `python3 /home/nathanael/Documents/.claude/gpt-workers/gate_hook.py --review --repo /home/nathanael/.worktrees/tb-moderation-disscord-erkennen --base origin/main --head HEAD --model gpt-6.1-sol`. Exit 0, derselbe Reviewer wie in Runde 1 und 2.
+
+> ALLOW: No merge-blocking defect found in the supplied diff and revision snapshots.
+
+Protokoll: /tmp/tb-contact-bait-m1-integrated-gate.log. Format der drei eigenen Rust-Dateien: Exit 0. Die integrierte Kontaktabnahme und Paket-Clippy laufen über cargo-slot mit drei Jobs; ihre Ergebnisse werden im folgenden Paketereignis festgehalten. Keine erneute Gesamtsuite und kein reales Modellurteil behauptet.
