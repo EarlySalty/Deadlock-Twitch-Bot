@@ -35,95 +35,61 @@ pub struct BrokerDiscordDirectory {
     relay: Option<BrokerRelay>,
     guild_id: Option<u64>,
     role_id: u64,
+    pool: PgPool,
 }
 
 impl BrokerDiscordDirectory {
     pub fn from_config(
         relay: Option<BrokerRelay>,
         config: &tb_config::discord::OAuthFollowup,
+        pool: PgPool,
     ) -> Self {
         Self {
             relay,
             guild_id: Some(config.guild_id),
             role_id: config.streamer_role_id,
+            pool,
         }
     }
 
-    /// Rollen-Entzug mit Ausgang. Meldet, ob die Rolle wirklich weg ist —
-    /// „übersprungen" (keine Guild, kein Relay, kaputte ID) ist ein eigener
-    /// Zustand und darf nicht als Erfolg beim Aufrufer landen.
+    async fn sync(&self, discord_user_id: &str) -> Result<Option<bool>, String> {
+        let relay = self.relay.as_ref().ok_or("no_relay")?;
+        let user_id = discord_user_id
+            .parse::<u64>()
+            .ok()
+            .filter(|id| *id > 0)
+            .ok_or("invalid_user_id")?;
+        let guild_id = self.guild_id.ok_or("no_guild")?;
+        crate::streamer_role_sync::reconcile(
+            &self.pool,
+            relay,
+            guild_id,
+            self.role_id,
+            Some(user_id),
+        )
+        .await
+    }
+
     async fn revoke_streamer_role_detailed(
         &self,
         discord_user_id: &str,
-        reason: &str,
+        _reason: &str,
     ) -> RoleRevokeOutcome {
-        let skipped = |reason: &str| RoleRevokeOutcome::Skipped {
-            reason: reason.to_string(),
-        };
-        let Some(ref relay) = self.relay else {
-            tracing::warn!("Streamer-Rollen-Entzug übersprungen: kein BrokerRelay konfiguriert");
-            return skipped("no_relay");
-        };
-        let Ok(user_id) = discord_user_id.parse::<u64>() else {
-            tracing::warn!(
-                "Streamer-Rollen-Entzug übersprungen: ungültige Discord-User-ID {discord_user_id}"
-            );
-            return skipped("invalid_user_id");
-        };
-        let guild_ids = self.role_guild_ids(relay).await;
-        if guild_ids.is_empty() {
-            tracing::warn!("Streamer-Rollen-Entzug übersprungen: keine Guild-Kandidaten verfügbar");
-            return skipped("no_guild");
-        }
-        // B10: Fehler brechen nichts ab, werden aber zurückgemeldet.
-        let mut revoked = false;
-        let mut last_error: Option<String> = None;
-        for guild_id in guild_ids {
-            match relay
-                .remove_member_role(guild_id, user_id, self.role_id, reason)
-                .await
+        match self.sync(discord_user_id).await {
+            Ok(Some(false)) => RoleRevokeOutcome::Revoked,
+            Ok(Some(true)) => RoleRevokeOutcome::Skipped {
+                reason: "active_channel".into(),
+            },
+            Ok(None) => RoleRevokeOutcome::Skipped {
+                reason: "unknown_state".into(),
+            },
+            Err(reason)
+                if matches!(reason.as_str(), "no_relay" | "invalid_user_id" | "no_guild") =>
             {
-                Ok(()) => {
-                    tracing::info!(
-                        "Streamer role removed from {discord_user_id} in guild {guild_id}"
-                    );
-                    revoked = true;
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Streamer-Rollen-Entzug für {discord_user_id} in Guild {guild_id} fehlgeschlagen: {e}"
-                    );
-                    last_error = Some(e.to_string());
-                }
+                RoleRevokeOutcome::Skipped { reason }
             }
+            Err(detail) => RoleRevokeOutcome::Failed { detail },
         }
-        match (revoked, last_error) {
-            (true, _) => RoleRevokeOutcome::Revoked,
-            (false, Some(detail)) => RoleRevokeOutcome::Failed { detail },
-            (false, None) => skipped("no_guild"),
-        }
-    }
-
-    async fn role_guild_ids(&self, relay: &BrokerRelay) -> Vec<u64> {
-        if let Some(guild_id) = self.guild_id {
-            return vec![guild_id];
-        }
-        let members = match relay.list_members().await {
-            Ok(members) => members,
-            Err(error) => {
-                tracing::warn!(
-                    "Streamer-Rollen-Sync: Guild-Fallback via Broker-Mitglieder fehlgeschlagen: {error}"
-                );
-                return Vec::new();
-            }
-        };
-        let mut ids = std::collections::BTreeSet::new();
-        for member in members {
-            if let Some(guild_id) = member.guild_id.filter(|id| *id > 0) {
-                ids.insert(guild_id);
-            }
-        }
-        ids.into_iter().collect()
     }
 }
 
@@ -131,60 +97,35 @@ impl BrokerDiscordDirectory {
 impl DiscordDirectoryPort for BrokerDiscordDirectory {
     async fn resolve_display_name(&self, discord_user_id: &str) -> Option<String> {
         let relay = self.relay.as_ref()?;
-        let user_id: u64 = discord_user_id.parse().ok()?;
+        let user_id = discord_user_id.parse().ok()?;
         match relay.resolve_user(user_id).await {
             Ok(Some(user)) => user.preferred_display_name(),
             Ok(None) => None,
-            Err(e) => {
-                tracing::warn!("Discord-Display-Name-Auflösung via Broker fehlgeschlagen: {e}");
+            Err(error) => {
+                tracing::warn!(%error, "Discord-Anzeigename nicht verfügbar");
                 None
             }
         }
     }
 
-    async fn grant_streamer_role(&self, discord_user_id: &str, reason: &str) {
-        let Some(ref relay) = self.relay else {
-            tracing::warn!("Streamer-Rollen-Sync übersprungen: kein BrokerRelay konfiguriert");
-            return;
-        };
-        let Ok(user_id) = discord_user_id.parse::<u64>() else {
-            tracing::warn!(
-                "Streamer-Rollen-Sync übersprungen: ungültige Discord-User-ID {discord_user_id}"
-            );
-            return;
-        };
-        let guild_ids = self.role_guild_ids(relay).await;
-        if guild_ids.is_empty() {
-            tracing::warn!("Streamer-Rollen-Sync übersprungen: keine Guild-Kandidaten verfügbar");
-            return;
-        }
-        for guild_id in guild_ids {
-            match relay
-                .add_member_role(guild_id, user_id, self.role_id, reason)
-                .await
-            {
-                Ok(()) => tracing::info!(
-                    "Streamer role granted to {discord_user_id} in guild {guild_id}"
-                ),
-                Err(e) => tracing::warn!(
-                    "Streamer-Rollen-Sync für {discord_user_id} in Guild {guild_id} fehlgeschlagen: {e}"
-                ),
-            }
+    async fn grant_streamer_role(&self, discord_user_id: &str, _reason: &str) {
+        if let Err(error) = self.sync(discord_user_id).await {
+            tracing::warn!(%error, discord_user_id, "Streamer-Rollenabgleich wird später wiederholt");
         }
     }
 
     async fn revoke_streamer_role(&self, discord_user_id: &str, reason: &str) {
-        // Ausgang hier bewusst verworfen: dieser Pfad (Deautorisierung) ist
-        // best-effort und hat keinen Aufrufer, der ihn melden könnte. Wer den
-        // Ausgang braucht, nutzt `revoke_streamer_role_detailed`.
-        let _ = self
+        let outcome = self
             .revoke_streamer_role_detailed(discord_user_id, reason)
             .await;
+        tracing::info!(
+            discord_user_id,
+            ?outcome,
+            "Streamer-Rollenabgleich nach Zustandswechsel"
+        );
     }
 }
 
-/// Gleiche Broker-Mechanik für den internen-API-Pfad (`POST …/discord-profile`):
-/// leitet auf die bestehende [`DiscordDirectoryPort`]-Impl weiter.
 #[async_trait]
 impl tb_internal_api::DiscordRolePort for BrokerDiscordDirectory {
     async fn grant_streamer_role(&self, discord_user_id: &str, reason: &str) {
@@ -470,6 +411,7 @@ pub fn build_partner_setup_service(
             Arc::new(BrokerDiscordDirectory::from_config(
                 relay,
                 &config.discord.oauth_followup,
+                pool.clone(),
             )),
             Arc::new(HelixModeratorInstaller::new(helix)),
             greeter,
@@ -487,11 +429,14 @@ mod tests {
     /// noch `MAIN_GUILD_ID` gesetzt war und der Broker-Fallback keine
     /// `guild_id` liefert. Ohne Guild gibt es keinen Kandidaten — die
     /// Konfiguration muss deshalb immer einen tragen.
-    #[test]
-    fn from_config_hat_immer_eine_guild() {
+    #[tokio::test]
+    async fn from_config_hat_immer_eine_guild() {
         let directory = BrokerDiscordDirectory::from_config(
             None,
             &tb_config::discord::OAuthFollowup::default(),
+            sqlx::postgres::PgPoolOptions::new()
+                .connect_lazy("postgres://localhost/test")
+                .unwrap(),
         );
         assert!(
             directory.guild_id.is_some(),
@@ -505,6 +450,9 @@ mod tests {
         let directory = BrokerDiscordDirectory::from_config(
             None,
             &tb_config::discord::OAuthFollowup::default(),
+            sqlx::postgres::PgPoolOptions::new()
+                .connect_lazy("postgres://localhost/test")
+                .unwrap(),
         );
         let outcome = directory
             .revoke_streamer_role_detailed("12345", "test")
@@ -524,6 +472,9 @@ mod tests {
         let directory = BrokerDiscordDirectory::from_config(
             None,
             &tb_config::discord::OAuthFollowup::default(),
+            sqlx::postgres::PgPoolOptions::new()
+                .connect_lazy("postgres://localhost/test")
+                .unwrap(),
         );
         let via_trait =
             tb_internal_api::DiscordRolePort::revoke_streamer_role(&directory, "12345", "test")

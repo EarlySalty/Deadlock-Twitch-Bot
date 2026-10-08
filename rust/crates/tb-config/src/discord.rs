@@ -29,13 +29,24 @@ pub struct DiscordChat {
     pub promo_invite: Option<String>,
 }
 impl Default for DiscordChat {
-    fn default() -> Self { Self { moderation_alert_channel_id: 1374364800817303632, promo_invite: None } }
+    fn default() -> Self {
+        Self {
+            moderation_alert_channel_id: 1374364800817303632,
+            promo_invite: None,
+        }
+    }
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct DiscordInternal { pub owner_id: String }
+pub struct DiscordInternal {
+    pub owner_id: String,
+}
 impl Default for DiscordInternal {
-    fn default() -> Self { Self { owner_id: "662995601738170389".into() } }
+    fn default() -> Self {
+        Self {
+            owner_id: "662995601738170389".into(),
+        }
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -65,12 +76,14 @@ impl Default for StreamerLink {
 pub struct OAuthFollowup {
     pub guild_id: u64,
     pub streamer_role_id: u64,
+    pub role_sync_interval_secs: u64,
 }
 impl Default for OAuthFollowup {
     fn default() -> Self {
         Self {
             guild_id: COMMUNITY,
             streamer_role_id: STREAMER_ROLE,
+            role_sync_interval_secs: 60,
         }
     }
 }
@@ -113,8 +126,15 @@ impl Default for RaidOAuth {
 impl DiscordOperations {
     pub fn validate(&self) -> Result<(), FileError> {
         crate::global::positive_id(&self.internal.owner_id, "discord.internal.owner_id")?;
-        range(self.chat.moderation_alert_channel_id, 1, u64::MAX, "discord.chat.moderation_alert_channel_id")?;
-        if let Some(url) = &self.chat.promo_invite { public_url(url, "discord.chat.promo_invite", false)?; }
+        range(
+            self.chat.moderation_alert_channel_id,
+            1,
+            u64::MAX,
+            "discord.chat.moderation_alert_channel_id",
+        )?;
+        if let Some(url) = &self.chat.promo_invite {
+            public_url(url, "discord.chat.promo_invite", false)?;
+        }
         for (id, field) in [
             (
                 self.streamer_link.notify_channel_id,
@@ -143,6 +163,22 @@ impl DiscordOperations {
         ] {
             range(id, 1, u64::MAX, field)?;
         }
+        if self.streamer_link.guild_id != self.oauth_followup.guild_id
+            || self.streamer_link.streamer_role_id != self.oauth_followup.streamer_role_id
+            || self.token_lifecycle.streamer_role_id != self.oauth_followup.streamer_role_id
+            || self
+                .token_lifecycle
+                .guild_id
+                .is_some_and(|id| id != self.oauth_followup.guild_id)
+        {
+            return Err(FileError::invalid("discord.streamer_role_targets"));
+        }
+        range(
+            self.oauth_followup.role_sync_interval_secs,
+            15,
+            3600,
+            "discord.oauth_followup.role_sync_interval_secs",
+        )?;
         if let Some(id) = self.token_lifecycle.guild_id {
             range(id, 1, u64::MAX, "discord.token_lifecycle.guild_id")?;
         }
@@ -183,5 +219,46 @@ impl DiscordOperations {
             "discord.raid_oauth.success_redirect_url",
             false,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn role_sync_defaults_and_interval_bounds() {
+        let mut config = DiscordOperations::default();
+        assert!(config.validate().is_ok());
+        for seconds in [0, 14, 3601] {
+            config.oauth_followup.role_sync_interval_secs = seconds;
+            assert!(config.validate().is_err());
+        }
+        for seconds in [15, 60, 3600] {
+            config.oauth_followup.role_sync_interval_secs = seconds;
+            assert!(config.validate().is_ok());
+        }
+    }
+
+    #[test]
+    fn role_sync_rejects_conflicting_targets() {
+        for target in 0..4 {
+            let mut config = DiscordOperations::default();
+            match target {
+                0 => config.streamer_link.guild_id += 1,
+                1 => config.streamer_link.streamer_role_id += 1,
+                2 => config.token_lifecycle.streamer_role_id += 1,
+                _ => config.token_lifecycle.guild_id = Some(config.oauth_followup.guild_id + 1),
+            }
+            assert!(config.validate().is_err());
+        }
+        let mut config = DiscordOperations::default();
+        config.oauth_followup.guild_id = 1;
+        config.oauth_followup.streamer_role_id = 2;
+        config.streamer_link.guild_id = 1;
+        config.streamer_link.streamer_role_id = 2;
+        config.token_lifecycle.guild_id = Some(1);
+        config.token_lifecycle.streamer_role_id = 2;
+        assert!(config.validate().is_ok());
     }
 }

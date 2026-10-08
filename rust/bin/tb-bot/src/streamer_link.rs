@@ -32,8 +32,6 @@ static AFFIXES: &[&str] = &[
 
 pub struct StreamerLinkConfig {
     pub notify_channel_id: u64,
-    pub streamer_role_id: u64,
-    pub guild_id: u64,
     pub state_path: PathBuf,
     pub enabled: bool,
 }
@@ -45,8 +43,6 @@ impl StreamerLinkConfig {
         let config = &snapshot.settings().discord.streamer_link;
         Ok(Self {
             notify_channel_id: config.notify_channel_id,
-            streamer_role_id: config.streamer_role_id,
-            guild_id: config.guild_id,
             state_path: snapshot.resolve(&config.state_path)?,
             enabled: config.enabled,
         })
@@ -263,16 +259,6 @@ async fn link_discord_profile(
     Ok(())
 }
 
-async fn grant_role(relay: &BrokerRelay, guild_id: u64, user_id: u64, role_id: u64) -> String {
-    match relay
-        .add_member_role(guild_id, user_id, role_id, "Streamer-Link Auto-Match")
-        .await
-    {
-        Ok(()) => "Streamer-Rolle vergeben.".to_string(),
-        Err(e) => format!("⚠️ Rolle fehlgeschlagen: {e}"),
-    }
-}
-
 async fn notify_embed(
     relay: &BrokerRelay,
     channel_id: u64,
@@ -401,9 +387,6 @@ async fn run_scan(
 
         match link_discord_profile(internal_base, token, &login, &member.id, &display).await {
             Ok(()) => {
-                let member_id: u64 = member.id.parse().unwrap_or(0);
-                let role_note =
-                    grant_role(relay, config.guild_id, member_id, config.streamer_role_id).await;
                 state.mark(
                     &login,
                     "auto_linked",
@@ -416,7 +399,7 @@ async fn run_scan(
                     config.notify_channel_id,
                     "✅ Auto-verknüpft",
                     &format!(
-                        "**Twitch:** `{login}`\n**Discord:** `{display}` (`{}`)\n{role_note}",
+                        "**Twitch:** `{login}`\n**Discord:** `{display}` (`{}`)",
                         member.name
                     ),
                     0x2ECC71,

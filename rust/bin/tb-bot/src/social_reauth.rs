@@ -118,6 +118,7 @@ mod tests {
         let dm = BrokerTokenLifecycleNotifier::from_config(
             Some(relay),
             &tb_config::discord::TokenLifecycle::default(),
+            pool.clone(),
         );
         let notifier = Arc::new(SocialConnectionNotifier::new(pool.clone(), dm));
         assert!(notifier.notify("42", "tiktok", true, incident()).await);
