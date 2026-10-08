@@ -69,13 +69,31 @@ BEGIN
             EXECUTE format('GRANT SELECT,INSERT,UPDATE ON TABLE public.category_channels,public.category_collector_status,public.category_chat_rollup,public.category_media,public.category_media_jobs TO %I',role_name);
             EXECUTE format('GRANT SELECT,INSERT ON TABLE public.category_collection_runs,public.category_stream_snapshots,public.category_chat_messages TO %I',role_name);
             EXECUTE format('GRANT SELECT,INSERT,DELETE ON TABLE public.category_chat_dirty TO %I',role_name);
+            EXECUTE format('GRANT UPDATE(hour_at) ON TABLE public.category_chat_dirty TO %I',role_name);
             EXECUTE format('GRANT SELECT ON TABLE public.category_collector_config,public.category_chat_redactions,public.category_chat_user_redactions TO %I',role_name);
             EXECUTE format('GRANT EXECUTE ON FUNCTION public.category_prepare_partitions(),public.category_lock_chat_rooms(text[]),public.category_redact_chat_event(text,text,text,timestamptz) TO %I',role_name);
         END IF;
     END LOOP;
-    FOREACH signature IN ARRAY ARRAY['category_native_runtime','category_native_processes'] LOOP
-        IF to_regclass('public.'||signature) IS NOT NULL THEN
+    FOREACH signature IN ARRAY ARRAY['category_native_runtime','category_native_processes',
+        'category_watchdog_suspensions','category_watchdog_storage_incidents',
+        'category_watchdog_storage_notifications'] LOOP
+        IF to_regclass('public.'||signature) IS NOT NULL
+            AND EXISTS(SELECT 1 FROM pg_roles WHERE rolname='twitchbot') THEN
             EXECUTE format('GRANT SELECT,INSERT,UPDATE ON TABLE public.%I TO twitchbot',signature);
+        END IF;
+    END LOOP;
+    FOREACH signature IN ARRAY ARRAY['category_watchdog_suspensions_id_seq',
+        'category_watchdog_storage_incidents_id_seq'] LOOP
+        IF to_regclass('public.'||signature) IS NOT NULL THEN
+            EXECUTE format('REVOKE ALL ON SEQUENCE public.%I FROM PUBLIC',signature);
+            FOREACH role_name IN ARRAY ARRAY['twitchbot','twitchdash','twitchlegacy','twitchcollector'] LOOP
+                IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname=role_name) THEN
+                    EXECUTE format('REVOKE ALL ON SEQUENCE public.%I FROM %I',signature,role_name);
+                END IF;
+            END LOOP;
+            IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='twitchbot') THEN
+                EXECUTE format('GRANT USAGE,SELECT ON SEQUENCE public.%I TO twitchbot',signature);
+            END IF;
         END IF;
     END LOOP;
     IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='twitchdash') THEN

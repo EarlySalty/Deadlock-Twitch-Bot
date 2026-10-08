@@ -757,6 +757,189 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn standalone_category_matrix_preserves_storage_observation_as_twitchbot() {
+        use std::str::FromStr;
+        let dsn =
+            test_database::database_url().expect("isolated Postgres test configuration required");
+        let options = PgConnectOptions::from_str(&dsn).unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options.clone())
+            .await
+            .unwrap();
+        let database = format!(
+            "category_roles_{}_{}",
+            std::process::id(),
+            Utc::now().timestamp_subsec_nanos()
+        );
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
+            .execute(&admin)
+            .await
+            .unwrap();
+        let owner = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options.clone().database(&database))
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "DO $$ BEGIN
+                IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='twitchbot') THEN
+                    CREATE ROLE twitchbot;
+                END IF;
+                IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='twitchdash') THEN
+                    CREATE ROLE twitchdash;
+                END IF;
+                IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='twitchlegacy') THEN
+                    CREATE ROLE twitchlegacy;
+                END IF;
+            END $$;",
+        )
+        .execute(&owner)
+        .await
+        .unwrap();
+        for migration in [
+            include_str!("../../../../migrations/20260918123000_category_collector.sql"),
+            include_str!("../../../../migrations/20260918170000_category_permanent_archive.sql"),
+            include_str!("../../../../migrations/20261001220000_twitch_watchdog_incidents.sql"),
+            include_str!("../../../../migrations/20261008160000_category_native_bot.sql"),
+            include_str!("../../../../migrations/20261008161000_category_watchdog_native.sql"),
+        ] {
+            sqlx::raw_sql(migration).execute(&owner).await.unwrap();
+        }
+        let matrix = include_str!("../../../../../ops/systemd/category-runtime-roles.sql")
+            .lines()
+            .filter(|line| !line.starts_with('\\'))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .replace("DATABASE twitch_analytics", &format!("DATABASE {database}"));
+        let bot = PgPoolOptions::new()
+            .max_connections(1)
+            .after_connect(|connection, _| {
+                Box::pin(async move {
+                    sqlx::query("SET ROLE twitchbot")
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect_with(options.database(&database))
+            .await
+            .unwrap();
+        let identity: String = sqlx::query_scalar("SELECT current_user")
+            .fetch_one(&bot)
+            .await
+            .unwrap();
+        assert_eq!(identity, "twitchbot");
+        for iteration in 0..2 {
+            sqlx::raw_sql(sqlx::AssertSqlSafe(matrix.clone()))
+                .execute(&owner)
+                .await
+                .unwrap();
+            let now = DateTime::from_timestamp(1_800_000_000, 0).unwrap()
+                + chrono::Duration::days(iteration);
+            let mut state = CollectorState {
+                enabled: true,
+                poll_seconds: 60,
+                heartbeat_at: Some(now),
+                disk_paused: true,
+                raw_paused: true,
+                latest: Some(now),
+                resumed_at: None,
+            };
+            observe_storage(&bot, &state, now).await.unwrap();
+            let notify_at = now + chrono::Duration::minutes(6);
+            state.heartbeat_at = Some(notify_at);
+            observe_storage(&bot, &state, notify_at).await.unwrap();
+            let unavailable = Err("Test ohne Benachrichtigungszugang".into());
+            storage_notifications(&bot, notify_at, 60, &unavailable)
+                .await
+                .unwrap();
+            let attempted: (String, bool, bool) = sqlx::query_as(
+                "SELECT i.reason,n.last_attempt_at IS NOT NULL,n.delivery_error_at IS NOT NULL
+                 FROM category_watchdog_storage_incidents i
+                 JOIN category_watchdog_storage_notifications n ON n.incident_id=i.id
+                 WHERE i.started_at=$1",
+            )
+            .bind(now)
+            .fetch_one(&bot)
+            .await
+            .unwrap();
+            assert_eq!(attempted, ("disk".into(), true, true));
+            sqlx::query(
+                "UPDATE category_watchdog_storage_notifications SET notified_at=$2 WHERE notification_day=$1",
+            )
+            .bind(notify_at.with_timezone(&Berlin).date_naive())
+            .bind(notify_at)
+            .execute(&bot)
+            .await
+            .unwrap();
+            let clear_at = now + chrono::Duration::minutes(7);
+            state.disk_paused = false;
+            state.raw_paused = false;
+            state.heartbeat_at = Some(clear_at);
+            observe_storage(&bot, &state, clear_at).await.unwrap();
+            state.heartbeat_at = Some(clear_at + chrono::Duration::minutes(30));
+            observe_storage(&bot, &state, state.heartbeat_at.unwrap())
+                .await
+                .unwrap();
+            let recovered: bool = sqlx::query_scalar(
+                "SELECT recovered_at IS NOT NULL FROM category_watchdog_storage_incidents WHERE started_at=$1",
+            )
+            .bind(now)
+            .fetch_one(&bot)
+            .await
+            .unwrap();
+            assert!(recovered);
+            let closed: bool = sqlx::query_scalar(
+                "SELECT ended_at IS NOT NULL FROM category_watchdog_suspensions WHERE reason='disk' AND started_at=$1",
+            )
+            .bind(now)
+            .fetch_one(&bot)
+            .await
+            .unwrap();
+            assert!(closed);
+            for role in ["twitchdash", "twitchlegacy", "twitchcollector"] {
+                let mut connection = owner.acquire().await.unwrap();
+                sqlx::query(sqlx::AssertSqlSafe(format!("SET ROLE {role}")))
+                    .execute(&mut *connection)
+                    .await
+                    .unwrap();
+                for forbidden in [
+                    "SELECT * FROM category_watchdog_suspensions",
+                    "SELECT * FROM category_watchdog_storage_incidents",
+                    "SELECT * FROM category_watchdog_storage_notifications",
+                    "SELECT nextval('category_watchdog_suspensions_id_seq')",
+                    "SELECT nextval('category_watchdog_storage_incidents_id_seq')",
+                ] {
+                    let error = sqlx::query(forbidden)
+                        .execute(&mut *connection)
+                        .await
+                        .unwrap_err();
+                    assert_eq!(
+                        error
+                            .as_database_error()
+                            .and_then(|error| error.code())
+                            .as_deref(),
+                        Some("42501"),
+                        "{role}: {forbidden}: {error}"
+                    );
+                }
+                sqlx::query("RESET ROLE")
+                    .execute(&mut *connection)
+                    .await
+                    .unwrap();
+            }
+        }
+        bot.close().await;
+        owner.close().await;
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {database}")))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+    }
+
+    #[tokio::test]
     async fn incidents_survive_retries_and_recovery_opens_a_new_incident() {
         use sqlx::postgres::PgConnectOptions;
         use std::str::FromStr;

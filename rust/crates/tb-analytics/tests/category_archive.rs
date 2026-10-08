@@ -1,4 +1,3 @@
-//! Real isolated PostgreSQL. No production DSN, environment or skipped tests.
 #[path = "../../../test-support/postgres.rs"]
 mod test_postgres;
 
@@ -428,16 +427,168 @@ async fn runtime_roles_can_append_and_redact_but_never_generically_delete_or_rea
         CREATE TABLE unrelated_private_fixture(secret text);
         GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO twitchbot,twitchdash,twitchlegacy;")
         .execute(&db.pool).await.unwrap();
+    for migration in [
+        include_str!("../../../migrations/20261001220000_twitch_watchdog_incidents.sql"),
+        include_str!("../../../migrations/20261008160000_category_native_bot.sql"),
+        include_str!("../../../migrations/20261008161000_category_watchdog_native.sql"),
+    ] {
+        sqlx::raw_sql(migration).execute(&db.pool).await.unwrap();
+    }
     let matrix = include_str!("../../../../ops/systemd/category-runtime-roles.sql")
         .lines()
         .filter(|line| !line.starts_with('\\'))
         .collect::<Vec<_>>()
         .join("\n");
-    sqlx::raw_sql(sqlx::AssertSqlSafe(matrix))
-        .execute(&db.pool)
+    let bot = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE twitchbot")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect_with(db.pool.connect_options().as_ref().clone())
         .await
         .unwrap();
-    for role in ["twitchbot", "twitchdash", "twitchlegacy"] {
+    let identity: String = sqlx::query_scalar("SELECT current_user")
+        .fetch_one(&bot)
+        .await
+        .unwrap();
+    assert_eq!(identity, "twitchbot");
+    let now: chrono::DateTime<Utc> =
+        sqlx::query_scalar("SELECT sent_at FROM category_chat_messages WHERE message_id='recent'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    for iteration in 0..2 {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(matrix.clone()))
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query("SELECT category_prepare_partitions()")
+            .execute(&bot)
+            .await
+            .unwrap();
+        let at = now + Duration::seconds(iteration * 120);
+        let stream = HelixStream {
+            id: "native-stream".into(),
+            user_id: "100".into(),
+            user_login: "sample".into(),
+            user_name: format!("Sample {iteration}"),
+            viewer_count: 42,
+            language: "de".into(),
+            game_id: "deadlock".into(),
+            started_at: (now - Duration::hours(1)).to_rfc3339(),
+            ..Default::default()
+        };
+        category::store_snapshot(&bot, at, &[stream], 60)
+            .await
+            .unwrap();
+        category::store_snapshot(&bot, at + Duration::seconds(60), &[], 60)
+            .await
+            .unwrap();
+        let runs: Vec<(i32, i64)> = sqlx::query_as(
+            "SELECT streams,viewers FROM category_collection_runs WHERE snapshot_at >= $1 ORDER BY snapshot_at",
+        )
+        .bind(at)
+        .fetch_all(&bot)
+        .await
+        .unwrap();
+        assert_eq!(runs, [(1, 42), (0, 0)]);
+        let profile: String =
+            sqlx::query_scalar("SELECT display_name FROM category_channels WHERE user_id='100'")
+                .fetch_one(&bot)
+                .await
+                .unwrap();
+        assert_eq!(profile, format!("Sample {iteration}"));
+        let stored_streams: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM category_stream_snapshots WHERE snapshot_at=$1 AND stream_id='native-stream'",
+        )
+        .bind(at)
+        .fetch_one(&bot)
+        .await
+        .unwrap();
+        assert_eq!(stored_streams, 1);
+        let messages = ["clearmsg", "clearchat"].map(|target| {
+            let line = format!("@room-id=100;user-id=201;id=native-{target}-{iteration};tmi-sent-ts={} :viewer!v@v PRIVMSG #sample :Diese Testnachricht prüft die nativen Sammlerrechte.", at.timestamp_millis());
+            category::raw_message(&line, at, "100", "de").unwrap()
+        });
+        assert_eq!(category::store_messages(&bot, &messages).await.unwrap(), 2);
+        assert_eq!(category::store_messages(&bot, &messages).await.unwrap(), 0);
+        assert!(category::flush_rollups(&bot, 100).await.unwrap() > 0);
+        let total: i64 =
+            sqlx::query_scalar("SELECT sum(messages)::bigint FROM category_chat_rollup")
+                .fetch_one(&bot)
+                .await
+                .unwrap();
+        assert_eq!(total, 4);
+        let clear = format!("@room-id=100;target-msg-id=native-clearmsg-{iteration} :tmi.twitch.tv CLEARMSG #sample :entfernt");
+        assert_eq!(
+            category::delete_chat(&bot, &clear, "100", at)
+                .await
+                .unwrap(),
+            1
+        );
+        let clear = format!("@room-id=100;target-user-id=201;tmi-sent-ts={} :tmi.twitch.tv CLEARCHAT #sample :viewer", at.timestamp_millis());
+        assert_eq!(
+            category::delete_chat(&bot, &clear, "100", at)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(category::store_messages(&bot, &messages).await.unwrap(), 0);
+        assert!(category::flush_rollups(&bot, 100).await.unwrap() > 0);
+        assert_eq!(count(&db).await, 2);
+        let total: i64 =
+            sqlx::query_scalar("SELECT sum(messages)::bigint FROM category_chat_rollup")
+                .fetch_one(&bot)
+                .await
+                .unwrap();
+        assert_eq!(total, 2);
+        for forbidden in [
+            "DELETE FROM category_chat_messages WHERE false",
+            "TRUNCATE category_chat_messages",
+            "UPDATE category_chat_messages SET message_text='' WHERE false",
+            "UPDATE category_collector_config SET enabled=false",
+            "SELECT category_redact_chat_event_locked('100','recent',NULL,now())",
+        ] {
+            let error = sqlx::query(forbidden).execute(&bot).await.unwrap_err();
+            assert_eq!(
+                error
+                    .as_database_error()
+                    .and_then(|error| error.code())
+                    .as_deref(),
+                Some("42501"),
+                "{forbidden}: {error}"
+            );
+        }
+        let direct_partitions: Vec<String> = sqlx::query_scalar(
+            "SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid WHERE i.inhparent='category_chat_messages'::regclass",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert!(!direct_partitions.is_empty());
+        for partition in direct_partitions {
+            let forbidden = format!("SELECT * FROM {partition}");
+            let error = sqlx::query(sqlx::AssertSqlSafe(forbidden.clone()))
+                .execute(&bot)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error
+                    .as_database_error()
+                    .and_then(|error| error.code())
+                    .as_deref(),
+                Some("42501"),
+                "{forbidden}: {error}"
+            );
+        }
+    }
+    bot.close().await;
+    for role in ["twitchdash", "twitchlegacy"] {
         let can_read: bool =
             sqlx::query_scalar("SELECT has_table_privilege($1,'category_chat_messages','SELECT')")
                 .bind(role)
