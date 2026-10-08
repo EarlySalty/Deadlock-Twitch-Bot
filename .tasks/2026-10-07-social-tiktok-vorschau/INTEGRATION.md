@@ -45,3 +45,36 @@ TESTNACHWEIS[TW-1]: P 42 passed, Q 57 passed, jeweils 0 ignored | Baseline: 1 ro
 ## Aktualisierung von main
 
 Frischer Fetch: origin/main `0ecae1370f1a80d1a101249b5c932663d69be8af`. Seit Ausgangs-SHA nur fremde Aktenbelege des Archivauftrags hinzugekommen, keine Produktivdateien. Übernahme nach Abschluss der Bauworker. Keine Änderung am geteilten Checkout.
+
+## F2: bestehende Prüfungen nachgezogen
+
+Commit `7ea50d9c856a7472583da65d886ab4bfdf73358b`, drei Rust-Dateien. Abschließende Befehle im eigenen Worktree, echte Wegwerf-DB:
+
+```bash
+cd /home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/rust && SQLX_OFFLINE=true TB_TEST_DATABASE_URL=postgresql://nathanael@127.0.0.1:19329/postgres TB_TEST_REQUIRE_DB=1 /home/nathanael/.local/bin/cargo-slot test --jobs 3 --target-dir /home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/rust/target -p tb-social-media -- --include-ignored > /tmp/tb-tiktok-f2-social-validated.log 2>&1
+cd /home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/rust && SQLX_OFFLINE=true TB_TEST_DATABASE_URL=postgresql://nathanael@127.0.0.1:19329/postgres TB_TEST_REQUIRE_DB=1 /home/nathanael/.local/bin/cargo-slot test --jobs 3 --target-dir /home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007/rust/target -p tb-dashboard-api handlers::social_media::tests -- --include-ignored > /tmp/tb-tiktok-f2-dashboard.log 2>&1
+```
+
+Erster Lauf: 345 bestanden, null fehlgeschlagen, null ignoriert, null gefiltert, Exit 0. Zweiter Lauf: 49 bestanden, null fehlgeschlagen, null ignoriert, 1317 gefiltert, Exit 0. Rohlogs `/tmp/tb-tiktok-f2-social-validated.log` und `/tmp/tb-tiktok-f2-dashboard.log`. Formatprüfung mit skip_children=true und Diffcheck jeweils Exit 0. testing ist in diesen Paketen keine angebotene Cargo-Eigenschaft; der Versuch mit diesem Flag hatte keine Testausführung und wird nicht als Testlauf gezählt.
+
+Gemessene Dashboard-Baseline a99b2bcf: gezielt null bestanden, ein fehlgeschlagen, 1340 gefiltert; ganze Handler-Suite 48 bestanden, ein fehlgeschlagen, 1292 gefiltert, jeweils null ignoriert und Exit 101. Gemessener ursprünglicher main 0ecae137: queue_dedup_und_invalid_platform eins bestanden, null fehlgeschlagen, null ignoriert, 339 gefiltert, Exit 0. Das Terminverhalten war durch diesen Auftrag geändert worden, seine bestehende Prüfung wurde entsprechend erhalten und angepasst. Der Dashboard-Test übergab unvollständige Auswahloptionen, keine Vorschau-Fixture; Optionen jetzt vollständig, Historienprüfung unverändert.
+
+Die vorangegangenen Social-Läufe mit 342 bestanden/zwei fehlgeschlagen und 343 bestanden/einem fehlgeschlagen zeigten echte Sperrkollisionen der Test-Schemas mit identischen Clip-IDs. Getrennte IDs korrigierten dies ohne Serialisierung oder Skip. Diese Zwischenstände sind nicht der Abschlusslauf.
+
+Zentraler Gate für 7ea50d9c: BLOCK wegen UI-Rückkehr zu fehlender Vorschau nach bereits angefordertem Renderauftrag. F3 aktiv, endgültiger gemeinsamer SHA und Browser-Beleg stehen noch aus. Noch kein Release-Build oder Deploy.
+
+TESTNACHWEIS[TW-1]: F2 Social 345 passed, Dashboard 49 passed, jeweils 0 ignored | Baseline: Dashboard a99b2bcf 1 rot, ursprünglicher main Termin-Test 0 rot
+
+Inhaltsanker vor Deploy: `preview_source_changed` fehlt nach tatsächlicher Byteprüfung sowohl in tb-bot als auch tb-dashboard des laufenden Releases b0bd6824. Nach Deploy wird derselbe Anker zusätzlich zur ELF-Herkunft am neuen Artefakt geprüft. Das Alter einer Datei dient nicht als Herkunftsnachweis.
+
+## F3 und F4: endgültige Produktivquellen
+
+F3 f1275b27: Social-Suite seriell mit echter Wegwerf-DB, 345 Unit-Tests und ein Doc-Test bestanden, null fehlgeschlagen oder ignoriert. Der erste parallele Lauf hatte tatsächlich einen PoolTimedOut bei 344 bestandenen Tests. Dashboard: 49 bestanden, null fehlgeschlagen oder ignoriert; 1292 Unit- und 25 Integrationstests gefiltert. Rohlogs `/tmp/tb-tiktok-f3-social-tests-serial.log`, `/tmp/tb-tiktok-f3-dashboard-tests-final.log`. TypeScript und gezielter Dialog-/Dictionary-ESLint Exit 0. Vier gezielte Frontend-Dateien: 48 bestanden, null fehlgeschlagen oder übersprungen.
+
+F4 b9e284c5: ursprüngliche npm-Baseline 0ecae137 und finaler Lauf jeweils 439 bestanden, fünf fehlgeschlagen, null übersprungen. Es sind über mehrere Testläufe aggregierte Zahlen, keine eindeutige Gesamtzahl. Die konkreten Farbfundstellen sind identisch. SocialMedia-Purity: zwei finale Befunde gegenüber einem ursprünglichen Befund; der zusätzliche Date.now-Aufruf ist als neuer NIT belegt. Nachweise: browser/baseline-results.json, `/tmp/tb-tiktok-f4-npm-original.log`, `/tmp/tb-tiktok-f4-npm-final.log` sowie beide ESLint-JSONs.
+
+Moli F4: 14 synthetische Beobachtungen plus eine statische Abbruchverdrahtungsprüfung. Consent vor Video-/Kontowechsel tatsächlich gesetzt, danach gelöscht. SHA256 der echten Komponente `887c1cbc93cf05a468196900b2473d490ffaa846249ab4ccad70cff0fcc2f6f2`. Kein Medienplayback, keine echte Zustimmung und kein TikTok-Aufruf. Nachweise browser/results-compact.json und PNGs. Gesicherter Gate für b9: ALLOW. Unabhängige Abschlussabnahme I2: Intent bereit ja, notwendiger Fix nein.
+
+Beim Wiederanlauf erneut `/usr/local/bin/deploy-twitch-release --pruefen`, Exit 0. Release b0bd6824 und dieselben vier PIDs wie oben bestätigt. Kein Deploy aus dem Serverneustart abgeleitet. Aktueller origin/main 6937e4a6 enthält ausschließlich drei neue Vollreview-Akten; in den eigenen TikTok-Worktree integriert. Geteilter Checkout unangetastet.
+
+TESTNACHWEIS[TW-1]: Social 346 passed, Dashboard 49 passed, jeweils 0 ignored | Baseline: ursprüngliches npm 5 rot

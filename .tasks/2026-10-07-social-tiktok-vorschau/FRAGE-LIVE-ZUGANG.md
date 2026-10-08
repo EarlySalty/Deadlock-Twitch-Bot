@@ -1,6 +1,8 @@
 # Offener Zugang für den Live-Funktionsbeweis
 
-status: aktiv, 2026-10-08
+status: überholt, 2026-10-08
+
+Erledigt durch ENTSCHEIDUNG-LIVE-ZUGANG.md: Bestehender Dienstzugang sicher im lokalen Prozessspeicher genutzt. Tatsächlicher Statusaufruf für Clip 124768 liefert HTTP 200 mit application/json, ohne Wertausgabe oder Speicherung von Zugangsdaten. Nach Deploy wird der vorhandene Vorbereitungspfad geprüft. Keine interaktive Nutzeranmeldung nötig.
 
 FRAGE AN ORCHESTRATOR: Für den produktiven Vorbereitungsweg fehlt ein erlaubter angemeldeter Browserkontext. `GET http://127.0.0.1:8769/social-media/api/clips/124768/tiktok/creator-info?streamer=earlysalty` antwortet ohne Anmeldung mit 401. DashboardAuthLevel verwendet den bestehenden Sessionzugang oder einen internen geheimen Wert. AuthLevel hat ausdrücklich keinen Loopback-Bypass mehr. Secrets oder vorhandene Sessions aus Dateien, DB oder Prozessumgebung werden nicht gelesen.
 
