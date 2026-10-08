@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 2,
+  "sequenz": 2,
+  "zeit": "2026-10-08T03:05:34Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "blockiert",
+  "gebaut": "ja",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "f68702992808aa13f3449ce332699f9d4fd3645d",
+  "nachweise": ["HANDOFF.md", "REGISTER.md", "PRUEFUNG.md", "restart-gate-round6.log", "pruefung/provider-vor-release.txt"],
+  "blocker": ["Eigene Provider-Sitzung auf ausdrückliche Anweisung unmittelbar stoppen; Fachauftrag offen.", "Gate Runde 6 BLOCK: Legacy-Kanalbindung der Wiederherstellung, Fehler-/Quota-Backoff bei Snapshotabweichung, widersprüchliche Auth-/Teilsperrreihenfolge."],
+  "naechster_schritt": "Denselben Thread mit neuem Sitzungszugang und erhaltenem Worktree fortsetzen. Zuerst eigene Restprozesse und vorhandene Ergebnisse prüfen; frischer Fixkontext nur für offene Gate-Runde-6-Funde. Kein Neuaufbau oder weitere YouTube-Vorprobe."
+}

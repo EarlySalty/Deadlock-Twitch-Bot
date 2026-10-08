@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 1,
+  "zeit": "2026-10-08T03:09:26Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "aktiv",
+  "gebaut": "ja",
+  "reviewt": "nein",
+  "gemergt": "nein",
+  "live": "nein",
+  "sha": "f68702992808aa13f3449ce332699f9d4fd3645d",
+  "nachweise": ["HANDOFF.md", "REGISTER.md", "PRUEFUNG.md", "restart-gate-round6.log", "pruefung/provider-vor-release.txt"],
+  "blocker": ["Gate Runde 6: Legacy-Kanalbindung, Fehler-/Quota-Backoff bei Snapshotabweichung und widersprüchliche Auth-/Teilsperrreihenfolge."],
+  "naechster_schritt": "Frischer nativer Fixkontext für diese drei offenen Gatefunde. Wiederanlauf ohne Restwriter, API-Nachlauf leer und ohne Abschluss, nicht gezählt. Eigener vorheriger Provider-Stopp HTTP 200 um 03:07:45Z bestätigt; alter Zugang wird nicht gelesen oder wiederverwendet. Keine neue Vorprobe, UI-Politur oder Baselinebereinigung."
+}

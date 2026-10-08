@@ -11,12 +11,19 @@ Stufe mittel, ein zusammenhängendes Paket. Pyramide worker_mittel liefert sol.
 
 | Paket | Thread/Session | Ersteller-ID | Startnachweis | Harness | Modell | Status | Worktree | Branch | HEAD |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| youtube, Versuch 2 | Thread 022314b5-fac1-41c2-abe7-e6c7673b0762; Session c5d0a48e-64b8-4232-9b24-fa23316782b7 | d264f838-4a47-4b9e-9bf2-12efa37223f7 | eigener Wiederanlauf und Prozess-/HEAD-Prüfung 2026-10-08T02:02:13Z | claudeAgent | gpt-6.1-sol | aktiv, erhaltene Runde-5-Fixes abschließen | /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008 | feat/vod-youtube-abgleich-20261008 | 6dd214a27ece1aa6ba783e9aa0c742efcdc6b3cb |
+| youtube, Versuch 3 | Thread 022314b5-fac1-41c2-abe7-e6c7673b0762; Session c5d0a48e-64b8-4232-9b24-fa23316782b7 | d264f838-4a47-4b9e-9bf2-12efa37223f7 | Wiederanlauf mit neuem Harness-Zugang, HEAD-/Prozessprobe 2026-10-08T03:09:26Z | claudeAgent | gpt-6.1-sol | aktiv, drei offene Runde-6-Blocker | /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008 | feat/vod-youtube-abgleich-20261008 | f68702992808aa13f3449ce332699f9d4fd3645d |
+| youtube, Versuch 2 | Thread 022314b5-fac1-41c2-abe7-e6c7673b0762; Session c5d0a48e-64b8-4232-9b24-fa23316782b7 | d264f838-4a47-4b9e-9bf2-12efa37223f7 | eigener Wiederanlauf und Prozess-/HEAD-Prüfung 2026-10-08T02:02:13Z | claudeAgent | gpt-6.1-sol | gezielt gestoppt; Zugang widerrufen, Versuch 3 übernimmt | /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008 | feat/vod-youtube-abgleich-20261008 | 6dd214a27ece1aa6ba783e9aa0c742efcdc6b3cb |
 | youtube, Versuch 1 | Thread 022314b5-fac1-41c2-abe7-e6c7673b0762; Session c5d0a48e-64b8-4232-9b24-fa23316782b7 | d264f838-4a47-4b9e-9bf2-12efa37223f7 | erster Werkzeugaufruf und bestätigtes CWD/HEAD am 2026-10-07T22:27:50Z; eigener Thread running | claudeAgent | gpt-6.1-sol | durch Serverneustart unterbrochen; in Versuch 2 fortgesetzt | /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008 | feat/vod-youtube-abgleich-20261008 | 6dd214a27ece1aa6ba783e9aa0c742efcdc6b3cb |
 
 Ausschließliche Schreibhoheit ab Threadstart einmalig an den Paket-Worker übergeben, wie in AUFTRAG.md festgelegt. Der Hauptorchestrator schreibt danach nichts in diesen Worktree und prüft read-only. Hauptorchestrator überwacht aktive Arbeit nach etwa 20 Minuten, spätestens 30 Minuten.
 
-Statuskanal Versuch 2: `.tasks/2026-10-08-vod-youtube-abgleich/status/youtube/2/`. Versuch 1 bleibt unverändert erhalten.
+Statuskanal Versuch 3: `.tasks/2026-10-08-vod-youtube-abgleich/status/youtube/3/`. Versuche 1 und 2 bleiben unverändert erhalten.
+
+2026-10-08T03:09:26Z: tatsächlicher HEAD f6870299 und kein eigener Restwriter bestätigt. Vorheriger gezielter eigener Provider-Stopp am 03:07:45Z HTTP 200, Status stopped, vom Orchestrator bestätigt. Wiederaufnahme mit neuem Harness-Zugang; alten Wert weder gelesen noch geprüft. Der integrierte API-Nachlauf hatte kein Ergebnis und sein Log ist leer, zählt nicht. Erhalten bleiben 63 Archiv-, neun API-, acht Frontend- und zwei Clienttests. Keine neue Vorprobe.
+
+Nativer Runde-6-Fixer `a416a113c573896ad`: frischer Kontext für Legacy-Kanalbindung, Backoff und Sperrreihenfolge, erhält geprüften Stand. Begrenzte Quellen-/Testschreibhoheit, keine Taskberichte/Register/Status. Kein Merge/Push/Deploy, eigener regulärer Gate nach gezielten Prüfungen. Status aktiv. Eltern bleibt alleiniger Statusproduzent, übernimmt Abschluss bis live. Bisherige inhaltliche BLOCK-Runden 1, 3, 5, 6, erfolgreiche ALLOW-Runden 2 und 4 getrennt; nächste inhaltlich erfolglose Runde wird mit Ursachenbericht eskaliert.
+
+Historischer Statuskanal Versuch 2: `.tasks/2026-10-08-vod-youtube-abgleich/status/youtube/2/`. Versuch 1 bleibt unverändert erhalten.
 
 Wiederanlauf am 2026-10-08T02:02:13Z nach ausdrücklichem Fortsetzungsauftrag. HEAD und erhaltene Runde-5-Änderungen tatsächlich bestätigt. Prozessprüfung: ausschließlich eigene Hauptsession und Zustandsprobe im Worktree, kein weiterer Fixer, Compiler oder Gateprozess. Alleiniger Schreiber und Statusproduzent bleibt Session `c5d0a48e-64b8-4232-9b24-fa23316782b7` im bestehenden Thread. Versuch 2 aktiv; gebaut/reviewt/gemergt/live jeweils nein für den aktuellen geänderten Rust-Stand.
 Gebaut: ja, 59 Archivtests und acht Frontendtests bestanden, Frontend neu gebaut. Reviewt: nein, Gate-Runde 5 auf 6dd214a2 BLOCK. Gemergt: nein. Live: nein.
@@ -28,5 +35,9 @@ Nativer Fixer der Runde 5: `aab8bdbb6241427b2`, gestartet von Session `c5d0a48e-
 Nativer Fixer der Runde 3: `a5ec69ec1742e7a0b`, gestartet von Session `c5d0a48e-64b8-4232-9b24-fa23316782b7`, frischer Kontext, enger Rust-/UI-Schreibbereich. Elternsession besitzt Nachweise und Register. Status: abgeschlossen mit 89bfd5fa und ALLOW, nicht wiederaufnehmen. Die einzelne erlaubte gebündelte Moli-Bestätigungsrunde ist nach diesem Commit erfolgreich abgeschlossen.
 
 Nativer Fixer der Gate-Runde 1: `ab6d2a6f3ec6b3702`, gestartet von Session `c5d0a48e-64b8-4232-9b24-fa23316782b7` nach dem BLOCK-Urteil. Frischer Kontext, derselbe Worktree, begrenzte Schreibhoheit für die Gate-Funde. Kein weiterer T3-Thread. Status: abgeschlossen mit Commit 76332e3d, 57 Archivtests und sieben fokussierten API-Tests bestanden. Nicht wiederaufnehmen.
+
+## Sicherheitsunterbrechung Versuch 2
+
+2026-10-08T03:05:34Z: eigener Provider-Stopp auf ausdrückliche Anweisung, kein Settlen und kein Archivieren. Fachauftrag offen. HEAD f68702992808aa13f3449ce332699f9d4fd3645d. Aktueller Gate Runde 6 BLOCK, kein Main-Push/Release/Deploy. Nachweise und offene Funde in HANDOFF.md, vollständiger Gateoutput restart-gate-round6.log. Eigener integrierter API-Nachlauf bi220woxt noch ohne Abschlussrecord. Worktree erhalten. Ausschließlich eigener Thread 022314b5-fac1-41c2-abe7-e6c7673b0762 wird über thread.session.stop beendet; anschließende Wiederaufnahme durch Orchestrator im selben Thread.
 
 Voriger Auftrag 2026-10-07-vod-archiv-status ist abgeschlossen. Thread 9b165f9b-1fc6-4d0a-ade0-8b01afcc86ea bleibt beendet und wird nicht wiederaufgenommen. Fremde TikTok- oder Brain-Arbeit ist nicht Teil dieses Auftrags.

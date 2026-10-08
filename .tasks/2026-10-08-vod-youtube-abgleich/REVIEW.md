@@ -60,3 +60,15 @@ Versuch 2 übernimmt die erhaltene dauerhafte Fortsetzung mit Auth-, Kanal-, VOD
 Frischer nativer Kontext ad1360b9c5a31929f erledigte die tatsächlich offenen Testfälle, keine neue Hierarchie. Produktivfix unverändert erhalten, Auth-ID-Sperrkollision zwischen synthetischen Großfallproben und veraltete Suchzeit-Erwartungen korrigiert. 63 Archivtests und neun API-Tests bestanden, striktes Archiv-Clippy Exit 0. Reguläre nächste Gateentscheidung steht noch aus.
 
 Der Sichtnachweis für NIT 4 aus Runde 1 wurde anschließend in einer gebündelten Runde erbracht: bestätigt, teilweise und Verbindungsfehler jeweils auf Desktop und Mobil. Sechs betrachtete Detailbilder und `pruefung/moli-layout.json` sind gesichert. Keine weitere UI-Korrekturrunde.
+
+## Runde 6 auf f6870299
+
+Nach regulärer Integration von origin/main, gleicher Kritiker gpt-6.1-sol, Exit 1. Urteil: `BLOCK: Legacy recovery fails, error backoff is bypassed, and recovery locks can deadlock.` Vollständiger bereinigter Beleg: restart-gate-round6.log.
+
+1. BLOCKING, social_media_vod_archive.rs:392: Die Aktionsprüfung verweigert bei leerer gespeicherter Kanal-ID einen gültigen Nachweis. Liste und bestehende ausdrückliche Wiederherstellung müssen denselben sicheren Kontobindungsvertrag verwenden.
+2. BLOCKING, youtube_check.rs:212: Ein geänderter Teil-Snapshot macht Fehler trotz zukünftiger next_check_at bei jedem Poll erneut fällig. Ursprüngliche Evidenz erhalten und Fehler-/Quotenwartezeit gesondert an den tatsächlichen Prüfversuch binden.
+3. BLOCKING, social_media_vod_archive.rs:386: Aktionspfad sperrt Teile vor Konto, beide Abgleichsschreiber Konto vor Teilen. Gemeinsame Sperrreihenfolge erforderlich.
+4. NIT, social_media_vod_archive.rs:97: Gemeinsam aktivierte Wiederholungs- und Drive-Aktion können eine nicht verfügbare zweite Aktion anbieten.
+5. NIT, social_media_vod_archive.rs:307: Drei Wiederherstellungserklärungen fehlen im englischen Wörterbuch.
+
+Versuch 3 erhält sämtliche abgeschlossenen Fixes und Nachweise. Frischer nativer Fixer a416a113c573896ad bearbeitet gemeinsam die drei BLOCK-Funde und nötiges enges Funktionswiring. Kein weiterer Browserlauf, keine neue Vorprobe, kein Merge oder Deploy vor ALLOW. Die bisherigen inhaltlichen BLOCK-Runden sind 1, 3, 5 und 6; ALLOW-Runden 2 und 4 zählen nicht als gescheiterte Fixrunden.
