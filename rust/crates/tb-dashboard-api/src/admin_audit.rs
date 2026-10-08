@@ -63,12 +63,12 @@ fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 
 async fn actor_from_request(
     state: Option<crate::auth::session::DashboardAuthState>,
-    admin_session_id: Option<String>,
+    admin_session_ids: Vec<String>,
     partner_session_id: Option<String>,
     internal: bool,
 ) -> String {
     if let Some(state) = state {
-        if let Some(session_id) = admin_session_id {
+        for session_id in admin_session_ids {
             if let Ok(Some(user_id)) = state.load_admin_session_user_id(&session_id).await {
                 return format!("discord:{user_id}");
             }
@@ -88,10 +88,6 @@ async fn actor_from_request(
     }
 }
 
-/// Persistiert erfolgreiche mutierende Admin-Requests ohne Query oder Body.
-///
-/// Die Auditierung ist best-effort: ein Schreibfehler darf die bereits
-/// ausgeführte Admin-Aktion nicht in einen HTTP-Fehler umwandeln.
 pub async fn audit_admin_mutations(
     State(pool): State<PgPool>,
     request: Request,
@@ -107,14 +103,20 @@ pub async fn audit_admin_mutations(
         .extensions()
         .get::<crate::auth::session::DashboardAuthState>()
         .cloned();
-    let admin_session_id = cookie_value(request.headers(), crate::auth::session::ADMIN_COOKIE_NAME)
-        .map(str::to_string);
+    let admin_session_ids = crate::auth::level::cookie_values(
+        request.headers(),
+        crate::auth::session::ADMIN_COOKIE_NAME,
+    )
+    .into_iter()
+    .filter(|session_id| !session_id.is_empty())
+    .map(str::to_string)
+    .collect();
     let partner_session_id =
         cookie_value(request.headers(), crate::auth::session::PARTNER_COOKIE_NAME)
             .map(str::to_string);
     let internal = request.headers().contains_key("x-internal-token");
     let actor =
-        actor_from_request(auth_state, admin_session_id, partner_session_id, internal).await;
+        actor_from_request(auth_state, admin_session_ids, partner_session_id, internal).await;
     let response = next.run(request).await;
     let status = response.status();
     if response_marks_success(&path, &response) {
@@ -145,7 +147,7 @@ mod tests {
         middleware::from_fn_with_state,
         response::Redirect,
         routing::{get, post},
-        Router,
+        Extension, Router,
     };
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
@@ -191,6 +193,98 @@ mod tests {
         .await
         .unwrap();
         Some(pool)
+    }
+
+    #[tokio::test]
+    async fn audit_ordnet_einzel_doppelte_und_getrennte_admin_cookies_zu() {
+        use crate::auth::{
+            level::DashboardAuthLevel,
+            session::{DashboardAuthState, ADMIN_COOKIE_NAME},
+        };
+
+        let schema = crate::auth::session::test_schema_name("admin_audit_actor");
+        let pool = pool_or_skip(&schema)
+            .await
+            .expect("Audit-Test benötigt eine Testdatenbank");
+        sqlx::query(
+            r#"CREATE TABLE dashboard_sessions (
+                session_id TEXT PRIMARY KEY,
+                session_type TEXT NOT NULL,
+                payload_enc BYTEA NOT NULL,
+                created_at DOUBLE PRECISION NOT NULL,
+                expires_at DOUBLE PRECISION NOT NULL
+            )"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let state = DashboardAuthState::new(
+            pool.clone(),
+            "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".to_string(),
+        );
+        state
+            .import_central_admin_session("veraltet", "99", "Alt", "Alt", 0.0)
+            .await
+            .unwrap();
+        let session = state
+            .create_admin_session("42", "Audit Admin")
+            .await
+            .unwrap();
+        let app = Router::new()
+            .route(
+                "/twitch/api/admin/test",
+                post(|auth: DashboardAuthLevel| async move {
+                    assert!(auth.is_privileged());
+                    StatusCode::NO_CONTENT
+                }),
+            )
+            .layer(from_fn_with_state(pool.clone(), audit_admin_mutations))
+            .layer(Extension(state.clone()));
+
+        let valid_cookie = format!("{ADMIN_COOKIE_NAME}={}", session.session_id);
+        let stale_cookie = format!("{ADMIN_COOKIE_NAME}=veraltet");
+        for cookies in [
+            vec![valid_cookie.clone()],
+            vec![format!("{stale_cookie}; {valid_cookie}")],
+            vec![stale_cookie, valid_cookie],
+        ] {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/twitch/api/admin/test")
+                .header("x-dashboard-context", "admin");
+            for cookie in cookies {
+                request = request.header(axum::http::header::COOKIE, cookie);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        }
+
+        let actors: Vec<String> =
+            sqlx::query_scalar("SELECT actor FROM dashboard_admin_audit_events ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(actors, vec!["discord:42"; 3]);
+        for internal in [false, true] {
+            assert_eq!(
+                super::actor_from_request(
+                    Some(state.clone()),
+                    vec!["unbekannt".to_string()],
+                    None,
+                    internal,
+                )
+                .await,
+                if internal { "internal" } else { "admin" },
+            );
+            assert_eq!(
+                super::actor_from_request(None, Vec::new(), None, internal).await,
+                if internal { "internal" } else { "admin" },
+            );
+        }
     }
 
     #[tokio::test]
