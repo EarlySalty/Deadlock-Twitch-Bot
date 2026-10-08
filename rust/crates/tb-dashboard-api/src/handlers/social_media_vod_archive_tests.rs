@@ -418,6 +418,44 @@ async fn youtube_evidence_keeps_drive_success_and_upload_recovery_visible() {
     for state in ["error", "partial", "processing", "rejected", "confirmed"] {
         sqlx::query("UPDATE twitch_vod_youtube_checks SET state=$1,complete=$1='confirmed',requested_at=NULL,last_error=CASE WHEN $1='error' THEN 'connection' END")
             .bind(state).execute(pool).await.unwrap();
+        if state == "confirmed" {
+            let data = json(
+                list_handler(
+                    partner(),
+                    State(pool.clone()),
+                    Query(ArchiveQuery {
+                        twitch_user_id: None,
+                        page: None,
+                    }),
+                )
+                .await,
+            )
+            .await;
+            let unknown = data["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["id"] == 1)
+                .unwrap();
+            assert_eq!(unknown["can_retry"], true);
+            assert_eq!(unknown["youtube_verified_complete"], false);
+            for (id, video) in [(1, "synthetic-existing"), (3, "synthetic-drive")] {
+                let observations = source_bound(
+                    pool,
+                    id,
+                    json!([{
+                        "video_id":video,"part_index":0,"state":"processed"
+                    }]),
+                )
+                .await;
+                sqlx::query("UPDATE twitch_vod_youtube_checks SET observations=$2 WHERE vod_id=$1")
+                    .bind(id)
+                    .bind(observations)
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+        }
         for drive_requested in [false, true] {
             sqlx::query("UPDATE twitch_vod_archive_vods SET drive_requested=$1 WHERE id=1")
                 .bind(drive_requested)
