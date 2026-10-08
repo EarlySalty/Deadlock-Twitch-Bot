@@ -1,42 +1,12 @@
-//! Python-konformes Parsen beschränkter Query-Integer (`days`, `months`, `limit`).
-//!
-//! Port von `_parse_bounded_query_int` aus `bot/analytics/api_insights.py` /
-//! `bot/analytics/api_performance.py`:
-//!
-//! ```python
-//! raw = (request.query.get(name, str(default)) or str(default)).strip()
-//! try:
-//!     parsed = int(raw)
-//! except (TypeError, ValueError):
-//!     raise ValueError(f"{name} must be an integer")
-//! return min(max(parsed, minimum), maximum)
-//! ```
-//!
-//! Kontrakt (deshalb dieses Modul statt `Option<i32>` im Query-Struct):
-//! Ein nicht-numerischer Wert ergibt in Python eine **400 mit JSON-Body**
-//! `{"error": "<name> must be an integer"}`. axum würde bei `Option<i32>` und
-//! `days=abc` die `serde_urlencoded`-Deserialisierung scheitern lassen und einen
-//! generischen Plaintext-400 (`Failed to deserialize query string...`) liefern —
-//! falsche Form. Darum tragen die betroffenen Handler den Rohwert als
-//! `Option<String>` und parsen hier.
+use std::num::IntErrorKind;
 
 use axum::{http::StatusCode, Json};
 use serde_json::{json, Value};
 
-/// Gemeinsame Obergrenze für frei wählbare Analytics-Zeiträume.
 pub const MAX_ANALYTICS_DAYS: i64 = 3650;
 
-/// 400-Fehler in der Python-Form `{"error": "<name> must be an integer"}`.
-/// Kleines Tupel statt `Response` als `Err`-Typ (vermeidet `result_large_err`,
-/// folgt dem Crate-Idiom z. B. in `performance::require_auth`). `.into_response()`
-/// am Call-Site liefert die fertige `axum::response::Response`.
 pub type QueryIntError = (StatusCode, Json<Value>);
 
-/// Parst einen beschränkten Query-Integer Python-konform.
-///
-/// `raw` ist der rohe (noch nicht getrimmte) Query-Wert; `None` bzw. nur
-/// Whitespace ⇒ `default`. Geparster Wert wird auf `[minimum, maximum]` geklemmt.
-/// Bei nicht-numerischem Wert ⇒ `Err` mit dem Python-identischen 400-JSON-Body.
 pub fn parse_bounded_query_int(
     raw: Option<&str>,
     name: &str,
@@ -48,11 +18,19 @@ pub fn parse_bounded_query_int(
     let parsed = if trimmed.is_empty() {
         default
     } else {
-        trimmed.parse::<i64>().map_err(|_| {
-            (
+        trimmed.parse::<i64>().or_else(|error| {
+            let digits = trimmed.strip_prefix(['+', '-']).unwrap_or(trimmed);
+            if digits.bytes().all(|digit| digit.is_ascii_digit()) {
+                match error.kind() {
+                    IntErrorKind::PosOverflow => return Ok(maximum),
+                    IntErrorKind::NegOverflow => return Ok(minimum),
+                    _ => {}
+                }
+            }
+            Err((
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": format!("{name} must be an integer") })),
-            )
+            ))
         })?
     };
     Ok(parsed.clamp(minimum, maximum))
@@ -64,25 +42,42 @@ mod tests {
 
     #[test]
     fn fehlend_ergibt_default() {
-        assert_eq!(parse_bounded_query_int(None, "days", 30, 7, 365).unwrap(), 30);
+        assert_eq!(
+            parse_bounded_query_int(None, "days", 30, 7, 365).unwrap(),
+            30
+        );
     }
 
     #[test]
     fn leer_und_whitespace_ergibt_default() {
-        assert_eq!(parse_bounded_query_int(Some(""), "days", 30, 7, 365).unwrap(), 30);
-        assert_eq!(parse_bounded_query_int(Some("   "), "days", 30, 7, 365).unwrap(), 30);
+        assert_eq!(
+            parse_bounded_query_int(Some(""), "days", 30, 7, 365).unwrap(),
+            30
+        );
+        assert_eq!(
+            parse_bounded_query_int(Some("   "), "days", 30, 7, 365).unwrap(),
+            30
+        );
     }
 
     #[test]
     fn numerisch_wird_geparst_und_getrimmt() {
-        assert_eq!(parse_bounded_query_int(Some(" 90 "), "days", 30, 7, 365).unwrap(), 90);
+        assert_eq!(
+            parse_bounded_query_int(Some(" 90 "), "days", 30, 7, 365).unwrap(),
+            90
+        );
     }
 
     #[test]
     fn out_of_range_wird_geklemmt_nicht_400() {
-        // Python: min(max(parsed, minimum), maximum) — KEIN Fehler.
-        assert_eq!(parse_bounded_query_int(Some("1"), "days", 30, 7, 365).unwrap(), 7);
-        assert_eq!(parse_bounded_query_int(Some("9999"), "days", 30, 7, 365).unwrap(), 365);
+        assert_eq!(
+            parse_bounded_query_int(Some("1"), "days", 30, 7, 365).unwrap(),
+            7
+        );
+        assert_eq!(
+            parse_bounded_query_int(Some("9999"), "days", 30, 7, 365).unwrap(),
+            365
+        );
     }
 
     #[test]
@@ -98,6 +93,74 @@ mod tests {
     }
 
     #[test]
+    fn dezimalinteger_ausserhalb_i64_werden_geklemmt() {
+        let huge = "9".repeat(1000);
+        let negative_huge = format!("-{huge}");
+        for (raw, days, months) in [
+            ("10000000000000000000", 3650, 120),
+            ("9223372036854775808", 3650, 120),
+            ("+9223372036854775808", 3650, 120),
+            ("  +0009223372036854775808  ", 3650, 120),
+            ("-9223372036854775809", 7, 1),
+            ("  -0009223372036854775809  ", 7, 1),
+            (huge.as_str(), 3650, 120),
+            (negative_huge.as_str(), 7, 1),
+        ] {
+            assert_eq!(
+                parse_bounded_query_int(Some(raw), "days", 30, 7, MAX_ANALYTICS_DAYS).unwrap(),
+                days,
+                "{raw}"
+            );
+            assert_eq!(
+                parse_bounded_query_int(Some(raw), "months", 12, 1, 120).unwrap(),
+                months,
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn i64_grenzen_und_bisherige_zahlengrammatik_bleiben_erhalten() {
+        for (raw, expected) in [
+            ("9223372036854775807", i64::MAX),
+            ("-9223372036854775808", i64::MIN),
+            ("+00090", 90),
+            ("-00090", -90),
+            ("+0", 0),
+            ("-0", 0),
+        ] {
+            assert_eq!(
+                parse_bounded_query_int(Some(raw), "days", 30, i64::MIN, i64::MAX).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn syntaxfehler_auch_hinter_ueberlauf_bleiben_400() {
+        for raw in [
+            "9223372036854775808000x",
+            "-9223372036854775809000x",
+            "9223372036854775808000.0",
+            "9223372036854775808000_0",
+            "9223372036854775808000 0",
+            "1.5",
+            "1_000",
+            "0x10",
+            "+",
+            "-",
+            "++1",
+            "+-1",
+            "１２",
+        ] {
+            let (status, Json(body)) =
+                parse_bounded_query_int(Some(raw), "days", 30, 7, MAX_ANALYTICS_DAYS).unwrap_err();
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{raw}");
+            assert_eq!(body, json!({ "error": "days must be an integer" }), "{raw}");
+        }
+    }
+
+    #[test]
     fn nicht_numerisch_ergibt_python_konformes_400_json() {
         let (status, Json(body)) =
             parse_bounded_query_int(Some("abc"), "days", 30, 7, 365).unwrap_err();
@@ -107,8 +170,7 @@ mod tests {
 
     #[test]
     fn fehlername_steckt_in_der_meldung() {
-        let (_, Json(body)) =
-            parse_bounded_query_int(Some("x"), "months", 12, 1, 24).unwrap_err();
+        let (_, Json(body)) = parse_bounded_query_int(Some("x"), "months", 12, 1, 24).unwrap_err();
         assert_eq!(body, json!({ "error": "months must be an integer" }));
     }
 }

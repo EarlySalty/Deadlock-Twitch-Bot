@@ -1,5 +1,3 @@
-//! Admin-Research für den Onboarding-Wert eines Twitch-Streamers.
-
 use std::collections::{BTreeMap, HashSet};
 
 use axum::{
@@ -246,7 +244,17 @@ fn parse_days(params: &ResearchQuery) -> Result<i64, Box<Response>> {
         .as_deref()
         .map(str::trim)
         .filter(|raw| !raw.is_empty())
-        .and_then(|raw| raw.parse::<i64>().ok())
+        .map(str::parse::<i64>)
+        .transpose()
+        .map_err(|_| {
+            Box::new(
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "days must be an integer"})),
+                )
+                    .into_response(),
+            )
+        })?
         .is_some_and(|raw| !(7..=3650).contains(&raw))
     {
         return Err(Box::new(
@@ -328,8 +336,6 @@ fn aggregate_subject(ticks: &[SubjectTick]) -> SubjectMetrics {
     }
 }
 
-// Eine Woche Pause bleibt neutral; danach halbiert sich die Priorität alle
-// zwei Wochen. Der gewählte Auswertungszeitraum verlängert diese Frist nicht.
 fn activity_factor(last_seen: Option<DateTime<Utc>>, now: DateTime<Utc>) -> f64 {
     let Some(last_seen) = last_seen else {
         return 0.0;
@@ -374,8 +380,6 @@ fn build_score(subject: &SubjectMetrics, partners: &[PartnerAggregate]) -> Score
     viewer_values.sort_by(f64::total_cmp);
     hour_values.sort_by(f64::total_cmp);
     session_values.sort_by(f64::total_cmp);
-    // Ohne Vergleichsgruppe liefert percentile_of 50 („Mittelmaß") — bei
-    // leerer Partner-Baseline irreführend, daher Percentile 0.
     let (viewers_pct, hours_pct, sessions_pct) = if partners.is_empty() {
         (0, 0, 0)
     } else {
@@ -427,7 +431,6 @@ fn internal_error(error: sqlx::Error) -> Response {
         .into_response()
 }
 
-/// `GET /twitch/api/admin/research/{login}?days=30`
 pub async fn handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -462,12 +465,6 @@ pub async fn handler(
     .bind(since)
     .bind(&login)
     .fetch_all(&pool);
-    // `is_partner` setzt der Rust-Poller (tb-monitoring poller/engine.rs,
-    // `sample_of`) per Abgleich gegen das Partner-Login-Set aus der DB — NICHT
-    // aus dem Helix-Stream-Objekt. Der Python-Poller
-    // (bot/monitoring/monitoring.py) ist seit dem Twitch-Cutover außer
-    // Betrieb; sein `stream.get("is_partner")` ist tote Altlast. Live-Check
-    // 2026-07-11: 26 Partner-Streamer mit is_partner-Ticks in 30 Tagen.
     let baseline_query = sqlx::query_as::<_, PartnerAggregate>(PARTNER_BASELINE_SQL)
         .bind(since)
         .fetch_all(&pool);
@@ -501,7 +498,6 @@ pub async fn handler(
     .into_response()
 }
 
-/// `GET /twitch/api/admin/research/suggestions?days=30`
 pub async fn suggestions_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
@@ -788,8 +784,6 @@ mod tests {
                     .bind(login).bind(language).execute(&pool).await.unwrap();
             }
         }
-        // Zwei widersprüchliche Sprachwerte zur selben letzten Sichtung:
-        // nicht abhängig von einer zufälligen Sortierreihenfolge empfehlen.
         sqlx::query("INSERT INTO twitch_stats_category (ts_utc, streamer, viewer_count, language) VALUES (NOW() - INTERVAL '20 minutes', 'sprach_tie', 10, 'de'), (NOW() - INTERVAL '10 minutes', 'sprach_tie', 10, 'de'), (NOW(), 'sprach_tie', 10, 'de'), (NOW(), 'sprach_tie', 10, NULL), (NOW() - INTERVAL '10 minutes', 'halb_deutsch', 10, 'en'), (NOW(), 'halb_deutsch', 10, 'de')")
             .execute(&pool).await.unwrap();
         let (status, body) =
@@ -1036,6 +1030,57 @@ mod tests {
             days: Some("3651".into()),
         });
         assert!(zu_gross.is_err());
+    }
+
+    #[test]
+    fn parse_days_default_und_gueltige_werte_bleiben_erhalten() {
+        for (raw, expected) in [
+            (None, 30),
+            (Some(""), 30),
+            (Some("   "), 30),
+            (Some("7"), 7),
+            (Some("3650"), 3650),
+            (Some(" +00090 "), 90),
+        ] {
+            assert_eq!(
+                parse_days(&ResearchQuery {
+                    days: raw.map(str::to_owned),
+                })
+                .ok(),
+                Some(expected)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn parse_days_bewahrt_den_ablehnungsvertrag() {
+        for (raw, error) in [
+            ("9223372036854775808", "days must be an integer"),
+            ("-9223372036854775809", "days must be an integer"),
+            (" +0009223372036854775808 ", "days must be an integer"),
+            (" -0009223372036854775809 ", "days must be an integer"),
+            ("9223372036854775808000x", "days must be an integer"),
+            ("abc", "days must be an integer"),
+            ("1_000", "days must be an integer"),
+            ("6", "days must be between 7 and 3650"),
+            ("3651", "days must be between 7 and 3650"),
+            ("9223372036854775807", "days must be between 7 and 3650"),
+            ("-9223372036854775808", "days must be between 7 and 3650"),
+        ] {
+            let response = parse_days(&ResearchQuery {
+                days: Some(raw.into()),
+            })
+            .unwrap_err();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{raw}");
+            let body = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap(),
+                json!({"error": error}),
+                "{raw}"
+            );
+        }
     }
 
     #[tokio::test]
