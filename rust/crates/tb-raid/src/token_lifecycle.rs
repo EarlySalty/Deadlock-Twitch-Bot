@@ -555,6 +555,16 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                 self.notifier.revoke_streamer_role(did, &reason).await;
             }
 
+            if let Err(error) = sqlx::query!(
+                "UPDATE twitch_token_blacklist SET role_removed = 1 WHERE twitch_user_id = $1",
+                &row.twitch_user_id
+            )
+            .execute(&self.pool)
+            .await
+            {
+                tracing::warn!(%error, user = %mask(&row.twitch_user_id), "Grace-Abschluss wird wiederholt");
+                continue;
+            }
             processed += 1;
             tracing::info!(
                 user = %mask(&row.twitch_user_id),
@@ -1343,12 +1353,6 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
                 OR LOWER(twitch_login) = LOWER($1)
             "#,
             twitch_login,
-            twitch_user_id
-        )
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query!(
-            "UPDATE twitch_token_blacklist SET role_removed = 1 WHERE twitch_user_id = $1",
             twitch_user_id
         )
         .execute(&mut *tx)

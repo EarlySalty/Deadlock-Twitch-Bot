@@ -240,3 +240,57 @@ async fn failed_write_retries_on_next_sync_and_signup_denial_revokes() {
     reconcile(&db.pool, &relay, 1, 2, None).await.unwrap();
     assert!(discord.0.lock().unwrap().holders.is_empty());
 }
+
+struct GraceNotifier {
+    pool: PgPool,
+    relay: BrokerRelay,
+}
+
+#[async_trait::async_trait]
+impl tb_raid::token_lifecycle::TokenLifecycleNotifier for GraceNotifier {
+    async fn send_admin_embed(&self, _: i64, _: &str, _: &str) -> bool {
+        true
+    }
+
+    async fn send_user_dm(&self, _: &str, _: &str) -> bool {
+        true
+    }
+
+    async fn revoke_streamer_role(&self, discord_user_id: &str, _: &str) -> bool {
+        assert_eq!(
+            reconcile(
+                &self.pool,
+                &self.relay,
+                1,
+                2,
+                Some(discord_user_id.parse().unwrap())
+            )
+            .await
+            .unwrap(),
+            Some(false)
+        );
+        true
+    }
+}
+
+#[tokio::test]
+async fn grace_expiry_reconciles_after_persistent_deactivation() {
+    let (db, _server, relay, discord) = fixture().await;
+    reconcile(&db.pool, &relay, 1, 2, None).await.unwrap();
+    sqlx::raw_sql("ALTER TABLE twitch_streamer_identities ADD twitch_login TEXT DEFAULT 'test', ADD updated_at TIMESTAMPTZ DEFAULT NOW();
+        ALTER TABLE twitch_raid_auth ADD twitch_login TEXT DEFAULT 'test', ADD raid_enabled BOOL DEFAULT true, ADD needs_reauth BOOL DEFAULT false;
+        CREATE TABLE twitch_token_blacklist (twitch_user_id TEXT, twitch_login TEXT, error_count INT, grace_expires_at TEXT, role_removed INT, reminder_sent INT);
+        INSERT INTO twitch_token_blacklist VALUES ('100','test',3,'2000-01-01T00:00:00+00:00',0,0);")
+        .execute(&db.pool).await.unwrap();
+    let reactor = tb_raid::token_lifecycle::TokenLifecycleReactor::new(
+        db.pool.clone(),
+        GraceNotifier {
+            pool: db.pool.clone(),
+            relay,
+        },
+    );
+    assert_eq!(reactor.check_grace_periods().await, 1);
+    assert!(discord.0.lock().unwrap().holders.is_empty());
+    assert_eq!(reactor.check_grace_periods().await, 0);
+    assert_eq!(discord.0.lock().unwrap().writes.len(), 2);
+}

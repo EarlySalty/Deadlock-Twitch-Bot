@@ -163,6 +163,16 @@ impl DiscordOperations {
         ] {
             range(id, 1, u64::MAX, field)?;
         }
+        if self.streamer_link.guild_id != self.oauth_followup.guild_id
+            || self.streamer_link.streamer_role_id != self.oauth_followup.streamer_role_id
+            || self.token_lifecycle.streamer_role_id != self.oauth_followup.streamer_role_id
+            || self
+                .token_lifecycle
+                .guild_id
+                .is_some_and(|id| id != self.oauth_followup.guild_id)
+        {
+            return Err(FileError::invalid("discord.streamer_role_targets"));
+        }
         range(
             self.oauth_followup.role_sync_interval_secs,
             15,
@@ -209,5 +219,46 @@ impl DiscordOperations {
             "discord.raid_oauth.success_redirect_url",
             false,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn role_sync_defaults_and_interval_bounds() {
+        let mut config = DiscordOperations::default();
+        assert!(config.validate().is_ok());
+        for seconds in [0, 14, 3601] {
+            config.oauth_followup.role_sync_interval_secs = seconds;
+            assert!(config.validate().is_err());
+        }
+        for seconds in [15, 60, 3600] {
+            config.oauth_followup.role_sync_interval_secs = seconds;
+            assert!(config.validate().is_ok());
+        }
+    }
+
+    #[test]
+    fn role_sync_rejects_conflicting_targets() {
+        for target in 0..4 {
+            let mut config = DiscordOperations::default();
+            match target {
+                0 => config.streamer_link.guild_id += 1,
+                1 => config.streamer_link.streamer_role_id += 1,
+                2 => config.token_lifecycle.streamer_role_id += 1,
+                _ => config.token_lifecycle.guild_id = Some(config.oauth_followup.guild_id + 1),
+            }
+            assert!(config.validate().is_err());
+        }
+        let mut config = DiscordOperations::default();
+        config.oauth_followup.guild_id = 1;
+        config.oauth_followup.streamer_role_id = 2;
+        config.streamer_link.guild_id = 1;
+        config.streamer_link.streamer_role_id = 2;
+        config.token_lifecycle.guild_id = Some(1);
+        config.token_lifecycle.streamer_role_id = 2;
+        assert!(config.validate().is_ok());
     }
 }
