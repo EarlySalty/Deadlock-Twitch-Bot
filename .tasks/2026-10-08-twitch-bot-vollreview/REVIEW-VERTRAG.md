@@ -23,6 +23,17 @@ Jede Kombination aus Paket und Blickwinkel erhält einen frischen Reviewer. Pake
 3. Fehlerbehandlung: Fehlerverlust, fälschlicher Erfolg, Panics durch externe Daten und nicht funktionierende Wiederherstellung.
 4. Nebenläufigkeit und Daten: belegte Races, doppelte Wirkung, Transaktionen, Idempotenz und verlorene Änderungen.
 5. Ressourcen: unbeschränkte Schleifen, Speicher, Warteschlangen und Wiederholungen sowie fehlende Zeitgrenzen mit konkretem Fehlerszenario.
+6. Bauqualität: Struktur und Kopplung, doppelte Pfade, Fehler- und Zustandsmodell, Testbarkeit und belegte Testlage sowie Wartbarkeit. Dieser Blickwinkel bewertet nur und erzeugt keine Fixfreigabe.
+
+## Bauqualität und Qualitätskritiker
+
+Der sechste Blickwinkel bleibt je Bereich unabhängig von den fünf Defektprüfungen. Seine Ausgabe enthält eine Note von 1 bis 5, Belege als Datei:Zeile, Stärken, Schwächen, Testlücken und Empfehlungen. Skala: 1 mangelhaft, 2 schwach, 3 solide mit deutlichen Grenzen, 4 gut, 5 sehr gut. Bewertungen beziehen sich auf belegte Eigenschaften, nicht auf persönliche Stilvorlieben.
+
+Ein frischer Sol-Kritiker prüft jede Bereichsbewertung auf Übertreibung, unbewiesene Aussagen, ignorierte bestehende Bausteine und falsch behauptete Testlücken. Er bestätigt oder korrigiert Note und Begründung anhand eigener Codelektüre. Strukturkritik ist kein Sicherheitsbefund. Qualitätsbefunde und Empfehlungen bleiben C, auch wenn ihr Nutzen hoch ist.
+
+QUALITAET.md wird aus den geprüften Bereichsbewertungen erstellt, mit Gesamteinschätzung und den fünf Empfehlungen mit dem größten belegten Nutzen, geordnet nach Nutzen und Risiko. Kein Umbau wird daraus ausgeführt.
+
+## Befundstandard
 
 Der Reviewer liest die dem Paket zugeordneten Quellen vollständig genug für den Blickwinkel. Stichproben, nicht gelesene Dateien und nur strukturell geprüfte Daten sind gesondert zu nennen. Keine feste Befundobergrenze. Ein leeres Ergebnis ist zulässig, aber kein Ersatz für Abdeckung.
 

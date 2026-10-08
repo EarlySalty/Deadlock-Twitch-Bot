@@ -102,3 +102,17 @@ Je Fix-Paket ein frischer Sol-Kritiker, der den Diff gegen den Befund prüft: Is
 Kurz: Anzahl Befunde je Klasse, gefixte Befunde mit Commit und Deploy-SHA, Live-Nachweis, widerlegte Befunde (Zahl), offene C-Befunde mit Urteil und Empfehlung, geordnet nach Risiko. Dazu `MERGEPROTOKOLL[MS-1]`- und `TESTNACHWEIS[TW-1]`-Zeile. Nutzertexte ohne Em-Dashes.
 
 Rückfragen nur bei echten Produkt- oder Architekturentscheidungen. Alles andere selbst entscheiden und im Bericht begründen. Steckt der Auftrag fest (Kontingent, kaputter Build auf main, Gate liefert dauerhaft kein Urteil), Stand in `REGISTER.md` sichern, pushen und melden.
+
+## Nachtrag 2026-10-08: Bauqualität bewerten
+
+Der Nutzer will zusätzlich wissen, wie gut der Code gebaut ist. Das ist reine Bewertung, kein Bauauftrag: daraus entsteht keine Änderung, alles läuft als C.
+
+Je Bereich ein sechster Blickwinkel „Bauqualität“, von Sol-Reviewern bewertet und von einem Sol-Kritiker gegen Übertreibung geprüft:
+
+- Struktur: klare Zuständigkeiten je Crate, Kopplung, Schichtung, zyklische oder versteckte Abhängigkeiten.
+- Doppelte Pfade: dasselbe zweimal gebaut (zwei Wege für dieselbe Aufgabe, parallele Clients, verwaiste Module und tote Features).
+- Fehler- und Zustandsmodell: einheitliche Fehlertypen, Konfiguration statt harter Konstanten, Altlasten wie ENV-Konfiguration.
+- Testbarkeit und Testlage: welche kritischen Pfade ungetestet sind.
+- Wartbarkeit: Riesendateien und Riesenfunktionen, Namensklarheit, Python-Reste im Produktivpfad.
+
+Ergebnis in `QUALITAET.md`: je Bereich eine Note von 1 bis 5 mit kurzer, belegter Begründung (Datei:Zeile), dazu eine Gesamteinschätzung und die fünf Umbauten mit dem größten Nutzen, geordnet nach Nutzen und Risiko. Nur Empfehlung, nichts davon umsetzen. Die Zusammenfassung kommt in den Abschlussbericht.

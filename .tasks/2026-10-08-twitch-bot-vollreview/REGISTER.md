@@ -31,6 +31,10 @@ Eigene native Session: `f61905e7-f7ff-405b-a6d7-090dec371fcb`. Transcript-Basis:
 
 Der erste Inventar-Agent hat Sol im Transcript bestätigt. Weitere Review-Starts erfolgen nach vollständigem Paketschnitt. Die Ops-Vorprüfung löst keinen Gate-Review und keinen Deploy aus.
 
+## Nachtrag: Bauqualität
+
+Der Nachtrag vom 2026-10-08 ist in AUFTRAG.md übernommen. Sechster Blickwinkel je Bereich: Bauqualität mit Note 1 bis 5, Belegen und eigenem frischem Sol-Kritiker. Ergebnisse ausschließlich als Bewertung und C-Empfehlungen in QUALITAET.md. Kein Neustart des Inventars und keine daraus abgeleiteten Codeänderungen. Die Reviews sind noch nicht gestartet, daher geht der Zusatz direkt in die erste Review-Welle ein.
+
 ## Nächste Schritte
 
 1. Auftrag und Register sind mit `e8801a02` committed. Folgeartefakte gezielt sichern.
