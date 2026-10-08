@@ -678,9 +678,10 @@ pub async fn logout_handler(
         .collect();
     let mut revoke_failed = false;
     for session_id in session_ids {
-        if let Some(Extension(state)) = state.as_ref() {
-            state.invalidate_session(&session_id).await;
-        }
+        let _operation = match state.as_ref() {
+            Some(Extension(state)) => Some(state.admin_session_operation(&session_id).await),
+            None => None,
+        };
         if let Some(Extension(config)) = config.as_ref() {
             if config.client.revoke_session(&session_id).await.is_err() {
                 revoke_failed = true;
@@ -688,7 +689,7 @@ pub async fn logout_handler(
             }
         }
         if let Some(Extension(state)) = state.as_ref() {
-            state.invalidate_session(&session_id).await;
+            state.invalidate_session_under_operation(&session_id).await;
         }
     }
     let base_url = config
@@ -705,11 +706,12 @@ pub async fn logout_handler(
             "Die zentrale Sitzung konnte nicht abgemeldet werden. Bitte versuche es erneut.",
         )
             .into_response();
-        if let Ok(value) = HeaderValue::from_str(&cookie) {
-            response.headers_mut().append(header::SET_COOKIE, value);
-        }
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store, max-age=0"),
+        );
     }
-    if cookie_domain.is_some() {
+    if cookie_domain.is_some() && !revoke_failed {
         let legacy_cookie = clear_admin_cookie(cookie_secure, None);
         if let Ok(value) = HeaderValue::from_str(&legacy_cookie) {
             response.headers_mut().append(header::SET_COOKIE, value);
@@ -2368,10 +2370,7 @@ mod tests {
         let response = logout_handler(None, Some(Extension(config(client.clone()))), headers).await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert!(response.headers().get(header::LOCATION).is_none());
-        assert_eq!(cookies(&response).len(), 2);
-        assert!(cookies(&response)
-            .iter()
-            .all(|cookie| cookie.contains("Max-Age=0")));
+        assert!(cookies(&response).is_empty());
         assert_eq!(client.revoked.lock().await.as_slice(), &["central-session"]);
     }
 }

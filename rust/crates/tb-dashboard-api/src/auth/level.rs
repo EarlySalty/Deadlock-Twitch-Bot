@@ -433,20 +433,19 @@ where
                             continue;
                         }
                     } else {
-                        let generation = state.admin_session_generation().await;
+                        let _operation = state.admin_session_operation(&session_id).await;
                         match config.client.validate_session_outcome(&session_id).await {
                             Ok(Some(session)) => {
                                 match state.load_admin_session(&session_id).await {
                                     Ok(Some(_)) => {}
                                     Ok(None) => {
                                         if state
-                                            .import_central_admin_session_if_current(
+                                            .import_central_admin_session(
                                                 &session_id,
                                                 &session.user_id.to_string(),
                                                 &session.username,
                                                 &session.display_name,
                                                 session.expires_at,
-                                                generation,
                                             )
                                             .await
                                             .is_err()
@@ -459,7 +458,7 @@ where
                                 state.cache_central_admin_validation(&session_id).await;
                             }
                             Ok(None) => {
-                                state.invalidate_session(&session_id).await;
+                                state.invalidate_session_under_operation(&session_id).await;
                                 continue;
                             }
                             Err(_) => {

@@ -39,13 +39,13 @@
 //! Der Fernet-Key kommt aus Env-Var `SESSIONS_ENCRYPTION_KEY` (Infisical lädt
 //! sie in beide Services; Python liest sie seit dem Linux-Key-Fix ebenfalls).
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 use tracing::{debug, warn};
 
 use super::fernet;
@@ -435,6 +435,7 @@ pub struct DashboardAuthState {
     fernet_key: String,
     /// Cache für Admin-Sessions (discord_admin).
     admin_cache: Arc<Mutex<TimedCache<bool>>>,
+    admin_operations: Arc<Mutex<std::collections::HashMap<String, Weak<Mutex<()>>>>>,
     /// Kurzzeit-Cache für erfolgreiche Validierungen beim zentralen Discord-Broker.
     central_admin_validation_cache: Arc<Mutex<TimedCache<bool>>>,
     /// Cache für Partner-Sessions (twitch).
@@ -452,6 +453,7 @@ impl DashboardAuthState {
             pool,
             fernet_key,
             admin_cache: Arc::new(Mutex::new(TimedCache::default())),
+            admin_operations: Arc::new(Mutex::new(std::collections::HashMap::new())),
             central_admin_validation_cache: Arc::new(Mutex::new(TimedCache::default())),
             partner_cache: Arc::new(Mutex::new(TimedCache::default())),
             admin_twitch_user_id: None,
@@ -791,35 +793,7 @@ impl DashboardAuthState {
         display_name: &str,
         expires_at: f64,
     ) -> Result<SessionCreation, sqlx::Error> {
-        let generation = self.admin_session_generation().await;
-        self.import_central_admin_session_if_current(
-            session_id,
-            user_id,
-            username,
-            display_name,
-            expires_at,
-            generation,
-        )
-        .await
-    }
-
-    pub(crate) async fn admin_session_generation(&self) -> u64 {
-        self.admin_cache.lock().await.generation
-    }
-
-    pub(crate) async fn import_central_admin_session_if_current(
-        &self,
-        session_id: &str,
-        user_id: &str,
-        username: &str,
-        display_name: &str,
-        expires_at: f64,
-        generation: u64,
-    ) -> Result<SessionCreation, sqlx::Error> {
         let mut cache = self.admin_cache.lock().await;
-        if cache.generation != generation {
-            return Err(sqlx::Error::RowNotFound);
-        }
         let now = unix_now() as f64;
         let expires_at = expires_at.min(now + ADMIN_SESSION_TTL_SECS as f64);
         let csrf_token = tb_crypto::random_urlsafe_token(SESSION_ID_BYTES);
@@ -848,6 +822,24 @@ impl DashboardAuthState {
             session_id: session_id.to_string(),
             csrf_token,
         })
+    }
+
+    /// Serialisiert laufende zentrale Prüfungen und Widerrufe derselben Sitzung.
+    /// Die schwachen Referenzen speichern keinen Widerrufsstatus.
+    pub(crate) async fn admin_session_operation(&self, session_id: &str) -> OwnedMutexGuard<()> {
+        let operation = {
+            let mut operations = self.admin_operations.lock().await;
+            operations.retain(|_, operation| operation.strong_count() > 0);
+            let key = session_lookup_key(session_id);
+            if let Some(operation) = operations.get(&key).and_then(Weak::upgrade) {
+                operation
+            } else {
+                let operation = Arc::new(Mutex::new(()));
+                operations.insert(key, Arc::downgrade(&operation));
+                operation
+            }
+        };
+        operation.lock_owned().await
     }
 
     /// Liefert den CSRF-Token einer gültigen lokalen Admin-Session.
@@ -985,16 +977,41 @@ impl DashboardAuthState {
         payload: &serde_json::Value,
         now: u64,
     ) -> Result<bool, sqlx::Error> {
-        let token = fernet::encrypt(&self.fernet_key, payload.to_string().as_bytes())
+        let mut transaction = self.pool.begin().await?;
+        let session_key = session_lookup_key(session_id);
+        let current: Option<Vec<u8>> = sqlx::query_scalar(
+            "SELECT payload_enc FROM dashboard_sessions WHERE session_id = $1 AND session_type = 'discord_admin' AND expires_at > $2 FOR UPDATE",
+        )
+        .bind(&session_key)
+        .bind(now as f64)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let Some(current) = current else {
+            return Ok(false);
+        };
+        let plaintext = fernet::decrypt(&self.fernet_key, &encode_b64(&current), None)
+            .map_err(|e| sqlx::Error::Decode(Box::new(SessionEncryptError(e.to_string()))))?;
+        let mut current: serde_json::Value =
+            serde_json::from_slice(&plaintext).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+        let Some(object) = current.as_object_mut() else {
+            return Ok(false);
+        };
+        for field in ["js_fp", "fp_pending", "last_seen_at"] {
+            if let Some(value) = payload.get(field) {
+                object.insert(field.into(), value.clone());
+            }
+        }
+        let token = fernet::encrypt(&self.fernet_key, current.to_string().as_bytes())
             .map_err(|e| sqlx::Error::Encode(Box::new(SessionEncryptError(e.to_string()))))?;
         let updated = sqlx::query(
             "UPDATE dashboard_sessions SET payload_enc = $2 WHERE session_id = $1 AND session_type = 'discord_admin' AND expires_at > $3",
         )
-        .bind(session_lookup_key(session_id))
+        .bind(session_key)
         .bind(token.as_bytes())
         .bind(now as f64)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
+        transaction.commit().await?;
         Ok(updated.rows_affected() > 0)
     }
 
@@ -1544,6 +1561,11 @@ impl DashboardAuthState {
     /// `session_id` ist ein No-Op. DB-Fehler werden nur als Debug geloggt; der
     /// Logout-Erfolg hängt nicht am DB-Delete (das Cookie wird ohnehin gelöscht).
     pub async fn invalidate_session(&self, session_id: &str) {
+        let _operation = self.admin_session_operation(session_id).await;
+        self.invalidate_session_under_operation(session_id).await;
+    }
+
+    pub(crate) async fn invalidate_session_under_operation(&self, session_id: &str) {
         if session_id.is_empty() {
             return;
         }
@@ -3970,30 +3992,37 @@ mod identity_regression_tests {
             "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".into(),
         );
         let now = unix_now();
-        let generation = state.admin_session_generation().await;
-        state.invalidate_session("delayed-import").await;
-        assert!(matches!(
-            state
-                .import_central_admin_session_if_current(
-                    "delayed-import",
-                    "42",
-                    "admin",
-                    "Admin",
-                    now as f64 + 3600.0,
-                    generation,
-                )
-                .await,
-            Err(sqlx::Error::RowNotFound)
-        ));
-        let current_generation = state.admin_session_generation().await;
+        let delayed_operation = state.admin_session_operation("delayed-import").await;
+        let logout_state = state.clone();
+        let logout = tokio::spawn(async move {
+            logout_state.invalidate_session("delayed-import").await;
+        });
+        state.invalidate_session("unrelated-session").await;
+        assert!(!logout.is_finished());
         state
-            .import_central_admin_session_if_current(
+            .import_central_admin_session(
+                "delayed-import",
+                "42",
+                "admin",
+                "Admin",
+                now as f64 + 3600.0,
+            )
+            .await
+            .unwrap();
+        drop(delayed_operation);
+        logout.await.unwrap();
+        assert!(state
+            .fetch_session_payload("delayed-import", "discord_admin", now)
+            .await
+            .unwrap()
+            .is_none());
+        state
+            .import_central_admin_session(
                 "valid-import",
                 "42",
                 "admin",
                 "Admin",
                 now as f64 + 3600.0,
-                current_generation,
             )
             .await
             .unwrap();
@@ -4025,6 +4054,22 @@ mod identity_regression_tests {
             .unwrap();
         assert_eq!(latest["js_fp"], "permanent-fingerprint");
         assert_eq!(latest["fp_pending"], false);
+        assert_eq!(
+            latest["expires_at"],
+            now as f64 + ADMIN_SESSION_TTL_SECS as f64
+        );
+        stale["js_fp"] = serde_json::json!("late-fingerprint");
+        stale["fp_pending"] = serde_json::json!(false);
+        assert!(state
+            .persist_admin_fingerprint("valid-import", &stale, now)
+            .await
+            .unwrap());
+        let latest = state
+            .fetch_session_payload("valid-import", "discord_admin", now)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(latest["js_fp"], "late-fingerprint");
         assert_eq!(
             latest["expires_at"],
             now as f64 + ADMIN_SESSION_TTL_SECS as f64
