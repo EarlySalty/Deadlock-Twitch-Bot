@@ -58,6 +58,7 @@ BEGIN
             EXECUTE format('GRANT SELECT,INSERT,UPDATE ON TABLE public.category_channels,public.category_collector_status,public.category_chat_rollup,public.category_media,public.category_media_jobs TO %I',role_name);
             EXECUTE format('GRANT SELECT,INSERT ON TABLE public.category_collection_runs,public.category_stream_snapshots,public.category_chat_messages TO %I',role_name);
             EXECUTE format('GRANT SELECT,INSERT,DELETE ON TABLE public.category_chat_dirty TO %I',role_name);
+            EXECUTE format('GRANT UPDATE(hour_at) ON TABLE public.category_chat_dirty TO %I',role_name);
             EXECUTE format('GRANT SELECT ON TABLE public.category_collector_config,public.category_chat_redactions,public.category_chat_user_redactions TO %I',role_name);
             EXECUTE format('GRANT EXECUTE ON FUNCTION public.category_prepare_partitions(),public.category_lock_chat_rooms(text[]),public.category_redact_chat_event(text,text,text,timestamptz) TO %I',role_name);
         END IF;

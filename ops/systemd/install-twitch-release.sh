@@ -80,7 +80,7 @@ fi
 # generierte Artefakte werden separat auf Typ, Eigentum und Schreibschutz geprüft.
 
 dashboard_source=bot/dashboard_v2/dist
-if ! "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:bot/dashboard_v2/package.json" 2>/dev/null; then
+if [[ ! -d "$checkout/$dashboard_source" ]]; then
   dashboard_source=bot/analytics/dashboard_v2/dist
 fi
 

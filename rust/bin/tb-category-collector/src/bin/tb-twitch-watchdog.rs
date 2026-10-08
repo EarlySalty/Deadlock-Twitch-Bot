@@ -21,10 +21,10 @@ const BROKER: &str = "http://127.0.0.1:8770/internal/master/v1/discord/send-mess
 const GAP_QUERY: &str = "WITH runs AS (
       SELECT snapshot_at,poll_seconds,lag(snapshot_at) OVER(ORDER BY snapshot_at) AS previous_at,
         lag(poll_seconds) OVER(ORDER BY snapshot_at) AS previous_poll
-      FROM category_collection_runs WHERE snapshot_at >= $2 - interval '2 days'
-        OR snapshot_at = (SELECT MAX(snapshot_at) FROM category_collection_runs WHERE snapshot_at < $2 - interval '2 days')
+      FROM category_collection_runs WHERE snapshot_at <= $2 AND (snapshot_at >= $2 - interval '2 days'
+        OR snapshot_at = (SELECT MAX(snapshot_at) FROM category_collection_runs WHERE snapshot_at < $2 - interval '2 days'))
     ), gaps AS (
-      SELECT tstzrange(previous_at,snapshot_at,'[)') AS span,
+      SELECT tstzrange(GREATEST(previous_at,$2 - interval '2 days'),snapshot_at,'[)') AS span,
         make_interval(secs => 3*GREATEST(poll_seconds,previous_poll)) AS grace
       FROM runs WHERE snapshot_at - previous_at > make_interval(secs => 3*GREATEST(poll_seconds,previous_poll))
     ), unexplained AS (
@@ -46,6 +46,10 @@ const GAP_QUERY: &str = "WITH runs AS (
         AND COALESCE(i.recovered_at,$2) > lower(remainder)
     ),'{}'::tstzmultirange)) AS new_gaps(unrecorded)
     ON CONFLICT DO NOTHING";
+const NOTIFICATION_QUERY: &str = "SELECT id,service,started_at,recovered_at FROM twitch_watchdog_incidents
+    WHERE superseded_at IS NULL AND notified_at IS NULL AND started_at <= $1 - make_interval(secs => CASE WHEN service=$2 THEN $3 ELSE 90 END)
+    AND (recovered_at IS NULL OR recovered_at-started_at >= make_interval(secs => CASE WHEN service=$2 THEN $3 ELSE 90 END))
+    AND (last_attempt_at IS NULL OR last_attempt_at <= $1 - make_interval(secs => $4)) ORDER BY id LIMIT 2";
 
 #[cfg(test)]
 #[path = "../../../../test-support/database.rs"]
@@ -68,6 +72,7 @@ struct Incident {
     id: i64,
     service: String,
     started_at: DateTime<Utc>,
+    recovered_at: Option<DateTime<Utc>>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -326,12 +331,21 @@ fn local_time(at: DateTime<Utc>) -> String {
 
 fn outage_content(incident: &Incident) -> String {
     let at = local_time(incident.started_at);
-    if incident.service == COLLECTOR {
-        format!("Seit {at} fehlen aktuelle Daten des Deadlock-Kategoriesammlers im Twitch-Bot. Kategorie- und Chatdaten können Lücken enthalten. Bereits erfasste Daten bleiben erhalten. Bitte den Twitch-Bot prüfen.")
-    } else {
-        format!(
-            "Der Deadlock-Twitch-Bot war ab {at} nicht erreichbar. Bitte den Twitch-Bot prüfen."
-        )
+    match (incident.service.as_str(), incident.recovered_at) {
+        (COLLECTOR, Some(recovered_at)) => {
+            let recovered = local_time(recovered_at);
+            format!("Vom {at} bis {recovered} fehlten Daten des Deadlock-Kategoriesammlers im Twitch-Bot. Diese Messlücke ist beendet. Kategorie- und Chatdaten können für diesen Zeitraum Lücken enthalten. Bereits erfasste Daten bleiben erhalten.")
+        }
+        (COLLECTOR, None) => {
+            format!("Seit {at} fehlen aktuelle Daten des Deadlock-Kategoriesammlers im Twitch-Bot. Kategorie- und Chatdaten können Lücken enthalten. Bereits erfasste Daten bleiben erhalten. Bitte den Twitch-Bot prüfen.")
+        }
+        (_, Some(recovered_at)) => {
+            let recovered = local_time(recovered_at);
+            format!("Der Deadlock-Twitch-Bot war vom {at} bis {recovered} nicht erreichbar. Dieser Ausfall ist beendet.")
+        }
+        (_, None) => {
+            format!("Seit {at} ist der Deadlock-Twitch-Bot nicht erreichbar. Bitte den Twitch-Bot prüfen.")
+        }
     }
 }
 
@@ -505,12 +519,13 @@ async fn main() -> Result<()> {
     for service in warnings {
         eprintln!("Dienst oder Datenquelle ausgefallen: {service}");
     }
-    let incidents: Vec<Incident> = sqlx::query_as(
-        "SELECT id,service,started_at FROM twitch_watchdog_incidents
-         WHERE superseded_at IS NULL AND notified_at IS NULL AND started_at <= $1 - make_interval(secs => CASE WHEN service=$2 THEN $3 ELSE 90 END)
-         AND (recovered_at IS NULL OR recovered_at-started_at >= make_interval(secs => CASE WHEN service=$2 THEN $3 ELSE 90 END))
-         AND (last_attempt_at IS NULL OR last_attempt_at <= $1 - make_interval(secs => $4)) ORDER BY id LIMIT 2"
-    ).bind(now).bind(BOT).bind(bot_delay as i32).bind(retry as i32).fetch_all(&pool).await?;
+    let incidents: Vec<Incident> = sqlx::query_as(NOTIFICATION_QUERY)
+        .bind(now)
+        .bind(BOT)
+        .bind(bot_delay as i32)
+        .bind(retry as i32)
+        .fetch_all(&pool)
+        .await?;
     for incident in incidents {
         sqlx::query("UPDATE twitch_watchdog_incidents SET last_attempt_at=$2 WHERE id=$1")
             .bind(incident.id)
@@ -610,6 +625,36 @@ mod tests {
             .with_timezone(&Utc);
         assert_eq!(summer.with_timezone(&Berlin).offset().to_string(), "CEST");
         assert_eq!(winter.with_timezone(&Berlin).offset().to_string(), "CET");
+        assert_eq!(local_time(summer), "08.10.2026 um 15:35:57 CEST");
+        assert_eq!(local_time(winter), "08.12.2026 um 14:35:57 CET");
+    }
+
+    #[test]
+    fn outage_content_distinguishes_ongoing_and_recovered_intervals() {
+        let started_at = DateTime::parse_from_rfc3339("2026-10-08T13:35:57Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let recovered_at = started_at + chrono::Duration::minutes(10);
+        for service in [COLLECTOR, BOT] {
+            let mut incident = Incident {
+                id: 1,
+                service: service.into(),
+                started_at,
+                recovered_at: None,
+            };
+            let ongoing = outage_content(&incident);
+            assert!(ongoing.contains(&local_time(started_at)));
+            assert!(!ongoing.contains(&local_time(recovered_at)));
+            incident.recovered_at = Some(recovered_at);
+            let recovered = outage_content(&incident);
+            assert!(recovered.contains(&local_time(started_at)));
+            assert!(recovered.contains(&local_time(recovered_at)));
+            assert_ne!(ongoing, recovered);
+            for content in [ongoing, recovered] {
+                assert!(!content.contains("tb-category-collector.service"));
+                assert!(!content.contains("UTC"));
+            }
+        }
     }
 
     #[tokio::test]
@@ -748,6 +793,56 @@ mod tests {
         let rest: f64 = sqlx::query_scalar("SELECT extract(epoch FROM sum(recovered_at-started_at))::float8 FROM twitch_watchdog_incidents")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(rest, 3540.0);
+        let window_start = end - chrono::Duration::days(2);
+        for (pause_start, pause_end, gap_end, expected_start) in [
+            (0, 0, 2, None),
+            (0, 0, 60, Some(0)),
+            (0, 30, 60, Some(30)),
+            (-60, 60, 60, None),
+        ] {
+            sqlx::query("TRUNCATE category_collection_runs,category_watchdog_suspensions,twitch_watchdog_incidents")
+                .execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO category_collection_runs VALUES($1,60),($2,60),($3,60)")
+                .bind(end - chrono::Duration::days(1000))
+                .bind(window_start + chrono::Duration::minutes(gap_end))
+                .bind(end + chrono::Duration::hours(1))
+                .execute(&pool)
+                .await
+                .unwrap();
+            if pause_start != pause_end {
+                sqlx::query("INSERT INTO category_watchdog_suspensions(reason,started_at,last_seen_at,ended_at) VALUES('unobserved',$1,$2,$2)")
+                    .bind(window_start + chrono::Duration::minutes(pause_start))
+                    .bind(window_start + chrono::Duration::minutes(pause_end))
+                    .execute(&pool).await.unwrap();
+            }
+            for _ in 0..2 {
+                sqlx::query(GAP_QUERY)
+                    .bind(COLLECTOR)
+                    .bind(end)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+            let incidents: Vec<(DateTime<Utc>, Option<DateTime<Utc>>)> = sqlx::query_as(
+                "SELECT started_at,recovered_at FROM twitch_watchdog_incidents ORDER BY started_at",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+            let expected: Vec<_> = expected_start
+                .into_iter()
+                .map(|minute| {
+                    (
+                        window_start + chrono::Duration::minutes(minute),
+                        Some(window_start + chrono::Duration::minutes(gap_end)),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                incidents, expected,
+                "pause {pause_start}..{pause_end}, gap {gap_end}"
+            );
+        }
         pool.close().await;
         sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
             .execute(&admin)
@@ -1041,6 +1136,22 @@ mod tests {
         assert!(first_delivery_error(&pool, ids[0], now).await.unwrap());
         assert!(!first_delivery_error(&pool, ids[0], now).await.unwrap());
         assert!(first_delivery_error(&pool, ids[1], now).await.unwrap());
+        let selected: Vec<Incident> = sqlx::query_as(NOTIFICATION_QUERY)
+            .bind(now + chrono::Duration::seconds(180))
+            .bind(BOT)
+            .bind(3600_i32)
+            .bind(60_i32)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].id, ids[0]);
+        assert_eq!(
+            selected[0].recovered_at,
+            Some(now + chrono::Duration::seconds(90))
+        );
+        assert_eq!(selected[1].id, ids[1]);
+        assert_eq!(selected[1].recovered_at, None);
         sqlx::query("CREATE TABLE category_collection_runs(snapshot_at timestamptz PRIMARY KEY,poll_seconds integer NOT NULL)")
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO category_collection_runs VALUES($1,60),($2,60)")
@@ -1080,6 +1191,63 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(gaps, 2);
+        let selected: Vec<Incident> = sqlx::query_as(NOTIFICATION_QUERY)
+            .bind(now)
+            .bind(BOT)
+            .bind(3600_i32)
+            .bind(60_i32)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].started_at, now - chrono::Duration::days(2));
+        assert_eq!(
+            selected[0].recovered_at,
+            Some(now - chrono::Duration::days(1))
+        );
+        assert_eq!(
+            selected[1].recovered_at,
+            Some(now - chrono::Duration::hours(12))
+        );
+        sqlx::query(
+            "UPDATE twitch_watchdog_incidents SET last_attempt_at=$1 WHERE started_at < $1",
+        )
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let pending: Vec<Incident> = sqlx::query_as(NOTIFICATION_QUERY)
+            .bind(now)
+            .bind(BOT)
+            .bind(3600_i32)
+            .bind(60_i32)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(pending.is_empty());
+        let retry: Vec<Incident> = sqlx::query_as(NOTIFICATION_QUERY)
+            .bind(now + chrono::Duration::seconds(60))
+            .bind(BOT)
+            .bind(3600_i32)
+            .bind(60_i32)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(retry.len(), 2);
+        sqlx::query("UPDATE twitch_watchdog_incidents SET notified_at=$1 WHERE started_at < $1")
+            .bind(now)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let notified: Vec<Incident> = sqlx::query_as(NOTIFICATION_QUERY)
+            .bind(now)
+            .bind(BOT)
+            .bind(3600_i32)
+            .bind(60_i32)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(notified.is_empty());
         record_storage(&pool, Some("disk"), now).await.unwrap();
         record_storage(&pool, None, now + chrono::Duration::minutes(1))
             .await
@@ -1143,6 +1311,78 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(queued, 2);
+        sqlx::query("TRUNCATE category_watchdog_storage_notifications,category_watchdog_storage_incidents RESTART IDENTITY")
+            .execute(&pool).await.unwrap();
+        let evening = DateTime::parse_from_rfc3339("2026-10-08T21:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        record_storage(&pool, Some("disk"), evening).await.unwrap();
+        prepare_storage_notification(&pool, evening + chrono::Duration::minutes(4))
+            .await
+            .unwrap();
+        let early: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM category_watchdog_storage_notifications")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(early, 0);
+        prepare_storage_notification(&pool, evening + chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+        sqlx::query("UPDATE category_watchdog_storage_notifications SET notified_at=$1")
+            .bind(evening + chrono::Duration::minutes(5))
+            .execute(&pool)
+            .await
+            .unwrap();
+        record_storage(&pool, None, evening + chrono::Duration::minutes(7))
+            .await
+            .unwrap();
+        record_storage(&pool, None, evening + chrono::Duration::minutes(36))
+            .await
+            .unwrap();
+        let still_open: bool = sqlx::query_scalar(
+            "SELECT recovered_at IS NULL FROM category_watchdog_storage_incidents",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(still_open);
+        record_storage(&pool, None, evening + chrono::Duration::minutes(37))
+            .await
+            .unwrap();
+        record_storage(
+            &pool,
+            Some("budget"),
+            evening + chrono::Duration::minutes(38),
+        )
+        .await
+        .unwrap();
+        prepare_storage_notification(&pool, evening + chrono::Duration::minutes(44))
+            .await
+            .unwrap();
+        let same_day: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM category_watchdog_storage_notifications")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(same_day, 1);
+        for _ in 0..2 {
+            prepare_storage_notification(&pool, evening + chrono::Duration::hours(1))
+                .await
+                .unwrap();
+        }
+        let days: Vec<chrono::NaiveDate> = sqlx::query_scalar("SELECT notification_day FROM category_watchdog_storage_notifications ORDER BY notification_day")
+            .fetch_all(&pool).await.unwrap();
+        assert_eq!(
+            days,
+            [
+                evening.with_timezone(&Berlin).date_naive(),
+                (evening + chrono::Duration::hours(1))
+                    .with_timezone(&Berlin)
+                    .date_naive()
+            ]
+        );
+        assert_ne!(days[0], days[1]);
         sqlx::query("TRUNCATE twitch_watchdog_incidents,category_collection_runs RESTART IDENTITY")
             .execute(&pool)
             .await

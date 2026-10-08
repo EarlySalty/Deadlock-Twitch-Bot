@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 
 
@@ -151,6 +152,65 @@ rm() { printf 'obsolete files removed\n'; }
         self.assertEqual(result.returncode, 1)
         self.assertNotIn("snapshot proof checked", result.stderr)
         self.assertNotIn("obsolete files removed", result.stdout)
+
+
+class ArtifactPathTests(unittest.TestCase):
+    def check_layout(self, dashboards):
+        wrapper = WRAPPER.read_text()
+        preflight = wrapper.split("dashboard_source=bot/dashboard_v2/dist\n", 1)[1].split('\nif [[ -e "$dest"', 1)[0]
+        installer = WRAPPER.with_name("install-twitch-release.sh").read_text()
+        selection = installer.split("dashboard_source=bot/dashboard_v2/dist\n", 1)[1].split('\nfor relative in "${generated[@]}";', 1)[0]
+        copy = next(line for line in installer.splitlines() if line.strip().startswith('cp -a "$checkout/$dashboard_source/."'))
+        with tempfile.TemporaryDirectory(prefix="twitch-artifact-paths-") as directory:
+            checkout = Path(directory) / "checkout"
+            for relative in (
+                "rust/target/release/tb-bot", "rust/target/release/tb-dashboard",
+                "rust/target/release/tb-stream-audit", "rust/target/release/tb-config-check",
+                "rust/target/release/tb-llm-usage-recover",
+            ):
+                artifact = checkout / relative
+                artifact.parent.mkdir(parents=True, exist_ok=True)
+                artifact.write_text("synthetic artifact")
+            for relative in (*dashboards, "bot/admin_dashboard/dist", "website/dist"):
+                output = checkout / relative
+                output.mkdir(parents=True, exist_ok=True)
+                (output / "index.html").write_text(relative)
+            package = checkout / "bot/dashboard_v2/package.json"
+            package.parent.mkdir(parents=True, exist_ok=True)
+            package.write_text('{}')
+            wrapper_result = subprocess.run(
+                ["/bin/bash", "-c", 'set -euo pipefail\nsrc="$1"\ndashboard_source=bot/dashboard_v2/dist\n' + preflight + '\nprintf "%s\\n" "${required_artifacts[@]}"', "wrapper", str(checkout)],
+                capture_output=True, text=True, timeout=5,
+            )
+            if not dashboards:
+                self.assertEqual(wrapper_result.returncode, 1)
+                self.assertIn("bot/analytics/dashboard_v2/dist", wrapper_result.stderr)
+                return
+            self.assertEqual(wrapper_result.returncode, 0, wrapper_result.stderr)
+            expected = "bot/dashboard_v2/dist" if "bot/dashboard_v2/dist" in dashboards else "bot/analytics/dashboard_v2/dist"
+            self.assertIn(expected, wrapper_result.stdout.splitlines())
+            stage = Path(directory) / "stage"
+            installed = stage / "bot/analytics/dashboard_v2/dist"
+            installed.mkdir(parents=True)
+            installer_result = subprocess.run(
+                ["/bin/bash", "-c", 'set -euo pipefail\ncheckout="$1"\nstage="$2"\ngit_sha="$3"\ngit_safe=(/bin/false)\ndashboard_source=bot/dashboard_v2/dist\n' + selection + '\n' + copy + '\nprintf "%s\\n" "${generated[@]}"', "installer", str(checkout), str(stage), SHA],
+                capture_output=True, text=True, timeout=5,
+            )
+            self.assertEqual(installer_result.returncode, 0, installer_result.stderr)
+            self.assertEqual(wrapper_result.stdout.splitlines(), installer_result.stdout.splitlines())
+            self.assertEqual((installed / "index.html").read_text(), expected)
+
+    def test_current_build_path_is_required_and_installed(self):
+        self.check_layout(("bot/dashboard_v2/dist",))
+
+    def test_base_build_path_is_required_and_installed_despite_new_package_location(self):
+        self.check_layout(("bot/analytics/dashboard_v2/dist",))
+
+    def test_current_path_has_the_same_precedence_in_both_scripts(self):
+        self.check_layout(("bot/dashboard_v2/dist", "bot/analytics/dashboard_v2/dist"))
+
+    def test_missing_dashboard_is_rejected_before_installation(self):
+        self.check_layout(())
 
 
 if __name__ == "__main__":

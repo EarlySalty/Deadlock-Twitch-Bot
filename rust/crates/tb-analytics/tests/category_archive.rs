@@ -462,11 +462,13 @@ async fn runtime_roles_can_append_and_redact_but_never_generically_delete_or_rea
             .fetch_one(&db.pool)
             .await
             .unwrap();
-    for iteration in 0..2 {
-        sqlx::raw_sql(sqlx::AssertSqlSafe(matrix.clone()))
-            .execute(&db.pool)
-            .await
-            .unwrap();
+    for iteration in 0..3 {
+        if iteration > 0 {
+            sqlx::raw_sql(sqlx::AssertSqlSafe(matrix.clone()))
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
         sqlx::query("SELECT category_prepare_partitions()")
             .execute(&bot)
             .await
@@ -551,6 +553,8 @@ async fn runtime_roles_can_append_and_redact_but_never_generically_delete_or_rea
             "DELETE FROM category_chat_messages WHERE false",
             "TRUNCATE category_chat_messages",
             "UPDATE category_chat_messages SET message_text='' WHERE false",
+            "UPDATE category_chat_dirty SET room_user_id='' WHERE false",
+            "UPDATE category_chat_dirty SET language='' WHERE false",
             "UPDATE category_collector_config SET enabled=false",
             "SELECT category_redact_chat_event_locked('100','recent',NULL,now())",
         ] {
