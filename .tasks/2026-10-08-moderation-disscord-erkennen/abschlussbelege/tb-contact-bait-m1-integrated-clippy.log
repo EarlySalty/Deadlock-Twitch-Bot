@@ -1,0 +1,19 @@
+cargo-slot: Slot 2, optimiert=0
+   Compiling tb-config v0.1.0 (/home/nathanael/.worktrees/tb-moderation-disscord-erkennen/rust/crates/tb-config)
+   Compiling tb-llm v0.1.0 (/home/nathanael/.worktrees/tb-moderation-disscord-erkennen/rust/crates/tb-llm)
+    Checking tb-transport-twitch v0.1.0 (/home/nathanael/.worktrees/tb-moderation-disscord-erkennen/rust/crates/tb-transport-twitch)
+    Checking tb-analytics v0.1.0 (/home/nathanael/.worktrees/tb-moderation-disscord-erkennen/rust/crates/tb-analytics)
+    Checking tb-engagement v0.1.0 (/home/nathanael/.worktrees/tb-moderation-disscord-erkennen/rust/crates/tb-engagement)
+    Checking tb-chat v0.1.0 (/home/nathanael/.worktrees/tb-moderation-disscord-erkennen/rust/crates/tb-chat)
+warning: the borrowed expression implements the required traits
+    --> crates/tb-chat/src/scam_pitch.rs:1502:29
+     |
+1502 |     std::fs::create_dir_all(&dir)?;
+     |                             ^^^^ help: change this to: `dir`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#needless_borrows_for_generic_args
+     = note: `#[warn(clippy::needless_borrows_for_generic_args)]` on by default
+
+warning: `tb-chat` (lib) generated 1 warning (run `cargo clippy --fix --lib -p tb-chat -- --no-deps` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 49.84s
+cargo-slot: EXIT=0

@@ -52,4 +52,6 @@ Origin/main bd7dd1d4 wurde konfliktfrei in den eigenen Fixbranch integriert. Gep
 
 > ALLOW: No merge-blocking defect found in the supplied diff and revision snapshots.
 
-Protokoll: /tmp/tb-contact-bait-m1-integrated-gate.log. Format der drei eigenen Rust-Dateien: Exit 0. Die integrierte Kontaktabnahme und Paket-Clippy laufen über cargo-slot mit drei Jobs; ihre Ergebnisse werden im folgenden Paketereignis festgehalten. Keine erneute Gesamtsuite und kein reales Modellurteil behauptet.
+Protokoll: /tmp/tb-contact-bait-m1-integrated-gate.log. Format der drei eigenen Rust-Dateien: Exit 0. Integrierte Kontaktabnahme am veröffentlichten Stand 3341098f: Exit 0, 7 passed, 0 failed, 0 ignored; 18 Pipeline-Fälle sowie Vertrauens- und Einstellungsausnahmen bestätigt. Paket-Clippy: Exit 0 mit dem vorhandenen Borrow-Hinweis. Beide Läufe über cargo-slot mit drei Jobs. Keine erneute Gesamtsuite und kein reales Modellurteil behauptet.
+
+Auch der endgültige Veröffentlichungsstand 3341098f wurde vor dem Push mit demselben Gate-Aufruf und Reviewer geprüft: Exit 0, „ALLOW: No merge-blocking defect found in the supplied diff and revision snapshots.“ Release 3341098f ist über den vorhandenen Wrapper ausgeliefert und live geprüft. Abschlussbelege einschließlich integrierter Tests und getrennter Baseline-Vergleiche liegen unter abschlussbelege/. Weitere Abschlussänderungen betreffen Dokumentation und Belegsicherung, nicht Anwendungscode.
