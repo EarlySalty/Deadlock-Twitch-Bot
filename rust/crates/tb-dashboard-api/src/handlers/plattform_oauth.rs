@@ -182,7 +182,7 @@ impl KickOAuth {
     }
 
     #[cfg(test)]
-    fn fuer_test(id_base: &str, api_base: &str) -> Self {
+    pub(super) fn fuer_test(id_base: &str, api_base: &str) -> Self {
         Self {
             client_id: "kick-cid".into(),
             client_secret: "kick-sec".into(),
@@ -407,7 +407,7 @@ impl GoogleOAuth {
     }
 
     #[cfg(test)]
-    fn fuer_test(token_base: &str, api_base: &str) -> Self {
+    pub(super) fn fuer_test(token_base: &str, api_base: &str) -> Self {
         Self {
             client_id: "g-cid".into(),
             client_secret: "g-sec".into(),
