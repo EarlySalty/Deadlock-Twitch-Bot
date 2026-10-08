@@ -1,0 +1,1417 @@
+{
+  "schema_version": 1,
+  "source_file": "W03-DA04-DA06-URTEILE-01.json",
+  "source_sha256": "c2774f13580071a22a814cd927a74995af8827a32c5c9947227fc7607526223a",
+  "scope": "Mechanical pairing only; complete original reasons remain in source_file. No fix assignment or final independence audit.",
+  "counts": {
+    "B": 57,
+    "C": 4,
+    "A": 5,
+    "PENDING": 1
+  },
+  "pairs": [
+    {
+      "claim": {
+        "id": "W03-DA04-S001-security-1",
+        "claim": "Admin chat-action POSTs execute without validating the required form CSRF token.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_chat_action.rs",
+        "line": 74
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S001-security-1:skeptic-1",
+          "agent_id": "a2462a6fcabf74e2a",
+          "transcript_sha256": "7a82eda879ac5163647d93164c6295a59a3ac5bacee98d2ae4d91bd8b1db87b1"
+        },
+        {
+          "label": "W03-DA04-S001-security-1:skeptic-2",
+          "agent_id": "a4ee5f14742a546fc",
+          "transcript_sha256": "0b86fce636abc2d7c20598430ab6cdb50af5eb19343e5ca4bd410e49b7e3c4f7"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S001-security-2",
+        "claim": "A stale first master_dash_session cookie suppresses the authenticated admin's Discord attribution.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_actor.rs",
+        "line": 27
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S001-security-2:skeptic-1",
+          "agent_id": "af1cf7ab721daefa7",
+          "transcript_sha256": "381075daaf88733c5b35f6bf086075ae0a90a85034372cfb09ce71c09ace1eb9"
+        },
+        {
+          "label": "W03-DA04-S001-security-2:skeptic-2",
+          "agent_id": "a5708859c97144cf9",
+          "transcript_sha256": "78a2316b28923a9afb568b0363e6ab9d891007fad7523d61d1c3e636a7d5532b"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S001-correctness-1",
+        "claim": "The admin chat-action gate permits departed partners whose manual opt-out flag is unset.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_chat_action.rs",
+        "line": 220
+      },
+      "status": "C",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S001-correctness-1:skeptic-1",
+          "agent_id": "a7c28bd76b5ab3d94",
+          "transcript_sha256": "5e8fe4a3dd11d66498ed3f653776ae2c78569798d13b34e219b5659f868bbe93"
+        },
+        {
+          "label": "W03-DA04-S001-correctness-1:skeptic-2",
+          "agent_id": "a02304fe48cd49994",
+          "transcript_sha256": "6b15b10ea75912c711dbf507a8d859f00da6c885c59d73df922be91d5b5d37e0"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S001-correctness-2",
+        "claim": "The audit log silently drops archive events written by the native archive endpoint.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_audit_log.rs",
+        "line": 32
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S001-correctness-2:skeptic-1",
+          "agent_id": "aa651a5d44d578aa4",
+          "transcript_sha256": "13c0e1f1212348d157f04b83f1a4ad71dd00e3a4e6aa83ca6bd95b16b1780bc9"
+        },
+        {
+          "label": "W03-DA04-S001-correctness-2:skeptic-2",
+          "agent_id": "a5add80b88902aada",
+          "transcript_sha256": "8e5e4d416e48bc5c0d3d4c1343df0e2aca80ab015447429fdc3ec1ec8dc9eda6"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S001-correctness-3",
+        "claim": "The dashboard reports a successful announcement when the bot delivered only its plain-chat fallback.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_chat_action.rs",
+        "line": 133
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S001-correctness-3:skeptic-1",
+          "agent_id": "a5e0e1a71919eec9c",
+          "transcript_sha256": "59113fb416f4606448ba30562027fd1c48cd03964da71caacfdc99144b0b5901"
+        },
+        {
+          "label": "W03-DA04-S001-correctness-3:skeptic-2",
+          "agent_id": "a101dd7edf1430889",
+          "transcript_sha256": "15e89a54094a087e5910fd3025911340980a2f706593e53a63477132a6a4c5f7"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S001-correctness-4",
+        "claim": "The audit endpoint rejects date-only since filters despite explicitly promising ISO dates.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_audit_log.rs",
+        "line": 792
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S001-correctness-4:skeptic-1",
+          "agent_id": "aa5c3b9762d604ac1",
+          "transcript_sha256": "e237f09c8f4e83b1639684483e376274c71a43920e891f16f6d00fdcbae82252"
+        },
+        {
+          "label": "W03-DA04-S001-correctness-4:skeptic-2",
+          "agent_id": "afeaf5145a438b3f5",
+          "transcript_sha256": "aeb0dca6eade86853915b51828f028ce801e3108968810ba7b5e869cde5e1098"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S001-concurrency-1",
+        "claim": "Saving announcement text can revert a concurrently saved promo configuration.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_announcements.rs",
+        "line": 88
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S001-concurrency-1:skeptic-1",
+          "agent_id": "a41d82c2de0dac56c",
+          "transcript_sha256": "53491bf27393cc9b5f40f1214d2816575f0338d91d5f3140e53b74fba29d7f4a"
+        },
+        {
+          "label": "W03-DA04-S001-concurrency-1:skeptic-2",
+          "agent_id": "a0d0f784f50bf38d8",
+          "transcript_sha256": "1bb7bbaee6e496e1b8f668e2f7b873fc5acbbb620901d4574c1b2cc1752ca87d"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S002-correctness-1",
+        "claim": "Admin Discord-profile editing rejects normally promoted partners because it requires a remaining twitch_streamers row.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_legacy_streamers.rs",
+        "line": 304
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S002-correctness-1:skeptic-1",
+          "agent_id": "a3e28d2f32f43aaf2",
+          "transcript_sha256": "1cf50820c8cdfdce84b1b5bd905cb6a2d341c34a135fb4bf3d293dee43a65110"
+        },
+        {
+          "label": "W03-DA04-S002-correctness-1:skeptic-2",
+          "agent_id": "a148062c3d978cf45",
+          "transcript_sha256": "b8abe5a5f503be2e2f94d27a631801573cbb6a6d4ec9bd4663772f75dd7d1980"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S002-correctness-2",
+        "claim": "The mounted legacy verification route cannot promote an existing non-partner streamer.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_form_aliases.rs",
+        "line": 70
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S002-correctness-2:skeptic-1",
+          "agent_id": "abc9e27174e610af6",
+          "transcript_sha256": "e761fef15106c3a91d206d01534bb128e6dcb1a660b3311911e6ad48fc3ce1c0"
+        },
+        {
+          "label": "W03-DA04-S002-correctness-2:skeptic-2",
+          "agent_id": "af0b422be3021458e",
+          "transcript_sha256": "77dea93800106e2c08702a557c6fb2bc645f26a8d53fa74ce35ae964432e1623"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S002-correctness-3",
+        "claim": "Admin legal-page reads and saves ignore the configured TB_LEGAL_PAGES_PATH used by public pages.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_legal.rs",
+        "line": 61
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S002-correctness-3:skeptic-1",
+          "agent_id": "afb1b4a61428d7216",
+          "transcript_sha256": "58790c5bcb044ae396b18ff28327c759d3bbb3cc1383fe70d518fc75a8bdf8be"
+        },
+        {
+          "label": "W03-DA04-S002-correctness-3:skeptic-2",
+          "agent_id": "a871fdfa978222f84",
+          "transcript_sha256": "a1a8706e80b3f6406f4295bf7e2081ab0c3781fde1b53b202b9bb97b1332160f"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S002-correctness-4",
+        "claim": "A non-string legal-page body is accepted and overwrites existing custom content with an empty string.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_legal.rs",
+        "line": 195
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S002-correctness-4:skeptic-1",
+          "agent_id": "a4e6d772200dab8ff",
+          "transcript_sha256": "c1f5892d07ad2a75d1d11e220d3f90d06a744a659c3c22ee640f5d7c99821d0b"
+        },
+        {
+          "label": "W03-DA04-S002-correctness-4:skeptic-2",
+          "agent_id": "a02854841fa87dfac",
+          "transcript_sha256": "134353b433b84831a1d6d4c745ff181e0afa137302ebd567e849fbf46f295a7f"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S002-correctness-5",
+        "claim": "The admin security-page fallback omits sections present in the public security-page fallback.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_legal.rs",
+        "line": 28
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S002-correctness-5:skeptic-1",
+          "agent_id": "abdb1ef14f3a5d64d",
+          "transcript_sha256": "d2f1138c38b6753f6f585b88e60d4e466e4391f872401154c2e052213ae7a74f"
+        },
+        {
+          "label": "W03-DA04-S002-correctness-5:skeptic-2",
+          "agent_id": "ade624ec7740ac9f9",
+          "transcript_sha256": "52be6190e070c8ad3e77d2ccbac1b2b43abbe5b79bb56933b0fbb47700f53331"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S002-errors-1",
+        "claim": "Retrying a failed admin removal can report success without disabling the streamer's raid authorization.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_legacy_streamers.rs",
+        "line": 254
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S002-errors-1:skeptic-1",
+          "agent_id": "ad169958b40b278c4",
+          "transcript_sha256": "52b175c25491452c40767cfeae2d3860297616929649f2c684c5f198000c2c76"
+        },
+        {
+          "label": "W03-DA04-S002-errors-1:skeptic-2",
+          "agent_id": "a7155f7770e6bd13e",
+          "transcript_sha256": "d2442cc19cbcd94a49a17aaf4d56e669073ca9090da339ae593828d2116a5ed6"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S002-concurrency-1",
+        "claim": "Parallele Speicheraufrufe für unterschiedliche Rechtsseiten verlieren bereits erfolgreich gespeicherte Änderungen.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_legal.rs",
+        "line": 145
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S002-concurrency-1:skeptic-1",
+          "agent_id": "aa2e69bf90832f5e8",
+          "transcript_sha256": "44b922c397936b880d5d4f22fffbe320e46f8c64b1c74e6fb22ad3a7eaa29a54"
+        },
+        {
+          "label": "W03-DA04-S002-concurrency-1:skeptic-2",
+          "agent_id": "ae28edfa73e875497",
+          "transcript_sha256": "f6734855607765bde2c7296fab58304739d164e53b12056e088a42390bf78ba4"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S002-concurrency-2",
+        "claim": "Legacy-Verifizierung mit clear oder failed überschreibt gleichzeitig gespeicherte Discord-Profiländerungen.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_form_aliases.rs",
+        "line": 58
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S002-concurrency-2:skeptic-1",
+          "agent_id": "a85f38190202119fa",
+          "transcript_sha256": "aa457c620c39e2a8160afa36f5931a8c754fc55eb45d99a11f84f08e86733cce"
+        },
+        {
+          "label": "W03-DA04-S002-concurrency-2:skeptic-2",
+          "agent_id": "a101d4b14c3f1e91a",
+          "transcript_sha256": "00e5bd488485c4e5edbdc3cdb6bc5038b5b0a72f44fb7856e1c93ae50aff94ae"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S002-concurrency-4",
+        "claim": "Gleichzeitige Archivierungs- oder Block-Toggles verlieren eine der beiden Zustandsänderungen.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_form_aliases.rs",
+        "line": 138
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S002-concurrency-4:skeptic-1",
+          "agent_id": "a2928fa4d1e3b12ab",
+          "transcript_sha256": "ac96763750262b1453209f9a58197ac168ffd765246e9935f7796de08daee7f1"
+        },
+        {
+          "label": "W03-DA04-S002-concurrency-4:skeptic-2",
+          "agent_id": "a493cb3876ff78565",
+          "transcript_sha256": "a65230eb7a9958e49ea106fc3a39558bebd094216edb8916967275352079c043"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S002-concurrency-5",
+        "claim": "Die Bulk-Konfiguration meldet einen falschen updatedCount, wenn sich aktive Partner zwischen Zählung und UPDATE ändern.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_config.rs",
+        "line": 178
+      },
+      "status": "C",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S002-concurrency-5:skeptic-1",
+          "agent_id": "a6da2054ff4ad33ff",
+          "transcript_sha256": "61ddd66999f33ec9dea1f48a42952c778dbe917055b813f9f5c4bbf273e831b9"
+        },
+        {
+          "label": "W03-DA04-S002-concurrency-5:skeptic-2",
+          "agent_id": "ac82d4248632f06a4",
+          "transcript_sha256": "ea2664b485043db5d32467925072ea8cec5fd08fd221a18429a6524e2a07f18f"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S003-correctness-1",
+        "claim": "Removing one signup block can also unblock another account matched by its stale login.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-analytics/src/partner_signup_block.rs",
+        "line": 326
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S003-correctness-1:skeptic-1",
+          "agent_id": "ac21f6e23c8324ff0",
+          "transcript_sha256": "031c226123931862a906ecfb919d1712132500943c4658cb0c198e9554004966"
+        },
+        {
+          "label": "W03-DA04-S003-correctness-1:skeptic-2",
+          "agent_id": "a5694fc8e7b877221",
+          "transcript_sha256": "0329e7a61b7f318e0f79c8cd230bbda18bb467fa20a51637f73bafe190cabad9"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S003-concurrency-2",
+        "claim": "A concurrent raid-blacklist insert can roll back an otherwise valid signup-block request.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_partner_signup_block.rs",
+        "line": 254
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S003-concurrency-2:skeptic-1",
+          "agent_id": "a36e83f0acc776e04",
+          "transcript_sha256": "c8256c1161984dabc00245cf8995d22d4a96c1e586a79b4ab6541396e45c0f4d"
+        },
+        {
+          "label": "W03-DA04-S003-concurrency-2:skeptic-2",
+          "agent_id": "a5e3993a7c279b65a",
+          "transcript_sha256": "64597770981c3b3c625f33854243b90276916e543fc7b1ad2e174cd74903be0f"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S004-correctness-1",
+        "claim": "Research detail merges separate sessions when their gap exceeds 30 minutes by less than one second.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_research.rs",
+        "line": 277
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S004-correctness-1:skeptic-1",
+          "agent_id": "a3ca94ce9645ed277",
+          "transcript_sha256": "d7c7fa0f2821c01344c0d1d9313d703fdbb20baf68dd0b1c87bd309328f5faec"
+        },
+        {
+          "label": "W03-DA04-S004-correctness-1:skeptic-2",
+          "agent_id": "af40cb716ce5d84ba",
+          "transcript_sha256": "2b16388bcb0f2c003dee05cdbf7b156a4f69990d5f8e65b40c8e5c8b0c0d4f75"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S004-errors-1",
+        "claim": "A failed roadmap overwrite can destroy the previously saved document.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_roadmap.rs",
+        "line": 111
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S004-errors-1:skeptic-1",
+          "agent_id": "adf0a8876788cbcd7",
+          "transcript_sha256": "7039f66c980c004c4cfe04d44279ef59a1c4f3cdc6b5e22dc2dbd460132885ee"
+        },
+        {
+          "label": "W03-DA04-S004-errors-1:skeptic-2",
+          "agent_id": "abb1445631c7f41d0",
+          "transcript_sha256": "4bf34515b3e973ce3af1418ba2f4a6e2e46f0fce9e5ebf90176349e48f3ef137"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S004-concurrency-1",
+        "claim": "Concurrent roadmap saves can corrupt the stored JSON while both requests report success.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_roadmap.rs",
+        "line": 111
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S004-concurrency-1:skeptic-1",
+          "agent_id": "aa3d503ad0717c35c",
+          "transcript_sha256": "4b4dd16e6379c73414ba5164b5b715b98f97240686071b2ab810ae603289e213"
+        },
+        {
+          "label": "W03-DA04-S004-concurrency-1:skeptic-2",
+          "agent_id": "a05357a43f3bca13c",
+          "transcript_sha256": "0023406f776f28ec4b44edf9da21c6a193b0e69b566d43a5666f4145284e4f64"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S004-concurrency-2",
+        "claim": "A concurrent scout decision can make the GET response contain the same candidate in both status lists.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_scout.rs",
+        "line": 151
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S004-concurrency-2:skeptic-1",
+          "agent_id": "ae1599dffb4d2cbb2",
+          "transcript_sha256": "466bcedfe9882c26b12a42d8b40f5565ed82896d1736b54255a4fbbfb5997363"
+        },
+        {
+          "label": "W03-DA04-S004-concurrency-2:skeptic-2",
+          "agent_id": "a598e2650ad28b6a0",
+          "transcript_sha256": "189e1654ba9d3617bdd0da631cd6a0a03683063021040198f88c9051ca819555"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S005-security-1",
+        "claim": "A nonexistent first master_dash_session cookie bypasses fingerprint validation of the authenticated admin session.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/forward_auth.rs",
+        "line": 65
+      },
+      "status": "A",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S005-security-1:skeptic-1",
+          "agent_id": "aa6fac5c94466a4c1",
+          "transcript_sha256": "0c68ed27f1c1b85b8628bd47e1c5e50c839349556483212f43aaa4794327a4da"
+        },
+        {
+          "label": "W03-DA04-S005-security-1:skeptic-2",
+          "agent_id": "a1ad9b91fc07b222a",
+          "transcript_sha256": "22096f1dc303caa5bdc4da4f2b13e67834ad9002439adb36959e11084ed6886f"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S005-correctness-2",
+        "claim": "Unicode login encoding can make the admin disconnect endpoint disconnect a different ASCII channel.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_streamers.rs",
+        "line": 768
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S005-correctness-2:skeptic-1",
+          "agent_id": "ad4b12d1897f214ec",
+          "transcript_sha256": "35ac90ba87715819007895196dc70fb40d09665c54de2afecfa70372ed37a1b2"
+        },
+        {
+          "label": "W03-DA04-S005-correctness-2:skeptic-2",
+          "agent_id": "ae9bd24190b045afb",
+          "transcript_sha256": "05bd9eb35c2e0918194c95acfb462feba78573988fe73622a59ed9adfcb630f5"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S005-errors-2",
+        "claim": "Disconnect transport failures falsely report that no disconnection occurred after side effects may already have completed.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_streamers.rs",
+        "line": 729
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S005-errors-2:skeptic-1",
+          "agent_id": "abc81e365326ce826",
+          "transcript_sha256": "6446332bc77d67c92a5390364f04bfbdd263d4ba47605afbf7939fd51cef7e9a"
+        },
+        {
+          "label": "W03-DA04-S005-errors-2:skeptic-2",
+          "agent_id": "a73e236e5c90f7fee",
+          "transcript_sha256": "0d38e84d8feb0c62c8503e38d1f04952b5efa7c338d66763ea36ed3bad0f848a"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S005-concurrency-2",
+        "claim": "Nach einem Raid-Auth-Fehler während der Departnerung überspringen Verify-Retries die ausstehende Bereinigung.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-analytics/src/streamers_crud.rs",
+        "line": 525
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S005-concurrency-2:skeptic-1",
+          "agent_id": "a70e2fa17d6090497",
+          "transcript_sha256": "15012f054b77be7c4d596c4d5330f20a4021f4f8840799694f3a08e6eff1c517"
+        },
+        {
+          "label": "W03-DA04-S005-concurrency-2:skeptic-2",
+          "agent_id": "ac74d6229e4ae1cc4",
+          "transcript_sha256": "0394a07ca5df22570b18bb71878ef83ba6ad070046389407634c02aa4a2d76d0"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S005-concurrency-3",
+        "claim": "Die Departnerung überschreibt gleichzeitig geänderte Discord-Mitgliedschaft mit einem veralteten Wert.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-analytics/src/streamers_crud.rs",
+        "line": 460
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S005-concurrency-3:skeptic-1",
+          "agent_id": "ab4639e995ba82740",
+          "transcript_sha256": "f0d8ecb04287c3ae868247f104d792e12a05027a6f192044409eb3332236b88f"
+        },
+        {
+          "label": "W03-DA04-S005-concurrency-3:skeptic-2",
+          "agent_id": "ad82e3c8f6e2fdc74",
+          "transcript_sha256": "c002ff04337150a40aea91df0c58b17229d7973dd1002025748388c5210ed208"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA04-S005-concurrency-4",
+        "claim": "Parallele Archive- und Block-Toggles verlieren jeweils einen Zustandswechsel.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-analytics/src/streamers_crud.rs",
+        "line": 751
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA04-S005-concurrency-4:skeptic-1",
+          "agent_id": "abd3d1d64e345f8c7",
+          "transcript_sha256": "067cd0f8de0004d06b761569a7f397f8f4c6622c77ec0039a39c6fbb69d64aae"
+        },
+        {
+          "label": "W03-DA04-S005-concurrency-4:skeptic-2",
+          "agent_id": "a66ab0dd27b2748e3",
+          "transcript_sha256": "e4d0e5a7ed03b17c330ecc5c8dbb3d72aadaf98d58b866aee9dabefa8a9f0a06"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA05-S001-security-1",
+        "claim": "Behind a loopback reverse proxy, one unauthenticated visitor can exhaust the Self-Explainer quota for every visitor.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/self_explainer.rs",
+        "line": 816
+      },
+      "status": "A",
+      "vote_refs": [
+        {
+          "label": "W03-DA05-S001-security-1:skeptic-1",
+          "agent_id": "a510b35eb4a3fb42d",
+          "transcript_sha256": "71dc88df9e8c030a953d6a8300820c0af1fab32593ba9476febce0ddc91ca4cc"
+        },
+        {
+          "label": "W03-DA05-S001-security-1:skeptic-2",
+          "agent_id": "a95f415aa5bcf7bf6",
+          "transcript_sha256": "91438e11d5277619834463895f6501b8053503226dd6d098aa6553b362385322"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA05-S001-correctness-1",
+        "claim": "Readiness ignores the internal API destination configured in the active snapshot.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/health_probe.rs",
+        "line": 230
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA05-S001-correctness-1:skeptic-1",
+          "agent_id": "a76f198b766237226",
+          "transcript_sha256": "22baf4289f58a6a32b5e18cbd008ff82b8b2b412830e8718938646e287a41ac3"
+        },
+        {
+          "label": "W03-DA05-S001-correctness-1:skeptic-2",
+          "agent_id": "a3669034c52bb5c3a",
+          "transcript_sha256": "c6ff8fdd2b305414bf74e413242d553f3afa651599d8b3b3110400ef73e0551e"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA05-S001-correctness-2",
+        "claim": "The self-explainer ignores the configured knowledge directory.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/self_explainer.rs",
+        "line": 354
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA05-S001-correctness-2:skeptic-1",
+          "agent_id": "a45c206eecfcf5332",
+          "transcript_sha256": "00be048fd8d418345b761d07d40b4c154f61e9bfd8682c41d0e5fc4a108a613b"
+        },
+        {
+          "label": "W03-DA05-S001-correctness-2:skeptic-2",
+          "agent_id": "a911c046982c67924",
+          "transcript_sha256": "e2af6bb7f3873aadcbea1a30aee963f53892085fed7fb969cb03d1cf25ae4560"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA05-S001-correctness-3",
+        "claim": "Long conversation history can remove the current question from document retrieval.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/self_explainer.rs",
+        "line": 419
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA05-S001-correctness-3:skeptic-1",
+          "agent_id": "aad761729af79113e",
+          "transcript_sha256": "0af7cd486598cec4566032a3baa359a2396dbd2dd9dd150417618834eaccb0e3"
+        },
+        {
+          "label": "W03-DA05-S001-correctness-3:skeptic-2",
+          "agent_id": "a37aaa6499381de81",
+          "transcript_sha256": "49e36c1e4b1ee0c4c5cc65c996775f63a81e0f5315264f060b0d2964b3bec2d1"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA05-S001-correctness-4",
+        "claim": "The health probe rejects valid IPv6 loopback HTTP URLs.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/health_probe.rs",
+        "line": 289
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA05-S001-correctness-4:skeptic-1",
+          "agent_id": "ac28374cb50838fa2",
+          "transcript_sha256": "184109d3ab564f1d59b1c9d28eae337efa22ec728526b9c7f07059aecab8bd6d"
+        },
+        {
+          "label": "W03-DA05-S001-correctness-4:skeptic-2",
+          "agent_id": "a62f6895a5741e248",
+          "transcript_sha256": "39669afe2ea09e98a2d336299766c0495c3447cf17abfd5d9cf734c01a5da131"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA05-S001-errors-1",
+        "claim": "Readiness reports success when reading an HTTP 200 upstream health response body fails.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/health_probe.rs",
+        "line": 317
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA05-S001-errors-1:skeptic-1",
+          "agent_id": "a57390c1c0859c02a",
+          "transcript_sha256": "e3d94540077ea38dc38f84ecd6407fc37e9109dc008c6f540cce006e8e2cdf44"
+        },
+        {
+          "label": "W03-DA05-S001-errors-1:skeptic-2",
+          "agent_id": "ac351ae0449b7a2f0",
+          "transcript_sha256": "f2d1948bba35bf8d59d3d9928d9ee7e3dd27955cc161c7b42c8a0714d39552bc"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA05-S001-errors-2",
+        "claim": "An internal API base URL ending in /internal/twitch/v1 produces a duplicated path in self-explainer Discord logging.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/self_explainer.rs",
+        "line": 719
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA05-S001-errors-2:skeptic-1",
+          "agent_id": "afe8f59b50bef986b",
+          "transcript_sha256": "7045c49f07da60dbd2fdcdf02fbdc00b76eaa990205e655abb820d89d207a607"
+        },
+        {
+          "label": "W03-DA05-S001-errors-2:skeptic-2",
+          "agent_id": "a00f2a93bc01d072a",
+          "transcript_sha256": "0f1ce963a2f12c35b020804409abe12acfa33cdc740eb5d58d1935a0452b591b"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA05-S002-security-1",
+        "claim": "The error-log API returns secrets unredacted in its timestamp and level fields.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/system/errors.rs",
+        "line": 223
+      },
+      "status": "C",
+      "vote_refs": [
+        {
+          "label": "W03-DA05-S002-security-1:skeptic-1",
+          "agent_id": "a2dcbd463fb0c0d0a",
+          "transcript_sha256": "f20cc9917e8c3d3eb6ac4acbeb84a6f25ad9b0e9ac37528cefd540f5f0cee6f1"
+        },
+        {
+          "label": "W03-DA05-S002-security-1:skeptic-2",
+          "agent_id": "a36ab01fefa594dd1",
+          "transcript_sha256": "1ea099d8dd4f5e22b947158196d8afa93fc20f2f085685c98f91227a8c67db89"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA05-S002-correctness-1",
+        "claim": "Database fingerprint ignores PostgreSQL URI connection overrides, allowing different databases to compare equal.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/system/health.rs",
+        "line": 75
+      },
+      "status": "C",
+      "vote_refs": [
+        {
+          "label": "W03-DA05-S002-correctness-1:skeptic-1",
+          "agent_id": "a5f39034fc0a42dd0",
+          "transcript_sha256": "4ce3ec35cfba2e46988c1a4ec4f66e33fc90778c2caeaa628d8306cefdfc22a9"
+        },
+        {
+          "label": "W03-DA05-S002-correctness-1:skeptic-2",
+          "agent_id": "a965c1ff083a7ced7",
+          "transcript_sha256": "ba594264b908f8c6dfd192c9e3572a923f3654529861e7cd3efa7b5cf60e75e4"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA05-S002-correctness-2",
+        "claim": "System health ignores the active configuration's internal API target.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/system/health.rs",
+        "line": 112
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA05-S002-correctness-2:skeptic-1",
+          "agent_id": "a3f3c2a4c00725118",
+          "transcript_sha256": "74e206a76c00e5d4325ef696db851da69254f4fed8d4477cead89a6cc15eaceb"
+        },
+        {
+          "label": "W03-DA05-S002-correctness-2:skeptic-2",
+          "agent_id": "a3a6cd6b98d934b62",
+          "transcript_sha256": "eb5946ea4f346ab70be99406c4adb10db4d0ef5507778388f1d0972eeb09b554"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA05-S002-correctness-3",
+        "claim": "SQL console replaces standard NUMERIC and naive timestamp values with type placeholders.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/system/query.rs",
+        "line": 243
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA05-S002-correctness-3:skeptic-1",
+          "agent_id": "ae3c85426d23721af",
+          "transcript_sha256": "4fd584b73b8aba4d2baf59fd7588322721dc8500328f9a2436652c90c914faba"
+        },
+        {
+          "label": "W03-DA05-S002-correctness-3:skeptic-2",
+          "agent_id": "a504cff0e44e5f07c",
+          "transcript_sha256": "edd455561282258ba843fa6692fecff71860383efb2f10fdd4f8f7dcf5fa82d3"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA05-S002-correctness-4",
+        "claim": "SQL console loses result-column metadata when a SELECT returns no rows.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/system/query.rs",
+        "line": 191
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA05-S002-correctness-4:skeptic-1",
+          "agent_id": "a0acbbdd2df54c11a",
+          "transcript_sha256": "2de7d72901b6dc19de625946c7532fbd7d6faa702dbfbf3abdceaebf1f297f87"
+        },
+        {
+          "label": "W03-DA05-S002-correctness-4:skeptic-2",
+          "agent_id": "a8dda1654f7aeb809",
+          "transcript_sha256": "f223cf7162e9a51ff75a6112d1ef493b94bd0159e886ea9c95ce9931f0c7220a"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S001-security-3",
+        "claim": "Manual-plan forms reject the owner's valid partner-access admin session because form CSRF ignores its cookie.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/legacy_form.rs",
+        "line": 70
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S001-security-3:skeptic-1",
+          "agent_id": "a9f67793dd3eb05eb",
+          "transcript_sha256": "67e68b332c7ae25e085f5a73eb890c645fef53673bdac66513131bb19f8f6d3b"
+        },
+        {
+          "label": "W03-DA06-S001-security-3:skeptic-2",
+          "agent_id": "a4ced44216a9d87c9",
+          "transcript_sha256": "6c15f9099de49d28f2cafbb907be492b810b1c79ac042e7850eceb66730ee229"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S001-correctness-1",
+        "claim": "Manual plan saves discard valid timezone-less expiry timestamps.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/admin_manual_plan.rs",
+        "line": 362
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S001-correctness-1:skeptic-1",
+          "agent_id": "a98a02d9f250da866",
+          "transcript_sha256": "a5d65845963d182cf22f7648e36e35faf16296fc121a2298ca3aa3b60342539e"
+        },
+        {
+          "label": "W03-DA06-S001-correctness-1:skeptic-2",
+          "agent_id": "aafedbf624347dcf6",
+          "transcript_sha256": "92ab5779543440e1b538be9ff5d5c0d84ab620596af816e4b5b5b3854508aa6b"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S001-errors-1",
+        "claim": "The trial-start endpoint grants trials after a failed paid-subscription lookup, overriding existing paid access.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing.rs",
+        "line": 38
+      },
+      "status": "PENDING",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S001-errors-1:skeptic-1",
+          "agent_id": "a56a6138740da9c4b",
+          "transcript_sha256": "331e2390bff210016be68ecbf7fa171ff01be9e5fda59b5b90e80718b9052422"
+        },
+        null
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S001-concurrency-1",
+        "claim": "Concurrent trial grants can overwrite a newly assigned paid manual plan and grant an already-consumed trial again.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-analytics/src/trial.rs",
+        "line": 197
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S001-concurrency-1:skeptic-1",
+          "agent_id": "ae825c39b4df999e2",
+          "transcript_sha256": "f872b7c0eb631e4feaecefb3f199e47d4bab5ca53d76ce3cf6efca65e7695e43"
+        },
+        {
+          "label": "W03-DA06-S001-concurrency-1:skeptic-2",
+          "agent_id": "a1062c72c250a38a8",
+          "transcript_sha256": "aa1c8bc2ebe5f23ffe5b5f0b5a5261242cdf399df3a121e5d0e74ff898bb80f8"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S001-concurrency-2",
+        "claim": "A stale score refresh within the same second can restore a manual raid boost after the override is cleared.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-raid/src/score_store.rs",
+        "line": 333
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S001-concurrency-2:skeptic-1",
+          "agent_id": "afee3aa4f9e692e27",
+          "transcript_sha256": "e6c06ac6a4b2ec247e60ceab17a448d04fc2788208630e2f1fa10823dd98122b"
+        },
+        {
+          "label": "W03-DA06-S001-concurrency-2:skeptic-2",
+          "agent_id": "ac642d43bd1f12328",
+          "transcript_sha256": "2fb22f61a2e36b5b2ad4cbae2fc0a6321c96c6f98c7870ed0ed6e5ce2c89ae8c"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S002-security-1",
+        "claim": "A recycled Twitch login grants access to the previous owner's Stripe customer portal.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing_page.rs",
+        "line": 1103
+      },
+      "status": "A",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S002-security-1:skeptic-1",
+          "agent_id": "aa9302bfa97f877c9",
+          "transcript_sha256": "2b1dec06dee4e0272f96c3f905ac0068e24a9fca4d0974757abc718473aef07c"
+        },
+        {
+          "label": "W03-DA06-S002-security-1:skeptic-2",
+          "agent_id": "aace3669eabacd236",
+          "transcript_sha256": "21dfae997b9e2655880dcf6fd3e7a3eb9864ad30c5df764b009bfb65a5ab8f21"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S002-security-2",
+        "claim": "A stale admin cookie prevents valid partner requests from cancelling subscriptions or saving billing forms.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing_page.rs",
+        "line": 1025
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S002-security-2:skeptic-1",
+          "agent_id": "a4cd1085ce5b9c284",
+          "transcript_sha256": "7e2aa41c91b48b4a5219a4c16c67b185ba51c4bd039d5a1f13be2aeeee5c5745"
+        },
+        {
+          "label": "W03-DA06-S002-security-2:skeptic-2",
+          "agent_id": "a9299c2dda2f8b7e2",
+          "transcript_sha256": "91ad905e8298ad085ecf4c00363285d474930e202c942483c63f9197bba687c0"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S002-security-3",
+        "claim": "Billing form CSRF validation rejects every request authenticated solely by a durable partner-access session.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing_page.rs",
+        "line": 1028
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S002-security-3:skeptic-1",
+          "agent_id": "acbd00e2574f8f2c5",
+          "transcript_sha256": "e798af56bdf4ff70c40cd28c3144f0adaf3e0e1b89392165c09c0b5757c17157"
+        },
+        {
+          "label": "W03-DA06-S002-security-3:skeptic-2",
+          "agent_id": "a4933aa76b0d9788b",
+          "transcript_sha256": "dead03ea55c76d7d2cefc93352a9d80a18592c8279d39efc1a67355bbc403a4c"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S002-correctness-2",
+        "claim": "A paid Plus checkout can be recorded as Free when its configured Stripe price has no plan metadata.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing_page.rs",
+        "line": 247
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S002-correctness-2:skeptic-1",
+          "agent_id": "ad67892bd71765754",
+          "transcript_sha256": "8398f9f30197b7063632ddc436bb63726ef18a7c64e566cab7080eadcbcd5850"
+        },
+        {
+          "label": "W03-DA06-S002-correctness-2:skeptic-2",
+          "agent_id": "a0f681d4998b095f6",
+          "transcript_sha256": "efeac65341f3ac66a7bcc28fde7a192ab9be0fdce1df3550d84d9187ee48fcfa"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S002-correctness-4",
+        "claim": "Billing readiness reports live-ready even when no Stripe price IDs are configured.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing_page.rs",
+        "line": 893
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S002-correctness-4:skeptic-1",
+          "agent_id": "acb949f02340d1d73",
+          "transcript_sha256": "d7929f93de6fa428b74a0154d383d693f6708c74a52299e4086c508602427ebe"
+        },
+        {
+          "label": "W03-DA06-S002-correctness-4:skeptic-2",
+          "agent_id": "a3ca1dd24d099a9b0",
+          "transcript_sha256": "9097afb0cb26958701f29833ee41b2c2f182aeff676993d4f923971f88291ab4"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S002-correctness-5",
+        "claim": "Checkout preview declares Creator Pro ready even though its checkout is explicitly disabled.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing_page.rs",
+        "line": 812
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S002-correctness-5:skeptic-1",
+          "agent_id": "aa42427269fffb38f",
+          "transcript_sha256": "ba886fd97bd554052a59031bb1a617dfe427a891851ded0cfb42adccef70be06"
+        },
+        {
+          "label": "W03-DA06-S002-correctness-5:skeptic-2",
+          "agent_id": "a520b4194cbc3184e",
+          "transcript_sha256": "5d4e20afb267203c40552af262c0dcf2be9938da6bdd8a99592af16e11ebc24e"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S002-correctness-6",
+        "claim": "Numeric checkout cycles overflow into valid annual cycles instead of normalizing to monthly.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing_page.rs",
+        "line": 853
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S002-correctness-6:skeptic-1",
+          "agent_id": "ab1de59fbd9f836de",
+          "transcript_sha256": "3060fa970593dc3c66fef1fd9176e93ad7c2b4a1432eb6c206640c6912909e8d"
+        },
+        {
+          "label": "W03-DA06-S002-correctness-6:skeptic-2",
+          "agent_id": "ac7426dfbdba3f9dc",
+          "transcript_sha256": "9d2c939e46bd96d32e38efabe60361fc5b1560044a9737d437a32df76a493c8a"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S002-concurrency-1",
+        "claim": "Concurrent checkout requests can create independently billable subscriptions for the same partner and plan.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing_page.rs",
+        "line": 288
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S002-concurrency-1:skeptic-1",
+          "agent_id": "a4a737c38fa1a2628",
+          "transcript_sha256": "8375ba07c9a67a489ca2afc7bfb5b5e45aeae33730127a8207e06f398a68bb3b"
+        },
+        {
+          "label": "W03-DA06-S002-concurrency-1:skeptic-2",
+          "agent_id": "ae6461e6b33ec20d2",
+          "transcript_sha256": "1e6712a4c4f906721bdb466753b60cda9f1cc496f0c3c439fa39624e1c684706"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S002-concurrency-2",
+        "claim": "A delayed cancellation response can overwrite a newer canceled subscription with active status.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing_page.rs",
+        "line": 1138
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S002-concurrency-2:skeptic-1",
+          "agent_id": "a687c2f28cb8a8eaa",
+          "transcript_sha256": "7df30e30c67a17ccfe86fafed7835295ecd0b9f27bf1ed96ba49bb9149fb8ced"
+        },
+        {
+          "label": "W03-DA06-S002-concurrency-2:skeptic-2",
+          "agent_id": "a2d7596ebad81a330",
+          "transcript_sha256": "bce6322d49cc75a14edc70da1583f8946cd0865605cc0b0bf0019c7b0c59f0cc"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S002-concurrency-3",
+        "claim": "A delayed post-commit cancellation sync can undo a newer webhook's free plan mirror.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing_page.rs",
+        "line": 1153
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S002-concurrency-3:skeptic-1",
+          "agent_id": "af22eb2d550f759c6",
+          "transcript_sha256": "eb0a760405fd8ad6962f1f0d3d28111d03f639b414303f01125fad2b95eae359"
+        },
+        {
+          "label": "W03-DA06-S002-concurrency-3:skeptic-2",
+          "agent_id": "a182fcbd344e61938",
+          "transcript_sha256": "77f78cc582523ae689002b4c2c55927f06ebefc6e534f33fdd99087e13a8cf94"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S002-concurrency-4",
+        "claim": "A concurrent thin invoice update can erase billing-period changes saved by the cancellation fallback.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing_page.rs",
+        "line": 1138
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S002-concurrency-4:skeptic-1",
+          "agent_id": "a3dd043423373960f",
+          "transcript_sha256": "76f1e6f8a1e384c409dd6cdd72351601143877bca931f40cbfbdd925146e9daa"
+        },
+        {
+          "label": "W03-DA06-S002-concurrency-4:skeptic-2",
+          "agent_id": "a232349aed6e65ee6",
+          "transcript_sha256": "0dfdb4717f69227f0627535b6b8e2c58100d10b71b803d8c37e97037b29ac652"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S003-security-1",
+        "claim": "Reassigned Twitch logins expose and overwrite the previous owner's billing profile.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing_profile.rs",
+        "line": 189
+      },
+      "status": "A",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S003-security-1:skeptic-1",
+          "agent_id": "aa13615d152065d1f",
+          "transcript_sha256": "68931f1040eb5b429793d2fd6f74cd62c568a425f2ef92bcbb929a9a2858cb85"
+        },
+        {
+          "label": "W03-DA06-S003-security-1:skeptic-2",
+          "agent_id": "a83108f1100b6e291",
+          "transcript_sha256": "5d598e92c6f1e19a18e2a0d6a57828a2e7b68dcf2e9c1eb4f1caa18972dd80c7"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S003-security-2",
+        "claim": "Reassigned Twitch logins expose the previous owner's monetization history.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/monetization.rs",
+        "line": 45
+      },
+      "status": "A",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S003-security-2:skeptic-1",
+          "agent_id": "a268b57123909d998",
+          "transcript_sha256": "bfbe06c84a501f1a09c40151519b7e1cc0b9b53535c05ee6c2686c55d23abc86"
+        },
+        {
+          "label": "W03-DA06-S003-security-2:skeptic-2",
+          "agent_id": "ae3b099d852befac6",
+          "transcript_sha256": "8eca08f643488b0e9825253cb6c4c555225ed6037be9bc5e0931d7afe1be3bc0"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S003-correctness-1",
+        "claim": "The Stripe webhook acknowledges commission database failures with HTTP 200 even when no commission was recorded.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing_webhook.rs",
+        "line": 303
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S003-correctness-1:skeptic-1",
+          "agent_id": "a46795af6c7e3b6b9",
+          "transcript_sha256": "d5af8b79429538ca5246936d71a4be0ffad841db43ddc139aad47db72414dc80"
+        },
+        {
+          "label": "W03-DA06-S003-correctness-1:skeptic-2",
+          "agent_id": "af5c0bfbbc2c91585",
+          "transcript_sha256": "951187f22fd1fec11288a67881f56664398c3384382552b6aeee9dbbfdeb3959"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S003-correctness-2",
+        "claim": "Billing-profile saves reject the authenticated partner's valid CSRF token when a master-session cookie is also present.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing_profile.rs",
+        "line": 430
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S003-correctness-2:skeptic-1",
+          "agent_id": "ad54953c7e4962019",
+          "transcript_sha256": "e0290457cef21f2bd0c5d66a85d7562426dbbff7f8b3438ec2cb56595ead882b"
+        },
+        {
+          "label": "W03-DA06-S003-correctness-2:skeptic-2",
+          "agent_id": "a9af68ebd327006aa",
+          "transcript_sha256": "815706bf2cbac4ce84c928f9dfe27a331ece40a8654e7e8fb2e50b9be0c159b9"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S003-correctness-3",
+        "claim": "Stripe prefill overwrites an explicitly saved German billing country with the Stripe customer's foreign country.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing_profile.rs",
+        "line": 355
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S003-correctness-3:skeptic-1",
+          "agent_id": "a40c593ea9c604425",
+          "transcript_sha256": "23855f1b0aed8ad681501592ba06a505099a44dc102be92fb7b83838334019ae"
+        },
+        {
+          "label": "W03-DA06-S003-correctness-3:skeptic-2",
+          "agent_id": "acd67230326a0c16f",
+          "transcript_sha256": "233e2e819eb3d6d1746960743697bfe08002b6642c7fcdac3a5505efdffe3e7a"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S003-correctness-4",
+        "claim": "Repeated live Stripe synchronization creates new products while reusing prices belonging to the previous products.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing_stripe_sync.rs",
+        "line": 123
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S003-correctness-4:skeptic-1",
+          "agent_id": "a01df7531f5ac144c",
+          "transcript_sha256": "04f786ae4a559a52ca80321b099c2cbdfcb9fc36269f7d22d3b343d1f31a96aa"
+        },
+        {
+          "label": "W03-DA06-S003-correctness-4:skeptic-2",
+          "agent_id": "a2f0c43853b6225cd",
+          "transcript_sha256": "64a9ee01edc1f675ee5d8936652f0f0e05a5ffa902cf1a66b771b1ffd5db08d9"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S003-correctness-5",
+        "claim": "Stripe synchronization reports price_map_ready and ready_for_live even when no usable price mapping exists.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing_stripe_sync.rs",
+        "line": 351
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S003-correctness-5:skeptic-1",
+          "agent_id": "a8ea78ad75af32502",
+          "transcript_sha256": "a3cd5a13ea0f004712a80b556b43eea26cc8ddeee29c0c44260637008116514e"
+        },
+        {
+          "label": "W03-DA06-S003-correctness-5:skeptic-2",
+          "agent_id": "ab715ff54a63c88d4",
+          "transcript_sha256": "e9b40b4cb755fe72c7bdce85c845ad1d64da78d9b2e20dffd0deef83f902386e"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S003-concurrency-1",
+        "claim": "Thin invoice upserts can overwrite concurrently updated subscription plan and period fields.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-analytics/src/stripe/webhook_apply.rs",
+        "line": 433
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S003-concurrency-1:skeptic-1",
+          "agent_id": "aece26a120923bfd6",
+          "transcript_sha256": "2f1d51f40e53fcb84f2b00d314d5e5097e024d15ab875fc9a22b5a193552687a"
+        },
+        {
+          "label": "W03-DA06-S003-concurrency-1:skeptic-2",
+          "agent_id": "ae604deaaa8c51e98",
+          "transcript_sha256": "c46985c15f6da5005df50b74ec78484585cea5c43064c0d6756b990a4f164626"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S003-concurrency-2",
+        "claim": "Post-commit webhook plan synchronization can restore a paid plan after cancellation.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing_webhook.rs",
+        "line": 244
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S003-concurrency-2:skeptic-1",
+          "agent_id": "a03e4715f561544b8",
+          "transcript_sha256": "d5f8daef0f05117b4b561c3bff90c40d7614e9b0b4e890dcb6f1f8cc6aa8d78e"
+        },
+        {
+          "label": "W03-DA06-S003-concurrency-2:skeptic-2",
+          "agent_id": "a875776a546f693bd",
+          "transcript_sha256": "75b6006104c0abab7191ea247216282733e76eb0cca0ba3a5d15b8cd492b944c"
+        }
+      ]
+    },
+    {
+      "claim": {
+        "id": "W03-DA06-S003-concurrency-3",
+        "claim": "An invoice webhook processed before its subscription mapping can permanently miss affiliate commission.",
+        "file": "/home/nathanael/repos/Deadlock-Twitch-Bot/rust/crates/tb-dashboard-api/src/handlers/billing_webhook.rs",
+        "line": 297
+      },
+      "status": "B",
+      "vote_refs": [
+        {
+          "label": "W03-DA06-S003-concurrency-3:skeptic-1",
+          "agent_id": "a6dae7ab8d935b74d",
+          "transcript_sha256": "dc59d0cdd3cb66468c39bbd6a0fc6f2d918f3e15708bf6fcecf0fd823d5bba79"
+        },
+        {
+          "label": "W03-DA06-S003-concurrency-3:skeptic-2",
+          "agent_id": "a8c20a8f2338180fd",
+          "transcript_sha256": "48769b14bbe7eb83ac980e7cdec889f7db6f7aa7af33491190cc786721f197ea"
+        }
+      ]
+    }
+  ]
+}

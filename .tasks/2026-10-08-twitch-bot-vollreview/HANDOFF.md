@@ -1,5 +1,39 @@
 # Wiederaufnahme des Vollreviews
 
+## Aktueller Wiederaufnahmestand nach der Zwölf-Stunden-Auskunft
+
+Am 2026-10-08 erneut per ls-remote bestätigt: main f04c0ef03d47ce4893ee4d17cb98eeb4c2f6c473 und Artefaktbranch 1adb7e802ffe89a5597073f92481bdae8383dfb1. B02 und A01 bleiben die zwei nachgewiesenen Anwendungscode-Integrationen. Kein Deploy, Neustart oder Live-Nachweis. Die folgende aktuelle Tabelle ersetzt abweichende Aktivmeldungen im historischen Stand darunter.
+
+| Zweck | Run-ID | Task-ID | Zustand bei Journalprüfung |
+|---|---|---|---|
+| Serielle Integration B05, danach B09, danach B08 | wf_beeac761-2c8 | wpx113kdx | B05 gestartet, kein Ergebnis; B09/B08 noch nicht gestartet |
+| A02 frischer Fix Runde 2 und Kritik | wf_8d15f5fe-eff | wx57xab14 | Fixer gestartet, kein Ergebnis |
+| B03 frischer Fix Runde 4 und Kritik | wf_e6ba5fe6-44e | wgefq8ej9 | Fixer gestartet, kein Ergebnis |
+| B01/B04/B06/B07/B10 Integrationsvorbereitung | wf_f7342e70-084 | wq0ls3kxm | Fünf Rollen gestartet, keine Ergebnisse |
+| Zwei fehlende Urteile ergänzen | wf_287d5302-dbb | w3c9l4lav | SM04-Kritik und zweiter Skeptiker zu W03-DA06-S001-errors-1 gestartet, keine Ergebnisse |
+| Q04-Teilberichte 1, 2 und 4 | wf_874d1dcd-995 | wg0cyy3ty | Drei Rollen gestartet, keine Ergebnisse; Teil 3 noch nicht gestartet |
+| W03-Restgegenprüfung | wf_16dfb9cb-031 | wc1nrzzig | 36 Ergebnisse von 180 geplanten Skeptikern im Journal |
+| W04 | wf_b01ff274-9fa | wyiyzgmff | 109 Ergebnisse von 230 geplanten Reviews im Journal |
+| W05 | wf_a9db9baa-10f | wanhv3338 | 80 Ergebnisse von 485 geplanten Reviews im Journal |
+| W06 | wf_d11f7416-b1a | wa8zdhmi2 | 51 Ergebnisse von 440 geplanten Reviews im Journal |
+| W07 | wf_7417fa2e-5e9 | wi8qh46vu | 45 Ergebnisse von 835 geplanten Reviews und ein Ausfall im Journal |
+
+Die Journalzählungen belegen vorhandene Rückgaben, weder fachliche Abnahmen noch den gegenwärtigen Prozesszustand. Vor Wiederaufnahme erhaltene Arbeit und Journal prüfen; keine Doppelstarts. Astra führt während der seriellen Integrationskette keinen anderen eigenen Main-Push aus. BRIEFING-SERIELLE-INTEGRATION-02.md bindet die drei Integrationsrollen. Artefaktsicherungen auf dem Auditbranch bleiben davon unabhängig. Die drei neuen Integrationsberichte liegen bei dieser Prüfung noch nicht vor.
+
+B08-Prüfabschluss und echte frische Kritik sind beendet und auf Sol geprüft: ABSCHLUESSE-13.json und B08-PRUEFABSCHLUSS.md, Head 70d26a8b00189d3212af53337935757eb576a50e auf e98b7f01. Standard-Suite 1337/31/6 ignoriert gegen 1332/31/6, 13 Parserfälle bestanden, Clippy beidseitig Exit 0. Der optionale Research-Test liefert beim vorzeitigen Rücksprung keinen HTTP-/DB-Nachweis. Keine neue Main-Integration daraus ableiten.
+
+Q04-ORIGINALE.json enthält 191 geprüfte Originale: 96 Bewertungen und 95 Kritiken, 9432 echte Sol-Datensätze und sieben getrennte synthetische Datensätze. 43 Kritiken BESTÄTIGT, 52 KORRIGIERT; SM04 fehlt nach API 403. Q04-SM04-BEWERTUNG.json erhält die unveränderte Eingabe für die Ersatzrolle. Noch keine globale Gesamtnote oder fünf abschließenden Empfehlungen. Exakte Teilberichtseingaben in WORKFLOW-ARGS.json; Teil 3 wartet auf die fehlende SM04-Kritik.
+
+W03-DA04-DA06-URTEILE-01.json enthält den neutralen Extraktor und 133 Skeptiker, Modelle/Hashes/Originale geprüft: 5873 echte Sol-Datensätze und zwei getrennte synthetische Datensätze. Ein zweites Urteil fehlt nach API 403. W03-DA04-DA06-PAARE-01.json ordnet die vorhandenen Rückgaben mechanisch zu: fünf A, 57 B, vier C und ein offenes Paar. Diese Zuordnung ist noch keine abschließende Unabhängigkeitsabnahme, neue Fixfreigabe oder aktualisierte Gesamtbefundzahl. Bestehende C-Gruppen bleiben ausgeschlossen.
+
+Status 8 wf_63f902dc-aae ist beendet und jetzt abgenommen: Agent a297458851a9ba920, 15 echte Sol-Datensätze, fertiger Transcript-SHA256 9b384e9517c3080e50b5e39f3f5d5920cc39018ee524741a1a949843ed3812f5. Letzte StructuredOutput-Rückgabe stimmt exakt mit dem Journal überein. Der vorherige TODO-Inhalt ist wortgleich erhalten. Ereignis 8 bleibt historisch; spätere Abschlüsse gehören in Ereignis 9.
+
+Der Nutzer erhielt eine Statusauskunft, keine Abschlussmeldung. Die Deployfrage wurde erneut gestellt; weiterhin keine menschliche Freigabe. Die Stop-Hook-Meldung über offene Branches ersetzt keine fehlenden Reviews oder Integrationsnachweise. Aktive Fixdateien, benötigte Belegworktrees und der fremde Hauptcheckout bleiben erhalten; keine unvollständig geprüfte Arbeit zum Erzwingen eines Abschlusses mergen oder löschen.
+
+Nächster Schritt: diese abgeschlossenen Metadaten gezielt sichern, erhaltene Rückgaben auswerten und die bestehenden Fixketten unter ihren Schreibgrenzen weiterführen.
+
+## Historischer Stand vor diesen Nachträgen
+
 Stand: 2026-10-08, nach A01-Integration und serieller B03-Freigabe. 108 Defektbereiche beauftragt, zwölf Bereichskonsolidierungen technisch abgenommen. B02 und A01 integriert, kein Deploy oder Live-Nachweis. Fertige Rückgaben nach diesem Stand sind gesondert abzunehmen.
 
 ## Auftrag und feste Orte

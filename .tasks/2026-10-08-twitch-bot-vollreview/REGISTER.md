@@ -1,5 +1,17 @@
 # Register: Twitch-Bot Vollreview
 
+## Aktuell: Statusauskunft, erhaltene Ergebnisse und serielle Integration
+
+Dieser Abschnitt und der neue erste Abschnitt in HANDOFF.md gehen älteren Aktivmeldungen vor. Am 2026-10-08 erneut remote bestätigt: Artefaktcheckpoint 1adb7e802ffe89a5597073f92481bdae8383dfb1, main f04c0ef03d47ce4893ee4d17cb98eeb4c2f6c473. Zwei Anwendungscodepakete integriert, kein Deploy oder Live-Nachweis.
+
+- Serielle Main-Integration ausschließlich über wf_beeac761-2c8, Task wpx113kdx: B05, danach B09, danach B08, je frischer Sol-Kontext. B05 ist gestartet, noch kein Integrationsergebnis. Während dieser Kette kein anderer eigener Main-Push durch Astra. BRIEFING-SERIELLE-INTEGRATION-02.md, args in WORKFLOW-ARGS.json.
+- B08-Abschluss wf_58a43069-334 ist beendet und abgenommen, nicht mehr als aktive Prüfrolle führen. ABSCHLUESSE-13.json, SHA256 e2ddea8df4d5fc9d2783117031c667578b15fc2cc7e5957e787951d5e9ad3e3f, enthält echte Fixabschluss- und Kritikeroriginale. Keine Main-Integration aus der Kritik ableiten.
+- Q04 und DA04/DA05/DA06-Gegenprüfung sind bis auf je eine ausgefallene Rolle beendet, ihre Originalexporte und Sol-Nachweise geprüft. Genau zwei Ersatzrollen in wf_287d5302-dbb, Task w3c9l4lav. Keine ungünstigen Urteile ersetzen. Q04-Teilberichte 1, 2 und 4 in wf_874d1dcd-995, Task wg0cyy3ty; Teil 3 wartet auf SM04. Ausgaben und args in HANDOFF.md und WORKFLOW-ARGS.json.
+- W03-DA04-DA06-PAARE-01.json ist eine mechanische Teilzuordnung von 67 Claims: fünf A, 57 B, vier C und ein offenes Paar. Keine abschließende Unabhängigkeitsabnahme oder neue Fixfreigabe daraus. Der bislang abgeschlossene Gesamtbefundstand bleibt separat bestehen.
+- Status 8 ist durch Astra abgenommen: a297458851a9ba920, 15 echte Sol-Datensätze, SHA256 9b384e9517c3080e50b5e39f3f5d5920cc39018ee524741a1a949843ed3812f5, exakte letzte StructuredOutput-/Journalgleichheit und wortgleich erhaltene TODO-Historie. Spätere Ergebnisse nicht rückwirkend in Ereignis 8 schreiben.
+
+A02/B03-Fixer sowie die fünf Integrationsvorbereiter haben bei dieser Journalprüfung noch keine Rückgaben. Ihre Dateirechte bleiben unverändert. Die Statusantwort an den Nutzer ist kein Arbeitsabschluss und keine Deployfreigabe. Offene Branches werden erst nach ihren vollständigen Prüfketten integriert; aktive Änderungen und benötigte Belegworktrees bleiben unangetastet.
+
 ## Neuester Abschluss: A01 integriert, B03 seriell freigegeben
 
 A01 ist als f04c0ef03d47ce4893ee4d17cb98eeb4c2f6c473 nach main integriert, regulärer Push Exit 0 und anschließendes ls-remote bestätigt. B02 und A01 sind damit zwei integrierte Anwendungscodepakete, kein Deploy, Neustart oder Live-Nachweis. Sieben Git-Schritte durch Astra einzeln, unveränderter 36780-Byte-Diff, Sol-Gate ALLOW. A01-Vorbereitungsrolle a55303cd25a62b63a, 130 echte Sol-Datensätze, fertiger Transcript-Hash c9515afe465bd141352d39d20895580184b7bcfd9d9f5da4f23118ded68dcc2b. ABSCHLUESSE-12.json; finale Suite 1341/35 gegen 1334/35, sieben funktionale Regressionen, 50 OBS-Fälle und beide optionalen DB-Testverträge belegt.

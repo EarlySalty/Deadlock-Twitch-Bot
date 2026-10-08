@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "workflow_id": "wf_58a43069-334",
+      "agent_id": "ab2d78f0f75628752",
+      "label": "B08 R2: Sol-Prüfabschluss",
+      "model_counts": {
+        "gpt-6.1-sol": 133
+      },
+      "transcript_sha256": "0f2fb72606332345b89f9b1a61e6effdcf23b882bcf7e06541617530d61b9b48",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_58a43069-334/agent-ab2d78f0f75628752.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "artifact": "/home/nathanael/.worktrees/tb-vollreview-artefakte/.tasks/2026-10-08-twitch-bot-vollreview/B08-PRUEFABSCHLUSS.md",
+        "base_sha": "e98b7f016dbab373a5a8dd9490d158b136c97fec",
+        "head_sha": "70d26a8b00189d3212af53337935757eb576a50e",
+        "patch_equivalent": true,
+        "source_changed": false,
+        "worktree_clean": true,
+        "status": "completed_with_limits",
+        "gate": "ALLOW",
+        "checks": [
+          "Originalcommit 0e3ea42398c9fd54e7af1349aabf217ec6916b27 erhalten; konfliktfreier Rebase mit byteidentischem Gesamtdiff, identischen Quellhashes und unverändertem Range-Diff.",
+          "Finale Pakettests: 1337 passed, 31 failed, 6 ignored, Exit 101. Aktuelle Baseline: 1332 passed, dieselben 31 failed, 6 ignored, Exit 101.",
+          "13 gezielte Parserprüfungen ohne DB-Opt-in bestanden; Research-Fehlervertrag erhalten.",
+          "Clippy auf Head und Baseline: Exit 0, identische Warnungen. Beide Patchdateien formatkonform; Paket-fmt auf beiden Ständen Exit 1 mit identischen gemeinsamen Bestandsfehlern.",
+          "1981 Quelldateien je Prüfstand vor und nach allen Prüfungen unverändert; Unterschiede ausschließlich in den beiden B08-Dateien. Belege unter /tmp/tb-b08-abschluss-20261008/checks.json.",
+          "Keine neue Codekorrektur, Delegation, Schutzumgehung, Push, Merge, Deploy, Neustart oder Löschung."
+        ],
+        "gate_evidence": [
+          "/tmp/tb-b08-abschluss-20261008/final-gate.log: ALLOW, Exit 0.",
+          "/tmp/tb-b08-abschluss-20261008/final-gate-state.json: feste Basis und Head bestätigt; ausschließlich gpt-6.1-sol, keine Eskalation.",
+          "Tatsächliches Remote-main vor und nach Gate sowie bei Abschluss unverändert auf der finalen Basis; Nachweise unter /tmp/tb-b08-abschluss-20261008/remote-main-before-gate.log, /tmp/tb-b08-abschluss-20261008/remote-main-after-gate.log und /tmp/tb-b08-abschluss-20261008/remote-main-at-close.log."
+        ],
+        "blockers": [
+          "Gesamtsuite bleibt wegen 31 identischen Baseline-Fehlern rot; keine neue Fehlertestmenge.",
+          "Paketweiter Formatcheck bleibt durch unveränderte Bestandsfehler rot.",
+          "DB-gestützter Research-HTTP-Test kehrt wegen fehlender optionaler Konfigurationsdatei früh zurück. Seine Erfolgsmeldung ist kein HTTP-/DB-Nachweis; Parservertrag separat tatsächlich geprüft."
+        ]
+      }
+    },
+    {
+      "workflow_id": "wf_58a43069-334",
+      "agent_id": "af0a0937bfc225e28",
+      "label": "B08 R2: frischer Sol-Kritiker",
+      "model_counts": {
+        "gpt-6.1-sol": 33
+      },
+      "transcript_sha256": "fb0409bf99fa9beaaa119c69546a4677e4fed46c676ef13d10e86c7ca71f8b2c",
+      "transcript_path": "/home/nathanael/.claude/projects/-home-nathanael-repos-Deadlock-Twitch-Bot/f61905e7-f7ff-405b-a6d7-090dec371fcb/subagents/workflows/wf_58a43069-334/agent-af0a0937bfc225e28.jsonl",
+      "final_structured_output_matches_journal": true,
+      "result": {
+        "verdict": "ALLOW",
+        "head_sha": "70d26a8b00189d3212af53337935757eb576a50e",
+        "rationale": "The fixed B08 diff corrects signed decimal i64 overflow clamping while preserving existing syntax, defaults, valid inputs, JSON errors, and Research rejection behavior. This is static functional acceptance only, not merge, runtime, or integration approval.",
+        "findings": [],
+        "evidence": [
+          "Reviewed e98b7f016dbab373a5a8dd9490d158b136c97fec..70d26a8b00189d3212af53337935757eb576a50e in /home/nathanael/.worktrees/tb-vollreview-query-grenzen. HEAD matches; worktree is clean; only the two assigned files changed. Graphify preceded source and caller inspection.",
+          "/home/nathanael/.worktrees/tb-vollreview-query-grenzen/rust/crates/tb-dashboard-api/src/query_int.rs:17-36 clamps PosOverflow/NegOverflow only after complete ASCII-digit validation with one optional sign. Malformed suffixes remain HTTP 400; representable integers and missing/blank defaults retain their original path.",
+          "/home/nathanael/.worktrees/tb-vollreview-query-grenzen/rust/crates/tb-dashboard-api/src/handlers/chat_analytics.rs:45 and /home/nathanael/.worktrees/tb-vollreview-query-grenzen/rust/crates/tb-dashboard-api/src/handlers/performance.rs:78 retain their bounds. Static tracing gives days=10000000000000000000 → 3650, months=9223372036854775808 → 120, and negative overflow → respective minima 7 and 1.",
+          "/home/nathanael/.worktrees/tb-vollreview-query-grenzen/rust/crates/tb-dashboard-api/src/handlers/admin_research.rs:239-269 preserves HTTP 400 with 'days must be an integer' for overflow and invalid syntax, versus 'days must be between 7 and 3650' for representable out-of-range values. Both Research handlers retain authentication-before-validation and rejection-before-database ordering.",
+          "/home/nathanael/.worktrees/tb-vollreview-query-grenzen/rust/crates/tb-dashboard-api/src/handlers/admin_research.rs:588-637 retains the original optional database setup and missing-configuration skip. Added regressions at :1035-1084 require no database; parser regressions are in /home/nathanael/.worktrees/tb-vollreview-query-grenzen/rust/crates/tb-dashboard-api/src/query_int.rs:95-160."
+        ],
+        "test_gaps": [
+          "As requested, no builds, tests, Cargo, database access, HTTP probes, or live checks were performed. Regression tests were inspected but not executed; compilation and runtime/integration behavior remain unverified."
+        ]
+      }
+    }
+  ]
+}

@@ -1,6 +1,207 @@
 # TODO: Twitch-Bot-Vollreview
 
 status: aktiv (2026-10-08)
+Stand: 2026-10-08T13:10:56Z (UTC). Auftrag `2026-10-08-twitch-bot-vollreview`, Gesamtphase `aktiv`.
+Verantwortlich: Astra, Produzent `astra-f61905e7`, T3 `c88f4057-c6b3-4c54-8750-addd08b24b42`.
+Worktree: `/home/nathanael/.worktrees/tb-vollreview-artefakte`; Branch `audit/tb-vollreview-20261008`.
+Review-Codebasis: `0ecae1370f1a80d1a101249b5c932663d69be8af`; eingefrorener Arbeitscommit: `e8801a0202059dbf919863101904d9a152a94367`.
+SHA der aktuellen Gesamtmeldung: `b47669f408ba5f00e7d9eec9703bc006ef05aa5d`, erneut remote bestätigter Artefaktcheckpoint. Dies ist kein Deploy-SHA. Aktuell bestätigtes Remote-main: `f04c0ef03d47ce4893ee4d17cb98eeb4c2f6c473` (A01); B02 wurde zuvor mit `e98b7f016dbab373a5a8dd9490d158b136c97fec` integriert. Kein Deploy, Neustart oder Live-Nachweis für beide Pakete.
+Letzter gültiger Ereignisschlüssel: `2026-10-08-twitch-bot-vollreview/gesamt/1/8`; Quellen: `events/gesamt-v1-s1.json` bis `events/gesamt-v1-s8.json`.
+Sequenz 7 stimmt mit dem übernommenen TODO-Stand überein. Sequenz 8 enthält die Pflichtfelder und stammt vom bereits zugelassenen Produzenten für `gesamt`. Versuch 1, Sequenzen 1 bis 8 lückenlos; kein neuer Schema-, Duplikat- oder Ereigniskonflikt. Die frühere Schema-Abnahme bleibt erhalten. Neue SHAs übernehmen keine früheren Abnahme- oder Live-Nachweise.
+
+## Gesamtstand
+
+- [x] Zwei Anwendungscodepakete tatsächlich integriert und regulär gepusht: B02 `e98b7f016dbab373a5a8dd9490d158b136c97fec`, danach A01 `f04c0ef03d47ce4893ee4d17cb98eeb4c2f6c473`. Remote-Abfragen durch Astra bestätigt. Kein Deploy, Neustart oder Live-Nachweis.
+- [x] Artefaktcheckpoint `b47669f408ba5f00e7d9eec9703bc006ef05aa5d` erneut remote bestätigt. Spätere Dateien sind noch gezielt zu sichern. Die frühere Sicherung `eed9782e209827e019f75fec9ecf049665b47c2f` und der reine Taskdokumentationscheckpoint `6937e4a61f43a9c08174fa95c96f49da149ca859` bleiben historisch nachgewiesen.
+- [x] Inventar und Zuordnungsprüfung abgeschlossen: 108 disjunkte Pakete, 1745 primäre Dateien, 597180 Zeilen; keine fehlende oder doppelte Primärzuordnung (`INVENTAR.md`, `PAKETE.md`, `pakete.json`).
+- [x] Alle 108 eindeutigen Defektbereiche und 450 geplanten Abschnitte beauftragt. W06/W07 ergänzen die zuvor unverteilt gebliebenen 61 Bereiche; Abschnittszahlen gegen Manifest geprüft. Keine unverteilten Defektbereiche mehr. Starts und deklarierte Intervalle belegen keine tatsächliche Volllektüre oder Fehlerfreiheit.
+- [x] Zwölf Bereichskonsolidierungen technisch abgenommen: R09, DA01, DA02, DA03, DA04, DA05, DA06, DA07, DA15, DA17, MO01 und IA01. Für die übrigen 96 Bereiche fehlt die abgenommene Defektkonsolidierung.
+- [x] Bestätigte Befundzahlen unverändert: R09/W02/DA03 zusammen 13 A, 25 B und 30 C. Keine erledigten Fixzahlen. DA04/DA05/DA06 führen getrennt 67 ungeprüfte A/B-Vorschläge und 29 ursprüngliche C-Vorschläge; die fünf weiteren W03-Bereiche 90 reine A/B-Vorschläge und 36 konservative C-Gruppen. Keine neuen Bestätigungen aus Rohmeldungen oder Skeptikerstarts; C wird ausschließlich dokumentiert.
+- [x] W02 und DA03 bleiben gegengeprüft und exportiert; W03s zwei frühere Ausfälle wurden ergänzt. Die 183 ursprünglichen W03-Rückgaben bleiben erhalten.
+- [x] W03-Restkonsolidierung und Restclaimabgleich technisch abgenommen. Sechs partielle Überlappungen bleiben offen; kein globaler Einzigartigkeitsnachweis.
+- [ ] Die Gegenprüfung der 67 DA04-/DA05-/DA06-Claims bleibt separat aktiv. Für die 90 neutralen Restclaims ist eine weitere Gegenprüfung mit je zwei frischen unabhängigen Skeptikern gestartet; noch keine neuen Bestätigungen.
+- [x] Zwölf frühere Qualitätsbereiche samt Kritik bleiben abgenommen (`QUALITAET.md`, `QUALITAET-W03.md`). R09, DA01 und DA02 behalten jeweils 3/5; keine neuen Einzelnoten oder Gesamtnote gemeldet.
+- [ ] Q04 ist laut Rückgabe beendet: 191 von 192 Rollen abgeschlossen, `SM04:quality-critic` nach API 403 ohne Urteil. Journal, Modelle und Originale sind noch unabhängig abzunehmen. Die Abnahme der übrigen 96 Qualitätsbereiche bleibt offen.
+- [ ] A02 hat aktuell Gate-BLOCK. B03 wurde nach A01s Integration seriell für zwei Dateien neu beauftragt; noch kein neuer Abschluss. B05/B09 müssen ihre Nachweise an die fortgeschrittene Integrationsbasis binden. B07/B10 besitzen bisher Teilprüfungen.
+- [ ] Der Gesamtauftrag bleibt unvollständig: `gebaut=nein`, `reviewt=nein`, `gemergt=nein`, `live=nein`. Zwei integrierte Einzelpakete ergeben keine abgeschlossene Gesamtprüfung. Keine vollständig grüne Gesamtsuite oder Live-Abnahme gemeldet.
+
+Die sechs Blickwinkel bleiben Security, Korrektheit, Fehlerbehandlung, Nebenläufigkeit und Daten, Ressourcen sowie Bauqualität. 108 Pakete ergeben 648 geplante Reviewer-Kombinationen vor Skeptikern und Qualitätskritikern. Bauqualität und C-Empfehlungen führen nicht zu einer Umsetzung.
+
+## Paketstand
+
+Ziel und Dateiumfang der Fachpakete stehen in `PAKETE.md`. Astra verantwortet die Verteilung; Inventar- und Modellvorbedingungen sind erfüllt. Defektkonsolidierung, Bestätigung einzelner Claims und Bauqualitätskritik werden getrennt geführt.
+
+| Gruppe | Pakete | Aktuelle Phase | Nachweise und nächste Voraussetzung | Letzte gültige Gesamtquelle |
+|---|---|---|---|---|
+| Frühere drei Bereiche | R09, DA01, DA02 | Defektkonsolidierung abgenommen, Qualitätskritik abgeschlossen | `QUALITAET.md`, W02-Nachweise und offene Fixketten; B02/A01-Integration gesondert nachgewiesen | `gesamt/1/8` |
+| DA03 | DA03 | Konsolidierung, Qualitätskritik, Gegenprüfung und Export abgeschlossen | `W03-DA03-KANDIDATEN.json`, `W03-DA03-GEGENPRUEFUNG.json`, `QUALITAET-W03.md`. Bestätigte A/B-Befunde weiterführen; C-Sperren erhalten | `gesamt/1/8` |
+| Weitere frühere W03-Konsolidierungen | DA04, DA05, DA06 | Konsolidierung und Qualitätskritik abgenommen; 67 A/B-Claims in Gegenprüfung | `wf_af2d23c2-851`; Skeptikerworkflow `wf_655679bf-2b7`, Task `w1e6f5s6i`. Paare und Modellnachweise auswerten | `gesamt/1/8` |
+| Fünf weitere W03-Bereiche | DA07, DA15, DA17, MO01, IA01 | Konsolidierung und Restclaimabgleich technisch abgenommen; Qualitätskritik abgenommen; 90 A/B-Claims zur Gegenprüfung beauftragt | `W03-NACHWEIS-03.md`, `W03-REST-VERIFIKATION.json`, `W03-REST-CLAIMS.json`; `wf_16dfb9cb-031`. Gegenprüfungen abschließen; sechs partielle Überlappungen offen | `gesamt/1/8` |
+| W04 | DA08, DA09, DA10, DA11, DA12, DA13, DA14, DA16, DA18, DA19, IA02, IA03, IA04 | Defektreviews aktiv; Abnahmen offen | `wf_b01ff274-9fa`, Task `wyiyzgmff`: 46 Abschnitte, 230 Reviews. Abschlussnachweise fehlen | `gesamt/1/8` |
+| W05 | AN02, BI01, BI04, BO01 bis BO04, CH01 bis CH08, EN01, MO03, R19, RA01 bis RA03, SM01 | Defektreviews aktiv; Abnahmen offen | `wf_a9db9baa-10f`, Task `wanhv3338`: 22 Bereiche, 97 Abschnitte, 485 Reviews. Abschlussnachweise fehlen | `gesamt/1/8` |
+| W06/W07 | 61 zuvor unverteilte IDs unten; Aufteilung auf die zwei Wellen nicht einzeln gemeldet | Defektreviews beauftragt; Abnahmen offen | W06 `wf_d11f7416-b1a`: elf Bereiche, 88 Abschnitte, 440 Reviews. W07 `wf_7417fa2e-5e9`: 50 Bereiche, 167 Abschnitte, 835 Reviews. Rückgaben und Abnahmen fehlen | `gesamt/1/8` |
+
+Die zwölf früher beauftragten Bereiche, W04 mit 13, W05 mit 22, W06 mit elf und W07 mit 50 ergeben 108 eindeutige Defektbereiche. W03 umfasst neun davon, inzwischen alle technisch konsolidiert. Die Wellen sind keine zusätzlichen Fachpakete.
+
+Die 61 inzwischen über W06/W07 beauftragten, zuvor unverteilten IDs: R01 bis R08, R10 bis R18, R20, R21, K01; AN01, AN03 bis AN08; RA04; SM02 bis SM04; MO02, MO04; EN02, EN03; BO05, BO06; BI02, BI03.
+Außerdem: FE01 bis FE10; AD01 bis AD03; WE01 bis WE03; DB01, DB02; OP01, OP02; TO01; BU01.
+
+Für die 108 Fachpakete sind weiterhin keine eigenen Ereignisschlüssel, individuellen Reviewer-Zuordnungen oder Paket-SHAs übergeben. `gebaut`, `reviewt`, `gemergt` und `live` sind für sie nicht einzeln gemeldet. Die belegten Einzelpaket-SHAs, Prüfungen und Integrationen der getrennten Fixpakete stehen unten und bleiben auch ohne eigene Paketereignisse gültige gemeldete Nachweise. Weitere individuelle Voraussetzungen oder Blocker sind nicht gemeldet. Der frühere blockierte W02-Cargo-Vorlauf zählt nicht als Review-Abdeckung.
+
+## Gegenprüfungen, Reviewwellen und Nachweissicherung
+
+### W02 und DA03
+
+- Verantwortlich: Astra. Gegenprüfungen und Exporte abgeschlossen; letzte gültige Gesamtquelle `gesamt/1/8`.
+- W02: 59 Rohmeldungen in 40 Gruppen, jede Roh-ID genau einmal (`W02-KANDIDATEN.json`, `W02-NACHWEIS.md`). Die frühere Prüfung von 70 Transcript-Hashes und 2694 Sol-Modellfeldern bleibt erhalten. 22 echte Gegenprüfungspaare, 44 Originalurteile, 1703 echte Modell-Datensätze durch Astra geprüft. Zusätzlich 7 A, 11 B mit belegtem Soll und vier C-Sperren; W02 allein 9 A, 13 B und 18 C, mit R09 9 A, 14 B und 19 C.
+- W02-Export `W02-GEGENPRUEFUNG-03.json`, SHA256 `3fff60d3d22e7af33e929c2f5aedb3a11d1ffc44daf327d981a0a7b2006bee7f`; Fortsetzungsrolle `wf_670191de-48b` abgeschlossen und auf Sol geprüft. Kein offener Exportblocker.
+- DA03-Konsolidierung: 30 fertige Reviewer, 1393 Sol-Datensätze, 37 Rohmeldungen in 32 Gruppen; sechs W02-Verknüpfungen und 26 neue Gruppen (`W03-DA03-KANDIDATEN.json`). 19 neue A/B-Claims gegengeprüft: 38 Originalurteile, 1543 echte Sol-Datensätze, ein synthetischer Datensatz getrennt. Vier ursprüngliche API-Ausfälle genau einmal ergänzt; Modelle, Hashes und StructuredOutput-Gleichheit durch Astra geprüft.
+- DA03-Ergebnis unverändert: 4 A, 11 B und vier C-Sperren; mit sieben ursprünglichen C-Gruppen insgesamt 4 A, 11 B und 11 C. Keine weiteren günstigen Ersatzurteile.
+- Aktueller DA03-Exporthash für `W03-DA03-GEGENPRUEFUNG.json`: SHA256 `46a472cf3d741405fff02cfcc0e0617fb9da0d649f80db33d06e37b7db38febe`. Der frühere Hash `658fea9e12a905451ce2162807b3cdd2e0c34d19734758ac5a09146a948fe32e` bleibt für Ereignis 6 historisch korrekt. Metadatenfeldnamen präzisiert, Werte und Originalurteile unverändert (`SICHERUNG-02.md`). Gegenprüfung `wf_97f7401d-6c8`, Export `wf_fb383924-e58` beendet.
+- Nächster Schritt: bestätigte A/B-Befunde in den Fixketten weiterführen; C ausschließlich dokumentieren. Kein Fixabschluss aus dem Export ableiten.
+
+### DA04, DA05 und DA06
+
+- Verantwortlich: Astra; je neutralem A/B-Claim zwei unabhängige Skeptiker. Individuelle Skeptiker-IDs nicht gemeldet.
+- Konsolidierung `wf_af2d23c2-851` abgenommen: 50 Reviewertranscripts, 2829 echte Sol-Datensätze, zwei synthetische Datensätze getrennt; 118 Originalbefunde exakt erhalten.
+- Unverändert 67 ungeprüfte A/B-Vorschläge und 29 ursprüngliche C-Vorschläge. Gegenprüfung `wf_655679bf-2b7`, Task `w1e6f5s6i`, separat aktiv. Keine neuen Bestätigungen in Ereignis 8.
+- Fehlende Voraussetzung und nächster Schritt: fertige unabhängige Paare samt Modellnachweisen auswerten; bei B zusätzlich belegtes Sollverhalten. Letzte gültige Gesamtquelle `gesamt/1/8`.
+
+### Fünf weitere W03-Konsolidierungen und Restclaims
+
+- Verantwortlich: Astra. W03 `wf_bd410bd5-531`, Task `weh6ttwrs`, lieferte ursprünglich 183/185 Rückgaben und 318 rohe Meldungen. Alle 183 Originale bleiben erhalten. Ergänzung `wf_6efbb8b3-653`, Task `wwucjq6g5`, für `DA07-S001:security` und `DA15-S002:resources` vollständig beendet und auf Sol geprüft.
+- Restkonsolidierung `wf_1ff0fd6e-a0d` für DA07/DA15/DA17/MO01/IA01 technisch abgenommen: 105 Reviewertranscripts, 5001 echte Sol-Datensätze, 166 exakt erhaltene Rohbefunde und vollständige disjunkte Mitgliedschaft. Modelle, Hashes und finale Originalgleichheit einschließlich der fünf Konsolidierer durch Astra geprüft (`W03-NACHWEIS-03.md`, `W03-REST-VERIFIKATION.json`). Nicht zum früheren Rohstand addieren.
+- Deklarierte Primärintervalle vollständig; tatsächliche Volllektüre und Fehlerfreiheit nicht nachgewiesen. Die fehlende IA01-Kontextreferenz ist keine Primärlücke.
+- Restclaimabgleich `wf_3c0cb7ee-5b4` beendet und abgenommen: zwölf Quellhashes, 126 Gruppen, fünf bestehende Verknüpfungen, 166 Mitglieder, 90 exakte neutrale Objekte und C-Ausschlüsse geprüft (`W03-REST-CLAIMS.json`). Originale unverändert.
+- 36 neue Gruppen bleiben konservativ C, darunter vier gemischte B/C-Gruppen. Keine zusätzliche vollständige Gleichwertigkeit belegt; sechs offene partielle Überlappungen dokumentiert. Kein globaler Einzigartigkeitsnachweis oder neue Fixfreigabe.
+- Neue Gegenprüfung `wf_16dfb9cb-031`, Task `wc1nrzzig`, Script `tb-vollreview-w03-rest-gegenpruefung-wf_16dfb9cb-031.js`: je zwei frische unabhängige Skeptiker für 90 neutrale Behauptungen. Input `W03-REST-NEUTRALE-CLAIMS.json`, SHA256 `0f3c3298add523c126fe5ed55c1d239d20d3668caf841b3a8dac5bb6ab8f8420`; exakt `id`, `claim`, `file`, `line`, indexgebunden. Keine Bestätigung aus dem Start ableiten.
+- Nächster Schritt: Gegenprüfungen und Modellnachweise auswerten; die separate 67-Claim-Gegenprüfung erhalten. Letzte gültige Gesamtquelle `gesamt/1/8`.
+
+### W04 bis W07 und Q04
+
+- Verantwortlich: Astra. W04 `wf_b01ff274-9fa`, Task `wyiyzgmff`, und W05 `wf_a9db9baa-10f`, Task `wanhv3338`, bleiben aktiv. Bereichszuordnung und Planumfang stehen oben; kein neuer Abschluss gemeldet.
+- W06 `wf_d11f7416-b1a`, Task `wa8zdhmi2`: elf Bereiche, 88 Abschnitte, 440 Reviews. W07 `wf_7417fa2e-5e9`, Task `wi8qh46vu`: 50 Bereiche, 167 Abschnitte, 835 Reviews. Beide nutzen `tb-vollreview-restliche-defektbereiche-wf_d11f7416-b1a.js` mit unterschiedlichen gesicherten args. Abschnittszahlen gegen Manifest geprüft.
+- Zusammen mit früheren Wellen 108 eindeutige Bereiche und 450 geplante Abschnitte beauftragt; kein unverteiltes Defektpaket. Starts sind keine Abnahmen oder Volllektüre.
+- Q04 `wf_e3b6f95d-94c`, Task `wy6nc2611`, laut Rückgabe beendet: 191/192 Rollen abgeschlossen; `SM04:quality-critic` nach API 403 ohne Urteil. Journal, Modelle und Originale noch unabhängig abzunehmen. Zwölf frühere Qualitätsbereiche bleiben abgenommen; keine neue Gesamtnote.
+- Nächster Schritt: Q04-Journal und Originale prüfen, anschließend genau die fehlende SM04-Kritik ergänzen. Keine der 191 fertigen Rollen wiederholen. Laufende Defektwellen und ihre Abnahmen erhalten. Letzte gültige Gesamtquelle `gesamt/1/8`. Fehlende Kritik ist weder ALLOW noch BLOCK.
+
+### Abschluss- und Sicherungsnachweise
+
+- `ABSCHLUESSE-07.json` erhält elf originale Rückgaben samt geprüften Modellfeldern, Transcript-Hashes und StructuredOutput-/Journalgleichheit. `ABSCHLUESSE-08.json` ergänzt den früheren Prüfabschluss A02/B05/B02; `ABSCHLUESSE-09.json` den früheren A01-Abschluss und B03s damalige Abhängigkeit.
+- `ABSCHLUESSE-10.json` enthält zehn geprüfte Originalrückgaben mit 824 echten Sol-Datensätzen, keine synthetischen. `ABSCHLUESSE-11.json` enthält den W03-Claimabgleich sowie A02/B05/B09s Vorbereitung; `ABSCHLUESSE-12.json` A01s Vorbereitung. Keine Rohtranscripts übernommen.
+- `NACHWEIS-ABSCHLUESSE-07.md` dokumentiert B02s Integration, Testgrenzen und regulären Push; `A01-INTEGRATIONSVORBEREITUNG.md` A01s neue Prüfbindung. `SICHERUNG-02.md` dokumentiert die frühere bestätigte Artefaktsicherung und den behobenen Metadaten-Pushblocker. Der blockierte Push von `416851e6` bleibt historisch; keine Hook- oder Scanneränderung.
+- Status 7 abgeschlossen, TODO-Diff durch Astra geprüft, ältere Historie unverändert. Ereignis 7 bleibt historisch. Artefaktcheckpoint `b47669f4` erneut remote bestätigt; spätere Dateien noch gezielt sichern.
+- Modelle, fachliche Kritik, technisches Gate, tatsächlich ausgeführte Prüfungen, Remote-Integration und Livewirkung bleiben getrennte Nachweise. Ein neuer SHA übernimmt keine frühere Abnahme.
+
+## Fixpakete und Integrationsstände
+
+Gemeldete IDs: B01, B02, B03, A01, A02, B04, B05, B06, B07, B08, B09 und B10. Sie erhöhen die Zahl der 108 Fachpakete nicht. Astra verantwortet die Fixketten; Voraussetzungen sind bestätigte A/B-Befunde und getrennte Schreibgrenzen gemäß `REGISTER.md` und den Briefings. A01s Integration löst B03s Dateizugriff seriell auf; B03s Restfehler ist damit noch nicht behoben.
+
+Gesamtquelle: `2026-10-08-twitch-bot-vollreview/gesamt/1/8`. Eigene Paketereignisse und individuelle Produzenten nicht übergeben; das entwertet die hier belegten Einzelpaket-SHAs und Prüfstände nicht. `gebaut` und `reviewt` sind keine separat gemeldeten Paketabschlussfelder. B02 und A01 sind tatsächlich integriert (`gemergt=ja`); beide weiterhin `live=nein`. Für andere Fixpakete kein Merge- oder Live-Nachweis. Gate- und Kritikerurteile gelten nur für den geprüften Head und seine Basisbindung. Neue SHAs setzen frühere Abnahme- und Live-Nachweise zurück.
+
+### A01
+
+- Ziel: zugeordnete bestätigte Befunde beheben, einschließlich echtem Login-Widerrufspfad und DB-Testfreigabe. Phase: als zweites Anwendungscodepaket tatsächlich integriert.
+- Aktueller Fix- und Main-SHA `f04c0ef03d47ce4893ee4d17cb98eeb4c2f6c473`, Basis `e98b7f016dbab373a5a8dd9490d158b136c97fec`. Der frühere Fixhead `1080b730` und dessen fachliches ALLOW bleiben historisch.
+- Integrationsvorbereitung `wf_06169aa7-139`, Task `w0axf2bba`, abgeschlossen und auf Sol geprüft: gemeldete Kennung `a55303cd25a62b63a`, 130 echte Sol-Datensätze, Transcript-Hash `c9515afe465bd141352d39d20895580184b7bcfd9d9f5da4f23118ded68dcc2b`. Zehn Loghashes durch Astra geprüft (`ABSCHLUESSE-12.json`, `A01-INTEGRATIONSVORBEREITUNG.md`).
+- Finale Suite 1341 bestanden/35 gleiche Baselinefehler gegen 1334/35; sieben funktionale Regressionen und 50 OBS-Tests bestanden. Sieben sichere Skips ohne freiwillige DB-Aktivierung, sieben erwartete harte aktivierte Setupfehler. Paket-fmt und vollständige Lintabdeckung bleiben vorbestehend eingeschränkt. Keine vollständig grüne Gesamtsuite.
+- Astra prüfte sauberen Worktree, frische Basis, Vorfahrbeziehung Exit 0, unveränderten 36780-Byte-Diff und aktuellen Sol-Gate. Sieben Git-Schritte einzeln; regulärer Push `b9iarfbzz` Exit 0, anschließend Remote-SHA bestätigt.
+- `gemergt=ja`, `live=nein`. Kein Deploy, Neustart oder Live-Nachweis. B03s Zugriff danach seriell neu beauftragt. Nächste Live-Voraussetzung: zulässige Klärung des getrennten Deploykonflikts; kein Releasebau oder Aufräumen freigegeben.
+
+### B02
+
+- Ziel: zugeordnete bestätigte Befunde beheben und nach abgenommenem Prüfabschluss klein integrieren. Phase: zuvor als erstes Anwendungscodepaket tatsächlich integriert.
+- Unveränderter Fix- und Integrations-SHA `e98b7f016dbab373a5a8dd9490d158b136c97fec`, Basis `a8b5b5e9`. Prüfabschluss abgenommen; echte fachliche Kritik ALLOW und passend gebundener Sol-Gate.
+- 50 finale OBS-Tests bestanden; Gesamtsuite 1334 bestanden/35 gleiche Fehler wie in der neu ausgeführten Baseline. Eigene Dateien formatiert; fremde Paketformat- und Clippyfehler identisch. Keine vollständig grüne Gesamtsuite.
+- Integration `wf_bcd5a36c-fdb`, Task `wty4n1c23`, abgeschlossen. Astra prüfte frisches main, sauberen Worktree, unveränderten Diffhash und passenden Gate; sieben Git-Schritte einzeln, regulärer Push Exit 0 und anschließende Remote-Bestätigung (`NACHWEIS-ABSCHLUESSE-07.md`). A01 hat main inzwischen fortgeschrieben.
+- `gemergt=ja`, `live=nein`. Kein Deploy, Neustart oder Live-Nachweis. Nächste Live-Voraussetzung bleibt die zulässige Klärung des Deploykonflikts.
+
+### B03
+
+- Ziel: zentrale Akteursauswahl und Test-Opt-in korrigieren; die tatsächlich verwendete Auswahl zum Audit übertragen.
+- Historische Runde 2: `3a01d0c3`, Gate ALLOW, frische fachliche Kritik BLOCK wegen erneuter Auth-Auswahl nach der Aktion. Runde 3 `wf_7f393473-8ca` endete ohne Quellfix mit belegtem Abhängigkeitsblocker; kein zusätzlicher Fehlversuch.
+- Ausgangspunkt weiterhin `aa450978` auf B02-Basis `e98b7f01`; die früheren Urteile gelten nicht als Abnahme dieses oder eines neuen Heads. A01 integriert, Dateiabhängigkeit seriell aufgelöst.
+- Frischer Fixer Runde 4 mit anschließendem Kritiker `wf_e6ba5fe6-44e`, Task `wgefq8ej9`, Script `tb-vollreview-b03-fixrunde-4-wf_e6ba5fe6-44e.js`, `BRIEFING-B03-R4.md`. Exklusiv `admin_audit.rs` und `auth/level.rs`; andere Auth-Dateien und `lib.rs` ausgeschlossen. Aktuelles main regulär abgleichen.
+- Noch kein neuer B03-Head oder Abschluss. Nächster Schritt: Restfehler beheben, aktuelle Prüfbindung, frische Kritik und passendes Gate nachweisen. Kein paralleler Writer, Ein-Datei-Umgehungsfix oder Gate-Neuwürfeln.
+
+### A02
+
+- Ziel: zugeordnete bestätigte Befunde beheben und freiwilligen DB-Test-Skip sowie harte aktivierte Einrichtungsfehler erhalten.
+- Vorbereitung `wf_a21871df-c4d`, Task `wdr88j8sx`, beendet; Modelle, Hashes und Originale der drei A02/B05/B09-Rollen durch Astra geprüft. Aktueller Head `e6765a5d` auf B02-Basis `e98b7f01`: Gate-BLOCK wegen dreier neuer bedingungsloser optionaler DB-Pool-Erwartungen.
+- Früherer Head `3365e6b2`: echte fachliche Kritik ALLOW, drei Eigentumsregressionen bestanden, Suite 1336/35 gleiche Baselinefehler, Clippy Exit 0. Diese historische Abnahme hebt den aktuellen Gate-BLOCK nicht auf.
+- Frischer Fixer Runde 2 und anschließende Kritik `wf_8d15f5fe-eff`, Task `wx57xab14`, Script `tb-vollreview-a02-fixrunde-2-wf_8d15f5fe-eff.js`, `BRIEFING-A02-R2.md`. Keine neue Produktlogik; freiwilligen Skip und harte aktivierte Einrichtungsfehler erhalten.
+- Nächster Schritt: aktuellen BLOCK beheben und Prüfungen, frische Kritik sowie Gate für den dann aktuellen Head und seine Basis nachweisen. Kein A02-Merge oder neuer Abschluss gemeldet.
+
+### B05 und B09
+
+- Verantwortlich: Astra. Vorbereitung `wf_a21871df-c4d`, Task `wdr88j8sx`, abgeschlossen; keine aktive frühere Vorbereitungsrolle mehr. Keine Main-Integration aus diesen Rollen.
+- B05-Ziel: zugeordnete bestätigte Befunde beheben und die Änderungen vollständig binden. Aktueller Head `6383a00f031750095a38ff25809aee75a95cf25d`: alte Baselinebindung geschlossen; finale Suite 1337/35 gegen 1334/35, vollständige Fehlerkörper gleich; 40 Fokusfälle und 50 OBS-Fälle bestanden; Clippy beidseitig Exit 0; Sol-Gate ALLOW auf `e98b7f01`. Das fachliche ALLOW für den früheren `9c11bf6c` bleibt historisch.
+- B09-Ziel: eigenen bestätigten Befund der früheren Query-Grenzen-/IDOR-Testfixture-Beauftragung beheben; individuelle Zielzuordnung weiterhin nicht ausdrücklich übergeben (`BRIEFING-W02-FIXGRUPPE-03.md`). Aktueller Head `fa01de7b12f51bde4a9af922ae3e3bcf7ee72598`: neue Suite mit 29 gegen 31 Baselinefehler, genau zwei IDOR-Fehler entfernt; passende übrige Fehlerkörper; DB-Fokus 2/2 bestanden, Clippy Exit 0, Sol-Gate ALLOW auf `e98b7f01`.
+- B09s früherer `02f98b8b` erhielt Fixer- und Kritiker-ALLOW; Originale und Modelle geprüft. Historischer Doctestlauf null ausgeführt/zwei ignoriert. Aktuell bleiben vier gewöhnliche Tests und zwei Doctests ignoriert; kein funktionaler Doctestnachweis oder vollständig grüner Gesamtlauf.
+- Blocker und nächster Schritt für beide: Nach A01s Integration die fortgeschrittene Integrationsbasis und aktuelle Quell-/Gatebindung berücksichtigen. Die gemeldeten Nachweise sind an die frühere B02-Basis gebunden; keine neue Bindung oder Integration für die fortgeschriebene Basis gemeldet. Kein B05-/B09-Merge; rote Baselines bleiben rot.
+
+### B01
+
+- Ziel: bestätigten B01-Befund aus R09 beheben und die eigene Fixkette abschließen (`BRIEFING-B01.md`).
+- Prüfbindung `wf_e099cf2a-fc9`, Task `wvn9nj909`, abgeschlossen und abgenommen (`B01-PRUEFBINDUNG.md`). Neuer gebundener Regressionstest bestanden. Tatsächlicher historischer Fixhead `307c09e6` mit identischem Rust-Baum zu `c3aa3cc94fec60aa365dcc9ca9f54b4bd3f1539a`.
+- Historische Suite 336/24 gegen 335/24, gleiche Fehlernamen; neun Loghashes erneut durch Astra geprüft. Frühere fachliche Kritik und Sol-Gate ALLOW bleiben an ihren historischen Stand gebunden. Der frühere leere finale Log und die Cargo-Slotwartezeit beweisen keinen zusätzlichen Testerfolg.
+- Jüngstes Clippy in unverändertem `tb-chat` blockiert; passende vollständige Baseline-Clippybindung separat offen. Neue Integrationsvorbereitung unten schließt konkrete Prüflücken und aktuelle Bindung ohne Quellkorrektur. Kein Merge; nächster Schritt: Clippybindung und aktuelle Prüf-/Gatebasis nachweisen.
+
+### B04, B06 und B07
+
+- Ziel: jeweilige zugeordnete bestätigte Befunde in getrennten Schreibbereichen beheben und vollständig abnehmen lassen. Prüfabschluss `wf_961bca08-8d7`, Task `wo3n55x8t`, abgeschlossen; sechs Rollen samt echten Kritiken abgenommen.
+- B04 `d760300d`: fachliche Kritik ALLOW; vollständige Suite 1336/35 gegen 1333/35, Clippy beidseitig Exit 0, neun Routerfälle bestanden. Der frühere gesicherte `c0383531` und dessen Leerdiff-Kritik bleiben historisch.
+- B06 `46c52a92`: fachliche Kritik ALLOW; vollständige Suite 1336/35 gegen 1333/35, Clippy beidseitig Exit 0, 14 Proxyfälle bestanden; 255 unveränderte fremde Formatblöcke.
+- B07 `9ec607b3`: jetzt echte fachliche Kritik ALLOW; Integrationstestziel 11/1 gegen 3/9. Fehlende TikTok-Eingaben bleiben getrennt, kein Nebenfixauftrag. Keine vollständige B07-Crate-Suite bisher. Das frühere Gate-ALLOW ersetzt keine neue Basisbindung.
+- Kein Merge gemeldet. Nächster Schritt: neue Integrationsvorbereitung erhalten; B07s tatsächlichen vollen Prüfumfang sowie für alle aktuelle Quell-/Gatebindung nachweisen. Frühe API-Ausfälle der Kritiker sind kein aktuelles Urteil.
+
+### B08
+
+- Ziel: bestätigten Parserfix bei erhaltenem Research-Vertrag abschließen. Schreibumfang eng um `admin_research.rs` erweitert (`BRIEFING-B08-R2.md`).
+- Runde 2 `wf_2b7d67c4-23f`, Task `wti12vgrf`, endete am Kontextlimit ohne Abgabe; sauberer Commit `0e3ea423` und Logs erhalten. 131 echte Sol-Datensätze plus ein synthetischer Datensatz durch Astra geprüft.
+- Abschluss ohne Codeänderung und anschließende frische Kritik `wf_58a43069-334`, Task `w4qi2a6tt`, bleiben aktiv, nicht duplizieren. Kein neuer Abschluss in Ereignis 8.
+- Nächster Schritt: Prüfabschluss, frische fachliche Kritik und aktuelle Gate-/Basisbindung nach dem Main-Fortschritt nachweisen. Vorhandener historischer Gate-ALLOW ist keine aktuelle Integrationsfreigabe. Kein B08-Merge.
+
+### B10
+
+- Ziel: zwei bestätigte Authstatus-Befunde beheben, ausschließlich `handlers/auth_status.rs`. Die C-gesperrte HTTP-Cachepolitik bleibt unverändert und ausgeschlossen.
+- Workflow `wf_b1cabe6f-009`, Task `wo6s9aj11`, abgeschlossen und abgenommen; Head `9bce62f1`, Gate und echte Kritik ALLOW, 13 Fokusfälle bestanden.
+- Reale Kommandos durch Astra geprüft: Paketaufruf ohne `--no-fail-fast` bricht nach dem Bibliotheksziel ab. 1321/21/3 ignoriert gegen 1317/21/3 belegt keine vollständige Crate-Suite. Integrationstests und Doctests fehlen.
+- Kein Merge. Nächster Schritt: in der neuen Integrationsvorbereitung den tatsächlichen vollständigen Prüfumfang und aktuelle Quell-/Gatebindung schließen; Teilprüfung nicht als vollständige Suite ausgeben.
+
+### Neue Integrationsvorbereitung B01/B04/B06/B07/B10
+
+- `wf_f7342e70-084`, Task `wq0ls3kxm`, Script `tb-vollreview-integrationsvorbereitung-03-wf_f7342e70-084.js`, args gespeichert; `BRIEFING-INTEGRATIONSVORBEREITUNG-03.md`.
+- Keine Quellkorrektur durch diese Rollen. Konkrete Prüflücken und aktuelle Quell-/Gatebindung schließen. A01 hat main fortgeschrieben; die alte Basis nicht als aktuelle Vorfahrbasis ausgeben.
+- Noch keine Rückgabe oder neue Integrationsfreigabe für diese Vorbereitung gemeldet. Aktive Rollen erhalten, keine Ergebnisse vorwegnehmen.
+
+## Getrennter Deploy-Blocker
+
+- [ ] Deploy bleibt gesperrt: Der vorgeschriebene Wrapper startet Migrationen und ändert PostgreSQL-Konfiguration. Das widerspricht den Auftragsgrenzen (`OPS-PREFLIGHT.md`). Seit `gesamt/1/2` gemeldet, in `gesamt/1/3` bis `gesamt/1/8` wiederholt (sechs Wiederholungen).
+- [ ] Keine menschliche Antwort auf die Freigabefrage und kein Ersatzweg gemeldet. A01-/B02-Merges sind keine Deployfreigabe; kein Releasebau, Neustart oder Aufräumen. Die Freigabefrage bleibt beim Auftraggeber; Bereichsreviews sind dadurch nicht blockiert.
+
+## Offene Abschlussnachweise und nächster Schritt
+
+- [ ] Neue Artefakte und Ereignis 8 gezielt sichern. Bestätigten Artefaktcheckpoint `b47669f4`, tatsächliche Einzelpaket-Integrations-SHAs und historische Sicherungen getrennt halten.
+- [ ] DA04-/DA05-/DA06-Gegenprüfungen der 67 A/B-Claims sowie die neue Gegenprüfung der 90 Restclaims erhalten und abschließen. B verlangt belegtes Sollverhalten; 29 ursprüngliche C-Vorschläge und 36 konservative Restgruppen ausschließlich dokumentieren. Sechs partielle Überlappungen offen lassen; keinen globalen Einzigartigkeitsnachweis behaupten.
+- [ ] W04/W05 sowie W06/W07 fortführen und Rückgaben konsolidieren. Alle 108 Defektbereiche sind beauftragt, zwölf technisch konsolidiert; keine Starts oder deklarierte Intervalle als Volllektüre oder Abnahmen zählen.
+- [ ] Q04-Journal, Modelle und Originale unabhängig abnehmen; danach genau `SM04:quality-critic` ergänzen. 191 fertige Rollen nicht wiederholen. Zwölf frühere Qualitätsabnahmen erhalten, keine neue Gesamtnote ableiten.
+- [ ] A02s aktuellen Gate-BLOCK durch die beauftragte frische Runde 2 bearbeiten lassen. B03 Runde 4 nach A01s Integration seriell in genau zwei Dateien fortführen; noch kein neuer Abschluss.
+- [ ] B05/B09s Nachweise für die fortgeschrittene Integrationsbasis binden. Die frühere Vorbereitung ist beendet; kein neues Ergebnis oder Merge aus dem alten ALLOW ableiten.
+- [ ] B01s vollständige Baseline-Clippybindung schließen. B04/B06s gemeldete vollständige Suites von B07/B10s Teilprüfungen trennen. Neue Integrationsvorbereitung ohne Quellkorrektur erhalten; B07/B10 brauchen den fehlenden vollständigen Prüfumfang.
+- [ ] B08s aktiven Abschluss ohne Codeänderung und frische Kritik erhalten; aktuelle Gate-Basis nachweisen. Keine aktive Rolle duplizieren und keine neuere Rückgabe raten.
+- [ ] A01/B02s tatsächliche Integration und weiterhin fehlende Livewirkung getrennt führen. Mehrere Suites bleiben mit Bestandsfehlern rot; keine vollständig grüne Gesamtprüfung oder neue Gesamtabschlussfelder erfinden.
+- [ ] Eigene Fachpaketereignisse, individuelle Reviewer-Zuordnungen und fehlende Abschlussfelder ergänzen. Einzelpaket-Sequenzlücken sind mangels eigener Ereignisse nicht prüfbar; vorhandene Einzelpaket-SHAs und konkrete Prüfstände dennoch erhalten.
+- [ ] Jede Fixkette braucht vollständige Prüfungen, Fix-Nachweis, frische fachliche Kritik und lokales Gate für den eigenen Head und die passende Basis. Merge und Push gesondert nachweisen. Deploy, Live-Prüfung und Bereinigung bleiben bis zur zulässigen Freigabe offen; neue SHAs übernehmen keine frühere Abnahme.
+
+## Historie bis Ereignis 7
+
+Der folgende Stand einschließlich aller älteren Historie bleibt unverändert erhalten. Für den aktuellen Stand gilt Ereignis 8 oben. Frühere Angaben zu A01s fehlender Integration, unverteilten Defektbereichen und noch nicht abgenommenen W03-Restkonsolidierungen gelten nicht mehr als aktueller Stand.
+
+``````markdown
+# TODO: Twitch-Bot-Vollreview
+
+status: aktiv (2026-10-08)
 Stand: 2026-10-08T10:22:13Z (UTC). Auftrag `2026-10-08-twitch-bot-vollreview`, Gesamtphase `aktiv`.
 Verantwortlich: Astra, Produzent `astra-f61905e7`, T3 `c88f4057-c6b3-4c54-8750-addd08b24b42`.
 Worktree: `/home/nathanael/.worktrees/tb-vollreview-artefakte`; Branch `audit/tb-vollreview-20261008`.
@@ -598,3 +799,4 @@ B01, B02, B03 und A01 haben getrennte Schreibpfade. Sie erhöhen die Zahl der 10
 ```
 ````
 `````
+``````
