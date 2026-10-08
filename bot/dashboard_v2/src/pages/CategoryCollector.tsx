@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Activity, Languages, Radio, Users } from 'lucide-react';
 import { buildCategoryTrend, categoryArchiveLabel, categoryUtcLabel, languageName } from './categoryCollectorViewModel';
+import { COLLECTOR_STATE_TEXT, collectorCoverageState, type CollectorStatusDetails } from './categoryCollectorStaleness';
 
 const GOLD = '#C5A059';
 const AMBER = '#D9752E';
@@ -10,10 +11,10 @@ const COPPER = '#C93F63';
 interface LanguageRow { language: string; streams: number | null; channels: number | null; airtime_hours: number | null; avg_viewers: number | null; viewer_hours: number | null; messages: number }
 interface ChannelRow { language: string; user_id: string; login: string; airtime_hours: number; avg_viewers: number | null; viewer_hours: number; rank: number }
 interface TrendRow { at: string; streams: number | null; viewers: number | null; polls: number; peak_streams: number; peak_viewers: number }
-interface Status { desired_channels?: number; confirmed_channels?: number; connected_shards?: number; discovery_state?: string; received_messages?: number; stored_this_process?: number; queue_drops?: number; storage_drops?: number; invalid_events?: number; raw_bytes?: number; retention_days?: number | null; preserve_raw_data?: boolean; storage_warning?: boolean; disk_paused?: boolean; free_disk_bytes?: number; raw_budget_bytes?: number; raw_paused?: boolean; oldest_raw_message?: string; last_discovery?: string; media_enabled?: boolean }
-export interface CategoryReport { days: number; generated_at: string; heartbeat_at: string | null; first_snapshot: string | null; last_snapshot: string | null; total_polls: number; languages: LanguageRow[]; top_channels: ChannelRow[]; trend: TrendRow[]; hourly: { language: string; hour: number; messages: number }[]; status: Status | null }
-const number = (value: number | null | undefined, digits = 0) => value == null ? '—' : new Intl.NumberFormat('de-DE', { maximumFractionDigits: digits }).format(value);
-const dateTime = (date: string | null | undefined) => date ? new Date(date).toLocaleString('de-DE', { timeZone: 'Europe/Berlin' }) : 'Noch keine Messung';
+interface Status extends CollectorStatusDetails { desired_channels?: number; confirmed_channels?: number; connected_shards?: number; received_messages?: number; stored_since_collector_start?: number; collector_started_at?: string; counters_scope?: string; queue_drops?: number; storage_drops?: number; invalid_events?: number; raw_bytes?: number; retention_days?: number | null; preserve_raw_data?: boolean; storage_warning?: boolean; free_disk_bytes?: number; raw_budget_bytes?: number; oldest_raw_message?: string; media_enabled?: boolean }
+export interface CategoryReport { days: number; generated_at: string; heartbeat_at: string | null; first_snapshot: string | null; last_snapshot: string | null; total_polls: number; languages: LanguageRow[]; top_channels: ChannelRow[]; trend: TrendRow[]; hourly: { language: string; hour: number; messages: number }[]; status: Status | null; collector_config?: { enabled: boolean; poll_seconds: number } | null }
+const number = (value: number | null | undefined, digits = 0) => value == null ? 'Unbekannt' : new Intl.NumberFormat('de-DE', { maximumFractionDigits: digits }).format(value);
+const dateTime = (date: string | null | undefined) => !date ? 'Noch keine Messung' : Number.isFinite(Date.parse(date)) ? new Date(date).toLocaleString('de-DE', { timeZone: 'Europe/Berlin' }) : 'Zeitpunkt unbekannt';
 const tooltipStyle = { background: '#161616', border: '1px solid #6B4E27', borderRadius: 12, color: '#F2EEE6' };
 
 export function CategoryCollector() {
@@ -39,11 +40,11 @@ export function CategoryCollector() {
   const totals = useMemo(() => data?.languages.reduce((sum, row) => ({ hours: sum.hours + (row.airtime_hours ?? 0), messages: sum.messages + row.messages, viewerHours: sum.viewerHours + (row.viewer_hours ?? 0) }), { hours: 0, messages: 0, viewerHours: 0 }), [data]);
   const chart = useMemo(() => buildCategoryTrend(data?.trend ?? []), [data]);
   const hourly = useMemo(() => Array.from({ length: 24 }, (_, hour) => ({ hour: `${String(hour).padStart(2, '0')}:00`, messages: data?.hourly.filter(row => row.hour === hour && (language === 'all' || row.language === language)).reduce((sum, row) => sum + row.messages, 0) ?? 0 })), [data, language]);
-  const heartbeatAt = data?.heartbeat_at ? Date.parse(data.heartbeat_at) : NaN;
-  const stale = !Number.isFinite(heartbeatAt) || heartbeatAt > clock + 120_000 || clock - heartbeatAt > 120_000;
+  const coverage = collectorCoverageState(data ?? {}, clock);
+  const stateText = COLLECTOR_STATE_TEXT[coverage.state];
   const status = data?.status;
   const cards = [
-    { icon: Radio, title: 'Entdeckte Live-Kanäle', value: stale ? '—' : number(status?.desired_channels), detail: 'Letzter erfolgreicher Kategorieabruf' },
+    { icon: Radio, title: 'Entdeckte Live-Kanäle', value: coverage.liveChannelsCurrent ? number(status?.desired_channels) : 'Nicht aktuell bestätigt', detail: 'Letzter erfolgreicher Kategorieabruf' },
     { icon: Activity, title: 'Beobachtete Sendestunden', value: number(totals?.hours, 1), detail: 'Aus Messintervallen geschätzt' },
     { icon: Users, title: 'Zuschauerstunden', value: number(totals?.viewerHours, 1), detail: 'Keine einzelnen oder eindeutigen Zuschauer' },
     { icon: Languages, title: 'Chat-Nachrichten', value: number(totals?.messages), detail: 'Ohne doppelt zugestellte Shared-Chat-Kopien' },
@@ -51,18 +52,20 @@ export function CategoryCollector() {
 
   return <main className="mx-auto w-full max-w-[1500px] space-y-6 p-4 md:p-8">
     <header className="flex flex-wrap items-end justify-between gap-4">
-      <div><p className="text-sm font-semibold uppercase tracking-widest text-primary">Twitch · Admin-Auswertung</p><h1 className="mt-2 text-3xl font-bold text-white">Deadlock weltweit</h1><p className="mt-3 max-w-3xl text-text-secondary">Die gesamte Live-Kategorie, über alle Sprachen. Sprache ist kein Land und keine Zuschauer-Geolokation. Der Collector liest Chat anonym und sendet nichts.</p></div>
+      <div><p className="text-sm font-semibold uppercase tracking-widest text-primary">Twitch · Admin-Auswertung</p><h1 className="mt-2 text-3xl font-bold text-white">Deadlock weltweit</h1><p className="mt-3 max-w-3xl text-text-secondary">Die gesamte Live-Kategorie, über alle Sprachen. Sprache ist kein Land und keine Zuschauer-Geolokation. Der Sammler läuft im Twitch-Bot, liest Chat anonym und sendet nichts.</p></div>
       <label className="flex items-center gap-3 text-sm text-text-secondary">Zeitraum<select aria-label="Zeitraum" value={days} onChange={event => setDays(Number(event.target.value))} className="rounded-xl border border-primary/30 bg-bg px-4 py-3 text-white">{[7, 30, 90].map(period => <option key={period} value={period}>{period} Tage</option>)}</select></label>
     </header>
     {query.isPending && <div className="panel-card rounded-2xl p-8 text-text-secondary" role="status">Kategoriedaten werden geladen …</div>}
     {query.isError && <div role="alert" className="panel-card rounded-2xl border border-primary/30 p-6"><p className="text-white">{query.error.message}</p><button className="mt-3 text-primary underline" onClick={() => void query.refetch()}>Erneut laden</button></div>}
     {data && <>
       <section className="panel-card rounded-2xl p-5 text-sm text-text-secondary" aria-label="Messabdeckung">
-        <div className="flex flex-wrap justify-between gap-3"><strong className="text-white">{stale ? 'Collector-Status veraltet oder noch nicht vorhanden' : status?.discovery_state === 'ok' ? 'Sammlung aktiv' : 'Sammlung mit Einschränkungen'}</strong><span>Letzter Abruf: {dateTime(data.last_snapshot)} (Berlin)</span></div>
-        <p className="mt-2">Datenbeginn: {dateTime(data.first_snapshot)}. {number(data.total_polls)} erfolgreiche Messungen insgesamt. Bestätigte Chat-Kanäle: {number(status?.confirmed_channels)} von {number(status?.desired_channels)}; anonyme Verbindungen: {number(status?.connected_shards)}.</p>
+        <div className="flex flex-wrap justify-between gap-3"><strong className="text-white" role="status">{stateText.title}</strong><span>Letzte Kategoriemessung: {dateTime(data.last_snapshot)} (Berlin)</span></div>
+        <p className="mt-2">{stateText.detail}</p>
+        <p className="mt-2">Statusmeldung: {dateTime(data.heartbeat_at)}. Erfolgreicher Kategorieabruf: {dateTime(status?.last_discovery)}. Speicherprüfung: {dateTime(status?.storage_checked_at)}. Zeiten in Berlin.</p>
+        <p className="mt-2">Datenbeginn: {dateTime(data.first_snapshot)}. {number(data.total_polls)} erfolgreiche Messungen insgesamt. Zuletzt gemeldete Chat-Kanäle: {number(status?.confirmed_channels)} von {number(status?.desired_channels)}; anonyme Verbindungen: {number(status?.connected_shards)}.</p>
         <p className="mt-2">Rohchat: {number(status?.raw_bytes == null ? null : status.raw_bytes / (1024 ** 3), 2)} GiB. {categoryArchiveLabel(status?.preserve_raw_data)} Älteste Rohzeile: {dateTime(status?.oldest_raw_message)}. Freier Datenbank-Datenträger: {number(status?.free_disk_bytes == null ? null : status.free_disk_bytes / (1024 ** 3), 1)} GiB.</p>
-        <p className="mt-2">Verworfene Warteschlangenereignisse: {number(status?.queue_drops)} · Speicherbedingt nicht gespeichert: {number(status?.storage_drops)} · Ungültige oder nicht mehr zuordenbare Ereignisse: {number(status?.invalid_events)}. Diese Zähler gelten seit dem letzten Prozessstart.</p>
-        {status?.storage_warning && <p className="mt-3 font-semibold text-primary">Speicherwarnung: {status.disk_paused ? 'Neue Erfassung ist wegen knappen oder nicht prüfbaren Plattenplatzes pausiert.' : status.raw_paused ? 'Das Rohdatenbudget ist erreicht; neue Chatzeilen werden derzeit nicht gespeichert.' : 'Das Speicherbudget wird knapp.'} Bestehende Rohdaten werden nicht gelöscht.</p>}
+        <p className="mt-2">Verworfene Warteschlangenereignisse: {number(status?.queue_drops)} · Speicherbedingt nicht gespeichert: {number(status?.storage_drops)} · Ungültige oder nicht mehr zuordenbare Ereignisse: {number(status?.invalid_events)}. Diese Zähler gelten {status?.counters_scope === 'collector_run' ? `seit dem letzten Sammlerstart am ${dateTime(status.collector_started_at)} (Berlin). Bei einer internen Wiederholung beginnen sie neu.` : 'seit dem zuletzt gemeldeten Start; der genaue Beginn ist nicht bestätigt.'}</p>
+        {(status?.disk_paused || status?.raw_paused || status?.storage_warning) && <p className="mt-3 font-semibold text-primary">{coverage.heartbeatStale || coverage.state === 'disabled' ? 'Zuletzt gemeldeter Speicherzustand: ' : 'Speicherzustand: '}{status.disk_paused ? 'Neue Erfassung wegen Plattenplatz pausiert.' : status.raw_paused ? 'Neue Chatzeilen wegen erreichtem Rohdatenbudget pausiert.' : 'Das Speicherbudget wird knapp.'} Der bisherige Bestand bleibt erhalten.</p>}
         <p className="mt-2">Ausfälle, Beitrittsverzögerungen und nicht gelieferte Nachrichten sind keine Null-Aktivität. Keine vollständige Zuschauer- oder Lurker-Liste. {status?.media_enabled ? 'VOD- und Clip-Metadaten werden zusätzlich gesammelt; keine Medien werden heruntergeladen.' : 'VOD- und Clip-Metadaten sind nicht aktiviert.'}</p>
       </section>
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{cards.map(card => <article key={card.title} className="panel-card rounded-2xl p-5"><card.icon className="mb-4 h-5 w-5 text-primary" /><h2 className="text-sm text-text-secondary">{card.title}</h2><p className="mt-2 text-3xl font-bold text-white">{card.value}</p><p className="mt-2 text-xs text-text-secondary">{card.detail}</p></article>)}</section>

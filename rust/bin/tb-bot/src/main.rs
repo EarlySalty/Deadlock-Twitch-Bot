@@ -578,6 +578,15 @@ async fn main() {
         }
     };
 
+    if let Some(client) = helix.as_ref().clone() {
+        let category_pool = pool.clone();
+        supervisor.spawn_graceful("category_collector", move |stop| {
+            tb_category_collector::run(category_pool, Arc::new(client), stop)
+        });
+    } else {
+        tracing::error!("Kategoriesammler nicht gestartet: Helix-Client fehlt");
+    }
+
     // EventSub-Ingress: Inbox-Worker + Dispatcher. Mit Webhook-Config + Helix
     // verwaltet Rust die Core-Subscriptions selbst (Go-Live → stream.offline);
     // mit Krypto-Key sind zusätzlich alle Raid-Hooks echt (s. unten).

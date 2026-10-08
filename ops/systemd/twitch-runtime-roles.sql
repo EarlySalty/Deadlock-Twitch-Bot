@@ -347,14 +347,32 @@ END
 $bot_token_roles$;
 
 DO $watchdog_roles$
+DECLARE relation_name text; role_name text;
 BEGIN
-    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchcollector')
-        AND to_regclass('public.twitch_watchdog_incidents') IS NOT NULL THEN
-        GRANT SELECT, INSERT, UPDATE ON TABLE public.twitch_watchdog_incidents TO twitchcollector;
-        IF to_regclass('public.twitch_watchdog_incidents_id_seq') IS NOT NULL THEN
-            GRANT USAGE, SELECT ON SEQUENCE public.twitch_watchdog_incidents_id_seq TO twitchcollector;
+    FOREACH relation_name IN ARRAY ARRAY['twitch_watchdog_incidents','category_watchdog_suspensions',
+        'category_watchdog_storage_incidents','category_watchdog_storage_notifications'] LOOP
+        IF to_regclass('public.'||relation_name) IS NOT NULL THEN
+            EXECUTE format('REVOKE ALL ON TABLE public.%I FROM PUBLIC',relation_name);
+            FOREACH role_name IN ARRAY ARRAY['twitchbot','twitchdash','twitchlegacy','twitchcollector'] LOOP
+                IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname=role_name) THEN
+                    EXECUTE format('REVOKE ALL ON TABLE public.%I FROM %I',relation_name,role_name);
+                END IF;
+            END LOOP;
+            EXECUTE format('GRANT SELECT,INSERT,UPDATE ON TABLE public.%I TO twitchbot',relation_name);
         END IF;
-    END IF;
+    END LOOP;
+    FOREACH relation_name IN ARRAY ARRAY['twitch_watchdog_incidents_id_seq','category_watchdog_suspensions_id_seq',
+        'category_watchdog_storage_incidents_id_seq'] LOOP
+        IF to_regclass('public.'||relation_name) IS NOT NULL THEN
+            EXECUTE format('REVOKE ALL ON SEQUENCE public.%I FROM PUBLIC',relation_name);
+            FOREACH role_name IN ARRAY ARRAY['twitchbot','twitchdash','twitchlegacy','twitchcollector'] LOOP
+                IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname=role_name) THEN
+                    EXECUTE format('REVOKE ALL ON SEQUENCE public.%I FROM %I',relation_name,role_name);
+                END IF;
+            END LOOP;
+            EXECUTE format('GRANT USAGE,SELECT ON SEQUENCE public.%I TO twitchbot',relation_name);
+        END IF;
+    END LOOP;
 END
 $watchdog_roles$;
 

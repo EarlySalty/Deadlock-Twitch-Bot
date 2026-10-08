@@ -79,18 +79,24 @@ fi
 # kommen unten ausschließlich per `git archive` aus dem expliziten SHA;
 # generierte Artefakte werden separat auf Typ, Eigentum und Schreibschutz geprüft.
 
+dashboard_source=bot/dashboard_v2/dist
+if [[ ! -d "$checkout/$dashboard_source" ]]; then
+  dashboard_source=bot/analytics/dashboard_v2/dist
+fi
+
 generated=(
   rust/target/release/tb-bot
   rust/target/release/tb-dashboard
   rust/target/release/tb-stream-audit
   rust/target/release/tb-config-check
   rust/target/release/tb-llm-usage-recover
-  bot/analytics/dashboard_v2/dist
+  "$dashboard_source"
   bot/admin_dashboard/dist
   website/dist
 )
 collector_expected=0
-if "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:rust/bin/tb-category-collector/Cargo.toml" 2>/dev/null; then
+if "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:rust/bin/tb-category-collector/Cargo.toml" 2>/dev/null &&
+   ! "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:rust/bin/tb-category-collector/src/lib.rs" 2>/dev/null; then
   collector_expected=1
   generated+=(rust/target/release/tb-category-collector)
 fi
@@ -251,7 +257,7 @@ if [[ ! -e "$release" ]]; then
     "$stage/rust/scripts/run_tb_dashboard_service.sh" \
     "$stage/rust/scripts/run_stream_audit_service.sh"
   chmod 0644 "$stage/ops/systemd/twitch-runtime-roles.sql"
-  cp -a "$checkout/bot/analytics/dashboard_v2/dist/." "$stage/bot/analytics/dashboard_v2/dist/"
+  cp -a "$checkout/$dashboard_source/." "$stage/bot/analytics/dashboard_v2/dist/"
   cp -a "$checkout/bot/admin_dashboard/dist/." "$stage/bot/admin_dashboard/dist/"
   cp -a "$checkout/website/dist/." "$stage/website/dist/"
 

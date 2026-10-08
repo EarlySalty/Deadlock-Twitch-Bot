@@ -1,70 +1,90 @@
 # Globaler Deadlock-Kategoriesammler
 
-`tb-category-collector.service` ist ein eigener Rust-Dienst mit dem Betriebssystem- und PostgreSQL-Benutzer `twitchcollector`. Er liest die gesamte über Helix sichtbare Live-Kategorie ohne Sprachfilter. IRC läuft ausschließlich anonym über `justinfan`. Die gemeinsame Lesekomponente wird auch vom bestehenden Scout verwendet und besitzt keine Sende-, Whisper- oder Moderationsschnittstelle.
+Der Kategoriesammler läuft als Rust-Bibliothek mit eigenen Tasks im `tb-bot`-Prozess (`deadlock-twitch-bot-rust.service`). Er nutzt den PostgreSQL-Pool, den Helix-Client, den geschützten Zugangspfad und das Logging des Bots. Er liest die über Helix sichtbare Deadlock-Live-Kategorie ohne Sprachfilter. Für die Sammlung sind keine eigene App-Konfiguration, kein separates App-Credential und kein dauerhaft laufender Sammlerdienst erforderlich.
+
+IRC läuft anonym über `justinfan`, unabhängig vom angemeldeten Bot-Konto. Die vorhandene gemeinsame Lesekomponente wird auch vom Scout verwendet und besitzt keine Sende-, Whisper- oder Moderationsschnittstelle. Ein nativer Leader-Lock verhindert parallele Sammlung durch mehrere Bot-Prozesse. Beim Übergang darf auch der bisherige externe Sammler nicht gleichzeitig Daten erfassen; die Umschaltung ist unten beschrieben.
 
 ## Daten und Grenzen
 
-Vollständig paginierte Stream-Snapshots enthalten Kanal- und Stream-IDs, Titel, Zuschaueraggregat, Stream-Sprache, Startzeit, Tags, Vorschaubild und Mature-Kennzeichnung. Öffentliche Kanalprofile werden ergänzt. Der bestehende Bot ergänzt Follower-Gesamtzahlen mit seinem bereits verwalteten User-Token; ein fehlgeschlagener Abruf bleibt unbekannt. Es werden keine Follower-Einzellisten, Subscriber-Daten, vollständigen Zuschauer-/Lurker-Listen oder Zuschauerländer abgefragt.
+Vollständig paginierte Stream-Snapshots enthalten Kanal- und Stream-IDs, Titel, Zuschaueraggregat, Stream-Sprache, Startzeit, Tags, Vorschaubild und Mature-Kennzeichnung. Öffentliche Kanalprofile werden ergänzt. Der bestehende Bot ergänzt Follower-Gesamtzahlen über seinen geschützten Zugang; ein fehlgeschlagener Abruf bleibt unbekannt. Follower-Einzellisten, Subscriber-Daten, vollständige Zuschauer-/Lurker-Listen und Zuschauerländer gehören nicht zur Sammlung.
 
 Chat wird mit Nachrichten-ID, Herkunft, Zeit, Tags, Emotezahl und lokaler Sprachdetektion gespeichert. Kurze und unsichere Texte bleiben `und`. Stream-Sprache und Nachrichtensprache sind getrennte Merkmale, keine Geografie. Shared-Chat-Kopien sind gekennzeichnet und werden nicht mehrfach in die Volumensummen aufgenommen.
 
-VOD- und Clip-Metadaten sind in der DB standardmäßig aktiviert. Es werden keine Videos oder Audiodaten heruntergeladen und keine STT- oder Cloud-Sprachdienste verwendet. Clips werden im gleitenden Sieben-Tage-Fenster abgefragt; verfügbare VOD-Seiten werden mit persistenten Cursorn nachgezogen. Das ist kein vollständiges historisches Medienarchiv. Kanal-VODs werden nicht automatisch als Deadlock-Videos ausgegeben.
+VOD- und Clip-Metadaten sind über `category_collector_config.media_enabled` steuerbar, standardmäßig aktiviert. Die Sammlung lädt keine Videos oder Audiodaten herunter und nutzt keine STT- oder Cloud-Sprachdienste. Clips werden im gleitenden Sieben-Tage-Fenster abgefragt; verfügbare VOD-Seiten werden mit persistenten Cursorn nachgezogen. Das ist kein vollständiges historisches Medienarchiv. Kanal-VODs werden nicht automatisch als Deadlock-Videos ausgegeben.
 
-## Dauerhafte Speicherung
+## Dauerhafte Speicherung und Speicherpause
 
-Datenbank: `twitch_analytics`. Die Sammlertabellen beginnen mit `category_`; Rohchat liegt in täglichen UTC-Partitionen. **Es gibt keine automatische Alterslöschung und keine Kürzung des Bestands bei Speicherknappheit.** Stundenaggregate ergänzen die Rohdaten, sie ersetzen sie nicht.
+Datenbank: `twitch_analytics`. Die Sammlertabellen beginnen mit `category_`; Rohchat liegt in täglichen UTC-Partitionen. Es gibt keine automatische Archiv-Alterslöschung und keine Kürzung des Bestands wegen Speicherknappheit. Stundenaggregate ergänzen die Rohdaten, sie ersetzen sie nicht.
 
-Die additive Migration `20260918170000_category_permanent_archive.sql` deaktiviert auch die alte Partitions-Prune-Funktion. Der Rust-Kompatibilitätseinstieg zur Alterslöschung ist ebenfalls wirkungslos. Die Laufzeitrolle hat weder DELETE-, UPDATE- noch TRUNCATE-Rechte auf Rohchat. Bereits angewandte historische Migrationen werden nicht geändert.
+Die additive Migration `20260918170000_category_permanent_archive.sql` deaktiviert die alte Partitions-Prune-Funktion. Der Rust-Kompatibilitätseinstieg zur Alterslöschung ist wirkungslos. Rechte für die native Bot-Rolle werden über neue additive Migrationen vergeben, nicht durch Änderungen an bereits angewandten Migrationen. Pauschale DELETE-, UPDATE- oder TRUNCATE-Rechte auf Rohchat bleiben der Bot-Rolle entzogen. Die Native-Migration vergibt auf der Dirty-Queue das begrenzte Spaltenrecht `UPDATE(hour_at)`, das die Zeilensperre bei der Aggregation benötigt; andere Queue-Spalten erhalten kein UPDATE-Recht.
 
 Die DB-Konfiguration setzt anfänglich 20 GiB Rohdatenbudget und 10 GiB freien Plattenplatz als Reserve. Ab 80 Prozent des Budgets erscheint eine Warnung. Bei erreichtem Rohdatenbudget pausieren neue Chatzeilen; bei zu wenig oder nicht prüfbarem freien Plattenplatz pausieren auch neue Snapshots und Medienmetadaten. Bestandsdaten bleiben erhalten. Diese Werte sind veränderbare Betriebsgrenzen, keine Aufbewahrungsfristen und keine garantierte Grenze für die gesamte PostgreSQL-Belegung einschließlich WAL und anderer Dienste.
 
-Explizite Twitch-Moderationsereignisse sind ein getrennter Vorgang: CLEARMSG entfernt nur die konkret bezeichnete Nachricht einschließlich zugehöriger Shared-Chat-Kopien. Gespeicherte Ziel-IDs und transaktionsgebundene Raumsperren verhindern deren Wiederherstellung durch verspätete oder parallel laufende Zustellungen. Ein personenbezogenes CLEARCHAT ist auf das Zeitfenster des zum Twitch-Ereignis beobachteten Streams begrenzt; die Zielmarke aus Nutzer-ID und Zeitfenster endet am Twitch-Zeitstempel, bei fehlendem Tag an der IRC-Empfangszeit. So bleiben verspätete ältere Nachrichten entfernt, aber später gesendete Nachrichten erhalten. Ein allgemeines CLEARCHAT ohne Ziel löscht kein Kanalarchiv. Stundenaggregate werden danach neu berechnet. Eine rechtlich oder vom Betreiber angeordnete Datenlöschung ist nicht Teil einer pauschalen Retention.
+Die Speicherpause bleibt bis zur Erholungsgrenze aktiv. Die Hysterese trennt Pause und Wiederaufnahme, damit kleine Schwankungen um die Speichergrenze die Erfassung nicht fortlaufend umschalten. Heartbeat und Speicherprüfung laufen während der Pause weiter. Ein aktueller Heartbeat mit `disk_paused=true` bezeichnet eine Speicherpause, keinen Sammlerausfall. `raw_paused=true` betrifft Rohchat; aktuelle Kategoriemessungen können weiterhin vorliegen. Ein veralteter Heartbeat bleibt auch bei zuletzt gemeldeter Speicherpause prüfbedürftig.
+
+Explizite Twitch-Moderationsereignisse sind ein getrennter Vorgang: CLEARMSG entfernt die konkret bezeichnete Nachricht einschließlich zugehöriger Shared-Chat-Kopien. Gespeicherte Ziel-IDs und transaktionsgebundene Raumsperren verhindern deren Wiederherstellung durch verspätete oder parallel laufende Zustellungen. Ein personenbezogenes CLEARCHAT ist auf das Zeitfenster des zum Twitch-Ereignis beobachteten Streams begrenzt; die Zielmarke aus Nutzer-ID und Zeitfenster endet am Twitch-Zeitstempel, bei fehlendem Tag an der IRC-Empfangszeit. So bleiben verspätete ältere Nachrichten entfernt, aber später gesendete Nachrichten erhalten. Ein allgemeines CLEARCHAT ohne Ziel löscht kein Kanalarchiv. Stundenaggregate werden danach neu berechnet. Eine rechtlich oder vom Betreiber angeordnete Datenlöschung ist nicht Teil einer pauschalen Retention.
 
 ## Konfiguration ohne ENV
 
-Der Bootstrap enthält ausschließlich DB-Zugang und die Quelle der geschützten App-Zugangsdaten:
-
-```sh
-tb-category-collector --config /etc/deadlock-twitch/category-collector.json
-```
-
-Vorlage: `ops/systemd/category-collector.example.json`. Produktiv erhält der Dienst ein hostverschlüsseltes systemd-Credential mit nur Twitch-App-ID und App-Secret. Er bekommt weder Bot-Token noch Infisical-Bootstrap- oder Benachrichtigungs-Token. Verhaltensparameter werden laufend aus `category_collector_config` gelesen. Alte Retention-Felder in einem vorhandenen Bootstrap werden lediglich zur Abwärtskompatibilität akzeptiert, niemals als Löschfreigabe verwendet.
+Der Sammler erhält Pool und Helix-Client aus dem Bot. App-Zugangsdaten kommen aus dem vorhandenen geschützten Bot-Weg, etwa Infisical oder den bestehenden Bot-Credentials. Es gibt keinen zusätzlichen Sammler-Secretweg. Verhaltensparameter werden laufend aus `category_collector_config` gelesen. Die Einstellungen lassen sich lesend prüfen:
 
 ```sql
-SELECT * FROM category_collector_config;
--- Änderungen führt der Betreiber als postgres aus, nicht der Collector:
+SELECT enabled, poll_seconds, raw_budget_bytes, min_free_bytes, media_enabled
+FROM category_collector_config
+WHERE singleton;
+```
+
+Änderungen führt der Betreiber als `postgres` aus, nicht die Sammlerlaufzeit:
+
+```sql
 UPDATE category_collector_config
 SET raw_budget_bytes = 107374182400, updated_at = now()
 WHERE singleton;
 ```
 
-`enabled=false` pausiert die Erfassung; vorhandene Daten bleiben zugänglich. Das Plattenmessziel `/var/lib/postgresql` muss auf demselben Dateisystem wie PostgreSQL liegen. Auf diesem Host liegt dessen Datenverzeichnis unter `/var/lib/postgresql/16/main`.
+`enabled=false` deaktiviert neue Erfassung; vorhandene Daten bleiben zugänglich. Das Plattenmessziel `/var/lib/postgresql` muss auf demselben Dateisystem wie PostgreSQL liegen. Auf diesem Host liegt dessen Datenverzeichnis unter `/var/lib/postgresql/16/main`.
 
-## Dashboard
+## Dashboard und Berichtvertrag
 
-Admin-Seite: `/twitch/kategorie`, Navigation **Deadlock weltweit**. Datenroute: `/twitch/api/v2/category-collector?days=7` mit 7, 30 oder 90 Tagen. Diese Werte sind ausschließlich Ansichtsfenster. Beide Routen sind serverseitig adminpflichtig: 401 ohne Anmeldung, 403 für normale Partner. Es gibt keinen Rohchat-Endpunkt; auch die Dashboard-DB-Rolle darf Rohchat nicht lesen.
+Admin-Seite: `/twitch/kategorie`, Navigation **Deadlock weltweit**. Datenroute: `/twitch/api/v2/category-collector?days=7` mit 7, 30 oder 90 Tagen. Diese Werte sind Ansichtsfenster, keine Löschfristen. Beide Routen sind serverseitig adminpflichtig: 401 ohne Anmeldung, 403 für normale Partner. Es gibt keinen Rohchat-Endpunkt; die Dashboard-DB-Rolle darf Rohchat nicht lesen.
 
 Die Seite zeigt Sprachen, Stundenverlauf, Top-Kanäle nach Zuschauerstunden und Chat-Tageszeiten in UTC. Stundenwerte bleiben unverändert; Lücken werden nicht zu Nullwerten oder falschen Tagesmitteln. Unbekannte gewichtete Durchschnitte bleiben unbekannt. Kanal- und Shard-Abdeckung, Datenbeginn, letzte Messung, Speicherstand, Warnungen und seit Prozessstart bekannte Verluste sind sichtbar. Stündlich eindeutige Schreiber werden nicht über Stunden zu angeblich eindeutigen Zuschauern aufsummiert.
 
-## Installation und Prüfung
+Der bestehende Bericht liefert `collector_config.enabled` und `collector_config.poll_seconds`, `heartbeat_at`, `last_snapshot` sowie die Statusdetails unter `status`. Die Details enthalten `disk_paused`, `raw_paused`, `storage_checked_at`, `last_discovery` und `discovery_state`. Intern liegen Heartbeat und Details in `category_collector_status`; das Frontend erwartet keine neue Statushülle.
 
-Der vorhandene Release-Weg baut `tb-bot`, `tb-dashboard`, `tb-stream-audit`, `tb-category-collector`, `tb-twitch-watchdog` und `clip_context_learn` aus demselben sauberen SHA, dazu die bestehenden Frontends. Herkunftsnachweis: ELF-Sektion `.twitch_build`. Die aktualisierten, geprüften Wrapper unter `ops/systemd/deploy-twitch-release` und `ops/systemd/install-twitch-release.sh` müssen installiert sein, damit auch der Watchdog als geprüftes Release-Artefakt installiert wird.
+Die Anzeige unterscheidet deaktivierte Sammlung, Plattenpause, Rohchatbudget-Pause, veraltete Statusmeldung, fehlende aktuelle Kategoriemessungen und einen nicht aktuell bestätigten Kategorieabruf. Sie prüft Aktualität gegen die laufende Uhr, nicht gegen `generated_at`. Der alle 15 Sekunden erneuerte Heartbeat hat eine Toleranz von zwei Minuten. Für Snapshots und erfolgreiche Kategorieabrufe beträgt die Toleranz mindestens zwei Minuten beziehungsweise zwei konfigurierte Messintervalle. Eine Plattenpause mit aktuellem Heartbeat wird auch bei alten Snapshots als Pause dargestellt. Fehlende Snapshots ohne Plattenpause bleiben ein eigener Hinweis. Bei veralteter Statusmeldung sind Speicherangaben und Chat-Abdeckung zuletzt gemeldete Werte. Historische Auswertungen bleiben sichtbar.
 
-`deploy-twitch-release` wendet Migrationen als postgres an. Danach richtet die root-eigene Kopie von `ops/systemd/install-category-collector.py` im versiegelten Release Benutzer, Peer-Zugang, eingeschränkte Rollen, Credentials, Unit und Caddy-Matcher ein. Dieser vorhandene Installationshelfer ist ein Einmalwerkzeug; die Sammlerlaufzeit selbst ist Rust. Neue Caddy-Regeln werden vor Reload validiert, bestehende Regeln nicht ersetzt.
+## Bereitstellung und Umschaltung
 
-Die Unit hat 512 MiB Speicherlimit und CPU-Begrenzung. Bei einem Fehler versucht systemd den Start jede Minute erneut, ohne Startlimit. OnFailure und der vorhandene 30-Sekunden-Watchdog-Timer benutzen `deadlock-twitch-bot-watchdog.service`. Seine Rust-Laufzeit prüft Bot, Collector, Heartbeat und neue Collector-Läufe. Der vorhandene lokale Discord-Broker erhält eine Meldung je Vorfall mit stabilem Idempotenzschlüssel. Zustellfehler werden erneut versucht; Vorfälle bleiben in `twitch_watchdog_incidents` in Postgres gespeichert. Auch übersehene Collector-Lücken aus den letzten zwei Tagen werden nachgetragen.
+Die Integration bringt den Sammler mit dem Bot-Release. `tb-category-collector` ist danach eine Bibliothek, kein eigenes Sammlerbinary. `tb-twitch-watchdog` bleibt ein separates, kurz laufendes Rust-Prüfprogramm im bestehenden `deadlock-twitch-bot-watchdog.timer`; es sammelt selbst keine Kategorie- oder Chatdaten. Der Herkunftsnachweis der Release-Artefakte steht in der ELF-Sektion `.twitch_build`.
 
-Der externe Watchdog benötigt keine systemd-Mount-Namespaces und kein LoadCredential-Setup. Er liest den bestehenden verschlüsselten Infrastruktur-Schlüssel als root in den Speicher und gibt anschließend alle root-Rechte ab. Datenbankzugang und Zustellung laufen als `twitchcollector`; der Peer-Zugang bleibt unverändert. Ein fehlender Schlüssel verhindert die Vorfall-Erfassung nicht. Die Collector-Unit behält ihre eigene Sandbox. Die Migration `20261001220000_twitch_watchdog_incidents.sql` muss vor dem neuen Watchdog aktiv sein.
+Die Verpackung richtet sich nach der Zielrevision: Stände mit Collector-Crate ohne native Bibliothek benötigen weiterhin `tb-category-collector`. Der Wrapper verlangt diese Binary vor dem Verschieben des Builds; der Installer prüft ihren eingebetteten Git-SHA im Build und im fertigen Release und kopiert sie in den Release-Baum. Native Zielrevisionen verpacken keine externe Sammlerbinary. Eine Rückkehr zu einem älteren Stand stellt bereits entfernte Units und Zugänge nicht wieder her; vor dessen Nutzung muss der Betreiber die getrennte Sammlung und die Übergangssperre erneut einrichten.
 
-Eine historische Collector-Lücke schaltet Rangliste und Erfolge nicht ab. Betroffene Stream-Aufgaben und Ausdauer bleiben ausgesetzt, während bestätigte Punkte und unabhängige Aufgaben sichtbar bleiben. Das Dashboard kennzeichnet die Teilwertung. Monatsboosts verlangen weiterhin alle sieben gesunden Effort-Quellen.
+`deploy-twitch-release` startet tatsächlich `deadlock-twitch-migrate.service`. Für diese Umschaltung spielt die Integration die neuen additiven Migrationen vor dem Release manuell als `postgres` in `twitch_analytics` ein. Die passenden Grants für Bot und Dashboard sowie Einträge in `_sqlx_migrations` müssen mit Version, Beschreibung, Erfolg und passender SQLx-Prüfsumme korrekt geführt werden. Der Wrapper prüft den angewandten Stand vor dem Bot-Neustart. Der Schema-Snapshot gehört zum integrierten Stand; zusätzliche `.sqlx`-Metadaten sind für die dynamischen Sammlerabfragen nicht erforderlich.
+
+Für die Umschaltung gilt diese Reihenfolge:
+
+1. Migrationen prüfen und einspielen, dann den Bot mit nativer Sammlerbibliothek bereitstellen. Der native Leader-Lock muss doppelte native Sammlung verhindern. Solange der alte externe Sammler noch aktiv ist, darf der native Sammler nicht parallel erfassen; die Integrationsprüfung muss die Übergangssperre belegen.
+2. Den bisherigen `tb-category-collector.service` stoppen und deaktivieren. Danach native Sammlung im Bot-Journal und neue `category_collection_runs` nachweisen. Bei sichtbaren Streams gehören neue Zeilen in `category_stream_snapshots` zum Datenflussnachweis; eine erfolgreich abgerufene leere Kategorie wird als Messlauf mit `streams=0` gespeichert und benötigt keine Streamzeilen. Ein aktueller Heartbeat allein beweist keine neuen Messungen.
+3. Watchdog und Dashboard prüfen. Erst nach erfolgreichem nativen Live-Nachweis externe Unit, Sammler-Credential, Bootstrap-Konfiguration und bisherige Installationsreste endgültig entfernen. Bestehende Archivdaten und benötigte Watchdog-Rechte erhalten.
+
+Die native Bereitschaft liegt während des Wartens auf die bisherige Lease pro Bot-PID in `category_native_processes`, mit aktuellem Heartbeat sowie `process_id`, `lease_id` und `lease_state=waiting`. Der aktive Lease-Inhaber veröffentlicht seinen Status in `category_native_runtime`; wartende Prozesse überschreiben diesen Eintrag nicht. Nach der Übernahme enthalten die Sammlerstatusdetails `runtime=tb-bot`, `process_id`, `process_started_at`, `lease_id` und `native_lease_active=true`. Der Wrapper verknüpft Bereitschaft, aktiven Runtime-Eintrag und Sammlerstatus mit der gestarteten Bot-PID und derselben Lease. Vor der Entfernung von alter Unit, Bootstrap und App-Credential verlangt er einen neuen `category_collection_runs`-Eintrag nach dem Umschaltzeitpunkt, dessen `snapshot_at` mit `last_discovery_snapshot_at` im Sammlerstatus übereinstimmt. Auch ein bestätigter leerer Messlauf erfüllt diesen Vertrag.
+
+Der Watchdog prüft Bot und Sammlerzustand über den vorhandenen Status- und Datenpfad. Speicherpausen werden getrennt von Ausfällen geführt. Fehlende aktuelle Messungen ohne erklärende Pause und veraltete Heartbeats bleiben Ausfallhinweise. Speicherpausen werden nach fünf Minuten gemeldet, nach 30 durchgehend freien Minuten abgeschlossen und höchstens einmal je Vorfall sowie insgesamt einmal pro Berliner Kalendertag zugestellt. Wiederholungen innerhalb des Vorfalls werden mitgezählt. Der persistente Zustellauftrag behält Inhalt und Idempotenzschlüssel bei erneuten Versuchen. Bekannte deaktivierte Zeiten und Plattenpausen werden nicht nachträglich als Messausfall gemeldet. Historische Messlücken werden auf das zweitägige Beobachtungsfenster begrenzt; überlappende erklärte Pausen werden vereinigt abgezogen. Historische Lücken vor Einführung dieser Unterscheidung lösen keine neue Ausfallmeldung aus. Bereits beendete Vorfälle nennen Beginn und Ende in Berliner Ortszeit und kennzeichnen die Messlücke als beendet. Sie behaupten keine weiterhin fehlenden aktuellen Daten. Laufende Vorfälle bleiben als laufender Ausfall erkennbar. Zustellung erfolgt über den vorhandenen lokalen Discord-Broker, Vorfälle bleiben in `twitch_watchdog_incidents` gespeichert. Die historische Migration `20261001220000_twitch_watchdog_incidents.sql` bleibt Voraussetzung für diesen Vorfallpfad.
+
+Eine historische Collector-Lücke schaltet Rangliste und Erfolge nicht ab. Betroffene Stream-Aufgaben und Ausdauer bleiben ausgesetzt, während bestätigte Punkte und unabhängige Aufgaben sichtbar bleiben. Das Dashboard kennzeichnet die Teilwertung. Monatsboosts verlangen weiterhin die sieben gesunden Effort-Quellen.
 
 ```sh
-systemctl status tb-category-collector.service
-journalctl -u tb-category-collector.service --since '-10 minutes'
+systemctl status deadlock-twitch-bot-rust.service
+journalctl -u deadlock-twitch-bot-rust.service --since '-10 minutes'
 sudo -u postgres psql -d twitch_analytics -c "SELECT * FROM category_collection_runs ORDER BY snapshot_at DESC LIMIT 3"
+sudo -u postgres psql -d twitch_analytics -c "SELECT max(snapshot_at) FROM category_stream_snapshots"
 sudo -u postgres psql -d twitch_analytics -c "SELECT heartbeat_at,details FROM category_collector_status"
+systemctl status deadlock-twitch-bot-watchdog.timer
 ```
 
-Ein Stopp nur des Collectors beeinträchtigt Bot und Dashboard nicht. Vor einem Rollback auf eine Version vor der dauerhaften Archivierung den Collector anhalten: Der alte Rust-Retentionpfad würde mit den absichtlich entzogenen DELETE-Rechten scheitern. Die Datenbank-Löschsperre nicht zurücknehmen.
+Beim Beenden werden zuerst die Erzeuger-Tasks gestoppt und die anonyme IRC-Steuerung freigegeben. Der Chatwriter darf die geschlossene Eingangsqueue anschließend bis zu 15 Sekunden leeren; danach wird er abgebrochen und ein möglicher Verlust noch nicht bestätigter Chatzeilen im Bot-Journal gemeldet. Die nachfolgende Lease-Abmeldung und das Schließen ihrer Verbindung haben zusammen drei Sekunden Zeit. Der schreibende Bot-Pool begrenzt den Verbindungsaufbau, setzt aber selbst keine allgemeine Abfragefrist; ein blockierter Datenbankaufruf darf die Writer-Abschaltung deshalb nicht unbegrenzt aufhalten. Bereits bestätigte Archivdaten werden beim Abbruch nicht gelöscht.
 
-Tests verwenden isolierte PostgreSQL-Instanzen und Mock-/lokale IRC-Verbindungen, keine produktiven Testnachrichten. Ein kurzer Live-Lauf belegt nur den beobachteten Datenfluss. Eine vollständige 24–48-Stunden-Abdeckungsmessung benötigt entsprechende reale Laufzeit; konkrete Live-Zahlen und Release-SHA stehen separat im Abnahmebericht.
+Ein Bot-Neustart startet auch die Sammler-Tasks neu. `enabled=false` pausiert die Sammlung ohne Bot-Stopp. Deploy-Wrapper und Installer verwenden bevorzugt `bot/dashboard_v2/dist`, wenn dieses Build-Verzeichnis vorliegt, andernfalls `bot/analytics/dashboard_v2/dist` für ältere Vite-Builds. Der Speicherort von `package.json` entscheidet nicht über den Ausgabepfad. Im installierten Release liegt das Dashboard in beiden Fällen unter `bot/analytics/dashboard_v2/dist`. Beim Rollback muss die Übergangssperre erneut geprüft werden; der externe Sammler darf nicht gleichzeitig mit dem nativen Pfad laufen. Die Archiv-Löschsperre bleibt bestehen.
+
+Tests verwenden isolierte PostgreSQL-Instanzen und Mock-/lokale IRC-Verbindungen, keine produktiven Testnachrichten. Ein kurzer Live-Lauf belegt den beobachteten Datenfluss, keine vollständige Tagesabdeckung. Eine 24–48-Stunden-Abdeckungsmessung benötigt entsprechende reale Laufzeit; konkrete Live-Zahlen und Release-SHA gehören zum Integrationsnachweis.

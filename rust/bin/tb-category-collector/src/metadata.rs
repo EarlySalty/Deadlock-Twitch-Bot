@@ -1,4 +1,3 @@
-//! Public profile and media metadata enrichment. No downloads or Twitch writes.
 use crate::{Counters, Error};
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
@@ -23,7 +22,6 @@ pub async fn run(
         {
             continue;
         }
-        // Metadata failures must not erase snapshots or reconnect anonymous chat.
         if let Err(error) = profiles(&pool, &helix).await {
             tracing::warn!(%error,"public category profile enrichment failed");
         }
@@ -103,8 +101,6 @@ async fn media(pool: &PgPool, helix: &HelixClient, game_id: &str) -> Result<(), 
         else {
             continue;
         };
-        // Videos do not expose game_id. Their channel's category is not evidence
-        // that the entire video is Deadlock; preserve this uncertainty.
         let verified =
             kind == "clip" && item.get("game_id").and_then(|v| v.as_str()) == Some(game_id);
         sqlx::query("INSERT INTO category_media(kind,media_id,user_id,metadata,category_verified)

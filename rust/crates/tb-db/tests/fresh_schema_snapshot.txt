@@ -156,6 +156,12 @@ category_media|last_seen|timestamp with time zone|NO|now()
 category_media|media_id|text|NO|
 category_media|metadata|jsonb|NO|
 category_media|user_id|text|NO|
+category_native_processes|details|jsonb|NO|
+category_native_processes|heartbeat_at|timestamp with time zone|NO|
+category_native_processes|process_id|bigint|NO|
+category_native_runtime|details|jsonb|NO|
+category_native_runtime|heartbeat_at|timestamp with time zone|NO|
+category_native_runtime|singleton|boolean|NO|true
 category_stream_snapshots|is_mature|boolean|NO|
 category_stream_snapshots|language|text|NO|
 category_stream_snapshots|sample_seconds|double precision|NO|
@@ -168,6 +174,24 @@ category_stream_snapshots|title|text|NO|
 category_stream_snapshots|user_id|text|NO|
 category_stream_snapshots|user_login|text|NO|
 category_stream_snapshots|viewer_count|bigint|NO|
+category_watchdog_storage_incidents|clear_since|timestamp with time zone|YES|
+category_watchdog_storage_incidents|id|bigint|NO|
+category_watchdog_storage_incidents|last_paused_at|timestamp with time zone|NO|
+category_watchdog_storage_incidents|reason|text|NO|
+category_watchdog_storage_incidents|recovered_at|timestamp with time zone|YES|
+category_watchdog_storage_incidents|repetitions|integer|NO|0
+category_watchdog_storage_incidents|started_at|timestamp with time zone|NO|
+category_watchdog_storage_notifications|content|text|NO|
+category_watchdog_storage_notifications|delivery_error_at|timestamp with time zone|YES|
+category_watchdog_storage_notifications|incident_id|bigint|NO|
+category_watchdog_storage_notifications|last_attempt_at|timestamp with time zone|YES|
+category_watchdog_storage_notifications|notification_day|date|NO|
+category_watchdog_storage_notifications|notified_at|timestamp with time zone|YES|
+category_watchdog_suspensions|ended_at|timestamp with time zone|YES|
+category_watchdog_suspensions|id|bigint|NO|
+category_watchdog_suspensions|last_seen_at|timestamp with time zone|NO|
+category_watchdog_suspensions|reason|text|NO|
+category_watchdog_suspensions|started_at|timestamp with time zone|NO|
 clip_fetch_history|clips_found|integer|YES|0
 clip_fetch_history|clips_new|integer|YES|0
 clip_fetch_history|error|text|YES|
@@ -2365,6 +2389,7 @@ twitch_watchdog_incidents|notified_at|timestamp with time zone|YES|
 twitch_watchdog_incidents|recovered_at|timestamp with time zone|YES|
 twitch_watchdog_incidents|service|text|NO|
 twitch_watchdog_incidents|started_at|timestamp with time zone|NO|
+twitch_watchdog_incidents|superseded_at|timestamp with time zone|YES|
 twitch_watchdog_incidents|warning_at|timestamp with time zone|YES|
 twitch_zuschauer_register|community_probability|double precision|NO|
 twitch_zuschauer_register|computed_at|timestamp with time zone|NO|now()

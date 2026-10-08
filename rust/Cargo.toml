@@ -95,6 +95,7 @@ tb-monitoring = { path = "crates/tb-monitoring" }
 tb-platform-core = { path = "crates/tb-platform-core" }
 tb-raid = { path = "crates/tb-raid" }
 tb-http-core     = { path = "crates/tb-http-core" }
+tb-category-collector = { path = "bin/tb-category-collector" }
 tb-analytics     = { path = "crates/tb-analytics" }
 tb-chat          = { path = "crates/tb-chat" }
 tb-dashboard-api = { path = "crates/tb-dashboard-api" }

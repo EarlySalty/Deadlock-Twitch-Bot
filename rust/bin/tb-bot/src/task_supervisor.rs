@@ -4,7 +4,7 @@ use std::sync::{
     Arc,
 };
 
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot, watch, Mutex};
 use tokio::task::AbortHandle;
 use tokio::task::{JoinHandle, JoinSet};
 
@@ -12,6 +12,7 @@ struct TaskRecord {
     name: &'static str,
     handle: JoinHandle<()>,
     finite: bool,
+    shutdown: Option<watch::Sender<bool>>,
 }
 
 enum SupervisorCommand {
@@ -41,18 +42,32 @@ impl TaskSupervisor {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.spawn_inner(name, future, false);
+        self.spawn_inner(name, future, false, None);
     }
 
     pub fn spawn_finite<F>(&self, name: &'static str, future: F)
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.spawn_inner(name, future, true);
+        self.spawn_inner(name, future, true, None);
     }
 
-    fn spawn_inner<F>(&self, name: &'static str, future: F, finite: bool)
+    pub fn spawn_graceful<F, Fut>(&self, name: &'static str, task: F)
     where
+        F: FnOnce(watch::Receiver<bool>) -> Fut,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let (stop, stopped) = watch::channel(false);
+        self.spawn_inner(name, task(stopped), false, Some(stop));
+    }
+
+    fn spawn_inner<F>(
+        &self,
+        name: &'static str,
+        future: F,
+        finite: bool,
+        shutdown: Option<watch::Sender<bool>>,
+    ) where
         F: Future<Output = ()> + Send + 'static,
     {
         if self.closed.load(Ordering::SeqCst) {
@@ -76,6 +91,7 @@ impl TaskSupervisor {
             name,
             handle,
             finite,
+            shutdown,
         })) {
             match error.0 {
                 SupervisorCommand::Spawn(record) => record.handle.abort(),
@@ -85,7 +101,7 @@ impl TaskSupervisor {
             }
             tracing::error!(
                 task = name,
-                "Task-Supervisor nicht verfuegbar; Background-Task wird abgebrochen"
+                "Task-Supervisor nicht verfügbar; Background-Task wird abgebrochen"
             );
             return;
         }
@@ -111,21 +127,25 @@ impl TaskSupervisor {
 
 async fn run_supervisor(mut rx: mpsc::UnboundedReceiver<SupervisorCommand>) {
     let mut watchers = JoinSet::new();
-    let mut aborts = Vec::<(&'static str, AbortHandle)>::new();
+    let mut aborts = Vec::<(&'static str, AbortHandle, Option<watch::Sender<bool>>)>::new();
     loop {
         tokio::select! {
             command = rx.recv() => match command {
                 Some(SupervisorCommand::Spawn(record)) => {
-                    aborts.retain(|(_, abort)| !abort.is_finished());
-                    aborts.push((record.name, record.handle.abort_handle()));
+                    aborts.retain(|(_, abort, _)| !abort.is_finished());
+                    aborts.push((record.name, record.handle.abort_handle(), record.shutdown));
                     watchers.spawn(async move {
                         let result = record.handle.await;
                         (record.name, record.finite, result)
                     });
                 }
                 Some(SupervisorCommand::Shutdown(done)) => {
-                    for (_, abort) in aborts.drain(..) {
-                        abort.abort();
+                    for (_, abort, stop) in aborts.drain(..) {
+                        if let Some(stop) = stop {
+                            stop.send_replace(true);
+                        } else {
+                            abort.abort();
+                        }
                     }
                     while let Some(joined) = watchers.join_next().await {
                         log_joined(joined, true);
@@ -134,8 +154,12 @@ async fn run_supervisor(mut rx: mpsc::UnboundedReceiver<SupervisorCommand>) {
                     break;
                 }
                 None => {
-                    for (_, abort) in aborts.drain(..) {
-                        abort.abort();
+                    for (_, abort, stop) in aborts.drain(..) {
+                        if let Some(stop) = stop {
+                            stop.send_replace(true);
+                        } else {
+                            abort.abort();
+                        }
                     }
                     while let Some(joined) = watchers.join_next().await {
                         log_joined(joined, true);
@@ -146,7 +170,7 @@ async fn run_supervisor(mut rx: mpsc::UnboundedReceiver<SupervisorCommand>) {
             joined = watchers.join_next(), if !watchers.is_empty() => {
                 if let Some(joined) = joined {
                     log_joined(joined, false);
-                    aborts.retain(|(_, abort)| !abort.is_finished());
+                    aborts.retain(|(_, abort, _)| !abort.is_finished());
                 }
             }
         }
@@ -232,6 +256,24 @@ mod tests {
         sleep(Duration::from_millis(20)).await;
 
         assert!(!ran.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn graceful_shutdown_waits_for_worker_cleanup() {
+        let supervisor = TaskSupervisor::start();
+        let finished = Arc::new(AtomicBool::new(false));
+        let finished_in_task = finished.clone();
+        supervisor.spawn_graceful("graceful_task", move |mut stop| async move {
+            while !*stop.borrow_and_update() {
+                if stop.changed().await.is_err() {
+                    break;
+                }
+            }
+            tokio::task::yield_now().await;
+            finished_in_task.store(true, Ordering::SeqCst);
+        });
+        supervisor.shutdown().await;
+        assert!(finished.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
