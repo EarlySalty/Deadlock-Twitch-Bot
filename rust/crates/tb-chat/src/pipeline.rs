@@ -3811,6 +3811,105 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn contact_bait_replay_runs_through_pipeline_with_guards() {
+        let Some(pool) = moderation_test_pool("pipeline_contact_bait_replay").await else {
+            return;
+        };
+        seed_active_pipeline_channel(&pool).await;
+        for ddl in [
+            "ALTER TABLE twitch_stream_sessions ADD COLUMN followers_start INTEGER, ADD COLUMN followers_end INTEGER",
+            "CREATE TABLE twitch_scam_guard_settings (channel_login TEXT, channel_user_id TEXT, enabled BOOLEAN, mode TEXT, threshold REAL, suggestion_floor REAL)",
+            "INSERT INTO twitch_scam_guard_settings VALUES ('channel', 'broadcaster-id', FALSE, 'alert_only', 0.9, 0.7)",
+            "CREATE TABLE twitch_zuschauer_register (twitch_user_id TEXT PRIMARY KEY, unauffaellig_seit TIMESTAMPTZ, vertrauen_widerrufen_am TIMESTAMPTZ, historie_geprueft_am TIMESTAMPTZ)",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        set_moderation_flags(&pool, "broadcaster-id", false, true, false, false).await;
+        let api = Arc::new(RecordingChatApi::default());
+        let context_handle_replay =
+            crate::scam_pitch::CONTACT_BAIT_REPLAY.replace("united_247", "deadlock.player");
+        let promise_handle_replay =
+            crate::scam_pitch::CONTACT_BAIT_REPLAY.replace("united_247", "cool.gefollowt");
+        let cases = [
+            (crate::scam_pitch::CONTACT_BAIT_REPLAY, true, ""),
+            (context_handle_replay.as_str(), true, ""),
+            (promise_handle_replay.as_str(), true, ""),
+            ("Nice Stream! Hab gefollowt. Disscord: wie gefragt", true, ""),
+            ("Nice Stream! Hab gefollowt. Disscord: normal_handle Discord: deadlock.player", true, ""),
+            ("Toller Stream! Hab dir gefolgt. Disscord: unrelated_handle", true, ""),
+            ("Richtig nice Stream! Hab direkt gefollowt. Komme nächstes Mal gerne wieder", false, ""),
+            ("Wie gefragt: nice Stream, hab gefollowt. Discord: normal_handle", false, ""),
+            ("Wie gefragt: nice Stream, hab gefollowt. Discord: deadlock.player", false, ""),
+            ("Wie gefragt: nice Stream, hab gefollowt. Disscord: cool.gefollowt", false, ""),
+            ("Nice Stream! Disscord: cool.gefollowt", false, ""),
+            ("Hab gefollowt. Disscord: cool.gefollowt", false, ""),
+            ("Disscord: cool.gefollowt", false, ""),
+            ("Nice Stream, hab gefollowt. Für die Deadlock-Runde bin ich im Community-Discord: normal_handle", false, ""),
+            ("Nice Stream, hab gefollowt. Für die Deadlock-Runde bin ich im Community-Discord: cool.gefollowt", false, ""),
+            ("Im Disscord reden wir über den Haze-Build, guter Match-Abend", false, ""),
+            (crate::scam_pitch::CONTACT_BAIT_REPLAY, false, "moderator"),
+            (crate::scam_pitch::CONTACT_BAIT_REPLAY, false, "broadcaster"),
+        ];
+        for (index, (text, should_warn, role)) in cases.into_iter().enumerate() {
+            let pipeline = pipeline_for_scam_pitch(Arc::clone(&api), pool.clone());
+            let mut event = strong_timeout_event();
+            event.chatter_user_id = format!("contact-bait-id-{index}");
+            event.chatter_user_login = format!("contact_bait_chatter_{index}");
+            event.message_id = format!("contact-bait-message-{index}");
+            event.message.text = text.to_string();
+            if !role.is_empty() {
+                event.badges.push(crate::types::ChatBadge {
+                    set_id: role.to_string(),
+                    id: "1".to_string(),
+                    info: String::new(),
+                });
+            }
+            sqlx::query("INSERT INTO twitch_zuschauer_register (twitch_user_id, historie_geprueft_am) VALUES ($1, NOW())")
+                .bind(&event.chatter_user_id).execute(&pool).await.unwrap();
+            let before = api.calls().len();
+            pipeline.handle(&event).await;
+            let calls = api.calls();
+            let new_calls = &calls[before..];
+            assert_eq!(
+                new_calls.iter().any(|call| call.starts_with("send:")),
+                should_warn,
+                "case {index}: {new_calls:?}"
+            );
+            assert!(
+                !new_calls.iter().any(|call| call.starts_with("delete:")
+                    || call.starts_with("timeout:")
+                    || call.starts_with("ban:")),
+                "case {index}: {new_calls:?}"
+            );
+            eprintln!(
+                "CONTACT_BAIT_PIPELINE case={index} warned={should_warn} calls={new_calls:?}"
+            );
+        }
+        for (suffix, trusted, enabled) in [("trusted", true, true), ("disabled", false, false)] {
+            let mut event = strong_timeout_event();
+            event.chatter_user_id = format!("contact-bait-{suffix}");
+            event.chatter_user_login = format!("contact_bait_{suffix}");
+            event.message_id = format!("contact-bait-{suffix}");
+            event.message.text = crate::scam_pitch::CONTACT_BAIT_REPLAY.to_string();
+            sqlx::query("INSERT INTO twitch_zuschauer_register (twitch_user_id, unauffaellig_seit, historie_geprueft_am) VALUES ($1, CASE WHEN $2 THEN NOW() ELSE NULL END, NOW())")
+                .bind(&event.chatter_user_id).bind(trusted).execute(&pool).await.unwrap();
+            sqlx::query("UPDATE twitch_moderation_settings SET scam_pitch_enabled = $1 WHERE channel_user_id = 'broadcaster-id'")
+                .bind(enabled).execute(&pool).await.unwrap();
+            let api = Arc::new(RecordingChatApi::default());
+            let pipeline = pipeline_for_scam_pitch(Arc::clone(&api), pool.clone());
+            pipeline.handle(&event).await;
+            assert!(
+                !api.calls().iter().any(|call| call.starts_with("send:")
+                    || call.starts_with("delete:")
+                    || call.starts_with("timeout:")
+                    || call.starts_with("ban:")),
+                "{suffix}: {:?}",
+                api.calls()
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn scam_pitch_flag_false_unterdrueckt_warnung() {
         let Some(pool) = moderation_test_pool("pipeline_modtoggle_scam_off").await else {
             return;

@@ -1,6 +1,6 @@
 # Auftragsregister
 
-status: aktiv, 2026-10-07
+status: produktiv verifiziert, letzter Aktenabschluss läuft, 2026-10-08
 
 - Auftrag: TikTok-Freigabe wartet auf nicht gestartete Vorschau, einschließlich sicherer Behandlung bestehender Aufträge ohne Freigabe.
 - Hauptorchestrator: Claude-Code-Session `d71ef3f0-d1c3-420d-948c-320ff0cc9670`.
@@ -13,7 +13,7 @@ status: aktiv, 2026-10-07
 
 | Paket | Thread/Session | Ersteller | Startnachweis | Harness | Modell | Status | Worktree | Branch | HEAD | Letzte Meldung |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| T, Versuch 1 | acc27df7-c3ba-406b-8617-3106e9e06fcf | d71ef3f0-d1c3-420d-948c-320ff0cc9670 | t3-harness angenommen; native task.started mit gpt-6.1-sol; 2026-10-07T22:07Z laufende Dateiänderungen | Claude Code via t3-harness, provider claudeAgent | sol | aktiv, zwei Bauagenten und ein Browserprüfagent | /home/nathanael/.worktrees/tb-tiktok-preview-freigabe-20261007 | fix/tiktok-preview-freigabe-20261007 | b0bd68248c3accc1771e938e6166c3a122ac154e | P a808e9877ddc86a39, Q aae459057e450a736, B a21c0aa6882213abd; Einzelheiten in BEREICHSREGISTER.md, noch kein Merge |
+| T, Versuch 1 mit Wiederaufnahme nach T3-Neustart | acc27df7-c3ba-406b-8617-3106e9e06fcf | d71ef3f0-d1c3-420d-948c-320ff0cc9670 | Native Agenten gestartet, finale Intent-Abnahme und Gate-ALLOW; Hauptsession bestätigte Wrapper und produktive DB unabhängig | Claude Code via t3-harness, provider claudeAgent | sol | gemergt, gepusht, deployt, Funktion live belegt; Aktenpush und Settlen in Abschluss | ursprünglicher Fix-Worktree entfernt; letzter Aktenbaum /home/nathanael/.worktrees/tb-tiktok-main-integration-20261008 | fix/tiktok-preview-freigabe-20261007 entfernt | produktiv 51c8a674a371d0e623687940e6b8ca3492f96c92 | Clip 124768 ready ohne Fehler, MP4 geprüft; YouTube unverändert, TikTok nicht veröffentlicht; DETAILS ABSCHLUSS.md |
 
 ## Verantwortung und Überwachung
 

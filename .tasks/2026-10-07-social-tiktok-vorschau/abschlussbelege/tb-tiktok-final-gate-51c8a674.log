@@ -1,0 +1,6 @@
+ALLOW: No merge-blocking defect is established by the supplied code.
+
+1. rust/crates/tb-social-media/src/clip_queue.rs:190 | NIT: Saving a choice reactivates every eligible queue row, including legacy failures | Duplicate-upload safety depends on the omitted `existing_upload` and `reserve_with_options` guards. Check that multiple reactivated rows cannot publish twice.
+2. bot/dashboard_v2/src/pages/SocialMedia.tsx:2251 | NIT: The action fix covers only `approved` clips | Held TikTok jobs on `published_partial`, `failed`, or `publishing` clips expose general Approve/Skip actions. The omitted `handle_decision` implementation is needed to establish whether Skip safely handles existing jobs; the static wiring test covers only `approved`.
+3. rust/crates/tb-social-media/src/preview.rs:78 | NIT: Render-input completeness remains unverified | `render_clip_vertical` is omitted. Compare its mutable inputs against this fingerprint before treating the supplied invalidation tests as complete coverage.
+4. bot/dashboard_v2/src/pages/SocialMedia.tsx:2543 | NIT: New `react-hooks/purity` lint failure | `Date.now()` runs during rendering. The supplied baseline correctly identifies this as an introduced lint error.

@@ -1,0 +1,21 @@
+
+> admin_dashboard@0.1.0 build
+> tsc -b && vite build
+
+(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - `__dirname` (vite.config.ts:10:25). Use `import.meta.dirname` instead
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.
+vite v8.3.1 building client environment for production...
+transforming...
+✓ 3045 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                             0.95 kB │ gzip:   0.44 kB
+dist/assets/index-CwvAnEc1.css             79.41 kB │ gzip:  13.76 kB
+dist/assets/rolldown-runtime-hePW80VL.js    0.71 kB │ gzip:   0.42 kB
+dist/assets/query-DdwBKAsK.js              28.63 kB │ gzip:   8.88 kB
+dist/assets/react-Dilr4hBx.js             206.83 kB │ gzip:  64.79 kB
+dist/assets/charts-BY1uUclO.js            385.25 kB │ gzip: 110.61 kB
+dist/assets/index-C-Fmvogm.js             571.08 kB │ gzip: 155.41 kB
+
+✓ built in 1.20s

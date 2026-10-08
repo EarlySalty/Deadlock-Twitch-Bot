@@ -224,6 +224,9 @@ struct Patterns {
     discord_handle_drop: Regex,
     discord_teamup: Regex,
     platform_ref: Regex,
+    contact_label: Regex,
+    support_promise: Regex,
+    requested_contact: Regex,
 }
 
 impl Patterns {
@@ -343,7 +346,7 @@ impl Patterns {
             ],
             // service_pitch_warning.py Z. 296–317
             generic_praise: ri(
-                r"\b(?:cool|amazing|nice\s+stream|love\s+your\s+vibe|you'?re\s+so\s+entertaining|this\s+is\s+awesome|great\s+content|setup\s+is\s+fire|awesome)\b",
+                r"\b(?:cool|amazing|nice\s+stream|(?:schöner|schoener|toller|super)\s+stream|love\s+your\s+vibe|you'?re\s+so\s+entertaining|this\s+is\s+awesome|great\s+content|setup\s+is\s+fire|awesome)\b",
             ),
             stream_context: ri(
                 r"\b(?:deadlock|fight|boss|round|match|kill|build|lane|rank|aim|ability|ult|teamfight|objective|clip)\b",
@@ -354,6 +357,13 @@ impl Patterns {
             discord_handle_drop: ri(r"\bdiscord\s*[:：]\s*[A-Za-z0-9_.-]{3,}\b"),
             discord_teamup: ri(r"\b(?:let'?s|lets)\s+team\s+up(?:\s+on\s+discord)?\b"),
             platform_ref: ri(r"\b(?:discord|instagram|tiktok|youtube|yt|ig)\b"),
+            contact_label: ri(r"\bdis{1,2}cord\s*[:：]\s*@?[A-Za-z0-9_.-]{3,}\b"),
+            support_promise: ri(
+                r"\b(?:gefollowt|gefolgt|followed|(?:komme?|schau(?:e)?|bin)\b[^.!?:]{0,65}\b(?:wieder|nächstes\s+mal|naechstes\s+mal)|(?:bring(?:e)?|mit)\s+(?:meinen?\s+)?freunden)\b",
+            ),
+            requested_contact: ri(
+                r"\b(?:wie\s+(?:gefragt|gewünscht|gewuenscht|besprochen)|(?:du|ihr)\s+(?:hattest|hattet|hast|habt)\s+(?:nach\s+[^.!?]{0,30}\s+)?gefragt|auf\s+(?:deine|eure)\s+frage)\b",
+            ),
         }
     }
 }
@@ -481,8 +491,6 @@ struct ScoreResult {
     features: HashSet<String>,
 }
 
-/// Scoring einer einzelnen Nachricht gegen alle Gruppen.
-/// service_pitch_warning.py Z. 340–394
 fn score_message(raw: &str, p: &Patterns) -> ScoreResult {
     if raw.is_empty() {
         return ScoreResult {
@@ -492,16 +500,42 @@ fn score_message(raw: &str, p: &Patterns) -> ScoreResult {
         };
     }
 
+    let contacts: Vec<_> = p.contact_label.find_iter(raw).collect();
+    let has_contact_label = !contacts.is_empty();
+    let mut message_parts = Vec::with_capacity(contacts.len() + 1);
+    let mut start = 0;
+    for contact in &contacts {
+        message_parts.push(&raw[start..contact.start()]);
+        start = contact.end();
+    }
+    message_parts.push(&raw[start..]);
+    let matches_message = |pattern: &Regex| message_parts.iter().any(|part| pattern.is_match(part));
+    let has_pitch = p
+        .growth_pitch
+        .iter()
+        .chain(&p.design_pitch)
+        .chain(&p.crew_threat)
+        .any(matches_message);
+    if has_contact_label
+        && !has_pitch
+        && (matches_message(&p.requested_contact) || matches_message(&p.stream_context))
+    {
+        return ScoreResult {
+            score: 0,
+            reasons: vec!["context:requested_or_game_related_contact".to_string()],
+            features: HashSet::new(),
+        };
+    }
+
     let mut score = 0i32;
     let mut reasons = Vec::new();
     let mut features: HashSet<String> = HashSet::new();
 
-    // _SERVICE_PATTERNS-Gruppen (Z. 349–357)
     macro_rules! check_group {
         ($name:expr, $pts:expr, $patterns:expr) => {
             if !features.contains($name) {
                 for re in &$patterns {
-                    if re.is_match(raw) {
+                    if matches_message(re) {
                         features.insert($name.to_string());
                         score += $pts;
                         reasons.push(format!("feature:{}", $name));
@@ -519,17 +553,31 @@ fn score_message(raw: &str, p: &Patterns) -> ScoreResult {
     check_group!("crew_threat", 5, p.crew_threat);
     check_group!("design_pitch", 4, p.design_pitch);
     check_group!("offplatform", 4, p.offplatform);
+    let contact_platforms: Vec<_> = contacts
+        .iter()
+        .filter_map(|contact| {
+            contact
+                .as_str()
+                .split_once([':', '：'])
+                .map(|(label, _)| label)
+        })
+        .collect();
+    if !features.contains("offplatform")
+        && contact_platforms
+            .iter()
+            .any(|label| p.offplatform.iter().any(|pattern| pattern.is_match(label)))
+    {
+        score += 4;
+        features.insert("offplatform".to_string());
+        reasons.push("feature:offplatform".to_string());
+    }
     check_group!("urgency_probe", 2, p.urgency_probe);
     check_group!("intrusive_probe", 2, p.intrusive_probe);
     check_group!("greeting", 1, p.greeting);
     check_group!("wellbeing", 1, p.wellbeing);
 
-    let lowered = raw.to_lowercase();
-
-    // generic_praise (Z. 360–365)
-    if p.generic_praise.is_match(raw) {
-        let tokens: Vec<&str> = lowered.split_whitespace().collect();
-        let praise_score = if tokens.len() <= 5 && !p.stream_context.is_match(raw) {
+    if matches_message(&p.generic_praise) {
+        let praise_score = if token_count(raw) <= 5 && !matches_message(&p.stream_context) {
             2i32
         } else {
             1
@@ -539,24 +587,33 @@ fn score_message(raw: &str, p: &Patterns) -> ScoreResult {
         reasons.push(format!("feature:generic_praise({praise_score})"));
     }
 
-    // discord_teamup_pitch (Z. 367–371)
-    if p.discord_teamup.is_match(raw) {
+    if has_contact_label
+        && matches_message(&p.generic_praise)
+        && matches_message(&p.support_promise)
+    {
+        score += 4;
+        features.insert("contact_bait".to_string());
+        reasons.push("combo:praise_support_unsolicited_contact".to_string());
+    }
+
+    if matches_message(&p.discord_teamup) {
         score += 3;
         features.insert("discord_teamup_pitch".to_string());
         reasons.push("feature:discord_teamup_pitch".to_string());
     }
 
-    // discord_handle_drop (Z. 373–377)
     if p.discord_handle_drop.is_match(raw) {
         score += 4;
         features.insert("discord_handle_drop".to_string());
         reasons.push("feature:discord_handle_drop".to_string());
     }
 
-    // external_link_or_handle / trusted_twitch_collab_invite (Z. 379–392)
-    let has_link = p.link.is_match(raw);
-    let has_twitch_collab = p.twitch_collab_invite.is_match(raw);
-    let has_platform_ref = p.platform_ref.is_match(&lowered);
+    let has_link = matches_message(&p.link);
+    let has_twitch_collab = matches_message(&p.twitch_collab_invite);
+    let has_platform_ref = matches_message(&p.platform_ref)
+        || contact_platforms
+            .iter()
+            .any(|label| p.platform_ref.is_match(label));
     let has_handle = p.handle.is_match(raw);
     let has_discord_handle_drop = features.contains("discord_handle_drop");
     let has_external_profile_drop = has_platform_ref && (has_handle || has_discord_handle_drop);
@@ -995,6 +1052,7 @@ impl ScamPitchDetector {
         // Schritt 12: force_single_warning (Z. 884–891)
         let quick_action_eligible = is_new_account && is_first_observed_message;
         let force_single_warning = scored.features.contains("crew_threat")
+            || (is_first_observed_message && scored.features.contains("contact_bait"))
             || (quick_action_eligible
                 && has_high_confidence_single_message_signal(&scored.features));
 
@@ -2111,6 +2169,9 @@ async fn save_spam_pattern(
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+pub(crate) const CONTACT_BAIT_REPLAY: &str = "Richtig nice Stream! Hab direkt gefollowt. Komme nächstes Mal gerne mit Freunden wieder - Disscord: united_247";
 
 #[cfg(test)]
 mod tests {
@@ -3354,6 +3415,139 @@ mod tests {
         // ausser pre_warm_follower_cache, der hier nicht aufgerufen wird).
         // Wir nutzen ein ungültiges DSN — der Pool wird nie connecten.
         PgPool::connect_lazy("postgres://unused:unused@127.0.0.1:1/unused").unwrap()
+    }
+
+    #[test]
+    fn contact_bait_scoring_requires_praise_support_and_contact() {
+        let p = Patterns::build();
+        for message in [
+            CONTACT_BAIT_REPLAY.to_string(),
+            CONTACT_BAIT_REPLAY.replace("united_247", "deadlock.player"),
+            CONTACT_BAIT_REPLAY.replace("united_247", "cool.gefollowt"),
+            "Toller Stream, bin dir gefolgt. Disscord: different.name".to_string(),
+            "Nice Stream, komme nächstes Mal wieder! Disscord: another_handle".to_string(),
+        ] {
+            let result = score_message(&message, &p);
+            assert!(
+                result.features.contains("contact_bait"),
+                "{message}: {:?}",
+                result.reasons
+            );
+            assert!(result.score >= LIGHT_THRESHOLD);
+        }
+        for message in [
+            "Richtig nice Stream! Hab direkt gefollowt. Komme nächstes Mal gerne wieder",
+            "Disscord: normal_handle",
+            "Nice Stream! Disscord: normal_handle",
+            "Hab gefollowt. Disscord: normal_handle",
+            "Wie gefragt: nice Stream, hab gefollowt. Disscord: normal_handle",
+            "Nice Stream, hab gefollowt! Für die Deadlock-Runde bin ich im Community-Discord: normal_handle",
+            "Im Disscord reden wir über den Haze-Build, war ein cooler Match-Abend",
+            "Nice Stream, hab gefollowt. Dissscord: untouched_handle",
+        ] {
+            let result = score_message(message, &p);
+            assert!(!result.features.contains("contact_bait"), "{message}: {:?}", result.reasons);
+        }
+    }
+
+    #[test]
+    fn contact_handles_do_not_supply_or_suppress_message_signals() {
+        let p = Patterns::build();
+        for label in ["Disscord", "Discord"] {
+            for body in [
+                "Nice Stream! Hab gefollowt.",
+                "Nice Stream!",
+                "Hab gefollowt.",
+                "Hallo zusammen!",
+                "Wie gefragt: nice Stream! Hab gefollowt.",
+                "Nice Stream! Hab gefollowt. Für die Deadlock-Runde",
+            ] {
+                let baseline = score_message(&format!("{body} {label}: normal_handle"), &p);
+                for handle in [
+                    "deadlock.player",
+                    "cool.gefollowt",
+                    "affiliate.overlays",
+                    "instagram.www.player",
+                ] {
+                    let message = format!("{body} {label}: {handle}");
+                    let result = score_message(&message, &p);
+                    assert_eq!(result.score, baseline.score, "{message}");
+                    assert_eq!(result.features, baseline.features, "{message}");
+                    assert_eq!(result.reasons, baseline.reasons, "{message}");
+                }
+            }
+        }
+        for message in [
+            "Nice Stream! Hab gefollowt. Disscord: wie gefragt",
+            "Nice Stream! Hab gefollowt. Disscord: normal_handle Discord: deadlock.player",
+            "Nice Stream! Hab gefollowt. Disscord: deadlock.player Disscord: cool.gefollowt",
+        ] {
+            let result = score_message(message, &p);
+            assert!(result.features.contains("contact_bait"), "{message}");
+        }
+    }
+
+    #[test]
+    fn contact_context_does_not_hide_growth_pitch() {
+        let p = Patterns::build();
+        for pitch in [
+            "I can help you grow",
+            "Brauchst du ein Logo",
+            "pull up with my crew",
+        ] {
+            let message = format!(
+                "Wie gefragt: Nice Stream, hab gefollowt. Deadlock! {pitch}. Discord: deadlock.player"
+            );
+            let result = score_message(&message, &p);
+            assert!(
+                result.features.contains("growth_pitch")
+                    || result.features.contains("design_pitch")
+                    || result.features.contains("crew_threat"),
+                "{message}"
+            );
+            assert!(result.features.contains("discord_handle_drop"));
+        }
+    }
+
+    #[tokio::test]
+    async fn contact_bait_observe_respects_account_age_and_history() {
+        let pool = pool_or_skip!("contact_bait_observe");
+        for age in [None, Some(10), Some(200)] {
+            let detector = ScamPitchDetector::new(
+                Arc::new(MockApi),
+                Arc::new(MockAccountAge { days: age }),
+                pool.clone(),
+            );
+            let result = detector
+                .observe(&make_event("chan", "new_chatter", CONTACT_BAIT_REPLAY))
+                .await;
+            if age == Some(10) {
+                assert!(
+                    matches!(result, PitchDecision::PublicWarn { .. }),
+                    "{result:?}"
+                );
+            } else {
+                assert_eq!(result, PitchDecision::Hint);
+            }
+            eprintln!("CONTACT_BAIT_REPLAY age={age:?} decision={result:?}");
+        }
+        let detector = ScamPitchDetector::new(
+            Arc::new(MockApi),
+            Arc::new(MockAccountAge { days: Some(10) }),
+            pool,
+        );
+        assert_eq!(
+            detector
+                .observe(&make_event("chan", "returning", "Hallo, guter Haze-Build!"))
+                .await,
+            PitchDecision::None
+        );
+        assert_eq!(
+            detector
+                .observe(&make_event("chan", "returning", CONTACT_BAIT_REPLAY))
+                .await,
+            PitchDecision::None
+        );
     }
 
     #[tokio::test]

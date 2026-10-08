@@ -1,0 +1,4 @@
+SAFE_EVIDENCE {"clip_db_id": 124767, "http_status": 200, "content_type": "application/json", "clip_status": "approved", "tiktok_state": "waiting_tiktok_approval", "youtube_state": "pending", "youtube_done": false, "tiktok_done": false, "tiktok_scheduled_at": "2026-10-08T16:00:00+00:00"}
+SAFE_EVIDENCE {"clip_db_id": 124768, "http_status": 200, "content_type": "application/json", "clip_status": "approved", "tiktok_state": "waiting_tiktok_approval", "youtube_state": "completed", "youtube_done": true, "tiktok_done": false, "tiktok_scheduled_at": "2026-10-07T16:00:00+00:00"}
+SAFE_EVIDENCE {"clip_db_id": 124768, "media_http_status": 200, "media_content_type": "video/mp4", "media_bytes": 59226618, "ffprobe_exit": 0, "video_codec": "h264", "width": 1080, "height": 1920, "duration": "30.000000", "audio_present": true}
+LAUNCHER_EXIT 0

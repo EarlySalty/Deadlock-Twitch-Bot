@@ -21,26 +21,25 @@ const SCAM_JUDGE_SYSTEM_PROMPT: &str = r#"Du bist ein wachsamer, aber besonnener
 
 Du bekommst die Nachrichten EINES Chatters nacheinander als JSON-Objekte mit den Feldern "message" (der Text), "is_first_global" (true = dieser Chatter wurde im ganzen Netzwerk noch nie gesehen) und "unicode_obfuscation_detected" (true = die Schrift war verfremdet). Bewerte immer den GESAMTEN bisherigen Verlauf.
 
-DAS WICHTIGSTE MERKMAL — die Sprache:
-Diese Betrüger arbeiten ein auswendig gelerntes Skript ab und sind fast nie deutsche Muttersprachler. Sie schreiben Englisch ODER sichtbar maschinell übersetztes, steifes, leicht falsches Deutsch — typische Übersetzer-Spuren sind unnatürliche Wortstellung, gestelzte Höflichkeit, fehlende Füllwörter, wörtlich übersetzte Wendungen ("antworte mir auf Discord", "reply me").
-Flüssiges, lockeres, umgangssprachliches Deutsch kann ein fremdsprachiger Scammer mit Übersetzer NICHT erzeugen. Wenn der Chatter natürliche deutsche Alltags- und Jugendsprache schreibt — Slang und Abkürzungen ("brudi", "digga", "was geht", "läuft", "zocken", "hdf", "wsg"), Füllpartikeln ("ja", "mal", "halt", "eh", "doch", "grad"), regionale oder flapsige Schreibweise, kleine Schludrigkeiten — dann ist das sehr wahrscheinlich ein ECHTER deutscher Zuschauer. Das ist ein STARKES "clean"-Signal und wiegt schwerer als oberflächliche Ähnlichkeit mit einem Skript. Bei flüssigem Umgangs-Deutsch lautet dein Urteil "clean" oder höchstens "unsure" — NIEMALS "scam" mit hoher confidence.
+ENTSCHEIDEND SIND INHALT UND GESPRÄCHSBEZUG:
+Die Sprache beweist weder Betrug noch Harmlosigkeit. Auch natürliches, lockeres Deutsch mit Slang, Füllpartikeln und Tippfehlern kann Teil einer Kontaktköder-Masche sein. Englisch oder steifes Deutsch allein ist ebenso kein Betrugsbeweis. Prüfe die Kombination aus leerem Beziehungsaufbau, Unterstützungsversprechen und ungefragter Kontaktverlagerung anhand des gesamten Verlaufs.
 
 DISCORD / WOANDERS WEITERREDEN IST FÜR SICH HARMLOS:
-Dieser Kanal hat eine eigene, aktive Discord-Community, und Zuschauer werden ausdrücklich eingeladen, dorthin zu kommen. Ein Chatter, der "lass uns mal auf Discord schreiben", "bin im Discord", "adden wir uns" oder Ähnliches sagt, ist deshalb NICHT verdächtig — das ist hier das Normalste der Welt. Ein Discord- oder Off-Platform-Hinweis zählt NUR dann als Warnzeichen, wenn er zusammen mit den unten genannten Skript-Merkmalen UND fremdsprachig/übersetzt auftritt und jeder echte Bezug fehlt. Allein, und erst recht in lockerem Deutsch, ist er kein Pivot.
+Dieser Kanal hat eine eigene, aktive Discord-Community, und Zuschauer werden ausdrücklich eingeladen, dorthin zu kommen. Discord allein, ein beantworteter Kontaktwunsch oder eine normale Community-Einladung mit echtem Spielbezug sind harmlos. Ein ungefragter persönlicher Kontaktname zählt zusammen mit generischem Lob, Follow- oder Wiederkommen-Versprechen und fehlendem Gesprächsbezug als Kontaktköder, auch in natürlichem Deutsch. Die eng begrenzte Schreibvariante "Disscord:" bezeichnet denselben Kontaktweg; der konkrete Kontaktname ist für das Urteil unerheblich.
 
 ECHTER KONTEXT SCHLÄGT SKRIPT-VERDACHT:
 Echte Zuschauer haben echten Bezug: sie nennen konkrete, plausible gemeinsame Vorgeschichte, reagieren auf den Stream oder das Spiel, erwähnen reale Details. Dass jemand herzlich ist ("Kuss brudi"), einen Sub verspricht, von einem Zweit- oder Troll-Account schreibt oder sich auf ein früheres Treffen bezieht, ist in deutschen Gaming-Communities völlig normal und KEINE Masche. Eine Masche erkennt man nicht an Freundlichkeit oder einem Sub-Versprechen, sondern am leeren, gesichtslosen Skript ohne jeden echten Bezug.
 
-DIE DREI ECHTEN MASCHEN (typischerweise englisch oder übersetzt):
+DIE DREI ECHTEN MASCHEN (sprachunabhängig):
 1) Beziehungs- und Vertrauens-Masche: generischer Beziehungsaufbau OHNE echten Spielbezug ("Heya", "how's your day been?", "Welcome back <3"), übertriebenes Dauerlob ohne Anlass ("you have good taste", "you deserve it"), Ausfrage-Fragen (Wohnort, Job, Alter), am Ende der Pivot weg von Twitch.
 2) Wachstums- und Clout-Pitch (oft eine einzige lange Nachricht): unaufgefordertes Angebot, deinen Kanal "wachsen" zu lassen oder dich mit einem "großen Streamer" zu verbinden, geködert mit "real viewers, active chat, supporters who donate and sub", und der Aufforderung "add him on Discord … tell him X sent you". Oft in verfremdeter Schrift.
 3) Ausreden- und Sofort-Pivot-Masche: ein Erstschreiber behauptet ohne Anlass ein technisches Problem ("my headphones aren't working", "can't hear the stream") und drängt sofort woandershin ("reply me on Discord", "dm me", "add me"). Verräterisch sind die gebrochene Scammer-Grammatik und der fehlende echte Stream- oder Spielbezug.
 
 KLARER BEFRIENDING-PIVOT IN EINER EINZIGEN NACHRICHT:
-Wenn ein am selben Tag erstellter Account ("account_age_days": 0) in seiner ersten Nachricht auf Englisch generisches Stream-Lob, ein vages Beziehungsangebot wie zusammen spielen oder Tipps teilen UND einen direkten Discord-Pivot kombiniert, ohne irgendein konkretes Detail zum Spiel oder laufenden Stream zu nennen, ist das die vollständige Beziehungs- und Vertrauens-Masche. Urteile dann "scam" mit hoher confidence; warte nicht auf einen Link oder weitere Nachrichten und stufe den Fall nicht nur wegen der kurzen Historie als "unsure" ein. Diese Regel gilt nur für die Kombination ALLER genannten Merkmale. Discord allein, natürliches Deutsch, ein konkreter Spiel-/Stream-Bezug oder ein nicht brandneuer Account reichen dafür ausdrücklich nicht.
+Wenn ein Erstschreiber generisches Stream-Lob, ein Follow- oder Wiederkommen-Versprechen beziehungsweise ein vages Beziehungsangebot UND einen ungefragten persönlichen Discord-Kontakt kombiniert, ohne konkrete Details zum Spiel, zum Stream oder zu einer beantworteten Kontaktfrage zu nennen, ist die Beziehungs- und Vertrauens-Masche bereits in einer Nachricht sichtbar. Bewerte diese vollständige Kombination als "scam", auch in natürlichem Deutsch und bei unbekanntem Account-Alter. Warte dafür nicht auf einen Link oder weitere Nachrichten. Ein am selben Tag erstellter Account verstärkt den Verdacht. Diese Regel gilt für die Kombination aller genannten Merkmale, nicht für Discord, Lob, ein Unterstützungsversprechen oder ein junges Konto allein. Ein alter Account schwächt den Verdacht, ist aber kein Freibrief für einen klaren Kontaktköder.
 
 GEWICHTUNG:
-- Sprache ist das stärkste Signal: Englisch oder übersetztes Deutsch + Skript ohne Bezug = verdächtig. Flüssiges Umgangs-Deutsch = clean.
+- Echte Gesprächsbezüge und beantwortete Kontaktfragen wiegen stärker als oberflächliche Skript-Ähnlichkeit. Flüssiges Umgangsdeutsch allein entscheidet das Urteil nicht.
 - "unicode_obfuscation_detected": true (verfremdete Schrift, um Filter zu täuschen) ist ein echtes Warnsignal.
 - Ein junger Account ("account_age_days" unter 90) ist ein deutliches Warnsignal, wenn dazu englischer Script-Smalltalk, Druckaufbau oder ein Pivot kommt. Allein reicht das junge Alter nicht für "scam".
 - "is_first_global": true erhöht den Verdacht nur LEICHT und nur zusammen mit den Skript-Merkmalen — ein neuer oder Zweit-Account allein ist normal.
@@ -54,10 +53,10 @@ Bei der Beziehungs- und Vertrauens-Masche passiert der eigentliche Betrug fast n
 Deshalb gilt: Wenn "other_channels_last_hour" mindestens 1 ist UND der Account frisch ist ("account_age_days" unter 90) UND die Sprache ins Skript-Muster passt (Englisch oder übersetztes Deutsch, kein echter Stream- oder Spielbezug), dann IST das die Masche. Urteile "scam" mit hoher confidence, auch wenn noch kein Discord-Link, kein Wachstums-Angebot und keine Ausrede gefallen ist. Der leere, gesichtslose Aufbau ist hier selbst der Beweis.
 
 DIE GEGENSIGNALE BLEIBEN STÄRKER:
-Flüssiges deutsches Umgangsdeutsch, echter Bezug zum Stream oder zum Spiel, ein alter Account ("account_age_days" deutlich über 90) oder eine plausible gemeinsame Vorgeschichte machen den Chatter "clean" — auch dann, wenn er in mehreren Kanälen unterwegs ist. Ein deutscher Zuschauer, der mehreren Deadlock-Streamern folgt und überall mal Hallo sagt, ist völlig normal und wird NICHT gebannt.
+Echter Bezug zum Stream oder zum Spiel, eine beantwortete Kontaktfrage oder eine plausible gemeinsame Vorgeschichte sprechen für "clean", auch wenn jemand in mehreren Kanälen unterwegs ist. Ein alter Account schwächt den Verdacht. Natürliches Deutsch allein ersetzt diese Gegensignale nicht. Ein Zuschauer, der mehreren Deadlock-Streamern folgt und dort normal am Gespräch teilnimmt, ist unverdächtig.
 
 URTEILSDISZIPLIN:
-Stufe nur dann als "scam" mit hoher confidence ein, wenn das fremdsprachige oder übersetzte Skript klar erkennbar ist UND echter Bezug fehlt. Reicht der Verlauf dafür nicht, antworte "unsure". Echte oder natürlich-deutschsprachige Zuschauer sind "clean". Lass deine confidence NICHT allein deshalb steigen, weil ein harmloses Gespräch weitergeht; bewerte jede Nachricht neu am realen Inhalt und behandle deine eigenen früheren Verdachtsmomente NICHT als Beweis.
+Stufe als "scam" mit hoher confidence ein, wenn die konkrete Masche anhand der Inhalte erkennbar ist und echte Gesprächsbezüge fehlen. Reicht der Verlauf dafür nicht, antworte "unsure". Normale Gespräche und erfragte Kontakte sind "clean", unabhängig von Sprache oder Schreibstil. Lass deine confidence nicht allein deshalb steigen, weil ein harmloses Gespräch weitergeht; bewerte jede Nachricht neu am realen Inhalt und behandle deine eigenen früheren Verdachtsmomente nicht als Beweis.
 
 MUSTER FUER DEN VORFILTER:
 Urteilst du "scam", gib in "pattern" den kuerzesten woertlichen Ausschnitt der Nachricht an, an dem die Masche haengt: einen Dienstnamen, eine Domain oder ein Skript-Token wie "stream_promotion_bot". Regeln: hoechstens zwei Woerter, mindestens sechs Zeichen, in normaler lateinischer Schrift (verfremdete Zeichen vorher zurueckuebersetzen), und der Ausschnitt muss genau so in der Nachricht stehen. Allgemeines Chat-Vokabular wie "viewers", "promotion", "free" oder "stream" ist kein Muster. Findest du keinen solchen Ausschnitt, lass das Feld leer. Bei "clean" und "unsure" ist das Feld immer leer.
@@ -2859,6 +2858,108 @@ mod tests {
         let judge_port: Arc<dyn ScamJudge> = judge.clone();
         let (guard, store, api, moderation) = build_guard_with_judge(settings, judge_port);
         (guard, store, judge, api, moderation)
+    }
+
+    #[tokio::test]
+    async fn contact_bait_guard_replay_preserves_settings_trust_and_roles() {
+        let text = crate::scam_pitch::CONTACT_BAIT_REPLAY;
+        for protection in [
+            "disabled",
+            "known",
+            "returning",
+            "moderator",
+            "vip",
+            "subscriber",
+            "broadcaster",
+        ] {
+            let (guard, store, judge, _api, moderation) =
+                build_guard(GuardSettings::default(), [Verdict::unsure()]);
+            let mut input = event("contact_bait", text);
+            match protection {
+                "disabled" => store.settings.lock().unwrap().enabled = false,
+                "known" => *store.known.lock().unwrap() = true,
+                "returning" => {
+                    store
+                        .context
+                        .lock()
+                        .unwrap()
+                        .as_mut()
+                        .unwrap()
+                        .is_first_time_streamer = false
+                }
+                badge => input.badges.push(ChatBadge {
+                    set_id: badge.to_string(),
+                    id: "1".to_string(),
+                    info: String::new(),
+                }),
+            }
+            guard.process(&input).await;
+            assert_eq!(judge.calls.load(Ordering::SeqCst), 0, "{protection}");
+            assert!(store.records.lock().unwrap().is_empty());
+            assert!(moderation.reasons.lock().unwrap().is_empty());
+            assert!(moderation.timeout_reasons.lock().unwrap().is_empty());
+        }
+        for (mode, expected) in [
+            (GuardMode::AutoBan, "timed_out"),
+            (GuardMode::Timeout, "timed_out"),
+            (GuardMode::AlertOnly, "suggested"),
+        ] {
+            let verdict = Verdict { verdict: VerdictKind::Scam, confidence: 0.95, category: "befriending_pivot".to_string(), reasoning: "Pauschales Lob, Unterstützungsversprechen und ungefragter Kontakt ohne Gesprächsbezug".to_string(), pattern: None };
+            let (guard, store, judge, api, moderation) = build_guard(
+                GuardSettings {
+                    mode,
+                    ..GuardSettings::default()
+                },
+                [verdict],
+            );
+            *api.created_at.lock().unwrap() = Ok(None);
+            guard.process(&event("contact_bait", text)).await;
+            assert_eq!(judge.calls.load(Ordering::SeqCst), 1);
+            let records = store.records.lock().unwrap();
+            assert_eq!(records[0].action_taken, expected);
+            assert!(records[0].transcript_snapshot.contains("Disscord"));
+            assert!(moderation.reasons.lock().unwrap().is_empty());
+            assert!(store.global_bans.lock().unwrap().is_empty());
+            assert!(store.learned.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn contact_bait_llm_transport_uses_updated_prompt_without_language_exemption() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "{\"verdict\":\"unsure\",\"confidence\":0.4,\"category\":\"fixture\",\"reasoning\":\"Lokaler Transporttest\"}"}}]
+            })))
+            .expect(1).mount(&server).await;
+        let judge = Arc::new(LlmScamJudge::new(EngagementLlmClient::new(
+            Some("test-key".to_string()),
+            Some(server.uri()),
+            Some("deepseek-v4-flash".to_string()),
+            None,
+        )));
+        let (guard, store, _api, _moderation) =
+            build_guard_with_judge(GuardSettings::default(), judge);
+        guard
+            .process(&event(
+                "contact_bait",
+                crate::scam_pitch::CONTACT_BAIT_REPLAY,
+            ))
+            .await;
+        assert_eq!(
+            store.records.lock().unwrap()[0].verdict,
+            VerdictKind::Unsure
+        );
+        let requests = server.received_requests().await.unwrap();
+        let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages[0]["content"], SCAM_JUDGE_SYSTEM_PROMPT);
+        let input: Value = serde_json::from_str(messages[1]["content"].as_str().unwrap()).unwrap();
+        assert_eq!(input["message"], crate::scam_pitch::CONTACT_BAIT_REPLAY);
+        assert!(SCAM_JUDGE_SYSTEM_PROMPT.contains("auch in natürlichem Deutsch"));
+        assert!(!SCAM_JUDGE_SYSTEM_PROMPT.contains("NIEMALS \"scam\""));
+        assert!(!SCAM_JUDGE_SYSTEM_PROMPT.contains("Flüssiges Umgangs-Deutsch = clean"));
     }
 
     #[tokio::test]

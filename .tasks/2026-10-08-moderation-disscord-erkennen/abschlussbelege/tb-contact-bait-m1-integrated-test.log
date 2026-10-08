@@ -1,0 +1,113 @@
+cargo-slot: Slot 3, optimiert=0
+   Compiling tb-config v0.1.0 (/home/nathanael/.worktrees/tb-moderation-disscord-erkennen/rust/crates/tb-config)
+   Compiling tb-llm v0.1.0 (/home/nathanael/.worktrees/tb-moderation-disscord-erkennen/rust/crates/tb-llm)
+   Compiling tb-transport-twitch v0.1.0 (/home/nathanael/.worktrees/tb-moderation-disscord-erkennen/rust/crates/tb-transport-twitch)
+   Compiling tb-db v0.1.0 (/home/nathanael/.worktrees/tb-moderation-disscord-erkennen/rust/crates/tb-db)
+   Compiling tb-analytics v0.1.0 (/home/nathanael/.worktrees/tb-moderation-disscord-erkennen/rust/crates/tb-analytics)
+   Compiling tb-engagement v0.1.0 (/home/nathanael/.worktrees/tb-moderation-disscord-erkennen/rust/crates/tb-engagement)
+   Compiling tb-chat v0.1.0 (/home/nathanael/.worktrees/tb-moderation-disscord-erkennen/rust/crates/tb-chat)
+warning: struct `FixedSuppression` is never constructed
+    --> crates/tb-chat/src/promos.rs:4245:12
+     |
+4245 |     struct FixedSuppression(bool);
+     |            ^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `tb-chat` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 44s
+     Running unittests src/lib.rs (/home/nathanael/.cache/rust-build/74/aafc763e91fe1e/debug/deps/tb_chat-821c22fe69682709)
+
+running 7 tests
+test conversation_scam::tests::contact_bait_guard_replay_preserves_settings_trust_and_roles ... ok
+test conversation_scam::tests::contact_bait_llm_transport_uses_updated_prompt_without_language_exemption ... ok
+test scam_pitch::tests::contact_context_does_not_hide_growth_pitch ... ok
+test scam_pitch::tests::contact_bait_scoring_requires_praise_support_and_contact ... ok
+test scam_pitch::tests::contact_handles_do_not_supply_or_suppress_message_signals ... ok
+CONTACT_BAIT_REPLAY age=None decision=Hint
+CONTACT_BAIT_PIPELINE case=0 warned=true calls=["send:broadcaster-id:@contact_bait_chatter_0 bitte keine Service-/Promo-Angebote zumal der Account unter <3 Monate alt ist "]
+CONTACT_BAIT_REPLAY age=Some(10) decision=PublicWarn { text: "@new_chatter bitte keine Service-/Promo-Angebote zumal der Account unter <3 Monate alt ist " }
+CONTACT_BAIT_PIPELINE case=1 warned=true calls=["send:broadcaster-id:@contact_bait_chatter_1 bitte keine Service-/Promo-Angebote zumal der Account unter <3 Monate alt ist "]
+CONTACT_BAIT_REPLAY age=Some(200) decision=Hint
+CONTACT_BAIT_PIPELINE case=2 warned=true calls=["send:broadcaster-id:@contact_bait_chatter_2 bitte keine Service-/Promo-Angebote zumal der Account unter <3 Monate alt ist "]
+test scam_pitch::tests::contact_bait_observe_respects_account_age_and_history ... ok
+CONTACT_BAIT_PIPELINE case=3 warned=true calls=["send:broadcaster-id:@contact_bait_chatter_3 bitte keine Service-/Promo-Angebote zumal der Account unter <3 Monate alt ist "]
+CONTACT_BAIT_PIPELINE case=4 warned=true calls=["send:broadcaster-id:🛡\u{fe0f} @contact_bait_chatter_4 wurde als potenzieller Pitcher erkannt zumal der Account unter <3 Monate alt ist verkauft oft Designs/Viewer/Scam. Unsere Empfehlung: Ignorieren & Bannen."]
+CONTACT_BAIT_PIPELINE case=5 warned=true calls=["send:broadcaster-id:@contact_bait_chatter_5 bitte keine Service-/Promo-Angebote zumal der Account unter <3 Monate alt ist "]
+CONTACT_BAIT_PIPELINE case=6 warned=false calls=[]
+CONTACT_BAIT_PIPELINE case=7 warned=false calls=[]
+CONTACT_BAIT_PIPELINE case=8 warned=false calls=[]
+CONTACT_BAIT_PIPELINE case=9 warned=false calls=[]
+CONTACT_BAIT_PIPELINE case=10 warned=false calls=[]
+CONTACT_BAIT_PIPELINE case=11 warned=false calls=[]
+CONTACT_BAIT_PIPELINE case=12 warned=false calls=[]
+CONTACT_BAIT_PIPELINE case=13 warned=false calls=[]
+CONTACT_BAIT_PIPELINE case=14 warned=false calls=[]
+CONTACT_BAIT_PIPELINE case=15 warned=false calls=[]
+CONTACT_BAIT_PIPELINE case=16 warned=false calls=[]
+CONTACT_BAIT_PIPELINE case=17 warned=false calls=[]
+test pipeline::tests::contact_bait_replay_runs_through_pipeline_with_guards ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 951 filtered out; finished in 21.06s
+
+     Running tests/channel_policy.rs (/home/nathanael/.cache/rust-build/74/aafc763e91fe1e/debug/deps/channel_policy-85fcd2890c09aa69)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+     Running tests/chatter_tracking_db.rs (/home/nathanael/.cache/rust-build/74/aafc763e91fe1e/debug/deps/chatter_tracking_db-0bd8cdb577c4a45c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/conversation_scam_db.rs (/home/nathanael/.cache/rust-build/74/aafc763e91fe1e/debug/deps/conversation_scam_db-ee5e682a28c04faf)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+
+     Running tests/crew_radar_db.rs (/home/nathanael/.cache/rust-build/74/aafc763e91fe1e/debug/deps/crew_radar_db-563c04a1571fc619)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.00s
+
+     Running tests/global_chatter_ban_db.rs (/home/nathanael/.cache/rust-build/74/aafc763e91fe1e/debug/deps/global_chatter_ban_db-48cc6a38b42183a9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/lfg_pitch.rs (/home/nathanael/.cache/rust-build/74/aafc763e91fe1e/debug/deps/lfg_pitch-6219be5d6a9c961b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/moderation_db.rs (/home/nathanael/.cache/rust-build/74/aafc763e91fe1e/debug/deps/moderation_db-a328ccaeecc322ff)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+     Running tests/suppression_db.rs (/home/nathanael/.cache/rust-build/74/aafc763e91fe1e/debug/deps/suppression_db-ad33019dbe6ca0f0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+     Running tests/title_costream_review.rs (/home/nathanael/.cache/rust-build/74/aafc763e91fe1e/debug/deps/title_costream_review-1ef8d7a5a161deec)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s
+
+     Running tests/zuschauer_register_db.rs (/home/nathanael/.cache/rust-build/74/aafc763e91fe1e/debug/deps/zuschauer_register_db-e3e83f079ad80626)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s
+
+cargo-slot: EXIT=0
