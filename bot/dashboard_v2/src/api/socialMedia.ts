@@ -374,6 +374,28 @@ export interface TikTokPostOptions {
   approved_video_sha256: string;
 }
 
+export type TikTokDraft = Pick<TikTokPostOptions,
+  'caption' | 'privacy_level' | 'allow_comment' | 'allow_duet' | 'allow_stitch'
+  | 'commercial_content' | 'brand_organic_toggle' | 'brand_content_toggle'>;
+
+export interface TikTokEditorState {
+  draft: TikTokDraft | null;
+  defaults: TikTokDraft | null;
+}
+
+export function fetchTikTokEditor(clipDbId: number): Promise<TikTokEditorState> {
+  return fetchJson(`/twitch/social-media/api/clips/${clipDbId}/tiktok/editor`, { cache: 'no-store' });
+}
+
+export function saveTikTokChoices(clipDbId: number, kind: 'draft' | 'defaults', choices: TikTokDraft): Promise<{ success: boolean }> {
+  const path = kind === 'draft'
+    ? `/twitch/social-media/api/clips/${clipDbId}/tiktok/draft`
+    : `/twitch/social-media/api/clips/${clipDbId}/tiktok/defaults`;
+  return fetchJson(path, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(choices),
+  });
+}
+
 export interface TikTokPostingContext {
   creator: {
     creator_username: string;

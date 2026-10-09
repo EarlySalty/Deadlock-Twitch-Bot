@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::layout::{LayoutBox, StreamerLayout, TARGET_HEIGHT, TARGET_WIDTH};
 
 const VIDEO_PRESET: &str = "veryfast";
-const VIDEO_CRF: &str = "20";
+const VIDEO_CRF: &str = "18";
 const VIDEO_PROFILE: &str = "high";
 const PIXEL_FORMAT: &str = "yuv420p";
 const AUDIO_BITRATE: &str = "192k";
@@ -187,8 +187,8 @@ pub fn build_compose_filter(layout: &StreamerLayout, mode: &str, cam_enabled: bo
     if mode == "stacked" {
         let cam = format!(
             "[0:v]crop={cw}:{ch}:{cx}:{cy},\
-             scale={tw}:{top}:force_original_aspect_ratio=increase,\
-             crop={tw}:{top},setsar=1[cam]",
+             scale={tw}:{top}:force_original_aspect_ratio=increase:flags=lanczos,\
+             crop={tw}:{top},unsharp=5:5:0.35:5:5:0,setsar=1[cam]",
             cw = c.w,
             ch = c.h,
             cx = c.x,
@@ -221,8 +221,8 @@ pub fn build_compose_filter(layout: &StreamerLayout, mode: &str, cam_enabled: bo
     // PiP: die Cam landet exakt auf dem Zielrechteck aus cam_position.
     let cam = format!(
         "[0:v]crop={cw}:{ch}:{cx}:{cy},\
-         scale={pw}:{ph}:force_original_aspect_ratio=increase,\
-         crop={pw}:{ph},setsar=1[cam]",
+         scale={pw}:{ph}:force_original_aspect_ratio=increase:flags=lanczos,\
+         crop={pw}:{ph},unsharp=5:5:0.35:5:5:0,setsar=1[cam]",
         cw = c.w,
         ch = c.h,
         cx = c.x,
@@ -878,7 +878,7 @@ mod tests {
         assert!(parts[0].ends_with("setsar=1[gamefull]"));
         assert_eq!(
             parts[1],
-            "[0:v]crop=380:380:1500:50,scale=320:320:force_original_aspect_ratio=increase,crop=320:320,setsar=1[cam]"
+            "[0:v]crop=380:380:1500:50,scale=320:320:force_original_aspect_ratio=increase:flags=lanczos,crop=320:320,unsharp=5:5:0.35:5:5:0,setsar=1[cam]"
         );
         assert_eq!(parts[2], "[gamefull][cam]overlay=712:48[vout]");
     }
@@ -898,7 +898,7 @@ mod tests {
         assert_eq!(parts.len(), 3);
         assert_eq!(
             parts[1],
-            "[0:v]crop=380:380:1500:50,scale=420:560:force_original_aspect_ratio=increase,crop=420:560,setsar=1[cam]"
+            "[0:v]crop=380:380:1500:50,scale=420:560:force_original_aspect_ratio=increase:flags=lanczos,crop=420:560,unsharp=5:5:0.35:5:5:0,setsar=1[cam]"
         );
         assert_eq!(parts[2], "[gamefull][cam]overlay=60:1200[vout]");
         // Keine festen 320/48-Reste mehr im Graphen.

@@ -93,6 +93,13 @@ pub use clip_contest_forward::submit_clip_contest_handler;
 mod tiktok_direct;
 pub use tiktok_direct::creator_info_handler as tiktok_creator_info_handler;
 
+#[path = "social_media_tiktok_editor.rs"]
+mod tiktok_editor;
+pub use tiktok_editor::{
+    defaults_put_handler as tiktok_defaults_put_handler,
+    draft_put_handler as tiktok_draft_put_handler, get_handler as tiktok_editor_get_handler,
+};
+
 #[path = "social_media_vod_archive.rs"]
 mod vod_archive_management;
 pub use vod_archive_management::{
