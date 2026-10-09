@@ -9,7 +9,10 @@ Kandidat `561542c0af3afe54155f3b530c56c03fc98b4bcb`, damalige Basis `origin/main
 1. NIT: Clusterweite Rollenerzeugung der synthetischen Fixture verwendet einen nebenläufigen Existenzcheck. Fundstellen `rust/test-support/category_postgres.rs:45`, `category_archive.rs:443` und Erzeugung von `twitchcategoryarchive` in der Migration. Das ist kein BLOCK; parallele Läufe auf einem frischen Testcluster können kollidieren.
 2. NIT: Die konfigurierte Test-DSN erzeugt je Test eine Datenbank ohne anschließenden Cleanup. Fundstelle `rust/test-support/category_postgres.rs:29`. Eigene synthetische Ressourcen werden beim vollständigen Auftragsabschluss geprüft und bereinigt.
 
-Paket L wurde in `b9b423edb06db2717a562e731ed57b9a9672fcb1` mit dem veröffentlichten Kern integriert. Sein eigener Gate ist noch offen. Keine Gate-Fixrunde wird aus den fünf Workercommits abgeleitet.
+Paket L wurde in `b9b423edb06db2717a562e731ed57b9a9672fcb1` mit dem veröffentlichten Kern integriert. Gate auf `566b09d82` mit `gpt-6.1-sol`: `ALLOW: No confirmed merge-blocking defect in the supplied diff.` Nachweis `/tmp/tb-storage-runtime-gate-168485db.log`. Keine Gate-Fixrunde wird aus den fünf Workercommits abgeleitet.
+
+1. NIT: Archivmeldungen werden mit der Startzeit des Watchdogs bestätigt. Eine erfolgreiche Zustellung über die Berliner Mitternacht kann dem Vortag zugeordnet werden. Fundstelle `rust/bin/tb-category-collector/src/bin/tb-twitch-watchdog.rs:459`. Nicht als BLOCK gemeldet; die Randbedingung bleibt dokumentiert.
+2. NIT geprüft: `rust/bin/tb-bot/src/main.rs:587` verwirft den Schlüsselinitialisierungsfehler mit `.ok()`. Der gemeinsame Archivtask prüft bei aktivierter Auslagerung den fehlenden Schlüssel in `rust/crates/tb-analytics/src/category/storage.rs:970`, protokolliert den Fehlschlag ab Zeile 994 und legt eine entprellte Watchdogmeldung an. Fehlende Verschlüsselung führt damit zu sichtbarem Fehler und keinem Upload.
 
 ## Erster BLOCK auf fd0dbebd
 
