@@ -45,4 +45,8 @@ Logs: `/tmp/tb-tiktok-dialog-build-final-20261009.log`, `/tmp/tb-tiktok-dialog-t
 
 ## Rust, Gate und Betrieb
 
-Rustc 1.97.1, SQLX_OFFLINE=true. Abschließende Zahlen, Basisvergleich, Gate-Urteil und Live-Nachweise werden nach tatsächlichem Abschluss ergänzt. Noch kein Merge oder Deploy belegt.
+Rustc 1.97.1, SQLX_OFFLINE=true. Abschließender gezielter Editorlauf: 3 bestanden, 0 fehlgeschlagen, 0 ignoriert. Dazu gehört der echte isolierte PostgreSQL-Roundtrip. Erster vollständiger Dashboard-Lauf: 1356 bestanden, 7 fehlgeschlagen, 0 ignoriert; ein gültiger Basisvergleich läuft separat. Ein vorheriger archivierter Rust-Basisversuch war wegen fehlender Git-Herkunft kein gültiger Testlauf.
+
+`cargo fmt --check` auf Änderung und archivierter Basis liefert nach Pfadnormalisierung exakt dieselben 265 Abweichungsblöcke in unberührten Dateien. Keine neue Formatabweichung. Lesende Produktionsprüfung: `twitchdash` und `twitchbot` besitzen SELECT sowie INSERT/UPDATE auf dem vorhandenen Einstellungsspeicher.
+
+Lokales Gate für `9083826d8`: `[gpt-6.1-sol] ALLOW: No merge-blocking defect found in the supplied diff.` Nicht blockierender Browserhinweis steht in `REVIEW.md`. Noch kein Merge oder Deploy belegt. Abschließende Suite-, Integrations- und Betriebsnachweise werden im Abschlussprotokoll außerhalb des zu löschenden Worktrees gesichert.
