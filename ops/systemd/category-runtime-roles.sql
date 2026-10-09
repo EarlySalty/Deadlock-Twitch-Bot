@@ -67,7 +67,21 @@ BEGIN
     FOREACH role_name IN ARRAY ARRAY['twitchbot','twitchcollector'] LOOP
         IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname=role_name) THEN
             EXECUTE format('GRANT SELECT,INSERT,UPDATE ON TABLE public.category_channels,public.category_collector_status,public.category_chat_rollup,public.category_media,public.category_media_jobs TO %I',role_name);
-            EXECUTE format('GRANT SELECT,INSERT ON TABLE public.category_collection_runs,public.category_stream_snapshots,public.category_chat_messages TO %I',role_name);
+            EXECUTE format('GRANT SELECT,INSERT ON TABLE public.category_collection_runs,public.category_chat_messages TO %I',role_name);
+            IF to_regclass('public.category_stream_snapshots') IS NOT NULL THEN
+                EXECUTE format('GRANT SELECT,INSERT ON TABLE public.category_stream_snapshots TO %I',role_name);
+            END IF;
+            IF to_regclass('public.category_snapshot_samples') IS NOT NULL THEN
+                EXECUTE format('GRANT SELECT ON TABLE public.category_snapshot_versions,public.category_snapshot_samples,public.category_snapshots_normalized,public.category_snapshots_read,public.category_snapshot_metrics,public.category_snapshot_metric_source,public.category_chat_metrics,public.category_chat_metric_source,public.category_storage_state,public.category_archive_manifest,public.category_archive_members TO %I',role_name);
+                EXECUTE format('GRANT EXECUTE ON FUNCTION public.category_snapshot_put(timestamptz,text,text,text,bigint,text,text,timestamptz,text[],text,boolean,double precision),public.category_snapshot_wire(public.category_snapshots_normalized),public.category_chat_wire(public.category_chat_messages) TO %I',role_name);
+                EXECUTE format('GRANT UPDATE(writer_snapshot_at) ON public.category_storage_state TO %I',role_name);
+                IF role_name='twitchbot' THEN
+                    GRANT INSERT,UPDATE ON public.category_archive_manifest TO twitchbot;
+                    GRANT INSERT,DELETE ON public.category_archive_members TO twitchbot;
+                    GRANT UPDATE(last_alert_at,failures) ON public.category_storage_state TO twitchbot;
+                    GRANT SELECT,INSERT,UPDATE ON public.category_archive_notifications TO twitchbot;
+                END IF;
+            END IF;
             EXECUTE format('GRANT SELECT,INSERT,DELETE ON TABLE public.category_chat_dirty TO %I',role_name);
             EXECUTE format('GRANT UPDATE(hour_at) ON TABLE public.category_chat_dirty TO %I',role_name);
             EXECUTE format('GRANT SELECT ON TABLE public.category_collector_config,public.category_chat_redactions,public.category_chat_user_redactions TO %I',role_name);
@@ -98,7 +112,13 @@ BEGIN
     END LOOP;
     IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='twitchdash') THEN
         GRANT SELECT ON TABLE public.category_channels,public.category_collection_runs,
-            public.category_stream_snapshots,public.category_chat_rollup,
+            public.category_chat_rollup,
             public.category_collector_status,public.category_media,public.category_collector_config TO twitchdash;
+        IF to_regclass('public.category_stream_snapshots') IS NOT NULL THEN
+            GRANT SELECT ON public.category_stream_snapshots TO twitchdash;
+        END IF;
+        IF to_regclass('public.category_snapshot_metric_source') IS NOT NULL THEN
+            GRANT SELECT ON public.category_snapshot_metric_source TO twitchdash;
+        END IF;
     END IF;
 END $$;

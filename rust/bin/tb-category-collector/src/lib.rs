@@ -547,11 +547,7 @@ async fn heartbeat(
 }
 
 #[cfg(test)]
-#[path = "../../../test-support/database.rs"]
-mod test_database;
-
-#[cfg(test)]
-#[path = "../../../test-support/postgres.rs"]
+#[path = "../../../test-support/category_postgres.rs"]
 mod test_postgres;
 
 #[cfg(test)]
@@ -654,48 +650,16 @@ mod storage_tests {
 
     #[tokio::test]
     async fn waiting_processes_preserve_owner_and_empty_measurements_prove_cutover() {
-        use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-        use std::str::FromStr;
-        let dsn =
-            test_database::database_url().expect("isolated Postgres test configuration required");
-        let options = PgConnectOptions::from_str(&dsn).unwrap();
-        let admin = PgPoolOptions::new()
-            .max_connections(1)
-            .connect_with(options.clone())
-            .await
-            .unwrap();
-        let schema = format!(
-            "native_{}_{}",
-            std::process::id(),
-            Utc::now().timestamp_subsec_nanos()
-        );
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
-            .execute(&admin)
-            .await
-            .unwrap();
-        let pool = PgPoolOptions::new()
-            .max_connections(4)
-            .connect_with(options.options([("search_path", schema.as_str())]))
-            .await
-            .unwrap();
-        sqlx::raw_sql(
-            include_str!("../../../migrations/20260918123000_category_collector.sql")
-                .split("CREATE OR REPLACE FUNCTION category_prepare_partitions()")
-                .next()
-                .unwrap(),
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::raw_sql(
-            include_str!("../../../migrations/20261008160000_category_native_bot.sql")
-                .split("CREATE OR REPLACE FUNCTION category_prepare_partitions()")
-                .next()
-                .unwrap(),
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+        let db = test_postgres::TestPostgres::start().await;
+        let pool = db.pool.clone();
+        for migration in [
+            include_str!("../../../migrations/20260918123000_category_collector.sql"),
+            include_str!("../../../migrations/20260918170000_category_permanent_archive.sql"),
+            include_str!("../../../migrations/20261008160000_category_native_bot.sql"),
+        ] {
+            sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+        }
+        test_postgres::storage_schema(&pool).await;
         let first = json!({"runtime":"tb-bot","process_id":101,"lease_id":"101-1000","process_started_at":"2026-10-08T12:00:00Z"});
         let second = json!({"runtime":"tb-bot","process_id":102,"lease_id":"102-2000","process_started_at":"2026-10-08T12:01:00Z"});
         let mut owner = pool.acquire().await.unwrap().detach();
@@ -806,11 +770,6 @@ mod storage_tests {
         }
         waiter.close().await.unwrap();
         pool.close().await;
-        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
-            .execute(&admin)
-            .await
-            .unwrap();
-        admin.close().await;
     }
 
     #[tokio::test]
@@ -822,6 +781,7 @@ mod storage_tests {
         ] {
             sqlx::raw_sql(migration).execute(&db.pool).await.unwrap();
         }
+        test_postgres::storage_schema(&db.pool).await;
         sqlx::raw_sql(
             "CREATE TABLE IF NOT EXISTS category_chat_messages_p20261008
             PARTITION OF category_chat_messages FOR VALUES FROM ('2026-10-08') TO ('2026-10-09')",

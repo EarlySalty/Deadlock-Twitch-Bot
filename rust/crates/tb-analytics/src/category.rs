@@ -1,5 +1,4 @@
-//! Global category analytics. Public data only; no outbound Twitch actions.
-//! Raw data is bounded and deduplicated; rollups are rebuilt from dirty buckets.
+pub mod storage;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -132,7 +131,6 @@ pub fn detect_language(text: &str, emotes: &str) -> (String, f64, i32) {
         .collect();
     let sample = words.join(" ");
     let letters = sample.chars().filter(|c| c.is_alphabetic()).count();
-    // Short messages, emotes and game jargon cannot be assigned reliably.
     if letters < 20 {
         return ("und".into(), 0.0, ranges.len() as i32);
     }
@@ -179,7 +177,6 @@ pub fn raw_message(
         return None;
     }
     let sent_at = DateTime::from_timestamp_millis(parsed.tags.get("tmi-sent-ts")?.parse().ok()?)?;
-    // IRC has no backfill. Reject invalid timestamps rather than corrupt retention.
     if sent_at > received_at + chrono::Duration::minutes(2)
         || sent_at < received_at - chrono::Duration::minutes(15)
     {
@@ -207,7 +204,17 @@ pub fn raw_message(
         stream_language: language_code(stream_language),
         emote_count: emotes,
         shared_chat_copy,
-        tags: json!(parsed.tags),
+        tags: Value::Object(
+            ["emotes", "source-room-id", "source-id"]
+                .into_iter()
+                .filter_map(|key| {
+                    parsed
+                        .tags
+                        .get(key)
+                        .map(|value| (key.to_owned(), json!(value)))
+                })
+                .collect(),
+        ),
     })
 }
 
@@ -232,13 +239,10 @@ pub async fn store_messages(pool: &PgPool, messages: &[RawMessage]) -> Result<i6
         .map(str::to_owned)
         .collect();
     let mut tx = pool.begin().await?;
-    // Keep the room locks through INSERT and commit. A concurrent CLEARMSG
-    // cannot miss an uncommitted row or be missed by a later delivery.
     sqlx::query("SELECT category_lock_chat_rooms($1)")
         .bind(&rooms)
         .execute(&mut *tx)
         .await?;
-    // Mark only inserted rows as dirty. Replayed deliveries cannot inflate counts.
     let inserted = sqlx::query_scalar(
         "WITH inserted AS (INSERT INTO category_chat_messages
          SELECT * FROM jsonb_to_recordset($1::jsonb) AS x(sent_at timestamptz,received_at timestamptz,
@@ -260,7 +264,6 @@ pub async fn store_messages(pool: &PgPool, messages: &[RawMessage]) -> Result<i6
     Ok(inserted)
 }
 
-/// Honor Twitch deletions, without keeping a second raw-text audit copy.
 pub async fn delete_chat(
     pool: &PgPool,
     line: &str,
@@ -280,25 +283,18 @@ pub async fn delete_chat(
         "CLEARCHAT" => (None, tags.get("target-user-id").cloned()),
         _ => return Ok(0),
     };
-    // A room-wide clear is not an instruction to destroy the historical archive.
-    // Malformed/empty targets must never become a wildcard deletion.
     if message.as_ref().is_some_and(|id| id.trim().is_empty())
         || user.as_ref().is_some_and(|id| id.trim().is_empty())
         || (message.is_none() && user.is_none())
     {
         return Ok(0);
     }
-    // Twitch attaches the moderation event's server timestamp. The receive
-    // timestamp is a bounded fallback for malformed or missing tags; never
-    // extend a user clear to the later database processing time.
     let event_at = tags
         .get("tmi-sent-ts")
         .and_then(|value| value.parse::<i64>().ok())
         .and_then(DateTime::from_timestamp_millis)
         .filter(|at| *at <= received_at + chrono::Duration::minutes(2))
         .unwrap_or(received_at);
-    // The runtime role cannot DELETE raw rows itself. Only a narrowly scoped,
-    // operator-installed function can apply an explicit moderation target.
     let affected: i64 = sqlx::query_scalar("SELECT category_redact_chat_event($1,$2,$3,$4)")
         .bind(room_id)
         .bind(message)
@@ -311,7 +307,6 @@ pub async fn delete_chat(
 
 pub async fn flush_rollups(pool: &PgPool, limit: i64) -> Result<usize, sqlx::Error> {
     let mut tx = pool.begin().await?;
-    // Lock keys while computing: a concurrent writer cannot lose its dirty mark.
     let keys: Vec<(DateTime<Utc>, String, String)> = sqlx::query_as(
         "SELECT hour_at,room_user_id,language FROM category_chat_dirty ORDER BY hour_at
          LIMIT $1 FOR UPDATE SKIP LOCKED",
@@ -326,7 +321,7 @@ pub async fn flush_rollups(pool: &PgPool, limit: i64) -> Result<usize, sqlx::Err
         sqlx::query(
             "INSERT INTO category_chat_rollup(hour_at,room_user_id,language,messages,distinct_chatter,total_chars,avg_len)
              SELECT $1,$2,$3,count(*),count(DISTINCT chatter_user_id),coalesce(sum(message_len),0),coalesce(avg(message_len),0)::float8
-             FROM category_chat_messages WHERE sent_at >= $1 AND sent_at < $1 + interval '1 hour'
+             FROM category_chat_metric_source WHERE sent_at >= $1 AND sent_at < $1 + interval '1 hour'
              AND room_user_id=$2 AND detected_lang=$3 AND NOT shared_chat_copy
              ON CONFLICT(hour_at,room_user_id,language) DO UPDATE SET messages=excluded.messages,
              distinct_chatter=excluded.distinct_chatter,total_chars=excluded.total_chars,avg_len=excluded.avg_len,updated_at=now()")
@@ -355,7 +350,6 @@ pub async fn store_snapshot(
         sqlx::query_scalar("SELECT max(snapshot_at) FROM category_collection_runs")
             .fetch_one(&mut *tx)
             .await?;
-    // Downtime is NOT counted as observed airtime. Estimates integrate at most one poll.
     let elapsed = previous
         .map(|p| (at - p).num_milliseconds().max(0) as f64 / 1000.0)
         .unwrap_or(0.0);
@@ -372,6 +366,10 @@ pub async fn store_snapshot(
         .bind(poll_seconds)
         .execute(&mut *tx)
         .await?;
+    sqlx::query("UPDATE category_storage_state SET writer_snapshot_at=$1 WHERE singleton")
+        .bind(at)
+        .execute(&mut *tx)
+        .await?;
     for stream in streams {
         let started = DateTime::parse_from_rfc3339(&stream.started_at)
             .map_err(|_| sqlx::Error::Protocol("invalid stream start timestamp".into()))?
@@ -382,33 +380,29 @@ pub async fn store_snapshot(
             display_name=excluded.display_name,last_seen=excluded.last_seen,broadcaster_language=excluded.broadcaster_language")
             .bind(&stream.user_id).bind(stream.user_login.to_ascii_lowercase()).bind(&stream.user_name).bind(at).bind(&language).execute(&mut *tx).await?;
         let seconds = duration.min((at - started).num_milliseconds().max(0) as f64 / 1000.0);
-        sqlx::query(
-            "INSERT INTO category_stream_snapshots VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
-        )
-        .bind(at)
-        .bind(&stream.id)
-        .bind(&stream.user_id)
-        .bind(&stream.user_login)
-        .bind(stream.viewer_count.max(0))
-        .bind(&stream.title)
-        .bind(language)
-        .bind(started)
-        .bind(stream.tags.clone().unwrap_or_default())
-        .bind(&stream.thumbnail_url)
-        .bind(stream.is_mature)
-        .bind(seconds)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("SELECT category_snapshot_put($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)")
+            .bind(at)
+            .bind(&stream.id)
+            .bind(&stream.user_id)
+            .bind(&stream.user_login)
+            .bind(stream.viewer_count.max(0))
+            .bind(&stream.title)
+            .bind(language)
+            .bind(started)
+            .bind(stream.tags.clone().unwrap_or_default())
+            .bind(&stream.thumbnail_url)
+            .bind(stream.is_mature)
+            .bind(seconds)
+            .execute(&mut *tx)
+            .await?;
     }
     tx.commit().await
 }
 
-/// Compatibility only: elapsed time never authorizes deletion of archived data.
 pub async fn trim_expired_rows(_pool: &PgPool, _days: i32) -> Result<u64, sqlx::Error> {
     Ok(0)
 }
 
-/// Runtime configuration is persisted centrally; the bootstrap file holds access only.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct CollectorConfig {
     pub enabled: bool,
@@ -436,41 +430,55 @@ pub async fn raw_storage_bytes(pool: &PgPool) -> Result<i64, sqlx::Error> {
     .await
 }
 
-async fn json_query(pool: &PgPool, sql: &'static str, days: i32) -> Result<Value, sqlx::Error> {
-    let text: String = sqlx::query_scalar(sql).bind(days).fetch_one(pool).await?;
+async fn json_query(
+    pool: &PgPool,
+    sql: &'static str,
+    days: i32,
+    at: DateTime<Utc>,
+) -> Result<Value, sqlx::Error> {
+    let text: String = sqlx::query_scalar(sql)
+        .bind(days)
+        .bind(at)
+        .fetch_one(pool)
+        .await?;
     serde_json::from_str(&text).map_err(|e| sqlx::Error::Protocol(e.to_string()))
 }
 
 pub async fn report(pool: &PgPool, days: i32) -> Result<Value, sqlx::Error> {
+    report_at(pool, days, Utc::now()).await
+}
+
+pub async fn report_at(pool: &PgPool, days: i32, at: DateTime<Utc>) -> Result<Value, sqlx::Error> {
     let languages = json_query(pool, "WITH s AS (SELECT language,count(DISTINCT stream_id) AS streams,
-        count(DISTINCT user_id) AS channels,sum(sample_seconds)/3600 AS airtime_hours,
-        sum(viewer_count*sample_seconds)/NULLIF(sum(sample_seconds),0) AS avg_viewers,
-        sum(viewer_count*sample_seconds)/3600 AS viewer_hours
-        FROM category_stream_snapshots WHERE snapshot_at >= now()-make_interval(days=>$1) GROUP BY language),
+        count(DISTINCT user_id) AS channels,sum(sample_seconds ORDER BY snapshot_at,stream_id)/3600 AS airtime_hours,
+        sum(viewer_count*sample_seconds ORDER BY snapshot_at,stream_id)/NULLIF(sum(sample_seconds ORDER BY snapshot_at,stream_id),0) AS avg_viewers,
+        sum(viewer_count*sample_seconds ORDER BY snapshot_at,stream_id)/3600 AS viewer_hours
+        FROM category_snapshot_metric_source WHERE snapshot_at >= $2::timestamptz-make_interval(days=>$1) GROUP BY language),
         c AS (SELECT language,sum(messages) AS messages FROM category_chat_rollup
-        WHERE hour_at >= date_trunc('hour',now()-make_interval(days=>$1)) GROUP BY language)
+        WHERE hour_at >= date_trunc('hour',$2::timestamptz-make_interval(days=>$1)) GROUP BY language)
         SELECT coalesce(jsonb_agg(to_jsonb(x) ORDER BY viewer_hours DESC NULLS LAST),'[]')::text
         FROM (SELECT coalesce(s.language,c.language) AS language,s.streams,s.channels,s.airtime_hours,s.avg_viewers,s.viewer_hours,
-        coalesce(c.messages,0) AS messages FROM s FULL JOIN c USING(language)) x", days).await?;
+        coalesce(c.messages,0) AS messages FROM s FULL JOIN c USING(language)) x", days, at).await?;
     let trend = json_query(
         pool,
         "WITH x AS (SELECT date_trunc('hour',snapshot_at) AS at,
         avg(streams)::float8 AS streams,avg(viewers)::float8 AS viewers,count(*) AS polls,
         max(streams) AS peak_streams,max(viewers) AS peak_viewers
-        FROM category_collection_runs WHERE snapshot_at >= now()-make_interval(days=>$1) GROUP BY 1)
+        FROM category_collection_runs WHERE snapshot_at >= $2::timestamptz-make_interval(days=>$1) GROUP BY 1)
         SELECT coalesce(jsonb_agg(to_jsonb(x) ORDER BY at),'[]')::text FROM x",
         days,
+        at,
     )
     .await?;
     let top = json_query(pool, "WITH totals AS (SELECT language,user_id,max(user_login) AS login,
-        sum(sample_seconds)/3600 AS airtime_hours,sum(viewer_count*sample_seconds)/NULLIF(sum(sample_seconds),0) AS avg_viewers,
-        sum(viewer_count*sample_seconds)/3600 AS viewer_hours FROM category_stream_snapshots
-        WHERE snapshot_at >= now()-make_interval(days=>$1) GROUP BY language,user_id),
+        sum(sample_seconds ORDER BY snapshot_at,stream_id)/3600 AS airtime_hours,sum(viewer_count*sample_seconds ORDER BY snapshot_at,stream_id)/NULLIF(sum(sample_seconds ORDER BY snapshot_at,stream_id),0) AS avg_viewers,
+        sum(viewer_count*sample_seconds ORDER BY snapshot_at,stream_id)/3600 AS viewer_hours FROM category_snapshot_metric_source
+        WHERE snapshot_at >= $2::timestamptz-make_interval(days=>$1) GROUP BY language,user_id),
         ranked AS (SELECT *,row_number() OVER(PARTITION BY language ORDER BY viewer_hours DESC,user_id) AS rank FROM totals)
-        SELECT coalesce(jsonb_agg(to_jsonb(ranked) ORDER BY language,rank),'[]')::text FROM ranked WHERE rank<=10",days).await?;
+        SELECT coalesce(jsonb_agg(to_jsonb(ranked) ORDER BY language,rank),'[]')::text FROM ranked WHERE rank<=10",days,at).await?;
     let hourly = json_query(pool, "WITH x AS (SELECT language,extract(hour FROM hour_at AT TIME ZONE 'UTC')::int AS hour,
-        sum(messages) AS messages FROM category_chat_rollup WHERE hour_at >= date_trunc('hour',now()-make_interval(days=>$1))
-        GROUP BY 1,2) SELECT coalesce(jsonb_agg(to_jsonb(x) ORDER BY language,hour),'[]')::text FROM x",days).await?;
+        sum(messages) AS messages FROM category_chat_rollup WHERE hour_at >= date_trunc('hour',$2::timestamptz-make_interval(days=>$1))
+        GROUP BY 1,2) SELECT coalesce(jsonb_agg(to_jsonb(x) ORDER BY language,hour),'[]')::text FROM x",days,at).await?;
     let status: Option<(DateTime<Utc>, String)> = sqlx::query_as(
         "SELECT heartbeat_at,details::text FROM category_collector_status WHERE singleton",
     )
@@ -483,7 +491,7 @@ pub async fn report(pool: &PgPool, days: i32) -> Result<Value, sqlx::Error> {
         .transpose()
         .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
     Ok(
-        json!({"days":days,"generated_at":Utc::now(),"languages":languages,"trend":trend,"top_channels":top,"hourly":hourly,
+        json!({"days":days,"generated_at":at,"languages":languages,"trend":trend,"top_channels":top,"hourly":hourly,
         "status":details,"heartbeat_at":status.map(|s|s.0),
         "first_snapshot":coverage.try_get::<Option<DateTime<Utc>>,_>("first")?,
         "last_snapshot":coverage.try_get::<Option<DateTime<Utc>>,_>("last")?,"total_polls":coverage.try_get::<i64,_>("polls")?,

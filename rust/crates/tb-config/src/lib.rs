@@ -4,6 +4,7 @@
 //! ohne Prozess-Env testbar ist. `from_env()` nutzt `std::env::var`.
 
 pub mod affiliate_options;
+pub mod category_archive;
 pub mod challenges;
 pub mod dashboard_options;
 pub mod discord;

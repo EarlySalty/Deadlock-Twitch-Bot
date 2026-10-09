@@ -1,36 +1,26 @@
-//! AES-256-GCM-Feldverschlüsselung — byte-identisch zu `bot/compat/field_crypto.py`.
-
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use rand::TryRng;
 use tb_error::CryptoError;
 use zeroize::Zeroizing;
 
-/// Format-Version (erstes Blob-Byte). Entspricht `FieldCrypto.VERSION = 1`.
 pub const VERSION: u8 = 1;
-/// GCM-Nonce-Länge in Byte. Entspricht `NONCE_SIZE = 12`.
 pub const NONCE_SIZE: usize = 12;
-/// AES-256-Schlüssellänge in Byte. Entspricht `KEY_SIZE = 32`.
 pub const KEY_SIZE: usize = 32;
-/// Einziger Key-Slot. Entspricht `self._keys['v1']`.
 pub const KID: &str = "v1";
 
-/// AES-256-GCM-Feldchiffre mit dem byte-genauen Blob-Format des Python-`FieldCrypto`.
+#[derive(Clone)]
 pub struct FieldCipher {
     cipher: Aes256Gcm,
     kid: String,
 }
 
 impl FieldCipher {
-    /// Lädt den Master-Key aus `DB_MASTER_KEY_V1` (Hex, exakt 32 Byte).
-    /// Kein KDF, kein base64 — byte-identisch zu `FieldCrypto._load_keys`.
     pub fn from_env() -> Result<Self, CryptoError> {
         let raw = std::env::var("DB_MASTER_KEY_V1").map_err(|_| CryptoError::KeyMissing)?;
         Self::from_hex_key(raw.trim(), KID)
     }
 
-    /// Baut die Chiffre aus einem Hex-Schlüssel. Die dekodierten Key-Bytes werden
-    /// nach der Übergabe an die Chiffre wieder genullt (`Zeroizing`).
     pub fn from_hex_key(hex_key: &str, kid: &str) -> Result<Self, CryptoError> {
         let bytes = Zeroizing::new(hex::decode(hex_key).map_err(|_| CryptoError::KeyMissing)?);
         if bytes.len() != KEY_SIZE {
@@ -44,8 +34,6 @@ impl FieldCipher {
         })
     }
 
-    /// Verschlüsselt `plaintext` unter `aad` und baut den BYTEA-Blob:
-    /// `version[1] ‖ kid_len[1] ‖ kid ‖ nonce[12] ‖ ciphertext‖tag[16]`.
     pub fn encrypt_field(&self, plaintext: &str, aad: &str) -> Result<Vec<u8>, CryptoError> {
         let mut nonce_bytes = [0u8; NONCE_SIZE];
         rand::rngs::SysRng
@@ -54,12 +42,27 @@ impl FieldCipher {
         self.encrypt_field_with_nonce(plaintext, aad, &nonce_bytes)
     }
 
-    /// Wie [`FieldCipher::encrypt_field`], aber mit fester Nonce — für deterministische
-    /// Testvektoren.
     pub fn encrypt_field_with_nonce(
         &self,
         plaintext: &str,
         aad: &str,
+        nonce_bytes: &[u8; NONCE_SIZE],
+    ) -> Result<Vec<u8>, CryptoError> {
+        self.encrypt_bytes_with_nonce(plaintext.as_bytes(), aad.as_bytes(), nonce_bytes)
+    }
+
+    pub fn encrypt_bytes(&self, plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        let mut nonce_bytes = [0u8; NONCE_SIZE];
+        rand::rngs::SysRng
+            .try_fill_bytes(&mut nonce_bytes)
+            .map_err(|_| CryptoError::EncryptFailed)?;
+        self.encrypt_bytes_with_nonce(plaintext, aad, &nonce_bytes)
+    }
+
+    fn encrypt_bytes_with_nonce(
+        &self,
+        plaintext: &[u8],
+        aad: &[u8],
         nonce_bytes: &[u8; NONCE_SIZE],
     ) -> Result<Vec<u8>, CryptoError> {
         let nonce = Nonce::from(*nonce_bytes);
@@ -68,8 +71,8 @@ impl FieldCipher {
             .encrypt(
                 &nonce,
                 Payload {
-                    msg: plaintext.as_bytes(),
-                    aad: aad.as_bytes(),
+                    msg: plaintext,
+                    aad,
                 },
             )
             .map_err(|_| CryptoError::EncryptFailed)?;
@@ -83,8 +86,12 @@ impl FieldCipher {
         Ok(out)
     }
 
-    /// Entschlüsselt einen Python-/Rust-erzeugten Blob unter demselben `aad`.
     pub fn decrypt_field(&self, blob: &[u8], aad: &str) -> Result<String, CryptoError> {
+        String::from_utf8(self.decrypt_bytes(blob, aad.as_bytes())?)
+            .map_err(|_| CryptoError::DecryptFailed)
+    }
+
+    pub fn decrypt_bytes(&self, blob: &[u8], aad: &[u8]) -> Result<Vec<u8>, CryptoError> {
         if blob.len() < 15 {
             return Err(CryptoError::InvalidPayload("blob too short".into()));
         }
@@ -117,18 +124,11 @@ impl FieldCipher {
         }
         let pt = self
             .cipher
-            .decrypt(
-                nonce,
-                Payload {
-                    msg: ct,
-                    aad: aad.as_bytes(),
-                },
-            )
+            .decrypt(nonce, Payload { msg: ct, aad })
             .map_err(|_| CryptoError::DecryptFailed)?;
-        String::from_utf8(pt).map_err(|_| CryptoError::DecryptFailed)
+        Ok(pt)
     }
 
-    /// Der Key-Slot dieser Chiffre (`"v1"`).
     pub fn kid(&self) -> &str {
         &self.kid
     }
@@ -138,7 +138,6 @@ impl FieldCipher {
 mod tests {
     use super::*;
 
-    // Fester 32-Byte-Testschlüssel (Hex). NUR für Tests — niemals ein Prod-Key.
     const TEST_KEY_HEX: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 
     #[test]
@@ -155,10 +154,10 @@ mod tests {
         let c = FieldCipher::from_hex_key(TEST_KEY_HEX, KID).unwrap();
         let aad = crate::aad::raid_auth("access_token", "555", 1);
         let blob = c.encrypt_field("x", &aad).unwrap();
-        assert_eq!(blob[0], VERSION); // version
-        assert_eq!(blob[1] as usize, KID.len()); // kid_len = 2
-        assert_eq!(&blob[2..2 + KID.len()], KID.as_bytes()); // "v1"
-        let expected_len = 2 + KID.len() + NONCE_SIZE + 1 + 16; // Header + nonce + ct(1) + tag(16)
+        assert_eq!(blob[0], VERSION);
+        assert_eq!(blob[1] as usize, KID.len());
+        assert_eq!(&blob[2..2 + KID.len()], KID.as_bytes());
+        let expected_len = 2 + KID.len() + NONCE_SIZE + 1 + 16;
         assert_eq!(blob.len(), expected_len);
     }
 
@@ -177,7 +176,7 @@ mod tests {
         let c = FieldCipher::from_hex_key(TEST_KEY_HEX, KID).unwrap();
         let aad = crate::aad::raid_auth("access_token", "1", 1);
         let mut blob = c.encrypt_field("secret", &aad).unwrap();
-        *blob.last_mut().unwrap() ^= 0xff; // Tag kippen
+        *blob.last_mut().unwrap() ^= 0xff;
         assert!(c.decrypt_field(&blob, &aad).is_err());
     }
 
