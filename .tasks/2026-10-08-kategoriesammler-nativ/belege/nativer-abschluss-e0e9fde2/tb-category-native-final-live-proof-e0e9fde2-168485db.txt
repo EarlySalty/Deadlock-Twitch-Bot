@@ -1,0 +1,34 @@
+BEGIN
+SET
+      proof      |         observed_at          |       runtime_heartbeat       |      collector_heartbeat      | runtime | process_id |         lease_id         | lease_state | native_lease_active |         last_snapshot          | expected_pid | expected_collector_pid | expected_runtime | matching_lease | active_runtime_lease | active_collector_lease | fresh_runtime | fresh_collector | measured_after_final_restart 
+-----------------+------------------------------+-------------------------------+-------------------------------+---------+------------+--------------------------+-------------+---------------------+--------------------------------+--------------+------------------------+------------------+----------------+----------------------+------------------------+---------------+-----------------+------------------------------
+ native_identity | 2026-10-09 02:57:54.68877+00 | 2026-10-09 02:57:48.632158+00 | 2026-10-09 02:57:53.550076+00 | tb-bot  | 2692127    | 2692127-1791514597888877 | active      | true                | 2026-10-09T02:57:38.550434762Z | t            | t                      | t                | t              | t                    | t                      | t             | t               | t
+(1 row)
+
+        proof        | runs |        first_snapshot         |         last_snapshot         | expected_snapshot_rows 
+---------------------+------+-------------------------------+-------------------------------+------------------------
+ new_collection_runs |    2 | 2026-10-09 02:56:38.549383+00 | 2026-10-09 02:57:38.550434+00 |                   1332
+(1 row)
+
+       proof       | rows 
+-------------------+------
+ new_snapshot_rows | 1332
+(1 row)
+
+     proof     | rows | rooms 
+---------------+------+-------
+ new_chat_rows |   70 |    14
+(1 row)
+
+     proof      | disk_paused | raw_paused |       storage_checked_at       
+----------------+-------------+------------+--------------------------------
+ storage_status | false       | false      | 2026-10-09T02:57:38.574308730Z
+(1 row)
+
+           proof            |    version     | success |                                             checksum                                             
+----------------------------+----------------+---------+--------------------------------------------------------------------------------------------------
+ frozen_migration_checksums | 20261008160000 | t       | 041990429185870812d4521dec0026a9b0ae4ba1449dc855eab62a8180abad7ff778affa1b1ee8b4ea918ea92bb95e22
+ frozen_migration_checksums | 20261008161000 | t       | c414f7f9d6f4d7bcf28837eb8e2ebd740af76143705e3cafe3cbfa05815839fe26c8b3517a2c6ad02a8197d3107c31a7
+(2 rows)
+
+ROLLBACK

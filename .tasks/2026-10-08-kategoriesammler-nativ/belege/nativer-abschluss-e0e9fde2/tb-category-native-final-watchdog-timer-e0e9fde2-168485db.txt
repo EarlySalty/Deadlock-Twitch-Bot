@@ -1,0 +1,4 @@
+NextElapseUSecMonotonic=2w 5d 2h 44min 59.353705s
+LastTriggerUSec=Fri 2026-10-09 04:57:53 CEST
+ActiveState=active
+SubState=waiting

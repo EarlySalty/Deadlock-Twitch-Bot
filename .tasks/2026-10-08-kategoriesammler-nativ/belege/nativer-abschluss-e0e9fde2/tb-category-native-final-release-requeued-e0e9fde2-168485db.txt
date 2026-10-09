@@ -1,0 +1,21 @@
+cargo-slot: Slot 3, optimiert=1
+   Compiling tb-config v0.1.0 (/home/nathanael/.worktrees/tb-kategoriesammler-nativ/rust/crates/tb-config)
+   Compiling tb-llm v0.1.0 (/home/nathanael/.worktrees/tb-kategoriesammler-nativ/rust/crates/tb-llm)
+   Compiling tb-db v0.1.0 (/home/nathanael/.worktrees/tb-kategoriesammler-nativ/rust/crates/tb-db)
+   Compiling tb-category-collector v0.1.0 (/home/nathanael/.worktrees/tb-kategoriesammler-nativ/rust/bin/tb-category-collector)
+   Compiling tb-dashboard v0.1.0 (/home/nathanael/.worktrees/tb-kategoriesammler-nativ/rust/bin/tb-dashboard)
+   Compiling tb-stream-audit-bin v0.1.0 (/home/nathanael/.worktrees/tb-kategoriesammler-nativ/rust/bin/tb-stream-audit)
+   Compiling tb-bot v0.1.0 (/home/nathanael/.worktrees/tb-kategoriesammler-nativ/rust/bin/tb-bot)
+   Compiling tb-transport-twitch v0.1.0 (/home/nathanael/.worktrees/tb-kategoriesammler-nativ/rust/crates/tb-transport-twitch)
+   Compiling tb-transport-discord v0.1.0 (/home/nathanael/.worktrees/tb-kategoriesammler-nativ/rust/crates/tb-transport-discord)
+   Compiling tb-analytics v0.1.0 (/home/nathanael/.worktrees/tb-kategoriesammler-nativ/rust/crates/tb-analytics)
+   Compiling tb-effort v0.1.0 (/home/nathanael/.worktrees/tb-kategoriesammler-nativ/rust/crates/tb-effort)
+   Compiling tb-engagement v0.1.0 (/home/nathanael/.worktrees/tb-kategoriesammler-nativ/rust/crates/tb-engagement)
+   Compiling tb-chat v0.1.0 (/home/nathanael/.worktrees/tb-kategoriesammler-nativ/rust/crates/tb-chat)
+   Compiling tb-social-media v0.1.0 (/home/nathanael/.worktrees/tb-kategoriesammler-nativ/rust/crates/tb-social-media)
+   Compiling tb-monitoring v0.1.0 (/home/nathanael/.worktrees/tb-kategoriesammler-nativ/rust/crates/tb-monitoring)
+   Compiling tb-vod-archive v0.1.0 (/home/nathanael/.worktrees/tb-kategoriesammler-nativ/rust/crates/tb-vod-archive)
+   Compiling tb-internal-api v0.1.0 (/home/nathanael/.worktrees/tb-kategoriesammler-nativ/rust/crates/tb-internal-api)
+   Compiling tb-dashboard-api v0.1.0 (/home/nathanael/.worktrees/tb-kategoriesammler-nativ/rust/crates/tb-dashboard-api)
+    Finished `release` profile [optimized] target(s) in 20m 40s
+cargo-slot: EXIT=0

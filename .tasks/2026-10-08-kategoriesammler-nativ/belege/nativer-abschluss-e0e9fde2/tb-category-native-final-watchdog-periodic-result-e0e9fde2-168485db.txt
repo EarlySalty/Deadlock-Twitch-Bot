@@ -1,0 +1,6 @@
+Result=success
+ExecMainStartTimestamp=Fri 2026-10-09 04:57:53 CEST
+ExecMainExitTimestamp=Fri 2026-10-09 04:57:54 CEST
+ExecMainPID=2725434
+ExecMainStatus=0
+InvocationID=da0bc50a9dc146b68537bec32cc03305

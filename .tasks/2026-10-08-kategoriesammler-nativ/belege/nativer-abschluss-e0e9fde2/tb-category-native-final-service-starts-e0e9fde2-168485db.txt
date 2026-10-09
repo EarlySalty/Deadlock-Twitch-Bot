@@ -1,0 +1,17 @@
+MainPID=2692127
+NRestarts=0
+ExecMainStartTimestamp=Fri 2026-10-09 04:56:37 CEST
+Id=deadlock-twitch-bot-rust.service
+ActiveState=active
+
+MainPID=2692369
+NRestarts=0
+ExecMainStartTimestamp=Fri 2026-10-09 04:56:37 CEST
+Id=deadlock-twitch-dashboard-rust.service
+ActiveState=active
+
+MainPID=2694550
+NRestarts=0
+ExecMainStartTimestamp=Fri 2026-10-09 04:56:43 CEST
+Id=deadlock-twitch-stream-coaching-watch.service
+ActiveState=active
