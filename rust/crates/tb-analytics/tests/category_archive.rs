@@ -7,6 +7,10 @@ use tb_transport_twitch::streams::HelixStream;
 use test_postgres::TestPostgres;
 
 async fn fixture() -> TestPostgres {
+    fixture_with_storage(true).await
+}
+
+async fn fixture_with_storage(storage: bool) -> TestPostgres {
     let db = TestPostgres::start().await;
     sqlx::raw_sql(include_str!(
         "../../../migrations/20260918123000_category_collector.sql"
@@ -20,7 +24,9 @@ async fn fixture() -> TestPostgres {
     .execute(&db.pool)
     .await
     .unwrap();
-    test_postgres::storage_schema(&db.pool).await;
+    if storage {
+        test_postgres::storage_schema(&db.pool).await;
+    }
     let old = Utc::now() - Duration::days(1000);
     let day = old.date_naive();
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
@@ -33,7 +39,9 @@ async fn fixture() -> TestPostgres {
         let row = category::raw_message(&line, at, "100", "de").unwrap();
         assert_eq!(category::store_messages(&db.pool, &[row]).await.unwrap(), 1);
     }
-    category::flush_rollups(&db.pool, 100).await.unwrap();
+    if storage {
+        category::flush_rollups(&db.pool, 100).await.unwrap();
+    }
     db
 }
 
@@ -419,7 +427,7 @@ async fn a_targeted_chat_clear_is_limited_to_the_observed_stream() {
 
 #[tokio::test]
 async fn runtime_roles_can_append_and_redact_but_never_generically_delete_or_read_secrets() {
-    let db = fixture().await;
+    let db = fixture_with_storage(false).await;
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT FROM pg_database WHERE datname='twitch_analytics')",
     )
@@ -447,6 +455,8 @@ async fn runtime_roles_can_append_and_redact_but_never_generically_delete_or_rea
     ] {
         sqlx::raw_sql(migration).execute(&db.pool).await.unwrap();
     }
+    test_postgres::storage_schema(&db.pool).await;
+    category::flush_rollups(&db.pool, 100).await.unwrap();
     let matrix = include_str!("../../../../ops/systemd/category-runtime-roles.sql")
         .lines()
         .filter(|line| !line.starts_with('\\'))

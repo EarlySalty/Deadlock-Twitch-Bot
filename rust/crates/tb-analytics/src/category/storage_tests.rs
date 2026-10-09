@@ -136,3 +136,18 @@ async fn asynchronous_hash_and_cancelled_integrity_checks_use_the_same_archive()
     .is_err());
     assert_eq!(rows, 0);
 }
+
+#[tokio::test]
+async fn already_requested_shutdown_returns_before_any_archive_work() {
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_lazy("postgres://postgres:tbtest@127.0.0.1:33100/tb_storage_shutdown_20261009")
+        .unwrap();
+    let config = ArchiveConfig {
+        enabled: true,
+        ..ArchiveConfig::default()
+    };
+    let (_sender, receiver) = tokio::sync::watch::channel(true);
+    let future = run(pool, config, None, receiver);
+    tokio::pin!(future);
+    assert!(futures_util::poll!(future).is_ready());
+}

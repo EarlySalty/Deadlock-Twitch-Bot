@@ -957,11 +957,14 @@ pub async fn run(
     cipher: Option<Arc<FieldCipher>>,
     mut stop: tokio::sync::watch::Receiver<bool>,
 ) {
-    if !config.enabled {
+    if !config.enabled || *stop.borrow() {
         return;
     }
     let mut interval = tokio::time::interval(Duration::from_secs(3600));
     loop {
+        if *stop.borrow() {
+            return;
+        }
         tokio::select! { biased; _=stop.changed()=>return, _=interval.tick()=>{} }
         let attempt = async {
             let cipher = cipher
