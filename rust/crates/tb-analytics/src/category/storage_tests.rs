@@ -109,3 +109,30 @@ fn oversized_rows_missing_key_and_wrong_key_slot_fail_closed() {
     manifest.key_id = "different-key".into();
     assert!(manifest.validate(&cipher).is_err());
 }
+
+#[tokio::test]
+async fn asynchronous_hash_and_cancelled_integrity_checks_use_the_same_archive() {
+    let (directory, mut manifest, cipher, config) = example();
+    let path = directory.path().join("archive.gcm");
+    record(&path, &mut manifest, &config, &cipher);
+    assert_eq!(
+        file_checksum_async(&path).await.unwrap(),
+        file_checksum(&path).unwrap()
+    );
+    let cancelled = CancelRead::default();
+    let stopped = cancelled.0.clone();
+    drop(cancelled);
+    let mut rows = 0;
+    assert!(read_archive_with_cancel(
+        &path,
+        &manifest,
+        &cipher,
+        |_| {
+            rows += 1;
+            Ok(())
+        },
+        &|| stopped.load(Ordering::Acquire)
+    )
+    .is_err());
+    assert_eq!(rows, 0);
+}

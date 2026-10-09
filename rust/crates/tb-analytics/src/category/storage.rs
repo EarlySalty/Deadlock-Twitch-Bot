@@ -13,7 +13,10 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     process::Stdio,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 use tb_crypto::field::FieldCipher;
@@ -163,12 +166,31 @@ impl<'a> ArchiveWriter<'a> {
     }
 }
 
+#[derive(Default)]
+struct CancelRead(Arc<AtomicBool>);
+impl Drop for CancelRead {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
 fn file_checksum(path: &Path) -> Result<(String, u64), Error> {
+    file_checksum_with_cancel(path, &|| false)
+}
+
+fn file_checksum_with_cancel(
+    path: &Path,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(String, u64), Error> {
     let mut file = File::open(path)?;
     let mut digest = Sha256::new();
     let mut buffer = [0u8; 65536];
     let mut bytes = 0;
     loop {
+        if cancelled() {
+            return Err("Archivprüfung abgebrochen".into());
+        }
         let n = file.read(&mut buffer)?;
         if n == 0 {
             break;
@@ -179,14 +201,44 @@ fn file_checksum(path: &Path) -> Result<(String, u64), Error> {
     Ok((hex::encode(digest.finalize()), bytes))
 }
 
+async fn file_checksum_async(path: &Path) -> Result<(String, u64), Error> {
+    use tokio::io::AsyncReadExt;
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 65536];
+    let mut bytes = 0;
+    loop {
+        let n = file.read(&mut buffer).await?;
+        if n == 0 {
+            return Ok((hex::encode(digest.finalize()), bytes));
+        }
+        digest.update(&buffer[..n]);
+        bytes += n as u64;
+    }
+}
+
+#[cfg(test)]
 fn read_archive(
     path: &Path,
     manifest: &Manifest,
     cipher: &FieldCipher,
+    consume: impl FnMut(&str) -> Result<(), Error>,
+) -> Result<(), Error> {
+    read_archive_with_cancel(path, manifest, cipher, consume, &|| false)
+}
+
+fn read_archive_with_cancel(
+    path: &Path,
+    manifest: &Manifest,
+    cipher: &FieldCipher,
     mut consume: impl FnMut(&str) -> Result<(), Error>,
+    cancelled: &impl Fn() -> bool,
 ) -> Result<(), Error> {
     manifest.validate(cipher)?;
-    let (checksum, bytes) = file_checksum(path)?;
+    if manifest.cipher_bytes != Some(std::fs::metadata(path)?.len() as i64) {
+        return Err("Archivgröße stimmt nicht mit Manifest überein".into());
+    }
+    let (checksum, bytes) = file_checksum_with_cancel(path, cancelled)?;
     if manifest.cipher_checksum.as_ref() != Some(&checksum)
         || manifest.cipher_bytes != Some(bytes as i64)
     {
@@ -202,6 +254,9 @@ fn read_archive(
     let mut rows = 0i64;
     let mut index = 0u64;
     loop {
+        if cancelled() {
+            return Err("Archivprüfung abgebrochen".into());
+        }
         let mut header = [0u8; 5];
         file.read_exact(&mut header)?;
         let last = match header[0] {
@@ -273,6 +328,10 @@ pub async fn dry_run(pool: &PgPool, from: NaiveDate, to: NaiveDate) -> Result<Va
     sqlx::query("SET LOCAL TIME ZONE 'UTC'")
         .execute(&mut *tx)
         .await?;
+    let unresolved: bool = sqlx::query_scalar("SELECT EXISTS(SELECT FROM twitch_streamers_partner_state WHERE is_partner=1 AND nullif(btrim(twitch_user_id),'') IS NULL)").fetch_one(&mut *tx).await?;
+    if unresolved {
+        return Err("Aktiver Partner ohne stabile Twitch-ID; Trockenlauf bleibt gesperrt".into());
+    }
     let mut result = Vec::new();
     let mut day = from;
     while day <= to {
@@ -520,7 +579,7 @@ async fn export(
     drop(stream);
     store_members(pool, m.id, &batch).await?;
     let (rows, checksum, bytes) = writer.finish()?;
-    let (cipher_checksum, actual_bytes) = file_checksum(path)?;
+    let (cipher_checksum, actual_bytes) = file_checksum_async(path).await?;
     if actual_bytes != bytes {
         return Err("Archivgröße geändert".into());
     }
@@ -574,6 +633,12 @@ impl Drive {
         command
             .args(args)
             .args(["--max-size", &self.config.max_file_bytes.to_string()])
+            .args([
+                "--max-transfer",
+                &self.config.max_file_bytes.to_string(),
+                "--cutoff-mode",
+                "hard",
+            ])
             .args([
                 "--transfers",
                 "1",
@@ -640,6 +705,21 @@ async fn lease(pool: &PgPool) -> Result<sqlx::pool::PoolConnection<sqlx::Postgre
     Ok(connection)
 }
 
+async fn serialized<T>(
+    pool: &PgPool,
+    operation: impl std::future::Future<Output = Result<T, Error>>,
+) -> Result<T, Error> {
+    let mut connection = lease(pool).await?;
+    let result = operation.await;
+    let released: bool = sqlx::query_scalar("SELECT pg_advisory_unlock(782363991807)")
+        .fetch_one(&mut *connection)
+        .await?;
+    if !released {
+        return Err("Archiv-Sperre konnte nicht bestätigt freigegeben werden".into());
+    }
+    result
+}
+
 pub async fn archive_day(
     pool: &PgPool,
     day: NaiveDate,
@@ -650,7 +730,7 @@ pub async fn archive_day(
 ) -> Result<Manifest, Error> {
     config.validate()?;
     reserve(config, config.max_file_bytes.saturating_mul(2))?;
-    let _lease = lease(pool).await?;
+    serialized(pool, async {
     let m = create_manifest(pool, day, kind, cipher).await?;
     m.validate(cipher)?;
     let directory = tempfile::Builder::new()
@@ -667,6 +747,7 @@ pub async fn archive_day(
     verify_remote(&m, directory.path(), config, cipher, store).await?;
     sqlx::query("UPDATE category_archive_manifest SET state='verified',verified_at=now() WHERE id=$1 AND state IN ('exported','verified')").bind(m.id).execute(pool).await?;
     manifest(pool, m.id).await
+    }).await
 }
 async fn verify_remote(
     m: &Manifest,
@@ -682,7 +763,17 @@ async fn verify_remote(
     reserve(config, bytes as u64)?;
     let path = directory.join("verified.gcm");
     store.download(&m.object_path, &path).await?;
-    read_archive(&path, m, cipher, |_| Ok(()))?;
+    let cancelled = CancelRead::default();
+    let stopped = cancelled.0.clone();
+    let input = path.clone();
+    let manifest = m.clone();
+    let cipher = cipher.clone();
+    tokio::task::spawn_blocking(move || {
+        read_archive_with_cancel(&input, &manifest, &cipher, |_| Ok(()), &|| {
+            stopped.load(Ordering::Acquire)
+        })
+    })
+    .await??;
     Ok(path)
 }
 
@@ -697,43 +788,46 @@ pub async fn remove_local(
     if !config.remove_enabled {
         return Err("Lokales Entfernen ist in der Betriebskonfiguration gesperrt".into());
     }
-    let _lease = lease(pool).await?;
-    let m = manifest(pool, id).await?;
-    if !matches!(m.state.as_str(), "verified" | "removed") {
-        return Err("Manifest nicht bestätigt".into());
-    }
-    let directory = tempfile::Builder::new()
-        .prefix("tb-category-")
-        .tempdir_in(&config.temporary_directory)?;
-    verify_remote(&m, directory.path(), config, cipher, store).await?;
-    let members: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM category_archive_members WHERE manifest_id=$1")
-            .bind(id)
-            .fetch_one(pool)
-            .await?;
-    if members != m.rows {
-        return Err("Archiv-Mitgliederzahl stimmt nicht mit Manifest überein".into());
-    }
-    let mut total = 0;
-    loop {
-        let n: i64 = sqlx::query_scalar("SELECT category_archive_remove($1,1000)")
-            .bind(id)
-            .fetch_one(pool)
-            .await?;
-        total += n as u64;
-        let state: String =
-            sqlx::query_scalar("SELECT state FROM category_archive_manifest WHERE id=$1")
+    serialized(pool, async {
+        let m = manifest(pool, id).await?;
+        if !matches!(m.state.as_str(), "verified" | "removed") {
+            return Err("Manifest nicht bestätigt".into());
+        }
+        let directory = tempfile::Builder::new()
+            .prefix("tb-category-")
+            .tempdir_in(&config.temporary_directory)?;
+        verify_remote(&m, directory.path(), config, cipher, store).await?;
+        let members: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM category_archive_members WHERE manifest_id=$1",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+        if members != m.rows {
+            return Err("Archiv-Mitgliederzahl stimmt nicht mit Manifest überein".into());
+        }
+        let mut total = 0;
+        loop {
+            let n: i64 = sqlx::query_scalar("SELECT category_archive_remove($1,1000)")
                 .bind(id)
                 .fetch_one(pool)
                 .await?;
-        if state == "removed" {
-            break;
+            total += n as u64;
+            let state: String =
+                sqlx::query_scalar("SELECT state FROM category_archive_manifest WHERE id=$1")
+                    .bind(id)
+                    .fetch_one(pool)
+                    .await?;
+            if state == "removed" {
+                break;
+            }
         }
-    }
-    if m.kind == "chat" {
-        compact_chat(pool, id, config).await?;
-    }
-    Ok(total)
+        if m.kind == "chat" {
+            compact_chat(pool, id, config).await?;
+        }
+        Ok(total)
+    })
+    .await
 }
 
 async fn compact_chat(pool: &PgPool, id: Uuid, config: &ArchiveConfig) -> Result<(), Error> {
@@ -774,7 +868,7 @@ pub async fn restore(
     store: &impl ObjectStore,
 ) -> Result<u64, Error> {
     config.validate()?;
-    let _lease = lease(pool).await?;
+    serialized(pool, async {
     let m = manifest(pool, id).await?;
     if !matches!(m.state.as_str(), "verified" | "removed" | "restored") {
         return Err("Archiv noch nicht bestätigt".into());
@@ -793,12 +887,14 @@ pub async fn restore(
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<String>(16);
     let reader_cipher = cipher.clone();
     let reader_manifest = m.clone();
+    let cancelled = CancelRead::default();
+    let stopped = cancelled.0.clone();
     let reader = tokio::task::spawn_blocking(move || {
-        let result = read_archive(&path, &reader_manifest, &reader_cipher, |row| {
+        let result = read_archive_with_cancel(&path, &reader_manifest, &reader_cipher, |row| {
             sender
                 .blocking_send(row.to_owned())
                 .map_err(|_| "Rückholung abgebrochen".into())
-        });
+        }, &|| stopped.load(Ordering::Acquire));
         drop(sender);
         result
     });
@@ -840,6 +936,7 @@ pub async fn restore(
         .await?;
     tx.commit().await?;
     Ok(count)
+    }).await
 }
 
 pub fn archive_cipher(secret: &dyn Fn(&str) -> Option<String>) -> Result<FieldCipher, Error> {
@@ -891,7 +988,8 @@ pub async fn run(
             Ok::<(), Error>(())
         };
         let outcome = tokio::select! { biased; _=stop.changed()=>return, result=attempt=>result };
-        if outcome.is_err() {
+        if let Err(error) = outcome {
+            tracing::error!(error = %error, "Kategorie-Auslagerung fehlgeschlagen");
             if record_failure(&pool, Utc::now()).await.is_err() {
                 tracing::error!("Archivfehler konnte nicht dauerhaft entprellt werden");
             }

@@ -504,6 +504,9 @@ async fn unresolved_partner_ids_and_alert_retry_keep_local_data_safe() {
         .execute(&db.pool)
         .await
         .unwrap();
+    assert!(storage::dry_run(&db.pool, at.date_naive(), at.date_naive())
+        .await
+        .is_err());
     assert!(
         storage::archive_day(&db.pool, at.date_naive(), "chat", &config, &key, &drive)
             .await

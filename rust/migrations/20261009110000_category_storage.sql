@@ -304,6 +304,17 @@ END $$;
 DO $$
 DECLARE r text; relation text;
 BEGIN
+    FOR relation IN SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND (c.oid='public.category_stream_snapshots'::regclass
+            OR c.oid IN (SELECT relid FROM pg_partition_tree('public.category_chat_messages'::regclass)))
+    LOOP
+        EXECUTE format('REVOKE UPDATE,DELETE,TRUNCATE ON TABLE public.%I FROM PUBLIC',relation);
+        FOREACH r IN ARRAY ARRAY['twitchbot','twitchcollector','twitchcategoryarchive','twitchdash','twitchlegacy'] LOOP
+            IF EXISTS(SELECT FROM pg_roles WHERE rolname=r) THEN
+                EXECUTE format('REVOKE UPDATE,DELETE,TRUNCATE ON TABLE public.%I FROM %I',relation,r);
+            END IF;
+        END LOOP;
+    END LOOP;
     FOREACH r IN ARRAY ARRAY['twitchbot','twitchcollector','twitchdash','twitchlegacy'] LOOP
         IF EXISTS(SELECT FROM pg_roles WHERE rolname=r) THEN
             EXECUTE format('REVOKE ALL ON FUNCTION category_archive_remove(uuid,integer),category_archive_compact(uuid) FROM %I',r);
