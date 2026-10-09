@@ -1,0 +1,851 @@
+{
+  "scope": "Owned ignored task logs only; no session transcript or secret files.",
+  "counts": {
+    "empty": 14,
+    "already_saved": 54,
+    "preserved_here": 72
+  },
+  "originals": "ignored-log-originals.txt",
+  "rows": [
+    {
+      "path": "admin-build.log",
+      "bytes": 1030,
+      "sha256": "d6418486ac00029f828434ce4236fc0333ae343df70b44df8f88d091d1277fc0",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "admin-npm-ci.log",
+      "bytes": 225,
+      "sha256": "b1aea748850a0fb0efbfef954e45a4b4bc6da32d98800261eb9ee99fabfc90ab",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "api-gatefix.log",
+      "bytes": 3956,
+      "sha256": "a94fac062ed03ff444160716ba1a8c378ab32593a808aa33933933a449c0955e",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "api-test-baseline.log",
+      "bytes": 2469,
+      "sha256": "5c3c9b68ee01ff1f4be14a2ea9fdf3c54ea7c1a9cc180890aa5775cb57295f14",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "api-tests.log",
+      "bytes": 9947,
+      "sha256": "3730a06576e72731f1a9dacba18be3bee9b04d16959040f359070ac454ab7632",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "api-tests2.log",
+      "bytes": 3683,
+      "sha256": "2b3c672a2e7cbd2d4295d973aa75eaa8201a1abfbf3c8e62c0e16068754ef271",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "archive-gatefix.log",
+      "bytes": 6818,
+      "sha256": "4742b281715f72283b5a26b890eb8a22e28b0029e4bd85954faa8bbeef94bd4b",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "archive-gatefix2.log",
+      "bytes": 6600,
+      "sha256": "9e00a96e9bffb3e8662d4c10aaca2d888491f27586e514eedbd1c28899b04f39",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "archive-test-baseline.log",
+      "bytes": 5979,
+      "sha256": "2124b6d91ae82998c81c1b61ea86d395e19d4fd0a137351a27907254bd598efc",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "archive-test-baseline2.log",
+      "bytes": 4775,
+      "sha256": "9ef07f732a373df5f5ee0f5239937481c8f022b0a3494e13fafd7e741bf7b178",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "archive-tests.log",
+      "bytes": 11170,
+      "sha256": "ad68cfebf291e4fe5588aef317edcaeded6cb51ed45279e7ea06e0add8c8082b",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "archive-tests2.log",
+      "bytes": 5517,
+      "sha256": "5416842660f0e749b4a9832902da63878fc83244bf80e0410d6562e282b85f04",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "archive-tests3.log",
+      "bytes": 5837,
+      "sha256": "c3c34a4e6a9cb96296b0a71c111b3092f546b533ac83697d20ab352b9ccd55a5",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "check.log",
+      "bytes": 9104,
+      "sha256": "f56bcf5c08fc24ad81d3a710b306f3baef90ef298850970e62779cdeee89a298",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "check2.log",
+      "bytes": 9156,
+      "sha256": "6565776a0d5e66bcbb7161fb679301def0070a7eab6af50d8ad18d159ceba2d4",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "clean-debug-dry.log",
+      "bytes": 133,
+      "sha256": "77bfc10b48122b41debad9159acdef0b3c639d7c8066415b4525d41faa1cc50a",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "clean-debug.log",
+      "bytes": 90,
+      "sha256": "8bf3b056361d828a816aa9119723c50cabc236a162005f8ca05f1aa28bb27efc",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "clippy-baseline.log",
+      "bytes": 1968,
+      "sha256": "11ea11b5206cdb7bf106f0ba0aefd4c2324e5e29dc6d2b2dba6e795d2b03ec6f",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "clippy-final-archive.log",
+      "bytes": 1995,
+      "sha256": "efa67feb9ef57b82b2a2dd3f9301b961f0a1e42ac7aa7004527fae62d4ceb062",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "clippy-owned-baseline.log",
+      "bytes": 4306,
+      "sha256": "3c548986520373e01716f1ea45cb0eb86ef2eb012aaa139cd71d175bb42f56f9",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "clippy-owned.log",
+      "bytes": 5202,
+      "sha256": "040073c15c774b24ad733271657fd23fe9806a8d582914536a24a48d363cab92",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "clippy-warnings.log",
+      "bytes": 5061,
+      "sha256": "a5164c03c30a8be5a2ecb38f907ad6a192de7b4aa1d7dca695757cf79b01dc10",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "clippy.log",
+      "bytes": 3059,
+      "sha256": "3bc1354be860536a68cc0b03c8670720a48050af60f1bb62daf3d15295d178c4",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "db-init.log",
+      "bytes": 915,
+      "sha256": "de81a46f118856f1e83bdf50a08b3a3a73e19877bf6ddb08f72e46d8a5fb89d9",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "deploy-current-main.log",
+      "bytes": 777,
+      "sha256": "4549f3b427e5e57dbcf660e15eec3dc99d0c7c1b106c6cfb96e820a143043a04",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r10-api-resets.log",
+      "bytes": 3496,
+      "sha256": "02284b399733f03eab8faa7a3f9f6d45a7f0fa473330d481816d25baadce93eb",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r10-api-worker.log",
+      "bytes": 3586,
+      "sha256": "1231ded27068e144d556d68d9e5b0a5c8ec0d8b83acfd1a1c5299148891592bc",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r10-archive-rejection.log",
+      "bytes": 1473,
+      "sha256": "8284cef71335a601a0c534c7a31117807951466ef58ecd3e176cbd5d8975b8bb",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r10-clippy.log",
+      "bytes": 253,
+      "sha256": "3f6a39c251d663c7cbaef2b9c412f222d9b49e4163d9519750807bade064beb8",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r10-gate-base.log",
+      "bytes": 123,
+      "sha256": "27c52322cdb95044ba212211fe96f98f0410ecd1c7b147070d49b9264b19ef75",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r10-gate.log",
+      "bytes": 962,
+      "sha256": "977694edaa8f4ab902dce93c4b63636e18689e672f112791fa3b2a11a11fec6a",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r10-source-hashes.log",
+      "bytes": 873,
+      "sha256": "48dc0a6d21937f886c08e0835ee5efadf0855b1a4542b78f7c39273a92536f0c",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r11-fmt.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "empty"
+    },
+    {
+      "path": "fixer-r11-freeze.log",
+      "bytes": 1001,
+      "sha256": "b3fa013929bdded20af4bd164747685ed2c8b8ba500c3819cc447d1f32652898",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r11-gate.log",
+      "bytes": 864,
+      "sha256": "23413924b40b32732b2531ed6f7d2c55bfee52dd552e0d4a4d097d04e57f73d9",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r11-hashcheck.log",
+      "bytes": 609,
+      "sha256": "83c71a8db4a2e0c64b2e0ac1f115f803c3fd0b79129415f6245c988592fdc74d",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r13-api-contract.log",
+      "bytes": 7081,
+      "sha256": "3fed7a61b0866f00bcd3ce6d6e6f2b400879bd52a048718de805fb24ec9db9ea",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r13-api-fixture.log",
+      "bytes": 3365,
+      "sha256": "4c41bd7ecad228a79a598258184e19e9cd6985ba7f7299dd0ad3e74b0e4eaf52",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r13-api.log",
+      "bytes": 3316,
+      "sha256": "b098d29a7b6579d6d4f8631c8d66433c0605e7aa4e4f5d1662ed8e3b6cb3d622",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r13-archive.log",
+      "bytes": 11950,
+      "sha256": "eb5e16a6decff455a774ee0b4b8362314842cb333b709c5e5f99d8cf35d9197b",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r13-clippy.log",
+      "bytes": 17064,
+      "sha256": "16b2328da49767b28fa48e32f9d3ed59ecaa231bc6e3e395e1612540ee1733bf",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r13-gate-base.log",
+      "bytes": 82,
+      "sha256": "0bffdbdfeaf20abd54855d3ad79ab4a275aae49555aa1b92e497f705b60e8082",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r13-gate.log",
+      "bytes": 224,
+      "sha256": "d058681f198d9b4171743269b848452445afad2e35e22b9099ae6b3f523a97fa",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r13-metadata.log",
+      "bytes": 177546,
+      "sha256": "bccab061a09fb66f8d6495a25d028a11e96d690781f6e2ee13eee4c07ca06bd4",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "fixer-r13-source-sha256.log",
+      "bytes": 1085,
+      "sha256": "a512d5e9a15de0c4f91c6974e8aefce47c825fa721a1586925792697d62703fb",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r13-worker.log",
+      "bytes": 3335,
+      "sha256": "52d5af362767f837d9f15a8271fbba14580aadb8db13e8e384ed2db9b462ecba",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r3-api-confirm.log",
+      "bytes": 1933,
+      "sha256": "61cc6cbaf77691adb74cefe8a57d324e1767cd07922bda82764fa3d71140eb82",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "fixer-r3-api.log",
+      "bytes": 1543,
+      "sha256": "24370df2f0cc0610c7f67cdbfde37fa35b2c3fe5f51270b95ded930c02942ec0",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "fixer-r3-archive.log",
+      "bytes": 7384,
+      "sha256": "7bdd8c14e9e2fa9b57cdd5319b9565cbf50f2ab97b44cc83a4857fe72033ef77",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "fixer-r3-client.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "empty"
+    },
+    {
+      "path": "fixer-r3-frontend-build.log",
+      "bytes": 1903,
+      "sha256": "8b6383be0a370b538222de0c2fb74600db1272e254ca9a392b3dc0127fa5bf74",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "fixer-r3-frontend-test.log",
+      "bytes": 2046,
+      "sha256": "cf27544ef1dad866c5b2116514cbc40c35db39bef1da9c282fb983fe17af502a",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "fixer-r3-gate.log",
+      "bytes": 162,
+      "sha256": "f705fbffdbe32b8480007260c4b798836f2c723891dc6a370f596ba3502f626a",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r5-initial-tests.log",
+      "bytes": 5715,
+      "sha256": "5ef11764f7d23b06ac79a5027aa0ac371f3e5cb824478125d4e1aa904b30c91c",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "fixer-r6-api.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "empty"
+    },
+    {
+      "path": "fixer-r6-archive.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "empty"
+    },
+    {
+      "path": "fixer-r6-clippy.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "empty"
+    },
+    {
+      "path": "fixer-r6-ui-build.log",
+      "bytes": 1902,
+      "sha256": "cebb75c8861381c80a963c71e094b584f618b717d91b1c4db7c345e9446afef2",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r6-ui.log",
+      "bytes": 2161,
+      "sha256": "4983373fb3fee4463d9a4b9d888447867a27309710b21fcf5290bb5b16b7a76f",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r6b-api.log",
+      "bytes": 5182,
+      "sha256": "1bf95f9b37c3e92eeb7aaac564106095c410b3130876056f169b1af9800274dc",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r6b-archive-initial.log",
+      "bytes": 9125,
+      "sha256": "5cab18898f6d2dff63f5dccc88c6969d88707d38ad97f4c3f4e3d9c148d83215",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "fixer-r6b-archive.log",
+      "bytes": 9125,
+      "sha256": "b515142b72a8c8eea6dea455f00cd4fe1f4878a3533a1fc4d748184395c1c20d",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r6b-clippy.log",
+      "bytes": 972,
+      "sha256": "e98530ff6c85048543415814ca0ba37079f68d2cd8c2912d5a04e8130660967c",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r6b-gate.log",
+      "bytes": 962,
+      "sha256": "647fc35bc3fcb1a053dba37251d50624ca7aea09486a7a27343a02a5d81698b1",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r7-api.log",
+      "bytes": 6236,
+      "sha256": "0bf7e008ea332fc2eba28baa4e824c9b7145f3fe63a950e488e80fb9f62761d7",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r7-archive.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "empty"
+    },
+    {
+      "path": "fixer-r7-fmt-check.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "empty"
+    },
+    {
+      "path": "fixer-r7-fmt.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "empty"
+    },
+    {
+      "path": "fixer-r7-worker.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "empty"
+    },
+    {
+      "path": "fixer-r8-api-final.log",
+      "bytes": 6626,
+      "sha256": "15a12d07503e0c8b1bcf093ce0294780eac51018b621b2238b9fcb2c5ab4f1b5",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r8-api-focused.log",
+      "bytes": 5997,
+      "sha256": "30272d7d56b9cc5b150870239ef1e69eac902438528ebed41c3db41f1b30532c",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "fixer-r8-api.log",
+      "bytes": 2969,
+      "sha256": "dc7ae74330aab1222f56852e2f507fa54242f42a2a5412e343a9a4af3c72a124",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "fixer-r8-archive.log",
+      "bytes": 9909,
+      "sha256": "60e2b5a8aa4a399417dc18888eff5fe8f35c8836d871fdfcd35d8b347952a327",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r8-clippy-api.log",
+      "bytes": 17166,
+      "sha256": "8514c6949a5c186a77e4461808425eb516274375fb9aa1c6291bab0ee8384fbe",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r8-clippy-archive.log",
+      "bytes": 1308,
+      "sha256": "7e5568a2c86d59f2f7398a8efcaafcef4fba38261f7edfeb0dd6ec5b4b43b15c",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r8-db-sequence.log",
+      "bytes": 548,
+      "sha256": "e0e9e6ff9c3d0779f267a1c16855c45f778d93cd87e9dc115308d86be2c2baa6",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r8-diff-check.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "empty"
+    },
+    {
+      "path": "fixer-r8-fmt.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "empty"
+    },
+    {
+      "path": "fixer-r8-gate.log",
+      "bytes": 1183,
+      "sha256": "4059fa5ac51e0a8488210ad7272707ef696e9bcd7171394bb64529e1ea190e52",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r8-integrated-hashes.log",
+      "bytes": 817,
+      "sha256": "81fda6c9029805d6f4a6adb4bedcf9aa65275ad1a7b02a5a1056178215101036",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "fixer-r8-source-hashes.log",
+      "bytes": 1251,
+      "sha256": "54a1410aef7fb36744a18538d073f1b9dc8daae146abc8ab8a26a160139289a5",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r9-api-clippy.log",
+      "bytes": 17166,
+      "sha256": "d3dcc392a08216b9f8b949c7ed638d8d1b69b2a824d3f87ff342f197573a446c",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r9-api.log",
+      "bytes": 6977,
+      "sha256": "cc0bddbe543a4db1d9c0ad6624d70e93fea7fe9470863f6799864ada56a5530b",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r9-archive-clippy.log",
+      "bytes": 1308,
+      "sha256": "62925643940028b0b5eb87d0e7affee721be6822914381af35221b03df401ba0",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r9-archive.log",
+      "bytes": 10250,
+      "sha256": "2331775cc3319df3fac14d2c8c0f1ca33e00fc93c8efa6074cde7808d76cf147",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r9-diff-check.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "empty"
+    },
+    {
+      "path": "fixer-r9-gate-base.log",
+      "bytes": 41,
+      "sha256": "16605bf23fa270c06a734dee024493d088ab618b9a9fde7f66be1a59a423c1de",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r9-gate.log",
+      "bytes": 1631,
+      "sha256": "9bef8bfb4461d6b38cdd385993c08518d3797edd79c1f71fabd0a3ca619656d3",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-r9-rustfmt.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "empty"
+    },
+    {
+      "path": "fixer-r9-source-hash-check.log",
+      "bytes": 817,
+      "sha256": "81fda6c9029805d6f4a6adb4bedcf9aa65275ad1a7b02a5a1056178215101036",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "fixer-r9-source-hashes.log",
+      "bytes": 1251,
+      "sha256": "820d73a5a0d2b297992200733d8020b1868a4c0371b7303fbb5c78222ac60d35",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "fixer-restart-archive-clippy.log",
+      "bytes": 972,
+      "sha256": "53856e53460fceb1d76d843d81388e5620a0b99baf3335e177a4577a4c2c9538",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "fixer-restart-archive.log",
+      "bytes": 8825,
+      "sha256": "128d37a39573b82b5872ab403ef3fc5ca5d4c9c3bca82e991fa6e9a7b4e56f09",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "fmt-baseline.log",
+      "bytes": 2031,
+      "sha256": "d449f883945e110b3db35babe236f3c3a06f93220e743be55813a277b22ab436",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "fmt-check.log",
+      "bytes": 2399,
+      "sha256": "96e62b5a8cdc3f40b8f291954f29b284de552bfbcf13afd4f8635bd27868f68c",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "frontend-build.log",
+      "bytes": 1902,
+      "sha256": "61f38179173685990da759dc6586ba422fdd96407a4af4858f88f9f566741d8d",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "frontend-build2.log",
+      "bytes": 1902,
+      "sha256": "0ae26c79599ad99704db79d5568d31a0cf92b3f6d5c011add835434913933c6e",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "frontend-tests.log",
+      "bytes": 1504,
+      "sha256": "9d5f9869508a9a76ce018c968eee28f5a8cda7b811b8a9a9e8f9b698d15465e8",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "gate-final.log",
+      "bytes": 1841,
+      "sha256": "56f023eafd7410e0eaaf40df52b9ceb8ce824d28ed3d05b59d471ed4bb6fd1c8",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "gate-main.log",
+      "bytes": 1486,
+      "sha256": "213aaf7e9e9464673ff88495549a789ee6cc37ebdbcfc27ee468a977dd01a1c6",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "gate-round1.log",
+      "bytes": 1577,
+      "sha256": "0735381f941fa23f18e635e8195abe2417eddf2f3f072787413c69aed78bf00e",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "gate-round2.log",
+      "bytes": 189,
+      "sha256": "27149f4fba4c94d9e8ae1a1de1132be6e8923e4739983aed4d07c571532b1c67",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "gate-round8.log",
+      "bytes": 2389,
+      "sha256": "7cba831eb97ef53dc9077ef2dc5697ba703fbc8273106b807c532a4b1b1a630c",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "integrated-api-tests.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "empty"
+    },
+    {
+      "path": "npm-ci.log",
+      "bytes": 225,
+      "sha256": "96430485ca55dfbd0ed4904268350a2840348e42c4d90e2a04e5bb5988e37847",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "package1-gate.log",
+      "bytes": 438,
+      "sha256": "34c0da6e8a963ff5774c1ef60b986b6e440a5d4db0cd8c6c92653cd0716e4481",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "package2-gate.log",
+      "bytes": 585,
+      "sha256": "f32cd75d62eb8e6771a8168d6875c1dd48a711c3ed3fce154da3b055a1eda28f",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "parent-r6-archive.log",
+      "bytes": 9142,
+      "sha256": "c870f5bdfbea0743142e420818e5342a0eff236450647ee7742b3c820d9b35c8",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "parent-r7-api-clippy-retry.log",
+      "bytes": 24099,
+      "sha256": "ee401d3a4e8831096792e15c75b585c772517b88424cc5c5fd0e99d2db4be079",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "parent-r7-api-clippy.log",
+      "bytes": 221,
+      "sha256": "4f798223f3d72cd47ae717dd0264d2aa10023e53a4c48d538b275d76f9dd2450",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "parent-r7-archive-clippy.log",
+      "bytes": 972,
+      "sha256": "6ee653be3e91ab3e946b3d868743be1a736cb4530e7c41d86b2231f65aac3b61",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "parent-r7-archive.log",
+      "bytes": 9576,
+      "sha256": "cdfb329a750a21483b126ffb58d8e48b5707ec1e99001992cbc0b16ad8e25760",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "parent-r9-live-query-synthetic.log",
+      "bytes": 221,
+      "sha256": "0ed4aa90a8e254b494d760e92ddb0c7151038ae8ffeca5b3af9dc07e54029e95",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "provider-probe-build.log",
+      "bytes": 4538,
+      "sha256": "9d3c2e2a1f98d6d6715a11da2d61a6830ca5a99067938a34e339d604234c8b49",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "pruefung/daten-vorher.log",
+      "bytes": 813,
+      "sha256": "751373f776f46e9db122cc818a9886ede87241b604fdbe264012159aed15f35b",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "pruefung/fixture-bestaetigung.log",
+      "bytes": 108,
+      "sha256": "dda302aa3790c4293c87d46af9e94c03ae1751c5e084059f12f8f75cf3880492",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "pruefung/moli-bestaetigung-ergebnis.log",
+      "bytes": 593,
+      "sha256": "94360bfc0280ce13446a25be9d15823777dac15c6648f2cfadc782697cb1a68f",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "pruefung/moli-bestaetigung.log",
+      "bytes": 113,
+      "sha256": "e60122e6ba839017db7860646cb20debf68bc12c5390ef4a015e4fe5af2106c6",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "pruefung/moli-pruefung.log",
+      "bytes": 580,
+      "sha256": "75bf7fb76bd5b7ce4c165762548595818e3c135234c92d834c911141816e3bc5",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "pruefung/moli-pruefung2.log",
+      "bytes": 593,
+      "sha256": "0f4777cb56c2e4ecc1b85dc4b5f4d1cb1e30c44748fc95ae0e3021b8d3e14f2c",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "pruefung/moli-server.log",
+      "bytes": 113,
+      "sha256": "a87bee102464da60b1646f8e5bcb67cb79da6dd01d313e54b79a848a68c12ed1",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "pruefung/moli-server2.log",
+      "bytes": 113,
+      "sha256": "bd3928a30615ceb44fe917be2be681033bef2fb2748dda7fab7d55ec10c10204",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "pruefung/provider-vor-release.log",
+      "bytes": 220,
+      "sha256": "3cc97f441430a3918c40e124a4e8d582720070f9c10b4c82e7ab273a2abb7a7c",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "pruefung/services-vor-cachebereinigung.log",
+      "bytes": 1158,
+      "sha256": "76f141c5abf81bd72c7274e71b2073574c36e34af27657d55334cc601903a1b7",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "pruefung/services-vorher.log",
+      "bytes": 1158,
+      "sha256": "76f141c5abf81bd72c7274e71b2073574c36e34af27657d55334cc601903a1b7",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "pruefung/services-wiederanlauf.log",
+      "bytes": 1158,
+      "sha256": "76f141c5abf81bd72c7274e71b2073574c36e34af27657d55334cc601903a1b7",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "pruefung/ui-fixture-server.log",
+      "bytes": 108,
+      "sha256": "dda302aa3790c4293c87d46af9e94c03ae1751c5e084059f12f8f75cf3880492",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "pruefung/ui-fixture-server2.log",
+      "bytes": 108,
+      "sha256": "dda302aa3790c4293c87d46af9e94c03ae1751c5e084059f12f8f75cf3880492",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "pruefung/ui-fixture-server3.log",
+      "bytes": 108,
+      "sha256": "dda302aa3790c4293c87d46af9e94c03ae1751c5e084059f12f8f75cf3880492",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "release-build.log",
+      "bytes": 15534,
+      "sha256": "c65468b57b28ee6c4aef0af3f9828048ef404b350067cbefa24078499e5aa66f",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "release-current-main-build.log",
+      "bytes": 2271,
+      "sha256": "9e99b4d79455d4e1c4c095bc4557a5b2da9481758530ac04b3a8c95f06fb26fc",
+      "outcome": "already_saved"
+    },
+    {
+      "path": "restart-api-tests.log",
+      "bytes": 18010,
+      "sha256": "f0a6dd429c89eecd0e0a1940ea6e6c9aebd2012a6baeb1309b9ad471231b786a",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "restart-archive-clippy.log",
+      "bytes": 9432,
+      "sha256": "1f58d09f5ed5c23f54c13555908fd3051a0f3ecf8a77d54500121dd7c00e4a52",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "restart-archive-tests.log",
+      "bytes": 10036,
+      "sha256": "ecebb3e322bb50a2297d586c936afca2c4756e4deae892a89c5c8293fbe527cc",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "restart-frontend-build.log",
+      "bytes": 1902,
+      "sha256": "aa5d8cbb3f7a85aeec16961dbe618c04d446e582d24a79879b852e802740b40d",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "restart-frontend-tests.log",
+      "bytes": 1979,
+      "sha256": "741400cc74a55b61c116a4d14c4d1936d406e3ff23780669c7d4484184ca9ff8",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "restart-gate-round6.log",
+      "bytes": 2172,
+      "sha256": "f3a2ba9ae17363fa8e6241c697b727b9686b248c35aa7718d556003590f44e61",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "website-build.log",
+      "bytes": 11743,
+      "sha256": "1c13d25caa60888419990e2c39314515ade667a64ba673e6d97d5b74cc3d6dee",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "website-npm-ci.log",
+      "bytes": 225,
+      "sha256": "ad96d3e2ef5fd3d6a32b66947aeefd74f65a297332c499ef88a8a89104d46ede",
+      "outcome": "preserved_here"
+    },
+    {
+      "path": "youtube-client-tests.log",
+      "bytes": 2609,
+      "sha256": "d5c581934a2e2ff7b21ced64b8230f7b7a932b5279e7a4fe35b1913663a96c03",
+      "outcome": "preserved_here"
+    }
+  ]
+}

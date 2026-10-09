@@ -1,0 +1,46 @@
+{
+  "proof": "main_session_reported_final_evidence",
+  "reported_by_session": "9fffdbdc-3f14-4f4a-b93d-4437d1133cc6",
+  "reported_by_thread": "d264f838-4a47-4b9e-9bf2-12efa37223f7",
+  "source": "Explicit orchestrator messages in this worker conversation on 2026-10-09. These are main-session results, not independently repeated worker probes.",
+  "historical_deploy": {
+    "release_sha": "e0e9fde20ec27f87acc8833e3d93dcdbe4d2934d",
+    "process_check_exit": 0,
+    "pids": {"bot": 2453730, "dashboard": 2454071, "coaching": 2455109},
+    "all_active": true,
+    "all_deleted_false": true,
+    "all_nrestarts_zero": true
+  },
+  "historical_journal": {
+    "since": "2026-10-09 02:28:37 UTC",
+    "until": "2026-10-09 02:45:00 UTC",
+    "units": ["deadlock-twitch-bot-rust", "deadlock-twitch-dashboard-rust", "deadlock-twitch-stream-coaching-watch", "deadlock-twitch-migrate"],
+    "priority": "err",
+    "output_fields": ["__REALTIME_TIMESTAMP", "PRIORITY", "_SYSTEMD_UNIT"],
+    "error_query_exit": 0,
+    "error_query_output_bytes": 0,
+    "positive_control_exit": 0,
+    "positive_control_record": {
+      "_SYSTEMD_UNIT": "deadlock-twitch-bot-rust.service",
+      "PRIORITY": 6,
+      "__REALTIME_TIMESTAMP": "1791513892545701"
+    },
+    "message_or_secret_values_read": false,
+    "rights_units_or_wrappers_changed": false,
+    "limited_elevated_read_finished": true,
+    "worker_repeated_elevated_read": false
+  },
+  "current_process_state_reported_separately": {
+    "release_sha": "fdee652aabefb7e4f4e08fe1b287f87baca152c1",
+    "process_check_exit": 0,
+    "pids": {"bot": 1721897, "dashboard": 1722048, "coaching": 1723139},
+    "all_active": true,
+    "all_deleted_false": true,
+    "all_nrestarts_zero": true,
+    "source_fix_sha": "4177752abf6a65b865de2817e170a9907001c38e",
+    "source_fix_ancestor_of_current_release_exit": 0
+  },
+  "function_result_measured_at": "2026-10-09T02:32:35.13781+00:00",
+  "function_result": {"confirmed": 70, "unavailable": 7, "unresolved_historical_cases": [10, 11, 2941, 2995, 2996]},
+  "new_build_deploy_provider_browser_or_test_run": false
+}

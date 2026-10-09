@@ -1,0 +1,22 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 24,
+  "zeit": "2026-10-09T12:38:41Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "abschluss",
+  "gebaut": "ja",
+  "reviewt": "ja",
+  "gemergt": "ja",
+  "live": "ja",
+  "sha": "4177752abf6a65b865de2817e170a9907001c38e",
+  "historischer_release_sha": "e0e9fde20ec27f87acc8833e3d93dcdbe4d2934d",
+  "aktueller_release_sha_hauptsession": "fdee652aabefb7e4f4e08fe1b287f87baca152c1",
+  "beleg_checkpoint": "eb3336196dde2bf2904134a3604d7080df514863",
+  "nachweise": ["ABSCHLUSS.md", "pruefung/main-session-final-proof.json", "pruefung/cleanup-artifact-inventory.json", "pruefung/ignored-log-originals.txt"],
+  "blocker": [],
+  "journalbeleg": "Ausdrücklich übernommener Hauptsession-Beleg: begrenztes ursprüngliches Deployfenster, vier Units, Priorität err, Exit0 ohne Ausgabe, positive Botkontrolle Exit0. Worker hat keinen erhöhten Zugriff wiederholt. Aktueller Prozessstand fdee652a zeitlich getrennt, Fix-Ancestor Exit0.",
+  "artefakte": "140 ignorierte eigene Logs inventarisiert:54 bereits erhalten,14 leer,72 zusätzliche Originale unverändert vor Cleanup gesichert. Lokaler Secretscan ohne Funde, Exit0. PostgreSQL bereits gestoppt, pg_ctl status Exit3.",
+  "naechster_schritt": "Abschlussdoku regulär vollständig prüfen und auf main veröffentlichen. Danach eigene temporäre Ressourcen und gemergten Featurebranch/Worktree nach Ancestor-Prüfung entfernen, tatsächlichen Cleanupbericht veröffentlichen und als letzten operativen Schritt selbst settlen. Keine neue Test-, Provider-, Browser-, Build- oder Deployrunde; geschützte Release-/Buildbäume unverändert."
+}
