@@ -1,0 +1,227 @@
+
+added 219 packages in 48s
+
+> dashboard_v2@0.0.0 build
+> tsc -b && vite build
+
+(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - `__dirname` (vite.config.ts:14:27). Use `import.meta.dirname` instead
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.
+vite v8.3.1 building client environment for production...
+transforming...
+
+/brand/fonts/manrope-latin.woff2 referenced in /brand/fonts/manrope-latin.woff2 didn't resolve at build time, it will remain unchanged to be resolved at runtime
+
+/brand/fonts/sora-latin.woff2 referenced in /brand/fonts/sora-latin.woff2 didn't resolve at build time, it will remain unchanged to be resolved at runtime
+✓ 3104 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                               1.36 kB │ gzip:   0.56 kB
+dist/assets/index-x3LVghQ4.css              185.56 kB │ gzip:  26.63 kB
+dist/assets/rolldown-runtime-hePW80VL.js      0.71 kB │ gzip:   0.42 kB
+dist/assets/query-FwnJxEWc.js                33.07 kB │ gzip:  10.08 kB
+dist/assets/react-BKtprR8h.js               206.83 kB │ gzip:  64.79 kB
+dist/assets/charts-BGgtzR2C.js              481.59 kB │ gzip: 133.17 kB
+dist/assets/index-X8mKHYK5.js             1,266.93 kB │ gzip: 320.43 kB
+
+[plugin builtin:vite-reporter] 
+(!) Some chunks are larger than 1000 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 1.76s
+
+added 185 packages in 19s
+
+> admin_dashboard@0.1.0 build
+> tsc -b && vite build
+
+(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - `__dirname` (vite.config.ts:10:25). Use `import.meta.dirname` instead
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.
+vite v8.3.1 building client environment for production...
+transforming...
+✓ 3045 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                             0.95 kB │ gzip:   0.44 kB
+dist/assets/index-CwvAnEc1.css             79.41 kB │ gzip:  13.76 kB
+dist/assets/rolldown-runtime-hePW80VL.js    0.71 kB │ gzip:   0.42 kB
+dist/assets/query-DdwBKAsK.js              28.63 kB │ gzip:   8.88 kB
+dist/assets/react-Dilr4hBx.js             206.83 kB │ gzip:  64.79 kB
+dist/assets/charts-BY1uUclO.js            385.25 kB │ gzip: 110.61 kB
+dist/assets/index-C-Fmvogm.js             571.08 kB │ gzip: 155.41 kB
+
+✓ built in 1.72s
+
+added 160 packages in 12s
+
+> earlysalty-website@1.0.0 build
+> tsc -b && node scripts/vite-build.mjs
+
+(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - `__dirname` (vite.config.ts:47:25). Use `import.meta.dirname` instead
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.
+vite v8.3.1 building client environment for production...
+<script src="/brand/nav.js"> in "/v1/index.html" can't be bundled without type="module" attribute
+transforming...
+
+/brand/tokens.css doesn't exist at build time, it will remain unchanged to be resolved at runtime
+
+/brand/nav.css doesn't exist at build time, it will remain unchanged to be resolved at runtime
+
+/streamer/brand/doorman/deco-fan-pattern.svg referenced in /streamer/brand/doorman/deco-fan-pattern.svg didn't resolve at build time, it will remain unchanged to be resolved at runtime
+
+/streamer/fonts/manrope-latin-ext.woff2 referenced in /streamer/fonts/manrope-latin-ext.woff2 didn't resolve at build time, it will remain unchanged to be resolved at runtime
+
+/streamer/fonts/manrope-latin.woff2 referenced in /streamer/fonts/manrope-latin.woff2 didn't resolve at build time, it will remain unchanged to be resolved at runtime
+
+/streamer/fonts/sora-latin-ext.woff2 referenced in /streamer/fonts/sora-latin-ext.woff2 didn't resolve at build time, it will remain unchanged to be resolved at runtime
+
+/streamer/fonts/sora-latin.woff2 referenced in /streamer/fonts/sora-latin.woff2 didn't resolve at build time, it will remain unchanged to be resolved at runtime
+✓ 2381 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/clips/index.html                         1.30 kB │ gzip:   0.58 kB
+dist/vertriebler/index.html                   1.32 kB │ gzip:   0.60 kB
+dist/affiliate-portal/index.html              1.66 kB │ gzip:   0.64 kB
+dist/faq/index.html                           1.68 kB │ gzip:   0.70 kB
+dist/onboarding/index.html                    1.96 kB │ gzip:   0.79 kB
+dist/vergleich/index.html                     2.07 kB │ gzip:   0.79 kB
+dist/v3/index.html                            2.55 kB │ gzip:   0.85 kB
+dist/v1/index.html                            8.97 kB │ gzip:   2.27 kB
+dist/index.html                              96.89 kB │ gzip:  17.36 kB
+dist/assets/gemeinsam-DDXhcMV7.css          105.87 kB │ gzip:  20.99 kB
+dist/assets/streamerComparison-D8MSwjlR.js    0.24 kB │ gzip:   0.21 kB
+dist/assets/faq-DY-p_peL.js                   0.25 kB │ gzip:   0.21 kB │ map:     0.94 kB
+dist/assets/onboarding-BQH_Klkw.js            0.27 kB │ gzip:   0.22 kB │ map:     0.93 kB
+dist/assets/affiliatePortal-Beu-rt1b.js       0.27 kB │ gzip:   0.22 kB │ map:     0.91 kB
+dist/assets/affiliateProgram-C32CGxxu.js      0.27 kB │ gzip:   0.22 kB │ map:     0.92 kB
+dist/assets/streamerV3-BEWV8QSg.js            0.37 kB │ gzip:   0.25 kB │ map:     1.28 kB
+dist/assets/rolldown-runtime-CbXtAM7H.js      0.58 kB │ gzip:   0.36 kB
+dist/assets/streamerV1-zbqtuM82.js            0.77 kB │ gzip:   0.38 kB │ map:     3.54 kB
+dist/assets/prerenderEntry-C-d5Whpv.js        0.83 kB │ gzip:   0.43 kB │ map:     1.56 kB
+dist/assets/clips-CdcwNtZI.js                15.49 kB │ gzip:   5.01 kB │ map:    36.90 kB
+dist/assets/gemeinsam-SiEX4Lck.js           829.85 kB │ gzip: 240.21 kB │ map: 3,345.15 kB
+
+✓ built in 9.77s
+Prerendered 1 page:
+  /
+[plugin builtin:vite-reporter] 
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <h1>. It was passed a child from ForwardRef(motion.h1). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <p>. It was passed a child from ForwardRef(motion.p). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <circle>. It was passed a child from ForwardRef(motion.circle). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <line>. It was passed a child from ForwardRef(motion.line). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <line>. It was passed a child from ForwardRef(motion.line). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <line>. It was passed a child from ForwardRef(motion.line). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <line>. It was passed a child from ForwardRef(motion.line). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <circle>. It was passed a child from ForwardRef(motion.circle). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <circle>. It was passed a child from ForwardRef(motion.circle). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <circle>. It was passed a child from ForwardRef(motion.circle). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <circle>. It was passed a child from ForwardRef(motion.circle). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <line>. It was passed a child from ForwardRef(motion.line). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+Each child in a list should have a unique "key" prop.
+
+Check the top-level render call using <div>. It was passed a child from ForwardRef(motion.div). See https://react.dev/link/warning-keys for more information.
+
+[exited with code 0]

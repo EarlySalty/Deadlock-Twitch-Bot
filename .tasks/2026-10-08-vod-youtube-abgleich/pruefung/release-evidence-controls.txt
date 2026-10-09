@@ -1,0 +1,4 @@
+BEGIN
+{"proof": "reporter_control", "fixture": "empty", "nonempty": false, "processed_observations": 0, "original_source_guard_passes": true}
+{"proof": "reporter_control", "fixture": "valid_part", "nonempty": true, "processed_observations": 1, "original_source_guard_passes": true}
+COMMIT

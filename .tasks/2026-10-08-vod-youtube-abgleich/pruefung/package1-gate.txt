@@ -1,0 +1,3 @@
+ALLOW: No merge-blocking defect found in this task-evidence package.
+
+1. .tasks/2026-10-08-vod-youtube-abgleich/pruefung/live-evidence.sql:28 | NIT: Empty observations pass both source guards here and at line 71; `confirmed_current` then trusts `state`/`complete`. | The recorded SQL probe exercised no matching proof. Check valid and empty-proof fixtures against the current API validator before treating this query as release evidence.

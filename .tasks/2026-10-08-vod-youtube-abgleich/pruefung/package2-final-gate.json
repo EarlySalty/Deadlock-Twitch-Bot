@@ -1,0 +1,14 @@
+{
+  "allow_phase": "phase1",
+  "allow_sha": "4177752abf6a65b865de2817e170a9907001c38e",
+  "base_sha": "c7440400ce566393b812738e53bc5d7e56153637",
+  "branch": "feat/vod-youtube-abgleich-20261008",
+  "created_at": "2026-10-09T00:07:31.535091+00:00",
+  "diff_bytes": 338196,
+  "head_sha": "4177752abf6a65b865de2817e170a9907001c38e",
+  "local_verdict": "allow",
+  "phase1_model": "gpt-6.1-sol",
+  "repo": "/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008",
+  "reviewer_model": "gpt-6.1-sol",
+  "evidence": "Selected metadata read from the existing branch-specific gate state. Normal push bhsboubci exited 0 and published c7440400..4177752a to main. The owned clean release clone fast-forwarded to this SHA. All 19 product, migration, frontend and test paths match preserved snapshot f37b7ecf095686acebd0b0920f0ba40078f5cc14; git diff --exit-code returned 0. No gate changes or source exclusions."
+}

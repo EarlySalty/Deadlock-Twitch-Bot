@@ -1,0 +1,4 @@
+9c8e054acdfb5d4cf0329604f0ec91a1bcedad8cedd759be8707aa9b472e4871  /usr/local/bin/deploy-twitch-release
+9c8e054acdfb5d4cf0329604f0ec91a1bcedad8cedd759be8707aa9b472e4871  /home/nathanael/repos/twitch-release-youtube-c5d0-20261008/ops/systemd/deploy-twitch-release
+fa2606eef0ee71b0c570be17e1d0648b15401e7cb0e1be037509d4a3ddf4469d  /usr/local/sbin/install-twitch-release
+fa2606eef0ee71b0c570be17e1d0648b15401e7cb0e1be037509d4a3ddf4469d  /home/nathanael/repos/twitch-release-youtube-c5d0-20261008/ops/systemd/install-twitch-release.sh

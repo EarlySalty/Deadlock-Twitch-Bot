@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 21,
+  "zeit": "2026-10-09T01:26:03Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "release",
+  "gebaut": "ja",
+  "reviewt": "ja",
+  "gemergt": "ja",
+  "live": "nein",
+  "sha": "4177752abf6a65b865de2817e170a9907001c38e",
+  "nachweise": ["REGISTER.md", "HANDOFF.md", "pruefung/package2-final-gate.json", "pruefung/release-build-4177752a.txt", "pruefung/release-frontends.txt"],
+  "blocker": [],
+  "naechster_schritt": "Erster Sieben-Binary-Releasebau Exit0 nach50m37s Compilerzeit. Frisches origin/main inzwischen e0e9fde20ec27f87acc8833e3d93dcdbe4d2934d; eigener sauberer Stagingclone regulär vorgezogen. Frontend-/Migrationsbäume unverändert, git diff Exit0. Installierte Deploywerkzeuge identisch mit aktuellem Main. Genau ein cargo-slot-Aufruf b94ek0pqp mit --jobs3 baut die sieben exakten aktuellen ELF-Revisionen. Nach dessen Ergebnis Herkunft und aktuellen Main prüfen, regulär deployen und vollständig live belegen. Kein paralleler eigener Bau, kein alter Stand deployt, keine fremde Sessionkoordination."
+}

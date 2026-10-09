@@ -1,0 +1,4 @@
+ALLOW: No blocking defect established in the supplied revision.
+
+1. bot/dashboard_v2/src/components/socialmedia/VodArchiveTab.tsx:44 | NIT: Partial observations replace all saved YouTube links. | During a partially successful check, existing video links absent from the observation list disappear. Merge both lists by video ID.
+2. bot/dashboard_v2/tests/vodArchive.test.tsx:83 | NIT: Fixtures at lines 83, 90, and 95 omit required `youtube_check.can_request`. | These fixtures violate `ArchivedVod` and fail TypeScript checking when the tests are included. Add the field to all three.

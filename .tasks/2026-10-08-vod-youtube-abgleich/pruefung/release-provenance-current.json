@@ -1,0 +1,135 @@
+{
+  "source_sha": "e0e9fde20ec27f87acc8833e3d93dcdbe4d2934d",
+  "required_binary_count": 7,
+  "all_required_elf_revisions_match": true,
+  "native_collector": true,
+  "dirty_revisions": 0,
+  "binaries": {
+    "tb-bot": {
+      "embedded_revision": "e0e9fde20ec27f87acc8833e3d93dcdbe4d2934d",
+      "sha256": "84ac00a090e7bb5c2d09a39d07f3b25546937685e1ac0e996a0aa80a1e30185f",
+      "bytes": 47181376
+    },
+    "tb-dashboard": {
+      "embedded_revision": "e0e9fde20ec27f87acc8833e3d93dcdbe4d2934d",
+      "sha256": "e8a26ba240615683586debb5f2d7bfe72772982969d7ba8ef987afa4ed240fb3",
+      "bytes": 46542520
+    },
+    "tb-stream-audit": {
+      "embedded_revision": "e0e9fde20ec27f87acc8833e3d93dcdbe4d2934d",
+      "sha256": "254e9470d957874b851201faf40a3e22ff7ae209f33e8a76cfa896bd3e802e73",
+      "bytes": 10158568
+    },
+    "tb-config-check": {
+      "embedded_revision": "e0e9fde20ec27f87acc8833e3d93dcdbe4d2934d",
+      "sha256": "2d1252301177a5774dc4768a1ad0547fc05f8b7ee10139311011cd572ea61d7b",
+      "bytes": 2900064
+    },
+    "tb-llm-usage-recover": {
+      "embedded_revision": "e0e9fde20ec27f87acc8833e3d93dcdbe4d2934d",
+      "sha256": "9de885f58e1e603f0ee3ea55dea427b198c27eafb8fe59cadfa1ce9790eb4c76",
+      "bytes": 6078960
+    },
+    "tb-twitch-watchdog": {
+      "embedded_revision": "e0e9fde20ec27f87acc8833e3d93dcdbe4d2934d",
+      "sha256": "cdce1bb73eb1a3f05f2f8424f90680202591a514faf1f63912ad5c3808e2ec34",
+      "bytes": 8820864
+    },
+    "clip_context_learn": {
+      "embedded_revision": "e0e9fde20ec27f87acc8833e3d93dcdbe4d2934d",
+      "sha256": "252f7e9d6b6b2a21c4bb1e1d822801bdd32098bb958a7a600bf974dc230d1cba",
+      "bytes": 7202096
+    }
+  },
+  "assets": {
+    "bot/dashboard_v2/dist": {
+      "assets/charts-BGgtzR2C.js": "fcc08fcf381d9b4f01e4dabbf13dd8708ef3a7e65c1ad1eb0fc9a3614784b05f",
+      "assets/index-X8mKHYK5.js": "a1c52f1ec7cca5f53c0023e36b474de14d531f29c43eae0fe6a84dfce126fc11",
+      "assets/index-x3LVghQ4.css": "cf067cff2a405be83a9c0c07acd20f2ddddab78c3d9d3c789dff7fcae068b49d",
+      "assets/query-FwnJxEWc.js": "3355524e18c965fb34fae3c19d166e6a1b46b66ec9d72b96904bd812396046af",
+      "assets/react-BKtprR8h.js": "bd5b828cc30b1cc9ed9491d7c103d91ac6a7989d7a7fa64cc1dbb2bedaaa274d",
+      "assets/rolldown-runtime-hePW80VL.js": "580ad8c58061a4dde99bde0a56905e382f0568516ee2f5b84dbfb52085709021",
+      "brand/ddc-logo.svg": "8f7e2b3269942c09a25e654875d4e97bca84fd96d849e2590b76d4ed7b6fd0a5",
+      "brand/deadlock-d-logo.png": "9647e2a596cfa341a607f33e3f64071f0ef3515742156fcb0734948e367cc8c1",
+      "brand/icon-community-bars.svg": "72b60f7e0479089e514d7366c1ccd9bb8e5a0c83d0264bad846be58599a29db8",
+      "brand/icon-raute-ddc.svg": "d2c5c34a49983f601e54b2f0c6faac7b27dd352a399f92f6814ffb6cf8a974be",
+      "brand/logo-community-bars.svg": "567c5adfe73324718a48385052f1b5ce58fd6c11606b474e5734e5131316be52",
+      "brand/logo-raute-ddc.svg": "5cbb7dbf97e815189f86a9f0b2344956c16c299595da707e8dd387f52a9a8c4f",
+      "index.html": "54b479c702fc1575830e9ef309d1038e2fc53a171339014efc9a4fe940d38cb4",
+      "uplink/bilder/1-stream.svg": "43410d12c4d7bcf85702cf52eee58e2f10d5ca28fda50a818eede77a8f547ef6",
+      "uplink/bilder/2-docks-menue.svg": "e0e683e5fefbe201d9b9dea4a068b7efce47ee7eb7007cde1fc8135df8d69484",
+      "uplink/bilder/3-docks-dialog.svg": "e8e8676b42bc40fb3df62dc487e305e941e66445d10cbd6df8bd6dbd069538e2",
+      "uplink/bilder/4-ausgabe.svg": "2ea0a375b01e19f5995eb8074c11cc859190fa5477f1e4c20eeba1e3012ba08b",
+      "uplink/doc.css": "15e17ea22d188e50f8759d06133e120356721e0b86b687ef260c03763039e816",
+      "uplink/index.html": "c19f1c0a539cc382e4c63a9bd31da7d0a20f58efaa48fee7d28dbd0b0475d95d",
+      "uplink/obs.html": "e28059e53f137ce16e2fba0e5e63f9dd0697099f88d45b024e3a92e74ff1d05b",
+      "uplink/stoerungen.html": "8260e04b887cd986f95916b855cd886b4e4ee9ab4053f89841dff1afba4599fc",
+      "uplink/was-ist.html": "e2e9f99a8d6fc119fe5c38ac73f593b812c95812085d523db4f5b64719a68fbf"
+    },
+    "bot/admin_dashboard/dist": {
+      "assets/charts-BY1uUclO.js": "24a83b2a2169ed16cfb99fc1d541eefe17ecb2100a106310493dc7912597e0fa",
+      "assets/index-C-Fmvogm.js": "8ecb8ec1015118781c35548c1670748799a85fa2d3a8df7bd982bb1d5ed71b13",
+      "assets/index-CwvAnEc1.css": "b6239827a3582d528243e23df997cb0a24891c29c318f6dd798401e7e86d55ea",
+      "assets/query-DdwBKAsK.js": "5aba602ad60a5bb71c2acd7ac4c0be17d0b5c4f634d3f4f617dc0d283e18a882",
+      "assets/react-Dilr4hBx.js": "c0eeabf650b7defff112fee67ccd39ebd05c0fd7ca6f6aa3094b0f5380e9bfc0",
+      "assets/rolldown-runtime-hePW80VL.js": "580ad8c58061a4dde99bde0a56905e382f0568516ee2f5b84dbfb52085709021",
+      "index.html": "2c3aced59ab617cd1ffb1441245174b8ef8636ef1cf2a4c26cddd19cf86fd7e6"
+    },
+    "website/dist": {
+      "affiliate-portal/index.html": "fb2b2a233c8f9cb55702ac79a938656cecf407a826f41f4bb5826aef419f7236",
+      "assets/affiliatePortal-Beu-rt1b.js": "137aa4c5a3ed202dee9087b19aaa9203f0c9c5c7884bf34494b48337c2b55754",
+      "assets/affiliateProgram-C32CGxxu.js": "8f45f14105324606c9d22e8dc781bc0501f46329d37e48f7ed73c8dc132cb210",
+      "assets/clips-CdcwNtZI.js": "d4b4dfb821e6ec6ecb2be2e5538e1e54143ebca7d1fb24d1006e08fa50c71d96",
+      "assets/faq-DY-p_peL.js": "4f9f80f560dbc9d764c87ccc4a87918983b1d74054e367ba45959e91a7043e67",
+      "assets/gemeinsam-DDXhcMV7.css": "958231c9f51c9103fe5f52ffcc3e33f0daff1693f84a4480a98e5421a48b2a80",
+      "assets/gemeinsam-SiEX4Lck.js": "0eabfa64e79e6952276a2a3bc4fadea22852cee44449e3b8f186b200e40ae135",
+      "assets/onboarding-BQH_Klkw.js": "206297bca40395044353a74fbd7125bbe74383d8813bffd551c42284baf24452",
+      "assets/prerenderEntry-C-d5Whpv.js": "cf651e83e8106e84669912b0f04258b04b2d33287e65bb9514c531957c50bbed",
+      "assets/rolldown-runtime-CbXtAM7H.js": "bbf7c5086ae414dc3f33777e3eebf16ea8631325b8bb4690d25091c03567f31a",
+      "assets/streamerComparison-D8MSwjlR.js": "190ec4f994df1a6dc19359499263347fe31b8eaa1d6ff01bd42940b8f4bfddf3",
+      "assets/streamerV1-zbqtuM82.js": "0e98f67b19c3f5cc14568559d6f899857626af179f637ba904a0fe30fd14421b",
+      "assets/streamerV3-BEWV8QSg.js": "3d786f843b2913d37f7a8dacc47d3329414d3ac8f165d9199712c0ded078c7be",
+      "brand/deadlock-d-logo.png": "9647e2a596cfa341a607f33e3f64071f0ef3515742156fcb0734948e367cc8c1",
+      "brand/doorman/concierge-key.png": "3332370c4fb99b6fa220ba64ac661b7403e7bc26eb7d0028ff10769eaa6c7e7c",
+      "brand/doorman/deco-fan-pattern.svg": "b4e9fe7dbc3e75705820bb2b0ba7f9c32cbf25ad0a4f2986979593632dfe9bbd",
+      "brand/doorman/deco-key.svg": "1ac582ab838222e66e61398a471154f069db0515eadafd6e06f8461aa40643db",
+      "brand/doorman/deco-tuerbogen.svg": "4f9ed4bdd7e21cd91e0f3725f1b2bb786248876c779faca93b195b454904cf49",
+      "brand/doorman/doorman-tuer.webp": "207bdffebeb87cb4a69b142ae744f789f81edea1db12f037ba004bb10d7e202b",
+      "brand/wordmark.svg": "4d5564c32942d745882d7d779e4a5e8b5518ca1709994e92f8b597e26b441610",
+      "clips/coolysdl.mp4": "6e168313b52875e4d7229cc3f94c9c2602ac9b5061d2e54ba48180bcf1de6d8c",
+      "clips/duzzel.mp4": "5591e3273ab9a3085f219317816fe6af611d132c44e682481029fc400b1f85aa",
+      "clips/index.html": "802fe97c82a9ce3ee4c49a4f63648712d15dabb76236d8a57b152ca5908283f9",
+      "clips/johnnyblazedx.mp4": "3cb61c80ec84b69ba785cac4ec3685e3e34d2182dd43aefce8bfc13627a62709",
+      "clips/kdenos.mp4": "1c29624603e6fcef0c0be8fb526226d92cf55ef0a1fc20ff8b23390e8642a8d1",
+      "clips/miracleghost9.mp4": "89adbc5590fe8d755221e8a3e5adf1132cfbe1c9dacbdec4b602bd32f7dc72b9",
+      "clips/pfp/coolysdl.png": "c24982e51bc5e32807a71453556afcd9ea829d400b45f6bee8ccc7f901c37525",
+      "clips/pfp/duzzel.png": "f8e30ea754c68f1ab1737370b2ab2ced5f4e500d643d1c0db90abf07ab99fe69",
+      "clips/pfp/johnnyblazedx.png": "1c93c35891c6a5b880c6f820fe0294553f1ceaa7a2f2ebb4ff938b431161caeb",
+      "clips/pfp/kdenos.png": "4d146dbeedc2a2c27915f2109b581144647d985754c5bdad669b6df4d460d607",
+      "clips/pfp/miracleghost9.png": "81ce86927ea3a4d43c45623b8804ef5942226ec1a669a8ab122ebde525e9e8db",
+      "clips/pfp/whysolowkey.png": "c2ef473e05cdf653c349aef35c6a26246783d70169d929d3189a4981624ecc9c",
+      "clips/poster/coolysdl.jpg": "f5bec2852563172d2d122b71e3b7a8347a51a904fe8a7bbe43e0ac5ce7772ee7",
+      "clips/poster/duzzel.jpg": "f78b0302d8f70c9218389879ae57a10692e0e2a375a166046238b5e9510f260b",
+      "clips/poster/johnnyblazedx.jpg": "700f492c8fc058d1d161421100d795fb13f69f218e8e777b422feff3f6148e2b",
+      "clips/poster/kdenos.jpg": "60797659d0a5f4b69803863c879121a4ec0733b1e17e112965c77b76c2b74cfb",
+      "clips/poster/miracleghost9.jpg": "cd00b21466088ce89b0ea926f73f379424c4461c2da561c0dc39ea860313f25c",
+      "clips/poster/whysolowkey.jpg": "b4810ea23d7e1c7d6f70881975008fd562097f097e882fb96744e92afeb2291c",
+      "clips/whysolowkey.mp4": "e74e1650993a9e3d024642c7df952e83947d4f6f6d3def75ecacbfa1c7fe6e20",
+      "faq/index.html": "2b74404bad0113df62795acae9b27196c6b9d2af90cef34eb19febae48fe2b0d",
+      "favicon.svg": "baeae418d3239c9e989c0b993c31c89b2bbb40c8599435c21c47a35dab8da808",
+      "fonts/manrope-latin-ext.woff2": "3911b66d9f2e005a4b989223405d0e5032619c668597ba467cc76a23c8fffcfb",
+      "fonts/manrope-latin.woff2": "a30ddcd349703aff7464c34bef3fffdff405ee50c113440d7c8693c02d210972",
+      "fonts/sora-latin-ext.woff2": "08e1ba85bcb55277782f56766af09467dfe18cbeea49704203100c5797ac4cc5",
+      "fonts/sora-latin.woff2": "811e11966d29f3a01fcb19b087b61ac067d380665a55aebb7fcdf2cda95e4a93",
+      "index.html": "2b863dd394a2265ef83cb2d7e4952db0a6fb7d48fd9208d542173c0b28dcd378",
+      "og-image.png": "f59993dcc1e8fd251fd6a33f7e43ebb0de7cbedb8c01f53228077295115312bf",
+      "onboarding/index.html": "560b0de94f3c5c9b0e9ee7df7b3c9549d888ce5dd0a083895b83b39a69e1ba99",
+      "v1/index.html": "f53404cb2b15cddd8803b8552a5db2799792866d47eb919cdbb10712a4e3058e",
+      "v3/index.html": "4cce42e925412ed07a1db154bc8962b49e1f8e2a014a5950f7103e4da787d0f4",
+      "vergleich/index.html": "8169536d4edd829061fea8ed6787e73d3bee1fdfb39a11302a4188c664927d0f",
+      "vertriebler/index.html": "85ff056c5ed6598d9d00512e47e75ff5f97e5ae399a60a3a3f6162db13b5836b"
+    }
+  },
+  "migration_sha256": "0a1adc4108c95f64125ab564bcbbc4fabb1a14e4ff15e4d16a3683c688491739",
+  "migration_sqlx_sha384": "9e5496e4efa169f7e177551c68f9f2c85923eb971e0784d4b34e40d29823def4bb7b711e9cac839215b8154cd6482383"
+}

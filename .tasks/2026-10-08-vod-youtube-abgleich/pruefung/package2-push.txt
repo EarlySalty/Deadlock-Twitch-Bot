@@ -1,0 +1,542 @@
+== Security-Scan lokal (kein GitHub, keine Lizenz) ==
+Modus: Push-Gate (Secrets und RustSec blocken, Rest nur melden)
+[90m2:08AM[0m [32mINF[0m [1mscanned ~36284558 bytes (36.28 MB) in 13.9s[0m
+[90m2:08AM[0m [32mINF[0m [1mno leaks found[0m
+OK: gitleaks
+    Fetching advisory database from `https://github.com/RustSec/advisory-db.git`
+      Loaded 1295 security advisories (from /home/nathanael/.cargo/advisory-db)
+    Updating crates.io index
+    Scanning Cargo.lock for vulnerabilities (502 crate dependencies)
+Crate:     chacha20
+Version:   0.10.1
+Warning:   yanked
+
+Crate:     spin
+Version:   0.9.8
+Warning:   yanked
+
+warning: 2 allowed warnings found
+OK: cargo-audit
+2026-10-09 00:08:09 [WARN] unable to find a config path, falling back to default config
+warning[source-not-allowed]: detected 'git' source not explicitly allowed
+   ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:37:20
+   │
+37 │ brain-client 0.1.0 git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=d2028d8b0c96c2097dc9b92882bb96b73bf19fd0
+   │                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ source
+
+warning[source-not-allowed]: detected 'git' source not explicitly allowed
+   ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:38:23
+   │
+38 │ brain-contracts 0.1.0 git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=d2028d8b0c96c2097dc9b92882bb96b73bf19fd0
+   │                       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ source
+
+warning[source-not-allowed]: detected 'git' source not explicitly allowed
+   ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:80:21
+   │
+80 │ dbrain-builds 0.1.0 git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=d8c34270868e129098e12243f53f5b52ee507b8b
+   │                     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ source
+
+warning[source-not-allowed]: detected 'git' source not explicitly allowed
+   ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:81:25
+   │
+81 │ dbrain-population 0.1.0 git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=d8c34270868e129098e12243f53f5b52ee507b8b
+   │                         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ source
+
+warning[source-not-allowed]: detected 'git' source not explicitly allowed
+   ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:82:23
+   │
+82 │ dbrain-reasoner 0.1.0 git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=d8c34270868e129098e12243f53f5b52ee507b8b
+   │                       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ source
+
+warning[source-not-allowed]: detected 'git' source not explicitly allowed
+   ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:83:27
+   │
+83 │ deadlock-brain-core 0.1.0 git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=d8c34270868e129098e12243f53f5b52ee507b8b
+   │                           ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ source
+
+warning[source-not-allowed]: detected 'git' source not explicitly allowed
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:389:34
+    │
+389 │ uplink-infisical-transport 0.1.0 git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=d8c34270868e129098e12243f53f5b52ee507b8b
+    │                                  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ source
+
+warning[source-not-allowed]: detected 'git' source not explicitly allowed
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:391:34
+    │
+391 │ uplink-infisical-transport 0.1.1 git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=d2028d8b0c96c2097dc9b92882bb96b73bf19fd0
+    │                                  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ source
+
+warning[duplicate]: found 2 duplicate entries for crate 'base64'
+   ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:28:1
+   │  
+28 │ ╭ base64 0.22.1 registry+https://github.com/rust-lang/crates.io-index
+29 │ │ base64 0.23.1 registry+https://github.com/rust-lang/crates.io-index
+   │ ╰───────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'block-buffer'
+   ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:34:1
+   │  
+34 │ ╭ block-buffer 0.10.4 registry+https://github.com/rust-lang/crates.io-index
+35 │ │ block-buffer 0.12.1 registry+https://github.com/rust-lang/crates.io-index
+   │ ╰─────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'cpufeatures'
+   ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:67:1
+   │  
+67 │ ╭ cpufeatures 0.2.17 registry+https://github.com/rust-lang/crates.io-index
+68 │ │ cpufeatures 0.3.0 registry+https://github.com/rust-lang/crates.io-index
+   │ ╰───────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'crypto-common'
+   ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:74:1
+   │  
+74 │ ╭ crypto-common 0.1.7 registry+https://github.com/rust-lang/crates.io-index
+75 │ │ crypto-common 0.2.2 registry+https://github.com/rust-lang/crates.io-index
+   │ ╰─────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'digest'
+   ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:87:1
+   │  
+87 │ ╭ digest 0.10.7 registry+https://github.com/rust-lang/crates.io-index
+88 │ │ digest 0.11.3 registry+https://github.com/rust-lang/crates.io-index
+   │ ╰───────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'etcetera'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:100:1
+    │  
+100 │ ╭ etcetera 0.8.0 registry+https://github.com/rust-lang/crates.io-index
+101 │ │ etcetera 0.11.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'foldhash'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:109:1
+    │  
+109 │ ╭ foldhash 0.1.5 registry+https://github.com/rust-lang/crates.io-index
+110 │ │ foldhash 0.2.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 3 duplicate entries for crate 'getrandom'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:125:1
+    │  
+125 │ ╭ getrandom 0.2.17 registry+https://github.com/rust-lang/crates.io-index
+126 │ │ getrandom 0.3.4 registry+https://github.com/rust-lang/crates.io-index
+127 │ │ getrandom 0.4.2 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 4 duplicate entries for crate 'hashbrown'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:132:1
+    │  
+132 │ ╭ hashbrown 0.14.5 registry+https://github.com/rust-lang/crates.io-index
+133 │ │ hashbrown 0.15.5 registry+https://github.com/rust-lang/crates.io-index
+134 │ │ hashbrown 0.16.1 registry+https://github.com/rust-lang/crates.io-index
+135 │ │ hashbrown 0.17.1 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰──────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'hashlink'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:136:1
+    │  
+136 │ ╭ hashlink 0.10.0 registry+https://github.com/rust-lang/crates.io-index
+137 │ │ hashlink 0.11.1 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'heck'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:138:1
+    │  
+138 │ ╭ heck 0.4.1 registry+https://github.com/rust-lang/crates.io-index
+139 │ │ heck 0.5.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'hkdf'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:142:1
+    │  
+142 │ ╭ hkdf 0.12.4 registry+https://github.com/rust-lang/crates.io-index
+143 │ │ hkdf 0.13.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'hmac'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:144:1
+    │  
+144 │ ╭ hmac 0.12.1 registry+https://github.com/rust-lang/crates.io-index
+145 │ │ hmac 0.13.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'md-5'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:188:1
+    │  
+188 │ ╭ md-5 0.10.6 registry+https://github.com/rust-lang/crates.io-index
+189 │ │ md-5 0.11.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'nix'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:197:1
+    │  
+197 │ ╭ nix 0.29.0 registry+https://github.com/rust-lang/crates.io-index
+198 │ │ nix 0.31.3 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'nom'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:199:1
+    │  
+199 │ ╭ nom 7.1.3 registry+https://github.com/rust-lang/crates.io-index
+200 │ │ nom 8.0.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰───────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'r-efi'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:236:1
+    │  
+236 │ ╭ r-efi 5.3.0 registry+https://github.com/rust-lang/crates.io-index
+237 │ │ r-efi 6.0.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 3 duplicate entries for crate 'rand'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:238:1
+    │  
+238 │ ╭ rand 0.8.8 registry+https://github.com/rust-lang/crates.io-index
+239 │ │ rand 0.9.5 registry+https://github.com/rust-lang/crates.io-index
+240 │ │ rand 0.10.3 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'rand_chacha'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:241:1
+    │  
+241 │ ╭ rand_chacha 0.3.1 registry+https://github.com/rust-lang/crates.io-index
+242 │ │ rand_chacha 0.9.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰───────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 3 duplicate entries for crate 'rand_core'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:243:1
+    │  
+243 │ ╭ rand_core 0.6.4 registry+https://github.com/rust-lang/crates.io-index
+244 │ │ rand_core 0.9.5 registry+https://github.com/rust-lang/crates.io-index
+245 │ │ rand_core 0.10.1 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰──────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'redox_syscall'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:247:1
+    │  
+247 │ ╭ redox_syscall 0.5.18 registry+https://github.com/rust-lang/crates.io-index
+248 │ │ redox_syscall 0.9.2 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'serde_spanned'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:269:1
+    │  
+269 │ ╭ serde_spanned 0.6.9 registry+https://github.com/rust-lang/crates.io-index
+270 │ │ serde_spanned 1.1.1 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'sha2'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:274:1
+    │  
+274 │ ╭ sha2 0.10.9 registry+https://github.com/rust-lang/crates.io-index
+275 │ │ sha2 0.11.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'shlex'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:277:1
+    │  
+277 │ ╭ shlex 1.3.0 registry+https://github.com/rust-lang/crates.io-index
+278 │ │ shlex 2.0.1 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'sqlx'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:286:1
+    │  
+286 │ ╭ sqlx 0.8.6 registry+https://github.com/rust-lang/crates.io-index
+287 │ │ sqlx 0.9.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'sqlx-core'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:288:1
+    │  
+288 │ ╭ sqlx-core 0.8.6 registry+https://github.com/rust-lang/crates.io-index
+289 │ │ sqlx-core 0.9.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'sqlx-macros'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:290:1
+    │  
+290 │ ╭ sqlx-macros 0.8.6 registry+https://github.com/rust-lang/crates.io-index
+291 │ │ sqlx-macros 0.9.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰───────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'sqlx-macros-core'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:292:1
+    │  
+292 │ ╭ sqlx-macros-core 0.8.6 registry+https://github.com/rust-lang/crates.io-index
+293 │ │ sqlx-macros-core 0.9.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'sqlx-postgres'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:294:1
+    │  
+294 │ ╭ sqlx-postgres 0.8.6 registry+https://github.com/rust-lang/crates.io-index
+295 │ │ sqlx-postgres 0.9.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'syn'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:301:1
+    │  
+301 │ ╭ syn 2.0.119 registry+https://github.com/rust-lang/crates.io-index
+302 │ │ syn 3.0.6 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰───────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'thiserror'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:338:1
+    │  
+338 │ ╭ thiserror 1.0.69 registry+https://github.com/rust-lang/crates.io-index
+339 │ │ thiserror 2.0.21 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰──────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'thiserror-impl'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:340:1
+    │  
+340 │ ╭ thiserror-impl 1.0.69 registry+https://github.com/rust-lang/crates.io-index
+341 │ │ thiserror-impl 2.0.21 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰───────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'toml'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:355:1
+    │  
+355 │ ╭ toml 0.8.23 registry+https://github.com/rust-lang/crates.io-index
+356 │ │ toml 1.1.6+spec-1.1.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰───────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'toml_datetime'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:357:1
+    │  
+357 │ ╭ toml_datetime 0.6.11 registry+https://github.com/rust-lang/crates.io-index
+358 │ │ toml_datetime 1.1.1+spec-1.1.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'toml_edit'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:359:1
+    │  
+359 │ ╭ toml_edit 0.22.27 registry+https://github.com/rust-lang/crates.io-index
+360 │ │ toml_edit 0.25.15+spec-1.1.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰──────────────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'tower-http'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:365:1
+    │  
+365 │ ╭ tower-http 0.6.11 registry+https://github.com/rust-lang/crates.io-index
+366 │ │ tower-http 0.7.1 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰──────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 3 duplicate entries for crate 'uplink-infisical-transport'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:389:1
+    │  
+389 │ ╭ uplink-infisical-transport 0.1.0 git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=d8c34270868e129098e12243f53f5b52ee507b8b
+390 │ │ uplink-infisical-transport 0.1.0 /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/vendor/uplink-infisical-transport
+391 │ │ uplink-infisical-transport 0.1.1 git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=d2028d8b0c96c2097dc9b92882bb96b73bf19fd0
+    │ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'webpki-roots'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:409:1
+    │  
+409 │ ╭ webpki-roots 0.26.11 registry+https://github.com/rust-lang/crates.io-index
+410 │ │ webpki-roots 1.0.7 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'whoami'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:415:1
+    │  
+415 │ ╭ whoami 1.6.1 registry+https://github.com/rust-lang/crates.io-index
+416 │ │ whoami 2.1.3 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰──────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 3 duplicate entries for crate 'windows-sys'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:426:1
+    │  
+426 │ ╭ windows-sys 0.48.0 registry+https://github.com/rust-lang/crates.io-index
+427 │ │ windows-sys 0.52.0 registry+https://github.com/rust-lang/crates.io-index
+428 │ │ windows-sys 0.61.2 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'windows-targets'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:429:1
+    │  
+429 │ ╭ windows-targets 0.48.5 registry+https://github.com/rust-lang/crates.io-index
+430 │ │ windows-targets 0.52.6 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'windows_aarch64_gnullvm'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:431:1
+    │  
+431 │ ╭ windows_aarch64_gnullvm 0.48.5 registry+https://github.com/rust-lang/crates.io-index
+432 │ │ windows_aarch64_gnullvm 0.52.6 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'windows_aarch64_msvc'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:433:1
+    │  
+433 │ ╭ windows_aarch64_msvc 0.48.5 registry+https://github.com/rust-lang/crates.io-index
+434 │ │ windows_aarch64_msvc 0.52.6 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'windows_i686_gnu'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:435:1
+    │  
+435 │ ╭ windows_i686_gnu 0.48.5 registry+https://github.com/rust-lang/crates.io-index
+436 │ │ windows_i686_gnu 0.52.6 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'windows_i686_msvc'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:438:1
+    │  
+438 │ ╭ windows_i686_msvc 0.48.5 registry+https://github.com/rust-lang/crates.io-index
+439 │ │ windows_i686_msvc 0.52.6 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰──────────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'windows_x86_64_gnu'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:440:1
+    │  
+440 │ ╭ windows_x86_64_gnu 0.48.5 registry+https://github.com/rust-lang/crates.io-index
+441 │ │ windows_x86_64_gnu 0.52.6 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰───────────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'windows_x86_64_gnullvm'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:442:1
+    │  
+442 │ ╭ windows_x86_64_gnullvm 0.48.5 registry+https://github.com/rust-lang/crates.io-index
+443 │ │ windows_x86_64_gnullvm 0.52.6 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰───────────────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'windows_x86_64_msvc'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:444:1
+    │  
+444 │ ╭ windows_x86_64_msvc 0.48.5 registry+https://github.com/rust-lang/crates.io-index
+445 │ │ windows_x86_64_msvc 0.52.6 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'winnow'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:446:1
+    │  
+446 │ ╭ winnow 0.7.15 registry+https://github.com/rust-lang/crates.io-index
+447 │ │ winnow 1.0.4 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰──────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[duplicate]: found 2 duplicate entries for crate 'wit-bindgen'
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:449:1
+    │  
+449 │ ╭ wit-bindgen 0.51.0 registry+https://github.com/rust-lang/crates.io-index
+450 │ │ wit-bindgen 0.57.1 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────────────┘ lock entries
+
+warning[yanked]: detected yanked crate (try `cargo update -p chacha20`)
+   ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:50:1
+   │
+50 │ chacha20 0.10.1 registry+https://github.com/rust-lang/crates.io-index
+   │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ yanked version
+
+warning[yanked]: detected yanked crate (try `cargo update -p spin`)
+    ┌─ /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock:285:1
+    │
+285 │ spin 0.9.8 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ yanked version
+
+advisories ok, bans ok, sources ok
+OK: cargo-deny
+Scanning dir /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008
+Starting filesystem walk for root: /
+Scanned /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/ops/highlight-detector/requirements.txt file and found 9 packages
+Scanned /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/vendor/uplink-infisical-transport file and found 0 packages
+Scanned /home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008/rust/Cargo.lock file and found 502 packages
+End status: 458 dirs visited, 4518 inodes visited, 3 Extract calls, 722.845053ms elapsed, 722.845183ms wall time
+RUSTSEC-2023-0071 and 3 aliases have been filtered out because: rsa 0.9 Marvin-Timing kommt ausschliesslich ueber sqlx-mysql in den Lockfile-Graph; der Workspace baut sqlx mit default-features = false und nur postgres/runtime-tokio/tls-rustls/macros/migrate/chrono, daher wird sqlx-mysql nicht kompiliert. Upstream hat weiterhin keine gepatchte rsa-Version.
+Filtered 1 vulnerability from output
+
+No issues found
+OK: osv-scanner
+2026-10-09T02:08:18+02:00	INFO	[vuln] Vulnerability scanning is enabled
+2026-10-09T02:08:18+02:00	INFO	[secret] Secret scanning is enabled
+2026-10-09T02:08:18+02:00	INFO	[secret] If your scanning is slow, please try '--scanners vuln' to disable secret scanning
+2026-10-09T02:08:18+02:00	INFO	[secret] Please see https://trivy.dev/docs/v0.73/guide/scanner/secret#recommendation for faster secret detection
+2026-10-09T02:08:28+02:00	INFO	[npm] Run "npm install" to collect the license information of packages	dir=".tasks/2026-09-21-social-studio-handoff/checks/node_modules"
+2026-10-09T02:08:28+02:00	INFO	[npm] Run "npm install" to collect the license information of packages	dir=".tasks/2026-09-21-social-studio-handoff/reference/node_modules"
+2026-10-09T02:08:28+02:00	INFO	[npm] Run "npm install" to collect the license information of packages	dir="bot/admin_dashboard/node_modules"
+2026-10-09T02:08:28+02:00	INFO	[npm] Run "npm install" to collect the license information of packages	dir="bot/dashboard_v2/node_modules"
+2026-10-09T02:08:28+02:00	INFO	[npm] Run "npm install" to collect the license information of packages	dir="website/node_modules"
+2026-10-09T02:08:28+02:00	WARN	[pip] Unable to find python `site-packages` directory. License detection is skipped.	err="site-packages directory not found"
+2026-10-09T02:08:28+02:00	INFO	Suppressing dependencies for development and testing. To display them, try the '--include-dev-deps' flag.
+2026-10-09T02:08:28+02:00	INFO	Number of language-specific files	num=7
+2026-10-09T02:08:28+02:00	INFO	[cargo] Detecting vulnerabilities...
+2026-10-09T02:08:28+02:00	INFO	[npm] Detecting vulnerabilities...
+2026-10-09T02:08:28+02:00	INFO	[pip] Detecting vulnerabilities...
+
+Report Summary
+
+┌──────────────────────────────────────────────────────────────┬───────┬─────────────────┬─────────┐
+│                            Target                            │ Type  │ Vulnerabilities │ Secrets │
+├──────────────────────────────────────────────────────────────┼───────┼─────────────────┼─────────┤
+│ bot/admin_dashboard/package-lock.json                        │  npm  │        1        │    -    │
+├──────────────────────────────────────────────────────────────┼───────┼─────────────────┼─────────┤
+│ bot/dashboard_v2/package-lock.json                           │  npm  │        1        │    -    │
+├──────────────────────────────────────────────────────────────┼───────┼─────────────────┼─────────┤
+│ ops/highlight-detector/requirements.txt                      │  pip  │        0        │    -    │
+├──────────────────────────────────────────────────────────────┼───────┼─────────────────┼─────────┤
+│ rust/Cargo.lock                                              │ cargo │        0        │    -    │
+├──────────────────────────────────────────────────────────────┼───────┼─────────────────┼─────────┤
+│ website/package-lock.json                                    │  npm  │        1        │    -    │
+├──────────────────────────────────────────────────────────────┼───────┼─────────────────┼─────────┤
+│ rust/crates/tb-dashboard-api/src/auth/discord_admin_login.rs │ text  │        -        │    0    │
+└──────────────────────────────────────────────────────────────┴───────┴─────────────────┴─────────┘
+Legend:
+- '-': Not scanned
+- '0': Clean (no security findings detected)
+
+
+bot/admin_dashboard/package-lock.json (npm)
+===========================================
+Total: 1 (HIGH: 1, CRITICAL: 0)
+
+┌───────────────┬────────────────┬──────────┬────────┬───────────────────┬───────────────┬─────────────────────────────────────────────────────┐
+│    Library    │ Vulnerability  │ Severity │ Status │ Installed Version │ Fixed Version │                        Title                        │
+├───────────────┼────────────────┼──────────┼────────┼───────────────────┼───────────────┼─────────────────────────────────────────────────────┤
+│ source-map-js │ CVE-2026-93749 │ HIGH     │ fixed  │ 1.2.1             │ 1.2.2         │ source-map-js: source-map-js: Denial of Service via │
+│               │                │          │        │                   │               │ malformed indexed source maps                       │
+│               │                │          │        │                   │               │ https://avd.aquasec.com/nvd/cve-2026-93749          │
+└───────────────┴────────────────┴──────────┴────────┴───────────────────┴───────────────┴─────────────────────────────────────────────────────┘
+
+bot/dashboard_v2/package-lock.json (npm)
+========================================
+Total: 1 (HIGH: 1, CRITICAL: 0)
+
+┌───────────────┬────────────────┬──────────┬────────┬───────────────────┬───────────────┬─────────────────────────────────────────────────────┐
+│    Library    │ Vulnerability  │ Severity │ Status │ Installed Version │ Fixed Version │                        Title                        │
+├───────────────┼────────────────┼──────────┼────────┼───────────────────┼───────────────┼─────────────────────────────────────────────────────┤
+│ source-map-js │ CVE-2026-93749 │ HIGH     │ fixed  │ 1.2.1             │ 1.2.2         │ source-map-js: source-map-js: Denial of Service via │
+│               │                │          │        │                   │               │ malformed indexed source maps                       │
+│               │                │          │        │                   │               │ https://avd.aquasec.com/nvd/cve-2026-93749          │
+└───────────────┴────────────────┴──────────┴────────┴───────────────────┴───────────────┴─────────────────────────────────────────────────────┘
+
+website/package-lock.json (npm)
+===============================
+Total: 1 (HIGH: 1, CRITICAL: 0)
+
+┌───────────────┬────────────────┬──────────┬────────┬───────────────────┬───────────────┬─────────────────────────────────────────────────────┐
+│    Library    │ Vulnerability  │ Severity │ Status │ Installed Version │ Fixed Version │                        Title                        │
+├───────────────┼────────────────┼──────────┼────────┼───────────────────┼───────────────┼─────────────────────────────────────────────────────┤
+│ source-map-js │ CVE-2026-93749 │ HIGH     │ fixed  │ 1.2.1             │ 1.2.2         │ source-map-js: source-map-js: Denial of Service via │
+│               │                │          │        │                   │               │ malformed indexed source maps                       │
+│               │                │          │        │                   │               │ https://avd.aquasec.com/nvd/cve-2026-93749          │
+└───────────────┴────────────────┴──────────┴────────┴───────────────────┴───────────────┴─────────────────────────────────────────────────────┘
+
+📣 [34mNotices:[0m
+  - Version 0.75.0 of Trivy is now available, current version is 0.73.0
+
+To suppress version checks, run Trivy scans with the --skip-version-check flag
+
+OK: trivy
+SKIP: semgrep (nur mit --strict)
+SKIP: clippy (nur mit --strict, sonst zu langsam für jeden Push)
+
+Alles grün.
+remote: 
+remote: GitHub found 3 vulnerabilities on EarlySalty/Deadlock-Twitch-Bot's default branch (3 high). To find out more, visit:        
+remote:      https://github.com/EarlySalty/Deadlock-Twitch-Bot/security/dependabot        
+remote: 
+To github.com:EarlySalty/Deadlock-Twitch-Bot.git
+   c7440400..4177752a  HEAD -> main
+
+[exited with code 0]

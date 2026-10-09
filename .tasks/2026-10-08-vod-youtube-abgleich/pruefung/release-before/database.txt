@@ -1,0 +1,8 @@
+BEGIN
+{"vods": 83, "proof": "release_before_totals", "observed_at": "2026-10-09T00:24:20.106323+00:00", "historical_completed": 77}
+{"parts": 0, "proof": "release_before_case", "case_id": 10, "duration_sec": 24750, "legacy_state": "archived", "accepted_parts": 0, "legacy_upload_time_present": false}
+{"parts": 0, "proof": "release_before_case", "case_id": 11, "duration_sec": 19510, "legacy_state": "archived", "accepted_parts": 0, "legacy_upload_time_present": false}
+{"parts": 1, "proof": "release_before_case", "case_id": 2941, "duration_sec": 13830, "legacy_state": "archived", "accepted_parts": 0, "legacy_upload_time_present": false}
+{"parts": 1, "proof": "release_before_case", "case_id": 2995, "duration_sec": 14663, "legacy_state": "archived", "accepted_parts": 0, "legacy_upload_time_present": false}
+{"parts": 1, "proof": "release_before_case", "case_id": 2996, "duration_sec": 2830, "legacy_state": "archived", "accepted_parts": 0, "legacy_upload_time_present": false}
+COMMIT

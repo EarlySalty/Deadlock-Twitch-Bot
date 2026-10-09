@@ -1,0 +1,17 @@
+{
+  "auftrag": "2026-10-08-vod-youtube-abgleich",
+  "paket": "youtube",
+  "versuch": 3,
+  "sequenz": 20,
+  "zeit": "2026-10-09T00:28:59Z",
+  "produzent": "c5d0a48e-64b8-4232-9b24-fa23316782b7",
+  "phase": "release",
+  "gebaut": "ja",
+  "reviewt": "ja",
+  "gemergt": "ja",
+  "live": "nein",
+  "sha": "4177752abf6a65b865de2817e170a9907001c38e",
+  "nachweise": ["REGISTER.md", "HANDOFF.md", "package1-gate.log", "package2-gate.log", "pruefung/package2-final-gate.json", "pruefung/package2-push.txt", "pruefung/release-frontends.txt", "pruefung/release-evidence-controls.txt", "pruefung/release-before/database.txt", "pruefung/release-before/processes.txt"],
+  "blocker": [],
+  "naechster_schritt": "Genau ein cargo-slot-Releaseaufruf blhsa8lwz für sieben Binaries mit --jobs3 wartet regulär, ohne eigene Slot-Abbruchgrenze. Drei Frontendbuilds bcu4kewo9 Exit0. Anschließend exakte ELF-/Asset-/Migrationsherkunft, frischer Main- und Live-Vorhercheck, autorisierter regulärer Wrapperdeploy, vollständiger produktiver Fünf-Fälle-Abgleich und eigenes Cleanup. Noch kein neuer Release oder Produktivnachweis. Leere SQL-Beobachtungen sind ausdrücklich kein Bestätigungsbeweis."
+}
