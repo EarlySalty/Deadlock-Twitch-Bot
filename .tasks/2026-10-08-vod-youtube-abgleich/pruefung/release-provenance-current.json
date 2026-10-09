@@ -90,9 +90,11 @@
       "assets/streamerV1-zbqtuM82.js": "0e98f67b19c3f5cc14568559d6f899857626af179f637ba904a0fe30fd14421b",
       "assets/streamerV3-BEWV8QSg.js": "3d786f843b2913d37f7a8dacc47d3329414d3ac8f165d9199712c0ded078c7be",
       "brand/deadlock-d-logo.png": "9647e2a596cfa341a607f33e3f64071f0ef3515742156fcb0734948e367cc8c1",
-      "brand/doorman/concierge-key.png": "3332370c4fb99b6fa220ba64ac661b7403e7bc26eb7d0028ff10769eaa6c7e7c",
+      "brand/doorman/concierge-key.png":
+        "3332370c4fb99b6fa220ba64ac661b7403e7bc26eb7d0028ff10769eaa6c7e7c",
       "brand/doorman/deco-fan-pattern.svg": "b4e9fe7dbc3e75705820bb2b0ba7f9c32cbf25ad0a4f2986979593632dfe9bbd",
-      "brand/doorman/deco-key.svg": "1ac582ab838222e66e61398a471154f069db0515eadafd6e06f8461aa40643db",
+      "brand/doorman/deco-key.svg":
+        "1ac582ab838222e66e61398a471154f069db0515eadafd6e06f8461aa40643db",
       "brand/doorman/deco-tuerbogen.svg": "4f9ed4bdd7e21cd91e0f3725f1b2bb786248876c779faca93b195b454904cf49",
       "brand/doorman/doorman-tuer.webp": "207bdffebeb87cb4a69b142ae744f789f81edea1db12f037ba004bb10d7e202b",
       "brand/wordmark.svg": "4d5564c32942d745882d7d779e4a5e8b5518ca1709994e92f8b597e26b441610",
@@ -107,14 +109,17 @@
       "clips/pfp/johnnyblazedx.png": "1c93c35891c6a5b880c6f820fe0294553f1ceaa7a2f2ebb4ff938b431161caeb",
       "clips/pfp/kdenos.png": "4d146dbeedc2a2c27915f2109b581144647d985754c5bdad669b6df4d460d607",
       "clips/pfp/miracleghost9.png": "81ce86927ea3a4d43c45623b8804ef5942226ec1a669a8ab122ebde525e9e8db",
-      "clips/pfp/whysolowkey.png": "c2ef473e05cdf653c349aef35c6a26246783d70169d929d3189a4981624ecc9c",
+      "clips/pfp/whysolowkey.png":
+        "c2ef473e05cdf653c349aef35c6a26246783d70169d929d3189a4981624ecc9c",
       "clips/poster/coolysdl.jpg": "f5bec2852563172d2d122b71e3b7a8347a51a904fe8a7bbe43e0ac5ce7772ee7",
       "clips/poster/duzzel.jpg": "f78b0302d8f70c9218389879ae57a10692e0e2a375a166046238b5e9510f260b",
       "clips/poster/johnnyblazedx.jpg": "700f492c8fc058d1d161421100d795fb13f69f218e8e777b422feff3f6148e2b",
       "clips/poster/kdenos.jpg": "60797659d0a5f4b69803863c879121a4ec0733b1e17e112965c77b76c2b74cfb",
       "clips/poster/miracleghost9.jpg": "cd00b21466088ce89b0ea926f73f379424c4461c2da561c0dc39ea860313f25c",
-      "clips/poster/whysolowkey.jpg": "b4810ea23d7e1c7d6f70881975008fd562097f097e882fb96744e92afeb2291c",
-      "clips/whysolowkey.mp4": "e74e1650993a9e3d024642c7df952e83947d4f6f6d3def75ecacbfa1c7fe6e20",
+      "clips/poster/whysolowkey.jpg":
+        "b4810ea23d7e1c7d6f70881975008fd562097f097e882fb96744e92afeb2291c",
+      "clips/whysolowkey.mp4":
+        "e74e1650993a9e3d024642c7df952e83947d4f6f6d3def75ecacbfa1c7fe6e20",
       "faq/index.html": "2b74404bad0113df62795acae9b27196c6b9d2af90cef34eb19febae48fe2b0d",
       "favicon.svg": "baeae418d3239c9e989c0b993c31c89b2bbb40c8599435c21c47a35dab8da808",
       "fonts/manrope-latin-ext.woff2": "3911b66d9f2e005a4b989223405d0e5032619c668597ba467cc76a23c8fffcfb",

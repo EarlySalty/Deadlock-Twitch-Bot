@@ -25,6 +25,10 @@ Der tatsächlich verbundene Kanal wurde vollständig gelesen: aktuelle Kontobind
 
 Alle fünf bleiben archived, ohne erfundene Uploadzeit, akzeptierten Teil oder Vollständigkeit. Das Ergebnis ist eine abgeschlossene Suche ohne belastbare Quellenzuordnung, kein Beweis einer Löschung oder eines fehlenden Videos.
 
+## Sicherung der neuen Releasebelege
+
+Der Featurebackup-Push `bg7x3zdku` von `fabf3d82b45e38a00c2de211a2e0fa6d6a30f952` scheiterte mit Exit1 an fünf generic-api-key-Funden im neu erzeugten Assetmanifest. Alle fünf Werte wurden durch erneutes Hashen der installierten Dateien als SHA256 von Bildern beziehungsweise einem Video belegt, nicht als Zugangsschlüssel. Fünf Zeilenumbrüche im JSON trennen Pfadnamen und Prüfsummen; sämtliche Schlüssel, Werte und81 Assetdigests bleiben nach JSON-Vergleich identisch. Die ursprünglichen Bytes bleiben im Commit erhalten. Der vollständige Snapshot wurde mit semantisch identischer unveränderter Hookpolicy erneut geprüft:0 Funde, Exit0. Keine Gate-/Hookänderung, keine Ausnahme, kein alternativer Pushweg. [Bereinigter Nachweis](pruefung/release-backup-scan.json). Diagnoseverzeichnis und Archiv gehören dieser Session und bleiben bis zur vollständigen Abnahme erhalten.
+
 ## Prüfgrenzen und offener Blocker
 
 31 verschiedene fokussierte Rustfälle bestanden,0 ignored; keine aktuelle Vollsuite behauptet. Archivbaseline historisch50/0/0 auf `0ecae1370f1a80d1a101249b5c932663d69be8af`, kein neuer Baselinelauf. Nichtblockierende Gate-NITs bleiben dokumentiert: teilweise Beobachtungen ersetzen gespeicherte UI-Links; drei TypeScript-Testfixtures ohne can_request. Keine weitere UI-Politur oder Browserrunde. Gebaute UI-Anker vorhanden, kein eingeloggter Produktions-E2E-Beweis.
