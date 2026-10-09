@@ -1,12 +1,12 @@
 # Register: YouTube-Abgleich im VOD-Archiv
 
-status: aktiv, 2026-10-09. Nutzerfreigabe: „Ja umsetzen“, Plan noble-yawning-charm.md. Stufe mittel, zusammenhängendes Paket youtube, Pyramide worker_mittel: sol.
+status: technisch abgenommen und eigenes Feature bereinigt; letzte Cleanupbeleg-Publikation und Selbstabschluss, 2026-10-09. Nutzerfreigabe: „Ja umsetzen“, Plan noble-yawning-charm.md. Stufe mittel, zusammenhängendes Paket youtube, Pyramide worker_mittel: sol.
 
 ## Session-Register und Eigentum
 
 - Intent-/Auftraggeber-Thread: `d264f838-4a47-4b9e-9bf2-12efa37223f7`; Ersteller-Session: `9fffdbdc-3f14-4f4a-b93d-4437d1133cc6`.
 - Paket-Thread: `022314b5-fac1-41c2-abe7-e6c7673b0762`; Elternsession und alleiniger Register-/Status-/Berichtsschreiber: `c5d0a48e-64b8-4232-9b24-fa23316782b7`. Harness claudeAgent, Modell gpt-6.1-sol.
-- Worktree: `/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008`; Branch: `feat/vod-youtube-abgleich-20261008`.
+- Ursprünglicher Worktree `/home/nathanael/.worktrees/tb-vod-youtube-abgleich-20261008` nach Veröffentlichung entfernt, Branch `feat/vod-youtube-abgleich-20261008` lokal und remote nach Ancestor-Prüfung Exit0 gelöscht. Einzige eigene Restressource: selbst angelegter detached Publikationsworktree `/home/nathanael/.worktrees/tb-vod-youtube-abschluss-20261009-c5d0`, nach diesem Cleanupbeleg-Push zu entfernen.
 - Schreibhoheit wurde gemäß AUFTRAG.md einmalig an den Paket-Worker übergeben. Hauptorchestrator prüft read-only und überwacht aktive Arbeit nach etwa 20, spätestens 30 Minuten. Native Fixer besitzen jeweils begrenzte Quellen, niemals Register, Status oder Elternberichte. Kein Doppelwriter, kein weiterer T3-Thread.
 
 | Versuch | Startnachweis (UTC) | HEAD beim Start/Übergang | Statuskanal und Zustand |
@@ -15,13 +15,13 @@ status: aktiv, 2026-10-09. Nutzerfreigabe: „Ja umsetzen“, Plan noble-yawning
 | 2 | eigener Prozess-/HEAD-Check 2026-10-08T02:02:13Z | 6dd214a27ece1aa6ba783e9aa0c742efcdc6b3cb | status/youtube/2/; gezielt gestoppt und Zugang widerrufen, nicht wiederaufnehmen |
 | 3 | neuer Harness-Zugang, HEAD-/Prozessprobe 2026-10-08T03:09:26Z | f68702992808aa13f3449ce332699f9d4fd3645d | status/youtube/3/; aktueller alleiniger Eigentümer |
 
-Alle Versuche gehören demselben oben genannten Thread, Elternmodell, Worktree und Branch. Historische Statusereignisse bleiben unverändert, einschließlich des Sicherheitsstopps status/youtube/2/002.json. Letztes Ereignis: [024](status/youtube/3/024.json), 2026-10-09T12:38:41Z: gebaut/reviewt/gemergt/live ja; Hauptsession-Journalbeleg übernommen, technischer Abnahmeblocker behoben. Historischer Release e0e9fde2 und aktueller Hauptsession-Prozessstand fdee652a zeitlich getrennt, Fix-Ancestor Exit0. Belegbackup `eb3336196dde2bf2904134a3604d7080df514863` remote bestätigt. [Abschlussbericht](ABSCHLUSS.md), [Hauptsession-Beleg](pruefung/main-session-final-proof.json). Aktuelle Aktion: reguläre Dokumentationspublikation, danach eigenes Cleanup und zuletzt Settlen. Kein erneuter Build/Deploy oder erhöhter Zugriff.
+Alle Versuche gehören demselben oben genannten Thread und Elternmodell. Historische Statusereignisse bleiben unverändert. Letztes Ereignis: [025](status/youtube/3/025.json), 2026-10-09T13:01:39Z: technisch abgenommen, vollständige Abschlussdokumentation auf main `2d36ebddbc28083bf8f7842e30838c299b1276bb`, normaler Push Exit0/Remote bestätigt. Featurebranch lokal/remote und ursprünglicher Worktree entfernt, eigene temporäre PostgreSQL-/SQL-/Scanressourcen bereinigt. [Tatsächlicher Cleanup](pruefung/cleanup-completed.json), [Abschlussbericht](ABSCHLUSS.md). Nur noch diese Cleanupbeleg-Publikation, Entfernung des eigenen detached Publikationsworktrees und anschließend Selbstabschluss. Keine neue Runtime-/Provider-/Test-/Deployrunde.
 
 ## Abschlussfortsetzung ohne Neubau
 
 Hauptsession hat den begrenzten Journalbeleg mit positiver Kontrolle nachgeliefert. Ihre Präzisierung trennt den ursprünglichen e0e9fde2-Deploy von aktuellen Prozessen auf fdee652a; Sourcefix4177752a ist laut ihrer Ancestor-Prüfung enthalten. [Bereinigter Beleg](pruefung/main-session-final-proof.json). Frisches origin/main `fdee652aabefb7e4f4e08fe1b287f87baca152c1` normal in den eigenen Branch integriert, verbleibender Diff ausschließlich eigene Taskakten. Keine fremden Produktivquellen geändert, kein neuer Deploy. Der frühere Journalblocker im folgenden Verlauf ist historisch behoben.
 
-140 ignorierte Tasklogs vor Cleanup inventarisiert:54 bereits erhalten,14 leer,72 weitere Originale unverändert zusätzlich gesichert. Eigene synthetische PostgreSQL bereits gestoppt, pg_ctl status Exit3. Hilfsbranch im eigenen Repo, remote und in losen/gepackten Branchrefs des eingefrorenen Stagingclones nicht vorhanden; kein Root-Gitref wird geändert. Cleanup erst nach regulärer Berichtspublikation.
+140 ignorierte Tasklogs vor Cleanup inventarisiert:54 bereits erhalten,14 leer,72 weitere Originale unverändert zusätzlich auf main veröffentlicht. Eigene synthetische PostgreSQL war bereits gestoppt, pg_ctl status Exit3; Datenverzeichnis und eigene SQL-/Scanressourcen jetzt entfernt. Hilfsbranch bereits nicht vorhanden, historischer Hilfspaketcommit Ancestor Exit0; kein Root-Gitref geändert. Tatsächlicher Feature-/Ressourcencleanup nach regulärer Berichtspublikation abgeschlossen, [Nachweis](pruefung/cleanup-completed.json).
 
 ## Historischer Stand vor dem nachgereichten Journalbeleg
 

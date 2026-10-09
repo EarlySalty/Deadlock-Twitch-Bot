@@ -8,11 +8,13 @@ Produktivcode mit sämtlichen Tests auf main `4177752abf6a65b865de2817e170a99070
 
 Die Hauptsession liefert den zuletzt offenen Journalbeleg: ursprüngliches Deployfenster02:28:37 bis02:45:00 UTC, vier Units, Priorität err, Exit0 ohne Ausgabe und positive Botkontrolle Exit0. Ihre aktuelle Prozessmeldung ist getrennt: Release `fdee652aabefb7e4f4e08fe1b287f87baca152c1`, PIDs1721897/1722048/1723139, active/deleted=nein/NRestarts0, Sourcefix-Ancestor Exit0. [Hauptsession-Beleg](pruefung/main-session-final-proof.json). Worker wiederholt keinen erhöhten Zugriff.
 
-## Verbleibender operativer Abschluss
+## Tatsächlicher Cleanup und letzte Publikation
 
-Abschlussdoku mit vollständigem eigenem Taskdiff regulär prüfen und veröffentlichen, dann nur eigene Ressourcen aufräumen. Featurebranch/Worktree erst nach wertvoller Artefaktsicherung und Ancestor-Prüfung mit Exit-Code entfernen. Tatsächlichen Cleanupbericht nachführen und veröffentlichen; allerletzter Schritt `t3-thread.py settle --selbst`. Kein neuer Test, Provider-/Browserlauf, Build oder Deploy.
+Abschlussdokumentation vollständig regulär geprüft und auf main `2d36ebddbc28083bf8f7842e30838c299b1276bb` gepusht, Exit0/Remote bestätigt. Danach Ancestor-Prüfungen Exit0, ursprünglichen Worktree entfernt, Featurebranch lokal und remote gelöscht. Eigene gestoppte synthetische DB samt zwei Scanverzeichnissen und13 temporären Dateien entfernt; eigene Temppräfix-Inventur leer. [Tatsächlicher Nachweis](pruefung/cleanup-completed.json).
 
-140 ignorierte Tasklogs sind inventarisiert:54 bereits erhalten,14 leer,72 weitere Originale zusätzlich unverändert gesichert. Synthetische PostgreSQL `/tmp/tb-youtube-pg-c5d0/data` bereits gestoppt, pg_ctl status Exit3. Nur eindeutig eigene temporäre SQL-/Scanressourcen entfernen. Keine Cache-/Targetbereinigung, keine fremden Prozesse/Locks, keine Release- oder Buildbäume anfassen.
+Jetzt nur diese Cleanupbeleg-Ergänzung regulär veröffentlichen, danach den eigenen detached Publikationsworktree `/home/nathanael/.worktrees/tb-vod-youtube-abschluss-20261009-c5d0` entfernen und als letzten Schritt `t3-thread.py settle --selbst`. Kein neuer Test, Provider-/Browserlauf, Build oder Deploy.
+
+140 ignorierte Tasklogs sind vollständig inventarisiert und vor Cleanup veröffentlicht:54 bereits erhalten,14 leer,72 weitere Originale unverändert gesichert. Synthetische PostgreSQL war bereits gestoppt, pg_ctl status Exit3. Keine fremden Caches, Prozesse, Locks oder Release-/Buildbäume verändert.
 
 Der alte Stagingclone ist eingefrorene Releaseprovenienz unter `/opt/deadlock/twitch/builds/e0e9fde20ec27f87acc8833e3d93dcdbe4d2934d`. Hilfsbranch `docs/vod-youtube-belege-20261009-c5d0` weder im eigenen Arbeitsrepo noch remote noch in losen/gepackten Branchrefs dieses Clones vorhanden. Keine Root-Gitoperation zum Entfernen eines nicht vorhandenen Branches.
 

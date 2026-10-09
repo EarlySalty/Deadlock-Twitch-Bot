@@ -1,6 +1,6 @@
 # Abschluss: YouTube-Abgleich im VOD-Archiv
 
-Stand2026-10-09: Produktivänderung gemergt und live nachgewiesen. Der zuletzt fehlende Journalbeleg stammt ausdrücklich aus der Hauptsession. Abschlussdokumentation wird regulär veröffentlicht; eigenes Cleanup ist in dieser ersten Berichtsfassung noch ausstehend.
+Stand2026-10-09: Produktivänderung gemergt und live nachgewiesen. Hauptsession-Journalbeleg übernommen; Abschlussdokumentation und Originalbelege regulär auf main `2d36ebddbc28083bf8f7842e30838c299b1276bb` veröffentlicht. Eigener Featurebranch lokal/remote und ursprünglicher Arbeitsworktree entfernt, temporäre Testressourcen bereinigt. Diese Fassung ergänzt den tatsächlichen Cleanupbeleg; der nur zur Berichtspublikation angelegte detached Integrationsworktree wird nach Veröffentlichung dieser Ergänzung entfernt, danach Selbstabschluss.
 
 ## Ergebnis und fünf Altfälle
 
@@ -22,7 +22,7 @@ Alle fünf bleiben ohne erfundene Uploadzeit oder Vollständigkeit. Der Abgleich
 - Gesamter Produktivcode mit Migration, Frontend und Tests: Main-Paket `4177752abf6a65b865de2817e170a9907001c38e`. Beide vollständigen Pakete erhielten gpt-6.1-sol ALLOW. [Endgültiger Produktivgate](pruefung/package2-final-gate.json).
 - Eigener geprüfter und damals aktueller Main-Release: `e0e9fde20ec27f87acc8833e3d93dcdbe4d2934d`. Sieben saubere ELF-Revisionen, drei Frontendbuilds, vorhandener Migrationsweg und drei Neustarts belegt. Livebinary- und Assetbytes entsprachen dem eigenen Build, neuer Binaryanker vorhanden. Migration nach produktiver Anwendung unverändert eingefroren.
 - Getrennt von diesem historischen Deploy: Die Hauptsession meldet jetzt `fdee652aabefb7e4f4e08fe1b287f87baca152c1` als aktuellen Release, Bot1721897, Dashboard1722048, Coaching1723139, active/deleted=nein/NRestarts0. Ihr Ancestor-Aufruf von `4177752a` gegen diesen Release lieferte Exit0. Das belegt die enthaltene gemergte Korrektur, keine neue Funktionsmessung.
-- Gesicherter eigener Belegcheckpoint: `eb3336196dde2bf2904134a3604d7080df514863`, regulärer Featurepush Exit0 und Remote bestätigt. Berichtsveröffentlichung und Cleanupbeleg werden nach tatsächlicher Ausführung nachgeführt. Keine erneute Test-, Provider-, Browser-, Build- oder Deployrunde für diese Abschlussdoku.
+- Berichtsveröffentlichung `2d36ebddbc28083bf8f7842e30838c299b1276bb`: vollständiger Dokumentationsgate gpt-6.1-sol ALLOW, historischer Label-NIT korrigiert, regulärer Mainpush Exit0 und Remote bestätigt. Frühere Belegcheckpoints `eb3336196dde2bf2904134a3604d7080df514863` und `fabf3d82b45e38a00c2de211a2e0fa6d6a30f952` sind in dieser Main-Historie enthalten. [Gate](pruefung/final-documentation-gate.txt), [Mainpush](pruefung/final-main-push.txt), [tatsächlicher Cleanup](pruefung/cleanup-completed.json). Keine erneute Test-, Provider-, Browser-, Build- oder Deployrunde für diese Abschlussdoku.
 
 ## Journal und zeitliche Abgrenzung
 
@@ -42,14 +42,16 @@ Gezählt sind31 verschiedene fokussierte Rustfälle: Worker15, API15 und korrigi
 
 Nichtblockierende Gate-NITs bleiben: partielle Beobachtungen ersetzen gespeicherte UI-Links, drei TypeScript-Testfixtures ohne can_request. Original-SQL-Guard akzeptiert leere Beobachtungen; zusätzliche aktuelle SQL-Leseprüfung belegt70 nichtleere verarbeitete und0 leere Bestätigungen. Keine weitere UI-Politur oder eingeloggte Produktions-E2E-Behauptung.
 
-MERGEPROTOKOLL[MS-1]: 3 Git-Schritte einzeln | Anläufe: 1 | Gate: Produktivpakete ALLOW, Abschlussdokumentation noch ausstehend
+MERGEPROTOKOLL[MS-1]: 22 Git-Schritte einzeln | Anläufe: 1 | Gate: vollständige Abschlussdokumentation gpt-6.1-sol ALLOW, regulärer Mainpush Exit0
 
-Die Zahl gilt bisher für die verändernden Git-Schritte dieser Abschlussphase: Fetch, normale Integration des aktuellen origin/main und Attributionsergänzung ausschließlich am eigenen ungepushten Mergecommit. Sie ist kein erfundener Gesamtzähler der früheren Fixrunden. Nach Veröffentlichung wird sie durch das tatsächlich ausgeführte Abschlussprotokoll ersetzt.
+Gezählt sind die verändernden Git-Schritte dieser Abschlussphase vom Fetch bis zur ersten Mainpublikation und abgeschlossenen Featurebereinigung:3 Vorbereitungsschritte,8 einzelne Adds, Commit, eigener detached Integrationsworktree,3 einzelne NIT-/Gatebeleg-Adds, Commit, Fast-forward-Integration, Mainpush, ursprünglichen Worktree entfernen, lokalen Branch löschen, Remote-Branch löschen. Read-only-Abfragen und frühere Fixrunden sind nicht eingerechnet. Diese Ergänzungsveröffentlichung und die anschließende Integrationsworktree-Entfernung folgen außerhalb dieses bereits ausgeführten22-Schritte-Checkpoints.
 
 ## Eigentum und Cleanup
 
 140 ignorierte eigene Tasklogs geprüft:54 bereits in getrackten Belegen enthalten,14 leer,72 weitere Originale unverändert vor Cleanup gesichert. [Inventur](pruefung/cleanup-artifact-inventory.json), [Originalbytes](pruefung/ignored-log-originals.txt). Keine Session-JSONL oder Secretdateien zur Rekonstruktion gelesen.
 
-Eigene synthetische PostgreSQL unter `/tmp/tb-youtube-pg-c5d0/data` bereits gestoppt, pg_ctl status Exit3. Hilfsbranch `docs/vod-youtube-belege-20261009-c5d0` bei Abschlussinventur weder im eigenen Arbeitsrepo noch remote noch in den losen/gepackten Branchrefs des eingefrorenen alten Buildclones vorhanden; kein geschützter Root-Gitref wird verändert. Ancestor-Prüfung des historischen Hilfspaketcommits und des eigenen Featurebranches folgt vor Löschung.
+Vor tatsächlicher Löschung jeweils Ancestor-Prüfung mit Exit0: eigener Feature-HEAD und Remote-Backup gegen veröffentlichtes origin/main; historischer Hilfspaketcommit ebenfalls auf main. Arbeitsworktree entfernt, lokaler Featurebranch gelöscht, Remote-Löschung Exit0; anschließend lokale/Remote-Branchabfragen ohne diese Namen. Hilfsbranch war schon nicht vorhanden, auch nicht in den losen/gepackten Branchrefs der eingefrorenen alten Buildprovenienz; keine Root-Gitoperation.
 
-Erst nach regulärer Veröffentlichung dieser wertvollen Belege: eigene temporäre SQL-/Scanressourcen entfernen, eigenen gemergten Featurebranch und Arbeitsworktree entfernen, tatsächliche Ergebnisse nachführen. Fremde Worktrees/Branches und sämtliche Release-/Buildbäume bleiben unangetastet. Eigenes `settle --selbst` ist der letzte operative Schritt nach vollständigem Abschluss, noch nicht ausgeführt.
+Synthetische PostgreSQL war bereits gestoppt, pg_ctl status Exit3. Danach ausschließlich eigene Testdaten- und zwei Diagnosescanverzeichnisse sowie13 einzeln benannte temporäre Dateien entfernt. Arbeitsworktree und drei Tempverzeichnisse nachweislich nicht mehr vorhanden; Inventur des eigenen Temppräfixes leer. Keine fremden Ressourcen oder Release-/Buildbäume verändert. [Tatsächlicher Cleanupbeleg](pruefung/cleanup-completed.json).
+
+Verbleibend ist nur `/home/nathanael/.worktrees/tb-vod-youtube-abschluss-20261009-c5d0`, selbst angelegter detached Worktree für diese Berichtspublikation. Nach regulärem Push dieser Ergänzung wird genau dieser Worktree entfernt. `settle --selbst` folgt als letzter operativer Schritt; es wird hier nicht vorweg als ausgeführt behauptet.
