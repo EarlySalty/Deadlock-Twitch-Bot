@@ -1,5 +1,4 @@
-//! Real isolated PostgreSQL; never uses production or skips the storage contract.
-#[path = "../../../test-support/postgres.rs"]
+#[path = "../../../test-support/category_postgres.rs"]
 mod test_postgres;
 
 use chrono::{Duration, Utc};
@@ -18,6 +17,7 @@ async fn category_storage_deletions_rollups_preservation_and_report() {
     ] {
         sqlx::raw_sql(migration).execute(pool).await.unwrap();
     }
+    test_postgres::storage_schema(&db.pool).await;
     let now = Utc::now();
     let streams = vec![HelixStream {
         id: "s1".into(),
@@ -146,6 +146,7 @@ async fn explicit_source_removal_also_covers_late_shared_chat_copies() {
     ] {
         sqlx::raw_sql(migration).execute(&db.pool).await.unwrap();
     }
+    test_postgres::storage_schema(&db.pool).await;
     let now = Utc::now();
     let copied = format!("@room-id=20;user-id=30;id=copy;source-room-id=10;source-id=original;tmi-sent-ts={} :viewer!v@v PRIVMSG #sample :Eine kopierte Nachricht für den kontrollierten Datenbanktest.",now.timestamp_millis());
     let row = category::raw_message(&copied, now, "20", "de").unwrap();

@@ -1,4 +1,4 @@
-#[path = "../../../test-support/postgres.rs"]
+#[path = "../../../test-support/category_postgres.rs"]
 mod test_postgres;
 
 use chrono::{Duration, Utc};
@@ -20,6 +20,7 @@ async fn fixture() -> TestPostgres {
     .execute(&db.pool)
     .await
     .unwrap();
+    test_postgres::storage_schema(&db.pool).await;
     let old = Utc::now() - Duration::days(1000);
     let day = old.date_naive();
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
@@ -419,11 +420,23 @@ async fn a_targeted_chat_clear_is_limited_to_the_observed_stream() {
 #[tokio::test]
 async fn runtime_roles_can_append_and_redact_but_never_generically_delete_or_read_secrets() {
     let db = fixture().await;
-    sqlx::query("CREATE DATABASE twitch_analytics")
-        .execute(&db.pool)
-        .await
-        .unwrap();
-    sqlx::raw_sql("CREATE ROLE twitchbot; CREATE ROLE twitchdash; CREATE ROLE twitchlegacy;
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT FROM pg_database WHERE datname='twitch_analytics')",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    if !exists {
+        sqlx::query("CREATE DATABASE twitch_analytics")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+    }
+    sqlx::raw_sql("DO $$ BEGIN
+        IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='twitchbot') THEN CREATE ROLE twitchbot; END IF;
+        IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='twitchdash') THEN CREATE ROLE twitchdash; END IF;
+        IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='twitchlegacy') THEN CREATE ROLE twitchlegacy; END IF;
+        END $$;
         CREATE TABLE unrelated_private_fixture(secret text);
         GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO twitchbot,twitchdash,twitchlegacy;")
         .execute(&db.pool).await.unwrap();
@@ -506,7 +519,7 @@ async fn runtime_roles_can_append_and_redact_but_never_generically_delete_or_rea
                 .unwrap();
         assert_eq!(profile, format!("Sample {iteration}"));
         let stored_streams: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM category_stream_snapshots WHERE snapshot_at=$1 AND stream_id='native-stream'",
+            "SELECT count(*) FROM category_snapshots_normalized WHERE snapshot_at=$1 AND stream_id='native-stream'",
         )
         .bind(at)
         .fetch_one(&bot)

@@ -321,7 +321,7 @@ class ArtifactPathTests(unittest.TestCase):
 
 
 class CollectorPackagingTests(unittest.TestCase):
-    def check_target(self, revision, native, scenario="complete"):
+    def check_target(self, revision, native, scenario="complete", target="tb-category-collector"):
         repository = WRAPPER.parents[2]
         sha = subprocess.check_output(
             ["git", "-C", str(repository), "rev-parse", revision], text=True,
@@ -341,6 +341,7 @@ class CollectorPackagingTests(unittest.TestCase):
                 "rust/bin/tb-category-collector/Cargo.toml",
                 "rust/bin/tb-category-collector/src/lib.rs",
                 "rust/bin/tb-category-collector/src/bin/tb-twitch-watchdog.rs",
+                "rust/bin/tb-category-collector/src/bin/tb-category-storage.rs",
                 "rust/bin/tb-dashboard/src/bin/clip_context_learn.rs",
             ):
                 exists = subprocess.run(
@@ -356,11 +357,11 @@ class CollectorPackagingTests(unittest.TestCase):
             stamp = Path(directory) / "revision"
             for binary in (
                 "tb-bot", "tb-dashboard", "tb-stream-audit", "tb-config-check",
-                "tb-llm-usage-recover", "tb-category-collector", "tb-twitch-watchdog", "clip_context_learn",
+                "tb-llm-usage-recover", "tb-category-collector", "tb-twitch-watchdog", "tb-category-storage", "clip_context_learn",
             ):
-                if binary == "tb-category-collector" and scenario == "missing":
+                if binary == target and scenario == "missing":
                     continue
-                stamp.write_bytes((("0" * 40 if scenario == "wrong_revision" and binary == "tb-category-collector" else sha) + "\0").encode())
+                stamp.write_bytes((("0" * 40 if scenario == "wrong_revision" and binary == target else sha) + "\0").encode())
                 artifact = checkout / "rust/target/release" / binary
                 artifact.parent.mkdir(parents=True, exist_ok=True)
                 subprocess.run(
@@ -376,13 +377,13 @@ class CollectorPackagingTests(unittest.TestCase):
             prefix = 'set -euo pipefail\ncheckout="$1"\nstage="$2"\ngit_sha="$3"\nrepository="$4"\ntarget_git() { shift 2; /usr/bin/git -C "$repository" "$@"; }\ngit_safe=(target_git)\n'
             command = prefix + selection + "\n" + revisions + '\ncheck_binary_revisions "$checkout"\n' + copies
             if scenario == "incomplete_release":
-                command += '\nrm -- "$stage/rust/target/release/tb-category-collector"'
+                command += f'\nrm -- "$stage/rust/target/release/{target}"'
             command += '\ncheck_binary_revisions "$stage"\nprintf "%s\\n" "${generated[@]}"'
             installer_result = subprocess.run(
                 ["/bin/bash", "-c", command, "installer", str(checkout), str(stage), sha, str(repository)],
                 capture_output=True, text=True, timeout=5,
             )
-            collector = "rust/target/release/tb-category-collector"
+            collector = f"rust/target/release/{target}"
             if scenario == "missing":
                 self.assertEqual(wrapper_result.returncode, 1, wrapper_result.stderr)
                 self.assertEqual(installer_result.returncode, 1, installer_result.stderr)
@@ -391,15 +392,28 @@ class CollectorPackagingTests(unittest.TestCase):
             elif scenario in ("wrong_revision", "incomplete_release"):
                 self.assertEqual(wrapper_result.returncode, 0, wrapper_result.stderr)
                 self.assertEqual(installer_result.returncode, 1, installer_result.stderr)
-                self.assertIn("tb-category-collector", installer_result.stderr)
+                self.assertIn(target, installer_result.stderr)
             else:
                 self.assertEqual(wrapper_result.returncode, 0, wrapper_result.stderr)
                 self.assertEqual(installer_result.returncode, 0, installer_result.stderr)
                 self.assertEqual(wrapper_result.stdout.splitlines(), installer_result.stdout.splitlines())
-                self.assertEqual(collector in installer_result.stdout.splitlines(), not native)
-                self.assertEqual((stage / collector).exists(), not native)
-                if not native:
+                expected = not native or target == "tb-category-storage"
+                self.assertEqual(collector in installer_result.stdout.splitlines(), expected)
+                self.assertEqual((stage / collector).exists(), expected)
+                if expected:
                     self.assertEqual((checkout / collector).read_bytes(), (stage / collector).read_bytes())
+
+    def test_storage_binary_is_required_checked_and_copied(self):
+        self.check_target("HEAD", native=True, target="tb-category-storage")
+
+    def test_missing_storage_binary_is_rejected(self):
+        self.check_target("HEAD", native=True, scenario="missing", target="tb-category-storage")
+
+    def test_storage_binary_from_another_revision_is_rejected(self):
+        self.check_target("HEAD", native=True, scenario="wrong_revision", target="tb-category-storage")
+
+    def test_existing_release_without_storage_binary_is_rejected(self):
+        self.check_target("HEAD", native=True, scenario="incomplete_release", target="tb-category-storage")
 
     def test_base_revision_requires_checks_and_copies_standalone_collector(self):
         self.check_target(LEGACY_SHA, native=False)

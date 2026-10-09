@@ -551,7 +551,7 @@ async fn heartbeat(
 mod test_database;
 
 #[cfg(test)]
-#[path = "../../../test-support/postgres.rs"]
+#[path = "../../../test-support/category_postgres.rs"]
 mod test_postgres;
 
 #[cfg(test)]
@@ -822,6 +822,7 @@ mod storage_tests {
         ] {
             sqlx::raw_sql(migration).execute(&db.pool).await.unwrap();
         }
+        test_postgres::storage_schema(&db.pool).await;
         sqlx::raw_sql(
             "CREATE TABLE IF NOT EXISTS category_chat_messages_p20261008
             PARTITION OF category_chat_messages FOR VALUES FROM ('2026-10-08') TO ('2026-10-09')",

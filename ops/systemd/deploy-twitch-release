@@ -282,6 +282,9 @@ fi
 if [[ -f "$src/rust/bin/tb-category-collector/src/bin/tb-twitch-watchdog.rs" ]]; then
   required_artifacts+=(rust/target/release/tb-twitch-watchdog)
 fi
+if [[ -f "$src/rust/bin/tb-category-collector/src/bin/tb-category-storage.rs" ]]; then
+  required_artifacts+=(rust/target/release/tb-category-storage)
+fi
 if [[ -f "$src/rust/bin/tb-dashboard/src/bin/clip_context_learn.rs" ]]; then
   required_artifacts+=(rust/target/release/clip_context_learn)
 fi
