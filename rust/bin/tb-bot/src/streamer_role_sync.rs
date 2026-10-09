@@ -135,6 +135,10 @@ pub async fn reconcile(
     only_user: Option<u64>,
 ) -> Result<Option<bool>, String> {
     let _guard = SYNC_LOCK.lock().await;
+    let members = relay
+        .live_role_members(guild_id, guild_id)
+        .await
+        .map_err(|error| error.to_string())?;
     let holders = relay
         .live_role_members(guild_id, role_id)
         .await
@@ -158,8 +162,13 @@ pub async fn reconcile(
     let mut outcome = None;
     let mut changed = 0;
     let mut unknown = 0;
+    let mut nonmembers = 0;
     let mut failures = Vec::new();
     for user_id in users {
+        if !members.contains(&user_id) {
+            nonmembers += 1;
+            continue;
+        }
         let state = desired
             .get(&user_id)
             .copied()
@@ -215,6 +224,7 @@ pub async fn reconcile(
         linked = desired.len(),
         changed,
         unknown,
+        nonmembers,
         failed = failures.len(),
         "Streamer-Rollenabgleich abgeschlossen"
     );

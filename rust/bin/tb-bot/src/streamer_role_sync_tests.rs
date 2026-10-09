@@ -5,6 +5,9 @@ use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 #[derive(Default)]
 struct DiscordState {
     holders: BTreeSet<u64>,
+    members: BTreeSet<u64>,
+    membership_error: bool,
+    membership_complete: bool,
     writes: Vec<(u64, bool, String)>,
     links: Vec<serde_json::Value>,
     role_error: bool,
@@ -24,12 +27,21 @@ impl Respond for Discord {
                     .url
                     .query_pairs()
                     .any(|(key, value)| key == "live" && value == "true"));
-                if state.role_error {
+                let membership = request
+                    .url
+                    .query_pairs()
+                    .any(|(key, value)| key == "role_id" && value == "1");
+                if membership && state.membership_error || !membership && state.role_error {
                     return ResponseTemplate::new(503);
                 }
+                let (role_id, complete, members) = if membership {
+                    ("1", state.membership_complete, &state.members)
+                } else {
+                    ("2", state.complete, &state.holders)
+                };
                 ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "ok": true, "complete": state.complete, "guild_id": "1", "role_id": "2",
-                    "members": state.holders.iter().map(|id| serde_json::json!({"id": id.to_string()})).collect::<Vec<_>>()
+                    "ok": true, "complete": complete, "guild_id": "1", "role_id": role_id,
+                    "members": members.iter().map(|id| serde_json::json!({"id": id.to_string()})).collect::<Vec<_>>()
                 }))
             }
             "/internal/master/v1/discord/twitch-links" => {
@@ -88,6 +100,8 @@ async fn fixture() -> (
     let server = MockServer::start().await;
     let discord = Discord(Arc::new(Mutex::new(DiscordState {
         complete: true,
+        membership_complete: true,
+        members: BTreeSet::from([10, 11, 12, 13, 14, 15, 16, 17, 20, 99]),
         ..Default::default()
     })));
     Mock::given(wiremock::matchers::any())
@@ -105,6 +119,16 @@ async fn fixture() -> (
 #[tokio::test]
 async fn activation_deactivation_reactivation_and_unchanged_state() {
     let (db, _server, relay, discord) = fixture().await;
+    discord.0.lock().unwrap().members.remove(&10);
+    reconcile(&db.pool, &relay, 1, 2, None).await.unwrap();
+    assert_eq!(
+        reconcile(&db.pool, &relay, 1, 2, Some(10)).await.unwrap(),
+        None
+    );
+    assert!(discord.0.lock().unwrap().writes.is_empty());
+    discord.0.lock().unwrap().members.insert(10);
+    reconcile(&db.pool, &relay, 1, 2, None).await.unwrap();
+    assert_eq!(discord.0.lock().unwrap().holders, BTreeSet::from([10]));
     sqlx::query(
         "UPDATE twitch_partners SET status=' ACTIVE ',departnered_at='',admin_archived_at='  '",
     )
@@ -269,17 +293,21 @@ async fn missing_state_temporary_pause_unverified_links_and_failures_do_not_revo
     }
     reconcile(&db.pool, &relay, 1, 2, None).await.unwrap();
     assert!(discord.0.lock().unwrap().writes.is_empty());
-    for error in 0..3 {
+    discord.0.lock().unwrap().holders.insert(99);
+    for error in 0..5 {
         {
             let mut state = discord.0.lock().unwrap();
             state.role_error = error == 0;
             state.link_error = error == 1;
             state.complete = error != 2;
+            state.membership_error = error == 3;
+            state.membership_complete = error != 4;
         }
         assert!(reconcile(&db.pool, &relay, 1, 2, None).await.is_err());
         assert!(discord.0.lock().unwrap().writes.is_empty());
     }
     discord.0.lock().unwrap().complete = true;
+    discord.0.lock().unwrap().membership_complete = true;
     sqlx::query("ALTER TABLE twitch_partners RENAME TO unavailable_partners")
         .execute(&db.pool)
         .await
