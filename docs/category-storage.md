@@ -78,7 +78,7 @@ remove <Manifest-UUID> --apply
 restore <Manifest-UUID> --apply
 ```
 
-`restore` lädt und prüft das bestätigte konkrete Objekt zunächst vollständig. Ein zweiter begrenzter Leselauf importiert innerhalb einer Transaktion. Die Collection-Runs und Kennzahlen dieses Tages müssen in derselben Datenbank erhalten sein. Der gemeldete Rückholwert bezeichnet verarbeitete Archivzeilen, nicht die Zahl nach Redaktionsfiltern neu eingefügter Chatnachrichten. Wiederholungen sind dedupliziert. Restore ändert ein Manifest zu `restored`; der normale Exportjob entfernt eine ausdrücklich zurückgeholte Tagesgeneration nicht sofort erneut.
+`restore` lädt und prüft das bestätigte konkrete Objekt zunächst vollständig. Ein zweiter begrenzter Leselauf importiert innerhalb einer Transaktion. Die Collection-Runs und Kennzahlen dieses Tages müssen in derselben Datenbank erhalten sein. Der gemeldete Rückholwert bezeichnet verarbeitete Archivzeilen, nicht die Zahl nach Redaktionsfiltern neu eingefügter Chatnachrichten. Wiederholungen sind dedupliziert. Restore ändert ein Manifest zu `restored`; dessen erfasste Schlüssel lösen keinen erneuten automatischen Tagesexport aus. Kommen andere noch nicht erfasste Nichtpartnerdaten dieses Tages hinzu, kann eine weitere Tagesgeneration auch zurückgeholte Rohzeilen erneut erfassen und nach bestätigter Prüfung entfernen.
 
 `--test-database <Datenbankname>` ist auf den synthetischen Server `127.0.0.1:33100` und Datenbanknamen mit `category_storage_` oder `tb_storage_` beschränkt. Dieser Zugang erlaubt `dry-run`, `backfill` und `finalize`, keine Drive-Befehle. Er ist kein Produktionszugang. Der Container dieses Auftrags bleibt bestehen.
 
