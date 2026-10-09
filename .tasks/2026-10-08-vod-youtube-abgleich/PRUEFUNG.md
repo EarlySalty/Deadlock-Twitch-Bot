@@ -106,6 +106,8 @@ Vor Versuch2 ein Archivlauf vor Tests Exit101 wegen Speicherplatz, kein Ergebnis
 
 Früheres eigenes Debug-Cleanup erst nach Ende eigener Prüfprozesse und lesender Prozess-/Releaseprüfung: cargo-slot clean explizites Profil dev/eigenes Baseline-Manifest/eigener Hauptworktree als target-dir. Trockenlauf und tatsächlicher identischer Lauf je8778Dateien/11,2GiB,Exit0. Keine Releasebinaries/fremden Caches/Modelle/Container entfernt; eigener sauberer Baselineworktree danach gelöscht. Keine Wiederholung beauftragt.
 
-## Offen
+## Historischer Zwischenstand vor dem Hauptsession-Beleg
+
+Dieser Abschnitt beschreibt den damals offenen Journalblocker. Die Hauptsession hat ihn inzwischen mit begrenztem Leseaufruf und positiver Kontrolle behoben. Der aktuelle gemeldete Release ist fdee652a; e0e9fde2 bleibt der ursprüngliche Deploy-/Journal-/Funktionsbeleg. [Abschlussbericht](ABSCHLUSS.md), [Hauptsession-Beleg](pruefung/main-session-final-proof.json).
 
 Beide vollständigen Mergepakete mit gpt-6.1-sol ALLOW und regulär auf main. Aktueller sauberer Sieben-Binary-Release `e0e9fde20ec27f87acc8833e3d93dcdbe4d2934d` über vorhandenen Wrapper deployt, Migrationsweg und drei Neustarts Exit0, Byte-/SHA-/PID-/Ankerbelege vorhanden. Vollständiger regulärer Workerabgleich:70 bestätigt mit nichtleeren verarbeiteten Belegen,7 nicht abrufbar,5 Altfälle ohne eindeutige Zuordnung. Details in [RELEASE-STAND.md](RELEASE-STAND.md). Noch offen: tatsächlicher Systemjournalnachweis; explizites --system meldet unzureichende Leserechte. Leere Standardjournalprobe nicht als fehlerfrei gezählt. Keine Rechte-/Wrapperänderung oder generisches sudo als Rückfall. Abschluss, finales Cleanup und settle bleiben bis zu diesem Beleg offen.

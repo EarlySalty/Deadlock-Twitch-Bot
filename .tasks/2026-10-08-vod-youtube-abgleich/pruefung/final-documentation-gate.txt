@@ -1,0 +1,3 @@
+ALLOW: No merge-blocking defect established in the supplied diff.
+
+1. .tasks/2026-10-08-vod-youtube-abgleich/PRUEFUNG.md:111 | NIT: Stale status says journal acceptance remains blocked and calls `e0e9fde2` current; RELEASE-STAND.md:8 also calls that release current. | The supplied final proof records completed journal evidence and current release `fdee652a`. Update these statements or explicitly label them historical.
