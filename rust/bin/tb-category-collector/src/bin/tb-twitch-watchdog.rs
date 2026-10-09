@@ -420,6 +420,50 @@ async fn storage_notifications(
     Ok(())
 }
 
+async fn archive_notifications(
+    pool: &PgPool,
+    now: DateTime<Utc>,
+    retry: i64,
+    credential: &Result<NotifyCredential>,
+) -> Result<()> {
+    let installed: bool =
+        sqlx::query_scalar("SELECT to_regclass('category_archive_notifications') IS NOT NULL")
+            .fetch_one(pool)
+            .await?;
+    if !installed {
+        return Ok(());
+    }
+    let pending: Option<(chrono::NaiveDate, String)> = sqlx::query_as(
+        "SELECT notification_day,content FROM category_archive_notifications
+         WHERE notified_at IS NULL AND (last_attempt_at IS NULL OR last_attempt_at <= $1 - make_interval(secs=>$2))
+         AND NOT EXISTS(SELECT FROM category_archive_notifications
+             WHERE (notified_at AT TIME ZONE 'Europe/Berlin')::date=($1 AT TIME ZONE 'Europe/Berlin')::date)
+         ORDER BY notification_day LIMIT 1")
+        .bind(now).bind(retry as i32).fetch_optional(pool).await?;
+    if let Some((day, content)) = pending {
+        sqlx::query("UPDATE category_archive_notifications SET last_attempt_at=$2 WHERE notification_day=$1")
+            .bind(day).bind(now).execute(pool).await?;
+        let delivered = match credential {
+            Ok(credential) => {
+                send(
+                    &content,
+                    &format!("twitch-category-archive-{day}"),
+                    credential,
+                )
+                .await
+            }
+            Err(_) => Err("Benachrichtigungszugang nicht verfügbar".into()),
+        };
+        if delivered.is_ok() {
+            sqlx::query("UPDATE category_archive_notifications SET notified_at=$2 WHERE notification_day=$1")
+                .bind(day).bind(now).execute(pool).await?;
+        } else {
+            eprintln!("Meldung zur Kategorie-Auslagerung noch nicht zugestellt; derselbe bestätigbare Versuch folgt erneut.");
+        }
+    }
+    Ok(())
+}
+
 #[tokio::main(worker_threads = 1)]
 async fn main() -> Result<()> {
     if print_build_revision() {
@@ -568,6 +612,7 @@ async fn main() -> Result<()> {
         }
     }
     storage_notifications(&pool, now, retry, &notification).await?;
+    archive_notifications(&pool, now, retry, &notification).await?;
     lock.commit().await?;
     Ok(())
 }

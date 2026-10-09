@@ -578,6 +578,18 @@ async fn main() {
         }
     };
 
+    if config.category_archive.enabled {
+        let archive_pool = pool.clone();
+        let archive_config = config.category_archive.clone();
+        let archive_cipher =
+            tb_analytics::category::storage::archive_cipher(&|key| std::env::var(key).ok())
+                .map(Arc::new)
+                .ok();
+        supervisor.spawn_graceful("category_archive", move |stop| {
+            tb_analytics::category::storage::run(archive_pool, archive_config, archive_cipher, stop)
+        });
+    }
+
     if let Some(client) = helix.as_ref().clone() {
         let category_pool = pool.clone();
         supervisor.spawn_graceful("category_collector", move |stop| {

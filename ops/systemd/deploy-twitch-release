@@ -282,6 +282,9 @@ fi
 if [[ -f "$src/rust/bin/tb-category-collector/src/bin/tb-twitch-watchdog.rs" ]]; then
   required_artifacts+=(rust/target/release/tb-twitch-watchdog)
 fi
+if [[ -f "$src/rust/bin/tb-category-collector/src/bin/tb-category-storage.rs" ]]; then
+  required_artifacts+=(rust/target/release/tb-category-storage)
+fi
 if [[ -f "$src/rust/bin/tb-dashboard/src/bin/clip_context_learn.rs" ]]; then
   required_artifacts+=(rust/target/release/clip_context_learn)
 fi
@@ -308,9 +311,6 @@ previous_link=""
 candidate="$release_root/$sha"
 verification_pending=1
 
-# Der bestehende Installer aktiviert vor der Migration. Bei einem Fehler vor
-# unserer Abnahme wird der frühere Link wiederhergestellt. Ein automatischer
-# Dienststart im kurzen Aktivierungszeitraum wird dadurch nicht ausgeschlossen.
 for directory in /opt /opt/deadlock /opt/deadlock/twitch "$release_root"; do
   if [[ ! -d "$directory" || -L "$directory" || $(stat -c %u "$directory") != 0 ]] ||
      [[ -n $(find "$directory" -maxdepth 0 -perm /022 -print) ]]; then
@@ -366,22 +366,14 @@ trap 'exit 143' TERM
 
 /usr/local/sbin/install-twitch-release "$dest" "$sha"
 
-# Das Release ist jetzt unter /opt/deadlock/twitch/current aktiv. Schema zuerst
-# mit dem eng begrenzten postgres-One-shot auf den Release-Stand bringen; erst
-# danach dürfen Dashboard/Bot mit dem neuen Code starten. Ein Migrationsfehler
-# bricht den Deploy wegen `set -e` ab statt einen halbfertigen Release zu starten.
 systemctl start deadlock-twitch-migrate.service
 
-# Der Peerinstaller stammt aus demselben geprüften Gitarchiv wie die Rollenmatrix.
-# Die feste SHA-Adresse vermeidet Änderungen am current-Link während des Aufrufs.
 peer_installer="/opt/deadlock/twitch/releases/$sha/ops/systemd/install-twitch-contest-peer"
 if [[ ! -f "$peer_installer" || -L "$peer_installer" ]]; then
   echo "Geprüfter Peerinstaller fehlt im Release: $peer_installer" >&2
   exit 1
 fi
 
-# Feste Verbindungen ohne Nutzer-psqlrc, Passwortdatei oder geerbte PG-Optionen.
-# Alle SQL-Proben sind lesend und begrenzt; es werden keine Nutzerdaten abgefragt.
 local_psql() {
   local os_user="$1" database="$2" database_user="$3"
   shift 3
@@ -472,9 +464,6 @@ BEGIN
         AND has_table_privilege('twitchaudit',c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')) THEN
         RAISE EXCEPTION 'Auditverbrauch: fremde Schreibrechte';
     END IF;
-    -- Vorhandenes PUBLIC SELECT auf echte Timescale-Metadaten gehört zum
-    -- Extensionbestand. Anwendungsdaten, Chunks, Direktgrants und sämtliche
-    -- zusätzlichen Schreibrechte bleiben auch dort ausgeschlossen.
     IF EXISTS (
         WITH extension_metadata AS (
             SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -601,8 +590,6 @@ listeners=$(local_psql postgres twitch_analytics postgres -c 'SHOW listen_addres
 if [[ -z "$listeners" ]]; then
   echo "Analyse-TCPzugang: Listener deaktiviert, geladene rollenbezogene Rejectregeln separat geprüft."
 else
-  # Der Kontrollzugang nutzt einen Socket. Die tatsächliche TCPadresse wird
-  # deshalb aus dem fest konfigurierten Listener gewählt, ohne ihn zu ändern.
   case ",$listeners," in
     *,localhost,*|*,127.0.0.1,*|*,0.0.0.0,*|*,\*,*) tcp_address=127.0.0.1 ;;
     *,::1,*|*,::,*) tcp_address=::1 ;;
@@ -697,7 +684,8 @@ SELECT EXISTS(SELECT FROM category_collector_status s JOIN category_native_runti
     AND n.details->>'process_id'=:'pid'
     AND s.details->>'native_lease_active'='true' AND n.details->>'lease_state'='active'
     AND EXISTS(SELECT FROM category_collection_runs WHERE snapshot_at > :'cutoff'::timestamptz
-        AND snapshot_at=(s.details->>'last_discovery_snapshot_at')::timestamptz));
+        AND snapshot_at=regexp_replace(s.details->>'last_discovery_snapshot_at',
+            '([.][0-9]{6})[0-9]+', '\1')::timestamptz));
 SQL
     ) == t ]]; then
       active=1

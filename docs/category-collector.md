@@ -14,7 +14,7 @@ VOD- und Clip-Metadaten sind über `category_collector_config.media_enabled` ste
 
 ## Dauerhafte Speicherung und Speicherpause
 
-Datenbank: `twitch_analytics`. Die Sammlertabellen beginnen mit `category_`; Rohchat liegt in täglichen UTC-Partitionen. Es gibt keine automatische Archiv-Alterslöschung und keine Kürzung des Bestands wegen Speicherknappheit. Stundenaggregate ergänzen die Rohdaten, sie ersetzen sie nicht.
+Datenbank: `twitch_analytics`. Die Sammlertabellen beginnen mit `category_`; Rohchat liegt in täglichen UTC-Partitionen. Es gibt keine automatische Archiv-Alterslöschung und keine Kürzung des Gesamtbestands wegen Speicherknappheit. Der Speichernachtrag sieht nach geprüftem Upload die lokale Entfernung von Nichtpartner-Rohdaten vor. Partnerdaten und Kennzahlen bleiben lokal. Aktivierung, Übergang und Rückholung stehen in [Kategorie-Speicherung](category-storage.md). Beide Archivschalter sind standardmäßig aus.
 
 Die additive Migration `20260918170000_category_permanent_archive.sql` deaktiviert die alte Partitions-Prune-Funktion. Der Rust-Kompatibilitätseinstieg zur Alterslöschung ist wirkungslos. Rechte für die native Bot-Rolle werden über neue additive Migrationen vergeben, nicht durch Änderungen an bereits angewandten Migrationen. Pauschale DELETE-, UPDATE- oder TRUNCATE-Rechte auf Rohchat bleiben der Bot-Rolle entzogen. Die Native-Migration vergibt auf der Dirty-Queue das begrenzte Spaltenrecht `UPDATE(hour_at)`, das die Zeilensperre bei der Aggregation benötigt; andere Queue-Spalten erhalten kein UPDATE-Recht.
 
@@ -65,7 +65,7 @@ Die Verpackung richtet sich nach der Zielrevision: Stände mit Collector-Crate o
 Für die Umschaltung gilt diese Reihenfolge:
 
 1. Migrationen prüfen und einspielen, dann den Bot mit nativer Sammlerbibliothek bereitstellen. Der native Leader-Lock muss doppelte native Sammlung verhindern. Solange der alte externe Sammler noch aktiv ist, darf der native Sammler nicht parallel erfassen; die Integrationsprüfung muss die Übergangssperre belegen.
-2. Den bisherigen `tb-category-collector.service` stoppen und deaktivieren. Danach native Sammlung im Bot-Journal und neue `category_collection_runs` nachweisen. Bei sichtbaren Streams gehören neue Zeilen in `category_stream_snapshots` zum Datenflussnachweis; eine erfolgreich abgerufene leere Kategorie wird als Messlauf mit `streams=0` gespeichert und benötigt keine Streamzeilen. Ein aktueller Heartbeat allein beweist keine neuen Messungen.
+2. Den bisherigen `tb-category-collector.service` stoppen und deaktivieren. Danach native Sammlung im Bot-Journal und neue `category_collection_runs` nachweisen. Bei sichtbaren Streams gehören neue Zeilen in `category_snapshots_normalized` zum Datenflussnachweis; eine erfolgreich abgerufene leere Kategorie wird als Messlauf mit `streams=0` gespeichert und benötigt keine Streamzeilen. Ein aktueller Heartbeat allein beweist keine neuen Messungen.
 3. Watchdog und Dashboard prüfen. Erst nach erfolgreichem nativen Live-Nachweis externe Unit, Sammler-Credential, Bootstrap-Konfiguration und bisherige Installationsreste endgültig entfernen. Bestehende Archivdaten und benötigte Watchdog-Rechte erhalten.
 
 Die native Bereitschaft liegt während des Wartens auf die bisherige Lease pro Bot-PID in `category_native_processes`, mit aktuellem Heartbeat sowie `process_id`, `lease_id` und `lease_state=waiting`. Der aktive Lease-Inhaber veröffentlicht seinen Status in `category_native_runtime`; wartende Prozesse überschreiben diesen Eintrag nicht. Nach der Übernahme enthalten die Sammlerstatusdetails `runtime=tb-bot`, `process_id`, `process_started_at`, `lease_id` und `native_lease_active=true`. Der Wrapper verknüpft Bereitschaft, aktiven Runtime-Eintrag und Sammlerstatus mit der gestarteten Bot-PID und derselben Lease. Vor der Entfernung von alter Unit, Bootstrap und App-Credential verlangt er einen neuen `category_collection_runs`-Eintrag nach dem Umschaltzeitpunkt, dessen `snapshot_at` mit `last_discovery_snapshot_at` im Sammlerstatus übereinstimmt. Auch ein bestätigter leerer Messlauf erfüllt diesen Vertrag.
@@ -78,7 +78,7 @@ Eine historische Collector-Lücke schaltet Rangliste und Erfolge nicht ab. Betro
 systemctl status deadlock-twitch-bot-rust.service
 journalctl -u deadlock-twitch-bot-rust.service --since '-10 minutes'
 sudo -u postgres psql -d twitch_analytics -c "SELECT * FROM category_collection_runs ORDER BY snapshot_at DESC LIMIT 3"
-sudo -u postgres psql -d twitch_analytics -c "SELECT max(snapshot_at) FROM category_stream_snapshots"
+sudo -u postgres psql -d twitch_analytics -c "SELECT max(snapshot_at) FROM category_snapshots_normalized"
 sudo -u postgres psql -d twitch_analytics -c "SELECT heartbeat_at,details FROM category_collector_status"
 systemctl status deadlock-twitch-bot-watchdog.timer
 ```

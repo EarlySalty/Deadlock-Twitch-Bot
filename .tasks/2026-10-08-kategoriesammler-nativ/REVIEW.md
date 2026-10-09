@@ -2,6 +2,18 @@
 
 Einziger Reviewer: lokaler Merge-Gate, Kritiker `gpt-6.1-sol`. Die Fixer bleiben bei diesem Kritiker. Kein Produktivschritt vor gültigem ALLOW.
 
+## Speichernachtrag: Kern-Gate
+
+Kandidat `561542c0af3afe54155f3b530c56c03fc98b4bcb`, damalige Basis `origin/main = 14eedf4aa602ba835b3619d9f4d8bcfd16351a53`, Kritiker `gpt-6.1-sol`: `ALLOW: No blocking defect found in the supplied changes.` Nachweis `/tmp/tb-storage-core-gate-168485db.log`. Kern veröffentlicht, keine produktive Speicheranwendung.
+
+1. NIT: Clusterweite Rollenerzeugung der synthetischen Fixture verwendet einen nebenläufigen Existenzcheck. Fundstellen `rust/test-support/category_postgres.rs:45`, `category_archive.rs:443` und Erzeugung von `twitchcategoryarchive` in der Migration. Das ist kein BLOCK; parallele Läufe auf einem frischen Testcluster können kollidieren.
+2. NIT: Die konfigurierte Test-DSN erzeugt je Test eine Datenbank ohne anschließenden Cleanup. Fundstelle `rust/test-support/category_postgres.rs:29`. Eigene synthetische Ressourcen werden beim vollständigen Auftragsabschluss geprüft und bereinigt.
+
+Paket L wurde in `b9b423edb06db2717a562e731ed57b9a9672fcb1` mit dem veröffentlichten Kern integriert. Gate auf `566b09d82` mit `gpt-6.1-sol`: `ALLOW: No confirmed merge-blocking defect in the supplied diff.` Nachweis `/tmp/tb-storage-runtime-gate-168485db.log`. Keine Gate-Fixrunde wird aus den fünf Workercommits abgeleitet.
+
+1. NIT: Archivmeldungen werden mit der Startzeit des Watchdogs bestätigt. Eine erfolgreiche Zustellung über die Berliner Mitternacht kann dem Vortag zugeordnet werden. Fundstelle `rust/bin/tb-category-collector/src/bin/tb-twitch-watchdog.rs:459`. Nicht als BLOCK gemeldet; die Randbedingung bleibt dokumentiert.
+2. NIT geprüft: `rust/bin/tb-bot/src/main.rs:587` verwirft den Schlüsselinitialisierungsfehler mit `.ok()`. Der gemeinsame Archivtask prüft bei aktivierter Auslagerung den fehlenden Schlüssel in `rust/crates/tb-analytics/src/category/storage.rs:970`, protokolliert den Fehlschlag ab Zeile 994 und legt eine entprellte Watchdogmeldung an. Fehlende Verschlüsselung führt damit zu sichtbarem Fehler und keinem Upload.
+
 ## Erster BLOCK auf fd0dbebd
 
 1. Gemeinsamer Pausenstatus konnte die Budget-Hysterese falsch einrasten lassen.
@@ -51,3 +63,11 @@ Unveränderte Wrapper-Suite: 16 bestanden, Exit 0, Nachweis `/tmp/tb-category-fi
 Der erste Clippy-Lauf ohne `--no-deps` endet an einem `needless_borrows_for_generic_args` in `tb-chat/src/scam_pitch.rs:1502`, Exit 101, Nachweis `/tmp/tb-category-fix6-clippy.log`. Kein Fix außerhalb dieses Pakets. Die strikt ausgewählten Collector-/Monitoring-Ziele sind mit `--all-targets --no-deps -- -D warnings` tatsächlich geprüft und beendet, Exit 0, Nachweis `/tmp/tb-category-fix6-scoped-clippy.log`. Changed-file-Fmt mit Edition 2021 und Diff-Prüfung sind erfolgreich.
 
 Das Urteil des lokalen Gates zum sauberen eigenen Fixrunde-6-Commit wird unter `/tmp/tb-category-fix6-gate.log` nachgewiesen; maßgeblich ist das Urteil für den in der Übergabe genannten SHA. Kritiker bleibt `gpt-6.1-sol`. Diese Auftragsakte behauptet keinen produktiven Start. Keine angewandte Migration verändert; kein produktiver Eingriff, Push oder Deploy durch den Fixer. Der Start in der produktiven Unit und der vollständige Live-Abschluss bleiben bei der Hauptsession.
+
+## Fixrunde 7: Exakter Messbeweis auf Mikrosekundenauflösung
+
+1. Der Textcast von `last_discovery_snapshot_at` rundet die Nanosekunden; SQLx speichert die abgeschnittenen Mikrosekunden. `native_cutover` schneidet deshalb vor dem Cast ausschließlich die Nachkommastellen nach der sechsten Ziffer ab und behält die exakte Gleichheit zum Messlauf bei. PID, Lease, beide frischen Heartbeats, `native_lease_active`, aktive Laufzeit-Lease und der Messzeitpunkt nach dem Cutover bleiben unverändert. Keine Rust-, Speicher- oder Migrationsänderung.
+2. Tatsächlicher Start im zugewiesenen Fixer-Worktree war `4177752abf6a65b865de2817e170a9907001c38e`, identisch mit lokalem `origin/main`; `c7440400` ist dessen Vorfahr. Der neuere Stand wurde nicht zurückgesetzt. Unveränderte Wrapper-Baseline: 16 bestanden, 0 ignoriert, Exit 0, `/tmp/tb-category-fix7-wrapper-baseline.log`. Die neuen PG-Regressionen gegen das alte Prädikat scheitern in 6 Unterfällen, darunter die fälschliche Annahme der benachbarten Mikrosekunde; `/tmp/tb-category-fix7-precision-baseline.log`.
+3. Vollständiger Lauf nach dem Fix: 18 Tests bestanden, 0 fehlgeschlagen, 0 ignoriert, Exit 0, `/tmp/tb-category-fix7-wrapper-tests.log`. Befehl: `TB_TEST_DATABASE_URL=postgres://postgres:tbtest@127.0.0.1:33100/postgres TB_TEST_REQUIRE_DB=1 python3 -I /home/nathanael/.worktrees/tb-kategoriesammler-legacy-merge/ops/systemd/test_deploy_twitch_pruefen.py -v`. Das unverändert extrahierte Wrapper-Prädikat lief gegen echten PostgreSQL mit synthetischen, lesenden CTE-Fixtures: 11 passende Zeitwerte einschließlich Rundungsgrenze, Sekundenüberlauf und Zeitzonenversatz bestätigt, 17 negative Messungs- und Zustandsfälle abgewiesen. `/tmp/tb-category-fix7-pg-proof.log` enthält die Einzelergebnisse und das Prädikat; `/tmp/tb-category-fix7-pg-version.log` die Serverversion. `bash -n` erfolgreich, Exit 0, `/tmp/tb-category-fix7-bash-syntax.log`.
+
+Das lokale Gate prüft den eigenen sauberen Commit gegen `origin/main` mit `gpt-6.1-sol`; der Nachweis für den Übergabe-SHA liegt unter `/tmp/tb-category-fix7-gate.log`. Das verbindliche Urteil wird im Übergabebericht genannt. Die Testprozesse sind beendet. Der Originalworktree und sein Release-Build blieben unangetastet; kein Push, Deploy, produktiver Eingriff, Cleanup oder Speichernachtrag durch diesen Fixer.

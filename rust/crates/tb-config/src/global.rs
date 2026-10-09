@@ -1,6 +1,3 @@
-//! Gemeinsames Schema der nicht geheimen Betriebskonfiguration.
-//! Zugangsdaten sind absichtlich kein Bestandteil dieses Schemas.
-
 use crate::{
     file::{FileError, Schema, Snapshot},
     BrokerConfig, DbConfig, InternalApiConfig, Settings,
@@ -44,6 +41,8 @@ pub struct BotConfig {
     pub knowledge: crate::shared_options::KnowledgePaths,
     #[serde(default)]
     pub media: crate::shared_options::MediaPublicOptions,
+    #[serde(default)]
+    pub category_archive: crate::category_archive::CategoryArchive,
 }
 
 impl fmt::Debug for BotConfig {
@@ -55,9 +54,7 @@ impl fmt::Debug for BotConfig {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Twitch {
-    /// Öffentliche Bot-ID, kein Token. Bewusst ohne erfundenen Ersatzwert.
     pub bot_user_id: String,
-    /// Öffentliche Discord-Ziel-ID für bestehende Stream-Ankündigungen.
     pub notify_channel_id: String,
     pub eventsub_callback_url: String,
     #[serde(default = "default_game")]
@@ -79,7 +76,6 @@ fn default_languages() -> Vec<String> {
 pub struct Database {
     pub retry: crate::reliability::TransactionRetry,
     pub pool_max: u32,
-    /// Millisekunden, einschließlich der bisher erlaubten Bruchteile einer Sekunde.
     pub acquire_timeout_ms: u64,
     pub connect_timeout_seconds: u64,
 }
@@ -99,9 +95,7 @@ impl Default for Database {
 pub struct InternalApi {
     pub host: IpAddr,
     pub port: u16,
-    /// Eigenständiges Clientziel; nicht mit der Listeneradresse gleichsetzen.
     pub client_base_url: Option<String>,
-    /// Nur die bestehende Health-Probe darf damit entfernte HTTPS-Ziele prüfen.
     pub probe_allow_non_loopback: bool,
 }
 impl Default for InternalApi {
@@ -161,7 +155,6 @@ impl Default for Broker {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Logging {
-    /// Feste Stufen statt eines ungeprüften ENV-Filterausdrucks.
     pub level: LogLevel,
 }
 impl Default for Logging {
@@ -222,7 +215,6 @@ pub(crate) fn positive_id(value: &str, field: &'static str) -> Result<(), FileEr
     let number = value
         .parse::<u64>()
         .map_err(|_| FileError::invalid(field))?;
-    // Discord-Verbraucher verwenden BIGINT; kein Überlauf beim Weiterreichen.
     range(number, 1, i64::MAX as u64, field)
 }
 
@@ -325,6 +317,10 @@ impl Schema for BotConfig {
         self.challenges.validate()?;
         self.knowledge.validate()?;
         self.media.validate()?;
+        self.category_archive.validate()?;
+        if self.category_archive.enabled && self.database.pool_max < 3 {
+            return Err(FileError::invalid("database.pool_max"));
+        }
         self.bot.validate()?;
         self.discord.validate()?;
         self.monitoring.validate()?;
@@ -356,8 +352,6 @@ impl Schema for BotConfig {
 }
 
 impl BotConfigSnapshot {
-    /// Bestehende Verbraucher-Typen bleiben erhalten. Der Getter wird NUR nach
-    /// bekannten Zugangsdaten gefragt, nie nach einem Betriebswert.
     pub fn runtime_settings(
         &self,
         secret: &dyn Fn(&str) -> Option<String>,

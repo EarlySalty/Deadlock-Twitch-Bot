@@ -155,6 +155,112 @@ rm() { printf 'obsolete files removed\n'; }
         self.assertNotIn("obsolete files removed", result.stdout)
 
 
+class SnapshotProofTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.dsn = os.environ.get("TB_TEST_DATABASE_URL")
+        if not cls.dsn:
+            if os.environ.get("TB_TEST_REQUIRE_DB") == "1":
+                raise RuntimeError("Die synthetische PostgreSQL-Test-DB muss angegeben werden.")
+            raise unittest.SkipTest("TB_TEST_DATABASE_URL für den PostgreSQL-Präzisionsbeweis fehlt.")
+        if cls.dsn != "postgres://postgres:tbtest@127.0.0.1:33100/postgres":
+            raise RuntimeError("Der Präzisionsbeweis verwendet ausschließlich die isolierte Test-DB auf Port 33100.")
+        body = WRAPPER.read_text().split("native_cutover() {\n", 1)[1].split("\n}\n\nif [[ -n", 1)[0]
+        cls.proof_sql = body.split("<<'SQL'\n", 1)[1].split("\nSQL", 1)[0]
+
+    def snapshot_proof(self, snapshot_text, stored_snapshot, **overrides):
+        values = {
+            "snapshot_text": snapshot_text,
+            "stored_snapshot": stored_snapshot,
+            "pid": "123",
+            "lease_id": "123-1000000",
+            "status_pid": "123",
+            "runtime_pid": "123",
+            "status_lease": "123-1000000",
+            "runtime_lease": "123-1000000",
+            "runtime": "tb-bot",
+            "native_lease_active": "true",
+            "lease_state": "active",
+            "status_heartbeat_offset": "0 seconds",
+            "runtime_heartbeat_offset": "0 seconds",
+            "has_snapshot": "true",
+            "cutoff": "2026-10-09 00:19:00+00",
+            **overrides,
+        }
+        fixtures = r'''
+BEGIN READ ONLY;
+SET LOCAL statement_timeout = '5s';
+WITH category_collector_status AS (
+    SELECT true AS singleton, now() + :'status_heartbeat_offset'::interval AS heartbeat_at,
+        jsonb_build_object('runtime', :'runtime', 'process_id', :'status_pid',
+            'lease_id', :'status_lease', 'native_lease_active', :'native_lease_active'::boolean,
+            'last_discovery_snapshot_at', NULLIF(:'snapshot_text', '')) AS details
+), category_native_runtime AS (
+    SELECT true AS singleton, now() + :'runtime_heartbeat_offset'::interval AS heartbeat_at,
+        jsonb_build_object('process_id', :'runtime_pid', 'lease_id', :'runtime_lease',
+            'lease_state', :'lease_state') AS details
+), category_collection_runs AS (
+    SELECT :'stored_snapshot'::timestamptz AS snapshot_at WHERE :'has_snapshot'::boolean
+)
+'''
+        raw_comparison = "\nSELECT NULLIF(:'snapshot_text', '')::timestamptz = :'stored_snapshot'::timestamptz;\nROLLBACK;\n"
+        args = ["/usr/bin/psql", "--no-psqlrc", "--no-password", "--quiet", "-At",
+                "--dbname", self.dsn + "?connect_timeout=5", "-v", "ON_ERROR_STOP=1"]
+        for name, value in values.items():
+            args.extend(("-v", f"{name}={value}"))
+        result = subprocess.run(
+            args, input=fixtures + self.proof_sql + raw_comparison,
+            env={}, capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.splitlines()
+
+    def test_postgresql_proves_the_exact_stored_microsecond(self):
+        cases = (
+            ("2026-10-09T00:19:40Z", "2026-10-09 00:19:40+00", "t"),
+            ("2026-10-09T00:19:40.1Z", "2026-10-09 00:19:40.100000+00", "t"),
+            ("2026-10-09T00:19:40.978Z", "2026-10-09 00:19:40.978000+00", "t"),
+            ("2026-10-09T00:19:40.978276Z", "2026-10-09 00:19:40.978276+00", "t"),
+            ("2026-10-09T00:19:40.978276499Z", "2026-10-09 00:19:40.978276+00", "t"),
+            ("2026-10-09T00:19:40.978276500Z", "2026-10-09 00:19:40.978276+00", "t"),
+            ("2026-10-09T00:19:40.978275500Z", "2026-10-09 00:19:40.978275+00", "f"),
+            ("2026-10-09T00:19:40.978276501Z", "2026-10-09 00:19:40.978276+00", "f"),
+            ("2026-10-09T00:19:40.978276730Z", "2026-10-09 00:19:40.978276+00", "f"),
+            ("2026-10-09T00:19:40.999999999Z", "2026-10-09 00:19:40.999999+00", "f"),
+            ("2026-10-09T02:19:40.978276730+02:00", "2026-10-09 00:19:40.978276+00", "f"),
+        )
+        for snapshot_text, stored_snapshot, raw_match in cases:
+            with self.subTest(snapshot_text=snapshot_text):
+                self.assertEqual(self.snapshot_proof(snapshot_text, stored_snapshot), ["t", raw_match])
+
+    def test_postgresql_rejects_other_measurements_and_invalid_native_state(self):
+        snapshot_text = "2026-10-09T00:19:40.978276730Z"
+        stored_snapshot = "2026-10-09 00:19:40.978276+00"
+        cases = {
+            "next_microsecond": {"stored_snapshot": "2026-10-09 00:19:40.978277+00"},
+            "previous_microsecond": {"stored_snapshot": "2026-10-09 00:19:40.978275+00"},
+            "missing_snapshot": {"has_snapshot": "false"},
+            "missing_status_timestamp": {"snapshot_text": ""},
+            "wrong_runtime": {"runtime": "standalone"},
+            "wrong_status_pid": {"status_pid": "124"},
+            "wrong_runtime_pid": {"runtime_pid": "124"},
+            "wrong_status_lease": {"status_lease": "123-1000001"},
+            "wrong_runtime_lease": {"runtime_lease": "123-1000001"},
+            "inactive_native_lease": {"native_lease_active": "false"},
+            "waiting_runtime_lease": {"lease_state": "waiting"},
+            "stale_status": {"status_heartbeat_offset": "-31 seconds"},
+            "stale_runtime": {"runtime_heartbeat_offset": "-31 seconds"},
+            "status_at_freshness_boundary": {"status_heartbeat_offset": "-30 seconds"},
+            "runtime_at_freshness_boundary": {"runtime_heartbeat_offset": "-30 seconds"},
+            "snapshot_at_cutover": {"cutoff": stored_snapshot},
+            "snapshot_before_cutover": {"cutoff": "2026-10-09 00:19:40.978277+00"},
+        }
+        for name, overrides in cases.items():
+            with self.subTest(scenario=name):
+                values = {"snapshot_text": snapshot_text, "stored_snapshot": stored_snapshot, **overrides}
+                self.assertEqual(self.snapshot_proof(**values)[0], "f")
+
+
 class ArtifactPathTests(unittest.TestCase):
     def check_layout(self, dashboards):
         wrapper = WRAPPER.read_text()
@@ -215,7 +321,7 @@ class ArtifactPathTests(unittest.TestCase):
 
 
 class CollectorPackagingTests(unittest.TestCase):
-    def check_target(self, revision, native, scenario="complete"):
+    def check_target(self, revision, native, scenario="complete", target="tb-category-collector"):
         repository = WRAPPER.parents[2]
         sha = subprocess.check_output(
             ["git", "-C", str(repository), "rev-parse", revision], text=True,
@@ -235,6 +341,7 @@ class CollectorPackagingTests(unittest.TestCase):
                 "rust/bin/tb-category-collector/Cargo.toml",
                 "rust/bin/tb-category-collector/src/lib.rs",
                 "rust/bin/tb-category-collector/src/bin/tb-twitch-watchdog.rs",
+                "rust/bin/tb-category-collector/src/bin/tb-category-storage.rs",
                 "rust/bin/tb-dashboard/src/bin/clip_context_learn.rs",
             ):
                 exists = subprocess.run(
@@ -250,11 +357,11 @@ class CollectorPackagingTests(unittest.TestCase):
             stamp = Path(directory) / "revision"
             for binary in (
                 "tb-bot", "tb-dashboard", "tb-stream-audit", "tb-config-check",
-                "tb-llm-usage-recover", "tb-category-collector", "tb-twitch-watchdog", "clip_context_learn",
+                "tb-llm-usage-recover", "tb-category-collector", "tb-twitch-watchdog", "tb-category-storage", "clip_context_learn",
             ):
-                if binary == "tb-category-collector" and scenario == "missing":
+                if binary == target and scenario == "missing":
                     continue
-                stamp.write_bytes((("0" * 40 if scenario == "wrong_revision" and binary == "tb-category-collector" else sha) + "\0").encode())
+                stamp.write_bytes((("0" * 40 if scenario == "wrong_revision" and binary == target else sha) + "\0").encode())
                 artifact = checkout / "rust/target/release" / binary
                 artifact.parent.mkdir(parents=True, exist_ok=True)
                 subprocess.run(
@@ -270,13 +377,13 @@ class CollectorPackagingTests(unittest.TestCase):
             prefix = 'set -euo pipefail\ncheckout="$1"\nstage="$2"\ngit_sha="$3"\nrepository="$4"\ntarget_git() { shift 2; /usr/bin/git -C "$repository" "$@"; }\ngit_safe=(target_git)\n'
             command = prefix + selection + "\n" + revisions + '\ncheck_binary_revisions "$checkout"\n' + copies
             if scenario == "incomplete_release":
-                command += '\nrm -- "$stage/rust/target/release/tb-category-collector"'
+                command += f'\nrm -- "$stage/rust/target/release/{target}"'
             command += '\ncheck_binary_revisions "$stage"\nprintf "%s\\n" "${generated[@]}"'
             installer_result = subprocess.run(
                 ["/bin/bash", "-c", command, "installer", str(checkout), str(stage), sha, str(repository)],
                 capture_output=True, text=True, timeout=5,
             )
-            collector = "rust/target/release/tb-category-collector"
+            collector = f"rust/target/release/{target}"
             if scenario == "missing":
                 self.assertEqual(wrapper_result.returncode, 1, wrapper_result.stderr)
                 self.assertEqual(installer_result.returncode, 1, installer_result.stderr)
@@ -285,15 +392,28 @@ class CollectorPackagingTests(unittest.TestCase):
             elif scenario in ("wrong_revision", "incomplete_release"):
                 self.assertEqual(wrapper_result.returncode, 0, wrapper_result.stderr)
                 self.assertEqual(installer_result.returncode, 1, installer_result.stderr)
-                self.assertIn("tb-category-collector", installer_result.stderr)
+                self.assertIn(target, installer_result.stderr)
             else:
                 self.assertEqual(wrapper_result.returncode, 0, wrapper_result.stderr)
                 self.assertEqual(installer_result.returncode, 0, installer_result.stderr)
                 self.assertEqual(wrapper_result.stdout.splitlines(), installer_result.stdout.splitlines())
-                self.assertEqual(collector in installer_result.stdout.splitlines(), not native)
-                self.assertEqual((stage / collector).exists(), not native)
-                if not native:
+                expected = not native or target == "tb-category-storage"
+                self.assertEqual(collector in installer_result.stdout.splitlines(), expected)
+                self.assertEqual((stage / collector).exists(), expected)
+                if expected:
                     self.assertEqual((checkout / collector).read_bytes(), (stage / collector).read_bytes())
+
+    def test_storage_binary_is_required_checked_and_copied(self):
+        self.check_target("HEAD", native=True, target="tb-category-storage")
+
+    def test_missing_storage_binary_is_rejected(self):
+        self.check_target("HEAD", native=True, scenario="missing", target="tb-category-storage")
+
+    def test_storage_binary_from_another_revision_is_rejected(self):
+        self.check_target("HEAD", native=True, scenario="wrong_revision", target="tb-category-storage")
+
+    def test_existing_release_without_storage_binary_is_rejected(self):
+        self.check_target("HEAD", native=True, scenario="incomplete_release", target="tb-category-storage")
 
     def test_base_revision_requires_checks_and_copies_standalone_collector(self):
         self.check_target(LEGACY_SHA, native=False)

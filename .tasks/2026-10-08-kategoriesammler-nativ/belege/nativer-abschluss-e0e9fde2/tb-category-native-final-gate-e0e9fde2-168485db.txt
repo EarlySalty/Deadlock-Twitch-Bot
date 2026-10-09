@@ -1,0 +1,1 @@
+ALLOW: The timestamp fix preserves exact microsecond matching and existing cutover safeguards. No blocking defects found in the supplied diff.

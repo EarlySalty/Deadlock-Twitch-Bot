@@ -79,6 +79,32 @@ ai_analyses|model|text|NO|
 ai_analyses|points|jsonb|NO|
 ai_analyses|streamer|text|NO|
 ai_analyses|twitch_user_id|text|YES|
+category_archive_manifest|checksum|text|YES|
+category_archive_manifest|cipher_bytes|bigint|YES|
+category_archive_manifest|cipher_checksum|text|YES|
+category_archive_manifest|compacted_at|timestamp with time zone|YES|
+category_archive_manifest|created_at|timestamp with time zone|NO|now()
+category_archive_manifest|day|date|NO|
+category_archive_manifest|id|uuid|NO|
+category_archive_manifest|key_id|text|NO|
+category_archive_manifest|kind|text|NO|
+category_archive_manifest|object_path|text|NO|
+category_archive_manifest|removal_after_at|timestamp with time zone|YES|
+category_archive_manifest|removal_after_item|text|YES|
+category_archive_manifest|removal_after_room|text|YES|
+category_archive_manifest|removed_at|timestamp with time zone|YES|
+category_archive_manifest|rows|bigint|NO|0
+category_archive_manifest|state|text|NO|
+category_archive_manifest|verified_at|timestamp with time zone|YES|
+category_archive_members|at|timestamp with time zone|NO|
+category_archive_members|checksum|text|NO|
+category_archive_members|item_id|text|NO|
+category_archive_members|manifest_id|uuid|NO|
+category_archive_members|room_user_id|text|NO|
+category_archive_notifications|content|text|NO|
+category_archive_notifications|last_attempt_at|timestamp with time zone|YES|
+category_archive_notifications|notification_day|date|NO|
+category_archive_notifications|notified_at|timestamp with time zone|YES|
 category_channels|broadcaster_language|text|NO|'und'::text
 category_channels|broadcaster_type|text|NO|''::text
 category_channels|created_at|timestamp with time zone|YES|
@@ -110,6 +136,24 @@ category_chat_messages|sent_at|timestamp with time zone|NO|
 category_chat_messages|shared_chat_copy|boolean|NO|false
 category_chat_messages|stream_language|text|NO|
 category_chat_messages|tags|jsonb|NO|'{}'::jsonb
+category_chat_metric_source|chatter_user_id|text|YES|
+category_chat_metric_source|detected_lang|text|YES|
+category_chat_metric_source|message_id|text|YES|
+category_chat_metric_source|message_len|integer|YES|
+category_chat_metric_source|room_user_id|text|YES|
+category_chat_metric_source|sent_at|timestamp with time zone|YES|
+category_chat_metric_source|shared_chat_copy|boolean|YES|
+category_chat_metric_source|source_id|text|YES|
+category_chat_metric_source|source_room_id|text|YES|
+category_chat_metrics|chatter_user_id|text|NO|
+category_chat_metrics|detected_lang|text|NO|
+category_chat_metrics|message_id|text|NO|
+category_chat_metrics|message_len|integer|NO|
+category_chat_metrics|room_user_id|text|NO|
+category_chat_metrics|sent_at|timestamp with time zone|NO|
+category_chat_metrics|shared_chat_copy|boolean|NO|
+category_chat_metrics|source_id|text|YES|
+category_chat_metrics|source_room_id|text|YES|
 category_chat_redactions|message_id|text|NO|
 category_chat_redactions|observed_at|timestamp with time zone|NO|now()
 category_chat_redactions|room_user_id|text|NO|
@@ -162,6 +206,74 @@ category_native_processes|process_id|bigint|NO|
 category_native_runtime|details|jsonb|NO|
 category_native_runtime|heartbeat_at|timestamp with time zone|NO|
 category_native_runtime|singleton|boolean|NO|true
+category_normalization_proofs|checksum|text|NO|
+category_normalization_proofs|day|date|NO|
+category_normalization_proofs|proved_at|timestamp with time zone|NO|now()
+category_normalization_proofs|rows|bigint|NO|
+category_snapshot_metric_source|language|text|YES|
+category_snapshot_metric_source|sample_seconds|double precision|YES|
+category_snapshot_metric_source|snapshot_at|timestamp with time zone|YES|
+category_snapshot_metric_source|started_at|timestamp with time zone|YES|
+category_snapshot_metric_source|stream_id|text|YES|
+category_snapshot_metric_source|user_id|text|YES|
+category_snapshot_metric_source|user_login|text|YES|
+category_snapshot_metric_source|viewer_count|bigint|YES|
+category_snapshot_metrics|language|text|NO|
+category_snapshot_metrics|sample_seconds|double precision|NO|
+category_snapshot_metrics|snapshot_at|timestamp with time zone|NO|
+category_snapshot_metrics|started_at|timestamp with time zone|NO|
+category_snapshot_metrics|stream_id|text|NO|
+category_snapshot_metrics|user_id|text|NO|
+category_snapshot_metrics|user_login|text|NO|
+category_snapshot_metrics|viewer_count|bigint|NO|
+category_snapshot_samples|sample_seconds|double precision|NO|
+category_snapshot_samples|snapshot_at|timestamp with time zone|NO|
+category_snapshot_samples|stream_id|text|NO|
+category_snapshot_samples|version_id|bigint|NO|
+category_snapshot_samples|viewer_count|bigint|NO|
+category_snapshot_versions|fingerprint|text|NO|
+category_snapshot_versions|id|bigint|NO|
+category_snapshot_versions|is_mature|boolean|NO|
+category_snapshot_versions|language|text|NO|
+category_snapshot_versions|started_at|timestamp with time zone|NO|
+category_snapshot_versions|stream_id|text|NO|
+category_snapshot_versions|tags|ARRAY|NO|
+category_snapshot_versions|thumbnail_url|text|NO|
+category_snapshot_versions|title|text|NO|
+category_snapshot_versions|user_id|text|NO|
+category_snapshot_versions|user_login|text|NO|
+category_snapshot_versions|valid_from|timestamp with time zone|NO|
+category_snapshots_normalized|is_mature|boolean|YES|
+category_snapshots_normalized|language|text|YES|
+category_snapshots_normalized|sample_seconds|double precision|YES|
+category_snapshots_normalized|snapshot_at|timestamp with time zone|YES|
+category_snapshots_normalized|started_at|timestamp with time zone|YES|
+category_snapshots_normalized|stream_id|text|YES|
+category_snapshots_normalized|tags|ARRAY|YES|
+category_snapshots_normalized|thumbnail_url|text|YES|
+category_snapshots_normalized|title|text|YES|
+category_snapshots_normalized|user_id|text|YES|
+category_snapshots_normalized|user_login|text|YES|
+category_snapshots_normalized|viewer_count|bigint|YES|
+category_snapshots_read|is_mature|boolean|YES|
+category_snapshots_read|language|text|YES|
+category_snapshots_read|sample_seconds|double precision|YES|
+category_snapshots_read|snapshot_at|timestamp with time zone|YES|
+category_snapshots_read|started_at|timestamp with time zone|YES|
+category_snapshots_read|stream_id|text|YES|
+category_snapshots_read|tags|ARRAY|YES|
+category_snapshots_read|thumbnail_url|text|YES|
+category_snapshots_read|title|text|YES|
+category_snapshots_read|user_id|text|YES|
+category_snapshots_read|user_login|text|YES|
+category_snapshots_read|viewer_count|bigint|YES|
+category_storage_state|chat_metrics_ready|boolean|NO|false
+category_storage_state|failures|bigint|NO|0
+category_storage_state|last_alert_at|timestamp with time zone|YES|
+category_storage_state|normalized|boolean|NO|false
+category_storage_state|removal_authorized|boolean|NO|false
+category_storage_state|singleton|boolean|NO|true
+category_storage_state|writer_snapshot_at|timestamp with time zone|YES|
 category_stream_snapshots|is_mature|boolean|NO|
 category_stream_snapshots|language|text|NO|
 category_stream_snapshots|sample_seconds|double precision|NO|
@@ -2382,6 +2494,52 @@ twitch_vod_highlights|start_s|double precision|NO|
 twitch_vod_highlights|status|text|NO|'neu'::text
 twitch_vod_highlights|streamer_twitch_id|text|NO|
 twitch_vod_highlights|vod_id|text|NO|
+twitch_vod_youtube_checks|attempt_snapshot|jsonb|YES|
+twitch_vod_youtube_checks|auth_id|integer|NO|
+twitch_vod_youtube_checks|auth_revision|text|NO|
+twitch_vod_youtube_checks|channel_id|text|YES|
+twitch_vod_youtube_checks|complete|boolean|NO|false
+twitch_vod_youtube_checks|last_attempt_at|timestamp with time zone|YES|
+twitch_vod_youtube_checks|last_error|text|YES|
+twitch_vod_youtube_checks|last_success_at|timestamp with time zone|YES|
+twitch_vod_youtube_checks|next_check_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
+twitch_vod_youtube_checks|observations|jsonb|NO|'[]'::jsonb
+twitch_vod_youtube_checks|requested_at|timestamp with time zone|YES|
+twitch_vod_youtube_checks|state|text|NO|'pending'::text
+twitch_vod_youtube_checks|upload_snapshot|jsonb|NO|'[]'::jsonb
+twitch_vod_youtube_checks|vod_id|bigint|NO|
+twitch_vod_youtube_continuations|auth_id|integer|NO|
+twitch_vod_youtube_continuations|auth_revision|text|NO|
+twitch_vod_youtube_continuations|channel_id|text|NO|
+twitch_vod_youtube_continuations|observations|jsonb|NO|
+twitch_vod_youtube_continuations|refreshed|jsonb|NO|
+twitch_vod_youtube_continuations|source_snapshot|jsonb|NO|
+twitch_vod_youtube_continuations|started_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
+twitch_vod_youtube_continuations|upload_snapshot|jsonb|NO|
+twitch_vod_youtube_continuations|vod_id|bigint|NO|
+twitch_vod_youtube_continuations|vod_snapshot|jsonb|NO|
+twitch_vod_youtube_inventory|duration_sec|bigint|YES|
+twitch_vod_youtube_inventory|generation|bigint|NO|
+twitch_vod_youtube_inventory|observed_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
+twitch_vod_youtube_inventory|part_index|integer|YES|
+twitch_vod_youtube_inventory|part_total|integer|YES|
+twitch_vod_youtube_inventory|privacy|text|YES|
+twitch_vod_youtube_inventory|state|text|NO|
+twitch_vod_youtube_inventory|twitch_id|text|NO|
+twitch_vod_youtube_inventory|twitch_user_id|text|NO|
+twitch_vod_youtube_inventory|video_id|text|NO|
+twitch_vod_youtube_scans|auth_id|integer|NO|
+twitch_vod_youtube_scans|auth_revision|text|NO|
+twitch_vod_youtube_scans|channel_id|text|NO|
+twitch_vod_youtube_scans|complete|boolean|NO|false
+twitch_vod_youtube_scans|cursor|text|YES|
+twitch_vod_youtube_scans|generation|bigint|NO|1
+twitch_vod_youtube_scans|last_attempt_at|timestamp with time zone|YES|
+twitch_vod_youtube_scans|last_error|text|YES|
+twitch_vod_youtube_scans|last_success_at|timestamp with time zone|YES|
+twitch_vod_youtube_scans|next_scan_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
+twitch_vod_youtube_scans|playlist_id|text|NO|
+twitch_vod_youtube_scans|twitch_user_id|text|NO|
 twitch_watchdog_incidents|delivery_error_at|timestamp with time zone|YES|
 twitch_watchdog_incidents|id|bigint|NO|
 twitch_watchdog_incidents|last_attempt_at|timestamp with time zone|YES|
