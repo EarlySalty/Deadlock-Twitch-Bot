@@ -2,6 +2,15 @@
 
 Einziger Reviewer: lokaler Merge-Gate, Kritiker `gpt-6.1-sol`. Die Fixer bleiben bei diesem Kritiker. Kein Produktivschritt vor gültigem ALLOW.
 
+## Speichernachtrag: Kern-Gate
+
+Kandidat `561542c0af3afe54155f3b530c56c03fc98b4bcb`, damalige Basis `origin/main = 14eedf4aa602ba835b3619d9f4d8bcfd16351a53`, Kritiker `gpt-6.1-sol`: `ALLOW: No blocking defect found in the supplied changes.` Nachweis `/tmp/tb-storage-core-gate-168485db.log`. Kern veröffentlicht, keine produktive Speicheranwendung.
+
+1. NIT: Clusterweite Rollenerzeugung der synthetischen Fixture verwendet einen nebenläufigen Existenzcheck. Fundstellen `rust/test-support/category_postgres.rs:45`, `category_archive.rs:443` und Erzeugung von `twitchcategoryarchive` in der Migration. Das ist kein BLOCK; parallele Läufe auf einem frischen Testcluster können kollidieren.
+2. NIT: Die konfigurierte Test-DSN erzeugt je Test eine Datenbank ohne anschließenden Cleanup. Fundstelle `rust/test-support/category_postgres.rs:29`. Eigene synthetische Ressourcen werden beim vollständigen Auftragsabschluss geprüft und bereinigt.
+
+Paket L wurde in `b9b423edb06db2717a562e731ed57b9a9672fcb1` mit dem veröffentlichten Kern integriert. Sein eigener Gate ist noch offen. Keine Gate-Fixrunde wird aus den fünf Workercommits abgeleitet.
+
 ## Erster BLOCK auf fd0dbebd
 
 1. Gemeinsamer Pausenstatus konnte die Budget-Hysterese falsch einrasten lassen.
