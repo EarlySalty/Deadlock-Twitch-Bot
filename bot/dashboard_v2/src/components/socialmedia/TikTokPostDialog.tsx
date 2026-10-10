@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { fetchTikTokCreatorInfo, fetchTikTokEditor, saveTikTokChoices, getPreviewStatus, requestPreview, previewFileUrl, SocialMediaApiError, type TikTokDraft, type TikTokPostOptions } from '@/api/socialMedia';
+import { fetchTikTokCreatorInfo, fetchTikTokEditor, saveTikTokChoices, getPreviewStatus, requestPreview, previewFileUrl, SocialMediaApiError, type TikTokDraft, type TikTokEditorState, type TikTokPostOptions } from '@/api/socialMedia';
 import { WorkspaceDialog } from './WorkspaceDialog';
 import { VideoFullscreenButton } from './VideoFullscreenButton';
 import { useT } from '@/context/LanguageContext';
@@ -91,7 +91,14 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
   const save = useMutation({
     mutationFn: (request: { clip: number; kind: 'draft' | 'defaults'; choices: TikTokDraft }) =>
       saveTikTokChoices(request.clip, request.kind, request.choices),
-    onSuccess: (response, request) => {
+    onSuccess: async (response, request) => {
+      const key = ['social-media', 'tiktok-editor', request.clip];
+      await queryClient.cancelQueries({ queryKey: key });
+      queryClient.setQueryData<TikTokEditorState>(key, (previous) => ({
+        draft: previous?.draft ?? null,
+        defaults: previous?.defaults ?? null,
+        [request.kind]: response.choices,
+      }));
       if (request.clip !== clipDbId) return;
       if (request.kind === 'defaults') {
         const values = response.choices;
@@ -119,7 +126,7 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
     save.mutate({ clip: clipDbId, kind, choices: payload });
   };
   const applyChoices = (values: TikTokDraft, kind: 'draft' | 'defaults') => {
-    if (!context.data) return;
+    if (busy || editor.isError || editor.isFetching || context.isError || context.isFetching || !context.data) return;
     const creator = context.data.creator;
     setCaption(values.caption);
     setPrivacy(creator.privacy_level_options.includes(values.privacy_level) ? values.privacy_level : '');
@@ -239,9 +246,9 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
               <a className="text-accent underline" href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noreferrer">{t('Bestätigung zur Musiknutzung')}</a>. {t('Gilt für dieses TikTok-Konto. Zum Widerrufen ohne Haken als Standard speichern.')}
             </p>
             <div className="flex flex-wrap gap-2">
-              <button type="button" className="studio-button" disabled={busy || editor.isFetching || !editor.data?.defaults} onClick={() => editor.data?.defaults && applyChoices(editor.data.defaults, 'defaults')}>{t('Meine Standardwerte übernehmen')}</button>
+              <button type="button" className="studio-button" disabled={busy || editor.isError || editor.isFetching || !editor.data?.defaults} onClick={() => editor.data?.defaults && applyChoices(editor.data.defaults, 'defaults')}>{t('Meine Standardwerte übernehmen')}</button>
               <button type="button" className="studio-button" disabled={busy || caption.length > 2200} onClick={() => saveChoices('defaults')}>{t('Als Standard speichern')}</button>
-              {editor.data?.draft && <button type="button" className="studio-button" disabled={busy || editor.isFetching} onClick={() => editor.data?.draft && applyChoices(editor.data.draft, 'draft')}>{t('Gespeicherten Entwurf laden')}</button>}
+              {editor.data?.draft && <button type="button" className="studio-button" disabled={busy || editor.isError || editor.isFetching} onClick={() => editor.data?.draft && applyChoices(editor.data.draft, 'draft')}>{t('Gespeicherten Entwurf laden')}</button>}
             </div>
             {editor.isFetching && <p role="status" className="text-sm">{t('Gespeicherte Einstellungen werden geladen.')}</p>}
             {editor.isError && <div role="alert" className="space-y-2 text-danger"><p>{t('Deine gespeicherten Einstellungen konnten nicht geladen werden.')}</p><button type="button" className="studio-button" disabled={busy || editor.isFetching} onClick={() => editor.refetch()}>{t('Erneut laden')}</button></div>}

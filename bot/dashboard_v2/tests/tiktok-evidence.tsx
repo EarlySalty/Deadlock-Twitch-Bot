@@ -12,6 +12,13 @@ window.addEventListener('tiktok-fixture-account', (event) => {
   account = (event as CustomEvent<string>).detail;
   void queryClient.invalidateQueries({ queryKey: ['social-media', 'tiktok-creator'] });
 });
+let editorError = false;
+window.addEventListener('tiktok-fixture-editor-error', (event) => {
+  editorError = (event as CustomEvent<boolean>).detail;
+});
+window.addEventListener('tiktok-fixture-editor-cache', () => {
+  document.body.dataset.tiktokEditorCache = JSON.stringify(queryClient.getQueryData(['social-media', 'tiktok-editor', 124789]));
+});
 let draft: unknown = null;
 let defaults: unknown = { caption: 'Meine Beschreibung #deadlock', privacy_level: 'SELF_ONLY', allow_comment: true, allow_duet: true, allow_stitch: false, commercial_content: false, brand_organic_toggle: false, brand_content_toggle: false };
 window.fetch = async (input, init) => {
@@ -25,7 +32,9 @@ window.fetch = async (input, init) => {
   }
   if (url.endsWith('/preview')) return reply({ status: 'ready', ready: true, clip_db_id: 124789 });
   if (url.endsWith('/creator-info')) return reply({ creator: { creator_username: 'earlysalty', creator_nickname: 'EarlySalty', privacy_level_options: ['PUBLIC_TO_EVERYONE', 'SELF_ONLY'], comment_disabled: true, duet_disabled: false, stitch_disabled: false, max_video_post_duration_sec: 300 }, caption: 'Ein guter Teamfight #deadlock', duration_seconds: 34, credential_id: 1, platform_user_id: account, approved_video_sha256: 'fixture-only' });
-  if (url.endsWith('/editor')) return reply({ draft, defaults });
+  if (url.endsWith('/editor')) return editorError
+    ? new Response(JSON.stringify({ error: 'fixture_editor_unavailable' }), { status: 503, headers: { 'content-type': 'application/json' } })
+    : reply({ draft, defaults });
   if (url.endsWith('/draft')) { draft = JSON.parse(String(init?.body)); return reply({ success: true, choices: draft }); }
   if (url.endsWith('/defaults')) {
     const choices = JSON.parse(String(init?.body));
