@@ -12,9 +12,8 @@ const postCheckbox = () => page.getByRole('checkbox', { name: /Mit der Veröffen
 const saveCheckbox = () => page.getByRole('checkbox', { name: 'Der Musiknutzung von TikTok für alle meine Clips zustimmen' });
 const apply = () => click(page.getByRole('button', { name: 'Meine Standardwerte übernehmen', exact: true }));
 const saveDefaults = () => click(page.getByRole('button', { name: 'Als Standard speichern', exact: true }));
-const saved = () => page.waitForFunction(() => document.body.innerText.includes('Deine Standardwerte sind gespeichert.'));
-const writes = [];
-page.on('request', request => { if (request.method() === 'PUT') writes.push({ url: request.url(), body: request.postDataJSON() }); });
+const saved = () => page.waitForFunction(() => document.body.textContent.includes('Deine Standardwerte sind gespeichert.'));
+const writes = () => page.evaluate(() => JSON.parse(document.body.dataset.tiktokEditorWrites ?? '[]'));
 try {
   await page.goto('http://127.0.0.1:4198/twitch/dashboard-v2/tiktok-evidence.html');
   await page.waitForFunction(() => document.querySelector('textarea')?.value.includes('Teamfight'));
@@ -27,7 +26,7 @@ try {
   await saved();
   assert.equal(await saveCheckbox().isChecked(), false);
   assert.equal(await postCheckbox().count(), 0);
-  assert.ok((await page.locator('body').innerText()).includes('Deine Musikzustimmung ist im Standard gespeichert.'));
+  assert.ok((await page.locator('body').textContent()).includes('Deine Musikzustimmung ist im Standard gespeichert.'));
   await page.getByLabel('Beschreibung für TikTok').evaluate(node => {
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(node, 'Andere Beschreibung');
     node.dispatchEvent(new Event('input', { bubbles: true }));
@@ -52,8 +51,8 @@ try {
   await click(postCheckbox());
   assert.equal(await schedule.isDisabled(), false);
   await click(page.getByRole('button', { name: 'Speichern', exact: true }));
-  await page.waitForFunction(() => document.body.innerText.includes('Gespeichert. Der Clip wurde nicht eingeplant.'));
-  assert.ok(!('music_consent' in writes.at(-1).body));
+  await page.waitForFunction(() => document.body.textContent.includes('Gespeichert. Der Clip wurde nicht eingeplant.'));
+  assert.ok(!('music_consent' in (await writes()).at(-1).body));
   await click(page.getByRole('button', { name: 'Gespeicherten Entwurf laden', exact: true }));
   assert.equal(await postCheckbox().isChecked(), false);
   await apply();
@@ -63,7 +62,7 @@ try {
   await apply();
   assert.equal(await postCheckbox().isChecked(), false);
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('tiktok-fixture-account', { detail: 'fixture-only' })));
-  await page.waitForFunction(() => !document.body.innerText.includes('Aktuelle TikTok-Einstellungen werden geladen.'));
+  await page.waitForFunction(() => !document.body.textContent.includes('Aktuelle TikTok-Einstellungen werden geladen.'));
   await apply();
   assert.equal(await postCheckbox().count(), 0);
   const measurements = [];
@@ -71,7 +70,11 @@ try {
     await page.setViewportSize({ width, height: 1080 });
     await page.evaluate(() => document.fonts.ready);
     await page.screenshot({ path: `${evidence}/dialog-${width}.png` });
-    measurements.push(await page.evaluate(() => ({ width: innerWidth, documentWidth: document.documentElement.scrollWidth, notice: document.body.innerText.includes('Mit der Veröffentlichung stimmst du TikToks'), checkboxes: [...document.querySelectorAll('input[type=checkbox]')].map(node => ({ checked: node.checked, text: node.parentElement.textContent })) })));
+    if (width === 390) {
+      await page.evaluate(() => { const node = document.querySelector('.studio-dialog-content'); node.scrollTop = node.scrollHeight; });
+      await page.screenshot({ path: `${evidence}/dialog-390-footer.png` });
+    }
+    measurements.push(await page.evaluate(() => ({ width: innerWidth, documentWidth: document.documentElement.scrollWidth, notice: document.body.textContent.includes('Mit der Veröffentlichung stimmst du TikToks'), checkboxes: [...document.querySelectorAll('input[type=checkbox]')].map(node => ({ checked: node.checked, text: node.parentElement.textContent })) })));
   }
   assert.ok(measurements.every(value => value.documentWidth <= value.width && value.notice));
   await saveDefaults();
@@ -79,7 +82,7 @@ try {
   assert.equal(await postCheckbox().isChecked(), false);
   await apply();
   assert.equal(await postCheckbox().isChecked(), false);
-  await fs.writeFile(`${evidence}/moli-dom.json`, JSON.stringify({ measurements, writes, options }, null, 2));
+  await fs.writeFile(`${evidence}/moli-dom.json`, JSON.stringify({ measurements, writes: await writes(), options }, null, 2));
   console.log('Moli: preset grant, edits, post consent, branded consent, draft isolation, account switch, revocation and desktop/mobile layout passed. Synthetic fixture, no upload.');
 } finally {
   await context.close();

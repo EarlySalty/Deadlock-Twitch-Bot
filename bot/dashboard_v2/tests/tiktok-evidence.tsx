@@ -18,6 +18,11 @@ window.fetch = async (input, init) => {
   const url = String(input);
   if (!url.includes('/social-media/api/')) return originalFetch(input, init);
   const reply = (data: unknown) => Promise.resolve(new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json' } }));
+  if (init?.method === 'PUT') {
+    const writes = JSON.parse(document.body.dataset.tiktokEditorWrites ?? '[]');
+    writes.push({ url, body: JSON.parse(String(init.body)) });
+    document.body.dataset.tiktokEditorWrites = JSON.stringify(writes);
+  }
   if (url.endsWith('/preview')) return reply({ status: 'ready', ready: true, clip_db_id: 124789 });
   if (url.endsWith('/creator-info')) return reply({ creator: { creator_username: 'earlysalty', creator_nickname: 'EarlySalty', privacy_level_options: ['PUBLIC_TO_EVERYONE', 'SELF_ONLY'], comment_disabled: true, duet_disabled: false, stitch_disabled: false, max_video_post_duration_sec: 300 }, caption: 'Ein guter Teamfight #deadlock', duration_seconds: 34, credential_id: 1, platform_user_id: account, approved_video_sha256: 'fixture-only' });
   if (url.endsWith('/editor')) return reply({ draft, defaults });
