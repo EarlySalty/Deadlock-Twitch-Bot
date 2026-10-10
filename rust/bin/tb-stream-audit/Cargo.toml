@@ -27,5 +27,5 @@ tb-stream-audit = { workspace = true }
 tb-transport-twitch = { workspace = true }
 
 sqlx = { version = "=0.9.0", default-features = false, features = ["postgres", "runtime-tokio"] }
-toml = "0.8"
+toml = "1.1"
 serde = { workspace = true }
