@@ -9,13 +9,82 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::{SecondsFormat, Utc};
 use reqwest::{redirect::Policy, Client, StatusCode};
 use serde_json::{json, Value};
-use sqlx::{PgConnection, PgPool, Postgres, Row, Transaction};
-use std::time::{Duration, Instant};
+use sqlx::{postgres::PgConnectOptions, PgConnection, PgPool, Postgres, Row, Transaction};
+use std::{
+    sync::{Arc, LazyLock, Mutex},
+    time::{Duration, Instant},
+};
 
 const PROVIDER: &str = "anthropic";
 const PURPOSE: &str = "social_editor";
 const BUDGET_LOCK: i64 = 745_001_322_990;
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
+
+struct ActiveAttempt {
+    options: Arc<PgConnectOptions>,
+    id: i64,
+}
+
+static ACTIVE_ATTEMPTS: LazyLock<Mutex<Vec<ActiveAttempt>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+
+struct ReservedAttempt {
+    id: i64,
+    options: Arc<PgConnectOptions>,
+    active: bool,
+}
+
+impl ReservedAttempt {
+    fn register(id: i64, options: Arc<PgConnectOptions>) -> Result<Self, EditorError> {
+        ACTIVE_ATTEMPTS
+            .lock()
+            .map_err(|_| EditorError::new(ErrorKind::Ledger))?
+            .push(ActiveAttempt {
+                options: options.clone(),
+                id,
+            });
+        Ok(Self {
+            id,
+            options,
+            active: true,
+        })
+    }
+
+    fn mark_finalizing(&mut self) {
+        self.unregister();
+    }
+
+    fn unregister(&mut self) {
+        if self.active {
+            let mut active = ACTIVE_ATTEMPTS
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            active.retain(|registered| {
+                registered.id != self.id || !Arc::ptr_eq(&registered.options, &self.options)
+            });
+            self.active = false;
+        }
+    }
+
+    async fn finalize(
+        mut self,
+        pool: &PgPool,
+        completion: &crate::ledger::Completion,
+    ) -> Result<(), EditorError> {
+        self.mark_finalizing();
+        let (project, service) =
+            crate::ledger::identity().ok_or_else(|| EditorError::new(ErrorKind::Ledger))?;
+        crate::ledger::recover_with_pool(pool, completion, project, service)
+            .await
+            .map_err(|_| EditorError::new(ErrorKind::Ledger))
+    }
+}
+
+impl Drop for ReservedAttempt {
+    fn drop(&mut self) {
+        self.unregister();
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorKind {
@@ -252,7 +321,7 @@ async fn begin_attempt(
     pool: &PgPool,
     config: &ProviderConfig,
     context: &EditorContext,
-) -> Result<i64, EditorError> {
+) -> Result<ReservedAttempt, EditorError> {
     let (project, service) =
         crate::ledger::identity().ok_or_else(|| EditorError::new(ErrorKind::Ledger))?;
     let reservation = config
@@ -272,6 +341,21 @@ async fn begin_attempt(
         .await
         .map_err(|_| EditorError::new(ErrorKind::Ledger))?;
     check_consent_on(&mut tx, &context.twitch_user_id).await?;
+    let started: Vec<i64> = sqlx::query_scalar("SELECT id FROM public.llm_usage WHERE purpose=$1 AND provider=$2 AND attempt_state='started'")
+        .bind(PURPOSE).bind(PROVIDER).fetch_all(&mut *tx).await.map_err(|_| EditorError::new(ErrorKind::Ledger))?;
+    let options = pool.connect_options();
+    {
+        let active = ACTIVE_ATTEMPTS
+            .lock()
+            .map_err(|_| EditorError::new(ErrorKind::Ledger))?;
+        if started.iter().any(|id| {
+            !active.iter().any(|registered| {
+                registered.id == *id && Arc::ptr_eq(&registered.options, &options)
+            })
+        }) {
+            return Err(EditorError::new(ErrorKind::Ledger));
+        }
+    }
     let (used, total, invalid): (Option<i64>, i64, i64) = sqlx::query_as("SELECT SUM(CASE WHEN attempt_state='succeeded' THEN COALESCE(NULLIF(estimated_micro_usd, 0), reserved_micro_usd) ELSE GREATEST(reserved_micro_usd, COALESCE(estimated_micro_usd, reserved_micro_usd)) END)::bigint, COUNT(*)::bigint, COUNT(*) FILTER (WHERE reserved_micro_usd IS NULL OR reserved_micro_usd <= 0 OR attempt_state NOT IN ('started','succeeded','failed') OR (estimated_micro_usd IS NOT NULL AND estimated_micro_usd < 0))::bigint FROM public.llm_usage WHERE purpose=$1 AND provider=$2")
         .bind(PURPOSE).bind(PROVIDER).fetch_one(&mut *tx).await.map_err(|_| EditorError::new(ErrorKind::Ledger))?;
     if invalid != 0 || (total != 0 && used.is_none()) {
@@ -289,10 +373,11 @@ async fn begin_attempt(
         .bind(crate::ledger::SOURCE).bind(PURPOSE).bind(&config.model).bind(project).bind(service).bind(PROVIDER)
         .bind(&context.twitch_user_id).bind(&context.job_id).bind(&context.stage).bind(reservation)
         .fetch_one(&mut *tx).await.map_err(|_| EditorError::new(ErrorKind::Ledger))?;
+    let attempt = ReservedAttempt::register(id, options)?;
     tx.commit()
         .await
         .map_err(|_| EditorError::new(ErrorKind::Ledger))?;
-    Ok(id)
+    Ok(attempt)
 }
 
 fn parse_reply(
@@ -345,12 +430,7 @@ struct AttemptOutcome<'a> {
     provider_code: Option<&'a str>,
 }
 
-async fn finalize(
-    pool: &PgPool,
-    id: i64,
-    reserved: i64,
-    outcome: AttemptOutcome<'_>,
-) -> Result<(), EditorError> {
+fn completion(id: i64, reserved: i64, outcome: AttemptOutcome<'_>) -> crate::ledger::Completion {
     let AttemptOutcome {
         status,
         request_id,
@@ -368,22 +448,37 @@ async fn finalize(
         .and_then(|u| u.output_tokens)
         .and_then(|n| i64::try_from(n).ok());
     let total = tokens_in.and_then(|a| tokens_out.and_then(|b| a.checked_add(b)));
-    let code = kind.map(|k| match provider_code {
+    let error_code = kind.map(|k| match provider_code {
         Some(provider_code) if k == ErrorKind::Provider => format!("{k:?}/{provider_code}"),
         _ => format!("{k:?}"),
     });
-    let affected = sqlx::query("UPDATE public.llm_usage SET tokens_in=$2,tokens_out=$3,total=$4,success=$5,attempt_state=$6,request_id=$7,error_code=$8,http_status=$9,latency_ms=$10,finished_at=now(),estimated_micro_usd=$11,cost_basis=$12,cache_creation_input_tokens=$13,cache_read_input_tokens=$14 WHERE id=$1 AND purpose=$15 AND provider=$16 AND attempt_state='started'")
-        .bind(id).bind(tokens_in).bind(tokens_out).bind(total).bind(i64::from(kind.is_none()))
-        .bind(if kind.is_none() { "succeeded" } else { "failed" }).bind(request_id).bind(code)
-        .bind(status.map(|s| i32::from(s.as_u16()))).bind(i64::try_from(latency_ms).unwrap_or(i64::MAX))
-        .bind(safe_estimated).bind(if (kind.is_none() || safe_estimated.is_some_and(|cost| cost > reserved)) && safe_estimated.is_some() { "usage_priced_estimate" } else { "reserved_upper_bound" })
-        .bind(usage.and_then(|u| u.cache_creation_input_tokens).and_then(|n| i64::try_from(n).ok()))
-        .bind(usage.and_then(|u| u.cache_read_input_tokens).and_then(|n| i64::try_from(n).ok()))
-        .bind(PURPOSE).bind(PROVIDER).execute(pool).await.map_err(|_| EditorError::new(ErrorKind::Ledger))?;
-    if affected.rows_affected() != 1 {
-        return Err(EditorError::new(ErrorKind::Ledger));
+    crate::ledger::Completion {
+        id,
+        tokens_in,
+        tokens_out,
+        total,
+        request_id: request_id.map(str::to_owned),
+        success: kind.is_none(),
+        error_code,
+        http_status: status.map(|s| i32::from(s.as_u16())),
+        latency_ms: i64::try_from(latency_ms).unwrap_or(i64::MAX),
+        social_accounting: Some(crate::ledger::SocialAccounting {
+            reserved_micro_usd: reserved,
+            estimated_micro_usd: safe_estimated,
+            cost_basis: if safe_estimated.is_some_and(|cost| kind.is_none() || cost > reserved) {
+                "usage_priced_estimate"
+            } else {
+                "reserved_upper_bound"
+            }
+            .to_owned(),
+            cache_creation_input_tokens: usage
+                .and_then(|u| u.cache_creation_input_tokens)
+                .and_then(|n| i64::try_from(n).ok()),
+            cache_read_input_tokens: usage
+                .and_then(|u| u.cache_read_input_tokens)
+                .and_then(|n| i64::try_from(n).ok()),
+        }),
     }
-    Ok(())
 }
 
 fn response_usage(body: &[u8]) -> Option<Usage> {
@@ -397,10 +492,13 @@ fn response_request_id(
 ) -> Option<String> {
     header
         .and_then(|h| h.to_str().ok())
-        .map(str::to_owned)
+        .and_then(crate::hub::safe_request_id)
         .or_else(|| {
             let value: Value = serde_json::from_slice(body).ok()?;
-            value.get("id")?.as_str().map(str::to_owned)
+            value
+                .get("id")?
+                .as_str()
+                .and_then(crate::hub::safe_request_id)
         })
 }
 
@@ -485,10 +583,10 @@ async fn complete_with_key(
             }
             tokio::time::sleep(delay).await;
         }
-        let id = begin_attempt(pool, config, context).await?;
+        let reserved_attempt = begin_attempt(pool, config, context).await?;
+        let id = reserved_attempt.id;
         if let Err(mut consent_error) = check_consent(pool, &context.twitch_user_id).await {
-            if finalize(
-                pool,
+            let completed = completion(
                 id,
                 reservation,
                 AttemptOutcome {
@@ -500,21 +598,9 @@ async fn complete_with_key(
                     kind: Some(ErrorKind::Consent),
                     provider_code: None,
                 },
-            )
-            .await
-            .is_err()
-            {
-                crate::ledger::journal_completion(&crate::ledger::Completion {
-                    id,
-                    tokens_in: None,
-                    tokens_out: None,
-                    total: None,
-                    request_id: None,
-                    success: false,
-                    error_code: Some("Consent".to_owned()),
-                    http_status: None,
-                    latency_ms: 0,
-                });
+            );
+            if reserved_attempt.finalize(pool, &completed).await.is_err() {
+                crate::ledger::journal_completion(&completed);
             }
             consent_error.ledger_id = Some(id);
             return Err(consent_error);
@@ -585,8 +671,7 @@ async fn complete_with_key(
         };
         let error_kind = parsed.as_ref().err().copied();
         let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
-        if let Err(mut err) = finalize(
-            pool,
+        let completed = completion(
             id,
             reservation,
             AttemptOutcome {
@@ -598,31 +683,9 @@ async fn complete_with_key(
                 kind: error_kind,
                 provider_code: provider_code.as_deref(),
             },
-        )
-        .await
-        {
-            let tokens_in = usage
-                .as_ref()
-                .and_then(|u| u.input_tokens)
-                .and_then(|n| i64::try_from(n).ok());
-            let tokens_out = usage
-                .as_ref()
-                .and_then(|u| u.output_tokens)
-                .and_then(|n| i64::try_from(n).ok());
-            crate::ledger::journal_completion(&crate::ledger::Completion {
-                id,
-                tokens_in,
-                tokens_out,
-                total: tokens_in.and_then(|a| tokens_out.and_then(|b| a.checked_add(b))),
-                request_id: request_id.clone(),
-                success: error_kind.is_none(),
-                error_code: error_kind.map(|k| match provider_code.as_deref() {
-                    Some(code) if k == ErrorKind::Provider => format!("{k:?}/{code}"),
-                    _ => format!("{k:?}"),
-                }),
-                http_status: status.map(|s| i32::from(s.as_u16())),
-                latency_ms: i64::try_from(latency_ms).unwrap_or(i64::MAX),
-            });
+        );
+        if let Err(mut err) = reserved_attempt.finalize(pool, &completed).await {
+            crate::ledger::journal_completion(&completed);
             err.ledger_id = Some(id);
             err.request_id = request_id.map(String::into_boxed_str);
             err.http_status = status.map(|s| s.as_u16());
