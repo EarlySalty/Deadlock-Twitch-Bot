@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Clock3, RefreshCw, Trash2 } from 'lucide-react';
-import { getBrowserTimezone } from '@/api/core';
+import { ApiHttpError, getBrowserTimezone } from '@/api/core';
 import { scheduleQueueApi } from './api';
 import type { QueueJob, SchedulePatch, ScheduleQueueApi, ScheduleQueueSnapshot, ScheduleSettings } from './api';
 import './schedule-queue.css';
@@ -42,6 +42,9 @@ function slotLabel(value: string | null, timezone: string): string {
 }
 
 function errorText(error: unknown): string {
+  if (error instanceof ApiHttpError && error.status === 401) return 'Bitte melde dich erneut an.';
+  if (error instanceof ApiHttpError && error.status === 403) return 'Du hast keinen Zugriff auf den Zeitplan dieses Kanals.';
+  if (error instanceof TypeError) return 'Die Verbindung ist unterbrochen. Bitte versuche es erneut.';
   return error instanceof Error ? error.message : 'Die Änderung konnte nicht gespeichert werden. Bitte versuche es erneut.';
 }
 
@@ -60,14 +63,18 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
   const [removeId, setRemoveId] = useState<number | null>(null);
   const live = useRef(true);
   const dirty = useRef(false);
+  const epoch = useRef(0);
+  const mutating = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
     live.current = true;
     const load = async () => {
+      if (mutating.current) return;
+      const generation = ++epoch.current;
       try {
         const result = await api.load(twitchUserId, controller.signal);
-        if (!live.current || controller.signal.aborted) return;
+        if (!live.current || controller.signal.aborted || generation !== epoch.current) return;
         setSnapshot(result);
         if (!dirty.current) {
           const timezone = result.persisted ? result.settings.timezone : getBrowserTimezone();
@@ -79,7 +86,7 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
         }
         setError('');
       } catch (failure) {
-        if (!controller.signal.aborted && live.current) setError(errorText(failure));
+        if (!controller.signal.aborted && live.current && generation === epoch.current) setError(errorText(failure));
       }
     };
     void load();
@@ -95,11 +102,14 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
   }
 
   async function act(request: () => Promise<ScheduleQueueSnapshot>, message: string, saved = false) {
+    if (mutating.current) return;
+    mutating.current = true;
+    const generation = ++epoch.current;
     setBusy(true);
     setError('');
     try {
       const result = await request();
-      if (!live.current) return;
+      if (!live.current || generation !== epoch.current) return;
       setSnapshot(result);
       if (saved || !dirty.current) setDraft(result.settings);
       if (saved) { dirty.current = false; setPatch({}); }
@@ -109,6 +119,7 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
     } catch (failure) {
       if (live.current) setError(errorText(failure));
     } finally {
+      mutating.current = false;
       if (live.current) setBusy(false);
     }
   }
