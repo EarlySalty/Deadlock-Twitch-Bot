@@ -29,7 +29,7 @@ name = "korpus_ernte"
 path = "src/bin/korpus_ernte.rs"
 
 [dev-dependencies]
-tokio    = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+tokio    = { workspace = true, features = ["rt-multi-thread", "macros", "time", "test-util"] }
 wiremock = { workspace = true }
 tempfile = "3"
 

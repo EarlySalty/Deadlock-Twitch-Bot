@@ -431,26 +431,31 @@ impl VodArchiveWorker {
                 vod.status.as_str(),
                 "uploaded" | "archived" | "unavailable" | "drive_uploaded"
             ) {
+                guard.rollback().await?;
                 continue;
             }
             let braucht_download = vod.braucht_download();
             match naechste_aktion(&self.config, &bilanz, braucht_download) {
                 Aktion::Beende => {
                     tracing::info!("Grenzen erreicht, der Rest folgt beim naechsten Lauf");
+                    guard.rollback().await?;
                     break;
                 }
                 Aktion::Ueberspringe => {
                     bilanz.uebersprungen += 1;
+                    guard.rollback().await?;
                     continue;
                 }
                 Aktion::Bearbeite => {}
             }
             if !self.platz_reicht() {
                 tracing::warn!("Plattenplatz aufgebraucht, der Rest folgt spaeter");
+                guard.rollback().await?;
                 break;
             }
 
             let Some(twitch_user_id) = einstellung.twitch_user_id.as_deref() else {
+                guard.rollback().await?;
                 continue;
             };
             let zugang = uploader.get(twitch_user_id).and_then(|u| u.clone());
@@ -477,6 +482,7 @@ impl VodArchiveWorker {
                         "quotaExceeded",
                     )
                     .await?;
+                    guard.rollback().await?;
                     break;
                 }
                 Err(fehler) => {
@@ -502,6 +508,7 @@ impl VodArchiveWorker {
                                     {
                                         tracing::warn!(vod = %vod.twitch_id, "VOD ist bei Twitch nicht mehr verfügbar und nicht vollständig gesichert");
                                     }
+                                    guard.rollback().await?;
                                     continue;
                                 }
                             }
@@ -527,6 +534,7 @@ impl VodArchiveWorker {
                     .await?;
                 }
             }
+            guard.rollback().await?;
         }
 
         self.raeume_auf().await?;
