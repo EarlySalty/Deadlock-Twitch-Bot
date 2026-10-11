@@ -444,14 +444,74 @@ class CollectorPackagingTests(unittest.TestCase):
         self.check_target(LEGACY_SHA, native=False, scenario="incomplete_release")
 
 
+class ModelInstallationDeploymentTests(unittest.TestCase):
+    def test_model_installation_is_opt_in_at_argument_parse(self):
+        wrapper = WRAPPER.read_text()
+        parser = wrapper.split('src=""\nrestart_explicit=0\n', 1)[1].split('\nif [[ $restart_explicit -eq 0 ]]', 1)[0]
+        script = 'set -euo pipefail\nsrc=""\nrestart_explicit=0\n' + parser + '\nprintf "install=%s source=%s\\n" "$install_stt_models" "$src"'
+
+        def run(*args):
+            return subprocess.run(
+                ["/bin/bash", "-c", script, "deploy-options", *args],
+                capture_output=True, text=True, timeout=5,
+            )
+
+        default = run("/tmp/isolated-checkout")
+        self.assertEqual(default.returncode, 0, default.stderr)
+        self.assertEqual(default.stdout.strip(), "install=0 source=/tmp/isolated-checkout")
+        explicit = run("/tmp/isolated-checkout", "--install-stt-models")
+        self.assertEqual(explicit.returncode, 0, explicit.stderr)
+        self.assertEqual(explicit.stdout.strip(), "install=1 source=/tmp/isolated-checkout")
+        duplicate = run("--install-stt-models", "--install-stt-models")
+        self.assertEqual(duplicate.returncode, 1)
+        self.assertIn("mehrfach", duplicate.stderr)
+
+    def test_default_skips_models_and_explicit_install_uses_release_helper(self):
+        wrapper = WRAPPER.read_text()
+        start = 'if [[ $install_stt_models -eq 1 ]]; then\n  model_installer='
+        block = start + wrapper.split(start, 1)[1].split('\nfi\n', 1)[0] + '\nfi\n'
+        self.assertIn('model_installer="$candidate/ops/systemd/install-stt-models.sh"', block)
+        self.assertEqual(wrapper.count('/bin/bash "$model_installer"'), 1)
+        self.assertLess(wrapper.index('/usr/local/sbin/install-twitch-release'), wrapper.index(block))
+        with tempfile.TemporaryDirectory(prefix="stt-deploy-opt-in-") as directory:
+            candidate = Path(directory) / "releases" / SHA
+            script = candidate / "ops/systemd/install-stt-models.sh"
+            command = 'set -euo pipefail\ncandidate="$1"\ninstall_stt_models="$2"\n' + block
+
+            def run(option):
+                return subprocess.run(
+                    ["/bin/bash", "-c", command, "deploy-models", str(candidate), str(option)],
+                    capture_output=True, text=True, timeout=5,
+                )
+
+            default = run(0)
+            self.assertEqual(default.returncode, 0, default.stderr)
+            self.assertEqual(default.stdout, "")
+            missing = run(1)
+            self.assertEqual(missing.returncode, 1)
+            self.assertIn("Geprüfter STT-Modellinstaller fehlt", missing.stderr)
+            script.parent.mkdir(parents=True)
+            script.write_text("printf 'release helper invoked\\n'\n")
+            explicit = run(1)
+            self.assertEqual(explicit.returncode, 0, explicit.stderr)
+            self.assertIn("release helper invoked", explicit.stdout)
+            self.assertIn("STT-Modelle aus dem geprüften Release", explicit.stdout)
+            script.unlink()
+            script.symlink_to("/dev/null")
+            linked = run(1)
+            self.assertEqual(linked.returncode, 1)
+            self.assertIn("Geprüfter STT-Modellinstaller fehlt", linked.stderr)
+
+
 class ModelPinContractTests(unittest.TestCase):
     def test_installer_uses_only_the_native_model_and_vad_pins(self):
         source = (WRAPPER.parents[2] / "rust/bin/tb-stt-server/src/main.rs").read_text()
         installer = WRAPPER.with_name("install-stt-models.sh").read_text()
+        sizes = {"MODEL": 574041195, "VAD": 885098}
         for prefix in ("MODEL", "VAD"):
             filename = re.search(rf'const DEFAULT_{prefix}_FILE: &str = "([^"]+)";', source).group(1)
             checksum = re.search(rf'const DEFAULT_{prefix}_SHA256: &str =\s*"([0-9a-f]{{64}})";', source).group(1)
-            self.assertIn(f"stt_copy_model {filename} {checksum}", installer)
+            self.assertIn(f"stt_copy_model {filename} {checksum} {sizes[prefix]}", installer)
         self.assertEqual(installer.count("  stt_copy_model ggml-"), 2)
 
 
