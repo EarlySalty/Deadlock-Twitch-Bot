@@ -30,6 +30,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { dictionaryFor, translate } from '../src/i18n/dictionary';
 import { LanguageProvider } from '../src/context/LanguageContext';
 import { resolveSocialMediaChannel } from '../src/utils/socialMediaChannel';
+import { socialWorkspaceDepartureAllowed } from '../src/components/socialmedia/studioNavigation';
 import {
   clipFehler,
   istGesperrt,
@@ -603,7 +604,7 @@ test('metadata departure preserves rejected drafts and blocks pending saves befo
   const start = studio.indexOf('  const changeView = ');
   const end = studio.indexOf('  const statusClip = ', start);
   assert.ok(start >= 0 && end > start);
-  const createGuard = new Function('document', 'window', 't', 'activeView', 'selectedAiClipId', 'setActiveView', 'setSelectedAiClipId', 'socialViewSearch', `${studio.slice(start, end).replace('next: SocialMediaView', 'next')} return changeView;`);
+  const createGuard = new Function('document', 'window', 't', 'activeView', 'selectedAiClipId', 'setActiveView', 'setSelectedAiClipId', 'socialViewSearch', 'socialWorkspaceDepartureAllowed', `${studio.slice(start, end).replace('next: SocialMediaView', 'next')} return changeView;`);
   for (const [saving, dirty, accepted, expected] of [[true, true, true, false], [false, true, false, false], [false, true, true, true], [false, false, false, true]]) {
     const updates: unknown[] = [];
     let prompts = 0;
@@ -613,6 +614,7 @@ test('metadata departure preserves rejected drafts and blocks pending saves befo
       (text: string) => text, 'pool', undefined,
       (view: string) => updates.push(view), (id: number) => updates.push(id),
       (_search: string, view: string, id: number) => `view=${view}&clip_db_id=${id}`,
+      socialWorkspaceDepartureAllowed,
     );
     assert.equal(guard('ai', 42), expected);
     assert.equal(prompts, !saving && dirty ? 1 : 0);
@@ -627,7 +629,7 @@ test('metadata departure preserves rejected drafts and blocks pending saves befo
   assert.match(studio, /const busy = isSaving \|\| enrichmentSaving/);
   assert.match(studio, /onSavingChange=\{setEnrichmentSaving\}/);
   assert.match(lies('src/components/socialmedia/WorkspaceDialog.tsx'), /if \(busy \|\| dialog\.current\?\.querySelector\('\[data-saving="true"\]'\)\) return;/);
-  assert.match(lies('src/pages/SocialMediaManager.tsx'), /if \(document\.querySelector\('\[data-saving="true"\]'\)\) return;/);
+  assert.match(lies('src/pages/SocialMediaManager.tsx'), /if \(!socialWorkspaceDepartureAllowed\(document, \(\) => window\.confirm\(t\('Ungespeicherte Änderungen verwerfen\?'\)\)\)\) return;/);
 });
 
 test('VOD-Archiv kehrt nach Ausblenden, Bestandsänderung und Kanalwechsel auf eine gültige Seite zurück', () => {
