@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Clapperboard, Loader2, ShieldAlert } from 'lucide-react';
 import { SocialMedia } from '@/pages/SocialMedia';
@@ -16,6 +16,12 @@ import {
 import { dashboardRuntimeConfig, resolveEffectiveDemoMode } from '@/runtimeConfig';
 import { ZUGRIFF_LABELS } from '@/components/socialmedia/labels';
 import { resolveSocialMediaChannel } from '@/utils/socialMediaChannel';
+import { socialWorkspaceDepartureAllowed } from '@/components/socialmedia/studioNavigation';
+import { PREVIEW_SOCIAL_ROUTE } from '@/preview/routes';
+
+const SocialMediaPage = import.meta.env.MODE === 'preview'
+  ? lazy(() => import('@/preview/SocialWorkspaces'))
+  : SocialMedia;
 
 export function SocialMediaManager() {
   const t = useT();
@@ -101,7 +107,7 @@ export function SocialMediaManager() {
     const newUrl = qs
       ? `${window.location.pathname}?${qs}`
       : window.location.pathname;
-    window.history.replaceState({}, '', newUrl);
+    window.history.replaceState({}, '', `${newUrl}${window.location.hash}`);
   }, [streamer, selectedChannel, isAdminView]);
 
   return (
@@ -113,7 +119,13 @@ export function SocialMediaManager() {
           {loadingStreamers && <Loader2 aria-label={t('Lade Streamer-Liste…')} className="h-4 w-4 animate-spin text-primary" />}
         </div>
         {isAdminView && <div className="studio-channel-controls">
-            <a href="/twitch/social-media?view=archiv" className="studio-button">{t('VOD-Archiv')}</a>
+            {!streamer && <a
+              href={`${PREVIEW_SOCIAL_ROUTE}?view=archiv`}
+              className="studio-button"
+              onClick={(event) => {
+                if (!socialWorkspaceDepartureAllowed(document, () => window.confirm(t('Ungespeicherte Änderungen verwerfen?')))) event.preventDefault();
+              }}
+            >{t('VOD-Archiv')}</a>}
             {isAdminView && streamer && (
               <button
                 type="button"
@@ -140,10 +152,14 @@ export function SocialMediaManager() {
                 aria-label={t('Streamer wählen')}
                 value={selectedChannel?.twitchUserId ?? ''}
                 onChange={(event) => {
-                  if (document.querySelector('[data-saving="true"]')) return;
-                  if (document.querySelector('[data-unsaved="true"]') && !window.confirm(t('Ungespeicherte Änderungen verwerfen?'))) return;
+                  if (!socialWorkspaceDepartureAllowed(document, () => window.confirm(t('Ungespeicherte Änderungen verwerfen?')))) return;
                   hasAutoSetStreamer.current = true;
                   const selected = resolveSocialMediaChannel(streamers, event.target.value);
+                  if (selected?.twitchUserId !== selectedChannel?.twitchUserId) {
+                    const params = new URLSearchParams(window.location.search);
+                    params.delete('clip_db_id');
+                    window.history.replaceState({}, '', `${window.location.pathname}?${params}${window.location.hash}`);
+                  }
                   setStreamerUserId(selected?.twitchUserId ?? '');
                 }}
                 disabled={loadingStreamers}
@@ -170,14 +186,15 @@ export function SocialMediaManager() {
           <TrialExpiryModal />
           <TrialBanner />
 
+          <Suspense fallback={<p role="status" className="studio-workspace-note">{t('Wird geladen')}</p>}>
           {isAdminView ? (
-            <SocialMedia key={selectedChannel?.twitchUserId ?? ''} streamer={streamer} twitchUserId={selectedChannel?.twitchUserId ?? undefined} isAdmin aiEditor={AiEditorPanel} />
+            <SocialMediaPage key={selectedChannel?.twitchUserId ?? ''} streamer={streamer} twitchUserId={selectedChannel?.twitchUserId ?? undefined} isAdmin aiEditor={AiEditorPanel} />
           ) : loadingAccess ? (
             <div className="panel-card rounded-2xl p-8 text-center text-text-secondary">
               {t('Zugriff wird geprüft…')}
             </div>
           ) : access?.allowed ? (
-            <SocialMedia key={authStatus?.twitchUserId ?? ''} twitchUserId={authStatus?.twitchUserId ?? undefined} streamer={access.streamer ?? authStatus?.twitchLogin ?? ''} isAdmin={false} aiEditor={AiEditorPanel} />
+            <SocialMediaPage key={authStatus?.twitchUserId ?? ''} twitchUserId={authStatus?.twitchUserId ?? undefined} streamer={access.streamer ?? authStatus?.twitchLogin ?? ''} isAdmin={false} aiEditor={AiEditorPanel} />
           ) : (
             <div className="panel-card rounded-2xl p-8 text-center">
               <ShieldAlert className="w-12 h-12 text-warning mx-auto mb-4" />
@@ -189,6 +206,7 @@ export function SocialMediaManager() {
               </p>
             </div>
           )}
+          </Suspense>
         </PlanProvider>
         {loadingStreamers && (
           <div className="mt-4 text-xs text-text-secondary">{t('Lade Streamer-Liste…')}</div>
