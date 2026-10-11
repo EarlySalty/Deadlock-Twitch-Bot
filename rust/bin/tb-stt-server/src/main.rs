@@ -481,10 +481,18 @@ fn transcribe(
     })
 }
 
+#[cfg(unix)]
+fn root_protected(uid: u32, mode: u32, file: bool) -> bool {
+    uid == 0 && mode & (if file { 0o222 } else { 0o022 }) == 0
+}
+
 async fn verify_pinned_model(path: &Path, expected_sha256: &str, kind: &str) -> Result<(), String> {
     let directory = path
         .parent()
         .ok_or_else(|| format!("{kind}-Modellpfad hat keinen Elternordner"))?;
+    if !path.is_absolute() {
+        return Err(format!("{kind}-Modellpfad muss absolut sein"));
+    }
     let mut ancestor = PathBuf::new();
     for component in directory.components() {
         if matches!(component, Component::ParentDir | Component::CurDir) {
@@ -497,10 +505,14 @@ async fn verify_pinned_model(path: &Path, expected_sha256: &str, kind: &str) -> 
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
             return Err(format!("{kind}-Modellverzeichnis ist unsicher"));
         }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            if !root_protected(metadata.uid(), metadata.permissions().mode(), false) {
+                return Err(format!("{kind}-Modellverzeichnis ist nicht rootgeschützt"));
+            }
+        }
     }
-    let directory_metadata = fs::metadata(directory)
-        .await
-        .map_err(|_| format!("{kind}-Modellverzeichnis ist nicht lesbar"))?;
     let metadata = fs::symlink_metadata(path)
         .await
         .map_err(|_| format!("{kind}-Modell fehlt oder ist nicht lesbar"))?;
@@ -510,13 +522,14 @@ async fn verify_pinned_model(path: &Path, expected_sha256: &str, kind: &str) -> 
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        if directory_metadata.permissions().mode() & 0o022 != 0
-            || metadata.permissions().mode() & 0o222 != 0
-            || directory_metadata.uid() != metadata.uid()
-        {
-            return Err(format!("{kind}-Modell ist nicht schreibgeschützt"));
+        if !root_protected(metadata.uid(), metadata.permissions().mode(), true) {
+            return Err(format!("{kind}-Modell ist nicht rootgeschützt"));
         }
     }
+    verify_model_sha256(path, expected_sha256, kind).await
+}
+
+async fn verify_model_sha256(path: &Path, expected_sha256: &str, kind: &str) -> Result<(), String> {
     let mut file = fs::File::open(path)
         .await
         .map_err(|_| format!("{kind}-Modell ist nicht lesbar"))?;
@@ -697,8 +710,21 @@ mod tests {
         assert!(Config::from_snapshot(&snapshot).is_err());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn pinned_models_require_root_control_of_every_entry() {
+        assert!(root_protected(0, 0o755, false));
+        assert!(!root_protected(1000, 0o755, false));
+        assert!(!root_protected(0, 0o775, false));
+        assert!(!root_protected(0, 0o757, false));
+        assert!(root_protected(0, 0o444, true));
+        assert!(!root_protected(1000, 0o444, true));
+        assert!(!root_protected(0, 0o644, true));
+        assert!(!root_protected(0, 0o464, true));
+    }
+
     #[tokio::test]
-    async fn pinned_models_reject_corruption_missing_and_symlinks_without_network() {
+    async fn pinned_models_reject_insecure_paths_without_network() {
         let directory =
             std::env::temp_dir().join(format!("tb-stt-model-test-{}", std::process::id()));
         std::fs::create_dir(&directory).unwrap();
@@ -711,14 +737,18 @@ mod tests {
         let expected = hex::encode(Sha256::digest(b"fixture"));
         assert!(verify_pinned_model(&path, &expected, "VAD").await.is_err());
         std::fs::write(&path, b"wrong").unwrap();
-        assert!(verify_pinned_model(&path, &expected, "VAD").await.is_err());
+        assert!(verify_model_sha256(&path, &expected, "VAD").await.is_err());
         std::fs::write(&path, b"fixture").unwrap();
+        verify_model_sha256(&path, &expected, "VAD").await.unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
         }
-        verify_pinned_model(&path, &expected, "VAD").await.unwrap();
+        let rejection = verify_pinned_model(&path, &expected, "VAD")
+            .await
+            .unwrap_err();
+        assert!(rejection.contains("rootgeschützt"));
         let link = directory.join(DEFAULT_MODEL_FILE);
         #[cfg(unix)]
         {

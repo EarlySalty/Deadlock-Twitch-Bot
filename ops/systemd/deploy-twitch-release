@@ -9,7 +9,9 @@ Aufruf:
   deploy-twitch-release --pruefen
   deploy-twitch-release <40-stelliger-git-sha> [quell-checkout]
   deploy-twitch-release <40-stelliger-git-sha> [quell-checkout] --restart <dienst> [--restart <dienst> ...]
+  deploy-twitch-release <40-stelliger-git-sha> [quell-checkout] --install-stt-models [--restart <dienst> ...]
 
+STT-Modelle werden nur mit --install-stt-models aus dem geprüften Release installiert.
 Ohne --restart werden wie bisher Dashboard, Bot und Coaching-Watch neu gestartet.
 Mit --restart werden nur die explizit genannten Twitch-Dienste neu gestartet.
 
@@ -139,6 +141,7 @@ fi
 
 src=""
 restart_explicit=0
+install_stt_models=0
 declare -a restart_targets=()
 declare -A restart_seen=()
 
@@ -176,6 +179,14 @@ add_restart_target() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --install-stt-models)
+      if [[ $install_stt_models -eq 1 ]]; then
+        echo "--install-stt-models wurde mehrfach angegeben." >&2
+        exit 1
+      fi
+      install_stt_models=1
+      shift
+      ;;
     --restart)
       if [[ $# -lt 2 ]]; then
         echo "--restart braucht ein Ziel." >&2
@@ -367,12 +378,15 @@ trap 'exit 143' TERM
 
 /usr/local/sbin/install-twitch-release "$dest" "$sha"
 
-model_installer="$candidate/ops/systemd/install-stt-models.sh"
-if [[ ! -f "$model_installer" || -L "$model_installer" ]]; then
-  echo "Geprüfter STT-Modellinstaller fehlt im Release: $model_installer" >&2
-  exit 1
+if [[ $install_stt_models -eq 1 ]]; then
+  model_installer="$candidate/ops/systemd/install-stt-models.sh"
+  if [[ ! -f "$model_installer" || -L "$model_installer" ]]; then
+    echo "Geprüfter STT-Modellinstaller fehlt im Release: $model_installer" >&2
+    exit 1
+  fi
+  /bin/bash "$model_installer"
+  printf 'STT-Modelle aus dem geprüften Release installiert oder bestätigt.\n'
 fi
-/bin/bash "$model_installer"
 
 systemctl start deadlock-twitch-migrate.service
 
