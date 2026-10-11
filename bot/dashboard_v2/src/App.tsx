@@ -45,6 +45,7 @@ import {
   PREVIEW_PRICING_ROUTE,
   PREVIEW_TITLE_ROUTE,
   PREVIEW_UPLINK_ROUTE,
+  PREVIEW_SOCIAL_ROUTE,
   PREVIEW_VERWALTUNG_ROUTE,
   isPreviewModeEnabled,
 } from '@/preview/routes';
@@ -403,7 +404,7 @@ export default function App() {
   const isTitleRoute = path === PREVIEW_TITLE_ROUTE;
   const isPricingRoute = path === PREVIEW_PRICING_ROUTE;
   const isUplinkRoute = path === PREVIEW_UPLINK_ROUTE;
-  const isSocialMediaManagerRoute = path === '/twitch/social-media' || path.startsWith('/twitch/social-media/');
+  const isSocialMediaManagerRoute = path === PREVIEW_SOCIAL_ROUTE || path === '/twitch/social-media' || path.startsWith('/twitch/social-media/');
   const isAnalyticsRoute =
     path === PREVIEW_ANALYTICS_ROUTE ||
     path === '/twitch/analyse' ||

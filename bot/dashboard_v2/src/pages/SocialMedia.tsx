@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentType, type DragEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
@@ -31,6 +31,9 @@ import { TikTokPostDialog } from '@/components/socialmedia/TikTokPostDialog';
 import { VideoFullscreenButton } from '@/components/socialmedia/VideoFullscreenButton';
 import { WorkspaceDialog } from '@/components/socialmedia/WorkspaceDialog';
 import { PostingPlanDraft } from '@/components/socialmedia/PostingPlanDraft';
+import { PlatformStatusDialog } from '@/components/socialmedia/PlatformStatusDialog';
+import { socialAiClipFromSearch, socialViewFromSearch, socialViewSearch, socialWorkspaceView, type AiEditorMountProps } from '@/components/socialmedia/studioNavigation';
+import { authorizationFact } from '@/components/socialmedia/platformPresentation';
 import {
   filterQueue,
   queueStats,
@@ -106,8 +109,8 @@ import {
 interface SocialMediaProps {
   streamer: string;
   twitchUserId?: string;
-  /** Reports und Cross-Auswertungen sind der Verwaltung vorbehalten. */
   isAdmin?: boolean;
+  aiEditor?: ComponentType<AiEditorMountProps>;
 }
 
 /** Deutscher Text als Schluessel: ohne Uebersetzung bleibt er einfach stehen. */
@@ -161,16 +164,16 @@ function formatRetention(retentionUntil: string | null, t: Translate): string {
 
 type EditMode = 'layout' | 'enrichment';
 
-/** Zu jedem Bereich der Seite das Symbol; die Beschriftung kommt aus labels.ts. */
 const TAB_ICONS: Record<SocialMediaView, React.ComponentType<{ className?: string }>> = {
   pool: Layers3,
   plan: Calendar,
+  ai: Clapperboard,
   layout: Crop,
   konten: SlidersHorizontal,
   archiv: Archive,
 };
 
-export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialMediaProps) {
+export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor: AiEditor }: SocialMediaProps) {
   const queryClient = useQueryClient();
   const t = useT();
   const [statusFilter, setStatusFilter] = useState<QueueStage>('all');
@@ -185,9 +188,17 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
     mode: EditMode;
   } | null>(null);
   const [activeView, setActiveView] = useState<SocialMediaView>(() =>
-    new URLSearchParams(window.location.search).get('view') === 'archiv' ? 'archiv' : /oauth/.test(window.location.search) ? 'konten' : 'pool',
+    socialViewFromSearch(window.location.search),
   );
+  const [statusClipId, setStatusClipId] = useState<number | null>(null);
+  const [selectedAiClipId, setSelectedAiClipId] = useState(() => socialAiClipFromSearch(window.location.search));
+  const workspaceView = socialWorkspaceView(activeView);
   const [showAnalytics, setShowAnalytics] = useState(false);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const [tiktokPost, setTikTokPost] = useState<{ clipDbId: number; platforms: SocialPlatform[] } | null>(null);
 
   const layoutQuery = useQuery<StreamerLayoutResponse, Error>({
@@ -221,7 +232,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
     queryFn: () =>
       fetchClips({ status: 'all', twitch_user_id: twitchUserId, page: 1, page_size: 12 }),
     // Vorschauclips werden nur im fokussierten Layout-Bereich gebraucht.
-    enabled: !!twitchUserId && activeView === 'layout',
+    enabled: !!twitchUserId && workspaceView === 'konten',
     staleTime: 5 * 60 * 1000,
     retry: (failureCount, err) => {
       if (err instanceof SocialMediaForbiddenError) return false;
@@ -404,18 +415,21 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
   const editorClip = editingClip?.clip ?? null;
   const actionsBusy =
     approvalMutation.isPending || discardMutation.isPending || abbrechenMutation.isPending;
-  const changeView = (next: SocialMediaView) => {
-    if (next === activeView) return;
+  const changeView = (next: SocialMediaView, clipDbId = selectedAiClipId) => {
+    if (next === activeView && clipDbId === selectedAiClipId) return true;
     if (
       document.querySelector('[data-unsaved="true"]') &&
       !window.confirm(t('Ungespeicherte Änderungen verwerfen?'))
     )
-      return;
+      return false;
     setActiveView(next);
-    const params = new URLSearchParams(window.location.search);
-    params.set('view', next);
-    window.history.replaceState({}, '', `${window.location.pathname}?${params}`);
+    setSelectedAiClipId(next === 'ai' ? clipDbId : undefined);
+    const search = socialViewSearch(window.location.search, next, clipDbId);
+    window.history.replaceState({}, '', `${window.location.pathname}?${search}${window.location.hash}`);
+    return true;
   };
+  const statusClip = clipsQuery.data?.items.find((clip) => clip.clip_db_id === statusClipId);
+  const selectedAiClip = clipsQuery.data?.items.find((clip) => clip.clip_db_id === selectedAiClipId);
 
   const defaultApprovalPlatforms = useMemo(
     () =>
@@ -470,8 +484,8 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
               role="tab"
               id={`studio-tab-${id}`}
               aria-controls="studio-panel"
-              aria-selected={activeView === id}
-              tabIndex={activeView === id ? 0 : -1}
+              aria-selected={workspaceView === id}
+              tabIndex={workspaceView === id ? 0 : -1}
               className="studio-tab"
               onClick={() => changeView(id)}
               onKeyDown={(event) => {
@@ -500,10 +514,22 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
       <section
         id="studio-panel"
         role="tabpanel"
-        aria-labelledby={`studio-tab-${activeView}`}
+        aria-labelledby={`studio-tab-${workspaceView}`}
         className={activeView === 'pool' ? 'studio-pipeline min-w-0 space-y-4' : 'min-w-0'}
       >
-        {activeView === 'archiv' ? (
+        {activeView === 'ai' ? (
+          AiEditor && twitchUserId ? (
+            <AiEditor twitchUserId={twitchUserId} streamer={streamer} clipDbId={selectedAiClipId} />
+          ) : (
+            <div className="studio-ai-reserved">
+              <Clapperboard aria-hidden="true" className="h-6 w-6 text-primary" />
+              <h2 className="text-lg font-semibold">{t('KI-Bearbeitung noch nicht verfügbar')}</h2>
+              <p className="max-w-prose text-sm leading-6 text-text-secondary">{t('Hier kannst du künftig einzelne Clips bearbeiten und das Ergebnis prüfen. Die bisherige Clip-Bearbeitung bleibt in der Pipeline verfügbar.')}</p>
+              {selectedAiClipId !== undefined && <p className="text-sm">{selectedAiClip?.title ?? t('Ausgewählter Clip: {id}', { id: selectedAiClipId })}</p>}
+              <button type="button" className="studio-button" onClick={() => changeView('pool')}>{t('Zur Pipeline')}</button>
+            </div>
+          )
+        ) : activeView === 'archiv' ? (
           <VodArchiveTab twitchUserId={twitchUserId} isAdmin={isAdmin} />
         ) : activeView === 'plan' ? (
           <PostingPlanDraft
@@ -607,8 +633,35 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
               </div>
             )}
           </PostingPlanDraft>
-        ) : activeView === 'layout' ? (
-          <div className="space-y-5">
+        ) : workspaceView === 'konten' ? (
+          <div className="studio-settings space-y-6">
+            <div className="studio-accounts grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <PlatformConnectionsCard
+                now={now}
+                twitchUserId={twitchUserId}
+                streamer={streamer}
+                platforms={platformStatusQuery.data?.platforms ?? []}
+                isLoading={platformStatusQuery.isLoading}
+                ladeFehler={platformStatusQuery.error}
+                onDisconnect={(platform) => disconnectMutation.mutate(platform)}
+                isDisconnecting={disconnectMutation.isPending}
+                error={disconnectMutation.error}
+                disconnectResult={disconnectMutation.data?.twitchUserId === twitchUserId ? disconnectMutation.data ?? null : null}
+              />
+              <div className="space-y-4">
+                <VodArchiveCard
+                  streamer={streamer}
+                  settings={vodArchiveQuery.data ?? null}
+                  isLoading={vodArchiveQuery.isLoading}
+                  ladeFehler={vodArchiveQuery.error}
+                  isSaving={vodArchiveMutation.isPending}
+                  error={vodArchiveMutation.error}
+                  onChange={(next) => vodArchiveMutation.mutate(next)}
+                />
+                <LanguageCard />
+              </div>
+            </div>
+            <h2 className="text-lg font-semibold">{t('Templates & Layouts')}</h2>
             <p className="text-sm text-text-secondary">
               {t(
                 'Lege den Standard-Ausschnitt für neue Clips fest. Einzelne Clips kannst du weiterhin separat anpassen.',
@@ -660,30 +713,6 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
             >
               {t('Gespeichertes Layout öffnen')}
             </button>
-          </div>
-        ) : activeView === 'konten' ? (
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <PlatformConnectionsCard
-              twitchUserId={twitchUserId}
-              streamer={streamer}
-              platforms={platformStatusQuery.data?.platforms ?? []}
-              isLoading={platformStatusQuery.isLoading}
-              ladeFehler={platformStatusQuery.error}
-              onDisconnect={(platform) => disconnectMutation.mutate(platform)}
-              isDisconnecting={disconnectMutation.isPending}
-              error={disconnectMutation.error}
-              disconnectResult={disconnectMutation.data?.twitchUserId === twitchUserId ? disconnectMutation.data ?? null : null}
-            />
-            <VodArchiveCard
-              streamer={streamer}
-              settings={vodArchiveQuery.data ?? null}
-              isLoading={vodArchiveQuery.isLoading}
-              ladeFehler={vodArchiveQuery.error}
-              isSaving={vodArchiveMutation.isPending}
-              error={vodArchiveMutation.error}
-              onChange={(next) => vodArchiveMutation.mutate(next)}
-            />
-            <LanguageCard />
           </div>
         ) : (
           <>
@@ -840,6 +869,9 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
                       <ClipCard
                         key={clip.clip_db_id}
                         clip={clip}
+                        now={now}
+                        onOpenPlatformStatus={() => setStatusClipId(clip.clip_db_id)}
+                        onOpenAiEditor={() => changeView('ai', clip.clip_db_id)}
                         timezone={postingPlanQuery.data?.timezone ?? 'Europe/Berlin'}
                         defaultPlatforms={defaultApprovalPlatforms}
                         availablePlatforms={(platformStatusQuery.data?.platforms ?? []).filter((p) => p.capabilities?.upload).map((p) => p.platform as SocialPlatform)}
@@ -998,6 +1030,9 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
           isSaving={overrideMutation.isPending}
           error={overrideMutation.error}
           onClose={() => setEditingClip(null)}
+          onOpenAiEditor={() => {
+            if (changeView('ai', editorClip.clip_db_id)) setEditingClip(null);
+          }}
           onSaveLayout={(layout) =>
             overrideMutation.mutate(
               { clipDbId: editorClip.clip_db_id, layout },
@@ -1013,6 +1048,15 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false }: SocialM
         />
       )}
 
+      {statusClip && (
+        <PlatformStatusDialog
+          clip={statusClip}
+          platforms={platformStatusQuery.data?.platforms ?? []}
+          loading={platformStatusQuery.isPending}
+          error={platformStatusQuery.error}
+          onClose={() => setStatusClipId(null)}
+        />
+      )}
       {tiktokPost && (
         <TikTokPostDialog
           clipDbId={tiktokPost.clipDbId}
@@ -1052,20 +1096,21 @@ function SocialHero({
   const t = useT();
   const titles = {
     pool: 'Deine Clip-Pipeline',
-    plan: 'Auto-Pilot & Zeitplan',
-    layout: 'Templates & Layouts',
-    konten: 'Konten & Einstellungen',
+    plan: 'Zeitplan',
+    ai: 'KI-Bearbeitung & Prüfung',
+    layout: 'Vorlagen & Konten',
+    konten: 'Vorlagen & Konten',
     archiv: 'VOD-Archiv',
   };
   return (
-    <header className="flex flex-wrap items-center justify-between gap-4 py-2">
+    <header className="studio-header">
       <div className="min-w-0">
         <h1 className="studio-heading">{t(titles[activeView])}</h1>
         <p className="mt-2 text-sm text-text-secondary">
           {streamer} · {t('Aus guten Momenten werden deine nächsten Posts.')}
         </p>
       </div>
-      <div className="flex gap-2">
+      <div className="studio-header-actions">
         <button type="button" onClick={onOpenAnalytics} className="studio-button">
           <BarChart3 className="h-4 w-4" />
           {t('Auswertung')}
@@ -1113,6 +1158,7 @@ function ClipEditorDialog({
   mode,
   isSaving,
   onClose,
+  onOpenAiEditor,
   onSaveLayout,
   onResetLayout,
 }: {
@@ -1121,6 +1167,7 @@ function ClipEditorDialog({
   mode: EditMode;
   isSaving: boolean;
   onClose: () => void;
+  onOpenAiEditor: () => void;
   onSaveLayout: (layout: LayoutPayload) => void;
   onResetLayout: () => void;
 }) {
@@ -1132,6 +1179,7 @@ function ClipEditorDialog({
       busy={isSaving}
       onClose={onClose}
     >
+      {clip.source_kind !== 'manual_upload' && <button type="button" disabled={isSaving} className="studio-button mb-4" onClick={onOpenAiEditor}>{t('KI-Bearbeitung & Prüfung')}</button>}
       {mode === 'layout' ? (
         <div className="space-y-4">
           <LayoutEditor
@@ -1905,6 +1953,7 @@ function leseOauthRueckmeldung(): OauthRueckmeldung {
 }
 
 function PlatformConnectionsCard({
+  now,
   streamer,
   twitchUserId,
   platforms,
@@ -1915,6 +1964,7 @@ function PlatformConnectionsCard({
   error,
   disconnectResult,
 }: {
+  now: number;
   streamer: string;
   twitchUserId?: string;
   platforms: PlatformStatus[];
@@ -1931,7 +1981,7 @@ function PlatformConnectionsCard({
   // Ohne Statusabruf ist jede Zeile geraten. Ein verbundener Kanal saehe dann
   // wie "nicht verbunden" aus und der Streamer startet einen ueberfluessigen
   // OAuth-Flow, deshalb verschwinden hier alle Knoepfe.
-  const standUnbekannt = istStandUnbekannt(ladeFehler);
+  const standUnbekannt = istStandUnbekannt(ladeFehler) || isLoading || platforms.length === 0;
   const gesperrt = istGesperrt({ isLoading, isSaving: isDisconnecting, ladeFehler });
   const rueckmeldung = leseOauthRueckmeldung();
 
@@ -1972,6 +2022,7 @@ function PlatformConnectionsCard({
         </p>
       )}
       <LadeFehlerHinweis fehler={ladeFehler} />
+      <p className="text-xs leading-5 text-text-secondary">{t('Gespeicherter Kontostand, keine Live-Prüfung beim Anbieter.')}</p>
 
       <div className="space-y-2">
         {PLATTFORMEN.map((platform) => {
@@ -1988,7 +2039,7 @@ function PlatformConnectionsCard({
             ? status?.expires_at
             : status?.refresh_expires_at;
           const ablaufZeit = verbindungsablauf ? new Date(verbindungsablauf).getTime() : NaN;
-          const baldAbgelaufen = Number.isFinite(ablaufZeit) && ablaufZeit < Date.now() + 30 * 24 * 60 * 60 * 1000;
+          const baldAbgelaufen = Number.isFinite(ablaufZeit) && ablaufZeit < now + 30 * 24 * 60 * 60 * 1000;
           const ablauf = baldAbgelaufen
             ? new Date(ablaufZeit).toLocaleDateString(locale, {
                 day: '2-digit',
@@ -2000,8 +2051,10 @@ function PlatformConnectionsCard({
           let zeile: string;
           let tonKlasse = 'text-text-secondary';
           if (standUnbekannt) {
+            zeile = isLoading ? t('Wird geladen') : t('Zustand unbekannt');
+            tonKlasse = ladeFehler ? 'text-danger' : 'text-text-secondary';
+          } else if (!status) {
             zeile = t('Zustand unbekannt');
-            tonKlasse = 'text-danger';
           } else if (!uploadAvailable) {
             zeile = t(status?.capabilities.reason ?? 'Noch nicht verfügbar');
           } else if (!connected) {
@@ -2026,6 +2079,7 @@ function PlatformConnectionsCard({
                   {PLATFORM_LABELS[platform] ?? platform}
                 </div>
                 <div className={`text-xs ${tonKlasse}`}>{zeile}</div>
+                <p className="mt-1 text-xs text-text-secondary">{t(authorizationFact(status, isLoading, Boolean(ladeFehler)).label)}</p>
                 {!standUnbekannt && connected && !abgelaufen && (
                   <div className="text-[11px] text-text-secondary">
                     {ablauf
@@ -2212,6 +2266,9 @@ function LanguageCard() {
 
 interface ClipCardProps {
   clip: SocialClipMitPosting;
+  now: number;
+  onOpenPlatformStatus: () => void;
+  onOpenAiEditor: () => void;
   /** Zeitzone des Kanals, damit geplante Termine nicht in UTC dastehen. */
   timezone: string;
   /** Vorauswahl aus dem Auto-Pilot, falls am Clip noch keine Zielplattformen stehen. */
@@ -2232,6 +2289,9 @@ interface ClipCardProps {
 
 function ClipCard({
   clip,
+  now,
+  onOpenPlatformStatus,
+  onOpenAiEditor,
   timezone,
   defaultPlatforms,
   availablePlatforms,
@@ -2384,7 +2444,15 @@ function ClipCard({
         <div className="min-w-0 space-y-2.5">
           {ready && <VideoFullscreenButton videoRef={videoRef} />}
           <span className={`studio-status ${tone}`}>
-            {waitingPlatforms.length > 0 ? t('Wartet auf Verbindung') : stoppbar ? t('Geplant') : t(status.label)}
+            {waitingPlatforms.length > 0
+              ? t('Wartet auf Verbindung')
+              : stoppbar
+                ? t('Geplant')
+                : tiktokInbox && !clip.platform_status.youtube && !clip.platform_status.instagram
+                  ? t('Im TikTok-Postfach')
+                  : clip.youtube_visibility === 'private' && clip.platform_status.youtube && !clip.platform_status.tiktok && !clip.platform_status.instagram
+                    ? t('Privat auf YouTube')
+                    : t(status.label)}
           </span>
           <h3 className="break-words text-sm font-semibold leading-6">
             {clip.title || t('Clip ohne Titel')}
@@ -2496,6 +2564,9 @@ function ClipCard({
               ))}
             </div>
           )}
+          {previewActive && preview.data?.status === null && (
+            <p role="status" className="text-sm text-text-secondary">{t('Noch keine Vorschau vorhanden. Über „Weitere Aktionen“ kannst du sie rendern.')}</p>
+          )}
           {(render.isError || preview.isError || preview.data?.status === 'error') && (
             <p role="alert" className="text-sm text-danger">
               {t('Vorschau konnte nicht gerendert werden.')}
@@ -2537,16 +2608,20 @@ function ClipCard({
           )}
         </div>
         <div className="studio-clip-actions">
+          <button type="button" className="studio-button" onClick={onOpenPlatformStatus}>
+            {t('Plattformstatus')}
+          </button>
           {!canDecide && !terminal && !clip.platform_status.tiktok
-            && clip.approval?.approved_platforms.includes('tiktok')
+            && clip.approval?.state === 'approved'
+            && clip.approval.approved_platforms.includes('tiktok')
             && ['pending', 'failed', 'waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.tiktok ?? 'pending') && (
             <button type="button" className="studio-button" disabled={approvalPending}
               onClick={() => onApprovalDecision('approve', clip.approval?.approved_platforms ?? ['tiktok'])}>
               {clip.upload_states?.tiktok === 'waiting_schedule'
                 || (clip.upload_states?.tiktok === 'waiting_tiktok_approval'
-                  && (!clip.scheduled_at?.tiktok || Date.parse(clip.scheduled_at.tiktok) <= Date.now()))
+                  && (!clip.scheduled_at?.tiktok || Date.parse(clip.scheduled_at.tiktok) <= now))
                 ? t('TikTok erneut einplanen')
-                : t('TikTok-Freigabe prüfen')}
+                : t('TikTok-Veröffentlichung vorbereiten')}
             </button>
           )}
           {canDecide ? (
@@ -2606,6 +2681,15 @@ function ClipCard({
             <div className="studio-menu">
               <button
                 type="button"
+                disabled={terminal || clip.status === 'publishing' || clip.source_kind === 'manual_upload'}
+                onClick={() => runMenu(onOpenAiEditor)}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-white/5"
+              >
+                <Clapperboard className="h-4 w-4" />
+                {t('KI-Bearbeitung & Prüfung')}
+              </button>
+              <button
+                type="button"
                 disabled={approvalPending || terminal || clip.status === 'publishing'}
                 onClick={() => runMenu(() => onOpenEditor('layout'))}
                 className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-white/5"
@@ -2621,6 +2705,15 @@ function ClipCard({
               >
                 <Pencil className="h-4 w-4" />
                 {t('Titel, Beschreibung & Hashtags')}
+              </button>
+              <button
+                type="button"
+                disabled={preview.isFetching || terminal}
+                onClick={() => runMenu(() => { setPreviewActive(true); if (previewActive) void preview.refetch(); })}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-white/5"
+              >
+                <Film className="h-4 w-4" />
+                {t('Vorschau prüfen')}
               </button>
               <button
                 type="button"
