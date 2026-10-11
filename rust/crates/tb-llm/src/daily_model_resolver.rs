@@ -662,6 +662,16 @@ mod tests {
             )
             .await
         }
+        async fn run_due(&self, time: DateTime<Utc>) -> Result<(), LlmError> {
+            for _ in 0..128 {
+                self.run(time).await?;
+                if self.status().checked == time.timestamp() {
+                    return Ok(());
+                }
+                tokio::task::yield_now().await;
+            }
+            panic!("due resolver refresh did not acquire its lock");
+        }
         fn status(&self) -> Attempts {
             attempts(&self.dir.join("llm-model-selection-attempts.json")).unwrap()
         }
@@ -687,7 +697,17 @@ mod tests {
         assert_eq!(fixture.selection(), original);
         assert_eq!(fixture.status().checked, yesterday.timestamp());
         fixture.respond(200).await;
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(fixture.dir.join("llm-model-selection.lock"))
+            .unwrap();
+        lock.try_lock_exclusive().unwrap();
         fixture.run(now).await.unwrap();
+        assert_eq!(fixture.status().checked, yesterday.timestamp());
+        assert_eq!(fixture.server.received_requests().await.unwrap().len(), 0);
+        drop(lock);
+        fixture.run_due(now).await.unwrap();
         assert_eq!(fixture.server.received_requests().await.unwrap().len(), 2);
         assert_eq!(fixture.status().checked, now.timestamp());
         let selection = fireworks_model_selection::read_selection(
