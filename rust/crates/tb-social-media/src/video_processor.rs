@@ -24,8 +24,6 @@ const BRAND_GOLD: &str = "0xC5A059";
 const LOGO: &[u8] = include_bytes!("../assets/ddc-logo.png");
 const FONT: &[u8] = include_bytes!("../assets/DejaVuSans-Bold.ttf");
 
-// Wie TemporaryMedia im bestehenden Kontextpfad: nur das exklusiv angelegte
-// eigene Verzeichnis gehört diesem Render und wird auch bei Future-Drop entfernt.
 struct BrandedRenderDirectory(PathBuf);
 
 impl Drop for BrandedRenderDirectory {
