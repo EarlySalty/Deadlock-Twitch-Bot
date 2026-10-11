@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Clapperboard, ShieldAlert } from 'lucide-react';
-import { DashboardHeader } from '@/components/layout/DashboardHeader';
+import { Clapperboard, Loader2, ShieldAlert } from 'lucide-react';
 import { SocialMedia } from '@/pages/SocialMedia';
 import { PlanProvider } from '@/context/PlanContext';
 import { useT } from '@/context/LanguageContext';
@@ -106,13 +105,13 @@ export function SocialMediaManager() {
 
   return (
     <div className="space-y-6">
-      <DashboardHeader
-        title={t('Social-Media-Manager')}
-        icon={<Clapperboard className="w-6 h-6 text-primary" />}
-        isLoading={loadingStreamers}
-        description={t('Fokus: {focus}', { focus: isAdminView ? streamer || t('Streamer wählen') : access?.streamer || authStatus?.twitchLogin || t('Dein Kanal') })}
-      >
-        {isAdminView && <div className="flex flex-wrap items-center gap-3">
+      <header className="studio-channel-header">
+        <div className="flex min-w-0 items-center gap-2">
+          <Clapperboard aria-hidden="true" className="h-5 w-5 shrink-0 text-primary" />
+          <h2 className="text-sm font-semibold">{t('Social-Media-Manager')}</h2>
+          {loadingStreamers && <Loader2 aria-label={t('Lade Streamer-Liste…')} className="h-4 w-4 animate-spin text-primary" />}
+        </div>
+        {isAdminView && <div className="studio-channel-controls">
             <a href="/twitch/social-media?view=archiv" className="studio-button">{t('VOD-Archiv')}</a>
             {isAdminView && streamer && (
               <button
@@ -140,6 +139,7 @@ export function SocialMediaManager() {
                 aria-label={t('Streamer wählen')}
                 value={selectedChannel?.twitchUserId ?? ''}
                 onChange={(event) => {
+                  if (document.querySelector('[data-saving="true"]')) return;
                   if (document.querySelector('[data-unsaved="true"]') && !window.confirm(t('Ungespeicherte Änderungen verwerfen?'))) return;
                   hasAutoSetStreamer.current = true;
                   const selected = resolveSocialMediaChannel(streamers, event.target.value);
@@ -158,7 +158,7 @@ export function SocialMediaManager() {
             )}
             {accessMutation.isError && <p role="alert" className="text-sm text-ui-danger-soft">{t('Die Freigabe konnte nicht geändert werden. Bitte prüfe die Kanalauswahl.')}</p>}
         </div>}
-      </DashboardHeader>
+      </header>
 
       <PlanProvider
           plan={authStatus?.plan ?? null}

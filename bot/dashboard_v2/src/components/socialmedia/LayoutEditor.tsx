@@ -591,6 +591,12 @@ export function LayoutEditor({
   }, [initialLayout]);
 
   const isDirty = useMemo(() => JSON.stringify(layout) !== JSON.stringify(base), [layout, base]);
+  useEffect(() => {
+    if (!isDirty && !isSaving) return;
+    const preventUnload = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener('beforeunload', preventUnload);
+    return () => window.removeEventListener('beforeunload', preventUnload);
+  }, [isDirty, isSaving]);
 
   const handleBoxChange = (id: BoxId, next: LayoutBox) => {
     setLayout((l) => {
@@ -625,8 +631,7 @@ export function LayoutEditor({
   };
 
   return (
-    <div className="panel-card rounded-2xl p-5 md:p-6 space-y-5">
-      {/* Toolbar */}
+    <div className="panel-card rounded-2xl p-5 md:p-6 space-y-5" data-unsaved={isDirty || isSaving ? 'true' : undefined} data-saving={isSaving ? 'true' : undefined}>
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-white/70">
           <Maximize2 className="w-4 h-4 text-orange" /> {t('Layout-Editor')}

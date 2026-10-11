@@ -12,6 +12,7 @@
  */
 
 import { VOD_ARCHIVE_EN } from './vodArchive';
+import { SOCIAL_STUDIO_EN } from './socialStudio';
 
 export type Language = 'de' | 'en';
 
@@ -48,6 +49,7 @@ export const MESSAGE_TYPE_LABELS: Record<string, string> = {
 
 const EN: Record<string, string> = {
   ...VOD_ARCHIVE_EN,
+  ...SOCIAL_STUDIO_EN,
   'Diesen Streamer für den eigenen Social-Media-Manager freischalten': 'Enable this streamer’s own social media manager',
   'Titel, Beschreibung & Hashtags': 'Title, description & hashtags',
   'Titel, Beschreibung und Hashtags bearbeitest du im Clip-Editor.': 'Edit the title, description and hashtags in the clip editor.',

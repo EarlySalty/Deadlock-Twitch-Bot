@@ -598,6 +598,38 @@ test('Kanalwahl hält URL, sichtbaren Kanal und Uploadziel gemeinsam an derselbe
   assert.equal(resolveSocialMediaChannel(renamed, '11', 'alpha'), undefined);
 });
 
+test('metadata departure preserves rejected drafts and blocks pending saves before confirmation', () => {
+  const studio = lies(SEITE);
+  const start = studio.indexOf('  const changeView = ');
+  const end = studio.indexOf('  const statusClip = ', start);
+  assert.ok(start >= 0 && end > start);
+  const createGuard = new Function('document', 'window', 't', 'activeView', 'selectedAiClipId', 'setActiveView', 'setSelectedAiClipId', 'socialViewSearch', `${studio.slice(start, end).replace('next: SocialMediaView', 'next')} return changeView;`);
+  for (const [saving, dirty, accepted, expected] of [[true, true, true, false], [false, true, false, false], [false, true, true, true], [false, false, false, true]]) {
+    const updates: unknown[] = [];
+    let prompts = 0;
+    const guard = createGuard(
+      { querySelector: (selector: string) => selector.includes('data-saving') ? saving : dirty },
+      { confirm: () => { prompts++; return accepted; }, location: { search: '', pathname: '/social-media', hash: '' }, history: { replaceState: (...args: unknown[]) => updates.push(args) } },
+      (text: string) => text, 'pool', undefined,
+      (view: string) => updates.push(view), (id: number) => updates.push(id),
+      (_search: string, view: string, id: number) => `view=${view}&clip_db_id=${id}`,
+    );
+    assert.equal(guard('ai', 42), expected);
+    assert.equal(prompts, !saving && dirty ? 1 : 0);
+    assert.deepEqual(updates, expected ? ['ai', 42, [{}, '', '/social-media?view=ai&clip_db_id=42']] : []);
+  }
+  assert.match(lies('src/components/socialmedia/LayoutEditor.tsx'), /<div\b[^>]*data-unsaved=\{isDirty \|\| isSaving \? 'true' : undefined\}[^>]*data-saving=\{isSaving \? 'true' : undefined\}/);
+  const panel = lies('src/components/socialmedia/EnrichmentPanel.tsx');
+  assert.match(panel, /data-unsaved=\{dirty \|\| saveMutation\.isPending/);
+  assert.match(panel, /data-saving=\{saveMutation\.isPending/);
+  assert.match(panel, /onSavingChange\?\.\(saveMutation\.isPending\)/);
+  assert.match(panel, /if \(saveMutation\.isPending\) return;/);
+  assert.match(studio, /const busy = isSaving \|\| enrichmentSaving/);
+  assert.match(studio, /onSavingChange=\{setEnrichmentSaving\}/);
+  assert.match(lies('src/components/socialmedia/WorkspaceDialog.tsx'), /if \(busy \|\| dialog\.current\?\.querySelector\('\[data-saving="true"\]'\)\) return;/);
+  assert.match(lies('src/pages/SocialMediaManager.tsx'), /if \(document\.querySelector\('\[data-saving="true"\]'\)\) return;/);
+});
+
 test('VOD-Archiv kehrt nach Ausblenden, Bestandsänderung und Kanalwechsel auf eine gültige Seite zurück', () => {
   const source = lies('src/components/socialmedia/VodArchiveTab.tsx');
   const start = source.indexOf('  useEffect(() => {');
