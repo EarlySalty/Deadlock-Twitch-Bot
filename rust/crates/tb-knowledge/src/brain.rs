@@ -18,6 +18,7 @@ pub enum BrainAdapterError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KnowledgeReply {
     Answered { text: String, sources: Vec<String> },
+    Unsourced { text: String },
     NoEvidence,
 }
 pub struct BrainKnowledgeAdapter {
@@ -119,19 +120,39 @@ impl BrainKnowledgeAdapter {
             .await
     }
 }
+const UNVERIFIED_PREFIX: &str = "Ungeprüft:";
+
 fn project(response: PublicAnswerResponse) -> Result<KnowledgeReply, BrainAdapterError> {
     match response.status {
-        AnswerStatus::Answered | AnswerStatus::BuildRejected => Ok(KnowledgeReply::Answered {
-            text: response.text,
-            sources: response.citations.into_iter().map(|c| c.label).collect(),
-        }),
-        AnswerStatus::InsufficientEvidence | AnswerStatus::Unverified => {
-            Ok(KnowledgeReply::NoEvidence)
-        }
+        AnswerStatus::Answered | AnswerStatus::BuildRejected => Ok(answered(response)),
+        AnswerStatus::InsufficientEvidence | AnswerStatus::Unverified => Ok(unsourced(&response)),
         AnswerStatus::UnauthorizedEvidence
         | AnswerStatus::Unavailable
         | AnswerStatus::ProviderError
         | AnswerStatus::BudgetExceeded => Err(BrainAdapterError::Backend),
+    }
+}
+
+fn answered(response: PublicAnswerResponse) -> KnowledgeReply {
+    KnowledgeReply::Answered {
+        text: response.text,
+        sources: response.citations.into_iter().map(|c| c.label).collect(),
+    }
+}
+
+fn unsourced(response: &PublicAnswerResponse) -> KnowledgeReply {
+    unsourced_text(response).map_or(KnowledgeReply::NoEvidence, |text| {
+        KnowledgeReply::Unsourced { text }
+    })
+}
+
+fn unsourced_text(response: &PublicAnswerResponse) -> Option<String> {
+    let text = response.text.trim();
+    let body = text.strip_prefix(UNVERIFIED_PREFIX).map(str::trim_start);
+    match (response.status, body) {
+        (_, Some(body)) if !body.is_empty() => Some(body.to_owned()),
+        (AnswerStatus::Unverified, None) if !text.is_empty() => Some(text.to_owned()),
+        _ => None,
     }
 }
 
@@ -219,11 +240,34 @@ mod tests {
         );
         for status in [AnswerStatus::InsufficientEvidence, AnswerStatus::Unverified] {
             response.status = status;
+            response.text = "Ungeprüft: Mir geht es gut, danke!".into();
             assert_eq!(
                 project(response.clone()).unwrap(),
-                KnowledgeReply::NoEvidence
+                KnowledgeReply::Unsourced {
+                    text: "Mir geht es gut, danke!".into()
+                }
             );
+            for text in ["", "Ungeprüft:", "   "] {
+                response.text = text.into();
+                assert_eq!(
+                    project(response.clone()).unwrap(),
+                    KnowledgeReply::NoEvidence
+                );
+            }
         }
+        response.status = AnswerStatus::InsufficientEvidence;
+        response.text = "Dazu habe ich keine belegte Antwort.".into();
+        assert_eq!(
+            project(response.clone()).unwrap(),
+            KnowledgeReply::NoEvidence
+        );
+        response.status = AnswerStatus::Unverified;
+        assert_eq!(
+            project(response.clone()).unwrap(),
+            KnowledgeReply::Unsourced {
+                text: "Dazu habe ich keine belegte Antwort.".into()
+            }
+        );
         for status in [
             AnswerStatus::UnauthorizedEvidence,
             AnswerStatus::Unavailable,

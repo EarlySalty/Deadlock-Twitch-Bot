@@ -436,7 +436,7 @@ impl BrainChatPort for BrainChatService {
             None => Err(BrainAdapterError::Backend),
         };
         let (text, status) = match answer {
-            Ok(KnowledgeReply::Answered { text, .. }) => {
+            Ok(KnowledgeReply::Answered { text, .. } | KnowledgeReply::Unsourced { text }) => {
                 self.backend_state(BackendState::Available);
                 match safe_chat_answer(&text) {
                     Some(text) => (text, "Answered"),
@@ -1346,6 +1346,9 @@ mod tests {
             Ok(KnowledgeReply::NoEvidence),
             Ok(KnowledgeReply::NoEvidence),
             Ok(KnowledgeReply::NoEvidence),
+            Ok(KnowledgeReply::Unsourced {
+                text: "Mir geht es gut, danke!".into(),
+            }),
             Err(BrainAdapterError::Backend),
         ]))));
         let log = Arc::new(FakeLog::default());
@@ -1364,11 +1367,11 @@ mod tests {
             backend_state: Mutex::new(BackendState::Unknown),
             no_evidence_index: AtomicUsize::new(0),
         };
-        for index in 0..7 {
+        for index in 0..8 {
             assert!(service.maybe_respond(&event(index)).await);
         }
         let sends = chat.sends.lock().unwrap().clone();
-        assert_eq!(sends.len(), 7);
+        assert_eq!(sends.len(), 8);
         assert_eq!(
             sends[0],
             (
@@ -1382,7 +1385,8 @@ mod tests {
         assert_eq!(sends[3].2, NO_EVIDENCE_REPLIES[0]);
         assert_eq!(sends[4].2, NO_EVIDENCE_REPLIES[1]);
         assert_eq!(sends[5].2, NO_EVIDENCE_REPLIES[2]);
-        assert_eq!(sends[6].2, UNAVAILABLE_REPLY);
+        assert_eq!(sends[6].2, "Mir geht es gut, danke!");
+        assert_eq!(sends[7].2, UNAVAILABLE_REPLY);
         let records = log.results.lock().unwrap().clone();
         assert_eq!(
             records.iter().map(|row| row.1.as_str()).collect::<Vec<_>>(),
@@ -1393,24 +1397,25 @@ mod tests {
                 "NoEvidence",
                 "NoEvidence",
                 "NoEvidence",
+                "Answered",
                 "Fehler"
             ]
         );
         assert!(records.iter().all(|row| row.2 >= 0));
-        assert_eq!(log.deliveries.lock().unwrap().len(), 7);
+        assert_eq!(log.deliveries.lock().unwrap().len(), 8);
         assert!(log.deliveries.lock().unwrap().iter().all(|row| row.0));
-        assert_eq!(log.questions.lock().unwrap().len(), 7);
+        assert_eq!(log.questions.lock().unwrap().len(), 8);
         assert!(matches!(
             *service.backend_state.lock().unwrap(),
             BackendState::Unavailable
         ));
-        let mut self_message = event(8);
+        let mut self_message = event(10);
         self_message.chatter_user_id = "999".into();
         assert!(!service.maybe_respond(&self_message).await);
-        let mut command = event(9);
+        let mut command = event(11);
         command.message.text = "!status @DeadlockBot".into();
         assert!(!service.maybe_respond(&command).await);
-        assert_eq!(log.questions.lock().unwrap().len(), 7);
+        assert_eq!(log.questions.lock().unwrap().len(), 8);
     }
 
     #[tokio::test]
