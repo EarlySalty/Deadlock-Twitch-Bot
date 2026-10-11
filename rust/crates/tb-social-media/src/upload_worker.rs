@@ -847,10 +847,9 @@ impl UploadWorker {
         uploader.ok_or(UploadWaitReason::ConnectionIncomplete)
     }
 
-    /// Ein Durchlauf: Queue scannen, Batch (max_parallel) bilden, nebenläufig
-    /// hochladen.
     async fn refresh_tiktok_inbox(&self) {
-        let rows: Vec<(i64, i64, Option<String>, String, Option<Value>)> = match sqlx::query_as(
+        type TikTokInboxRow = (i64, i64, Option<String>, String, Option<Value>);
+        let rows: Vec<TikTokInboxRow> = match sqlx::query_as(
             "SELECT q.id, c.id, q.tiktok_publish_id, q.status, NULLIF(to_jsonb(q)->'tiktok_post_options', 'null'::jsonb) \
              FROM twitch_clips_upload_queue q \
              JOIN twitch_clips_social_media c ON c.id = q.clip_id \

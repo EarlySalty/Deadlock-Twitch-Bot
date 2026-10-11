@@ -534,8 +534,7 @@ impl SocialMediaReportWriter {
             "streamer",
             Some(streamer_login),
             Some(twitch_user_id),
-            &start_iso,
-            &end_iso,
+            (&start_iso, &end_iso),
             &rendered.content,
             rendered.model.as_deref(),
         )
@@ -565,8 +564,7 @@ impl SocialMediaReportWriter {
             "cross",
             None,
             None,
-            &start_iso,
-            &end_iso,
+            (&start_iso, &end_iso),
             &rendered.content,
             rendered.model.as_deref(),
         )
@@ -596,8 +594,7 @@ impl SocialMediaReportWriter {
             "admin",
             None,
             None,
-            &start_iso,
-            &end_iso,
+            (&start_iso, &end_iso),
             &rendered.content,
             rendered.model.as_deref(),
         )
