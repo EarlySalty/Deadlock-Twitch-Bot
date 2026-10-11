@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -273,7 +274,7 @@ class ArtifactPathTests(unittest.TestCase):
             for relative in (
                 "rust/target/release/tb-bot", "rust/target/release/tb-dashboard",
                 "rust/target/release/tb-stream-audit", "rust/target/release/tb-config-check",
-                "rust/target/release/tb-llm-usage-recover",
+                "rust/target/release/tb-llm-usage-recover", "rust/target/release/tb-stt-server",
             ):
                 artifact = checkout / relative
                 artifact.parent.mkdir(parents=True, exist_ok=True)
@@ -357,7 +358,7 @@ class CollectorPackagingTests(unittest.TestCase):
             stamp = Path(directory) / "revision"
             for binary in (
                 "tb-bot", "tb-dashboard", "tb-stream-audit", "tb-config-check",
-                "tb-llm-usage-recover", "tb-category-collector", "tb-twitch-watchdog", "tb-category-storage", "clip_context_learn",
+                "tb-llm-usage-recover", "tb-stt-server", "tb-category-collector", "tb-twitch-watchdog", "tb-category-storage", "clip_context_learn",
             ):
                 if binary == target and scenario == "missing":
                     continue
@@ -397,11 +398,23 @@ class CollectorPackagingTests(unittest.TestCase):
                 self.assertEqual(wrapper_result.returncode, 0, wrapper_result.stderr)
                 self.assertEqual(installer_result.returncode, 0, installer_result.stderr)
                 self.assertEqual(wrapper_result.stdout.splitlines(), installer_result.stdout.splitlines())
-                expected = not native or target == "tb-category-storage"
+                expected = target == "tb-stt-server" or not native or target == "tb-category-storage"
                 self.assertEqual(collector in installer_result.stdout.splitlines(), expected)
                 self.assertEqual((stage / collector).exists(), expected)
                 if expected:
                     self.assertEqual((checkout / collector).read_bytes(), (stage / collector).read_bytes())
+
+    def test_stt_binary_is_required_checked_and_copied(self):
+        self.check_target("HEAD", native=True, target="tb-stt-server")
+
+    def test_missing_stt_binary_is_rejected(self):
+        self.check_target("HEAD", native=True, scenario="missing", target="tb-stt-server")
+
+    def test_stale_stt_binary_is_rejected(self):
+        self.check_target("HEAD", native=True, scenario="wrong_revision", target="tb-stt-server")
+
+    def test_existing_release_without_stt_binary_is_rejected(self):
+        self.check_target("HEAD", native=True, scenario="incomplete_release", target="tb-stt-server")
 
     def test_storage_binary_is_required_checked_and_copied(self):
         self.check_target("HEAD", native=True, target="tb-category-storage")
@@ -429,6 +442,17 @@ class CollectorPackagingTests(unittest.TestCase):
 
     def test_existing_release_without_expected_collector_is_rejected(self):
         self.check_target(LEGACY_SHA, native=False, scenario="incomplete_release")
+
+
+class ModelPinContractTests(unittest.TestCase):
+    def test_installer_uses_only_the_native_model_and_vad_pins(self):
+        source = (WRAPPER.parents[2] / "rust/bin/tb-stt-server/src/main.rs").read_text()
+        installer = WRAPPER.with_name("install-stt-models.sh").read_text()
+        for prefix in ("MODEL", "VAD"):
+            filename = re.search(rf'const DEFAULT_{prefix}_FILE: &str = "([^"]+)";', source).group(1)
+            checksum = re.search(rf'const DEFAULT_{prefix}_SHA256: &str =\s*"([0-9a-f]{{64}})";', source).group(1)
+            self.assertIn(f"stt_copy_model {filename} {checksum}", installer)
+        self.assertEqual(installer.count("  stt_copy_model ggml-"), 2)
 
 
 if __name__ == "__main__":
