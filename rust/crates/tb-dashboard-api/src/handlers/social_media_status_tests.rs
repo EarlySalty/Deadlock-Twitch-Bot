@@ -1,8 +1,17 @@
-struct StatusMasterKeyGuard(Option<std::ffi::OsString>);
+static STATUS_MASTER_KEY_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+struct StatusMasterKeyGuard {
+    previous_key: Option<std::ffi::OsString>,
+    _lock: tokio::sync::MutexGuard<'static, ()>,
+}
 
 impl StatusMasterKeyGuard {
-    fn new() -> Self {
-        let guard = Self(std::env::var_os("DB_MASTER_KEY_V1"));
+    async fn new() -> Self {
+        let lock = STATUS_MASTER_KEY_LOCK.lock().await;
+        let guard = Self {
+            previous_key: std::env::var_os("DB_MASTER_KEY_V1"),
+            _lock: lock,
+        };
         std::env::set_var("DB_MASTER_KEY_V1", "ab".repeat(32));
         guard
     }
@@ -10,11 +19,36 @@ impl StatusMasterKeyGuard {
 
 impl Drop for StatusMasterKeyGuard {
     fn drop(&mut self) {
-        match &self.0 {
+        match &self.previous_key {
             Some(key) => std::env::set_var("DB_MASTER_KEY_V1", key),
             None => std::env::remove_var("DB_MASTER_KEY_V1"),
         }
     }
+}
+
+#[tokio::test]
+async fn status_master_key_guard_serializes_and_restores() {
+    use std::future::{poll_fn, Future};
+    use std::task::Poll;
+
+    let first = StatusMasterKeyGuard::new().await;
+    let previous_key = first.previous_key.clone();
+    let mut second = std::pin::pin!(StatusMasterKeyGuard::new());
+    poll_fn(|cx| {
+        assert!(second.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    assert!(std::env::var_os("DB_MASTER_KEY_V1") == Some("ab".repeat(32).into()));
+    drop(first);
+
+    let second = second.await;
+    assert!(second.previous_key == previous_key);
+    assert!(std::env::var_os("DB_MASTER_KEY_V1") == Some("ab".repeat(32).into()));
+    drop(second);
+
+    let _lock = STATUS_MASTER_KEY_LOCK.lock().await;
+    assert!(std::env::var_os("DB_MASTER_KEY_V1") == previous_key);
 }
 
 async fn make_platform_status_pool(schema: &str) -> PgPool {
@@ -264,7 +298,7 @@ fn platform_status_authorization_exposes_only_allowlisted_metadata() {
 #[tokio::test]
 async fn platforms_status_stored_scopes_keep_disabled_connections_and_channel_fallback_distinct() {
     let pool = make_platform_status_pool("t_dash_sm_stored_authorization").await;
-    let _key_guard = StatusMasterKeyGuard::new();
+    let _key_guard = StatusMasterKeyGuard::new().await;
     let cipher = FieldCipher::from_env().unwrap();
     sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('synthetic-channel', '42')")
         .execute(&pool).await.unwrap();
@@ -339,7 +373,7 @@ async fn platforms_status_stored_scopes_keep_disabled_connections_and_channel_fa
 #[tokio::test]
 async fn platforms_status_read_errors_return_500_not_disconnected() {
     let pool = make_platform_status_pool("t_dash_sm_status_errors").await;
-    let _key_guard = StatusMasterKeyGuard::new();
+    let _key_guard = StatusMasterKeyGuard::new().await;
     let cipher = FieldCipher::from_env().unwrap();
 
     let response = stored_platform_status_response(&pool, None).await;
