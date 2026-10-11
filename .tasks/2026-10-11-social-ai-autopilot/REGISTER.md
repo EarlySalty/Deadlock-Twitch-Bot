@@ -123,6 +123,8 @@ Exact remote 7ae7f2c9e12c1385c53a0b9faf016657e2b1769a is now independently verif
 
 Parent rechecked the canonical gate visual bridge and catalog: only the canonical repository is registered, neither owned sending/runtime worktree. Exact realpath matching still exits before server/browser startup without a project. Do not register these worktrees or run the Brave-backed dependency/persistent-session path. Moli fixtures remain separate evidence. The approved review_1 role still resolves to sol/opus55/grok. No actual gate has yet run.
 
+The worker reports b2wh1kfxi exited 101 after the actual Brain-adapter group passed 4/0/0 with 19 filtered. The subsequent API library-test compiler was terminated by signal 9 through sccache before any API test started. Bot tests and all three new Clippy scopes had not started because the sequence stopped there. No failed assertion, flake or OOM cause is established. The worker observed 7,550 MiB available and no swap afterwards, without inspecting foreign process arguments/environments or changing services. Original interruption evidence remains preserved. Targeted continuation bx4g3qkz0 now runs only the API and remaining affected checks with normal cargo-slot, release/jobs2, a two-hour tracked timeout and unchanged HEAD7ae/MERGE_HEADb0/treee50. The passed four-test group and unchanged 142/57 scopes are not repeated. No source mutation, cache copy, sccache restart or competing parent build. A final committed handover remains pending.
+
 ## Superseded leaf-work snapshots
 
 The following table records the previous loop before the genuine lean-loop instruction. Any running/pending language below is historical, not current ownership. Its workflows are stopped and must not be resumed.
