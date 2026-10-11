@@ -23,6 +23,10 @@ const BREADCRUMB_LABELS: Record<string, string> = {
   engagement: 'Engagement AI',
   chat: 'Chat Actions',
   content: 'Content & Comms',
+  'social-ai': 'KI-Videobearbeitung',
+  skills: 'Skills & Vorschläge',
+  usage: 'Verbrauch & Kosten',
+  limits: 'Verarbeitungsgrenzen',
   announcements: 'Ankündigungen',
   roadmap: 'Roadmap',
   'caster-overlay': 'Caster-Overlay',
@@ -77,6 +81,7 @@ export function TopBar({ auth }: TopBarProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const breadcrumbs = buildBreadcrumbs(location.pathname);
+  const wideBreadcrumb = location.pathname.endsWith('/content/announcements') || location.pathname.startsWith('/content/social-ai');
   const logoutHref = auth?.user?.authType === 'discord_admin' ? '/twitch/auth/discord/logout' : '/twitch/auth/logout';
   const [query, setQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -139,9 +144,9 @@ export function TopBar({ auth }: TopBarProps) {
   }
 
   return (
-    <header className={`glass ${location.pathname.endsWith('/content/announcements') ? 'lg:sticky' : 'sticky'} top-4 z-20 rounded-[1.8rem] px-5 py-4`}>
-      <div className={`grid gap-4 lg:items-center ${location.pathname.endsWith('/content/announcements') ? 'lg:grid-cols-[minmax(0,1fr)_auto]' : 'lg:grid-cols-[minmax(0,1fr)_minmax(0,32rem)_auto]'}`}>
-        <div className={`flex min-w-0 flex-wrap items-center gap-2 text-sm text-text-secondary ${location.pathname.endsWith('/content/announcements') ? 'lg:col-span-2' : ''}`}>
+    <header className={`glass ${wideBreadcrumb ? 'lg:sticky' : 'sticky'} top-4 z-20 rounded-[1.8rem] px-5 py-4`}>
+      <div className={`grid gap-4 lg:items-center ${wideBreadcrumb ? 'lg:grid-cols-[minmax(0,1fr)_auto]' : 'lg:grid-cols-[minmax(0,1fr)_minmax(0,32rem)_auto]'}`}>
+        <div className={`flex min-w-0 flex-wrap items-center gap-2 text-sm text-text-secondary ${wideBreadcrumb ? 'lg:col-span-2' : ''}`}>
           {breadcrumbs.map((crumb, index) => (
             <div key={crumb.to} className="flex items-center gap-2">
               {index > 0 ? <ChevronRight className="h-4 w-4" /> : null}

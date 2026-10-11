@@ -60,9 +60,6 @@ import { coerceArray, coerceRecord } from '@/utils/formatters';
 
 const ADMIN_API_BASE = '/twitch/api/admin';
 const ENGAGEMENT_API_BASE = '/twitch/api/v2/engagement';
-// Admin-Prefix statt `/social-media/api/access`: die Admin-SPA läuft nur auf
-// admin.deutsche-deadlock-community.de, und dort ist `/social-media/*` laut
-// docs/HOST_ROUTING_CONTRACT.md bewusst 404. Dahinter liegen dieselben Handler.
 const PARTNER_ACCESS_URL = '/twitch/api/admin/partner-access';
 const AUTH_STATUS_URL = '/twitch/api/v2/auth-status';
 const INTERNAL_HOME_URL = '/twitch/api/v2/internal-home';
@@ -193,7 +190,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-function admin<T>(suffix: string, init?: RequestInit) {
+export function admin<T>(suffix: string, init?: RequestInit) {
   return request<T>(`${ADMIN_API_BASE}${suffix}`, init);
 }
 
@@ -875,11 +872,6 @@ export function removeGlobalBan(login: string): Promise<{ ok: boolean; removed: 
   return postAdminJson('/global-bans/remove', { login });
 }
 
-/**
- * Partneraufnahme-Sperrliste. Der Server löst die stabile Twitch-ID selbst auf
- * und setzt den Bearbeiter aus der Admin-Session; beides gehört nicht in den
- * Request-Body.
- */
 export function fetchPartnerSignupBlocks(): Promise<PartnerSignupBlockList> {
   return admin<PartnerSignupBlockList>('/partner-signup-blocks');
 }
@@ -991,7 +983,7 @@ async function resolveJsonCsrfToken(body: Record<string, unknown>): Promise<stri
   throw new ApiError('CSRF-Token fehlt.', 403);
 }
 
-async function postAdminJson<T, TBody extends object = Record<string, unknown>>(path: string, body: TBody) {
+export async function postAdminJson<T, TBody extends object = Record<string, unknown>>(path: string, body: TBody) {
   const normalizedBody = coerceRecord(body);
   const csrfToken = await resolveJsonCsrfToken(normalizedBody);
   const payload = { ...normalizedBody, csrf_token: csrfToken };
@@ -1289,9 +1281,6 @@ const DISCONNECT_UNMOD_OUTCOMES: DisconnectBotUnmodOutcome[] = [
   'failed',
 ];
 
-/// Trennt den Bot bewusst vom Kanal: Mod-Rechte entziehen, departnern, Opt-out
-/// setzen. `confirmLogin` ist die zweite Bestätigung und wird serverseitig
-/// gegen den Pfad-Login geprüft — passt sie nicht, mutiert der Server nichts.
 export async function disconnectBotFromChannel(
   login: string,
   confirmLogin: string,
@@ -1350,17 +1339,11 @@ export async function toggleEngagement(login: string, enabled: boolean): Promise
   }
 }
 
-/**
- * Liste aller Streamer mit Social-Media-Freigabe (`GET /social-media/api/access`).
- * Admin-only; der Endpunkt liegt bewusst weiter beim Social-Media-Backend, nur
- * die Bedienung sitzt hier in der Admin-SPA.
- */
 export async function fetchPartnerAccess(): Promise<PartnerAccessEntry[]> {
   const payload = await request<Record<string, unknown>>(PARTNER_ACCESS_URL);
   return coerceArray(coerceRecord(payload).items) as PartnerAccessEntry[];
 }
 
-/** Freigabe für einen Streamer setzen oder entziehen (`PUT`, admin-only). */
 export async function setPartnerAccess(
   twitchUserId: string,
   granted: boolean,
@@ -1490,7 +1473,6 @@ export function fetchBrainCatalog(): Promise<BrainCatalog> {
 
 export async function buildBrainPlan(body: BrainRequest): Promise<BrainReport> {
   const csrfToken = await resolveJsonCsrfToken({});
-  // The strict Rust request accepts only scenario fields, not transport tokens.
   return admin<BrainReport>('/brain/build', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },

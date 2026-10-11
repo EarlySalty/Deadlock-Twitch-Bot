@@ -89,6 +89,7 @@ const navigationGroups: NavigationGroup[] = [
       { label: 'Ankündigungen', to: '/content/announcements', icon: Megaphone },
       { label: 'Caster-Overlay', to: '/content/caster-overlay', icon: Monitor },
       { label: 'Build-Labor', to: '/content/build-lab', icon: Brain },
+      { label: 'KI-Videobearbeitung', to: '/content/social-ai', icon: Sparkles },
       { label: 'Roadmap', to: '/content/roadmap', icon: Map },
       { label: 'Changelog', to: '/content/changelog', icon: ClipboardList },
       { label: 'Legal Pages', to: '/content/legal', icon: ScrollText },
@@ -118,9 +119,6 @@ export function Sidebar({ collapsed, onToggle, storageKey }: SidebarProps) {
   return (
     <aside
       className={[
-        // Nur die Breite laeuft — `transition-all` haette auch Farbe, Rahmen
-        // und Schatten der Glasflaeche mitgezogen, die sich beim Einklappen
-        // gar nicht aendern.
         'glass sticky top-0 flex h-screen flex-col border-r border-white/8 px-3 py-4 transition-[width] duration-200',
         collapsed ? 'w-[92px]' : 'w-[240px]',
       ].join(' ')}
