@@ -350,6 +350,7 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
         error_code: None,
         http_status: Some(200),
         latency_ms: 1,
+        model: None,
     };
     assert!(tb_llm::ledger::recover_with_pool(
         &verify,

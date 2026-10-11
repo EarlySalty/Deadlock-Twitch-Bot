@@ -61,6 +61,8 @@ pub struct Completion {
     pub error_code: Option<String>,
     pub http_status: Option<i32>,
     pub latency_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 /// Auch nach einem Abschlussfehler bleibt der bereits gespeicherte Start sichtbar.
 /// Die strukturierte Journalzeile enthält nur Zähler und technische IDs.
@@ -115,10 +117,10 @@ pub async fn recover_with_pool(
     project: &str,
     service: &str,
 ) -> Result<(), RecoveryError> {
-    let result = sqlx::query("UPDATE public.llm_usage SET tokens_in=$2,tokens_out=$3,total=$4,success=$5,attempt_state=$6,request_id=$7,error_code=$8,http_status=$9,latency_ms=$10,finished_at=now() WHERE id=$1 AND attempt_state='started' AND project=$11 AND service=$12")
+    let result = sqlx::query("UPDATE public.llm_usage SET tokens_in=$2,tokens_out=$3,total=$4,success=$5,attempt_state=$6,request_id=$7,error_code=$8,http_status=$9,latency_ms=$10,finished_at=now(),model=COALESCE($13,model) WHERE id=$1 AND attempt_state='started' AND project=$11 AND service=$12")
         .bind(c.id).bind(c.tokens_in).bind(c.tokens_out).bind(c.total)
         .bind(i64::from(c.success)).bind(if c.success { "succeeded" } else { "failed" })
-        .bind(&c.request_id).bind(&c.error_code).bind(c.http_status).bind(c.latency_ms).bind(project).bind(service)
+        .bind(&c.request_id).bind(&c.error_code).bind(c.http_status).bind(c.latency_ms).bind(project).bind(service).bind(&c.model)
         .execute(pool).await.map_err(|_| RecoveryError)?;
     if result.rows_affected() == 0 {
         let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM public.llm_usage WHERE id=$1 AND project=$2 AND service=$3 AND attempt_state IN ('succeeded','failed'))")
@@ -246,6 +248,7 @@ mod tests {
             error_code: None,
             http_status: Some(200),
             latency_ms: 1,
+            model: None,
         });
     }
 

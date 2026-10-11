@@ -32,6 +32,22 @@ extern "C" {
     fn flock(fd: std::os::raw::c_int, operation: std::os::raw::c_int) -> std::os::raw::c_int;
 }
 
+fn install_title_ai_brain_route(
+    options: &tb_config::dashboard_options::BrainClientOptions,
+    token: Option<&str>,
+) {
+    if !options.title_ai_via_brain {
+        return;
+    }
+    if let Err(error) = tb_llm::brain_route::install_title_ai(
+        options.endpoint.as_deref(),
+        token,
+        options.timeout_ms.map(std::time::Duration::from_millis),
+    ) {
+        tracing::error!(fehler = ?error, "Brain-Route für Titel konnte nicht installiert werden");
+    }
+}
+
 fn optional_env_bool(name: &str, default: bool) -> bool {
     match std::env::var(name) {
         Ok(value) => {
@@ -459,6 +475,16 @@ async fn main() {
         "deadlock-twitch-dashboard-rust",
     )
     .expect("Verbrauchserfassung initialisieren");
+    let title_brain_token = tb_dashboard_api::uplink_config::brain_service_token();
+    if config.dashboard.options.brain_client.title_ai_via_brain && title_brain_token.is_none() {
+        tracing::error!(
+            "Titel über Brain ist aktiv, aber die Uplink-Laufzeit liefert keinen Brain-Dienstschlüssel; Titelvorschläge schlagen fehl"
+        );
+    }
+    install_title_ai_brain_route(
+        &config.dashboard.options.brain_client,
+        title_brain_token.as_deref(),
+    );
 
     let pause_loop_helix = pause_loop_helix_client_from_env();
     let brain_token = if config.dashboard.options.brain_client.mode
