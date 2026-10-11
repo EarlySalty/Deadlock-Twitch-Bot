@@ -106,10 +106,8 @@ async fn ownership_category_and_concurrent_active_create_are_scoped() {
         store::create_job(&db.pool, "101", 1, limit()),
         store::create_job(&db.pool, "101", 1, limit())
     );
-    assert_eq!(
-        first.expect("erster Start").id,
-        second.expect("zweiter Start").id
-    );
+    let job_id = first.expect("erster Start").id;
+    assert_eq!(job_id, second.expect("zweiter Start").id);
     assert!(matches!(
         store::create_job(&db.pool, "202", 1, limit()).await,
         Err(store::AiStoreError::NotFound)
@@ -119,11 +117,11 @@ async fn ownership_category_and_concurrent_active_create_are_scoped() {
         Err(store::AiStoreError::NotFound)
     ));
     assert!(matches!(
-        store::get_job(&db.pool, "202", 1, limit()).await,
+        store::get_job(&db.pool, "202", job_id, limit()).await,
         Err(store::AiStoreError::NotFound)
     ));
     assert!(matches!(
-        store::retry_job(&db.pool, "202", 1, limit()).await,
+        store::retry_job(&db.pool, "202", job_id, limit()).await,
         Err(store::AiStoreError::NotFound)
     ));
     let own = store::create_job(&db.pool, "202", 2, limit())
@@ -137,12 +135,12 @@ async fn ownership_category_and_concurrent_active_create_are_scoped() {
             .len(),
         1
     );
-    assert!(store::list_jobs(&db.pool, "101", 10, Some(1), limit())
+    assert!(store::list_jobs(&db.pool, "101", 10, Some(job_id), limit())
         .await
         .expect("Seite")
         .is_empty());
     let serialized = serde_json::to_string(
-        &store::get_job(&db.pool, "101", 1, limit())
+        &store::get_job(&db.pool, "101", job_id, limit())
             .await
             .expect("Job"),
     )
@@ -160,10 +158,10 @@ async fn ownership_category_and_concurrent_active_create_are_scoped() {
         .expect("Lease")
         .expect("frei");
     assert!(matches!(
-        store::load_job_for_runner(&mut lease, "101", 1).await,
+        store::load_job_for_runner(&mut lease, "101", job_id).await,
         Err(store::AiStoreError::SourceUnavailable)
     ));
-    let retained = store::get_job(&db.pool, "101", 1, limit())
+    let retained = store::get_job(&db.pool, "101", job_id, limit())
         .await
         .expect("Auftragshistorie bleibt erhalten");
     assert_eq!(retained.clip_db_id, 1);
@@ -171,7 +169,8 @@ async fn ownership_category_and_concurrent_active_create_are_scoped() {
     assert_eq!(retained.failure_code.as_deref(), Some("source_unavailable"));
     assert!(!retained.can_retry);
     let source_clip_id: Option<i64> =
-        sqlx::query_scalar("SELECT source_clip_id FROM social_ai_jobs WHERE id = 1")
+        sqlx::query_scalar("SELECT source_clip_id FROM social_ai_jobs WHERE id = $1")
+            .bind(job_id)
             .fetch_one(&db.pool)
             .await
             .expect("abgelöster Fremdschlüssel");
@@ -868,4 +867,306 @@ async fn failed_provider_attempt_keeps_authoritative_cumulative_totals() {
     assert_eq!(view.processing_ms, Some(750));
     assert_eq!(view.cost_basis, "unknown");
     assert!(view.can_retry);
+}
+
+#[tokio::test]
+async fn twitch_source_identifier_is_frozen_without_rejecting_metadata_refresh() {
+    let db = fixture().await;
+    let job = start_job(&db.pool).await;
+    let source_id: String =
+        sqlx::query_scalar("SELECT source_twitch_clip_id FROM social_ai_jobs WHERE id = $1")
+            .bind(job.id)
+            .fetch_one(&db.pool)
+            .await
+            .expect("gespeicherte Twitch-Kennung");
+    assert_eq!(source_id, "clip");
+    sqlx::query("UPDATE twitch_clips_social_media SET clip_url = 'https://clips.twitch.tv/refreshed', streamer_login = 'updated' WHERE id = 1")
+        .execute(&db.pool)
+        .await
+        .expect("Metadaten aktualisieren");
+    let mut lease = store::acquire_production_lease(&db.pool)
+        .await
+        .expect("Lease")
+        .expect("frei");
+    store::claim_job(&mut lease, "101", job.id, limit())
+        .await
+        .expect("unveränderte Quelle beanspruchen");
+    store::save_stage(&mut lease, "101", job.id, &preparation(), None)
+        .await
+        .expect("Vorbereitung über Metadatenänderung hinweg");
+    sqlx::query("UPDATE twitch_clips_social_media SET clip_id = 'replacement' WHERE id = 1")
+        .execute(&db.pool)
+        .await
+        .expect("Clip-Kennung ersetzen");
+    assert!(matches!(
+        store::create_job(&db.pool, "101", 1, limit()).await,
+        Err(store::AiStoreError::NotFound)
+    ));
+    assert!(matches!(
+        store::claim_job(&mut lease, "101", job.id, limit()).await,
+        Err(store::AiStoreError::SourceUnavailable)
+    ));
+    assert!(matches!(
+        store::load_job_for_runner(&mut lease, "101", job.id).await,
+        Err(store::AiStoreError::SourceUnavailable)
+    ));
+    let old = store::get_job(&db.pool, "101", job.id, limit())
+        .await
+        .expect("erhaltene Auftragshistorie");
+    assert_eq!(old.status, "failed");
+    assert_eq!(old.failure_code.as_deref(), Some("source_unavailable"));
+    assert!(!old.can_retry);
+    assert!(matches!(
+        store::retry_job(&db.pool, "101", job.id, limit()).await,
+        Err(store::AiStoreError::Conflict)
+    ));
+    let saved: bool =
+        sqlx::query_scalar("SELECT checkpoints ? 'preparing' FROM social_ai_jobs WHERE id = $1")
+            .bind(job.id)
+            .fetch_one(&db.pool)
+            .await
+            .expect("Checkpoint bleibt erhalten");
+    assert!(saved);
+    lease.release().await.expect("Lease freigeben");
+    let replacement = store::create_job(&db.pool, "101", 1, limit())
+        .await
+        .expect("neue Quelle unter gleicher Datenbankkennung");
+    assert_ne!(replacement.id, job.id);
+    let replacement_id: String =
+        sqlx::query_scalar("SELECT source_twitch_clip_id FROM social_ai_jobs WHERE id = $1")
+            .bind(replacement.id)
+            .fetch_one(&db.pool)
+            .await
+            .expect("Kennung der neuen Quelle");
+    assert_eq!(replacement_id, "replacement");
+}
+
+#[tokio::test]
+async fn twitch_identifier_swap_blocks_inflight_save_and_finish() {
+    let db = fixture().await;
+    let first = start_job(&db.pool).await;
+    let mut lease = store::acquire_production_lease(&db.pool)
+        .await
+        .expect("Lease")
+        .expect("frei");
+    store::claim_job(&mut lease, "101", first.id, limit())
+        .await
+        .expect("Vorbereitung beanspruchen");
+    sqlx::query("UPDATE twitch_clips_social_media SET clip_id = 'replacement' WHERE id = 1")
+        .execute(&db.pool)
+        .await
+        .expect("Kennung während der Vorbereitung ändern");
+    assert!(matches!(
+        store::save_stage(&mut lease, "101", first.id, &preparation(), None).await,
+        Err(store::AiStoreError::Conflict)
+    ));
+    assert!(matches!(
+        store::load_job_for_runner(&mut lease, "101", first.id).await,
+        Err(store::AiStoreError::SourceUnavailable)
+    ));
+    lease.release().await.expect("Lease freigeben");
+    let second = store::create_job(&db.pool, "101", 1, limit())
+        .await
+        .expect("neuer Auftrag für neue Quelle");
+    let mut lease = store::acquire_production_lease(&db.pool)
+        .await
+        .expect("Lease")
+        .expect("frei");
+    for checkpoint in [
+        preparation(),
+        transcription(),
+        store::StageCheckpoint::Analyzing {
+            highlights: Vec::new(),
+            uncertainty: Vec::new(),
+            analysis_notes: Vec::new(),
+        },
+        planning(),
+        store::StageCheckpoint::Rendering {
+            output_path: "/private/rendered.mp4".to_string(),
+            output_duration_ms: Some(800),
+            rendering_ms: 2400,
+        },
+        store::StageCheckpoint::Validating {
+            review_reasons: Vec::new(),
+        },
+    ] {
+        store::claim_job(&mut lease, "101", second.id, limit())
+            .await
+            .expect("Schritt beanspruchen");
+        store::save_stage(&mut lease, "101", second.id, &checkpoint, None)
+            .await
+            .expect("Schritt speichern");
+    }
+    sqlx::query("INSERT INTO social_produced_videos (twitch_user_id, clip_id, mode, version_no, status, metadata) VALUES ('101', 1, 'ai', 1, 'review', jsonb_build_object('manual_ai_job_id', $1::text))")
+        .bind(second.id)
+        .execute(&db.pool)
+        .await
+        .expect("gebundene Video-Version");
+    sqlx::query("UPDATE twitch_clips_social_media SET clip_id = 'another' WHERE id = 1")
+        .execute(&db.pool)
+        .await
+        .expect("Kennung vor Abschluss ändern");
+    assert!(matches!(
+        store::finish_job(&mut lease, "101", second.id, 1).await,
+        Err(store::AiStoreError::Conflict)
+    ));
+    assert!(matches!(
+        store::load_job_for_runner(&mut lease, "101", second.id).await,
+        Err(store::AiStoreError::SourceUnavailable)
+    ));
+    let retained = store::get_job(&db.pool, "101", second.id, limit())
+        .await
+        .expect("Abschluss wurde verweigert");
+    assert_eq!(retained.status, "failed");
+    assert_eq!(retained.failure_code.as_deref(), Some("source_unavailable"));
+    assert!(!retained.can_retry);
+    assert_eq!(retained.versions.len(), 1);
+}
+
+#[tokio::test]
+async fn loaded_active_job_blocks_same_lease_recovery_but_terminal_read_does_not() {
+    let db = fixture().await;
+    let job = start_job(&db.pool).await;
+    let mut lease = store::acquire_production_lease(&db.pool)
+        .await
+        .expect("Lease")
+        .expect("frei");
+    store::claim_job(&mut lease, "101", job.id, limit())
+        .await
+        .expect("aktive Vorbereitung");
+    lease.release().await.expect("Lease freigeben");
+    let mut lease = store::acquire_production_lease(&db.pool)
+        .await
+        .expect("neu erworbene Lease")
+        .expect("frei");
+    let snapshot = store::load_job_for_runner(&mut lease, "101", job.id)
+        .await
+        .expect("aktiven Auftrag laden");
+    assert_eq!(snapshot.status, "preparing");
+    assert!(matches!(
+        store::recover_stale_jobs(&mut lease, "101", 10).await,
+        Err(store::AiStoreError::Conflict)
+    ));
+    assert_eq!(
+        store::get_job(&db.pool, "101", job.id, limit())
+            .await
+            .expect("aktiver Auftrag bleibt aktiv")
+            .status,
+        "preparing"
+    );
+    lease.release().await.expect("Lease freigeben");
+    let mut lease = store::acquire_production_lease(&db.pool)
+        .await
+        .expect("erneut erworbene Lease")
+        .expect("frei");
+    assert_eq!(
+        store::recover_stale_jobs(&mut lease, "101", 10)
+            .await
+            .expect("verwaiste Arbeit zurücksetzen"),
+        1
+    );
+    sqlx::query("INSERT INTO twitch_clips_social_media (id, clip_id, clip_url, streamer_login, created_at, twitch_user_id, category_key) VALUES (4, 'other-clip', 'https://clips.twitch.tv/other', 'streamer', '2026-10-11T00:00:00Z', '101', 'deadlock')")
+        .execute(&db.pool)
+        .await
+        .expect("zweiten Clip anlegen");
+    let another = store::create_job(&db.pool, "101", 4, limit())
+        .await
+        .expect("weiterer Auftrag");
+    store::claim_job(&mut lease, "101", another.id, limit())
+        .await
+        .expect("weiterer aktiver Auftrag");
+    lease.release().await.expect("Lease freigeben");
+    let mut lease = store::acquire_production_lease(&db.pool)
+        .await
+        .expect("nächste Lease")
+        .expect("frei");
+    let terminal = store::load_job_for_runner(&mut lease, "101", job.id)
+        .await
+        .expect("Fehlerhistorie lesen");
+    assert_eq!(terminal.status, "failed");
+    assert_eq!(
+        store::recover_stale_jobs(&mut lease, "101", 10)
+            .await
+            .expect("andere verwaiste Arbeit zurücksetzen"),
+        1
+    );
+    assert_eq!(
+        store::get_job(&db.pool, "101", another.id, limit())
+            .await
+            .expect("zurückgesetzter Auftrag")
+            .failure_code
+            .as_deref(),
+        Some("interrupted")
+    );
+}
+
+#[tokio::test]
+async fn public_pages_group_bounded_versions_without_exposing_checkpoints() {
+    let db = fixture().await;
+    let original = start_job(&db.pool).await;
+    let mut lease = store::acquire_production_lease(&db.pool)
+        .await
+        .expect("Lease")
+        .expect("frei");
+    step(&mut lease, preparation()).await;
+    lease.release().await.expect("Lease freigeben");
+    sqlx::query("INSERT INTO twitch_clips_social_media (id, clip_id, clip_url, streamer_login, created_at, twitch_user_id, category_key) SELECT n, 'clip-' || n, 'https://clips.twitch.tv/example', 'streamer', '2026-10-11T00:00:00Z', '101', 'deadlock' FROM generate_series(4, 53) AS n")
+        .execute(&db.pool)
+        .await
+        .expect("50 zusätzliche Clips");
+    sqlx::query("INSERT INTO social_ai_jobs (twitch_user_id, clip_db_id, source_clip_id, source_twitch_clip_id) SELECT 101, id, id, clip_id FROM twitch_clips_social_media WHERE id BETWEEN 4 AND 53 ORDER BY id")
+        .execute(&db.pool)
+        .await
+        .expect("50 zusätzliche Aufträge");
+    let newest_id: i64 = sqlx::query_scalar("SELECT id FROM social_ai_jobs WHERE clip_db_id = 53")
+        .fetch_one(&db.pool)
+        .await
+        .expect("jüngster Auftrag");
+    let next_id: i64 = sqlx::query_scalar("SELECT id FROM social_ai_jobs WHERE clip_db_id = 52")
+        .fetch_one(&db.pool)
+        .await
+        .expect("zweiter Auftrag");
+    sqlx::query("INSERT INTO social_produced_videos (twitch_user_id, clip_id, mode, version_no, status, metadata) SELECT '101', 53, 'ai', n, 'review', jsonb_build_object('manual_ai_job_id', $1::text) FROM generate_series(1, 55) AS n")
+        .bind(newest_id)
+        .execute(&db.pool)
+        .await
+        .expect("Versionen über dem Limit");
+    sqlx::query("INSERT INTO social_produced_videos (twitch_user_id, clip_id, mode, version_no, status, metadata) VALUES ('101', 52, 'ai', 2, 'review', jsonb_build_object('manual_ai_job_id', $1::text)), ('101', 52, 'ai', 1, 'review', jsonb_build_object('manual_ai_job_id', $1::text)), ('202', 53, 'ai', 56, 'review', jsonb_build_object('manual_ai_job_id', $2::text)), ('101', 53, 'manual', 57, 'review', jsonb_build_object('manual_ai_job_id', $2::text)), ('101', 53, 'ai', 58, 'review', jsonb_build_object('manual_ai_job_id', $1::text)), ('101', 52, 'ai', 59, 'review', jsonb_build_object('manual_ai_job_id', $2::text))")
+        .bind(next_id)
+        .bind(newest_id)
+        .execute(&db.pool)
+        .await
+        .expect("abzugrenzende Versionen");
+    let first = store::list_jobs(&db.pool, "101", 500, None, limit())
+        .await
+        .expect("erste Seite");
+    assert_eq!(first.len(), 50);
+    assert_eq!(first[0].id, newest_id);
+    assert_eq!(first[49].id, original.id + 1);
+    assert_eq!(first[0].versions.len(), 50);
+    assert_eq!(first[0].versions[0].version_no, 1);
+    assert_eq!(first[0].versions[49].version_no, 50);
+    assert_eq!(first[1].id, next_id);
+    assert_eq!(first[1].versions.len(), 2);
+    assert_eq!(first[1].versions[0].version_no, 1);
+    assert_eq!(first[1].versions[1].version_no, 2);
+    let second = store::list_jobs(&db.pool, "101", 50, Some(first[49].id), limit())
+        .await
+        .expect("zweite Seite");
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0].id, original.id);
+    let detail = store::get_job(&db.pool, "101", newest_id, limit())
+        .await
+        .expect("öffentlicher Detailaufruf");
+    assert_eq!(detail.versions.len(), 50);
+    let serialized =
+        serde_json::to_string(&(first, second, detail)).expect("öffentliche JSON-Daten");
+    assert!(!serialized.contains("/private/source.mp4"));
+    assert!(!serialized.contains("source_path"));
+    assert!(!serialized.contains("checkpoints"));
+    assert!(!serialized.contains("source_twitch_clip_id"));
+    let other = store::list_jobs(&db.pool, "202", 50, None, limit())
+        .await
+        .expect("anderer Kanal");
+    assert!(other.is_empty());
 }
