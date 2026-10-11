@@ -77,7 +77,8 @@ export function createAiPreviewFetch(originalFetch: typeof fetch, scenario: AiPr
   let polls = 0;
   let secondConsent = false;
   const secondJob: AiJobView = { ...BASE_JOB, id: 1201, clip_db_id: 601, status: 'review', original_url: null, versions: [] };
-  let secondFailure: AiJobView = { ...BASE_JOB, id: 1202, clip_db_id: 601, status: 'failed', stage: 'rendering', original_url: null, versions: [], failure_code: 'render_failed', failure_message: 'Die Prüfung ist fehlgeschlagen. Versuche es erneut.', can_retry: true };
+  let secondFailure: AiJobView = { ...BASE_JOB, id: 1202, clip_db_id: 601, status: 'failed', stage: 'rendering', original_url: null, versions: [], failure_code: 'render_failed', failure_message: 'Die Prüfung ist fehlgeschlagen. Der Anbieter meldet SIMULIERTER_WERT aus /var/test/mock.', can_retry: true };
+  let secondStarted: AiJobView | null = null;
   return async (input, init) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, window.location.origin);
     if (url.pathname !== '/twitch/social-media/api/admin/clips' && !url.pathname.startsWith(`${PREFIX}/`)) return originalFetch(input, init);
@@ -85,13 +86,21 @@ export function createAiPreviewFetch(originalFetch: typeof fetch, scenario: AiPr
     const body = init?.body && typeof init.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : {};
     const channel = method === 'GET' ? url.searchParams.get('twitch_user_id') : body.twitch_user_id;
     if (scenario === 'race' && channel === '987654321') {
-      if (url.pathname === '/twitch/social-media/api/admin/clips') return response({ items: [{ clip_db_id: 601, source_kind: 'twitch', title: 'Clip aus dem zweiten Kanal', created_at: '2026-10-11T07:00:00Z' }], total: 1, page: Number(url.searchParams.get('page')), page_size: Number(url.searchParams.get('page_size')) });
+      if (url.pathname === '/twitch/social-media/api/admin/clips') return response({ items: [
+        { clip_db_id: 601, source_kind: 'twitch', title: 'Clip aus dem zweiten Kanal', created_at: '2026-10-11T07:00:00Z' },
+        { clip_db_id: 602, source_kind: 'twitch', title: 'Weiterer Clip aus dem zweiten Kanal', created_at: '2026-10-11T07:01:00Z' },
+      ], total: 2, page: Number(url.searchParams.get('page')), page_size: Number(url.searchParams.get('page_size')) });
       if (url.pathname === `${PREFIX}/consent` && method === 'GET') return response({ external_ai_consent: secondConsent, global_allowed: true });
       if (url.pathname === `${PREFIX}/consent` && method === 'PUT' && typeof body.external_ai_consent === 'boolean') {
         secondConsent = body.external_ai_consent;
         return response({ external_ai_consent: secondConsent, global_allowed: true });
       }
-      if (url.pathname === `${PREFIX}/jobs` && method === 'GET') return response({ items: [secondJob, secondFailure] });
+      if (url.pathname === `${PREFIX}/jobs` && method === 'GET') return response({ items: [secondJob, secondFailure, ...(secondStarted ? [secondStarted] : [])] });
+      if (url.pathname === `${PREFIX}/jobs` && method === 'POST' && secondConsent && [601, 602].includes(Number(body.clip_db_id))) {
+        secondStarted = { ...BASE_JOB, id: 1203, clip_db_id: Number(body.clip_db_id), status: 'rendering', stage: 'rendering', original_url: null, versions: [], failure_code: null, failure_message: null, can_retry: false };
+        return response({ job: secondStarted });
+      }
+      if (url.pathname === `${PREFIX}/jobs/1203` && method === 'GET' && secondStarted) return response(secondStarted);
       if (url.pathname === `${PREFIX}/jobs/1201` && method === 'GET') return response(secondJob);
       if (url.pathname === `${PREFIX}/jobs/1202` && method === 'GET') return response(secondFailure);
       if (url.pathname === `${PREFIX}/jobs/1202/retry` && method === 'POST') {

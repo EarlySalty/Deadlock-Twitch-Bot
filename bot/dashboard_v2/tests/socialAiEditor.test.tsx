@@ -112,7 +112,9 @@ test('channel-scoped pagination resolves a valid handoff beyond the first 30 cli
     return Response.json({ page, page_size: 100, total: 140, items: page === 1 ? Array.from({ length: 100 }, (_, index) => ({ clip_db_id: index + 1, source_kind: 'twitch', title: 'Clip', created_at: '2026-10-11T08:00:00Z' })) : [{ clip_db_id: 135, source_kind: 'twitch', title: 'Übernommener Clip', created_at: '2026-10-11T08:00:00Z' }] });
   };
   try {
-    assert.equal((await findChannelClip('123', 135, controller.signal))?.clip_db_id, 135);
+    const result = await findChannelClip('123', 135, controller.signal);
+    assert.equal(result.kind, 'found');
+    if (result.kind === 'found') assert.equal(result.clip.clip_db_id, 135);
     assert.equal(calls.length, 2);
   } finally {
     globalThis.fetch = previous;
@@ -130,10 +132,10 @@ test('foreign, malformed and unproven handoffs never become selectable', async (
     ] });
   };
   try {
-    assert.equal(await findChannelClip('123', 99), null);
-    assert.equal(await findChannelClip('123', 77), null);
-    assert.equal(await findChannelClip('123', 78), null);
-    assert.equal(await findChannelClip('123', -1), null);
+    assert.deepEqual(await findChannelClip('123', 99), { kind: 'not_found' });
+    assert.deepEqual(await findChannelClip('123', 77), { kind: 'not_found' });
+    assert.deepEqual(await findChannelClip('123', 78), { kind: 'not_found' });
+    assert.deepEqual(await findChannelClip('123', -1), { kind: 'not_found' });
     assert.equal(isSelectableClip({ clip_db_id: 99, source_kind: 'twitch', created_at: 'invalid', title: 'Fremd' } as never), false);
   } finally {
     globalThis.fetch = previous;
@@ -146,9 +148,37 @@ test('foreign, malformed and unproven handoffs never become selectable', async (
   }
 });
 
-test('failure explanation uses only short German recovery text and hides technical details', () => {
-  assert.equal(failureExplanation('Der Renderversuch ist fehlgeschlagen.'), 'Der Renderversuch ist fehlgeschlagen.');
+test('bounded handoff search distinguishes a partial archive from a confirmed absence', async () => {
+  const previous = globalThis.fetch;
+  const pages: number[] = [];
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input), 'http://localhost');
+    assert.equal(url.searchParams.get('twitch_user_id'), '123');
+    const page = Number(url.searchParams.get('page'));
+    pages.push(page);
+    return Response.json({ page, page_size: 100, total: 2100, items: Array.from({ length: 100 }, (_, index) => ({ clip_db_id: (page - 1) * 100 + index + 1, source_kind: 'twitch', title: 'Clip', created_at: '2026-10-11T08:00:00Z' })) });
+  };
+  try {
+    assert.deepEqual(await findChannelClip('123', 2099), { kind: 'limit_reached' });
+    assert.deepEqual(pages, Array.from({ length: 20 }, (_, index) => index + 1));
+    pages.length = 0;
+    const result = await findChannelClip('123', 2000);
+    assert.equal(result.kind, 'found');
+    if (result.kind === 'found') assert.equal(result.clip.clip_db_id, 2000);
+    assert.equal(pages.length, 20);
+  } finally {
+    globalThis.fetch = previous;
+  }
+});
+
+test('failure explanation uses only approved codes and ignores arbitrary provider text', () => {
+  assert.match(failureExplanation('rendering_failed'), /Video/);
+  assert.match(failureExplanation('render_failed'), /Video/);
+  assert.match(failureExplanation('consent_missing'), /Freigabe/);
   assert.match(failureExplanation(null), /erneut/);
+  const unsafe = 'Die Prüfung ist fehlgeschlagen. Zugangscode geheim123 wurde an /var/lib/private übertragen.';
+  assert.equal(failureExplanation(unsafe), failureExplanation(null));
+  assert.equal(failureExplanation('__proto__'), failureExplanation(null));
   assert.doesNotMatch(failureExplanation('Error: /var/lib/private/stack'), /private|stack|Error/);
 });
 
