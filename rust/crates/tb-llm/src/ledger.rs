@@ -64,6 +64,18 @@ pub struct Completion {
     pub error_code: Option<String>,
     pub http_status: Option<i32>,
     pub latency_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub social_accounting: Option<SocialAccounting>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SocialAccounting {
+    pub reserved_micro_usd: i64,
+    pub estimated_micro_usd: Option<i64>,
+    pub cost_basis: String,
+    pub cache_creation_input_tokens: Option<i64>,
+    pub cache_read_input_tokens: Option<i64>,
 }
 /// Auch nach einem Abschlussfehler bleibt der bereits gespeicherte Start sichtbar.
 /// Die strukturierte Journalzeile enthält nur Zähler und technische IDs.
@@ -118,9 +130,47 @@ pub async fn recover_with_pool(
     project: &str,
     service: &str,
 ) -> Result<(), RecoveryError> {
+    let state = if c.success { "succeeded" } else { "failed" };
+    if let Some(social) = &c.social_accounting {
+        if social.reserved_micro_usd <= 0
+            || social.estimated_micro_usd.is_some_and(|n| n <= 0)
+            || social.cache_creation_input_tokens.is_some_and(|n| n < 0)
+            || social.cache_read_input_tokens.is_some_and(|n| n < 0)
+            || social.cost_basis
+                != if social
+                    .estimated_micro_usd
+                    .is_some_and(|n| c.success || n > social.reserved_micro_usd)
+                {
+                    "usage_priced_estimate"
+                } else {
+                    "reserved_upper_bound"
+                }
+        {
+            return Err(RecoveryError);
+        }
+        let result = sqlx::query("UPDATE public.llm_usage SET tokens_in=$2,tokens_out=$3,total=$4,success=$5,attempt_state=$6,request_id=$7,error_code=$8,http_status=$9,latency_ms=$10,finished_at=now(),estimated_micro_usd=$11,cost_basis=$12,cache_creation_input_tokens=$13,cache_read_input_tokens=$14 WHERE id=$1 AND attempt_state='started' AND project=$15 AND service=$16 AND purpose='social_editor' AND provider='anthropic' AND reserved_micro_usd=$17")
+            .bind(c.id).bind(c.tokens_in).bind(c.tokens_out).bind(c.total)
+            .bind(i64::from(c.success)).bind(state).bind(&c.request_id).bind(&c.error_code)
+            .bind(c.http_status).bind(c.latency_ms).bind(social.estimated_micro_usd)
+            .bind(&social.cost_basis).bind(social.cache_creation_input_tokens)
+            .bind(social.cache_read_input_tokens).bind(project).bind(service)
+            .bind(social.reserved_micro_usd)
+            .execute(pool).await.map_err(|_| RecoveryError)?;
+        if result.rows_affected() == 1 {
+            return Ok(());
+        }
+        let matching: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM public.llm_usage WHERE id=$1 AND project=$2 AND service=$3 AND purpose='social_editor' AND provider='anthropic' AND reserved_micro_usd=$4 AND attempt_state=$5 AND success=$6 AND tokens_in IS NOT DISTINCT FROM $7 AND tokens_out IS NOT DISTINCT FROM $8 AND total IS NOT DISTINCT FROM $9 AND request_id IS NOT DISTINCT FROM $10 AND error_code IS NOT DISTINCT FROM $11 AND http_status IS NOT DISTINCT FROM $12 AND latency_ms=$13 AND estimated_micro_usd IS NOT DISTINCT FROM $14 AND cost_basis=$15 AND cache_creation_input_tokens IS NOT DISTINCT FROM $16 AND cache_read_input_tokens IS NOT DISTINCT FROM $17)")
+            .bind(c.id).bind(project).bind(service).bind(social.reserved_micro_usd)
+            .bind(state).bind(i64::from(c.success)).bind(c.tokens_in).bind(c.tokens_out)
+            .bind(c.total).bind(&c.request_id).bind(&c.error_code).bind(c.http_status)
+            .bind(c.latency_ms).bind(social.estimated_micro_usd).bind(&social.cost_basis)
+            .bind(social.cache_creation_input_tokens).bind(social.cache_read_input_tokens)
+            .fetch_one(pool).await.map_err(|_| RecoveryError)?;
+        return if matching { Ok(()) } else { Err(RecoveryError) };
+    }
     let result = sqlx::query("UPDATE public.llm_usage SET tokens_in=$2,tokens_out=$3,total=$4,success=$5,attempt_state=$6,request_id=$7,error_code=$8,http_status=$9,latency_ms=$10,finished_at=now() WHERE id=$1 AND attempt_state='started' AND project=$11 AND service=$12")
         .bind(c.id).bind(c.tokens_in).bind(c.tokens_out).bind(c.total)
-        .bind(i64::from(c.success)).bind(if c.success { "succeeded" } else { "failed" })
+        .bind(i64::from(c.success)).bind(state)
         .bind(&c.request_id).bind(&c.error_code).bind(c.http_status).bind(c.latency_ms).bind(project).bind(service)
         .execute(pool).await.map_err(|_| RecoveryError)?;
     if result.rows_affected() == 0 {
@@ -212,6 +262,7 @@ mod tests {
     #[test]
     fn journalbeleg_bleibt_bei_error_filter_sichtbar() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .env("TB_LEDGER_JOURNAL_CHILD", "1")
             .args([
                 "--ignored",
                 "--exact",
@@ -233,6 +284,9 @@ mod tests {
     #[tokio::test]
     #[ignore = "Isolierter Kindprozess für den Error-Filter"]
     async fn journalbeleg_stderr_kind() {
+        if std::env::var_os("TB_LEDGER_JOURNAL_CHILD").is_none() {
+            return;
+        }
         tracing_subscriber::fmt()
             .with_max_level(tracing::Level::ERROR)
             .init();
@@ -249,6 +303,7 @@ mod tests {
             error_code: None,
             http_status: Some(200),
             latency_ms: 1,
+            social_accounting: None,
         });
     }
 
