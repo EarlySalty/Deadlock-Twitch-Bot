@@ -132,11 +132,12 @@ export function kategorieLabel(categoryKey: string, displayName: string): string
   return KATEGORIE_LABELS[categoryKey] ?? displayName;
 }
 
-export type SocialMediaView = 'pool' | 'plan' | 'layout' | 'konten' | 'archiv' | 'ai';
+export type SocialMediaView = 'pool' | 'plan' | 'library' | 'layout' | 'konten' | 'archiv' | 'ai';
 
 export const SOCIAL_MEDIA_TABS: Array<{ id: SocialMediaView; label: string }> = [
   { id: 'pool', label: 'Pipeline' },
-  { id: 'plan', label: 'Zeitplan' },
+  { id: 'plan', label: 'Auto-Pilot & Zeitplan' },
+  { id: 'library', label: 'Clips & Import' },
   { id: 'ai', label: 'KI-Bearbeitung & Prüfung' },
   { id: 'konten', label: 'Vorlagen & Konten' },
   { id: 'archiv', label: 'VOD-Archiv' },
