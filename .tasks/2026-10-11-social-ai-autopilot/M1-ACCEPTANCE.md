@@ -1,6 +1,6 @@
 # M1 acceptance and evidence checklist
 
-Status: eight scoped test targets passed at e80a75bdb2d4bc5235d8151bbd8894462640be38. Current main is incorporated at a30e8245ffe30519922f97ebc4a4d14120cbede1 with unchanged P2 Rust source. Its five affected chat tests, strict LLM/Social library lint and real four-binary build passed; three ELF revisions are parent-verified. Strict API lint remains red with a measured zero-delta inherited baseline; binary lint has two diagnostics with its actual matching baseline pending. The existing-tab mount and exact frontend/Moli checks remain pending. Not accepted, merged or live. REGISTER.md distinguishes executed evidence from open acceptance.
+Status: eight scoped test targets passed at e80a75bdb2d4bc5235d8151bbd8894462640be38. Mainc1 is incorporated at a30e8245ffe30519922f97ebc4a4d14120cbede1 with unchanged P2 Rust source; five affected chat tests, strict LLM/Social library lint and a real four-binary build passed, with three ELF revisions parent-verified. Strict API and binary lint remain red with actual matching zero-delta inherited baselines. The minimal existing-tab mount is published at 7ae7f2c9e12c1385c53a0b9faf016657e2b1769a; frontend build, owned lint and 57 tests passed, and eight preserved Moli images prove synthetic Manager layout only. The same worker's pending mainb0 merge is under affected-check source freeze; no final committed SHA or result yet. Not gate-approved, merged or live. REGISTER.md holds current evidence and exclusions.
 
 ## Must pass before paid proof
 

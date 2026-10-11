@@ -1,0 +1,377 @@
+{
+  "boundary": "Synthetic manager mount, DOM and viewport only. No authentication, provider calls or playback proof.",
+  "results": [
+    {
+      "role": "admin",
+      "viewport": "desktop",
+      "width": 1440,
+      "documentWidth": 1440,
+      "title": "KI-Videoschnitt",
+      "streamer": "beispielkanal",
+      "clip": "501",
+      "fallback": false,
+      "tabs": [
+        {
+          "text": "Pipeline",
+          "selected": "false"
+        },
+        {
+          "text": "Zeitplan",
+          "selected": "false"
+        },
+        {
+          "text": "KI-Bearbeitung & Prüfung",
+          "selected": "true"
+        },
+        {
+          "text": "Vorlagen & Konten",
+          "selected": "false"
+        },
+        {
+          "text": "VOD-Archiv",
+          "selected": "false"
+        }
+      ],
+      "media": [
+        {
+          "label": "Originalclip abspielen",
+          "source": "/twitch/social-media/api/ai/jobs/1101/original"
+        },
+        {
+          "label": "Bearbeitetes Video abspielen",
+          "source": "/twitch/social-media/api/ai/jobs/1101/versions/2201/file"
+        }
+      ],
+      "metrics": [
+        "KI-Anbieter und Modell",
+        "Gesamte Bearbeitungszeit",
+        "KI-Antwortzeit",
+        "FFmpeg-Rechenzeit",
+        "Eingabe- und Ausgabetokens",
+        "Geschätzte Anbieter-Kosten",
+        "Vom Anbieter abgerechnete Kosten",
+        "Fertiggestellt"
+      ],
+      "requests": [
+        {
+          "path": "/twitch/social-media/api/ai/consent",
+          "channel": "123456789",
+          "method": "GET"
+        },
+        {
+          "path": "/twitch/social-media/api/ai/jobs",
+          "channel": "123456789",
+          "method": "GET"
+        },
+        {
+          "path": "/twitch/social-media/api/admin/clips",
+          "channel": "123456789",
+          "method": "GET"
+        },
+        {
+          "path": "/twitch/social-media/api/admin/clips",
+          "channel": "123456789",
+          "method": "GET"
+        },
+        {
+          "path": "/twitch/social-media/api/ai/jobs/1101",
+          "channel": "123456789",
+          "method": "GET"
+        }
+      ],
+      "bounds": [
+        {
+          "x": 155,
+          "y": 1561,
+          "width": 559,
+          "height": 476
+        },
+        {
+          "x": 726,
+          "y": 1561,
+          "width": 559,
+          "height": 476
+        }
+      ]
+    },
+    {
+      "role": "admin",
+      "viewport": "mobile",
+      "width": 390,
+      "documentWidth": 390,
+      "title": "KI-Videoschnitt",
+      "streamer": "beispielkanal",
+      "clip": "501",
+      "fallback": false,
+      "tabs": [
+        {
+          "text": "Pipeline",
+          "selected": "false"
+        },
+        {
+          "text": "Zeitplan",
+          "selected": "false"
+        },
+        {
+          "text": "KI-Bearbeitung & Prüfung",
+          "selected": "true"
+        },
+        {
+          "text": "Vorlagen & Konten",
+          "selected": "false"
+        },
+        {
+          "text": "VOD-Archiv",
+          "selected": "false"
+        }
+      ],
+      "media": [
+        {
+          "label": "Originalclip abspielen",
+          "source": "/twitch/social-media/api/ai/jobs/1101/original"
+        },
+        {
+          "label": "Bearbeitetes Video abspielen",
+          "source": "/twitch/social-media/api/ai/jobs/1101/versions/2201/file"
+        }
+      ],
+      "metrics": [
+        "KI-Anbieter und Modell",
+        "Gesamte Bearbeitungszeit",
+        "KI-Antwortzeit",
+        "FFmpeg-Rechenzeit",
+        "Eingabe- und Ausgabetokens",
+        "Geschätzte Anbieter-Kosten",
+        "Vom Anbieter abgerechnete Kosten",
+        "Fertiggestellt"
+      ],
+      "requests": [
+        {
+          "path": "/twitch/social-media/api/ai/consent",
+          "channel": "123456789",
+          "method": "GET"
+        },
+        {
+          "path": "/twitch/social-media/api/ai/jobs",
+          "channel": "123456789",
+          "method": "GET"
+        },
+        {
+          "path": "/twitch/social-media/api/admin/clips",
+          "channel": "123456789",
+          "method": "GET"
+        },
+        {
+          "path": "/twitch/social-media/api/admin/clips",
+          "channel": "123456789",
+          "method": "GET"
+        },
+        {
+          "path": "/twitch/social-media/api/ai/jobs/1101",
+          "channel": "123456789",
+          "method": "GET"
+        }
+      ],
+      "bounds": [
+        {
+          "x": 33,
+          "y": 2702,
+          "width": 324,
+          "height": 316
+        },
+        {
+          "x": 33,
+          "y": 3030,
+          "width": 324,
+          "height": 316
+        }
+      ]
+    },
+    {
+      "role": "partner",
+      "viewport": "desktop",
+      "width": 1440,
+      "documentWidth": 1440,
+      "title": "KI-Videoschnitt",
+      "streamer": "beispielkanal",
+      "clip": "501",
+      "fallback": false,
+      "tabs": [
+        {
+          "text": "Pipeline",
+          "selected": "false"
+        },
+        {
+          "text": "Zeitplan",
+          "selected": "false"
+        },
+        {
+          "text": "KI-Bearbeitung & Prüfung",
+          "selected": "true"
+        },
+        {
+          "text": "Vorlagen & Konten",
+          "selected": "false"
+        },
+        {
+          "text": "VOD-Archiv",
+          "selected": "false"
+        }
+      ],
+      "media": [
+        {
+          "label": "Originalclip abspielen",
+          "source": "/twitch/social-media/api/ai/jobs/1101/original"
+        },
+        {
+          "label": "Bearbeitetes Video abspielen",
+          "source": "/twitch/social-media/api/ai/jobs/1101/versions/2201/file"
+        }
+      ],
+      "metrics": [
+        "KI-Anbieter und Modell",
+        "Gesamte Bearbeitungszeit",
+        "KI-Antwortzeit",
+        "FFmpeg-Rechenzeit",
+        "Eingabe- und Ausgabetokens",
+        "Geschätzte Anbieter-Kosten",
+        "Vom Anbieter abgerechnete Kosten",
+        "Fertiggestellt"
+      ],
+      "requests": [
+        {
+          "path": "/twitch/social-media/api/ai/consent",
+          "channel": "123456789",
+          "method": "GET"
+        },
+        {
+          "path": "/twitch/social-media/api/ai/jobs",
+          "channel": "123456789",
+          "method": "GET"
+        },
+        {
+          "path": "/twitch/social-media/api/admin/clips",
+          "channel": "123456789",
+          "method": "GET"
+        },
+        {
+          "path": "/twitch/social-media/api/admin/clips",
+          "channel": "123456789",
+          "method": "GET"
+        },
+        {
+          "path": "/twitch/social-media/api/ai/jobs/1101",
+          "channel": "123456789",
+          "method": "GET"
+        }
+      ],
+      "bounds": [
+        {
+          "x": 155,
+          "y": 1541,
+          "width": 559,
+          "height": 476
+        },
+        {
+          "x": 726,
+          "y": 1541,
+          "width": 559,
+          "height": 476
+        }
+      ]
+    },
+    {
+      "role": "partner",
+      "viewport": "mobile",
+      "width": 390,
+      "documentWidth": 390,
+      "title": "KI-Videoschnitt",
+      "streamer": "beispielkanal",
+      "clip": "501",
+      "fallback": false,
+      "tabs": [
+        {
+          "text": "Pipeline",
+          "selected": "false"
+        },
+        {
+          "text": "Zeitplan",
+          "selected": "false"
+        },
+        {
+          "text": "KI-Bearbeitung & Prüfung",
+          "selected": "true"
+        },
+        {
+          "text": "Vorlagen & Konten",
+          "selected": "false"
+        },
+        {
+          "text": "VOD-Archiv",
+          "selected": "false"
+        }
+      ],
+      "media": [
+        {
+          "label": "Originalclip abspielen",
+          "source": "/twitch/social-media/api/ai/jobs/1101/original"
+        },
+        {
+          "label": "Bearbeitetes Video abspielen",
+          "source": "/twitch/social-media/api/ai/jobs/1101/versions/2201/file"
+        }
+      ],
+      "metrics": [
+        "KI-Anbieter und Modell",
+        "Gesamte Bearbeitungszeit",
+        "KI-Antwortzeit",
+        "FFmpeg-Rechenzeit",
+        "Eingabe- und Ausgabetokens",
+        "Geschätzte Anbieter-Kosten",
+        "Vom Anbieter abgerechnete Kosten",
+        "Fertiggestellt"
+      ],
+      "requests": [
+        {
+          "path": "/twitch/social-media/api/ai/consent",
+          "channel": "123456789",
+          "method": "GET"
+        },
+        {
+          "path": "/twitch/social-media/api/ai/jobs",
+          "channel": "123456789",
+          "method": "GET"
+        },
+        {
+          "path": "/twitch/social-media/api/admin/clips",
+          "channel": "123456789",
+          "method": "GET"
+        },
+        {
+          "path": "/twitch/social-media/api/admin/clips",
+          "channel": "123456789",
+          "method": "GET"
+        },
+        {
+          "path": "/twitch/social-media/api/ai/jobs/1101",
+          "channel": "123456789",
+          "method": "GET"
+        }
+      ],
+      "bounds": [
+        {
+          "x": 33,
+          "y": 2646,
+          "width": 324,
+          "height": 316
+        },
+        {
+          "x": 33,
+          "y": 2974,
+          "width": 324,
+          "height": 316
+        }
+      ]
+    }
+  ]
+}

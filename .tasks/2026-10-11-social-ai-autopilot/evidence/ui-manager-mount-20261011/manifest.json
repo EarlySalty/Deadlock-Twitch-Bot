@@ -1,0 +1,46 @@
+{
+  "date": "2026-10-11",
+  "boundary": "Synthetic existing-manager mount, DOM and layout only. Not authentication, backend media-contract, real playback, paid-provider or live acceptance proof.",
+  "tool": "Moli 1.1.14",
+  "worker_source_revision": "d86fb70a7664787b8e577842f1185306ac6ba09a",
+  "parent_metadata_corrected_revision": "7ae7f2c9e12c1385c53a0b9faf016657e2b1769a",
+  "source_tree": "180a316075b744a44a4e825443013a17fe74bfb8",
+  "source_delta": "one import and existing aiEditor prop at both SocialMediaManager callers; unchanged existing props, fallbacks and production CSS",
+  "viewports": [{"width": 1440, "height": 900}, {"width": 390, "height": 844}],
+  "roles": ["admin", "partner"],
+  "synthetic_channel": "123456789",
+  "synthetic_clip_id": 501,
+  "dom_results": "mount-results.json",
+  "parent_inspected_images": 8,
+  "parent_observations": {
+    "existing_ai_tab_and_panel_visible": true,
+    "desktop_original_output_side_by_side": true,
+    "mobile_original_output_stacked": true,
+    "media_are_gray_placeholders": true,
+    "synthetic_media_durations_seconds": [54.8, 42.4],
+    "last_usable_version_warning_visible_desktop": true,
+    "all_timing_labels_visually_proved_by_these_images": false,
+    "timing_labels_present_in_inspected_dom_results": true,
+    "real_playback_proved": false,
+    "real_authentication_proved": false
+  },
+  "worker_reported_fixture_limits": {
+    "only_synthetic_gets": true,
+    "document_widths_equal_viewports": true,
+    "initial_raw_fixture_overflow_pixels": 1,
+    "repair": "scratch frame matched existing preview-entry plumbing; assertions and production CSS unchanged",
+    "owned_fixture_processes_closed": true,
+    "fixture_ports_free": true
+  },
+  "files": [
+    {"file": "mount-admin-desktop.png", "bytes": 134154, "sha256": "88ef7b89037b137ca6675132ff194e96592f3450849256f52e993d51cd792858"},
+    {"file": "mount-partner-desktop.png", "bytes": 131274, "sha256": "a1bcebf13db59d247acb2be2d82713c2d5d0cdc9459514bdb6554cf9b1bb3e88"},
+    {"file": "mount-admin-mobile.png", "bytes": 81059, "sha256": "59173a4cff2a08bc2d286259e06cf642ef3da8a530137d5dcf427c667a7ed1d1"},
+    {"file": "mount-partner-mobile.png", "bytes": 78966, "sha256": "e44377318861e1cdfabd294a59dca386118793829151513429a36eae30bfb62a"},
+    {"file": "mount-media-admin-desktop.png", "bytes": 86856, "sha256": "38ef58f174db8f9548d4da9386743b238fdaca6d71bacc6316fad6679c0c9011"},
+    {"file": "mount-media-partner-desktop.png", "bytes": 86856, "sha256": "38ef58f174db8f9548d4da9386743b238fdaca6d71bacc6316fad6679c0c9011"},
+    {"file": "mount-media-admin-mobile.png", "bytes": 27827, "sha256": "a5ca847eaace35142b442d69b605d82dc91911d4dd3f30a9e3ac11d3166c7692"},
+    {"file": "mount-media-partner-mobile.png", "bytes": 27827, "sha256": "a5ca847eaace35142b442d69b605d82dc91911d4dd3f30a9e3ac11d3166c7692"},
+    {"file": "mount-results.json", "bytes": 9173, "sha256": "0501556cde64be95c9534ce77fe6bab1ef82c339e39249ca54a485c765d853af"}
+  ]
+}
