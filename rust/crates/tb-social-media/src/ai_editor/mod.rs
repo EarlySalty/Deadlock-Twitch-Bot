@@ -1,8 +1,10 @@
+pub mod brain;
 mod media;
 mod model;
 mod skills;
-mod validation;
 pub mod store;
+pub mod stt;
+mod validation;
 
 pub use media::{
     extract_frames, inspect_media, prepare_intervals, render_prepared, FrameBatch, MediaInfo,
