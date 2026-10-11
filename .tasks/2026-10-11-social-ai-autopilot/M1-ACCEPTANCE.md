@@ -1,6 +1,6 @@
 # M1 acceptance and evidence checklist
 
-Status: integrated source and eight scoped test targets have executed successfully at e80a75bdb2d4bc5235d8151bbd8894462640be38. Strict lint baseline, real binary build, final existing-tab mount and their exact final-source checks remain pending. Not accepted, merged or live. This checklist is a verification contract; REGISTER.md distinguishes executed evidence from open acceptance.
+Status: integrated source and eight scoped test targets have executed successfully at e80a75bdb2d4bc5235d8151bbd8894462640be38. Actual strict API lint matches its measured inherited baseline with zero delta; it remains red, not passed. Current main is incorporated at a30e8245ffe30519922f97ebc4a4d14120cbede1 with unchanged P2 Rust source. Affected chat/binary checks, final existing-tab mount and exact final-source checks remain pending. Not accepted, merged or live. REGISTER.md distinguishes executed evidence from open acceptance.
 
 ## Must pass before paid proof
 
