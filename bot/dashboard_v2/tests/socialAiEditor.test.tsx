@@ -1,0 +1,106 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { chooseUsableVersion } from '../src/components/socialmedia/ai/versions';
+import { aiPreviewJob } from '../src/components/socialmedia/ai/preview';
+
+Object.assign(globalThis, { window: { location: { pathname: '/' } } });
+const { decodeAiConsent, decodeAiJob, fetchAiConsent, fetchAiJob, fetchAiJobs, retryAiJob, saveAiConsent, startAiJob } = await import('../src/components/socialmedia/ai/api');
+
+function mockFetch(body: unknown, inspect: (url: string, init: RequestInit) => void): () => void {
+  const previous = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => {
+    inspect(String(input), init);
+    return Response.json(body);
+  };
+  return () => { globalThis.fetch = previous; };
+}
+
+test('consent requires an explicit per-channel PUT and never invents a default', async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const restore = mockFetch({ external_ai_consent: false, global_allowed: false }, (url, init) => calls.push({ url, init }));
+  try {
+    assert.deepEqual(await fetchAiConsent('11 22'), { external_ai_consent: false, global_allowed: false });
+    await saveAiConsent('11 22', true);
+    assert.equal(calls[0].url, '/twitch/social-media/api/ai/consent?twitch_user_id=11+22');
+    assert.equal(calls[0].init.credentials, 'same-origin');
+    assert.equal(calls[1].url, '/twitch/social-media/api/ai/consent');
+    assert.equal(calls[1].init.method, 'PUT');
+    assert.deepEqual(JSON.parse(String(calls[1].init.body)), { twitch_user_id: '11 22', external_ai_consent: true });
+    assert.throws(() => decodeAiConsent({ global_allowed: true }), /unvollständig/);
+    assert.throws(() => decodeAiConsent({ external_ai_consent: 'true', global_allowed: true }), /unvollständig/);
+  } finally {
+    restore();
+  }
+});
+
+test('manual jobs and failed-stage retry send exactly the scoped API payloads', async () => {
+  const validJob = aiPreviewJob('review');
+  assert.ok(validJob);
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const previous = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    calls.push({ url, init });
+    if (url.endsWith('/jobs') && init.method === 'POST') return Response.json({ job: validJob });
+    if (url.endsWith('/retry')) return Response.json({ job: validJob });
+    if (url.includes('/jobs/1101?')) return Response.json(validJob);
+    return Response.json({ items: [validJob] });
+  };
+  try {
+    assert.equal((await fetchAiJobs('22'))[0].id, 1101);
+    assert.equal((await startAiJob('22', 501)).clip_db_id, 501);
+    assert.equal((await fetchAiJob('22', 1101)).id, 1101);
+    assert.equal((await retryAiJob('22', 1101)).id, 1101);
+    assert.deepEqual(calls.map((call) => [call.url, call.init.method ?? 'GET']), [
+      ['/twitch/social-media/api/ai/jobs?twitch_user_id=22', 'GET'],
+      ['/twitch/social-media/api/ai/jobs', 'POST'],
+      ['/twitch/social-media/api/ai/jobs/1101?twitch_user_id=22', 'GET'],
+      ['/twitch/social-media/api/ai/jobs/1101/retry', 'POST'],
+    ]);
+    assert.deepEqual(JSON.parse(String(calls[1].init.body)), { twitch_user_id: '22', clip_db_id: 501 });
+    assert.deepEqual(JSON.parse(String(calls[3].init.body)), { twitch_user_id: '22' });
+    assert.ok(calls.every((call) => call.init.credentials === 'same-origin'));
+  } finally {
+    globalThis.fetch = previous;
+  }
+});
+
+test('malformed status and non-backend media URLs fail closed', () => {
+  const valid = aiPreviewJob('review');
+  assert.ok(valid);
+  assert.equal(decodeAiJob(valid).status, 'review');
+  assert.throws(() => decodeAiJob({ ...valid, status: 'published' }), /unvollständig/);
+  assert.throws(() => decodeAiJob({ ...valid, cost_basis: 'free' }), /unvollständig/);
+  assert.throws(() => decodeAiJob({ ...valid, original_url: '/var/lib/clips/test.mp4' }), /unvollständig/);
+  assert.throws(() => decodeAiJob({ ...valid, original_url: '//other.example/video' }), /unvollständig/);
+  assert.throws(() => decodeAiJob({ ...valid, versions: [{ ...valid.versions[0], file_url: 'https://other.example/video' }] }), /unvollständig/);
+  assert.throws(() => decodeAiJob({ ...valid, highlights: [{ start_ms: 10, end_ms: 5, description: 'Falsche Zeit' }] }), /unvollständig/);
+});
+
+test('denied or mismatched channel data cannot become an enabled editor state', async () => {
+  const previous = globalThis.fetch;
+  const validJob = aiPreviewJob('review');
+  assert.ok(validJob);
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'channel_denied' }), { status: 403 });
+  try {
+    await assert.rejects(fetchAiConsent('other-channel'));
+    await assert.rejects(fetchAiJobs('other-channel'));
+  } finally {
+    globalThis.fetch = previous;
+  }
+  const restore = mockFetch({ ...validJob, id: 9999 }, () => {});
+  try {
+    await assert.rejects(fetchAiJob('other-channel', 1101), /unvollständig/);
+  } finally {
+    restore();
+  }
+});
+
+test('a failed new version leaves the older playable output selected', () => {
+  const job = aiPreviewJob('review');
+  assert.ok(job);
+  assert.equal(chooseUsableVersion(job.versions)?.version_no, 1);
+  assert.equal(chooseUsableVersion(job.versions, 2202)?.id, 2201);
+  assert.equal(chooseUsableVersion(job.versions, 2201)?.id, 2201);
+  assert.equal(chooseUsableVersion([], 2201), null);
+});

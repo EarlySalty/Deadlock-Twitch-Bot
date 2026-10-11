@@ -715,3 +715,5 @@ export async function disconnectPlatform(platform: string, twitchUserId: string 
   const qs = buildQuery({ twitch_user_id: twitchUserId });
   return fetchJson(`/twitch/social-media/oauth/disconnect/${platform}${qs}`, { method: 'POST' });
 }
+
+export const fetchSocialAiJson = fetchJson;
