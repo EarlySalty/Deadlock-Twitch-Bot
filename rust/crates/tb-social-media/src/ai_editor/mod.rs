@@ -2,6 +2,7 @@ mod media;
 mod model;
 mod skills;
 mod validation;
+pub mod store;
 
 pub use media::{
     extract_frames, inspect_media, prepare_intervals, render_prepared, FrameBatch, MediaInfo,

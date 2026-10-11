@@ -152,9 +152,18 @@ pub async fn insert(
     pool: &PgPool,
     video: &NewProducedVideo,
 ) -> Result<ProducedVideo, ProducedVideoError> {
-    if video.version_no <= 0 || video.variant_index < 0 {
+    insert_with_metadata(pool, video, &Value::Object(Default::default())).await
+}
+
+pub async fn insert_with_metadata(
+    pool: &PgPool,
+    video: &NewProducedVideo,
+    metadata: &Value,
+) -> Result<ProducedVideo, ProducedVideoError> {
+    if video.version_no <= 0 || video.variant_index < 0 || !metadata.is_object() {
         return Err(ProducedVideoError::Invalid);
     }
+    let metadata = serde_json::to_string(metadata)?;
     let mut tx = pool.begin().await?;
     autopilot_settings::lock_owner(&mut tx, &video.twitch_user_id).await?;
     let owned: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM twitch_clips_social_media WHERE id = $1 AND twitch_user_id = $2)")
@@ -176,9 +185,9 @@ pub async fn insert(
             return Err(ProducedVideoError::Ownership);
         }
     }
-    let id: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, version_no, parent_version_id, variant_index) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id")
+    let id: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, version_no, parent_version_id, variant_index, metadata) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text::jsonb) RETURNING id")
         .bind(&video.twitch_user_id).bind(video.clip_id).bind(video.job_id).bind(video.mode.as_str())
-        .bind(video.version_no).bind(video.parent_version_id).bind(video.variant_index).fetch_one(&mut *tx).await?;
+        .bind(video.version_no).bind(video.parent_version_id).bind(video.variant_index).bind(metadata).fetch_one(&mut *tx).await?;
     let row = sqlx::query(sqlx::AssertSqlSafe(format!("{SELECT} WHERE id = $1")))
         .bind(id)
         .fetch_one(&mut *tx)
@@ -209,7 +218,7 @@ pub async fn complete_render(
     }
     ensure_file(&rendered.file_path).await?;
     let changed = sqlx::query("UPDATE social_produced_videos SET file_path = $3, duration_ms = $4, needs_review = $5,
-        review_reasons = $6::text::jsonb, metadata = $7::text::jsonb, status = 'review', expires_at = NOW() + INTERVAL '7 days'
+        review_reasons = $6::text::jsonb, metadata = $7::text::jsonb || metadata, status = 'review', expires_at = NOW() + INTERVAL '7 days'
         WHERE id = $1 AND twitch_user_id = $2 AND status = 'rendering'")
         .bind(id).bind(twitch_user_id).bind(&rendered.file_path).bind(rendered.duration_ms).bind(rendered.needs_review)
         .bind(serde_json::to_string(&rendered.review_reasons)?).bind(serde_json::to_string(&rendered.metadata)?)

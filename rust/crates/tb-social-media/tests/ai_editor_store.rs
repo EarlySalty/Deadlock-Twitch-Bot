@@ -1,7 +1,11 @@
 #[path = "../../../test-support/postgres.rs"]
 mod postgres;
-#[path = "../src/ai_editor/store.rs"]
-pub mod store;
+use tb_social_media::{
+    ai_editor::store,
+    produced_video::{self, NewProducedVideo, ProducedVideoError, RenderedVideo},
+    production_jobs::{self, JobCompletion, JobSource, NewProductionJob, ProductionMode},
+    production_lease,
+};
 
 use sqlx::{PgPool, Row};
 
@@ -19,12 +23,10 @@ async fn fixture() -> postgres::TestPostgres {
     .execute(&db.pool)
     .await
     .expect("Produzierte Videos");
-    sqlx::query(
-        "CREATE TABLE public.social_ai_user_consent (twitch_user_id TEXT PRIMARY KEY, external_ai_consent BOOLEAN NOT NULL DEFAULT FALSE, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT NOT NULL)",
-    )
-    .execute(&db.pool)
-    .await
-    .expect("Einwilligungstabelle");
+    sqlx::raw_sql("CREATE TABLE public.twitch_streamers (twitch_user_id TEXT PRIMARY KEY); INSERT INTO public.twitch_streamers (twitch_user_id) VALUES ('101'), ('202')")
+        .execute(&db.pool)
+        .await
+        .expect("Test-Streamer");
     sqlx::raw_sql(include_str!(
         "../../../migrations/20261011200002_social_ai_jobs.sql"
     ))
@@ -41,6 +43,55 @@ async fn fixture() -> postgres::TestPostgres {
         .await
         .expect("Clip");
     }
+    db
+}
+
+async fn real_schema_fixture() -> postgres::TestPostgres {
+    let db = postgres::TestPostgres::start().await;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20260601000000_baseline_schema.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .expect("echte Basismigration");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20260629120000_live_schema_type_reconcile.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .expect("echte Typmigration");
+    sqlx::query("INSERT INTO twitch_streamers (twitch_login, twitch_user_id) VALUES ('fixture-one', '101'), ('fixture-two', '202'), ('earlysalty', '303')")
+        .execute(&db.pool)
+        .await
+        .expect("isolierte Streamer");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20260806120000_social_media_partner_access.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .expect("echte Partnerzugangsmigration");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20260815120000_social_media_scheduling.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .expect("echte Kategoriemigration");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20261011100000_social_autopilot_contracts.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .expect("echter M0-Vertrag");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20261011200002_social_ai_jobs.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .expect("echte KI-Auftragsmigration");
+    sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, created_at, twitch_user_id, category_key) VALUES ('fixture-clip-101', 'https://clips.twitch.tv/fixture-101', 'fixture-one', '2026-10-11T00:00:00Z', '101', 'deadlock'), ('fixture-clip-202', 'https://clips.twitch.tv/fixture-202', 'fixture-two', '2026-10-11T00:00:00Z', '202', 'deadlock')")
+        .execute(&db.pool)
+        .await
+        .expect("isolierte Clips");
     db
 }
 
@@ -97,6 +148,225 @@ async fn step(lease: &mut store::ProductionLease, checkpoint: store::StageCheckp
     store::save_stage(lease, "101", 1, &checkpoint, None)
         .await
         .expect("Checkpoint speichern");
+}
+
+#[tokio::test]
+async fn real_m0_schema_keeps_manual_identity_and_allocates_atomic_metadata() {
+    let db = real_schema_fixture().await;
+    let column_types: Vec<(String, String)> = sqlx::query_as(
+        "SELECT a.attrelid::regclass::text || '.' || a.attname, format_type(a.atttypid, a.atttypmod) \
+         FROM pg_attribute a WHERE (a.attrelid, a.attname) IN ( \
+         ('twitch_clips_social_media'::regclass, 'id'), \
+         ('twitch_clips_social_media'::regclass, 'clip_id'), \
+         ('social_ai_jobs'::regclass, 'source_clip_id'), \
+         ('social_produced_videos'::regclass, 'clip_id')) ORDER BY 1",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .expect("echte Spaltentypen");
+    assert_eq!(column_types.len(), 4);
+    assert_eq!(column_types[0].1, "bigint");
+    assert_eq!(column_types[1].1, "bigint");
+    assert_eq!(column_types[2].1, "text");
+    assert_eq!(column_types[3].1, "bigint");
+    let settings = tb_social_media::autopilot_settings::load(&db.pool, "101")
+        .await
+        .expect("echte C1-Einstellungen");
+    assert!(!settings.enabled && !settings.ai_editing_enabled);
+    let mut paused_settings = settings;
+    paused_settings.paused = true;
+    tb_social_media::autopilot_settings::save(&db.pool, "101", &paused_settings)
+        .await
+        .expect("deaktivierter und pausierter Auto-Pilot");
+    assert!(!store::get_user_consent(&db.pool, "101")
+        .await
+        .expect("fehlende Einwilligung"));
+    store::upsert_user_consent(&db.pool, "101", true, "fixture-owner")
+        .await
+        .expect("echter Eigentümer-Consent");
+    assert!(store::get_user_consent(&db.pool, "101")
+        .await
+        .expect("eigene Einwilligung"));
+    assert!(!store::get_user_consent(&db.pool, "202")
+        .await
+        .expect("anderer Kanal"));
+    let job = store::create_job(&db.pool, "101", 1, limit())
+        .await
+        .expect("manueller Auftrag trotz deaktiviertem Auto-Pilot");
+    assert!(matches!(
+        store::create_job(&db.pool, "202", 1, limit()).await,
+        Err(store::AiStoreError::NotFound)
+    ));
+    let spec = NewProducedVideo {
+        twitch_user_id: "101".into(),
+        clip_id: 1,
+        job_id: None,
+        mode: ProductionMode::Ai,
+        version_no: 1,
+        parent_version_id: None,
+        variant_index: 0,
+    };
+    let metadata = serde_json::json!({"manual_ai_job_id": job.id.to_string()});
+    assert!(matches!(
+        produced_video::insert_with_metadata(&db.pool, &spec, &serde_json::json!([])).await,
+        Err(ProducedVideoError::Invalid)
+    ));
+    let video = produced_video::insert_with_metadata(&db.pool, &spec, &metadata)
+        .await
+        .expect("atomare C2-Zuordnung");
+    assert_eq!(video.metadata, metadata);
+    assert_eq!(video.job_id, None);
+    assert_eq!(video.status, "rendering");
+    assert_eq!(
+        store::get_job(&db.pool, "101", job.id, limit())
+            .await
+            .expect("Ansicht")
+            .versions
+            .len(),
+        1
+    );
+    assert!(matches!(
+        produced_video::insert_with_metadata(&db.pool, &spec, &metadata).await,
+        Err(ProducedVideoError::Database(_))
+    ));
+    let mut other = spec.clone();
+    other.version_no = 2;
+    other.twitch_user_id = "202".into();
+    assert!(matches!(
+        produced_video::insert_with_metadata(&db.pool, &other, &metadata).await,
+        Err(ProducedVideoError::Ownership)
+    ));
+    other.twitch_user_id = "101".into();
+    other.parent_version_id = Some(video.id);
+    let child = produced_video::insert(&db.pool, &other)
+        .await
+        .expect("bestehender Insert-Pfad mit gültigem Parent");
+    assert_eq!(child.metadata, serde_json::json!({}));
+    assert_eq!(child.parent_version_id, Some(video.id));
+    let mut variant = spec.clone();
+    variant.variant_index = 1;
+    assert_eq!(
+        produced_video::insert_with_metadata(&db.pool, &variant, &metadata)
+            .await
+            .expect("zweite Variante derselben Versionsnummer")
+            .version_no,
+        1
+    );
+    other.version_no = 1;
+    assert!(matches!(
+        produced_video::insert(&db.pool, &other).await,
+        Err(ProducedVideoError::Ownership)
+    ));
+    let directory = tempfile::tempdir().expect("temporärer Renderordner");
+    let file = directory.path().join("render.mp4");
+    tokio::fs::write(&file, b"fixture video")
+        .await
+        .expect("temporäre Videodatei");
+    let rendered = produced_video::complete_render(
+        &db.pool,
+        "101",
+        video.id,
+        &RenderedVideo {
+            file_path: file.to_str().expect("Videopfad").into(),
+            duration_ms: 900,
+            needs_review: true,
+            review_reasons: Vec::new(),
+            metadata: serde_json::json!({"manual_ai_job_id": "forged", "platforms": {"youtube": {"title": "Fixture"}}}),
+        },
+    )
+    .await
+    .expect("Renderfreigabe");
+    assert_eq!(rendered.metadata["manual_ai_job_id"], job.id.to_string());
+    assert_eq!(
+        rendered.metadata["platforms"]["youtube"]["title"],
+        "Fixture"
+    );
+    let view = store::get_job(&db.pool, "101", job.id, limit())
+        .await
+        .expect("Version nach Rendering");
+    assert_eq!(view.versions.len(), 2);
+    assert_eq!(view.versions[0].status, "review");
+    assert_eq!(view.versions[1].version_no, 1);
+    assert!(matches!(
+        store::get_job(&db.pool, "202", job.id, limit()).await,
+        Err(store::AiStoreError::NotFound)
+    ));
+    let foreign_job = production_jobs::insert(
+        &db.pool,
+        &NewProductionJob {
+            twitch_user_id: "202".into(),
+            clip_id: 2,
+            source: JobSource::Manual,
+            requested_mode: Some(ProductionMode::Ai),
+            scheduled_at: None,
+            max_attempts: 2,
+        },
+    )
+    .await
+    .expect("eigener C3-Auftrag für anderen Kanal");
+    let claimed = production_jobs::claim_next(&db.pool)
+        .await
+        .expect("C3-Claim")
+        .expect("wartender Auftrag");
+    assert_eq!(claimed.id, foreign_job.id);
+    let mut linked = spec.clone();
+    linked.version_no = 3;
+    linked.job_id = Some(foreign_job.id);
+    assert!(matches!(
+        produced_video::insert(&db.pool, &linked).await,
+        Err(ProducedVideoError::Ownership)
+    ));
+    production_jobs::finish(
+        &db.pool,
+        "202",
+        foreign_job.id,
+        JobCompletion::Completed,
+        &[],
+        None,
+    )
+    .await
+    .expect("fremden C3-Auftrag abschließen");
+    let own_job = production_jobs::insert(
+        &db.pool,
+        &NewProductionJob {
+            twitch_user_id: "101".into(),
+            clip_id: 1,
+            source: JobSource::Manual,
+            requested_mode: Some(ProductionMode::Ai),
+            scheduled_at: None,
+            max_attempts: 2,
+        },
+    )
+    .await
+    .expect("echter C3-Auftrag");
+    assert_eq!(
+        production_jobs::claim_next(&db.pool)
+            .await
+            .expect("C3-Claim")
+            .expect("eigener Auftrag")
+            .id,
+        own_job.id
+    );
+    linked.job_id = Some(own_job.id);
+    linked.mode = ProductionMode::Static;
+    assert!(matches!(
+        produced_video::insert(&db.pool, &linked).await,
+        Err(ProducedVideoError::Ownership)
+    ));
+    linked.mode = ProductionMode::Ai;
+    assert_eq!(
+        produced_video::insert(&db.pool, &linked)
+            .await
+            .expect("gültiger C3-Bezug")
+            .job_id,
+        Some(own_job.id)
+    );
+    assert!(matches!(
+        sqlx::query("DELETE FROM twitch_clips_social_media WHERE id = 1")
+            .execute(&db.pool)
+            .await,
+        Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23503")
+    ));
 }
 
 #[tokio::test]
@@ -1169,4 +1439,159 @@ async fn public_pages_group_bounded_versions_without_exposing_checkpoints() {
         .await
         .expect("anderer Kanal");
     assert!(other.is_empty());
+}
+
+#[tokio::test]
+async fn real_schema_recovery_identity_deletion_and_private_projection() {
+    let db = real_schema_fixture().await;
+    let job = store::create_job(&db.pool, "101", 1, limit())
+        .await
+        .expect("manueller Auftrag");
+    let mut lease = production_lease::acquire_production_lease(&db.pool)
+        .await
+        .expect("Sperre")
+        .expect("freie Sperre");
+    assert!(production_lease::acquire_production_lease(&db.pool)
+        .await
+        .expect("Konkurrenz")
+        .is_none());
+    store::claim_job(&mut lease, "101", job.id, limit())
+        .await
+        .expect("Vorbereitung");
+    store::save_stage(&mut lease, "101", job.id, &preparation(), None)
+        .await
+        .expect("privater Checkpoint");
+    store::claim_job(&mut lease, "101", job.id, limit())
+        .await
+        .expect("Transkription");
+    let loaded = store::load_job_for_runner(&mut lease, "101", job.id)
+        .await
+        .expect("laufende Arbeit");
+    assert_eq!(loaded.status, "transcribing");
+    assert!(matches!(
+        store::recover_stale_jobs(&mut lease, "101", 10).await,
+        Err(store::AiStoreError::Conflict)
+    ));
+    for public in [
+        store::get_job(&db.pool, "101", job.id, limit())
+            .await
+            .expect("öffentliche Details"),
+        store::list_jobs(&db.pool, "101", 10, None, limit())
+            .await
+            .expect("öffentliche Liste")
+            .remove(0),
+    ] {
+        let json = serde_json::to_string(&public).expect("öffentliche Projektion");
+        assert!(!json.contains("/private/source.mp4"));
+        assert!(!json.contains("checkpoints"));
+        assert!(!json.contains("source_twitch_clip_id"));
+    }
+    lease.release().await.expect("Sperre freigeben");
+    let mut lease = production_lease::acquire_production_lease(&db.pool)
+        .await
+        .expect("neue Sperre")
+        .expect("frei");
+    assert_eq!(
+        store::recover_stale_jobs(&mut lease, "101", 10)
+            .await
+            .expect("verwaiste Arbeit"),
+        1
+    );
+    assert_eq!(
+        store::load_job_for_runner(&mut lease, "101", job.id)
+            .await
+            .expect("Endzustand")
+            .status,
+        "failed"
+    );
+    assert_eq!(
+        store::recover_stale_jobs(&mut lease, "101", 10)
+            .await
+            .expect("terminaler Lesezugriff blockiert nicht"),
+        0
+    );
+    lease.release().await.expect("Sperre freigeben");
+    sqlx::query("DELETE FROM twitch_clips_social_media WHERE id = 1")
+        .execute(&db.pool)
+        .await
+        .expect("echter FK erlaubt Retention");
+    let source: Option<i64> =
+        sqlx::query_scalar("SELECT source_clip_id FROM social_ai_jobs WHERE id = $1")
+            .bind(job.id)
+            .fetch_one(&db.pool)
+            .await
+            .expect("gelöster Fremdschlüssel");
+    assert_eq!(source, None);
+    assert_eq!(
+        store::get_job(&db.pool, "101", job.id, limit())
+            .await
+            .expect("Historie")
+            .clip_db_id,
+        1
+    );
+    assert!(matches!(
+        store::retry_job(&db.pool, "101", job.id, limit()).await,
+        Err(store::AiStoreError::Conflict)
+    ));
+    let other = store::create_job(&db.pool, "202", 2, limit())
+        .await
+        .expect("weiterer Kanal");
+    sqlx::query("UPDATE twitch_clips_social_media SET clip_id = 'changed-identity' WHERE id = 2")
+        .execute(&db.pool)
+        .await
+        .expect("Twitch-Kennung geändert");
+    let mut lease = production_lease::acquire_production_lease(&db.pool)
+        .await
+        .expect("Sperre")
+        .expect("frei");
+    assert!(matches!(
+        store::claim_job(&mut lease, "202", other.id, limit()).await,
+        Err(store::AiStoreError::SourceUnavailable)
+    ));
+    assert!(
+        !store::get_job(&db.pool, "202", other.id, limit())
+            .await
+            .expect("Identität unverändert")
+            .can_retry
+    );
+}
+
+#[tokio::test]
+async fn neutral_production_lease_releases_on_task_cancellation() {
+    let db = real_schema_fixture().await;
+    let pool = db.pool.clone();
+    let (held_tx, held_rx) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let _lease = production_lease::acquire_production_lease(&pool)
+            .await
+            .expect("Sperre")
+            .expect("frei");
+        held_tx.send(()).expect("Startsignal");
+        std::future::pending::<()>().await;
+    });
+    held_rx.await.expect("Sperre ist aktiv");
+    assert!(production_lease::acquire_production_lease(&db.pool)
+        .await
+        .expect("konkurrierender Produktionslauf")
+        .is_none());
+    task.abort();
+    assert!(task
+        .await
+        .expect_err("abgebrochener Auftrag")
+        .is_cancelled());
+    let mut released = None;
+    for _ in 0..1000 {
+        released = production_lease::acquire_production_lease(&db.pool)
+            .await
+            .expect("erneuter Sperrversuch");
+        if released.is_some() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    released
+        .expect("Abbruch schließt die Sperrverbindung")
+        .release()
+        .await
+        .expect("ausdrückliche Freigabe");
 }
