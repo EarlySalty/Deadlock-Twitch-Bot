@@ -309,6 +309,12 @@ pub struct VideoProcessor {
     ffprobe: String,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct RenderResourceLimits {
+    pub encoder_threads: u16,
+    pub max_output_bytes: u64,
+}
+
 impl Default for VideoProcessor {
     fn default() -> Self {
         Self {
@@ -333,6 +339,39 @@ impl VideoProcessor {
         max_duration: i64,
         layout: Option<&StreamerLayout>,
         ass: &str,
+    ) -> Result<(), VideoProcessorError> {
+        self.render_branded_inner(input_path, output_path, max_duration, layout, ass, None)
+            .await
+    }
+
+    pub(crate) async fn render_branded_limited(
+        &self,
+        input_path: &str,
+        output_path: &str,
+        max_duration: i64,
+        layout: Option<&StreamerLayout>,
+        ass: &str,
+        limits: RenderResourceLimits,
+    ) -> Result<(), VideoProcessorError> {
+        self.render_branded_inner(
+            input_path,
+            output_path,
+            max_duration,
+            layout,
+            ass,
+            Some(limits),
+        )
+        .await
+    }
+
+    async fn render_branded_inner(
+        &self,
+        input_path: &str,
+        output_path: &str,
+        max_duration: i64,
+        layout: Option<&StreamerLayout>,
+        ass: &str,
+        limits: Option<RenderResourceLimits>,
     ) -> Result<(), VideoProcessorError> {
         let started = std::time::Instant::now();
         let input = std::fs::canonicalize(input_path)?;
@@ -363,20 +402,44 @@ impl VideoProcessor {
                 "{};[1:v]scale=120:120[logo];[vout][logo]overlay=48:300:shortest=1[branded];[branded]ass=overlay.ass:fontsdir=.[final]",
                 base_filter
             );
-            let mut cmd = tokio::process::Command::new(&self.ffmpeg);
+            let mut cmd = if let Some(limits) = limits {
+                bounded_ffmpeg_command(&self.ffmpeg, limits.max_output_bytes)
+            } else {
+                tokio::process::Command::new(&self.ffmpeg)
+            };
             cmd.kill_on_drop(true)
                 .current_dir(assets)
-                .args(["-hide_banner", "-loglevel", "error", "-i"])
-                .arg(&input)
-                .args(["-loop", "1", "-i", "ddc-logo.png", "-filter_complex", &filter,
+                .args(["-hide_banner", "-loglevel", "error"]);
+            if let Some(limits) = limits {
+                cmd.args(["-filter_threads", &limits.encoder_threads.to_string()])
+                    .args(["-filter_complex_threads", &limits.encoder_threads.to_string()])
+                    .args(["-threads", &limits.encoder_threads.to_string()]);
+            }
+            cmd.arg("-i").arg(&input);
+            if let Some(limits) = limits {
+                cmd.args(["-threads", &limits.encoder_threads.to_string()]);
+            }
+            cmd.args(["-loop", "1", "-i", "ddc-logo.png", "-filter_complex", &filter,
                     "-map", "[final]", "-map", "0:a?", "-t"])
                 .arg(max_duration.max(1).to_string());
             encode_options(&mut cmd);
+            if let Some(limits) = limits {
+                cmd.args(["-threads:v", &limits.encoder_threads.to_string()]);
+            }
             let result = cmd.arg("-y").arg(&render_temp).output().await?;
             if !result.status.success() {
                 return Err(VideoProcessorError::Ffmpeg(String::from_utf8_lossy(&result.stderr).trim().to_string()));
             }
             ensure_output(&render_temp.to_string_lossy())?;
+            if let Some(limits) = limits {
+                let size = tokio::fs::metadata(&render_temp).await?.len();
+                if size == 0 || size > limits.max_output_bytes {
+                    return Err(VideoProcessorError::Ffmpeg(
+                        "Das gerenderte Video ist leer oder überschreitet die zulässige Dateigröße."
+                            .to_string(),
+                    ));
+                }
+            }
             tokio::fs::rename(&render_temp, &output).await?;
             tracing::info!(
                 elapsed_ms = started.elapsed().as_millis() as u64,
@@ -677,6 +740,15 @@ fn num_field(stream: &Value, key: &str) -> Option<i64> {
         .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
 }
 
+pub(crate) fn bounded_ffmpeg_command(ffmpeg: &str, max_bytes: u64) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new("/usr/bin/prlimit");
+    command
+        .arg(format!("--fsize={max_bytes}:{max_bytes}"))
+        .arg("--")
+        .arg(ffmpeg);
+    command
+}
+
 fn encode_options(cmd: &mut tokio::process::Command) {
     cmd.args([
         "-c:v",
@@ -730,6 +802,100 @@ mod tests {
         layout
     }
 
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn limited_render_passes_threads_to_codec_and_filters() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let input = dir.path().join("input.mp4");
+        let output = dir.path().join("output.mp4");
+        let ffmpeg = dir.path().join("ffmpeg-args");
+        std::fs::write(&input, b"source").expect("input");
+        std::fs::write(
+            &ffmpeg,
+            b"#!/bin/sh\nfor flag in -filter_threads -filter_complex_threads -threads -threads:v; do\n  previous=\n  found=0\n  for arg do\n    if [ \"$previous\" = \"$flag\" ] && [ \"$arg\" = 3 ]; then found=1; break; fi\n    previous=$arg\n  done\n  [ \"$found\" = 1 ] || exit 1\ndone\nfor last; do :; done\nprintf rendered > \"$last\"\n",
+        )
+        .expect("ffmpeg shim");
+        std::fs::set_permissions(&ffmpeg, std::fs::Permissions::from_mode(0o700))
+            .expect("executable shim");
+        let processor = VideoProcessor::new(ffmpeg.to_string_lossy(), "ffprobe");
+        processor
+            .render_branded_limited(
+                &input.to_string_lossy(),
+                &output.to_string_lossy(),
+                1,
+                None,
+                "",
+                RenderResourceLimits {
+                    encoder_threads: 3,
+                    max_output_bytes: 4096,
+                },
+            )
+            .await
+            .expect("limited render");
+        assert_eq!(std::fs::read(&output).expect("rendered file"), b"rendered");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn limited_render_stops_oversized_child_before_replacing_output() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let input = dir.path().join("input.mp4");
+        let output = dir.path().join("output.mp4");
+        let untouched = dir.path().join("unrelated.txt");
+        let ffmpeg = dir.path().join("ffmpeg-large");
+        std::fs::write(&input, b"source").expect("input");
+        std::fs::write(&output, b"complete").expect("existing output");
+        std::fs::write(&untouched, b"untouched").expect("unrelated file");
+        std::fs::write(
+            &ffmpeg,
+            b"#!/bin/sh\nfor last; do :; done\n/usr/bin/dd if=/dev/zero of=\"$last\" bs=8192 count=2 2>/dev/null\n/usr/bin/stat -c %s \"$last\" > ../observed-size\nexit 1\n",
+        )
+        .expect("ffmpeg shim");
+        std::fs::set_permissions(&ffmpeg, std::fs::Permissions::from_mode(0o700))
+            .expect("executable shim");
+        let processor = VideoProcessor::new(ffmpeg.to_string_lossy(), "ffprobe");
+        let result = processor
+            .render_branded_limited(
+                &input.to_string_lossy(),
+                &output.to_string_lossy(),
+                1,
+                None,
+                "",
+                RenderResourceLimits {
+                    encoder_threads: 2,
+                    max_output_bytes: 4096,
+                },
+            )
+            .await;
+        assert!(matches!(result, Err(VideoProcessorError::Ffmpeg(_))));
+        let observed: u64 = std::fs::read_to_string(dir.path().join("observed-size"))
+            .expect("observed partial size")
+            .trim()
+            .parse()
+            .expect("numeric partial size");
+        assert!(observed > 0 && observed <= 4096, "observed {observed}");
+        assert_eq!(
+            std::fs::read(&output).expect("existing output"),
+            b"complete"
+        );
+        assert_eq!(
+            std::fs::read(&untouched).expect("unrelated file"),
+            b"untouched"
+        );
+        assert_eq!(
+            std::fs::read_dir(dir.path())
+                .expect("tempdir")
+                .flatten()
+                .filter(|entry| entry.file_name().to_string_lossy().contains(".assets-"))
+                .count(),
+            0
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn fehlgeschlagener_render_ueberschreibt_keine_fertige_datei() {
@@ -781,6 +947,17 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn abgebrochener_render_beendet_eigenen_ffmpeg_und_entfernt_tempdateien() {
+        assert_cancelled_render_cleanup(false).await;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn bounded_render_ends_its_child_and_removes_temp_files_on_drop() {
+        assert_cancelled_render_cleanup(true).await;
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn assert_cancelled_render_cleanup(bounded: bool) {
         use std::os::unix::fs::PermissionsExt;
         use std::time::Duration;
 
@@ -817,16 +994,33 @@ mod tests {
         );
         std::fs::write(&output, b"complete").unwrap();
         std::fs::write(&untouched, b"untouched").unwrap();
-        // exec erhält die protokollierte PID. Der echte FFmpeg-Prozess liest
-        // diese kleine lokale Datei in Echtzeit, bis sein Render abgebrochen wird.
         std::fs::write(&ffmpeg, b"#!/bin/sh\nprintf '%s' \"$$\" > ../render-child.pid\nexec /usr/bin/ffmpeg -re -stream_loop -1 \"$@\"\n").unwrap();
         std::fs::set_permissions(&ffmpeg, std::fs::Permissions::from_mode(0o700)).unwrap();
         let processor = VideoProcessor::new(ffmpeg.to_string_lossy(), "ffprobe");
         let input_path = input.to_string_lossy();
         let output_path = output.to_string_lossy();
         let ass = crate::subtitles::build_ass(&[]);
-        let mut render =
-            Box::pin(processor.render_branded(&input_path, &output_path, 300, None, &ass));
+        let mut render = Box::pin(async {
+            if bounded {
+                processor
+                    .render_branded_limited(
+                        &input_path,
+                        &output_path,
+                        300,
+                        None,
+                        &ass,
+                        RenderResourceLimits {
+                            encoder_threads: 1,
+                            max_output_bytes: 5_000_000,
+                        },
+                    )
+                    .await
+            } else {
+                processor
+                    .render_branded(&input_path, &output_path, 300, None, &ass)
+                    .await
+            }
+        });
         let (pid, assets) = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 tokio::select! {
@@ -834,12 +1028,21 @@ mod tests {
                     _ = tokio::time::sleep(Duration::from_millis(10)) => {}
                 }
                 let Some(pid) = std::fs::read_to_string(dir.path().join("render-child.pid")).ok().and_then(|s| s.parse::<u32>().ok()) else { continue; };
-                if !std::fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|exe| exe.file_name().is_some_and(|name| name == "ffmpeg")) { continue; }
+                if !std::fs::read_to_string(format!("/proc/{pid}/comm"))
+                    .is_ok_and(|comm| comm.trim() == "ffmpeg")
+                {
+                    continue;
+                }
                 if let Some(assets) = std::fs::read_dir(dir.path()).unwrap().flatten().map(|entry| entry.path()).find(|path| path.join("render.mp4").exists()) {
                     break (pid, assets);
                 }
             }
         }).await.expect("Echter FFmpeg hat seine eigene temporäre Ausgabe geöffnet");
+        if bounded {
+            assert!(tokio::time::timeout(Duration::from_millis(50), &mut render)
+                .await
+                .is_err());
+        }
         drop(render);
         assert!(
             !assets.exists(),

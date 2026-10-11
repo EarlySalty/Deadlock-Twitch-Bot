@@ -7,7 +7,7 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 use crate::layout::{StreamerLayout, TARGET_HEIGHT, TARGET_WIDTH};
-use crate::video_processor::VideoProcessor;
+use crate::video_processor::{bounded_ffmpeg_command, RenderResourceLimits, VideoProcessor};
 
 use super::model::ResourceLimits;
 use super::validation::{EditorError, ErrorCode, ValidatedPlan};
@@ -91,6 +91,7 @@ impl PreparedMedia {
 fn check_resources(limits: &ResourceLimits) -> Result<(), EditorError> {
     if limits.max_source_bytes == 0
         || limits.max_output_bytes == 0
+        || limits.max_output_bytes > i64::MAX as u64
         || limits.max_probe_bytes == 0
         || limits.max_media_duration_ms == 0
         || limits.max_media_width < TARGET_WIDTH as u32
@@ -98,8 +99,9 @@ fn check_resources(limits: &ResourceLimits) -> Result<(), EditorError> {
         || limits.max_frames == 0
         || limits.max_frames > 256
         || !(2..=4096).contains(&limits.frame_width)
-        || limits.frame_width % 2 != 0
+        || !limits.frame_width.is_multiple_of(2)
         || limits.max_frame_bytes == 0
+        || limits.max_frame_bytes > i64::MAX as u64
         || limits.max_ass_bytes == 0
         || limits.process_deadline_ms == 0
         || limits.total_frames_deadline_ms == 0
@@ -290,15 +292,20 @@ pub async fn extract_frames(
                 let timestamp = ((index as u128 * 2 + 1) * info.duration_ms as u128
                     / (limits.max_frames as u128 * 2)) as u64;
                 let output = owned.0.join(format!("frame-{index:04}.jpg"));
-                let mut command = Command::new("ffmpeg");
+                let mut command = bounded_ffmpeg_command("ffmpeg", limits.max_frame_bytes);
                 command
-                    .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-ss"])
+                    .args(["-hide_banner", "-loglevel", "error", "-nostdin"])
+                    .args(["-filter_threads", &limits.encoder_threads.to_string()])
+                    .args(["-threads", &limits.encoder_threads.to_string()])
+                    .args(["-ss"])
                     .arg(format_time(timestamp))
                     .arg("-i")
                     .arg(&path)
                     .args(["-frames:v", "1", "-vf"])
                     .arg(format!("scale={}:-2", limits.frame_width))
-                    .args(["-q:v", "4", "-y"])
+                    .args(["-q:v", "4", "-threads:v"])
+                    .arg(limits.encoder_threads.to_string())
+                    .args(["-y"])
                     .arg(&output);
                 run_status(command, limits.process_deadline_ms).await?;
                 check_output(&output, limits.max_frame_bytes)?;
@@ -382,9 +389,16 @@ pub async fn prepare_intervals(
     }
     let owned = make_temp_directory(workspace_root)?;
     let output = owned.0.join("prepared.mp4");
-    let mut command = Command::new("ffmpeg");
+    let mut command = bounded_ffmpeg_command("ffmpeg", limits.max_output_bytes);
     command
-        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-i"])
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin"])
+        .args(["-filter_threads", &limits.encoder_threads.to_string()])
+        .args([
+            "-filter_complex_threads",
+            &limits.encoder_threads.to_string(),
+        ])
+        .args(["-threads", &limits.encoder_threads.to_string()])
+        .arg("-i")
         .arg(&path)
         .args([
             "-filter_complex",
@@ -397,7 +411,13 @@ pub async fn prepare_intervals(
     }
     command
         .args([
-            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-threads",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-pix_fmt",
+            "yuv420p",
+            "-threads:v",
         ])
         .arg(limits.encoder_threads.to_string());
     if source_info.has_audio {
@@ -445,12 +465,16 @@ pub async fn render_prepared(
     let processor = VideoProcessor::default();
     tokio::time::timeout(
         Duration::from_millis(limits.process_deadline_ms),
-        processor.render_branded(
+        processor.render_branded_limited(
             &prepared.path().to_string_lossy(),
             &output.to_string_lossy(),
             max_duration,
             layout,
             ass,
+            RenderResourceLimits {
+                encoder_threads: limits.encoder_threads,
+                max_output_bytes: limits.max_output_bytes,
+            },
         ),
     )
     .await
@@ -490,6 +514,22 @@ mod tests {
             max_duration_drift_ms: 400,
             encoder_threads: 1,
         }
+    }
+
+    #[test]
+    fn rejects_file_limits_that_disable_the_kernel_ceiling() {
+        let mut resources = limits();
+        resources.max_output_bytes = u64::MAX;
+        assert_eq!(
+            check_resources(&resources).err().map(|error| error.code),
+            Some(ErrorCode::InvalidLimits)
+        );
+        resources.max_output_bytes = 5_000_000;
+        resources.max_frame_bytes = u64::MAX;
+        assert_eq!(
+            check_resources(&resources).err().map(|error| error.code),
+            Some(ErrorCode::InvalidLimits)
+        );
     }
 
     #[tokio::test]
@@ -535,6 +575,17 @@ mod tests {
         let frames = extract_frames(root.path(), &source, root.path(), &resources)
             .await
             .expect("extract across duration");
+        let limited_frames = ResourceLimits {
+            max_frame_bytes: 64,
+            ..resources.clone()
+        };
+        let frame_error = extract_frames(root.path(), &source, root.path(), &limited_frames)
+            .await
+            .expect_err("frame output must stay bounded");
+        assert!(matches!(
+            frame_error.code,
+            ErrorCode::ProcessFailed | ErrorCode::MediaTooLarge
+        ));
         let frame_paths = frames.frames();
         assert_eq!(frame_paths.len(), 3);
         assert!(frame_paths.windows(2).all(|pair| pair[0].0 < pair[1].0));
@@ -586,6 +637,18 @@ mod tests {
         );
         let validated =
             validate_plan(plan, source_info.duration_ms, &plan_limits).expect("valid intervals");
+        let bounded_prep = ResourceLimits {
+            max_output_bytes: 64,
+            ..resources.clone()
+        };
+        let prep_error =
+            prepare_intervals(root.path(), &source, root.path(), &validated, &bounded_prep)
+                .await
+                .expect_err("prepared output must stay bounded");
+        assert!(matches!(
+            prep_error.code,
+            ErrorCode::ProcessFailed | ErrorCode::MediaTooLarge
+        ));
         let prepared = prepare_intervals(root.path(), &source, root.path(), &validated, &resources)
             .await
             .expect("prepare cuts");
@@ -604,8 +667,58 @@ mod tests {
         run_status(decode, 15_000).await.expect("decode cut audio");
         let audio = tokio::fs::read(&pcm).await.expect("decoded audio");
         assert!(audio
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .any(|sample| { i16::from_le_bytes([sample[0], sample[1]]).unsigned_abs() > 500 }));
+        let bounded_render = ResourceLimits {
+            max_output_bytes: 1024,
+            ..resources.clone()
+        };
+        assert!(render_prepared(
+            &prepared,
+            None,
+            &crate::subtitles::build_ass(&[]),
+            &bounded_render,
+        )
+        .await
+        .is_err());
+        assert!(!prepared.owned.0.join("rendered.mp4").exists());
+        let rendered = render_prepared(
+            &prepared,
+            None,
+            &crate::subtitles::build_ass(&[]),
+            &resources,
+        )
+        .await
+        .expect("render branded audio and video");
+        let rendered_info = inspect_media(root.path(), &rendered, &resources)
+            .await
+            .expect("probe rendered media");
+        assert_eq!(
+            (rendered_info.width, rendered_info.height),
+            (TARGET_WIDTH as u32, TARGET_HEIGHT as u32)
+        );
+        assert!(rendered_info.has_audio);
+        let rendered_pcm = root.path().join("rendered.pcm");
+        let mut decode = Command::new("ffmpeg");
+        decode
+            .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-i"])
+            .arg(&rendered)
+            .args(["-vn", "-ac", "1", "-f", "s16le", "-y"])
+            .arg(&rendered_pcm);
+        run_status(decode, 15_000)
+            .await
+            .expect("decode rendered audio");
+        let rendered_audio = tokio::fs::read(&rendered_pcm)
+            .await
+            .expect("decoded rendered audio");
+        assert!(rendered_audio
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .any(|sample| i16::from_le_bytes([sample[0], sample[1]]).unsigned_abs() > 500));
+        assert!(source.exists());
         let owned_path = prepared.path();
         drop(prepared);
         assert!(!owned_path.exists());
