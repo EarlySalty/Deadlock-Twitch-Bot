@@ -844,7 +844,7 @@ mod tests {
         use std::io::{Seek, Write};
         let fd = nix::sys::memfd::memfd_create(
             c"uplink-public-test",
-            nix::sys::memfd::MemFdCreateFlag::empty(),
+            nix::sys::memfd::MFdFlags::empty(),
         )
         .unwrap();
         let mut file = std::fs::File::from(fd);

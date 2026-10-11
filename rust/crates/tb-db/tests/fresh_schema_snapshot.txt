@@ -549,6 +549,44 @@ platform_connections|updated_at|timestamp with time zone|NO|now()
 schema_version|component|text|NO|
 schema_version|updated_at|timestamp with time zone|NO|now()
 schema_version|version|integer|NO|
+social_clip_import_jobs|active_window|jsonb|YES|
+social_clip_import_jobs|attempts|integer|NO|0
+social_clip_import_jobs|clip_date_filter|jsonb|NO|
+social_clip_import_jobs|completed_at|timestamp with time zone|YES|
+social_clip_import_jobs|completed_windows|bigint|NO|0
+social_clip_import_jobs|created_at|timestamp with time zone|NO|now()
+social_clip_import_jobs|cursor|text|YES|
+social_clip_import_jobs|eligible_fetched|bigint|NO|0
+social_clip_import_jobs|ended_at|timestamp with time zone|NO|
+social_clip_import_jobs|id|bigint|NO|nextval('social_clip_import_jobs_id_seq'::regclass)
+social_clip_import_jobs|incomplete_windows|jsonb|NO|'[]'::jsonb
+social_clip_import_jobs|last_error|text|YES|
+social_clip_import_jobs|lease_generation|bigint|NO|0
+social_clip_import_jobs|lease_until|timestamp with time zone|YES|
+social_clip_import_jobs|next_retry_at|timestamp with time zone|YES|
+social_clip_import_jobs|pending_windows|jsonb|NO|
+social_clip_import_jobs|persisted_count|bigint|NO|0
+social_clip_import_jobs|raw_fetched|bigint|NO|0
+social_clip_import_jobs|started_at|timestamp with time zone|NO|
+social_clip_import_jobs|status|text|NO|'queued'::text
+social_clip_import_jobs|streamer_login|text|NO|
+social_clip_import_jobs|timezone|text|NO|
+social_clip_import_jobs|total_attempts|bigint|NO|0
+social_clip_import_jobs|twitch_user_id|text|NO|
+social_clip_pool_owners|managed_since|timestamp with time zone|NO|clock_timestamp()
+social_clip_pool_owners|twitch_user_id|text|NO|
+social_clip_pool|clip_db_id|bigint|YES|
+social_clip_pool|clip_id|text|NO|
+social_clip_pool|first_selected_at|timestamp with time zone|YES|
+social_clip_pool|game_id|text|NO|
+social_clip_pool|imported_at|timestamp with time zone|NO|now()
+social_clip_pool|legacy_reserved|boolean|NO|false
+social_clip_pool|processed_at|timestamp with time zone|YES|
+social_clip_pool|published_at|timestamp with time zone|YES|
+social_clip_pool|selected_at|timestamp with time zone|YES|
+social_clip_pool|source_created_at|timestamp with time zone|NO|
+social_clip_pool|source_metadata|jsonb|NO|
+social_clip_pool|twitch_user_id|text|NO|
 social_media_autopilot_settings|ai_editing_enabled|boolean|NO|false
 social_media_autopilot_settings|clip_date_filter|jsonb|NO|'{"kind": "all"}'::jsonb
 social_media_autopilot_settings|clip_sort|text|NO|'oldest_first'::text
@@ -1290,6 +1328,9 @@ twitch_clips_social_media|last_analytics_sync|timestamp with time zone|YES|
 twitch_clips_social_media|layout_override_json|jsonb|YES|
 twitch_clips_social_media|local_file_path|text|YES|
 twitch_clips_social_media|music_track|text|YES|
+twitch_clips_social_media|pool_legacy_prerequisite|boolean|NO|false
+twitch_clips_social_media|pool_legacy_reserved|boolean|NO|false
+twitch_clips_social_media|pool_managed_at|timestamp with time zone|YES|
 twitch_clips_social_media|preview_error|text|YES|
 twitch_clips_social_media|preview_path|text|YES|
 twitch_clips_social_media|preview_status|text|YES|

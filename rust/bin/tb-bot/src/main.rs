@@ -1938,6 +1938,17 @@ async fn main() {
 
     // Auch der Twitch-Clip-Fetch bleibt vorerst deaktiviert. Der reparierte
     // Datenpfad kann später mit explizitem Opt-in wieder aufgenommen werden.
+    if let Some(ref h) = *helix {
+        let importer = tb_social_media::clip_pool::ClipImportWorker::new(
+            pool.clone(),
+            tb_social_media::HelixClipSource::new(Arc::new(h.clone())),
+        );
+        supervisor.spawn(
+            "social_clip_import_worker",
+            async move { importer.run().await },
+        );
+    }
+
     if config.bot.clip_fetcher_enabled {
         if let Some(ref h) = *helix {
             tb_social_media::build_clip_fetch_task(pool.clone(), std::sync::Arc::new(h.clone()))
