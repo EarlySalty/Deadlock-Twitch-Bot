@@ -39,6 +39,7 @@ export interface AiJobView {
   original_duration_ms: number | null;
   output_duration_ms: number | null;
   processing_ms: number | null;
+  provider_latency_ms: number | null;
   rendering_ms: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
@@ -94,6 +95,10 @@ function optionalNumber(value: unknown): number | null {
   if (value === null) return null;
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) invalidResponse();
   return value;
+}
+
+function optionalMilliseconds(value: unknown): number | null {
+  return value === null || value === undefined ? null : number(value);
 }
 
 function flag(value: unknown): boolean {
@@ -160,6 +165,7 @@ export function decodeAiJob(value: unknown): AiJobView {
     original_duration_ms: optionalNumber(item.original_duration_ms),
     output_duration_ms: optionalNumber(item.output_duration_ms),
     processing_ms: optionalNumber(item.processing_ms),
+    provider_latency_ms: optionalMilliseconds(item.provider_latency_ms),
     rendering_ms: optionalNumber(item.rendering_ms),
     input_tokens: optionalNumber(item.input_tokens),
     output_tokens: optionalNumber(item.output_tokens),

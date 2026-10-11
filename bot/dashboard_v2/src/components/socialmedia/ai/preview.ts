@@ -22,6 +22,7 @@ const BASE_JOB: AiJobView = {
   original_duration_ms: 54800,
   output_duration_ms: 42400,
   processing_ms: 183000,
+  provider_latency_ms: 78200,
   rendering_ms: 42900,
   input_tokens: 12894,
   output_tokens: 921,
@@ -52,7 +53,7 @@ export function aiPreviewJob(scenario: AiPreviewScenario): AiJobView | null {
   if (scenario === 'consent-off' || scenario === 'global-off') return null;
   if (scenario === 'render') return {
     ...BASE_JOB, status: 'rendering', stage: 'rendering', updated_at: '2026-10-11T08:17:23Z', completed_at: null,
-    output_duration_ms: null, processing_ms: null, rendering_ms: null, versions: [],
+    output_duration_ms: null, processing_ms: null, provider_latency_ms: null, rendering_ms: null, versions: [],
     input_tokens: 12894, output_tokens: 921, estimated_provider_cost_usd: 0.04372,
     review_reasons: [],
   };
@@ -97,7 +98,7 @@ export function createAiPreviewFetch(originalFetch: typeof fetch, scenario: AiPr
       }
       if (url.pathname === `${PREFIX}/jobs` && method === 'GET') return response({ items: [secondJob, secondFailure, ...(secondStarted ? [secondStarted] : [])] });
       if (url.pathname === `${PREFIX}/jobs` && method === 'POST' && secondConsent && [601, 602].includes(Number(body.clip_db_id))) {
-        secondStarted = { ...BASE_JOB, id: 1203, clip_db_id: Number(body.clip_db_id), status: 'rendering', stage: 'rendering', original_url: null, versions: [], failure_code: null, failure_message: null, can_retry: false };
+        secondStarted = { ...BASE_JOB, id: 1203, clip_db_id: Number(body.clip_db_id), status: 'rendering', stage: 'rendering', provider_latency_ms: null, original_url: null, versions: [], failure_code: null, failure_message: null, can_retry: false };
         return response({ job: secondStarted });
       }
       if (url.pathname === `${PREFIX}/jobs/1203` && method === 'GET' && secondStarted) return response(secondStarted);
@@ -130,7 +131,7 @@ export function createAiPreviewFetch(originalFetch: typeof fetch, scenario: AiPr
     if (url.pathname === `${PREFIX}/jobs` && method === 'GET') return response({ items: job ? [job] : [] });
     if (url.pathname === `${PREFIX}/jobs` && method === 'POST') {
       if (!consent.external_ai_consent || !consent.global_allowed || ![501, 502, ...(scenario === 'handoff' ? [135] : [])].includes(Number(body.clip_db_id))) return response({ error: 'not_allowed' }, 403);
-      job = { ...BASE_JOB, clip_db_id: Number(body.clip_db_id), status: 'rendering', stage: 'rendering', completed_at: null, processing_ms: null, rendering_ms: null, versions: [], can_retry: false };
+      job = { ...BASE_JOB, clip_db_id: Number(body.clip_db_id), status: 'rendering', stage: 'rendering', completed_at: null, processing_ms: null, provider_latency_ms: null, rendering_ms: null, versions: [], can_retry: false };
       polls = 0;
       return response({ job });
     }
