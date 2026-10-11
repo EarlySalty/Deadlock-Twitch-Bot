@@ -13,6 +13,8 @@ pub enum AiStoreError {
     InvalidInput,
     #[error("Der KI-Auftrag wurde nicht gefunden.")]
     NotFound,
+    #[error("Der Clip ist nicht verfügbar.")]
+    SourceUnavailable,
     #[error("Der KI-Auftrag hat sich bereits geändert.")]
     Conflict,
     #[error("Die erlaubten Versuche für diesen Schritt sind aufgebraucht.")]
@@ -76,16 +78,26 @@ pub struct TimelineEntry {
     pub description: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TranscriptSegment {
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "stage", content = "result", rename_all = "snake_case")]
 pub enum StageCheckpoint {
     Preparing {
         source_path: String,
         original_duration_ms: Option<i64>,
+        snapshot: serde_json::Map<String, serde_json::Value>,
     },
     Transcribing {
         transcript: String,
-        language: String,
+        language: Option<String>,
+        segments: Vec<TranscriptSegment>,
     },
     Analyzing {
         highlights: Vec<TimelineEntry>,
@@ -95,6 +107,7 @@ pub enum StageCheckpoint {
     Planning {
         decisions: Vec<TimelineEntry>,
         review_reasons: Vec<String>,
+        edit_plan: serde_json::Map<String, serde_json::Value>,
     },
     Rendering {
         output_path: String,
@@ -123,15 +136,27 @@ impl StageCheckpoint {
             Self::Preparing {
                 source_path,
                 original_duration_ms,
-            } => valid_path(source_path) && valid_duration(*original_duration_ms),
+                snapshot,
+            } => {
+                valid_path(source_path)
+                    && valid_duration(*original_duration_ms)
+                    && valid_payload(snapshot, 32_768)
+            }
             Self::Transcribing {
                 transcript,
                 language,
+                segments,
             } => {
-                !transcript.trim().is_empty()
-                    && transcript.len() <= 48_000
-                    && !language.trim().is_empty()
-                    && language.len() <= 32
+                transcript.len() <= 48_000
+                    && language
+                        .as_ref()
+                        .is_none_or(|value| !value.trim().is_empty() && value.len() <= 32)
+                    && valid_segments(segments)
+                    && if segments.is_empty() {
+                        transcript.is_empty()
+                    } else {
+                        !transcript.trim().is_empty()
+                    }
             }
             Self::Analyzing {
                 highlights,
@@ -145,7 +170,12 @@ impl StageCheckpoint {
             Self::Planning {
                 decisions,
                 review_reasons,
-            } => valid_timeline(decisions) && valid_labels(review_reasons),
+                edit_plan,
+            } => {
+                valid_timeline(decisions)
+                    && valid_labels(review_reasons)
+                    && valid_payload(edit_plan, 32_768)
+            }
             Self::Rendering {
                 output_path,
                 output_duration_ms,
@@ -191,38 +221,64 @@ fn valid_timeline(values: &[TimelineEntry]) -> bool {
         })
 }
 
+fn valid_payload(payload: &serde_json::Map<String, serde_json::Value>, max_bytes: usize) -> bool {
+    !payload.is_empty()
+        && serde_json::to_vec(payload).is_ok_and(|encoded| encoded.len() <= max_bytes)
+}
+
+fn valid_segments(segments: &[TranscriptSegment]) -> bool {
+    segments.len() <= 512
+        && segments.iter().enumerate().all(|(index, segment)| {
+            segment.start_ms >= 0
+                && segment.end_ms > segment.start_ms
+                && !segment.text.trim().is_empty()
+                && segment.text.len() <= 512
+                && (index == 0 || segments[index - 1].end_ms <= segment.start_ms)
+        })
+}
+
 #[derive(Debug, Clone, Default)]
-pub struct JobMetrics {
+pub struct CumulativeProviderTotals {
     pub provider: Option<String>,
     pub model: Option<String>,
-    pub processing_ms: Option<i64>,
-    pub rendering_ms: Option<i64>,
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub estimated_provider_cost_usd: Option<f64>,
     pub measured_provider_cost_usd: Option<f64>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct JobMetrics {
+    pub processing_ms: Option<i64>,
+    pub rendering_ms: Option<i64>,
+    pub cumulative_provider_totals: Option<CumulativeProviderTotals>,
+}
+
 impl JobMetrics {
     fn validate(&self) -> Result<(), AiStoreError> {
-        let names_valid = [&self.provider, &self.model].iter().all(|name| {
-            name.as_ref()
-                .is_none_or(|name| !name.trim().is_empty() && name.len() <= 128)
+        let totals = self.cumulative_provider_totals.as_ref();
+        let names_valid = totals.is_none_or(|totals| {
+            [&totals.provider, &totals.model].iter().all(|name| {
+                name.as_ref()
+                    .is_none_or(|name| !name.trim().is_empty() && name.len() <= 128)
+            })
         });
         let counts_valid = [
             self.processing_ms,
             self.rendering_ms,
-            self.input_tokens,
-            self.output_tokens,
+            totals.and_then(|value| value.input_tokens),
+            totals.and_then(|value| value.output_tokens),
         ]
         .iter()
         .all(|count| count.is_none_or(|count| count >= 0));
-        let costs_valid = [
-            self.estimated_provider_cost_usd,
-            self.measured_provider_cost_usd,
-        ]
-        .iter()
-        .all(|cost| cost.is_none_or(|cost| cost.is_finite() && cost >= 0.0));
+        let costs_valid = totals.is_none_or(|totals| {
+            [
+                totals.estimated_provider_cost_usd,
+                totals.measured_provider_cost_usd,
+            ]
+            .iter()
+            .all(|cost| cost.is_none_or(|cost| cost.is_finite() && cost >= 0.0))
+        });
         if names_valid && counts_valid && costs_valid {
             Ok(())
         } else {
@@ -287,6 +343,7 @@ pub struct JobSnapshot {
 
 pub struct ProductionLease {
     connection: PoolConnection<Postgres>,
+    claimed_work: bool,
 }
 
 impl ProductionLease {
@@ -315,7 +372,10 @@ pub async fn acquire_production_lease(
     )
     .fetch_one(&mut *connection)
     .await?;
-    Ok(acquired.then_some(ProductionLease { connection }))
+    Ok(acquired.then_some(ProductionLease {
+        connection,
+        claimed_work: false,
+    }))
 }
 
 fn numeric_owner(twitch_user_id: &str) -> Result<i64, AiStoreError> {
@@ -384,7 +444,9 @@ fn view_from_row(row: &PgRow, limit: AttemptLimit) -> Result<AiJobView, AiStoreE
         "unknown"
     };
     let active_sibling: bool = row.try_get("active_sibling")?;
+    let source_eligible: bool = row.try_get("source_eligible")?;
     let can_retry = status == "failed"
+        && source_eligible
         && !active_sibling
         && attempts.get(&stage).copied().unwrap_or(0) < limit.0;
     Ok(AiJobView {
@@ -465,7 +527,11 @@ pub async fn get_job(
          j.attempts::text AS attempts_text, \
          EXISTS (SELECT 1 FROM social_ai_jobs sibling WHERE sibling.twitch_user_id = j.twitch_user_id \
          AND sibling.clip_db_id = j.clip_db_id AND sibling.id <> j.id \
-         AND sibling.status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating')) AS active_sibling \
+         AND sibling.status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating')) AS active_sibling, \
+         EXISTS (SELECT 1 FROM twitch_clips_social_media c WHERE c.id = j.source_clip_id \
+         AND c.id = j.clip_db_id AND c.twitch_user_id = j.twitch_user_id::text \
+         AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
+         AND c.source_kind = 'twitch') AS source_eligible \
          FROM social_ai_jobs j WHERE j.id = $1 AND j.twitch_user_id = $2",
     )
     .bind(job_id)
@@ -495,7 +561,11 @@ pub async fn list_jobs(
          j.attempts::text AS attempts_text, \
          EXISTS (SELECT 1 FROM social_ai_jobs sibling WHERE sibling.twitch_user_id = j.twitch_user_id \
          AND sibling.clip_db_id = j.clip_db_id AND sibling.id <> j.id \
-         AND sibling.status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating')) AS active_sibling \
+         AND sibling.status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating')) AS active_sibling, \
+         EXISTS (SELECT 1 FROM twitch_clips_social_media c WHERE c.id = j.source_clip_id \
+         AND c.id = j.clip_db_id AND c.twitch_user_id = j.twitch_user_id::text \
+         AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
+         AND c.source_kind = 'twitch') AS source_eligible \
          FROM social_ai_jobs j WHERE j.twitch_user_id = $1 \
          AND ($2::bigint IS NULL OR j.id < $2) ORDER BY j.id DESC LIMIT $3",
     )
@@ -524,10 +594,11 @@ pub async fn create_job(
         return Err(AiStoreError::InvalidInput);
     }
     let id: Option<i64> = sqlx::query_scalar(
-        "INSERT INTO social_ai_jobs (twitch_user_id, clip_db_id) \
-         SELECT $1, c.id FROM twitch_clips_social_media c \
+        "INSERT INTO social_ai_jobs (twitch_user_id, clip_db_id, source_clip_id) \
+         SELECT $1, c.id, c.id FROM twitch_clips_social_media c \
          WHERE c.id = $2 AND c.twitch_user_id = $3 \
          AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
+         AND c.source_kind = 'twitch' \
          ON CONFLICT (twitch_user_id, clip_db_id) \
          WHERE status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating') \
          DO UPDATE SET updated_at = social_ai_jobs.updated_at RETURNING id",
@@ -541,6 +612,29 @@ pub async fn create_job(
     get_job(pool, twitch_user_id, id, limit).await
 }
 
+async fn fail_missing_source(
+    lease: &mut ProductionLease,
+    owner: i64,
+    job_id: i64,
+) -> Result<bool, AiStoreError> {
+    let changed = sqlx::query(
+        "UPDATE social_ai_jobs j SET status = 'failed', failure_code = 'source_unavailable', \
+         failure_message = 'Der Clip ist nicht verfügbar.', updated_at = NOW() \
+         WHERE j.id = $1 AND j.twitch_user_id = $2 \
+         AND j.status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating') \
+         AND NOT EXISTS (SELECT 1 FROM twitch_clips_social_media c \
+         WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id \
+         AND c.twitch_user_id = j.twitch_user_id::text \
+         AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
+         AND c.source_kind = 'twitch')",
+    )
+    .bind(job_id)
+    .bind(owner)
+    .execute(&mut *lease.connection)
+    .await?;
+    Ok(changed.rows_affected() == 1)
+}
+
 pub async fn load_job_for_runner(
     lease: &mut ProductionLease,
     twitch_user_id: &str,
@@ -548,15 +642,24 @@ pub async fn load_job_for_runner(
 ) -> Result<JobSnapshot, AiStoreError> {
     let owner = numeric_owner(twitch_user_id)?;
     let row = sqlx::query(
-        "SELECT id, clip_db_id, status, stage, attempts::text AS attempts_text, \
-         checkpoints::text AS checkpoints_text FROM social_ai_jobs \
-         WHERE id = $1 AND twitch_user_id = $2",
+        "SELECT j.id, j.clip_db_id, j.status, j.stage, j.attempts::text AS attempts_text, \
+         j.checkpoints::text AS checkpoints_text, \
+         EXISTS (SELECT 1 FROM twitch_clips_social_media c \
+         WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id \
+         AND c.twitch_user_id = j.twitch_user_id::text \
+         AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
+         AND c.source_kind = 'twitch') AS source_eligible \
+         FROM social_ai_jobs j WHERE j.id = $1 AND j.twitch_user_id = $2",
     )
     .bind(job_id)
     .bind(owner)
     .fetch_optional(&mut *lease.connection)
     .await?
     .ok_or(AiStoreError::NotFound)?;
+    if !row.try_get::<bool, _>("source_eligible")? {
+        fail_missing_source(lease, owner, job_id).await?;
+        return Err(AiStoreError::SourceUnavailable);
+    }
     let stage_name: String = row.try_get("stage")?;
     let stage = stage_from_str(&stage_name)?;
     let attempts: BTreeMap<String, i32> = parse_json(row.try_get("attempts_text")?)?;
@@ -564,7 +667,7 @@ pub async fn load_job_for_runner(
         parse_json(row.try_get("checkpoints_text")?)?;
     if checkpoints
         .iter()
-        .any(|(key, checkpoint)| *key != checkpoint.stage())
+        .any(|(key, checkpoint)| *key != checkpoint.stage() || checkpoint.validate().is_err())
     {
         return Err(AiStoreError::InvalidStoredData);
     }
@@ -598,14 +701,19 @@ pub async fn claim_job(
 ) -> Result<(), AiStoreError> {
     let owner = numeric_owner(twitch_user_id)?;
     let claimed: Option<i64> = sqlx::query_scalar(
-        "UPDATE social_ai_jobs SET status = stage, \
+        "UPDATE social_ai_jobs j SET status = stage, \
          attempts = jsonb_set(attempts, ARRAY[stage], \
          to_jsonb(COALESCE((attempts ->> stage)::integer, 0) + 1)), \
          started_at = COALESCE(started_at, NOW()), updated_at = NOW(), \
          failure_code = NULL, failure_message = NULL \
-         WHERE id = $1 AND twitch_user_id = $2 AND status = 'queued' \
+         WHERE j.id = $1 AND j.twitch_user_id = $2 AND j.status = 'queued' \
          AND COALESCE((attempts ->> stage)::integer, 0) < $3 \
-         RETURNING id",
+         AND EXISTS (SELECT 1 FROM twitch_clips_social_media c \
+         WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id \
+         AND c.twitch_user_id = j.twitch_user_id::text \
+         AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
+         AND c.source_kind = 'twitch') \
+         RETURNING j.id",
     )
     .bind(job_id)
     .bind(owner)
@@ -613,7 +721,10 @@ pub async fn claim_job(
     .fetch_optional(&mut *lease.connection)
     .await?;
     if claimed.is_some() {
+        lease.claimed_work = true;
         Ok(())
+    } else if fail_missing_source(lease, owner, job_id).await? {
+        Err(AiStoreError::SourceUnavailable)
     } else {
         Err(AiStoreError::Conflict)
     }
@@ -681,6 +792,7 @@ pub async fn save_stage(
         .map(serde_json::to_string)
         .transpose()
         .map_err(|_| AiStoreError::InvalidInput)?;
+    let totals = metrics.and_then(|value| value.cumulative_provider_totals.as_ref());
     let saved: Option<i64> = sqlx::query_scalar(
         "UPDATE social_ai_jobs SET \
          checkpoints = jsonb_set(checkpoints, ARRAY[$3::text], $4::jsonb), \
@@ -693,13 +805,13 @@ pub async fn save_stage(
          original_duration_ms = COALESCE($10::bigint, original_duration_ms), \
          output_duration_ms = COALESCE($11::bigint, output_duration_ms), \
          rendering_ms = COALESCE($20::bigint, $12::bigint, rendering_ms), \
-         provider = COALESCE($13::text, provider), \
-         model = COALESCE($14::text, model), \
+         provider = CASE WHEN $21::boolean THEN $13::text ELSE provider END, \
+         model = CASE WHEN $21::boolean THEN $14::text ELSE model END, \
          processing_ms = COALESCE($15::bigint, processing_ms), \
-         input_tokens = COALESCE($16::bigint, input_tokens), \
-         output_tokens = COALESCE($17::bigint, output_tokens), \
-         estimated_provider_cost_usd = COALESCE($18::double precision, estimated_provider_cost_usd), \
-         measured_provider_cost_usd = COALESCE($19::double precision, measured_provider_cost_usd), \
+         input_tokens = CASE WHEN $21::boolean THEN $16::bigint ELSE input_tokens END, \
+         output_tokens = CASE WHEN $21::boolean THEN $17::bigint ELSE output_tokens END, \
+         estimated_provider_cost_usd = CASE WHEN $21::boolean THEN $18::double precision ELSE estimated_provider_cost_usd END, \
+         measured_provider_cost_usd = CASE WHEN $21::boolean THEN $19::double precision ELSE measured_provider_cost_usd END, \
          updated_at = NOW() \
          WHERE id = $1 AND twitch_user_id = $2 AND stage = $3 AND status = $3 \
          AND NOT checkpoints ? $3 RETURNING id",
@@ -716,14 +828,15 @@ pub async fn save_stage(
     .bind(original_duration_ms)
     .bind(output_duration_ms)
     .bind(stage_rendering_ms)
-    .bind(metrics.and_then(|value| value.provider.as_deref()))
-    .bind(metrics.and_then(|value| value.model.as_deref()))
+    .bind(totals.and_then(|value| value.provider.as_deref()))
+    .bind(totals.and_then(|value| value.model.as_deref()))
     .bind(metrics.and_then(|value| value.processing_ms))
-    .bind(metrics.and_then(|value| value.input_tokens))
-    .bind(metrics.and_then(|value| value.output_tokens))
-    .bind(metrics.and_then(|value| value.estimated_provider_cost_usd))
-    .bind(metrics.and_then(|value| value.measured_provider_cost_usd))
+    .bind(totals.and_then(|value| value.input_tokens))
+    .bind(totals.and_then(|value| value.output_tokens))
+    .bind(totals.and_then(|value| value.estimated_provider_cost_usd))
+    .bind(totals.and_then(|value| value.measured_provider_cost_usd))
     .bind(metrics.and_then(|value| value.rendering_ms))
+    .bind(totals.is_some())
     .fetch_optional(&mut *lease.connection)
     .await?;
     if saved.is_some() {
@@ -782,11 +895,25 @@ pub async fn fail_job(
     job_id: i64,
     stage: AiStage,
     failure: JobFailure,
+    metrics: Option<&JobMetrics>,
 ) -> Result<(), AiStoreError> {
     let owner = numeric_owner(twitch_user_id)?;
+    if let Some(metrics) = metrics {
+        metrics.validate()?;
+    }
+    let totals = metrics.and_then(|value| value.cumulative_provider_totals.as_ref());
     let changed = sqlx::query(
         "UPDATE social_ai_jobs SET status = 'failed', failure_code = $4, \
-         failure_message = $5, updated_at = NOW() \
+         failure_message = $5, \
+         provider = CASE WHEN $6::boolean THEN $7::text ELSE provider END, \
+         model = CASE WHEN $6::boolean THEN $8::text ELSE model END, \
+         processing_ms = COALESCE($9::bigint, processing_ms), \
+         rendering_ms = COALESCE($10::bigint, rendering_ms), \
+         input_tokens = CASE WHEN $6::boolean THEN $11::bigint ELSE input_tokens END, \
+         output_tokens = CASE WHEN $6::boolean THEN $12::bigint ELSE output_tokens END, \
+         estimated_provider_cost_usd = CASE WHEN $6::boolean THEN $13::double precision ELSE estimated_provider_cost_usd END, \
+         measured_provider_cost_usd = CASE WHEN $6::boolean THEN $14::double precision ELSE measured_provider_cost_usd END, \
+         updated_at = NOW() \
          WHERE id = $1 AND twitch_user_id = $2 AND stage = $3 AND status = $3",
     )
     .bind(job_id)
@@ -794,6 +921,15 @@ pub async fn fail_job(
     .bind(stage.as_str())
     .bind(failure.code())
     .bind(failure.message())
+    .bind(totals.is_some())
+    .bind(totals.and_then(|value| value.provider.as_deref()))
+    .bind(totals.and_then(|value| value.model.as_deref()))
+    .bind(metrics.and_then(|value| value.processing_ms))
+    .bind(metrics.and_then(|value| value.rendering_ms))
+    .bind(totals.and_then(|value| value.input_tokens))
+    .bind(totals.and_then(|value| value.output_tokens))
+    .bind(totals.and_then(|value| value.estimated_provider_cost_usd))
+    .bind(totals.and_then(|value| value.measured_provider_cost_usd))
     .execute(&mut *lease.connection)
     .await?;
     if changed.rows_affected() == 1 {
@@ -815,6 +951,11 @@ pub async fn retry_job(
          failure_message = NULL, updated_at = NOW() \
          WHERE id = $1 AND twitch_user_id = $2 AND status = 'failed' \
          AND COALESCE((attempts ->> stage)::integer, 0) < $3 \
+         AND EXISTS (SELECT 1 FROM twitch_clips_social_media c \
+         WHERE c.id = social_ai_jobs.source_clip_id AND c.id = social_ai_jobs.clip_db_id \
+         AND c.twitch_user_id = social_ai_jobs.twitch_user_id::text \
+         AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
+         AND c.source_kind = 'twitch') \
          AND NOT EXISTS (SELECT 1 FROM social_ai_jobs sibling \
          WHERE sibling.twitch_user_id = social_ai_jobs.twitch_user_id \
          AND sibling.clip_db_id = social_ai_jobs.clip_db_id AND sibling.id <> social_ai_jobs.id \
@@ -868,6 +1009,11 @@ pub async fn finish_job(
          completed_at = NOW(), updated_at = NOW() \
          WHERE j.id = $1 AND j.twitch_user_id = $2 AND j.status = 'validating' \
          AND j.stage = 'validating' AND j.checkpoints ? 'validating' \
+         AND EXISTS (SELECT 1 FROM twitch_clips_social_media c \
+         WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id \
+         AND c.twitch_user_id = j.twitch_user_id::text \
+         AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
+         AND c.source_kind = 'twitch') \
          AND EXISTS (SELECT 1 FROM social_produced_videos p \
          WHERE p.id = $3 AND p.twitch_user_id = $4 AND p.clip_id = j.clip_db_id \
          AND p.mode = 'ai' AND p.status = 'review' \
@@ -895,12 +1041,27 @@ pub async fn recover_stale_jobs(
     if requested_limit <= 0 {
         return Err(AiStoreError::InvalidInput);
     }
+    if lease.claimed_work {
+        return Err(AiStoreError::Conflict);
+    }
     let changed = sqlx::query(
-        "WITH stale AS (SELECT id FROM social_ai_jobs \
-         WHERE twitch_user_id = $1 AND status IN ('preparing','transcribing','analyzing','planning','rendering','validating') \
-         ORDER BY updated_at, id LIMIT $2 FOR UPDATE SKIP LOCKED) \
-         UPDATE social_ai_jobs j SET status = 'failed', failure_code = 'interrupted', \
-         failure_message = 'Der Verarbeitungsschritt wurde unterbrochen.', updated_at = NOW() \
+        "WITH stale AS (SELECT j.id, EXISTS (SELECT 1 FROM twitch_clips_social_media c \
+         WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id \
+         AND c.twitch_user_id = j.twitch_user_id::text \
+         AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
+         AND c.source_kind = 'twitch') AS source_eligible \
+         FROM social_ai_jobs j WHERE j.twitch_user_id = $1 \
+         AND (j.status IN ('preparing','transcribing','analyzing','planning','rendering','validating') \
+         OR (j.status = 'queued' AND NOT EXISTS (SELECT 1 FROM twitch_clips_social_media c \
+         WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id \
+         AND c.twitch_user_id = j.twitch_user_id::text \
+         AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
+         AND c.source_kind = 'twitch'))) \
+         ORDER BY j.updated_at, j.id LIMIT $2 FOR UPDATE OF j SKIP LOCKED) \
+         UPDATE social_ai_jobs j SET status = 'failed', \
+         failure_code = CASE WHEN stale.source_eligible THEN 'interrupted' ELSE 'source_unavailable' END, \
+         failure_message = CASE WHEN stale.source_eligible THEN 'Der Verarbeitungsschritt wurde unterbrochen.' \
+         ELSE 'Der Clip ist nicht verfügbar.' END, updated_at = NOW() \
          FROM stale WHERE j.id = stale.id AND j.twitch_user_id = $1",
     )
     .bind(owner)

@@ -1,7 +1,9 @@
 CREATE TABLE public.social_ai_jobs (
     id BIGSERIAL PRIMARY KEY,
     twitch_user_id BIGINT NOT NULL CHECK (twitch_user_id > 0),
-    clip_db_id BIGINT NOT NULL REFERENCES public.twitch_clips_social_media(id) ON DELETE CASCADE,
+    clip_db_id BIGINT NOT NULL CHECK (clip_db_id > 0),
+    source_clip_id BIGINT REFERENCES public.twitch_clips_social_media(id) ON DELETE SET NULL,
+    CONSTRAINT social_ai_jobs_source_identity CHECK (source_clip_id IS NULL OR source_clip_id = clip_db_id),
     status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'preparing', 'transcribing', 'analyzing', 'planning', 'rendering', 'validating', 'review', 'failed')),
     stage TEXT NOT NULL DEFAULT 'preparing' CHECK (stage IN ('preparing', 'transcribing', 'analyzing', 'planning', 'rendering', 'validating')),
     attempts JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(attempts) = 'object'),
@@ -33,6 +35,9 @@ CREATE TABLE public.social_ai_jobs (
 CREATE UNIQUE INDEX social_ai_jobs_active_clip_uq
     ON public.social_ai_jobs (twitch_user_id, clip_db_id)
     WHERE status IN ('queued', 'preparing', 'transcribing', 'analyzing', 'planning', 'rendering', 'validating');
+
+CREATE INDEX social_ai_jobs_source_clip_idx
+    ON public.social_ai_jobs (source_clip_id) WHERE source_clip_id IS NOT NULL;
 
 CREATE INDEX social_ai_jobs_owner_recent_idx
     ON public.social_ai_jobs (twitch_user_id, id DESC);
