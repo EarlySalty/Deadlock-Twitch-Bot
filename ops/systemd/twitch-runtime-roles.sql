@@ -509,3 +509,11 @@ BEGIN
 END
 $audit_usage$;
 ALTER ROLE twitchaudit IN DATABASE twitch_analytics SET search_path=public,pg_catalog;
+
+DO $social_ai_consent_roles$
+BEGIN
+    IF to_regprocedure('public.twitch_apply_social_ai_consent_roles()') IS NOT NULL THEN
+        PERFORM public.twitch_apply_social_ai_consent_roles();
+    END IF;
+END
+$social_ai_consent_roles$;

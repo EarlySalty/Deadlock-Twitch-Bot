@@ -25,19 +25,44 @@ ALTER TABLE public.llm_usage
 CREATE INDEX llm_usage_social_ai_budget_idx ON public.llm_usage (purpose, provider)
     WHERE purpose = 'social_editor' AND provider = 'anthropic';
 
-DO $$
+CREATE FUNCTION public.twitch_apply_social_ai_consent_roles() RETURNS void
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $roles$
 BEGIN
-    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchanalysis') THEN
-        GRANT SELECT, INSERT, UPDATE ON public.social_ai_user_consent TO twitchanalysis;
-        GRANT SELECT, INSERT, UPDATE ON public.llm_usage TO twitchanalysis;
-        GRANT USAGE, SELECT ON SEQUENCE public.llm_usage_id_seq TO twitchanalysis;
+    IF to_regclass('public.social_ai_user_consent') IS NULL THEN
+        RETURN;
     END IF;
-END $$;
+    REVOKE ALL ON TABLE public.social_ai_user_consent FROM PUBLIC;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchbot') THEN
+        REVOKE ALL ON TABLE public.social_ai_user_consent FROM twitchbot;
+        GRANT SELECT ON TABLE public.social_ai_user_consent TO twitchbot;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchdash') THEN
+        REVOKE ALL ON TABLE public.social_ai_user_consent FROM twitchdash;
+        GRANT SELECT, INSERT, UPDATE ON TABLE public.social_ai_user_consent TO twitchdash;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchlegacy') THEN
+        REVOKE ALL ON TABLE public.social_ai_user_consent FROM twitchlegacy;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchanalysis') THEN
+        REVOKE ALL ON TABLE public.social_ai_user_consent FROM twitchanalysis;
+        GRANT SELECT ON TABLE public.social_ai_user_consent TO twitchanalysis;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchaudit') THEN
+        REVOKE ALL ON TABLE public.social_ai_user_consent FROM twitchaudit;
+        GRANT SELECT ON TABLE public.social_ai_user_consent TO twitchaudit;
+    END IF;
+END
+$roles$;
+REVOKE ALL ON FUNCTION public.twitch_apply_social_ai_consent_roles() FROM PUBLIC;
+SELECT public.twitch_apply_social_ai_consent_roles();
 
 DO $$
 BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchanalysis') THEN
+        GRANT SELECT, INSERT, UPDATE ON public.llm_usage TO twitchanalysis;
+        GRANT USAGE, SELECT ON SEQUENCE public.llm_usage_id_seq TO twitchanalysis;
+    END IF;
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchaudit') THEN
-        GRANT SELECT ON public.social_ai_user_consent TO twitchaudit;
         GRANT SELECT, INSERT, UPDATE ON public.llm_usage TO twitchaudit;
         GRANT USAGE, SELECT ON SEQUENCE public.llm_usage_id_seq TO twitchaudit;
     END IF;
