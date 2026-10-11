@@ -19,6 +19,7 @@ required-features = ["local-eval"]
 # gemeinsame Usage-Ledger (Tabelle `llm_usage`, zentrale Postgres).
 [dependencies]
 async-trait = { workspace = true }
+brain-client = { workspace = true }
 uuid = { workspace = true }
 tb-observability = { workspace = true }
 fireworks-model-selection = { path = "../fireworks-model-selection" }

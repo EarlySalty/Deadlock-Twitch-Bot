@@ -772,6 +772,13 @@ fn title_endpoint() -> tb_llm::LlmEndpoint {
     tb_llm::endpoint_for(USE_CASE)
 }
 
+fn title_key(endpoint: &tb_llm::LlmEndpoint) -> Option<&str> {
+    endpoint
+        .api_key
+        .as_deref()
+        .or_else(|| tb_llm::brain_route::is_installed(USE_CASE).then_some(""))
+}
+
 /// Ein Titel- oder Insight-Aufruf ueber den gemeinsamen Eingang.
 ///
 /// Der Titel-Pfad haengt am Twitch-Dashboard und laeuft in Stosszeiten in
@@ -928,10 +935,7 @@ pub async fn generate_title_personalized(
         .check_and_record(streamer_id, source)
         .map_err(GenerateTitleError::RateLimit)?;
     let endpoint = title_endpoint();
-    let api_key = endpoint
-        .api_key
-        .as_deref()
-        .ok_or(GenerateTitleError::NoApiKey)?;
+    let api_key = title_key(&endpoint).ok_or(GenerateTitleError::NoApiKey)?;
     generate_title_personalized_with(
         Some(streamer_id),
         &endpoint.base_url,
@@ -1117,7 +1121,7 @@ pub async fn generate_insight(
         return None;
     }
     let endpoint = tb_llm::endpoint_for(USE_CASE);
-    let key = endpoint.api_key.as_deref()?;
+    let key = title_key(&endpoint)?;
     generate_insight_with(
         Some(streamer_id),
         &endpoint.base_url,

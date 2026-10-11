@@ -475,9 +475,15 @@ async fn main() {
         "deadlock-twitch-dashboard-rust",
     )
     .expect("Verbrauchserfassung initialisieren");
+    let title_brain_token = tb_dashboard_api::uplink_config::brain_service_token();
+    if config.dashboard.options.brain_client.title_ai_via_brain && title_brain_token.is_none() {
+        tracing::error!(
+            "Titel über Brain ist aktiv, aber die Uplink-Laufzeit liefert keinen Brain-Dienstschlüssel; Titelvorschläge schlagen fehl"
+        );
+    }
     install_title_ai_brain_route(
         &config.dashboard.options.brain_client,
-        tb_dashboard_api::uplink_config::brain_service_token().as_deref(),
+        title_brain_token.as_deref(),
     );
 
     let pause_loop_helix = pause_loop_helix_client_from_env();

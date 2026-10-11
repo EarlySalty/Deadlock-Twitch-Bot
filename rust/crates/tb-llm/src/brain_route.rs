@@ -3,92 +3,23 @@ use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use zeroize::Zeroizing;
+use brain_client::{AsyncBrainClient, ClientError};
+pub use brain_client::{
+    BotCapability, BotIdentity, BotTask, BotTaskRequest, BotTaskResponse, BotTaskResult,
+    TaskFailure, TaskUsage, TwitchTitlePurpose, BOT_TASK_VERSION,
+};
 
 use crate::hub::{
-    bounded_response, is_loopback_endpoint, kurz, new_http_client, strip_think, transport_error,
-    Ledger, LlmError, LlmFailure, Request, Response, DEFAULT_TIMEOUT, MAX_RETRY_AFTER_SECS,
+    strip_think, transport_error, Ledger, LlmError, LlmFailure, Request, Response, DEFAULT_TIMEOUT,
+    MAX_RETRY_AFTER_SECS,
 };
 use crate::ledger::Completion;
 
-pub const CONTRACT_VERSION: &str = "brain.bot_tasks.v1";
 pub const PROVIDER: &str = "brain";
 pub const TITLE_AI_USE_CASE: &str = "title_ai";
-const TITLE_CAPABILITY: &str = "twitch_title";
+pub const MAX_TITLE_TOKENS: u32 = 1500;
 const UNKNOWN_MODEL: &str = "unknown";
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct BotTaskRequest {
-    pub contract_version: String,
-    pub request_id: String,
-    pub identity: TaskIdentity,
-    pub task: BotTask,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum TaskIdentity {
-    Twitch { broadcaster_id: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum BotTask {
-    TwitchTitle {
-        purpose: TitlePurpose,
-        prompt: String,
-        temperature: f64,
-        max_tokens: i64,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TitlePurpose {
-    Title,
-    Insight,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct BotTaskResponse {
-    pub contract_version: String,
-    pub request_id: String,
-    pub result: BotTaskResult,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum BotTaskResult {
-    TwitchTitle {
-        text: String,
-        model: String,
-        #[serde(default)]
-        usage: TaskUsage,
-    },
-    Failed {
-        capability: String,
-        failure: TaskFailure,
-    },
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-pub struct TaskUsage {
-    #[serde(default)]
-    pub input_tokens: Option<i64>,
-    #[serde(default)]
-    pub output_tokens: Option<i64>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskFailure {
-    ProviderUnavailable,
-    ProviderRateLimited,
-    Timeout,
-    InvalidOutput,
-}
+const PROVIDER_RATE_LIMITED: &str = "provider_rate_limited";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransportError {
@@ -102,6 +33,7 @@ pub enum TransportError {
     },
     Timeout(String),
     Unreachable(String),
+    InvalidRequest(String),
     InvalidResponse(String),
 }
 
@@ -110,79 +42,56 @@ pub trait BrainTaskTransport: Send + Sync {
     async fn task(&self, request: &BotTaskRequest) -> Result<BotTaskResponse, TransportError>;
 }
 
-pub struct HttpBrainTransport {
-    client: reqwest::Client,
-    url: String,
-    token: Zeroizing<String>,
-    timeout: Option<Duration>,
+pub struct BrainClientTransport {
+    client: AsyncBrainClient,
 }
 
-impl HttpBrainTransport {
+impl BrainClientTransport {
     pub fn new(endpoint: &str, token: &str, timeout: Option<Duration>) -> Result<Self, String> {
-        let endpoint = endpoint.trim();
-        if !is_loopback_endpoint(endpoint) {
-            return Err("Brain-Endpunkt muss lokal erreichbar sein".into());
-        }
-        if token.trim().is_empty() {
-            return Err("Brain-Dienstschlüssel fehlt".into());
-        }
-        Ok(Self {
-            client: new_http_client()?,
-            url: format!("{}/v1/task", endpoint.trim_end_matches('/')),
-            token: Zeroizing::new(token.to_string()),
-            timeout,
-        })
+        AsyncBrainClient::new_local(endpoint, token, timeout.unwrap_or(DEFAULT_TIMEOUT))
+            .map(|client| Self { client })
+            .map_err(|error| match error {
+                ClientError::InvalidBaseUrl => {
+                    "Brain-Endpunkt muss lokal erreichbar sein und eine gültige Frist haben".into()
+                }
+                ClientError::InvalidToken => "Brain-Dienstschlüssel fehlt oder ist ungültig".into(),
+                other => format!("Brain-Client nicht nutzbar: {other}"),
+            })
     }
 }
 
 #[async_trait]
-impl BrainTaskTransport for HttpBrainTransport {
+impl BrainTaskTransport for BrainClientTransport {
     async fn task(&self, request: &BotTaskRequest) -> Result<BotTaskResponse, TransportError> {
-        let mut builder = self
-            .client
-            .post(&self.url)
-            .bearer_auth(self.token.as_str())
-            .json(request);
-        if let Some(timeout) = self.timeout {
-            builder = builder.timeout(timeout);
-        }
-        let response = builder.send().await.map_err(llm_transport_error)?;
-        let status = response.status().as_u16();
-        let retry_after = response
-            .headers()
-            .get(reqwest::header::RETRY_AFTER)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok());
-        let bytes = bounded_response(response).await;
-        let body = |bytes: &[u8]| kurz(&String::from_utf8_lossy(bytes));
-        if status == 429 {
-            return Err(TransportError::Overloaded {
-                retry_after,
-                body: bytes.map(|bytes| body(&bytes)).unwrap_or_default(),
-            });
-        }
-        if !(200..300).contains(&status) {
-            return Err(TransportError::Rejected {
-                status,
-                body: bytes.map(|bytes| body(&bytes)).unwrap_or_default(),
-            });
-        }
-        let bytes = bytes.map_err(|error| match error {
-            LlmError::Timeout(detail) => TransportError::Timeout(detail),
-            LlmError::Transport(detail) => TransportError::Unreachable(detail),
-            other => TransportError::InvalidResponse(other.to_string()),
-        })?;
-        serde_json::from_slice(&bytes).map_err(|_| {
-            TransportError::InvalidResponse("Brain-Antwort passt nicht zum Aufgabenvertrag".into())
-        })
+        self.client.task(request).await.map_err(client_error)
     }
 }
 
-fn llm_transport_error(error: reqwest::Error) -> TransportError {
-    match transport_error(&error) {
-        LlmError::Timeout(detail) => TransportError::Timeout(detail),
-        LlmError::Unparsable(detail) => TransportError::InvalidResponse(detail),
-        other => TransportError::Unreachable(other.to_string()),
+fn client_error(error: ClientError) -> TransportError {
+    match error {
+        ClientError::HttpStatus { status, body } if status.as_u16() == 429 => {
+            TransportError::Overloaded {
+                retry_after: None,
+                body,
+            }
+        }
+        ClientError::HttpStatus { status, body } => TransportError::Rejected {
+            status: status.as_u16(),
+            body,
+        },
+        ClientError::Http(error) => match transport_error(&error) {
+            LlmError::Timeout(detail) => TransportError::Timeout(detail),
+            LlmError::Unparsable(detail) => TransportError::InvalidResponse(detail),
+            other => TransportError::Unreachable(other.to_string()),
+        },
+        ClientError::InvalidBaseUrl
+        | ClientError::InvalidToken
+        | ClientError::InvalidQuery(_)
+        | ClientError::RequestTooLarge => TransportError::InvalidRequest(error.to_string()),
+        ClientError::Contract(_)
+        | ClientError::InvalidResponse
+        | ClientError::ResponseTooLarge
+        | ClientError::BodyRead(_) => TransportError::InvalidResponse(error.to_string()),
     }
 }
 
@@ -292,9 +201,9 @@ impl BrainRoute {
                     LlmError::Timeout("Verbrauchsstart überschreitet Aufruffrist".into())
                 })??;
             let body = BotTaskRequest {
-                contract_version: CONTRACT_VERSION.to_string(),
+                contract_version: BOT_TASK_VERSION.to_string(),
                 request_id: uuid::Uuid::new_v4().to_string(),
-                identity: TaskIdentity::Twitch {
+                identity: BotIdentity::Twitch {
                     broadcaster_id: broadcaster_id.clone(),
                 },
                 task: task.clone(),
@@ -305,21 +214,21 @@ impl BrainRoute {
                 .await;
             match outcome {
                 Ok(answer) => return answer_response(request, answer, started),
-                Err(Attempt::Transport(TransportError::Overloaded { retry_after, body }))
-                    if versuch < request.retry_on_429 =>
-                {
-                    versuch += 1;
-                    let wartezeit = Duration::from_secs(
-                        retry_after
-                            .unwrap_or(1u64 << (versuch - 1))
-                            .min(MAX_RETRY_AFTER_SECS),
-                    );
-                    if Instant::now() + wartezeit >= ende {
-                        return Err(LlmError::Http { status: 429, body });
+                Err(error) => match error.rate_limited() {
+                    Some(retry_after) if versuch < request.retry_on_429 => {
+                        versuch += 1;
+                        let wartezeit = Duration::from_secs(
+                            retry_after
+                                .unwrap_or(1u64 << (versuch - 1))
+                                .min(MAX_RETRY_AFTER_SECS),
+                        );
+                        if Instant::now() + wartezeit >= ende {
+                            return Err(error.llm_error());
+                        }
+                        tokio::time::sleep(wartezeit).await;
                     }
-                    tokio::time::sleep(wartezeit).await;
-                }
-                Err(error) => return Err(error.llm_error()),
+                    _ => return Err(error.llm_error()),
+                },
             }
         }
     }
@@ -337,6 +246,14 @@ enum Attempt {
 }
 
 impl Attempt {
+    fn rate_limited(&self) -> Option<Option<u64>> {
+        match self {
+            Self::Transport(TransportError::Overloaded { retry_after, .. }) => Some(*retry_after),
+            Self::Failed(TaskFailure::ProviderRateLimited) => Some(None),
+            _ => None,
+        }
+    }
+
     fn llm_error(&self) -> LlmError {
         match self {
             Self::Transport(TransportError::Overloaded { body, .. }) => LlmError::Http {
@@ -351,6 +268,9 @@ impl Attempt {
             Self::Transport(TransportError::Unreachable(detail)) => {
                 LlmError::Transport(detail.clone())
             }
+            Self::Transport(TransportError::InvalidRequest(detail)) => {
+                LlmError::Unavailable(format!("Brain-Aufgabe ungültig: {detail}"))
+            }
             Self::Transport(TransportError::InvalidResponse(detail)) => {
                 LlmError::Unparsable(detail.clone())
             }
@@ -359,7 +279,7 @@ impl Attempt {
             }
             Self::Failed(TaskFailure::ProviderRateLimited) => LlmError::Http {
                 status: 429,
-                body: "provider_rate_limited".into(),
+                body: PROVIDER_RATE_LIMITED.into(),
             },
             Self::Failed(TaskFailure::Timeout) => {
                 LlmError::Timeout("Brain: Modellanbieter antwortete nicht rechtzeitig".into())
@@ -403,7 +323,7 @@ async fn attempt(
 
 fn validated_answer(body: &BotTaskRequest, response: BotTaskResponse) -> Result<Answer, Attempt> {
     let invalid = |detail: &str| Attempt::Transport(TransportError::InvalidResponse(detail.into()));
-    if response.contract_version != CONTRACT_VERSION {
+    if response.contract_version != BOT_TASK_VERSION {
         return Err(invalid("Brain-Antwort hat eine fremde Vertragsversion"));
     }
     if response.request_id != body.request_id {
@@ -417,10 +337,13 @@ fn validated_answer(body: &BotTaskRequest, response: BotTaskResponse) -> Result<
             Ok(Answer { text, model, usage })
         }
         BotTaskResult::Failed {
-            capability,
+            capability: BotCapability::TwitchTitle,
             failure,
-        } if capability == TITLE_CAPABILITY => Err(Attempt::Failed(failure)),
+        } => Err(Attempt::Failed(failure)),
         BotTaskResult::Failed { .. } => Err(invalid("Brain-Fehler betrifft eine andere Aufgabe")),
+        BotTaskResult::DiscordAnswer { .. } | BotTaskResult::CapabilityStatus { .. } => {
+            Err(invalid("Brain-Antwort passt nicht zur Titelaufgabe"))
+        }
     }
 }
 
@@ -452,8 +375,8 @@ fn answer_response(
     })
 }
 
-fn known_tokens(value: Option<i64>) -> Option<i64> {
-    value.filter(|tokens| *tokens >= 0)
+fn known_tokens(value: Option<u64>) -> Option<i64> {
+    value.and_then(|tokens| i64::try_from(tokens).ok())
 }
 
 fn completion(
@@ -518,9 +441,11 @@ fn title_task(request: &Request) -> Result<(&'static str, BotTask), LlmError> {
     let unsupported =
         |detail: &str| LlmError::Unavailable(format!("Brain-Aufgabe nicht abbildbar: {detail}"));
     let (ledger_purpose, purpose) = match &request.ledger {
-        Some(Ledger::Purpose(purpose)) if purpose == "title" => ("title", TitlePurpose::Title),
+        Some(Ledger::Purpose(purpose)) if purpose == "title" => {
+            ("title", TwitchTitlePurpose::Title)
+        }
         Some(Ledger::Purpose(purpose)) if purpose == "title-insight" => {
-            ("title-insight", TitlePurpose::Insight)
+            ("title-insight", TwitchTitlePurpose::Insight)
         }
         _ => return Err(unsupported("Zweck")),
     };
@@ -535,11 +460,13 @@ fn title_task(request: &Request) -> Result<(&'static str, BotTask), LlmError> {
     };
     let temperature = request
         .temperature
-        .filter(|value| value.is_finite())
+        .filter(|value| value.is_finite() && (0.0..=2.0).contains(value))
+        .map(|value| value as f32)
         .ok_or_else(|| unsupported("Temperatur"))?;
     let max_tokens = request
         .max_tokens
-        .filter(|value| *value > 0)
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| (1..=MAX_TITLE_TOKENS).contains(value))
         .ok_or_else(|| unsupported("Tokengrenze"))?;
     Ok((
         ledger_purpose,
@@ -596,7 +523,7 @@ pub fn install_title_ai(
     timeout: Option<Duration>,
 ) -> Result<(), BrainRouteError> {
     let transport = match (endpoint, token) {
-        (Some(endpoint), Some(token)) => HttpBrainTransport::new(endpoint, token, timeout),
+        (Some(endpoint), Some(token)) => BrainClientTransport::new(endpoint, token, timeout),
         (None, _) => Err("Brain-Endpunkt fehlt".to_string()),
         (_, None) => Err("Brain-Dienstschlüssel fehlt".to_string()),
     };
@@ -612,6 +539,10 @@ pub fn install_title_ai(
         }
     };
     install(TITLE_AI_USE_CASE, route)
+}
+
+pub fn is_installed(use_case: &str) -> bool {
+    installed(use_case).is_some()
 }
 
 pub(crate) fn installed(use_case: &str) -> Option<Arc<BrainRoute>> {
@@ -684,7 +615,7 @@ mod tests {
     }
 
     fn route(brain: &MockServer, ledger: Arc<RecordingLedger>) -> Arc<BrainRoute> {
-        let transport = HttpBrainTransport::new(&brain.uri(), "brain-fixture", None)
+        let transport = BrainClientTransport::new(&brain.uri(), "brain-fixture", None)
             .expect("lokaler Brain-Endpunkt");
         Arc::new(BrainRoute::with_ledger(Arc::new(transport), ledger))
     }
@@ -694,7 +625,7 @@ mod tests {
             events.lock().unwrap().push("brain".into());
             let body: Value = serde_json::from_slice(&request.body).unwrap();
             ResponseTemplate::new(200).set_body_json(json!({
-                "contract_version": CONTRACT_VERSION,
+                "contract_version": BOT_TASK_VERSION,
                 "request_id": body["request_id"],
                 "result": {
                     "kind": "twitch_title",
@@ -786,9 +717,9 @@ mod tests {
             .respond_with(|request: &wiremock::Request| {
                 let body: Value = serde_json::from_slice(&request.body).unwrap();
                 ResponseTemplate::new(200).set_body_json(json!({
-                    "contract_version": CONTRACT_VERSION,
+                    "contract_version": BOT_TASK_VERSION,
                     "request_id": body["request_id"],
-                    "result": {"kind": "twitch_title", "text": "T", "model": "m", "usage": {"input_tokens": -1}}
+                    "result": {"kind": "twitch_title", "text": "T", "model": "m", "usage": {"output_tokens": 30}}
                 }))
             })
             .mount(&brain)
@@ -801,7 +732,7 @@ mod tests {
         .await
         .expect("Antwort");
         assert_eq!(response.prompt_tokens, None);
-        assert_eq!(response.completion_tokens, None);
+        assert_eq!(response.completion_tokens, Some(30));
         let completions = ledger.completions.lock().unwrap();
         assert_eq!(
             (
@@ -809,7 +740,7 @@ mod tests {
                 completions[0].tokens_out,
                 completions[0].total
             ),
-            (None, None, None)
+            (None, Some(30), None)
         );
     }
 
@@ -823,14 +754,6 @@ mod tests {
             ),
             (
                 ResponseTemplate::new(200),
-                Some("provider_rate_limited"),
-                LlmError::Http {
-                    status: 429,
-                    body: "provider_rate_limited".into(),
-                },
-            ),
-            (
-                ResponseTemplate::new(200),
                 Some("timeout"),
                 LlmError::Timeout("Brain: Modellanbieter antwortete nicht rechtzeitig".into()),
             ),
@@ -840,11 +763,13 @@ mod tests {
                 LlmError::Unparsable("Brain: Modellantwort unbrauchbar".into()),
             ),
             (
-                ResponseTemplate::new(403).set_body_string("permission denied"),
+                ResponseTemplate::new(403).set_body_json(
+                    json!({"error": {"code": "forbidden", "message": "Kanal nicht freigegeben"}}),
+                ),
                 None,
                 LlmError::Http {
                     status: 403,
-                    body: "permission denied".into(),
+                    body: "forbidden".into(),
                 },
             ),
             (
@@ -852,7 +777,7 @@ mod tests {
                 None,
                 LlmError::Http {
                     status: 502,
-                    body: "upstream".into(),
+                    body: "http_error".into(),
                 },
             ),
         ];
@@ -864,7 +789,7 @@ mod tests {
                 Some(failure) => {
                     let body: Value = serde_json::from_slice(&request.body).unwrap();
                     ResponseTemplate::new(200).set_body_json(json!({
-                        "contract_version": CONTRACT_VERSION,
+                        "contract_version": BOT_TASK_VERSION,
                         "request_id": body["request_id"],
                         "result": {"kind": "failed", "capability": "twitch_title", "failure": failure}
                     }))
@@ -895,11 +820,11 @@ mod tests {
     #[tokio::test]
     async fn fremde_antworten_sind_unbrauchbar() {
         for result in [
-            json!({"contract_version": "brain.bot_tasks.v0", "request_id": "SAME", "result": {"kind": "twitch_title", "text": "T", "model": "m"}}),
-            json!({"contract_version": CONTRACT_VERSION, "request_id": "andere", "result": {"kind": "twitch_title", "text": "T", "model": "m"}}),
-            json!({"contract_version": CONTRACT_VERSION, "request_id": "SAME", "result": {"kind": "failed", "capability": "public_guide", "failure": "timeout"}}),
-            json!({"contract_version": CONTRACT_VERSION, "request_id": "SAME", "result": {"kind": "twitch_title", "text": "T", "model": ""}}),
-            json!({"contract_version": CONTRACT_VERSION, "request_id": "SAME", "result": {"kind": "twitch_title", "text": "T", "model": "m", "extra": 1}}),
+            json!({"contract_version": "brain.bot_tasks.v0", "request_id": "SAME", "result": {"kind": "twitch_title", "text": "T", "model": "m", "usage": {}}}),
+            json!({"contract_version": BOT_TASK_VERSION, "request_id": "andere", "result": {"kind": "twitch_title", "text": "T", "model": "m", "usage": {}}}),
+            json!({"contract_version": BOT_TASK_VERSION, "request_id": "SAME", "result": {"kind": "failed", "capability": "public_guide", "failure": "timeout"}}),
+            json!({"contract_version": BOT_TASK_VERSION, "request_id": "SAME", "result": {"kind": "twitch_title", "text": "T", "model": "", "usage": {}}}),
+            json!({"contract_version": BOT_TASK_VERSION, "request_id": "SAME", "result": {"kind": "twitch_title", "text": "T", "model": "m", "usage": {}, "extra": 1}}),
         ] {
             let fireworks_server = silent_fireworks().await;
             let brain = MockServer::start().await;
@@ -933,11 +858,7 @@ mod tests {
         let brain = MockServer::start().await;
         let ledger = Arc::new(RecordingLedger::default());
         Mock::given(method("POST"))
-            .respond_with(
-                ResponseTemplate::new(429)
-                    .insert_header("retry-after", "0")
-                    .set_body_string("busy"),
-            )
+            .respond_with(overloaded())
             .up_to_n_times(1)
             .mount(&brain)
             .await;
@@ -962,11 +883,7 @@ mod tests {
 
         let exhausted = MockServer::start().await;
         Mock::given(method("POST"))
-            .respond_with(
-                ResponseTemplate::new(429)
-                    .insert_header("retry-after", "0")
-                    .set_body_string("busy"),
-            )
+            .respond_with(overloaded())
             .expect(2)
             .mount(&exhausted)
             .await;
@@ -983,7 +900,76 @@ mod tests {
             failure.error,
             LlmError::Http {
                 status: 429,
-                body: "busy".into()
+                body: "overloaded".into()
+            }
+        );
+    }
+
+    fn overloaded() -> ResponseTemplate {
+        ResponseTemplate::new(429)
+            .set_body_json(json!({"error": {"code": "overloaded", "message": "ausgelastet"}}))
+    }
+
+    fn rate_limited() -> impl wiremock::Respond {
+        |request: &wiremock::Request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            ResponseTemplate::new(200).set_body_json(json!({
+                "contract_version": BOT_TASK_VERSION,
+                "request_id": body["request_id"],
+                "result": {"kind": "failed", "capability": "twitch_title", "failure": "provider_rate_limited"}
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn anbieter_ratenlimit_nutzt_die_bestehende_wiederholung() {
+        let fireworks_server = silent_fireworks().await;
+        let brain = MockServer::start().await;
+        let ledger = Arc::new(RecordingLedger::default());
+        Mock::given(method("POST"))
+            .respond_with(rate_limited())
+            .up_to_n_times(1)
+            .mount(&brain)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(echo_title("Titel", Arc::new(Mutex::new(Vec::new()))))
+            .mount(&brain)
+            .await;
+        let response = complete_routed(
+            "title_ai",
+            title_request(&fireworks_server, "title").twitch_broadcaster("42"),
+            Some(route(&brain, Arc::clone(&ledger))),
+        )
+        .await
+        .expect("zweiter Versuch");
+        assert_eq!(response.text, "Titel");
+        {
+            let completions = ledger.completions.lock().unwrap();
+            assert_eq!(completions.len(), 2);
+            assert_eq!(completions[0].error_code.as_deref(), Some("http_status"));
+            assert!(completions[1].success);
+        }
+
+        let exhausted = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(rate_limited())
+            .expect(2)
+            .mount(&exhausted)
+            .await;
+        let failure = complete_routed(
+            "title_ai",
+            title_request(&fireworks_server, "title")
+                .retry_on_429(1)
+                .twitch_broadcaster("42"),
+            Some(route(&exhausted, Arc::new(RecordingLedger::default()))),
+        )
+        .await
+        .expect_err("Ratenlimit erschöpft");
+        assert_eq!(
+            failure.error,
+            LlmError::Http {
+                status: 429,
+                body: "provider_rate_limited".into()
             }
         );
     }
@@ -1053,6 +1039,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn zu_grosse_tokengrenze_wird_nicht_umgeleitet() {
+        let fireworks_server = silent_fireworks().await;
+        let brain = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&brain)
+            .await;
+        let failure = complete_routed(
+            "title_ai",
+            title_request(&fireworks_server, "title")
+                .max_tokens(1501)
+                .twitch_broadcaster("42"),
+            Some(route(&brain, Arc::new(RecordingLedger::default()))),
+        )
+        .await
+        .expect_err("Tokengrenze");
+        assert!(matches!(failure.error, LlmError::Unavailable(_)));
+    }
+
+    #[tokio::test]
     async fn inaktive_route_schickt_den_unveraenderten_fireworks_request() {
         let fireworks_server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -1100,8 +1107,14 @@ mod tests {
 
     #[test]
     fn brain_endpunkt_muss_lokal_sein() {
-        assert!(HttpBrainTransport::new("https://example.org", "t", None).is_err());
-        assert!(HttpBrainTransport::new("http://127.0.0.1:8789", " ", None).is_err());
-        assert!(HttpBrainTransport::new("http://127.0.0.1:8789/", "t", None).is_ok());
+        assert!(BrainClientTransport::new("https://example.org", "t", None).is_err());
+        assert!(BrainClientTransport::new("http://127.0.0.1:8789", " ", None).is_err());
+        assert!(BrainClientTransport::new(
+            "http://127.0.0.1:8789",
+            "t",
+            Some(Duration::from_secs(606))
+        )
+        .is_err());
+        assert!(BrainClientTransport::new("http://127.0.0.1:8789/", "t", None).is_ok());
     }
 }

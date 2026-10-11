@@ -73,6 +73,7 @@ impl BrainKnowledgeAdapter {
             profile: AnswerProfile::Explain,
             patch: None,
             mode: None,
+            answer_context: None,
         };
         query
             .validate()
@@ -124,7 +125,9 @@ fn project(response: PublicAnswerResponse) -> Result<KnowledgeReply, BrainAdapte
             text: response.text,
             sources: response.citations.into_iter().map(|c| c.label).collect(),
         }),
-        AnswerStatus::InsufficientEvidence => Ok(KnowledgeReply::NoEvidence),
+        AnswerStatus::InsufficientEvidence | AnswerStatus::Unverified => {
+            Ok(KnowledgeReply::NoEvidence)
+        }
         AnswerStatus::UnauthorizedEvidence
         | AnswerStatus::Unavailable
         | AnswerStatus::ProviderError
@@ -214,11 +217,13 @@ mod tests {
                 sources: vec!["Beleg 1".into()]
             }
         );
-        response.status = AnswerStatus::InsufficientEvidence;
-        assert_eq!(
-            project(response.clone()).unwrap(),
-            KnowledgeReply::NoEvidence
-        );
+        for status in [AnswerStatus::InsufficientEvidence, AnswerStatus::Unverified] {
+            response.status = status;
+            assert_eq!(
+                project(response.clone()).unwrap(),
+                KnowledgeReply::NoEvidence
+            );
+        }
         for status in [
             AnswerStatus::UnauthorizedEvidence,
             AnswerStatus::Unavailable,

@@ -846,7 +846,7 @@ async fn finish(response: reqwest::Response) -> Result<Value, RawError> {
     }
     Ok(payload)
 }
-pub(crate) async fn bounded_response(mut response: reqwest::Response) -> Result<Vec<u8>, LlmError> {
+async fn bounded_response(mut response: reqwest::Response) -> Result<Vec<u8>, LlmError> {
     const MAX_RESPONSE: usize = 8 * 1024 * 1024;
     if response
         .content_length()
@@ -870,7 +870,7 @@ pub(crate) async fn bounded_response(mut response: reqwest::Response) -> Result<
 
 /// Anbieter-Body auf 500 Zeichen gekuerzt: genug fuer "credit balance is too
 /// low", zu wenig fuer eine ganze HTML-Fehlerseite im Log.
-pub(crate) fn kurz(body: &str) -> String {
+fn kurz(body: &str) -> String {
     body.chars().take(500).collect()
 }
 
@@ -932,21 +932,27 @@ pub fn strip_think(raw: &str) -> String {
     re.replace_all(raw, "").trim().to_string()
 }
 
-pub(crate) fn http_client() -> Result<reqwest::Client, LlmError> {
+/// Ein HTTP-Client fuer alle Aufrufe (ein Verbindungspool). Die Zeitgrenze
+/// liegt nicht im Client, sondern um jeden Request, deshalb braucht es keinen
+/// Client je Frist.
+fn http_client() -> Result<reqwest::Client, LlmError> {
     static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
     CLIENT
-        .get_or_init(new_http_client)
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .no_proxy()
+                // Keine Gesamtfrist im Client: die legt `call_endpoint` per
+                // `tokio::time::timeout` um jeden Request. Nur der
+                // Verbindungsaufbau hat eine feste Grenze.
+                .connect_timeout(Duration::from_secs(10))
+                // Umleitungen sind bei einem API-Endpunkt kein normaler Fall:
+                // sie koennten den Schluessel an eine fremde Adresse tragen.
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|error| error.to_string())
+        })
         .clone()
         .map_err(LlmError::Transport)
-}
-
-pub(crate) fn new_http_client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .no_proxy()
-        .connect_timeout(Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
