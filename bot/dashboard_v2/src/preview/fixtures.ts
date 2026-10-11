@@ -6,6 +6,8 @@ import type {
 import type { AuthStatus } from '@/api/auth';
 import type { AdManagerResponse } from '@/api/adManager';
 import type { CatalogPlan } from '@/types/billing';
+import { DEFAULT_LAYOUT, type ClipApprovalRecord, type PostingPlan } from '../types/socialMedia';
+import type { SocialClipMitPosting, PlatformStatus } from '@/api/socialMedia';
 
 const NOW_ISO = '2026-04-22T09:30:00Z';
 
@@ -19,6 +21,7 @@ const AUTH_STATUS_FIXTURE: AuthStatus = {
   adminMode: true,
   canViewAllStreamers: true,
   twitchLogin: 'midcore_live',
+  twitchUserId: '123456789',
   displayName: 'Local Preview Creator',
   csrfToken: 'preview-csrf-token',
   csrf_token: 'preview-csrf-token',
@@ -372,11 +375,89 @@ const SESSION_EVENTS_FIXTURE = {
   subscriptions: [{ minute: 77, count: 3 }],
 };
 
+const SOCIAL_POSTER = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="960" height="540" fill="#242321"/><path d="M0 400 230 150 460 350 700 90 960 360V540H0" fill="#37342d"/><circle cx="740" cy="155" r="62" fill="#8e7549"/><path d="M0 450H960M160 0V540M480 0V540M800 0V540" stroke="#c5a059" opacity=".15"/><text x="48" y="480" font-family="sans-serif" font-size="28" fill="#ded7c5">Synthetische Clip-Vorschau</text></svg>')}`;
+
+function socialApproval(platforms: ClipApprovalRecord['approved_platforms'], approved = true): ClipApprovalRecord {
+  return {
+    clip_db_id: 1, state: approved ? 'approved' : 'awaiting_approval', approved_platforms: platforms,
+    approver_user_id: null, decided_at: null, dm_message_id: null, dm_channel_id: null,
+    last_sent_at: null, not_scheduled: [],
+  };
+}
+
+export const SOCIAL_CLIPS_FIXTURE: SocialClipMitPosting[] = [
+  { title: 'Die letzte Sekunde: Lash hält den Patron', status: 'awaiting_approval', approval: socialApproval([], false) },
+  { title: 'Bebop dreht den Teamfight am Markt', status: 'approved', approval: socialApproval(['youtube']), scheduled_at: { youtube: '2026-10-12T16:00:00Z' }, upload_states: { youtube: 'pending', tiktok: 'waiting_tiktok_approval' } },
+  { title: 'Ein ruhiger Moment vor dem nächsten Push', status: 'pending', enrichment_status: 'transcribing' },
+  { title: 'Paradox rettet den Rückzug', status: 'published_partial', approval: socialApproval(['tiktok']), upload_states: { tiktok: 'inbox' } },
+  { title: 'Haze im Finale: Upload gespeichert, privat auf YouTube', status: 'published_all', approval: socialApproval(['youtube']), platform_status: { youtube: true, tiktok: false, instagram: false }, youtube_visibility: 'private', upload_states: { youtube: 'completed' } },
+  { title: 'Der nächste Versuch wartet auf die Verbindung', status: 'failed', approval: socialApproval(['youtube', 'instagram']), upload_states: { youtube: 'failed', instagram: 'waiting_connection' }, upload_errors: { youtube: 'Die synthetische Übertragung ist fehlgeschlagen.', instagram: 'connection_missing' } },
+].map((entry, index) => ({
+  clip_db_id: index + 1, clip_id: `synthetic-${index + 1}`, clip_url: null,
+  thumbnail_url: SOCIAL_POSTER, streamer_login: 'midcore_live',
+  created_at: '2026-10-10T16:00:00Z', duration_seconds: 32 + index * 4,
+  view_count: 248 + index * 117, game_name: 'Deadlock',
+  source_kind: 'twitch', upload_local_path: null, retention_until: '2026-10-18T16:00:00Z',
+  discarded_at: null, platform_status: { youtube: false, tiktok: false, instagram: false },
+  layout_override: null, effective_layout: DEFAULT_LAYOUT,
+  ...entry,
+})) as SocialClipMitPosting[];
+
+export const SOCIAL_PLATFORMS_FIXTURE: PlatformStatus[] = ['youtube', 'tiktok', 'instagram'].map((platform) => ({
+  platform, connected: platform !== 'instagram', expired: false, username: platform === 'instagram' ? null : 'preview_creator',
+  automatically_renewed: true, uses_global_fallback: platform === 'tiktok',
+  capabilities: { upload: true, statistics: platform !== 'tiktok', upload_mode: 'direct', reason: null },
+  authorization: { source: 'stored', upload_scope_status: platform === 'youtube' ? 'sufficient' : platform === 'tiktok' ? 'missing' : 'unknown',
+    required_upload_scopes: platform === 'youtube' ? ['https://www.googleapis.com/auth/youtube.upload'] : platform === 'tiktok' ? ['video.publish'] : [], missing_upload_scopes: platform === 'youtube' ? [] : platform === 'tiktok' ? ['video.publish'] : null,
+    channel_account_required: platform === 'tiktok' },
+}));
+
+const SOCIAL_PLAN_FIXTURE: PostingPlan = {
+  streamer_login: 'midcore_live', approval_mode: 'manual', approval_modes: ['manual', 'veto_window', 'full_auto'],
+  timezone: 'Europe/Berlin', subtitles_enabled: true,
+  platforms: ['youtube', 'tiktok', 'instagram'].map((platform) => ({ platform: platform as 'youtube' | 'tiktok' | 'instagram', auto_post: platform !== 'instagram', posts_per_week: 3, max_posts_per_day: 1, post_times: ['18:00'], next_slot: '2026-10-12T16:00:00Z' })),
+  categories: [{ category_key: 'deadlock', display_name: 'Deadlock', enrichment_enabled: true, auto_post: true }],
+  pool: { verfuegbare_clips: 4, aktive_plattformen: 2, reicht_fuer_posts: 8, posts_pro_woche: 6, reicht_fuer_tage: 9, warnung: false },
+};
+
+export function getPreviewSocialResponse(path: string, init: RequestInit = {}, scenario = typeof window === 'undefined' ? '' : new URLSearchParams(window.location.search).get('fixture') ?? ''): Response {
+  const url = new URL(path, 'http://localhost');
+  const pathname = url.pathname;
+  const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+  if ((init.method ?? 'GET').toUpperCase() !== 'GET') {
+    return json({ error: 'preview_read_only', message: 'Die lokale Vorschau speichert, verbindet und veröffentlicht nichts.' }, 409);
+  }
+  if (pathname.endsWith('/access/me')) return json({ allowed: true, streamer: 'midcore_live', isAdmin: true });
+  if (pathname.endsWith('/access')) return json({ items: [{ twitch_user_id: '123456789', streamer_login: 'midcore_live', granted: true }] });
+  if (pathname.endsWith('/platforms/status')) {
+    if (scenario === 'accounts-error') return json({ error: 'platform_status_failed' }, 503);
+    return json({ platforms: scenario === 'unknown' ? [] : SOCIAL_PLATFORMS_FIXTURE });
+  }
+  if (pathname.endsWith('/streamer-layout')) return json({ streamer_login: 'midcore_live', layout: DEFAULT_LAYOUT, cam_enabled: true, mode: 'stacked', updated_at: null, updated_by: null });
+  if (pathname.endsWith('/posting-plan')) return json(SOCIAL_PLAN_FIXTURE);
+  if (pathname.endsWith('/settings/vod-archive')) return json({ streamer_login: 'midcore_live', enabled: true, privacy: 'private', privacy_options: ['private', 'unlisted', 'public'], privacy_forced: true });
+  if (pathname.endsWith('/admin/clips')) {
+    if (scenario === 'clips-error') return json({ error: 'clip_list_failed' }, 503);
+    const page = Number(url.searchParams.get('page') ?? 1);
+    const pageSize = Number(url.searchParams.get('page_size') ?? 100);
+    return json({ items: SOCIAL_CLIPS_FIXTURE.slice((page - 1) * pageSize, page * pageSize), total: SOCIAL_CLIPS_FIXTURE.length, page, page_size: pageSize });
+  }
+  if (pathname.endsWith('/vod-archive')) return json({ total: 1, items: [{ id: 1, twitch_id: 'synthetic-vod', channel: 'midcore_live', twitch_user_id: '123456789', title: 'Deadlock-Abend: Rangliste und Community', duration_sec: 7380, recorded_at: '2026-10-10T16:00:00Z', discovered_at: '2026-10-10T18:15:00Z', status: 'uploaded', status_label: 'YouTube-Upload abgeschlossen', display_status: 'youtube_uploaded', youtube_complete: true, youtube_verified_complete: false, can_check_youtube: false, drive_complete: false, confirmed_parts: 1, total_parts: 1, can_retry: false, can_drive: false, reason: null, drive_url: null, drive_requested: false, last_attempt_at: '2026-10-10T18:30:00Z', uploaded_at: '2026-10-10T18:45:00Z', parts: [{ index: 1, status: 'uploaded', youtube_video_id: null }], needs_connection: false }] });
+  if (pathname.endsWith('/enrichment')) return json({ clip_db_id: 1, status: 'done', title_youtube: 'Der letzte Push', title_tiktok: 'Der letzte Push', title_instagram: 'Der letzte Push', description_youtube: 'Ein Moment aus der synthetischen Vorschau.', description_tiktok: '', description_instagram: '', hashtags_youtube: ['Deadlock'], hashtags_tiktok: [], hashtags_instagram: [], detected_terms: [], transcript_raw: null, transcript_corrected: null, transcript_segments: null, llm_provider: null, llm_model: null, cost_usd_estimate: null });
+  if (pathname.endsWith('/preview')) {
+    const id = Number(pathname.match(/clips\/(\d+)\/preview$/)?.[1] ?? 1);
+    const status = scenario === 'preview-rendering' ? 'rendering' : scenario === 'preview-error' ? 'error' : null;
+    return json({ clip_db_id: id, status, ready: false });
+  }
+  return json({ error: 'preview_fixture_missing', message: 'Für diese Ansicht gibt es noch keine lokalen Vorschau-Daten.' }, 404);
+}
+
 export function getPreviewApiFixture(
   endpoint: string,
   _params: Record<string, string | number | boolean> = {}
 ): unknown | undefined {
   if (endpoint === '/auth-status') return AUTH_STATUS_FIXTURE;
+  if (endpoint === '/feedback/counts') return { total: 0, unread: 0 };
   if (endpoint === '/streamers') return [{ login: 'midcore_live', twitchUserId: '123456789', isPartner: true }];
   if (endpoint === '/billing/catalog') return BILLING_CATALOG_FIXTURE;
   if (endpoint === '/internal-home') return INTERNAL_HOME_FIXTURE;

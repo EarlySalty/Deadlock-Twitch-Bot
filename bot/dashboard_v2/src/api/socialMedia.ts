@@ -1,4 +1,6 @@
 import { withCookieCredentials } from './core';
+import { isPreviewLocalhost, PREVIEW_SOCIAL_ROUTE } from '@/preview/routes';
+import { getPreviewSocialResponse } from '@/preview/fixtures';
 import { fetchAuthStatus } from './auth';
 import type {
   ApprovalMode,
@@ -100,8 +102,13 @@ export class SocialMediaForbiddenError extends SocialMediaApiError {
   }
 }
 
+async function socialRequest(path: string, init: RequestInit = {}): Promise<Response> {
+  if (isPreviewLocalhost()) return getPreviewSocialResponse(path, init);
+  return fetch(path, withCookieCredentials(init));
+}
+
 async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, withCookieCredentials(init));
+  const response = await socialRequest(path, init);
   if (response.status === 403 || response.status === 401) {
     throw new SocialMediaForbiddenError('admin_required', response.status);
   }
@@ -258,6 +265,7 @@ export async function getPreviewStatus(clipDbId: number): Promise<ClipPreviewSta
 }
 
 export function previewFileUrl(clipDbId: number): string {
+  if (isPreviewLocalhost()) return 'data:video/mp4;base64,';
   return `${ADMIN_PREFIX}/clips/${clipDbId}/preview/file`;
 }
 
@@ -473,9 +481,9 @@ export interface ClipContestResult {
  * lesbarer Satz zurück, deshalb hier ohne `fetchJson`.
  */
 export async function submitClipToContest(clipDbId: number): Promise<ClipContestResult> {
-  const auth = await fetchAuthStatus();
-  const csrf = auth.csrfToken ?? auth.csrf_token;
-  const response = await fetch(
+  const auth = isPreviewLocalhost() ? null : await fetchAuthStatus();
+  const csrf = auth?.csrfToken ?? auth?.csrf_token;
+  const response = await socialRequest(
     `/twitch/social-media/api/clips/${clipDbId}/clip-contest`,
     withCookieCredentials({
       method: 'POST',
@@ -636,7 +644,7 @@ export async function uploadClip(input: {
   if (input.title) form.append('title', input.title);
   if (input.clip_id) form.append('clip_id', input.clip_id);
 
-  const response = await fetch(
+  const response = await socialRequest(
     UPLOAD_PATH,
     withCookieCredentials({ method: 'POST', body: form }),
   );
@@ -668,7 +676,16 @@ export interface PlatformCapabilities {
   reason: string | null;
 }
 
+export interface PlatformAuthorization {
+  source: 'stored';
+  upload_scope_status: 'sufficient' | 'missing' | 'unknown';
+  required_upload_scopes: string[];
+  missing_upload_scopes: string[] | null;
+  channel_account_required: boolean;
+}
+
 export interface PlatformStatus {
+  authorization?: PlatformAuthorization;
   capabilities: PlatformCapabilities;
   platform: string;
   connected: boolean;
@@ -703,6 +720,7 @@ export async function fetchPlatformStatus(
 }
 
 export function oauthStartUrl(platform: string, twitchUserId: string | undefined): string {
+  if (isPreviewLocalhost()) return `${PREVIEW_SOCIAL_ROUTE}?view=konten#preview-read-only`;
   const qs = buildQuery({ twitch_user_id: twitchUserId });
   return `/twitch/social-media/oauth/start/${platform}${qs}`;
 }
