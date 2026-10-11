@@ -1,0 +1,135 @@
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+use super::{
+    runtime_config::CopyLimits, store::TimelineEntry, AiEditorError, EditPlan, PlanLimits,
+};
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Analysis {
+    pub highlights: Vec<TimelineEntry>,
+    pub uncertainty: Vec<String>,
+    pub analysis_notes: Vec<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Planning {
+    pub plan: EditPlan,
+    pub platforms: BTreeMap<String, PublicationCopy>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PublicationCopy {
+    pub title: String,
+    pub description: String,
+    pub hashtags: Vec<String>,
+}
+
+fn object(properties: Value) -> Value {
+    let required = properties
+        .as_object()
+        .map(|fields| fields.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    json!({ "type": "object", "additionalProperties": false, "properties": properties, "required": required })
+}
+
+fn text(max: usize) -> Value {
+    json!({ "type": "string", "minLength": 1, "maxLength": max })
+}
+fn array(items: Value, max: usize) -> Value {
+    json!({ "type": "array", "items": items, "maxItems": max })
+}
+fn timestamp(duration: u64) -> Value {
+    json!({ "type": "integer", "minimum": 0, "maximum": duration })
+}
+
+pub(super) fn analysis_schema(limits: &PlanLimits, duration: u64) -> Value {
+    object(json!({
+        "highlights": array(object(json!({ "start_ms": timestamp(duration), "end_ms": timestamp(duration), "description": text(limits.max_text_bytes) })), limits.max_highlights),
+        "uncertainty": array(text(limits.max_text_bytes), limits.max_review_reasons),
+        "analysis_notes": array(text(limits.max_text_bytes), limits.max_review_reasons),
+    }))
+}
+
+pub(super) fn planning_schema(
+    limits: &PlanLimits,
+    copy_limits: &CopyLimits,
+    duration: u64,
+) -> Value {
+    let copy = object(
+        json!({ "title": text(copy_limits.max_title_chars), "description": text(copy_limits.max_description_chars), "hashtags": array(text(copy_limits.max_hashtag_chars), copy_limits.max_hashtags) }),
+    );
+    let plan = object(json!({
+        "schema_version": { "type": "integer", "const": 1 },
+        "source_duration_ms": { "type": "integer", "const": duration },
+        "kept_intervals": { "type": "array", "minItems": 1, "maxItems": limits.max_intervals, "items": object(json!({ "start_ms": timestamp(duration), "end_ms": timestamp(duration), "reason": text(limits.max_text_bytes) })) },
+        "observed_highlights": array(object(json!({ "start_ms": timestamp(duration), "end_ms": timestamp(duration), "observation": text(limits.max_text_bytes) })), limits.max_highlights),
+        "significant_uncertainty": { "type": "boolean" },
+        "review_reasons": array(text(limits.max_text_bytes), limits.max_review_reasons),
+        "layout": { "type": "string", "enum": ["existing_stable"] },
+    }));
+    object(
+        json!({ "plan": plan, "platforms": object(json!({ "youtube": copy.clone(), "tiktok": copy.clone(), "instagram": copy })) }),
+    )
+}
+
+impl Analysis {
+    pub fn validate(&self, duration: u64, limits: &PlanLimits) -> Result<(), AiEditorError> {
+        let valid_text =
+            |text: &String| !text.trim().is_empty() && text.len() <= limits.max_text_bytes;
+        if self.highlights.len() > limits.max_highlights
+            || self.highlights.iter().any(|entry| {
+                entry.start_ms < 0
+                    || entry.end_ms <= entry.start_ms
+                    || entry.end_ms as u64 > duration
+                    || !valid_text(&entry.description)
+            })
+            || [&self.uncertainty, &self.analysis_notes]
+                .into_iter()
+                .any(|values| {
+                    values.len() > limits.max_review_reasons || !values.iter().all(valid_text)
+                })
+        {
+            return Err(AiEditorError::Plan);
+        }
+        Ok(())
+    }
+}
+
+impl Planning {
+    pub fn validate(
+        &self,
+        duration: u64,
+        limits: &PlanLimits,
+        copy_limits: &CopyLimits,
+    ) -> Result<super::ValidatedPlan, AiEditorError> {
+        if serde_json::to_vec(self)
+            .map_err(|_| AiEditorError::Plan)?
+            .len()
+            > limits.max_plan_bytes
+            || self.platforms.len() != crate::posting_plan::PLATFORMS.len()
+            || self.platforms.iter().any(|(platform, copy)| {
+                !crate::posting_plan::PLATFORMS.contains(&platform.as_str())
+                    || copy.title.trim().is_empty()
+                    || copy.title.chars().count() > copy_limits.max_title_chars
+                    || copy.description.trim().is_empty()
+                    || copy.description.chars().count() > copy_limits.max_description_chars
+                    || copy.hashtags.len() > copy_limits.max_hashtags
+                    || copy.hashtags.iter().any(|tag| {
+                        !tag.starts_with('#')
+                            || tag.chars().count() < 2
+                            || tag.chars().count() > copy_limits.max_hashtag_chars
+                            || tag.chars().any(char::is_whitespace)
+                    })
+            })
+        {
+            return Err(AiEditorError::Plan);
+        }
+        super::validate_plan(self.plan.clone(), duration, limits).map_err(|_| AiEditorError::Plan)
+    }
+}

@@ -38,6 +38,10 @@ impl Drop for BrandedRenderDirectory {
 
 #[derive(Debug, thiserror::Error)]
 pub enum VideoProcessorError {
+    #[error("Ein anderer Clip wird gerade produziert. Die Verarbeitung wird erneut versucht.")]
+    ProductionBusy,
+    #[error("Die gemeinsame Videoproduktion ist momentan nicht verfügbar.")]
+    ProductionLease(#[source] crate::production_lease::ProductionLeaseError),
     #[error("subprocess spawn failed: {0}")]
     Spawn(#[from] std::io::Error),
     #[error("ffprobe failed: {0}")]

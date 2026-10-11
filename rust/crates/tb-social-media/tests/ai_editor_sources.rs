@@ -332,7 +332,7 @@ async fn transient_real_stt_silence_and_cancellation_cleanup() {
     task.abort();
     let _ = task.await;
     assert!(!job.path().join("stt-transient").exists());
-    let _ = tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if !Path::new(&format!("/proc/{child_id}")).exists() {
                 break;

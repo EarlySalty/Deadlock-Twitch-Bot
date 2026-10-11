@@ -6,8 +6,6 @@ use crate::subtitles::{ass_from_segments, build_branded_ass};
 use crate::video_processor::{VideoProcessor, VideoProcessorError};
 use crate::vocab::load_all_vocab;
 
-/// Untertitel-Schalter des Streamers zum Clip. Fehlt die Einstellung, ist der
-/// Standard an (Default TRUE in der Spalte, hier gespiegelt).
 pub async fn subtitles_enabled_for_clip(pool: &PgPool, clip_db_id: i64) -> bool {
     sqlx::query_scalar!(
         "SELECT COALESCE(s.subtitles_enabled, TRUE) AS \"enabled!\" \
@@ -24,8 +22,6 @@ pub async fn subtitles_enabled_for_clip(pool: &PgPool, clip_db_id: i64) -> bool 
     .unwrap_or(true)
 }
 
-/// Baut die ASS-Untertiteldatei fuer einen Clip aus dem gespeicherten Transkript
-/// (Vokabel-Korrektur inklusive). `None`, wenn kein Transkript vorliegt.
 pub async fn build_clip_ass(pool: &PgPool, clip_db_id: i64) -> Option<String> {
     let clip_db_id_i32 = i32::try_from(clip_db_id).ok()?;
     let enrichment = get_enrichment(pool, clip_db_id_i32).await?;
@@ -44,6 +40,43 @@ pub async fn render_clip_vertical(
     output_path: &str,
     max_duration: i64,
 ) -> Result<(), VideoProcessorError> {
+    let Some(mut lease) = crate::production_lease::acquire_production_lease(pool)
+        .await
+        .map_err(VideoProcessorError::ProductionLease)?
+    else {
+        return Err(VideoProcessorError::ProductionBusy);
+    };
+    let result = render_clip_vertical_with_lease(
+        &mut lease,
+        vp,
+        pool,
+        clip_db_id,
+        input_path,
+        output_path,
+        max_duration,
+    )
+    .await;
+    lease
+        .release()
+        .await
+        .map_err(VideoProcessorError::ProductionLease)?;
+    result
+}
+
+pub async fn render_clip_vertical_with_lease(
+    lease: &mut crate::production_lease::ProductionLease,
+    vp: &VideoProcessor,
+    pool: &PgPool,
+    clip_db_id: i64,
+    input_path: &str,
+    output_path: &str,
+    max_duration: i64,
+) -> Result<(), VideoProcessorError> {
+    lease
+        .ensure_held()
+        .await
+        .map_err(VideoProcessorError::ProductionLease)?;
+    lease.mark_claimed_work();
     let layout = get_clip_stored_layout(pool, clip_db_id).await;
     let (login, clip_title, custom_title): (String, Option<String>, Option<String>) =
         sqlx::query_as(
@@ -131,9 +164,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        // Ohne Settings-Zeile: Default an.
         assert!(subtitles_enabled_for_clip(&pool, a as i64).await);
-        // Ausgeschaltet.
         sqlx::query("INSERT INTO social_media_streamer_settings (streamer_login, subtitles_enabled) VALUES ('nani', FALSE)").execute(&pool).await.unwrap();
         assert!(!subtitles_enabled_for_clip(&pool, a as i64).await);
     }
@@ -149,7 +180,6 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        // Ohne Transkript: kein ASS.
         sqlx::query(
             "INSERT INTO social_media_clip_enrichment (clip_db_id, status) VALUES ($1, 'done')",
         )
@@ -158,7 +188,6 @@ mod tests {
         .await
         .unwrap();
         assert!(build_clip_ass(&pool, clip as i64).await.is_none());
-        // Mit Segmenten + Vokabel: ASS mit korrigiertem Text.
         sqlx::query(
             "INSERT INTO deadlock_vocab (term, canonical, category) VALUES ('haze','Haze','hero')",
         )
