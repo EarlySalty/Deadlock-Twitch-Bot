@@ -289,7 +289,7 @@ pub async fn run_insight_job(pool: &PgPool) {
             period_start.format("%d.%m."),
             now.format("%d.%m.%Y")
         );
-        let result = match generate_insight(&enriched, &period_label).await {
+        let result = match generate_insight(&streamer_id, &enriched, &period_label).await {
             Some(result) => result,
             None => {
                 tracing::warn!(

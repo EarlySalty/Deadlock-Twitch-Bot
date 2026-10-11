@@ -780,29 +780,29 @@ fn title_endpoint() -> tb_llm::LlmEndpoint {
 /// unterscheidbar bleiben.
 async fn titel_completion(
     endpoint: &tb_llm::LlmEndpoint,
+    broadcaster_id: Option<&str>,
     purpose: &str,
     prompt: &str,
     temperature: f64,
     max_tokens: i64,
 ) -> Result<String, String> {
-    let response = tb_llm::complete(
-        USE_CASE,
-        tb_llm::Request::prompt(prompt)
-            .temperature(temperature)
-            .max_tokens(max_tokens)
-            .denken_aus()
-            .strip_think()
-            .retry_on_429(2)
-            .ledger_purpose(purpose)
-            .endpoint(endpoint.clone()),
-    )
-    .await
-    .map_err(|error| match error {
-        // Die Fehlerform der bisherigen Meldungen bleibt: die Aufrufer und die
-        // Tests lesen "HTTP <status>".
-        tb_llm::LlmError::Http { status, .. } => format!("HTTP {status}"),
-        other => other.to_string(),
-    })?;
+    let mut request = tb_llm::Request::prompt(prompt)
+        .temperature(temperature)
+        .max_tokens(max_tokens)
+        .denken_aus()
+        .strip_think()
+        .retry_on_429(2)
+        .ledger_purpose(purpose)
+        .endpoint(endpoint.clone());
+    if let Some(broadcaster_id) = broadcaster_id {
+        request = request.twitch_broadcaster(broadcaster_id);
+    }
+    let response = tb_llm::complete(USE_CASE, request)
+        .await
+        .map_err(|error| match error {
+            tb_llm::LlmError::Http { status, .. } => format!("HTTP {status}"),
+            other => other.to_string(),
+        })?;
     Ok(response.text)
 }
 
@@ -818,6 +818,7 @@ fn endpunkt(base_url: &str, api_key: &str, _model: &str) -> tb_llm::LlmEndpoint 
 /// Ein eigener Wrapper bleibt darunter fuer den bestehenden !title-Command.
 #[allow(clippy::too_many_arguments)]
 pub async fn generate_title_personalized_with(
+    broadcaster_id: Option<&str>,
     base_url: &str,
     api_key: &str,
     model: &str,
@@ -849,7 +850,7 @@ pub async fn generate_title_personalized_with(
     let endpoint = endpunkt(base_url, api_key, model);
     // Kreativer als der alte konservative Generator, aber mit wenig Output:
     // Die Titel selbst sind kurz und eine Analyse pro Klick waere nur Tokenlast.
-    let content = titel_completion(&endpoint, "title", &prompt, 0.8, 900)
+    let content = titel_completion(&endpoint, broadcaster_id, "title", &prompt, 0.8, 900)
         .await
         .map_err(GenerateTitleError::Http)?;
     let mut result = sanitize_title_result(
@@ -860,7 +861,7 @@ pub async fn generate_title_personalized_with(
         never_words,
     );
     if result.primary.is_empty() {
-        let retry = titel_completion(&endpoint, "title", &prompt, 0.8, 900)
+        let retry = titel_completion(&endpoint, broadcaster_id, "title", &prompt, 0.8, 900)
             .await
             .map_err(GenerateTitleError::Http)?;
         result = sanitize_title_result(
@@ -892,6 +893,7 @@ pub async fn generate_title_with(
     live_state: Option<&PromptLiveState>,
 ) -> Result<TitleResult, GenerateTitleError> {
     generate_title_personalized_with(
+        None,
         base_url,
         api_key,
         model,
@@ -931,6 +933,7 @@ pub async fn generate_title_personalized(
         .as_deref()
         .ok_or(GenerateTitleError::NoApiKey)?;
     generate_title_personalized_with(
+        Some(streamer_id),
         &endpoint.base_url,
         api_key,
         &endpoint.model,
@@ -1079,6 +1082,7 @@ fn parse_insight_response(raw: &str) -> Option<InsightResult> {
 /// Insight-Analyse mit injizierbarem `base_url`/`api_key` (für Tests). Leere
 /// History / HTTP-Fehler / Parse-Fehler → `None`.
 pub async fn generate_insight_with(
+    broadcaster_id: Option<&str>,
     base_url: &str,
     api_key: &str,
     model: &str,
@@ -1091,6 +1095,7 @@ pub async fn generate_insight_with(
     let prompt = build_insight_prompt(history, period_label);
     let content = titel_completion(
         &endpunkt(base_url, api_key, model),
+        broadcaster_id,
         "title-insight",
         &prompt,
         0.5,
@@ -1104,6 +1109,7 @@ pub async fn generate_insight_with(
 /// Wöchentliche Insight-Analyse via KI (Python `generate_insight`).
 /// Leere History / fehlender Key / Fehler → `None`.
 pub async fn generate_insight(
+    streamer_id: &str,
     history: &[InsightHistoryItem],
     period_label: &str,
 ) -> Option<InsightResult> {
@@ -1113,6 +1119,7 @@ pub async fn generate_insight(
     let endpoint = tb_llm::endpoint_for(USE_CASE);
     let key = endpoint.api_key.as_deref()?;
     generate_insight_with(
+        Some(streamer_id),
         &endpoint.base_url,
         key,
         &endpoint.model,
@@ -1582,6 +1589,7 @@ mod tests {
             engagement_rate: 0.05,
         }];
         let r = generate_insight_with(
+            None,
             &server.uri(),
             "k",
             "deepseek-v4-flash",
@@ -1618,6 +1626,7 @@ mod tests {
             engagement_rate: 0.05,
         }];
         generate_insight_with(
+            None,
             &server.uri(),
             "k",
             "deepseek-v4-flash",
@@ -1643,7 +1652,7 @@ mod tests {
 
         // Leere History → None ohne HTTP-Call.
         assert!(
-            generate_insight_with("http://unused", "k", "deepseek-v4-flash", &[], "p")
+            generate_insight_with(None, "http://unused", "k", "deepseek-v4-flash", &[], "p")
                 .await
                 .is_none()
         );
@@ -1660,10 +1669,15 @@ mod tests {
             relative_perf: 1.0,
             engagement_rate: 0.1,
         }];
-        assert!(
-            generate_insight_with(&server.uri(), "k", "deepseek-v4-flash", &history, "p")
-                .await
-                .is_none()
-        );
+        assert!(generate_insight_with(
+            None,
+            &server.uri(),
+            "k",
+            "deepseek-v4-flash",
+            &history,
+            "p"
+        )
+        .await
+        .is_none());
     }
 }
