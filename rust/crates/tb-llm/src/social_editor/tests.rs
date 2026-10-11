@@ -350,6 +350,232 @@ async fn structured_provider_codes_are_bounded_and_saved_without_messages() {
         provider_error_code(malicious.to_string().as_bytes()).as_deref(),
         Some("invalid_request_error")
     );
+    let unsafe_id = json!({"id":"private input\nsecond line"});
+    assert!(response_request_id(unsafe_id.to_string().as_bytes(), None).is_none());
+}
+
+#[tokio::test]
+async fn failed_finalization_blocks_reservations_until_exact_recovery() {
+    let database = DisposablePostgres::start().await;
+    let pool = &database.pool;
+    let context = EditorContext {
+        twitch_user_id: "person".into(),
+        job_id: "job".into(),
+        stage: "caption".into(),
+    };
+    sqlx::query("INSERT INTO public.social_ai_user_consent(twitch_user_id,external_ai_consent) VALUES ($1,true)")
+        .bind(&context.twitch_user_id).execute(pool).await.expect("user consent");
+    sqlx::query("INSERT INTO public.social_media_settings(key,value) VALUES ('external_llm_consent','true'::jsonb)")
+        .execute(pool).await.expect("global consent");
+    let mut config = config().provider;
+    config.max_input_tokens = 16_000;
+    let reservation = config
+        .pricing
+        .reservation(16_000, u64::from(config.max_output_tokens))
+        .expect("reservation");
+    let usage = Usage {
+        input_tokens: Some(100),
+        output_tokens: Some(10_000),
+        cache_creation_input_tokens: Some(17),
+        cache_read_input_tokens: Some(23),
+    };
+    let estimate = usage.estimated_cost(&config.pricing).expect("priced usage");
+    assert!(estimate > reservation);
+    config.initial_total_cap_micro_usd = estimate + reservation - 1;
+    config.validate().expect("approved ceiling");
+    let attempt = begin_attempt(pool, &config, &context)
+        .await
+        .expect("reservation before failure");
+    let completed = completion(
+        attempt.id,
+        reservation,
+        AttemptOutcome {
+            status: Some(StatusCode::OK),
+            request_id: Some("request-test"),
+            usage: Some(&usage),
+            estimated: Some(estimate),
+            latency_ms: 11,
+            kind: Some(ErrorKind::InvalidResponse),
+            provider_code: None,
+        },
+    );
+    sqlx::raw_sql("CREATE FUNCTION public.fail_social_finalization() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic finalization failure'; END $$; CREATE TRIGGER fail_social_finalization BEFORE UPDATE ON public.llm_usage FOR EACH ROW EXECUTE FUNCTION public.fail_social_finalization()")
+        .execute(pool).await.expect("install database failure");
+    assert_eq!(
+        attempt
+            .finalize(pool, &completed)
+            .await
+            .err()
+            .map(|e| e.kind),
+        Some(ErrorKind::Ledger)
+    );
+    crate::ledger::journal_completion(&completed);
+    let record = crate::ledger::Recovery {
+        project: "social_test".into(),
+        service: "connector_test".into(),
+        completion: completed.clone(),
+    };
+    let json = serde_json::to_string(&record).expect("journal payload");
+    let replay: crate::ledger::Recovery = serde_json::from_str(&json).expect("journal recovery");
+    assert_eq!(
+        replay.completion.social_accounting,
+        completed.social_accounting
+    );
+    assert!(!json.contains("private input"));
+    let row: (String, i64, Option<i64>) = sqlx::query_as("SELECT attempt_state,reserved_micro_usd,estimated_micro_usd FROM public.llm_usage WHERE id=$1")
+        .bind(completed.id).fetch_one(pool).await.expect("still unresolved");
+    assert_eq!(row, ("started".into(), reservation, None));
+    assert_eq!(
+        begin_attempt(pool, &config, &context)
+            .await
+            .err()
+            .map(|e| e.kind),
+        Some(ErrorKind::Ledger)
+    );
+    sqlx::raw_sql("DROP TRIGGER fail_social_finalization ON public.llm_usage; DROP FUNCTION public.fail_social_finalization()")
+        .execute(pool).await.expect("restore database finalization");
+    let (project, service) = crate::ledger::identity().expect("ledger origin");
+    crate::ledger::recover_with_pool(pool, &replay.completion, project, service)
+        .await
+        .expect("recovery");
+    crate::ledger::recover_with_pool(pool, &replay.completion, project, service)
+        .await
+        .expect("idempotent replay");
+    let persisted: (String, i64, i64, String, i64, i64, i64, i64, String) = sqlx::query_as("SELECT attempt_state,reserved_micro_usd,estimated_micro_usd,cost_basis,cache_creation_input_tokens,cache_read_input_tokens,tokens_in,tokens_out,request_id FROM public.llm_usage WHERE id=$1")
+        .bind(completed.id).fetch_one(pool).await.expect("recovered accounting");
+    assert_eq!(
+        persisted,
+        (
+            "failed".into(),
+            reservation,
+            estimate,
+            "usage_priced_estimate".into(),
+            17,
+            23,
+            100,
+            10_000,
+            "request-test".into()
+        )
+    );
+    assert_eq!(
+        begin_attempt(pool, &config, &context)
+            .await
+            .err()
+            .map(|e| e.kind),
+        Some(ErrorKind::Budget)
+    );
+    let mut conflicting = completed;
+    conflicting
+        .social_accounting
+        .as_mut()
+        .expect("social accounting")
+        .estimated_micro_usd = Some(estimate + 1);
+    assert!(
+        crate::ledger::recover_with_pool(pool, &conflicting, project, service)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn orphaned_unknown_usage_stays_reserved_until_recovered() {
+    let database = DisposablePostgres::start().await;
+    let pool = &database.pool;
+    let context = EditorContext {
+        twitch_user_id: "person".into(),
+        job_id: "job".into(),
+        stage: "caption".into(),
+    };
+    sqlx::query("INSERT INTO public.social_ai_user_consent(twitch_user_id,external_ai_consent) VALUES ($1,true)")
+        .bind(&context.twitch_user_id).execute(pool).await.expect("user consent");
+    sqlx::query("INSERT INTO public.social_media_settings(key,value) VALUES ('external_llm_consent','true'::jsonb)")
+        .execute(pool).await.expect("global consent");
+    let config = config().provider;
+    let reservation = config
+        .pricing
+        .reservation(
+            u64::from(config.max_input_tokens),
+            u64::from(config.max_output_tokens),
+        )
+        .expect("reservation");
+    let attempt = begin_attempt(pool, &config, &context)
+        .await
+        .expect("reservation");
+    let completed = completion(
+        attempt.id,
+        reservation,
+        AttemptOutcome {
+            status: None,
+            request_id: None,
+            usage: Some(&Usage {
+                input_tokens: Some(12),
+                output_tokens: Some(3),
+                cache_creation_input_tokens: Some(4),
+                cache_read_input_tokens: None,
+            }),
+            estimated: None,
+            latency_ms: 12,
+            kind: Some(ErrorKind::Transport),
+            provider_code: None,
+        },
+    );
+    drop(attempt);
+    assert_eq!(
+        begin_attempt(pool, &config, &context)
+            .await
+            .err()
+            .map(|e| e.kind),
+        Some(ErrorKind::Ledger)
+    );
+    let (project, service) = crate::ledger::identity().expect("ledger origin");
+    crate::ledger::recover_with_pool(pool, &completed, project, service)
+        .await
+        .expect("reconcile unknown usage");
+    let saved: (String, i64, Option<i64>, String, Option<i64>, Option<i64>) = sqlx::query_as("SELECT attempt_state,reserved_micro_usd,estimated_micro_usd,cost_basis,cache_creation_input_tokens,cache_read_input_tokens FROM public.llm_usage WHERE id=$1")
+        .bind(completed.id).fetch_one(pool).await.expect("unknown usage remains reserved");
+    assert_eq!(
+        saved,
+        (
+            "failed".into(),
+            reservation,
+            None,
+            "reserved_upper_bound".into(),
+            Some(4),
+            None
+        )
+    );
+    let next = begin_attempt(pool, &config, &context)
+        .await
+        .expect("reconciled account permits reservation within cap");
+    drop(next);
+}
+
+#[tokio::test]
+async fn legacy_recovery_payload_remains_readable() {
+    let database = DisposablePostgres::start().await;
+    let pool = &database.pool;
+    let (project, service) = crate::ledger::identity().expect("ledger origin");
+    let id: i64 = sqlx::query_scalar("INSERT INTO public.llm_usage(ts,source,purpose,model,project,service,provider,attempt_state) VALUES ('test','twitch-bot','legacy','model',$1,$2,'fireworks','started') RETURNING id")
+        .bind(project).bind(service).fetch_one(pool).await.expect("legacy attempt");
+    let raw = format!(
+        r#"{{"project":"{project}","service":"{service}","completion":{{"id":{id},"tokens_in":10,"tokens_out":5,"total":15,"request_id":null,"success":true,"error_code":null,"http_status":200,"latency_ms":3}}}}"#
+    );
+    let record: crate::ledger::Recovery = serde_json::from_str(&raw).expect("historical payload");
+    assert!(record.completion.social_accounting.is_none());
+    crate::ledger::recover_with_pool(pool, &record.completion, project, service)
+        .await
+        .expect("legacy recovery");
+    crate::ledger::recover_with_pool(pool, &record.completion, project, service)
+        .await
+        .expect("legacy replay");
+    let saved: (String, Option<i64>, i64) = sqlx::query_as(
+        "SELECT attempt_state,estimated_micro_usd,total FROM public.llm_usage WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .expect("legacy accounting");
+    assert_eq!(saved, ("succeeded".into(), None, 15));
 }
 
 #[tokio::test]
@@ -424,11 +650,13 @@ async fn consent_budget_and_native_mock_contract() {
     let second = second.expect("second reservation");
     let third = begin_attempt(pool, &configuration.provider, &context)
         .await
-        .expect_err("atomic cap");
+        .err()
+        .expect("atomic cap");
     assert_eq!(third.kind, ErrorKind::Budget);
-    finalize(
-        pool,
-        first,
+    let first_id = first.id;
+    let second_id = second.id;
+    let completed = completion(
+        first_id,
         configuration
             .provider
             .pricing
@@ -446,16 +674,20 @@ async fn consent_budget_and_native_mock_contract() {
             kind: Some(ErrorKind::Transport),
             provider_code: None,
         },
-    )
-    .await
-    .expect("ambiguous failure");
+    );
+    first
+        .finalize(pool, &completed)
+        .await
+        .expect("ambiguous failure");
     let still_denied = begin_attempt(pool, &configuration.provider, &context)
         .await
-        .expect_err("ambiguous spend retained");
+        .err()
+        .expect("ambiguous spend retained");
     assert_eq!(still_denied.kind, ErrorKind::Budget);
+    drop(second);
     sqlx::query("DELETE FROM public.llm_usage WHERE id=$1 OR id=$2")
-        .bind(first)
-        .bind(second)
+        .bind(first_id)
+        .bind(second_id)
         .execute(pool)
         .await
         .expect("remove synthetic reservations");
