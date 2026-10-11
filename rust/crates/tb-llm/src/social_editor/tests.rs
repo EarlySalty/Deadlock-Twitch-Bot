@@ -159,6 +159,10 @@ struct DisposablePostgres {
 
 impl DisposablePostgres {
     async fn start() -> Self {
+        Self::start_with_migration(true).await
+    }
+
+    async fn start_with_migration(migrate: bool) -> Self {
         use std::process::{Command, Stdio};
         let data = tempfile::Builder::new()
             .prefix("social-ai-db-")
@@ -199,12 +203,14 @@ impl DisposablePostgres {
             .expect("isolated postgres");
         sqlx::raw_sql("CREATE TABLE public.llm_usage (id BIGSERIAL PRIMARY KEY, ts TEXT NOT NULL, source TEXT, purpose TEXT, model TEXT, tokens_in BIGINT, tokens_out BIGINT, total BIGINT, success BIGINT, project TEXT, service TEXT, provider TEXT, attempt_state TEXT NOT NULL DEFAULT 'legacy', request_id TEXT, error_code TEXT, http_status INT, latency_ms BIGINT, finished_at TIMESTAMPTZ); CREATE TABLE public.social_media_settings (key TEXT PRIMARY KEY, value JSONB NOT NULL)")
             .execute(&pool).await.expect("base schema");
-        sqlx::raw_sql(include_str!(
-            "../../../../migrations/20261011200001_social_ai_provider_usage.sql"
-        ))
-        .execute(&pool)
-        .await
-        .expect("provider migration");
+        if migrate {
+            sqlx::raw_sql(include_str!(
+                "../../../../migrations/20261011200001_social_ai_provider_usage.sql"
+            ))
+            .execute(&pool)
+            .await
+            .expect("provider migration");
+        }
         static LEDGER_IDENTITY: std::sync::Once = std::sync::Once::new();
         LEDGER_IDENTITY.call_once(|| {
             crate::ledger::initialize(pool.clone(), "social_test", "connector_test")
@@ -225,6 +231,168 @@ impl Drop for DisposablePostgres {
             .stderr(Stdio::null())
             .status();
     }
+}
+
+fn apply_runtime_roles(database: &DisposablePostgres) {
+    let output = std::process::Command::new("/usr/bin/psql")
+        .args(["-X", "-v", "ON_ERROR_STOP=1", "-h"])
+        .arg(database.data.path())
+        .args(["-U", "social_test", "-d", "postgres", "-f"])
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../ops/systemd/twitch-runtime-roles.sql"
+        ))
+        .output()
+        .expect("run actual runtime role script");
+    assert!(
+        output.status.success(),
+        "runtime role script failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+async fn assert_consent_roles(pool: &PgPool) {
+    for (role, expected) in [
+        ("twitchbot", (true, false, false)),
+        ("twitchdash", (true, true, true)),
+        ("twitchlegacy", (false, false, false)),
+        ("twitchanalysis", (true, false, false)),
+        ("twitchaudit", (true, false, false)),
+    ] {
+        let rights: (bool, bool, bool, bool) = sqlx::query_as(
+            "SELECT has_table_privilege($1,'public.social_ai_user_consent','SELECT'), has_table_privilege($1,'public.social_ai_user_consent','INSERT'), has_table_privilege($1,'public.social_ai_user_consent','UPDATE'), has_table_privilege($1,'public.social_ai_user_consent','DELETE,TRUNCATE,REFERENCES,TRIGGER')",
+        )
+        .bind(role)
+        .fetch_one(pool)
+        .await
+        .expect("effective consent grants");
+        assert_eq!((rights.0, rights.1, rights.2), expected, "{role}");
+        assert!(!rights.3, "{role} has surplus privileges");
+    }
+    let helper_exposed: bool = sqlx::query_scalar(
+        "SELECT has_function_privilege('twitchbot','public.twitch_apply_social_ai_consent_roles()','EXECUTE')",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("helper execution privilege");
+    assert!(!helper_exposed);
+}
+
+#[tokio::test]
+async fn consent_roles_survive_real_runtime_script_and_allow_only_dashboard_mutation() {
+    let database = DisposablePostgres::start_with_migration(false).await;
+    let pool = &database.pool;
+    sqlx::query("CREATE DATABASE twitch_analytics")
+        .execute(pool)
+        .await
+        .expect("role script database reference");
+    sqlx::raw_sql(
+        "CREATE ROLE postgres; \
+         CREATE TABLE public.category_channels(id BIGINT); \
+         CREATE TABLE public.category_collector_status(id BIGINT); \
+         CREATE TABLE public.category_chat_rollup(id BIGINT); \
+         CREATE TABLE public.category_media(id BIGINT); \
+         CREATE TABLE public.category_media_jobs(id BIGINT); \
+         CREATE TABLE public.category_collection_runs(id BIGINT); \
+         CREATE TABLE public.category_chat_messages(id BIGINT); \
+         CREATE TABLE public.category_chat_dirty(id BIGINT, hour_at TIMESTAMPTZ); \
+         CREATE TABLE public.category_collector_config(id BIGINT); \
+         CREATE TABLE public.category_chat_redactions(id BIGINT); \
+         CREATE TABLE public.category_chat_user_redactions(id BIGINT); \
+         CREATE FUNCTION public.category_prune_partitions(integer,bigint) RETURNS void LANGUAGE plpgsql AS $$ BEGIN END $$; \
+         CREATE FUNCTION public.category_lock_chat_rooms(text[]) RETURNS void LANGUAGE plpgsql AS $$ BEGIN END $$; \
+         CREATE FUNCTION public.category_redact_chat_event(text,text,text,timestamptz) RETURNS void LANGUAGE plpgsql AS $$ BEGIN END $$; \
+         CREATE FUNCTION public.category_redact_chat_event_locked(text,text,text,timestamptz) RETURNS void LANGUAGE plpgsql AS $$ BEGIN END $$",
+    )
+    .execute(pool)
+    .await
+    .expect("minimal runtime role dependencies");
+    apply_runtime_roles(&database);
+    apply_runtime_roles(&database);
+    let absent: Option<String> =
+        sqlx::query_scalar("SELECT to_regclass('public.social_ai_user_consent')::text")
+            .fetch_one(pool)
+            .await
+            .expect("consent table optional before migration");
+    assert!(absent.is_none());
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261011200001_social_ai_provider_usage.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("provider migration after runtime role installation");
+    assert_consent_roles(pool).await;
+    apply_runtime_roles(&database);
+    apply_runtime_roles(&database);
+    assert_consent_roles(pool).await;
+
+    let mut connection = pool.acquire().await.expect("role session");
+    sqlx::query("SET ROLE twitchdash")
+        .execute(&mut *connection)
+        .await
+        .expect("dashboard role");
+    sqlx::query("INSERT INTO public.social_ai_user_consent(twitch_user_id,external_ai_consent) VALUES ('fixture',false)")
+        .execute(&mut *connection)
+        .await
+        .expect("dashboard may store consent");
+    sqlx::query("UPDATE public.social_ai_user_consent SET external_ai_consent=true WHERE twitch_user_id='fixture'")
+        .execute(&mut *connection)
+        .await
+        .expect("dashboard may change consent");
+    let allowed: bool = sqlx::query_scalar(
+        "SELECT external_ai_consent FROM public.social_ai_user_consent WHERE twitch_user_id='fixture'",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .expect("dashboard may read consent");
+    assert!(allowed);
+    sqlx::query("RESET ROLE")
+        .execute(&mut *connection)
+        .await
+        .expect("restore owner role");
+    for (role, set_role) in [
+        ("twitchbot", "SET ROLE twitchbot"),
+        ("twitchlegacy", "SET ROLE twitchlegacy"),
+        ("twitchanalysis", "SET ROLE twitchanalysis"),
+        ("twitchaudit", "SET ROLE twitchaudit"),
+    ] {
+        sqlx::query(set_role)
+            .execute(&mut *connection)
+            .await
+            .expect("read-only role");
+        if role != "twitchlegacy" {
+            let readable: bool = sqlx::query_scalar("SELECT external_ai_consent FROM public.social_ai_user_consent WHERE twitch_user_id='fixture'")
+                .fetch_one(&mut *connection).await.expect("legitimate consent read");
+            assert!(readable);
+        }
+        let denied = sqlx::query("UPDATE public.social_ai_user_consent SET external_ai_consent=false WHERE twitch_user_id='fixture'")
+            .execute(&mut *connection).await.expect_err("read-only role cannot grant or revoke consent");
+        assert_eq!(
+            denied
+                .as_database_error()
+                .and_then(|error| error.code())
+                .as_deref(),
+            Some("42501")
+        );
+        sqlx::query("RESET ROLE")
+            .execute(&mut *connection)
+            .await
+            .expect("restore owner role");
+    }
+    let persisted: bool = sqlx::query_scalar(
+        "SELECT external_ai_consent FROM public.social_ai_user_consent WHERE twitch_user_id='fixture'",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .expect("unauthorized writes did not change consent");
+    assert!(persisted);
+    drop(connection);
+    sqlx::query("DROP TABLE public.social_ai_user_consent")
+        .execute(pool)
+        .await
+        .expect("remove optional fixture table");
+    apply_runtime_roles(&database);
+    apply_runtime_roles(&database);
 }
 
 #[tokio::test]
@@ -435,6 +603,33 @@ async fn failed_finalization_blocks_reservations_until_exact_recovery() {
     sqlx::raw_sql("DROP TRIGGER fail_social_finalization ON public.llm_usage; DROP FUNCTION public.fail_social_finalization()")
         .execute(pool).await.expect("restore database finalization");
     let (project, service) = crate::ledger::identity().expect("ledger origin");
+    let historical = format!(
+        r#"{{"project":"{project}","service":"{service}","completion":{{"id":{},"tokens_in":100,"tokens_out":10000,"total":10100,"request_id":"request-test","success":false,"error_code":"InvalidResponse","http_status":200,"latency_ms":11}}}}"#,
+        completed.id
+    );
+    let generic: crate::ledger::Recovery =
+        serde_json::from_str(&historical).expect("historical generic Social payload");
+    assert!(generic.completion.social_accounting.is_none());
+    assert!(
+        crate::ledger::recover_with_pool(pool, &generic.completion, project, service)
+            .await
+            .is_err()
+    );
+    let held: (String, i64, Option<i64>) = sqlx::query_as(
+        "SELECT attempt_state,reserved_micro_usd,estimated_micro_usd FROM public.llm_usage WHERE id=$1",
+    )
+    .bind(completed.id)
+    .fetch_one(pool)
+    .await
+    .expect("incomplete replay cannot finalize the row");
+    assert_eq!(held, ("started".into(), reservation, None));
+    assert_eq!(
+        begin_attempt(pool, &config, &context)
+            .await
+            .err()
+            .map(|e| e.kind),
+        Some(ErrorKind::Ledger)
+    );
     crate::ledger::recover_with_pool(pool, &replay.completion, project, service)
         .await
         .expect("recovery");
@@ -457,6 +652,11 @@ async fn failed_finalization_blocks_reservations_until_exact_recovery() {
             "request-test".into()
         )
     );
+    assert!(
+        crate::ledger::recover_with_pool(pool, &generic.completion, project, service)
+            .await
+            .is_err()
+    );
     assert_eq!(
         begin_attempt(pool, &config, &context)
             .await
@@ -464,6 +664,13 @@ async fn failed_finalization_blocks_reservations_until_exact_recovery() {
             .map(|e| e.kind),
         Some(ErrorKind::Budget)
     );
+    config.initial_total_cap_micro_usd = estimate + reservation;
+    config.validate().expect("test cap within approved ceiling");
+    let next = begin_attempt(pool, &config, &context)
+        .await
+        .expect("exact remaining budget permits next reservation");
+    assert_ne!(next.id, completed.id);
+    drop(next);
     let mut conflicting = completed;
     conflicting
         .social_accounting
