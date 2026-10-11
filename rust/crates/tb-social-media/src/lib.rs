@@ -73,6 +73,7 @@ pub mod posting_plan;
 pub mod preview;
 pub mod produced_video;
 pub mod production_jobs;
+pub mod production_lease;
 pub mod reauth;
 pub mod refresh_worker;
 pub mod render;
