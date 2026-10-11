@@ -272,6 +272,7 @@ required_artifacts=(
   rust/target/release/tb-stream-audit
   rust/target/release/tb-config-check
   rust/target/release/tb-llm-usage-recover
+  rust/target/release/tb-stt-server
   "$dashboard_source"
   bot/admin_dashboard/dist
   website/dist
@@ -365,6 +366,13 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 /usr/local/sbin/install-twitch-release "$dest" "$sha"
+
+model_installer="$candidate/ops/systemd/install-stt-models.sh"
+if [[ ! -f "$model_installer" || -L "$model_installer" ]]; then
+  echo "Geprüfter STT-Modellinstaller fehlt im Release: $model_installer" >&2
+  exit 1
+fi
+/bin/bash "$model_installer"
 
 systemctl start deadlock-twitch-migrate.service
 
