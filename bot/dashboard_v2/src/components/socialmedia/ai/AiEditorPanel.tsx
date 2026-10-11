@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Check, Clock3, Film, RotateCcw, ShieldCheck } from 'lucide-react';
 import { fetchClips } from '@/api/socialMedia';
@@ -141,7 +141,10 @@ function AiEditorContent({ twitchUserId, streamer, clipDbId }: AiEditorPanelProp
   const confirmationRevision = useRef(0);
   const jobSelectionRevision = useRef(0);
   const consentSwitch = useRef<HTMLButtonElement>(null);
+  const confirmationCheckbox = useRef<HTMLInputElement>(null);
+  const reloadConsentButton = useRef<HTMLButtonElement>(null);
   const focusConsentSwitch = () => requestAnimationFrame(() => consentSwitch.current?.focus());
+  const focusConsentReload = () => requestAnimationFrame(() => reloadConsentButton.current?.focus());
   const advanceConsent = () => { confirmationRevision.current += 1; setConsentRevision(confirmationRevision.current); return confirmationRevision.current; };
   const advanceSelection = () => { jobSelectionRevision.current += 1; setSelectionRevision(jobSelectionRevision.current); };
   const hasChannel = twitchUserId.trim().length > 0;
@@ -175,7 +178,6 @@ function AiEditorContent({ twitchUserId, streamer, clipDbId }: AiEditorPanelProp
     refetchOnWindowFocus: false,
     refetchInterval: (query) => query.state.status === 'success' && query.state.data && !['review', 'failed'].includes(query.state.data.status) ? 5000 : false,
   });
-  const canStart = consent.isSuccess && consent.data.external_ai_consent === true && consent.data.global_allowed === true;
   const savingConsent = useMutation({
     mutationFn: ({ channel, allow }: { channel: string; allow: boolean; revision: number }) => saveAiConsent(channel, allow),
     onSuccess: (value, { channel, revision }) => {
@@ -183,7 +185,7 @@ function AiEditorContent({ twitchUserId, streamer, clipDbId }: AiEditorPanelProp
       if (revision === confirmationRevision.current) { setConfirmChannel(null); setConfirmed(false); focusConsentSwitch(); }
     },
     onError: (_error, { revision }) => {
-      if (revision === confirmationRevision.current) focusConsentSwitch();
+      if (revision === confirmationRevision.current) focusConsentReload();
     },
   });
   const start = useMutation({
@@ -205,6 +207,20 @@ function AiEditorContent({ twitchUserId, streamer, clipDbId }: AiEditorPanelProp
   const currentConsentAction = savingConsent.variables?.channel === twitchUserId && savingConsent.variables.revision === consentRevision;
   const consentSaved = savingConsent.isSuccess && currentConsentAction;
   const consentError = savingConsent.isError && currentConsentAction;
+  const canStart = consent.isSuccess && consent.data.external_ai_consent === true && consent.data.global_allowed === true && !savingConsent.isPending && !consentError && !consent.isFetching;
+  useEffect(() => {
+    if (consentOpen && !consent.data?.external_ai_consent) confirmationCheckbox.current?.focus();
+  }, [consentOpen, consent.data?.external_ai_consent]);
+  const reloadConsent = async () => {
+    const revision = confirmationRevision.current;
+    const result = await consent.refetch();
+    if (result.isSuccess && revision === confirmationRevision.current) {
+      savingConsent.reset();
+      setConfirmChannel(null);
+      setConfirmed(false);
+      focusConsentSwitch();
+    }
+  };
   const currentStartAction = start.variables?.channel === twitchUserId && start.variables.clip === selectedClip?.clip_db_id && start.variables.revision === selectionRevision;
   const currentRetryAction = retry.variables?.channel === twitchUserId && retry.variables.id === selectedJobId && retry.variables.revision === selectionRevision;
   const clipCount = clips.data?.total ?? 0;
@@ -214,12 +230,15 @@ function AiEditorContent({ twitchUserId, streamer, clipDbId }: AiEditorPanelProp
     {!hasChannel ? <EditorError>Bitte wähle zuerst einen Kanal, um Clips und Freigaben zu laden.</EditorError> : <>
       <section className="social-ai-setup" aria-label="Freigabe und Clipauswahl">
         <div className="social-ai-consent"><div className="social-ai-section-head"><h3>Freigabe für externe KI</h3><p>Diese Freigabe gilt für deinen Kanal und ist unabhängig vom Auto-Piloten.</p></div>
-          {consent.isPending ? <p role="status">Freigabe wird geladen…</p> : consent.isError ? <EditorError retry={() => consent.refetch()}>Die Freigabe konnte nicht geladen werden. Der Start bleibt gesperrt.</EditorError> : <>
-            <button ref={consentSwitch} type="button" className="studio-button social-ai-consent-toggle" role="switch" aria-checked={consent.data.external_ai_consent} disabled={savingConsent.isPending} onClick={() => { const revision = advanceConsent(); if (consent.data.external_ai_consent) savingConsent.mutate({ channel: twitchUserId, allow: false, revision }); else { setConfirmChannel(twitchUserId); setConfirmed(false); } }}>{consent.data.external_ai_consent ? 'Externe KI: zugestimmt' : 'Externe KI: nicht zugestimmt'}</button>
+          {consent.isPending ? <p role="status">Freigabe wird geladen…</p> : consent.isError ? <EditorError retry={() => consent.refetch()}>Die Freigabe konnte nicht geladen werden. Der aktuelle Stand ist unklar; der Start bleibt gesperrt.</EditorError> : <>
+            <button ref={consentSwitch} type="button" className="studio-button social-ai-consent-toggle" role="switch" aria-checked={consent.data.external_ai_consent} aria-controls={consentOpen && !consent.data.external_ai_consent ? 'social-ai-consent-confirm' : undefined} disabled={savingConsent.isPending || consentError || consent.isFetching} onClick={() => { const revision = advanceConsent(); if (consent.data.external_ai_consent) savingConsent.mutate({ channel: twitchUserId, allow: false, revision }); else { setConfirmChannel(twitchUserId); setConfirmed(false); } }}>{consent.data.external_ai_consent ? 'Externe KI: zugestimmt' : 'Externe KI: nicht zugestimmt'}</button>
             <p className={`social-ai-global ${consent.data.global_allowed ? '' : 'social-ai-caution'}`}>{consent.data.global_allowed ? <Check aria-hidden="true" size={16} /> : <AlertTriangle aria-hidden="true" size={16} />}{consent.data.global_allowed ? 'Die globale Freigabe ist aktiv.' : 'Die globale Freigabe ist gesperrt. Eine Bearbeitung kann derzeit nicht gestartet werden.'}</p>
-            {consentOpen && !consent.data.external_ai_consent && <div className="social-ai-confirm"><p>Wenn du zustimmst, werden Einzelbilder des Clips und die erkannte Mitschrift an den konfigurierten externen KI-Anbieter übertragen. Prüfe diese Freigabe vor dem Start bewusst.</p><label><input type="checkbox" checked={confirmed} disabled={savingConsent.isPending} onChange={(event) => setConfirmed(event.target.checked)} />Ich stimme der Übertragung von Einzelbildern und Mitschrift an den konfigurierten KI-Anbieter zu.</label><div className="social-ai-actions"><button type="button" className="studio-primary" disabled={!confirmed || savingConsent.isPending} onClick={() => savingConsent.mutate({ channel: twitchUserId, allow: true, revision: confirmationRevision.current })}>Zustimmung erteilen</button><button type="button" className="studio-button" disabled={savingConsent.isPending} onClick={() => { advanceConsent(); setConfirmChannel(null); setConfirmed(false); consentSwitch.current?.focus(); }}>Abbrechen</button></div></div>}
-            {consentSaved && <p role="status">{savingConsent.data.external_ai_consent ? 'Freigabe gespeichert. Du hast der Übertragung an externe KI zugestimmt.' : 'Freigabe widerrufen. Ohne Zustimmung werden keine neuen KI-Bearbeitungen gestartet.'}</p>}
-            {consentError && <EditorError>Die Freigabe konnte nicht gespeichert werden. Der bisherige Stand bleibt maßgeblich.</EditorError>}
+            {consentOpen && !consent.data.external_ai_consent && <div id="social-ai-consent-confirm" className="social-ai-confirm" role="group" aria-label="Freigabe bestätigen" aria-describedby="social-ai-consent-description"><p id="social-ai-consent-description">Wenn du zustimmst, werden Einzelbilder des Clips und die erkannte Mitschrift an den konfigurierten externen KI-Anbieter übertragen. Prüfe diese Freigabe vor dem Start bewusst.</p><label><input ref={confirmationCheckbox} type="checkbox" aria-describedby="social-ai-consent-description" checked={confirmed} disabled={savingConsent.isPending || consentError || consent.isFetching} onChange={(event) => setConfirmed(event.target.checked)} />Ich stimme der Übertragung von Einzelbildern und Mitschrift an den konfigurierten KI-Anbieter zu.</label><div className="social-ai-actions"><button type="button" className="studio-primary" disabled={!confirmed || savingConsent.isPending || consentError || consent.isFetching} onClick={() => savingConsent.mutate({ channel: twitchUserId, allow: true, revision: confirmationRevision.current })}>Zustimmung erteilen</button><button type="button" className="studio-button" disabled={savingConsent.isPending || consentError || consent.isFetching} onClick={() => { advanceConsent(); setConfirmChannel(null); setConfirmed(false); consentSwitch.current?.focus(); }}>Abbrechen</button></div></div>}
+            <div className="social-ai-consent-feedback" role="status" aria-live="polite" aria-atomic="true">
+              {savingConsent.isPending && currentConsentAction && <p>{savingConsent.variables.allow ? 'Zustimmung wird gespeichert…' : 'Widerruf wird gespeichert…'}</p>}
+              {consentSaved && <p>{savingConsent.data.external_ai_consent ? 'Freigabe gespeichert. Du hast der Übertragung an externe KI zugestimmt.' : 'Freigabe widerrufen. Ohne Zustimmung werden keine neuen KI-Bearbeitungen gestartet.'}</p>}
+              {consentError && <div className="social-ai-alert"><AlertTriangle aria-hidden="true" size={18} /><div><p>{consent.isFetching ? 'Freigabe wird erneut geladen…' : 'Speichern fehlgeschlagen. Ob die Änderung übernommen wurde, ist unklar. Lade den aktuellen Stand neu, bevor du die Freigabe erneut änderst.'}</p><button ref={reloadConsentButton} type="button" className="studio-button" disabled={consent.isFetching} onClick={reloadConsent}>Freigabe neu laden</button></div></div>}
+            </div>
           </>}
         </div>
         <div className="social-ai-pick"><div className="social-ai-section-head"><h3>Clip auswählen</h3><p>Clips aus deinem eigenen Kanal, ohne automatische Bearbeitung.</p></div>

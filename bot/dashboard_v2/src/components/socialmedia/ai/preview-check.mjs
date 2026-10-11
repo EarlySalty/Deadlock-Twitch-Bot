@@ -19,7 +19,7 @@ async function stableShot(name, width, height, focus) {
   await page.evaluate(() => window.scrollTo(0, 0));
   if (focus) await page.locator(focus).evaluate((element) => element.scrollIntoView({ block: 'start' }));
   await page.waitForTimeout(120);
-  await page.screenshot({ path: `${directory}/${name}.png`, animations: 'disabled', fullPage: name === 'ai-channel-switch-mobile' || name === 'ai-consent-confirm-mobile' });
+  await page.screenshot({ path: `${directory}/${name}.png`, animations: 'disabled', fullPage: ['ai-channel-switch-mobile', 'ai-consent-confirm-mobile', 'ai-consent-pending-mobile', 'ai-consent-uncertain-mobile'].includes(name) });
   const metrics = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth, videos: [...document.querySelectorAll('video')].map((video) => ({ controls: video.controls, label: video.getAttribute('aria-label'), readyState: video.readyState, src: video.currentSrc })), overflow: [...document.querySelectorAll('.social-ai *')].filter((element) => element.getBoundingClientRect().right > innerWidth + 1).slice(0, 8).map((element) => ({ className: element.className?.baseVal ?? element.className, tag: element.tagName, right: element.getBoundingClientRect().right, width: element.scrollWidth })) }));
   assert.equal(metrics.viewport, width, `${name}: actual viewport differs`);
   assert.ok(metrics.document <= metrics.viewport, `${name}: horizontal overflow ${JSON.stringify(metrics)}`);
@@ -85,8 +85,14 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('switch', { name: 'Externe KI: nicht zugestimmt' }).waitFor();
   assert.ok(await page.getByRole('button', { name: 'KI-Bearbeitung manuell starten' }).isDisabled());
-  await page.getByRole('switch', { name: 'Externe KI: nicht zugestimmt' }).evaluate((element) => element.scrollIntoView({ block: 'center' }));
-  await page.getByRole('switch', { name: 'Externe KI: nicht zugestimmt' }).evaluate((element) => element.click());
+  await page.getByRole('switch', { name: 'Externe KI: nicht zugestimmt' }).focus();
+  await page.keyboard.press('Space');
+  await page.getByRole('group', { name: 'Freigabe bestätigen' }).waitFor({ state: 'attached' });
+  const opening = await page.evaluate(() => ({ focusedType: document.activeElement?.getAttribute('type'), focusedDescription: document.activeElement?.getAttribute('aria-describedby'), switchChecked: document.querySelector('[role="switch"]')?.getAttribute('aria-checked'), controls: document.querySelector('[role="switch"]')?.getAttribute('aria-controls'), groupId: document.querySelector('[role="group"][aria-label="Freigabe bestätigen"]')?.id }));
+  assert.deepEqual(opening, { focusedType: 'checkbox', focusedDescription: 'social-ai-consent-description', switchChecked: 'false', controls: 'social-ai-consent-confirm', groupId: 'social-ai-consent-confirm' });
+  await page.keyboard.press('Tab');
+  const tabFocus = await page.evaluate(() => ({ tag: document.activeElement?.tagName, type: document.activeElement?.getAttribute('type'), text: document.activeElement?.textContent?.slice(0, 80) }));
+  assert.equal(tabFocus.text, 'Abbrechen', JSON.stringify(tabFocus));
   assert.ok(await page.getByRole('button', { name: 'Zustimmung erteilen' }).isDisabled());
   const consentMetrics = await stableShot('ai-consent-confirm-mobile', 390, 844, '.social-ai-confirm');
   const consentBounds = await page.locator('.social-ai-confirm').evaluate((element) => {
@@ -149,9 +155,22 @@ try {
   await page.getByRole('button', { name: 'Zustimmung erteilen' }).evaluate((element) => element.click());
   assert.ok(await page.getByRole('button', { name: 'Abbrechen' }).isDisabled());
   assert.ok(await page.getByRole('checkbox', { name: /Ich stimme der Übertragung/ }).isDisabled());
+  const pendingStatus = page.getByRole('status').filter({ hasText: 'Zustimmung wird gespeichert…' });
+  await pendingStatus.waitFor({ state: 'attached' });
+  assert.equal(await pendingStatus.getAttribute('aria-live'), 'polite');
+  const pendingMetrics = await stableShot('ai-consent-pending-mobile', 390, 844, '.social-ai-confirm');
   await settleMutation('consent', false);
-  await page.getByRole('alert').filter({ hasText: 'Die Freigabe konnte nicht gespeichert werden.' }).waitFor({ state: 'attached' });
+  const uncertainStatus = page.getByRole('status').filter({ hasText: 'Ob die Änderung übernommen wurde, ist unklar.' });
+  await uncertainStatus.waitFor({ state: 'attached' });
+  await page.waitForFunction(() => document.activeElement?.textContent?.includes('Freigabe neu laden'));
+  assert.ok(await page.getByRole('switch', { name: 'Externe KI: nicht zugestimmt' }).isDisabled());
+  assert.ok(await page.getByRole('button', { name: 'Zustimmung erteilen' }).isDisabled());
+  assert.ok(await page.getByRole('button', { name: 'Freigabe neu laden' }).isEnabled());
+  await page.getByRole('button', { name: 'Freigabe neu laden' }).evaluate((element) => element.click());
+  await page.getByRole('switch', { name: 'Externe KI: nicht zugestimmt' }).waitFor({ state: 'attached' });
   await page.waitForFunction(() => document.activeElement?.getAttribute('role') === 'switch');
+  await page.getByRole('switch', { name: 'Externe KI: nicht zugestimmt' }).evaluate((element) => element.click());
+  await page.getByRole('checkbox', { name: /Ich stimme der Übertragung/ }).evaluate((element) => element.click());
   await page.getByRole('button', { name: 'Zustimmung erteilen' }).evaluate((element) => element.click());
   assert.ok(await page.getByRole('button', { name: 'Abbrechen' }).isDisabled());
   await page.getByRole('button', { name: 'Vorschaukanal wechseln' }).click();
@@ -159,7 +178,7 @@ try {
   await page.getByRole('button', { name: 'Zustimmung erteilen' }).waitFor({ state: 'attached' });
   await settleMutation('consent', true);
   assert.equal(await page.getByRole('button', { name: 'Zustimmung erteilen' }).count(), 1);
-  assert.equal(await page.getByText('Die Freigabe konnte nicht gespeichert werden.').count(), 0);
+  assert.equal(await page.getByText('Ob die Änderung übernommen wurde, ist unklar.', { exact: false }).count(), 0);
   await page.getByRole('checkbox', { name: /Ich stimme der Übertragung/ }).evaluate((element) => element.click());
   await page.getByRole('button', { name: 'Zustimmung erteilen' }).evaluate((element) => element.click());
   await page.getByRole('switch', { name: 'Externe KI: zugestimmt' }).waitFor({ state: 'attached' });
@@ -214,8 +233,53 @@ try {
   await settleMutation('start-secondary', true);
   assert.equal(await page.getByRole('combobox', { name: 'Auftrag ansehen' }).inputValue(), '1202');
   assert.equal(await page.getByText('Die Bearbeitung konnte nicht gestartet werden.').count(), 0);
+  await go('consent-off');
+  await page.getByRole('switch', { name: 'Externe KI: nicht zugestimmt' }).waitFor();
+  await page.evaluate(() => {
+    const original = window.fetch;
+    window.fetch = (input, init) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.origin);
+      return init?.method === 'PUT' && url.pathname.endsWith('/consent') ? original(input, init).then(() => { throw new Error('Synthetic response lost after save'); }) : original(input, init);
+    };
+  });
+  await page.getByRole('switch', { name: 'Externe KI: nicht zugestimmt' }).evaluate((element) => element.click());
+  await page.getByRole('checkbox', { name: /Ich stimme der Übertragung/ }).evaluate((element) => element.click());
+  await page.getByRole('button', { name: 'Zustimmung erteilen' }).evaluate((element) => element.click());
+  await page.getByRole('status').filter({ hasText: 'Ob die Änderung übernommen wurde, ist unklar.' }).waitFor({ state: 'attached' });
+  assert.equal(await page.getByRole('switch').getAttribute('aria-checked'), 'false');
+  assert.ok(await page.getByRole('switch').isDisabled());
+  const uncertainMetrics = await stableShot('ai-consent-uncertain-mobile', 390, 844, '.social-ai-consent-feedback');
+  assert.ok(await page.getByRole('button', { name: 'Freigabe neu laden' }).isEnabled());
+  await page.getByRole('button', { name: 'Freigabe neu laden' }).evaluate((element) => element.click());
+  await page.getByRole('switch', { name: 'Externe KI: zugestimmt' }).waitFor();
+  await page.waitForFunction(() => document.activeElement?.getAttribute('role') === 'switch');
+  assert.equal(await page.getByRole('status').filter({ hasText: 'Ob die Änderung übernommen wurde, ist unklar.' }).count(), 0);
+  assert.ok(await page.getByRole('button', { name: 'KI-Bearbeitung manuell starten' }).isEnabled());
+  await go('review');
+  await page.getByRole('switch', { name: 'Externe KI: zugestimmt' }).waitFor();
+  await page.evaluate(() => {
+    const original = window.fetch;
+    window.fetch = (input, init) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.origin);
+      if (init?.method === 'PUT' && url.pathname.endsWith('/consent')) return new Promise((_, reject) => {
+        window.__finishRevoke = () => original(input, init).then(() => reject(new Error('Synthetic response lost after revoke')), reject);
+      });
+      return original(input, init);
+    };
+  });
+  await page.getByRole('switch', { name: 'Externe KI: zugestimmt' }).evaluate((element) => element.click());
+  await page.getByRole('status').filter({ hasText: 'Widerruf wird gespeichert…' }).waitFor({ state: 'attached' });
+  assert.ok(await page.getByRole('button', { name: 'KI-Bearbeitung manuell starten' }).isDisabled());
+  await page.evaluate(() => window.__finishRevoke());
+  await page.getByRole('status').filter({ hasText: 'Ob die Änderung übernommen wurde, ist unklar.' }).waitFor({ state: 'attached' });
+  assert.equal(await page.getByRole('switch').getAttribute('aria-checked'), 'true');
+  assert.ok(await page.getByRole('switch').isDisabled());
+  assert.ok(await page.getByRole('button', { name: 'KI-Bearbeitung manuell starten' }).isDisabled());
+  await page.getByRole('button', { name: 'Freigabe neu laden' }).evaluate((element) => element.click());
+  await page.getByRole('switch', { name: 'Externe KI: nicht zugestimmt' }).waitFor({ state: 'attached' });
+  await page.waitForFunction(() => document.activeElement?.getAttribute('role') === 'switch');
   assert.deepEqual(errors, []);
-  const evidence = { environment: 'synthetic-local-preview', desktop, mobile, consentMetrics, consentBounds, playback, playbackReady: playback.every((video) => video.currentTime > 0 && video.readyState >= 2 && !video.error), channelRacePassed: true, sameChannelActionScopePassed: true, screenshots: 10, errors };
+  const evidence = { environment: 'synthetic-local-preview', desktop, mobile, opening, consentMetrics, consentBounds, pendingMetrics, uncertainMetrics, playback, playbackReady: playback.every((video) => video.currentTime > 0 && video.readyState >= 2 && !video.error), channelRacePassed: true, sameChannelActionScopePassed: true, acceptedButResponseLostReloadPassed: true, revokePendingAndUncertainGuardPassed: true, screenshots: 12, errors };
   await writeFile(`${directory}/run.json`, `${JSON.stringify(evidence, null, 2)}\n`);
   assert.ok(evidence.playbackReady, `synthetic media did not play: ${JSON.stringify(playback)}`);
   console.log(JSON.stringify(evidence, null, 2));
