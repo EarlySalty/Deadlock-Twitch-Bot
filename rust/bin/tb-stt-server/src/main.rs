@@ -3,7 +3,7 @@ use std::{
     io::Cursor,
     net::SocketAddr,
     path::{Component, Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Instant,
 };
 
@@ -29,6 +29,7 @@ use tokio::{
 use tracing::{info, warn};
 use whisper_rs::{
     get_lang_str, FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
+    WhisperError, WhisperVadContext, WhisperVadContextParams, WhisperVadParams, WhisperVadSegments,
 };
 
 const DEFAULT_MODEL_NAME: &str = "ggml-large-v3-turbo-q5_0";
@@ -105,6 +106,7 @@ impl Config {
 
 struct Engine {
     context: WhisperContext,
+    vad: Mutex<WhisperVadContext>,
 }
 
 #[derive(Clone)]
@@ -219,9 +221,21 @@ async fn main() -> Result<(), String> {
         "STT-Modell geladen"
     );
 
+    let vad_path = config
+        .vad_path
+        .to_str()
+        .ok_or_else(|| "VAD-Pfad ist kein UTF-8".to_owned())?;
+    let mut vad_params = WhisperVadContextParams::default();
+    vad_params.set_n_threads(config.threads);
+    let vad = WhisperVadContext::new(vad_path, vad_params)
+        .map_err(|e| format!("VAD-Modell konnte nicht geladen werden: {e}"))?;
+
     let state = AppState {
         config: Arc::new(config.clone()),
-        engine: Arc::new(Engine { context }),
+        engine: Arc::new(Engine {
+            context,
+            vad: Mutex::new(vad),
+        }),
         gate: Arc::new(Semaphore::new(1)),
     };
 
@@ -327,7 +341,7 @@ async fn transcriptions(
 
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        transcribe(&engine.context, &config, decoded, verbose)
+        transcribe(&engine, &config, decoded, verbose)
     })
     .await
     .map_err(|e| ApiError::Internal(format!("STT-Worker abgebrochen: {e}")))??;
@@ -356,6 +370,9 @@ fn decode_wav(raw: &[u8]) -> Result<DecodedAudio, ApiError> {
         let sample = sample.map_err(|e| ApiError::BadRequest(format!("PCM unlesbar: {e}")))?;
         pcm.push(sample as f32 / 32768.0);
     }
+    if pcm.is_empty() {
+        return Err(ApiError::BadRequest("Die Audiodatei ist leer.".to_owned()));
+    }
 
     Ok(DecodedAudio {
         duration_seconds: pcm.len() as f64 / spec.sample_rate as f64,
@@ -363,14 +380,82 @@ fn decode_wav(raw: &[u8]) -> Result<DecodedAudio, ApiError> {
     })
 }
 
+fn speech_window(
+    segments: Result<WhisperVadSegments, WhisperError>,
+    duration: f64,
+) -> Result<Option<(i32, f64, f64)>, ApiError> {
+    let segments = segments.map_err(|e| ApiError::Internal(format!("VAD-Inferenz: {e}")))?;
+    let count = segments.num_segments();
+    if count == 0 {
+        return Ok(None);
+    }
+    if count < 0 {
+        return Err(ApiError::Internal(
+            "VAD-Segmentzahl ist ungültig".to_owned(),
+        ));
+    }
+    let first = segments
+        .get_segment(0)
+        .ok_or_else(|| ApiError::Internal("VAD-Segment fehlt".to_owned()))?;
+    let last = segments
+        .get_segment(count - 1)
+        .ok_or_else(|| ApiError::Internal("VAD-Segment fehlt".to_owned()))?;
+    let start = (f64::from(first.start) / 100.0).clamp(0.0, duration);
+    let end = (f64::from(last.end) / 100.0).clamp(0.0, duration);
+    if !start.is_finite() || !end.is_finite() || end <= start {
+        return Err(ApiError::Internal(
+            "VAD-Zeitfenster ist ungültig".to_owned(),
+        ));
+    }
+    Ok(Some((count, start, end)))
+}
+
+fn bounded_timestamps(
+    start_cs: i64,
+    end_cs: i64,
+    speech_start: f64,
+    speech_end: f64,
+) -> Option<(f64, f64)> {
+    let start = (start_cs as f64 / 100.0).max(speech_start);
+    let end = (end_cs as f64 / 100.0).min(speech_end);
+    (end > start).then_some((start, end))
+}
+
 fn transcribe(
-    context: &WhisperContext,
+    engine: &Engine,
     config: &Config,
     audio: DecodedAudio,
     verbose: bool,
 ) -> Result<TranscriptionResponse, ApiError> {
     let started = Instant::now();
-    let mut state = context
+    let window = {
+        let mut vad = engine
+            .vad
+            .lock()
+            .map_err(|_| ApiError::Internal("VAD-State ist nicht verfügbar".to_owned()))?;
+        speech_window(
+            vad.segments_from_samples(WhisperVadParams::default(), &audio.pcm),
+            audio.duration_seconds,
+        )?
+    };
+    let Some((vad_segments, speech_start, speech_end)) = window else {
+        info!(
+            duration_seconds = audio.duration_seconds,
+            elapsed_seconds = started.elapsed().as_secs_f64(),
+            vad_segments = 0,
+            "Keine Sprache erkannt"
+        );
+        return Ok(TranscriptionResponse {
+            text: String::new(),
+            duration: audio.duration_seconds,
+            language: "unknown".to_owned(),
+            model: config.model_name.clone(),
+            segments: verbose.then_some(Vec::new()),
+        });
+    };
+
+    let mut state = engine
+        .context
         .create_state()
         .map_err(|e| ApiError::Internal(format!("Whisper-State: {e}")))?;
 
@@ -395,13 +480,6 @@ fn transcribe(
         params.set_language(None);
         params.set_detect_language(false);
     }
-
-    let vad_path = config
-        .vad_path
-        .to_str()
-        .ok_or_else(|| ApiError::Internal("VAD-Pfad ist kein UTF-8".to_owned()))?;
-    params.set_vad_model_path(Some(vad_path));
-    params.enable_vad(true);
 
     state
         .full(params, &audio.pcm)
@@ -443,12 +521,27 @@ fn transcribe(
             continue;
         }
 
+        let Some((start, end)) = bounded_timestamps(
+            segment.start_timestamp(),
+            segment.end_timestamp(),
+            speech_start,
+            speech_end,
+        ) else {
+            continue;
+        };
+
         kept.push(SegmentResponse {
             id: kept.len(),
-            start: segment.start_timestamp() as f64 / 100.0,
-            end: segment.end_timestamp() as f64 / 100.0,
+            start,
+            end,
             text,
         });
+    }
+
+    if kept.is_empty() {
+        return Err(ApiError::Internal(
+            "Sprache erkannt, aber kein verlässlicher Transkripttext".to_owned(),
+        ));
     }
 
     let text = kept
@@ -467,6 +560,7 @@ fn transcribe(
         elapsed_seconds = elapsed,
         rtf = elapsed / audio.duration_seconds.max(0.01),
         segments = kept.len(),
+        vad_segments,
         dropped,
         language = %language,
         "Transkription abgeschlossen"
@@ -659,6 +753,27 @@ mod tests {
             decode_wav(&wrong_rate),
             Err(ApiError::BadRequest(_))
         ));
+    }
+
+    #[test]
+    fn rejects_wav_without_audio_frames() {
+        let empty = wav(&[], 16_000, 1);
+        assert!(matches!(decode_wav(&empty), Err(ApiError::BadRequest(_))));
+    }
+
+    #[test]
+    fn vad_failure_is_not_no_speech() {
+        assert!(matches!(
+            speech_window(Err(WhisperError::NullPointer), 2.0),
+            Err(ApiError::Internal(_))
+        ));
+    }
+
+    #[test]
+    fn speech_timestamps_remain_on_original_timeline() {
+        assert_eq!(bounded_timestamps(0, 700, 1.98, 6.98), Some((1.98, 6.98)));
+        assert_eq!(bounded_timestamps(0, 512, 0.0, 5.025), Some((0.0, 5.025)));
+        assert_eq!(bounded_timestamps(0, 100, 1.98, 6.98), None);
     }
 
     #[test]
