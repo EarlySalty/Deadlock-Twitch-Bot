@@ -17,8 +17,6 @@ pub struct BatchClip {
     pub local_file_path: Option<String>,
 }
 
-/// Alle Clips eines Streamers, aufgeloest ueber die Twitch-User-ID (nie ueber den
-/// Login). Neueste zuerst.
 pub async fn select_clips_for_user(pool: &PgPool, twitch_user_id: &str) -> Vec<BatchClip> {
     let uid = twitch_user_id.trim();
     if uid.is_empty() {
@@ -47,11 +45,9 @@ pub async fn select_clips_for_user(pool: &PgPool, twitch_user_id: &str) -> Vec<B
 pub struct BatchResult {
     pub rendered: Vec<String>,
     pub failed: Vec<(String, String)>,
+    pub deferred: Vec<String>,
 }
 
-/// Rendert alle Clips eines Streamers nach REQ-01 bis REQ-03 (Layout, Blur-Rand,
-/// Untertitel) in `out_dir`, ohne Upload. Laedt fehlende Clips per `downloader`
-/// nach `clips_dir`.
 pub async fn render_all_for_user(
     pool: &PgPool,
     vp: &VideoProcessor,
@@ -70,6 +66,7 @@ pub async fn render_all_for_user(
     let mut result = BatchResult {
         rendered: Vec::new(),
         failed: Vec::new(),
+        deferred: Vec::new(),
     };
 
     for clip in clips {
@@ -86,6 +83,9 @@ pub async fn render_all_for_user(
         match render_clip_vertical(vp, pool, clip.clip_db_id, &input, &output, BATCH_MAX_SECS).await
         {
             Ok(()) => result.rendered.push(output),
+            Err(crate::video_processor::VideoProcessorError::ProductionBusy) => {
+                result.deferred.push(clip.clip_id)
+            }
             Err(e) => result
                 .failed
                 .push((clip.clip_id.clone(), format!("render: {e}"))),

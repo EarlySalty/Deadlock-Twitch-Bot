@@ -14,6 +14,16 @@ pub struct ProductionLease {
 }
 
 impl ProductionLease {
+    pub async fn ensure_held(&mut self) -> Result<(), ProductionLeaseError> {
+        let held: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted AND classid = ((hashtextextended('social_media_video_production', 0) >> 32) & 4294967295)::oid AND objid = (hashtextextended('social_media_video_production', 0) & 4294967295)::oid AND objsubid = 1)")
+            .fetch_one(&mut *self.connection).await?;
+        if held {
+            Ok(())
+        } else {
+            Err(ProductionLeaseError::Conflict)
+        }
+    }
+
     pub(crate) fn mark_claimed_work(&mut self) {
         self.claimed_work = true;
     }

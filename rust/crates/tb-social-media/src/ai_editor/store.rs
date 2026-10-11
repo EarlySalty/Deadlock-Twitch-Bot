@@ -135,7 +135,7 @@ impl StageCheckpoint {
         }
     }
 
-    fn validate(&self) -> Result<String, AiStoreError> {
+    pub(super) fn validate(&self) -> Result<String, AiStoreError> {
         let valid = match self {
             Self::Preparing {
                 source_path,
@@ -318,6 +318,7 @@ pub struct AiJobView {
     pub original_duration_ms: Option<i64>,
     pub output_duration_ms: Option<i64>,
     pub processing_ms: Option<i64>,
+    pub provider_latency_ms: Option<i64>,
     pub rendering_ms: Option<i64>,
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
@@ -339,6 +340,7 @@ pub struct AiJobView {
 pub struct JobSnapshot {
     pub id: i64,
     pub clip_db_id: i64,
+    pub source_twitch_clip_id: String,
     pub status: String,
     pub stage: AiStage,
     pub attempts_for_stage: i32,
@@ -451,6 +453,7 @@ fn view_from_row(row: &PgRow, limit: AttemptLimit) -> Result<AiJobView, AiStoreE
         original_duration_ms: row.try_get("original_duration_ms")?,
         output_duration_ms: row.try_get("output_duration_ms")?,
         processing_ms: row.try_get("processing_ms")?,
+        provider_latency_ms: None,
         rendering_ms: row.try_get("rendering_ms")?,
         input_tokens: row.try_get("input_tokens")?,
         output_tokens: row.try_get("output_tokens")?,
@@ -627,7 +630,7 @@ pub async fn load_job_for_runner(
 ) -> Result<JobSnapshot, AiStoreError> {
     let owner = numeric_owner(twitch_user_id)?;
     let row = sqlx::query(
-        "SELECT j.id, j.clip_db_id, j.status, j.stage, j.attempts::text AS attempts_text, \
+        "SELECT j.id, j.clip_db_id, j.source_twitch_clip_id, j.status, j.stage, j.attempts::text AS attempts_text, \
          j.checkpoints::text AS checkpoints_text, \
          EXISTS (SELECT 1 FROM twitch_clips_social_media c \
          WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id AND c.clip_id = j.source_twitch_clip_id \
@@ -659,6 +662,7 @@ pub async fn load_job_for_runner(
     let snapshot = JobSnapshot {
         id: row.try_get("id")?,
         clip_db_id: row.try_get("clip_db_id")?,
+        source_twitch_clip_id: row.try_get("source_twitch_clip_id")?,
         status: row.try_get("status")?,
         stage,
         attempts_for_stage: attempts.get(&stage_name).copied().unwrap_or(0),
@@ -1029,6 +1033,72 @@ pub async fn finish_job(
     } else {
         Err(AiStoreError::Conflict)
     }
+}
+
+pub(super) async fn checkpoints(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    job_id: i64,
+) -> Result<BTreeMap<AiStage, StageCheckpoint>, AiStoreError> {
+    let owner = numeric_owner(twitch_user_id)?;
+    let raw: String = sqlx::query_scalar(
+        "SELECT checkpoints::text FROM social_ai_jobs WHERE id=$1 AND twitch_user_id=$2",
+    )
+    .bind(job_id)
+    .bind(owner)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(AiStoreError::NotFound)?;
+    parse_json(&raw)
+}
+
+pub async fn original_file_path(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    job_id: i64,
+) -> Result<String, AiStoreError> {
+    let owner = numeric_owner(twitch_user_id)?;
+    let path: Option<String> = sqlx::query_scalar("SELECT c.local_file_path FROM social_ai_jobs j JOIN twitch_clips_social_media c ON c.id = j.source_clip_id AND c.id = j.clip_db_id AND c.clip_id = j.source_twitch_clip_id AND c.twitch_user_id = j.twitch_user_id::text JOIN social_media_category k ON k.category_key = c.category_key WHERE j.id = $1 AND j.twitch_user_id = $2 AND c.source_kind = 'twitch' AND c.category_key = 'deadlock' AND c.game_id = k.twitch_game_id AND c.discarded_at IS NULL")
+        .bind(job_id).bind(owner).fetch_optional(pool).await?.flatten();
+    path.ok_or(AiStoreError::NotFound)
+}
+
+pub(super) async fn fail_invalid_checkpoint(
+    lease: &mut ProductionLease,
+    twitch_user_id: &str,
+    job_id: i64,
+) -> Result<(), AiStoreError> {
+    lease.ensure_held().await?;
+    let owner = numeric_owner(twitch_user_id)?;
+    let changed = sqlx::query("UPDATE social_ai_jobs SET status='failed', failure_code='invalid_checkpoint', failure_message='Die gespeicherten Auftragsdaten konnten nicht sicher geprüft werden.', updated_at=NOW() WHERE id=$1 AND twitch_user_id=$2 AND status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating')")
+        .bind(job_id).bind(owner).execute(&mut *lease.connection).await?.rows_affected();
+    if changed != 1 {
+        return Err(AiStoreError::Conflict);
+    }
+    Ok(())
+}
+
+pub async fn next_queued_job(
+    lease: &mut ProductionLease,
+) -> Result<Option<(String, i64)>, AiStoreError> {
+    sqlx::query_as("SELECT twitch_user_id::text, id FROM social_ai_jobs WHERE status = 'queued' ORDER BY id LIMIT 1")
+        .fetch_optional(&mut *lease.connection).await.map_err(Into::into)
+}
+
+pub async fn recover_all_stale_jobs(
+    lease: &mut ProductionLease,
+    limit: i64,
+) -> Result<u64, AiStoreError> {
+    if lease.has_claimed_work() || !(1..=100).contains(&limit) {
+        return Err(AiStoreError::Conflict);
+    }
+    let owners: Vec<String> = sqlx::query_scalar("SELECT twitch_user_id::text FROM social_ai_jobs WHERE status IN ('preparing','transcribing','analyzing','planning','rendering','validating') GROUP BY twitch_user_id ORDER BY MIN(updated_at), twitch_user_id LIMIT $1")
+        .bind(limit).fetch_all(&mut *lease.connection).await?;
+    let mut recovered = 0;
+    for owner in owners {
+        recovered += recover_stale_jobs(lease, &owner, limit).await?;
+    }
+    Ok(recovered)
 }
 
 pub async fn recover_stale_jobs(

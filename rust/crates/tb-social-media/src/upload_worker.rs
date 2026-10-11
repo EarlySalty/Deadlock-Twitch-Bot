@@ -400,6 +400,17 @@ impl UploadTask {
                     .await;
                     return false;
                 }
+                if matches!(e, WorkerError::Convert(VideoProcessorError::ProductionBusy)) {
+                    self.update_upload_status_logged(
+                        &item,
+                        "pending",
+                        None,
+                        None,
+                        "production_busy",
+                    )
+                    .await;
+                    return false;
+                }
                 let err = e.to_string();
                 self.update_upload_status_logged(
                     &item,
