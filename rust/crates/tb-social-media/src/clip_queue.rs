@@ -426,7 +426,9 @@ pub async fn get_upload_queue(
          FROM twitch_clips_upload_queue q \
          JOIN twitch_clips_social_media c ON c.id = q.clip_id WHERE ",
     );
-    sql.push_str("q.status = $1");
+    sql.push_str(
+        "q.status = $1 AND NULLIF(to_jsonb(q)->'produced_video_id', 'null'::jsonb) IS NULL",
+    );
     if status == "waiting_connection" {
         sql.push_str(
             " AND (q.last_attempt_at IS NULL OR q.last_attempt_at <= NOW() - INTERVAL '5 minutes')",

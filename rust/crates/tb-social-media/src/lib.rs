@@ -41,6 +41,9 @@
 pub mod analytics;
 pub mod approval;
 pub mod approval_worker;
+#[cfg(test)]
+mod autopilot_contract_tests;
+pub mod autopilot_settings;
 pub mod batch;
 pub mod capabilities;
 pub mod clip;
@@ -67,6 +70,8 @@ pub mod oauth;
 pub mod partner_access;
 pub mod posting_plan;
 pub mod preview;
+pub mod produced_video;
+pub mod production_jobs;
 pub mod reauth;
 pub mod refresh_worker;
 pub mod render;
