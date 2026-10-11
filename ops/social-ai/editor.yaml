@@ -1,0 +1,24 @@
+schema_version: 1
+provider:
+  kind: anthropic
+  endpoint: https://api.anthropic.com
+  model: claude-opus-5-5
+  effort: low
+  max_input_tokens: 128000
+  max_output_tokens: 4096
+  max_frames: 4
+  max_frame_bytes: 131072
+  max_text_bytes: 16000
+  max_schema_bytes: 16000
+  request_timeout_ms: 30000
+  total_deadline_ms: 90000
+  max_retries: 1
+  retry_backoff_ms: 1000
+  initial_total_cap_micro_usd: 2000000
+  pricing_version: 1
+  pricing:
+    input_micro_usd_per_million: 4000000
+    output_micro_usd_per_million: 20000000
+    cache_creation_micro_usd_per_million: 5000000
+    cache_read_micro_usd_per_million: 200000
+runtime: {}
