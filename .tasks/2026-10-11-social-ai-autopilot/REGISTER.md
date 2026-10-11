@@ -12,3 +12,9 @@ Stage: riesig. Base origin/main `3862b764a`. User allowed GPT workers on 2026-10
 | P3 | 10eb1247-91e9-4677-b3b3-4bcdba076044 | cc9b61b9 | t3-harness new 04:31:40Z, running | claudeAgent | gpt-6.1-sol ultracode | running | /home/nathanael/.worktrees/tb-social-dash | feat/social-dashboard-redesign-20261011 (fix/p3-social-responsive fafd98e75) | 5e7bf62f7 | M1 LIVE at 33656f2c (screenshots /tmp/p3-social-responsive-20261011, checked by orchestrator); idle until P1/P2 land for M2 |
 
 Decisions sent: Anthropic connector scoped to social editor (Opus 5.5 via YAML, $2 hard test cap), per-user consent default off, transient STT spawn, global advisory production lease, AiEditorPanel contract, pid/comm-only process checks. Open with user: DB credential rotation after log redaction; final assisted logged-in UI check.
+
+## 2026-10-11 ~21:10Z: parallel tracks (user: "build the stuff parallel")
+- P1: A = M1a gate/deploy then M1b UI; B = M2 schedule + runner; C = M3 modes/approval/retries + M4 retention/notifications.
+- P2: A = M1 gate/deploy/live run; B = M2 revisions/produce/multi-output; C = M3 learning; D = M4 admin pages.
+- P3: M2 started now against fixtures and published contracts; integrates real components as they land.
+- Guardrail: memory about 6 GB free, cargo -j2 via cargo-slot, never two release builds at once.
