@@ -515,7 +515,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
         id="studio-panel"
         role="tabpanel"
         aria-labelledby={`studio-tab-${workspaceView}`}
-        className={activeView === 'pool' ? 'studio-pipeline min-w-0 space-y-4' : 'min-w-0'}
+        className={activeView === 'pool' ? 'studio-pipeline min-w-0 space-y-4' : activeView === 'archiv' ? 'studio-archive min-w-0' : 'min-w-0'}
       >
         {activeView === 'ai' ? (
           AiEditor && twitchUserId ? (

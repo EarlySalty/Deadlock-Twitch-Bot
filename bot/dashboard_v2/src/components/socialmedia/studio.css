@@ -373,17 +373,23 @@ select.studio-select {
   box-shadow: none;
 }
 .studio-savebar {
-  position: sticky;
-  bottom: 80px;
+  position: static;
   z-index: 20;
   background: var(--color-card);
   box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.25);
 }
 @media (min-width: 1280px) {
   .studio-savebar {
+    position: sticky;
     width: calc(100% - 284px);
     bottom: 12px;
   }
+}
+.studio-archive #vod-archive-title {
+  display: none;
+}
+.studio-archive #vod-archive-title + p {
+  margin-top: 0;
 }
 .studio-schedule {
   padding: 24px;
