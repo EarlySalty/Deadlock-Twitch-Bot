@@ -464,6 +464,7 @@ fn completion(id: i64, reserved: i64, outcome: AttemptOutcome<'_>) -> crate::led
         error_code,
         http_status: status.map(|s| i32::from(s.as_u16())),
         latency_ms: i64::try_from(latency_ms).unwrap_or(i64::MAX),
+        model: None,
         social_accounting: Some(crate::ledger::SocialAccounting {
             reserved_micro_usd: reserved,
             estimated_micro_usd: safe_estimated,

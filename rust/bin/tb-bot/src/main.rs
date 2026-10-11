@@ -53,6 +53,22 @@ mod token_lifecycle_wiring;
 mod user_id_backfill;
 mod wiring;
 
+fn install_title_ai_brain_route(
+    options: &tb_config::dashboard_options::BrainClientOptions,
+    token: Option<&str>,
+) {
+    if !options.title_ai_via_brain {
+        return;
+    }
+    if let Err(error) = tb_llm::brain_route::install_title_ai(
+        options.endpoint.as_deref(),
+        token,
+        options.timeout_ms.map(std::time::Duration::from_millis),
+    ) {
+        tracing::error!(fehler = ?error, "Brain-Route für Titel konnte nicht installiert werden");
+    }
+}
+
 /// Sucht das yt-dlp-Binary: `YT_DLP_PATH`, dann das Repo-venv im Arbeitsverzeichnis,
 /// dann `~/.local/bin/yt-dlp`, sonst der blanke Name für die PATH-Suche.
 ///
@@ -502,6 +518,10 @@ async fn main() {
         "deadlock-twitch-bot-rust",
     )
     .expect("Verbrauchserfassung initialisieren");
+    install_title_ai_brain_route(
+        &config.bot.brain_client,
+        Some(settings.internal_api.token.as_str()),
+    );
 
     // Vorhandene Feldchiffre einmal laden und an die Verbraucher weiterreichen.
     let runtime_cipher = FieldCipher::from_env().map(Arc::new);

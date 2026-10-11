@@ -32,6 +32,7 @@
 //! Schlüssel kommen ausschließlich aus der Umgebung (Infisical/systemd) über
 //! den konsolidierten Resolver [`keys`] und werden NIE geloggt.
 
+pub mod brain_route;
 pub mod daily_model_resolver;
 pub mod hub;
 pub mod keys;

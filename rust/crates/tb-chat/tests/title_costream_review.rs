@@ -181,6 +181,7 @@ async fn review_genau_ein_neuversuch_ohne_schleife() {
         .expect(2)
         .mount(&server).await;
     let actual = tb_chat::title_ai::generate_title_personalized_with(
+        None,
         &server.uri(),
         "test-key",
         "test-model",

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-brain-client = { git = "https://github.com/EarlySalty/Deadlock-Brain.git", rev = "d2028d8b0c96c2097dc9b92882bb96b73bf19fd0" }
+brain-client = { workspace = true }
 tokio = { workspace = true }
 
 regex     = { workspace = true }

@@ -14,6 +14,9 @@ path = "src/bin/tb-local-replay.rs"
 required-features = ["local-eval"]
 
 [dependencies]
+async-trait = { workspace = true }
+brain-client = { workspace = true }
+uuid = { workspace = true }
 tb-observability = { workspace = true }
 fireworks-model-selection = { path = "../fireworks-model-selection" }
 uplink-infisical-transport = { path = "../../vendor/uplink-infisical-transport" }

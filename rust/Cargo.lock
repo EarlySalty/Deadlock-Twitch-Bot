@@ -419,7 +419,7 @@ checksum = "dc0b364ead1874514c8c2855ab558056ebfeb775653e7ae45ff72f28f8f3166c"
 [[package]]
 name = "brain-client"
 version = "0.1.0"
-source = "git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=d2028d8b0c96c2097dc9b92882bb96b73bf19fd0#d2028d8b0c96c2097dc9b92882bb96b73bf19fd0"
+source = "git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=139bc39214d183c339fb0f06a00c6b1af42383cc#139bc39214d183c339fb0f06a00c6b1af42383cc"
 dependencies = [
  "brain-contracts",
  "reqwest",
@@ -431,8 +431,9 @@ dependencies = [
 [[package]]
 name = "brain-contracts"
 version = "0.1.0"
-source = "git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=d2028d8b0c96c2097dc9b92882bb96b73bf19fd0#d2028d8b0c96c2097dc9b92882bb96b73bf19fd0"
+source = "git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=139bc39214d183c339fb0f06a00c6b1af42383cc#139bc39214d183c339fb0f06a00c6b1af42383cc"
 dependencies = [
+ "chrono",
  "regex",
  "serde",
  "serde_json",
@@ -4128,7 +4129,9 @@ dependencies = [
 name = "tb-llm"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "base64 0.23.1",
+ "brain-client",
  "chrono",
  "fireworks-model-selection",
  "fs2",
@@ -4148,6 +4151,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uplink-infisical-transport 0.1.0",
+ "uuid",
  "wiremock",
  "zeroize",
 ]
@@ -4953,7 +4957,7 @@ dependencies = [
 [[package]]
 name = "uplink-infisical-transport"
 version = "0.1.1"
-source = "git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=d2028d8b0c96c2097dc9b92882bb96b73bf19fd0#d2028d8b0c96c2097dc9b92882bb96b73bf19fd0"
+source = "git+https://github.com/EarlySalty/Deadlock-Brain.git?rev=139bc39214d183c339fb0f06a00c6b1af42383cc#139bc39214d183c339fb0f06a00c6b1af42383cc"
 dependencies = [
  "reqwest",
 ]

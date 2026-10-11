@@ -499,6 +499,33 @@ async fn failed_original_preview_still_expires_the_partial_owned_output() {
     .execute(&db.pool)
     .await
     .expect("expired fixture");
+    let backup = output.with_extension("retention-retry.mp4");
+    tokio::fs::rename(&output, &backup)
+        .await
+        .expect("retain own output for cleanup retry");
+    tokio::fs::create_dir(&output)
+        .await
+        .expect("real removal failure fixture");
+    assert!(matches!(
+        cleanup_expired_artifacts(&db.pool, &runtime, &mut lease).await,
+        Err(AiEditorError::Storage)
+    ));
+    let interrupted = produced_video::get(&db.pool, "101", video.id)
+        .await
+        .expect("interrupted cleanup")
+        .expect("retained history");
+    assert_eq!(interrupted.status, "expired");
+    assert!(interrupted.metadata.get("ai_artifacts_expired").is_none());
+    assert!(matches!(
+        produced_video::approve(&db.pool, "101", video.id, &["youtube".into()]).await,
+        Err(crate::produced_video::ProducedVideoError::State)
+    ));
+    tokio::fs::remove_dir(&output)
+        .await
+        .expect("remove own failure fixture");
+    tokio::fs::rename(&backup, &output)
+        .await
+        .expect("restore own output for retry");
     cleanup_expired_artifacts(&db.pool, &runtime, &mut lease)
         .await
         .expect("partial artifact cleanup without a preview checkpoint");

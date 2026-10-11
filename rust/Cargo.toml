@@ -42,6 +42,7 @@ edition = "2021"
 
 # Zentrale Versionspflege — jede Crate referenziert via `{ workspace = true }`.
 [workspace.dependencies]
+brain-client = { git = "https://github.com/EarlySalty/Deadlock-Brain.git", rev = "139bc39214d183c339fb0f06a00c6b1af42383cc" }
 thiserror = "2"
 aes-gcm = "0.11"
 aes = "0.9"

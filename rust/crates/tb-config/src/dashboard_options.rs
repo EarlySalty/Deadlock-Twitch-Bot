@@ -23,6 +23,7 @@ pub struct BrainClientOptions {
     pub endpoint: Option<String>,
     pub public_scopes: Vec<String>,
     pub timeout_ms: Option<u64>,
+    pub title_ai_via_brain: bool,
 }
 
 impl BrainClientOptions {
@@ -50,6 +51,13 @@ impl BrainClientOptions {
             {
                 return Err(FileError::invalid(scopes_field));
             }
+        }
+        if self.title_ai_via_brain {
+            let endpoint = self
+                .endpoint
+                .as_deref()
+                .ok_or_else(|| FileError::invalid(endpoint_field))?;
+            crate::global::public_url(endpoint, endpoint_field, true)?;
         }
         if self
             .timeout_ms
@@ -377,6 +385,7 @@ mod brain_client_tests {
             endpoint: Some("http://127.0.0.1:8789".into()),
             public_scopes: vec!["bot.public".into()],
             timeout_ms: Some(8_000),
+            title_ai_via_brain: false,
         };
         assert!(config.validate().is_ok());
         config.endpoint = Some("https://example.org".into());
@@ -391,5 +400,18 @@ mod brain_client_tests {
         assert!(config.validate().is_err());
         config.timeout_ms = Some(60_000);
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn titel_ueber_brain_ist_standardmaessig_aus_und_braucht_lokalen_endpoint() {
+        let mut config = BrainClientOptions::default();
+        assert!(!config.title_ai_via_brain);
+        config.title_ai_via_brain = true;
+        assert!(config.validate().is_err());
+        config.endpoint = Some("https://example.org".into());
+        assert!(config.validate().is_err());
+        config.endpoint = Some("http://127.0.0.1:8789".into());
+        assert!(config.validate().is_ok());
+        assert_eq!(config.mode, BrainClientMode::Legacy);
     }
 }
