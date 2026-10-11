@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -430,6 +430,28 @@ fn parse_json<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, AiStoreE
     serde_json::from_str(value).map_err(|_| AiStoreError::InvalidStoredData)
 }
 
+macro_rules! public_job_query {
+    ($tail:literal) => {
+        concat!(
+            "SELECT j.id, j.clip_db_id, j.status, j.stage, j.created_at, \
+             j.updated_at, j.completed_at, j.provider, j.model, j.original_duration_ms, \
+             j.output_duration_ms, j.processing_ms, j.rendering_ms, j.input_tokens, j.output_tokens, \
+             j.estimated_provider_cost_usd, j.measured_provider_cost_usd, j.failure_code, j.failure_message, \
+             j.highlights::text AS highlights_text, j.decisions::text AS decisions_text, \
+             j.uncertainty::text AS uncertainty_text, j.review_reasons::text AS review_reasons_text, \
+             j.attempts::text AS attempts_text, \
+             EXISTS (SELECT 1 FROM social_ai_jobs sibling WHERE sibling.twitch_user_id = j.twitch_user_id \
+             AND sibling.clip_db_id = j.clip_db_id AND sibling.id <> j.id \
+             AND sibling.status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating')) AS active_sibling, \
+             EXISTS (SELECT 1 FROM twitch_clips_social_media c WHERE c.id = j.source_clip_id \
+             AND c.id = j.clip_db_id AND c.clip_id = j.source_twitch_clip_id \
+             AND c.twitch_user_id = j.twitch_user_id::text AND c.category_key = 'deadlock' \
+             AND c.discarded_at IS NULL AND c.source_kind = 'twitch') AS source_eligible",
+            $tail
+        )
+    };
+}
+
 fn view_from_row(row: &PgRow, limit: AttemptLimit) -> Result<AiJobView, AiStoreError> {
     let attempts: BTreeMap<String, i32> = parse_json(row.try_get("attempts_text")?)?;
     let status: String = row.try_get("status")?;
@@ -480,24 +502,36 @@ fn view_from_row(row: &PgRow, limit: AttemptLimit) -> Result<AiJobView, AiStoreE
     })
 }
 
-async fn load_versions(pool: &PgPool, owner: i64, job: &mut AiJobView) -> Result<(), AiStoreError> {
+async fn load_versions(
+    pool: &PgPool,
+    owner: i64,
+    jobs: &mut [AiJobView],
+) -> Result<(), AiStoreError> {
+    if jobs.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<i64> = jobs.iter().map(|job| job.id).collect();
     let rows = sqlx::query(
-        "SELECT p.id, p.version_no, p.created_at, p.status, p.duration_ms, p.parent_version_id \
-         FROM social_produced_videos p JOIN social_ai_jobs j ON j.twitch_user_id = $1 \
-         AND j.id = $2 AND j.clip_db_id = p.clip_id \
-         WHERE p.twitch_user_id = $3 AND p.mode = 'ai' \
-         AND p.metadata ->> 'manual_ai_job_id' = j.id::text \
-         ORDER BY p.version_no, p.id LIMIT 50",
+        "SELECT j.id AS job_id, p.id, p.version_no, p.created_at, p.status, \
+         p.duration_ms, p.parent_version_id FROM social_ai_jobs j \
+         JOIN LATERAL (SELECT p.id, p.version_no, p.created_at, p.status, \
+         p.duration_ms, p.parent_version_id FROM social_produced_videos p \
+         WHERE p.twitch_user_id = j.twitch_user_id::text AND p.clip_id = j.clip_db_id \
+         AND p.mode = 'ai' AND p.metadata ->> 'manual_ai_job_id' = j.id::text \
+         ORDER BY p.version_no, p.id LIMIT 50) p ON TRUE \
+         WHERE j.twitch_user_id = $1 AND j.id = ANY($2::bigint[]) \
+         ORDER BY j.id DESC, p.version_no, p.id",
     )
     .bind(owner)
-    .bind(job.id)
-    .bind(owner.to_string())
+    .bind(&ids)
     .fetch_all(pool)
     .await?;
-    job.versions = rows
-        .iter()
-        .map(|row| {
-            Ok(AiVideoVersion {
+    let mut versions: HashMap<i64, Vec<AiVideoVersion>> = HashMap::new();
+    for row in &rows {
+        versions
+            .entry(row.try_get("job_id")?)
+            .or_default()
+            .push(AiVideoVersion {
                 id: row.try_get("id")?,
                 version_no: row.try_get("version_no")?,
                 created_at: row.try_get("created_at")?,
@@ -505,9 +539,11 @@ async fn load_versions(pool: &PgPool, owner: i64, job: &mut AiJobView) -> Result
                 duration_ms: row.try_get("duration_ms")?,
                 file_url: None,
                 parent_version_id: row.try_get("parent_version_id")?,
-            })
-        })
-        .collect::<Result<_, sqlx::Error>>()?;
+            });
+    }
+    for job in jobs {
+        job.versions = versions.remove(&job.id).unwrap_or_default();
+    }
     Ok(())
 }
 
@@ -521,26 +557,18 @@ pub async fn get_job(
     if job_id <= 0 {
         return Err(AiStoreError::InvalidInput);
     }
-    let row = sqlx::query(
-        "SELECT j.*, j.highlights::text AS highlights_text, j.decisions::text AS decisions_text, \
-         j.uncertainty::text AS uncertainty_text, j.review_reasons::text AS review_reasons_text, \
-         j.attempts::text AS attempts_text, \
-         EXISTS (SELECT 1 FROM social_ai_jobs sibling WHERE sibling.twitch_user_id = j.twitch_user_id \
-         AND sibling.clip_db_id = j.clip_db_id AND sibling.id <> j.id \
-         AND sibling.status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating')) AS active_sibling, \
-         EXISTS (SELECT 1 FROM twitch_clips_social_media c WHERE c.id = j.source_clip_id \
-         AND c.id = j.clip_db_id AND c.twitch_user_id = j.twitch_user_id::text \
-         AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
-         AND c.source_kind = 'twitch') AS source_eligible \
-         FROM social_ai_jobs j WHERE j.id = $1 AND j.twitch_user_id = $2",
-    )
+    let row = sqlx::query(public_job_query!(
+        " FROM social_ai_jobs j WHERE j.id = $1 AND j.twitch_user_id = $2"
+    ))
     .bind(job_id)
     .bind(owner)
     .fetch_optional(pool)
     .await?
     .ok_or(AiStoreError::NotFound)?;
-    let mut view = view_from_row(&row, limit)?;
-    load_versions(pool, owner, &mut view).await?;
+    let view = view_from_row(&row, limit)?;
+    let mut jobs = [view];
+    load_versions(pool, owner, &mut jobs).await?;
+    let [view] = jobs;
     Ok(view)
 }
 
@@ -555,31 +583,20 @@ pub async fn list_jobs(
     if requested_limit <= 0 || before_id.is_some_and(|id| id <= 0) {
         return Err(AiStoreError::InvalidInput);
     }
-    let rows = sqlx::query(
-        "SELECT j.*, j.highlights::text AS highlights_text, j.decisions::text AS decisions_text, \
-         j.uncertainty::text AS uncertainty_text, j.review_reasons::text AS review_reasons_text, \
-         j.attempts::text AS attempts_text, \
-         EXISTS (SELECT 1 FROM social_ai_jobs sibling WHERE sibling.twitch_user_id = j.twitch_user_id \
-         AND sibling.clip_db_id = j.clip_db_id AND sibling.id <> j.id \
-         AND sibling.status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating')) AS active_sibling, \
-         EXISTS (SELECT 1 FROM twitch_clips_social_media c WHERE c.id = j.source_clip_id \
-         AND c.id = j.clip_db_id AND c.twitch_user_id = j.twitch_user_id::text \
-         AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
-         AND c.source_kind = 'twitch') AS source_eligible \
-         FROM social_ai_jobs j WHERE j.twitch_user_id = $1 \
-         AND ($2::bigint IS NULL OR j.id < $2) ORDER BY j.id DESC LIMIT $3",
-    )
+    let rows = sqlx::query(public_job_query!(
+        " FROM social_ai_jobs j WHERE j.twitch_user_id = $1 \
+         AND ($2::bigint IS NULL OR j.id < $2) ORDER BY j.id DESC LIMIT $3"
+    ))
     .bind(owner)
     .bind(before_id)
     .bind(requested_limit.min(50))
     .fetch_all(pool)
     .await?;
-    let mut jobs = Vec::with_capacity(rows.len());
-    for row in &rows {
-        let mut view = view_from_row(row, limit)?;
-        load_versions(pool, owner, &mut view).await?;
-        jobs.push(view);
-    }
+    let mut jobs = rows
+        .iter()
+        .map(|row| view_from_row(row, limit))
+        .collect::<Result<Vec<_>, _>>()?;
+    load_versions(pool, owner, &mut jobs).await?;
     Ok(jobs)
 }
 
@@ -594,14 +611,15 @@ pub async fn create_job(
         return Err(AiStoreError::InvalidInput);
     }
     let id: Option<i64> = sqlx::query_scalar(
-        "INSERT INTO social_ai_jobs (twitch_user_id, clip_db_id, source_clip_id) \
-         SELECT $1, c.id, c.id FROM twitch_clips_social_media c \
+        "INSERT INTO social_ai_jobs (twitch_user_id, clip_db_id, source_clip_id, source_twitch_clip_id) \
+         SELECT $1, c.id, c.id, c.clip_id FROM twitch_clips_social_media c \
          WHERE c.id = $2 AND c.twitch_user_id = $3 \
          AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
          AND c.source_kind = 'twitch' \
          ON CONFLICT (twitch_user_id, clip_db_id) \
          WHERE status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating') \
-         DO UPDATE SET updated_at = social_ai_jobs.updated_at RETURNING id",
+         DO UPDATE SET updated_at = social_ai_jobs.updated_at \
+         WHERE social_ai_jobs.source_twitch_clip_id = EXCLUDED.source_twitch_clip_id RETURNING id",
     )
     .bind(owner)
     .bind(clip_db_id)
@@ -623,7 +641,7 @@ async fn fail_missing_source(
          WHERE j.id = $1 AND j.twitch_user_id = $2 \
          AND j.status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating') \
          AND NOT EXISTS (SELECT 1 FROM twitch_clips_social_media c \
-         WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id \
+         WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id AND c.clip_id = j.source_twitch_clip_id \
          AND c.twitch_user_id = j.twitch_user_id::text \
          AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
          AND c.source_kind = 'twitch')",
@@ -645,7 +663,7 @@ pub async fn load_job_for_runner(
         "SELECT j.id, j.clip_db_id, j.status, j.stage, j.attempts::text AS attempts_text, \
          j.checkpoints::text AS checkpoints_text, \
          EXISTS (SELECT 1 FROM twitch_clips_social_media c \
-         WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id \
+         WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id AND c.clip_id = j.source_twitch_clip_id \
          AND c.twitch_user_id = j.twitch_user_id::text \
          AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
          AND c.source_kind = 'twitch') AS source_eligible \
@@ -671,14 +689,21 @@ pub async fn load_job_for_runner(
     {
         return Err(AiStoreError::InvalidStoredData);
     }
-    Ok(JobSnapshot {
+    let snapshot = JobSnapshot {
         id: row.try_get("id")?,
         clip_db_id: row.try_get("clip_db_id")?,
         status: row.try_get("status")?,
         stage,
         attempts_for_stage: attempts.get(&stage_name).copied().unwrap_or(0),
         checkpoints,
-    })
+    };
+    if matches!(
+        snapshot.status.as_str(),
+        "preparing" | "transcribing" | "analyzing" | "planning" | "rendering" | "validating"
+    ) {
+        lease.claimed_work = true;
+    }
+    Ok(snapshot)
 }
 
 fn stage_from_str(value: &str) -> Result<AiStage, AiStoreError> {
@@ -709,7 +734,7 @@ pub async fn claim_job(
          WHERE j.id = $1 AND j.twitch_user_id = $2 AND j.status = 'queued' \
          AND COALESCE((attempts ->> stage)::integer, 0) < $3 \
          AND EXISTS (SELECT 1 FROM twitch_clips_social_media c \
-         WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id \
+         WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id AND c.clip_id = j.source_twitch_clip_id \
          AND c.twitch_user_id = j.twitch_user_id::text \
          AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
          AND c.source_kind = 'twitch') \
@@ -814,7 +839,13 @@ pub async fn save_stage(
          measured_provider_cost_usd = CASE WHEN $21::boolean THEN $19::double precision ELSE measured_provider_cost_usd END, \
          updated_at = NOW() \
          WHERE id = $1 AND twitch_user_id = $2 AND stage = $3 AND status = $3 \
-         AND NOT checkpoints ? $3 RETURNING id",
+         AND NOT checkpoints ? $3 \
+         AND EXISTS (SELECT 1 FROM twitch_clips_social_media c \
+         WHERE c.id = social_ai_jobs.source_clip_id AND c.id = social_ai_jobs.clip_db_id \
+         AND c.clip_id = social_ai_jobs.source_twitch_clip_id \
+         AND c.twitch_user_id = social_ai_jobs.twitch_user_id::text \
+         AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
+         AND c.source_kind = 'twitch') RETURNING id",
     )
     .bind(job_id)
     .bind(owner)
@@ -953,6 +984,7 @@ pub async fn retry_job(
          AND COALESCE((attempts ->> stage)::integer, 0) < $3 \
          AND EXISTS (SELECT 1 FROM twitch_clips_social_media c \
          WHERE c.id = social_ai_jobs.source_clip_id AND c.id = social_ai_jobs.clip_db_id \
+         AND c.clip_id = social_ai_jobs.source_twitch_clip_id \
          AND c.twitch_user_id = social_ai_jobs.twitch_user_id::text \
          AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
          AND c.source_kind = 'twitch') \
@@ -1010,7 +1042,7 @@ pub async fn finish_job(
          WHERE j.id = $1 AND j.twitch_user_id = $2 AND j.status = 'validating' \
          AND j.stage = 'validating' AND j.checkpoints ? 'validating' \
          AND EXISTS (SELECT 1 FROM twitch_clips_social_media c \
-         WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id \
+         WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id AND c.clip_id = j.source_twitch_clip_id \
          AND c.twitch_user_id = j.twitch_user_id::text \
          AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
          AND c.source_kind = 'twitch') \
@@ -1046,14 +1078,14 @@ pub async fn recover_stale_jobs(
     }
     let changed = sqlx::query(
         "WITH stale AS (SELECT j.id, EXISTS (SELECT 1 FROM twitch_clips_social_media c \
-         WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id \
+         WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id AND c.clip_id = j.source_twitch_clip_id \
          AND c.twitch_user_id = j.twitch_user_id::text \
          AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
          AND c.source_kind = 'twitch') AS source_eligible \
          FROM social_ai_jobs j WHERE j.twitch_user_id = $1 \
          AND (j.status IN ('preparing','transcribing','analyzing','planning','rendering','validating') \
          OR (j.status = 'queued' AND NOT EXISTS (SELECT 1 FROM twitch_clips_social_media c \
-         WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id \
+         WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id AND c.clip_id = j.source_twitch_clip_id \
          AND c.twitch_user_id = j.twitch_user_id::text \
          AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
          AND c.source_kind = 'twitch'))) \
