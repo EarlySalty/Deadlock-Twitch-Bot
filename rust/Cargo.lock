@@ -3923,6 +3923,7 @@ dependencies = [
 name = "tb-llm"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "fireworks-model-selection",
  "fs2",
@@ -3939,6 +3940,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uplink-infisical-transport 0.1.0",
+ "uuid",
  "wiremock",
  "zeroize",
 ]

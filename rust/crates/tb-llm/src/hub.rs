@@ -25,7 +25,7 @@ pub use replay::{EvalResponse, LocalClient};
 /// Zeitgrenze, wenn der Aufrufer keine nennt.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(240);
 /// Obergrenze fuer eine vom Anbieter genannte Wartezeit.
-const MAX_RETRY_AFTER_SECS: u64 = 5;
+pub(crate) const MAX_RETRY_AFTER_SECS: u64 = 5;
 
 /// Eine Nachricht im Verlauf.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +105,7 @@ pub struct Request {
     /// Fester Endpunkt statt Anbieterwahl. Fuer Tests und fuer Aufrufer, die
     /// aus fachlichen Gruenden an genau einer Adresse haengen.
     pub endpoint: Option<LlmEndpoint>,
+    pub twitch_broadcaster: Option<String>,
 }
 
 impl Request {
@@ -196,6 +197,10 @@ impl Request {
     }
     pub fn endpoint(mut self, endpoint: LlmEndpoint) -> Self {
         self.endpoint = Some(endpoint);
+        self
+    }
+    pub fn twitch_broadcaster(mut self, broadcaster_id: impl Into<String>) -> Self {
+        self.twitch_broadcaster = Some(broadcaster_id.into());
         self
     }
 }
@@ -296,6 +301,21 @@ pub async fn complete(use_case: &str, request: Request) -> Result<Response, LlmE
 /// technische Details stehen auf `debug!`. Aufrufer ergänzen höchstens eine
 /// Debug-Meldung, damit derselbe Fehler nicht doppelt gewarnt wird.
 pub async fn complete_detailed(use_case: &str, request: Request) -> Result<Response, LlmFailure> {
+    complete_routed(use_case, request, crate::brain_route::installed(use_case)).await
+}
+
+pub(crate) async fn complete_routed(
+    use_case: &str,
+    request: Request,
+    brain: Option<Arc<crate::brain_route::BrainRoute>>,
+) -> Result<Response, LlmFailure> {
+    match brain {
+        Some(route) => route.complete(use_case, &request).await,
+        None => complete_direct(use_case, request).await,
+    }
+}
+
+async fn complete_direct(use_case: &str, request: Request) -> Result<Response, LlmFailure> {
     let chain: Vec<LlmEndpoint> = match &request.endpoint {
         Some(endpoint) => vec![endpoint.clone()],
         None if request.failover => endpoint_chain(use_case),
@@ -598,6 +618,7 @@ pub(crate) async fn call_endpoint(
                 error_code,
                 http_status,
                 latency_ms: started.elapsed().as_millis() as i64,
+                model: None,
             };
             ledger::journal_completion(&completion);
             let finish = tokio::spawn(ledger::finish(completion));
@@ -825,7 +846,7 @@ async fn finish(response: reqwest::Response) -> Result<Value, RawError> {
     }
     Ok(payload)
 }
-async fn bounded_response(mut response: reqwest::Response) -> Result<Vec<u8>, LlmError> {
+pub(crate) async fn bounded_response(mut response: reqwest::Response) -> Result<Vec<u8>, LlmError> {
     const MAX_RESPONSE: usize = 8 * 1024 * 1024;
     if response
         .content_length()
@@ -849,11 +870,11 @@ async fn bounded_response(mut response: reqwest::Response) -> Result<Vec<u8>, Ll
 
 /// Anbieter-Body auf 500 Zeichen gekuerzt: genug fuer "credit balance is too
 /// low", zu wenig fuer eine ganze HTML-Fehlerseite im Log.
-fn kurz(body: &str) -> String {
+pub(crate) fn kurz(body: &str) -> String {
     body.chars().take(500).collect()
 }
 
-fn transport_error(error: &reqwest::Error) -> LlmError {
+pub(crate) fn transport_error(error: &reqwest::Error) -> LlmError {
     if error.is_timeout() {
         LlmError::Timeout(error.to_string())
     } else if error.is_decode() {
@@ -911,27 +932,21 @@ pub fn strip_think(raw: &str) -> String {
     re.replace_all(raw, "").trim().to_string()
 }
 
-/// Ein HTTP-Client fuer alle Aufrufe (ein Verbindungspool). Die Zeitgrenze
-/// liegt nicht im Client, sondern um jeden Request, deshalb braucht es keinen
-/// Client je Frist.
-fn http_client() -> Result<reqwest::Client, LlmError> {
+pub(crate) fn http_client() -> Result<reqwest::Client, LlmError> {
     static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
     CLIENT
-        .get_or_init(|| {
-            reqwest::Client::builder()
-                .no_proxy()
-                // Keine Gesamtfrist im Client: die legt `call_endpoint` per
-                // `tokio::time::timeout` um jeden Request. Nur der
-                // Verbindungsaufbau hat eine feste Grenze.
-                .connect_timeout(Duration::from_secs(10))
-                // Umleitungen sind bei einem API-Endpunkt kein normaler Fall:
-                // sie koennten den Schluessel an eine fremde Adresse tragen.
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .map_err(|error| error.to_string())
-        })
+        .get_or_init(new_http_client)
         .clone()
         .map_err(LlmError::Transport)
+}
+
+pub(crate) fn new_http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .no_proxy()
+        .connect_timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
