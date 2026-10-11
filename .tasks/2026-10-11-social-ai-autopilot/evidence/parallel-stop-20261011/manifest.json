@@ -1,0 +1,104 @@
+{
+  "base_sha": "7ae7f2c9e12c1385c53a0b9faf016657e2b1769a",
+  "boundary": "Preserved untested interrupted drafts only. No build, gate, main or live acceptance.",
+  "files": [
+    {
+      "track": "B",
+      "file": "track-b/tracked.patch.gz",
+      "bytes": 601,
+      "sha256": "2cb73bd02b7a840afc4be52b929d7d064fedf24b3fe2a0ba6e2e59b86eed5da7",
+      "encoding": "gzip",
+      "uncompressed_bytes": 1730,
+      "uncompressed_sha256": "fa6d735e5f2c156b8c1193636f42d64f761dd012c373e4688cff9ceceac93231",
+      "local_original": "track-b/tracked.patch"
+    },
+    {
+      "track": "B",
+      "file": "track-b/new-files/rust/crates/tb-social-media/src/ai_editor/revision.rs",
+      "bytes": 13903,
+      "sha256": "8a577f3f180620cf16b831cfb78badd96354f4af38481d49c183582bea278819"
+    },
+    {
+      "track": "B",
+      "file": "track-b/new-files/rust/migrations/20261011200101_social_ai_revisions.sql",
+      "bytes": 2716,
+      "sha256": "fc670a3e24c318a02e2d25e881088785cb02bfcd76d9664bd1971a24d90eb280"
+    },
+    {
+      "track": "C",
+      "file": "track-c/tracked.patch",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "track": "C",
+      "file": "track-c/new-files/ops/social-ai/learning.yaml",
+      "bytes": 149,
+      "sha256": "43b3549689d79299e787db4ba3bdd7eef6a4fd1eb441d3458ebb3bdb6f47bf2c"
+    },
+    {
+      "track": "C",
+      "file": "track-c/new-files/rust/crates/tb-social-media/src/social_ai_learning.rs",
+      "bytes": 1204,
+      "sha256": "b499dfee365c1c67d67315a1dc2d04e06f022d2fe4b494e5473d6839e7377c32"
+    },
+    {
+      "track": "C",
+      "file": "track-c/new-files/rust/crates/tb-social-media/src/social_ai_learning/config.rs",
+      "bytes": 1372,
+      "sha256": "f167fb79d66da19f33837c153935d023d9416e680a3dd6a6fd6734f79574cd55"
+    },
+    {
+      "track": "C",
+      "file": "track-c/new-files/rust/crates/tb-social-media/src/social_ai_learning/mod.rs",
+      "bytes": 1726,
+      "sha256": "688b6bae9951e53ceb2e9c878c199252fcfd5e963246e0a9d88d4e00d15773e5"
+    },
+    {
+      "track": "C",
+      "file": "track-c/new-files/rust/crates/tb-social-media/src/social_ai_learning/types.rs",
+      "bytes": 5014,
+      "sha256": "339881b7ba471b270131dfb50603b1710a023364dfc725fe7c3528d8143705c1"
+    },
+    {
+      "track": "C",
+      "file": "track-c/new-files/rust/migrations/20261011200200_social_ai_learning.sql",
+      "bytes": 3239,
+      "sha256": "1a332d73047317f9167bd5ef66f796c4d05ac270b7ce3f00520d02d0df8b3c25"
+    },
+    {
+      "track": "D",
+      "file": "track-d/tracked.patch.gz",
+      "bytes": 469,
+      "sha256": "df5f321777bd854776030ea54bcff3ff87170e3faf57de27077db52b30097282",
+      "encoding": "gzip",
+      "uncompressed_bytes": 1092,
+      "uncompressed_sha256": "d09ee3573dad953991d9dee926e21741d5f0913df6832fb4a5dce800d3beded9",
+      "local_original": "track-d/tracked.patch"
+    },
+    {
+      "track": "D",
+      "file": "track-d/new-files/bot/admin_dashboard/src/api/socialAi.ts",
+      "bytes": 2142,
+      "sha256": "d815c6a716235a1ad9a251d26e10cf617dacb2dacab805cb0fe149d2249de4d4"
+    },
+    {
+      "track": "D",
+      "file": "track-d/new-files/bot/admin_dashboard/src/pages/operations/SocialAiUsage.tsx",
+      "bytes": 13716,
+      "sha256": "7cab9325156de2a2c082362693773d2c5bcc9d3adeeb1642c372e00c84f50bc9"
+    },
+    {
+      "track": "D",
+      "file": "track-d/new-files/bot/admin_dashboard/src/pages/socialAi/SocialAiLayout.tsx",
+      "bytes": 1539,
+      "sha256": "3ff63902bcc3a6685bd5171f5d0c33f6667efecde822f890c8a863abf8d2ea4e"
+    },
+    {
+      "track": "D",
+      "file": "track-d/new-files/bot/admin_dashboard/src/utils/socialAi.ts",
+      "bytes": 1181,
+      "sha256": "2a8c4891546157a54e65864cc8cefe290d9b1b3424d41c328a1abcb7dc3d7dfb"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+personal_min_versions: 2
+global_min_owners: 5
+global_min_decisions: 10
+global_min_support_percent: 80
+evidence_window_days: 90
+max_skill_bytes: 4096
