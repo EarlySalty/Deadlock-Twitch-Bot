@@ -2,8 +2,10 @@ use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{pool::PoolConnection, postgres::PgRow, PgPool, Postgres, Row};
+use sqlx::{postgres::PgRow, PgPool, Row};
 use thiserror::Error;
+
+pub use crate::production_lease::{acquire_production_lease, ProductionLease};
 
 #[derive(Debug, Error)]
 pub enum AiStoreError {
@@ -19,6 +21,8 @@ pub enum AiStoreError {
     Conflict,
     #[error("Die erlaubten Versuche für diesen Schritt sind aufgebraucht.")]
     AttemptsExhausted,
+    #[error(transparent)]
+    Lease(#[from] crate::production_lease::ProductionLeaseError),
     #[error("Gespeicherte Auftragsdaten sind ungültig.")]
     InvalidStoredData,
 }
@@ -339,43 +343,6 @@ pub struct JobSnapshot {
     pub stage: AiStage,
     pub attempts_for_stage: i32,
     pub checkpoints: BTreeMap<AiStage, StageCheckpoint>,
-}
-
-pub struct ProductionLease {
-    connection: PoolConnection<Postgres>,
-    claimed_work: bool,
-}
-
-impl ProductionLease {
-    pub async fn release(mut self) -> Result<(), AiStoreError> {
-        let unlocked: bool = sqlx::query_scalar(
-            "SELECT pg_advisory_unlock(hashtextextended('social_media_video_production', 0))",
-        )
-        .fetch_one(&mut *self.connection)
-        .await?;
-        self.connection.close().await?;
-        if unlocked {
-            Ok(())
-        } else {
-            Err(AiStoreError::Conflict)
-        }
-    }
-}
-
-pub async fn acquire_production_lease(
-    pool: &PgPool,
-) -> Result<Option<ProductionLease>, AiStoreError> {
-    let mut connection = pool.acquire().await?;
-    connection.close_on_drop();
-    let acquired: bool = sqlx::query_scalar(
-        "SELECT pg_try_advisory_lock(hashtextextended('social_media_video_production', 0))",
-    )
-    .fetch_one(&mut *connection)
-    .await?;
-    Ok(acquired.then_some(ProductionLease {
-        connection,
-        claimed_work: false,
-    }))
 }
 
 fn numeric_owner(twitch_user_id: &str) -> Result<i64, AiStoreError> {
@@ -701,7 +668,7 @@ pub async fn load_job_for_runner(
         snapshot.status.as_str(),
         "preparing" | "transcribing" | "analyzing" | "planning" | "rendering" | "validating"
     ) {
-        lease.claimed_work = true;
+        lease.mark_claimed_work();
     }
     Ok(snapshot)
 }
@@ -746,7 +713,7 @@ pub async fn claim_job(
     .fetch_optional(&mut *lease.connection)
     .await?;
     if claimed.is_some() {
-        lease.claimed_work = true;
+        lease.mark_claimed_work();
         Ok(())
     } else if fail_missing_source(lease, owner, job_id).await? {
         Err(AiStoreError::SourceUnavailable)
@@ -1073,7 +1040,7 @@ pub async fn recover_stale_jobs(
     if requested_limit <= 0 {
         return Err(AiStoreError::InvalidInput);
     }
-    if lease.claimed_work {
+    if lease.has_claimed_work() {
         return Err(AiStoreError::Conflict);
     }
     let changed = sqlx::query(
