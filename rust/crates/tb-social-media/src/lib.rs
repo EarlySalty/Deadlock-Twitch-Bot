@@ -38,6 +38,7 @@
 //! - `report_writer` — Report-Aggregation + Markdown (social_media_reports).
 //! - `report_dispatcher` — wöchentlicher Admin-Report-Generator (DM=B10 aus).
 
+pub mod ai_editor;
 pub mod analytics;
 pub mod approval;
 pub mod approval_worker;
