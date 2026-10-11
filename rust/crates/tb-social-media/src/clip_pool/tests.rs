@@ -778,6 +778,299 @@ async fn legacy_selectors_are_isolated_but_existing_upload_prerequisites_survive
 }
 
 #[tokio::test]
+async fn full_migration_chain_preserves_manual_uploads_at_import_and_settings_cutovers() {
+    let dsn = crate::test_support::test_dsn().expect("owned local test database required");
+    let pool = PgPoolOptions::new()
+        .max_connections(6)
+        .connect(&dsn)
+        .await
+        .unwrap();
+    sqlx::migrate!("../../migrations").run(&pool).await.unwrap();
+    let approval_column: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public'
+            AND table_name = 'social_media_clip_approval' AND column_name = 'produced_video_id')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(approval_column);
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("manual.mp4");
+    tokio::fs::write(&file, b"manual upload fixture")
+        .await
+        .unwrap();
+    for (owner, login, via_settings) in [
+        ("7042001", "m1a_wfc3_import", false),
+        ("7042002", "m1a_wfc3_settings", true),
+    ] {
+        sqlx::query("INSERT INTO twitch_streamers (twitch_user_id, twitch_login) VALUES ($1, $2)")
+            .bind(owner)
+            .bind(login)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (before, _) = crate::clip_manager::register_manual_upload(
+            &pool,
+            &format!("{login}_before"),
+            owner,
+            Some("Eigener Upload"),
+            file.to_str().unwrap(),
+            30.0,
+        )
+        .await
+        .unwrap();
+        let twitch: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media
+            (clip_id, twitch_user_id, streamer_login, clip_url, game_id, created_at)
+            VALUES ($1, $2, $3, 'https://clips.twitch.tv/fixture', $4, NOW()) RETURNING id",
+        )
+        .bind(format!("{login}_twitch"))
+        .bind(owner)
+        .bind(login)
+        .bind(DEADLOCK_GAME_ID)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let reserved: i64 = sqlx::query_scalar(
+            "INSERT INTO twitch_clips_social_media
+            (clip_id, twitch_user_id, streamer_login, clip_url, game_id, created_at)
+            VALUES ($1, $2, $3, 'https://clips.twitch.tv/reserved', $4, NOW()) RETURNING id",
+        )
+        .bind(format!("{login}_reserved"))
+        .bind(owner)
+        .bind(login)
+        .bind(DEADLOCK_GAME_ID)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let reserved_queue =
+            crate::clip_queue::queue_upload(&pool, reserved, "youtube", None, None, None, None, 0)
+                .await
+                .unwrap();
+        let reserved_before: serde_json::Value =
+            sqlx::query_scalar("SELECT to_jsonb(q) FROM twitch_clips_upload_queue q WHERE id = $1")
+                .bind(reserved_queue)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let enabled = AutopilotSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        if via_settings {
+            autopilot_settings::save(&pool, owner, &enabled)
+                .await
+                .unwrap();
+        } else {
+            start_import(&pool, owner, login).await.unwrap();
+        }
+        let (after, _) = crate::clip_manager::register_manual_upload(
+            &pool,
+            &format!("{login}_after"),
+            owner,
+            Some("Neuer eigener Upload"),
+            file.to_str().unwrap(),
+            30.0,
+        )
+        .await
+        .unwrap();
+        for _ in 0..2 {
+            start_import(&pool, owner, login).await.unwrap();
+            autopilot_settings::save(&pool, owner, &enabled)
+                .await
+                .unwrap();
+        }
+        for id in [before, after] {
+            let source: (String, Option<String>, bool, bool) = sqlx::query_as(
+                "SELECT source_kind,
+                pool_managed_at::text, pool_legacy_reserved, pool_legacy_prerequisite
+                FROM twitch_clips_social_media WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(source, ("manual_upload".into(), None, false, false));
+            assert!(legacy_automatic_allowed(&pool, id).await.unwrap());
+            let id32 = i32::try_from(id).unwrap();
+            assert!(crate::approval::iter_clips_ohne_enrichment(&pool, 100)
+                .await
+                .contains(&id32));
+            sqlx::query(
+                "UPDATE twitch_clips_social_media SET category_key = 'deadlock' WHERE id = $1",
+            )
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+            crate::enrichment::ensure_enrichment_row(&pool, id32).await;
+            assert!(crate::enrichment::iter_pending_enrichments(&pool, 100)
+                .await
+                .contains(&id32));
+            crate::enrichment::update_enrichment_status(
+                &pool,
+                id32,
+                crate::enrichment::STATUS_DONE,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+            let outcome = crate::enrich_pipeline::ClipEnrichmentPipeline::new(pool.clone())
+                .run(id32, None, &NeverLlm, false)
+                .await
+                .unwrap();
+            assert_eq!(outcome.status, crate::enrichment::STATUS_DONE);
+            crate::approval::mark_clip_awaiting_approval(&pool, id32).await;
+            assert_eq!(
+                crate::approval::get_approval_record(&pool, id32)
+                    .await
+                    .unwrap()
+                    .state,
+                crate::approval::STATE_AWAITING
+            );
+            let record = crate::approval::handle_decision(
+                &pool,
+                id32,
+                crate::approval::DECISION_APPROVE,
+                &["youtube".into()],
+                Some(owner),
+            )
+            .await
+            .unwrap();
+            assert_eq!(record.state, crate::approval::STATE_APPROVED);
+            let queued: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM twitch_clips_upload_queue
+                WHERE clip_id = $1 AND platform = 'youtube' AND produced_video_id IS NULL",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(queued, 1);
+            assert!(crate::approval::ensure_queued_uploads(&pool, id32)
+                .await
+                .is_empty());
+            sqlx::query(
+                "UPDATE twitch_clips_social_media SET game_id = $2,
+                converted_file_path = local_file_path, uploaded_youtube = TRUE WHERE id = $1",
+            )
+            .bind(id)
+            .bind(DEADLOCK_GAME_ID)
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "UPDATE twitch_clips_upload_queue SET status = 'completed' WHERE clip_id = $1",
+            )
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let recent = ClipRecord {
+            clip_id: format!("{login}_recent"),
+            streamer_login: login.into(),
+            twitch_user_id: owner.into(),
+            ..clip("recent", "2025-06-01T00:00:00Z")
+        };
+        assert_eq!(
+            register_recent(&pool, owner, &[recent]).await.unwrap(),
+            (1, 1)
+        );
+        let recent_id: i64 =
+            sqlx::query_scalar("SELECT id FROM twitch_clips_social_media WHERE clip_id = $1")
+                .bind(format!("{login}_recent"))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(!legacy_automatic_allowed(&pool, recent_id).await.unwrap());
+        assert!(!legacy_automatic_allowed(&pool, twitch).await.unwrap());
+        assert!(matches!(
+            crate::clip_queue::queue_upload(&pool, twitch, "youtube", None, None, None, None, 0)
+                .await,
+            Err(crate::clip_queue::QueueError::PoolManaged)
+        ));
+        assert!(
+            sqlx::query("INSERT INTO social_media_clip_approval (clip_db_id) VALUES ($1)")
+                .bind(i32::try_from(twitch).unwrap())
+                .execute(&pool)
+                .await
+                .is_err()
+        );
+        let reserved_flags: (bool, bool) = sqlx::query_as(
+            "SELECT pool_legacy_reserved,
+            pool_legacy_prerequisite FROM twitch_clips_social_media WHERE id = $1",
+        )
+        .bind(reserved)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(reserved_flags, (true, true));
+        let reserved_after: serde_json::Value =
+            sqlx::query_scalar("SELECT to_jsonb(q) FROM twitch_clips_upload_queue q WHERE id = $1")
+                .bind(reserved_queue)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(reserved_before, reserved_after);
+        assert!(list(&pool, owner, 100, 0)
+            .await
+            .unwrap()
+            .clips
+            .iter()
+            .all(|clip| clip.clip_db_id != Some(before) && clip.clip_db_id != Some(after)));
+        autopilot_settings::save(&pool, owner, &enabled)
+            .await
+            .unwrap();
+        for id in [before, after] {
+            assert!(legacy_automatic_allowed(&pool, id).await.unwrap());
+            sqlx::query("DELETE FROM twitch_clips_upload_queue WHERE clip_id = $1")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("DELETE FROM twitch_clips_social_media WHERE id = $1")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let manual_history: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM social_clip_pool
+            WHERE twitch_user_id = $1 AND clip_id IN ($2, $3)",
+        )
+        .bind(owner)
+        .bind(format!("{login}_before"))
+        .bind(format!("{login}_after"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(manual_history, 0);
+        sqlx::query(
+            "DELETE FROM twitch_clips_upload_queue WHERE clip_id IN
+            (SELECT id FROM twitch_clips_social_media WHERE twitch_user_id = $1)",
+        )
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM twitch_clips_social_media WHERE twitch_user_id = $1")
+            .bind(owner)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM twitch_streamers WHERE twitch_user_id = $1")
+            .bind(owner)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    pool.close().await;
+}
+
+#[tokio::test]
 async fn filter_changes_and_deselection_preserve_running_work_and_exact_file_events() {
     use crate::autopilot_settings::ScheduleSlot;
     use crate::produced_video::{self, NewProducedVideo, RenderedVideo};

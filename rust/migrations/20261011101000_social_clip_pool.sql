@@ -56,7 +56,7 @@ CREATE INDEX social_clip_import_pending ON social_clip_import_jobs (next_retry_a
 
 CREATE FUNCTION social_clip_capture_history(c twitch_clips_social_media) RETURNS VOID LANGUAGE plpgsql AS $$
 BEGIN
-    IF c.game_id IS DISTINCT FROM '2132205352' OR c.pool_managed_at IS NULL THEN
+    IF c.source_kind = 'manual_upload' OR c.game_id IS DISTINCT FROM '2132205352' OR c.pool_managed_at IS NULL THEN
         RETURN;
     END IF;
     IF NOT c.pool_legacy_reserved AND c.converted_file_path IS NULL
@@ -97,7 +97,7 @@ BEGIN
         pool_legacy_reserved = EXISTS (SELECT 1 FROM twitch_clips_upload_queue q WHERE q.clip_id = c.id AND q.produced_video_id IS NULL),
         pool_legacy_prerequisite = EXISTS (SELECT 1 FROM twitch_clips_upload_queue q WHERE q.clip_id = c.id AND q.produced_video_id IS NULL
             AND q.status IN ('pending', 'processing', 'waiting_connection', 'waiting_tiktok_approval', 'waiting_schedule'))
-    WHERE c.twitch_user_id = owner_id AND c.pool_managed_at IS NULL;
+    WHERE c.twitch_user_id = owner_id AND c.source_kind <> 'manual_upload' AND c.pool_managed_at IS NULL;
 END;
 $$;
 
@@ -112,7 +112,7 @@ BEGIN
     IF TG_OP = 'INSERT' THEN
         PERFORM pg_advisory_xact_lock(hashtextextended('social_autopilot:' || NEW.twitch_user_id, 0));
         SELECT managed_since INTO managed_at FROM social_clip_pool_owners WHERE twitch_user_id = NEW.twitch_user_id;
-        NEW.pool_managed_at := managed_at;
+        NEW.pool_managed_at := CASE WHEN NEW.source_kind = 'manual_upload' THEN NULL ELSE managed_at END;
         NEW.pool_legacy_reserved := FALSE;
         NEW.pool_legacy_prerequisite := FALSE;
     ELSE
