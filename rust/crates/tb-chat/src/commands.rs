@@ -682,7 +682,7 @@ impl CommandEngine {
                 true
             }
             "!silentban" => {
-                if event.is_mod_or_broadcaster() {
+                if self.can_control_bot(event).await {
                     self.cmd_silentban(event).await;
                 } else {
                     self.reply(
@@ -694,7 +694,7 @@ impl CommandEngine {
                 true
             }
             "!silentraid" => {
-                if event.is_mod_or_broadcaster() {
+                if self.can_control_bot(event).await {
                     self.cmd_silentraid(event).await;
                 } else {
                     self.reply(
@@ -858,7 +858,7 @@ impl CommandEngine {
         }
     }
 
-    async fn can_toggle_engagement(&self, event: &ChatMessageEvent) -> bool {
+    async fn can_control_bot(&self, event: &ChatMessageEvent) -> bool {
         event.is_mod_or_broadcaster() || self._super_mod.is_super_mod(&event.chatter_user_id).await
     }
 
@@ -2286,7 +2286,7 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
 
     async fn cmd_engagement_set_enabled(&self, event: &ChatMessageEvent, enabled: bool) {
-        if !self.can_toggle_engagement(event).await {
+        if !self.can_control_bot(event).await {
             self.reply(event, "Nur Broadcaster, Mods oder Super-Mod dürfen das.")
                 .await;
             return;
@@ -3672,6 +3672,40 @@ mod tests {
             msg.contains("Neu-Autorisierung erforderlich"),
             "Meldung: {msg}"
         );
+    }
+
+    #[tokio::test]
+    async fn silent_toggles_erlauben_super_mod_ohne_mod_badge() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        seed_partner(&pool).await;
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, raid_enabled, needs_reauth) VALUES ('bc123', TRUE, FALSE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let raid = MockRaid::default_arc();
+        let engine = CommandEngine::new(
+            pool,
+            api.clone(),
+            raid.clone(),
+            Arc::new(MockDiscordLink { url: None }),
+            Arc::new(MockInvite { reply: None }),
+            Arc::new(MockSuperMod(true)),
+            Arc::new(MockAutoban(None)),
+        );
+
+        engine.handle(&make_event("!silentban", false, false)).await;
+        engine
+            .handle(&make_event("!silentraid", false, false))
+            .await;
+
+        assert_eq!(raid.silent_ban_call_count().await, 1);
+        assert_eq!(raid.silent_raid_call_count().await, 1);
     }
 
     #[tokio::test]
