@@ -1,3 +1,10 @@
+CREATE TABLE public.social_ai_user_consent (
+    twitch_user_id TEXT PRIMARY KEY REFERENCES public.twitch_streamers(twitch_user_id) ON DELETE CASCADE,
+    external_ai_consent BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_by TEXT NOT NULL
+);
+
 CREATE TABLE public.social_ai_jobs (
     id BIGSERIAL PRIMARY KEY,
     twitch_user_id BIGINT NOT NULL CHECK (twitch_user_id > 0),
