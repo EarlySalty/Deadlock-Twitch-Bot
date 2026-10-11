@@ -692,14 +692,14 @@ pub async fn save_stage(
              ELSE COALESCE($9::jsonb, review_reasons) END, \
          original_duration_ms = COALESCE($10::bigint, original_duration_ms), \
          output_duration_ms = COALESCE($11::bigint, output_duration_ms), \
-         rendering_ms = COALESCE($21::bigint, $12::bigint, rendering_ms), \
-         provider = CASE WHEN $13 THEN $14 ELSE provider END, \
-         model = CASE WHEN $13 THEN $15 ELSE model END, \
-         processing_ms = CASE WHEN $13 THEN $16::bigint ELSE processing_ms END, \
-         input_tokens = CASE WHEN $13 THEN $17::bigint ELSE input_tokens END, \
-         output_tokens = CASE WHEN $13 THEN $18::bigint ELSE output_tokens END, \
-         estimated_provider_cost_usd = CASE WHEN $13 THEN $19::double precision ELSE estimated_provider_cost_usd END, \
-         measured_provider_cost_usd = CASE WHEN $13 THEN $20::double precision ELSE measured_provider_cost_usd END, \
+         rendering_ms = COALESCE($20::bigint, $12::bigint, rendering_ms), \
+         provider = COALESCE($13::text, provider), \
+         model = COALESCE($14::text, model), \
+         processing_ms = COALESCE($15::bigint, processing_ms), \
+         input_tokens = COALESCE($16::bigint, input_tokens), \
+         output_tokens = COALESCE($17::bigint, output_tokens), \
+         estimated_provider_cost_usd = COALESCE($18::double precision, estimated_provider_cost_usd), \
+         measured_provider_cost_usd = COALESCE($19::double precision, measured_provider_cost_usd), \
          updated_at = NOW() \
          WHERE id = $1 AND twitch_user_id = $2 AND stage = $3 AND status = $3 \
          AND NOT checkpoints ? $3 RETURNING id",
@@ -716,7 +716,6 @@ pub async fn save_stage(
     .bind(original_duration_ms)
     .bind(output_duration_ms)
     .bind(stage_rendering_ms)
-    .bind(metrics.is_some())
     .bind(metrics.and_then(|value| value.provider.as_deref()))
     .bind(metrics.and_then(|value| value.model.as_deref()))
     .bind(metrics.and_then(|value| value.processing_ms))
