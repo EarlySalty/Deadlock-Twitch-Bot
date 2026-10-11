@@ -325,18 +325,19 @@ pub async fn save_llm_output(
 /// bekommen das nackte Auto-Posting ohne LLM und laufen ueber
 /// [`crate::approval::iter_clips_ohne_enrichment`] in den Approval-Workflow.
 pub async fn iter_pending_enrichments(pool: &PgPool, limit: i64) -> Vec<i32> {
-    let rows = sqlx::query!(
-        "SELECT c.id AS \"id!\" FROM twitch_clips_social_media c \
+    let rows = sqlx::query_scalar::<_, i64>(
+        "SELECT c.id::bigint FROM twitch_clips_social_media c \
          LEFT JOIN social_media_clip_enrichment e ON e.clip_db_id = c.id \
          JOIN social_media_category k ON k.category_key = c.category_key \
          WHERE c.discarded_at IS NULL \
+           AND to_jsonb(c)->>'pool_managed_at' IS NULL \
            AND k.enrichment_enabled \
            AND COALESCE(c.upload_local_path, c.local_file_path) IS NOT NULL \
            AND (e.status IS NULL OR e.status IN ('pending', 'failed')) \
            AND c.id BETWEEN 0 AND 2147483647 \
          ORDER BY c.created_at DESC LIMIT $1",
-        limit.max(1)
     )
+    .bind(limit.max(1))
     .fetch_all(pool)
     .await
     .unwrap_or_else(|error| {
@@ -348,9 +349,9 @@ pub async fn iter_pending_enrichments(pool: &PgPool, limit: i64) -> Vec<i32> {
     });
     let mut ids = Vec::with_capacity(rows.len());
     for row in rows {
-        let Ok(id) = i32::try_from(row.id) else {
+        let Ok(id) = i32::try_from(row) else {
             tracing::warn!(
-                clip_db_id = row.id,
+                clip_db_id = row,
                 "pending enrichment clip id is out of int4 range; skipping"
             );
             continue;

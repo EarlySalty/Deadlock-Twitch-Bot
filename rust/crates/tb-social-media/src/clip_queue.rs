@@ -19,6 +19,8 @@ const PLATFORMS: [&str; 3] = ["tiktok", "youtube", "instagram"];
 pub enum QueueError {
     #[error("Invalid platform: {0}")]
     InvalidPlatform(String),
+    #[error("Dieser Clip wird im Clip-Pool verwaltet")]
+    PoolManaged,
     #[error("db: {0}")]
     Db(#[from] sqlx::Error),
 }
@@ -415,6 +417,11 @@ async fn queue_upload_record_on(
         return Ok(id);
     }
 
+    let allowed = sqlx::query_scalar::<_, bool>("SELECT to_jsonb(c)->>'pool_managed_at' IS NULL FROM twitch_clips_social_media c WHERE id = $1")
+        .bind(clip_db_id).fetch_optional(&mut *connection).await?.unwrap_or(false);
+    if !allowed {
+        return Err(QueueError::PoolManaged);
+    }
     let id = sqlx::query_scalar(
         "INSERT INTO twitch_clips_upload_queue \
             (clip_id, platform, title, description, hashtags, scheduled_at, priority, status, created_at) \

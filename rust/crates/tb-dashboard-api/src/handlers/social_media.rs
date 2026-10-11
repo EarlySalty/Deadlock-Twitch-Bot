@@ -106,6 +106,9 @@ pub use vod_archive_management::{
     action_handler as vod_archive_action_handler, list_handler as vod_archive_list_handler,
 };
 
+#[path = "social_media_autopilot.rs"]
+pub mod autopilot;
+
 const MAX_PARAMETER_LAENGE: usize = 64;
 
 fn forbidden(message: &str) -> Response {

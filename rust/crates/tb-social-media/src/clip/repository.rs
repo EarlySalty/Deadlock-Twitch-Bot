@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 
 use super::model::{ClipRecord, StreamerFetchResult};
 use crate::layout::apply_default_layout;
@@ -19,6 +19,18 @@ pub struct ClipRepository {
 }
 
 impl ClipRepository {
+    pub async fn pool_managed(&self, owner: &str) -> Result<bool, crate::clip_pool::PoolError> {
+        crate::clip_pool::is_managed(&self.pool, owner).await
+    }
+
+    pub async fn register_recent_pool(
+        &self,
+        owner: &str,
+        clips: &[ClipRecord],
+    ) -> Result<(i32, i32), crate::clip_pool::PoolError> {
+        crate::clip_pool::register_recent(&self.pool, owner, clips).await
+    }
+
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
@@ -82,58 +94,18 @@ impl ClipRepository {
             .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
         let view_count = int4_metric("view_count", rec.view_count)?;
 
-        // Prüfe ob der Clip bereits existiert.
-        let existing: Option<i64> = sqlx::query_scalar!(
-            "SELECT id AS \"id!\" FROM twitch_clips_social_media WHERE clip_id = $1",
-            &rec.clip_id
-        )
-        .fetch_optional(&self.pool)
-        .await?;
-
-        if let Some(id) = existing {
-            self.apply_layout(id, &rec.streamer_login).await;
-            return Ok((id, false));
-        }
-
-        // Kategorie einmal beim Registrieren aufloesen: die Helix-`game_id`
-        // schlaegt den Anzeigenamen, ohne Treffer landet der Clip im Fallback.
         let category_key = crate::posting_plan::resolve_category(
             &self.pool,
             rec.game_id.as_deref(),
             rec.game_name.as_deref(),
         )
         .await;
-
-        let id: i64 = sqlx::query_scalar!(
-            r#"
-            INSERT INTO twitch_clips_social_media
-                (clip_id, clip_url, clip_title, clip_thumbnail_url,
-                 streamer_login, twitch_user_id, created_at, duration_seconds,
-                 view_count, game_name, game_id, category_key, status,
-                 vod_id, vod_offset_s)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', $13, $14)
-            RETURNING id AS "id!"
-            "#,
-            &rec.clip_id,
-            &rec.clip_url,
-            &rec.clip_title,
-            rec.thumbnail_url.as_deref(),
-            &rec.streamer_login,
-            &rec.twitch_user_id,
-            created_at,
-            rec.duration_seconds,
-            view_count,
-            rec.game_name.as_deref(),
-            rec.game_id.as_deref(),
-            category_key,
-            rec.vod_id.as_deref(),
-            rec.vod_offset_s
-        )
-        .fetch_one(&self.pool)
-        .await?;
-
-        self.apply_layout(id, &rec.streamer_login).await;
-        Ok((id, true))
+        let mut tx = self.pool.begin().await?;
+        let result =
+            register_on(&mut tx, rec, created_at, view_count, &category_key, false).await?;
+        tx.commit().await?;
+        self.apply_layout(result.0, &rec.streamer_login).await;
+        Ok(result)
     }
 
     /// Belegt das Clip-Override mit dem Streamer-Default (best-effort, mirror
@@ -156,9 +128,9 @@ impl ClipRepository {
     /// einen spaeteren Monat.
     pub async fn mark_kontingent_verbrauch(&self, clip_db_id: i64) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "UPDATE twitch_clips_social_media \
+            "UPDATE twitch_clips_social_media AS c \
                 SET kontingent_verbraucht_at = COALESCE(kontingent_verbraucht_at, NOW()) \
-              WHERE id = $1",
+              WHERE id = $1 AND (to_jsonb(c)->>'pool_managed_at' IS NULL OR c.source_kind = 'manual_upload')",
         )
         .bind(clip_db_id)
         .execute(&self.pool)
@@ -197,6 +169,61 @@ impl ClipRepository {
         }
         Ok(())
     }
+}
+
+pub(crate) async fn register_on(
+    connection: &mut PgConnection,
+    rec: &ClipRecord,
+    created_at: chrono::DateTime<chrono::Utc>,
+    view_count: i32,
+    category_key: &str,
+    pool_only: bool,
+) -> Result<(i64, bool), sqlx::Error> {
+    let row: Option<(i64, bool)> = sqlx::query_as(
+        "INSERT INTO twitch_clips_social_media AS c
+            (clip_id, clip_url, clip_title, clip_thumbnail_url, streamer_login, twitch_user_id,
+             created_at, duration_seconds, view_count, game_name, game_id, category_key, status, vod_id, vod_offset_s)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         ON CONFLICT (clip_id) DO UPDATE SET clip_id = c.clip_id
+         WHERE c.twitch_user_id = EXCLUDED.twitch_user_id
+         RETURNING c.id::bigint, (xmax = 0)",
+    )
+    .bind(&rec.clip_id).bind(&rec.clip_url).bind(&rec.clip_title).bind(&rec.thumbnail_url)
+    .bind(&rec.streamer_login).bind(&rec.twitch_user_id).bind(created_at).bind(rec.duration_seconds)
+    .bind(view_count).bind(&rec.game_name).bind(&rec.game_id).bind(category_key)
+    .bind(if pool_only { "pool" } else { "pending" }).bind(&rec.vod_id).bind(rec.vod_offset_s)
+    .fetch_optional(connection).await?;
+    row.ok_or_else(|| sqlx::Error::Protocol("Der Clip gehört zu einem anderen Kanal".into()))
+}
+
+pub(crate) async fn initialize_layout_on(
+    connection: &mut PgConnection,
+    clip_id: i64,
+    owner: &str,
+) -> Result<(), sqlx::Error> {
+    let needs_layout: bool = sqlx::query_scalar("SELECT layout_override_json IS NULL FROM twitch_clips_social_media WHERE id = $1 AND twitch_user_id = $2")
+        .bind(clip_id).bind(owner).fetch_one(&mut *connection).await?;
+    if !needs_layout {
+        return Ok(());
+    }
+    let raw: Option<(serde_json::Value, bool, String)> = sqlx::query_as(
+        "SELECT layout_json, cam_enabled, mode FROM social_media_streamer_layout WHERE twitch_user_id = $1",
+    ).bind(owner).fetch_optional(&mut *connection).await?;
+    let layout = match raw {
+        Some((raw, cam_enabled, mode)) => {
+            crate::layout::StreamerLayout::from_stored_value(&raw, Some(cam_enabled), Some(&mode))
+                .map_err(|error| sqlx::Error::Protocol(error.to_string()))?
+        }
+        None => {
+            let mut layout = crate::layout::default_streamer_layout();
+            layout.cam_enabled = false;
+            layout.mode = "blur_pad".into();
+            layout
+        }
+    };
+    sqlx::query("UPDATE twitch_clips_social_media SET layout_override_json = COALESCE(layout_override_json, $2) WHERE id = $1")
+        .bind(clip_id).bind(layout.to_override_json()).execute(connection).await?;
+    Ok(())
 }
 
 #[cfg(test)]

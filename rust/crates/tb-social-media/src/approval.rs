@@ -196,6 +196,12 @@ pub async fn ensure_approval_row(pool: &PgPool, clip_db_id: i32) -> ApprovalReco
 /// Setzt den Clip (zurück) auf „wartet auf Freigabe" (Python
 /// `mark_clip_awaiting_approval`; ersetzt den Orchestrator-Stub).
 pub async fn mark_clip_awaiting_approval(pool: &PgPool, clip_db_id: i32) {
+    if !crate::clip_pool::legacy_automatic_allowed(pool, i64::from(clip_db_id))
+        .await
+        .unwrap_or(false)
+    {
+        return;
+    }
     ensure_approval_row(pool, clip_db_id).await;
     if let Err(error) = sqlx::query!(
         "UPDATE social_media_clip_approval SET state = $1, approver_user_id = NULL, \
@@ -231,16 +237,17 @@ pub async fn mark_clip_awaiting_approval(pool: &PgPool, clip_db_id: i32) {
 }
 
 pub async fn iter_clips_ohne_enrichment(pool: &PgPool, limit: i64) -> Vec<i32> {
-    sqlx::query_scalar!(
-        "SELECT c.id::int AS \"id!\" FROM twitch_clips_social_media c \
+    sqlx::query_scalar::<_, i32>(
+        "SELECT c.id::int FROM twitch_clips_social_media c \
          LEFT JOIN social_media_clip_approval a ON a.clip_db_id = c.id \
          WHERE c.discarded_at IS NULL \
+           AND to_jsonb(c)->>'pool_managed_at' IS NULL \
            AND a.clip_db_id IS NULL \
            AND COALESCE(c.status, 'pending') = 'pending' \
            AND c.id BETWEEN 0 AND 2147483647 \
          ORDER BY c.created_at DESC LIMIT $1",
-        limit.max(1)
     )
+    .bind(limit.max(1))
     .fetch_all(pool)
     .await
     .unwrap_or_default()
@@ -425,6 +432,12 @@ async fn auto_platforms(pool: &PgPool, clip_db_id: i32) -> Vec<String> {
 /// Wird am Ende der Enrichment-Pipeline aufgerufen. Im Modus `manual` passiert
 /// hier nichts, der Clip bleibt in `awaiting_approval` liegen.
 pub async fn auto_approve_if_allowed(pool: &PgPool, clip_db_id: i32) -> Vec<String> {
+    if !crate::clip_pool::legacy_automatic_allowed(pool, i64::from(clip_db_id))
+        .await
+        .unwrap_or(false)
+    {
+        return Vec::new();
+    }
     if !posting_plan::auto_schedule_allowed(pool, i64::from(clip_db_id)).await {
         return Vec::new();
     }
@@ -600,6 +613,12 @@ async fn enqueue_approved_platform(
 }
 
 pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(String, i64)> {
+    if !crate::clip_pool::legacy_automatic_allowed(pool, i64::from(clip_db_id))
+        .await
+        .unwrap_or(false)
+    {
+        return Vec::new();
+    }
     if !clip_exists(pool, clip_db_id).await {
         return Vec::new();
     }

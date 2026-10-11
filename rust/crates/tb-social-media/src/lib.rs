@@ -51,6 +51,7 @@ pub mod clip_analytics;
 pub mod clip_context;
 pub mod clip_context_harvest;
 pub mod clip_manager;
+pub mod clip_pool;
 pub mod clip_prep_worker;
 pub mod clip_queue;
 pub mod clip_templates;
