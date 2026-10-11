@@ -1,0 +1,7 @@
+version: 1
+model: claude-opus-5-5
+pricing:
+  input_micro_usd_per_million: 4000000
+  output_micro_usd_per_million: 20000000
+  cache_creation_micro_usd_per_million: 5000000
+  cache_read_micro_usd_per_million: 200000

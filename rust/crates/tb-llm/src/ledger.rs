@@ -27,6 +27,9 @@ pub fn initialize(
         .map_err(|_| "Verbrauchsherkunft bereits gesetzt")?;
     Ok(())
 }
+pub(crate) fn identity() -> Option<(&'static str, &'static str)> {
+    IDENTITY.get().copied()
+}
 pub(crate) async fn pool() -> Option<&'static PgPool> {
     POOL.get()
 }

@@ -15,6 +15,10 @@ pub fn fireworks_api_key() -> Option<String> {
         .find_map(|name| nonempty_env(name))
 }
 
+pub fn anthropic_api_key() -> Option<String> {
+    nonempty_env("ANTHROPIC_API_KEY")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
