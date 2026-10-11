@@ -1,0 +1,90 @@
+{
+  "source_head_before_metadata_correction": "dcbbb80b7acc89e537051adbfd903a5d7865d676",
+  "source_head": "4db985ebf32b457d1d727447a0b682aa40e9e11d",
+  "source_tree": "e8be4c5365b904d3f88640d9f7e06f0a4a5c4f77",
+  "boundary": "Synthetic admin frontend proof only. No registered backend binding, real data, enforcement, gate, main or live acceptance.",
+  "parent_inspected_images": [
+    "skills-1440.png",
+    "diff-390.png",
+    "limits-390.png",
+    "usage-1440.png"
+  ],
+  "other_images": "Digest and PNG geometry verified, not independently visually inspected by parent.",
+  "files": [
+    {
+      "file": "skills-1440.png",
+      "bytes": 445390,
+      "sha256": "9b097d901036d8e9718aea041c2e44f9ce87a8fd57919d9757c7574655c01346"
+    },
+    {
+      "file": "diff-1440.png",
+      "bytes": 348217,
+      "sha256": "268d556d9c181d56c9293d659bef4cb87f7df0315b25fdf860f49bd0ca335351"
+    },
+    {
+      "file": "rollback-1440.png",
+      "bytes": 291440,
+      "sha256": "edf6b676415df9502aabc0472bf64ee9a4267b2fb708c0ad8729ab3465eb314f"
+    },
+    {
+      "file": "usage-1440.png",
+      "bytes": 438877,
+      "sha256": "b95305237c48d37fef8be6119fb1a5750a0a8bbe804e35aecd94d7f7e0c52f3c"
+    },
+    {
+      "file": "usage-unknown-1440.png",
+      "bytes": 360618,
+      "sha256": "e6b2a19daad373f1d84c17df456dacba58d1fa76645dcf3890673b7ed7ba003c"
+    },
+    {
+      "file": "limits-1440.png",
+      "bytes": 463197,
+      "sha256": "1b4238e90e7e41df3bbaac434ccf36ff4529b074a5a2f57481c90fa1b6ae78db"
+    },
+    {
+      "file": "plan-1440.png",
+      "bytes": 335122,
+      "sha256": "7026273f9b3bc45f910f5f0eaed5bd86f6165d6225627e443b833a97ac548791"
+    },
+    {
+      "file": "skills-390.png",
+      "bytes": 175117,
+      "sha256": "9f26c3434b42f5402812ca2dc9aa01bac67a588e56f1c3a40ae9cd88f2d7d1b5"
+    },
+    {
+      "file": "diff-390.png",
+      "bytes": 119172,
+      "sha256": "8a9f484b9920baf22f862a2894d2a23d915c7cd6f2a245b33bc820ea9bebd4a7"
+    },
+    {
+      "file": "rollback-390.png",
+      "bytes": 142371,
+      "sha256": "34ba9f2779c3acfd78d210079bb5dad5eebcc56fdd80c3ecca64ab2c14196ddd"
+    },
+    {
+      "file": "usage-390.png",
+      "bytes": 181001,
+      "sha256": "55690fb446acf24e4e2931bb72b83f4b4e76c8c9a85ce26dbd7524003de04995"
+    },
+    {
+      "file": "usage-unknown-390.png",
+      "bytes": 114400,
+      "sha256": "8546c69f921eefcf9250d60e80338c9c8baa64df182358f2245f24d608dbe8ca"
+    },
+    {
+      "file": "limits-390.png",
+      "bytes": 173281,
+      "sha256": "8a7423c0aff391f6768aefeeb12326bbe616ef93d0a8e4bd3fb6b13a371e4af7"
+    },
+    {
+      "file": "plan-390.png",
+      "bytes": 123301,
+      "sha256": "f550fc733661d327d4d05ef1cf9bd96c93fb4750ba745893fe75aa11ceb8824d"
+    },
+    {
+      "file": "checks.json",
+      "bytes": 1922,
+      "sha256": "ba6c6cea00cd2332a805a69a375f53d9e35db2c988bb07db34cebb417d40868d"
+    }
+  ]
+}

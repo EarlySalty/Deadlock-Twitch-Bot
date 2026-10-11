@@ -1,0 +1,128 @@
+[
+  {
+    "name": "skills",
+    "width": 1440,
+    "geometry": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "diff",
+    "width": 1440,
+    "geometry": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "rollback",
+    "width": 1440,
+    "geometry": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "usage",
+    "width": 1440,
+    "geometry": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "usage-unknown",
+    "width": 1440,
+    "geometry": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "limits",
+    "width": 1440,
+    "geometry": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "name": "plan",
+    "width": 1440,
+    "geometry": {
+      "viewport": 1440,
+      "document": 1440
+    }
+  },
+  {
+    "width": 1440,
+    "functional": "passed",
+    "fixtureWrites": 6,
+    "pageErrors": [],
+    "live": false
+  },
+  {
+    "name": "skills",
+    "width": 390,
+    "geometry": {
+      "viewport": 390,
+      "document": 390
+    }
+  },
+  {
+    "name": "diff",
+    "width": 390,
+    "geometry": {
+      "viewport": 390,
+      "document": 390
+    }
+  },
+  {
+    "name": "rollback",
+    "width": 390,
+    "geometry": {
+      "viewport": 390,
+      "document": 390
+    }
+  },
+  {
+    "name": "usage",
+    "width": 390,
+    "geometry": {
+      "viewport": 390,
+      "document": 390
+    }
+  },
+  {
+    "name": "usage-unknown",
+    "width": 390,
+    "geometry": {
+      "viewport": 390,
+      "document": 390
+    }
+  },
+  {
+    "name": "limits",
+    "width": 390,
+    "geometry": {
+      "viewport": 390,
+      "document": 390
+    }
+  },
+  {
+    "name": "plan",
+    "width": 390,
+    "geometry": {
+      "viewport": 390,
+      "document": 390
+    }
+  },
+  {
+    "width": 390,
+    "functional": "passed",
+    "fixtureWrites": 6,
+    "pageErrors": [],
+    "live": false
+  }
+]

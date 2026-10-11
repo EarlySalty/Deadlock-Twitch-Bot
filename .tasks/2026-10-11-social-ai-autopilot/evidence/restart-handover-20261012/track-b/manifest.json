@@ -1,0 +1,143 @@
+{
+  "worktree": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1",
+  "head_sha": "7ae7f2c9e12c1385c53a0b9faf016657e2b1769a",
+  "head_tree_sha": "180a316075b744a44a4e825443013a17fe74bfb8",
+  "source_complete": false,
+  "clean_checkpoint": false,
+  "files": [
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/bot/dashboard_v2/src/components/socialmedia/ai/AiEditorPanel.css",
+      "archive_path": "bot/dashboard_v2/src/components/socialmedia/ai/AiEditorPanel.css",
+      "bytes": 10750,
+      "sha256": "da399f7cbf2f5dd459776ed1a7a8b6b48858883e9f6856b52d434a6c2c7504ad"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/bot/dashboard_v2/src/components/socialmedia/ai/AiEditorPanel.tsx",
+      "archive_path": "bot/dashboard_v2/src/components/socialmedia/ai/AiEditorPanel.tsx",
+      "bytes": 29307,
+      "sha256": "0a1a09e07cb20232d6318052d77b6ffd503c9a8e06b7ed911da1340218e606e4"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/bot/dashboard_v2/src/components/socialmedia/ai/RevisionControls.tsx",
+      "archive_path": "bot/dashboard_v2/src/components/socialmedia/ai/RevisionControls.tsx",
+      "bytes": 9511,
+      "sha256": "9fac4ef9438783c18718553e1902a2b416b519cd55e106cfc953b3ca744486f1"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/bot/dashboard_v2/src/components/socialmedia/ai/api.ts",
+      "archive_path": "bot/dashboard_v2/src/components/socialmedia/ai/api.ts",
+      "bytes": 13740,
+      "sha256": "09033250c38ca18a3e0257fe2161c650036da3d969dccac571bcaa94ee70424d"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/bot/dashboard_v2/src/components/socialmedia/ai/preview-entry.tsx",
+      "archive_path": "bot/dashboard_v2/src/components/socialmedia/ai/preview-entry.tsx",
+      "bytes": 2730,
+      "sha256": "efc65db2a6a66819d5d132c20ddbeaaabf4fca0a8d7250e3a25aea7e21d254be"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/bot/dashboard_v2/src/components/socialmedia/ai/preview-routes.ts",
+      "archive_path": "bot/dashboard_v2/src/components/socialmedia/ai/preview-routes.ts",
+      "bytes": 277,
+      "sha256": "30105e817a5ae7c81eed447f4f8ba0e88b6cb3edcb6175c6fd863b4870da9167"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/bot/dashboard_v2/src/components/socialmedia/ai/preview.config.ts",
+      "archive_path": "bot/dashboard_v2/src/components/socialmedia/ai/preview.config.ts",
+      "bytes": 2050,
+      "sha256": "091ebb4f57981806c4e4bf2a9b6925d1609bd6d8bd2fe77d25d92540117fd2b9"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/bot/dashboard_v2/src/components/socialmedia/ai/preview.ts",
+      "archive_path": "bot/dashboard_v2/src/components/socialmedia/ai/preview.ts",
+      "bytes": 12906,
+      "sha256": "7e9cd971f053dde040771a98c63246e82ca7267a113f24ed56ab54a0800e2855"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/bot/dashboard_v2/src/components/socialmedia/ai/revision-api.test.ts",
+      "archive_path": "bot/dashboard_v2/src/components/socialmedia/ai/revision-api.test.ts",
+      "bytes": 3538,
+      "sha256": "ccd422fa8e900df548804fc236e997b6a897f4057fab00c85b7162760c00e287"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/bot/dashboard_v2/src/components/socialmedia/ai/revisions-check.mjs",
+      "archive_path": "bot/dashboard_v2/src/components/socialmedia/ai/revisions-check.mjs",
+      "bytes": 4440,
+      "sha256": "5a3429efde6f2738fdec998dbea1e88f40e67351a3db5cddc57681043e3227b4"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/rust/crates/tb-dashboard-api/src/handlers/social_media_ai.rs",
+      "archive_path": "rust/crates/tb-dashboard-api/src/handlers/social_media_ai.rs",
+      "bytes": 22450,
+      "sha256": "cbd95e1bdacf4e9562799d397222ca5a40cfbfbab6b267009f358f0aa73a28e8"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/rust/crates/tb-social-media/src/ai_editor/mod.rs",
+      "archive_path": "rust/crates/tb-social-media/src/ai_editor/mod.rs",
+      "bytes": 3405,
+      "sha256": "29d0356c7211750da262420095a15e98044c0e7d4e7e9f5600f654d22e81ea19"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/rust/crates/tb-social-media/src/ai_editor/pipeline.rs",
+      "archive_path": "rust/crates/tb-social-media/src/ai_editor/pipeline.rs",
+      "bytes": 56338,
+      "sha256": "2feea72619e5925db19f250615ec23c0e5a0d56393dd1bfa4c384a7b8cd173a9"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/rust/crates/tb-social-media/src/ai_editor/pipeline_tests.rs",
+      "archive_path": "rust/crates/tb-social-media/src/ai_editor/pipeline_tests.rs",
+      "bytes": 53435,
+      "sha256": "42a179e82e21cd86a3ec58170c534bc1ccdb1f1b9cf67d9367b332bcd9d9cc3b"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/rust/crates/tb-social-media/src/ai_editor/revision.rs",
+      "archive_path": "rust/crates/tb-social-media/src/ai_editor/revision.rs",
+      "bytes": 19025,
+      "sha256": "8904f51625daddb38c2de320ac06b8375cf312c5956fb378203b291c256719bb"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/rust/crates/tb-social-media/src/ai_editor/runtime_config.rs",
+      "archive_path": "rust/crates/tb-social-media/src/ai_editor/runtime_config.rs",
+      "bytes": 13018,
+      "sha256": "e3d6015e5b8ea8c3415c5bba6fa985befa6a5429a3bc7c53ceb15907cf00a7a6"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/rust/crates/tb-social-media/src/ai_editor/service.rs",
+      "archive_path": "rust/crates/tb-social-media/src/ai_editor/service.rs",
+      "bytes": 15003,
+      "sha256": "1f4d45ec5c96db81985cec4389e2674da56651e55c0157faed677c632c973d60"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/rust/crates/tb-social-media/src/ai_editor/stage_contract.rs",
+      "archive_path": "rust/crates/tb-social-media/src/ai_editor/stage_contract.rs",
+      "bytes": 7493,
+      "sha256": "9066071d5c09648e0f3b824633fa57fd6cda766eab047cb981dacc450b8118df"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/rust/crates/tb-social-media/src/ai_editor/store.rs",
+      "archive_path": "rust/crates/tb-social-media/src/ai_editor/store.rs",
+      "bytes": 46515,
+      "sha256": "bdc1b9e009a008ef71206d01d2305d27c261186875a4e73a5c4953a0fdb1085c"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/rust/crates/tb-social-media/src/ai_editor/validation.rs",
+      "archive_path": "rust/crates/tb-social-media/src/ai_editor/validation.rs",
+      "bytes": 17438,
+      "sha256": "4d6e770cc967a8cf794f7b6e7597495d1a9d53e8adb546bd56419a9e538f701a"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/rust/crates/tb-social-media/tests/ai_editor_store.rs",
+      "archive_path": "rust/crates/tb-social-media/tests/ai_editor_store.rs",
+      "bytes": 58496,
+      "sha256": "18a3636b231a584de789a25547883276f3add9da6251d95b29b40b2da23845d3"
+    },
+    {
+      "path": "/home/nathanael/.worktrees/tb-social-ai-m2-revisions-r1/rust/migrations/20261011200101_social_ai_revisions.sql",
+      "archive_path": "rust/migrations/20261011200101_social_ai_revisions.sql",
+      "bytes": 2843,
+      "sha256": "ebfe58ca7c87191b57faafba8eb08e2cc38db8145b8f9b062e0aad85a96f90c8"
+    }
+  ],
+  "tracked_patch_sha256": "5513d341a236046e779aa86c2305ad6d47847c9ad05c00fe1a70157a3597aa9f",
+  "archive_sha256": "5dbe5960b3b27ce6f764ffca249872a37ac9a24fd2e0561a7b15bf8dd1a78c48"
+}
