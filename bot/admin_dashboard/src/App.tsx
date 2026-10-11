@@ -25,6 +25,10 @@ import LegalPage from '@/pages/content/Legal';
 import CasterOverlayPage from '@/pages/content/CasterOverlay';
 import RoadmapPage from '@/pages/content/Roadmap';
 import BrainBuildLab from '@/pages/content/BrainBuildLab';
+import { SocialAiLayout } from '@/pages/socialAi/SocialAiLayout';
+import { SocialAiSkillsPage } from '@/pages/socialAi/SocialAiSkills';
+import { SocialAiUsagePage } from '@/pages/socialAi/SocialAiUsage';
+import { SocialAiLimitsPage } from '@/pages/socialAi/SocialAiLimits';
 import BotControlPage from '@/pages/operations/BotControl';
 import ScopesPage from '@/pages/operations/Scopes';
 import AuditLogPage from '@/pages/money/AuditLog';
@@ -77,6 +81,12 @@ const router = createBrowserRouter(
         { path: 'content/announcements', element: <AnnouncementsPage /> },
         { path: 'content/caster-overlay', element: <CasterOverlayPage /> },
         { path: 'content/build-lab', element: <BrainBuildLab /> },
+        { path: 'content/social-ai', element: <SocialAiLayout />, children: [
+          { index: true, element: <Navigate to="/content/social-ai/skills" replace /> },
+          { path: 'skills', element: <SocialAiSkillsPage /> },
+          { path: 'usage', element: <SocialAiUsagePage /> },
+          { path: 'limits', element: <SocialAiLimitsPage /> },
+        ] },
         { path: 'content/roadmap', element: <RoadmapPage /> },
         { path: 'content/changelog', element: <ChangelogPage /> },
         { path: 'content/legal', element: <LegalPage /> },

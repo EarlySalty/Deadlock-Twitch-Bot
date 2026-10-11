@@ -8,6 +8,7 @@ interface ConfirmDialogProps {
   cancelLabel?: string;
   tone?: 'danger' | 'default';
   busy?: boolean;
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -20,6 +21,7 @@ export function ConfirmDialog({
   cancelLabel = 'Abbrechen',
   tone = 'default',
   busy = false,
+  confirmDisabled = false,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -46,14 +48,14 @@ export function ConfirmDialog({
             <p className="text-sm leading-6 text-text-secondary">{description}</p>
           </div>
         </div>
-        <div className="mt-6 flex justify-end gap-3">
+        <div className="mt-6 flex flex-wrap justify-end gap-3">
           <button onClick={onCancel} className="admin-button admin-button-secondary" disabled={busy}>
             {cancelLabel}
           </button>
           <button
             onClick={onConfirm}
             className={`admin-button ${tone === 'danger' ? 'admin-button-danger' : 'admin-button-primary'}`}
-            disabled={busy}
+            disabled={busy || confirmDisabled}
           >
             {busy ? 'Läuft …' : confirmLabel}
           </button>
