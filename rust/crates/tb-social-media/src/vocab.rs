@@ -161,7 +161,7 @@ pub async fn list_vocab(
         qb.build_query_scalar().fetch_one(pool).await.unwrap_or(0)
     };
 
-    let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(&format!(
+    let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(format!(
         "SELECT {SELECT_COLS} FROM deadlock_vocab WHERE 1=1"
     ));
     if let Some(cat) = category {

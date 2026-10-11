@@ -8,6 +8,9 @@ import {
 } from '../src/components/socialmedia/queuePresentation';
 import type { SocialClipMitPosting } from '../src/api/socialMedia';
 import { DEFAULT_LAYOUT } from '../src/types/socialMedia';
+import { approvalFact, authorizationFact, clipPlatformPresentation, connectionFact, publicationFact, transferFact } from '../src/components/socialmedia/platformPresentation';
+import { socialAiClipFromSearch, socialViewFromSearch, socialViewSearch, socialWorkspaceView } from '../src/components/socialmedia/studioNavigation';
+import { getPreviewSocialResponse, SOCIAL_CLIPS_FIXTURE, SOCIAL_PLATFORMS_FIXTURE } from '../src/preview/fixtures';
 
 const clip = (id: number, overrides: Partial<SocialClipMitPosting> = {}): SocialClipMitPosting => ({
   clip_db_id: id,
@@ -117,6 +120,83 @@ test('Pagination-Verschiebung: neuer Clip zwischen zwei Abrufen bricht die Ansic
   assert.deepEqual(calls, [1, 2]);
   assert.equal(data.items.length, 101);
   assert.equal(data.total, 102);
+});
+
+test('Kontostand, Upload-Rechte und Videofreigabe bleiben unabhängige Fakten', () => {
+  const [youtube, tiktok] = SOCIAL_PLATFORMS_FIXTURE;
+  const partial = SOCIAL_CLIPS_FIXTURE[1];
+  assert.equal(connectionFact(youtube).state, 'connected');
+  assert.equal(authorizationFact(youtube).state, 'sufficient');
+  assert.equal(approvalFact(partial, 'youtube').state, 'approved');
+  assert.equal(approvalFact(partial, 'tiktok').state, 'not_approved');
+  assert.equal(authorizationFact(tiktok).state, 'missing');
+  assert.equal(connectionFact(tiktok).state, 'channel_required');
+  assert.equal(publicationFact(partial, 'youtube').state, 'unknown');
+  const undecided = { ...partial, approval: { ...partial.approval!, state: 'editing' as const } };
+  assert.equal(approvalFact(undecided, 'youtube').state, 'not_approved');
+});
+
+test('fehlende oder gescheiterte Statusdaten behaupten keine fehlende Verbindung', () => {
+  const stored = SOCIAL_PLATFORMS_FIXTURE[0];
+  assert.equal(connectionFact(undefined).state, 'unknown');
+  assert.equal(connectionFact(stored, false, true).state, 'error');
+  assert.equal(connectionFact(stored, true).state, 'loading');
+  assert.equal(authorizationFact({ ...stored, authorization: undefined }).state, 'unknown');
+  assert.equal(approvalFact(clip(1), 'youtube').state, 'unknown');
+  const row = clipPlatformPresentation(SOCIAL_CLIPS_FIXTURE[1], 'youtube', stored, 'error');
+  assert.equal(row.connection.state, 'error');
+  assert.equal(row.authorization.state, 'error');
+  assert.equal(row.approval.state, 'approved');
+});
+
+test('Übertragung, Postfach und private YouTube-Sichtbarkeit bedeuten keine öffentliche Publikation', () => {
+  assert.equal(transferFact(SOCIAL_CLIPS_FIXTURE[1], 'youtube').state, 'queued');
+  assert.equal(transferFact(SOCIAL_CLIPS_FIXTURE[3], 'tiktok').state, 'inbox');
+  assert.equal(publicationFact(SOCIAL_CLIPS_FIXTURE[3], 'tiktok').state, 'inbox');
+  assert.equal(transferFact(SOCIAL_CLIPS_FIXTURE[4], 'youtube').state, 'transferred');
+  assert.equal(publicationFact(SOCIAL_CLIPS_FIXTURE[4], 'youtube').state, 'private');
+  assert.equal(transferFact(SOCIAL_CLIPS_FIXTURE[5], 'youtube').state, 'failed');
+  assert.equal(transferFact(SOCIAL_CLIPS_FIXTURE[5], 'instagram').state, 'waiting_connection');
+  assert.equal(publicationFact({ ...SOCIAL_CLIPS_FIXTURE[3], publish_states: { tiktok: 'PUBLISH_COMPLETE' } }, 'tiktok').state, 'confirmed');
+});
+
+test('alte Studio-Adressen und OAuth-Rückkehr bleiben erreichbar', () => {
+  for (const view of ['pool', 'clips', 'unrecognized']) assert.equal(socialViewFromSearch(`?view=${view}`), 'pool');
+  for (const [alias, view] of [['schedule', 'plan'], ['settings', 'konten'], ['vod', 'archiv'], ['layout', 'layout'], ['ai', 'ai']]) {
+    assert.equal(socialViewFromSearch(`?view=${alias}`), view);
+  }
+  assert.equal(socialWorkspaceView('layout'), 'konten');
+  for (const callback of ['oauth_success=youtube', 'oauth_error=provider_error']) assert.equal(socialViewFromSearch(`?view=pool&${callback}`), 'konten');
+  const search = socialViewSearch('?twitch_user_id=1&streamer=alpha&oauth_success=youtube', 'plan');
+  assert.equal(socialViewFromSearch(`?${search}`), 'plan');
+  assert.equal(new URLSearchParams(search).get('twitch_user_id'), '1');
+  assert.equal(new URLSearchParams(search).get('streamer'), 'alpha');
+});
+
+test('KI-Einstieg bewahrt Clipkontext beim Neuladen und entfernt ihn außerhalb der KI-Ansicht', () => {
+  const search = socialViewSearch('?twitch_user_id=1', 'ai', 42);
+  assert.equal(socialAiClipFromSearch(`?${search}`), 42);
+  assert.equal(socialAiClipFromSearch(`?${socialViewSearch(search, 'pool')}`), undefined);
+  for (const value of ['0', '-1', '1.5', 'NaN', '9007199254740992']) assert.equal(socialAiClipFromSearch(`?clip_db_id=${value}`), undefined);
+});
+
+test('lokale Social-Vorschau sperrt schreibende Aufrufe und simuliert keine Speicherung', async () => {
+  for (const path of ['/twitch/social-media/api/admin/approval/1/decision', '/twitch/social-media/api/admin/clips/1/preview', '/twitch/social-media/oauth/disconnect/youtube', '/twitch/social-media/api/ai/jobs']) {
+    const response = getPreviewSocialResponse(path, { method: 'POST' });
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).error, 'preview_read_only');
+  }
+  assert.equal(getPreviewSocialResponse('/twitch/social-media/api/unimplemented').status, 404);
+});
+
+test('lokale Lesefehler und Renderzustände behalten unbekannte oder fehlerhafte Ergebnisse', async () => {
+  assert.equal(getPreviewSocialResponse('/twitch/social-media/api/platforms/status', {}, 'accounts-error').status, 503);
+  assert.deepEqual((await getPreviewSocialResponse('/twitch/social-media/api/platforms/status', {}, 'unknown').json()).platforms, []);
+  assert.equal(getPreviewSocialResponse('/twitch/social-media/api/admin/clips', {}, 'clips-error').status, 503);
+  const state = await getPreviewSocialResponse('/twitch/social-media/api/admin/clips/2/preview', {}, 'preview-rendering').json();
+  assert.equal(state.clip_db_id, 2);
+  assert.equal(state.status, 'rendering');
+  assert.equal(state.ready, false);
 });
 
 test('volle Seite ohne Fortschritt startet die Bestandsabfrage neu statt abzubrechen', async () => {

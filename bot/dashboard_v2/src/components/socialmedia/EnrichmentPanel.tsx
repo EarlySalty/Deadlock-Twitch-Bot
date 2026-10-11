@@ -36,6 +36,7 @@ const PLATFORMS: Array<{
 interface EnrichmentPanelProps {
   clipDbId: number;
   onClose?: () => void;
+  onSavingChange?: (saving: boolean) => void;
 }
 
 interface EditState {
@@ -83,7 +84,7 @@ function toPayload(initial: ClipEnrichment, edit: EditState): EnrichmentEditPayl
   return payload;
 }
 
-export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
+export function EnrichmentPanel({ clipDbId, onClose, onSavingChange }: EnrichmentPanelProps) {
   const t = useT();
   const queryClient = useQueryClient();
   const [edit, setEdit] = useState<EditState | null>(null);
@@ -109,6 +110,22 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
     },
   });
 
+  const dirty = Boolean(enrichmentQuery.data && edit && JSON.stringify(toPayload(enrichmentQuery.data, edit)) !== '{}');
+
+  useEffect(() => {
+    onSavingChange?.(saveMutation.isPending);
+  }, [onSavingChange, saveMutation.isPending]);
+
+  useEffect(() => {
+    if (!dirty && !saveMutation.isPending) return;
+    const preventUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', preventUnload);
+    return () => window.removeEventListener('beforeunload', preventUnload);
+  }, [dirty, saveMutation.isPending]);
+
   if (enrichmentQuery.isError) {
     return (
       <div role="alert" className="space-y-3 text-sm text-danger">
@@ -129,10 +146,9 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
   }
 
   const enrichment = enrichmentQuery.data!;
-  const dirty = JSON.stringify(toPayload(enrichment, edit)) !== '{}';
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" data-unsaved={dirty || saveMutation.isPending ? 'true' : undefined} data-saving={saveMutation.isPending ? 'true' : undefined}>
       <div className="flex flex-wrap items-center gap-3 border-b border-border pb-3">
         <div className="flex items-center gap-2">
           <Pencil className="w-4 h-4 text-orange" />
@@ -142,7 +158,12 @@ export function EnrichmentPanel({ clipDbId, onClose }: EnrichmentPanelProps) {
           {onClose && (
             <button
               type="button"
-              onClick={onClose}
+              disabled={saveMutation.isPending}
+              onClick={() => {
+                if (saveMutation.isPending) return;
+                if (dirty && !window.confirm(t('Ungespeicherte Änderungen verwerfen?'))) return;
+                onClose();
+              }}
               className="p-1.5 rounded-lg hover:bg-bg/60 text-text-secondary hover:text-white"
               aria-label={t('Editor schließen')}
             >

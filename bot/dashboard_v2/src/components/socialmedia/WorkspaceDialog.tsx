@@ -19,6 +19,11 @@ export function WorkspaceDialog({
   const dialog = useRef<HTMLDialogElement>(null);
   const close = useRef<HTMLButtonElement>(null);
   const titleId = useId();
+  const requestClose = () => {
+    if (busy || dialog.current?.querySelector('[data-saving="true"]')) return;
+    if (dialog.current?.querySelector('[data-unsaved="true"]') && !window.confirm(t('Ungespeicherte Änderungen verwerfen?'))) return;
+    onClose();
+  };
   useEffect(() => {
     const element = dialog.current;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -39,7 +44,7 @@ export function WorkspaceDialog({
       className="social-studio studio-dialog"
       onCancel={(event) => {
         event.preventDefault();
-        if (!busy) onClose();
+        requestClose();
       }}
       onKeyDown={(event) => {
         if (event.key !== 'Tab') return;
@@ -72,7 +77,7 @@ export function WorkspaceDialog({
           disabled={busy}
           className="studio-icon-button shrink-0"
           aria-label={t('Schließen')}
-          onClick={onClose}
+          onClick={requestClose}
         >
           <X className="h-4 w-4" />
         </button>

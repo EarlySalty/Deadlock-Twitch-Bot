@@ -7,9 +7,12 @@
 //! DM-Versand) ist **B10 (von Nani ausgeschlossen)** und nicht portiert.
 
 use serde_json::{json, Value};
-use sqlx::PgPool;
+use sqlx::{Executor, PgPool, Postgres};
 
-use crate::clip_queue::queue_upload;
+use crate::clip_queue::{
+    lock_clip_owner, queue_upload_on, upload_wait_reason_for_clip, QueueError, QueueUploadRequest,
+    UploadSchedule,
+};
 use crate::enrichment::get_enrichment;
 use crate::posting_plan;
 
@@ -144,13 +147,13 @@ pub async fn get_approval_record(pool: &PgPool, clip_db_id: i32) -> Option<Appro
     }
 }
 
-async fn fetch_approval_record(
-    pool: &PgPool,
+async fn fetch_approval_record<'a>(
+    executor: impl Executor<'a, Database = Postgres>,
     clip_db_id: i32,
 ) -> Result<Option<ApprovalRecord>, sqlx::Error> {
     let row: Option<Row> = sqlx::query_as(SELECT_SQL)
         .bind(clip_db_id)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await?;
     Ok(row.map(row_to_record))
 }
@@ -544,22 +547,58 @@ async fn teile_pausierte_ab(
     (eingeplant, pausiert)
 }
 
-/// Reiht die freigegebenen Plattformen eines Clips in die Upload-Queue
-/// (Python `ensure_queued_uploads`). Nutzt die Enrichment-Texte je Plattform.
-///
-/// Die Schleife laeuft je Plattform, und jeder ihrer Abbruchgruende
-/// (Freigabepruefung gescheitert, Plattform schon hochgeladen, voller
-/// Planungshorizont, `queue_upload` gescheitert) laesst genau diese eine
-/// Plattform ohne Zeile stehen, waehrend die Schwesterplattformen ihre Zeile
-/// bekommen. Das ist gewollt: der Clip bleibt in der Nachreih-Liste, weil
-/// `iter_approved_clips_pending_queue` plattformgenau prueft, und wird beim
-/// naechsten Lauf erneut versucht.
-///
-/// Damit das nicht zur Blockade wird, wenn eine Plattform dauerhaft nichts tun
-/// kann (Upload-Flag steht schon, Planungshorizont bleibt voll), sortiert der
-/// Nachreih-Lauf nach dem letzten Versuch und nicht nach der Entscheidung.
-/// Siehe [`iter_approved_clips_pending_queue`] und
-/// [`vermerke_nachreih_versuch`].
+enum LegacyQueueOutcome {
+    Queued(i64),
+    Unchanged,
+    Paused,
+    NoSlot,
+}
+
+async fn enqueue_approved_platform(
+    pool: &PgPool,
+    request: QueueUploadRequest<'_>,
+) -> Result<LegacyQueueOutcome, QueueError> {
+    let clip_id = i32::try_from(request.clip_db_id)
+        .map_err(|_| sqlx::Error::Protocol("Ungültige Clip-ID".into()))?;
+    let reason = upload_wait_reason_for_clip(pool, request.clip_db_id, request.platform).await?;
+    let mut tx = pool.begin().await?;
+    let owner = lock_clip_owner(&mut tx, request.clip_db_id).await?;
+    let approval = fetch_approval_record(&mut *tx, clip_id).await?;
+    if !approval.is_some_and(|record| {
+        record.state == STATE_APPROVED
+            && record
+                .approved_platforms
+                .iter()
+                .any(|p| p == request.platform)
+    }) || upload_already_exists(&mut *tx, clip_id, request.platform).await
+    {
+        return Ok(LegacyQueueOutcome::Unchanged);
+    }
+    let scheduled_at = if let Some(owner) = owner {
+        let now = sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(&mut *tx)
+            .await?;
+        match posting_plan::plan_next_slot_on(&mut tx, &owner, request.platform, now).await? {
+            posting_plan::SlotPlan::Termin(slot) => Some(slot.to_rfc3339()),
+            posting_plan::SlotPlan::Ausgeschaltet => return Ok(LegacyQueueOutcome::Paused),
+            posting_plan::SlotPlan::HorizontVoll => return Ok(LegacyQueueOutcome::NoSlot),
+        }
+    } else {
+        None
+    };
+    let id = queue_upload_on(
+        &mut tx,
+        QueueUploadRequest {
+            schedule: UploadSchedule::Preserve(scheduled_at.as_deref()),
+            ..request
+        },
+        reason.as_deref(),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(LegacyQueueOutcome::Queued(id))
+}
+
 pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(String, i64)> {
     if !clip_exists(pool, clip_db_id).await {
         return Vec::new();
@@ -570,9 +609,7 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
     }
     let enrichment = get_enrichment(pool, clip_db_id).await;
     let streamer = clip_streamer(pool, clip_db_id).await;
-    let now = chrono::Utc::now();
     let mut queued = Vec::new();
-    // Plattformen, die der Kanal nach der Freigabe auf null gestellt hat.
     let mut nachtraeglich_pausiert: Vec<String> = Vec::new();
     for platform in &record.approved_platforms {
         match is_clip_approved_for(pool, i64::from(clip_db_id), platform).await {
@@ -606,64 +643,31 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
                         e.hashtags_instagram.clone(),
                     ),
                 });
-        // Freigegeben heisst ab hier nicht mehr „sofort raus": der Clip bekommt
-        // den naechsten Termin aus der Kadenz des Kanals.
-        //
-        // Ein leeres `scheduled_at` heisst in `get_upload_queue` "sofort
-        // faellig". Genau deshalb darf hier nicht jedes "kein Termin" zu einem
-        // leeren Feld werden, sonst kippt "die Plattform postet nie" in "die
-        // Plattform postet sofort", also ins Gegenteil der Einstellung.
-        //
-        // Entschieden ist: nicht einreihen statt Termin in ferner Zukunft. Ein
-        // Eintrag mit einem nie erreichten Termin haengt dauerhaft in der
-        // Warteschlange, blockiert `upload_already_exists` und belegt in
-        // `belegte_termine` einen Slot. Ohne Zeile bleibt der Clip dagegen in
-        // `iter_approved_clips_pending_queue` stehen, weil diese Abfrage
-        // plattformgenau prueft: schon eine einzige freigegebene Plattform ohne
-        // Queue-Zeile haelt den Clip im Fenster, auch wenn die
-        // Schwesterplattformen laengst ihre Zeile haben. Er wird also bei jedem
-        // Lauf erneut versucht, sobald die Kadenz wieder etwas hergibt.
-        //
-        // Ohne Kanal bleibt es beim alten Verhalten: dort gibt es keine Kadenz,
-        // an die man sich halten koennte.
-        let scheduled_at = match &streamer {
-            Some(login) => match posting_plan::plan_next_slot(pool, login, platform, now).await {
-                posting_plan::SlotPlan::Termin(slot) => Some(slot.to_rfc3339()),
-                posting_plan::SlotPlan::Ausgeschaltet => {
-                    // Die Plattform wurde nach der Freigabe abgeschaltet.
-                    // `handle_decision` laesst sie gar nicht erst zu, hier
-                    // bleibt nur der nachtraegliche Fall. Die Freigabe gilt
-                    // dort nicht mehr, sie wird deshalb weiter unten aus
-                    // `approved_platforms` entfernt statt endlos wiederholt.
-                    nachtraeglich_pausiert.push(platform.clone());
-                    continue;
-                }
-                posting_plan::SlotPlan::HorizontVoll => {
-                    tracing::warn!(
-                        clip_db_id,
-                        platform = %platform,
-                        streamer = %login,
-                        "Social-Media-Approval: kein freier Termin im Planungshorizont, \
-                         Freigabe bleibt offen und wird spaeter erneut versucht"
-                    );
-                    continue;
-                }
-            },
-            None => None,
-        };
-        match queue_upload(
+        match enqueue_approved_platform(
             pool,
-            clip_db_id,
-            platform,
-            title.as_deref(),
-            description.as_deref(),
-            Some(&hashtags),
-            scheduled_at.as_deref(),
-            0,
+            QueueUploadRequest {
+                clip_db_id: i64::from(clip_db_id),
+                platform,
+                title: title.as_deref(),
+                description: description.as_deref(),
+                hashtags: Some(&hashtags),
+                schedule: UploadSchedule::Preserve(None),
+                priority: 0,
+            },
         )
         .await
         {
-            Ok(queue_id) => queued.push((platform.clone(), queue_id)),
+            Ok(LegacyQueueOutcome::Queued(queue_id)) => queued.push((platform.clone(), queue_id)),
+            Ok(LegacyQueueOutcome::Unchanged) => {}
+            Ok(LegacyQueueOutcome::Paused) => nachtraeglich_pausiert.push(platform.clone()),
+            Ok(LegacyQueueOutcome::NoSlot) => {
+                tracing::warn!(
+                    clip_db_id,
+                    platform = %platform,
+                    streamer = streamer.as_deref().unwrap_or(""),
+                    "Social-Media-Approval: kein freier Termin im Planungshorizont, Freigabe bleibt offen"
+                );
+            }
             Err(error) => {
                 tracing::warn!(
                     %error,
@@ -760,6 +764,7 @@ pub async fn cancel_scheduled_uploads(
         return Err(ApprovalError::ClipNotFound(clip_db_id));
     }
     let mut tx = pool.begin().await?;
+    lock_clip_owner(&mut tx, i64::from(clip_db_id)).await?;
 
     sqlx::query("SELECT id FROM twitch_clips_social_media WHERE id = $1 FOR UPDATE")
         .bind(i64::from(clip_db_id))
@@ -837,7 +842,11 @@ async fn clip_exists(pool: &PgPool, clip_db_id: i32) -> bool {
 /// zusaetzliche an; ein automatischer Nachreih-Lauf wuerde einer dauerhaft
 /// scheiternden Plattform deshalb bei jedem Fehlschlag eine weitere Zeile
 /// verpassen, endlos.
-async fn upload_already_exists(pool: &PgPool, clip_db_id: i32, platform: &str) -> bool {
+async fn upload_already_exists<'a>(
+    executor: impl Executor<'a, Database = Postgres>,
+    clip_db_id: i32,
+    platform: &str,
+) -> bool {
     let column = match platform {
         "youtube" => "uploaded_youtube",
         "tiktok" => "uploaded_tiktok",
@@ -853,7 +862,7 @@ async fn upload_already_exists(pool: &PgPool, clip_db_id: i32, platform: &str) -
     .bind(clip_db_id as i64)
     .bind(platform)
     .bind(clip_db_id as i64)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
     .ok()
     .flatten();
@@ -898,7 +907,7 @@ mod tests {
         for ddl in [
             "CREATE TABLE twitch_clips_social_media (twitch_user_id TEXT DEFAULT '42', id SERIAL PRIMARY KEY, status TEXT DEFAULT 'pending', uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE)",
             "CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]'::jsonb, approver_user_id TEXT, decided_at TIMESTAMPTZ, dm_message_id TEXT, dm_channel_id TEXT, last_sent_at TIMESTAMPTZ, letzter_nachreih_versuch TIMESTAMPTZ)",
-            "CREATE TABLE twitch_clips_upload_queue (id SERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
+            "CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id INTEGER, platform TEXT, status TEXT DEFAULT 'pending', priority INTEGER DEFAULT 0, title TEXT, description TEXT, hashtags TEXT, scheduled_at TIMESTAMPTZ, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMPTZ)",
             "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMPTZ, updated_by TEXT)",
             "CREATE TABLE social_media_clip_enrichment (clip_db_id INTEGER PRIMARY KEY, transcript_raw TEXT, transcript_corrected TEXT, transcript_segments JSONB, transcript_lang TEXT, detected_terms JSONB DEFAULT '[]'::jsonb, title_youtube TEXT, title_tiktok TEXT, title_instagram TEXT, description_youtube TEXT, description_tiktok TEXT, description_instagram TEXT, hashtags_youtube JSONB DEFAULT '[]'::jsonb, hashtags_tiktok JSONB DEFAULT '[]'::jsonb, hashtags_instagram JSONB DEFAULT '[]'::jsonb, llm_provider TEXT, llm_model TEXT, cost_usd_estimate NUMERIC(10,6), status TEXT DEFAULT 'pending', error_message TEXT, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, edited_by TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())",
         ] {
@@ -976,7 +985,7 @@ mod tests {
             .bind(clip).execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, scheduled_at) VALUES ($1, 'tiktok', 'waiting_schedule', NOW() - INTERVAL '1 day')")
             .bind(clip).execute(&pool).await.unwrap();
-        let youtube_before: (i32, String, String, String) = sqlx::query_as("SELECT id, status, scheduled_at::text, completed_at::text FROM twitch_clips_upload_queue WHERE clip_id = $1 AND platform = 'youtube'")
+        let youtube_before: (i64, String, String, String) = sqlx::query_as("SELECT id, status, scheduled_at::text, completed_at::text FROM twitch_clips_upload_queue WHERE clip_id = $1 AND platform = 'youtube'")
             .bind(clip).fetch_one(&pool).await.unwrap();
         handle_decision(
             &pool,
@@ -987,7 +996,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let youtube_after: (i32, String, String, String) = sqlx::query_as("SELECT id, status, scheduled_at::text, completed_at::text FROM twitch_clips_upload_queue WHERE clip_id = $1 AND platform = 'youtube'")
+        let youtube_after: (i64, String, String, String) = sqlx::query_as("SELECT id, status, scheduled_at::text, completed_at::text FROM twitch_clips_upload_queue WHERE clip_id = $1 AND platform = 'youtube'")
             .bind(clip).fetch_one(&pool).await.unwrap();
         assert_eq!(youtube_before, youtube_after);
         let tiktok: (i64, bool) = sqlx::query_as("SELECT COUNT(*), BOOL_AND(scheduled_at > NOW()) FROM twitch_clips_upload_queue WHERE clip_id = $1 AND platform = 'tiktok'")
