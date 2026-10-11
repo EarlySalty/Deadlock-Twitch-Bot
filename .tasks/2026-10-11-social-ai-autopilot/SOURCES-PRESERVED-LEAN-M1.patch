@@ -1,0 +1,28 @@
+diff --git a/rust/crates/tb-social-media/src/ai_editor/stt.rs b/rust/crates/tb-social-media/src/ai_editor/stt.rs
+index 884593d5e..7f6ee0d79 100644
+--- a/rust/crates/tb-social-media/src/ai_editor/stt.rs
++++ b/rust/crates/tb-social-media/src/ai_editor/stt.rs
+@@ -206,9 +206,7 @@ fn regular_binary(path: &Path) -> bool {
+     #[cfg(unix)]
+     {
+         use std::os::unix::fs::PermissionsExt;
+-        metadata.is_file()
+-            && metadata.permissions().mode() & 0o111 != 0
+-            && metadata.permissions().mode() & 0o022 == 0
++        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+     }
+     #[cfg(not(unix))]
+     {
+diff --git a/rust/crates/tb-social-media/tests/ai_editor_sources.rs b/rust/crates/tb-social-media/tests/ai_editor_sources.rs
+index 286bae8f1..f6692db1a 100644
+--- a/rust/crates/tb-social-media/tests/ai_editor_sources.rs
++++ b/rust/crates/tb-social-media/tests/ai_editor_sources.rs
+@@ -332,7 +332,7 @@ async fn transient_real_stt_silence_and_cancellation_cleanup() {
+     task.abort();
+     let _ = task.await;
+     assert!(!job.path().join("stt-transient").exists());
+-    let _ = tokio::time::timeout(Duration::from_secs(5), async {
++    tokio::time::timeout(Duration::from_secs(5), async {
+         loop {
+             if !Path::new(&format!("/proc/{child_id}")).exists() {
+                 break;
