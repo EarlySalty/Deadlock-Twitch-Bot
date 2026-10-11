@@ -2,12 +2,13 @@ use std::{
     env,
     io::Cursor,
     net::SocketAddr,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::Arc,
     time::Instant,
 };
 
 mod recovery;
+include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
 
 use axum::{
     extract::{DefaultBodyLimit, Multipart, State},
@@ -20,7 +21,11 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tb_config::{file::ConfigArguments, BotConfigSnapshot};
-use tokio::{fs, io::AsyncWriteExt, sync::Semaphore};
+use tokio::{
+    fs,
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::Semaphore,
+};
 use tracing::{info, warn};
 use whisper_rs::{
     get_lang_str, FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
@@ -30,7 +35,8 @@ const DEFAULT_MODEL_NAME: &str = "ggml-large-v3-turbo-q5_0";
 const DEFAULT_MODEL_FILE: &str = "ggml-large-v3-turbo-q5_0.bin";
 const DEFAULT_MODEL_URL: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin";
-const DEFAULT_MODEL_SHA256: &str = "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2";
+const DEFAULT_MODEL_SHA256: &str =
+    "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2";
 const DEFAULT_VAD_FILE: &str = "ggml-silero-v6.2.0.bin";
 const DEFAULT_VAD_URL: &str =
     "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin";
@@ -48,6 +54,7 @@ struct Config {
     vad_path: PathBuf,
     vad_url: String,
     vad_sha256: String,
+    pinned_models: bool,
     forced_language: Option<String>,
     no_speech_max: f32,
     avg_logprob_min: f32,
@@ -63,9 +70,15 @@ impl Config {
                 "Das Rust-STT unterstützt aktuell nur das Modell {DEFAULT_MODEL_NAME}."
             ));
         }
-        let cache = env::var_os("HOME")
-            .map(|home| PathBuf::from(home).join(".cache/deadlock-stt"))
-            .unwrap_or_else(|| PathBuf::from("/tmp/deadlock-stt"));
+        let cache = if let Some(directory) = &settings.model_directory {
+            snapshot
+                .resolve(directory)
+                .map_err(|error| format!("stt.model_directory ist ungültig: {error}"))?
+        } else {
+            env::var_os("HOME")
+                .map(|home| PathBuf::from(home).join(".cache/deadlock-stt"))
+                .unwrap_or_else(|| PathBuf::from("/tmp/deadlock-stt"))
+        };
         let max_upload_bytes = usize::try_from(settings.max_upload_bytes)
             .map_err(|_| "stt.max_upload_bytes ist auf diesem System zu groß.".to_owned())?;
 
@@ -80,6 +93,7 @@ impl Config {
             vad_path: cache.join(DEFAULT_VAD_FILE),
             vad_url: DEFAULT_VAD_URL.to_owned(),
             vad_sha256: DEFAULT_VAD_SHA256.to_owned(),
+            pinned_models: settings.model_directory.is_some(),
             forced_language: settings.language.clone(),
             no_speech_max: settings.no_speech_max as f32,
             avg_logprob_min: settings.avg_logprob_min as f32,
@@ -146,7 +160,10 @@ impl IntoResponse for ApiError {
             Self::Unavailable(detail) => (StatusCode::SERVICE_UNAVAILABLE, detail),
             Self::Internal(detail) => {
                 warn!(error = %detail, "STT-Anfrage fehlgeschlagen");
-                (StatusCode::INTERNAL_SERVER_ERROR, "Transkription fehlgeschlagen".to_owned())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Transkription fehlgeschlagen".to_owned(),
+                )
             }
         };
         (status, Json(serde_json::json!({ "detail": detail }))).into_response()
@@ -155,6 +172,9 @@ impl IntoResponse for ApiError {
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
+    if print_build_revision() {
+        return Ok(());
+    }
     let arguments =
         ConfigArguments::parse(env::args_os().skip(1)).map_err(|error| error.to_string())?;
     let recovery_state = recovery::parse_arguments(&arguments.remaining)?;
@@ -174,27 +194,24 @@ async fn main() -> Result<(), String> {
         "TWITCH_STT_CONFIG_V1"
     );
 
-    ensure_model(
-        &config.model_path,
-        &config.model_url,
-        &config.model_sha256,
-        "Whisper",
-    )
-    .await?;
-    ensure_model(
-        &config.vad_path,
-        &config.vad_url,
-        &config.vad_sha256,
-        "VAD",
-    )
-    .await?;
+    if config.pinned_models {
+        verify_pinned_model(&config.model_path, &config.model_sha256, "Whisper").await?;
+        verify_pinned_model(&config.vad_path, &config.vad_sha256, "VAD").await?;
+    } else {
+        ensure_model(
+            &config.model_path,
+            &config.model_url,
+            &config.model_sha256,
+            "Whisper",
+        )
+        .await?;
+        ensure_model(&config.vad_path, &config.vad_url, &config.vad_sha256, "VAD").await?;
+    }
 
     let started = Instant::now();
-    let context = WhisperContext::new_with_params(
-        &config.model_path,
-        WhisperContextParameters::default(),
-    )
-    .map_err(|e| format!("Whisper-Modell konnte nicht geladen werden: {e}"))?;
+    let context =
+        WhisperContext::new_with_params(&config.model_path, WhisperContextParameters::default())
+            .map_err(|e| format!("Whisper-Modell konnte nicht geladen werden: {e}"))?;
     info!(
         model = %config.model_name,
         threads = config.threads,
@@ -205,8 +222,6 @@ async fn main() -> Result<(), String> {
     let state = AppState {
         config: Arc::new(config.clone()),
         engine: Arc::new(Engine { context }),
-        // Ein Whisper-Lauf nutzt selbst mehrere CPU-Threads. Mehrere parallele
-        // Decoder würden den Host nur überbuchen und Latenz/Load verschlechtern.
         gate: Arc::new(Semaphore::new(1)),
     };
 
@@ -294,9 +309,6 @@ async fn transcriptions(
                     .await
                     .map_err(|e| ApiError::BadRequest(format!("response_format unlesbar: {e}")))?;
             }
-            // model/language/timestamp_granularities[] werden aus
-            // Kompatibilitaetsgruenden akzeptiert. Wie der Python-Dienst
-            // entscheidet aber der lokale Server ueber Modell/Sprache.
             _ => {}
         }
     }
@@ -341,8 +353,7 @@ fn decode_wav(raw: &[u8]) -> Result<DecodedAudio, ApiError> {
     let total_samples = reader.duration() as usize;
     let mut pcm = Vec::with_capacity(total_samples);
     for sample in reader.samples::<i16>() {
-        let sample =
-            sample.map_err(|e| ApiError::BadRequest(format!("PCM unlesbar: {e}")))?;
+        let sample = sample.map_err(|e| ApiError::BadRequest(format!("PCM unlesbar: {e}")))?;
         pcm.push(sample as f32 / 32768.0);
     }
 
@@ -382,8 +393,6 @@ fn transcribe(
         params.set_language(Some(language));
     } else {
         params.set_language(None);
-        // None erkennt die Sprache automatisch. detect_language=true würde
-        // whisper.cpp direkt danach, noch vor der Transkription, beenden.
         params.set_detect_language(false);
     }
 
@@ -472,13 +481,74 @@ fn transcribe(
     })
 }
 
+async fn verify_pinned_model(path: &Path, expected_sha256: &str, kind: &str) -> Result<(), String> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| format!("{kind}-Modellpfad hat keinen Elternordner"))?;
+    let mut ancestor = PathBuf::new();
+    for component in directory.components() {
+        if matches!(component, Component::ParentDir | Component::CurDir) {
+            return Err(format!("{kind}-Modellpfad ist unsicher"));
+        }
+        ancestor.push(component);
+        let metadata = fs::symlink_metadata(&ancestor)
+            .await
+            .map_err(|_| format!("{kind}-Modellverzeichnis fehlt oder ist nicht lesbar"))?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(format!("{kind}-Modellverzeichnis ist unsicher"));
+        }
+    }
+    let directory_metadata = fs::metadata(directory)
+        .await
+        .map_err(|_| format!("{kind}-Modellverzeichnis ist nicht lesbar"))?;
+    let metadata = fs::symlink_metadata(path)
+        .await
+        .map_err(|_| format!("{kind}-Modell fehlt oder ist nicht lesbar"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() == 0 {
+        return Err(format!("{kind}-Modell ist keine reguläre Datei"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if directory_metadata.permissions().mode() & 0o022 != 0
+            || metadata.permissions().mode() & 0o222 != 0
+            || directory_metadata.uid() != metadata.uid()
+        {
+            return Err(format!("{kind}-Modell ist nicht schreibgeschützt"));
+        }
+    }
+    let mut file = fs::File::open(path)
+        .await
+        .map_err(|_| format!("{kind}-Modell ist nicht lesbar"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 65536];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .await
+            .map_err(|_| format!("{kind}-Modell konnte nicht geprüft werden"))?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    if !hex::encode(hasher.finalize()).eq_ignore_ascii_case(expected_sha256) {
+        return Err(format!("{kind}-Modell hat eine ungültige SHA256-Prüfsumme"));
+    }
+    Ok(())
+}
+
 async fn ensure_model(
     path: &Path,
     url: &str,
     expected_sha256: &str,
     kind: &str,
 ) -> Result<(), String> {
-    if fs::metadata(path).await.map(|m| m.len() > 0).unwrap_or(false) {
+    if fs::metadata(path)
+        .await
+        .map(|m| m.len() > 0)
+        .unwrap_or(false)
+    {
         return Ok(());
     }
 
@@ -588,5 +658,85 @@ mod tests {
         let cfg = Config::from_snapshot(&snapshot).unwrap();
         assert_eq!(cfg.host, "127.0.0.1");
         assert_eq!(cfg.port, 8791);
+        assert!(!cfg.pinned_models);
+        assert!(
+            cfg.model_path
+                .ends_with(".cache/deadlock-stt/ggml-large-v3-turbo-q5_0.bin")
+                || cfg
+                    .model_path
+                    .ends_with("/tmp/deadlock-stt/ggml-large-v3-turbo-q5_0.bin")
+        );
+    }
+
+    #[test]
+    fn configured_directory_uses_snapshot_resolution() {
+        let snapshot = BotConfigSnapshot::parse(
+            "schema_version=1\n[twitch]\nbot_user_id='1'\nnotify_channel_id='2'\neventsub_callback_url='https://example.invalid/callback'\n[stt]\nmodel_directory='../models'\n",
+            Path::new("/test/config/bot.toml"),
+        )
+        .unwrap();
+        let cfg = Config::from_snapshot(&snapshot).unwrap();
+        assert!(cfg.pinned_models);
+        assert_eq!(
+            cfg.model_path,
+            Path::new("/test/models").join(DEFAULT_MODEL_FILE)
+        );
+        assert_eq!(
+            cfg.vad_path,
+            Path::new("/test/models").join(DEFAULT_VAD_FILE)
+        );
+    }
+
+    #[test]
+    fn configured_directory_cannot_escape_filesystem_root() {
+        let snapshot = BotConfigSnapshot::parse(
+            "schema_version=1\n[twitch]\nbot_user_id='1'\nnotify_channel_id='2'\neventsub_callback_url='https://example.invalid/callback'\n[stt]\nmodel_directory='../../../../../../models'\n",
+            Path::new("/test/config/bot.toml"),
+        )
+        .unwrap();
+        assert!(Config::from_snapshot(&snapshot).is_err());
+    }
+
+    #[tokio::test]
+    async fn pinned_models_reject_corruption_missing_and_symlinks_without_network() {
+        let directory =
+            std::env::temp_dir().join(format!("tb-stt-model-test-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let path = directory.join(DEFAULT_VAD_FILE);
+        let expected = hex::encode(Sha256::digest(b"fixture"));
+        assert!(verify_pinned_model(&path, &expected, "VAD").await.is_err());
+        std::fs::write(&path, b"wrong").unwrap();
+        assert!(verify_pinned_model(&path, &expected, "VAD").await.is_err());
+        std::fs::write(&path, b"fixture").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        }
+        verify_pinned_model(&path, &expected, "VAD").await.unwrap();
+        let link = directory.join(DEFAULT_MODEL_FILE);
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&path, &link).unwrap();
+            assert!(verify_pinned_model(&link, &expected, "Whisper")
+                .await
+                .is_err());
+            std::fs::remove_file(&link).unwrap();
+            let directory_link = directory.with_extension("symlink");
+            std::os::unix::fs::symlink(&directory, &directory_link).unwrap();
+            assert!(
+                verify_pinned_model(&directory_link.join(DEFAULT_VAD_FILE), &expected, "VAD")
+                    .await
+                    .is_err()
+            );
+            std::fs::remove_file(&directory_link).unwrap();
+        }
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&directory).unwrap();
     }
 }
