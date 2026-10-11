@@ -79,6 +79,23 @@ test('malformed status and non-backend media URLs fail closed', () => {
   assert.throws(() => decodeAiJob({ ...valid, highlights: [{ start_ms: 10, end_ms: 5, description: 'Falsche Zeit' }] }), /unvollständig/);
 });
 
+test('provider latency decodes independently without inventing a duration', () => {
+  const valid = aiPreviewJob('review');
+  assert.ok(valid);
+  const decoded = decodeAiJob(valid);
+  assert.equal(decoded.provider_latency_ms, 78200);
+  assert.equal(decoded.processing_ms, 183000);
+  assert.equal(decoded.rendering_ms, 42900);
+  assert.equal(decodeAiJob({ ...valid, provider_latency_ms: 0 }).provider_latency_ms, 0);
+  assert.equal(decodeAiJob({ ...valid, provider_latency_ms: null }).provider_latency_ms, null);
+  const legacy = { ...valid };
+  delete (legacy as Partial<typeof valid>).provider_latency_ms;
+  assert.equal(decodeAiJob(legacy).provider_latency_ms, null);
+  for (const value of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, NaN, Infinity, '78200']) {
+    assert.throws(() => decodeAiJob({ ...valid, provider_latency_ms: value }), /unvollständig/);
+  }
+});
+
 test('denied or mismatched channel data cannot become an enabled editor state', async () => {
   const previous = globalThis.fetch;
   const validJob = aiPreviewJob('review');

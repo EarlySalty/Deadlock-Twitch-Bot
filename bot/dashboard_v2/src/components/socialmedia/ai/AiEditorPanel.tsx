@@ -115,6 +115,7 @@ function JobDetails({ job, canStart, onRetry, retryPending, retryError }: { job:
     <dl className="social-ai-facts" aria-label="Verarbeitung und Kosten">
       <div><dt>KI-Anbieter und Modell</dt><dd>{job.provider && job.model ? `${job.provider} · ${job.model}` : 'Noch unbekannt'}</dd></div>
       <div><dt>Gesamte Bearbeitungszeit</dt><dd>{duration(job.processing_ms)}</dd></div>
+      <div><dt>KI-Antwortzeit</dt><dd>{duration(job.provider_latency_ms)}</dd></div>
       <div><dt>FFmpeg-Rechenzeit</dt><dd>{duration(job.rendering_ms)}</dd></div>
       <div><dt>Eingabe- und Ausgabetokens</dt><dd>{job.input_tokens === null || job.output_tokens === null ? 'Noch unbekannt' : `${numberFormat.format(job.input_tokens)} / ${numberFormat.format(job.output_tokens)}`}</dd></div>
       <div><dt>Geschätzte Anbieter-Kosten</dt><dd>{job.cost_basis === 'unknown' || job.estimated_provider_cost_usd === null ? 'Noch unbekannt' : `${moneyFormat.format(job.estimated_provider_cost_usd)} US-Dollar (Schätzung aus Tokenverbrauch)`}</dd></div>

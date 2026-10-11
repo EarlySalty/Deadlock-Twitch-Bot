@@ -107,7 +107,11 @@ try {
   assert.equal(desktop.videos.length, 2);
   assert.equal(mobile.videos.length, 2);
   assert.ok(desktop.videos.every((video) => video.controls && video.label));
-  assert.equal(await page.locator('dl.social-ai-facts dt').count(), 7);
+  assert.equal(await page.locator('dl.social-ai-facts dt').count(), 8);
+  const timing = await page.locator('dl.social-ai-facts > div').evaluateAll((rows) => Object.fromEntries(rows.map((row) => [row.querySelector('dt')?.textContent, row.querySelector('dd')?.textContent])));
+  assert.equal(timing['Gesamte Bearbeitungszeit'], '183 s');
+  assert.equal(timing['KI-Antwortzeit'], '78,2 s');
+  assert.equal(timing['FFmpeg-Rechenzeit'], '42,9 s');
   assert.ok(await page.getByText('Die neueste Fassung ist nicht abspielbar.').isVisible());
   const playback = await page.locator('video').evaluateAll(async (videos) => {
     const results = [];
