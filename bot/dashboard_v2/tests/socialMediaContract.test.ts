@@ -618,6 +618,7 @@ test('metadata departure preserves rejected drafts and blocks pending saves befo
     assert.equal(prompts, !saving && dirty ? 1 : 0);
     assert.deepEqual(updates, expected ? ['ai', 42, [{}, '', '/social-media?view=ai&clip_db_id=42']] : []);
   }
+  assert.match(lies('src/components/socialmedia/LayoutEditor.tsx'), /<div\b[^>]*data-unsaved=\{isDirty \|\| isSaving \? 'true' : undefined\}[^>]*data-saving=\{isSaving \? 'true' : undefined\}/);
   const panel = lies('src/components/socialmedia/EnrichmentPanel.tsx');
   assert.match(panel, /data-unsaved=\{dirty \|\| saveMutation\.isPending/);
   assert.match(panel, /data-saving=\{saveMutation\.isPending/);
