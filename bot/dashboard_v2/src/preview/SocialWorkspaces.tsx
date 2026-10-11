@@ -639,7 +639,9 @@ export default function SocialWorkspaces(props: SocialMediaProps) {
           legacy
             ? props.workspaceSlots
             : {
-                automation: <SyntheticAutomation />,
+                automation: props.workspaceSlots?.automation ?? (
+                  <SyntheticAutomation />
+                ),
                 libraryImport: <SyntheticImport />,
               }
         }
