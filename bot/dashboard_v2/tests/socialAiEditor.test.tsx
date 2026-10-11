@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chooseUsableVersion } from '../src/components/socialmedia/ai/versions';
+import { failureExplanation } from '../src/components/socialmedia/ai/failure';
 import { aiPreviewJob } from '../src/components/socialmedia/ai/preview';
 
 Object.assign(globalThis, { window: { location: { pathname: '/' } } });
+const { findChannelClip, isSelectableClip } = await import('../src/components/socialmedia/ai/clipLookup');
 const { decodeAiConsent, decodeAiJob, fetchAiConsent, fetchAiJob, fetchAiJobs, retryAiJob, saveAiConsent, startAiJob } = await import('../src/components/socialmedia/ai/api');
 
 function mockFetch(body: unknown, inspect: (url: string, init: RequestInit) => void): () => void {
@@ -94,6 +96,60 @@ test('denied or mismatched channel data cannot become an enabled editor state', 
   } finally {
     restore();
   }
+});
+
+test('channel-scoped pagination resolves a valid handoff beyond the first 30 clips', async () => {
+  const previous = globalThis.fetch;
+  const calls: string[] = [];
+  const controller = new AbortController();
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input), 'http://localhost');
+    calls.push(url.search);
+    assert.equal(url.searchParams.get('twitch_user_id'), '123');
+    assert.equal(url.searchParams.get('page_size'), '100');
+    assert.equal(init?.signal, controller.signal);
+    const page = Number(url.searchParams.get('page'));
+    return Response.json({ page, page_size: 100, total: 140, items: page === 1 ? Array.from({ length: 100 }, (_, index) => ({ clip_db_id: index + 1, source_kind: 'twitch', title: 'Clip', created_at: '2026-10-11T08:00:00Z' })) : [{ clip_db_id: 135, source_kind: 'twitch', title: 'Übernommener Clip', created_at: '2026-10-11T08:00:00Z' }] });
+  };
+  try {
+    assert.equal((await findChannelClip('123', 135, controller.signal))?.clip_db_id, 135);
+    assert.equal(calls.length, 2);
+  } finally {
+    globalThis.fetch = previous;
+  }
+});
+
+test('foreign, malformed and unproven handoffs never become selectable', async () => {
+  const previous = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input), 'http://localhost');
+    assert.equal(url.searchParams.get('twitch_user_id'), '123');
+    return Response.json({ page: 1, page_size: 100, total: 2, items: [
+      { clip_db_id: 77, source_kind: 'upload', title: 'Falsche Quelle', created_at: '2026-10-11T08:00:00Z' },
+      { clip_db_id: 78, source_kind: 'twitch', title: 'Kaputt', created_at: 'invalid' },
+    ] });
+  };
+  try {
+    assert.equal(await findChannelClip('123', 99), null);
+    assert.equal(await findChannelClip('123', 77), null);
+    assert.equal(await findChannelClip('123', 78), null);
+    assert.equal(await findChannelClip('123', -1), null);
+    assert.equal(isSelectableClip({ clip_db_id: 99, source_kind: 'twitch', created_at: 'invalid', title: 'Fremd' } as never), false);
+  } finally {
+    globalThis.fetch = previous;
+  }
+  const restore = mockFetch({ page: 5, page_size: 100, total: 100, items: [{ clip_db_id: 99, source_kind: 'twitch', title: 'Fremd', created_at: '2026-10-11T08:00:00Z' }] }, () => {});
+  try {
+    await assert.rejects(findChannelClip('123', 99), /nicht geprüft/);
+  } finally {
+    restore();
+  }
+});
+
+test('failure explanation uses only short German recovery text and hides technical details', () => {
+  assert.equal(failureExplanation('Der Renderversuch ist fehlgeschlagen.'), 'Der Renderversuch ist fehlgeschlagen.');
+  assert.match(failureExplanation(null), /erneut/);
+  assert.doesNotMatch(failureExplanation('Error: /var/lib/private/stack'), /private|stack|Error/);
 });
 
 test('a failed new version leaves the older playable output selected', () => {
