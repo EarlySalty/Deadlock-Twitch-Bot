@@ -20,7 +20,7 @@ export function WorkspaceDialog({
   const close = useRef<HTMLButtonElement>(null);
   const titleId = useId();
   const requestClose = () => {
-    if (busy) return;
+    if (busy || dialog.current?.querySelector('[data-saving="true"]')) return;
     if (dialog.current?.querySelector('[data-unsaved="true"]') && !window.confirm(t('Ungespeicherte Änderungen verwerfen?'))) return;
     onClose();
   };

@@ -139,6 +139,7 @@ export function SocialMediaManager() {
                 aria-label={t('Streamer wählen')}
                 value={selectedChannel?.twitchUserId ?? ''}
                 onChange={(event) => {
+                  if (document.querySelector('[data-saving="true"]')) return;
                   if (document.querySelector('[data-unsaved="true"]') && !window.confirm(t('Ungespeicherte Änderungen verwerfen?'))) return;
                   hasAutoSetStreamer.current = true;
                   const selected = resolveSocialMediaChannel(streamers, event.target.value);

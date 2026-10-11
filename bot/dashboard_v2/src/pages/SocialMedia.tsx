@@ -417,6 +417,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
     approvalMutation.isPending || discardMutation.isPending || abbrechenMutation.isPending;
   const changeView = (next: SocialMediaView, clipDbId = selectedAiClipId) => {
     if (next === activeView && clipDbId === selectedAiClipId) return true;
+    if (document.querySelector('[data-saving="true"]')) return false;
     if (
       document.querySelector('[data-unsaved="true"]') &&
       !window.confirm(t('Ungespeicherte Änderungen verwerfen?'))
@@ -1172,14 +1173,16 @@ function ClipEditorDialog({
   onResetLayout: () => void;
 }) {
   const t = useT();
+  const [enrichmentSaving, setEnrichmentSaving] = useState(false);
+  const busy = isSaving || enrichmentSaving;
   return (
     <WorkspaceDialog
       eyebrow={mode === 'layout' ? t('Clip-Layout') : t('Metadaten')}
       title={clip.title}
-      busy={isSaving}
+      busy={busy}
       onClose={onClose}
     >
-      {clip.source_kind !== 'manual_upload' && <button type="button" disabled={isSaving} className="studio-button mb-4" onClick={onOpenAiEditor}>{t('KI-Bearbeitung & Prüfung')}</button>}
+      {clip.source_kind !== 'manual_upload' && <button type="button" disabled={busy} className="studio-button mb-4" onClick={onOpenAiEditor}>{t('KI-Bearbeitung & Prüfung')}</button>}
       {mode === 'layout' ? (
         <div className="space-y-4">
           <LayoutEditor
@@ -1218,7 +1221,7 @@ function ClipEditorDialog({
           )}
         </div>
       ) : (
-        <EnrichmentPanel clipDbId={clip.clip_db_id} onClose={onClose} />
+        <EnrichmentPanel clipDbId={clip.clip_db_id} onClose={onClose} onSavingChange={setEnrichmentSaving} />
       )}
     </WorkspaceDialog>
   );
