@@ -3,7 +3,10 @@ use std::{
     io::Cursor,
     net::SocketAddr,
     path::{Component, Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::Instant,
 };
 
@@ -26,7 +29,8 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::Semaphore,
 };
-use tracing::{info, warn};
+use tracing::{info, warn, Event, Level, Subscriber};
+use tracing_subscriber::{filter::LevelFilter, layer::Context, prelude::*, Layer};
 use whisper_rs::{
     get_lang_str, FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
     WhisperError, WhisperVadContext, WhisperVadContextParams, WhisperVadParams, WhisperVadSegments,
@@ -107,6 +111,37 @@ impl Config {
 struct Engine {
     context: WhisperContext,
     vad: Mutex<WhisperVadContext>,
+    native_errors: Arc<AtomicU64>,
+}
+
+struct NativeErrorLayer {
+    errors: Arc<AtomicU64>,
+}
+
+impl<S: Subscriber> Layer<S> for NativeErrorLayer {
+    fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+        let metadata = event.metadata();
+        if *metadata.level() == Level::ERROR
+            && matches!(
+                metadata.target(),
+                "whisper_rs::whisper_logging_hook" | "whisper_rs::ggml_logging_hook"
+            )
+        {
+            self.errors.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
+fn observe_vad<T>(
+    errors: &AtomicU64,
+    call: impl FnOnce() -> Result<T, WhisperError>,
+) -> Result<T, ApiError> {
+    let before = errors.load(Ordering::SeqCst);
+    let result = call();
+    if errors.load(Ordering::SeqCst) != before {
+        return Err(ApiError::Internal("VAD-Backendfehler".to_owned()));
+    }
+    result.map_err(|error| ApiError::Internal(format!("VAD-Inferenz: {error}")))
 }
 
 #[derive(Clone)]
@@ -181,9 +216,18 @@ async fn main() -> Result<(), String> {
         ConfigArguments::parse(env::args_os().skip(1)).map_err(|error| error.to_string())?;
     let recovery_state = recovery::parse_arguments(&arguments.remaining)?;
     let snapshot = BotConfigSnapshot::load(&arguments.path).map_err(|error| error.to_string())?;
-    tracing_subscriber::fmt()
-        .with_max_level(snapshot.settings().logging.level.tracing_level())
+    let native_errors = Arc::new(AtomicU64::new(0));
+    tracing_subscriber::registry()
+        .with(NativeErrorLayer {
+            errors: Arc::clone(&native_errors),
+        })
+        .with(
+            tracing_subscriber::fmt::layer().with_filter(LevelFilter::from_level(
+                snapshot.settings().logging.level.tracing_level(),
+            )),
+        )
         .init();
+    whisper_rs::install_logging_hooks();
 
     if let Some(state_path) = recovery_state {
         recovery::run(&snapshot.settings().stt, &state_path).await?;
@@ -235,6 +279,7 @@ async fn main() -> Result<(), String> {
         engine: Arc::new(Engine {
             context,
             vad: Mutex::new(vad),
+            native_errors,
         }),
         gate: Arc::new(Semaphore::new(1)),
     };
@@ -381,10 +426,10 @@ fn decode_wav(raw: &[u8]) -> Result<DecodedAudio, ApiError> {
 }
 
 fn speech_window(
-    segments: Result<WhisperVadSegments, WhisperError>,
+    segments: Result<WhisperVadSegments, ApiError>,
     duration: f64,
 ) -> Result<Option<(i32, f64, f64)>, ApiError> {
-    let segments = segments.map_err(|e| ApiError::Internal(format!("VAD-Inferenz: {e}")))?;
+    let segments = segments?;
     let count = segments.num_segments();
     if count == 0 {
         return Ok(None);
@@ -434,7 +479,9 @@ fn transcribe(
             .lock()
             .map_err(|_| ApiError::Internal("VAD-State ist nicht verfügbar".to_owned()))?;
         speech_window(
-            vad.segments_from_samples(WhisperVadParams::default(), &audio.pcm),
+            observe_vad(&engine.native_errors, || {
+                vad.segments_from_samples(WhisperVadParams::default(), &audio.pcm)
+            }),
             audio.duration_seconds,
         )?
     };
@@ -764,9 +811,73 @@ mod tests {
     #[test]
     fn vad_failure_is_not_no_speech() {
         assert!(matches!(
-            speech_window(Err(WhisperError::NullPointer), 2.0),
+            speech_window(
+                observe_vad(&AtomicU64::new(0), || Err(WhisperError::NullPointer)),
+                2.0
+            ),
             Err(ApiError::Internal(_))
         ));
+    }
+
+    #[test]
+    fn native_error_hook_rejects_successful_vad_return_with_reused_probabilities() {
+        let errors = Arc::new(AtomicU64::new(0));
+        let subscriber = tracing_subscriber::registry()
+            .with(NativeErrorLayer {
+                errors: Arc::clone(&errors),
+            })
+            .with(tracing_subscriber::fmt::layer().with_filter(LevelFilter::OFF));
+        tracing::subscriber::set_global_default(subscriber).unwrap();
+        whisper_rs::install_logging_hooks();
+
+        let missing_model = std::env::temp_dir().join(format!(
+            "tb-stt-missing-vad-model-{}.bin",
+            std::process::id()
+        ));
+        assert!(!missing_model.exists());
+        let before = errors.load(Ordering::SeqCst);
+        assert!(WhisperVadContext::new(
+            missing_model.to_str().unwrap(),
+            WhisperVadContextParams::default()
+        )
+        .is_err());
+        assert!(errors.load(Ordering::SeqCst) > before);
+
+        let mut stale_probabilities = vec![0.85_f32; 64];
+        assert!(observe_vad(&errors, || Ok::<_, WhisperError>(())).is_ok());
+        let failure = observe_vad(&errors, || {
+            stale_probabilities.resize(64, 0.0);
+            assert_eq!(stale_probabilities, vec![0.85_f32; 64]);
+            std::thread::spawn(|| {
+                tracing::error!(
+                    target: "whisper_rs::whisper_logging_hook",
+                    "whisper_vad_detect_speech: failed to compute VAD graph"
+                );
+            })
+            .join()
+            .unwrap();
+            Ok::<_, WhisperError>(stale_probabilities)
+        })
+        .unwrap_err();
+        assert_eq!(
+            failure.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+
+        let ggml_failure = observe_vad(&errors, || {
+            std::thread::spawn(|| {
+                tracing::error!(target: "whisper_rs::ggml_logging_hook", "compute failed");
+            })
+            .join()
+            .unwrap();
+            Ok::<_, WhisperError>(())
+        })
+        .unwrap_err();
+        assert_eq!(
+            ggml_failure.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert!(observe_vad(&errors, || Ok::<_, WhisperError>(())).is_ok());
     }
 
     #[test]
