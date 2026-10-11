@@ -1,0 +1,49 @@
+{
+  "observed_date": "2026-10-11",
+  "kind": "Moli synthetic Social AI review fixture screenshots",
+  "source_directory": "/tmp/m1-runtime-moli-20261011-3yu8LU",
+  "worker_reported_viewport_widths": [
+    1440,
+    390
+  ],
+  "parent_inspected": [
+    "review-desktop.png",
+    "review-mobile.png",
+    "media-desktop.png",
+    "media-mobile.png"
+  ],
+  "parent_observations": [
+    "Desktop original and edited media panels are side by side; mobile panels are stacked.",
+    "Media labels identify Originalclip and Bearbeitete Fassung 1 with synthetic 54.8-second and 42.4-second durations.",
+    "Media are gray placeholders, not decoded playback.",
+    "Desktop fixture shows a warning retaining the last usable version when the newest version cannot play.",
+    "These inspected screenshot viewports do not independently prove every timing label below the fold."
+  ],
+  "limits": [
+    "Synthetic layout and fixture state only.",
+    "No real source playback, provider work, live authentication or production acceptance.",
+    "Synthetic durations are not the 30-second own-channel source preflight."
+  ],
+  "artifacts": [
+    {
+      "file": "review-desktop.png",
+      "sha256": "3ae55e09d7d93bd88760c765677ebc81f2737cd68d67b1753c8a801388d2487b",
+      "bytes": 129876
+    },
+    {
+      "file": "review-mobile.png",
+      "sha256": "da9ffbd0a6fb69f0d55752f9883c2548d380c8348ffd4d359c42b9cc5285c62a",
+      "bytes": 76347
+    },
+    {
+      "file": "media-desktop.png",
+      "sha256": "38ef58f174db8f9548d4da9386743b238fdaca6d71bacc6316fad6679c0c9011",
+      "bytes": 86856
+    },
+    {
+      "file": "media-mobile.png",
+      "sha256": "a5ca847eaace35142b442d69b605d82dc91911d4dd3f30a9e3ac11d3166c7692",
+      "bytes": 27827
+    }
+  ]
+}

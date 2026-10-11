@@ -1,0 +1,33 @@
+{
+  "observed_date": "2026-10-11",
+  "purpose": "Bounded read-only own-channel original-media availability and codec preflight",
+  "twitch_user_id": "1186925760",
+  "source_kind": "twitch",
+  "category_key": "deadlock",
+  "candidate_limit": 13,
+  "selection": "Not discarded, recorded local original filename matches numeric clip ID, prior candidate 124808 first, then descending clip ID",
+  "metadata_access": "Local PostgreSQL peer, explicit read-only transaction default and bounded statement timeout; no credentials or raw private rows output",
+  "file_access_identity": "twitchbot",
+  "bot_source_root_access": true,
+  "bounded_candidates": 13,
+  "shared_original_files_present": 13,
+  "permission_denied": 0,
+  "missing_candidate_files": 0,
+  "bot_readable_probes": 13,
+  "probe": "Low-priority ffprobe with 15-second timeout, canonical approved shared root, exact numeric MP4 basename and 200 MB file bound; only codec, dimensions and duration returned",
+  "live_mount": "System bot unit binds /var/lib/deadlock-twitch-media/clips onto /opt/deadlock/twitch/current/data/clips",
+  "clip_db_ids": [124808, 124810, 124809, 124807, 124789, 124788, 124769, 124768, 124767, 124758, 124722, 124719, 124658],
+  "all_probed_media": {
+    "video_codec": "hevc",
+    "width": 1920,
+    "height": 1080,
+    "audio_codecs": ["aac"],
+    "duration_seconds": 30
+  },
+  "limits": [
+    "Source availability under the actual runtime identity is proved, not browser playback",
+    "This bounded sample does not establish the codec of every own-channel original",
+    "Earlier host-side zero-file probes did not use the runtime file-access identity and remain inconclusive",
+    "No file copy, download, source change, transcription, external AI call or production write occurred"
+  ]
+}
