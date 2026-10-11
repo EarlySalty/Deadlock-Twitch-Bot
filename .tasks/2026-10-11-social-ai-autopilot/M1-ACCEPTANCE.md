@@ -1,10 +1,10 @@
 # M1 acceptance and evidence checklist
 
-Status: not implemented end to end, not merged or live. This checklist is a verification contract, not green evidence.
+Status: integrated source and eight scoped test targets have executed successfully at e80a75bdb2d4bc5235d8151bbd8894462640be38. Strict lint baseline, real binary build, final existing-tab mount and their exact final-source checks remain pending. Not accepted, merged or live. This checklist is a verification contract; REGISTER.md distinguishes executed evidence from open acceptance.
 
 ## Must pass before paid proof
 
-1. Actual P1 M0 is merged on freshly fetched `origin/main`, and P2 is rebased onto that contract. Component handovers have independently verified source and matching checks. Shared lease uses the exact global identity for the whole job.
+1. Actual P1 M0 and current upstream main are incorporated from freshly fetched `origin/main`. Relevant integrated source has matching checks with exact SHA scope and explicit baseline failures/exclusions. Shared lease uses the exact global identity for the whole job. The genuine lean-loop instruction supersedes separate per-leaf reviews; the configured integrated gate is the independent review.
 2. Global YAML and stage skills are included in the verified release. Bot and dashboard resolve the same validated configuration. Provider/model/rates/limits are not taken from requests or per-user preferences.
 3. Central provider has a durable shared $2 initial-test ceiling. Concurrent, in-flight, failed, ambiguous and retried attempts cannot bypass it. Known priced usage remains an estimate, not a provider invoice. Job views have no second independent reservation mechanism.
 4. Existing global AI gate and default-false explicit per-user consent are rechecked before every external transmission. Revocation prevents subsequent calls. Test channel is only the verified own channel `1186925760`.
@@ -44,4 +44,4 @@ Required live location: `https://deutsche-deadlock-community.de/twitch/social-me
 
 ## Completion boundary
 
-Matching formatter/build/linter/relevant tests and independent intent review precede local `gate_hook.py --review`. Only ALLOW permits merge. Apply new migrations and runtime grants before affected restart; deploy only verified `origin/main` through the wrapper and check the actual live job. No milestone success is inferred from synthetic tests, branch commits or an unmounted component. Preserve artifacts before cleaning owned branches/worktrees.
+Matching formatter/build/linter/relevant tests lead directly to local `gate_hook.py --review` as the independent review, with a fresh fixer per actual BLOCK. The parent independently judges acceptance against this goal and evidence without adding a separate source-review layer. Only ALLOW permits merge. Apply new migrations and runtime grants before affected restart; deploy only verified `origin/main` through the wrapper and check the actual live job. No milestone success is inferred from synthetic tests, branch commits or an unmounted component. Preserve artifacts before cleaning owned branches/worktrees.
