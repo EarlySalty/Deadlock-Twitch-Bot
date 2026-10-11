@@ -449,6 +449,127 @@ async fn produced_decisions_use_database_time_after_owner_lock_waits() {
 }
 
 #[tokio::test]
+async fn legacy_decisions_refresh_each_platform_time_after_owner_lock_waits() {
+    let schema = "t_m0_gate_7041_legacy_time";
+    let pool = fixture(schema).await;
+    sqlx::raw_sql(
+        "ALTER TABLE twitch_clips_upload_queue ALTER COLUMN id TYPE INTEGER;
+        CREATE TABLE legacy_decision_clock (
+            decision_at TIMESTAMPTZ NOT NULL, reads INTEGER NOT NULL DEFAULT 0,
+            all_reads_locked BOOLEAN NOT NULL DEFAULT TRUE);
+        INSERT INTO legacy_decision_clock (decision_at) VALUES ('2030-01-01T17:59:00Z');
+        CREATE FUNCTION clock_timestamp() RETURNS TIMESTAMPTZ LANGUAGE plpgsql VOLATILE AS $$
+        DECLARE decision_time TIMESTAMPTZ;
+        BEGIN
+            UPDATE legacy_decision_clock SET reads = reads + 1,
+                all_reads_locked = all_reads_locked AND EXISTS (
+                    SELECT 1 FROM pg_locks WHERE pid = pg_backend_pid()
+                    AND locktype = 'advisory' AND granted)
+            RETURNING decision_at INTO decision_time;
+            RETURN decision_time;
+        END $$;",
+    )
+    .execute(&pool)
+    .await
+    .expect("controlled database clock with real INT4 queue identity");
+    let id = clip(&pool, "legacy-decision-time", "owner").await;
+    let clip_id = i32::try_from(id).expect("legacy clip identity");
+    sqlx::query("INSERT INTO social_media_clip_approval (clip_db_id, state, approved_platforms) VALUES ($1, 'approved', '[\"youtube\",\"tiktok\"]')")
+        .bind(clip_id).execute(&pool).await.expect("two approved destinations");
+    let search_path = format!("{schema},pg_catalog");
+    let caller_pool = PgPoolOptions::new()
+        .max_connections(3)
+        .connect_with(
+            options()
+                .options([("search_path", search_path.as_str())])
+                .application_name(schema),
+        )
+        .await
+        .expect("isolated caller with controlled clock");
+    let mut barrier = pool.begin().await.expect("real owner barrier");
+    autopilot_settings::lock_owner(&mut barrier, "owner")
+        .await
+        .expect("hold actual owner transaction lock");
+    let caller = tokio::spawn(async move {
+        let queued = approval::ensure_queued_uploads(&caller_pool, clip_id).await;
+        caller_pool.close().await;
+        queued
+    });
+    wait_for_lock(&pool, schema, "advisory").await;
+    let before: (i32, i64) = sqlx::query_as(
+        "SELECT reads, (SELECT count(*) FROM twitch_clips_upload_queue) FROM legacy_decision_clock",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("blocked decision has not sampled time or persisted a slot");
+    assert_eq!(before, (0, 0));
+    sqlx::query("UPDATE legacy_decision_clock SET decision_at = '2030-01-01T18:01:00Z'")
+        .execute(&mut *barrier)
+        .await
+        .expect("posting time elapsed while actual owner lock was held");
+    barrier.commit().await.expect("release owner lock");
+    let queued = caller.await.expect("blocked legacy scheduling completed");
+    assert_eq!(queued.len(), 2);
+    let expected: DateTime<Utc> = "2030-01-02T18:00:00Z".parse().expect("next future slot");
+    let slots: Vec<(String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT platform, scheduled_at FROM twitch_clips_upload_queue ORDER BY platform",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("persisted future slots after the real lock boundary");
+    assert_eq!(
+        slots,
+        vec![("tiktok".into(), expected), ("youtube".into(), expected)]
+    );
+    let clock: (i32, bool) =
+        sqlx::query_as("SELECT reads, all_reads_locked FROM legacy_decision_clock")
+            .fetch_one(&pool)
+            .await
+            .expect("each platform sampled time while holding the owner lock");
+    assert_eq!(clock, (2, true));
+    assert!(approval::ensure_queued_uploads(&pool, clip_id)
+        .await
+        .is_empty());
+    let youtube_id = queued
+        .iter()
+        .find(|(platform, _)| platform == "youtube")
+        .expect("existing YouTube reservation")
+        .1;
+    let explicit = "2030-01-04T13:00:00Z";
+    let reused = crate::clip_queue::queue_upload_with_schedule(
+        &pool,
+        crate::clip_queue::QueueUploadRequest {
+            clip_db_id: id,
+            platform: "youtube",
+            title: None,
+            description: None,
+            hashtags: None,
+            schedule: crate::clip_queue::UploadSchedule::Replace(explicit),
+            priority: 0,
+        },
+    )
+    .await
+    .expect("explicit schedule remains independent of automatic decision time");
+    assert_eq!(reused, youtube_id);
+    assert!(approval::ensure_queued_uploads(&pool, clip_id)
+        .await
+        .is_empty());
+    let preserved: (i64, bool, i32) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM twitch_clips_upload_queue),
+            (SELECT scheduled_at = $2::text::timestamptz FROM twitch_clips_upload_queue WHERE id = $1),
+            reads FROM legacy_decision_clock",
+    )
+    .bind(youtube_id)
+    .bind(explicit)
+    .fetch_one(&pool)
+    .await
+    .expect("reservation identities and explicit schedule are unchanged on retry");
+    assert_eq!(preserved, (2, true, 2));
+    eprintln!("M0_LEGACY_DECISION_TIME real_owner_lock=true before=2030-01-01T17:59:00Z after=2030-01-01T18:01:00Z slot={expected} platforms=2 post_lock_reads=2 explicit_preserved=true int4_reuse=true");
+    pool.close().await;
+}
+
+#[tokio::test]
 async fn legacy_and_produced_reservations_share_owner_lock_in_both_orders() {
     for (schema, produced_first, legacy_settings) in [
         ("t_m0_fix_produced_first", true, true),

@@ -557,7 +557,6 @@ enum LegacyQueueOutcome {
 async fn enqueue_approved_platform(
     pool: &PgPool,
     request: QueueUploadRequest<'_>,
-    now: chrono::DateTime<chrono::Utc>,
 ) -> Result<LegacyQueueOutcome, QueueError> {
     let clip_id = i32::try_from(request.clip_db_id)
         .map_err(|_| sqlx::Error::Protocol("Ungültige Clip-ID".into()))?;
@@ -576,6 +575,9 @@ async fn enqueue_approved_platform(
         return Ok(LegacyQueueOutcome::Unchanged);
     }
     let scheduled_at = if let Some(owner) = owner {
+        let now = sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(&mut *tx)
+            .await?;
         match posting_plan::plan_next_slot_on(&mut tx, &owner, request.platform, now).await? {
             posting_plan::SlotPlan::Termin(slot) => Some(slot.to_rfc3339()),
             posting_plan::SlotPlan::Ausgeschaltet => return Ok(LegacyQueueOutcome::Paused),
@@ -607,9 +609,7 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
     }
     let enrichment = get_enrichment(pool, clip_db_id).await;
     let streamer = clip_streamer(pool, clip_db_id).await;
-    let now = chrono::Utc::now();
     let mut queued = Vec::new();
-    // Plattformen, die der Kanal nach der Freigabe auf null gestellt hat.
     let mut nachtraeglich_pausiert: Vec<String> = Vec::new();
     for platform in &record.approved_platforms {
         match is_clip_approved_for(pool, i64::from(clip_db_id), platform).await {
@@ -654,7 +654,6 @@ pub async fn ensure_queued_uploads(pool: &PgPool, clip_db_id: i32) -> Vec<(Strin
                 schedule: UploadSchedule::Preserve(None),
                 priority: 0,
             },
-            now,
         )
         .await
         {
