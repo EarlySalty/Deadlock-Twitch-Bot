@@ -538,7 +538,7 @@ pub async fn answer_via_brain(
             }
             Ok(result)
         }
-        KnowledgeReply::Unsourced { .. } | KnowledgeReply::NoEvidence => Ok(SelfExplainerAnswer {
+        KnowledgeReply::NoEvidence => Ok(SelfExplainerAnswer {
             answer: FALLBACK_NOT_DOCUMENTED.into(),
             grounded: false,
             flagged_injection: looks_like_injection(q),
