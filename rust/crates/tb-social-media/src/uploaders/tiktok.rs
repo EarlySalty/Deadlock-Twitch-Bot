@@ -813,13 +813,74 @@ mod tests {
         tokio::fs::remove_file(video).await.unwrap();
     }
 
+    const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+    fn timeout_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .unwrap()
+    }
+
+    async fn fail_at_requests<F>(
+        upload: F,
+        mut requests: tokio::sync::mpsc::UnboundedReceiver<()>,
+        attempts: u32,
+    ) -> UploadError
+    where
+        F: std::future::Future<Output = Result<String, UploadError>>,
+    {
+        use std::{future::Future, task::Poll};
+
+        tokio::pin!(upload);
+        let mut keep_awake: Option<tokio::task::JoinHandle<()>> = None;
+        let mut attempt = 1;
+        let error = loop {
+            tokio::select! {
+                request = requests.recv() => assert_eq!(request, Some(())),
+                result = &mut upload => panic!("upload finished before the targeted request: {result:?}"),
+            }
+            if attempt == 1 {
+                tokio::time::pause();
+                keep_awake = Some(tokio::spawn(async {
+                    loop {
+                        tokio::task::yield_now().await;
+                    }
+                }));
+            }
+            tokio::time::advance(REQUEST_TIMEOUT + Duration::from_secs(1)).await;
+            match std::future::poll_fn(|context| Poll::Ready(upload.as_mut().poll(context))).await {
+                Poll::Ready(result) => {
+                    assert_eq!(attempt, attempts);
+                    break result.unwrap_err();
+                }
+                Poll::Pending => {
+                    assert!(attempt < attempts);
+                    tokio::time::advance(Duration::from_millis(BACKOFF_BASE_MS << (attempt - 1)))
+                        .await;
+                    attempt += 1;
+                }
+            }
+        };
+        if let Some(task) = keep_awake {
+            task.abort();
+            let _ = task.await;
+        }
+        tokio::time::resume();
+        error
+    }
+
     #[tokio::test]
     async fn tiktok_init_timeout_is_not_retried() {
         let server = MockServer::start().await;
         mount_creator_info(&server, json!(["SELF_ONLY", "PUBLIC_TO_EVERYONE"])).await;
+        let (requests, observed) = tokio::sync::mpsc::unbounded_channel();
         Mock::given(method("POST"))
             .and(path("/post/publish/video/init/"))
-            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(100)))
+            .respond_with(move |_: &wiremock::Request| {
+                requests.send(()).unwrap();
+                ResponseTemplate::new(200).set_delay(REQUEST_TIMEOUT * 2)
+            })
             .expect(1)
             .mount(&server)
             .await;
@@ -831,14 +892,14 @@ mod tests {
         let mut uploader = TikTokUploader::new("test-token")
             .with_privacy_level("SELF_ONLY")
             .with_api_base(server.uri());
-        uploader.http = reqwest::Client::builder()
-            .timeout(Duration::from_millis(20))
-            .build()
-            .unwrap();
-        let result = uploader
-            .upload_video_checkpointed(&video, "Titel", "", &[], &checkpoint)
-            .await;
-        assert!(matches!(result, Err(UploadError::Request(_))));
+        uploader.http = timeout_client();
+        let error = fail_at_requests(
+            uploader.upload_video_checkpointed(&video, "Titel", "", &[], &checkpoint),
+            observed,
+            1,
+        )
+        .await;
+        assert!(matches!(error, UploadError::Request(_)));
         assert!(checkpoint.ids.lock().unwrap().is_empty());
         assert_eq!(server.received_requests().await.unwrap().len(), 2);
         server.verify().await;
@@ -856,8 +917,12 @@ mod tests {
                 "error": { "code": "ok" }
             })))
             .expect(1).mount(&server).await;
+        let (requests, observed) = tokio::sync::mpsc::unbounded_channel();
         Mock::given(method("PUT"))
-            .respond_with(ResponseTemplate::new(201).set_delay(Duration::from_millis(100)))
+            .respond_with(move |_: &wiremock::Request| {
+                requests.send(()).unwrap();
+                ResponseTemplate::new(201).set_delay(REQUEST_TIMEOUT * 2)
+            })
             .expect(3)
             .mount(&server)
             .await;
@@ -869,14 +934,14 @@ mod tests {
         let mut uploader = TikTokUploader::new("test-token")
             .with_privacy_level("SELF_ONLY")
             .with_api_base(server.uri());
-        uploader.http = reqwest::Client::builder()
-            .timeout(Duration::from_millis(20))
-            .build()
-            .unwrap();
-        let error = uploader
-            .upload_video_checkpointed(&video, "Titel", "", &[], &checkpoint)
-            .await
-            .unwrap_err();
+        uploader.http = timeout_client();
+        let error = fail_at_requests(
+            uploader.upload_video_checkpointed(&video, "Titel", "", &[], &checkpoint),
+            observed,
+            3,
+        )
+        .await;
+        assert!(matches!(error, UploadError::Request(_)));
         assert_eq!(*checkpoint.ids.lock().unwrap(), vec!["operation-1"]);
         assert!(!error.to_string().contains("signature"));
         server.verify().await;

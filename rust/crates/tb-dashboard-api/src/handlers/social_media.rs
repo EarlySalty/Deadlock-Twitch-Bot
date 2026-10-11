@@ -2418,7 +2418,7 @@ pub async fn admin_clips_handler(
         }
     };
 
-    let mut qb = QueryBuilder::<Postgres>::new(&format!(
+    let mut qb = QueryBuilder::<Postgres>::new(format!(
         "SELECT {CLIP_COLUMNS} FROM twitch_clips_social_media WHERE 1=1"
     ));
     push_clips_where(&mut qb, &auth, twitch_user_id, status.as_deref());
