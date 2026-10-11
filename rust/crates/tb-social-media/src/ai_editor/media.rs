@@ -700,6 +700,28 @@ mod tests {
             (TARGET_WIDTH as u32, TARGET_HEIGHT as u32)
         );
         assert!(rendered_info.has_audio);
+        let decoded_frame = root.path().join("rendered-frame.jpg");
+        let mut decode = Command::new("ffmpeg");
+        decode
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-threads",
+                "1",
+                "-i",
+            ])
+            .arg(&rendered)
+            .args(["-frames:v", "1", "-an", "-threads:v", "1", "-y"])
+            .arg(&decoded_frame);
+        run_status(decode, 15_000)
+            .await
+            .expect("decode rendered video");
+        let frame = tokio::fs::read(&decoded_frame)
+            .await
+            .expect("decoded rendered frame");
+        assert!(frame.starts_with(&[0xff, 0xd8]) && frame.ends_with(&[0xff, 0xd9]));
         let rendered_pcm = root.path().join("rendered.pcm");
         let mut decode = Command::new("ffmpeg");
         decode
