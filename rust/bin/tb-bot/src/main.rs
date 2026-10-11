@@ -1732,6 +1732,18 @@ async fn main() {
             async move { preview.run().await },
         );
 
+        match tb_social_media::ai_editor::EditorRuntime::load_packaged() {
+            Ok(runtime) => {
+                let worker = tb_social_media::ai_editor::ManualWorker::new(
+                    pool.clone(),
+                    runtime,
+                    Some(settings.internal_api.token.clone()),
+                );
+                supervisor.spawn("social_manual_ai_worker", async move { worker.run().await });
+            }
+            Err(error) => tracing::warn!(error = %error, "Manual AI production is unavailable"),
+        }
+
         tracing::info!("Clip-Anreicherung und Transkription abgeschaltet");
 
         // Upload + Token-Refresh + Insights brauchen den Field-Cipher

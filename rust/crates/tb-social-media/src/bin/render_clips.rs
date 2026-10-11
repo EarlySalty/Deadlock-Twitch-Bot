@@ -45,7 +45,6 @@ async fn main() {
     let pool = match PgPoolOptions::new().max_connections(4).connect(&dsn).await {
         Ok(p) => p,
         Err(_) => {
-            // Connection errors may include credentials from a malformed DSN.
             eprintln!("DB-Verbindung fehlgeschlagen. Zugang und Erreichbarkeit prüfen.");
             std::process::exit(1);
         }
@@ -67,15 +66,22 @@ async fn main() {
     .await;
 
     println!(
-        "Fertig: {} gerendert, {} fehlgeschlagen.",
+        "Fertig: {} gerendert, {} fehlgeschlagen, {} zurückgestellt.",
         result.rendered.len(),
-        result.failed.len()
+        result.failed.len(),
+        result.deferred.len()
     );
     for path in &result.rendered {
         println!("  ok   {path}");
     }
     for (clip_id, err) in &result.failed {
         println!("  FAIL {clip_id}: {err}");
+    }
+    for clip_id in &result.deferred {
+        println!("  Zurückgestellt: {clip_id}. Bitte starte die Verarbeitung erneut, sobald die laufende Produktion beendet ist.");
+    }
+    if !result.deferred.is_empty() {
+        std::process::exit(75);
     }
     if result.rendered.is_empty() {
         std::process::exit(1);

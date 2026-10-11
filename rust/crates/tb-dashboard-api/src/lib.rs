@@ -262,6 +262,9 @@ fn build_authed_router_with_analysis_store(
         RateLimitLayerConfig::new(rate_limiter.clone(), "uplink_connect", 30, 60);
 
     let social_routes = Router::new()
+        .merge(handlers::social_media_ai::routes(
+            handlers::social_media_ai::AiRuntime::packaged(),
+        ))
         .route("/social-media/api/stats", get(social_media::stats_handler))
         .route("/social-media/api/clips", get(social_media::clips_handler))
         .route(

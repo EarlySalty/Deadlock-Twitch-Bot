@@ -1,8 +1,10 @@
 mod config;
+mod read_side;
 mod schema;
 mod usage;
 
 pub use config::{EditorConfig, Effort, Pricing, ProviderConfig, ProviderKind};
+pub use read_side::{consent_allowed, global_consent, job_usage, JobUsage};
 pub use usage::Usage;
 
 use base64::{engine::general_purpose::STANDARD, Engine};

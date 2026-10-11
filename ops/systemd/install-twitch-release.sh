@@ -205,6 +205,7 @@ if [[ ! -e "$release" ]]; then
     rust/migrations \
     rust/knowledge \
     ops/systemd \
+    ops/social-ai \
     | tar --extract --file=- --directory="$stage" --no-same-owner --no-same-permissions
 
   # Vor jedem root-seitigen chmod/chown müssen archivierte Quellen echte
@@ -218,6 +219,7 @@ if [[ ! -e "$release" ]]; then
     rust/migrations
     rust/knowledge
     ops/systemd
+    ops/social-ai
   )
   unsafe_archived="$({
     cd "$stage"
@@ -231,6 +233,16 @@ if [[ ! -e "$release" ]]; then
     rust/scripts/run_tb_bot_service.sh \
     rust/scripts/run_tb_dashboard_service.sh \
     rust/scripts/run_stream_audit_service.sh \
+    ops/social-ai/editor.yaml \
+    ops/social-ai/pricing-v1.yaml \
+    ops/social-ai/skills/deadlock-understanding.md \
+    ops/social-ai/skills/highlight-analysis.md \
+    ops/social-ai/skills/editing-strategy.md \
+    ops/social-ai/skills/video-layout.md \
+    ops/social-ai/skills/subtitles.md \
+    ops/social-ai/skills/copywriting.md \
+    ops/social-ai/skills/quality-validation.md \
+    ops/social-ai/skills/feedback-learning.md \
     ops/systemd/twitch-runtime-roles.sql; do
     if [[ ! -f "$stage/$required_file" || -L "$stage/$required_file" ]]; then
       echo "Erforderliche Release-Quelle fehlt oder ist ein Symlink: $required_file" >&2

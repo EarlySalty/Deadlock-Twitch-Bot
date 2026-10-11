@@ -30,6 +30,7 @@ name = "korpus_ernte"
 path = "src/bin/korpus_ernte.rs"
 
 [dev-dependencies]
+serde_yaml = "0.9"
 tokio    = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 wiremock = { workspace = true }
 tempfile = "3"

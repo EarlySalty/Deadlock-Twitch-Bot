@@ -3634,7 +3634,7 @@ pub async fn posting_plan_category_put_handler(
 /// führt vorher schon zu 403. Ein Admin muss den Kanal benennen, „alle" gibt es
 /// hier nicht: VOD-Archiv und Zeitplan sind Entscheidungen je Kanal.
 #[allow(clippy::result_large_err)]
-async fn required_streamer_scope(
+pub(crate) async fn required_streamer_scope(
     auth: &DashboardAuthLevel,
     pool: &PgPool,
     requested_twitch_user_id: Option<&str>,

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
@@ -12,7 +12,8 @@ use crate::video_processor::{bounded_ffmpeg_command, RenderResourceLimits, Video
 use super::model::ResourceLimits;
 use super::validation::{EditorError, ErrorCode, ValidatedPlan};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MediaInfo {
     pub duration_ms: u64,
     pub width: u32,
@@ -29,6 +30,8 @@ struct Probe {
 #[derive(Debug, Deserialize)]
 struct ProbeStream {
     codec_type: String,
+    codec_name: Option<String>,
+    pix_fmt: Option<String>,
     width: Option<u32>,
     height: Option<u32>,
 }
@@ -169,14 +172,14 @@ async fn run_status(mut command: Command, deadline_ms: u64) -> Result<(), Editor
     }
 }
 
-async fn probe_path(path: &Path, limits: &ResourceLimits) -> Result<MediaInfo, EditorError> {
+async fn probe(path: &Path, limits: &ResourceLimits) -> Result<(MediaInfo, Probe), EditorError> {
     let mut command = Command::new("ffprobe");
     command
         .args([
             "-v",
             "error",
             "-show_entries",
-            "format=duration:stream=codec_type,width,height",
+            "format=duration:stream=codec_type,codec_name,pix_fmt,width,height",
             "-of",
             "json",
         ])
@@ -245,7 +248,7 @@ async fn probe_path(path: &Path, limits: &ResourceLimits) -> Result<MediaInfo, E
     {
         return Err(EditorError::new(ErrorCode::InvalidMedia));
     }
-    Ok(MediaInfo {
+    let info = MediaInfo {
         duration_ms: duration_ms.round() as u64,
         width,
         height,
@@ -253,7 +256,12 @@ async fn probe_path(path: &Path, limits: &ResourceLimits) -> Result<MediaInfo, E
             .streams
             .iter()
             .any(|stream| stream.codec_type == "audio"),
-    })
+    };
+    Ok((info, probe))
+}
+
+async fn probe_path(path: &Path, limits: &ResourceLimits) -> Result<MediaInfo, EditorError> {
+    probe(path, limits).await.map(|(info, _)| info)
 }
 
 fn check_output(path: &Path, max_bytes: u64) -> Result<(), EditorError> {
@@ -492,6 +500,138 @@ pub async fn render_prepared(
     Ok(output)
 }
 
+pub(super) async fn render_original_preview(
+    root: &Path,
+    input: &Path,
+    workspace: &Path,
+    source: &MediaInfo,
+    limits: &ResourceLimits,
+    config: &super::runtime_config::OriginalPreviewConfig,
+) -> Result<PathBuf, EditorError> {
+    check_resources(limits)?;
+    let path = source_path(root, input, limits.max_source_bytes)?;
+    let output = workspace.join("original-preview.mp4");
+    let mut command = bounded_ffmpeg_command("nice", config.max_output_bytes);
+    command
+        .args(["-n", &config.nice.to_string(), "ffmpeg"])
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-xerror"])
+        .args(["-threads", &config.encoder_threads.to_string()])
+        .arg("-i")
+        .arg(path)
+        .args(["-map", "0:v:0", "-map", "0:a:0?", "-map_metadata", "-1"])
+        .args([
+            "-filter_threads",
+            &config.encoder_threads.to_string(),
+            "-vf",
+        ])
+        .arg(format!(
+            "scale={}:{}:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1",
+            config.max_width, config.max_height
+        ))
+        .args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            &config.preset,
+            "-crf",
+            &config.crf.to_string(),
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .args(["-threads:v", &config.encoder_threads.to_string()])
+        .args(["-c:a", "aac", "-movflags", "+faststart", "-n"])
+        .arg(&output);
+    run_status(command, config.process_deadline_ms).await?;
+    validate_original_preview(workspace, &output, source, limits, config).await?;
+    Ok(output)
+}
+
+pub(super) async fn validate_original_preview(
+    root: &Path,
+    output: &Path,
+    source: &MediaInfo,
+    limits: &ResourceLimits,
+    config: &super::runtime_config::OriginalPreviewConfig,
+) -> Result<MediaInfo, EditorError> {
+    let path = source_path(root, output, config.max_output_bytes)?;
+    let (info, codecs) = probe(&path, limits).await?;
+    if info.width > config.max_width
+        || info.height > config.max_height
+        || !info.width.is_multiple_of(2)
+        || !info.height.is_multiple_of(2)
+        || (u64::from(info.width) * u64::from(source.height))
+            .abs_diff(u64::from(info.height) * u64::from(source.width))
+            > u64::from(source.width.max(source.height)) * 2
+        || info.has_audio != source.has_audio
+        || info.duration_ms.abs_diff(source.duration_ms) > limits.max_duration_drift_ms
+        || codecs
+            .streams
+            .iter()
+            .any(|stream| match stream.codec_type.as_str() {
+                "video" => {
+                    stream.codec_name.as_deref() != Some("h264")
+                        || stream.pix_fmt.as_deref() != Some("yuv420p")
+                }
+                "audio" => stream.codec_name.as_deref() != Some("aac"),
+                _ => true,
+            })
+    {
+        return Err(EditorError::new(ErrorCode::InvalidMedia));
+    }
+    let mut command = bounded_ffmpeg_command("nice", config.max_output_bytes);
+    command
+        .args(["-n", &config.nice.to_string(), "ffmpeg"])
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-xerror",
+            "-threads",
+        ])
+        .arg(config.encoder_threads.to_string())
+        .arg("-i")
+        .arg(path)
+        .args(["-map", "0:v:0", "-map", "0:a:0?", "-f", "null", "-"]);
+    run_status(command, config.process_deadline_ms).await?;
+    Ok(info)
+}
+
+pub(super) async fn validate_output(
+    root: &Path,
+    output: &Path,
+    expected_duration_ms: u64,
+    source: &MediaInfo,
+    limits: &ResourceLimits,
+) -> Result<MediaInfo, EditorError> {
+    check_resources(limits)?;
+    let path = source_path(root, output, limits.max_output_bytes)?;
+    let info = probe_path(&path, limits).await?;
+    if info.width != TARGET_WIDTH as u32
+        || info.height != TARGET_HEIGHT as u32
+        || info.has_audio != source.has_audio
+        || info.duration_ms.abs_diff(expected_duration_ms) > limits.max_duration_drift_ms
+    {
+        return Err(EditorError::new(ErrorCode::InvalidMedia));
+    }
+    let mut command = bounded_ffmpeg_command("ffmpeg", limits.max_output_bytes);
+    command
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-xerror",
+            "-threads",
+        ])
+        .arg(limits.encoder_threads.to_string())
+        .arg("-i")
+        .arg(path)
+        .args(["-map", "0:v:0", "-map", "0:a?", "-f", "null", "-"]);
+    run_status(command, limits.process_deadline_ms).await?;
+    Ok(info)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -530,6 +670,120 @@ mod tests {
             check_resources(&resources).err().map(|error| error.code),
             Some(ErrorCode::InvalidLimits)
         );
+    }
+
+    #[tokio::test]
+    async fn hevc_original_preview_is_uncut_browser_safe_and_bounded() {
+        let root = tempfile::tempdir().expect("media fixture");
+        let source = root.path().join("uncut-hevc.mp4");
+        let mut fixture = Command::new("ffmpeg");
+        fixture
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=320x180:rate=10",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000",
+                "-t",
+                "2",
+                "-c:v",
+                "libx265",
+                "-x265-params",
+                "pools=1:frame-threads=1:log-level=error",
+                "-c:a",
+                "aac",
+                "-y",
+            ])
+            .arg(&source);
+        run_status(fixture, 15_000)
+            .await
+            .expect("real synthetic HEVC source");
+        let resources = limits();
+        let (info, codecs) = probe(&source, &resources).await.expect("source codec");
+        assert_eq!(
+            codecs
+                .streams
+                .iter()
+                .find(|stream| stream.codec_type == "video")
+                .and_then(|stream| stream.codec_name.as_deref()),
+            Some("hevc")
+        );
+        let config = super::super::runtime_config::OriginalPreviewConfig {
+            max_width: 320,
+            max_height: 180,
+            max_output_bytes: 5_000_000,
+            encoder_threads: 1,
+            nice: 10,
+            crf: 26,
+            preset: "veryfast".into(),
+            process_deadline_ms: 15_000,
+        };
+        let before = tokio::fs::read(&source).await.expect("original bytes");
+        let workspace = make_temp_directory(root.path()).expect("own workspace");
+        let preview = render_original_preview(
+            root.path(),
+            &source,
+            &workspace.0,
+            &info,
+            &resources,
+            &config,
+        )
+        .await
+        .expect("uncut preview");
+        let output = validate_original_preview(&workspace.0, &preview, &info, &resources, &config)
+            .await
+            .expect("full H.264/AAC decode");
+        assert_eq!(
+            (output.width, output.height, output.has_audio),
+            (320, 180, true)
+        );
+        assert!(output.duration_ms.abs_diff(info.duration_ms) <= resources.max_duration_drift_ms);
+        assert_eq!(
+            tokio::fs::read(&source).await.expect("unchanged original"),
+            before
+        );
+        let pcm = workspace.0.join("preview.pcm");
+        let mut decode = Command::new("ffmpeg");
+        decode
+            .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-i"])
+            .arg(&preview)
+            .args(["-vn", "-ac", "1", "-ar", "48000", "-f", "s16le", "-y"])
+            .arg(&pcm);
+        run_status(decode, 15_000)
+            .await
+            .expect("real full preview audio");
+        let audio = tokio::fs::read(&pcm).await.expect("decoded uncut audio");
+        assert!(audio.len() >= 48_000 * 2 * 2);
+        assert!(audio
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .any(|sample| i16::from_le_bytes([sample[0], sample[1]]).unsigned_abs() > 500));
+        let small_workspace = make_temp_directory(root.path()).expect("bounded failure workspace");
+        let small = super::super::runtime_config::OriginalPreviewConfig {
+            max_output_bytes: 64,
+            ..config.clone()
+        };
+        assert!(render_original_preview(
+            root.path(),
+            &source,
+            &small_workspace.0,
+            &info,
+            &resources,
+            &small
+        )
+        .await
+        .is_err());
+        let retained = preview.clone();
+        drop(workspace);
+        assert!(!retained.exists());
     }
 
     #[tokio::test]
