@@ -373,6 +373,13 @@ pub async fn prepare_intervals(
     if source_info.duration_ms.abs_diff(plan.source_duration_ms()) > limits.max_duration_drift_ms {
         return Err(EditorError::new(ErrorCode::InvalidDuration));
     }
+    if plan
+        .intervals()
+        .iter()
+        .any(|interval| interval.end_ms > source_info.duration_ms)
+    {
+        return Err(EditorError::new(ErrorCode::InvalidInterval));
+    }
     let owned = make_temp_directory(workspace_root)?;
     let output = owned.0.join("prepared.mp4");
     let mut command = Command::new("ffmpeg");
@@ -565,6 +572,18 @@ mod tests {
             review_reasons: vec![],
             layout: LayoutIntent::ExistingStable,
         };
+        let mut stale_plan = plan.clone();
+        stale_plan.source_duration_ms = source_info.duration_ms + 100;
+        stale_plan.kept_intervals[1].end_ms = source_info.duration_ms + 100;
+        let stale = validate_plan(stale_plan, source_info.duration_ms + 100, &plan_limits)
+            .expect("plan matches earlier measurement");
+        assert_eq!(
+            prepare_intervals(root.path(), &source, root.path(), &stale, &resources)
+                .await
+                .err()
+                .map(|error| error.code),
+            Some(ErrorCode::InvalidInterval)
+        );
         let validated =
             validate_plan(plan, source_info.duration_ms, &plan_limits).expect("valid intervals");
         let prepared = prepare_intervals(root.path(), &source, root.path(), &validated, &resources)
@@ -575,6 +594,18 @@ mod tests {
             .expect("probe prepared");
         assert!(cut.has_audio);
         assert!(cut.duration_ms.abs_diff(1800) <= resources.max_duration_drift_ms);
+        let pcm = root.path().join("cut.pcm");
+        let mut decode = Command::new("ffmpeg");
+        decode
+            .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-i"])
+            .arg(prepared.path())
+            .args(["-vn", "-ac", "1", "-f", "s16le", "-y"])
+            .arg(&pcm);
+        run_status(decode, 15_000).await.expect("decode cut audio");
+        let audio = tokio::fs::read(&pcm).await.expect("decoded audio");
+        assert!(audio
+            .chunks_exact(2)
+            .any(|sample| { i16::from_le_bytes([sample[0], sample[1]]).unsigned_abs() > 500 }));
         let owned_path = prepared.path();
         drop(prepared);
         assert!(!owned_path.exists());
