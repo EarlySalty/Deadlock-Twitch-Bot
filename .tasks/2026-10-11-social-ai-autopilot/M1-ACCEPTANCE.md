@@ -1,6 +1,6 @@
 # M1 acceptance and evidence checklist
 
-Status: integrated source and eight scoped test targets have executed successfully at e80a75bdb2d4bc5235d8151bbd8894462640be38. Actual strict API lint matches its measured inherited baseline with zero delta; it remains red, not passed. Current main is incorporated at a30e8245ffe30519922f97ebc4a4d14120cbede1 with unchanged P2 Rust source. Affected chat/binary checks, final existing-tab mount and exact final-source checks remain pending. Not accepted, merged or live. REGISTER.md distinguishes executed evidence from open acceptance.
+Status: eight scoped test targets passed at e80a75bdb2d4bc5235d8151bbd8894462640be38. Current main is incorporated at a30e8245ffe30519922f97ebc4a4d14120cbede1 with unchanged P2 Rust source. Its five affected chat tests, strict LLM/Social library lint and real four-binary build passed; three ELF revisions are parent-verified. Strict API lint remains red with a measured zero-delta inherited baseline; binary lint has two diagnostics with its actual matching baseline pending. The existing-tab mount and exact frontend/Moli checks remain pending. Not accepted, merged or live. REGISTER.md distinguishes executed evidence from open acceptance.
 
 ## Must pass before paid proof
 

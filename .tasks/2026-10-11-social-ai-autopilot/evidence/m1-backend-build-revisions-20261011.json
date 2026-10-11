@@ -1,0 +1,34 @@
+{
+  "date": "2026-10-11",
+  "source_revision": "a30e8245ffe30519922f97ebc4a4d14120cbede1",
+  "scope": "feature-checkpoint build, not accepted-main release assembly or deployment",
+  "worker_report": {
+    "task": "bgabocjip",
+    "build_exit_code": 0,
+    "build_duration_seconds": 1320,
+    "build_targets": ["tb-bot", "tb-dashboard", "tb-stt-server", "render_clips"],
+    "build_compiler_warnings": 0,
+    "overall_task_exit_code": 101,
+    "overall_failure": "two binary Clippy diagnostics; matching baseline still pending"
+  },
+  "parent_verification": {
+    "method": "lstat regular-file check and exact readelf .twitch_build string comparison",
+    "exit_code": 0,
+    "artifact_directory": "/home/nathanael/.worktrees/tb-social-ai-m1-runtime/rust/target/release",
+    "artifacts": [
+      {"binary": "tb-bot", "bytes": 53955512, "regular": true, "symlink": false, "exact_revision": true},
+      {"binary": "tb-dashboard", "bytes": 49263400, "regular": true, "symlink": false, "exact_revision": true},
+      {"binary": "tb-stt-server", "bytes": 8224888, "regular": true, "symlink": false, "exact_revision": true}
+    ],
+    "render_clips_revision_checked": false
+  },
+  "acceptance": {
+    "minimal_panel_mount_completed": false,
+    "integrated_gate_completed": false,
+    "published_to_main": false,
+    "deployed": false,
+    "production_models_installed": false,
+    "paid_application_run_completed": false,
+    "authenticated_playback_proved": false
+  }
+}
