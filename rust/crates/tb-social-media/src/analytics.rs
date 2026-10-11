@@ -317,17 +317,16 @@ pub async fn get_existing_report(
     row.map(row_to_report)
 }
 
-/// Legt einen Report an und liefert den gespeicherten Datensatz.
 pub async fn insert_report(
     pool: &PgPool,
     kind: &str,
     streamer_login: Option<&str>,
     twitch_user_id: Option<&str>,
-    period_start: &str,
-    period_end: &str,
+    period: (&str, &str),
     content_md: &str,
     model: Option<&str>,
 ) -> Result<SocialMediaReportRecord, sqlx::Error> {
+    let (period_start, period_end) = period;
     let row: ReportRow = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "INSERT INTO social_media_reports (kind, streamer_login, twitch_user_id, period_start, period_end, content_md, model) \
          VALUES ($1, $2, $7, $3::timestamptz, $4::timestamptz, $5, $6) RETURNING {REPORT_COLUMNS}"
@@ -504,8 +503,7 @@ mod tests {
             "weekly",
             Some("nani"),
             Some("42"),
-            ps,
-            pe,
+            (ps, pe),
             "# Report",
             Some("llm"),
         )
@@ -524,7 +522,7 @@ mod tests {
             .await
             .is_none());
         // Globaler Report (streamer NULL) separat.
-        insert_report(&pool, "weekly", None, None, ps, pe, "# Global", None)
+        insert_report(&pool, "weekly", None, None, (ps, pe), "# Global", None)
             .await
             .unwrap();
         let global = get_existing_report(&pool, "weekly", ps, pe, None)
@@ -533,10 +531,17 @@ mod tests {
         assert_eq!(global.streamer_login, None);
         assert_eq!(global.model, None);
 
-        let missing_display =
-            insert_report(&pool, "weekly", None, Some("99"), ps, pe, "# Channel", None)
-                .await
-                .unwrap();
+        let missing_display = insert_report(
+            &pool,
+            "weekly",
+            None,
+            Some("99"),
+            (ps, pe),
+            "# Channel",
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             get_existing_report(&pool, "weekly", ps, pe, None)
                 .await

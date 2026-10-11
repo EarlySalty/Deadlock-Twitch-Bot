@@ -118,3 +118,6 @@ pub fn build_clip_fetch_task(pool: PgPool, helix: Arc<HelixClient>) -> ClipFetch
 #[cfg(test)]
 #[path = "../../../test-support/schema_sql.rs"]
 mod test_sql;
+
+#[cfg(test)]
+mod autopilot_compatibility_tests;

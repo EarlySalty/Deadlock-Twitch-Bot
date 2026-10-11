@@ -70,6 +70,18 @@ CREATE UNIQUE INDEX social_produced_shared_slot ON social_produced_videos (twitc
 CREATE INDEX social_produced_user_review ON social_produced_videos (twitch_user_id, status, created_at);
 
 ALTER TABLE social_media_clip_approval ADD COLUMN approval_id BIGSERIAL;
+DO $$
+DECLARE
+    runtime_role TEXT;
+    approval_sequence TEXT := pg_get_serial_sequence('social_media_clip_approval', 'approval_id');
+BEGIN
+    FOR runtime_role IN
+        SELECT rolname FROM pg_roles WHERE rolname IN ('twitchbot', 'twitchdash', 'twitchlegacy')
+    LOOP
+        EXECUTE format('GRANT USAGE ON SEQUENCE %s TO %I', approval_sequence, runtime_role);
+    END LOOP;
+END;
+$$;
 ALTER TABLE social_media_clip_approval ADD COLUMN produced_video_id BIGINT REFERENCES social_produced_videos(id);
 ALTER TABLE social_media_clip_approval ADD COLUMN platform TEXT CHECK (platform IN ('youtube', 'tiktok', 'instagram'));
 ALTER TABLE social_media_clip_approval DROP CONSTRAINT social_media_clip_approval_pkey;

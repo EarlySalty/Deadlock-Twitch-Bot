@@ -9,7 +9,7 @@
 //! geschrieben, weil das sqlx-`json`-Feature bewusst nicht aktiv ist.
 
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sqlx::{Executor, PgConnection, PgPool, Postgres};
 
 use crate::scheduler::{next_cadence_slot, CadenceLimits};
 use crate::settings::PostingSchedule;
@@ -233,14 +233,20 @@ pub async fn ensure_streamer_rows(pool: &PgPool, twitch_user_id: &str) -> Result
     Ok(())
 }
 
-/// Liest die Kanal-Einstellungen; fehlende Zeile ergibt den Default.
 pub async fn load_streamer_settings(pool: &PgPool, twitch_user_id: &str) -> StreamerSettings {
+    load_streamer_settings_on(pool, twitch_user_id).await
+}
+
+async fn load_streamer_settings_on<'a>(
+    executor: impl Executor<'a, Database = Postgres>,
+    twitch_user_id: &str,
+) -> StreamerSettings {
     let login = twitch_user_id.to_string();
     let row = sqlx::query!(
         "SELECT approval_mode, timezone, subtitles_enabled FROM social_media_streamer_settings WHERE twitch_user_id = $1",
         login
     )
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
     .ok()
     .flatten();
@@ -284,8 +290,14 @@ pub async fn save_streamer_settings(
     Ok(settings.clone())
 }
 
-/// Kadenz aller Plattformen, fehlende Zeilen als Default aufgefuellt.
 pub async fn load_platform_schedules(pool: &PgPool, twitch_user_id: &str) -> Vec<PlatformSchedule> {
+    load_platform_schedules_on(pool, twitch_user_id).await
+}
+
+async fn load_platform_schedules_on<'a>(
+    executor: impl Executor<'a, Database = Postgres>,
+    twitch_user_id: &str,
+) -> Vec<PlatformSchedule> {
     let login = twitch_user_id.to_string();
     let rows = sqlx::query!(
         "SELECT platform, auto_post, posts_per_week, max_posts_per_day, \
@@ -293,7 +305,7 @@ pub async fn load_platform_schedules(pool: &PgPool, twitch_user_id: &str) -> Vec
            FROM social_media_platform_schedule WHERE twitch_user_id = $1",
         login
     )
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await
     .unwrap_or_default();
 
@@ -516,63 +528,99 @@ pub enum SlotPlan {
     HorizontVoll,
 }
 
-/// Naechster freier Termin fuer diese Plattform, unter Beachtung der Kadenz und
-/// der schon eingeplanten Uploads.
 pub async fn plan_next_slot(
     pool: &PgPool,
     twitch_user_id: &str,
     platform: &str,
     now: DateTime<Utc>,
 ) -> SlotPlan {
-    let login = twitch_user_id.to_string();
-    let schedule = load_platform_schedules(pool, &login)
+    let Ok(mut connection) = pool.acquire().await else {
+        return SlotPlan::HorizontVoll;
+    };
+    plan_next_slot_on(&mut connection, twitch_user_id, platform, now)
         .await
-        .into_iter()
-        .find(|s| s.platform == platform)
-        // `load_platform_schedules` fuellt jede Plattform aus `PLATFORMS` auf,
-        // die Zeile greift also nur, wenn jemand einen Namen ausserhalb der
-        // Liste hereinreicht. Auch dann gilt eine echte Kadenz: einen Pfad
-        // "kein Plan, also sofort" soll es hier bewusst nicht geben.
-        .unwrap_or_else(|| PlatformSchedule::default_for(platform));
-    let limits = schedule.limits();
-    if limits.blocks_everything() {
-        return SlotPlan::Ausgeschaltet;
-    }
-    let settings = load_streamer_settings(pool, &login).await;
-    let taken = belegte_termine(pool, &login, platform).await;
-    match next_cadence_slot(
-        now,
-        &taken,
-        &schedule.posting_schedule(&settings.timezone),
-        &limits,
-    ) {
-        Some(termin) => SlotPlan::Termin(termin),
-        None => SlotPlan::HorizontVoll,
-    }
+        .unwrap_or(SlotPlan::HorizontVoll)
 }
 
-/// Schon vergebene Termine dieser Plattform: eingeplante und erledigte Uploads
-/// im relevanten Zeitfenster.
-async fn belegte_termine(
-    pool: &PgPool,
+pub(crate) async fn plan_next_slot_on(
+    connection: &mut PgConnection,
     twitch_user_id: &str,
     platform: &str,
-) -> Vec<DateTime<Utc>> {
-    sqlx::query_scalar!(
-        "SELECT COALESCE(q.scheduled_at, q.completed_at) AS \"termin!\" \
+    now: DateTime<Utc>,
+) -> Result<SlotPlan, sqlx::Error> {
+    let (has_schedule, has_settings): (bool, bool) = sqlx::query_as(
+        "SELECT to_regclass('social_media_platform_schedule') IS NOT NULL,
+                to_regclass('social_media_streamer_settings') IS NOT NULL",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    let schedule = if has_schedule {
+        load_platform_schedules_on(&mut *connection, twitch_user_id)
+            .await
+            .into_iter()
+            .find(|s| s.platform == platform)
+            .unwrap_or_else(|| PlatformSchedule::default_for(platform))
+    } else {
+        PlatformSchedule::default_for(platform)
+    };
+    let limits = schedule.limits();
+    if limits.blocks_everything() {
+        return Ok(SlotPlan::Ausgeschaltet);
+    }
+    let settings = if has_settings {
+        load_streamer_settings_on(&mut *connection, twitch_user_id).await
+    } else {
+        StreamerSettings::default()
+    };
+    let taken = belegte_termine(connection, twitch_user_id, platform).await?;
+    Ok(
+        match next_cadence_slot(
+            now,
+            &taken,
+            &schedule.posting_schedule(&settings.timezone),
+            &limits,
+        ) {
+            Some(termin) => SlotPlan::Termin(termin),
+            None => SlotPlan::HorizontVoll,
+        },
+    )
+}
+
+async fn belegte_termine(
+    connection: &mut PgConnection,
+    twitch_user_id: &str,
+    platform: &str,
+) -> Result<Vec<DateTime<Utc>>, sqlx::Error> {
+    let mut taken = sqlx::query_scalar(
+        "SELECT COALESCE(q.scheduled_at, q.completed_at) \
            FROM twitch_clips_upload_queue q \
            JOIN twitch_clips_social_media c ON c.id = q.clip_id \
           WHERE c.twitch_user_id = $1 \
             AND q.platform = $2 \
             AND q.status <> 'failed' \
+            AND NULLIF(to_jsonb(q)->'produced_video_id', 'null'::jsonb) IS NULL \
             AND COALESCE(q.scheduled_at, q.completed_at) IS NOT NULL \
             AND COALESCE(q.scheduled_at, q.completed_at) > CURRENT_TIMESTAMP - INTERVAL '14 days'",
-        twitch_user_id,
-        platform
     )
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default()
+    .bind(twitch_user_id)
+    .bind(platform)
+    .fetch_all(&mut *connection)
+    .await?;
+    let has_videos: bool =
+        sqlx::query_scalar("SELECT to_regclass('social_produced_videos') IS NOT NULL")
+            .fetch_one(&mut *connection)
+            .await?;
+    if has_videos {
+        let reservations: Vec<DateTime<Utc>> = sqlx::query_scalar(
+            "SELECT scheduled_at FROM social_produced_videos WHERE twitch_user_id = $1
+             AND scheduled_at IS NOT NULL AND scheduled_at > CURRENT_TIMESTAMP - INTERVAL '14 days'",
+        )
+        .bind(twitch_user_id)
+        .fetch_all(connection)
+        .await?;
+        taken.extend(reservations);
+    }
+    Ok(taken)
 }
 
 /// Zaehlt die Clips, die noch fuer Posts zur Verfuegung stehen: nicht verworfen,

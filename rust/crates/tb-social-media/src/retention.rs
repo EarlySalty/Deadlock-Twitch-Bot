@@ -9,7 +9,7 @@
 
 use std::collections::HashSet;
 
-use sqlx::PgPool;
+use sqlx::{Executor, PgConnection, PgPool, Postgres};
 
 /// Plattform → Upload-Flag-Spalte.
 const PLATFORM_UPLOAD_COLUMNS: [(&str, &str); 3] = [
@@ -23,17 +23,24 @@ pub async fn get_active_platforms_for_streamer(
     pool: &PgPool,
     twitch_user_id: Option<&str>,
 ) -> HashSet<String> {
+    get_active_platforms_on(pool, twitch_user_id)
+        .await
+        .unwrap_or_default()
+}
+
+async fn get_active_platforms_on<'a>(
+    executor: impl Executor<'a, Database = Postgres>,
+    twitch_user_id: Option<&str>,
+) -> Result<HashSet<String>, sqlx::Error> {
     let identity = twitch_user_id.filter(|id| !id.is_empty());
-    sqlx::query_scalar!(
+    let platforms = sqlx::query_scalar!(
         "SELECT DISTINCT platform FROM social_media_platform_auth \
          WHERE enabled = 1 AND (twitch_user_id = $1 OR (streamer_login IS NULL AND twitch_user_id IS NULL))",
         identity
     )
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default()
-    .into_iter()
-    .collect()
+    .fetch_all(executor)
+    .await?;
+    Ok(platforms.into_iter().collect())
 }
 
 /// `true`, wenn der Clip auf allen aktiven Plattformen hochgeladen ist (keine
@@ -42,7 +49,18 @@ pub async fn is_clip_published_on_all_active_platforms(
     pool: &PgPool,
     clip_db_id: impl Into<i64>,
 ) -> bool {
-    let clip_db_id = clip_db_id.into();
+    let Ok(mut connection) = pool.acquire().await else {
+        return false;
+    };
+    is_clip_published_on_all_active_platforms_on(&mut connection, clip_db_id.into())
+        .await
+        .unwrap_or(false)
+}
+
+pub(crate) async fn is_clip_published_on_all_active_platforms_on(
+    connection: &mut PgConnection,
+    clip_db_id: i64,
+) -> Result<bool, sqlx::Error> {
     let row = sqlx::query!(
         "SELECT twitch_user_id, COALESCE(uploaded_tiktok, false) AS \"uploaded_tiktok!\", \
                 COALESCE(uploaded_youtube, false) AS \"uploaded_youtube!\", \
@@ -50,16 +68,14 @@ pub async fn is_clip_published_on_all_active_platforms(
          FROM twitch_clips_social_media WHERE id = $1 LIMIT 1",
         clip_db_id
     )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+    .fetch_optional(&mut *connection)
+    .await?;
     let Some(row) = row else {
-        return false;
+        return Ok(false);
     };
-    let active = get_active_platforms_for_streamer(pool, row.twitch_user_id.as_deref()).await;
+    let active = get_active_platforms_on(connection, row.twitch_user_id.as_deref()).await?;
     if active.is_empty() {
-        return true;
+        return Ok(true);
     }
     let uploaded = |col: &str| -> bool {
         match col {
@@ -70,10 +86,10 @@ pub async fn is_clip_published_on_all_active_platforms(
     };
     for (platform, col) in PLATFORM_UPLOAD_COLUMNS {
         if active.contains(platform) && !uploaded(col) {
-            return false;
+            return Ok(false);
         }
     }
-    true
+    Ok(true)
 }
 
 /// Aktualisiert den Clip-`status` aus dem Publication-Stand (Python
@@ -118,7 +134,7 @@ pub async fn refresh_clip_publication_status(pool: &PgPool, clip_db_id: impl Int
 }
 
 /// Ein abgelaufener Clip (für den Retention-Cleanup). Timestamps als ISO-Text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct ExpiredClip {
     pub id: i64,
     pub clip_id: Option<String>,
@@ -179,23 +195,85 @@ pub async fn iter_expired_clips_for_retention(pool: &PgPool, now: &str) -> Vec<E
         .collect()
 }
 
-/// Löscht die Clip-Zeilen mit den gegebenen IDs (leere Liste = No-op).
-pub async fn delete_clips_by_ids(pool: &PgPool, clip_ids: &[i64]) {
-    if clip_ids.is_empty() {
-        return;
-    }
-    if let Err(error) = sqlx::query!(
-        "DELETE FROM twitch_clips_social_media WHERE id = ANY($1::bigint[])",
-        clip_ids
+pub(crate) async fn lock_retention_clip(
+    connection: &mut PgConnection,
+    clip_id: i64,
+) -> Result<Option<ExpiredClip>, sqlx::Error> {
+    let clip = sqlx::query_as::<_, ExpiredClip>(
+        "SELECT id, clip_id, streamer_login, source_kind, upload_local_path, local_file_path,
+                preview_path, retention_until::text, discarded_at::text, status
+         FROM twitch_clips_social_media WHERE id = $1 FOR UPDATE",
     )
-    .execute(pool)
-    .await
+    .bind(clip_id)
+    .fetch_optional(&mut *connection)
+    .await?;
+    if clip.is_some() && has_production_reference(connection, clip_id).await? {
+        return Ok(None);
+    }
+    Ok(clip)
+}
+
+async fn has_production_reference(
+    connection: &mut PgConnection,
+    clip_id: i64,
+) -> Result<bool, sqlx::Error> {
+    let (jobs, videos): (bool, bool) = sqlx::query_as(
+        "SELECT to_regclass('social_production_jobs') IS NOT NULL,
+                to_regclass('social_produced_videos') IS NOT NULL",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    if jobs
+        && sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM social_production_jobs WHERE clip_id = $1)",
+        )
+        .bind(clip_id)
+        .fetch_one(&mut *connection)
+        .await?
     {
-        tracing::warn!(
-            %error,
-            count = clip_ids.len(),
-            "Social-Media-Retention: Clip-Zeilen konnten nicht geloescht werden"
-        );
+        return Ok(true);
+    }
+    if videos {
+        return sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM social_produced_videos WHERE clip_id = $1)",
+        )
+        .bind(clip_id)
+        .fetch_one(connection)
+        .await;
+    }
+    Ok(false)
+}
+
+pub(crate) async fn delete_locked_retention_clip(
+    connection: &mut PgConnection,
+    clip_id: i64,
+) -> Result<(), sqlx::Error> {
+    if !has_production_reference(connection, clip_id).await? {
+        sqlx::query("DELETE FROM twitch_clips_social_media WHERE id = $1")
+            .bind(clip_id)
+            .execute(connection)
+            .await?;
+    }
+    Ok(())
+}
+
+async fn delete_retention_clip(pool: &PgPool, clip_id: i64) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    if lock_retention_clip(&mut tx, clip_id).await?.is_some() {
+        delete_locked_retention_clip(&mut tx, clip_id).await?;
+    }
+    tx.commit().await
+}
+
+pub async fn delete_clips_by_ids(pool: &PgPool, clip_ids: &[i64]) {
+    for &clip_id in clip_ids {
+        if let Err(error) = delete_retention_clip(pool, clip_id).await {
+            tracing::warn!(
+                %error,
+                clip_id,
+                "Social-Media-Retention: Clip-Zeile konnte nicht gelöscht werden"
+            );
+        }
     }
 }
 

@@ -310,7 +310,7 @@ pub async fn approve(
     let selected = platforms(selected)?;
     let mut tx = pool.begin().await?;
     let video = lock_video(&mut tx, id, Some(twitch_user_id)).await?;
-    let now = sqlx::query_scalar("SELECT NOW()")
+    let now = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut *tx)
         .await?;
     ensure_ready(&video, now).await?;
@@ -368,7 +368,7 @@ async fn enqueue(
     let selected = platforms(selected)?;
     let mut tx = pool.begin().await?;
     let video = lock_video(&mut tx, id, owner).await?;
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT NOW()")
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut *tx)
         .await?;
     ensure_ready(&video, now).await?;
