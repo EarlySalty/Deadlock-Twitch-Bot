@@ -115,6 +115,14 @@ async fn ownership_category_and_concurrent_active_create_are_scoped() {
     assert!(!serialized.contains("transcript"));
     assert!(!serialized.contains("twitch_user_id"));
     assert!(store::AttemptLimit::from_server_config(0).is_err());
+    sqlx::query("DELETE FROM twitch_clips_social_media WHERE id = 1")
+        .execute(&db.pool)
+        .await
+        .expect("Clip-Retention darf nicht blockiert werden");
+    assert!(matches!(
+        store::get_job(&db.pool, "101", 1, limit()).await,
+        Err(store::AiStoreError::NotFound)
+    ));
 }
 
 #[tokio::test]
@@ -377,6 +385,30 @@ async fn consent_lease_release_recovery_and_estimated_cost_are_explicit() {
     store::claim_job(&mut lease, "101", 1, limit())
         .await
         .expect("nächster Schritt");
+    store::save_stage(
+        &mut lease,
+        "101",
+        1,
+        &store::StageCheckpoint::Transcribing {
+            transcript: "Originalsprache".to_string(),
+            language: "de".to_string(),
+        },
+        Some(&store::JobMetrics {
+            processing_ms: Some(500),
+            ..Default::default()
+        }),
+    )
+    .await
+    .expect("Teilmetriken speichern");
+    let view = store::get_job(&db.pool, "101", 1, limit())
+        .await
+        .expect("Gesamtkosten bleiben erhalten");
+    assert_eq!(view.estimated_provider_cost_usd, Some(0.042));
+    assert_eq!(view.input_tokens, Some(10));
+    assert_eq!(view.processing_ms, Some(500));
+    store::claim_job(&mut lease, "101", 1, limit())
+        .await
+        .expect("weiterer Schritt");
     lease.release().await.expect("Lease freigeben");
     let mut lease = store::acquire_production_lease(&db.pool)
         .await
@@ -392,10 +424,10 @@ async fn consent_lease_release_recovery_and_estimated_cost_are_explicit() {
         .await
         .expect("erhaltener Stand");
     assert_eq!(snapshot.status, "failed");
-    assert_eq!(snapshot.stage, store::AiStage::Transcribing);
+    assert_eq!(snapshot.stage, store::AiStage::Analyzing);
     assert!(snapshot
         .checkpoints
-        .contains_key(&store::AiStage::Preparing));
+        .contains_key(&store::AiStage::Transcribing));
     assert_eq!(
         store::recover_stale_jobs(&mut lease, "101", 10)
             .await

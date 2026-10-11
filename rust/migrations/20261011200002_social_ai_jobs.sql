@@ -1,7 +1,7 @@
 CREATE TABLE public.social_ai_jobs (
     id BIGSERIAL PRIMARY KEY,
     twitch_user_id BIGINT NOT NULL CHECK (twitch_user_id > 0),
-    clip_db_id BIGINT NOT NULL REFERENCES public.twitch_clips_social_media(id) ON DELETE RESTRICT,
+    clip_db_id BIGINT NOT NULL REFERENCES public.twitch_clips_social_media(id) ON DELETE CASCADE,
     status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'preparing', 'transcribing', 'analyzing', 'planning', 'rendering', 'validating', 'review', 'failed')),
     stage TEXT NOT NULL DEFAULT 'preparing' CHECK (stage IN ('preparing', 'transcribing', 'analyzing', 'planning', 'rendering', 'validating')),
     attempts JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(attempts) = 'object'),
