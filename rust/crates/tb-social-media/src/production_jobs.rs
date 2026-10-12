@@ -217,7 +217,7 @@ pub async fn claim_next(pool: &PgPool) -> Result<Option<ProductionJob>, JobError
          AND COALESCE((j.metadata->>'retry_after')::timestamptz, '-infinity'::timestamptz) <= clock_timestamp()
          AND (j.started_at IS NOT NULL OR j.source = 'manual' OR EXISTS (
              SELECT 1 FROM social_media_autopilot_settings s WHERE s.twitch_user_id = j.twitch_user_id
-             AND s.enabled AND NOT s.paused
+             AND s.enabled AND NOT s.paused AND jsonb_array_length(s.schedule_slots) > 0
              AND (j.scheduled_at IS NULL OR (j.scheduled_at > clock_timestamp()
                  AND j.scheduled_at <= clock_timestamp() + make_interval(hours => s.lead_time_hours)
                      + CASE WHEN s.lead_time_hours = 0 THEN INTERVAL '1 minute' ELSE INTERVAL '0' END))
@@ -254,6 +254,7 @@ pub async fn claim_next(pool: &PgPool) -> Result<Option<ProductionJob>, JobError
         let reviews: i64 = autopilot_schedule::review_count_on(&mut tx, &owner).await?;
         if !settings.enabled
             || settings.paused
+            || settings.schedule_slots.is_empty()
             || autopilot_schedule::has_automatic_review_on(&mut tx, &owner).await?
             || (settings.publish_mode == autopilot_settings::PublishMode::Review && reviews >= 2)
             || job.scheduled_at.is_some_and(|slot| {

@@ -354,6 +354,128 @@ async fn retry_now(pool: &PgPool, id: i64) {
 }
 
 #[tokio::test]
+async fn autopilot_runner_cleared_schedule_preserves_queued_work_and_manual_independence() {
+    for full_auto in [false, true] {
+        let pool = pool().await;
+        let (root, _, _, clip_id) = real_static_fixture(&pool).await;
+        let slot = automatic_schedule(&pool, "42", false, full_auto).await;
+        crate::clip_pool::save_preferences(
+            &pool,
+            "42",
+            &crate::clip_pool::PoolPreferences {
+                clip_date_filter: crate::autopilot_settings::ClipDateFilter::Year { year: 2025 },
+                clip_sort: crate::autopilot_settings::ClipSort::OldestFirst,
+                timezone: "UTC".into(),
+            },
+        )
+        .await
+        .expect("eligible synthetic clip");
+        assert_eq!(
+            super::plan_owner(&pool, "42", slot - chrono::Duration::minutes(5))
+                .await
+                .expect("actual queued schedule")
+                .created,
+            1
+        );
+        let queued = production_jobs::list(&pool, "42", 50)
+            .await
+            .expect("original queue")
+            .remove(0);
+        assert_eq!(queued.scheduled_at, Some(slot));
+        assert_eq!(queued.clip_id, clip_id);
+        super::save_schedule(
+            &pool,
+            "42",
+            &super::SchedulePatch {
+                schedule_slots: Some(vec![]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("clear all weekly slots after queueing");
+        let runner = worker(&pool, root.path(), VideoProcessor::default());
+        for _ in 0..3 {
+            let report = super::plan_owner(&pool, "42", slot - chrono::Duration::minutes(4))
+                .await
+                .expect("empty schedule planning");
+            assert_eq!(
+                report.production_hold,
+                Some(super::ProductionHold::NoSchedule)
+            );
+            assert_eq!(report.created, 0);
+            assert_eq!(report.retimed, 0);
+            assert!(!runner.run_once().await.expect("no automatic dispatch"));
+        }
+        let unchanged = production_jobs::get(&pool, "42", queued.id)
+            .await
+            .expect("preserved automatic job")
+            .expect("job still exists");
+        assert_eq!(
+            serde_json::to_value(&unchanged).expect("unchanged job state"),
+            serde_json::to_value(&queued).expect("original job state")
+        );
+        assert!(produced_video::list(&pool, "42", 50)
+            .await
+            .expect("no automatic versions or progress")
+            .is_empty());
+        let state = super::snapshot(&pool, "42")
+            .await
+            .expect("truthful snapshot");
+        assert_eq!(
+            state.production_hold,
+            Some(super::ProductionHold::NoSchedule)
+        );
+        assert!(state.settings.schedule_slots.is_empty());
+        for mode in [ProductionMode::Ai, ProductionMode::Static] {
+            let manual_clip = clip(
+                &pool,
+                "42",
+                &format!("manual-{}", mode.as_str()),
+                utc("2025-01-02T00:00:00Z"),
+            )
+            .await;
+            sqlx::query("UPDATE twitch_clips_social_media SET local_file_path = (SELECT local_file_path FROM twitch_clips_social_media WHERE id = $2) WHERE id = $1")
+                .bind(manual_clip)
+                .bind(clip_id)
+                .execute(&pool)
+                .await
+                .expect("separate manual clip with real local synthetic media");
+            let manual = job(&pool, "42", manual_clip, Some(mode)).await;
+            assert!(runner
+                .run_once()
+                .await
+                .expect("manual dispatch without slots"));
+            let result = production_jobs::get(&pool, "42", manual.id)
+                .await
+                .expect("manual result")
+                .expect("owned manual result");
+            assert_eq!(result.attempts, 1);
+            assert_eq!(result.mode, Some(mode));
+            if mode == ProductionMode::Ai {
+                assert_eq!(result.status, "review");
+                assert_eq!(result.review_reasons, json!(["ai_editor_unavailable"]));
+            } else {
+                assert_eq!(result.status, "completed");
+            }
+        }
+        let uploads: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue")
+            .fetch_one(&pool)
+            .await
+            .expect("no publication side effects");
+        assert_eq!(uploads, 0);
+        assert_eq!(
+            production_jobs::get(&pool, "42", queued.id)
+                .await
+                .expect("automatic attempt count")
+                .expect("automatic job")
+                .attempts,
+            0
+        );
+        cleanup(pool).await;
+    }
+}
+
+#[tokio::test]
 async fn autopilot_runner_repeated_resource_holds_do_not_drain_the_pool() {
     for full_auto in [false, true] {
         for ai in [false, true] {
