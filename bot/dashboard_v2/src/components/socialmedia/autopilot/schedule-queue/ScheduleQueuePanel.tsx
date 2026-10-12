@@ -60,7 +60,10 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
   const [snapshot, setSnapshot] = useState<ScheduleQueueSnapshot | null>(null);
   const [draft, setDraft] = useState<ScheduleSettings | null>(null);
   const [patch, setPatch] = useState<SchedulePatch>({});
-  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<'read' | 'mutation' | null>(null);
+  const busy = pending !== null;
+  const saving = pending === 'mutation';
+  const hasChanges = Object.keys(patch).length > 0;
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [removeId, setRemoveId] = useState<number | null>(null);
@@ -104,37 +107,37 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
     setNotice('');
   }
 
-  async function act(request: () => Promise<ScheduleQueueSnapshot>, message: string, saved = false) {
+  async function act(request: () => Promise<ScheduleQueueSnapshot>, message: string, saved = false, mutation = true) {
     if (mutating.current) return;
     mutating.current = true;
     const generation = ++epoch.current;
-    setBusy(true);
+    const notifyChanged = onChanged;
+    setPending(mutation ? 'mutation' : 'read');
     setError('');
     try {
       const result = await request();
+      notifyChanged?.();
       if (!live.current || generation !== epoch.current) return;
       setSnapshot(result);
       if (saved || !dirty.current) setDraft(result.settings);
       if (saved) { dirty.current = false; setPatch({}); }
       setRemoveId(null);
       setNotice(message);
-      onChanged?.();
     } catch (failure) {
       if (live.current) setError(errorText(failure));
     } finally {
       mutating.current = false;
-      if (live.current) setBusy(false);
+      if (live.current) setPending(null);
     }
   }
 
-  if (!snapshot || !draft) return <section className="schedule-queue" aria-busy={!error}>
+  if (!snapshot || !draft) return <section className="schedule-queue" aria-busy={!error} data-unsaved={hasChanges || saving ? 'true' : undefined} data-saving={saving ? 'true' : undefined}>
     <h2>Auto-Pilot und Zeitplan</h2>
-    {error ? <><p role="alert">{error}</p><button onClick={() => { void act(() => api.load(twitchUserId), 'Aktualisiert.'); }}>Erneut laden</button></> : <p role="status">Zeitplan wird geladen.</p>}
+    {error ? <><p role="alert">{error}</p><button onClick={() => { void act(() => api.load(twitchUserId), 'Aktualisiert.', false, false); }}>Erneut laden</button></> : <p role="status">Zeitplan wird geladen.</p>}
   </section>;
 
   const unstarted = snapshot.jobs.filter(job => job.status === 'queued' && !job.started_at);
   const visible = snapshot.jobs.filter(job => job.status !== 'completed' && job.status !== 'cancelled');
-  const hasChanges = Object.keys(patch).length > 0;
   function move(jobId: number, offset: number) {
     const order = unstarted.map(job => job.id);
     const index = order.indexOf(jobId);
@@ -144,10 +147,10 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
     void act(() => api.reorder(order, twitchUserId), 'Reihenfolge gespeichert.');
   }
 
-  return <section className="schedule-queue" aria-labelledby={`${id}-heading`}>
+  return <section className="schedule-queue" aria-labelledby={`${id}-heading`} data-unsaved={hasChanges || saving ? 'true' : undefined} data-saving={saving ? 'true' : undefined}>
     <header className="sq-heading">
       <div><h2 id={`${id}-heading`}>Auto-Pilot und Zeitplan</h2><p>Ein Video pro Termin, gemeinsam für deine ausgewählten Plattformen.</p></div>
-      <button type="button" disabled={busy} onClick={() => { void act(() => api.load(twitchUserId), 'Aktualisiert.'); }}><RefreshCw size={16} />Aktualisieren</button>
+      <button type="button" disabled={busy} onClick={() => { void act(() => api.load(twitchUserId), 'Aktualisiert.', false, false); }}><RefreshCw size={16} />Aktualisieren</button>
     </header>
     <div className="sq-status" role="status">
       <Clock3 size={18} aria-hidden="true" />
