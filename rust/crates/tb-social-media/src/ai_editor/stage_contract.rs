@@ -107,7 +107,9 @@ impl Planning {
         duration: u64,
         limits: &PlanLimits,
         copy_limits: &CopyLimits,
+        analysis: &Analysis,
     ) -> Result<super::ValidatedPlan, AiEditorError> {
+        analysis.validate(duration, limits)?;
         if serde_json::to_vec(self)
             .map_err(|_| AiEditorError::Plan)?
             .len()
@@ -130,6 +132,19 @@ impl Planning {
         {
             return Err(AiEditorError::Plan);
         }
-        super::validate_plan(self.plan.clone(), duration, limits).map_err(|_| AiEditorError::Plan)
+        let validated = super::validate_plan(self.plan.clone(), duration, limits)
+            .map_err(|_| AiEditorError::Plan)?;
+        if analysis.highlights.iter().any(|highlight| {
+            !validated.preserves_highlight(highlight.start_ms as u64, highlight.end_ms as u64)
+        }) || (!analysis.uncertainty.is_empty()
+            && (!self.plan.significant_uncertainty
+                || analysis
+                    .uncertainty
+                    .iter()
+                    .any(|reason| !self.plan.review_reasons.contains(reason))))
+        {
+            return Err(AiEditorError::Plan);
+        }
+        Ok(validated)
     }
 }

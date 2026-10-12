@@ -273,6 +273,7 @@ fn planning(
         frozen.media.duration_ms,
         &runtime.limits.plan,
         &runtime.limits.copy,
+        &analysis(checkpoints)?,
     )?;
     Ok((result, plan))
 }
@@ -586,6 +587,7 @@ async fn plan(
         frozen.media.duration_ms,
         &runtime.limits.plan,
         &runtime.limits.copy,
+        &analysis,
     )?;
     let _ = subtitles(ctx.checkpoints, &validated, runtime)?;
     let decisions = result

@@ -179,6 +179,7 @@ async fn prepared(
         frozen.media.duration_ms,
         &runtime.limits.plan,
         &runtime.limits.copy,
+        &analysis(&checkpoints).expect("persisted analysis"),
     )
     .expect("real deterministic plan validation");
     checkpoints.insert(
@@ -194,6 +195,125 @@ async fn prepared(
         },
     );
     checkpoints
+}
+
+#[tokio::test]
+async fn analyzed_highlights_guard_fresh_and_resumed_plans_before_render_and_qa() {
+    let db = database().await;
+    let directory = tempfile::tempdir().expect("package root");
+    let runtime = runtime(directory.path());
+    let clip = source(&db.pool, &runtime).await;
+    let mut lease = super::super::store::acquire_production_lease(&db.pool)
+        .await
+        .expect("lease")
+        .expect("free");
+    let mut checkpoints = prepared(&db.pool, &runtime, &mut lease, clip, Identity::Manual(1)).await;
+    let (frozen, _) = preparing(&checkpoints, &runtime).expect("frozen source");
+    let (original, _) = planning(&checkpoints, &frozen, &runtime).expect("original plan");
+    let analyzed = Analysis {
+        highlights: vec![TimelineEntry {
+            start_ms: 100,
+            end_ms: 300,
+            description: "Spielmoment und Reaktion".into(),
+        }],
+        uncertainty: vec![],
+        analysis_notes: vec![],
+    };
+    checkpoints.insert(
+        AiStage::Analyzing,
+        StageCheckpoint::Analyzing {
+            highlights: analyzed.highlights.clone(),
+            uncertainty: vec![],
+            analysis_notes: vec![],
+        },
+    );
+    assert!(original.plan.observed_highlights.is_empty());
+    for start_ms in [200, 500] {
+        let mut changed = original.clone();
+        changed.plan.kept_intervals[0].start_ms = start_ms;
+        assert!(matches!(
+            changed.validate(
+                frozen.media.duration_ms,
+                &runtime.limits.plan,
+                &runtime.limits.copy,
+                &analyzed
+            ),
+            Err(AiEditorError::Plan)
+        ));
+        checkpoints.insert(
+            AiStage::Planning,
+            StageCheckpoint::Planning {
+                decisions: vec![],
+                review_reasons: vec![],
+                edit_plan: serde_json::to_value(changed)
+                    .expect("plan")
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+            },
+        );
+        assert!(matches!(
+            planning(&checkpoints, &frozen, &runtime),
+            Err(AiEditorError::Plan)
+        ));
+        for stage in [AiStage::Rendering, AiStage::Validating] {
+            assert!(matches!(
+                execute_stage(
+                    &mut StageContext {
+                        pool: &db.pool,
+                        current: &runtime,
+                        lease: &mut lease,
+                        owner: "101",
+                        clip_id: clip,
+                        identity: Identity::Manual(1),
+                        expected_twitch_clip_id: Some("fixture-original"),
+                        checkpoints: &checkpoints,
+                        brain_token: None,
+                    },
+                    stage
+                )
+                .await,
+                Err(AiEditorError::Plan)
+            ));
+        }
+    }
+    assert!(produced_video::list(&db.pool, "101", 50)
+        .await
+        .expect("no allocation")
+        .is_empty());
+    original
+        .validate(
+            frozen.media.duration_ms,
+            &runtime.limits.plan,
+            &runtime.limits.copy,
+            &analyzed,
+        )
+        .expect("full context and reaction preserved despite empty planner observations");
+    let mut uncertain = analyzed;
+    uncertain
+        .uncertainty
+        .push("Die Fähigkeit ist nicht klar erkennbar".into());
+    assert!(original
+        .validate(
+            frozen.media.duration_ms,
+            &runtime.limits.plan,
+            &runtime.limits.copy,
+            &uncertain
+        )
+        .is_err());
+    let mut reviewed = original;
+    reviewed.plan.significant_uncertainty = true;
+    reviewed.plan.review_reasons = uncertain.uncertainty.clone();
+    assert!(reviewed
+        .validate(
+            frozen.media.duration_ms,
+            &runtime.limits.plan,
+            &runtime.limits.copy,
+            &uncertain
+        )
+        .expect("uncertainty remains visible")
+        .needs_review());
+    lease.release().await.expect("release");
 }
 
 #[test]
