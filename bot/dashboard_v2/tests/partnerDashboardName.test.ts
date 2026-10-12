@@ -35,7 +35,8 @@ test('kein Quelltext nennt noch Twitch Analytics oder Analyse Dashboard', () => 
 
 test('der Archiv-Einstieg bleibt im Social-Media-Manager', () => {
   const src = read('src/pages/SocialMediaManager.tsx');
-  assert.match(src, /href="\/twitch\/social-media\?view=archiv"/);
+  assert.match(src, /href=\{`\$\{PREVIEW_SOCIAL_ROUTE\}\?view=archiv`\}/);
+  assert.match(read('src/preview/routes.ts'), /PREVIEW_SOCIAL_ROUTE = PREVIEW_MODE \? '\/social-media' : '\/twitch\/social-media'/);
   assert.doesNotMatch(src, /\/social-media-admin\?view=archiv|Analyse-Dashboard/);
 });
 
