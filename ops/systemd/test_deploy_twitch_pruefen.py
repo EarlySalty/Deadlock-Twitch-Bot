@@ -455,20 +455,24 @@ class CollectorPackagingTests(unittest.TestCase):
 
 
 class ArchivedSourceTests(unittest.TestCase):
-    def check_archive(self, revision, missing=None, ai_expected=True):
+    def check_archive(self, revision, missing=None, ai_expected=True, existing=False):
         repository = WRAPPER.parents[2]
         sha = subprocess.check_output(["git", "-C", str(repository), "rev-parse", revision], text=True).strip()
         installer = WRAPPER.with_name("install-twitch-release.sh").read_text()
         classification = "social_ai_expected=0\n" + installer.split("social_ai_expected=0\n", 1)[1].split("\ncollector_expected=0", 1)[0]
+        required = "required_files=(" + installer.split("required_files=(", 1)[1].split("\nrelease_root=", 1)[0]
         archive = "  archived_roots=(" + installer.split("  archived_roots=(", 1)[1].split("\n  chmod 0755", 1)[0]
-        if missing:
-            archive = archive.replace('  for required_file in "${required_files[@]}"; do', '  rm -- "$stage/$missing"\n  for required_file in "${required_files[@]}"; do')
+        if missing and not existing:
+            archive = archive.replace('  check_required_sources "$stage"', '  rm -- "$stage/$missing"\n  check_required_sources "$stage"')
+        if existing:
+            archive += '\nrelease="$stage"\nrm -- "$release/$missing"\ncheck_required_sources "$release"'
+            self.assertIn('check_required_sources "$release"\ncheck_binary_revisions "$release"', installer)
         with tempfile.TemporaryDirectory(prefix="twitch-source-archive-") as directory:
             stage = Path(directory) / "stage"
             stage.mkdir()
             prefix = 'set -euo pipefail\ncheckout="$1"\ngit_sha="$2"\nstage="$3"\nrelease_root="$4"\nmissing="$5"\ngit_safe=(git)\ngenerated=()\ncleanup_stage() { :; }\n'
             result = subprocess.run(
-                ["/bin/bash", "-c", prefix + classification + "\n" + archive,
+                ["/bin/bash", "-c", prefix + classification + "\n" + required + "\n" + archive,
                  "archive-fixture", str(repository), sha, str(stage), directory, missing or ""],
                 capture_output=True, text=True, timeout=20,
             )
@@ -499,6 +503,17 @@ class ArchivedSourceTests(unittest.TestCase):
         )):
             with self.subTest(missing=missing):
                 self.check_archive("HEAD", missing)
+
+
+    def test_existing_ai_release_never_accepts_missing_configuration_or_skills(self):
+        for missing in ("ops/social-ai/editor.yaml", "ops/social-ai/pricing-v1.yaml", *(
+            f"ops/social-ai/skills/{skill}.md" for skill in (
+                "deadlock-understanding", "highlight-analysis", "editing-strategy", "video-layout",
+                "subtitles", "copywriting", "quality-validation", "feedback-learning",
+            )
+        )):
+            with self.subTest(missing=missing):
+                self.check_archive("HEAD", missing, existing=True)
 
 
 class ModelInstallationDeploymentTests(unittest.TestCase):
