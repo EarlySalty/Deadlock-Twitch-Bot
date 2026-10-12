@@ -305,8 +305,8 @@ mod tests {
             error_code: None,
             http_status: Some(200),
             latency_ms: 1,
-            model: None,
             social_accounting: None,
+            model: None,
         });
     }
 

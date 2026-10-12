@@ -403,6 +403,7 @@ fn completion(
                 http_status: Some(200),
                 latency_ms,
                 model: Some(answer.model.clone()),
+                social_accounting: None,
             }
         }
         Err(error) => Completion {
@@ -416,6 +417,7 @@ fn completion(
             http_status: error.http_status(),
             latency_ms,
             model: None,
+            social_accounting: None,
         },
     }
 }
