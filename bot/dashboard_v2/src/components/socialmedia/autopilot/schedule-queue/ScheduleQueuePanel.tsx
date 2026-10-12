@@ -44,8 +44,11 @@ function slotLabel(value: string | null, timezone: string): string {
 function errorText(error: unknown): string {
   if (error instanceof ApiHttpError && error.status === 401) return 'Bitte melde dich erneut an.';
   if (error instanceof ApiHttpError && error.status === 403) return 'Du hast keinen Zugriff auf den Zeitplan dieses Kanals.';
+  if (error instanceof ApiHttpError && error.message === 'unknown_streamer') return 'Dieser Twitch-Kanal wurde nicht gefunden. Wähle einen anderen Kanal.';
+  if (error instanceof ApiHttpError && error.status === 400 && error.message.startsWith('Server-Fehler')) return 'Wähle einen Twitch-Kanal und prüfe deine Eingaben.';
+  if (error instanceof ApiHttpError && error.status >= 500) return 'Der Zeitplan ist gerade nicht verfügbar. Bitte versuche es später erneut.';
   if (error instanceof TypeError) return 'Die Verbindung ist unterbrochen. Bitte versuche es erneut.';
-  return error instanceof Error ? error.message : 'Die Änderung konnte nicht gespeichert werden. Bitte versuche es erneut.';
+  return error instanceof ApiHttpError ? error.message : 'Die Änderung konnte nicht gespeichert werden. Bitte versuche es erneut.';
 }
 
 export function ScheduleQueuePanel(props: ScheduleQueuePanelProps) {
@@ -168,7 +171,7 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
           <div className="sq-fields">
             <label htmlFor={`${id}-zone`}>Zeitzone<input id={`${id}-zone`} value={draft.timezone} required list={`${id}-zones`} onChange={event => edit({ timezone: event.target.value })} /></label>
             <datalist id={`${id}-zones`}><option value="Europe/Berlin" /><option value="Europe/Vienna" /><option value="Europe/Zurich" /><option value="UTC" /></datalist>
-            <label htmlFor={`${id}-lead`}>Vorlauf in Stunden<input id={`${id}-lead`} type="number" min="0" max="720" required value={draft.lead_time_hours} onChange={event => edit({ lead_time_hours: event.target.valueAsNumber })} /></label>
+            <label htmlFor={`${id}-lead`}>Vorlauf in Stunden<input id={`${id}-lead`} type="number" min="0" max="720" required value={Number.isFinite(draft.lead_time_hours) ? draft.lead_time_hours : ''} onChange={event => edit({ lead_time_hours: event.target.valueAsNumber })} /></label>
           </div>
           <p className="sq-help">Sommerzeit wird berücksichtigt. Auch bei kürzerem Vorlauf kann die Produktion starten. Verpasste Termine werden nicht gesammelt.</p>
           <div className="sq-slots">
