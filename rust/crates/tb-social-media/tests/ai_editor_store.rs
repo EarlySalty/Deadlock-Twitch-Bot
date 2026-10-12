@@ -18,7 +18,7 @@ async fn fixture() -> postgres::TestPostgres {
     .await
     .expect("Clip-Tabelle");
     sqlx::query(
-        "CREATE TABLE public.social_produced_videos (id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT NOT NULL, clip_id BIGINT NOT NULL, mode TEXT NOT NULL, version_no INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), expires_at TIMESTAMPTZ, status TEXT NOT NULL, duration_ms BIGINT, parent_version_id BIGINT, metadata JSONB NOT NULL DEFAULT '{}'::jsonb)",
+        "CREATE TABLE public.social_produced_videos (id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT NOT NULL, clip_id BIGINT NOT NULL, mode TEXT NOT NULL, version_no INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), expires_at TIMESTAMPTZ, status TEXT NOT NULL, duration_ms BIGINT, parent_version_id BIGINT, variant_index INTEGER NOT NULL DEFAULT 0, metadata JSONB NOT NULL DEFAULT '{}'::jsonb)",
     )
     .execute(&db.pool)
     .await
@@ -33,6 +33,12 @@ async fn fixture() -> postgres::TestPostgres {
     .execute(&db.pool)
     .await
     .expect("Migration");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20261011203001_social_ai_revisions.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .expect("Revisionsmigration");
     for (owner, category) in [("101", "deadlock"), ("202", "deadlock"), ("101", "other")] {
         sqlx::query(
             "INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, created_at, twitch_user_id, category_key) VALUES ('clip', 'https://clips.twitch.tv/example', 'streamer', '2026-10-11T00:00:00Z', $1, $2)",
@@ -88,6 +94,12 @@ async fn real_schema_fixture() -> postgres::TestPostgres {
     .execute(&db.pool)
     .await
     .expect("echte KI-Auftragsmigration");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20261011203001_social_ai_revisions.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .expect("echte Revisionsmigration");
     sqlx::query("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, created_at, twitch_user_id, category_key) VALUES ('fixture-clip-101', 'https://clips.twitch.tv/fixture-101', 'fixture-one', '2026-10-11T00:00:00Z', '101', 'deadlock'), ('fixture-clip-202', 'https://clips.twitch.tv/fixture-202', 'fixture-two', '2026-10-11T00:00:00Z', '202', 'deadlock')")
         .execute(&db.pool)
         .await
