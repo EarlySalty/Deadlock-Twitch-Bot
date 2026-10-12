@@ -2,7 +2,7 @@
 //!
 //! Variablen:
 //! - `DISCORD_HUB_HOST` / `DISCORD_HUB_PORT` – Bind-Adresse (Standard 127.0.0.1:8771)
-//! - `DISCORD_HUB_INTERNAL_TOKEN` → `TWITCH_INTERNAL_API_TOKEN` – Token eingehender Anfragen
+//! - `DISCORD_HUB_INTERNAL_TOKEN` → Broker-Token-Kette – Token eingehender Anfragen
 //! - `MASTER_BROKER_BASE_URL` bzw. `MASTER_BROKER_HOST`/`MASTER_BROKER_PORT` – Broker
 //! - `MASTER_BROKER_TOKEN` → `MAIN_BOT_INTERNAL_TOKEN` → `TWITCH_INTERNAL_API_TOKEN` – Broker-Token
 //! - `DISCORD_HUB_BOT_TOKEN` – optional; fehlt es, läuft nur die Weiterleitung
@@ -105,10 +105,6 @@ impl HubConfig {
         }
 
         let twitch_internal = value(get, "TWITCH_INTERNAL_API_TOKEN");
-        let internal_token = value(get, "DISCORD_HUB_INTERNAL_TOKEN")
-            .or_else(|| twitch_internal.clone())
-            .ok_or_else(|| ConfigError::MissingRequired("DISCORD_HUB_INTERNAL_TOKEN".into()))?;
-
         let broker_base_url = match value(get, "MASTER_BROKER_BASE_URL") {
             Some(u) => u,
             None => {
@@ -126,6 +122,10 @@ impl HubConfig {
             .or_else(|| value(get, "MAIN_BOT_INTERNAL_TOKEN"))
             .or(twitch_internal)
             .ok_or_else(|| ConfigError::MissingRequired("MASTER_BROKER_TOKEN".into()))?;
+        // Gleiche Kette wie der Twitch-Bot (`BrokerConfig::with_discord_hub`):
+        // eigenes Hub-Token, sonst das aufgelöste Broker-Token.
+        let internal_token =
+            value(get, "DISCORD_HUB_INTERNAL_TOKEN").unwrap_or_else(|| broker_token.clone());
 
         let bot_token = value(get, "DISCORD_HUB_BOT_TOKEN");
         let application_id = parse_opt::<u64>(get, "DISCORD_HUB_APPLICATION_ID")?;
