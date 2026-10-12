@@ -1,3 +1,5 @@
+import { activeLocale, tr } from '../i18n/dictionary';
+
 export interface CategoryTrendInput {
   at: string;
   streams: number | null;
@@ -6,11 +8,10 @@ export interface CategoryTrendInput {
 }
 
 export function languageName(code: string): string {
-  if (code === 'und') return 'Unbekannt / nicht sicher erkannt';
-  try { return new Intl.DisplayNames(['de'], { type: 'language' }).of(code) ?? code; } catch { return code; }
+  if (code === 'und') return tr('Unbekannt / nicht sicher erkannt');
+  try { return new Intl.DisplayNames([activeLocale()], { type: 'language' }).of(code) ?? code; } catch { return code; }
 }
 
-/** Keep every hourly bucket. Never average averages or turn gaps into zero. */
 export function buildCategoryTrend(input: CategoryTrendInput[]) {
   const sorted = input
     .map(row => ({ ...row, timestamp: Date.parse(row.at) }))
@@ -33,12 +34,12 @@ export function buildCategoryTrend(input: CategoryTrendInput[]) {
 
 export function categoryArchiveLabel(confirmed: boolean | undefined): string {
   return confirmed === true
-    ? 'Keine automatische Löschung. Rohdaten und Stundenaggregate bleiben erhalten.'
-    : 'Aufbewahrungsstatus noch nicht bestätigt.';
+    ? tr('Keine automatische Löschung. Rohdaten und Stundenaggregate bleiben erhalten.')
+    : tr('Aufbewahrungsstatus noch nicht bestätigt.');
 }
 
 export function categoryUtcLabel(value: number | string): string {
   const time = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(time)) return 'Unbekannter Zeitpunkt';
-  return new Date(time).toLocaleString('de-DE', { timeZone: 'UTC', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  if (!Number.isFinite(time)) return tr('Unbekannter Zeitpunkt');
+  return new Date(time).toLocaleString(activeLocale(), { timeZone: 'UTC', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
