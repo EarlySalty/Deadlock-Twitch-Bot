@@ -96,9 +96,9 @@ function NetEffectSection({ net }: { net: NetEffect | undefined }) {
     );
   }
   const horizons = [
-    { key: 'plus_1', minutes: 1, h: net.by_horizon.plus_1 },
-    { key: 'plus_3', minutes: 3, h: net.by_horizon.plus_3 },
-    { key: 'plus_5', minutes: 5, h: net.by_horizon.plus_5 },
+    { key: 'plus_1', label: t('+1 Min nach Werbung'), h: net.by_horizon.plus_1 },
+    { key: 'plus_3', label: t('+3 Min nach Werbung'), h: net.by_horizon.plus_3 },
+    { key: 'plus_5', label: t('+5 Min nach Werbung'), h: net.by_horizon.plus_5 },
   ];
   const labels = momentLabels();
   return (
@@ -109,9 +109,9 @@ function NetEffectSection({ net }: { net: NetEffect | undefined }) {
         <span className="text-xs text-text-secondary ml-auto">{t('gegenüber werbefreien Momenten derselben Sendung')}</span>
       </div>
       <div className="grid grid-cols-3 gap-3">
-        {horizons.map(({ key, minutes, h }) => (
+        {horizons.map(({ key, label, h }) => (
           <div key={key} className="bg-background rounded-lg p-3 flex flex-col gap-1">
-            <span className="text-xs text-text-secondary">{t('+{minutes} Min nach Werbung', { minutes })}</span>
+            <span className="text-xs text-text-secondary">{label}</span>
             <span className={`text-lg font-bold ${h.avg_net_drop_pct != null ? dropTextClass(h.avg_net_drop_pct) : 'text-text-secondary'}`}>
               {h.avg_net_drop_pct != null ? fmtDrop(h.avg_net_drop_pct) : t('Keine Daten')}
             </span>

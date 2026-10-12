@@ -323,7 +323,6 @@ export const PENDING_FILES: string[] = [
   'src/pages/AuthScopes.tsx',
   'src/pages/Category.tsx',
   'src/pages/CategoryCollector.tsx',
-  'src/pages/Challenges.tsx',
   'src/pages/Coaching.tsx',
   'src/pages/Comparison.tsx',
   'src/pages/Experimental.tsx',
