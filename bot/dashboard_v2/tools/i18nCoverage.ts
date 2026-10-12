@@ -37,6 +37,33 @@ const COMPARISON_OPERATORS = new Set([
 const LOCALE_METHODS = new Set(['toLocaleString', 'toLocaleDateString', 'toLocaleTimeString']);
 const GERMAN_LOCALES = new Set(['de', 'de-DE', 'de-AT', 'de-CH']);
 
+const HTML_ENTITIES: Record<string, string> = {
+  amp: '&',
+  quot: '"',
+  apos: "'",
+  lt: '<',
+  gt: '>',
+  nbsp: ' ',
+  auml: 'ä',
+  ouml: 'ö',
+  uuml: 'ü',
+  Auml: 'Ä',
+  Ouml: 'Ö',
+  Uuml: 'Ü',
+  szlig: 'ß',
+  hellip: '…',
+  middot: '·',
+  ndash: '–',
+};
+
+function decodeEntities(text: string): string {
+  return text.replace(/&(#x[0-9a-fA-F]+|#\d+|[a-zA-Z]+);/g, (entity, name: string) => {
+    if (name.startsWith('#x')) return String.fromCodePoint(parseInt(name.slice(2), 16));
+    if (name.startsWith('#')) return String.fromCodePoint(Number(name.slice(1)));
+    return HTML_ENTITIES[name] ?? entity;
+  });
+}
+
 function normalize(text: string): string {
   return text
     .replace(/&[a-zA-Z]+;|&#\d+;/g, ' ')
@@ -262,7 +289,9 @@ function collectTexts(file: string, source: string): string[] {
   const texts: string[] = [];
   const visit = (node: ts.Node) => {
     if (ts.isJsxText(node)) {
-      texts.push(normalize(node.getText(sf)));
+      texts.push(normalize(decodeEntities(node.getText(sf))));
+    } else if (ts.isStringLiteral(node) && ts.isJsxAttribute(node.parent)) {
+      texts.push(normalize(decodeEntities(node.text)));
     } else if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
       texts.push(normalize(node.text));
     } else if (ts.isTemplateExpression(node)) {

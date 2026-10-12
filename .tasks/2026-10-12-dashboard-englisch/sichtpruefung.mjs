@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
-const [, , output, mode = 'stored', base = 'http://127.0.0.1:4176', cdp = 'http://127.0.0.1:9351', nodeModules = '/home/nathanael/.worktrees/ttb-dashboard-englisch/bot/dashboard_v2/node_modules'] = process.argv;
+const [, , output, mode = 'stored', base = 'http://127.0.0.1:4176', cdp = 'http://127.0.0.1:9351', nodeModules = new URL('../../bot/dashboard_v2/node_modules', import.meta.url).pathname] = process.argv;
 const { chromium } = createRequire(path.join(nodeModules, 'x.js'))('playwright-core');
 
 const ROUTES = (process.env.ROUTES ?? [
@@ -62,30 +62,23 @@ async function measure(page, lang) {
   return page.evaluate(({ germanSource, lang }) => {
     const german = new RegExp(germanSource, 'u');
     const viewport = window.innerWidth;
-    const visible = (el) => {
-      const style = getComputedStyle(el);
-      const rect = el.getBoundingClientRect();
-      return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
-    };
-    const ownText = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent.trim()).join(' ').trim();
+    const SCROLLER = '[class*="overflow-x-auto"],[class*="overflow-auto"],[class*="overflow-x-scroll"],[class*="overflow-scroll"]';
+    const CLIPPER = '.truncate,[class*="overflow-hidden"],[class*="overflow-x-hidden"],[class*="text-ellipsis"],[class*="line-clamp"]';
+    const parents = new Set();
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (node.textContent.trim() && node.parentElement) parents.add(node.parentElement);
+    }
     const clipped = [];
     const outside = [];
-    for (const el of document.body.querySelectorAll('*')) {
-      if (!visible(el)) continue;
-      const text = ownText(el);
-      if (!text) continue;
-      const style = getComputedStyle(el);
+    for (const el of parents) {
       const rect = el.getBoundingClientRect();
-      const hides = ['hidden', 'clip'].includes(style.overflowX) || style.textOverflow === 'ellipsis';
-      if (hides && el.scrollWidth > el.clientWidth + 1) clipped.push(text.slice(0, 80));
-      let scroller = el.parentElement;
-      let insideScroller = false;
-      while (scroller && scroller !== document.body) {
-        const s = getComputedStyle(scroller);
-        if (['auto', 'scroll'].includes(s.overflowX)) { insideScroller = true; break; }
-        scroller = scroller.parentElement;
-      }
-      if (!insideScroller && (rect.right > viewport + 1 || rect.left < -1)) outside.push(text.slice(0, 80));
+      if (rect.width === 0 || rect.height === 0) continue;
+      const text = el.textContent.trim().slice(0, 80);
+      const clipper = el.closest(CLIPPER);
+      if (clipper && clipper.scrollWidth > clipper.clientWidth + 1) clipped.push(text);
+      if (!el.closest(SCROLLER) && (rect.right > viewport + 1 || rect.left < -1)) outside.push(text);
     }
     const lines = document.body.innerText.split('\n').map((l) => l.trim()).filter(Boolean);
     const germanLines = lang === 'en' ? [...new Set(lines.filter((l) => german.test(l)))] : [];
@@ -118,8 +111,7 @@ async function visit(page, { name, route, lang, width }) {
   await within(5000, page.evaluate(() => document.fonts.ready)).catch(() => {});
   const contentHeight = await within(10000, page.evaluate(() => Math.max(
     document.documentElement.scrollHeight,
-    ...[...document.querySelectorAll('*')]
-      .filter((el) => ['auto', 'scroll'].includes(getComputedStyle(el).overflowY))
+    ...[...document.querySelectorAll('[class*="overflow-y-auto"],[class*="overflow-auto"],[class*="overflow-y-scroll"]')]
       .map((el) => el.scrollHeight),
   )));
   await page.setViewportSize({ width, height: Math.min(Math.max(contentHeight, 900), 9000) });
