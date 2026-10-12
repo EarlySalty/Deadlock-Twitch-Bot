@@ -11,6 +11,7 @@ import {
 } from 'recharts';
 import type { StreamSession } from '@/types/analytics';
 import { formatNumber, formatDate } from '@/utils/formatters';
+import { useT } from '../../context/LanguageContext';
 
 interface ViewerTrendChartProps {
   sessions: StreamSession[];
@@ -18,7 +19,7 @@ interface ViewerTrendChartProps {
 }
 
 export function ViewerTrendChart({ sessions, title = 'Viewer Trend' }: ViewerTrendChartProps) {
-  // Sort sessions chronologically
+  const t = useT();
   const data = [...sessions]
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
     .map(session => ({
@@ -34,10 +35,10 @@ export function ViewerTrendChart({ sessions, title = 'Viewer Trend' }: ViewerTre
           <p className="text-white font-medium mb-2">{label}</p>
           <div className="space-y-1 text-sm">
             <p className="text-accent">
-              Avg: <span className="text-white">{formatNumber(payload[0]?.value)}</span>
+              {t('Avg:')} <span className="text-white">{formatNumber(payload[0]?.value)}</span>
             </p>
             <p className="text-accent">
-              Peak: <span className="text-white">{formatNumber(payload[1]?.value)}</span>
+              {t('Peak:')} <span className="text-white">{formatNumber(payload[1]?.value)}</span>
             </p>
           </div>
         </div>
@@ -85,7 +86,7 @@ export function ViewerTrendChart({ sessions, title = 'Viewer Trend' }: ViewerTre
               height={36}
               formatter={(value) => (
                 <span className="text-text-secondary text-sm">
-                  {value === 'avgViewers' ? 'Avg Viewers' : 'Peak Viewers'}
+                  {value === 'avgViewers' ? t('Avg Viewers') : t('Peak Viewers')}
                 </span>
               )}
             />

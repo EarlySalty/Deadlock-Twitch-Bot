@@ -2,61 +2,61 @@ import { Rise } from '../../motion/Rise';
 import { Eye, UserCheck, Users } from 'lucide-react';
 import { NoDataCard } from '@/components/cards/NoDataCard';
 import type { LurkerAnalysis as LurkerAnalysisData } from '@/types/analytics';
+import { useLanguage } from '../../context/LanguageContext';
 
 interface LurkerAnalysisProps {
   data: LurkerAnalysisData | undefined;
 }
 
 export function LurkerAnalysis({ data }: LurkerAnalysisProps) {
+  const { t, locale } = useLanguage();
   if (!data || !data.dataAvailable) {
-    return <NoDataCard message={data?.message || "Keine Lurker-Daten vorhanden"} />;
+    return <NoDataCard message={data?.message ? t(data.message) : t('Keine Lurker-Daten vorhanden')} />;
   }
 
   const { lurkerStats, conversionStats, regularLurkers } = data;
 
   return (
     <div className="space-y-4">
-      {/* Stat Cards */}
       <Rise
         className="grid grid-cols-1 md:grid-cols-3 gap-4"
       >
         <StatCard
           icon={<Eye className="w-5 h-5" />}
-          label="Lurker-Ratio"
+          label={t('Lurker-Ratio')}
           value={`${(lurkerStats.ratio * 100).toFixed(1)}%`}
-          sublabel={`${lurkerStats.totalLurkers} von ${lurkerStats.totalViewers} Zuschauern`}
+          sublabel={t('{lurkers} von {viewers} Zuschauern', { lurkers: lurkerStats.totalLurkers, viewers: lurkerStats.totalViewers })}
           color="primary"
         />
         <StatCard
           icon={<UserCheck className="w-5 h-5" />}
-          label="LurkerChatter Conversion"
+          label={t('LurkerChatter Conversion')}
           value={`${(conversionStats.rate * 100).toFixed(1)}%`}
-          sublabel={`${conversionStats.converted} von ${conversionStats.eligible} konvertiert`}
+          sublabel={t('{converted} von {eligible} konvertiert', { converted: conversionStats.converted, eligible: conversionStats.eligible })}
           color="success"
         />
         <StatCard
           icon={<Users className="w-5 h-5" />}
-          label="Regulare Lurker"
+          label={t('Regulare Lurker')}
           value={regularLurkers.length.toString()}
-          sublabel={`Ø ${lurkerStats.avgSessions.toFixed(1)} Sessions`}
+          sublabel={t('Ø {sessions} Sessions', { sessions: lurkerStats.avgSessions.toFixed(1) })}
           color="accent"
         />
       </Rise>
 
-      {/* Lurker Table */}
       {regularLurkers.length > 0 && (
         <Rise
           step={{ seconds: 0.1 }}
           className="bg-card rounded-xl border border-border p-6"
         >
-          <h4 className="text-sm font-medium text-text-secondary mb-4">Top Lurker</h4>
+          <h4 className="text-sm font-medium text-text-secondary mb-4">{t('Top Lurker')}</h4>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border">
-                  <th className="text-left py-2 text-text-secondary font-medium">Viewer</th>
-                  <th className="text-right py-2 text-text-secondary font-medium">Sessions</th>
-                  <th className="text-right py-2 text-text-secondary font-medium">Zuletzt gesehen</th>
+                  <th className="text-left py-2 text-text-secondary font-medium">{t('Viewer')}</th>
+                  <th className="text-right py-2 text-text-secondary font-medium">{t('Sessions')}</th>
+                  <th className="text-right py-2 text-text-secondary font-medium">{t('Zuletzt gesehen')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -66,7 +66,7 @@ export function LurkerAnalysis({ data }: LurkerAnalysisProps) {
                     <td className="py-2 text-right text-text-secondary">{lurker.lurkSessions}</td>
                     <td className="py-2 text-right text-text-secondary">
                       {lurker.lastSeen
-                        ? new Date(lurker.lastSeen).toLocaleDateString('de-DE')
+                        ? new Date(lurker.lastSeen).toLocaleDateString(locale)
                         : '-'}
                     </td>
                   </tr>
