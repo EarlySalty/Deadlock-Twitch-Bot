@@ -292,6 +292,17 @@ export const IGNORED_LITERALS: Record<string, string[]> = {
   ],
   'src/components/verwaltung/LurkerTaxSection.tsx': ['Lurker Steuer'],
   'src/utils/formatters.ts': ['Mär', 'März'],
+  'src/pages/Audience.tsx': [
+    'bg-warning/10 text-warning',
+    'bg-warning/10 border-warning/20',
+    'bg-primary/10 border-primary/20',
+  ],
+  'src/pages/CategoryCollector.tsx': [
+    'Diese Auswertung ist nur im Admin-Modus verfügbar.',
+    'Die Kategoriedaten konnten nicht geladen werden. Bestehende Daten werden nicht als Nullwerte dargestellt.',
+  ],
+  'src/utils/engagementKpi.ts': ['Chatters-API zeigt Chat-Audience, nicht alle Video-Viewer.'],
+  'src/utils/healthScoreContext.ts': ['Ausbaufähig'],
 };
 
 export const PENDING_FILES: string[] = [
@@ -329,10 +340,7 @@ export const PENDING_FILES: string[] = [
   'src/components/verwaltung/adManagerTexte.ts',
   'src/hooks/useScopes.tsx',
   'src/pages/AIAnalysis.tsx',
-  'src/pages/Audience.tsx',
   'src/pages/AuthScopes.tsx',
-  'src/pages/Category.tsx',
-  'src/pages/CategoryCollector.tsx',
   'src/pages/Challenges.tsx',
   'src/pages/Coaching.tsx',
   'src/pages/Community.tsx',
@@ -358,11 +366,8 @@ export const PENDING_FILES: string[] = [
   'src/pages/UplinkOutputMode.tsx',
   'src/pages/UplinkZiel.tsx',
   'src/pages/ViewerTimeline.tsx',
-  'src/pages/Viewers.tsx',
   'src/pages/Wachstum.tsx',
   'src/pages/WasTun.tsx',
-  'src/pages/categoryCollectorStaleness.ts',
-  'src/pages/categoryCollectorViewModel.ts',
   'src/pages/chatAnalyticsContent.tsx',
   'src/pages/chatAnalyticsDeepSections.tsx',
   'src/pages/chatAnalyticsShared.tsx',
@@ -377,7 +382,5 @@ export const PENDING_FILES: string[] = [
   'src/uplinkOutputMode.ts',
   'src/utils/browserErkennung.ts',
   'src/utils/community.ts',
-  'src/utils/engagementKpi.ts',
-  'src/utils/healthScoreContext.ts',
   'src/utils/partnerProfile.ts',
 ];
