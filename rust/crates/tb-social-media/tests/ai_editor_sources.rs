@@ -3,7 +3,12 @@ mod brain;
 #[path = "../src/ai_editor/stt.rs"]
 mod stt;
 
-use std::{net::TcpListener, path::Path, time::Duration};
+use std::{
+    net::TcpListener,
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
 
 use brain::{retrieve_game_context, BrainRetrieveConfig, BrainStatus};
 use stt::{SttError, SttJobConfig, SttLease};
@@ -12,22 +17,45 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
 };
 
-const VERIFIED_STT_SERVER: &str =
-    "/home/nathanael/.worktrees/tb-social-ai-stt-deploy/rust/target/release/tb-stt-server";
-const VERIFIED_STT_REVISION: &str = "30d39c41d2a4fcb6a3c938fc2e7eca70bbc53911";
-
-fn assert_verified_server() {
-    let output = std::process::Command::new(VERIFIED_STT_SERVER)
+fn assert_verified_server() -> PathBuf {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("Rust workspace");
+    let status = Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .current_dir(workspace)
+        .output()
+        .expect("source status");
+    assert!(
+        status.status.success() && status.stdout.is_empty(),
+        "STT fixtures require a clean source checkpoint"
+    );
+    let head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(workspace)
+        .output()
+        .expect("source revision");
+    assert!(head.status.success());
+    let revision = std::str::from_utf8(&head.stdout)
+        .expect("source revision")
+        .trim();
+    assert_eq!(revision.len(), 40);
+    let binary = workspace.join("target/release/tb-stt-server");
+    let output = Command::new(&binary)
         .arg("--build-revision")
         .output()
-        .expect("fresh reviewed STT server is required");
+        .expect(
+        "build tb-stt-server --release from this clean workspace before running source fixtures",
+    );
     assert!(output.status.success());
     assert_eq!(
         std::str::from_utf8(&output.stdout)
             .expect("build revision")
             .trim(),
-        VERIFIED_STT_REVISION
+        revision
     );
+    binary
 }
 
 fn brain_config(server: &MockServer) -> BrainRetrieveConfig {
@@ -69,12 +97,12 @@ fn occupied_port_fails_without_attaching() {
 
 #[tokio::test]
 async fn occupied_port_never_creates_a_job_server() {
-    assert_verified_server();
+    let binary = assert_verified_server();
     let owner = TcpListener::bind("127.0.0.1:0").expect("own listener");
     let port = owner.local_addr().expect("own address").port();
     let job = tempfile::tempdir().expect("job directory");
     assert!(matches!(
-        SttLease::start(&seed(), job.path(), &job_config(port)).await,
+        SttLease::start(&seed(), job.path(), &job_config(port, &binary)).await,
         Err(SttError::PortOccupied)
     ));
     assert!(!job.path().join("stt-transient").exists());
@@ -239,9 +267,9 @@ fn seed() -> tb_config::BotConfigSnapshot {
     .expect("synthetic seed")
 }
 
-fn job_config(port: u16) -> SttJobConfig {
+fn job_config(port: u16, binary: &Path) -> SttJobConfig {
     SttJobConfig {
-        binary: VERIFIED_STT_SERVER.into(),
+        binary: binary.into(),
         model_directory: std::env::var_os("HOME")
             .map(std::path::PathBuf::from)
             .expect("local home")
@@ -276,12 +304,12 @@ fn stt_rejects_job_symlink_without_starting() {
 
 #[tokio::test]
 async fn transient_real_stt_silence_and_cancellation_cleanup() {
-    assert_verified_server();
+    let binary = assert_verified_server();
     let port = TcpListener::bind("127.0.0.1:0").expect("reserve port");
     let number = port.local_addr().expect("reserved port").port();
     drop(port);
     let job = tempfile::tempdir().expect("job directory");
-    let lease = SttLease::start(&seed(), job.path(), &job_config(number))
+    let lease = SttLease::start(&seed(), job.path(), &job_config(number, &binary))
         .await
         .expect("real cached server ready");
     assert!(!lease.is_stopped());
@@ -321,7 +349,7 @@ async fn transient_real_stt_silence_and_cancellation_cleanup() {
     assert!(!job.path().join("stt-transient").exists());
     assert!(stt::check_port_available(number).is_ok());
 
-    let lease = SttLease::start(&seed(), job.path(), &job_config(number))
+    let lease = SttLease::start(&seed(), job.path(), &job_config(number, &binary))
         .await
         .expect("second server ready");
     let child_id = lease.child_id_for_test().expect("owned child");

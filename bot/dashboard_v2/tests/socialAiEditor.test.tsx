@@ -199,6 +199,18 @@ test('failure explanation uses only approved codes and ignores arbitrary provide
   assert.doesNotMatch(failureExplanation('Error: /var/lib/private/stack'), /private|stack|Error/);
 });
 
+test('selecting an older output does not make a playable newest version unusable', () => {
+  const job = aiPreviewJob('review');
+  assert.ok(job);
+  const playable = job.versions.map((version) => ({ ...version, status: 'review', file_url: job.versions[0].file_url }));
+  const newest = [...playable].sort((a, b) => b.version_no - a.version_no)[0];
+  assert.equal(chooseUsableVersion(playable, 2201)?.id, 2201);
+  assert.equal(chooseUsableVersion([newest])?.id, 2202);
+  const unavailable = { ...newest, file_url: null };
+  assert.equal(chooseUsableVersion([unavailable]), null);
+  assert.equal(chooseUsableVersion([playable[0], unavailable], 2201)?.id, 2201);
+});
+
 test('a failed new version leaves the older playable output selected', () => {
   const job = aiPreviewJob('review');
   assert.ok(job);

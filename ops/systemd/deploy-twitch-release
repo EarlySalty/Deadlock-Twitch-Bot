@@ -283,11 +283,13 @@ required_artifacts=(
   rust/target/release/tb-stream-audit
   rust/target/release/tb-config-check
   rust/target/release/tb-llm-usage-recover
-  rust/target/release/tb-stt-server
   "$dashboard_source"
   bot/admin_dashboard/dist
   website/dist
 )
+if GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$src" cat-file -e "$sha:rust/crates/tb-social-media/src/ai_editor/mod.rs" 2>/dev/null; then
+  required_artifacts+=(rust/target/release/tb-stt-server)
+fi
 if [[ $native_expected -eq 0 && -f "$src/rust/bin/tb-category-collector/Cargo.toml" ]]; then
   required_artifacts+=(rust/target/release/tb-category-collector)
 fi

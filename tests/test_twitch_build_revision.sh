@@ -62,6 +62,7 @@ for name in tb-bot tb-dashboard tb-stream-audit tb-config-check tb-llm-usage-rec
   cp "$scratch/target/release/revision-check" "$scratch/package/rust/target/release/$name"
 done
 git_sha="$second"
+social_ai_expected=1
 collector_expected=0
 clip_context_expected=0
 watchdog_expected=0

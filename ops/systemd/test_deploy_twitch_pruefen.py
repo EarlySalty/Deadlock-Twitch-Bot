@@ -9,6 +9,7 @@ import unittest
 WRAPPER = Path(__file__).with_name("deploy-twitch-release")
 SHA = "a" * 40
 LEGACY_SHA = "12987b689642b630f9b62b786f2002a6843add73"
+GATE_BASE_SHA = "b0be1e4c46776b10d08255623b02e070e1977fbf"
 MOCKS = r'''
 systemctl() {
   [[ "$1" == show ]] || exit 90
@@ -287,7 +288,7 @@ class ArtifactPathTests(unittest.TestCase):
             package.parent.mkdir(parents=True, exist_ok=True)
             package.write_text('{}')
             wrapper_result = subprocess.run(
-                ["/bin/bash", "-c", 'set -euo pipefail\nsrc="$1"\nnative_expected=0\ndashboard_source=bot/dashboard_v2/dist\n' + preflight + '\nprintf "%s\\n" "${required_artifacts[@]}"', "wrapper", str(checkout)],
+                ["/bin/bash", "-c", 'set -euo pipefail\nsrc="$1"\nsha="$2"\nnative_expected=0\ndashboard_source=bot/dashboard_v2/dist\n' + preflight + '\nprintf "%s\\n" "${required_artifacts[@]}"', "wrapper", str(checkout), SHA],
                 capture_output=True, text=True, timeout=5,
             )
             if not dashboards:
@@ -327,13 +328,17 @@ class CollectorPackagingTests(unittest.TestCase):
         sha = subprocess.check_output(
             ["git", "-C", str(repository), "rev-parse", revision], text=True,
         ).strip()
+        ai_expected = subprocess.run(
+            ["git", "-C", str(repository), "cat-file", "-e", f"{sha}:rust/crates/tb-social-media/src/ai_editor/mod.rs"],
+            capture_output=True,
+        ).returncode == 0
         wrapper = WRAPPER.read_text()
         preflight = "native_expected=0\n" + wrapper.split("native_expected=0\n", 1)[1].split('\nif [[ -e "$dest"', 1)[0]
         installer = WRAPPER.with_name("install-twitch-release.sh").read_text()
         selection = "dashboard_source=bot/dashboard_v2/dist\n" + installer.split("dashboard_source=bot/dashboard_v2/dist\n", 1)[1].split("\ncheck_binary_revisions() {", 1)[0]
         selection = selection.replace("! -user root", f"! -user {os.getuid()}")
         revisions = "check_binary_revisions() {" + installer.split("check_binary_revisions() {", 1)[1].split('\ncheck_binary_revisions "$checkout"', 1)[0]
-        copies = '  install -m 0755 "$checkout/rust/target/release/tb-bot"' + installer.split('  install -m 0755 "$checkout/rust/target/release/tb-bot"', 1)[1].split('\n  "${git_safe[@]}" -C "$checkout" archive', 1)[0]
+        copies = '  install -m 0755 "$checkout/rust/target/release/tb-bot"' + installer.split('  install -m 0755 "$checkout/rust/target/release/tb-bot"', 1)[1].split('\n  archived_roots=(', 1)[0]
         with tempfile.TemporaryDirectory(prefix="twitch-collector-packaging-") as directory:
             checkout = Path(directory) / "checkout"
             stage = Path(directory) / "stage"
@@ -360,6 +365,8 @@ class CollectorPackagingTests(unittest.TestCase):
                 "tb-bot", "tb-dashboard", "tb-stream-audit", "tb-config-check",
                 "tb-llm-usage-recover", "tb-stt-server", "tb-category-collector", "tb-twitch-watchdog", "tb-category-storage", "clip_context_learn",
             ):
+                if binary == "tb-stt-server" and not ai_expected:
+                    continue
                 if binary == target and scenario == "missing":
                     continue
                 stamp.write_bytes((("0" * 40 if scenario == "wrong_revision" and binary == target else sha) + "\0").encode())
@@ -372,7 +379,7 @@ class CollectorPackagingTests(unittest.TestCase):
             for path in checkout.rglob("*"):
                 path.chmod(path.stat().st_mode & ~0o022)
             wrapper_result = subprocess.run(
-                ["/bin/bash", "-c", 'set -euo pipefail\nsrc="$1"\ndeclare -A restart_seen=([twitch-bot]=1)\n' + preflight + '\nprintf "%s\\n" "${required_artifacts[@]}"', "wrapper", str(checkout)],
+                ["/bin/bash", "-c", 'set -euo pipefail\nsrc="$1"\nsha="$2"\nrepository="$3"\ngit() { shift 2; /usr/bin/git -C "$repository" "$@"; }\ndeclare -A restart_seen=([twitch-bot]=1)\n' + preflight + '\nprintf "%s\\n" "${required_artifacts[@]}"', "wrapper", str(checkout), sha, str(repository)],
                 capture_output=True, text=True, timeout=5,
             )
             prefix = 'set -euo pipefail\ncheckout="$1"\nstage="$2"\ngit_sha="$3"\nrepository="$4"\ntarget_git() { shift 2; /usr/bin/git -C "$repository" "$@"; }\ngit_safe=(target_git)\n'
@@ -398,11 +405,14 @@ class CollectorPackagingTests(unittest.TestCase):
                 self.assertEqual(wrapper_result.returncode, 0, wrapper_result.stderr)
                 self.assertEqual(installer_result.returncode, 0, installer_result.stderr)
                 self.assertEqual(wrapper_result.stdout.splitlines(), installer_result.stdout.splitlines())
-                expected = target == "tb-stt-server" or not native or target == "tb-category-storage"
+                expected = ai_expected if target == "tb-stt-server" else not native or target == "tb-category-storage"
                 self.assertEqual(collector in installer_result.stdout.splitlines(), expected)
                 self.assertEqual((stage / collector).exists(), expected)
                 if expected:
                     self.assertEqual((checkout / collector).read_bytes(), (stage / collector).read_bytes())
+
+    def test_gate_base_deployment_does_not_require_or_copy_stt(self):
+        self.check_target(GATE_BASE_SHA, native=True, target="tb-stt-server")
 
     def test_stt_binary_is_required_checked_and_copied(self):
         self.check_target("HEAD", native=True, target="tb-stt-server")
@@ -442,6 +452,53 @@ class CollectorPackagingTests(unittest.TestCase):
 
     def test_existing_release_without_expected_collector_is_rejected(self):
         self.check_target(LEGACY_SHA, native=False, scenario="incomplete_release")
+
+
+class ArchivedSourceTests(unittest.TestCase):
+    def check_archive(self, revision, missing=None, ai_expected=True):
+        repository = WRAPPER.parents[2]
+        sha = subprocess.check_output(["git", "-C", str(repository), "rev-parse", revision], text=True).strip()
+        installer = WRAPPER.with_name("install-twitch-release.sh").read_text()
+        classification = "social_ai_expected=0\n" + installer.split("social_ai_expected=0\n", 1)[1].split("\ncollector_expected=0", 1)[0]
+        archive = "  archived_roots=(" + installer.split("  archived_roots=(", 1)[1].split("\n  chmod 0755", 1)[0]
+        if missing:
+            archive = archive.replace('  for required_file in "${required_files[@]}"; do', '  rm -- "$stage/$missing"\n  for required_file in "${required_files[@]}"; do')
+        with tempfile.TemporaryDirectory(prefix="twitch-source-archive-") as directory:
+            stage = Path(directory) / "stage"
+            stage.mkdir()
+            prefix = 'set -euo pipefail\ncheckout="$1"\ngit_sha="$2"\nstage="$3"\nrelease_root="$4"\nmissing="$5"\ngit_safe=(git)\ngenerated=()\ncleanup_stage() { :; }\n'
+            result = subprocess.run(
+                ["/bin/bash", "-c", prefix + classification + "\n" + archive,
+                 "archive-fixture", str(repository), sha, str(stage), directory, missing or ""],
+                capture_output=True, text=True, timeout=20,
+            )
+            if missing:
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(missing, result.stderr)
+            else:
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((stage / "ops/social-ai/editor.yaml").is_file(), ai_expected)
+                if ai_expected:
+                    self.assertEqual(len(list((stage / "ops/social-ai/skills").glob("*.md"))), 8)
+
+    def test_legacy_base_archives_without_ai_configuration_or_skills(self):
+        self.check_archive(LEGACY_SHA, ai_expected=False)
+
+    def test_gate_base_archives_without_ai_configuration_or_skills(self):
+        self.check_archive(GATE_BASE_SHA, ai_expected=False)
+
+    def test_current_revision_archives_all_ai_configuration_and_skills(self):
+        self.check_archive("HEAD")
+
+    def test_current_revision_never_accepts_missing_ai_configuration_or_skills(self):
+        for missing in ("ops/social-ai/editor.yaml", "ops/social-ai/pricing-v1.yaml", *(
+            f"ops/social-ai/skills/{skill}.md" for skill in (
+                "deadlock-understanding", "highlight-analysis", "editing-strategy", "video-layout",
+                "subtitles", "copywriting", "quality-validation", "feedback-learning",
+            )
+        )):
+            with self.subTest(missing=missing):
+                self.check_archive("HEAD", missing)
 
 
 class ModelInstallationDeploymentTests(unittest.TestCase):
