@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::{PgPool, Row};
+use sqlx::{PgConnection, PgPool, Row};
 
 use crate::autopilot_settings::{self, json_column, SettingsError};
 
@@ -197,21 +197,10 @@ pub async fn insert(pool: &PgPool, job: &NewProductionJob) -> Result<ProductionJ
     Ok(job)
 }
 
-pub async fn claim_next(pool: &PgPool) -> Result<Option<ProductionJob>, JobError> {
-    let mut tx = pool.begin().await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(2026101110)")
-        .execute(&mut *tx)
-        .await?;
-    let running: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM social_production_jobs WHERE status = 'running')",
-    )
-    .fetch_one(&mut *tx)
-    .await?;
-    if running {
-        tx.commit().await?;
-        return Ok(None);
-    }
-    let candidate: Option<(i64, String)> = sqlx::query_as(
+async fn eligible_head_on(
+    connection: &mut PgConnection,
+) -> Result<Option<(i64, String)>, JobError> {
+    Ok(sqlx::query_as(
         "SELECT j.id, j.twitch_user_id FROM social_production_jobs j WHERE j.status = 'queued'
          AND j.attempts < j.max_attempts
          AND COALESCE((j.metadata->>'retry_after')::timestamptz, '-infinity'::timestamptz) <= clock_timestamp()
@@ -230,12 +219,36 @@ pub async fn claim_next(pool: &PgPool) -> Result<Option<ProductionJob>, JobError
                          WHERE v.job_id = h.id AND v.status = 'review'
                          AND (v.expires_at IS NULL OR v.expires_at > clock_timestamp())))) < 2)))
          ORDER BY j.queue_order, j.id LIMIT 1",
-    ).fetch_optional(&mut *tx).await?;
-    let Some((candidate_id, owner)) = candidate else {
+    ).fetch_optional(connection).await?)
+}
+
+pub async fn claim_next(pool: &PgPool) -> Result<Option<ProductionJob>, JobError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(2026101110)")
+        .execute(&mut *tx)
+        .await?;
+    let running: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM social_production_jobs WHERE status = 'running')",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if running {
+        tx.commit().await?;
+        return Ok(None);
+    }
+    let Some((_, locked_owner)) = eligible_head_on(&mut tx).await? else {
         tx.commit().await?;
         return Ok(None);
     };
-    autopilot_settings::lock_owner(&mut tx, &owner).await?;
+    autopilot_settings::lock_owner(&mut tx, &locked_owner).await?;
+    let Some((candidate_id, owner)) = eligible_head_on(&mut tx).await? else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+    if owner != locked_owner {
+        tx.commit().await?;
+        return Ok(None);
+    }
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "{SELECT} WHERE twitch_user_id = $1 AND id = $2 AND status = 'queued' AND attempts < max_attempts
          AND COALESCE((metadata->>'retry_after')::timestamptz, '-infinity'::timestamptz) <= clock_timestamp()

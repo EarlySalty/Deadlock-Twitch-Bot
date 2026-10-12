@@ -322,6 +322,159 @@ async fn automatic_retry_and_recovery_reviews_stop_reselection_in_both_publish_m
     }
 }
 
+async fn waiter_behind(pool: &sqlx::PgPool, blocker: i32) -> i32 {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let waiting: Option<i32> = sqlx::query_scalar(
+                "SELECT pid FROM pg_stat_activity WHERE datname = current_database()
+                AND $1 = ANY(pg_blocking_pids(pid)) LIMIT 1",
+            )
+            .bind(blocker)
+            .fetch_optional(pool)
+            .await
+            .expect("actual PostgreSQL blocking chain");
+            if let Some(pid) = waiting {
+                return pid;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("transaction reaches its controlled database lock")
+}
+
+async fn queue_change_during_claim(mark: bool, deferred_head: bool) {
+    let pool = pool().await;
+    save_schedule(
+        &pool,
+        "owner",
+        &SchedulePatch {
+            ai_editing_enabled: Some(true),
+            ..schedule()
+        },
+    )
+    .await
+    .expect("enabled automatic AI queue");
+    let first_clip = clip(&pool, "owner", "stale", utc("2025-01-01T00:00:00Z")).await;
+    let first = job(&pool, "owner", first_clip, None).await;
+    let foreign_clip = clip(&pool, "other", "foreign", utc("2025-01-01T00:00:00Z")).await;
+    let foreign = job(&pool, "other", foreign_clip, Some(ProductionMode::Static)).await;
+    let next_clip = clip(&pool, "owner", "promoted", utc("2025-01-02T00:00:00Z")).await;
+    let next = job(&pool, "owner", next_clip, None).await;
+    if deferred_head {
+        sqlx::query("UPDATE social_production_jobs SET metadata = '{\"retry_after\":\"infinity\"}'::jsonb WHERE id = $1")
+            .bind(next.id).execute(&pool).await.expect("ineligible retry without a clock deadline");
+    }
+    let mut row_tx = pool.begin().await.expect("controlled queue row blocker");
+    let blocker: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *row_tx)
+        .await
+        .expect("blocker's backend");
+    sqlx::query("SELECT id FROM social_production_jobs WHERE twitch_user_id = 'owner' ORDER BY queue_order, id FOR UPDATE")
+        .fetch_all(&mut *row_tx).await.expect("block only queue rows, not the owner advisory lock");
+    let queue_pool = pool.clone();
+    let first_id = first.id;
+    let next_id = next.id;
+    let mutation = tokio::spawn(async move {
+        if mark {
+            mark_next(&queue_pool, "owner", next_id).await
+        } else {
+            reorder(&queue_pool, "owner", &[next_id, first_id]).await
+        }
+    });
+    let queue_pid = waiter_behind(&pool, blocker).await;
+    let claim_pool = pool.clone();
+    let claim = tokio::spawn(async move { production_jobs::claim_next(&claim_pool).await });
+    let claim_pid = waiter_behind(&pool, queue_pid).await;
+    let owner_wait: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pg_locks waiting JOIN pg_locks held
+        ON waiting.locktype = held.locktype AND waiting.database = held.database
+        AND waiting.classid = held.classid AND waiting.objid = held.objid
+        AND waiting.objsubid = held.objsubid
+        WHERE waiting.pid = $1 AND held.pid = $2 AND waiting.locktype = 'advisory'
+        AND NOT waiting.granted AND held.granted)",
+    )
+    .bind(claim_pid)
+    .bind(queue_pid)
+    .fetch_one(&pool)
+    .await
+    .expect("claim is behind the actual queue owner's advisory lock");
+    assert!(owner_wait);
+    assert!(!mutation.is_finished());
+    assert!(!claim.is_finished());
+    row_tx
+        .commit()
+        .await
+        .expect("let actual queue mutation commit");
+    mutation
+        .await
+        .expect("queue task")
+        .expect("committed queue change");
+    let claimed = claim
+        .await
+        .expect("claim task")
+        .expect("locked head selection");
+    let mut expected_stale = first.clone();
+    expected_stale.queue_order = next.queue_order;
+    let stale = production_jobs::get(&pool, "owner", first.id)
+        .await
+        .expect("stale job state")
+        .expect("stale job preserved");
+    assert_eq!(
+        serde_json::to_value(&stale).expect("stale post-claim state"),
+        serde_json::to_value(&expected_stale).expect("only the requested queue order changed")
+    );
+    if deferred_head {
+        assert!(claimed.is_none());
+        let queued_next = production_jobs::get(&pool, "owner", next.id)
+            .await
+            .expect("deferred head")
+            .expect("preserved deferred head");
+        assert_eq!(queued_next.status, "queued");
+        assert_eq!(queued_next.attempts, 0);
+        assert_eq!(queued_next.stage, next.stage);
+        assert_eq!(queued_next.mode, None);
+        assert_eq!(queued_next.metadata["retry_after"], "infinity");
+    } else {
+        let claimed = claimed.expect("committed new eligible head is claimed");
+        assert_eq!(claimed.id, next.id);
+        assert_eq!(claimed.mode, Some(ProductionMode::Ai));
+        assert_eq!(claimed.attempts, 1);
+        assert_eq!(claimed.stage, "starting");
+        production_jobs::finish(&pool, "owner", next.id, JobCompletion::Completed, &[], None)
+            .await
+            .expect("release global running slot");
+    }
+    let global_next = production_jobs::claim_next(&pool)
+        .await
+        .expect("next poll")
+        .expect("global order retained");
+    assert_eq!(global_next.id, foreign.id);
+    assert_eq!(global_next.mode, Some(ProductionMode::Static));
+    assert_eq!(global_next.queue_order, foreign.queue_order);
+    assert_eq!(global_next.attempts, 1);
+    let outputs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM social_produced_videos")
+        .fetch_one(&pool)
+        .await
+        .expect("no immutable version created by claim");
+    assert_eq!(outputs, 0);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn reorder_committing_while_claim_waits_reselects_the_eligible_global_head() {
+    for deferred_head in [false, true] {
+        queue_change_during_claim(false, deferred_head).await;
+    }
+}
+
+#[tokio::test]
+async fn mark_next_committing_while_claim_waits_reselects_the_eligible_global_head() {
+    for deferred_head in [false, true] {
+        queue_change_during_claim(true, deferred_head).await;
+    }
+}
+
 #[tokio::test]
 async fn clearing_schedule_while_claim_waits_for_owner_prevents_first_start() {
     let pool = pool().await;
