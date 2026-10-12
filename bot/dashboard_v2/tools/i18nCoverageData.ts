@@ -225,6 +225,7 @@ export const NEUTRAL_TEXTS = new Set<string>([
 
 export const IGNORED_LITERALS: Record<string, string[]> = {
   'src/api/assistent.ts': ['Zu viele Fragen gerade. Probier es gleich noch einmal.'],
+  'src/components/pricing/BillingStatusBanner.tsx': ['border-white/15 bg-white/5 text-white/70'],
   'src/components/assistent/vorschlaege.ts': [
     'Wie liefen meine letzten Streams?',
     'Was macht der Bot für meinen Kanal?',
@@ -255,7 +256,6 @@ export const PENDING_FILES: string[] = [
   'src/api/home.ts',
   'src/api/statCommands.ts',
   'src/api/subReminder.ts',
-  'src/api/title.ts',
   'src/api/uplink.ts',
   'src/components/SessionEventTimeline.tsx',
   'src/components/banners/TrialBanner.tsx',
@@ -293,11 +293,6 @@ export const PENDING_FILES: string[] = [
   'src/components/onboarding/OnboardingContext.tsx',
   'src/components/onboarding/OnboardingGuide.tsx',
   'src/components/onboarding/steps.ts',
-  'src/components/pricing/BillingStatusBanner.tsx',
-  'src/components/pricing/MySubscriptionCard.tsx',
-  'src/components/pricing/PlanStufen.tsx',
-  'src/components/pricing/PricingHero.tsx',
-  'src/components/pricing/TrialCallout.tsx',
   'src/components/roadmap/RoadmapPanel.tsx',
   'src/components/scopes/ScopeSummaryBanner.tsx',
   'src/components/tables/SessionTable.tsx',
@@ -337,7 +332,6 @@ export const PENDING_FILES: string[] = [
   'src/pages/OverlayBuilder.tsx',
   'src/pages/Overview.tsx',
   'src/pages/PartnerProfile.tsx',
-  'src/pages/Pricing.tsx',
   'src/pages/Publikum.tsx',
   'src/pages/Schedule.tsx',
   'src/pages/SessionDetail.tsx',
