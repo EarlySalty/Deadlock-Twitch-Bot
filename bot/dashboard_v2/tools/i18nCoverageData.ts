@@ -336,7 +336,6 @@ export const PENDING_FILES: string[] = [
   'src/pages/Sessions.tsx',
   'src/pages/StreamReports.tsx',
   'src/pages/Tagesform.tsx',
-  'src/pages/TitleGenerator.tsx',
   'src/pages/Uplink.tsx',
   'src/pages/UplinkEingang.tsx',
   'src/pages/UplinkNative2kHardware.tsx',
