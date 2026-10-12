@@ -5,6 +5,9 @@ use sqlx::{PgPool, Row};
 
 use crate::autopilot_settings::{self, json_column, SettingsError};
 
+#[path = "autopilot_schedule/mod.rs"]
+pub mod autopilot_schedule;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProductionMode {
@@ -208,31 +211,83 @@ pub async fn claim_next(pool: &PgPool) -> Result<Option<ProductionJob>, JobError
         tx.commit().await?;
         return Ok(None);
     }
+    let candidate: Option<(i64, String)> = sqlx::query_as(
+        "SELECT j.id, j.twitch_user_id FROM social_production_jobs j WHERE j.status = 'queued'
+         AND j.attempts < j.max_attempts
+         AND COALESCE((j.metadata->>'retry_after')::timestamptz, '-infinity'::timestamptz) <= clock_timestamp()
+         AND (j.started_at IS NOT NULL OR j.source = 'manual' OR EXISTS (
+             SELECT 1 FROM social_media_autopilot_settings s WHERE s.twitch_user_id = j.twitch_user_id
+             AND s.enabled AND NOT s.paused
+             AND (j.scheduled_at IS NULL OR (j.scheduled_at > clock_timestamp()
+                 AND j.scheduled_at <= clock_timestamp() + make_interval(hours => s.lead_time_hours)
+                     + CASE WHEN s.lead_time_hours = 0 THEN INTERVAL '1 minute' ELSE INTERVAL '0' END))
+             AND (SELECT COUNT(*) FROM social_produced_videos v WHERE v.twitch_user_id = j.twitch_user_id
+                 AND v.status = 'review' AND (v.expires_at IS NULL OR v.expires_at > clock_timestamp())) < 2))
+         ORDER BY j.queue_order, j.id LIMIT 1",
+    ).fetch_optional(&mut *tx).await?;
+    let Some((candidate_id, owner)) = candidate else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+    autopilot_settings::lock_owner(&mut tx, &owner).await?;
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "{SELECT} j WHERE status = 'queued' AND (source = 'manual' OR EXISTS (
-             SELECT 1 FROM social_media_autopilot_settings s WHERE s.twitch_user_id = j.twitch_user_id AND s.enabled AND NOT s.paused))
-         ORDER BY queue_order, id LIMIT 1 FOR UPDATE"
-    ))).fetch_optional(&mut *tx).await?;
+        "{SELECT} WHERE twitch_user_id = $1 AND id = $2 AND status = 'queued' AND attempts < max_attempts
+         AND COALESCE((metadata->>'retry_after')::timestamptz, '-infinity'::timestamptz) <= clock_timestamp()
+         FOR UPDATE"
+    ))).bind(&owner).bind(candidate_id).fetch_optional(&mut *tx).await?;
     let Some(row) = row else {
         tx.commit().await?;
         return Ok(None);
     };
     let mut job = from_row(row)?;
-    let settings = autopilot_settings::load_on(&mut tx, &job.twitch_user_id).await?;
-    let mode = match job.source {
-        JobSource::Manual => job.requested_mode.ok_or(JobError::State)?,
-        JobSource::Autopilot if settings.ai_editing_enabled => ProductionMode::Ai,
-        JobSource::Autopilot => ProductionMode::Static,
-    };
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT NOW()")
+    let settings = autopilot_settings::load_on(&mut tx, &owner).await?;
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut *tx)
         .await?;
-    sqlx::query("UPDATE social_production_jobs SET mode = $2, status = 'running', stage = 'starting', started_at = $3, attempts = attempts + 1 WHERE id = $1")
-        .bind(job.id).bind(mode.as_str()).bind(now).execute(&mut *tx).await?;
+    if job.started_at.is_none() && job.source == JobSource::Autopilot {
+        let reviews: i64 = autopilot_schedule::review_count_on(&mut tx, &owner).await?;
+        if !settings.enabled
+            || settings.paused
+            || reviews >= 2
+            || job.scheduled_at.is_some_and(|slot| {
+                slot <= now || slot > autopilot_schedule::production_horizon(&settings, now)
+            })
+        {
+            tx.commit().await?;
+            return Ok(None);
+        }
+    }
+    let mode = if job.started_at.is_some() {
+        job.mode.ok_or(JobError::State)?
+    } else {
+        match job.source {
+            JobSource::Manual => job.requested_mode.ok_or(JobError::State)?,
+            JobSource::Autopilot if settings.ai_editing_enabled => ProductionMode::Ai,
+            JobSource::Autopilot => ProductionMode::Static,
+        }
+    };
+    let first_start = job.started_at.is_none();
+    sqlx::query(
+        "UPDATE social_production_jobs SET mode = $2, status = 'running',
+        stage = CASE WHEN started_at IS NULL THEN 'starting' ELSE stage END,
+        started_at = COALESCE(started_at, $3), attempts = attempts + 1,
+        metadata = metadata - 'retry_after', finished_at = NULL WHERE id = $1",
+    )
+    .bind(job.id)
+    .bind(mode.as_str())
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
     job.mode = Some(mode);
     job.status = "running".into();
-    job.stage = "starting".into();
-    job.started_at = Some(now);
+    if first_start {
+        job.stage = "starting".into();
+        job.started_at = Some(now);
+    }
+    if let Some(metadata) = job.metadata.as_object_mut() {
+        metadata.remove("retry_after");
+    }
+    job.finished_at = None;
     job.attempts += 1;
     tx.commit().await?;
     Ok(Some(job))
