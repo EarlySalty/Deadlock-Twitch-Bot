@@ -11,4 +11,4 @@ Open packages (native subagents, local branches, worktrees under ~/.worktrees):
 - P1 Track C: feat/social-p1-c-modes-20261012 (tb-social-p1-c): 10 commits, rebase onto main, gate, merge, deploy.
 - P3: mount B schedule/runner UI, Track C PublishReviewPanel and M2 revision UI once on main; screenshots 390/768/1440.
 
-Open with user: go/no-go for paid live AI editor test ($2 hard cap).
+User decision 2026-10-13 ~01:00: NO paid live AI editor test. No paid AI model calls; prove AI paths only with fixtures and no-cost paths.
