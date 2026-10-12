@@ -12,7 +12,7 @@ use crate::production_jobs::autopilot_schedule::{
     plan_owner, recover_after_lease, retry_or_review, ScheduleError,
 };
 use crate::{
-    ai_editor::{self, EditorRuntime, MediaInfo, ProductionContext, ResourceLimits},
+    ai_editor::{self, EditorRuntime, MediaInfo, MediaRuntime, ProductionContext, ResourceLimits},
     autopilot_settings,
     clip_prep_worker::{download_atomic, register_local_file, ClipDownloader},
     clip_templates,
@@ -59,15 +59,19 @@ pub struct WorkerConfig {
 }
 
 impl WorkerConfig {
-    pub fn from_runtime(runtime: EditorRuntime, brain_token: Option<String>) -> Self {
+    pub fn from_media_runtime(
+        media: &MediaRuntime,
+        editor: Option<EditorRuntime>,
+        brain_token: Option<String>,
+    ) -> Self {
         Self {
-            package_root: runtime.package_root.clone(),
-            source_root: runtime.limits.source_root.clone(),
-            output_root: runtime.limits.output_root.clone(),
-            media_limits: runtime.limits.resources.clone(),
+            package_root: media.package_root.clone(),
+            source_root: media.source_root.clone(),
+            output_root: media.output_root.clone(),
+            media_limits: media.resources.clone(),
             max_duration_seconds: 60,
             poll_interval: Duration::from_secs(20),
-            editor: Some(runtime),
+            editor,
             brain_token,
         }
     }
