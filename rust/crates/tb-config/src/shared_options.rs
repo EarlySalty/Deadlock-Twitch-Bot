@@ -37,7 +37,7 @@ impl Default for MediaPublicOptions {
     fn default() -> Self {
         Self {
             youtube_audit_passed: false,
-            social_media_public_origin: "https://admin.deutsche-deadlock-community.de".into(),
+            social_media_public_origin: crate::admin_url!().into(),
         }
     }
 }

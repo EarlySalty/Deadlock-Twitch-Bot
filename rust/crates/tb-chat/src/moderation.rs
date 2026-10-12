@@ -77,14 +77,15 @@ pub const TIMEOUT_PITCH_COOLDOWN_SECS: u64 = 24 * 3600;
 pub const BOT_TIMEOUT_DROP_CODES: &[&str] = &["sender_banned", "sender_timedout"];
 
 /// Werbefrei-Pitch-URL (timeout_guard.py).
-pub const WERBEFREI_PITCH_URL: &str = "https://deutsche-deadlock-community.de/twitch/pricing";
+pub const WERBEFREI_PITCH_URL: &str = tb_config::primary_url!("/twitch/pricing");
 
 /// Werbefrei-Pitch-Nachricht (timeout_guard.py).
-pub const WERBEFREI_PITCH_MSG: &str =
+pub const WERBEFREI_PITCH_MSG: &str = concat!(
     "Kurzer Hinweis: Beim letzten Stream wurde der Bot in diesem Chat getimed outed 🙈 \
      Falls die automatischen Promo-Nachrichten stören – es gibt ein Werbefrei-Abo, \
-     das alle Bot-Features ohne automatische Nachrichten bietet: \
-     https://deutsche-deadlock-community.de/twitch/pricing";
+     das alle Bot-Features ohne automatische Nachrichten bietet: ",
+    tb_config::primary_url!("/twitch/pricing")
+);
 
 pub const TWITCH_MODERATION_REASON_MAX_CHARS: usize = 500;
 

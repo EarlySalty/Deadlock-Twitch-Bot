@@ -979,6 +979,25 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
         discord_user_id: Option<&str>,
         scope_profile: Option<&str>,
     ) -> Result<String, RaidOAuthError> {
+        self.auth_url_for_site(
+            login,
+            discord_user_id,
+            scope_profile,
+            tb_config::PublicSite::Primary,
+        )
+        .await
+    }
+
+    /// Paket O: Redirect-URI nach Startdomain (nur Allowlist). Sie wandert im
+    /// State mit und wird bei go-url und beim Code-Tausch wiederverwendet.
+    async fn auth_url_for_site(
+        &self,
+        login: &str,
+        discord_user_id: Option<&str>,
+        scope_profile: Option<&str>,
+        site: tb_config::PublicSite,
+    ) -> Result<String, RaidOAuthError> {
+        let redirect_uri = site.rebase(&self.redirect_uri);
         let scope_raw = scope_profile.unwrap_or("auto");
         let resolver = PgStreamerContextResolver {
             pool: self.pool.clone(),
@@ -998,7 +1017,7 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
         let state_token = tb_crypto::random_hex_token(32);
 
         self.state_store
-            .persist(&state_token, &state_info, Utc::now())
+            .persist_with_redirect(&state_token, &state_info, &redirect_uri, Utc::now())
             .await
             .map_err(|e| {
                 tracing::error!("auth_url: StateStore::persist fehlgeschlagen: {e}");
@@ -1007,7 +1026,7 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
 
         let url = build_authorize_url(
             &self.client_id,
-            &self.redirect_uri,
+            &redirect_uri,
             &state_info.scope_profile,
             &state_token,
         );
@@ -1045,10 +1064,19 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
         let Some(info) = state_info else {
             return Ok(None);
         };
+        let redirect_uri = self
+            .state_store
+            .lookup_redirect_uri(state, Utc::now())
+            .await
+            .map_err(|e| {
+                tracing::error!("go_url: Redirect-URI nicht lesbar: {e}");
+                RaidOAuthError::Internal
+            })?
+            .unwrap_or_else(|| self.redirect_uri.clone());
 
         let url = build_authorize_url(
             &self.client_id,
-            &self.redirect_uri,
+            &redirect_uri,
             &info.scope_profile,
             state,
         );
@@ -1211,13 +1239,18 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
         // 3. State konsumieren (single-use).
         let state_info = self
             .state_store
-            .consume_with_created_at(&state_str, Utc::now())
+            .consume_with_redirect(&state_str, Utc::now())
             .await
             .map_err(|e| {
                 tracing::error!("oauth_callback: StateStore::consume fehlgeschlagen: {e}");
                 RaidOAuthError::Internal
             })?;
-        let Some((state_info, state_created_at)) = state_info else {
+        let Some(tb_raid::ConsumedRaidState {
+            state: state_info,
+            created_at: state_created_at,
+            redirect_uri: state_redirect_uri,
+        }) = state_info
+        else {
             return Ok(failure(
                 400,
                 "Ungültiger State",
@@ -1231,7 +1264,11 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
         // 4. Code gegen Twitch tauschen. Python fängt JEDEN Fehler ab hier im
         // äußeren except und antwortet mit der generischen 500-Failure-Payload
         // der internen API (`mixin.py:646-649`) — keine differenzierten Texte.
-        let token_response = match self.token_client.exchange_code(&code).await {
+        let token_response = match self
+            .token_client
+            .exchange_code_with_redirect(&code, &state_redirect_uri)
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 tracing::error!(
@@ -1512,10 +1549,15 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             status: 200,
             title: title.to_string(),
             body_html: body_html.to_string(),
-            redirect_url: Some(erfolgsziel(
-                &self.success_redirect_url,
-                &state_info.scope_profile,
-            )),
+            // Paket O: Rücksprung auf die Domain, auf der der Ablauf startete.
+            redirect_url: Some(
+                tb_config::PublicSite::from_url(&state_redirect_uri)
+                    .unwrap_or_default()
+                    .rebase(&erfolgsziel(
+                        &self.success_redirect_url,
+                        &state_info.scope_profile,
+                    )),
+            ),
         })
     }
 }
@@ -3178,6 +3220,143 @@ mod callback_tests {
                 .await
                 .unwrap();
         assert!(leftover.is_none(), "State muss konsumiert sein");
+    }
+
+    /// Merkt sich die Redirect-URI des Code-Tauschs (Paket O).
+    struct RecordingTokenClient {
+        inner: StubTokenClient,
+        redirect: std::sync::Mutex<Option<String>>,
+    }
+
+    #[async_trait]
+    impl TwitchTokenClient for RecordingTokenClient {
+        async fn validate_token(
+            &self,
+            a: &str,
+            b: &str,
+        ) -> Result<tb_raid::token_refresher::TokenValidation, RefreshError> {
+            self.inner.validate_token(a, b).await
+        }
+        async fn refresh(&self, t: &str) -> Result<TokenResponse, RefreshError> {
+            self.inner.refresh(t).await
+        }
+        async fn exchange_code(&self, _c: &str) -> Result<TokenResponse, RefreshError> {
+            unreachable!("Callback muss die Redirect-URI des States nutzen")
+        }
+        async fn exchange_code_with_redirect(
+            &self,
+            c: &str,
+            redirect_uri: &str,
+        ) -> Result<TokenResponse, RefreshError> {
+            *self.redirect.lock().unwrap() = Some(redirect_uri.to_string());
+            self.inner.exchange_code(c).await
+        }
+        async fn token_owner(&self, a: &str) -> Result<TokenOwnerInfo, RefreshError> {
+            self.inner.token_owner(a).await
+        }
+    }
+
+    /// Paket O: Start auf `dead-lock.de` → Authorize, go-url, Code-Tausch und
+    /// Rücksprung bleiben auf `dead-lock.de`.
+    #[tokio::test]
+    async fn internationale_domain_bleibt_ueber_den_ganzen_ablauf_erhalten() {
+        let db = super::auth_test_database::Database::empty().await;
+        let pool = make_pool(&db.pool).await;
+        let configured = "https://deutsche-deadlock-community.de/callback/twitch";
+        let client = Arc::new(RecordingTokenClient {
+            inner: StubTokenClient::ok(&raid_scopes(), "111", "dragscope"),
+            redirect: std::sync::Mutex::new(None),
+        });
+        let cipher = Arc::new(FieldCipher::from_hex_key(TEST_KEY_HEX, KID).unwrap());
+        let imp = TbRaidOAuthImpl::new(
+            pool.clone(),
+            StateStore::new(pool.clone(), configured),
+            AuthWriter::new(pool.clone(), cipher),
+            client.clone(),
+            "cid".to_string(),
+            configured.to_string(),
+            None,
+            None,
+            &tb_config::discord::RaidOAuth::default(),
+        );
+
+        let auth_url = imp
+            .auth_url_for_site(
+                "dragscope",
+                None,
+                Some("raid"),
+                tb_config::PublicSite::International,
+            )
+            .await
+            .expect("auth_url");
+        let parsed = url::Url::parse(&auth_url).unwrap();
+        let pairs: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+        assert_eq!(
+            pairs.get("redirect_uri").map(String::as_str),
+            Some("https://dead-lock.de/callback/twitch")
+        );
+        let state = pairs.get("state").unwrap().clone();
+
+        let go = imp.go_url(&state).await.unwrap().unwrap();
+        assert!(
+            go.contains("redirect_uri=https%3A%2F%2Fdead-lock.de%2Fcallback%2Ftwitch"),
+            "{go}"
+        );
+
+        let result = imp
+            .oauth_callback("code-1", &state, "")
+            .await
+            .expect("callback");
+        assert_eq!(result.status, 200, "body: {}", result.body_html);
+        assert_eq!(
+            client.redirect.lock().unwrap().as_deref(),
+            Some("https://dead-lock.de/callback/twitch")
+        );
+        assert_eq!(
+            result.redirect_url.as_deref(),
+            Some("https://dead-lock.de/twitch/dashboard")
+        );
+    }
+
+    /// Hauptdomain: unverändert die konfigurierte URI.
+    #[tokio::test]
+    async fn hauptdomain_nutzt_unveraendert_die_konfigurierte_uri() {
+        let db = super::auth_test_database::Database::empty().await;
+        let pool = make_pool(&db.pool).await;
+        let configured = "https://deutsche-deadlock-community.de/callback/twitch";
+        let client = Arc::new(RecordingTokenClient {
+            inner: StubTokenClient::ok(&raid_scopes(), "111", "dragscope"),
+            redirect: std::sync::Mutex::new(None),
+        });
+        let cipher = Arc::new(FieldCipher::from_hex_key(TEST_KEY_HEX, KID).unwrap());
+        let imp = TbRaidOAuthImpl::new(
+            pool.clone(),
+            StateStore::new(pool.clone(), configured),
+            AuthWriter::new(pool.clone(), cipher),
+            client.clone(),
+            "cid".to_string(),
+            configured.to_string(),
+            None,
+            None,
+            &tb_config::discord::RaidOAuth::default(),
+        );
+        let auth_url = imp
+            .auth_url("dragscope", None, Some("raid"))
+            .await
+            .expect("auth_url");
+        let parsed = url::Url::parse(&auth_url).unwrap();
+        let pairs: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+        assert_eq!(pairs.get("redirect_uri").map(String::as_str), Some(configured));
+        let result = imp
+            .oauth_callback("code-1", pairs.get("state").unwrap(), "")
+            .await
+            .expect("callback");
+        assert_eq!(result.status, 200, "body: {}", result.body_html);
+        assert_eq!(client.redirect.lock().unwrap().as_deref(), Some(configured));
+        assert_eq!(
+            result.redirect_url.as_deref(),
+            Some("https://deutsche-deadlock-community.de/twitch/dashboard")
+        );
     }
 
     /// Kernforderung: ein geblockter Streamer bekommt den Absagetext und es

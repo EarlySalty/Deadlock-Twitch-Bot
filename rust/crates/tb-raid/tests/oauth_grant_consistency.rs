@@ -829,3 +829,61 @@ async fn pending_disconnect_fences_old_callback_and_new_generation_survives_old_
         .is_err());
     db.close().await;
 }
+
+#[tokio::test]
+async fn state_merkt_die_redirect_uri_der_startdomain() {
+    let db = Database::new().await;
+    let states = tb_raid::StateStore::new(
+        db.pool.clone(),
+        "https://deutsche-deadlock-community.de/callback/twitch",
+    );
+    let state = tb_raid::RaidOAuthState {
+        requested_login: "synthetic".into(),
+        scope_profile: "raid".into(),
+        expected_twitch_login: None,
+        expected_twitch_user_id: None,
+        discord_user_id: None,
+    };
+    states
+        .persist_with_redirect(
+            "intl-state",
+            &state,
+            "https://dead-lock.de/callback/twitch",
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    states
+        .persist("primary-state", &state, Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(
+        states
+            .lookup_redirect_uri("intl-state", Utc::now())
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("https://dead-lock.de/callback/twitch")
+    );
+    let consumed = states
+        .consume_with_redirect("intl-state", Utc::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(consumed.redirect_uri, "https://dead-lock.de/callback/twitch");
+    assert_eq!(consumed.state, state);
+    assert!(states
+        .consume_with_redirect("intl-state", Utc::now())
+        .await
+        .unwrap()
+        .is_none());
+    let primary = states
+        .consume_with_redirect("primary-state", Utc::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        primary.redirect_uri,
+        "https://deutsche-deadlock-community.de/callback/twitch"
+    );
+}

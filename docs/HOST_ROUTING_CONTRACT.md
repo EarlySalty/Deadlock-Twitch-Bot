@@ -14,12 +14,17 @@ Weitere Wurzelpfade bleiben bis zur Entscheidung des Betreibers bestehen. Bestan
 
 ## TL;DR
 
-Es gibt **zwei Hosts**, die auf **dasselbe** Backend (`tb-dashboard`, `127.0.0.1:8769`) zeigen:
+Es gibt **drei Hosts**, die auf **dasselbe** Backend (`tb-dashboard`, `127.0.0.1:8769`) zeigen:
 
 | Host | Rolle | `/twitch/analyse`, `/twitch/social-media`, generisches `/twitch/*` |
 |------|-------|------------------------------------------------------|
 | `deutsche-deadlock-community.de` | öffentlich / Partner | **erlaubt** |
+| `dead-lock.de` | öffentlich / international (seit Paket O, keine Weiterleitung mehr) | **erlaubt** |
 | `admin.deutsche-deadlock-community.de` | Admin-Dashboard | **bewusst 404** |
+
+Die beiden öffentlichen Hosts kennt nur `tb_config::PublicSite`. OAuth-Abläufe wählen ihre
+Redirect-URL nach dem Start-Host aus dieser Allowlist und behalten sie bis zum Rücksprung;
+Details und die Liste der App-Redirect-URLs: [DOMAINS_OAUTH.md](DOMAINS_OAUTH.md).
 
 Caddy unterscheidet die beiden über den weitergereichten `Host`-Header
 (`header_up Host …`) plus `X-Dashboard-Context: public` für öffentliche Dashboard-Routen
@@ -106,6 +111,7 @@ dedizierte Forward-Auth-Pfad `/twitch/auth/validate` zählt ebenfalls als Admin-
   `https://admin.deutsche-deadlock-community.de`.
 - `TWITCH_PUBLIC_URL` / `DASHBOARD_PUBLIC_URL` → öffentliche Base-URL für host-aware Redirects.
   Default `https://deutsche-deadlock-community.de`.
+- `tb_config::PublicSite` / `primary_url!` → einzige Quelle der öffentlichen Hostnamen.
 
 ## Verwandte Doku
 

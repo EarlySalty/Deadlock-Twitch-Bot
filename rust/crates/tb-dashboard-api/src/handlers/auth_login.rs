@@ -32,6 +32,7 @@ use crate::auth::session::{
 };
 use crate::handlers::auth_status::ADMIN_MODE_COOKIE;
 use crate::handlers::spa::is_admin_dashboard_host_request;
+use crate::public_site::{request_site, PublicSite};
 
 /// Logout-Redirect-Ziel (Python `auth_logout`: 302 → `/twitch/analyse`).
 const LOGOUT_REDIRECT: &str = "/twitch/analyse";
@@ -41,8 +42,7 @@ const ADMIN_LOGOUT_REDIRECT: &str = "/twitch/auth/discord/login";
 /// SameSite=Lax; bindet den Callback an den Browser, der den Login startete.
 const OAUTH_CONTEXT_COOKIE: &str = "twitch_dash_session_oauth_ctx";
 /// Default-Ziel nach erfolgreicher Raid-OAuth-Autorisierung (Python-Konstante).
-const DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL: &str =
-    "https://deutsche-deadlock-community.de/twitch/dashboard";
+const DEFAULT_RAID_OAUTH_SUCCESS_PATH: &str = "/twitch/dashboard";
 /// Interner Worker-Endpoint, der den nativen Raid-OAuth-Callback verarbeitet.
 const RAID_OAUTH_CALLBACK_PATH: &str = "/raid/oauth-callback";
 const RAID_OAUTH_CALLBACK_TIMEOUT: Duration = Duration::from_secs(20);
@@ -113,6 +113,7 @@ fn oauth_unconfigured() -> Response {
 pub async fn login_handler(
     state: Option<Extension<DashboardAuthState>>,
     config: Option<Extension<OAuthLoginConfig>>,
+    headers: HeaderMap,
     Query(query): Query<LoginQuery>,
 ) -> Response {
     let (Some(Extension(state)), Some(Extension(config))) = (state, config) else {
@@ -123,6 +124,11 @@ pub async fn login_handler(
     }
 
     let next_path = sanitize_next_path(query.next.as_deref());
+    // Paket O: Rücksprung auf die Domain, auf der der Login startet (nur aus der
+    // Allowlist). Die gewählte URI wandert im State mit und wird beim Code-Tausch
+    // wiederverwendet; das Session-Cookie ist host-only und landet damit auf
+    // derselben Domain.
+    let redirect_uri = request_site(&headers).rebase(&config.redirect_uri);
     let state_token = tb_crypto::random_urlsafe_token(24);
     // P2.139: Kontext-CSRF-Token erzeugen, im State persistieren UND als HttpOnly-
     // Cookie setzen. Der Callback prüft beide gegeneinander → ein fremder/cookie-
@@ -130,7 +136,7 @@ pub async fn login_handler(
     let context_token = tb_crypto::random_urlsafe_token(24);
     let login_state = OAuthLoginState {
         next_path,
-        redirect_uri: config.redirect_uri.clone(),
+        redirect_uri: redirect_uri.clone(),
         context_token: context_token.clone(),
     };
 
@@ -146,7 +152,7 @@ pub async fn login_handler(
             .into_response();
     }
 
-    let auth_url = build_login_authorize_url(&config.client_id, &config.redirect_uri, &state_token);
+    let auth_url = build_login_authorize_url(&config.client_id, &redirect_uri, &state_token);
     let ctx_cookie = build_session_cookie(
         OAUTH_CONTEXT_COOKIE,
         &context_token,
@@ -665,7 +671,7 @@ fn raid_oauth_idempotency_key(state_token: &str) -> String {
 }
 
 fn normalize_raid_success_redirect_url(candidate: &str) -> String {
-    let fallback = DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL.to_string();
+    let fallback = PublicSite::Primary.url(DEFAULT_RAID_OAUTH_SUCCESS_PATH);
     let Ok(mut url) = url::Url::parse(candidate.trim()) else {
         return fallback;
     };
@@ -1143,7 +1149,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_ohne_config_503() {
-        let resp = login_handler(None, None, Query(LoginQuery::default())).await;
+        let resp = login_handler(None, None, HeaderMap::new(), Query(LoginQuery::default())).await;
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
@@ -1219,11 +1225,11 @@ mod tests {
         );
         assert_eq!(
             normalize_raid_success_redirect_url("http://example.test/unsicher"),
-            DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL
+            PublicSite::Primary.url(DEFAULT_RAID_OAUTH_SUCCESS_PATH)
         );
         assert_eq!(
             normalize_raid_success_redirect_url("https://user:pass@example.test/"),
-            DEFAULT_RAID_OAUTH_SUCCESS_REDIRECT_URL
+            PublicSite::Primary.url(DEFAULT_RAID_OAUTH_SUCCESS_PATH)
         );
     }
 
@@ -1896,6 +1902,7 @@ mod tests {
         let resp = login_handler(
             Some(Extension(state)),
             Some(Extension(cfg)),
+            HeaderMap::new(),
             Query(LoginQuery {
                 next: Some("/twitch/stats".to_string()),
             }),
@@ -1912,6 +1919,62 @@ mod tests {
         assert!(loc.contains("client_id=cid"));
         assert!(loc.contains("response_type=code"));
         assert!(!loc.contains("scope="));
+    }
+
+    /// Paket O: Login auf `dead-lock.de` springt auf `dead-lock.de` zurück; die
+    /// gewählte URI liegt im State und wird beim Code-Tausch wiederverwendet.
+    #[tokio::test]
+    async fn login_auf_internationaler_domain_nutzt_deren_redirect() {
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
+        ensure_tables(&pool).await;
+        let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
+        let mut cfg = config_with(Ok(identity("x", "1")));
+        cfg.redirect_uri = "https://deutsche-deadlock-community.de/callback/twitch".to_string();
+
+        for (host, expected) in [
+            ("dead-lock.de", "https://dead-lock.de/callback/twitch"),
+            (
+                "evil.test",
+                "https://deutsche-deadlock-community.de/callback/twitch",
+            ),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(axum::http::header::HOST, HeaderValue::from_static(host));
+            let resp = login_handler(
+                Some(Extension(state.clone())),
+                Some(Extension(cfg.clone())),
+                headers,
+                Query(LoginQuery::default()),
+            )
+            .await;
+            let loc = resp
+                .headers()
+                .get(axum::http::header::LOCATION)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string();
+            let url = url::Url::parse(&loc).unwrap();
+            let pairs: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+            assert_eq!(
+                pairs.get("redirect_uri").map(String::as_str),
+                Some(expected)
+            );
+            let token = pairs.get("state").unwrap();
+            let saved = state
+                .consume_oauth_login_state(token)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(saved.redirect_uri, expected);
+            let cookie = resp.headers().get(SET_COOKIE).unwrap().to_str().unwrap();
+            assert!(
+                !cookie.contains("Domain="),
+                "Cookie bleibt host-only: {cookie}"
+            );
+        }
     }
 
     /// Logout löscht das Cookie (Max-Age=0) und redirectet auf /twitch/analyse.

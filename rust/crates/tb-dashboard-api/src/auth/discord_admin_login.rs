@@ -31,8 +31,8 @@ use crate::auth::session::{
     ADMIN_SESSION_TTL_SECS,
 };
 
-const DEFAULT_ADMIN_BASE_URL: &str = "https://admin.deutsche-deadlock-community.de";
-const DEFAULT_COOKIE_DOMAIN: &str = "deutsche-deadlock-community.de";
+const DEFAULT_ADMIN_BASE_URL: &str = tb_config::public_site::ADMIN_ORIGIN;
+const DEFAULT_COOKIE_DOMAIN: &str = tb_config::public_site::PRIMARY_HOST;
 const DEFAULT_DASHBOARD_MODERATOR_ROLE_ID: u64 = 1_337_518_124_647_579_661;
 /// Discord-Rollen, die das Twitch-Admin-Dashboard ohne Moderator-Rolle oeffnen:
 /// `1541055931079729302` = "Twitch Admin Dashboard",

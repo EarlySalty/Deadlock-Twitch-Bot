@@ -80,6 +80,22 @@ impl RaidOAuthState {
     }
 }
 
+/// `streamer_login`, Meta, `created_at`, `redirect_uri` aus `DELETE … RETURNING`.
+type ConsumedRow = (
+    String,
+    Option<String>,
+    Option<DateTime<Utc>>,
+    Option<String>,
+);
+
+/// Verbrauchter State samt Erzeugungszeit und gewählter Redirect-URI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumedRaidState {
+    pub state: RaidOAuthState,
+    pub created_at: DateTime<Utc>,
+    pub redirect_uri: String,
+}
+
 /// Zugriff auf `oauth_state_tokens`, plattform-gated auf `twitch_raid`.
 #[derive(Clone)]
 pub struct StateStore {
@@ -102,6 +118,26 @@ impl StateStore {
         state: &RaidOAuthState,
         now: DateTime<Utc>,
     ) -> Result<(), sqlx::Error> {
+        let redirect_uri = self.redirect_uri.clone();
+        self.persist_with_redirect(state_token, state, &redirect_uri, now)
+            .await
+    }
+
+    /// Konfigurierte Redirect-URI (Hauptdomain).
+    pub fn redirect_uri(&self) -> &str {
+        &self.redirect_uri
+    }
+
+    /// Wie [`persist`](Self::persist), aber mit der für diesen Ablauf gewählten
+    /// Redirect-URI (Paket O: Startdomain). Sie wird beim Code-Tausch über
+    /// [`consume_with_redirect`](Self::consume_with_redirect) wiederverwendet.
+    pub async fn persist_with_redirect(
+        &self,
+        state_token: &str,
+        state: &RaidOAuthState,
+        redirect_uri: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), sqlx::Error> {
         let expires_at = now + Duration::seconds(STATE_TTL_SECONDS);
         let state_lookup_key = tb_crypto::token_lookup_key(state_token);
         sqlx::query(
@@ -119,7 +155,7 @@ impl StateStore {
             "#
         )
         .bind(state_lookup_key).bind(PLATFORM_RAID).bind(&state.requested_login)
-        .bind(&self.redirect_uri).bind(state.serialize_meta()).bind(expires_at)
+        .bind(redirect_uri).bind(state.serialize_meta()).bind(expires_at)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -152,6 +188,37 @@ impl StateStore {
         ))
     }
 
+    /// Gespeicherte Redirect-URI eines noch gültigen States, ohne ihn zu
+    /// verbrauchen. Fehlt sie (Altbestand), gilt die konfigurierte URI.
+    pub async fn lookup_redirect_uri(
+        &self,
+        state_token: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<String>, sqlx::Error> {
+        let state_lookup_key = tb_crypto::token_lookup_key(state_token);
+        let row: Option<(Option<String>,)> = sqlx::query_as(
+            r#"
+            SELECT redirect_uri
+            FROM oauth_state_tokens
+            WHERE state_token = $1 AND platform = $2 AND expires_at > $3
+            LIMIT 1
+            "#,
+        )
+        .bind(state_lookup_key)
+        .bind(PLATFORM_RAID)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(redirect,)| self.stored_or_configured(redirect)))
+    }
+
+    fn stored_or_configured(&self, stored: Option<String>) -> String {
+        stored
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| self.redirect_uri.clone())
+    }
+
     /// Verbraucht einen noch gültigen State atomar (DELETE … RETURNING).
     pub async fn consume(
         &self,
@@ -170,12 +237,25 @@ impl StateStore {
         state_token: &str,
         now: DateTime<Utc>,
     ) -> Result<Option<(RaidOAuthState, DateTime<Utc>)>, sqlx::Error> {
+        Ok(self
+            .consume_with_redirect(state_token, now)
+            .await?
+            .map(|consumed| (consumed.state, consumed.created_at)))
+    }
+
+    /// Wie [`consume_with_created_at`](Self::consume_with_created_at), liefert
+    /// zusätzlich die beim Authorize verwendete Redirect-URI (Paket O).
+    pub async fn consume_with_redirect(
+        &self,
+        state_token: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<ConsumedRaidState>, sqlx::Error> {
         let state_lookup_key = tb_crypto::token_lookup_key(state_token);
-        let row: Option<(String, Option<String>, Option<DateTime<Utc>>)> = sqlx::query_as(
+        let row: Option<ConsumedRow> = sqlx::query_as(
             r#"
             DELETE FROM oauth_state_tokens
             WHERE state_token = $1 AND platform = $2 AND expires_at > $3
-            RETURNING COALESCE(streamer_login, ''),pkce_verifier,created_at
+            RETURNING COALESCE(streamer_login, ''),pkce_verifier,created_at,redirect_uri
             "#,
         )
         .bind(state_lookup_key)
@@ -183,7 +263,14 @@ impl StateStore {
         .bind(now)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.and_then(|(login, meta, created)| row_to_state(Some((login, meta))).zip(created)))
+        Ok(row.and_then(|(login, meta, created, redirect)| {
+            let state = row_to_state(Some((login, meta)))?;
+            Some(ConsumedRaidState {
+                state,
+                created_at: created?,
+                redirect_uri: self.stored_or_configured(redirect),
+            })
+        }))
     }
 
     /// Räumt abgelaufene raid-State-Tokens ab; liefert die Anzahl.

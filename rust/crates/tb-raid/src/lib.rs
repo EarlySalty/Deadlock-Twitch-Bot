@@ -175,7 +175,7 @@ pub use signal_correlation::{
     ActionData, RaidArrivalInput, RaidSignalAction, RaidSignalActionKind,
     RaidSignalCorrelationService, RaidSignalOutcome, RaidSignalPlan, RaidSignalType,
 };
-pub use state_store::{RaidOAuthState, StateStore};
+pub use state_store::{ConsumedRaidState, RaidOAuthState, StateStore};
 pub use strikes_store::StrikesStore;
 pub use target_resolution::{
     filter_fallback_pool, resolve_boost_target, resolve_fallback_target, resolve_partner_target,

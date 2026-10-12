@@ -73,7 +73,7 @@ const ANALYTICS_BLOCKED_PARTNER_STATUSES: &[&str] = &[
 const INTERNAL_HOME_LOGIN_URL: &str = "/twitch/auth/login?next=%2Ftwitch%2Fdashboard";
 const INTERNAL_HOME_DISCORD_CONNECT_URL: &str =
     "/twitch/auth/discord/link?next=%2Ftwitch%2Fverwaltung%23konto";
-const STEAM_LINK_DEFAULT_BASE_URL: &str = "https://deutsche-deadlock-community.de/link";
+const STEAM_LINK_DEFAULT_BASE_URL: &str = tb_config::primary_url!("/link");
 
 struct CachedAvatar {
     value: Option<String>,
