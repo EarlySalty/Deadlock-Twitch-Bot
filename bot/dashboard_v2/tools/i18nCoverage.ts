@@ -230,7 +230,7 @@ export function checkSource(file: string, source: string, dictionary: Record<str
           parent.initializer === node &&
           VISIBLE_PROPERTY_NAMES.has(parent.name.getText(sf).replace(/['"]/g, ''));
         const suspicious = visibleProperty ? looksLikeText(text) : looksGerman(text);
-        if (suspicious && !isNeutral(text) && !hasTranslation(node.text, dictionary)) {
+        if (suspicious && !isNeutral(text)) {
           report(node, visibleProperty ? 'visible-property' : 'german-literal', text);
         }
       }

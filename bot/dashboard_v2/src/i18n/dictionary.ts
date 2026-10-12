@@ -783,16 +783,6 @@ export function readStoredLanguage(): Language | null {
   }
 }
 
-export function browserLanguage(): Language {
-  if (typeof window === 'undefined' || !window.navigator) return DEFAULT_LANGUAGE;
-  const primary = window.navigator.languages?.[0] ?? window.navigator.language ?? '';
-  return primary.toLowerCase().startsWith('de') ? 'de' : 'en';
-}
-
-export function readInitialLanguage(): Language {
-  return readStoredLanguage() ?? browserLanguage();
-}
-
 export function storeLanguage(language: Language): void {
   if (typeof window === 'undefined') return;
   try {
