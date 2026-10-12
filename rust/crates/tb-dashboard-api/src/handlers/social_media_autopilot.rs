@@ -7,7 +7,10 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use sqlx::PgPool;
+use tb_social_media::autopilot_publish as publish;
+use tb_social_media::autopilot_settings::NotificationPreferences;
 use tb_social_media::clip_pool::{self, PoolError, PoolPreferences};
+use tb_social_media::produced_video::ProducedVideoError;
 
 use crate::auth::level::DashboardAuthLevel;
 
@@ -193,4 +196,164 @@ pub async fn selection_handler(
         Ok(()) => Json(json!({"clip_id": clip_id, "selected": input.selected})).into_response(),
         Err(error) => error_response(error),
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PauseInput {
+    pub paused: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalInput {
+    pub destinations: Vec<publish::DestinationDecision>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScheduleInput {
+    pub platforms: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RetryInput {
+    pub platform: String,
+}
+
+fn publish_error(error: publish::PublishError) -> Response {
+    use publish::PublishError as E;
+    let (status, code) = match &error {
+        E::NotFound | E::Video(ProducedVideoError::NotFound) => {
+            (StatusCode::NOT_FOUND, "not_found")
+        }
+        E::Video(ProducedVideoError::Ownership) => (StatusCode::FORBIDDEN, "forbidden"),
+        E::Confirmation
+        | E::PendingChoice
+        | E::NoPlatforms
+        | E::Invalid(_)
+        | E::Settings(tb_social_media::autopilot_settings::SettingsError::Invalid(_))
+        | E::Video(ProducedVideoError::NoPlatforms | ProducedVideoError::Invalid) => {
+            (StatusCode::BAD_REQUEST, "invalid_publish_input")
+        }
+        E::State | E::ApprovalRequired | E::RetryBlocked | E::NoSlot | E::Video(_) => {
+            (StatusCode::CONFLICT, "publish_state_conflict")
+        }
+        E::Schedule(_) | E::Settings(_) | E::Database(_) | E::Json(_) | E::Io(_) => {
+            tracing::warn!(%error, "Auto-Pilot publication request failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "publish_unavailable")
+        }
+    };
+    (
+        status,
+        Json(json!({"error": code, "message": error.to_string()})),
+    )
+        .into_response()
+}
+
+fn publish_result(result: Result<(), publish::PublishError>) -> Response {
+    match result {
+        Ok(()) => Json(json!({"ok": true})).into_response(),
+        Err(error) => publish_error(error),
+    }
+}
+
+pub async fn publish_snapshot_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(query): Query<OwnerQuery>,
+) -> Response {
+    let (_, owner) = match target(&auth, &pool, query.twitch_user_id.as_deref()).await {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    match publish::snapshot(&pool, &owner).await {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(error) => publish_error(error),
+    }
+}
+
+pub async fn publish_mode_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(query): Query<OwnerQuery>,
+    Json(input): Json<publish::ModeTransition>,
+) -> Response {
+    let (_, owner) = match target(&auth, &pool, query.twitch_user_id.as_deref()).await {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    publish_result(publish::transition_mode(&pool, &owner, &input).await)
+}
+
+pub async fn publish_pause_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(query): Query<OwnerQuery>,
+    Json(input): Json<PauseInput>,
+) -> Response {
+    let (_, owner) = match target(&auth, &pool, query.twitch_user_id.as_deref()).await {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    publish_result(publish::set_paused(&pool, &owner, input.paused).await)
+}
+
+pub async fn publish_notifications_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(query): Query<OwnerQuery>,
+    Json(input): Json<NotificationPreferences>,
+) -> Response {
+    let (_, owner) = match target(&auth, &pool, query.twitch_user_id.as_deref()).await {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    match publish::save_notifications(&pool, &owner, &input).await {
+        Ok(preferences) => Json(preferences).into_response(),
+        Err(error) => publish_error(error),
+    }
+}
+
+pub async fn publish_approval_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(query): Query<OwnerQuery>,
+    Path(id): Path<i64>,
+    Json(input): Json<ApprovalInput>,
+) -> Response {
+    let (_, owner) = match target(&auth, &pool, query.twitch_user_id.as_deref()).await {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    publish_result(publish::approve(&pool, &owner, id, &input.destinations).await)
+}
+
+pub async fn publish_schedule_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(query): Query<OwnerQuery>,
+    Path(id): Path<i64>,
+    Json(input): Json<ScheduleInput>,
+) -> Response {
+    let (_, owner) = match target(&auth, &pool, query.twitch_user_id.as_deref()).await {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    publish_result(publish::schedule(&pool, &owner, id, &input.platforms).await)
+}
+
+pub async fn publish_retry_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(query): Query<OwnerQuery>,
+    Path(id): Path<i64>,
+    Json(input): Json<RetryInput>,
+) -> Response {
+    let (_, owner) = match target(&auth, &pool, query.twitch_user_id.as_deref()).await {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    publish_result(publish::retry(&pool, &owner, id, &input.platform).await)
 }

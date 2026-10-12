@@ -414,6 +414,34 @@ fn build_authed_router_with_analysis_store(
             put(social_media::autopilot::selection_handler),
         )
         .route(
+            "/social-media/api/autopilot/publish",
+            get(social_media::autopilot::publish_snapshot_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/publish/mode",
+            put(social_media::autopilot::publish_mode_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/publish/pause",
+            put(social_media::autopilot::publish_pause_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/publish/notifications",
+            put(social_media::autopilot::publish_notifications_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/publish/videos/{id}/approval",
+            put(social_media::autopilot::publish_approval_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/publish/videos/{id}/schedule",
+            post(social_media::autopilot::publish_schedule_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/publish/videos/{id}/retry",
+            post(social_media::autopilot::publish_retry_handler),
+        )
+        .route(
             "/social-media/api/admin/clips",
             get(social_media::admin_clips_handler),
         )
