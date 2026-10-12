@@ -271,6 +271,7 @@ export const IGNORED_LITERALS: Record<string, string[]> = {
     'Deine aktuelle Sieg- oder Niederlagenserie.',
     'Dein meistgespielter Held.',
   ],
+  'src/components/pricing/BillingStatusBanner.tsx': ['border-white/15 bg-white/5 text-white/70'],
   'src/components/assistent/vorschlaege.ts': [
     'Wie liefen meine letzten Streams?',
     'Was macht der Bot für meinen Kanal?',
@@ -317,13 +318,7 @@ export const IGNORED_LITERALS: Record<string, string[]> = {
 
 export const PENDING_FILES: string[] = [
   'src/api/ai.ts',
-  'src/api/title.ts',
   'src/api/uplink.ts',
-  'src/components/pricing/BillingStatusBanner.tsx',
-  'src/components/pricing/MySubscriptionCard.tsx',
-  'src/components/pricing/PlanStufen.tsx',
-  'src/components/pricing/PricingHero.tsx',
-  'src/components/pricing/TrialCallout.tsx',
   'src/components/uplink/UplinkHochkantEditor.tsx',
   'src/components/uplink/UplinkYouTubeLive.tsx',
   'src/components/uplink/hochkantLayout.ts',
@@ -338,7 +333,6 @@ export const PENDING_FILES: string[] = [
   'src/pages/Monetization.tsx',
   'src/pages/OverlayBuilder.tsx',
   'src/pages/PartnerProfile.tsx',
-  'src/pages/Pricing.tsx',
   'src/pages/StreamReports.tsx',
   'src/pages/TitleGenerator.tsx',
   'src/pages/Uplink.tsx',
