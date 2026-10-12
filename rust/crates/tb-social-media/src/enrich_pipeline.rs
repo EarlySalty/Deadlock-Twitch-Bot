@@ -90,6 +90,8 @@ pub struct EnrichmentOutcome {
 
 #[derive(Debug, thiserror::Error)]
 pub enum PipelineError {
+    #[error("Dieser Clip wird im Clip-Pool verwaltet")]
+    PoolManaged,
     #[error("clip_db_id {0} not found")]
     ClipNotFound(i32),
 }
@@ -190,6 +192,12 @@ impl ClipEnrichmentPipeline {
         let ctx = load_clip_context(&self.pool, clip_db_id)
             .await
             .ok_or(PipelineError::ClipNotFound(clip_db_id))?;
+        if !crate::clip_pool::legacy_automatic_allowed(&self.pool, i64::from(clip_db_id))
+            .await
+            .unwrap_or(false)
+        {
+            return Err(PipelineError::PoolManaged);
+        }
         let existing = ensure_enrichment_row(&self.pool, clip_db_id).await;
         if existing.status == STATUS_DONE && !force {
             return Ok(Self::done_outcome(

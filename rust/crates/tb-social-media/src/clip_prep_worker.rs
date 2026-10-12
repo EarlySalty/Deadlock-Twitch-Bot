@@ -156,25 +156,26 @@ impl ClipPrepWorker {
     }
 
     async fn iter_clips_needing_download(&self, limit: i64) -> Vec<(i64, String)> {
-        let rows = sqlx::query!(
-            "SELECT c.id AS \"id!\", c.clip_url AS \"clip_url!\" \
+        let rows = sqlx::query_as::<_, (i64, String)>(
+            "SELECT c.id::bigint, c.clip_url \
                FROM twitch_clips_social_media c \
                JOIN social_media_category k ON k.category_key = c.category_key \
               WHERE c.discarded_at IS NULL \
+                AND (to_jsonb(c)->>'pool_managed_at' IS NULL OR COALESCE((to_jsonb(c)->>'pool_legacy_prerequisite')::boolean, FALSE)) \
                 AND k.enrichment_enabled \
                 AND COALESCE(c.upload_local_path, c.local_file_path) IS NULL \
                 AND c.clip_url IS NOT NULL AND c.clip_url <> '' \
                 AND (c.download_failed_at IS NULL OR c.download_failed_at < NOW() - INTERVAL '6 hours') \
               ORDER BY c.created_at DESC LIMIT $1",
-            limit.max(1)
         )
+        .bind(limit.max(1))
         .fetch_all(&self.pool)
         .await
         .unwrap_or_else(|error| {
             tracing::error!(%error, "Clip-Prep: offene Downloads konnten nicht gelesen werden");
             Vec::new()
         });
-        rows.into_iter().map(|r| (r.id, r.clip_url)).collect()
+        rows
     }
 
     async fn download_one(&self, clip_db_id: i64, clip_url: &str) -> Result<(), PrepError> {
@@ -190,6 +191,21 @@ impl ClipPrepWorker {
         let clips = self.iter_clips_needing_download(self.batch_size).await;
         let mut geladen = 0usize;
         for (clip_db_id, clip_url) in clips {
+            let allowed = sqlx::query_scalar::<_, bool>(
+                "SELECT to_jsonb(c)->>'pool_managed_at' IS NULL OR COALESCE((to_jsonb(c)->>'pool_legacy_prerequisite')::boolean, FALSE)
+                 FROM twitch_clips_social_media c WHERE id = $1",
+            ).bind(clip_db_id).fetch_optional(&self.pool).await;
+            match allowed {
+                Ok(Some(true)) => {}
+                Ok(_) => continue,
+                Err(_) => {
+                    tracing::warn!(
+                        clip_db_id,
+                        "Clip-Prep: Poolgrenze konnte nicht geprüft werden"
+                    );
+                    continue;
+                }
+            }
             match self.download_one(clip_db_id, &clip_url).await {
                 Ok(()) => geladen += 1,
                 Err(error) => {

@@ -366,6 +366,32 @@ fn build_authed_router_with_analysis_store(
         )
         // Admin-Clips: paginierte Liste, Detail, Verwerfen.
         .route(
+            "/social-media/api/autopilot/pool",
+            get(social_media::autopilot::pool_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/preferences",
+            get(social_media::autopilot::preferences_get_handler)
+                .put(social_media::autopilot::preferences_put_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/imports",
+            get(social_media::autopilot::import_latest_handler)
+                .post(social_media::autopilot::import_start_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/imports/{id}",
+            get(social_media::autopilot::import_get_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/imports/{id}/resume",
+            post(social_media::autopilot::import_resume_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/pool/{clip_id}/selection",
+            put(social_media::autopilot::selection_handler),
+        )
+        .route(
             "/social-media/api/admin/clips",
             get(social_media::admin_clips_handler),
         )

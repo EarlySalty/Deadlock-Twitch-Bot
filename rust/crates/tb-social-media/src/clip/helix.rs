@@ -61,9 +61,25 @@ pub struct ClipPage {
     pub next_cursor: Option<String>,
 }
 
-/// Fetcht Clips über die Twitch Helix-API.
-///
-/// Kapselt alle HTTP-Kommunikation — der Rest des Crates kennt kein reqwest.
+#[derive(Debug, thiserror::Error)]
+pub enum HistoricalFetchError {
+    #[error("Twitch begrenzt den Abruf vorübergehend")]
+    RateLimited(DateTime<Utc>),
+    #[error("Die Twitch-Seitenmarkierung ist abgelaufen")]
+    InvalidCursor,
+    #[error("Die Twitch-Antwort enthält unvollständige Clipdaten")]
+    InvalidData,
+    #[error("Der Twitch-Abruf ist fehlgeschlagen")]
+    Upstream(#[from] HelixError),
+}
+
+#[derive(Debug)]
+pub struct HistoricalClipPage {
+    pub clips: Vec<ClipRecord>,
+    pub raw_count: usize,
+    pub next_cursor: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct HelixClipSource {
     client: Arc<HelixClient>,
@@ -72,6 +88,51 @@ pub struct HelixClipSource {
 impl HelixClipSource {
     pub fn new(client: Arc<HelixClient>) -> Self {
         Self { client }
+    }
+
+    pub async fn fetch_historical_page(
+        &self,
+        broadcaster_id: &str,
+        started_at: DateTime<Utc>,
+        ended_at: DateTime<Utc>,
+        cursor: Option<&str>,
+    ) -> Result<HistoricalClipPage, HistoricalFetchError> {
+        let mut params = vec![
+            ("broadcaster_id", broadcaster_id.to_owned()),
+            ("first", HELIX_PAGE_SIZE.to_string()),
+            (
+                "started_at",
+                started_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+            ),
+            (
+                "ended_at",
+                ended_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+            ),
+        ];
+        if let Some(cursor) = cursor {
+            params.push(("after", cursor.to_owned()));
+        }
+        let request = self.client.get("/clips").await?.query(&params);
+        let response = self.client.send_with_retry(request).await?;
+        let status = response.status().as_u16();
+        if status == 429 {
+            let reset = response
+                .headers()
+                .get("Ratelimit-Reset")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<i64>().ok())
+                .and_then(|value| DateTime::from_timestamp(value, 0))
+                .unwrap_or_else(|| Utc::now() + Duration::minutes(1));
+            return Err(HistoricalFetchError::RateLimited(reset));
+        }
+        if status == 400 && cursor.is_some() {
+            return Err(HistoricalFetchError::InvalidCursor);
+        }
+        if !(200..300).contains(&status) {
+            return Err(HelixError::Status { status }.into());
+        }
+        let response: serde_json::Value = response.json().await.map_err(HelixError::from)?;
+        parse_historical_page(&response)
     }
 
     pub async fn fetch_clip_by_id(
@@ -237,6 +298,47 @@ impl HelixClipSource {
 
         Ok(all)
     }
+}
+
+fn parse_historical_page(
+    response: &serde_json::Value,
+) -> Result<HistoricalClipPage, HistoricalFetchError> {
+    let raw = response
+        .get("data")
+        .and_then(|value| value.as_array())
+        .filter(|items| items.len() <= HELIX_PAGE_SIZE as usize)
+        .ok_or(HistoricalFetchError::InvalidData)?;
+    let pagination = response
+        .get("pagination")
+        .and_then(|value| value.as_object())
+        .ok_or(HistoricalFetchError::InvalidData)?;
+    let next_cursor = match pagination.get("cursor") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(value)) if value.is_empty() => None,
+        Some(serde_json::Value::String(value)) => Some(value.clone()),
+        _ => return Err(HistoricalFetchError::InvalidData),
+    };
+    let mut clips = Vec::with_capacity(raw.len());
+    for item in raw {
+        for field in ["id", "url", "broadcaster_id", "game_id", "created_at"] {
+            if item
+                .get(field)
+                .and_then(|value| value.as_str())
+                .is_none_or(str::is_empty)
+            {
+                return Err(HistoricalFetchError::InvalidData);
+            }
+        }
+        let clip = parse_clip(item, "").ok_or(HistoricalFetchError::InvalidData)?;
+        DateTime::parse_from_rfc3339(&clip.created_at)
+            .map_err(|_| HistoricalFetchError::InvalidData)?;
+        clips.push(clip);
+    }
+    Ok(HistoricalClipPage {
+        clips,
+        raw_count: raw.len(),
+        next_cursor,
+    })
 }
 
 fn parse_clip(v: &serde_json::Value, broadcaster_id: &str) -> Option<ClipRecord> {

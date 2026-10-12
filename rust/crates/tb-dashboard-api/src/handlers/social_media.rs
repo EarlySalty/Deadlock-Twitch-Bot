@@ -106,6 +106,9 @@ pub use vod_archive_management::{
     action_handler as vod_archive_action_handler, list_handler as vod_archive_list_handler,
 };
 
+#[path = "social_media_autopilot.rs"]
+pub mod autopilot;
+
 const MAX_PARAMETER_LAENGE: usize = 64;
 
 fn forbidden(message: &str) -> Response {
@@ -2415,7 +2418,7 @@ pub async fn admin_clips_handler(
         }
     };
 
-    let mut qb = QueryBuilder::<Postgres>::new(&format!(
+    let mut qb = QueryBuilder::<Postgres>::new(format!(
         "SELECT {CLIP_COLUMNS} FROM twitch_clips_social_media WHERE 1=1"
     ));
     push_clips_where(&mut qb, &auth, twitch_user_id, status.as_deref());

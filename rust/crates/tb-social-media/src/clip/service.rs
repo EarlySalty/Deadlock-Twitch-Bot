@@ -75,6 +75,11 @@ impl ClipFetchService {
         if user_id.is_empty() || !user_id.bytes().all(|byte| byte.is_ascii_digit()) {
             return error_result(login, "Ungültige Twitch-ID", started);
         }
+        match self.repo.pool_managed(user_id).await {
+            Ok(true) => return self.fetch_managed_recent(user_id, login, started).await,
+            Ok(false) => {}
+            Err(error) => return error_result(login, &error.to_string(), started),
+        }
         let clips = match self
             .helix
             .fetch_clips(user_id, login, self.clip_limit)
@@ -129,6 +134,56 @@ impl ClipFetchService {
             tracing::warn!("clip_fetch: History-Write für {login} fehlgeschlagen: {e}");
         }
 
+        result
+    }
+
+    async fn fetch_managed_recent(
+        &self,
+        owner: &str,
+        login: &str,
+        started: Instant,
+    ) -> StreamerFetchResult {
+        let now = chrono::Utc::now();
+        let start = now - chrono::Duration::days(14);
+        let mut cursor = None;
+        let mut clips = Vec::new();
+        while clips.len() < self.clip_limit as usize {
+            let page = match self
+                .helix
+                .fetch_historical_page(owner, start, now, cursor.as_deref())
+                .await
+            {
+                Ok(page) => page,
+                Err(error) => return error_result(login, &error.to_string(), started),
+            };
+            clips.extend(page.clips.into_iter().map(|mut clip| {
+                clip.streamer_login = login.to_owned();
+                clip
+            }));
+            if page.next_cursor.is_none() || page.next_cursor == cursor {
+                break;
+            }
+            cursor = page.next_cursor;
+        }
+        clips.truncate(self.clip_limit as usize);
+        let (clips_found, clips_new) = match self.repo.register_recent_pool(owner, &clips).await {
+            Ok(counts) => counts,
+            Err(error) => return error_result(login, &error.to_string(), started),
+        };
+        let result = StreamerFetchResult {
+            login: login.to_owned(),
+            clips_found,
+            clips_new,
+            duration_ms: started.elapsed().as_millis() as i64,
+            error: None,
+        };
+        if self.repo.record_history(&result).await.is_err() {
+            return error_result(
+                login,
+                "Der Abrufverlauf konnte nicht gespeichert werden",
+                started,
+            );
+        }
         result
     }
 
