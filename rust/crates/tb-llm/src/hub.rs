@@ -618,8 +618,8 @@ pub(crate) async fn call_endpoint(
                 error_code,
                 http_status,
                 latency_ms: started.elapsed().as_millis() as i64,
-                model: None,
                 social_accounting: None,
+                model: None,
             };
             ledger::journal_completion(&completion);
             let finish = tokio::spawn(ledger::finish(completion));

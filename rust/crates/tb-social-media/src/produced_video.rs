@@ -288,6 +288,32 @@ pub(crate) async fn record_ffmpeg_total(
     Ok(())
 }
 
+pub(crate) async fn claim_expired_ai_artifacts(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    id: i64,
+) -> Result<Option<String>, ProducedVideoError> {
+    let mut tx = pool.begin().await?;
+    autopilot_settings::lock_owner(&mut tx, twitch_user_id).await?;
+    let status = sqlx::query_scalar("UPDATE social_produced_videos SET status=CASE WHEN status IN ('review','rendering','failed') THEN 'expired' ELSE status END WHERE id=$1 AND twitch_user_id=$2 AND mode='ai' AND expires_at <= NOW() AND (metadata ? 'manual_ai_job_id' OR metadata ? 'production_ai_job_id') AND (metadata -> 'ai_artifacts_expired') IS DISTINCT FROM 'true'::jsonb RETURNING status")
+        .bind(id).bind(twitch_user_id).fetch_optional(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(status)
+}
+
+pub(crate) async fn finish_expired_ai_artifacts(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    id: i64,
+) -> Result<(), ProducedVideoError> {
+    let changed = sqlx::query("UPDATE social_produced_videos SET metadata=jsonb_set(metadata,'{ai_artifacts_expired}','true'::jsonb) WHERE id=$1 AND twitch_user_id=$2 AND mode='ai' AND expires_at <= NOW() AND (metadata ? 'manual_ai_job_id' OR metadata ? 'production_ai_job_id')")
+        .bind(id).bind(twitch_user_id).execute(pool).await?.rows_affected();
+    if changed != 1 {
+        return Err(ProducedVideoError::State);
+    }
+    Ok(())
+}
+
 pub async fn complete_render(
     pool: &PgPool,
     twitch_user_id: &str,

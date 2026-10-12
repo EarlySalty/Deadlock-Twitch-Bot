@@ -1,4 +1,3 @@
-pub mod brain;
 mod media;
 mod model;
 mod pipeline;
@@ -7,8 +6,6 @@ mod service;
 mod skills;
 mod source;
 mod stage_contract;
-pub mod store;
-pub mod stt;
 mod validation;
 
 pub use media::{
@@ -23,6 +20,10 @@ pub use validation::{
     build_subtitle_ass, rebase_subtitles, validate_plan, validate_plan_json, EditorError,
     ErrorCode, MappedSubtitle, SourceSubtitle, ValidatedPlan,
 };
+pub mod brain;
+pub mod store;
+pub mod stt;
+
 pub use pipeline::{produce, ProducedOutcome, ProductionContext};
 pub use runtime_config::{EditorRuntime, RuntimeConfig};
 pub use service::{

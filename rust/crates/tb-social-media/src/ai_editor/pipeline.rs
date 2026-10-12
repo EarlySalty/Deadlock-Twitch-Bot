@@ -875,9 +875,15 @@ pub(super) async fn cleanup_expired_artifacts(
         .map_err(|_| AiEditorError::Conflict)?;
     let rows: Vec<(i64, String, String)> = sqlx::query_as("SELECT id, twitch_user_id, status FROM social_produced_videos WHERE mode='ai' AND expires_at <= NOW() AND (metadata ? 'manual_ai_job_id' OR metadata ? 'production_ai_job_id') AND (metadata -> 'ai_artifacts_expired') IS DISTINCT FROM 'true'::jsonb ORDER BY expires_at, id LIMIT $1")
         .bind(runtime.limits.recovery_limit).fetch_all(pool).await.map_err(|_| AiEditorError::Storage)?;
-    for (id, owner, status) in rows {
+    for (id, owner, _) in rows {
+        let Some(status) = produced_video::claim_expired_ai_artifacts(pool, &owner, id)
+            .await
+            .map_err(|_| AiEditorError::Storage)?
+        else {
+            continue;
+        };
         let mut paths = vec![original_preview_path(runtime, id)];
-        if matches!(status.as_str(), "review" | "rendering" | "failed") {
+        if status == "expired" {
             paths.push(output_path(runtime, id));
         }
         for path in paths {
@@ -890,8 +896,9 @@ pub(super) async fn cleanup_expired_artifacts(
                 Err(_) => return Err(AiEditorError::Storage),
             }
         }
-        sqlx::query("UPDATE social_produced_videos SET metadata=jsonb_set(metadata,'{ai_artifacts_expired}','true'::jsonb), status=CASE WHEN status IN ('review','rendering','failed') THEN 'expired' ELSE status END WHERE id=$1 AND twitch_user_id=$2 AND mode='ai' AND expires_at <= NOW()")
-            .bind(id).bind(owner).execute(pool).await.map_err(|_| AiEditorError::Storage)?;
+        produced_video::finish_expired_ai_artifacts(pool, &owner, id)
+            .await
+            .map_err(|_| AiEditorError::Storage)?;
     }
     Ok(())
 }
