@@ -21,6 +21,11 @@ mod test_database;
 
 static MIGRATOR: Migrator = sqlx::migrate!("../../migrations");
 
+/// Migrationslauf nur nacheinander: eine bestehende Migration ändert
+/// clusterweite Rollen (`ALTER ROLE`), parallele Läufe kollidieren sonst mit
+/// „tuple concurrently updated“.
+static MIGRATION_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+
 /// Die Migration ist idempotent und lässt sich nach dem Seeden erneut
 /// anwenden; so prüft der Test den Backfill an Zeilen, die es zur
 /// Migrationszeit noch nicht gab.
@@ -74,7 +79,13 @@ async fn migrated_pool(db_name: &str) -> Option<PgPool> {
         .execute(&pool)
         .await
         .ok();
-    MIGRATOR.run(&pool).await.expect("run all migrations");
+    {
+        let _nacheinander = MIGRATION_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        MIGRATOR.run(&pool).await.expect("run all migrations");
+    }
     Some(pool)
 }
 
