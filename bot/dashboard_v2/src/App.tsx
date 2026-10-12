@@ -25,6 +25,8 @@ import { VerwaltungPage } from '@/pages/Verwaltung';
 import { OverlayBuilderPage } from '@/pages/OverlayBuilder';
 import Pricing from '@/pages/Pricing';
 import { DashboardShell } from '@/components/layout/DashboardShell';
+import { ServerAdminPage } from '@/pages/ServerAdmin';
+import { SERVER_ADMIN_ROUTE } from '@/api/serverAdmin';
 import { OnboardingProvider } from '@/components/onboarding/OnboardingContext';
 import { EinrichtungCard } from '@/components/onboarding/EinrichtungCard';
 import { FeedbackBox } from '@/components/feedback/FeedbackBox';
@@ -395,6 +397,9 @@ function PricingRoute() {
 
 export default function App() {
   const path = normalizePathname(window.location.pathname);
+  // Server-Admin-Dashboard (fremde Discord-Server): eigenes Panel ausserhalb
+  // von Onboarding, Partner-Profil, Assistent und Admin-Modus.
+  const isServerAdminRoute = path === SERVER_ADMIN_ROUTE;
   const isInternalHomeRoute = path === PREVIEW_HOME_ROUTE || path === '/twitch/onboarding';
   const isHelpRoute = path === '/twitch/hilfe';
   const isFeedbackRoute = path === '/twitch/feedback';
@@ -415,6 +420,7 @@ export default function App() {
     (isAnalyticsRoute && new URLSearchParams(window.location.search).get('view') === 'category');
 
   const zeigeAssistent =
+    !isServerAdminRoute &&
     !isPreviewModeEnabled() &&
     !hasDemoRuntimeConfig() &&
     !resolveEffectiveDemoMode({
@@ -428,6 +434,9 @@ export default function App() {
           Bundles, auch fuer die Fehlergrenze. */}
       <LanguageProvider>
         <ErrorBoundary>
+        {isServerAdminRoute ? (
+          <ServerAdminPage />
+        ) : (
         <OnboardingProvider>
           {isCategoryRoute ? (
             <DashboardShell activeRoute="category"><CategoryCollector /></DashboardShell>
@@ -467,6 +476,7 @@ export default function App() {
             <AnalyticsDashboard />
           )}
         </OnboardingProvider>
+        )}
         </ErrorBoundary>
         {zeigeAssistent && <DashboardAssistent imDokumentfluss={isUplinkRoute} />}
       </LanguageProvider>

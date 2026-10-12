@@ -30,6 +30,8 @@ pub mod partner_access;
 pub mod partner_gate;
 pub mod partner_login;
 pub mod security;
+pub mod server_admin_gate;
+pub mod server_admin_login;
 pub mod session;
 pub mod steam_openid;
 pub(crate) mod streamer_scope;
