@@ -318,9 +318,8 @@ async fn claims_are_global_recovery_keeps_mode_and_checkpoint() {
         &pool,
         "owner",
         &SchedulePatch {
-            enabled: Some(true),
             ai_editing_enabled: Some(true),
-            ..Default::default()
+            ..schedule()
         },
     )
     .await
@@ -354,6 +353,7 @@ async fn claims_are_global_recovery_keeps_mode_and_checkpoint() {
         &SchedulePatch {
             paused: Some(true),
             ai_editing_enabled: Some(false),
+            schedule_slots: Some(vec![]),
             ..Default::default()
         },
     )
@@ -394,16 +394,9 @@ async fn claims_are_global_recovery_keeps_mode_and_checkpoint() {
 #[tokio::test]
 async fn two_reviews_block_automatic_claims_but_not_manual_work() {
     let pool = pool().await;
-    save_schedule(
-        &pool,
-        "owner",
-        &SchedulePatch {
-            enabled: Some(true),
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("enabled");
+    save_schedule(&pool, "owner", &schedule())
+        .await
+        .expect("enabled weekly schedule");
     let clip_id = clip(&pool, "owner", "auto", utc("2025-01-01T00:00:00Z")).await;
     job(&pool, "owner", clip_id, None).await;
     for index in 0..2 {

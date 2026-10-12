@@ -323,6 +323,65 @@ async fn automatic_retry_and_recovery_reviews_stop_reselection_in_both_publish_m
 }
 
 #[tokio::test]
+async fn clearing_schedule_while_claim_waits_for_owner_prevents_first_start() {
+    let pool = pool().await;
+    save_schedule(&pool, "owner", &schedule())
+        .await
+        .expect("weekly schedule before candidate selection");
+    let id = clip(
+        &pool,
+        "owner",
+        "locked-candidate",
+        utc("2025-01-01T00:00:00Z"),
+    )
+    .await;
+    let queued = job(&pool, "owner", id, None).await;
+    let mut owner_tx = pool.begin().await.expect("schedule edit transaction");
+    autopilot_settings::lock_owner(&mut owner_tx, "owner")
+        .await
+        .expect("actual schedule owner lock");
+    let claim_pool = pool.clone();
+    let claim = tokio::spawn(async move { production_jobs::claim_next(&claim_pool).await });
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM pg_locks l
+                JOIN pg_stat_activity a ON a.pid = l.pid WHERE a.datname = current_database()
+                AND l.locktype = 'advisory' AND NOT l.granted)",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("real claim waiting behind schedule editor");
+            if waiting {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("candidate selected before locked recheck");
+    sqlx::query("UPDATE social_media_autopilot_settings SET schedule_slots = '[]'::jsonb WHERE twitch_user_id = 'owner'")
+        .execute(&mut *owner_tx)
+        .await
+        .expect("clear weekly slots under the real owner lock");
+    owner_tx.commit().await.expect("release changed schedule");
+    assert!(claim
+        .await
+        .expect("claim task")
+        .expect("locked recheck")
+        .is_none());
+    let unchanged = production_jobs::get(&pool, "owner", queued.id)
+        .await
+        .expect("queue after rejected claim")
+        .expect("preserved job");
+    assert_eq!(
+        serde_json::to_value(unchanged).expect("post-claim state"),
+        serde_json::to_value(queued).expect("pre-claim state")
+    );
+    cleanup(pool).await;
+}
+
+#[tokio::test]
 async fn completion_retry_and_recovery_lock_owner_before_the_job_row() {
     for transition in ["finish", "retry", "recover", "exhausted"] {
         let pool = pool().await;
