@@ -266,9 +266,9 @@ Migration `rust/migrations/20261012120000_multiserver_guilds_language.sql`
 | `language` | Sprache des Servers (`de`, `en`, …), Rückfall für Streamer ohne bekannte Kanalsprache |
 | `announce_channel_id`, `streamer_role_id`, `ping_role_id`, `alert_channel_id` | Kanäle und Rollen des Servers (für den deutschen Server füllt Paket G sie aus der Konfiguration, bis dahin `NULL`) |
 | `promo_invite_url` | Discord-Einladung, mit der der Server im Twitch-Chat seiner Streamer wirbt |
-| `auto_partner_default` | neue Streamer werden automatisch Partner des Servers (Standard an) |
-| `cross_server_raids` | Netzwerk-Schalter: Raids über Servergrenzen innerhalb derselben Sprache (Standard an) |
-| `ai_features` | KI-Funktionen mit Streamerbezug (Standard aus, deutscher Server an) |
+| `auto_partner_default` | neue Streamer werden automatisch Partner des Servers (Standard an; noch ohne Wirkung, ausgewertet erst beim Onboarding mit Paket G) |
+| `cross_server_raids` | Netzwerk-Schalter: Raids über Servergrenzen innerhalb derselben Sprache (Standard an). Partner, die er ausschließt, sind auch für den Kategorie-Ersatz gesperrt |
+| `ai_features` | KI-Funktionen mit Streamerbezug (Standard aus, deutscher Server an; noch ohne Wirkung, der zentrale KI-Schalter kommt mit Paket K) |
 | `installed_at`, `removed_at`, `status` | Lebenszyklus (`active` / `removed`) |
 
 Die Migration legt den deutschen Community-Server (`1289721245281292288`,

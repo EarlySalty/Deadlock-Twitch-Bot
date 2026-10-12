@@ -420,6 +420,7 @@ fn request(partners: Vec<OnlineCandidate>) -> AutoRaidRequest {
         partners,
         category_id: Some("cat-deadlock".to_string()),
         fallback_language: None,
+        network_excluded_ids: Vec::new(),
         offline_trigger_ts: Some(1000.0),
         reason: "auto_raid_on_offline".to_string(),
         respect_soft_raid_blacklist: true,
@@ -921,6 +922,30 @@ async fn kategorie_ersatz_nutzt_die_sprache_des_raiders() {
         h.fallback_requests.lock().unwrap().clone(),
         vec![("en".to_string(), 50)]
     );
+}
+
+#[tokio::test]
+async fn netzwerk_ausgeschlossener_partner_bleibt_auch_im_kategorie_ersatz_aus() {
+    let pool = pool_or_skip!("t6w_pipe_fallback_netzwerk");
+    seed_source_token(&pool, "100").await;
+    // Der Partner eines Servers ohne Netzwerk-Schalter streamt in der Kategorie.
+    let h = build(
+        &pool,
+        HashMap::new(),
+        vec![fairness("400", "geschlossen"), fairness("300", "offen")],
+    );
+
+    let mut req = request(Vec::new());
+    req.network_excluded_ids = vec!["400".to_string()];
+    let outcome = h.pipeline.run(&req).await;
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Started {
+            target_login: "offen".to_string(),
+            is_partner_raid: false,
+        }
+    );
+    assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["300"]);
 }
 
 #[tokio::test]

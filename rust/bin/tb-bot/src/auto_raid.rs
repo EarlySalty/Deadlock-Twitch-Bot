@@ -121,8 +121,9 @@ struct AssembledPartners {
     eligible: Vec<tb_raid::OnlineCandidate>,
     online_count: usize,
     filtered_out: usize,
-    /// Partner, die der Netzwerk-/Sprachfilter (Paket R) aussortiert hat.
-    network_filtered: usize,
+    /// Partner, die der Netzwerk-/Sprachfilter (Paket R) aussortiert hat;
+    /// sie bleiben auch für den Kategorie-Ersatz ausgeschlossen.
+    network_excluded_ids: Vec<String>,
     /// Sprache des Kategorie-Ersatzes (Sprachgruppe des Raiders).
     fallback_language: String,
 }
@@ -134,7 +135,7 @@ fn apply_network_scope(
     raider_live_language: Option<&str>,
     online: Vec<tb_raid::OnlineCandidate>,
     networks: Result<HashMap<String, tb_domain::network::StreamerNetwork>, sqlx::Error>,
-) -> (Vec<tb_raid::OnlineCandidate>, usize, String) {
+) -> (Vec<tb_raid::OnlineCandidate>, Vec<String>, String) {
     let mut networks = match networks {
         Ok(networks) => networks,
         Err(error) => {
@@ -143,11 +144,11 @@ fn apply_network_scope(
                 broadcaster_id,
                 "Raid: Server-Netzwerk nicht ladbar — Pool wie bisher, Ersatz de"
             );
-            return (online, 0, tb_raid::fallback_language(None));
+            return (online, Vec::new(), tb_raid::fallback_language(None));
         }
     };
     let Some(raider) = networks.remove(broadcaster_id.trim()) else {
-        return (online, 0, tb_raid::fallback_language(None));
+        return (online, Vec::new(), tb_raid::fallback_language(None));
     };
     let raider_language = raider.language_group(raider_live_language);
     let outcome = tb_raid::filter_candidates_by_network(
@@ -173,7 +174,11 @@ fn apply_network_scope(
     }
     (
         outcome.kept,
-        outcome.dropped.len(),
+        outcome
+            .dropped
+            .into_iter()
+            .map(|dropped| dropped.twitch_user_id)
+            .collect(),
         tb_raid::fallback_language(raider_language.as_deref()),
     )
 }
@@ -429,7 +434,7 @@ impl OfflineRaidHandler {
             online_partners = assembled.online_count,
             eligible_partners = assembled.eligible.len(),
             filtered_out = assembled.filtered_out,
-            netzwerk_gefiltert = assembled.network_filtered,
+            netzwerk_gefiltert = assembled.network_excluded_ids.len(),
             ersatz_sprache = %assembled.fallback_language,
             "Auto-Raid-Pipeline gestartet"
         );
@@ -444,6 +449,7 @@ impl OfflineRaidHandler {
             partners: eligible,
             category_id: self.resolve_category_id().await,
             fallback_language: Some(assembled.fallback_language),
+            network_excluded_ids: assembled.network_excluded_ids,
             offline_trigger_ts: Some(offline_trigger_ts),
             reason: "auto_raid_on_offline".to_string(),
             respect_soft_raid_blacklist: true,
@@ -556,7 +562,7 @@ impl OfflineRaidHandler {
             duration_sec = source.stream_duration_sec(now),
             online_partners = assembled.online_count,
             eligible_partners = assembled.eligible.len(),
-            netzwerk_gefiltert = assembled.network_filtered,
+            netzwerk_gefiltert = assembled.network_excluded_ids.len(),
             ersatz_sprache = %assembled.fallback_language,
             "Manual-Raid-Pipeline gestartet"
         );
@@ -568,6 +574,7 @@ impl OfflineRaidHandler {
             partners: assembled.eligible,
             category_id: self.resolve_category_id().await,
             fallback_language: Some(assembled.fallback_language),
+            network_excluded_ids: assembled.network_excluded_ids,
             offline_trigger_ts: None,
             reason: "manual_chat_command".to_string(),
             respect_soft_raid_blacklist: false,
@@ -633,7 +640,7 @@ impl OfflineRaidHandler {
         network_ids.push(broadcaster_id.trim().to_string());
         network_ids.extend(online.iter().map(|c| c.twitch_user_id.trim().to_string()));
         let networks = tb_db::network::load_networks(&self.network_pool, &network_ids).await;
-        let (online, network_filtered, fallback_language) =
+        let (online, network_excluded_ids, fallback_language) =
             apply_network_scope(broadcaster_id, raider_live_language, online, networks);
 
         // Deadlock-Eligibility je Kandidat (aktiv vor kürzlich) — Partition
@@ -675,7 +682,7 @@ impl OfflineRaidHandler {
             eligible,
             online_count,
             filtered_out,
-            network_filtered,
+            network_excluded_ids,
             fallback_language,
         })
     }
@@ -828,14 +835,14 @@ mod tests {
 
     #[test]
     fn netzwerkfehler_laesst_pool_und_ersatz_wie_bisher() {
-        let (kept, filtered, language) = apply_network_scope(
+        let (kept, excluded, language) = apply_network_scope(
             "1",
             Some("en"),
             vec![online("2", "en"), online("3", "de")],
             Err(sqlx::Error::PoolTimedOut),
         );
         assert_eq!(kept.len(), 2);
-        assert_eq!(filtered, 0);
+        assert!(excluded.is_empty());
         assert_eq!(language, "de");
     }
 
@@ -848,7 +855,7 @@ mod tests {
             ("2".to_string(), english_network()),
             ("3".to_string(), StreamerNetwork::community(&community)),
         ]);
-        let (kept, filtered, language) = apply_network_scope(
+        let (kept, excluded, language) = apply_network_scope(
             "1",
             None,
             vec![online("2", "en"), online("3", "de")],
@@ -860,7 +867,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["login_2"]
         );
-        assert_eq!(filtered, 1);
+        assert_eq!(excluded, vec!["3".to_string()]);
         assert_eq!(language, "en");
     }
 
@@ -873,14 +880,14 @@ mod tests {
             ("2".to_string(), StreamerNetwork::community(&community)),
             ("3".to_string(), StreamerNetwork::community(&community)),
         ]);
-        let (kept, filtered, language) = apply_network_scope(
+        let (kept, excluded, language) = apply_network_scope(
             "1",
             None,
             vec![online("2", "en"), online("3", "de")],
             Ok(networks),
         );
         assert_eq!(kept.len(), 2);
-        assert_eq!(filtered, 0);
+        assert!(excluded.is_empty());
         assert_eq!(language, "de");
     }
 

@@ -328,6 +328,11 @@ pub struct AutoRaidRequest {
     /// Sprache des Kategorie-Ersatzes (Sprachgruppe des Raiders, Paket R).
     /// `None` oder leer → bisheriger fester Wert `de`.
     pub fallback_language: Option<String>,
+    /// Partner, die der Netzwerk-/Sprachfilter ausgeschlossen hat (Paket R).
+    /// Sie bleiben auch im Kategorie-Ersatz und im Boost-Pfad ausgeschlossen,
+    /// sonst ginge ein Raid über diesen Umweg doch an einen Server mit
+    /// ausgeschaltetem Netzwerk-Schalter.
+    pub network_excluded_ids: Vec<String>,
     /// Unix-Zeitpunkt des Offline-Triggers (für Arrival-Latenz-Metriken).
     pub offline_trigger_ts: Option<f64>,
     /// History-Grund, z. B. `auto_raid_on_offline`.
@@ -517,6 +522,12 @@ impl AutoRaidPipeline {
         };
 
         let mut exclude_ids: HashSet<String> = [req.broadcaster_id.clone()].into();
+        exclude_ids.extend(
+            req.network_excluded_ids
+                .iter()
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty()),
+        );
         // Fallback-Streams werden lazy geholt und über Versuche gecacht
         // (Python `cached_de_streams`).
         let mut cached_fallback: Option<Vec<FairnessCandidate>> = None;

@@ -69,6 +69,23 @@ fn invite_code_of(url: &str) -> Option<String> {
         .then(|| code.to_string())
 }
 
+/// Vollständige Einladungscodes in `content`, auch mit `-` (Vanity-Links wie
+/// `discord.gg/deadlock-en`), ohne die Community-Einladung. Nur für den
+/// Abgleich mit den Einladungen des Heimat-Servers; die Erkennung selbst
+/// (`discord_invite_re`) bleibt unverändert.
+fn full_invite_codes(content: &str) -> Vec<String> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)discord\.gg/([A-Za-z0-9-]+)").expect("Einladungs-Regex ist konstant")
+    })
+    .captures_iter(content)
+    .filter_map(|caps| caps.get(1))
+    .map(|code| code.as_str().trim_end_matches('-'))
+    .filter(|code| !code.is_empty() && !code.eq_ignore_ascii_case(OWN_DISCORD_INVITE_CODE))
+    .map(str::to_string)
+    .collect()
+}
+
 /// `true`, wenn jeder Code in `codes` einer der eigenen Codes ist.
 fn all_codes_known(codes: &[String], own: &[String]) -> bool {
     !codes.is_empty()
@@ -180,17 +197,6 @@ impl SusInviteCheck {
             );
             return None;
         }
-        if self.only_home_server_invites(content, channel_login).await {
-            log_decision(
-                content,
-                channel_login,
-                &chatter_login,
-                "allow",
-                "own_server_invite",
-                "no_action",
-            );
-            return None;
-        }
         if chatter_login.is_empty() {
             log_decision(
                 content,
@@ -227,6 +233,21 @@ impl SusInviteCheck {
                 &chatter_login,
                 "allow",
                 "established_chatter",
+                "no_action",
+            );
+            return None;
+        }
+
+        // Eigene Server-Einladung im Chat eines anderen Servers (Paket R). Erst
+        // nach den günstigen Prüfungen, aber vor dem Cooldown, damit sie den
+        // Cooldown nicht verbraucht.
+        if self.only_home_server_invites(content, channel_login).await {
+            log_decision(
+                content,
+                channel_login,
+                &chatter_login,
+                "allow",
+                "own_server_invite",
                 "no_action",
             );
             return None;
@@ -286,7 +307,7 @@ impl SusInviteCheck {
                 tracing::debug!(%error, channel_login, "Sus-Invite: Streamer-Invite nicht lesbar");
             }
         }
-        all_codes_known(&foreign_invite_codes(content), &own)
+        all_codes_known(&full_invite_codes(content), &own)
     }
 
     /// Prüft ob ein Chatter als etabliert gilt.
@@ -453,14 +474,30 @@ mod tests {
     fn nur_bekannte_codes_gelten_als_eigene() {
         let own = vec!["English".to_string()];
         assert!(all_codes_known(
-            &foreign_invite_codes("discord.gg/english"),
+            &full_invite_codes("discord.gg/english"),
             &own
         ));
         assert!(!all_codes_known(
-            &foreign_invite_codes("discord.gg/english und discord.gg/fremd"),
+            &full_invite_codes("discord.gg/english und discord.gg/fremd"),
             &own
         ));
         assert!(!all_codes_known(&[], &own));
+        // Vanity-Links mit Bindestrich werden vollständig verglichen.
+        let vanity = vec!["deadlock-en".to_string()];
+        assert!(all_codes_known(
+            &full_invite_codes("discord.gg/Deadlock-EN"),
+            &vanity
+        ));
+        let kurz = vec!["deadlock".to_string()];
+        assert!(!all_codes_known(
+            &full_invite_codes("discord.gg/deadlock-giveaway"),
+            &kurz
+        ));
+        // Die Community-Einladung zählt nicht als fremder Code.
+        assert_eq!(
+            full_invite_codes("discord.gg/z5TfVHuQq2 discord.gg/abc-"),
+            vec!["abc".to_string()]
+        );
     }
 
     #[test]

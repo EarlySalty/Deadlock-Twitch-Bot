@@ -17,6 +17,7 @@ use crate::partner_roster::OnlineCandidate;
 /// Ein ausgeschiedener Kandidat samt Grund (für Logs).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkDrop {
+    pub twitch_user_id: String,
     pub twitch_login: String,
     pub reason: RaidBlock,
 }
@@ -56,6 +57,7 @@ pub fn filter_candidates_by_network(
                 outcome.kept.push(candidate);
             }
             Err(reason) => outcome.dropped.push(NetworkDrop {
+                twitch_user_id: candidate.twitch_user_id,
                 twitch_login: candidate.twitch_login,
                 reason,
             }),
@@ -186,10 +188,12 @@ mod tests {
             outcome.dropped,
             vec![
                 NetworkDrop {
+                    twitch_user_id: "2".to_string(),
                     twitch_login: "login_2".to_string(),
                     reason: RaidBlock::LanguageMismatch,
                 },
                 NetworkDrop {
+                    twitch_user_id: "3".to_string(),
                     twitch_login: "login_3".to_string(),
                     reason: RaidBlock::NetworkSwitchOff,
                 },
