@@ -6,6 +6,7 @@ import type {
   ReactNode,
 } from 'react';
 import { Camera, Layers, Maximize2, RotateCcw, Save } from 'lucide-react';
+import { useLanguage, useT } from '../../context/LanguageContext';
 import {
   ausrichten,
   hochkantAnfang,
@@ -94,6 +95,7 @@ function Ziehflaeche({
   aufAendern: (id: string, naechster: HochkantRahmen) => void;
   style?: CSSProperties;
 }) {
+  const t = useT();
   const flaeche = useRef<HTMLDivElement | null>(null);
   const zug = useRef<DragStand | null>(null);
 
@@ -191,7 +193,7 @@ function Ziehflaeche({
                 <button
                   key={ecke}
                   type="button"
-                  aria-label={`${ziehbar.ariaLabel} Ecke ${ecke}`}
+                  aria-label={t('{rahmen} Ecke {ecke}', { rahmen: ziehbar.ariaLabel, ecke })}
                   onPointerDown={(e) => beginn(e, ziehbar, ecke)}
                   className="absolute h-3.5 w-3.5 rounded"
                   style={{
@@ -256,10 +258,10 @@ function Fuellung({
   );
 }
 
-function datumText(iso: string): string {
+function datumText(iso: string, locale: string): string {
   const datum = new Date(iso);
   if (Number.isNaN(datum.getTime())) return iso;
-  return datum.toLocaleDateString('de-DE');
+  return datum.toLocaleDateString(locale);
 }
 
 export function UplinkHochkantEditor({
@@ -273,6 +275,7 @@ export function UplinkHochkantEditor({
   onSpeichern,
   onZuruecksetzen,
 }: UplinkHochkantEditorProps) {
+  const { t, locale } = useLanguage();
   const basisId = useId();
   const quelleEff = quelle ?? STANDARD_QUELLE;
   const anfang = useMemo(
@@ -330,7 +333,7 @@ export function UplinkHochkantEditor({
       id: 'gameplay',
       rahmen: entwurf.gameplay,
       farbe: 'gold',
-      ariaLabel: 'Gameplay-Rahmen',
+      ariaLabel: t('Gameplay-Rahmen'),
       verhaeltnis: ratios.gameplay,
       bezug: quelleEff,
     },
@@ -340,7 +343,7 @@ export function UplinkHochkantEditor({
       id: 'kamera',
       rahmen: entwurf.kamera,
       farbe: 'weiss',
-      ariaLabel: 'Kamera-Rahmen',
+      ariaLabel: t('Kamera-Rahmen'),
       verhaeltnis:
         entwurf.modus === 'gestapelt' && ratios.kamera != null
           ? ratios.kamera
@@ -411,7 +414,7 @@ export function UplinkHochkantEditor({
             id: 'box',
             rahmen: entwurf.kameraBox,
             farbe: 'weiss',
-            ariaLabel: 'Kamerafenster',
+            ariaLabel: t('Kamerafenster'),
             verhaeltnis: kameraVerhaeltnis(entwurf.kamera, quelleEff),
             bezug: { breite: ziel.breite, hoehe: ziel.hoehe },
             inhalt: <Fuellung rahmen={entwurf.kamera} quelle={quelleEff} standbildUrl={standbildUrl} />,
@@ -420,15 +423,16 @@ export function UplinkHochkantEditor({
       : [];
 
   const modusOptionen: { modus: HochkantModus; titel: string; text: string; Icon: typeof Camera }[] = [
-    { modus: 'nur_gameplay', titel: 'Nur Gameplay', text: 'Nur dein Spielbild füllt das Hochkantbild.', Icon: Maximize2 },
-    { modus: 'gestapelt', titel: 'Gestapelt', text: 'Spielbild und Kamera liegen übereinander.', Icon: Layers },
-    { modus: 'bild_im_bild', titel: 'Bild im Bild', text: 'Kamera als Fenster über dem Spielbild.', Icon: Camera },
+    { modus: 'nur_gameplay', titel: t('Nur Gameplay'), text: t('Nur dein Spielbild füllt das Hochkantbild.'), Icon: Maximize2 },
+    { modus: 'gestapelt', titel: t('Gestapelt'), text: t('Spielbild und Kamera liegen übereinander.'), Icon: Layers },
+    { modus: 'bild_im_bild', titel: t('Bild im Bild'), text: t('Kamera als Fenster über dem Spielbild.'), Icon: Camera },
   ];
 
   const standZeile = (() => {
-    if (!stand || stand.revision === 0) return 'Noch kein Stand gespeichert.';
-    const wann = stand.gespeichertAm ? ` am ${datumText(stand.gespeichertAm)}` : '';
-    return `Gespeichert als Stand ${stand.revision}${wann}.`;
+    if (!stand || stand.revision === 0) return t('Noch kein Stand gespeichert.');
+    return stand.gespeichertAm
+      ? t('Gespeichert als Stand {revision} am {datum}.', { revision: stand.revision, datum: datumText(stand.gespeichertAm, locale) })
+      : t('Gespeichert als Stand {revision}.', { revision: stand.revision });
   })();
 
   return (
@@ -436,7 +440,7 @@ export function UplinkHochkantEditor({
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="space-y-2 rounded-xl border border-border/60 bg-background/40 p-3">
           <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
-            Quelle mit Ausschnitt
+            {t('Quelle mit Ausschnitt')}
           </span>
           <Ziehflaeche
             aspect={quelleEff.breite / quelleEff.hoehe}
@@ -457,14 +461,14 @@ export function UplinkHochkantEditor({
           />
           {quelle ? null : (
             <p className="text-xs text-text-secondary">
-              Vorschau nimmt 1920×1080 an, bis dein Stream gemessen ist.
+              {t('Vorschau nimmt 1920×1080 an, bis dein Stream gemessen ist.')}
             </p>
           )}
         </div>
 
         <div className="space-y-2 rounded-xl border border-border/60 bg-background/40 p-3">
           <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
-            Hochkant-Vorschau
+            {t('Hochkant-Vorschau')}
           </span>
           <div className="mx-auto" style={{ maxWidth: `${(ziel.breite / ziel.hoehe) * 60}vh` }}>
             <Ziehflaeche
@@ -478,19 +482,27 @@ export function UplinkHochkantEditor({
           </div>
           <p className="text-[11px] text-text-secondary">
             {pixel.kamera
-              ? `Gameplay ${pixel.gameplay.w}×${pixel.gameplay.h} Pixel, Kamera ${pixel.kamera.w}×${pixel.kamera.h} Pixel`
-              : `Gameplay ${pixel.gameplay.w}×${pixel.gameplay.h} Pixel`}
+              ? t('Gameplay {gameplayBreite}×{gameplayHoehe} Pixel, Kamera {kameraBreite}×{kameraHoehe} Pixel', {
+                  gameplayBreite: pixel.gameplay.w,
+                  gameplayHoehe: pixel.gameplay.h,
+                  kameraBreite: pixel.kamera.w,
+                  kameraHoehe: pixel.kamera.h,
+                })
+              : t('Gameplay {gameplayBreite}×{gameplayHoehe} Pixel', {
+                  gameplayBreite: pixel.gameplay.w,
+                  gameplayHoehe: pixel.gameplay.h,
+                })}
           </p>
           {standbildHinweis ? <p className="text-[11px] text-text-secondary">{standbildHinweis}</p> : null}
           <p className="text-[11px] text-text-secondary">
-            Die Vorschau ist eine Bedienhilfe, das fertige Bild rechnet Uplink beim Streamstart.
+            {t('Die Vorschau ist eine Bedienhilfe, das fertige Bild rechnet Uplink beim Streamstart.')}
           </p>
         </div>
       </div>
 
       <fieldset className="space-y-2 rounded-xl border border-border/60 bg-background/40 p-3">
         <legend className="px-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
-          Aufteilung
+          {t('Aufteilung')}
         </legend>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           {modusOptionen.map(({ modus, titel, text, Icon }) => {
@@ -523,13 +535,13 @@ export function UplinkHochkantEditor({
 
         <label className="flex items-center gap-2 text-sm text-white">
           <input type="checkbox" checked={kameraAn} onChange={(e) => setzeKamera(e.target.checked)} />
-          Kamera anzeigen
+          {t('Kamera anzeigen')}
         </label>
 
         {entwurf.modus === 'gestapelt' && entwurf.kameraBand ? (
           <div className="space-y-2 rounded-xl border border-border/60 bg-background/40 p-3">
             <label className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
-              Höhe des Kamerabands: {Math.round(entwurf.kameraBand.hoehe * 100)} Prozent
+              {t('Höhe des Kamerabands: {prozent} Prozent', { prozent: Math.round(entwurf.kameraBand.hoehe * 100) })}
               <input
                 type="range"
                 min={10}
@@ -539,12 +551,12 @@ export function UplinkHochkantEditor({
                 className="mt-1 w-full"
               />
             </label>
-            <p className="text-[11px] text-text-secondary">Die Kamera sitzt unten, das Spielbild oben.</p>
+            <p className="text-[11px] text-text-secondary">{t('Die Kamera sitzt unten, das Spielbild oben.')}</p>
           </div>
         ) : null}
 
         <p className="text-[11px] text-text-secondary">
-          Seitenverhältnis wird automatisch gehalten, damit keine schwarzen Balken entstehen.
+          {t('Seitenverhältnis wird automatisch gehalten, damit keine schwarzen Balken entstehen.')}
         </p>
       </fieldset>
 
@@ -552,7 +564,7 @@ export function UplinkHochkantEditor({
         <p className="text-xs text-text-secondary">{standZeile}</p>
         {stand && stand.aktiveRevision != null ? (
           <p className="text-xs text-text-secondary">
-            Im laufenden Stream aktiv: Stand {stand.aktiveRevision}. Ein neuer Stand gilt ab dem nächsten Stream.
+            {t('Im laufenden Stream aktiv: Stand {revision}. Ein neuer Stand gilt ab dem nächsten Stream.', { revision: stand.aktiveRevision })}
           </p>
         ) : null}
       </div>
@@ -577,7 +589,7 @@ export function UplinkHochkantEditor({
           className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-[#0D0806] disabled:opacity-50"
         >
           <Save size={15} aria-hidden="true" />
-          Als neuen Stand speichern
+          {t('Als neuen Stand speichern')}
         </button>
         <button
           type="button"
@@ -586,7 +598,7 @@ export function UplinkHochkantEditor({
           className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
         >
           <RotateCcw size={15} aria-hidden="true" />
-          Zurücksetzen
+          {t('Zurücksetzen')}
         </button>
       </div>
     </div>

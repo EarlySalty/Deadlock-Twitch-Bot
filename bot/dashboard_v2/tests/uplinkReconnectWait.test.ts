@@ -10,7 +10,7 @@ const {
   reconnectWaitEingabe,
   reconnectWaitPayload,
   saveUplinkReconnectWait,
-  UPLINK_RECONNECT_WAIT_TEXT,
+  uplinkReconnectWaitText,
 } = await import('../src/api/uplink');
 globalState.window = vorherigesFenster;
 
@@ -24,8 +24,8 @@ test('Wartezeit ist eine gespeicherte Frist und wird nicht lokal geklemmt', () =
   assert.equal(reconnectWaitPayload('30.5'), null);
   assert.equal(reconnectWaitPayload('-1'), null);
   assert.equal(reconnectWaitPayload(''), null);
-  assert.match(UPLINK_RECONNECT_WAIT_TEXT, /Gespeicherte Frist/);
-  assert.match(UPLINK_RECONNECT_WAIT_TEXT, /Verbindungsende allein beweist nicht/);
+  assert.match(uplinkReconnectWaitText(), /Gespeicherte Frist/);
+  assert.match(uplinkReconnectWaitText(), /Verbindungsende allein beweist nicht/);
 });
 
 test('die Wartezeit wird mit dem bestehenden Proxy gespeichert', async () => {
