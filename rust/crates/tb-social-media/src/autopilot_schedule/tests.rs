@@ -32,6 +32,19 @@ async fn pool() -> PgPool {
         .connect(&dsn)
         .await
         .expect("test database");
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {schema}")))
+        .execute(&admin)
+        .await
+        .expect("owned advisory-lock namespace");
+    admin.close().await;
+    let options = PgConnectOptions::from_str(&dsn)
+        .expect("test DSN")
+        .database(&schema);
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(options.clone())
+        .await
+        .expect("owned database");
     sqlx::query(crate::test_sql::create_schema(&schema, false))
         .execute(&admin)
         .await
@@ -39,11 +52,7 @@ async fn pool() -> PgPool {
     admin.close().await;
     let pool = PgPoolOptions::new()
         .max_connections(8)
-        .connect_with(
-            PgConnectOptions::from_str(&dsn)
-                .expect("test DSN")
-                .options([("search_path", schema.as_str())]),
-        )
+        .connect_with(options.options([("search_path", schema.as_str())]))
         .await
         .expect("test pool");
     sqlx::raw_sql("CREATE TABLE twitch_streamers (twitch_user_id TEXT PRIMARY KEY);
@@ -76,15 +85,23 @@ async fn pool() -> PgPool {
 }
 
 async fn cleanup(pool: PgPool) {
-    let schema: String = sqlx::query_scalar("SELECT current_schema()")
+    let database: String = sqlx::query_scalar("SELECT current_database()")
         .fetch_one(&pool)
         .await
-        .expect("owned schema name");
-    sqlx::query(crate::test_sql::drop_schema(&schema, true))
-        .execute(&pool)
-        .await
-        .expect("drop owned schema");
+        .expect("owned database name");
+    assert!(database.starts_with(&format!("t_sm_b_{}_", std::process::id())));
     pool.close().await;
+    let dsn = crate::test_support::test_dsn().expect("isolated test database");
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&dsn)
+        .await
+        .expect("isolated admin");
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {database}")))
+        .execute(&admin)
+        .await
+        .expect("drop owned database");
+    admin.close().await;
 }
 
 fn utc(raw: &str) -> DateTime<Utc> {
