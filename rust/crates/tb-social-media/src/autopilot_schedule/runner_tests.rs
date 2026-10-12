@@ -102,9 +102,9 @@ async fn autopilot_runner_lease_precedes_claim_and_unavailable_ai_has_no_static_
     cleanup(pool).await;
 }
 
-#[tokio::test]
-async fn autopilot_runner_static_local_media_and_restart_preserve_immutable_version() {
-    let pool = pool().await;
+async fn real_static_fixture(
+    pool: &PgPool,
+) -> (tempfile::TempDir, WorkerConfig, std::path::PathBuf, i64) {
     sqlx::raw_sql("INSERT INTO twitch_streamers VALUES ('42');
         ALTER TABLE twitch_clips_social_media ADD COLUMN custom_title TEXT;
         ALTER TABLE twitch_clips_social_media ADD COLUMN discarded_at TIMESTAMPTZ;
@@ -112,7 +112,7 @@ async fn autopilot_runner_static_local_media_and_restart_preserve_immutable_vers
         ALTER TABLE twitch_clips_social_media ADD COLUMN hashtags TEXT DEFAULT '[]';
         ALTER TABLE twitch_clips_social_media ADD COLUMN layout_override_json JSONB;
         CREATE TABLE social_media_streamer_layout (twitch_user_id TEXT PRIMARY KEY, layout_json JSONB, cam_enabled BOOLEAN, mode TEXT)")
-        .execute(&pool).await.expect("static rendering prerequisites");
+        .execute(pool).await.expect("static rendering prerequisites");
     let root = tempfile::tempdir().expect("owned media root");
     let config = configuration(root.path());
     tokio::fs::create_dir_all(&config.source_root)
@@ -151,12 +151,19 @@ async fn autopilot_runner_static_local_media_and_restart_preserve_immutable_vers
         .await
         .expect("existing real-media test pattern");
     assert!(status.success());
+    let clip_id = clip(pool, "42", "static-local", utc("2025-01-01T00:00:00Z")).await;
+    sqlx::query("UPDATE twitch_clips_social_media SET local_file_path=$2, custom_description='Lokaler Test' WHERE id=$1")
+        .bind(clip_id).bind(source.to_string_lossy().as_ref()).execute(pool).await.expect("local source only");
+    (root, config, source, clip_id)
+}
+
+#[tokio::test]
+async fn autopilot_runner_static_local_media_and_restart_preserve_immutable_version() {
+    let pool = pool().await;
+    let (root, config, source, clip_id) = real_static_fixture(&pool).await;
     let original = tokio::fs::read(&source)
         .await
         .expect("synthetic original bytes");
-    let clip_id = clip(&pool, "42", "static-local", utc("2025-01-01T00:00:00Z")).await;
-    sqlx::query("UPDATE twitch_clips_social_media SET local_file_path=$2, custom_description='Lokaler Test' WHERE id=$1")
-        .bind(clip_id).bind(source.to_string_lossy().as_ref()).execute(&pool).await.expect("local source only");
     let queued = job(&pool, "42", clip_id, Some(ProductionMode::Static)).await;
     let runner = worker(&pool, root.path(), VideoProcessor::default());
     assert!(runner.run_once().await.expect("concrete static dispatch"));
@@ -270,6 +277,494 @@ async fn autopilot_runner_static_local_media_and_restart_preserve_immutable_vers
             .await
             .expect("original version remains immutable"),
         rendered
+    );
+    cleanup(pool).await;
+}
+
+async fn automatic_schedule(
+    pool: &PgPool,
+    owner: &str,
+    ai: bool,
+    full_auto: bool,
+) -> chrono::DateTime<chrono::Utc> {
+    use chrono::Datelike;
+    let slot: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT date_trunc('minute', clock_timestamp()) + INTERVAL '5 minutes'")
+            .fetch_one(pool)
+            .await
+            .expect("actual future database slot");
+    super::save_schedule(
+        pool,
+        owner,
+        &super::SchedulePatch {
+            enabled: Some(true),
+            ai_editing_enabled: Some(ai),
+            timezone: Some("UTC".into()),
+            schedule_slots: Some(vec![crate::autopilot_settings::ScheduleSlot {
+                weekday: slot.weekday().number_from_monday() as u8,
+                local_time: slot.format("%H:%M").to_string(),
+            }]),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("automatic schedule");
+    let mut settings = crate::autopilot_settings::load(pool, owner)
+        .await
+        .expect("actual settings");
+    settings.publish_mode = if full_auto {
+        crate::autopilot_settings::PublishMode::FullAuto
+    } else {
+        crate::autopilot_settings::PublishMode::Review
+    };
+    crate::autopilot_settings::save(pool, owner, &settings)
+        .await
+        .expect("publication policy");
+    slot
+}
+
+async fn inject_job_database_failure(pool: &PgPool, stage: &str, skip: i64, failures: i64) {
+    sqlx::raw_sql("CREATE SEQUENCE job_database_fault;
+        CREATE FUNCTION fail_job_write() RETURNS trigger LANGUAGE plpgsql AS $$
+        DECLARE invocation BIGINT;
+        BEGIN
+            IF NEW.stage = TG_ARGV[0] AND NEW.status IN ('running', 'completed') THEN
+                invocation := nextval('job_database_fault');
+                IF invocation > TG_ARGV[1]::bigint AND invocation <= TG_ARGV[1]::bigint + TG_ARGV[2]::bigint THEN
+                    RAISE EXCEPTION 'isolated transient production write failure' USING ERRCODE = '40001';
+                END IF;
+            END IF;
+            RETURN NEW;
+        END;
+        $$;")
+        .execute(pool).await.expect("real PostgreSQL transient fault");
+    assert!(matches!(stage, "rendering" | "rendered" | "completed"));
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "CREATE TRIGGER isolated_job_database_fault BEFORE UPDATE ON social_production_jobs
+        FOR EACH ROW EXECUTE FUNCTION fail_job_write('{stage}', '{skip}', '{failures}')"
+    )))
+    .execute(pool)
+    .await
+    .expect("owned database fault trigger");
+}
+
+async fn retry_now(pool: &PgPool, id: i64) {
+    sqlx::query("UPDATE social_production_jobs SET metadata = metadata - 'retry_after' WHERE id = $1 AND status = 'queued'")
+        .bind(id).execute(pool).await.expect("advance synthetic retry eligibility without sleeping");
+}
+
+#[tokio::test]
+async fn autopilot_runner_repeated_resource_holds_do_not_drain_the_pool() {
+    for full_auto in [false, true] {
+        for ai in [false, true] {
+            let pool = pool().await;
+            sqlx::raw_sql("INSERT INTO twitch_streamers VALUES ('42'); ALTER TABLE twitch_clips_social_media ADD COLUMN discarded_at TIMESTAMPTZ")
+                .execute(&pool).await.expect("source prerequisites");
+            let root = tempfile::tempdir().expect("owned media root");
+            let config = configuration(root.path());
+            tokio::fs::create_dir_all(&config.source_root)
+                .await
+                .expect("owned sources");
+            let invalid = config.source_root.join("invalid-local.mp4");
+            tokio::fs::write(&invalid, b"synthetic invalid media")
+                .await
+                .expect("invalid local media, not a downloader failure");
+            automatic_schedule(&pool, "42", ai, full_auto).await;
+            crate::clip_pool::save_preferences(
+                &pool,
+                "42",
+                &crate::clip_pool::PoolPreferences {
+                    clip_date_filter: crate::autopilot_settings::ClipDateFilter::Year {
+                        year: 2025,
+                    },
+                    clip_sort: crate::autopilot_settings::ClipSort::OldestFirst,
+                    timezone: "UTC".into(),
+                },
+            )
+            .await
+            .expect("actual pool window");
+            let mut clips = Vec::new();
+            for index in 0..8 {
+                let id = clip(
+                    &pool,
+                    "42",
+                    &format!("resource-{index}"),
+                    utc("2025-01-01T00:00:00Z") + chrono::Duration::days(index),
+                )
+                .await;
+                sqlx::query(
+                    "UPDATE twitch_clips_social_media SET local_file_path = $2 WHERE id = $1",
+                )
+                .bind(id)
+                .bind(invalid.to_string_lossy().as_ref())
+                .execute(&pool)
+                .await
+                .expect("authorized local invalid source");
+                clips.push(id);
+            }
+            let runner = worker(&pool, root.path(), VideoProcessor::default());
+            assert!(runner
+                .run_once()
+                .await
+                .expect("actual unavailable/resource dispatch"));
+            for _ in 0..8 {
+                assert!(!runner
+                    .run_once()
+                    .await
+                    .expect("backpressure, not repeated clip consumption"));
+            }
+            let state = super::snapshot(&pool, "42")
+                .await
+                .expect("actual queue snapshot");
+            assert_eq!(state.jobs.len(), 1);
+            assert_eq!(state.jobs[0].status, "review");
+            assert_eq!(state.jobs[0].attempts, 1);
+            assert_eq!(state.review_count, 1);
+            assert_eq!(
+                state.production_hold,
+                Some(super::ProductionHold::ReviewBacklog)
+            );
+            assert_eq!(
+                state.jobs[0].review_reasons,
+                vec![if ai {
+                    "ai_editor_unavailable"
+                } else {
+                    "static_production_failed"
+                }]
+            );
+            let selected: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM social_clip_pool WHERE selected_at IS NOT NULL",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("bounded pool consumption");
+            assert_eq!(selected, 1);
+            assert!(produced_video::list(&pool, "42", 50)
+                .await
+                .expect("no fallback versions")
+                .is_empty());
+            super::save_schedule(
+                &pool,
+                "42",
+                &super::SchedulePatch {
+                    enabled: Some(false),
+                    paused: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("automatic controls independent of manual AI");
+            let manual = job(&pool, "42", clips[1], Some(ProductionMode::Ai)).await;
+            assert!(runner
+                .run_once()
+                .await
+                .expect("manual AI remains independently dispatchable"));
+            let manual = production_jobs::get(&pool, "42", manual.id)
+                .await
+                .expect("manual result")
+                .expect("owned manual result");
+            assert_eq!(manual.mode, Some(ProductionMode::Ai));
+            assert_eq!(manual.review_reasons, json!(["ai_editor_unavailable"]));
+            let uploads: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue")
+                .fetch_one(&pool)
+                .await
+                .expect("no external publication");
+            assert_eq!(uploads, 0);
+            cleanup(pool).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn autopilot_runner_transient_progress_and_finish_failures_reuse_the_version() {
+    for stage in ["rendering", "rendered", "completed", "existing_completed"] {
+        let pool = pool().await;
+        let (root, config, source, clip_id) = real_static_fixture(&pool).await;
+        let original = tokio::fs::read(&source).await.expect("original bytes");
+        let slot = automatic_schedule(&pool, "42", false, true).await;
+        let queued = production_jobs::insert(
+            &pool,
+            &production_jobs::NewProductionJob {
+                twitch_user_id: "42".into(),
+                clip_id,
+                source: production_jobs::JobSource::Autopilot,
+                requested_mode: None,
+                scheduled_at: Some(slot),
+                max_attempts: 3,
+            },
+        )
+        .await
+        .expect("scheduled automatic static job");
+        let existing = stage == "existing_completed";
+        inject_job_database_failure(
+            &pool,
+            if existing { "completed" } else { stage },
+            i64::from(existing),
+            1,
+        )
+        .await;
+        let runner = worker(&pool, root.path(), VideoProcessor::default());
+        assert!(runner.run_once().await.expect("actual first attempt"));
+        let expected = config
+            .output_root
+            .canonicalize()
+            .expect("output root")
+            .join("42")
+            .join(format!("production-{}", queued.id))
+            .join("version-1.mp4");
+        let mut previous_bytes = None;
+        if existing {
+            previous_bytes = Some(
+                tokio::fs::read(&expected)
+                    .await
+                    .expect("completed immutable output"),
+            );
+            sqlx::query("UPDATE social_production_jobs SET status = 'running', stage = 'rendered', finished_at = NULL WHERE id = $1")
+                .bind(queued.id).execute(&pool).await.expect("restart before final bookkeeping");
+            assert!(runner
+                .run_once()
+                .await
+                .expect("existing-output completion fault"));
+        }
+        let failed_attempt = production_jobs::get(&pool, "42", queued.id)
+            .await
+            .expect("job after fault")
+            .expect("owned job");
+        assert_eq!(failed_attempt.status, "queued", "{stage}");
+        assert_eq!(failed_attempt.attempts, if existing { 2 } else { 1 });
+        assert_eq!(
+            failed_attempt.metadata["last_failure"],
+            "static_production_failed"
+        );
+        assert!(failed_attempt.metadata["retry_after"].is_string());
+        assert!(!runner.run_once().await.expect("retry backoff is respected"));
+        let videos = produced_video::list(&pool, "42", 50)
+            .await
+            .expect("checkpoint version");
+        assert_eq!(videos.len(), 1);
+        assert_eq!(videos[0].version_no, 1);
+        assert_eq!(videos[0].scheduled_at, Some(slot));
+        assert_eq!(
+            videos[0].status,
+            if stage.starts_with("render") {
+                "rendering"
+            } else {
+                "review"
+            }
+        );
+        let saved_file = if stage == "rendered" {
+            Some(expected.with_extension("rendering.mp4"))
+        } else if stage == "rendering" {
+            None
+        } else {
+            Some(expected.clone())
+        };
+        if let Some(file) = &saved_file {
+            previous_bytes = Some(tokio::fs::read(file).await.expect("valid checkpoint bytes"));
+        }
+        retry_now(&pool, queued.id).await;
+        let restart = if stage == "rendering" {
+            worker(&pool, root.path(), VideoProcessor::default())
+        } else {
+            worker(
+                &pool,
+                root.path(),
+                VideoProcessor::new("unavailable-ffmpeg", "unavailable-ffprobe"),
+            )
+        };
+        assert!(restart
+            .run_once()
+            .await
+            .expect("real retry or immutable completion recovery"));
+        let done = production_jobs::get(&pool, "42", queued.id)
+            .await
+            .expect("finished retry")
+            .expect("owned job");
+        assert_eq!(done.status, "completed");
+        assert_eq!(done.attempts, if existing { 3 } else { 2 });
+        assert_eq!(done.mode, Some(ProductionMode::Static));
+        assert_eq!(done.started_at, failed_attempt.started_at);
+        let finished = produced_video::list(&pool, "42", 50)
+            .await
+            .expect("final immutable version");
+        assert_eq!(finished.len(), 1);
+        assert_eq!(finished[0].id, videos[0].id);
+        assert_eq!(finished[0].file_path.as_deref(), expected.to_str());
+        assert_eq!(finished[0].scheduled_at, Some(slot));
+        assert!(!finished[0].needs_review);
+        if let Some(bytes) = previous_bytes {
+            assert_eq!(
+                tokio::fs::read(&expected)
+                    .await
+                    .expect("unchanged output bytes"),
+                bytes
+            );
+        }
+        assert_eq!(
+            tokio::fs::read(&source).await.expect("unchanged source"),
+            original
+        );
+        let fault_calls: i64 = sqlx::query_scalar("SELECT last_value FROM job_database_fault")
+            .fetch_one(&pool)
+            .await
+            .expect("real fault executed");
+        assert!(fault_calls >= 2);
+        assert!(!super::has_automatic_review_on(
+            &mut pool.acquire().await.expect("count connection"),
+            "42"
+        )
+        .await
+        .expect("Full Auto is not blocked by completed output"));
+        let uploads: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue")
+            .fetch_one(&pool)
+            .await
+            .expect("no publication");
+        assert_eq!(uploads, 0);
+        cleanup(pool).await;
+    }
+}
+
+#[tokio::test]
+async fn autopilot_runner_persistent_database_failures_stop_at_max_attempts() {
+    for stage in ["rendering", "rendered", "completed"] {
+        let pool = pool().await;
+        let (root, config, _, clip_id) = real_static_fixture(&pool).await;
+        let queued = production_jobs::insert(
+            &pool,
+            &production_jobs::NewProductionJob {
+                twitch_user_id: "42".into(),
+                clip_id,
+                source: production_jobs::JobSource::Manual,
+                requested_mode: Some(ProductionMode::Static),
+                scheduled_at: None,
+                max_attempts: 2,
+            },
+        )
+        .await
+        .expect("bounded manual job");
+        inject_job_database_failure(&pool, stage, 0, 10).await;
+        let runner = worker(&pool, root.path(), VideoProcessor::default());
+        assert!(runner.run_once().await.expect("first fault"));
+        let videos = produced_video::list(&pool, "42", 50)
+            .await
+            .expect("checkpoint version");
+        assert_eq!(videos.len(), 1);
+        assert_ne!(videos[0].status, "failed");
+        let expected = config
+            .output_root
+            .canonicalize()
+            .expect("root")
+            .join("42")
+            .join(format!("production-{}", queued.id))
+            .join("version-1.mp4");
+        let file = if stage == "rendered" {
+            expected.with_extension("rendering.mp4")
+        } else {
+            expected.clone()
+        };
+        let bytes = if stage == "rendering" {
+            None
+        } else {
+            Some(
+                tokio::fs::read(&file)
+                    .await
+                    .expect("valid rendering checkpoint"),
+            )
+        };
+        retry_now(&pool, queued.id).await;
+        let restart = worker(
+            &pool,
+            root.path(),
+            VideoProcessor::new("unavailable-ffmpeg", "unavailable-ffprobe"),
+        );
+        assert!(restart.run_once().await.expect("last permitted attempt"));
+        let held = production_jobs::get(&pool, "42", queued.id)
+            .await
+            .expect("bounded result")
+            .expect("owned job");
+        assert_eq!(held.status, "review");
+        assert_eq!(held.attempts, 2);
+        assert_eq!(held.review_reasons, json!(["attempts_exhausted"]));
+        let finished = produced_video::list(&pool, "42", 50)
+            .await
+            .expect("retained version");
+        assert_eq!(finished.len(), 1);
+        assert_eq!(finished[0].id, videos[0].id);
+        assert_eq!(
+            finished[0].status,
+            if stage == "completed" {
+                "review"
+            } else {
+                "failed"
+            }
+        );
+        if let Some(bytes) = bytes {
+            assert_eq!(
+                tokio::fs::read(&file).await.expect("unchanged valid bytes"),
+                bytes
+            );
+        }
+        assert!(!restart
+            .run_once()
+            .await
+            .expect("no work beyond the maximum"));
+        let unchanged = production_jobs::get(&pool, "42", queued.id)
+            .await
+            .expect("stable terminal result")
+            .expect("job");
+        assert_eq!(unchanged.attempts, 2);
+        cleanup(pool).await;
+    }
+}
+
+#[tokio::test]
+async fn autopilot_runner_recovers_when_the_retry_write_also_fails_transiently() {
+    let pool = pool().await;
+    let (root, _, _, clip_id) = real_static_fixture(&pool).await;
+    let queued = job(&pool, "42", clip_id, Some(ProductionMode::Static)).await;
+    inject_job_database_failure(&pool, "rendering", 0, 1).await;
+    sqlx::raw_sql("CREATE SEQUENCE requeue_database_fault;
+        CREATE FUNCTION fail_first_requeue() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            IF NEW.status = 'queued' AND nextval('requeue_database_fault') = 1 THEN
+                RAISE EXCEPTION 'isolated transient requeue failure' USING ERRCODE = '40001';
+            END IF;
+            RETURN NEW;
+        END;
+        $$;
+        CREATE TRIGGER isolated_requeue_database_fault BEFORE UPDATE OF status ON social_production_jobs
+        FOR EACH ROW EXECUTE FUNCTION fail_first_requeue()")
+        .execute(&pool).await.expect("real retry-update failure");
+    let runner = worker(&pool, root.path(), VideoProcessor::default());
+    assert!(runner.run_once().await.is_err());
+    let interrupted = production_jobs::get(&pool, "42", queued.id)
+        .await
+        .expect("interrupted job")
+        .expect("owned job");
+    assert_eq!(interrupted.status, "running");
+    assert_eq!(interrupted.attempts, 1);
+    let video = produced_video::list(&pool, "42", 50)
+        .await
+        .expect("rendering checkpoint");
+    assert_eq!(video.len(), 1);
+    assert_eq!(video[0].status, "rendering");
+    assert!(runner
+        .run_once()
+        .await
+        .expect("real recovery after transient database rollback"));
+    let done = production_jobs::get(&pool, "42", queued.id)
+        .await
+        .expect("recovered job")
+        .expect("owned job");
+    assert_eq!(done.status, "completed");
+    assert_eq!(done.attempts, 2);
+    assert_eq!(done.metadata["recovered"], true);
+    assert_eq!(
+        produced_video::list(&pool, "42", 50)
+            .await
+            .expect("same version")[0]
+            .id,
+        video[0].id
     );
     cleanup(pool).await;
 }
