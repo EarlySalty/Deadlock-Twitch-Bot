@@ -224,6 +224,26 @@ export const NEUTRAL_TEXTS = new Set<string>([
 ]);
 
 export const IGNORED_LITERALS: Record<string, string[]> = {
+  'src/api/assistent.ts': ['Zu viele Fragen gerade. Probier es gleich noch einmal.'],
+  'src/components/assistent/vorschlaege.ts': [
+    'Wie liefen meine letzten Streams?',
+    'Was macht der Bot für meinen Kanal?',
+    'Bin ich als Partner freigeschaltet?',
+    'Ist mein Spam-Schutz an?',
+    'Wie schalte ich die Scam-Warnung ein?',
+    'Welche Schutzfunktionen habe ich aktiviert?',
+    'Wie richte ich OBS für den Uplink ein?',
+    'Ist meine Uplink-Verbindung aktiv?',
+    'Welche Plattformen sind mit meinem Kanal verbunden?',
+    'Wie plane ich meine Clips für Social Media?',
+    'Welche Plattformen kann ich anbinden?',
+    'Wie oft werden meine Clips gepostet?',
+    'Wie viele Zuschauer hatte ich im Schnitt?',
+    'Wie haben sich meine Follower entwickelt?',
+    'Was kann der Bot für mich tun?',
+    'Wie werde ich Partner?',
+    'Wo bekomme ich Hilfe, wenn ich nicht weiterkomme?',
+  ],
   'src/pages/Audience.tsx': [
     'bg-warning/10 text-warning',
     'bg-warning/10 border-warning/20',
@@ -236,6 +256,7 @@ export const IGNORED_LITERALS: Record<string, string[]> = {
   'src/pages/Schedule.tsx': ['{…}h'],
   'src/pages/Sessions.tsx': ['bg-warning/10 text-warning'],
   'src/utils/engagementKpi.ts': ['Chatters-API zeigt Chat-Audience, nicht alle Video-Viewer.'],
+  'src/utils/formatters.ts': ['Mär', 'März'],
   'src/utils/healthScoreContext.ts': ['Ausbaufähig'],
 };
 
