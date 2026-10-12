@@ -104,6 +104,30 @@ async function measure(page, lang) {
   }, { germanSource: GERMAN.source, lang });
 }
 
+function within(ms, promise) {
+  return Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(`timeout after ${ms} ms`)), ms))]);
+}
+
+async function visit(page, { name, route, lang, width }) {
+  await page.setViewportSize({ width, height: 900 });
+  await page.addInitScript(initScript(lang, mode));
+  await page.goto(`${base}${route}`, { waitUntil: 'load', timeout: 30000 });
+  await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+  await page.waitForFunction(() => !/(Lade |Wird geladen|Loading|wird geladen)/.test(document.body.innerText), null, { timeout: 25000 }).catch(() => {});
+  await page.waitForTimeout(800);
+  await within(5000, page.evaluate(() => document.fonts.ready)).catch(() => {});
+  const contentHeight = await within(10000, page.evaluate(() => Math.max(
+    document.documentElement.scrollHeight,
+    ...[...document.querySelectorAll('*')]
+      .filter((el) => ['auto', 'scroll'].includes(getComputedStyle(el).overflowY))
+      .map((el) => el.scrollHeight),
+  )));
+  await page.setViewportSize({ width, height: Math.min(Math.max(contentHeight, 900), 9000) });
+  await page.waitForTimeout(400);
+  await within(30000, page.screenshot({ path: `${output}/${name}.png` }));
+  return { name, route, lang, width, ...(await within(20000, measure(page, lang))) };
+}
+
 fs.mkdirSync(output, { recursive: true });
 const browser = await chromium.connectOverCDP(cdp);
 const context = browser.contexts()[0] ?? await browser.newContext();
@@ -116,28 +140,13 @@ try {
         const page = await context.newPage();
         const errors = [];
         page.on('pageerror', (error) => errors.push(error.message));
-        await page.setViewportSize({ width, height: 900 });
-        await page.addInitScript(initScript(lang, mode));
         try {
-          await page.goto(`${base}${route}`, { waitUntil: 'load', timeout: 30000 });
-          await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-          await page.waitForFunction(() => !/(Lade |Wird geladen|Loading|wird geladen)/.test(document.body.innerText), null, { timeout: 25000 }).catch(() => {});
-          await page.waitForTimeout(800);
-          await page.evaluate(() => document.fonts.ready);
-          const contentHeight = await page.evaluate(() => Math.max(
-            document.documentElement.scrollHeight,
-            ...[...document.querySelectorAll('*')]
-              .filter((el) => ['auto', 'scroll'].includes(getComputedStyle(el).overflowY))
-              .map((el) => el.scrollHeight),
-          ));
-          await page.setViewportSize({ width, height: Math.min(Math.max(contentHeight, 900), 9000) });
-          await page.waitForTimeout(400);
-          await page.screenshot({ path: `${output}/${name}.png` });
-          results.push({ name, route, lang, width, ...(await measure(page, lang)), errors });
+          const result = await within(90000, visit(page, { name, route, lang, width }));
+          results.push({ ...result, errors });
         } catch (error) {
           results.push({ name, route, lang, width, failed: String(error), errors });
         }
-        await page.close();
+        await within(10000, page.close()).catch(() => {});
       }
     }
   }
