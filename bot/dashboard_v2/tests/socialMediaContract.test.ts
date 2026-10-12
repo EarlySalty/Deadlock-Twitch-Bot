@@ -213,6 +213,7 @@ test('kein deutscher Text traegt in zwei Tabellen zwei Bedeutungen', () => {
 const API_MODULE = [
   'src/api/socialMedia.ts',
   'src/components/socialmedia/autopilot/import-pool/api.ts',
+  'src/components/socialmedia/autopilot/schedule-queue/api.ts',
 ];
 const RUST_ROUTEN = path.join(REPO, 'rust/crates/tb-dashboard-api/src/lib.rs');
 
@@ -288,6 +289,13 @@ function modulePaths(source: string): string[] {
       return (
         values.get(expression.text) ?? (expression.text === 'qs' ? '' : ':p')
       );
+    if (ts.isConditionalExpression(expression)) {
+      const alternatives = [expression.whenTrue, expression.whenFalse].map(
+        (branch) => resolve(branch, values),
+      );
+      if (alternatives.every((value) => value === '' || value.startsWith('?')))
+        return '';
+    }
     if (ts.isTemplateExpression(expression)) {
       return (
         expression.head.text +
@@ -396,12 +404,43 @@ test('route discovery observes nonexistent static and encoded paths in the real 
   }
 });
 
+test('route discovery observes schedule and queue callers with optional query strings', () => {
+  const source = lies(API_MODULE[2]);
+  const prefix = '/twitch/social-media/api/autopilot';
+  assert.deepEqual(gebautePfade([source]), [
+    `${prefix}/queue/:p/cancel`,
+    `${prefix}/queue/:p/next`,
+    `${prefix}/queue/order`,
+    `${prefix}/schedule`,
+  ]);
+  const routes = new Set(registrierteRouten());
+  for (const [original, replacement, missing] of [
+    [
+      '/schedule${query.size',
+      '/contract-missing${query.size',
+      `${prefix}/contract-missing`,
+    ],
+    ['/queue/order`', '/queue/contract-missing`', `${prefix}/queue/contract-missing`],
+    ['/next`', '/contract-missing`', `${prefix}/queue/:p/contract-missing`],
+    ['/cancel`', '/contract-missing`', `${prefix}/queue/:p/contract-missing`],
+  ]) {
+    const changed = source.replace(original, replacement);
+    assert.notEqual(changed, source);
+    assert.deepEqual(
+      gebautePfade([changed]).filter((pathname) => !routes.has(pathname)),
+      [missing],
+    );
+  }
+});
+
 test('unused path constants do not count as callers', () => {
   const sources = API_MODULE.map(lies);
-  const changed = [...sources];
-  changed[1] +=
-    '\nconst UNUSED_PATH = "/twitch/social-media/api/contract-missing";';
-  assert.deepEqual(gebautePfade(changed), gebautePfade(sources));
+  for (const index of [1, 2]) {
+    const changed = [...sources];
+    changed[index] +=
+      '\nconst UNUSED_PATH = "/twitch/social-media/api/contract-missing";';
+    assert.deepEqual(gebautePfade(changed), gebautePfade(sources));
+  }
 });
 
 test('jede gebaute URL gibt es als Route', () => {
