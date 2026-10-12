@@ -2,12 +2,16 @@ use std::{
     env,
     io::Cursor,
     net::SocketAddr,
-    path::{Path, PathBuf},
-    sync::Arc,
+    path::{Component, Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::Instant,
 };
 
 mod recovery;
+include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
 
 use axum::{
     extract::{DefaultBodyLimit, Multipart, State},
@@ -20,17 +24,24 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tb_config::{file::ConfigArguments, BotConfigSnapshot};
-use tokio::{fs, io::AsyncWriteExt, sync::Semaphore};
-use tracing::{info, warn};
+use tokio::{
+    fs,
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::Semaphore,
+};
+use tracing::{info, warn, Event, Level, Subscriber};
+use tracing_subscriber::{filter::LevelFilter, layer::Context, prelude::*, Layer};
 use whisper_rs::{
     get_lang_str, FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
+    WhisperError, WhisperVadContext, WhisperVadContextParams, WhisperVadParams, WhisperVadSegments,
 };
 
 const DEFAULT_MODEL_NAME: &str = "ggml-large-v3-turbo-q5_0";
 const DEFAULT_MODEL_FILE: &str = "ggml-large-v3-turbo-q5_0.bin";
 const DEFAULT_MODEL_URL: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin";
-const DEFAULT_MODEL_SHA256: &str = "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2";
+const DEFAULT_MODEL_SHA256: &str =
+    "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2";
 const DEFAULT_VAD_FILE: &str = "ggml-silero-v6.2.0.bin";
 const DEFAULT_VAD_URL: &str =
     "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin";
@@ -48,6 +59,7 @@ struct Config {
     vad_path: PathBuf,
     vad_url: String,
     vad_sha256: String,
+    pinned_models: bool,
     forced_language: Option<String>,
     no_speech_max: f32,
     avg_logprob_min: f32,
@@ -63,9 +75,15 @@ impl Config {
                 "Das Rust-STT unterstützt aktuell nur das Modell {DEFAULT_MODEL_NAME}."
             ));
         }
-        let cache = env::var_os("HOME")
-            .map(|home| PathBuf::from(home).join(".cache/deadlock-stt"))
-            .unwrap_or_else(|| PathBuf::from("/tmp/deadlock-stt"));
+        let cache = if let Some(directory) = &settings.model_directory {
+            snapshot
+                .resolve(directory)
+                .map_err(|error| format!("stt.model_directory ist ungültig: {error}"))?
+        } else {
+            env::var_os("HOME")
+                .map(|home| PathBuf::from(home).join(".cache/deadlock-stt"))
+                .unwrap_or_else(|| PathBuf::from("/tmp/deadlock-stt"))
+        };
         let max_upload_bytes = usize::try_from(settings.max_upload_bytes)
             .map_err(|_| "stt.max_upload_bytes ist auf diesem System zu groß.".to_owned())?;
 
@@ -80,6 +98,7 @@ impl Config {
             vad_path: cache.join(DEFAULT_VAD_FILE),
             vad_url: DEFAULT_VAD_URL.to_owned(),
             vad_sha256: DEFAULT_VAD_SHA256.to_owned(),
+            pinned_models: settings.model_directory.is_some(),
             forced_language: settings.language.clone(),
             no_speech_max: settings.no_speech_max as f32,
             avg_logprob_min: settings.avg_logprob_min as f32,
@@ -91,6 +110,38 @@ impl Config {
 
 struct Engine {
     context: WhisperContext,
+    vad: Mutex<WhisperVadContext>,
+    native_errors: Arc<AtomicU64>,
+}
+
+struct NativeErrorLayer {
+    errors: Arc<AtomicU64>,
+}
+
+impl<S: Subscriber> Layer<S> for NativeErrorLayer {
+    fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+        let metadata = event.metadata();
+        if *metadata.level() == Level::ERROR
+            && matches!(
+                metadata.target(),
+                "whisper_rs::whisper_logging_hook" | "whisper_rs::ggml_logging_hook"
+            )
+        {
+            self.errors.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
+fn observe_vad<T>(
+    errors: &AtomicU64,
+    call: impl FnOnce() -> Result<T, WhisperError>,
+) -> Result<T, ApiError> {
+    let before = errors.load(Ordering::SeqCst);
+    let result = call();
+    if errors.load(Ordering::SeqCst) != before {
+        return Err(ApiError::Internal("VAD-Backendfehler".to_owned()));
+    }
+    result.map_err(|error| ApiError::Internal(format!("VAD-Inferenz: {error}")))
 }
 
 #[derive(Clone)]
@@ -146,7 +197,10 @@ impl IntoResponse for ApiError {
             Self::Unavailable(detail) => (StatusCode::SERVICE_UNAVAILABLE, detail),
             Self::Internal(detail) => {
                 warn!(error = %detail, "STT-Anfrage fehlgeschlagen");
-                (StatusCode::INTERNAL_SERVER_ERROR, "Transkription fehlgeschlagen".to_owned())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Transkription fehlgeschlagen".to_owned(),
+                )
             }
         };
         (status, Json(serde_json::json!({ "detail": detail }))).into_response()
@@ -155,13 +209,25 @@ impl IntoResponse for ApiError {
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
+    if print_build_revision() {
+        return Ok(());
+    }
     let arguments =
         ConfigArguments::parse(env::args_os().skip(1)).map_err(|error| error.to_string())?;
     let recovery_state = recovery::parse_arguments(&arguments.remaining)?;
     let snapshot = BotConfigSnapshot::load(&arguments.path).map_err(|error| error.to_string())?;
-    tracing_subscriber::fmt()
-        .with_max_level(snapshot.settings().logging.level.tracing_level())
+    let native_errors = Arc::new(AtomicU64::new(0));
+    tracing_subscriber::registry()
+        .with(NativeErrorLayer {
+            errors: Arc::clone(&native_errors),
+        })
+        .with(
+            tracing_subscriber::fmt::layer().with_filter(LevelFilter::from_level(
+                snapshot.settings().logging.level.tracing_level(),
+            )),
+        )
         .init();
+    whisper_rs::install_logging_hooks();
 
     if let Some(state_path) = recovery_state {
         recovery::run(&snapshot.settings().stt, &state_path).await?;
@@ -174,27 +240,24 @@ async fn main() -> Result<(), String> {
         "TWITCH_STT_CONFIG_V1"
     );
 
-    ensure_model(
-        &config.model_path,
-        &config.model_url,
-        &config.model_sha256,
-        "Whisper",
-    )
-    .await?;
-    ensure_model(
-        &config.vad_path,
-        &config.vad_url,
-        &config.vad_sha256,
-        "VAD",
-    )
-    .await?;
+    if config.pinned_models {
+        verify_pinned_model(&config.model_path, &config.model_sha256, "Whisper").await?;
+        verify_pinned_model(&config.vad_path, &config.vad_sha256, "VAD").await?;
+    } else {
+        ensure_model(
+            &config.model_path,
+            &config.model_url,
+            &config.model_sha256,
+            "Whisper",
+        )
+        .await?;
+        ensure_model(&config.vad_path, &config.vad_url, &config.vad_sha256, "VAD").await?;
+    }
 
     let started = Instant::now();
-    let context = WhisperContext::new_with_params(
-        &config.model_path,
-        WhisperContextParameters::default(),
-    )
-    .map_err(|e| format!("Whisper-Modell konnte nicht geladen werden: {e}"))?;
+    let context =
+        WhisperContext::new_with_params(&config.model_path, WhisperContextParameters::default())
+            .map_err(|e| format!("Whisper-Modell konnte nicht geladen werden: {e}"))?;
     info!(
         model = %config.model_name,
         threads = config.threads,
@@ -202,11 +265,22 @@ async fn main() -> Result<(), String> {
         "STT-Modell geladen"
     );
 
+    let vad_path = config
+        .vad_path
+        .to_str()
+        .ok_or_else(|| "VAD-Pfad ist kein UTF-8".to_owned())?;
+    let mut vad_params = WhisperVadContextParams::default();
+    vad_params.set_n_threads(config.threads);
+    let vad = WhisperVadContext::new(vad_path, vad_params)
+        .map_err(|e| format!("VAD-Modell konnte nicht geladen werden: {e}"))?;
+
     let state = AppState {
         config: Arc::new(config.clone()),
-        engine: Arc::new(Engine { context }),
-        // Ein Whisper-Lauf nutzt selbst mehrere CPU-Threads. Mehrere parallele
-        // Decoder würden den Host nur überbuchen und Latenz/Load verschlechtern.
+        engine: Arc::new(Engine {
+            context,
+            vad: Mutex::new(vad),
+            native_errors,
+        }),
         gate: Arc::new(Semaphore::new(1)),
     };
 
@@ -294,9 +368,6 @@ async fn transcriptions(
                     .await
                     .map_err(|e| ApiError::BadRequest(format!("response_format unlesbar: {e}")))?;
             }
-            // model/language/timestamp_granularities[] werden aus
-            // Kompatibilitaetsgruenden akzeptiert. Wie der Python-Dienst
-            // entscheidet aber der lokale Server ueber Modell/Sprache.
             _ => {}
         }
     }
@@ -315,7 +386,7 @@ async fn transcriptions(
 
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        transcribe(&engine.context, &config, decoded, verbose)
+        transcribe(&engine, &config, decoded, verbose)
     })
     .await
     .map_err(|e| ApiError::Internal(format!("STT-Worker abgebrochen: {e}")))??;
@@ -341,9 +412,11 @@ fn decode_wav(raw: &[u8]) -> Result<DecodedAudio, ApiError> {
     let total_samples = reader.duration() as usize;
     let mut pcm = Vec::with_capacity(total_samples);
     for sample in reader.samples::<i16>() {
-        let sample =
-            sample.map_err(|e| ApiError::BadRequest(format!("PCM unlesbar: {e}")))?;
+        let sample = sample.map_err(|e| ApiError::BadRequest(format!("PCM unlesbar: {e}")))?;
         pcm.push(sample as f32 / 32768.0);
+    }
+    if pcm.is_empty() {
+        return Err(ApiError::BadRequest("Die Audiodatei ist leer.".to_owned()));
     }
 
     Ok(DecodedAudio {
@@ -352,14 +425,84 @@ fn decode_wav(raw: &[u8]) -> Result<DecodedAudio, ApiError> {
     })
 }
 
+fn speech_window(
+    segments: Result<WhisperVadSegments, ApiError>,
+    duration: f64,
+) -> Result<Option<(i32, f64, f64)>, ApiError> {
+    let segments = segments?;
+    let count = segments.num_segments();
+    if count == 0 {
+        return Ok(None);
+    }
+    if count < 0 {
+        return Err(ApiError::Internal(
+            "VAD-Segmentzahl ist ungültig".to_owned(),
+        ));
+    }
+    let first = segments
+        .get_segment(0)
+        .ok_or_else(|| ApiError::Internal("VAD-Segment fehlt".to_owned()))?;
+    let last = segments
+        .get_segment(count - 1)
+        .ok_or_else(|| ApiError::Internal("VAD-Segment fehlt".to_owned()))?;
+    let start = (f64::from(first.start) / 100.0).clamp(0.0, duration);
+    let end = (f64::from(last.end) / 100.0).clamp(0.0, duration);
+    if !start.is_finite() || !end.is_finite() || end <= start {
+        return Err(ApiError::Internal(
+            "VAD-Zeitfenster ist ungültig".to_owned(),
+        ));
+    }
+    Ok(Some((count, start, end)))
+}
+
+fn bounded_timestamps(
+    start_cs: i64,
+    end_cs: i64,
+    speech_start: f64,
+    speech_end: f64,
+) -> Option<(f64, f64)> {
+    let start = (start_cs as f64 / 100.0).max(speech_start);
+    let end = (end_cs as f64 / 100.0).min(speech_end);
+    (end > start).then_some((start, end))
+}
+
 fn transcribe(
-    context: &WhisperContext,
+    engine: &Engine,
     config: &Config,
     audio: DecodedAudio,
     verbose: bool,
 ) -> Result<TranscriptionResponse, ApiError> {
     let started = Instant::now();
-    let mut state = context
+    let window = {
+        let mut vad = engine
+            .vad
+            .lock()
+            .map_err(|_| ApiError::Internal("VAD-State ist nicht verfügbar".to_owned()))?;
+        speech_window(
+            observe_vad(&engine.native_errors, || {
+                vad.segments_from_samples(WhisperVadParams::default(), &audio.pcm)
+            }),
+            audio.duration_seconds,
+        )?
+    };
+    let Some((vad_segments, speech_start, speech_end)) = window else {
+        info!(
+            duration_seconds = audio.duration_seconds,
+            elapsed_seconds = started.elapsed().as_secs_f64(),
+            vad_segments = 0,
+            "Keine Sprache erkannt"
+        );
+        return Ok(TranscriptionResponse {
+            text: String::new(),
+            duration: audio.duration_seconds,
+            language: "unknown".to_owned(),
+            model: config.model_name.clone(),
+            segments: verbose.then_some(Vec::new()),
+        });
+    };
+
+    let mut state = engine
+        .context
         .create_state()
         .map_err(|e| ApiError::Internal(format!("Whisper-State: {e}")))?;
 
@@ -382,17 +525,8 @@ fn transcribe(
         params.set_language(Some(language));
     } else {
         params.set_language(None);
-        // None erkennt die Sprache automatisch. detect_language=true würde
-        // whisper.cpp direkt danach, noch vor der Transkription, beenden.
         params.set_detect_language(false);
     }
-
-    let vad_path = config
-        .vad_path
-        .to_str()
-        .ok_or_else(|| ApiError::Internal("VAD-Pfad ist kein UTF-8".to_owned()))?;
-    params.set_vad_model_path(Some(vad_path));
-    params.enable_vad(true);
 
     state
         .full(params, &audio.pcm)
@@ -434,12 +568,27 @@ fn transcribe(
             continue;
         }
 
+        let Some((start, end)) = bounded_timestamps(
+            segment.start_timestamp(),
+            segment.end_timestamp(),
+            speech_start,
+            speech_end,
+        ) else {
+            continue;
+        };
+
         kept.push(SegmentResponse {
             id: kept.len(),
-            start: segment.start_timestamp() as f64 / 100.0,
-            end: segment.end_timestamp() as f64 / 100.0,
+            start,
+            end,
             text,
         });
+    }
+
+    if kept.is_empty() {
+        return Err(ApiError::Internal(
+            "Sprache erkannt, aber kein verlässlicher Transkripttext".to_owned(),
+        ));
     }
 
     let text = kept
@@ -458,6 +607,7 @@ fn transcribe(
         elapsed_seconds = elapsed,
         rtf = elapsed / audio.duration_seconds.max(0.01),
         segments = kept.len(),
+        vad_segments,
         dropped,
         language = %language,
         "Transkription abgeschlossen"
@@ -472,13 +622,87 @@ fn transcribe(
     })
 }
 
+#[cfg(unix)]
+fn root_protected(uid: u32, mode: u32, file: bool) -> bool {
+    uid == 0 && mode & (if file { 0o222 } else { 0o022 }) == 0
+}
+
+async fn verify_pinned_model(path: &Path, expected_sha256: &str, kind: &str) -> Result<(), String> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| format!("{kind}-Modellpfad hat keinen Elternordner"))?;
+    if !path.is_absolute() {
+        return Err(format!("{kind}-Modellpfad muss absolut sein"));
+    }
+    let mut ancestor = PathBuf::new();
+    for component in directory.components() {
+        if matches!(component, Component::ParentDir | Component::CurDir) {
+            return Err(format!("{kind}-Modellpfad ist unsicher"));
+        }
+        ancestor.push(component);
+        let metadata = fs::symlink_metadata(&ancestor)
+            .await
+            .map_err(|_| format!("{kind}-Modellverzeichnis fehlt oder ist nicht lesbar"))?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(format!("{kind}-Modellverzeichnis ist unsicher"));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            if !root_protected(metadata.uid(), metadata.permissions().mode(), false) {
+                return Err(format!("{kind}-Modellverzeichnis ist nicht rootgeschützt"));
+            }
+        }
+    }
+    let metadata = fs::symlink_metadata(path)
+        .await
+        .map_err(|_| format!("{kind}-Modell fehlt oder ist nicht lesbar"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() == 0 {
+        return Err(format!("{kind}-Modell ist keine reguläre Datei"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if !root_protected(metadata.uid(), metadata.permissions().mode(), true) {
+            return Err(format!("{kind}-Modell ist nicht rootgeschützt"));
+        }
+    }
+    verify_model_sha256(path, expected_sha256, kind).await
+}
+
+async fn verify_model_sha256(path: &Path, expected_sha256: &str, kind: &str) -> Result<(), String> {
+    let mut file = fs::File::open(path)
+        .await
+        .map_err(|_| format!("{kind}-Modell ist nicht lesbar"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 65536];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .await
+            .map_err(|_| format!("{kind}-Modell konnte nicht geprüft werden"))?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    if !hex::encode(hasher.finalize()).eq_ignore_ascii_case(expected_sha256) {
+        return Err(format!("{kind}-Modell hat eine ungültige SHA256-Prüfsumme"));
+    }
+    Ok(())
+}
+
 async fn ensure_model(
     path: &Path,
     url: &str,
     expected_sha256: &str,
     kind: &str,
 ) -> Result<(), String> {
-    if fs::metadata(path).await.map(|m| m.len() > 0).unwrap_or(false) {
+    if fs::metadata(path)
+        .await
+        .map(|m| m.len() > 0)
+        .unwrap_or(false)
+    {
         return Ok(());
     }
 
@@ -579,6 +803,91 @@ mod tests {
     }
 
     #[test]
+    fn rejects_wav_without_audio_frames() {
+        let empty = wav(&[], 16_000, 1);
+        assert!(matches!(decode_wav(&empty), Err(ApiError::BadRequest(_))));
+    }
+
+    #[test]
+    fn vad_failure_is_not_no_speech() {
+        assert!(matches!(
+            speech_window(
+                observe_vad(&AtomicU64::new(0), || Err(WhisperError::NullPointer)),
+                2.0
+            ),
+            Err(ApiError::Internal(_))
+        ));
+    }
+
+    #[test]
+    fn native_error_hook_rejects_successful_vad_return_with_reused_probabilities() {
+        let errors = Arc::new(AtomicU64::new(0));
+        let subscriber = tracing_subscriber::registry()
+            .with(NativeErrorLayer {
+                errors: Arc::clone(&errors),
+            })
+            .with(tracing_subscriber::fmt::layer().with_filter(LevelFilter::OFF));
+        tracing::subscriber::set_global_default(subscriber).unwrap();
+        whisper_rs::install_logging_hooks();
+
+        let missing_model = std::env::temp_dir().join(format!(
+            "tb-stt-missing-vad-model-{}.bin",
+            std::process::id()
+        ));
+        assert!(!missing_model.exists());
+        let before = errors.load(Ordering::SeqCst);
+        assert!(WhisperVadContext::new(
+            missing_model.to_str().unwrap(),
+            WhisperVadContextParams::default()
+        )
+        .is_err());
+        assert!(errors.load(Ordering::SeqCst) > before);
+
+        let mut stale_probabilities = vec![0.85_f32; 64];
+        assert!(observe_vad(&errors, || Ok::<_, WhisperError>(())).is_ok());
+        let failure = observe_vad(&errors, || {
+            stale_probabilities.resize(64, 0.0);
+            assert_eq!(stale_probabilities, vec![0.85_f32; 64]);
+            std::thread::spawn(|| {
+                tracing::error!(
+                    target: "whisper_rs::whisper_logging_hook",
+                    "whisper_vad_detect_speech: failed to compute VAD graph"
+                );
+            })
+            .join()
+            .unwrap();
+            Ok::<_, WhisperError>(stale_probabilities)
+        })
+        .unwrap_err();
+        assert_eq!(
+            failure.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+
+        let ggml_failure = observe_vad(&errors, || {
+            std::thread::spawn(|| {
+                tracing::error!(target: "whisper_rs::ggml_logging_hook", "compute failed");
+            })
+            .join()
+            .unwrap();
+            Ok::<_, WhisperError>(())
+        })
+        .unwrap_err();
+        assert_eq!(
+            ggml_failure.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert!(observe_vad(&errors, || Ok::<_, WhisperError>(())).is_ok());
+    }
+
+    #[test]
+    fn speech_timestamps_remain_on_original_timeline() {
+        assert_eq!(bounded_timestamps(0, 700, 1.98, 6.98), Some((1.98, 6.98)));
+        assert_eq!(bounded_timestamps(0, 512, 0.0, 5.025), Some((0.0, 5.025)));
+        assert_eq!(bounded_timestamps(0, 100, 1.98, 6.98), None);
+    }
+
+    #[test]
     fn defaults_keep_loopback_and_existing_port() {
         let snapshot = BotConfigSnapshot::parse(
             "schema_version=1\n[twitch]\nbot_user_id=\"1\"\nnotify_channel_id=\"2\"\neventsub_callback_url=\"https://example.invalid/callback\"\n",
@@ -588,5 +897,102 @@ mod tests {
         let cfg = Config::from_snapshot(&snapshot).unwrap();
         assert_eq!(cfg.host, "127.0.0.1");
         assert_eq!(cfg.port, 8791);
+        assert!(!cfg.pinned_models);
+        assert!(
+            cfg.model_path
+                .ends_with(".cache/deadlock-stt/ggml-large-v3-turbo-q5_0.bin")
+                || cfg
+                    .model_path
+                    .ends_with("/tmp/deadlock-stt/ggml-large-v3-turbo-q5_0.bin")
+        );
+    }
+
+    #[test]
+    fn configured_directory_uses_snapshot_resolution() {
+        let snapshot = BotConfigSnapshot::parse(
+            "schema_version=1\n[twitch]\nbot_user_id='1'\nnotify_channel_id='2'\neventsub_callback_url='https://example.invalid/callback'\n[stt]\nmodel_directory='../models'\n",
+            Path::new("/test/config/bot.toml"),
+        )
+        .unwrap();
+        let cfg = Config::from_snapshot(&snapshot).unwrap();
+        assert!(cfg.pinned_models);
+        assert_eq!(
+            cfg.model_path,
+            Path::new("/test/models").join(DEFAULT_MODEL_FILE)
+        );
+        assert_eq!(
+            cfg.vad_path,
+            Path::new("/test/models").join(DEFAULT_VAD_FILE)
+        );
+    }
+
+    #[test]
+    fn configured_directory_cannot_escape_filesystem_root() {
+        let snapshot = BotConfigSnapshot::parse(
+            "schema_version=1\n[twitch]\nbot_user_id='1'\nnotify_channel_id='2'\neventsub_callback_url='https://example.invalid/callback'\n[stt]\nmodel_directory='../../../../../../models'\n",
+            Path::new("/test/config/bot.toml"),
+        )
+        .unwrap();
+        assert!(Config::from_snapshot(&snapshot).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pinned_models_require_root_control_of_every_entry() {
+        assert!(root_protected(0, 0o755, false));
+        assert!(!root_protected(1000, 0o755, false));
+        assert!(!root_protected(0, 0o775, false));
+        assert!(!root_protected(0, 0o757, false));
+        assert!(root_protected(0, 0o444, true));
+        assert!(!root_protected(1000, 0o444, true));
+        assert!(!root_protected(0, 0o644, true));
+        assert!(!root_protected(0, 0o464, true));
+    }
+
+    #[tokio::test]
+    async fn pinned_models_reject_insecure_paths_without_network() {
+        let directory =
+            std::env::temp_dir().join(format!("tb-stt-model-test-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let path = directory.join(DEFAULT_VAD_FILE);
+        let expected = hex::encode(Sha256::digest(b"fixture"));
+        assert!(verify_pinned_model(&path, &expected, "VAD").await.is_err());
+        std::fs::write(&path, b"wrong").unwrap();
+        assert!(verify_model_sha256(&path, &expected, "VAD").await.is_err());
+        std::fs::write(&path, b"fixture").unwrap();
+        verify_model_sha256(&path, &expected, "VAD").await.unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        }
+        let rejection = verify_pinned_model(&path, &expected, "VAD")
+            .await
+            .unwrap_err();
+        assert!(rejection.contains("rootgeschützt"));
+        let link = directory.join(DEFAULT_MODEL_FILE);
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&path, &link).unwrap();
+            assert!(verify_pinned_model(&link, &expected, "Whisper")
+                .await
+                .is_err());
+            std::fs::remove_file(&link).unwrap();
+            let directory_link = directory.with_extension("symlink");
+            std::os::unix::fs::symlink(&directory, &directory_link).unwrap();
+            assert!(
+                verify_pinned_model(&directory_link.join(DEFAULT_VAD_FILE), &expected, "VAD")
+                    .await
+                    .is_err()
+            );
+            std::fs::remove_file(&directory_link).unwrap();
+        }
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&directory).unwrap();
     }
 }

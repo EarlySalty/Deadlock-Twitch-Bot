@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Clapperboard, Loader2, ShieldAlert } from 'lucide-react';
 import { SocialMedia } from '@/pages/SocialMedia';
+import { AiEditorPanel } from '@/components/socialmedia/ai/AiEditorPanel';
 import { PlanProvider } from '@/context/PlanContext';
 import { useT } from '@/context/LanguageContext';
 import { TrialExpiryModal } from '@/components/modals/TrialExpiryModal';
@@ -170,13 +171,13 @@ export function SocialMediaManager() {
           <TrialBanner />
 
           {isAdminView ? (
-            <SocialMedia key={selectedChannel?.twitchUserId ?? ''} streamer={streamer} twitchUserId={selectedChannel?.twitchUserId ?? undefined} isAdmin />
+            <SocialMedia key={selectedChannel?.twitchUserId ?? ''} streamer={streamer} twitchUserId={selectedChannel?.twitchUserId ?? undefined} isAdmin aiEditor={AiEditorPanel} />
           ) : loadingAccess ? (
             <div className="panel-card rounded-2xl p-8 text-center text-text-secondary">
               {t('Zugriff wird geprüft…')}
             </div>
           ) : access?.allowed ? (
-            <SocialMedia key={authStatus?.twitchUserId ?? ''} twitchUserId={authStatus?.twitchUserId ?? undefined} streamer={access.streamer ?? authStatus?.twitchLogin ?? ''} isAdmin={false} />
+            <SocialMedia key={authStatus?.twitchUserId ?? ''} twitchUserId={authStatus?.twitchUserId ?? undefined} streamer={access.streamer ?? authStatus?.twitchLogin ?? ''} isAdmin={false} aiEditor={AiEditorPanel} />
           ) : (
             <div className="panel-card rounded-2xl p-8 text-center">
               <ShieldAlert className="w-12 h-12 text-warning mx-auto mb-4" />

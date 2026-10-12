@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -8,6 +9,7 @@ import unittest
 WRAPPER = Path(__file__).with_name("deploy-twitch-release")
 SHA = "a" * 40
 LEGACY_SHA = "12987b689642b630f9b62b786f2002a6843add73"
+GATE_BASE_SHA = "b0be1e4c46776b10d08255623b02e070e1977fbf"
 MOCKS = r'''
 systemctl() {
   [[ "$1" == show ]] || exit 90
@@ -261,6 +263,241 @@ WITH category_collector_status AS (
                 self.assertEqual(self.snapshot_proof(**values)[0], "f")
 
 
+class AnalysisConsentGrantTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.dsn = os.environ.get("TB_TEST_CONSENT_DATABASE_URL")
+        if not cls.dsn:
+            if os.environ.get("TB_TEST_REQUIRE_DB") == "1":
+                raise RuntimeError("The isolated PostgreSQL test database is required.")
+            raise unittest.SkipTest(
+                "TB_TEST_CONSENT_DATABASE_URL is required for consent ACL proofs."
+            )
+        if cls.dsn != "postgres://postgres@127.0.0.1:33101/postgres":
+            raise RuntimeError(
+                "Consent ACL proofs only use the isolated test database on port 33101."
+            )
+        source = WRAPPER.read_text()
+        cls.verifier = (
+            source.split("BEGIN READ ONLY;\n", 1)[1].split(
+                "    FOREACH p IN ARRAY ARRAY['SELECT','INSERT','UPDATE','DELETE'] LOOP\n"
+                "        IF NOT has_table_privilege('twitchbot'",
+                1,
+            )[0]
+            + "END\n$verification$;\n"
+        )
+        roles = WRAPPER.with_name("twitch-runtime-roles.sql").read_text()
+        cls.role_refresh = "\n".join(
+            "DO $"
+            + name
+            + "$"
+            + roles.split("DO $" + name + "$", 1)[1].split(
+                "$" + name + "$;",
+                1,
+            )[0]
+            + "$"
+            + name
+            + "$;"
+            for name in ("analysis_writer", "audit_usage")
+        )
+        cls.consent_refresh = (
+            "DO $social_ai_consent_roles$"
+            + roles.split(
+                "DO $social_ai_consent_roles$",
+                1,
+            )[1].split("$social_ai_consent_roles$;", 1)[0]
+            + "$social_ai_consent_roles$;"
+        )
+        cls.migration = (
+            WRAPPER.parents[2]
+            / "rust/migrations/20261011200001_social_ai_provider_usage.sql"
+        ).read_text()
+
+    def verify_grants(self, mutation="", ai_expected=True, migrated=True):
+        fixtures = """
+BEGIN;
+SET LOCAL statement_timeout = '5s';
+CREATE ROLE twitchbot LOGIN NOINHERIT;
+CREATE ROLE twitchdash LOGIN NOINHERIT;
+CREATE ROLE twitchlegacy LOGIN NOINHERIT;
+CREATE ROLE twitchcollector LOGIN NOINHERIT;
+CREATE ROLE twitchcontest LOGIN NOINHERIT;
+CREATE TABLE public.twitch_ai_chat_sessions (id text);
+CREATE TABLE public.twitch_ai_chat_hourly (id text);
+CREATE TABLE public.twitch_ai_chat_reservations (id text);
+CREATE TABLE public.llm_usage (id serial, purpose text, provider text);
+CREATE TABLE public.unrelated_private_fixture (id text);
+CREATE SEQUENCE public.unrelated_sequence_fixture;
+CREATE SCHEMA unrelated_fixture;
+CREATE TABLE unrelated_fixture.social_ai_user_consent (id text);
+CREATE SCHEMA _timescaledb_catalog;
+CREATE TABLE _timescaledb_catalog.chunk (relid oid);
+"""
+        migration = self.migration if migrated else ""
+        result = subprocess.run(
+            [
+                "/usr/bin/psql",
+                "--no-psqlrc",
+                "--no-password",
+                "--quiet",
+                "-At",
+                "--dbname",
+                self.dsn + "?connect_timeout=5",
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-v",
+                f"social_ai_expected={int(ai_expected)}",
+            ],
+            input=fixtures
+            + migration
+            + self.role_refresh
+            + self.consent_refresh
+            + mutation
+            + "\nSET LOCAL transaction_read_only = on;\n"
+            + self.verifier
+            + "ROLLBACK;\n",
+            env={},
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        return result
+
+    def test_required_m1_consent_read_survives_real_migration_and_role_refresh(self):
+        result = self.verify_grants(
+            "SET LOCAL ROLE twitchanalysis;"
+            "SELECT external_ai_consent FROM public.social_ai_user_consent LIMIT 0;"
+            "RESET ROLE;"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_consent_requirement_uses_the_requested_revision_not_the_checkout(self):
+        source = WRAPPER.read_text()
+        classification = (
+            "social_ai_expected=0\n"
+            + source.split("social_ai_expected=0\n", 1)[1].split(
+                "\nif [[ $native_expected",
+                1,
+            )[0]
+        )
+        for revision, expected in ((GATE_BASE_SHA, "0"), ("HEAD", "1")):
+            with self.subTest(revision=revision):
+                result = subprocess.run(
+                    [
+                        "/bin/bash",
+                        "-c",
+                        'set -euo pipefail\nsrc="$1"\nsha="$2"\nrequired_artifacts=()\n'
+                        + classification
+                        + '\nprintf "%s\\n" "$social_ai_expected"',
+                        "target-consent-fixture",
+                        str(WRAPPER.parents[2]),
+                        revision,
+                    ],
+                    env={},
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+
+    def test_m1_requires_the_table_and_table_level_select(self):
+        for mutation in (
+            "DROP TABLE public.social_ai_user_consent;",
+            "REVOKE SELECT ON public.social_ai_user_consent FROM twitchanalysis;",
+            (
+                "REVOKE SELECT ON public.social_ai_user_consent FROM twitchanalysis;"
+                "GRANT SELECT (external_ai_consent) ON public.social_ai_user_consent TO twitchanalysis;"
+            ),
+        ):
+            with self.subTest(mutation=mutation):
+                result = self.verify_grants(mutation)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "ohne erforderliches KI-Zustimmungsleserecht", result.stderr
+                )
+
+    def test_legacy_target_accepts_unmigrated_and_forward_migrated_databases(self):
+        for migrated, mutation in (
+            (False, ""),
+            (True, ""),
+            (
+                True,
+                "REVOKE SELECT ON public.social_ai_user_consent FROM twitchanalysis;",
+            ),
+        ):
+            with self.subTest(migrated=migrated, mutation=mutation):
+                result = self.verify_grants(
+                    mutation, ai_expected=False, migrated=migrated
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_consent_writes_columns_ownership_and_delegation_fail_for_both_targets(
+        self,
+    ):
+        mutations = (
+            [
+                f"GRANT {privilege} ON public.social_ai_user_consent TO twitchanalysis;"
+                for privilege in (
+                    "INSERT",
+                    "UPDATE",
+                    "DELETE",
+                    "TRUNCATE",
+                    "REFERENCES",
+                    "TRIGGER",
+                )
+            ]
+            + [
+                f"GRANT {privilege} (external_ai_consent) ON public.social_ai_user_consent TO twitchanalysis;"
+                for privilege in ("SELECT", "INSERT", "UPDATE", "REFERENCES")
+            ]
+            + [
+                "ALTER TABLE public.social_ai_user_consent OWNER TO twitchanalysis;",
+                "GRANT SELECT ON public.social_ai_user_consent TO twitchanalysis WITH GRANT OPTION;",
+                "GRANT SELECT ON public.social_ai_user_consent TO PUBLIC;",
+                "GRANT UPDATE ON public.social_ai_user_consent TO PUBLIC;",
+                "GRANT SELECT (external_ai_consent) ON public.social_ai_user_consent TO PUBLIC;",
+            ]
+        )
+        for ai_expected in (True, False):
+            for mutation in mutations:
+                with self.subTest(ai_expected=ai_expected, mutation=mutation):
+                    result = self.verify_grants(mutation, ai_expected=ai_expected)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertRegex(
+                        result.stderr,
+                        "zusätzliche KI-Zustimmungsrechte|Auditverbrauch: fremde Schreibrechte",
+                    )
+
+    def test_foreign_table_column_sequence_schema_and_role_rights_stay_denied(self):
+        mutations = (
+            "GRANT SELECT ON public.unrelated_private_fixture TO twitchanalysis;",
+            "GRANT SELECT (id) ON public.unrelated_private_fixture TO twitchanalysis;",
+            "GRANT UPDATE (id) ON public.unrelated_private_fixture TO twitchanalysis;",
+            "ALTER TABLE public.unrelated_private_fixture OWNER TO twitchanalysis;",
+            "GRANT USAGE ON public.unrelated_sequence_fixture TO twitchanalysis;",
+            "GRANT SELECT ON public.unrelated_sequence_fixture TO twitchanalysis;",
+            "GRANT UPDATE ON public.unrelated_sequence_fixture TO twitchanalysis;",
+            (
+                "GRANT USAGE ON SCHEMA unrelated_fixture TO twitchanalysis;"
+                "GRANT SELECT ON unrelated_fixture.social_ai_user_consent TO twitchanalysis;"
+            ),
+            "GRANT CREATE ON SCHEMA unrelated_fixture TO twitchanalysis;",
+            "GRANT twitchanalysis TO twitchdash;",
+            "ALTER ROLE twitchanalysis INHERIT;",
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                result = self.verify_grants(mutation)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertRegex(
+                    result.stderr,
+                    "fremde Tabellen|Schemarechte falsch|Mitgliedschaften falsch",
+                )
+
+
 class ArtifactPathTests(unittest.TestCase):
     def check_layout(self, dashboards):
         wrapper = WRAPPER.read_text()
@@ -273,7 +510,7 @@ class ArtifactPathTests(unittest.TestCase):
             for relative in (
                 "rust/target/release/tb-bot", "rust/target/release/tb-dashboard",
                 "rust/target/release/tb-stream-audit", "rust/target/release/tb-config-check",
-                "rust/target/release/tb-llm-usage-recover",
+                "rust/target/release/tb-llm-usage-recover", "rust/target/release/tb-stt-server",
             ):
                 artifact = checkout / relative
                 artifact.parent.mkdir(parents=True, exist_ok=True)
@@ -286,7 +523,7 @@ class ArtifactPathTests(unittest.TestCase):
             package.parent.mkdir(parents=True, exist_ok=True)
             package.write_text('{}')
             wrapper_result = subprocess.run(
-                ["/bin/bash", "-c", 'set -euo pipefail\nsrc="$1"\nnative_expected=0\ndashboard_source=bot/dashboard_v2/dist\n' + preflight + '\nprintf "%s\\n" "${required_artifacts[@]}"', "wrapper", str(checkout)],
+                ["/bin/bash", "-c", 'set -euo pipefail\nsrc="$1"\nsha="$2"\nnative_expected=0\ndashboard_source=bot/dashboard_v2/dist\n' + preflight + '\nprintf "%s\\n" "${required_artifacts[@]}"', "wrapper", str(checkout), SHA],
                 capture_output=True, text=True, timeout=5,
             )
             if not dashboards:
@@ -326,13 +563,17 @@ class CollectorPackagingTests(unittest.TestCase):
         sha = subprocess.check_output(
             ["git", "-C", str(repository), "rev-parse", revision], text=True,
         ).strip()
+        ai_expected = subprocess.run(
+            ["git", "-C", str(repository), "cat-file", "-e", f"{sha}:rust/crates/tb-social-media/src/ai_editor/mod.rs"],
+            capture_output=True,
+        ).returncode == 0
         wrapper = WRAPPER.read_text()
         preflight = "native_expected=0\n" + wrapper.split("native_expected=0\n", 1)[1].split('\nif [[ -e "$dest"', 1)[0]
         installer = WRAPPER.with_name("install-twitch-release.sh").read_text()
         selection = "dashboard_source=bot/dashboard_v2/dist\n" + installer.split("dashboard_source=bot/dashboard_v2/dist\n", 1)[1].split("\ncheck_binary_revisions() {", 1)[0]
         selection = selection.replace("! -user root", f"! -user {os.getuid()}")
         revisions = "check_binary_revisions() {" + installer.split("check_binary_revisions() {", 1)[1].split('\ncheck_binary_revisions "$checkout"', 1)[0]
-        copies = '  install -m 0755 "$checkout/rust/target/release/tb-bot"' + installer.split('  install -m 0755 "$checkout/rust/target/release/tb-bot"', 1)[1].split('\n  "${git_safe[@]}" -C "$checkout" archive', 1)[0]
+        copies = '  install -m 0755 "$checkout/rust/target/release/tb-bot"' + installer.split('  install -m 0755 "$checkout/rust/target/release/tb-bot"', 1)[1].split('\n  archived_roots=(', 1)[0]
         with tempfile.TemporaryDirectory(prefix="twitch-collector-packaging-") as directory:
             checkout = Path(directory) / "checkout"
             stage = Path(directory) / "stage"
@@ -357,8 +598,10 @@ class CollectorPackagingTests(unittest.TestCase):
             stamp = Path(directory) / "revision"
             for binary in (
                 "tb-bot", "tb-dashboard", "tb-stream-audit", "tb-config-check",
-                "tb-llm-usage-recover", "tb-category-collector", "tb-twitch-watchdog", "tb-category-storage", "clip_context_learn",
+                "tb-llm-usage-recover", "tb-stt-server", "tb-category-collector", "tb-twitch-watchdog", "tb-category-storage", "clip_context_learn",
             ):
+                if binary == "tb-stt-server" and not ai_expected:
+                    continue
                 if binary == target and scenario == "missing":
                     continue
                 stamp.write_bytes((("0" * 40 if scenario == "wrong_revision" and binary == target else sha) + "\0").encode())
@@ -371,7 +614,7 @@ class CollectorPackagingTests(unittest.TestCase):
             for path in checkout.rglob("*"):
                 path.chmod(path.stat().st_mode & ~0o022)
             wrapper_result = subprocess.run(
-                ["/bin/bash", "-c", 'set -euo pipefail\nsrc="$1"\ndeclare -A restart_seen=([twitch-bot]=1)\n' + preflight + '\nprintf "%s\\n" "${required_artifacts[@]}"', "wrapper", str(checkout)],
+                ["/bin/bash", "-c", 'set -euo pipefail\nsrc="$1"\nsha="$2"\nrepository="$3"\ngit() { shift 2; /usr/bin/git -C "$repository" "$@"; }\ndeclare -A restart_seen=([twitch-bot]=1)\n' + preflight + '\nprintf "%s\\n" "${required_artifacts[@]}"', "wrapper", str(checkout), sha, str(repository)],
                 capture_output=True, text=True, timeout=5,
             )
             prefix = 'set -euo pipefail\ncheckout="$1"\nstage="$2"\ngit_sha="$3"\nrepository="$4"\ntarget_git() { shift 2; /usr/bin/git -C "$repository" "$@"; }\ngit_safe=(target_git)\n'
@@ -397,11 +640,26 @@ class CollectorPackagingTests(unittest.TestCase):
                 self.assertEqual(wrapper_result.returncode, 0, wrapper_result.stderr)
                 self.assertEqual(installer_result.returncode, 0, installer_result.stderr)
                 self.assertEqual(wrapper_result.stdout.splitlines(), installer_result.stdout.splitlines())
-                expected = not native or target == "tb-category-storage"
+                expected = ai_expected if target == "tb-stt-server" else not native or target == "tb-category-storage"
                 self.assertEqual(collector in installer_result.stdout.splitlines(), expected)
                 self.assertEqual((stage / collector).exists(), expected)
                 if expected:
                     self.assertEqual((checkout / collector).read_bytes(), (stage / collector).read_bytes())
+
+    def test_gate_base_deployment_does_not_require_or_copy_stt(self):
+        self.check_target(GATE_BASE_SHA, native=True, target="tb-stt-server")
+
+    def test_stt_binary_is_required_checked_and_copied(self):
+        self.check_target("HEAD", native=True, target="tb-stt-server")
+
+    def test_missing_stt_binary_is_rejected(self):
+        self.check_target("HEAD", native=True, scenario="missing", target="tb-stt-server")
+
+    def test_stale_stt_binary_is_rejected(self):
+        self.check_target("HEAD", native=True, scenario="wrong_revision", target="tb-stt-server")
+
+    def test_existing_release_without_stt_binary_is_rejected(self):
+        self.check_target("HEAD", native=True, scenario="incomplete_release", target="tb-stt-server")
 
     def test_storage_binary_is_required_checked_and_copied(self):
         self.check_target("HEAD", native=True, target="tb-category-storage")
@@ -429,6 +687,139 @@ class CollectorPackagingTests(unittest.TestCase):
 
     def test_existing_release_without_expected_collector_is_rejected(self):
         self.check_target(LEGACY_SHA, native=False, scenario="incomplete_release")
+
+
+class ArchivedSourceTests(unittest.TestCase):
+    def check_archive(self, revision, missing=None, ai_expected=True, existing=False):
+        repository = WRAPPER.parents[2]
+        sha = subprocess.check_output(["git", "-C", str(repository), "rev-parse", revision], text=True).strip()
+        installer = WRAPPER.with_name("install-twitch-release.sh").read_text()
+        classification = "social_ai_expected=0\n" + installer.split("social_ai_expected=0\n", 1)[1].split("\ncollector_expected=0", 1)[0]
+        required = "required_files=(" + installer.split("required_files=(", 1)[1].split("\nrelease_root=", 1)[0]
+        archive = "  archived_roots=(" + installer.split("  archived_roots=(", 1)[1].split("\n  chmod 0755", 1)[0]
+        if missing and not existing:
+            archive = archive.replace('  check_required_sources "$stage"', '  rm -- "$stage/$missing"\n  check_required_sources "$stage"')
+        if existing:
+            archive += '\nrelease="$stage"\nrm -- "$release/$missing"\ncheck_required_sources "$release"'
+            self.assertIn('check_required_sources "$release"\ncheck_binary_revisions "$release"', installer)
+        with tempfile.TemporaryDirectory(prefix="twitch-source-archive-") as directory:
+            stage = Path(directory) / "stage"
+            stage.mkdir()
+            prefix = 'set -euo pipefail\ncheckout="$1"\ngit_sha="$2"\nstage="$3"\nrelease_root="$4"\nmissing="$5"\ngit_safe=(git)\ngenerated=()\ncleanup_stage() { :; }\n'
+            result = subprocess.run(
+                ["/bin/bash", "-c", prefix + classification + "\n" + required + "\n" + archive,
+                 "archive-fixture", str(repository), sha, str(stage), directory, missing or ""],
+                capture_output=True, text=True, timeout=20,
+            )
+            if missing:
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(missing, result.stderr)
+            else:
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((stage / "ops/social-ai/editor.yaml").is_file(), ai_expected)
+                if ai_expected:
+                    self.assertEqual(len(list((stage / "ops/social-ai/skills").glob("*.md"))), 8)
+
+    def test_legacy_base_archives_without_ai_configuration_or_skills(self):
+        self.check_archive(LEGACY_SHA, ai_expected=False)
+
+    def test_gate_base_archives_without_ai_configuration_or_skills(self):
+        self.check_archive(GATE_BASE_SHA, ai_expected=False)
+
+    def test_current_revision_archives_all_ai_configuration_and_skills(self):
+        self.check_archive("HEAD")
+
+    def test_current_revision_never_accepts_missing_ai_configuration_or_skills(self):
+        for missing in ("ops/social-ai/editor.yaml", "ops/social-ai/pricing-v1.yaml", *(
+            f"ops/social-ai/skills/{skill}.md" for skill in (
+                "deadlock-understanding", "highlight-analysis", "editing-strategy", "video-layout",
+                "subtitles", "copywriting", "quality-validation", "feedback-learning",
+            )
+        )):
+            with self.subTest(missing=missing):
+                self.check_archive("HEAD", missing)
+
+
+    def test_existing_ai_release_never_accepts_missing_configuration_or_skills(self):
+        for missing in ("ops/social-ai/editor.yaml", "ops/social-ai/pricing-v1.yaml", *(
+            f"ops/social-ai/skills/{skill}.md" for skill in (
+                "deadlock-understanding", "highlight-analysis", "editing-strategy", "video-layout",
+                "subtitles", "copywriting", "quality-validation", "feedback-learning",
+            )
+        )):
+            with self.subTest(missing=missing):
+                self.check_archive("HEAD", missing, existing=True)
+
+
+class ModelInstallationDeploymentTests(unittest.TestCase):
+    def test_model_installation_is_opt_in_at_argument_parse(self):
+        wrapper = WRAPPER.read_text()
+        parser = wrapper.split('src=""\nrestart_explicit=0\n', 1)[1].split('\nif [[ $restart_explicit -eq 0 ]]', 1)[0]
+        script = 'set -euo pipefail\nsrc=""\nrestart_explicit=0\n' + parser + '\nprintf "install=%s source=%s\\n" "$install_stt_models" "$src"'
+
+        def run(*args):
+            return subprocess.run(
+                ["/bin/bash", "-c", script, "deploy-options", *args],
+                capture_output=True, text=True, timeout=5,
+            )
+
+        default = run("/tmp/isolated-checkout")
+        self.assertEqual(default.returncode, 0, default.stderr)
+        self.assertEqual(default.stdout.strip(), "install=0 source=/tmp/isolated-checkout")
+        explicit = run("/tmp/isolated-checkout", "--install-stt-models")
+        self.assertEqual(explicit.returncode, 0, explicit.stderr)
+        self.assertEqual(explicit.stdout.strip(), "install=1 source=/tmp/isolated-checkout")
+        duplicate = run("--install-stt-models", "--install-stt-models")
+        self.assertEqual(duplicate.returncode, 1)
+        self.assertIn("mehrfach", duplicate.stderr)
+
+    def test_default_skips_models_and_explicit_install_uses_release_helper(self):
+        wrapper = WRAPPER.read_text()
+        start = 'if [[ $install_stt_models -eq 1 ]]; then\n  model_installer='
+        block = start + wrapper.split(start, 1)[1].split('\nfi\n', 1)[0] + '\nfi\n'
+        self.assertIn('model_installer="$candidate/ops/systemd/install-stt-models.sh"', block)
+        self.assertEqual(wrapper.count('/bin/bash "$model_installer"'), 1)
+        self.assertLess(wrapper.index('/usr/local/sbin/install-twitch-release'), wrapper.index(block))
+        with tempfile.TemporaryDirectory(prefix="stt-deploy-opt-in-") as directory:
+            candidate = Path(directory) / "releases" / SHA
+            script = candidate / "ops/systemd/install-stt-models.sh"
+            command = 'set -euo pipefail\ncandidate="$1"\ninstall_stt_models="$2"\n' + block
+
+            def run(option):
+                return subprocess.run(
+                    ["/bin/bash", "-c", command, "deploy-models", str(candidate), str(option)],
+                    capture_output=True, text=True, timeout=5,
+                )
+
+            default = run(0)
+            self.assertEqual(default.returncode, 0, default.stderr)
+            self.assertEqual(default.stdout, "")
+            missing = run(1)
+            self.assertEqual(missing.returncode, 1)
+            self.assertIn("Geprüfter STT-Modellinstaller fehlt", missing.stderr)
+            script.parent.mkdir(parents=True)
+            script.write_text("printf 'release helper invoked\\n'\n")
+            explicit = run(1)
+            self.assertEqual(explicit.returncode, 0, explicit.stderr)
+            self.assertIn("release helper invoked", explicit.stdout)
+            self.assertIn("STT-Modelle aus dem geprüften Release", explicit.stdout)
+            script.unlink()
+            script.symlink_to("/dev/null")
+            linked = run(1)
+            self.assertEqual(linked.returncode, 1)
+            self.assertIn("Geprüfter STT-Modellinstaller fehlt", linked.stderr)
+
+
+class ModelPinContractTests(unittest.TestCase):
+    def test_installer_uses_only_the_native_model_and_vad_pins(self):
+        source = (WRAPPER.parents[2] / "rust/bin/tb-stt-server/src/main.rs").read_text()
+        installer = WRAPPER.with_name("install-stt-models.sh").read_text()
+        sizes = {"MODEL": 574041195, "VAD": 885098}
+        for prefix in ("MODEL", "VAD"):
+            filename = re.search(rf'const DEFAULT_{prefix}_FILE: &str = "([^"]+)";', source).group(1)
+            checksum = re.search(rf'const DEFAULT_{prefix}_SHA256: &str =\s*"([0-9a-f]{{64}})";', source).group(1)
+            self.assertIn(f"stt_copy_model {filename} {checksum} {sizes[prefix]}", installer)
+        self.assertEqual(installer.count("  stt_copy_model ggml-"), 2)
 
 
 if __name__ == "__main__":

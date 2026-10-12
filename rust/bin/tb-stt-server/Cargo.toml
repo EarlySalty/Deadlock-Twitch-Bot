@@ -1,5 +1,6 @@
 [package]
 name = "tb-stt-server"
+build = "../build_revision.rs"
 version = "0.1.0"
 edition.workspace = true
 
@@ -20,4 +21,4 @@ tokio = { workspace = true, features = ["fs", "io-util", "net", "process", "sign
 tb-config = { path = "../../crates/tb-config" }
 tracing.workspace = true
 tracing-subscriber.workspace = true
-whisper-rs = "0.16"
+whisper-rs = { version = "0.16", features = ["tracing_backend"] }

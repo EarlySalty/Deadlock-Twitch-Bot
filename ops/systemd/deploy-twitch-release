@@ -9,7 +9,9 @@ Aufruf:
   deploy-twitch-release --pruefen
   deploy-twitch-release <40-stelliger-git-sha> [quell-checkout]
   deploy-twitch-release <40-stelliger-git-sha> [quell-checkout] --restart <dienst> [--restart <dienst> ...]
+  deploy-twitch-release <40-stelliger-git-sha> [quell-checkout] --install-stt-models [--restart <dienst> ...]
 
+STT-Modelle werden nur mit --install-stt-models aus dem geprüften Release installiert.
 Ohne --restart werden wie bisher Dashboard, Bot und Coaching-Watch neu gestartet.
 Mit --restart werden nur die explizit genannten Twitch-Dienste neu gestartet.
 
@@ -139,6 +141,7 @@ fi
 
 src=""
 restart_explicit=0
+install_stt_models=0
 declare -a restart_targets=()
 declare -A restart_seen=()
 
@@ -176,6 +179,14 @@ add_restart_target() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --install-stt-models)
+      if [[ $install_stt_models -eq 1 ]]; then
+        echo "--install-stt-models wurde mehrfach angegeben." >&2
+        exit 1
+      fi
+      install_stt_models=1
+      shift
+      ;;
     --restart)
       if [[ $# -lt 2 ]]; then
         echo "--restart braucht ein Ziel." >&2
@@ -276,6 +287,11 @@ required_artifacts=(
   bot/admin_dashboard/dist
   website/dist
 )
+social_ai_expected=0
+if GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$src" cat-file -e "$sha:rust/crates/tb-social-media/src/ai_editor/mod.rs" 2>/dev/null; then
+  social_ai_expected=1
+  required_artifacts+=(rust/target/release/tb-stt-server)
+fi
 if [[ $native_expected -eq 0 && -f "$src/rust/bin/tb-category-collector/Cargo.toml" ]]; then
   required_artifacts+=(rust/target/release/tb-category-collector)
 fi
@@ -366,6 +382,16 @@ trap 'exit 143' TERM
 
 /usr/local/sbin/install-twitch-release "$dest" "$sha"
 
+if [[ $install_stt_models -eq 1 ]]; then
+  model_installer="$candidate/ops/systemd/install-stt-models.sh"
+  if [[ ! -f "$model_installer" || -L "$model_installer" ]]; then
+    echo "Geprüfter STT-Modellinstaller fehlt im Release: $model_installer" >&2
+    exit 1
+  fi
+  /bin/bash "$model_installer"
+  printf 'STT-Modelle aus dem geprüften Release installiert oder bestätigt.\n'
+fi
+
 systemctl start deadlock-twitch-migrate.service
 
 peer_installer="/opt/deadlock/twitch/releases/$sha/ops/systemd/install-twitch-contest-peer"
@@ -395,10 +421,11 @@ for ((attempt=0; attempt<30; attempt++)); do
 done
 [[ $reload_observed -eq 1 ]] || { echo "PostgreSQL hat die Peerregeln nicht nachweislich neu geladen." >&2; exit 1; }
 
-local_psql postgres twitch_analytics postgres <<'SQL'
+local_psql postgres twitch_analytics postgres -v social_ai_expected="$social_ai_expected" <<'SQL'
 BEGIN READ ONLY;
+SELECT set_config('twitch_deploy.social_ai_expected', :'social_ai_expected', true);
 DO $verification$
-DECLARE r text; t text; p text;
+DECLARE r text; t text; p text; consent oid := to_regclass('public.social_ai_user_consent');
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='twitchanalysis' AND rolcanlogin AND
         NOT (rolsuper OR rolinherit OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls))
@@ -464,6 +491,24 @@ BEGIN
         AND has_table_privilege('twitchaudit',c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')) THEN
         RAISE EXCEPTION 'Auditverbrauch: fremde Schreibrechte';
     END IF;
+    IF current_setting('twitch_deploy.social_ai_expected')::boolean AND
+        (consent IS NULL OR NOT has_table_privilege('twitchanalysis',consent,'SELECT')) THEN
+        RAISE EXCEPTION 'Analysewriter ohne erforderliches KI-Zustimmungsleserecht';
+    END IF;
+    IF consent IS NOT NULL AND (
+        EXISTS (SELECT FROM pg_class c WHERE c.oid=consent AND
+            (c.relkind NOT IN ('r','p') OR c.relowner='twitchanalysis'::regrole)) OR
+        has_table_privilege('twitchanalysis',consent,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') OR
+        has_table_privilege('twitchanalysis',consent,'SELECT WITH GRANT OPTION') OR
+        has_any_column_privilege('twitchanalysis',consent,'INSERT,UPDATE,REFERENCES') OR
+        EXISTS (SELECT FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a
+            WHERE c.oid=consent AND (a.grantee=0 OR
+                (a.grantee='twitchanalysis'::regrole AND (a.privilege_type<>'SELECT' OR a.is_grantable)))) OR
+        EXISTS (SELECT FROM pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) a
+            WHERE att.attrelid=consent AND a.grantee IN (0,'twitchanalysis'::regrole))
+    ) THEN
+        RAISE EXCEPTION 'Analysewriter hat zusätzliche KI-Zustimmungsrechte';
+    END IF;
     IF EXISTS (
         WITH extension_metadata AS (
             SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -499,7 +544,7 @@ BEGIN
               AND c.relkind IN ('r','p','v','m','f','S')
               AND NOT (n.nspname='public' AND c.relname=ANY(ARRAY[
                   'twitch_ai_chat_sessions','twitch_ai_chat_hourly','twitch_ai_chat_reservations',
-                  'llm_usage','llm_usage_id_seq']))
+                  'llm_usage','llm_usage_id_seq','social_ai_user_consent']))
         )
         SELECT FROM relation_rights r WHERE r.direct_writer_grant OR CASE WHEN r.relkind='S' THEN
             has_sequence_privilege('twitchanalysis',r.oid,'USAGE,UPDATE') OR

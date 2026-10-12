@@ -451,6 +451,12 @@ impl PreviewWorker {
                     }
                 }
             }
+            Err(crate::video_processor::VideoProcessorError::ProductionBusy) => {
+                if let Err(error) = sqlx::query("UPDATE twitch_clips_social_media SET preview_status='pending', preview_error=NULL, preview_updated_at=clock_timestamp() WHERE id=$1 AND preview_status='rendering' AND preview_updated_at=$2::text::timestamptz")
+                    .bind(job.clip_db_id).bind(&job.claimed_at).execute(&self.pool).await {
+                    tracing::warn!(clip_db_id=job.clip_db_id, %error, "Videovorschau konnte nicht zurückgestellt werden");
+                }
+            }
             Err(e) => {
                 let _ = finish_error(
                     &self.pool,

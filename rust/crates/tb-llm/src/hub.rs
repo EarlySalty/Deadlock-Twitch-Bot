@@ -652,6 +652,7 @@ pub(crate) async fn call_endpoint(
                 error_code,
                 http_status,
                 latency_ms: started.elapsed().as_millis() as i64,
+                social_accounting: None,
                 model: None,
             };
             ledger::journal_completion(&completion);
@@ -771,7 +772,7 @@ struct ResponseMetadata {
     request_id: Option<String>,
     status: Option<i32>,
 }
-fn safe_request_id(id: &str) -> Option<String> {
+pub(crate) fn safe_request_id(id: &str) -> Option<String> {
     if !id.is_empty()
         && id.len() <= 256
         && id
@@ -1014,8 +1015,7 @@ mod tests {
                 .unwrap();
             let error = finish(response)
                 .await
-                .err()
-                .expect("Große Antwort muss abgewiesen werden");
+                .expect_err("Große Antwort muss abgewiesen werden");
             match (status, error) {
                 (
                     429,

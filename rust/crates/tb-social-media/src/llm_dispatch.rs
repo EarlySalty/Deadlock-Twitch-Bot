@@ -242,7 +242,10 @@ mod tests {
 
         let response = provider.generate(&LlmRequest::default()).await.unwrap();
         assert_eq!(response.provider, "fireworks");
-        assert_eq!(response.model, tb_llm::selection::configured_fireworks_model());
+        assert_eq!(
+            response.model,
+            tb_llm::selection::configured_fireworks_model()
+        );
         assert_eq!(response.youtube.title.as_deref(), Some("YT"));
         assert_eq!(response.cost_usd_estimate, Some(0.0018));
     }

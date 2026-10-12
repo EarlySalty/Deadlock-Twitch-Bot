@@ -1,4 +1,3 @@
-//! Handler-Module: je ein Modul pro Endpoint.
 pub mod ad_manager;
 pub mod admin_actor;
 pub mod admin_affiliate;
@@ -110,6 +109,7 @@ pub mod self_explainer;
 pub mod session_detail;
 pub mod silent_settings;
 pub mod social_media;
+pub mod social_media_ai;
 pub mod spa;
 pub mod stream_kennzahlen;
 pub mod stream_report;

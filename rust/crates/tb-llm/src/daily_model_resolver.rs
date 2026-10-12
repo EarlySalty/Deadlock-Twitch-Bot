@@ -1,4 +1,3 @@
-//! Einziger Katalogwriter. Keine Chattexte, keine Konfiguration aus ENV.
 use crate::{hub::LlmError, LlmEndpoint, Request};
 use chrono::{DateTime, Utc};
 use fireworks_model_selection::{Selection, STATE_PATH, TRUSTED_UID};
@@ -358,7 +357,16 @@ fn attempts(path: &Path) -> Result<Attempts, LlmError> {
     }
     serde_json::from_slice(&protected_read(path, 4096)?).map_err(|_| error("Prüfstatus ungültig"))
 }
-/// Prozesslock plus persistente 24h-Frist, auch für manuell gestartete Läufe.
+struct ResolverLock(File);
+
+impl Drop for ResolverLock {
+    fn drop(&mut self) {
+        if FileExt::unlock(&self.0).is_err() {
+            tracing::warn!("Resolver lock could not be released explicitly");
+        }
+    }
+}
+
 pub async fn run(config: Config) -> Result<(), LlmError> {
     run_at(
         &config,
@@ -405,6 +413,7 @@ async fn run_at(
         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
         Err(_) => return Err(error("Resolverlock fehlgeschlagen")),
     }
+    let _lock = ResolverLock(lock);
     let attempt_path = dir.join("llm-model-selection-attempts.json");
     let mut status = attempts(&attempt_path)?;
     let now = time().timestamp();
@@ -676,6 +685,36 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc)
     }
+    #[test]
+    fn resolver_guard_releases_shared_description_without_waiting_for_other_descriptors() {
+        let directory = tempfile::tempdir().expect("private lock directory");
+        let path = directory.path().join("lock");
+        let first = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .expect("lock file");
+        first.try_lock_exclusive().expect("exclusive lock");
+        let shared = first.try_clone().expect("shared open file description");
+        let second = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("independent description");
+        assert_eq!(
+            second.try_lock_exclusive().expect_err("held lock").kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        drop(ResolverLock(first));
+        second
+            .try_lock_exclusive()
+            .expect("release does not wait for shared descriptor close");
+        drop(ResolverLock(second));
+        drop(shared);
+    }
+
     #[tokio::test]
     async fn failed_refresh_then_regular_retry_records_only_success() {
         let fixture = Fixture::new("retry").await;
@@ -689,6 +728,17 @@ mod tests {
         assert_eq!(fixture.selection(), original);
         assert_eq!(fixture.status().checked, yesterday.timestamp());
         fixture.respond(200).await;
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(fixture.dir.join("llm-model-selection.lock"))
+            .unwrap();
+        lock.try_lock_exclusive().unwrap();
+        let lock = ResolverLock(lock);
+        fixture.run(now).await.unwrap();
+        assert_eq!(fixture.status().checked, yesterday.timestamp());
+        assert_eq!(fixture.server.received_requests().await.unwrap().len(), 0);
+        drop(lock);
         fixture.run(now).await.unwrap();
         assert_eq!(fixture.server.received_requests().await.unwrap().len(), 2);
         assert_eq!(fixture.status().checked, now.timestamp());
@@ -923,6 +973,7 @@ mod tests {
             .open(dir.join("lock"))
             .unwrap();
         first.try_lock_exclusive().unwrap();
+        let first = ResolverLock(first);
         let second = OpenOptions::new()
             .read(true)
             .write(true)
@@ -931,7 +982,7 @@ mod tests {
         assert!(second.try_lock_exclusive().is_err());
         drop(first);
         assert!(second.try_lock_exclusive().is_ok());
-        drop(second);
+        drop(ResolverLock(second));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

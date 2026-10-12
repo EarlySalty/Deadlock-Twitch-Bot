@@ -148,13 +148,52 @@ pub async fn list(
     .collect()
 }
 
+pub async fn next_clip_version(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    clip_id: i64,
+) -> Result<(i32, Option<i64>), ProducedVideoError> {
+    let maximum: i32 = sqlx::query_scalar("SELECT COALESCE(MAX(version_no), 0) FROM social_produced_videos WHERE twitch_user_id = $1 AND clip_id = $2")
+        .bind(twitch_user_id).bind(clip_id).fetch_one(pool).await?;
+    let parent: Option<i64> = sqlx::query_scalar("SELECT id FROM social_produced_videos WHERE twitch_user_id = $1 AND clip_id = $2 AND file_path IS NOT NULL AND status IN ('review','approved','scheduled','published') ORDER BY version_no DESC, id DESC LIMIT 1")
+        .bind(twitch_user_id).bind(clip_id).fetch_optional(pool).await?;
+    Ok((
+        maximum.checked_add(1).ok_or(ProducedVideoError::Invalid)?,
+        parent,
+    ))
+}
+
+pub async fn find_ai_version(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    clip_id: i64,
+    manual_ai_job_id: Option<i64>,
+    production_job_id: Option<i64>,
+) -> Result<Option<ProducedVideo>, ProducedVideoError> {
+    if manual_ai_job_id.is_some() == production_job_id.is_some() {
+        return Err(ProducedVideoError::Invalid);
+    }
+    sqlx::query(sqlx::AssertSqlSafe(format!("{SELECT} WHERE twitch_user_id = $1 AND clip_id = $2 AND mode = 'ai' AND variant_index = 0 AND (($3::bigint IS NOT NULL AND job_id IS NULL AND metadata ->> 'manual_ai_job_id' = $3::text) OR ($4::bigint IS NOT NULL AND job_id = $4)) ORDER BY version_no DESC LIMIT 1")))
+        .bind(twitch_user_id).bind(clip_id).bind(manual_ai_job_id).bind(production_job_id)
+        .fetch_optional(pool).await?.map(from_row).transpose()
+}
+
 pub async fn insert(
     pool: &PgPool,
     video: &NewProducedVideo,
 ) -> Result<ProducedVideo, ProducedVideoError> {
-    if video.version_no <= 0 || video.variant_index < 0 {
+    insert_with_metadata(pool, video, &Value::Object(Default::default())).await
+}
+
+pub async fn insert_with_metadata(
+    pool: &PgPool,
+    video: &NewProducedVideo,
+    metadata: &Value,
+) -> Result<ProducedVideo, ProducedVideoError> {
+    if video.version_no <= 0 || video.variant_index < 0 || !metadata.is_object() {
         return Err(ProducedVideoError::Invalid);
     }
+    let metadata = serde_json::to_string(metadata)?;
     let mut tx = pool.begin().await?;
     autopilot_settings::lock_owner(&mut tx, &video.twitch_user_id).await?;
     let owned: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM twitch_clips_social_media WHERE id = $1 AND twitch_user_id = $2)")
@@ -176,9 +215,9 @@ pub async fn insert(
             return Err(ProducedVideoError::Ownership);
         }
     }
-    let id: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, version_no, parent_version_id, variant_index) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id")
+    let id: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, version_no, parent_version_id, variant_index, metadata, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text::jsonb, CASE WHEN $4 = 'ai' THEN NOW() + INTERVAL '7 days' ELSE NULL END) RETURNING id")
         .bind(&video.twitch_user_id).bind(video.clip_id).bind(video.job_id).bind(video.mode.as_str())
-        .bind(video.version_no).bind(video.parent_version_id).bind(video.variant_index).fetch_one(&mut *tx).await?;
+        .bind(video.version_no).bind(video.parent_version_id).bind(video.variant_index).bind(metadata).fetch_one(&mut *tx).await?;
     let row = sqlx::query(sqlx::AssertSqlSafe(format!("{SELECT} WHERE id = $1")))
         .bind(id)
         .fetch_one(&mut *tx)
@@ -198,6 +237,83 @@ async fn ensure_file(path: &str) -> Result<(), ProducedVideoError> {
     Ok(())
 }
 
+pub async fn record_render_time(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    id: i64,
+    rendering_ms: i64,
+) -> Result<(), ProducedVideoError> {
+    if rendering_ms < 0 {
+        return Err(ProducedVideoError::Invalid);
+    }
+    let changed = sqlx::query("UPDATE social_produced_videos SET metadata = metadata || jsonb_build_object('rendering_ms', $3::bigint, 'edited_rendering_ms', $3::bigint) WHERE id=$1 AND twitch_user_id=$2 AND mode='ai' AND status='rendering'")
+        .bind(id).bind(twitch_user_id).bind(rendering_ms).execute(pool).await?.rows_affected();
+    if changed != 1 {
+        return Err(ProducedVideoError::State);
+    }
+    Ok(())
+}
+
+pub(crate) async fn record_original_preview(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    id: i64,
+    preview: &Value,
+) -> Result<(), ProducedVideoError> {
+    if !preview.is_object() {
+        return Err(ProducedVideoError::Invalid);
+    }
+    let changed = sqlx::query("UPDATE social_produced_videos SET metadata = jsonb_set(metadata, '{original_preview}', $3::text::jsonb), expires_at = COALESCE(expires_at, NOW() + INTERVAL '7 days') WHERE id=$1 AND twitch_user_id=$2 AND mode='ai' AND status='rendering'")
+        .bind(id).bind(twitch_user_id).bind(serde_json::to_string(preview)?).execute(pool).await?.rows_affected();
+    if changed != 1 {
+        return Err(ProducedVideoError::State);
+    }
+    Ok(())
+}
+
+pub(crate) async fn record_ffmpeg_total(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    id: i64,
+    rendering_ms: i64,
+) -> Result<(), ProducedVideoError> {
+    if rendering_ms < 0 {
+        return Err(ProducedVideoError::Invalid);
+    }
+    let changed = sqlx::query("UPDATE social_produced_videos SET metadata = jsonb_set(metadata, '{rendering_ms}', to_jsonb($3::bigint)) WHERE id=$1 AND twitch_user_id=$2 AND mode='ai' AND status='rendering'")
+        .bind(id).bind(twitch_user_id).bind(rendering_ms).execute(pool).await?.rows_affected();
+    if changed != 1 {
+        return Err(ProducedVideoError::State);
+    }
+    Ok(())
+}
+
+pub(crate) async fn claim_expired_ai_artifacts(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    id: i64,
+) -> Result<Option<String>, ProducedVideoError> {
+    let mut tx = pool.begin().await?;
+    autopilot_settings::lock_owner(&mut tx, twitch_user_id).await?;
+    let status = sqlx::query_scalar("UPDATE social_produced_videos SET status=CASE WHEN status IN ('review','rendering','failed') THEN 'expired' ELSE status END WHERE id=$1 AND twitch_user_id=$2 AND mode='ai' AND expires_at <= NOW() AND (metadata ? 'manual_ai_job_id' OR metadata ? 'production_ai_job_id') AND (metadata -> 'ai_artifacts_expired') IS DISTINCT FROM 'true'::jsonb RETURNING status")
+        .bind(id).bind(twitch_user_id).fetch_optional(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(status)
+}
+
+pub(crate) async fn finish_expired_ai_artifacts(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    id: i64,
+) -> Result<(), ProducedVideoError> {
+    let changed = sqlx::query("UPDATE social_produced_videos SET metadata=jsonb_set(metadata,'{ai_artifacts_expired}','true'::jsonb) WHERE id=$1 AND twitch_user_id=$2 AND mode='ai' AND expires_at <= NOW() AND (metadata ? 'manual_ai_job_id' OR metadata ? 'production_ai_job_id')")
+        .bind(id).bind(twitch_user_id).execute(pool).await?.rows_affected();
+    if changed != 1 {
+        return Err(ProducedVideoError::State);
+    }
+    Ok(())
+}
+
 pub async fn complete_render(
     pool: &PgPool,
     twitch_user_id: &str,
@@ -209,7 +325,7 @@ pub async fn complete_render(
     }
     ensure_file(&rendered.file_path).await?;
     let changed = sqlx::query("UPDATE social_produced_videos SET file_path = $3, duration_ms = $4, needs_review = $5,
-        review_reasons = $6::text::jsonb, metadata = $7::text::jsonb, status = 'review', expires_at = NOW() + INTERVAL '7 days'
+        review_reasons = $6::text::jsonb, metadata = $7::text::jsonb || metadata, status = 'review', expires_at = NOW() + INTERVAL '7 days'
         WHERE id = $1 AND twitch_user_id = $2 AND status = 'rendering'")
         .bind(id).bind(twitch_user_id).bind(&rendered.file_path).bind(rendered.duration_ms).bind(rendered.needs_review)
         .bind(serde_json::to_string(&rendered.review_reasons)?).bind(serde_json::to_string(&rendered.metadata)?)
