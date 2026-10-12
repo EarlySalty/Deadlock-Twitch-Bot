@@ -113,10 +113,8 @@ pub mod autopilot;
 mod autopilot_schedule;
 pub use autopilot_schedule::{
     cancel_handler as autopilot_queue_cancel_handler,
-    get_handler as autopilot_schedule_get_handler,
-    next_handler as autopilot_queue_next_handler,
-    order_handler as autopilot_queue_order_handler,
-    put_handler as autopilot_schedule_put_handler,
+    get_handler as autopilot_schedule_get_handler, next_handler as autopilot_queue_next_handler,
+    order_handler as autopilot_queue_order_handler, put_handler as autopilot_schedule_put_handler,
 };
 
 const MAX_PARAMETER_LAENGE: usize = 64;
