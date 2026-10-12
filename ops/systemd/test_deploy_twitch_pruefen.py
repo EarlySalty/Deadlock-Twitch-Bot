@@ -263,6 +263,241 @@ WITH category_collector_status AS (
                 self.assertEqual(self.snapshot_proof(**values)[0], "f")
 
 
+class AnalysisConsentGrantTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.dsn = os.environ.get("TB_TEST_CONSENT_DATABASE_URL")
+        if not cls.dsn:
+            if os.environ.get("TB_TEST_REQUIRE_DB") == "1":
+                raise RuntimeError("The isolated PostgreSQL test database is required.")
+            raise unittest.SkipTest(
+                "TB_TEST_CONSENT_DATABASE_URL is required for consent ACL proofs."
+            )
+        if cls.dsn != "postgres://postgres@127.0.0.1:33101/postgres":
+            raise RuntimeError(
+                "Consent ACL proofs only use the isolated test database on port 33101."
+            )
+        source = WRAPPER.read_text()
+        cls.verifier = (
+            source.split("BEGIN READ ONLY;\n", 1)[1].split(
+                "    FOREACH p IN ARRAY ARRAY['SELECT','INSERT','UPDATE','DELETE'] LOOP\n"
+                "        IF NOT has_table_privilege('twitchbot'",
+                1,
+            )[0]
+            + "END\n$verification$;\n"
+        )
+        roles = WRAPPER.with_name("twitch-runtime-roles.sql").read_text()
+        cls.role_refresh = "\n".join(
+            "DO $"
+            + name
+            + "$"
+            + roles.split("DO $" + name + "$", 1)[1].split(
+                "$" + name + "$;",
+                1,
+            )[0]
+            + "$"
+            + name
+            + "$;"
+            for name in ("analysis_writer", "audit_usage")
+        )
+        cls.consent_refresh = (
+            "DO $social_ai_consent_roles$"
+            + roles.split(
+                "DO $social_ai_consent_roles$",
+                1,
+            )[1].split("$social_ai_consent_roles$;", 1)[0]
+            + "$social_ai_consent_roles$;"
+        )
+        cls.migration = (
+            WRAPPER.parents[2]
+            / "rust/migrations/20261011200001_social_ai_provider_usage.sql"
+        ).read_text()
+
+    def verify_grants(self, mutation="", ai_expected=True, migrated=True):
+        fixtures = """
+BEGIN;
+SET LOCAL statement_timeout = '5s';
+CREATE ROLE twitchbot LOGIN NOINHERIT;
+CREATE ROLE twitchdash LOGIN NOINHERIT;
+CREATE ROLE twitchlegacy LOGIN NOINHERIT;
+CREATE ROLE twitchcollector LOGIN NOINHERIT;
+CREATE ROLE twitchcontest LOGIN NOINHERIT;
+CREATE TABLE public.twitch_ai_chat_sessions (id text);
+CREATE TABLE public.twitch_ai_chat_hourly (id text);
+CREATE TABLE public.twitch_ai_chat_reservations (id text);
+CREATE TABLE public.llm_usage (id serial, purpose text, provider text);
+CREATE TABLE public.unrelated_private_fixture (id text);
+CREATE SEQUENCE public.unrelated_sequence_fixture;
+CREATE SCHEMA unrelated_fixture;
+CREATE TABLE unrelated_fixture.social_ai_user_consent (id text);
+CREATE SCHEMA _timescaledb_catalog;
+CREATE TABLE _timescaledb_catalog.chunk (relid oid);
+"""
+        migration = self.migration if migrated else ""
+        result = subprocess.run(
+            [
+                "/usr/bin/psql",
+                "--no-psqlrc",
+                "--no-password",
+                "--quiet",
+                "-At",
+                "--dbname",
+                self.dsn + "?connect_timeout=5",
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-v",
+                f"social_ai_expected={int(ai_expected)}",
+            ],
+            input=fixtures
+            + migration
+            + self.role_refresh
+            + self.consent_refresh
+            + mutation
+            + "\nSET LOCAL transaction_read_only = on;\n"
+            + self.verifier
+            + "ROLLBACK;\n",
+            env={},
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        return result
+
+    def test_required_m1_consent_read_survives_real_migration_and_role_refresh(self):
+        result = self.verify_grants(
+            "SET LOCAL ROLE twitchanalysis;"
+            "SELECT external_ai_consent FROM public.social_ai_user_consent LIMIT 0;"
+            "RESET ROLE;"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_consent_requirement_uses_the_requested_revision_not_the_checkout(self):
+        source = WRAPPER.read_text()
+        classification = (
+            "social_ai_expected=0\n"
+            + source.split("social_ai_expected=0\n", 1)[1].split(
+                "\nif [[ $native_expected",
+                1,
+            )[0]
+        )
+        for revision, expected in ((GATE_BASE_SHA, "0"), ("HEAD", "1")):
+            with self.subTest(revision=revision):
+                result = subprocess.run(
+                    [
+                        "/bin/bash",
+                        "-c",
+                        'set -euo pipefail\nsrc="$1"\nsha="$2"\nrequired_artifacts=()\n'
+                        + classification
+                        + '\nprintf "%s\\n" "$social_ai_expected"',
+                        "target-consent-fixture",
+                        str(WRAPPER.parents[2]),
+                        revision,
+                    ],
+                    env={},
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+
+    def test_m1_requires_the_table_and_table_level_select(self):
+        for mutation in (
+            "DROP TABLE public.social_ai_user_consent;",
+            "REVOKE SELECT ON public.social_ai_user_consent FROM twitchanalysis;",
+            (
+                "REVOKE SELECT ON public.social_ai_user_consent FROM twitchanalysis;"
+                "GRANT SELECT (external_ai_consent) ON public.social_ai_user_consent TO twitchanalysis;"
+            ),
+        ):
+            with self.subTest(mutation=mutation):
+                result = self.verify_grants(mutation)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "ohne erforderliches KI-Zustimmungsleserecht", result.stderr
+                )
+
+    def test_legacy_target_accepts_unmigrated_and_forward_migrated_databases(self):
+        for migrated, mutation in (
+            (False, ""),
+            (True, ""),
+            (
+                True,
+                "REVOKE SELECT ON public.social_ai_user_consent FROM twitchanalysis;",
+            ),
+        ):
+            with self.subTest(migrated=migrated, mutation=mutation):
+                result = self.verify_grants(
+                    mutation, ai_expected=False, migrated=migrated
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_consent_writes_columns_ownership_and_delegation_fail_for_both_targets(
+        self,
+    ):
+        mutations = (
+            [
+                f"GRANT {privilege} ON public.social_ai_user_consent TO twitchanalysis;"
+                for privilege in (
+                    "INSERT",
+                    "UPDATE",
+                    "DELETE",
+                    "TRUNCATE",
+                    "REFERENCES",
+                    "TRIGGER",
+                )
+            ]
+            + [
+                f"GRANT {privilege} (external_ai_consent) ON public.social_ai_user_consent TO twitchanalysis;"
+                for privilege in ("SELECT", "INSERT", "UPDATE", "REFERENCES")
+            ]
+            + [
+                "ALTER TABLE public.social_ai_user_consent OWNER TO twitchanalysis;",
+                "GRANT SELECT ON public.social_ai_user_consent TO twitchanalysis WITH GRANT OPTION;",
+                "GRANT SELECT ON public.social_ai_user_consent TO PUBLIC;",
+                "GRANT UPDATE ON public.social_ai_user_consent TO PUBLIC;",
+                "GRANT SELECT (external_ai_consent) ON public.social_ai_user_consent TO PUBLIC;",
+            ]
+        )
+        for ai_expected in (True, False):
+            for mutation in mutations:
+                with self.subTest(ai_expected=ai_expected, mutation=mutation):
+                    result = self.verify_grants(mutation, ai_expected=ai_expected)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertRegex(
+                        result.stderr,
+                        "zusätzliche KI-Zustimmungsrechte|Auditverbrauch: fremde Schreibrechte",
+                    )
+
+    def test_foreign_table_column_sequence_schema_and_role_rights_stay_denied(self):
+        mutations = (
+            "GRANT SELECT ON public.unrelated_private_fixture TO twitchanalysis;",
+            "GRANT SELECT (id) ON public.unrelated_private_fixture TO twitchanalysis;",
+            "GRANT UPDATE (id) ON public.unrelated_private_fixture TO twitchanalysis;",
+            "ALTER TABLE public.unrelated_private_fixture OWNER TO twitchanalysis;",
+            "GRANT USAGE ON public.unrelated_sequence_fixture TO twitchanalysis;",
+            "GRANT SELECT ON public.unrelated_sequence_fixture TO twitchanalysis;",
+            "GRANT UPDATE ON public.unrelated_sequence_fixture TO twitchanalysis;",
+            (
+                "GRANT USAGE ON SCHEMA unrelated_fixture TO twitchanalysis;"
+                "GRANT SELECT ON unrelated_fixture.social_ai_user_consent TO twitchanalysis;"
+            ),
+            "GRANT CREATE ON SCHEMA unrelated_fixture TO twitchanalysis;",
+            "GRANT twitchanalysis TO twitchdash;",
+            "ALTER ROLE twitchanalysis INHERIT;",
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                result = self.verify_grants(mutation)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertRegex(
+                    result.stderr,
+                    "fremde Tabellen|Schemarechte falsch|Mitgliedschaften falsch",
+                )
+
+
 class ArtifactPathTests(unittest.TestCase):
     def check_layout(self, dashboards):
         wrapper = WRAPPER.read_text()
