@@ -100,7 +100,11 @@ pub(crate) async fn check(
                 "ai_guard_ohne_streamer",
                 "KI-Aufruf ohne Streamerbezug abgewiesen, weil ein Server die KI aus hat",
             );
-            tracing::warn!(use_case, purpose, "KI_GUARD: Aufruf ohne Streamerbezug abgewiesen");
+            tracing::warn!(
+                use_case,
+                purpose,
+                "KI_GUARD: Aufruf ohne Streamerbezug abgewiesen"
+            );
             return Err(LlmError::Disabled(format!(
                 "{use_case}: Streamerbezug fehlt, KI-Schalter nicht prüfbar"
             )));
@@ -144,6 +148,18 @@ pub async fn streamer_ai_allowed(
     Ok(streamer_verdict(pool, id, login.as_deref()).await?.1)
 }
 
+/// Dieselbe Entscheidung für Eingänge mit eigenem Pool, die nicht über
+/// [`crate::complete`] laufen (Social-AI-Editor).
+pub(crate) async fn twitch_user_ai_allowed(
+    pool: &PgPool,
+    twitch_user_id: &str,
+) -> Result<bool, LlmError> {
+    match clean(Some(twitch_user_id)) {
+        Some(id) => Ok(streamer_verdict(pool, Some(id), None).await?.1),
+        None => Ok(false),
+    }
+}
+
 fn clean(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
@@ -182,7 +198,9 @@ async fn streamer_verdict(
     }
 
     let (twitch_user_id, erlaubt) = match load(pool, id, login).await {
-        Ok((twitch_user_id, erlaubt)) => (twitch_user_id.or_else(|| id.map(str::to_string)), erlaubt),
+        Ok((twitch_user_id, erlaubt)) => {
+            (twitch_user_id.or_else(|| id.map(str::to_string)), erlaubt)
+        }
         // Ohne Multi-Server-Schema gibt es nur den deutschen Server.
         Err(error) if fehlendes_schema(&error) => (id.map(str::to_string), true),
         Err(error) => {

@@ -1019,3 +1019,54 @@ async fn consent_budget_and_native_mock_contract() {
         2
     );
 }
+
+#[tokio::test]
+async fn ki_schalter_des_servers_sperrt_den_editor_vor_jeder_reservierung() {
+    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+    let database = DisposablePostgres::start().await;
+    let pool = &database.pool;
+    sqlx::raw_sql(include_str!(
+        "../../../../test-support/multiserver_ai_schema.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("guild schema");
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261012140000_ai_features_rule.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("ai rule");
+    sqlx::raw_sql(
+        "INSERT INTO discord_guilds (guild_id, ai_features) VALUES (1289721245281292288, true), (900000000000000001, false); \
+         INSERT INTO streamer_guilds (twitch_user_id, guild_id) VALUES ('fremder_server', 900000000000000001); \
+         INSERT INTO public.social_ai_user_consent(twitch_user_id,external_ai_consent) VALUES ('fremder_server',true); \
+         INSERT INTO public.social_media_settings(key,value) VALUES ('external_llm_consent','true'::jsonb)",
+    )
+    .execute(pool)
+    .await
+    .expect("seed");
+    let mut configuration = config();
+    let mock = MockServer::start().await;
+    configuration.provider.endpoint = mock.uri();
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&mock)
+        .await;
+    let context = EditorContext {
+        twitch_user_id: "fremder_server".into(),
+        job_id: "job".into(),
+        stage: "caption".into(),
+    };
+
+    let denied = complete_with_key(pool, &context, &configuration, &request(), "fake-key")
+        .await
+        .expect_err("KI des Servers ist aus");
+    assert_eq!(denied.kind, ErrorKind::Consent);
+    let reserved: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM public.llm_usage")
+        .fetch_one(pool)
+        .await
+        .expect("ledger");
+    assert_eq!(reserved, 0, "keine Reservierung bei ausgeschalteter KI");
+}

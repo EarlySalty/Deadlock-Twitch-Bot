@@ -561,6 +561,14 @@ async fn complete_with_key(
     configuration.validate()?;
     let config = &configuration.provider;
     let validator = validate_request(config, context, request)?;
+    // KI-Schalter pro Server (Paket K): Der Editor läuft nicht über
+    // `crate::complete`, also prüft er den Guard selbst, vor jeder Reservierung.
+    if !crate::ai_guard::twitch_user_ai_allowed(pool, &context.twitch_user_id)
+        .await
+        .map_err(|_| EditorError::new(ErrorKind::Consent))?
+    {
+        return Err(EditorError::new(ErrorKind::Consent));
+    }
     let body = build_body(config, request)?;
     let reservation = config
         .pricing

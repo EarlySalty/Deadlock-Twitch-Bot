@@ -16,8 +16,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 mod test_database;
 
 const LLM_USAGE_SCHEMA: &str = include_str!("../sqlx/schema.sql");
-const PAKET_K_REGEL: &str =
-    include_str!("../../../migrations/20261012140000_ai_features_rule.sql");
+const PAKET_K_REGEL: &str = include_str!("../../../migrations/20261012140000_ai_features_rule.sql");
 const PAKET_K_LEDGER: &str =
     include_str!("../../../migrations/20261012140100_llm_usage_streamer.sql");
 const DB_NAME: &str = "tb_llm_ai_guard_test";
@@ -32,7 +31,7 @@ fn endpoint(server: &MockServer) -> tb_llm::LlmEndpoint {
     tb_llm::LlmEndpoint {
         provider: "fireworks",
         base_url: server.uri(),
-        model: tb_llm::selection::configured_fireworks_model().into(),
+        model: tb_llm::selection::configured_fireworks_model(),
         api_key: Some("synthetic-key".into()),
     }
 }
@@ -71,12 +70,24 @@ async fn ki_schalter_sperrt_fremde_server_und_belegt_im_ledger() {
         .await
         .expect("test db connect");
 
-    sqlx::raw_sql(LLM_USAGE_SCHEMA).execute(&pool).await.expect("llm_usage");
-    sqlx::raw_sql(GUILD_SCHEMA).execute(&pool).await.expect("guild schema");
+    sqlx::raw_sql(LLM_USAGE_SCHEMA)
+        .execute(&pool)
+        .await
+        .expect("llm_usage");
+    sqlx::raw_sql(GUILD_SCHEMA)
+        .execute(&pool)
+        .await
+        .expect("guild schema");
     // Idempotent: ein zweiter Lauf darf nicht scheitern.
     for _ in 0..2 {
-        sqlx::raw_sql(PAKET_K_REGEL).execute(&pool).await.expect("Migration Regel");
-        sqlx::raw_sql(PAKET_K_LEDGER).execute(&pool).await.expect("Migration Ledger");
+        sqlx::raw_sql(PAKET_K_REGEL)
+            .execute(&pool)
+            .await
+            .expect("Migration Regel");
+        sqlx::raw_sql(PAKET_K_LEDGER)
+            .execute(&pool)
+            .await
+            .expect("Migration Ledger");
     }
 
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
@@ -98,16 +109,16 @@ async fn ki_schalter_sperrt_fremde_server_und_belegt_im_ledger() {
 
     // Die Regel als DB-Funktion.
     for (id, login, erwartet) in [
-        (Some("100"), None, true),            // deutscher Server
-        (Some("200"), None, false),           // nur fremder Server ohne KI
-        (Some("300"), None, true),            // beide Server
-        (Some("400"), None, true),            // ohne Zeile: deutscher Server
-        (Some("500"), None, false),           // nur inaktiv, fremd
-        (Some("600"), None, true),            // nur inaktiv, deutsch
-        (Some("700"), None, false),           // entfernter Server zählt nicht als aktiv
-        (None, Some("FREMD_KANAL"), false),   // per Login
+        (Some("100"), None, true),          // deutscher Server
+        (Some("200"), None, false),         // nur fremder Server ohne KI
+        (Some("300"), None, true),          // beide Server
+        (Some("400"), None, true),          // ohne Zeile: deutscher Server
+        (Some("500"), None, false),         // nur inaktiv, fremd
+        (Some("600"), None, true),          // nur inaktiv, deutsch
+        (Some("700"), None, false),         // entfernter Server zählt nicht als aktiv
+        (None, Some("FREMD_KANAL"), false), // per Login
         (None, Some("de_kanal"), true),
-        (None, Some("unbekannt"), true),      // unbekannter Login: deutscher Server
+        (None, Some("unbekannt"), true), // unbekannter Login: deutscher Server
     ] {
         let erlaubt: bool = sqlx::query_scalar("SELECT twitch_streamer_ai_allowed($1, $2)")
             .bind(id)
@@ -120,8 +131,14 @@ async fn ki_schalter_sperrt_fremde_server_und_belegt_im_ledger() {
 
     tb_llm::ledger::initialize(pool.clone(), "twitch-test", "ai-guard").unwrap();
 
-    assert_eq!(tb_llm::streamer_ai_allowed(Some("200"), None).await, Ok(false));
-    assert_eq!(tb_llm::streamer_ai_allowed(None, Some("de_kanal")).await, Ok(true));
+    assert_eq!(
+        tb_llm::streamer_ai_allowed(Some("200"), None).await,
+        Ok(false)
+    );
+    assert_eq!(
+        tb_llm::streamer_ai_allowed(None, Some("de_kanal")).await,
+        Ok(true)
+    );
 
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -141,12 +158,21 @@ async fn ki_schalter_sperrt_fremde_server_und_belegt_im_ledger() {
 
     // Gesperrt: kein HTTP-Aufruf, keine Ledger-Zeile.
     let gesperrt = tb_llm::complete("promo_pitch", request().twitch_broadcaster("200")).await;
-    assert!(matches!(gesperrt, Err(tb_llm::LlmError::Disabled(_))), "{gesperrt:?}");
+    assert!(
+        matches!(gesperrt, Err(tb_llm::LlmError::Disabled(_))),
+        "{gesperrt:?}"
+    );
     let gesperrt = tb_llm::complete("lfg_pitch", request().twitch_channel("Fremd_Kanal")).await;
-    assert!(matches!(gesperrt, Err(tb_llm::LlmError::Disabled(_))), "{gesperrt:?}");
+    assert!(
+        matches!(gesperrt, Err(tb_llm::LlmError::Disabled(_))),
+        "{gesperrt:?}"
+    );
     // Streamer-Zweck ohne Streamerbezug, während ein Server die KI aus hat.
     let gesperrt = tb_llm::complete("promo_pitch", request()).await;
-    assert!(matches!(gesperrt, Err(tb_llm::LlmError::Disabled(_))), "{gesperrt:?}");
+    assert!(
+        matches!(gesperrt, Err(tb_llm::LlmError::Disabled(_))),
+        "{gesperrt:?}"
+    );
 
     // Erlaubt: Streamer per Login aufgelöst, ID im Ledger.
     tb_llm::complete("engagement", request().twitch_channel("de_kanal"))
@@ -158,12 +184,11 @@ async fn ki_schalter_sperrt_fremde_server_und_belegt_im_ledger() {
         .expect("globaler Job");
     server.verify().await;
 
-    let zeilen: Vec<(String, Option<String>)> = sqlx::query_as(
-        "SELECT purpose, twitch_user_id FROM llm_usage ORDER BY id",
-    )
-    .fetch_all(&pool)
-    .await
-    .expect("Ledger lesen");
+    let zeilen: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT purpose, twitch_user_id FROM llm_usage ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("Ledger lesen");
     assert_eq!(
         zeilen,
         vec![

@@ -18,7 +18,10 @@ pub const AI_DISABLED_CODE: &str = "ai_disabled";
 
 /// `Some(403)`, wenn der Server des Streamers die KI aus hat. Ist der
 /// Schalter nicht lesbar, geht es weiter; der LLM-Eingang sperrt dann selbst.
-pub async fn blocked(twitch_user_id: Option<&str>, channel_login: Option<&str>) -> Option<Response> {
+pub async fn blocked(
+    twitch_user_id: Option<&str>,
+    channel_login: Option<&str>,
+) -> Option<Response> {
     match tb_llm::streamer_ai_allowed(twitch_user_id, channel_login).await {
         Ok(false) => Some(
             (
