@@ -6,7 +6,7 @@ import {
   isPreviewModeEnabled,
 } from '../preview/routes';
 import { ApiHttpError } from './httpError';
-import { tr } from '../i18n/dictionary';
+import { getActiveLanguage, tr } from '../i18n/dictionary';
 
 const API_BASE = dashboardRuntimeConfig.apiBase;
 const INTERNAL_REDIRECT_PREFIX = '/twitch';
@@ -16,6 +16,7 @@ export const DASHBOARD_V2_LOGIN_FALLBACK = isPreviewModeEnabled()
   ? PREVIEW_HOME_ROUTE
   : LIVE_LOGIN_FALLBACK;
 const COOKIE_FETCH_CREDENTIALS: RequestCredentials = 'same-origin';
+export const LANGUAGE_HEADER = 'X-Dashboard-Language';
 
 interface ApiErrorPayload {
   error?: string;
@@ -120,7 +121,19 @@ async function handleUnauthorizedResponse(
     window.location.href = sanitizeInternalRedirectUrl(unauthorized.loginUrl, loginFallback);
     throw new Error('Redirecting to Twitch login');
   }
-  throw new ApiHttpError(unauthorized?.error || 'Unauthorized', response.status);
+  throw new ApiHttpError(tr(unauthorized?.error || 'Unauthorized'), response.status);
+}
+
+export function withLanguageHeader(input: RequestInfo | URL, init: RequestInit = {}): RequestInit {
+  if (typeof Request !== 'undefined' && input instanceof Request) return init;
+  try {
+    if (new URL(String(input), window.location.origin).origin !== window.location.origin) return init;
+  } catch {
+    return init;
+  }
+  const headers = new Headers(init.headers);
+  headers.set(LANGUAGE_HEADER, getActiveLanguage());
+  return { ...init, headers };
 }
 
 export async function fetchJson<T>(
@@ -142,20 +155,21 @@ export async function fetchJson<T>(
     }
   }
 
-  const response = await fetch(input, init);
+  const response = await fetch(input, withLanguageHeader(input, init));
 
   if (response.status === 401) {
     await handleUnauthorizedResponse(response, options.loginFallback || DASHBOARD_V2_LOGIN_FALLBACK);
   }
 
   if (options.notFoundMessage && response.status === 404) {
-    throw new ApiHttpError(options.notFoundMessage, response.status);
+    throw new ApiHttpError(tr(options.notFoundMessage), response.status);
   }
 
   if (!response.ok) {
     const error = await readErrorPayload(response);
+    const message = error?.message || error?.error;
     throw new ApiHttpError(
-      error?.message || error?.error || tr('Server-Fehler (HTTP {status})', { status: response.status }),
+      message ? tr(message) : tr('Server-Fehler (HTTP {status})', { status: response.status }),
       response.status
     );
   }
