@@ -5,10 +5,8 @@ import {
   socialViewSearch,
   socialWorkspaceDepartureAllowed,
 } from '../src/components/socialmedia/studioNavigation';
-import {
-  previewAiJob,
-  previewWorkspaceState,
-} from '../src/preview/socialWorkspaceFixtures';
+import { previewWorkspaceState } from '../src/preview/socialWorkspaceFixtures';
+import type { AiJobView } from '../src/components/socialmedia/ai/api';
 import { getPreviewSocialResponse } from '../src/preview/fixtures';
 
 test('grouped workspaces keep old aliases and numeric channel context', () => {
@@ -70,31 +68,48 @@ test('pending saving cannot be discarded while dirty departures require confirma
   assert.equal(confirmations, 1);
 });
 
-test('synthetic review distinguishes unknown billing and retains earlier versions', () => {
-  const review = previewAiJob(42, null);
-  assert.equal(review.clip_db_id, 42);
+test('real editor preview reuses accepted job contracts without media or write requests', async () => {
+  const path = '/twitch/social-media/api/ai/jobs/1101?twitch_user_id=123456789';
+  const review = (await getPreviewSocialResponse(path).json()) as AiJobView;
+  assert.equal(review.clip_db_id, 1);
   assert.equal(review.measured_provider_cost_usd, null);
   assert.equal(review.cost_basis, 'usage_priced_estimate');
   assert.equal(review.original_url, null);
   assert.ok(review.versions.every((version) => version.file_url === null));
-  const removed = review.decisions.reduce(
-    (sum, item) => sum + item.end_ms - item.start_ms,
-    0,
-  );
-  assert.equal(
-    review.original_duration_ms! - removed,
-    review.output_duration_ms,
-  );
-  for (const fixture of ['ai-rendering', 'ai-last-version']) {
-    const job = previewAiJob(42, fixture);
-    assert.equal(job.versions[0].status, 'review');
-    assert.equal(job.versions[1].parent_version_id, job.versions[0].id);
-    assert.equal(job.versions[1].duration_ms, null);
+  assert.ok(review.provider_latency_ms);
+  assert.ok(review.highlights.length);
+  assert.ok(review.decisions.length);
+  assert.equal(review.versions[0].status, 'ready');
+  assert.equal(review.versions[1].parent_version_id, review.versions[0].id);
+  for (const [fixture, status] of [
+    ['ai-rendering', 'rendering'],
+    ['ai-last-version', 'failed'],
+  ] as const) {
+    const job = (await getPreviewSocialResponse(
+      path,
+      {},
+      fixture,
+    ).json()) as AiJobView;
+    assert.equal(job.status, status);
+    assert.equal(job.output_duration_ms, null);
   }
-  const unknown = previewAiJob(42, 'ai-unknown-cost');
+  const unknown = (await getPreviewSocialResponse(
+    path,
+    {},
+    'ai-unknown-cost',
+  ).json()) as AiJobView;
   assert.equal(unknown.cost_basis, 'unknown');
   assert.equal(unknown.estimated_provider_cost_usd, null);
   assert.equal(unknown.measured_provider_cost_usd, null);
+  assert.equal(
+    getPreviewSocialResponse(path.replace('123456789', 'streamer')).status,
+    403,
+  );
+  assert.equal(
+    getPreviewSocialResponse('/twitch/social-media/api/ai/jobs').status,
+    403,
+  );
+  assert.equal(getPreviewSocialResponse(path, { method: 'POST' }).status, 409);
 });
 
 test('preview states and library fixtures remain scoped to their workspace and owner', async () => {
