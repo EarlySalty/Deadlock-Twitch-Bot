@@ -292,6 +292,10 @@ if GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$src" cat-file -e "$sha:
   social_ai_expected=1
   required_artifacts+=(rust/target/release/tb-stt-server)
 fi
+social_ai_limits_expected=0
+if GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$src" cat-file -e "$sha:rust/migrations/20261011204000_social_ai_admin_limits.sql" 2>/dev/null; then
+  social_ai_limits_expected=1
+fi
 if [[ $native_expected -eq 0 && -f "$src/rust/bin/tb-category-collector/Cargo.toml" ]]; then
   required_artifacts+=(rust/target/release/tb-category-collector)
 fi
@@ -421,11 +425,12 @@ for ((attempt=0; attempt<30; attempt++)); do
 done
 [[ $reload_observed -eq 1 ]] || { echo "PostgreSQL hat die Peerregeln nicht nachweislich neu geladen." >&2; exit 1; }
 
-local_psql postgres twitch_analytics postgres -v social_ai_expected="$social_ai_expected" <<'SQL'
+local_psql postgres twitch_analytics postgres -v social_ai_expected="$social_ai_expected" -v social_ai_limits_expected="$social_ai_limits_expected" <<'SQL'
 BEGIN READ ONLY;
 SELECT set_config('twitch_deploy.social_ai_expected', :'social_ai_expected', true);
+SELECT set_config('twitch_deploy.social_ai_limits_expected', :'social_ai_limits_expected', true);
 DO $verification$
-DECLARE r text; t text; p text; consent oid := to_regclass('public.social_ai_user_consent');
+DECLARE r text; t text; p text; policy oid; consent oid := to_regclass('public.social_ai_user_consent');
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='twitchanalysis' AND rolcanlogin AND
         NOT (rolsuper OR rolinherit OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls))
@@ -509,6 +514,27 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'Analysewriter hat zusätzliche KI-Zustimmungsrechte';
     END IF;
+    FOREACH t IN ARRAY ARRAY['social_ai_processing_control','social_ai_user_limits'] LOOP
+        policy := to_regclass('public.' || t);
+        IF current_setting('twitch_deploy.social_ai_limits_expected')::boolean AND
+            (policy IS NULL OR NOT has_table_privilege('twitchanalysis',policy,'SELECT')) THEN
+            RAISE EXCEPTION 'Analysewriter ohne erforderliches KI-Grenzenleserecht auf %',t;
+        END IF;
+        IF policy IS NOT NULL AND (
+            EXISTS (SELECT FROM pg_class c WHERE c.oid=policy AND
+                (c.relkind NOT IN ('r','p') OR c.relowner='twitchanalysis'::regrole)) OR
+            has_table_privilege('twitchanalysis',policy,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') OR
+            has_table_privilege('twitchanalysis',policy,'SELECT WITH GRANT OPTION') OR
+            has_any_column_privilege('twitchanalysis',policy,'INSERT,UPDATE,REFERENCES') OR
+            EXISTS (SELECT FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a
+                WHERE c.oid=policy AND (a.grantee=0 OR
+                    (a.grantee='twitchanalysis'::regrole AND (a.privilege_type<>'SELECT' OR a.is_grantable)))) OR
+            EXISTS (SELECT FROM pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) a
+                WHERE att.attrelid=policy AND a.grantee IN (0,'twitchanalysis'::regrole))
+        ) THEN
+            RAISE EXCEPTION 'Analysewriter hat zusätzliche KI-Grenzenrechte auf %',t;
+        END IF;
+    END LOOP;
     IF EXISTS (
         WITH extension_metadata AS (
             SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -544,7 +570,8 @@ BEGIN
               AND c.relkind IN ('r','p','v','m','f','S')
               AND NOT (n.nspname='public' AND c.relname=ANY(ARRAY[
                   'twitch_ai_chat_sessions','twitch_ai_chat_hourly','twitch_ai_chat_reservations',
-                  'llm_usage','llm_usage_id_seq','social_ai_user_consent']))
+                  'llm_usage','llm_usage_id_seq','social_ai_user_consent',
+                  'social_ai_processing_control','social_ai_user_limits']))
         )
         SELECT FROM relation_rights r WHERE r.direct_writer_grant OR CASE WHEN r.relkind='S' THEN
             has_sequence_privilege('twitchanalysis',r.oid,'USAGE,UPDATE') OR

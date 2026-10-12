@@ -517,3 +517,11 @@ BEGIN
     END IF;
 END
 $social_ai_consent_roles$;
+
+DO $social_ai_limit_roles$
+BEGIN
+    IF to_regprocedure('public.twitch_apply_social_ai_limit_roles()') IS NOT NULL THEN
+        PERFORM public.twitch_apply_social_ai_limit_roles();
+    END IF;
+END
+$social_ai_limit_roles$;

@@ -274,10 +274,9 @@ class AnalysisConsentGrantTests(unittest.TestCase):
             raise unittest.SkipTest(
                 "TB_TEST_CONSENT_DATABASE_URL is required for consent ACL proofs."
             )
-        if cls.dsn != "postgres://postgres@127.0.0.1:33101/postgres":
-            raise RuntimeError(
-                "Consent ACL proofs only use the isolated test database on port 33101."
-            )
+        if cls.dsn not in ("postgres://postgres@127.0.0.1:33101/postgres", "postgres://postgres@127.0.0.1:48184/postgres"):
+            raise RuntimeError("Consent ACL proofs require an explicitly isolated fixture endpoint.")
+        cls.connection_env = {"PGHOST": "127.0.0.1", "PGPORT": "48184" if ":48184/" in cls.dsn else "33101", "PGUSER": "postgres", "PGDATABASE": "postgres", "PGCONNECT_TIMEOUT": "5"}
         source = WRAPPER.read_text()
         cls.verifier = (
             source.split("BEGIN READ ONLY;\n", 1)[1].split(
@@ -314,7 +313,14 @@ class AnalysisConsentGrantTests(unittest.TestCase):
             / "rust/migrations/20261011200001_social_ai_provider_usage.sql"
         ).read_text()
 
-    def verify_grants(self, mutation="", ai_expected=True, migrated=True):
+        cls.limit_migration = (WRAPPER.parents[2] / "rust/migrations/20261011204000_social_ai_admin_limits.sql").read_text()
+        cls.limit_refresh = (
+            "DO $social_ai_limit_roles$"
+            + roles.split("DO $social_ai_limit_roles$", 1)[1].split("$social_ai_limit_roles$;", 1)[0]
+            + "$social_ai_limit_roles$;"
+        )
+
+    def verify_grants(self, mutation="", ai_expected=True, migrated=True, limits_expected=False, limits_migrated=False):
         fixtures = """
 BEGIN;
 SET LOCAL statement_timeout = '5s';
@@ -326,6 +332,7 @@ CREATE ROLE twitchcontest LOGIN NOINHERIT;
 CREATE TABLE public.twitch_ai_chat_sessions (id text);
 CREATE TABLE public.twitch_ai_chat_hourly (id text);
 CREATE TABLE public.twitch_ai_chat_reservations (id text);
+CREATE TABLE public.twitch_streamers (twitch_user_id text PRIMARY KEY);
 CREATE TABLE public.llm_usage (id serial, purpose text, provider text);
 CREATE TABLE public.unrelated_private_fixture (id text);
 CREATE SEQUENCE public.unrelated_sequence_fixture;
@@ -342,22 +349,24 @@ CREATE TABLE _timescaledb_catalog.chunk (relid oid);
                 "--no-password",
                 "--quiet",
                 "-At",
-                "--dbname",
-                self.dsn + "?connect_timeout=5",
                 "-v",
                 "ON_ERROR_STOP=1",
                 "-v",
                 f"social_ai_expected={int(ai_expected)}",
+                "-v",
+                f"social_ai_limits_expected={int(limits_expected)}",
             ],
             input=fixtures
             + migration
+            + (self.limit_migration if limits_migrated else "")
             + self.role_refresh
             + self.consent_refresh
+            + self.limit_refresh
             + mutation
             + "\nSET LOCAL transaction_read_only = on;\n"
             + self.verifier
             + "ROLLBACK;\n",
-            env={},
+            env=self.connection_env,
             capture_output=True,
             text=True,
             timeout=10,
@@ -471,6 +480,38 @@ CREATE TABLE _timescaledb_catalog.chunk (relid oid);
                         result.stderr,
                         "zusätzliche KI-Zustimmungsrechte|Auditverbrauch: fremde Schreibrechte",
                     )
+
+    def test_m4_requires_exact_read_only_policy_grants_and_keeps_rollback(self):
+        self.assertEqual(self.verify_grants(limits_expected=True, limits_migrated=True).returncode, 0)
+        self.assertNotEqual(self.verify_grants(limits_expected=True).returncode, 0)
+        for table in ("social_ai_processing_control", "social_ai_user_limits"):
+            for mutation in (
+                f"DROP TABLE public.{table};",
+                f"REVOKE SELECT ON public.{table} FROM twitchanalysis;",
+            ):
+                with self.subTest(table=table, required=mutation):
+                    self.assertNotEqual(self.verify_grants(mutation, limits_expected=True, limits_migrated=True).returncode, 0)
+                    self.assertEqual(self.verify_grants(mutation, limits_migrated=True).returncode, 0)
+            for mutation in (
+                f"GRANT UPDATE ON public.{table} TO twitchanalysis;",
+                f"GRANT SELECT (paused) ON public.{table} TO twitchanalysis;",
+                f"GRANT SELECT ON public.{table} TO twitchanalysis WITH GRANT OPTION;",
+                f"GRANT SELECT ON public.{table} TO PUBLIC;",
+                f"ALTER TABLE public.{table} OWNER TO twitchanalysis;",
+            ):
+                for expected in (True, False):
+                    with self.subTest(table=table, mutation=mutation, expected=expected):
+                        self.assertNotEqual(self.verify_grants(mutation, limits_expected=expected, limits_migrated=True).returncode, 0)
+        self.assertNotEqual(self.verify_grants("GRANT SELECT ON public.social_ai_plan_limit_drafts TO twitchanalysis;", limits_expected=True, limits_migrated=True).returncode, 0)
+
+    def test_m4_requirement_is_classified_from_the_requested_revision(self):
+        source = WRAPPER.read_text()
+        classification = "social_ai_limits_expected=0\n" + source.split("social_ai_limits_expected=0\n", 1)[1].split("\nif [[ $native_expected", 1)[0]
+        for revision, expected in (("origin/main", "0"), ("HEAD", "1")):
+            available = subprocess.run(["git", "-C", str(WRAPPER.parents[2]), "cat-file", "-e", f"{revision}:rust/migrations/20261011204000_social_ai_admin_limits.sql"], capture_output=True).returncode == 0
+            result = subprocess.run(["/bin/bash", "-c", 'set -euo pipefail\nsrc="$1"\nsha="$2"\n' + classification + '\nprintf "%s\\n" "$social_ai_limits_expected"', "target-limit-fixture", str(WRAPPER.parents[2]), revision], env={}, capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout.strip(), str(int(available)))
 
     def test_foreign_table_column_sequence_schema_and_role_rights_stay_denied(self):
         mutations = (

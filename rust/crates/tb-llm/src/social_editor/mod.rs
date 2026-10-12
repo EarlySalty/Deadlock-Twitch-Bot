@@ -1,3 +1,5 @@
+pub mod admin_limits;
+pub mod admin_usage;
 mod config;
 mod read_side;
 mod schema;
@@ -358,18 +360,15 @@ async fn begin_attempt(
             return Err(EditorError::new(ErrorKind::Ledger));
         }
     }
-    let (used, total, invalid): (Option<i64>, i64, i64) = sqlx::query_as("SELECT SUM(CASE WHEN attempt_state='succeeded' THEN COALESCE(NULLIF(estimated_micro_usd, 0), reserved_micro_usd) ELSE GREATEST(reserved_micro_usd, COALESCE(estimated_micro_usd, reserved_micro_usd)) END)::bigint, COUNT(*)::bigint, COUNT(*) FILTER (WHERE reserved_micro_usd IS NULL OR reserved_micro_usd <= 0 OR attempt_state NOT IN ('started','succeeded','failed') OR (estimated_micro_usd IS NOT NULL AND estimated_micro_usd < 0))::bigint FROM public.llm_usage WHERE purpose=$1 AND provider=$2")
-        .bind(PURPOSE).bind(PROVIDER).fetch_one(&mut *tx).await.map_err(|_| EditorError::new(ErrorKind::Ledger))?;
-    if invalid != 0 || (total != 0 && used.is_none()) {
-        return Err(EditorError::new(ErrorKind::Ledger));
-    }
-    if used
-        .unwrap_or(0)
-        .checked_add(reservation)
-        .is_none_or(|sum| sum > config.initial_total_cap_micro_usd)
-    {
+    let used = usage::consumption_on(&mut tx, None).await?;
+    if used.checked_add(reservation).is_none_or(|sum| {
+        sum > config
+            .initial_total_cap_micro_usd
+            .min(admin_limits::INITIAL_TOTAL_CAP_MICRO_USD)
+    }) {
         return Err(EditorError::new(ErrorKind::Budget));
     }
+    admin_limits::admit_on(&mut tx, &context.twitch_user_id, reservation).await?;
     let id: i64 = sqlx::query_scalar("INSERT INTO public.llm_usage (ts,source,purpose,model,tokens_in,tokens_out,total,success,project,service,provider,attempt_state,social_ai_twitch_user_id,social_ai_job_id,social_ai_stage,reserved_micro_usd,cost_basis) VALUES ($1,$2,$3,$4,NULL,NULL,NULL,0,$5,$6,$7,'started',$8,$9,$10,$11,'reserved_upper_bound') RETURNING id")
         .bind(Utc::now().to_rfc3339_opts(SecondsFormat::Secs, false))
         .bind(crate::ledger::SOURCE).bind(PURPOSE).bind(&config.model).bind(project).bind(service).bind(PROVIDER)

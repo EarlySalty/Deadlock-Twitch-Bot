@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "admin_contract_tests.rs"]
+mod admin_contract_tests;
+
 fn config() -> EditorConfig {
     toml::from_str(include_str!("../../../../../ops/social-ai/editor.toml")).expect("configuration")
 }
@@ -267,6 +270,10 @@ impl DisposablePostgres {
             .expect("isolated postgres");
         sqlx::raw_sql("CREATE TABLE public.llm_usage (id BIGSERIAL PRIMARY KEY, ts TEXT NOT NULL, source TEXT, purpose TEXT, model TEXT, tokens_in BIGINT, tokens_out BIGINT, total BIGINT, success BIGINT, project TEXT, service TEXT, provider TEXT, attempt_state TEXT NOT NULL DEFAULT 'legacy', request_id TEXT, error_code TEXT, http_status INT, latency_ms BIGINT, finished_at TIMESTAMPTZ); CREATE TABLE public.social_media_settings (key TEXT PRIMARY KEY, value JSONB NOT NULL)")
             .execute(&pool).await.expect("base schema");
+        sqlx::query("CREATE TABLE public.twitch_streamers (twitch_user_id TEXT PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .expect("limit owner schema");
         if migrate {
             sqlx::raw_sql(include_str!(
                 "../../../../migrations/20261011200001_social_ai_provider_usage.sql"
@@ -274,6 +281,12 @@ impl DisposablePostgres {
             .execute(&pool)
             .await
             .expect("provider migration");
+            sqlx::raw_sql(include_str!(
+                "../../../../migrations/20261011204000_social_ai_admin_limits.sql"
+            ))
+            .execute(&pool)
+            .await
+            .expect("admin limits migration");
         }
         static LEDGER_IDENTITY: std::sync::Once = std::sync::Once::new();
         LEDGER_IDENTITY.call_once(|| {
@@ -385,10 +398,18 @@ async fn consent_roles_survive_real_runtime_script_and_allow_only_dashboard_muta
     .execute(pool)
     .await
     .expect("provider migration after runtime role installation");
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261011204000_social_ai_admin_limits.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("limits migration after runtime role installation");
+    admin_contract_tests::assert_limit_roles(pool).await;
     assert_consent_roles(pool).await;
     apply_runtime_roles(&database);
     apply_runtime_roles(&database);
     assert_consent_roles(pool).await;
+    admin_contract_tests::assert_limit_roles(pool).await;
 
     let mut connection = pool.acquire().await.expect("role session");
     sqlx::query("SET ROLE twitchdash")
