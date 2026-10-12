@@ -101,8 +101,25 @@ pub(crate) async fn review_count_on(
     owner: &str,
 ) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar(
-        "SELECT COUNT(*) FROM social_produced_videos WHERE twitch_user_id = $1
-        AND status = 'review' AND (expires_at IS NULL OR expires_at > clock_timestamp())",
+        "SELECT (SELECT COUNT(*) FROM social_produced_videos WHERE twitch_user_id = $1
+            AND status = 'review' AND (expires_at IS NULL OR expires_at > clock_timestamp()))
+        + (SELECT COUNT(*) FROM social_production_jobs j WHERE j.twitch_user_id = $1
+            AND j.status = 'review' AND NOT EXISTS (SELECT 1 FROM social_produced_videos v
+                WHERE v.job_id = j.id AND v.status = 'review'
+                AND (v.expires_at IS NULL OR v.expires_at > clock_timestamp())))",
+    )
+    .bind(owner)
+    .fetch_one(connection)
+    .await
+}
+
+pub(crate) async fn has_automatic_review_on(
+    connection: &mut PgConnection,
+    owner: &str,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM social_production_jobs
+        WHERE twitch_user_id = $1 AND source = 'autopilot' AND status = 'review')",
     )
     .bind(owner)
     .fetch_one(connection)
@@ -134,6 +151,7 @@ pub(crate) fn production_horizon(
 pub(crate) fn hold(
     settings: &AutopilotSettings,
     reviews: i64,
+    held_automatic: bool,
     next: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
 ) -> Option<ProductionHold> {
@@ -143,7 +161,9 @@ pub(crate) fn hold(
     if settings.paused {
         return Some(ProductionHold::Paused);
     }
-    if settings.publish_mode == autopilot_settings::PublishMode::Review && reviews >= 2 {
+    if held_automatic
+        || (settings.publish_mode == autopilot_settings::PublishMode::Review && reviews >= 2)
+    {
         return Some(ProductionHold::ReviewBacklog);
     }
     if settings.schedule_slots.is_empty() {
@@ -200,7 +220,8 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<ScheduleQueueSnapsho
             QueueJob::from_job(job, title)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut production_hold = hold(&settings, review_count, next_slot, now);
+    let held_automatic = has_automatic_review_on(&mut tx, owner).await?;
+    let mut production_hold = hold(&settings, review_count, held_automatic, next_slot, now);
     if production_hold.is_none() {
         let empty: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM social_autopilot_schedule_state
             WHERE twitch_user_id = $1 AND production_hold = 'empty_pool' AND planned_at > $2 - INTERVAL '2 minutes')")

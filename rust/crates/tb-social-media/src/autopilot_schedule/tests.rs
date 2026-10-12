@@ -562,5 +562,56 @@ async fn shared_slot_guard_covers_produced_and_upload_races() {
             .bind(fourth).bind(next_slot).execute(&pool)
     );
     assert_ne!(job_reservation.is_ok(), video_reservation.is_ok());
+    let video_slot = scheduled + Duration::days(14);
+    let (video_one, video_two) = tokio::join!(
+        sqlx::query("INSERT INTO social_produced_videos (twitch_user_id,clip_id,mode,version_no,scheduled_at) VALUES ('owner',$1,'static',2,$2)")
+            .bind(third).bind(video_slot).execute(&pool),
+        sqlx::query("INSERT INTO social_produced_videos (twitch_user_id,clip_id,mode,version_no,scheduled_at) VALUES ('owner',$1,'static',2,$2)")
+            .bind(fourth).bind(video_slot).execute(&pool)
+    );
+    assert_ne!(video_one.is_ok(), video_two.is_ok());
+    let rejected = video_one
+        .err()
+        .or_else(|| video_two.err())
+        .expect("one sibling video rejected");
+    assert_eq!(
+        rejected
+            .as_database_error()
+            .expect("actual unique constraint")
+            .code()
+            .as_deref(),
+        Some("23505")
+    );
+    let upload_slot = scheduled + Duration::days(21);
+    let upload_video_one: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id,clip_id,mode,version_no) VALUES ('owner',$1,'static',3) RETURNING id")
+        .bind(third).fetch_one(&pool).await.expect("unscheduled immutable version one");
+    let upload_video_two: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id,clip_id,mode,version_no) VALUES ('owner',$1,'static',3) RETURNING id")
+        .bind(fourth).fetch_one(&pool).await.expect("unscheduled immutable version two");
+    let (upload_one, upload_two) = tokio::join!(
+        sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,produced_video_id,platform,scheduled_at) VALUES ($1,$2,'youtube',$3)")
+            .bind(third).bind(upload_video_one).bind(upload_slot).execute(&pool),
+        sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,produced_video_id,platform,scheduled_at) VALUES ($1,$2,'tiktok',$3)")
+            .bind(fourth).bind(upload_video_two).bind(upload_slot).execute(&pool)
+    );
+    assert_ne!(upload_one.is_ok(), upload_two.is_ok());
+    let (same_clip, same_video) = if upload_one.is_ok() {
+        (third, upload_video_one)
+    } else {
+        (fourth, upload_video_two)
+    };
+    let rejected = upload_one
+        .err()
+        .or_else(|| upload_two.err())
+        .expect("one sibling upload rejected");
+    assert_eq!(
+        rejected
+            .as_database_error()
+            .expect("actual shared slot guard")
+            .code()
+            .as_deref(),
+        Some("23505")
+    );
+    sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,produced_video_id,platform,scheduled_at) VALUES ($1,$2,'instagram',$3)")
+        .bind(same_clip).bind(same_video).bind(upload_slot).execute(&pool).await.expect("same immutable video reuses one slot across platforms");
     cleanup(pool).await;
 }

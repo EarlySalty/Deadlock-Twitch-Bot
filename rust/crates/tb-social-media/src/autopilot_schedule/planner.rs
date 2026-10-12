@@ -2,7 +2,10 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgConnection, PgPool};
 
-use super::{hold, production_horizon, review_count_on, taken_on, ProductionHold, ScheduleError};
+use super::{
+    has_automatic_review_on, hold, production_horizon, review_count_on, taken_on, ProductionHold,
+    ScheduleError,
+};
 use crate::autopilot_settings::{self, AutopilotSettings, ClipSort};
 
 type ClipBounds = (DateTime<Utc>, DateTime<Utc>);
@@ -120,7 +123,8 @@ pub async fn plan_owner(
         )?,
         ..Default::default()
     };
-    report.production_hold = hold(&settings, reviews, report.next_slot, now);
+    let held_automatic = has_automatic_review_on(&mut tx, owner).await?;
+    report.production_hold = hold(&settings, reviews, held_automatic, report.next_slot, now);
     if matches!(
         report.production_hold,
         Some(

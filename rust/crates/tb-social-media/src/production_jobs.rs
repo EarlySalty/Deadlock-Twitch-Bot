@@ -221,8 +221,14 @@ pub async fn claim_next(pool: &PgPool) -> Result<Option<ProductionJob>, JobError
              AND (j.scheduled_at IS NULL OR (j.scheduled_at > clock_timestamp()
                  AND j.scheduled_at <= clock_timestamp() + make_interval(hours => s.lead_time_hours)
                      + CASE WHEN s.lead_time_hours = 0 THEN INTERVAL '1 minute' ELSE INTERVAL '0' END))
-             AND (s.publish_mode = 'full_auto' OR (SELECT COUNT(*) FROM social_produced_videos v WHERE v.twitch_user_id = j.twitch_user_id
-                 AND v.status = 'review' AND (v.expires_at IS NULL OR v.expires_at > clock_timestamp())) < 2)))
+             AND NOT EXISTS(SELECT 1 FROM social_production_jobs h WHERE h.twitch_user_id = j.twitch_user_id
+                 AND h.source = 'autopilot' AND h.status = 'review')
+             AND (s.publish_mode = 'full_auto' OR ((SELECT COUNT(*) FROM social_produced_videos v WHERE v.twitch_user_id = j.twitch_user_id
+                 AND v.status = 'review' AND (v.expires_at IS NULL OR v.expires_at > clock_timestamp()))
+                 + (SELECT COUNT(*) FROM social_production_jobs h WHERE h.twitch_user_id = j.twitch_user_id
+                     AND h.status = 'review' AND NOT EXISTS(SELECT 1 FROM social_produced_videos v
+                         WHERE v.job_id = h.id AND v.status = 'review'
+                         AND (v.expires_at IS NULL OR v.expires_at > clock_timestamp())))) < 2)))
          ORDER BY j.queue_order, j.id LIMIT 1",
     ).fetch_optional(&mut *tx).await?;
     let Some((candidate_id, owner)) = candidate else {
@@ -248,6 +254,7 @@ pub async fn claim_next(pool: &PgPool) -> Result<Option<ProductionJob>, JobError
         let reviews: i64 = autopilot_schedule::review_count_on(&mut tx, &owner).await?;
         if !settings.enabled
             || settings.paused
+            || autopilot_schedule::has_automatic_review_on(&mut tx, &owner).await?
             || (settings.publish_mode == autopilot_settings::PublishMode::Review && reviews >= 2)
             || job.scheduled_at.is_some_and(|slot| {
                 slot <= now || slot > autopilot_schedule::production_horizon(&settings, now)
@@ -331,11 +338,14 @@ pub async fn finish(
         JobCompletion::Review => "review",
         JobCompletion::Failed => "failed",
     };
+    let mut tx = pool.begin().await?;
+    autopilot_settings::lock_owner(&mut tx, twitch_user_id).await?;
     let changed = sqlx::query("UPDATE social_production_jobs SET status = $3, stage = $3, review_reasons = $4::text::jsonb, last_error = $5, finished_at = NOW() WHERE id = $1 AND twitch_user_id = $2 AND status = 'running'")
         .bind(id).bind(twitch_user_id).bind(status).bind(serde_json::to_string(reasons)?).bind(error)
-        .execute(pool).await?.rows_affected();
+        .execute(&mut *tx).await?.rows_affected();
     if changed != 1 {
         return Err(JobError::State);
     }
+    tx.commit().await?;
     Ok(())
 }
