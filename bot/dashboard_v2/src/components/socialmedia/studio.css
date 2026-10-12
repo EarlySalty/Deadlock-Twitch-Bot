@@ -683,6 +683,8 @@ select.studio-select {
 }
 .studio-legacy-plan {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 16px;
 }
 .studio-legacy-plan .studio-savebar {
