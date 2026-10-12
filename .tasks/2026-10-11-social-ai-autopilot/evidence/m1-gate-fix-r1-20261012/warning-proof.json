@@ -1,0 +1,41 @@
+{
+  "environment": "synthetic-local-Moli-preview",
+  "newestUnavailableWarningRetained": true,
+  "olderSelectionDoesNotInventWarning": true,
+  "playbackProved": false,
+  "observations": [
+    {
+      "name": "newest-unavailable-desktop",
+      "viewport": 1440,
+      "document": 1440,
+      "warningCount": 1,
+      "selected": "2201",
+      "overflowingBounds": []
+    },
+    {
+      "name": "newest-unavailable-mobile",
+      "viewport": 390,
+      "document": 390,
+      "warningCount": 1,
+      "selected": "2201",
+      "overflowingBounds": []
+    },
+    {
+      "name": "older-playable-selected-desktop",
+      "viewport": 1440,
+      "document": 1440,
+      "warningCount": 0,
+      "selected": "2201",
+      "overflowingBounds": []
+    },
+    {
+      "name": "older-playable-selected-mobile",
+      "viewport": 390,
+      "document": 390,
+      "warningCount": 0,
+      "selected": "2201",
+      "overflowingBounds": []
+    }
+  ],
+  "errors": []
+}

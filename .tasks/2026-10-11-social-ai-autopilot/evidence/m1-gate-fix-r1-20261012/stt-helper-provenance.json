@@ -1,0 +1,14 @@
+{
+  "path": "/home/nathanael/.worktrees/tb-social-ai-m1-gate-fix-r1/rust/target/release/tb-stt-server",
+  "verified_revision": "42cb7644506ff2b6223186a5383dda3b32d19ea6",
+  "bytes": 8019168,
+  "sha256": "318c2b8b4cdc2c0234eea8febb5c4ced43769cd887ba32d271a5978baeafddd6",
+  "verified_equal_source_tree": "149b997c758bb9a55f7e66d44f62dfbfd296a75a",
+  "metadata_corrected_source_head": "71c17c2da112c7c2fe7d14e5c672a015973dc62a",
+  "matches_metadata_corrected_or_rebased_head": false,
+  "requires_exact_head_rebuild": true,
+  "parent_checks": ["regular non-symlink file", "exact SHA256", "exact readelf .twitch_build revision"],
+  "parent_started_helper": false,
+  "production_installed": false,
+  "live": false
+}

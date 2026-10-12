@@ -1,0 +1,51 @@
+{
+  "source": "/tmp/tb-social-ai-m1-gate-fix-r1-evidence",
+  "worker_sha": "42cb7644506ff2b6223186a5383dda3b32d19ea6",
+  "verified_equal_source_sha": "71c17c2da112c7c2fe7d14e5c672a015973dc62a",
+  "live": false,
+  "playback_proved": false,
+  "notes": [
+    "Four images independently inspected by parent; synthetic warning and layout proof only.",
+    "Gray media placeholders are not video-content or playback evidence.",
+    "No authenticated session or provider/live application proof."
+  ],
+  "files": [
+    {
+      "name": "newest-unavailable-desktop.png",
+      "bytes": 87930,
+      "sha256": "93659ee26fc005e2131e06121887fec32d5225ca15711c050b29b9227506fa7a",
+      "width": 1440,
+      "height": 1000,
+      "parent_visually_inspected": true
+    },
+    {
+      "name": "newest-unavailable-mobile.png",
+      "bytes": 41026,
+      "sha256": "137dbf7e54437f8f9ad05ef0b35d9cb909686d6d034a8cbb9ff058794ce04649",
+      "width": 390,
+      "height": 844,
+      "parent_visually_inspected": true
+    },
+    {
+      "name": "older-playable-selected-desktop.png",
+      "bytes": 77184,
+      "sha256": "26039906f9502bae8ca358314803926add1197e0e982391bb50cd982048401b1",
+      "width": 1440,
+      "height": 1000,
+      "parent_visually_inspected": true
+    },
+    {
+      "name": "older-playable-selected-mobile.png",
+      "bytes": 30469,
+      "sha256": "f96fcd0dcef5056f7e182ab73d1a36516632114bf6aedf20cb66b4c20d3b279a",
+      "width": 390,
+      "height": 844,
+      "parent_visually_inspected": true
+    },
+    {
+      "name": "warning-proof.json",
+      "bytes": 956,
+      "sha256": "7f66c6c9356d2006ebf8fced51a684d23f36f838b027c054f24338ce37ecdbfe"
+    }
+  ]
+}
