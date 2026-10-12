@@ -110,7 +110,16 @@ function OwnerImportPool({
   });
   const latestQuery = useQuery({
     queryKey: latestKey,
-    queryFn: ({ signal }) => api.getLatestImport(owner, signal),
+    queryFn: async ({ signal }) => {
+      const latest = await api.getLatestImport(owner, signal);
+      if (latest.import) {
+        const key = [...scope, "import", latest.import.id];
+        if (!unauthorized(queryClient.getQueryState(key)?.error)) {
+          queryClient.setQueryData(key, latest.import);
+        }
+      }
+      return latest;
+    },
     retry: false,
     refetchOnWindowFocus: false,
   });
@@ -258,7 +267,7 @@ function OwnerImportPool({
     void preferencesQuery.refetch();
     void poolQuery.refetch();
     void latestQuery.refetch();
-    if (activeImport(job)) void importQuery.refetch();
+    if (activeImport(job) || importQuery.isError) void importQuery.refetch();
   }
 
   return (
@@ -570,7 +579,11 @@ function OwnerImportPool({
           <span className="import-pool-help">
             {page
               ? `${page.total} ${t("erfasste Clips")}`
-              : t("Clip-Pool laden …")}
+              : t(
+                  poolQuery.isError
+                    ? "Clip-Pool nicht geladen"
+                    : "Clip-Pool laden …",
+                )}
           </span>
         </div>
         {saved && (
@@ -709,7 +722,7 @@ function OwnerImportPool({
             })}
           </ul>
         )}
-        {page && page.total > page.limit && (
+        {(offset > 0 || (page && page.total > page.limit)) && (
           <nav
             className="import-pool-pagination"
             aria-label={t("Clip-Pool-Seiten")}
@@ -723,16 +736,14 @@ function OwnerImportPool({
               {t("Zurück")}
             </button>
             <span>
-              {t("Seite")} {Math.floor(offset / PAGE_SIZE) + 1} /{" "}
-              {Math.max(1, Math.ceil(page.total / PAGE_SIZE))}
+              {t("Seite")} {Math.floor(offset / PAGE_SIZE) + 1}
+              {page && ` / ${Math.max(1, Math.ceil(page.total / PAGE_SIZE))}`}
             </span>
             <button
               type="button"
               className="studio-button"
               disabled={
-                busy ||
-                poolQuery.isFetching ||
-                offset + page.limit >= page.total
+                busy || !poolKnown || !page || offset + page.limit >= page.total
               }
               onClick={() => setOffset(offset + PAGE_SIZE)}
             >
