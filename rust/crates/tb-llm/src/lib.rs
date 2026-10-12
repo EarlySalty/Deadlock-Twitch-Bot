@@ -32,6 +32,7 @@
 //! Schlüssel kommen ausschließlich aus der Umgebung (Infisical/systemd) über
 //! den konsolidierten Resolver [`keys`] und werden NIE geloggt.
 
+pub mod ai_guard;
 pub mod brain_route;
 pub mod daily_model_resolver;
 pub mod hub;
@@ -47,4 +48,5 @@ pub use hub::{
     complete, complete_detailed, strip_think, Accept, Ledger, LlmError, LlmFailure, Message,
     Request, Response,
 };
+pub use ai_guard::streamer_ai_allowed;
 pub use selection::{endpoint_chain, endpoint_for, LlmEndpoint};

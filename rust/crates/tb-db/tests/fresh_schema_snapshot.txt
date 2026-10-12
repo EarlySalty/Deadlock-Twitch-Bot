@@ -456,6 +456,7 @@ llm_usage|tokens_in|bigint|YES|0
 llm_usage|tokens_out|bigint|YES|0
 llm_usage|total|bigint|YES|0
 llm_usage|ts|text|NO|
+llm_usage|twitch_user_id|text|YES|
 oauth_state_tokens|consumed_at|timestamp with time zone|YES|
 oauth_state_tokens|created_at|timestamp with time zone|YES|CURRENT_TIMESTAMP
 oauth_state_tokens|expires_at|timestamp with time zone|NO|

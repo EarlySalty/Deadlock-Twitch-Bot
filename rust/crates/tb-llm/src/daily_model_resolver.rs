@@ -543,7 +543,9 @@ async fn probe_and_publish_at(
             LlmError::Timeout(_) => error("Modellprobe: Zeitgrenze überschritten"),
             LlmError::Transport(_) => error("Modellprobe: Transport fehlgeschlagen"),
             LlmError::Unparsable(_) => error("Modellprobe: Antwort ungültig"),
-            LlmError::Unavailable(_) => error("Modellprobe: kein gültiges Prüfergebnis"),
+            LlmError::Unavailable(_) | LlmError::Disabled(_) => {
+                error("Modellprobe: kein gültiges Prüfergebnis")
+            }
         })?;
     let now = time();
     let selection = Selection {

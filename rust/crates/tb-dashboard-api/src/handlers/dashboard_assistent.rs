@@ -439,6 +439,9 @@ pub async fn ask(
     let login = login_roh.trim().to_lowercase();
     let user_id = user_id_roh.trim().to_string();
     let display_name = anzeigename(&auth);
+    if let Some(resp) = super::ai_switch::blocked(Some(&user_id), Some(&login)).await {
+        return resp;
+    }
 
     let value: Value = match serde_json::from_str(&body) {
         Ok(v) => v,
@@ -598,6 +601,7 @@ pub async fn ask(
             .total_deadline(Duration::from_secs(MODEL_TIMEOUT_SEC))
             .strip_think()
             .accept(|text| !output_unusable(text))
+            .twitch_broadcaster(user_id.clone())
             .ledger_purpose("dashboard-assistent"),
     )
     .await;

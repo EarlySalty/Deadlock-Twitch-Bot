@@ -282,6 +282,7 @@ impl Threads {
         );
 
         let response = match llm
+            .for_channel(channel_login)
             .generate(
                 EXTRACTOR_SYSTEM_PROMPT,
                 &[ChatMessage { role: "user".to_string(), content: user_prompt, name: None }],

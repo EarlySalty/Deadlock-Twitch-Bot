@@ -139,6 +139,7 @@ impl ChannelBackground {
             return None;
         }
         let raw = llm
+            .for_channel(channel_login)
             .raw_completion_tracked(SYS, &build_profile_prompt(channel_login, &lines), BUILD_MAX_TOKENS, 0.4, "channel_profile")
             .await
             .ok()?;

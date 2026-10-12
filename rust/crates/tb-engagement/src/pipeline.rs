@@ -220,6 +220,15 @@ impl EngagementPipeline {
         if gate::is_opted_out(&self.pool, &msg.twitch_user_id).await {
             return HandleResult::new(Decision::Optout);
         }
+        // KI-Schalter pro Server (E14): vor dem Speichern des User-Turns, damit
+        // Chat fremder Server auch nicht in globale Jobs (Stimmung, Soul)
+        // einfließt. Durchgesetzt wird er zusätzlich im LLM-Eingang.
+        if !tb_llm::streamer_ai_allowed(Some(&msg.channel_user_id), Some(&msg.channel_login))
+            .await
+            .unwrap_or(false)
+        {
+            return HandleResult::new(Decision::Disabled);
+        }
 
         self.rhythm.note_user_post(&msg.channel_login);
         if self
@@ -340,12 +349,15 @@ impl EngagementPipeline {
         }
 
         // --- Modell-Call ---
+        // Streamerbezug für den KI-Schalter pro Server; ist er aus, bleibt der
+        // Bot still (Decision::Disabled), ohne Providerfehler zu zählen.
+        let llm = self.llm.for_broadcaster(msg.channel_user_id.clone());
         // Live-Smalltalk soll sich wie Chat anfuehlen: nach sieben Sekunden
         // lieber schweigen als 20+ Sekunden spaeter unnatuerlich antworten.
         let generated = if smalltalk_mode {
             match tokio::time::timeout(
                 Duration::from_secs(7),
-                self.llm.generate(&prompt, &history, 500, 480),
+                llm.generate(&prompt, &history, 500, 480),
             )
             .await
             {
@@ -364,10 +376,11 @@ impl EngagementPipeline {
                 }
             }
         } else {
-            self.llm.generate(&prompt, &history, 500, 480).await
+            llm.generate(&prompt, &history, 500, 480).await
         };
         let response = match generated {
             Ok(r) => r,
+            Err(GenerateError::Disabled(_)) => return HandleResult::new(Decision::Disabled),
             Err(GenerateError::Unavailable(_)) => {
                 if smalltalk_mode {
                     let store = SmalltalkLoopStore::new(self.pool.clone());

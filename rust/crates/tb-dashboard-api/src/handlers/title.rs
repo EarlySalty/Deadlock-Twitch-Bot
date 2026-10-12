@@ -555,6 +555,13 @@ pub async fn suggest_handler(
     )
     .await;
 
+    // KI-Schalter pro Server (Paket K): ohne Stichwörter greifen unten die
+    // regelbasierten Ersatztitel, mit Stichwörtern gibt es eine klare Absage.
+    if !keywords.is_empty() {
+        if let Some(resp) = super::ai_switch::blocked(Some(&user_id), None).await {
+            return resp;
+        }
+    }
     let limiter = TITLE_RATE_LIMITER.get_or_init(TitleRateLimiter::default);
     match generate_title_personalized(
         limiter,

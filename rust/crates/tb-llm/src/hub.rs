@@ -105,7 +105,13 @@ pub struct Request {
     /// Fester Endpunkt statt Anbieterwahl. Fuer Tests und fuer Aufrufer, die
     /// aus fachlichen Gruenden an genau einer Adresse haengen.
     pub endpoint: Option<LlmEndpoint>,
+    /// Twitch-User-ID des Streamers, auf den sich der Aufruf bezieht. Der
+    /// KI-Schalter seines Servers ([`crate::ai_guard`]) entscheidet, ob der
+    /// Aufruf stattfindet; die ID steht im Ledger.
     pub twitch_broadcaster: Option<String>,
+    /// Wie `twitch_broadcaster`, aber als Kanal-Login, wenn der Aufrufer die
+    /// ID nicht kennt. Die ID hat Vorrang.
+    pub twitch_channel: Option<String>,
 }
 
 impl Request {
@@ -199,8 +205,14 @@ impl Request {
         self.endpoint = Some(endpoint);
         self
     }
+    /// Streamerbezug per Twitch-User-ID (siehe [`crate::ai_guard`]).
     pub fn twitch_broadcaster(mut self, broadcaster_id: impl Into<String>) -> Self {
         self.twitch_broadcaster = Some(broadcaster_id.into());
+        self
+    }
+    /// Streamerbezug per Kanal-Login (siehe [`crate::ai_guard`]).
+    pub fn twitch_channel(mut self, channel_login: impl Into<String>) -> Self {
+        self.twitch_channel = Some(channel_login.into());
         self
     }
 }
@@ -233,6 +245,10 @@ pub enum LlmError {
     /// Antwort kam an, taugte aber nicht: leerer Text oder abgelehnt vom
     /// `accept`-Praedikat des Aufrufers.
     Unparsable(String),
+    /// Kein Aufruf: Der KI-Schalter des Servers, zu dem der Streamer gehört,
+    /// ist aus ([`crate::ai_guard`]). Kein Fehler des Anbieters; Aufrufer
+    /// fallen auf ihre regelbasierte Variante zurück oder schweigen.
+    Disabled(String),
 }
 
 impl LlmError {
@@ -244,6 +260,7 @@ impl LlmError {
             Self::Http { .. } => "http_status",
             Self::Transport(_) => "transport",
             Self::Unparsable(_) => "unparsable",
+            Self::Disabled(_) => "ai_disabled",
         }
     }
 }
@@ -261,6 +278,7 @@ impl std::fmt::Display for LlmError {
             }
             Self::Transport(e) => write!(f, "LLM-Aufruf fehlgeschlagen: {e}"),
             Self::Unparsable(e) => write!(f, "LLM-Antwort unbrauchbar: {e}"),
+            Self::Disabled(e) => write!(f, "KI ausgeschaltet: {e}"),
         }
     }
 }
@@ -309,9 +327,29 @@ pub(crate) async fn complete_routed(
     request: Request,
     brain: Option<Arc<crate::brain_route::BrainRoute>>,
 ) -> Result<Response, LlmFailure> {
-    match brain {
-        Some(route) => route.complete(use_case, &request).await,
-        None => complete_direct(use_case, request).await,
+    // KI-Schalter pro Server: vor jedem Weg, auch vor dem Brain.
+    let purpose = ledger_purpose(use_case, &request);
+    let freigabe = crate::ai_guard::check(use_case, &purpose, &request)
+        .await
+        .map_err(|error| LlmFailure {
+            provider: "ki-schalter".to_string(),
+            model: String::new(),
+            error,
+        })?;
+    ledger::with_streamer(freigabe.twitch_user_id, async move {
+        match brain {
+            Some(route) => route.complete(use_case, &request).await,
+            None => complete_direct(use_case, request).await,
+        }
+    })
+    .await
+}
+
+/// Zweck, unter dem ein Aufruf verbucht wird.
+fn ledger_purpose(use_case: &str, request: &Request) -> String {
+    match &request.ledger {
+        Some(Ledger::Purpose(p)) => p.clone(),
+        Some(Ledger::Off) | None => use_case.to_string(),
     }
 }
 
@@ -394,11 +432,7 @@ async fn complete_chain(
         });
     }
 
-    let purpose = match &request.ledger {
-        Some(Ledger::Off) => Some(use_case.to_string()),
-        Some(Ledger::Purpose(p)) => Some(p.clone()),
-        None => Some(use_case.to_string()),
-    };
+    let purpose = Some(ledger_purpose(use_case, &request));
 
     // Gesamtfrist: ohne Angabe die Summe der Einzelfristen, also das
     // bisherige Verhalten. Mit Angabe bekommt jedes weitere Glied nur noch,

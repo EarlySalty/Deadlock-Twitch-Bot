@@ -83,6 +83,7 @@ struct ChatCallError { known_rejection: bool }
 impl From<tb_llm::LlmError> for ChatCallError {
     fn from(error: tb_llm::LlmError) -> Self {
         let known_rejection = matches!(error, tb_llm::LlmError::Unavailable(_) |
+            tb_llm::LlmError::Disabled(_) |
             tb_llm::LlmError::Http { status: 400 | 401 | 403 | 404 | 409 | 422 | 429, .. });
         Self { known_rejection }
     }
@@ -91,7 +92,7 @@ impl From<tb_engagement::llm_chat::GenerateError> for ChatCallError {
     fn from(error: tb_engagement::llm_chat::GenerateError) -> Self {
         use tb_engagement::llm_chat::GenerateError;
         let known_rejection = match error {
-            GenerateError::Unavailable(_) => true,
+            GenerateError::Unavailable(_) | GenerateError::Disabled(_) => true,
             GenerateError::Http(text) => text.strip_prefix("LLM-Aufruf fehlgeschlagen: HTTP ")
                 .and_then(|rest| rest.split_whitespace().next())
                 .and_then(|status| status.trim_end_matches(':').parse::<u16>().ok())
@@ -101,7 +102,11 @@ impl From<tb_engagement::llm_chat::GenerateError> for ChatCallError {
         Self { known_rejection }
     }
 }
-async fn call_ai_chat(session: &ChatSession, message: &str) -> Result<String, ChatCallError> {
+async fn call_ai_chat(
+    session: &ChatSession,
+    message: &str,
+    twitch_user_id: &str,
+) -> Result<String, ChatCallError> {
     let system_prompt = build_chat_system_prompt(session);
     let history = history_messages(session);
 
@@ -120,6 +125,7 @@ async fn call_ai_chat(session: &ChatSession, message: &str) -> Result<String, Ch
             "ai_chat",
             tb_llm::Request::history(messages)
                 .system(&system_prompt)
+                .twitch_broadcaster(twitch_user_id)
                 .max_tokens(4000)
                 .ledger_purpose("ai-chat"),
         )
@@ -136,6 +142,7 @@ async fn call_ai_chat(session: &ChatSession, message: &str) -> Result<String, Ch
         let client = EngagementLlmClient::new(None, None, None, Some(Duration::from_secs(240)));
         // raw_text bereits getrimmt (= extract_text_response auf String).
         client
+            .for_broadcaster(twitch_user_id)
             .messages_completion(Value::Array(messages), 4000, 0.5, "dashboard_ai_chat")
             .await
             .map_err(ChatCallError::from)
@@ -208,6 +215,9 @@ pub(crate) async fn ai_chat_handler(
         Ok(target) => target,
         Err(resp) => return resp,
     };
+    if let Some(resp) = super::ai_switch::blocked(Some(&twitch_user_id), Some(&streamer)).await {
+        return resp;
+    }
 
     // Plan-Gate für Nicht-Admin/Localhost.
     if !matches!(auth, DashboardAuthLevel::Admin { .. }) {
@@ -242,7 +252,7 @@ pub(crate) async fn ai_chat_handler(
         }
     };
     let model = turn.session.model.clone();
-    let reply = match call_ai_chat(&turn.session, &message).await {
+    let reply = match call_ai_chat(&turn.session, &message, &twitch_user_id).await {
         Ok(r) if !r.trim().is_empty() => r,
         Ok(_) => {
             if let Err(error) = turn.fail(false).await {

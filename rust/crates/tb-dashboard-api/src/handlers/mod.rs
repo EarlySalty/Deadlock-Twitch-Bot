@@ -28,6 +28,7 @@ pub mod affiliate_portal;
 pub mod ai_analysis;
 pub mod ai_chat;
 pub mod ai_history;
+pub mod ai_switch;
 pub mod audience;
 pub mod audience_demographics;
 pub mod auth_login;
