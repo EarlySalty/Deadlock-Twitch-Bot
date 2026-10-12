@@ -4,6 +4,10 @@ Creator: P2 native Claude Code session `78e43a4b-d7c4-4910-adb3-26be78165791`.
 Main orchestrator: T3 thread `eddfce29-0b2a-4f47-931f-8b5387672f94`.
 Integration worktree: `/home/nathanael/.worktrees/tb-social-ai`, branch `feat/social-ai-editor-20261011`.
 
+## Required upstream boundary for the next gate
+
+Genuine orchestrator FYI on 2026-10-12: P1 M1a historical clip pool/import backend is on main at d5c30b730; its deployment is pending. Parent fetched origin/main and independently resolved full d5c30b730acc3ad7e598915913c93c501f036a59. Rebase completed owned M1 source onto this actual main before the next configured gate, preserving published checkpoints without force updates and running genuinely affected integration checks. Do not alter a Cargo-pinned active fixer tree; parent handles adoption at the clean handover boundary. The current blocked source/fixer creation base remains 2556911 until adoption actually occurs. No rebase/check/gate/deploy success is inferred from the FYI, and no extra production action is required.
+
 ## Active integrated M1 implementation
 
 Genuine user update on 2026-10-11: stop separate per-leaf source reviews; integrate finished leaves, run scoped checks once on the integrated SHA, then use `gate_hook.py --review` as the independent review, with a fresh fixer per BLOCK. The resolver's real retry/error assertions must remain unless demonstrated not to test real behavior. No more test-only workaround rounds. Goal remains merged/deployed M1 and one real consented own-channel run under the shared $2 cap.
