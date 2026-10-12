@@ -110,8 +110,11 @@ pub trait BrokerForward: Send + Sync {
 /// Response-Formate entsprechen den Broker-Endpunkten.
 #[async_trait::async_trait]
 pub trait DirectDiscord: Send + Sync {
-    async fn handle(&self, guild_id: u64, req: InboundRequest)
-        -> Result<OutboundResponse, HubError>;
+    async fn handle(
+        &self,
+        guild_id: u64,
+        req: InboundRequest,
+    ) -> Result<OutboundResponse, HubError>;
 }
 
 /// Ereignisse aus dem Gateway. Persistenz folgt mit Paket G (`discord_guilds`,

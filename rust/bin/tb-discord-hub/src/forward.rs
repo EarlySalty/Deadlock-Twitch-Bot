@@ -19,7 +19,7 @@ use reqwest::header::CONTENT_TYPE;
 use reqwest::{Client, Url};
 
 use crate::{
-    BrokerForward, HubError, IDEMPOTENCY_HEADER, INTERNAL_PREFIX, InboundRequest, OutboundResponse,
+    BrokerForward, HubError, InboundRequest, OutboundResponse, IDEMPOTENCY_HEADER, INTERNAL_PREFIX,
     TOKEN_HEADER,
 };
 

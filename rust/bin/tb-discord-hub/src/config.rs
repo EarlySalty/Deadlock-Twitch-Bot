@@ -49,10 +49,7 @@ impl std::fmt::Debug for HubConfig {
             .field("internal_token", &"[geschützt]")
             .field("broker_base_url", &self.broker_base_url)
             .field("broker_token", &"[geschützt]")
-            .field(
-                "bot_token",
-                &self.bot_token.as_ref().map(|_| "[geschützt]"),
-            )
+            .field("bot_token", &self.bot_token.as_ref().map(|_| "[geschützt]"))
             .field("application_id", &self.application_id)
             .field("community_guild_id", &self.community_guild_id)
             .finish()
@@ -108,8 +105,8 @@ impl HubConfig {
         let broker_base_url = match value(get, "MASTER_BROKER_BASE_URL") {
             Some(u) => u,
             None => {
-                let host = value(get, "MASTER_BROKER_HOST")
-                    .unwrap_or_else(|| "127.0.0.1".to_string());
+                let host =
+                    value(get, "MASTER_BROKER_HOST").unwrap_or_else(|| "127.0.0.1".to_string());
                 let port = parse_opt::<u16>(get, "MASTER_BROKER_PORT")?
                     .filter(|p| *p >= 1)
                     .unwrap_or(8770);
