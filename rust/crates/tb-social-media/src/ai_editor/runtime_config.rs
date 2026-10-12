@@ -1,4 +1,5 @@
 use std::{
+    io::Read,
     path::{Component, Path, PathBuf},
     time::Duration,
 };
@@ -89,11 +90,29 @@ impl BrainRuntimeConfig {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct MediaRuntime {
+    pub package_root: PathBuf,
+    pub source_root: PathBuf,
+    pub work_root: PathBuf,
+    pub output_root: PathBuf,
+    pub resources: ResourceLimits,
+}
+
+#[derive(Deserialize)]
+struct MediaConfiguration {
+    source_root: PathBuf,
+    work_root: PathBuf,
+    output_root: PathBuf,
+    resources: ResourceLimits,
+}
+
 #[derive(Clone)]
 pub struct EditorRuntime {
     pub configuration: EditorConfig,
     pub limits: RuntimeConfig,
     pub package_root: PathBuf,
+    media: MediaRuntime,
 }
 
 fn valid_path(path: &Path) -> bool {
@@ -113,15 +132,106 @@ fn resolve(root: &Path, path: &Path) -> PathBuf {
     }
 }
 
+fn packaged_root() -> Result<PathBuf, super::AiEditorError> {
+    let executable = std::env::current_exe().map_err(|_| super::AiEditorError::Configuration)?;
+    executable
+        .ancestors()
+        .nth(4)
+        .map(Path::to_path_buf)
+        .ok_or(super::AiEditorError::Configuration)
+}
+
+fn validate_media(
+    source_root: &Path,
+    work_root: &Path,
+    output_root: &Path,
+    resources: &ResourceLimits,
+) -> Result<(), super::AiEditorError> {
+    if ![source_root, work_root, output_root]
+        .into_iter()
+        .all(valid_path)
+        || source_root != output_root
+        || !work_root.starts_with(output_root)
+        || work_root == output_root
+        || !(1..=512 * 1024 * 1024).contains(&resources.max_source_bytes)
+        || !(1..=512 * 1024 * 1024).contains(&resources.max_output_bytes)
+        || !(1024..=65_536).contains(&resources.max_probe_bytes)
+        || !(1..=120_000).contains(&resources.max_media_duration_ms)
+        || !(1920..=7680).contains(&resources.max_media_width)
+        || !(1920..=4320).contains(&resources.max_media_height)
+        || resources.max_frames == 0
+        || !(2..=1920).contains(&resources.frame_width)
+        || !resources.frame_width.is_multiple_of(2)
+        || resources.max_frame_bytes == 0
+        || !(1024..=262_144).contains(&resources.max_ass_bytes)
+        || !(1000..=600_000).contains(&resources.process_deadline_ms)
+        || !(1000..=600_000).contains(&resources.total_frames_deadline_ms)
+        || !(1..=1000).contains(&resources.max_duration_drift_ms)
+        || !(1..=3).contains(&resources.encoder_threads)
+    {
+        return Err(super::AiEditorError::Configuration);
+    }
+    Ok(())
+}
+
+impl MediaRuntime {
+    pub fn load_packaged() -> Result<Self, super::AiEditorError> {
+        Self::load(&packaged_root()?)
+    }
+
+    pub fn load(package_root: &Path) -> Result<Self, super::AiEditorError> {
+        #[derive(Deserialize)]
+        struct Document {
+            runtime: MediaConfiguration,
+        }
+        const MAX_CONFIG_BYTES: u64 = 64 * 1024;
+        let path = package_root.join("ops/social-ai/editor.yaml");
+        let metadata = std::fs::metadata(&path).map_err(|_| super::AiEditorError::Configuration)?;
+        if !metadata.is_file() || metadata.len() > MAX_CONFIG_BYTES {
+            return Err(super::AiEditorError::Configuration);
+        }
+        let mut bytes = Vec::new();
+        std::fs::File::open(&path)
+            .map_err(|_| super::AiEditorError::Configuration)?
+            .take(MAX_CONFIG_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| super::AiEditorError::Configuration)?;
+        if bytes.len() as u64 > MAX_CONFIG_BYTES {
+            return Err(super::AiEditorError::Configuration);
+        }
+        let value: serde_yaml::Value =
+            serde_yaml::from_slice(&bytes).map_err(|_| super::AiEditorError::Configuration)?;
+        let document: Document =
+            serde_yaml::from_value(value).map_err(|_| super::AiEditorError::Configuration)?;
+        Self::from_configuration(package_root, document.runtime)
+    }
+
+    fn from_configuration(
+        package_root: &Path,
+        configuration: MediaConfiguration,
+    ) -> Result<Self, super::AiEditorError> {
+        let root = package_root
+            .canonicalize()
+            .map_err(|_| super::AiEditorError::Configuration)?;
+        validate_media(
+            &configuration.source_root,
+            &configuration.work_root,
+            &configuration.output_root,
+            &configuration.resources,
+        )?;
+        Ok(Self {
+            source_root: resolve(&root, &configuration.source_root),
+            work_root: resolve(&root, &configuration.work_root),
+            output_root: resolve(&root, &configuration.output_root),
+            resources: configuration.resources,
+            package_root: root,
+        })
+    }
+}
+
 impl EditorRuntime {
     pub fn load_packaged() -> Result<Self, super::AiEditorError> {
-        let executable =
-            std::env::current_exe().map_err(|_| super::AiEditorError::Configuration)?;
-        let root = executable
-            .ancestors()
-            .nth(4)
-            .ok_or(super::AiEditorError::Configuration)?;
-        Self::load(root)
+        Self::load(&packaged_root()?)
     }
 
     pub fn load(package_root: &Path) -> Result<Self, super::AiEditorError> {
@@ -137,23 +247,34 @@ impl EditorRuntime {
         configuration
             .validate()
             .map_err(|_| super::AiEditorError::Configuration)?;
-        let root = package_root
-            .canonicalize()
-            .map_err(|_| super::AiEditorError::Configuration)?;
         let mut limits: RuntimeConfig = serde_json::from_value(configuration.runtime.clone())
             .map_err(|_| super::AiEditorError::Configuration)?;
+        let media = MediaRuntime::from_configuration(
+            package_root,
+            MediaConfiguration {
+                source_root: limits.source_root.clone(),
+                work_root: limits.work_root.clone(),
+                output_root: limits.output_root.clone(),
+                resources: limits.resources.clone(),
+            },
+        )?;
         limits.validate(&configuration)?;
-        limits.source_root = resolve(&root, &limits.source_root);
-        limits.work_root = resolve(&root, &limits.work_root);
-        limits.output_root = resolve(&root, &limits.output_root);
-        limits.stt.binary = resolve(&root, &limits.stt.binary);
+        limits.source_root = media.source_root.clone();
+        limits.work_root = media.work_root.clone();
+        limits.output_root = media.output_root.clone();
+        limits.stt.binary = resolve(&media.package_root, &limits.stt.binary);
         configuration.runtime =
             serde_json::to_value(&limits).map_err(|_| super::AiEditorError::Configuration)?;
         Ok(Self {
             configuration,
             limits,
-            package_root: root,
+            package_root: media.package_root.clone(),
+            media,
         })
+    }
+
+    pub fn media(&self) -> &MediaRuntime {
+        &self.media
     }
 }
 
@@ -161,17 +282,13 @@ impl RuntimeConfig {
     pub fn validate(&self, configuration: &EditorConfig) -> Result<(), super::AiEditorError> {
         let resources = &self.resources;
         let plan = &self.plan;
-        if ![
+        validate_media(
             &self.source_root,
             &self.work_root,
             &self.output_root,
-            &self.stt.binary,
-        ]
-        .into_iter()
-        .all(|p| valid_path(p))
-            || self.source_root != self.output_root
-            || !self.work_root.starts_with(&self.output_root)
-            || self.work_root == self.output_root
+            resources,
+        )?;
+        if !valid_path(&self.stt.binary)
             || !(1..=3).contains(&self.stage_attempts)
             || !(100..=60_000).contains(&self.worker_poll_ms)
             || !(60_000..=3_600_000).contains(&self.job_deadline_ms)
@@ -179,25 +296,10 @@ impl RuntimeConfig {
             || !(1..=50).contains(&self.list_limit)
             || !(1024..=32_768).contains(&self.max_snapshot_bytes)
             || !(128..=4096).contains(&self.max_skill_bytes)
-            || !(1..=512 * 1024 * 1024).contains(&resources.max_source_bytes)
-            || !(1..=512 * 1024 * 1024).contains(&resources.max_output_bytes)
-            || !(1024..=65_536).contains(&resources.max_probe_bytes)
-            || !(1..=120_000).contains(&resources.max_media_duration_ms)
-            || !(1920..=7680).contains(&resources.max_media_width)
-            || !(1920..=4320).contains(&resources.max_media_height)
-            || resources.max_frames == 0
             || resources.max_frames > configuration.provider.max_frames
-            || !(2..=1920).contains(&resources.frame_width)
-            || !resources.frame_width.is_multiple_of(2)
-            || resources.max_frame_bytes == 0
             || resources.max_frame_bytes > configuration.provider.max_frame_bytes as u64
-            || !(1024..=262_144).contains(&resources.max_ass_bytes)
-            || !(1000..=600_000).contains(&resources.process_deadline_ms)
-            || !(1000..=600_000).contains(&resources.total_frames_deadline_ms)
             || resources.process_deadline_ms > self.job_deadline_ms
             || resources.total_frames_deadline_ms > self.job_deadline_ms
-            || !(1..=1000).contains(&resources.max_duration_drift_ms)
-            || !(1..=3).contains(&resources.encoder_threads)
             || plan.max_source_duration_ms > resources.max_media_duration_ms
             || plan.max_output_duration_ms > resources.max_media_duration_ms
             || plan.max_source_duration_drift_ms > resources.max_duration_drift_ms

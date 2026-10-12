@@ -1,7 +1,7 @@
 mod media;
 mod model;
 mod pipeline;
-mod runtime_config;
+pub mod runtime_config;
 mod service;
 mod skills;
 mod source;
@@ -25,7 +25,7 @@ pub mod store;
 pub mod stt;
 
 pub use pipeline::{produce, ProducedOutcome, ProductionContext};
-pub use runtime_config::{EditorRuntime, RuntimeConfig};
+pub use runtime_config::{EditorRuntime, MediaRuntime, RuntimeConfig};
 pub use service::{
     create_manual_job, get_manual_job, list_manual_jobs, manual_original_file, retry_manual_job,
     ManualWorker,
