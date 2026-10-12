@@ -80,6 +80,15 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'shared produced slot already reserved' USING ERRCODE = '23505';
     END IF;
+    IF TG_TABLE_NAME = 'twitch_clips_upload_queue' AND EXISTS (
+        SELECT 1 FROM twitch_clips_upload_queue q
+        JOIN twitch_clips_social_media c ON c.id = q.clip_id
+        WHERE c.twitch_user_id = owner_id AND q.scheduled_at = slot_time
+        AND q.id IS DISTINCT FROM NEW.id AND COALESCE(q.status, '') NOT IN ('failed', 'cancelled')
+        AND (q.produced_video_id IS DISTINCT FROM video_subject OR q.clip_id IS DISTINCT FROM clip_subject)
+    ) THEN
+        RAISE EXCEPTION 'shared sibling upload slot already reserved' USING ERRCODE = '23505';
+    END IF;
     RETURN NEW;
 END;
 $$;

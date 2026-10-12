@@ -176,8 +176,16 @@ impl AutopilotWorker {
                         RunnerError::Render(_)
                             | RunnerError::File(_)
                             | RunnerError::Database(_)
+                            | RunnerError::Job(production_jobs::JobError::Database(_))
+                            | RunnerError::Schedule(ScheduleError::Database(_))
+                            | RunnerError::Schedule(ScheduleError::Settings(
+                                autopilot_settings::SettingsError::Database(_)
+                            ))
                             | RunnerError::Download
                             | RunnerError::Video(ProducedVideoError::Database(_))
+                            | RunnerError::Video(ProducedVideoError::Settings(
+                                autopilot_settings::SettingsError::Database(_)
+                            ))
                     );
                     retry_or_review(&self.pool, job, "static_production_failed", retryable).await?;
                     if !retryable || job.attempts >= job.max_attempts {
@@ -416,6 +424,40 @@ impl AutopilotWorker {
         .await?)
     }
 
+    async fn inherit_static_slot(
+        &self,
+        lease: &mut ProductionLease,
+        job: &ProductionJob,
+        mut video: ProducedVideo,
+    ) -> Result<ProducedVideo, RunnerError> {
+        let Some(slot) = job.scheduled_at else {
+            return Ok(video);
+        };
+        if let Some(existing) = video.scheduled_at {
+            return if existing == slot {
+                Ok(video)
+            } else {
+                Err(RunnerError::Source)
+            };
+        }
+        lease.ensure_held().await?;
+        let mut tx = self.pool.begin().await?;
+        autopilot_settings::lock_owner(&mut tx, &job.twitch_user_id)
+            .await
+            .map_err(ScheduleError::from)?;
+        let changed = sqlx::query("UPDATE social_produced_videos SET scheduled_at = $3
+            WHERE id = $1 AND twitch_user_id = $2 AND job_id = $4 AND clip_id = $5
+            AND mode = 'static' AND scheduled_at IS NULL AND status IN ('rendering', 'review', 'approved')")
+            .bind(video.id).bind(&job.twitch_user_id).bind(slot).bind(job.id).bind(job.clip_id)
+            .execute(&mut *tx).await?.rows_affected();
+        if changed != 1 {
+            return Err(RunnerError::Source);
+        }
+        tx.commit().await?;
+        video.scheduled_at = Some(slot);
+        Ok(video)
+    }
+
     async fn valid_output(
         &self,
         checkpoint: &StaticCheckpoint,
@@ -477,6 +519,7 @@ impl AutopilotWorker {
         job: &ProductionJob,
     ) -> Result<(), RunnerError> {
         let video = self.prepare_static(lease, job).await?;
+        let video = self.inherit_static_slot(lease, job, video).await?;
         if matches!(
             video.status.as_str(),
             "review" | "approved" | "scheduled" | "published"
