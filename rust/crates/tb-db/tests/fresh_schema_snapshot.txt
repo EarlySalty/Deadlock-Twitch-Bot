@@ -627,6 +627,9 @@ social_ai_user_limits|revision|bigint|NO|
 social_ai_user_limits|twitch_user_id|text|NO|
 social_ai_user_limits|updated_at|timestamp with time zone|NO|now()
 social_ai_user_limits|updated_by|text|NO|
+social_autopilot_schedule_state|planned_at|timestamp with time zone|NO|
+social_autopilot_schedule_state|production_hold|text|YES|
+social_autopilot_schedule_state|twitch_user_id|text|NO|
 social_clip_import_jobs|active_window|jsonb|YES|
 social_clip_import_jobs|attempts|integer|NO|0
 social_clip_import_jobs|clip_date_filter|jsonb|NO|

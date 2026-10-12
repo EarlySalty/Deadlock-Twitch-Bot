@@ -22,12 +22,13 @@ impl ClipDownloader for NoDownload {
 }
 
 fn configuration(root: &Path) -> WorkerConfig {
-    let mut configuration: tb_llm::social_editor::EditorConfig =
+    let mut configuration: serde_yaml::Value =
         serde_yaml::from_str(include_str!("../../../../../ops/social-ai/editor.yaml"))
             .expect("existing packaged configuration");
-    configuration.runtime["source_root"] = json!("clips");
-    configuration.runtime["output_root"] = json!("clips");
-    configuration.runtime["work_root"] = json!("clips/.ai-editor-work");
+    configuration["runtime"]["source_root"] = serde_yaml::Value::String("clips".into());
+    configuration["runtime"]["output_root"] = serde_yaml::Value::String("clips".into());
+    configuration["runtime"]["work_root"] =
+        serde_yaml::Value::String("clips/.ai-editor-work".into());
     let directory = root.join("ops/social-ai");
     std::fs::create_dir_all(&directory).expect("owned configuration directory");
     std::fs::write(
@@ -106,6 +107,7 @@ async fn autopilot_runner_static_local_media_and_restart_preserve_immutable_vers
     let pool = pool().await;
     sqlx::raw_sql("INSERT INTO twitch_streamers VALUES ('42');
         ALTER TABLE twitch_clips_social_media ADD COLUMN custom_title TEXT;
+        ALTER TABLE twitch_clips_social_media ADD COLUMN discarded_at TIMESTAMPTZ;
         ALTER TABLE twitch_clips_social_media ADD COLUMN custom_description TEXT;
         ALTER TABLE twitch_clips_social_media ADD COLUMN hashtags TEXT DEFAULT '[]';
         ALTER TABLE twitch_clips_social_media ADD COLUMN layout_override_json JSONB;
