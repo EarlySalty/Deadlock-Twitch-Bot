@@ -24,3 +24,12 @@ Decisions sent: Anthropic connector scoped to social editor (Opus 5.5 via YAML, 
 - Speed directive sent: critical path P2 M1 -> P1 B -> P3 M2, no re-verification ceremony, one batched deploy, 15-min watch.
 - P1 B composes on P2 candidate 741ba64a0 (WIP adf4a6206), rebases on P2 main SHA.
 - MediaRuntime owned by P2 (media-only loader, EditorRuntime builds on it); B uses editor=None when AI config fails.
+
+## 2026-10-12 ~20:55Z: takeover by native Opus subagents
+- P1/P2/P3 Sol threads stopped: weekly limit, resets 2026-10-18 06:21 Europe/Berlin. Do not resume them before that; work moved to native subagents of session d7e0c71c.
+- A critical path: TOML fix fc77864af gate/merge/deploy, then P1 Track B 7d70fa8a8 gate/merge/deploy.
+- P2 M2 revisions/versions/produce/transfer (from f3cd92197 / b6e8a57e6), migrations 20261011203xxx.
+- P2 M3+M4 learning, skill versioning, admin usage/budgets (from b8ed37b5a, d56efa51b), migrations 20261011204xxx.
+- P3 M2 dashboard integration (from 8ae9a1031).
+- P1 Track C modes/approval/retries/retention/notifications (contract 7878c5431), migrations 20261011105xxx.
+- All: no paid AI calls until user approves the paid live test; review mode only, no real publishing.
