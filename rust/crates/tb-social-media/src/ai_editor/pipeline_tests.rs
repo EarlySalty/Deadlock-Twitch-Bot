@@ -40,7 +40,7 @@ async fn database() -> postgres::TestPostgres {
     .await
     .expect("jobs migration after provider migration");
     sqlx::raw_sql(include_str!(
-        "../../../../migrations/20261011200101_social_ai_revisions.sql"
+        "../../../../migrations/20261011203001_social_ai_revisions.sql"
     ))
     .execute(&db.pool)
     .await
@@ -1633,6 +1633,18 @@ async fn revisions_preserve_parent_reuse_checkpoints_and_confirm_before_renderin
             crate::produced_video::ProducedVideoError::ApprovalRequired
         ))
     ));
+    let mut settings = autopilot_settings::load(&db.pool, "101")
+        .await
+        .expect("settings");
+    settings.schedule_slots = (1..=7)
+        .map(|weekday| autopilot_settings::ScheduleSlot {
+            weekday,
+            local_time: "18:00".into(),
+        })
+        .collect();
+    autopilot_settings::save(&db.pool, "101", &settings)
+        .await
+        .expect("schedule slots");
     let exact_bytes = tokio::fs::read(new.file_path.as_deref().expect("exact file"))
         .await
         .expect("before queue");
@@ -1686,6 +1698,19 @@ async fn revisions_preserve_parent_reuse_checkpoints_and_confirm_before_renderin
     assert!(Path::new(new.file_path.as_deref().expect("scheduled exact file")).is_file());
     assert!(!original_preview_path(&runtime, new.id).exists());
     lease.release().await.expect("release");
+    sqlx::query("UPDATE social_produced_videos SET status='published' WHERE id=$1")
+        .bind(new.id)
+        .execute(&db.pool)
+        .await
+        .expect("isolated published version");
+    let published = revision::select_version(&db.pool, &runtime, "101", root, new.id)
+        .await
+        .expect("published history remains selectable");
+    assert_eq!(published.selected_version_id, Some(new.id));
+    assert!(published.versions.iter().any(|version| version.id == new.id
+        && version.status == "published"
+        && version.file_url.is_some()
+        && version.original_url.is_none()));
 }
 
 #[tokio::test]
@@ -1973,14 +1998,21 @@ async fn variants_require_frozen_opt_in_and_preserve_concrete_parent_plan_and_su
         requires_confirmation: false,
         estimated_provider_cost_usd: Some(0.01),
     };
-    super::super::revision::validate_proposal(&mut proposal, &base, &base, &runtime)
+    super::super::revision::validate_proposal(&mut proposal, &base, &base, &runtime, Some(0.5))
         .expect("small revision");
-    assert!(!proposal.requires_confirmation && proposal.estimated_provider_cost_usd.is_none());
+    assert!(!proposal.requires_confirmation && proposal.estimated_provider_cost_usd == Some(0.0));
     let mut changed = base.clone();
     changed.plan.kept_intervals[0].start_ms = 500;
-    super::super::revision::validate_proposal(&mut proposal, &base, &changed, &runtime)
+    super::super::revision::validate_proposal(&mut proposal, &base, &changed, &runtime, None)
         .expect("server classification");
     assert!(proposal.requires_confirmation);
+    proposal.reanalyze = true;
+    super::super::revision::validate_proposal(&mut proposal, &base, &changed, &runtime, Some(0.04))
+        .expect("reanalysis estimate from the measured root job");
+    assert_eq!(proposal.estimated_provider_cost_usd, Some(0.04));
+    super::super::revision::validate_proposal(&mut proposal, &base, &changed, &runtime, None)
+        .expect("unknown reanalysis estimate");
+    assert!(proposal.estimated_provider_cost_usd.is_none());
     if let Some(StageCheckpoint::Planning { edit_plan, .. }) =
         checkpoints.get_mut(&AiStage::Planning)
     {
@@ -2048,4 +2080,205 @@ async fn variants_require_frozen_opt_in_and_preserve_concrete_parent_plan_and_su
         100
     );
     assert_eq!(payload["parent_version_id"], view.versions[1].id);
+}
+
+#[tokio::test]
+async fn secondary_variant_expiry_recovers_without_replacing_retained_primary_or_provider_work() {
+    let db = database().await;
+    let directory = tempfile::tempdir().expect("package root");
+    let runtime = runtime(directory.path());
+    let clip = source(&db.pool, &runtime).await;
+    let mut settings = autopilot_settings::load(&db.pool, "101")
+        .await
+        .expect("settings");
+    settings.multi_output_enabled = true;
+    autopilot_settings::save(&db.pool, "101", &settings)
+        .await
+        .expect("isolated opt-in");
+    production_jobs::insert(
+        &db.pool,
+        &production_jobs::NewProductionJob {
+            twitch_user_id: "101".into(),
+            clip_id: clip,
+            source: production_jobs::JobSource::Manual,
+            requested_mode: Some(ProductionMode::Ai),
+            scheduled_at: None,
+            max_attempts: 2,
+        },
+    )
+    .await
+    .expect("C3 request");
+    let mut job = production_jobs::claim_next(&db.pool)
+        .await
+        .expect("claim")
+        .expect("job");
+    let identity = Identity::Production(job.id);
+    usage_fixture(&db.pool, identity).await;
+    let mut lease = super::super::store::acquire_production_lease(&db.pool)
+        .await
+        .expect("lease")
+        .expect("free");
+    let mut checkpoints = prepared(&db.pool, &runtime, &mut lease, clip, identity).await;
+    let (frozen, _) = preparing(&checkpoints, &runtime).expect("snapshot");
+    let (mut plan, _) = planning(&checkpoints, &frozen, &runtime).expect("main plan");
+    let mut alternate = plan.plan.clone();
+    alternate.kept_intervals[0].start_ms = 100;
+    plan.variants
+        .push(super::super::stage_contract::VariantPlan {
+            plan: alternate,
+            platforms: plan.platforms.clone(),
+            subtitle_scale_percent: 100,
+        });
+    if let Some(StageCheckpoint::Planning { edit_plan, .. }) =
+        checkpoints.get_mut(&AiStage::Planning)
+    {
+        *edit_plan = serde_json::to_value(plan)
+            .expect("plan")
+            .as_object()
+            .cloned()
+            .expect("object");
+    }
+    let earlier = serde_json::to_value(&checkpoints).expect("saved provider work");
+    job.metadata["ai_editor"] = serde_json::to_value(ProductionState {
+        checkpoints,
+        attempts: BTreeMap::new(),
+    })
+    .expect("state");
+    production_jobs::update_progress(&db.pool, "101", job.id, "rendering", &job.metadata)
+        .await
+        .expect("saved C3 checkpoints");
+    let first = produce(
+        ProductionContext {
+            pool: &db.pool,
+            runtime: &runtime,
+            lease: &mut lease,
+            brain_token: None,
+        },
+        job.clone(),
+    )
+    .await
+    .expect("real variant rendering");
+    assert_eq!(first.produced_video_ids.len(), 2);
+    let primary = first.produced_video_ids[0];
+    let secondary = first.produced_video_ids[1];
+    let primary_bytes = tokio::fs::read(output_path(&runtime, primary))
+        .await
+        .expect("retained main bytes");
+    produced_video::approve(&db.pool, "101", primary, &["youtube".into()])
+        .await
+        .expect("isolated primary approval");
+    expire_fixture(&db.pool, primary).await;
+    expire_fixture(&db.pool, secondary).await;
+    cleanup_expired_artifacts(&db.pool, &runtime, &mut lease)
+        .await
+        .expect("independent review and preview retention");
+    assert!(!original_preview_path(&runtime, primary).exists());
+    assert!(!output_path(&runtime, secondary).exists());
+    let fresh = produce(
+        ProductionContext {
+            pool: &db.pool,
+            runtime: &runtime,
+            lease: &mut lease,
+            brain_token: None,
+        },
+        job.clone(),
+    )
+    .await
+    .expect("secondary expiry is detected and rewound");
+    assert_eq!(fresh.produced_video_ids[0], primary);
+    assert_ne!(fresh.produced_video_ids[1], secondary);
+    assert!(fresh.needs_review);
+    assert_eq!(
+        tokio::fs::read(output_path(&runtime, primary))
+            .await
+            .expect("unchanged main"),
+        primary_bytes
+    );
+    assert!(!original_preview_path(&runtime, primary).exists());
+    let retained = produced_video::get(&db.pool, "101", primary)
+        .await
+        .expect("primary")
+        .expect("row");
+    assert_eq!(retained.status, "approved");
+    let replaced = produced_video::get(&db.pool, "101", fresh.produced_video_ids[1])
+        .await
+        .expect("replacement")
+        .expect("row");
+    assert_eq!(
+        (replaced.status.as_str(), replaced.variant_index),
+        ("review", 1)
+    );
+    assert!(replaced.version_no > retained.version_no);
+    let persisted = production_jobs::get(&db.pool, "101", job.id)
+        .await
+        .expect("C3")
+        .expect("job");
+    let mut state: ProductionState =
+        serde_json::from_value(persisted.metadata["ai_editor"].clone()).expect("recovered state");
+    assert_eq!(state.attempts[&AiStage::Rendering], 2);
+    assert_eq!(state.attempts[&AiStage::Validating], 2);
+    state.checkpoints.remove(&AiStage::Rendering);
+    state.checkpoints.remove(&AiStage::Validating);
+    assert_eq!(
+        serde_json::to_value(state.checkpoints).expect("reused checkpoints"),
+        earlier
+    );
+    assert_usage_preserved(&db.pool, identity).await;
+    let replay = produce(
+        ProductionContext {
+            pool: &db.pool,
+            runtime: &runtime,
+            lease: &mut lease,
+            brain_token: None,
+        },
+        job,
+    )
+    .await
+    .expect("reconciled exact versions");
+    assert_eq!(replay.produced_video_ids, fresh.produced_video_ids);
+    assert_eq!(
+        produced_video::list(&db.pool, "101", 50)
+            .await
+            .expect("bounded history")
+            .len(),
+        3
+    );
+    lease.release().await.expect("release");
+}
+
+#[tokio::test]
+async fn editor_options_default_off_and_save_without_touching_other_settings() {
+    let db = database().await;
+    let defaults = super::super::options::load(&db.pool, "101")
+        .await
+        .expect("defaults");
+    assert!(!defaults.multi_output_enabled && !defaults.experimental_ai_layout);
+    let mut settings = autopilot_settings::load(&db.pool, "101")
+        .await
+        .expect("settings");
+    settings.enabled = true;
+    settings.target_platforms = vec!["youtube".into()];
+    autopilot_settings::save(&db.pool, "101", &settings)
+        .await
+        .expect("existing autopilot settings");
+    let saved = super::super::options::save(
+        &db.pool,
+        "101",
+        crate::ai_editor::EditorOptions {
+            multi_output_enabled: true,
+            experimental_ai_layout: true,
+        },
+    )
+    .await
+    .expect("opt-in");
+    assert!(saved.multi_output_enabled && saved.experimental_ai_layout);
+    let after = autopilot_settings::load(&db.pool, "101")
+        .await
+        .expect("settings after");
+    assert!(after.enabled && after.multi_output_enabled && after.experimental_ai_layout);
+    assert_eq!(after.target_platforms, vec!["youtube".to_string()]);
+    let other = super::super::options::load(&db.pool, "202")
+        .await
+        .expect("other user");
+    assert!(!other.multi_output_enabled && !other.experimental_ai_layout);
 }

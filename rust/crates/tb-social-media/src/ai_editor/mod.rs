@@ -1,5 +1,6 @@
 mod media;
 mod model;
+pub mod options;
 mod pipeline;
 pub mod revision;
 pub mod runtime_config;

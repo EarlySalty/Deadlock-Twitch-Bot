@@ -160,7 +160,9 @@ impl Planning {
             return Err(AiEditorError::Plan);
         }
         for variant in &self.variants {
-            variant.planning().validate(duration, limits, copy_limits, analysis)?;
+            variant
+                .planning()
+                .validate(duration, limits, copy_limits, analysis)?;
         }
         if serde_json::to_vec(self)
             .map_err(|_| AiEditorError::Plan)?

@@ -118,6 +118,14 @@
 .social-ai-compare > label { display: grid; gap: 6px; margin-block: 12px; font-size: 13px; }
 .social-ai-compare select { min-width: 0; max-width: 100%; }
 
+.social-ai-options { display: grid; gap: 12px; min-width: 0; }
+.social-ai-option-list { display: grid; gap: 12px; }
+.social-ai-option-list label { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 10px; align-items: start; cursor: pointer; }
+.social-ai-option-list input { margin-top: 3px; }
+.social-ai-option-list span { font-size: 14px; font-weight: 650; }
+.social-ai-option-list small { grid-column: 2; color: var(--ai-muted); font-size: 13px; line-height: 1.5; }
+.social-ai-options [role="status"] p { font-size: 13px; color: var(--ai-muted); }
+
 @media (min-width: 960px) {
   .social-ai-setup, .social-ai-video-grid, .social-ai-explanations, .social-ai-review-notices { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

@@ -713,7 +713,11 @@ async fn plan(
             frozen.media.duration_ms,
             &runtime.limits.plan,
             &runtime.limits.copy,
-            &Analysis { highlights: vec![], uncertainty: vec![], analysis_notes: vec![] },
+            &Analysis {
+                highlights: vec![],
+                uncertainty: vec![],
+                analysis_notes: vec![],
+            },
         )?;
         let mut proposal = result.revision_proposal.take().ok_or(AiEditorError::Plan)?;
         if revision
@@ -722,7 +726,13 @@ async fn plan(
         {
             proposal.reanalyze = false;
         }
-        super::revision::validate_proposal(&mut proposal, base, &result, runtime)?;
+        let estimate = match ctx.identity.manual() {
+            Some(id) if proposal.reanalyze => {
+                super::revision::reanalysis_estimate(ctx.pool, ctx.owner, id).await?
+            }
+            _ => None,
+        };
+        super::revision::validate_proposal(&mut proposal, base, &result, runtime, estimate)?;
         result.revision_proposal = Some(proposal);
     } else if result.revision_proposal.is_some() {
         return Err(AiEditorError::Plan);
@@ -781,23 +791,21 @@ pub(super) async fn media_recovery_needed(
     identity: Identity,
     checkpoints: &BTreeMap<AiStage, StageCheckpoint>,
 ) -> Result<bool, AiEditorError> {
-    let Some(video) = produced_video::find_ai_version(
-        pool,
-        owner,
-        clip_id,
-        identity.manual(),
-        identity.production(),
-    )
-    .await
-    .map_err(|_| AiEditorError::Storage)?
-    else {
-        return Ok(false);
-    };
-    Ok(expired_allocation(&video)
-        || (video.status == "rendering"
-            && matches!(checkpoints.get(&AiStage::Rendering),
-                Some(StageCheckpoint::Rendering { output_path: stored, .. })
-                if stored != &output_path(runtime, video.id).to_string_lossy())))
+    for variant_index in 0..runtime.limits.revisions.max_variants as i32 {
+        let Some(video) = stage_video(pool, owner, clip_id, identity, variant_index).await? else {
+            continue;
+        };
+        if expired_allocation(&video)
+            || (variant_index == 0
+                && video.status == "rendering"
+                && matches!(checkpoints.get(&AiStage::Rendering),
+                    Some(StageCheckpoint::Rendering { output_path: stored, .. })
+                    if stored != &output_path(runtime, video.id).to_string_lossy()))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn validate_variants(
@@ -856,6 +864,7 @@ async fn allocation(
         .ensure_held()
         .await
         .map_err(|_| AiEditorError::Conflict)?;
+    let mut replaced_version = None;
     if let Some(video) = stage_video(
         ctx.pool,
         ctx.owner,
@@ -867,8 +876,12 @@ async fn allocation(
     {
         if expired_allocation(&video) {
             cleanup_expired_video(ctx.pool, runtime, ctx.lease, ctx.owner, video.id).await?;
+            replaced_version = Some(video.version_no);
         } else {
-            if !matches!(video.status.as_str(), "rendering" | "review") {
+            if !matches!(
+                video.status.as_str(),
+                "rendering" | "review" | "approved" | "scheduled" | "published"
+            ) {
                 return Err(AiEditorError::Conflict);
             }
             return Ok(video);
@@ -882,7 +895,9 @@ async fn allocation(
         let primary = stage_video(ctx.pool, ctx.owner, ctx.clip_id, ctx.identity, 0)
             .await?
             .ok_or(AiEditorError::Conflict)?;
-        version_no = primary.version_no;
+        if replaced_version.is_none_or(|previous| primary.version_no > previous) {
+            version_no = primary.version_no;
+        }
         parent_version_id = primary.parent_version_id;
     }
     let metadata = match ctx.identity {
@@ -1352,13 +1367,28 @@ async fn render_one(
         .await?;
         rendering_ms
     };
-    let refreshed = produced_video::get(ctx.pool, ctx.owner, video.id)
-        .await
-        .map_err(|_| AiEditorError::Storage)?
-        .ok_or(AiEditorError::NotFound)?;
-    let preview = ensure_original_preview(ctx, frozen, runtime, &refreshed).await?;
+    let preview_ms = if matches!(
+        video.status.as_str(),
+        "approved" | "scheduled" | "published"
+    ) {
+        video
+            .metadata
+            .get("original_preview")
+            .and_then(|preview| preview.get("rendering_ms"))
+            .and_then(Value::as_i64)
+            .filter(|time| *time >= 0)
+            .ok_or(AiEditorError::Validation)?
+    } else {
+        let refreshed = produced_video::get(ctx.pool, ctx.owner, video.id)
+            .await
+            .map_err(|_| AiEditorError::Storage)?
+            .ok_or(AiEditorError::NotFound)?;
+        ensure_original_preview(ctx, frozen, runtime, &refreshed)
+            .await?
+            .rendering_ms
+    };
     let rendering_ms = rendering_ms
-        .checked_add(preview.rendering_ms)
+        .checked_add(preview_ms)
         .ok_or(AiEditorError::Render)?;
     if video.status == "rendering" {
         produced_video::record_ffmpeg_total(ctx.pool, ctx.owner, video.id, rendering_ms)
@@ -1432,7 +1462,9 @@ async fn validate_one(
     )
     .await
     .map_err(|_| AiEditorError::Validation)?;
-    let _ = check_original_preview(runtime, frozen, &video).await?;
+    if matches!(video.status.as_str(), "rendering" | "review") {
+        let _ = check_original_preview(runtime, frozen, &video).await?;
+    }
     let mapped = subtitles(ctx.checkpoints, &validated, runtime)?;
     let mut reasons = validated.review_reasons().to_vec();
     if !frozen.media.has_audio {
@@ -1512,11 +1544,21 @@ pub(super) async fn produced_outcome(
             .await
             .map_err(|_| AiEditorError::Storage)?
             .ok_or(AiEditorError::NotFound)?;
-        if !matches!(version.status.as_str(), "review" | "approved" | "scheduled" | "published") || expired_allocation(&version) {
+        if !matches!(
+            version.status.as_str(),
+            "review" | "approved" | "scheduled" | "published"
+        ) || expired_allocation(&version)
+        {
             return Err(AiEditorError::Validation);
         }
-        let file = tokio::fs::metadata(version.file_path.as_deref().ok_or(AiEditorError::Validation)?)
-            .await.map_err(|_| AiEditorError::Validation)?;
+        let file = tokio::fs::metadata(
+            version
+                .file_path
+                .as_deref()
+                .ok_or(AiEditorError::Validation)?,
+        )
+        .await
+        .map_err(|_| AiEditorError::Validation)?;
         if !file.is_file() || file.len() == 0 {
             return Err(AiEditorError::Validation);
         }
