@@ -50,7 +50,7 @@ async fn database() -> postgres::TestPostgres {
 
 fn runtime(root: &Path) -> EditorRuntime {
     let mut configuration: EditorConfig =
-        serde_yaml::from_str(include_str!("../../../../../ops/social-ai/editor.yaml"))
+        toml::from_str(include_str!("../../../../../ops/social-ai/editor.toml"))
             .expect("packaged configuration");
     configuration.runtime["source_root"] = json!("clips");
     configuration.runtime["output_root"] = json!("clips");

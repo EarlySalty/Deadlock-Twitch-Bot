@@ -6,23 +6,45 @@ use tb_social_media::ai_editor::{runtime_config::MediaRuntime, AiEditorError, Ed
 use tempfile::TempDir;
 
 fn document() -> Value {
-    let mut document: Value =
-        serde_yaml::from_str(include_str!("../../../../ops/social-ai/editor.yaml"))
-            .expect("packaged YAML");
+    let mut document: Value = toml::from_str(include_str!("../../../../ops/social-ai/editor.toml"))
+        .expect("packaged TOML");
     document["runtime"]["source_root"] = json!("clips");
     document["runtime"]["work_root"] = json!("clips/.ai-editor-work");
     document["runtime"]["output_root"] = json!("clips");
     document
 }
 
+fn fixture_value(value: &Value) -> toml::Value {
+    match value {
+        Value::Object(fields) => toml::Value::Table(
+            fields
+                .iter()
+                .map(|(key, value)| (key.clone(), fixture_value(value)))
+                .collect(),
+        ),
+        Value::Array(values) => toml::Value::Array(values.iter().map(fixture_value).collect()),
+        Value::String(value) => toml::Value::String(value.clone()),
+        Value::Bool(value) => toml::Value::Boolean(*value),
+        Value::Number(value) => value
+            .as_i64()
+            .map(toml::Value::Integer)
+            .unwrap_or_else(|| toml::Value::Float(value.as_f64().expect("bounded fixture number"))),
+        Value::Null => panic!("TOML fixtures omit null options"),
+    }
+}
+
+fn serialized_document(document: &Value) -> String {
+    let text = toml::to_string(&fixture_value(document)).expect("TOML fixture");
+    let round_trip: Value = toml::from_str(&text).expect("round-trip TOML fixture");
+    assert_eq!(&round_trip, document);
+    text
+}
+
 fn write_document(root: &Path, document: &Value) {
     let directory = root.join("ops/social-ai");
     std::fs::create_dir_all(&directory).expect("configuration directory");
-    std::fs::write(
-        directory.join("editor.yaml"),
-        serde_json::to_string(document).expect("JSON-form YAML"),
-    )
-    .expect("configuration file");
+    std::fs::write(directory.join("editor.toml"), serialized_document(document))
+        .expect("configuration file");
 }
 
 fn package(document: &Value) -> TempDir {
@@ -111,7 +133,7 @@ fn invalid_ai_sections_do_not_disable_media() {
     invalid["runtime"]["stt"]["settings"]["port"] = json!(8791);
     documents.push(invalid);
     let mut invalid = document();
-    invalid["runtime"]["plan"] = Value::Null;
+    invalid["runtime"]["plan"] = json!(false);
     documents.push(invalid);
     let mut invalid = document();
     invalid["runtime"]["brain"] = json!(false);
@@ -243,36 +265,93 @@ fn missing_or_invalid_media_fields_fail_closed() {
 }
 
 #[test]
-fn malformed_missing_and_oversized_yaml_fail_closed() {
+fn malformed_missing_and_oversized_toml_fail_closed() {
     let root = tempfile::tempdir().expect("package root");
     assert_configuration_error(root.path());
+    assert!(EditorRuntime::load(root.path()).is_err());
     write_document(root.path(), &document());
-    let path = root.path().join("ops/social-ai/editor.yaml");
-    std::fs::write(&path, "provider: [\nruntime: []").expect("malformed fixture");
-    assert_configuration_error(root.path());
-    let duplicate = format!(
-        "provider: unavailable\n{}",
-        include_str!("../../../../ops/social-ai/editor.yaml")
-    );
-    std::fs::write(&path, duplicate).expect("duplicate YAML mapping key");
-    assert_configuration_error(root.path());
-    let mut oversized = serde_json::to_string(&document()).expect("valid YAML");
+    let path = root.path().join("ops/social-ai/editor.toml");
+    for invalid in [
+        b"provider = [\nruntime = []".as_slice(),
+        b"schema_version = 1\nschema_version = 1".as_slice(),
+        b"\xff".as_slice(),
+    ] {
+        std::fs::write(&path, invalid).expect("invalid TOML fixture");
+        assert_configuration_error(root.path());
+        assert!(EditorRuntime::load(root.path()).is_err());
+    }
+    let mut oversized = serialized_document(&document());
     oversized.push_str(&" ".repeat(64 * 1024));
     std::fs::write(&path, oversized).expect("oversized fixture");
     assert_configuration_error(root.path());
+    assert!(EditorRuntime::load(root.path()).is_err());
+}
+
+#[test]
+fn packaged_toml_rejects_unknown_runtime_fields_at_each_typed_boundary() {
+    let raw = include_str!("../../../../ops/social-ai/editor.toml");
+    for table in [
+        "runtime",
+        "runtime.resources",
+        "runtime.plan",
+        "runtime.original_preview",
+        "runtime.copy",
+        "runtime.stt",
+        "runtime.stt.settings",
+        "runtime.brain",
+    ] {
+        let header = format!("[{table}]");
+        let unknown = if raw.contains(&header) {
+            raw.replace(&header, &format!("{header}\nunknown_setting = true"))
+        } else {
+            format!("{raw}\n{header}\nunknown_setting = true\n")
+        };
+        let configuration: EditorConfig = toml::from_str(&unknown).expect("valid outer TOML");
+        let error = serde_json::from_value::<
+            tb_social_media::ai_editor::runtime_config::RuntimeConfig,
+        >(configuration.runtime)
+        .err()
+        .expect("unknown runtime field");
+        assert!(error.to_string().contains("unknown field"), "{table}");
+        assert!(error.to_string().contains("unknown_setting"), "{table}");
+        let root = tempfile::tempdir().expect("package root");
+        let directory = root.path().join("ops/social-ai");
+        std::fs::create_dir_all(&directory).expect("configuration directory");
+        std::fs::write(directory.join("editor.toml"), unknown).expect("unknown setting fixture");
+        assert!(EditorRuntime::load(root.path()).is_err(), "{table}");
+    }
+}
+
+#[test]
+fn packaged_toml_keeps_optional_services_disabled_and_the_shared_cap() {
+    let root = tempfile::tempdir().expect("package root");
+    let directory = root.path().join("ops/social-ai");
+    std::fs::create_dir_all(&directory).expect("configuration directory");
+    std::fs::write(
+        directory.join("editor.toml"),
+        include_str!("../../../../ops/social-ai/editor.toml"),
+    )
+    .expect("packaged TOML");
+    let runtime = EditorRuntime::load(root.path()).expect("packaged runtime");
+    assert_eq!(
+        runtime.configuration.provider.initial_total_cap_micro_usd,
+        2_000_000
+    );
+    assert!(runtime.limits.brain.is_none());
+    assert!(runtime.limits.stt.settings.language.is_none());
+    assert!(runtime.limits.stt.settings.remote_endpoint.is_none());
 }
 
 #[test]
 fn absolute_roots_and_canonical_package_resolution_are_preserved() {
-    let mut document: Value =
-        serde_yaml::from_str(include_str!("../../../../ops/social-ai/editor.yaml"))
-            .expect("packaged YAML");
+    let mut document: Value = toml::from_str(include_str!("../../../../ops/social-ai/editor.toml"))
+        .expect("packaged TOML");
     let root = package(&document);
     std::fs::write(
-        root.path().join("ops/social-ai/editor.yaml"),
-        include_str!("../../../../ops/social-ai/editor.yaml"),
+        root.path().join("ops/social-ai/editor.toml"),
+        include_str!("../../../../ops/social-ai/editor.toml"),
     )
-    .expect("unmodified packaged YAML");
+    .expect("unmodified packaged TOML");
     let media = MediaRuntime::load(root.path()).expect("absolute media roots");
     assert_eq!(
         media.source_root,

@@ -1,8 +1,7 @@
 use super::*;
 
 fn config() -> EditorConfig {
-    serde_yaml::from_str(include_str!("../../../../../ops/social-ai/editor.yaml"))
-        .expect("configuration")
+    toml::from_str(include_str!("../../../../../ops/social-ai/editor.toml")).expect("configuration")
 }
 
 fn request() -> EditorRequest {
