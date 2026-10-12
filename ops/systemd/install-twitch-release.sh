@@ -150,6 +150,36 @@ check_binary_revisions() {
 }
 check_binary_revisions "$checkout"
 
+required_files=(
+  rust/scripts/run_tb_bot_service.sh
+  rust/scripts/run_tb_dashboard_service.sh
+  rust/scripts/run_stream_audit_service.sh
+  ops/systemd/twitch-runtime-roles.sql
+)
+if [[ "$social_ai_expected" == 1 ]]; then
+  required_files+=(
+    ops/social-ai/editor.yaml
+    ops/social-ai/pricing-v1.yaml
+    ops/social-ai/skills/deadlock-understanding.md
+    ops/social-ai/skills/highlight-analysis.md
+    ops/social-ai/skills/editing-strategy.md
+    ops/social-ai/skills/video-layout.md
+    ops/social-ai/skills/subtitles.md
+    ops/social-ai/skills/copywriting.md
+    ops/social-ai/skills/quality-validation.md
+    ops/social-ai/skills/feedback-learning.md
+  )
+fi
+check_required_sources() {
+  local source_root="$1" required_file
+  for required_file in "${required_files[@]}"; do
+    if [[ ! -f "$source_root/$required_file" || -L "$source_root/$required_file" ]]; then
+      echo "Erforderliche Release-Quelle fehlt oder ist ein Symlink: $required_file" >&2
+      exit 1
+    fi
+  done
+}
+
 release_root=/opt/deadlock/twitch/releases
 install -d -o root -g root -m 0755 "$release_root"
 release="$release_root/$git_sha"
@@ -203,26 +233,8 @@ if [[ ! -e "$release" ]]; then
     rust/knowledge
     ops/systemd
   )
-  required_files=(
-    rust/scripts/run_tb_bot_service.sh
-    rust/scripts/run_tb_dashboard_service.sh
-    rust/scripts/run_stream_audit_service.sh
-    ops/systemd/twitch-runtime-roles.sql
-  )
   if [[ "$social_ai_expected" == 1 ]]; then
     archived_roots+=(ops/social-ai)
-    required_files+=(
-      ops/social-ai/editor.yaml
-      ops/social-ai/pricing-v1.yaml
-      ops/social-ai/skills/deadlock-understanding.md
-      ops/social-ai/skills/highlight-analysis.md
-      ops/social-ai/skills/editing-strategy.md
-      ops/social-ai/skills/video-layout.md
-      ops/social-ai/skills/subtitles.md
-      ops/social-ai/skills/copywriting.md
-      ops/social-ai/skills/quality-validation.md
-      ops/social-ai/skills/feedback-learning.md
-    )
   fi
   "${git_safe[@]}" -C "$checkout" archive --format=tar "$git_sha" -- \
     "${archived_roots[@]}" \
@@ -236,12 +248,7 @@ if [[ ! -e "$release" ]]; then
     echo "Archivierte Release-Quelle ist keine reguläre Datei: $unsafe_archived" >&2
     exit 1
   fi
-  for required_file in "${required_files[@]}"; do
-    if [[ ! -f "$stage/$required_file" || -L "$stage/$required_file" ]]; then
-      echo "Erforderliche Release-Quelle fehlt oder ist ein Symlink: $required_file" >&2
-      exit 1
-    fi
-  done
+  check_required_sources "$stage"
   expected_archive=
   actual_archive=
   cleanup_archive_lists() {
@@ -308,6 +315,7 @@ fi
   cd "$release"
   sha256sum --check --strict SHA256SUMS >/dev/null
 )
+check_required_sources "$release"
 check_binary_revisions "$release"
 
 current_tmp=/opt/deadlock/twitch/.current-next
