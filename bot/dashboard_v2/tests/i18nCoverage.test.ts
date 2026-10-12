@@ -75,3 +75,18 @@ test('Prüfer lässt übersetzte und unsichtbare Texte in Ruhe', () => {
   ].join('\n');
   assert.deepEqual(checkSource('src/pages/Probe.tsx', source, dictionaryFor('en')), []);
 });
+
+test('Wörterbucheintrag allein gilt nicht als übersetzt', () => {
+  const source = [
+    "export function A() {",
+    "  const x = { label: 'Einstellungen' };",
+    "  const fallback = 'Übersicht';",
+    "  return <div title={fallback}>{x.label}</div>;",
+    "}",
+  ].join('\n');
+  const dictionary = dictionaryFor('en');
+  assert.equal(dictionary.Einstellungen, 'Settings');
+  assert.equal(dictionary['Übersicht'], 'Overview');
+  const rules = checkSource('src/pages/Probe.tsx', source, dictionary).map((v) => `${v.rule}:${v.text}`);
+  assert.deepEqual(rules.sort(), ['german-literal:Übersicht', 'visible-property:Einstellungen']);
+});
