@@ -5,6 +5,7 @@ import {
   buildTwitchBotAuthUrl,
   buildTwitchDashboardLoginUrl,
 } from "@/data/externalLinks";
+import { tx } from "@/i18n/locale";
 
 export interface OnboardingHighlight {
   label: string;
@@ -31,7 +32,7 @@ export interface ChecklistItem {
 }
 
 // Visual onboarding steps - simplified 4-step structure
-export const ONBOARDING_VISUAL_STEPS: OnboardingStep[] = [
+export const ONBOARDING_VISUAL_STEPS: OnboardingStep[] = tx<OnboardingStep[]>([
   {
     eyebrow: "1. Verbinden",
     title: "Tritt dem Netzwerk bei",
@@ -65,15 +66,53 @@ export const ONBOARDING_VISUAL_STEPS: OnboardingStep[] = [
     ctaLabel: "Zum Dashboard",
     ctaHref: buildTwitchDashboardLoginUrl("/twitch/dashboard-v2"),
   },
-];
+], [
+  {
+    eyebrow: "1. Connect",
+    title: "Join the network",
+    description: "Connect your Twitch channel in seconds. No extra account - just log in with Twitch.",
+    visualType: "animation",
+    ctaLabel: "Activate the bot",
+    ctaHref: buildTwitchBotAuthUrl(),
+  },
+  {
+    eyebrow: "2. Auto-raid",
+    title: "Automatic raids for Deadlock",
+    description: "When you go offline, the bot automatically sends your viewers to active partners.",
+    visualType: "diagram",
+    ctaLabel: "Learn more",
+    ctaHref: `${TWITCH_FAQ_URL}#raids`,
+  },
+  {
+    eyebrow: "3. Dashboard",
+    title: "Your stream dashboard",
+    description: "Viewer trends, raid history and network analytics in one place.",
+    visualType: "screenshot",
+    visualSrc: "/images/onboarding/dashboard-preview.png",
+    ctaLabel: "View demo",
+    ctaHref: TWITCH_DEMO_DASHBOARD_URL,
+  },
+  {
+    eyebrow: "4. Start",
+    title: "Ready to stream",
+    description: "Checklist: channel connected, auto-raid active, dashboard open.",
+    visualType: "diagram",
+    ctaLabel: "Go to dashboard",
+    ctaHref: buildTwitchDashboardLoginUrl("/twitch/dashboard-v2"),
+  },
+]);
 
-export const ONBOARDING_HIGHLIGHTS: OnboardingHighlight[] = [
+export const ONBOARDING_HIGHLIGHTS: OnboardingHighlight[] = tx<OnboardingHighlight[]>([
   { label: "Partnernetzwerk", value: "30+ Deadlock-Streamer" },
   { label: "Auto-Raid", value: "Nur bei Deadlock aktiv" },
   { label: "Start", value: "Kanal verbinden und loslegen" },
-];
+], [
+  { label: "Partner network", value: "30+ Deadlock streamers" },
+  { label: "Auto-raid", value: "Only active for Deadlock" },
+  { label: "Start", value: "Connect your channel and go" },
+]);
 
-export const START_CHECKLIST: ChecklistItem[] = [
+export const START_CHECKLIST: ChecklistItem[] = tx<ChecklistItem[]>([
   {
     title: "Kanal verbinden",
     description:
@@ -95,4 +134,26 @@ export const START_CHECKLIST: ChecklistItem[] = [
     href: DISCORD_INVITE_URL,
     label: "Discord beitreten",
   },
-];
+], [
+  {
+    title: "Connect your channel",
+    description:
+      "Activate the bot for your channel and join the Deadlock Partner Network.",
+    href: buildTwitchBotAuthUrl(),
+    label: "Activate the bot for your channel",
+  },
+  {
+    title: "Explore the dashboard",
+    description:
+      "See what's visible for your channel and which features you can use right away.",
+    href: buildTwitchDashboardLoginUrl("/twitch/dashboard-v2"),
+    label: "Open dashboard",
+  },
+  {
+    title: "Join our Discord",
+    description:
+      "More visibility, automatic go-live posts and quick contact with the community.",
+    href: DISCORD_INVITE_URL,
+    label: "Join our Discord",
+  },
+]);
