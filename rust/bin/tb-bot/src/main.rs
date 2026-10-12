@@ -1764,12 +1764,21 @@ async fn main() {
             Err(error) => tracing::warn!(error = %error, "Manual AI production is unavailable"),
         }
 
-        match tb_social_media::ai_editor::EditorRuntime::load_packaged() {
-            Ok(runtime) => {
-                let worker_config = tb_social_media::autopilot_runner::WorkerConfig::from_runtime(
-                    runtime,
-                    Some(settings.internal_api.token.clone()),
-                );
+        match tb_social_media::ai_editor::MediaRuntime::load_packaged() {
+            Ok(media) => {
+                let editor = match tb_social_media::ai_editor::EditorRuntime::load_packaged() {
+                    Ok(runtime) => Some(runtime),
+                    Err(error) => {
+                        tracing::warn!(error = %error, "Auto-Pilot AI production is unavailable");
+                        None
+                    }
+                };
+                let worker_config =
+                    tb_social_media::autopilot_runner::WorkerConfig::from_media_runtime(
+                        &media,
+                        editor,
+                        Some(settings.internal_api.token.clone()),
+                    );
                 let downloader = Arc::new(tb_social_media::clip_prep_worker::YtDlpDownloader::new(
                     yt_dlp_path(snapshot).to_string_lossy().into_owned(),
                 ));
@@ -1786,7 +1795,7 @@ async fn main() {
                 }
             }
             Err(error) => {
-                tracing::warn!(error = %error, "Auto-Pilot media configuration is unavailable")
+                tracing::error!(error = %error, "Auto-Pilot media configuration is unavailable")
             }
         }
 

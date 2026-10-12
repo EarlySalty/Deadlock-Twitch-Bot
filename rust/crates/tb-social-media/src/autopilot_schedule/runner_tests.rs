@@ -1,6 +1,6 @@
 use super::{cleanup, clip, job, pool, utc};
 use crate::{
-    ai_editor::EditorRuntime,
+    ai_editor::MediaRuntime,
     autopilot_runner::{AutopilotWorker, WorkerConfig},
     clip_prep_worker::ClipDownloader,
     produced_video, production_jobs,
@@ -28,11 +28,15 @@ fn configuration(root: &Path) -> WorkerConfig {
     configuration.runtime["source_root"] = json!("clips");
     configuration.runtime["output_root"] = json!("clips");
     configuration.runtime["work_root"] = json!("clips/.ai-editor-work");
-    let runtime = EditorRuntime::from_configuration(root, configuration)
-        .expect("existing runtime with isolated media paths");
-    let mut config = WorkerConfig::from_runtime(runtime, None);
-    config.editor = None;
-    config
+    let directory = root.join("ops/social-ai");
+    std::fs::create_dir_all(&directory).expect("owned configuration directory");
+    std::fs::write(
+        directory.join("editor.yaml"),
+        serde_yaml::to_string(&configuration).expect("existing configuration with isolated paths"),
+    )
+    .expect("owned media configuration");
+    let media = MediaRuntime::load(root).expect("existing media runtime with isolated paths");
+    WorkerConfig::from_media_runtime(&media, None, None)
 }
 
 fn worker(pool: &PgPool, root: &Path, processor: VideoProcessor) -> AutopilotWorker {
