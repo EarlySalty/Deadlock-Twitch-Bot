@@ -45,6 +45,7 @@ mod score_refresh;
 mod scout_chat;
 mod shadow_review_wiring;
 mod smalltalk_loop_wiring;
+mod social_autopilot_notify;
 mod social_reauth;
 mod streamer_link;
 mod streamer_role_sync;
@@ -1818,6 +1819,33 @@ async fn main() {
                     tb_social_media::upload_worker::UploadWorker::new(pool.clone(), upload_creds)
                         .with_yt_dlp(yt_dlp_path(snapshot).to_string_lossy().into_owned());
                 supervisor.spawn("social_upload_worker", async move { upload.run().await });
+
+                let publisher = tb_social_media::autopilot_publish::PlatformPublisher::new(
+                    tb_social_media::credentials::CredentialManager::new(
+                        pool.clone(),
+                        cipher.clone(),
+                    ),
+                );
+                let mut executor = tb_social_media::autopilot_publish::PublishExecutor::new(
+                    pool.clone(),
+                    Arc::new(publisher),
+                );
+                match BrokerRelay::new(&settings.broker) {
+                    Ok(relay) => {
+                        let dm = token_lifecycle_wiring::BrokerTokenLifecycleNotifier::from_config(
+                            Some(relay),
+                            &config.discord.token_lifecycle,
+                            pool.clone(),
+                        );
+                        executor = executor.with_notifier(Arc::new(
+                            social_autopilot_notify::AutopilotDiscordNotifier::new(pool.clone(), dm),
+                        ));
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "Auto-Pilot notification broker unavailable")
+                    }
+                }
+                supervisor.spawn("social_autopilot_publisher", executor.run());
 
                 let refresh_oauth =
                     tb_social_media::oauth::OAuthManager::new(pool.clone(), cipher.clone());
