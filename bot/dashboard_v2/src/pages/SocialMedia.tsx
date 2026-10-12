@@ -31,6 +31,7 @@ import { TikTokPostDialog } from '@/components/socialmedia/TikTokPostDialog';
 import { VideoFullscreenButton } from '@/components/socialmedia/VideoFullscreenButton';
 import { WorkspaceDialog } from '@/components/socialmedia/WorkspaceDialog';
 import { PostingPlanDraft } from '@/components/socialmedia/PostingPlanDraft';
+import { PublishReviewPanel } from '@/components/socialmedia/autopilot/publish-review/PublishReviewPanel';
 import { PlatformStatusDialog } from '@/components/socialmedia/PlatformStatusDialog';
 import { ImportPoolPanel } from '@/components/socialmedia/autopilot/import-pool';
 import { socialAiClipFromSearch, socialViewFromSearch, socialViewSearch, socialWorkspaceDepartureAllowed, socialWorkspaceView, type AiEditorMountProps } from '@/components/socialmedia/studioNavigation';
@@ -533,7 +534,10 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
           )
         ) : activeView === 'archiv' ? (
           <VodArchiveTab twitchUserId={twitchUserId} isAdmin={isAdmin} />
-        ) : activeView === 'plan' ? workspaceSlots?.automation ?? (
+        ) : activeView === 'plan' ? (
+          <>
+          {workspaceSlots?.publishReview ?? (twitchUserId && <PublishReviewPanel twitchUserId={twitchUserId} />)}
+          {workspaceSlots?.automation ?? (
           <div className="studio-legacy-plan">
             <p className="studio-workspace-note">{t('Der bisherige Posting-Plan bleibt nutzbar. Der gemeinsame Auto-Pilot-Zeitplan ist noch nicht verfügbar.')}</p>
           <PostingPlanDraft
@@ -638,6 +642,8 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
             )}
           </PostingPlanDraft>
           </div>
+          )}
+          </>
         ) : workspaceView === 'konten' ? (
           <div className="studio-settings space-y-6">
             <div className="studio-accounts grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -772,7 +778,6 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
               <button type="button" className="studio-button" onClick={() => changeView('library')}>{t('Clip-Bibliothek & Import')}</button>
               <button type="button" className="studio-button" onClick={() => changeView('konten')}>{t('Verbindungen prüfen')}</button>
             </div>
-            {workspaceSlots?.publishReview}
             </>
             )}
 

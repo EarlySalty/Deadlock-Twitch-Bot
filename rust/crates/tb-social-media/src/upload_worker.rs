@@ -56,7 +56,7 @@ enum WorkerError {
 
 /// Baut den passenden Uploader aus den Credentials (mirror `_build_uploader`).
 /// `None`, wenn Pflichtfelder fehlen oder die Plattform unbekannt ist.
-fn build_uploader(
+pub(crate) fn build_uploader(
     platform: &str,
     creds: &SocialMediaCredentials,
 ) -> Option<Arc<dyn PlatformUploader>> {

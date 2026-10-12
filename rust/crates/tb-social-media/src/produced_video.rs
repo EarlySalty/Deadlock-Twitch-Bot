@@ -488,22 +488,23 @@ async fn enqueue(
         .fetch_one(&mut *tx)
         .await?;
     ensure_ready(&video, now).await?;
+    let settings = autopilot_settings::load_on(&mut tx, &video.twitch_user_id).await?;
+    let automatic = settings.publish_mode == autopilot_settings::PublishMode::FullAuto;
     for platform in &selected {
-        let approved: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM social_media_clip_approval WHERE produced_video_id = $1 AND platform = $2 AND state = 'approved' AND approver_user_id = $3)")
-            .bind(id).bind(platform).bind(&video.twitch_user_id).fetch_one(&mut *tx).await?;
+        let approved: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM social_media_clip_approval WHERE produced_video_id = $1 AND platform = $2 AND state = 'approved' AND (approver_user_id = $3 OR ($4 AND approver_user_id = 'autopilot')))")
+            .bind(id).bind(platform).bind(&video.twitch_user_id).bind(automatic).fetch_one(&mut *tx).await?;
         if !approved {
             return Err(ProducedVideoError::ApprovalRequired);
         }
     }
-    let settings = autopilot_settings::load_on(&mut tx, &video.twitch_user_id).await?;
     let scheduled_at = match video.scheduled_at {
         Some(slot) => slot,
         None => {
-            let taken: Vec<DateTime<Utc>> = sqlx::query_scalar(
-                "SELECT scheduled_at FROM social_produced_videos WHERE twitch_user_id = $1 AND scheduled_at IS NOT NULL
-                 UNION SELECT q.scheduled_at FROM twitch_clips_upload_queue q JOIN twitch_clips_social_media c ON c.id = q.clip_id
-                 WHERE c.twitch_user_id = $1 AND q.scheduled_at IS NOT NULL AND COALESCE(q.status, '') NOT IN ('failed', 'cancelled')",
-            ).bind(&video.twitch_user_id).fetch_all(&mut *tx).await?;
+            let taken = crate::production_jobs::autopilot_schedule::taken_on(
+                &mut tx,
+                &video.twitch_user_id,
+            )
+            .await?;
             autopilot_settings::next_shared_slot(now, &taken, &settings)?
                 .ok_or(ProducedVideoError::NoSlot)?
         }
