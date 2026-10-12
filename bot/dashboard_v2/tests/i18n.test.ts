@@ -4,8 +4,10 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_LANGUAGE,
   LANGUAGE_STORAGE_KEY,
+  browserLanguage,
   dictionaryFor,
   isLanguage,
+  readInitialLanguage,
   readStoredLanguage,
   storeLanguage,
   translate,
@@ -103,4 +105,42 @@ test('isLanguage erkennt nur gepflegte Sprachen', () => {
   assert.ok(!isLanguage('fr'));
   assert.ok(!isLanguage(null));
   assert.equal(LANGUAGE_STORAGE_KEY, 'dashboard.language');
+});
+
+function withBrowser(
+  navigator: { languages?: string[]; language?: string } | undefined,
+  stored: string | null,
+  run: () => void,
+) {
+  const original = (globalThis as { window?: unknown }).window;
+  (globalThis as { window?: unknown }).window = {
+    navigator,
+    localStorage: {
+      getItem: (key: string) => (key === LANGUAGE_STORAGE_KEY ? stored : null),
+      setItem: () => {},
+    },
+  };
+  try {
+    run();
+  } finally {
+    (globalThis as { window?: unknown }).window = original;
+  }
+}
+
+test('Browsersprache entscheidet ohne gespeicherte Wahl', () => {
+  withBrowser({ languages: ['de-AT', 'en'] }, null, () => assert.equal(readInitialLanguage(), 'de'));
+  withBrowser({ languages: ['en-US', 'de-DE'] }, null, () => assert.equal(readInitialLanguage(), 'en'));
+  withBrowser({ languages: [], language: 'de' }, null, () => assert.equal(readInitialLanguage(), 'de'));
+  withBrowser({ language: 'fr-FR' }, null, () => assert.equal(readInitialLanguage(), 'en'));
+  withBrowser({}, null, () => assert.equal(browserLanguage(), 'en'));
+});
+
+test('Manuell gewaehlte Sprache schlaegt die Browsersprache', () => {
+  withBrowser({ languages: ['en-US'] }, 'de', () => assert.equal(readInitialLanguage(), 'de'));
+  withBrowser({ languages: ['de-DE'] }, 'en', () => assert.equal(readInitialLanguage(), 'en'));
+  withBrowser({ languages: ['de-DE'] }, 'klingonisch', () => assert.equal(readInitialLanguage(), 'de'));
+});
+
+test('Ohne Browser bleibt Deutsch', () => {
+  withBrowser(undefined, null, () => assert.equal(readInitialLanguage(), DEFAULT_LANGUAGE));
 });
