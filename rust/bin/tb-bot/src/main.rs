@@ -1764,6 +1764,32 @@ async fn main() {
             Err(error) => tracing::warn!(error = %error, "Manual AI production is unavailable"),
         }
 
+        match tb_social_media::ai_editor::EditorRuntime::load_packaged() {
+            Ok(runtime) => {
+                let worker_config = tb_social_media::autopilot_runner::WorkerConfig::from_runtime(
+                    runtime,
+                    Some(settings.internal_api.token.clone()),
+                );
+                let downloader = Arc::new(tb_social_media::clip_prep_worker::YtDlpDownloader::new(
+                    yt_dlp_path(snapshot).to_string_lossy().into_owned(),
+                ));
+                match tb_social_media::autopilot_runner::AutopilotWorker::new(
+                    pool.clone(),
+                    worker_config,
+                    downloader,
+                    tb_social_media::video_processor::VideoProcessor::default(),
+                ) {
+                    Ok(worker) => supervisor.spawn("social_autopilot_worker", worker.run()),
+                    Err(error) => {
+                        tracing::warn!(error = %error, "Auto-Pilot production is unavailable")
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "Auto-Pilot media configuration is unavailable")
+            }
+        }
+
         tracing::info!("Clip-Anreicherung und Transkription abgeschaltet");
 
         // Upload + Token-Refresh + Insights brauchen den Field-Cipher
