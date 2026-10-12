@@ -1,23 +1,21 @@
 import { motion } from 'framer-motion';
 import { CheckCircle2, Circle, Loader2, Map, Zap } from 'lucide-react';
+import { useT } from '@/context/LanguageContext';
 import { useRoadmap } from '@/hooks/useAnalytics';
 import type { RoadmapItem } from '@/api';
 
 const STATUS_CONFIG = {
   planned: {
-    label: 'Geplant',
     icon: Circle,
     badgeClass: 'border-border/70 bg-background/60 text-text-secondary',
     dotClass: 'bg-text-secondary/50',
   },
   in_progress: {
-    label: 'In Arbeit',
     icon: Zap,
     badgeClass: 'border-primary/40 bg-primary/10 text-primary',
     dotClass: 'bg-primary',
   },
   done: {
-    label: 'Fertig',
     icon: CheckCircle2,
     badgeClass: 'border-success/40 bg-success/10 text-success',
     dotClass: 'bg-success',
@@ -48,13 +46,15 @@ function StatusSection({
   status: keyof typeof STATUS_CONFIG;
   items: RoadmapItem[];
 }) {
+  const t = useT();
   const cfg = STATUS_CONFIG[status];
+  const labels = { planned: t('Geplant'), in_progress: t('In Arbeit'), done: t('Fertig') };
   if (items.length === 0) return null;
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
         <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${cfg.badgeClass}`}>
-          {cfg.label}
+          {labels[status]}
         </span>
         <span className="text-[11px] text-text-secondary">{items.length}</span>
       </div>
@@ -68,6 +68,7 @@ function StatusSection({
 }
 
 export function RoadmapPanel() {
+  const t = useT();
   const { data, isLoading, isError } = useRoadmap();
 
   const planned = data?.planned ?? [];
@@ -85,9 +86,9 @@ export function RoadmapPanel() {
     >
       <div className="mb-5 flex items-start justify-between gap-2">
         <div>
-          <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">Features</p>
-          <h2 className="display-font text-2xl font-bold text-white mb-1">Roadmap</h2>
-          <p className="text-sm text-text-secondary">Geplante &amp; aktive Entwicklungen.</p>
+          <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">{t('Features')}</p>
+          <h2 className="display-font text-2xl font-bold text-white mb-1">{t('Roadmap')}</h2>
+          <p className="text-sm text-text-secondary">{t('Geplante & aktive Entwicklungen.')}</p>
         </div>
         <div className="flex items-center gap-1.5 rounded-full border border-border bg-background/70 px-3 py-1">
           <Map className="h-3.5 w-3.5 text-primary" />
@@ -98,19 +99,19 @@ export function RoadmapPanel() {
       {isLoading && (
         <div className="flex items-center gap-2 text-text-secondary text-sm">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          <span>Lädt...</span>
+          <span>{t('Lädt...')}</span>
         </div>
       )}
 
       {isError && (
         <div className="rounded-xl border border-error/30 bg-error/10 p-3 text-sm text-error">
-          Roadmap konnte nicht geladen werden.
+          {t('Roadmap konnte nicht geladen werden.')}
         </div>
       )}
 
       {!isLoading && !isError && total === 0 && (
         <div className="rounded-xl border border-border bg-background/60 p-4 text-sm text-text-secondary">
-          Noch keine Roadmap-Einträge vorhanden.
+          {t('Noch keine Roadmap-Einträge vorhanden.')}
         </div>
       )}
 

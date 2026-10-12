@@ -57,7 +57,6 @@ import {
 } from '@/runtimeConfig';
 import { AlertTriangle } from 'lucide-react';
 
-// Error Boundary to prevent white screen on crashes
 interface ErrorBoundaryProps {
   children: ReactNode;
 }
@@ -93,11 +92,6 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   }
 }
 
-/**
- * Eigene Komponente, weil die Fehlergrenze eine Klasse ist und keine Hooks
- * benutzen kann. Der Provider liegt darueber, die Sprache gilt also auch im
- * Fehlerfall.
- */
 function ErrorFallback({ message, onRetry }: { message: string | null; onRetry: () => void }) {
   const t = useT();
   return (
@@ -119,7 +113,6 @@ function ErrorFallback({ message, onRetry }: { message: string | null; onRetry: 
   );
 }
 
-// Create QueryClient
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -139,10 +132,6 @@ function InternalHome() {
   return <InternalHomeLanding />;
 }
 
-/**
- * Wählt zwischen Tagesform (Free) und Overview (Paid/Admin/Demo).
- * Muss innerhalb von PlanProvider gerendert werden.
- */
 interface OverviewOrTagesformProps {
   streamer: string | null;
   days: import('@/types/analytics').TimeRange;
@@ -302,7 +291,6 @@ function AnalyticsDashboard() {
             <TabNavigation activeTab={activeTab as TabId} onTabChange={handleTabChange} />
           )}
 
-          {/* Tab Content */}
           {activeTab === 'overview' && (
             <OverviewOrTagesform
               streamer={streamer}
@@ -363,6 +351,7 @@ function AnalyticsDashboard() {
 }
 
 function TitleGeneratorRoute() {
+  const t = useT();
   const { data: authStatus } = useAuthStatus();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const ownId = authStatus?.twitchUserId ?? null;
@@ -371,12 +360,12 @@ function TitleGeneratorRoute() {
   return (
     <DashboardShell activeRoute="title">
       {authStatus?.isAdmin && <div className="mx-auto max-w-4xl pt-4">
-        <label htmlFor="title-streamer" className="text-sm text-text-secondary">Twitch-Kanal</label>
+        <label htmlFor="title-streamer" className="text-sm text-text-secondary">{t('Twitch-Kanal')}</label>
         <select id="title-streamer" value={streamer ?? ''} onChange={(event) => setSelectedId(event.target.value)} className="ml-3 rounded-lg border border-border bg-card px-3 py-2 text-white">
-          {ownId ? <option value={ownId}>Mein Kanal</option> : <option value="" disabled>Kanal auswählen</option>}
+          {ownId ? <option value={ownId}>{t('Mein Kanal')}</option> : <option value="" disabled>{t('Kanal auswählen')}</option>}
           {directory.data?.items.filter((item) => item.twitchUserId && item.twitchUserId !== ownId).map((item) => <option key={item.twitchUserId} value={item.twitchUserId!}>{item.login}</option>)}
         </select>
-        {directory.isError && <p role="status" className="mt-2 text-sm text-error">Die Kanalliste ist gerade nicht verfügbar.</p>}
+        {directory.isError && <p role="status" className="mt-2 text-sm text-error">{t('Die Kanalliste ist gerade nicht verfügbar.')}</p>}
       </div>}
       <TitleGenerator key={streamer} streamer={streamer} />
     </DashboardShell>
@@ -424,8 +413,6 @@ export default function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      {/* Die Sprachwahl liegt ueber allem: sie gilt fuer jede Route dieses
-          Bundles, auch fuer die Fehlergrenze. */}
       <LanguageProvider>
         <ErrorBoundary>
         <OnboardingProvider>
