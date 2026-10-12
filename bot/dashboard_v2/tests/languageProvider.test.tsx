@@ -71,21 +71,6 @@ test('Gespeichertes Englisch schlaegt bis in die Komponenten durch', () => {
   });
 });
 
-test('Englische Browsersprache ohne gespeicherte Wahl liefert Englisch', () => {
-  withStoredLanguage(
-    null,
-    () => {
-      const html = renderToStaticMarkup(
-        <LanguageProvider>
-          <Probe />
-        </LanguageProvider>,
-      );
-      assert.match(html, /<li>Settings<\/li>/);
-    },
-    { languages: ['en-US'] },
-  );
-});
-
 test('Gespeichertes Deutsch schlaegt englische Browsersprache', () => {
   withStoredLanguage(
     'de',

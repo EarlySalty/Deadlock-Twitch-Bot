@@ -11,7 +11,7 @@ import {
 import {
   DEFAULT_LANGUAGE,
   LOCALES,
-  readInitialLanguage,
+  readStoredLanguage,
   setActiveLanguage,
   storeLanguage,
   translate,
@@ -43,7 +43,7 @@ const LanguageContext = createContext<LanguageContextValue>({
 });
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
-  const [language, setLanguageState] = useState<Language>(() => readInitialLanguage());
+  const [language, setLanguageState] = useState<Language>(() => readStoredLanguage() ?? DEFAULT_LANGUAGE);
   setActiveLanguage(language);
 
   const setLanguage = useCallback((next: Language) => {
