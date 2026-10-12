@@ -60,7 +60,7 @@
 }
 .import-pool-fields {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 .import-pool-fields label {
@@ -141,7 +141,7 @@
 }
 .import-pool-counts {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px 24px;
   margin: 4px 0;
 }
@@ -226,7 +226,22 @@
   background: var(--color-primary);
   color: var(--color-on-gold);
 }
+.import-pool .studio-primary {
+  background: var(--color-primary);
+}
+.import-pool .studio-primary:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+@media (max-width: 960px) {
+  .import-pool-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 @media (max-width: 600px) {
+  .import-pool-fields,
+  .import-pool-counts {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .import-pool-clip {
     flex-direction: column;
     align-items: stretch;

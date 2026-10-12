@@ -127,7 +127,9 @@ function OwnerImportPool({
     refetchOnWindowFocus: false,
     retry: false,
   });
-  const job = importQuery.data ?? latestJob;
+  const job = activeImport(latestJob)
+    ? (importQuery.data ?? latestJob)
+    : latestJob;
   const importCount = job?.persisted_count;
   const importStatus = job?.status;
 
@@ -176,13 +178,20 @@ function OwnerImportPool({
       }
     },
   });
+  async function prepareImportMutation() {
+    await queryClient.cancelQueries({ queryKey: latestKey });
+    await queryClient.cancelQueries({ queryKey: [...scope, "import"] });
+  }
+
   const startMutation = useMutation({
     mutationFn: (_completion: Completion) => api.startImport(owner),
+    onMutate: prepareImportMutation,
     onSuccess: (next, { after }) => acceptJob(next, after),
   });
   const resumeMutation = useMutation({
     mutationFn: ({ jobId }: Completion & { jobId: number }) =>
       api.resumeImport(owner, jobId),
+    onMutate: prepareImportMutation,
     onSuccess: (next, { after }) => acceptJob(next, after),
   });
   const selectionMutation = useMutation({
@@ -625,6 +634,33 @@ function OwnerImportPool({
                         )}
                       </p>
                     )}
+                    {clip.processed_at && (
+                      <p className="import-pool-help">
+                        {t("Verarbeitet am")}:{" "}
+                        {localTimestamp(
+                          clip.processed_at,
+                          page.preferences.timezone,
+                        )}
+                      </p>
+                    )}
+                    {clip.published_at && (
+                      <p className="import-pool-help">
+                        {t("Veröffentlicht am")}:{" "}
+                        {localTimestamp(
+                          clip.published_at,
+                          page.preferences.timezone,
+                        )}
+                      </p>
+                    )}
+                    {!clip.eligible &&
+                      (clip.selected_at ||
+                        clip.processed_at ||
+                        clip.published_at ||
+                        clip.legacy_reserved) && (
+                        <p className="import-pool-help">
+                          {t("Außerhalb des gespeicherten Zeitraums")}
+                        </p>
+                      )}
                     {clip.clip_db_id === null && (
                       <p className="import-pool-help">
                         {t(
