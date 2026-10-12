@@ -1,6 +1,9 @@
 #[path = "../../../test-support/database.rs"]
 mod test_database;
 
+#[path = "../../../test-support/postgres.rs"]
+pub(crate) mod postgres;
+
 pub(crate) fn test_dsn() -> Option<String> {
     match test_database::database_url() {
         Some(dsn) if !dsn.trim().is_empty() => Some(dsn),

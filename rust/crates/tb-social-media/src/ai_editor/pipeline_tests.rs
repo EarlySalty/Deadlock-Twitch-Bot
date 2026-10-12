@@ -1,7 +1,6 @@
 use super::*;
 
-#[path = "../../../../test-support/postgres.rs"]
-mod postgres;
+use crate::test_support::postgres;
 
 async fn database() -> postgres::TestPostgres {
     let db = postgres::TestPostgres::start().await;

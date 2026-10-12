@@ -1,8 +1,7 @@
 use super::*;
 use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
 
-#[path = "../../../test-support/postgres.rs"]
-mod postgres;
+use crate::test_support::postgres;
 
 #[tokio::test]
 async fn upload_download_uses_real_ytdlp_and_registers_cached_file() {
