@@ -6,6 +6,7 @@ import {
   isPreviewModeEnabled,
 } from '../preview/routes';
 import { ApiHttpError } from './httpError';
+import { tr } from '../i18n/dictionary';
 
 const API_BASE = dashboardRuntimeConfig.apiBase;
 const INTERNAL_REDIRECT_PREFIX = '/twitch';
@@ -154,7 +155,7 @@ export async function fetchJson<T>(
   if (!response.ok) {
     const error = await readErrorPayload(response);
     throw new ApiHttpError(
-      error?.message || error?.error || `Server-Fehler (HTTP ${response.status})`,
+      error?.message || error?.error || tr('Server-Fehler (HTTP {status})', { status: response.status }),
       response.status
     );
   }

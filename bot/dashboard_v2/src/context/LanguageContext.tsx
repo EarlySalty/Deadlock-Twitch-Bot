@@ -1,4 +1,5 @@
 import {
+  Fragment,
   createContext,
   useCallback,
   useContext,
@@ -10,7 +11,8 @@ import {
 import {
   DEFAULT_LANGUAGE,
   LOCALES,
-  readStoredLanguage,
+  readInitialLanguage,
+  setActiveLanguage,
   storeLanguage,
   translate,
   type Language,
@@ -41,9 +43,11 @@ const LanguageContext = createContext<LanguageContextValue>({
 });
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
-  const [language, setLanguageState] = useState<Language>(() => readStoredLanguage());
+  const [language, setLanguageState] = useState<Language>(() => readInitialLanguage());
+  setActiveLanguage(language);
 
   const setLanguage = useCallback((next: Language) => {
+    setActiveLanguage(next);
     setLanguageState(next);
     storeLanguage(next);
   }, []);
@@ -63,7 +67,11 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     [language, setLanguage],
   );
 
-  return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;
+  return (
+    <LanguageContext.Provider value={value}>
+      <Fragment key={language}>{children}</Fragment>
+    </LanguageContext.Provider>
+  );
 }
 
 export function useLanguage(): LanguageContextValue {
