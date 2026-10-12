@@ -89,11 +89,11 @@ const PRODUCTION_SKILLS: [SkillId; 7] = [
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct FrozenSkill {
-    id: SkillId,
-    version: String,
-    sha256: String,
-    text: String,
+pub struct FrozenSkill {
+    pub id: SkillId,
+    pub version: String,
+    pub sha256: String,
+    pub text: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -113,7 +113,13 @@ impl PreparingSnapshot {
             EditorRuntime::from_configuration(&current.package_root, self.configuration.clone())?;
         if self.media.duration_ms == 0
             || self.media.duration_ms > runtime.limits.resources.max_media_duration_ms
-            || self.skills.len() != PRODUCTION_SKILLS.len()
+            || !(PRODUCTION_SKILLS.len()..=PRODUCTION_SKILLS.len() + 1).contains(&self.skills.len())
+            || self
+                .skills
+                .iter()
+                .filter(|skill| skill.id == SkillId::FeedbackLearning)
+                .count()
+                != self.skills.len() - PRODUCTION_SKILLS.len()
             || PRODUCTION_SKILLS
                 .iter()
                 .any(|id| self.skills.iter().filter(|skill| skill.id == *id).count() != 1)
@@ -196,6 +202,55 @@ pub(super) fn checkpoint_runtime(
     }
 }
 
+pub(super) fn prepare_revision(
+    checkpoints: &mut BTreeMap<AiStage, StageCheckpoint>,
+    current: &EditorRuntime,
+) -> Result<(), AiEditorError> {
+    let (mut frozen, _) = preparing(checkpoints, current)?;
+    if !frozen
+        .skills
+        .iter()
+        .any(|skill| skill.id == SkillId::FeedbackLearning)
+    {
+        let skill = super::skill_snapshot(SkillId::FeedbackLearning);
+        frozen.skills.push(FrozenSkill {
+            id: skill.id,
+            version: skill.version.into(),
+            sha256: skill.sha256,
+            text: skill.text.into(),
+        });
+    }
+    frozen.runtime(current)?;
+    let value = serde_json::to_value(frozen).map_err(|_| AiEditorError::Storage)?;
+    if let Some(StageCheckpoint::Preparing { snapshot, .. }) =
+        checkpoints.get_mut(&AiStage::Preparing)
+    {
+        *snapshot = value.as_object().cloned().ok_or(AiEditorError::Storage)?;
+    }
+    checkpoints.retain(|stage, _| {
+        matches!(
+            stage,
+            AiStage::Preparing | AiStage::Transcribing | AiStage::Analyzing
+        )
+    });
+    if checkpoints.len() != 3
+        || checkpoints
+            .values()
+            .any(|checkpoint| checkpoint.validate().is_err())
+    {
+        return Err(AiEditorError::Plan);
+    }
+    preparing(checkpoints, current)?;
+    Ok(())
+}
+
+pub(super) fn frozen_skills(
+    checkpoints: &BTreeMap<AiStage, StageCheckpoint>,
+    current: &EditorRuntime,
+) -> Result<Vec<FrozenSkill>, AiEditorError> {
+    Ok(preparing(checkpoints, current)?.0.skills)
+}
+
 pub(super) async fn original_source(
     pool: &PgPool,
     current: &EditorRuntime,
@@ -226,6 +281,29 @@ pub(super) async fn original_source(
         return Err(AiEditorError::NotFound);
     }
     check_original_preview(&runtime, &frozen, &video)
+        .await
+        .map(|preview| preview.path)
+}
+
+pub(super) async fn version_original(
+    pool: &PgPool,
+    current: &EditorRuntime,
+    owner: &str,
+    video: &ProducedVideo,
+    checkpoints: &BTreeMap<AiStage, StageCheckpoint>,
+) -> Result<PathBuf, AiEditorError> {
+    let (frozen, runtime) = preparing(checkpoints, current)?;
+    if !matches!(
+        video.status.as_str(),
+        "review" | "approved" | "scheduled" | "published"
+    ) {
+        return Err(AiEditorError::NotFound);
+    }
+    frozen
+        .source
+        .recheck(pool, &runtime, owner, video.clip_id)
+        .await?;
+    check_original_preview(&runtime, &frozen, video)
         .await
         .map(|preview| preview.path)
 }
@@ -269,6 +347,7 @@ fn planning(
     };
     let result: Planning = serde_json::from_value(Value::Object(edit_plan.clone()))
         .map_err(|_| AiEditorError::Plan)?;
+    validate_variants(&result, &frozen.publication, runtime)?;
     let plan = result.validate(
         frozen.media.duration_ms,
         &runtime.limits.plan,
@@ -491,6 +570,16 @@ async fn analyze(
     frozen: &PreparingSnapshot,
     runtime: &EditorRuntime,
 ) -> Result<StageCheckpoint, AiEditorError> {
+    let feedback = match ctx.identity.manual() {
+        Some(id) => super::revision::request(ctx.pool, ctx.owner, id).await?,
+        None => None,
+    };
+    if feedback
+        .as_ref()
+        .is_some_and(|request| !request.reanalysis_confirmed)
+    {
+        return Err(AiEditorError::Conflict);
+    }
     let workspace = Workspace::create(runtime)?;
     let batch = super::extract_frames(
         &runtime.limits.source_root,
@@ -523,7 +612,7 @@ async fn analyze(
     let evidence = brain_context(ctx, runtime, transcript).await;
     let request = EditorRequest {
         system: frozen.system(&[SkillId::DeadlockUnderstanding, SkillId::HighlightAnalysis])?,
-        text: json!({ "task": "Analyze observed highlights conservatively. Sampled frames are not complete temporal gameplay evidence. Return explicit uncertainty and only timestamps within the measured source.", "source": { "duration_ms": frozen.media.duration_ms, "width": frozen.media.width, "height": frozen.media.height, "has_audio": frozen.media.has_audio, "title": frozen.source.title }, "transcript": transcript, "language": language, "segments": segments, "brain": evidence }).to_string(),
+        text: json!({ "task": "Analyze observed highlights conservatively. Sampled frames are not complete temporal gameplay evidence. Return explicit uncertainty and only timestamps within the measured source.", "source": { "duration_ms": frozen.media.duration_ms, "width": frozen.media.width, "height": frozen.media.height, "has_audio": frozen.media.has_audio, "title": frozen.source.title }, "transcript": transcript, "language": language, "segments": segments, "brain": evidence, "user_correction":feedback.as_ref().map(|request| &request.feedback) }).to_string(),
         frames,
         json_schema: analysis_schema(&runtime.limits.plan, frozen.media.duration_ms),
     };
@@ -556,11 +645,54 @@ async fn plan(
     let analysis = analysis(ctx.checkpoints)?;
     analysis.validate(frozen.media.duration_ms, &runtime.limits.plan)?;
     let (_, language, segments) = transcription(ctx.checkpoints)?;
+    let revision = match ctx.identity.manual() {
+        Some(id) => super::revision::request(ctx.pool, ctx.owner, id).await?,
+        None => None,
+    };
+    let base = match &revision {
+        Some(request) => Some(
+            super::revision::parent_planning(ctx.pool, ctx.owner, request.parent_version_id)
+                .await?,
+        ),
+        None => None,
+    };
+    let mut skill_ids = vec![
+        SkillId::EditingStrategy,
+        SkillId::VideoLayout,
+        SkillId::Subtitles,
+        SkillId::Copywriting,
+    ];
+    if revision.is_some() {
+        skill_ids.push(SkillId::FeedbackLearning);
+    }
+    let multi_output = frozen
+        .publication
+        .get("multi_output_enabled")
+        .and_then(Value::as_bool)
+        == Some(true);
+    let mut schema = if revision.is_some() {
+        super::stage_contract::revision_schema(
+            &runtime.limits.plan,
+            &runtime.limits.copy,
+            frozen.media.duration_ms,
+        )
+    } else {
+        planning_schema(
+            &runtime.limits.plan,
+            &runtime.limits.copy,
+            frozen.media.duration_ms,
+        )
+    };
+    schema["properties"]["variants"]["maxItems"] = json!(if multi_output {
+        runtime.limits.revisions.max_variants - 1
+    } else {
+        0
+    });
     let request = EditorRequest {
-        system: frozen.system(&[SkillId::EditingStrategy, SkillId::VideoLayout, SkillId::Subtitles, SkillId::Copywriting])?,
-        text: json!({ "task": "Produce exactly one coherent main edit with the existing stable layout. Keep observed highlights and reactions. Use only the provided real speech cues without translation. Publication copy follows the requested language and existing template, not subtitle language. Keep uncertain content for review. Provide metadata only for the existing platforms.", "source_duration_ms": frozen.media.duration_ms, "analysis": analysis, "language": language, "segments": segments, "layout": frozen.layout, "publication": frozen.publication, "limits": runtime.limits.plan }).to_string(),
+        system: frozen.system(&skill_ids)?,
+        text: json!({ "task": "Produce one coherent main edit with the existing stable layout, original audio and real speech cues. Only add distinct useful variants when multi_output_enabled is true; never duplicate the main output or force cuts. Keep uncertain content for review. Publication copy follows the requested language and template, not subtitle language.", "source_duration_ms": frozen.media.duration_ms, "analysis": analysis, "language": language, "segments": segments, "layout": frozen.layout, "publication": frozen.publication, "limits": runtime.limits.plan, "revision":revision.as_ref().zip(base.as_ref()).map(|(request,base)| super::revision::request_context(request,base)) }).to_string(),
         frames: vec![],
-        json_schema: planning_schema(&runtime.limits.plan, &runtime.limits.copy, frozen.media.duration_ms),
+        json_schema: schema,
     };
     let response = social_editor::complete(
         ctx.pool,
@@ -575,6 +707,26 @@ async fn plan(
     .await?;
     let mut result: Planning =
         serde_json::from_value(response.content).map_err(|_| AiEditorError::Plan)?;
+    validate_variants(&result, &frozen.publication, runtime)?;
+    if let Some(base) = &base {
+        base.validate(
+            frozen.media.duration_ms,
+            &runtime.limits.plan,
+            &runtime.limits.copy,
+            &Analysis { highlights: vec![], uncertainty: vec![], analysis_notes: vec![] },
+        )?;
+        let mut proposal = result.revision_proposal.take().ok_or(AiEditorError::Plan)?;
+        if revision
+            .as_ref()
+            .is_some_and(|request| request.reanalysis_confirmed)
+        {
+            proposal.reanalyze = false;
+        }
+        super::revision::validate_proposal(&mut proposal, base, &result, runtime)?;
+        result.revision_proposal = Some(proposal);
+    } else if result.revision_proposal.is_some() {
+        return Err(AiEditorError::Plan);
+    }
     if !analysis.uncertainty.is_empty() {
         result.plan.significant_uncertainty = true;
         for reason in &analysis.uncertainty {
@@ -648,23 +800,70 @@ pub(super) async fn media_recovery_needed(
                 if stored != &output_path(runtime, video.id).to_string_lossy())))
 }
 
+fn validate_variants(
+    result: &Planning,
+    publication: &Value,
+    runtime: &EditorRuntime,
+) -> Result<(), AiEditorError> {
+    let multi_output = publication
+        .get("multi_output_enabled")
+        .and_then(Value::as_bool)
+        == Some(true);
+    if (!multi_output && !result.variants.is_empty())
+        || result.variants.len() >= runtime.limits.revisions.max_variants
+    {
+        return Err(AiEditorError::Plan);
+    }
+    let mut intervals = vec![&result.plan.kept_intervals];
+    for variant in &result.variants {
+        if intervals.iter().any(|previous| {
+            previous.iter().map(|i| (i.start_ms, i.end_ms)).eq(variant
+                .plan
+                .kept_intervals
+                .iter()
+                .map(|i| (i.start_ms, i.end_ms)))
+        }) {
+            return Err(AiEditorError::Plan);
+        }
+        intervals.push(&variant.plan.kept_intervals);
+    }
+    Ok(())
+}
+
+async fn stage_video(
+    pool: &PgPool,
+    owner: &str,
+    clip_id: i64,
+    identity: Identity,
+    variant_index: i32,
+) -> Result<Option<ProducedVideo>, AiEditorError> {
+    let id: Option<i64> = sqlx::query_scalar("SELECT id FROM social_produced_videos WHERE twitch_user_id=$1 AND clip_id=$2 AND mode='ai' AND variant_index=$3 AND (($4::bigint IS NOT NULL AND job_id IS NULL AND metadata->>'manual_ai_job_id'=$4::text) OR ($5::bigint IS NOT NULL AND job_id=$5)) ORDER BY version_no DESC LIMIT 1")
+        .bind(owner).bind(clip_id).bind(variant_index).bind(identity.manual()).bind(identity.production()).fetch_optional(pool).await.map_err(|_| AiEditorError::Storage)?;
+    match id {
+        Some(id) => produced_video::get(pool, owner, id)
+            .await
+            .map_err(|_| AiEditorError::Storage),
+        None => Ok(None),
+    }
+}
+
 async fn allocation(
     ctx: &mut StageContext<'_>,
     runtime: &EditorRuntime,
+    variant_index: i32,
 ) -> Result<ProducedVideo, AiEditorError> {
     ctx.lease
         .ensure_held()
         .await
         .map_err(|_| AiEditorError::Conflict)?;
-    if let Some(video) = produced_video::find_ai_version(
+    if let Some(video) = stage_video(
         ctx.pool,
         ctx.owner,
         ctx.clip_id,
-        ctx.identity.manual(),
-        ctx.identity.production(),
+        ctx.identity,
+        variant_index,
     )
-    .await
-    .map_err(|_| AiEditorError::Storage)?
+    .await?
     {
         if expired_allocation(&video) {
             cleanup_expired_video(ctx.pool, runtime, ctx.lease, ctx.owner, video.id).await?;
@@ -675,12 +874,25 @@ async fn allocation(
             return Ok(video);
         }
     }
-    let (version_no, parent_version_id) =
+    let (mut version_no, mut parent_version_id) =
         produced_video::next_clip_version(ctx.pool, ctx.owner, ctx.clip_id)
             .await
             .map_err(|_| AiEditorError::Storage)?;
+    if variant_index > 0 {
+        let primary = stage_video(ctx.pool, ctx.owner, ctx.clip_id, ctx.identity, 0)
+            .await?
+            .ok_or(AiEditorError::Conflict)?;
+        version_no = primary.version_no;
+        parent_version_id = primary.parent_version_id;
+    }
     let metadata = match ctx.identity {
-        Identity::Manual(id) => json!({ "manual_ai_job_id": id }),
+        Identity::Manual(id) => {
+            let root: i64 = sqlx::query_scalar("SELECT COALESCE(root_job_id,id) FROM social_ai_jobs WHERE id=$1 AND twitch_user_id::text=$2").bind(id).bind(ctx.owner).fetch_one(ctx.pool).await.map_err(|_| AiEditorError::Storage)?;
+            if let Some(request) = super::revision::request(ctx.pool, ctx.owner, id).await? {
+                parent_version_id = Some(request.parent_version_id);
+            }
+            json!({ "manual_ai_job_id": id, "root_ai_job_id":root })
+        }
         Identity::Production(id) => json!({ "production_ai_job_id": id }),
     };
     produced_video::insert_with_metadata(
@@ -692,7 +904,7 @@ async fn allocation(
             mode: ProductionMode::Ai,
             version_no,
             parent_version_id,
-            variant_index: 0,
+            variant_index,
         },
         &metadata,
     )
@@ -854,6 +1066,48 @@ async fn ensure_original_preview(
     if video.status != "rendering" {
         return Err(AiEditorError::Source);
     }
+    let primary = stage_video(ctx.pool, ctx.owner, ctx.clip_id, ctx.identity, 0).await?;
+    let reusable =
+        primary
+            .filter(|primary| primary.id != video.id)
+            .or(match video.parent_version_id {
+                Some(id) => produced_video::get(ctx.pool, ctx.owner, id)
+                    .await
+                    .map_err(|_| AiEditorError::Storage)?,
+                None => None,
+            });
+    if let Some(previous) = reusable {
+        if let Ok(mut preview) = check_original_preview(runtime, frozen, &previous).await {
+            super::media::validate_original_preview(
+                &runtime.limits.output_root,
+                &preview.path,
+                &frozen.media,
+                &runtime.limits.resources,
+                &runtime.limits.original_preview,
+            )
+            .await
+            .map_err(|_| AiEditorError::Validation)?;
+            let source = preview.path.clone();
+            preview.path = destination.clone();
+            preview.rendering_ms = 0;
+            produced_video::record_original_preview(
+                ctx.pool,
+                ctx.owner,
+                video.id,
+                &serde_json::to_value(&preview).map_err(|_| AiEditorError::Storage)?,
+            )
+            .await
+            .map_err(|_| AiEditorError::Storage)?;
+            materialize(
+                runtime,
+                &source,
+                &destination,
+                runtime.limits.original_preview.max_output_bytes,
+            )
+            .await?;
+            return Ok(preview);
+        }
+    }
     let workspace = Workspace::create(runtime)?;
     let started = Instant::now();
     let rendered = super::media::render_original_preview(
@@ -964,8 +1218,49 @@ async fn render(
     frozen: &PreparingSnapshot,
     runtime: &EditorRuntime,
 ) -> Result<StageCheckpoint, AiEditorError> {
-    let (_, validated) = planning(ctx.checkpoints, frozen, runtime)?;
-    let video = allocation(ctx, runtime).await?;
+    let (result, _) = planning(ctx.checkpoints, frozen, runtime)?;
+    if let Some(id) = ctx.identity.manual() {
+        if let Some(request) = super::revision::request(ctx.pool, ctx.owner, id).await? {
+            if result.revision_proposal.as_ref().is_none_or(|proposal| {
+                proposal.reanalyze || (proposal.requires_confirmation && !request.confirmed)
+            }) {
+                return Err(AiEditorError::Conflict);
+            }
+        }
+    }
+    let mut checkpoint = render_one(ctx, frozen, runtime, &result, 0).await?;
+    for (index, variant) in result.variants.iter().enumerate() {
+        let child = render_one(ctx, frozen, runtime, &variant.planning(), index as i32 + 1).await?;
+        if let (
+            StageCheckpoint::Rendering { rendering_ms, .. },
+            StageCheckpoint::Rendering {
+                rendering_ms: extra,
+                ..
+            },
+        ) = (&mut checkpoint, child)
+        {
+            *rendering_ms = rendering_ms
+                .checked_add(extra)
+                .ok_or(AiEditorError::Render)?;
+        }
+    }
+    Ok(checkpoint)
+}
+
+async fn render_one(
+    ctx: &mut StageContext<'_>,
+    frozen: &PreparingSnapshot,
+    runtime: &EditorRuntime,
+    result: &Planning,
+    variant_index: i32,
+) -> Result<StageCheckpoint, AiEditorError> {
+    let validated = result.validate(
+        frozen.media.duration_ms,
+        &runtime.limits.plan,
+        &runtime.limits.copy,
+        &analysis(ctx.checkpoints)?,
+    )?;
+    let video = allocation(ctx, runtime, variant_index).await?;
     let output = output_path(runtime, video.id);
     let started = Instant::now();
     let rendering_ms = if output.exists() {
@@ -1010,13 +1305,14 @@ async fn render(
             .filter(|layout| layout.cam_enabled)
             .map(|layout| layout.cam_position.h)
             .unwrap_or(0);
-        let ass = super::build_subtitle_ass(
+        let ass = super::validation::build_scaled_subtitle_ass(
             &validated,
             &mapped,
             &frozen.source.title,
             &frozen.source.login,
             cam_height,
-        );
+            result.subtitle_scale_percent,
+        )?;
         let rendered =
             super::render_prepared(&prepared, layout.as_ref(), &ass, &runtime.limits.resources)
                 .await
@@ -1081,8 +1377,40 @@ async fn validate(
     frozen: &PreparingSnapshot,
     runtime: &EditorRuntime,
 ) -> Result<StageCheckpoint, AiEditorError> {
-    let (planning, validated) = planning(ctx.checkpoints, frozen, runtime)?;
-    let video = allocation(ctx, runtime).await?;
+    let (result, _) = planning(ctx.checkpoints, frozen, runtime)?;
+    let mut checkpoint = validate_one(ctx, frozen, runtime, &result, 0).await?;
+    for (index, variant) in result.variants.iter().enumerate() {
+        let extra =
+            validate_one(ctx, frozen, runtime, &variant.planning(), index as i32 + 1).await?;
+        if let (
+            StageCheckpoint::Validating { review_reasons },
+            StageCheckpoint::Validating {
+                review_reasons: extra,
+            },
+        ) = (&mut checkpoint, extra)
+        {
+            review_reasons.extend(extra);
+            review_reasons.sort();
+            review_reasons.dedup();
+        }
+    }
+    Ok(checkpoint)
+}
+
+async fn validate_one(
+    ctx: &mut StageContext<'_>,
+    frozen: &PreparingSnapshot,
+    runtime: &EditorRuntime,
+    planning: &Planning,
+    variant_index: i32,
+) -> Result<StageCheckpoint, AiEditorError> {
+    let validated = planning.validate(
+        frozen.media.duration_ms,
+        &runtime.limits.plan,
+        &runtime.limits.copy,
+        &analysis(ctx.checkpoints)?,
+    )?;
+    let video = allocation(ctx, runtime, variant_index).await?;
     let Some(StageCheckpoint::Rendering {
         output_path: stored_path,
         rendering_ms,
@@ -1092,7 +1420,7 @@ async fn validate(
         return Err(AiEditorError::Validation);
     };
     let output = output_path(runtime, video.id);
-    if stored_path != &output.to_string_lossy() {
+    if variant_index == 0 && stored_path != &output.to_string_lossy() {
         return Err(AiEditorError::Source);
     }
     let media = super::media::validate_output(
@@ -1133,7 +1461,7 @@ async fn validate(
         produced_video::complete_render(ctx.pool, ctx.owner, video.id, &RenderedVideo {
             file_path: output.to_string_lossy().into_owned(), duration_ms: media.duration_ms as i64,
             needs_review: true, review_reasons: reasons.clone(),
-            metadata: json!({ "platforms": planning.platforms, "rendering_ms": rendering_ms, "qa": { "decode": "passed", "aspect_ratio": "9:16", "original_audio_retained": frozen.media.has_audio, "subtitle_partial_cues": mapped.iter().filter(|cue| cue.partial).count(), "skill_versions": frozen.skills.iter().map(|skill| json!({ "id": skill.id, "version": skill.version, "sha256": skill.sha256 })).collect::<Vec<_>>() } }),
+            metadata: json!({ "platforms": planning.platforms, "planning":planning, "rendering_ms": rendering_ms, "qa": { "decode": "passed", "aspect_ratio": "9:16", "original_audio_retained": frozen.media.has_audio, "subtitle_partial_cues": mapped.iter().filter(|cue| cue.partial).count(), "skill_versions": frozen.skills.iter().map(|skill| json!({ "id": skill.id, "version": skill.version, "sha256": skill.sha256 })).collect::<Vec<_>>() } }),
         }).await.map_err(|_| AiEditorError::Storage)?;
     }
     Ok(StageCheckpoint::Validating {
@@ -1175,11 +1503,34 @@ pub(super) async fn produced_outcome(
     if !file.is_file() || file.len() == 0 {
         return Err(AiEditorError::Validation);
     }
-    let reasons =
-        serde_json::from_value(video.review_reasons).map_err(|_| AiEditorError::Validation)?;
+    let mut reasons = Vec::new();
+    let mut needs_review = false;
+    let ids: Vec<i64> = sqlx::query_scalar("SELECT DISTINCT ON (variant_index) id FROM social_produced_videos WHERE twitch_user_id=$1 AND clip_id=$2 AND mode='ai' AND (($3::bigint IS NOT NULL AND job_id IS NULL AND metadata->>'manual_ai_job_id'=$3::text) OR ($4::bigint IS NOT NULL AND job_id=$4)) ORDER BY variant_index,version_no DESC,id DESC LIMIT 3")
+        .bind(owner).bind(clip_id).bind(identity.manual()).bind(identity.production()).fetch_all(pool).await.map_err(|_| AiEditorError::Storage)?;
+    for id in &ids {
+        let version = produced_video::get(pool, owner, *id)
+            .await
+            .map_err(|_| AiEditorError::Storage)?
+            .ok_or(AiEditorError::NotFound)?;
+        if !matches!(version.status.as_str(), "review" | "approved" | "scheduled" | "published") || expired_allocation(&version) {
+            return Err(AiEditorError::Validation);
+        }
+        let file = tokio::fs::metadata(version.file_path.as_deref().ok_or(AiEditorError::Validation)?)
+            .await.map_err(|_| AiEditorError::Validation)?;
+        if !file.is_file() || file.len() == 0 {
+            return Err(AiEditorError::Validation);
+        }
+        needs_review |= version.needs_review;
+        reasons.extend(
+            serde_json::from_value::<Vec<String>>(version.review_reasons)
+                .map_err(|_| AiEditorError::Validation)?,
+        );
+    }
+    reasons.sort();
+    reasons.dedup();
     Ok(ProducedOutcome {
-        produced_video_ids: vec![video.id],
-        needs_review: video.needs_review,
+        produced_video_ids: ids,
+        needs_review,
         review_reasons: reasons,
     })
 }
