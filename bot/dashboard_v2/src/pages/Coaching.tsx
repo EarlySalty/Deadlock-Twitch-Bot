@@ -11,8 +11,9 @@ import {
   ResponsiveContainer, Legend, Cell,
 } from 'recharts';
 import type { CoachingData, CoachingRecommendation } from '@/types/analytics';
-
-const WEEKDAY_SHORT = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+import { useLanguage, useT } from '@/context/LanguageContext';
+import { getWeekdayLabel } from '@/utils/formatters';
+import { tr } from '../i18n/dictionary';
 
 const PRIORITY_STYLES: Record<string, { bg: string; border: string; text: string; badge: string }> = {
   critical: { bg: 'bg-error/10', border: 'border-error/30', text: 'text-error', badge: 'bg-error text-white' },
@@ -35,6 +36,7 @@ function getRecommendationIcon(iconName: string) {
 // ---------------------------------------------------------------------------
 
 export function RecommendationCard({ rec, index }: { rec: CoachingRecommendation; index: number }) {
+  const t = useT();
   const styles = PRIORITY_STYLES[rec.priority] || PRIORITY_STYLES.low;
   const Icon = getRecommendationIcon(rec.icon);
 
@@ -54,7 +56,7 @@ export function RecommendationCard({ rec, index }: { rec: CoachingRecommendation
             <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${styles.badge}`}>
               {rec.priority.toUpperCase()}
             </span>
-            <span className="text-xs text-text-secondary">{rec.category}</span>
+            <span className="text-xs text-text-secondary">{t(rec.category)}</span>
           </div>
           <h3 className="font-semibold text-white mb-1">{rec.title}</h3>
           <p className="text-sm text-text-secondary mb-2">{rec.description}</p>
@@ -76,6 +78,7 @@ export function RecommendationCard({ rec, index }: { rec: CoachingRecommendation
 // ---------------------------------------------------------------------------
 
 export function EfficiencySection({ data }: { data: CoachingData }) {
+  const { t, locale } = useLanguage();
   const eff = data.efficiency;
   if (!eff) return null;
 
@@ -100,24 +103,24 @@ export function EfficiencySection({ data }: { data: CoachingData }) {
     >
       <div className="flex items-center gap-3 mb-6">
         <BarChart3 className="w-6 h-6 text-primary" />
-        <h2 className="text-xl font-bold text-white">Effizienz-Vergleich</h2>
-        <span className="text-xs text-text-secondary ml-auto">Viewer-Hours pro Stream-Hour</span>
+        <h2 className="text-xl font-bold text-white">{t('Effizienz-Vergleich')}</h2>
+        <span className="text-xs text-text-secondary ml-auto">{t('Viewer-Hours pro Stream-Hour')}</span>
       </div>
 
       <div className="grid grid-cols-3 gap-4 mb-6">
         <div className="text-center">
           <div className="text-2xl font-bold text-white">{eff.viewerHoursPerStreamHour}</div>
-          <div className="text-xs text-text-secondary">Deine Effizienz</div>
+          <div className="text-xs text-text-secondary">{t('Deine Effizienz')}</div>
         </div>
         <div className="text-center">
           <div className="text-2xl font-bold text-accent">{eff.categoryAvg}</div>
-          <div className="text-xs text-text-secondary">Kat.-Schnitt (exkl. Top 15%)</div>
+          <div className="text-xs text-text-secondary">{t('Kat.-Schnitt (exkl. Top 15%)')}</div>
         </div>
         <div className="text-center">
           <div className={`text-2xl font-bold ${eff.percentile >= 50 ? 'text-success' : 'text-warning'}`}>
             {eff.percentile}%
           </div>
-          <div className="text-xs text-text-secondary">Perzentil</div>
+          <div className="text-xs text-text-secondary">{t('Perzentil')}</div>
         </div>
       </div>
 
@@ -147,7 +150,7 @@ export function EfficiencySection({ data }: { data: CoachingData }) {
           })}
           {/* Category average line indicator */}
           <div className="flex items-center gap-3 mt-1">
-            <span className="text-xs text-text-secondary w-28">Kat.-Schnitt</span>
+            <span className="text-xs text-text-secondary w-28">{t('Kat.-Schnitt')}</span>
             <div className="flex-1 relative h-1">
               <div
                 className="absolute top-0 h-4 -mt-1.5 w-0.5 bg-warning"
@@ -160,8 +163,8 @@ export function EfficiencySection({ data }: { data: CoachingData }) {
       )}
 
       <div className="flex gap-4 mt-4 text-xs text-text-secondary">
-        <span>{eff.totalStreamHours}h gestreamt</span>
-        <span>{eff.totalViewerHours.toLocaleString()}h Viewer-Hours</span>
+        <span>{t('{hours}h gestreamt', { hours: eff.totalStreamHours })}</span>
+        <span>{t('{hours}h Viewer-Hours', { hours: eff.totalViewerHours.toLocaleString(locale) })}</span>
       </div>
 
       {/* Growth Efficiency sub-section */}
@@ -169,23 +172,23 @@ export function EfficiencySection({ data }: { data: CoachingData }) {
         <div className="mt-6 pt-6 border-t border-border">
           <div className="flex items-center gap-2 mb-4">
             <Activity className="w-5 h-5 text-success" />
-            <h3 className="text-base font-semibold text-white">Wachstums-Effizienz</h3>
-            <span className="text-xs text-text-secondary ml-auto">Follower / 10h Stream · Kategorie exkl. Top 15%</span>
+            <h3 className="text-base font-semibold text-white">{t('Wachstums-Effizienz')}</h3>
+            <span className="text-xs text-text-secondary ml-auto">{t('Follower / 10h Stream · Kategorie exkl. Top 15%')}</span>
           </div>
           <div className="grid grid-cols-3 gap-4 mb-4">
             <div className="text-center">
               <div className="text-xl font-bold text-white">{eff.growthPer10Hours}</div>
-              <div className="text-xs text-text-secondary">Dein Wert</div>
+              <div className="text-xs text-text-secondary">{t('Dein Wert')}</div>
             </div>
             <div className="text-center">
               <div className="text-xl font-bold text-success">{eff.growthCategoryAvg ?? 0}</div>
-              <div className="text-xs text-text-secondary">Kat.-Schnitt (organ.)</div>
+              <div className="text-xs text-text-secondary">{t('Kat.-Schnitt (organ.)')}</div>
             </div>
             <div className="text-center">
               <div className={`text-xl font-bold ${(eff.growthPercentile ?? 0) >= 50 ? 'text-success' : 'text-warning'}`}>
                 {eff.growthPercentile ?? 0}%
               </div>
-              <div className="text-xs text-text-secondary">Perzentil</div>
+              <div className="text-xs text-text-secondary">{t('Perzentil')}</div>
             </div>
           </div>
           {(eff.growthTopPerformers ?? []).length > 0 && (
@@ -227,6 +230,7 @@ export function EfficiencySection({ data }: { data: CoachingData }) {
 // ---------------------------------------------------------------------------
 
 export function DurationSection({ data }: { data: CoachingData }) {
+  const t = useT();
   const dur = data.durationAnalysis;
   if (!dur || !dur.buckets.length) return null;
 
@@ -242,9 +246,9 @@ export function DurationSection({ data }: { data: CoachingData }) {
     >
       <div className="flex items-center gap-3 mb-6">
         <Timer className="w-6 h-6 text-accent" />
-        <h2 className="text-xl font-bold text-white">Dauer-Sweetspot</h2>
+        <h2 className="text-xl font-bold text-white">{t('Dauer-Sweetspot')}</h2>
         <span className="text-xs text-text-secondary ml-auto">
-          Dein Ø: {dur.currentAvgHours}h | Optimal: {dur.optimalLabel || '–'}
+          {t('Dein Ø: {hours}h | Optimal: {optimal}', { hours: dur.currentAvgHours, optimal: dur.optimalLabel || '–' })}
         </span>
       </div>
 
@@ -262,7 +266,7 @@ export function DurationSection({ data }: { data: CoachingData }) {
             labelStyle={{ color: '#fff' }}
             itemStyle={{ color: '#EDE0C4' }}
             formatter={((value: number, name: string) => {
-              if (name === 'avgViewers') return [`${value.toFixed(1)}`, 'Ø Viewer'];
+              if (name === 'avgViewers') return [`${value.toFixed(1)}`, t('Ø Viewer')];
               if (name === 'streamCount') return [value, 'Streams'];
               return [value, name];
             }) as any}
@@ -282,10 +286,10 @@ export function DurationSection({ data }: { data: CoachingData }) {
 
       {dur.correlation !== 0 && (
         <div className="mt-4 text-xs text-text-secondary">
-          Korrelation Dauer vs Viewer: <span className={dur.correlation < -0.2 ? 'text-warning' : 'text-text-secondary'}>
+          {t('Korrelation Dauer vs Viewer:')} <span className={dur.correlation < -0.2 ? 'text-warning' : 'text-text-secondary'}>
             r = {dur.correlation}
           </span>
-          {dur.correlation < -0.2 && ' (Laengere Streams = weniger Viewer)'}
+          {dur.correlation < -0.2 && ` ${t('(Laengere Streams = weniger Viewer)')}`}
         </div>
       )}
     </Rise>
@@ -298,6 +302,7 @@ export function DurationSection({ data }: { data: CoachingData }) {
 // ---------------------------------------------------------------------------
 
 export function ScheduleSection({ data }: { data: CoachingData }) {
+  const t = useT();
   const sched = data.scheduleOptimizer;
 
   // Build 7x24 grid
@@ -334,13 +339,13 @@ export function ScheduleSection({ data }: { data: CoachingData }) {
     >
       <div className="flex items-center gap-3 mb-6">
         <Calendar className="w-6 h-6 text-primary" />
-        <h2 className="text-xl font-bold text-white">Schedule-Optimizer</h2>
+        <h2 className="text-xl font-bold text-white">{t('Schedule-Optimizer')}</h2>
       </div>
 
       {/* Sweet Spots */}
       {sched.sweetSpots.length > 0 && (
         <div className="mb-6">
-          <h3 className="text-sm font-medium text-text-secondary mb-3">Top Sweet-Spots (hohe Viewer, wenig Konkurrenz)</h3>
+          <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Top Sweet-Spots (hohe Viewer, wenig Konkurrenz)')}</h3>
           <div className="flex flex-wrap gap-2">
             {sched.sweetSpots.slice(0, 8).map((spot, i) => (
               <div
@@ -349,9 +354,9 @@ export function ScheduleSection({ data }: { data: CoachingData }) {
                   i < 3 ? 'bg-success/20 border border-success/30 text-success' : 'bg-background text-text-secondary'
                 }`}
               >
-                {WEEKDAY_SHORT[spot.weekday]} {spot.hour}:00
+                {getWeekdayLabel(spot.weekday)} {spot.hour}:00
                 <span className="ml-1 text-xs opacity-70">
-                  ({spot.categoryViewers.toFixed(0)}v / {spot.competitors}k)
+                  {t('({viewers}v / {competitors}k)', { viewers: spot.categoryViewers.toFixed(0), competitors: spot.competitors })}
                 </span>
               </div>
             ))}
@@ -372,7 +377,7 @@ export function ScheduleSection({ data }: { data: CoachingData }) {
           </div>
           {[1, 2, 3, 4, 5, 6, 0].map(weekday => (
             <div key={weekday} className="flex items-center mb-0.5">
-              <div className="w-10 text-xs text-text-secondary">{WEEKDAY_SHORT[weekday]}</div>
+              <div className="w-10 text-xs text-text-secondary">{getWeekdayLabel(weekday)}</div>
               {hours.map(hour => {
                 const key = `${weekday}-${hour}`;
                 const cell = grid.cells[key];
@@ -388,7 +393,13 @@ export function ScheduleSection({ data }: { data: CoachingData }) {
                       minWidth: '12px',
                       minHeight: '12px',
                     }}
-                    title={`${WEEKDAY_SHORT[weekday]} ${hour}:00 - Opp: ${opp.toFixed(1)} | ${cell?.competitors || 0} Streamer | ${cell?.viewers?.toFixed(0) || 0} Viewer`}
+                    title={t('{day} {hour}:00 - Opp: {opportunity} | {competitors} Streamer | {viewers} Viewer', {
+                      day: getWeekdayLabel(weekday),
+                      hour,
+                      opportunity: opp.toFixed(1),
+                      competitors: cell?.competitors || 0,
+                      viewers: cell?.viewers?.toFixed(0) || 0,
+                    })}
                   >
                     {isYourSlot && (
                       <div className="absolute inset-0 border-2 border-accent rounded-sm" />
@@ -404,15 +415,15 @@ export function ScheduleSection({ data }: { data: CoachingData }) {
       <div className="flex items-center gap-4 mt-4 text-xs text-text-secondary">
         <div className="flex items-center gap-1">
           <div className="w-3 h-3 rounded-sm bg-success/20" />
-          <span>Wenig Opportunity</span>
+          <span>{t('Wenig Opportunity')}</span>
         </div>
         <div className="flex items-center gap-1">
           <div className="w-3 h-3 rounded-sm bg-success/80" />
-          <span>Hohe Opportunity</span>
+          <span>{t('Hohe Opportunity')}</span>
         </div>
         <div className="flex items-center gap-1">
           <div className="w-3 h-3 rounded-sm border-2 border-accent" />
-          <span>Deine Slots</span>
+          <span>{t('Deine Slots')}</span>
         </div>
       </div>
     </Rise>
@@ -425,6 +436,7 @@ export function ScheduleSection({ data }: { data: CoachingData }) {
 // ---------------------------------------------------------------------------
 
 export function TitleSection({ data }: { data: CoachingData }) {
+  const t = useT();
   const titles = data.titleAnalysis;
   if (!titles) return null;
 
@@ -435,7 +447,7 @@ export function TitleSection({ data }: { data: CoachingData }) {
     >
       <div className="flex items-center gap-3 mb-6">
         <Type className="w-6 h-6 text-accent" />
-        <h2 className="text-xl font-bold text-white">Titel-Coach</h2>
+        <h2 className="text-xl font-bold text-white">{t('Titel-Coach')}</h2>
       </div>
 
       {/* Title Variety Gauge */}
@@ -445,19 +457,19 @@ export function TitleSection({ data }: { data: CoachingData }) {
             <div className={`text-2xl font-bold ${titles.varietyPct < titles.avgPeerVarietyPct * 0.5 ? 'text-error' : titles.varietyPct < titles.avgPeerVarietyPct ? 'text-warning' : 'text-success'}`}>
               {titles.varietyPct}%
             </div>
-            <div className="text-xs text-text-secondary">Deine Titel-Vielfalt</div>
+            <div className="text-xs text-text-secondary">{t('Deine Titel-Vielfalt')}</div>
           </div>
           <div className="text-center p-3 rounded-lg bg-background/50">
             <div className="text-2xl font-bold text-accent">{titles.avgPeerVarietyPct}%</div>
-            <div className="text-xs text-text-secondary">Peer-Durchschnitt</div>
+            <div className="text-xs text-text-secondary">{t('Peer-Durchschnitt')}</div>
           </div>
           <div className="text-center p-3 rounded-lg bg-background/50">
             <div className="text-2xl font-bold text-white">{titles.uniqueTitleCount}</div>
-            <div className="text-xs text-text-secondary">Einzigartige Titel</div>
+            <div className="text-xs text-text-secondary">{t('Einzigartige Titel')}</div>
           </div>
           <div className="text-center p-3 rounded-lg bg-background/50">
             <div className="text-2xl font-bold text-white">{titles.totalSessionCount}</div>
-            <div className="text-xs text-text-secondary">Sessions gesamt</div>
+            <div className="text-xs text-text-secondary">{t('Sessions gesamt')}</div>
           </div>
         </div>
       )}
@@ -465,22 +477,22 @@ export function TitleSection({ data }: { data: CoachingData }) {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Your Titles */}
         <div>
-          <h3 className="text-sm font-medium text-text-secondary mb-3">Deine Titel (nach Ø Viewer)</h3>
+          <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Deine Titel (nach Ø Viewer)')}</h3>
           <div className="space-y-2 max-h-64 overflow-y-auto">
-            {titles.yourTitles.slice(0, 10).map((t, i) => (
+            {titles.yourTitles.slice(0, 10).map((entry, i) => (
               <div key={i} className="flex items-center gap-3 p-2 rounded-lg bg-background/50">
                 <span className={`text-xs w-5 text-center ${i === 0 ? 'text-success font-bold' : 'text-text-secondary'}`}>
                   {i + 1}
                 </span>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm text-white truncate">{t.title}</div>
+                  <div className="text-sm text-white truncate">{entry.title}</div>
                   <div className="text-xs text-text-secondary">
-                    {t.usageCount}x benutzt
+                    {t('{count}x benutzt', { count: entry.usageCount })}
                   </div>
                 </div>
                 <div className="text-right">
-                  <div className="text-sm font-medium text-white">{t.avgViewers} Ø</div>
-                  <div className="text-xs text-text-secondary">{t.peakViewers} Peak</div>
+                  <div className="text-sm font-medium text-white">{t('{value} Ø', { value: entry.avgViewers })}</div>
+                  <div className="text-xs text-text-secondary">{entry.peakViewers} Peak</div>
                 </div>
               </div>
             ))}
@@ -489,22 +501,22 @@ export function TitleSection({ data }: { data: CoachingData }) {
 
         {/* Category Top Titles + Missing Patterns */}
         <div>
-          <h3 className="text-sm font-medium text-text-secondary mb-3">Kategorie-Top-Titel</h3>
+          <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Kategorie-Top-Titel')}</h3>
           <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
-            {titles.categoryTopTitles.slice(0, 5).map((t, i) => (
+            {titles.categoryTopTitles.slice(0, 5).map((entry, i) => (
               <div key={i} className="flex items-center gap-3 p-2 rounded-lg bg-background/50">
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm text-white truncate">{t.title}</div>
-                  <div className="text-xs text-text-secondary">{t.streamer}</div>
+                  <div className="text-sm text-white truncate">{entry.title}</div>
+                  <div className="text-xs text-text-secondary">{entry.streamer}</div>
                 </div>
-                <span className="text-sm text-accent">{t.avgViewers} Ø</span>
+                <span className="text-sm text-accent">{t('{value} Ø', { value: entry.avgViewers })}</span>
               </div>
             ))}
           </div>
 
           {titles.yourMissingPatterns.length > 0 && (
             <div>
-              <h3 className="text-sm font-medium text-text-secondary mb-2">Fehlende Keywords</h3>
+              <h3 className="text-sm font-medium text-text-secondary mb-2">{t('Fehlende Keywords')}</h3>
               <div className="flex flex-wrap gap-1.5">
                 {titles.yourMissingPatterns.map((p, i) => (
                   <span key={i} className="px-2 py-1 rounded-md bg-warning/10 border border-warning/20 text-warning text-xs">
@@ -526,6 +538,7 @@ export function TitleSection({ data }: { data: CoachingData }) {
 // ---------------------------------------------------------------------------
 
 export function TagSection({ data }: { data: CoachingData }) {
+  const t = useT();
   const tags = data.tagOptimization;
   if (!tags) return null;
 
@@ -536,21 +549,21 @@ export function TagSection({ data }: { data: CoachingData }) {
     >
       <div className="flex items-center gap-3 mb-6">
         <Tag className="w-6 h-6 text-primary" />
-        <h2 className="text-xl font-bold text-white">Tag-Optimierung</h2>
+        <h2 className="text-xl font-bold text-white">{t('Tag-Optimierung')}</h2>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Your Tags */}
         <div>
-          <h3 className="text-sm font-medium text-text-secondary mb-3">Deine Tag-Kombinationen</h3>
+          <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Deine Tag-Kombinationen')}</h3>
           <div className="space-y-2">
-            {tags.yourTags.slice(0, 8).map((t, i) => (
+            {tags.yourTags.slice(0, 8).map((entry, i) => (
               <div key={i} className="flex items-center gap-3 p-2 rounded-lg bg-background/50">
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm text-white truncate">{t.tags}</div>
-                  <div className="text-xs text-text-secondary">{t.usageCount}x</div>
+                  <div className="text-sm text-white truncate">{entry.tags}</div>
+                  <div className="text-xs text-text-secondary">{entry.usageCount}x</div>
                 </div>
-                <span className="text-sm text-accent">{t.avgViewers} Ø</span>
+                <span className="text-sm text-accent">{t('{value} Ø', { value: entry.avgViewers })}</span>
               </div>
             ))}
           </div>
@@ -558,26 +571,26 @@ export function TagSection({ data }: { data: CoachingData }) {
 
         {/* Category Tags + Missing */}
         <div>
-          <h3 className="text-sm font-medium text-text-secondary mb-3">Kategorie-Beste Tags</h3>
+          <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Kategorie-Beste Tags')}</h3>
           <div className="space-y-2 mb-4">
-            {tags.categoryBestTags.slice(0, 5).map((t, i) => (
+            {tags.categoryBestTags.slice(0, 5).map((entry, i) => (
               <div key={i} className="flex items-center gap-3 p-2 rounded-lg bg-background/50">
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm text-white truncate">{t.tags}</div>
-                  <div className="text-xs text-text-secondary">{t.streamerCount} Streamer</div>
+                  <div className="text-sm text-white truncate">{entry.tags}</div>
+                  <div className="text-xs text-text-secondary">{t('{count} Streamer', { count: entry.streamerCount })}</div>
                 </div>
-                <span className="text-sm text-success">{t.avgViewers} Ø</span>
+                <span className="text-sm text-success">{t('{value} Ø', { value: entry.avgViewers })}</span>
               </div>
             ))}
           </div>
 
           {tags.missingHighPerformers.length > 0 && (
             <div>
-              <h3 className="text-sm font-medium text-text-secondary mb-2">Fehlende Top-Tags</h3>
+              <h3 className="text-sm font-medium text-text-secondary mb-2">{t('Fehlende Top-Tags')}</h3>
               <div className="flex flex-wrap gap-1.5">
-                {tags.missingHighPerformers.map((t, i) => (
+                {tags.missingHighPerformers.map((tag, i) => (
                   <span key={i} className="px-2 py-1 rounded-md bg-success/10 border border-success/20 text-success text-xs">
-                    {t}
+                    {tag}
                   </span>
                 ))}
               </div>
@@ -586,11 +599,11 @@ export function TagSection({ data }: { data: CoachingData }) {
 
           {tags.underperformingTags.length > 0 && (
             <div className="mt-3">
-              <h3 className="text-sm font-medium text-text-secondary mb-2">Underperformer (unter deinem Schnitt)</h3>
+              <h3 className="text-sm font-medium text-text-secondary mb-2">{t('Underperformer (unter deinem Schnitt)')}</h3>
               <div className="flex flex-wrap gap-1.5">
-                {tags.underperformingTags.map((t, i) => (
+                {tags.underperformingTags.map((tag, i) => (
                   <span key={i} className="px-2 py-1 rounded-md bg-error/10 border border-error/20 text-error text-xs">
-                    {t}
+                    {tag}
                   </span>
                 ))}
               </div>
@@ -608,6 +621,7 @@ export function TagSection({ data }: { data: CoachingData }) {
 // ---------------------------------------------------------------------------
 
 export function RetentionSection({ data }: { data: CoachingData }) {
+  const t = useT();
   const ret = data.retentionCoaching;
 
   const chartData = useMemo(() => {
@@ -638,7 +652,7 @@ export function RetentionSection({ data }: { data: CoachingData }) {
     >
       <div className="flex items-center gap-3 mb-6">
         <TrendingDown className="w-6 h-6 text-warning" />
-        <h2 className="text-xl font-bold text-white">Retention-Analyse</h2>
+        <h2 className="text-xl font-bold text-white">{t('Retention-Analyse')}</h2>
       </div>
 
       <div className="grid grid-cols-3 gap-4 mb-6">
@@ -646,17 +660,17 @@ export function RetentionSection({ data }: { data: CoachingData }) {
           <div className={`text-2xl font-bold ${ret.your5mRetention >= ret.category5mRetention ? 'text-success' : 'text-warning'}`}>
             {ret.your5mRetention}%
           </div>
-          <div className="text-xs text-text-secondary">Deine 5-Min Retention</div>
+          <div className="text-xs text-text-secondary">{t('Deine 5-Min Retention')}</div>
         </div>
         <div className="text-center">
           <div className="text-2xl font-bold text-accent">{ret.category5mRetention}%</div>
-          <div className="text-xs text-text-secondary">Kategorie-Schnitt</div>
+          <div className="text-xs text-text-secondary">{t('Kategorie-Schnitt')}</div>
         </div>
         <div className="text-center">
           <div className="text-2xl font-bold text-primary">
             {ret.criticalDropoffMinute > 0 ? `${ret.criticalDropoffMinute} min` : '–'}
           </div>
-          <div className="text-xs text-text-secondary">Kritischer Drop-off</div>
+          <div className="text-xs text-text-secondary">{t('Kritischer Drop-off')}</div>
         </div>
       </div>
 
@@ -674,11 +688,11 @@ export function RetentionSection({ data }: { data: CoachingData }) {
             }}
               labelFormatter={(m) => `Minute ${m}`}
               formatter={((value: number, name: string) => {
-                const label = name === 'you' ? 'Du' : 'Top-Performer';
+                const label = name === 'you' ? t('Du') : t('Top-Performer');
                 return [`${value.toFixed(1)}%`, label];
               }) as any}
             />
-            <Legend formatter={(v) => v === 'you' ? 'Du' : 'Top-Performer'} />
+            <Legend formatter={(v) => v === 'you' ? t('Du') : t('Top-Performer')} />
             <Line type="monotone" dataKey="you" stroke="var(--color-primary)" strokeWidth={2} dot={false} />
             <Line type="monotone" dataKey="top" stroke="#00D9FF" strokeWidth={2} dot={false} strokeDasharray="5 5" />
           </LineChart>
@@ -694,6 +708,7 @@ export function RetentionSection({ data }: { data: CoachingData }) {
 // ---------------------------------------------------------------------------
 
 export function CommunitySection({ data }: { data: CoachingData }) {
+  const t = useT();
   const comm = data.crossCommunity;
   if (!comm || comm.totalUniqueChatters === 0) return null;
 
@@ -708,29 +723,29 @@ export function CommunitySection({ data }: { data: CoachingData }) {
     >
       <div className="flex items-center gap-3 mb-6">
         <Users className="w-6 h-6 text-accent" />
-        <h2 className="text-xl font-bold text-white">Cross-Community</h2>
+        <h2 className="text-xl font-bold text-white">{t('Cross-Community')}</h2>
       </div>
 
       <div className="grid grid-cols-3 gap-4 mb-6">
         <div className="text-center">
           <div className="text-2xl font-bold text-white">{comm.totalUniqueChatters}</div>
-          <div className="text-xs text-text-secondary">Unique Chatters</div>
+          <div className="text-xs text-text-secondary">{t('Unique Chatters')}</div>
         </div>
         <div className="text-center">
           <div className="text-2xl font-bold text-accent">{comm.isolatedChatters}</div>
-          <div className="text-xs text-text-secondary">Nur bei dir</div>
+          <div className="text-xs text-text-secondary">{t('Nur bei dir')}</div>
         </div>
         <div className="text-center">
           <div className={`text-2xl font-bold ${comm.isolatedPercentage > 40 ? 'text-success' : 'text-warning'}`}>
             {comm.isolatedPercentage}%
           </div>
-          <div className="text-xs text-text-secondary">Exklusiv-Rate</div>
+          <div className="text-xs text-text-secondary">{t('Exklusiv-Rate')}</div>
         </div>
       </div>
 
-      <p className="text-sm text-text-secondary mb-4">{comm.ecosystemSummary}</p>
+      <p className="text-sm text-text-secondary mb-4">{t(comm.ecosystemSummary)}</p>
 
-      <h3 className="text-sm font-medium text-text-secondary mb-3">Chatter-Quellen</h3>
+      <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Chatter-Quellen')}</h3>
       <div className="space-y-2">
         {comm.chatterSources.slice(0, 10).map((src, i) => (
           <div key={i} className="flex items-center gap-3">
@@ -759,6 +774,7 @@ export function CommunitySection({ data }: { data: CoachingData }) {
 // ---------------------------------------------------------------------------
 
 export function DoubleStreamSection({ data }: { data: CoachingData }) {
+  const t = useT();
   const ds = data.doubleStreamDetection;
   if (!ds || !ds.detected) return null;
 
@@ -769,32 +785,32 @@ export function DoubleStreamSection({ data }: { data: CoachingData }) {
     >
       <div className="flex items-center gap-3 mb-4">
         <AlertTriangle className="w-6 h-6 text-error" />
-        <h2 className="text-xl font-bold text-white">Doppel-Stream-Warnung</h2>
+        <h2 className="text-xl font-bold text-white">{t('Doppel-Stream-Warnung')}</h2>
         <span className="text-xs px-2 py-0.5 rounded-full bg-error text-white font-medium">
-          {ds.count}x erkannt
+          {t('{count}x erkannt', { count: ds.count })}
         </span>
       </div>
 
       <div className="grid grid-cols-2 gap-4 mb-4">
         <div className="p-3 rounded-lg bg-background/50">
-          <div className="text-lg font-bold text-white">{ds.singleDayAvg} Ø</div>
-          <div className="text-xs text-text-secondary">Single-Stream-Tage</div>
+          <div className="text-lg font-bold text-white">{t('{value} Ø', { value: ds.singleDayAvg })}</div>
+          <div className="text-xs text-text-secondary">{t('Single-Stream-Tage')}</div>
         </div>
         <div className="p-3 rounded-lg bg-background/50">
           <div className={`text-lg font-bold ${ds.doubleDayAvg < ds.singleDayAvg ? 'text-error' : 'text-white'}`}>
-            {ds.doubleDayAvg} Ø
+            {t('{value} Ø', { value: ds.doubleDayAvg })}
           </div>
-          <div className="text-xs text-text-secondary">Doppel-Stream-Tage</div>
+          <div className="text-xs text-text-secondary">{t('Doppel-Stream-Tage')}</div>
         </div>
       </div>
 
       {ds.occurrences.length > 0 && (
         <div className="space-y-1">
-          <h3 className="text-sm font-medium text-text-secondary mb-2">Betroffene Tage</h3>
+          <h3 className="text-sm font-medium text-text-secondary mb-2">{t('Betroffene Tage')}</h3>
           <div className="flex flex-wrap gap-2">
             {ds.occurrences.map((occ, i) => (
               <span key={i} className="px-2 py-1 rounded-md bg-error/10 text-error text-xs">
-                {occ.date} ({occ.sessionCount} Sessions, {occ.avgViewers} Ø)
+                {t('{date} ({sessions} Sessions, {viewers} Ø)', { date: occ.date, sessions: occ.sessionCount, viewers: occ.avgViewers })}
               </span>
             ))}
           </div>
@@ -810,6 +826,7 @@ export function DoubleStreamSection({ data }: { data: CoachingData }) {
 // ---------------------------------------------------------------------------
 
 export function RaidNetworkSection({ data }: { data: CoachingData }) {
+  const { t, locale } = useLanguage();
   const raids = data.raidNetwork;
   if (!raids || raids.totalPartners === 0) return null;
 
@@ -825,47 +842,47 @@ export function RaidNetworkSection({ data }: { data: CoachingData }) {
     >
       <div className="flex items-center gap-3 mb-6">
         <ArrowLeftRight className="w-6 h-6 text-accent" />
-        <h2 className="text-xl font-bold text-white">Raid-Netzwerk</h2>
+        <h2 className="text-xl font-bold text-white">{t('Raid-Netzwerk')}</h2>
       </div>
 
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div className="text-center p-3 rounded-lg bg-background/50">
           <div className="text-2xl font-bold text-white">{raids.totalSent}</div>
-          <div className="text-xs text-text-secondary">Raids gesendet</div>
+          <div className="text-xs text-text-secondary">{t('Raids gesendet')}</div>
         </div>
         <div className="text-center p-3 rounded-lg bg-background/50">
           <div className="text-2xl font-bold text-white">{raids.totalReceived}</div>
-          <div className="text-xs text-text-secondary">Raids erhalten</div>
+          <div className="text-xs text-text-secondary">{t('Raids erhalten')}</div>
         </div>
         <div className="text-center p-3 rounded-lg bg-background/50">
           <div className={`text-2xl font-bold ${raids.reciprocityRatio < 0.3 ? 'text-warning' : raids.reciprocityRatio > 0.7 ? 'text-success' : 'text-white'}`}>
             {raids.reciprocityRatio}x
           </div>
-          <div className="text-xs text-text-secondary">Reziprozitaet</div>
+          <div className="text-xs text-text-secondary">{t('Reziprozitaet')}</div>
         </div>
         <div className="text-center p-3 rounded-lg bg-background/50">
           <div className="text-2xl font-bold text-accent">{raids.mutualPartners}</div>
-          <div className="text-xs text-text-secondary">Gegenseitige Partner</div>
+          <div className="text-xs text-text-secondary">{t('Gegenseitige Partner')}</div>
         </div>
       </div>
 
       {/* Viewer Balance */}
       <div className="grid grid-cols-2 gap-4 mb-6">
         <div className="p-3 rounded-lg bg-background/50">
-          <div className="text-sm text-text-secondary mb-1">Ø Viewer gesendet</div>
+          <div className="text-sm text-text-secondary mb-1">{t('Ø Viewer gesendet')}</div>
           <div className="text-lg font-bold text-white">{raids.avgSentViewers}</div>
-          <div className="text-xs text-text-secondary">{raids.totalSentViewers.toLocaleString()} total</div>
+          <div className="text-xs text-text-secondary">{t('{count} total', { count: raids.totalSentViewers.toLocaleString(locale) })}</div>
         </div>
         <div className="p-3 rounded-lg bg-background/50">
-          <div className="text-sm text-text-secondary mb-1">Ø Viewer erhalten</div>
+          <div className="text-sm text-text-secondary mb-1">{t('Ø Viewer erhalten')}</div>
           <div className="text-lg font-bold text-white">{raids.avgReceivedViewers}</div>
-          <div className="text-xs text-text-secondary">{raids.totalReceivedViewers.toLocaleString()} total</div>
+          <div className="text-xs text-text-secondary">{t('{count} total', { count: raids.totalReceivedViewers.toLocaleString(locale) })}</div>
         </div>
       </div>
 
       {/* Partner List */}
-      <h3 className="text-sm font-medium text-text-secondary mb-3">Raid-Partner</h3>
+      <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Raid-Partner')}</h3>
       <div className="space-y-2 max-h-72 overflow-y-auto">
         {raids.partners.slice(0, 15).map((p, i) => {
           const total = p.sentCount + p.receivedCount;
@@ -878,12 +895,12 @@ export function RaidNetworkSection({ data }: { data: CoachingData }) {
                 <div
                   className="h-full bg-primary/60"
                   style={{ width: `${sentPct * width / 100}%` }}
-                  title={`Gesendet: ${p.sentCount}`}
+                  title={t('Gesendet: {count}', { count: p.sentCount })}
                 />
                 <div
                   className="h-full bg-accent/60"
                   style={{ width: `${(100 - sentPct) * width / 100}%` }}
-                  title={`Erhalten: ${p.receivedCount}`}
+                  title={t('Erhalten: {count}', { count: p.receivedCount })}
                 />
               </div>
               <span className={`text-xs w-20 text-right ${
@@ -900,11 +917,11 @@ export function RaidNetworkSection({ data }: { data: CoachingData }) {
       <div className="flex items-center gap-4 mt-4 text-xs text-text-secondary">
         <div className="flex items-center gap-1">
           <div className="w-3 h-3 rounded-sm bg-primary/60" />
-          <span>Gesendet</span>
+          <span>{t('Gesendet')}</span>
         </div>
         <div className="flex items-center gap-1">
           <div className="w-3 h-3 rounded-sm bg-accent/60" />
-          <span>Erhalten</span>
+          <span>{t('Erhalten')}</span>
         </div>
       </div>
     </Rise>
@@ -916,18 +933,22 @@ export function RaidNetworkSection({ data }: { data: CoachingData }) {
 // 12. Peer-Vergleich
 // ---------------------------------------------------------------------------
 
-const METRIC_LABELS: Record<string, string> = {
-  avgViewers: 'Ø Viewer',
-  maxPeak: 'Peak',
-  avgChatters: 'Ø Chatters',
-  retention5m: '5m Retention',
-  titleVariety: 'Titel-Vielfalt',
-  sessions: 'Sessions',
-};
+function metricLabels(): Record<string, string> {
+  return {
+    avgViewers: tr('Ø Viewer'),
+    maxPeak: tr('Peak'),
+    avgChatters: tr('Ø Chatters'),
+    retention5m: tr('5m Retention'),
+    titleVariety: tr('Titel-Vielfalt'),
+    sessions: tr('Sessions'),
+  };
+}
 
 export function PeerComparisonSection({ data }: { data: CoachingData }) {
+  const t = useT();
   const pc = data.peerComparison;
   if (!pc || !pc.ownData) return null;
+  const labels = metricLabels();
   const percentile = Math.round((pc.ownRank / Math.max(pc.totalStreamers, 1)) * 100);
 
   return (
@@ -937,13 +958,13 @@ export function PeerComparisonSection({ data }: { data: CoachingData }) {
       >
         <div className="flex items-center gap-3 mb-6">
           <Trophy className="w-6 h-6 text-warning" />
-          <h2 className="text-xl font-bold text-white">Peer-Vergleich</h2>
+          <h2 className="text-xl font-bold text-white">{t('Peer-Vergleich')}</h2>
           <span className="text-xs text-text-secondary ml-auto">
-            Rang {pc.ownRank} von {pc.totalStreamers}
+            {t('Rang {rank} von {total}', { rank: pc.ownRank, total: pc.totalStreamers })}
           </span>
         </div>
         <div className="text-xs text-text-secondary mb-4">
-          Du bist in den Top {percentile}% aller Deadlock-Streamer (Ranking nach Ø Viewern).
+          {t('Du bist in den Top {percentile}% aller Deadlock-Streamer (Ranking nach Ø Viewern).', { percentile })}
         </div>
 
       {/* Per-Metric Rankings */}
@@ -951,7 +972,7 @@ export function PeerComparisonSection({ data }: { data: CoachingData }) {
         {Object.entries(pc.metricsRanked).map(([metric, ranking]) => (
           <div key={metric} className="p-3 rounded-lg bg-background/50">
             <div className="flex justify-between items-center mb-1">
-              <span className="text-xs text-text-secondary">{METRIC_LABELS[metric] || metric}</span>
+              <span className="text-xs text-text-secondary">{labels[metric] || metric}</span>
               <span className={`text-xs font-medium ${
                 ranking.rank <= 3 ? 'text-success' :
                 ranking.rank <= Math.ceil(ranking.total / 2) ? 'text-white' : 'text-warning'
@@ -981,19 +1002,19 @@ export function PeerComparisonSection({ data }: { data: CoachingData }) {
       {/* Gap to Next */}
       {pc.gapToNext && (
         <div className="p-4 rounded-lg bg-accent/5 border border-accent/20 mb-6">
-          <h3 className="text-sm font-medium text-accent mb-2">Abstand zum Naechsten: {pc.gapToNext.login}</h3>
+          <h3 className="text-sm font-medium text-accent mb-2">{t('Abstand zum Naechsten: {login}', { login: pc.gapToNext.login })}</h3>
           <div className="grid grid-cols-3 gap-4 text-center">
             <div>
               <div className="text-lg font-bold text-white">+{pc.gapToNext.avgViewersDiff}</div>
-              <div className="text-xs text-text-secondary">Ø Viewer</div>
+              <div className="text-xs text-text-secondary">{t('Ø Viewer')}</div>
             </div>
             <div>
               <div className="text-lg font-bold text-white">+{pc.gapToNext.chatDiff}</div>
-              <div className="text-xs text-text-secondary">Ø Chatters</div>
+              <div className="text-xs text-text-secondary">{t('Ø Chatters')}</div>
             </div>
             <div>
               <div className="text-lg font-bold text-white">+{pc.gapToNext.retentionDiff}%</div>
-              <div className="text-xs text-text-secondary">Retention</div>
+              <div className="text-xs text-text-secondary">{t('Retention')}</div>
             </div>
           </div>
         </div>
@@ -1003,12 +1024,12 @@ export function PeerComparisonSection({ data }: { data: CoachingData }) {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {pc.similarPeers.length > 0 && (
           <div>
-            <h3 className="text-sm font-medium text-text-secondary mb-3">Aehnliche Streamer</h3>
+            <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Aehnliche Streamer')}</h3>
             <div className="space-y-2">
               {pc.similarPeers.map((p, i) => (
                 <div key={i} className="flex items-center gap-3 p-2 rounded-lg bg-background/50">
                   <span className="text-sm text-white flex-1 truncate">{p.login}</span>
-                  <span className="text-xs text-accent">{p.avgViewers} Ø</span>
+                  <span className="text-xs text-accent">{t('{value} Ø', { value: p.avgViewers })}</span>
                   <span className="text-xs text-text-secondary">{p.sessions}s</span>
                   <span className="text-xs text-text-secondary">{p.retention5m}%</span>
                 </div>
@@ -1019,12 +1040,12 @@ export function PeerComparisonSection({ data }: { data: CoachingData }) {
 
         {pc.aspirationalPeers.length > 0 && (
           <div>
-            <h3 className="text-sm font-medium text-text-secondary mb-3">Vorbilder (naechste Stufe)</h3>
+            <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Vorbilder (naechste Stufe)')}</h3>
             <div className="space-y-2">
               {pc.aspirationalPeers.map((p, i) => (
                 <div key={i} className="flex items-center gap-3 p-2 rounded-lg bg-background/50">
                   <span className="text-sm text-white flex-1 truncate">{p.login}</span>
-                  <span className="text-xs text-success">{p.avgViewers} Ø</span>
+                  <span className="text-xs text-success">{t('{value} Ø', { value: p.avgViewers })}</span>
                   <span className="text-xs text-text-secondary">{p.sessions}s</span>
                   <span className="text-xs text-text-secondary">{p.retention5m}%</span>
                 </div>
@@ -1043,6 +1064,7 @@ export function PeerComparisonSection({ data }: { data: CoachingData }) {
 // ---------------------------------------------------------------------------
 
 export function CompetitionDensitySection({ data }: { data: CoachingData }) {
+  const t = useT();
   const comp = data.competitionDensity;
   if (!comp || !comp.hourly.length) return null;
 
@@ -1055,13 +1077,13 @@ export function CompetitionDensitySection({ data }: { data: CoachingData }) {
     >
       <div className="flex items-center gap-3 mb-6">
         <Activity className="w-6 h-6 text-warning" />
-        <h2 className="text-xl font-bold text-white">Konkurrenz-Dichte</h2>
+        <h2 className="text-xl font-bold text-white">{t('Konkurrenz-Dichte')}</h2>
       </div>
 
       {/* Sweet Spots */}
       {comp.sweetSpots.length > 0 && (
         <div className="mb-6">
-          <h3 className="text-sm font-medium text-text-secondary mb-3">Beste Gelegenheiten (niedrige Konkurrenz, hohe Viewer)</h3>
+          <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Beste Gelegenheiten (niedrige Konkurrenz, hohe Viewer)')}</h3>
           <div className="flex flex-wrap gap-2">
             {comp.sweetSpots.map((s, i) => (
               <div
@@ -1072,7 +1094,7 @@ export function CompetitionDensitySection({ data }: { data: CoachingData }) {
               >
                 {s.hour.toString().padStart(2, '0')}:00 UTC
                 <span className="ml-1 text-xs opacity-70">
-                  ({s.activeStreamers} Str. / {s.avgViewers} Ø / Score {s.opportunityScore})
+                  {t('({streamers} Str. / {viewers} Ø / Score {score})', { streamers: s.activeStreamers, viewers: s.avgViewers, score: s.opportunityScore })}
                 </span>
               </div>
             ))}
@@ -1081,7 +1103,7 @@ export function CompetitionDensitySection({ data }: { data: CoachingData }) {
       )}
 
       {/* Hourly Density Chart */}
-      <h3 className="text-sm font-medium text-text-secondary mb-3">Streamer pro Stunde (UTC)</h3>
+      <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Streamer pro Stunde (UTC)')}</h3>
       <ResponsiveContainer width="100%" height={250}>
         <BarChart data={comp.hourly}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
@@ -1095,7 +1117,7 @@ export function CompetitionDensitySection({ data }: { data: CoachingData }) {
             }}
             labelFormatter={(h) => `${h}:00 UTC`}
             formatter={((value: number, name: string) => {
-              if (name === 'activeStreamers') return [value, 'Aktive Streamer'];
+              if (name === 'activeStreamers') return [value, t('Aktive Streamer')];
               return [value, name];
             }) as any}
           />
@@ -1116,13 +1138,13 @@ export function CompetitionDensitySection({ data }: { data: CoachingData }) {
       {/* Weekly Density */}
       {comp.weekly.length > 0 && (
         <div className="mt-6">
-          <h3 className="text-sm font-medium text-text-secondary mb-3">Wochentag-Verteilung</h3>
+          <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Wochentag-Verteilung')}</h3>
           <div className="grid grid-cols-7 gap-2">
             {comp.weekly.map((w) => {
               const intensity = w.activeStreamers / Math.max(...comp.weekly.map(x => x.activeStreamers), 1);
               return (
                 <div key={w.weekday} className="text-center">
-                  <div className="text-xs text-text-secondary mb-1">{w.weekdayLabel}</div>
+                  <div className="text-xs text-text-secondary mb-1">{t(w.weekdayLabel)}</div>
                   <div
                     className="rounded-lg p-2 border"
                     style={{
@@ -1131,7 +1153,7 @@ export function CompetitionDensitySection({ data }: { data: CoachingData }) {
                     }}
                   >
                     <div className="text-sm font-bold text-white">{w.activeStreamers}</div>
-                    <div className="text-xs text-text-secondary">{w.avgViewers} Ø</div>
+                    <div className="text-xs text-text-secondary">{t('{value} Ø', { value: w.avgViewers })}</div>
                     {w.yourData && (
                       <div className="text-xs text-accent mt-1">{w.yourData.count}x</div>
                     )}
@@ -1146,11 +1168,11 @@ export function CompetitionDensitySection({ data }: { data: CoachingData }) {
       <div className="flex items-center gap-4 mt-4 text-xs text-text-secondary">
         <div className="flex items-center gap-1">
           <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(0, 217, 255, 0.8)' }} />
-          <span>Deine Stunden</span>
+          <span>{t('Deine Stunden')}</span>
         </div>
         <div className="flex items-center gap-1">
           <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'rgba(255, 255, 255, 0.3)' }} />
-          <span>Ohne dich</span>
+          <span>{t('Ohne dich')}</span>
         </div>
       </div>
     </Rise>
