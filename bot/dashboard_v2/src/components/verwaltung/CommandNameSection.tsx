@@ -9,6 +9,8 @@ import {
   enqueueCommandNameSave,
   type CommandNameSaveQueue,
 } from '../../api/commandNames';
+import { useT } from '../../context/LanguageContext';
+import { tr } from '../../i18n/dictionary';
 
 type CommandNamesContextValue = {
   commands: CommandNameSetting[];
@@ -23,15 +25,16 @@ export function CommandNamesProvider({ children }: { children: ReactNode }) {
   const [commands, setCommands] = useState<CommandNameSetting[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const t = useT();
 
   useEffect(() => {
     let active = true;
     fetchCommandNames()
       .then(result => { if (active) setCommands(result.commands); })
-      .catch(() => { if (active) setError('Befehlsnamen konnten nicht geladen werden. Bitte Seite neu laden.'); })
+      .catch(() => { if (active) setError(t('Befehlsnamen konnten nicht geladen werden. Bitte Seite neu laden.')); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, []);
+  }, [t]);
 
   const update = useCallback(async (command: string, name: string | null) => {
     const saved = await saveCommandName(command, name);
@@ -58,10 +61,11 @@ function messageFor(error: unknown): string {
   if (error instanceof CommandNameApiError && (error.code === 'name_conflict' || error.code === 'invalid_name')) {
     return error.message;
   }
-  return 'Speichern fehlgeschlagen. Bitte erneut tippen.';
+  return tr('Speichern fehlgeschlagen. Bitte erneut tippen.');
 }
 
 export function EditableCommandName({ command, className = '' }: { command: string; className?: string }) {
+  const t = useT();
   const { commands, loading, error, update } = useCommandNames();
   const row = commands.find(item => item.command === command);
   const [draft, setDraft] = useState<string | null>(null);
@@ -82,11 +86,11 @@ export function EditableCommandName({ command, className = '' }: { command: stri
     if (!operation) return;
     if (mounted.current) {
       setPending(true);
-      setMessage('Wird gespeichert …');
+      setMessage(t('Wird gespeichert …'));
     }
     void operation.then(() => {
       if (mounted.current && latestDraft.current === requested) {
-        setMessage('Gespeichert.');
+        setMessage(t('Gespeichert.'));
         setDraft(null);
       }
     }).catch(cause => {
@@ -94,7 +98,7 @@ export function EditableCommandName({ command, className = '' }: { command: stri
     }).finally(() => {
       if (mounted.current) setPending(queue.queued > 0);
     });
-  }, [command, update]);
+  }, [command, update, t]);
 
   useEffect(() => {
     if (draft === null || !validCommandNameInput(draft)) return;
@@ -110,8 +114,8 @@ export function EditableCommandName({ command, className = '' }: { command: stri
     };
   }, [saveNow]);
 
-  if (loading) return <span className="text-xs text-text-secondary">Befehl wird geladen …</span>;
-  if (error || !row) return <span role="alert" className="text-xs text-danger">{error || 'Befehl nicht verfügbar.'}</span>;
+  if (loading) return <span className="text-xs text-text-secondary">{t('Befehl wird geladen …')}</span>;
+  if (error || !row) return <span role="alert" className="text-xs text-danger">{error || t('Befehl nicht verfügbar.')}</span>;
 
   return (
     <div className={className}>
@@ -125,7 +129,7 @@ export function EditableCommandName({ command, className = '' }: { command: stri
           autoCapitalize="none"
           autoCorrect="off"
           spellCheck={false}
-          aria-label={`${row.default_name} Befehlsname ändern`}
+          aria-label={t('{command} Befehlsname ändern', { command: row.default_name })}
           aria-describedby={`command-name-hint-${command}`}
           value={value}
           onBlur={saveNow}
@@ -135,14 +139,14 @@ export function EditableCommandName({ command, className = '' }: { command: stri
             latestDraft.current = next;
             saveQueue.current.lastAttempt = null;
             setDraft(next);
-            setMessage(validCommandNameInput(next) ? '' : 'Nur Buchstaben und Zahlen eingeben; das ! steht bereits davor.');
+            setMessage(validCommandNameInput(next) ? '' : t('Nur Buchstaben und Zahlen eingeben; das ! steht bereits davor.'));
           }}
           className="min-w-0 w-[12ch] max-w-[22ch] bg-transparent py-2 outline-none placeholder:text-text-secondary/60"
         />
-        {pending && <Loader2 aria-label="Wird gespeichert" className="ml-1 h-3.5 w-3.5 animate-spin text-primary" />}
+        {pending && <Loader2 aria-label={t('Wird gespeichert')} className="ml-1 h-3.5 w-3.5 animate-spin text-primary" />}
       </label>
       <p id={`command-name-hint-${command}`} className="mt-1 text-[11px] text-text-secondary">
-        Namen ändern · speichert automatisch · nur Buchstaben und Zahlen
+        {t('Namen ändern · speichert automatisch · nur Buchstaben und Zahlen')}
       </p>
       {message && <p role={validCommandNameInput(draft ?? '') ? 'status' : 'alert'} className={`mt-1 text-xs ${validCommandNameInput(draft ?? '') ? 'text-text-secondary' : 'text-danger'}`}>{message}</p>}
     </div>
@@ -150,20 +154,21 @@ export function EditableCommandName({ command, className = '' }: { command: stri
 }
 
 export function OtherCommandNames({ excluded }: { excluded: string[] }) {
+  const t = useT();
   const { commands, loading, error } = useCommandNames();
   const remaining = commands.filter(row => !excluded.includes(row.command));
-  if (loading) return <p className="text-sm text-text-secondary">Weitere Befehle werden geladen …</p>;
+  if (loading) return <p className="text-sm text-text-secondary">{t('Weitere Befehle werden geladen …')}</p>;
   if (error) return <p role="alert" className="text-sm text-danger">{error}</p>;
   if (!remaining.length) return null;
   return (
     <div className="mt-2">
-      <h3 className="mb-3 text-lg font-bold text-white">Weitere Chat-Befehle</h3>
+      <h3 className="mb-3 text-lg font-bold text-white">{t('Weitere Chat-Befehle')}</h3>
       <div className="grid gap-3 md:grid-cols-2">
         {remaining.map(row => (
           <div key={row.command} className="soft-elevate rounded-xl border border-border bg-background/60 p-4">
             <EditableCommandName command={row.command} />
             <p className="mt-2 text-xs leading-5 text-text-secondary">{row.summary.split(row.default_name).join(row.effective_name)}</p>
-            {row.command === 'discord' && <p className="mt-2 text-xs leading-5 text-primary">Wenn du diesen Namen änderst, hilft der Bot bei !dldc mit „Meinst du {row.effective_name}?“ weiter.</p>}
+            {row.command === 'discord' && <p className="mt-2 text-xs leading-5 text-primary">{t('Wenn du diesen Namen änderst, hilft der Bot bei !dldc mit „Meinst du {command}?“ weiter.', { command: row.effective_name })}</p>}
           </div>
         ))}
       </div>

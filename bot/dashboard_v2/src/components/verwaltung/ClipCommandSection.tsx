@@ -7,8 +7,11 @@ import {
   toggleClipCommand,
   type ClipCommandSettingsResponse,
 } from '@/api/clipCommand';
+import { useT } from '../../context/LanguageContext';
+import { tr } from '../../i18n/dictionary';
 
 export function ClipCommandSection() {
+  const t = useT();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -21,7 +24,7 @@ export function ClipCommandSection() {
     try {
       setSettings(await fetchClipCommandSettings());
     } catch {
-      setError('Status konnte nicht geladen werden. Bitte Seite neu laden.');
+      setError(tr('Status konnte nicht geladen werden. Bitte Seite neu laden.'));
     } finally {
       setLoading(false);
     }
@@ -40,9 +43,9 @@ export function ClipCommandSection() {
     try {
       const data = await toggleClipCommand(want);
       setSettings({ clip_command_enabled: data.clip_command_enabled });
-      setSuccess('Gespeichert.');
+      setSuccess(t('Gespeichert.'));
     } catch {
-      setError('Speichern fehlgeschlagen. Bitte nochmal versuchen.');
+      setError(t('Speichern fehlgeschlagen. Bitte nochmal versuchen.'));
     } finally {
       setPending(false);
     }
@@ -60,14 +63,13 @@ export function ClipCommandSection() {
     >
       <div className="mb-5">
         <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">
-          Chat-Befehl
+          {t('Chat-Befehl')}
         </p>
         <h2 className="display-font text-2xl font-bold text-white mb-1">
-          Clip-Befehl
+          {t('Clip-Befehl')}
         </h2>
         <p className="text-sm text-text-secondary">
-          Steuert, ob dein Chat per Befehl einen Twitch-Clip erstellen kann. Aus heißt: der
-          Bot legt keinen Clip mehr an und antwortet auch nicht darauf.
+          {t('Steuert, ob dein Chat per Befehl einen Twitch-Clip erstellen kann. Aus heißt: der Bot legt keinen Clip mehr an und antwortet auch nicht darauf.')}
         </p>
       </div>
 
@@ -86,11 +88,11 @@ export function ClipCommandSection() {
       {loading ? (
         <div className="flex items-center gap-3 text-text-secondary text-sm">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          Status wird geladen …
+          {t('Status wird geladen …')}
         </div>
       ) : !settings ? (
         <div className="rounded-xl border border-border bg-background/40 px-4 py-6 text-sm text-text-secondary text-center">
-          Einstellung gerade nicht verfügbar.
+          {t('Einstellung gerade nicht verfügbar.')}
         </div>
       ) : (
         <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4">
@@ -102,17 +104,17 @@ export function ClipCommandSection() {
                   enabled ? 'text-success' : 'text-text-secondary'
                 }`}
               >
-                {enabled ? 'Befehl ist aktiv' : 'Befehl ist aus'}
+                {enabled ? t('Befehl ist aktiv') : t('Befehl ist aus')}
               </p>
               <p className="text-xs text-text-secondary mt-0.5">
                 {enabled
-                  ? 'Dein Chat kann per Befehl einen Clip erstellen.'
-                  : 'Der Bot erstellt damit nichts mehr und bleibt stumm.'}
+                  ? t('Dein Chat kann per Befehl einen Clip erstellen.')
+                  : t('Der Bot erstellt damit nichts mehr und bleibt stumm.')}
               </p>
             </div>
             <button
               type="button"
-              aria-label={`Clip-Befehl ${enabled ? 'deaktivieren' : 'aktivieren'}`}
+              aria-label={enabled ? t('Clip-Befehl deaktivieren') : t('Clip-Befehl aktivieren')}
               disabled={pending}
               onClick={() => void onToggle()}
               className={`inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold transition-colors ${
@@ -128,7 +130,7 @@ export function ClipCommandSection() {
               ) : (
                 <Power className="h-4 w-4" />
               )}
-              {enabled ? 'Deaktivieren' : 'Aktivieren'}
+              {enabled ? t('Deaktivieren') : t('Aktivieren')}
             </button>
           </div>
         </div>
