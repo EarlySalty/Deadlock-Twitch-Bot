@@ -30,11 +30,6 @@ function getRecommendationIcon(iconName: string) {
   return ICON_MAP[iconName] || AlertCircle;
 }
 
-
-// ---------------------------------------------------------------------------
-// Recommendation Card
-// ---------------------------------------------------------------------------
-
 export function RecommendationCard({ rec, index }: { rec: CoachingRecommendation; index: number }) {
   const t = useT();
   const styles = PRIORITY_STYLES[rec.priority] || PRIORITY_STYLES.low;
@@ -72,11 +67,6 @@ export function RecommendationCard({ rec, index }: { rec: CoachingRecommendation
   );
 }
 
-
-// ---------------------------------------------------------------------------
-// 2. Efficiency Section
-// ---------------------------------------------------------------------------
-
 export function EfficiencySection({ data }: { data: CoachingData }) {
   const { t, locale } = useLanguage();
   const eff = data.efficiency;
@@ -90,7 +80,6 @@ export function EfficiencySection({ data }: { data: CoachingData }) {
     })),
   ];
 
-  // Ensure streamer is in the list
   if (!barData.find(b => b.isYou)) {
     barData.push({ name: data.streamer, ratio: eff.viewerHoursPerStreamHour, isYou: true });
     barData.sort((a, b) => b.ratio - a.ratio);
@@ -148,7 +137,6 @@ export function EfficiencySection({ data }: { data: CoachingData }) {
               </div>
             );
           })}
-          {/* Category average line indicator */}
           <div className="flex items-center gap-3 mt-1">
             <span className="text-xs text-text-secondary w-28">{t('Kat.-Schnitt')}</span>
             <div className="flex-1 relative h-1">
@@ -167,7 +155,6 @@ export function EfficiencySection({ data }: { data: CoachingData }) {
         <span>{t('{hours}h Viewer-Hours', { hours: eff.totalViewerHours.toLocaleString(locale) })}</span>
       </div>
 
-      {/* Growth Efficiency sub-section */}
       {(eff.growthPer10Hours !== undefined) && (
         <div className="mt-6 pt-6 border-t border-border">
           <div className="flex items-center gap-2 mb-4">
@@ -223,11 +210,6 @@ export function EfficiencySection({ data }: { data: CoachingData }) {
     </Rise>
   );
 }
-
-
-// ---------------------------------------------------------------------------
-// 3. Duration Section
-// ---------------------------------------------------------------------------
 
 export function DurationSection({ data }: { data: CoachingData }) {
   const t = useT();
@@ -296,16 +278,10 @@ export function DurationSection({ data }: { data: CoachingData }) {
   );
 }
 
-
-// ---------------------------------------------------------------------------
-// 4. Schedule Section (Opportunity Heatmap)
-// ---------------------------------------------------------------------------
-
 export function ScheduleSection({ data }: { data: CoachingData }) {
   const t = useT();
   const sched = data.scheduleOptimizer;
 
-  // Build 7x24 grid
   const grid = useMemo(() => {
     if (!sched) {
       return { cells: {}, maxOpp: 1 };
@@ -342,7 +318,6 @@ export function ScheduleSection({ data }: { data: CoachingData }) {
         <h2 className="text-xl font-bold text-white">{t('Schedule-Optimizer')}</h2>
       </div>
 
-      {/* Sweet Spots */}
       {sched.sweetSpots.length > 0 && (
         <div className="mb-6">
           <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Top Sweet-Spots (hohe Viewer, wenig Konkurrenz)')}</h3>
@@ -364,7 +339,6 @@ export function ScheduleSection({ data }: { data: CoachingData }) {
         </div>
       )}
 
-      {/* Opportunity Heatmap */}
       <div className="overflow-x-auto">
         <div className="min-w-[700px]">
           <div className="flex mb-1">
@@ -430,11 +404,6 @@ export function ScheduleSection({ data }: { data: CoachingData }) {
   );
 }
 
-
-// ---------------------------------------------------------------------------
-// 5. Title Coach
-// ---------------------------------------------------------------------------
-
 export function TitleSection({ data }: { data: CoachingData }) {
   const t = useT();
   const titles = data.titleAnalysis;
@@ -450,7 +419,6 @@ export function TitleSection({ data }: { data: CoachingData }) {
         <h2 className="text-xl font-bold text-white">{t('Titel-Coach')}</h2>
       </div>
 
-      {/* Title Variety Gauge */}
       {titles.varietyPct !== undefined && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <div className="text-center p-3 rounded-lg bg-background/50">
@@ -475,7 +443,6 @@ export function TitleSection({ data }: { data: CoachingData }) {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Your Titles */}
         <div>
           <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Deine Titel (nach Ø Viewer)')}</h3>
           <div className="space-y-2 max-h-64 overflow-y-auto">
@@ -499,7 +466,6 @@ export function TitleSection({ data }: { data: CoachingData }) {
           </div>
         </div>
 
-        {/* Category Top Titles + Missing Patterns */}
         <div>
           <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Kategorie-Top-Titel')}</h3>
           <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
@@ -532,11 +498,6 @@ export function TitleSection({ data }: { data: CoachingData }) {
   );
 }
 
-
-// ---------------------------------------------------------------------------
-// 6. Tag Optimization
-// ---------------------------------------------------------------------------
-
 export function TagSection({ data }: { data: CoachingData }) {
   const t = useT();
   const tags = data.tagOptimization;
@@ -553,7 +514,6 @@ export function TagSection({ data }: { data: CoachingData }) {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Your Tags */}
         <div>
           <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Deine Tag-Kombinationen')}</h3>
           <div className="space-y-2">
@@ -569,7 +529,6 @@ export function TagSection({ data }: { data: CoachingData }) {
           </div>
         </div>
 
-        {/* Category Tags + Missing */}
         <div>
           <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Kategorie-Beste Tags')}</h3>
           <div className="space-y-2 mb-4">
@@ -614,11 +573,6 @@ export function TagSection({ data }: { data: CoachingData }) {
     </Rise>
   );
 }
-
-
-// ---------------------------------------------------------------------------
-// 7. Retention Curves
-// ---------------------------------------------------------------------------
 
 export function RetentionSection({ data }: { data: CoachingData }) {
   const t = useT();
@@ -702,11 +656,6 @@ export function RetentionSection({ data }: { data: CoachingData }) {
   );
 }
 
-
-// ---------------------------------------------------------------------------
-// 8. Cross-Community
-// ---------------------------------------------------------------------------
-
 export function CommunitySection({ data }: { data: CoachingData }) {
   const t = useT();
   const comm = data.crossCommunity;
@@ -768,11 +717,6 @@ export function CommunitySection({ data }: { data: CoachingData }) {
   );
 }
 
-
-// ---------------------------------------------------------------------------
-// 9. Double-Stream Warning
-// ---------------------------------------------------------------------------
-
 export function DoubleStreamSection({ data }: { data: CoachingData }) {
   const t = useT();
   const ds = data.doubleStreamDetection;
@@ -820,11 +764,6 @@ export function DoubleStreamSection({ data }: { data: CoachingData }) {
   );
 }
 
-
-// ---------------------------------------------------------------------------
-// 11. Raid-Netzwerk
-// ---------------------------------------------------------------------------
-
 export function RaidNetworkSection({ data }: { data: CoachingData }) {
   const { t, locale } = useLanguage();
   const raids = data.raidNetwork;
@@ -845,7 +784,6 @@ export function RaidNetworkSection({ data }: { data: CoachingData }) {
         <h2 className="text-xl font-bold text-white">{t('Raid-Netzwerk')}</h2>
       </div>
 
-      {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div className="text-center p-3 rounded-lg bg-background/50">
           <div className="text-2xl font-bold text-white">{raids.totalSent}</div>
@@ -867,7 +805,6 @@ export function RaidNetworkSection({ data }: { data: CoachingData }) {
         </div>
       </div>
 
-      {/* Viewer Balance */}
       <div className="grid grid-cols-2 gap-4 mb-6">
         <div className="p-3 rounded-lg bg-background/50">
           <div className="text-sm text-text-secondary mb-1">{t('Ø Viewer gesendet')}</div>
@@ -881,7 +818,6 @@ export function RaidNetworkSection({ data }: { data: CoachingData }) {
         </div>
       </div>
 
-      {/* Partner List */}
       <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Raid-Partner')}</h3>
       <div className="space-y-2 max-h-72 overflow-y-auto">
         {raids.partners.slice(0, 15).map((p, i) => {
@@ -928,11 +864,6 @@ export function RaidNetworkSection({ data }: { data: CoachingData }) {
   );
 }
 
-
-// ---------------------------------------------------------------------------
-// 12. Peer-Vergleich
-// ---------------------------------------------------------------------------
-
 function metricLabels(): Record<string, string> {
   return {
     avgViewers: tr('Ø Viewer'),
@@ -967,7 +898,6 @@ export function PeerComparisonSection({ data }: { data: CoachingData }) {
           {t('Du bist in den Top {percentile}% aller Deadlock-Streamer (Ranking nach Ø Viewern).', { percentile })}
         </div>
 
-      {/* Per-Metric Rankings */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
         {Object.entries(pc.metricsRanked).map(([metric, ranking]) => (
           <div key={metric} className="p-3 rounded-lg bg-background/50">
@@ -985,7 +915,6 @@ export function PeerComparisonSection({ data }: { data: CoachingData }) {
                 {typeof ranking.value === 'number' ? (ranking.value % 1 === 0 ? ranking.value : ranking.value.toFixed(1)) : ranking.value}
               </span>
             </div>
-            {/* Mini rank bar */}
             <div className="mt-2 bg-background rounded-full h-1.5 overflow-hidden">
               <div
                 className={`h-full rounded-full ${
@@ -999,7 +928,6 @@ export function PeerComparisonSection({ data }: { data: CoachingData }) {
         ))}
       </div>
 
-      {/* Gap to Next */}
       {pc.gapToNext && (
         <div className="p-4 rounded-lg bg-accent/5 border border-accent/20 mb-6">
           <h3 className="text-sm font-medium text-accent mb-2">{t('Abstand zum Naechsten: {login}', { login: pc.gapToNext.login })}</h3>
@@ -1020,7 +948,6 @@ export function PeerComparisonSection({ data }: { data: CoachingData }) {
         </div>
       )}
 
-      {/* Similar + Aspirational Peers */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {pc.similarPeers.length > 0 && (
           <div>
@@ -1058,11 +985,6 @@ export function PeerComparisonSection({ data }: { data: CoachingData }) {
   );
 }
 
-
-// ---------------------------------------------------------------------------
-// 13. Konkurrenz-Dichte
-// ---------------------------------------------------------------------------
-
 export function CompetitionDensitySection({ data }: { data: CoachingData }) {
   const t = useT();
   const comp = data.competitionDensity;
@@ -1080,7 +1002,6 @@ export function CompetitionDensitySection({ data }: { data: CoachingData }) {
         <h2 className="text-xl font-bold text-white">{t('Konkurrenz-Dichte')}</h2>
       </div>
 
-      {/* Sweet Spots */}
       {comp.sweetSpots.length > 0 && (
         <div className="mb-6">
           <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Beste Gelegenheiten (niedrige Konkurrenz, hohe Viewer)')}</h3>
@@ -1102,7 +1023,6 @@ export function CompetitionDensitySection({ data }: { data: CoachingData }) {
         </div>
       )}
 
-      {/* Hourly Density Chart */}
       <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Streamer pro Stunde (UTC)')}</h3>
       <ResponsiveContainer width="100%" height={250}>
         <BarChart data={comp.hourly}>
@@ -1135,7 +1055,6 @@ export function CompetitionDensitySection({ data }: { data: CoachingData }) {
         </BarChart>
       </ResponsiveContainer>
 
-      {/* Weekly Density */}
       {comp.weekly.length > 0 && (
         <div className="mt-6">
           <h3 className="text-sm font-medium text-text-secondary mb-3">{t('Wochentag-Verteilung')}</h3>
