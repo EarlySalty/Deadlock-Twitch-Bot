@@ -44,6 +44,8 @@ pub mod approval;
 pub mod approval_worker;
 #[cfg(test)]
 mod autopilot_contract_tests;
+#[path = "autopilot_schedule/runner.rs"]
+pub mod autopilot_runner;
 pub mod autopilot_settings;
 pub mod batch;
 pub mod capabilities;
