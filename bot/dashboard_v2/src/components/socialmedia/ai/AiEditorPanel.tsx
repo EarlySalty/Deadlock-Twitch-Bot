@@ -88,7 +88,7 @@ function Review({ job, selectedVersion, onVersionChange }: { job: AiJobView; sel
         </select>
       </label>}
     </div>
-    {newest && newest.id !== version?.id && <p className="social-ai-caution" role="status">Die neueste Fassung ist nicht abspielbar. Die letzte nutzbare Fassung bleibt zur Sichtung erhalten.</p>}
+    {newest && !chooseUsableVersion([newest]) && <p className="social-ai-caution" role="status">Die neueste Fassung ist nicht abspielbar. Die letzte nutzbare Fassung bleibt zur Sichtung erhalten.</p>}
     <div className="social-ai-video-grid">
       <figure><figcaption><span>Originalclip</span><strong>{duration(job.original_duration_ms)}</strong></figcaption><VideoPlayer key={`source-${job.id}-${job.original_url}`} url={job.original_url} label="Originalclip abspielen" shape="source" /></figure>
       <figure><figcaption><span>Bearbeitete Fassung {version ? version.version_no : ''}</span><strong>{duration(version ? version.duration_ms : job.output_duration_ms)}</strong></figcaption><VideoPlayer key={`output-${job.id}-${version?.id}`} url={version?.file_url ?? null} label="Bearbeitetes Video abspielen" shape="output" /></figure>

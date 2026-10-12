@@ -67,6 +67,16 @@ impl ValidatedPlan {
     pub fn decisions(&self) -> &EditPlan {
         &self.plan
     }
+
+    pub(super) fn preserves_highlight(&self, start_ms: u64, end_ms: u64) -> bool {
+        preserves_highlight(&self.plan.kept_intervals, start_ms, end_ms)
+    }
+}
+
+fn preserves_highlight(intervals: &[KeptInterval], start_ms: u64, end_ms: u64) -> bool {
+    intervals
+        .iter()
+        .any(|interval| interval.start_ms <= start_ms && interval.end_ms >= end_ms)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -178,9 +188,7 @@ pub fn validate_plan(
             return Err(EditorError::new(ErrorCode::InvalidHighlight));
         }
         valid_decision_text(&highlight.observation, limits.max_text_bytes)?;
-        if !plan.kept_intervals.iter().any(|interval| {
-            interval.start_ms <= highlight.start_ms && interval.end_ms >= highlight.end_ms
-        }) {
+        if !preserves_highlight(&plan.kept_intervals, highlight.start_ms, highlight.end_ms) {
             return Err(EditorError::new(ErrorCode::HighlightRemoved));
         }
     }
