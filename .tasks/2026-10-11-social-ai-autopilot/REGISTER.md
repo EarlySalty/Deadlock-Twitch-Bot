@@ -7,7 +7,7 @@ Stage: riesig. Base origin/main `3862b764a`. User allowed GPT workers on 2026-10
 
 | Pkg | Thread ID | Creator | Start proof | Harness | Model | Status | Worktree | Branch | HEAD | Last report |
 |---|---|---|---|---|---|---|---|---|---|---|
-| P1 | 81c8c48a-fde2-4def-b87a-0e1c2eaa34b9 | cc9b61b9 | t3-harness new 04:31:40Z, running | claudeAgent | gpt-6.1-sol ultracode | running | /home/nathanael/.worktrees/tb-social-autopilot | feat/social-autopilot-20261011 | 03caeb060 | M0 LIVE 33656f2c; M1 import wip backup 03caeb06, pre-gate |
+| P1 | 81c8c48a-fde2-4def-b87a-0e1c2eaa34b9 | cc9b61b9 | t3-harness new 04:31:40Z, running | claudeAgent | gpt-6.1-sol ultracode | running | /home/nathanael/.worktrees/tb-social-autopilot | feat/social-autopilot-20261011 | d5c30b730 | M0 LIVE 33656f2c; M1a import backend on main d5c30b73 (gate ALLOW), deploy pending; tracks B/C active |
 | P2 | 92e11d80-06bd-4765-aa75-41d5b8fe1757 | cc9b61b9 | t3-harness new 04:31:40Z, running | claudeAgent | gpt-6.1-sol ultracode | running | /home/nathanael/.worktrees/tb-social-ai (+ tb-social-ai-*) | sub-branches social-ai-core 6b5c62fd7, jobs b1c39b55f, provider 8a962fe0e, review-ui 35847ff6c, stt-deploy 1056488f6 | 361e1fcbd | M1 runtime wip on feat/social-ai-m1-runtime-20261011; resolver fixed (58 pass), H.264 proxy + static lease adoption written, pre-gate |
 | P3 | 10eb1247-91e9-4677-b3b3-4bcdba076044 | cc9b61b9 | t3-harness new 04:31:40Z, running | claudeAgent | gpt-6.1-sol ultracode | running | /home/nathanael/.worktrees/tb-social-dash | feat/social-dashboard-redesign-20261011 (fix/p3-social-responsive fafd98e75) | 5e7bf62f7 | M1 LIVE at 33656f2c (screenshots /tmp/p3-social-responsive-20261011, checked by orchestrator); idle until P1/P2 land for M2 |
 
