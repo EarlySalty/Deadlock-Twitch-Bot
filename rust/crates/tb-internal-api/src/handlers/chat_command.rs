@@ -5,17 +5,16 @@
 //!
 //! Aktuell unterstützt: `!invite`
 //!   - Unabhängig vom Streamstatus und der Kategorie verfügbar.
-//!   - Invite-URL: zuerst streamer-spezifisch aus `twitch_streamer_invites`,
-//!     dann Env-Var `PROMO_DISCORD_INVITE` oder globaler Default.
+//!   - Invite-URL vom Heimat-Server des Kanals (Paket R): zuerst
+//!     streamer-spezifisch aus `twitch_streamer_invites`, dann beim deutschen
+//!     Server Konfiguration `discord.chat.promo_invite` oder die feste
+//!     Community-Einladung, bei anderen Servern deren Server-Einladung.
 
 use axum::{extract::State, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use tb_chat::{server_invite, HomeInviteResolver, InvitePurpose, StreamerKey};
 use tb_http_core::ApiError;
-
-/// Env-Var-Name für den globalen Discord-Invite-Fallback.
-/// Python-paritärer Default-Fallback für den globalen Discord-Invite.
-const DEFAULT_PROMO_DISCORD_INVITE: &str = "https://discord.gg/z5TfVHuQq2";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,37 +67,37 @@ pub async fn handler(
 }
 
 async fn get_invite_url(pool: &PgPool, channel_login: &str) -> Result<Option<String>, ApiError> {
-    // 1. Streamer-spezifischer Invite (twitch_streamer_invites).
-    let row = sqlx::query!(
-        r#"SELECT invite_url AS "invite_url!"
-           FROM twitch_streamer_invites
-          WHERE LOWER(streamer_login) = $1
-          LIMIT 1"#,
-        channel_login
-    )
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("chat_command invite-Query fehlgeschlagen für {channel_login}: {e}");
-        ApiError::internal()
-    })?;
+    let key = StreamerKey::Login(channel_login);
+    let lookup = HomeInviteResolver::new(pool.clone(), None);
+    let Some(home) = lookup.home_guild(key).await else {
+        return Ok(None);
+    };
 
-    if let Some(row) = row {
-        let url = row.invite_url;
-        if !url.trim().is_empty() {
-            return Ok(Some(url));
-        }
+    // 1. Streamer-spezifischer Invite (twitch_streamer_invites), passend zum Heimat-Server.
+    let url = lookup
+        .fitting_personal_invite(&home, key)
+        .await
+        .map_err(|e| {
+            tracing::error!("chat_command invite-Query fehlgeschlagen für {channel_login}: {e}");
+            ApiError::internal()
+        })?;
+    if url.is_some() {
+        return Ok(url);
     }
 
-    // 2. Globaler Fallback aus Env oder Python-paritärem Default.
-    let config = tb_config::runtime::settings().map_err(|_| ApiError::internal())?;
-    let configured = &config.discord.chat.promo_invite;
-    let invite = configured
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(DEFAULT_PROMO_DISCORD_INVITE);
-    Ok(Some(invite.to_string()))
+    // 2. Rückfall des Heimat-Servers. Die Konfiguration gilt nur für den
+    //    deutschen Server und wird wie bisher erst hier gelesen.
+    let community_override = if home.is_community() {
+        let config = tb_config::runtime::settings().map_err(|_| ApiError::internal())?;
+        config.discord.chat.promo_invite.clone()
+    } else {
+        None
+    };
+    Ok(server_invite(
+        &home,
+        InvitePurpose::Promo,
+        community_override.as_deref(),
+    ))
 }
 
 #[cfg(test)]

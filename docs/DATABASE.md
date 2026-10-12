@@ -251,6 +251,48 @@ Welcher Streamer wurde mit welchem Invite eingeladen.
 ### twitch_partner_outreach
 Outreach-Log fuer Partner-Ansprache.
 
+### Server-Netzwerk: discord_guilds / streamer_guilds (Multi-Server, Paket R)
+
+Migration `rust/migrations/20261012120000_multiserver_guilds_language.sql`
+(minimales Guild-Schema nach Plan 2026-10-12, Abschnitt 4.2). Gelesen wird
+über `tb_db::network`, die Regeln stehen in `tb_domain::network`.
+
+`discord_guilds` — ein Discord-Server, der den Bot nutzt:
+
+| Spalte | Inhalt |
+|--------|--------|
+| `guild_id` | Discord-Server-ID (PK) |
+| `name` | Anzeigename |
+| `language` | Sprache des Servers (`de`, `en`, …), Rückfall für Streamer ohne bekannte Kanalsprache |
+| `announce_channel_id`, `streamer_role_id`, `ping_role_id`, `alert_channel_id` | Kanäle und Rollen des Servers (für den deutschen Server füllt Paket G sie aus der Konfiguration, bis dahin `NULL`) |
+| `promo_invite_url` | Discord-Einladung, mit der der Server im Twitch-Chat seiner Streamer wirbt |
+| `auto_partner_default` | neue Streamer werden automatisch Partner des Servers (Standard an) |
+| `cross_server_raids` | Netzwerk-Schalter: Raids über Servergrenzen innerhalb derselben Sprache (Standard an) |
+| `ai_features` | KI-Funktionen mit Streamerbezug (Standard aus, deutscher Server an) |
+| `installed_at`, `removed_at`, `status` | Lebenszyklus (`active` / `removed`) |
+
+Die Migration legt den deutschen Community-Server (`1289721245281292288`,
+Sprache `de`, Einladung `https://discord.gg/z5TfVHuQq2`, KI an) an.
+
+`streamer_guilds` — Zugehörigkeit eines Streamers zu einem Server, Schlüssel
+(`twitch_user_id`, `guild_id`): `active`, `deactivated_by`, `deactivated_at`,
+`joined_at`, `source` (`onboarding`, `migration`, `admin`). Alle Partner mit
+`twitch_partners.status = 'active'` bekommen beim Migrieren eine aktive Zeile
+für den deutschen Server.
+
+Regeln: Ein Streamer ganz ohne Zeile gehört zum deutschen Server. Heimat-Server
+ist der früheste Server mit aktiver Zeile, dessen Bot nicht entfernt ist.
+Werbung nutzt nur Einladungen des Heimat-Servers; für den deutschen Server
+gilt dabei weiter zuerst `discord.chat.promo_invite` aus der Konfiguration.
+Raids siehe `docs/funktionsweise/raids.md`. Der neue Partnerbegriff
+(Partner = mindestens eine aktive Zeile) kommt erst mit Paket G.
+
+`twitch_streamer_identities.broadcaster_language` (+
+`broadcaster_language_updated_at`): Kanalsprache je Streamer, vom Poller aus
+der Stream-Sprache und von EventSub `channel.update` gepflegt (nur bei
+Änderung geschrieben), Startwert aus `twitch_channel_updates` und
+`twitch_stream_sessions`.
+
 ### Community-Punkte (Community-Streamer-Brücke, Paket B)
 
 Migration `rust/migrations/20261001100000_community_points.sql`. Der tb-bot

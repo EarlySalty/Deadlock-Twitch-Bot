@@ -191,6 +191,7 @@ fn partner(user_id: &str, login: &str) -> OnlineCandidate {
             followers_total: 0,
             started_at: Some("2026-06-10T17:00:00+00:00".to_string()),
             game_name: Some("Deadlock".to_string()),
+            language: Some("de".to_string()),
         },
     }
 }
@@ -243,15 +244,21 @@ impl ArrivalReadiness for StubReadiness {
 
 struct StubFallback {
     streams: Vec<FairnessCandidate>,
+    /// Abgefragte (Sprache, Limit) je Aufruf.
+    requests: Arc<Mutex<Vec<(String, usize)>>>,
 }
 #[async_trait::async_trait]
 impl FallbackStreamSource for StubFallback {
     async fn category_streams(
         &self,
         _category_id: &str,
-        _language: &str,
-        _limit: usize,
+        language: &str,
+        limit: usize,
     ) -> Result<Vec<FairnessCandidate>, String> {
+        self.requests
+            .lock()
+            .unwrap()
+            .push((language.to_string(), limit));
         Ok(self.streams.clone())
     }
 }
@@ -321,6 +328,7 @@ struct Harness {
     pending: Arc<Mutex<PendingRaidStore>>,
     api: Arc<TargetedRaidApi>,
     readiness: Arc<StubReadiness>,
+    fallback_requests: Arc<Mutex<Vec<(String, usize)>>>,
 }
 
 fn build(
@@ -378,6 +386,7 @@ fn build_with_enricher(
     let readiness = Arc::new(StubReadiness {
         calls: Mutex::new(Vec::new()),
     });
+    let fallback_requests = Arc::new(Mutex::new(Vec::new()));
     let pipeline = AutoRaidPipeline::new(
         RaidBlacklistStore::new(pool.clone()),
         ScoreStore::new(pool.clone()),
@@ -388,6 +397,7 @@ fn build_with_enricher(
         readiness.clone(),
         Some(Arc::new(StubFallback {
             streams: fallback_streams,
+            requests: fallback_requests.clone(),
         })),
         follower_enricher,
         Some(tb_raid::OutreachBoostStore::new(pool.clone())),
@@ -397,6 +407,7 @@ fn build_with_enricher(
         pending,
         api,
         readiness,
+        fallback_requests,
     }
 }
 
@@ -408,6 +419,7 @@ fn request(partners: Vec<OnlineCandidate>) -> AutoRaidRequest {
         stream_duration_sec: 3600,
         partners,
         category_id: Some("cat-deadlock".to_string()),
+        fallback_language: None,
         offline_trigger_ts: Some(1000.0),
         reason: "auto_raid_on_offline".to_string(),
         respect_soft_raid_blacklist: true,
@@ -882,6 +894,33 @@ async fn partner_lehnt_ab_wird_uebersprungen_fallback_uebernimmt() {
         .unwrap();
     assert_eq!(attempts, 2);
     assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["200", "300"]);
+    // Ohne Sprachangabe bleibt der Kategorie-Ersatz bei einer Abfrage `de`, Limit 50.
+    assert_eq!(
+        h.fallback_requests.lock().unwrap().clone(),
+        vec![("de".to_string(), 50)]
+    );
+}
+
+#[tokio::test]
+async fn kategorie_ersatz_nutzt_die_sprache_des_raiders() {
+    let pool = pool_or_skip!("t6w_pipe_fallback_sprache");
+    seed_source_token(&pool, "100").await;
+    let h = build(&pool, HashMap::new(), vec![fairness("300", "en_streamer")]);
+
+    let mut req = request(Vec::new());
+    req.fallback_language = Some("en".to_string());
+    let outcome = h.pipeline.run(&req).await;
+    assert_eq!(
+        outcome,
+        AutoRaidPipelineOutcome::Started {
+            target_login: "en_streamer".to_string(),
+            is_partner_raid: false,
+        }
+    );
+    assert_eq!(
+        h.fallback_requests.lock().unwrap().clone(),
+        vec![("en".to_string(), 50)]
+    );
 }
 
 #[tokio::test]

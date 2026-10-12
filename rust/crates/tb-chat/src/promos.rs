@@ -467,8 +467,11 @@ fn known_chat_bot_not_in_clause(column: &str, start: usize) -> String {
 /// Der Orchestrator verdrahtet die konkrete Implementierung.
 #[async_trait]
 pub trait InviteResolver: Send + Sync {
-    /// Liefert (invite_url, is_specific). Fallback: PROMO_DISCORD_INVITE, false.
-    async fn resolve_invite(&self, channel_login: &str) -> (String, bool);
+    /// Liefert (invite_url, is_specific). Deutscher Server: Fallback
+    /// PROMO_DISCORD_INVITE, false. `None` nur für Streamer anderer Server
+    /// ohne Server-Einladung (Paket R: keine globale Ersatz-Einladung) —
+    /// dann entfällt die Promo.
+    async fn resolve_invite(&self, channel_login: &str) -> Option<(String, bool)>;
 }
 
 /// Partner-Channel-Check für Chat-Tracking. (promos.py:1422: `is_partner_channel_for_chat_tracking`).
@@ -501,13 +504,13 @@ pub trait PitchReviewSink: Send + Sync {
 // Default-Implementierungen
 // ---------------------------------------------------------------------------
 
-/// Fallback-InviteResolver: gibt immer den globalen Discord-Invite zurück.
+/// Fallback-InviteResolver: gibt immer den Community-Invite zurück.
 pub struct StaticInviteResolver;
 
 #[async_trait]
 impl InviteResolver for StaticInviteResolver {
-    async fn resolve_invite(&self, _channel_login: &str) -> (String, bool) {
-        (DEFAULT_PROMO_DISCORD_INVITE.to_string(), false)
+    async fn resolve_invite(&self, _channel_login: &str) -> Option<(String, bool)> {
+        Some((DEFAULT_PROMO_DISCORD_INVITE.to_string(), false))
     }
 }
 
@@ -1882,7 +1885,22 @@ impl PromoEngine {
         if self.promo_blocked_by_plan_or_flag(login).await {
             return false;
         }
-        let (invite, is_specific) = self.invite_resolver.resolve_invite(login).await;
+        let Some((invite, is_specific)) = self.invite_resolver.resolve_invite(login).await else {
+            // Streamer eines anderen Servers ohne Server-Einladung: keine
+            // Werbung für fremde Server (Paket R).
+            self.record_pitch_log(PitchLogEntry {
+                channel_login: login.to_string(),
+                target_user_id: None,
+                pfad: "periodic",
+                occasion: None,
+                trigger_text: None,
+                generated_text: None,
+                reject_reason: Some("kein_invite".to_string()),
+                sent_at: None,
+            })
+            .await;
+            return false;
+        };
 
         let Some((text, color)) = self.build_promo_text(login, &invite).await else {
             self.record_pitch_log(PitchLogEntry {
@@ -4704,6 +4722,40 @@ mod db_tests {
             Arc::new(super::tests::MockApi::default()),
             Arc::new(NoopSuppressionCheck),
         )
+    }
+
+    /// Streamer eines anderen Servers ohne Server-Einladung (Paket R).
+    struct OhneEinladung;
+
+    #[async_trait]
+    impl InviteResolver for OhneEinladung {
+        async fn resolve_invite(&self, _channel_login: &str) -> Option<(String, bool)> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn ohne_einladung_des_heimat_servers_keine_promo() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        let api = Arc::new(super::tests::MockApi::default());
+        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            .set_invite_resolver(Arc::new(OhneEinladung));
+
+        assert!(
+            !engine
+                .send_promo_message("englishkanal", "en-id", Instant::now(), "test")
+                .await
+        );
+        assert_eq!(api.announcement_count().await, 0);
+        let grund: Option<String> = sqlx::query_scalar(
+            "SELECT reject_reason FROM twitch_promo_pitch_log WHERE channel_login = 'englishkanal'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(grund.as_deref(), Some("kein_invite"));
     }
 
     #[tokio::test]

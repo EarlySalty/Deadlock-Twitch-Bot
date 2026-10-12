@@ -32,6 +32,7 @@ whoami              = { workspace = true }
 tb-config           = { workspace = true }
 tb-crypto           = { workspace = true }
 tb-db               = { workspace = true }
+tb-domain           = { workspace = true }
 tb-internal-api     = { workspace = true }
 tb-chat            = { workspace = true }
 tb-knowledge        = { workspace = true }
