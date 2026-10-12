@@ -193,7 +193,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-function admin<T>(suffix: string, init?: RequestInit) {
+export function admin<T>(suffix: string, init?: RequestInit) {
   return request<T>(`${ADMIN_API_BASE}${suffix}`, init);
 }
 
@@ -991,7 +991,7 @@ async function resolveJsonCsrfToken(body: Record<string, unknown>): Promise<stri
   throw new ApiError('CSRF-Token fehlt.', 403);
 }
 
-async function postAdminJson<T, TBody extends object = Record<string, unknown>>(path: string, body: TBody) {
+export async function postAdminJson<T, TBody extends object = Record<string, unknown>>(path: string, body: TBody) {
   const normalizedBody = coerceRecord(body);
   const csrfToken = await resolveJsonCsrfToken(normalizedBody);
   const payload = { ...normalizedBody, csrf_token: csrfToken };

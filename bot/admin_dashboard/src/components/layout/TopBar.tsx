@@ -24,6 +24,9 @@ const BREADCRUMB_LABELS: Record<string, string> = {
   chat: 'Chat Actions',
   content: 'Content & Comms',
   announcements: 'Ankündigungen',
+  'social-ai': 'KI-Videos',
+  usage: 'Verbrauch & Kosten',
+  limits: 'Verarbeitungsgrenzen',
   roadmap: 'Roadmap',
   'caster-overlay': 'Caster-Overlay',
   changelog: 'Changelog',
@@ -77,6 +80,8 @@ export function TopBar({ auth }: TopBarProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const breadcrumbs = buildBreadcrumbs(location.pathname);
+  const socialAiPage = location.pathname.includes('/content/social-ai');
+  const separateBreadcrumbs = socialAiPage || location.pathname.endsWith('/content/announcements');
   const logoutHref = auth?.user?.authType === 'discord_admin' ? '/twitch/auth/discord/logout' : '/twitch/auth/logout';
   const [query, setQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -140,8 +145,8 @@ export function TopBar({ auth }: TopBarProps) {
 
   return (
     <header className={`glass ${location.pathname.endsWith('/content/announcements') ? 'lg:sticky' : 'sticky'} top-4 z-20 rounded-[1.8rem] px-5 py-4`}>
-      <div className={`grid gap-4 lg:items-center ${location.pathname.endsWith('/content/announcements') ? 'lg:grid-cols-[minmax(0,1fr)_auto]' : 'lg:grid-cols-[minmax(0,1fr)_minmax(0,32rem)_auto]'}`}>
-        <div className={`flex min-w-0 flex-wrap items-center gap-2 text-sm text-text-secondary ${location.pathname.endsWith('/content/announcements') ? 'lg:col-span-2' : ''}`}>
+      <div className={`grid gap-4 lg:items-center ${separateBreadcrumbs ? 'lg:grid-cols-[minmax(0,1fr)_auto]' : 'lg:grid-cols-[minmax(0,1fr)_minmax(0,32rem)_auto]'}`}>
+        <div className={`flex min-w-0 flex-wrap items-center gap-2 text-sm text-text-secondary ${separateBreadcrumbs ? 'lg:col-span-2' : ''}`}>
           {breadcrumbs.map((crumb, index) => (
             <div key={crumb.to} className="flex items-center gap-2">
               {index > 0 ? <ChevronRight className="h-4 w-4" /> : null}
@@ -249,9 +254,9 @@ export function TopBar({ auth }: TopBarProps) {
             {auth?.isLocalhost ? <Wifi className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4" />}
             {auth?.isLocalhost ? 'Localhost Admin' : 'Discord Admin'}
           </span>
-          <div className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm">
-            <span className="text-text-secondary">Angemeldet als </span>
-            <span className="font-semibold text-white">
+          <div className={`${socialAiPage ? 'min-w-0 rounded-2xl' : 'rounded-full'} border border-white/10 bg-white/5 px-4 py-2 text-sm`}>
+            <span className={`${socialAiPage ? 'block' : ''} text-text-secondary`}>Angemeldet als </span>
+            <span className={`${socialAiPage ? 'block break-words' : ''} font-semibold text-white`}>
               {auth?.user?.displayName || auth?.user?.login || 'Admin'}
             </span>
           </div>
