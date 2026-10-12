@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { fetchOverview, fetchSessionDetail } from '@/api/analytics';
 import { getHoldTone } from '@/utils/formatters';
+import { useLanguage, useT } from '@/context/LanguageContext';
 import type { DashboardOverview, StreamSession, TimeRange } from '@/types/analytics';
 
 interface SessionsProps {
@@ -14,6 +15,7 @@ interface SessionsProps {
 }
 
 export function Sessions({ streamer, days, onSessionClick }: SessionsProps) {
+  const { t, locale } = useLanguage();
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const { data, isLoading } = useQuery<DashboardOverview>({
@@ -34,42 +36,40 @@ export function Sessions({ streamer, days, onSessionClick }: SessionsProps) {
     return (
       <div className="flex flex-col items-center justify-center h-64">
         <AlertCircle className="w-12 h-12 text-text-secondary mb-4" />
-        <p className="text-text-secondary text-lg">Keine Sessions gefunden</p>
+        <p className="text-text-secondary text-lg">{t('Keine Sessions gefunden')}</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
-      {/* Stats Summary */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard
           icon={<Play className="w-5 h-5" />}
-          label="Total Streams"
+          label={t('Total Streams')}
           value={String(data.summary.streamCount ?? 0)}
           color="primary"
         />
         <StatCard
           icon={<Clock className="w-5 h-5" />}
-          label="Total Airtime"
+          label={t('Total Airtime')}
           value={`${data.summary.totalAirtime.toFixed(1)}h`}
           color="accent"
         />
         <StatCard
           icon={<Users className="w-5 h-5" />}
-          label="Ø Viewer"
-          value={Math.round(data.summary.avgViewers).toLocaleString('de-DE')}
+          label={t('Ø Viewer')}
+          value={Math.round(data.summary.avgViewers).toLocaleString(locale)}
           color="success"
         />
         <StatCard
           icon={<TrendingUp className="w-5 h-5" />}
           label="Peak"
-          value={data.summary.peakViewers.toLocaleString('de-DE')}
+          value={data.summary.peakViewers.toLocaleString(locale)}
           color="warning"
         />
       </div>
 
-      {/* Session List */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -129,6 +129,7 @@ interface SessionCardProps {
 }
 
 function SessionCard({ session, index, isExpanded, onToggle, onSessionClick }: SessionCardProps) {
+  const t = useT();
   const durationHours = (session.duration / 3600).toFixed(1);
   const holdPct = session.holdPct ?? 0;
   const holdTone = getHoldTone(holdPct);
@@ -142,7 +143,6 @@ function SessionCard({ session, index, isExpanded, onToggle, onSessionClick }: S
       transition={{ delay: Math.min(index * 0.03, 0.24) }}
       className="panel-card rounded-2xl overflow-hidden"
     >
-      {/* Session Header */}
       <div
         className="p-4 cursor-pointer hover:bg-background/50 transition-colors"
         onClick={onToggle}
@@ -158,7 +158,7 @@ function SessionCard({ session, index, isExpanded, onToggle, onSessionClick }: S
 
             <div>
               <div className="font-medium text-white truncate max-w-md" title={session.title}>
-                {session.title || 'Untitled Stream'}
+                {session.title || t('Untitled Stream')}
               </div>
               <div className="flex items-center gap-4 text-sm text-text-secondary mt-1">
                 <span className="flex items-center gap-1">
@@ -167,7 +167,7 @@ function SessionCard({ session, index, isExpanded, onToggle, onSessionClick }: S
                 </span>
                 <span className="flex items-center gap-1">
                   <Users className="w-3 h-3" />
-                  Ø {Math.round(session.avgViewers)}
+                  {t('Ø {viewers}', { viewers: Math.round(session.avgViewers) })}
                 </span>
                 <span className="flex items-center gap-1">
                   <TrendingUp className="w-3 h-3" />
@@ -182,8 +182,8 @@ function SessionCard({ session, index, isExpanded, onToggle, onSessionClick }: S
               <div className={`text-lg font-bold ${holdColor}`}>
                 {holdPct.toFixed(0)}%
               </div>
-              <div className="text-xs text-text-secondary">Bindung</div>
-              <div className="text-xs text-text-secondary">Ø Zuschauer / Peak</div>
+              <div className="text-xs text-text-secondary">{t('Bindung')}</div>
+              <div className="text-xs text-text-secondary">{t('Ø Zuschauer / Peak')}</div>
             </div>
             {onSessionClick && (
               <button
@@ -191,7 +191,7 @@ function SessionCard({ session, index, isExpanded, onToggle, onSessionClick }: S
                 className="text-xs text-primary hover:text-primary/80 flex items-center gap-1 transition-colors"
               >
                 <ExternalLink className="w-3 h-3" />
-                Details
+                {t('Details')}
               </button>
             )}
             {isExpanded ? (
@@ -203,7 +203,6 @@ function SessionCard({ session, index, isExpanded, onToggle, onSessionClick }: S
         </div>
       </div>
 
-      {/* Expanded Details */}
       <AnimatePresence>
         {isExpanded && (
           <SessionDetails sessionId={session.id} session={session} />
@@ -219,6 +218,7 @@ interface SessionDetailsProps {
 }
 
 function SessionDetails({ sessionId, session }: SessionDetailsProps) {
+  const t = useT();
   const { data: detail, isLoading } = useQuery({
     queryKey: ['sessionDetail', sessionId],
     queryFn: () => fetchSessionDetail(sessionId),
@@ -233,27 +233,24 @@ function SessionDetails({ sessionId, session }: SessionDetailsProps) {
       className="border-t border-border"
     >
       <div className="p-4 space-y-4">
-        {/* Retention Breakdown */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <MetricBox label="5 Min" value={`${session.retention5m.toFixed(0)}%`} />
-          <MetricBox label="10 Min" value={`${session.retention10m.toFixed(0)}%`} />
-          <MetricBox label="20 Min" value={`${session.retention20m.toFixed(0)}%`} />
-          <MetricBox label="Dropoff" value={`${session.dropoffPct.toFixed(0)}%`} isNegative />
+          <MetricBox label={t('5 Min')} value={`${session.retention5m.toFixed(0)}%`} />
+          <MetricBox label={t('10 Min')} value={`${session.retention10m.toFixed(0)}%`} />
+          <MetricBox label={t('20 Min')} value={`${session.retention20m.toFixed(0)}%`} />
+          <MetricBox label={t('Dropoff')} value={`${session.dropoffPct.toFixed(0)}%`} isNegative />
         </div>
 
-        {/* Viewer Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <MetricBox label="Start Viewer" value={String(session.startViewers ?? 0)} />
-          <MetricBox label="End Viewer" value={String(session.endViewers ?? 0)} />
-          <MetricBox label="Unique Chatter" value={String(session.totalChatterSessions ?? 0)} icon={<MessageCircle className="w-4 h-4" />} />
+          <MetricBox label={t('Start Viewer')} value={String(session.startViewers ?? 0)} />
+          <MetricBox label={t('End Viewer')} value={String(session.endViewers ?? 0)} />
+          <MetricBox label={t('Unique Chatter')} value={String(session.totalChatterSessions ?? 0)} icon={<MessageCircle className="w-4 h-4" />} />
           <MetricBox
-            label="Follower"
+            label={t('Follower')}
             value={`${session.followersEnd - session.followersStart >= 0 ? '+' : ''}${session.followersEnd - session.followersStart}`}
             isPositive={session.followersEnd >= session.followersStart}
           />
         </div>
 
-        {/* Timeline Chart */}
         {isLoading ? (
             <div className="h-32 flex items-center justify-center">
               <Loader2 className="w-5 h-5 animate-spin text-primary" />
@@ -281,7 +278,7 @@ function SessionDetails({ sessionId, session }: SessionDetailsProps) {
                   <Line
                     type="monotone"
                     dataKey="viewers"
-                    name="Viewer"
+                    name={t('Viewer')}
                     stroke="var(--color-primary)"
                     strokeWidth={2}
                     dot={false}
@@ -291,10 +288,9 @@ function SessionDetails({ sessionId, session }: SessionDetailsProps) {
             </div>
           ) : null}
 
-        {/* Top Chatters */}
         {detail?.chatters && detail.chatters.length > 0 && (
           <div>
-            <div className="text-sm font-medium text-text-secondary mb-2">Top Chatter dieser Session</div>
+            <div className="text-sm font-medium text-text-secondary mb-2">{t('Top Chatter dieser Session')}</div>
             <div className="flex flex-wrap gap-2">
               {detail.chatters.slice(0, 10).map((c: { login: string; messages: number }) => (
                 <span
