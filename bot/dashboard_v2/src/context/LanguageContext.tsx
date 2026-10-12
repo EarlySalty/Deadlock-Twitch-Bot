@@ -42,7 +42,13 @@ const LanguageContext = createContext<LanguageContextValue>({
   locale: LOCALES[DEFAULT_LANGUAGE],
 });
 
-export function LanguageProvider({ children }: { children: ReactNode }) {
+export function LanguageProvider({
+  children,
+  onLanguageChange,
+}: {
+  children: ReactNode;
+  onLanguageChange?: (next: Language) => void;
+}) {
   const [language, setLanguageState] = useState<Language>(() => readInitialLanguage());
   setActiveLanguage(language);
 
@@ -50,7 +56,8 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     setActiveLanguage(next);
     setLanguageState(next);
     storeLanguage(next);
-  }, []);
+    onLanguageChange?.(next);
+  }, [onLanguageChange]);
 
   // Screenreader und Browser-Uebersetzer richten sich nach dem lang-Attribut.
   useEffect(() => {

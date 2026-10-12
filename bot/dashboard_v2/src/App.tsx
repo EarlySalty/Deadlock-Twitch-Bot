@@ -123,6 +123,10 @@ const queryClient = new QueryClient({
   },
 });
 
+function refreshTranslatedQueries() {
+  void queryClient.invalidateQueries();
+}
+
 function normalizePathname(pathname: string): string {
   const normalized = pathname.replace(/\/+$/, '');
   return normalized || '/';
@@ -413,7 +417,7 @@ export default function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <LanguageProvider>
+      <LanguageProvider onLanguageChange={refreshTranslatedQueries}>
         <ErrorBoundary>
         <OnboardingProvider>
           {isCategoryRoute ? (
