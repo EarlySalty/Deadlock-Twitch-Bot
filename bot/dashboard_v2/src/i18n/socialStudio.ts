@@ -7,7 +7,7 @@ export const SOCIAL_STUDIO_EN: Record<string, string> = {
   'Zeitplan nicht erreichbar': 'Schedule unavailable',
   'Zeitplan wird geladen': 'Loading schedule',
   'Der bisherige Posting-Plan bleibt nutzbar. Der gemeinsame Auto-Pilot-Zeitplan ist noch nicht verfügbar.': 'The existing posting plan remains usable. The shared autopilot schedule is not available yet.',
-  'Verwalte vorhandene Clips oder hole neue von Twitch. Der historische Import ist noch nicht verfügbar.': 'Manage existing clips or fetch new clips from Twitch. Historical import is not available yet.',
+  'Auto-Pilot & Zeitplan': 'Autopilot & schedule',
   'Freigaben, geplante Posts und Plattformstatus im Überblick.': 'Approvals, scheduled posts and platform status at a glance.',
   'Produktion und Veröffentlichung planen. Laufende Arbeit bleibt erhalten.': 'Plan production and publication. Work already in progress is kept.',
   'Clips auswählen und Nachschub verwalten, ohne eine Bearbeitung zu starten.': 'Select clips and manage your pool without starting an edit.',
