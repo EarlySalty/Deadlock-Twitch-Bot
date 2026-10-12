@@ -11,7 +11,7 @@ use std::{
 
 use super::*;
 use crate::{
-    autopilot_settings::{ClipSort, ScheduleSlot},
+    autopilot_settings::{ClipDateFilter, ClipSort, ScheduleSlot},
     production_jobs::{self, JobCompletion, JobSource, NewProductionJob, ProductionMode},
 };
 
@@ -58,10 +58,14 @@ async fn pool() -> PgPool {
     sqlx::raw_sql("CREATE TABLE twitch_streamers (twitch_user_id TEXT PRIMARY KEY);
         INSERT INTO twitch_streamers VALUES ('owner'), ('other');
         CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, twitch_user_id TEXT, clip_id TEXT,
-            clip_url TEXT, clip_title TEXT, streamer_login TEXT, local_file_path TEXT, converted_file_path TEXT, status TEXT DEFAULT 'pending');
+            clip_url TEXT, clip_title TEXT, streamer_login TEXT, local_file_path TEXT, converted_file_path TEXT,
+            status TEXT DEFAULT 'pending', game_id TEXT DEFAULT '2132205352', source_kind TEXT DEFAULT 'twitch',
+            clip_thumbnail_url TEXT, duration_seconds DOUBLE PRECISION DEFAULT 15, created_at TIMESTAMPTZ DEFAULT NOW(),
+            uploaded_youtube BOOLEAN DEFAULT FALSE, uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_instagram BOOLEAN DEFAULT FALSE);
         CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]', approver_user_id TEXT, decided_at TIMESTAMPTZ);
         CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL,
-            status TEXT DEFAULT 'pending', scheduled_at TIMESTAMPTZ, title TEXT, description TEXT, hashtags TEXT)")
+            status TEXT DEFAULT 'pending', scheduled_at TIMESTAMPTZ, title TEXT, description TEXT, hashtags TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())")
         .execute(&pool).await.expect("legacy prerequisite schema");
     sqlx::raw_sql(include_str!(
         "../../../../migrations/20261011100000_social_autopilot_contracts.sql"
@@ -70,17 +74,17 @@ async fn pool() -> PgPool {
     .await
     .expect("actual M0 migration");
     sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261011101000_social_clip_pool.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("actual merged M1 migration");
+    sqlx::raw_sql(include_str!(
         "../../../../migrations/20261011102000_social_production_slot_guards.sql"
     ))
     .execute(&pool)
     .await
     .expect("actual M2 migration");
-    sqlx::raw_sql("CREATE TABLE social_clip_pool (twitch_user_id TEXT NOT NULL, clip_id TEXT NOT NULL,
-        clip_db_id BIGINT, source_created_at TIMESTAMPTZ NOT NULL, game_id TEXT NOT NULL,
-        source_metadata JSONB NOT NULL DEFAULT '{}', selected_at TIMESTAMPTZ, first_selected_at TIMESTAMPTZ,
-        processed_at TIMESTAMPTZ, published_at TIMESTAMPTZ, legacy_reserved BOOLEAN NOT NULL DEFAULT FALSE,
-        PRIMARY KEY(twitch_user_id, clip_id))")
-        .execute(&pool).await.expect("documented immutable M1 pool columns");
     pool
 }
 
@@ -111,9 +115,15 @@ fn utc(raw: &str) -> DateTime<Utc> {
 }
 
 async fn clip(pool: &PgPool, owner: &str, name: &str, created: DateTime<Utc>) -> i64 {
-    let id = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (twitch_user_id, clip_id, clip_title) VALUES ($1,$2,$2) RETURNING id::bigint")
-        .bind(owner).bind(name).fetch_one(pool).await.expect("owned clip");
-    sqlx::query("INSERT INTO social_clip_pool (twitch_user_id, clip_id, clip_db_id, source_created_at, game_id) VALUES ($1,$2,$3,$4,'2132205352')")
+    sqlx::query("SELECT social_clip_manage_owner($1)")
+        .bind(owner)
+        .execute(pool)
+        .await
+        .expect("actual managed pool owner");
+    let id = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (twitch_user_id, clip_id, clip_title, created_at, streamer_login, clip_url)
+        VALUES ($1,$2,$2,$3,$1,'https://clips.test/fixture') RETURNING id::bigint")
+        .bind(owner).bind(name).bind(created).fetch_one(pool).await.expect("owned clip");
+    sqlx::query("INSERT INTO social_clip_pool (twitch_user_id, clip_id, clip_db_id, source_created_at, game_id, source_metadata) VALUES ($1,$2,$3,$4,'2132205352','{}')")
         .bind(owner).bind(name).bind(id).bind(created).execute(pool).await.expect("pool fixture");
     id
 }
@@ -150,8 +160,18 @@ fn schedule() -> SchedulePatch {
     }
 }
 
-fn bounds(_: &AutopilotSettings, _: DateTime<Utc>) -> Result<ClipBounds, ScheduleError> {
-    Ok((utc("2025-01-01T00:00:00Z"), utc("2026-01-01T00:00:00Z")))
+async fn choose_year(pool: &PgPool, year: i32, clip_sort: ClipSort) {
+    crate::clip_pool::save_preferences(
+        pool,
+        "owner",
+        &crate::clip_pool::PoolPreferences {
+            clip_date_filter: ClipDateFilter::Year { year },
+            clip_sort,
+            timezone: "Europe/Berlin".into(),
+        },
+    )
+    .await
+    .expect("actual M1 preferences");
 }
 
 #[tokio::test]
@@ -202,6 +222,7 @@ async fn schedule_narrow_writes_preserve_other_settings_and_validate() {
 #[tokio::test]
 async fn planner_inside_lead_is_chronological_and_cancel_is_durable() {
     let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
     save_schedule(&pool, "owner", &schedule())
         .await
         .expect("schedule");
@@ -211,8 +232,8 @@ async fn planner_inside_lead_is_chronological_and_cancel_is_durable() {
     clip(&pool, "other", "foreign", utc("2025-01-01T00:00:00Z")).await;
     let now = utc("2026-10-11T18:00:00Z");
     let (first, second) = tokio::join!(
-        plan_owner(&pool, "owner", now, bounds),
-        plan_owner(&pool, "owner", now, bounds)
+        plan_owner(&pool, "owner", now),
+        plan_owner(&pool, "owner", now)
     );
     assert_eq!(
         first.expect("first planner").created + second.expect("second planner").created,
@@ -226,7 +247,7 @@ async fn planner_inside_lead_is_chronological_and_cancel_is_durable() {
     assert_eq!(jobs[0].scheduled_at, Some(utc("2026-10-12T16:00:00Z")));
     cancel(&pool, "owner", jobs[0].id).await.expect("cancel");
     assert_eq!(
-        plan_owner(&pool, "owner", now, bounds)
+        plan_owner(&pool, "owner", now)
             .await
             .expect("replacement")
             .created,
@@ -239,7 +260,7 @@ async fn planner_inside_lead_is_chronological_and_cancel_is_durable() {
             .expect("selected next");
     assert_eq!(active, next);
     assert_eq!(
-        plan_owner(&pool, "owner", now, bounds)
+        plan_owner(&pool, "owner", now)
             .await
             .expect("idempotent planner")
             .created,
@@ -414,6 +435,7 @@ async fn two_reviews_block_automatic_claims_but_not_manual_work() {
 #[tokio::test]
 async fn pause_resume_retimes_preserved_queue_without_missed_slot_bursts() {
     let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
     save_schedule(&pool, "owner", &schedule())
         .await
         .expect("schedule");
@@ -421,7 +443,7 @@ async fn pause_resume_retimes_preserved_queue_without_missed_slot_bursts() {
     clip(&pool, "owner", "two", utc("2025-01-02T00:00:00Z")).await;
     let before = utc("2026-10-11T18:00:00Z");
     assert_eq!(
-        plan_owner(&pool, "owner", before, bounds)
+        plan_owner(&pool, "owner", before)
             .await
             .expect("initial plan")
             .created,
@@ -438,7 +460,7 @@ async fn pause_resume_retimes_preserved_queue_without_missed_slot_bursts() {
     .await
     .expect("pause");
     let resume = before + Duration::days(21);
-    let paused = plan_owner(&pool, "owner", resume, bounds)
+    let paused = plan_owner(&pool, "owner", resume)
         .await
         .expect("paused plan");
     assert_eq!(paused.production_hold, Some(ProductionHold::Paused));
@@ -453,7 +475,7 @@ async fn pause_resume_retimes_preserved_queue_without_missed_slot_bursts() {
     )
     .await
     .expect("resume");
-    let report = plan_owner(&pool, "owner", resume, bounds)
+    let report = plan_owner(&pool, "owner", resume)
         .await
         .expect("normal resume");
     assert_eq!(report.retimed, 1);

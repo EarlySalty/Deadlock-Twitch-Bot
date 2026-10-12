@@ -5,7 +5,7 @@ use sqlx::{PgConnection, PgPool};
 use super::{hold, production_horizon, review_count_on, taken_on, ProductionHold, ScheduleError};
 use crate::autopilot_settings::{self, AutopilotSettings, ClipSort};
 
-pub type ClipBounds = (DateTime<Utc>, DateTime<Utc>);
+type ClipBounds = (DateTime<Utc>, DateTime<Utc>);
 
 #[derive(Debug, Default, Serialize)]
 pub struct PlanReport {
@@ -103,15 +103,11 @@ async fn save_report(
     Ok(())
 }
 
-pub async fn plan_owner<F>(
+pub async fn plan_owner(
     pool: &PgPool,
     owner: &str,
     now: DateTime<Utc>,
-    resolve_bounds: F,
-) -> Result<PlanReport, ScheduleError>
-where
-    F: FnOnce(&AutopilotSettings, DateTime<Utc>) -> Result<ClipBounds, ScheduleError>,
-{
+) -> Result<PlanReport, ScheduleError> {
     let mut tx = pool.begin().await?;
     autopilot_settings::lock_owner(&mut tx, owner).await?;
     let settings = autopilot_settings::load_on(&mut tx, owner).await?;
@@ -139,7 +135,9 @@ where
         return Ok(report);
     }
     report.retimed = retime_on(&mut tx, owner, &settings, now).await?;
-    let bounds = resolve_bounds(&settings, now)?;
+    let window = crate::clip_pool::bounds(&settings, now)
+        .map_err(|error| ScheduleError::Invalid(error.to_string()))?;
+    let bounds = (window.start, window.end);
     let mut taken = taken_on(&mut tx, owner).await?;
     let horizon = production_horizon(&settings, now);
     let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM social_production_jobs WHERE twitch_user_id = $1 AND status IN ('queued', 'running')")

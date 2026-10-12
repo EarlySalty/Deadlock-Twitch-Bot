@@ -43,7 +43,7 @@ async fn snapshot_uses_real_serial_clip_ids_and_hides_internal_checkpoints() {
 #[tokio::test]
 async fn newest_selection_is_strict_and_empty_pool_does_not_set_pause() {
     let pool = pool().await;
-    sqlx::query("INSERT INTO social_media_autopilot_settings (twitch_user_id, clip_sort) VALUES ('owner','newest_first')").execute(&pool).await.expect("chosen sorting");
+    choose_year(&pool, 2025, ClipSort::NewestFirst).await;
     save_schedule(&pool, "owner", &schedule())
         .await
         .expect("schedule");
@@ -52,7 +52,7 @@ async fn newest_selection_is_strict_and_empty_pool_does_not_set_pause() {
     clip(&pool, "owner", "excluded", utc("2026-01-01T00:00:00Z")).await;
     let now = utc("2026-10-11T18:00:00Z");
     assert_eq!(
-        plan_owner(&pool, "owner", now, bounds)
+        plan_owner(&pool, "owner", now)
             .await
             .expect("newest plan")
             .created,
@@ -65,11 +65,10 @@ async fn newest_selection_is_strict_and_empty_pool_does_not_set_pause() {
     cancel(&pool, "owner", selected[0].id)
         .await
         .expect("durable cancellation");
-    let report = plan_owner(&pool, "owner", now, |_, _| {
-        Ok((utc("1970-01-01T00:00:00Z"), utc("1971-01-01T00:00:00Z")))
-    })
-    .await
-    .expect("empty envelope");
+    choose_year(&pool, 1970, ClipSort::NewestFirst).await;
+    let report = plan_owner(&pool, "owner", now)
+        .await
+        .expect("actual empty M1 filter");
     assert_eq!(report.production_hold, Some(ProductionHold::EmptyPool));
     assert!(
         !autopilot_settings::load(&pool, "owner")
@@ -88,6 +87,7 @@ async fn newest_selection_is_strict_and_empty_pool_does_not_set_pause() {
 #[tokio::test]
 async fn zero_lead_uses_poll_window_and_changed_filters_preserve_queued_clips() {
     let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
     save_schedule(
         &pool,
         "owner",
@@ -102,14 +102,14 @@ async fn zero_lead_uses_poll_window_and_changed_filters_preserve_queued_clips() 
     let current = clip(&pool, "owner", "current", utc("2026-01-01T00:00:00Z")).await;
     let now = utc("2026-10-12T15:59:30Z");
     assert_eq!(
-        plan_owner(&pool, "owner", now - Duration::minutes(2), bounds)
+        plan_owner(&pool, "owner", now - Duration::minutes(2))
             .await
             .expect("before poll window")
             .created,
         0
     );
     assert_eq!(
-        plan_owner(&pool, "owner", now, bounds)
+        plan_owner(&pool, "owner", now)
             .await
             .expect("zero lead activation")
             .created,
@@ -119,7 +119,7 @@ async fn zero_lead_uses_poll_window_and_changed_filters_preserve_queued_clips() 
         .await
         .expect("first queued clip");
     assert_eq!(first[0].clip_id, old);
-    sqlx::query("UPDATE social_media_autopilot_settings SET clip_date_filter = '{\"kind\":\"year\",\"year\":2026}' WHERE twitch_user_id = 'owner'").execute(&pool).await.expect("changed pool filter");
+    choose_year(&pool, 2026, ClipSort::OldestFirst).await;
     save_schedule(
         &pool,
         "owner",
@@ -140,11 +140,9 @@ async fn zero_lead_uses_poll_window_and_changed_filters_preserve_queued_clips() 
     )
     .await
     .expect("next normal demand");
-    let report = plan_owner(&pool, "owner", now, |_, _| {
-        Ok((utc("2026-01-01T00:00:00Z"), now))
-    })
-    .await
-    .expect("new selection envelope");
+    let report = plan_owner(&pool, "owner", now)
+        .await
+        .expect("actual changed M1 filter");
     assert_eq!(report.created, 1);
     let after = production_jobs::list(&pool, "owner", 500)
         .await

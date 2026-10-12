@@ -3,7 +3,7 @@ mod queue;
 mod recovery;
 mod settings;
 
-pub use planner::{plan_owner, ClipBounds, PlanReport};
+pub use planner::{plan_owner, PlanReport};
 
 pub use queue::{cancel, mark_next, reorder};
 pub use recovery::{recover_after_lease, retry_or_review, Recovery};
