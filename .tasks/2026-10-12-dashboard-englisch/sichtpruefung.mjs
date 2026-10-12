@@ -124,7 +124,15 @@ try {
           await page.waitForFunction(() => !/(Lade |Wird geladen|Loading|wird geladen)/.test(document.body.innerText), null, { timeout: 25000 }).catch(() => {});
           await page.waitForTimeout(800);
           await page.evaluate(() => document.fonts.ready);
-          await page.screenshot({ path: `${output}/${name}.png`, fullPage: true });
+          const contentHeight = await page.evaluate(() => Math.max(
+            document.documentElement.scrollHeight,
+            ...[...document.querySelectorAll('*')]
+              .filter((el) => ['auto', 'scroll'].includes(getComputedStyle(el).overflowY))
+              .map((el) => el.scrollHeight),
+          ));
+          await page.setViewportSize({ width, height: Math.min(Math.max(contentHeight, 900), 9000) });
+          await page.waitForTimeout(400);
+          await page.screenshot({ path: `${output}/${name}.png` });
           results.push({ name, route, lang, width, ...(await measure(page, lang)), errors });
         } catch (error) {
           results.push({ name, route, lang, width, failed: String(error), errors });
