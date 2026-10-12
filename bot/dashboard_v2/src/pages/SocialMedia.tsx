@@ -32,6 +32,7 @@ import { VideoFullscreenButton } from '@/components/socialmedia/VideoFullscreenB
 import { WorkspaceDialog } from '@/components/socialmedia/WorkspaceDialog';
 import { PostingPlanDraft } from '@/components/socialmedia/PostingPlanDraft';
 import { PlatformStatusDialog } from '@/components/socialmedia/PlatformStatusDialog';
+import { ImportPoolPanel } from '@/components/socialmedia/autopilot/import-pool';
 import { socialAiClipFromSearch, socialViewFromSearch, socialViewSearch, socialWorkspaceDepartureAllowed, socialWorkspaceView, type AiEditorMountProps } from '@/components/socialmedia/studioNavigation';
 import { authorizationFact } from '@/components/socialmedia/platformPresentation';
 import {
@@ -723,7 +724,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
             {activeView === 'library' ? (
               <div className="studio-library-import">
                 {workspaceSlots?.libraryImport ?? (
-                  <p className="studio-workspace-note">{t('Verwalte vorhandene Clips oder hole neue von Twitch. Der historische Import ist noch nicht verfügbar.')}</p>
+                  <ImportPoolPanel twitchUserId={twitchUserId} />
                 )}
               </div>
             ) : (

@@ -8,6 +8,7 @@ import type { AdManagerResponse } from '@/api/adManager';
 import type { CatalogPlan } from '@/types/billing';
 import { DEFAULT_LAYOUT, type ClipApprovalRecord, type PostingPlan } from '../types/socialMedia';
 import type { SocialClipMitPosting, PlatformStatus } from '@/api/socialMedia';
+import { aiPreviewConsent, aiPreviewJob, type AiPreviewScenario } from '../components/socialmedia/ai/preview';
 
 const SOCIAL_WORKSPACE_PREVIEW = import.meta.env?.MODE === 'preview' || import.meta.env?.MODE === undefined;
 const NOW_ISO = '2026-04-22T09:30:00Z';
@@ -434,6 +435,25 @@ export function getPreviewSocialResponse(path: string, init: RequestInit = {}, s
       return new Response(body, { status: 409, headers: { 'Content-Type': 'application/json' } });
     }
     return json(error, 409);
+  }
+  if (SOCIAL_WORKSPACE_PREVIEW && pathname.startsWith('/twitch/social-media/api/ai/')) {
+    const owner = url.searchParams.get('twitch_user_id');
+    if (!owner || !['123456789', '987654321'].includes(owner)) return json({ error: 'channel_not_found' }, 403);
+    if (scenario === 'ai-error') return json({ error: 'preview_ai_unavailable' }, 503);
+    if (scenario === 'ai-loading') return new Response(new ReadableStream(), { headers: { 'Content-Type': 'application/json' } });
+    const aiScenario: AiPreviewScenario = scenario === 'ai-rendering' ? 'render' : scenario === 'ai-last-version' ? 'failed' : 'review';
+    if (pathname.endsWith('/consent')) return json(aiPreviewConsent(aiScenario));
+    const sample = aiPreviewJob(aiScenario);
+    const job = sample && {
+      ...sample,
+      clip_db_id: 1,
+      original_url: null,
+      versions: sample.versions.map((version) => ({ ...version, file_url: null })),
+      ...(scenario === 'ai-unknown-cost' ? { cost_basis: 'unknown', estimated_provider_cost_usd: null, measured_provider_cost_usd: null } : {}),
+    };
+    if (pathname.endsWith('/jobs')) return json({ items: scenario === 'ai-empty' || !job ? [] : [job] });
+    if (job && pathname.endsWith(`/jobs/${job.id}`)) return json(job);
+    return json({ error: 'preview_fixture_missing' }, 404);
   }
   const streamer = SOCIAL_WORKSPACE_PREVIEW && url.searchParams.get('twitch_user_id') === '987654321' ? 'preview_second' : 'midcore_live';
   if (pathname.endsWith('/access/me')) return json({ allowed: true, streamer: 'midcore_live', isAdmin: true });
