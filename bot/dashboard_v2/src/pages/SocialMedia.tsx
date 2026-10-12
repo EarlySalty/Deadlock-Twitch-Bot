@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType, type DragEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentType, type DragEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
@@ -32,7 +32,8 @@ import { VideoFullscreenButton } from '@/components/socialmedia/VideoFullscreenB
 import { WorkspaceDialog } from '@/components/socialmedia/WorkspaceDialog';
 import { PostingPlanDraft } from '@/components/socialmedia/PostingPlanDraft';
 import { PlatformStatusDialog } from '@/components/socialmedia/PlatformStatusDialog';
-import { socialAiClipFromSearch, socialViewFromSearch, socialViewSearch, socialWorkspaceView, type AiEditorMountProps } from '@/components/socialmedia/studioNavigation';
+import { ImportPoolPanel } from '@/components/socialmedia/autopilot/import-pool';
+import { socialAiClipFromSearch, socialViewFromSearch, socialViewSearch, socialWorkspaceDepartureAllowed, socialWorkspaceView, type AiEditorMountProps } from '@/components/socialmedia/studioNavigation';
 import { authorizationFact } from '@/components/socialmedia/platformPresentation';
 import {
   filterQueue,
@@ -106,17 +107,20 @@ import {
   type VodArchiveSettings,
 } from '@/types/socialMedia';
 
-interface SocialMediaProps {
+export interface SocialMediaProps {
   streamer: string;
   twitchUserId?: string;
   isAdmin?: boolean;
   aiEditor?: ComponentType<AiEditorMountProps>;
+  workspaceSlots?: {
+    automation?: ReactNode;
+    libraryImport?: ReactNode;
+    publishReview?: ReactNode;
+  };
 }
 
-/** Deutscher Text als Schluessel: ohne Uebersetzung bleibt er einfach stehen. */
 type Translate = (text: string, params?: Record<string, string | number>) => string;
 
-/** Die drei Plattformen in der Reihenfolge, in der sie auf der Karte stehen. */
 const PLATTFORMEN: SocialPlatform[] = ['youtube', 'tiktok', 'instagram'];
 
 /**
@@ -167,13 +171,14 @@ type EditMode = 'layout' | 'enrichment';
 const TAB_ICONS: Record<SocialMediaView, React.ComponentType<{ className?: string }>> = {
   pool: Layers3,
   plan: Calendar,
+  library: Film,
   ai: Clapperboard,
   layout: Crop,
   konten: SlidersHorizontal,
   archiv: Archive,
 };
 
-export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor: AiEditor }: SocialMediaProps) {
+export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor: AiEditor, workspaceSlots }: SocialMediaProps) {
   const queryClient = useQueryClient();
   const t = useT();
   const [statusFilter, setStatusFilter] = useState<QueueStage>('all');
@@ -417,12 +422,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
     approvalMutation.isPending || discardMutation.isPending || abbrechenMutation.isPending;
   const changeView = (next: SocialMediaView, clipDbId = selectedAiClipId) => {
     if (next === activeView && clipDbId === selectedAiClipId) return true;
-    if (document.querySelector('[data-saving="true"]')) return false;
-    if (
-      document.querySelector('[data-unsaved="true"]') &&
-      !window.confirm(t('Ungespeicherte Änderungen verwerfen?'))
-    )
-      return false;
+    if (!socialWorkspaceDepartureAllowed(document, () => window.confirm(t('Ungespeicherte Änderungen verwerfen?')))) return false;
     setActiveView(next);
     setSelectedAiClipId(next === 'ai' ? clipDbId : undefined);
     const search = socialViewSearch(window.location.search, next, clipDbId);
@@ -502,8 +502,9 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
                           : null;
                 if (nextIndex === null) return;
                 event.preventDefault();
-                changeView(SOCIAL_MEDIA_TABS[nextIndex].id);
-                document.getElementById(`studio-tab-${SOCIAL_MEDIA_TABS[nextIndex].id}`)?.focus();
+                if (changeView(SOCIAL_MEDIA_TABS[nextIndex].id)) {
+                  document.getElementById(`studio-tab-${SOCIAL_MEDIA_TABS[nextIndex].id}`)?.focus();
+                }
               }}
             >
               <Icon className="h-4 w-4" />
@@ -516,7 +517,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
         id="studio-panel"
         role="tabpanel"
         aria-labelledby={`studio-tab-${workspaceView}`}
-        className={activeView === 'pool' ? 'studio-pipeline min-w-0 space-y-4' : activeView === 'archiv' ? 'studio-archive min-w-0' : 'min-w-0'}
+        className={activeView === 'pool' || activeView === 'library' ? 'studio-pipeline min-w-0 space-y-4' : activeView === 'archiv' ? 'studio-archive min-w-0' : activeView === 'ai' ? 'studio-ai-workspace min-w-0' : 'studio-automation-workspace min-w-0'}
       >
         {activeView === 'ai' ? (
           AiEditor && twitchUserId ? (
@@ -532,7 +533,9 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
           )
         ) : activeView === 'archiv' ? (
           <VodArchiveTab twitchUserId={twitchUserId} isAdmin={isAdmin} />
-        ) : activeView === 'plan' ? (
+        ) : activeView === 'plan' ? workspaceSlots?.automation ?? (
+          <div className="studio-legacy-plan">
+            <p className="studio-workspace-note">{t('Der bisherige Posting-Plan bleibt nutzbar. Der gemeinsame Auto-Pilot-Zeitplan ist noch nicht verfügbar.')}</p>
           <PostingPlanDraft
             twitchUserId={twitchUserId}
             key={twitchUserId}
@@ -543,7 +546,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
             onSaved={uebernehmePlan}
           >
             {({ draft, patch, busy }) => (
-              <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_260px]">
+              <div className="studio-plan-grid" data-saving={busy ? 'true' : undefined}>
                 <div className="space-y-5">
                   <ApprovalModeCard
                     plan={draft}
@@ -634,6 +637,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
               </div>
             )}
           </PostingPlanDraft>
+          </div>
         ) : workspaceView === 'konten' ? (
           <div className="studio-settings space-y-6">
             <div className="studio-accounts grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -717,11 +721,19 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
           </div>
         ) : (
           <>
+            {activeView === 'library' ? (
+              <div className="studio-library-import">
+                {workspaceSlots?.libraryImport ?? (
+                  <ImportPoolPanel twitchUserId={twitchUserId} />
+                )}
+              </div>
+            ) : (
+            <>
             <div className="studio-metrics">
               <SocialMetric
                 label={t('Wartet auf Freigabe')}
                 value={clipsQuery.isError ? '—' : !clipsQuery.data ? '…' : stats.awaitingApproval}
-                detail={t('{count} Clips im Pool', { count: stats.total })}
+                detail={!clipsQuery.data ? t(clipsQuery.isError ? 'Bestand nicht erreichbar' : 'Bestand wird geladen') : t('{count} Clips im Pool', { count: stats.total })}
                 tone="gold"
               />
               <SocialMetric
@@ -733,9 +745,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
                       ? t('Manuell')
                       : t('{days} Tage', { days: postingPlanQuery.data.pool.reicht_fuer_tage })
                 }
-                detail={t('{count} Posts pro Woche', {
-                  count: postingPlanQuery.data?.pool.posts_pro_woche ?? 0,
-                })}
+                detail={postingPlanQuery.data ? t('{count} Posts pro Woche', { count: postingPlanQuery.data.pool.posts_pro_woche }) : t(postingPlanQuery.isError ? 'Zeitplan nicht erreichbar' : 'Zeitplan wird geladen')}
                 tone={postingPlanQuery.data?.pool.warnung ? 'warning' : 'success'}
               />
               <SocialMetric
@@ -747,8 +757,8 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
               <SocialMetric
                 label={t('Fehler')}
                 value={clipsQuery.isError ? '—' : !clipsQuery.data ? '…' : stats.failed}
-                detail={stats.failed === 0 ? t('Keine offenen Fehler') : t('Bitte prüfen')}
-                tone={stats.failed === 0 ? 'neutral' : 'danger'}
+                detail={!clipsQuery.data ? t(clipsQuery.isError ? 'Bestand nicht erreichbar' : 'Bestand wird geladen') : stats.failed === 0 ? t('Keine offenen Fehler') : t('Bitte prüfen')}
+                tone={!clipsQuery.data || stats.failed === 0 ? 'neutral' : 'danger'}
               />
             </div>
 
@@ -757,6 +767,14 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
               onClipsHolen={() => clipsHolenMutation.mutate()}
               isHolend={clipsHolenMutation.isPending}
             />
+            <div className="studio-overview-actions">
+              <button type="button" className="studio-button" onClick={() => changeView('plan')}>{t('Auto-Pilot & Zeitplan')}</button>
+              <button type="button" className="studio-button" onClick={() => changeView('library')}>{t('Clip-Bibliothek & Import')}</button>
+              <button type="button" className="studio-button" onClick={() => changeView('konten')}>{t('Verbindungen prüfen')}</button>
+            </div>
+            {workspaceSlots?.publishReview}
+            </>
+            )}
 
             <div className="space-y-3">
               <div className="studio-toolbar mt-6">
@@ -1097,18 +1115,28 @@ function SocialHero({
   const t = useT();
   const titles = {
     pool: 'Deine Clip-Pipeline',
-    plan: 'Zeitplan',
+    plan: 'Auto-Pilot & Zeitplan',
+    library: 'Clip-Bibliothek & Import',
     ai: 'KI-Bearbeitung & Prüfung',
     layout: 'Vorlagen & Konten',
     konten: 'Vorlagen & Konten',
     archiv: 'VOD-Archiv',
+  };
+  const descriptions = {
+    pool: 'Freigaben, geplante Posts und Plattformstatus im Überblick.',
+    plan: 'Produktion und Veröffentlichung planen. Laufende Arbeit bleibt erhalten.',
+    library: 'Clips auswählen und Nachschub verwalten, ohne eine Bearbeitung zu starten.',
+    ai: 'Einen Clip gezielt bearbeiten und das Ergebnis mit dem Original vergleichen.',
+    layout: 'Standard-Layouts und verbundene Plattformkonten für diesen Kanal.',
+    konten: 'Standard-Layouts und verbundene Plattformkonten für diesen Kanal.',
+    archiv: 'Gesicherte Twitch-Aufzeichnungen und ihr Übertragungsstatus.',
   };
   return (
     <header className="studio-header">
       <div className="min-w-0">
         <h1 className="studio-heading">{t(titles[activeView])}</h1>
         <p className="mt-2 text-sm text-text-secondary">
-          {streamer} · {t('Aus guten Momenten werden deine nächsten Posts.')}
+          {streamer ? `${streamer} · ` : ''}{t(descriptions[activeView])}
         </p>
       </div>
       <div className="studio-header-actions">

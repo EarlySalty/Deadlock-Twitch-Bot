@@ -8,7 +8,9 @@ import type { AdManagerResponse } from '@/api/adManager';
 import type { CatalogPlan } from '@/types/billing';
 import { DEFAULT_LAYOUT, type ClipApprovalRecord, type PostingPlan } from '../types/socialMedia';
 import type { SocialClipMitPosting, PlatformStatus } from '@/api/socialMedia';
+import { aiPreviewConsent, aiPreviewJob, type AiPreviewScenario } from '../components/socialmedia/ai/preview';
 
+const SOCIAL_WORKSPACE_PREVIEW = import.meta.env?.MODE === 'preview' || import.meta.env?.MODE === undefined;
 const NOW_ISO = '2026-04-22T09:30:00Z';
 
 const AUTH_STATUS_FIXTURE: AuthStatus = {
@@ -425,8 +427,35 @@ export function getPreviewSocialResponse(path: string, init: RequestInit = {}, s
   const pathname = url.pathname;
   const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
   if ((init.method ?? 'GET').toUpperCase() !== 'GET') {
-    return json({ error: 'preview_read_only', message: 'Die lokale Vorschau speichert, verbindet und veröffentlicht nichts.' }, 409);
+    const error = { error: 'preview_read_only', message: 'Die lokale Vorschau speichert, verbindet und veröffentlicht nichts.' };
+    if (SOCIAL_WORKSPACE_PREVIEW && scenario === 'legacy-save-pending') {
+      const body = new ReadableStream({ start(controller) {
+        setTimeout(() => { controller.enqueue(new TextEncoder().encode(JSON.stringify(error))); controller.close(); }, 2000);
+      } });
+      return new Response(body, { status: 409, headers: { 'Content-Type': 'application/json' } });
+    }
+    return json(error, 409);
   }
+  if (SOCIAL_WORKSPACE_PREVIEW && pathname.startsWith('/twitch/social-media/api/ai/')) {
+    const owner = url.searchParams.get('twitch_user_id');
+    if (!owner || !['123456789', '987654321'].includes(owner)) return json({ error: 'channel_not_found' }, 403);
+    if (scenario === 'ai-error') return json({ error: 'preview_ai_unavailable' }, 503);
+    if (scenario === 'ai-loading') return new Response(new ReadableStream(), { headers: { 'Content-Type': 'application/json' } });
+    const aiScenario: AiPreviewScenario = scenario === 'ai-rendering' ? 'render' : scenario === 'ai-last-version' ? 'failed' : 'review';
+    if (pathname.endsWith('/consent')) return json(aiPreviewConsent(aiScenario));
+    const sample = aiPreviewJob(aiScenario);
+    const job = sample && {
+      ...sample,
+      clip_db_id: 1,
+      original_url: null,
+      versions: sample.versions.map((version) => ({ ...version, file_url: null })),
+      ...(scenario === 'ai-unknown-cost' ? { cost_basis: 'unknown', estimated_provider_cost_usd: null, measured_provider_cost_usd: null } : {}),
+    };
+    if (pathname.endsWith('/jobs')) return json({ items: scenario === 'ai-empty' || !job ? [] : [job] });
+    if (job && pathname.endsWith(`/jobs/${job.id}`)) return json(job);
+    return json({ error: 'preview_fixture_missing' }, 404);
+  }
+  const streamer = SOCIAL_WORKSPACE_PREVIEW && url.searchParams.get('twitch_user_id') === '987654321' ? 'preview_second' : 'midcore_live';
   if (pathname.endsWith('/access/me')) return json({ allowed: true, streamer: 'midcore_live', isAdmin: true });
   if (pathname.endsWith('/access')) return json({ items: [{ twitch_user_id: '123456789', streamer_login: 'midcore_live', granted: true }] });
   if (pathname.endsWith('/platforms/status')) {
@@ -434,13 +463,14 @@ export function getPreviewSocialResponse(path: string, init: RequestInit = {}, s
     return json({ platforms: scenario === 'unknown' ? [] : SOCIAL_PLATFORMS_FIXTURE });
   }
   if (pathname.endsWith('/streamer-layout')) return json({ streamer_login: 'midcore_live', layout: DEFAULT_LAYOUT, cam_enabled: true, mode: 'stacked', updated_at: null, updated_by: null });
-  if (pathname.endsWith('/posting-plan')) return json(SOCIAL_PLAN_FIXTURE);
+  if (pathname.endsWith('/posting-plan')) return json({ ...SOCIAL_PLAN_FIXTURE, streamer_login: streamer });
   if (pathname.endsWith('/settings/vod-archive')) return json({ streamer_login: 'midcore_live', enabled: true, privacy: 'private', privacy_options: ['private', 'unlisted', 'public'], privacy_forced: true });
   if (pathname.endsWith('/admin/clips')) {
     if (scenario === 'clips-error') return json({ error: 'clip_list_failed' }, 503);
     const page = Number(url.searchParams.get('page') ?? 1);
     const pageSize = Number(url.searchParams.get('page_size') ?? 100);
-    return json({ items: SOCIAL_CLIPS_FIXTURE.slice((page - 1) * pageSize, page * pageSize), total: SOCIAL_CLIPS_FIXTURE.length, page, page_size: pageSize });
+    const items = SOCIAL_WORKSPACE_PREVIEW && scenario === 'library-empty' ? [] : SOCIAL_CLIPS_FIXTURE;
+    return json({ items: items.slice((page - 1) * pageSize, page * pageSize).map(clip => ({ ...clip, streamer_login: streamer })), total: items.length, page, page_size: pageSize });
   }
   if (pathname.endsWith('/vod-archive')) return json({ total: 1, items: [{ id: 1, twitch_id: 'synthetic-vod', channel: 'midcore_live', twitch_user_id: '123456789', title: 'Deadlock-Abend: Rangliste und Community', duration_sec: 7380, recorded_at: '2026-10-10T16:00:00Z', discovered_at: '2026-10-10T18:15:00Z', status: 'uploaded', status_label: 'YouTube-Upload abgeschlossen', display_status: 'youtube_uploaded', youtube_complete: true, youtube_verified_complete: false, can_check_youtube: false, drive_complete: false, confirmed_parts: 1, total_parts: 1, can_retry: false, can_drive: false, reason: null, drive_url: null, drive_requested: false, last_attempt_at: '2026-10-10T18:30:00Z', uploaded_at: '2026-10-10T18:45:00Z', parts: [{ index: 1, status: 'uploaded', youtube_video_id: null }], needs_connection: false }] });
   if (pathname.endsWith('/enrichment')) return json({ clip_db_id: 1, status: 'done', title_youtube: 'Der letzte Push', title_tiktok: 'Der letzte Push', title_instagram: 'Der letzte Push', description_youtube: 'Ein Moment aus der synthetischen Vorschau.', description_tiktok: '', description_instagram: '', hashtags_youtube: ['Deadlock'], hashtags_tiktok: [], hashtags_instagram: [], detected_terms: [], transcript_raw: null, transcript_corrected: null, transcript_segments: null, llm_provider: null, llm_model: null, cost_usd_estimate: null });
@@ -456,9 +486,12 @@ export function getPreviewApiFixture(
   endpoint: string,
   _params: Record<string, string | number | boolean> = {}
 ): unknown | undefined {
-  if (endpoint === '/auth-status') return AUTH_STATUS_FIXTURE;
+  if (endpoint === '/auth-status') {
+    const partner = SOCIAL_WORKSPACE_PREVIEW && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('fixture') === 'partner';
+    return partner ? { ...AUTH_STATUS_FIXTURE, isAdmin: false, isLocalhost: false, adminMode: false, adminEligible: false, level: 'partner', canViewAllStreamers: false } : AUTH_STATUS_FIXTURE;
+  }
   if (endpoint === '/feedback/counts') return { total: 0, unread: 0 };
-  if (endpoint === '/streamers') return [{ login: 'midcore_live', twitchUserId: '123456789', isPartner: true }];
+  if (endpoint === '/streamers') return [{ login: 'midcore_live', twitchUserId: '123456789', isPartner: true }, ...(SOCIAL_WORKSPACE_PREVIEW ? [{ login: 'preview_second', twitchUserId: '987654321', isPartner: true }] : [])];
   if (endpoint === '/billing/catalog') return BILLING_CATALOG_FIXTURE;
   if (endpoint === '/internal-home') return INTERNAL_HOME_FIXTURE;
   if (endpoint === '/roadmap') return ROADMAP_FIXTURE;

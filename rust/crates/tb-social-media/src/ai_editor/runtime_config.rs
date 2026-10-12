@@ -185,7 +185,7 @@ impl MediaRuntime {
             runtime: MediaConfiguration,
         }
         const MAX_CONFIG_BYTES: u64 = 64 * 1024;
-        let path = package_root.join("ops/social-ai/editor.yaml");
+        let path = package_root.join("ops/social-ai/editor.toml");
         let metadata = std::fs::metadata(&path).map_err(|_| super::AiEditorError::Configuration)?;
         if !metadata.is_file() || metadata.len() > MAX_CONFIG_BYTES {
             return Err(super::AiEditorError::Configuration);
@@ -199,10 +199,12 @@ impl MediaRuntime {
         if bytes.len() as u64 > MAX_CONFIG_BYTES {
             return Err(super::AiEditorError::Configuration);
         }
-        let value: serde_yaml::Value =
-            serde_yaml::from_slice(&bytes).map_err(|_| super::AiEditorError::Configuration)?;
-        let document: Document =
-            serde_yaml::from_value(value).map_err(|_| super::AiEditorError::Configuration)?;
+        let text = std::str::from_utf8(&bytes).map_err(|_| super::AiEditorError::Configuration)?;
+        let value: toml::Value =
+            toml::from_str(text).map_err(|_| super::AiEditorError::Configuration)?;
+        let document: Document = value
+            .try_into()
+            .map_err(|_| super::AiEditorError::Configuration)?;
         Self::from_configuration(package_root, document.runtime)
     }
 
@@ -235,7 +237,7 @@ impl EditorRuntime {
     }
 
     pub fn load(package_root: &Path) -> Result<Self, super::AiEditorError> {
-        let configuration = EditorConfig::load(&package_root.join("ops/social-ai/editor.yaml"))
+        let configuration = EditorConfig::load(&package_root.join("ops/social-ai/editor.toml"))
             .map_err(|_| super::AiEditorError::Configuration)?;
         Self::from_configuration(package_root, configuration)
     }

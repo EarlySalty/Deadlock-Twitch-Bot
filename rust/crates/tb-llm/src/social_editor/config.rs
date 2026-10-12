@@ -85,8 +85,10 @@ impl EditorConfig {
         if bytes.len() as u64 > MAX_CONFIG_BYTES {
             return Err(EditorError::new(ErrorKind::Configuration));
         }
-        let config: Self = serde_yaml::from_slice(&bytes)
-            .map_err(|_| EditorError::new(ErrorKind::Configuration))?;
+        let text =
+            std::str::from_utf8(&bytes).map_err(|_| EditorError::new(ErrorKind::Configuration))?;
+        let config: Self =
+            toml::from_str(text).map_err(|_| EditorError::new(ErrorKind::Configuration))?;
         config.validate()?;
         Ok(config)
     }
@@ -102,7 +104,7 @@ impl EditorConfig {
 impl ProviderConfig {
     pub fn validate(&self) -> Result<(), EditorError> {
         let trusted: TrustedPricing =
-            serde_yaml::from_str(include_str!("../../../../../ops/social-ai/pricing-v1.yaml"))
+            toml::from_str(include_str!("../../../../../ops/social-ai/pricing-v1.toml"))
                 .map_err(|_| EditorError::new(ErrorKind::Configuration))?;
         if self.pricing_version != trusted.version
             || self.model != trusted.model
@@ -210,9 +212,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn yaml_is_strict_and_cap_cannot_be_raised() {
-        let raw = include_str!("../../../../../ops/social-ai/editor.yaml");
-        let mut config: EditorConfig = serde_yaml::from_str(raw).expect("YAML");
+    fn toml_is_strict_and_cap_cannot_be_raised() {
+        let raw = include_str!("../../../../../ops/social-ai/editor.toml");
+        let mut config: EditorConfig = toml::from_str(raw).expect("TOML");
         config.validate().expect("valid initial config");
         config.provider.initial_total_cap_micro_usd += 1;
         assert!(config.validate().is_err());
@@ -226,15 +228,42 @@ mod tests {
         config.provider.pricing_version -= 1;
         config.provider.model = "unapproved-model".to_owned();
         assert!(config.validate().is_err());
-        let unknown = raw.replace("  model:", "  unknown_setting: true\n  model:");
-        assert!(serde_yaml::from_str::<EditorConfig>(&unknown).is_err());
+        for unknown in [
+            format!("unknown_setting = true\n{raw}"),
+            raw.replace("[provider]", "[provider]\nunknown_setting = true"),
+            raw.replace(
+                "[provider.pricing]",
+                "[provider.pricing]\nunknown_setting = true",
+            ),
+        ] {
+            let error = toml::from_str::<EditorConfig>(&unknown).expect_err("unknown setting");
+            assert!(error.to_string().contains("unknown field"));
+            assert!(error.to_string().contains("unknown_setting"));
+            let directory = tempfile::tempdir().expect("configuration directory");
+            let path = directory.path().join("editor.toml");
+            std::fs::write(&path, unknown).expect("unknown setting fixture");
+            assert_eq!(
+                EditorConfig::load(&path).err().map(|error| error.kind),
+                Some(ErrorKind::Configuration)
+            );
+        }
+        let trusted = include_str!("../../../../../ops/social-ai/pricing-v1.toml");
+        for unknown in [
+            format!("unknown_setting = true\n{trusted}"),
+            trusted.replace("[pricing]", "[pricing]\nunknown_setting = true"),
+        ] {
+            let error = toml::from_str::<TrustedPricing>(&unknown)
+                .err()
+                .expect("unknown trusted pricing setting");
+            assert!(error.to_string().contains("unknown field"));
+            assert!(error.to_string().contains("unknown_setting"));
+        }
     }
 
     #[test]
     fn exact_integer_pricing_ceil() {
         let config: EditorConfig =
-            serde_yaml::from_str(include_str!("../../../../../ops/social-ai/editor.yaml"))
-                .expect("YAML");
+            toml::from_str(include_str!("../../../../../ops/social-ai/editor.toml")).expect("TOML");
         assert_eq!(config.provider.pricing.reservation(1, 1), Some(25));
     }
 }
