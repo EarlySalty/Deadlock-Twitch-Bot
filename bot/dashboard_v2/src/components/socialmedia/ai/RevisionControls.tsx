@@ -4,6 +4,12 @@ import type { AiJobView, AiVideoVersion } from './api';
 import { approveAiVersion, decideAiProposal, decideAiVersion, reviseAiVersion, scheduleAiVersion, selectAiVersion } from './api';
 
 type Action = 'revise' | 'confirm' | 'cancel' | 'select' | 'accept' | 'reject' | 'approve' | 'schedule';
+function proposalCost(proposal: NonNullable<AiJobView['revision_proposal']>) {
+  if (proposal.estimated_provider_cost_usd === null) return 'Die zusätzlichen Anbieter-Kosten sind noch nicht zuverlässig schätzbar.';
+  if (!proposal.reanalyze) return 'Dafür fallen keine weiteren KI-Kosten an, nur die Videoerstellung auf unserem Server.';
+  return `Geschätzte zusätzliche Anbieter-Kosten: etwa ${proposal.estimated_provider_cost_usd.toLocaleString('de-DE',{maximumFractionDigits:4})} US-Dollar, gemessen am ersten Durchlauf dieses Clips.`;
+}
+
 const platforms = [{id:'youtube',label:'YouTube'},{id:'tiktok',label:'TikTok'},{id:'instagram',label:'Instagram'}];
 
 export function RevisionControls({channel,job,version,canStart,onJob,onReload}: {
@@ -48,7 +54,7 @@ export function RevisionControls({channel,job,version,canStart,onJob,onReload}: 
     {job.status === 'awaiting_confirmation' && job.revision_proposal && <div className="social-ai-confirm" role="group" aria-label="Aufwendige Änderung bestätigen">
       <h4>Vor dem nächsten Schritt bestätigen</h4>
       <p>{job.revision_proposal.summary}</p><p>{job.revision_proposal.impact}</p>
-      <p>{job.revision_proposal.reanalyze ? 'Dafür ist eine erneute KI-Analyse nötig.' : 'Der geplante Schnitt verändert die bisherige Fassung deutlich.'} {job.revision_proposal.estimated_provider_cost_usd === null ? 'Die zusätzlichen Anbieter-Kosten sind noch nicht zuverlässig schätzbar.' : `Geschätzte zusätzliche Anbieter-Kosten: ${job.revision_proposal.estimated_provider_cost_usd.toLocaleString('de-DE')} US-Dollar.`}</p>
+      <p>{job.revision_proposal.reanalyze ? 'Dafür ist eine erneute KI-Analyse nötig.' : 'Der geplante Schnitt verändert die bisherige Fassung deutlich.'} {proposalCost(job.revision_proposal)}</p>
       <label><input type="checkbox" checked={confirmed} disabled={blocked || !canStart} onChange={(event) => setConfirmed(event.target.checked)} />Ich bestätige den vorgeschlagenen nächsten Bearbeitungsschritt und mögliche zusätzliche KI-Kosten.</label>
       <div className="social-ai-actions"><button type="button" className="studio-primary" disabled={!confirmed || !canStart || blocked} onClick={() => action.mutate('confirm')}>Änderung bestätigen</button><button type="button" className="studio-button" disabled={blocked} onClick={() => action.mutate('cancel')}>Änderung verwerfen</button></div>
       <p>Bis zur Bestätigung wird keine neue Analyse oder Videofassung erstellt. Die kurze Schnittplanung ist bereits in den Auftragskosten enthalten.</p>

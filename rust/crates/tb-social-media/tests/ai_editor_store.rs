@@ -34,7 +34,7 @@ async fn fixture() -> postgres::TestPostgres {
     .await
     .expect("Migration");
     sqlx::raw_sql(include_str!(
-        "../../../migrations/20261011200101_social_ai_revisions.sql"
+        "../../../migrations/20261011203001_social_ai_revisions.sql"
     ))
     .execute(&db.pool)
     .await
@@ -95,7 +95,7 @@ async fn real_schema_fixture() -> postgres::TestPostgres {
     .await
     .expect("echte KI-Auftragsmigration");
     sqlx::raw_sql(include_str!(
-        "../../../migrations/20261011200101_social_ai_revisions.sql"
+        "../../../migrations/20261011203001_social_ai_revisions.sql"
     ))
     .execute(&db.pool)
     .await

@@ -50,6 +50,10 @@ pub fn routes(runtime: AiRuntime) -> Router<PgPool> {
             get(consent_get).put(consent_put),
         )
         .route(
+            "/social-media/api/ai/options",
+            get(options_get).put(options_put),
+        )
+        .route(
             "/social-media/api/ai/jobs",
             get(jobs_list).post(jobs_create),
         )
@@ -152,6 +156,14 @@ pub struct ChannelQuery {
 pub struct ConsentInput {
     twitch_user_id: String,
     external_ai_consent: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OptionsInput {
+    twitch_user_id: String,
+    multi_output_enabled: bool,
+    experimental_ai_layout: bool,
 }
 
 #[derive(Deserialize)]
@@ -260,6 +272,30 @@ pub async fn consent_put(
     };
     store::upsert_user_consent(&pool, &owner, input.external_ai_consent, actor).await?;
     Ok(Json(consent_view(&pool, &owner).await?))
+}
+
+pub async fn options_get(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Query(query): Query<ChannelQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let owner = channel(&pool, &auth, query.twitch_user_id.as_deref()).await?;
+    Ok(Json(json!(ai_editor::options::load(&pool, &owner).await?)))
+}
+
+pub async fn options_put(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Json(input): Json<OptionsInput>,
+) -> Result<Json<Value>, ApiError> {
+    let owner = channel(&pool, &auth, Some(&input.twitch_user_id)).await?;
+    let options = ai_editor::EditorOptions {
+        multi_output_enabled: input.multi_output_enabled,
+        experimental_ai_layout: input.experimental_ai_layout,
+    };
+    Ok(Json(json!(
+        ai_editor::options::save(&pool, &owner, options).await?
+    )))
 }
 
 pub async fn jobs_list(

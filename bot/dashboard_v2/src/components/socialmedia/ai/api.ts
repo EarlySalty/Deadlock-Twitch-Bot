@@ -10,6 +10,11 @@ export interface AiConsent {
   global_allowed: boolean;
 }
 
+export interface AiEditorOptions {
+  multi_output_enabled: boolean;
+  experimental_ai_layout: boolean;
+}
+
 export interface AiVideoVersion {
   id: number;
   version_no: number;
@@ -243,6 +248,24 @@ export async function saveAiConsent(twitchUserId: string, externalAiConsent: boo
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ twitch_user_id: channelId(twitchUserId), external_ai_consent: externalAiConsent }),
+  }));
+}
+
+export function decodeAiOptions(value: unknown): AiEditorOptions {
+  const item = record(value);
+  return { multi_output_enabled: flag(item.multi_output_enabled), experimental_ai_layout: flag(item.experimental_ai_layout) };
+}
+
+export async function fetchAiOptions(twitchUserId: string, signal?: AbortSignal): Promise<AiEditorOptions> {
+  const query = new URLSearchParams({ twitch_user_id: channelId(twitchUserId) });
+  return decodeAiOptions(await fetchSocialAiJson(`${AI_PREFIX}/options?${query}`, { signal, cache: 'no-store' }));
+}
+
+export async function saveAiOptions(twitchUserId: string, options: AiEditorOptions): Promise<AiEditorOptions> {
+  return decodeAiOptions(await fetchSocialAiJson(`${AI_PREFIX}/options`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ twitch_user_id: channelId(twitchUserId), ...options }),
   }));
 }
 

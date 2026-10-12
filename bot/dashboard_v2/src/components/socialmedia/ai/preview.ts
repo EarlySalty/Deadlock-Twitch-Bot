@@ -85,6 +85,7 @@ export function createAiPreviewFetch(originalFetch: typeof fetch, scenario: AiPr
   let job = aiPreviewJob(scenario);
   let polls = 0;
   let secondConsent = false;
+  let options = { multi_output_enabled: false, experimental_ai_layout: false };
   const secondJob: AiJobView = { ...BASE_JOB, id: 1201, clip_db_id: 601, status: 'review', original_url: null, versions: [] };
   let secondFailure: AiJobView = { ...BASE_JOB, id: 1202, clip_db_id: 601, status: 'failed', stage: 'rendering', original_url: null, versions: [], failure_code: 'render_failed', failure_message: 'Die Prüfung ist fehlgeschlagen. Der Anbieter meldet SIMULIERTER_WERT aus /var/test/mock.', can_retry: true };
   let secondStarted: AiJobView | null = null;
@@ -94,6 +95,11 @@ export function createAiPreviewFetch(originalFetch: typeof fetch, scenario: AiPr
     const method = (init?.method ?? 'GET').toUpperCase();
     const body = init?.body && typeof init.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : {};
     const channel = method === 'GET' ? url.searchParams.get('twitch_user_id') : body.twitch_user_id;
+    if (url.pathname === `${PREFIX}/options` && method === 'GET') return response(options);
+    if (url.pathname === `${PREFIX}/options` && method === 'PUT' && typeof body.multi_output_enabled === 'boolean' && typeof body.experimental_ai_layout === 'boolean') {
+      options = { multi_output_enabled: body.multi_output_enabled, experimental_ai_layout: body.experimental_ai_layout };
+      return response(options);
+    }
     if (scenario === 'race' && channel === '987654321') {
       if (url.pathname === '/twitch/social-media/api/admin/clips') return response({ items: [
         { clip_db_id: 601, source_kind: 'twitch', title: 'Clip aus dem zweiten Kanal', created_at: '2026-10-11T07:00:00Z' },
@@ -156,7 +162,7 @@ export function createAiPreviewFetch(originalFetch: typeof fetch, scenario: AiPr
       const action = versionAction[3];
       if (action === 'revision') {
         if (!consent.external_ai_consent || !consent.global_allowed || typeof body.feedback !== 'string' || !body.feedback.trim()) return response({error:'not_allowed'},403);
-        job = {...job,id:1104,parent_version_id:version.id,status:'awaiting_confirmation',stage:'planning',completed_at:null,revision_proposal:{summary:'Der Einstieg wird stärker gekürzt.',impact:'Die neue Fassung behält den Teamkampf und die ursprüngliche Reaktion.',reanalyze:false,requires_confirmation:true,estimated_provider_cost_usd:null}};
+        job = {...job,id:1104,parent_version_id:version.id,status:'awaiting_confirmation',stage:'planning',completed_at:null,revision_proposal:{summary:'Der Einstieg wird stärker gekürzt.',impact:'Die neue Fassung behält den Teamkampf und die ursprüngliche Reaktion.',reanalyze:false,requires_confirmation:true,estimated_provider_cost_usd:0}};
       } else if (action === 'select') job = {...job,selected_version_id:version.id};
       else if (action === 'approve' || action === 'schedule') {
         const selected = Array.isArray(body.platforms) ? body.platforms.filter((item): item is string => typeof item === 'string' && ['youtube','tiktok','instagram'].includes(item)) : [];

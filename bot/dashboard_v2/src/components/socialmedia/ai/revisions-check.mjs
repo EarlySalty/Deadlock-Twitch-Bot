@@ -34,6 +34,15 @@ async function click(name) {
 try {
   await page.goto(base);
   await page.getByRole('button',{name:'Änderung anfordern'}).waitFor();
+  const multi = page.getByRole('checkbox',{name:/^Mehrere Videos aus einem Clip erlauben/});
+  await multi.waitFor();
+  assert.equal(await multi.isChecked(),false);
+  assert.equal(await page.getByRole('checkbox',{name:/^Experimentelles KI-Layout/}).isChecked(),false);
+  await multi.evaluate((element) => element.click());
+  await page.getByText('Optionen gespeichert.').waitFor({state:'attached'});
+  assert.equal(await multi.isChecked(),true);
+  await shot('options-desktop',1440,'.social-ai-options');
+  await shot('options-mobile',390,'.social-ai-options');
   assert.equal(await page.getByRole('combobox',{name:'Videofassung'}).inputValue(),'2203');
   assert.ok(await page.getByRole('button',{name:'In den Zeitplan übernehmen'}).isDisabled());
   await page.locator('details summary').evaluate((element) => element.click());
@@ -64,8 +73,8 @@ try {
   assert.ok(await page.getByRole('button',{name:'Änderung anfordern'}).isEnabled());
   assert.ok(await page.locator('video[aria-label="Bearbeitetes Video abspielen"]').getAttribute('src'));
   assert.deepEqual(errors,[]);
-  await writeFile(`${directory}/run.json`,JSON.stringify({environment:'synthetic-local-moli',passed:8,errors,shots},null,2));
-  console.log(JSON.stringify({passed:8,errors,shots}));
+  await writeFile(`${directory}/run.json`,JSON.stringify({environment:'synthetic-local-moli',passed:9,errors,shots},null,2));
+  console.log(JSON.stringify({passed:9,errors,shots}));
 } finally {
   await page.close();
   await browser.close();

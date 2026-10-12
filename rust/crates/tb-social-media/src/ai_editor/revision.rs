@@ -111,7 +111,10 @@ pub(super) fn maker_id(video: &ProducedVideo) -> Result<i64, AiEditorError> {
 
 pub fn usable(video: &ProducedVideo) -> bool {
     video.file_path.is_some()
-        && matches!(video.status.as_str(), "review" | "approved" | "scheduled")
+        && matches!(
+            video.status.as_str(),
+            "review" | "approved" | "scheduled" | "published"
+        )
         && (video.status != "review"
             || video
                 .expires_at
@@ -123,7 +126,7 @@ async fn ensure_ready(
     owner: &str,
     version_id: i64,
 ) -> Result<(), AiEditorError> {
-    let valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM social_produced_videos WHERE id=$1 AND twitch_user_id=$2 AND status IN ('review','approved','scheduled') AND (status<>'review' OR expires_at>NOW()) AND file_path IS NOT NULL)")
+    let valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM social_produced_videos WHERE id=$1 AND twitch_user_id=$2 AND status IN ('review','approved','scheduled','published') AND (status<>'review' OR expires_at>NOW()) AND file_path IS NOT NULL)")
         .bind(version_id).bind(owner).fetch_one(tx).await.map_err(|_| AiEditorError::Storage)?;
     if !valid {
         return Err(AiEditorError::Conflict);
@@ -419,6 +422,7 @@ pub(super) fn validate_proposal(
     base: &Planning,
     new: &Planning,
     runtime: &EditorRuntime,
+    reanalysis_estimate: Option<f64>,
 ) -> Result<(), AiEditorError> {
     if [&proposal.summary, &proposal.impact].iter().any(|text| {
         text.trim().is_empty()
@@ -431,8 +435,26 @@ pub(super) fn validate_proposal(
         || changed_percent(base, new)
             > u64::from(runtime.limits.revisions.max_auto_changed_percent)
         || !new.variants.is_empty();
-    proposal.estimated_provider_cost_usd = None;
+    proposal.estimated_provider_cost_usd = if proposal.reanalyze {
+        reanalysis_estimate.filter(|cost| cost.is_finite() && *cost >= 0.0)
+    } else {
+        Some(0.0)
+    };
     Ok(())
+}
+
+pub(super) async fn reanalysis_estimate(
+    pool: &PgPool,
+    owner: &str,
+    job_id: i64,
+) -> Result<Option<f64>, AiEditorError> {
+    sqlx::query_scalar("SELECT root.estimated_provider_cost_usd FROM social_ai_jobs j JOIN social_ai_jobs root ON root.id=COALESCE(j.root_job_id,j.id) AND root.twitch_user_id=j.twitch_user_id WHERE j.id=$1 AND j.twitch_user_id::text=$2")
+        .bind(job_id)
+        .bind(owner)
+        .fetch_optional(pool)
+        .await
+        .map_err(|_| AiEditorError::Storage)
+        .map(Option::flatten)
 }
 
 pub(super) fn request_context(request: &RevisionRequest, base: &Planning) -> Value {
