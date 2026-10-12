@@ -613,7 +613,45 @@ async fn plan(
     })
 }
 
-async fn allocation(ctx: &mut StageContext<'_>) -> Result<ProducedVideo, AiEditorError> {
+fn expired_allocation(video: &ProducedVideo) -> bool {
+    video.status == "expired"
+        || (matches!(video.status.as_str(), "rendering" | "review" | "failed")
+            && video
+                .expires_at
+                .is_some_and(|expiry| expiry <= chrono::Utc::now()))
+}
+
+pub(super) async fn media_recovery_needed(
+    pool: &PgPool,
+    runtime: &EditorRuntime,
+    owner: &str,
+    clip_id: i64,
+    identity: Identity,
+    checkpoints: &BTreeMap<AiStage, StageCheckpoint>,
+) -> Result<bool, AiEditorError> {
+    let Some(video) = produced_video::find_ai_version(
+        pool,
+        owner,
+        clip_id,
+        identity.manual(),
+        identity.production(),
+    )
+    .await
+    .map_err(|_| AiEditorError::Storage)?
+    else {
+        return Ok(false);
+    };
+    Ok(expired_allocation(&video)
+        || (video.status == "rendering"
+            && matches!(checkpoints.get(&AiStage::Rendering),
+                Some(StageCheckpoint::Rendering { output_path: stored, .. })
+                if stored != &output_path(runtime, video.id).to_string_lossy())))
+}
+
+async fn allocation(
+    ctx: &mut StageContext<'_>,
+    runtime: &EditorRuntime,
+) -> Result<ProducedVideo, AiEditorError> {
     ctx.lease
         .ensure_held()
         .await
@@ -628,10 +666,14 @@ async fn allocation(ctx: &mut StageContext<'_>) -> Result<ProducedVideo, AiEdito
     .await
     .map_err(|_| AiEditorError::Storage)?
     {
-        if !matches!(video.status.as_str(), "rendering" | "review") {
-            return Err(AiEditorError::Conflict);
+        if expired_allocation(&video) {
+            cleanup_expired_video(ctx.pool, runtime, ctx.lease, ctx.owner, video.id).await?;
+        } else {
+            if !matches!(video.status.as_str(), "rendering" | "review") {
+                return Err(AiEditorError::Conflict);
+            }
+            return Ok(video);
         }
-        return Ok(video);
     }
     let (version_no, parent_version_id) =
         produced_video::next_clip_version(ctx.pool, ctx.owner, ctx.clip_id)
@@ -864,6 +906,42 @@ async fn ensure_original_preview(
     Ok(preview)
 }
 
+async fn cleanup_expired_video(
+    pool: &PgPool,
+    runtime: &EditorRuntime,
+    lease: &mut ProductionLease,
+    owner: &str,
+    id: i64,
+) -> Result<(), AiEditorError> {
+    lease
+        .ensure_held()
+        .await
+        .map_err(|_| AiEditorError::Conflict)?;
+    let Some(status) = produced_video::claim_expired_ai_artifacts(pool, owner, id)
+        .await
+        .map_err(|_| AiEditorError::Storage)?
+    else {
+        return Ok(());
+    };
+    let mut paths = vec![original_preview_path(runtime, id)];
+    if status == "expired" {
+        paths.push(output_path(runtime, id));
+    }
+    for path in paths {
+        if path.parent() != Some(runtime.limits.output_root.as_path()) {
+            return Err(AiEditorError::Source);
+        }
+        match tokio::fs::remove_file(path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(AiEditorError::Storage),
+        }
+    }
+    produced_video::finish_expired_ai_artifacts(pool, owner, id)
+        .await
+        .map_err(|_| AiEditorError::Storage)
+}
+
 pub(super) async fn cleanup_expired_artifacts(
     pool: &PgPool,
     runtime: &EditorRuntime,
@@ -876,29 +954,7 @@ pub(super) async fn cleanup_expired_artifacts(
     let rows: Vec<(i64, String, String)> = sqlx::query_as("SELECT id, twitch_user_id, status FROM social_produced_videos WHERE mode='ai' AND expires_at <= NOW() AND (metadata ? 'manual_ai_job_id' OR metadata ? 'production_ai_job_id') AND (metadata -> 'ai_artifacts_expired') IS DISTINCT FROM 'true'::jsonb ORDER BY expires_at, id LIMIT $1")
         .bind(runtime.limits.recovery_limit).fetch_all(pool).await.map_err(|_| AiEditorError::Storage)?;
     for (id, owner, _) in rows {
-        let Some(status) = produced_video::claim_expired_ai_artifacts(pool, &owner, id)
-            .await
-            .map_err(|_| AiEditorError::Storage)?
-        else {
-            continue;
-        };
-        let mut paths = vec![original_preview_path(runtime, id)];
-        if status == "expired" {
-            paths.push(output_path(runtime, id));
-        }
-        for path in paths {
-            if path.parent() != Some(runtime.limits.output_root.as_path()) {
-                return Err(AiEditorError::Source);
-            }
-            match tokio::fs::remove_file(path).await {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(_) => return Err(AiEditorError::Storage),
-            }
-        }
-        produced_video::finish_expired_ai_artifacts(pool, &owner, id)
-            .await
-            .map_err(|_| AiEditorError::Storage)?;
+        cleanup_expired_video(pool, runtime, lease, &owner, id).await?;
     }
     Ok(())
 }
@@ -909,7 +965,7 @@ async fn render(
     runtime: &EditorRuntime,
 ) -> Result<StageCheckpoint, AiEditorError> {
     let (_, validated) = planning(ctx.checkpoints, frozen, runtime)?;
-    let video = allocation(ctx).await?;
+    let video = allocation(ctx, runtime).await?;
     let output = output_path(runtime, video.id);
     let started = Instant::now();
     let rendering_ms = if output.exists() {
@@ -1026,7 +1082,7 @@ async fn validate(
     runtime: &EditorRuntime,
 ) -> Result<StageCheckpoint, AiEditorError> {
     let (planning, validated) = planning(ctx.checkpoints, frozen, runtime)?;
-    let video = allocation(ctx).await?;
+    let video = allocation(ctx, runtime).await?;
     let Some(StageCheckpoint::Rendering {
         output_path: stored_path,
         rendering_ms,
@@ -1101,14 +1157,29 @@ pub(super) async fn produced_outcome(
     .await
     .map_err(|_| AiEditorError::Storage)?
     .ok_or(AiEditorError::NotFound)?;
-    if video.status != "review" || video.file_path.is_none() {
+    if !matches!(
+        video.status.as_str(),
+        "review" | "approved" | "scheduled" | "published"
+    ) || expired_allocation(&video)
+    {
+        return Err(AiEditorError::Validation);
+    }
+    let file = tokio::fs::metadata(
+        video
+            .file_path
+            .as_deref()
+            .ok_or(AiEditorError::Validation)?,
+    )
+    .await
+    .map_err(|_| AiEditorError::Validation)?;
+    if !file.is_file() || file.len() == 0 {
         return Err(AiEditorError::Validation);
     }
     let reasons =
         serde_json::from_value(video.review_reasons).map_err(|_| AiEditorError::Validation)?;
     Ok(ProducedOutcome {
         produced_video_ids: vec![video.id],
-        needs_review: true,
+        needs_review: video.needs_review,
         review_reasons: reasons,
     })
 }
@@ -1175,6 +1246,32 @@ async fn produce_inner(
         .any(|(key, value)| *key != value.stage() || value.validate().is_err())
     {
         return Err(AiEditorError::Storage);
+    }
+    if (state.checkpoints.contains_key(&AiStage::Rendering)
+        || state.checkpoints.contains_key(&AiStage::Validating))
+        && media_recovery_needed(
+            ctx.pool,
+            &preparing(&state.checkpoints, ctx.runtime)?.1,
+            &job.twitch_user_id,
+            job.clip_id,
+            Identity::Production(job.id),
+            &state.checkpoints,
+        )
+        .await?
+    {
+        let limit = preparing(&state.checkpoints, ctx.runtime)?
+            .1
+            .limits
+            .stage_attempts;
+        if [AiStage::Rendering, AiStage::Validating]
+            .iter()
+            .any(|stage| state.attempts.get(stage).copied().unwrap_or(0) >= limit)
+        {
+            return Err(AiEditorError::Attempts);
+        }
+        state.checkpoints.remove(&AiStage::Rendering);
+        state.checkpoints.remove(&AiStage::Validating);
+        save_production_state(ctx, job, AiStage::Rendering, &state).await?;
     }
     let started = Instant::now();
     for stage in [

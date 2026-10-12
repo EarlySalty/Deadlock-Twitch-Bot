@@ -930,6 +930,465 @@ async fn c3_resume_reuses_the_pipeline_and_exact_durable_version_under_the_exist
     lease.release().await.expect("caller releases");
 }
 
+async fn expire_fixture(pool: &PgPool, video_id: i64) {
+    sqlx::query(
+        "UPDATE social_produced_videos SET expires_at='2000-01-01'::timestamptz WHERE id=$1",
+    )
+    .bind(video_id)
+    .execute(pool)
+    .await
+    .expect("expire isolated allocation");
+}
+
+async fn usage_fixture(pool: &PgPool, identity: Identity) {
+    sqlx::query("INSERT INTO llm_usage (purpose,provider,model,attempt_state,tokens_in,tokens_out,latency_ms,social_ai_twitch_user_id,social_ai_job_id,social_ai_stage,reserved_micro_usd,estimated_micro_usd,cost_basis) VALUES ('social_editor','anthropic','fixture-model','completed',11,7,23,'101',$1,'planning',20,10,'usage_priced_estimate')")
+        .bind(identity.namespace()).execute(pool).await.expect("synthetic existing provider ledger");
+}
+
+async fn assert_usage_preserved(pool: &PgPool, identity: Identity) {
+    let usage: (i64, i64, i64, i64, i64) = sqlx::query_as("SELECT COUNT(*),SUM(tokens_in)::bigint,SUM(tokens_out)::bigint,SUM(reserved_micro_usd)::bigint,SUM(estimated_micro_usd)::bigint FROM llm_usage WHERE social_ai_job_id=$1")
+        .bind(identity.namespace()).fetch_one(pool).await.expect("unchanged provider accounting");
+    assert_eq!(usage, (1, 11, 7, 20, 10));
+}
+
+#[tokio::test]
+async fn expired_manual_media_retries_rebuild_without_replaying_provider_stages() {
+    for resume in [AiStage::Rendering, AiStage::Validating, AiStage::Planning] {
+        let db = database().await;
+        let directory = tempfile::tempdir().expect("package root");
+        let runtime = runtime(directory.path());
+        let clip = source(&db.pool, &runtime).await;
+        let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip)
+            .await
+            .expect("manual job");
+        let identity = Identity::Manual(job.id);
+        usage_fixture(&db.pool, identity).await;
+        let mut lease = super::super::store::acquire_production_lease(&db.pool)
+            .await
+            .expect("lease")
+            .expect("free");
+        let mut checkpoints = prepared(&db.pool, &runtime, &mut lease, clip, identity).await;
+        let frozen = serde_json::to_value(&checkpoints).expect("frozen earlier checkpoints");
+        let limit = super::super::store::AttemptLimit::from_server_config(2).expect("limit");
+        for checkpoint in checkpoints.values() {
+            super::super::store::claim_job(&mut lease, "101", job.id, limit)
+                .await
+                .expect("claim");
+            super::super::store::save_stage(&mut lease, "101", job.id, checkpoint, None)
+                .await
+                .expect("save");
+        }
+        super::super::store::claim_job(&mut lease, "101", job.id, limit)
+            .await
+            .expect("render claim");
+        let rendered = execute_stage(
+            &mut StageContext {
+                pool: &db.pool,
+                current: &runtime,
+                lease: &mut lease,
+                owner: "101",
+                clip_id: clip,
+                identity,
+                expected_twitch_clip_id: Some("fixture-original"),
+                checkpoints: &checkpoints,
+                brain_token: None,
+            },
+            AiStage::Rendering,
+        )
+        .await
+        .expect("real original render before expiry");
+        let old = produced_video::find_ai_version(&db.pool, "101", clip, Some(job.id), None)
+            .await
+            .expect("allocated video")
+            .expect("owned version");
+        let failed_stage = if resume == AiStage::Rendering {
+            AiStage::Rendering
+        } else {
+            super::super::store::save_stage(&mut lease, "101", job.id, &rendered, None)
+                .await
+                .expect("render checkpoint");
+            checkpoints.insert(AiStage::Rendering, rendered);
+            super::super::store::claim_job(&mut lease, "101", job.id, limit)
+                .await
+                .expect("validation claim");
+            if resume == AiStage::Planning {
+                let validated = execute_stage(
+                    &mut StageContext {
+                        pool: &db.pool,
+                        current: &runtime,
+                        lease: &mut lease,
+                        owner: "101",
+                        clip_id: clip,
+                        identity,
+                        expected_twitch_clip_id: Some("fixture-original"),
+                        checkpoints: &checkpoints,
+                        brain_token: None,
+                    },
+                    AiStage::Validating,
+                )
+                .await
+                .expect("validation before completion crash");
+                super::super::store::save_stage(&mut lease, "101", job.id, &validated, None)
+                    .await
+                    .expect("completed media checkpoint");
+            }
+            AiStage::Validating
+        };
+        super::super::store::fail_job(
+            &mut lease,
+            "101",
+            job.id,
+            failed_stage,
+            super::super::store::JobFailure::ValidationFailed,
+            None,
+        )
+        .await
+        .expect("retryable interrupted job");
+        expire_fixture(&db.pool, old.id).await;
+        let view = super::super::get_manual_job(&db.pool, &runtime, "101", job.id)
+            .await
+            .expect("public retry view");
+        assert!(view.can_retry);
+        assert_eq!(view.versions[0].status, "expired");
+        assert!(view.versions[0].file_url.is_none() && view.original_url.is_none());
+        super::super::retry_manual_job(&db.pool, &runtime, "101", job.id)
+            .await
+            .expect("advertised retry accepted");
+        lease.release().await.expect("worker handover");
+        let worker = super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None);
+        assert!(worker
+            .process_next()
+            .await
+            .expect("retry rebuilds media on its remaining attempts"));
+        let view = super::super::get_manual_job(&db.pool, &runtime, "101", job.id)
+            .await
+            .expect("completed view");
+        assert_eq!(view.status, "review");
+        assert_eq!(view.versions.len(), 2);
+        assert_eq!(view.versions[0].id, old.id);
+        assert_eq!(view.versions[0].status, "expired");
+        assert!(view.versions[0].file_url.is_none());
+        assert_eq!(view.versions[1].status, "review");
+        assert!(view.versions[1].file_url.is_some());
+        assert!(
+            !output_path(&runtime, old.id).exists()
+                && !original_preview_path(&runtime, old.id).exists()
+        );
+        let fresh = produced_video::get(&db.pool, "101", view.versions[1].id)
+            .await
+            .expect("C2 read")
+            .expect("fresh version");
+        assert!(fresh.id != old.id && fresh.version_no > old.version_no);
+        assert_eq!(fresh.metadata["qa"]["decode"], "passed");
+        assert!(fresh
+            .expires_at
+            .is_some_and(|expiry| expiry > chrono::Utc::now()));
+        assert!(
+            super::super::manual_original_file(&db.pool, &runtime, "101", job.id)
+                .await
+                .expect("fresh authenticated original")
+                .is_file()
+        );
+        assert!(
+            super::super::manual_original_file(&db.pool, &runtime, "202", job.id)
+                .await
+                .is_err()
+        );
+        let persisted = super::super::store::checkpoints(&db.pool, "101", job.id)
+            .await
+            .expect("durable recovered checkpoints");
+        let mut earlier = persisted.clone();
+        earlier.remove(&AiStage::Rendering);
+        earlier.remove(&AiStage::Validating);
+        assert_eq!(
+            serde_json::to_value(earlier).expect("earlier checkpoints"),
+            frozen
+        );
+        assert!(
+            matches!(persisted.get(&AiStage::Rendering),Some(StageCheckpoint::Rendering { output_path: path,.. }) if path == &output_path(&runtime,fresh.id).to_string_lossy())
+        );
+        let attempts: Value = sqlx::query_scalar("SELECT attempts FROM social_ai_jobs WHERE id=$1")
+            .bind(job.id)
+            .fetch_one(&db.pool)
+            .await
+            .expect("attempt accounting");
+        assert_eq!(attempts["rendering"], 2);
+        assert_eq!(
+            attempts["validating"],
+            if resume == AiStage::Rendering { 1 } else { 2 }
+        );
+        assert_usage_preserved(&db.pool, identity).await;
+        assert!(!worker.process_next().await.expect("no duplicate work"));
+    }
+}
+
+#[tokio::test]
+async fn expired_production_media_resumes_rebuild_and_reconcile_completed_checkpoints() {
+    for resume in [AiStage::Rendering, AiStage::Validating, AiStage::Planning] {
+        let db = database().await;
+        let directory = tempfile::tempdir().expect("package root");
+        let runtime = runtime(directory.path());
+        let clip = source(&db.pool, &runtime).await;
+        production_jobs::insert(
+            &db.pool,
+            &production_jobs::NewProductionJob {
+                twitch_user_id: "101".into(),
+                clip_id: clip,
+                source: production_jobs::JobSource::Manual,
+                requested_mode: Some(ProductionMode::Ai),
+                scheduled_at: None,
+                max_attempts: 2,
+            },
+        )
+        .await
+        .expect("C3 request");
+        let mut lease = super::super::store::acquire_production_lease(&db.pool)
+            .await
+            .expect("lease")
+            .expect("free");
+        let mut job = production_jobs::claim_next(&db.pool)
+            .await
+            .expect("claim")
+            .expect("job");
+        let identity = Identity::Production(job.id);
+        usage_fixture(&db.pool, identity).await;
+        let mut checkpoints = prepared(&db.pool, &runtime, &mut lease, clip, identity).await;
+        let frozen = serde_json::to_value(&checkpoints).expect("earlier checkpoints");
+        let rendered = execute_stage(
+            &mut StageContext {
+                pool: &db.pool,
+                current: &runtime,
+                lease: &mut lease,
+                owner: "101",
+                clip_id: clip,
+                identity,
+                expected_twitch_clip_id: None,
+                checkpoints: &checkpoints,
+                brain_token: None,
+            },
+            AiStage::Rendering,
+        )
+        .await
+        .expect("render before interruption");
+        let old = produced_video::find_ai_version(&db.pool, "101", clip, None, Some(job.id))
+            .await
+            .expect("C2 read")
+            .expect("old version");
+        let mut attempts = BTreeMap::from([(AiStage::Rendering, 1)]);
+        if resume != AiStage::Rendering {
+            checkpoints.insert(AiStage::Rendering, rendered);
+            attempts.insert(AiStage::Validating, 1);
+            if resume == AiStage::Planning {
+                let validated = execute_stage(
+                    &mut StageContext {
+                        pool: &db.pool,
+                        current: &runtime,
+                        lease: &mut lease,
+                        owner: "101",
+                        clip_id: clip,
+                        identity,
+                        expected_twitch_clip_id: None,
+                        checkpoints: &checkpoints,
+                        brain_token: None,
+                    },
+                    AiStage::Validating,
+                )
+                .await
+                .expect("completed validation before interruption");
+                checkpoints.insert(AiStage::Validating, validated);
+            }
+        }
+        job.metadata["ai_editor"] = serde_json::to_value(ProductionState {
+            checkpoints,
+            attempts,
+        })
+        .expect("state");
+        production_jobs::update_progress(&db.pool, "101", job.id, "validating", &job.metadata)
+            .await
+            .expect("durable state");
+        expire_fixture(&db.pool, old.id).await;
+        assert!(produced_outcome(&db.pool, "101", clip, identity)
+            .await
+            .is_err());
+        let outcome = produce(
+            ProductionContext {
+                pool: &db.pool,
+                runtime: &runtime,
+                lease: &mut lease,
+                brain_token: None,
+            },
+            job.clone(),
+        )
+        .await
+        .expect("expired C3 checkpoints recover on remaining attempts");
+        let fresh_id = outcome.produced_video_ids[0];
+        assert_ne!(fresh_id, old.id);
+        assert!(outcome.needs_review);
+        assert!(
+            !output_path(&runtime, old.id).exists()
+                && !original_preview_path(&runtime, old.id).exists()
+        );
+        let old = produced_video::get(&db.pool, "101", old.id)
+            .await
+            .expect("history")
+            .expect("retained version");
+        assert_eq!(old.status, "expired");
+        let fresh = produced_video::get(&db.pool, "101", fresh_id)
+            .await
+            .expect("fresh video")
+            .expect("version");
+        assert_eq!(fresh.job_id, Some(job.id));
+        assert_eq!(fresh.metadata["qa"]["decode"], "passed");
+        let persisted = production_jobs::get(&db.pool, "101", job.id)
+            .await
+            .expect("C3 read")
+            .expect("job");
+        let state: ProductionState =
+            serde_json::from_value(persisted.metadata["ai_editor"].clone())
+                .expect("recovered durable state");
+        assert_eq!(state.attempts[&AiStage::Rendering], 2);
+        assert_eq!(
+            state.attempts[&AiStage::Validating],
+            if resume == AiStage::Rendering { 1 } else { 2 }
+        );
+        let mut earlier = state.checkpoints;
+        earlier.remove(&AiStage::Rendering);
+        earlier.remove(&AiStage::Validating);
+        assert_eq!(
+            serde_json::to_value(earlier).expect("preserved earlier checkpoints"),
+            frozen
+        );
+        assert_usage_preserved(&db.pool, identity).await;
+        let replay = produce(
+            ProductionContext {
+                pool: &db.pool,
+                runtime: &runtime,
+                lease: &mut lease,
+                brain_token: None,
+            },
+            job.clone(),
+        )
+        .await
+        .expect("fresh checkpoint crash reconciliation");
+        assert_eq!(replay.produced_video_ids, outcome.produced_video_ids);
+        produced_video::approve(&db.pool, "101", fresh_id, &["youtube".into()])
+            .await
+            .expect("synthetic owner approval");
+        for status in ["approved", "scheduled", "published"] {
+            sqlx::query("UPDATE social_produced_videos SET status=$2,scheduled_at=NOW()+INTERVAL '1 day',expires_at='2000-01-01'::timestamptz WHERE id=$1")
+                .bind(fresh_id).bind(status).execute(&db.pool).await.expect("isolated completed C2 state");
+            let replay = produce(
+                ProductionContext {
+                    pool: &db.pool,
+                    runtime: &runtime,
+                    lease: &mut lease,
+                    brain_token: None,
+                },
+                job.clone(),
+            )
+            .await
+            .expect("completed production checkpoint accepts retained approved media");
+            assert_eq!(replay.produced_video_ids, outcome.produced_video_ids);
+            assert!(!replay.needs_review);
+        }
+        assert_eq!(
+            produced_video::list(&db.pool, "101", 50)
+                .await
+                .expect("versions")
+                .len(),
+            2
+        );
+        tokio::fs::remove_file(output_path(&runtime, fresh_id))
+            .await
+            .expect("isolated missing media");
+        assert!(produced_outcome(&db.pool, "101", clip, identity)
+            .await
+            .is_err());
+        lease.ensure_held().await.expect("caller retains lease");
+        lease.release().await.expect("release");
+    }
+}
+
+#[tokio::test]
+async fn expiry_after_queueing_does_not_spend_validation_attempts_when_rendering_is_exhausted() {
+    let db = database().await;
+    let directory = tempfile::tempdir().expect("package root");
+    let runtime = runtime(directory.path());
+    let clip = source(&db.pool, &runtime).await;
+    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip)
+        .await
+        .expect("job");
+    let identity = Identity::Manual(job.id);
+    let mut lease = super::super::store::acquire_production_lease(&db.pool)
+        .await
+        .expect("lease")
+        .expect("free");
+    let mut checkpoints = prepared(&db.pool, &runtime, &mut lease, clip, identity).await;
+    let rendered = execute_stage(
+        &mut StageContext {
+            pool: &db.pool,
+            current: &runtime,
+            lease: &mut lease,
+            owner: "101",
+            clip_id: clip,
+            identity,
+            expected_twitch_clip_id: None,
+            checkpoints: &checkpoints,
+            brain_token: None,
+        },
+        AiStage::Rendering,
+    )
+    .await
+    .expect("real media");
+    checkpoints.insert(AiStage::Rendering, rendered);
+    sqlx::query("UPDATE social_ai_jobs SET stage='validating',status='failed',checkpoints=$2,attempts='{\"rendering\":2,\"validating\":1}'::jsonb WHERE id=$1")
+        .bind(job.id).bind(serde_json::to_value(checkpoints).expect("state")).execute(&db.pool).await.expect("bounded failed validation fixture");
+    let video = produced_video::find_ai_version(&db.pool, "101", clip, Some(job.id), None)
+        .await
+        .expect("video")
+        .expect("version");
+    assert!(
+        super::super::get_manual_job(&db.pool, &runtime, "101", job.id)
+            .await
+            .expect("unexpired retry")
+            .can_retry
+    );
+    super::super::retry_manual_job(&db.pool, &runtime, "101", job.id)
+        .await
+        .expect("queue before expiry");
+    expire_fixture(&db.pool, video.id).await;
+    lease.release().await.expect("handover");
+    let worker = super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None);
+    assert!(matches!(
+        worker.process_next().await,
+        Err(AiEditorError::Attempts)
+    ));
+    let view = super::super::get_manual_job(&db.pool, &runtime, "101", job.id)
+        .await
+        .expect("terminal bounded failure");
+    assert_eq!(view.status, "failed");
+    assert!(!view.can_retry);
+    assert!(
+        super::super::retry_manual_job(&db.pool, &runtime, "101", job.id)
+            .await
+            .is_err()
+    );
+    let attempts: Value = sqlx::query_scalar("SELECT attempts FROM social_ai_jobs WHERE id=$1")
+        .bind(job.id)
+        .fetch_one(&db.pool)
+        .await
+        .expect("unchanged attempts");
+    assert_eq!(attempts, json!({"rendering":2,"validating":1}));
+    assert!(!worker.process_next().await.expect("no queue starvation"));
+    assert_eq!(
+        produced_video::list(&db.pool, "101", 50)
+            .await
+            .expect("no replacement beyond limit")
+            .len(),
+        1
+    );
+}
+
 #[tokio::test]
 async fn c3_consent_failure_stays_review_without_static_fallback_or_manual_identity() {
     let db = database().await;

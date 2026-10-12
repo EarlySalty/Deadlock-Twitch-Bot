@@ -39,9 +39,18 @@ async fn project(
         let checkpoints = store::checkpoints(pool, owner, job.id).await?;
         job.can_retry = match pipeline::checkpoint_runtime(&checkpoints, runtime) {
             Ok(frozen) => {
-                store::get_job(pool, owner, job.id, attempt_limit(&frozen)?)
+                let limit = attempt_limit(&frozen)?;
+                store::get_job(pool, owner, job.id, limit).await?.can_retry
+                    && (!pipeline::media_recovery_needed(
+                        pool,
+                        &frozen,
+                        owner,
+                        job.clip_db_id,
+                        Identity::Manual(job.id),
+                        &checkpoints,
+                    )
                     .await?
-                    .can_retry
+                        || store::render_retry_available(pool, owner, job.id, limit).await?)
             }
             Err(_) => false,
         };
@@ -160,6 +169,10 @@ pub async fn retry_manual_job(
 ) -> Result<AiJobView, AiEditorError> {
     social_editor::consent_allowed(pool, owner).await?;
     let limit = frozen_limit(pool, runtime, owner, job_id).await?;
+    let job = get_manual_job(pool, runtime, owner, job_id).await?;
+    if !job.can_retry {
+        return Err(AiEditorError::Conflict);
+    }
     let job = store::retry_job(pool, owner, job_id, limit).await?;
     project(pool, runtime, owner, job).await
 }
@@ -284,6 +297,25 @@ impl ManualWorker {
                 }
             };
             let limit = attempt_limit(&frozen_runtime)?;
+            if matches!(job.stage, AiStage::Rendering | AiStage::Validating)
+                && (job.stage != AiStage::Rendering
+                    || job.checkpoints.contains_key(&AiStage::Rendering)
+                    || job.checkpoints.contains_key(&AiStage::Validating))
+                && pipeline::media_recovery_needed(
+                    &self.pool,
+                    &frozen_runtime,
+                    owner,
+                    job.clip_db_id,
+                    Identity::Manual(id),
+                    &job.checkpoints,
+                )
+                .await?
+            {
+                if !store::rewind_media_stages(lease, owner, id, limit).await? {
+                    return Err(AiEditorError::Attempts);
+                }
+                continue;
+            }
             if job.status == "queued" {
                 store::claim_job(lease, owner, id, limit).await?;
             }

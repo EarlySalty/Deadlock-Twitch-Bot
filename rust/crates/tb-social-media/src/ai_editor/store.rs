@@ -484,7 +484,8 @@ async fn load_versions(
     let rows = sqlx::query(
         "SELECT j.id AS job_id, p.id, p.version_no, p.created_at, p.status, \
          p.duration_ms, p.parent_version_id FROM social_ai_jobs j \
-         JOIN LATERAL (SELECT p.id, p.version_no, p.created_at, p.status, \
+         JOIN LATERAL (SELECT p.id, p.version_no, p.created_at, \
+         CASE WHEN p.status IN ('rendering','review','failed') AND p.expires_at <= NOW() THEN 'expired' ELSE p.status END AS status, \
          p.duration_ms, p.parent_version_id FROM social_produced_videos p \
          WHERE p.twitch_user_id = j.twitch_user_id::text AND p.clip_id = j.clip_db_id \
          AND p.mode = 'ai' AND p.metadata ->> 'manual_ai_job_id' = j.id::text \
@@ -939,6 +940,47 @@ pub async fn fail_job(
     } else {
         Err(AiStoreError::Conflict)
     }
+}
+
+pub(super) async fn render_retry_available(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    job_id: i64,
+    limit: AttemptLimit,
+) -> Result<bool, AiStoreError> {
+    let owner = numeric_owner(twitch_user_id)?;
+    sqlx::query_scalar("SELECT COALESCE((attempts ->> 'rendering')::integer, 0) < $3 FROM social_ai_jobs WHERE id=$1 AND twitch_user_id=$2")
+        .bind(job_id).bind(owner).bind(limit.0).fetch_optional(pool).await?
+        .ok_or(AiStoreError::NotFound)
+}
+
+pub(super) async fn rewind_media_stages(
+    lease: &mut ProductionLease,
+    twitch_user_id: &str,
+    job_id: i64,
+    limit: AttemptLimit,
+) -> Result<bool, AiStoreError> {
+    lease.ensure_held().await?;
+    let owner = numeric_owner(twitch_user_id)?;
+    let status: Option<String> = sqlx::query_scalar(
+        "UPDATE social_ai_jobs SET stage='rendering', \
+         status=CASE WHEN COALESCE((attempts ->> 'rendering')::integer, 0) < $3 THEN 'queued' ELSE 'failed' END, \
+         checkpoints=checkpoints - 'rendering' - 'validating', \
+         output_duration_ms=NULL, rendering_ms=NULL, \
+         failure_code=CASE WHEN COALESCE((attempts ->> 'rendering')::integer, 0) < $3 THEN NULL ELSE 'rendering_failed' END, \
+         failure_message=CASE WHEN COALESCE((attempts ->> 'rendering')::integer, 0) < $3 THEN NULL ELSE 'Die erlaubten Versuche für diesen Schritt sind aufgebraucht.' END, \
+         updated_at=NOW() WHERE id=$1 AND twitch_user_id=$2 \
+         AND stage IN ('rendering','validating') AND status IN ('queued','rendering','validating') \
+         RETURNING status",
+    )
+    .bind(job_id)
+    .bind(owner)
+    .bind(limit.0)
+    .fetch_optional(&mut *lease.connection)
+    .await?;
+    status
+        .map(|status| status == "queued")
+        .ok_or(AiStoreError::Conflict)
 }
 
 pub async fn retry_job(

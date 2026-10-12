@@ -18,7 +18,7 @@ async fn fixture() -> postgres::TestPostgres {
     .await
     .expect("Clip-Tabelle");
     sqlx::query(
-        "CREATE TABLE public.social_produced_videos (id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT NOT NULL, clip_id BIGINT NOT NULL, mode TEXT NOT NULL, version_no INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), status TEXT NOT NULL, duration_ms BIGINT, parent_version_id BIGINT, metadata JSONB NOT NULL DEFAULT '{}'::jsonb)",
+        "CREATE TABLE public.social_produced_videos (id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT NOT NULL, clip_id BIGINT NOT NULL, mode TEXT NOT NULL, version_no INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), expires_at TIMESTAMPTZ, status TEXT NOT NULL, duration_ms BIGINT, parent_version_id BIGINT, metadata JSONB NOT NULL DEFAULT '{}'::jsonb)",
     )
     .execute(&db.pool)
     .await
