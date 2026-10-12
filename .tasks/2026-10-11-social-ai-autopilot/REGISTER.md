@@ -18,3 +18,9 @@ Decisions sent: Anthropic connector scoped to social editor (Opus 5.5 via YAML, 
 - P2: A = M1 gate/deploy/live run; B = M2 revisions/produce/multi-output; C = M3 learning; D = M4 admin pages.
 - P3: M2 started now against fixtures and published contracts; integrates real components as they land.
 - Guardrail: memory about 6 GB free, cargo -j2 via cargo-slot, never two release builds at once.
+
+## 2026-10-12 ~05:40Z decisions
+- DB role deadlock password rotated 04:10Z (user approved), all 9 consumers restarted and verified.
+- Speed directive sent: critical path P2 M1 -> P1 B -> P3 M2, no re-verification ceremony, one batched deploy, 15-min watch.
+- P1 B composes on P2 candidate 741ba64a0 (WIP adf4a6206), rebases on P2 main SHA.
+- MediaRuntime owned by P2 (media-only loader, EditorRuntime builds on it); B uses editor=None when AI config fails.
