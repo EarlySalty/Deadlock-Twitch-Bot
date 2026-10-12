@@ -639,11 +639,26 @@ export default function SocialWorkspaces(props: SocialMediaProps) {
           legacy
             ? props.workspaceSlots
             : {
+                ...props.workspaceSlots,
                 automation: props.workspaceSlots?.automation ?? (
                   <SyntheticAutomation />
                 ),
                 libraryImport: props.workspaceSlots?.libraryImport ?? (
                   <SyntheticImport />
+                ),
+                publishReview: props.workspaceSlots?.publishReview ?? (
+                  <section
+                    className="studio-workspace-surface"
+                    data-preview="p3-publish-review-reservation-v1"
+                  >
+                    <div className="studio-section-heading">
+                      <h2>Veröffentlichung prüfen</h2>
+                    </div>
+                    <p className="studio-workspace-note">
+                      Die neue Veröffentlichungsprüfung für statische und
+                      KI-bearbeitete Videos ist noch nicht angebunden.
+                    </p>
+                  </section>
                 ),
               }
         }
