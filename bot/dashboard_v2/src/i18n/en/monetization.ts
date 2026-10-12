@@ -113,4 +113,287 @@ export const MONETIZATION_EN: Record<string, string> = {
   'Läuft noch einen Tag als Test.': 'Trial runs for one more day.',
   'Läuft gerade als Test.': 'Currently running as a trial.',
   'Du nutzt diese Stufe über einen älteren Tarif.': 'You are using this tier through an older plan.',
+  'Modus unbekannt': 'Mode unknown',
+  'Steam-Spielhistorie · {count} Spiele': 'Steam match history · {count} matches',
+  'Hinweis aus aktuellem Streamtitel': 'Hint from current stream title',
+  'Hinweis aus letztem passenden Streamtitel': 'Hint from last matching stream title',
+  'Noch kein belastbarer Modushinweis': 'No reliable mode hint yet',
+  'Rang unbekannt': 'Rank unknown',
+  'etwa {rank}': 'about {rank}',
+  'Treffpunkt für gemeinsame Streams': 'Meeting point for streaming together',
+  'Anderer Modus als dein letzter Hinweis': 'Different mode from your last hint',
+  'Größerer Rangunterschied · vorher absprechen': 'Larger rank gap · talk it through first',
+  'Modus und ungefährer Rang passen': 'Mode and approximate rank match',
+  'Passender Modushinweis': 'Matching mode hint',
+  'Ähnlicher Rang laut Discord-Rollen': 'Similar rank based on Discord roles',
+  'Modus oder Rang noch nicht vergleichbar': 'Mode or rank not comparable yet',
+  'Verbinde dein Discord-Konto, damit wir dir nur Sprachkanäle zeigen, auf die du zugreifen darfst.':
+    'Connect your Discord account so we only show you voice channels you are allowed to access.',
+  'Deine Discord-Mitgliedschaft konnte nicht bestätigt werden. Prüfe deine Verbindung und den Serverbeitritt.':
+    'Your Discord membership could not be confirmed. Check your connection and that you joined the server.',
+  'Die Discord-Liveansicht ist gerade nicht verfügbar. Das bedeutet nicht, dass niemand spielt.':
+    'The Discord live view is currently unavailable. That does not mean nobody is playing.',
+  'Die Lobby-Anzeige ist nicht mehr aktuell. Zum Öffnen bitte neu laden.':
+    'The lobby view is out of date. Please reload to open a lobby.',
+
+  'Steam-Rang vom {date}': 'Steam rank from {date}',
+  'Bestätigter Steam-Rang': 'Confirmed Steam rank',
+  'aus Spielhistorie': 'from match history',
+  'Titelhinweis': 'Title hint',
+  'Streamer-Treffpunkt': 'Streamer meetup',
+  'Streamer zu Streamer': 'Streamer to streamer',
+  'Nicht nur gleichzeitig live. Gemeinsam streamen.': 'Not just live at the same time. Stream together.',
+  'Verabredet euch im Streamer-VC: Duo, gemeinsamer Abend oder erst einmal kennenlernen. Vorher kurz klären, wer mit auf Sendung sein möchte.':
+    'Meet up in the streamer VC: duo, an evening together or just getting to know each other first. Briefly clarify beforehand who wants to be on stream.',
+  'Zum Streamer-VC': 'Go to streamer VC',
+  'Die Streamer-Rolle hat in den vorgesehenen Sprachkanälen erweiterte Rechte: Personen verschieben und den Kanalzugriff sperren. Das ist kein serverweiter Bann. Bei Problemen bitte beim Mod-Team oder der Serverleitung melden.':
+    'The streamer role has extended permissions in the designated voice channels: moving people and blocking channel access. This is not a server-wide ban. If there are problems, please report them to the mod team or the server management.',
+  'Historische Streamzeiten, Montag bis Sonntag, Zeit in Berlin':
+    'Past stream times, Monday to Sunday, Berlin time',
+  '{day} {start} bis {end} · {own}: {ownPct} % gewichtete Häufigkeit':
+    '{day} {start} to {end} · {own}: {ownPct}% weighted frequency',
+  '{day} {start} bis {end} · {own}: {ownPct} % · {other}: {otherPct} % gewichtete Häufigkeit':
+    '{day} {start} to {end} · {own}: {ownPct}% · {other}: {otherPct}% weighted frequency',
+  'Gemeinsame Zeitfenster': 'Shared time slots',
+  'Europe/Berlin · zusammenhängende Balken aus 30 Minuten Fenstern · neuere Streams zählen stärker. Beobachtete Gewohnheiten sind keine zugesagten Termine.':
+    'Europe/Berlin · continuous bars from 30-minute slots · recent streams count more. Observed habits are not confirmed appointments.',
+  '{count} ausgewertete Streams': '{count} streams analyzed',
+  'Signalpunkte, keine Erfolgswahrscheinlichkeit.': 'Signal points, not a success probability.',
+  'Signalpunkte / 100': 'Signal points / 100',
+  'Gemeinsames Spiel': 'Shared game',
+  'Gleiches Spiel live': 'Live in the same game',
+  'Zeiten vergleichen': 'Compare times',
+  'Stream öffnen': 'Open stream',
+  'Voice aktiv': 'Voice active',
+  'Stand veraltet': 'Out of date',
+  '{count} / {limit} im Sprachkanal': '{count} / {limit} in the voice channel',
+  '{count} im Sprachkanal': '{count} in the voice channel',
+  'Kein VC-Limit': 'No VC limit',
+  'VC voll': 'VC full',
+  '{count} VC-Plätze frei': '{count} VC slots free',
+  'Belegung des Sprachkanals': 'Voice channel occupancy',
+  'Kategorie: {mode}': 'Category: {mode}',
+  'Grobe Einschätzung aus {count} Discord-Rollen, nicht aus aktuellen Match-Rängen.':
+    'Rough estimate from {count} Discord roles, not from current match ranks.',
+  'Du bist bereits in diesem Sprachkanal.': 'You are already in this voice channel.',
+  'Zum Sprachkanal': 'Go to voice channel',
+  'Aktualisierung erforderlich': 'Refresh required',
+  'Sprachkanal voll': 'Voice channel full',
+  'Aktualisierung fehlgeschlagen. Historische Vorschläge bleiben sichtbar; die Lobby-Einstiege sind vorsichtshalber deaktiviert.':
+    'Refresh failed. Past suggestions stay visible; lobby links are disabled as a precaution.',
+  'Wann überschneiden sich eure Streams?': 'When do your streams overlap?',
+  '{days} Tage · {sessions} abgeschlossene Streams von {streamer}':
+    '{days} days · {sessions} completed streams by {streamer}',
+  'Vergleichen mit': 'Compare with',
+  'Tatsächlich gleichzeitig gestreamte Stunden': 'Hours actually streamed at the same time',
+  'Tatsächlich gleichzeitig': 'Actually overlapping',
+  '{hours} Std.': '{hours} hrs',
+  'im betrachteten Zeitraum': 'in the selected period',
+  'Gleichzeitige Streamzeit bedeutet nicht automatisch, dass ihr gemeinsam in einem Match wart.':
+    'Streaming at the same time does not automatically mean you were in a match together.',
+  'Wer passt zu dir?': 'Who is a good match for you?',
+  'Passende Zeiten zuerst. Bekannte Ränge und Modi verfeinern die Auswahl.':
+    'Matching times first. Known ranks and modes refine the selection.',
+  'Jetzt live': 'Live now',
+  'Ohne bekannte Rang oder Moduskonflikte': 'Without known rank or mode conflicts',
+  'Für diese Filter gibt es gerade keine Vorschläge.': 'There are no suggestions for these filters right now.',
+  'Noch keine anderen aktiven Partner mit passenden Daten vorhanden. Der Streamer-VC bleibt euer Treffpunkt.':
+    'No other active partners with matching data yet. The streamer VC remains your meeting point.',
+  'Weniger anzeigen': 'Show less',
+  'Alle {count} Vorschläge ansehen': 'View all {count} suggestions',
+  '{evaluated} von {total} anderen aktiven Partnern näher betrachtet. Bei großen Netzwerken werden bis zu 16 Kandidaten nach Zeitüberschneidung vorausgewählt. Signalpunkte sind keine Wahrscheinlichkeit und keine Zusage.':
+    '{evaluated} of {total} other active partners examined more closely. In large networks, up to 16 candidates are preselected by time overlap. Signal points are neither a probability nor a promise.',
+  'Jetzt im Discord': 'In Discord now',
+  'Community-Daten aktualisieren': 'Refresh community data',
+  'Aktualisieren': 'Refresh',
+  'Aktive Sprachkanäle, auf die dein Discord-Konto zugreifen darf.':
+    'Active voice channels your Discord account can access.',
+  'Nur mit VC-Platz': 'Only with a free VC slot',
+  'Frisch geprüft': 'Just checked',
+  'Keine Live-Bestätigung': 'No live confirmation',
+  'Discord-Verbindung verwalten →': 'Manage Discord connection →',
+  'Community-Discord öffnen →': 'Open community Discord →',
+  'Die sichtbaren Sprachkanäle sind gerade voll. Deaktiviere den Filter, um sie zu sehen.':
+    'The visible voice channels are full right now. Turn off the filter to see them.',
+  'Gerade keine belegte, für dich sichtbare Community-Lobby gefunden.':
+    'No occupied community lobby visible to you right now.',
+  'Ein freier VC-Platz ist kein garantierter Ingame-Platz. Der Klick öffnet Discord; Beitritt und Rechte prüft Discord erneut. Keine automatische Verschiebung, kein Audio im Browser. Aktualisierung alle 30 Sekunden.':
+    'A free VC slot is not a guaranteed in-game slot. The click opens Discord; Discord checks access and permissions again. No automatic moving, no audio in the browser. Refreshes every 30 seconds.',
+  'Wie entstehen die Vorschläge?': 'How are the suggestions made?',
+  'Abgeschlossene Streams liefern halbstündige Wochenprofile in Berliner Zeit. Tatsächlich gleichzeitig gestreamte Minuten werden separat aus den Session-Zeiten berechnet. Für eine Wertung sind mindestens drei Sessions je Person nötig.':
+    'Completed streams provide weekly profiles in half-hour slots in Berlin time. Minutes actually streamed at the same time are calculated separately from the session times. A score needs at least three sessions per person.',
+  'Bis zu 65 Punkte kommen aus den Zeiten, 15 aus gemeinsamen Spielen, 15 aus bestätigten, höchstens 14 Tage alten Steam-Rängen und 5 aus passenden Modi. Ein Titelhinweis gibt höchstens 2 Moduspunkte. Unbekannte Werte bleiben unbekannt.':
+    'Up to 65 points come from times, 15 from shared games, 15 from confirmed Steam ranks no older than 14 days and 5 from matching modes. A title hint gives at most 2 mode points. Unknown values stay unknown.',
+  'Spielhistorie berücksichtigt explizite Modi aus den letzten 14 Tagen. Ein einzelnes Spiel genügt nicht: mindestens drei passende Spiele und ein überwiegender Modus sind nötig. Aktuelle Titel sind Absichtshinweise, keine verifizierten Match-Daten.':
+    'Match history considers explicit modes from the last 14 days. A single match is not enough: at least three matching games and a predominant mode are needed. Current titles are hints of intent, not verified match data.',
+  'Ein größerer Rangunterschied oder unterschiedliche Modi werden in der Auswahl berücksichtigt. Zeiten, Spielweise und freie Plätze solltet ihr kurz miteinander absprechen.':
+    'A larger rank gap or different modes are taken into account in the selection. Briefly agree on times, play style and free slots with each other.',
+  'Community': 'Community',
+  'Zusammen spielen & streamen': 'Play & stream together',
+  'Finde Menschen für deinen nächsten gemeinsamen Abend – und sieh, wo gerade etwas los ist.':
+    'Find people for your next evening together and see where things are happening right now.',
+  'Die Demo liest keine persönlichen Steam- oder Discord-Livedaten. Melde dich mit deinem Partner-Konto an, um echte Vorschläge und sichtbare Lobbys zu sehen.':
+    'The demo does not read any personal Steam or Discord live data. Sign in with your partner account to see real suggestions and visible lobbies.',
+  'Bitte einen Streamer auswählen.': 'Please select a streamer.',
+  'Streamzeiten und Community-Daten werden geladen …': 'Loading stream times and community data …',
+  'Community-Daten konnten nicht geladen werden.': 'Could not load community data.',
+  'Ungültige Uhrzeit.': 'Invalid time.',
+  'Bitte Datum und Uhrzeit vollständig eintragen.': 'Please enter both date and time.',
+  'Ungültiges Datum.': 'Invalid date.',
+  'Diese Uhrzeit existiert in Berlin wegen der Zeitumstellung nicht. Bitte eine andere Uhrzeit wählen.':
+    'This time does not exist in Berlin because of the daylight saving change. Please choose a different time.',
+  'Diese Uhrzeit kommt bei der Zeitumstellung zweimal vor. Bitte eine eindeutige Uhrzeit außerhalb der doppelten Stunde wählen.':
+    'This time occurs twice during the daylight saving change. Please choose an unambiguous time outside the repeated hour.',
+
+  'Erklärend': 'Educational',
+  'Unter der Woche tagsüber': 'Weekdays, daytime',
+  'Unter der Woche abends': 'Weekdays, evenings',
+  'Unter der Woche spät': 'Weekdays, late',
+  'Am Wochenende tagsüber': 'Weekends, daytime',
+  'Am Wochenende abends': 'Weekends, evenings',
+  'Spontan': 'Spontaneous',
+  'Das Speichern ist fehlgeschlagen.': 'Saving failed.',
+  'Twitch-Profilbild von {login}': 'Twitch profile picture of {login}',
+  'Twitch Profildaten sind gerade nicht verfügbar. Bitte erneut versuchen.':
+    'Twitch profile data is currently unavailable. Please try again.',
+  'Twitch-Bio, Profilbild, Banner und Streamplan sind aktualisiert. Bitte Änderungen speichern.':
+    'Twitch bio, profile picture, banner and stream schedule are updated. Please save your changes.',
+  'Gespeichert. Dein Profil ist öffentlich erreichbar.': 'Saved. Your profile is publicly available.',
+  'Gespeichert. Dein Profil bleibt privat.': 'Saved. Your profile stays private.',
+  'Der Termin muss länger als null, aber höchstens 48 Stunden dauern.':
+    'The event must last longer than zero and at most 48 hours.',
+  'Bitte einen Titel eintragen.': 'Please enter a title.',
+  'Höchstens 200 Termine speichern. Alte Termine kannst du gezielt entfernen.':
+    'You can save at most 200 events. You can remove old events individually.',
+  'Den noch nicht übernommenen Termineintrag verwerfen?': 'Discard the event entry you have not applied yet?',
+  'Dein Platz im Partnernetzwerk': 'Your place in the partner network',
+  'Mein öffentliches Profil': 'My public profile',
+  'Stell dich als Streamer vor, verlinke deine Kanäle und plane Termine für deine Community.':
+    'Introduce yourself as a streamer, link your channels and plan events for your community.',
+  'Bot derzeit nicht aktiv': 'Bot currently inactive',
+  'Profil veröffentlicht': 'Profile published',
+  'Noch nicht veröffentlicht': 'Not published yet',
+  'Profil veröffentlichen': 'Publish profile',
+  'Ausgeschaltet bleibt dein Profil ein privater Entwurf.': 'When turned off, your profile stays a private draft.',
+  'Wird gespeichert …': 'Saving…',
+  'Offenen Termin zuerst übernehmen oder abbrechen.': 'Apply or cancel the open event first.',
+  'Gespeicherter Stand': 'All changes saved',
+  'Öffentliche Adresse': 'Public URL',
+  'Profil öffnen': 'Open profile',
+  'Profilbild von Twitch': 'Profile picture from Twitch',
+  'Wird automatisch aus deinem Twitch-Konto übernommen.': 'Taken automatically from your Twitch account.',
+  'Profil zu {completion}% vollständig': 'Profile {completion}% complete',
+  'Überschrift, Bio, Deadlock-Angaben, Links und Streamplan zählen in die Einrichtung.':
+    'Headline, bio, Deadlock details, links and stream schedule count toward setup.',
+  'Twitch wird aktualisiert': 'Updating from Twitch',
+  'Aus Twitch importieren': 'Import from Twitch',
+  'Lädt Twitch-Bio, Profilbild, Banner und Streamplan neu. Zusätzliche Social-Links stellt Twitch hier nicht bereit.':
+    'Reloads your Twitch bio, profile picture, banner and stream schedule. Twitch does not provide additional social links here.',
+  'Dein Profil bleibt gespeichert, ist aber nicht öffentlich. Du kannst es bearbeiten, sobald dein Bot wieder aktiv ist.':
+    'Your profile stays saved but is not public. You can edit it once your bot is active again.',
+  'Bot-Verwaltung öffnen': 'Open bot management',
+  '{error} Deine Eingaben bleiben hier erhalten.': '{error} Your input stays here.',
+  'Deine ungespeicherten Eingaben verwerfen und den aktuellen Serverstand laden?':
+    'Discard your unsaved input and load the current version from the server?',
+  'Aktuellen Stand laden': 'Load current version',
+  'Vorstellung': 'Introduction',
+  'Erzähl, wer du bist': 'Tell people who you are',
+  'Deine Überschrift ist der erste Eindruck. Im Text darunter kannst du erklären, was Zuschauer bei dir erwartet.':
+    'Your headline is the first impression. In the text below you can explain what viewers can expect from you.',
+  'Profilüberschrift': 'Profile headline',
+  'Deadlock, gute Gespräche und eine Runde mehr': 'Deadlock, good conversations and one more round',
+  '{count} / 120 Zeichen': '{count} / 120 characters',
+  'Über mich und meinen Stream': 'About me and my stream',
+  'Was spielst du am liebsten? Wie ist die Stimmung bei dir? Was macht deinen Stream aus?':
+    'What do you like to play most? What is the vibe on your stream? What makes your stream special?',
+  '{count} / 4000 Zeichen': '{count} / 4000 characters',
+  'Deadlock auf einen Blick': 'Deadlock at a glance',
+  'Diese Angaben erscheinen als kompakte Badges direkt im Profilkopf.':
+    'These details appear as compact badges right in your profile header.',
+  'Rangbereich': 'Rank range',
+  'Nicht angegeben': 'Not specified',
+  'Main Heroes, bis zu drei': 'Main heroes, up to three',
+  'Main Hero {number}': 'Main hero {number}',
+  'Hero {number}': 'Hero {number}',
+  'Streamstil': 'Stream style',
+  'Akzentfarbe': 'Accent color',
+  'Community-Gold': 'Community gold',
+  'Violett': 'Violet',
+  'Petrol': 'Teal',
+  'Livezeiten zeigen': 'Show live times',
+  'Zeigt deine erfasste Streamhistorie ohne Zuschauerzahlen, Chats oder private Analysen.':
+    'Shows your recorded stream history without viewer counts, chats or private analytics.',
+  'Live-Vorschau': 'Live preview',
+  'So wirkst du nach außen': 'How others see you',
+  'Die Vorschau aktualisiert sich direkt beim Tippen.': 'The preview updates as you type.',
+  'Deadlock Partner': 'Deadlock partner',
+  'Deine Profilüberschrift': 'Your profile headline',
+  'Hier erscheint deine Vorstellung. Erzähl kurz, was deinen Stream und deine Community ausmacht.':
+    'Your introduction appears here. Briefly describe what makes your stream and your community special.',
+  'Rang: {rank}': 'Rank: {rank}',
+  'Main: {hero}': 'Main: {hero}',
+  '{count} Links': '{count} links',
+  '{count} Empfehlungen': '{count} recommendations',
+  '{count} Termine': '{count} events',
+  'Das Profilbild kommt direkt von Twitch. Die Akzentfarbe steuerst du hier im Dashboard.':
+    'Your profile picture comes straight from Twitch. You control the accent color here in the dashboard.',
+  'Links': 'Links',
+  'Hier findet man dich': 'Where to find you',
+  'Dein Twitch-Kanal gehört automatisch zum Profil. Ergänze die Plattformen, auf denen du noch aktiv bist.':
+    'Your Twitch channel is automatically part of your profile. Add the other platforms you are active on.',
+  'Link {number}: Name': 'Link {number}: name',
+  'Plattform wählen': 'Choose platform',
+  'Adresse': 'URL',
+  'Link {number}: Adresse': 'Link {number}: URL',
+  'Entfernen': 'Remove',
+  'Noch keine zusätzlichen Links eingetragen.': 'No additional links added yet.',
+  'Link hinzufügen': 'Add link',
+  'Partnernetzwerk': 'Partner network',
+  'Leute aus deinem Umfeld': 'People in your circle',
+  'Empfiehl Streamer, mit denen du gerne spielst oder zusammen Content machst. Sichtbar werden aktive Partner mit veröffentlichtem Profil.':
+    'Recommend streamers you like to play with or create content with. Active partners with a published profile are shown.',
+  'Twitch-Namen': 'Twitch names',
+  'partner_eins, partner_zwei': 'partner_one, partner_two',
+  'Mehrere Namen mit Komma trennen. Das @ musst du nicht mitschreiben.':
+    'Separate multiple names with commas. You do not need to include the @.',
+  'Diese Empfehlungen helfen Besuchern, dein Umfeld zu entdecken und weitere Streamer aus dem Partnernetzwerk kennenzulernen.':
+    'These recommendations help visitors discover your circle and get to know more streamers from the partner network.',
+  'Streamplan': 'Stream schedule',
+  'Dein Streamplan': 'Your stream schedule',
+  'Nutze deinen Twitch-Streamplan automatisch. Eigene Zusatztermine kannst du darunter weiterhin eintragen.':
+    'Use your Twitch stream schedule automatically. You can still add your own extra events below.',
+  'Monat': 'Month',
+  'Kalendermonat': 'Calendar month',
+  'Twitch-Streamplan synchronisieren': 'Sync Twitch stream schedule',
+  'Künftige Twitch-Termine erscheinen automatisch im öffentlichen Profil. Du musst sie hier nicht doppelt pflegen.':
+    'Upcoming Twitch events appear on your public profile automatically. You do not need to add them here as well.',
+  'Typische Streamingzeiten': 'Typical streaming times',
+  'Twitch Termine': 'Twitch events',
+  'Automatisch gelesen, nicht manuell gespeichert.': 'Read automatically, not saved manually.',
+  '{count} gefunden': '{count} found',
+  'Twitch Stream': 'Twitch stream',
+  '{time} Uhr': '{time}',
+  'Aktuell sind keine kommenden Twitch Termine verfügbar.': 'There are no upcoming Twitch events right now.',
+  'Eigene Zusatztermine': 'Your own extra events',
+  'Für Community-Abende, Events oder Termine außerhalb deines Twitch-Streamplans.':
+    'For community evenings, events or dates outside your Twitch stream schedule.',
+  'Termin am {day} eintragen': 'Add event on {day}',
+  'Kalendereintrag': 'Calendar entry',
+  'Termin bearbeiten': 'Edit event',
+  'Neuer Termin': 'New event',
+  'Beginn, Berlin': 'Start, Berlin time',
+  'Ende, Berlin': 'End, Berlin time',
+  'Termin übernehmen': 'Apply event',
+  'Termin übernehmen aktualisiert zuerst deinen Entwurf. Gespeichert wird er mit dem Button oben.':
+    'Apply event updates your draft first. It is saved with the button above.',
+  '{start} bis {end} Uhr, Berlin': '{start} to {end}, Berlin time',
+  '„{title}“ aus deinem Kalender entfernen?': 'Remove “{title}” from your calendar?',
+  'Noch keine Termine. Wähle oben deinen ersten Streamtag aus.': 'No events yet. Pick your first stream day above.',
+  '{count} / 200 Termine. Keine automatische Löschung alter Termine. Erfasste Livestreams werden separat angezeigt und lassen sich hier nicht verändern.':
+    '{count} / 200 events. Old events are not deleted automatically. Recorded livestreams are shown separately and cannot be changed here.',
+  'Mein Profil': 'My profile',
+  'Die Demo liest oder verändert keine persönlichen Partnerprofile. Melde dich mit deinem Twitch-Konto an, um dein Profil zu gestalten.':
+    'The demo does not read or change any personal partner profiles. Sign in with your Twitch account to design your profile.',
+  'Dein Profil wird geladen …': 'Loading your profile …',
+  'Dein Profil konnte nicht geladen werden.': 'Could not load your profile.',
 };
