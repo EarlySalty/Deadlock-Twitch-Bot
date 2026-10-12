@@ -23,7 +23,7 @@ const websiteRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Verzeichnisse im Website-Root, die eine eigene Einstiegs-HTML tragen. */
 function pageDirsWithHtml() {
-  const skip = new Set(["node_modules", "dist", "src", "public", "tests", "scripts"]);
+  const skip = new Set(["node_modules", "dist", "dist-en", "src", "public", "tests", "scripts"]);
   return readdirSync(websiteRoot).filter((entry) => {
     if (skip.has(entry) || entry.startsWith(".")) return false;
     const full = join(websiteRoot, entry);
