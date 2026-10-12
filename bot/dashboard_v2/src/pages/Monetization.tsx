@@ -3,6 +3,8 @@ import { Rise } from '../motion/Rise';
 import { useMonetization, useAdsSchedule } from '@/hooks/useAnalytics';
 import type { TimeRange, AdBucketData, RecoveryBucketData, AdsSchedule, NetEffect } from '@/types/analytics';
 import { fmtDrop } from '@/utils/monetization';
+import { useT } from '../context/LanguageContext';
+import { activeLocale, tr } from '../i18n/dictionary';
 
 interface MonetizationProps {
   streamer: string | null;
@@ -21,7 +23,7 @@ function StatTile({ label, value, sub, valueClassName = 'text-white' }: { label:
 
 function fmt(n: number | null | undefined, fallback = '-'): string {
   if (n === null || n === undefined) return fallback;
-  return n.toLocaleString('de-DE');
+  return n.toLocaleString(activeLocale());
 }
 
 function dropTextClass(n: number): string {
@@ -38,30 +40,33 @@ function scaleFill(fraction: number): string {
   return `${BRONZE_RAMP[idx]}47`;
 }
 
-const momentLabels: Record<string, string> = {
-  queue: 'Queue',
-  first_match_minute: 'Erste Match-Minute',
-  in_match: 'Im Match',
-  post_match: 'Nach Matchende',
-  quiet_chat: 'Ruhiger Chat',
-  active_chat: 'Aktiver Chat',
-};
+function momentLabels(): Record<string, string> {
+  return {
+    queue: 'Queue',
+    first_match_minute: tr('Erste Match-Minute'),
+    in_match: tr('Im Match'),
+    post_match: tr('Nach Matchende'),
+    quiet_chat: tr('Ruhiger Chat'),
+    active_chat: tr('Aktiver Chat'),
+  };
+}
 
 const MOMENT_ORDER = ['queue', 'first_match_minute', 'in_match', 'post_match', 'quiet_chat', 'active_chat'];
 
 function formatRecovery(minutes: number | null | undefined): string {
-  if (minutes === null || minutes === undefined) return 'nicht erreicht';
-  if (minutes < 1) return '<1 Min';
-  return `${minutes} Min`;
+  if (minutes === null || minutes === undefined) return tr('nicht erreicht');
+  if (minutes < 1) return tr('<1 Min');
+  return tr('{minutes} Min', { minutes });
 }
 
 function DropBar({ label, avgDrop, count, maxDrop }: { label: string; avgDrop: number | null; count: number; maxDrop: number }) {
+  const t = useT();
   if (avgDrop === null || count === 0) {
     return (
       <div className="flex items-center gap-3">
         <span className="text-xs text-text-secondary w-16 text-right shrink-0">{label}</span>
         <div className="flex-1 h-6 bg-background rounded flex items-center px-2">
-          <span className="text-xs text-text-secondary">Keine Daten</span>
+          <span className="text-xs text-text-secondary">{t('Keine Daten')}</span>
         </div>
       </div>
     );
@@ -82,31 +87,33 @@ function DropBar({ label, avgDrop, count, maxDrop }: { label: string; avgDrop: n
 }
 
 function NetEffectSection({ net }: { net: NetEffect | undefined }) {
+  const t = useT();
   if (!net || net.sample === 0) {
     return (
       <div className="bg-card border border-border rounded-xl p-4 text-text-secondary text-sm">
-        Noch keine belastbare Netto-Wirkung. Sie entsteht, sobald Werbungen mit Viewer-Verlauf vorliegen.
+        {t('Noch keine belastbare Netto-Wirkung. Sie entsteht, sobald Werbungen mit Viewer-Verlauf vorliegen.')}
       </div>
     );
   }
   const horizons = [
-    { key: 'plus_1', label: '+1 Min', h: net.by_horizon.plus_1 },
-    { key: 'plus_3', label: '+3 Min', h: net.by_horizon.plus_3 },
-    { key: 'plus_5', label: '+5 Min', h: net.by_horizon.plus_5 },
+    { key: 'plus_1', minutes: 1, h: net.by_horizon.plus_1 },
+    { key: 'plus_3', minutes: 3, h: net.by_horizon.plus_3 },
+    { key: 'plus_5', minutes: 5, h: net.by_horizon.plus_5 },
   ];
+  const labels = momentLabels();
   return (
     <div className="bg-card border border-border rounded-xl p-5 space-y-4">
       <div className="flex items-center gap-2">
         <BarChart3 className="w-4 h-4 text-accent" />
-        <span className="text-sm font-medium text-white">Netto-Wirkung der Werbung</span>
-        <span className="text-xs text-text-secondary ml-auto">gegenüber werbefreien Momenten derselben Sendung</span>
+        <span className="text-sm font-medium text-white">{t('Netto-Wirkung der Werbung')}</span>
+        <span className="text-xs text-text-secondary ml-auto">{t('gegenüber werbefreien Momenten derselben Sendung')}</span>
       </div>
       <div className="grid grid-cols-3 gap-3">
-        {horizons.map(({ key, label, h }) => (
+        {horizons.map(({ key, minutes, h }) => (
           <div key={key} className="bg-background rounded-lg p-3 flex flex-col gap-1">
-            <span className="text-xs text-text-secondary">{label} nach Werbung</span>
+            <span className="text-xs text-text-secondary">{t('+{minutes} Min nach Werbung', { minutes })}</span>
             <span className={`text-lg font-bold ${h.avg_net_drop_pct != null ? dropTextClass(h.avg_net_drop_pct) : 'text-text-secondary'}`}>
-              {h.avg_net_drop_pct != null ? fmtDrop(h.avg_net_drop_pct) : 'Keine Daten'}
+              {h.avg_net_drop_pct != null ? fmtDrop(h.avg_net_drop_pct) : t('Keine Daten')}
             </span>
             <span className="text-xs text-text-secondary">{h.count}x</span>
           </div>
@@ -115,18 +122,18 @@ function NetEffectSection({ net }: { net: NetEffect | undefined }) {
       <div>
         <div className="flex items-center gap-2 mb-2">
           <Clock className="w-4 h-4 text-accent" />
-          <span className="text-sm font-medium text-white">Wirkung nach Moment</span>
+          <span className="text-sm font-medium text-white">{t('Wirkung nach Moment')}</span>
         </div>
         <div className="space-y-2">
           {MOMENT_ORDER.map((key) => {
             const m = net.moment_impact?.[key];
-            const label = momentLabels[key];
+            const label = labels[key];
             if (!m || !m.enough_data || m.avg_net_drop_pct == null) {
               return (
                 <div key={key} className="flex items-center gap-3">
                   <span className="text-xs text-text-secondary w-32 text-right shrink-0">{label}</span>
                   <div className="flex-1 h-6 bg-background rounded flex items-center px-2">
-                    <span className="text-xs text-text-secondary">Noch zu wenig Daten ({m?.count ?? 0}/15)</span>
+                    <span className="text-xs text-text-secondary">{t('Noch zu wenig Daten ({count}/15)', { count: m?.count ?? 0 })}</span>
                   </div>
                 </div>
               );
@@ -148,13 +155,14 @@ function NetEffectSection({ net }: { net: NetEffect | undefined }) {
 }
 
 function AdStrategyRecommendation({ recommendations }: { recommendations: string[] }) {
+  const t = useT();
   if (!recommendations || recommendations.length === 0) return null;
 
   return (
     <div className="bg-gradient-to-r from-primary/10 via-card to-accent/10 border border-primary/25 rounded-xl p-5">
       <div className="flex items-center gap-2 mb-3">
         <Lightbulb className="w-5 h-5 text-primary" />
-        <h4 className="font-semibold text-white">Ad-Strategie Empfehlung</h4>
+        <h4 className="font-semibold text-white">{t('Ad-Strategie Empfehlung')}</h4>
       </div>
       <ul className="space-y-2">
         {recommendations.map((rec, i) => (
@@ -171,11 +179,12 @@ function AdStrategyRecommendation({ recommendations }: { recommendations: string
 }
 
 function AdScheduleSection({ scheduleData, loading }: { scheduleData: AdsSchedule | null; loading: boolean }) {
+  const t = useT();
   if (loading) {
     return (
       <div className="mb-4 bg-card border border-border rounded-xl p-5 flex items-center gap-2 text-text-secondary text-sm">
         <Loader2 className="w-4 h-4 animate-spin" />
-        Lade Ad-Zeitplan…
+        {t('Lade Ad-Zeitplan…')}
       </div>
     );
   }
@@ -183,7 +192,7 @@ function AdScheduleSection({ scheduleData, loading }: { scheduleData: AdsSchedul
   if (!scheduleData || !scheduleData.current) {
     return (
       <div className="mb-4 p-4 bg-card border border-border rounded-xl text-text-secondary text-sm">
-        Keine Ad-Zeitplan-Daten vorhanden.
+        {t('Keine Ad-Zeitplan-Daten vorhanden.')}
       </div>
     );
   }
@@ -194,24 +203,22 @@ function AdScheduleSection({ scheduleData, loading }: { scheduleData: AdsSchedul
     <Rise
       className="mb-4 space-y-4"
     >
-      {/* Section Header */}
       <div className="flex items-center gap-2">
         <Calendar className="w-4 h-4 text-primary" />
-        <h4 className="font-semibold text-white">Ad-Zeitplan</h4>
+        <h4 className="font-semibold text-white">{t('Ad-Zeitplan')}</h4>
         <span className="text-xs text-text-secondary ml-auto">
-          Stand: {formatTimestamp(current.snapshot_at)}
+          {t('Stand: {time}', { time: formatTimestamp(current.snapshot_at) })}
         </span>
       </div>
 
-      {/* Current Status Tiles */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <div className="bg-card border border-border rounded-xl p-4 flex flex-col gap-1">
           <div className="flex items-center gap-1.5">
             <Clock className="w-3.5 h-3.5 text-accent" />
-            <span className="text-xs text-text-secondary uppercase tracking-wide">Nächste Ad</span>
+            <span className="text-xs text-text-secondary uppercase tracking-wide">{t('Nächste Ad')}</span>
           </div>
           <span className="text-lg font-bold text-white">
-            {current.next_ad_at ? formatRelativeTime(current.next_ad_at) : 'Keine geplant'}
+            {current.next_ad_at ? formatRelativeTime(current.next_ad_at) : t('Keine geplant')}
           </span>
           {current.next_ad_at && (
             <span className="text-xs text-text-secondary">{formatTimestamp(current.next_ad_at)}</span>
@@ -221,25 +228,25 @@ function AdScheduleSection({ scheduleData, loading }: { scheduleData: AdsSchedul
         <div className="bg-card border border-border rounded-xl p-4 flex flex-col gap-1">
           <div className="flex items-center gap-1.5">
             <Timer className="w-3.5 h-3.5 text-success" />
-            <span className="text-xs text-text-secondary uppercase tracking-wide">Preroll-frei</span>
+            <span className="text-xs text-text-secondary uppercase tracking-wide">{t('Preroll-frei')}</span>
           </div>
           <span className="text-lg font-bold text-white">
             {formatDurationMin(current.preroll_free_time)}
           </span>
-          <span className="text-xs text-text-secondary">verbleibend</span>
+          <span className="text-xs text-text-secondary">{t('verbleibend')}</span>
         </div>
 
         <div className="bg-card border border-border rounded-xl p-4 flex flex-col gap-1">
           <div className="flex items-center gap-1.5">
             <BellOff className="w-3.5 h-3.5 text-warning" />
-            <span className="text-xs text-text-secondary uppercase tracking-wide">Snooze</span>
+            <span className="text-xs text-text-secondary uppercase tracking-wide">{t('Snooze')}</span>
           </div>
           <span className="text-lg font-bold text-white">
             {current.snooze_count !== null ? `${current.snooze_count}x` : '-'}
           </span>
           {current.snooze_refresh_at && (
             <span className="text-xs text-text-secondary">
-              Refresh: {formatTimestamp(current.snooze_refresh_at)}
+              {t('Refresh: {time}', { time: formatTimestamp(current.snooze_refresh_at) })}
             </span>
           )}
         </div>
@@ -247,7 +254,7 @@ function AdScheduleSection({ scheduleData, loading }: { scheduleData: AdsSchedul
         <div className="bg-card border border-border rounded-xl p-4 flex flex-col gap-1">
           <div className="flex items-center gap-1.5">
             <Clock className="w-3.5 h-3.5 text-text-secondary" />
-            <span className="text-xs text-text-secondary uppercase tracking-wide">Letzte Ad</span>
+            <span className="text-xs text-text-secondary uppercase tracking-wide">{t('Letzte Ad')}</span>
           </div>
           <span className="text-lg font-bold text-white">
             {current.last_ad_at ? formatTimestamp(current.last_ad_at) : '-'}
@@ -257,7 +264,7 @@ function AdScheduleSection({ scheduleData, loading }: { scheduleData: AdsSchedul
         <div className="bg-card border border-border rounded-xl p-4 flex flex-col gap-1">
           <div className="flex items-center gap-1.5">
             <Timer className="w-3.5 h-3.5 text-text-secondary" />
-            <span className="text-xs text-text-secondary uppercase tracking-wide">Dauer</span>
+            <span className="text-xs text-text-secondary uppercase tracking-wide">{t('Dauer')}</span>
           </div>
           <span className="text-lg font-bold text-white">
             {current.duration !== null ? `${current.duration} s` : '-'}
@@ -265,22 +272,21 @@ function AdScheduleSection({ scheduleData, loading }: { scheduleData: AdsSchedul
         </div>
       </div>
 
-      {/* Schedule History */}
       {history.length > 1 && (
         <div className="bg-card border border-border rounded-xl p-5">
           <div className="flex items-center gap-2 mb-3">
             <BarChart3 className="w-4 h-4 text-accent" />
-            <span className="text-sm font-medium text-white">Schedule-Verlauf</span>
-            <span className="text-xs text-text-secondary ml-auto">Letzte {history.length} Snapshots</span>
+            <span className="text-sm font-medium text-white">{t('Schedule-Verlauf')}</span>
+            <span className="text-xs text-text-secondary ml-auto">{t('Letzte {count} Snapshots', { count: history.length })}</span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-text-secondary border-b border-border">
-                  <th className="text-left py-2 pr-4 font-medium">Snapshot</th>
-                  <th className="text-left py-2 pr-4 font-medium">Nächste Ad</th>
-                  <th className="text-right py-2 pr-4 font-medium">Dauer</th>
-                  <th className="text-right py-2 font-medium">Preroll-frei</th>
+                  <th className="text-left py-2 pr-4 font-medium">{t('Snapshot')}</th>
+                  <th className="text-left py-2 pr-4 font-medium">{t('Nächste Ad')}</th>
+                  <th className="text-right py-2 pr-4 font-medium">{t('Dauer')}</th>
+                  <th className="text-right py-2 font-medium">{t('Preroll-frei')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -290,7 +296,7 @@ function AdScheduleSection({ scheduleData, loading }: { scheduleData: AdsSchedul
                       {formatTimestamp(entry.snapshot_at)}
                     </td>
                     <td className="py-2 pr-4 text-text-secondary text-xs">
-                      {entry.next_ad_at ? formatTimestamp(entry.next_ad_at) : 'Keine'}
+                      {entry.next_ad_at ? formatTimestamp(entry.next_ad_at) : t('Keine')}
                     </td>
                     <td className="py-2 pr-4 text-right text-text-secondary">
                       {entry.duration !== null ? `${entry.duration} s` : '-'}
@@ -312,7 +318,7 @@ function AdScheduleSection({ scheduleData, loading }: { scheduleData: AdsSchedul
 function formatTimestamp(iso: string | null): string {
   if (!iso) return '-';
   try {
-    return new Date(iso).toLocaleString('de-DE', {
+    return new Date(iso).toLocaleString(activeLocale(), {
       day: '2-digit', month: '2-digit', year: 'numeric',
       hour: '2-digit', minute: '2-digit',
     });
@@ -339,7 +345,7 @@ function formatRelativeTime(iso: string | null): string {
     const target = new Date(iso);
     const now = new Date();
     const diffMs = target.getTime() - now.getTime();
-    if (diffMs <= 0) return 'Abgelaufen';
+    if (diffMs <= 0) return tr('Abgelaufen');
     const diffMin = Math.floor(diffMs / 60000);
     if (diffMin < 60) return `in ${diffMin} min`;
     const diffH = Math.floor(diffMin / 60);
@@ -351,6 +357,7 @@ function formatRelativeTime(iso: string | null): string {
 }
 
 export function Monetization({ streamer, days }: MonetizationProps) {
+  const t = useT();
   const { data, isLoading, isError } = useMonetization(streamer, days);
   const { data: adsSchedule, isLoading: scheduleLoading } = useAdsSchedule(streamer);
 
@@ -358,7 +365,7 @@ export function Monetization({ streamer, days }: MonetizationProps) {
     return (
       <div className="flex items-center justify-center h-64 text-text-secondary">
         <Loader2 className="w-6 h-6 animate-spin mr-2" />
-        Lade Monetization-Daten…
+        {t('Lade Monetization-Daten…')}
       </div>
     );
   }
@@ -367,7 +374,7 @@ export function Monetization({ streamer, days }: MonetizationProps) {
     return (
       <div className="flex items-center gap-3 p-6 bg-error/10 border border-error/20 rounded-xl text-error">
         <AlertCircle className="w-5 h-5 shrink-0" />
-        <span>Monetization-Daten konnten nicht geladen werden.</span>
+        <span>{t('Monetization-Daten konnten nicht geladen werden.')}</span>
       </div>
     );
   }
@@ -377,9 +384,8 @@ export function Monetization({ streamer, days }: MonetizationProps) {
   const netAvg = ads.net_effect?.avg_net_drop_pct ?? null;
   const netSample = ads.net_effect?.sample ?? 0;
   const netEnough = netSample >= 15 && netAvg != null;
-  const netValue = netEnough ? fmtDrop(netAvg!) : 'Noch zu wenig Daten';
+  const netValue = netEnough ? fmtDrop(netAvg!) : t('Noch zu wenig Daten');
 
-  // Get max drop across all buckets for consistent bar scaling
   const allDropValues = [
     ...Object.values((ads.duration_impact ?? {}) as Record<string, AdBucketData>).map(b => Math.abs(b.avg_drop ?? 0)),
     ...Object.values((ads.position_impact ?? {}) as Record<string, AdBucketData>).map(b => Math.abs(b.avg_drop ?? 0)),
@@ -388,46 +394,44 @@ export function Monetization({ streamer, days }: MonetizationProps) {
 
   const durationLabels: Record<string, string> = { '30s': '30s', '60s': '60s', '90s': '90s', '120s_plus': '120s+' };
   const positionLabels: Record<string, string> = {
-    'early_0_30m': '0-30 Min',
-    'mid_30_60m': '30-60 Min',
-    'late_60_90m': '60-90 Min',
-    'endgame_90m': '90+ Min',
+    'early_0_30m': t('0-30 Min'),
+    'mid_30_60m': t('30-60 Min'),
+    'late_60_90m': t('60-90 Min'),
+    'endgame_90m': t('90+ Min'),
   };
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div>
-        <h2 className="text-xl font-bold text-white">Monetization &amp; Ad-Analyse</h2>
-        <p className="text-text-secondary text-sm mt-1">Letzte {window_days} Tage</p>
+        <h2 className="text-xl font-bold text-white">{t('Monetization & Ad-Analyse')}</h2>
+        <p className="text-text-secondary text-sm mt-1">{t('Letzte {days} Tage', { days: window_days })}</p>
       </div>
 
-      {/* Ad Breaks Overview */}
       <section>
         <div className="flex items-center gap-2 mb-3">
           <Radio className="w-4 h-4 text-accent" />
-          <h3 className="font-semibold text-white">Ad Breaks</h3>
+          <h3 className="font-semibold text-white">{t('Ad Breaks')}</h3>
         </div>
         {noAds ? (
           <div className="p-4 bg-card border border-border rounded-xl text-text-secondary text-sm">
-            Noch keine Ad-Break-Events in den letzten {window_days} Tagen.
+            {t('Noch keine Ad-Break-Events in den letzten {days} Tagen.', { days: window_days })}
           </div>
         ) : (
           <>
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
-              <StatTile label="Gesamt" value={fmt(ads.total)} />
-              <StatTile label="Automatisch" value={fmt(ads.auto)} sub={`${fmt(ads.manual)} manuell`} />
-              <StatTile label="Ø Dauer" value={`${ads.avg_duration_s.toFixed(0)} s`} />
+              <StatTile label={t('Gesamt')} value={fmt(ads.total)} />
+              <StatTile label={t('Automatisch')} value={fmt(ads.auto)} sub={t('{count} manuell', { count: fmt(ads.manual) })} />
+              <StatTile label={t('Ø Dauer')} value={`${ads.avg_duration_s.toFixed(0)} s`} />
               <StatTile
-                label="Netto Viewer-Wirkung"
+                label={t('Netto Viewer-Wirkung')}
                 value={netValue}
                 valueClassName={netEnough ? dropTextClass(netAvg!) : 'text-text-secondary'}
-                sub={netEnough ? 'gegenüber werbefreien Momenten' : `${netSample}/15`}
+                sub={netEnough ? t('gegenüber werbefreien Momenten') : `${netSample}/15`}
               />
               <StatTile
-                label="Ø Recovery"
-                value={ads.avg_recovery_min != null ? `${ads.avg_recovery_min} Min` : '-'}
-                sub="bis Pre-Ad Level"
+                label={t('Ø Recovery')}
+                value={ads.avg_recovery_min != null ? t('{minutes} Min', { minutes: ads.avg_recovery_min }) : '-'}
+                sub={t('bis Pre-Ad Level')}
               />
             </div>
 
@@ -435,14 +439,12 @@ export function Monetization({ streamer, days }: MonetizationProps) {
               <NetEffectSection net={ads.net_effect} />
             </div>
 
-            {/* Ad Analysis Grid */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-              {/* Duration Impact */}
               {ads.duration_impact && (
                 <div className="bg-card border border-border rounded-xl p-4">
                   <div className="flex items-center gap-2 mb-3">
                     <BarChart3 className="w-4 h-4 text-accent" />
-                    <span className="text-sm font-medium text-white">Viewer-Drop nach Ad-Dauer</span>
+                    <span className="text-sm font-medium text-white">{t('Viewer-Drop nach Ad-Dauer')}</span>
                   </div>
                   <div className="space-y-2">
                     {Object.entries(durationLabels).map(([key, label]) => {
@@ -461,12 +463,11 @@ export function Monetization({ streamer, days }: MonetizationProps) {
                 </div>
               )}
 
-              {/* Position Impact */}
               {ads.position_impact && (
                 <div className="bg-card border border-border rounded-xl p-4">
                   <div className="flex items-center gap-2 mb-3">
                     <Clock className="w-4 h-4 text-accent" />
-                    <span className="text-sm font-medium text-white">Viewer-Drop nach Stream-Zeitpunkt</span>
+                    <span className="text-sm font-medium text-white">{t('Viewer-Drop nach Stream-Zeitpunkt')}</span>
                   </div>
                   <div className="space-y-2">
                     {Object.entries(positionLabels).map(([key, label]) => {
@@ -485,22 +486,21 @@ export function Monetization({ streamer, days }: MonetizationProps) {
                 </div>
               )}
 
-              {/* Auto vs Manual */}
               {ads.auto_vs_manual && (ads.auto_vs_manual.auto_count > 0 || ads.auto_vs_manual.manual_count > 0) && (
                 <div className="bg-card border border-border rounded-xl p-4">
                   <div className="flex items-center gap-2 mb-3">
                     <ArrowLeftRight className="w-4 h-4 text-accent" />
-                    <span className="text-sm font-medium text-white">Auto vs Manuell</span>
+                    <span className="text-sm font-medium text-white">{t('Auto vs Manuell')}</span>
                   </div>
                   <div className="space-y-2">
                     <DropBar
-                      label="Auto"
+                      label={t('Auto')}
                       avgDrop={ads.auto_vs_manual.auto_avg_drop}
                       count={ads.auto_vs_manual.auto_count}
                       maxDrop={maxDrop}
                     />
                     <DropBar
-                      label="Manuell"
+                      label={t('Manuell')}
                       avgDrop={ads.auto_vs_manual.manual_avg_drop}
                       count={ads.auto_vs_manual.manual_count}
                       maxDrop={maxDrop}
@@ -509,12 +509,11 @@ export function Monetization({ streamer, days }: MonetizationProps) {
                 </div>
               )}
 
-              {/* Recovery by Duration */}
               {ads.recovery_by_duration && (
                 <div className="bg-card border border-border rounded-xl p-4">
                   <div className="flex items-center gap-2 mb-3">
                     <Clock className="w-4 h-4 text-success" />
-                    <span className="text-sm font-medium text-white">Recovery-Zeit nach Ad-Dauer</span>
+                    <span className="text-sm font-medium text-white">{t('Recovery-Zeit nach Ad-Dauer')}</span>
                   </div>
                   <div className="space-y-2">
                     {Object.entries(durationLabels).map(([key, label]) => {
@@ -527,10 +526,10 @@ export function Monetization({ streamer, days }: MonetizationProps) {
                           <div className="flex-1 h-6 bg-background rounded flex items-center px-2">
                             {avgRec != null && count > 0 ? (
                               <span className="text-xs font-medium text-white">
-                                Ø {avgRec} Min ({count}x)
+                                {t('Ø {minutes} Min ({count}x)', { minutes: avgRec, count })}
                               </span>
                             ) : (
-                              <span className="text-xs text-text-secondary">Keine Daten</span>
+                              <span className="text-xs text-text-secondary">{t('Keine Daten')}</span>
                             )}
                           </div>
                         </div>
@@ -541,29 +540,27 @@ export function Monetization({ streamer, days }: MonetizationProps) {
               )}
             </div>
 
-            {/* Recommendations */}
             <AdStrategyRecommendation recommendations={ads.recommendations ?? []} />
 
-            {/* Worst Ads Table */}
             {ads.worst_ads.length > 0 && (
               <div className="mt-4">
                 <div className="flex items-center gap-2 mb-2">
                   <TrendingDown className="w-4 h-4 text-error" />
-                  <span className="text-sm font-medium text-white">Schlechteste Ads (Top 5)</span>
+                  <span className="text-sm font-medium text-white">{t('Schlechteste Ads (Top 5)')}</span>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-text-secondary border-b border-border">
-                        <th className="text-left py-2 pr-4 font-medium">Zeitpunkt</th>
-                        <th className="text-right py-2 pr-4 font-medium">Dauer</th>
-                        <th className="text-center py-2 pr-4 font-medium">Typ</th>
-                        <th className="text-right py-2 pr-4 font-medium">Viewer-Drop</th>
+                        <th className="text-left py-2 pr-4 font-medium">{t('Zeitpunkt')}</th>
+                        <th className="text-right py-2 pr-4 font-medium">{t('Dauer')}</th>
+                        <th className="text-center py-2 pr-4 font-medium">{t('Typ')}</th>
+                        <th className="text-right py-2 pr-4 font-medium">{t('Viewer-Drop')}</th>
                         <th
                           className="text-right py-2 font-medium"
-                          title="Minuten bis der Viewer-Schnitt wieder 95% des Niveaus vor der Ad erreicht"
+                          title={t('Minuten bis der Viewer-Schnitt wieder 95% des Niveaus vor der Ad erreicht')}
                         >
-                          Recovery
+                          {t('Recovery')}
                         </th>
                       </tr>
                     </thead>
@@ -572,19 +569,19 @@ export function Monetization({ streamer, days }: MonetizationProps) {
                         <tr
                           key={i}
                           className={`border-b border-border/50 hover:bg-card/50 ${ad.low_sample ? 'opacity-50' : ''}`}
-                          title={ad.low_sample ? 'Zu wenige Viewer für eine belastbare Prozentangabe' : undefined}
+                          title={ad.low_sample ? t('Zu wenige Viewer für eine belastbare Prozentangabe') : undefined}
                         >
                           <td className="py-2 pr-4 text-white font-mono text-xs">{ad.started_at}</td>
                           <td className="py-2 pr-4 text-right text-text-secondary">{ad.duration_s} s</td>
                           <td className="py-2 pr-4 text-center">
                             <span className={`text-xs px-2 py-0.5 rounded-full ${ad.is_automatic ? 'bg-warning/20 text-warning' : 'bg-primary/20 text-primary'}`}>
-                              {ad.is_automatic ? 'Auto' : 'Manuell'}
+                              {ad.is_automatic ? t('Auto') : t('Manuell')}
                             </span>
                           </td>
                           <td className={`py-2 pr-4 text-right font-semibold ${dropTextClass(ad.drop_pct)}`}>
                             <div>{fmtDrop(ad.drop_pct)}</div>
                             <div className="text-xs font-normal text-text-secondary">
-                              {Math.round(ad.pre_avg_viewers)} → {Math.round(ad.post_avg_viewers)} Viewer
+                              {t('{before} → {after} Viewer', { before: Math.round(ad.pre_avg_viewers), after: Math.round(ad.post_avg_viewers) })}
                             </div>
                           </td>
                           <td className="py-2 text-right text-text-secondary">
@@ -601,38 +598,35 @@ export function Monetization({ streamer, days }: MonetizationProps) {
         )}
       </section>
 
-      {/* Ad-Zeitplan (unabhängig von Ad-Break Events) */}
       <AdScheduleSection scheduleData={adsSchedule ?? null} loading={scheduleLoading} />
 
-      {/* Hype Train */}
       <section>
         <div className="flex items-center gap-2 mb-3">
           <Zap className="w-4 h-4 text-warning" />
-          <h3 className="font-semibold text-white">Hype Trains</h3>
+          <h3 className="font-semibold text-white">{t('Hype Trains')}</h3>
         </div>
         {hype_train.total === 0 ? (
           <div className="p-4 bg-card border border-border rounded-xl text-text-secondary text-sm">
-            Noch keine Hype Trains in den letzten {window_days} Tagen.
+            {t('Noch keine Hype Trains in den letzten {days} Tagen.', { days: window_days })}
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <StatTile label="Gesamt" value={fmt(hype_train.total)} />
-            <StatTile label="Ø Level" value={hype_train.avg_level.toFixed(1)} />
-            <StatTile label="Max Level" value={fmt(hype_train.max_level)} />
-            <StatTile label="Ø Dauer" value={`${hype_train.avg_duration_s.toFixed(0)} s`} />
+            <StatTile label={t('Gesamt')} value={fmt(hype_train.total)} />
+            <StatTile label={t('Ø Level')} value={hype_train.avg_level.toFixed(1)} />
+            <StatTile label={t('Max Level')} value={fmt(hype_train.max_level)} />
+            <StatTile label={t('Ø Dauer')} value={`${hype_train.avg_duration_s.toFixed(0)} s`} />
           </div>
         )}
       </section>
 
-      {/* Bits & Subs */}
       <section>
         <div className="flex items-center gap-2 mb-3">
           <Gift className="w-4 h-4 text-success" />
-          <h3 className="font-semibold text-white">Bits &amp; Subs</h3>
+          <h3 className="font-semibold text-white">{t('Bits & Subs')}</h3>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <StatTile label="Bits total" value={fmt(bits.total)} sub={`${fmt(bits.cheer_events)} Cheers`} />
-          <StatTile label="Sub-Events" value={fmt(subs.total_events)} sub={`${fmt(subs.gifted)} Gifted`} />
+          <StatTile label={t('Bits total')} value={fmt(bits.total)} sub={t('{count} Cheers', { count: fmt(bits.cheer_events) })} />
+          <StatTile label={t('Sub-Events')} value={fmt(subs.total_events)} sub={t('{count} Gifted', { count: fmt(subs.gifted) })} />
         </div>
       </section>
     </div>

@@ -245,6 +245,7 @@ export const IGNORED_LITERALS: Record<string, string[]> = {
     'Wo bekomme ich Hilfe, wenn ich nicht weiterkomme?',
   ],
   'src/components/pricing/BillingStatusBanner.tsx': ['border-white/15 bg-white/5 text-white/70'],
+  'src/pages/Monetization.tsx': ['x', 'x)', '{…}x', '{…} s'],
   'src/pages/PartnerProfile.tsx': ['deutsche-deadlock-community.de'],
   'src/utils/formatters.ts': ['Mär', 'März'],
 };
@@ -328,7 +329,6 @@ export const PENDING_FILES: string[] = [
   'src/pages/Experimental.tsx',
   'src/pages/Growth.tsx',
   'src/pages/InternalHomeLanding.tsx',
-  'src/pages/Monetization.tsx',
   'src/pages/OverlayBuilder.tsx',
   'src/pages/Overview.tsx',
   'src/pages/Publikum.tsx',
