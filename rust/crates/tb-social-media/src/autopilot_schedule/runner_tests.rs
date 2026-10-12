@@ -22,21 +22,15 @@ impl ClipDownloader for NoDownload {
 }
 
 fn configuration(root: &Path) -> WorkerConfig {
-    let mut configuration: serde_yaml::Value =
-        serde_yaml::from_str(include_str!("../../../../../ops/social-ai/editor.yaml"))
-            .expect("existing packaged configuration");
-    configuration["runtime"]["source_root"] = serde_yaml::Value::String("clips".into());
-    configuration["runtime"]["output_root"] = serde_yaml::Value::String("clips".into());
-    configuration["runtime"]["work_root"] =
-        serde_yaml::Value::String("clips/.ai-editor-work".into());
-    let directory = root.join("ops/social-ai");
-    std::fs::create_dir_all(&directory).expect("owned configuration directory");
-    std::fs::write(
-        directory.join("editor.yaml"),
-        serde_yaml::to_string(&configuration).expect("existing configuration with isolated paths"),
-    )
-    .expect("owned media configuration");
-    let media = MediaRuntime::load(root).expect("existing media runtime with isolated paths");
+    let package_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .expect("owned source package");
+    let mut media = MediaRuntime::load(package_root).expect("existing packaged media runtime");
+    media.package_root = root.canonicalize().expect("owned isolated package root");
+    media.source_root = media.package_root.join("clips");
+    media.output_root = media.source_root.clone();
+    media.work_root = media.source_root.join(".ai-editor-work");
     WorkerConfig::from_media_runtime(&media, None, None)
 }
 
