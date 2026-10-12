@@ -15,7 +15,7 @@ const WEEKDAYS = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Sa
 const HOLDS = {
   disabled: 'Der Auto-Pilot ist ausgeschaltet.',
   paused: 'Pausiert. Laufende Produktionen werden fertiggestellt.',
-  review_backlog: 'Zwei Videos warten auf deine Freigabe. Neue automatische Produktionen warten.',
+  review_backlog: 'Eine Produktion oder ein fertiges Video benötigt deine Prüfung. Neue automatische Produktionen warten.',
   empty_pool: 'Keine passenden Clips verfügbar. Prüfe deinen Clip-Pool oder den Zeitraum.',
   no_schedule: 'Füge mindestens einen wöchentlichen Termin hinzu.',
   outside_lead: 'Der nächste freie Termin liegt noch außerhalb des Produktionsvorlaufs.',
@@ -71,15 +71,36 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
   const dirty = useRef(false);
   const epoch = useRef(0);
   const mutating = useRef(false);
+  const refresh = useRef<((message?: string) => void) | null>(null);
+  const changed = useRef(onChanged);
+  useEffect(() => { changed.current = onChanged; }, [onChanged]);
 
   useEffect(() => {
     const controller = new AbortController();
+    let loading = false;
+    let queued = false;
+    let queuedMessage = '';
     live.current = true;
-    const load = async () => {
-      if (mutating.current) return;
+    const load = async (message = '') => {
+      if (!live.current || controller.signal.aborted) return;
+      if (message) {
+        queuedMessage = message;
+        setPending('read');
+        setError('');
+      }
+      if (loading || mutating.current) {
+        queued = true;
+        return;
+      }
+      loading = true;
+      queued = false;
+      const readMessage = queuedMessage;
+      queuedMessage = '';
+      const notifyChanged = changed.current;
       const generation = ++epoch.current;
       try {
         const result = await api.load(twitchUserId, controller.signal);
+        if (readMessage) notifyChanged?.();
         if (!live.current || controller.signal.aborted || generation !== epoch.current) return;
         setSnapshot(result);
         if (!dirty.current) {
@@ -91,13 +112,24 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
           }
         }
         setError('');
+        if (readMessage) {
+          setRemoveId(null);
+          setNotice(readMessage);
+        }
       } catch (failure) {
         if (!controller.signal.aborted && live.current && generation === epoch.current) setError(errorText(failure));
+      } finally {
+        loading = false;
+        if (!controller.signal.aborted && live.current) {
+          if (generation === epoch.current && !mutating.current) setPending(queuedMessage ? 'read' : null);
+          if (queued && !mutating.current) void load();
+        }
       }
     };
+    refresh.current = message => { void load(message); };
     void load();
     const timer = window.setInterval(() => { void load(); }, 15000);
-    return () => { live.current = false; controller.abort(); window.clearInterval(timer); };
+    return () => { live.current = false; refresh.current = null; controller.abort(); window.clearInterval(timer); };
   }, [api, twitchUserId]);
 
   function edit(change: SchedulePatch) {
@@ -107,15 +139,17 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
     setNotice('');
   }
 
-  async function act(request: () => Promise<ScheduleQueueSnapshot>, message: string, saved = false, mutation = true) {
+  async function act(request: () => Promise<ScheduleQueueSnapshot>, message: string, saved = false) {
     if (mutating.current) return;
     mutating.current = true;
+    let succeeded = false;
     const generation = ++epoch.current;
     const notifyChanged = onChanged;
-    setPending(mutation ? 'mutation' : 'read');
+    setPending('mutation');
     setError('');
     try {
       const result = await request();
+      succeeded = true;
       notifyChanged?.();
       if (!live.current || generation !== epoch.current) return;
       setSnapshot(result);
@@ -127,13 +161,16 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
       if (live.current) setError(errorText(failure));
     } finally {
       mutating.current = false;
-      if (live.current) setPending(null);
+      if (live.current) {
+        setPending(null);
+        if (succeeded) refresh.current?.();
+      }
     }
   }
 
   if (!snapshot || !draft) return <section className="schedule-queue" aria-busy={!error} data-unsaved={hasChanges || saving ? 'true' : undefined} data-saving={saving ? 'true' : undefined}>
     <h2>Auto-Pilot und Zeitplan</h2>
-    {error ? <><p role="alert">{error}</p><button onClick={() => { void act(() => api.load(twitchUserId), 'Aktualisiert.', false, false); }}>Erneut laden</button></> : <p role="status">Zeitplan wird geladen.</p>}
+    {error ? <><p role="alert">{error}</p><button onClick={() => refresh.current?.('Aktualisiert.')}>Erneut laden</button></> : <p role="status">Zeitplan wird geladen.</p>}
   </section>;
 
   const unstarted = snapshot.jobs.filter(job => job.status === 'queued' && !job.started_at);
@@ -150,7 +187,7 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
   return <section className="schedule-queue" aria-labelledby={`${id}-heading`} data-unsaved={hasChanges || saving ? 'true' : undefined} data-saving={saving ? 'true' : undefined}>
     <header className="sq-heading">
       <div><h2 id={`${id}-heading`}>Auto-Pilot und Zeitplan</h2><p>Ein Video pro Termin, gemeinsam für deine ausgewählten Plattformen.</p></div>
-      <button type="button" disabled={busy} onClick={() => { void act(() => api.load(twitchUserId), 'Aktualisiert.', false, false); }}><RefreshCw size={16} />Aktualisieren</button>
+      <button type="button" disabled={busy} onClick={() => refresh.current?.('Aktualisiert.')}><RefreshCw size={16} />Aktualisieren</button>
     </header>
     <div className="sq-status" role="status">
       <Clock3 size={18} aria-hidden="true" />
