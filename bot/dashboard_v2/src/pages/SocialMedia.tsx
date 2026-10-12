@@ -114,6 +114,7 @@ export interface SocialMediaProps {
   workspaceSlots?: {
     automation?: ReactNode;
     libraryImport?: ReactNode;
+    publishReview?: ReactNode;
   };
 }
 
@@ -770,6 +771,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
               <button type="button" className="studio-button" onClick={() => changeView('library')}>{t('Clip-Bibliothek & Import')}</button>
               <button type="button" className="studio-button" onClick={() => changeView('konten')}>{t('Verbindungen prüfen')}</button>
             </div>
+            {workspaceSlots?.publishReview}
             </>
             )}
 
