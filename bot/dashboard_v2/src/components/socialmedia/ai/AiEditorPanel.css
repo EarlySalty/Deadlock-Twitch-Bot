@@ -17,7 +17,7 @@
 .social-ai h4 { font-size: 14px; line-height: 1.4; }
 .social-ai p { line-height: 1.55; }
 .social-ai button:disabled { opacity: .5; cursor: not-allowed; }
-.social-ai :is(button, select, input):focus-visible { outline: 2px solid var(--ai-gold); outline-offset: 3px; }
+.social-ai :is(button, select, input, textarea, summary):focus-visible { outline: 2px solid var(--ai-gold); outline-offset: 3px; }
 .social-ai button { min-height: 40px; }
 
 .social-ai-header, .social-ai-job-head, .social-ai-review-heading, .social-ai-history {
@@ -98,6 +98,25 @@
 .social-ai-review-notices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 14px; }
 .social-ai-review-notices section { padding: 12px 14px; border: 1px solid var(--ai-line); border-radius: 8px; }
 .social-ai-review-notices li { padding: 4px 0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+
+.social-ai-status--awaiting_confirmation { color: var(--ai-gold); }
+.social-ai-status--rejected { color: var(--ai-muted); }
+.social-ai-revisions { display: grid; gap: 20px; min-width: 0; padding-top: 20px; border-top: 1px solid var(--ai-line); }
+.social-ai-revisions p { color: var(--ai-muted); font-size: 13px; overflow-wrap: anywhere; }
+.social-ai-revisions :is(form, .social-ai-version-actions) { display: grid; gap: 10px; min-width: 0; }
+.social-ai-revisions form > label { font-size: 14px; font-weight: 650; }
+.social-ai-revisions textarea { width: 100%; min-width: 0; box-sizing: border-box; resize: vertical; padding: 12px; border: 1px solid var(--ai-line); border-radius: 6px; background: var(--ai-backdrop); color: var(--ai-ink); font: inherit; font-size: 14px; line-height: 1.5; }
+.social-ai-revisions textarea:disabled { opacity: .6; }
+.social-ai-revisions form > button { justify-self: start; }
+.social-ai-platform-approval { display: grid; gap: 12px; min-width: 0; margin: 0; padding: 16px; border: 1px solid var(--ai-line); border-radius: 8px; }
+.social-ai-platform-approval legend { padding-inline: 6px; font-size: 14px; font-weight: 650; }
+.social-ai-platforms { display: flex; flex-wrap: wrap; gap: 12px 24px; }
+.social-ai-platforms label { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; align-items: center; padding-block: 8px; cursor: pointer; }
+.social-ai-platforms small { grid-column: 2; color: var(--ai-muted); }
+.social-ai-compare { min-width: 0; border-top: 1px solid var(--ai-line); padding-top: 14px; }
+.social-ai-compare summary { cursor: pointer; font-size: 14px; font-weight: 650; padding-block: 7px; }
+.social-ai-compare > label { display: grid; gap: 6px; margin-block: 12px; font-size: 13px; }
+.social-ai-compare select { min-width: 0; max-width: 100%; }
 
 @media (min-width: 960px) {
   .social-ai-setup, .social-ai-video-grid, .social-ai-explanations, .social-ai-review-notices { grid-template-columns: repeat(2, minmax(0, 1fr)); }

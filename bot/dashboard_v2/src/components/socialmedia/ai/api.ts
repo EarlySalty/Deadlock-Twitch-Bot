@@ -2,7 +2,7 @@ import { fetchSocialAiJson } from '@/api/socialMedia';
 
 const AI_PREFIX = '/twitch/social-media/api/ai';
 
-export type AiJobStatus = 'queued' | 'preparing' | 'transcribing' | 'analyzing' | 'planning' | 'rendering' | 'validating' | 'review' | 'failed';
+export type AiJobStatus = 'queued' | 'preparing' | 'transcribing' | 'analyzing' | 'planning' | 'rendering' | 'validating' | 'review' | 'failed' | 'awaiting_confirmation' | 'rejected';
 export type AiCostBasis = 'usage_priced_estimate' | 'provider_billed' | 'unknown';
 
 export interface AiConsent {
@@ -18,6 +18,19 @@ export interface AiVideoVersion {
   duration_ms: number | null;
   file_url: string | null;
   parent_version_id: number | null;
+  job_id: number;
+  variant_index: number;
+  original_url: string | null;
+  decisions: AiTimeRange[];
+  approved_platforms: string[];
+}
+
+export interface AiRevisionProposal {
+  summary: string;
+  impact: string;
+  reanalyze: boolean;
+  requires_confirmation: boolean;
+  estimated_provider_cost_usd: number | null;
 }
 
 export interface AiTimeRange {
@@ -55,6 +68,10 @@ export interface AiJobView {
   failure_code: string | null;
   failure_message: string | null;
   can_retry: boolean;
+  root_job_id: number;
+  parent_version_id: number | null;
+  selected_version_id: number | null;
+  revision_proposal: AiRevisionProposal | null;
 }
 
 function invalidResponse(): never {
@@ -138,7 +155,24 @@ function decodeVersion(value: unknown): AiVideoVersion {
     duration_ms: optionalNumber(item.duration_ms),
     file_url: mediaUrl(item.file_url),
     parent_version_id: item.parent_version_id === null ? null : number(item.parent_version_id, true),
+    job_id: number(item.job_id, true),
+    variant_index: number(item.variant_index),
+    original_url: mediaUrl(item.original_url),
+    decisions: list(item.decisions, decodeTimeRange),
+    approved_platforms: decodePlatforms(item.approved_platforms),
   };
+}
+
+function decodePlatforms(value: unknown): string[] {
+  const platforms = list(value,text);
+  if (platforms.some((platform) => !['youtube','tiktok','instagram'].includes(platform)) || new Set(platforms).size !== platforms.length) invalidResponse();
+  return platforms;
+}
+
+function decodeProposal(value: unknown): AiRevisionProposal | null {
+  if (value === null) return null;
+  const proposal = record(value);
+  return {summary:text(proposal.summary),impact:text(proposal.impact),reanalyze:flag(proposal.reanalyze),requires_confirmation:flag(proposal.requires_confirmation),estimated_provider_cost_usd:optionalNumber(proposal.estimated_provider_cost_usd)};
 }
 
 export function decodeAiConsent(value: unknown): AiConsent {
@@ -149,7 +183,7 @@ export function decodeAiConsent(value: unknown): AiConsent {
 export function decodeAiJob(value: unknown): AiJobView {
   const item = record(value);
   const status = text(item.status);
-  if (!['queued', 'preparing', 'transcribing', 'analyzing', 'planning', 'rendering', 'validating', 'review', 'failed'].includes(status)) invalidResponse();
+  if (!['queued', 'preparing', 'transcribing', 'analyzing', 'planning', 'rendering', 'validating', 'review', 'failed', 'awaiting_confirmation', 'rejected'].includes(status)) invalidResponse();
   const cost_basis = text(item.cost_basis);
   if (!['usage_priced_estimate', 'provider_billed', 'unknown'].includes(cost_basis)) invalidResponse();
   return {
@@ -181,6 +215,10 @@ export function decodeAiJob(value: unknown): AiJobView {
     failure_code: optionalText(item.failure_code),
     failure_message: optionalText(item.failure_message),
     can_retry: flag(item.can_retry),
+    root_job_id: number(item.root_job_id,true),
+    parent_version_id: item.parent_version_id === null ? null : number(item.parent_version_id,true),
+    selected_version_id: item.selected_version_id === null ? null : number(item.selected_version_id,true),
+    revision_proposal: decodeProposal(item.revision_proposal),
   };
 }
 
@@ -239,4 +277,53 @@ export async function retryAiJob(twitchUserId: string, id: number): Promise<AiJo
   const result = decodeAiJob(response.job);
   if (result.id !== id) invalidResponse();
   return result;
+}
+
+async function versionAction(twitchUserId: string, id: number, version: number, action: string, body: Record<string, unknown> = {}): Promise<AiJobView> {
+  const response = record(await fetchSocialAiJson(`${AI_PREFIX}/jobs/${jobId(id)}/versions/${jobId(version)}/${action}`, {
+    method:'POST', headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,twitch_user_id:channelId(twitchUserId)}),
+  }));
+  const result = decodeAiJob(response.job);
+  if (action === 'revision' ? result.parent_version_id !== version || result.id === id : result.id !== id) invalidResponse();
+  return result;
+}
+
+export function reviseAiVersion(channel: string, id: number, version: number, feedback: string): Promise<AiJobView> {
+  return versionAction(channel,id,version,'revision',{feedback});
+}
+
+export function selectAiVersion(channel: string, id: number, version: number): Promise<AiJobView> {
+  return versionAction(channel,id,version,'select');
+}
+
+export function decideAiVersion(channel: string, id: number, version: number, accept: boolean): Promise<AiJobView> {
+  return versionAction(channel,id,version,'decision',{accept});
+}
+
+export function approveAiVersion(channel: string, id: number, version: number, platforms: string[]): Promise<AiJobView> {
+  return versionAction(channel,id,version,'approve',{platforms});
+}
+
+export async function decideAiProposal(channel: string, id: number, accept: boolean): Promise<AiJobView> {
+  const response = record(await fetchSocialAiJson(`${AI_PREFIX}/jobs/${jobId(id)}/proposal`, {
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({twitch_user_id:channelId(channel),accept}),
+  }));
+  const result = decodeAiJob(response.job);
+  if (result.id !== id) invalidResponse();
+  return result;
+}
+
+export async function scheduleAiVersion(channel: string, id: number, version: number, platforms: string[]): Promise<{job: AiJobView; scheduledAt: string}> {
+  const response = record(await fetchSocialAiJson(`${AI_PREFIX}/jobs/${jobId(id)}/versions/${jobId(version)}/schedule`, {
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({twitch_user_id:channelId(channel),platforms}),
+  }));
+  const job = decodeAiJob(response.job);
+  const reservation = record(response.reservation);
+  if (job.id !== id || number(reservation.produced_video_id,true) !== version) invalidResponse();
+  const queues = list(reservation.queue_ids,(entry) => {
+    if (!Array.isArray(entry) || entry.length !== 2) invalidResponse();
+    return {platform:text(entry[0]),id:number(entry[1],true)};
+  });
+  if (queues.length !== platforms.length || new Set(queues.map((queue) => queue.platform)).size !== platforms.length || queues.some((queue) => !platforms.includes(queue.platform))) invalidResponse();
+  return {job,scheduledAt:date(reservation.scheduled_at)};
 }

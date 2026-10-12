@@ -20,6 +20,36 @@ pub(super) struct Analysis {
 pub(super) struct Planning {
     pub plan: EditPlan,
     pub platforms: BTreeMap<String, PublicationCopy>,
+    #[serde(default = "default_subtitle_scale")]
+    pub subtitle_scale_percent: u16,
+    #[serde(default)]
+    pub revision_proposal: Option<super::revision::RevisionProposal>,
+    #[serde(default)]
+    pub variants: Vec<VariantPlan>,
+}
+
+fn default_subtitle_scale() -> u16 {
+    100
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct VariantPlan {
+    pub plan: EditPlan,
+    pub platforms: BTreeMap<String, PublicationCopy>,
+    pub subtitle_scale_percent: u16,
+}
+
+impl VariantPlan {
+    pub fn planning(&self) -> Planning {
+        Planning {
+            plan: self.plan.clone(),
+            platforms: self.platforms.clone(),
+            subtitle_scale_percent: self.subtitle_scale_percent,
+            revision_proposal: None,
+            variants: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -73,9 +103,25 @@ pub(super) fn planning_schema(
         "review_reasons": array(text(limits.max_text_bytes), limits.max_review_reasons),
         "layout": { "type": "string", "enum": ["existing_stable"] },
     }));
+    let variant = object(
+        json!({"plan":plan.clone(),"platforms":object(json!({"youtube":copy.clone(),"tiktok":copy.clone(),"instagram":copy.clone()})),"subtitle_scale_percent":{"type":"integer","minimum":60,"maximum":140}}),
+    );
     object(
-        json!({ "plan": plan, "platforms": object(json!({ "youtube": copy.clone(), "tiktok": copy.clone(), "instagram": copy })) }),
+        json!({ "plan": plan, "platforms": object(json!({ "youtube": copy.clone(), "tiktok": copy.clone(), "instagram": copy })), "subtitle_scale_percent":{"type":"integer","minimum":60,"maximum":140}, "variants":array(variant,2) }),
     )
+}
+
+pub(super) fn revision_schema(limits: &PlanLimits, copy: &CopyLimits, duration: u64) -> Value {
+    let mut schema = planning_schema(limits, copy, duration);
+    schema["properties"]["revision_proposal"] = object(json!({
+        "summary":text(limits.max_text_bytes),"impact":text(limits.max_text_bytes),
+        "reanalyze":{"type":"boolean"},"requires_confirmation":{"type":"boolean"},
+        "estimated_provider_cost_usd":{"type":"null"}
+    }));
+    if let Some(required) = schema["required"].as_array_mut() {
+        required.push(json!("revision_proposal"));
+    }
+    schema
 }
 
 impl Analysis {
@@ -110,6 +156,12 @@ impl Planning {
         analysis: &Analysis,
     ) -> Result<super::ValidatedPlan, AiEditorError> {
         analysis.validate(duration, limits)?;
+        if !(60..=140).contains(&self.subtitle_scale_percent) || self.variants.len() > 2 {
+            return Err(AiEditorError::Plan);
+        }
+        for variant in &self.variants {
+            variant.planning().validate(duration, limits, copy_limits, analysis)?;
+        }
         if serde_json::to_vec(self)
             .map_err(|_| AiEditorError::Plan)?
             .len()
