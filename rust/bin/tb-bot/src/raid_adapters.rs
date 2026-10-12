@@ -477,7 +477,7 @@ impl RaidSubscriptionStatusPoll {
     /// `Some("enabled")`, `Some("webhook_callback_verification_pending")`, … ;
     /// `None` = (noch) keine passende Subscription registriert.
     async fn raid_status(&self, to_broadcaster_id: &str) -> Option<String> {
-        match self.transport.list().await {
+        match self.transport.list_for_user(to_broadcaster_id).await {
             Ok(subs) => subs
                 .into_iter()
                 .find(|s| {

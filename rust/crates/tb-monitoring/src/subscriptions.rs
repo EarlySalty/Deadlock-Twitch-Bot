@@ -492,6 +492,14 @@ pub trait SubscriptionTransport: Send + Sync {
         Ok(())
     }
     async fn list(&self) -> Result<Vec<RemoteSubscription>, SourceError>;
+    async fn list_for_user(&self, user_id: &str) -> Result<Vec<RemoteSubscription>, SourceError> {
+        Ok(self
+            .list()
+            .await?
+            .into_iter()
+            .filter(|s| s.broadcaster_user_id.as_deref() == Some(user_id))
+            .collect())
+    }
     async fn delete(&self, id: &str) -> Result<(), SourceError>;
 }
 
