@@ -28,6 +28,28 @@ pub struct RuntimeConfig {
     pub copy: CopyLimits,
     pub stt: SttRuntimeConfig,
     pub brain: Option<BrainRuntimeConfig>,
+    #[serde(default)]
+    pub revisions: RevisionLimits,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RevisionLimits {
+    pub max_feedback_bytes: usize,
+    pub max_revisions: i64,
+    pub max_auto_changed_percent: u8,
+    pub max_variants: usize,
+}
+
+impl Default for RevisionLimits {
+    fn default() -> Self {
+        Self {
+            max_feedback_bytes: 2000,
+            max_revisions: 10,
+            max_auto_changed_percent: 10,
+            max_variants: 3,
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -172,6 +194,10 @@ impl RuntimeConfig {
             || self.source_root != self.output_root
             || !self.work_root.starts_with(&self.output_root)
             || self.work_root == self.output_root
+            || !(1..=4000).contains(&self.revisions.max_feedback_bytes)
+            || !(1..=20).contains(&self.revisions.max_revisions)
+            || !(1..=20).contains(&self.revisions.max_auto_changed_percent)
+            || !(1..=3).contains(&self.revisions.max_variants)
             || !(1..=3).contains(&self.stage_attempts)
             || !(100..=60_000).contains(&self.worker_poll_ms)
             || !(60_000..=3_600_000).contains(&self.job_deadline_ms)

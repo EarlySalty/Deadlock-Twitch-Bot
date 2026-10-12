@@ -1,6 +1,7 @@
 mod media;
 mod model;
 mod pipeline;
+pub mod revision;
 mod runtime_config;
 mod service;
 mod skills;
@@ -24,11 +25,11 @@ pub mod brain;
 pub mod store;
 pub mod stt;
 
-pub use pipeline::{produce, ProducedOutcome, ProductionContext};
+pub use pipeline::{produce, FrozenSkill, ProducedOutcome, ProductionContext};
 pub use runtime_config::{EditorRuntime, RuntimeConfig};
 pub use service::{
-    create_manual_job, get_manual_job, list_manual_jobs, manual_original_file, retry_manual_job,
-    ManualWorker,
+    create_manual_job, get_manual_job, list_manual_jobs, manual_original_file,
+    manual_version_original_file, retry_manual_job, ManualWorker,
 };
 pub use source::authorized_path;
 
@@ -60,6 +61,10 @@ pub enum AiEditorError {
     Attempts,
     #[error("Das Zeitlimit für die Verarbeitung ist erreicht.")]
     Deadline,
+    #[error("Bitte gib eine gültige Änderungsanweisung ein.")]
+    Input,
+    #[error("Die Freigabe oder Übernahme in den Zeitplan konnte nicht abgeschlossen werden: {0}")]
+    Publishing(#[from] crate::produced_video::ProducedVideoError),
     #[error("Der Auftrag wurde nicht gefunden.")]
     NotFound,
 }

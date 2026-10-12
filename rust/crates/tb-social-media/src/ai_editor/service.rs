@@ -61,32 +61,48 @@ async fn project(
         "unknown"
     }
     .into();
-    job.original_url = job
-        .versions
-        .iter()
-        .any(|version| {
-            matches!(
-                version.status.as_str(),
-                "review" | "approved" | "scheduled" | "published"
-            )
-        })
-        .then(|| {
-            format!(
-                "/twitch/social-media/api/ai/jobs/{}/original?twitch_user_id={owner}",
-                job.id
-            )
-        });
+    job.original_url = None;
     for version in &mut job.versions {
-        if matches!(
-            version.status.as_str(),
-            "review" | "approved" | "scheduled" | "published"
-        ) {
+        let video = super::revision::owned_version(pool, owner, job.id, version.id).await?;
+        if super::revision::usable(&video) {
             version.file_url = Some(format!(
                 "/twitch/social-media/api/ai/jobs/{}/versions/{}/file?twitch_user_id={owner}",
                 job.id, version.id
             ));
         }
+        if matches!(
+            video.status.as_str(),
+            "review" | "approved" | "scheduled" | "published"
+        ) && video
+            .expires_at
+            .is_some_and(|expiry| expiry > chrono::Utc::now())
+            && video.metadata.get("original_preview").is_some()
+        {
+            version.original_url = Some(format!(
+                "/twitch/social-media/api/ai/jobs/{}/versions/{}/original?twitch_user_id={owner}",
+                job.id, version.id
+            ));
+        }
+        version.approved_platforms = crate::produced_video::approvals(pool, owner, version.id)
+            .await?
+            .into_iter()
+            .filter(|approval| {
+                approval.state == "approved" && approval.approver_user_id.as_deref() == Some(owner)
+            })
+            .map(|approval| approval.platform)
+            .collect();
     }
+    job.original_url = job
+        .versions
+        .iter()
+        .find(|version| Some(version.id) == job.selected_version_id && version.file_url.is_some())
+        .or_else(|| {
+            job.versions
+                .iter()
+                .rev()
+                .find(|version| version.file_url.is_some())
+        })
+        .and_then(|version| version.original_url.clone());
     Ok(job)
 }
 
@@ -118,6 +134,18 @@ pub async fn manual_original_file(
         &checkpoints,
     )
     .await
+}
+
+pub async fn manual_version_original_file(
+    pool: &PgPool,
+    runtime: &EditorRuntime,
+    owner: &str,
+    job_id: i64,
+    version_id: i64,
+) -> Result<std::path::PathBuf, AiEditorError> {
+    let video = super::revision::owned_version(pool, owner, job_id, version_id).await?;
+    let checkpoints = store::checkpoints(pool, owner, super::revision::maker_id(&video)?).await?;
+    pipeline::version_original(pool, runtime, owner, &video, &checkpoints).await
 }
 
 pub async fn list_manual_jobs(
@@ -275,6 +303,9 @@ impl ManualWorker {
                 }
                 Err(error) => return Err(error.into()),
             };
+            if job.status == "awaiting_confirmation" || job.status == "rejected" {
+                return Ok(());
+            }
             let frozen_runtime = match pipeline::checkpoint_runtime(&job.checkpoints, &self.runtime)
             {
                 Ok(runtime) => runtime,

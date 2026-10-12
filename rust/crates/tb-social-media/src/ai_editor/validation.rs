@@ -302,6 +302,48 @@ pub fn build_subtitle_ass(
     )
 }
 
+pub(super) fn build_scaled_subtitle_ass(
+    plan: &ValidatedPlan,
+    subtitles: &[MappedSubtitle],
+    title: &str,
+    login: &str,
+    cam_height: i64,
+    scale_percent: u16,
+) -> Result<String, super::AiEditorError> {
+    if !(60..=140).contains(&scale_percent) {
+        return Err(super::AiEditorError::Plan);
+    }
+    let ass = build_subtitle_ass(plan, subtitles, title, login, cam_height);
+    if scale_percent == 100 {
+        return Ok(ass);
+    }
+    let mut result = String::new();
+    let mut changed = false;
+    for line in ass.lines() {
+        if line.starts_with("Style: Default,") {
+            let mut fields = line.split(',').map(str::to_owned).collect::<Vec<_>>();
+            let size: f64 = fields
+                .get(2)
+                .ok_or(super::AiEditorError::Plan)?
+                .parse()
+                .map_err(|_| super::AiEditorError::Plan)?;
+            if !size.is_finite() || size <= 0.0 {
+                return Err(super::AiEditorError::Plan);
+            }
+            fields[2] = format!("{:.0}", size * f64::from(scale_percent) / 100.0);
+            result.push_str(&fields.join(","));
+            changed = true;
+        } else {
+            result.push_str(line);
+        }
+        result.push('\n');
+    }
+    if !changed {
+        return Err(super::AiEditorError::Plan);
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
