@@ -14,12 +14,17 @@ import {
   twitchUrl,
   PARTNER_VORSCHAU,
 } from "@/lib/partnerNetwork";
+import { tx } from "@/i18n/locale";
 
-const EMPTY_STATE_TEXT =
-  "Die Partnerliste lädt gerade nicht. Schau auf Twitch oder im Discord vorbei.";
+const EMPTY_STATE_TEXT = tx(
+  "Die Partnerliste lädt gerade nicht. Schau auf Twitch oder im Discord vorbei.",
+  "The partner list isn't loading right now. Check us out on Twitch or in the Discord.",
+);
 
-const KEIN_DEADLOCK_TEXT =
-  "Gerade streamt kein Partner Deadlock. Schau später wieder rein.";
+const KEIN_DEADLOCK_TEXT = tx(
+  "Gerade streamt kein Partner Deadlock. Schau später wieder rein.",
+  "No partner is streaming Deadlock right now. Check back later.",
+);
 
 function TwitchEmbed({ login }: { login: string }) {
   const src =
@@ -31,7 +36,7 @@ function TwitchEmbed({ login }: { login: string }) {
       style={{ backgroundImage: `url(${previewImageUrl(login)})` }}
     >
       <iframe
-        title={`Live-Stream von ${login}`}
+        title={tx(`Live-Stream von ${login}`, `Live stream by ${login}`)}
         src={src}
         className="absolute inset-0 h-full w-full"
         allow="autoplay; fullscreen"
@@ -50,7 +55,7 @@ function LivePreview({ partner }: { partner: NetworkStreamer }) {
       </span>
       <img
         src={previewImageUrl(partner.login)}
-        alt={`Vorschau von ${partner.login}`}
+        alt={tx(`Vorschau von ${partner.login}`, `Preview of ${partner.login}`)}
         loading="lazy"
         className="absolute inset-0 h-full w-full object-cover"
         onError={(e) => {
@@ -82,7 +87,7 @@ function ChannelBar({ partner }: { partner: NetworkStreamer }) {
         </span>
         <span className="flex items-center gap-1 text-xs text-[var(--color-text-secondary)]">
           <Users size={12} />
-          {partner.viewers} {partner.isLive ? "gerade" : "zuletzt"}
+          {partner.viewers} {partner.isLive ? tx("gerade", "watching") : tx("zuletzt", "last stream")}
           {partner.game ? <span>· {partner.game}</span> : null}
         </span>
       </span>
@@ -151,7 +156,7 @@ function PartnerZeile({
         </span>
         <span className="flex items-center gap-1 text-[11px] text-[var(--color-text-secondary)]">
           <Users size={11} />
-          {partner.viewers} Zuschauer
+          {partner.viewers} {tx("Zuschauer", "viewers")}
         </span>
       </span>
       <ArrowUpRight
@@ -245,7 +250,7 @@ function AllePartnerBlock({ partner }: { partner: NetworkStreamer[] }) {
   return (
     <div className="mt-8">
       <p className="mb-4 text-sm font-medium uppercase tracking-wider text-[var(--color-text-secondary)]">
-        Alle {partner.length} Partner
+        {tx(<>Alle {partner.length} Partner</>, <>All {partner.length} partners</>)}
       </p>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 min-[1800px]:grid-cols-5">
         {sichtbar.map((p, i) => (
@@ -261,7 +266,9 @@ function AllePartnerBlock({ partner }: { partner: NetworkStreamer[] }) {
             className="mt-4 flex w-full items-center justify-between gap-3 rounded-xl border border-[var(--color-border)] bg-black/20 px-4 py-3 text-left transition-colors hover:border-[var(--color-border-hover)]"
           >
             <span className="text-sm font-medium uppercase tracking-wider text-[var(--color-text-secondary)]">
-              {offen ? "Weniger anzeigen" : `${rest.length} weitere Partner anzeigen`}
+              {offen
+                ? tx("Weniger anzeigen", "Show less")
+                : tx(`${rest.length} weitere Partner anzeigen`, `Show ${rest.length} more partners`)}
             </span>
             <ChevronDown
               size={18}
@@ -336,21 +343,27 @@ export function PartnerNetwork({
       <div className="max-w-[1600px] mx-auto px-6">
         <ScrollReveal className="text-center">
           <p className="text-sm uppercase tracking-wider font-medium text-[var(--color-primary)] mb-3">
-            Unsere Partner
+            {tx("Unsere Partner", "Our partners")}
           </p>
           <h2 className="text-4xl md:text-5xl font-bold text-[var(--color-text-primary)] font-display">
-            Wer schon dabei ist
+            {tx("Wer schon dabei ist", "Who's already in")}
           </h2>
           {status === "ready" && streamers.length > 0 ? (
             <p className="mt-4 text-lg text-[var(--color-text-secondary)]">
               <span className="font-semibold text-[var(--color-accent)]">
-                {streamers.length} Partner
+                {streamers.length} {tx("Partner", "partners")}
               </span>{" "}
-              streamen Deadlock in diesem Netzwerk. In diese Runde steigst du ein.
+              {tx(
+                "streamen Deadlock in diesem Netzwerk. In diese Runde steigst du ein.",
+                "stream Deadlock in this network. This is the crew you're joining.",
+              )}
             </p>
           ) : (
             <p className="mt-4 text-lg text-[var(--color-text-secondary)]">
-              Das sind die Kanäle, in deren Runde du als Partner einsteigst.
+              {tx(
+                "Das sind die Kanäle, in deren Runde du als Partner einsteigst.",
+                "These are the channels you join as a partner.",
+              )}
             </p>
           )}
         </ScrollReveal>
@@ -378,7 +391,10 @@ export function PartnerNetwork({
 
               {weitereDeadlock.length > 0 ? (
                 <Ausklappliste
-                  titel={`${weitereDeadlock.length} weitere streamen gerade Deadlock`}
+                  titel={tx(
+                    `${weitereDeadlock.length} weitere streamen gerade Deadlock`,
+                    `${weitereDeadlock.length} more streaming Deadlock right now`,
+                  )}
                 >
                   {weitereDeadlock.map((p, i) => (
                     <PartnerZeile key={p.login} partner={p} index={i} />

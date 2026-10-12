@@ -2,6 +2,7 @@ import { ExternalLink } from "lucide-react";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
 import { DiscordLogo } from "@/components/ui/DiscordLogo";
 import { buildTwitchBotAuthUrl, DISCORD_INVITE_URL } from "@/data/externalLinks";
+import { tx } from "@/i18n/locale";
 
 export function CTA() {
   return (
@@ -11,15 +12,29 @@ export function CTA() {
       <div className="max-w-3xl mx-auto px-6 text-center relative z-10">
         <ScrollReveal>
           <h2 className="text-4xl md:text-5xl font-bold text-[var(--color-text-primary)] mb-6 font-display">
-            Dein nächster Stream endet sowieso. Die Frage ist, ob du{" "}
-            <span className="bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-accent)] bg-clip-text text-transparent inline">
-              allein
-            </span>{" "}
-            endest oder als Partner.
+            {tx(
+              <>
+                Dein nächster Stream endet sowieso. Die Frage ist, ob du{" "}
+                <span className="bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-accent)] bg-clip-text text-transparent inline">
+                  allein
+                </span>{" "}
+                endest oder als Partner.
+              </>,
+              <>
+                Your next stream ends either way. The question is whether you end it{" "}
+                <span className="bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-accent)] bg-clip-text text-transparent inline">
+                  alone
+                </span>{" "}
+                or as a partner.
+              </>,
+            )}
           </h2>
 
           <p className="text-xl text-[var(--color-text-secondary)] mb-10">
-            Werde Teil vom größten deutschen Deadlock-Netzwerk auf Twitch.
+            {tx(
+              "Werde Teil vom größten deutschen Deadlock-Netzwerk auf Twitch.",
+              "Join the biggest English-speaking Deadlock network on Twitch.",
+            )}
           </p>
 
           <div className="flex gap-4 justify-center flex-wrap">
@@ -28,7 +43,7 @@ export function CTA() {
               className="gradient-accent rounded-xl px-8 py-4 font-semibold text-lg inline-flex items-center gap-2"
             >
               <ExternalLink size={20} />
-              Jetzt Partner werden
+              {tx("Jetzt Partner werden", "Become a partner")}
             </a>
             <a
               href={DISCORD_INVITE_URL}
@@ -38,7 +53,7 @@ export function CTA() {
               style={{ background: "#5865F2" }}
             >
               <DiscordLogo size={22} className="text-white" />
-              Community-Discord beitreten
+              {tx("Community-Discord beitreten", "Join our Discord")}
             </a>
           </div>
         </ScrollReveal>

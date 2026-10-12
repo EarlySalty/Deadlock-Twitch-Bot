@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { SectionHeading } from "@/components/ui/SectionHeading";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
+import { tx } from "@/i18n/locale";
 
 interface PartnerBenefit {
   id: string;
@@ -21,43 +22,53 @@ const benefits: PartnerBenefit[] = [
   {
     id: "auto-raid",
     icon: Swords,
-    title: "Auto-Raid im Netzwerk",
-    description:
+    title: tx("Auto-Raid im Netzwerk", "Network auto-raid"),
+    description: tx(
       "Endet dein Stream, landen deine Zuschauer beim passenden Live-Partner. Gehen andere offline, landen ihre bei dir.",
+      "When your stream ends, your viewers land with a fitting live partner. When others go offline, theirs land with you.",
+    ),
   },
   {
     id: "discord-live",
     icon: Zap,
-    title: "Sichtbar ab der ersten Minute",
-    description:
+    title: tx("Sichtbar ab der ersten Minute", "Visible from minute one"),
+    description: tx(
       "Du gehst live, der Discord weiß es sofort. Verschluckt Twitch das Ereignis, fragt der Bot alle 15 Sekunden selbst nach.",
+      "You go live, the Discord knows instantly. If Twitch drops the event, the bot checks for itself every 15 seconds.",
+    ),
   },
   {
     id: "analytics",
     icon: BarChart2,
-    title: "Deine Zahlen im Blick",
-    description:
+    title: tx("Deine Zahlen im Blick", "Your numbers at a glance"),
+    description: tx(
       "Zuschauer, Chat, Raids, Bestwerte und der Vergleich mit dem Netzwerk. Nach jedem Stream siehst du, was funktioniert hat.",
+      "Viewers, chat, raids, personal bests and how you compare to the network. After every stream you see what worked.",
+    ),
   },
   {
     id: "clip-manager",
     icon: Clapperboard,
-    title: "Clips direkt aus dem Chat",
-    description: "!clip im Chat, fertig ist der Clip.",
+    title: tx("Clips direkt aus dem Chat", "Clips straight from chat"),
+    description: tx("!clip im Chat, fertig ist der Clip.", "Type !clip in chat and the clip is done."),
   },
   {
     id: "community",
     icon: Users,
-    title: "Eine Community im Rücken",
-    description:
+    title: tx("Eine Community im Rücken", "A community behind you"),
+    description: tx(
       "Treue Zuschauer werden belohnt, Lurker gezielt angesprochen. Im Streamer-Bereich im Discord tauschst du dich mit den anderen aus.",
+      "Loyal viewers get rewarded, lurkers get a targeted nudge. In the streamer area of the Discord you swap notes with the others.",
+    ),
   },
   {
     id: "moderation",
     icon: ShieldCheck,
-    title: "Ein Schutzschild für alle",
-    description:
+    title: tx("Ein Schutzschild für alle", "One shield for everyone"),
+    description: tx(
       "Scam- und Spam-Konten fliegen aus deinem Chat, bevor jemand sie sieht. Dazu die Ban-Liste des ganzen Netzwerks, alles pro Kanal abschaltbar.",
+      "Scam and spam accounts get kicked from your chat before anyone sees them. Plus the ban list of the whole network, all switchable per channel.",
+    ),
   },
 ];
 
@@ -66,9 +77,9 @@ export function Features() {
     <section id="features" className="py-24">
       <div className="max-w-7xl mx-auto px-6">
         <SectionHeading
-          badge="Partner-Vorteile"
-          title="Was als Partner dazugehört"
-          subtitle="Sechs Dinge, die dazukommen, sobald du Partner bist."
+          badge={tx("Partner-Vorteile", "Partner perks")}
+          title={tx("Was als Partner dazugehört", "What you get as a partner")}
+          subtitle={tx("Sechs Dinge, die dazukommen, sobald du Partner bist.", "Six things you get the moment you're a partner.")}
         />
 
         <div className="mt-16 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

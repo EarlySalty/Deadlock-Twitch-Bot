@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
+import { TWITCH_PUBLIC_ORIGIN } from "@/data/externalLinks";
 
-const NETWORK_API =
-  "https://deutsche-deadlock-community.de/twitch/api/v2/public/network";
+const NETWORK_API = `${TWITCH_PUBLIC_ORIGIN}/twitch/api/v2/public/network`;
 
 /**
  * Aktuelle Anzahl aktiver Partner-Streamer im Netzwerk, live aus der DB
