@@ -3,6 +3,7 @@ import { Rise } from '../../motion/Rise';
 import { Clock, TrendingUp, TrendingDown, Users, Timer } from 'lucide-react';
 import { NoDataCard } from '@/components/cards/NoDataCard';
 import type { WatchTimeDistribution as WatchTimeDistributionType } from '@/types/analytics';
+import { useT } from '../../context/LanguageContext';
 
 interface WatchTimeDistributionProps {
   data: WatchTimeDistributionType;
@@ -17,6 +18,7 @@ const SEGMENTS = [
 ] as const;
 
 export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
+  const t = useT();
   const method = data?.dataQuality?.method;
   const isNoData =
     !data ||
@@ -32,11 +34,16 @@ export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
     const minCoveragePct = ((data?.dataQuality?.required_min_coverage ?? 0.15) * 100).toFixed(0);
     const submessage =
       method === 'low_coverage'
-        ? `Echte Samples vorhanden (${sampleCount}), aber Coverage ${coveragePct}% ist noch unter der Schwelle (${minSamples} Samples und ${minCoveragePct}% Coverage).`
-        : 'Zu wenig echte Chatters-Samples – Ergebnisse werden angezeigt, sobald belastbare Daten vorliegen.';
+        ? t('Echte Samples vorhanden ({samples}), aber Coverage {coverage}% ist noch unter der Schwelle ({minSamples} Samples und {minCoverage}% Coverage).', {
+            samples: sampleCount,
+            coverage: coveragePct,
+            minSamples,
+            minCoverage: minCoveragePct,
+          })
+        : t('Zu wenig echte Chatters-Samples – Ergebnisse werden angezeigt, sobald belastbare Daten vorliegen.');
     return (
       <NoDataCard
-        message="Nicht genug Daten für Watch Time"
+        message={t('Nicht genug Daten für Watch Time')}
         submessage={submessage}
       />
     );
@@ -59,27 +66,26 @@ export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
             <Clock className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h3 className="text-lg font-bold text-white">Watch Time Verteilung</h3>
-            <p className="text-sm text-text-secondary">Wie lange bleiben deine Viewer?</p>
+            <h3 className="text-lg font-bold text-white">{t('Watch Time Verteilung')}</h3>
+            <p className="text-sm text-text-secondary">{t('Wie lange bleiben deine Viewer?')}</p>
           </div>
         </div>
         {hasPrevious && (
           <div className="text-xs text-text-secondary bg-background px-2 py-1 rounded">
-            vs. Vorperiode ({data.previous!.sessionCount} Sessions)
+            {t('vs. Vorperiode ({count} Sessions)', { count: data.previous!.sessionCount ?? '' })}
           </div>
         )}
       </div>
 
-      {/* Main Stats */}
       <div className="grid grid-cols-2 gap-4 mb-6">
         <div className="bg-background rounded-lg p-4">
           <div className="flex items-center gap-2 text-text-secondary text-sm mb-1">
             <Timer className="w-4 h-4" />
-            Ø Watch Time
+            {t('Ø Watch Time')}
           </div>
           <div className="flex items-baseline gap-2">
             <span className="text-2xl font-bold text-white">{data.avgWatchTime.toFixed(1)}</span>
-            <span className="text-text-secondary">Min</span>
+            <span className="text-text-secondary">{t('Min')}</span>
             {avgDelta != null && (
               <span className={`flex items-center gap-1 text-sm ${avgTrendUp ? 'text-success' : 'text-error'}`}>
                 {avgTrendUp ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
@@ -89,22 +95,22 @@ export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
           </div>
           {hasPrevious && (
             <div className="text-xs text-text-secondary mt-1">
-              Vorher: {data.previous!.avgWatchTime.toFixed(1)} Min
+              {t('Vorher: {value} Min', { value: data.previous!.avgWatchTime.toFixed(1) })}
             </div>
           )}
         </div>
         <div className="bg-background rounded-lg p-4">
           <div className="flex items-center gap-2 text-text-secondary text-sm mb-1">
             <Users className="w-4 h-4" />
-            Loyale Viewer
+            {t('Loyale Viewer')}
           </div>
           <div className="flex items-baseline gap-2">
             <span className="text-2xl font-bold text-success">{totalLoyalViewers.toFixed(1)}%</span>
-            <span className="text-text-secondary text-sm">&gt; 30 Min</span>
+            <span className="text-text-secondary text-sm">{t('> 30 Min')}</span>
           </div>
           {hasPrevious && (
             <div className="text-xs text-text-secondary mt-1">
-              Vorher: {prevLoyalViewers.toFixed(1)}%
+              {t('Vorher: {value}%', { value: prevLoyalViewers.toFixed(1) })}
               {totalLoyalViewers !== prevLoyalViewers && (
                 <span className={totalLoyalViewers > prevLoyalViewers ? 'text-success ml-1' : 'text-error ml-1'}>
                   ({totalLoyalViewers > prevLoyalViewers ? '+' : ''}{(totalLoyalViewers - prevLoyalViewers).toFixed(1)}pp)
@@ -115,7 +121,6 @@ export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
         </div>
       </div>
 
-      {/* Distribution Comparison Bars */}
       <div className="space-y-3 mb-6">
         {SEGMENTS.map((segment, i) => {
           const currVal = data[segment.key];
@@ -136,14 +141,11 @@ export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
               transition={{ delay: Math.min(i * 0.04, 0.24) }}
             >
               <div className="flex items-center gap-3">
-                {/* Label */}
                 <div className="w-16 text-xs text-text-secondary text-right shrink-0">
                   {segment.shortLabel}
                 </div>
 
-                {/* Bars container */}
                 <div className="flex-1 space-y-1">
-                  {/* Current bar */}
                   <div className="flex items-center gap-2">
                     <div className="flex-1 h-5 bg-background rounded overflow-hidden">
                       <motion.div
@@ -157,7 +159,6 @@ export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
                     <span className="text-xs font-medium text-white w-12 text-right">{currVal.toFixed(1)}%</span>
                   </div>
 
-                  {/* Previous bar (if available) */}
                   {hasPrevious && prevVal != null && (
                     <div className="flex items-center gap-2">
                       <div className="flex-1 h-3 bg-background rounded overflow-hidden">
@@ -174,7 +175,6 @@ export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
                   )}
                 </div>
 
-                {/* Delta */}
                 <div className="w-14 text-right shrink-0">
                   {hasPrevious && prevVal != null && prevVal > 0 ? (
                     <DeltaBadge current={currVal} previous={prevVal} inverted={segment.key === 'under5min'} />
@@ -188,49 +188,47 @@ export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
         })}
       </div>
 
-      {/* Legend */}
       {hasPrevious && (
         <div className="flex items-center gap-4 text-xs text-text-secondary mb-4">
           <span className="flex items-center gap-1.5">
-            <div className="w-3 h-3 rounded bg-primary" /> Aktuell ({data.sessionCount ?? '?'} Sessions)
+            <div className="w-3 h-3 rounded bg-primary" /> {t('Aktuell ({count} Sessions)', { count: data.sessionCount ?? '?' })}
           </span>
           <span className="flex items-center gap-1.5">
-            <div className="w-3 h-3 rounded border border-primary bg-transparent" /> Vorperiode ({data.previous!.sessionCount ?? '?'} Sessions)
+            <div className="w-3 h-3 rounded border border-primary bg-transparent" /> {t('Vorperiode ({count} Sessions)', { count: data.previous!.sessionCount ?? '?' })}
           </span>
         </div>
       )}
 
-      {/* Insights */}
       <div className="pt-4 border-t border-border">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {data.under5min > 30 && (
             <InsightBadge
               type="warning"
-              text={`${data.under5min.toFixed(0)}% springen in den ersten 5 Min ab - optimiere deinen Stream-Start!`}
+              text={t('{percent}% springen in den ersten 5 Min ab - optimiere deinen Stream-Start!', { percent: data.under5min.toFixed(0) })}
             />
           )}
           {totalLoyalViewers > 40 && (
             <InsightBadge
               type="success"
-              text={`${totalLoyalViewers.toFixed(0)}% bleiben über 30 Min - starke Community-Bindung!`}
+              text={t('{percent}% bleiben über 30 Min - starke Community-Bindung!', { percent: totalLoyalViewers.toFixed(0) })}
             />
           )}
           {hasPrevious && avgDelta != null && avgDelta > 10 && (
             <InsightBadge
               type="success"
-              text={`Watch Time um ${avgDelta.toFixed(0)}% gestiegen vs. Vorperiode!`}
+              text={t('Watch Time um {percent}% gestiegen vs. Vorperiode!', { percent: avgDelta.toFixed(0) })}
             />
           )}
           {hasPrevious && avgDelta != null && avgDelta < -10 && (
             <InsightBadge
               type="warning"
-              text={`Watch Time um ${Math.abs(avgDelta).toFixed(0)}% gesunken - prüfe was sich geändert hat.`}
+              text={t('Watch Time um {percent}% gesunken - prüfe was sich geändert hat.', { percent: Math.abs(avgDelta).toFixed(0) })}
             />
           )}
           {data.avgWatchTime < 15 && (
             <InsightBadge
               type="warning"
-              text="Durchschnittliche Watch Time unter 15 Min - teste längere Engagement-Segmente"
+              text={t('Durchschnittliche Watch Time unter 15 Min - teste längere Engagement-Segmente')}
             />
           )}
         </div>
@@ -241,7 +239,6 @@ export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
 
 function DeltaBadge({ current, previous, inverted = false }: { current: number; previous: number; inverted?: boolean }) {
   const diff = current - previous;
-  // For "under5min", less is better (inverted)
   const isPositive = inverted ? diff < 0 : diff > 0;
   const color = Math.abs(diff) < 0.5 ? 'text-text-secondary' : isPositive ? 'text-success' : 'text-error';
 

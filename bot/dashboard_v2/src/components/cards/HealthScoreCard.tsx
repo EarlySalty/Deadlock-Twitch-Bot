@@ -2,16 +2,18 @@ import { motion } from 'framer-motion';
 import { Rise } from '../../motion/Rise';
 import { Zap } from 'lucide-react';
 import type { HealthScore } from '@/types/analytics';
+import { useT } from '../../context/LanguageContext';
 
 interface HealthScoreCardProps {
   scores: HealthScore;
 }
 
 export function HealthScoreCard({ scores }: HealthScoreCardProps) {
+  const t = useT();
   const subScores = [
-    { label: 'Reach', value: scores.reach },
-    { label: 'Ret.', value: scores.retention },
-    { label: 'Eng.', value: scores.engagement },
+    { label: t('Reach'), value: scores.reach },
+    { label: t('Ret.'), value: scores.retention },
+    { label: t('Eng.'), value: scores.engagement },
   ];
 
   return (
@@ -20,16 +22,14 @@ export function HealthScoreCard({ scores }: HealthScoreCardProps) {
       animate={{ opacity: 1, scale: 1 }}
       className="md:col-span-2 lg:col-span-1 panel-card metric-highlight p-6 rounded-2xl flex flex-col items-center justify-center text-center relative overflow-hidden"
     >
-      {/* Background Icon */}
       <div className="absolute top-0 right-0 p-4 opacity-15">
         <Zap className="w-16 h-16" />
       </div>
 
       <h2 className="text-text-secondary font-semibold uppercase tracking-[0.14em] text-xs mb-4">
-        Channel Health
+        {t('Channel Health')}
       </h2>
 
-      {/* Main Score */}
       <div className="flex items-baseline justify-center gap-1 mb-2">
         <Rise
           step={{ seconds: 0.2 }}
@@ -41,7 +41,6 @@ export function HealthScoreCard({ scores }: HealthScoreCardProps) {
         <span className="text-xl text-primary">/100</span>
       </div>
 
-      {/* Sub Scores */}
       <div className="mt-4 w-full grid grid-cols-3 gap-2 text-xs text-text-secondary">
         {subScores.map((sub, i) => (
           <motion.div
