@@ -160,7 +160,7 @@ function VideoRow({ video, snapshot, busy, owner, client, act, onOpenVideo, onCo
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
-  const platforms = video.event?.destinations.length ? video.event.destinations.map((destination) => destination.platform) : snapshot.target_platforms;
+  const platforms = [...new Set<PublishPlatform>([...snapshot.target_platforms, ...(video.event?.destinations.map((destination) => destination.platform) ?? []), ...video.approvals.map((approval) => approval.platform)])].filter((platform) => platform in names);
   const expired = video.status === 'expired' || video.artifact_state === 'deleted' || video.artifact_state === 'missing';
   const actionable = !expired && ['review', 'approved', 'scheduled'].includes(video.status);
   async function approve() {
@@ -176,6 +176,7 @@ function VideoRow({ video, snapshot, busy, owner, client, act, onOpenVideo, onCo
   }
   return <article className="publish-video" data-unsaved={selected.length > 0 || busy ? 'true' : undefined} aria-label={`Videoversion ${video.version_no}, Variante ${video.variant_index + 1}`}>
     <header><div><h3>Video #{video.id} <span>Version {video.version_no}, Variante {video.variant_index + 1}</span></h3><p>{video.mode === 'ai' ? 'KI-bearbeitet' : 'Statisch bearbeitet'}{video.duration_ms ? ` · ${(video.duration_ms / 1000).toLocaleString('de-DE')} Sekunden` : ''}</p></div>{onOpenVideo && !expired && <button type="button" disabled={busy} onClick={() => onOpenVideo(video.id)}>Video prüfen</button>}</header>
+    {!onOpenVideo && !expired && client.videoUrl && <video className="publish-preview" controls preload="none" playsInline aria-label={`Vorschau Video #${video.id}`} src={client.videoUrl(owner, video.id)} />}
     {video.needs_review && <p className="publish-note">Dieses Video benötigt deine Prüfung. Bitte prüfe die Bildqualität und ob die wichtige Spielsituation vollständig erhalten ist.</p>}
     {expired ? <p className="publish-note">Aufbewahrungsfrist abgelaufen. Es wird nicht automatisch neu gerendert.</p> : <p className="publish-expiry">{video.status === 'review' ? `Ohne Freigabe verfügbar bis ${date(video.expires_at)}` : 'Datei für Freigabe, Veröffentlichung und erforderliche Wiederholungen geschützt.'}</p>}
     {video.cleanup_error && <p role="alert" className="publish-error">{video.cleanup_error}</p>}

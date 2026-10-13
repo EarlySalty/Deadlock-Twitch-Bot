@@ -95,6 +95,7 @@ export interface PublishReviewClient {
   approve(owner: string, videoId: number, decisions: DestinationDecision[]): Promise<void>;
   schedule(owner: string, videoId: number, platforms: PublishPlatform[]): Promise<void>;
   retry(owner: string, videoId: number, platform: PublishPlatform): Promise<void>;
+  videoUrl?(owner: string, videoId: number): string;
 }
 
 const base = '/twitch/social-media/api/autopilot/publish';
@@ -122,4 +123,5 @@ export const publishReviewClient: PublishReviewClient = {
   approve: (owner, video, destinations) => request(owner, publishUrl(`/videos/${video}/approval`), 'PUT', { destinations }),
   schedule: (owner, video, platforms) => request(owner, publishUrl(`/videos/${video}/schedule`), 'POST', { platforms }),
   retry: (owner, video, platform) => request(owner, publishUrl(`/videos/${video}/retry`), 'POST', { platform }),
+  videoUrl: (owner, video) => `${publishUrl(`/videos/${video}/file`)}?${new URLSearchParams({ twitch_user_id: owner })}`,
 };

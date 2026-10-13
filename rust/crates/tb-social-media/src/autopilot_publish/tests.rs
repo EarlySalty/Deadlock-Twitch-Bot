@@ -688,3 +688,159 @@ async fn open_destination_keeps_file_past_retention_and_deleted_file_is_never_re
     assert_eq!(status, queue_status::RETRY);
     cleanup(pool).await;
 }
+
+#[tokio::test]
+async fn review_switch_holds_pending_destination_of_executed_event() {
+    let pool = pool().await;
+    configure(
+        &pool,
+        &["youtube", "instagram"],
+        &[("youtube", "yt-1"), ("instagram", "ig-1")],
+    )
+    .await;
+    let (id, file) = video(&pool, "executed").await;
+    approve(&pool, "owner", id, &decisions(&["youtube"]))
+        .await
+        .expect("approve youtube");
+    transition_mode(
+        &pool,
+        "owner",
+        &ModeTransition {
+            mode: PublishMode::FullAuto,
+            confirmed: true,
+            pending: Some(PendingHandling::KeepReview),
+        },
+    )
+    .await
+    .expect("full auto");
+    sqlx::query("INSERT INTO social_media_clip_approval (produced_video_id, platform, state, approved_platforms, approver_user_id, decided_at) VALUES ($1, 'instagram', 'approved', '[]', 'autopilot', NOW())")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("automatic approval");
+    sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, produced_video_id, platform, status, scheduled_at) SELECT clip_id, id, 'instagram', $2, scheduled_at FROM social_produced_videos WHERE id = $1")
+        .bind(id)
+        .bind(queue_status::PENDING)
+        .execute(&pool)
+        .await
+        .expect("pending instagram");
+    sqlx::query("UPDATE twitch_clips_upload_queue SET status = $2 WHERE produced_video_id = $1 AND platform = 'youtube'")
+        .bind(id)
+        .bind(queue_status::PUBLISHED)
+        .execute(&pool)
+        .await
+        .expect("published youtube");
+    sqlx::query("UPDATE social_produced_videos SET publication_executed_at = clock_timestamp() WHERE id = $1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("executed");
+    transition_mode(
+        &pool,
+        "owner",
+        &ModeTransition {
+            mode: PublishMode::Review,
+            confirmed: true,
+            pending: None,
+        },
+    )
+    .await
+    .expect("review");
+    assert_eq!(
+        destinations(&pool, id).await,
+        vec![
+            (
+                "instagram".into(),
+                queue_status::HELD.into(),
+                Some("review_required".into())
+            ),
+            ("youtube".into(), queue_status::PUBLISHED.into(), None),
+        ]
+    );
+    let publisher = ScriptedPublisher::with(vec![published("ig-video")]);
+    let executor = PublishExecutor::new(pool.clone(), publisher.clone());
+    executor.tick().await.expect("held tick");
+    assert!(publisher.calls().is_empty());
+    assert!(file.exists());
+    approve(&pool, "owner", id, &decisions(&["instagram"]))
+        .await
+        .expect("explicit instagram approval");
+    executor.tick().await.expect("approved tick");
+    assert_eq!(publisher.calls().len(), 1);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn approved_video_without_slot_is_scheduled_again() {
+    let pool = pool().await;
+    configure(&pool, &["youtube"], &[("youtube", "yt-1")]).await;
+    let (id, _) = video(&pool, "slotless").await;
+    approve(&pool, "owner", id, &decisions(&["youtube"]))
+        .await
+        .expect("approve");
+    let mut tx = pool.begin().await.expect("tx");
+    release_slot(&mut tx, id).await.expect("release");
+    tx.commit().await.expect("commit");
+    let (status, slot): (String, Option<chrono::DateTime<chrono::Utc>>) =
+        sqlx::query_as("SELECT status, scheduled_at FROM social_produced_videos WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("released");
+    assert_eq!((status.as_str(), slot), ("approved", None));
+    PublishExecutor::new(pool.clone(), ScriptedPublisher::with(vec![]))
+        .tick()
+        .await
+        .expect("tick");
+    let (status, slot): (String, Option<chrono::DateTime<chrono::Utc>>) =
+        sqlx::query_as("SELECT status, scheduled_at FROM social_produced_videos WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("rescheduled");
+    assert_eq!(status, "scheduled");
+    assert!(slot.is_some_and(|slot| slot > chrono::Utc::now()));
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn pending_discord_message_is_dropped_after_opt_out() {
+    let pool = pool().await;
+    configure(&pool, &["youtube"], &[("youtube", "yt-1")]).await;
+    let mut preferences = autopilot_settings::load(&pool, "owner")
+        .await
+        .expect("settings")
+        .notifications;
+    preferences.discord = true;
+    save_notifications(&pool, "owner", &preferences)
+        .await
+        .expect("enable discord");
+    let (_, _) = video(&pool, "opt-out").await;
+    let silent = PublishExecutor::new(pool.clone(), ScriptedPublisher::with(vec![]));
+    silent.tick().await.expect("collect tick");
+    let pending: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM social_autopilot_notifications WHERE discord_state = 'pending'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("pending");
+    assert_eq!(pending, 1);
+    preferences.discord = false;
+    save_notifications(&pool, "owner", &preferences)
+        .await
+        .expect("disable discord");
+    let notifier = Arc::new(RecordingNotifier(Mutex::default()));
+    PublishExecutor::new(pool.clone(), ScriptedPublisher::with(vec![]))
+        .with_notifier(notifier.clone())
+        .tick()
+        .await
+        .expect("dispatch tick");
+    assert!(notifier.0.lock().expect("messages").is_empty());
+    let state: String =
+        sqlx::query_scalar("SELECT discord_state FROM social_autopilot_notifications")
+            .fetch_one(&pool)
+            .await
+            .expect("state");
+    assert_eq!(state, "disabled");
+    cleanup(pool).await;
+}

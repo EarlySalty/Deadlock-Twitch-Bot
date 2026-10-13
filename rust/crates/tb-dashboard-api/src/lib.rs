@@ -265,10 +265,9 @@ fn build_authed_router_with_analysis_store(
     let uplink_connect_rl =
         RateLimitLayerConfig::new(rate_limiter.clone(), "uplink_connect", 30, 60);
 
+    let ai_runtime = handlers::social_media_ai::AiRuntime::packaged();
     let social_routes = Router::new()
-        .merge(handlers::social_media_ai::routes(
-            handlers::social_media_ai::AiRuntime::packaged(),
-        ))
+        .merge(handlers::social_media_ai::routes(ai_runtime.clone()))
         .route("/social-media/api/stats", get(social_media::stats_handler))
         .route("/social-media/api/clips", get(social_media::clips_handler))
         .route(
@@ -442,6 +441,10 @@ fn build_authed_router_with_analysis_store(
         .route(
             "/social-media/api/autopilot/publish/videos/{id}/retry",
             post(social_media::autopilot::publish_retry_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/publish/videos/{id}/file",
+            get(handlers::social_media_ai::produced_file).layer(Extension(ai_runtime)),
         )
         .route(
             "/social-media/api/admin/clips",

@@ -40,6 +40,19 @@ impl Kind {
         }
     }
 
+    fn from_code(code: &str) -> Option<Self> {
+        [
+            Self::ReadyForReview,
+            Self::PublicationDeadline,
+            Self::ProcessingFailed,
+            Self::PublicationFailed,
+            Self::EmptyPool,
+            Self::ReviewExpiring,
+        ]
+        .into_iter()
+        .find(|kind| kind.code() == code)
+    }
+
     fn enabled(self, preferences: &NotificationPreferences) -> bool {
         match self {
             Self::ReadyForReview => preferences.ready_for_review,
@@ -264,22 +277,24 @@ pub(crate) async fn dispatch(
     pool: &PgPool,
     notifier: &dyn AutopilotNotifier,
 ) -> Result<(), PublishError> {
-    let pending: Vec<(i64, String, String, String)> = sqlx::query_as(
-        "SELECT id, twitch_user_id, content, link FROM social_autopilot_notifications
+    let pending: Vec<(i64, String, String, String, String)> = sqlx::query_as(
+        "SELECT id, twitch_user_id, kind, content, link FROM social_autopilot_notifications
          WHERE discord_state = 'pending' AND created_at > clock_timestamp() - INTERVAL '1 day'
          ORDER BY created_at, id LIMIT 20",
     )
     .fetch_all(pool)
     .await?;
-    for (id, owner, content, link) in pending {
+    for (id, owner, kind, content, link) in pending {
+        let wanted = discord_wanted(pool, &owner, &kind).await?;
         let claimed = sqlx::query(
-            "UPDATE social_autopilot_notifications SET discord_state = 'sending' WHERE id = $1 AND discord_state = 'pending'",
+            "UPDATE social_autopilot_notifications SET discord_state = $2 WHERE id = $1 AND discord_state = 'pending'",
         )
         .bind(id)
+        .bind(if wanted { "sending" } else { "disabled" })
         .execute(pool)
         .await?
         .rows_affected();
-        if claimed != 1 {
+        if claimed != 1 || !wanted {
             continue;
         }
         let state = match notifier.send(&owner, &format!("{content}\n{link}")).await {
@@ -297,4 +312,14 @@ pub(crate) async fn dispatch(
         .await?;
     }
     Ok(())
+}
+
+async fn discord_wanted(pool: &PgPool, owner: &str, kind: &str) -> Result<bool, PublishError> {
+    let settings = match autopilot_settings::load(pool, owner).await {
+        Ok(settings) => settings,
+        Err(autopilot_settings::SettingsError::Database(error)) => return Err(error.into()),
+        Err(_) => return Ok(false),
+    };
+    let preferences = &settings.notifications;
+    Ok(preferences.discord && Kind::from_code(kind).is_some_and(|kind| kind.enabled(preferences)))
 }

@@ -529,8 +529,9 @@ async fn enter_review(
         let explicit = valid_approvals_on(tx, id, owner, PublishMode::Review).await?;
         let explicit: Vec<String> = explicit.into_iter().collect();
         sqlx::query(
-            "DELETE FROM twitch_clips_upload_queue WHERE produced_video_id = $1 AND status = $2
-             AND NOT (platform = ANY($3))",
+            "DELETE FROM twitch_clips_upload_queue q USING social_produced_videos v
+             WHERE v.id = q.produced_video_id AND q.produced_video_id = $1 AND q.status = $2
+             AND v.publication_executed_at IS NULL AND NOT (q.platform = ANY($3))",
         )
         .bind(id)
         .bind(queue_status::PENDING)
@@ -539,11 +540,11 @@ async fn enter_review(
         .await?;
         sqlx::query(
             "UPDATE twitch_clips_upload_queue SET status = $2, outcome_reason = 'review_required', next_retry_at = NULL
-             WHERE produced_video_id = $1 AND status = $3 AND NOT (platform = ANY($4))",
+             WHERE produced_video_id = $1 AND status = ANY($3) AND NOT (platform = ANY($4))",
         )
         .bind(id)
         .bind(queue_status::HELD)
-        .bind(queue_status::RETRY)
+        .bind([queue_status::RETRY, queue_status::PENDING])
         .bind(&explicit)
         .execute(&mut *tx)
         .await?;

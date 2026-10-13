@@ -494,6 +494,33 @@ pub async fn version_file(
     .await
 }
 
+pub async fn produced_file(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Extension(runtime): Extension<AiRuntime>,
+    Path(id): Path<i64>,
+    Query(query): Query<ChannelQuery>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let owner = channel(&pool, &auth, query.twitch_user_id.as_deref()).await?;
+    let runtime = runtime.required()?;
+    let video = produced_video::get(&pool, &owner, id)
+        .await
+        .map_err(AiEditorError::Publishing)?
+        .ok_or(AiEditorError::NotFound)?;
+    if video.status == "expired" {
+        return Err(AiEditorError::NotFound.into());
+    }
+    let path = PathBuf::from(video.file_path.ok_or(AiEditorError::NotFound)?);
+    stream_file(
+        &runtime.limits.output_root,
+        &path,
+        runtime.limits.resources.max_output_bytes,
+        &headers,
+    )
+    .await
+}
+
 fn byte_range(range: Option<&str>, size: u64) -> Result<(u64, u64, bool), ApiError> {
     let invalid = || {
         response_error(

@@ -152,6 +152,7 @@ impl PublishExecutor {
         let mut report = TickReport::default();
         self.recover_stale().await?;
         report.promoted = self.promote().await?;
+        report.promoted += self.schedule_slotless().await?;
         self.execute_due(&mut report).await?;
         report.uploads = self.upload_due().await?;
         report.finished = self.finalize().await?;
@@ -280,6 +281,32 @@ impl PublishExecutor {
             Ok(_) | Err(produced_video::ProducedVideoError::NoSlot) => Ok(true),
             Err(error) => Err(error.into()),
         }
+    }
+
+    async fn schedule_slotless(&self) -> Result<usize, PublishError> {
+        let candidates: Vec<(i64, String, Vec<String>)> = sqlx::query_as(
+            "SELECT v.id, v.twitch_user_id, array_agg(a.platform ORDER BY a.platform)
+             FROM social_produced_videos v
+             JOIN social_media_clip_approval a ON a.produced_video_id = v.id AND a.state = 'approved'
+             LEFT JOIN social_media_autopilot_settings s ON s.twitch_user_id = v.twitch_user_id
+             WHERE v.status = 'approved' AND v.scheduled_at IS NULL AND v.publication_executed_at IS NULL
+             AND v.artifact_deleted_at IS NULL AND v.file_path IS NOT NULL
+             AND v.metadata ? 'publication' AND NOT COALESCE(s.paused, FALSE)
+             GROUP BY v.id, v.twitch_user_id ORDER BY v.id LIMIT 20",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut scheduled = 0;
+        for (id, owner, platforms) in candidates {
+            match super::schedule(&self.pool, &owner, id, &platforms).await {
+                Ok(()) => scheduled += 1,
+                Err(PublishError::NoSlot) | Err(PublishError::ApprovalRequired) => {}
+                Err(error) => {
+                    tracing::warn!(%error, video = id, "Auto-Pilot publication could not be rescheduled")
+                }
+            }
+        }
+        Ok(scheduled)
     }
 
     async fn execute_due(&self, report: &mut TickReport) -> Result<(), PublishError> {
@@ -525,18 +552,7 @@ impl PublishExecutor {
             }
             Verdict::Upload(account) => account,
         };
-        let started = sqlx::query(
-            "UPDATE twitch_clips_upload_queue SET status = $2, effect_started_at = clock_timestamp(),
-             attempts = attempts + 1, account_id = $3, next_retry_at = NULL WHERE id = $1 AND status = $4",
-        )
-        .bind(claim.queue_id)
-        .bind(queue_status::EFFECT_STARTED)
-        .bind(&account)
-        .bind(queue_status::PREPARING)
-        .execute(&self.pool)
-        .await?
-        .rows_affected();
-        if started != 1 {
+        if !self.start_effect(&claim, account.as_deref()).await? {
             return Ok(());
         }
         let attempts = claim.attempts.saturating_add(1);
@@ -584,6 +600,43 @@ impl PublishExecutor {
                 }
             }
         }
+    }
+
+    async fn start_effect(
+        &self,
+        claim: &Claim,
+        account: Option<&str>,
+    ) -> Result<bool, PublishError> {
+        let mut tx = self.pool.begin().await?;
+        autopilot_settings::lock_owner(&mut tx, &claim.owner).await?;
+        let settings = autopilot_settings::load_on(&mut tx, &claim.owner).await?;
+        let approved =
+            valid_approvals_on(&mut tx, claim.video_id, &claim.owner, settings.publish_mode)
+                .await?;
+        let (status, reason) = if approved.contains(&claim.platform) {
+            (queue_status::EFFECT_STARTED, None)
+        } else {
+            (queue_status::HELD, Some("review_required"))
+        };
+        let changed = sqlx::query(
+            "UPDATE twitch_clips_upload_queue SET status = $2,
+             outcome_reason = CASE WHEN $2 = $6 THEN outcome_reason ELSE $5 END,
+             effect_started_at = CASE WHEN $2 = $6 THEN clock_timestamp() ELSE effect_started_at END,
+             attempts = CASE WHEN $2 = $6 THEN attempts + 1 ELSE attempts END,
+             account_id = CASE WHEN $2 = $6 THEN $3 ELSE account_id END,
+             next_retry_at = NULL WHERE id = $1 AND status = $4",
+        )
+        .bind(claim.queue_id)
+        .bind(status)
+        .bind(account)
+        .bind(queue_status::PREPARING)
+        .bind(reason)
+        .bind(queue_status::EFFECT_STARTED)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+        Ok(changed == 1 && reason.is_none())
     }
 
     async fn settle(
