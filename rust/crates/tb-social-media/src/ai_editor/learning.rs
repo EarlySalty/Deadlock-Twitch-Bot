@@ -440,8 +440,11 @@ pub fn planning_hints(profile: &PersonalProfile) -> Vec<String> {
 }
 
 pub async fn personal_hints(pool: &PgPool, owner: &str) -> Result<Vec<String>, sqlx::Error> {
+    let Ok(owner) = owner.parse::<i64>() else {
+        return Ok(Vec::new());
+    };
     let profile: Option<Value> = sqlx::query_scalar(
-        "SELECT profile FROM public.social_ai_personal_preferences WHERE twitch_user_id::text = $1",
+        "SELECT profile FROM public.social_ai_personal_preferences WHERE twitch_user_id = $1",
     )
     .bind(owner)
     .fetch_optional(pool)
@@ -588,10 +591,15 @@ async fn apply_skill(
             evidence: Some(&evidence),
             actor: LEARNING_ACTOR,
             max_bytes,
+            expected_version: Some(active.version),
         },
     )
-    .await?;
-    Ok(Some(version))
+    .await;
+    match version {
+        Ok(version) => Ok(Some(version)),
+        Err(SkillRegistryError::Conflict) => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 async fn record_proposals(

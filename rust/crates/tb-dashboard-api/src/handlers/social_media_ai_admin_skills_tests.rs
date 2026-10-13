@@ -117,6 +117,7 @@ async fn skill_history_shows_learned_diff_and_rollback_restores_bundled_version(
             evidence: Some(&evidence),
             actor: "system:learning",
             max_bytes: 4096,
+            expected_version: None,
         },
     )
     .await
