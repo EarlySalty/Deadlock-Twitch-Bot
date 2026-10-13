@@ -858,6 +858,8 @@ social_media_vod_archive|twitch_user_id|text|YES|
 social_media_vod_archive|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 social_media_vod_archive|updated_by|text|YES|
 social_produced_videos|artifact_deleted_at|timestamp with time zone|YES|
+social_produced_videos|autopilot_deferred_stage|text|YES|
+social_produced_videos|autopilot_deferred_until|timestamp with time zone|YES|
 social_produced_videos|cleanup_error|text|YES|
 social_produced_videos|clip_id|bigint|NO|
 social_produced_videos|created_at|timestamp with time zone|NO|now()
@@ -1485,6 +1487,7 @@ twitch_clips_social_media|youtube_uploaded_at|timestamp with time zone|YES|
 twitch_clips_social_media|youtube_video_id|text|YES|
 twitch_clips_upload_queue|account_id|text|YES|
 twitch_clips_upload_queue|attempts|integer|YES|0
+twitch_clips_upload_queue|claim_generation|bigint|NO|0
 twitch_clips_upload_queue|clip_id|bigint|NO|
 twitch_clips_upload_queue|completed_at|timestamp with time zone|YES|
 twitch_clips_upload_queue|created_at|timestamp with time zone|NO|now()

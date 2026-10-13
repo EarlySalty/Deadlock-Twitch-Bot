@@ -22,6 +22,7 @@ pub use notify::{AutopilotNotifier, DiscordDelivery};
 pub const AUTOPILOT_APPROVER: &str = "autopilot";
 pub const DASHBOARD_LINK: &str =
     "https://deutsche-deadlock-community.de/twitch/social-media?view=plan";
+const RECENT_FINISHED_VIDEOS: i64 = 50;
 const RETRY_BLOCKING_REASONS: [&str; 4] = [
     "account_changed",
     "account_missing",
@@ -303,13 +304,32 @@ async fn videos_on(
     owner: &str,
 ) -> Result<Vec<PublishVideo>, PublishError> {
     let rows = sqlx::query(
-        "SELECT id, clip_id, version_no, variant_index, mode, status, duration_ms, expires_at,
+        "WITH listed AS (
+            SELECT v.*, v.status IN ('review', 'approved', 'scheduled') OR EXISTS (
+                SELECT 1 FROM twitch_clips_upload_queue q
+                WHERE q.produced_video_id = v.id AND q.status = ANY($2)) AS unresolved
+            FROM social_produced_videos v WHERE v.twitch_user_id = $1 AND v.status <> 'rendering'
+         ), ranked AS (
+            SELECT listed.*, ROW_NUMBER() OVER (PARTITION BY unresolved ORDER BY created_at DESC, id DESC) AS position
+            FROM listed
+         )
+         SELECT id, clip_id, version_no, variant_index, mode, status, duration_ms, expires_at,
             needs_review, review_reasons::text AS review_reasons, file_path, artifact_deleted_at,
             cleanup_error, scheduled_at, publication_executed_at, publication_completed_at
-         FROM social_produced_videos WHERE twitch_user_id = $1 AND status <> 'rendering'
-         ORDER BY created_at DESC, id DESC LIMIT 50",
+         FROM ranked WHERE unresolved OR position <= $3
+         ORDER BY created_at DESC, id DESC",
     )
     .bind(owner)
+    .bind([
+        queue_status::PENDING,
+        queue_status::PREPARING,
+        queue_status::EFFECT_STARTED,
+        queue_status::RETRY,
+        queue_status::HELD,
+        queue_status::UNCERTAIN,
+        queue_status::FAILED,
+    ])
+    .bind(RECENT_FINISHED_VIDEOS)
     .fetch_all(&mut *connection)
     .await?;
     let ids: Vec<i64> = rows
@@ -607,20 +627,30 @@ pub async fn save_notifications(
     Ok(preferences)
 }
 
-pub(crate) async fn bind_publication(
-    pool: &PgPool,
-    owner: &str,
-    id: i64,
-    platforms: &[String],
-) -> Result<(), PublishError> {
+pub(crate) struct Binding {
+    path: String,
+    digest: String,
+}
+
+pub(crate) async fn binding(pool: &PgPool, owner: &str, id: i64) -> Result<Binding, PublishError> {
     let video = produced_video::get(pool, owner, id)
         .await?
         .ok_or(PublishError::NotFound)?;
     let path = video.file_path.ok_or(PublishError::State)?;
     let digest = crate::uploaders::tiktok::video_digest(&path).await?;
-    let mut connection = pool.acquire().await?;
-    let accounts = connections_on(&mut connection, owner).await?;
+    Ok(Binding { path, digest })
+}
+
+pub(crate) async fn bind_on(
+    connection: &mut PgConnection,
+    owner: &str,
+    id: i64,
+    binding: &Binding,
+    platforms: &[String],
+) -> Result<(), PublishError> {
+    let accounts = connections_on(connection, owner).await?;
     let mut bound = serde_json::Map::new();
+    let mut hashes = serde_json::Map::new();
     for platform in platforms {
         let account = accounts.get(platform).ok_or_else(|| {
             PublishError::Invalid(format!(
@@ -629,18 +659,20 @@ pub(crate) async fn bind_publication(
             ))
         })?;
         bound.insert(platform.clone(), json!(account));
+        hashes.insert(platform.clone(), json!(binding.digest));
     }
     let changed = sqlx::query(
-        "UPDATE social_produced_videos SET metadata = jsonb_set(
-            jsonb_set(metadata, '{publication}', COALESCE(metadata->'publication', '{}'::jsonb) || jsonb_build_object('sha256', $3::text)),
-            '{publication,accounts}', COALESCE(metadata#>'{publication,accounts}', '{}'::jsonb) || $4::text::jsonb)
+        "UPDATE social_produced_videos SET metadata = jsonb_set(metadata, '{publication}',
+            COALESCE(metadata->'publication', '{}'::jsonb) || jsonb_build_object(
+                'hashes', COALESCE(metadata#>'{publication,hashes}', '{}'::jsonb) || $3::text::jsonb,
+                'accounts', COALESCE(metadata#>'{publication,accounts}', '{}'::jsonb) || $4::text::jsonb))
          WHERE id = $1 AND twitch_user_id = $2 AND file_path = $5 AND artifact_deleted_at IS NULL",
     )
     .bind(id)
     .bind(owner)
-    .bind(&digest)
+    .bind(serde_json::to_string(&hashes)?)
     .bind(serde_json::to_string(&bound)?)
-    .bind(&path)
+    .bind(&binding.path)
     .execute(&mut *connection)
     .await?
     .rows_affected();
@@ -673,8 +705,10 @@ pub async fn approve(
     if platforms.is_empty() {
         return Err(PublishError::NoPlatforms);
     }
-    bind_publication(pool, owner, id, &platforms).await?;
-    produced_video::approve(pool, owner, id, &platforms).await?;
+    let binding = binding(pool, owner, id).await?;
+    let mut tx = pool.begin().await?;
+    produced_video::approve_on(&mut tx, owner, id, &platforms).await?;
+    bind_on(&mut tx, owner, id, &binding, &platforms).await?;
     let tiktok = decisions
         .iter()
         .find(|decision| decision.platform == "tiktok")
@@ -687,7 +721,7 @@ pub async fn approve(
         .bind(id)
         .bind(owner)
         .bind(serde_json::to_string(&options)?)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     }
     sqlx::query(
@@ -699,8 +733,9 @@ pub async fn approve(
     .bind(&platforms)
     .bind(queue_status::RETRY)
     .bind(queue_status::HELD)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     schedule(pool, owner, id, &platforms).await
 }
 

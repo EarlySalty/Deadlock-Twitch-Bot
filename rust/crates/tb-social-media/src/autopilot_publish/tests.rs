@@ -844,3 +844,174 @@ async fn pending_discord_message_is_dropped_after_opt_out() {
     assert_eq!(state, "disabled");
     cleanup(pool).await;
 }
+
+async fn queue_state(pool: &PgPool, id: i64, platform: &str) -> (String, Option<String>) {
+    sqlx::query_as("SELECT status, outcome_reason FROM twitch_clips_upload_queue WHERE produced_video_id = $1 AND platform = $2")
+        .bind(id)
+        .bind(platform)
+        .fetch_one(pool)
+        .await
+        .expect("destination state")
+}
+
+#[tokio::test]
+async fn stale_claim_cannot_change_a_recovered_destination() {
+    let pool = pool().await;
+    configure(&pool, &["youtube"], &[("youtube", "yt-1")]).await;
+    let (id, _) = video(&pool, "fenced").await;
+    approve(&pool, "owner", id, &decisions(&["youtube"]))
+        .await
+        .expect("approve");
+    sqlx::query("UPDATE social_produced_videos SET publication_executed_at = clock_timestamp() WHERE id = $1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("executed");
+    let publisher = ScriptedPublisher::with(vec![published("yt-video")]);
+    let executor = PublishExecutor::new(pool.clone(), publisher.clone());
+    let stale = executor.claim().await.expect("claim").expect("first claim");
+    sqlx::query("UPDATE twitch_clips_upload_queue SET last_attempt_at = clock_timestamp() - INTERVAL '11 minutes' WHERE produced_video_id = $1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("stale claim");
+    executor.recover_stale().await.expect("recover");
+    let fresh = executor
+        .claim()
+        .await
+        .expect("claim")
+        .expect("second claim");
+    executor
+        .settle(&stale, queue_status::HELD, Some("exact_file_changed"), None)
+        .await
+        .expect("stale hold");
+    assert!(!executor
+        .start_effect(&stale, Some("yt-1"))
+        .await
+        .expect("stale start"));
+    executor
+        .complete(
+            &stale,
+            &PublishOutcome {
+                external_id: "stale".into(),
+                visibility: None,
+            },
+        )
+        .await
+        .expect("stale complete");
+    assert_eq!(
+        queue_state(&pool, id, "youtube").await,
+        (queue_status::PREPARING.into(), None)
+    );
+    executor.process(fresh).await.expect("fresh upload");
+    assert_eq!(
+        queue_state(&pool, id, "youtube").await,
+        (queue_status::PUBLISHED.into(), None)
+    );
+    assert_eq!(publisher.calls().len(), 1);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn rebinding_one_platform_keeps_the_hash_other_destinations_were_approved_for() {
+    let pool = pool().await;
+    configure(
+        &pool,
+        &["youtube", "instagram"],
+        &[("youtube", "yt-1"), ("instagram", "ig-1")],
+    )
+    .await;
+    let (id, file) = video(&pool, "rebound").await;
+    approve(&pool, "owner", id, &decisions(&["youtube"]))
+        .await
+        .expect("approve youtube");
+    std::fs::write(&file, b"different bytes").expect("replace");
+    approve(&pool, "owner", id, &decisions(&["instagram"]))
+        .await
+        .expect("approve instagram");
+    make_due(&pool, id).await;
+    let publisher = ScriptedPublisher::with(vec![published("ig-video")]);
+    PublishExecutor::new(pool.clone(), publisher.clone())
+        .tick()
+        .await
+        .expect("tick");
+    assert_eq!(
+        destinations(&pool, id).await,
+        vec![
+            ("instagram".into(), queue_status::PUBLISHED.into(), None),
+            (
+                "youtube".into(),
+                queue_status::HELD.into(),
+                Some("exact_file_changed".into())
+            ),
+        ]
+    );
+    assert_eq!(
+        publisher.calls(),
+        vec![("instagram".to_string(), file.to_string_lossy().into_owned())]
+    );
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn unschedulable_videos_do_not_starve_later_ones() {
+    let pool = pool().await;
+    configure(&pool, &["youtube"], &[("youtube", "yt-1")]).await;
+    for index in 0..20 {
+        let (id, _) = video(&pool, &format!("stuck-{index}")).await;
+        sqlx::query("UPDATE social_produced_videos SET status = 'approved', metadata = metadata || '{\"publication\":{}}'::jsonb WHERE id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .expect("stuck video");
+        sqlx::query("INSERT INTO social_media_clip_approval (produced_video_id, platform, state, approved_platforms, approver_user_id, decided_at) VALUES ($1, 'youtube', 'approved', '[]', 'stranger', NOW())")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .expect("foreign approval");
+    }
+    let (id, _) = video(&pool, "waiting").await;
+    approve(&pool, "owner", id, &decisions(&["youtube"]))
+        .await
+        .expect("approve");
+    let mut tx = pool.begin().await.expect("tx");
+    release_slot(&mut tx, id).await.expect("release");
+    tx.commit().await.expect("commit");
+    let executor = PublishExecutor::new(pool.clone(), ScriptedPublisher::with(vec![]));
+    executor.tick().await.expect("first tick");
+    executor.tick().await.expect("second tick");
+    let slot: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT scheduled_at FROM social_produced_videos WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("slot");
+    assert!(slot.is_some());
+    let deferred: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM social_produced_videos WHERE autopilot_deferred_stage = 'schedule' AND autopilot_deferred_until > clock_timestamp()",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("deferred");
+    assert_eq!(deferred, 20);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn snapshot_keeps_old_unresolved_work_visible() {
+    let pool = pool().await;
+    configure(&pool, &["youtube"], &[("youtube", "yt-1")]).await;
+    let (open, _) = video(&pool, "old-review").await;
+    for index in 0..55 {
+        let (id, _) = video(&pool, &format!("finished-{index}")).await;
+        sqlx::query("UPDATE social_produced_videos SET status = 'expired' WHERE id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .expect("finished video");
+    }
+    let view = snapshot(&pool, "owner").await.expect("snapshot");
+    assert_eq!(view.videos.len(), 51);
+    assert!(view.videos.iter().any(|video| video.id == open));
+    cleanup(pool).await;
+}

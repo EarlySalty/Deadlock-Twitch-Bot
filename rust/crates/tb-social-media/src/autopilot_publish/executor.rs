@@ -9,7 +9,7 @@ use serde_json::Value;
 use sqlx::{PgConnection, PgPool, Row};
 
 use super::{
-    bind_publication, connections_on, notify, now_on, queue_status, release_slot,
+    bind_on, binding, connections_on, notify, now_on, queue_status, release_slot,
     valid_approvals_on, AutopilotNotifier, PublishError, AUTOPILOT_APPROVER,
 };
 use crate::autopilot_settings::{self, AutopilotSettings};
@@ -24,6 +24,9 @@ const PROMPT_LATENESS_MINUTES: i64 = 15;
 const MAX_LATENESS_MINUTES: i64 = 120;
 const PREPARING_STALE_MINUTES: i64 = 10;
 const EFFECT_STALE_MINUTES: i64 = 120;
+const DEFERRAL_MINUTES: i32 = 15;
+const NOT_DEFERRED: &str = "NOT COALESCE(v.autopilot_deferred_stage = $1
+    AND v.autopilot_deferred_until > clock_timestamp(), FALSE)";
 
 #[derive(Debug, Clone)]
 pub struct PublishRequest {
@@ -109,8 +112,9 @@ pub struct TickReport {
     pub cleaned: usize,
 }
 
-struct Claim {
+pub(super) struct Claim {
     queue_id: i64,
+    generation: i64,
     video_id: i64,
     owner: String,
     platform: String,
@@ -165,7 +169,7 @@ impl PublishExecutor {
         Ok(report)
     }
 
-    async fn recover_stale(&self) -> Result<(), PublishError> {
+    pub(super) async fn recover_stale(&self) -> Result<(), PublishError> {
         sqlx::query(
             "UPDATE twitch_clips_upload_queue SET status = $1
              WHERE produced_video_id IS NOT NULL AND status = $2
@@ -190,7 +194,7 @@ impl PublishExecutor {
     }
 
     async fn promote(&self) -> Result<usize, PublishError> {
-        let candidates: Vec<(i64, String)> = sqlx::query_as(
+        let candidates: Vec<(i64, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT v.id, v.twitch_user_id FROM social_produced_videos v
              JOIN social_production_jobs j ON j.id = v.job_id AND j.source = 'autopilot'
              JOIN social_media_autopilot_settings s ON s.twitch_user_id = v.twitch_user_id
@@ -200,21 +204,36 @@ impl PublishExecutor {
              AND v.artifact_deleted_at IS NULL AND v.file_path IS NOT NULL
              AND NOT (v.metadata ? 'manual_review') AND NOT (v.metadata ? 'manual_ai_job_id')
              AND NOT EXISTS (SELECT 1 FROM social_media_clip_approval a WHERE a.produced_video_id = v.id)
-             ORDER BY v.created_at, v.id LIMIT 20",
-        )
+             AND {NOT_DEFERRED} ORDER BY v.created_at, v.id LIMIT 20"
+        )))
+        .bind(Stage::Promote.name())
         .fetch_all(&self.pool)
         .await?;
         let mut promoted = 0;
         for (id, owner) in candidates {
             match self.promote_video(id, &owner).await {
                 Ok(true) => promoted += 1,
-                Ok(false) => {}
+                Ok(false) => self.defer(id, Stage::Promote).await?,
                 Err(error) => {
-                    tracing::warn!(%error, video = id, "Auto-Pilot approval could not be prepared")
+                    tracing::warn!(%error, video = id, "Auto-Pilot approval could not be prepared");
+                    self.defer(id, Stage::Promote).await?;
                 }
             }
         }
         Ok(promoted)
+    }
+
+    async fn defer(&self, id: i64, stage: Stage) -> Result<(), PublishError> {
+        sqlx::query(
+            "UPDATE social_produced_videos SET autopilot_deferred_stage = $2,
+             autopilot_deferred_until = clock_timestamp() + make_interval(mins => $3) WHERE id = $1",
+        )
+        .bind(id)
+        .bind(stage.name())
+        .bind(DEFERRAL_MINUTES)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     async fn promote_video(&self, id: i64, owner: &str) -> Result<bool, PublishError> {
@@ -231,7 +250,7 @@ impl PublishExecutor {
         if platforms.is_empty() {
             return Ok(false);
         }
-        bind_publication(&self.pool, owner, id, &platforms).await?;
+        let binding = binding(&self.pool, owner, id).await?;
         let mut tx = self.pool.begin().await?;
         autopilot_settings::lock_owner(&mut tx, owner).await?;
         let mode: Option<String> = sqlx::query_scalar(
@@ -250,6 +269,7 @@ impl PublishExecutor {
         if mode.as_deref() != Some("full_auto") || !still_eligible {
             return Ok(false);
         }
+        bind_on(&mut tx, owner, id, &binding, &platforms).await?;
         for platform in &platforms {
             sqlx::query(
                 "INSERT INTO social_media_clip_approval (produced_video_id, platform, state, approved_platforms, approver_user_id, decided_at)
@@ -284,25 +304,29 @@ impl PublishExecutor {
     }
 
     async fn schedule_slotless(&self) -> Result<usize, PublishError> {
-        let candidates: Vec<(i64, String, Vec<String>)> = sqlx::query_as(
+        let candidates: Vec<(i64, String, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT v.id, v.twitch_user_id, array_agg(a.platform ORDER BY a.platform)
              FROM social_produced_videos v
              JOIN social_media_clip_approval a ON a.produced_video_id = v.id AND a.state = 'approved'
              LEFT JOIN social_media_autopilot_settings s ON s.twitch_user_id = v.twitch_user_id
              WHERE v.status = 'approved' AND v.scheduled_at IS NULL AND v.publication_executed_at IS NULL
              AND v.artifact_deleted_at IS NULL AND v.file_path IS NOT NULL
-             AND v.metadata ? 'publication' AND NOT COALESCE(s.paused, FALSE)
-             GROUP BY v.id, v.twitch_user_id ORDER BY v.id LIMIT 20",
-        )
+             AND v.metadata ? 'publication' AND NOT COALESCE(s.paused, FALSE) AND {NOT_DEFERRED}
+             GROUP BY v.id, v.twitch_user_id ORDER BY v.id LIMIT 20"
+        )))
+        .bind(Stage::Schedule.name())
         .fetch_all(&self.pool)
         .await?;
         let mut scheduled = 0;
         for (id, owner, platforms) in candidates {
             match super::schedule(&self.pool, &owner, id, &platforms).await {
                 Ok(()) => scheduled += 1,
-                Err(PublishError::NoSlot) | Err(PublishError::ApprovalRequired) => {}
+                Err(PublishError::NoSlot) | Err(PublishError::ApprovalRequired) => {
+                    self.defer(id, Stage::Schedule).await?
+                }
                 Err(error) => {
-                    tracing::warn!(%error, video = id, "Auto-Pilot publication could not be rescheduled")
+                    tracing::warn!(%error, video = id, "Auto-Pilot publication could not be rescheduled");
+                    self.defer(id, Stage::Schedule).await?;
                 }
             }
         }
@@ -310,18 +334,20 @@ impl PublishExecutor {
     }
 
     async fn execute_due(&self, report: &mut TickReport) -> Result<(), PublishError> {
-        let due: Vec<(i64, String)> = sqlx::query_as(
+        let due: Vec<(i64, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT v.id, v.twitch_user_id FROM social_produced_videos v
              LEFT JOIN social_media_autopilot_settings s ON s.twitch_user_id = v.twitch_user_id
              WHERE v.status IN ('review', 'approved', 'scheduled') AND v.publication_executed_at IS NULL
-             AND v.scheduled_at <= clock_timestamp() AND NOT COALESCE(s.paused, FALSE)
-             ORDER BY v.scheduled_at, v.id LIMIT 20",
-        )
+             AND v.scheduled_at <= clock_timestamp() AND NOT COALESCE(s.paused, FALSE) AND {NOT_DEFERRED}
+             ORDER BY v.scheduled_at, v.id LIMIT 20"
+        )))
+        .bind(Stage::Execute.name())
         .fetch_all(&self.pool)
         .await?;
         for (id, owner) in due {
             if let Err(error) = self.execute_video(id, &owner, report).await {
                 tracing::warn!(%error, video = id, "Auto-Pilot publication event failed");
+                self.defer(id, Stage::Execute).await?;
             }
         }
         Ok(())
@@ -454,9 +480,10 @@ impl PublishExecutor {
         Ok(uploads)
     }
 
-    async fn claim(&self) -> Result<Option<Claim>, PublishError> {
+    pub(super) async fn claim(&self) -> Result<Option<Claim>, PublishError> {
         let row = sqlx::query(
-            "UPDATE twitch_clips_upload_queue q SET status = $1, last_attempt_at = clock_timestamp()
+            "UPDATE twitch_clips_upload_queue q SET status = $1, last_attempt_at = clock_timestamp(),
+                 claim_generation = q.claim_generation + 1
              FROM social_produced_videos v, twitch_clips_social_media c
              WHERE q.id = (SELECT q2.id FROM twitch_clips_upload_queue q2
                  JOIN social_produced_videos v2 ON v2.id = q2.produced_video_id
@@ -466,9 +493,9 @@ impl PublishExecutor {
                  AND (q2.status = $2 OR (q2.status = $3 AND q2.next_retry_at <= clock_timestamp()))
                  ORDER BY q2.scheduled_at, q2.id LIMIT 1 FOR UPDATE OF q2 SKIP LOCKED)
              AND v.id = q.produced_video_id AND c.id = q.clip_id
-             RETURNING q.id::bigint AS queue_id, v.id AS video_id, v.twitch_user_id, q.platform,
-                 q.attempts, v.file_path, q.title, q.description, q.hashtags, c.clip_title,
-                 v.metadata#>>'{publication,sha256}' AS sha256,
+             RETURNING q.id::bigint AS queue_id, q.claim_generation, v.id AS video_id, v.twitch_user_id,
+                 q.platform, q.attempts, v.file_path, q.title, q.description, q.hashtags, c.clip_title,
+                 v.metadata#>>ARRAY['publication', 'hashes', q.platform] AS sha256,
                  COALESCE(v.metadata#>'{publication,accounts}', '{}'::jsonb)::text AS accounts",
         )
         .bind(queue_status::PREPARING)
@@ -484,6 +511,7 @@ impl PublishExecutor {
         let hashtags: Option<String> = row.try_get("hashtags")?;
         Ok(Some(Claim {
             queue_id: row.try_get("queue_id")?,
+            generation: row.try_get("claim_generation")?,
             video_id: row.try_get("video_id")?,
             owner: row.try_get("twitch_user_id")?,
             platform: row.try_get("platform")?,
@@ -543,10 +571,10 @@ impl PublishExecutor {
         }
     }
 
-    async fn process(&self, claim: Claim) -> Result<(), PublishError> {
+    pub(super) async fn process(&self, claim: Claim) -> Result<(), PublishError> {
         let account = match self.verdict(&claim).await? {
             Verdict::Hold(reason) => {
-                self.settle(&claim, queue_status::HELD, Some(reason), None, None)
+                self.settle(&claim, queue_status::HELD, Some(reason), None)
                     .await?;
                 return Ok(());
             }
@@ -568,7 +596,6 @@ impl PublishExecutor {
                     queue_status::UNCERTAIN,
                     Some("request_uncertain"),
                     None,
-                    None,
                 )
                 .await
             }
@@ -577,7 +604,6 @@ impl PublishExecutor {
                     &claim,
                     queue_status::FAILED,
                     Some("validation_failed"),
-                    None,
                     None,
                 )
                 .await
@@ -590,19 +616,19 @@ impl PublishExecutor {
                     _ => "platform_error",
                 };
                 if attempts >= MAX_ATTEMPTS {
-                    self.settle(&claim, queue_status::FAILED, Some(reason), None, None)
+                    self.settle(&claim, queue_status::FAILED, Some(reason), None)
                         .await
                 } else {
                     let delay =
                         chrono::Duration::minutes(15 * (1_i64 << (attempts - 1).clamp(0, 6)));
-                    self.settle(&claim, queue_status::RETRY, Some(reason), Some(delay), None)
+                    self.settle(&claim, queue_status::RETRY, Some(reason), Some(delay))
                         .await
                 }
             }
         }
     }
 
-    async fn start_effect(
+    pub(super) async fn start_effect(
         &self,
         claim: &Claim,
         account: Option<&str>,
@@ -624,7 +650,7 @@ impl PublishExecutor {
              effect_started_at = CASE WHEN $2 = $6 THEN clock_timestamp() ELSE effect_started_at END,
              attempts = CASE WHEN $2 = $6 THEN attempts + 1 ELSE attempts END,
              account_id = CASE WHEN $2 = $6 THEN $3 ELSE account_id END,
-             next_retry_at = NULL WHERE id = $1 AND status = $4",
+             next_retry_at = NULL WHERE id = $1 AND status = $4 AND claim_generation = $7",
         )
         .bind(claim.queue_id)
         .bind(status)
@@ -632,6 +658,7 @@ impl PublishExecutor {
         .bind(queue_status::PREPARING)
         .bind(reason)
         .bind(queue_status::EFFECT_STARTED)
+        .bind(claim.generation)
         .execute(&mut *tx)
         .await?
         .rows_affected();
@@ -639,43 +666,54 @@ impl PublishExecutor {
         Ok(changed == 1 && reason.is_none())
     }
 
-    async fn settle(
+    pub(super) async fn settle(
         &self,
         claim: &Claim,
         status: &str,
         reason: Option<&str>,
         delay: Option<chrono::Duration>,
-        external_id: Option<&str>,
     ) -> Result<(), PublishError> {
         sqlx::query(
             "UPDATE twitch_clips_upload_queue SET status = $2, outcome_reason = $3,
              next_retry_at = CASE WHEN $4::bigint IS NULL THEN NULL ELSE clock_timestamp() + make_interval(secs => $4::bigint::double precision) END,
-             external_id = COALESCE($5, external_id), last_error = $3 WHERE id = $1",
+             last_error = $3 WHERE id = $1 AND claim_generation = $5 AND status = ANY($6)",
         )
         .bind(claim.queue_id)
         .bind(status)
         .bind(reason)
         .bind(delay.map(|delay| delay.num_seconds()))
-        .bind(external_id)
+        .bind(claim.generation)
+        .bind(claimed_states(status))
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
-    async fn complete(&self, claim: &Claim, outcome: &PublishOutcome) -> Result<(), PublishError> {
+    pub(super) async fn complete(
+        &self,
+        claim: &Claim,
+        outcome: &PublishOutcome,
+    ) -> Result<(), PublishError> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query(
+        let changed = sqlx::query(
             "UPDATE twitch_clips_upload_queue SET status = $2, external_id = $3, completed_at = clock_timestamp(),
              outcome_reason = NULL, last_error = NULL, next_retry_at = NULL,
              youtube_visibility = CASE WHEN platform = 'youtube' THEN COALESCE($4, youtube_visibility) ELSE youtube_visibility END
-             WHERE id = $1",
+             WHERE id = $1 AND claim_generation = $5 AND status = ANY($6)",
         )
         .bind(claim.queue_id)
         .bind(queue_status::PUBLISHED)
         .bind(&outcome.external_id)
         .bind(&outcome.visibility)
+        .bind(claim.generation)
+        .bind(claimed_states(queue_status::PUBLISHED))
         .execute(&mut *tx)
-        .await?;
+        .await?
+        .rows_affected();
+        if changed != 1 {
+            tx.commit().await?;
+            return Ok(());
+        }
         let clip_sql = match claim.platform.as_str() {
             "youtube" => Some("UPDATE twitch_clips_social_media c SET uploaded_youtube = TRUE, youtube_video_id = $1, youtube_uploaded_at = clock_timestamp() FROM twitch_clips_upload_queue q WHERE q.id = $2 AND c.id = q.clip_id"),
             "instagram" => Some("UPDATE twitch_clips_social_media c SET uploaded_instagram = TRUE, instagram_media_id = $1, instagram_uploaded_at = clock_timestamp() FROM twitch_clips_upload_queue q WHERE q.id = $2 AND c.id = q.clip_id"),
@@ -794,6 +832,31 @@ impl PublishExecutor {
                 Ok(false)
             }
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Stage {
+    Promote,
+    Schedule,
+    Execute,
+}
+
+impl Stage {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Promote => "promote",
+            Self::Schedule => "schedule",
+            Self::Execute => "execute",
+        }
+    }
+}
+
+fn claimed_states(target: &str) -> Vec<&'static str> {
+    if target == queue_status::HELD {
+        vec![queue_status::PREPARING]
+    } else {
+        vec![queue_status::EFFECT_STARTED, queue_status::UNCERTAIN]
     }
 }
 

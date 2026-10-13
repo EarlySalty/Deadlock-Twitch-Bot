@@ -3,6 +3,7 @@ ALTER TABLE twitch_clips_upload_queue ADD COLUMN next_retry_at TIMESTAMPTZ;
 ALTER TABLE twitch_clips_upload_queue ADD COLUMN outcome_reason TEXT;
 ALTER TABLE twitch_clips_upload_queue ADD COLUMN account_id TEXT;
 ALTER TABLE twitch_clips_upload_queue ADD COLUMN effect_started_at TIMESTAMPTZ;
+ALTER TABLE twitch_clips_upload_queue ADD COLUMN claim_generation BIGINT NOT NULL DEFAULT 0;
 CREATE INDEX social_upload_produced_due ON twitch_clips_upload_queue (status, next_retry_at)
     WHERE produced_video_id IS NOT NULL;
 
@@ -10,6 +11,9 @@ ALTER TABLE social_produced_videos ADD COLUMN publication_executed_at TIMESTAMPT
 ALTER TABLE social_produced_videos ADD COLUMN publication_completed_at TIMESTAMPTZ;
 ALTER TABLE social_produced_videos ADD COLUMN artifact_deleted_at TIMESTAMPTZ;
 ALTER TABLE social_produced_videos ADD COLUMN cleanup_error TEXT;
+ALTER TABLE social_produced_videos ADD COLUMN autopilot_deferred_stage TEXT
+    CHECK (autopilot_deferred_stage IN ('promote', 'schedule', 'execute'));
+ALTER TABLE social_produced_videos ADD COLUMN autopilot_deferred_until TIMESTAMPTZ;
 CREATE INDEX social_produced_due ON social_produced_videos (scheduled_at)
     WHERE status IN ('review', 'approved', 'scheduled') AND publication_executed_at IS NULL;
 

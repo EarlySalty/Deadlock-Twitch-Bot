@@ -423,9 +423,20 @@ pub async fn approve(
     id: i64,
     selected: &[String],
 ) -> Result<(), ProducedVideoError> {
-    let selected = platforms(selected)?;
     let mut tx = pool.begin().await?;
-    let video = lock_video(&mut tx, id, Some(twitch_user_id)).await?;
+    approve_on(&mut tx, twitch_user_id, id, selected).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub(crate) async fn approve_on(
+    tx: &mut sqlx::PgConnection,
+    twitch_user_id: &str,
+    id: i64,
+    selected: &[String],
+) -> Result<(), ProducedVideoError> {
+    let selected = platforms(selected)?;
+    let video = lock_video(&mut *tx, id, Some(twitch_user_id)).await?;
     let now = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut *tx)
         .await?;
@@ -439,7 +450,6 @@ pub async fn approve(
     }
     sqlx::query("UPDATE social_produced_videos SET status = CASE WHEN status = 'scheduled' THEN status ELSE 'approved' END, needs_review = FALSE WHERE id = $1")
         .bind(id).execute(&mut *tx).await?;
-    tx.commit().await?;
     Ok(())
 }
 
