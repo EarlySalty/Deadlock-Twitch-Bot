@@ -1522,7 +1522,7 @@ fn append_service_warning(line: &str) -> std::io::Result<()> {
 
 fn append_service_warning_in(dir: &std::path::Path, line: &str) -> std::io::Result<()> {
     use std::io::Write;
-    std::fs::create_dir_all(&dir)?;
+    std::fs::create_dir_all(dir)?;
     let path = dir.join("twitch_service_warnings.log");
     let mut file = std::fs::OpenOptions::new()
         .create(true)
