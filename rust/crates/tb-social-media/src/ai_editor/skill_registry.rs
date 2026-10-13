@@ -398,37 +398,78 @@ pub async fn rollback(
     Ok(target)
 }
 
+const MAX_DIFF_CELLS: usize = 250_000;
+
+fn diff_line(kind: DiffKind, text: &str) -> DiffLine {
+    DiffLine {
+        kind,
+        text: text.to_owned(),
+    }
+}
+
 pub fn line_diff(before: &str, after: &str) -> Vec<DiffLine> {
     let old: Vec<&str> = before.lines().collect();
     let new: Vec<&str> = after.lines().collect();
-    let mut table = vec![vec![0usize; new.len() + 1]; old.len() + 1];
+    let prefix = old
+        .iter()
+        .zip(&new)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let suffix = old[prefix..]
+        .iter()
+        .rev()
+        .zip(new[prefix..].iter().rev())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let old_middle = &old[prefix..old.len() - suffix];
+    let new_middle = &new[prefix..new.len() - suffix];
+    let mut lines: Vec<DiffLine> = old[..prefix]
+        .iter()
+        .map(|text| diff_line(DiffKind::Context, text))
+        .collect();
+    lines.extend(middle_diff(old_middle, new_middle));
+    lines.extend(
+        old[old.len() - suffix..]
+            .iter()
+            .map(|text| diff_line(DiffKind::Context, text)),
+    );
+    lines
+}
+
+fn middle_diff(old: &[&str], new: &[&str]) -> Vec<DiffLine> {
+    let cells = (old.len() + 1).saturating_mul(new.len() + 1);
+    if cells > MAX_DIFF_CELLS {
+        return old
+            .iter()
+            .map(|text| diff_line(DiffKind::Removed, text))
+            .chain(new.iter().map(|text| diff_line(DiffKind::Added, text)))
+            .collect();
+    }
+    let width = new.len() + 1;
+    let mut table = vec![0u32; cells];
     for i in (0..old.len()).rev() {
         for j in (0..new.len()).rev() {
-            table[i][j] = if old[i] == new[j] {
-                table[i + 1][j + 1] + 1
+            table[i * width + j] = if old[i] == new[j] {
+                table[(i + 1) * width + j + 1] + 1
             } else {
-                table[i + 1][j].max(table[i][j + 1])
+                table[(i + 1) * width + j].max(table[i * width + j + 1])
             };
         }
     }
     let (mut i, mut j) = (0, 0);
     let mut lines = Vec::new();
-    let mut push = |kind, text: &str| {
-        lines.push(DiffLine {
-            kind,
-            text: text.to_owned(),
-        })
-    };
     while i < old.len() || j < new.len() {
         if i < old.len() && j < new.len() && old[i] == new[j] {
-            push(DiffKind::Context, old[i]);
+            lines.push(diff_line(DiffKind::Context, old[i]));
             i += 1;
             j += 1;
-        } else if j < new.len() && (i == old.len() || table[i][j + 1] >= table[i + 1][j]) {
-            push(DiffKind::Added, new[j]);
+        } else if j < new.len()
+            && (i == old.len() || table[i * width + j + 1] >= table[(i + 1) * width + j])
+        {
+            lines.push(diff_line(DiffKind::Added, new[j]));
             j += 1;
         } else {
-            push(DiffKind::Removed, old[i]);
+            lines.push(diff_line(DiffKind::Removed, old[i]));
             i += 1;
         }
     }
@@ -482,12 +523,12 @@ fn version_view(stored: &StoredVersion, all: &[StoredVersion]) -> SkillVersionVi
 }
 
 async fn stored_versions(
-    pool: &PgPool,
+    tx: &mut Transaction<'_, Postgres>,
 ) -> Result<Vec<(String, StoredVersion)>, SkillRegistryError> {
     let rows = sqlx::query(
         "SELECT skill_id, version, previous_version, content, sha256, summary, reason, evidence, created_at FROM public.social_ai_skill_versions ORDER BY skill_id, version DESC",
     )
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await?;
     rows.iter()
         .map(|row| {
@@ -510,11 +551,16 @@ async fn stored_versions(
 }
 
 pub async fn history(pool: &PgPool) -> Result<Vec<SkillHistory>, SkillRegistryError> {
-    let mut stored = stored_versions(pool).await?;
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    let mut stored = stored_versions(&mut tx).await?;
     let active: Vec<(String, i32)> =
         sqlx::query_as("SELECT skill_id, version FROM public.social_ai_skill_active")
-            .fetch_all(pool)
+            .fetch_all(&mut *tx)
             .await?;
+    tx.commit().await?;
     Ok(SkillId::ALL
         .into_iter()
         .map(|id| {
@@ -632,6 +678,18 @@ mod tests {
                 (DiffKind::Added, "d"),
             ]
         );
+    }
+
+    #[test]
+    fn line_diff_of_huge_inputs_stays_bounded() {
+        let before = format!("head\n{}tail", "a\n".repeat(16_000));
+        let after = format!("head\n{}tail", "b\n".repeat(16_000));
+        let diff = line_diff(&before, &after);
+        assert_eq!(diff.len(), 32_002);
+        assert_eq!(diff[0].kind, DiffKind::Context);
+        assert_eq!(diff[1].kind, DiffKind::Removed);
+        assert_eq!(diff[16_001].kind, DiffKind::Added);
+        assert_eq!(diff[32_001].kind, DiffKind::Context);
     }
 
     #[test]
