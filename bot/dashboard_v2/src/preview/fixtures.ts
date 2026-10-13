@@ -441,14 +441,15 @@ export function getPreviewSocialResponse(path: string, init: RequestInit = {}, s
     if (!owner || !['123456789', '987654321'].includes(owner)) return json({ error: 'channel_not_found' }, 403);
     if (scenario === 'ai-error') return json({ error: 'preview_ai_unavailable' }, 503);
     if (scenario === 'ai-loading') return new Response(new ReadableStream(), { headers: { 'Content-Type': 'application/json' } });
-    const aiScenario: AiPreviewScenario = scenario === 'ai-rendering' ? 'render' : scenario === 'ai-last-version' ? 'failed' : 'review';
+    const aiScenario: AiPreviewScenario = scenario === 'ai-rendering' ? 'render' : scenario === 'ai-last-version' ? 'failed' : scenario === 'ai-revisions' ? 'revisions' : 'review';
     if (pathname.endsWith('/consent')) return json(aiPreviewConsent(aiScenario));
+    if (pathname.endsWith('/options')) return json({ multi_output_enabled: false, experimental_ai_layout: false });
     const sample = aiPreviewJob(aiScenario);
     const job = sample && {
       ...sample,
       clip_db_id: 1,
       original_url: null,
-      versions: sample.versions.map((version) => ({ ...version, file_url: null })),
+      versions: aiScenario === 'revisions' ? sample.versions : sample.versions.map((version) => ({ ...version, file_url: null })),
       ...(scenario === 'ai-unknown-cost' ? { cost_basis: 'unknown', estimated_provider_cost_usd: null, measured_provider_cost_usd: null } : {}),
     };
     if (pathname.endsWith('/jobs')) return json({ items: scenario === 'ai-empty' || !job ? [] : [job] });

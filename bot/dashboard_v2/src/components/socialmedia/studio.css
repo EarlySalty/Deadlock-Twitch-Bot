@@ -687,6 +687,16 @@ select.studio-select {
   min-width: 0;
   gap: 16px;
 }
+.studio-plan-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: 28px;
+}
+.studio-legacy-plan-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+}
 .studio-legacy-plan .studio-savebar {
   width: 100%;
 }
