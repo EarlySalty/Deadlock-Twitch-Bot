@@ -136,6 +136,7 @@ fn invite_lack_re() -> &'static Regex {
 struct InviteQuestionSignal {
     is_candidate: bool,
     has_strong_access: bool,
+    is_clear_request: bool,
 }
 
 fn classify_invite_question(content: &str) -> InviteQuestionSignal {
@@ -147,18 +148,21 @@ fn classify_invite_question(content: &str) -> InviteQuestionSignal {
         return InviteQuestionSignal {
             is_candidate: false,
             has_strong_access: false,
+            is_clear_request: false,
         };
     }
 
     let has_strong_access = invite_strong_access_re().is_match(raw);
     let has_question = raw.contains('?') || invite_question_re().is_match(raw);
     let has_lack = invite_lack_re().is_match(raw);
+    let is_clear_request = crate::invite_request::is_clear_invite_request(raw);
 
     // Anfänger, Spielinteresse und Mitspielen sind kein Bedarf an Spielzugang.
     // Nur eine konkrete Zugangsfrage oder ein Zugangsmangel darf zum Judge.
     InviteQuestionSignal {
-        is_candidate: has_strong_access && (has_question || has_lack),
+        is_candidate: is_clear_request || (has_strong_access && (has_question || has_lack)),
         has_strong_access,
+        is_clear_request,
     }
 }
 
@@ -307,6 +311,7 @@ impl InviteQuestionVerdict {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InviteQuestionLoggedVerdict {
+    Regex,
     Yes,
     No,
     Unsure,
@@ -317,6 +322,7 @@ pub enum InviteQuestionLoggedVerdict {
 impl InviteQuestionLoggedVerdict {
     fn as_str(self) -> &'static str {
         match self {
+            Self::Regex => "regex",
             Self::Yes => "yes",
             Self::No => "no",
             Self::Unsure => "unsure",
@@ -592,6 +598,26 @@ impl InviteQuestionDecision {
         }
     }
 
+    fn regex_go(
+        channel_login: String,
+        chatter_login: String,
+        message: String,
+        invite_url: String,
+    ) -> Self {
+        Self {
+            action: InviteQuestionAction::SendGo,
+            verdict: Some(InviteQuestionLoggedVerdict::Regex),
+            confidence: 1.0,
+            is_newcomer: true,
+            has_strong_access: true,
+            channel_login,
+            chatter_login,
+            message,
+            pending_confirmation: false,
+            invite_url: Some(invite_url),
+        }
+    }
+
     fn judged(
         action: InviteQuestionAction,
         verdict: &InviteQuestionVerdict,
@@ -846,6 +872,14 @@ impl InviteQuestionResponder {
                 signal.has_strong_access,
             );
         };
+        if is_newcomer && signal.is_clear_request {
+            return InviteQuestionDecision::regex_go(
+                channel_login,
+                chatter_login,
+                raw.to_string(),
+                invite_url,
+            );
+        }
         before_judge(&channel_login, &chatter_login);
 
         let verdict = self
@@ -859,10 +893,10 @@ impl InviteQuestionResponder {
 
         let action = match verdict.source {
             InviteQuestionVerdictSource::ProviderError => {
-                InviteQuestionAction::Silent(SilentReason::JudgeProviderError)
+                regex_fallback_action(signal, is_newcomer, SilentReason::JudgeProviderError)
             }
             InviteQuestionVerdictSource::ParseError => {
-                InviteQuestionAction::Silent(SilentReason::JudgeParseError)
+                regex_fallback_action(signal, is_newcomer, SilentReason::JudgeParseError)
             }
             InviteQuestionVerdictSource::Model => match verdict.verdict {
                 InviteQuestionVerdictKind::Yes if verdict.confidence >= 0.7 => {
@@ -1123,6 +1157,20 @@ impl InviteQuestionResponder {
                 false
             }
         }
+    }
+}
+
+fn regex_fallback_action(
+    signal: InviteQuestionSignal,
+    is_newcomer: bool,
+    silent_reason: SilentReason,
+) -> InviteQuestionAction {
+    if signal.is_clear_request {
+        InviteQuestionAction::SendGo
+    } else if is_newcomer {
+        InviteQuestionAction::AskConfirmation
+    } else {
+        InviteQuestionAction::Silent(silent_reason)
     }
 }
 
@@ -1624,7 +1672,7 @@ mod tests {
             ),
             (
                 SilentReason::MissingLogin,
-                "Wie bekomme ich einen invite?",
+                "Wie bekomme ich Zugang?",
                 rollup(1, false),
                 verdict(InviteQuestionVerdictKind::Yes, 0.9),
             ),
@@ -1642,31 +1690,31 @@ mod tests {
             ),
             (
                 SilentReason::JudgeNo,
-                "Wie bekomme ich einen invite?",
+                "Wie bekomme ich Zugang?",
                 rollup(1, false),
                 verdict(InviteQuestionVerdictKind::No, 1.0),
             ),
             (
                 SilentReason::JudgeProviderError,
-                "Wie bekomme ich einen invite?",
-                rollup(1, false),
+                "Wie bekomme ich Zugang?",
+                rollup(50, false),
                 InviteQuestionVerdict::provider_error(),
             ),
             (
                 SilentReason::JudgeParseError,
-                "Wie bekomme ich einen invite?",
-                rollup(1, false),
+                "Wie bekomme ich Zugang?",
+                rollup(50, false),
                 parse_invite_verdict("kaputt"),
             ),
             (
                 SilentReason::JudgeUnsureRegular,
-                "Wie bekomme ich einen invite?",
+                "Wie bekomme ich Zugang?",
                 rollup(50, false),
                 verdict(InviteQuestionVerdictKind::Unsure, 0.0),
             ),
             (
                 SilentReason::JudgeYesLowConfidenceRegular,
-                "Wie bekomme ich einen invite?",
+                "Wie bekomme ich Zugang?",
                 rollup(50, false),
                 verdict(InviteQuestionVerdictKind::Yes, 0.69),
             ),
@@ -1700,7 +1748,7 @@ mod tests {
             None,
         );
         assert_eq!(
-            decide_action(&invite, "viewer", "Wie bekomme ich einen invite?")
+            decide_action(&invite, "viewer", "Wie bekomme ich Zugang?")
                 .await
                 .action,
             InviteQuestionAction::Silent(SilentReason::NoInviteUrl)
@@ -1715,11 +1763,11 @@ mod tests {
             }),
             judge,
         );
-        let decision = decide_action(&invite, "viewer", "Wie bekomme ich einen invite?").await;
+        let decision = decide_action(&invite, "viewer", "Wie bekomme ich Zugang?").await;
         assert_eq!(decision.action, InviteQuestionAction::SendGo);
         invite.mark_replied("streamer", "viewer");
         assert_eq!(
-            decide_action(&invite, "other", "Wie bekomme ich einen invite?")
+            decide_action(&invite, "other", "Wie bekomme ich Zugang?")
                 .await
                 .action,
             InviteQuestionAction::Silent(SilentReason::CooldownChannel)
@@ -1739,7 +1787,7 @@ mod tests {
             (invite.clock.now(), CooldownKind::Replied),
         );
         assert_eq!(
-            decide_action(&invite, "viewer", "Wie bekomme ich einen invite?")
+            decide_action(&invite, "viewer", "Wie bekomme ich Zugang?")
                 .await
                 .action,
             InviteQuestionAction::Silent(SilentReason::CooldownUserReplied)
@@ -1756,7 +1804,7 @@ mod tests {
         );
         invite.mark_judged("streamer", "viewer");
         assert_eq!(
-            decide_action(&invite, "viewer", "Wie bekomme ich einen invite?")
+            decide_action(&invite, "viewer", "Wie bekomme ich Zugang?")
                 .await
                 .action,
             InviteQuestionAction::Silent(SilentReason::CooldownJudgeBrake)
@@ -1775,7 +1823,7 @@ mod tests {
             judge.clone(),
         );
 
-        let decision = decide_action(&invite, "viewer", "Wie bekomme ich einen invite?").await;
+        let decision = decide_action(&invite, "viewer", "Wie bekomme ich Zugang?").await;
 
         assert_eq!(decision.action, InviteQuestionAction::SendGo);
         assert!(api.messages().is_empty());
@@ -1799,7 +1847,7 @@ mod tests {
             None,
         );
 
-        let decision = decide_action(&invite, "viewer", "Wie bekomme ich einen invite?").await;
+        let decision = decide_action(&invite, "viewer", "Wie bekomme ich Zugang?").await;
 
         assert_eq!(
             decision.action,
@@ -1808,10 +1856,7 @@ mod tests {
         assert_eq!(judge.call_count(), 0);
 
         invite
-            .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("viewer", "Wie bekomme ich Zugang?"), "streamer")
             .await;
         assert!(api.messages().is_empty());
         assert_eq!(judge.call_count(), 0);
@@ -1832,10 +1877,7 @@ mod tests {
         );
 
         let sent = invite
-            .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("viewer", "Wie bekomme ich Zugang?"), "streamer")
             .await;
 
         assert!(sent);
@@ -1858,10 +1900,7 @@ mod tests {
         );
 
         invite
-            .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("viewer", "Wie bekomme ich Zugang?"), "streamer")
             .await;
 
         assert_eq!(notifier.calls(), vec!["streamer"]);
@@ -1884,7 +1923,7 @@ mod tests {
 
         let sent = invite
             .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
+                &event("viewer", "Wie bekomme ich Zugang zu Deadlock?"),
                 "streamer",
             )
             .await;
@@ -1910,7 +1949,7 @@ mod tests {
 
         invite
             .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
+                &event("viewer", "Wie bekomme ich Zugang zu Deadlock?"),
                 "streamer",
             )
             .await;
@@ -1937,10 +1976,7 @@ mod tests {
         );
 
         let sent = invite
-            .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("viewer", "Wie bekomme ich Zugang?"), "streamer")
             .await;
 
         assert!(!sent);
@@ -1967,12 +2003,8 @@ mod tests {
             Some(notifier_port),
         );
 
-        let decision = decide_action(
-            &invite,
-            "viewer",
-            "Wie bekomme ich einen Invite für Deadlock?",
-        )
-        .await;
+        let decision =
+            decide_action(&invite, "viewer", "Wie bekomme ich Zugang zu Deadlock?").await;
         assert_eq!(
             decision.action,
             InviteQuestionAction::Silent(SilentReason::NoInviteUrl)
@@ -1980,7 +2012,7 @@ mod tests {
 
         invite
             .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
+                &event("viewer", "Wie bekomme ich Zugang zu Deadlock?"),
                 "streamer",
             )
             .await;
@@ -2009,17 +2041,14 @@ mod tests {
             Some(notifier_port),
         );
 
-        let decision = decide_action(&invite, "viewer", "Wie bekomme ich einen invite?").await;
+        let decision = decide_action(&invite, "viewer", "Wie bekomme ich Zugang?").await;
         assert_eq!(
             decision.action,
             InviteQuestionAction::Silent(SilentReason::NoInviteUrl)
         );
 
         invite
-            .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("viewer", "Wie bekomme ich Zugang?"), "streamer")
             .await;
         assert!(api.messages().is_empty());
         assert!(notifier.calls().is_empty());
@@ -2041,10 +2070,7 @@ mod tests {
         );
 
         invite
-            .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("viewer", "Wie bekomme ich Zugang?"), "streamer")
             .await;
 
         assert_eq!(judge.call_count(), 0);
@@ -2067,10 +2093,7 @@ mod tests {
         );
 
         invite
-            .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("viewer", "Wie bekomme ich Zugang?"), "streamer")
             .await;
 
         assert_eq!(
@@ -2096,10 +2119,7 @@ mod tests {
         );
 
         invite
-            .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("viewer", "Wie bekomme ich Zugang?"), "streamer")
             .await;
 
         assert_eq!(
@@ -2129,7 +2149,7 @@ mod tests {
 
         invite
             .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
+                &event("viewer", "Wie bekomme ich Zugang zu Deadlock?"),
                 "streamer",
             )
             .await;
@@ -2182,9 +2202,8 @@ mod tests {
         );
 
         let provider_decision =
-            decide_action(&provider_error, "viewer", "Wie bekomme ich einen invite?").await;
-        let parse_decision =
-            decide_action(&parse_error, "viewer", "Wie bekomme ich einen invite?").await;
+            decide_action(&provider_error, "viewer", "Wie bekomme ich Zugang?").await;
+        let parse_decision = decide_action(&parse_error, "viewer", "Wie bekomme ich Zugang?").await;
 
         assert_eq!(
             provider_decision.action,
@@ -2248,10 +2267,7 @@ mod tests {
             judge.clone(),
         );
         invite
-            .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("viewer", "Wie bekomme ich Zugang?"), "streamer")
             .await;
         assert_eq!(judge.calls().len(), 1);
 
@@ -2273,7 +2289,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn provider_fehler_schweigt_immer() {
+    async fn provider_fehler_faellt_auf_regex_zurueck() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
@@ -2291,15 +2307,12 @@ mod tests {
         let invite = responder(
             api.clone(),
             Arc::new(FakeStore {
-                rollup: rollup(1, false),
+                rollup: rollup(50, false),
             }),
             judge.clone(),
         );
         invite
-            .maybe_respond(
-                &event("newbie", "Wie bekomme ich einen Invite für Deadlock?"),
-                "streamer",
-            )
+            .maybe_respond(&event("regular", "Wie bekomme ich Zugang?"), "streamer")
             .await;
         assert!(api.messages().is_empty());
 
@@ -2312,70 +2325,74 @@ mod tests {
             judge,
         );
         invite
-            .maybe_respond(
-                &event("regular", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("regular", "kann mich jemand inviten?"), "streamer")
             .await;
-        assert!(api.messages().is_empty());
+        assert_eq!(api.messages(), vec![expected_go("regular")]);
     }
 
     #[tokio::test]
-    async fn provider_fehler_schweigt_auch_bei_newcomer() {
+    async fn provider_fehler_fragt_newcomer_nach() {
         let api = MockApi::new();
         let invite = responder(
             api.clone(),
             Arc::new(FakeStore {
                 rollup: rollup(1, false),
             }),
-            FakeJudge::new(vec![
-                InviteQuestionVerdict::provider_error(),
-                InviteQuestionVerdict::provider_error(),
-            ]),
-        );
-
-        let decision = decide_action(&invite, "newbie", "Wie bekomme ich einen invite?").await;
-        assert_eq!(
-            decision.action,
-            InviteQuestionAction::Silent(SilentReason::JudgeProviderError)
+            FakeJudge::new(vec![InviteQuestionVerdict::provider_error()]),
         );
 
         invite
-            .maybe_respond(
-                &event("newbie", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("newbie", "Wie bekomme ich Zugang?"), "streamer")
             .await;
-        assert!(api.messages().is_empty());
+        assert_eq!(api.messages(), vec![expected_confirm("newbie")]);
     }
 
     #[tokio::test]
-    async fn parse_fehler_schweigt_auch_bei_newcomer() {
+    async fn parse_fehler_fragt_newcomer_nach() {
         let api = MockApi::new();
         let invite = responder(
             api.clone(),
             Arc::new(FakeStore {
                 rollup: rollup(1, false),
             }),
-            FakeJudge::new(vec![
-                parse_invite_verdict("kaputt"),
-                parse_invite_verdict("kaputt"),
-            ]),
-        );
-
-        let decision = decide_action(&invite, "newbie", "Wie bekomme ich einen invite?").await;
-        assert_eq!(
-            decision.action,
-            InviteQuestionAction::Silent(SilentReason::JudgeParseError)
+            FakeJudge::new(vec![parse_invite_verdict("kaputt")]),
         );
 
         invite
+            .maybe_respond(&event("newbie", "Wie bekomme ich Zugang?"), "streamer")
+            .await;
+        assert_eq!(api.messages(), vec![expected_confirm("newbie")]);
+    }
+
+    #[tokio::test]
+    async fn klare_invite_bitte_vom_newcomer_braucht_keine_ki() {
+        let api = MockApi::new();
+        let judge = FakeJudge::new(vec![]);
+        let invite = responder(
+            api.clone(),
+            Arc::new(FakeStore {
+                rollup: rollup(1, true),
+            }),
+            judge.clone(),
+        );
+
+        let decision = decide_action(
+            &invite,
+            "nicc117",
+            "Hey, kann mich jemand einladen zum spiel?",
+        )
+        .await;
+        assert_eq!(decision.action, InviteQuestionAction::SendGo);
+        assert_eq!(decision.verdict, Some(InviteQuestionLoggedVerdict::Regex));
+
+        invite
             .maybe_respond(
-                &event("newbie", "Wie bekomme ich einen invite?"),
+                &event("nicc117", "Hey, kann mich jemand einladen zum spiel?"),
                 "streamer",
             )
             .await;
-        assert!(api.messages().is_empty());
+        assert_eq!(api.messages(), vec![expected_go("nicc117")]);
+        assert_eq!(judge.call_count(), 0);
     }
 
     #[tokio::test]
@@ -2392,14 +2409,11 @@ mod tests {
             ]),
         );
 
-        let decision = decide_action(&invite, "newbie", "Wie bekomme ich einen invite?").await;
+        let decision = decide_action(&invite, "newbie", "Wie bekomme ich Zugang?").await;
         assert_eq!(decision.action, InviteQuestionAction::AskConfirmation);
 
         invite
-            .maybe_respond(
-                &event("newbie", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("newbie", "Wie bekomme ich Zugang?"), "streamer")
             .await;
         assert_eq!(api.messages().len(), 1);
     }
@@ -2414,16 +2428,13 @@ mod tests {
         let (invite, clock) = responder_with_clock(
             api.clone(),
             Arc::new(FakeStore {
-                rollup: rollup(1, false),
+                rollup: rollup(50, false),
             }),
             judge.clone(),
         );
 
         invite
-            .maybe_respond(
-                &event("newbie", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("regular", "Wie bekomme ich Zugang?"), "streamer")
             .await;
         assert!(api.messages().is_empty());
         assert_eq!(
@@ -2431,20 +2442,17 @@ mod tests {
                 .user_cooldowns
                 .lock()
                 .unwrap()
-                .get(&("streamer".to_string(), "newbie".to_string()))
+                .get(&("streamer".to_string(), "regular".to_string()))
                 .map(|(_, kind)| *kind),
             Some(CooldownKind::Judged)
         );
 
         clock.advance(Duration::from_secs(31));
         invite
-            .maybe_respond(
-                &event("newbie", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("regular", "Wie bekomme ich Zugang?"), "streamer")
             .await;
         assert_eq!(judge.call_count(), 2);
-        assert_eq!(api.messages(), vec![expected_go("newbie")]);
+        assert_eq!(api.messages(), vec![expected_go("regular")]);
     }
 
     #[tokio::test]
@@ -2459,7 +2467,7 @@ mod tests {
         );
         invite
             .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
+                &event("viewer", "Wie bekomme ich Zugang zu Deadlock?"),
                 "streamer",
             )
             .await;
@@ -2475,7 +2483,7 @@ mod tests {
         );
         invite
             .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
+                &event("viewer", "Wie bekomme ich Zugang zu Deadlock?"),
                 "streamer",
             )
             .await;
@@ -2494,7 +2502,7 @@ mod tests {
         );
         invite
             .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
+                &event("viewer", "Wie bekomme ich Zugang zu Deadlock?"),
                 "streamer",
             )
             .await;
@@ -2519,7 +2527,7 @@ mod tests {
         );
         invite
             .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
+                &event("viewer", "Wie bekomme ich Zugang zu Deadlock?"),
                 "streamer",
             )
             .await;
@@ -2559,20 +2567,14 @@ mod tests {
         );
 
         invite
-            .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("viewer", "Wie bekomme ich Zugang?"), "streamer")
             .await;
         assert!(api.messages().is_empty());
         assert_eq!(judge.call_count(), 1);
 
         clock.advance(Duration::from_secs(31));
         invite
-            .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("viewer", "Wie bekomme ich Zugang?"), "streamer")
             .await;
         assert_eq!(judge.call_count(), 2);
         assert_eq!(api.messages(), vec![expected_go("viewer")]);
@@ -2594,16 +2596,10 @@ mod tests {
         );
 
         invite
-            .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("viewer", "Wie bekomme ich Zugang?"), "streamer")
             .await;
         invite
-            .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("viewer", "Wie bekomme ich Zugang?"), "streamer")
             .await;
 
         assert_eq!(judge.call_count(), 1);
@@ -2626,27 +2622,18 @@ mod tests {
         );
 
         invite
-            .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("viewer", "Wie bekomme ich Zugang?"), "streamer")
             .await;
         clock.advance(Duration::from_secs(59 * 60));
         invite
-            .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("viewer", "Wie bekomme ich Zugang?"), "streamer")
             .await;
         assert_eq!(judge.call_count(), 1);
         assert_eq!(api.messages().len(), 1);
 
         clock.advance(Duration::from_secs(2 * 60));
         invite
-            .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("viewer", "Wie bekomme ich Zugang?"), "streamer")
             .await;
         assert_eq!(judge.call_count(), 2);
         assert_eq!(api.messages().len(), 2);
@@ -2668,21 +2655,18 @@ mod tests {
         );
 
         invite
-            .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("viewer", "Wie bekomme ich Zugang?"), "streamer")
             .await;
         clock.advance(Duration::from_secs(60));
         invite
-            .maybe_respond(&event("other", "Wie bekomme ich einen invite?"), "streamer")
+            .maybe_respond(&event("other", "Wie bekomme ich Zugang?"), "streamer")
             .await;
         assert_eq!(judge.call_count(), 1);
         assert_eq!(api.messages().len(), 1);
 
         clock.advance(Duration::from_secs(61));
         invite
-            .maybe_respond(&event("other", "Wie bekomme ich einen invite?"), "streamer")
+            .maybe_respond(&event("other", "Wie bekomme ich Zugang?"), "streamer")
             .await;
         assert_eq!(judge.call_count(), 2);
         assert_eq!(api.messages().len(), 2);
@@ -2705,22 +2689,19 @@ mod tests {
 
         invite
             .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
+                &event("viewer", "Wie bekomme ich Zugang zu Deadlock?"),
                 "streamer",
             )
             .await;
         invite
-            .maybe_respond(&event("other", "Wie bekomme ich einen invite?"), "streamer")
+            .maybe_respond(&event("other", "Wie bekomme ich Zugang?"), "streamer")
             .await;
         assert_eq!(judge.call_count(), 1);
         assert_eq!(api.messages().len(), 1);
 
         clock.advance(Duration::from_secs(121));
         invite
-            .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen invite?"),
-                "streamer",
-            )
+            .maybe_respond(&event("viewer", "Wie bekomme ich Zugang?"), "streamer")
             .await;
         assert_eq!(judge.call_count(), 1);
         assert_eq!(api.messages().len(), 1);
@@ -2744,13 +2725,13 @@ mod tests {
 
         invite
             .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
+                &event("viewer", "Wie bekomme ich Zugang zu Deadlock?"),
                 "streamer",
             )
             .await;
         invite
             .maybe_respond(
-                &event("other", "Wie bekomme ich einen Invite für Deadlock?"),
+                &event("other", "Wie bekomme ich Zugang zu Deadlock?"),
                 "streamer",
             )
             .await;
@@ -2760,7 +2741,7 @@ mod tests {
         clock.advance(Duration::from_secs(121));
         invite
             .maybe_respond(
-                &event("viewer", "Wie bekomme ich einen Invite für Deadlock?"),
+                &event("viewer", "Wie bekomme ich Zugang zu Deadlock?"),
                 "streamer",
             )
             .await;
