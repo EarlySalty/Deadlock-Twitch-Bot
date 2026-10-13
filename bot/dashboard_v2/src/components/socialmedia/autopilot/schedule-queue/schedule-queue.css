@@ -1,12 +1,12 @@
 .schedule-queue {
-  color: var(--color-text-primary, #f1eee8);
+  color: var(--color-text-primary, #f2eee6);
   font-family: var(--font-sans, 'Segoe UI', sans-serif);
   color-scheme: dark;
   min-width: 0;
-  --sq-muted: var(--color-text-secondary, #b9b5ab);
-  --sq-border: var(--color-border, #3b3b38);
-  --sq-accent: var(--color-primary, #d3b66a);
-  --sq-panel: var(--color-card, #242624);
+  --sq-muted: var(--color-text-secondary, #9d968a);
+  --sq-border: var(--color-border, #3a2e25);
+  --sq-accent: var(--color-primary, #c5a059);
+  --sq-panel: var(--color-card, #161616);
 }
 .schedule-queue *, .schedule-queue *::before, .schedule-queue *::after { box-sizing: border-box; }
 .schedule-queue h2 { font-family: var(--font-display, inherit); font-size: 24px; margin: 0 0 8px; font-weight: 600; }
@@ -23,13 +23,13 @@
 .schedule-queue :is(button, input, select):focus-visible { outline: 2px solid var(--sq-accent); outline-offset: 3px; }
 .schedule-queue input, .schedule-queue select {
   min-height: 44px; min-width: 0; max-width: 100%; width: 100%; padding: 9px 10px;
-  border: 1px solid var(--sq-border); border-radius: 8px; color: inherit; background: #191b19;
+  border: 1px solid var(--sq-border); border-radius: 8px; color: inherit; background: #121212;
   caret-color: var(--sq-accent); font-size: 14px;
 }
 .schedule-queue input[type='checkbox'] { width: 18px; min-height: 18px; height: 18px; accent-color: var(--sq-accent); flex-shrink: 0; }
 .schedule-queue fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
-.schedule-queue .sq-primary { color: #191b19; background: var(--sq-accent); border-color: var(--sq-accent); }
-.schedule-queue .sq-primary:hover:not(:disabled) { background: var(--color-primary-hover, #e2c980); }
+.schedule-queue .sq-primary { color: #241a12; background: var(--sq-accent); border-color: var(--sq-accent); }
+.schedule-queue .sq-primary:hover:not(:disabled) { background: var(--color-primary-hover, #e0be86); }
 .sq-heading { display: flex; align-items: start; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 24px; }
 .sq-heading p, .sq-help { color: var(--sq-muted); font-size: 13px; max-width: 70ch; }
 .sq-status { display: flex; gap: 12px; padding: 16px 0 20px; border-top: 1px solid var(--sq-border); border-bottom: 1px solid var(--sq-border); margin-bottom: 24px; }
@@ -41,7 +41,7 @@
 .sq-toggles label { display: flex; align-items: center; gap: 10px; min-height: 44px; font-size: 14px; cursor: pointer; }
 .sq-fields { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 16px; margin: 24px 0 12px; }
 .sq-fields label { display: grid; gap: 8px; font-size: 13px; color: var(--sq-muted); }
-.sq-fields input { color: var(--color-text-primary, #f1eee8); }
+.sq-fields input { color: var(--color-text-primary, #f2eee6); }
 .sq-slots { display: grid; gap: 10px; margin: 24px 0 16px; }
 .sq-slot { display: grid; grid-template-columns: minmax(0, 1fr) 118px 44px; gap: 8px; align-items: center; }
 .sq-slot > label { min-width: 0; }
@@ -59,9 +59,9 @@
 .sq-empty { padding: 24px 0; color: var(--sq-muted); font-size: 14px; }
 .sq-confirm { border: 1px solid var(--sq-border); border-radius: 8px; padding: 14px; margin-top: 14px; background: var(--sq-panel); font-size: 13px; }
 .sq-confirm button { margin: 8px 8px 0 0; }
-.schedule-queue .sq-error { color: var(--color-danger, #ffb4b0); font-size: 13px; overflow-wrap: anywhere; }
+.schedule-queue .sq-error { color: var(--color-danger, #ffc9b8); font-size: 13px; overflow-wrap: anywhere; }
 .schedule-queue .sq-notice { color: var(--sq-accent); font-size: 13px; margin-bottom: 16px; }
 .sq-sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; clip: rect(0, 0, 0, 0); overflow: hidden; white-space: nowrap; }
-.schedule-queue ::selection { background: var(--sq-accent); color: #191b19; }
+.schedule-queue ::selection { background: var(--sq-accent); color: #241a12; }
 @media (max-width: 800px) { .sq-columns { grid-template-columns: minmax(0, 1fr); gap: 36px; } }
 @media (max-width: 420px) { .sq-fields { grid-template-columns: minmax(0, 1fr); } .sq-slot { grid-template-columns: minmax(0, 1fr) 112px 44px; gap: 6px; } .sq-job-head { flex-wrap: wrap; } }
