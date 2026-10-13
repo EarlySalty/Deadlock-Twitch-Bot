@@ -4,6 +4,7 @@ import type { UplinkCaps, UplinkCapsRoh } from '../uplinkEmpfehlung';
 import type { ZielBetriebsdaten } from '../uplinkBetrieb';
 import type { EingangsSession } from '../uplinkBetrieb';
 import type { UplinkTwitchOutputMode } from '../uplinkOutputMode';
+import { tr } from '../i18n/dictionary';
 
 /**
  * `live_status` kommt nicht vom Relay, sondern aus der Twitch-Beobachtung des
@@ -96,12 +97,8 @@ export async function rotateUplinkDockToken(): Promise<DockUrls> {
       body: '{}',
     })
   );
-  // Kommt hier nichts Anzeigbares zurueck, ist der Zugang trotzdem schon
-  // gedreht und die Eintraege in OBS sind tot. Das darf nicht still
-  // durchgehen: sonst drueckt der Streamer denselben Knopf noch einmal und
-  // entwertet jedes Mal einen weiteren Zugang, ohne je eine Adresse zu sehen.
   if (!antwort.dock_urls?.chat) {
-    throw new Error('Das Relay hat keine Dock-Adressen zurueckgegeben.');
+    throw new Error(tr('Das Relay hat keine Dock-Adressen zurueckgegeben.'));
   }
   return antwort.dock_urls;
 }
@@ -188,40 +185,17 @@ export interface UplinkPlattformVerbindung {
   trennenMoeglich: boolean;
 }
 
-/**
- * Hinweis unter dem Trennen-Knopf.
- *
- * Uplink wird getrennt; der gemeinsame Twitch-Grant für andere Funktionen bleibt.
- */
-export const TRENNEN_HINWEIS =
-  'Trennt diese Plattform von Uplink und entfernt ihr Sendeziel. Deine übrigen Bot- und Raidfunktionen bleiben verbunden.';
+export function trennenHinweis(): string {
+  return tr('Trennt diese Plattform von Uplink und entfernt ihr Sendeziel. Deine übrigen Bot- und Raidfunktionen bleiben verbunden.');
+}
 
-/**
- * Wofür die Rechte gebraucht werden, in Klartext.
- *
- * Der Twitch-Dialog listet sie einzeln und in seiner eigenen Sprache auf. Wer
- * vorher nicht weiß, wofür sie da sind, klickt entweder blind zu oder gar
- * nicht.
- *
- * Bewusst ohne Zahl: der Dialog zeigt den vollen Satz, und der ist je nach
- * bisherigem Grant unterschiedlich lang. Eine genannte Zahl wäre dort für
- * einen Teil der Streamer immer die falsche. Genannt wird nur, was neu
- * dazukommt; der Rest wird als das benannt, was er ist, ohne zu behaupten,
- * jeder habe ihn schon.
- */
-/**
- * Der eine Satz, der neben dem Status steht, solange nichts verbunden ist.
- *
- * Drei Zeilen Erklaertext im Kartenkopf haben die Karte erschlagen: wer schon
- * verbunden ist, liest sie jedes Mal mit und braucht sie nie. Das Lange steht
- * jetzt in der aufklappbaren Hilfe daneben, dieser Satz sagt nur, was der
- * Klick bringt.
- */
-export const VERBINDEN_KURZ =
-  'Verbindet dein Plattformkonto. Verfügbare Funktionen hängen von den gewährten Rechten ab.';
+export function verbindenKurz(): string {
+  return tr('Verbindet dein Plattformkonto. Verfügbare Funktionen hängen von den gewährten Rechten ab.');
+}
 
-export const VERBINDEN_HINWEIS =
-  'Twitch zeigt dir gleich die Liste der Rechte. Neu dazu kommen: deinen Stream-Key holen, den Chat lesen und darin antworten, Aktivitäten wie Follows sehen und Kanalpunkt-Einlösungen abhaken. Die übrigen Punkte in der Liste gehören zum Bot und zum Dashboard.';
+export function verbindenHinweis(): string {
+  return tr('Twitch zeigt dir gleich die Liste der Rechte. Neu dazu kommen: deinen Stream-Key holen, den Chat lesen und darin antworten, Aktivitäten wie Follows sehen und Kanalpunkt-Einlösungen abhaken. Die übrigen Punkte in der Liste gehören zum Bot und zum Dashboard.');
+}
 
 /** Eine Zeile je Plattform fuer den Kopf der Plattform-Karte. */
 export function plattformVerbindungen(me: UplinkMe): UplinkPlattformVerbindung[] {
@@ -230,27 +204,27 @@ export function plattformVerbindungen(me: UplinkMe): UplinkPlattformVerbindung[]
     const status = eintrag?.status ?? 'getrennt';
     const aktiv = eintrag?.verbindbar ?? verbindenAktiv(p.id);
     const streamKeyVorhanden = eintrag?.stream_key_vorhanden ?? false;
-    let statusText = 'Kontoverbindung nicht verfügbar';
+    let statusText = tr('Kontoverbindung nicht verfügbar');
     let knopfText: string | null = null;
     if (status === 'verbunden') {
-      statusText = streamKeyVorhanden ? 'Verbunden' : 'Verbunden, Schlüssel fehlt';
+      statusText = streamKeyVorhanden ? tr('Verbunden') : tr('Verbunden, Schlüssel fehlt');
     } else if (status === 'neu_verbinden') {
-      statusText = 'Zugang erneuern';
+      statusText = tr('Zugang erneuern');
     } else if (status === 'rechte_ergaenzen') {
-      statusText = 'Für Uplink fehlen noch Rechte';
+      statusText = tr('Für Uplink fehlen noch Rechte');
     } else if (status === 'zugang_unbekannt') {
-      statusText = 'Kontozugang konnte gerade nicht geprüft werden';
+      statusText = tr('Kontozugang konnte gerade nicht geprüft werden');
     } else if (status === 'trennung_offen') {
-      statusText = 'Trennung noch nicht bestätigt';
+      statusText = tr('Trennung noch nicht bestätigt');
     } else if (!aktiv && (p.id === 'kick' || p.id === 'youtube')) {
-      statusText = `Kontoverbindung zu ${p.label} ist hier noch nicht eingerichtet`;
+      statusText = tr('Kontoverbindung zu {plattform} ist hier noch nicht eingerichtet', { plattform: p.label });
     } else if (aktiv) {
-      statusText = 'Nicht verbunden';
+      statusText = tr('Nicht verbunden');
     }
     if (aktiv) {
-      knopfText = status === 'getrennt' ? `Mit ${p.label} verbinden`
-        : status === 'rechte_ergaenzen' ? 'Rechte ergänzen'
-        : status === 'zugang_unbekannt' ? null : 'Neu verbinden';
+      knopfText = status === 'getrennt' ? tr('Mit {plattform} verbinden', { plattform: p.label })
+        : status === 'rechte_ergaenzen' ? tr('Rechte ergänzen')
+        : status === 'zugang_unbekannt' ? null : tr('Neu verbinden');
     }
     return {
       id: p.id,
@@ -301,7 +275,7 @@ export function dockAdressen(me: UplinkMe): DockAdresse[] {
   const liste: DockAdresse[] = [];
   for (const dock of EIGENE_DOCKS) {
     const url = me.dock_urls[dock.feld]?.trim() ?? '';
-    if (url) liste.push({ titel: dock.titel, url });
+    if (url) liste.push({ titel: tr(dock.titel), url });
   }
   return liste;
 }
@@ -376,9 +350,7 @@ export function rejectUplinkAdminWaitlistEntry(
         'X-CSRF-Token': csrfToken,
       },
     }),
-    // Ohne diesen Satz stuende hier "Server-Fehler (HTTP 404)". Der Fall ist
-    // harmlos und hat einen klaren Grund: der Eintrag ist schon weg.
-    { notFoundMessage: 'Dieser Eintrag steht nicht mehr auf der Warteliste.' },
+    { notFoundMessage: tr('Dieser Eintrag steht nicht mehr auf der Warteliste.') },
   );
 }
 
@@ -400,9 +372,9 @@ export function saveUplinkReconnectWait(
   );
 }
 
-/** Ein gespeicherter Wert ist noch kein Nachweis einer aktiven Pufferreserve. */
-export const UPLINK_RECONNECT_WAIT_TEXT =
-  'Gespeicherte Frist für eine Wiederverbindung nach einem Verbindungsabbruch. Ein Verbindungsende allein beweist nicht, dass du den Stream bewusst beendet hast.';
+export function uplinkReconnectWaitText(): string {
+  return tr('Gespeicherte Frist für eine Wiederverbindung nach einem Verbindungsabbruch. Ein Verbindungsende allein beweist nicht, dass du den Stream bewusst beendet hast.');
+}
 
 export function reconnectWaitEingabe(wert: number | null | undefined): string {
   return typeof wert === 'number' && Number.isFinite(wert) && wert >= 0 ? String(wert) : '';
@@ -426,42 +398,33 @@ export interface UplinkProfilAnsicht {
   bitrate_kbps: number;
 }
 
-/** Benannte Wunschprofile; keine Aussage über Plattformfreigabe oder aktive Ausgabe. */
 export const UPLINK_PROFILE = [
-  {
-    name: '1440p60',
-    label: '2560×1440, 60 fps, 12000 kbit/s',
-    hinweis: 'Wunschprofil für einen passenden 2560×1440-Eingang.',
-    warnung:
-      'Twitch benötigt dafür eine bestätigte Enhanced-Broadcasting-Konfiguration und einen geeigneten Kanalzugang. Gespeichert bedeutet noch nicht freigegeben.',
-  },
-  {
-    name: '1080p60-hoch',
-    label: '1080p60, 8000 kbps',
-    hinweis: 'Wunschprofil mit höherem Video-Bitratenbudget. Wird für das jeweilige Ziel geprüft.',
-    warnung: '',
-  },
-  {
-    name: '1080p60',
-    label: '1080p60, 6000 kbps',
-    hinweis: 'Wunschprofil mit 6000 kbit/s Video am Ausgang. Dein Upload wird getrennt bewertet.',
-    warnung: '',
-  },
-  {
-    name: '720p60',
-    label: '720p60, 4500 kbps',
-    hinweis: 'Kleineres Ausgabeprofil mit 60 Bildern pro Sekunde.',
-    warnung: '',
-  },
-  {
-    name: '480p30',
-    label: '480p30, 1500 kbps',
-    hinweis: 'Kleineres Ausgabeprofil mit 30 Bildern pro Sekunde.',
-    warnung: '',
-  },
+  { name: '1440p60', label: '2560×1440, 60 fps, 12000 kbit/s' },
+  { name: '1080p60-hoch', label: '1080p60, 8000 kbps' },
+  { name: '1080p60', label: '1080p60, 6000 kbps' },
+  { name: '720p60', label: '720p60, 4500 kbps' },
+  { name: '480p30', label: '480p30, 1500 kbps' },
 ] as const;
 
 export type UplinkProfilName = (typeof UPLINK_PROFILE)[number]['name'];
+
+export function uplinkProfilHinweis(name: UplinkProfilName): { hinweis: string; warnung: string } {
+  switch (name) {
+    case '1440p60':
+      return {
+        hinweis: tr('Wunschprofil für einen passenden 2560×1440-Eingang.'),
+        warnung: tr('Twitch benötigt dafür eine bestätigte Enhanced-Broadcasting-Konfiguration und einen geeigneten Kanalzugang. Gespeichert bedeutet noch nicht freigegeben.'),
+      };
+    case '1080p60-hoch':
+      return { hinweis: tr('Wunschprofil mit höherem Video-Bitratenbudget. Wird für das jeweilige Ziel geprüft.'), warnung: '' };
+    case '1080p60':
+      return { hinweis: tr('Wunschprofil mit 6000 kbit/s Video am Ausgang. Dein Upload wird getrennt bewertet.'), warnung: '' };
+    case '720p60':
+      return { hinweis: tr('Kleineres Ausgabeprofil mit 60 Bildern pro Sekunde.'), warnung: '' };
+    case '480p30':
+      return { hinweis: tr('Kleineres Ausgabeprofil mit 30 Bildern pro Sekunde.'), warnung: '' };
+  }
+}
 
 /** Die Zahlen hinter jedem Profilnamen, gespiegelt aus `handlers/uplink.rs`. */
 export const PROFIL_WERTE: Record<UplinkProfilName, [number, number, number, number]> = {
