@@ -118,6 +118,37 @@ fn knowledge_base() -> &'static KnowledgeBase {
 /// wenn auch der fehlt, gibt es `OAuthMissing`. Der Bot-Token wird dem
 /// Broadcaster zwar nicht zugeschrieben — Python nimmt ihn dennoch als letzten
 /// Versuch (Scope-Vorbehalt `clips:edit` siehe Python-Kommentar).
+struct ChatVodClipAdapter {
+    helix: HelixClient,
+    pool: PgPool,
+}
+
+#[async_trait::async_trait]
+impl tb_chat::commands::VodClipPort for ChatVodClipAdapter {
+    async fn submit(
+        &self,
+        owner_id: &str,
+        range: tb_domain::vod_range::VodRange,
+    ) -> Result<(), String> {
+        tb_vod_archive::private_range::submit(&self.pool, &self.helix, owner_id, range)
+            .await
+            .map(|_| ())
+            .map_err(|error| {
+                tracing::warn!(code = error.code(), "Private VOD request rejected");
+                error.message().to_string()
+            })
+    }
+}
+
+pub fn build_vod_clip_port(
+    helix: Option<HelixClient>,
+    pool: PgPool,
+) -> Option<Arc<dyn tb_chat::commands::VodClipPort>> {
+    helix.map(|helix| {
+        Arc::new(ChatVodClipAdapter { helix, pool }) as Arc<dyn tb_chat::commands::VodClipPort>
+    })
+}
+
 struct ChatClipAdapter {
     helix: Arc<HelixClient>,
     token_provider: Arc<TokenProvider>,
@@ -820,6 +851,7 @@ pub struct ChatRuntimePorts {
     pub subscription_status: Arc<dyn tb_chat::sub_reminder::SubscriptionStatus>,
     pub manual_raid: Option<Arc<dyn tb_internal_api::ManualRaidPort>>,
     pub clip_port: Option<Arc<dyn ClipPort>>,
+    pub vod_clip_port: Option<Arc<dyn tb_chat::commands::VodClipPort>>,
     pub clip_contest: Option<Arc<tb_chat::clip_contest_submit::ClipContestSubmitter>>,
     pub bot_ban_handler: Option<Arc<dyn BotBannedChannelHandler>>,
     pub invite_relay: Option<BrokerRelay>,
@@ -851,6 +883,7 @@ pub async fn build_runtime(
         subscription_status,
         manual_raid,
         clip_port,
+        vod_clip_port,
         clip_contest,
         bot_ban_handler,
         invite_relay,
@@ -1023,6 +1056,9 @@ pub async fn build_runtime(
         Arc::clone(&api),
         subscription_status,
     )));
+    if let Some(port) = vod_clip_port {
+        command_engine = command_engine.set_vod_clip_port(port);
+    }
     if let Some(cp) = clip_port {
         command_engine = command_engine.set_clip_port(cp);
     }

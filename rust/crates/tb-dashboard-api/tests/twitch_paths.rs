@@ -142,6 +142,51 @@ async fn platform_callbacks_are_served_without_a_path_redirect() {
 }
 
 #[tokio::test]
+async fn private_vod_routes_require_authentication_and_csrf() {
+    let app = app();
+    let settings = "/twitch/api/v2/streamer/private-vod-clips";
+    for path in [
+        settings.to_string(),
+        format!("{settings}?streamer=foreign"),
+        format!("{settings}/00000000-0000-4000-8000-000000000001/download"),
+    ] {
+        assert_eq!(
+            request(&app, "GET", &path).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    for (origin, expected) in [
+        (None, StatusCode::FORBIDDEN),
+        (Some("https://attacker.invalid"), StatusCode::FORBIDDEN),
+        (
+            Some("https://deutsche-deadlock-community.de"),
+            StatusCode::FORBIDDEN,
+        ),
+    ] {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(settings)
+            .header(header::HOST, "deutsche-deadlock-community.de")
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(origin) = origin {
+            builder = builder.header(header::ORIGIN, origin);
+        }
+        let response = app
+            .clone()
+            .oneshot(builder.body(Body::from("{\"enabled\":true}")).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::FORBIDDEN {
+            let body: serde_json::Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), 8192).await.unwrap())
+                    .unwrap();
+            assert_eq!(body["error"], "invalid_csrf");
+        }
+    }
+}
+
+#[tokio::test]
 async fn old_tabs_and_new_clients_share_api_auth_and_csrf_guards() {
     let app = app();
     for suffix in [

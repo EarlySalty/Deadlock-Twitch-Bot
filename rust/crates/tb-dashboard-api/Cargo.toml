@@ -58,7 +58,7 @@ tb-vod-archive = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
-tokio     = { workspace = true, features = ["net", "rt-multi-thread"] }
+tokio     = { workspace = true, features = ["net", "rt-multi-thread", "test-util"] }
 tokio-tungstenite = "0.30"
 tower     = { workspace = true, features = ["util"] }
 wiremock  = { workspace = true }

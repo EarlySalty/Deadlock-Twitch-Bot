@@ -525,3 +525,11 @@ BEGIN
     END IF;
 END
 $social_ai_limit_roles$;
+
+DO $private_vod_roles$
+BEGIN
+    IF to_regprocedure('public.twitch_apply_private_vod_roles()') IS NOT NULL THEN
+        PERFORM public.twitch_apply_private_vod_roles();
+    END IF;
+END
+$private_vod_roles$;

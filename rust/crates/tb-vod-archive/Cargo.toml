@@ -16,6 +16,9 @@ tb-social-media  = { workspace = true }
 tb-crypto        = { workspace = true }
 tb-config        = { workspace = true }
 tb-transport-twitch = { workspace = true }
+tb-domain = { workspace = true }
+uuid = { workspace = true }
+url = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

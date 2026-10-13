@@ -91,6 +91,7 @@ pub mod platform_token;
 pub mod plattform_connect;
 pub mod plattform_oauth;
 pub mod player_connect;
+pub mod private_vod;
 pub mod raid_analytics;
 pub mod raid_history;
 pub mod raid_network_analytics;
