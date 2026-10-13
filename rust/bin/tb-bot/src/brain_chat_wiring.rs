@@ -1218,7 +1218,7 @@ mod tests {
         ) -> Result<(), String> {
             if self
                 .fail_finishes
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
                     (left > 0).then(|| left - 1)
                 })
                 .is_ok()

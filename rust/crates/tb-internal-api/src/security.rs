@@ -55,7 +55,10 @@ pub fn host_without_port(raw: Option<&str>) -> String {
     // `[::1]` / `[::1]:8776` → Inhalt zwischen den Klammern.
     if let Some(stripped) = host.strip_prefix('[') {
         if let Some(end) = stripped.find(']') {
-            return stripped[..end].to_lowercase().trim_end_matches('.').to_string();
+            return stripped[..end]
+                .to_lowercase()
+                .trim_end_matches('.')
+                .to_string();
         }
         return stripped.to_lowercase().trim_end_matches('.').to_string();
     }
@@ -74,7 +77,10 @@ pub fn host_without_port(raw: Option<&str>) -> String {
     // Genau ein `:` → host:port; nur abschneiden wenn der Port numerisch ist.
     if normalized.matches(':').count() == 1 {
         if let Some((host_part, port_part)) = normalized.rsplit_once(':') {
-            if !host_part.is_empty() && !port_part.is_empty() && port_part.bytes().all(|b| b.is_ascii_digit()) {
+            if !host_part.is_empty()
+                && !port_part.is_empty()
+                && port_part.bytes().all(|b| b.is_ascii_digit())
+            {
                 return host_part.to_string();
             }
         }
@@ -320,7 +326,8 @@ pub fn enforce_internal_api_runtime(
     }
 
     let mut expected_port = INTERNAL_API_PORT;
-    if let Some(legacy) = legacy_port.filter(|port| *port != 0 && *port != MASTER_API_RESERVED_PORT) {
+    if let Some(legacy) = legacy_port.filter(|port| *port != 0 && *port != MASTER_API_RESERVED_PORT)
+    {
         if port == legacy {
             expected_port = legacy;
         }
@@ -331,7 +338,10 @@ pub fn enforce_internal_api_runtime(
     }
 
     if port != expected_port {
-        return Err(RuntimeHardeningError(port_error_message(expected_port, port)));
+        return Err(RuntimeHardeningError(port_error_message(
+            expected_port,
+            port,
+        )));
     }
 
     Ok(resolved_role)
@@ -483,7 +493,10 @@ mod tests {
         assert!(is_loopback_request(Some("http://localhost"), loopback));
         assert!(is_loopback_request(None, loopback));
         // Fremder Origin trotz Loopback-Peer → abgelehnt.
-        assert!(!is_loopback_request(Some("https://evil.example.com"), loopback));
+        assert!(!is_loopback_request(
+            Some("https://evil.example.com"),
+            loopback
+        ));
         // Loopback-Origin aber externer Peer → abgelehnt.
         assert!(!is_loopback_request(Some("http://localhost"), external));
     }
@@ -556,16 +569,22 @@ mod tests {
 
     #[test]
     fn runtime_ok_for_worker_on_default_port() {
-        let role = enforce_internal_api_runtime(Some("twitch_worker"), INTERNAL_API_PORT, true, None)
-            .expect("worker on 8776 must be accepted");
+        let role =
+            enforce_internal_api_runtime(Some("twitch_worker"), INTERNAL_API_PORT, true, None)
+                .expect("worker on 8776 must be accepted");
         assert_eq!(role, ROLE_TWITCH_WORKER);
     }
 
     #[test]
     fn runtime_role_aliases_resolve_to_worker() {
         assert!(enforce_internal_api_runtime(Some("bot"), INTERNAL_API_PORT, true, None).is_ok());
-        assert!(enforce_internal_api_runtime(Some("twitch-worker"), INTERNAL_API_PORT, true, None).is_ok());
-        assert!(enforce_internal_api_runtime(Some("WORKER"), INTERNAL_API_PORT, true, None).is_ok());
+        assert!(
+            enforce_internal_api_runtime(Some("twitch-worker"), INTERNAL_API_PORT, true, None)
+                .is_ok()
+        );
+        assert!(
+            enforce_internal_api_runtime(Some("WORKER"), INTERNAL_API_PORT, true, None).is_ok()
+        );
     }
 
     #[test]
@@ -598,8 +617,13 @@ mod tests {
 
     #[test]
     fn runtime_rejects_reserved_master_port() {
-        let err = enforce_internal_api_runtime(Some("twitch_worker"), MASTER_API_RESERVED_PORT, true, None)
-            .expect_err("reserved master port must be rejected");
+        let err = enforce_internal_api_runtime(
+            Some("twitch_worker"),
+            MASTER_API_RESERVED_PORT,
+            true,
+            None,
+        )
+        .expect_err("reserved master port must be rejected");
         assert!(err.0.contains("reserved for the master API service"));
     }
 
@@ -658,7 +682,11 @@ mod tests {
             // Kern der Lücke: Loopback-Peer, aber fremder Origin → 403.
             let app = guarded_router("secret");
             let res = app
-                .oneshot(req("127.0.0.1", Some("https://evil.example.com"), Some("secret")))
+                .oneshot(req(
+                    "127.0.0.1",
+                    Some("https://evil.example.com"),
+                    Some("secret"),
+                ))
                 .await
                 .unwrap();
             assert_eq!(res.status(), StatusCode::FORBIDDEN);
@@ -668,7 +696,11 @@ mod tests {
         async fn loopback_peer_with_loopback_origin_passes() {
             let app = guarded_router("secret");
             let res = app
-                .oneshot(req("127.0.0.1", Some("http://localhost:8776"), Some("secret")))
+                .oneshot(req(
+                    "127.0.0.1",
+                    Some("http://localhost:8776"),
+                    Some("secret"),
+                ))
                 .await
                 .unwrap();
             assert_eq!(res.status(), StatusCode::OK);

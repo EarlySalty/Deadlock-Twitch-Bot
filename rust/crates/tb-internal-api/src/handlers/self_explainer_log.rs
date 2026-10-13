@@ -87,7 +87,11 @@ fn broker_token() -> Option<String> {
 
 /// Broker-Ziel aus derselben geprüften Momentaufnahme wie die Bot-Laufzeit.
 fn broker_base_url() -> Result<String, tb_config::file::FileError> {
-    Ok(tb_config::runtime::settings()?.broker.base_url.trim_end_matches('/').to_string())
+    Ok(tb_config::runtime::settings()?
+        .broker
+        .base_url
+        .trim_end_matches('/')
+        .to_string())
 }
 
 /// Kanonischer Idempotency-Key aus dem Broker-Payload.
@@ -190,10 +194,7 @@ fn is_truthy_channel_id(v: &Value) -> bool {
 ///
 /// Validiert `channel_id` + `embed`, baut den Broker-Payload, leitet ihn
 /// an den Master-Broker weiter und gibt `{ok, broker_status}` zurück.
-pub async fn handler(
-    auth: AuthLevel,
-    body: axum::body::Bytes,
-) -> axum::response::Response {
+pub async fn handler(auth: AuthLevel, body: axum::body::Bytes) -> axum::response::Response {
     if !auth.is_privileged() {
         return ApiError::unauthorized().into_response();
     }
@@ -370,12 +371,12 @@ mod tests {
     fn make_router(token: &str) -> Router {
         let base = INTERNAL_API_BASE_PATH;
         Router::new()
-            .route(
-                &format!("{base}/discord/self-explainer-log"),
-                post(handler),
-            )
+            .route(&format!("{base}/discord/self-explainer-log"), post(handler))
             .layer(Extension(ExpectedToken(token.to_string())))
-            .layer(middleware::from_fn_with_state(token.to_string(), internal_auth))
+            .layer(middleware::from_fn_with_state(
+                token.to_string(),
+                internal_auth,
+            ))
             .layer(middleware::from_fn(loopback_only))
     }
 
@@ -385,7 +386,9 @@ mod tests {
             .method("POST")
             .uri(format!("{base}/discord/self-explainer-log"))
             .header("content-type", "application/json")
-            .extension(ConnectInfo("127.0.0.1:55555".parse::<SocketAddr>().unwrap()));
+            .extension(ConnectInfo(
+                "127.0.0.1:55555".parse::<SocketAddr>().unwrap(),
+            ));
         if let Some(t) = token {
             builder = builder.header("x-internal-token", t);
         }
@@ -501,7 +504,10 @@ mod tests {
             "MAIN_BOT_INTERNAL_TOKEN",
             "TWITCH_INTERNAL_API_TOKEN",
         ] {
-            if std::env::var(key).map(|v| !v.trim().is_empty()).unwrap_or(false) {
+            if std::env::var(key)
+                .map(|v| !v.trim().is_empty())
+                .unwrap_or(false)
+            {
                 eprintln!("SKIP: {key} ist gesetzt — kein_broker_token_503 nicht testbar");
                 return;
             }

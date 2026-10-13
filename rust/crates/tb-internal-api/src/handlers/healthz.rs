@@ -90,7 +90,13 @@ fn analytics_identity_fields(dsn: &str) -> (String, String, String) {
 /// gehasht, leere Felder als `"-"` (`pg.py:284-287`).
 fn analytics_db_identity(dsn: &str) -> DbIdentity {
     let (host, port, dbname) = analytics_identity_fields(dsn);
-    let or_dash = |v: &str| if v.is_empty() { "-".to_string() } else { v.to_string() };
+    let or_dash = |v: &str| {
+        if v.is_empty() {
+            "-".to_string()
+        } else {
+            v.to_string()
+        }
+    };
     DbIdentity {
         fingerprint: (!dsn.trim().is_empty()).then(|| analytics_identity_fingerprint(dsn)),
         host_hash: fingerprint_hex(&or_dash(&host)),
@@ -114,7 +120,8 @@ pub async fn healthz_handler(auth: AuthLevel) -> Result<impl IntoResponse, ApiEr
         service: "twitch-internal-api",
         analytics_db_fingerprint: identity.fingerprint.clone(),
         analytics_db: identity,
-        config_fingerprint: tb_config::runtime::active().map(|config| config.fingerprint().to_string()),
+        config_fingerprint: tb_config::runtime::active()
+            .map(|config| config.fingerprint().to_string()),
     }))
 }
 
@@ -182,7 +189,10 @@ mod tests {
         assert!(db.get("portHash").is_some());
         assert_eq!(db["engine"], "postgres");
         for klartext in ["host", "port", "database", "user"] {
-            assert!(db.get(klartext).is_none(), "{klartext} darf nicht erscheinen");
+            assert!(
+                db.get(klartext).is_none(),
+                "{klartext} darf nicht erscheinen"
+            );
         }
         assert_eq!(json["analyticsDbFingerprint"], db["fingerprint"]);
     }

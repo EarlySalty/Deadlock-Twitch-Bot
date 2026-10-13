@@ -250,10 +250,8 @@ mod tests {
 
     #[tokio::test]
     async fn any_route_methoden_erreichen_upstream() {
-        let upstream = Router::new().route(
-            "/internal/twitch/v1/raid/go-url",
-            any(|| async { "ok" }),
-        );
+        let upstream =
+            Router::new().route("/internal/twitch/v1/raid/go-url", any(|| async { "ok" }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {

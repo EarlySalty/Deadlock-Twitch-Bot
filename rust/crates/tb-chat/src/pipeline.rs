@@ -1637,11 +1637,8 @@ impl ChatPipeline {
         // ohne KI bleibt es bei den regelbasierten Prüfungen; kein Judge und
         // kein Fehleralarm. Ein DB-Fehler fällt nicht hierher, sondern sperrt
         // im LLM-Eingang und wird als AI_ERROR sichtbar.
-        if let Ok(false) = tb_llm::streamer_ai_allowed(
-            Some(&event.broadcaster_user_id),
-            Some(channel_login),
-        )
-        .await
+        if let Ok(false) =
+            tb_llm::streamer_ai_allowed(Some(&event.broadcaster_user_id), Some(channel_login)).await
         {
             p.review_log.record(
                 channel_login,

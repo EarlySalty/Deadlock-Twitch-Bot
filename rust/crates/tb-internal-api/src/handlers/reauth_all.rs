@@ -58,7 +58,10 @@ pub async fn reauth_all_handler(
         ApiError::internal()
     })?;
 
-    tracing::info!(flagged, "reauth-all: {flagged} Streamer zur Neu-Autorisierung geflaggt");
+    tracing::info!(
+        flagged,
+        "reauth-all: {flagged} Streamer zur Neu-Autorisierung geflaggt"
+    );
     Ok(Json(ReauthAllResponse { ok: true, flagged }))
 }
 
@@ -99,22 +102,21 @@ mod tests {
     #[tokio::test]
     async fn non_admin_is_unauthorized() {
         let port: Arc<dyn BulkReauthPort> = Arc::new(StubPort { result: Ok(7) });
-        let status = match reauth_all_handler(AuthLevel::None, Extension(BulkReauthExt(Some(port))))
-            .await
-        {
-            Ok(_) => panic!("non-admin should be denied"),
-            Err(e) => e.into_response().status(),
-        };
+        let status =
+            match reauth_all_handler(AuthLevel::None, Extension(BulkReauthExt(Some(port)))).await {
+                Ok(_) => panic!("non-admin should be denied"),
+                Err(e) => e.into_response().status(),
+            };
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn missing_port_is_unavailable() {
-        let status = match reauth_all_handler(AuthLevel::Admin, Extension(BulkReauthExt(None))).await
-        {
-            Ok(_) => panic!("missing port should be 503"),
-            Err(e) => e.into_response().status(),
-        };
+        let status =
+            match reauth_all_handler(AuthLevel::Admin, Extension(BulkReauthExt(None))).await {
+                Ok(_) => panic!("missing port should be 503"),
+                Err(e) => e.into_response().status(),
+            };
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     }
 }

@@ -705,7 +705,7 @@ mod tests {
 
         let resp = app
             .oneshot(req(
-                &format!("{base}/sessions/{{session_id}}"),
+                &format!("{base}/sessions/{session_id}"),
                 Some("secret"),
             ))
             .await

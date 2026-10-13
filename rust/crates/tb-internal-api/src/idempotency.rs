@@ -365,7 +365,9 @@ mod tests {
     async fn body_json(resp: Response) -> (StatusCode, Value, bool) {
         let status = resp.status();
         let replayed = resp.headers().contains_key(REPLAYED_HEADER);
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         (status, serde_json::from_slice(&bytes).unwrap(), replayed)
     }
 
@@ -377,7 +379,9 @@ mod tests {
             Prepared::Skip
         ));
         assert!(matches!(
-            state.prepare(Some("  "), "POST", "/x", "/x", &json!({})).await,
+            state
+                .prepare(Some("  "), "POST", "/x", "/x", &json!({}))
+                .await,
             Prepared::Skip
         ));
     }
@@ -444,7 +448,9 @@ mod tests {
         slot.complete(200, &json!({"ok": true}), true);
 
         assert!(matches!(
-            state.prepare(Some("key3"), "POST", "/b", "/b", &json!({})).await,
+            state
+                .prepare(Some("key3"), "POST", "/b", "/b", &json!({}))
+                .await,
             Prepared::Owner(_)
         ));
     }
@@ -516,8 +522,7 @@ mod tests {
 
         let state2 = state.clone();
         let waiter = tokio::spawn(async move {
-            let Prepared::Immediate(resp) =
-                prepare_simple(&state2, "key7", json!({"x": 1})).await
+            let Prepared::Immediate(resp) = prepare_simple(&state2, "key7", json!({"x": 1})).await
             else {
                 panic!("Waiter erwartet Immediate");
             };
@@ -560,8 +565,7 @@ mod tests {
         };
         slot.complete(200, &json!({"ok": true}), true);
 
-        let Prepared::Immediate(resp) = prepare_simple(&state, "key9", json!([1, 2])).await
-        else {
+        let Prepared::Immediate(resp) = prepare_simple(&state, "key9", json!([1, 2])).await else {
             panic!("Replay erwartet (gleicher Fingerprint)");
         };
         let (status, _, replayed) = body_json(resp).await;
