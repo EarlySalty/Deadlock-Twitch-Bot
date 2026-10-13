@@ -25,6 +25,8 @@ pub struct StreamData {
     pub followers_total: i32,
     pub started_at: Option<String>,
     pub game_name: Option<String>,
+    /// Sprache des laufenden Streams (Helix `language`), für Raids nach Sprache.
+    pub language: Option<String>,
 }
 
 /// Ein live Partner-Kandidat (Roster-Eintrag + Stream-Daten).

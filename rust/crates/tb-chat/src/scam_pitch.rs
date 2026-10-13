@@ -1689,7 +1689,7 @@ impl SpamAiReviewer {
         // Die Kette arbeitet der gemeinsame Eingang ab; ohne konfigurierten
         // Anbieter liefert er `Unavailable`, das unten als ProviderError
         // landet. Hier bleibt nur die Fachauswertung des Urteils.
-        let (last_error, last_verdict) = match call_judge(None, true, &content).await {
+        let (last_error, last_verdict) = match call_judge(None, true, Some(&event.broadcaster_user_id), &content).await {
             Ok(review) => {
                 let (learned, rejected_pattern, save_failed) =
                     persist_spam_learning(&self.pool, &review, &content, &channel).await;
@@ -2014,6 +2014,7 @@ pub(crate) async fn learn_pattern_from_judge(
 async fn call_judge(
     endpoint: Option<&tb_llm::LlmEndpoint>,
     record_usage: bool,
+    broadcaster_id: Option<&str>,
     content: &str,
 ) -> Result<AiReview, JudgeFailure> {
     let truncated: String = content.chars().take(500).collect();
@@ -2030,6 +2031,9 @@ async fn call_judge(
         Some(endpoint) => request.endpoint(endpoint.clone()),
         None => request.failover(),
     };
+    if let Some(broadcaster_id) = broadcaster_id {
+        request = request.twitch_broadcaster(broadcaster_id);
+    }
     let request = if record_usage {
         request.ledger_purpose(JUDGE_PURPOSE)
     } else {
@@ -3189,7 +3193,7 @@ mod tests {
             api_key: Some("test-key".to_string()),
             model: tb_llm::selection::configured_fireworks_model().to_string(),
         };
-        let review = call_judge(Some(&provider), false, content)
+        let review = call_judge(Some(&provider), false, None, content)
             .await
             .expect("Transport ok und Urteil parsebar");
         assert!(review.is_spam);
@@ -3235,7 +3239,7 @@ mod tests {
             api_key: Some("fw-key".to_string()),
             model: tb_llm::selection::configured_fireworks_model().to_string(),
         };
-        let error = call_judge(Some(&provider), false, "cheap viewers telegram")
+        let error = call_judge(Some(&provider), false, None, "cheap viewers telegram")
             .await
             .expect_err("404 bleibt ein Providerfehler");
         assert!(
@@ -3265,7 +3269,7 @@ mod tests {
             api_key: Some("test-key".to_string()),
             model: tb_llm::selection::configured_fireworks_model().to_string(),
         };
-        call_judge(Some(&provider), false, "harmlose nachricht")
+        call_judge(Some(&provider), false, None, "harmlose nachricht")
             .await
             .expect("Urteil parsebar");
 
@@ -3718,7 +3722,7 @@ mod tests {
             ("gönne viewer du weißt", false),
             ("gönn dir viewer bro bin nur am lurken", false),
         ] {
-            let review = call_judge(Some(provider), false, message)
+            let review = call_judge(Some(provider), false, None, message)
                 .await
                 .expect("Judge-Call fehlgeschlagen");
             eprintln!(

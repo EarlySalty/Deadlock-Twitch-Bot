@@ -695,6 +695,10 @@ pub fn pitch_injection_reject(reply: &str, target_login: &str) -> bool {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PitchJudgeInput {
+    /// Twitch-User-ID des Kanals; nur für den KI-Schalter pro Server
+    /// (Paket K), geht nicht ans Modell.
+    #[serde(skip)]
+    pub channel_id: String,
     pub trigger_text: String,
     pub game: Option<String>,
     pub title: Option<String>,
@@ -718,6 +722,7 @@ impl FireworksPitchJudge {
     ) -> Option<PitchResponse> {
         let user = serde_json::to_string(&input).ok()?;
         let mut request = tb_llm::Request::simple(PITCH_SYSTEM_PROMPT, user)
+            .twitch_broadcaster(input.channel_id.clone())
             .temperature(0.0)
             .json_object()
             .denken_aus()
@@ -742,6 +747,10 @@ impl PitchJudge for FireworksPitchJudge {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ChannelPromoContext {
+    /// Kanal-Login; nur für den KI-Schalter pro Server (Paket K), geht nicht
+    /// ans Modell.
+    #[serde(skip)]
+    pub channel_login: String,
     pub game: Option<String>,
     pub title: Option<String>,
     pub recent_chat: Vec<String>,
@@ -750,6 +759,10 @@ pub struct ChannelPromoContext {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PartnerPitchContext {
+    /// Twitch-User-ID des Kanals; nur für den KI-Schalter pro Server
+    /// (Paket K), geht nicht ans Modell.
+    #[serde(skip)]
+    pub channel_id: String,
     pub target_login: String,
     pub target_messages: Vec<String>,
     pub game: Option<String>,
@@ -863,6 +876,7 @@ fn fallback_channel_promo_body(ctx: &ChannelPromoContext) -> &'static str {
 pub async fn build_channel_promo_text(ctx: &ChannelPromoContext, invite: &str) -> Option<String> {
     if let Ok(user) = serde_json::to_string(ctx) {
         let request = tb_llm::Request::simple(CHANNEL_PROMO_SYSTEM_PROMPT, user)
+            .twitch_channel(ctx.channel_login.clone())
             .temperature(0.35)
             .denken_aus()
             .max_tokens(TEXT_MAX_TOKENS)
@@ -880,6 +894,7 @@ pub async fn build_channel_promo_text(ctx: &ChannelPromoContext, invite: &str) -
 pub async fn build_partner_pitch_text(ctx: &PartnerPitchContext) -> Option<String> {
     let user = serde_json::to_string(ctx).ok()?;
     let request = tb_llm::Request::simple(PARTNER_PITCH_SYSTEM_PROMPT, user)
+        .twitch_broadcaster(ctx.channel_id.clone())
         .temperature(0.7)
         .denken_aus()
         .max_tokens(TEXT_MAX_TOKENS)
@@ -976,6 +991,7 @@ mod tests {
             api_key: Some("test".to_string()),
         };
         let input = PitchJudgeInput {
+            channel_id: String::new(),
             trigger_text: "Sach ma' welche Rollen gibt es in diesem Spiel?".into(),
             game: Some("Deadlock".into()),
             title: None,
@@ -1033,6 +1049,7 @@ mod tests {
             api_key: Some("k".to_string()),
         };
         let input = PitchJudgeInput {
+            channel_id: String::new(),
             trigger_text: "test".to_string(),
             game: None,
             title: None,
@@ -1330,48 +1347,56 @@ mod tests {
     fn channel_promo_fallback_hat_immer_konkreten_mehrwert() {
         for ctx in [
             ChannelPromoContext {
+                channel_login: String::new(),
                 game: Some("Deadlock".into()),
                 title: None,
                 recent_chat: vec![],
                 beispiele: String::new(),
             },
             ChannelPromoContext {
+                channel_login: String::new(),
                 game: Some("Deadlock".into()),
                 title: Some("Scrims heute".into()),
                 recent_chat: vec![],
                 beispiele: String::new(),
             },
             ChannelPromoContext {
+                channel_login: String::new(),
                 game: Some("Deadlock".into()),
                 title: Some("Ranked grind".into()),
                 recent_chat: vec![],
                 beispiele: String::new(),
             },
             ChannelPromoContext {
+                channel_login: String::new(),
                 game: Some("Deadlock".into()),
                 title: None,
                 recent_chat: vec!["welcher hero ist gut für anfänger?".into()],
                 beispiele: String::new(),
             },
             ChannelPromoContext {
+                channel_login: String::new(),
                 game: Some("Deadlock".into()),
                 title: Some("Patchday".into()),
                 recent_chat: vec!["was wurde generft?".into()],
                 beispiele: String::new(),
             },
             ChannelPromoContext {
+                channel_login: String::new(),
                 game: Some("Deadlock".into()),
                 title: Some("Build testing".into()),
                 recent_chat: vec!["welches item ist gerade meta?".into()],
                 beispiele: String::new(),
             },
             ChannelPromoContext {
+                channel_login: String::new(),
                 game: Some("Deadlock".into()),
                 title: Some("Replay Coaching".into()),
                 recent_chat: vec![],
                 beispiele: String::new(),
             },
             ChannelPromoContext {
+                channel_login: String::new(),
                 game: Some("Deadlock".into()),
                 title: None,
                 recent_chat: vec!["schon wieder so ein fake server scam".into()],

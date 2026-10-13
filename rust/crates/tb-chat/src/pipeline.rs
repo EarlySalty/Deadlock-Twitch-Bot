@@ -1633,6 +1633,26 @@ impl ChatPipeline {
         {
             return;
         }
+        // KI-Schalter pro Server (Paket K, E14): In Kanälen fremder Server
+        // ohne KI bleibt es bei den regelbasierten Prüfungen; kein Judge und
+        // kein Fehleralarm. Ein DB-Fehler fällt nicht hierher, sondern sperrt
+        // im LLM-Eingang und wird als AI_ERROR sichtbar.
+        if let Ok(false) = tb_llm::streamer_ai_allowed(
+            Some(&event.broadcaster_user_id),
+            Some(channel_login),
+        )
+        .await
+        {
+            p.review_log.record(
+                channel_login,
+                chatter_login,
+                &event.chatter_user_id,
+                text,
+                "AI_OFF",
+                "KI für den Server dieses Kanals ausgeschaltet",
+            );
+            return;
+        }
         let outcome = p.ai_reviewer.review_for_verdict(event).await;
 
         // Jede Judge-Entscheidung sichtbar machen: Review-Log + Tracing.

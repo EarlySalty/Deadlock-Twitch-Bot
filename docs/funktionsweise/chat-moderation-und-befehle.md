@@ -40,7 +40,7 @@ Hinweis zu Rechten: "Broadcaster" = der Streamer selbst, "Mods" = die Moderatore
 - **`!ping`** (auch `!health`, `!status`, `!bot`) — Prüft, ob der Bot online ist. Antwortet mit einer zufälligen, lockeren "Ich lebe noch"-Meldung.
 - **`!clip`** (auch `!createclip`) — Erstellt einen Clip aus dem aktuellen Stream (ungefähr die letzten 60 Sekunden). Optional kann ein Titel mitgegeben werden, z. B. `!clip Unfassbarer Outplay`; ohne Titel wählt der Bot einen Standard-Titel. Der Bot antwortet mit dem Link zum erstellten Clip.
 - **`!dldc`** (auch `!dlde`) — Gibt den hinterlegten Discord-Invite-Link des Streamers aus. Ist kein Link hinterlegt, sagt der Bot das.
-- **`!invite`** — Gibt im laufenden Deadlock-Stream den Community-Discord-Einladungslink aus. Pro Person und Kanal nur einmal innerhalb eines bestimmten Zeitfensters, danach wieder.
+- **`!invite`** — Gibt im laufenden Deadlock-Stream den Community-Discord-Einladungslink aus. Pro Person und Kanal nur einmal innerhalb eines bestimmten Zeitfensters, danach wieder. Streamer, die zu einem anderen Discord-Server gehören, bekommen hier und in der automatischen Werbung nur die Einladung ihres eigenen Servers, nie die der Deutschen Deadlock Community.
 - **`!raid_status`** (auch `!raidbot_status`) — Zeigt an, ob der Auto-Raid für diesen Kanal aktiv ist, plus eine kurze Raid-Statistik und den letzten Raid.
 - **`!raid_history`** (auch `!raidbot_history`) — Zeigt die letzten Raids des Kanals.
 - **`!engagement_status`** — Zeigt, ob der AI-Engagement-Layer für den Kanal an oder aus ist, und wann er zuletzt etwas getan hat.

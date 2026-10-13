@@ -498,6 +498,7 @@ impl ScamJudge for LlmScamJudge {
         );
         match self
             .client
+            .for_channel(dialog.channel_login.clone())
             .messages_completion_uncapped(messages, 0.0, "conversation_scam_judge")
             .await
         {
@@ -1454,6 +1455,7 @@ impl ScamGuardCommands {
 
         let text = match self
             .client
+            .for_channel(channel_login)
             .messages_completion_uncapped(messages, 0.3, "conversation_scam_followup")
             .await
         {
@@ -1566,24 +1568,26 @@ impl LearningCorpus {
 async fn fetch_samples(pool: &PgPool, actions: &[&str], limit: i64) -> Vec<LearningSample> {
     let actions_owned: Vec<String> = actions.iter().map(|s| s.to_string()).collect();
 
-    sqlx::query!(
-        "SELECT category AS \"category!\", \
-                reasoning AS \"reasoning!\", \
-                transcript_snapshot AS \"transcript_snapshot!\" \
+    // Nur Fälle aus Kanälen mit eingeschalteter KI (Paket K, E14): Der Korpus
+    // geht ans Modell. Laufzeit-Query statt `query!`, weil die DB-Funktion
+    // aus derselben Migration stammt wie der Guard.
+    sqlx::query_as::<_, (String, String, String)>(
+        "SELECT category, reasoning, transcript_snapshot \
          FROM twitch_scam_guard_verdicts \
          WHERE verdict = 'scam' AND action_taken = ANY($1::text[]) \
+           AND twitch_streamer_ai_allowed(NULL, channel_login) \
          ORDER BY created_at DESC, id DESC LIMIT $2",
-        &actions_owned,
-        limit,
     )
+    .bind(&actions_owned)
+    .bind(limit)
     .fetch_all(pool)
     .await
     .unwrap_or_default()
     .into_iter()
-    .map(|row| LearningSample {
-        category: row.category,
-        reasoning: row.reasoning,
-        transcript_snapshot: row.transcript_snapshot,
+    .map(|(category, reasoning, transcript_snapshot)| LearningSample {
+        category,
+        reasoning,
+        transcript_snapshot,
     })
     .collect()
 }

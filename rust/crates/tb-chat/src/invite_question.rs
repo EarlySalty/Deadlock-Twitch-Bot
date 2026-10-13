@@ -342,6 +342,8 @@ impl From<&InviteQuestionVerdict> for InviteQuestionLoggedVerdict {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InviteQuestionJudgeInput {
+    /// Twitch-User-ID des Kanals (KI-Schalter pro Server, Paket K).
+    pub broadcaster_id: String,
     pub message: String,
     pub is_newcomer: bool,
     pub is_deadlock_live: bool,
@@ -386,6 +388,7 @@ impl InviteQuestionJudge for LlmInviteQuestionJudge {
 
         match self
             .client
+            .for_broadcaster(input.broadcaster_id.clone())
             .messages_completion_uncapped(messages, 0.0, "invite_question")
             .await
         {
@@ -851,6 +854,7 @@ impl InviteQuestionResponder {
         let verdict = self
             .judge
             .judge(InviteQuestionJudgeInput {
+                broadcaster_id: event.broadcaster_user_id.clone(),
                 message: raw.to_string(),
                 is_newcomer,
                 is_deadlock_live: true,

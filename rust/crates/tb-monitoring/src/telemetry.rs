@@ -811,6 +811,17 @@ impl TelemetryStore {
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
+        // Kanalsprache auch offline aktuell halten (Raids nach Sprache,
+        // Paket R). Best effort nach dem Commit, damit das Protokoll nie an
+        // diesem Zusatz scheitert.
+        if let Some(language) = language {
+            let observed = [(broadcaster_user_id.to_string(), language)];
+            if let Err(error) =
+                tb_db::network::record_broadcaster_languages(&self.pool, &observed).await
+            {
+                tracing::warn!(%error, broadcaster_user_id, "Konnte Kanalsprache nicht speichern");
+            }
+        }
         Ok(())
     }
 }

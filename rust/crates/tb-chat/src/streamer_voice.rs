@@ -205,6 +205,7 @@ impl StreamerVoiceResponder {
             let verdict = self
                 .judge
                 .judge(LfgJudgeInput {
+                    broadcaster_id: event.broadcaster_user_id.clone(),
                     message: event.message.text.clone(),
                     recent_chat: self
                         .recent_chat

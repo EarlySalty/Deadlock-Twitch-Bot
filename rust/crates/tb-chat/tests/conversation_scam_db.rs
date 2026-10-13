@@ -114,6 +114,17 @@ async fn apply_ddl(pool: &PgPool) {
     ] {
         sqlx::query(ddl).execute(pool).await.unwrap();
     }
+    // KI-Schalter pro Server (Paket K): der Lern-Korpus filtert damit.
+    sqlx::raw_sql(include_str!("../../../test-support/multiserver_ai_schema.sql"))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20261012140000_ai_features_rule.sql"
+    ))
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 struct FixedJudge;
@@ -786,7 +797,27 @@ async fn self_learning_korpus_und_persistenz() {
         .unwrap();
     }
 
+    // Ein bestätigter Fall aus einem Kanal, dessen Server die KI aus hat,
+    // geht nicht in den Korpus (Paket K).
+    sqlx::raw_sql(
+        "INSERT INTO discord_guilds (guild_id, ai_features) VALUES (900000000000000001, false); \
+         INSERT INTO streamer_guilds (twitch_user_id, guild_id) VALUES ('fremd-id', 900000000000000001); \
+         INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login) VALUES ('fremd-id', 'fremdkanal'); \
+         INSERT INTO twitch_scam_guard_verdicts \
+             (channel_login, chatter_login, chatter_id, verdict, confidence, category, \
+              reasoning, transcript_snapshot, action_taken) \
+         VALUES ('fremdkanal', 'fremd_scammer', 'fremd_scammer-id', 'scam', 0.9, 'cat', \
+                 'grund-fremd', '[\"msg\"]', 'banned')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
     let corpus = fetch_learning_corpus(&pool, 40).await;
+    assert!(
+        corpus.confirmed.iter().all(|s| s.reasoning != "grund-fremd"),
+        "Fälle fremder Server ohne KI bleiben draußen"
+    );
     assert_eq!(corpus.confirmed.len(), 2, "banned + suggested = bestätigt");
     assert_eq!(corpus.false_positives.len(), 1, "overturned = Fehlalarm");
     assert_eq!(corpus.total(), 3);

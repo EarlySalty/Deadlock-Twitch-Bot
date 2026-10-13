@@ -194,7 +194,9 @@ pub async fn create_schema(pool: &PgPool) {
             discord_display_name TEXT,
             is_on_discord INTEGER DEFAULT 0,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            broadcaster_language TEXT,
+            broadcaster_language_updated_at TIMESTAMPTZ
         )",
         "CREATE UNIQUE INDEX idx_twitch_streamer_identities_login_lower
             ON twitch_streamer_identities(LOWER(twitch_login))",

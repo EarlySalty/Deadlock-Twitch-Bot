@@ -382,15 +382,19 @@ async fn klassifiziere_modell_intern(
     Ok((ergebnis, response.model))
 }
 
+/// Ungelabelte Nachrichten: `(id, content, chatter_login, ki_erlaubt)`.
+/// `ki_erlaubt` ist der KI-Schalter des Servers dieses Kanals (Paket K, E14);
+/// ohne ihn bekommt die Nachricht nur das Regel-Label.
 pub async fn lade_unlabelte(
     pool: &sqlx::PgPool,
     limit: i64,
-) -> Result<Vec<(i64, String, String)>, sqlx::Error> {
-    let rows: Vec<(i64, String, String)> = sqlx::query_as(
+) -> Result<Vec<(i64, String, String, bool)>, sqlx::Error> {
+    let rows: Vec<(i64, String, String, bool)> = sqlx::query_as(
         r#"
         SELECT cm.id,
                COALESCE(cm.content, '') AS content,
-               COALESCE(cm.chatter_login, '') AS chatter_login
+               COALESCE(cm.chatter_login, '') AS chatter_login,
+               twitch_streamer_ai_allowed(NULL, cm.streamer_login) AS ki_erlaubt
         FROM twitch_chat_messages cm
         LEFT JOIN twitch_chat_message_labels l ON l.message_id = cm.id
         WHERE l.message_id IS NULL

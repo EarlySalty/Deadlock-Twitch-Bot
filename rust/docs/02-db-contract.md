@@ -88,6 +88,8 @@ Subsystem, das Schema + primären Schreibpfad besitzt; viele Tabellen werden cro
 |---|---|
 | `discord_invite_codes` | runtime-cog-discord |
 | `twitch_streamer_invites` | storage |
+| `discord_guilds` | multi-server (Paket R/G) |
+| `streamer_guilds` | multi-server (Paket R/G) |
 | `twitch_guild_settings` | runtime-cog-discord |
 | `twitch_live_announcement_configs` | dashboard/live-announce |
 | `twitch_global_promo_modes` | storage |
