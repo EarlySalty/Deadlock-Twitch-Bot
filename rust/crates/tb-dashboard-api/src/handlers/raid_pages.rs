@@ -18,13 +18,14 @@ use std::time::Duration;
 
 use axum::{
     extract::Query,
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Redirect, Response},
 };
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::public_site::{request_site, PublicSite};
 
 const PUBLIC_ONBOARDING_LOGIN: &str = "public:website_onboarding";
 const BASE_SCOPE_PROFILE: &str = "base";
@@ -133,6 +134,7 @@ fn is_admin(auth: &DashboardAuthLevel) -> bool {
 /// `GET /twitch/raid/auth` — startet den Raid-OAuth-Flow.
 pub async fn raid_auth_handler(
     auth: DashboardAuthLevel,
+    headers: HeaderMap,
     Query(q): Query<RaidAuthQuery>,
 ) -> Response {
     let requested_login = q.login.unwrap_or_default().trim().to_lowercase();
@@ -172,6 +174,7 @@ pub async fn raid_auth_handler(
     if !scope_profile.is_empty() {
         path.push_str(&format!("&scope_profile={}", urlencode(&scope_profile)));
     }
+    path.push_str(&raid_site_query(request_site(&headers)));
 
     match bridge_auth_url(&path).await {
         BridgeResult::Url(url) => Redirect::to(&url).into_response(),
@@ -218,6 +221,15 @@ fn expired_link_page() -> Response {
         html,
     )
         .into_response()
+}
+
+/// Startdomain für die interne API (Paket O). Die Hauptdomain bleibt ohne
+/// Zusatz, damit der bisherige Ablauf bytegleich bleibt.
+fn raid_site_query(site: PublicSite) -> String {
+    match site {
+        PublicSite::Primary => String::new(),
+        other => format!("&public_site={}", other.as_str()),
+    }
 }
 
 /// Minimales URL-Encoding für Query-Werte.
@@ -274,6 +286,7 @@ mod tests {
         clear_internal_env();
         let res = raid_auth_handler(
             partner("self"),
+            HeaderMap::new(),
             Query(RaidAuthQuery {
                 login: Some("other".into()),
                 ..Default::default()
@@ -281,6 +294,15 @@ mod tests {
         )
         .await;
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn startdomain_geht_nur_bei_internationaler_domain_mit() {
+        assert_eq!(raid_site_query(PublicSite::Primary), "");
+        assert_eq!(
+            raid_site_query(PublicSite::International),
+            "&public_site=international"
+        );
     }
 
     #[tokio::test]
@@ -297,6 +319,7 @@ mod tests {
         // ohne Internal-Token → 503 (kein Netzaufruf, kein 404-Fallthrough).
         let res = raid_auth_handler(
             admin(),
+            HeaderMap::new(),
             Query(RaidAuthQuery {
                 login: Some("earlysalty".into()),
                 ..Default::default()
@@ -313,6 +336,7 @@ mod tests {
         // erlaubt; Bridge ohne Token → 503 (nicht 401).
         let res = raid_auth_handler(
             DashboardAuthLevel::None,
+            HeaderMap::new(),
             Query(RaidAuthQuery::default()),
         )
         .await;

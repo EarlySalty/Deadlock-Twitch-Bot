@@ -195,7 +195,12 @@ async fn player_connect_public_page_is_accessible_without_partner_and_never_cach
 #[tokio::test]
 async fn player_connect_twitch_login_uses_existing_callback_without_raid_scopes() {
     let (_db, state, _) = fixture().await;
-    let response = twitch_login(Some(Extension(state)), Some(Extension(config()))).await;
+    let response = twitch_login(
+        Some(Extension(state)),
+        Some(Extension(config())),
+        axum::http::HeaderMap::new(),
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     let url = url::Url::parse(response.headers()[LOCATION].to_str().unwrap()).unwrap();
     assert_eq!(url.host_str(), Some("id.twitch.tv"));

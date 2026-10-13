@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
+import { TWITCH_PUBLIC_ORIGIN } from "@/data/externalLinks";
 
-const NETWORK_STATS_API =
-  "https://deutsche-deadlock-community.de/twitch/api/v2/public/network-stats";
+const NETWORK_STATS_API = `${TWITCH_PUBLIC_ORIGIN}/twitch/api/v2/public/network-stats`;
 
 export interface NetworkStats {
   activePartners: number;

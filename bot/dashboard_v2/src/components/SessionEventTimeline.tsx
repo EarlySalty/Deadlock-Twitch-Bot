@@ -3,6 +3,8 @@ import { Pencil, Gamepad2, ArrowDownLeft, ArrowUpRight, Heart, Calendar } from '
 import type { SessionEvent } from '@/types/analytics';
 import { NoDataCard } from '@/components/cards/NoDataCard';
 import { Loader2 } from 'lucide-react';
+import { useT } from '../context/LanguageContext';
+import { tr } from '../i18n/dictionary';
 
 interface SessionEventTimelineProps {
   events: SessionEvent | undefined;
@@ -31,7 +33,6 @@ function buildTimelineEntries(events: SessionEvent, sessionStart: string): Timel
   const startMs = new Date(sessionStart).getTime();
   const entries: TimelineEntry[] = [];
 
-  // Channel updates — detect what changed
   let prevTitle: string | null = null;
   let prevGame: string | null = null;
 
@@ -46,8 +47,8 @@ function buildTimelineEntries(events: SessionEvent, sessionStart: string): Timel
         relativeMin: relMin,
         icon: <Gamepad2 className="w-4 h-4" />,
         color: 'text-accent',
-        label: 'Spiel gewechselt',
-        detail: cu.game || 'Unbekannt',
+        label: tr('Spiel gewechselt'),
+        detail: cu.game || tr('Unbekannt'),
       });
     }
 
@@ -57,21 +58,15 @@ function buildTimelineEntries(events: SessionEvent, sessionStart: string): Timel
         relativeMin: relMin,
         icon: <Pencil className="w-4 h-4" />,
         color: 'text-warning',
-        label: 'Titel geandert',
+        label: tr('Titel geandert'),
         detail: cu.title || '',
       });
-    }
-
-    // If it's the first update and nothing "changed" yet, still show it if there's useful info
-    if (prevTitle === null && prevGame === null && entries.length === 0) {
-      // Skip the very first record as it's the initial state
     }
 
     prevTitle = cu.title;
     prevGame = cu.game;
   }
 
-  // Raids
   for (const raid of events.raids) {
     const relMin = (new Date(raid.at).getTime() - startMs) / 60000;
     const isIncoming = raid.direction === 'incoming';
@@ -82,12 +77,11 @@ function buildTimelineEntries(events: SessionEvent, sessionStart: string): Timel
         ? <ArrowDownLeft className="w-4 h-4" />
         : <ArrowUpRight className="w-4 h-4" />,
       color: isIncoming ? 'text-success' : 'text-primary',
-      label: isIncoming ? 'Eingehender Raid' : 'Ausgehender Raid',
-      detail: `${raid.channel} (${raid.viewers} Viewer)`,
+      label: isIncoming ? tr('Eingehender Raid') : tr('Ausgehender Raid'),
+      detail: tr('{channel} ({viewers} Viewer)', { channel: raid.channel, viewers: raid.viewers }),
     });
   }
 
-  // Follow spikes (only show minutes with >= 2 follows to reduce noise)
   for (const f of events.follows_per_minute) {
     if (f.count < 2) continue;
     const relMin = (new Date(f.minute).getTime() - startMs) / 60000;
@@ -96,24 +90,24 @@ function buildTimelineEntries(events: SessionEvent, sessionStart: string): Timel
       relativeMin: relMin,
       icon: <Heart className="w-4 h-4" />,
       color: 'text-info',
-      label: 'Follow-Spike',
-      detail: `${f.count} neue Follower`,
+      label: tr('Follow-Spike'),
+      detail: tr('{count} neue Follower', { count: f.count }),
     });
   }
 
-  // Sort by time
   entries.sort((a, b) => a.relativeMin - b.relativeMin);
 
   return entries;
 }
 
 export function SessionEventTimeline({ events, sessionStart, loading }: SessionEventTimelineProps) {
+  const t = useT();
   if (loading) {
     return (
       <div className="bg-card rounded-xl border border-border p-5">
         <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
           <Calendar className="w-5 h-5 text-accent" />
-          Session Events
+          {t('Session Events')}
         </h3>
         <div className="flex items-center justify-center h-32">
           <Loader2 className="w-6 h-6 animate-spin text-primary" />
@@ -131,11 +125,11 @@ export function SessionEventTimeline({ events, sessionStart, loading }: SessionE
       <div className="bg-card rounded-xl border border-border p-5">
         <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
           <Calendar className="w-5 h-5 text-accent" />
-          Session Events
+          {t('Session Events')}
         </h3>
         <NoDataCard
-          message="Keine Events wahrend dieser Session"
-          submessage="Titel-/Spielwechsel, Raids und Follow-Spikes werden hier angezeigt."
+          message={t('Keine Events wahrend dieser Session')}
+          submessage={t('Titel-/Spielwechsel, Raids und Follow-Spikes werden hier angezeigt.')}
         />
       </div>
     );
@@ -145,10 +139,9 @@ export function SessionEventTimeline({ events, sessionStart, loading }: SessionE
     <div className="bg-card rounded-xl border border-border p-5">
       <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
         <Calendar className="w-5 h-5 text-accent" />
-        Session Events ({entries.length})
+        {t('Session Events ({count})', { count: entries.length })}
       </h3>
       <div className="relative pl-6">
-        {/* Vertical line */}
         <div className="absolute left-[11px] top-2 bottom-2 w-px bg-border" />
 
         <div className="space-y-4">
@@ -160,7 +153,6 @@ export function SessionEventTimeline({ events, sessionStart, loading }: SessionE
               transition={{ delay: Math.min(i * 0.04, 0.24) }}
               className="relative flex items-start gap-3"
             >
-              {/* Dot on the line */}
               <div className={`absolute -left-6 mt-1 w-[22px] h-[22px] rounded-full bg-bg border-2 border-border flex items-center justify-center ${entry.color}`}>
                 {entry.icon}
               </div>

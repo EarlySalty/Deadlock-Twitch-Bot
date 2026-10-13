@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Menu, X } from "lucide-react";
+import { tx } from "@/i18n/locale";
 
 interface NavLink {
   label: string;
@@ -80,10 +81,10 @@ export function PublicInfoHeader({
           href="/twitch/onboarding"
           className="min-w-0 bg-gradient-to-r from-primary to-accent bg-clip-text text-base sm:text-xl leading-tight font-bold font-display text-transparent no-underline"
         >
-          Deutsche Deadlock Community
+          {tx("Deutsche Deadlock Community", "Deadlock Partner Network")}
 </a>
 
-        <nav className="hidden shrink-0 items-center gap-6 xl:flex" aria-label="Seitennavigation">
+        <nav className="hidden shrink-0 items-center gap-6 xl:flex" aria-label={tx("Seitennavigation", "Site navigation")}>
           {navLinks.map((link) => (
             <a
               key={link.href}
@@ -104,7 +105,7 @@ export function PublicInfoHeader({
           type="button"
           className="shrink-0 border-0 bg-transparent p-2 text-text-secondary transition-colors duration-200 hover:text-text-primary xl:hidden"
           onClick={() => setMenuOpen((value) => !value)}
-          aria-label={menuOpen ? "Navigation schließen" : "Navigation öffnen"}
+          aria-label={menuOpen ? tx("Navigation schließen", "Close navigation") : tx("Navigation öffnen", "Open navigation")}
           aria-expanded={menuOpen}
           ref={menuButton}
           aria-controls="public-mobile-navigation"
@@ -114,7 +115,7 @@ export function PublicInfoHeader({
       </div>
 
       {menuOpen ? (
-        <nav id="public-mobile-navigation" aria-label="Seitennavigation" className="glass border-t border-border max-h-[calc(100dvh-4rem)] overflow-y-auto xl:hidden">
+        <nav id="public-mobile-navigation" aria-label={tx("Seitennavigation", "Site navigation")} className="glass border-t border-border max-h-[calc(100dvh-4rem)] overflow-y-auto xl:hidden">
           <div className="mx-auto flex max-w-7xl flex-col gap-2 px-6 py-4">
             {navLinks.map((link) => (
               <a

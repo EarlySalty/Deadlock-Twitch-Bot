@@ -1,6 +1,6 @@
-//! Kanalbezogene Chat-Command-Namen für Partner und Admins.
 use crate::auth::level::DashboardAuthLevel;
 use crate::auth::streamer_scope::resolve_settings_target as resolve_target;
+use crate::language::RequestLanguage;
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -16,6 +16,7 @@ use tb_chat::command_names::{
     conflicting_command, effective_aliases, effective_name, entry_by_key, key,
     normalize_custom_name, normalize_saved_name, CommandNameValidationError,
 };
+use tb_domain::DashboardLanguage;
 
 #[derive(Deserialize, Default)]
 pub struct CommandNameQuery {
@@ -66,15 +67,19 @@ fn validation_error(error: CommandNameValidationError) -> Response {
         .into_response()
 }
 
-fn conflict_error(candidate: &str, conflict: &tb_chat::catalog::CommandInfo) -> Response {
+fn conflict_error(
+    candidate: &str,
+    conflict: &tb_chat::catalog::CommandInfo,
+    lang: DashboardLanguage,
+) -> Response {
+    let name = conflict.name;
     (
         StatusCode::CONFLICT,
         Json(json!({
             "error":"name_conflict",
-            "message": format!(
-                "{} wird in deinem Kanal bereits für {} verwendet.",
-                candidate,
-                conflict.name
+            "message": lang.pick(
+                format!("{candidate} wird in deinem Kanal bereits für {name} verwendet."),
+                format!("{candidate} is already used for {name} in your channel."),
             ),
             "conflict_command": key(conflict)
         })),
@@ -137,6 +142,7 @@ pub async fn post_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Query(query): Query<CommandNameQuery>,
+    RequestLanguage(lang): RequestLanguage,
     body: Result<Json<CommandNameUpdate>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
     let (login, user_id) = match resolve_target(&auth, &query.streamer) {
@@ -214,13 +220,13 @@ pub async fn post_handler(
 
     if let Some(candidate) = requested_name.as_deref() {
         if let Some(conflict) = conflicting_command(command_key, candidate, &overrides) {
-            return conflict_error(candidate, conflict);
+            return conflict_error(candidate, conflict, lang);
         }
         overrides.insert(command_key.to_string(), candidate.to_string());
     } else {
         for candidate in std::iter::once(entry.name).chain(entry.aliases.iter().copied()) {
             if let Some(conflict) = conflicting_command(command_key, candidate, &overrides) {
-                return conflict_error(candidate, conflict);
+                return conflict_error(candidate, conflict, lang);
             }
         }
         overrides.remove(command_key);
@@ -333,6 +339,7 @@ mod tests {
             partner("42"),
             State(pool.clone()),
             Query(CommandNameQuery::default()),
+            RequestLanguage::default(),
             Ok(Json(CommandNameUpdate {
                 command: "raid".into(),
                 name: Some("DACHRAID".into()),
@@ -369,6 +376,7 @@ mod tests {
             partner("42"),
             State(pool.clone()),
             Query(CommandNameQuery::default()),
+            RequestLanguage::default(),
             Ok(Json(CommandNameUpdate {
                 command: "raid".into(),
                 name: None,
@@ -400,6 +408,7 @@ mod tests {
                 partner("42"),
                 State(pool.clone()),
                 Query(CommandNameQuery::default()),
+                RequestLanguage::default(),
                 Ok(Json(CommandNameUpdate {
                     command: "raid".into(),
                     name: Some(name.into()),
@@ -413,6 +422,7 @@ mod tests {
             partner("42"),
             State(pool.clone()),
             Query(CommandNameQuery::default()),
+            RequestLanguage::default(),
             Ok(Json(CommandNameUpdate {
                 command: "gibt-es-nicht".into(),
                 name: Some("!x".into()),
@@ -425,6 +435,7 @@ mod tests {
             partner("42"),
             State(pool.clone()),
             Query(CommandNameQuery::default()),
+            RequestLanguage::default(),
             Ok(Json(CommandNameUpdate {
                 command: "raid".into(),
                 name: Some("!ping".into()),
@@ -470,6 +481,7 @@ mod tests {
             partner("42"),
             State(database.pool.clone()),
             Query(CommandNameQuery::default()),
+            RequestLanguage::default(),
             Ok(Json(CommandNameUpdate {
                 command: "raid".into(),
                 name: Some("!anderer_raid".into()),
@@ -495,6 +507,7 @@ mod tests {
                 partner("42"),
                 State(database.pool.clone()),
                 Query(CommandNameQuery::default()),
+                RequestLanguage::default(),
                 Ok(Json(CommandNameUpdate {
                     command: "raid_history".into(),
                     name: None,
@@ -518,6 +531,7 @@ mod tests {
                     partner("42"),
                     State(pool.clone()),
                     Query(CommandNameQuery::default()),
+                    RequestLanguage::default(),
                     Ok(Json(CommandNameUpdate {
                         command: command.into(),
                         name: Some(name.into()),
@@ -533,6 +547,7 @@ mod tests {
             partner("42"),
             State(pool.clone()),
             Query(CommandNameQuery::default()),
+            RequestLanguage::default(),
             Ok(Json(CommandNameUpdate {
                 command: "ping".into(),
                 name: None,
@@ -561,6 +576,7 @@ mod tests {
                 partner("42"),
                 State(pool.clone()),
                 Query(CommandNameQuery::default()),
+                RequestLanguage::default(),
                 Ok(Json(CommandNameUpdate {
                     command: "raid".into(),
                     name: Some("!meinraid".into()),
@@ -585,6 +601,7 @@ mod tests {
                 Query(CommandNameQuery {
                     streamer: Some("anderer".into()),
                 }),
+                RequestLanguage::default(),
                 Ok(Json(CommandNameUpdate {
                     command: "raid".into(),
                     name: Some("!andererraid".into()),
@@ -616,6 +633,7 @@ mod tests {
                 partner("42"),
                 State(database.pool),
                 Query(CommandNameQuery::default()),
+                RequestLanguage::default(),
                 payload,
             )
             .await

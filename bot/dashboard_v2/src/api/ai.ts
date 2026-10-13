@@ -1,4 +1,5 @@
-import { buildApiUrl, fetchApi, withCookieCredentials } from './core';
+import { buildApiUrl, fetchApi, withCookieCredentials, withLanguageHeader } from './core';
+import { tr } from '../i18n/dictionary';
 import type { AIAnalysisResult, AIChatResponse, AIHistoryEntry } from '@/types/analytics';
 
 export class AIChatRateLimitError extends Error {
@@ -38,9 +39,10 @@ export async function fetchAIChat(
   analysisId: number,
   message: string
 ): Promise<AIChatResponse> {
+  const url = buildApiUrl('/ai/chat');
   const response = await fetch(
-    buildApiUrl('/ai/chat'),
-    withCookieCredentials({
+    url,
+    withLanguageHeader(url, withCookieCredentials({
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -51,7 +53,7 @@ export async function fetchAIChat(
         analysis_id: analysisId,
         message,
       }),
-    })
+    }))
   );
 
   const payload = await response.json().catch(() => null) as {
@@ -61,9 +63,11 @@ export async function fetchAIChat(
     rateLimitReset?: number;
   } | null;
 
+  const backendMessage = payload?.message || payload?.error;
+
   if (response.status === 429) {
     throw new AIChatRateLimitError(
-      payload?.message || payload?.error || 'Rückfragen-Limit erreicht',
+      backendMessage ? tr(backendMessage) : tr('Rückfragen-Limit erreicht'),
       {
         retryAfter: payload?.retry_after,
         rateLimitReset: payload?.rateLimitReset,
@@ -72,7 +76,9 @@ export async function fetchAIChat(
   }
 
   if (!response.ok) {
-    throw new Error(payload?.message || payload?.error || `Server-Fehler (HTTP ${response.status})`);
+    throw new Error(
+      backendMessage ? tr(backendMessage) : tr('Server-Fehler (HTTP {status})', { status: response.status })
+    );
   }
 
   return payload as AIChatResponse;

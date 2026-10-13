@@ -169,6 +169,34 @@ async fn apply_ddl(pool: &PgPool) {
             stream_title TEXT,
             tags TEXT
         )"#,
+        r#"CREATE TABLE discord_guilds (
+            guild_id BIGINT PRIMARY KEY CHECK (guild_id > 0),
+            name TEXT NOT NULL DEFAULT '',
+            language TEXT NOT NULL DEFAULT 'en',
+            announce_channel_id BIGINT,
+            alert_channel_id BIGINT,
+            streamer_role_id BIGINT,
+            ping_role_id BIGINT,
+            promo_invite_url TEXT,
+            auto_partner_default BOOLEAN NOT NULL DEFAULT TRUE,
+            cross_server_raids BOOLEAN NOT NULL DEFAULT TRUE,
+            ai_features BOOLEAN NOT NULL DEFAULT FALSE,
+            status TEXT NOT NULL DEFAULT 'active',
+            installed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            removed_at TIMESTAMPTZ,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_by TEXT
+        )"#,
+        r#"CREATE TABLE streamer_guilds (
+            twitch_user_id TEXT NOT NULL,
+            guild_id BIGINT NOT NULL REFERENCES discord_guilds(guild_id) ON DELETE CASCADE,
+            active BOOLEAN NOT NULL DEFAULT TRUE,
+            deactivated_by TEXT,
+            deactivated_at TIMESTAMPTZ,
+            joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            source TEXT NOT NULL DEFAULT 'onboarding',
+            PRIMARY KEY (twitch_user_id, guild_id)
+        )"#,
     ] {
         sqlx::query(ddl).execute(pool).await.unwrap();
     }
@@ -186,6 +214,7 @@ fn default_args(login: &str, uid: &str) -> PromotePartnerArgs {
         is_on_discord: 0,
         activate_partner_features: true,
         clear_source: true,
+        guild_id: None,
     }
 }
 
@@ -1228,6 +1257,21 @@ async fn signup_block_ohne_eigenen_text_nutzt_standard() {
     let block = result.signup_block.expect("Block erwartet");
     assert_eq!(block.public_text(), tb_domain::SIGNUP_BLOCK_BODY);
     assert!(block.public_text().contains("repräsentieren"));
+}
+
+#[tokio::test]
+async fn promote_schreibt_aktive_streamer_guilds_zeile() {
+    let pool = pool_or_skip!("ps_guild_write");
+    promote(&pool, &default_args("guilded", "4242")).await;
+    let row: (i64, bool, String) = sqlx::query_as(
+        "SELECT guild_id, active, source FROM streamer_guilds WHERE twitch_user_id = '4242'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(row.0, tb_raid::partner_setup::COMMUNITY_GUILD_ID);
+    assert!(row.1);
+    assert_eq!(row.2, "onboarding");
 }
 
 include!("fixtures/streamer_referral_cases.rs");

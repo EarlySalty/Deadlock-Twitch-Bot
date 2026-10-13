@@ -2,6 +2,7 @@
 
 pub mod error;
 pub mod migrate;
+pub mod network;
 pub mod pool;
 pub mod retry;
 pub mod rows;

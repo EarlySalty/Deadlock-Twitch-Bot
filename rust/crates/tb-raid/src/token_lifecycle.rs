@@ -39,7 +39,7 @@ pub const TOKEN_ERROR_CHANNEL_ID: i64 = 1374364800817303632;
 /// erste Punkt, über den der Streamer den Bot neu autorisiert — damit gilt das
 /// Dashboard sofort wieder als vertraut. Bewusst kein einzelner OAuth-State-Link:
 /// Der kann ungenutzt ablaufen und wäre danach wertlos.
-pub const DEFAULT_REAUTH_URL: &str = "https://deutsche-deadlock-community.de/twitch/verwaltung";
+pub const DEFAULT_REAUTH_URL: &str = tb_config::primary_url!("/twitch/verwaltung");
 
 /// Obergrenze an Kanälen pro aktivem Ban-Sweep. Reine Sicherheitsleine gegen
 /// einen Helix-Ansturm, wenn die Partner-Zahl unerwartet wächst.
@@ -51,7 +51,7 @@ const BAN_PROBE_DELAY: std::time::Duration = std::time::Duration::from_millis(12
 
 /// Anker der Bot-Sektion im Verwaltungs-Dashboard. Dort unten sitzt
 /// "Bot vom Kanal trennen" — der einzige saubere Weg, den Bot loszuwerden.
-pub const BOT_SECTION_URL: &str = "https://deutsche-deadlock-community.de/twitch/verwaltung#bot";
+pub const BOT_SECTION_URL: &str = tb_config::primary_url!("/twitch/verwaltung#bot");
 
 /// Twitch-Login des Bots, wie ihn der Streamer in seinem Chat tippt. Per Env
 /// `BOT_TWITCH_LOGIN` überschreibbar.
@@ -226,33 +226,75 @@ pub fn admin_ban_probe_rueckname_text(twitch_login: &str) -> (String, String) {
 /// nackten OAuth-Link: nach der Neu-Autorisierung im ersten Punkt
 /// "Twitch-Verbindung" gilt das Dashboard sofort wieder als vertraut.
 pub fn user_dm_token_error_text(twitch_login: &str, reauth_url: &str) -> String {
-    format!(
-        "⚠️ **Twitch-Verbindung fehlgeschlagen**\n\n\
-         Die Verbindung für **{twitch_login}** ist abgelaufen (z. B. nach Passwort- \
-         oder 2FA-Änderung). Auto-Raid, Chat-Schutz und Analytics pausieren, bis sie \
-         wieder steht.\n\n\
-         **So verbindest du neu:**\n\
-         1️⃣ Dashboard öffnen: {reauth_url}\n\
-         2️⃣ Erster Punkt **Twitch-Verbindung**\n\
-         3️⃣ **Bot neu autorisieren** klicken\n\n\
-         Danach läuft alles von allein weiter.\n\n\
-         ⏳ Du hast {GRACE_PERIOD_DAYS} Tage, danach entfällt die Streamer-Rolle.\n\n\
-         Willst du kein Partner mehr sein, ignorier die Nachricht einfach."
-    )
+    user_dm_token_error_text_for(tb_domain::UiLang::De, twitch_login, reauth_url)
+}
+
+pub fn user_dm_token_error_text_for(
+    lang: tb_domain::UiLang,
+    twitch_login: &str,
+    reauth_url: &str,
+) -> String {
+    match lang {
+        tb_domain::UiLang::De => format!(
+            "⚠️ **Twitch-Verbindung fehlgeschlagen**\n\n\
+             Die Verbindung für **{twitch_login}** ist abgelaufen (z. B. nach Passwort- \
+             oder 2FA-Änderung). Auto-Raid, Chat-Schutz und Analytics pausieren, bis sie \
+             wieder steht.\n\n\
+             **So verbindest du neu:**\n\
+             1️⃣ Dashboard öffnen: {reauth_url}\n\
+             2️⃣ Erster Punkt **Twitch-Verbindung**\n\
+             3️⃣ **Bot neu autorisieren** klicken\n\n\
+             Danach läuft alles von allein weiter.\n\n\
+             ⏳ Du hast {GRACE_PERIOD_DAYS} Tage, danach entfällt die Streamer-Rolle.\n\n\
+             Willst du kein Partner mehr sein, ignorier die Nachricht einfach."
+        ),
+        tb_domain::UiLang::En => format!(
+            "⚠️ **Twitch connection failed**\n\n\
+             The connection for **{twitch_login}** has expired (for example after a password \
+             or 2FA change). Auto-raid, chat protection and analytics pause until it is back.\n\n\
+             **How to reconnect:**\n\
+             1️⃣ Open the dashboard: {reauth_url}\n\
+             2️⃣ First item **Twitch connection**\n\
+             3️⃣ Click **Re-authorize bot**\n\n\
+             After that everything continues on its own.\n\n\
+             ⏳ You have {GRACE_PERIOD_DAYS} days, then the streamer role is removed.\n\n\
+             If you no longer want to be a partner, just ignore the message."
+        ),
+    }
 }
 
 /// User-DM-Text als Grace-Reminder (Python `is_reminder=True`).
 pub fn user_dm_reminder_text(twitch_login: &str, reauth_url: &str) -> String {
-    format!(
-        "⚠️ **Twitch-Verbindung fehlt weiterhin**\n\n\
-         Für **{twitch_login}** ist die Verbindung seit {GRACE_PERIOD_DAYS} Tagen \
-         offen. Die Bot-Funktionen bleiben so lange aus.\n\n\
-         **So verbindest du neu:**\n\
-         1️⃣ Dashboard öffnen: {reauth_url}\n\
-         2️⃣ Erster Punkt **Twitch-Verbindung**\n\
-         3️⃣ **Bot neu autorisieren** klicken\n\n\
-         Willst du kein Partner mehr sein, ignorier die Nachricht einfach."
-    )
+    user_dm_reminder_text_for(tb_domain::UiLang::De, twitch_login, reauth_url)
+}
+
+pub fn user_dm_reminder_text_for(
+    lang: tb_domain::UiLang,
+    twitch_login: &str,
+    reauth_url: &str,
+) -> String {
+    match lang {
+        tb_domain::UiLang::De => format!(
+            "⚠️ **Twitch-Verbindung fehlt weiterhin**\n\n\
+             Für **{twitch_login}** ist die Verbindung seit {GRACE_PERIOD_DAYS} Tagen \
+             offen. Die Bot-Funktionen bleiben so lange aus.\n\n\
+             **So verbindest du neu:**\n\
+             1️⃣ Dashboard öffnen: {reauth_url}\n\
+             2️⃣ Erster Punkt **Twitch-Verbindung**\n\
+             3️⃣ **Bot neu autorisieren** klicken\n\n\
+             Willst du kein Partner mehr sein, ignorier die Nachricht einfach."
+        ),
+        tb_domain::UiLang::En => format!(
+            "⚠️ **Twitch connection is still missing**\n\n\
+             For **{twitch_login}** the connection has been open for {GRACE_PERIOD_DAYS} days. \
+             Bot features stay off until then.\n\n\
+             **How to reconnect:**\n\
+             1️⃣ Open the dashboard: {reauth_url}\n\
+             2️⃣ First item **Twitch connection**\n\
+             3️⃣ Click **Re-authorize bot**\n\n\
+             If you no longer want to be a partner, just ignore the message."
+        ),
+    }
 }
 
 /// User-DM-Text bei Kanal-seitigem Bot-Ban (Python `_send_user_dm_bot_banned`).
@@ -264,21 +306,45 @@ pub fn user_dm_reminder_text(twitch_login: &str, reauth_url: &str) -> String {
 /// entbannen (sonst kann der Bot seine Mod-Rechte nicht abgeben) und dann im
 /// Dashboard trennen.
 pub fn user_dm_bot_banned_text(twitch_login: &str, _error_message: &str) -> String {
+    user_dm_bot_banned_text_for(tb_domain::UiLang::De, twitch_login, _error_message)
+}
+
+pub fn user_dm_bot_banned_text_for(
+    lang: tb_domain::UiLang,
+    twitch_login: &str,
+    _error_message: &str,
+) -> String {
     let bot = bot_twitch_login();
-    format!(
-        "⚠️ **Der Bot ist in deinem Kanal blockiert**\n\n\
-         Der Bot wurde in **{twitch_login}** gebannt oder als Moderator entfernt. \
-         Auto-Raid, Chat-Schutz und Analytics pausieren so lange.\n\n\
-         **War das ein Versehen?** Zwei Befehle in deinem Chat:\n\
-         1️⃣ `/unban {bot}`\n\
-         2️⃣ `/mod {bot}`\n\n\
-         Danach läuft alles von allein wieder an.\n\n\
-         **Willst du den Bot loswerden?** Bitte in dieser Reihenfolge:\n\
-         1️⃣ `/unban {bot}` in deinem Chat (ohne das behält der Bot seine Rechte)\n\
-         2️⃣ {BOT_SECTION_URL} öffnen\n\
-         3️⃣ Ganz unten **Bot vom Kanal trennen** klicken\n\n\
-         Damit ist er sauber raus und wird nicht mehr für dich tätig."
-    )
+    match lang {
+        tb_domain::UiLang::De => format!(
+            "⚠️ **Der Bot ist in deinem Kanal blockiert**\n\n\
+             Der Bot wurde in **{twitch_login}** gebannt oder als Moderator entfernt. \
+             Auto-Raid, Chat-Schutz und Analytics pausieren so lange.\n\n\
+             **War das ein Versehen?** Zwei Befehle in deinem Chat:\n\
+             1️⃣ `/unban {bot}`\n\
+             2️⃣ `/mod {bot}`\n\n\
+             Danach läuft alles von allein wieder an.\n\n\
+             **Willst du den Bot loswerden?** Bitte in dieser Reihenfolge:\n\
+             1️⃣ `/unban {bot}` in deinem Chat (ohne das behält der Bot seine Rechte)\n\
+             2️⃣ {BOT_SECTION_URL} öffnen\n\
+             3️⃣ Ganz unten **Bot vom Kanal trennen** klicken\n\n\
+             Damit ist er sauber raus und wird nicht mehr für dich tätig."
+        ),
+        tb_domain::UiLang::En => format!(
+            "⚠️ **The bot is blocked in your channel**\n\n\
+             The bot was banned in **{twitch_login}** or removed as a moderator. \
+             Auto-raid, chat protection and analytics pause until then.\n\n\
+             **Was that an accident?** Two commands in your chat:\n\
+             1️⃣ `/unban {bot}`\n\
+             2️⃣ `/mod {bot}`\n\n\
+             After that everything starts again on its own.\n\n\
+             **Want to get rid of the bot?** Please in this order:\n\
+             1️⃣ `/unban {bot}` in your chat (without that the bot keeps its rights)\n\
+             2️⃣ Open {BOT_SECTION_URL}\n\
+             3️⃣ At the bottom click **Disconnect bot from channel**\n\n\
+             Then it is cleanly out and will no longer act for you."
+        ),
+    }
 }
 
 /// Python-Parität für `_get_discord_user_id`: nur rein numerische IDs zählen.
@@ -1866,6 +1932,15 @@ mod tests {
         assert!(text.contains("https://deutsche-deadlock-community.de/twitch/verwaltung"));
         assert!(text.contains("Twitch-Verbindung"));
         assert!(text.contains("Bot neu autorisieren"));
+    }
+
+    #[test]
+    fn token_error_dm_english_catalog_has_no_em_dash() {
+        let de = user_dm_token_error_text("foo", DEFAULT_REAUTH_URL);
+        let en = user_dm_token_error_text_for(tb_domain::UiLang::En, "foo", DEFAULT_REAUTH_URL);
+        assert_ne!(de, en);
+        assert!(en.contains(DEFAULT_REAUTH_URL));
+        assert!(!en.contains('\u{2014}'));
     }
 
     #[test]

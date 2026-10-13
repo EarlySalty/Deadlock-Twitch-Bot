@@ -23,21 +23,21 @@ use crate::auth::level::DashboardAuthLevel;
 const STATE_TTL_SECONDS: i64 = 600;
 const KICK_AUTHORIZE: &str = "https://id.kick.com/oauth/authorize";
 const GOOGLE_AUTHORIZE: &str = "https://accounts.google.com/o/oauth2/v2/auth";
-const KICK_DEFAULT_REDIRECT: &str = "https://deutsche-deadlock-community.de/callback/kick";
-const YOUTUBE_DEFAULT_REDIRECT: &str = "https://deutsche-deadlock-community.de/callback/youtube";
+const KICK_CALLBACK_PATH: &str = "/callback/kick";
+const YOUTUBE_CALLBACK_PATH: &str = "/callback/youtube";
 
 pub fn kick_redirect_uri() -> String {
     crate::uplink_config::runtime()
         .ok()
         .map(|runtime| runtime.kick_redirect_uri.clone())
-        .unwrap_or_else(|| KICK_DEFAULT_REDIRECT.to_string())
+        .unwrap_or_else(|| tb_config::PublicSite::Primary.url(KICK_CALLBACK_PATH))
 }
 
 pub fn youtube_redirect_uri() -> String {
     crate::uplink_config::runtime()
         .ok()
         .map(|runtime| runtime.youtube_redirect_uri.clone())
-        .unwrap_or_else(|| YOUTUBE_DEFAULT_REDIRECT.to_string())
+        .unwrap_or_else(|| tb_config::PublicSite::Primary.url(YOUTUBE_CALLBACK_PATH))
 }
 
 pub fn kick_konfiguriert() -> bool {
@@ -255,6 +255,7 @@ pub async fn connect_kick_start_handler(
     State(pool): State<PgPool>,
     config: Option<Extension<PlatformTokenConfig>>,
     auth: DashboardAuthLevel,
+    headers: axum::http::HeaderMap,
 ) -> Response {
     let Some(_client) = KickOAuth::aus_konfiguration() else {
         return nicht_eingerichtet("Kick ist auf dieser Instanz noch nicht eingerichtet");
@@ -270,7 +271,8 @@ pub async fn connect_kick_start_handler(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let redirect_uri = kick_redirect_uri();
+    // Paket O: Rücksprung auf die Startdomain (Allowlist), URI wandert im State mit.
+    let redirect_uri = crate::public_site::request_site(&headers).rebase(&kick_redirect_uri());
     let state_token = tb_crypto::random_urlsafe_token(32);
     let verifier = pkce_verifier();
     let challenge = pkce_challenge(&verifier);
@@ -304,6 +306,7 @@ pub async fn connect_youtube_start_handler(
     State(pool): State<PgPool>,
     config: Option<Extension<PlatformTokenConfig>>,
     auth: DashboardAuthLevel,
+    headers: axum::http::HeaderMap,
 ) -> Response {
     let Some(_client) = GoogleOAuth::aus_konfiguration() else {
         return nicht_eingerichtet("YouTube ist auf dieser Instanz noch nicht eingerichtet");
@@ -318,7 +321,8 @@ pub async fn connect_youtube_start_handler(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let redirect_uri = youtube_redirect_uri();
+    // Paket O: Rücksprung auf die Startdomain (Allowlist), URI wandert im State mit.
+    let redirect_uri = crate::public_site::request_site(&headers).rebase(&youtube_redirect_uri());
     let state_token = tb_crypto::random_urlsafe_token(32);
     if let Err(error) = persist_connect_state(
         &pool,
@@ -780,12 +784,17 @@ mod tests {
     #[test]
     fn redirect_defaults_liegen_auf_der_domain() {
         assert_eq!(
-            KICK_DEFAULT_REDIRECT,
+            tb_config::PublicSite::Primary.url(KICK_CALLBACK_PATH),
             "https://deutsche-deadlock-community.de/callback/kick"
         );
         assert_eq!(
-            YOUTUBE_DEFAULT_REDIRECT,
+            tb_config::PublicSite::Primary.url(YOUTUBE_CALLBACK_PATH),
             "https://deutsche-deadlock-community.de/callback/youtube"
+        );
+        assert_eq!(
+            tb_config::PublicSite::International
+                .rebase(&tb_config::PublicSite::Primary.url(KICK_CALLBACK_PATH)),
+            "https://dead-lock.de/callback/kick"
         );
     }
 

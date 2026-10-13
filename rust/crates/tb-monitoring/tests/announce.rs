@@ -189,6 +189,8 @@ fn sink_with_vod_and_profile(
             alert_mention: Some("<@&777>".to_string()),
             ref_code: Some("dc".to_string()),
             target_game: "Deadlock".to_string(),
+            guild_id: Some(tb_domain::COMMUNITY_GUILD_ID),
+            guild_language: None,
         },
         live_ping_role_provider,
     )

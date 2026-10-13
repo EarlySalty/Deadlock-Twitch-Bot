@@ -629,3 +629,63 @@ fn bot_rolle_und_discord_chat_defaults_bleiben_getrennt() {
     assert!(parse(&format!("{VALID}\n[bot]\nlegacy_internal_api_port=8766")).is_err());
     assert!(parse(&format!("{VALID}\n[discord.chat]\nmoderation_alert_channel_id=0")).is_err());
 }
+
+#[test]
+fn ohne_hub_eintrag_bleibt_der_broker_ziel_und_hub_token_wird_nicht_gelesen() {
+    let snapshot = parse(VALID).unwrap();
+    let queries = std::cell::RefCell::new(Vec::new());
+    let runtime = snapshot
+        .runtime_settings(&|key| {
+            queries.borrow_mut().push(key.to_string());
+            Some(format!("wert-{key}"))
+        })
+        .unwrap();
+    assert_eq!(runtime.broker.base_url, "http://127.0.0.1:18770");
+    assert_eq!(runtime.broker.token, "wert-MASTER_BROKER_TOKEN");
+    assert!(!queries
+        .borrow()
+        .iter()
+        .any(|key| key == "DISCORD_HUB_INTERNAL_TOKEN"));
+}
+
+#[test]
+fn hub_eintrag_schaltet_auf_den_hub_um() {
+    let text = VALID.replace(
+        "base_url = \"http://127.0.0.1:18770\"",
+        "base_url = \"http://127.0.0.1:18770\"\ndiscord_hub_base_url = \"http://127.0.0.1:18790\"",
+    );
+    let snapshot = parse(&text).unwrap();
+    let runtime = snapshot
+        .runtime_settings(&|key| Some(format!("wert-{key}")))
+        .unwrap();
+    assert_eq!(runtime.broker.base_url, "http://127.0.0.1:18790");
+    assert_eq!(runtime.broker.token, "wert-DISCORD_HUB_INTERNAL_TOKEN");
+
+    // Ohne eigenes Hub-Token greift die bestehende Broker-Token-Kette.
+    let runtime = snapshot
+        .runtime_settings(&|key| match key {
+            "DISCORD_HUB_INTERNAL_TOKEN" => Some("  ".into()),
+            "MASTER_BROKER_TOKEN" => None,
+            _ => Some(format!("wert-{key}")),
+        })
+        .unwrap();
+    assert_eq!(runtime.broker.base_url, "http://127.0.0.1:18790");
+    assert_eq!(runtime.broker.token, "wert-MAIN_BOT_INTERNAL_TOKEN");
+}
+
+#[test]
+fn externe_oder_unsichere_hub_adressen_werden_abgelehnt() {
+    for url in [
+        "https://untrusted.invalid",
+        "http://REDACTION_SENTINEL@127.0.0.1:18790",
+        "http://127.0.0.1:18790/?token=REDACTION_SENTINEL",
+    ] {
+        let text = VALID.replace(
+            "base_url = \"http://127.0.0.1:18770\"",
+            &format!("base_url = \"http://127.0.0.1:18770\"\ndiscord_hub_base_url = \"{url}\""),
+        );
+        let error = parse(&text).unwrap_err();
+        assert!(!format!("{error} {error:?}").contains("REDACTION_SENTINEL"));
+        assert_eq!(error.field, Some("broker.discord_hub_base_url"));
+    }
+}

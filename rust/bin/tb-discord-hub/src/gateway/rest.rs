@@ -1,0 +1,571 @@
+use std::time::Duration;
+
+use serde::Deserialize;
+use serde_json::{json, Value};
+
+use super::permissions::{Role, MANAGE_GUILD};
+use super::protocol::snowflake;
+
+pub const DISCORD_API_BASE: &str = "https://discord.com/api/v10";
+
+pub const FLAG_EPHEMERAL: u64 = 1 << 6;
+
+#[derive(Debug, thiserror::Error)]
+pub enum RestError {
+    #[error("HTTP-Fehler: {0}")]
+    Http(#[source] reqwest::Error),
+    #[error("Discord antwortet {status}: {body}")]
+    Status { status: u16, body: String },
+    #[error("unerwartete Antwort: {0}")]
+    Decode(String),
+}
+
+impl From<reqwest::Error> for RestError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::Http(error.without_url())
+    }
+}
+
+impl RestError {
+    pub fn is_unauthorized(&self) -> bool {
+        matches!(self, RestError::Status { status: 401, .. })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct GatewayBot {
+    pub url: String,
+    #[serde(default)]
+    pub session_start_limit: Option<SessionStartLimit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SessionStartLimit {
+    pub remaining: u64,
+    pub reset_after: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct GuildInfo {
+    pub owner_id: Option<u64>,
+    pub name: String,
+    pub roles: Vec<Role>,
+}
+
+#[derive(Clone)]
+pub struct DiscordRest {
+    http: reqwest::Client,
+    base: String,
+    token: String,
+}
+
+impl std::fmt::Debug for DiscordRest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiscordRest")
+            .field("base", &self.base)
+            .finish_non_exhaustive()
+    }
+}
+
+impl DiscordRest {
+    pub fn new(base: impl Into<String>, token: impl Into<String>) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .user_agent(concat!(
+                "DiscordBot (https://github.com/EarlySalty/Deadlock-Twitch-Bot, ",
+                env!("CARGO_PKG_VERSION"),
+                ")"
+            ))
+            .build()
+            .unwrap_or_default();
+        Self {
+            http,
+            base: base.into().trim_end_matches('/').to_string(),
+            token: token.into(),
+        }
+    }
+
+    async fn send(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        route: &'static str,
+        body: Option<&Value>,
+        auth: bool,
+    ) -> Result<Value, RestError> {
+        let url = format!("{}{}", self.base, path);
+        for attempt in 0..2 {
+            let mut req = self.http.request(method.clone(), &url);
+            if auth {
+                req = req.header("Authorization", format!("Bot {}", self.token));
+            }
+            if let Some(b) = body {
+                req = req.json(b);
+            }
+            let resp = req.send().await?;
+            let status = resp.status().as_u16();
+            let text = resp.text().await.unwrap_or_default();
+            if status == 429 && attempt == 0 {
+                let wait = serde_json::from_str::<Value>(&text)
+                    .ok()
+                    .and_then(|v| v.get("retry_after").and_then(Value::as_f64))
+                    .unwrap_or(1.0)
+                    .clamp(0.0, 10.0);
+                tracing::warn!(route, wait, "Discord-Rate-Limit, warte vor Wiederholung");
+                tokio::time::sleep(Duration::from_secs_f64(wait)).await;
+                continue;
+            }
+            if !(200..300).contains(&status) {
+                return Err(RestError::Status {
+                    status,
+                    body: text.chars().take(500).collect(),
+                });
+            }
+            if text.trim().is_empty() {
+                return Ok(Value::Null);
+            }
+            return serde_json::from_str(&text).map_err(|e| RestError::Decode(e.to_string()));
+        }
+        Err(RestError::Status {
+            status: 429,
+            body: "Rate-Limit nach Wiederholung".to_string(),
+        })
+    }
+
+    pub async fn gateway_bot(&self) -> Result<GatewayBot, RestError> {
+        let v = self
+            .send(
+                reqwest::Method::GET,
+                "/gateway/bot",
+                "/gateway/bot",
+                None,
+                true,
+            )
+            .await?;
+        serde_json::from_value(v).map_err(|e| RestError::Decode(e.to_string()))
+    }
+
+    pub async fn register_commands(&self, application_id: u64) -> Result<(), RestError> {
+        let body = setup_command_definition();
+        self.send(
+            reqwest::Method::PUT,
+            &format!("/applications/{application_id}/commands"),
+            "/applications/{id}/commands",
+            Some(&body),
+            true,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    pub async fn guild(&self, guild_id: u64) -> Result<GuildInfo, RestError> {
+        let v = self
+            .send(
+                reqwest::Method::GET,
+                &format!("/guilds/{guild_id}"),
+                "/guilds/{id}",
+                None,
+                true,
+            )
+            .await?;
+        let roles: Vec<Role> = match v.get("roles") {
+            Some(r) => {
+                serde_json::from_value(r.clone()).map_err(|e| RestError::Decode(e.to_string()))?
+            }
+            None => {
+                let r = self
+                    .send(
+                        reqwest::Method::GET,
+                        &format!("/guilds/{guild_id}/roles"),
+                        "/guilds/{id}/roles",
+                        None,
+                        true,
+                    )
+                    .await?;
+                serde_json::from_value(r).map_err(|e| RestError::Decode(e.to_string()))?
+            }
+        };
+        Ok(GuildInfo {
+            owner_id: snowflake(v.get("owner_id")),
+            name: v
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .chars()
+                .take(200)
+                .collect(),
+            roles,
+        })
+    }
+
+    pub async fn member_role_ids(
+        &self,
+        guild_id: u64,
+        user_id: u64,
+    ) -> Result<Vec<u64>, RestError> {
+        let v = self
+            .send(
+                reqwest::Method::GET,
+                &format!("/guilds/{guild_id}/members/{user_id}"),
+                "/guilds/{id}/members/{user}",
+                None,
+                true,
+            )
+            .await?;
+        let roles = v
+            .get("roles")
+            .and_then(Value::as_array)
+            .ok_or_else(|| RestError::Decode("Mitglied ohne roles".to_string()))?;
+        Ok(roles.iter().filter_map(|r| snowflake(Some(r))).collect())
+    }
+
+    pub async fn interaction_callback(
+        &self,
+        interaction_id: u64,
+        token: &str,
+        body: &Value,
+    ) -> Result<(), RestError> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/interactions/{interaction_id}/{token}/callback"),
+            "/interactions/{id}/{token}/callback",
+            Some(body),
+            false,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    pub async fn edit_original_response(
+        &self,
+        application_id: u64,
+        token: &str,
+        content: &str,
+    ) -> Result<(), RestError> {
+        self.send(
+            reqwest::Method::PATCH,
+            &format!("/webhooks/{application_id}/{token}/messages/@original"),
+            "/webhooks/{id}/{token}/messages/@original",
+            Some(&json!({ "content": content, "allowed_mentions": { "parse": [] } })),
+            false,
+        )
+        .await
+        .map(|_| ())
+    }
+}
+
+pub fn setup_command_definition() -> Value {
+    json!([{
+        "name": "setup",
+        "type": 1,
+        "description": "Check permissions and save this server's Deadlock Hub channels and roles",
+        "default_member_permissions": MANAGE_GUILD.to_string(),
+        "dm_permission": false,
+        "contexts": [0],
+        "options": [
+            {
+                "name": "language",
+                "description": "Language for bot messages on this server",
+                "type": 3,
+                "required": false,
+                "choices": [
+                    {"name": "German", "value": "de"},
+                    {"name": "English", "value": "en"}
+                ]
+            },
+            {
+                "name": "announce_channel",
+                "description": "Channel for go-live announcements",
+                "type": 7,
+                "required": false,
+                "channel_types": [0]
+            },
+            {
+                "name": "alert_channel",
+                "description": "Channel for moderation alerts",
+                "type": 7,
+                "required": false,
+                "channel_types": [0]
+            },
+            {
+                "name": "streamer_role",
+                "description": "Role assigned to partnered streamers",
+                "type": 8,
+                "required": false
+            },
+            {
+                "name": "ping_role",
+                "description": "Mentionable role for live pings",
+                "type": 8,
+                "required": false
+            },
+            {
+                "name": "invite",
+                "description": "Discord invite URL used in promotions",
+                "type": 3,
+                "required": false
+            },
+            {
+                "name": "auto_partner",
+                "description": "New streamers become partners of this server automatically",
+                "type": 5,
+                "required": false
+            }
+        ]
+    }])
+}
+
+pub fn ephemeral_message(content: &str) -> Value {
+    json!({
+        "type": 4,
+        "data": {
+            "content": content,
+            "flags": FLAG_EPHEMERAL,
+            "allowed_mentions": { "parse": [] }
+        }
+    })
+}
+
+pub fn ephemeral_deferred() -> Value {
+    json!({ "type": 5, "data": { "flags": FLAG_EPHEMERAL } })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use tracing::instrument::WithSubscriber;
+    use wiremock::matchers::{body_partial_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[derive(Clone, Default)]
+    struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedLogs {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("log buffer").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rate_limit_logs_omit_interaction_tokens() {
+        let server = MockServer::start().await;
+        let token = "synthetic-interaction-token-sentinel";
+        for (verb, route) in [
+            ("POST", format!("/interactions/7/{token}/callback")),
+            ("PATCH", format!("/webhooks/7/{token}/messages/@original")),
+        ] {
+            Mock::given(method(verb))
+                .and(path(&route))
+                .respond_with(
+                    ResponseTemplate::new(429)
+                        .set_body_json(json!({"retry_after": 0.01, "global": false})),
+                )
+                .up_to_n_times(1)
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method(verb))
+                .and(path(&route))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let logs = CapturedLogs::default();
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(move || writer.clone())
+            .finish();
+        let mut rest = DiscordRest::new(server.uri(), "synthetic-bot-token");
+        rest.http = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("test client without a virtual-time request timeout");
+        async {
+            rest.interaction_callback(7, token, &ephemeral_deferred())
+                .await
+                .expect("callback retry");
+            rest.edit_original_response(7, token, "synthetic response")
+                .await
+                .expect("webhook retry");
+        }
+        .with_subscriber(subscriber)
+        .await;
+        let output =
+            String::from_utf8(logs.0.lock().expect("log buffer").clone()).expect("UTF-8 logs");
+        assert_eq!(output.matches("Discord-Rate-Limit").count(), 2);
+        assert!(output.contains("/interactions/{id}/{token}/callback"));
+        assert!(output.contains("/webhooks/{id}/{token}/messages/@original"));
+        assert!(!output.contains(token));
+    }
+
+    #[tokio::test]
+    async fn http_errors_omit_interaction_tokens() {
+        let token = "synthetic-interaction-token-sentinel";
+        let http = reqwest::Client::builder()
+            .https_only(true)
+            .build()
+            .expect("HTTPS-only test client");
+        let raw_error = http
+            .post(format!("http://127.0.0.1/interactions/7/{token}/callback"))
+            .send()
+            .await
+            .expect_err("HTTP rejected before network access");
+        assert!(raw_error.url().expect("request URL").path().contains(token));
+        let assert_redacted = |error: RestError| {
+            assert!(!error.to_string().contains(token));
+            assert!(!format!("{error:?}").contains(token));
+            assert!(!std::error::Error::source(&error)
+                .expect("HTTP error source")
+                .to_string()
+                .contains(token));
+            let RestError::Http(http_error) = error else {
+                panic!("expected HTTP error");
+            };
+            assert!(http_error.url().is_none());
+        };
+        assert_redacted(raw_error.into());
+        let mut rest = DiscordRest::new("http://127.0.0.1", "synthetic-bot-token");
+        rest.http = http;
+        assert_redacted(
+            rest.interaction_callback(7, token, &ephemeral_deferred())
+                .await
+                .expect_err("callback HTTP rejected"),
+        );
+        assert_redacted(
+            rest.edit_original_response(7, token, "synthetic response")
+                .await
+                .expect_err("webhook HTTP rejected"),
+        );
+    }
+
+    #[test]
+    fn befehlsdefinition() {
+        let v = setup_command_definition();
+        assert_eq!(v[0]["name"], "setup");
+        assert_eq!(v[0]["default_member_permissions"], "32");
+        assert_eq!(v[0]["dm_permission"], false);
+        let names: Vec<&str> = v[0]["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "language",
+                "announce_channel",
+                "alert_channel",
+                "streamer_role",
+                "ping_role",
+                "invite",
+                "auto_partner"
+            ]
+        );
+    }
+
+    #[test]
+    fn antworten_sind_ephemeral() {
+        let v = ephemeral_message("hi");
+        assert_eq!(v["type"], 4);
+        assert_eq!(v["data"]["flags"], 64);
+        assert_eq!(ephemeral_deferred()["data"]["flags"], 64);
+    }
+
+    #[test]
+    fn debug_ohne_token() {
+        let r = DiscordRest::new("http://x", "geheim");
+        assert!(!format!("{r:?}").contains("geheim"));
+    }
+
+    #[tokio::test]
+    async fn gateway_bot_mit_auth() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/gateway/bot"))
+            .and(header("Authorization", "Bot tok"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "url": "wss://gateway.discord.gg", "shards": 1,
+                "session_start_limit": {"total": 1000, "remaining": 999, "reset_after": 1000, "max_concurrency": 1}
+            })))
+            .mount(&server)
+            .await;
+        let rest = DiscordRest::new(server.uri(), "tok");
+        let gb = rest.gateway_bot().await.unwrap();
+        assert_eq!(gb.url, "wss://gateway.discord.gg");
+        assert_eq!(gb.session_start_limit.unwrap().remaining, 999);
+    }
+
+    #[tokio::test]
+    async fn gateway_bot_401() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/gateway/bot"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("401: Unauthorized"))
+            .mount(&server)
+            .await;
+        let err = DiscordRest::new(server.uri(), "tok")
+            .gateway_bot()
+            .await
+            .unwrap_err();
+        assert!(err.is_unauthorized());
+    }
+
+    #[tokio::test]
+    async fn rate_limit_wird_wiederholt() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/applications/7/commands"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .set_body_json(json!({"retry_after": 0.01, "global": false})),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/applications/7/commands"))
+            .and(body_partial_json(json!([{"name": "setup"}])))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        DiscordRest::new(server.uri(), "tok")
+            .register_commands(7)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn guild_und_member() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/guilds/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "1", "owner_id": "2",
+                "roles": [{"id":"1","name":"@everyone","permissions":"1024","position":0}]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/guilds/1/members/50"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"roles": ["10", "11"]})))
+            .mount(&server)
+            .await;
+        let rest = DiscordRest::new(server.uri(), "tok");
+        let g = rest.guild(1).await.unwrap();
+        assert_eq!(g.owner_id, Some(2));
+        assert_eq!(g.roles.len(), 1);
+        assert_eq!(rest.member_role_ids(1, 50).await.unwrap(), vec![10, 11]);
+    }
+}

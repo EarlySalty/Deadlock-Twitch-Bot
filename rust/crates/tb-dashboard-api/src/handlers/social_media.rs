@@ -3795,7 +3795,7 @@ fn oauth_public_origin() -> String {
         .ok()
         .map(|s| s.trim().trim_end_matches('/').to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://admin.deutsche-deadlock-community.de".to_string())
+        .unwrap_or_else(|| tb_config::public_site::ADMIN_ORIGIN.to_string())
 }
 
 /// Internes Dashboard-Redirect-Ziel (Python `_dashboard_url`).

@@ -358,7 +358,8 @@ const LEDGER_PURPOSE_OPUS: &str = "post-stream-report-claude";
 ///
 /// Die beiden historischen Reportstufen behalten ihre bisherigen Token- und
 /// Zeitbudgets; Anbieter und Modell sind für beide zentral festgelegt.
-pub async fn call_ai(model: AiModel, prompt: &str) -> Result<String, String> {
+/// `streamer` (Login) ist der Streamerbezug für den KI-Schalter pro Server.
+pub async fn call_ai(model: AiModel, prompt: &str, streamer: &str) -> Result<String, String> {
     let (use_case, purpose, request) = match model {
         AiModel::Llm => (
             USE_CASE_LLM,
@@ -377,7 +378,10 @@ pub async fn call_ai(model: AiModel, prompt: &str) -> Result<String, String> {
                 .timeout_secs(240),
         ),
     };
-    let response = tb_llm::complete(use_case, request.ledger_purpose(purpose))
+    let response = tb_llm::complete(
+        use_case,
+        request.ledger_purpose(purpose).twitch_channel(streamer),
+    )
         .await
         .map_err(|error| match error {
             // Der Fehlerbody nennt die Ursache (ungueltiges Modell, Limit, ...);
@@ -412,12 +416,16 @@ pub fn process_word_group_response(raw: &str) -> Vec<WordGroup> {
 
 /// Erzeugt die thematischen Wortgruppen via KI (Python `_generate_word_groups`).
 /// Leere Nachrichten / fehlender Key / KI-Fehler → leere Liste.
-pub async fn generate_word_groups(model: AiModel, messages: &[String]) -> Vec<WordGroup> {
+pub async fn generate_word_groups(
+    model: AiModel,
+    messages: &[String],
+    streamer: &str,
+) -> Vec<WordGroup> {
     if messages.is_empty() {
         return Vec::new();
     }
     let prompt = build_word_group_prompt(messages.len(), messages);
-    let raw = call_ai(model, &prompt).await.unwrap_or_default();
+    let raw = call_ai(model, &prompt, streamer).await.unwrap_or_default();
     process_word_group_response(&raw)
 }
 
@@ -1808,9 +1816,13 @@ pub fn process_report_v2_response(raw: &str, snapshot: &serde_json::Value) -> se
 
 /// Erzeugt den strukturierten v2-Report via KI (Python `_generate_report_v2`).
 /// Fehlender Key / KI-Fehler → Fallback-Report.
-pub async fn generate_report_v2(model: AiModel, snapshot: &serde_json::Value) -> serde_json::Value {
+pub async fn generate_report_v2(
+    model: AiModel,
+    snapshot: &serde_json::Value,
+    streamer: &str,
+) -> serde_json::Value {
     let prompt = build_report_v2_prompt(snapshot);
-    let raw = match call_ai(model, &prompt).await {
+    let raw = match call_ai(model, &prompt, streamer).await {
         Ok(raw) => raw,
         Err(error) => {
             // Der Eingang hat den Fehler schon mit Anbieter und Body gewarnt;
@@ -2059,7 +2071,7 @@ pub async fn trigger_post_stream_analysis(
     let word_groups = if messages.is_empty() {
         Vec::new()
     } else {
-        generate_word_groups(model, &messages).await
+        generate_word_groups(model, &messages, &streamer).await
     };
 
     if !word_groups.is_empty() {
@@ -2124,7 +2136,7 @@ pub async fn trigger_post_stream_analysis(
             };
 
         // generate_report_v2 wirft nie (Fallback bei KI-Fehler) → normalerweise done.
-        let report = generate_report_v2(model, &snapshot).await;
+        let report = generate_report_v2(model, &snapshot, &streamer).await;
         match finalize_report(pool, report_id, &report, &word_groups_json).await {
             Ok(()) => {
                 created_any = true;
@@ -2398,7 +2410,7 @@ mod tests {
             "schema_version": "post_stream_report_v2",
             "report_variant": "compact",
         });
-        let report = generate_report_v2(AiModel::Llm, &snapshot).await;
+        let report = generate_report_v2(AiModel::Llm, &snapshot, "").await;
         assert_eq!(report["snapshot"]["bewertung"], "Provider-Test");
 
         clear_provider_env();
@@ -2484,7 +2496,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let out = call_ai(AiModel::Llm, "prompt").await.unwrap();
+        let out = call_ai(AiModel::Llm, "prompt", "").await.unwrap();
         assert_eq!(out, "ANTWORT");
     }
 
@@ -2531,7 +2543,7 @@ mod tests {
         std::env::set_var("FIREWORK_API_KEY", "secret");
         std::env::set_var("FIREWORK_BASE_URL", server.uri());
 
-        let out = call_ai(AiModel::Opus, "prompt").await.unwrap();
+        let out = call_ai(AiModel::Opus, "prompt", "").await.unwrap();
         assert_eq!(out, "FIREWORKS-ANTWORT");
     }
 
@@ -2558,7 +2570,7 @@ mod tests {
         std::env::set_var("FIREWORK_API_KEY", "secret");
         std::env::set_var("FIREWORK_BASE_URL", server.uri());
 
-        let err = call_ai(AiModel::Opus, "prompt").await.unwrap_err();
+        let err = call_ai(AiModel::Opus, "prompt", "").await.unwrap_err();
         // Ohne Body ist ein 400 nicht diagnostizierbar (Modellname? Limit?).
         assert!(err.contains("400"), "Status fehlt: {err}");
         assert!(err.contains("invalid_request_error"), "Body fehlt: {err}");

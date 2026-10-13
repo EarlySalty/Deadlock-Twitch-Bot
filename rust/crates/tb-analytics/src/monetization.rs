@@ -14,17 +14,18 @@
 
 use std::cmp::Ordering::Equal;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration as StdDuration, Instant};
 
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{json, Value};
 use sqlx::PgPool;
+use tb_domain::DashboardLanguage;
 
 const MIN_GROUP: usize = 15;
 const NETWORK_RECO_TTL: StdDuration = StdDuration::from_secs(15 * 60);
 
-type NetworkRecoCache = Mutex<HashMap<i64, (Instant, Vec<String>)>>;
+type NetworkRecoCache = Mutex<HashMap<(i64, DashboardLanguage), (Instant, Vec<String>)>>;
 
 fn network_reco_cache() -> &'static NetworkRecoCache {
     static CACHE: OnceLock<NetworkRecoCache> = OnceLock::new();
@@ -35,18 +36,24 @@ async fn network_recommendations(
     pool: &PgPool,
     cutoff: DateTime<Utc>,
     days: i64,
+    lang: DashboardLanguage,
 ) -> Result<Vec<String>, sqlx::Error> {
-    if let Some((at, recos)) = network_reco_cache().lock().unwrap().get(&days) {
+    let key = (days, lang);
+    if let Some((at, recos)) = network_reco_cache()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&key)
+    {
         if at.elapsed() < NETWORK_RECO_TTL {
             return Ok(recos.clone());
         }
     }
     let network = compute_ad_effects(pool, "", cutoff, 5000).await?;
-    let recos = build_network_recommendations(&network);
+    let recos = build_network_recommendations(&network, lang);
     network_reco_cache()
         .lock()
-        .unwrap()
-        .insert(days, (Instant::now(), recos.clone()));
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(key, (Instant::now(), recos.clone()));
     Ok(recos)
 }
 const QUIET_CHAT_MAX: i32 = 3;
@@ -93,25 +100,38 @@ fn sample_at(timeline: &[(f64, f64)], target: f64, tol: f64) -> Option<f64> {
         .map(|(_, v)| *v)
 }
 
-fn moment_label(key: &str) -> &'static str {
+fn moment_label(key: &str, lang: DashboardLanguage) -> &'static str {
     match key {
-        "queue" => "in der Queue",
-        "first_match_minute" => "in der ersten Match-Minute",
-        "in_match" => "mitten im Match",
-        "post_match" => "kurz nach Matchende",
-        "quiet_chat" => "bei ruhigem Chat",
-        "active_chat" => "bei aktivem Chat",
-        _ => "im Stream",
+        "queue" => lang.pick("in der Queue", "in the queue"),
+        "first_match_minute" => lang.pick(
+            "in der ersten Match-Minute",
+            "in the first minute of a match",
+        ),
+        "in_match" => lang.pick("mitten im Match", "in the middle of a match"),
+        "post_match" => lang.pick("kurz nach Matchende", "right after a match"),
+        "quiet_chat" => lang.pick("bei ruhigem Chat", "when chat is quiet"),
+        "active_chat" => lang.pick("bei aktivem Chat", "when chat is active"),
+        _ => lang.pick("im Stream", "during the stream"),
     }
 }
 
-fn effect_phrase(net_drop: f64) -> String {
+fn effect_phrase(net_drop: f64, lang: DashboardLanguage) -> String {
     if net_drop > 0.05 {
-        format!("verliert im Schnitt {:.1}% Zuschauer", net_drop)
+        lang.pick(
+            format!("verliert im Schnitt {:.1}% Zuschauer", net_drop),
+            format!("average viewer loss of {:.1}%", net_drop),
+        )
     } else if net_drop < -0.05 {
-        format!("gewinnt im Schnitt {:.1}% Zuschauer", net_drop.abs())
+        lang.pick(
+            format!("gewinnt im Schnitt {:.1}% Zuschauer", net_drop.abs()),
+            format!("average viewer gain of {:.1}%", net_drop.abs()),
+        )
     } else {
-        "bleibt im Schnitt neutral".to_string()
+        lang.pick(
+            "bleibt im Schnitt neutral",
+            "no change in viewers on average",
+        )
+        .to_string()
     }
 }
 
@@ -583,7 +603,7 @@ fn effects_json(eff: &AdEffects) -> Value {
     })
 }
 
-fn build_network_recommendations(eff: &AdEffects) -> Vec<String> {
+fn build_network_recommendations(eff: &AdEffects, lang: DashboardLanguage) -> Vec<String> {
     let mut moment_avgs: Vec<(&str, f64, usize)> = MOMENT_KEYS
         .iter()
         .filter_map(|k| {
@@ -592,25 +612,36 @@ fn build_network_recommendations(eff: &AdEffects) -> Vec<String> {
         })
         .collect();
     if moment_avgs.is_empty() {
-        return vec![format!(
-            "Noch zu wenig Werbungen für eine Empfehlung. Ab {} Werbungen je Moment zeigen wir, wann Werbung am wenigsten Zuschauer kostet.",
-            MIN_GROUP
+        return vec![lang.pick(
+            format!(
+                "Noch zu wenig Werbungen für eine Empfehlung. Ab {} Werbungen je Moment zeigen wir, wann Werbung am wenigsten Zuschauer kostet.",
+                MIN_GROUP
+            ),
+            format!(
+                "Not enough ads for a recommendation yet. Once each moment has {} ads, we show when ads cost you the fewest viewers.",
+                MIN_GROUP
+            ),
         )];
     }
     moment_avgs.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Equal));
     let mut recos = Vec::new();
     let (best_key, best_avg, _) = moment_avgs[0];
-    recos.push(format!(
-        "Am besten läuft Werbung {}: {}.",
-        moment_label(best_key),
-        effect_phrase(best_avg)
+    let best_label = moment_label(best_key, lang);
+    let best_effect = effect_phrase(best_avg, lang);
+    recos.push(lang.pick(
+        format!("Am besten läuft Werbung {}: {}.", best_label, best_effect),
+        format!("Ads work best {}: {}.", best_label, best_effect),
     ));
     if let Some(&(worst_key, worst_avg, _)) = moment_avgs.last() {
         if worst_key != best_key {
-            recos.push(format!(
-                "Am meisten kostet Werbung {}: {}.",
-                moment_label(worst_key),
-                effect_phrase(worst_avg)
+            let worst_label = moment_label(worst_key, lang);
+            let worst_effect = effect_phrase(worst_avg, lang);
+            recos.push(lang.pick(
+                format!(
+                    "Am meisten kostet Werbung {}: {}.",
+                    worst_label, worst_effect
+                ),
+                format!("Ads cost the most {}: {}.", worst_label, worst_effect),
             ));
         }
     }
@@ -618,10 +649,17 @@ fn build_network_recommendations(eff: &AdEffects) -> Vec<String> {
         if bot.len() >= MIN_GROUP && plan.len() >= MIN_GROUP {
             let (bot_avg, plan_avg) = (mean(bot), mean(plan));
             if bot_avg + 1.0 < plan_avg {
-                recos.push(format!(
-                    "Selbst gesetzte Werbung kostet weniger Zuschauer als der Twitch-Plan: {} gegen {}.",
-                    effect_phrase(bot_avg),
-                    effect_phrase(plan_avg)
+                let bot_effect = effect_phrase(bot_avg, lang);
+                let plan_effect = effect_phrase(plan_avg, lang);
+                recos.push(lang.pick(
+                    format!(
+                        "Selbst gesetzte Werbung kostet weniger Zuschauer als der Twitch-Plan: {} gegen {}.",
+                        bot_effect, plan_effect
+                    ),
+                    format!(
+                        "Ads you schedule yourself cost fewer viewers than the Twitch plan: {} vs {}.",
+                        bot_effect, plan_effect
+                    ),
                 ));
             }
         }
@@ -629,12 +667,11 @@ fn build_network_recommendations(eff: &AdEffects) -> Vec<String> {
     recos
 }
 
-/// Lädt die Monetization-Übersicht (Python `load_monetization_payload`).
-/// `streamer` ist der bereits getrimmte/kleingeschriebene Query-Wert (`""` = ohne Filter).
 pub async fn load_monetization_payload(
     pool: &PgPool,
     streamer: &str,
     days: i64,
+    lang: DashboardLanguage,
 ) -> Result<Value, sqlx::Error> {
     let cutoff: DateTime<Utc> = Utc::now() - Duration::days(days);
 
@@ -655,7 +692,7 @@ pub async fn load_monetization_payload(
 
     let analysis = compute_drop_analysis(pool, streamer, cutoff).await?;
     let effects = compute_ad_effects(pool, streamer, cutoff, 200).await?;
-    let recommendations = network_recommendations(pool, cutoff, days).await?;
+    let recommendations = network_recommendations(pool, cutoff, days, lang).await?;
 
     let ads = json!({
         "total": ad_agg.total_ads,
@@ -808,7 +845,9 @@ mod tests {
         sqlx::query("INSERT INTO twitch_hype_train_events (session_id, level, duration_seconds, started_at, ended_at) VALUES (1,3,300,NOW()-INTERVAL '1 hour',NOW()-INTERVAL '55 min'),(1,5,600,NOW()-INTERVAL '30 min',NOW()-INTERVAL '20 min')")
             .execute(&pool).await.unwrap();
 
-        let v = load_monetization_payload(&pool, "nani", 30).await.unwrap();
+        let v = load_monetization_payload(&pool, "nani", 30, DashboardLanguage::De)
+            .await
+            .unwrap();
         assert_eq!(v["ads"]["total"], 3);
         assert_eq!(v["ads"]["auto"], 2);
         assert_eq!(v["ads"]["manual"], 1);
@@ -851,12 +890,16 @@ mod tests {
             .execute(&pool).await.unwrap();
 
         // Mit Streamer-Filter: nur nani.
-        let v = load_monetization_payload(&pool, "nani", 30).await.unwrap();
+        let v = load_monetization_payload(&pool, "nani", 30, DashboardLanguage::De)
+            .await
+            .unwrap();
         assert_eq!(v["bits"], json!({ "total": 150, "cheer_events": 2 }));
         assert_eq!(v["subs"], json!({ "total_events": 3, "gifted": 1 }));
 
         // Ohne Filter: alles.
-        let all = load_monetization_payload(&pool, "", 30).await.unwrap();
+        let all = load_monetization_payload(&pool, "", 30, DashboardLanguage::De)
+            .await
+            .unwrap();
         assert_eq!(all["bits"], json!({ "total": 1149, "cheer_events": 3 }));
         assert_eq!(all["subs"], json!({ "total_events": 4, "gifted": 2 }));
     }
@@ -885,7 +928,7 @@ mod tests {
                 .bind(m).bind(vc).execute(&pool).await.unwrap();
         }
 
-        let v = load_monetization_payload(&pool, "nani", 3650)
+        let v = load_monetization_payload(&pool, "nani", 3650, DashboardLanguage::De)
             .await
             .unwrap();
         let ads = &v["ads"];
@@ -938,10 +981,10 @@ mod tests {
 
     #[test]
     fn effect_phrase_vorzeichen() {
-        assert!(effect_phrase(4.2).contains("verliert"));
-        assert!(effect_phrase(-4.2).contains("gewinnt"));
-        assert!(effect_phrase(-4.2).contains("4.2"));
-        assert!(effect_phrase(0.0).contains("neutral"));
+        assert!(effect_phrase(4.2, DashboardLanguage::De).contains("verliert"));
+        assert!(effect_phrase(-4.2, DashboardLanguage::De).contains("gewinnt"));
+        assert!(effect_phrase(-4.2, DashboardLanguage::De).contains("4.2"));
+        assert!(effect_phrase(0.0, DashboardLanguage::De).contains("neutral"));
     }
 
     #[test]
@@ -958,7 +1001,7 @@ mod tests {
     fn empfehlung_erst_ab_mindestzahl() {
         let mut sparse = AdEffects::default();
         sparse.moment.insert("queue", vec![-5.0; MIN_GROUP - 1]);
-        let recos = build_network_recommendations(&sparse);
+        let recos = build_network_recommendations(&sparse, DashboardLanguage::De);
         assert_eq!(recos.len(), 1);
         assert!(recos[0].contains("zu wenig Werbungen"));
     }
@@ -970,7 +1013,7 @@ mod tests {
         eff.moment.insert("in_match", vec![8.0; MIN_GROUP]);
         eff.source.insert("bot", vec![2.0; MIN_GROUP]);
         eff.source.insert("twitch_plan", vec![6.0; MIN_GROUP]);
-        let recos = build_network_recommendations(&eff);
+        let recos = build_network_recommendations(&eff, DashboardLanguage::De);
         assert!(recos[0].contains("Queue"));
         assert!(recos[0].contains("gewinnt"));
         assert!(recos[1].contains("Match"));
@@ -983,7 +1026,9 @@ mod tests {
         let Some(pool) = make_pool("t_mon_empty").await else {
             return;
         };
-        let v = load_monetization_payload(&pool, "", 7).await.unwrap();
+        let v = load_monetization_payload(&pool, "", 7, DashboardLanguage::De)
+            .await
+            .unwrap();
         assert_eq!(v["ads"]["total"], 0);
         assert_eq!(v["ads"]["avg_duration_s"], 0.0);
         assert_eq!(v["hype_train"]["total"], 0);

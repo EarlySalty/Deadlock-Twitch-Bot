@@ -902,7 +902,8 @@ async fn main() {
                 raid_greeting::RaidGreetingMonitor::new(h.raid_api(), probe)
                     .with_live_probe(live_probe)
                     .with_courtesy(courtesy)
-                    .with_aliases(aliases),
+                    .with_aliases(aliases)
+                    .with_pool(pool.clone()),
             )
         });
 
@@ -1127,6 +1128,7 @@ async fn main() {
                 helix_client.clone(),
                 followers.clone(),
                 pipeline,
+                pool.clone(),
                 &target_game,
                 std::time::Duration::from_secs(config.bot.auto_raid_offline_grace_seconds),
             ));
@@ -1944,6 +1946,8 @@ async fn main() {
                                     alert_mention: config.bot.alert_mention.clone(),
                                     ref_code: config.bot.discord_ref_code.clone(),
                                     target_game: target_game.clone(),
+                                    guild_id: Some(live_ping_guild_id),
+                                    guild_language: None,
                                 },
                                 live_ping_role_provider,
                             ))

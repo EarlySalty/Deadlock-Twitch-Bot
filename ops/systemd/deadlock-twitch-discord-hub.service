@@ -1,0 +1,49 @@
+[Unit]
+Description=Deadlock Twitch Discord-Hub
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+ConditionPathExists=/etc/deadlock-twitch/discord-hub.conf
+
+[Service]
+Type=simple
+DynamicUser=yes
+User=twitchhub
+WorkingDirectory=/opt/deadlock/twitch/current
+ExecStart=/usr/bin/bash /opt/deadlock/twitch/current/ops/systemd/run-discord-hub
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+KillMode=mixed
+LoadCredentialEncrypted=infisical-token:/etc/credstore.encrypted/deadlock-twitch-infisical.cred
+StateDirectory=deadlock-twitch-discord-hub
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+KeyringMode=private
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+UMask=0077
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

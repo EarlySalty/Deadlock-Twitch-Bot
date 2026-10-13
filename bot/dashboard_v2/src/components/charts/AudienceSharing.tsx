@@ -13,6 +13,7 @@ import {
   writeSharingTopN,
   type SharingTopN,
 } from '@/utils/sharingTopN';
+import { useLanguage } from '../../context/LanguageContext';
 
 interface AudienceSharingProps {
   data: AudienceSharingData | undefined;
@@ -41,6 +42,7 @@ function lineColor(index: number): string {
 }
 
 export function AudienceSharing({ data }: AudienceSharingProps) {
+  const { t, locale } = useLanguage();
   const current = useMemo(() => data?.current ?? [], [data]);
   const timeline = useMemo(() => data?.timeline ?? [], [data]);
   const totalUniqueViewers = data?.totalUniqueViewers ?? 0;
@@ -52,13 +54,11 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
     writeSharingTopN(value);
   };
 
-  // Prepare bar chart data (top 10 partners by shared viewers)
   const barData = useMemo(
     () => [...current].sort((a, b) => b.sharedViewers - a.sharedViewers).slice(0, 10),
     [current]
   );
 
-  // Prepare line chart data: pivot timeline into { month, streamer1, streamer2, ... }
   const topStreamers = useMemo(() => {
     const totals = new Map<string, number>();
     for (const row of timeline) {
@@ -83,31 +83,29 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
   }, [timeline, topStreamers]);
 
   if (!data || !data.dataAvailable) {
-    return <NoDataCard message={data?.message || "Keine Sharing-Daten vorhanden"} />;
+    return <NoDataCard message={data?.message ? t(data.message) : t('Keine Sharing-Daten vorhanden')} />;
   }
 
   return (
     <div className="space-y-4">
-      {/* Summary */}
       <Rise
         className="panel-card rounded-2xl p-4"
       >
         <div className="flex items-center justify-between">
-          <span className="text-sm text-text-secondary">Einzigartige Zuschauer gesamt</span>
+          <span className="text-sm text-text-secondary">{t('Einzigartige Zuschauer gesamt')}</span>
           <span className="text-lg font-bold text-white">
-            {totalUniqueViewers.toLocaleString('de-DE')}
+            {totalUniqueViewers.toLocaleString(locale)}
           </span>
         </div>
       </Rise>
 
-      {/* Horizontal Bar Chart: Top Partners */}
       {barData.length > 0 && (
         <Rise
           step={{ seconds: 0.1 }}
           className="panel-card rounded-2xl p-6"
         >
           <h4 className="text-sm font-medium text-text-secondary mb-4">
-            Top Partner nach geteilten Zuschauern
+            {t('Top Partner nach geteilten Zuschauern')}
           </h4>
           <div className="h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
@@ -137,14 +135,14 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
                       <div className="bg-card border border-border rounded-lg p-3 text-sm">
                         <div className="text-white font-medium mb-1">{entry.streamer}</div>
                         <div className="text-text-secondary">
-                          Geteilt: {entry.sharedViewers}
+                          {t('Geteilt: {count}', { count: entry.sharedViewers })}
                         </div>
                         <div className="flex gap-3 mt-1">
-                          <span className="text-success">Inflow: {entry.inflow}</span>
-                          <span className="text-danger">Outflow: {entry.outflow}</span>
+                          <span className="text-success">{t('Inflow: {count}', { count: entry.inflow })}</span>
+                          <span className="text-danger">{t('Outflow: {count}', { count: entry.outflow })}</span>
                         </div>
                         <div className="text-text-secondary mt-1">
-                          Jaccard: {(entry.jaccardSimilarity * 100).toFixed(1)}%
+                          {t('Jaccard: {value}%', { value: (entry.jaccardSimilarity * 100).toFixed(1) })}
                         </div>
                       </div>
                     );
@@ -155,14 +153,13 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
             </ResponsiveContainer>
           </div>
 
-          {/* Inflow/Outflow indicators */}
           <div className="mt-4 space-y-1">
             {barData.slice(0, 5).map((entry) => (
               <div key={entry.streamer} className="flex items-center justify-between text-sm">
                 <span className="text-text-secondary">{entry.streamer}</span>
                 <div className="flex items-center gap-3">
-                  <span className="text-success text-xs">Inflow: {entry.inflow}</span>
-                  <span className="text-danger text-xs">Outflow: {entry.outflow}</span>
+                  <span className="text-success text-xs">{t('Inflow: {count}', { count: entry.inflow })}</span>
+                  <span className="text-danger text-xs">{t('Outflow: {count}', { count: entry.outflow })}</span>
                 </div>
               </div>
             ))}
@@ -170,7 +167,6 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
         </Rise>
       )}
 
-      {/* Timeline Line Chart */}
       {lineData.length > 1 && topStreamers.length > 0 && (
         <Rise
           step={{ seconds: 0.2 }}
@@ -178,7 +174,7 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
         >
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <h4 className="text-sm font-medium text-text-secondary">
-              Zuschauer-Sharing Timeline (Top {topN})
+              {t('Zuschauer-Sharing Timeline (Top {count})', { count: topN })}
             </h4>
             <div className="flex items-center bg-background/70 rounded-xl border border-border p-1.5">
               {SHARING_TOPN_OPTIONS.map(option => (
@@ -198,7 +194,7 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
                       transition={SEGMENT_SPRING}
                     />
                   )}
-                  <span className="relative z-10">Top {option}</span>
+                  <span className="relative z-10">{t('Top {count}', { count: option })}</span>
                 </button>
               ))}
             </div>

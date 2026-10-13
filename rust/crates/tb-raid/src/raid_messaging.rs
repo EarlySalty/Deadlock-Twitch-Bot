@@ -12,11 +12,22 @@
 //! externen Channel ab, ist das ein gracefuler `Dropped`-Ausgang).
 
 /// Singular/Plural für die Viewer-Anzahl (Python `_viewer_word`).
-fn viewer_word(viewer_count: i32) -> &'static str {
-    if viewer_count == 1 {
-        "Viewer"
-    } else {
-        "Viewern"
+fn viewer_word(viewer_count: i32, lang: tb_domain::UiLang) -> &'static str {
+    match lang {
+        tb_domain::UiLang::De => {
+            if viewer_count == 1 {
+                "Viewer"
+            } else {
+                "Viewern"
+            }
+        }
+        tb_domain::UiLang::En => {
+            if viewer_count == 1 {
+                "viewer"
+            } else {
+                "viewers"
+            }
+        }
     }
 }
 
@@ -32,12 +43,34 @@ pub fn build_partner_raid_message(
     viewer_count: i32,
     received_raid_count: i64,
 ) -> String {
-    let count = received_raid_count.max(1);
-    format!(
-        "Hey @{target_login}! 🎮 @{from_login} hat dich gerade mit {viewer_count} {word} \
-         geraidet. Das ist dein Raid Nr. {count} aus dem Deadlock Streamer-Netzwerk. ❤️",
-        word = viewer_word(viewer_count),
+    build_partner_raid_message_for(
+        tb_domain::UiLang::De,
+        from_login,
+        target_login,
+        viewer_count,
+        received_raid_count,
     )
+}
+
+pub fn build_partner_raid_message_for(
+    lang: tb_domain::UiLang,
+    from_login: &str,
+    target_login: &str,
+    viewer_count: i32,
+    received_raid_count: i64,
+) -> String {
+    let count = received_raid_count.max(1);
+    let word = viewer_word(viewer_count, lang);
+    match lang {
+        tb_domain::UiLang::De => format!(
+            "Hey @{target_login}! 🎮 @{from_login} hat dich gerade mit {viewer_count} {word} \
+             geraidet. Das ist dein Raid Nr. {count} aus dem Deadlock Streamer-Netzwerk. ❤️"
+        ),
+        tb_domain::UiLang::En => format!(
+            "Hey @{target_login}! 🎮 @{from_login} just raided you with {viewer_count} {word}. \
+             That's raid #{count} from the Deadlock streamer network. ❤️"
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -46,10 +79,12 @@ mod tests {
 
     #[test]
     fn viewer_word_singular_vs_plural() {
-        assert_eq!(viewer_word(1), "Viewer");
-        assert_eq!(viewer_word(0), "Viewern");
-        assert_eq!(viewer_word(2), "Viewern");
-        assert_eq!(viewer_word(42), "Viewern");
+        assert_eq!(viewer_word(1, tb_domain::UiLang::De), "Viewer");
+        assert_eq!(viewer_word(0, tb_domain::UiLang::De), "Viewern");
+        assert_eq!(viewer_word(2, tb_domain::UiLang::De), "Viewern");
+        assert_eq!(viewer_word(42, tb_domain::UiLang::De), "Viewern");
+        assert_eq!(viewer_word(1, tb_domain::UiLang::En), "viewer");
+        assert_eq!(viewer_word(2, tb_domain::UiLang::En), "viewers");
     }
 
     #[test]
@@ -68,5 +103,16 @@ mod tests {
         let msg = build_partner_raid_message("a", "b", 1, 0);
         assert!(msg.contains("mit 1 Viewer geraidet"));
         assert!(msg.contains("dein Raid Nr. 1 "));
+    }
+
+    #[test]
+    fn partner_raid_message_english() {
+        let msg = build_partner_raid_message_for(tb_domain::UiLang::En, "raider", "victim", 12, 3);
+        assert_eq!(
+            msg,
+            "Hey @victim! 🎮 @raider just raided you with 12 viewers. \
+             That's raid #3 from the Deadlock streamer network. ❤️"
+        );
+        assert!(!msg.contains('\u{2014}'));
     }
 }

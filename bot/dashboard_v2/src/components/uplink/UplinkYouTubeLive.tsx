@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Info, Loader2, Radio, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { useLanguage, type LanguageContextValue } from '../../context/LanguageContext';
 
 export type YouTubeLiveSichtbarkeit = 'private' | 'unlisted' | 'public';
 export type YouTubeLiveZustand =
@@ -47,15 +48,19 @@ export interface UplinkYouTubeLiveProps {
   onBeenden: () => void;
 }
 
-const SICHTBARKEITEN: ReadonlyArray<{
+type Uebersetzer = LanguageContextValue['t'];
+
+function sichtbarkeiten(t: Uebersetzer): ReadonlyArray<{
   wert: YouTubeLiveSichtbarkeit;
   label: string;
   erklaerung: string;
-}> = [
-  { wert: 'private', label: 'Privat', erklaerung: 'Nur du siehst den Livestream.' },
-  { wert: 'unlisted', label: 'Nicht gelistet', erklaerung: 'Nur wer den Link hat, sieht den Livestream.' },
-  { wert: 'public', label: 'Öffentlich', erklaerung: 'Für alle sichtbar und in deinem Kanal gelistet.' },
-];
+}> {
+  return [
+    { wert: 'private', label: t('Privat'), erklaerung: t('Nur du siehst den Livestream.') },
+    { wert: 'unlisted', label: t('Nicht gelistet'), erklaerung: t('Nur wer den Link hat, sieht den Livestream.') },
+    { wert: 'public', label: t('Öffentlich'), erklaerung: t('Für alle sichtbar und in deinem Kanal gelistet.') },
+  ];
+}
 
 const TITEL_MAX = 100;
 
@@ -96,41 +101,43 @@ function beendenErlaubt(status: YouTubeLiveStatus | null): boolean {
   );
 }
 
-function datumDe(wert: string): string {
+function datumText(wert: string, locale: string): string {
   const zeit = new Date(wert);
   if (Number.isNaN(zeit.getTime())) return wert;
-  return zeit.toLocaleDateString('de-DE');
+  return zeit.toLocaleDateString(locale);
 }
 
-function uhrzeitDe(wert: string): string {
+function uhrzeitText(wert: string, locale: string): string {
   const zeit = new Date(wert);
   if (Number.isNaN(zeit.getTime())) return wert;
-  return zeit.toLocaleTimeString('de-DE');
+  return zeit.toLocaleTimeString(locale);
 }
 
-function zustandText(status: YouTubeLiveStatus): string {
-  const hinweis = status.hinweis ?? 'kein Grund genannt';
+function zustandText(status: YouTubeLiveStatus, t: Uebersetzer, locale: string): string {
+  const hinweis = status.hinweis ?? t('kein Grund genannt');
   switch (status.zustand) {
     case 'inaktiv':
-      return 'Kein Livestream vorbereitet';
+      return t('Kein Livestream vorbereitet');
     case 'vorbereitet':
-      return 'Livestream angelegt, wartet auf dein Bild aus OBS';
+      return t('Livestream angelegt, wartet auf dein Bild aus OBS');
     case 'sendet':
-      return 'Bild kommt bei YouTube an, noch nicht live geschaltet';
+      return t('Bild kommt bei YouTube an, noch nicht live geschaltet');
     case 'live':
-      return status.seit ? `Auf YouTube live seit ${uhrzeitDe(status.seit)}` : 'Auf YouTube live';
+      return status.seit
+        ? t('Auf YouTube live seit {uhrzeit}', { uhrzeit: uhrzeitText(status.seit, locale) })
+        : t('Auf YouTube live');
     case 'beendet':
-      return 'Livestream beendet';
+      return t('Livestream beendet');
     case 'blockiert':
-      return `Angehalten: ${hinweis}`;
+      return t('Angehalten: {hinweis}', { hinweis });
     case 'fehler':
       return status.wiederaufnehmbar
-        ? `Fehler: ${hinweis}. Uplink versucht es beim nächsten Stream erneut.`
-        : `Fehler: ${hinweis}. Bitte prüfe deinen YouTube-Kanal und speichere die Einstellungen neu.`;
+        ? t('Fehler: {hinweis}. Uplink versucht es beim nächsten Stream erneut.', { hinweis })
+        : t('Fehler: {hinweis}. Bitte prüfe deinen YouTube-Kanal und speichere die Einstellungen neu.', { hinweis });
     case 'unklar':
-      return 'Stand wird mit YouTube abgeglichen';
+      return t('Stand wird mit YouTube abgeglichen');
     default:
-      return 'Stand wird mit YouTube abgeglichen';
+      return t('Stand wird mit YouTube abgeglichen');
   }
 }
 
@@ -154,6 +161,7 @@ export function UplinkYouTubeLive({
   onSpeichern,
   onBeenden,
 }: UplinkYouTubeLiveProps) {
+  const { t, locale } = useLanguage();
   const basisId = useId();
   const titelId = `${basisId}-titel`;
   const titelHinweisId = `${basisId}-titel-hinweis`;
@@ -182,15 +190,14 @@ export function UplinkYouTubeLive({
   if (!verbunden) {
     return (
       <section
-        aria-label="YouTube Live"
+        aria-label={t('YouTube Live')}
         className="space-y-2 rounded-2xl border border-border bg-background/70 p-4"
       >
-        <h3 className="text-sm font-bold text-white">YouTube Live</h3>
+        <h3 className="text-sm font-bold text-white">{t('YouTube Live')}</h3>
         <p className="flex items-start gap-2 text-xs text-text-secondary">
           <Info aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
-            Verbinde zuerst dein YouTube-Konto über den Knopf oben in dieser Karte, dann kannst du hier den
-            Livestream einrichten.
+            {t('Verbinde zuerst dein YouTube-Konto über den Knopf oben in dieser Karte, dann kannst du hier den Livestream einrichten.')}
           </span>
         </p>
       </section>
@@ -207,29 +214,29 @@ export function UplinkYouTubeLive({
   let freigabeText: string;
   if (freigegebenAm && entwurf.liveFreigeben) {
     freigabeTon = 'success';
-    freigabeText = `Freigegeben am ${datumDe(freigegebenAm)}.`;
+    freigabeText = t('Freigegeben am {datum}.', { datum: datumText(freigegebenAm, locale) });
   } else if (!freigegebenAm && entwurf.liveFreigeben) {
     freigabeTon = 'neutral';
-    freigabeText = 'Wird mit dem Speichern freigegeben.';
+    freigabeText = t('Wird mit dem Speichern freigegeben.');
   } else if (freigegebenAm && !entwurf.liveFreigeben) {
     freigabeTon = 'neutral';
-    freigabeText = 'Wird mit dem Speichern zurückgenommen.';
+    freigabeText = t('Wird mit dem Speichern zurückgenommen.');
   } else {
     freigabeTon = 'warning';
-    freigabeText = 'Noch nicht freigegeben: beim OBS-Start legt Uplink keinen YouTube-Livestream an.';
+    freigabeText = t('Noch nicht freigegeben: beim OBS-Start legt Uplink keinen YouTube-Livestream an.');
   }
 
   return (
     <section
-      aria-label="YouTube Live"
+      aria-label={t('YouTube Live')}
       className="space-y-4 rounded-2xl border border-border bg-background/70 p-4"
     >
       <div className="space-y-0.5">
-        <h3 className="text-sm font-bold text-white">YouTube Live</h3>
+        <h3 className="text-sm font-bold text-white">{t('YouTube Live')}</h3>
         <p className="text-xs text-text-secondary">
           {kanalName
-            ? `Verbunden mit ${kanalName}. Lege Titel, Sichtbarkeit und den Ablauf für deinen Livestream fest.`
-            : 'Lege Titel, Sichtbarkeit und den Ablauf für deinen Livestream fest.'}
+            ? t('Verbunden mit {kanal}. Lege Titel, Sichtbarkeit und den Ablauf für deinen Livestream fest.', { kanal: kanalName })
+            : t('Lege Titel, Sichtbarkeit und den Ablauf für deinen Livestream fest.')}
         </p>
       </div>
 
@@ -253,7 +260,7 @@ export function UplinkYouTubeLive({
             className="mt-0.5 h-4 w-4 shrink-0 accent-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
           />
           <span className="text-sm text-white">
-            Uplink darf bei OBS-Start einen YouTube-Livestream mit diesen Einstellungen anlegen.
+            {t('Uplink darf bei OBS-Start einen YouTube-Livestream mit diesen Einstellungen anlegen.')}
           </span>
         </label>
       </div>
@@ -263,7 +270,7 @@ export function UplinkYouTubeLive({
           htmlFor={titelId}
           className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary"
         >
-          Titel des Livestreams
+          {t('Titel des Livestreams')}
         </label>
         <input
           id={titelId}
@@ -271,16 +278,16 @@ export function UplinkYouTubeLive({
           onChange={(e) => aendern({ titel: e.target.value })}
           aria-invalid={!erlaubt}
           aria-describedby={titelHinweisId}
-          placeholder="Titel für deinen Livestream"
+          placeholder={t('Titel für deinen Livestream')}
           className="min-h-11 w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
         />
         <div id={titelHinweisId} className="flex items-center justify-between gap-3 text-[11px]">
           <span className={titelLeer || titelZuLang ? 'text-warning' : 'text-text-secondary'}>
             {titelLeer
-              ? 'Bitte gib einen Titel ein, sonst lässt sich nicht speichern.'
+              ? t('Bitte gib einen Titel ein, sonst lässt sich nicht speichern.')
               : titelZuLang
-                ? 'Der Titel darf höchstens 100 Zeichen haben.'
-                : 'Dieser Titel steht später bei deinem YouTube-Livestream.'}
+                ? t('Der Titel darf höchstens 100 Zeichen haben.')
+                : t('Dieser Titel steht später bei deinem YouTube-Livestream.')}
           </span>
           <span className={titelZuLang ? 'text-warning' : 'text-text-secondary'}>
             {entwurf.titel.length}/{TITEL_MAX}
@@ -292,9 +299,9 @@ export function UplinkYouTubeLive({
         aria-describedby={sichtHinweisId}
         className="space-y-3 rounded-xl border border-border/60 bg-background/40 p-3"
       >
-        <legend className="px-1 text-xs font-semibold text-white">Sichtbarkeit</legend>
+        <legend className="px-1 text-xs font-semibold text-white">{t('Sichtbarkeit')}</legend>
         <div className="grid gap-2 sm:grid-cols-3">
-          {SICHTBARKEITEN.map((eintrag) => (
+          {sichtbarkeiten(t).map((eintrag) => (
             <label
               key={eintrag.wert}
               className={`flex min-h-11 cursor-pointer items-start gap-3 rounded-xl border p-3 ${
@@ -317,7 +324,7 @@ export function UplinkYouTubeLive({
           ))}
         </div>
         <p id={sichtHinweisId} className="text-xs text-text-secondary">
-          Die Sichtbarkeit gilt für den nächsten Livestream, den Uplink anlegt.
+          {t('Die Sichtbarkeit gilt für den nächsten Livestream, den Uplink anlegt.')}
         </p>
       </fieldset>
 
@@ -331,10 +338,9 @@ export function UplinkYouTubeLive({
             className="mt-0.5 h-4 w-4 shrink-0 accent-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
           />
           <span className="space-y-1">
-            <span className="block text-sm font-semibold text-white">Auto-Start</span>
+            <span className="block text-sm font-semibold text-white">{t('Auto-Start')}</span>
             <span className="block text-xs text-text-secondary">
-              YouTube schaltet live, sobald Bild ankommt. Ohne Auto-Start schaltet Uplink erst, wenn dein Stream
-              stabil ankommt.
+              {t('YouTube schaltet live, sobald Bild ankommt. Ohne Auto-Start schaltet Uplink erst, wenn dein Stream stabil ankommt.')}
             </span>
           </span>
         </label>
@@ -347,10 +353,9 @@ export function UplinkYouTubeLive({
             className="mt-0.5 h-4 w-4 shrink-0 accent-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
           />
           <span className="space-y-1">
-            <span className="block text-sm font-semibold text-white">Auto-Stop</span>
+            <span className="block text-sm font-semibold text-white">{t('Auto-Stop')}</span>
             <span className="block text-xs text-text-secondary">
-              YouTube beendet den Livestream kurz nach dem Ende deines Streams. Ohne Auto-Stop beendest du ihn hier
-              mit "Beenden".
+              {t('YouTube beendet den Livestream kurz nach dem Ende deines Streams. Ohne Auto-Stop beendest du ihn hier mit "Beenden".')}
             </span>
           </span>
         </label>
@@ -366,7 +371,7 @@ export function UplinkYouTubeLive({
             ) : (
               <Info aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             )}
-            <span>{zustandText(status)}</span>
+            <span>{zustandText(status, t, locale)}</span>
           </span>
         </div>
       ) : null}
@@ -380,7 +385,7 @@ export function UplinkYouTubeLive({
           className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-[#0D0806] disabled:opacity-60"
         >
           {beschaeftigt && <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />}
-          Speichern
+          {t('Speichern')}
         </button>
         <button
           type="button"
@@ -389,7 +394,7 @@ export function UplinkYouTubeLive({
           onClick={() => onBeenden()}
           className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border px-4 py-2 text-sm font-semibold text-text-secondary transition-colors hover:text-white disabled:opacity-60"
         >
-          Beenden
+          {t('Beenden')}
         </button>
       </div>
 
@@ -401,8 +406,8 @@ export function UplinkYouTubeLive({
 
       {status?.broadcastId ? (
         <details className="text-xs text-text-secondary">
-          <summary className="cursor-pointer">Technische Details</summary>
-          <p className="mt-2">Broadcast-Kennung: {status.broadcastId}</p>
+          <summary className="cursor-pointer">{t('Technische Details')}</summary>
+          <p className="mt-2">{t('Broadcast-Kennung: {id}', { id: status.broadcastId })}</p>
         </details>
       ) : null}
     </section>

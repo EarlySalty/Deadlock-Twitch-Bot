@@ -292,11 +292,11 @@ async fn fetch(config: &UplinkConfig, token: &str) -> Result<UplinkRuntime, &'st
     }
     let kick_redirect_uri = redirect_uri(
         config.kick_redirect_uri.as_deref(),
-        "https://deutsche-deadlock-community.de/callback/kick",
+        &tb_config::PublicSite::Primary.url("/callback/kick"),
     )?;
     let youtube_redirect_uri = redirect_uri(
         config.youtube_redirect_uri.as_deref(),
-        "https://deutsche-deadlock-community.de/callback/youtube",
+        &tb_config::PublicSite::Primary.url("/callback/youtube"),
     )?;
     if config.project_id.trim().is_empty()
         || config.environment.trim().is_empty()

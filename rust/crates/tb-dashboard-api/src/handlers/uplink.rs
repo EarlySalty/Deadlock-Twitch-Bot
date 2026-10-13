@@ -14,10 +14,12 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::collections::HashMap;
+use tb_domain::DashboardLanguage;
 use tb_transport_twitch::{HelixClient, TwitchUser};
 
 use super::platform_token::{PlatformTokenConfig, PLATFORM_TWITCH};
 use crate::auth::{level::DashboardAuthLevel, require_admin, session::DashboardAuthState};
+use crate::language::RequestLanguage;
 
 const RELAY_ADMIN_WAITLIST_PFAD: &str = "/v1/admin/waitlist";
 const RELAY_ADMIN_USERS_PFAD: &str = "/v1/admin/users";
@@ -923,57 +925,52 @@ pub struct ManuellesProfil {
     pub bitrate_kbps: Formularzahl,
 }
 
-/// Prueft ein manuelles Profil auf das, was technisch nicht gehen kann, und
-/// gibt die vier Zahlen so zurueck, wie das Relay sie speichert.
-///
-/// Nach oben wird nichts mehr geprueft. Frueher stand hier ein Ingest-Deckel,
-/// und der hat eine Eingabe abgelehnt, die das Relay angenommen haette: der
-/// Streamer trug 16000 ein, bekam "liegt über unserem Maximum" und keine
-/// Erklaerung, wessen Maximum das ist. Was eine Plattform wirklich annimmt,
-/// entscheidet die Plattform an ihrem Ingest. Was der Server traegt,
-/// entscheidet das Punktebudget in rs-relay, und zwar mit einer Ablehnung
-/// samt Grund statt hier mit einem Formularfehler.
-///
-/// Die Umrechnung nach `i32` ist keine Obergrenze und will keine sein. Sie ist
-/// der Spaltentyp in rs-relay, und eine Zahl, die dort nicht hineinpasst, kann
-/// niemand speichern. Frueher hat das `serde` erledigt, mit einer 422 ohne
-/// Feldangabe; jetzt steht der Feldname und die getippte Zahl im Satz.
-///
-/// Rueckgabe ist sonst der Grund, warum es nicht geht, damit die Oberflaeche
-/// ihn hinschreiben kann. Ein blosses "ungueltig" laesst den Streamer raten,
-/// welches der vier Felder gemeint ist.
-fn manuell_pruefen(p: ManuellesProfil) -> Result<(i32, i32, i32, i32), String> {
+fn manuell_pruefen(
+    p: ManuellesProfil,
+    lang: DashboardLanguage,
+) -> Result<(i32, i32, i32, i32), String> {
     let mut zahlen = [0i32; 4];
     for (platz, (name, feld)) in [
-        ("Breite", p.width),
-        ("Höhe", p.height),
-        ("Bildrate", p.fps),
+        (lang.pick("Breite", "Width"), p.width),
+        (lang.pick("Höhe", "Height"), p.height),
+        (lang.pick("Bildrate", "Frame rate"), p.fps),
         ("Bitrate", p.bitrate_kbps),
     ]
     .into_iter()
     .enumerate()
     {
         let Some(wert) = feld.0 else {
-            return Err(format!(
-                "{name}: das ist keine ganze Zahl. Prüf das Feld auf einen Tippfehler."
+            return Err(lang.pick(
+                format!("{name}: das ist keine ganze Zahl. Prüf das Feld auf einen Tippfehler."),
+                format!("{name}: that is not a whole number. Check the field for a typo."),
             ));
         };
         if wert <= 0 {
-            return Err(format!("{name} muss größer als 0 sein."));
+            return Err(lang.pick(
+                format!("{name} muss größer als 0 sein."),
+                format!("{name} must be greater than 0."),
+            ));
         }
         let Ok(wert) = i32::try_from(wert) else {
-            return Err(format!(
-                "{name}: {wert} ist zu groß für dieses Feld. Da hat sich wohl eine Ziffer verirrt."
+            return Err(lang.pick(
+                format!(
+                    "{name}: {wert} ist zu groß für dieses Feld. Da hat sich wohl eine Ziffer verirrt."
+                ),
+                format!(
+                    "{name}: {wert} is too large for this field. An extra digit probably slipped in."
+                ),
             ));
         };
         zahlen[platz] = wert;
     }
     let [width, height, fps, bitrate_kbps] = zahlen;
-    // Ungerade Kantenlaengen bringen den Encoder ins Straucheln: yuv420p
-    // halbiert beide Achsen, und eine ungerade Zahl laesst sich nicht
-    // halbieren. ffmpeg bricht dann beim Start ab, nicht beim Speichern.
     if width % 2 != 0 || height % 2 != 0 {
-        return Err("Breite und Höhe müssen gerade Zahlen sein.".into());
+        return Err(lang
+            .pick(
+                "Breite und Höhe müssen gerade Zahlen sein.",
+                "Width and height must be even numbers.",
+            )
+            .into());
     }
     Ok((width, height, fps, bitrate_kbps))
 }
@@ -1004,8 +1001,7 @@ fn fehler(status: StatusCode, text: &str) -> Response {
     (status, Json(json!({ "error": text }))).into_response()
 }
 
-/// Baut den Zieleintrag fuer das Relay oder liefert den Grund, warum nicht.
-fn ziel_nutzlast(body: &DestinationBody) -> Result<Value, Response> {
+fn ziel_nutzlast(body: &DestinationBody, lang: DashboardLanguage) -> Result<Value, Response> {
     if !PLATTFORMEN.contains(&body.platform.trim()) {
         return Err(fehler(StatusCode::BAD_REQUEST, "unbekannte Plattform"));
     }
@@ -1076,7 +1072,8 @@ fn ziel_nutzlast(body: &DestinationBody) -> Result<Value, Response> {
                 .ok_or_else(|| fehler(StatusCode::BAD_REQUEST, "unbekanntes Profil"))?,
         ),
         (None, Some(manuell)) => Some(
-            manuell_pruefen(manuell).map_err(|grund| fehler(StatusCode::BAD_REQUEST, &grund))?,
+            manuell_pruefen(manuell, lang)
+                .map_err(|grund| fehler(StatusCode::BAD_REQUEST, &grund))?,
         ),
         (None, None) => None,
     };
@@ -1135,10 +1132,11 @@ fn nutzlast_fuer(streamer_id: i64, eintrag: Value) -> Value {
 pub async fn put_destination_handler(
     State(pool): State<PgPool>,
     auth: DashboardAuthLevel,
+    RequestLanguage(lang): RequestLanguage,
     Json(body): Json<DestinationBody>,
 ) -> Result<Json<Value>, Response> {
     let id = partner_id(&pool, &auth).await?;
-    let mut eintrag = ziel_nutzlast(&body)?;
+    let mut eintrag = ziel_nutzlast(&body, lang)?;
     let platform = eintrag["platform"]
         .as_str()
         .ok_or_else(|| fehler(StatusCode::BAD_REQUEST, "Plattform fehlt"))?
@@ -1825,13 +1823,13 @@ mod tests {
                 serde_json::from_value(json!({"platform":"twitch","twitch_output_mode":mode}))
                     .unwrap();
             assert_eq!(
-                ziel_nutzlast(&request).unwrap(),
+                ziel_nutzlast(&request, DashboardLanguage::De).unwrap(),
                 json!({"platform":"twitch","twitch_output_mode":mode})
             );
         }
         let mut unchanged = body("twitch");
         unchanged.enabled = Some(false);
-        assert!(ziel_nutzlast(&unchanged)
+        assert!(ziel_nutzlast(&unchanged, DashboardLanguage::De)
             .unwrap()
             .get("twitch_output_mode")
             .is_none());
@@ -1843,7 +1841,7 @@ mod tests {
             let request: DestinationBody =
                 serde_json::from_value(json!({"platform":platform,"twitch_output_mode":mode}))
                     .unwrap();
-            assert!(ziel_nutzlast(&request).is_err());
+            assert!(ziel_nutzlast(&request, DashboardLanguage::De).is_err());
         }
     }
 
@@ -1854,14 +1852,14 @@ mod tests {
                 json!({"platform":"twitch","profil":"1080p60","twitch_audio_mode":mode}),
             )
             .unwrap();
-            assert!(ziel_nutzlast(&request)
+            assert!(ziel_nutzlast(&request, DashboardLanguage::De)
                 .unwrap()
                 .get("twitch_audio_mode")
                 .is_none());
         }
         let mut unchanged = body("twitch");
         unchanged.enabled = Some(true);
-        assert!(ziel_nutzlast(&unchanged)
+        assert!(ziel_nutzlast(&unchanged, DashboardLanguage::De)
             .unwrap()
             .get("twitch_audio_mode")
             .is_none());
@@ -1870,7 +1868,7 @@ mod tests {
                 json!({"platform":platform,"enabled":true,"twitch_audio_mode":mode}),
             )
             .unwrap();
-            assert!(ziel_nutzlast(&request).is_err());
+            assert!(ziel_nutzlast(&request, DashboardLanguage::De).is_err());
         }
     }
 
@@ -1881,7 +1879,7 @@ mod tests {
     fn nur_das_profil_aendern_geht_ohne_stream_key() {
         let mut b = body("twitch");
         b.profil = Some("720p60".into());
-        let wert = ziel_nutzlast(&b).expect("darf durchgehen");
+        let wert = ziel_nutzlast(&b, DashboardLanguage::De).expect("darf durchgehen");
         assert_eq!(wert["platform"], "twitch");
         assert_eq!(wert["height"], 720);
         assert_eq!(wert["bitrate_kbps"], 4500);
@@ -1892,7 +1890,7 @@ mod tests {
     fn manuelle_werte_gehen_durch() {
         let mut b = body("youtube");
         b.manuell = Some(manuell(2560, 1440, 60, 18000));
-        let wert = ziel_nutzlast(&b).expect("darf durchgehen");
+        let wert = ziel_nutzlast(&b, DashboardLanguage::De).expect("darf durchgehen");
         assert_eq!(wert["width"], 2560);
         assert_eq!(wert["bitrate_kbps"], 18000);
     }
@@ -1906,12 +1904,12 @@ mod tests {
     /// einem Grund statt mit einem Formularfehler.
     #[test]
     fn hohe_werte_werden_nicht_mehr_abgelehnt() {
-        assert!(manuell_pruefen(manuell(3840, 2160, 60, 6000)).is_ok());
-        assert!(manuell_pruefen(manuell(1920, 1080, 60, 60000)).is_ok());
+        assert!(manuell_pruefen(manuell(3840, 2160, 60, 6000), DashboardLanguage::De).is_ok());
+        assert!(manuell_pruefen(manuell(1920, 1080, 60, 60000), DashboardLanguage::De).is_ok());
         // Und der Fall aus dem Betrieb: 16000 kbps an Twitch. Genau diese Zahl
         // hat der Streamer eingetragen und "liegt über unserem Maximum"
         // gelesen, ohne zu erfahren, wessen Maximum gemeint war.
-        assert!(manuell_pruefen(manuell(2560, 1440, 60, 16000)).is_ok());
+        assert!(manuell_pruefen(manuell(2560, 1440, 60, 16000), DashboardLanguage::De).is_ok());
     }
 
     /// Der Weg, auf dem der Fehler entstanden ist: nicht der Aufruf von
@@ -1939,7 +1937,8 @@ mod tests {
             "-9999999999",
         ] {
             let b = aus_json(zahl).expect("darf nicht schon am Typ scheitern");
-            let antwort = ziel_nutzlast(&b).expect_err("und wird danach abgelehnt");
+            let antwort =
+                ziel_nutzlast(&b, DashboardLanguage::De).expect_err("und wird danach abgelehnt");
             assert_eq!(antwort.status(), StatusCode::BAD_REQUEST, "{zahl}");
         }
     }
@@ -1948,20 +1947,26 @@ mod tests {
     #[test]
     fn eine_normale_zahl_geht_durch_dieselbe_huelle() {
         let b = aus_json("16000").expect("gueltig");
-        let wert = ziel_nutzlast(&b).expect("darf durchgehen");
+        let wert = ziel_nutzlast(&b, DashboardLanguage::De).expect("darf durchgehen");
         assert_eq!(wert["bitrate_kbps"], 16000);
     }
 
     #[test]
     fn die_meldung_zu_einem_vertipper_nennt_das_feld() {
         // Ohne Feldnamen sucht der Streamer in vier Feldern nach dem Fehler.
-        let fehler = manuell_pruefen(manuell(1920, 1080, 60, 9_999_999_999))
-            .expect_err("passt nicht in den Spaltentyp des Relays");
+        let fehler = manuell_pruefen(
+            manuell(1920, 1080, 60, 9_999_999_999),
+            DashboardLanguage::De,
+        )
+        .expect_err("passt nicht in den Spaltentyp des Relays");
         assert!(fehler.starts_with("Bitrate"), "{fehler}");
-        let fehler = manuell_pruefen(ManuellesProfil {
-            bitrate_kbps: Formularzahl(None),
-            ..manuell(1920, 1080, 60, 6000)
-        })
+        let fehler = manuell_pruefen(
+            ManuellesProfil {
+                bitrate_kbps: Formularzahl(None),
+                ..manuell(1920, 1080, 60, 6000)
+            },
+            DashboardLanguage::De,
+        )
         .expect_err("keine ganze Zahl");
         assert!(fehler.starts_with("Bitrate"), "{fehler}");
     }
@@ -1970,14 +1975,18 @@ mod tests {
     /// wieder eingefuehrte Obergrenze: alles, was dort hineinpasst, geht durch.
     #[test]
     fn der_groesste_speicherbare_wert_geht_weiterhin_durch() {
-        assert!(manuell_pruefen(manuell(1920, 1080, 60, i32::MAX as i64)).is_ok());
+        assert!(manuell_pruefen(
+            manuell(1920, 1080, 60, i32::MAX as i64),
+            DashboardLanguage::De
+        )
+        .is_ok());
     }
 
     /// yuv420p halbiert beide Achsen. Eine ungerade Kante laesst ffmpeg erst
     /// beim Start sterben, nicht beim Speichern, und dann steht der Stream.
     #[test]
     fn ungerade_kanten_werden_abgelehnt() {
-        assert!(manuell_pruefen(manuell(1921, 1080, 60, 6000)).is_err());
+        assert!(manuell_pruefen(manuell(1921, 1080, 60, 6000), DashboardLanguage::De).is_err());
     }
 
     #[test]
@@ -1988,7 +1997,7 @@ mod tests {
             (1920, 1080, 0, 6000),
             (1920, 1080, 60, -1),
         ] {
-            assert!(manuell_pruefen(manuell(w, h, f, b)).is_err());
+            assert!(manuell_pruefen(manuell(w, h, f, b), DashboardLanguage::De).is_err());
         }
     }
 
@@ -1997,28 +2006,28 @@ mod tests {
         let mut b = body("twitch");
         b.profil = Some("1080p60".into());
         b.manuell = Some(manuell(1920, 1080, 60, 6000));
-        assert!(ziel_nutzlast(&b).is_err());
+        assert!(ziel_nutzlast(&b, DashboardLanguage::De).is_err());
     }
 
     #[test]
     fn halb_ausgefuellte_zugangsdaten_sind_ein_fehler() {
         let mut b = body("twitch");
         b.rtmp_url = Some("rtmp://live.twitch.tv/app".into());
-        assert!(ziel_nutzlast(&b).is_err());
+        assert!(ziel_nutzlast(&b, DashboardLanguage::De).is_err());
     }
 
     /// Ohne diese Pruefung meldete ein Aufruf, der nichts traegt, Erfolg. In
     /// der Oberflaeche sieht das aus wie gespeichert.
     #[test]
     fn ein_aufruf_ohne_inhalt_ist_ein_fehler() {
-        assert!(ziel_nutzlast(&body("twitch")).is_err());
+        assert!(ziel_nutzlast(&body("twitch"), DashboardLanguage::De).is_err());
     }
 
     #[test]
     fn unbekannte_plattformen_kommen_nicht_durch() {
         let mut b = body("facebook");
         b.profil = Some("1080p60".into());
-        assert!(ziel_nutzlast(&b).is_err());
+        assert!(ziel_nutzlast(&b, DashboardLanguage::De).is_err());
     }
 
     #[test]
@@ -2026,7 +2035,10 @@ mod tests {
         for platform in PLATTFORMEN {
             let mut b = body(platform);
             b.profil = Some("1080p60".into());
-            assert!(ziel_nutzlast(&b).is_ok(), "{platform} kommt nicht durch");
+            assert!(
+                ziel_nutzlast(&b, DashboardLanguage::De).is_ok(),
+                "{platform} kommt nicht durch"
+            );
         }
     }
 
@@ -2034,7 +2046,7 @@ mod tests {
     fn abschalten_geht_ohne_qualitaetsangabe() {
         let mut b = body("kick");
         b.enabled = Some(false);
-        let wert = ziel_nutzlast(&b).expect("darf durchgehen");
+        let wert = ziel_nutzlast(&b, DashboardLanguage::De).expect("darf durchgehen");
         assert_eq!(wert["enabled"], false);
         assert!(wert.get("width").is_none());
     }
@@ -2046,7 +2058,10 @@ mod tests {
     fn die_nutzlast_hat_die_huelle_des_relays() {
         let mut b = body("twitch");
         b.profil = Some("1080p60".into());
-        let nutzlast = nutzlast_fuer(4711, ziel_nutzlast(&b).expect("darf durchgehen"));
+        let nutzlast = nutzlast_fuer(
+            4711,
+            ziel_nutzlast(&b, DashboardLanguage::De).expect("darf durchgehen"),
+        );
         assert_eq!(nutzlast["streamer_id"], 4711);
         let ziele = nutzlast["destinations"].as_array().expect("Liste");
         assert_eq!(ziele.len(), 1, "eine Anfrage traegt genau ein Ziel");

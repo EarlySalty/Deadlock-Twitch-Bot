@@ -34,7 +34,23 @@ pub(crate) async fn pool() -> Option<&'static PgPool> {
     POOL.get()
 }
 
+tokio::task_local! {
+    /// Twitch-User-ID des Streamers, auf den sich der laufende Aufruf bezieht.
+    /// Gesetzt nur im Eingang ([`crate::complete`]), gelesen nur von [`begin`].
+    static STREAMER: Option<String>;
+}
+
+/// Führt `future` mit dem Streamerbezug für das Ledger aus.
+pub(crate) async fn with_streamer<F: std::future::Future>(
+    twitch_user_id: Option<String>,
+    future: F,
+) -> F::Output {
+    STREAMER.scope(twitch_user_id, future).await
+}
+
 /// Vor jedem kostenpflichtigen Versuch muss diese Zeile dauerhaft stehen.
+/// Sie trägt die Twitch-User-ID des Streamers, wenn der Aufruf einen hat
+/// (Beleg für den KI-Schalter pro Server).
 pub async fn begin(purpose: &str, model: &str, provider: &str) -> Result<i64, crate::LlmError> {
     let fail = || {
         crate::LlmError::Unavailable(
@@ -43,9 +59,11 @@ pub async fn begin(purpose: &str, model: &str, provider: &str) -> Result<i64, cr
     };
     let pool = POOL.get().ok_or_else(fail)?;
     let (project, service) = IDENTITY.get().ok_or_else(fail)?;
-    sqlx::query_scalar("INSERT INTO public.llm_usage (ts,source,purpose,model,tokens_in,tokens_out,total,success,project,service,provider,attempt_state) VALUES ($1,$2,$3,$4,NULL,NULL,NULL,0,$5,$6,$7,'started') RETURNING id")
+    let twitch_user_id = STREAMER.try_with(Clone::clone).ok().flatten();
+    sqlx::query_scalar("INSERT INTO public.llm_usage (ts,source,purpose,model,tokens_in,tokens_out,total,success,project,service,provider,attempt_state,twitch_user_id) VALUES ($1,$2,$3,$4,NULL,NULL,NULL,0,$5,$6,$7,'started',$8) RETURNING id")
         .bind(Utc::now().to_rfc3339_opts(SecondsFormat::Secs, false))
         .bind(SOURCE).bind(purpose).bind(model).bind(project).bind(service).bind(provider)
+        .bind(twitch_user_id)
         .fetch_one(pool).await.map_err(|_| {
             tracing::error!(purpose, provider, "LLM_USAGE_BLOCKED: Start konnte nicht gespeichert werden");
             fail()

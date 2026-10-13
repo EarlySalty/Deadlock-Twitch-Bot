@@ -38,6 +38,11 @@ pub(crate) fn announcement_reannounce_cooldown_key(login: &str) -> Option<String
 /// ohne Funktionsgewinn. Die Konstante bleibt korrekt befüllt, falls je ein
 /// EventSub-loses Setup einen geteilten DB-Dedupe bekommt.
 pub const REAUTH_REMINDER_TEXT: &str = "Kurze Erinnerung: Fuer den Raid-/Stats-Bot fehlt noch die neue Twitch-Autorisierung. Bitte im Dashboard einloggen und Twitch neu verbinden. Falls du die DM brauchst: Der Re-Auth-Link wurde dir bereits auf Discord geschickt.";
+const REAUTH_REMINDER_TEXT_EN: &str = "Quick reminder: the raid/stats bot still needs the new Twitch authorization. Please log into the dashboard and reconnect Twitch. If you need the DM: the re-auth link was already sent to you on Discord.";
+
+fn reauth_reminder_text(lang: tb_domain::UiLang) -> &'static str {
+    lang.pick(REAUTH_REMINDER_TEXT, REAUTH_REMINDER_TEXT_EN)
+}
 
 const REAUTH_FALLBACK_DEDUPE_WINDOW: Duration = Duration::from_secs(300);
 
@@ -299,9 +304,10 @@ impl ReauthReminderPollHooks {
         if !self.claim_send(key) {
             return;
         }
+        let lang = tb_chat::channel_ui_lang(&self.pool, twitch_user_id.trim()).await;
         match self
             .chat
-            .send_message(twitch_user_id.trim(), REAUTH_REMINDER_TEXT)
+            .send_message(twitch_user_id.trim(), reauth_reminder_text(lang))
             .await
         {
             Ok(SendOutcome::Sent) => {

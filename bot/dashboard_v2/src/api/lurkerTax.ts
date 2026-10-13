@@ -1,3 +1,6 @@
+import { tr } from '../i18n/dictionary';
+import { withLanguageHeader } from './languageHeader';
+
 export interface LurkerTaxSettingsResponse {
   lurker_tax_enabled: boolean;
   has_moderator_read_chatters: boolean;
@@ -12,20 +15,11 @@ export interface LurkerTaxUpdateResponse {
 const BASE = '/twitch/api/v2/streamer/lurker-tax-settings';
 
 async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
-    credentials: 'same-origin',
-    ...init,
-  });
+  const response = await fetch(path, withLanguageHeader(path, { credentials: 'same-origin', ...init }));
   if (!response.ok) {
-    let message = `HTTP ${response.status}`;
-    try {
-      const body = await response.json();
-      if (body?.error) message = String(body.error);
-      else if (body?.message) message = String(body.message);
-    } catch {
-      // ignore json parse error, keep default message
-    }
-    throw new Error(message);
+    const body = (await response.json().catch(() => null)) as { error?: unknown; message?: unknown } | null;
+    const message = body?.error ? String(body.error) : body?.message ? String(body.message) : `HTTP ${response.status}`;
+    throw new Error(tr(message));
   }
   return (await response.json()) as T;
 }

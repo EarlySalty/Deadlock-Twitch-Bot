@@ -1,0 +1,31 @@
+# Site body for the international domain (Paket O, Multi-Server-Plan 4.3).
+# Usage: replace the old `dead_lock_domain_alias` redirect with
+#
+#   dead-lock.de {
+#       import /path/to/ops/caddy/dead-lock-domain.caddy
+#   }
+#
+# No redirect to the main domain any more. Streamer pages, dashboard, API and
+# OAuth callbacks go to the same backend as on the main domain. The original
+# Host header is passed through unchanged (Caddy default): the backend picks the
+# OAuth redirect URL and cookie domain from it, using a fixed allowlist.
+# Never add `header_up Host ...` here.
+
+@dead_lock_backend path /twitch /twitch/* /streamer /streamer/* /callback/twitch /callback/kick /callback/youtube /demo /demo/*
+handle @dead_lock_backend {
+    reverse_proxy 127.0.0.1:8769 {
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto https
+        header_up X-Dashboard-Context public
+    }
+}
+
+# Until the English landing page exists (Paket W) the root shows the streamer page.
+handle / {
+    redir * /streamer 302
+}
+
+# Everything else belongs only to the main domain.
+handle {
+    respond "Not Found" 404
+}

@@ -1,3 +1,6 @@
+import { tr } from '../i18n/dictionary';
+import { withLanguageHeader } from './languageHeader';
+
 export interface TitleCommandSettingsResponse {
   title_command_enabled: boolean;
 }
@@ -10,20 +13,11 @@ export interface TitleCommandUpdateResponse {
 const BASE = '/twitch/api/v2/streamer/title-command-settings';
 
 async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
-    credentials: 'same-origin',
-    ...init,
-  });
+  const response = await fetch(path, withLanguageHeader(path, { credentials: 'same-origin', ...init }));
   if (!response.ok) {
-    let message = `HTTP ${response.status}`;
-    try {
-      const body = await response.json();
-      if (body?.error) message = String(body.error);
-      else if (body?.message) message = String(body.message);
-    } catch {
-      // keep default message
-    }
-    throw new Error(message);
+    const body = (await response.json().catch(() => null)) as { error?: unknown; message?: unknown } | null;
+    const message = body?.error ? String(body.error) : body?.message ? String(body.message) : `HTTP ${response.status}`;
+    throw new Error(tr(message));
   }
   return (await response.json()) as T;
 }

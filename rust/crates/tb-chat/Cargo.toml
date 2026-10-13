@@ -22,6 +22,8 @@ unicode-normalization = { workspace = true }
 tb-config   = { workspace = true }
 tb-crypto = { workspace = true }
 tb-domain   = { workspace = true }
+# Heimat-Server der Streamer für Werbung pro Server (Paket R): tb_db::network.
+tb-db       = { workspace = true }
 tb-engagement = { workspace = true }
 tb-knowledge = { workspace = true }
 tb-analytics = { workspace = true }

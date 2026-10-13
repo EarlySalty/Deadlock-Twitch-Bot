@@ -3,47 +3,62 @@ import { useRef } from "react";
 import { ArrowRight, CheckCircle2, Power, Search, Users } from "lucide-react";
 import { ScrollReveal, useEinblendung } from "@/components/ui/ScrollReveal";
 import { GradientText } from "@/components/ui/GradientText";
+import { tx } from "@/i18n/locale";
 
 const features = [
   {
-    title: "Fließende Übergänge",
-    description:
+    title: tx("Fließende Übergänge", "Seamless handoffs"),
+    description: tx(
       "Aus einer beendeten Session wird direkt der Einstieg in den nächsten passenden Live-Stream.",
+      "The end of one session becomes the start of the next fitting live stream.",
+    ),
   },
   {
-    title: "Passende Partner-Ziele",
-    description:
+    title: tx("Passende Partner-Ziele", "The right partner targets"),
+    description: tx(
       "Bevorzugt werden aktive Partner aus dem Netzwerk, damit Zuschauer im Deadlock-Umfeld bleiben.",
+      "Active partners from the network get priority, so viewers stay in the Deadlock scene.",
+    ),
   },
   {
-    title: "Mehr Sichtbarkeit für alle",
-    description:
+    title: tx("Mehr Sichtbarkeit für alle", "More visibility for everyone"),
+    description: tx(
       "Viewer werden sinnvoll weitergeleitet, sodass große und kleine Creator gemeinsam von mehr Discoverability profitieren.",
+      "Viewers get passed on where it makes sense, so big and small creators alike benefit from better discoverability.",
+    ),
   },
   {
-    title: "Volle Kontrolle",
-    description:
+    title: tx("Volle Kontrolle", "Full control"),
+    description: tx(
       "Automatisierung, wenn sie hilft; manuelle Raids bleiben jederzeit Teil eures eigenen Ablaufs.",
+      "Automation when it helps; manual raids are always still part of your own routine.",
+    ),
   },
 ];
 
 const flowSteps = [
   {
     title: "Offline",
-    description:
+    description: tx(
       "Sobald ein Deadlock-Stream endet, übernimmt das Netzwerk automatisch den nächsten Schritt.",
+      "As soon as a Deadlock stream ends, the network automatically takes the next step.",
+    ),
     icon: Power,
   },
   {
     title: "Partner",
-    description:
+    description: tx(
       "Ein passender Live-Partner aus dem Netzwerk wird priorisiert, damit die Community im richtigen Umfeld bleibt.",
+      "A fitting live partner from the network gets priority, so the community stays in the right place.",
+    ),
     icon: Search,
   },
   {
     title: "Raid",
-    description:
+    description: tx(
       "Die Viewer werden direkt in den nächsten relevanten Stream weitergeleitet statt am Ende zu verlieren.",
+      "Viewers are sent straight to the next relevant stream instead of being lost at the end.",
+    ),
     icon: Users,
   },
 ];
@@ -273,25 +288,52 @@ export function RaidExplainer() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
           <ScrollReveal>
             <p className="text-sm text-[var(--color-accent)] font-medium uppercase tracking-wider mb-4">
-              Auto-Raid System
+              {tx("Auto-Raid System", "Auto-raid system")}
             </p>
 
             <h2 className="text-3xl md:text-4xl font-bold text-[var(--color-text-primary)] mb-6">
-              <GradientText>Intelligentes</GradientText> Raid-System
+              {tx(
+                <>
+                  <GradientText>Intelligentes</GradientText> Raid-System
+                </>,
+                <>
+                  <GradientText>Smart</GradientText> raid system
+                </>,
+              )}
             </h2>
 
             <p className="text-[var(--color-text-secondary)] text-lg mb-8 leading-relaxed">
-              Der Auto-Raid hält die Deadlock-Community in Bewegung. Endet ein
-              Partner-Stream nach einer Deadlock-Session, sucht das Netzwerk
-              automatisch nach einem passenden Live-Partner und leitet die
-              Community direkt weiter.
+              {tx(
+                <>
+                  Der Auto-Raid hält die Deadlock-Community in Bewegung. Endet ein
+                  Partner-Stream nach einer Deadlock-Session, sucht das Netzwerk
+                  automatisch nach einem passenden Live-Partner und leitet die
+                  Community direkt weiter.
+                </>,
+                <>
+                  The auto-raid keeps the Deadlock community moving. When a partner
+                  stream ends after a Deadlock session, the network automatically
+                  looks for a fitting live partner and sends the community straight
+                  over.
+                </>,
+              )}
             </p>
 
             <p className="text-[var(--color-text-secondary)] text-base mb-8 leading-relaxed">
-              Das sorgt für fließende Übergänge statt harter Stream-Enden: mehr
-              Sichtbarkeit, mehr gemeinsame Reichweite und mehr echte
-              Verbindungen im Netzwerk. Wer lieber selbst entscheidet, kann
-              natürlich weiterhin manuell raiden.
+              {tx(
+                <>
+                  Das sorgt für fließende Übergänge statt harter Stream-Enden: mehr
+                  Sichtbarkeit, mehr gemeinsame Reichweite und mehr echte
+                  Verbindungen im Netzwerk. Wer lieber selbst entscheidet, kann
+                  natürlich weiterhin manuell raiden.
+                </>,
+                <>
+                  That means seamless handoffs instead of abrupt stream endings: more
+                  visibility, more shared reach and more real connections across the
+                  network. Prefer to pick yourself? You can still raid manually any
+                  time.
+                </>,
+              )}
             </p>
 
             <ul className="space-y-4">
@@ -315,7 +357,7 @@ export function RaidExplainer() {
           <ScrollReveal delay={0.2}>
             <div className="panel-card rounded-2xl p-8">
               <p className="text-lg font-semibold text-[var(--color-text-primary)] mb-6">
-                Flow beim Offline-Gehen
+                {tx("Flow beim Offline-Gehen", "What happens when you go offline")}
               </p>
 
               <motion.div
@@ -391,8 +433,16 @@ export function RaidExplainer() {
                   </div>
 
                   <p className="text-sm text-[var(--color-text-primary)] mt-3 leading-relaxed">
-                    So bleibt eure Community in Bewegung und der Stream endet
-                    nicht einfach im Leeren.
+                    {tx(
+                      <>
+                        So bleibt eure Community in Bewegung und der Stream endet
+                        nicht einfach im Leeren.
+                      </>,
+                      <>
+                        That keeps your community moving, and your stream doesn&apos;t
+                        just end in the void.
+                      </>,
+                    )}
                   </p>
                 </motion.div>
               </motion.div>

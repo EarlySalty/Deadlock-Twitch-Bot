@@ -22,6 +22,7 @@ use tb_dashboard_api::auth::level::DashboardAuthLevel;
 use tb_dashboard_api::handlers::{
     category_comparison, chat_analytics, clip_command_settings, coaching, performance, social_media,
 };
+use tb_dashboard_api::language::RequestLanguage;
 
 // ── Aufbau ──────────────────────────────────────────────────────────────────
 
@@ -218,6 +219,7 @@ async fn coaching_ohne_plus_403_mit_plus_200() {
 
     let frei = coaching::coaching_handler(
         partner("freistreamer"),
+        RequestLanguage::default(),
         State(pool.clone()),
         Query(coaching::CoachingQuery {
             streamer: None,
@@ -233,6 +235,7 @@ async fn coaching_ohne_plus_403_mit_plus_200() {
 
     let bezahlt = coaching::coaching_handler(
         partner("plusstreamer"),
+        RequestLanguage::default(),
         State(pool),
         Query(coaching::CoachingQuery {
             streamer: None,
@@ -902,6 +905,7 @@ async fn ohne_auth_kein_zugang() {
     };
     let resp = coaching::coaching_handler(
         DashboardAuthLevel::None,
+        RequestLanguage::default(),
         State(pool.clone()),
         Query(coaching::CoachingQuery {
             streamer: Some("freistreamer".into()),

@@ -61,7 +61,7 @@ pub async fn chat_deep_llm_handler(
     // IDOR-Guard: streamer ist Pflicht und wird (wie in Python) für die Query
     // nicht direkt genutzt, aber Partner dürfen nur ihren eigenen Login angeben
     // (Cross-Account → 403); Admin/Localhost frei. `required=true`.
-    let _streamer =
+    let streamer =
         match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
             Ok(Some(s)) => s,
             Ok(None) => {
@@ -73,6 +73,9 @@ pub async fn chat_deep_llm_handler(
             }
             Err(resp) => return resp,
         };
+    if let Some(resp) = super::ai_switch::blocked(None, Some(&streamer)).await {
+        return resp;
+    }
     let session_id = match params
         .session_id
         .as_deref()
@@ -108,6 +111,7 @@ pub async fn chat_deep_llm_handler(
     // Wie Python: einzelne User-Message, temperature 0.1, 240s-Timeout.
     let client = EngagementLlmClient::new(None, None, None, Some(Duration::from_secs(240)));
     match client
+        .for_channel(streamer.clone())
         .raw_completion_tracked(
             "",
             &prompt,
