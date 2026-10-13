@@ -1,8 +1,8 @@
-/// <reference types="node" />
 import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
+import { createSourceFile, isFunctionDeclaration, ScriptTarget } from 'typescript';
 
 const SRC = join(import.meta.dirname, '..', 'src');
 const read = (rel: string) => readFileSync(join(SRC, rel), 'utf8');
@@ -43,12 +43,12 @@ test('App.tsx importiert die Shell und wickelt jede der sieben Routen darin ein'
 test('Deadlock weltweit nutzt die bereits veröffentlichte Analyse-Route statt eines separaten Caddy-Pfads', () => {
   assert.match(
     SIDEBAR,
-    /href: '\/twitch\/analyse\?view=category'.*label: 'Deadlock weltweit'/,
+    /href: '\/twitch\/analyse\?view=category'.*label: t\('Deadlock weltweit'\)/,
     'Die Admin-Navigation darf nicht von einer separaten /twitch/kategorie-Caddyfreigabe abhängen',
   );
   assert.doesNotMatch(
     SIDEBAR,
-    /href: '\/twitch\/kategorie'.*label: 'Deadlock weltweit'/,
+    /href: '\/twitch\/kategorie'.*label: t\('Deadlock weltweit'\)/,
     'Die Sidebar darf den extern nicht gerouteten Legacy-Pfad nicht mehr verlinken',
   );
   assert.match(
@@ -124,10 +124,12 @@ test('App.tsx gatet die Pricing-Sidebar gegen den Auth-Status', () => {
 });
 
 test('der Analytics-Rahmen in App.tsx setzt keine eigene Gesamtbreite', () => {
-  const analytics = APP.slice(
-    APP.indexOf('function AnalyticsDashboard'),
-    APP.indexOf('export default function App'),
+  const source = createSourceFile('App.tsx', APP, ScriptTarget.Latest, true);
+  const component = source.statements.find(
+    (statement) => isFunctionDeclaration(statement) && statement.name?.text === 'AnalyticsDashboard',
   );
+  assert.ok(component, 'AnalyticsDashboard muss vorhanden sein');
+  const analytics = component.getText(source);
   assert.doesNotMatch(
     analytics,
     /internal-home-vibe/,

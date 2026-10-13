@@ -1,6 +1,7 @@
 import { type ReactNode } from 'react';
 import { Lock } from 'lucide-react';
 import { usePlan } from '../../context/PlanContext';
+import { useT } from '../../context/LanguageContext';
 import type { EntitlementId } from '../../types/billing';
 
 export interface SubTabDef {
@@ -17,8 +18,9 @@ interface SubTabsProps {
 }
 
 export function SubTabs({ tabs, active, onChange }: SubTabsProps) {
+  const t = useT();
   const { hasEntitlement, isPreviewMode } = usePlan();
-  const current = tabs.find((t) => t.id === active) ?? tabs[0];
+  const current = tabs.find((tab) => tab.id === active) ?? tabs[0];
   const lockedNow = current.entitlement ? !hasEntitlement(current.entitlement) : false;
 
   return (
@@ -48,9 +50,9 @@ export function SubTabs({ tabs, active, onChange }: SubTabsProps) {
             <Lock className="h-5 w-5 text-white/40" />
           </div>
           <p className="text-sm font-medium text-white/70">
-            {current.label} ist in deinem Plan nicht enthalten
+            {t('{label} ist in deinem Plan nicht enthalten', { label: current.label })}
           </p>
-          <p className="text-xs text-white/40">Verfügbar nach einem Upgrade</p>
+          <p className="text-xs text-white/40">{t('Verfügbar nach einem Upgrade')}</p>
         </div>
       ) : (
         current.render()
