@@ -10,6 +10,7 @@ import {
   Tooltip,
 } from 'recharts';
 import type { HealthScore } from '@/types/analytics';
+import { useT } from '../../context/LanguageContext';
 
 interface RetentionRadarProps {
   scores: HealthScore;
@@ -22,6 +23,7 @@ export function RetentionRadar({
   categoryAvg,
   title = 'Performance Mix',
 }: RetentionRadarProps) {
+  const t = useT();
   const data = [
     {
       metric: 'Reach',
@@ -92,11 +94,11 @@ export function RetentionRadar({
           <p className="text-white font-medium mb-2">{payload[0]?.payload?.metric}</p>
           <div className="space-y-1 text-sm">
             <p className="text-accent">
-              Du: <span className="text-white">{payload[0]?.value}</span>
+              {t('Du:')} <span className="text-white">{payload[0]?.value}</span>
             </p>
             {categoryAvg && (
               <p className="text-text-secondary">
-                Kategorie: <span className="text-white">{payload[1]?.value}</span>
+                {t('Kategorie:')} <span className="text-white">{payload[1]?.value}</span>
               </p>
             )}
           </div>
@@ -132,7 +134,7 @@ export function RetentionRadar({
                 height={36}
                 formatter={(value) => (
                   <span className="text-text-secondary text-sm">
-                    {value === 'you' ? 'Dein Kanal' : 'Kategorie Ø'}
+                    {value === 'you' ? t('Dein Kanal') : t('Kategorie Ø')}
                   </span>
                 )}
               />
@@ -163,7 +165,7 @@ export function RetentionRadar({
         </ResponsiveContainer>
       </div>
       <div className="mt-4 text-xs text-center text-text-secondary">
-        Scores von 0 bis 100 je Bereich
+        {t('Scores von 0 bis 100 je Bereich')}
       </div>
     </Rise>
   );

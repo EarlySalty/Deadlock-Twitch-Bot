@@ -20,8 +20,9 @@ import type {
   InternalHomeStreamComparison,
   InternalHomeViewersOverTimePoint,
 } from '@/api/home';
+import { useT } from '../../context/LanguageContext';
+import { activeLocale } from '../../i18n/dictionary';
 
-// Chart und Bestwerte folgen dem gemeinsamen Gold-Akzent.
 const GOLD = 'var(--color-primary)';
 
 function formatDurationShort(seconds: number | null | undefined): string {
@@ -35,13 +36,13 @@ function achievedLabel(iso: string | null): string | null {
   if (!iso) return null;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleDateString('de-DE', { day: '2-digit', month: 'short', year: 'numeric' });
+  return date.toLocaleDateString(activeLocale(), { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-/** Signiertes Delta: gruen bei +, rot bei -, nichts bei Nullbasis (pct === null). */
 function DeltaBadge({ pct }: { pct: number | null }) {
+  const t = useT();
   if (pct == null) {
-    return <span className="text-xs font-medium text-text-secondary">neu</span>;
+    return <span className="text-xs font-medium text-text-secondary">{t('neu')}</span>;
   }
   const up = pct >= 0;
   const Icon = up ? ArrowUpRight : ArrowDownRight;
@@ -98,6 +99,7 @@ function BestTile({
   display: string;
   isRecord: boolean;
 }) {
+  const t = useT();
   const achieved = achievedLabel(entry?.achieved_at ?? null);
   return (
     <div className="group relative overflow-hidden rounded-xl border border-border bg-background/55 p-3 transition-[transform,translate,scale,border-color,background-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-border-hover hover:bg-background/75">
@@ -122,7 +124,7 @@ function BestTile({
             style={{ background: `color-mix(in srgb, ${GOLD} 16%, transparent)`, color: GOLD }}
           >
             <Flame className="h-3 w-3" />
-            Neuer Rekord
+            {t('Neuer Rekord')}
           </span>
         ) : null}
       </div>
@@ -133,17 +135,11 @@ function BestTile({
       >
         {display}
       </div>
-      {achieved ? <div className="mt-1 text-[11px] text-text-secondary">am {achieved}</div> : null}
+      {achieved ? <div className="mt-1 text-[11px] text-text-secondary">{t('am {date}', { date: achieved })}</div> : null}
     </div>
   );
 }
 
-/**
- * Persoenliche Bestwerte + Stream-zu-Stream-Recap + Zuschauerverlauf.
- * Vibe angelehnt an die StreamElements-Stream-Summary, aber im Gold/Glass-Look.
- * "Neuer Rekord" nur bei Metriken, die der letzte Stream vergleichbar liefert
- * (Peak/Oe-Viewer/Follower/Dauer) -- NICHT bei Chat (messages vs. unique_chatters).
- */
 export function StreamRecapCard({
   personalBests,
   streamComparison,
@@ -157,6 +153,7 @@ export function StreamRecapCard({
   lastStream: InternalHomeLastStreamSummary | null;
   delay?: number;
 }) {
+  const t = useT();
   const pb = personalBests;
   const hasBests =
     pb != null &&
@@ -166,13 +163,10 @@ export function StreamRecapCard({
   const points = viewersOverTime ?? [];
   const hasChart = points.length > 1;
 
-  // Nichts anzuzeigen -> Karte ganz weglassen (kein leeres Panel).
   if (!hasBests && !streamComparison && !hasChart) {
     return null;
   }
 
-  // "Neuer Rekord": letzter Stream haelt den Bestwert (PB = MAX inkl. letztem Stream,
-  // also value >= PB-value == der letzte Stream IST der Rekord). Chat ausgenommen.
   const beats = (last: number | null | undefined, best: number | null | undefined, eps = 0) =>
     last != null && best != null && last >= best - eps;
   const peakRecord = beats(lastStream?.peak_viewers, pb?.peak_viewers.value);
@@ -188,23 +182,23 @@ export function StreamRecapCard({
       transition={{ duration: 0.32, delay }}
     >
       <div className="text-[11px] font-semibold uppercase tracking-[0.22em]" style={{ color: GOLD }}>
-        Dein Kanal in Rekorden
+        {t('Dein Kanal in Rekorden')}
       </div>
       <h2 className="mt-1 text-xl font-semibold text-white">
-        Pers&ouml;nliche Bestwerte <span className="text-text-secondary">(&#9685;&#8255;&#9685;)</span>
+        {t('Persönliche Bestwerte')} <span className="text-text-secondary">(&#9685;&#8255;&#9685;)</span>
       </h2>
-      <p className="mt-1 text-sm text-text-secondary">Deine Rekorde, seit wir mitschreiben.</p>
+      <p className="mt-1 text-sm text-text-secondary">{t('Deine Rekorde, seit wir mitschreiben.')}</p>
 
       {streamComparison ? (
         <div className="mt-5 rounded-xl border border-border bg-background/40 p-4">
           <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
-            So lief dein letzter Stream
+            {t('So lief dein letzter Stream')}
           </div>
-          <p className="mb-2 text-xs text-text-secondary">im Vergleich zum Stream davor</p>
+          <p className="mb-2 text-xs text-text-secondary">{t('im Vergleich zum Stream davor')}</p>
           <div className="divide-y divide-border/70">
-            <ComparisonRow label="Peak-Viewer" icon={TrendingUp} metric={streamComparison.peak_viewers} />
-            <ComparisonRow label="Neue Follower" icon={Users} metric={streamComparison.new_followers} />
-            <ComparisonRow label="Unique Chatter" icon={MessageSquare} metric={streamComparison.unique_chatters} />
+            <ComparisonRow label={t('Peak-Viewer')} icon={TrendingUp} metric={streamComparison.peak_viewers} />
+            <ComparisonRow label={t('Neue Follower')} icon={Users} metric={streamComparison.new_followers} />
+            <ComparisonRow label={t('Unique Chatter')} icon={MessageSquare} metric={streamComparison.unique_chatters} />
           </div>
         </div>
       ) : null}
@@ -212,7 +206,7 @@ export function StreamRecapCard({
       {hasChart ? (
         <div className="mt-5">
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
-            Zuschauer im Verlauf
+            {t('Zuschauer im Verlauf')}
           </div>
           <div className="h-40 w-full">
             <ResponsiveContainer width="100%" height="100%">
@@ -232,8 +226,8 @@ export function StreamRecapCard({
                     borderRadius: 10,
                     fontSize: 12,
                   }}
-                  labelFormatter={(t) => `${Math.round(Number(t) / 60)} min`}
-                  formatter={(value) => [formatNumber(Number(value)), 'Zuschauer']}
+                  labelFormatter={(value) => `${Math.round(Number(value) / 60)} min`}
+                  formatter={(value) => [formatNumber(Number(value)), t('Zuschauer')]}
                 />
                 <Area
                   type="monotone"
@@ -252,35 +246,35 @@ export function StreamRecapCard({
       {hasBests && pb ? (
         <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           <BestTile
-            label="Peak-Viewer"
+            label={t('Peak-Viewer')}
             icon={TrendingUp}
             entry={pb.peak_viewers}
             display={pb.peak_viewers.value != null ? formatNumber(pb.peak_viewers.value) : '–'}
             isRecord={peakRecord}
           />
           <BestTile
-            label={'Ø-Viewer'}
+            label={t('Ø-Viewer')}
             icon={Users}
             entry={pb.avg_viewers}
             display={pb.avg_viewers.value != null ? formatNumber(pb.avg_viewers.value) : '–'}
             isRecord={avgRecord}
           />
           <BestTile
-            label="Follower (1 Stream)"
+            label={t('Follower (1 Stream)')}
             icon={Crown}
             entry={pb.follower_gain}
             display={pb.follower_gain.value != null ? `+${formatNumber(pb.follower_gain.value)}` : '–'}
             isRecord={followerRecord}
           />
           <BestTile
-            label="Aktivster Chat"
+            label={t('Aktivster Chat')}
             icon={MessageSquare}
             entry={pb.unique_chatters}
             display={pb.unique_chatters.value != null ? formatNumber(pb.unique_chatters.value) : '–'}
             isRecord={false}
           />
           <BestTile
-            label={'Längster Stream'}
+            label={t('Längster Stream')}
             icon={Timer}
             entry={pb.longest_stream_seconds}
             display={formatDurationShort(pb.longest_stream_seconds.value)}
