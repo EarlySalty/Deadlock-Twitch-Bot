@@ -95,6 +95,88 @@ class PruefenTests(unittest.TestCase):
                 self.assertNotIn("Unit=", result.stdout)
 
 
+class FrozenSourceResumeTests(unittest.TestCase):
+    def run_resume(self, source, destination):
+        wrapper = WRAPPER.read_text()
+        preflight = (
+            'if [[ -L "$src" || ! -d "$src" ]]; then'
+            + wrapper.split('if [[ -L "$src" || ! -d "$src" ]]; then', 1)[1].split(
+                "\nnative_expected=0", 1
+            )[0]
+        )
+        transfer = (
+            'if [[ -e "$dest" || -L "$dest" ]]; then'
+            + wrapper.split('if [[ -e "$dest" || -L "$dest" ]]; then', 1)[1].split(
+                "\ncurrent=/opt/deadlock/twitch/current", 1
+            )[0]
+        )
+        return subprocess.run(
+            [
+                "/bin/bash",
+                "-c",
+                'set -euo pipefail\nsrc="$1"\ndest="$2"\n'
+                "mv() { exit 92; }\nchown() { exit 93; }\nchmod() { exit 94; }\n"
+                + preflight
+                + "\n"
+                + transfer,
+                "frozen-source-resume",
+                str(source),
+                str(destination),
+            ],
+            env={},
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+
+    def test_matching_frozen_source_is_reused_without_mutations(self):
+        with tempfile.TemporaryDirectory(prefix="twitch-resume-") as directory:
+            source = Path(directory) / SHA
+            (source / ".git").mkdir(parents=True)
+            artifact = source / "artifact"
+            artifact.write_bytes(b"already verified artifact")
+            artifact.chmod(0o444)
+            before = artifact.stat()
+            result = self.run_resume(source, source)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(artifact.read_bytes(), b"already verified artifact")
+            after = artifact.stat()
+            self.assertEqual(
+                (after.st_ino, after.st_mode, after.st_mtime_ns),
+                (before.st_ino, before.st_mode, before.st_mtime_ns),
+            )
+
+    def test_other_source_cannot_overwrite_an_existing_destination(self):
+        with tempfile.TemporaryDirectory(
+            prefix="twitch-resume-collision-"
+        ) as directory:
+            root = Path(directory)
+            source = root / "source"
+            (source / ".git").mkdir(parents=True)
+            destination = root / SHA
+            destination.mkdir()
+            artifact = destination / "artifact"
+            artifact.write_bytes(b"preserve destination")
+            result = self.run_resume(source, destination)
+            self.assertEqual(result.returncode, 1)
+            self.assertTrue(source.is_dir())
+            self.assertEqual(artifact.read_bytes(), b"preserve destination")
+
+    def test_symlink_and_worktree_metadata_are_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="twitch-resume-layout-") as directory:
+            root = Path(directory)
+            source = root / SHA
+            source.mkdir()
+            (source / ".git").write_text("gitdir: /foreign/worktree")
+            self.assertEqual(self.run_resume(source, source).returncode, 1)
+            (source / ".git").unlink()
+            (source / ".git").mkdir()
+            linked = root / "linked"
+            linked.symlink_to(source, target_is_directory=True)
+            self.assertEqual(self.run_resume(linked, linked).returncode, 1)
+
+
 class CutoverTests(unittest.TestCase):
     def run_cutover(self, scenario):
         body = WRAPPER.read_text().split("native_cutover() {\n", 1)[1].split("\n}\n\nif [[ -n", 1)[0]
