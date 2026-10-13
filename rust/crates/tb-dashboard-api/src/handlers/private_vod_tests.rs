@@ -89,7 +89,7 @@ async fn mounted_private_vod_routes_require_verified_twitch_session_provenance()
     .execute(pool)
     .await
     .unwrap();
-    let key = "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".to_string();
+    let key = tb_crypto::random_urlsafe_token(32);
     let auth_state = DashboardAuthState::new(pool.clone(), key.clone())
         .with_admin_twitch_user_id(Some("42".into()));
     let master = auth_state
