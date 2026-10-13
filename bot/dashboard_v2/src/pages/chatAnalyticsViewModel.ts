@@ -6,6 +6,7 @@ import {
   resolveMessagesPer100ViewerMinutes,
   resolveQualityMethod,
 } from '@/utils/engagementKpi';
+import { activeLocale, tr } from '../i18n/dictionary';
 
 export interface ChatAnalyticsViewModel {
   totalChatters: number;
@@ -90,15 +91,18 @@ export function buildChatAnalyticsViewModel(
   const newViewerShare = totalChatters > 0 ? (firstTimeChatters / totalChatters) * 100 : 0;
   const activeChattersShare = totalTrackedViewers > 0 ? (totalChatters / totalTrackedViewers) * 100 : 0;
   const activeChattersDescription = totalTrackedViewers > 0
-    ? `${totalChatters.toLocaleString('de-DE')} von ${totalTrackedViewers.toLocaleString('de-DE')} getrackten Accounts haben im Zeitraum geschrieben.`
-    : 'Anteil der getrackten Chat-Accounts mit mindestens einer Nachricht im Zeitraum.';
+    ? tr('{chatters} von {tracked} getrackten Accounts haben im Zeitraum geschrieben.', {
+        chatters: totalChatters.toLocaleString(activeLocale()),
+        tracked: totalTrackedViewers.toLocaleString(activeLocale()),
+      })
+    : tr('Anteil der getrackten Chat-Accounts mit mindestens einer Nachricht im Zeitraum.');
   const chatPenetrationGaugeValue =
     chattersApiInactive && data.legacyInteractionActivePerAvgViewer != null
       ? Math.min(100, data.legacyInteractionActivePerAvgViewer)
       : interactionRate;
   const messagesBenchmarkText = (() => {
     if (messagesPer100ViewerMinutes === null) {
-      return 'Keine Viewer-Minuten im Zeitraum';
+      return tr('Keine Viewer-Minuten im Zeitraum');
     }
     if (
       messagesPer100ViewerMinutesPercentile !== null &&
@@ -107,20 +111,33 @@ export function buildChatAnalyticsViewModel(
     ) {
       const rating =
         messagesPer100ViewerMinutesPercentile >= 75
-          ? 'Uber deinem ublichen Niveau'
+          ? tr('Uber deinem ublichen Niveau')
           : messagesPer100ViewerMinutesPercentile >= 40
-            ? 'Im typischen Bereich'
-            : 'Unter deinem ublichen Niveau';
-      return `${rating} · Rohwert ${messagesPer100ViewerMinutes.toFixed(1)} Nachrichten pro 100 Viewer-Minuten · besser als ${messagesPer100ViewerMinutesPercentile.toFixed(0)}% deiner ${messagesPer100ViewerMinutesBenchmarkSessions} Streams`;
+            ? tr('Im typischen Bereich')
+            : tr('Unter deinem ublichen Niveau');
+      return tr('{rating} · Rohwert {value} Nachrichten pro 100 Viewer-Minuten · besser als {percentile}% deiner {sessions} Streams', {
+        rating,
+        value: messagesPer100ViewerMinutes.toFixed(1),
+        percentile: messagesPer100ViewerMinutesPercentile.toFixed(0),
+        sessions: messagesPer100ViewerMinutesBenchmarkSessions,
+      });
     }
     return messagesPer100ViewerMinutesBenchmarkSessions > 0
-      ? `Rohwert ${messagesPer100ViewerMinutes.toFixed(1)} Nachrichten pro 100 Viewer-Minuten · Eigenvergleich noch instabil (${messagesPer100ViewerMinutesBenchmarkSessions} Streams)`
-      : `Rohwert ${messagesPer100ViewerMinutes.toFixed(1)} Nachrichten pro 100 Viewer-Minuten · Noch keine Vergleichsbasis aus fruheren Streams`;
+      ? tr('Rohwert {value} Nachrichten pro 100 Viewer-Minuten · Eigenvergleich noch instabil ({sessions} Streams)', {
+          value: messagesPer100ViewerMinutes.toFixed(1),
+          sessions: messagesPer100ViewerMinutesBenchmarkSessions,
+        })
+      : tr('Rohwert {value} Nachrichten pro 100 Viewer-Minuten · Noch keine Vergleichsbasis aus fruheren Streams', {
+          value: messagesPer100ViewerMinutes.toFixed(1),
+        });
   })();
   const messagesBenchmarkFootnote =
     data.viewerMinutes && data.viewerMinutes > 0
-      ? `Median: ${messagesPer100ViewerMinutesMedian?.toFixed(1) ?? '-'} · Basis: ${data.viewerMinutes.toFixed(0)} Viewer-Minuten`
-      : 'Keine Viewer-Minuten im Zeitraum';
+      ? tr('Median: {median} · Basis: {minutes} Viewer-Minuten', {
+          median: messagesPer100ViewerMinutesMedian?.toFixed(1) ?? '-',
+          minutes: data.viewerMinutes.toFixed(0),
+        })
+      : tr('Keine Viewer-Minuten im Zeitraum');
   const messagesGaugeProgress =
     messagesGaugeHasBenchmark
       ? Math.min(100, Math.max(0, messagesPer100ViewerMinutesPercentile ?? 0))
@@ -160,6 +177,6 @@ export function buildChatAnalyticsViewModel(
     messagesBenchmarkFootnote,
     messagesGaugeProgress,
     hourlyChartGradientId,
-    chatAudienceTooltip: CHAT_AUDIENCE_TOOLTIP,
+    chatAudienceTooltip: tr(CHAT_AUDIENCE_TOOLTIP),
   };
 }
