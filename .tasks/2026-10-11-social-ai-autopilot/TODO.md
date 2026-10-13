@@ -1,3 +1,12 @@
+# TODO, state 2026-10-14 01:45 CEST
+
+D (P1 Track C) live on release 00e750557 (merged to main as fast-forward from feat/social-p1-c-modes-20261013).
+- Merge with origin/main, migration renamed to 20261013140000_social_autopilot_publishing.sql (never applied before), PublishReviewPanel was already mounted in the plan view; preview slot added and checked at 390/768/1440 without overflow.
+- Gate: round 1 BLOCK (gpt-6.1-sol, 4 findings: hash binding outside approval transaction, unfenced stale claims, batch starvation, snapshot limited to 50 newest). Round 2 fixer 00e750557: per-platform hash bound in the approval transaction, claim_generation fencing, per-stage deferral (autopilot_deferred_stage/until, 15 min), snapshot keeps all unresolved items. ALLOW (claude-opus-5-5 fallback, gpt-6.1-sol failed on bwrap ENOMEM). autopilot_publish tests 15/15, fresh schema snapshot green.
+- Deploy: deploy-twitch-release 00e750557 (first try rejected: wrapper now also needs tb-stt-server; built and retried). Migration 20261013140000 success=true in twitch_analytics._sqlx_migrations. current -> releases/00e750557, dashboard/bot/coaching-watch active, journal -p err empty since 01:32:20, all 8 /social-media/api/autopilot/publish* routes answer 401 unauthenticated, public bundle index-DZVAHt_r.js contains "Freigabe & Veröffentlichung".
+- Not deployed: 5476e4ee8 (English dashboard dictionaries, another session) landed on main after this merge.
+- Open for the coordinator: t3-wakeup cancel social-ai.
+
 # TODO, state 2026-10-13 20:30 CEST
 
 Live e20f72419 = origin/main: Track B schedule+runner (3f33b5914), schedule-queue UI mount (5cb4345b1), M3 learning r6, plus everything earlier (M2 revisions, M4 usage, skill versions).
