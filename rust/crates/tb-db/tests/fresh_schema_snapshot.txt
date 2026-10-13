@@ -557,6 +557,13 @@ platform_connections|updated_at|timestamp with time zone|NO|now()
 schema_version|component|text|NO|
 schema_version|updated_at|timestamp with time zone|NO|now()
 schema_version|version|integer|NO|
+social_ai_change_proposals|created_at|timestamp with time zone|NO|now()
+social_ai_change_proposals|evidence|text|YES|
+social_ai_change_proposals|id|bigint|NO|nextval('social_ai_change_proposals_id_seq'::regclass)
+social_ai_change_proposals|reason|text|NO|
+social_ai_change_proposals|status|text|NO|'proposed'::text
+social_ai_change_proposals|summary|text|NO|
+social_ai_change_proposals|title|text|NO|
 social_ai_jobs|attempts|jsonb|NO|'{}'::jsonb
 social_ai_jobs|checkpoints|jsonb|NO|'{}'::jsonb
 social_ai_jobs|clip_db_id|bigint|NO|
@@ -616,6 +623,29 @@ social_ai_revision_events|payload|jsonb|NO|
 social_ai_revision_events|produced_video_id|bigint|YES|
 social_ai_revision_events|root_job_id|bigint|NO|
 social_ai_revision_events|twitch_user_id|bigint|NO|
+social_ai_skill_activations|actor|text|NO|
+social_ai_skill_activations|created_at|timestamp with time zone|NO|now()
+social_ai_skill_activations|from_version|integer|NO|
+social_ai_skill_activations|id|bigint|NO|nextval('social_ai_skill_activations_id_seq'::regclass)
+social_ai_skill_activations|kind|text|NO|
+social_ai_skill_activations|reason|text|NO|
+social_ai_skill_activations|skill_id|text|NO|
+social_ai_skill_activations|to_version|integer|NO|
+social_ai_skill_active|skill_id|text|NO|
+social_ai_skill_active|updated_at|timestamp with time zone|NO|now()
+social_ai_skill_active|updated_by|text|NO|
+social_ai_skill_active|version|integer|NO|
+social_ai_skill_versions|content|text|NO|
+social_ai_skill_versions|created_at|timestamp with time zone|NO|now()
+social_ai_skill_versions|created_by|text|NO|
+social_ai_skill_versions|evidence|jsonb|YES|
+social_ai_skill_versions|origin|text|NO|
+social_ai_skill_versions|previous_version|integer|YES|
+social_ai_skill_versions|reason|text|NO|
+social_ai_skill_versions|sha256|text|NO|
+social_ai_skill_versions|skill_id|text|NO|
+social_ai_skill_versions|summary|text|NO|
+social_ai_skill_versions|version|integer|NO|
 social_ai_user_consent|external_ai_consent|boolean|NO|false
 social_ai_user_consent|twitch_user_id|text|NO|
 social_ai_user_consent|updated_at|timestamp with time zone|NO|now()
