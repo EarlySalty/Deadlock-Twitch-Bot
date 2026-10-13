@@ -15,6 +15,7 @@ const LEARNED_HEADING: &str = "## Learned guidance";
 const LEARNING_ACTOR: &str = "ai-learning";
 const MAX_USERS_PER_PASS: i64 = 200;
 const MAX_EVENTS_PER_USER: i64 = 5000;
+const PASS_LOCK: &str = "social_ai_learning_pass";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -139,12 +140,33 @@ fn length_signal(dimension: Dimension, text: &str) -> Option<Signal> {
     }
 }
 
+const KEEP_PHRASES: &[&str] = &[
+    "nicht rausschneiden",
+    "nicht schneiden",
+    "nicht kürzen",
+    "don't cut",
+    "do not cut",
+];
+const NEGATIONS: &[&str] = &[
+    "nicht", "nichts", "kein", "keine", "keinen", "keiner", "keinem", "nie", "niemals", "ohne",
+    "not", "no", "never", "without", "don't", "dont", "doesn't", "didn't", "isn't", "aren't",
+];
+
+fn negated(clause: &str) -> bool {
+    let mut rest = clause.to_owned();
+    for phrase in KEEP_PHRASES {
+        rest = rest.replace(phrase, " ");
+    }
+    rest.split(|c: char| !(c.is_alphanumeric() || c == '\''))
+        .any(|word| NEGATIONS.contains(&word))
+}
+
 fn classify(feedback: &str) -> Vec<Signal> {
     let text = feedback.to_lowercase();
     let mut signals = Vec::new();
-    for clause in text.split(['.', '!', '?', ';', '\n']) {
+    for clause in text.split(['.', '!', '?', ';', ',', '\n']) {
         let clause = clause.trim();
-        if clause.is_empty() {
+        if clause.is_empty() || negated(clause) {
             continue;
         }
         if contains_any(clause, &["untertitel", "subtitle", "caption"]) {
@@ -186,17 +208,8 @@ fn classify(feedback: &str) -> Vec<Signal> {
             signals.push(Signal::Toward(Dimension::KeepAction, 1));
         }
         if contains_any(clause, &["reaktion", "reaction"])
-            && contains_any(
-                clause,
-                &[
-                    "behalt",
-                    "keep",
-                    "lass",
-                    "drin",
-                    "nicht schneiden",
-                    "don't cut",
-                ],
-            )
+            && (contains_any(clause, &["behalt", "keep", "lass", "drin"])
+                || contains_any(clause, KEEP_PHRASES))
         {
             signals.push(Signal::Toward(Dimension::KeepReaction, 1));
         }
@@ -253,7 +266,7 @@ fn review_directions(events: &[FeedbackEvent]) -> BTreeMap<i64, BTreeMap<Dimensi
     let decided = outcomes(events);
     let mut reviews: BTreeMap<i64, BTreeMap<Dimension, i32>> = BTreeMap::new();
     for event in events.iter().filter(|event| event.kind == "feedback") {
-        if decided.get(&event.job_id) == Some(&Outcome::Rejected) {
+        if decided.get(&event.job_id) != Some(&Outcome::Accepted) {
             continue;
         }
         let Some(feedback) = &event.feedback else {
@@ -494,7 +507,7 @@ pub async fn refresh_personal(pool: &PgPool) -> Result<usize, sqlx::Error> {
         let profile = serde_json::to_value(personal_profile(&events))
             .map_err(|error| sqlx::Error::Encode(Box::new(error)))?;
         sqlx::query(
-            "INSERT INTO public.social_ai_personal_preferences (twitch_user_id, profile, last_event_id) VALUES ($1, $2, $3) ON CONFLICT (twitch_user_id) DO UPDATE SET profile = EXCLUDED.profile, last_event_id = EXCLUDED.last_event_id, updated_at = now()",
+            "INSERT INTO public.social_ai_personal_preferences (twitch_user_id, profile, last_event_id) VALUES ($1, $2, $3) ON CONFLICT (twitch_user_id) DO UPDATE SET profile = EXCLUDED.profile, last_event_id = EXCLUDED.last_event_id, updated_at = now() WHERE social_ai_personal_preferences.last_event_id <= EXCLUDED.last_event_id",
         )
         .bind(user)
         .bind(profile)
@@ -640,6 +653,23 @@ async fn record_proposals(
 }
 
 pub async fn run_pass(
+    pool: &PgPool,
+    max_skill_bytes: usize,
+) -> Result<PassReport, SkillRegistryError> {
+    let mut guard = pool.begin().await?;
+    let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(hashtext($1))")
+        .bind(PASS_LOCK)
+        .fetch_one(&mut *guard)
+        .await?;
+    if !locked {
+        return Ok(PassReport::default());
+    }
+    let report = locked_pass(pool, max_skill_bytes).await;
+    guard.commit().await?;
+    report
+}
+
+async fn locked_pass(
     pool: &PgPool,
     max_skill_bytes: usize,
 ) -> Result<PassReport, SkillRegistryError> {
