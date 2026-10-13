@@ -1,6 +1,4 @@
 /// <reference types="node" />
-// Server-Admin-Dashboard (Issue #1064): eigenes Panel, getrennt vom Admin-Modus
-// des Partner-Dashboards, mit derselben Optik.
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -13,11 +11,11 @@ import {
   patchGuildSettings,
   setStreamerActive,
 } from '../src/api/serverAdmin';
+import { translate } from '../src/i18n/dictionary';
 import { ApiHttpError } from '../src/api/httpError';
 
 const SRC = join(import.meta.dirname, '..', 'src');
 const read = (rel: string) => readFileSync(join(SRC, rel), 'utf8');
-/** Quelltext ohne Kommentare (die duerfen den Admin-Modus beim Namen nennen). */
 const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 const PAGE = read('pages/ServerAdmin.tsx');
 const SIDEBAR = read('components/layout/ServerAdminSidebar.tsx');
@@ -67,7 +65,6 @@ test('Optik kommt aus der Partner-Dashboard-Shell, nicht aus einer Kopie', () =>
   assert.match(PAGE, /gradient-accent/);
   assert.match(SIDEBAR, /import \{ SidebarLink, type SidebarNavItem \} from '@\/components\/layout\/SidebarLink'/);
   assert.match(SIDEBAR, /panel-card card-glow/);
-  // Eigene Sidebar ersetzt die Partner-Sidebar komplett.
   assert.match(SHELL, /activeRoute \? <DashboardSidebar activeRoute=\{activeRoute\} \/> : sidebar/);
   assert.doesNotMatch(PAGE + SIDEBAR, /<style|\.css'/, 'kein paralleles Stylesheet');
 });
@@ -103,6 +100,28 @@ test('401 fuehrt zum Login, 403 zu klaren Texten', async () => {
     return true;
   });
   assert.match(errorText(new ApiHttpError('area_forbidden', 403)), /zentral verwaltet/);
+});
+
+test('Fehlercodes und HTTP-Fallbacks sind in beiden Anzeigesprachen übersetzt', () => {
+  const cases: Array<[string, number, string]> = [
+    ['guild_forbidden', 403, 'Für diesen Server hast du keine Verwaltungsrechte.'],
+    ['unknown_field', 400, 'Dieser Bereich wird zentral verwaltet und ist hier gesperrt.'],
+    ['invalid_field', 400, 'Ein Wert ist ungültig. Bitte prüfe IDs und Einladungslink.'],
+    ['invalid_csrf', 403, 'Sitzung abgelaufen. Bitte lade die Seite neu.'],
+    ['opaque_failure', 401, 'Bitte melde dich mit Discord an.'],
+    ['opaque_failure', 404, 'Dieser Streamer oder Server ist nicht mehr verfügbar. Bitte lade die Seite neu.'],
+    ['opaque_failure', 429, 'Zu viele Anfragen. Bitte versuche es gleich erneut.'],
+    ['opaque_failure', 503, 'Der Server ist gerade nicht erreichbar. Bitte versuche es erneut.'],
+    ['opaque_failure', 400, 'Die Anfrage konnte nicht verarbeitet werden. Bitte versuche es erneut.'],
+  ];
+  for (const language of ['de', 'en'] as const) {
+    const t = (text: string) => translate(language, text);
+    for (const [code, status, key] of cases) {
+      assert.equal(errorText(new ApiHttpError(code, status), t), t(key));
+    }
+    assert.equal(errorText(new TypeError('private transport detail'), t), t('Der Server ist gerade nicht erreichbar. Bitte versuche es erneut.'));
+    assert.equal(errorText(new Error('private detail'), t), t('Unbekannter Fehler.'));
+  }
 });
 
 test('Snowflake-Pruefung', () => {

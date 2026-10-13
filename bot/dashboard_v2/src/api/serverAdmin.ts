@@ -1,15 +1,11 @@
-// API des Server-Admin-Dashboards (Multi-Server Paket A).
-// Eigene Session (Discord-Login, Recht "Server verwalten"), eigene Endpunkte.
-// Die Rechte prueft ausschliesslich der Server; diese Datei kennt nur die
-// erlaubten Bereiche und schickt nie etwas anderes.
 import { ApiHttpError } from './httpError';
+import { tr } from '../i18n/dictionary';
 
 export const SERVER_ADMIN_ROUTE = '/twitch/server-admin';
 export const SERVER_ADMIN_LOGIN_URL = '/twitch/server-admin/auth/login';
 export const SERVER_ADMIN_LOGOUT_URL = '/twitch/server-admin/auth/logout';
 const API = '/twitch/api/server-admin';
 
-/** Abschnitte des Panels (Anker auf der Seite, Sidebar-Navigation). */
 export type ServerAdminSection = 'overview' | 'streamers' | 'channels' | 'language' | 'raids';
 export const SERVER_ADMIN_SECTIONS: ReadonlyArray<ServerAdminSection> = [
   'overview',
@@ -51,7 +47,6 @@ export interface GuildStreamer {
   deactivatedAt: string | null;
 }
 
-/** Nur diese Felder kennt die Einstellungs-API. */
 export type GuildSettingsPatch = Partial<
   Pick<
     GuildSettings,
@@ -140,26 +135,32 @@ export function setStreamerActive(
   );
 }
 
-/** Discord-Snowflake oder leer (= Feld leeren). */
 export function isSnowflakeOrEmpty(value: string): boolean {
   const trimmed = value.trim();
   return trimmed === '' || /^[1-9][0-9]{5,19}$/.test(trimmed);
 }
 
-export function errorText(error: unknown): string {
+export function errorText(error: unknown, t: typeof tr = tr): string {
   if (error instanceof ApiHttpError) {
     switch (error.message) {
       case 'guild_forbidden':
-        return 'Für diesen Server hast du keine Verwaltungsrechte.';
+        return t('Für diesen Server hast du keine Verwaltungsrechte.');
       case 'area_forbidden':
-        return 'Dieser Bereich wird zentral verwaltet und ist hier gesperrt.';
+      case 'unknown_field':
+        return t('Dieser Bereich wird zentral verwaltet und ist hier gesperrt.');
       case 'invalid_field':
-        return 'Ein Wert ist ungültig. Bitte prüfe IDs und Einladungslink.';
+        return t('Ein Wert ist ungültig. Bitte prüfe IDs und Einladungslink.');
       case 'invalid_csrf':
-        return 'Sitzung abgelaufen. Bitte lade die Seite neu.';
+        return t('Sitzung abgelaufen. Bitte lade die Seite neu.');
       default:
-        return error.message;
+        if (error.status === 401) return t('Bitte melde dich mit Discord an.');
+        if (error.status === 403) return t('Für diesen Server hast du keine Verwaltungsrechte.');
+        if (error.status === 404) return t('Dieser Streamer oder Server ist nicht mehr verfügbar. Bitte lade die Seite neu.');
+        if (error.status === 429) return t('Zu viele Anfragen. Bitte versuche es gleich erneut.');
+        if (error.status >= 500) return t('Der Server ist gerade nicht erreichbar. Bitte versuche es erneut.');
+        return t('Die Anfrage konnte nicht verarbeitet werden. Bitte versuche es erneut.');
     }
   }
-  return 'Unbekannter Fehler.';
+  if (error instanceof TypeError) return t('Der Server ist gerade nicht erreichbar. Bitte versuche es erneut.');
+  return t('Unbekannter Fehler.');
 }

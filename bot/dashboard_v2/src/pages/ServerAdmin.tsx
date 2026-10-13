@@ -1,10 +1,4 @@
-// Server-Admin-Dashboard (Multi-Server Paket A, Issue #1064).
-//
-// Eigenes Panel fuer Admins fremder Discord-Server ("Server verwalten"). Es
-// nutzt Shell, Karten und Stil des Partner-Dashboards, aber weder dessen
-// Sidebar noch Profil-/Admin-Hooks: kein Admin-Modus, keine Partner-Seiten,
-// keine globalen Werkzeuge. Alle Rechte prueft der Server.
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowRight,
@@ -23,7 +17,9 @@ import {
 import { Rise } from '@/motion/Rise';
 import { KpiCard } from '@/components/cards/KpiCard';
 import { DashboardShell } from '@/components/layout/DashboardShell';
-import { ServerAdminSidebar } from '@/components/layout/ServerAdminSidebar';
+import { ServerAdminLanguageSwitch, ServerAdminSidebar } from '@/components/layout/ServerAdminSidebar';
+import { useLanguage, useT } from '@/context/LanguageContext';
+import { isLanguage } from '@/i18n/dictionary';
 import {
   SERVER_ADMIN_LOGIN_URL,
   SERVER_ADMIN_SECTIONS,
@@ -51,7 +47,6 @@ const GOLD_BUTTON =
 const INPUT =
   'w-full rounded-xl border border-border bg-background/60 px-3 py-2 text-sm text-white placeholder:text-text-secondary/60 focus:border-primary/50 focus:outline-none';
 
-/** Bereiche, die zentral verwaltet werden und hier gesperrt sind (PLAN.md 4.5). */
 const LOCKED_AREAS = ['Tags', 'Globale Bans', 'Blacklist', 'Abrechnung', 'KI-Funktionen'] as const;
 
 function sectionFromHash(hash: string): ServerAdminSection {
@@ -119,12 +114,12 @@ function Toggle({ checked, onChange, label, hint, disabled }: {
 }
 
 function StatusLine({ error, saved }: { error: unknown; saved: boolean }) {
-  if (error) return <p className="text-sm text-danger">{errorText(error)}</p>;
-  if (saved) return <p className="text-sm text-success">Gespeichert.</p>;
+  const t = useT();
+  if (error) return <p role="alert" className="text-sm text-danger">{errorText(error, t)}</p>;
+  if (saved) return <p role="status" className="text-sm text-success">{t('Gespeichert.')}</p>;
   return null;
 }
 
-/** Einstellungs-Formular einer Karte: schickt nur die eigenen Felder. */
 function useSettingsForm<K extends keyof GuildSettingsPatch>(
   guild: GuildSettings,
   csrfToken: string,
@@ -136,19 +131,44 @@ function useSettingsForm<K extends keyof GuildSettingsPatch>(
     for (const field of fields) values[field] = guild[field];
     return values;
   }, [guild, fields]);
+  const previousInitial = useRef(initial);
   const [draft, setDraft] = useState(initial);
-  useEffect(() => setDraft(initial), [initial]);
+  useEffect(() => {
+    const previous = previousInitial.current;
+    previousInitial.current = initial;
+    setDraft((current) => {
+      const next = { ...current };
+      let changed = false;
+      for (const field of fields) {
+        if (current[field] === previous[field] && current[field] !== initial[field]) {
+          next[field] = initial[field];
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [initial, fields]);
   const dirty = fields.some((field) => draft[field] !== initial[field]);
 
   const mutation = useMutation({
-    mutationFn: () => {
+    mutationFn: (submitted: Pick<GuildSettings, K>) => {
       const patch: GuildSettingsPatch = {};
       for (const field of fields) {
-        if (draft[field] !== initial[field]) Object.assign(patch, { [field]: draft[field] });
+        if (submitted[field] !== initial[field]) Object.assign(patch, { [field]: submitted[field] });
       }
       return patchGuildSettings(guild.guildId, patch, csrfToken);
     },
-    onSuccess: (updated) => {
+    onSuccess: (updated, submitted) => {
+      const acknowledged = { ...submitted };
+      for (const field of fields) acknowledged[field] = updated[field];
+      previousInitial.current = acknowledged;
+      setDraft((current) => {
+        const next = { ...current };
+        for (const field of fields) {
+          if (current[field] === submitted[field]) next[field] = updated[field];
+        }
+        return next;
+      });
       queryClient.setQueryData<ServerAdminMe>(ME_KEY, (me) =>
         me ? { ...me, guilds: me.guilds.map((g) => (g.guildId === updated.guildId ? updated : g)) } : me,
       );
@@ -156,11 +176,11 @@ function useSettingsForm<K extends keyof GuildSettingsPatch>(
   });
 
   const set = <F extends K>(field: F, value: GuildSettings[F]) => {
-    mutation.reset();
+    if (!mutation.isPending) mutation.reset();
     setDraft((current) => ({ ...current, [field]: value }));
   };
 
-  return { draft, set, dirty, mutation };
+  return { draft, set, dirty, mutation: { ...mutation, mutate: () => mutation.mutate(draft) } };
 }
 
 function SaveRow({ dirty, invalid, mutation }: {
@@ -168,6 +188,7 @@ function SaveRow({ dirty, invalid, mutation }: {
   invalid?: boolean;
   mutation: { mutate: () => void; isPending: boolean; isSuccess: boolean; error: unknown };
 }) {
+  const t = useT();
   return (
     <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
       <StatusLine error={mutation.error} saved={mutation.isSuccess && !dirty} />
@@ -178,7 +199,7 @@ function SaveRow({ dirty, invalid, mutation }: {
         onClick={() => mutation.mutate()}
       >
         {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-        Speichern
+        {t('Speichern')}
       </button>
     </div>
   );
@@ -187,16 +208,17 @@ function SaveRow({ dirty, invalid, mutation }: {
 const CHANNEL_FIELDS = ['announceChannelId', 'alertChannelId', 'streamerRoleId', 'pingRoleId'] as const;
 
 function ChannelsCard({ guild, csrfToken }: { guild: GuildSettings; csrfToken: string }) {
+  const t = useT();
   const { draft, set, dirty, mutation } = useSettingsForm(guild, csrfToken, CHANNEL_FIELDS);
   const rows: Array<{ field: (typeof CHANNEL_FIELDS)[number]; label: string; hint: string }> = [
-    { field: 'announceChannelId', label: 'Ankündigungs-Kanal', hint: 'Hier postet der Bot, wenn ein Streamer live geht.' },
-    { field: 'alertChannelId', label: 'Hinweis-Kanal', hint: 'Interne Hinweise für dein Team.' },
-    { field: 'streamerRoleId', label: 'Streamer-Rolle', hint: 'Rolle für aktive Streamer deines Servers.' },
-    { field: 'pingRoleId', label: 'Ping-Rolle', hint: 'Wird bei Live-Ankündigungen erwähnt.' },
+    { field: 'announceChannelId', label: t('Ankündigungs-Kanal'), hint: t('Hier postet der Bot, wenn ein Streamer live geht.') },
+    { field: 'alertChannelId', label: t('Hinweis-Kanal'), hint: t('Interne Hinweise für dein Team.') },
+    { field: 'streamerRoleId', label: t('Streamer-Rolle'), hint: t('Rolle für aktive Streamer deines Servers.') },
+    { field: 'pingRoleId', label: t('Ping-Rolle'), hint: t('Wird bei Live-Ankündigungen erwähnt.') },
   ];
   const invalid = rows.some(({ field }) => !isSnowflakeOrEmpty(draft[field] ?? ''));
   return (
-    <Card id="channels" eyebrow="Kanäle & Rollen" title="Wohin der Bot postet" icon={Hash} step={3}>
+    <Card id="channels" eyebrow={t('Kanäle & Rollen')} title={t('Wohin der Bot postet')} icon={Hash} step={3}>
       <div className="grid gap-4 md:grid-cols-2">
         {rows.map(({ field, label, hint }) => {
           const value = draft[field] ?? '';
@@ -207,12 +229,12 @@ function ChannelsCard({ guild, csrfToken }: { guild: GuildSettings; csrfToken: s
               <input
                 className={`${INPUT} ${bad ? 'border-danger/60' : ''}`}
                 inputMode="numeric"
-                placeholder="Discord-ID, z. B. 1289721245281292288"
+                placeholder={t('Discord-ID, z. B. 1289721245281292288')}
                 value={value}
                 onChange={(event) => set(field, event.target.value.trim() === '' ? null : event.target.value.trim())}
               />
               <span className={`block text-xs ${bad ? 'text-danger' : 'text-text-secondary'}`}>
-                {bad ? 'Bitte eine gültige Discord-ID eintragen oder leer lassen.' : hint}
+                {bad ? t('Bitte eine gültige Discord-ID eintragen oder leer lassen.') : hint}
               </span>
             </label>
           );
@@ -226,39 +248,42 @@ function ChannelsCard({ guild, csrfToken }: { guild: GuildSettings; csrfToken: s
 const LANGUAGE_FIELDS = ['language', 'promoInviteUrl', 'autoPartnerDefault'] as const;
 
 function LanguageCard({ guild, csrfToken }: { guild: GuildSettings; csrfToken: string }) {
+  const t = useT();
   const { draft, set, dirty, mutation } = useSettingsForm(guild, csrfToken, LANGUAGE_FIELDS);
   return (
-    <Card id="language" eyebrow="Sprache & Einladung" title="Auftritt deines Servers" icon={Globe2} step={4}>
+    <Card id="language" eyebrow={t('Sprache & Einladung')} title={t('Auftritt deines Servers')} icon={Globe2} step={4}>
       <div className="grid gap-4 md:grid-cols-2">
         <label className="block space-y-1.5">
-          <span className={LABEL}>Sprache</span>
+          <span className={LABEL}>{t('Sprache')}</span>
           <select
             className={INPUT}
             value={draft.language}
-            onChange={(event) => set('language', event.target.value === 'de' ? 'de' : 'en')}
+            onChange={(event) => {
+              if (isLanguage(event.target.value)) set('language', event.target.value);
+            }}
           >
-            <option value="de">Deutsch</option>
-            <option value="en">English</option>
+            <option value="de">{t('Deutsch')}</option>
+            <option value="en">{t('English')}</option>
           </select>
-          <span className="block text-xs text-text-secondary">Sprache der Bot-Nachrichten auf deinem Server.</span>
+          <span className="block text-xs text-text-secondary">{t('Sprache der Bot-Nachrichten auf deinem Server.')}</span>
         </label>
         <label className="block space-y-1.5">
-          <span className={LABEL}>Einladungslink</span>
+          <span className={LABEL}>{t('Einladungslink')}</span>
           <input
             className={INPUT}
-            placeholder="https://discord.gg/deinserver"
+            placeholder={t('https://discord.gg/deinserver')}
             value={draft.promoInviteUrl ?? ''}
             onChange={(event) => set('promoInviteUrl', event.target.value.trim() === '' ? null : event.target.value)}
           />
-          <span className="block text-xs text-text-secondary">Nur Discord-Einladungen (discord.gg/…).</span>
+          <span className="block text-xs text-text-secondary">{t('Nur Discord-Einladungen (discord.gg/…).')}</span>
         </label>
       </div>
       <div className="mt-4">
         <Toggle
           checked={draft.autoPartnerDefault}
           onChange={(next) => set('autoPartnerDefault', next)}
-          label="Neue Streamer automatisch aktivieren"
-          hint="Standard für Streamer, die sich über deinen Server anmelden."
+          label={t('Neue Streamer automatisch aktivieren')}
+          hint={t('Standard für Streamer, die sich über deinen Server anmelden.')}
         />
       </div>
       <SaveRow dirty={dirty} mutation={mutation} />
@@ -269,14 +294,15 @@ function LanguageCard({ guild, csrfToken }: { guild: GuildSettings; csrfToken: s
 const RAID_FIELDS = ['crossServerRaids'] as const;
 
 function RaidsCard({ guild, csrfToken }: { guild: GuildSettings; csrfToken: string }) {
+  const t = useT();
   const { draft, set, dirty, mutation } = useSettingsForm(guild, csrfToken, RAID_FIELDS);
   return (
-    <Card id="raids" eyebrow="Raids" title="Raids über Servergrenzen" icon={Swords} step={5}>
+    <Card id="raids" eyebrow={t('Raids')} title={t('Raids über Servergrenzen')} icon={Swords} step={5}>
       <Toggle
         checked={draft.crossServerRaids}
         onChange={(next) => set('crossServerRaids', next)}
-        label="Raids zu Streamern anderer Server erlauben"
-        hint="Aus: Deine Streamer raiden nur innerhalb deines Servers."
+        label={t('Raids zu Streamern anderer Server erlauben')}
+        hint={t('Aus: Deine Streamer raiden nur innerhalb deines Servers.')}
       />
       <SaveRow dirty={dirty} mutation={mutation} />
     </Card>
@@ -284,6 +310,7 @@ function RaidsCard({ guild, csrfToken }: { guild: GuildSettings; csrfToken: stri
 }
 
 function StreamerRow({ guildId, streamer, csrfToken }: { guildId: string; streamer: GuildStreamer; csrfToken: string }) {
+  const { t, locale } = useLanguage();
   const queryClient = useQueryClient();
   const mutation = useMutation({
     mutationFn: (active: boolean) => setStreamerActive(guildId, streamer.twitchUserId, active, csrfToken),
@@ -292,7 +319,7 @@ function StreamerRow({ guildId, streamer, csrfToken }: { guildId: string; stream
       void queryClient.invalidateQueries({ queryKey: ME_KEY });
     },
   });
-  const name = streamer.twitchLogin ?? `ID ${streamer.twitchUserId}`;
+  const name = streamer.twitchLogin ?? t('ID {id}', { id: streamer.twitchUserId });
   return (
     <li className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-background/60 px-4 py-3">
       <div className="min-w-0">
@@ -303,11 +330,11 @@ function StreamerRow({ guildId, streamer, csrfToken }: { guildId: string; stream
               streamer.active ? 'border-success/40 bg-success/10 text-success' : 'border-border bg-background/60 text-text-secondary'
             }`}
           >
-            {streamer.active ? 'Aktiv' : 'Deaktiviert'}
+            {streamer.active ? t('Aktiv') : t('Deaktiviert')}
           </span>
-          {streamer.joinedAt ? <span>seit {new Date(streamer.joinedAt).toLocaleDateString('de-DE')}</span> : null}
+          {streamer.joinedAt ? <span>{t('seit {date}', { date: new Date(streamer.joinedAt).toLocaleDateString(locale) })}</span> : null}
         </div>
-        {mutation.error ? <p className="mt-1 text-xs text-danger">{errorText(mutation.error)}</p> : null}
+        {mutation.error ? <p role="alert" className="mt-1 text-xs text-danger">{errorText(mutation.error, t)}</p> : null}
       </div>
       <button
         type="button"
@@ -322,31 +349,32 @@ function StreamerRow({ guildId, streamer, csrfToken }: { guildId: string; stream
         ) : (
           <UserCheck className="h-4 w-4" />
         )}
-        {streamer.active ? 'Deaktivieren' : 'Aktivieren'}
+        {streamer.active ? t('Deaktivieren') : t('Aktivieren')}
       </button>
     </li>
   );
 }
 
 function StreamersCard({ guild, csrfToken }: { guild: GuildSettings; csrfToken: string }) {
+  const t = useT();
   const { data, isLoading, error } = useQuery({
     queryKey: ['server-admin', 'streamers', guild.guildId],
     queryFn: () => fetchGuildStreamers(guild.guildId),
   });
   const streamers = data?.streamers ?? [];
   return (
-    <Card id="streamers" eyebrow="Streamer" title="Streamer deines Servers" icon={Users} step={2}>
+    <Card id="streamers" eyebrow={t('Streamer')} title={t('Streamer deines Servers')} icon={Users} step={2}>
       <p className="mb-4 text-sm text-text-secondary">
-        Deaktivieren wirkt nur auf deinem Server. Auf anderen Servern und im restlichen Netzwerk bleibt der Streamer unverändert.
+        {t('Deaktivieren wirkt nur auf deinem Server. Auf anderen Servern und im restlichen Netzwerk bleibt der Streamer unverändert.')}
       </p>
       {isLoading ? (
         <div className="flex items-center gap-2 text-sm text-text-secondary">
-          <Loader2 className="h-4 w-4 animate-spin" /> Lade Streamer…
+          <Loader2 className="h-4 w-4 animate-spin" /> {t('Lade Streamer…')}
         </div>
       ) : error ? (
-        <p className="text-sm text-danger">{errorText(error)}</p>
+        <p role="alert" className="text-sm text-danger">{errorText(error, t)}</p>
       ) : streamers.length === 0 ? (
-        <p className="text-sm text-text-secondary">Auf diesem Server sind noch keine Streamer angemeldet.</p>
+        <p className="text-sm text-text-secondary">{t('Auf diesem Server sind noch keine Streamer angemeldet.')}</p>
       ) : (
         <ul className="space-y-2">
           {streamers.map((streamer) => (
@@ -359,10 +387,11 @@ function StreamersCard({ guild, csrfToken }: { guild: GuildSettings; csrfToken: 
 }
 
 function LockedAreasCard() {
+  const t = useT();
   return (
-    <Card eyebrow="Zentral verwaltet" title="Nicht in deinem Panel" icon={Lock} step={6}>
+    <Card eyebrow={t('Zentral verwaltet')} title={t('Nicht in deinem Panel')} icon={Lock} step={6}>
       <p className="mb-4 text-sm text-text-secondary">
-        Diese Bereiche gelten für das ganze Netzwerk und werden zentral gepflegt. Sie sind hier gesperrt.
+        {t('Diese Bereiche gelten für das ganze Netzwerk und werden zentral gepflegt. Sie sind hier gesperrt.')}
       </p>
       <ul className="flex flex-wrap gap-2">
         {LOCKED_AREAS.map((area) => (
@@ -371,7 +400,7 @@ function LockedAreasCard() {
             className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background/60 px-3 py-1 text-xs font-semibold text-text-secondary"
           >
             <Ban className="h-3 w-3" />
-            {area}
+            {t(area)}
           </li>
         ))}
       </ul>
@@ -380,10 +409,12 @@ function LockedAreasCard() {
 }
 
 function CenteredCard({ title, children }: { title: string; children: ReactNode }) {
+  const t = useT();
   return (
     <div className="internal-home-vibe relative flex min-h-screen items-center justify-center px-4 py-10">
       <Rise as="section" className="panel-card card-glow card-glow-accent hero-aura w-full max-w-xl rounded-2xl p-6 md:p-8">
-        <div className={LABEL}>Server-Admin</div>
+        <div className="mb-5 flex justify-end"><ServerAdminLanguageSwitch /></div>
+        <div className={LABEL}>{t('Server-Admin')}</div>
         <h1 className="display-font mt-1 text-2xl font-bold text-white md:text-[2rem]">{title}</h1>
         <div className="mt-3 space-y-4 text-sm text-text-secondary">{children}</div>
       </Rise>
@@ -392,20 +423,22 @@ function CenteredCard({ title, children }: { title: string; children: ReactNode 
 }
 
 function LoginCard() {
+  const t = useT();
   return (
-    <CenteredCard title="Server verwalten">
+    <CenteredCard title={t('Server verwalten')}>
       <p>
-        Melde dich mit Discord an. Du siehst danach die Server, auf denen du das Recht „Server verwalten“ hast und auf denen der Bot installiert ist.
+        {t('Melde dich mit Discord an. Du siehst danach die Server, auf denen du das Recht „Server verwalten“ hast und auf denen der Bot installiert ist.')}
       </p>
       <a href={SERVER_ADMIN_LOGIN_URL} className={GOLD_BUTTON}>
         <LogIn className="h-4 w-4" />
-        Mit Discord anmelden
+        {t('Mit Discord anmelden')}
       </a>
     </CenteredCard>
   );
 }
 
 export function ServerAdminPage() {
+  const { t, locale } = useLanguage();
   const section = useActiveSection();
   const [selectedGuildId, setSelectedGuildId] = useState<string | null>(null);
   const { data: me, error, isLoading, isFetching, refetch } = useQuery({
@@ -415,33 +448,33 @@ export function ServerAdminPage() {
 
   if (isLoading) {
     return (
-      <CenteredCard title="Server verwalten">
+      <CenteredCard title={t('Server verwalten')}>
         <span className="inline-flex items-center gap-2">
-          <Loader2 className="h-4 w-4 animate-spin" /> Lade…
+          <Loader2 className="h-4 w-4 animate-spin" /> {t('Lade…')}
         </span>
       </CenteredCard>
     );
   }
   if (error instanceof ServerAdminLoginRequired || (!me && !error)) return <LoginCard />;
-  if (error || !me) {
+  if (!me) {
     return (
-      <CenteredCard title="Server verwalten">
-        <p className="text-danger">{errorText(error)}</p>
+      <CenteredCard title={t('Server verwalten')}>
+        <p role="alert" className="text-danger">{errorText(error, t)}</p>
         <button type="button" className={OUTLINE_BUTTON} onClick={() => void refetch()}>
-          Erneut versuchen
+          {t('Erneut versuchen')}
         </button>
       </CenteredCard>
     );
   }
   if (me.guilds.length === 0) {
     return (
-      <CenteredCard title="Kein Server gefunden">
+      <CenteredCard title={t('Kein Server gefunden')}>
         <p>
-          Auf keinem deiner Server mit „Server verwalten“ ist der Bot installiert. Lade den Bot auf deinen Server ein und melde dich erneut an.
+          {t('Auf keinem deiner Server mit „Server verwalten“ ist der Bot installiert. Lade den Bot auf deinen Server ein und melde dich erneut an.')}
         </p>
         <a href={SERVER_ADMIN_LOGIN_URL} className={OUTLINE_BUTTON}>
           <LogIn className="h-4 w-4" />
-          Erneut anmelden
+          {t('Erneut anmelden')}
         </a>
       </CenteredCard>
     );
@@ -461,6 +494,7 @@ export function ServerAdminPage() {
         />
       }
     >
+      {error ? <p role="alert" className="text-sm text-danger">{errorText(error, t)}</p> : null}
       <Rise
         step={{ seconds: 0.04 }}
         as="section"
@@ -469,47 +503,46 @@ export function ServerAdminPage() {
       >
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-secondary">Server-Admin</div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-secondary">{t('Server-Admin')}</div>
             <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background/60 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
               <span className="h-2 w-2 rounded-full bg-success" />
-              Bot aktiv · {guild.language === 'de' ? 'Deutsch' : 'English'}
+              {t('Bot aktiv · {language}', { language: guild.language === 'de' ? t('Deutsch') : t('English') })}
             </span>
           </div>
-          <h1 className="display-font mt-1 text-2xl font-bold text-white md:text-[2rem]">{guild.name || `Server ${guild.guildId}`}</h1>
-          <p className="mt-1 text-sm text-text-secondary">Streamer-Partner deines Servers auf einen Blick</p>
+          <h1 className="display-font mt-1 text-2xl font-bold text-white md:text-[2rem]">{guild.name || t('Server {id}', { id: guild.guildId })}</h1>
+          <p className="mt-1 text-sm text-text-secondary">{t('Streamer-Partner deines Servers auf einen Blick')}</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <button type="button" onClick={() => void refetch()} disabled={isFetching} className={OUTLINE_BUTTON}>
             {isFetching ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-            Neu laden
+            {t('Neu laden')}
           </button>
           <a href="#streamers" className={GOLD_BUTTON}>
-            Streamer verwalten
+            {t('Streamer verwalten')}
             <ArrowRight className="h-4 w-4" />
           </a>
         </div>
       </Rise>
 
       <Rise step={{ seconds: 0.08 }} as="section" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard title="Aktive Streamer" value={guild.activeStreamers} icon={UserCheck} color="green" />
-        <KpiCard title="Deaktiviert" value={guild.inactiveStreamers} icon={UserX} color="yellow" />
+        <KpiCard title={t('Aktive Streamer')} value={guild.activeStreamers.toLocaleString(locale)} icon={UserCheck} color="green" />
+        <KpiCard title={t('Deaktiviert')} value={guild.inactiveStreamers.toLocaleString(locale)} icon={UserX} color="yellow" />
         <KpiCard
-          title="Auto-Partner"
-          value={guild.autoPartnerDefault ? 'An' : 'Aus'}
-          subValue="Standard für neue Streamer"
+          title={t('Auto-Partner')}
+          value={guild.autoPartnerDefault ? t('An') : t('Aus')}
+          subValue={t('Standard für neue Streamer')}
           icon={Server}
           color="blue"
         />
         <KpiCard
-          title="Server-Raids"
-          value={guild.crossServerRaids ? 'An' : 'Aus'}
-          subValue="Raids über Servergrenzen"
+          title={t('Server-Raids')}
+          value={guild.crossServerRaids ? t('An') : t('Aus')}
+          subValue={t('Raids über Servergrenzen')}
           icon={Swords}
           color="purple"
         />
       </Rise>
 
-      {/* key: Formulare beim Serverwechsel frisch aufsetzen. */}
       <div key={guild.guildId} className="space-y-4 md:space-y-5">
         <StreamersCard guild={guild} csrfToken={me.csrfToken} />
         <ChannelsCard guild={guild} csrfToken={me.csrfToken} />
