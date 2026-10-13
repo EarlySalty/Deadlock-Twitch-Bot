@@ -153,12 +153,24 @@ const NEGATIONS: &[&str] = &[
 ];
 
 fn negated(clause: &str) -> bool {
-    let mut rest = clause.to_owned();
-    for phrase in KEEP_PHRASES {
-        rest = rest.replace(phrase, " ");
-    }
-    rest.split(|c: char| !(c.is_alphanumeric() || c == '\''))
+    clause
+        .split(|c: char| !(c.is_alphanumeric() || c == '\''))
         .any(|word| NEGATIONS.contains(&word))
+}
+
+fn kept_reaction(clause: &str) -> bool {
+    if !contains_any(clause, &["reaktion", "reaction"]) {
+        return false;
+    }
+    let mut rest = clause.to_owned();
+    let mut found = false;
+    for phrase in KEEP_PHRASES {
+        if rest.contains(phrase) {
+            found = true;
+            rest = rest.replace(phrase, " ");
+        }
+    }
+    found && !negated(&rest)
 }
 
 fn classify(feedback: &str) -> Vec<Signal> {
@@ -166,7 +178,13 @@ fn classify(feedback: &str) -> Vec<Signal> {
     let mut signals = Vec::new();
     for clause in text.split(['.', '!', '?', ';', ',', '\n']) {
         let clause = clause.trim();
-        if clause.is_empty() || negated(clause) {
+        if clause.is_empty() {
+            continue;
+        }
+        if negated(clause) {
+            if kept_reaction(clause) {
+                signals.push(Signal::Toward(Dimension::KeepReaction, 1));
+            }
             continue;
         }
         if contains_any(clause, &["untertitel", "subtitle", "caption"]) {
@@ -208,8 +226,7 @@ fn classify(feedback: &str) -> Vec<Signal> {
             signals.push(Signal::Toward(Dimension::KeepAction, 1));
         }
         if contains_any(clause, &["reaktion", "reaction"])
-            && (contains_any(clause, &["behalt", "keep", "lass", "drin"])
-                || contains_any(clause, KEEP_PHRASES))
+            && contains_any(clause, &["behalt", "keep", "lass", "drin"])
         {
             signals.push(Signal::Toward(Dimension::KeepReaction, 1));
         }
