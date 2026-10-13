@@ -9,6 +9,7 @@ pub mod ai_state;
 pub(crate) mod ai_store;
 pub mod auth;
 pub mod handlers;
+pub mod language;
 pub mod obs;
 pub mod process_info;
 /// Strangler-Fig-Fallback-Proxy (→ Python 8765), siehe Modul-Doku.
