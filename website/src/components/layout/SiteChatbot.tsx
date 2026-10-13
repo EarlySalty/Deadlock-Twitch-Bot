@@ -2,16 +2,24 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Bot, Loader2, MessageCircle, Send, X } from "lucide-react";
 import { Trustpilot, TrustpilotLauncher } from "@/components/partner-clean/Trustpilot";
+import { SITE_LANG, tx } from "@/i18n/locale";
 
 const ASK_URL = "/twitch/api/v2/self-explainer/ask";
 const OPEN_EVENT = "ddc:open-support-chat";
 const REQUEST_TIMEOUT_MS = 125_000;
 
-const SUGGESTIONS = [
-  "Was macht der Bot?",
-  "Wie verbinde ich meinen Kanal?",
-  "Ist das sicher?",
-];
+const SUGGESTIONS = tx(
+  [
+    "Was macht der Bot?",
+    "Wie verbinde ich meinen Kanal?",
+    "Ist das sicher?",
+  ],
+  [
+    "What does the bot do?",
+    "How do I connect my channel?",
+    "Is it safe?",
+  ],
+);
 
 interface AskResponse {
   answer?: string;
@@ -89,16 +97,16 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
       const response = await fetch(ASK_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: text, history }),
+        body: JSON.stringify({ question: text, history, lang: SITE_LANG }),
         signal: controller.signal,
       });
 
       if (response.status === 429) {
-        setError("Zu viele Fragen gerade. Probier es gleich noch einmal.");
+        setError(tx("Zu viele Fragen gerade. Probier es gleich noch einmal.", "Too many questions right now. Try again in a moment."));
         return;
       }
       if (!response.ok) {
-        setError("Die Antwort konnte nicht geladen werden.");
+        setError(tx("Die Antwort konnte nicht geladen werden.", "Couldn't load the answer."));
         return;
       }
 
@@ -108,7 +116,7 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
       const sources: string[] = Array.isArray(data.sources) ? data.sources : [];
 
       if (!answerParts.length) {
-        setError("Der Bot hat keine Antwort geliefert.");
+        setError(tx("Der Bot hat keine Antwort geliefert.", "The bot didn't return an answer."));
         return;
       }
 
@@ -116,7 +124,7 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
         addMessage("bot", part, index === answerParts.length - 1 ? sources : undefined);
       });
     } catch {
-      setError("Verbindung fehlgeschlagen. Probier es noch einmal.");
+      setError(tx("Verbindung fehlgeschlagen. Probier es noch einmal.", "Connection failed. Please try again."));
     } finally {
       window.clearTimeout(timer);
       setLoading(false);
@@ -134,7 +142,7 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
       {open && (
         <section
           role="dialog"
-          aria-label="Hilfe zum Twitch-Bot"
+          aria-label={tx("Hilfe zum Twitch-Bot", "Twitch bot help")}
           className="mb-3 flex h-[min(620px,calc(100dvh-7rem))] w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-border bg-[color:var(--theme-chatbot-bg,#241c11f2)] shadow-2xl backdrop-blur-xl sm:w-[410px] [@media(max-height:500px)]:mb-0 [@media(max-height:500px)]:h-[calc(100dvh-3.5rem)]"
         >
           <header className="flex shrink-0 items-center justify-between border-b border-border px-5 py-4 [@media(max-height:500px)]:py-2">
@@ -143,16 +151,16 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
                 <Bot size={20} className="text-white" />
               </span>
               <div>
-                <p className="font-semibold text-text-primary">Bot-Hilfe</p>
+                <p className="font-semibold text-text-primary">{tx("Bot-Hilfe", "Bot help")}</p>
                 <p className="text-xs text-text-secondary">
-                  Fragen zur Einrichtung und den Funktionen
+                  {tx("Fragen zur Einrichtung und den Funktionen", "Questions about setup and features")}
                 </p>
               </div>
             </div>
             <button
               type="button"
               onClick={() => setOpen(false)}
-              aria-label="Chat schließen"
+              aria-label={tx("Chat schließen", "Close chat")}
               className="rounded-lg p-2 text-text-secondary transition-colors hover:bg-white/10 hover:text-text-primary"
             >
               <X size={19} />
@@ -168,9 +176,18 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
             {!messages.length && (
               <>
                 <div className="max-w-[88%] rounded-2xl rounded-tl-sm border border-border bg-white/[0.05] px-4 py-3 text-sm leading-relaxed text-text-primary">
-                  Frag mich, was der Twitch-Bot macht oder wie du deinen Kanal
-                  verbindest. Die Einrichtung ist normalerweise mit einem Klick
-                  auf „Autorisieren“ erledigt.
+                  {tx(
+                    <>
+                      Frag mich, was der Twitch-Bot macht oder wie du deinen Kanal
+                      verbindest. Die Einrichtung ist normalerweise mit einem Klick
+                      auf „Autorisieren“ erledigt.
+                    </>,
+                    <>
+                      Ask me what the Twitch bot does or how to connect your
+                      channel. Setup is usually done with a single click on
+                      “Authorize”.
+                    </>,
+                  )}
                 </div>
                 <div className="flex flex-wrap gap-2 pt-1">
                   {SUGGESTIONS.map((suggestion) => (
@@ -202,7 +219,7 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
                   <p>{message.text}</p>
                   {message.sources?.length ? (
                     <p className="mt-2 border-t border-border/60 pt-2 text-xs text-text-secondary">
-                      Quelle: {message.sources.join(", ")}
+                      {tx("Quelle", "Source")}: {message.sources.join(", ")}
                     </p>
                   ) : null}
                 </div>
@@ -212,7 +229,7 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
             {loading && (
               <div className="flex items-center gap-2 text-sm text-text-secondary">
                 <Loader2 size={16} className="animate-spin text-accent" />
-                Antwort wird erstellt…
+                {tx("Antwort wird erstellt…", "Writing an answer…")}
               </div>
             )}
 
@@ -230,14 +247,14 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
               onChange={(event) => setQuestion(event.target.value)}
               maxLength={500}
               disabled={loading}
-              placeholder="Deine Frage …"
-              aria-label="Frage an den Bot"
+              placeholder={tx("Deine Frage …", "Your question …")}
+              aria-label={tx("Frage an den Bot", "Question for the bot")}
               className="min-w-0 flex-1 rounded-xl border border-border bg-white/[0.05] px-4 py-3 text-sm text-text-primary outline-none placeholder:text-text-secondary/60 focus:border-accent"
             />
             <button
               type="submit"
               disabled={loading || !question.trim()}
-              aria-label="Frage senden"
+              aria-label={tx("Frage senden", "Send question")}
               className="gradient-accent flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
             >
               {loading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
@@ -250,12 +267,12 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
         ref={helpButtonRef}
         type="button"
         onClick={() => setOpen((current) => !current)}
-        aria-label={open ? "Hilfe-Chat schließen" : "Hilfe bekommen"}
+        aria-label={open ? tx("Hilfe-Chat schließen", "Close help chat") : tx("Hilfe bekommen", "Get help")}
         aria-expanded={open}
         className={`ml-auto flex items-center gap-2 rounded-full gradient-accent px-5 py-3.5 font-semibold shadow-[0_12px_40px_rgba(201,168,106,0.3)] transition-transform hover:scale-[1.03] ${open ? '[@media(max-height:500px)]:hidden' : ''}`}
       >
         {open ? <X size={20} /> : <MessageCircle size={20} />}
-        <span>{open ? "Schließen" : "Hilfe bekommen"}</span>
+        <span>{open ? tx("Schließen", "Close") : tx("Hilfe bekommen", "Get help")}</span>
       </button>
     </div>
   );

@@ -5,6 +5,7 @@ import { DiscordLogo } from "@/components/ui/DiscordLogo";
 import { RaidDemo } from "@/components/sections/RaidDemo";
 import { useEinblendung } from "@/components/ui/ScrollReveal";
 import { buildTwitchBotAuthUrl, DISCORD_INVITE_URL } from "@/data/externalLinks";
+import { tx } from "@/i18n/locale";
 
 export function Hero() {
   const badge = useEinblendung<HTMLDivElement>();
@@ -25,7 +26,7 @@ export function Hero() {
             transition={badge.versteckt ? { duration: 0 } : { duration: 0.5 }}
             className="inline-flex items-center rounded-full px-4 py-1.5 bg-[var(--color-card)] border border-[var(--color-border)] text-sm text-[var(--color-accent)]"
           >
-            Größtes Deadlock-Raid-Netzwerk auf Twitch
+            {tx("Größtes Deadlock-Raid-Netzwerk auf Twitch", "The biggest Deadlock raid network on Twitch")}
           </motion.div>
 
           <motion.h1
@@ -35,9 +36,18 @@ export function Hero() {
             transition={titel.versteckt ? { duration: 0 } : { duration: 0.6, delay: 0.1 }}
             className="mt-6 text-5xl md:text-6xl lg:text-7xl font-bold leading-tight text-[var(--color-text-primary)]"
           >
-            Kein Stream endet
-            <br />
-            <GradientText>im Leeren.</GradientText>
+            {tx(
+              <>
+                Kein Stream endet
+                <br />
+                <GradientText>im Leeren.</GradientText>
+              </>,
+              <>
+                No stream ends
+                <br />
+                <GradientText>in the void.</GradientText>
+              </>,
+            )}
           </motion.h1>
 
           <motion.p
@@ -47,10 +57,19 @@ export function Hero() {
             transition={text.versteckt ? { duration: 0 } : { duration: 0.6, delay: 0.2 }}
             className="mt-6 text-xl text-[var(--color-text-secondary)] max-w-2xl mx-auto"
           >
-            Der Bot ist nur der Schlüssel. Sobald du ihn aktivierst, bist du
-            Partner im deutschen Deadlock-Netzwerk. Gehst du offline, reicht das
-            Netzwerk deine Zuschauer an den nächsten deutschen Deadlock-Stream
-            weiter.
+            {tx(
+              <>
+                Der Bot ist nur der Schlüssel. Sobald du ihn aktivierst, bist du
+                Partner im deutschen Deadlock-Netzwerk. Gehst du offline, reicht das
+                Netzwerk deine Zuschauer an den nächsten deutschen Deadlock-Stream
+                weiter.
+              </>,
+              <>
+                The bot is just the key. Activate it and you&apos;re a partner in the
+                English-speaking Deadlock network. When you go offline, the network
+                passes your viewers on to the next English-speaking Deadlock stream.
+              </>,
+            )}
           </motion.p>
         </div>
 
@@ -70,7 +89,7 @@ export function Hero() {
             className="gradient-accent rounded-xl px-7 py-3.5 font-semibold inline-flex items-center gap-2 transition-all duration-200 hover:brightness-110 hover:shadow-[0_0_24px_4px_rgba(201,168,106,0.3)]"
           >
             <ExternalLink size={18} />
-            Jetzt Partner werden
+            {tx("Jetzt Partner werden", "Become a partner")}
           </a>
           <a
             href={DISCORD_INVITE_URL}
@@ -79,7 +98,7 @@ export function Hero() {
             className="rounded-xl px-7 py-3.5 font-semibold text-[var(--color-text-primary)] border border-[rgba(255,255,255,0.14)] inline-flex items-center gap-2 transition-all duration-200 hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
           >
             <DiscordLogo size={18} />
-            Community-Discord beitreten
+            {tx("Community-Discord beitreten", "Join our Discord")}
           </a>
         </motion.div>
       </div>

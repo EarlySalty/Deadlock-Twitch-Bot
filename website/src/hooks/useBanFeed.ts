@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
+import { TWITCH_PUBLIC_ORIGIN } from "@/data/externalLinks";
 
-const API_URL =
-  "https://deutsche-deadlock-community.de/twitch/api/v2/public/recent-bans";
+const API_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/api/v2/public/recent-bans`;
 
 export interface BanEntry {
   target_login: string;

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ExternalLink, CheckCircle2 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
+import { tx } from "@/i18n/locale";
 
 interface EmbeddedClip {
   id: string;
@@ -10,7 +11,7 @@ interface EmbeddedClip {
   embedUrl: string;
 }
 
-const TWITCH_PARENTS = ["deutsche-deadlock-community.de"] as const;
+const TWITCH_PARENTS = ["deutsche-deadlock-community.de", "dead-lock.de"] as const;
 
 const CLIPS: EmbeddedClip[] = [
   {
@@ -80,7 +81,10 @@ function ClipPreview({
     <button
       type="button"
       onClick={onSelect}
-      aria-label={`${side === "left" ? "Linken" : "Rechten"} Clip auswählen`}
+      aria-label={tx(
+        `${side === "left" ? "Linken" : "Rechten"} Clip auswählen`,
+        `Select ${side === "left" ? "left" : "right"} clip`,
+      )}
       className={[
         "absolute hidden md:block top-1/2 -translate-y-1/2 z-0",
         "w-[75%] aspect-video rounded-xl overflow-hidden",
@@ -93,7 +97,7 @@ function ClipPreview({
     >
       <iframe
         src={clipSrc(clip, false)}
-        title={`${clip.platform} Vorschau`}
+        title={tx(`${clip.platform} Vorschau`, `${clip.platform} preview`)}
         className="w-full h-full border-0 pointer-events-none saturate-[0.65]"
         loading="lazy"
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
@@ -145,7 +149,7 @@ export function ClipManager() {
                   >
                     <iframe
                       src={clipSrc(activeClip, true)}
-                      title={`${activeClip.platform} Hauptclip`}
+                      title={tx(`${activeClip.platform} Hauptclip`, `${activeClip.platform} main clip`)}
                       className="w-full h-full border-0"
                       loading="lazy"
                       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
@@ -158,7 +162,7 @@ export function ClipManager() {
                       rel="noopener noreferrer"
                       className="absolute right-3 bottom-3 z-30 rounded-md px-3 py-1.5 text-xs font-semibold text-white bg-black/55 border border-white/20 inline-flex items-center gap-1 hover:bg-black/75 transition"
                     >
-                      Clip öffnen
+                      {tx("Clip öffnen", "Open clip")}
                       <ExternalLink size={13} />
                     </a>
                   </motion.div>
@@ -179,13 +183,13 @@ export function ClipManager() {
               <div className="mt-2 grid grid-cols-2 gap-2 md:hidden">
                 <button
                   type="button"
-                  aria-label="Linke Vorschau anzeigen"
+                  aria-label={tx("Linke Vorschau anzeigen", "Show left preview")}
                   onClick={() => selectClip(prevIndex, -1)}
                   className="rounded-md border border-[var(--color-border)] overflow-hidden bg-black aspect-video"
                 >
                   <iframe
                     src={clipSrc(CLIPS[prevIndex], false)}
-                    title="Linke Vorschau"
+                    title={tx("Linke Vorschau", "Left preview")}
                     className="w-full h-full border-0 pointer-events-none saturate-[0.65]"
                     loading="lazy"
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
@@ -195,13 +199,13 @@ export function ClipManager() {
                 </button>
                 <button
                   type="button"
-                  aria-label="Rechte Vorschau anzeigen"
+                  aria-label={tx("Rechte Vorschau anzeigen", "Show right preview")}
                   onClick={() => selectClip(nextIndex, 1)}
                   className="rounded-md border border-[var(--color-border)] overflow-hidden bg-black aspect-video"
                 >
                   <iframe
                     src={clipSrc(CLIPS[nextIndex], false)}
-                    title="Rechte Vorschau"
+                    title={tx("Rechte Vorschau", "Right preview")}
                     className="w-full h-full border-0 pointer-events-none saturate-[0.65]"
                     loading="lazy"
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
@@ -218,29 +222,51 @@ export function ClipManager() {
               Clip Manager
             </p>
             <h2 className="text-3xl md:text-4xl font-bold text-[var(--color-text-primary)] mb-6 font-display">
-              Clips{" "}
-              <span className="bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-accent)] bg-clip-text text-transparent inline">
-                automatisch
-              </span>{" "}
-              überall teilen
+              {tx(
+                <>
+                  Clips{" "}
+                  <span className="bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-accent)] bg-clip-text text-transparent inline">
+                    automatisch
+                  </span>{" "}
+                  überall teilen
+                </>,
+                <>
+                  Share clips everywhere,{" "}
+                  <span className="bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-accent)] bg-clip-text text-transparent inline">
+                    automatically
+                  </span>
+                </>,
+              )}
             </h2>
             <p className="text-[var(--color-text-secondary)] text-lg mb-8 leading-relaxed">
-              Erstelle Clips direkt aus dem Chat und verteile sie automatisch auf allen Plattformen.
+              {tx(
+                "Erstelle Clips direkt aus dem Chat und verteile sie automatisch auf allen Plattformen.",
+                "Create clips straight from chat and push them out to every platform automatically.",
+              )}
             </p>
 
             <ul className="space-y-4">
               {[
                 {
-                  title: "Multi-Plattform",
-                  desc: "YouTube, TikTok und Instagram mit einem Befehl",
+                  title: tx("Multi-Plattform", "Multi-platform"),
+                  desc: tx(
+                    "YouTube, TikTok und Instagram mit einem Befehl",
+                    "YouTube, TikTok and Instagram with one command",
+                  ),
                 },
                 {
                   title: "Smart Templates",
-                  desc: "Automatische Titel, Beschreibungen und Hashtags",
+                  desc: tx(
+                    "Automatische Titel, Beschreibungen und Hashtags",
+                    "Automatic titles, descriptions and hashtags",
+                  ),
                 },
                 {
-                  title: "Clip-Archiv",
-                  desc: "Alle Clips organisiert und durchsuchbar",
+                  title: tx("Clip-Archiv", "Clip archive"),
+                  desc: tx(
+                    "Alle Clips organisiert und durchsuchbar",
+                    "All your clips organized and searchable",
+                  ),
                 },
               ].map((item) => (
                 <li key={item.title} className="flex items-start gap-3">
