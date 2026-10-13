@@ -133,6 +133,15 @@ fn negated_instructions_teach_nothing() {
         "Das Intro nicht kürzen",
         "Die Untertitel nicht schneiden und kleiner machen",
         "Reaktion nicht schneiden und nicht behalten",
+        "Untertitel keinesfalls kleiner",
+        "Untertitel keineswegs größer",
+        "Auf keinen Fall ein kürzeres Intro",
+        "Untertitel niemals kleiner",
+        "Bitte vermeide kleinere Untertitel",
+        "Hör auf, die Untertitel kleiner zu machen",
+        "Stop making the subtitles smaller",
+        "Subtitles shouldn’t be smaller",
+        "Never make the intro shorter",
     ] {
         assert!(classify(text).is_empty(), "{text}");
     }
@@ -140,8 +149,9 @@ fn negated_instructions_teach_nothing() {
         classify("Die Reaktion bitte nicht rausschneiden"),
         vec![Signal::Toward(Dimension::KeepReaction, 1)]
     );
+    assert!(classify("Untertitel kleiner, nicht größer").is_empty());
     assert_eq!(
-        classify("Untertitel kleiner, nicht größer"),
+        classify("Untertitel kleiner. Intro nicht kürzer"),
         vec![Signal::Toward(Dimension::SubtitleSize, -1)]
     );
 }

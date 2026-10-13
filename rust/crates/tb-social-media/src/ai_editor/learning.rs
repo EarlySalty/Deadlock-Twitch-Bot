@@ -147,15 +147,26 @@ const KEEP_PHRASES: &[&str] = &[
     "don't cut",
     "do not cut",
 ];
-const NEGATIONS: &[&str] = &[
-    "nicht", "nichts", "kein", "keine", "keinen", "keiner", "keinem", "nie", "niemals", "ohne",
-    "not", "no", "never", "without", "don't", "dont", "doesn't", "didn't", "isn't", "aren't",
+const NEGATION_STEMS: &[&str] = &[
+    "nicht", "kein", "nie", "nirgend", "weder", "ohne", "statt", "anstatt", "vermeid", "aufhör",
+    "aufhoer", "verzicht", "avoid", "stop",
 ];
+const NEGATION_WORDS: &[&str] = &[
+    "no", "not", "nor", "never", "neither", "none", "nothing", "without", "instead", "dont",
+    "cannot", "hör", "hoer",
+];
+
+fn negation_word(word: &str) -> bool {
+    NEGATION_WORDS.contains(&word)
+        || word.ends_with("n't")
+        || NEGATION_STEMS.iter().any(|stem| word.starts_with(stem))
+}
 
 fn negated(clause: &str) -> bool {
     clause
+        .replace('’', "'")
         .split(|c: char| !(c.is_alphanumeric() || c == '\''))
-        .any(|word| NEGATIONS.contains(&word))
+        .any(negation_word)
 }
 
 fn kept_reaction(clause: &str) -> bool {
@@ -176,7 +187,7 @@ fn kept_reaction(clause: &str) -> bool {
 fn classify(feedback: &str) -> Vec<Signal> {
     let text = feedback.to_lowercase();
     let mut signals = Vec::new();
-    for clause in text.split(['.', '!', '?', ';', ',', '\n']) {
+    for clause in text.split(['.', '!', '?', ';', '\n']) {
         let clause = clause.trim();
         if clause.is_empty() {
             continue;
