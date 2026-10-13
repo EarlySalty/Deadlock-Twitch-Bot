@@ -15,6 +15,14 @@ function PreviewAutomation({
   const [api] = useState<ScheduleQueueApi>(() => {
     const state = previewWorkspaceState(window.location.search, 'automation');
     const fixture = createScheduleQueueFixture();
+    if (new URLSearchParams(window.location.search).get('fixture') === 'automation-first-run')
+      return {
+        ...fixture.api,
+        load: async (owner, signal) => ({
+          ...(await fixture.api.load(owner, signal)),
+          persisted: false,
+        }),
+      };
     if (state === 'loading')
       return { ...fixture.api, load: () => new Promise(() => {}) };
     if (state === 'error')

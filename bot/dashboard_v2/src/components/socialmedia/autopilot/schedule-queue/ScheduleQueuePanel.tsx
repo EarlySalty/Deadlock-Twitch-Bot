@@ -64,6 +64,8 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
   const busy = pending !== null;
   const saving = pending === 'mutation';
   const hasChanges = Object.keys(patch).length > 0;
+  const [edited, setEdited] = useState(false);
+  const unsaved = edited || saving ? 'true' : undefined;
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [removeId, setRemoveId] = useState<number | null>(null);
@@ -134,6 +136,7 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
 
   function edit(change: SchedulePatch) {
     dirty.current = true;
+    setEdited(true);
     setDraft(current => current ? { ...current, ...change } : current);
     setPatch(current => ({ ...current, ...change }));
     setNotice('');
@@ -154,7 +157,7 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
       if (!live.current || generation !== epoch.current) return;
       setSnapshot(result);
       if (saved || !dirty.current) setDraft(result.settings);
-      if (saved) { dirty.current = false; setPatch({}); }
+      if (saved) { dirty.current = false; setEdited(false); setPatch({}); }
       setRemoveId(null);
       setNotice(message);
     } catch (failure) {
@@ -168,7 +171,7 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
     }
   }
 
-  if (!snapshot || !draft) return <section className="schedule-queue" aria-busy={!error} data-unsaved={hasChanges || saving ? 'true' : undefined} data-saving={saving ? 'true' : undefined}>
+  if (!snapshot || !draft) return <section className="schedule-queue" aria-busy={!error} data-unsaved={unsaved} data-saving={saving ? 'true' : undefined}>
     <h2>Auto-Pilot und Zeitplan</h2>
     {error ? <><p role="alert">{error}</p><button onClick={() => refresh.current?.('Aktualisiert.')}>Erneut laden</button></> : <p role="status">Zeitplan wird geladen.</p>}
   </section>;
@@ -184,7 +187,7 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
     void act(() => api.reorder(order, twitchUserId), 'Reihenfolge gespeichert.');
   }
 
-  return <section className="schedule-queue" aria-labelledby={`${id}-heading`} data-unsaved={hasChanges || saving ? 'true' : undefined} data-saving={saving ? 'true' : undefined}>
+  return <section className="schedule-queue" aria-labelledby={`${id}-heading`} data-unsaved={unsaved} data-saving={saving ? 'true' : undefined}>
     <header className="sq-heading">
       <div><h2 id={`${id}-heading`}>Auto-Pilot und Zeitplan</h2><p>Ein Video pro Termin, gemeinsam für deine ausgewählten Plattformen.</p></div>
       <button type="button" disabled={busy} onClick={() => refresh.current?.('Aktualisiert.')}><RefreshCw size={16} />Aktualisieren</button>

@@ -536,7 +536,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
           <VodArchiveTab twitchUserId={twitchUserId} isAdmin={isAdmin} />
         ) : activeView === 'plan' ? (
           <div className="studio-plan-workspace">
-          {workspaceSlots?.automation ?? <ScheduleQueuePanel twitchUserId={twitchUserId} />}
+            {workspaceSlots?.automation ?? <ScheduleQueuePanel twitchUserId={twitchUserId} />}
           <div className="studio-legacy-plan">
             <h2 className="studio-legacy-plan-title">{t('Bisheriger Posting-Plan')}</h2>
             <p className="studio-workspace-note">{t('Freigabemodus und Plattformzeiten der bisherigen Clip-Pipeline bleiben hier einstellbar.')}</p>
