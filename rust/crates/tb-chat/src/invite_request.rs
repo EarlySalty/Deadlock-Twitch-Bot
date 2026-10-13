@@ -40,6 +40,9 @@ pub(crate) fn is_clear_invite_request(content: &str) -> bool {
     let lower = content.to_lowercase();
     let folded = fold_german_umlauts(&lower);
     let words = words(&folded);
+    if is_declined_or_done(&words) {
+        return false;
+    }
     let invite = invite_term_re().is_match(&folded)
         || words
             .iter()
@@ -75,6 +78,26 @@ pub(crate) fn is_clear_invite_request(content: &str) -> bool {
         || words.contains(&"du")
         || lower.contains('?')
         || question_signal_re().is_match(&lower)
+}
+
+fn is_declined_or_done(words: &[&str]) -> bool {
+    words.iter().any(|word| {
+        matches!(
+            *word,
+            "kein"
+                | "keine"
+                | "keinen"
+                | "nicht"
+                | "nich"
+                | "net"
+                | "bereits"
+                | "schon"
+                | "eingeladen"
+                | "invited"
+                | "geinvited"
+                | "geinvitet"
+        )
+    })
 }
 
 fn is_offer(content: &str) -> bool {
@@ -156,6 +179,10 @@ mod tests {
             "Wie bekomme ich Zugang?",
             "Das Game sieht echt mega aus",
             "der Invite ist raus, danke!",
+            "Ich brauche keinen Invite mehr",
+            "Du hast mich bereits eingeladen",
+            "hat mich schon jemand eingeladen?",
+            "kann mich nicht jemand einladen, hab schon Zugang",
         ] {
             assert!(!is_clear_invite_request(raw), "falsch erkannt: {raw}");
         }

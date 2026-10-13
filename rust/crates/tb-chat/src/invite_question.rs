@@ -602,6 +602,7 @@ impl InviteQuestionDecision {
         channel_login: String,
         chatter_login: String,
         message: String,
+        has_strong_access: bool,
         invite_url: String,
     ) -> Self {
         Self {
@@ -609,7 +610,7 @@ impl InviteQuestionDecision {
             verdict: Some(InviteQuestionLoggedVerdict::Regex),
             confidence: 1.0,
             is_newcomer: true,
-            has_strong_access: true,
+            has_strong_access,
             channel_login,
             chatter_login,
             message,
@@ -877,6 +878,7 @@ impl InviteQuestionResponder {
                 channel_login,
                 chatter_login,
                 raw.to_string(),
+                signal.has_strong_access,
                 invite_url,
             );
         }
