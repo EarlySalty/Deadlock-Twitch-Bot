@@ -294,6 +294,7 @@ export const IGNORED_LITERALS: Record<string, string[]> = {
   'src/components/verwaltung/LurkerTaxSection.tsx': ['Lurker Steuer'],
   'src/pages/Monetization.tsx': ['x', 'x)', '{…}x', '{…} s'],
   'src/components/verwaltung/OverlayBuilderSection.tsx': ['Alt+t'],
+  'src/pages/PartnerProfile.tsx': ['deutsche-deadlock-community.de'],
   'src/utils/formatters.ts': ['Mär', 'März'],
   'src/pages/Audience.tsx': [
     'bg-warning/10 text-warning',
@@ -405,11 +406,6 @@ export const IGNORED_LITERALS: Record<string, string[]> = {
 
 export const PENDING_FILES: string[] = [
   'src/components/verwaltung/OverlayBuilderSection.tsx',
-  'src/pages/Challenges.tsx',
-  'src/pages/Community.tsx',
-  'src/pages/PartnerProfile.tsx',
   'src/pages/chatAnalyticsContent.tsx',
   'src/pages/chatAnalyticsDeepSections.tsx',
-  'src/utils/community.ts',
-  'src/utils/partnerProfile.ts',
 ];

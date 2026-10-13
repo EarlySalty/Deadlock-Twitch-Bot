@@ -42,6 +42,7 @@ export const MONETIZATION_EN: Record<string, string> = {
   'Etwas ist schiefgelaufen. Bitte versuche es erneut.': 'Something went wrong. Please try again.',
   'Dein Growth Coach für Twitch': 'Your growth coach for Twitch',
   'Mehr Wachstum, mehr': 'More growth, more',
+  'Insights': 'insights',
   'Verstehe deine Zuschauer, optimiere deinen Content und wachse schneller – mit KI-gestützten Analysen, die dir zeigen, was wirklich funktioniert.':
     'Understand your viewers, optimize your content and grow faster with AI-powered analytics that show you what really works.',
   'Tracke deinen Fortschritt': 'Track your progress',
@@ -421,6 +422,7 @@ export const MONETIZATION_EN: Record<string, string> = {
   'Nächste Ad': 'Next ad',
   'Keine geplant': 'None scheduled',
   'Preroll-frei': 'Preroll-free',
+  'verbleibend': 'remaining',
   'Snooze': 'Snooze',
   'Refresh: {time}': 'Refresh: {time}',
   'Letzte Ad': 'Last ad',
