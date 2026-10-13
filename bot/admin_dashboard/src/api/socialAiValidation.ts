@@ -1,4 +1,4 @@
-import type { ProcessingLimits, UsageGrouping, UsageReport } from './socialAiTypes.ts';
+import type { ProcessingLimits, SkillsReport, UsageGrouping, UsageReport } from './socialAiTypes.ts';
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Ungültige Serverantwort. Bitte den Stand neu laden.');
@@ -65,4 +65,32 @@ export function requireLimits(value: unknown): ProcessingLimits {
     requireValid(plan.monthly_cap_micro_usd === null || Number(plan.monthly_cap_micro_usd) <= 2_000_000);
   }
   return data as unknown as ProcessingLimits;
+}
+
+export function requireSkills(value: unknown): SkillsReport {
+  const data = record(value);
+  requireValid(typeof data.rollback_available === 'boolean');
+  const skills = rows(data.skills);
+  const skillIds = new Set<unknown>();
+  for (const skill of skills) {
+    requireValid(string(skill.skill_id) && !!skill.skill_id && !skillIds.has(skill.skill_id) && string(skill.name) && string(skill.current_version));
+    skillIds.add(skill.skill_id);
+    const versions = rows(skill.versions);
+    const versionIds = new Set<unknown>();
+    for (const version of versions) {
+      requireValid(string(version.version) && !!version.version && !versionIds.has(version.version) && (version.previous_version === null || string(version.previous_version)) && string(version.changed_at) && string(version.summary) && string(version.reason));
+      versionIds.add(version.version);
+      requireValid(version.content_hash === null || (string(version.content_hash) && version.content_hash.trim().length > 0));
+      if (version.evidence !== null) {
+        const evidence = record(version.evidence);
+        requireValid(string(evidence.summary) && nullableCount(evidence.sample_count));
+      }
+      for (const line of rows(version.diff)) requireValid(['added', 'removed', 'context'].includes(String(line.kind)) && string(line.text));
+    }
+    requireValid(versions.length === 0 || versionIds.has(skill.current_version));
+  }
+  for (const proposal of rows(data.proposals)) {
+    requireValid(string(proposal.id) && string(proposal.title) && string(proposal.created_at) && string(proposal.summary) && string(proposal.reason) && ['proposed', 'reviewed', 'dismissed'].includes(String(proposal.status)) && (proposal.evidence === null || string(proposal.evidence)));
+  }
+  return data as unknown as SkillsReport;
 }

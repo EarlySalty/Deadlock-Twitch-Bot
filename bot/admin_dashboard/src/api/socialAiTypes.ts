@@ -100,3 +100,48 @@ export interface PlanLimitChange {
   monthly_revisions: number | null;
   reason: string;
 }
+
+export interface SkillDiffLine {
+  kind: 'added' | 'removed' | 'context';
+  text: string;
+}
+
+export interface SkillVersion {
+  version: string;
+  content_hash: string | null;
+  previous_version: string | null;
+  changed_at: string;
+  summary: string;
+  reason: string;
+  evidence: { summary: string; sample_count: number | null } | null;
+  diff: SkillDiffLine[];
+}
+
+export interface SkillHistory {
+  skill_id: string;
+  name: string;
+  current_version: string;
+  versions: SkillVersion[];
+}
+
+export interface ChangeProposal {
+  id: string;
+  title: string;
+  created_at: string;
+  summary: string;
+  reason: string;
+  status: 'proposed' | 'reviewed' | 'dismissed';
+  evidence: string | null;
+}
+
+export interface SkillsReport {
+  rollback_available: boolean;
+  skills: SkillHistory[];
+  proposals: ChangeProposal[];
+}
+
+export interface RollbackChange {
+  expected_version: string;
+  target_version: string;
+  reason: string;
+}

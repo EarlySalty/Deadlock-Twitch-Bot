@@ -32,7 +32,7 @@ pub fn routes() -> Router<PgPool> {
         .layer(DefaultBodyLimit::max(8192))
 }
 
-fn failure(status: StatusCode, message: &'static str) -> ApiError {
+pub(crate) fn failure(status: StatusCode, message: &'static str) -> ApiError {
     let mut error = ApiError::bad_request(message);
     error.status = status;
     error
@@ -54,7 +54,7 @@ fn catalog() -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
-fn parse<T: DeserializeOwned>(body: &[u8]) -> Result<T, ApiError> {
+pub(crate) fn parse<T: DeserializeOwned>(body: &[u8]) -> Result<T, ApiError> {
     let mut value: serde_json::Value = serde_json::from_slice(body)
         .map_err(|_| ApiError::bad_request("Die Anfrage ist ungültig."))?;
     if let Some(object) = value.as_object_mut() {
@@ -64,7 +64,7 @@ fn parse<T: DeserializeOwned>(body: &[u8]) -> Result<T, ApiError> {
         .map_err(|_| ApiError::bad_request("Die Änderungsfelder sind ungültig."))
 }
 
-async fn actor(
+pub(crate) async fn actor(
     auth: &DashboardAuthLevel,
     state: Option<Extension<DashboardAuthState>>,
     session: Option<Extension<AuthenticatedAdminSessionId>>,

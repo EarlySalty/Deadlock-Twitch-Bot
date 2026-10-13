@@ -130,3 +130,37 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.social-ai-version-label {
+  width: min(100%, 18rem);
+}
+
+.social-ai-diff {
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+  overflow: auto;
+  max-height: 30rem;
+  background: var(--color-bg);
+}
+
+.social-ai-diff > div {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr);
+  padding: 0.4rem 0.75rem;
+}
+
+.social-ai-diff pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.social-ai-diff-added {
+  background: color-mix(in srgb, var(--color-success) 8%, var(--color-bg));
+}
+
+.social-ai-diff-removed {
+  background: color-mix(in srgb, var(--color-danger) 9%, var(--color-bg));
+}

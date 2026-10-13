@@ -6,11 +6,12 @@ import './socialAi.css';
 
 export function SocialAiLayout() {
   return <section className="social-ai space-y-5">
-    <PageHeader title="KI-Videos verwalten" description="Verbrauch einordnen und zusätzliche Verarbeitungsgrenzen verwalten." />
+    <PageHeader title="KI-Videos verwalten" description="Verbrauch einordnen, Verarbeitungsgrenzen verwalten und Skill-Versionen prüfen." />
     <nav className="flex flex-wrap gap-2" aria-label="KI-Verwaltung">
       {[
         ['/content/social-ai/usage', 'Verbrauch & Kosten'],
         ['/content/social-ai/limits', 'Verarbeitungsgrenzen'],
+        ['/content/social-ai/skills', 'Skill-Versionen'],
       ].map(([to, label]) => <NavLink key={to} to={to} className={({ isActive }) =>
         `admin-button admin-button-secondary ${isActive ? 'social-ai-active' : ''}`}>
         {label}

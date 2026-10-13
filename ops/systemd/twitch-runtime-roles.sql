@@ -525,3 +525,11 @@ BEGIN
     END IF;
 END
 $social_ai_limit_roles$;
+
+DO $social_ai_skill_roles$
+BEGIN
+    IF to_regprocedure('public.twitch_apply_social_ai_skill_roles()') IS NOT NULL THEN
+        PERFORM public.twitch_apply_social_ai_skill_roles();
+    END IF;
+END
+$social_ai_skill_roles$;
