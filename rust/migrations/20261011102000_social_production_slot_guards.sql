@@ -34,7 +34,7 @@ BEGIN
         job_subject := NEW.job_id;
         video_subject := NEW.id;
     ELSE
-        IF COALESCE(NEW.status, '') IN ('failed', 'cancelled') THEN
+        IF NEW.produced_video_id IS NULL OR COALESCE(NEW.status, '') IN ('failed', 'cancelled') THEN
             RETURN NEW;
         END IF;
         SELECT c.twitch_user_id INTO owner_id FROM twitch_clips_social_media c WHERE c.id = NEW.clip_id;

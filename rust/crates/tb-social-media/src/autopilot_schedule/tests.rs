@@ -23,6 +23,21 @@ mod runner;
 static NEXT_SCHEMA: AtomicU64 = AtomicU64::new(0);
 
 async fn pool() -> PgPool {
+    let pool = pool_before_slot_guards().await;
+    apply_slot_guards(&pool).await;
+    pool
+}
+
+async fn apply_slot_guards(pool: &PgPool) {
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261011102000_social_production_slot_guards.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("actual M2 migration");
+}
+
+async fn pool_before_slot_guards() -> PgPool {
     let dsn = crate::test_support::test_dsn().expect("isolated test database is required");
     let schema = format!(
         "t_sm_b_{}_{}",
@@ -81,12 +96,6 @@ async fn pool() -> PgPool {
     .execute(&pool)
     .await
     .expect("actual merged M1 migration");
-    sqlx::raw_sql(include_str!(
-        "../../../../migrations/20261011102000_social_production_slot_guards.sql"
-    ))
-    .execute(&pool)
-    .await
-    .expect("actual M2 migration");
     pool
 }
 
@@ -606,5 +615,40 @@ async fn shared_slot_guard_covers_produced_and_upload_races() {
     );
     sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,produced_video_id,platform,scheduled_at) VALUES ($1,$2,'instagram',$3)")
         .bind(same_clip).bind(same_video).bind(upload_slot).execute(&pool).await.expect("same immutable video reuses one slot across platforms");
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn legacy_uploads_sharing_a_slot_keep_their_status_lifecycle() {
+    let pool = pool_before_slot_guards().await;
+    let slot = utc("2026-10-14T16:00:00Z");
+    let mut rows = Vec::new();
+    for (name, platform) in [("legacy-a", "tiktok"), ("legacy-b", "youtube")] {
+        let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (twitch_user_id, clip_id, clip_title, streamer_login, clip_url)
+            VALUES ('other',$1,$1,'other','https://clips.test/legacy') RETURNING id::bigint")
+            .bind(name).fetch_one(&pool).await.expect("legacy clip");
+        let row: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id,platform,status,scheduled_at) VALUES ($1,$2,'pending',$3) RETURNING id")
+            .bind(clip).bind(platform).bind(slot).fetch_one(&pool).await.expect("legacy pending upload");
+        rows.push((clip, row));
+    }
+    apply_slot_guards(&pool).await;
+    for status in ["processing", "completed"] {
+        for (_, row) in &rows {
+            sqlx::query("UPDATE twitch_clips_upload_queue SET status = $2 WHERE id = $1")
+                .bind(row)
+                .bind(status)
+                .execute(&pool)
+                .await
+                .expect("legacy status update in a shared slot");
+        }
+    }
+    sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,platform,status,scheduled_at) VALUES ($1,'instagram','pending',$2)")
+        .bind(rows[0].0).bind(slot).execute(&pool).await.expect("legacy insert into a shared slot");
+    sqlx::query("UPDATE twitch_clips_upload_queue SET scheduled_at = $2 WHERE id = $1")
+        .bind(rows[1].1)
+        .bind(slot + Duration::hours(1))
+        .execute(&pool)
+        .await
+        .expect("legacy reschedule");
     cleanup(pool).await;
 }
