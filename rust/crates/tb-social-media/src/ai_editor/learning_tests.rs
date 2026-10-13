@@ -264,6 +264,21 @@ async fn recurring_feedback_creates_versioned_skill_change_and_respects_rollback
         .await
         .expect("restored subtitles");
     assert_eq!(restored.version, 1);
+    let stale = skill_registry::activate_learned(
+        pool,
+        SkillId::Subtitles,
+        skill_registry::LearnedChange {
+            text: &format!("{}\n\nStale.\n", restored.text.trim_end()),
+            summary: "Veraltet",
+            reason: "Veraltet",
+            evidence: None,
+            actor: "ai-learning",
+            max_bytes: 4096,
+            expected_version: Some(2),
+        },
+    )
+    .await;
+    assert_eq!(stale, Err(SkillRegistryError::Conflict));
 
     let proposals = skill_registry::proposals(pool).await.expect("proposals");
     assert_eq!(proposals.len(), 1);
