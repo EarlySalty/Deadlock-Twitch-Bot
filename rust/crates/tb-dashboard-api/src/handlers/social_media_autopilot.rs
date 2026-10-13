@@ -237,9 +237,12 @@ fn publish_error(error: publish::PublishError) -> Response {
         | E::Video(ProducedVideoError::NoPlatforms | ProducedVideoError::Invalid) => {
             (StatusCode::BAD_REQUEST, "invalid_publish_input")
         }
-        E::State | E::ApprovalRequired | E::RetryBlocked | E::NoSlot | E::Video(_) => {
-            (StatusCode::CONFLICT, "publish_state_conflict")
-        }
+        E::State
+        | E::ApprovalRequired
+        | E::RetryBlocked
+        | E::ArtifactDeleted
+        | E::NoSlot
+        | E::Video(_) => (StatusCode::CONFLICT, "publish_state_conflict"),
         E::Schedule(_) | E::Settings(_) | E::Database(_) | E::Json(_) | E::Io(_) => {
             tracing::warn!(%error, "Auto-Pilot publication request failed");
             (StatusCode::INTERNAL_SERVER_ERROR, "publish_unavailable")

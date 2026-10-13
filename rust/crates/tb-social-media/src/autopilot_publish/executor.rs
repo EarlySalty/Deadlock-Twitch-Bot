@@ -24,7 +24,6 @@ const PROMPT_LATENESS_MINUTES: i64 = 15;
 const MAX_LATENESS_MINUTES: i64 = 120;
 const PREPARING_STALE_MINUTES: i64 = 10;
 const EFFECT_STALE_MINUTES: i64 = 120;
-const FAILED_RETENTION_DAYS: i64 = 7;
 
 #[derive(Debug, Clone)]
 pub struct PublishRequest {
@@ -436,6 +435,7 @@ impl PublishExecutor {
                  JOIN social_produced_videos v2 ON v2.id = q2.produced_video_id
                  LEFT JOIN social_media_autopilot_settings s ON s.twitch_user_id = v2.twitch_user_id
                  WHERE v2.publication_executed_at IS NOT NULL AND NOT COALESCE(s.paused, FALSE)
+                 AND v2.artifact_deleted_at IS NULL AND v2.file_path IS NOT NULL
                  AND (q2.status = $2 OR (q2.status = $3 AND q2.next_retry_at <= clock_timestamp()))
                  ORDER BY q2.scheduled_at, q2.id LIMIT 1 FOR UPDATE OF q2 SKIP LOCKED)
              AND v.id = q.produced_video_id AND c.id = q.clip_id
@@ -664,18 +664,11 @@ impl PublishExecutor {
              WHERE v.file_path IS NOT NULL AND v.artifact_deleted_at IS NULL AND v.cleanup_error IS NULL
              AND v.publication_executed_at IS NOT NULL
              AND NOT EXISTS (SELECT 1 FROM twitch_clips_upload_queue q WHERE q.produced_video_id = v.id
-                 AND q.status NOT IN ($1, $2, $3, $4, $6))
-             AND (NOT EXISTS (SELECT 1 FROM twitch_clips_upload_queue q WHERE q.produced_video_id = v.id
-                     AND q.status NOT IN ($1, $2))
-                  OR v.publication_executed_at < clock_timestamp() - make_interval(days => $5))
+                 AND q.status IS DISTINCT FROM $1 AND q.status IS DISTINCT FROM $2)
              LIMIT 20",
         )
         .bind(queue_status::PUBLISHED)
         .bind(queue_status::DISCARDED)
-        .bind(queue_status::FAILED)
-        .bind(queue_status::UNCERTAIN)
-        .bind(FAILED_RETENTION_DAYS as i32)
-        .bind(queue_status::HELD)
         .fetch_all(&self.pool)
         .await?;
         let mut cleaned = 0;
