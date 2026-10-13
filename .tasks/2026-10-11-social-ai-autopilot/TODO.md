@@ -1,3 +1,10 @@
+# TODO, state 2026-10-13 20:30 CEST
+
+Live e20f72419 = origin/main: Track B schedule+runner (3f33b5914), schedule-queue UI mount (5cb4345b1), M3 learning r6, plus everything earlier (M2 revisions, M4 usage, skill versions).
+Open: only D, P1 Track C (tb-social-p1-c, feat/social-p1-c-modes-20261013, 2462aaa72, 7 ahead/13 behind). Fresh agent spawned 20:25: sync main, PublishReviewPanel mount, gate, merge, deploy.
+When D is live: t3-wakeup cancel social-ai.
+Disk: 87%, watchdog idle/pressure eviction being built in claude-config.
+
 # TODO, state 2026-10-13 08:55 CEST
 
 Wakeups: `t3-wakeup` chain social-ai every 5h into thread 98e836a5 (next 13:53). Fresh agents A-E spawned 08:55.
