@@ -160,7 +160,7 @@ function VideoRow({ video, snapshot, busy, owner, client, act, onOpenVideo, onCo
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
-  const platforms = video.event?.destinations.map((destination) => destination.platform) ?? snapshot.target_platforms;
+  const platforms = video.event?.destinations.length ? video.event.destinations.map((destination) => destination.platform) : snapshot.target_platforms;
   const expired = video.status === 'expired' || video.artifact_state === 'deleted' || video.artifact_state === 'missing';
   const actionable = !expired && ['review', 'approved', 'scheduled'].includes(video.status);
   async function approve() {
