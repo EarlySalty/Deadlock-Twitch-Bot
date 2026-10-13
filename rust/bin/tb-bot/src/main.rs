@@ -1838,7 +1838,10 @@ async fn main() {
                             pool.clone(),
                         );
                         executor = executor.with_notifier(Arc::new(
-                            social_autopilot_notify::AutopilotDiscordNotifier::new(pool.clone(), dm),
+                            social_autopilot_notify::AutopilotDiscordNotifier::new(
+                                pool.clone(),
+                                dm,
+                            ),
                         ));
                     }
                     Err(error) => {
