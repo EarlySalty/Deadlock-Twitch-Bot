@@ -116,28 +116,28 @@ const RESTORE: &[&str] = &[
     "restore",
 ];
 
-fn size_signal(dimension: Dimension, text: &str) -> Option<Signal> {
+fn directed_signal(
+    dimension: Dimension,
+    text: &str,
+    lower: &[&str],
+    higher: &[&str],
+) -> Option<Signal> {
     if contains_any(text, RESTORE) {
-        Some(Signal::Restore(dimension))
-    } else if contains_any(text, SMALLER) {
-        Some(Signal::Toward(dimension, -1))
-    } else if contains_any(text, LARGER) {
-        Some(Signal::Toward(dimension, 1))
-    } else {
-        None
+        return Some(Signal::Restore(dimension));
+    }
+    match (contains_any(text, lower), contains_any(text, higher)) {
+        (true, false) => Some(Signal::Toward(dimension, -1)),
+        (false, true) => Some(Signal::Toward(dimension, 1)),
+        _ => None,
     }
 }
 
+fn size_signal(dimension: Dimension, text: &str) -> Option<Signal> {
+    directed_signal(dimension, text, SMALLER, LARGER)
+}
+
 fn length_signal(dimension: Dimension, text: &str) -> Option<Signal> {
-    if contains_any(text, RESTORE) {
-        Some(Signal::Restore(dimension))
-    } else if contains_any(text, SHORTER) {
-        Some(Signal::Toward(dimension, -1))
-    } else if contains_any(text, LONGER) {
-        Some(Signal::Toward(dimension, 1))
-    } else {
-        None
-    }
+    directed_signal(dimension, text, SHORTER, LONGER)
 }
 
 const KEEP_PHRASES: &[&str] = &[
@@ -184,20 +184,35 @@ fn kept_reaction(clause: &str) -> bool {
     found && !negated(&rest)
 }
 
-fn classify(feedback: &str) -> Vec<Signal> {
-    let text = feedback.to_lowercase();
-    let mut signals = Vec::new();
-    for clause in text.split(['.', '!', '?', ';', '\n']) {
-        let clause = clause.trim();
-        if clause.is_empty() {
+fn affirmative_parts(text: &str, signals: &mut Vec<Signal>) -> Vec<String> {
+    let mut parts = Vec::new();
+    for sentence in text.split(['.', '!', '?', ';', '\n']) {
+        let sentence = sentence.trim();
+        if sentence.is_empty() {
             continue;
         }
-        if negated(clause) {
-            if kept_reaction(clause) {
+        if negated(sentence) {
+            if kept_reaction(sentence) {
                 signals.push(Signal::Toward(Dimension::KeepReaction, 1));
             }
             continue;
         }
+        parts.extend(
+            sentence
+                .split(',')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(str::to_owned),
+        );
+    }
+    parts
+}
+
+fn classify(feedback: &str) -> Vec<Signal> {
+    let text = feedback.to_lowercase();
+    let mut signals = Vec::new();
+    for clause in affirmative_parts(&text, &mut signals) {
+        let clause = clause.as_str();
         if contains_any(clause, &["untertitel", "subtitle", "caption"]) {
             signals.extend(size_signal(Dimension::SubtitleSize, clause));
         } else if contains_any(clause, &["intro", "einstieg", "anfang"]) {
