@@ -1376,7 +1376,7 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
                 return Ok(failure(403, block.public_title(), block.public_body_html()));
             }
             Ok(None) => {}
-            Err(()) => return Ok(generic_failure()),
+            Err(_) => return Ok(generic_failure()),
         }
 
         // 8. Erst-Auth erkennen — entscheidet das Followup-Routing in
