@@ -359,7 +359,13 @@ pub enum AutoRaidPipelineOutcome {
     },
 }
 
+#[async_trait::async_trait]
+pub trait RaidNetworkPolicy: Send + Sync {
+    async fn validate(&self, source_id: &str, target_id: &str) -> Result<(), String>;
+}
+
 pub struct AutoRaidPipeline {
+    network_policy: Option<Arc<dyn RaidNetworkPolicy>>,
     blacklist: RaidBlacklistStore,
     scores: ScoreStore,
     history: RaidHistoryStore,
@@ -402,6 +408,7 @@ impl AutoRaidPipeline {
         outreach: Option<OutreachBoostStore>,
     ) -> Self {
         Self {
+            network_policy: None,
             blacklist,
             scores,
             history,
@@ -447,7 +454,18 @@ impl AutoRaidPipeline {
         self
     }
 
+    #[must_use]
+    pub fn with_network_policy(mut self, policy: Arc<dyn RaidNetworkPolicy>) -> Self {
+        self.network_policy = Some(policy);
+        self
+    }
+
     pub async fn run(&self, req: &AutoRaidRequest) -> AutoRaidPipelineOutcome {
+        let Some(network_policy) = &self.network_policy else {
+            return AutoRaidPipelineOutcome::Blocked {
+                error: "network_policy_unavailable".to_string(),
+            };
+        };
         let flow_start = Instant::now();
         let (hard_blacklist_ids, hard_blacklist_logins) =
             match self.blacklist.load_hard_bans().await {
@@ -646,6 +664,13 @@ impl AutoRaidPipeline {
                 reason: req.reason.clone(),
             };
 
+            if let Err(error) = network_policy
+                .validate(&req.broadcaster_id, &target.user_id)
+                .await
+            {
+                tracing::warn!(%error, to = %target.user_login, "Raid-Pipeline blockiert: Netzwerkprüfung fehlgeschlagen");
+                return AutoRaidPipelineOutcome::Blocked { error };
+            }
             let api_start = Instant::now();
             let execution = self.executor.execute(&raid_request, Utc::now()).await;
             let api_call_ms = elapsed_ms(api_start);

@@ -128,35 +128,91 @@ struct AssembledPartners {
     fallback_language: String,
 }
 
-/// Netzwerk-/Sprachfilter (Paket R) auf die Online-Partner anwenden. Ist das
-/// Netzwerk nicht ladbar, bleibt es beim bisherigen Pool und Ersatz `de`.
+struct CurrentRaidNetworkPolicy {
+    pool: PgPool,
+    helix: HelixClient,
+}
+
+#[async_trait::async_trait]
+impl tb_raid::auto_raid_pipeline::RaidNetworkPolicy for CurrentRaidNetworkPolicy {
+    async fn validate(&self, source_id: &str, target_id: &str) -> Result<(), String> {
+        let ids = vec![source_id.trim().to_string(), target_id.trim().to_string()];
+        let streams = self
+            .helix
+            .get_streams_by_user_ids(&ids, None)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, source_id, target_id, "Raid: aktuelle Sprachen nicht ladbar");
+                "network_language_unavailable".to_string()
+            })?;
+        validate_loaded_network_policy(&self.pool, source_id, target_id, &streams).await
+    }
+}
+
+async fn validate_loaded_network_policy(
+    pool: &PgPool,
+    source_id: &str,
+    target_id: &str,
+    streams: &[HelixStream],
+) -> Result<(), String> {
+    let ids = vec![source_id.trim().to_string(), target_id.trim().to_string()];
+    let networks = tb_db::network::load_networks(pool, &ids)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, source_id, target_id, "Raid: aktuelles Netzwerk nicht ladbar");
+            "network_unavailable".to_string()
+        })?;
+    validate_current_networks(source_id, target_id, streams, &networks)
+}
+
+fn validate_current_networks(
+    source_id: &str,
+    target_id: &str,
+    streams: &[HelixStream],
+    networks: &HashMap<String, tb_domain::network::StreamerNetwork>,
+) -> Result<(), String> {
+    let source = networks
+        .get(source_id.trim())
+        .ok_or_else(|| "source_network_unknown".to_string())?;
+    let target = networks
+        .get(target_id.trim())
+        .ok_or_else(|| "target_network_unknown".to_string())?;
+    let live_language = |id: &str| {
+        streams
+            .iter()
+            .find(|stream| stream.user_id.trim() == id.trim())
+            .map(|stream| stream.language.as_str())
+    };
+    let source_language = source.language_group(live_language(source_id));
+    let target_language = target.language_group(live_language(target_id));
+    tb_domain::network::raid_reach(
+        source,
+        source_language.as_deref(),
+        target,
+        target_language.as_deref(),
+    )
+    .map(|_| ())
+    .map_err(|reason| reason.as_str().to_string())
+}
+
 fn apply_network_scope(
     broadcaster_id: &str,
     raider_live_language: Option<&str>,
     online: Vec<tb_raid::OnlineCandidate>,
     networks: Result<HashMap<String, tb_domain::network::StreamerNetwork>, sqlx::Error>,
-) -> (Vec<tb_raid::OnlineCandidate>, Vec<String>, String) {
-    let mut networks = match networks {
-        Ok(networks) => networks,
-        Err(error) => {
-            tracing::error!(
-                %error,
-                broadcaster_id,
-                "Raid: Server-Netzwerk nicht ladbar — Pool wie bisher, Ersatz de"
-            );
-            return (online, Vec::new(), tb_raid::fallback_language(None));
-        }
-    };
-    let Some(raider) = networks.remove(broadcaster_id.trim()) else {
-        return (online, Vec::new(), tb_raid::fallback_language(None));
-    };
-    let raider_language = raider.language_group(raider_live_language);
-    let outcome = tb_raid::filter_candidates_by_network(
-        &raider,
-        raider_language.as_deref(),
-        online,
-        &networks,
-    );
+) -> Result<(Vec<tb_raid::OnlineCandidate>, Vec<String>, String), &'static str> {
+    let mut networks = networks.map_err(|error| {
+        tracing::error!(%error, broadcaster_id, "Raid: Server-Netzwerk nicht ladbar");
+        "network_unavailable"
+    })?;
+    let raider = networks
+        .remove(broadcaster_id.trim())
+        .ok_or("source_network_unknown")?;
+    let raider_language = raider
+        .language_group(raider_live_language)
+        .ok_or("source_language_unknown")?;
+    let outcome =
+        tb_raid::filter_candidates_by_network(&raider, Some(&raider_language), online, &networks);
     for dropped in &outcome.dropped {
         tracing::debug!(
             broadcaster_id,
@@ -172,15 +228,15 @@ fn apply_network_scope(
             "Raid-Pool enthält Partner anderer Server"
         );
     }
-    (
+    Ok((
         outcome.kept,
         outcome
             .dropped
             .into_iter()
             .map(|dropped| dropped.twitch_user_id)
             .collect(),
-        tb_raid::fallback_language(raider_language.as_deref()),
-    )
+        raider_language,
+    ))
 }
 
 /// Quell-Zustand für den manuellen Raid — aus dem Helix-Stream (Vorrang)
@@ -324,6 +380,10 @@ impl OfflineRaidHandler {
         target_game: &str,
         offline_grace: std::time::Duration,
     ) -> Self {
+        let pipeline = pipeline.with_network_policy(Arc::new(CurrentRaidNetworkPolicy {
+            pool: network_pool.clone(),
+            helix: helix.clone(),
+        }));
         Self {
             offline_grace,
             suppression,
@@ -420,11 +480,19 @@ impl OfflineRaidHandler {
 
         // 5.–7. Online-Partner sammeln, filtern, anreichern (gemeinsam mit
         // dem manuellen Raid).
-        let Some(assembled) = self
+        let assembled = match self
             .assemble_eligible_partners(broadcaster_id, None, now)
             .await
-        else {
-            return;
+        {
+            Ok(assembled) => assembled,
+            Err(reason) => {
+                tracing::error!(
+                    broadcaster_id,
+                    reason,
+                    "Auto-Raid blockiert: Kandidaten nicht sicher prüfbar"
+                );
+                return;
+            }
         };
 
         tracing::info!(
@@ -550,11 +618,15 @@ impl OfflineRaidHandler {
         }
 
         // 3. Kandidaten + Pipeline (wie Auto-Raid).
-        let Some(assembled) = self
+        let assembled = match self
             .assemble_eligible_partners(broadcaster_id, source.language.as_deref(), now)
             .await
-        else {
-            return ManualRaidResponse::error("unavailable", "candidate_assembly_failed");
+        {
+            Ok(assembled) => assembled,
+            Err("candidate_assembly_failed") => {
+                return ManualRaidResponse::error("unavailable", "candidate_assembly_failed");
+            }
+            Err(reason) => return ManualRaidResponse::error("blocked", reason),
         };
         tracing::info!(
             streamer = %login,
@@ -609,12 +681,12 @@ impl OfflineRaidHandler {
         broadcaster_id: &str,
         raider_live_language: Option<&str>,
         now: chrono::DateTime<Utc>,
-    ) -> Option<AssembledPartners> {
+    ) -> Result<AssembledPartners, &'static str> {
         let roster = match self.roster.load_roster(broadcaster_id).await {
             Ok(roster) => roster,
             Err(error) => {
                 tracing::error!(%error, broadcaster_id, "Raid: Roster nicht ladbar");
-                return None;
+                return Err("candidate_assembly_failed");
             }
         };
         let logins: Vec<String> = roster.iter().map(|p| p.twitch_login.clone()).collect();
@@ -641,7 +713,7 @@ impl OfflineRaidHandler {
         network_ids.extend(online.iter().map(|c| c.twitch_user_id.trim().to_string()));
         let networks = tb_db::network::load_networks(&self.network_pool, &network_ids).await;
         let (online, network_excluded_ids, fallback_language) =
-            apply_network_scope(broadcaster_id, raider_live_language, online, networks);
+            apply_network_scope(broadcaster_id, raider_live_language, online, networks)?;
 
         // Deadlock-Eligibility je Kandidat (aktiv vor kürzlich) — Partition
         // wie `filter_eligible`, hier inline weil die Session-Flags aus der
@@ -678,7 +750,7 @@ impl OfflineRaidHandler {
             }
         }
 
-        Some(AssembledPartners {
+        Ok(AssembledPartners {
             eligible,
             online_count,
             filtered_out,
@@ -834,16 +906,14 @@ mod tests {
     }
 
     #[test]
-    fn netzwerkfehler_laesst_pool_und_ersatz_wie_bisher() {
-        let (kept, excluded, language) = apply_network_scope(
+    fn netzwerkfehler_blockiert_auch_bei_bekannter_live_sprache() {
+        let result = apply_network_scope(
             "1",
             Some("en"),
             vec![online("2", "en"), online("3", "de")],
             Err(sqlx::Error::PoolTimedOut),
         );
-        assert_eq!(kept.len(), 2);
-        assert!(excluded.is_empty());
-        assert_eq!(language, "de");
+        assert_eq!(result.err(), Some("network_unavailable"));
     }
 
     #[test]
@@ -860,7 +930,8 @@ mod tests {
             None,
             vec![online("2", "en"), online("3", "de")],
             Ok(networks),
-        );
+        )
+        .expect("Netzwerkfilter");
         assert_eq!(
             kept.iter()
                 .map(|c| c.twitch_login.as_str())
@@ -872,7 +943,7 @@ mod tests {
     }
 
     #[test]
-    fn deutscher_raider_ohne_zeile_behaelt_alle_partner_und_de() {
+    fn deutscher_raider_behaelt_nur_deutschsprachige_partner() {
         use tb_domain::network::{GuildSettings, StreamerNetwork};
         let community = GuildSettings::community_default();
         let networks = HashMap::from([
@@ -885,10 +956,113 @@ mod tests {
             None,
             vec![online("2", "en"), online("3", "de")],
             Ok(networks),
-        );
-        assert_eq!(kept.len(), 2);
-        assert!(excluded.is_empty());
+        )
+        .expect("Netzwerkfilter");
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].twitch_user_id, "3");
+        assert_eq!(excluded, vec!["2"]);
         assert_eq!(language, "de");
+    }
+
+    #[test]
+    fn missing_source_network_blocks_assembly_and_execution() {
+        assert_eq!(
+            apply_network_scope("1", Some("en"), Vec::new(), Ok(HashMap::new())).err(),
+            Some("source_network_unknown")
+        );
+        assert_eq!(
+            validate_current_networks("1", "2", &[], &HashMap::new()),
+            Err("source_network_unknown".to_string())
+        );
+        assert_eq!(
+            validate_current_networks(
+                "1",
+                "2",
+                &[],
+                &HashMap::from([("1".to_string(), english_network())]),
+            ),
+            Err("target_network_unknown".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn current_policy_reloads_undiscovered_targets_and_fails_closed_on_db_error() {
+        let dsn =
+            std::env::var("TB_TEST_DATABASE_URL").expect("Wegwerf-Testdatenbank erforderlich");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .expect("Testdatenbank");
+        for ddl in [
+            "SET search_path TO pg_temp",
+            "CREATE TEMP TABLE discord_guilds (guild_id BIGINT PRIMARY KEY, language TEXT NOT NULL, cross_server_raids BOOLEAN NOT NULL, promo_invite_url TEXT, status TEXT NOT NULL, removed_at TIMESTAMPTZ)",
+            "CREATE TEMP TABLE streamer_guilds (twitch_user_id TEXT, guild_id BIGINT, active BOOLEAN, joined_at TIMESTAMPTZ DEFAULT NOW())",
+            "CREATE TEMP TABLE twitch_streamer_identities (twitch_user_id TEXT, broadcaster_language TEXT)",
+            "INSERT INTO discord_guilds (guild_id, language, cross_server_raids, status) VALUES (42, 'en', TRUE, 'active'), (43, 'en', FALSE, 'active')",
+            "INSERT INTO streamer_guilds (twitch_user_id, guild_id, active) VALUES ('1', 42, TRUE), ('2', 43, TRUE)",
+            "INSERT INTO twitch_streamer_identities VALUES ('1', 'en'), ('2', 'en')",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.expect("Testschema");
+        }
+        let source_networks = tb_db::network::load_networks(&pool, &["1".to_string()]).await;
+        let (partners, excluded, language) =
+            apply_network_scope("1", None, Vec::new(), source_networks)
+                .expect("Leere Helix-Login-Entdeckung mit gültigem Quellnetzwerk");
+        assert!(partners.is_empty());
+        assert!(excluded.is_empty());
+        assert_eq!(language, "en");
+        assert_eq!(
+            validate_loaded_network_policy(&pool, "1", "2", &[]).await,
+            Err("netzwerk_schalter_aus".to_string())
+        );
+        sqlx::query("UPDATE discord_guilds SET cross_server_raids = TRUE WHERE guild_id = 43")
+            .execute(&pool)
+            .await
+            .expect("Zielnetzwerk einschalten");
+        assert_eq!(
+            validate_loaded_network_policy(&pool, "1", "2", &[]).await,
+            Ok(())
+        );
+        sqlx::query("UPDATE discord_guilds SET cross_server_raids = FALSE WHERE guild_id = 42")
+            .execute(&pool)
+            .await
+            .expect("Quellnetzwerk ausschalten");
+        assert_eq!(
+            validate_loaded_network_policy(&pool, "1", "2", &[]).await,
+            Err("netzwerk_schalter_aus".to_string())
+        );
+        sqlx::query("UPDATE streamer_guilds SET guild_id = 42 WHERE twitch_user_id = '2'")
+            .execute(&pool)
+            .await
+            .expect("Gemeinsamer Server");
+        assert_eq!(
+            validate_loaded_network_policy(&pool, "1", "2", &[]).await,
+            Ok(())
+        );
+        let streams = [HelixStream {
+            user_id: "2".to_string(),
+            language: "de".to_string(),
+            ..Default::default()
+        }];
+        assert_eq!(
+            validate_loaded_network_policy(&pool, "1", "2", &streams).await,
+            Err("andere_sprache".to_string())
+        );
+        sqlx::query("DROP TABLE discord_guilds")
+            .execute(&pool)
+            .await
+            .expect("Netzwerk-Ladefehler");
+        assert_eq!(
+            validate_loaded_network_policy(&pool, "1", "2", &[]).await,
+            Err("network_unavailable".to_string())
+        );
+        let broken = tb_db::network::load_networks(&pool, &["1".to_string()]).await;
+        assert_eq!(
+            apply_network_scope("1", Some("en"), Vec::new(), broken).err(),
+            Some("network_unavailable")
+        );
+        pool.close().await;
     }
 
     #[test]

@@ -323,6 +323,29 @@ fn fixed_millis(value: u64) -> MillisSource {
 
 // ── Aufbau ──
 
+struct TestNetworkPolicy {
+    blocked_target: Option<String>,
+    error: Option<String>,
+    calls: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+#[async_trait::async_trait]
+impl tb_raid::auto_raid_pipeline::RaidNetworkPolicy for TestNetworkPolicy {
+    async fn validate(&self, source_id: &str, target_id: &str) -> Result<(), String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((source_id.to_string(), target_id.to_string()));
+        if let Some(error) = &self.error {
+            return Err(error.clone());
+        }
+        if self.blocked_target.as_deref() == Some(target_id) {
+            return Err("netzwerk_schalter_aus".to_string());
+        }
+        Ok(())
+    }
+}
+
 struct Harness {
     pipeline: AutoRaidPipeline,
     pending: Arc<Mutex<PendingRaidStore>>,
@@ -401,7 +424,12 @@ fn build_with_enricher(
         })),
         follower_enricher,
         Some(tb_raid::OutreachBoostStore::new(pool.clone())),
-    );
+    )
+    .with_network_policy(Arc::new(TestNetworkPolicy {
+        blocked_target: None,
+        error: None,
+        calls: Arc::new(Mutex::new(Vec::new())),
+    }));
     Harness {
         pipeline,
         pending,
@@ -438,6 +466,86 @@ fn fairness(user_id: &str, login: &str) -> FairnessCandidate {
 }
 
 // ── Tests ──
+
+#[tokio::test]
+async fn undiscovered_category_and_boost_targets_require_policy_before_execution() {
+    let pool = pool_or_skip!("t6w_pipe_fresh_network");
+    seed_source_token(&pool, "100").await;
+    for boost in [false, true] {
+        if boost {
+            sqlx::query(
+                "INSERT INTO twitch_partner_outreach (streamer_login, status, contacted_at) VALUES ('closed_target', 'sent', NOW()::text)",
+            ).execute(&pool).await.unwrap();
+        }
+        let h = build(
+            &pool,
+            HashMap::new(),
+            vec![fairness("300", "closed_target")],
+        );
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let pipeline = h.pipeline.with_network_policy(Arc::new(TestNetworkPolicy {
+            blocked_target: Some("300".to_string()),
+            error: None,
+            calls: calls.clone(),
+        }));
+        let mut req = request(Vec::new());
+        req.fallback_language = Some("en".to_string());
+        assert!(req.network_excluded_ids.is_empty());
+        assert_eq!(
+            pipeline.run(&req).await,
+            AutoRaidPipelineOutcome::Blocked {
+                error: "netzwerk_schalter_aus".to_string()
+            },
+        );
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            &[("100".to_string(), "300".to_string())]
+        );
+        assert!(h.api.calls.lock().unwrap().is_empty());
+        assert!(h.pending.lock().unwrap().is_empty());
+        let used: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_partner_outreach WHERE raid_used_at IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(used, 0);
+    }
+}
+
+#[tokio::test]
+async fn fresh_policy_failure_blocks_automatic_and_manual_partner_execution() {
+    let pool = pool_or_skip!("t6w_pipe_network_error");
+    seed_source_token(&pool, "100").await;
+    seed_score(&pool, "200", 0.9, 1).await;
+    for manual in [false, true] {
+        let h = build(&pool, HashMap::new(), vec![fairness("300", "fallback")]);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let pipeline = h.pipeline.with_network_policy(Arc::new(TestNetworkPolicy {
+            blocked_target: None,
+            error: Some("network_unavailable".to_string()),
+            calls: calls.clone(),
+        }));
+        let mut req = request(vec![partner("200", "partner")]);
+        if manual {
+            req.reason = "manual_chat_command".to_string();
+            req.respect_soft_raid_blacklist = false;
+        }
+        assert_eq!(
+            pipeline.run(&req).await,
+            AutoRaidPipelineOutcome::Blocked {
+                error: "network_unavailable".to_string(),
+            }
+        );
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            &[("100".to_string(), "200".to_string())]
+        );
+        assert!(h.api.calls.lock().unwrap().is_empty());
+        assert!(h.fallback_requests.lock().unwrap().is_empty());
+        assert!(h.pending.lock().unwrap().is_empty());
+    }
+}
 
 #[tokio::test]
 async fn partner_pfad_startet_raid_und_registriert_pending() {

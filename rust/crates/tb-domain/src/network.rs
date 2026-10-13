@@ -1,22 +1,3 @@
-//! Discord-Netzwerk eines Streamers (Multi-Server-Plan, Paket R): Sprachgruppen,
-//! Server-Mitgliedschaft, Heimat-Server und die Raid-Regel über Servergrenzen.
-//!
-//! Reine Logik ohne I/O. Die Daten kommen aus `discord_guilds` und
-//! `streamer_guilds` (geladen in `tb_db::network`).
-//!
-//! # Regeln
-//!
-//! - Ein Streamer ohne jede `streamer_guilds`-Zeile gehört fest zum deutschen
-//!   Community-Server (Plan E1). Damit bleibt der heutige Betrieb gleich,
-//!   auch für Partner, die nach der Migration ohne Zeile hinzukommen.
-//! - Mitglied ist, wer eine aktive Zeile auf einem Server hat, der den Bot
-//!   nicht entfernt hat. Heimat-Server ist der früheste davon.
-//! - Sprache eines Streamers: eigene Kanalsprache, sonst die Sprache des
-//!   Heimat-Servers. Verglichen wird die Sprachgruppe (`de-AT` → `de`).
-//! - Raids: Partner desselben Servers sind immer erlaubt, unabhängig von der
-//!   Sprache. Über Servergrenzen nur, wenn beide Seiten einen Server mit
-//!   eingeschaltetem Netzwerk-Schalter haben und dieselbe Sprachgruppe sprechen.
-
 /// Discord-Server der Deutschen Deadlock Community.
 pub const COMMUNITY_GUILD_ID: i64 = 1_289_721_245_281_292_288;
 
@@ -177,7 +158,6 @@ impl StreamerNetwork {
 /// Weshalb ein Partner als Raid-Ziel erlaubt ist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RaidReach {
-    /// Gemeinsamer Server; die Sprache spielt keine Rolle.
     SameServer,
     /// Anderer Server, beide mit Netzwerk-Schalter, gleiche Sprachgruppe.
     CrossServer,
@@ -191,7 +171,7 @@ pub enum RaidBlock {
     NetworkSwitchOff,
     /// Beide Sprachen bekannt, aber verschiedene Sprachgruppen.
     LanguageMismatch,
-    /// Mindestens eine Sprache ist unbekannt.
+    NetworkUnknown,
     LanguageUnknown,
 }
 
@@ -202,6 +182,7 @@ impl RaidBlock {
             Self::NetworkSwitchOff => "netzwerk_schalter_aus",
             Self::LanguageMismatch => "andere_sprache",
             Self::LanguageUnknown => "sprache_unbekannt",
+            Self::NetworkUnknown => "netzwerk_unbekannt",
         }
     }
 }
@@ -214,17 +195,18 @@ pub fn raid_reach(
     target: &StreamerNetwork,
     target_language: Option<&str>,
 ) -> Result<RaidReach, RaidBlock> {
+    match (raider_language, target_language) {
+        (Some(mine), Some(theirs)) if mine == theirs => {}
+        (Some(_), Some(_)) => return Err(RaidBlock::LanguageMismatch),
+        _ => return Err(RaidBlock::LanguageUnknown),
+    }
     if raider.shares_guild_with(target) {
         return Ok(RaidReach::SameServer);
     }
     if !raider.allows_cross_server_raids() || !target.allows_cross_server_raids() {
         return Err(RaidBlock::NetworkSwitchOff);
     }
-    match (raider_language, target_language) {
-        (Some(mine), Some(theirs)) if mine == theirs => Ok(RaidReach::CrossServer),
-        (Some(_), Some(_)) => Err(RaidBlock::LanguageMismatch),
-        _ => Err(RaidBlock::LanguageUnknown),
-    }
+    Ok(RaidReach::CrossServer)
 }
 
 #[cfg(test)]
@@ -338,12 +320,12 @@ mod tests {
     }
 
     #[test]
-    fn gleicher_server_erlaubt_raid_unabhaengig_von_sprache() {
+    fn gleicher_server_blockiert_raid_mit_anderer_sprache() {
         let raider = network(Vec::new(), Some("de"));
         let target = network(Vec::new(), Some("en"));
         assert_eq!(
             raid_reach(&raider, Some("de"), &target, Some("en")),
-            Ok(RaidReach::SameServer)
+            Err(RaidBlock::LanguageMismatch)
         );
     }
 
@@ -352,8 +334,25 @@ mod tests {
         let raider = network(vec![member(guild(EN_GUILD, "en", false))], None);
         let target = network(vec![member(guild(EN_GUILD, "en", false))], None);
         assert_eq!(
-            raid_reach(&raider, None, &target, None),
+            raid_reach(&raider, Some("en"), &target, Some("en")),
             Ok(RaidReach::SameServer)
+        );
+    }
+
+    #[test]
+    fn overlapping_secondary_guild_does_not_bypass_language() {
+        let source = network(
+            vec![member(guild(EN_GUILD, "en", false)), member(community())],
+            Some("en"),
+        );
+        let target = network(vec![member(community())], Some("de"));
+        assert_eq!(
+            raid_reach(&source, Some("en"), &target, Some("de")),
+            Err(RaidBlock::LanguageMismatch)
+        );
+        assert_eq!(
+            raid_reach(&source, None, &target, None),
+            Err(RaidBlock::LanguageUnknown)
         );
     }
 

@@ -1,11 +1,3 @@
-//! Raid-Ziele nach Server-Netzwerk und Sprache filtern (Multi-Server-Plan,
-//! Paket R). Reine Funktion; die Netzwerkdaten lädt der Aufrufer
-//! (`tb_db::network`), die Regel steht in [`tb_domain::network::raid_reach`].
-//!
-//! Partner desselben Servers bleiben immer im Pool. Über Servergrenzen nur,
-//! wenn beide Seiten den Netzwerk-Schalter an haben und dieselbe Sprachgruppe
-//! sprechen. Für den deutschen Server allein ändert sich dadurch nichts.
-
 use std::collections::HashMap;
 
 use tb_domain::network::{
@@ -33,10 +25,6 @@ pub struct NetworkFilterOutcome {
     pub dropped: Vec<NetworkDrop>,
 }
 
-/// Filtert die Online-Partner für einen Raider. `raider_language` ist die
-/// bereits aufgelöste Sprachgruppe des Raiders. Kandidaten ohne Eintrag in
-/// `networks` bleiben wie bisher im Pool (der Lader liefert jede ID; das ist
-/// nur die Rückfallebene).
 pub fn filter_candidates_by_network(
     raider: &StreamerNetwork,
     raider_language: Option<&str>,
@@ -46,7 +34,11 @@ pub fn filter_candidates_by_network(
     let mut outcome = NetworkFilterOutcome::default();
     for candidate in candidates {
         let Some(target) = networks.get(candidate.twitch_user_id.trim()) else {
-            outcome.kept.push(candidate);
+            outcome.dropped.push(NetworkDrop {
+                twitch_user_id: candidate.twitch_user_id,
+                twitch_login: candidate.twitch_login,
+                reason: RaidBlock::NetworkUnknown,
+            });
             continue;
         };
         let target_language = target.language_group(candidate.stream.language.as_deref());
@@ -130,7 +122,7 @@ mod tests {
     }
 
     #[test]
-    fn deutscher_server_behaelt_alle_partner_unabhaengig_von_sprache() {
+    fn deutscher_server_behaelt_nur_partner_der_gleichen_sprachgruppe() {
         let raider = net(Vec::new(), Some("de"));
         let networks = HashMap::from([
             ("1".to_string(), net(Vec::new(), Some("de"))),
@@ -147,9 +139,10 @@ mod tests {
             ],
             &networks,
         );
-        assert_eq!(logins(&outcome), vec!["login_1", "login_2", "login_3"]);
+        assert_eq!(logins(&outcome), vec!["login_1", "login_3"]);
         assert_eq!(outcome.cross_server, 0);
-        assert!(outcome.dropped.is_empty());
+        assert_eq!(outcome.dropped.len(), 1);
+        assert_eq!(outcome.dropped[0].reason, RaidBlock::LanguageMismatch);
     }
 
     #[test]
@@ -182,7 +175,7 @@ mod tests {
             ],
             &networks,
         );
-        assert_eq!(logins(&outcome), vec!["login_1", "login_4"]);
+        assert_eq!(logins(&outcome), vec!["login_1"]);
         assert_eq!(outcome.cross_server, 1);
         assert_eq!(
             outcome.dropped,
@@ -196,6 +189,11 @@ mod tests {
                     twitch_user_id: "3".to_string(),
                     twitch_login: "login_3".to_string(),
                     reason: RaidBlock::NetworkSwitchOff,
+                },
+                NetworkDrop {
+                    twitch_user_id: "4".to_string(),
+                    twitch_login: "login_4".to_string(),
+                    reason: RaidBlock::LanguageMismatch,
                 },
             ]
         );
@@ -217,7 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn kandidat_ohne_netzwerkdaten_bleibt_im_pool() {
+    fn kandidat_ohne_netzwerkdaten_wird_ausgeschlossen() {
         let raider = net(vec![guild(EN_GUILD, "en", true)], Some("en"));
         let outcome = filter_candidates_by_network(
             &raider,
@@ -225,7 +223,9 @@ mod tests {
             vec![candidate("1", Some("de"))],
             &HashMap::new(),
         );
-        assert_eq!(logins(&outcome), vec!["login_1"]);
+        assert!(outcome.kept.is_empty());
+        assert_eq!(outcome.dropped.len(), 1);
+        assert_eq!(outcome.dropped[0].reason, RaidBlock::NetworkUnknown);
     }
 
     #[test]
