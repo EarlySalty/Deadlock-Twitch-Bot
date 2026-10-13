@@ -1,10 +1,3 @@
--- Paket A (Multi-Server, PLAN.md 4.5/E9/E11): Server-Admin-Dashboard.
---
--- Paket G (Datenmodell Guilds) ist noch nicht gebaut. Diese Migration legt nur
--- das minimale Fundament an, das das Server-Admin-Dashboard braucht. Die Spalten
--- folgen PLAN.md 4.2, damit G darauf aufbauen kann (Migration bestehender
--- Partner, /setup, Onboarding, neuer Partnerbegriff bleiben Aufgabe von G).
--- Es werden keine bestehenden Tabellen geändert und keine Daten migriert.
 
 CREATE TABLE IF NOT EXISTS public.discord_guilds (
     guild_id BIGINT PRIMARY KEY CHECK (guild_id > 0),
@@ -17,7 +10,6 @@ CREATE TABLE IF NOT EXISTS public.discord_guilds (
     promo_invite_url TEXT CHECK (char_length(promo_invite_url) <= 200),
     auto_partner_default BOOLEAN NOT NULL DEFAULT TRUE,
     cross_server_raids BOOLEAN NOT NULL DEFAULT TRUE,
-    -- KI-Schalter (E14): nur globale Ebene, im Server-Admin-Dashboard gesperrt.
     ai_features BOOLEAN NOT NULL DEFAULT FALSE,
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'removed')),
     installed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -40,7 +32,6 @@ CREATE TABLE IF NOT EXISTS public.streamer_guilds (
 CREATE INDEX IF NOT EXISTS streamer_guilds_guild_active
     ON public.streamer_guilds (guild_id, active);
 
--- Nachvollziehbarkeit aller Änderungen aus dem Server-Admin-Dashboard.
 CREATE TABLE IF NOT EXISTS public.server_admin_audit_log (
     id BIGSERIAL PRIMARY KEY,
     guild_id BIGINT NOT NULL CHECK (guild_id > 0),

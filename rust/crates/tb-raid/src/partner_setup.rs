@@ -168,13 +168,9 @@ struct ActivePartnerRow {
     live_ping_role_id: Option<i64>,
     live_ping_enabled: Option<i32>,
     partnered_at: Option<String>,
-    /// B11-PR-7: Hard-Kill-Grund. `{blocked, bot_banned}` darf NICHT durch einen
-    /// OAuth-Followup aufgehoben werden (Python `_HARD_PAUSE_REASONS`).
     technical_pause_reason: Option<String>,
 }
 
-/// Ergebnis der Promotion (Python-Rückgabe-Dict von
-/// `promote_streamer_to_partner`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromotedIdentity {
     pub twitch_login: String,
@@ -182,28 +178,18 @@ pub struct PromotedIdentity {
     pub discord_user_id: Option<String>,
     pub discord_display_name: Option<String>,
     pub is_on_discord: Option<i32>,
-    /// B11-PR-7: `false`, wenn die Promotion durch einen Hard-Kill
-    /// (`technical_pause_reason` ∈ {blocked, bot_banned}) als No-op abgewiesen
-    /// wurde (Python `reactivate_partner_after_valid_auth` → `reactivated: False`).
     pub reactivated: bool,
-    /// Gesetzter Hard-Kill-Grund bei abgewiesener Promotion, sonst `None`
-    /// (Python-Rückgabefeld `reason`).
     pub hard_pause_reason: Option<String>,
-    /// Gesetzt, wenn die Promotion am Signup-Block gescheitert ist. Eigener
-    /// Zustand, bewusst getrennt von `hard_pause_reason`: eine technische
-    /// Zwangspause ist etwas anderes als eine Aufnahme-Ablehnung. Trägt den
-    /// user-sichtbaren Absagetext für den aufrufenden Pfad.
     pub signup_block: Option<tb_domain::SignupBlock>,
+    pub guild_active: Option<bool>,
 }
 
-/// Ergebnis von `sync_partner_state_after_auth`.
 #[derive(Debug, Clone, Default)]
 pub struct PartnerSyncOutcome {
-    /// Aufgelöste Discord-ID des Streamers, sofern vorhanden.
     pub discord_user_id: Option<String>,
-    /// Gesetzt, wenn der Sync am Signup-Block abgebrochen wurde. Alle
-    /// Folgeschritte des Aufrufers müssen dann unterbleiben.
     pub signup_block: Option<tb_domain::SignupBlock>,
+    pub reactivated: bool,
+    pub hard_pause_reason: Option<String>,
 }
 
 pub const COMMUNITY_GUILD_ID: i64 = 1_289_721_245_281_292_288;
@@ -710,51 +696,43 @@ pub async fn attach_streamer_guild(
     if user_id.is_empty() || guild_id <= 0 {
         return Ok(());
     }
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('partner_signup'), hashtext($1::text))")
+        .bind(user_id)
+        .execute(&mut **tx)
+        .await?;
     let source = match source {
         STREAMER_GUILD_SOURCE_MIGRATION => STREAMER_GUILD_SOURCE_MIGRATION,
         STREAMER_GUILD_SOURCE_ADMIN => STREAMER_GUILD_SOURCE_ADMIN,
         _ => STREAMER_GUILD_SOURCE_ONBOARDING,
     };
-    if guild_id == COMMUNITY_GUILD_ID {
-        sqlx::query(
-            r#"
-            INSERT INTO discord_guilds (
-                guild_id, name, language, announce_channel_id, alert_channel_id,
-                streamer_role_id, auto_partner_default, cross_server_raids,
-                ai_features, status, updated_by
-            ) VALUES (
-                $1, 'Deutsche Deadlock Community', 'de',
-                1374364800817303632, 1374364800817303632, 1313624729466441769,
-                TRUE, TRUE, TRUE, 'active', 'promote'
-            )
-            ON CONFLICT (guild_id) DO UPDATE SET
-                status = 'active',
-                removed_at = NULL,
-                updated_at = NOW()
-            "#,
-        )
-        .bind(guild_id)
-        .execute(&mut **tx)
-        .await?;
-    }
-    let installed: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM discord_guilds WHERE guild_id = $1 AND status = 'active')",
-    )
-    .bind(guild_id)
-    .fetch_one(&mut **tx)
-    .await?;
-    if !installed {
-        return Ok(());
-    }
     sqlx::query(
         r#"
-        INSERT INTO streamer_guilds (twitch_user_id, guild_id, active, source)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO streamer_guilds (
+            twitch_user_id, guild_id, active, source, deactivated_by, deactivated_at
+        )
+        SELECT $1, g.guild_id,
+               $3 AND ($4 <> 'onboarding' OR g.auto_partner_default), $4,
+               CASE WHEN $3 AND ($4 <> 'onboarding' OR g.auto_partner_default) THEN NULL ELSE $4 END,
+               CASE WHEN $3 AND ($4 <> 'onboarding' OR g.auto_partner_default) THEN NULL ELSE NOW() END
+          FROM discord_guilds g
+         WHERE g.guild_id = $2 AND g.status = 'active' AND g.removed_at IS NULL
+           AND NOT EXISTS (
+               SELECT 1 FROM twitch_exclusions e
+                WHERE e.twitch_user_id = $1 AND e.reactivated_at IS NULL
+           )
+           AND NOT EXISTS (
+               SELECT 1 FROM twitch_partner_signup_denylist d WHERE d.twitch_user_id = $1
+           )
+           AND NOT EXISTS (
+               SELECT 1 FROM twitch_partners p
+                WHERE p.twitch_user_id = $1
+                  AND LOWER(TRIM(COALESCE(p.technical_pause_reason, ''))) IN ('blocked', 'bot_banned')
+           )
         ON CONFLICT (twitch_user_id, guild_id) DO UPDATE SET
             active = EXCLUDED.active,
-            source = streamer_guilds.source,
-            deactivated_by = CASE WHEN EXCLUDED.active THEN NULL ELSE COALESCE(streamer_guilds.deactivated_by, 'promote') END,
-            deactivated_at = CASE WHEN EXCLUDED.active THEN NULL ELSE COALESCE(streamer_guilds.deactivated_at, NOW()) END
+            deactivated_by = EXCLUDED.deactivated_by,
+            deactivated_at = EXCLUDED.deactivated_at
+        WHERE $4 = 'admin'
         "#,
     )
     .bind(user_id)
@@ -766,9 +744,38 @@ pub async fn attach_streamer_guild(
     Ok(())
 }
 
-/// Python `promote_streamer_to_partner` (`partner_registry.py:782`) für den
-/// OAuth-Followup-Parametersatz. Läuft vollständig in der übergebenen
-/// Transaktion (Promotion + Identity-Upsert + Normalisierung + Clear-Source).
+pub async fn promote_admitted_streamer(
+    tx: &mut Transaction<'_, Postgres>,
+    twitch_user_id: &str,
+    now: DateTime<Utc>,
+) -> Result<PromotedIdentity, PartnerSetupError> {
+    let identity: Option<(String, Option<String>, Option<String>, i32)> = sqlx::query_as(
+        "SELECT twitch_login, discord_user_id, discord_display_name, COALESCE(is_on_discord, 0) FROM twitch_streamer_identities WHERE twitch_user_id = $1",
+    )
+    .bind(twitch_user_id.trim())
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some((twitch_login, discord_user_id, discord_display_name, is_on_discord)) = identity
+    else {
+        return Err(PartnerSetupError::InvalidIdentity);
+    };
+    promote_streamer_to_partner(
+        tx,
+        &PromotePartnerArgs {
+            twitch_login,
+            twitch_user_id: twitch_user_id.trim().to_string(),
+            discord_user_id,
+            discord_display_name,
+            is_on_discord,
+            activate_partner_features: true,
+            clear_source: true,
+            guild_id: None,
+        },
+        now,
+    )
+    .await
+}
+
 pub async fn promote_streamer_to_partner(
     tx: &mut Transaction<'_, Postgres>,
     args: &PromotePartnerArgs,
@@ -785,14 +792,6 @@ pub async fn promote_streamer_to_partner(
         .execute(&mut **tx)
         .await?;
 
-    // Signup-Block-Guard: eigenständiger Zustand
-    // (`twitch_partner_signup_denylist`), getrennt von Raid-Blacklist,
-    // Opt-out und technischer Zwangspause. Sitzt bewusst NACH der
-    // ID-Normalisierung und VOR jedem Schreibzugriff, damit er auch bei
-    // Umbenennung des Streamers greift (Anker ist die twitch_user_id).
-    // No-op wie die beiden Guards darunter: keine Partner-Zeile, kein UPDATE.
-    // Fail-closed: ein fehlgeschlagener Nachschlag bricht ab, statt
-    // durchzulassen.
     match crate::signup_denylist::lookup_or_fail_closed(
         &mut **tx,
         Some(&normalized_user_id),
@@ -811,21 +810,38 @@ pub async fn promote_streamer_to_partner(
                 reactivated: false,
                 hard_pause_reason: Some(tb_domain::PROMOTE_BLOCK_REASON.to_string()),
                 signup_block: Some(block),
+                guild_active: None,
             });
         }
         Ok(None) => {}
-        Err(()) => return Err(PartnerSetupError::SignupBlockLookupFailed),
+        Err(_) => return Err(PartnerSetupError::SignupBlockLookupFailed),
+    }
+
+    let exclusion: Option<String> = sqlx::query_scalar(
+        "SELECT kind FROM twitch_exclusions WHERE twitch_user_id = $1 AND reactivated_at IS NULL",
+    )
+    .bind(&normalized_user_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if let Some(kind) = exclusion {
+        tracing::warn!(twitch_user_id = %normalized_user_id, %kind, "Partner-Aufnahme durch Ausschluss blockiert");
+        return Ok(PromotedIdentity {
+            twitch_login: normalized_login,
+            twitch_user_id: normalized_user_id,
+            discord_user_id: None,
+            discord_display_name: None,
+            is_on_discord: None,
+            reactivated: false,
+            hard_pause_reason: Some(kind),
+            signup_block: None,
+            guild_active: None,
+        });
     }
 
     let source_row = load_streamer_source_row(tx, &normalized_user_id, &normalized_login).await?;
     let active_row = load_active_partner_row(tx, &normalized_user_id, &normalized_login).await?;
     let active = active_row.as_ref();
 
-    // B11-PR-7: Hard-Pause-Guard — aktive Zeile (Python `reactivate_partner_after_valid_auth`,
-    // `partner_registry.py:1366`). Ein OAuth-Followup darf einen Hard-Kill
-    // ({blocked, bot_banned}) NICHT reaktivieren — sonst würde der UPDATE unten
-    // `technical_pause_reason = NULL` setzen und den Bann bedingungslos aufheben.
-    // No-op: keine Schreibzugriffe, Pause + Deaktivierung bleiben unangetastet.
     if let Some(reason) =
         hard_pause_reason(active.and_then(|a| a.technical_pause_reason.as_deref()))
     {
@@ -838,12 +854,10 @@ pub async fn promote_streamer_to_partner(
             reactivated: false,
             hard_pause_reason: Some(reason),
             signup_block: None,
+            guild_active: None,
         });
     }
 
-    // Nicht-aktive-Zeile-Guard: ausgeschiedene / archivierte / gebannte Partner
-    // haben keine aktive Zeile mehr — der Guard oben greift dort nicht.
-    // Ein Re-OAuth darf NICHT heimlich eine neue aktive Zeile anlegen.
     if let Some(reason) =
         load_inactive_block_reason(tx, &normalized_user_id, &normalized_login).await?
     {
@@ -861,23 +875,91 @@ pub async fn promote_streamer_to_partner(
             reactivated: false,
             hard_pause_reason: Some(reason),
             signup_block: None,
+            guild_active: None,
         });
     }
 
-    // Beide Hard-Kill-Guards sind passiert: {blocked, bot_banned} ist raus.
-    // Fehlt eine aktive Zeile, ist der Streamer ausgeschieden/archiviert/
-    // token_error — dann wird die jüngste inaktive Zeile reaktiviert (UPDATE
-    // unten) statt eine zweite Zeile anzulegen. Das erhält seine Konfiguration
-    // und hinterlässt keine Karteileiche.
     let active_row = match active_row {
         Some(row) => Some(row),
         None => load_reactivatable_partner_row(tx, &normalized_user_id, &normalized_login).await?,
     };
     let active = active_row.as_ref();
+    let identity_discord_user_id = non_empty(args.discord_user_id.as_deref());
+    let identity_display_name = non_empty(args.discord_display_name.as_deref());
+    let identity_is_on_discord = Some(bool_int(Some(i64::from(args.is_on_discord)), 0));
 
-    // Partner-Werte: explizite Parameter des Followup-Pfads + Zeilen-Fallbacks.
-    // Für require_discord_link/silent_ban/silent_raid/live_ping_* gilt der im
-    // Modul-Header dokumentierte Bugfix: aktiven Wert bewahren statt wipen.
+    upsert_streamer_identity(
+        tx,
+        &normalized_user_id,
+        &normalized_login,
+        identity_discord_user_id.as_deref(),
+        identity_display_name.as_deref(),
+        identity_is_on_discord,
+    )
+    .await?;
+
+    let mut guild_active = None;
+    let mut admission_reason = None;
+    if let Some(guild_id) = args.guild_id {
+        let installed: Option<i64> = sqlx::query_scalar(
+            "SELECT guild_id FROM discord_guilds WHERE guild_id = $1 AND status = 'active' AND removed_at IS NULL FOR SHARE",
+        )
+        .bind(guild_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+        if installed.is_none() {
+            admission_reason = Some("guild_unavailable");
+        } else {
+            attach_streamer_guild(
+                tx,
+                &normalized_user_id,
+                guild_id,
+                true,
+                STREAMER_GUILD_SOURCE_ONBOARDING,
+            )
+            .await?;
+            guild_active = sqlx::query_scalar(
+                "SELECT active FROM streamer_guilds WHERE twitch_user_id = $1 AND guild_id = $2 FOR UPDATE",
+            )
+            .bind(&normalized_user_id)
+            .bind(guild_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+            if guild_active != Some(true) {
+                admission_reason = Some("guild_inactive");
+            }
+        }
+    } else {
+        let admitted: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM streamer_guilds sg JOIN discord_guilds g ON g.guild_id = sg.guild_id WHERE sg.twitch_user_id = $1 AND sg.active AND g.status = 'active' AND g.removed_at IS NULL)",
+        )
+        .bind(&normalized_user_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        if !admitted {
+            admission_reason = Some("guild_verification_required");
+        }
+    }
+    if let Some(reason) = admission_reason {
+        tracing::warn!(
+            twitch_user_id = %normalized_user_id,
+            guild_id = ?args.guild_id,
+            reason,
+            "Partner-Aufnahme nicht aktiviert"
+        );
+        return Ok(PromotedIdentity {
+            twitch_login: normalized_login,
+            twitch_user_id: normalized_user_id,
+            discord_user_id: identity_discord_user_id,
+            discord_display_name: identity_display_name,
+            is_on_discord: identity_is_on_discord,
+            reactivated: false,
+            hard_pause_reason: Some(reason.to_string()),
+            signup_block: None,
+            guild_active,
+        });
+    }
+
     let require_discord_link = bool_int(
         active.and_then(|a| a.require_discord_link).map(i64::from),
         0,
@@ -886,7 +968,6 @@ pub async fn promote_streamer_to_partner(
     let last_link_ok = active.and_then(|a| a.last_link_ok);
     let added_by = active.and_then(|a| a.added_by.clone());
     let last_link_checked_at = active.and_then(|a| a.last_link_checked_at.clone());
-    // Quelle in twitch_streamers gedroppt → Python-Literal NULL.
     let next_link_check_at: Option<String> = None;
     let (manual_partner_opt_out, raid_bot_enabled) = if args.activate_partner_features {
         (0i32, 1i32)
@@ -904,13 +985,6 @@ pub async fn promote_streamer_to_partner(
     let live_ping_role_id = active.and_then(|a| a.live_ping_role_id);
     let live_ping_enabled = bool_int(active.and_then(|a| a.live_ping_enabled).map(i64::from), 1);
 
-    // Identität kommt aus expliziten Followup-Parametern. Der Sync-Pfad liest
-    // bestehende Werte vorher aus `twitch_streamer_identities`; `twitch_streamers`
-    // trägt in Prod keine Discord-Spalten mehr.
-    let identity_discord_user_id = non_empty(args.discord_user_id.as_deref());
-    let identity_display_name = non_empty(args.discord_display_name.as_deref());
-    let identity_is_on_discord = Some(bool_int(Some(i64::from(args.is_on_discord)), 0));
-
     sqlx::query!(
         r#"
         DELETE FROM twitch_raid_blacklist
@@ -920,16 +994,6 @@ pub async fn promote_streamer_to_partner(
         &normalized_user_id
     )
     .execute(&mut **tx)
-    .await?;
-
-    upsert_streamer_identity(
-        tx,
-        &normalized_user_id,
-        &normalized_login,
-        identity_discord_user_id.as_deref(),
-        identity_display_name.as_deref(),
-        identity_is_on_discord,
-    )
     .await?;
 
     let effective_partnered_at = active
@@ -1037,15 +1101,6 @@ pub async fn promote_streamer_to_partner(
         .await?;
     }
 
-    attach_streamer_guild(
-        tx,
-        &normalized_user_id,
-        args.guild_id.unwrap_or(COMMUNITY_GUILD_ID),
-        true,
-        STREAMER_GUILD_SOURCE_ONBOARDING,
-    )
-    .await?;
-
     Ok(PromotedIdentity {
         twitch_login: normalized_login,
         twitch_user_id: normalized_user_id,
@@ -1055,6 +1110,7 @@ pub async fn promote_streamer_to_partner(
         reactivated: true,
         hard_pause_reason: None,
         signup_block: None,
+        guild_active,
     })
 }
 
@@ -1257,21 +1313,18 @@ impl PartnerSetupService {
             promoted
         };
 
-        // Signup-Block: die Promotion war ein No-op. Alles, was danach kommt,
-        // würde die Ablehnung faktisch aushebeln — Backfill legt Datensätze an,
-        // grant_streamer_role gäbe dem abgelehnten Streamer die Discord-Rolle.
-        // Deshalb hier raus, nicht erst beim Aufrufer.
-        if let Some(block) = promoted.signup_block {
+        if !promoted.reactivated {
             tracing::warn!(
-                twitch_user_id = %twitch_user_id,
-                twitch_login = %twitch_login,
-                reason = %block.reason,
-                pfad = "sync_partner_state_after_auth",
-                "Signup-Block: Partner-Sync abgebrochen, keine Discord-Rolle, kein Backfill"
+                twitch_user_id,
+                twitch_login,
+                reason = ?promoted.hard_pause_reason,
+                "Partner-Sync ohne Aktivierung, keine Rolle und kein Backfill"
             );
             return Ok(PartnerSyncOutcome {
                 discord_user_id: None,
-                signup_block: Some(block),
+                signup_block: promoted.signup_block,
+                reactivated: false,
+                hard_pause_reason: promoted.hard_pause_reason,
             });
         }
 
@@ -1284,13 +1337,24 @@ impl PartnerSetupService {
         }
 
         if let Some(ref discord_id) = final_discord_id {
-            self.discord
-                .grant_streamer_role(discord_id, "Twitch-Bot erfolgreich autorisiert")
-                .await;
+            let has_community_membership: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM streamer_guilds sg JOIN discord_guilds g ON g.guild_id = sg.guild_id WHERE sg.twitch_user_id = $1 AND sg.guild_id = $2 AND sg.active AND g.status = 'active' AND g.removed_at IS NULL)",
+            )
+            .bind(twitch_user_id.trim())
+            .bind(COMMUNITY_GUILD_ID)
+            .fetch_one(&self.pool)
+            .await?;
+            if has_community_membership {
+                self.discord
+                    .grant_streamer_role(discord_id, "Twitch-Bot erfolgreich autorisiert")
+                    .await;
+            }
         }
         Ok(PartnerSyncOutcome {
             discord_user_id: final_discord_id,
             signup_block: None,
+            reactivated: true,
+            hard_pause_reason: None,
         })
     }
 
@@ -1323,22 +1387,15 @@ impl PartnerSetupService {
             tracing::error!("sync_partner_state_after_auth failed for {twitch_login}: {e}");
         }
 
-        // Signup-Block: Schritt 1 war ein No-op. Die restlichen Schritte würden
-        // die Ablehnung aushebeln — Schritt 2 legt eine streamer_plans-Zeile an,
-        // Schritt 4 macht den Bot zum Moderator im Kanal des abgelehnten
-        // Streamers, Schritt 5 begrüßt ihn öffentlich in seinem Chat.
-        // Deshalb hier vollständig abbrechen.
-        if let Ok(outcome) = &partner_sync_result {
-            if let Some(block) = &outcome.signup_block {
-                tracing::warn!(
-                    twitch_user_id = %twitch_user_id,
-                    twitch_login = %twitch_login,
-                    reason = %block.reason,
-                    pfad = "complete_setup_for_streamer",
-                    "Signup-Block: Setup abgebrochen, kein first_login, kein Moderator, keine Begruessung"
-                );
-                return Ok(());
-            }
+        let outcome = partner_sync_result?;
+        if !outcome.reactivated {
+            tracing::warn!(
+                twitch_user_id,
+                twitch_login,
+                reason = ?outcome.hard_pause_reason,
+                "Partner-Setup ohne Aktivierung beendet"
+            );
+            return Ok(());
         }
 
         // Schritt 2: first_login_at (loggt Fehler selbst).
@@ -1350,7 +1407,7 @@ impl PartnerSetupService {
             tracing::warn!(
                 "complete_setup: Keine Bot-ID verfügbar — Moderator-Setup und Begrüßung entfallen für {twitch_login}"
             );
-            return partner_sync_result.map(|_| ());
+            return Ok(());
         };
 
         // Schritt 4: Bot als Moderator einsetzen (Impl loggt alle Ausgänge).
@@ -1430,7 +1487,7 @@ impl PartnerSetupService {
 
         // Schritt 6 (Python stream_went_live_fn): entfällt — der native
         // Poll-Loop (15 s) registriert stream.offline beim nächsten Tick.
-        partner_sync_result.map(|_| ())
+        Ok(())
     }
 }
 
@@ -1584,8 +1641,14 @@ mod tests {
                 deactivated_at TIMESTAMPTZ,
                 joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 source TEXT NOT NULL DEFAULT 'onboarding',
-                PRIMARY KEY (twitch_user_id, guild_id)
+                PRIMARY KEY (twitch_user_id, guild_id),
+                CHECK (active OR deactivated_at IS NOT NULL)
             )"#,
+            r#"CREATE TABLE twitch_exclusions (
+                twitch_user_id TEXT PRIMARY KEY, kind TEXT NOT NULL, reactivated_at TIMESTAMPTZ
+            )"#,
+            r#"INSERT INTO discord_guilds (guild_id, name, language)
+                VALUES (1289721245281292288, 'Deutsche Deadlock Community', 'de')"#,
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -1602,7 +1665,7 @@ mod tests {
             is_on_discord: 0,
             activate_partner_features: true,
             clear_source: true,
-            guild_id: None,
+            guild_id: Some(COMMUNITY_GUILD_ID),
         }
     }
 

@@ -1,12 +1,3 @@
-//! Discord-Netzwerk von Streamern laden: Server-Zugehörigkeit
-//! (`streamer_guilds` + `discord_guilds`) und Kanalsprache
-//! (`twitch_streamer_identities.broadcaster_language`).
-//!
-//! Die Regeln (deutscher Server als Rückfall, Heimat-Server, Raid-Regel)
-//! liegen rein in [`tb_domain::network`]. Die Abfragen laufen zur Laufzeit
-//! statt als `query!`-Makro, damit der Offline-Cache unberührt bleibt; die
-//! DB-Tests in `tests/network.rs` prüfen sie gegen die echte Migration.
-
 use std::collections::HashMap;
 
 use sqlx::{FromRow, PgPool};
@@ -60,8 +51,17 @@ impl MembershipRow {
     }
 }
 
-/// Einstellungen des deutschen Community-Servers. Fehlt seine Zeile, gelten
-/// die festen Standardwerte (Sprache `de`, Netzwerk an).
+fn uninstalled_community() -> GuildSettings {
+    GuildSettings {
+        installed: false,
+        ..GuildSettings::community_default()
+    }
+}
+
+fn unavailable_network() -> StreamerNetwork {
+    StreamerNetwork::community(&uninstalled_community())
+}
+
 pub async fn community_settings(pool: &PgPool) -> Result<GuildSettings, sqlx::Error> {
     let row = sqlx::query_as::<_, GuildRow>(
         "SELECT g.guild_id, g.language, g.cross_server_raids, g.promo_invite_url, \
@@ -74,11 +74,9 @@ pub async fn community_settings(pool: &PgPool) -> Result<GuildSettings, sqlx::Er
     .await?;
     Ok(row
         .map(GuildSettings::from)
-        .unwrap_or_else(GuildSettings::community_default))
+        .unwrap_or_else(uninstalled_community))
 }
 
-/// Netzwerk je Twitch-User-ID. Jede angefragte (nicht leere) ID steht im
-/// Ergebnis; Streamer ohne Zeile gehören zum deutschen Server.
 pub async fn load_networks(
     pool: &PgPool,
     twitch_user_ids: &[String],
@@ -130,12 +128,19 @@ pub async fn load_networks(
     Ok(grouped
         .into_iter()
         .map(|(id, (memberships, language))| {
+            let memberships = if memberships.is_empty() {
+                vec![GuildMembership {
+                    guild: community.clone(),
+                    active: false,
+                }]
+            } else {
+                memberships
+            };
             (id, StreamerNetwork::new(memberships, language, &community))
         })
         .collect())
 }
 
-/// Netzwerk eines einzelnen Streamers.
 pub async fn load_network(
     pool: &PgPool,
     twitch_user_id: &str,
@@ -144,11 +149,10 @@ pub async fn load_network(
     let mut networks = load_networks(pool, std::slice::from_ref(&id)).await?;
     match networks.remove(&id) {
         Some(network) => Ok(network),
-        None => Ok(StreamerNetwork::community(&community_settings(pool).await?)),
+        None => Ok(unavailable_network()),
     }
 }
 
-/// Twitch-User-ID zu einem Login (`twitch_streamer_identities`), `None` wenn unbekannt.
 pub async fn twitch_user_id_for_login(
     pool: &PgPool,
     login: &str,
@@ -168,21 +172,16 @@ pub async fn twitch_user_id_for_login(
     .await
 }
 
-/// Netzwerk zu einem Kanal-Login. Unbekannte Logins gehören wie bisher zum
-/// deutschen Server.
 pub async fn load_network_by_login(
     pool: &PgPool,
     login: &str,
 ) -> Result<StreamerNetwork, sqlx::Error> {
     match twitch_user_id_for_login(pool, login).await? {
         Some(id) => load_network(pool, &id).await,
-        None => Ok(StreamerNetwork::community(&community_settings(pool).await?)),
+        None => Ok(unavailable_network()),
     }
 }
 
-/// Speichert beobachtete Kanalsprachen (`(twitch_user_id, sprache)`) in
-/// `twitch_streamer_identities`. Schreibt nur geänderte Werte; leere Werte
-/// werden übersprungen. Liefert die Zahl der geänderten Zeilen.
 pub async fn record_broadcaster_languages(
     pool: &PgPool,
     observed: &[(String, String)],

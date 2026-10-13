@@ -62,36 +62,37 @@ INSERT INTO public.discord_guilds (
     'migration'
 )
 ON CONFLICT (guild_id) DO UPDATE SET
-    name = EXCLUDED.name,
-    language = EXCLUDED.language,
     announce_channel_id = COALESCE(public.discord_guilds.announce_channel_id, EXCLUDED.announce_channel_id),
     alert_channel_id = COALESCE(public.discord_guilds.alert_channel_id, EXCLUDED.alert_channel_id),
     streamer_role_id = COALESCE(public.discord_guilds.streamer_role_id, EXCLUDED.streamer_role_id),
-    promo_invite_url = COALESCE(public.discord_guilds.promo_invite_url, EXCLUDED.promo_invite_url),
-    auto_partner_default = public.discord_guilds.auto_partner_default,
-    cross_server_raids = public.discord_guilds.cross_server_raids,
-    ai_features = TRUE,
-    status = 'active',
-    removed_at = NULL,
-    updated_at = NOW(),
-    updated_by = COALESCE(public.discord_guilds.updated_by, EXCLUDED.updated_by);
+    promo_invite_url = COALESCE(public.discord_guilds.promo_invite_url, EXCLUDED.promo_invite_url)
+WHERE public.discord_guilds.updated_by IS NULL OR public.discord_guilds.updated_by = 'migration';
 
-INSERT INTO public.streamer_guilds (twitch_user_id, guild_id, active, source)
-SELECT DISTINCT ON (p.twitch_user_id)
-    p.twitch_user_id,
-    1289721245281292288,
-    (
-        p.status = 'active'
-        AND COALESCE(p.manual_partner_opt_out, 0) = 0
-        AND COALESCE(p.technical_pause_reason, '') = ''
-        AND p.admin_archived_at IS NULL
-    ),
-    'migration'
-FROM public.twitch_partners p
-WHERE p.twitch_user_id ~ '^[0-9]{1,20}$'
-ORDER BY p.twitch_user_id,
-         CASE WHEN p.status = 'active' THEN 0 ELSE 1 END,
-         p.id DESC
+INSERT INTO public.streamer_guilds (
+    twitch_user_id, guild_id, active, source, deactivated_by, deactivated_at
+)
+SELECT s.twitch_user_id, 1289721245281292288::bigint, s.eligible, 'migration',
+       CASE WHEN s.eligible THEN NULL ELSE 'migration' END,
+       CASE WHEN s.eligible THEN NULL ELSE NOW() END
+FROM (
+    SELECT p.twitch_user_id,
+           BOOL_OR(p.status = 'active' AND COALESCE(p.manual_partner_opt_out, 0) = 0 AND COALESCE(p.technical_pause_reason, '') = '' AND p.admin_archived_at IS NULL)
+           AND NOT EXISTS (
+               SELECT 1 FROM public.twitch_exclusions e
+               WHERE e.twitch_user_id = p.twitch_user_id AND e.reactivated_at IS NULL
+           )
+           AND NOT EXISTS (
+               SELECT 1 FROM public.twitch_partner_signup_denylist d
+               WHERE d.twitch_user_id = p.twitch_user_id
+                  OR LOWER(d.twitch_login) IN (
+                      SELECT LOWER(p2.twitch_login) FROM public.twitch_partners p2
+                      WHERE p2.twitch_user_id = p.twitch_user_id
+                  )
+           ) AS eligible
+    FROM public.twitch_partners p
+    WHERE p.twitch_user_id ~ '^[0-9]{1,20}$'
+    GROUP BY p.twitch_user_id
+) s
 ON CONFLICT (twitch_user_id, guild_id) DO NOTHING;
 
 CREATE OR REPLACE VIEW public.partner_guild_active AS
@@ -99,7 +100,7 @@ SELECT DISTINCT sg.twitch_user_id
 FROM public.streamer_guilds sg
 JOIN public.discord_guilds dg ON dg.guild_id = sg.guild_id
 WHERE sg.active
-  AND dg.status = 'active';
+  AND dg.status = 'active' AND dg.removed_at IS NULL;
 
 CREATE OR REPLACE VIEW public.partner_status_shadow_mismatch AS
 SELECT

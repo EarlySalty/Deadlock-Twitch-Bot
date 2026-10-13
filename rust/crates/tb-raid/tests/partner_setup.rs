@@ -195,8 +195,14 @@ async fn apply_ddl(pool: &PgPool) {
             deactivated_at TIMESTAMPTZ,
             joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             source TEXT NOT NULL DEFAULT 'onboarding',
-            PRIMARY KEY (twitch_user_id, guild_id)
+            PRIMARY KEY (twitch_user_id, guild_id),
+            CHECK (active OR deactivated_at IS NOT NULL)
         )"#,
+        r#"CREATE TABLE twitch_exclusions (
+            twitch_user_id TEXT PRIMARY KEY, kind TEXT NOT NULL, reactivated_at TIMESTAMPTZ
+        )"#,
+        r#"INSERT INTO discord_guilds (guild_id, name, language)
+            VALUES (1289721245281292288, 'Deutsche Deadlock Community', 'de')"#,
     ] {
         sqlx::query(ddl).execute(pool).await.unwrap();
     }
@@ -214,7 +220,7 @@ fn default_args(login: &str, uid: &str) -> PromotePartnerArgs {
         is_on_discord: 0,
         activate_partner_features: true,
         clear_source: true,
-        guild_id: None,
+        guild_id: Some(tb_raid::partner_setup::COMMUNITY_GUILD_ID),
     }
 }
 
@@ -854,9 +860,14 @@ fn service(pool: PgPool, recorder: Arc<Recorder>, bot_id: Option<&str>) -> Partn
     .with_pauses(Duration::ZERO, Duration::ZERO)
 }
 
+async fn legacy_partner(pool: &PgPool, uid: &str, login: &str) {
+    promote(pool, &default_args(login, uid)).await;
+}
+
 #[tokio::test]
 async fn sync_loest_discord_auf_und_setzt_rolle() {
     let pool = pool_or_skip!("ps_sync");
+    legacy_partner(&pool, "901", "synckanal").await;
     let recorder = Arc::new(Recorder {
         resolve_result: Some("Globaler Name".to_string()),
         greeter_ok: true,
@@ -890,6 +901,7 @@ async fn sync_loest_discord_auf_und_setzt_rolle() {
 #[tokio::test]
 async fn sync_ohne_discord_id_setzt_keine_rolle() {
     let pool = pool_or_skip!("ps_sync_no_discord");
+    legacy_partner(&pool, "902", "ohnediscord").await;
     let recorder = Arc::new(Recorder::default());
     let svc = service(pool.clone(), recorder.clone(), Some("botid"));
 
@@ -913,6 +925,7 @@ async fn sync_ohne_discord_id_setzt_keine_rolle() {
 #[tokio::test]
 async fn complete_setup_voller_ablauf() {
     let pool = pool_or_skip!("ps_complete");
+    legacy_partner(&pool, "903", "vollkanal").await;
     let recorder = Arc::new(Recorder {
         greeter_ok: true,
         ..Default::default()
@@ -951,6 +964,7 @@ async fn complete_setup_voller_ablauf() {
 #[tokio::test]
 async fn complete_setup_ohne_bot_id_ueberspringt_mod_und_chat() {
     let pool = pool_or_skip!("ps_no_botid");
+    legacy_partner(&pool, "904", "kein_bot").await;
     let recorder = Arc::new(Recorder {
         greeter_ok: true,
         ..Default::default()
@@ -985,6 +999,7 @@ async fn complete_setup_ohne_bot_id_ueberspringt_mod_und_chat() {
 #[tokio::test]
 async fn complete_setup_bleibt_bei_moderator_fehler_erfolgreich() {
     let pool = pool_or_skip!("ps_mod_error");
+    legacy_partner(&pool, "907", "mod_fehler").await;
     let recorder = Arc::new(Recorder {
         moderator_error: Some("keine Moderator-Rechte".to_string()),
         ..Default::default()
@@ -1015,6 +1030,7 @@ async fn complete_setup_gibt_partner_sync_fehler_zurueck() {
 #[tokio::test]
 async fn greeter_nicht_verfuegbar_bricht_restliche_nachrichten_ab() {
     let pool = pool_or_skip!("ps_greeter_off");
+    legacy_partner(&pool, "905", "stiller_kanal").await;
     let recorder = Arc::new(Recorder {
         greeter_ok: false,
         ..Default::default()
@@ -1036,6 +1052,7 @@ async fn greeter_nicht_verfuegbar_bricht_restliche_nachrichten_ab() {
 #[tokio::test]
 async fn backfill_ist_idempotent() {
     let pool = pool_or_skip!("ps_backfill");
+    legacy_partner(&pool, "906", "backkanal").await;
     sqlx::query(
         "INSERT INTO twitch_stats_category (ts_utc, streamer, viewer_count)
          VALUES ('2026-06-01T00:00:00Z', 'backkanal', 10), ('2026-06-01T00:01:00Z', 'backkanal', 12)",
@@ -1096,7 +1113,6 @@ async fn revoke_streamer_role_default_ist_noop() {
 }
 
 // ---------------------------------------------------------------------------
-// Signup-Block
 // ---------------------------------------------------------------------------
 
 async fn block_setzen(pool: &PgPool, uid: &str, login: &str, public_message: Option<&str>) {
