@@ -1,4 +1,5 @@
 import type { UplinkNative2kClientProfile } from './api/uplink';
+import { tr } from './i18n/dictionary';
 
 export type UplinkGpuHersteller = 'nvidia' | 'amd' | 'intel' | 'unbekannt';
 export type UplinkVideoCodec = 'AV1' | 'HEVC / H.265' | 'H.264';
@@ -12,9 +13,7 @@ interface HardwareEncoder {
 }
 
 export interface UplinkEncoderAnalyse {
-  /** Der Adapter, auf dem OBS laut D3D11-Log tatsächlich rendert; sonst Adapter 0. */
   gpu: string | null;
-  /** Alle im OBS-Startlog gefundenen Grafikadapter. */
   gpus: string[];
   hersteller: UplinkGpuHersteller;
   hardware: {
@@ -24,9 +23,7 @@ export interface UplinkEncoderAnalyse {
   };
   softwareAv1: boolean;
   empfehlung: UplinkEncoderEmpfehlung;
-  /** Vollständige, aus dem OBS-Host gelesene GoLive-Hardwaredaten. */
   native2kProfile: UplinkNative2kClientProfile | null;
-  /** Fehlende OBS-Logfelder, falls das Profil noch nicht sicher weitergegeben werden kann. */
   native2kFehlendeFelder: string[];
 }
 
@@ -80,9 +77,9 @@ function encoderName(hersteller: HardwareEncoder['hersteller'], codec: HardwareC
 }
 
 function ratensteuerung(hersteller: HardwareEncoder['hersteller']) {
-  if (hersteller === 'nvidia') return 'Variable Bitrate mit Zielqualität';
-  if (hersteller === 'amd') return 'HQCBR (falls in OBS angeboten), sonst CBR';
-  return 'VBR mit Maximalbitrate';
+  if (hersteller === 'nvidia') return tr('Variable Bitrate mit Zielqualität');
+  if (hersteller === 'amd') return tr('HQCBR (falls in OBS angeboten), sonst CBR');
+  return tr('VBR mit Maximalbitrate');
 }
 
 function waehleEncoder(
@@ -93,9 +90,6 @@ function waehleEncoder(
   const passend = encoder.filter((eintrag) => eintrag.codec === codec);
   if (!passend.length) return null;
 
-  // Wenn OBS auf derselben GPU rendert, ist dieser Encoder der sauberste Weg.
-  // Gibt es dort den gewünschten Codec nicht, darf ein zweiter Hardwareencoder
-  // (z. B. Arc AV1 neben einer älteren NVIDIA-Karte) trotzdem genutzt werden.
   const aktiv = aktiverHersteller === 'unbekannt'
     ? null
     : passend.find((eintrag) => eintrag.hersteller === aktiverHersteller);
@@ -115,22 +109,22 @@ function empfehlungFuerHardware(
   const hinweise: string[] = [];
 
   if (eintrag.codec === 'av1') {
-    hinweise.push('Hardware-AV1 verwenden; AOM AV1 und SVT-AV1 sind für den Live-Uplink kein automatischer Ersatz.');
-    hinweise.push('Für den Uplink-Enhanced-Test: 1920×1080@60 mit 5 Mbit/s starten. Uplink erzeugt daraus die Twitch-H.264-Qualitätsstufen; natives Twitch-2K gehört nicht zu diesem Modus.');
+    hinweise.push(tr('Hardware-AV1 verwenden; AOM AV1 und SVT-AV1 sind für den Live-Uplink kein automatischer Ersatz.'));
+    hinweise.push(tr('Für den Uplink-Enhanced-Test: 1920×1080@60 mit 5 Mbit/s starten. Uplink erzeugt daraus die Twitch-H.264-Qualitätsstufen; natives Twitch-2K gehört nicht zu diesem Modus.'));
   } else if (softwareAv1) {
-    hinweise.push('AV1 ist nur als Softwareencoder sichtbar und wird deshalb nicht empfohlen.');
+    hinweise.push(tr('AV1 ist nur als Softwareencoder sichtbar und wird deshalb nicht empfohlen.'));
   }
 
   if (eintrag.hersteller === 'nvidia') {
-    hinweise.push('Zielqualität plus maximale Bitrate verwenden. Falls deine OBS-Version diese Auswahl nicht anbietet, auf VBR mit Maximalbitrate oder CBR zurückfallen.');
+    hinweise.push(tr('Zielqualität plus maximale Bitrate verwenden. Falls deine OBS-Version diese Auswahl nicht anbietet, auf VBR mit Maximalbitrate oder CBR zurückfallen.'));
   } else if (eintrag.hersteller === 'amd') {
-    hinweise.push('HQCBR nur wählen, wenn OBS es für genau diesen AMF-Encoder anbietet; unbegrenztes VBR wird nicht automatisch empfohlen.');
+    hinweise.push(tr('HQCBR nur wählen, wenn OBS es für genau diesen AMF-Encoder anbietet; unbegrenztes VBR wird nicht automatisch empfohlen.'));
   } else {
-    hinweise.push('Bei QuickSync ist für ein begrenztes Uploadbudget VBR mit gesetzter Maximalbitrate der sichere variable Weg; ICQ allein setzt in OBS kein Maximalbitratelimit.');
+    hinweise.push(tr('Bei QuickSync ist für ein begrenztes Uploadbudget VBR mit gesetzter Maximalbitrate der sichere variable Weg; ICQ allein setzt in OBS kein Maximalbitratelimit.'));
   }
 
   if (aktiverHersteller !== 'unbekannt' && eintrag.hersteller !== aktiverHersteller) {
-    hinweise.push('Der empfohlene Encoder sitzt auf einem anderen GPU-Hersteller als der OBS-Renderadapter. Das ist erlaubt, sollte aber im Preflight auf Kopierlast und Stabilität geprüft werden.');
+    hinweise.push(tr('Der empfohlene Encoder sitzt auf einem anderen GPU-Hersteller als der OBS-Renderadapter. Das ist erlaubt, sollte aber im Preflight auf Kopierlast und Stabilität geprüft werden.'));
   }
 
   return {
@@ -248,16 +242,16 @@ function native2kProfilAusObsLog(
   const aktiverHersteller = herstellerFuer(aktiveGpu);
   const hevc = waehleEncoder(encoder, 'hevc', aktiverHersteller);
   const h264 = waehleEncoder(encoder, 'h264', aktiverHersteller);
-  if (!physicalCores) fehlend.push('physische CPU-Kerne');
-  if (!logicalCores) fehlend.push('logische CPU-Kerne');
-  if (!memoryTotal) fehlend.push('Gesamtspeicher');
-  if (memoryFree === null) fehlend.push('freier Speicher');
-  if (!systemName || !systemVersion || !systemRelease || !systemRevision || !systemBits) fehlend.push('Windows-/Systemversion');
-  if (!hevc) fehlend.push('Hardware-HEVC-Encoder');
-  if (!h264) fehlend.push('Hardware-H.264-Encoder');
+  if (!physicalCores) fehlend.push(tr('physische CPU-Kerne'));
+  if (!logicalCores) fehlend.push(tr('logische CPU-Kerne'));
+  if (!memoryTotal) fehlend.push(tr('Gesamtspeicher'));
+  if (memoryFree === null) fehlend.push(tr('freier Speicher'));
+  if (!systemName || !systemVersion || !systemRelease || !systemRevision || !systemBits) fehlend.push(tr('Windows-/Systemversion'));
+  if (!hevc) fehlend.push(tr('Hardware-HEVC-Encoder'));
+  if (!h264) fehlend.push(tr('Hardware-H.264-Encoder'));
   const vollstaendigeGpus = gpuProfile.filter((gpu) => gpu.vendor_id && gpu.device_id
     && gpu.dedicated_video_memory && gpu.shared_system_memory !== null && gpu.driver_version);
-  if (!vollstaendigeGpus.length) fehlend.push('GPU PCI-ID/VRAM/Treiber');
+  if (!vollstaendigeGpus.length) fehlend.push(tr('GPU PCI-ID/VRAM/Treiber'));
   if (fehlend.length) return { profile: null, fehlend };
 
   return {
@@ -302,9 +296,6 @@ function empfehlung(
   encoder: HardwareEncoder[],
   softwareAv1: boolean,
 ): UplinkEncoderEmpfehlung {
-  // Der Codec wird anhand dessen gewählt, was OBS auf diesem Rechner wirklich
-  // registriert hat, nicht anhand einer fest verdrahteten GPU-Generationsliste.
-  // Das deckt neue Generationen automatisch ab, sobald OBS/Treiber sie anbieten.
   for (const codec of ['av1', 'hevc', 'h264'] as const) {
     const kandidat = waehleEncoder(encoder, codec, aktiverHersteller);
     if (kandidat) return empfehlungFuerHardware(kandidat, softwareAv1, aktiverHersteller);
@@ -312,21 +303,16 @@ function empfehlung(
 
   return {
     codec: 'H.264',
-    encoder: 'Hardwareencoder in OBS auswählen',
+    encoder: tr('Hardwareencoder in OBS auswählen'),
     ratensteuerung: 'CBR',
     status: 'fallback',
     hinweise: [
-      'Im Log wurde kein unterstützter Hardwareencoder eindeutig erkannt.',
-      'Uplink wählt Software-AV1 nicht automatisch für einen Live-Stream.',
+      tr('Im Log wurde kein unterstützter Hardwareencoder eindeutig erkannt.'),
+      tr('Uplink wählt Software-AV1 nicht automatisch für einen Live-Stream.'),
     ],
   };
 }
 
-/**
- * Liest ausschließlich den lokalen Text einer OBS-Logdatei. Die Datei wird
- * vom Browser nicht hochgeladen. OBS schreibt GPU und die beim Start
- * registrierten Encoder bereits vor einem Streamstart in das Log.
- */
 export function analysiereObsLog(text: string): UplinkEncoderAnalyse {
   const zeilen = text.split(/\r?\n/);
   const gpus: string[] = [];
