@@ -109,6 +109,18 @@ pub trait TwitchTokenClient: Send + Sync {
     /// (`grant_type=authorization_code`, Python `exchange_code_for_token`).
     async fn exchange_code(&self, code: &str) -> Result<TokenResponse, RefreshError>;
 
+    /// Wie [`exchange_code`](Self::exchange_code), aber mit der beim Authorize
+    /// tatsächlich verwendeten Redirect-URI (Paket O: pro Startdomain). Adapter
+    /// ohne eigene Redirect-Wahl nutzen ihre feste URI.
+    async fn exchange_code_with_redirect(
+        &self,
+        code: &str,
+        redirect_uri: &str,
+    ) -> Result<TokenResponse, RefreshError> {
+        let _ = redirect_uri;
+        self.exchange_code(code).await
+    }
+
     /// Ermittelt den Inhaber eines frischen Access-Tokens (Python
     /// `oauth_callback.py:130`: `GET /helix/users` mit dem User-Bearer ohne
     /// Parameter). Ohne diesen Schritt ist nach dem Code-Tausch unbekannt,

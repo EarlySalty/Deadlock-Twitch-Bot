@@ -9,8 +9,8 @@ use serde::Deserialize;
 use sqlx::{PgPool, Row};
 use tb_internal_api::{PatchEvent, PatchProcessError, PatchReceiver};
 
-const BASE_URL: &str = "https://deutsche-deadlock-community.de/patchnotes";
-const INDEX_URL: &str = "https://deutsche-deadlock-community.de/patchnotes/index.json";
+const BASE_URL: &str = tb_config::primary_url!("/patchnotes");
+const INDEX_URL: &str = tb_config::primary_url!("/patchnotes/index.json");
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PENDING_AGE_SECONDS: i64 = 120;
 

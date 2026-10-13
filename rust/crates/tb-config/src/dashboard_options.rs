@@ -153,17 +153,20 @@ impl Default for DashboardOptions {
             admin_owner_user_id: None,
             admin_twitch_user_id: None,
             admin_guild_ids: Vec::new(),
-            shared_admin_cookie_domain: "deutsche-deadlock-community.de".into(),
+            shared_admin_cookie_domain: crate::public_site::PRIMARY_HOST.into(),
             demo_login_twitch_user_id: None,
             demo_login_display_name: String::new(),
-            demo_embed_origins: vec!["https://deutsche-deadlock-community.de".into()],
+            demo_embed_origins: crate::PublicSite::ALL
+                .iter()
+                .map(|site| site.origin().to_string())
+                .collect(),
             billing_public_origin: None,
             stripe_price_ids: BTreeMap::new(),
             stripe_product_ids: BTreeMap::new(),
             discord_ref_code: "DE-Deadlock-Discord".into(),
             steam_rank_url: "http://127.0.0.1:8783/rank".into(),
             steam_title_context_url: "http://127.0.0.1:8783/internal/title-context".into(),
-            steam_link_start_base_url: "https://deutsche-deadlock-community.de/link".into(),
+            steam_link_start_base_url: crate::primary_url!("/link").into(),
             turnier_internal_base_url: "http://127.0.0.1:8900".into(),
             deadlock_assets_base_url: "https://assets.deadlock-api.com".into(),
             helix_base_url: None,

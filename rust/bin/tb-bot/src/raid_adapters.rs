@@ -379,8 +379,17 @@ impl TwitchTokenClient for HelixTokenClient {
     }
 
     async fn exchange_code(&self, code: &str) -> Result<TokenResponse, RefreshError> {
+        self.exchange_code_with_redirect(code, &self.redirect_uri)
+            .await
+    }
+
+    async fn exchange_code_with_redirect(
+        &self,
+        code: &str,
+        redirect_uri: &str,
+    ) -> Result<TokenResponse, RefreshError> {
         self.helix
-            .exchange_user_code(code, &self.redirect_uri)
+            .exchange_user_code(code, redirect_uri)
             .await
             .map(to_token_response)
             .map_err(map_token_error)

@@ -168,7 +168,7 @@ const PROMO_DUE_CONCURRENCY: usize = 4;
 /// Fallback-Discord-Invite (constants.py: PROMO_DISCORD_INVITE).
 pub const DEFAULT_PROMO_DISCORD_INVITE: &str = "https://discord.gg/z5TfVHuQq2";
 /// Partner-Seite für Streamer-Pitches in den Promo-Texten.
-pub const STREAMER_PARTNER_URL: &str = "https://deutsche-deadlock-community.de/streamer";
+pub const STREAMER_PARTNER_URL: &str = tb_config::primary_url!("/streamer");
 
 /// Liefert den konfigurierten globalen Promo-Invite oder den Python-paritären
 /// Default. Ein fehlendes/leeres Secret darf keinen leeren `{invite}`-Text

@@ -12,6 +12,7 @@ pub mod editor;
 pub mod file;
 pub mod global;
 pub mod operations;
+pub mod public_site;
 pub mod reliability;
 pub mod runtime;
 pub mod shared_options;
@@ -19,6 +20,7 @@ pub mod stt;
 pub mod vod_archive;
 
 pub use global::{BotConfig, BotConfigSnapshot};
+pub use public_site::PublicSite;
 
 use std::time::Duration;
 

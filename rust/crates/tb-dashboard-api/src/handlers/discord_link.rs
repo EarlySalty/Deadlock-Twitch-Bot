@@ -79,7 +79,9 @@ pub async fn link_start_handler(auth: DashboardAuthLevel, Query(q): Query<LinkQu
 
     let payload = json!({
         "scope": "identify",
-        "redirect_after": "https://deutsche-deadlock-community.de/twitch/auth/discord/link/complete",
+        // Bleibt auf der Hauptdomain: der Broker des Haupt-Bots lässt nur deren
+        // Rücksprünge zu (Deadlock-Bots bleibt unangetastet, Plan E6).
+        "redirect_after": tb_config::primary_url!("/twitch/auth/discord/link/complete"),
         "requesting_service": "twitch-dashboard-link",
         "metadata": {
             "next_path": next_path,

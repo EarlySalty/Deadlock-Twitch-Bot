@@ -39,7 +39,7 @@ pub const TOKEN_ERROR_CHANNEL_ID: i64 = 1374364800817303632;
 /// erste Punkt, über den der Streamer den Bot neu autorisiert — damit gilt das
 /// Dashboard sofort wieder als vertraut. Bewusst kein einzelner OAuth-State-Link:
 /// Der kann ungenutzt ablaufen und wäre danach wertlos.
-pub const DEFAULT_REAUTH_URL: &str = "https://deutsche-deadlock-community.de/twitch/verwaltung";
+pub const DEFAULT_REAUTH_URL: &str = tb_config::primary_url!("/twitch/verwaltung");
 
 /// Obergrenze an Kanälen pro aktivem Ban-Sweep. Reine Sicherheitsleine gegen
 /// einen Helix-Ansturm, wenn die Partner-Zahl unerwartet wächst.
@@ -51,7 +51,7 @@ const BAN_PROBE_DELAY: std::time::Duration = std::time::Duration::from_millis(12
 
 /// Anker der Bot-Sektion im Verwaltungs-Dashboard. Dort unten sitzt
 /// "Bot vom Kanal trennen" — der einzige saubere Weg, den Bot loszuwerden.
-pub const BOT_SECTION_URL: &str = "https://deutsche-deadlock-community.de/twitch/verwaltung#bot";
+pub const BOT_SECTION_URL: &str = tb_config::primary_url!("/twitch/verwaltung#bot");
 
 /// Twitch-Login des Bots, wie ihn der Streamer in seinem Chat tippt. Per Env
 /// `BOT_TWITCH_LOGIN` überschreibbar.

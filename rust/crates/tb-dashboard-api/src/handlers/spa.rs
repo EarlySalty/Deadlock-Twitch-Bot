@@ -44,7 +44,7 @@ const DEFAULT_DIST_PATH: &str = "bot/analytics/dashboard_v2/dist";
 /// (`api_v2.py:938-949`) ist `https://admin.deutsche-deadlock-community.de`,
 /// und `_configured_admin_dashboard_host` liefert bei leerer Kette ebenfalls
 /// genau diesen Hostnamen zurück.
-const ADMIN_DASHBOARD_HOST_DEFAULT: &str = "admin.deutsche-deadlock-community.de";
+const ADMIN_DASHBOARD_HOST_DEFAULT: &str = tb_config::public_site::ADMIN_HOST;
 
 /// Inline-Script das die React-App über apiBase und demoMode informiert.
 /// Python: `_dashboard_runtime_script` + `_inject_dashboard_runtime_config`.

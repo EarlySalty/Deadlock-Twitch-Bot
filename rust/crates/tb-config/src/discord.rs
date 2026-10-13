@@ -118,7 +118,7 @@ impl Default for RaidOAuth {
             allowed_guild_ids: None,
             allowed_channel_ids: None,
             allowed_role_ids: None,
-            success_redirect_url: "https://deutsche-deadlock-community.de/twitch/dashboard".into(),
+            success_redirect_url: crate::primary_url!("/twitch/dashboard").into(),
         }
     }
 }

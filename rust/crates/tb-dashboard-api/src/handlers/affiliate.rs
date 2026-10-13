@@ -37,7 +37,6 @@ use crate::auth::{
     },
 };
 
-const DEFAULT_PUBLIC_ORIGIN: &str = "https://deutsche-deadlock-community.de";
 const SHARED_TWITCH_CALLBACK_PATH: &str = "/callback/twitch";
 const AFFILIATE_STRIPE_CALLBACK_PATH: &str = "/twitch/affiliate/connect/stripe/callback";
 const STRIPE_CONNECT_AUTHORIZE_URL: &str = "https://connect.stripe.com/oauth/authorize";
@@ -144,7 +143,9 @@ pub async fn auth_login_handler(
         return Redirect::to("/twitch/affiliate/portal").into_response();
     }
 
-    let redirect_uri = affiliate_auth_redirect_uri();
+    // Paket O: Rücksprung auf die Startdomain (Allowlist), URI wandert im State mit.
+    let redirect_uri =
+        crate::public_site::request_site(&headers).rebase(&affiliate_auth_redirect_uri());
     let state_token = tb_crypto::random_urlsafe_token(24);
     let oauth_state = AffiliateOAuthState {
         redirect_uri: redirect_uri.clone(),
@@ -336,7 +337,8 @@ pub async fn connect_stripe_handler(
     };
 
     let state_token = tb_crypto::random_urlsafe_token(24);
-    let redirect_uri = affiliate_stripe_redirect_uri();
+    let redirect_uri =
+        crate::public_site::request_site(&headers).rebase(&affiliate_stripe_redirect_uri());
     let connect_state = AffiliateConnectState {
         redirect_uri: redirect_uri.clone(),
         twitch_login: session.twitch_login.clone(),
@@ -1205,7 +1207,7 @@ fn public_origin() -> String {
         "PUBLIC_URL",
     ])
     .and_then(|value| origin_from_urlish(&value))
-    .unwrap_or_else(|| DEFAULT_PUBLIC_ORIGIN.to_string())
+    .unwrap_or_else(|| crate::public_site::PublicSite::Primary.origin().to_string())
 }
 
 fn origin_from_urlish(raw: &str) -> Option<String> {

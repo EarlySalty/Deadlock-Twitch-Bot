@@ -150,7 +150,7 @@ pub async fn sync_products_handler(
                     "description": (!plan_description.is_empty()).then_some(plan_description),
                     "metadata": {
                         "plan_id": plan_id,
-                        "source": "deutsche-deadlock-community.de",
+                        "source": tb_config::public_site::PRIMARY_HOST,
                         "billing": "subscriptions",
                     },
                 }))
@@ -248,7 +248,7 @@ pub async fn sync_products_handler(
                             "metadata": {
                                 "plan_id": plan_id,
                                 "cycle_months": cycle.to_string(),
-                                "source": "deutsche-deadlock-community.de",
+                                "source": tb_config::public_site::PRIMARY_HOST,
                             },
                         }))
                         .await

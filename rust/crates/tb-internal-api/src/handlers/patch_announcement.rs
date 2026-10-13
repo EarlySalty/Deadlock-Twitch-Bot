@@ -19,7 +19,7 @@ use tb_transport_twitch::{HelixClient, HelixStream};
 const EVENT_TTL_SECONDS: i64 = 120;
 const SNAPSHOT_TTL_SECONDS: i64 = 120;
 const MESSAGE_PREFIX: &str = "Neuer Deadlock-Patch ist da 🔥 Die Änderungen auf Deutsch: ";
-const ARTICLE_PREFIX: &str = "https://deutsche-deadlock-community.de/patchnotes/patch-";
+const ARTICLE_PREFIX: &str = tb_config::primary_url!("/patchnotes/patch-");
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -65,7 +65,7 @@ impl PatchEvent {
             .and_then(|digits| digits.parse::<i64>().ok())
             .filter(|id| *id > 0);
         if article.scheme() != "https"
-            || article.host_str() != Some("deutsche-deadlock-community.de")
+            || article.host_str() != Some(tb_config::public_site::PRIMARY_HOST)
             || article.port().is_some()
             || !article.username().is_empty()
             || article.password().is_some()
