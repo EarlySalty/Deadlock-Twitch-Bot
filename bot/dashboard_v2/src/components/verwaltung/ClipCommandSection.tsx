@@ -10,13 +10,12 @@ import {
   type ClipCommandSettingsResponse,
 } from '@/api/clipCommand';
 import { useT } from '../../context/LanguageContext';
-import { tr } from '../../i18n/dictionary';
 
 export function ClipCommandSection() {
   const t = useT();
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const [error, setError] = useState<'load' | 'toggle' | 'invalidDuration' | 'duration' | null>(null);
+  const [success, setSuccess] = useState<'toggle' | 'duration' | null>(null);
   const [settings, setSettings] = useState<ClipCommandSettingsResponse | null>(null);
   const [pending, setPending] = useState(false);
   const [duration, setDuration] = useState('60');
@@ -30,7 +29,7 @@ export function ClipCommandSection() {
       setSettings(data);
       setDuration(String(data.clip_command_duration_seconds));
     } catch {
-      setError(tr('Status konnte nicht geladen werden. Bitte Seite neu laden.'));
+      setError('load');
     } finally {
       setLoading(false);
     }
@@ -49,9 +48,9 @@ export function ClipCommandSection() {
     try {
       const data = await toggleClipCommand(want);
       setSettings(data);
-      setSuccess(t('Gespeichert.'));
+      setSuccess('toggle');
     } catch {
-      setError(t('Speichern fehlgeschlagen. Bitte nochmal versuchen.'));
+      setError('toggle');
     } finally {
       setPending(false);
     }
@@ -62,7 +61,7 @@ export function ClipCommandSection() {
     if (!duration || !Number.isFinite(seconds) || seconds < 5 || seconds > 60
       || Math.abs(seconds * 10 - Math.round(seconds * 10)) >= 1e-7) {
       setSuccess(null);
-      setError('Bitte 5 bis 60 Sekunden eingeben, in Schritten von 0,1 Sekunden.');
+      setError('invalidDuration');
       return;
     }
     setPending(true);
@@ -72,15 +71,25 @@ export function ClipCommandSection() {
       const data = await setClipCommandDuration(seconds);
       setSettings(data);
       setDuration(String(data.clip_command_duration_seconds));
-      setSuccess('Clip-Dauer gespeichert.');
+      setSuccess('duration');
     } catch {
-      setError('Clip-Dauer konnte nicht gespeichert werden. Bitte nochmal versuchen.');
+      setError('duration');
     } finally {
       setPending(false);
     }
   };
 
   const enabled = Boolean(settings?.clip_command_enabled);
+  const errorMessages = {
+    load: t('Status konnte nicht geladen werden. Bitte Seite neu laden.'),
+    toggle: t('Speichern fehlgeschlagen. Bitte nochmal versuchen.'),
+    invalidDuration: t('Bitte 5 bis 60 Sekunden eingeben, in Schritten von 0,1 Sekunden.'),
+    duration: t('Clip-Dauer konnte nicht gespeichert werden. Bitte nochmal versuchen.'),
+  };
+  const successMessages = {
+    toggle: t('Gespeichert.'),
+    duration: t('Clip-Dauer gespeichert.'),
+  };
 
   return (
     <motion.section
@@ -104,13 +113,13 @@ export function ClipCommandSection() {
 
       {error && (
         <div role="alert" className="mb-4 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
-          {error}
+          {errorMessages[error]}
         </div>
       )}
 
       {success && (
         <div role="status" className="mb-4 rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-sm text-success">
-          {success}
+          {successMessages[success]}
         </div>
       )}
 
@@ -167,7 +176,7 @@ export function ClipCommandSection() {
             onSubmit={(event) => { event.preventDefault(); void onSaveDuration(); }}
           >
             <label htmlFor={durationId} className="block text-sm font-semibold text-white mb-2">
-              Clip-Dauer in Sekunden
+              {t('Clip-Dauer in Sekunden')}
             </label>
             <div className="flex flex-wrap items-center gap-3">
               <input
@@ -188,14 +197,14 @@ export function ClipCommandSection() {
                 disabled={pending || Number(duration) === settings.clip_command_duration_seconds}
                 className="rounded-lg border border-primary/40 bg-primary/10 px-4 py-2.5 text-sm font-semibold text-primary hover:bg-primary/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Dauer speichern
+                {t('Dauer speichern')}
               </button>
             </div>
             <p id={`${durationId}-hint`} className="mt-2 text-sm text-text-secondary">
-              5 bis 60 Sekunden, Standard: 60 Sekunden. Am Streamanfang oder Streamende kann Twitch einen kürzeren Clip liefern.
+              {t('5 bis 60 Sekunden, Standard: 60 Sekunden. Am Streamanfang oder Streamende kann Twitch einen kürzeren Clip liefern.')}
             </p>
             <p className="mt-2 text-sm text-text-secondary">
-              Eigener Titel: Schreibe den gewünschten Titel hinter den Clip-Befehl, zum Beispiel „Krasser Headshot“.
+              {t('Eigener Titel: Schreibe den gewünschten Titel hinter den Clip-Befehl, zum Beispiel „Krasser Headshot“.')}
             </p>
           </form>
         </div>
