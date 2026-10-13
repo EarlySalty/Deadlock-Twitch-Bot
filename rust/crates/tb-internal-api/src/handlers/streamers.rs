@@ -1972,6 +1972,12 @@ mod tests {
     #[tokio::test]
     async fn list_returns_200() {
         let dsn = db_dsn_or_skip!();
+        let snapshot = tb_config::BotConfigSnapshot::parse(
+            "schema_version=1\n[twitch]\nbot_user_id='123'\nnotify_channel_id='456'\neventsub_callback_url='https://example.invalid/callback'\ntarget_game='Deadlock'\n",
+            std::path::Path::new("/test/bot.toml"),
+        )
+        .expect("Gültige Test-Betriebskonfiguration");
+        tb_config::runtime::install(snapshot).expect("Test-Betriebskonfiguration installieren");
         let pool = make_pool(&dsn, "test_sh_list").await;
         let app = make_router(pool, "secret");
         let base = INTERNAL_API_BASE_PATH;

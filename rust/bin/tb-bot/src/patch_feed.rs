@@ -783,6 +783,15 @@ mod tests {
         .execute(&admin)
         .await
         .unwrap();
+        for migration in [
+            include_str!("../../../migrations/20260703000000_minimax_usage_ledger.sql"),
+            include_str!("../../../migrations/20260905130000_llm_usage_rename.sql"),
+            include_str!("../../../migrations/20260905130001_llm_usage_drop_compat_view.sql"),
+            include_str!("../../../migrations/20260918123000_category_collector.sql"),
+            include_str!("../../../migrations/20260918170000_category_permanent_archive.sql"),
+        ] {
+            sqlx::raw_sql(migration).execute(&admin).await.unwrap();
+        }
         sqlx::raw_sql(tb_chat::moderation::SUPPRESSION_DDL)
             .execute(&admin)
             .await

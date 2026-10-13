@@ -1191,6 +1191,15 @@ async fn feed_schema_tracks_each_patch_without_numeric_cursor_under_runtime_role
     .execute(&pool)
     .await
     .unwrap();
+    for migration in [
+        include_str!("../../../../migrations/20260703000000_minimax_usage_ledger.sql"),
+        include_str!("../../../../migrations/20260905130000_llm_usage_rename.sql"),
+        include_str!("../../../../migrations/20260905130001_llm_usage_drop_compat_view.sql"),
+        include_str!("../../../../migrations/20260918123000_category_collector.sql"),
+        include_str!("../../../../migrations/20260918170000_category_permanent_archive.sql"),
+    ] {
+        sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+    }
     run_runtime_role_matrix(&pool).await;
 
     let privileges: Vec<bool> = sqlx::query_scalar(
