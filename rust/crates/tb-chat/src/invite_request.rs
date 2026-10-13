@@ -61,12 +61,7 @@ pub(crate) fn is_clear_invite_request(content: &str) -> bool {
     if !invite || !self_request {
         return false;
     }
-    let room_address = words.iter().any(|word| {
-        matches!(
-            *word,
-            "jemand" | "wer" | "irgendwer" | "irgendjemand" | "einer" | "jmd"
-        )
-    });
+    let room_address = words.iter().any(|word| is_room_address(word));
     let direct_verb = words.iter().any(|word| {
         ["kannst", "kannste", "konntest", "wurdest", "magst"]
             .iter()
@@ -81,23 +76,24 @@ pub(crate) fn is_clear_invite_request(content: &str) -> bool {
 }
 
 fn is_declined_or_done(words: &[&str]) -> bool {
-    words.iter().any(|word| {
-        matches!(
-            *word,
-            "kein"
-                | "keine"
-                | "keinen"
-                | "nicht"
-                | "nich"
-                | "net"
-                | "bereits"
-                | "schon"
-                | "eingeladen"
-                | "invited"
-                | "geinvited"
-                | "geinvitet"
-        )
+    let wants_future = words
+        .iter()
+        .any(|word| matches!(*word, "werden" | "werde" | "wird"));
+    words.iter().enumerate().any(|(index, word)| match *word {
+        "kein" | "keine" | "keinen" | "bereits" => true,
+        "nicht" | "nich" | "net" => !words
+            .get(index + 1)
+            .is_some_and(|next| is_room_address(next)),
+        "eingeladen" | "invited" | "geinvited" | "geinvitet" => !wants_future,
+        _ => false,
     })
+}
+
+fn is_room_address(word: &str) -> bool {
+    matches!(
+        word,
+        "jemand" | "wer" | "irgendwer" | "irgendjemand" | "einer" | "jmd"
+    )
 }
 
 fn is_offer(content: &str) -> bool {
@@ -165,6 +161,9 @@ mod tests {
             "suche jemand der mich in Deadlock einladen kann",
             "kann mich wer inviten pls",
             "Wie bekomme ich einen invite?",
+            "Ich möchte eingeladen werden",
+            "Kann mich schon mal jemand einladen?",
+            "kann mich nicht jemand einladen?",
         ] {
             assert!(is_clear_invite_request(raw), "nicht erkannt: {raw}");
         }
@@ -182,7 +181,8 @@ mod tests {
             "Ich brauche keinen Invite mehr",
             "Du hast mich bereits eingeladen",
             "hat mich schon jemand eingeladen?",
-            "kann mich nicht jemand einladen, hab schon Zugang",
+            "Ich will nicht eingeladen werden",
+            "Mich hat gestern einer eingeladen",
         ] {
             assert!(!is_clear_invite_request(raw), "falsch erkannt: {raw}");
         }
