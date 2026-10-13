@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { SubTabs, type SubTabDef } from '@/components/layout/SubTabs';
+import { useT } from '@/context/LanguageContext';
 import { Growth } from '@/pages/Growth';
 import { Comparison } from '@/pages/Comparison';
 import { Category } from '@/pages/Category';
@@ -16,23 +17,24 @@ interface WachstumProps {
 }
 
 export function Wachstum({ streamer, days, initialSub, onStreamerSelect, onNavigate }: WachstumProps) {
+  const t = useT();
   const [sub, setSub] = useState(initialSub ?? 'trends');
   const tabs: SubTabDef[] = [
     {
       id: 'trends',
-      label: 'Trends',
+      label: t('Trends'),
       entitlement: 'analytics',
       render: () => <Growth streamer={streamer ?? ''} days={days} />,
     },
     {
       id: 'vergleich',
-      label: 'Vergleich',
+      label: t('Vergleich'),
       entitlement: 'analytics',
       render: () => <Comparison streamer={streamer ?? ''} days={days} />,
     },
     {
       id: 'markt',
-      label: 'Markt',
+      label: t('Markt'),
       render: () => (
         <Category
           streamer={streamer}
@@ -44,7 +46,7 @@ export function Wachstum({ streamer, days, initialSub, onStreamerSelect, onNavig
     },
     {
       id: 'experimentell',
-      label: 'Experimentell',
+      label: t('Experimentell'),
       entitlement: 'analytics',
       render: () => <Experimental streamer={streamer} days={days} />,
     },

@@ -1,13 +1,18 @@
+import { tr } from '../i18n/dictionary';
 import { buildApiUrl, fetchApi, fetchJson, withCookieCredentials } from './core';
 
 export type FeedbackKind = 'feedback' | 'feature';
 export type FeedbackStatus = 'received' | 'reviewing' | 'planned' | 'in_progress' | 'done' | 'declined' | 'answered';
-export const feedbackStatusLabels: Record<FeedbackStatus, string> = {
-  received: 'Eingegangen', reviewing: 'In Prüfung', planned: 'Geplant',
-  in_progress: 'In Arbeit', done: 'Umgesetzt', declined: 'Derzeit nicht vorgesehen', answered: 'Beantwortet',
-};
+const FEEDBACK_STATUSES: FeedbackStatus[] = ['received', 'reviewing', 'planned', 'in_progress', 'done', 'declined', 'answered'];
+export function feedbackStatusLabel(status: string): string {
+  const labels: Record<FeedbackStatus, string> = {
+    received: tr('Eingegangen'), reviewing: tr('In Prüfung'), planned: tr('Geplant'),
+    in_progress: tr('In Arbeit'), done: tr('Umgesetzt'), declined: tr('Derzeit nicht vorgesehen'), answered: tr('Beantwortet'),
+  };
+  return FEEDBACK_STATUSES.includes(status as FeedbackStatus) ? labels[status as FeedbackStatus] : status;
+}
 export function feedbackStatuses(kind: FeedbackKind): FeedbackStatus[] {
-  return (Object.keys(feedbackStatusLabels) as FeedbackStatus[]).filter(status => kind === 'feedback' || status !== 'answered');
+  return FEEDBACK_STATUSES.filter(status => kind === 'feedback' || status !== 'answered');
 }
 export interface FeedbackEntry {
   id: number; kind: FeedbackKind; title: string; body: string; area: string;
@@ -45,7 +50,6 @@ export function validFeedbackResultPath(path: string): boolean {
   return extra === undefined && ['/twitch/dashboard', '/twitch/verwaltung', '/twitch/uplink', '/twitch/analyse', '/analyse', '/twitch/abbo', '/twitch/social-media', '/social-media'].includes(base)
     && /^[a-zA-Z0-9_-]*$/.test(anchor);
 }
-/** Bleibt nach Netzfehlern gleich; eine bewusste Textänderung ist ein neuer Auftrag. */
 export function submissionAttempt<T>(payload: T, previous?: { fingerprint: string; requestId: string }, newId = () => crypto.randomUUID()) {
   const fingerprint = JSON.stringify(payload);
   return previous?.fingerprint === fingerprint ? previous : { fingerprint, requestId: newId() };
