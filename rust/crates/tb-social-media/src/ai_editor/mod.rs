@@ -1,3 +1,4 @@
+pub mod learning;
 mod media;
 mod model;
 pub mod options;
@@ -5,7 +6,6 @@ mod pipeline;
 pub mod revision;
 pub mod runtime_config;
 mod service;
-pub mod learning;
 pub mod skill_registry;
 mod skills;
 mod source;
