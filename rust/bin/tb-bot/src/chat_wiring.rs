@@ -127,7 +127,13 @@ struct ChatClipAdapter {
 
 #[async_trait::async_trait]
 impl ClipPort for ChatClipAdapter {
-    async fn create_clip(&self, broadcaster_user_id: &str, broadcaster_login: &str) -> ClipOutcome {
+    async fn create_clip(
+        &self,
+        broadcaster_user_id: &str,
+        broadcaster_login: &str,
+        duration_seconds: f64,
+        title: &str,
+    ) -> ClipOutcome {
         let requested_at = chrono::Utc::now();
         // Ungated + Auto-Refresh: Streamer mit deaktivierten Raids dürfen clippen,
         // und ein abgelaufener Token wird erneuert statt 401 zu produzieren.
@@ -155,7 +161,7 @@ impl ClipPort for ChatClipAdapter {
         };
         match self
             .helix
-            .create_clip(broadcaster_user_id, &access_token)
+            .create_clip(broadcaster_user_id, &access_token, duration_seconds, title)
             .await
         {
             Ok(Some(clip)) => {
@@ -167,6 +173,7 @@ impl ClipPort for ChatClipAdapter {
                 if url.is_empty() {
                     ClipOutcome::Failed
                 } else {
+                    let mut published = false;
                     if !clip.id.is_empty() {
                         let source = HelixClipSource::new(self.helix.clone());
                         let mut resolved = None;
@@ -187,10 +194,12 @@ impl ClipPort for ChatClipAdapter {
                                             })
                                             .is_some() =>
                                 {
+                                    published = true;
                                     resolved = Some(detail);
                                     break;
                                 }
-                                Ok(_) => {}
+                                Ok(Some(_)) => published = true,
+                                Ok(None) => {}
                                 Err(error) => {
                                     tracing::warn!(%error, clip_id = %clip.id, "!clip: VOD-Daten nicht abrufbar")
                                 }
@@ -230,7 +239,11 @@ impl ClipPort for ChatClipAdapter {
                             tracing::error!(%error, clip_id = %clip.id, "!clip: Zeitpunkt konnte nicht gespeichert werden");
                         }
                     }
-                    ClipOutcome::Created { url }
+                    if published {
+                        ClipOutcome::Created { url }
+                    } else {
+                        ClipOutcome::Pending { url }
+                    }
                 }
             }
             Ok(None) => ClipOutcome::Failed,

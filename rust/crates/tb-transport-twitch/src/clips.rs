@@ -100,7 +100,10 @@ impl HelixClient {
         if broadcaster_id.is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
-        if started_at.zip(ended_at).is_some_and(|(start, end)| end <= start) {
+        if started_at
+            .zip(ended_at)
+            .is_some_and(|(start, end)| end <= start)
+        {
             return Ok(Vec::new());
         }
 
@@ -198,6 +201,34 @@ mod tests {
         (start..start + count)
             .map(|idx| clip_json(&format!("clip-{idx}")))
             .collect()
+    }
+
+    #[tokio::test]
+    async fn create_clip_sends_encoded_title_and_duration_without_retries() {
+        let server = MockServer::start().await;
+        let client = bare_client(&server);
+        Mock::given(method("POST"))
+            .and(path("/helix/clips"))
+            .and(query_param("broadcaster_id", "42"))
+            .and(query_param("duration", "59.9"))
+            .and(query_param("title", "Grüße & Spaß? #1"))
+            .and(header("Authorization", "Bearer fixture-token"))
+            .and(header("Client-Id", "cid"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = client
+            .create_clip("42", "fixture-token", 59.9, "Grüße & Spaß? #1")
+            .await
+            .unwrap_err();
+        assert!(matches!(error, HelixError::Status { status: 503 }));
+        assert!(client
+            .create_clip("42", "fixture-token", 60.1, "invalid")
+            .await
+            .is_err());
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        server.verify().await;
     }
 
     #[tokio::test]

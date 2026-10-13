@@ -1,10 +1,11 @@
 export interface ClipCommandSettingsResponse {
   clip_command_enabled: boolean;
+  clip_command_duration_seconds: number;
+  clip_command_duration_configured: boolean;
 }
 
-export interface ClipCommandUpdateResponse {
+export interface ClipCommandUpdateResponse extends ClipCommandSettingsResponse {
   ok: boolean;
-  clip_command_enabled: boolean;
 }
 
 const BASE = '/twitch/api/v2/streamer/clip-command-settings';
@@ -33,6 +34,18 @@ export async function fetchClipCommandSettings(
 ): Promise<ClipCommandSettingsResponse> {
   const qs = streamer ? `?streamer=${encodeURIComponent(streamer)}` : '';
   return fetchJson(`${BASE}${qs}`);
+}
+
+export async function setClipCommandDuration(
+  seconds: number,
+  streamer?: string,
+): Promise<ClipCommandUpdateResponse> {
+  const qs = streamer ? `?streamer=${encodeURIComponent(streamer)}` : '';
+  return fetchJson(`${BASE}${qs}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clip_command_duration_seconds: seconds }),
+  });
 }
 
 export async function toggleClipCommand(

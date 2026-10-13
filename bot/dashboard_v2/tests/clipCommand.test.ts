@@ -1,7 +1,7 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { fetchClipCommandSettings, toggleClipCommand } from '../src/api/clipCommand';
+import { fetchClipCommandSettings, setClipCommandDuration, toggleClipCommand } from '../src/api/clipCommand';
 
 const originalFetch = globalThis.fetch;
 
@@ -21,6 +21,15 @@ function mockFetch(status: number, body: unknown) {
   }) as unknown as typeof fetch;
   return calls;
 }
+
+test('saves duration without overwriting the enable switch', async () => {
+  const calls = mockFetch(200, { ok: true, clip_command_enabled: false, clip_command_duration_seconds: 59.9, clip_command_duration_configured: true });
+  const data = await setClipCommandDuration(59.9);
+  assert.equal(calls[0].init.method, 'POST');
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)), { clip_command_duration_seconds: 59.9 });
+  assert.equal(data.clip_command_duration_seconds, 59.9);
+  assert.equal(data.clip_command_enabled, false);
+});
 
 test('liest den Status ohne Streamer-Parameter aus der Session', async () => {
   const calls = mockFetch(200, { clip_command_enabled: true });

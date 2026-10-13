@@ -317,20 +317,24 @@ impl HelixClient {
             .header("Authorization", format!("Bearer {user_token}"))
     }
 
-    /// Erstellt einen Clip aus dem aktuellen Stream-Buffer (Helix `POST /clips`).
-    ///
-    /// Braucht ein **User-Token mit `clips:edit`-Scope** (i. d. R. der Broadcaster).
-    /// Titel/Dauer akzeptiert Helix hier nicht — der Clip kommt aus dem Live-Buffer
-    /// (~letzte 30 s); der Titel wird nur in der Chat-Antwort verwendet.
-    /// `Ok(None)` = Twitch lieferte kein Clip-Objekt zurück.
     pub async fn create_clip(
         &self,
         broadcaster_id: &str,
         user_token: &str,
+        duration_seconds: f64,
+        title: &str,
     ) -> Result<Option<ClipInfo>, HelixError> {
-        let path = format!("/clips?broadcaster_id={broadcaster_id}&has_delay=false");
+        if !tb_domain::clip::valid_duration(duration_seconds) {
+            return Err(HelixError::InvalidResponse("Ungültige Clip-Dauer"));
+        }
         let resp = self
-            .send_with_retry(self.post_with_user_token(&path, user_token))
+            .post_with_user_token("/clips", user_token)
+            .query(&[
+                ("broadcaster_id", broadcaster_id.to_string()),
+                ("duration", duration_seconds.to_string()),
+                ("title", title.to_string()),
+            ])
+            .send()
             .await?;
         let body: HelixClipsResponse = check_status_and_json(resp).await?;
         Ok(body.data.into_iter().next())
