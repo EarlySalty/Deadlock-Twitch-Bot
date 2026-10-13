@@ -1,0 +1,11 @@
+[t3-wakeup] Supervise the multi-server roadmap Sol orchestrator.
+
+Source of truth: /home/nathanael/.worktrees/ttb-multiserver-sol-continue-20261013/.tasks/2026-10-13-multiserver-sol-continue/REGISTER.md and AUFTRAG.md (plus DOMAIN-REGISTER.md / TODO.md there if Sol wrote them).
+
+1. `python3 ~/Documents/tools/t3-thread.py read --thread c042a18e-f92d-453c-89ad-54138295a8ef` and check its transcript under ~/.claude/projects/-home-nathanael--worktrees-ttb-multiserver-sol-continue-20261013/ for recent activity.
+2. If it ended with a question (FRAGE AN ORCHESTRATOR), decide yourself and answer via `t3-harness send --thread <id> --file <answer>` (no --model). Only real product/legal/credential decisions go to the user, with a recommendation.
+3. If it died (proxy ECONNREFUSED, error, stopped without final report): do not resume it. Start a fresh Sol thread with `t3-harness new --project Deadlock-Twitch-Bot --model sol --effort ultracode` and a state brief pointing to its TODO.md/DOMAIN-REGISTER.md, same worktree. Update REGISTER.md.
+4. Update REGISTER.md. Report to the user only merges, live proof, blockers or decisions. No interim status chatter.
+5. If the work is still running, reschedule this check in 60 minutes with the same prompt file (`t3-wakeup at ... --name multiserver-cont`). When the roadmap is live or fully blocked, do not reschedule and run `t3-wakeup cancel multiserver-cont`.
+
+Rules: Sol only, never Sonnet; gate_hook --review is the only merge gate; no secrets in output; no community posts; German production must stay undisturbed.
