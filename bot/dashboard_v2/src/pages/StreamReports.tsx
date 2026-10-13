@@ -17,9 +17,11 @@ import {
 } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchOverview } from '@/api/analytics';
-import { buildApiUrl, withCookieCredentials } from '@/api/core';
+import { buildApiUrl, withCookieCredentials, withLanguageHeader } from '@/api/core';
 import { usePlan } from '@/context/PlanContext';
 import { useStreamReport } from '@/hooks/useAnalytics';
+import { useT } from '@/context/LanguageContext';
+import { activeLocale, tr } from '../i18n/dictionary';
 import type {
   LegacyStreamReportBody,
   StreamReport,
@@ -98,61 +100,65 @@ const ACTION_TONES = {
   neutral: 'border-border bg-white/5',
 };
 
-const RATING_OPTIONS: Array<{
+function ratingOptions(): Array<{
   value: RatingValue;
   label: string;
   icon: LucideIcon;
   activeClass: string;
   idleClass: string;
-}> = [
-  {
-    value: 'gut',
-    label: 'Gut',
-    icon: ThumbsUp,
-    activeClass: 'border-success/40 bg-success-soft text-success',
-    idleClass: 'border-border bg-white/5 text-text-secondary hover:border-success/25 hover:text-white',
-  },
-  {
-    value: 'neutral',
-    label: 'Neutral',
-    icon: MessageSquare,
-    activeClass: 'border-white/20 bg-white/10 text-white',
-    idleClass: 'border-border bg-white/5 text-text-secondary hover:border-white/20 hover:text-white',
-  },
-  {
-    value: 'schlecht',
-    label: 'Schlecht',
-    icon: ThumbsDown,
-    activeClass: 'border-danger/40 bg-danger-soft text-danger',
-    idleClass: 'border-border bg-white/5 text-text-secondary hover:border-danger/25 hover:text-white',
-  },
-];
+}> {
+  return [
+    {
+      value: 'gut',
+      label: tr('Gut'),
+      icon: ThumbsUp,
+      activeClass: 'border-success/40 bg-success-soft text-success',
+      idleClass: 'border-border bg-white/5 text-text-secondary hover:border-success/25 hover:text-white',
+    },
+    {
+      value: 'neutral',
+      label: tr('Neutral'),
+      icon: MessageSquare,
+      activeClass: 'border-white/20 bg-white/10 text-white',
+      idleClass: 'border-border bg-white/5 text-text-secondary hover:border-white/20 hover:text-white',
+    },
+    {
+      value: 'schlecht',
+      label: tr('Schlecht'),
+      icon: ThumbsDown,
+      activeClass: 'border-danger/40 bg-danger-soft text-danger',
+      idleClass: 'border-border bg-white/5 text-text-secondary hover:border-danger/25 hover:text-white',
+    },
+  ];
+}
 
-const AB_VOTE_OPTIONS: Array<{
+function abVoteOptions(): Array<{
   value: ABVoteWinner;
   label: string;
   activeClass: string;
   idleClass: string;
-}> = [
-  {
-    value: 'compact',
-    label: '← A ist besser',
-    activeClass: 'border-accent/40 bg-accent/15 text-accent',
-    idleClass: 'border-border bg-white/5 text-text-secondary hover:border-accent/25 hover:text-white',
-  },
-  {
-    value: 'gleich',
-    label: 'Gleich gut',
-    activeClass: 'border-white/20 bg-white/10 text-white',
-    idleClass: 'border-border bg-white/5 text-text-secondary hover:border-white/20 hover:text-white',
-  },
-  {
-    value: 'full',
-    label: 'B ist besser →',
-    activeClass: 'border-primary/40 bg-primary-soft text-primary',
-    idleClass: 'border-border bg-white/5 text-text-secondary hover:border-primary/25 hover:text-white',
-  },
-];
+}> {
+  return [
+    {
+      value: 'compact',
+      label: tr('← A ist besser'),
+      activeClass: 'border-accent/40 bg-accent/15 text-accent',
+      idleClass: 'border-border bg-white/5 text-text-secondary hover:border-accent/25 hover:text-white',
+    },
+    {
+      value: 'gleich',
+      label: tr('Gleich gut'),
+      activeClass: 'border-white/20 bg-white/10 text-white',
+      idleClass: 'border-border bg-white/5 text-text-secondary hover:border-white/20 hover:text-white',
+    },
+    {
+      value: 'full',
+      label: tr('B ist besser →'),
+      activeClass: 'border-primary/40 bg-primary-soft text-primary',
+      idleClass: 'border-border bg-white/5 text-text-secondary hover:border-primary/25 hover:text-white',
+    },
+  ];
+}
 
 function isV3(report: StreamReport['report']): report is StreamReportV3Body {
   return !!report && 'snapshot' in report && 'momente' in report;
@@ -170,12 +176,12 @@ function formatDate(value?: string | null): string {
   if (!value) return '';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' });
+  return date.toLocaleString(activeLocale(), { dateStyle: 'short', timeStyle: 'short' });
 }
 
 function formatPercent(value?: number | null): string {
   if (value === undefined || value === null || Number.isNaN(value)) return 'n/a';
-  return `${value.toFixed(1).replace('.', ',')}%`;
+  return `${value.toLocaleString(activeLocale(), { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
 }
 
 function formatDelta(value?: number | null): string {
@@ -184,9 +190,9 @@ function formatDelta(value?: number | null): string {
 }
 
 function formatRatingLabel(value: RatingValue): string {
-  if (value === 'gut') return 'Gut';
-  if (value === 'schlecht') return 'Schlecht';
-  return 'Neutral';
+  if (value === 'gut') return tr('Gut');
+  if (value === 'schlecht') return tr('Schlecht');
+  return tr('Neutral');
 }
 
 function sentimentBadgeClass(value: string): string {
@@ -204,9 +210,10 @@ function trendBadgeClass(value: string): string {
 async function readMutationError(response: Response): Promise<string> {
   try {
     const payload = (await response.json()) as { message?: string; error?: string };
-    return payload.message || payload.error || `Server-Fehler (HTTP ${response.status})`;
+    const message = payload.message || payload.error;
+    return message ? tr(message) : tr('Server-Fehler (HTTP {status})', { status: response.status });
   } catch {
-    return `Server-Fehler (HTTP ${response.status})`;
+    return tr('Server-Fehler (HTTP {status})', { status: response.status });
   }
 }
 
@@ -218,8 +225,8 @@ function useABVote(streamer: string | null, sessionId?: number) {
         streamer: streamer || '',
         session_id: sessionId!,
       });
-      const res = await fetch(url, { credentials: 'same-origin' });
-      if (!res.ok) throw new Error('Abstimmung konnte nicht geladen werden');
+      const res = await fetch(url, withLanguageHeader(url, { credentials: 'same-origin' }));
+      if (!res.ok) throw new Error(tr('Abstimmung konnte nicht geladen werden'));
       return res.json();
     },
     staleTime: 60 * 1000,
@@ -265,27 +272,28 @@ function EmptyState({ text }: { text: string }) {
 }
 
 function ReportBody({ report }: { report: StreamReport }) {
+  const t = useT();
   if (report.empty) {
-    return <p className="text-sm text-text-secondary">Für diese Session liegt noch kein Report vor.</p>;
+    return <p className="text-sm text-text-secondary">{t('Für diese Session liegt noch kein Report vor.')}</p>;
   }
   if (report.status === 'pending') {
     return (
       <div className="flex items-center gap-2 text-sm text-text-secondary">
         <Loader2 className="h-4 w-4 animate-spin text-accent" />
-        Report wird erstellt...
+        {t('Report wird erstellt...')}
       </div>
     );
   }
   if (report.status === 'failed') {
     return (
       <div className="rounded-xl border border-error/25 bg-error/10 p-4 text-sm text-error">
-        Fehlgeschlagen: {report.error || 'Unbekannter Fehler'}
+        {t('Fehlgeschlagen: {error}', { error: report.error || t('Unbekannter Fehler') })}
       </div>
     );
   }
 
   const body = report.report;
-  if (!body) return <p className="text-sm text-text-secondary">Report ist leer.</p>;
+  if (!body) return <p className="text-sm text-text-secondary">{t('Report ist leer.')}</p>;
 
   if (isV3(body)) {
     const snapshotTone = SNAPSHOT_TONES[body.snapshot.bewertung];
@@ -297,19 +305,19 @@ function ReportBody({ report }: { report: StreamReport }) {
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div className="space-y-2">
               <div className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-[0.18em] ${snapshotTone.badge}`}>
-                {body.snapshot.bewertung}
+                {t(body.snapshot.bewertung)}
               </div>
               <h3 className="text-lg font-bold text-white">{body.snapshot.ein_satz}</h3>
               <p className={`text-sm ${snapshotTone.accent}`}>{body.snapshot.wichtigste_erkenntnis}</p>
             </div>
             <div className="rounded-xl border border-white/10 bg-black/10 px-3 py-2 text-xs text-white/60">
-              Snapshot
+              {t('Snapshot')}
             </div>
           </div>
         </section>
 
         <section className="space-y-2">
-          <SectionHeading icon={Zap} title="Kritische Momente" accent="text-white/85" />
+          <SectionHeading icon={Zap} title={t('Kritische Momente')} accent="text-white/85" />
           {(body.momente || []).length > 0 ? (
             <div className="space-y-2">
               {body.momente.map((moment, index) => (
@@ -320,10 +328,10 @@ function ReportBody({ report }: { report: StreamReport }) {
                   <div className={`absolute inset-y-0 left-0 w-1 ${MOMENT_TONES[moment.typ]}`} />
                   <div className="mb-2 flex flex-wrap items-center gap-2">
                     <span className="rounded-full bg-white/10 px-2 py-1 text-[11px] font-bold uppercase tracking-wide text-white/70">
-                      Minute {moment.minute}
+                      {t('Minute {minute}', { minute: moment.minute })}
                     </span>
                     <span className={`rounded-full px-2 py-1 text-[11px] font-bold uppercase tracking-wide ${MOMENT_BADGES[moment.typ]}`}>
-                      {moment.typ}
+                      {t(moment.typ)}
                     </span>
                   </div>
                   <p className="text-sm font-semibold text-white">{moment.beobachtung}</p>
@@ -332,27 +340,27 @@ function ReportBody({ report }: { report: StreamReport }) {
               ))}
             </div>
           ) : (
-            <EmptyState text="Keine markanten Momente im Report hinterlegt." />
+            <EmptyState text={t('Keine markanten Momente im Report hinterlegt.')} />
           )}
         </section>
 
         <section className="space-y-2">
-          <SectionHeading icon={MessageSquareText} title="Audience" />
+          <SectionHeading icon={MessageSquareText} title={t('Audience')} />
           <div className="grid gap-3 md:grid-cols-3">
             <div className="rounded-xl border border-border bg-white/5 p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">Chat-Rate</p>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">{t('Chat-Rate')}</p>
               <p className="mt-2 text-lg font-bold text-white">{formatPercent(body.audience.chat_rate_prozent)}</p>
-              <p className="mt-1 text-xs text-text-secondary">{body.audience.chat_rate_einordnung}</p>
+              <p className="mt-1 text-xs text-text-secondary">{t(body.audience.chat_rate_einordnung)}</p>
             </div>
             <div className="rounded-xl border border-border bg-white/5 p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">Stammchatter</p>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">{t('Stammchatter')}</p>
               <p className="mt-2 text-lg font-bold text-white">
                 {formatPercent(body.audience.stammchatter_anteil_prozent)}
               </p>
-              <p className="mt-1 text-xs text-text-secondary">Anteil wiederkehrender Kern-Chatters</p>
+              <p className="mt-1 text-xs text-text-secondary">{t('Anteil wiederkehrender Kern-Chatters')}</p>
             </div>
             <div className="rounded-xl border border-border bg-white/5 p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">Bindung</p>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">{t('Bindung')}</p>
               <p className="mt-2 text-sm font-semibold text-white">{body.audience.bindung}</p>
               <p className="mt-1 text-xs text-text-secondary">{body.audience.auffaelligkeit}</p>
             </div>
@@ -360,10 +368,10 @@ function ReportBody({ report }: { report: StreamReport }) {
         </section>
 
         <section className="space-y-2">
-          <SectionHeading icon={MessageSquareText} title="Chat-Diagnose" />
+          <SectionHeading icon={MessageSquareText} title={t('Chat-Diagnose')} />
           <div className="grid gap-3 md:grid-cols-2">
             <div className="rounded-xl border border-border bg-white/5 p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">Top-Themen</p>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">{t('Top-Themen')}</p>
               <div className="mt-3 flex flex-wrap gap-2">
                 {(body.chat_diagnose.top_themen || []).length > 0 ? (
                   body.chat_diagnose.top_themen.map((item, index) => (
@@ -375,13 +383,13 @@ function ReportBody({ report }: { report: StreamReport }) {
                     </span>
                   ))
                 ) : (
-                  <span className="text-sm text-text-secondary">Keine Themen markiert.</span>
+                  <span className="text-sm text-text-secondary">{t('Keine Themen markiert.')}</span>
                 )}
               </div>
             </div>
 
             <div className="rounded-xl border border-border bg-white/5 p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">Explosions-Momente</p>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">{t('Explosions-Momente')}</p>
               {(body.chat_diagnose.explosions_momente || []).length > 0 ? (
                 <ul className="mt-3 space-y-2 text-sm text-text-secondary">
                   {body.chat_diagnose.explosions_momente.map((item, index) => (
@@ -389,12 +397,12 @@ function ReportBody({ report }: { report: StreamReport }) {
                   ))}
                 </ul>
               ) : (
-                <p className="mt-3 text-sm text-text-secondary">Keine Explosionen im Chat erkannt.</p>
+                <p className="mt-3 text-sm text-text-secondary">{t('Keine Explosionen im Chat erkannt.')}</p>
               )}
             </div>
 
             <div className="rounded-xl border border-warning/20 bg-warning-soft p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-warning/80">Verwirrung / Fragen</p>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-warning/80">{t('Verwirrung / Fragen')}</p>
               {(body.chat_diagnose.verwirrung_oder_fragen || []).length > 0 ? (
                 <ul className="mt-3 space-y-2 text-sm text-warning/85">
                   {body.chat_diagnose.verwirrung_oder_fragen.map((item, index) => (
@@ -402,12 +410,12 @@ function ReportBody({ report }: { report: StreamReport }) {
                   ))}
                 </ul>
               ) : (
-                <p className="mt-3 text-sm text-warning/75">Keine nennenswerten Fragezeichen im Chat.</p>
+                <p className="mt-3 text-sm text-warning/75">{t('Keine nennenswerten Fragezeichen im Chat.')}</p>
               )}
             </div>
 
             <div className="rounded-xl border border-border bg-white/5 p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">Stimmung</p>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">{t('Stimmung')}</p>
               <div className="mt-3">
                 <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${sentimentBadgeClass(body.chat_diagnose.stimmung)}`}>
                   {body.chat_diagnose.stimmung}
@@ -418,10 +426,10 @@ function ReportBody({ report }: { report: StreamReport }) {
         </section>
 
         <section className="space-y-2">
-          <SectionHeading icon={Sparkles} title="Wachstum" />
+          <SectionHeading icon={Sparkles} title={t('Wachstum')} />
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="rounded-xl border border-border bg-white/5 p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">Follower Delta</p>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">{t('Follower Delta')}</p>
               <p
                 className={`mt-2 text-lg font-bold ${
                   body.wachstum.follower_delta > 0
@@ -435,15 +443,15 @@ function ReportBody({ report }: { report: StreamReport }) {
               </p>
             </div>
             <div className="rounded-xl border border-border bg-white/5 p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">vs. Schnitt</p>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">{t('vs. Schnitt')}</p>
               <p className="mt-2 text-sm text-white">{body.wachstum.follower_vs_schnitt}</p>
             </div>
             <div className="rounded-xl border border-border bg-white/5 p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">Monetarisierung</p>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">{t('Monetarisierung')}</p>
               <p className="mt-2 text-sm text-white">{body.wachstum.monetarisierung}</p>
             </div>
             <div className="rounded-xl border border-border bg-white/5 p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">Raid-Einfluss</p>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">{t('Raid-Einfluss')}</p>
               <p className="mt-2 text-sm text-white">{body.wachstum.raid_einfluss}</p>
             </div>
           </div>
@@ -451,14 +459,14 @@ function ReportBody({ report }: { report: StreamReport }) {
 
         <section className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <SectionHeading icon={AlertCircle} title="Vergleich" />
+            <SectionHeading icon={AlertCircle} title={t('Vergleich')} />
             <span className={`rounded-full border px-2.5 py-1 text-xs font-bold uppercase tracking-wide ${trendBadgeClass(body.vergleich.trend)}`}>
-              {body.vergleich.trend}
+              {t(body.vergleich.trend)}
             </span>
           </div>
           <div className="grid gap-3 md:grid-cols-2">
             <div className="rounded-xl border border-success/20 bg-success-soft p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-success/80">Besser als sonst</p>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-success/80">{t('Besser als sonst')}</p>
               {(body.vergleich.besser_als_sonst || []).length > 0 ? (
                 <ul className="mt-3 space-y-2 text-sm text-success/90">
                   {body.vergleich.besser_als_sonst.map((item, index) => (
@@ -466,11 +474,11 @@ function ReportBody({ report }: { report: StreamReport }) {
                   ))}
                 </ul>
               ) : (
-                <p className="mt-3 text-sm text-success/75">Keine positiven Abweichungen markiert.</p>
+                <p className="mt-3 text-sm text-success/75">{t('Keine positiven Abweichungen markiert.')}</p>
               )}
             </div>
             <div className="rounded-xl border border-danger/20 bg-danger-soft p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-danger/80">Schlechter als sonst</p>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-danger/80">{t('Schlechter als sonst')}</p>
               {(body.vergleich.schlechter_als_sonst || []).length > 0 ? (
                 <ul className="mt-3 space-y-2 text-sm text-danger/90">
                   {body.vergleich.schlechter_als_sonst.map((item, index) => (
@@ -478,14 +486,14 @@ function ReportBody({ report }: { report: StreamReport }) {
                   ))}
                 </ul>
               ) : (
-                <p className="mt-3 text-sm text-danger/75">Keine negativen Abweichungen markiert.</p>
+                <p className="mt-3 text-sm text-danger/75">{t('Keine negativen Abweichungen markiert.')}</p>
               )}
             </div>
           </div>
         </section>
 
         <section className="space-y-2">
-          <SectionHeading icon={Zap} title="Maßnahmen" accent="text-primary" />
+          <SectionHeading icon={Zap} title={t('Maßnahmen')} accent="text-primary" />
           {sortedActions.length > 0 ? (
             <div className="space-y-2">
               {sortedActions.map((item, index) => {
@@ -505,19 +513,19 @@ function ReportBody({ report }: { report: StreamReport }) {
                       <p className="text-sm font-semibold text-white">{item.was}</p>
                     </div>
                     <p className="text-xs text-text-secondary">{item.warum}</p>
-                    <p className="mt-2 text-xs text-white/70">Erwarteter Effekt: {item.erwarteter_effekt}</p>
+                    <p className="mt-2 text-xs text-white/70">{t('Erwarteter Effekt: {effect}', { effect: item.erwarteter_effekt })}</p>
                   </div>
                 );
               })}
             </div>
           ) : (
-            <EmptyState text="Keine Maßnahmen hinterlegt." />
+            <EmptyState text={t('Keine Maßnahmen hinterlegt.')} />
           )}
         </section>
 
         {(body.admin_notizen || []).length > 0 && (
           <section className="rounded-xl border border-border bg-white/[0.03] p-3">
-            <SectionHeading icon={MessageSquare} title="Admin-Notizen" />
+            <SectionHeading icon={MessageSquare} title={t('Admin-Notizen')} />
             <div className="mt-3 space-y-2">
               {body.admin_notizen.map((note, index) => (
                 <p key={`${note}-${index}`} className="text-xs text-white/55">
@@ -538,10 +546,10 @@ function ReportBody({ report }: { report: StreamReport }) {
         {summary && (
           <div className="rounded-xl border border-primary/20 bg-primary/10 p-4">
             <div className="mb-2 flex items-center justify-between gap-3">
-              <h3 className="font-semibold text-white">{summary.headline || 'Stream Report'}</h3>
+              <h3 className="font-semibold text-white">{summary.headline || t('Stream Report')}</h3>
               {summary.overall_rating && (
                 <span className="rounded-full bg-white/10 px-2 py-1 text-xs text-white/70">
-                  {summary.overall_rating}
+                  {t(summary.overall_rating)}
                 </span>
               )}
             </div>
@@ -558,12 +566,12 @@ function ReportBody({ report }: { report: StreamReport }) {
         {(body.highlights || []).length > 0 && (
           <section className="space-y-2">
             <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-success">
-              <CheckCircle2 className="h-4 w-4" /> Highlights
+              <CheckCircle2 className="h-4 w-4" /> {t('Highlights')}
             </h4>
             {(body.highlights || []).map((item, index) => (
               <div key={index} className="rounded-xl border border-success/20 bg-success-soft p-3">
                 <p className="text-sm font-semibold text-success">{item.title}</p>
-                {item.evidence && <p className="mt-1 text-xs text-white/60">Beleg: {item.evidence}</p>}
+                {item.evidence && <p className="mt-1 text-xs text-white/60">{t('Beleg: {evidence}', { evidence: item.evidence })}</p>}
                 {item.why_it_matters && <p className="mt-1 text-xs text-text-secondary">{item.why_it_matters}</p>}
               </div>
             ))}
@@ -573,12 +581,12 @@ function ReportBody({ report }: { report: StreamReport }) {
         {(body.problems || []).length > 0 && (
           <section className="space-y-2">
             <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-danger">
-              <AlertCircle className="h-4 w-4" /> Probleme
+              <AlertCircle className="h-4 w-4" /> {t('Probleme')}
             </h4>
             {(body.problems || []).map((item, index) => (
               <div key={index} className="rounded-xl border border-danger/20 bg-danger-soft p-3">
                 <p className="text-sm font-semibold text-danger">{item.title}</p>
-                {item.evidence && <p className="mt-1 text-xs text-white/60">Beleg: {item.evidence}</p>}
+                {item.evidence && <p className="mt-1 text-xs text-white/60">{t('Beleg: {evidence}', { evidence: item.evidence })}</p>}
                 {item.impact && <p className="mt-1 text-xs text-text-secondary">{item.impact}</p>}
               </div>
             ))}
@@ -588,7 +596,7 @@ function ReportBody({ report }: { report: StreamReport }) {
         {(body.recommendations || []).length > 0 && (
           <section className="space-y-2">
             <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-primary">
-              <Zap className="h-4 w-4" /> Empfehlungen
+              <Zap className="h-4 w-4" /> {t('Empfehlungen')}
             </h4>
             {(body.recommendations || []).map((item, index) => (
               <div key={index} className="rounded-xl border border-primary/20 bg-primary/10 p-3">
@@ -607,15 +615,15 @@ function ReportBody({ report }: { report: StreamReport }) {
         {body.chat_analysis && (
           <section className="rounded-xl border border-border bg-white/5 p-4">
             <h4 className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-text-secondary">
-              <MessageSquareText className="h-4 w-4" /> Chat Analyse
+              <MessageSquareText className="h-4 w-4" /> {t('Chat Analyse')}
             </h4>
             <div className="space-y-2 text-sm text-text-secondary">
-              {body.chat_analysis.sentiment && <p>Sentiment: {body.chat_analysis.sentiment}</p>}
+              {body.chat_analysis.sentiment && <p>{t('Sentiment: {sentiment}', { sentiment: body.chat_analysis.sentiment })}</p>}
               {(body.chat_analysis.main_topics || []).length > 0 && (
-                <p>Themen: {(body.chat_analysis.main_topics || []).join(', ')}</p>
+                <p>{t('Themen: {topics}', { topics: (body.chat_analysis.main_topics || []).join(', ') })}</p>
               )}
               {(body.chat_analysis.questions_or_confusion || []).length > 0 && (
-                <p>Fragen/Unklarheiten: {(body.chat_analysis.questions_or_confusion || []).join(' · ')}</p>
+                <p>{t('Fragen/Unklarheiten: {questions}', { questions: (body.chat_analysis.questions_or_confusion || []).join(' · ') })}</p>
               )}
             </div>
           </section>
@@ -649,7 +657,7 @@ function ReportBody({ report }: { report: StreamReport }) {
     );
   }
 
-  return <p className="text-sm text-text-secondary">Unbekanntes Report-Format.</p>;
+  return <p className="text-sm text-text-secondary">{t('Unbekanntes Report-Format.')}</p>;
 }
 
 function RatingBar({
@@ -663,6 +671,7 @@ function RatingBar({
   variant: StreamReportVariant;
   initialRating?: StreamReportRating | null;
 }) {
+  const t = useT();
   const [currentRating, setCurrentRating] = React.useState<StreamReportRating | null>(initialRating ?? null);
   const [pendingRating, setPendingRating] = React.useState<RatingValue | null>(initialRating?.rating ?? null);
   const [pendingComment, setPendingComment] = React.useState(initialRating?.comment ?? '');
@@ -671,7 +680,11 @@ function RatingBar({
   const [saveError, setSaveError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    setCurrentRating(initialRating ?? null);
+    setCurrentRating(initialRating?.rating ? {
+      rating: initialRating.rating,
+      comment: initialRating.comment,
+      updated_at: initialRating.updated_at,
+    } : null);
     setPendingRating(initialRating?.rating ?? null);
     setPendingComment(initialRating?.comment ?? '');
     setSaving(false);
@@ -709,9 +722,10 @@ function RatingBar({
     setCurrentRating(optimisticRating);
 
     try {
+      const url = buildApiUrl('/stream-report/rate');
       const response = await fetch(
-        buildApiUrl('/stream-report/rate'),
-        withCookieCredentials({
+        url,
+        withLanguageHeader(url, withCookieCredentials({
           method: 'POST',
           headers: {
             Accept: 'application/json',
@@ -724,7 +738,7 @@ function RatingBar({
             rating: pendingRating,
             comment: trimmedComment || undefined,
           }),
-        })
+        }))
       );
 
       if (!response.ok) {
@@ -746,7 +760,7 @@ function RatingBar({
       setSaved(true);
     } catch (error) {
       setCurrentRating(previous ?? null);
-      setSaveError(error instanceof Error ? error.message : 'Bewertung konnte nicht gespeichert werden.');
+      setSaveError(error instanceof Error ? error.message : t('Bewertung konnte nicht gespeichert werden.'));
     } finally {
       setSaving(false);
     }
@@ -757,18 +771,18 @@ function RatingBar({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-sm font-semibold text-white">
           <MessageSquare className="h-4 w-4 text-text-secondary" />
-          Report bewerten
+          {t('Report bewerten')}
         </div>
         {currentRating && (
           <div className="text-xs text-text-secondary">
-            Aktuell gespeichert: <span className="font-semibold text-white">{formatRatingLabel(currentRating.rating)}</span>
+            {t('Aktuell gespeichert:')} <span className="font-semibold text-white">{formatRatingLabel(currentRating.rating)}</span>
             {currentRating.updated_at ? ` · ${formatDate(currentRating.updated_at)}` : ''}
           </div>
         )}
       </div>
 
       <div className="mt-3 grid gap-2 sm:grid-cols-3">
-        {RATING_OPTIONS.map((option) => {
+        {ratingOptions().map((option) => {
           const Icon = option.icon;
           const isActive = pendingRating === option.value;
           return (
@@ -799,7 +813,7 @@ function RatingBar({
               setSaveError(null);
             }}
             rows={3}
-            placeholder="Optionaler Kommentar zur Report-Qualität ..."
+            placeholder={t('Optionaler Kommentar zur Report-Qualität ...')}
             className="w-full rounded-xl border border-border bg-white/5 px-3 py-2 text-sm text-white placeholder:text-text-secondary/60 focus:border-primary/50 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
           />
 
@@ -808,7 +822,7 @@ function RatingBar({
               {saved && (
                 <span className="inline-flex items-center gap-1 text-success">
                   <CheckCircle2 className="h-4 w-4" />
-                  Gespeichert
+                  {t('Gespeichert')}
                 </span>
               )}
               {saveError && <span className="text-danger">{saveError}</span>}
@@ -821,7 +835,7 @@ function RatingBar({
               className="inline-flex items-center gap-2 rounded-xl border border-primary/30 bg-primary/15 px-3 py-2 text-sm font-semibold text-white transition-colors hover:border-primary/50 hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              Speichern
+              {t('Speichern')}
             </button>
           </div>
         </div>
@@ -837,6 +851,7 @@ function ABVoteSection({
   streamer: string | null;
   sessionId: number;
 }) {
+  const t = useT();
   const queryClient = useQueryClient();
   const { data, isLoading, error } = useABVote(streamer, sessionId);
   const [pendingWinner, setPendingWinner] = React.useState<ABVoteWinner | null>(null);
@@ -888,9 +903,10 @@ function ABVoteSection({
     setSaveError(null);
 
     try {
+      const url = buildApiUrl('/stream-report/ab-vote');
       const response = await fetch(
-        buildApiUrl('/stream-report/ab-vote'),
-        withCookieCredentials({
+        url,
+        withLanguageHeader(url, withCookieCredentials({
           method: 'POST',
           headers: {
             Accept: 'application/json',
@@ -902,7 +918,7 @@ function ABVoteSection({
             winner: pendingWinner,
             comment: trimmedComment || undefined,
           }),
-        })
+        }))
       );
 
       if (!response.ok) {
@@ -928,7 +944,7 @@ function ABVoteSection({
       void queryClient.invalidateQueries({ queryKey: ['stream-report-ab-vote', streamer, sessionId] });
       setSaved(true);
     } catch (saveErr) {
-      setSaveError(saveErr instanceof Error ? saveErr.message : 'Abstimmung konnte nicht gespeichert werden.');
+      setSaveError(saveErr instanceof Error ? saveErr.message : t('Abstimmung konnte nicht gespeichert werden.'));
     } finally {
       setSaving(false);
     }
@@ -948,7 +964,7 @@ function ABVoteSection({
         </div>
         <div className="mt-4 flex items-center gap-2 text-sm text-text-secondary">
           <Loader2 className="h-4 w-4 animate-spin text-accent" />
-          Lade Abstimmung...
+          {t('Lade Abstimmung...')}
         </div>
       </section>
     );
@@ -962,8 +978,8 @@ function ABVoteSection({
             <BarChart2 className="h-5 w-5 text-error" />
           </div>
           <div>
-            <h2 className="text-lg font-bold text-white">A/B Auswertung</h2>
-            <p className="mt-1 text-sm text-error">Abstimmung konnte nicht geladen werden.</p>
+            <h2 className="text-lg font-bold text-white">{t('A/B Auswertung')}</h2>
+            <p className="mt-1 text-sm text-error">{t('Abstimmung konnte nicht geladen werden.')}</p>
           </div>
         </div>
       </section>
@@ -977,16 +993,15 @@ function ABVoteSection({
           <BarChart2 className="h-5 w-5 text-accent" />
         </div>
         <div>
-          <h2 className="text-lg font-bold text-white">A/B Auswertung</h2>
+          <h2 className="text-lg font-bold text-white">{t('A/B Auswertung')}</h2>
           <p className="mt-1 text-sm text-text-secondary">
-            Welcher Report war für diese Session hilfreicher? Deine Stimme bestimmt, welche Variante wir langfristig
-            behalten.
+            {t('Welcher Report war für diese Session hilfreicher? Deine Stimme bestimmt, welche Variante wir langfristig behalten.')}
           </p>
         </div>
       </div>
 
       <div className="mt-4 grid gap-2 md:grid-cols-3">
-        {AB_VOTE_OPTIONS.map((option) => {
+        {abVoteOptions().map((option) => {
           const isActive = pendingWinner === option.value;
           return (
             <button
@@ -1015,7 +1030,7 @@ function ABVoteSection({
               setSaveError(null);
             }}
             rows={3}
-            placeholder="Optional: Was hat diesen Report besser gemacht?"
+            placeholder={t('Optional: Was hat diesen Report besser gemacht?')}
             className="w-full rounded-xl border border-border bg-white/5 px-3 py-2 text-sm text-white placeholder:text-text-secondary/60 focus:border-primary/50 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
           />
 
@@ -1024,11 +1039,11 @@ function ABVoteSection({
               {saved && (
                 <span className="inline-flex items-center gap-1 text-success">
                   <CheckCircle2 className="h-4 w-4" />
-                  Gespeichert
+                  {t('Gespeichert')}
                 </span>
               )}
               {currentVote?.updated_at && !saved && (
-                <span className="text-text-secondary">Letzte Stimme: {formatDate(currentVote.updated_at)}</span>
+                <span className="text-text-secondary">{t('Letzte Stimme: {date}', { date: formatDate(currentVote.updated_at) })}</span>
               )}
               {saveError && <span className="text-danger">{saveError}</span>}
             </div>
@@ -1040,7 +1055,7 @@ function ABVoteSection({
               className="inline-flex items-center gap-2 rounded-xl border border-primary/30 bg-primary/15 px-3 py-2 text-sm font-semibold text-white transition-colors hover:border-primary/50 hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              Abstimmen
+              {t('Abstimmen')}
             </button>
           </div>
         </div>
@@ -1048,20 +1063,20 @@ function ABVoteSection({
 
       <div className="mt-4 space-y-3 border-t border-border pt-4">
         {totalVotes === 0 && !currentVote ? (
-          <p className="text-sm text-text-secondary">Noch keine Stimmen</p>
+          <p className="text-sm text-text-secondary">{t('Noch keine Stimmen')}</p>
         ) : (
           <>
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <span className="rounded-full border border-accent/25 bg-accent/10 px-2.5 py-1 text-accent">
-                A: {totals.compact} Stimmen
+                {t('A: {count} Stimmen', { count: totals.compact })}
               </span>
               <span className="rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-white/80">
-                Gleich: {totals.gleich} Stimmen
+                {t('Gleich: {count} Stimmen', { count: totals.gleich })}
               </span>
               <span className="rounded-full border border-primary/25 bg-primary-soft px-2.5 py-1 text-primary">
-                B: {totals.full} Stimmen
+                {t('B: {count} Stimmen', { count: totals.full })}
               </span>
-              <span className="text-text-secondary">Insgesamt {totalVotes}</span>
+              <span className="text-text-secondary">{t('Insgesamt {count}', { count: totalVotes })}</span>
             </div>
 
             {totalVotes > 0 && (
@@ -1075,7 +1090,7 @@ function ABVoteSection({
                 </div>
                 <div className="flex flex-wrap items-center gap-3 text-[11px] text-text-secondary">
                   <span>A {compactPercent.toFixed(0)}%</span>
-                  <span>Gleich {gleichPercent.toFixed(0)}%</span>
+                  <span>{t('Gleich {percent}%', { percent: gleichPercent.toFixed(0) })}</span>
                   <span>B {fullPercent.toFixed(0)}%</span>
                 </div>
               </div>
@@ -1096,6 +1111,7 @@ function ReportColumn({
   sessionId?: number;
   variant: StreamReportVariant;
 }) {
+  const t = useT();
   const { data, isLoading, error } = useStreamReport(streamer, sessionId, variant);
   const isFull = variant === 'full';
 
@@ -1105,15 +1121,15 @@ function ReportColumn({
         <div>
           <div className="mb-2 flex items-center gap-2">
             <VariantBadge variant={variant} />
-            <span className="text-xs text-white/40">{data?.model === 'opus' ? 'Claude Opus' : 'KI'}</span>
+            <span className="text-xs text-white/40">{data?.model === 'opus' ? 'Claude Opus' : t('KI')}</span>
           </div>
           <h2 className="text-lg font-bold text-white">
-            {isFull ? 'Full / alle Daten' : 'Compact / Evidence'}
+            {isFull ? t('Full / alle Daten') : t('Compact / Evidence')}
           </h2>
           <p className="mt-1 text-xs text-text-secondary">
             {isFull
-              ? 'Raw-heavy Prompt mit Chat, Chatter, Events und voller Timeline.'
-              : 'Verdichtete Signale aus allen Daten, günstiger und stabiler.'}
+              ? t('Raw-heavy Prompt mit Chat, Chatter, Events und voller Timeline.')
+              : t('Verdichtete Signale aus allen Daten, günstiger und stabiler.')}
           </p>
         </div>
         {data?.generated_at && <span className="text-xs text-white/35">{formatDate(data.generated_at)}</span>}
@@ -1121,11 +1137,11 @@ function ReportColumn({
 
       {isLoading ? (
         <div className="flex items-center justify-center gap-2 py-12 text-sm text-text-secondary">
-          <Loader2 className="h-5 w-5 animate-spin text-accent" /> Lade {variant}-Report...
+          <Loader2 className="h-5 w-5 animate-spin text-accent" /> {t('Lade {variant}-Report...', { variant })}
         </div>
       ) : error ? (
         <div className="rounded-xl border border-error/25 bg-error/10 p-4 text-sm text-error">
-          Report konnte nicht geladen werden.
+          {t('Report konnte nicht geladen werden.')}
         </div>
       ) : data ? (
         <>
@@ -1145,6 +1161,7 @@ function ReportColumn({
 }
 
 export function StreamReports({ streamer, days }: StreamReportsProps) {
+  const t = useT();
   const { isFeatureLocked } = usePlan();
   const locked = isFeatureLocked('post_stream_report');
   const [selectedSessionId, setSelectedSessionId] = React.useState<number | undefined>(undefined);
@@ -1156,7 +1173,7 @@ export function StreamReports({ streamer, days }: StreamReportsProps) {
     staleTime: 2 * 60 * 1000,
   });
 
-  const sessions = overview?.sessions || [];
+  const sessions = React.useMemo(() => overview?.sessions ?? [], [overview?.sessions]);
 
   React.useEffect(() => {
     if (!selectedSessionId && sessions.length > 0) {
@@ -1176,9 +1193,9 @@ export function StreamReports({ streamer, days }: StreamReportsProps) {
           </div>
         </div>
         <div className="max-w-sm text-center">
-          <p className="mb-1 text-lg font-semibold text-white">Stream-Reports brauchen den Analyse-Zugang</p>
+          <p className="mb-1 text-lg font-semibold text-white">{t('Stream-Reports brauchen den Analyse-Zugang')}</p>
           <p className="text-sm leading-relaxed text-text-secondary">
-            Automatische Post-Stream-Reports sind mit dem Analyse-Zugang verfügbar.
+            {t('Automatische Post-Stream-Reports sind mit dem Analyse-Zugang verfügbar.')}
           </p>
         </div>
       </div>
@@ -1194,9 +1211,9 @@ export function StreamReports({ streamer, days }: StreamReportsProps) {
               <Sparkles className="h-6 w-6 text-primary" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-white">Stream Reports</h1>
+              <h1 className="text-2xl font-bold text-white">{t('Stream Reports')}</h1>
               <p className="mt-1 text-sm text-text-secondary">
-                A/B-Vergleich nach jedem Stream: Compact gegen Full-Rohdaten.
+                {t('A/B-Vergleich nach jedem Stream: Compact gegen Full-Rohdaten.')}
               </p>
             </div>
           </div>
@@ -1210,21 +1227,21 @@ export function StreamReports({ streamer, days }: StreamReportsProps) {
 
       {loadingSessions ? (
         <div className="flex items-center justify-center gap-2 py-16 text-text-secondary">
-          <Loader2 className="h-6 w-6 animate-spin text-accent" /> Lade Sessions...
+          <Loader2 className="h-6 w-6 animate-spin text-accent" /> {t('Lade Sessions...')}
         </div>
       ) : sessions.length === 0 ? (
         <div className="panel-card rounded-2xl p-8 text-center">
           <AlertCircle className="mx-auto mb-3 h-10 w-10 text-text-secondary" />
-          <p className="font-semibold text-white">Keine Sessions gefunden</p>
+          <p className="font-semibold text-white">{t('Keine Sessions gefunden')}</p>
           <p className="mt-1 text-sm text-text-secondary">
-            Nach dem nächsten abgeschlossenen Stream erscheinen hier Reports.
+            {t('Nach dem nächsten abgeschlossenen Stream erscheinen hier Reports.')}
           </p>
         </div>
       ) : (
         <>
           <div className="panel-card rounded-2xl p-4">
             <div className="mb-3 text-xs font-bold uppercase tracking-wide text-text-secondary">
-              Session auswählen
+              {t('Session auswählen')}
             </div>
             <div className="flex gap-2 overflow-x-auto pb-1">
               {sessions.slice(0, 20).map((session) => (
@@ -1238,9 +1255,9 @@ export function StreamReports({ streamer, days }: StreamReportsProps) {
                       : 'border-border bg-white/5 text-text-secondary hover:border-white/20 hover:text-white'
                   }`}
                 >
-                  <div className="truncate text-sm font-semibold">{session.title || 'Untitled Stream'}</div>
+                  <div className="truncate text-sm font-semibold">{session.title || t('Untitled Stream')}</div>
                   <div className="mt-1 text-xs opacity-70">
-                    {session.date} · Ø {Math.round(session.avgViewers)} · Peak {session.peakViewers}
+                    {t('{date} · Ø {avg} · Peak {peak}', { date: session.date, avg: Math.round(session.avgViewers), peak: session.peakViewers })}
                   </div>
                 </button>
               ))}
