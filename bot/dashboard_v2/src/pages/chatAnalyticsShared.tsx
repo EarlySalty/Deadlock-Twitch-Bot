@@ -1,5 +1,6 @@
 import { AlertCircle, Info } from 'lucide-react';
 
+import { useT } from '@/context/LanguageContext';
 import type { RawChatStatus } from '@/types/analytics';
 import { formatDateFull } from '@/utils/formatters';
 
@@ -18,6 +19,7 @@ export function RawChatStatusBanner({
   compact?: boolean;
   windowStart?: Date;
 }) {
+  const t = useT();
   if (!status) {
     return null;
   }
@@ -47,17 +49,17 @@ export function RawChatStatusBanner({
         <div>
           <p className="font-medium text-white">
             {status.suspectedIngestionIssue
-              ? CHAT_LUECKE_TITEL
+              ? t(CHAT_LUECKE_TITEL)
               : partialCoverage
-                ? `Chat-Daten ab ${date}`
-                : CHAT_KEINE_TITEL}
+                ? t('Chat-Daten ab {date}', { date: date ?? '' })
+                : t(CHAT_KEINE_TITEL)}
           </p>
           <p className="mt-1 leading-5">
             {partialCoverage
-              ? `Chat-Nachrichten werden erst seit ${date} erfasst. Kennzahlen aus dem Chat beziehen sich auf den Zeitraum ab diesem Datum.`
+              ? t('Chat-Nachrichten werden erst seit {date} erfasst. Kennzahlen aus dem Chat beziehen sich auf den Zeitraum ab diesem Datum.', { date: date ?? '' })
               : status.suspectedIngestionIssue
-                ? CHAT_LUECKE_TEXT
-                : CHAT_KEINE_TEXT}
+                ? t(CHAT_LUECKE_TEXT)
+                : t(CHAT_KEINE_TEXT)}
           </p>
         </div>
       </div>

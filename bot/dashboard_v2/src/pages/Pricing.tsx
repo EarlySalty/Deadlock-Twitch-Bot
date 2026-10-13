@@ -7,29 +7,37 @@ import PlanStufen from '../components/pricing/PlanStufen';
 import MySubscriptionCard from '../components/pricing/MySubscriptionCard';
 import BillingStatusBanner from '../components/pricing/BillingStatusBanner';
 import { isActivePaidSubscription } from '../types/billing';
+import { useT } from '../context/LanguageContext';
+import { tr } from '../i18n/dictionary';
 
-const faqData = [
-  {
-    question: 'Wie funktioniert die 30-tägige kostenlose Testphase?',
-    answer:
-      'Du meldest dich an, wählst Netzwerk Plus im Monatstakt aus und kannst es 30 Tage lang kostenlos nutzen. Deine Kreditkarte wird erst nach Ablauf der Testphase belastet, vorausgesetzt du kündigst nicht vorher. Der Jahrestakt startet ohne Testphase und wird sofort abgerechnet.',
-  },
-  {
-    question: 'Kann ich meinen Plan jederzeit kündigen?',
-    answer:
-      'Ja, du kannst dein Abonnement jederzeit kündigen. Es gibt keine Mindestlaufzeit. Bis zum Ende des Abrechnungszeitraums behältst du vollen Zugang zu deinen Features.',
-  },
-  {
-    question: 'Was passiert mit meinen Daten nach der Kündigung?',
-    answer:
-      'Deine Analytics-Daten bleiben für 30 Tage nach Kündigung gespeichert. Du kannst sie jederzeit exportieren oder dein Konto reaktivieren, um wieder Zugang zu erhalten.',
-  },
-  {
-    question: 'Was ist der Unterschied zwischen Free, Plus und Pro?',
-    answer:
-      'Free zeigt dir deinen letzten Stream und bleibt sonst vollwertig: Auto-Raid, Chat-Schutz, alle Chat-Befehle, Overlay-Builder. Netzwerk Plus zeigt dir deine Entwicklung, also den vollen Verlauf, Zeitraumvergleiche und die komplette KI-Auswertung. Creator Pro ist die Stufe darüber und steht noch nicht zum Kauf bereit: sie wird erst buchbar, wenn ihre eigenen Funktionen fertig sind.',
-  },
-];
+function faqItems(): { question: string; answer: string }[] {
+  return [
+    {
+      question: tr('Wie funktioniert die 30-tägige kostenlose Testphase?'),
+      answer: tr(
+        'Du meldest dich an, wählst Netzwerk Plus im Monatstakt aus und kannst es 30 Tage lang kostenlos nutzen. Deine Kreditkarte wird erst nach Ablauf der Testphase belastet, vorausgesetzt du kündigst nicht vorher. Der Jahrestakt startet ohne Testphase und wird sofort abgerechnet.',
+      ),
+    },
+    {
+      question: tr('Kann ich meinen Plan jederzeit kündigen?'),
+      answer: tr(
+        'Ja, du kannst dein Abonnement jederzeit kündigen. Es gibt keine Mindestlaufzeit. Bis zum Ende des Abrechnungszeitraums behältst du vollen Zugang zu deinen Features.',
+      ),
+    },
+    {
+      question: tr('Was passiert mit meinen Daten nach der Kündigung?'),
+      answer: tr(
+        'Deine Analytics-Daten bleiben für 30 Tage nach Kündigung gespeichert. Du kannst sie jederzeit exportieren oder dein Konto reaktivieren, um wieder Zugang zu erhalten.',
+      ),
+    },
+    {
+      question: tr('Was ist der Unterschied zwischen Free, Plus und Pro?'),
+      answer: tr(
+        'Free zeigt dir deinen letzten Stream und bleibt sonst vollwertig: Auto-Raid, Chat-Schutz, alle Chat-Befehle, Overlay-Builder. Netzwerk Plus zeigt dir deine Entwicklung, also den vollen Verlauf, Zeitraumvergleiche und die komplette KI-Auswertung. Creator Pro ist die Stufe darüber und steht noch nicht zum Kauf bereit: sie wird erst buchbar, wenn ihre eigenen Funktionen fertig sind.',
+      ),
+    },
+  ];
+}
 
 function FAQItem({ question, answer }: { question: string; answer: string }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -65,6 +73,7 @@ function FAQItem({ question, answer }: { question: string; answer: string }) {
 }
 
 export default function Pricing() {
+  const t = useT();
   const [cycle, setCycle] = useState<1 | 12>(1);
   const { data } = useBillingCatalog(cycle);
   const plans = data?.plans ?? [];
@@ -74,18 +83,14 @@ export default function Pricing() {
   return (
     <>
 
-      {/* Billing-Redirect-Hinweis (?invoice=… / ?cancel=…) in Klartext */}
       <BillingStatusBanner />
 
-      {/* Hero Section */}
       <PricingHero />
 
-      {/* Mein Abo — sichtbarer Einstieg zu Rechnungen/Portal für Abonnenten */}
       {isActivePaidSubscription(subscription) && (
         <MySubscriptionCard subscription={subscription} invoiceHref={invoiceHref} />
       )}
 
-      {/* Billing cycle toggle */}
       <div id="plans" className="flex justify-center mb-8">
         <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-white/5 border border-white/10">
           <button
@@ -96,7 +101,7 @@ export default function Pricing() {
                 : 'text-white/50 hover:text-white/70'
             }`}
           >
-            Monatlich
+            {t('Monatlich')}
           </button>
           <button
             onClick={() => setCycle(12)}
@@ -106,15 +111,14 @@ export default function Pricing() {
                 : 'text-white/50 hover:text-white/70'
             }`}
           >
-            Jährlich
+            {t('Jährlich')}
             <span className="ml-2 px-1.5 py-0.5 rounded-md text-xs font-semibold bg-[#00D9FF]/20 text-[#00D9FF]">
-              2 Mo. gratis
+              {t('2 Mo. gratis')}
             </span>
           </button>
         </div>
       </div>
 
-      {/* Die drei Stufen des Katalogs */}
       <motion.div
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
@@ -124,7 +128,6 @@ export default function Pricing() {
         <PlanStufen plans={plans} cycle={cycle} />
       </motion.div>
 
-      {/* FAQ Section */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -133,10 +136,10 @@ export default function Pricing() {
       >
         <div className="flex items-center gap-3 mb-6">
           <HelpCircle className="w-5 h-5 text-[#C5A059]" />
-          <h2 className="text-xl font-bold text-white">Häufige Fragen</h2>
+          <h2 className="text-xl font-bold text-white">{t('Häufige Fragen')}</h2>
         </div>
         <div>
-          {faqData.map((faq, index) => (
+          {faqItems().map((faq, index) => (
             <FAQItem key={index} question={faq.question} answer={faq.answer} />
           ))}
         </div>

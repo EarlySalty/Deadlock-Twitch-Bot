@@ -6,6 +6,8 @@
  * damit ein halb erledigter Lauf im UI nicht wie ein Erfolg aussieht.
  */
 
+import { tr } from '../i18n/dictionary';
+
 /** `removed` | `not_moderator` | `no_token` | `unknown_channel` | `unavailable` | `failed` */
 export type UnmodOutcome = string;
 
@@ -60,20 +62,17 @@ export function roleNeedsAttention(discordRole: string | undefined): boolean {
   return discordRole !== 'revoked' && discordRole !== 'skipped:no_discord_link';
 }
 
-/** Kurzer deutscher Klartext für den Rollen-Ausgang. */
 export function roleLabel(discordRole: string | undefined): string {
-  // Fehlendes Feld heißt nicht „nichts zu tun": eine ältere Server-Version
-  // hat den Ausgang schlicht nicht gemeldet — das ist ungeklärt, nicht okay.
-  if (!discordRole) return 'ACHTUNG — Ausgang unbekannt (keine Angabe vom Server)';
+  if (!discordRole) return tr('ACHTUNG — Ausgang unbekannt (keine Angabe vom Server)');
   if (discordRole === 'skipped:no_discord_link') {
-    return 'kein Discord-Account verknüpft';
+    return tr('kein Discord-Account verknüpft');
   }
-  if (discordRole === 'revoked') return 'entzogen';
+  if (discordRole === 'revoked') return tr('entzogen');
   if (discordRole.startsWith('skipped:')) {
-    return `ACHTUNG — bleibt bestehen (${discordRole.slice('skipped:'.length)})`;
+    return tr('ACHTUNG — bleibt bestehen ({reason})', { reason: discordRole.slice('skipped:'.length) });
   }
   if (discordRole.startsWith('failed:')) {
-    return `ACHTUNG — Entzug fehlgeschlagen (${discordRole.slice('failed:'.length)})`;
+    return tr('ACHTUNG — Entzug fehlgeschlagen ({reason})', { reason: discordRole.slice('failed:'.length) });
   }
-  return `ACHTUNG — unklarer Ausgang (${discordRole})`;
+  return tr('ACHTUNG — unklarer Ausgang ({outcome})', { outcome: discordRole });
 }

@@ -10,6 +10,7 @@ import {
   resolveMessagesPer100ViewerMinutes,
   resolveQualityMethod,
 } from '@/utils/engagementKpi';
+import { useLanguage } from '../../context/LanguageContext';
 
 export interface AudienceDemographicsData {
   viewerTypes: { label: string; percentage: number }[];
@@ -58,24 +59,25 @@ const VIEWER_COLORS = [
 ];
 
 export function AudienceDemographics({ data }: AudienceDemographicsProps) {
+  const { t, locale } = useLanguage();
   const [hoveredViewerType, setHoveredViewerType] = useState<string | null>(null);
   const [focusedViewerType, setFocusedViewerType] = useState<string | null>(null);
   const activeViewerType = hoveredViewerType ?? focusedViewerType;
   const activityLabels = {
-    'weekend-heavy': 'Wochenend-fokussiert',
-    'weekday-focused': 'Wochentags-fokussiert',
-    'balanced': 'Ausgewogen',
+    'weekend-heavy': t('Wochenend-fokussiert'),
+    'weekday-focused': t('Wochentags-fokussiert'),
+    'balanced': t('Ausgewogen'),
   };
 
   const confidenceLabel =
     data.dataQuality?.confidence === 'very_low'
-      ? 'sehr niedrig'
+      ? t('sehr niedrig')
       : data.dataQuality?.confidence === 'low'
-        ? 'niedrig'
+        ? t('niedrig')
         : data.dataQuality?.confidence === 'medium'
-          ? 'mittel'
+          ? t('mittel')
           : data.dataQuality?.confidence === 'high'
-            ? 'hoch'
+            ? t('hoch')
             : null;
   const chatMethod = resolveQualityMethod(
     data.dataQuality?.method,
@@ -87,10 +89,10 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
   );
   const methodLabel =
     chatMethod === 'no_data'
-      ? 'keine Daten'
+      ? t('keine Daten')
       : chatMethod === 'low_coverage'
-        ? 'wenige Daten'
-        : 'echte Chat-Daten';
+        ? t('wenige Daten')
+        : t('echte Chat-Daten');
   const normalizedPeakHours = Array.from(
     new Set(
       (data.peakActivityHours ?? [])
@@ -119,25 +121,23 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
             <Globe className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h3 className="text-lg font-bold text-white">Audience Demographics</h3>
-            <p className="text-sm text-text-secondary">Reach- und Chat-Engagement-Mix</p>
+            <h3 className="text-lg font-bold text-white">{t('Audience Demographics')}</h3>
+            <p className="text-sm text-text-secondary">{t('Reach- und Chat-Engagement-Mix')}</p>
           </div>
         </div>
         {data.dataQuality && confidenceLabel && (
           <span className="text-xs px-3 py-1 rounded-full border border-border text-text-secondary">
-            Datenbasis: {methodLabel} · Verlässlichkeit: {confidenceLabel}
+            {t('Datenbasis: {method} · Verlässlichkeit: {confidence}', { method: methodLabel, confidence: confidenceLabel })}
           </span>
         )}
       </div>
-      <div className="mb-4 text-xs text-text-secondary">{CHAT_AUDIENCE_TOOLTIP}</div>
+      <div className="mb-4 text-xs text-text-secondary">{t(CHAT_AUDIENCE_TOOLTIP)}</div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Left Column - Charts */}
         <div className="space-y-6">
-          {/* Viewer Types */}
           <div>
             <h4 className="text-sm font-medium text-text-secondary mb-3 flex items-center gap-2">
               <Users className="w-4 h-4" />
-              Viewer-Typen
+              {t('Viewer-Typen')}
             </h4>
             <div className="flex flex-col sm:flex-row items-center gap-4">
               <div className="w-48 h-48 shrink-0" onMouseLeave={() => setHoveredViewerType(null)}>
@@ -173,7 +173,7 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
                       }}
                       formatter={(value, name) => {
                         const numericValue = Array.isArray(value) ? Number(value[0] ?? 0) : Number(value ?? 0);
-                        return [`${numericValue.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %`, name];
+                        return [`${numericValue.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %`, name];
                       }}
                     />
                   </PieChart>
@@ -190,7 +190,7 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
                     onFocus={() => setFocusedViewerType(type.label)}
                     onBlur={() => setFocusedViewerType(null)}
                     onClick={() => setFocusedViewerType(type.label)}
-                    aria-label={`${type.label}: ${type.percentage.toLocaleString('de-DE')} Prozent im Diagramm hervorheben`}
+                    aria-label={t('{label}: {percentage} Prozent im Diagramm hervorheben', { label: type.label, percentage: type.percentage.toLocaleString(locale) })}
                   >
                     <div className="flex items-center gap-2">
                       <div
@@ -199,7 +199,7 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
                       />
                       <span className={`text-sm ${activeViewerType === type.label ? 'font-semibold text-white' : 'text-text-secondary'}`}>{type.label}</span>
                     </div>
-                    <span className="shrink-0 text-sm font-medium text-white">{type.percentage.toLocaleString('de-DE')} %</span>
+                    <span className="shrink-0 text-sm font-medium text-white">{type.percentage.toLocaleString(locale)} %</span>
                   </button>
                 ))}
               </div>
@@ -207,18 +207,16 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
           </div>
         </div>
 
-        {/* Right Column - Stats */}
         <div className="space-y-4">
-          {/* Language */}
           <div className="bg-background rounded-lg p-4">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm text-text-secondary flex items-center gap-2">
                 <Globe className="w-4 h-4" />
-                Primäre Sprache
+                {t('Primäre Sprache')}
               </span>
-              <span className="text-xs text-text-secondary">{data.languageConfidence}% sicher</span>
+              <span className="text-xs text-text-secondary">{t('{confidence}% sicher', { confidence: data.languageConfidence })}</span>
             </div>
-            <div className="text-xl font-bold text-white">{data.primaryLanguage}</div>
+            <div className="text-xl font-bold text-white">{t(data.primaryLanguage)}</div>
             <div className="mt-2 h-1.5 bg-border rounded-full overflow-hidden">
               <motion.div
                 initial={{ width: 0 }}
@@ -229,63 +227,63 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
             </div>
           </div>
 
-          {/* Activity Pattern */}
           <div className="bg-background rounded-lg p-4">
             <div className="flex items-center gap-2 text-sm text-text-secondary mb-2">
               <Activity className="w-4 h-4" />
-              Aktivitätsmuster
+              {t('Aktivitätsmuster')}
             </div>
             <div className="text-xl font-bold text-white">{activityLabels[data.activityPattern]}</div>
             <div className="mt-2 text-sm text-text-secondary">
               {hasPeakData
-                ? `Peak-Zeiten (${data.timezone || 'UTC'}): ${normalizedPeakHours.map(h => `${h}:00`).join(', ')} Uhr`
-                : 'Peak-Zeiten: zu wenig Aktivitätsdaten'}
+                ? t('Peak-Zeiten ({timezone}): {hours} Uhr', {
+                    timezone: data.timezone || 'UTC',
+                    hours: normalizedPeakHours.map(h => `${h}:00`).join(', '),
+                  })
+                : t('Peak-Zeiten: zu wenig Aktivitätsdaten')}
             </div>
           </div>
 
-          {/* Engagement Scores */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div className="bg-background rounded-lg p-4 text-center">
               <div className="flex items-center justify-center gap-1 text-text-secondary text-sm mb-2">
                 <TrendingUp className="w-4 h-4" />
-                Chat Penetration
+                {t('Chat Penetration')}
               </div>
               <div className="text-2xl font-bold text-primary">
-                {interactionReliable && interactionRate !== null ? `${interactionRate.toFixed(1)}%` : 'Nicht belastbar'}
+                {interactionReliable && interactionRate !== null ? `${interactionRate.toFixed(1)}%` : t('Nicht belastbar')}
               </div>
               <div className="text-xs text-text-secondary mt-1">
                 {interactionReliable
-                  ? 'Aktive Chatters / getrackte Chat-Accounts'
-                  : `Nicht belastbar (Coverage ${interactionCoveragePct.toFixed(1)}%)`}
+                  ? t('Aktive Chatters / getrackte Chat-Accounts')
+                  : t('Nicht belastbar (Coverage {coverage}%)', { coverage: interactionCoveragePct.toFixed(1) })}
               </div>
             </div>
             <div className="bg-background rounded-lg p-4 text-center">
               <div className="flex items-center justify-center gap-1 text-text-secondary text-sm mb-2">
                 <TrendingUp className="w-4 h-4" />
-                Msg / 100 Viewer-Minuten
+                {t('Msg / 100 Viewer-Minuten')}
               </div>
               <div className="text-2xl font-bold text-accent">
                 {messagesPer100ViewerMinutes !== null ? messagesPer100ViewerMinutes.toFixed(1) : '-'}
               </div>
               <div className="text-xs text-text-secondary mt-1">
-                Coverage {(chattersCoverage * 100).toFixed(1)}%
+                {t('Coverage {coverage}%', { coverage: (chattersCoverage * 100).toFixed(1) })}
               </div>
             </div>
             <div className="bg-background rounded-lg p-4 text-center">
               <div className="flex items-center justify-center gap-1 text-text-secondary text-sm mb-2">
                 <Heart className="w-4 h-4" />
-                Loyalitätsscore
+                {t('Loyalitätsscore')}
               </div>
               <div className="text-2xl font-bold text-success">{data.loyaltyScore.toFixed(1)}%</div>
-              <div className="text-xs text-text-secondary mt-1">Wiederkehrende</div>
+              <div className="text-xs text-text-secondary mt-1">{t('Wiederkehrende')}</div>
             </div>
           </div>
 
-          {/* Peak Hours Visualization */}
           <div className="bg-background rounded-lg p-4">
             <div className="text-sm text-text-secondary mb-3 flex items-center gap-2">
               <Clock className="w-4 h-4" />
-              Beste Sendezeiten {data.timezone ? `(${data.timezone})` : '(UTC)'}
+              {t('Beste Sendezeiten ({timezone})', { timezone: data.timezone || 'UTC' })}
             </div>
             {hasPeakData ? (
               <>
@@ -302,7 +300,7 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
                         className={`flex-1 rounded-sm ${
                           isPeak ? 'bg-primary' : isNearPeak ? 'bg-primary/50' : 'bg-border'
                         }`}
-                        title={`${i}:00 Uhr${isPeak ? ' (Peak)' : ''}`}
+                        title={isPeak ? t('{hour}:00 Uhr (Peak)', { hour: i }) : t('{hour}:00 Uhr', { hour: i })}
                       />
                     );
                   })}
@@ -317,32 +315,31 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
               </>
             ) : (
               <div className="text-sm text-text-secondary border border-border rounded-lg p-3">
-                Keine belastbaren Peak-Zeiten: zu wenig Aktivitäts-Samples.
+                {t('Keine belastbaren Peak-Zeiten: zu wenig Aktivitäts-Samples.')}
               </div>
             )}
           </div>
         </div>
       </div>
 
-      {/* Insights */}
       <div className="mt-6 pt-4 border-t border-border">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {data.loyaltyScore > 40 && (
             <InsightBadge
               type="success"
-              text={`Starke Community! ${data.loyaltyScore.toFixed(0)}% deiner Viewer kommen regelmäßig zurück.`}
+              text={t('Starke Community! {score}% deiner Viewer kommen regelmäßig zurück.', { score: data.loyaltyScore.toFixed(0) })}
             />
           )}
           {chatMethod === 'real_samples' && interactionReliable && (interactionRate ?? 0) > 15 && (
             <InsightBadge
               type="success"
-              text={`Hohe Chat-Penetration: ${(interactionRate ?? 0).toFixed(0)}% deiner Chat-Audience interagiert aktiv.`}
+              text={t('Hohe Chat-Penetration: {rate}% deiner Chat-Audience interagiert aktiv.', { rate: (interactionRate ?? 0).toFixed(0) })}
             />
           )}
           {chatMethod !== 'real_samples' && (
             <InsightBadge
               type="info"
-              text="Chat-Penetration und Conversion werden mit höherer Chatters-Coverage belastbarer."
+              text={t('Chat-Penetration und Conversion werden mit höherer Chatters-Coverage belastbarer.')}
             />
           )}
         </div>

@@ -1,3 +1,5 @@
+import { tr } from './i18n/dictionary';
+
 export const UPLINK_HELP_PAGES = [
   { file: 'was-ist.html', label: 'Was ist Uplink' },
   { file: 'obs.html', label: 'OBS einrichten' },
@@ -94,7 +96,7 @@ export function extractUplinkMain(html: string): string {
   // und zieht fremdes Markup in das dangerouslySetInnerHTML.
   const main = html.match(/<main class="uplink-doc" data-doc="[^"]+">[\s\S]*?<\/main>/);
   if (!main) {
-    throw new Error('Uplink-Hilfe enthält kein main.uplink-doc.');
+    throw new Error(tr('Uplink-Hilfe enthält kein main.uplink-doc.'));
   }
   // main wird zu div: mehrere main-Landmarks in einem Dokument sind ungueltig
   // und fuer Screenreader genau das Problem, gegen das die Ueberschriften eine
@@ -115,7 +117,7 @@ export async function fetchUplinkHelp(): Promise<UplinkHelpPage[]> {
     UPLINK_HELP_PAGES.map(async (page): Promise<UplinkHelpPage> => {
       const response = await fetch(uplinkHelpUrl(page.file), { credentials: 'same-origin' });
       if (!response.ok) {
-        throw new Error(`Uplink-Hilfe konnte nicht geladen werden: ${response.status}`);
+        throw new Error(tr('Uplink-Hilfe konnte nicht geladen werden: {status}', { status: response.status }));
       }
       return { ...page, html: extractUplinkMain(await response.text()) };
     }),
@@ -127,7 +129,7 @@ export async function fetchUplinkHelp(): Promise<UplinkHelpPage[]> {
     const erster = ergebnisse.find((e) => e.status === 'rejected');
     throw erster && erster.status === 'rejected'
       ? erster.reason
-      : new Error('Uplink-Hilfe konnte nicht geladen werden.');
+      : new Error(tr('Uplink-Hilfe konnte nicht geladen werden.'));
   }
   return geladen;
 }

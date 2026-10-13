@@ -23,6 +23,8 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { AIChatRateLimitError, fetchAIAnalysis, fetchAIChat, fetchAIHistory } from '@/api/ai';
 import { usePlan } from '@/context/PlanContext';
+import { useLanguage, useT } from '@/context/LanguageContext';
+import { tr } from '../i18n/dictionary';
 import type {
   AIAnalysisResult,
   AIAnalysisPoint,
@@ -44,7 +46,9 @@ const PRIORITY_CONFIG = {
     text: 'text-error',
     numberBg: 'bg-error/15',
     dot: 'bg-error',
-    label: 'Kritisch',
+    get label() {
+      return tr('Kritisch');
+    },
   },
   hoch: {
     bg: 'bg-warning/10',
@@ -52,7 +56,9 @@ const PRIORITY_CONFIG = {
     text: 'text-warning',
     numberBg: 'bg-warning/15',
     dot: 'bg-warning',
-    label: 'Hoch',
+    get label() {
+      return tr('Hoch');
+    },
   },
   mittel: {
     bg: 'bg-primary/10',
@@ -60,7 +66,9 @@ const PRIORITY_CONFIG = {
     text: 'text-primary',
     numberBg: 'bg-primary/15',
     dot: 'bg-primary',
-    label: 'Mittel',
+    get label() {
+      return tr('Mittel');
+    },
   },
 } as const;
 
@@ -74,6 +82,7 @@ function getPriorityConfig(priority: string) {
 type GameFilter = 'deadlock' | 'all';
 
 export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
+  const { t, locale } = useLanguage();
   const { data: authStatus, isLoading: loadingAuth } = useAuthStatus();
   const { hasEntitlement } = usePlan();
   const [result, setResult] = useState<AIAnalysisResult | null>(null);
@@ -124,9 +133,9 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
           </div>
         </div>
         <div className="text-center max-w-xs">
-          <p className="text-white font-semibold text-lg mb-1">Analyse-Zugang erforderlich</p>
+          <p className="text-white font-semibold text-lg mb-1">{t('Analyse-Zugang erforderlich')}</p>
           <p className="text-text-secondary text-sm leading-relaxed">
-            KI-Analysen sind mit dem Analyse-Zugang verfügbar.
+            {t('KI-Analysen sind mit dem Analyse-Zugang verfügbar.')}
           </p>
         </div>
       </div>
@@ -153,12 +162,12 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
       const isAbort = e instanceof DOMException && e.name === 'AbortError';
       setError(
         isAbort
-          ? 'Analyse hat zu lange gedauert (>4 Min). Ergebnis eventuell im Verlauf verfügbar.'
+          ? t('Analyse hat zu lange gedauert (>4 Min). Ergebnis eventuell im Verlauf verfügbar.')
           : e instanceof Error
           ? e.message
-          : 'Analyse fehlgeschlagen'
+          : t('Analyse fehlgeschlagen')
       );
-      refetchHistory(); // backend may have saved result despite connection drop
+      refetchHistory();
     } finally {
       analysisInProgress.current = false;
       setIsLoading(false);
@@ -199,12 +208,14 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
         setRateLimitReset(e.rateLimitReset ?? null);
         setChatError(
           e.rateLimitReset
-            ? `Limit erreicht. Wieder verfügbar in ${Math.max(1, Math.ceil((e.rateLimitReset * 1000 - Date.now()) / 60000))} Minuten.`
-            : 'Keine weiteren Rückfragen für diese Analyse verfügbar.'
+            ? t('Limit erreicht. Wieder verfügbar in {minutes} Minuten.', {
+                minutes: Math.max(1, Math.ceil((e.rateLimitReset * 1000 - Date.now()) / 60000)),
+              })
+            : t('Keine weiteren Rückfragen für diese Analyse verfügbar.')
         );
         setResult(prev => prev ? ({ ...prev, followUpsRemaining: 0 }) : prev);
       } else {
-        setChatError(e instanceof Error ? e.message : 'Rückfrage fehlgeschlagen');
+        setChatError(e instanceof Error ? e.message : t('Rückfrage fehlgeschlagen'));
       }
       setChatInput(outgoingMessage);
     } finally {
@@ -214,7 +225,6 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
 
   return (
     <div className="space-y-5">
-      {/* Header Card */}
       <div className="panel-card rounded-2xl p-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-4">
@@ -222,9 +232,9 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
               <Brain className="w-6 h-6 text-primary" />
             </div>
             <div>
-              <h2 className="text-xl font-bold text-white">KI Tiefenanalyse</h2>
+              <h2 className="text-xl font-bold text-white">{t('KI Tiefenanalyse')}</h2>
               <p className="text-text-secondary text-sm mt-0.5">
-                KI analysiert {days} Tage Streaming-Daten
+                {t('KI analysiert {days} Tage Streaming-Daten', { days })}
                 {streamer && (
                   <span className="text-primary font-medium"> · {streamer}</span>
                 )}
@@ -233,7 +243,6 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
           </div>
 
           <div className="flex items-center gap-3 flex-shrink-0">
-            {/* Game Filter Toggle */}
             <div className="flex rounded-xl border border-border overflow-hidden text-sm">
               <button
                 onClick={() => setGameFilter('all')}
@@ -244,7 +253,7 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
                     : 'text-text-secondary hover:text-white hover:bg-background/60'
                 }`}
               >
-                Alle Spiele
+                {t('Alle Spiele')}
               </button>
               <button
                 onClick={() => setGameFilter('deadlock')}
@@ -267,12 +276,12 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
               {isLoading ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Analysiere...
+                  {t('Analysiere...')}
                 </>
               ) : (
                 <>
                   <Sparkles className="w-4 h-4" />
-                  {result ? 'Neu analysieren' : 'Analyse starten'}
+                  {result ? t('Neu analysieren') : t('Analyse starten')}
                 </>
               )}
             </button>
@@ -282,20 +291,20 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
         {!streamer && (
           <div className="mt-4 p-3 bg-warning/10 border border-warning/20 rounded-xl flex items-center gap-2 text-warning text-sm">
             <AlertCircle className="w-4 h-4 flex-shrink-0" />
-            Bitte zuerst einen Streamer auswählen
+            {t('Bitte zuerst einen Streamer auswählen')}
           </div>
         )}
 
         <div className="mt-4">
           <label className="block text-sm font-medium text-white mb-2">
-            Deine eigenen Eindrücke / Fragen an die KI
-            <span className="text-text-secondary font-normal"> (optional)</span>
+            {t('Deine eigenen Eindrücke / Fragen an die KI')}
+            <span className="text-text-secondary font-normal"> {t('(optional)')}</span>
           </label>
           <textarea
             value={userContext}
             onChange={(event) => setUserContext(event.target.value.slice(0, 2000))}
             disabled={isLoading}
-            placeholder="z.B. Warum performen manche Titel schlechter? Welche Streams sollte ich wiederholen?"
+            placeholder={t('z.B. Warum performen manche Titel schlechter? Welche Streams sollte ich wiederholen?')}
             className="w-full min-h-[110px] rounded-2xl border border-border bg-background/60 px-4 py-3 text-sm text-white placeholder:text-text-secondary outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/15 resize-y"
           />
           <div className="mt-2 text-xs text-text-secondary text-right">
@@ -303,27 +312,25 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
           </div>
         </div>
 
-        {/* Feature pills */}
         {!result && !isLoading && (
           <div className="flex flex-wrap gap-2 mt-4">
             {[
-              { icon: Target, label: '10 priorisierte Handlungspunkte' },
-              { icon: Zap, label: 'Daten-basierte Insights' },
-              { icon: Shield, label: 'Nur für dich sichtbar' },
+              { icon: Target, label: t('10 priorisierte Handlungspunkte') },
+              { icon: Zap, label: t('Daten-basierte Insights') },
+              { icon: Shield, label: isDemoMode ? t('Snapshot-basiert') : t('Nur für dich sichtbar') },
             ].map(({ icon: Icon, label }) => (
               <span
                 key={label}
                 className="flex items-center gap-1.5 px-3 py-1 text-xs text-text-secondary bg-background/60 rounded-full border border-border"
               >
                 <Icon className="w-3 h-3" />
-                {label === 'Nur für dich sichtbar' && isDemoMode ? 'Snapshot-basiert' : label}
+                {label}
               </span>
             ))}
           </div>
         )}
       </div>
 
-      {/* Loading Animation */}
       {isLoading && (
         <div className="panel-card rounded-2xl p-10 flex flex-col items-center gap-5">
           <div className="relative">
@@ -331,9 +338,9 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
             <Brain className="w-7 h-7 text-primary absolute inset-0 m-auto" />
           </div>
           <div className="text-center">
-            <p className="text-white font-semibold">KI analysiert...</p>
+            <p className="text-white font-semibold">{t('KI analysiert...')}</p>
             <p className="text-text-secondary text-sm mt-1 max-w-xs">
-              Alle Stream-Daten werden ausgewertet. Das kann 1–3 Minuten dauern.
+              {t('Alle Stream-Daten werden ausgewertet. Das kann 1–3 Minuten dauern.')}
             </p>
           </div>
           <div className="flex gap-1.5 mt-2">
@@ -348,49 +355,46 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
         </div>
       )}
 
-      {/* Error */}
       {error && (
         <div className="panel-card rounded-2xl p-4 flex items-start gap-3 border border-error/20 bg-error/5">
           <AlertCircle className="w-5 h-5 text-error flex-shrink-0 mt-0.5" />
           <div>
-            <p className="text-error font-medium text-sm">Analyse fehlgeschlagen</p>
+            <p className="text-error font-medium text-sm">{t('Analyse fehlgeschlagen')}</p>
             <p className="text-text-secondary text-xs mt-0.5">{error}</p>
           </div>
         </div>
       )}
 
-      {/* Results */}
       {result && (
         <Rise
           className="space-y-4"
         >
-          {/* Data Snapshot */}
           <DataSnapshotGrid snapshot={result.dataSnapshot} />
 
-          {/* Meta info */}
           <div className="flex items-center gap-3 flex-wrap text-xs text-text-secondary px-1">
             <div className="flex items-center gap-2">
               <Brain className="w-3 h-3 text-primary" />
               <span>
-                {result.model === 'opus' ? 'Premium-Analyse' : 'KI-Analyse'} · generiert am{' '}
-                {new Date(result.generatedAt).toLocaleString('de-DE', {
-                  day: '2-digit',
-                  month: '2-digit',
-                  year: 'numeric',
-                  hour: '2-digit',
-                  minute: '2-digit',
+                {t('{model} · generiert am {date}', {
+                  model: result.model === 'opus' ? t('Premium-Analyse') : t('KI-Analyse'),
+                  date: new Date(result.generatedAt).toLocaleString(locale, {
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  }),
                 })}
               </span>
             </div>
             <span className="px-2 py-0.5 rounded-full bg-background/60 border border-border font-medium">
-              {result.gameFilter === 'deadlock' ? '🎮 Deadlock' : '🌐 Alle Spiele'}
+              {result.gameFilter === 'deadlock' ? t('🎮 Deadlock') : t('🌐 Alle Spiele')}
             </span>
             <span className="px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20 text-primary font-medium">
-              {result.model === 'opus' ? 'Premium-Analyse' : 'KI-Analyse'}
+              {result.model === 'opus' ? t('Premium-Analyse') : t('KI-Analyse')}
             </span>
           </div>
 
-          {/* Priority legend */}
           <div className="flex flex-wrap gap-3 px-1">
             {(['kritisch', 'hoch', 'mittel'] as const).map(p => {
               const cfg = PRIORITY_CONFIG[p];
@@ -403,7 +407,6 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
             })}
           </div>
 
-          {/* Analysis Points */}
           <div className="space-y-3">
             {result.points.map((point, i) => (
               <AnalysisPointCard
@@ -435,7 +438,6 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
         </Rise>
       )}
 
-      {/* History Panel */}
       {history.length > 0 && (
         <HistoryPanel
           history={history}
@@ -460,29 +462,30 @@ interface DataSnapshotGridProps {
 }
 
 function DataSnapshotGrid({ snapshot }: DataSnapshotGridProps) {
+  const { t, locale } = useLanguage();
   const items = [
     {
       icon: <TrendingUp className="w-4 h-4" />,
-      label: 'Streams',
+      label: t('Streams'),
       value: snapshot.streamCount.toString(),
       color: 'primary',
     },
     {
       icon: <Clock className="w-4 h-4" />,
-      label: 'Stunden',
+      label: t('Stunden'),
       value: `${snapshot.totalHours.toFixed(1)}h`,
       color: 'accent',
     },
     {
       icon: <Users className="w-4 h-4" />,
-      label: 'Ø Viewer',
-      value: Math.round(snapshot.avgViewers).toLocaleString('de-DE'),
+      label: t('Ø Viewer'),
+      value: Math.round(snapshot.avgViewers).toLocaleString(locale),
       color: 'success',
     },
     {
       icon: <MessageCircle className="w-4 h-4" />,
-      label: 'Ø Chatter',
-      value: snapshot.avgChatters.toLocaleString('de-DE'),
+      label: t('Ø Chatter'),
+      value: snapshot.avgChatters.toLocaleString(locale),
       color: 'warning',
     },
   ] as const;
@@ -517,6 +520,7 @@ interface AnalysisPointCardProps {
 }
 
 function AnalysisPointCard({ point, index, isExpanded, onToggle }: AnalysisPointCardProps) {
+  const t = useT();
   const cfg = getPriorityConfig(point.priority);
 
   return (
@@ -526,14 +530,12 @@ function AnalysisPointCard({ point, index, isExpanded, onToggle }: AnalysisPoint
       transition={{ delay: Math.min(index * 0.04, 0.24) }}
       className={`panel-card rounded-2xl overflow-hidden border ${cfg.border}`}
     >
-      {/* Header */}
       <div
         className="p-4 cursor-pointer hover:bg-background/30 transition-colors select-none"
         onClick={onToggle}
       >
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-start gap-3">
-            {/* Number badge */}
             <div
               className={`flex-shrink-0 w-8 h-8 rounded-lg ${cfg.numberBg} ${cfg.border} border flex items-center justify-center`}
             >
@@ -566,7 +568,6 @@ function AnalysisPointCard({ point, index, isExpanded, onToggle }: AnalysisPoint
         </div>
       </div>
 
-      {/* Expanded Detail */}
       <AnimatePresence>
         {isExpanded && (
           <motion.div
@@ -577,13 +578,13 @@ function AnalysisPointCard({ point, index, isExpanded, onToggle }: AnalysisPoint
             className="border-t border-border"
           >
             <div className="p-4 space-y-4">
-              <DetailSection label="Analyse" content={point.analysis} />
+              <DetailSection label={t('Analyse')} content={point.analysis} />
               {point.action && (
-                <DetailSection label="Handlungsempfehlung" content={point.action} />
+                <DetailSection label={t('Handlungsempfehlung')} content={point.action} />
               )}
               {point.expectedImpact && (
                 <DetailSection
-                  label="Erwarteter Impact"
+                  label={t('Erwarteter Impact')}
                   content={point.expectedImpact}
                   className={cfg.text}
                 />
@@ -638,22 +639,25 @@ function AIChatPanel({
   onInputChange,
   onSend,
 }: AIChatPanelProps) {
+  const t = useT();
   const [renderedAt] = useState(() => Date.now());
   const limitLabel = model === 'opus'
-    ? `Noch ${followUpsRemaining} Rückfragen verfügbar`
-    : `Noch ${followUpsRemaining}/10 Rückfragen in dieser Stunde`;
+    ? t('Noch {count} Rückfragen verfügbar', { count: followUpsRemaining })
+    : t('Noch {count}/10 Rückfragen in dieser Stunde', { count: followUpsRemaining });
 
   const rateLimitLabel = rateLimitReset
-    ? `Limit erreicht. Wieder verfügbar in ${Math.max(1, Math.ceil((rateLimitReset * 1000 - renderedAt) / 60000))} Minuten.`
+    ? t('Limit erreicht. Wieder verfügbar in {minutes} Minuten.', {
+        minutes: Math.max(1, Math.ceil((rateLimitReset * 1000 - renderedAt) / 60000)),
+      })
     : null;
 
   return (
     <div className="panel-card rounded-2xl p-5 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="text-white font-semibold">Rückfragen zur Analyse</div>
+          <div className="text-white font-semibold">{t('Rückfragen zur Analyse')}</div>
           <div className="text-sm text-text-secondary">
-            Analyse #{analysisId}
+            {t('Analyse #{id}', { id: analysisId })}
           </div>
         </div>
         <div className="text-xs px-3 py-1.5 rounded-full border border-border bg-background/60 text-text-secondary">
@@ -664,7 +668,7 @@ function AIChatPanel({
       <div className="space-y-3">
         {messages.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border bg-background/40 px-4 py-5 text-sm text-text-secondary">
-            Stelle gezielte Rückfragen zur bestehenden Analyse, z.B. zu Titeln, Wochentagen oder den wichtigsten Hebeln.
+            {t('Stelle gezielte Rückfragen zur bestehenden Analyse, z.B. zu Titeln, Wochentagen oder den wichtigsten Hebeln.')}
           </div>
         ) : (
           messages.map((message, index) => (
@@ -693,7 +697,7 @@ function AIChatPanel({
           value={inputValue}
           onChange={(event) => onInputChange(event.target.value)}
           disabled={isSending || followUpsRemaining <= 0}
-          placeholder="Deine Rückfrage zur Analyse..."
+          placeholder={t('Deine Rückfrage zur Analyse...')}
           className="w-full min-h-[96px] rounded-2xl border border-border bg-background/60 px-4 py-3 text-sm text-white placeholder:text-text-secondary outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/15 resize-y disabled:opacity-60"
         />
         <div className="flex justify-end">
@@ -706,12 +710,12 @@ function AIChatPanel({
             {isSending ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Sende...
+                {t('Sende...')}
               </>
             ) : (
               <>
                 <MessageCircle className="w-4 h-4" />
-                Rückfrage senden
+                {t('Rückfrage senden')}
               </>
             )}
           </button>
@@ -721,8 +725,6 @@ function AIChatPanel({
   );
 }
 
-// ── History Panel ──────────────────────────────────────────────────────
-
 interface HistoryPanelProps {
   history: AIHistoryEntry[];
   activeId: number | null | undefined;
@@ -730,18 +732,18 @@ interface HistoryPanelProps {
 }
 
 function HistoryPanel({ history, activeId, onRestore }: HistoryPanelProps) {
+  const { t, locale } = useLanguage();
   const [open, setOpen] = useState(false);
 
   return (
     <div className="panel-card rounded-2xl overflow-hidden">
-      {/* Header toggle */}
       <button
         className="w-full flex items-center justify-between p-4 hover:bg-background/30 transition-colors"
         onClick={() => setOpen(o => !o)}
       >
         <div className="flex items-center gap-2 text-sm font-semibold text-text-secondary">
           <History className="w-4 h-4" />
-          Vergangene Analysen
+          {t('Vergangene Analysen')}
           <span className="px-1.5 py-0.5 text-[10px] bg-background rounded-full border border-border">
             {history.length}
           </span>
@@ -765,7 +767,7 @@ function HistoryPanel({ history, activeId, onRestore }: HistoryPanelProps) {
             <div className="divide-y divide-border">
               {history.map((entry) => {
                 const isActive = entry.id === activeId;
-                const date = new Date(entry.generatedAt).toLocaleString('de-DE', {
+                const date = new Date(entry.generatedAt).toLocaleString(locale, {
                   day: '2-digit',
                   month: '2-digit',
                   year: 'numeric',
@@ -788,16 +790,15 @@ function HistoryPanel({ history, activeId, onRestore }: HistoryPanelProps) {
                         </span>
                         {isActive && (
                           <span className="text-[10px] text-primary px-1.5 py-0.5 rounded-full bg-primary/10 border border-primary/30">
-                            aktiv
+                            {t('aktiv')}
                           </span>
                         )}
                       </div>
-                      {/* Priority distribution */}
                       <div className="flex items-center gap-2 mt-1">
                         {entry.kritischCount > 0 && (
                           <span className="flex items-center gap-1 text-[10px] text-error">
                             <span className="w-1.5 h-1.5 rounded-full bg-error" />
-                            {entry.kritischCount}k
+                            {t('{count}k', { count: entry.kritischCount })}
                           </span>
                         )}
                         {entry.hochCount > 0 && (
@@ -813,7 +814,7 @@ function HistoryPanel({ history, activeId, onRestore }: HistoryPanelProps) {
                           </span>
                         )}
                         <span className="text-[10px] text-text-secondary">
-                          Ø {Math.round(entry.dataSnapshot.avgViewers)} Viewer
+                          {t('Ø {viewers} Viewer', { viewers: Math.round(entry.dataSnapshot.avgViewers) })}
                         </span>
                       </div>
                     </div>
@@ -822,10 +823,10 @@ function HistoryPanel({ history, activeId, onRestore }: HistoryPanelProps) {
                       <button
                         onClick={() => onRestore(entry)}
                         className="flex-shrink-0 flex items-center gap-1 px-2.5 py-1.5 text-xs text-text-secondary hover:text-white border border-border hover:border-primary/40 rounded-lg transition-colors"
-                        title="Diese Analyse laden"
+                        title={t('Diese Analyse laden')}
                       >
                         <RotateCcw className="w-3 h-3" />
-                        Laden
+                        {t('Laden')}
                       </button>
                     )}
                   </div>

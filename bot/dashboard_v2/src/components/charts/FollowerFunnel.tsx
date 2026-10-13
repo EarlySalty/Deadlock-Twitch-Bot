@@ -3,8 +3,9 @@ import { Rise } from '../../motion/Rise';
 import { UserPlus, Users, Heart, TrendingUp, TrendingDown, Zap, Radio, Share2, Info, ArrowRight } from 'lucide-react';
 import { useState } from 'react';
 import type { FollowerFunnel as FollowerFunnelType } from '@/types/analytics';
+import { useLanguage } from '../../context/LanguageContext';
+import { tr } from '../../i18n/dictionary';
 
-// Stufenfarben gehören nur zum Funnel; Bewertung und Trends bleiben semantisch.
 const FUNNEL_COLORS = {
   viewers: 'var(--color-primary)',
   returning: '#D9752E',
@@ -20,36 +21,37 @@ function rateConversion(rate: number): { label: string; color: string; bgColor: 
   if (rate < 0.5) {
     const position = Math.max(2, (rate / 0.5) * 25);
     return {
-      label: 'Niedrig', color: 'text-error', bgColor: 'bg-error/20',
-      description: 'Teste Follow-Reminders und Call-to-Actions während des Streams.',
+      label: tr('Niedrig'), color: 'text-error', bgColor: 'bg-error/20',
+      description: tr('Teste Follow-Reminders und Call-to-Actions während des Streams.'),
       position,
     };
   }
   if (rate < 2) {
     const position = 25 + ((rate - 0.5) / 1.5) * 25;
     return {
-      label: 'Durchschnitt', color: 'text-warning', bgColor: 'bg-warning/20',
-      description: 'Solide Basis - interaktive Segmente und Raids können die Rate steigern.',
+      label: tr('Durchschnitt'), color: 'text-warning', bgColor: 'bg-warning/20',
+      description: tr('Solide Basis - interaktive Segmente und Raids können die Rate steigern.'),
       position,
     };
   }
   if (rate < 5) {
     const position = 50 + ((rate - 2) / 3) * 25;
     return {
-      label: 'Gut', color: 'text-success', bgColor: 'bg-success/20',
-      description: 'Überdurchschnittlich! Dein Content überzeugt neue Viewer zum Folgen.',
+      label: tr('Gut'), color: 'text-success', bgColor: 'bg-success/20',
+      description: tr('Überdurchschnittlich! Dein Content überzeugt neue Viewer zum Folgen.'),
       position,
     };
   }
   const position = Math.min(98, 75 + ((rate - 5) / 5) * 25);
   return {
-    label: 'Exzellent', color: 'text-success', bgColor: 'bg-success-soft',
-    description: 'Herausragend - deine Nische und Community-Bindung sind stark.',
+    label: tr('Exzellent'), color: 'text-success', bgColor: 'bg-success-soft',
+    description: tr('Herausragend - deine Nische und Community-Bindung sind stark.'),
     position,
   };
 }
 
 export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelProps) {
+  const { t, locale } = useLanguage();
   const [showExplainer, setShowExplainer] = useState(false);
 
   const conversionTrend = previousConversionRate
@@ -62,21 +64,21 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
 
   const funnelStages = [
     {
-      label: 'Unique Viewer',
+      label: t('Unique Viewer'),
       value: data.uniqueViewers,
       icon: Users,
       color: FUNNEL_COLORS.viewers,
       width: 100,
     },
     {
-      label: 'Wiederkehrend',
+      label: t('Wiederkehrend'),
       value: data.returningViewers,
       icon: Heart,
       color: FUNNEL_COLORS.returning,
       width: data.uniqueViewers > 0 ? (data.returningViewers / data.uniqueViewers) * 100 : 0,
     },
     {
-      label: 'Neue Follower',
+      label: t('Neue Follower'),
       value: data.newFollowers,
       icon: UserPlus,
       color: FUNNEL_COLORS.followers,
@@ -85,10 +87,10 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
   ];
 
   const sourceData = [
-    { label: 'Organisch', value: data.followersBySource.organic, icon: Zap, color: FUNNEL_COLORS.followers },
+    { label: t('Organisch'), value: data.followersBySource.organic, icon: Zap, color: FUNNEL_COLORS.followers },
     { label: 'Raids', value: data.followersBySource.raids, icon: Radio, color: FUNNEL_COLORS.viewers },
-    { label: 'Hosts', value: data.followersBySource.hosts, icon: Share2, color: FUNNEL_COLORS.returning },
-    { label: 'Sonstige', value: data.followersBySource.other, icon: Users, color: 'var(--color-text-secondary)' },
+    { label: t('Hosts'), value: data.followersBySource.hosts, icon: Share2, color: FUNNEL_COLORS.returning },
+    { label: t('Sonstige'), value: data.followersBySource.other, icon: Users, color: 'var(--color-text-secondary)' },
   ];
 
   const totalSourceFollowers = sourceData.reduce((sum, s) => sum + s.value, 0);
@@ -103,21 +105,20 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
             <UserPlus className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h3 className="text-lg font-bold text-white">Follower Conversion Funnel</h3>
-            <p className="text-sm text-text-secondary">Von Viewer zu Follower</p>
+            <h3 className="text-lg font-bold text-white">{t('Follower Conversion Funnel')}</h3>
+            <p className="text-sm text-text-secondary">{t('Von Viewer zu Follower')}</p>
           </div>
         </div>
       </div>
 
-      {/* Conversion Rate Hero Section */}
       <div className="bg-background rounded-xl p-5 mb-6 border border-primary/25">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <span className="text-sm text-text-secondary">Conversion Rate</span>
+            <span className="text-sm text-text-secondary">{t('Conversion Rate')}</span>
             <button
               onClick={() => setShowExplainer(!showExplainer)}
               className="text-text-secondary hover:text-white transition-colors"
-              title="Was ist die Conversion Rate?"
+              title={t('Was ist die Conversion Rate?')}
             >
               <Info className="w-4 h-4" />
             </button>
@@ -129,7 +130,6 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
           )}
         </div>
 
-        {/* Explainer dropdown */}
         {showExplainer && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
@@ -137,37 +137,34 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
             exit={{ opacity: 0, height: 0 }}
             className="mb-4 p-3 bg-background/60 rounded-lg text-xs text-text-secondary space-y-2"
           >
-            <p className="font-medium text-white text-sm">Was bedeutet Conversion Rate?</p>
+            <p className="font-medium text-white text-sm">{t('Was bedeutet Conversion Rate?')}</p>
             <p>
-              Die Conversion Rate zeigt, wie viele deiner Zuschauer zu Followern werden.
-              Sie berechnet sich aus: <span className="text-white font-mono">Neue Follower / Unique Viewer × 100</span>
+              {t('Die Conversion Rate zeigt, wie viele deiner Zuschauer zu Followern werden. Sie berechnet sich aus:')} <span className="text-white font-mono">{t('Neue Follower / Unique Viewer × 100')}</span>
             </p>
             <p>
-              Unique Viewer basieren jetzt auf den echten Chatters: alle Nutzer, die im Zeitraum im Chat
-              aufgetaucht sind (mit oder ohne Nachricht) laut Chatters-API. Keine Schätzungen mehr.
+              {t('Unique Viewer basieren jetzt auf den echten Chatters: alle Nutzer, die im Zeitraum im Chat aufgetaucht sind (mit oder ohne Nachricht) laut Chatters-API. Keine Schätzungen mehr.')}
             </p>
             <div className="grid grid-cols-4 gap-2 pt-2 border-t border-border">
               <div className="text-center">
                 <div className="text-error font-medium">&lt; 0.5%</div>
-                <div className="text-[10px]">Niedrig</div>
+                <div className="text-[10px]">{t('Niedrig')}</div>
               </div>
               <div className="text-center">
                 <div className="text-warning font-medium">0.5-2%</div>
-                <div className="text-[10px]">Durchschnitt</div>
+                <div className="text-[10px]">{t('Durchschnitt')}</div>
               </div>
               <div className="text-center">
                 <div className="text-success font-medium">2-5%</div>
-                <div className="text-[10px]">Gut</div>
+                <div className="text-[10px]">{t('Gut')}</div>
               </div>
               <div className="text-center">
                 <div className="text-success font-medium">&gt; 5%</div>
-                <div className="text-[10px]">Exzellent</div>
+                <div className="text-[10px]">{t('Exzellent')}</div>
               </div>
             </div>
           </motion.div>
         )}
 
-        {/* Rate + Formula */}
         <div className="flex items-center justify-between">
           <div>
             <div className="flex items-baseline gap-3">
@@ -175,38 +172,36 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
               {conversionTrend !== null && (
                 <span className={`flex items-center gap-1 text-sm ${conversionTrend >= 0 ? 'text-success' : 'text-error'}`}>
                   {conversionTrend >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                  {Math.abs(conversionTrend).toFixed(1)}% vs. Vorperiode
+                  {t('{trend}% vs. Vorperiode', { trend: Math.abs(conversionTrend).toFixed(1) })}
                 </span>
               )}
             </div>
-            {/* Formula breakdown */}
             <div className="flex items-center gap-2 mt-2 text-xs text-text-secondary">
               <span className="text-white font-medium">+{data.newFollowers}</span>
-              <span>gewonnen</span>
+              <span>{t('gewonnen')}</span>
               <span>/</span>
-              <span className="text-white font-medium">{data.uniqueViewers.toLocaleString('de-DE')}</span>
-              <span>Viewer</span>
+              <span className="text-white font-medium">{data.uniqueViewers.toLocaleString(locale)}</span>
+              <span>{t('Viewer')}</span>
               <ArrowRight className="w-3 h-3" />
               <span className={rating.color}>{data.conversionRate.toFixed(2)}%</span>
             </div>
             {data.netFollowerDelta !== undefined && data.netFollowerDelta !== data.newFollowers && (
               <div className="flex items-center gap-2 mt-1 text-xs">
                 <span className={data.netFollowerDelta >= 0 ? 'text-success' : 'text-error'}>
-                  Netto: {data.netFollowerDelta >= 0 ? '+' : ''}{data.netFollowerDelta}
+                  {t('Netto: {delta}', { delta: `${data.netFollowerDelta >= 0 ? '+' : ''}${data.netFollowerDelta}` })}
                 </span>
                 <span className="text-text-secondary">
-                  ({Math.abs(data.netFollowerDelta - data.newFollowers)} verloren)
+                  {t('({count} verloren)', { count: Math.abs(data.netFollowerDelta - data.newFollowers) })}
                 </span>
               </div>
             )}
           </div>
           <div className="text-right">
-            <div className="text-sm text-text-secondary mb-1">Ø Zeit bis Follow</div>
-            <div className="text-2xl font-bold text-white">{avgTimeToFollow.toFixed(0)} Min</div>
+            <div className="text-sm text-text-secondary mb-1">{t('Ø Zeit bis Follow')}</div>
+            <div className="text-2xl font-bold text-white">{t('{minutes} Min', { minutes: avgTimeToFollow.toFixed(0) })}</div>
           </div>
         </div>
 
-        {/* Benchmark Gauge */}
         <div className="mt-4">
           <div className="relative h-2 rounded-full overflow-hidden flex">
             <div className="flex-1 bg-danger/70" />
@@ -232,7 +227,6 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
           </div>
         </div>
 
-        {/* Rating tip */}
         {rating.description && (
           <div className={`mt-3 text-xs ${rating.color}`}>
             {rating.description}
@@ -240,7 +234,6 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
         )}
       </div>
 
-      {/* Funnel Visualization */}
       <div className="space-y-3 mb-6">
         {funnelStages.map((stage, i) => {
           const Icon = stage.icon;
@@ -260,7 +253,7 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-sm font-medium text-white">{stage.label}</span>
                     <span className="text-sm text-text-secondary">
-                      {stage.value.toLocaleString('de-DE')}
+                      {stage.value.toLocaleString(locale)}
                     </span>
                   </div>
                   <div className="h-3 bg-background rounded-full overflow-hidden">
@@ -282,9 +275,8 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
         })}
       </div>
 
-      {/* Follower Sources */}
       <div className="border-t border-border pt-4">
-        <h4 className="text-sm font-medium text-text-secondary mb-3">Follower-Quellen</h4>
+        <h4 className="text-sm font-medium text-text-secondary mb-3">{t('Follower-Quellen')}</h4>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {sourceData.map((source, i) => {
             const Icon = source.icon;
@@ -307,31 +299,30 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
         </div>
       </div>
 
-      {/* Insights */}
       <div className="mt-4 pt-4 border-t border-border">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {data.conversionRate > 2 && (
             <InsightBadge
               type="success"
-              text={`Überdurchschnittliche Conversion von ${data.conversionRate.toFixed(2)}%!`}
+              text={t('Überdurchschnittliche Conversion von {rate}%!', { rate: data.conversionRate.toFixed(2) })}
             />
           )}
           {data.conversionRate < 0.5 && (
             <InsightBadge
               type="warning"
-              text="Niedrige Conversion - teste Call-to-Actions während des Streams"
+              text={t('Niedrige Conversion - teste Call-to-Actions während des Streams')}
             />
           )}
           {data.followersBySource.raids > data.followersBySource.organic * 0.5 && totalSourceFollowers > 0 && (
             <InsightBadge
               type="info"
-              text={`${((data.followersBySource.raids / totalSourceFollowers) * 100).toFixed(0)}% der Follower kommen über Raids - pflege dein Netzwerk!`}
+              text={t('{percent}% der Follower kommen über Raids - pflege dein Netzwerk!', { percent: ((data.followersBySource.raids / totalSourceFollowers) * 100).toFixed(0) })}
             />
           )}
           {hasFastConversion && (
             <InsightBadge
               type="success"
-              text={`Schnelle Conversion! Viewer folgen im Schnitt nach ${avgTimeToFollow.toFixed(0)} Min`}
+              text={t('Schnelle Conversion! Viewer folgen im Schnitt nach {minutes} Min', { minutes: avgTimeToFollow.toFixed(0) })}
             />
           )}
         </div>
