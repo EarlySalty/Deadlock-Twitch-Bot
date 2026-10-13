@@ -7,7 +7,21 @@ import {
   createScheduleQueueFixture,
   type ScheduleQueueApi,
 } from '@/components/socialmedia/autopilot/schedule-queue';
+import { PublishReviewPanel } from '@/components/socialmedia/autopilot/publish-review/PublishReviewPanel';
+import { createPublishReviewFixture } from '@/components/socialmedia/autopilot/publish-review/fixtures';
 import { previewWorkspaceState } from './socialWorkspaceFixtures';
+
+function PreviewPublishReview({
+  twitchUserId,
+}: Pick<SocialMediaProps, 'twitchUserId'>) {
+  const [fixture] = useState(() => createPublishReviewFixture());
+  return (
+    <PublishReviewPanel
+      twitchUserId={twitchUserId ?? 'synthetic-owner'}
+      client={fixture.client}
+    />
+  );
+}
 
 function PreviewAutomation({
   twitchUserId,
@@ -94,6 +108,12 @@ export default function SocialWorkspaces(props: SocialMediaProps) {
         {...props}
         workspaceSlots={{
           ...workspaceSlots,
+          publishReview: props.workspaceSlots?.publishReview ?? (
+            <PreviewPublishReview
+              key={props.twitchUserId ?? ''}
+              twitchUserId={props.twitchUserId}
+            />
+          ),
           automation: props.workspaceSlots?.automation ?? (
             <PreviewAutomation
               key={props.twitchUserId ?? ''}
