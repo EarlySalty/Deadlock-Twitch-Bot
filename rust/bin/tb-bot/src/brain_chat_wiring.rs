@@ -17,7 +17,7 @@ const UNUSABLE_REPLY: &str =
     "Die Antwort kann ich hier nicht sicher wiedergeben. Frag bitte im Discord nach.";
 const UNAVAILABLE_REPLY: &str =
     "Ich kann gerade keine Antwort abrufen. Versuch es bitte später noch einmal.";
-const COACHING_TARGET: &str = "https://deutsche-deadlock-community.de/coaching";
+const COACHING_TARGET: &str = tb_config::primary_url!("/coaching");
 
 #[async_trait]
 trait BrainAnswerPort: Send + Sync {

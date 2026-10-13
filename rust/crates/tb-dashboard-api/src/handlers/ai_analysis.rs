@@ -66,6 +66,9 @@ pub(crate) async fn ai_analysis_handler(
             Ok(target) => target,
             Err(resp) => return resp,
         };
+    if let Some(resp) = super::ai_switch::blocked(Some(&twitch_user_id), Some(&streamer)).await {
+        return resp;
+    }
     // days: parse-or-30, clamp 7..3650 (Python int()-ValueError → 30).
     let days = params
         .days
@@ -130,11 +133,16 @@ pub(crate) async fn ai_analysis_handler(
 /// `tb_llm::complete` mit Use-Case `ai_analysis` (max_tokens 60000), KI
 /// via raw_completion (temp 0.5, max_tokens 60000). Fehler als String
 /// (Aufrufer prüft „credit balance is too low").
-async fn call_ai_analysis(ai_model: &str, prompt: &str) -> Result<Vec<Value>, String> {
+async fn call_ai_analysis(
+    ai_model: &str,
+    prompt: &str,
+    twitch_user_id: &str,
+) -> Result<Vec<Value>, String> {
     if ai_model == AI_MODEL_OPUS {
         let response = tb_llm::complete(
             "ai_analysis",
             tb_llm::Request::prompt(prompt)
+                .twitch_broadcaster(twitch_user_id)
                 .max_tokens(60000)
                 .ledger_purpose("ai-analysis"),
         )
@@ -148,6 +156,7 @@ async fn call_ai_analysis(ai_model: &str, prompt: &str) -> Result<Vec<Value>, St
     } else {
         let client = EngagementLlmClient::new(None, None, None, Some(Duration::from_secs(240)));
         let raw = client
+            .for_broadcaster(twitch_user_id)
             .raw_completion_tracked("", prompt, 60000, 0.5, "dashboard_ai_analysis")
             .await
             .map_err(|e| e.to_string())?;
@@ -185,7 +194,7 @@ async fn run_ai_analysis(
 
     // Step 2: Modell aufrufen.
     let prompt = build_ai_analysis_prompt(streamer, days, &ctx, game_filter, user_context);
-    let points = match call_ai_analysis(ai_model, &prompt).await {
+    let points = match call_ai_analysis(ai_model, &prompt, twitch_user_id).await {
         Ok(p) => p,
         Err(msg) => {
             tracing::error!("ai/analysis Modell-Fehler ({ai_model}): {msg}");

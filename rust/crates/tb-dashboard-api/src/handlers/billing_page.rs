@@ -54,7 +54,7 @@ use crate::auth::level::DashboardAuthLevel;
 
 /// Default-Public-Origin für success/cancel/return-URLs, wenn keine konfiguriert
 /// ist (Pythons letzter `_billing_configured_public_origin`-Fallback).
-const DEFAULT_PUBLIC_ORIGIN: &str = "https://admin.deutsche-deadlock-community.de";
+const DEFAULT_PUBLIC_ORIGIN: &str = tb_config::public_site::ADMIN_ORIGIN;
 
 /// P2.103: User-sichtbarer AGB-/§356-Widerrufsrecht-Hinweis auf der Stripe-
 /// Checkout-Seite (deutscher Rechtstext). PLATZHALTER — finaler Wortlaut wird von

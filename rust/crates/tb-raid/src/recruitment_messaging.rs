@@ -288,34 +288,103 @@ pub const OUTREACH_TRUST_CHEEKY_POOL: [&str; 4] = [
     OUTREACH_TRUST_CHEEKY_4_MESSAGE,
 ];
 
+const OUTREACH_TRUST_STAGE_1_MESSAGE_EN: &str = "Hey! We're sending a bit of support from the German Deadlock Community 💜 Have a great stream! If you'd like support more often, check the link in our profile. (Don't worry, we're not a scam. 😅)";
+const OUTREACH_TRUST_STAGE_2_MESSAGE_EN: &str = "A bit of support for you again 👋 If you don't know us yet: we're the largest and most active German Deadlock Community. Enjoy the rest of the stream!";
+const OUTREACH_TRUST_STAGE_3_MESSAGE_EN: &str = "It's us again 😄 Real people, real streamers who love Deadlock just like you. Glad you're here, enjoy the rest of the stream!";
+const OUTREACH_TRUST_STAGE_4_MESSAGE_EN: &str = "Next load of support for you 💜 If you want to stay involved, everything is on our website (link in the profile), and Discord is there too. No pressure, just take a look. Keep it up!";
+const OUTREACH_TRUST_LIGHT_1_MESSAGE_EN: &str = "Us again 👋 Smash it and enjoy the stream!";
+const OUTREACH_TRUST_LIGHT_2_MESSAGE_EN: &str =
+    "A little support from the German Deadlock Community 💜 Nice to see you regularly!";
+const OUTREACH_TRUST_LIGHT_3_MESSAGE_EN: &str = "A few more people for you 😄 We keep the German Deadlock scene alive together. Glad you're part of it!";
+const OUTREACH_TRUST_LIGHT_POOL_EN: [&str; 3] = [
+    OUTREACH_TRUST_LIGHT_1_MESSAGE_EN,
+    OUTREACH_TRUST_LIGHT_2_MESSAGE_EN,
+    OUTREACH_TRUST_LIGHT_3_MESSAGE_EN,
+];
+const OUTREACH_TRUST_PITCH_1_MESSAGE_EN: &str = "If you want more than viewers: we run tournaments, coaching and regular events, with over 2,400 people. Details on our website (link in the profile), Discord too 💜";
+const OUTREACH_TRUST_PITCH_2_MESSAGE_EN: &str = "We actually build the German Deadlock scene: tournaments, coaching, events, 2,400+ members. If you want in, check our website (in the profile)!";
+const OUTREACH_TRUST_PITCH_3_MESSAGE_EN: &str = "You don't just get viewers here: tournaments, coaching and a really active community are waiting. More on our website (profile), enjoy until then! 💜";
+const OUTREACH_TRUST_PITCH_POOL_EN: [&str; 3] = [
+    OUTREACH_TRUST_PITCH_1_MESSAGE_EN,
+    OUTREACH_TRUST_PITCH_2_MESSAGE_EN,
+    OUTREACH_TRUST_PITCH_3_MESSAGE_EN,
+];
+const OUTREACH_TRUST_CHEEKY_1_MESSAGE_EN: &str = "Raid #{n} 💀 You really like our support, huh? 😄 But you don't want to join the community? Come on, website in the profile, Discord too!";
+const OUTREACH_TRUST_CHEEKY_2_MESSAGE_EN: &str = "And every day the support shows up 😏 That's raid #{n} for you. How many more viewers do you want before you stop by? Website + Discord in the profile 💜";
+const OUTREACH_TRUST_CHEEKY_3_MESSAGE_EN: &str = "Raid #{n} and still not in? It's getting personal 😂 How to join is on our website (profile). The support still keeps coming 👋";
+const OUTREACH_TRUST_CHEEKY_4_MESSAGE_EN: &str = "#{n} 🫡 Respect for the loyalty, but you could also join officially at some point 😅 Website in the profile!";
+const OUTREACH_TRUST_CHEEKY_POOL_EN: [&str; 4] = [
+    OUTREACH_TRUST_CHEEKY_1_MESSAGE_EN,
+    OUTREACH_TRUST_CHEEKY_2_MESSAGE_EN,
+    OUTREACH_TRUST_CHEEKY_3_MESSAGE_EN,
+    OUTREACH_TRUST_CHEEKY_4_MESSAGE_EN,
+];
+
 /// Trust-Leiter-Text für die gewählte Variante. CTA bleibt ohne rohe Links.
 pub fn build_recruitment_message(
+    variant: RecruitmentMessageVariant,
+    to_broadcaster_login: &str,
+) -> String {
+    build_recruitment_message_for(tb_domain::UiLang::De, variant, to_broadcaster_login)
+}
+
+pub fn build_recruitment_message_for(
+    lang: tb_domain::UiLang,
     variant: RecruitmentMessageVariant,
     _to_broadcaster_login: &str,
 ) -> String {
     match variant {
-        RecruitmentMessageVariant::S1 => OUTREACH_TRUST_STAGE_1_MESSAGE.to_string(),
-        RecruitmentMessageVariant::S2 => OUTREACH_TRUST_STAGE_2_MESSAGE.to_string(),
-        RecruitmentMessageVariant::S3 => OUTREACH_TRUST_STAGE_3_MESSAGE.to_string(),
-        RecruitmentMessageVariant::S4 => OUTREACH_TRUST_STAGE_4_MESSAGE.to_string(),
-        RecruitmentMessageVariant::Light { pool_index } => OUTREACH_TRUST_LIGHT_POOL
-            .get(pool_index)
-            .copied()
-            .unwrap_or(OUTREACH_TRUST_LIGHT_1_MESSAGE)
+        RecruitmentMessageVariant::S1 => lang
+            .pick(
+                OUTREACH_TRUST_STAGE_1_MESSAGE,
+                OUTREACH_TRUST_STAGE_1_MESSAGE_EN,
+            )
             .to_string(),
-        RecruitmentMessageVariant::Pitch { pool_index } => OUTREACH_TRUST_PITCH_POOL
-            .get(pool_index)
-            .copied()
-            .unwrap_or(OUTREACH_TRUST_PITCH_1_MESSAGE)
+        RecruitmentMessageVariant::S2 => lang
+            .pick(
+                OUTREACH_TRUST_STAGE_2_MESSAGE,
+                OUTREACH_TRUST_STAGE_2_MESSAGE_EN,
+            )
             .to_string(),
+        RecruitmentMessageVariant::S3 => lang
+            .pick(
+                OUTREACH_TRUST_STAGE_3_MESSAGE,
+                OUTREACH_TRUST_STAGE_3_MESSAGE_EN,
+            )
+            .to_string(),
+        RecruitmentMessageVariant::S4 => lang
+            .pick(
+                OUTREACH_TRUST_STAGE_4_MESSAGE,
+                OUTREACH_TRUST_STAGE_4_MESSAGE_EN,
+            )
+            .to_string(),
+        RecruitmentMessageVariant::Light { pool_index } => {
+            let pool = match lang {
+                tb_domain::UiLang::De => OUTREACH_TRUST_LIGHT_POOL.as_slice(),
+                tb_domain::UiLang::En => OUTREACH_TRUST_LIGHT_POOL_EN.as_slice(),
+            };
+            pool.get(pool_index).copied().unwrap_or(pool[0]).to_string()
+        }
+        RecruitmentMessageVariant::Pitch { pool_index } => {
+            let pool = match lang {
+                tb_domain::UiLang::De => OUTREACH_TRUST_PITCH_POOL.as_slice(),
+                tb_domain::UiLang::En => OUTREACH_TRUST_PITCH_POOL_EN.as_slice(),
+            };
+            pool.get(pool_index).copied().unwrap_or(pool[0]).to_string()
+        }
         RecruitmentMessageVariant::Cheeky {
             pool_index,
             raid_count,
-        } => OUTREACH_TRUST_CHEEKY_POOL
-            .get(pool_index)
-            .copied()
-            .unwrap_or(OUTREACH_TRUST_CHEEKY_1_MESSAGE)
-            .replace("{n}", &raid_count.to_string()),
+        } => {
+            let pool = match lang {
+                tb_domain::UiLang::De => OUTREACH_TRUST_CHEEKY_POOL.as_slice(),
+                tb_domain::UiLang::En => OUTREACH_TRUST_CHEEKY_POOL_EN.as_slice(),
+            };
+            pool.get(pool_index)
+                .copied()
+                .unwrap_or(pool[0])
+                .replace("{n}", &raid_count.to_string())
+        }
     }
 }
 
@@ -562,5 +631,17 @@ mod tests {
             ),
             OUTREACH_TRUST_CHEEKY_1_MESSAGE.replace("{n}", "42")
         );
+    }
+
+    #[test]
+    fn english_recruitment_text_has_no_em_dash() {
+        let msg = build_recruitment_message_for(
+            tb_domain::UiLang::En,
+            RecruitmentMessageVariant::S1,
+            "victim",
+        );
+        assert!(msg.contains("German Deadlock Community"));
+        assert!(!msg.contains('\u{2014}'));
+        assert_ne!(msg, OUTREACH_TRUST_STAGE_1_MESSAGE);
     }
 }

@@ -29,7 +29,7 @@ const REFRESH_SKEW_SECONDS: i64 = 300;
 /// Twitch-Authorize-Endpoint.
 const AUTHORIZE_URL: &str = "https://id.twitch.tv/oauth2/authorize";
 /// Registrierte Redirect-URI des Sende-Accounts (Caddy → Dashboard).
-const REDIRECT_URI: &str = "https://deutsche-deadlock-community.de/callback/engagement-sender";
+const REDIRECT_URI: &str = tb_config::primary_url!("/callback/engagement-sender");
 /// Plattform-Discriminator in der geteilten `oauth_state_tokens`-Tabelle.
 const PLATFORM: &str = "engagement_sender";
 /// Scopes des Sende-Accounts (chatten als unauffälliger Account).

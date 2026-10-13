@@ -1,5 +1,10 @@
 # Workflow
 
+## 2026-10-12 - Paket O: dead-lock.de ohne Weiterleitung, OAuth pro Domain
+
+- Umgesetzt (Issue #1062): zentrale Basisadresse `tb_config::PublicSite` mit Allowlist der zwei öffentlichen Domains; Dashboard-Login, Raid-/Uplink-/Titel-Freigabe (inkl. `go-url`, Code-Tausch und Rücksprung in `tb-bot`), Affiliate, Stripe Connect, Kick und YouTube wählen die Redirect-URL nach Startdomain und speichern sie im State. Feste Hauptdomain-Stellen im Rust-Code laufen über `primary_url!`/`PublicSite`. Caddy-Block `ops/caddy/dead-lock-domain.caddy` mit Test, Doku `docs/DOMAINS_OAUTH.md` mit Liste der App-Redirect-URLs.
+- Verifikation: `cargo check --workspace --tests` grün. Gezielte Tests grün: `tb-config` Lib, `tb-raid` (Lib und alle Integrationstests), `tb-bot raid_oauth_impl` (62/0), `tb-internal-api raid_oauth`, `tb-dashboard-api` (auth_login, raid_pages, public_site, plattform_connect, demo, caster, partner_profiles, player_connect), `tb-analytics affiliate_gutschrift`, Caddy-Test. Rote Tests (tb-chat 42, tb-config `global_file` 1, tb-engagement `smalltalk_loop_store` 1, tb-dashboard-api `claim_api_*` 3, tb-internal-api Patch-Feed-Rollenmatrix 1) sind ohne diese Änderung identisch rot (TimescaleDB/Schema/Netz in der Sandbox).
+
 ## 2026-07-06 - network-stats public Endpoint
 
 - Start: delegierter GPT-Implementierungsworker fuer `GET /twitch/api/v2/public/network-stats` in `tb-dashboard-api`; Codearbeit im separaten Worktree `/home/naniadm/.worktrees/Deadlock-Twitch-Bot-network-stats` auf Branch `feature/website-v2-stats`. Scope strikt API/Tests, `website/` tabu. Commit/Push werden gemaess verbindlicher Regel nicht ausgefuehrt.

@@ -55,11 +55,16 @@ impl SubReminder {
     }
 
     pub async fn command(&self, event: &ChatMessageEvent, args: &str) {
-        let text = match self.command_result(event, args).await {
+        let lang = crate::ui_lang::channel_ui_lang(&self.pool, &event.broadcaster_user_id).await;
+        let text = match self.command_result(event, args, lang).await {
             Ok(text) => text,
             Err(error) => {
                 tracing::warn!(%error, "Sub-Erinnerung konnte nicht gespeichert werden");
-                "Das hat gerade nicht geklappt. Versuch es bitte später nochmal.".into()
+                lang.pick(
+                    "Das hat gerade nicht geklappt. Versuch es bitte später nochmal.",
+                    "That didn't work just now. Please try again later.",
+                )
+                .into()
             }
         };
         crate::api::send_reply(self.api.as_ref(), &event.broadcaster_user_id, &text).await;
@@ -69,57 +74,104 @@ impl SubReminder {
         &self,
         event: &ChatMessageEvent,
         args: &str,
+        lang: tb_domain::UiLang,
     ) -> Result<String, sqlx::Error> {
         let Some(link) = sub_link(&event.broadcaster_user_login) else {
-            return Ok("Der Kanal konnte gerade nicht erkannt werden.".into());
+            return Ok(lang
+                .pick(
+                    "Der Kanal konnte gerade nicht erkannt werden.",
+                    "The channel could not be recognized just now.",
+                )
+                .into());
         };
         let args = args.trim().to_lowercase();
         if args.is_empty() {
-            return Ok(format!(
-                "Du möchtest den Kanal mit einem Abo unterstützen? {link}"
-            ));
+            return Ok(match lang {
+                tb_domain::UiLang::De => {
+                    format!("Du möchtest den Kanal mit einem Abo unterstützen? {link}")
+                }
+                tb_domain::UiLang::En => {
+                    format!("Want to support the channel with a sub? {link}")
+                }
+            });
         }
         let channel = &event.broadcaster_user_id;
         let viewer = &event.chatter_user_id;
         if channel.is_empty() || viewer.is_empty() {
-            return Ok("Deine Twitch-ID fehlt gerade. Bitte versuch es später nochmal.".into());
+            return Ok(lang
+                .pick(
+                    "Deine Twitch-ID fehlt gerade. Bitte versuch es später nochmal.",
+                    "Your Twitch ID is missing right now. Please try again later.",
+                )
+                .into());
         }
         match args.as_str() {
-            "erinnerung aus" => {
+            "erinnerung aus" | "reminder off" => {
                 sqlx::query("UPDATE twitch_sub_reminders SET enabled=false, ended_at=NULL, end_message_id=NULL WHERE broadcaster_user_id=$1 AND viewer_user_id=$2")
                     .bind(channel).bind(viewer).execute(&self.pool).await?;
-                Ok("Alles klar, du bekommst hier keine Abo-Erinnerung mehr.".into())
+                Ok(lang
+                    .pick(
+                        "Alles klar, du bekommst hier keine Abo-Erinnerung mehr.",
+                        "All set, you will not get a sub reminder here anymore.",
+                    )
+                    .into())
             }
-            "erinnerung status" => {
+            "erinnerung status" | "reminder status" => {
                 let enabled: Option<bool> = sqlx::query_scalar("SELECT enabled FROM twitch_sub_reminders WHERE broadcaster_user_id=$1 AND viewer_user_id=$2")
                     .bind(channel).bind(viewer).fetch_optional(&self.pool).await?;
                 Ok(if enabled == Some(true) {
-                    "Deine Abo-Erinnerung ist an. Abbestellen: !sub erinnerung aus"
+                    lang.pick(
+                        "Deine Abo-Erinnerung ist an. Abbestellen: !sub erinnerung aus",
+                        "Your sub reminder is on. Turn it off: !sub reminder off",
+                    )
                 } else {
-                    "Deine Abo-Erinnerung ist aus. Einschalten: !sub erinnerung an"
+                    lang.pick(
+                        "Deine Abo-Erinnerung ist aus. Einschalten: !sub erinnerung an",
+                        "Your sub reminder is off. Turn it on: !sub reminder on",
+                    )
                 }
                 .into())
             }
-            "erinnerung an" => {
+            "erinnerung an" | "reminder on" => {
                 if !channel_enabled(&self.pool, channel).await? {
-                    return Ok("Abo-Erinnerungen sind in diesem Kanal noch ausgeschaltet.".into());
+                    return Ok(lang
+                        .pick(
+                            "Abo-Erinnerungen sind in diesem Kanal noch ausgeschaltet.",
+                            "Sub reminders are still turned off in this channel.",
+                        )
+                        .into());
                 }
                 if self.status.active(channel, viewer).await.is_none() {
-                    return Ok("Abo-Erinnerungen sind gerade nicht verfügbar. Der Streamer muss Twitch in der Verwaltung neu verbinden oder es später nochmal versuchen.".into());
+                    return Ok(lang.pick(
+                        "Abo-Erinnerungen sind gerade nicht verfügbar. Der Streamer muss Twitch in der Verwaltung neu verbinden oder es später nochmal versuchen.",
+                        "Sub reminders are not available right now. The streamer needs to reconnect Twitch in settings, or try again later.",
+                    ).into());
                 }
-                // Wiederholtes „an“ startet keinen neuen Lebenszyklus.
                 let mut tx = self.pool.begin().await?;
                 let enabled: Option<i32> = sqlx::query_scalar("SELECT sub_reminder_enabled FROM streamer_plans WHERE twitch_user_id=$1 FOR SHARE")
                     .bind(channel).fetch_optional(&mut *tx).await?;
                 if enabled != Some(1) {
-                    return Ok("Abo-Erinnerungen sind in diesem Kanal ausgeschaltet.".into());
+                    return Ok(lang
+                        .pick(
+                            "Abo-Erinnerungen sind in diesem Kanal ausgeschaltet.",
+                            "Sub reminders are turned off in this channel.",
+                        )
+                        .into());
                 }
                 sqlx::query("INSERT INTO twitch_sub_reminders (broadcaster_user_id,viewer_user_id,enabled) VALUES ($1,$2,true) ON CONFLICT (broadcaster_user_id,viewer_user_id) DO UPDATE SET enabled=true, consent_at=CASE WHEN twitch_sub_reminders.enabled THEN twitch_sub_reminders.consent_at ELSE now() END, ended_at=CASE WHEN twitch_sub_reminders.enabled THEN twitch_sub_reminders.ended_at ELSE NULL END, end_message_id=CASE WHEN twitch_sub_reminders.enabled THEN twitch_sub_reminders.end_message_id ELSE NULL END")
                     .bind(channel).bind(viewer).execute(&mut *tx).await?;
                 tx.commit().await?;
-                Ok("Ist an: Wenn Twitch dein Abo als beendet meldet, erinnere ich dich einmal bei deiner nächsten Chatnachricht. Die Erinnerung steht öffentlich im Chat. Abbestellen: !sub erinnerung aus".into())
+                Ok(lang.pick(
+                    "Ist an: Wenn Twitch dein Abo als beendet meldet, erinnere ich dich einmal bei deiner nächsten Chatnachricht. Die Erinnerung steht öffentlich im Chat. Abbestellen: !sub erinnerung aus",
+                    "It's on: when Twitch reports your sub as ended, I will remind you once on your next chat message. The reminder is public in chat. Turn it off: !sub reminder off",
+                ).into())
             }
-            _ => Ok("Abo-Link: !sub | Erinnerung: !sub erinnerung an, aus oder status".into()),
+            _ => Ok(lang
+                .pick(
+                    "Abo-Link: !sub | Erinnerung: !sub erinnerung an, aus oder status",
+                    "Sub link: !sub | Reminder: !sub reminder on, off or status",
+                )
+                .into()),
         }
     }
 
@@ -180,7 +232,11 @@ impl SubReminder {
         let ready: Option<bool> = sqlx::query_scalar("SELECT enabled AND end_message_id=$3 AND consent_at=$4 FROM twitch_sub_reminders WHERE broadcaster_user_id=$1 AND viewer_user_id=$2 FOR UPDATE")
             .bind(channel).bind(viewer).bind(&message_id).bind(consent_at).fetch_optional(&mut *tx).await?;
         if enabled == Some(1) && ready == Some(true) {
-            let text = format!("@{} Wie gewünscht die Erinnerung: Dein Abo hier ist beendet. Wenn du wieder unterstützen möchtest: {link} | Erinnerung aus: !sub erinnerung aus", event.chatter_user_login);
+            let lang = crate::ui_lang::channel_ui_lang(&self.pool, channel).await;
+            let text = match lang {
+                tb_domain::UiLang::De => format!("@{} Wie gewünscht die Erinnerung: Dein Abo hier ist beendet. Wenn du wieder unterstützen möchtest: {link} | Erinnerung aus: !sub erinnerung aus", event.chatter_user_login),
+                tb_domain::UiLang::En => format!("@{} As requested, a reminder: your sub here has ended. If you want to support again: {link} | Turn off: !sub reminder off", event.chatter_user_login),
+            };
             match tokio::time::timeout(
                 std::time::Duration::from_secs(8),
                 self.api.send_message(channel, &text),

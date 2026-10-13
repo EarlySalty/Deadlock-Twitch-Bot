@@ -125,7 +125,7 @@ impl Default for BotOperations {
             flip_pause_seconds: 43200.0,
             mcp_host: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
             mcp_port: 8892,
-            raid_redirect_uri: "https://deutsche-deadlock-community.de/callback/twitch".into(),
+            raid_redirect_uri: crate::primary_url!("/callback/twitch").into(),
             clip_raid_redirect_uri: String::new(),
             legacy_proxy_base_url: None,
             legacy_greeter_base_url: "http://127.0.0.1:8779".into(),

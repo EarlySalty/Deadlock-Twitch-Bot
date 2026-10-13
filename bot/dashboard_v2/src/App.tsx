@@ -25,6 +25,8 @@ import { VerwaltungPage } from '@/pages/Verwaltung';
 import { OverlayBuilderPage } from '@/pages/OverlayBuilder';
 import Pricing from '@/pages/Pricing';
 import { DashboardShell } from '@/components/layout/DashboardShell';
+import { ServerAdminPage } from '@/pages/ServerAdmin';
+import { SERVER_ADMIN_ROUTE } from '@/api/serverAdmin';
 import { OnboardingProvider } from '@/components/onboarding/OnboardingContext';
 import { EinrichtungCard } from '@/components/onboarding/EinrichtungCard';
 import { FeedbackBox } from '@/components/feedback/FeedbackBox';
@@ -57,7 +59,6 @@ import {
 } from '@/runtimeConfig';
 import { AlertTriangle } from 'lucide-react';
 
-// Error Boundary to prevent white screen on crashes
 interface ErrorBoundaryProps {
   children: ReactNode;
 }
@@ -93,11 +94,6 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   }
 }
 
-/**
- * Eigene Komponente, weil die Fehlergrenze eine Klasse ist und keine Hooks
- * benutzen kann. Der Provider liegt darueber, die Sprache gilt also auch im
- * Fehlerfall.
- */
 function ErrorFallback({ message, onRetry }: { message: string | null; onRetry: () => void }) {
   const t = useT();
   return (
@@ -119,7 +115,6 @@ function ErrorFallback({ message, onRetry }: { message: string | null; onRetry: 
   );
 }
 
-// Create QueryClient
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -130,6 +125,10 @@ const queryClient = new QueryClient({
   },
 });
 
+function refreshTranslatedQueries() {
+  void queryClient.invalidateQueries();
+}
+
 function normalizePathname(pathname: string): string {
   const normalized = pathname.replace(/\/+$/, '');
   return normalized || '/';
@@ -139,10 +138,6 @@ function InternalHome() {
   return <InternalHomeLanding />;
 }
 
-/**
- * Wählt zwischen Tagesform (Free) und Overview (Paid/Admin/Demo).
- * Muss innerhalb von PlanProvider gerendert werden.
- */
 interface OverviewOrTagesformProps {
   streamer: string | null;
   days: import('@/types/analytics').TimeRange;
@@ -302,7 +297,6 @@ function AnalyticsDashboard() {
             <TabNavigation activeTab={activeTab as TabId} onTabChange={handleTabChange} />
           )}
 
-          {/* Tab Content */}
           {activeTab === 'overview' && (
             <OverviewOrTagesform
               streamer={streamer}
@@ -363,6 +357,7 @@ function AnalyticsDashboard() {
 }
 
 function TitleGeneratorRoute() {
+  const t = useT();
   const { data: authStatus } = useAuthStatus();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const ownId = authStatus?.twitchUserId ?? null;
@@ -371,12 +366,12 @@ function TitleGeneratorRoute() {
   return (
     <DashboardShell activeRoute="title">
       {authStatus?.isAdmin && <div className="mx-auto max-w-4xl pt-4">
-        <label htmlFor="title-streamer" className="text-sm text-text-secondary">Twitch-Kanal</label>
+        <label htmlFor="title-streamer" className="text-sm text-text-secondary">{t('Twitch-Kanal')}</label>
         <select id="title-streamer" value={streamer ?? ''} onChange={(event) => setSelectedId(event.target.value)} className="ml-3 rounded-lg border border-border bg-card px-3 py-2 text-white">
-          {ownId ? <option value={ownId}>Mein Kanal</option> : <option value="" disabled>Kanal auswählen</option>}
+          {ownId ? <option value={ownId}>{t('Mein Kanal')}</option> : <option value="" disabled>{t('Kanal auswählen')}</option>}
           {directory.data?.items.filter((item) => item.twitchUserId && item.twitchUserId !== ownId).map((item) => <option key={item.twitchUserId} value={item.twitchUserId!}>{item.login}</option>)}
         </select>
-        {directory.isError && <p role="status" className="mt-2 text-sm text-error">Die Kanalliste ist gerade nicht verfügbar.</p>}
+        {directory.isError && <p role="status" className="mt-2 text-sm text-error">{t('Die Kanalliste ist gerade nicht verfügbar.')}</p>}
       </div>}
       <TitleGenerator key={streamer} streamer={streamer} />
     </DashboardShell>
@@ -395,6 +390,9 @@ function PricingRoute() {
 
 export default function App() {
   const path = normalizePathname(window.location.pathname);
+  // Server-Admin-Dashboard (fremde Discord-Server): eigenes Panel ausserhalb
+  // von Onboarding, Partner-Profil, Assistent und Admin-Modus.
+  const isServerAdminRoute = path === SERVER_ADMIN_ROUTE;
   const isInternalHomeRoute = path === PREVIEW_HOME_ROUTE || path === '/twitch/onboarding';
   const isHelpRoute = path === '/twitch/hilfe';
   const isFeedbackRoute = path === '/twitch/feedback';
@@ -415,6 +413,7 @@ export default function App() {
     (isAnalyticsRoute && new URLSearchParams(window.location.search).get('view') === 'category');
 
   const zeigeAssistent =
+    !isServerAdminRoute &&
     !isPreviewModeEnabled() &&
     !hasDemoRuntimeConfig() &&
     !resolveEffectiveDemoMode({
@@ -424,10 +423,11 @@ export default function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      {/* Die Sprachwahl liegt ueber allem: sie gilt fuer jede Route dieses
-          Bundles, auch fuer die Fehlergrenze. */}
-      <LanguageProvider>
+      <LanguageProvider onLanguageChange={refreshTranslatedQueries}>
         <ErrorBoundary>
+        {isServerAdminRoute ? (
+          <ServerAdminPage />
+        ) : (
         <OnboardingProvider>
           {isCategoryRoute ? (
             <DashboardShell activeRoute="category"><CategoryCollector /></DashboardShell>
@@ -467,6 +467,7 @@ export default function App() {
             <AnalyticsDashboard />
           )}
         </OnboardingProvider>
+        )}
         </ErrorBoundary>
         {zeigeAssistent && <DashboardAssistent imDokumentfluss={isUplinkRoute} />}
       </LanguageProvider>

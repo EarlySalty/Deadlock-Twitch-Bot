@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use crate::auth::level::DashboardAuthLevel;
 use tb_http_core::ApiError;
 
-const SLUGS: [&str; 4] = ["impressum", "datenschutz", "agb", "sicherheit"];
+const SLUGS: [&str; 5] = ["impressum", "datenschutz", "agb", "sicherheit", "privacy"];
 const LEGAL_REL_PATH: &str = "data/admin_dashboard/legal_pages.json";
 
 // Eingebettete Default-Bodies (1:1 aus _DEFAULT_LEGAL_PAGE_BODIES extrahiert).
@@ -26,6 +26,7 @@ const DEFAULT_IMPRESSUM: &str = include_str!("../../templates/legal_default_impr
 const DEFAULT_DATENSCHUTZ: &str = include_str!("../../templates/legal_default_datenschutz.html");
 const DEFAULT_AGB: &str = include_str!("../../templates/legal_default_agb.html");
 const DEFAULT_SICHERHEIT: &str = include_str!("../../templates/legal_default_sicherheit.html");
+const DEFAULT_PRIVACY: &str = include_str!("../../templates/legal_default_privacy.html");
 
 fn default_title(slug: &str) -> &'static str {
     match slug {
@@ -33,6 +34,7 @@ fn default_title(slug: &str) -> &'static str {
         "datenschutz" => "Datenschutzerklärung",
         "agb" => "Allgemeine Geschäftsbedingungen",
         "sicherheit" => "Sicherheitskonzept",
+        "privacy" => "Privacy Policy",
         _ => "",
     }
 }
@@ -43,12 +45,13 @@ fn default_body(slug: &str) -> &'static str {
         "datenschutz" => DEFAULT_DATENSCHUTZ,
         "agb" => DEFAULT_AGB,
         "sicherheit" => DEFAULT_SICHERHEIT,
+        "privacy" => DEFAULT_PRIVACY,
         _ => "",
     }
 }
 
 /// Slug normalisieren (Python `normalize_legal_page_slug`): lowercase + muss
-/// einer der vier bekannten Slugs sein, sonst `None`.
+/// einer der bekannten Slugs sein, sonst `None`.
 fn normalize_slug(raw: Option<&str>) -> Option<String> {
     let s = raw.unwrap_or("").trim().to_lowercase();
     if SLUGS.contains(&s.as_str()) {

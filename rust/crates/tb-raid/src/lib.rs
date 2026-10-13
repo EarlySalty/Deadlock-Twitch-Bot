@@ -43,6 +43,7 @@ pub mod external_recruitment_store;
 pub mod flip_unraid;
 pub mod manual_suppression;
 pub mod monthly_raid_boost;
+pub mod network_scope;
 pub mod oauth_flow;
 pub mod offline_eligibility;
 pub mod outreach_boost;
@@ -124,6 +125,9 @@ pub use monthly_raid_boost::{
     SeasonCloseOutcome, SeasonWinner, SeasonalBoostState, MONTHLY_BOOST_STREAMS,
     MONTHLY_BOOST_TTL_DAYS, QUALIFYING_DEADLOCK_SECONDS,
 };
+pub use network_scope::{
+    fallback_language, filter_candidates_by_network, NetworkDrop, NetworkFilterOutcome,
+};
 pub use oauth_flow::{
     build_authorize_url, build_state_info, StreamerContextResolver,
     PUBLIC_WEBSITE_ONBOARDING_LOGIN, TWITCH_AUTHORIZE_URL,
@@ -149,12 +153,12 @@ pub use pending_raids::{
 pub use raid_blacklist::RaidBlacklistStore;
 pub use raid_executor::{RaidApi, RaidExecutor, RaidOutcome, RaidRequest};
 pub use raid_history_store::{RaidHistoryStore, RecordRaidInput};
-pub use raid_messaging::build_partner_raid_message;
+pub use raid_messaging::{build_partner_raid_message, build_partner_raid_message_for};
 pub use reauth_admin::{BulkReauthPort, ReauthAdminStore};
 pub use recruitment_messaging::{
-    build_recruitment_message, plan_recruitment_delivery, RecruitmentDeliveryConfig,
-    RecruitmentDeliveryPlan, RecruitmentDeliveryRequest, RecruitmentDeliveryStatus,
-    RecruitmentInviteVariant, RecruitmentMessageVariant,
+    build_recruitment_message, build_recruitment_message_for, plan_recruitment_delivery,
+    RecruitmentDeliveryConfig, RecruitmentDeliveryPlan, RecruitmentDeliveryRequest,
+    RecruitmentDeliveryStatus, RecruitmentInviteVariant, RecruitmentMessageVariant,
 };
 pub use scope_fallback_warn::ScopeFallbackWarner;
 pub use scope_profiles::{
@@ -175,7 +179,7 @@ pub use signal_correlation::{
     ActionData, RaidArrivalInput, RaidSignalAction, RaidSignalActionKind,
     RaidSignalCorrelationService, RaidSignalOutcome, RaidSignalPlan, RaidSignalType,
 };
-pub use state_store::{RaidOAuthState, StateStore};
+pub use state_store::{ConsumedRaidState, RaidOAuthState, StateStore};
 pub use strikes_store::StrikesStore;
 pub use target_resolution::{
     filter_fallback_pool, resolve_boost_target, resolve_fallback_target, resolve_partner_target,

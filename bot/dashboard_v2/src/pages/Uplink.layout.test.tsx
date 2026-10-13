@@ -18,7 +18,7 @@ test('der Kopf zeigt nur den Streamstatus und dupliziert keine Plattformzuständ
 });
 
 test('OBS ist eine geordnete Liste aus sechs nativen Disclosures', () => {
-  assert.match(UPLINK, /<ol[^>]+aria-label="OBS einrichten"/);
+  assert.match(UPLINK, /<ol[^>]+aria-label=\{t\('OBS einrichten'\)\}/);
   assert.equal((UPLINK.match(/data-obs-step=/g) ?? []).length, 1);
   assert.match(UPLINK, /function ObsSchritt[\s\S]+<details/);
   assert.match(UPLINK, /function ObsSchritt[\s\S]+<summary/);
@@ -113,7 +113,7 @@ test('Disclosure-Zustände werden mit geschlossenen Startwerten gespeichert', ()
 test('jede Plattformkarte exponiert Plattform und ausgeschriebenen Zustand', () => {
   assert.match(ZIEL, /data-platform=\{platform\}/);
   assert.match(ZIEL, /data-state=\{/);
-  assert.match(ZIEL, /aria-label=\{`\$\{label\}-Einstellungen`\}/);
+  assert.match(ZIEL, /aria-label=\{t\('\{label\}-Einstellungen', \{ label \}\)\}/);
 });
 
 test('alle vier Plattformkarten verwenden echte lokale Logos', () => {
@@ -168,7 +168,7 @@ test('verbinden_lebt_in_der_plattform_karte', () => {
   // von denen einer irgendwann der falsche war.
   assert.match(UPLINK_API, /\/twitch\/raid\/auth\?scope_profile=uplink/);
   assert.doesNotMatch(UPLINK_API, /uplink\/connect\/\$\{platform\}`;/);
-  assert.match(UPLINK_API, /Mit \$\{p\.label\} verbinden/);
+  assert.match(UPLINK_API, /Mit \{plattform\} verbinden/);
   assert.match(UPLINK_API, /'Neu verbinden'/);
   assert.doesNotMatch(UPLINK_API, /Folgt später/);
 });
@@ -180,7 +180,7 @@ test('verbinden_knopf_nennt_wofuer_die_rechte_gebraucht_werden', () => {
   assert.match(UPLINK_API, /den Chat lesen und darin antworten/);
   assert.match(UPLINK_API, /Aktivitäten wie Follows sehen/);
   assert.match(UPLINK_API, /Kanalpunkt-Einlösungen abhaken/);
-  assert.match(ZIEL, /VERBINDEN_HINWEIS/);
+  assert.match(ZIEL, /verbindenHinweis/);
   // Keine Zahl im Text: der Dialog zeigt den vollen Satz inklusive der
   // Rechte, die der Bot schon hat, jede genannte Zahl wäre dort die falsche.
   assert.doesNotMatch(UPLINK_API, /nach (drei|vier|fünf|sechs|sieben) Rechten/);
@@ -198,7 +198,7 @@ test('verbundene_karte_zeigt_keine_zugangsfelder', () => {
     /\{automatisch \? \([\s\S]*?data-zugang="automatisch"[\s\S]*?Schlüssel erneut holen[\s\S]*?\) : \([\s\S]*?Serveradresse von \{label\}[\s\S]*?Stream-Schlüssel von \{label\}/,
   );
   // Die Herkunft steht in der Statuszeile, nicht doppelt daneben.
-  assert.match(ZIEL, /Adresse und Stream-Schlüssel kommen von deiner \$\{label\}-Verbindung/);
+  assert.match(ZIEL, /Adresse und Stream-Schlüssel kommen von deiner \{label\}-Verbindung/);
   // Und im automatischen Weg geht nichts aus dem Formular mit: ein vorher
   // getippter alter Schluessel wuerde sonst den frisch geholten ersetzen.
   assert.match(ZIEL, /const url = automatisch \? '' : rtmpUrl\.trim\(\);/);
@@ -208,20 +208,20 @@ test('verbundene_karte_zeigt_keine_zugangsfelder', () => {
 test('kartenkopf_bleibt_kurz_und_erklaert_nur_bei_getrennt', () => {
   // Drei Zeilen Erklaertext ueber jeder Karte haben die Seite erschlagen.
   // Der lange Text steckt jetzt in der aufklappbaren Hilfe.
-  assert.match(UPLINK_API, /VERBINDEN_KURZ/);
+  assert.match(UPLINK_API, /verbindenKurz/);
   assert.doesNotMatch(UPLINK_API, /Holt Stream-Schlüssel, Chat, Aktivitäten, Stream-Infos und Kanalpunkte in einem Schritt\./);
   assert.match(ZIEL, /chat\.status === 'getrennt' \? \(/);
   assert.match(ZIEL, /Welche Rechte\?/);
   // Der Trennen-Hinweis steht nur in der Rueckfrage, nicht als Dauertext.
-  assert.equal((ZIEL.match(/TRENNEN_HINWEIS/g) ?? []).length, 2);
+  assert.equal((ZIEL.match(/trennenHinweis/g) ?? []).length, 2);
   assert.doesNotMatch(ZIEL, /trennenMoeglich && !nachfrage/);
 });
 
 test('trennen_sitzt_in_der_plattform_karte_mit_hinweis_auf_den_raid_bot', () => {
   assert.match(UPLINK_API, /Bot- und Raidfunktionen bleiben verbunden/);
-  assert.match(ZIEL, /TRENNEN_HINWEIS/);
+  assert.match(ZIEL, /trennenHinweis/);
   assert.match(ZIEL, /trenneUplinkPlattform\(chat\.id, csrfToken/);
-  assert.match(ZIEL, /^\s+Trennen$/m);
+  assert.match(ZIEL, /^\s+\{t\('Trennen'\)\}$/m);
   assert.match(ZIEL, /Ja, trennen/);
   assert.match(UPLINK_API, /connect\/\$\{platform\}\/disconnect/);
 });
@@ -239,8 +239,8 @@ test('Schritt 6 zeigt vier verdeckte Adressen mit Zeigen und Kopieren', () => {
   // waere ein zweiter Ort, an dem die Maskierung gepflegt werden muesste.
   assert.match(UPLINK, /adressen\.map\(\(dock\) => \(/);
   assert.match(UPLINK, /adressen\.map\([\s\S]{0,400}<CopyField/);
-  assert.match(UPLINK, /\{offen \? 'Verdecken' : 'Zeigen'\}/);
-  assert.equal((UPLINK.match(/\{offen \? 'Verdecken' : 'Zeigen'\}/g) ?? []).length, 1);
+  assert.match(UPLINK, /\{offen \? t\('Verdecken'\) : t\('Zeigen'\)\}/);
+  assert.equal((UPLINK.match(/\{offen \? t\('Verdecken'\) : t\('Zeigen'\)\}/g) ?? []).length, 1);
 
   // Frisch erzeugte Adressen gehen in den Zwischenspeicher der Abfrage, nicht
   // in einen zweiten Zustand daneben: sonst zeigt die Karte weiter, was einmal

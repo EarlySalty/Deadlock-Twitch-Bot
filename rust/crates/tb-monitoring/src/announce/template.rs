@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use tb_domain::{UiLang, UiLangHints};
 
 use crate::stream::{parse_dt_utc, StreamSnapshot};
 
@@ -18,6 +19,26 @@ pub const TWITCH_ICON_URL: &str =
     "https://static.twitchcdn.net/assets/favicon-32-e29e246c157142c94346.png";
 pub const TWITCH_BUTTON_LABEL: &str = "Auf Twitch ansehen";
 pub const TWITCH_VOD_BUTTON_LABEL: &str = "VOD anschauen";
+
+pub fn twitch_button_label(lang: UiLang) -> &'static str {
+    lang.pick(TWITCH_BUTTON_LABEL, "Watch on Twitch")
+}
+
+pub fn twitch_vod_button_label(lang: UiLang) -> &'static str {
+    lang.pick(TWITCH_VOD_BUTTON_LABEL, "Watch VOD")
+}
+
+pub fn announcement_ui_lang(
+    guild_id: Option<u64>,
+    guild_language: Option<&str>,
+    stream_language: Option<&str>,
+) -> UiLang {
+    UiLang::resolve(UiLangHints {
+        guild_id,
+        guild_language,
+        stream_language,
+    })
+}
 
 const MAX_DESCRIPTION: usize = 4096;
 const MAX_FIELDS: usize = 25;
@@ -50,6 +71,7 @@ pub struct AnnouncementConfig {
     pub button_label_template: String,
     pub use_streamer_ping_role: bool,
     pub static_ping_role_ids: Vec<i64>,
+    pub lang: UiLang,
 }
 
 impl Default for AnnouncementConfig {
@@ -82,7 +104,27 @@ impl Default for AnnouncementConfig {
             button_label_template: TWITCH_BUTTON_LABEL.to_string(),
             use_streamer_ping_role: true,
             static_ping_role_ids: Vec::new(),
+            lang: UiLang::De,
         }
+    }
+}
+
+impl AnnouncementConfig {
+    pub fn for_lang(lang: UiLang) -> Self {
+        let mut config = Self {
+            lang,
+            ..Self::default()
+        };
+        if lang == UiLang::En {
+            config.title_template = "{channel} is LIVE in {game}!".to_string();
+            config.fields = vec![
+                ("Viewers".to_string(), "{viewer_count}".to_string(), true),
+                ("Category".to_string(), "{game}".to_string(), true),
+            ];
+            config.footer_text_template = "Watch on Twitch for more action!".to_string();
+            config.button_label_template = twitch_button_label(lang).to_string();
+        }
+        config
     }
 }
 
@@ -283,13 +325,18 @@ fn context_value<'a>(context: &'a BTreeMap<String, String>, key: &str) -> &'a st
     context.get(key).map(String::as_str).unwrap_or("")
 }
 
-fn live_stat_text(context: &BTreeMap<String, String>) -> String {
+fn live_stat_text(context: &BTreeMap<String, String>, lang: UiLang) -> String {
     let mut parts = Vec::new();
     let viewer_count = context_value(context, "viewer_count").trim();
     if !viewer_count.is_empty() && viewer_count != "0" {
-        parts.push(format!("👁 **{viewer_count}** Zuschauer"));
+        let label = lang.pick("Zuschauer", "viewers");
+        parts.push(format!("👁 **{viewer_count}** {label}"));
     }
-    parts.push(format!("⏱ seit **{}**", context_value(context, "uptime")));
+    let since = lang.pick("seit", "for");
+    parts.push(format!(
+        "⏱ {since} **{}**",
+        context_value(context, "uptime")
+    ));
     parts.push(format!("🌐 {}", context_value(context, "language")));
     parts.join("   ·   ")
 }
@@ -304,18 +351,19 @@ fn tags_text(context: &BTreeMap<String, String>) -> Option<String> {
     (!tags.is_empty()).then(|| format!("-# 🏷 {}", tags.join(" · ")))
 }
 
-fn live_components(context: &BTreeMap<String, String>, image_url: &str) -> Value {
+fn live_components(context: &BTreeMap<String, String>, image_url: &str, lang: UiLang) -> Value {
+    let playing = lang.pick("spielt", "is playing");
     let mut children = vec![
         v2_section_with_thumbnail(
             format!(
-                "🔴 **LIVE** · {} spielt {}\n## {}",
+                "🔴 **LIVE** · {} {playing} {}\n## {}",
                 context_value(context, "channel"),
                 context_value(context, "game"),
                 context_value(context, "title")
             ),
             context_value(context, "channel_avatar_url"),
         ),
-        v2_text_display(live_stat_text(context)),
+        v2_text_display(live_stat_text(context, lang)),
         v2_separator(),
     ];
     if !image_url.trim().is_empty() {
@@ -567,12 +615,12 @@ pub fn render_announcement(
         .trim()
         .to_string(),
         embed,
-        components: Some(live_components(context, &image_url)),
+        components: Some(live_components(context, &image_url, config.lang)),
         button_label: {
             let label = render_placeholders(&config.button_label_template, context);
             let label = label.trim();
             if label.is_empty() {
-                TWITCH_BUTTON_LABEL.to_string()
+                twitch_button_label(config.lang).to_string()
             } else {
                 label.chars().take(80).collect()
             }
@@ -666,6 +714,7 @@ pub fn build_offline_embed(
     preview_image_url: Option<&str>,
     target_game: &str,
     now: DateTime<Utc>,
+    lang: UiLang,
 ) -> Value {
     let game = last_game
         .map(str::trim)
@@ -675,20 +724,38 @@ pub fn build_offline_embed(
         } else {
             target_game
         });
+    let fallback_description = lang.pick(
+        "Letzten Stream als VOD ansehen.",
+        "Watch the last stream as a VOD.",
+    );
     let description = last_title
         .map(str::trim)
         .filter(|t| !t.is_empty())
-        .unwrap_or("Letzten Stream als VOD ansehen.");
+        .unwrap_or(fallback_description);
+    let title = match lang {
+        UiLang::De => format!("{display_name} ist OFFLINE"),
+        UiLang::En => format!("{display_name} is OFFLINE"),
+    };
+    let category = lang.pick("Kategorie", "Category");
+    let hint_name = lang.pick("Hinweis", "Note");
+    let hint_value = lang.pick(
+        "VOD über den Button abrufen.",
+        "Get the VOD via the button.",
+    );
+    let footer = lang.pick(
+        "Letzten Stream auf Twitch ansehen.",
+        "Watch the last stream on Twitch.",
+    );
     let mut embed = serde_json::json!({
-        "title": format!("{display_name} ist OFFLINE"),
+        "title": title,
         "description": description,
         "color": TWITCH_BRAND_COLOR,
         "timestamp": now.to_rfc3339_opts(SecondsFormat::Secs, false),
         "fields": [
-            {"name": "Kategorie", "value": game, "inline": true},
-            {"name": "Hinweis", "value": "VOD über den Button abrufen.", "inline": false},
+            {"name": category, "value": game, "inline": true},
+            {"name": hint_name, "value": hint_value, "inline": false},
         ],
-        "footer": {"text": "Letzten Stream auf Twitch ansehen."},
+        "footer": {"text": footer},
         "author": {"name": display_name},
     });
     if let Some(url) = preview_image_url.map(str::trim).filter(|u| !u.is_empty()) {
@@ -707,6 +774,7 @@ pub struct OfflineComponentsContext<'a> {
     pub target_game: &'a str,
     pub started_at: Option<DateTime<Utc>>,
     pub now: DateTime<Utc>,
+    pub lang: UiLang,
 }
 
 /// Offline-/VOD-Components V2. Der Button bleibt Broker-Sache und wird hier
@@ -721,21 +789,24 @@ pub fn build_offline_components(context: OfflineComponentsContext<'_>) -> Value 
         } else {
             context.target_game
         });
+    let fallback_title = context.lang.pick(
+        "Letzten Stream als VOD ansehen.",
+        "Watch the last stream as a VOD.",
+    );
     let title = context
         .last_title
         .map(str::trim)
         .filter(|t| !t.is_empty())
-        .unwrap_or("Letzten Stream als VOD ansehen.");
+        .unwrap_or(fallback_title);
+    let ended = context.lang.pick("Stream beendet", "Stream ended");
     let mut children = vec![v2_section_with_thumbnail(
-        format!(
-            "💤 **Stream beendet** · {}\n## {title}",
-            context.display_name
-        ),
+        format!("💤 **{ended}** · {}\n## {title}", context.display_name),
         context.channel_avatar_url.unwrap_or(""),
     )];
     if let Some(started_at) = context.started_at {
+        let ran = context.lang.pick("Stream lief", "Stream ran");
         children.push(v2_text_display(format!(
-            "🎮 {game}   ·   ⏱ Stream lief **{}**",
+            "🎮 {game}   ·   ⏱ {ran} **{}**",
             fmt_duration(started_at, context.now)
         )));
     }
@@ -747,9 +818,10 @@ pub fn build_offline_components(context: OfflineComponentsContext<'_>) -> Value 
     {
         children.push(v2_media_gallery(url));
     }
-    children.push(v2_text_display(
+    children.push(v2_text_display(context.lang.pick(
         "-# Die Aufzeichnung gibt's über den Button — solange Twitch sie hält.",
-    ));
+        "-# The recording is available via the button as long as Twitch keeps it.",
+    )));
     Value::Array(vec![v2_container(
         TWITCH_OFFLINE_COMPONENT_ACCENT,
         children,
@@ -1093,6 +1165,7 @@ mod tests {
             target_game: "Deadlock",
             started_at,
             now,
+            lang: UiLang::De,
         });
         let components = components.as_array().expect("components array");
         assert_eq!(components.len(), 1);
@@ -1184,9 +1257,67 @@ mod tests {
             Some("https://vod/p.jpg"),
             "Deadlock",
             now,
+            UiLang::De,
         );
         assert_eq!(embed["title"], "Drag ist OFFLINE");
         assert_eq!(embed["fields"][0]["value"], "Deadlock");
         assert_eq!(embed["image"]["url"], "https://vod/p.jpg");
+    }
+
+    #[test]
+    fn community_guild_stays_german_even_for_english_stream() {
+        assert_eq!(
+            announcement_ui_lang(Some(tb_domain::COMMUNITY_GUILD_ID), None, Some("en")),
+            UiLang::De
+        );
+        let config = AnnouncementConfig::for_lang(UiLang::De);
+        let now = parse_dt_utc("2026-06-09T18:00:00Z").unwrap();
+        let stream = StreamSnapshot {
+            user_login: "drag".to_string(),
+            user_name: "Drag".to_string(),
+            title: "Ranked Grind".to_string(),
+            game_name: "Deadlock".to_string(),
+            language: "en".to_string(),
+            viewer_count: 42,
+            started_at: Some("2026-06-09T17:30:00Z".to_string()),
+            ..Default::default()
+        };
+        let ctx = build_context("drag", &stream, "https://www.twitch.tv/drag", "", now, None);
+        let rendered = render_announcement(&config, &ctx, now, Some("token-1"));
+        assert_eq!(rendered.embed["title"], "Drag ist LIVE in Deadlock!");
+        assert_eq!(rendered.button_label, "Auf Twitch ansehen");
+    }
+
+    #[test]
+    fn english_stream_language_renders_english_go_live() {
+        assert_eq!(announcement_ui_lang(None, None, Some("en")), UiLang::En);
+        let config = AnnouncementConfig::for_lang(UiLang::En);
+        let now = parse_dt_utc("2026-06-09T18:00:00Z").unwrap();
+        let stream = StreamSnapshot {
+            user_login: "drag".to_string(),
+            user_name: "Drag".to_string(),
+            title: "Ranked Grind".to_string(),
+            game_name: "Deadlock".to_string(),
+            language: "en".to_string(),
+            viewer_count: 42,
+            started_at: Some("2026-06-09T17:30:00Z".to_string()),
+            ..Default::default()
+        };
+        let ctx = build_context("drag", &stream, "https://www.twitch.tv/drag", "", now, None);
+        let rendered = render_announcement(&config, &ctx, now, Some("token-1"));
+        assert_eq!(rendered.embed["title"], "Drag is LIVE in Deadlock!");
+        assert_eq!(rendered.button_label, "Watch on Twitch");
+        assert_eq!(rendered.embed["fields"][0]["name"], "Viewers");
+        assert_eq!(rendered.embed["fields"][1]["name"], "Category");
+        let components = rendered.components.as_ref().expect("components");
+        let heading = components[0]["components"][0]["components"][0]["content"]
+            .as_str()
+            .expect("heading");
+        assert!(heading.contains("is playing"), "{heading}");
+        let stat = components[0]["components"][1]["content"]
+            .as_str()
+            .expect("stat");
+        assert!(stat.contains("viewers"), "{stat}");
+        assert!(!rendered.button_label.contains('\u{2014}'));
     }
 }

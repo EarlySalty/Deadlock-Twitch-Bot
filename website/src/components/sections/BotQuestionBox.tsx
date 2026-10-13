@@ -1,15 +1,24 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bot, Loader2, Send } from "lucide-react";
+import { SITE_LANG, tx } from "@/i18n/locale";
 
 const ASK_URL = "/twitch/api/v2/self-explainer/ask";
 
-const SUGGESTIONS = [
-  "Was macht der Bot eigentlich?",
-  "Ist das nicht Scam?",
-  "Muss ich was einrichten?",
-  "Wann raidet der Bot?",
-];
+const SUGGESTIONS = tx(
+  [
+    "Was macht der Bot eigentlich?",
+    "Ist das nicht Scam?",
+    "Muss ich was einrichten?",
+    "Wann raidet der Bot?",
+  ],
+  [
+    "What does the bot actually do?",
+    "Isn't this a scam?",
+    "Do I need to set anything up?",
+    "When does the bot raid?",
+  ],
+);
 
 interface AskResponse {
   answer?: string;
@@ -42,16 +51,16 @@ export function BotQuestionBox() {
       const res = await fetch(ASK_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q }),
+        body: JSON.stringify({ question: q, lang: SITE_LANG }),
         signal: controller.signal,
       });
 
       if (res.status === 429) {
-        setError("Zu viele Fragen gerade — probier's gleich nochmal.");
+        setError(tx("Zu viele Fragen gerade — probier's gleich nochmal.", "Too many questions right now — try again in a moment."));
         return;
       }
       if (!res.ok) {
-        setError("Hat nicht geklappt — versuch's nochmal oder schau in die FAQ.");
+        setError(tx("Hat nicht geklappt — versuch's nochmal oder schau in die FAQ.", "That didn't work — try again or check the FAQ."));
         return;
       }
 
@@ -63,12 +72,12 @@ export function BotQuestionBox() {
             ? [data.answer]
             : [];
       if (!answerParts.length) {
-        setError("Keine Antwort erhalten — versuch's nochmal.");
+        setError(tx("Keine Antwort erhalten — versuch's nochmal.", "No answer received — try again."));
         return;
       }
       setParts(answerParts);
     } catch {
-      setError("Verbindung fehlgeschlagen — versuch's nochmal.");
+      setError(tx("Verbindung fehlgeschlagen — versuch's nochmal.", "Connection failed — try again."));
     } finally {
       window.clearTimeout(timer);
       setLoading(false);
@@ -82,16 +91,24 @@ export function BotQuestionBox() {
           <Bot size={20} className="text-accent" />
         </div>
         <div>
-          <p className="text-sm uppercase tracking-[0.16em] text-primary">Frag den Bot</p>
+          <p className="text-sm uppercase tracking-[0.16em] text-primary">{tx("Frag den Bot", "Ask the bot")}</p>
           <h2 className="text-2xl font-bold text-text-primary md:text-3xl">
-            Unsicher? Frag direkt nach.
+            {tx("Unsicher? Frag direkt nach.", "Not sure? Just ask.")}
           </h2>
         </div>
       </div>
 
       <p className="mt-4 max-w-2xl text-base leading-relaxed text-text-secondary">
-        Tipp deine Frage ein — die Antwort kommt nur aus dem, was der Bot wirklich macht.
-        Ehrlich, kein Verkaufsgerede.
+        {tx(
+          <>
+            Tipp deine Frage ein — die Antwort kommt nur aus dem, was der Bot wirklich macht.
+            Ehrlich, kein Verkaufsgerede.
+          </>,
+          <>
+            Type your question — the answer is based only on what the bot actually does.
+            Honest, no sales pitch.
+          </>,
+        )}
       </p>
 
       <form
@@ -105,7 +122,7 @@ export function BotQuestionBox() {
           type="text"
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
-          placeholder="z. B. Was macht der Bot und ist das Scam?"
+          placeholder={tx("z. B. Was macht der Bot und ist das Scam?", "e.g. What does the bot do, and is it a scam?")}
           maxLength={500}
           disabled={loading}
           className="flex-1 rounded-xl border border-border bg-[rgba(44, 35, 24,0.76)] px-5 py-4 text-text-primary outline-none transition-colors placeholder:text-text-secondary/60 focus:border-accent disabled:opacity-60"
@@ -116,7 +133,7 @@ export function BotQuestionBox() {
           className="gradient-accent inline-flex items-center justify-center gap-2 rounded-xl px-6 py-4 font-semibold transition-all duration-200 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {loading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
-          {loading ? "Denkt nach…" : "Fragen"}
+          {loading ? tx("Denkt nach…", "Thinking…") : tx("Fragen", "Ask")}
         </button>
       </form>
 
@@ -142,7 +159,7 @@ export function BotQuestionBox() {
         {loading && (
           <div className="flex items-center gap-3 text-text-secondary">
             <Loader2 size={18} className="animate-spin text-accent" />
-            <span>Der Bot überlegt kurz…</span>
+            <span>{tx("Der Bot überlegt kurz…", "The bot is thinking…")}</span>
           </div>
         )}
 

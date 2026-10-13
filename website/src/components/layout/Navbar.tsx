@@ -4,6 +4,7 @@ import { useScrollSpy } from '@/hooks/useScrollSpy';
 import { DISCORD_INVITE_URL, TWITCH_DASHBOARD_URL } from '@/data/externalLinks';
 import { openSiteChatbot } from '@/components/layout/SiteChatbot';
 import { DiscordLogo } from '@/components/ui/DiscordLogo';
+import { tx } from '@/i18n/locale';
 
 interface NavLink {
   label: string;
@@ -12,13 +13,13 @@ interface NavLink {
 }
 
 const NAV_LINKS: NavLink[] = [
-  { label: "So funktioniert's", id: 'ablauf' },
+  { label: tx("So funktioniert's", 'How it works'), id: 'ablauf' },
   { label: 'Raids', id: 'raid' },
   { label: 'Moderation', id: 'moderation' },
   { label: 'Features', id: 'features' },
   { label: 'Community', id: 'community' },
-  { label: 'Sicherheit', id: 'sicherheit' },
-  { label: 'Streamer-Zahlen', href: '/streamer/vergleich/' },
+  { label: tx('Sicherheit', 'Security'), id: 'sicherheit' },
+  { label: tx('Streamer-Zahlen', 'Streamer stats'), href: '/streamer/vergleich/' },
 ];
 
 const SECTION_IDS = NAV_LINKS.flatMap((link) => (link.id ? [link.id] : []));
@@ -70,12 +71,12 @@ export function Navbar() {
             className="h-8 w-8 shrink-0"
           />
           <span className="font-display font-bold text-sm sm:text-lg leading-tight bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-            Deutsche Deadlock Community
+            {tx('Deutsche Deadlock Community', 'Deadlock Partner Network')}
           </span>
         </span>
 
         {/* Center nav – desktop only */}
-        <nav className="hidden min-[1720px]:flex items-center gap-4 whitespace-nowrap shrink-0" aria-label="Seitennavigation">
+        <nav className="hidden min-[1720px]:flex items-center gap-4 whitespace-nowrap shrink-0" aria-label={tx('Seitennavigation', 'Site navigation')}>
           {NAV_LINKS.map(({ label, id, href }) =>
             id ? (
               <button
@@ -107,7 +108,7 @@ export function Navbar() {
             href={TWITCH_DASHBOARD_URL}
             className="inline-flex items-center whitespace-nowrap rounded-lg border border-primary/60 bg-primary/10 px-4 py-2 text-sm font-semibold text-text-primary transition-colors duration-200 hover:border-primary hover:bg-primary/20"
           >
-            Partner-Dashboard
+            {tx('Partner-Dashboard', 'Partner Dashboard')}
           </a>
           <a
             href={DISCORD_INVITE_URL}
@@ -116,7 +117,7 @@ export function Navbar() {
             className="hidden min-[1720px]:inline-flex items-center gap-2 whitespace-nowrap rounded-lg border border-[#5865F2]/50 bg-[#5865F2]/10 px-4 py-2 text-sm text-text-primary transition-colors duration-200 hover:border-[#5865F2] hover:bg-[#5865F2]/20"
           >
             <DiscordLogo size={17} className="text-[#5865f2]" />
-            Community-Discord
+            {tx('Community-Discord', 'Join our Discord')}
           </a>
           <button
             onClick={openSiteChatbot}
@@ -124,7 +125,7 @@ export function Navbar() {
           >
             <span className="inline-flex items-center gap-2">
               <MessageCircle size={16} />
-              Hilfe bekommen
+              {tx('Hilfe bekommen', 'Get help')}
             </span>
           </button>
         </div>
@@ -134,7 +135,7 @@ export function Navbar() {
           type="button"
           className="min-[1720px]:hidden shrink-0 text-text-secondary hover:text-text-primary transition-colors duration-200 bg-transparent border-none p-2 cursor-pointer"
           onClick={() => setMenuOpen((prev) => !prev)}
-          aria-label={menuOpen ? 'Navigation schließen' : 'Navigation öffnen'}
+          aria-label={menuOpen ? tx('Navigation schließen', 'Close navigation') : tx('Navigation öffnen', 'Open navigation')}
           aria-expanded={menuOpen}
           ref={menuButton}
           aria-controls="streamer-mobile-navigation"
@@ -145,14 +146,14 @@ export function Navbar() {
 
       {/* Mobile dropdown */}
       {menuOpen && (
-        <nav id="streamer-mobile-navigation" aria-label="Seitennavigation" className="min-[1720px]:hidden glass border-t border-border max-h-[calc(100dvh-4rem)] overflow-y-auto">
+        <nav id="streamer-mobile-navigation" aria-label={tx('Seitennavigation', 'Site navigation')} className="min-[1720px]:hidden glass border-t border-border max-h-[calc(100dvh-4rem)] overflow-y-auto">
           <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col gap-2">
             <a
               href={TWITCH_DASHBOARD_URL}
               className="rounded-lg border border-primary/60 bg-primary/10 px-4 py-3 text-sm font-semibold text-text-primary transition-colors duration-200 hover:border-primary hover:bg-primary/20"
               onClick={() => setMenuOpen(false)}
             >
-              Partner-Dashboard
+              {tx('Partner-Dashboard', 'Partner Dashboard')}
             </a>
             {NAV_LINKS.map(({ label, id, href }) =>
               id ? (
@@ -190,7 +191,7 @@ export function Navbar() {
                 onClick={() => setMenuOpen(false)}
               >
                 <DiscordLogo size={17} className="text-[#5865f2]" />
-                Community-Discord
+                {tx('Community-Discord', 'Join our Discord')}
               </a>
               <button
                 onClick={() => {
@@ -201,7 +202,7 @@ export function Navbar() {
               >
                 <span className="inline-flex items-center justify-center gap-2">
                   <MessageCircle size={16} />
-                  Hilfe bekommen
+                  {tx('Hilfe bekommen', 'Get help')}
                 </span>
               </button>
             </div>

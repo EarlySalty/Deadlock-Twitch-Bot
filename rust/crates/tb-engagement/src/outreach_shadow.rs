@@ -276,6 +276,7 @@ impl OutreachReviewClient {
                 .denken_aus()
                 .timeout(FIREWORKS_TIMEOUT)
                 .ledger_purpose("outreach_shadow")
+                .twitch_channel(evidence.streamer_login.clone())
                 .endpoint(self.endpoint.clone()),
         )
         .await;
@@ -290,9 +291,9 @@ fn outreach_error(error: tb_llm::LlmError) -> OutreachError {
         tb_llm::LlmError::Timeout(_) => OutreachError::Timeout,
         tb_llm::LlmError::Http { .. } => OutreachError::HttpStatus,
         tb_llm::LlmError::Unparsable(_) => OutreachError::Decode,
-        tb_llm::LlmError::Unavailable(_) | tb_llm::LlmError::Transport(_) => {
-            OutreachError::Unavailable
-        }
+        tb_llm::LlmError::Unavailable(_)
+        | tb_llm::LlmError::Transport(_)
+        | tb_llm::LlmError::Disabled(_) => OutreachError::Unavailable,
     }
 }
 

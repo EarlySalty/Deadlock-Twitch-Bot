@@ -2,7 +2,7 @@
 use sqlx::PgPool;
 
 pub const CONNECT_PATH: &str = "/twitch/connect";
-pub const CONNECT_URL: &str = "https://deutsche-deadlock-community.de/twitch/connect";
+pub const CONNECT_URL: &str = tb_config::primary_url!("/twitch/connect");
 pub const DISCONNECTED_REPLY: &str = "Für dieses Twitch-Konto ist die Steam-Zuordnung deaktiviert. Nur die Person selbst kann sie mit !connect wieder aktivieren.";
 pub const STEAM64_BASE: i64 = 76561197960265728;
 

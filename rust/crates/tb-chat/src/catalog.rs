@@ -20,11 +20,19 @@ impl CommandGroup {
     }
 
     pub fn label(&self) -> &'static str {
-        match self {
-            CommandGroup::Stats => "Statistik",
-            CommandGroup::Match => "Match",
-            CommandGroup::Mod => "Moderation",
-            CommandGroup::Fun => "Sonstiges",
+        self.label_for(tb_domain::UiLang::De)
+    }
+
+    pub fn label_for(&self, lang: tb_domain::UiLang) -> &'static str {
+        match (self, lang) {
+            (CommandGroup::Stats, tb_domain::UiLang::De) => "Statistik",
+            (CommandGroup::Stats, tb_domain::UiLang::En) => "Stats",
+            (CommandGroup::Match, tb_domain::UiLang::De) => "Match",
+            (CommandGroup::Match, tb_domain::UiLang::En) => "Match",
+            (CommandGroup::Mod, tb_domain::UiLang::De) => "Moderation",
+            (CommandGroup::Mod, tb_domain::UiLang::En) => "Moderation",
+            (CommandGroup::Fun, tb_domain::UiLang::De) => "Sonstiges",
+            (CommandGroup::Fun, tb_domain::UiLang::En) => "Other",
         }
     }
 }
@@ -35,6 +43,54 @@ pub struct CommandInfo {
     pub aliases: &'static [&'static str],
     pub group: CommandGroup,
     pub summary: &'static str,
+}
+
+impl CommandInfo {
+    pub fn summary_for(&self, lang: tb_domain::UiLang) -> &'static str {
+        lang.pick(self.summary, en_summary(self.name).unwrap_or(self.summary))
+    }
+}
+
+fn en_summary(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "!connect" => "Links your own Twitch and Steam account on our website, without Discord.",
+        "!unconnect" => "Removes your own direct Steam link and turns off automatic linking.",
+        "!watchtime" => "Tracked watch time in this channel. Use !watchtime @user for someone else.",
+        "!sub" => "Sub link for this channel. Optional reminder: !sub erinnerung on/off/status.",
+        "!rank" => "Deadlock rank: !rank me for you, !rank @user for others; or !rank steam:<ID>.",
+        "!wins" => "The streamer's Deadlock career wins, or !wins @user for someone else.",
+        "!winrate" => "Deadlock winrate of recent games. Optional: !winrate @user.",
+        "!mmr" => "Rank and trend of the last few days. Optional: !mmr @user.",
+        "!live" => "The streamer's current Deadlock match, or !live @user for someone else.",
+        "!lastmatch" => "Last Deadlock game with result, hero and KDA. Optional: !lastmatch @user.",
+        "!streak" => "Current win or loss streak. Optional: !streak @user.",
+        "!mostplayed" => "Most played hero in recent games. Optional: !mostplayed @user.",
+        "!clip" => "Creates a clip of the current stream.",
+        "!invite" => "Posts the community invite link.",
+        "!dldc" => "Posts the invite link to the German Deadlock Community.",
+        "!commands" => "Links the overview of all commands.",
+        "!trustpilot" => "Links the German Deadlock Community Trustpilot page.",
+        "!dashboard" => "Links your Twitch dashboard.",
+        "!help" => "Short explanation of a feature: !help <topic>.",
+        "!ping" => "Checks whether the bot is responding right now.",
+        "!lurk" => "Tells chat that you are still watching quietly.",
+        "!engagement_ignore_me" => "Takes you out of the bot's engagement replies.",
+        "!engagement_remember_me" => "Puts you back into the bot's engagement replies.",
+        "!raid" => "Starts a raid to a Deadlock streamer (mods/broadcaster).",
+        "!title" => "Suggests a stream title: !title <keywords>.",
+        "!raid_status" => "Shows auto-raid status and rough raid stats.",
+        "!raid_history" => "Shows the latest raids.",
+        "!uban" => "Undoes the last auto-ban.",
+        "!explain" => "Explains why the bot flagged someone as a scam.",
+        "!clipcontest" => "Submits a clip from this channel to the weekly Discord contest: !clipcontest <clip link>, or without a link the newest clip of the live stream (broadcaster/mods).",
+        "!silentban" => "Toggles chat notices for auto-bans.",
+        "!silentraid" => "Toggles chat notices for raids.",
+        "!lurkersteuer_off" => "Turns off the lurker reminder (broadcaster only).",
+        "!engagement_status" => "Shows whether engagement tracking is on in this channel.",
+        "!engagement_on" => "Turns engagement tracking on for this channel.",
+        "!engagement_off" => "Turns engagement tracking off for this channel.",
+        _ => return None,
+    })
 }
 
 pub fn catalog() -> &'static [CommandInfo] {
@@ -277,10 +333,28 @@ mod tests {
         for c in cat {
             assert!(c.name.starts_with('!'));
             assert!(!c.summary.trim().is_empty());
+            assert!(!c.summary_for(tb_domain::UiLang::En).trim().is_empty());
+            assert_ne!(
+                c.summary_for(tb_domain::UiLang::En),
+                c.summary,
+                "missing English summary for {}",
+                c.name
+            );
             for alias in c.aliases {
                 assert!(alias.starts_with('!'));
             }
         }
+    }
+
+    #[test]
+    fn ping_summary_follows_language() {
+        let ping = catalog().iter().find(|c| c.name == "!ping").expect("!ping");
+        assert!(ping
+            .summary_for(tb_domain::UiLang::De)
+            .contains("antwortet"));
+        assert!(ping
+            .summary_for(tb_domain::UiLang::En)
+            .contains("responding"));
     }
 
     #[test]

@@ -37,6 +37,7 @@ pub mod db_token_store;
 pub mod fun_responses;
 pub mod global_ban_sweep;
 pub mod global_chatter_ban;
+pub mod home_invite;
 pub mod invite_question;
 pub mod lfg_pitch;
 pub mod lurker_policy;
@@ -68,6 +69,7 @@ pub mod title_db;
 pub mod title_jobs;
 pub mod token;
 pub mod types;
+pub mod ui_lang;
 pub mod zuschauer_register;
 
 pub use api::{BanOutcome, ChatApi};
@@ -85,6 +87,9 @@ pub use crew_guard::{screen as crew_screen, CrewGuard, CrewSignal};
 pub use fun_responses::FunResponses;
 pub use global_ban_sweep::{GlobalBanSweeper, PartnerRoster};
 pub use global_chatter_ban::GlobalChatterBanEnforcer;
+pub use home_invite::{
+    server_invite, HomeInviteResolver, InvitePurpose, ResolvedInvite, StreamerKey,
+};
 pub use invite_question::{
     InviteQuestionInviteUrlPort, InviteQuestionJudge, InviteQuestionJudgeInput,
     InviteQuestionResponder, InviteQuestionRollup, InviteQuestionStore, InviteQuestionVerdict,
@@ -130,6 +135,7 @@ pub use sus_invite::{SusInviteCheck, SusInviteHit};
 pub use timeout_tracking::{is_bot_timeout_drop, CombinedSuppression, TimeoutTrackingChatApi};
 pub use token::{load_seed_tokens, BotTokenManager, SeedTokens, TokenError};
 pub use types::{ChatMessageEvent, ChatReply, MentionRef, MessageFragment, SendOutcome};
+pub use ui_lang::channel_ui_lang;
 
 #[cfg(test)]
 #[path = "../../../test-support/postgres.rs"]

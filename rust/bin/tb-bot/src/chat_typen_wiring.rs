@@ -59,9 +59,9 @@ async fn lauf(pool: &sqlx::PgPool, zaehler: &mut TagesZaehler) -> Result<(), sql
 
     let mut regel_rows: Vec<(i64, Nachrichtentyp, &str, Option<String>)> = Vec::new();
     let mut offen: Vec<(i64, String)> = Vec::new();
-    for (id, content, login) in &unlabelte {
+    for (id, content, login, ki_erlaubt) in &unlabelte {
         let typ = klassifiziere_regel(content, login);
-        if ist_modellkandidat(typ, content) {
+        if *ki_erlaubt && ist_modellkandidat(typ, content) {
             offen.push((*id, content.clone()));
         } else {
             regel_rows.push((*id, typ, "regel", None));

@@ -1272,3 +1272,55 @@ async fn archive_candidates_ignoriert_kuerzlich_aktive_nicht_deadlock_streamer()
         "kuerzlich aktive Nicht-Deadlock-Streamer sind keine Inaktivitaetskandidaten"
     );
 }
+
+#[tokio::test]
+async fn tick_speichert_kanalsprache_nur_bei_aenderung() {
+    let pool = pool_or_skip!("t4c_kanalsprache");
+    insert_active_partner(&pool, "sprachkanal", "700").await;
+    sqlx::query(
+        "INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login)
+         VALUES ('700', 'sprachkanal')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let source = Arc::new(StubSource::new());
+    let engine = engine_with(&pool, source.clone(), Arc::new(RecordingHooks::new()));
+    let mut stream = live_stream("sprachkanal", "700", "stream-sprache", 12);
+    stream.language = "EN".to_string();
+    source.set_streams(vec![stream.clone()]);
+
+    engine.tick().await;
+    let (language, first_update): (Option<String>, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
+        "SELECT broadcaster_language, broadcaster_language_updated_at
+               FROM twitch_streamer_identities WHERE twitch_user_id = '700'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(language.as_deref(), Some("en"));
+    assert!(first_update.is_some());
+
+    // Gleiche Sprache im nächsten Tick: kein erneutes Schreiben.
+    engine.tick().await;
+    let unchanged: Option<chrono::DateTime<Utc>> = sqlx::query_scalar(
+        "SELECT broadcaster_language_updated_at FROM twitch_streamer_identities
+          WHERE twitch_user_id = '700'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(unchanged, first_update);
+
+    stream.language = "de".to_string();
+    source.set_streams(vec![stream]);
+    engine.tick().await;
+    let changed: Option<String> = sqlx::query_scalar(
+        "SELECT broadcaster_language FROM twitch_streamer_identities WHERE twitch_user_id = '700'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(changed.as_deref(), Some("de"));
+}

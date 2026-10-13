@@ -320,7 +320,10 @@ pub async fn html_handler() -> impl IntoResponse {
             (header::X_FRAME_OPTIONS, "SAMEORIGIN"),
             (
                 header::CONTENT_SECURITY_POLICY,
-                "default-src 'none'; img-src 'self'; frame-src 'self' https:; media-src 'self' blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self' ws: wss:; base-uri 'none'; frame-ancestors 'self' https://admin.deutsche-deadlock-community.de",
+                concat!(
+                    "default-src 'none'; img-src 'self'; frame-src 'self' https:; media-src 'self' blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self' ws: wss:; base-uri 'none'; frame-ancestors 'self' ",
+                    tb_config::admin_url!()
+                ),
             ),
         ],
         Html(include_str!("caster_overlay.html")),
@@ -425,7 +428,8 @@ pub async fn create_camera_handler(
     .await
     .map_err(db_error)?;
     let invite_url = format!(
-        "https://deutsche-deadlock-community.de/twitch/caster-camera/{camera_id}#token={publish_token}"
+        "{}/twitch/caster-camera/{camera_id}#token={publish_token}",
+        tb_config::public_site::PRIMARY_ORIGIN
     );
     Ok((
         StatusCode::CREATED,
@@ -559,7 +563,7 @@ fn allowed_camera_origin(headers: &HeaderMap) -> bool {
     };
     matches!(
         origin,
-        "https://deutsche-deadlock-community.de" | "https://admin.deutsche-deadlock-community.de"
+        tb_config::public_site::PRIMARY_ORIGIN | tb_config::public_site::ADMIN_ORIGIN
     ) || cfg!(test) && origin == "http://localhost"
 }
 

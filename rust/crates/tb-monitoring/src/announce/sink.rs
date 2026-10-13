@@ -15,8 +15,9 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::announce::template::{
-    build_context, build_offline_components, build_offline_embed, render_announcement,
-    sanitize_live_content, AnnouncementConfig, OfflineComponentsContext, TWITCH_VOD_BUTTON_LABEL,
+    announcement_ui_lang, build_context, build_offline_components, build_offline_embed,
+    render_announcement, sanitize_live_content, twitch_vod_button_label, AnnouncementConfig,
+    OfflineComponentsContext,
 };
 use crate::poller::hooks::{
     AnnounceLiveRequest, AnnounceLiveResult, AnnouncementSink, EndAnnouncementOutcome,
@@ -112,6 +113,8 @@ pub struct AnnouncementSettings {
     /// Referral-Code für die Twitch-URL (`?ref=`).
     pub ref_code: Option<String>,
     pub target_game: String,
+    pub guild_id: Option<u64>,
+    pub guild_language: Option<String>,
 }
 
 struct RetryState {
@@ -256,7 +259,12 @@ impl BrokerAnnouncementSink {
         tracking_token: &str,
         render_now: DateTime<Utc>,
     ) -> LivePayload {
-        let config = AnnouncementConfig::default();
+        let lang = announcement_ui_lang(
+            self.settings.guild_id,
+            self.settings.guild_language.as_deref(),
+            Some(request.stream.language.as_str()),
+        );
+        let config = AnnouncementConfig::for_lang(lang);
         let mut stream = request.stream.clone();
         self.fill_profile_image_url(login, &mut stream).await;
 
@@ -496,6 +504,11 @@ impl AnnouncementSink for BrokerAnnouncementSink {
                     .map(str::trim)
                     .filter(|url| !url.is_empty())
             });
+        let lang = announcement_ui_lang(
+            self.settings.guild_id,
+            self.settings.guild_language.as_deref(),
+            None,
+        );
         let embed = build_offline_embed(
             &request.display_name,
             request.last_title.as_deref(),
@@ -503,6 +516,7 @@ impl AnnouncementSink for BrokerAnnouncementSink {
             preview_image_url,
             &self.settings.target_game,
             now,
+            lang,
         );
         let components = build_offline_components(OfflineComponentsContext {
             display_name: &request.display_name,
@@ -516,11 +530,12 @@ impl AnnouncementSink for BrokerAnnouncementSink {
                 .as_deref()
                 .and_then(crate::stream::parse_dt_utc),
             now,
+            lang,
         });
         let referral_url = self.referral_url(&login);
         let view_spec = serde_json::json!({
             "type": "link_button",
-            "label": TWITCH_VOD_BUTTON_LABEL,
+            "label": twitch_vod_button_label(lang),
             "url": referral_url,
         });
         let discord_message_id = request.message_id.clone();

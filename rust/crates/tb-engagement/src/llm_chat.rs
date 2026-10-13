@@ -648,6 +648,8 @@ pub enum GenerateError {
     Http(String),
     /// Antwort kam an, war aber nicht verwertbar (leer, ungueltiger Body).
     Unparsable(String),
+    /// Kein Aufruf: KI-Schalter des Servers dieses Streamers ist aus.
+    Disabled(String),
 }
 
 impl std::fmt::Display for GenerateError {
@@ -658,6 +660,7 @@ impl std::fmt::Display for GenerateError {
             GenerateError::Transport(e) => write!(f, "Modell-Aufruf fehlgeschlagen: {e}"),
             GenerateError::Http(e) => write!(f, "Modell-Aufruf fehlgeschlagen: {e}"),
             GenerateError::Unparsable(e) => write!(f, "Modell-Antwort unbrauchbar: {e}"),
+            GenerateError::Disabled(e) => write!(f, "KI ausgeschaltet: {e}"),
         }
     }
 }
@@ -677,6 +680,7 @@ impl From<tb_llm::LlmError> for GenerateError {
             tb_llm::LlmError::Transport(detail) => Self::Transport(detail),
             tb_llm::LlmError::Unparsable(detail) => Self::Unparsable(detail),
             http @ tb_llm::LlmError::Http { .. } => Self::Http(http.to_string()),
+            tb_llm::LlmError::Disabled(detail) => Self::Disabled(detail),
         }
     }
 }
@@ -690,6 +694,7 @@ impl From<tb_llm::LlmError> for GenerateError {
 /// Anbieter und Modell kommen ausschließlich aus der gemeinsamen Auswahl unter
 /// dem jeweiligen Anwendungsfall. Frühere KI-Variablen und Modell-
 /// Overrides werden nicht verwendet.
+#[derive(Clone)]
 pub struct EngagementLlmClient {
     use_case: &'static str,
     endpoint: tb_llm::LlmEndpoint,
@@ -698,6 +703,9 @@ pub struct EngagementLlmClient {
     /// wird bewusst ignoriert.
     festgenagelt: bool,
     timeout: Duration,
+    /// Streamerbezug für den KI-Schalter pro Server (`tb_llm::ai_guard`).
+    twitch_broadcaster: Option<String>,
+    twitch_channel: Option<String>,
 }
 
 impl EngagementLlmClient {
@@ -740,6 +748,26 @@ impl EngagementLlmClient {
             endpoint,
             festgenagelt,
             timeout: timeout.unwrap_or_else(|| Duration::from_secs(30)),
+            twitch_broadcaster: None,
+            twitch_channel: None,
+        }
+    }
+
+    /// Kopie mit Streamerbezug per Twitch-User-ID. Jeder Aufruf mit Bezug zu
+    /// einem Kanal nennt ihn; ob die KI läuft, entscheidet der Eingang nach dem
+    /// KI-Schalter des Servers (`LlmError::Disabled` → `GenerateError::Disabled`).
+    pub fn for_broadcaster(&self, twitch_user_id: impl Into<String>) -> Self {
+        Self {
+            twitch_broadcaster: Some(twitch_user_id.into()),
+            ..self.clone()
+        }
+    }
+
+    /// Wie [`Self::for_broadcaster`], wenn nur der Kanal-Login bekannt ist.
+    pub fn for_channel(&self, channel_login: impl Into<String>) -> Self {
+        Self {
+            twitch_channel: Some(channel_login.into()),
+            ..self.clone()
         }
     }
 
@@ -946,9 +974,15 @@ impl EngagementLlmClient {
     /// Ohne explizite Testparameter läuft der Aufruf über die zentrale Kette,
     /// die genau den freigegebenen Fireworks-Endpunkt enthält.
     async fn call(&self, request: tb_llm::Request) -> Result<tb_llm::Response, GenerateError> {
-        let request = request
+        let mut request = request
             .timeout(self.timeout)
             .total_deadline(self.timeout);
+        if let Some(id) = &self.twitch_broadcaster {
+            request = request.twitch_broadcaster(id.clone());
+        }
+        if let Some(login) = &self.twitch_channel {
+            request = request.twitch_channel(login.clone());
+        }
         let request = if self.festgenagelt {
             request.endpoint(self.endpoint.clone())
         } else {

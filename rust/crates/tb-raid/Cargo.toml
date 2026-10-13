@@ -17,6 +17,7 @@ url         = { workspace = true }
 tb-crypto   = { workspace = true }
 tb-domain   = { workspace = true }
 tb-observability = { workspace = true }
+tb-config   = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

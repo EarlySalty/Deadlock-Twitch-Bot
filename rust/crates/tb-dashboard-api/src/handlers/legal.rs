@@ -84,6 +84,7 @@ fn legal_page_title(slug: &str) -> Option<&'static str> {
         "datenschutz" => Some("Datenschutzerklärung"),
         "agb" => Some("Allgemeine Geschäftsbedingungen"),
         "sicherheit" => Some("Sicherheitskonzept"),
+        "privacy" => Some("Privacy Policy"),
         _ => None,
     }
 }
@@ -235,6 +236,10 @@ const DEFAULT_BODY_AGB: &str = concat!(
 
 const DEFAULT_BODY_DATENSCHUTZ: &str =
     include_str!("../../templates/legal_default_datenschutz.html");
+
+/// Englische Fassung für dead-lock.de (Plan 4.10). Bei Abweichungen gilt die
+/// deutsche Datenschutzerklärung; der Text sagt das selbst.
+const DEFAULT_BODY_PRIVACY: &str = include_str!("../../templates/legal_default_privacy.html");
 
 const DEFAULT_BODY_SICHERHEIT: &str = concat!(
     "<p class='sub'>Stand: Juni 2026</p>",
@@ -527,6 +532,7 @@ fn default_legal_page_body(slug: &str) -> Option<&'static str> {
         "agb" => Some(DEFAULT_BODY_AGB),
         "datenschutz" => Some(DEFAULT_BODY_DATENSCHUTZ),
         "sicherheit" => Some(DEFAULT_BODY_SICHERHEIT),
+        "privacy" => Some(DEFAULT_BODY_PRIVACY),
         _ => None,
     }
 }
@@ -598,7 +604,36 @@ fn escape_html(raw: &str) -> String {
     out
 }
 
+/// Sprachabhängige Rahmenteile einer Legal-Seite.
+struct LegalPageChrome {
+    lang: &'static str,
+    back_href: &'static str,
+    back_label: &'static str,
+}
+
+const LEGAL_CHROME_DE: LegalPageChrome = LegalPageChrome {
+    lang: "de",
+    back_href: "/twitch/pricing",
+    back_label: "&larr; Zurück zu den Plänen",
+};
+
+const LEGAL_CHROME_EN: LegalPageChrome = LegalPageChrome {
+    lang: "en",
+    back_href: "/twitch/pricing",
+    back_label: "&larr; Back to plans",
+};
+
 fn render_legal_page(
+    title: &str,
+    body: &str,
+    footer_links: &[(&str, &str)],
+    noindex: bool,
+) -> String {
+    render_legal_page_with(&LEGAL_CHROME_DE, title, body, footer_links, noindex)
+}
+
+fn render_legal_page_with(
+    chrome: &LegalPageChrome,
     title: &str,
     body: &str,
     footer_links: &[(&str, &str)],
@@ -622,7 +657,7 @@ fn render_legal_page(
     };
     format!(
         concat!(
-            "<!doctype html><html lang='de'><head><meta charset='utf-8'>",
+            "<!doctype html><html lang='{lang}'><head><meta charset='utf-8'>",
             "<meta name='viewport' content='width=device-width,initial-scale=1'>",
             "{robots_meta}",
             "<title>{title} · EarlySalty</title>",
@@ -664,12 +699,15 @@ fn render_legal_page(
             ".msg-err{{padding:16px;background:#fef2f2;border:1px solid #fca5a5;",
             "border-radius:8px;color:#991b1b;font-size:15px;margin-bottom:16px;}}",
             "</style></head><body><div class='wrap'>",
-            "<a class='back' href='/twitch/pricing'>&larr; Zurück zu den Plänen</a>",
+            "<a class='back' href='{back_href}'>{back_label}</a>",
             "<h1>{title}</h1>",
             "{body}",
             "<div class='footer'>{footer}</div>",
             "</div></body></html>",
         ),
+        lang = chrome.lang,
+        back_href = chrome.back_href,
+        back_label = chrome.back_label,
         robots_meta = robots_meta,
         title = escape_html(title),
         body = body,
@@ -1349,6 +1387,36 @@ pub async fn datenschutz_handler() -> Response {
         .into_response()
 }
 
+/// GET /twitch/privacy — englische Datenschutzerklärung für dead-lock.de.
+/// Gleiche Regeln wie `/twitch/datenschutz`: öffentlich, aber `noindex`.
+pub async fn privacy_handler() -> Response {
+    let Some(document) = load_legal_page_document("privacy") else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let page = render_legal_page_with(
+        &LEGAL_CHROME_EN,
+        &document.title,
+        &document.body,
+        &[
+            ("/twitch/abbo", "Plans"),
+            ("/twitch/datenschutz", "Datenschutz (German)"),
+            ("/twitch/impressum", "Legal notice (German)"),
+            ("/twitch/agb", "Terms (German)"),
+            ("/twitch/sicherheit", "Security (German)"),
+        ],
+        true,
+    );
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE.as_str(), "text/html; charset=utf-8"),
+            ("X-Robots-Tag", X_ROBOTS_TAG),
+        ],
+        page,
+    )
+        .into_response()
+}
+
 /// GET /twitch/agb — AGB hinter dem Legal-Human-Gate.
 pub async fn agb_handler(headers: HeaderMap) -> Response {
     gated_legal_page_response(
@@ -1396,6 +1464,7 @@ pub fn build_legal_router() -> Router {
         .route("/twitch/legal/verify", post(legal_verify_handler))
         .route("/twitch/impressum", get(impressum_handler))
         .route("/twitch/datenschutz", get(datenschutz_handler))
+        .route("/twitch/privacy", get(privacy_handler))
         .route("/twitch/agb", get(agb_handler))
         .route("/twitch/sicherheit", get(sicherheit_handler))
 }
@@ -1589,6 +1658,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn privacy_ist_englisch_oeffentlich_aber_noindex() {
+        let response = privacy_handler().await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("X-Robots-Tag").unwrap(),
+            X_ROBOTS_TAG
+        );
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.starts_with("<!doctype html><html lang='en'>"));
+        assert!(html.contains("<meta name='robots' content='noindex, nofollow'>"));
+        assert!(html.contains("<h1>Privacy Policy</h1>"));
+        assert!(html.contains("Back to plans"));
+        assert!(!html.contains("Zurück zu den Plänen"));
+        // Google-Prüfung verlangt dieselben Angaben wie die deutsche Fassung.
+        assert!(html.contains("Google API Services and YouTube"));
+        assert!(html.contains("youtube.upload"));
+        assert!(html.contains("youtube.readonly"));
+        assert!(html.contains("youtube.force-ssl"));
+        assert!(html.contains("Google API Services User Data Policy"));
+        assert!(html.contains("href='/twitch/datenschutz'"));
+    }
+
+    #[test]
+    fn deutsche_legal_seiten_bleiben_deutsch() {
+        let doc = load_legal_page_document("datenschutz").unwrap();
+        let page = render_legal_page(&doc.title, &doc.body, &[], true);
+        assert!(page.starts_with("<!doctype html><html lang='de'>"));
+        assert!(page.contains(
+            "<a class='back' href='/twitch/pricing'>&larr; Zurück zu den Plänen</a>"
+        ));
+    }
+
+    #[tokio::test]
     async fn robots_txt_blockiert_datenschutz_nicht() {
         let response = robots_txt_handler().await;
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -1620,7 +1726,7 @@ mod tests {
 
     #[test]
     fn defaults_fuer_alle_slugs_vorhanden() {
-        for slug in ["impressum", "datenschutz", "agb", "sicherheit"] {
+        for slug in ["impressum", "datenschutz", "agb", "sicherheit", "privacy"] {
             let doc = load_legal_page_document(slug).expect("Dokument vorhanden");
             assert!(!doc.title.is_empty());
             assert!(doc.body.contains("<h2>"));

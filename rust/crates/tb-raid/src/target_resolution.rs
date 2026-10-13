@@ -375,6 +375,7 @@ mod tests {
                 followers_total: 0,
                 started_at: Some("2026-06-10T17:00:00+00:00".to_string()),
                 game_name: Some("Deadlock".to_string()),
+                language: None,
             },
         }
     }

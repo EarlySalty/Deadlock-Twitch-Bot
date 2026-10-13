@@ -418,6 +418,19 @@ impl PollEngine {
             }
         }
 
+        // Kanalsprache der live gesehenen getrackten Kanäle festhalten
+        // (Raids nach Sprache, Paket R). Best effort: der Tick läuft weiter.
+        if tracked_streams_loaded {
+            let observed: Vec<(String, String)> = streams_by_login
+                .values()
+                .map(|stream| (stream.user_id.trim().to_string(), stream.language.clone()))
+                .filter(|(user_id, language)| !user_id.is_empty() && !language.trim().is_empty())
+                .collect();
+            if let Err(error) = self.tracked.record_broadcaster_languages(&observed).await {
+                tracing::warn!(%error, "Konnte Kanalsprachen nicht speichern");
+            }
+        }
+
         let score_refreshes = if tracked_streams_loaded {
             self.process_entries(&tracked, &streams_by_login).await
         } else {
@@ -1319,7 +1332,12 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT, discord_user_id TEXT)",
+            "CREATE TABLE twitch_streamer_identities (
+                twitch_user_id TEXT,
+                discord_user_id TEXT,
+                broadcaster_language TEXT NOT NULL DEFAULT 'und',
+                broadcaster_language_updated_at TIMESTAMPTZ
+            )",
         )
         .execute(&pool)
         .await

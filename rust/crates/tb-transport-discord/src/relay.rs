@@ -31,6 +31,11 @@ pub const CLIP_SUBMIT_PATH: &str = "/internal/master/v1/clips/submit";
 const TIMEOUT: Duration = Duration::from_secs(10);
 const RETRY_WAIT: Duration = Duration::from_secs(2);
 const MAX_ATTEMPTS: u32 = 2;
+/// Header mit dem internen Token (Broker und Discord-Hub).
+const TOKEN_HEADER: &str = "X-Internal-Token";
+/// Header mit der Ziel-Guild für den Discord-Hub (Paket H). Fehlt er, reicht
+/// der Hub die Anfrage unverändert an den Broker der Community-Guild weiter.
+pub const GUILD_HEADER: &str = "X-Discord-Guild-Id";
 
 /// HTTP-Client für den Master-Broker. Hält eine geteilte `reqwest::Client`-Instanz.
 #[derive(Clone)]
@@ -38,6 +43,9 @@ pub struct BrokerRelay {
     client: Arc<Client>,
     base_url: String,
     token: String,
+    /// Ziel-Guild für den Discord-Hub. `None` ⇒ kein Guild-Header, Verhalten
+    /// wie bisher (Community-Guild über den Broker).
+    guild_id: Option<u64>,
 }
 
 /// Ein Guild-Member aus `GET /discord/members`.
@@ -256,9 +264,10 @@ impl BrokerRelay {
             members: Vec<Member>,
         }
         let response = self
-            .client
-            .get(self.request_url("/internal/master/v1/discord/role-members")?)
-            .header("X-Internal-Token", &self.token)
+            .authorized(
+                self.client
+                    .get(self.request_url("/internal/master/v1/discord/role-members")?),
+            )
             .query(&[
                 ("guild_id", guild_id.to_string()),
                 ("role_id", role_id.to_string()),
@@ -303,9 +312,10 @@ impl BrokerRelay {
             links: Vec<TwitchLink>,
         }
         let response = self
-            .client
-            .get(self.request_url("/internal/master/v1/discord/twitch-links")?)
-            .header("X-Internal-Token", &self.token)
+            .authorized(
+                self.client
+                    .get(self.request_url("/internal/master/v1/discord/twitch-links")?),
+            )
             .send()
             .await?;
         let invalid = || DiscordError::BrokerError {
@@ -388,7 +398,40 @@ impl BrokerRelay {
             client: Arc::new(client),
             base_url: config.base_url.clone(),
             token: config.token.clone(),
+            guild_id: None,
         })
+    }
+
+    /// Klon mit gesetzter Ziel-Guild: Jede Anfrage trägt dann zusätzlich
+    /// `X-Discord-Guild-Id`. Der HTTP-Client wird geteilt.
+    pub fn with_guild(&self, guild_id: u64) -> Self {
+        Self {
+            guild_id: Some(guild_id),
+            ..self.clone()
+        }
+    }
+
+    /// Gesetzte Ziel-Guild, falls vorhanden.
+    pub fn guild_id(&self) -> Option<u64> {
+        self.guild_id
+    }
+
+    /// Versieht eine Anfrage mit Token und (falls gesetzt) Guild-Header.
+    /// Zentrale Stelle für alle authentifizierten Aufrufe.
+    fn authorized(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        self.guild_scoped(request.header(TOKEN_HEADER, &self.token))
+    }
+
+    /// Setzt nur den Guild-Header (falls gesetzt).
+    ///
+    /// `list_members` und `find_role_by_name` senden seit dem Discord-Hub
+    /// ebenfalls das Token: Der Broker ignoriert es auf diesen Routen, der Hub
+    /// verlangt es für jede Anfrage.
+    fn guild_scoped(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match self.guild_id {
+            Some(guild_id) => request.header(GUILD_HEADER, guild_id.to_string()),
+            None => request,
+        }
     }
 
     /// HTTP is permitted only for literal loopback addresses. The internal
@@ -456,9 +499,7 @@ impl BrokerRelay {
 
         for attempt in 0..MAX_ATTEMPTS {
             let result = self
-                .client
-                .post(url.clone())
-                .header("X-Internal-Token", &self.token)
+                .authorized(self.client.post(url.clone()))
                 .header("X-Idempotency-Key", idempotency_key)
                 .json(payload)
                 .send()
@@ -783,8 +824,7 @@ impl BrokerRelay {
     ) -> Result<Option<u64>, DiscordError> {
         let url = self.request_url(ROLES_PATH)?;
         let resp = self
-            .client
-            .get(url)
+            .authorized(self.client.get(url))
             .query(&[("guild_id", guild_id.to_string())])
             .timeout(Duration::from_secs(15))
             .send()
@@ -807,8 +847,7 @@ impl BrokerRelay {
     pub async fn list_members(&self) -> Result<Vec<GuildMember>, DiscordError> {
         let url = self.request_url(MEMBERS_PATH)?;
         let resp = self
-            .client
-            .get(url)
+            .authorized(self.client.get(url))
             .timeout(Duration::from_secs(15))
             .send()
             .await
@@ -834,9 +873,7 @@ impl BrokerRelay {
     ) -> Result<MessageReactions, DiscordError> {
         let url = self.request_url(MESSAGE_REACTIONS_PATH)?;
         let resp = self
-            .client
-            .get(url)
-            .header("X-Internal-Token", &self.token)
+            .authorized(self.client.get(url))
             .query(&[("channel_id", channel_id), ("message_id", message_id)])
             .send()
             .await?;
@@ -1828,5 +1865,100 @@ mod tests {
             view_spec: None,
         };
         noop.edit_rich_message(edit).await.unwrap();
+    }
+
+    /// Liefert die mitgeschnittenen Werte des Guild-Headers aller Anfragen.
+    async fn guild_header_values(server: &MockServer) -> Vec<Option<String>> {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| {
+                request
+                    .headers
+                    .get(GUILD_HEADER)
+                    .map(|value| value.to_str().unwrap().to_string())
+            })
+            .collect()
+    }
+
+    /// Ruft je eine POST-, eine authentifizierte GET- und eine bisher
+    /// tokenlose GET-Methode auf.
+    async fn rufe_post_und_get_methoden_auf(relay: &BrokerRelay) {
+        relay
+            .send_rich_message(sample_send_payload())
+            .await
+            .unwrap();
+        relay.get_message_reactions("1", "2").await.unwrap();
+        relay.list_members().await.unwrap();
+    }
+
+    async fn mount_guild_test_mocks(server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path(SEND_PATH))
+            .and(header("X-Internal-Token", "test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": { "message_id": "msg-1" }
+            })))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(MESSAGE_REACTIONS_PATH))
+            .and(header("X-Internal-Token", "test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "found": true,
+                "reactions": []
+            })))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(MEMBERS_PATH))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "members": [] })),
+            )
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn mit_guild_tragen_alle_anfragen_den_guild_header() {
+        let server = MockServer::start().await;
+        mount_guild_test_mocks(&server).await;
+        let basis = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        let relay = basis.with_guild(1_234_567_890_123);
+        assert_eq!(relay.guild_id(), Some(1_234_567_890_123));
+        // Der Builder verändert das Original nicht.
+        assert_eq!(basis.guild_id(), None);
+
+        rufe_post_und_get_methoden_auf(&relay).await;
+
+        let values = guild_header_values(&server).await;
+        assert_eq!(values.len(), 3);
+        assert!(values
+            .iter()
+            .all(|value| value.as_deref() == Some("1234567890123")));
+    }
+
+    #[tokio::test]
+    async fn ohne_guild_fehlt_der_guild_header() {
+        let server = MockServer::start().await;
+        mount_guild_test_mocks(&server).await;
+        let relay = BrokerRelay::new(&test_config(&server.uri())).unwrap();
+        assert_eq!(relay.guild_id(), None);
+
+        rufe_post_und_get_methoden_auf(&relay).await;
+
+        let values = guild_header_values(&server).await;
+        assert_eq!(values.len(), 3);
+        assert!(values.iter().all(Option::is_none));
+        // Auch die früher tokenlosen Lese-Aufrufe senden jetzt das Token.
+        let requests = server.received_requests().await.unwrap();
+        let members = requests
+            .iter()
+            .find(|request| request.url.path() == MEMBERS_PATH)
+            .unwrap();
+        assert_eq!(members.headers.get("X-Internal-Token").unwrap(), "test-token");
     }
 }

@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 tb-config = { workspace = true }
+tb-domain = { workspace = true }
 async-trait = { workspace = true }
 chrono      = { workspace = true }
 axum        = { workspace = true }
@@ -23,6 +24,8 @@ tb-transport-twitch = { workspace = true }
 # Re-Export aus tb-chat; tb-chat hängt nicht an tb-monitoring (kein Zyklus).
 tb-chat             = { workspace = true }
 tb-analytics = { workspace = true }
+# Kanalsprache der Streamer (Paket R): tb_db::network.
+tb-db = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

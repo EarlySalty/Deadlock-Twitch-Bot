@@ -9,22 +9,32 @@ import {
 } from "@/hooks/useNetworkStreamers";
 import { istDeadlock, twitchUrl } from "@/lib/partnerNetwork";
 import { buildTwitchBotAuthUrl } from "@/data/externalLinks";
+import { tx } from "@/i18n/locale";
 
 const anchors = [
   {
     icon: Users,
-    lead: "Du gehörst dazu",
-    rest: "dein Kanal steht auf dieser Seite und im Discord neben allen anderen Partnern.",
+    lead: tx("Du gehörst dazu", "You're part of it"),
+    rest: tx(
+      "dein Kanal steht auf dieser Seite und im Discord neben allen anderen Partnern.",
+      "your channel is listed on this page and in the Discord alongside every other partner.",
+    ),
   },
   {
     icon: ShieldCheck,
-    lead: "Der Bot managt deinen Kanal",
-    rest: "Raids, Live-Ankündigung, Chat-Schutz, Auswertung. Du richtest nichts ein.",
+    lead: tx("Der Bot managt deinen Kanal", "The bot runs your channel"),
+    rest: tx(
+      "Raids, Live-Ankündigung, Chat-Schutz, Auswertung. Du richtest nichts ein.",
+      "Raids, go-live announcement, chat protection, analytics. Nothing for you to set up.",
+    ),
   },
   {
     icon: Radio,
-    lead: "Kein Anbieter, kein Abo",
-    rest: "eine Community, die ihre Streamer zusammenbringt.",
+    lead: tx("Kein Anbieter, kein Abo", "No vendor, no subscription"),
+    rest: tx(
+      "eine Community, die ihre Streamer zusammenbringt.",
+      "a community that brings its streamers together.",
+    ),
   },
 ];
 
@@ -89,8 +99,8 @@ export function PartnerPitch({
   const loop = marquee.length > 0 ? [...marquee, ...marquee] : [];
   const platzText =
     status === "ready" && streamers.length > 0
-      ? `Du wärst Partner Nr. ${streamers.length + 1}.`
-      : "Die Partner siehst du unten auf der Seite.";
+      ? tx(`Du wärst Partner Nr. ${streamers.length + 1}.`, `You'd be partner #${streamers.length + 1}.`)
+      : tx("Die Partner siehst du unten auf der Seite.", "You'll find the partners further down the page.");
 
   return (
     <section id="ablauf" className="py-24">
@@ -98,22 +108,39 @@ export function PartnerPitch({
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-14 items-center">
           <ScrollReveal>
             <div className="inline-flex items-center rounded-full px-4 py-1.5 bg-[var(--color-card)] border border-[var(--color-border)] text-sm text-[var(--color-accent)]">
-              Partner werden
+              {tx("Partner werden", "Become a partner")}
             </div>
 
             <h2 className="mt-6 text-3xl md:text-4xl lg:text-5xl font-bold text-[var(--color-text-primary)] font-display leading-tight">
-              Werde Partner der
-              <br />
-              <GradientText>Deutschen Deadlock Community.</GradientText>
+              {tx(
+                <>
+                  Werde Partner der
+                  <br />
+                  <GradientText>Deutschen Deadlock Community.</GradientText>
+                </>,
+                <>
+                  Become a partner of the
+                  <br />
+                  <GradientText>Deadlock Partner Network.</GradientText>
+                </>,
+              )}
             </h2>
 
             <p className="mt-6 text-xl md:text-2xl text-[var(--color-text-secondary)] leading-relaxed">
-              Dein Kanal wird Teil der deutschen Deadlock-Community. Der Bot
-              managt ihn ab dann komplett.
+              {tx(
+                <>
+                  Dein Kanal wird Teil der deutschen Deadlock-Community. Der Bot
+                  managt ihn ab dann komplett.
+                </>,
+                <>
+                  Your channel joins the English-speaking Deadlock community. From
+                  then on, the bot runs it for you.
+                </>,
+              )}
             </p>
 
             <p className="mt-10 text-sm uppercase tracking-wider font-medium text-[var(--color-primary)]">
-              Was Partner heißt
+              {tx("Was Partner heißt", "What being a partner means")}
             </p>
 
             <ul className="mt-4 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
@@ -148,7 +175,7 @@ export function PartnerPitch({
                 className="gradient-accent rounded-xl px-7 py-3.5 font-semibold inline-flex items-center gap-2 transition-all duration-200 hover:brightness-110 hover:shadow-[0_0_24px_4px_rgba(201,168,106,0.3)]"
               >
                 <ExternalLink size={18} />
-                Jetzt Partner werden
+                {tx("Jetzt Partner werden", "Become a partner")}
               </a>
             </div>
           </ScrollReveal>
@@ -163,7 +190,7 @@ export function PartnerPitch({
                 }}
               />
               <p className="relative text-sm uppercase tracking-wider font-medium text-[var(--color-primary)] mb-5">
-                Dein Platz im Netzwerk
+                {tx("Dein Platz im Netzwerk", "Your spot in the network")}
               </p>
 
               <div className="relative flex items-center gap-3.5 rounded-xl border border-[rgba(201,168,106,0.55)] bg-black/25 px-4 py-3.5">
@@ -175,10 +202,10 @@ export function PartnerPitch({
                   }}
                   aria-hidden="true"
                 >
-                  DU
+                  {tx("DU", "YOU")}
                 </span>
                 <span className="min-w-0 flex-1 truncate text-lg font-semibold text-[var(--color-text-primary)]">
-                  dein_kanal
+                  {tx("dein_kanal", "your_channel")}
                 </span>
                 <span className="shrink-0 rounded bg-[var(--color-accent)] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider text-black/85">
                   Partner
