@@ -10,6 +10,7 @@ pub(crate) mod ai_store;
 pub mod auth;
 pub mod handlers;
 pub mod obs;
+pub mod onboarding_guild;
 pub mod process_info;
 /// Strangler-Fig-Fallback-Proxy (→ Python 8765), siehe Modul-Doku.
 pub mod proxy;
@@ -46,6 +47,7 @@ pub use handlers::billing_webhook::{stripe_webhook_config_from_env, StripeWebhoo
 pub use handlers::health_probe::{
     analytics_db_fingerprint_startup_check, AnalyticsDbFingerprintStartup,
 };
+pub use onboarding_guild::{onboarding_discord_config_from_env, OnboardingDiscordConfig};
 
 pub use handlers::pause_loop::build_pause_loop_router;
 
@@ -2288,6 +2290,7 @@ pub fn build_router_with_analysis_writer(
         .merge(pause_loop_router)
         .merge(build_auth_router(rate_limiter.clone()))
         .merge(build_server_admin_router(rate_limiter.clone()))
+        .merge(onboarding_guild::router(pool.clone()))
         .merge(build_partner_login_router(
             pool.clone(),
             rate_limiter.clone(),

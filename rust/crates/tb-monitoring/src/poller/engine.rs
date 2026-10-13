@@ -1332,7 +1332,12 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT, discord_user_id TEXT)",
+            "CREATE TABLE twitch_streamer_identities (
+                twitch_user_id TEXT,
+                discord_user_id TEXT,
+                broadcaster_language TEXT NOT NULL DEFAULT 'und',
+                broadcaster_language_updated_at TIMESTAMPTZ
+            )",
         )
         .execute(&pool)
         .await

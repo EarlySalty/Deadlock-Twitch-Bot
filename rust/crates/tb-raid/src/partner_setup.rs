@@ -206,9 +206,11 @@ pub struct PartnerSyncOutcome {
     pub signup_block: Option<tb_domain::SignupBlock>,
 }
 
-/// Argumente für `promote_streamer_to_partner` — exakt die Parameter, die der
-/// OAuth-Followup-Pfad übergibt (`partner_setup_service.py:172-201`); alle
-/// übrigen Python-Kwargs bleiben UNSET und laufen über die Zeilen-Fallbacks.
+pub const COMMUNITY_GUILD_ID: i64 = 1_289_721_245_281_292_288;
+pub const STREAMER_GUILD_SOURCE_ONBOARDING: &str = "onboarding";
+pub const STREAMER_GUILD_SOURCE_MIGRATION: &str = "migration";
+pub const STREAMER_GUILD_SOURCE_ADMIN: &str = "admin";
+
 #[derive(Debug, Clone)]
 pub struct PromotePartnerArgs {
     pub twitch_login: String,
@@ -221,6 +223,7 @@ pub struct PromotePartnerArgs {
     /// Python-Default `True`: Quelle nach Promotion aus `twitch_streamers`
     /// löschen.
     pub clear_source: bool,
+    pub guild_id: Option<i64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -696,6 +699,73 @@ fn parse_session_tags(raw: &str) -> Vec<String> {
         .collect()
 }
 
+pub async fn attach_streamer_guild(
+    tx: &mut Transaction<'_, Postgres>,
+    twitch_user_id: &str,
+    guild_id: i64,
+    active: bool,
+    source: &str,
+) -> Result<(), sqlx::Error> {
+    let user_id = twitch_user_id.trim();
+    if user_id.is_empty() || guild_id <= 0 {
+        return Ok(());
+    }
+    let source = match source {
+        STREAMER_GUILD_SOURCE_MIGRATION => STREAMER_GUILD_SOURCE_MIGRATION,
+        STREAMER_GUILD_SOURCE_ADMIN => STREAMER_GUILD_SOURCE_ADMIN,
+        _ => STREAMER_GUILD_SOURCE_ONBOARDING,
+    };
+    if guild_id == COMMUNITY_GUILD_ID {
+        sqlx::query(
+            r#"
+            INSERT INTO discord_guilds (
+                guild_id, name, language, announce_channel_id, alert_channel_id,
+                streamer_role_id, auto_partner_default, cross_server_raids,
+                ai_features, status, updated_by
+            ) VALUES (
+                $1, 'Deutsche Deadlock Community', 'de',
+                1374364800817303632, 1374364800817303632, 1313624729466441769,
+                TRUE, TRUE, TRUE, 'active', 'promote'
+            )
+            ON CONFLICT (guild_id) DO UPDATE SET
+                status = 'active',
+                removed_at = NULL,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(guild_id)
+        .execute(&mut **tx)
+        .await?;
+    }
+    let installed: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM discord_guilds WHERE guild_id = $1 AND status = 'active')",
+    )
+    .bind(guild_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if !installed {
+        return Ok(());
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO streamer_guilds (twitch_user_id, guild_id, active, source)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (twitch_user_id, guild_id) DO UPDATE SET
+            active = EXCLUDED.active,
+            source = streamer_guilds.source,
+            deactivated_by = CASE WHEN EXCLUDED.active THEN NULL ELSE COALESCE(streamer_guilds.deactivated_by, 'promote') END,
+            deactivated_at = CASE WHEN EXCLUDED.active THEN NULL ELSE COALESCE(streamer_guilds.deactivated_at, NOW()) END
+        "#,
+    )
+    .bind(user_id)
+    .bind(guild_id)
+    .bind(active)
+    .bind(source)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 /// Python `promote_streamer_to_partner` (`partner_registry.py:782`) für den
 /// OAuth-Followup-Parametersatz. Läuft vollständig in der übergebenen
 /// Transaktion (Promotion + Identity-Upsert + Normalisierung + Clear-Source).
@@ -967,6 +1037,15 @@ pub async fn promote_streamer_to_partner(
         .await?;
     }
 
+    attach_streamer_guild(
+        tx,
+        &normalized_user_id,
+        args.guild_id.unwrap_or(COMMUNITY_GUILD_ID),
+        true,
+        STREAMER_GUILD_SOURCE_ONBOARDING,
+    )
+    .await?;
+
     Ok(PromotedIdentity {
         twitch_login: normalized_login,
         twitch_user_id: normalized_user_id,
@@ -1157,6 +1236,7 @@ impl PartnerSetupService {
                     is_on_discord: is_on_discord_value,
                     activate_partner_features,
                     clear_source: true,
+                    guild_id: None,
                 },
                 Utc::now(),
             )
@@ -1440,6 +1520,34 @@ mod tests {
                 id BIGSERIAL PRIMARY KEY, streamer_login TEXT NOT NULL,
                 twitch_user_id TEXT, tags TEXT
             )"#,
+            r#"CREATE TABLE discord_guilds (
+                guild_id BIGINT PRIMARY KEY CHECK (guild_id > 0),
+                name TEXT NOT NULL DEFAULT '',
+                language TEXT NOT NULL DEFAULT 'en',
+                announce_channel_id BIGINT,
+                alert_channel_id BIGINT,
+                streamer_role_id BIGINT,
+                ping_role_id BIGINT,
+                promo_invite_url TEXT,
+                auto_partner_default BOOLEAN NOT NULL DEFAULT TRUE,
+                cross_server_raids BOOLEAN NOT NULL DEFAULT TRUE,
+                ai_features BOOLEAN NOT NULL DEFAULT FALSE,
+                status TEXT NOT NULL DEFAULT 'active',
+                installed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                removed_at TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_by TEXT
+            )"#,
+            r#"CREATE TABLE streamer_guilds (
+                twitch_user_id TEXT NOT NULL,
+                guild_id BIGINT NOT NULL REFERENCES discord_guilds(guild_id) ON DELETE CASCADE,
+                active BOOLEAN NOT NULL DEFAULT TRUE,
+                deactivated_by TEXT,
+                deactivated_at TIMESTAMPTZ,
+                joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                source TEXT NOT NULL DEFAULT 'onboarding',
+                PRIMARY KEY (twitch_user_id, guild_id)
+            )"#,
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -1456,6 +1564,7 @@ mod tests {
             is_on_discord: 0,
             activate_partner_features: true,
             clear_source: true,
+            guild_id: None,
         }
     }
 
