@@ -136,6 +136,36 @@ impl TrackedStore {
         Ok((tracked, partner_logins))
     }
 
+    pub async fn persist_broadcaster_language(
+        &self,
+        twitch_user_id: &str,
+        language: &str,
+    ) -> Result<(), sqlx::Error> {
+        let user_id = twitch_user_id.trim();
+        let language = language.trim().to_lowercase();
+        if user_id.is_empty()
+            || !user_id.bytes().all(|b| b.is_ascii_digit())
+            || language.is_empty()
+            || language.len() > 16
+        {
+            return Ok(());
+        }
+        sqlx::query(
+            r#"
+            UPDATE twitch_streamer_identities
+               SET broadcaster_language = $1,
+                   updated_at = CURRENT_TIMESTAMP
+             WHERE twitch_user_id = $2
+               AND broadcaster_language IS DISTINCT FROM $1
+            "#,
+        )
+        .bind(language)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Partner, deren letzte bekannte Stream-Aktivität vor `cutoff` liegt.
     /// Nur aktive, nicht archivierte und noch nicht informativ markierte Partner
     /// mit vorhandener Historie.

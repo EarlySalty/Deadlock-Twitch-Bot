@@ -193,6 +193,7 @@ pub async fn create_schema(pool: &PgPool) {
             discord_user_id TEXT,
             discord_display_name TEXT,
             is_on_discord INTEGER DEFAULT 0,
+            broadcaster_language TEXT NOT NULL DEFAULT 'und',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )",

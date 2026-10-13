@@ -4,6 +4,7 @@ import { motion } from "framer-motion";
 import { GlowOrb } from "@/components/effects/GlowOrb";
 import { PublicInfoFooter } from "@/components/layout/PublicInfoFooter";
 import { PublicInfoHeader } from "@/components/layout/PublicInfoHeader";
+import { GuildPicker } from "@/components/onboarding/GuildPicker";
 import { OnboardingProgress } from "@/components/onboarding/OnboardingProgress";
 import { StepCard } from "@/components/onboarding/StepCard";
 import { BotQuestionBox } from "@/components/sections/BotQuestionBox";
@@ -274,6 +275,8 @@ export function StreamerOnboardingPage() {
             </motion.div>
           </div>
         </section>
+
+        <GuildPicker />
 
         {/* Progress Indicator */}
         <section className="px-6 py-8">

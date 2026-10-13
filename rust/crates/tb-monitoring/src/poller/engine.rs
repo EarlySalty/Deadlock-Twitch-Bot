@@ -1001,6 +1001,20 @@ impl PollEngine {
         if let Err(error) = self.stats.log_category(now, &category_rows).await {
             tracing::error!(%error, "Konnte category-Stats nicht loggen");
         }
+
+        for stream in streams_by_login.values() {
+            if let Err(error) = self
+                .tracked
+                .persist_broadcaster_language(&stream.user_id, &stream.language)
+                .await
+            {
+                tracing::debug!(
+                    %error,
+                    user_id = %stream.user_id,
+                    "broadcaster_language nicht gespeichert"
+                );
+            }
+        }
     }
 
     /// Informative Inaktivitaetsmarkierung (> 10 Tage keine bekannte Stream-
@@ -1319,7 +1333,11 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "CREATE TABLE twitch_streamer_identities (twitch_user_id TEXT, discord_user_id TEXT)",
+            "CREATE TABLE twitch_streamer_identities (
+                twitch_user_id TEXT,
+                discord_user_id TEXT,
+                broadcaster_language TEXT NOT NULL DEFAULT 'und'
+            )",
         )
         .execute(&pool)
         .await
