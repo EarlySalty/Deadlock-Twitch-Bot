@@ -1,8 +1,8 @@
-// Formatting utilities for the dashboard
+import { activeLocale, tr } from '../i18n/dictionary';
 
 export function formatNumber(n: number | null | undefined, decimals = 0): string {
   if (n === null || n === undefined) return '-';
-  return n.toLocaleString('de-DE', {
+  return n.toLocaleString(activeLocale(), {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   });
@@ -50,7 +50,7 @@ export function formatHours(hours: number): string {
 export function formatDate(dateStr: string): string {
   if (!dateStr) return '-';
   const date = new Date(dateStr);
-  return date.toLocaleDateString('de-DE', {
+  return date.toLocaleDateString(activeLocale(), {
     day: '2-digit',
     month: '2-digit',
     year: '2-digit',
@@ -60,7 +60,7 @@ export function formatDate(dateStr: string): string {
 export function formatDateFull(dateStr: string): string {
   if (!dateStr) return '-';
   const date = new Date(dateStr);
-  return date.toLocaleDateString('de-DE', {
+  return date.toLocaleDateString(activeLocale(), {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
@@ -95,17 +95,17 @@ export function formatCompact(n: number): string {
 
 export function getWeekdayLabel(weekday: number): string {
   const days = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
-  return days[weekday] || '';
+  return days[weekday] ? tr(days[weekday]) : '';
 }
 
 export function getWeekdayLabelFull(weekday: number): string {
   const days = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
-  return days[weekday] || '';
+  return days[weekday] ? tr(days[weekday]) : '';
 }
 
 export function getMonthLabel(month: number): string {
   const months = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
-  return months[month - 1] || '';
+  return months[month - 1] ? tr(months[month - 1]) : '';
 }
 
 export function getMonthLabelFull(month: number): string {
@@ -113,7 +113,7 @@ export function getMonthLabelFull(month: number): string {
     'Januar', 'Februar', 'März', 'April', 'Mai', 'Juni',
     'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'
   ];
-  return months[month - 1] || '';
+  return months[month - 1] ? tr(months[month - 1]) : '';
 }
 
 // Color utilities

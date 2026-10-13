@@ -6,6 +6,8 @@ import {
   isPreviewModeEnabled,
 } from '../preview/routes';
 import { ApiHttpError } from './httpError';
+import { tr } from '../i18n/dictionary';
+import { withLanguageHeader } from './languageHeader';
 
 const API_BASE = dashboardRuntimeConfig.apiBase;
 const INTERNAL_REDIRECT_PREFIX = '/twitch';
@@ -23,6 +25,7 @@ interface ApiErrorPayload {
 }
 
 export { ApiHttpError } from './httpError';
+export { LANGUAGE_HEADER, withLanguageHeader } from './languageHeader';
 
 export interface FetchJsonOptions {
   loginFallback?: string;
@@ -119,7 +122,7 @@ async function handleUnauthorizedResponse(
     window.location.href = sanitizeInternalRedirectUrl(unauthorized.loginUrl, loginFallback);
     throw new Error('Redirecting to Twitch login');
   }
-  throw new ApiHttpError(unauthorized?.error || 'Unauthorized', response.status);
+  throw new ApiHttpError(tr(unauthorized?.error || 'Unauthorized'), response.status);
 }
 
 export async function fetchJson<T>(
@@ -127,12 +130,6 @@ export async function fetchJson<T>(
   init: RequestInit = {},
   options: FetchJsonOptions = {}
 ): Promise<T> {
-  // Aufrufe mit absolutem Pfad (Uplink etwa) gehen nicht ueber `fetchApi` und
-  // haetten im Preview sonst keinen Gegenueber. Nur auf dem lokalen
-  // Preview-Host, im Betrieb ist dieser Zweig tot.
-  // Nur lesende Aufrufe: eine Fixture auf ein PUT waere ein erfundener
-  // Schreib-Erfolg, und die Oberflaeche zeigte danach einen Zustand, den es
-  // nirgends gibt.
   if (isPreviewLocalhost() && (init.method ?? 'GET').toUpperCase() === 'GET') {
     const pfad = typeof input === 'string' ? input : input.toString();
     const fixture = getPreviewPathFixture(pfad.split('?')[0]);
@@ -141,20 +138,21 @@ export async function fetchJson<T>(
     }
   }
 
-  const response = await fetch(input, init);
+  const response = await fetch(input, withLanguageHeader(input, init));
 
   if (response.status === 401) {
     await handleUnauthorizedResponse(response, options.loginFallback || DASHBOARD_V2_LOGIN_FALLBACK);
   }
 
   if (options.notFoundMessage && response.status === 404) {
-    throw new ApiHttpError(options.notFoundMessage, response.status);
+    throw new ApiHttpError(tr(options.notFoundMessage), response.status);
   }
 
   if (!response.ok) {
     const error = await readErrorPayload(response);
+    const message = error?.message || error?.error;
     throw new ApiHttpError(
-      error?.message || error?.error || `Server-Fehler (HTTP ${response.status})`,
+      message ? tr(message) : tr('Server-Fehler (HTTP {status})', { status: response.status }),
       response.status
     );
   }
@@ -178,7 +176,6 @@ export async function fetchApi<T>(
   const url = buildApiUrl(endpoint, params);
   const abortCtrl = timeoutMs ? new AbortController() : null;
   const timer = abortCtrl ? setTimeout(() => abortCtrl.abort(), timeoutMs!) : null;
-  // Preserve timeout callers while also allowing queries to cancel obsolete requests.
   const forwardAbort = () => abortCtrl?.abort(signal?.reason);
   if (abortCtrl && signal) {
     if (signal.aborted) forwardAbort();
