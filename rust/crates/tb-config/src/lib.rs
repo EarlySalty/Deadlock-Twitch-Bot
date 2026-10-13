@@ -180,9 +180,41 @@ impl BrokerConfig {
             .and_then(non_empty)
             .or_else(|| get("MAIN_BOT_INTERNAL_TOKEN").and_then(non_empty))
             .unwrap_or_else(|| internal_token.to_string());
-        Ok(Self { base_url, token })
+        let broker = Self { base_url, token };
+        // Optionale Umschaltung auf den Discord-Hub (Paket H). Ohne
+        // DISCORD_HUB_BASE_URL bleibt alles beim Broker wie bisher.
+        let hub_base_url = get(DISCORD_HUB_BASE_URL).and_then(non_empty);
+        let hub_token = || get(DISCORD_HUB_INTERNAL_TOKEN).and_then(non_empty);
+        Ok(broker.with_discord_hub(hub_base_url, hub_token))
+    }
+
+    /// Lenkt die Konfiguration auf den Discord-Hub um, falls eine Hub-Adresse
+    /// gesetzt ist. Der Hub bietet dieselben Endpunkte wie der Broker
+    /// (`/internal/master/v1/...`) und reicht Anfragen ohne Guild bzw. für die
+    /// Community-Guild unverändert an den Broker weiter.
+    ///
+    /// Token: eigenes Hub-Token, sonst das bereits aufgelöste Broker-Token.
+    /// Das Hub-Token wird nur abgefragt, wenn eine Hub-Adresse gesetzt ist.
+    /// Ohne Hub-Adresse bleibt die Konfiguration unverändert.
+    pub fn with_discord_hub(
+        self,
+        hub_base_url: Option<String>,
+        hub_token: impl FnOnce() -> Option<String>,
+    ) -> Self {
+        match hub_base_url {
+            Some(base_url) => Self {
+                base_url,
+                token: hub_token().unwrap_or(self.token),
+            },
+            None => self,
+        }
     }
 }
+
+/// Basis-URL des Discord-Hubs; gesetzt ⇒ Twitch-Bot spricht den Hub statt des Brokers an.
+pub const DISCORD_HUB_BASE_URL: &str = "DISCORD_HUB_BASE_URL";
+/// Optionales eigenes Token für den Hub; Fallback ist das Broker-Token.
+pub const DISCORD_HUB_INTERNAL_TOKEN: &str = "DISCORD_HUB_INTERNAL_TOKEN";
 
 /// Gesamte Settings des Bot-Prozesses (für Phase 0b: DB + interne API + Broker).
 #[derive(Debug, Clone)]
@@ -317,6 +349,54 @@ mod tests {
         // Kein MASTER_BROKER_TOKEN, kein MAIN_BOT_INTERNAL_TOKEN
         // → fällt auf TWITCH_INTERNAL_API_TOKEN zurück
         let s = Settings::load(&src(minimal())).unwrap();
+        assert_eq!(s.broker.token, "tok-123");
+    }
+
+    #[test]
+    fn ohne_hub_variable_bleibt_der_broker_ziel() {
+        let mut m = minimal();
+        m.insert("MASTER_BROKER_TOKEN", "master-tok");
+        // Ein Hub-Token allein schaltet nicht um.
+        m.insert("DISCORD_HUB_INTERNAL_TOKEN", "hub-tok");
+        let s = Settings::load(&src(m)).unwrap();
+        assert_eq!(s.broker.base_url, "http://127.0.0.1:8770");
+        assert_eq!(s.broker.token, "master-tok");
+    }
+
+    #[test]
+    fn leere_hub_variable_schaltet_nicht_um() {
+        let mut m = minimal();
+        m.insert("DISCORD_HUB_BASE_URL", "   ");
+        let s = Settings::load(&src(m)).unwrap();
+        assert_eq!(s.broker.base_url, "http://127.0.0.1:8770");
+        assert_eq!(s.broker.token, "tok-123");
+    }
+
+    #[test]
+    fn hub_variable_ersetzt_broker_adresse_und_nutzt_hub_token() {
+        let mut m = minimal();
+        m.insert("MASTER_BROKER_BASE_URL", "http://127.0.0.1:9999");
+        m.insert("MASTER_BROKER_TOKEN", "master-tok");
+        m.insert("DISCORD_HUB_BASE_URL", "http://127.0.0.1:8790");
+        m.insert("DISCORD_HUB_INTERNAL_TOKEN", "hub-tok");
+        let s = Settings::load(&src(m)).unwrap();
+        assert_eq!(s.broker.base_url, "http://127.0.0.1:8790");
+        assert_eq!(s.broker.token, "hub-tok");
+    }
+
+    #[test]
+    fn hub_ohne_eigenes_token_faellt_auf_broker_token_kette_zurueck() {
+        let mut m = minimal();
+        m.insert("DISCORD_HUB_BASE_URL", "http://127.0.0.1:8790");
+        m.insert("MAIN_BOT_INTERNAL_TOKEN", "main-tok");
+        m.insert("DISCORD_HUB_INTERNAL_TOKEN", "");
+        let s = Settings::load(&src(m)).unwrap();
+        assert_eq!(s.broker.base_url, "http://127.0.0.1:8790");
+        assert_eq!(s.broker.token, "main-tok");
+
+        let mut m = minimal();
+        m.insert("DISCORD_HUB_BASE_URL", "http://127.0.0.1:8790");
+        let s = Settings::load(&src(m)).unwrap();
         assert_eq!(s.broker.token, "tok-123");
     }
 }
