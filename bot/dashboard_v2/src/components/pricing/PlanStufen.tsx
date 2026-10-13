@@ -2,25 +2,8 @@ import { motion } from 'framer-motion';
 import { Check } from 'lucide-react';
 import { getPlanCheckoutHref } from '../../preview/routes';
 import type { CatalogPlan } from '../../types/billing';
-
-/* Die Stufen des Katalogs, so wie das Backend sie liefert: free, plus, pro.
-   Der frühere Baukasten setzte Feature-Kacheln zu Plan-IDs zusammen, die es seit
-   dem Umbau nicht mehr gibt; jede Auswahl landete deshalb bei "Kostenlos" und
-   verlinkte am Checkout vorbei. Hier wird nur noch angezeigt, was im Katalog
-   steht. Kein Empfohlen-Badge, keine Minus-Kreuze: was eine Stufe kann, steht
-   als Liste da, was sie nicht kann, steht in der Stufe darüber.
-
-   Creator Pro bekommt bewusst KEINE eigene Säule, solange die Werkzeuge dafür
-   fehlen: eine Karte mit zwei Zeilen neben zwei vollen Karten wirkt wie ein
-   Angebot, das man nicht kaufen will. Es steht deshalb als ruhige Zeile
-   darunter, bis es Substanz hat. Sobald der Katalog Pro auf `buchbar` stellt
-   und die Feature-Liste trägt, gehört es zurück nach oben. Wer die Stufe über
-   ein Geschenk bereits laufen hat, sieht sie ebenfalls als Karte, sonst
-   verschwindet der eigene Stand samt Hinweis hinter der Ausblick-Zeile.
-
-   Die Ausblick-Zeile nennt bewusst kein einzelnes Merkmal: was dort stünde,
-   liefe entweder heute schon für alle oder wäre ein Versprechen auf etwas,
-   das es noch nicht gibt. */
+import { useT } from '../../context/LanguageContext';
+import { activeLocale, tr } from '../../i18n/dictionary';
 
 const AKZENT: Record<string, string> = {
   free: '#C5A059',
@@ -30,13 +13,16 @@ const AKZENT: Record<string, string> = {
 
 const AKZENT_FALLBACK = '#C5A059';
 
-/** Cent-Betrag als deutscher Endpreis, z. B. `499` → `4,99 €`. */
-function eur(cents: number): string {
+function eur(cents: number, stellen = 2): string {
   const sicher = Math.max(0, Math.round(cents));
-  return `${Math.floor(sicher / 100)},${String(sicher % 100).padStart(2, '0')} €`;
+  return new Intl.NumberFormat(activeLocale(), {
+    style: 'currency',
+    currency: 'EUR',
+    minimumFractionDigits: stellen,
+    maximumFractionDigits: stellen,
+  }).format(sicher / 100);
 }
 
-/** Fälliger Endpreis der Stufe im gewählten Zyklus, in Cent. */
 function betragCents(plan: CatalogPlan, cycle: 1 | 12): number {
   if (typeof plan.price?.total_gross_cents === 'number') {
     return plan.price.total_gross_cents;
@@ -46,7 +32,6 @@ function betragCents(plan: CatalogPlan, cycle: 1 | 12): number {
   return cycle === 12 ? jahr : monat;
 }
 
-/** Rechnerischer Monatspreis im Jahreszyklus, in Cent. */
 function monatsBetragCents(plan: CatalogPlan, cycle: 1 | 12): number {
   if (typeof plan.price?.effective_monthly_gross_cents === 'number') {
     return plan.price.effective_monthly_gross_cents;
@@ -54,41 +39,33 @@ function monatsBetragCents(plan: CatalogPlan, cycle: 1 | 12): number {
   return Math.round(betragCents(plan, cycle) / cycle);
 }
 
-/* Bezahlte Stufen nur anbieten, wenn das Backend sie auch verkaufen kann: ohne
-   hinterlegte Stripe-Preis-ID meldet der Katalog checkout_available=false und
-   der Checkout schickt jeden Klick mit missing_stripe_price_id zurück. Lieber
-   ehrlich "bald buchbar" anzeigen als einen Kauf versprechen, der abprallt.
-   Free braucht keinen Stripe-Preis und bleibt immer anklickbar. `buchbar`
-   schlägt alles: die Stufe existiert als Ausblick, ihre Funktionen noch nicht. */
 function istBuchbar(plan: CatalogPlan, gratis: boolean): boolean {
   return plan.buchbar !== false && (gratis || plan.checkout_available !== false);
 }
 
-const ZAHLWORT: Record<number, string> = {
-  1: 'Eine',
-  2: 'Zwei',
-  3: 'Drei',
-  4: 'Vier',
-};
-
-/** Überschrift aus der tatsächlichen Kartenzahl, damit sie nie zwei behauptet,
-    während drei Säulen darunter stehen. */
 function ueberschriftFuer(anzahl: number): string {
-  if (anzahl === 1) {
-    return 'Eine Stufe, ein Bot';
+  switch (anzahl) {
+    case 1:
+      return tr('Eine Stufe, ein Bot');
+    case 2:
+      return tr('Zwei Stufen, ein Bot');
+    case 3:
+      return tr('Drei Stufen, ein Bot');
+    case 4:
+      return tr('Vier Stufen, ein Bot');
+    default:
+      return tr('{count} Stufen, ein Bot', { count: anzahl });
   }
-  return `${ZAHLWORT[anzahl] ?? anzahl} Stufen, ein Bot`;
 }
 
-/** Unterzeile passend zur Kartenzahl: über Plus nur reden, wenn Plus dasteht. */
 function unterzeileFuer(anzahl: number): string {
   if (anzahl <= 1) {
-    return 'Free bleibt dauerhaft vollwertig.';
+    return tr('Free bleibt dauerhaft vollwertig.');
   }
   if (anzahl === 2) {
-    return 'Free bleibt dauerhaft vollwertig. Plus zeigt dir deine Entwicklung statt nur den letzten Stream.';
+    return tr('Free bleibt dauerhaft vollwertig. Plus zeigt dir deine Entwicklung statt nur den letzten Stream.');
   }
-  return 'Free bleibt dauerhaft vollwertig. Die bezahlten Stufen zeigen dir deine Entwicklung statt nur den letzten Stream.';
+  return tr('Free bleibt dauerhaft vollwertig. Die bezahlten Stufen zeigen dir deine Entwicklung statt nur den letzten Stream.');
 }
 
 interface PlanStufenProps {
@@ -97,16 +74,13 @@ interface PlanStufenProps {
 }
 
 export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
+  const t = useT();
   if (plans.length === 0) {
     return null;
   }
 
   const karten = plans.filter((plan) => plan.id !== 'pro');
   const pro = plans.find((plan) => plan.id === 'pro');
-  /* Buchbar gehört nach oben, und wer die Stufe laufen hat, sieht sie auch:
-     ein unbefristetes Geschenk setzt is_current auf der Pro-Karte, ohne dass
-     der Katalog sie buchbar stellt. Ohne diese Ausnahme sähe der Beschenkte
-     weder "Deine aktuelle Stufe" noch den Hinweis dazu. */
   const proGehoertNachOben = pro ? istBuchbar(pro, false) || pro.is_current : false;
   const obenAngezeigt = proGehoertNachOben && pro ? [...karten, pro] : karten;
 
@@ -147,25 +121,25 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
               <p className="font-semibold text-white text-xl">{plan.name}</p>
               {plan.description && (
                 <p className="text-white/45 text-sm leading-relaxed mt-2 max-w-md">
-                  {plan.description}
+                  {t(plan.description)}
                 </p>
               )}
 
               <div className="mt-7 mb-1 flex items-baseline gap-2">
                 <span className="text-4xl font-bold text-white tracking-tight">
-                  {gratis ? '0 €' : eur(cents)}
+                  {gratis ? eur(0, 0) : eur(cents)}
                 </span>
                 <span className="text-white/45 text-base">
-                  {gratis ? 'für immer' : cycle === 12 ? '/ Jahr' : '/ Monat'}
+                  {gratis ? t('für immer') : cycle === 12 ? t('/ Jahr') : t('/ Monat')}
                 </span>
               </div>
               {!gratis && cycle === 12 && (
                 <p className="text-white/35 text-sm">
-                  entspricht {eur(monatlich)} im Monat, zwei Monate geschenkt
+                  {t('entspricht {price} im Monat, zwei Monate geschenkt', { price: eur(monatlich) })}
                 </p>
               )}
               {!gratis && cycle === 1 && (
-                <p className="text-white/35 text-sm">monatlich kündbar</p>
+                <p className="text-white/35 text-sm">{t('monatlich kündbar')}</p>
               )}
 
               <ul className="space-y-3 mt-8 mb-8 flex-1">
@@ -178,14 +152,14 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
                       className="w-4 h-4 mt-0.5 flex-shrink-0"
                       style={{ color: akzent }}
                     />
-                    {feature}
+                    {t(feature)}
                   </li>
                 ))}
               </ul>
 
               {plan.is_current ? (
                 <span className="px-6 py-3.5 rounded-xl text-sm font-semibold text-center bg-white/5 text-white/50">
-                  Deine aktuelle Stufe
+                  {t('Deine aktuelle Stufe')}
                 </span>
               ) : buchbar ? (
                 <a
@@ -196,19 +170,16 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
                       : 'bg-white/15 hover:bg-white/20 text-white'
                   }`}
                 >
-                  {gratis ? 'Kostenlos nutzen' : `${plan.name} buchen`}
+                  {gratis ? t('Kostenlos nutzen') : t('{plan} buchen', { plan: plan.name })}
                 </a>
               ) : (
                 <span className="px-6 py-3.5 rounded-xl text-sm font-semibold text-center bg-white/5 text-white/40">
-                  Bald buchbar
+                  {t('Bald buchbar')}
                 </span>
               )}
 
-              {/* Wer im Test oder auf einem alten Tarif steht, nutzt die Stufe
-                  schon, hat sie aber nicht dauerhaft gekauft. Der Knopf bleibt
-                  deshalb stehen, der Hinweis sagt nur, warum. */}
               {plan.hinweis && (
-                <p className="text-white/35 text-sm mt-3 text-center">{plan.hinweis}</p>
+                <p className="text-white/35 text-sm mt-3 text-center">{t(plan.hinweis)}</p>
               )}
             </motion.div>
           );
@@ -218,24 +189,21 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
       {pro && !proGehoertNachOben && (
         <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] px-8 py-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div className="max-w-2xl">
-            <p className="text-white/80 font-medium">{pro.name} ist noch nicht buchbar.</p>
+            <p className="text-white/80 font-medium">{t('{plan} ist noch nicht buchbar.', { plan: pro.name })}</p>
             <p className="text-white/40 text-sm mt-1.5 leading-relaxed">
-              Die Stufe bekommt Inhalt, sobald die Werkzeuge dafür stehen.
+              {t('Die Stufe bekommt Inhalt, sobald die Werkzeuge dafür stehen.')}
             </p>
           </div>
-          {/* Kein hartkodierter Ersatzpreis: fällt das Katalogfeld weg, steht
-              hier lieber nichts als stumm eine veraltete Zahl. */}
           {typeof pro.monthly_gross_cents === 'number' && (
             <span className="text-white/35 text-sm whitespace-nowrap">
-              später {eur(pro.monthly_gross_cents)} im Monat
+              {t('später {price} im Monat', { price: eur(pro.monthly_gross_cents) })}
             </span>
           )}
         </div>
       )}
 
       <p className="text-white/30 text-sm mt-6 text-center">
-        Alle Beträge sind Endpreise. Kleinunternehmer nach Paragraph 19 UStG, kein
-        Umsatzsteuerausweis.
+        {t('Alle Beträge sind Endpreise. Kleinunternehmer nach Paragraph 19 UStG, kein Umsatzsteuerausweis.')}
       </p>
     </div>
   );

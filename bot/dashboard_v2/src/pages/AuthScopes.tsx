@@ -7,7 +7,8 @@ import {
   ShieldOff,
   Sparkles,
 } from 'lucide-react';
-import { useMemo } from 'react';
+import { Fragment, useMemo, type ReactNode } from 'react';
+import { useT } from '@/context/LanguageContext';
 import { useScopes } from '@/hooks/useScopes';
 import type { ScopeStatus } from '@/types/scopes';
 
@@ -17,7 +18,15 @@ const demoScopes = new Set<string>([
   'channel:bot',
 ]);
 
+function withElements(text: string, elements: Record<string, ReactNode>): ReactNode[] {
+  return text.split(/(\{\w+\})/).map((part, index) => {
+    const name = /^\{(\w+)\}$/.exec(part)?.[1];
+    return <Fragment key={index}>{name && name in elements ? elements[name] : part}</Fragment>;
+  });
+}
+
 function ScopeCard({ scope }: { scope: ScopeStatus }) {
+  const t = useT();
   const isMissing = scope.status === 'missing';
   const isCritical = scope.importance === 'critical';
   const isNew = !!scope.addedAt;
@@ -36,12 +45,12 @@ function ScopeCard({ scope }: { scope: ScopeStatus }) {
             <span>{scope.label}</span>
             {isCritical && (
               <span className="rounded-full bg-danger/10 px-2 py-0.5 text-[10px] font-semibold text-danger">
-                Kritisch
+                {t('Kritisch')}
               </span>
             )}
             {isNew && (
               <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-semibold text-accent">
-                Neu
+                {t('Neu')}
               </span>
             )}
           </div>
@@ -56,7 +65,7 @@ function ScopeCard({ scope }: { scope: ScopeStatus }) {
           }`}
         >
           {isMissing ? <ShieldOff className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4" />}
-          {isMissing ? 'Fehlt' : 'Aktiv'}
+          {isMissing ? t('Fehlt') : t('Aktiv')}
         </div>
       </div>
 
@@ -69,7 +78,7 @@ function ScopeCard({ scope }: { scope: ScopeStatus }) {
             {scope.why}
           </div>
         </div>
-        <span className="hidden sm:inline">Warum:</span>
+        <span className="hidden sm:inline">{t('Warum:')}</span>
         <span className="line-clamp-1 sm:line-clamp-none">{scope.why}</span>
       </div>
     </div>
@@ -77,6 +86,7 @@ function ScopeCard({ scope }: { scope: ScopeStatus }) {
 }
 
 export function AuthScopes() {
+  const t = useT();
   const { input, setInput, statuses, summary, changelog, setFromList, reset, scopeCatalog } =
     useScopes();
 
@@ -89,27 +99,27 @@ export function AuthScopes() {
 
   return (
     <div className="space-y-6">
-      {/* Hero / Summary */}
       <div className="rounded-2xl border border-border bg-card/70 p-6 shadow-lg">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-text-secondary">
-              <span>Scopes</span>
+              <span>{t('Scopes')}</span>
               <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-text-secondary">
-                Frontend Preview
+                {t('Frontend Preview')}
               </span>
             </div>
-            <h2 className="text-2xl font-bold text-white">OAuth Scope Checker</h2>
+            <h2 className="text-2xl font-bold text-white">{t('OAuth Scope Checker')}</h2>
             <p className="max-w-3xl text-sm text-text-secondary">
-              Vergleicht die aktuell erteilten Broadcaster-/Streamer-Scopes mit unserer
-              benötigten Liste. Bot-User-Scopes wie <code>user:read:chat</code> laufen zentral über
-              den Bot-Account und sind bewusst nicht Teil dieser Streamer-Matrix.
+              {withElements(
+                t('Vergleicht die aktuell erteilten Broadcaster-/Streamer-Scopes mit unserer benötigten Liste. Bot-User-Scopes wie {scope} laufen zentral über den Bot-Account und sind bewusst nicht Teil dieser Streamer-Matrix.'),
+                { scope: <code>user:read:chat</code> },
+              )}
             </p>
           </div>
 
           <div className="flex items-center gap-3">
             <div className="rounded-xl border border-border bg-black/30 px-4 py-3 text-center">
-              <div className="text-sm text-text-secondary">Abdeckung</div>
+              <div className="text-sm text-text-secondary">{t('Abdeckung')}</div>
               <div className="text-2xl font-semibold text-white">{summary.coverage}%</div>
               <div className="mt-2 h-2 w-40 overflow-hidden rounded-full bg-white/5">
                 <div
@@ -119,9 +129,9 @@ export function AuthScopes() {
               </div>
             </div>
             <div className="rounded-xl border border-border bg-black/30 px-4 py-3 text-center">
-              <div className="text-sm text-text-secondary">Kritisch fehlen</div>
+              <div className="text-sm text-text-secondary">{t('Kritisch fehlen')}</div>
               <div className="text-2xl font-semibold text-danger">{summary.criticalMissing.length}</div>
-              <div className="text-xs text-text-secondary">von {summary.total}</div>
+              <div className="text-xs text-text-secondary">{t('von {total}', { total: summary.total })}</div>
             </div>
           </div>
         </div>
@@ -130,13 +140,13 @@ export function AuthScopes() {
           <div className="rounded-lg border border-border bg-black/20 px-4 py-3 text-sm text-text-secondary">
             <div className="mb-1 flex items-center gap-2 text-white">
               <Sparkles className="h-4 w-4 text-accent" />
-              Streamer-Scopes
+              {t('Streamer-Scopes')}
             </div>
             {summary.missing.length === 0 ? (
-              <span className="text-success">Alle Scopes vorhanden ✔</span>
+              <span className="text-success">{t('Alle Scopes vorhanden ✔')}</span>
             ) : (
               <span>
-                Fehlt: {missingLabels.join(', ')}
+                {t('Fehlt: {labels}', { labels: missingLabels.join(', ') })}
                 {summary.missing.length > missingLabels.length && ' …'}
               </span>
             )}
@@ -145,7 +155,7 @@ export function AuthScopes() {
           <div className="rounded-lg border border-border bg-black/20 px-4 py-3 text-sm text-text-secondary">
             <div className="mb-1 flex items-center gap-2 text-white">
               <History className="h-4 w-4 text-accent" />
-              Letzter Change
+              {t('Letzter Change')}
             </div>
             <span>{summary.lastChange || '—'}</span>
           </div>
@@ -153,24 +163,25 @@ export function AuthScopes() {
           <div className="rounded-lg border border-border bg-black/20 px-4 py-3 text-sm text-text-secondary">
             <div className="mb-1 flex items-center gap-2 text-white">
               <RefreshCw className="h-4 w-4 text-accent" />
-              Bot-Scopes
+              {t('Bot-Scopes')}
             </div>
             <span className="text-xs text-text-secondary">
-              Zentral: <code>user:read:chat</code>, <code>user:write:chat</code>.
-              <code>user:bot</code> erst bei App-Token-Chat-EventSub.
+              {withElements(t('Zentral: {chatRead}, {chatWrite}. {bot} erst bei App-Token-Chat-EventSub.'), {
+                chatRead: <code>user:read:chat</code>,
+                chatWrite: <code>user:write:chat</code>,
+                bot: <code>user:bot</code>,
+              })}
             </span>
           </div>
         </div>
       </div>
 
-      {/* Input area */}
       <div className="rounded-2xl border border-border bg-card/80 p-5 shadow">
         <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-white">Aktuelle Streamer-Scopes</h3>
+            <h3 className="text-lg font-semibold text-white">{t('Aktuelle Streamer-Scopes')}</h3>
             <p className="text-sm text-text-secondary">
-              Füge hier die Broadcaster-Scopes des Streamer-Tokens ein (Komma oder Leerzeichen
-              getrennt). Bot-Scopes werden getrennt zentral geprüft.
+              {t('Füge hier die Broadcaster-Scopes des Streamer-Tokens ein (Komma oder Leerzeichen getrennt). Bot-Scopes werden getrennt zentral geprüft.')}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -180,7 +191,7 @@ export function AuthScopes() {
               className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm text-text-secondary transition hover:border-border-hover"
             >
               <ClipboardCopy className="h-4 w-4" />
-              Demo füllen
+              {t('Demo füllen')}
             </button>
             <button
               type="button"
@@ -188,7 +199,7 @@ export function AuthScopes() {
               className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm text-text-secondary transition hover:border-border-hover"
             >
               <ShieldCheck className="h-4 w-4 text-success" />
-              Alles autorisiert
+              {t('Alles autorisiert')}
             </button>
             <button
               type="button"
@@ -196,7 +207,7 @@ export function AuthScopes() {
               className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm text-text-secondary transition hover:border-border-hover"
             >
               <RefreshCw className="h-4 w-4" />
-              Zurücksetzen
+              {t('Zurücksetzen')}
             </button>
           </div>
         </div>
@@ -209,31 +220,30 @@ export function AuthScopes() {
           placeholder="channel:manage:raids channel:bot bits:read …"
         />
         <p className="mt-2 text-xs text-text-secondary">
-          Tipp: Du kannst Scopes auch per URL setzen (&quot;?scopes=channel:manage:raids,channel:bot&quot;), wir
-          lesen sie beim Laden ein und speichern sie lokal. <code>user:read:chat</code> oder
-          <code>user:bot</code> gehoeren nicht in diese Streamer-Liste.
+          {withElements(
+            t('Tipp: Du kannst Scopes auch per URL setzen ("?scopes=channel:manage:raids,channel:bot"), wir lesen sie beim Laden ein und speichern sie lokal. {chatRead} oder {bot} gehoeren nicht in diese Streamer-Liste.'),
+            { chatRead: <code>user:read:chat</code>, bot: <code>user:bot</code> },
+          )}
         </p>
       </div>
 
-      {/* Scope grid */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {statuses.map(scope => (
           <ScopeCard key={scope.id} scope={scope} />
         ))}
       </div>
 
-      {/* Changelog */}
       <div className="rounded-2xl border border-border bg-card/80 p-5 shadow">
         <div className="mb-3 flex items-center justify-between">
           <div>
-            <p className="text-xs uppercase tracking-wide text-text-secondary">What&apos;s new</p>
-            <h3 className="text-lg font-semibold text-white">Changelog (Scopes)</h3>
+            <p className="text-xs uppercase tracking-wide text-text-secondary">{t("What's new")}</p>
+            <h3 className="text-lg font-semibold text-white">{t('Changelog (Scopes)')}</h3>
             <p className="text-sm text-text-secondary">
-              Platzhalter-Einträge – hier kannst du Updates posten, wenn Backend/Scopes sich ändern.
+              {t('Platzhalter-Einträge – hier kannst du Updates posten, wenn Backend/Scopes sich ändern.')}
             </p>
           </div>
           <span className="rounded-full bg-white/5 px-3 py-1 text-xs text-text-secondary">
-            Sichtbar für Streamer
+            {t('Sichtbar für Streamer')}
           </span>
         </div>
 

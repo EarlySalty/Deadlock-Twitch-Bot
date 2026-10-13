@@ -5,6 +5,8 @@ import { AlertCircle, Loader2, MessageSquare, Search, Users } from 'lucide-react
 import { useViewerTimeline } from '@/hooks/useAnalytics';
 import { SEGMENT_CONFIG } from '@/pages/Viewers';
 import { formatDateFull, formatDuration, formatNumber } from '@/utils/formatters';
+import { useT } from '@/context/LanguageContext';
+import { tr } from '../i18n/dictionary';
 
 interface ViewerTimelineProps {
   sessionId: number;
@@ -14,14 +16,16 @@ interface ViewerTimelineProps {
   onBack?: () => void;
 }
 
-const SEGMENT_OPTIONS = [
-  { value: 'all', label: 'Alle Segmente' },
-  { value: 'dedicated', label: 'Dedicated' },
-  { value: 'regular', label: 'Regular' },
-  { value: 'casual', label: 'Casual' },
-  { value: 'lurker', label: 'Lurker' },
-  { value: 'new', label: 'Neu' },
-] as const;
+function segmentOptions() {
+  return [
+    { value: 'all', label: tr('Alle Segmente') },
+    { value: 'dedicated', label: tr('Dedicated') },
+    { value: 'regular', label: tr('Regular') },
+    { value: 'casual', label: tr('Casual') },
+    { value: 'lurker', label: tr('Lurker') },
+    { value: 'new', label: tr('Neu') },
+  ] as const;
+}
 
 function formatPresenceMinutes(minutes: number): string {
   const safeMinutes = Math.max(0, Math.round(minutes));
@@ -39,6 +43,7 @@ export function ViewerTimeline({
   sessionStart,
   sessionDurationMin,
 }: ViewerTimelineProps) {
+  const t = useT();
   const [minPresentMin, setMinPresentMin] = useState(5);
   const [segment, setSegment] = useState('all');
   const [search, setSearch] = useState('');
@@ -83,7 +88,7 @@ export function ViewerTimeline({
     return (
       <div className="bg-card rounded-xl border border-border p-6 flex items-center gap-3 text-danger">
         <AlertCircle className="w-5 h-5 shrink-0" />
-        <span>{(error as Error).message || 'Viewer-Timeline konnte nicht geladen werden.'}</span>
+        <span>{(error as Error).message || t('Viewer-Timeline konnte nicht geladen werden.')}</span>
       </div>
     );
   }
@@ -95,26 +100,26 @@ export function ViewerTimeline({
       >
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <h3 className="text-white font-semibold text-lg">Viewer-Timeline</h3>
+            <h3 className="text-white font-semibold text-lg">{t('Viewer-Timeline')}</h3>
             <p className="text-sm text-text-secondary mt-1">
-              {subtitleDate} · {formatDuration(chartDurationMin * 60)} · {formatNumber(totalTracked)} getrackte Viewer
+              {subtitleDate} · {formatDuration(chartDurationMin * 60)} · {t('{count} getrackte Viewer', { count: formatNumber(totalTracked) })}
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="rounded-xl border border-white/10 bg-background/40 px-3 py-2">
-              <div className="text-xs text-text-secondary">Gelistet</div>
+              <div className="text-xs text-text-secondary">{t('Gelistet')}</div>
               <div className="text-lg font-semibold text-white">{formatNumber(stats.listed)}</div>
             </div>
             <div className="rounded-xl border border-white/10 bg-background/40 px-3 py-2">
-              <div className="text-xs text-text-secondary">Ø Presence</div>
+              <div className="text-xs text-text-secondary">{t('Ø Presence')}</div>
               <div className="text-lg font-semibold text-white">{formatPresenceMinutes(stats.avgMinutes)}</div>
             </div>
             <div className="rounded-xl border border-white/10 bg-background/40 px-3 py-2">
-              <div className="text-xs text-text-secondary">Min. Filter</div>
+              <div className="text-xs text-text-secondary">{t('Min. Filter')}</div>
               <div className="text-lg font-semibold text-white">{formatPresenceMinutes(minPresentMin)}</div>
             </div>
             <div className="rounded-xl border border-white/10 bg-background/40 px-3 py-2">
-              <div className="text-xs text-text-secondary">Session</div>
+              <div className="text-xs text-text-secondary">{t('Session')}</div>
               <div className="text-lg font-semibold text-white">#{sessionId}</div>
             </div>
           </div>
@@ -126,7 +131,7 @@ export function ViewerTimeline({
       >
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-[220px_180px_minmax(0,1fr)_120px]">
           <label className="space-y-2">
-            <span className="text-xs uppercase tracking-wide text-text-secondary">Min. Presence</span>
+            <span className="text-xs uppercase tracking-wide text-text-secondary">{t('Min. Presence')}</span>
             <div className="rounded-xl border border-white/10 bg-background/40 px-3 py-3">
               <input
                 type="range"
@@ -149,13 +154,13 @@ export function ViewerTimeline({
           </label>
 
           <label className="space-y-2">
-            <span className="text-xs uppercase tracking-wide text-text-secondary">Segment</span>
+            <span className="text-xs uppercase tracking-wide text-text-secondary">{t('Segment')}</span>
             <select
               value={segment}
               onChange={(event) => setSegment(event.target.value)}
               className="rounded-xl border border-white/10 bg-background/40 px-3 py-3 text-sm text-white outline-none"
             >
-              {SEGMENT_OPTIONS.map((option) => (
+              {segmentOptions().map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
@@ -164,24 +169,24 @@ export function ViewerTimeline({
           </label>
 
           <label className="space-y-2">
-            <span className="text-xs uppercase tracking-wide text-text-secondary">Suche</span>
+            <span className="text-xs uppercase tracking-wide text-text-secondary">{t('Suche')}</span>
             <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-background/40 px-3 py-3">
               <Search className="w-4 h-4 text-text-secondary" />
               <input
                 type="text"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Viewer-Login suchen"
+                placeholder={t('Viewer-Login suchen')}
                 className="w-full bg-transparent text-sm text-white outline-none placeholder:text-text-secondary"
               />
             </div>
           </label>
 
           <div className="rounded-xl border border-white/10 bg-background/40 px-3 py-3 flex flex-col justify-between">
-            <div className="text-xs uppercase tracking-wide text-text-secondary">Sichtbar</div>
+            <div className="text-xs uppercase tracking-wide text-text-secondary">{t('Sichtbar')}</div>
             <div className="text-lg font-semibold text-white">{formatNumber(viewers.length)}</div>
             <div className="text-xs text-text-secondary">
-              von {formatNumber(totalTracked)} Treffern
+              {t('von {count} Treffern', { count: formatNumber(totalTracked) })}
             </div>
           </div>
         </div>
@@ -189,17 +194,17 @@ export function ViewerTimeline({
         {viewers.length === 0 ? (
           <div className="rounded-xl border border-dashed border-white/10 bg-background/30 px-6 py-12 text-center">
             <Users className="w-10 h-10 text-text-secondary mx-auto mb-3" />
-            <p className="text-white font-medium">Keine Viewer im aktuellen Filter</p>
+            <p className="text-white font-medium">{t('Keine Viewer im aktuellen Filter')}</p>
             <p className="text-sm text-text-secondary mt-1">
-              Passe Presence-Minuten, Segment oder Suche an.
+              {t('Passe Presence-Minuten, Segment oder Suche an.')}
             </p>
           </div>
         ) : (
           <div className="space-y-3">
             <div className="grid grid-cols-[minmax(220px,280px)_minmax(0,1fr)] gap-4 px-2 text-xs uppercase tracking-wide text-text-secondary">
-              <div>Viewer</div>
+              <div>{t('Viewer')}</div>
               <div className="flex justify-between">
-                <span>Timeline</span>
+                <span>{t('Timeline')}</span>
                 <span>{formatPresenceMinutes(chartDurationMin)}</span>
               </div>
             </div>
@@ -232,9 +237,9 @@ export function ViewerTimeline({
                       <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-text-secondary">
                         <span className="flex items-center gap-1">
                           <MessageSquare className="w-3.5 h-3.5" />
-                          {formatNumber(viewer.chat_messages)} Messages
+                          {t('{count} Messages', { count: formatNumber(viewer.chat_messages) })}
                         </span>
-                        <span>{formatPresenceMinutes(viewer.total_present_min)} online</span>
+                        <span>{t('{duration} online', { duration: formatPresenceMinutes(viewer.total_present_min) })}</span>
                       </div>
                     </div>
 
@@ -264,13 +269,13 @@ export function ViewerTimeline({
                       <div className="pointer-events-none absolute right-2 top-2 z-10 hidden min-w-[220px] rounded-xl border border-white/10 bg-popover/95 px-3 py-2 text-xs text-white shadow-2xl group-hover:block">
                         <div className="font-semibold">{viewer.login}</div>
                         <div className="mt-1 text-text-secondary">
-                          Presence: {formatPresenceMinutes(viewer.total_present_min)}
+                          {t('Presence: {duration}', { duration: formatPresenceMinutes(viewer.total_present_min) })}
                         </div>
                         <div className="text-text-secondary">
-                          Segment: {segmentConfig?.label || 'Unbekannt'}
+                          {t('Segment: {segment}', { segment: segmentConfig?.label || t('Unbekannt') })}
                         </div>
                         <div className="text-text-secondary">
-                          Messages: {formatNumber(viewer.chat_messages)}
+                          {t('Messages: {count}', { count: formatNumber(viewer.chat_messages) })}
                         </div>
                       </div>
                     </div>
@@ -285,7 +290,7 @@ export function ViewerTimeline({
                   onClick={() => setLimit((current) => current + 200)}
                   className="rounded-xl border border-white/10 bg-background/50 px-4 py-2 text-sm font-medium text-white transition hover:bg-background/80"
                 >
-                  Mehr laden
+                  {t('Mehr laden')}
                 </button>
               </div>
             )}

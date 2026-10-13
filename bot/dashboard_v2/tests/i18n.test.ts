@@ -4,8 +4,10 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_LANGUAGE,
   LANGUAGE_STORAGE_KEY,
+  browserLanguage,
   dictionaryFor,
   isLanguage,
+  readInitialLanguage,
   readStoredLanguage,
   storeLanguage,
   translate,
@@ -56,7 +58,7 @@ test('Platzhalter stimmen zwischen Deutsch und Englisch ueberein', () => {
 
 // Die Wahl muss einen Neuladen ueberstehen, sonst waere der Umschalter
 // wertlos. Der Speicher wird hier nachgebaut, damit das ohne Browser prueft.
-test('Sprachwahl ueberlebt einen Neuladen und faellt bei Muell auf Deutsch', () => {
+test('Sprachwahl ueberlebt einen Neuladen und gilt bei Muell als nicht gemerkt', () => {
   const store = new Map<string, string>();
   const original = (globalThis as { window?: unknown }).window;
   (globalThis as { window?: unknown }).window = {
@@ -66,12 +68,12 @@ test('Sprachwahl ueberlebt einen Neuladen und faellt bei Muell auf Deutsch', () 
     },
   };
   try {
-    assert.equal(readStoredLanguage(), 'de');
+    assert.equal(readStoredLanguage(), null);
     storeLanguage('en');
     assert.equal(store.get(LANGUAGE_STORAGE_KEY), 'en');
     assert.equal(readStoredLanguage(), 'en');
     store.set(LANGUAGE_STORAGE_KEY, 'klingonisch');
-    assert.equal(readStoredLanguage(), 'de');
+    assert.equal(readStoredLanguage(), null);
   } finally {
     (globalThis as { window?: unknown }).window = original;
   }
@@ -90,7 +92,7 @@ test('Gesperrter Speicher kippt die Oberflaeche nicht', () => {
     },
   };
   try {
-    assert.equal(readStoredLanguage(), 'de');
+    assert.equal(readStoredLanguage(), null);
     assert.doesNotThrow(() => storeLanguage('en'));
   } finally {
     (globalThis as { window?: unknown }).window = original;
@@ -103,4 +105,42 @@ test('isLanguage erkennt nur gepflegte Sprachen', () => {
   assert.ok(!isLanguage('fr'));
   assert.ok(!isLanguage(null));
   assert.equal(LANGUAGE_STORAGE_KEY, 'dashboard.language');
+});
+
+function withBrowser(
+  navigator: { languages?: string[]; language?: string } | undefined,
+  stored: string | null,
+  run: () => void,
+) {
+  const original = (globalThis as { window?: unknown }).window;
+  (globalThis as { window?: unknown }).window = {
+    navigator,
+    localStorage: {
+      getItem: (key: string) => (key === LANGUAGE_STORAGE_KEY ? stored : null),
+      setItem: () => {},
+    },
+  };
+  try {
+    run();
+  } finally {
+    (globalThis as { window?: unknown }).window = original;
+  }
+}
+
+test('Browsersprache entscheidet ohne gespeicherte Wahl', () => {
+  withBrowser({ languages: ['de-AT', 'en'] }, null, () => assert.equal(readInitialLanguage(), 'de'));
+  withBrowser({ languages: ['en-US', 'de-DE'] }, null, () => assert.equal(readInitialLanguage(), 'en'));
+  withBrowser({ languages: [], language: 'de' }, null, () => assert.equal(readInitialLanguage(), 'de'));
+  withBrowser({ language: 'fr-FR' }, null, () => assert.equal(readInitialLanguage(), 'en'));
+  withBrowser({}, null, () => assert.equal(browserLanguage(), 'en'));
+});
+
+test('Manuell gewaehlte Sprache schlaegt die Browsersprache', () => {
+  withBrowser({ languages: ['en-US'] }, 'de', () => assert.equal(readInitialLanguage(), 'de'));
+  withBrowser({ languages: ['de-DE'] }, 'en', () => assert.equal(readInitialLanguage(), 'en'));
+  withBrowser({ languages: ['de-DE'] }, 'klingonisch', () => assert.equal(readInitialLanguage(), 'de'));
+});
+
+test('Ohne Browser bleibt Deutsch', () => {
+  withBrowser(undefined, null, () => assert.equal(readInitialLanguage(), DEFAULT_LANGUAGE));
 });

@@ -8,20 +8,24 @@ import type {
   RaidSortDirection,
   RaidSortKey,
 } from '@/types/analytics';
+import { useLanguage } from '../../context/LanguageContext';
+import { tr } from '../../i18n/dictionary';
 
 interface RaidRetentionProps {
   data: RaidRetentionData | undefined;
 }
 
-const RAID_SPALTEN: { key: RaidSortKey; label: string; align: 'left' | 'right' }[] = [
-  { key: 'toBroadcaster', label: 'Ziel-Streamer', align: 'left' },
-  { key: 'viewersSent', label: 'Gesendet', align: 'right' },
-  { key: 'chattersAt5m', label: '5m', align: 'right' },
-  { key: 'chattersAt15m', label: '15m', align: 'right' },
-  { key: 'chattersAt30m', label: '30m', align: 'right' },
-  { key: 'retention30mPct', label: 'Retention %', align: 'right' },
-  { key: 'newChatters', label: 'Neue Chatter', align: 'right' },
-];
+function raidSpalten(): { key: RaidSortKey; label: string; align: 'left' | 'right' }[] {
+  return [
+    { key: 'toBroadcaster', label: tr('Ziel-Streamer'), align: 'left' },
+    { key: 'viewersSent', label: tr('Gesendet'), align: 'right' },
+    { key: 'chattersAt5m', label: '5m', align: 'right' },
+    { key: 'chattersAt15m', label: '15m', align: 'right' },
+    { key: 'chattersAt30m', label: '30m', align: 'right' },
+    { key: 'retention30mPct', label: tr('Retention %'), align: 'right' },
+    { key: 'newChatters', label: tr('Neue Chatter'), align: 'right' },
+  ];
+}
 
 function retentionColor(pct: number): string {
   if (pct >= 50) return 'text-success';
@@ -30,6 +34,7 @@ function retentionColor(pct: number): string {
 }
 
 export function RaidRetention({ data }: RaidRetentionProps) {
+  const { t, locale } = useLanguage();
   const [suche, setSuche] = useState('');
   const [sortKey, setSortKey] = useState<RaidSortKey>('viewersSent');
   const [richtung, setRichtung] = useState<RaidSortDirection>('desc');
@@ -49,66 +54,64 @@ export function RaidRetention({ data }: RaidRetentionProps) {
   };
 
   if (!data || !data.dataAvailable) {
-    return <NoDataCard message={data?.message || "Keine Raid-Retention-Daten vorhanden"} />;
+    return <NoDataCard message={data?.message ? t(data.message) : t('Keine Raid-Retention-Daten vorhanden')} />;
   }
 
   const { summary, raids } = data;
 
   return (
     <div className="space-y-4">
-      {/* Summary Cards */}
       <Rise
         className="grid grid-cols-1 md:grid-cols-3 gap-4"
       >
         <SummaryCard
           icon={<TrendingUp className="w-5 h-5" />}
-          label="Ø Retention (30m)"
+          label={t('Ø Retention (30m)')}
           value={`${summary.avgRetentionPct.toFixed(1)}%`}
           color="primary"
         />
         <SummaryCard
           icon={<Target className="w-5 h-5" />}
-          label="Ø Chatter-Conversion"
+          label={t('Ø Chatter-Conversion')}
           value={`${summary.avgConversionPct.toFixed(1)}%`}
           color="success"
         />
         <SummaryCard
           icon={<UserPlus className="w-5 h-5" />}
-          label="Neue Zuschauer aus Raids"
-          value={summary.totalNewChatters.toLocaleString('de-DE')}
-          sublabel={`über ${summary.raidCount} Raids`}
+          label={t('Neue Zuschauer aus Raids')}
+          value={summary.totalNewChatters.toLocaleString(locale)}
+          sublabel={t('über {count} Raids', { count: summary.raidCount })}
           color="accent"
         />
       </Rise>
 
-      {/* Raids Table */}
       {raids.length > 0 && (
         <Rise
           step={{ seconds: 0.1 }}
           className="bg-card rounded-xl border border-border p-6"
         >
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h4 className="text-sm font-medium text-text-secondary">Raid-Details</h4>
+            <h4 className="text-sm font-medium text-text-secondary">{t('Raid-Details')}</h4>
             <div className="flex items-center gap-2 rounded-lg border border-border bg-background/60 px-2 py-1.5 sm:w-64">
               <Search className="h-3.5 w-3.5 shrink-0 text-text-secondary" />
               <input
                 type="text"
                 value={suche}
                 onChange={(event) => setSuche(event.target.value)}
-                placeholder="Ziel-Streamer suchen…"
-                aria-label="Ziel-Streamer suchen"
+                placeholder={t('Ziel-Streamer suchen…')}
+                aria-label={t('Ziel-Streamer suchen')}
                 className="w-full bg-transparent text-sm text-white outline-none placeholder:text-text-secondary"
               />
             </div>
           </div>
           <div className="mb-2 text-xs text-text-secondary">
-            {sichtbareRaids.length} von {raids.length} Raids
+            {t('{visible} von {total} Raids', { visible: sichtbareRaids.length, total: raids.length })}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border">
-                  {RAID_SPALTEN.map((spalte) => {
+                  {raidSpalten().map((spalte) => {
                     const aktiv = spalte.key === sortKey;
                     return (
                       <th
@@ -162,7 +165,7 @@ export function RaidRetention({ data }: RaidRetentionProps) {
             </table>
             {sichtbareRaids.length === 0 && (
               <div className="py-6 text-center text-sm text-text-secondary">
-                Kein Raid passt zur Suche „{suche.trim()}“.
+                {t('Kein Raid passt zur Suche „{query}“.', { query: suche.trim() })}
               </div>
             )}
           </div>

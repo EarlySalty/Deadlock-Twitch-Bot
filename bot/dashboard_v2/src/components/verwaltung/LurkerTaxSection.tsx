@@ -6,8 +6,10 @@ import {
   toggleLurkerTax,
   type LurkerTaxSettingsResponse,
 } from '@/api/lurkerTax';
+import { useT } from '../../context/LanguageContext';
 
 export function LurkerTaxSection() {
+  const t = useT();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -21,7 +23,7 @@ export function LurkerTaxSection() {
       const data = await fetchLurkerTaxSettings();
       setSettings(data);
     } catch {
-      setError('Lurker-Steuer-Status konnte nicht geladen werden.');
+      setError(t('Lurker-Steuer-Status konnte nicht geladen werden.'));
     } finally {
       setLoading(false);
     }
@@ -46,9 +48,9 @@ export function LurkerTaxSection() {
           current?.has_moderator_read_chatters ?? settings.has_moderator_read_chatters,
         reward_present: current?.reward_present ?? settings.reward_present,
       }));
-      setSuccess('Gespeichert.');
+      setSuccess(t('Gespeichert.'));
     } catch {
-      setError('Speichern fehlgeschlagen. Bitte versuch es nochmal.');
+      setError(t('Speichern fehlgeschlagen. Bitte versuch es nochmal.'));
     } finally {
       setPending(false);
     }
@@ -62,6 +64,7 @@ export function LurkerTaxSection() {
       : settings?.reward_present === false
         ? 'missing'
         : 'unknown';
+  const [rewardStepStart, rewardStepEnd] = t('Wähle Individuelle Belohnung hinzufügen und nenn sie genau {name}.').split('{name}');
 
   return (
     <motion.section
@@ -73,15 +76,13 @@ export function LurkerTaxSection() {
     >
       <div className="mb-5">
         <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">
-          Stammzuschauer
+          {t('Stammzuschauer')}
         </p>
         <h2 className="display-font text-2xl font-bold text-white mb-1">
-          Lurker-Steuer
+          {t('Lurker-Steuer')}
         </h2>
         <p className="text-sm text-text-secondary">
-          Erinnert deine ruhigsten Stamm-Lurker ab und zu mit einem freundlichen @-Hinweis
-          daran, mal wieder Hallo zu sagen. Höchstens zwei pro Erinnerung und nur bei
-          langjährigen Zuschauern. Standardmäßig aus.
+          {t('Erinnert deine ruhigsten Stamm-Lurker ab und zu mit einem freundlichen @-Hinweis daran, mal wieder Hallo zu sagen. Höchstens zwei pro Erinnerung und nur bei langjährigen Zuschauern. Standardmäßig aus.')}
         </p>
       </div>
 
@@ -100,11 +101,11 @@ export function LurkerTaxSection() {
       {loading ? (
         <div className="flex items-center gap-3 text-text-secondary text-sm">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          Status wird geladen ...
+          {t('Status wird geladen ...')}
         </div>
       ) : !settings ? (
         <div className="rounded-xl border border-border bg-background/40 px-4 py-6 text-sm text-text-secondary text-center">
-          Die Einstellung ist gerade nicht verfügbar. Bitte lade die Seite neu.
+          {t('Die Einstellung ist gerade nicht verfügbar. Bitte lade die Seite neu.')}
         </div>
       ) : (
         <>
@@ -116,12 +117,12 @@ export function LurkerTaxSection() {
                     enabled ? 'text-success' : 'text-text-secondary'
                   }`}
                 >
-                  {enabled ? 'Lurker-Steuer ist AKTIV' : 'Lurker-Steuer ist aus'}
+                  {enabled ? t('Lurker-Steuer ist AKTIV') : t('Lurker-Steuer ist aus')}
                 </p>
                 <p className="text-xs text-text-secondary mt-0.5">
                   {enabled
-                    ? 'Holt sehr sparsam deine ruhigsten Stamm-Lurker zurück in den Chat.'
-                    : 'Aktiviere sie, um stille Stammzuschauer sanft zurück in den Chat zu holen.'}
+                    ? t('Holt sehr sparsam deine ruhigsten Stamm-Lurker zurück in den Chat.')
+                    : t('Aktiviere sie, um stille Stammzuschauer sanft zurück in den Chat zu holen.')}
                 </p>
               </div>
               <button
@@ -141,7 +142,7 @@ export function LurkerTaxSection() {
                 ) : (
                   <Power className="h-4 w-4" />
                 )}
-                {enabled ? 'Lurker-Steuer deaktivieren' : 'Lurker-Steuer aktivieren'}
+                {enabled ? t('Lurker-Steuer deaktivieren') : t('Lurker-Steuer aktivieren')}
               </button>
             </div>
           </div>
@@ -150,59 +151,55 @@ export function LurkerTaxSection() {
             <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
               <div className="flex items-center gap-2 min-w-0">
                 <Gift className="h-4 w-4 text-primary shrink-0" />
-                <p className="text-base font-bold text-white">Belohnung zum Einlösen</p>
+                <p className="text-base font-bold text-white">{t('Belohnung zum Einlösen')}</p>
               </div>
               {rewardStatus === 'found' ? (
                 <span className="inline-flex items-center gap-1.5 rounded-lg border border-success/40 bg-success/10 px-2.5 py-1 text-xs font-semibold text-success">
                   <CheckCircle2 className="h-3.5 w-3.5" />
-                  Belohnung gefunden
+                  {t('Belohnung gefunden')}
                 </span>
               ) : rewardStatus === 'missing' ? (
                 <span className="inline-flex items-center gap-1.5 rounded-lg border border-warning/40 bg-warning/10 px-2.5 py-1 text-xs font-semibold text-warning">
                   <CircleAlert className="h-3.5 w-3.5" />
-                  Belohnung fehlt
+                  {t('Belohnung fehlt')}
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background/40 px-2.5 py-1 text-xs font-semibold text-text-secondary">
                   <CircleAlert className="h-3.5 w-3.5" />
-                  Status unbekannt
+                  {t('Status unbekannt')}
                 </span>
               )}
             </div>
             <p className="text-sm text-text-secondary mb-3">
-              Damit deine Lurker etwas zum Antippen haben, legst du in Twitch eine
-              Kanalpunkte-Belohnung mit genau diesem Namen an. Den Preis bestimmst du selbst,
-              zum Beispiel 10 Punkte.
+              {t('Damit deine Lurker etwas zum Antippen haben, legst du in Twitch eine Kanalpunkte-Belohnung mit genau diesem Namen an. Den Preis bestimmst du selbst, zum Beispiel 10 Punkte.')}
             </p>
             <div className="rounded-lg border border-border bg-background/40 px-3 py-2 mb-3">
-              <p className="text-xs text-text-secondary mb-0.5">Name der Belohnung</p>
+              <p className="text-xs text-text-secondary mb-0.5">{t('Name der Belohnung')}</p>
               <p className="text-sm font-semibold text-white">Lurker Steuer</p>
             </div>
             <p className="text-xs font-semibold text-text-secondary mb-1.5">
-              So legst du sie in Twitch an:
+              {t('So legst du sie in Twitch an:')}
             </p>
             <ol className="list-decimal pl-5 space-y-1 text-sm text-text-secondary">
-              <li>Öffne dein Twitch Creator-Dashboard.</li>
-              <li>Geh zu Zuschauerbelohnungen.</li>
-              <li>Öffne Punkte und Belohnungen.</li>
+              <li>{t('Öffne dein Twitch Creator-Dashboard.')}</li>
+              <li>{t('Geh zu Zuschauerbelohnungen.')}</li>
+              <li>{t('Öffne Punkte und Belohnungen.')}</li>
               <li>
-                Wähle Individuelle Belohnung hinzufügen und nenn sie genau
-                {' '}
-                <span className="font-semibold text-white">Lurker Steuer</span>.
+                {rewardStepStart}
+                <span className="font-semibold text-white">Lurker Steuer</span>
+                {rewardStepEnd}
               </li>
             </ol>
             {rewardStatus === 'unknown' && (
               <p className="text-xs text-text-secondary mt-3">
-                Wir konnten gerade nicht prüfen, ob die Belohnung schon da ist. Sobald die
-                Verbindung wieder klappt, siehst du hier den Status.
+                {t('Wir konnten gerade nicht prüfen, ob die Belohnung schon da ist. Sobald die Verbindung wieder klappt, siehst du hier den Status.')}
               </p>
             )}
           </div>
 
           {enabled && !scopeReady && (
             <div className="rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">
-              Der Schalter ist an, aber der Community-Bot braucht dafür noch die Leseberechtigung
-              für deine Zuschauerliste. Darum kümmern wir uns, du musst nichts tun.
+              {t('Der Schalter ist an, aber der Community-Bot braucht dafür noch die Leseberechtigung für deine Zuschauerliste. Darum kümmern wir uns, du musst nichts tun.')}
             </div>
           )}
         </>

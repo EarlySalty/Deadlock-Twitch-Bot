@@ -1,3 +1,5 @@
+import { tr } from '../i18n/dictionary';
+
 export interface SubReminderSettings { enabled: boolean; available: boolean }
 const BASE = '/twitch/api/v2/streamer/sub-reminder-settings';
 export async function subReminderSettings(enabled?: boolean): Promise<SubReminderSettings> {
@@ -8,6 +10,6 @@ export async function subReminderSettings(enabled?: boolean): Promise<SubReminde
       body: JSON.stringify({ enabled }),
     }),
   });
-  if (!response.ok) throw new Error('Die Einstellung konnte nicht gespeichert oder geladen werden.');
+  if (!response.ok) throw new Error(tr('Die Einstellung konnte nicht gespeichert oder geladen werden.'));
   return response.json();
 }

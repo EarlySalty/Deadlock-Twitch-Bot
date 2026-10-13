@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { usePlan } from '../../context/PlanContext';
 import { useT } from '../../context/LanguageContext';
+import { tr } from '../../i18n/dictionary';
 import type { TabId as BillingTabId } from '../../types/billing';
 
 export type TabId =
@@ -33,17 +34,19 @@ interface Tab {
   adminOnly?: boolean;
 }
 
-const tabs: Tab[] = [
-  { id: 'overview', label: 'Übersicht', icon: LayoutDashboard },
-  { id: 'streams', label: 'Streams', icon: TrendingUp },
-  { id: 'audience', label: 'Publikum', icon: Users },
-  { id: 'growth', label: 'Wachstum', icon: BarChart3 },
-  { id: 'planning', label: 'Planung', icon: Calendar },
-  { id: 'community', label: 'Zusammen spielen', icon: Users },
-  { id: 'profile', label: 'Mein Profil', icon: LayoutDashboard },
-  { id: 'coaching', label: 'Was tun?', icon: GraduationCap },
-  { id: 'monetization', label: 'Monetization', icon: DollarSign },
-];
+function tabs(): Tab[] {
+  return [
+    { id: 'overview', label: tr('Übersicht'), icon: LayoutDashboard },
+    { id: 'streams', label: tr('Streams'), icon: TrendingUp },
+    { id: 'audience', label: tr('Publikum'), icon: Users },
+    { id: 'growth', label: tr('Wachstum'), icon: BarChart3 },
+    { id: 'planning', label: tr('Planung'), icon: Calendar },
+    { id: 'community', label: tr('Zusammen spielen'), icon: Users },
+    { id: 'profile', label: tr('Mein Profil'), icon: LayoutDashboard },
+    { id: 'coaching', label: tr('Was tun?'), icon: GraduationCap },
+    { id: 'monetization', label: tr('Monetization'), icon: DollarSign },
+  ];
+}
 
 interface TabNavigationProps {
   activeTab: TabId;
@@ -54,9 +57,7 @@ export function TabNavigation({ activeTab, onTabChange }: TabNavigationProps) {
   const { canAccessTab, isTabLocked, isPreviewMode, isAdmin } = usePlan();
   const t = useT();
 
-  // Filter tabs: show if accessible, or if in preview mode show locked tabs with opacity
-  // Admin-only tabs are hidden completely for non-admins.
-  const visibleTabs = tabs.filter(tab => {
+  const visibleTabs = tabs().filter(tab => {
     if (tab.adminOnly && !isAdmin) return false;
     const tabId = tab.id as BillingTabId;
     if (canAccessTab(tabId)) return true;
@@ -85,7 +86,7 @@ export function TabNavigation({ activeTab, onTabChange }: TabNavigationProps) {
             <button
               key={tab.id}
               data-tour-id={tourId}
-              aria-label={t(tab.label)}
+              aria-label={tab.label}
               type="button"
               onClick={() => {
                 if (accessible) {
@@ -107,16 +108,12 @@ export function TabNavigation({ activeTab, onTabChange }: TabNavigationProps) {
                       'inset 0 0 0 1px rgba(255,255,255,0.08), 0 8px 22px -8px rgba(197, 160, 89, 0.45), 0 4px 12px rgba(0,0,0,0.28)',
                   }}
                   initial={false}
-                  // Kritisch gedaempft: der Tab-Wechsel ist ein Klick, keine
-                  // Wischbewegung — ein Nachschwingen haette hier keinen Anlass.
-                  // Vorher stiffness 500 / damping 35, das entspricht einer
-                  // Daempfung von 0.78 und schwang sichtbar ueber.
                   transition={{ type: 'spring', bounce: 0, duration: 0.35 }}
                 />
               )}
               <span className="relative z-10 flex items-center gap-2">
                 <Icon className="w-4 h-4" />
-                <span className="hidden sm:inline">{t(tab.label)}</span>
+                <span className="hidden sm:inline">{tab.label}</span>
                 {tab.beta && (
                   <span className="hidden sm:inline-block text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-accent/20 text-accent border border-accent/30 leading-none">
                     {t('Beta')}
