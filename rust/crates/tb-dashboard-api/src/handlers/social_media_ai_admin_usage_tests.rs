@@ -116,16 +116,22 @@ async fn m4_registered_routes_enforce_real_admin_session_and_csrf() {
     assert_eq!(report["global"]["revision"], 1);
     assert_eq!(report["global"]["initial_total_cap_micro_usd"], 2_000_000);
     let mut body = json!({"expected_revision":1,"paused":true,"reason":"fixture"});
+    let cross_origin = Request::builder()
+        .method("POST")
+        .uri("/twitch/api/admin/social-ai/limits/global")
+        .header("host", "admin.test")
+        .header("origin", "https://attacker.example")
+        .header("x-dashboard-context", "admin")
+        .header("cookie", &cookie)
+        .header("Content-Type", "application/json")
+        .body(Body::from(body.to_string()))
+        .expect("request");
     assert_eq!(
-        call(
-            &app,
-            "/limits/global",
-            Some(body.clone()),
-            Some(&cookie),
-            None
-        )
-        .await
-        .status(),
+        app.clone()
+            .oneshot(cross_origin)
+            .await
+            .expect("response")
+            .status(),
         StatusCode::FORBIDDEN
     );
     body["csrf_token"] = json!(admin.csrf_token);
