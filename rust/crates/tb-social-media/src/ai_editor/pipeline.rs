@@ -692,9 +692,19 @@ async fn plan(
     } else {
         0
     });
+    let personal = match super::learning::personal_hints(ctx.pool, ctx.owner).await {
+        Ok(hints) => hints,
+        Err(error) => {
+            tracing::warn!(error = %error, "Personal AI preferences unavailable");
+            Vec::new()
+        }
+    };
     let request = EditorRequest {
         system: frozen.system(&skill_ids)?,
-        text: json!({ "task": "Produce one coherent main edit with the existing stable layout, original audio and real speech cues. Only add distinct useful variants when multi_output_enabled is true; never duplicate the main output or force cuts. Keep uncertain content for review. Publication copy follows the requested language and template, not subtitle language.", "source_duration_ms": frozen.media.duration_ms, "analysis": analysis, "language": language, "segments": segments, "layout": frozen.layout, "publication": frozen.publication, "limits": runtime.limits.plan, "revision":revision.as_ref().zip(base.as_ref()).map(|(request,base)| super::revision::request_context(request,base)) }).to_string(),
+        text: planning_text(
+            json!({ "task": "Produce one coherent main edit with the existing stable layout, original audio and real speech cues. Only add distinct useful variants when multi_output_enabled is true; never duplicate the main output or force cuts. Keep uncertain content for review. Publication copy follows the requested language and template, not subtitle language.", "source_duration_ms": frozen.media.duration_ms, "analysis": analysis, "language": language, "segments": segments, "layout": frozen.layout, "publication": frozen.publication, "limits": runtime.limits.plan, "revision":revision.as_ref().zip(base.as_ref()).map(|(request,base)| super::revision::request_context(request,base)) }),
+            &personal,
+        ),
         frames: vec![],
         json_schema: schema,
     };
@@ -777,6 +787,16 @@ async fn plan(
         review_reasons,
         edit_plan,
     })
+}
+
+pub(super) fn planning_text(mut input: Value, personal: &[String]) -> String {
+    if !personal.is_empty() {
+        input["personal_preferences"] = json!({
+            "note": "Learned from this streamer's repeated, confirmed corrections. Apply when they fit the clip; the clip content and explicit revision feedback take precedence.",
+            "preferences": personal,
+        });
+    }
+    input.to_string()
 }
 
 fn expired_allocation(video: &ProducedVideo) -> bool {
