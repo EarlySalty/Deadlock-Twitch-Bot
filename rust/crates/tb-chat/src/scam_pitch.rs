@@ -1709,59 +1709,55 @@ impl SpamAiReviewer {
             cds.insert(key, now_mono + REVIEW_COOLDOWN_SEC);
         }
 
-        // Die Kette arbeitet der gemeinsame Eingang ab; ohne konfigurierten
-        // Anbieter liefert er `Unavailable`, das unten als ProviderError
-        // landet. Hier bleibt nur die Fachauswertung des Urteils.
-        let (last_error, last_verdict) = match call_judge(None, true, Some(&event.broadcaster_user_id), &content).await {
-            Ok(review) => {
-                let (learned, rejected_pattern, save_failed) =
-                    persist_spam_learning(&self.pool, &review, &content, &channel).await;
-                let reason = review.reason.unwrap_or_default();
-                let confidence = review.confidence;
-                let (outcome, verdict) = if review.is_spam {
-                    (
-                        AiReviewOutcome::Spam {
-                            reason,
-                            confidence,
-                            learned,
-                            rejected_pattern,
-                            save_failed,
-                        },
-                        SpamReviewVerdict::Spam,
-                    )
-                } else {
-                    (AiReviewOutcome::Safe { reason }, SpamReviewVerdict::Clean)
-                };
-                let persisted_reason = match &outcome {
-                    AiReviewOutcome::Spam { reason, .. } | AiReviewOutcome::Safe { reason } => {
-                        reason.clone()
-                    }
-                    _ => String::new(),
-                };
-                return self
-                    .record_and_return(event, outcome, verdict, confidence, persisted_reason)
-                    .await;
-            }
-            Err(failure) => {
-                let modell = failure.model;
-                let (verdict, detail) = match failure.error {
-                    JudgeCallError::Timeout(detail) => (SpamReviewVerdict::Timeout, detail),
-                    JudgeCallError::Provider(detail) => (SpamReviewVerdict::ProviderError, detail),
-                    JudgeCallError::Parse(detail) => (SpamReviewVerdict::ParseError, detail),
-                };
-                // Der Eingang hat pro Kettenglied schon gewarnt (mit
-                // Anbieter-Body); hier nur noch der Spur halber.
-                debug!(model = %modell, fehler = %detail, "Judge-Call fehlgeschlagen");
-                // Ohne Absender (kein Anbieter konfiguriert) kein fuehrender
-                // Doppelpunkt im Bericht.
-                let meldung = if modell.is_empty() {
-                    detail
-                } else {
-                    format!("{modell}: {detail}")
-                };
-                (meldung, verdict)
-            }
-        };
+        let (last_error, last_verdict) =
+            match call_judge(None, true, Some(&event.broadcaster_user_id), &content).await {
+                Ok(review) => {
+                    let (learned, rejected_pattern, save_failed) =
+                        persist_spam_learning(&self.pool, &review, &content, &channel).await;
+                    let reason = review.reason.unwrap_or_default();
+                    let confidence = review.confidence;
+                    let (outcome, verdict) = if review.is_spam {
+                        (
+                            AiReviewOutcome::Spam {
+                                reason,
+                                confidence,
+                                learned,
+                                rejected_pattern,
+                                save_failed,
+                            },
+                            SpamReviewVerdict::Spam,
+                        )
+                    } else {
+                        (AiReviewOutcome::Safe { reason }, SpamReviewVerdict::Clean)
+                    };
+                    let persisted_reason = match &outcome {
+                        AiReviewOutcome::Spam { reason, .. } | AiReviewOutcome::Safe { reason } => {
+                            reason.clone()
+                        }
+                        _ => String::new(),
+                    };
+                    return self
+                        .record_and_return(event, outcome, verdict, confidence, persisted_reason)
+                        .await;
+                }
+                Err(failure) => {
+                    let modell = failure.model;
+                    let (verdict, detail) = match failure.error {
+                        JudgeCallError::Timeout(detail) => (SpamReviewVerdict::Timeout, detail),
+                        JudgeCallError::Provider(detail) => {
+                            (SpamReviewVerdict::ProviderError, detail)
+                        }
+                        JudgeCallError::Parse(detail) => (SpamReviewVerdict::ParseError, detail),
+                    };
+                    debug!(model = %modell, fehler = %detail, "Judge-Call fehlgeschlagen");
+                    let meldung = if modell.is_empty() {
+                        detail
+                    } else {
+                        format!("{modell}: {detail}")
+                    };
+                    (meldung, verdict)
+                }
+            };
         self.record_and_return(
             event,
             AiReviewOutcome::Error {

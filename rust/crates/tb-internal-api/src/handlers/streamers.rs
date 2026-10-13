@@ -1237,19 +1237,12 @@ fn enforce_discord_action_scope(scope: &tb_config::discord::RaidOAuth) -> Result
     Ok(())
 }
 
-/// `POST /internal/twitch/v1/streamers/:login/discord-flag`
-///
-/// Body (Python/snake_case): `{"is_on_discord": true}`
-/// Body (camelCase-Alias): `{"isOnDiscord": true}`
-/// Body-Aliases für den Wert: "enabled", "value"
-/// Fehlendes Feld → 400 (Python: "is_on_discord is required")
 pub async fn discord_flag_handler(
     auth: AuthLevel,
     Extension(scope): Extension<Option<tb_config::discord::RaidOAuth>>,
     State(pool): State<PgPool>,
     Extension(idem): Extension<IdempotencyState>,
-    headers: HeaderMap,
-    OriginalUri(uri): OriginalUri,
+    (headers, OriginalUri(uri)): (HeaderMap, OriginalUri),
     Path(raw_login): Path<String>,
     Json(payload): Json<serde_json::Value>,
 ) -> Response {
