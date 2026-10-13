@@ -314,6 +314,8 @@ export const SOCIAL_EN: Record<string, string> = {
   'Die Zustimmung zur externen KI-Verarbeitung fehlt.': 'Consent to external AI processing is missing.',
   'Das Versuchslimit ist erreicht. Bitte prüfe den Auftrag.': 'The attempt limit has been reached. Please review the job.',
   'Die Produktion wurde unterbrochen und wird fortgesetzt.': 'Production was interrupted and will resume.',
+  'Die Produktion wurde unterbrochen und das Versuchslimit ist erreicht.': 'Production was interrupted and the attempt limit has been reached.',
+  'Die Produktion wird nach einer kurzen Wartezeit erneut versucht.': 'Production will be retried after a short wait.',
   'Noch kein Termin': 'No slot yet',
   'Termin nicht verfügbar': 'Slot unavailable',
   'Bitte melde dich erneut an.': 'Please sign in again.',

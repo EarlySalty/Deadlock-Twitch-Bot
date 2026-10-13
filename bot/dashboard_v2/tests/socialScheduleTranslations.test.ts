@@ -38,9 +38,13 @@ test('production queue failure messages are covered by the selected-language dic
   const dictionary = dictionaryFor('en');
   const messages = ['runner.rs', 'recovery.rs'].flatMap(file => {
     const producer = readFileSync(new URL(`../../../rust/crates/tb-social-media/src/autopilot_schedule/${file}`, import.meta.url), 'utf8');
-    return [...producer.matchAll(/"((?:Die|Der) [^"\n]+)"/g)].map(match => match[1]);
+    const rustMessages = [...producer.matchAll(/(?:#\[error\(|Some\()"([^"\n]+)"/g)].map(match => match[1]);
+    const sqlMessages = [...producer.matchAll(/last_error\s*=\s*'((?:[^']|'')+)'/g)].map(match => match[1].replaceAll("''", "'"));
+    assert.ok(rustMessages.length > 0, file);
+    if (file === 'recovery.rs') assert.equal(sqlMessages.length, 3);
+    return [...rustMessages, ...sqlMessages];
   });
-  assert.equal(messages.length, 8);
+  assert.equal(messages.length, 11);
   for (const message of messages) {
     assert.ok(Object.hasOwn(dictionary, message), message);
     assert.notEqual(translate('en', message), message);
