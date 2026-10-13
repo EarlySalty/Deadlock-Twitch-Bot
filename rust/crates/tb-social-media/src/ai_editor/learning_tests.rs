@@ -129,6 +129,10 @@ fn negated_instructions_teach_nothing() {
         "Teamfight nicht komplett zeigen",
         "Reaktion nicht drin lassen",
         "Die Fähigkeit wurde nicht falsch verstanden",
+        "Don't cut the video shorter",
+        "Das Intro nicht kürzen",
+        "Die Untertitel nicht schneiden und kleiner machen",
+        "Reaktion nicht schneiden und nicht behalten",
     ] {
         assert!(classify(text).is_empty(), "{text}");
     }
