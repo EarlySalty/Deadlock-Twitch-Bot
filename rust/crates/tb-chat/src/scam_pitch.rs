@@ -765,6 +765,7 @@ fn build_warning_text(
     strong: bool,
     new_account: bool,
     account_age_days: Option<i64>,
+    lang: tb_domain::UiLang,
 ) -> String {
     let mention = if chatter_login.is_empty() {
         String::new()
@@ -772,20 +773,39 @@ fn build_warning_text(
         format!("@{chatter_login} ")
     };
     let age_hint = if new_account {
-        " zumal der Account unter <3 Monate alt ist".to_string()
+        lang.pick(
+            " zumal der Account unter <3 Monate alt ist",
+            ", especially since the account is under 3 months old",
+        )
+        .to_string()
     } else if account_age_days.is_none() {
-        " (Account-Alter unbekannt)".to_string()
+        lang.pick(" (Account-Alter unbekannt)", " (account age unknown)")
+            .to_string()
     } else {
         String::new()
     };
     if strong {
-        format!(
-            "🛡️ {mention}wurde als potenzieller Pitcher erkannt{age_hint} \
-             verkauft oft Designs/Viewer/Scam. \
-             Unsere Empfehlung: Ignorieren & Bannen."
-        )
+        match lang {
+            tb_domain::UiLang::De => format!(
+                "🛡️ {mention}wurde als potenzieller Pitcher erkannt{age_hint} \
+                 verkauft oft Designs/Viewer/Scam. \
+                 Unsere Empfehlung: Ignorieren & Bannen."
+            ),
+            tb_domain::UiLang::En => format!(
+                "🛡️ {mention}was flagged as a likely pitcher{age_hint} \
+                 often sells designs/viewers/scam. \
+                 Our recommendation: ignore and ban."
+            ),
+        }
     } else {
-        format!("{mention}bitte keine Service-/Promo-Angebote{age_hint} ")
+        match lang {
+            tb_domain::UiLang::De => {
+                format!("{mention}bitte keine Service-/Promo-Angebote{age_hint} ")
+            }
+            tb_domain::UiLang::En => {
+                format!("{mention}please no service or promo offers{age_hint} ")
+            }
+        }
     }
 }
 
@@ -1145,11 +1165,14 @@ impl ScamPitchDetector {
 
         // Schritt 16–17: Senden + Cooldowns setzen (Z. 983–1016)
         let result = if severity != "HINT" {
+            let lang =
+                crate::ui_lang::channel_ui_lang(&self.pool, &event.broadcaster_user_id).await;
             let warning_text = build_warning_text(
                 &chatter_login,
                 severity == "WARNING_STRONG",
                 is_new_account,
                 account_age_days,
+                lang,
             );
             // Sendung über ChatApi
             match self
@@ -2606,28 +2629,40 @@ mod tests {
     // ── build_warning_text ────────────────────────────────────────────────────
     #[test]
     fn warning_text_public_kein_alter() {
-        let t = build_warning_text("spammer123", false, false, Some(200));
+        let t = build_warning_text("spammer123", false, false, Some(200), tb_domain::UiLang::De);
         assert!(t.starts_with("@spammer123 bitte keine"));
         assert!(!t.contains("unter <3 Monate"));
     }
 
     #[test]
     fn warning_text_public_neuer_account() {
-        let t = build_warning_text("spammer123", false, true, Some(10));
+        let t = build_warning_text("spammer123", false, true, Some(10), tb_domain::UiLang::De);
         assert!(t.contains("unter <3 Monate alt ist"));
     }
 
     #[test]
     fn warning_text_strong() {
-        let t = build_warning_text("spammer123", true, false, Some(200));
+        let t = build_warning_text("spammer123", true, false, Some(200), tb_domain::UiLang::De);
         assert!(t.starts_with("🛡️"));
         assert!(t.contains("Ignorieren & Bannen"));
     }
 
     #[test]
     fn warning_text_unbekanntes_alter() {
-        let t = build_warning_text("x", false, false, None);
+        let t = build_warning_text("x", false, false, None, tb_domain::UiLang::De);
         assert!(t.contains("Account-Alter unbekannt"));
+    }
+
+    #[test]
+    fn warning_text_english() {
+        let t = build_warning_text("spammer123", true, true, Some(10), tb_domain::UiLang::En);
+        assert!(t.contains("likely pitcher"));
+        assert!(t.contains("under 3 months"));
+        assert!(t.contains("ignore and ban"));
+        assert!(!t.contains('\u{2014}'));
+        let public = build_warning_text("spammer123", false, false, None, tb_domain::UiLang::En);
+        assert!(public.contains("please no service or promo offers"));
+        assert!(public.contains("account age unknown"));
     }
 
     // ── Threshold-Clamp (Vertrag §1 Z. 41–44) ────────────────────────────────

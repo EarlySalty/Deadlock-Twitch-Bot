@@ -1134,6 +1134,18 @@ const GREETING_MESSAGES: [&str; 3] = [
     "Commands für alle: !ping (Bot-Status) | !clip [beschreibung] (Clip erstellen) | !raid_history (letzte Raids)",
     "Mod-Commands: !raid / !traid (Raid starten) | !raid_status (Bot-Status) | !uban / !unban (letzten Auto-Ban aufheben) | !silentban / !silentraid (Benachrichtigungen an/aus)",
 ];
+const GREETING_MESSAGES_EN: [&str; 3] = [
+    "Deadlock Chatbot Guard connected! 🎮",
+    "Commands for everyone: !ping (bot status) | !clip [description] (create a clip) | !raid_history (recent raids)",
+    "Mod commands: !raid / !traid (start a raid) | !raid_status (bot status) | !uban / !unban (undo last auto-ban) | !silentban / !silentraid (notifications on/off)",
+];
+
+fn greeting_messages(lang: tb_domain::UiLang) -> [&'static str; 3] {
+    match lang {
+        tb_domain::UiLang::De => GREETING_MESSAGES,
+        tb_domain::UiLang::En => GREETING_MESSAGES_EN,
+    }
+}
 
 /// Orchestriert die OAuth-Followups (Python `PartnerSetupService`).
 ///
@@ -1371,7 +1383,24 @@ impl PartnerSetupService {
         // bricht die restlichen Nachrichten ab.
         tokio::time::sleep(self.greeting_initial_pause).await;
         let mut greeted = true;
-        for (idx, message) in GREETING_MESSAGES.iter().enumerate() {
+        let stream_language: Option<String> = sqlx::query_scalar(
+            "SELECT language FROM twitch_channel_updates
+              WHERE twitch_user_id = $1
+                AND NULLIF(BTRIM(language), '') IS NOT NULL
+              ORDER BY id DESC
+              LIMIT 1",
+        )
+        .bind(twitch_user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten();
+        let lang = tb_domain::UiLang::resolve(tb_domain::UiLangHints {
+            guild_id: None,
+            guild_language: None,
+            stream_language: stream_language.as_deref(),
+        });
+        for (idx, message) in greeting_messages(lang).iter().enumerate() {
             if idx > 0 {
                 tokio::time::sleep(self.greeting_message_pause).await;
             }
@@ -1412,6 +1441,15 @@ impl PartnerSetupService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn greeting_messages_follow_language() {
+        assert!(greeting_messages(tb_domain::UiLang::De)[0].contains("verbunden"));
+        assert!(greeting_messages(tb_domain::UiLang::En)[0].contains("connected"));
+        assert!(!greeting_messages(tb_domain::UiLang::En)
+            .iter()
+            .any(|msg| msg.contains('\u{2014}')));
+    }
 
     #[test]
     fn now_iso_entspricht_python_isoformat() {

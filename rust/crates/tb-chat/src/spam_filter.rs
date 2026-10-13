@@ -79,6 +79,10 @@ const SPAM_PHRASES: &[&str] = &[
     "Viewers smmhype",
     "viewers on streamboo .com (remove the space)",
     "Hey friend I really enjoy your content so I give you a follow I\u{2019}d love to be a friend and of you feel free to Add me on Discord",
+    "I can grow your channel with real viewers and active chat",
+    "add me on discord and tell him I sent you",
+    "how's your day been? add me on discord",
+    "my headphones aren't working reply me on discord",
 ];
 
 /// Fragment-Fallback-Liste, exakt wie in constants.py Z. 58–90.
@@ -114,6 +118,14 @@ const SPAM_FRAGMENTS: &[&str] = &[
     "top viewers",
     "prmxy",
     "prmup",
+    "i can grow your channel",
+    "real viewers active chat",
+    "add me on discord",
+    "tell him i sent you",
+    "how's your day been",
+    "my headphones aren't working",
+    "reply me on discord",
+    "can't hear the stream",
 ];
 
 // ---------------------------------------------------------------------------
@@ -379,6 +391,11 @@ const KONTAKT_MARKERS: &[&str] = &[
     "shop",
     "link in bio",
     "instagram",
+    "message me",
+    "add me on discord",
+    "dm me",
+    "cheap viewers",
+    "grow your channel",
 ];
 
 /// Jede Adresse und jeder Preis, nicht nur die sechs bekannten Spam-Marken.
@@ -2088,6 +2105,24 @@ mod tests {
     #[test]
     fn spam_min_matches_ist_3() {
         assert_eq!(SPAM_MIN_MATCHES, 3);
+    }
+
+    #[test]
+    fn english_scam_phrase_matches() {
+        let verdict = filter().evaluate(
+            "Hey, how's your day been? add me on discord",
+            &ctx_default(),
+        );
+        assert!(
+            verdict.score > 0,
+            "English scam phrase should score: {:?}",
+            verdict.matched
+        );
+        assert!(verdict
+            .matched
+            .iter()
+            .any(|reason| reason.to_lowercase().contains("discord")
+                || reason.to_lowercase().contains("how's your day been")));
     }
 
     // --- has_hard_spam_signal direkt ---

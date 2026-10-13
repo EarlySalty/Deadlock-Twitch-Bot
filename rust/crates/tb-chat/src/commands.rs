@@ -62,6 +62,14 @@ const PING_REPLIES: &[&str] = &[
     "Ich atme noch! Und ich hab sogar alle meine Kabel dran.",
     "Natürlich bin ich online – wer soll sonst die Clips machen? 😏🎬",
 ];
+const PING_REPLIES_EN: &[&str] = &[
+    "Your Majesty! 👑 The bot is at your service. What can I do for you?",
+    "I'm here! Rested, warmed up and ready for chaos. 🤖✅",
+    "Yes I'm still alive, no worries. Pulse: 🟢 Signal: 📶 Coffee: ☕ all good.",
+    "Bot online! Ready for your command, wise chatter. 🫡",
+    "Still breathing! And I even have all my cables attached.",
+    "Of course I'm online. Who else is supposed to make the clips? 😏🎬",
+];
 
 /// Fallback-Clip-Titel — commands.py:181.
 const CLIP_TITLE_FALLBACKS: &[&str] = &[
@@ -96,9 +104,19 @@ const TRUSTPILOT_REPLIES: &[&str] = &[
     "Platz für Lob und Kritik: Bewerte deine Erfahrung mit der Deutschen Deadlock Community auf Trustpilot:",
     "Deine Meinung zur Deutschen Deadlock Community ist willkommen. Hier geht es zur Bewertung:",
 ];
+const TRUSTPILOT_REPLIES_EN: &[&str] = &[
+    "How do you experience the German Deadlock Community? Share your experience on Trustpilot:",
+    "Want to rate the German Deadlock Community? You can share your experience here:",
+    "Room for praise and criticism: rate your experience with the German Deadlock Community on Trustpilot:",
+    "Your opinion of the German Deadlock Community is welcome. The review page is here:",
+];
 
-fn trustpilot_reply() -> String {
-    let introduction = TRUSTPILOT_REPLIES
+fn trustpilot_reply(lang: tb_domain::UiLang) -> String {
+    let replies = match lang {
+        tb_domain::UiLang::De => TRUSTPILOT_REPLIES,
+        tb_domain::UiLang::En => TRUSTPILOT_REPLIES_EN,
+    };
+    let introduction = replies
         .choose(&mut rand::rng())
         .expect("Trustpilot-Antworten sind fest hinterlegt");
     format!("{introduction} {TRUSTPILOT_URL}")
@@ -122,7 +140,7 @@ fn knowledge_base() -> &'static KnowledgeBase {
 }
 
 /// Der Link öffnet die aktiven Befehle des aktuellen Kanals.
-fn commands_reply(broadcaster_id: &str) -> String {
+fn commands_reply(broadcaster_id: &str, lang: tb_domain::UiLang) -> String {
     let id: String = broadcaster_id
         .bytes()
         .map(|byte| {
@@ -133,11 +151,27 @@ fn commands_reply(broadcaster_id: &str) -> String {
             }
         })
         .collect();
-    format!("Alle Befehle für diesen Kanal findest du hier: {COMMANDS_URL}?streamer_id={id}")
+    let prefix = lang.pick(
+        "Alle Befehle für diesen Kanal findest du hier:",
+        "All commands for this channel are here:",
+    );
+    format!("{prefix} {COMMANDS_URL}?streamer_id={id}")
 }
 
-fn dashboard_reply() -> String {
-    format!("Dein Dashboard findest du hier: {DASHBOARD_URL}")
+fn dashboard_reply(lang: tb_domain::UiLang) -> String {
+    let prefix = lang.pick("Dein Dashboard findest du hier:", "Your dashboard is here:");
+    format!("{prefix} {DASHBOARD_URL}")
+}
+
+fn ping_replies(lang: tb_domain::UiLang) -> &'static [&'static str] {
+    match lang {
+        tb_domain::UiLang::De => PING_REPLIES,
+        tb_domain::UiLang::En => PING_REPLIES_EN,
+    }
+}
+
+fn lurk_reply(lang: tb_domain::UiLang) -> &'static str {
+    lang.pick("verschwindet in den lurk 🐒", "slips into lurk 🐒")
 }
 
 fn watchtime_dauer(minuten: f64) -> String {
@@ -152,14 +186,28 @@ fn watchtime_dauer(minuten: f64) -> String {
     }
 }
 
-fn help_reply(kb: &KnowledgeBase, topic: &str) -> String {
+fn help_reply(kb: &KnowledgeBase, topic: &str, lang: tb_domain::UiLang) -> String {
     let topic = topic.trim();
     if topic.is_empty() {
-        return format!("Sag mir ein Thema, z. B. !help raid — oder schau hier: {HELP_BASE_URL}");
+        return match lang {
+            tb_domain::UiLang::De => {
+                format!("Sag mir ein Thema, z. B. !help raid — oder schau hier: {HELP_BASE_URL}")
+            }
+            tb_domain::UiLang::En => {
+                format!("Give me a topic, e.g. !help raid, or look here: {HELP_BASE_URL}")
+            }
+        };
     }
     match kb.select(topic, Namespace::Bot, None, 1).first() {
         Some(doc) => format!("{}: {HELP_BASE_URL}#{}", doc.title, doc.slug),
-        None => format!("Dazu habe ich nichts gefunden — schau hier: {HELP_BASE_URL}"),
+        None => match lang {
+            tb_domain::UiLang::De => {
+                format!("Dazu habe ich nichts gefunden — schau hier: {HELP_BASE_URL}")
+            }
+            tb_domain::UiLang::En => {
+                format!("I didn't find anything on that. Look here: {HELP_BASE_URL}")
+            }
+        },
     }
 }
 
@@ -721,7 +769,8 @@ impl CommandEngine {
                 true
             }
             "!trustpilot" => {
-                self.reply(event, &trustpilot_reply()).await;
+                let lang = self.ui_lang(event).await;
+                self.reply(event, &trustpilot_reply(lang)).await;
                 true
             }
             "!dashboard" => {
@@ -876,13 +925,19 @@ impl CommandEngine {
         crate::api::send_reply(self.api.as_ref(), &event.broadcaster_user_id, text).await
     }
 
+    async fn ui_lang(&self, event: &ChatMessageEvent) -> tb_domain::UiLang {
+        crate::ui_lang::channel_ui_lang(&self.pool, &event.broadcaster_user_id).await
+    }
+
     async fn cmd_commands(&self, event: &ChatMessageEvent) {
-        self.reply(event, &commands_reply(&event.broadcaster_user_id))
+        let lang = self.ui_lang(event).await;
+        self.reply(event, &commands_reply(&event.broadcaster_user_id, lang))
             .await;
     }
 
     async fn cmd_dashboard(&self, event: &ChatMessageEvent) {
-        self.reply(event, &dashboard_reply()).await;
+        let lang = self.ui_lang(event).await;
+        self.reply(event, &dashboard_reply(lang)).await;
     }
 
     async fn cmd_watchtime(&self, event: &ChatMessageEvent, args: &str) {
@@ -973,7 +1028,9 @@ impl CommandEngine {
     }
 
     async fn cmd_help(&self, event: &ChatMessageEvent, args: &str) {
-        self.reply(event, &help_reply(knowledge_base(), args)).await;
+        let lang = self.ui_lang(event).await;
+        self.reply(event, &help_reply(knowledge_base(), args, lang))
+            .await;
     }
 
     async fn stat_target(
@@ -1399,12 +1456,10 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
 
     async fn cmd_ping(&self, event: &ChatMessageEvent) {
+        let replies = ping_replies(self.ui_lang(event).await);
         let reply = {
             let mut rng = rand::rng();
-            PING_REPLIES
-                .choose(&mut rng)
-                .copied()
-                .unwrap_or(PING_REPLIES[0])
+            replies.choose(&mut rng).copied().unwrap_or(replies[0])
         };
         self.reply(event, reply).await;
     }
@@ -1435,7 +1490,8 @@ impl CommandEngine {
         if !enabled {
             return;
         }
-        self.reply(event, "verschwindet in den lurk 🐒").await;
+        let lang = self.ui_lang(event).await;
+        self.reply(event, lurk_reply(lang)).await;
     }
 
     // -----------------------------------------------------------------------
@@ -2852,12 +2908,12 @@ mod tests {
 
     #[test]
     fn commands_reply_zeigt_link() {
-        assert!(commands_reply("bc123").contains("/streamer/commands"));
+        assert!(commands_reply("bc123", tb_domain::UiLang::De).contains("/streamer/commands"));
     }
 
     #[test]
     fn commands_reply_listet_keine_befehle_auf() {
-        let reply = commands_reply("bc123");
+        let reply = commands_reply("bc123", tb_domain::UiLang::De);
         assert!(
             reply.len() <= 480,
             "Twitch-Antwort zu lang: {}",
@@ -2873,7 +2929,7 @@ mod tests {
     #[test]
     fn help_reply_findet_thema() {
         let kb = help_fixture_kb();
-        let r = help_reply(&kb, "raid");
+        let r = help_reply(&kb, "raid", tb_domain::UiLang::De);
         assert!(
             r.contains("Auto-Raid") && r.contains("/streamer/help#auto-raid"),
             "{r}"
@@ -2883,7 +2939,7 @@ mod tests {
     #[test]
     fn help_reply_unbekannt_fallback() {
         let kb = help_fixture_kb();
-        let r = help_reply(&kb, "quantenphysik");
+        let r = help_reply(&kb, "quantenphysik", tb_domain::UiLang::De);
         assert!(r.contains("/streamer/help") && !r.contains('#'), "{r}");
     }
 
@@ -3245,9 +3301,23 @@ mod tests {
             .1
             .contains("Meinst du !community?"));
         assert_eq!(
-            commands_reply("42"),
+            commands_reply("42", tb_domain::UiLang::De),
             format!("Alle Befehle für diesen Kanal findest du hier: {COMMANDS_URL}?streamer_id=42")
         );
+        assert_eq!(
+            commands_reply("42", tb_domain::UiLang::En),
+            format!("All commands for this channel are here: {COMMANDS_URL}?streamer_id=42")
+        );
+    }
+
+    #[test]
+    fn ping_and_commands_follow_language() {
+        assert!(ping_replies(tb_domain::UiLang::De)[0].contains("Majestät"));
+        assert!(ping_replies(tb_domain::UiLang::En)[0].contains("Majesty"));
+        assert_eq!(lurk_reply(tb_domain::UiLang::En), "slips into lurk 🐒");
+        for reply in ping_replies(tb_domain::UiLang::En) {
+            assert!(!reply.contains('\u{2014}'));
+        }
     }
 
     #[tokio::test]

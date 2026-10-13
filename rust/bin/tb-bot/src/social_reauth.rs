@@ -22,17 +22,26 @@ impl SocialConnectionNotifier {
     }
 }
 
-fn reconnect_text(platform: &str, incident_at: chrono::DateTime<chrono::Utc>) -> Option<String> {
+fn reconnect_text(
+    platform: &str,
+    incident_at: chrono::DateTime<chrono::Utc>,
+    lang: tb_domain::UiLang,
+) -> Option<String> {
     let name = match platform {
         "tiktok" => "TikTok",
         "youtube" => "YouTube",
         "instagram" => "Instagram",
         _ => return None,
     };
-    Some(format!(
-        "Deine Verbindung zu {name} muss erneuert werden. Bitte verbinde {name} im Social-Media-Manager neu: {SOCIAL_DASHBOARD_URL}?hinweis={}",
-        incident_at.timestamp_micros(),
-    ))
+    let hint = incident_at.timestamp_micros();
+    Some(match lang {
+        tb_domain::UiLang::De => format!(
+            "Deine Verbindung zu {name} muss erneuert werden. Bitte verbinde {name} im Social-Media-Manager neu: {SOCIAL_DASHBOARD_URL}?hinweis={hint}"
+        ),
+        tb_domain::UiLang::En => format!(
+            "Your {name} connection needs to be renewed. Please reconnect {name} in the social media manager: {SOCIAL_DASHBOARD_URL}?hinweis={hint}"
+        ),
+    })
 }
 
 #[async_trait]
@@ -44,7 +53,8 @@ impl SocialReauthNotifier for SocialConnectionNotifier {
         _needs_reauth: bool,
         incident_at: chrono::DateTime<chrono::Utc>,
     ) -> bool {
-        let Some(content) = reconnect_text(platform, incident_at) else {
+        let lang = tb_chat::channel_ui_lang(&self.pool, twitch_user_id).await;
+        let Some(content) = reconnect_text(platform, incident_at, lang) else {
             return false;
         };
         let Some(discord_user_id) = discord_user_id_for(&self.pool, twitch_user_id, "").await
@@ -187,17 +197,28 @@ mod tests {
     fn dm_contains_dashboard_link_and_no_internal_terms() {
         for platform in ["tiktok", "youtube", "instagram"] {
             for _needs_reauth in [false, true] {
-                let text = reconnect_text(platform, incident()).unwrap();
+                let text = reconnect_text(platform, incident(), tb_domain::UiLang::De).unwrap();
                 assert!(text.contains(SOCIAL_DASHBOARD_URL));
                 for forbidden in ["Token", "Autorisierung", "OAuth", "\u{2014}"] {
                     assert!(!text.contains(forbidden));
                 }
             }
         }
-        assert!(reconnect_text("unknown", incident()).is_none());
+        assert!(reconnect_text("unknown", incident(), tb_domain::UiLang::De).is_none());
         assert_ne!(
-            reconnect_text("tiktok", incident()),
-            reconnect_text("tiktok", incident() + chrono::Duration::days(1))
+            reconnect_text("tiktok", incident(), tb_domain::UiLang::De),
+            reconnect_text(
+                "tiktok",
+                incident() + chrono::Duration::days(1),
+                tb_domain::UiLang::De
+            )
+        );
+        let en = reconnect_text("tiktok", incident(), tb_domain::UiLang::En).unwrap();
+        assert!(en.contains(SOCIAL_DASHBOARD_URL));
+        assert!(!en.contains('\u{2014}'));
+        assert_ne!(
+            reconnect_text("tiktok", incident(), tb_domain::UiLang::De),
+            reconnect_text("tiktok", incident(), tb_domain::UiLang::En)
         );
     }
 }

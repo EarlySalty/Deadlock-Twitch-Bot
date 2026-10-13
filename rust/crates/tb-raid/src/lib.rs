@@ -153,12 +153,12 @@ pub use pending_raids::{
 pub use raid_blacklist::RaidBlacklistStore;
 pub use raid_executor::{RaidApi, RaidExecutor, RaidOutcome, RaidRequest};
 pub use raid_history_store::{RaidHistoryStore, RecordRaidInput};
-pub use raid_messaging::build_partner_raid_message;
+pub use raid_messaging::{build_partner_raid_message, build_partner_raid_message_for};
 pub use reauth_admin::{BulkReauthPort, ReauthAdminStore};
 pub use recruitment_messaging::{
-    build_recruitment_message, plan_recruitment_delivery, RecruitmentDeliveryConfig,
-    RecruitmentDeliveryPlan, RecruitmentDeliveryRequest, RecruitmentDeliveryStatus,
-    RecruitmentInviteVariant, RecruitmentMessageVariant,
+    build_recruitment_message, build_recruitment_message_for, plan_recruitment_delivery,
+    RecruitmentDeliveryConfig, RecruitmentDeliveryPlan, RecruitmentDeliveryRequest,
+    RecruitmentDeliveryStatus, RecruitmentInviteVariant, RecruitmentMessageVariant,
 };
 pub use scope_fallback_warn::ScopeFallbackWarner;
 pub use scope_profiles::{

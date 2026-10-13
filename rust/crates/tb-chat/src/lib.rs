@@ -69,6 +69,7 @@ pub mod title_db;
 pub mod title_jobs;
 pub mod token;
 pub mod types;
+pub mod ui_lang;
 pub mod zuschauer_register;
 
 pub use api::{BanOutcome, ChatApi};
@@ -134,6 +135,7 @@ pub use sus_invite::{SusInviteCheck, SusInviteHit};
 pub use timeout_tracking::{is_bot_timeout_drop, CombinedSuppression, TimeoutTrackingChatApi};
 pub use token::{load_seed_tokens, BotTokenManager, SeedTokens, TokenError};
 pub use types::{ChatMessageEvent, ChatReply, MentionRef, MessageFragment, SendOutcome};
+pub use ui_lang::channel_ui_lang;
 
 #[cfg(test)]
 #[path = "../../../test-support/postgres.rs"]
