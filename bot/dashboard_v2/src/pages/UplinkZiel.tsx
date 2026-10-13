@@ -318,7 +318,7 @@ export function ZielKarte({
   csrfToken?: string | null;
   offenStart: boolean;
 }) {
-  const { t, locale } = useLanguage();
+  const { t, locale, language } = useLanguage();
   const queryClient = useQueryClient();
   const basisId = useId();
   const eingerichtet = Boolean(ziel);
@@ -765,7 +765,7 @@ export function ZielKarte({
                     ? t('Zweite Tonspur noch nicht als laufend bestätigt.')
                     : t('Wird beim nächsten Stream geprüft.')}
               </span>
-              <a href={`${uplinkHelpUrl('obs.html')}#vod`} className="font-semibold text-primary underline underline-offset-2">
+              <a href={`${uplinkHelpUrl('obs.html', language)}#vod`} className="font-semibold text-primary underline underline-offset-2">
                 {t('OBS-Tonspur einrichten')}
               </a>
             </div>

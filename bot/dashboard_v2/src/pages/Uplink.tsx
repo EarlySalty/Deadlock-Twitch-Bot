@@ -1065,7 +1065,7 @@ function useRueckkehrVomVerbinden(
 }
 
 export function UplinkPage() {
-  const t = useT();
+  const { t, language } = useLanguage();
   const queryClient = useQueryClient();
   const { data: authStatus, isLoading: authLaedt } = useAuthStatus();
   const [qualitaetOffen, setQualitaetOffen] = useUplinkDisclosure('qualitaet-erklaerung', false);
@@ -1082,8 +1082,8 @@ export function UplinkPage() {
     refetchOnWindowFocus: true,
   });
   const { data: helpPages, isError: isHelpError } = useQuery({
-    queryKey: ['uplink-help'],
-    queryFn: fetchUplinkHelp,
+    queryKey: ['uplink-help', language],
+    queryFn: () => fetchUplinkHelp(language),
     staleTime: Infinity,
   });
   // Die gespeicherten Ziele. Ohne sie sieht ein hinterlegtes Ziel aus wie ein
@@ -1310,7 +1310,7 @@ export function UplinkPage() {
                       <p className="text-xs text-text-secondary">
                         {mitElementen(t('Mehr Hintergrund findest du in der {link}.'), {
                           link: (
-                            <a href={`${uplinkHelpUrl('obs.html')}#vod`} className="underline underline-offset-2">
+                            <a href={`${uplinkHelpUrl('obs.html', language)}#vod`} className="underline underline-offset-2">
                               {t('OBS-Hilfe zur VOD-Spur')}
                             </a>
                           ),
@@ -1482,7 +1482,7 @@ export function UplinkPage() {
                       ),
                     )}
                   </div>
-                  <a className="inline-flex min-h-11 items-center text-sm font-semibold text-primary" href={uplinkHelpUrl('index.html')}>
+                  <a className="inline-flex min-h-11 items-center text-sm font-semibold text-primary" href={uplinkHelpUrl('index.html', language)}>
                     {t('Uplink-Hilfe als eigene Seite öffnen')}
                   </a>
                 </div>
