@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+set -euo pipefail
+set +x
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+binary="$root_dir/rust/target/release/tb-discord-hub"
+
+fail() {
+  printf 'Discord-Hub: %s\n' "$1" >&2
+  exit 1
+}
+
+has_value() {
+  local LC_ALL=C.UTF-8
+  local whitespace=$'\t\n\v\f\r \xC2\x85\xC2\xA0\xE1\x9A\x80'
+  whitespace+=$'\xE2\x80\x80\xE2\x80\x81\xE2\x80\x82\xE2\x80\x83\xE2\x80\x84\xE2\x80\x85'
+  whitespace+=$'\xE2\x80\x86\xE2\x80\x87\xE2\x80\x88\xE2\x80\x89\xE2\x80\x8A'
+  whitespace+=$'\xE2\x80\xA8\xE2\x80\xA9\xE2\x80\xAF\xE2\x81\x9F\xE3\x80\x80'
+  [[ "$1" == *[!"$whitespace"]* ]]
+}
+
+if [[ "${1:-}" != --infisical-loaded ]]; then
+  [[ $# -eq 0 ]] || fail 'Keine Startargumente erlaubt.'
+  config=/etc/deadlock-twitch/discord-hub.conf
+  [[ -f "$config" && ! -L "$config" && -r "$config" ]] || fail 'Nicht geheime Hub-Konfiguration fehlt.'
+  [[ $(stat -c %u "$config") == 0 ]] || fail 'Hub-Konfiguration muss root gehören.'
+  mode=$(stat -c %a "$config")
+  (( (8#$mode & 022) == 0 )) || fail 'Hub-Konfiguration darf nur für root schreibbar sein.'
+  while IFS='=' read -r name value || [[ -n "$name" ]]; do
+    case "$name" in
+      INFISICAL_PROJECT_ID|INFISICAL_ENV|INFISICAL_SECRET_PATH|DISCORD_HUB_ENABLED|DISCORD_HUB_PORT)
+        printf -v "$name" '%s' "$value"
+        export "${name?}"
+        ;;
+      '') ;;
+      *) fail 'Unbekannter Konfigurationsschlüssel; keine Secrets in der Konfiguration erlaubt.' ;;
+    esac
+  done < "$config"
+  [[ "${DISCORD_HUB_ENABLED:-0}" == 1 ]] || fail 'Aktivierung fehlt; Dienst bleibt aus.'
+  port="${DISCORD_HUB_PORT:-8779}"
+  [[ "$port" =~ ^[1-9][0-9]{0,4}$ && "$port" -le 65535 ]] || fail 'Ungültiger Loopback-Port.'
+  [[ -x "$binary" && ! -L "$binary" ]] || fail 'Geprüftes Release-Binary fehlt.'
+  if ! has_value "${CREDENTIALS_DIRECTORY:-}" || [[ ! -r "$CREDENTIALS_DIRECTORY/infisical-token" ]]; then
+    fail 'Bestehendes Infisical-Credential fehlt.'
+  fi
+  if ! has_value "${INFISICAL_PROJECT_ID:-}" || ! has_value "${INFISICAL_ENV:-}"; then
+    fail 'Infisical-Projekt und Umgebung fehlen.'
+  fi
+  INFISICAL_SERVICE_TOKEN="$(<"$CREDENTIALS_DIRECTORY/infisical-token")"
+  has_value "$INFISICAL_SERVICE_TOKEN" || fail 'Infisical-Credential ist leer.'
+  export INFISICAL_SERVICE_TOKEN
+  export INFISICAL_MAX_ATTEMPTS=3
+  exec /usr/local/libexec/dl-infisical-env --profile all -- /usr/bin/bash "$0" --infisical-loaded "$port"
+fi
+
+[[ $# -eq 2 ]] || fail 'Ungültiger interner Startaufruf.'
+port="$2"
+[[ "$port" =~ ^[1-9][0-9]{0,4}$ && "$port" -le 65535 ]] || fail 'Ungültiger Loopback-Port.'
+has_value "${DISCORD_HUB_BOT_TOKEN:-}" || fail 'DISCORD_HUB_BOT_TOKEN fehlt in Infisical.'
+application_id="${DISCORD_HUB_APPLICATION_ID:-${DISCORD_HUB_CLIENT_ID:-}}"
+[[ "$application_id" =~ ^[1-9][0-9]{0,19}$ ]] || fail 'Hub-Application-ID fehlt oder ist ungültig.'
+if [[ -n "${DISCORD_HUB_CLIENT_ID:-}" && "$application_id" != "$DISCORD_HUB_CLIENT_ID" ]]; then
+  fail 'Hub-Application-ID und OAuth-Client-ID stimmen nicht überein.'
+fi
+broker_token="${MASTER_BROKER_TOKEN:-${MAIN_BOT_INTERNAL_TOKEN:-${TWITCH_INTERNAL_API_TOKEN:-}}}"
+has_value "$broker_token" || fail 'Broker-Token fehlt in Infisical.'
+has_value "${DISCORD_HUB_DATABASE_URL:-}" || fail 'Eingeschränkte Hub-Postgres-DSN fehlt in Infisical.'
+internal_token="${DISCORD_HUB_INTERNAL_TOKEN:-$broker_token}"
+has_value "$internal_token" || fail 'Internes Hub-Token ist leer.'
+
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export RUST_LOG=info
+export DISCORD_HUB_HOST=127.0.0.1
+export DISCORD_HUB_PORT="$port"
+export DISCORD_HUB_APPLICATION_ID="$application_id"
+export DISCORD_HUB_INTERNAL_TOKEN="$internal_token"
+export DISCORD_HUB_COMMUNITY_GUILD_ID=1289721245281292288
+export MASTER_BROKER_BASE_URL=http://127.0.0.1:8770
+export MASTER_BROKER_TOKEN="$broker_token"
+export DATABASE_URL="$DISCORD_HUB_DATABASE_URL"
+while IFS= read -r name; do
+  case "$name" in
+    PATH|RUST_LOG|DISCORD_HUB_HOST|DISCORD_HUB_PORT|DISCORD_HUB_APPLICATION_ID|DISCORD_HUB_BOT_TOKEN|DISCORD_HUB_INTERNAL_TOKEN|DISCORD_HUB_COMMUNITY_GUILD_ID|MASTER_BROKER_BASE_URL|MASTER_BROKER_TOKEN|DATABASE_URL) ;;
+    *) unset "$name" ;;
+  esac
+done < <(compgen -e)
+exec "$binary"
