@@ -151,6 +151,14 @@ fn negated_instructions_teach_nothing() {
     );
     assert!(classify("Untertitel kleiner, nicht größer").is_empty());
     assert_eq!(
+        classify("Intro länger, Video kürzer"),
+        vec![
+            Signal::Toward(Dimension::IntroLength, 1),
+            Signal::Toward(Dimension::VideoLength, -1)
+        ]
+    );
+    assert!(classify("Intro länger und kürzer").is_empty());
+    assert_eq!(
         classify("Untertitel kleiner. Intro nicht kürzer"),
         vec![Signal::Toward(Dimension::SubtitleSize, -1)]
     );
