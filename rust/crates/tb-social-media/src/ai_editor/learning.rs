@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -582,6 +582,35 @@ async fn was_rolled_back(pool: &PgPool, id: SkillId, sha256: &str) -> Result<boo
     .await
 }
 
+fn learned_lines(text: &str) -> BTreeSet<&str> {
+    match text.find(&format!("\n{LEARNED_HEADING}")) {
+        Some(index) => text[index..]
+            .lines()
+            .filter_map(|line| line.strip_prefix("- "))
+            .collect(),
+        None => BTreeSet::new(),
+    }
+}
+
+async fn vetoed_guidance(pool: &PgPool, id: SkillId) -> Result<BTreeSet<String>, sqlx::Error> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT f.content, t.content FROM public.social_ai_skill_activations a JOIN public.social_ai_skill_versions f ON f.skill_id = a.skill_id AND f.version = a.from_version JOIN public.social_ai_skill_versions t ON t.skill_id = a.skill_id AND t.version = a.to_version WHERE a.skill_id = $1 AND a.kind = 'rollback'",
+    )
+    .bind(id.as_str())
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .iter()
+        .flat_map(|(from, to)| {
+            let kept = learned_lines(to);
+            learned_lines(from)
+                .into_iter()
+                .filter(move |line| !kept.contains(line))
+                .map(str::to_owned)
+        })
+        .collect())
+}
+
 fn evidence_text(rules: &[&GlobalRule]) -> (String, i64) {
     let supporting: u32 = rules
         .iter()
@@ -614,6 +643,13 @@ async fn apply_skill(
     rules: &[&GlobalRule],
     max_bytes: usize,
 ) -> Result<Option<i32>, SkillRegistryError> {
+    let vetoed = vetoed_guidance(pool, id).await?;
+    let rules: Vec<&GlobalRule> = rules
+        .iter()
+        .copied()
+        .filter(|rule| !vetoed.contains(guidance(rule.dimension, rule.direction)))
+        .collect();
+    let rules = rules.as_slice();
     let active = skill_registry::active_skill(pool, id, max_bytes).await?;
     let candidate = compose_skill_text(&active.text, rules);
     let sha256 = skill_registry::sha256_hex(&candidate);

@@ -368,6 +368,51 @@ async fn recurring_feedback_creates_versioned_skill_change_and_respects_rollback
     assert_eq!(proposals[0].status, "proposed");
 }
 
+async fn learned_editing_lines(pool: &PgPool) -> (i32, Vec<String>) {
+    let active = skill_registry::active_skill(pool, SkillId::EditingStrategy, 16384)
+        .await
+        .expect("active editing strategy");
+    let lines = learned_lines(&active.text)
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    (active.version, lines)
+}
+
+#[tokio::test]
+async fn rollback_vetoes_removed_guidance_when_other_rules_change_the_skill() {
+    let db = database().await;
+    let pool = &db.pool;
+    let intro = guidance(Dimension::IntroLength, -1).to_owned();
+    let pace = guidance(Dimension::EditingPace, -1).to_owned();
+    let video = guidance(Dimension::VideoLength, -1).to_owned();
+    for user in [11, 12, 13] {
+        confirmed(pool, user, "Intro kürzer").await;
+    }
+    run_pass(pool, 16384).await.expect("intro pass");
+    assert_eq!(learned_editing_lines(pool).await, (2, vec![intro.clone()]));
+    for user in [11, 12, 13] {
+        confirmed(pool, user, "Weniger Schnitte").await;
+    }
+    run_pass(pool, 16384).await.expect("pace pass");
+    let (version, lines) = learned_editing_lines(pool).await;
+    assert_eq!(version, 3);
+    assert!(lines.contains(&intro) && lines.contains(&pace));
+    skill_registry::rollback(pool, SkillId::EditingStrategy, 3, 2, "Admin prüft", "admin")
+        .await
+        .expect("rollback");
+    for user in [11, 12, 13] {
+        confirmed(pool, user, "Videos kürzer").await;
+    }
+    run_pass(pool, 16384).await.expect("video pass");
+    let (version, lines) = learned_editing_lines(pool).await;
+    assert_eq!(version, 4);
+    let mut expected = vec![intro, video];
+    expected.sort_unstable();
+    assert_eq!(lines, expected);
+    assert!(!lines.contains(&pace));
+}
+
 #[test]
 fn planning_input_carries_personal_preferences_only_when_present() {
     let empty = super::super::pipeline::planning_text(serde_json::json!({"task": "x"}), &[]);
