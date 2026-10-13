@@ -150,12 +150,18 @@ impl AutopilotWorker {
         let owners: Vec<String> = sqlx::query_scalar("SELECT twitch_user_id FROM social_media_autopilot_settings WHERE enabled ORDER BY twitch_user_id")
             .fetch_all(&self.pool).await?;
         for owner in owners {
-            let report = plan_owner(&self.pool, &owner, chrono::Utc::now()).await?;
-            tracing::debug!(
-                created = report.created,
-                retimed = report.retimed,
-                "Auto-Pilot schedule planned"
-            );
+            match plan_owner(&self.pool, &owner, chrono::Utc::now()).await {
+                Ok(report) => tracing::debug!(
+                    created = report.created,
+                    retimed = report.retimed,
+                    "Auto-Pilot schedule planned"
+                ),
+                Err(error) => tracing::warn!(
+                    error = %error,
+                    owner = %owner,
+                    "Auto-Pilot schedule planning failed for owner"
+                ),
+            }
         }
         Ok(())
     }
