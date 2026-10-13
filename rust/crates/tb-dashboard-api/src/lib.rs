@@ -652,6 +652,14 @@ fn build_authed_router_with_analysis_store(
         // Streamer-Selbstbedienung: !clip-Command-Toggle. Default aktiviert
         // (bestehendes Verhalten), Spalte streamer_plans.clip_command_enabled.
         .route(
+            "/twitch/api/v2/streamer/private-vod-clips",
+            get(handlers::private_vod::list_handler).post(handlers::private_vod::settings_handler),
+        )
+        .route(
+            "/twitch/api/v2/streamer/private-vod-clips/{id}/download",
+            get(handlers::private_vod::download_handler),
+        )
+        .route(
             "/twitch/api/v2/streamer/clip-command-settings",
             get(clip_command_settings::get_handler).post(clip_command_settings::post_handler),
         )

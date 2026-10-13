@@ -25,5 +25,6 @@ tb-db             = { workspace = true }
 tb-dashboard-api  = { workspace = true }
 tb-social-media   = { workspace = true }
 tb-transport-twitch = { workspace = true }
+tb-vod-archive = { workspace = true }
 
 tb-llm = { workspace = true }

@@ -2100,6 +2100,19 @@ twitch_player_steam_links|revision|bigint|NO|0
 twitch_player_steam_links|steam_id64|bigint|YES|
 twitch_player_steam_links|twitch_user_id|text|NO|
 twitch_player_steam_links|updated_at|timestamp with time zone|NO|now()
+twitch_private_vod_jobs|created_at|timestamp with time zone|NO|now()
+twitch_private_vod_jobs|end_seconds|integer|NO|
+twitch_private_vod_jobs|error_code|text|YES|
+twitch_private_vod_jobs|expires_at|timestamp with time zone|NO|(now() + '24:00:00'::interval)
+twitch_private_vod_jobs|file_bytes|bigint|YES|
+twitch_private_vod_jobs|id|text|NO|
+twitch_private_vod_jobs|owner_id|text|NO|
+twitch_private_vod_jobs|start_seconds|integer|NO|
+twitch_private_vod_jobs|started_at|timestamp with time zone|YES|
+twitch_private_vod_jobs|status|text|NO|'queued'::text
+twitch_private_vod_jobs|video_id|text|NO|
+twitch_private_vod_settings|enabled|boolean|NO|false
+twitch_private_vod_settings|owner_id|text|NO|
 twitch_promo_cooldowns|cooldown_type|text|NO|
 twitch_promo_cooldowns|login|text|NO|
 twitch_promo_cooldowns|twitch_user_id|text|YES|

@@ -487,6 +487,45 @@ async fn main() {
     );
 
     let pause_loop_helix = pause_loop_helix_client_from_env();
+    let private_vod_paths = tb_vod_archive::private_range::PrivateRangePaths {
+        directory: std::env::var_os("STATE_DIRECTORY")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("data"))
+            .join("private-vod-clips"),
+        yt_dlp: config
+            .bot
+            .yt_dlp_binary
+            .as_ref()
+            .and_then(|path| snapshot.resolve(path).ok())
+            .unwrap_or_else(|| PathBuf::from("yt-dlp")),
+        ffmpeg: config.bot.vod_archive.ffmpeg.clone(),
+        ffprobe: config.bot.vod_archive.ffprobe.clone(),
+    };
+    let private_vod_runtime = tb_dashboard_api::handlers::private_vod::PrivateVodRuntime {
+        paths: private_vod_paths.clone(),
+        downloads: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
+    };
+    {
+        let pool = pool.clone();
+        let helix = pause_loop_helix.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Err(error) = tb_vod_archive::private_range::run_worker(
+                    pool.clone(),
+                    helix.clone(),
+                    private_vod_paths.clone(),
+                )
+                .await
+                {
+                    tracing::error!(
+                        code = error.code(),
+                        "Private VOD worker stopped; retrying in 60 seconds"
+                    );
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            }
+        });
+    }
     let brain_token = if config.dashboard.options.brain_client.mode
         == tb_config::dashboard_options::BrainClientMode::Legacy
     {
@@ -508,6 +547,7 @@ async fn main() {
         brain_runtime,
     );
     app = app.layer(axum::Extension(readiness_fingerprint));
+    app = app.layer(axum::Extension(private_vod_runtime));
     if let Some(avatar_cache) = tb_dashboard_api::handlers::internal_home::AvatarCache::from_env() {
         app = app.layer(axum::Extension(avatar_cache));
     }
