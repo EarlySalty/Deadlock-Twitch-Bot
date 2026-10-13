@@ -66,7 +66,9 @@ async fn reorder_on(
 
 pub async fn reorder(pool: &PgPool, owner: &str, ids: &[i64]) -> Result<(), ScheduleError> {
     if ids.len() > 500 || ids.iter().any(|id| *id <= 0) {
-        return Err(ScheduleError::QueueChanged);
+        return Err(ScheduleError::Invalid(
+            "Die Reihenfolge enthält ungültige Aufträge".into(),
+        ));
     }
     let mut tx = pool.begin().await?;
     autopilot_settings::lock_owner(&mut tx, owner).await?;
