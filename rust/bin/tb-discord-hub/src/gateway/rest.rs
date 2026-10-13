@@ -1,6 +1,3 @@
-//! Schmaler Discord-REST-Client für das Gateway (Gateway-URL, Befehls-
-//! Registrierung, Interaction-Antworten, Rollen-Abfrage).
-
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -9,31 +6,32 @@ use serde_json::{json, Value};
 use super::permissions::{Role, MANAGE_GUILD};
 use super::protocol::snowflake;
 
-/// Standard-Basisadresse der Discord-API.
 pub const DISCORD_API_BASE: &str = "https://discord.com/api/v10";
 
-/// Ephemeral-Flag für Interaction-Antworten.
 pub const FLAG_EPHEMERAL: u64 = 1 << 6;
 
-/// Fehler bei REST-Aufrufen.
 #[derive(Debug, thiserror::Error)]
 pub enum RestError {
     #[error("HTTP-Fehler: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(#[source] reqwest::Error),
     #[error("Discord antwortet {status}: {body}")]
     Status { status: u16, body: String },
     #[error("unerwartete Antwort: {0}")]
     Decode(String),
 }
 
+impl From<reqwest::Error> for RestError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::Http(error.without_url())
+    }
+}
+
 impl RestError {
-    /// 401/403: Token ungültig bzw. keine Berechtigung – nicht wiederholen.
     pub fn is_unauthorized(&self) -> bool {
         matches!(self, RestError::Status { status: 401, .. })
     }
 }
 
-/// Antwort von `GET /gateway/bot`.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct GatewayBot {
     pub url: String,
@@ -44,11 +42,9 @@ pub struct GatewayBot {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SessionStartLimit {
     pub remaining: u64,
-    /// Millisekunden bis zum Zurücksetzen.
     pub reset_after: u64,
 }
 
-/// Grunddaten einer Guild für `/setup`.
 #[derive(Debug, Clone)]
 pub struct GuildInfo {
     pub owner_id: Option<u64>,
@@ -89,11 +85,11 @@ impl DiscordRest {
         }
     }
 
-    /// Führt eine Anfrage aus; bei 429 wird einmal nach `retry_after` wiederholt.
     async fn send(
         &self,
         method: reqwest::Method,
         path: &str,
+        route: &'static str,
         body: Option<&Value>,
         auth: bool,
     ) -> Result<Value, RestError> {
@@ -115,7 +111,7 @@ impl DiscordRest {
                     .and_then(|v| v.get("retry_after").and_then(Value::as_f64))
                     .unwrap_or(1.0)
                     .clamp(0.0, 10.0);
-                tracing::warn!(path, wait, "Discord-Rate-Limit, warte vor Wiederholung");
+                tracing::warn!(route, wait, "Discord-Rate-Limit, warte vor Wiederholung");
                 tokio::time::sleep(Duration::from_secs_f64(wait)).await;
                 continue;
             }
@@ -136,20 +132,25 @@ impl DiscordRest {
         })
     }
 
-    /// `GET /gateway/bot`
     pub async fn gateway_bot(&self) -> Result<GatewayBot, RestError> {
         let v = self
-            .send(reqwest::Method::GET, "/gateway/bot", None, true)
+            .send(
+                reqwest::Method::GET,
+                "/gateway/bot",
+                "/gateway/bot",
+                None,
+                true,
+            )
             .await?;
         serde_json::from_value(v).map_err(|e| RestError::Decode(e.to_string()))
     }
 
-    /// Registriert `/setup` global (`PUT /applications/{id}/commands`).
     pub async fn register_commands(&self, application_id: u64) -> Result<(), RestError> {
         let body = setup_command_definition();
         self.send(
             reqwest::Method::PUT,
             &format!("/applications/{application_id}/commands"),
+            "/applications/{id}/commands",
             Some(&body),
             true,
         )
@@ -157,12 +158,12 @@ impl DiscordRest {
         .map(|_| ())
     }
 
-    /// Owner und Rollen einer Guild (`GET /guilds/{id}`).
     pub async fn guild(&self, guild_id: u64) -> Result<GuildInfo, RestError> {
         let v = self
             .send(
                 reqwest::Method::GET,
                 &format!("/guilds/{guild_id}"),
+                "/guilds/{id}",
                 None,
                 true,
             )
@@ -172,11 +173,11 @@ impl DiscordRest {
                 serde_json::from_value(r.clone()).map_err(|e| RestError::Decode(e.to_string()))?
             }
             None => {
-                // Rückfall: Rollen separat laden.
                 let r = self
                     .send(
                         reqwest::Method::GET,
                         &format!("/guilds/{guild_id}/roles"),
+                        "/guilds/{id}/roles",
                         None,
                         true,
                     )
@@ -197,7 +198,6 @@ impl DiscordRest {
         })
     }
 
-    /// Rollen-IDs eines Mitglieds (`GET /guilds/{id}/members/{user}`).
     pub async fn member_role_ids(
         &self,
         guild_id: u64,
@@ -207,6 +207,7 @@ impl DiscordRest {
             .send(
                 reqwest::Method::GET,
                 &format!("/guilds/{guild_id}/members/{user_id}"),
+                "/guilds/{id}/members/{user}",
                 None,
                 true,
             )
@@ -218,7 +219,6 @@ impl DiscordRest {
         Ok(roles.iter().filter_map(|r| snowflake(Some(r))).collect())
     }
 
-    /// Antwortet sofort auf eine Interaction (`POST /interactions/{id}/{token}/callback`).
     pub async fn interaction_callback(
         &self,
         interaction_id: u64,
@@ -228,6 +228,7 @@ impl DiscordRest {
         self.send(
             reqwest::Method::POST,
             &format!("/interactions/{interaction_id}/{token}/callback"),
+            "/interactions/{id}/{token}/callback",
             Some(body),
             false,
         )
@@ -235,7 +236,6 @@ impl DiscordRest {
         .map(|_| ())
     }
 
-    /// Bearbeitet die (aufgeschobene) Originalantwort einer Interaction.
     pub async fn edit_original_response(
         &self,
         application_id: u64,
@@ -245,6 +245,7 @@ impl DiscordRest {
         self.send(
             reqwest::Method::PATCH,
             &format!("/webhooks/{application_id}/{token}/messages/@original"),
+            "/webhooks/{id}/{token}/messages/@original",
             Some(&json!({ "content": content, "allowed_mentions": { "parse": [] } })),
             false,
         )
@@ -253,7 +254,6 @@ impl DiscordRest {
     }
 }
 
-/// Definition des globalen Befehls `/setup` (Bulk-Overwrite-Liste).
 pub fn setup_command_definition() -> Value {
     json!([{
         "name": "setup",
@@ -315,7 +315,6 @@ pub fn setup_command_definition() -> Value {
     }])
 }
 
-/// Sofortantwort (type 4, ephemeral).
 pub fn ephemeral_message(content: &str) -> Value {
     json!({
         "type": 4,
@@ -327,7 +326,6 @@ pub fn ephemeral_message(content: &str) -> Value {
     })
 }
 
-/// Aufgeschobene Antwort (type 5, ephemeral) – Inhalt folgt per Edit.
 pub fn ephemeral_deferred() -> Value {
     json!({ "type": 5, "data": { "flags": FLAG_EPHEMERAL } })
 }
@@ -335,8 +333,120 @@ pub fn ephemeral_deferred() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+    use tracing::instrument::WithSubscriber;
     use wiremock::matchers::{body_partial_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[derive(Clone, Default)]
+    struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedLogs {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("log buffer").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rate_limit_logs_omit_interaction_tokens() {
+        let server = MockServer::start().await;
+        let token = "synthetic-interaction-token-sentinel";
+        for (verb, route) in [
+            ("POST", format!("/interactions/7/{token}/callback")),
+            ("PATCH", format!("/webhooks/7/{token}/messages/@original")),
+        ] {
+            Mock::given(method(verb))
+                .and(path(&route))
+                .respond_with(
+                    ResponseTemplate::new(429)
+                        .set_body_json(json!({"retry_after": 0.01, "global": false})),
+                )
+                .up_to_n_times(1)
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method(verb))
+                .and(path(&route))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let logs = CapturedLogs::default();
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(move || writer.clone())
+            .finish();
+        let mut rest = DiscordRest::new(server.uri(), "synthetic-bot-token");
+        rest.http = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("test client without a virtual-time request timeout");
+        async {
+            rest.interaction_callback(7, token, &ephemeral_deferred())
+                .await
+                .expect("callback retry");
+            rest.edit_original_response(7, token, "synthetic response")
+                .await
+                .expect("webhook retry");
+        }
+        .with_subscriber(subscriber)
+        .await;
+        let output =
+            String::from_utf8(logs.0.lock().expect("log buffer").clone()).expect("UTF-8 logs");
+        assert_eq!(output.matches("Discord-Rate-Limit").count(), 2);
+        assert!(output.contains("/interactions/{id}/{token}/callback"));
+        assert!(output.contains("/webhooks/{id}/{token}/messages/@original"));
+        assert!(!output.contains(token));
+    }
+
+    #[tokio::test]
+    async fn http_errors_omit_interaction_tokens() {
+        let token = "synthetic-interaction-token-sentinel";
+        let http = reqwest::Client::builder()
+            .https_only(true)
+            .build()
+            .expect("HTTPS-only test client");
+        let raw_error = http
+            .post(format!("http://127.0.0.1/interactions/7/{token}/callback"))
+            .send()
+            .await
+            .expect_err("HTTP rejected before network access");
+        assert!(raw_error.url().expect("request URL").path().contains(token));
+        let assert_redacted = |error: RestError| {
+            assert!(!error.to_string().contains(token));
+            assert!(!format!("{error:?}").contains(token));
+            assert!(!std::error::Error::source(&error)
+                .expect("HTTP error source")
+                .to_string()
+                .contains(token));
+            let RestError::Http(http_error) = error else {
+                panic!("expected HTTP error");
+            };
+            assert!(http_error.url().is_none());
+        };
+        assert_redacted(raw_error.into());
+        let mut rest = DiscordRest::new("http://127.0.0.1", "synthetic-bot-token");
+        rest.http = http;
+        assert_redacted(
+            rest.interaction_callback(7, token, &ephemeral_deferred())
+                .await
+                .expect_err("callback HTTP rejected"),
+        );
+        assert_redacted(
+            rest.edit_original_response(7, token, "synthetic response")
+                .await
+                .expect_err("webhook HTTP rejected"),
+        );
+    }
 
     #[test]
     fn befehlsdefinition() {
