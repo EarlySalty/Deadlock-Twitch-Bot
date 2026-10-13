@@ -119,6 +119,16 @@ impl AuthWriter {
         }
         let uid = &new.twitch_user_id;
         let mut tx = auth_transaction(&self.pool, uid).await?;
+        if new.activate_raid_features
+            && crate::partner_setup::lock_partner_configuration(
+                &mut tx,
+                uid,
+                &new.twitch_login.trim().to_lowercase(),
+            )
+            .await?
+        {
+            return Err(AuthWriteError::InvalidIdentity);
+        }
         let disconnected: Option<Option<DateTime<Utc>>> = sqlx::query_scalar(
             "SELECT last_disconnected_at FROM twitch_uplink_auth_intent WHERE twitch_user_id=$1",
         )
@@ -267,7 +277,15 @@ impl AuthWriter {
         .execute(&mut *tx)
         .await?;
 
-        if new.activate_raid_features {
+        if new.activate_raid_features
+            && !crate::partner_setup::partner_configuration_inactive(
+                &mut tx,
+                uid,
+                &new.twitch_login.trim().to_lowercase(),
+                true,
+            )
+            .await?
+        {
             crate::partner_setup::restore_legacy_technical_membership(&mut tx, uid).await?;
             sqlx::query(
                 "UPDATE twitch_partners p

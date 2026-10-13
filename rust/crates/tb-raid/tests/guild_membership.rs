@@ -808,6 +808,67 @@ async fn oauth_promotion_preserves_global_deactivation_with_active_admission() {
 }
 
 #[tokio::test]
+async fn admin_deactivation_survives_global_blocks_and_removed_guild() {
+    let db = legacy_fixture().await;
+    let pool = &db.pool;
+    sqlx::query(
+        "UPDATE streamer_guilds SET active = TRUE, deactivated_by = NULL, deactivated_at = NULL",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    for restriction in [
+        "INSERT INTO twitch_exclusions VALUES ('8801', 'banned', NULL)",
+        "INSERT INTO twitch_partner_signup_denylist (twitch_user_id, twitch_login, reason, added_by) VALUES ('8801', 'legacy', 'owner_decision', 'test')",
+        "UPDATE twitch_partners SET technical_pause_reason = 'blocked'",
+        "UPDATE discord_guilds SET removed_at = NOW()",
+    ] {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(restriction)).execute(&mut *tx).await.unwrap();
+        attach_streamer_guild(&mut tx, "8801", COMMUNITY_GUILD_ID, false, "admin").await.unwrap();
+        sqlx::query("UPDATE streamer_guilds SET deactivated_at = '2026-01-01T00:00:00Z'")
+            .execute(&mut *tx).await.unwrap();
+        let before: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(sg) FROM streamer_guilds sg WHERE twitch_user_id = '8801'")
+            .fetch_one(&mut *tx).await.unwrap();
+        assert_eq!(before["active"], false, "{restriction}");
+        assert_eq!(before["source"], "migration");
+        assert_eq!(before["deactivated_by"], "admin");
+        assert!(!before["deactivated_at"].is_null());
+        attach_streamer_guild(&mut tx, "8801", COMMUNITY_GUILD_ID, false, "admin").await.unwrap();
+        attach_streamer_guild(&mut tx, "8801", COMMUNITY_GUILD_ID, true, "admin").await.unwrap();
+        let after: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(sg) FROM streamer_guilds sg WHERE twitch_user_id = '8801'")
+            .fetch_one(&mut *tx).await.unwrap();
+        assert_eq!(before, after, "{restriction}");
+        tx.rollback().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn recycled_login_cannot_mutate_archived_or_active_stable_identity() {
+    let db = legacy_fixture().await;
+    let pool = &db.pool;
+    sqlx::query("INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login, discord_user_id) VALUES ('8801', 'legacy', '9901')")
+        .execute(pool).await.unwrap();
+    for status in ["active", "archived"] {
+        sqlx::query("UPDATE twitch_partners SET status = $1, admin_archived_at = '2026-01-01T00:00:00Z', manual_partner_opt_out = 1")
+            .bind(status).execute(pool).await.unwrap();
+        let before: serde_json::Value = sqlx::query_scalar("SELECT jsonb_build_object('partners', (SELECT jsonb_agg(to_jsonb(p)) FROM twitch_partners p), 'memberships', (SELECT jsonb_agg(to_jsonb(sg)) FROM streamer_guilds sg), 'identities', (SELECT jsonb_agg(to_jsonb(i)) FROM twitch_streamer_identities i))")
+            .fetch_one(pool).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let result =
+            promote_streamer_to_partner(&mut tx, &args("legacy", "8802"), chrono::Utc::now()).await;
+        assert!(matches!(
+            result,
+            Err(tb_raid::partner_setup::PartnerSetupError::InvalidIdentity)
+        ));
+        tx.commit().await.unwrap();
+        let after: serde_json::Value = sqlx::query_scalar("SELECT jsonb_build_object('partners', (SELECT jsonb_agg(to_jsonb(p)) FROM twitch_partners p), 'memberships', (SELECT jsonb_agg(to_jsonb(sg)) FROM streamer_guilds sg), 'identities', (SELECT jsonb_agg(to_jsonb(i)) FROM twitch_streamer_identities i))")
+            .fetch_one(pool).await.unwrap();
+        assert_eq!(before, after, "{status}");
+    }
+}
+
+#[tokio::test]
 async fn guild_approval_preserves_each_existing_global_configuration() {
     let db = legacy_fixture().await;
     let pool = &db.pool;

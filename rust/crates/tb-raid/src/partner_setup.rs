@@ -138,20 +138,18 @@ async fn load_streamer_identity(
     twitch_user_id: &str,
     twitch_login: &str,
 ) -> Result<Option<IdentityRow>, sqlx::Error> {
-    sqlx::query_as!(
-        IdentityRow,
+    sqlx::query_as::<_, IdentityRow>(
         r#"
-        SELECT discord_user_id AS "discord_user_id?",
-               discord_display_name AS "discord_display_name?"
+        SELECT discord_user_id, discord_display_name
         FROM twitch_streamer_identities
         WHERE ($1 <> '' AND twitch_user_id = $1)
-           OR ($2 <> '' AND LOWER(twitch_login) = $2)
-        ORDER BY updated_at DESC
+           OR ($2 <> '' AND NULLIF(TRIM(twitch_user_id), '') IS NULL AND LOWER(twitch_login) = $2)
+        ORDER BY CASE WHEN twitch_user_id = $1 THEN 0 ELSE 1 END, updated_at DESC
         LIMIT 1
         "#,
-        twitch_user_id.trim(),
-        normalized_or_empty(twitch_login)
     )
+    .bind(twitch_user_id.trim())
+    .bind(normalized_or_empty(twitch_login))
     .fetch_optional(pool)
     .await
 }
@@ -165,21 +163,20 @@ async fn load_streamer_source_row(
     twitch_user_id: &str,
     twitch_login: &str,
 ) -> Result<Option<SourceStreamerRow>, sqlx::Error> {
-    sqlx::query_as!(
-        SourceStreamerRow,
+    sqlx::query_as::<_, SourceStreamerRow>(
         r#"
-        SELECT created_at::text AS "created_at?"
+        SELECT created_at::text AS created_at
         FROM twitch_streamers
         WHERE ($1 <> '' AND twitch_user_id = $1)
-           OR ($2 <> '' AND LOWER(twitch_login) = $2)
+           OR ($2 <> '' AND NULLIF(TRIM(twitch_user_id), '') IS NULL AND LOWER(twitch_login) = $2)
         ORDER BY
             CASE WHEN $1 <> '' AND twitch_user_id = $1 THEN 0 ELSE 1 END,
             LOWER(twitch_login)
         LIMIT 1
         "#,
-        twitch_user_id,
-        twitch_login
     )
+    .bind(twitch_user_id)
+    .bind(twitch_login)
     .fetch_optional(&mut **tx)
     .await
 }
@@ -189,34 +186,33 @@ async fn load_active_partner_row(
     twitch_user_id: &str,
     twitch_login: &str,
 ) -> Result<Option<ActivePartnerRow>, sqlx::Error> {
-    sqlx::query_as!(
-        ActivePartnerRow,
+    sqlx::query_as::<_, ActivePartnerRow>(
         r#"
         SELECT
-            p.id AS "id!",
-            p.require_discord_link AS "require_discord_link?",
-            p.last_description AS "last_description?",
-            p.last_link_ok AS "last_link_ok?",
-            p.added_by AS "added_by?",
-            p.last_link_checked_at AS "last_link_checked_at?",
-            p.manual_partner_opt_out AS "manual_partner_opt_out?",
-            p.raid_bot_enabled AS "raid_bot_enabled?",
-            p.silent_ban AS "silent_ban?",
-            p.silent_raid AS "silent_raid?",
-            p.live_ping_role_id AS "live_ping_role_id?",
-            COALESCE(p.live_ping_enabled, 1) AS "live_ping_enabled?",
-            p.partnered_at AS "partnered_at?",
-            p.technical_pause_reason AS "technical_pause_reason?"
+            p.id,
+            p.require_discord_link,
+            p.last_description,
+            p.last_link_ok,
+            p.added_by,
+            p.last_link_checked_at,
+            p.manual_partner_opt_out,
+            p.raid_bot_enabled,
+            p.silent_ban,
+            p.silent_raid,
+            p.live_ping_role_id,
+            COALESCE(p.live_ping_enabled, 1) AS live_ping_enabled,
+            p.partnered_at,
+            p.technical_pause_reason
         FROM twitch_partners p
         WHERE (($1 <> '' AND p.twitch_user_id = $1)
-            OR ($2 <> '' AND LOWER(p.twitch_login) = $2))
+            OR ($2 <> '' AND NULLIF(TRIM(p.twitch_user_id), '') IS NULL AND LOWER(p.twitch_login) = $2))
           AND p.status = 'active'
-        ORDER BY p.id DESC
+        ORDER BY CASE WHEN p.twitch_user_id = $1 THEN 0 ELSE 1 END, p.id DESC
         LIMIT 1
         "#,
-        twitch_user_id,
-        twitch_login
     )
+    .bind(twitch_user_id)
+    .bind(twitch_login)
     .fetch_optional(&mut **tx)
     .await
 }
@@ -226,34 +222,33 @@ async fn load_reactivatable_partner_row(
     twitch_user_id: &str,
     twitch_login: &str,
 ) -> Result<Option<ActivePartnerRow>, sqlx::Error> {
-    sqlx::query_as!(
-        ActivePartnerRow,
+    sqlx::query_as::<_, ActivePartnerRow>(
         r#"
         SELECT
-            p.id AS "id!",
-            p.require_discord_link AS "require_discord_link?",
-            p.last_description AS "last_description?",
-            p.last_link_ok AS "last_link_ok?",
-            p.added_by AS "added_by?",
-            p.last_link_checked_at AS "last_link_checked_at?",
-            p.manual_partner_opt_out AS "manual_partner_opt_out?",
-            p.raid_bot_enabled AS "raid_bot_enabled?",
-            p.silent_ban AS "silent_ban?",
-            p.silent_raid AS "silent_raid?",
-            p.live_ping_role_id AS "live_ping_role_id?",
-            COALESCE(p.live_ping_enabled, 1) AS "live_ping_enabled?",
-            p.partnered_at AS "partnered_at?",
-            p.technical_pause_reason AS "technical_pause_reason?"
+            p.id,
+            p.require_discord_link,
+            p.last_description,
+            p.last_link_ok,
+            p.added_by,
+            p.last_link_checked_at,
+            p.manual_partner_opt_out,
+            p.raid_bot_enabled,
+            p.silent_ban,
+            p.silent_raid,
+            p.live_ping_role_id,
+            COALESCE(p.live_ping_enabled, 1) AS live_ping_enabled,
+            p.partnered_at,
+            p.technical_pause_reason
         FROM twitch_partners p
         WHERE (($1 <> '' AND p.twitch_user_id = $1)
-            OR ($2 <> '' AND LOWER(p.twitch_login) = $2))
+            OR ($2 <> '' AND NULLIF(TRIM(p.twitch_user_id), '') IS NULL AND LOWER(p.twitch_login) = $2))
           AND p.status <> 'active'
-        ORDER BY p.id DESC
+        ORDER BY CASE WHEN p.twitch_user_id = $1 THEN 0 ELSE 1 END, p.id DESC
         LIMIT 1
         "#,
-        twitch_user_id,
-        twitch_login
     )
+    .bind(twitch_user_id)
+    .bind(twitch_login)
     .fetch_optional(&mut **tx)
     .await
 }
@@ -263,20 +258,20 @@ async fn load_inactive_block_reason(
     twitch_user_id: &str,
     twitch_login: &str,
 ) -> Result<Option<String>, sqlx::Error> {
-    let row: Option<Option<String>> = sqlx::query_scalar!(
+    let row: Option<Option<String>> = sqlx::query_scalar(
         r#"
-        SELECT technical_pause_reason AS "technical_pause_reason?"
+        SELECT technical_pause_reason
           FROM twitch_partners
          WHERE (($1 <> '' AND twitch_user_id = $1)
-             OR ($2 <> '' AND LOWER(twitch_login) = $2))
+             OR ($2 <> '' AND NULLIF(TRIM(twitch_user_id), '') IS NULL AND LOWER(twitch_login) = $2))
            AND status <> 'active'
            AND LOWER(TRIM(COALESCE(technical_pause_reason, ''))) = ANY(ARRAY['blocked', 'bot_banned'])
          ORDER BY id DESC
          LIMIT 1
         "#,
-        twitch_user_id,
-        twitch_login
     )
+    .bind(twitch_user_id)
+    .bind(twitch_login)
     .fetch_optional(&mut **tx)
     .await?;
 
@@ -364,27 +359,27 @@ async fn normalize_related_tables(
         SET twitch_login = $1,
             twitch_user_id = COALESCE(NULLIF(twitch_user_id, ''), $2)
         WHERE twitch_user_id = $2
-           OR LOWER(twitch_login) = LOWER($1)
+           OR (NULLIF(TRIM(twitch_user_id), '') IS NULL AND LOWER(twitch_login) = LOWER($1))
         "#,
         r#"
         UPDATE streamer_plans
         SET twitch_login = $1,
             twitch_user_id = COALESCE(NULLIF(twitch_user_id, ''), $2)
         WHERE twitch_user_id = $2
-           OR LOWER(COALESCE(twitch_login, '')) = LOWER($1)
+           OR (NULLIF(TRIM(twitch_user_id), '') IS NULL AND LOWER(COALESCE(twitch_login, '')) = LOWER($1))
         "#,
         r#"
         UPDATE twitch_partner_raid_scores
         SET twitch_login = $1,
             twitch_user_id = COALESCE(NULLIF(twitch_user_id, ''), $2)
         WHERE twitch_user_id = $2
-           OR LOWER(COALESCE(twitch_login, '')) = LOWER($1)
+           OR (NULLIF(TRIM(twitch_user_id), '') IS NULL AND LOWER(COALESCE(twitch_login, '')) = LOWER($1))
         "#,
         r#"
         UPDATE twitch_live_state
         SET streamer_login = $1
         WHERE twitch_user_id = $2
-           OR LOWER(streamer_login) = LOWER($1)
+           OR (NULLIF(TRIM(twitch_user_id), '') IS NULL AND LOWER(streamer_login) = LOWER($1))
         "#,
     ];
     for (idx, sql) in statements.iter().enumerate() {
@@ -555,6 +550,39 @@ fn parse_session_tags(raw: &str) -> Vec<String> {
         .collect()
 }
 
+pub(crate) async fn lock_partner_configuration(
+    tx: &mut Transaction<'_, Postgres>,
+    twitch_user_id: &str,
+    twitch_login: &str,
+) -> Result<bool, sqlx::Error> {
+    let stored_ids: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT twitch_user_id FROM twitch_partners WHERE twitch_user_id = $1 OR LOWER(twitch_login) = $2 ORDER BY twitch_user_id, ctid FOR UPDATE",
+    )
+    .bind(twitch_user_id)
+    .bind(twitch_login)
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(stored_ids
+        .iter()
+        .any(|stored| non_empty(stored.as_deref()).is_some_and(|stored| stored != twitch_user_id)))
+}
+
+pub(crate) async fn partner_configuration_inactive(
+    tx: &mut Transaction<'_, Postgres>,
+    twitch_user_id: &str,
+    twitch_login: &str,
+    allow_technical_recovery: bool,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM twitch_partners WHERE (twitch_user_id = $1 OR (NULLIF(TRIM(twitch_user_id), '') IS NULL AND LOWER(twitch_login) = $3)) AND (status <> 'active' OR COALESCE(manual_partner_opt_out, 0) <> 0 OR admin_archived_at IS NOT NULL OR departnered_at IS NOT NULL OR (NULLIF(TRIM(technical_pause_reason), '') IS NOT NULL AND (NOT $2 OR LOWER(TRIM(technical_pause_reason)) NOT LIKE 'token_error%'))))",
+    )
+    .bind(twitch_user_id)
+    .bind(allow_technical_recovery)
+    .bind(twitch_login)
+    .fetch_one(&mut **tx)
+    .await
+}
+
 pub async fn attach_streamer_guild(
     tx: &mut Transaction<'_, Postgres>,
     twitch_user_id: &str,
@@ -575,6 +603,17 @@ pub async fn attach_streamer_guild(
         STREAMER_GUILD_SOURCE_ADMIN => STREAMER_GUILD_SOURCE_ADMIN,
         _ => STREAMER_GUILD_SOURCE_ONBOARDING,
     };
+    if source == STREAMER_GUILD_SOURCE_ADMIN && !active {
+        sqlx::query(
+            "UPDATE streamer_guilds SET active = FALSE, deactivated_by = $3, deactivated_at = NOW() WHERE twitch_user_id = $1 AND guild_id = $2 AND (active OR deactivated_by IS DISTINCT FROM $3)",
+        )
+        .bind(user_id)
+        .bind(guild_id)
+        .bind(source)
+        .execute(&mut **tx)
+        .await?;
+        return Ok(());
+    }
     sqlx::query(
         r#"
         INSERT INTO streamer_guilds (
@@ -731,6 +770,10 @@ pub async fn promote_streamer_to_partner(
         .execute(&mut **tx)
         .await?;
 
+    if lock_partner_configuration(tx, &normalized_user_id, &normalized_login).await? {
+        return Err(PartnerSetupError::InvalidIdentity);
+    }
+
     match crate::signup_denylist::lookup_or_fail_closed(
         &mut **tx,
         Some(&normalized_user_id),
@@ -818,12 +861,12 @@ pub async fn promote_streamer_to_partner(
         });
     }
 
-    let global_deactivation: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM twitch_partners WHERE twitch_user_id = $1 AND (status <> 'active' OR COALESCE(manual_partner_opt_out, 0) <> 0 OR admin_archived_at IS NOT NULL OR departnered_at IS NOT NULL OR (NULLIF(TRIM(technical_pause_reason), '') IS NOT NULL AND (NOT $2 OR LOWER(TRIM(technical_pause_reason)) NOT LIKE 'token_error%'))))",
+    let global_deactivation = partner_configuration_inactive(
+        tx,
+        &normalized_user_id,
+        &normalized_login,
+        args.activate_partner_features,
     )
-    .bind(&normalized_user_id)
-    .bind(args.activate_partner_features)
-    .fetch_one(&mut **tx)
     .await?;
     if global_deactivation {
         return Ok(PromotedIdentity {
@@ -1058,15 +1101,15 @@ pub async fn promote_streamer_to_partner(
     normalize_related_tables(tx, &normalized_user_id, &normalized_login).await?;
 
     if args.clear_source {
-        sqlx::query!(
+        sqlx::query(
             r#"
             DELETE FROM twitch_streamers
             WHERE twitch_user_id = $1
-               OR LOWER(twitch_login) = LOWER($2)
+               OR (NULLIF(TRIM(twitch_user_id), '') IS NULL AND LOWER(twitch_login) = LOWER($2))
             "#,
-            &normalized_user_id,
-            &normalized_login
         )
+        .bind(&normalized_user_id)
+        .bind(&normalized_login)
         .execute(&mut **tx)
         .await?;
     }

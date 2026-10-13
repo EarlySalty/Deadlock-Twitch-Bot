@@ -115,7 +115,7 @@ async fn falsche_scopes_werden_abgelehnt_ohne_zu_schreiben() {
     let writer = AuthWriter::new(pool.clone(), cipher());
 
     let mut bad = base_auth("42", true);
-    bad.granted_scopes = vec!["bits:read".to_string()]; // unvollständig
+    bad.granted_scopes = vec!["bits:read".to_string()];
     let err = writer
         .store_new_auth(
             &bad,
@@ -183,8 +183,8 @@ async fn reauth_entfernt_blacklist_und_loest_token_error_pause() {
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO twitch_partners (twitch_user_id, technical_pause_reason, raid_bot_enabled)
-         VALUES ('99', 'bot_banned', 0)",
+        "INSERT INTO twitch_partners (twitch_user_id, twitch_login, technical_pause_reason, raid_bot_enabled)
+         VALUES ('99', 'foreign_drag', 'bot_banned', 0)",
     )
     .execute(&pool)
     .await

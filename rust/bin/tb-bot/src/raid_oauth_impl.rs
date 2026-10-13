@@ -3464,6 +3464,195 @@ mod callback_tests {
             .execute(pool).await.unwrap();
     }
 
+    async fn wait_for_database_lock(pool: &PgPool, waiter: i32, blocker: i32) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let blocked: bool = sqlx::query_scalar("SELECT $1 = ANY(pg_blocking_pids($2))")
+                    .bind(blocker)
+                    .bind(waiter)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap();
+                if blocked {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("Der echte Datenbankpfad muss auf die erwartete Zeilensperre warten");
+    }
+
+    #[tokio::test]
+    async fn concurrent_admin_deactivation_is_not_undone_by_oauth_promotion() {
+        use tb_analytics::streamers_crud::{archive_streamer, ArchiveMode};
+        use tb_raid::partner_setup::{
+            promote_streamer_to_partner, PromotePartnerArgs, COMMUNITY_GUILD_ID,
+        };
+        for (login, mode) in [
+            ("reauthme", ArchiveMode::Archive),
+            ("sibling", ArchiveMode::Block),
+        ] {
+            let db = super::auth_test_database::Database::empty().await;
+            let pool = make_pool(&db.pool).await;
+            sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login) VALUES ('222', 'sibling')")
+                .execute(&pool).await.unwrap();
+            seed_legacy_recovery(&pool).await;
+            let mut guild_lock = pool.begin().await.unwrap();
+            sqlx::query("SELECT guild_id FROM discord_guilds FOR UPDATE")
+                .execute(&mut *guild_lock)
+                .await
+                .unwrap();
+            let blocker: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+                .fetch_one(&mut *guild_lock)
+                .await
+                .unwrap();
+            let promotion_pool = pool.clone();
+            let (send, receive) = tokio::sync::oneshot::channel();
+            let promotion = tokio::spawn(async move {
+                let mut tx = promotion_pool.begin().await.unwrap();
+                let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+                    .fetch_one(&mut *tx)
+                    .await
+                    .unwrap();
+                send.send(pid).unwrap();
+                let outcome = promote_streamer_to_partner(
+                    &mut tx,
+                    &PromotePartnerArgs {
+                        twitch_login: "reauthme".into(),
+                        twitch_user_id: "222".into(),
+                        discord_user_id: None,
+                        discord_display_name: None,
+                        is_on_discord: 0,
+                        activate_partner_features: true,
+                        clear_source: true,
+                        guild_id: Some(COMMUNITY_GUILD_ID),
+                    },
+                    Utc::now(),
+                )
+                .await
+                .unwrap();
+                assert!(outcome.reactivated);
+                tx.commit().await.unwrap();
+            });
+            let promotion_pid = receive.await.unwrap();
+            wait_for_database_lock(&pool, promotion_pid, blocker).await;
+            let admin_pool = pool.clone();
+            let admin = tokio::spawn(async move {
+                assert!(archive_streamer(&admin_pool, login, mode).await.unwrap());
+            });
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let waiting: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))")
+                        .bind(promotion_pid).fetch_one(&pool).await.unwrap();
+                    if waiting { break; }
+                    assert!(!admin.is_finished(), "Die Admin-Änderung darf die Aufnahmesperre nicht umgehen");
+                    tokio::task::yield_now().await;
+                }
+            }).await.unwrap();
+            guild_lock.rollback().await.unwrap();
+            promotion.await.unwrap();
+            admin.await.unwrap();
+            let row: (bool, Option<String>, i32, i32) = sqlx::query_as("SELECT admin_archived_at IS NOT NULL, technical_pause_reason, manual_partner_opt_out, raid_bot_enabled FROM twitch_partners WHERE twitch_login = $1")
+                .bind(login).fetch_one(&pool).await.unwrap();
+            if login == "reauthme" {
+                assert!(row.0);
+            } else {
+                assert_eq!(row, (false, Some("blocked".into()), 1, 0));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn callback_writer_preserves_account_wide_duplicate_restrictions() {
+        for restriction in [
+            "manual_partner_opt_out = 1",
+            "admin_archived_at = '2026-01-01T00:00:00Z'",
+            "departnered_at = '2026-01-01T00:00:00Z'",
+            "status = 'archived'",
+            "technical_pause_reason = 'paused_by_admin'",
+            "technical_pause_reason = 'bot_banned'",
+        ] {
+            let db = super::auth_test_database::Database::empty().await;
+            let pool = make_pool(&db.pool).await;
+            seed_legacy_recovery(&pool).await;
+            sqlx::query("UPDATE streamer_guilds SET active = TRUE, deactivated_by = NULL, deactivated_at = NULL")
+                .execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login) VALUES ('222', 'previous_login')")
+                .execute(&pool).await.unwrap();
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE twitch_partners SET {restriction} WHERE twitch_login = 'previous_login'"
+            )))
+            .execute(&pool)
+            .await
+            .unwrap();
+            let before: serde_json::Value = sqlx::query_scalar(
+                "SELECT jsonb_agg(to_jsonb(p) ORDER BY id) FROM twitch_partners p",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            let state = seed_state(&pool, "reauthme", None, None).await;
+            let imp = make_impl(
+                &pool,
+                StubTokenClient::ok(&raid_scopes(), "222", "reauthme"),
+            )
+            .await;
+            assert_eq!(
+                imp.oauth_callback("synthetic-code", &state, "")
+                    .await
+                    .unwrap()
+                    .status,
+                200
+            );
+            let after: serde_json::Value = sqlx::query_scalar(
+                "SELECT jsonb_agg(to_jsonb(p) ORDER BY id) FROM twitch_partners p",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(before, after, "{restriction}");
+            let credentials: (bool, bool, bool) = sqlx::query_as("SELECT COALESCE(access_token, 'ENC') = 'ENC', access_token_enc IS NOT NULL, needs_reauth FROM twitch_raid_auth WHERE twitch_user_id = '222'")
+                .fetch_one(&pool).await.unwrap();
+            assert_eq!(credentials, (true, true, false));
+        }
+    }
+
+    #[tokio::test]
+    async fn callback_rejects_recycled_login_before_credentials_or_membership_changes() {
+        let db = super::auth_test_database::Database::empty().await;
+        let pool = make_pool(&db.pool).await;
+        seed_legacy_recovery(&pool).await;
+        sqlx::query("UPDATE twitch_partners SET status = 'archived', admin_archived_at = '2026-01-01T00:00:00Z', manual_partner_opt_out = 1")
+            .execute(&pool).await.unwrap();
+        let before: serde_json::Value = sqlx::query_scalar("SELECT jsonb_build_object('partners', (SELECT jsonb_agg(to_jsonb(p)) FROM twitch_partners p), 'memberships', (SELECT jsonb_agg(to_jsonb(sg)) FROM streamer_guilds sg))")
+            .fetch_one(&pool).await.unwrap();
+        let state = seed_state(&pool, "reauthme", None, None).await;
+        let imp = make_impl_with_partner_setup(
+            &pool,
+            StubTokenClient::ok(&raid_scopes(), "223", "reauthme"),
+            Some(partner_setup_service(&pool)),
+        )
+        .await;
+        assert_eq!(
+            imp.oauth_callback("synthetic-code", &state, "")
+                .await
+                .unwrap()
+                .status,
+            500
+        );
+        let after: serde_json::Value = sqlx::query_scalar("SELECT jsonb_build_object('partners', (SELECT jsonb_agg(to_jsonb(p)) FROM twitch_partners p), 'memberships', (SELECT jsonb_agg(to_jsonb(sg)) FROM streamer_guilds sg))")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(before, after);
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_raid_auth WHERE twitch_user_id = '223'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 0);
+    }
+
     #[tokio::test]
     async fn reauth_ohne_discord_state_fuehrt_partner_sync_aus() {
         let db = super::auth_test_database::Database::empty().await;
