@@ -29,7 +29,8 @@ use tb_dashboard_api::handlers::{
 const DDL: &[&str] = &[
     "CREATE TABLE streamer_plans (twitch_user_id TEXT, twitch_login TEXT, manual_plan_id TEXT, \
      manual_plan_expires_at TEXT, manual_plan_notes TEXT, manual_plan_updated_at TEXT, \
-     clip_command_enabled INTEGER DEFAULT 1)",
+     clip_command_enabled INTEGER DEFAULT 1, clip_command_duration_seconds DOUBLE PRECISION, \
+     trial_ever_granted INTEGER NOT NULL DEFAULT 1, first_login_at TEXT)",
     "CREATE TABLE twitch_billing_subscriptions (customer_reference TEXT, plan_id TEXT, \
      status TEXT, current_period_end TEXT, updated_at TEXT)",
     "CREATE TABLE twitch_stream_sessions (id BIGSERIAL PRIMARY KEY, streamer_login TEXT, \
@@ -68,7 +69,8 @@ const DDL: &[&str] = &[
      discarded_at TIMESTAMPTZ, kontingent_verbraucht_at TIMESTAMPTZ, layout_override_json JSONB, \
      uploaded_tiktok BOOLEAN DEFAULT FALSE, uploaded_youtube BOOLEAN DEFAULT FALSE, \
      uploaded_instagram BOOLEAN DEFAULT FALSE)",
-    "CREATE TABLE social_media_partner_access (streamer_login TEXT PRIMARY KEY, \
+    "CREATE TABLE twitch_streamers (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT)",
+    "CREATE TABLE social_media_partner_access (streamer_login TEXT PRIMARY KEY, twitch_user_id TEXT UNIQUE, \
      granted BOOLEAN NOT NULL DEFAULT TRUE, updated_at TIMESTAMPTZ DEFAULT NOW(), \
      updated_by TEXT)",
     "CREATE TABLE twitch_raid_history (from_broadcaster_login TEXT, to_broadcaster_login TEXT, \
@@ -139,6 +141,19 @@ fn partner(login: &str) -> DashboardAuthLevel {
     DashboardAuthLevel::Partner {
         twitch_login: login.to_string(),
         twitch_user_id: String::new(),
+        display_name: login.to_string(),
+    }
+}
+
+fn clip_partner(login: &str) -> DashboardAuthLevel {
+    DashboardAuthLevel::Partner {
+        twitch_login: login.to_string(),
+        twitch_user_id: if login == "plusstreamer" {
+            "200"
+        } else {
+            "100"
+        }
+        .to_string(),
         display_name: login.to_string(),
     }
 }
@@ -397,7 +412,11 @@ async fn clip_kontingent_zaehlt_ohne_zu_sperren() {
     let Some(pool) = pool("t_gate_clipfetch").await else {
         return;
     };
-    sqlx::query("INSERT INTO social_media_partner_access (streamer_login, granted) VALUES ('freistreamer', TRUE)")
+    sqlx::query("INSERT INTO social_media_partner_access (streamer_login, twitch_user_id, granted) VALUES ('freistreamer', '100', TRUE)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO twitch_streamers (twitch_user_id, twitch_login) VALUES ('100', 'freistreamer')")
         .execute(&pool)
         .await
         .unwrap();
@@ -415,7 +434,7 @@ async fn clip_kontingent_zaehlt_ohne_zu_sperren() {
     }
 
     let resp = social_media::fetch_clips_handler(
-        partner("freistreamer"),
+        clip_partner("freistreamer"),
         State(pool.clone()),
         Json(serde_json::from_value(json!({ "limit": 20 })).unwrap()),
     )
@@ -428,7 +447,7 @@ async fn clip_kontingent_zaehlt_ohne_zu_sperren() {
 
     // Gezaehlt wird trotzdem, und zwar richtig.
     let stand = clip_command_settings::get_handler(
-        partner("freistreamer"),
+        clip_partner("freistreamer"),
         State(pool),
         Query(clip_command_settings::ClipCommandQuery { streamer: None }),
     )
@@ -465,7 +484,7 @@ async fn kontingent_zaehlt_aufnahme_nicht_twitch_datum() {
 
     let stand = |pool: PgPool| async move {
         let resp = clip_command_settings::get_handler(
-            partner("freistreamer"),
+            clip_partner("freistreamer"),
             State(pool),
             Query(clip_command_settings::ClipCommandQuery { streamer: None }),
         )
@@ -532,7 +551,7 @@ async fn clip_command_settings_zeigt_den_zaehlerstand() {
 
     for (login, stufe) in [("freistreamer", "free"), ("plusstreamer", "plus")] {
         let resp = clip_command_settings::get_handler(
-            partner(login),
+            clip_partner(login),
             State(pool.clone()),
             Query(clip_command_settings::ClipCommandQuery { streamer: None }),
         )

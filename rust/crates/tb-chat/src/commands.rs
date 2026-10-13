@@ -303,14 +303,25 @@ pub struct AutobanEntry {
 /// Helix-Client und Krypto-Key vorhanden sind).
 #[async_trait]
 pub trait ClipPort: Send + Sync {
-    async fn create_clip(&self, broadcaster_user_id: &str, broadcaster_login: &str) -> ClipOutcome;
+    async fn create_clip(
+        &self,
+        broadcaster_user_id: &str,
+        broadcaster_login: &str,
+        duration_seconds: f64,
+        title: &str,
+    ) -> ClipOutcome;
 }
 
 /// Ergebnis eines `!clip`-Versuchs (Port von `commands.py:284-408`).
 #[derive(Debug, Clone)]
 pub enum ClipOutcome {
     /// Clip erstellt — fertige Clip-URL.
-    Created { url: String },
+    Created {
+        url: String,
+    },
+    Pending {
+        url: String,
+    },
     /// Keine gültige Broadcaster-Autorisierung (`clips:edit` fehlt / nicht verbunden).
     OAuthMissing,
     /// Twitch-Fehler oder kein Clip zurück.
@@ -1783,8 +1794,8 @@ impl CommandEngine {
         // Dashboard-Toggle (streamer_plans.clip_command_enabled). Aus heißt:
         // kein Helix-Call und keine Antwort im Chat. Bei DB-Fehlern erklärt
         // eine Antwort den Ausfall; eine fehlende Zeile behält den Default an.
-        let enabled = sqlx::query_scalar(
-            "SELECT COALESCE(clip_command_enabled, 1)
+        let settings = sqlx::query_as::<_, (i32, Option<f64>)>(
+            "SELECT COALESCE(clip_command_enabled, 1), clip_command_duration_seconds
                FROM streamer_plans
               WHERE twitch_user_id = $1
               LIMIT 1",
@@ -1792,16 +1803,25 @@ impl CommandEngine {
         .bind(&event.broadcaster_user_id)
         .fetch_optional(&self.pool)
         .await;
-        let enabled = match enabled {
-            Ok(value) => value.unwrap_or(1) != 0,
+        let (enabled, duration) = match settings {
+            Ok(value) => value.unwrap_or((1, None)),
             Err(error) => {
-                tracing::warn!(%error, channel = %event.broadcaster_user_login, "!clip Toggle konnte nicht gelesen werden");
+                tracing::warn!(%error, channel = %event.broadcaster_user_login, "!clip Einstellungen konnten nicht gelesen werden");
                 self.reply(event, "Die Einstellung kann ich gerade nicht abrufen.")
                     .await;
                 return;
             }
         };
-        if !enabled {
+        if enabled == 0 {
+            return;
+        }
+        let duration = duration.unwrap_or(tb_domain::clip::DEFAULT_DURATION_SECONDS);
+        if !tb_domain::clip::valid_duration(duration) {
+            self.reply(
+                event,
+                "Die Clip-Dauer ist ungültig. Bitte im Dashboard 5 bis 60 Sekunden einstellen.",
+            )
+            .await;
             return;
         }
 
@@ -1872,20 +1892,29 @@ impl CommandEngine {
         };
 
         match clip_port
-            .create_clip(&partner.twitch_user_id, &partner.twitch_login)
+            .create_clip(
+                &partner.twitch_user_id,
+                &partner.twitch_login,
+                duration,
+                &title,
+            )
             .await
         {
             ClipOutcome::Created { url } => {
                 let suffix = if title.is_empty() {
                     String::new()
                 } else {
-                    format!(" – \"{title}\"")
+                    format!(" (\"{title}\")")
                 };
                 self.reply(
                     event,
-                    &format!("🎬 Clip erstellt{suffix} (ca. letzte 30s): {url}"),
+                    &format!("🎬 Clip erstellt{suffix} (ca. letzte {duration}s): {url}"),
                 )
                 .await;
+            }
+            ClipOutcome::Pending { url } => {
+                self.reply(event, &format!("Twitch verarbeitet den Clip noch. Die Erstellung ist noch nicht bestätigt: {url}"))
+                    .await;
             }
             ClipOutcome::OAuthMissing => {
                 self.reply(event, CLIP_OAUTH_MISSING_REPLY).await;
@@ -3119,6 +3148,7 @@ mod tests {
                 stat_command_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
                 command_name_overrides JSONB NOT NULL DEFAULT '{}'::jsonb,
                 clip_command_enabled INTEGER DEFAULT 1,
+                clip_command_duration_seconds DOUBLE PRECISION,
                 promo_disabled INTEGER DEFAULT 0,
                 manual_plan_id TEXT,
                 manual_plan_expires_at TIMESTAMPTZ,
@@ -4171,7 +4201,13 @@ mod tests {
 
     #[async_trait]
     impl ClipPort for CountingClipPort {
-        async fn create_clip(&self, _broadcaster_user_id: &str, _login: &str) -> ClipOutcome {
+        async fn create_clip(
+            &self,
+            _broadcaster_user_id: &str,
+            _login: &str,
+            _duration_seconds: f64,
+            _title: &str,
+        ) -> ClipOutcome {
             self.calls.fetch_add(1, Ordering::SeqCst);
             ClipOutcome::Created {
                 url: "https://clips.twitch.tv/testclip".to_string(),

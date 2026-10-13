@@ -1,5 +1,6 @@
 //! Reine Domänen-Typen des Twitch-Bots (kein I/O, kein sqlx).
 
+pub mod clip;
 pub mod ids;
 pub mod login;
 pub mod partner;

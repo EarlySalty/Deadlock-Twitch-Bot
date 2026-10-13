@@ -4352,6 +4352,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tb-config",
+ "tb-domain",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
