@@ -95,6 +95,7 @@ pub struct LearnedChange<'a> {
     pub evidence: Option<&'a SkillEvidence>,
     pub actor: &'a str,
     pub max_bytes: usize,
+    pub expected_version: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -330,6 +331,12 @@ pub async fn activate_learned(
     lock_skill(&mut tx, id).await?;
     seed_baseline(&mut tx, id).await?;
     let current = current_version(&mut tx, id).await?;
+    if change
+        .expected_version
+        .is_some_and(|expected| expected != current)
+    {
+        return Err(SkillRegistryError::Conflict);
+    }
     let sha256 = sha256_hex(change.text);
     let active_sha: String = sqlx::query_scalar(
         "SELECT sha256 FROM public.social_ai_skill_versions WHERE skill_id = $1 AND version = $2",

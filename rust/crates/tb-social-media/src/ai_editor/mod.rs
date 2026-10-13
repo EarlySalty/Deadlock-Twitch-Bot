@@ -1,3 +1,4 @@
+pub mod learning;
 mod media;
 mod model;
 pub mod options;

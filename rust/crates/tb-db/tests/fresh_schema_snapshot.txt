@@ -601,6 +601,10 @@ social_ai_jobs|status|text|NO|'queued'::text
 social_ai_jobs|twitch_user_id|bigint|NO|
 social_ai_jobs|uncertainty|jsonb|NO|'[]'::jsonb
 social_ai_jobs|updated_at|timestamp with time zone|NO|now()
+social_ai_personal_preferences|last_event_id|bigint|NO|
+social_ai_personal_preferences|profile|jsonb|NO|
+social_ai_personal_preferences|twitch_user_id|bigint|NO|
+social_ai_personal_preferences|updated_at|timestamp with time zone|NO|now()
 social_ai_plan_limit_drafts|monthly_ai_jobs|bigint|YES|
 social_ai_plan_limit_drafts|monthly_cap_micro_usd|bigint|YES|
 social_ai_plan_limit_drafts|monthly_revisions|bigint|YES|
