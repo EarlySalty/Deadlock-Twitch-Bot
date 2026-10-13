@@ -1,16 +1,5 @@
-//! Quell-Eligibility fürs Auto-Raid: darf für diesen Broadcaster beim
-//! Offline-Gehen überhaupt ein Auto-Raid laufen? Port von
-//! `storage/partner_registry.py` `load_offline_auto_raid_eligibility` +
-//! der Skip-Kaskade in `offline_raid_orchestrator.handle_streamer_offline`.
-//!
-//! Python lud dafür die komplette Partner-Zeile (20 Spalten) und griff per
-//! Index `row[13]` auf `raid_bot_enabled` zu — hier werden genau die zwei
-//! benötigten Werte selektiert. `twitch_partners.raid_bot_enabled` ist
-//! **INTEGER** (0/1), `twitch_raid_auth.raid_enabled` **BOOLEAN**.
-
 use sqlx::PgPool;
 
-/// Ergebnis der Eligibility-Prüfung (Python `OfflineAutoRaidEligibility`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OfflineAutoRaidEligibility {
     pub active_partner: bool,
@@ -24,7 +13,6 @@ impl OfflineAutoRaidEligibility {
         self.active_partner && self.raid_bot_enabled && self.raid_auth_enabled
     }
 
-    /// Erster greifender Skip-Grund in Python-Reihenfolge, `None` wenn erlaubt.
     pub fn skip_reason(&self) -> Option<&'static str> {
         if !self.active_partner && !self.auth_row_found {
             return Some("not_found");
@@ -52,7 +40,6 @@ impl OfflineEligibilityStore {
         Self { pool }
     }
 
-    /// Lädt die Eligibility für einen Broadcaster. Leere ID → alles `false`.
     pub async fn load(
         &self,
         twitch_user_id: &str,
@@ -67,13 +54,12 @@ impl OfflineEligibilityStore {
             });
         }
 
-        // Neueste aktive Partner-Zeile (Python: status='active', ORDER BY id DESC).
-        let partner_row: Option<Option<i32>> = sqlx::query_scalar!(
-            r#"SELECT raid_bot_enabled AS "raid_bot_enabled?" FROM twitch_partners
-              WHERE twitch_user_id = $1 AND status = 'active'
-              ORDER BY id DESC LIMIT 1"#,
-            user_id
+        let partner_row: Option<Option<i32>> = sqlx::query_scalar(
+            "SELECT raid_bot_enabled FROM twitch_partners_all_state
+              WHERE twitch_user_id = $1 AND is_partner_active = 1 AND operational_state = 'active'
+              ORDER BY id DESC LIMIT 1",
         )
+        .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
 

@@ -1074,12 +1074,7 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             })?
             .unwrap_or_else(|| self.redirect_uri.clone());
 
-        let url = build_authorize_url(
-            &self.client_id,
-            &redirect_uri,
-            &info.scope_profile,
-            state,
-        );
+        let url = build_authorize_url(&self.client_id, &redirect_uri, &info.scope_profile, state);
         Ok(Some(url))
     }
 
@@ -1376,7 +1371,7 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
                 return Ok(failure(403, block.public_title(), block.public_body_html()));
             }
             Ok(None) => {}
-            Err(()) => return Ok(generic_failure()),
+            Err(_) => return Ok(generic_failure()),
         }
 
         // 8. Erst-Auth erkennen — entscheidet das Followup-Routing in
@@ -1683,12 +1678,12 @@ async fn partner_needs_reactivation(
     let row: Result<Option<Option<bool>>, _> = sqlx::query_scalar(
         r#"
         SELECT COUNT(*) > 0
-           AND COUNT(*) FILTER (WHERE COALESCE(status, '') = 'active') = 0
-           AND COUNT(*) FILTER (
-                 WHERE LOWER(TRIM(COALESCE(technical_pause_reason, '')))
-                       IN ('blocked', 'bot_banned')
-               ) = 0
-        FROM twitch_partners
+           AND COUNT(*) FILTER (WHERE COALESCE(is_partner_active, 0) = 1) = 0
+           AND COUNT(*) FILTER (WHERE COALESCE(status, '') <> 'active'
+                 OR COALESCE(manual_partner_opt_out, 0) <> 0
+                 OR LOWER(TRIM(COALESCE(technical_pause_reason, '')))
+                       IN ('blocked', 'bot_banned')) = 0
+        FROM twitch_partners_all_state
         WHERE ($1 <> '' AND twitch_user_id = $1)
            OR ($2 <> '' AND LOWER(twitch_login) = LOWER($2))
         "#,
@@ -2082,8 +2077,9 @@ mod db_tests {
             SELECT
                 p.twitch_user_id,
                 p.twitch_login,
+                p.status, p.manual_partner_opt_out, p.technical_pause_reason,
                 COALESCE(NULLIF(i.discord_user_id, ''), p.discord_user_id) AS discord_user_id,
-                CASE WHEN p.status = 'active' AND COALESCE(p.manual_partner_opt_out, 0) = 0
+                CASE WHEN p.status = 'active' AND COALESCE(p.manual_partner_opt_out, 0) = 0 AND COALESCE(p.technical_pause_reason, '') = ''
                      THEN 1 ELSE 0 END AS is_partner_active
             FROM twitch_partners p
             LEFT JOIN twitch_streamer_identities i ON i.twitch_user_id = p.twitch_user_id
@@ -2604,17 +2600,17 @@ mod db_tests {
     }
 
     #[tokio::test]
-    async fn reaktivierung_noetig_bei_selfservice_disconnect() {
+    async fn keine_reaktivierung_bei_selfservice_disconnect() {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_ro_needs_react_departnered").await;
         insert_partner(&pool, "getrennt", "uid_dep", "departnered", None).await;
 
         assert!(
-            partner_needs_reactivation(&pool, "uid_dep", "getrennt").await,
+            !partner_needs_reactivation(&pool, "uid_dep", "getrennt").await,
             "departnered ohne Hard-Kill → Followup muss laufen"
         );
         assert!(
-            partner_needs_reactivation(&pool, "", "GeTrEnNt").await,
+            !partner_needs_reactivation(&pool, "", "GeTrEnNt").await,
             "Login-Treffer ist case-insensitiv"
         );
     }
@@ -2624,16 +2620,9 @@ mod db_tests {
         let dsn = db_dsn_or_skip!();
         let pool = make_pool(&dsn, "test_ro_needs_react_soft").await;
         insert_partner(&pool, "archiviert", "uid_arch", "archived", None).await;
-        insert_partner(
-            &pool,
-            "tokenweg",
-            "uid_tok",
-            "token_error",
-            Some("token_error"),
-        )
-        .await;
+        insert_partner(&pool, "tokenweg", "uid_tok", "active", Some("token_error")).await;
 
-        assert!(partner_needs_reactivation(&pool, "uid_arch", "archiviert").await);
+        assert!(!partner_needs_reactivation(&pool, "uid_arch", "archiviert").await);
         assert!(partner_needs_reactivation(&pool, "uid_tok", "tokenweg").await);
     }
 
@@ -3016,6 +3005,34 @@ mod callback_tests {
             ));
         }
         referral_test_support::schema(&pool).await;
+        sqlx::raw_sql(
+            "ALTER TABLE twitch_partners ADD COLUMN verified BOOLEAN NOT NULL DEFAULT FALSE, ADD COLUMN inactivity_flagged_at TEXT;
+             CREATE TABLE discord_guilds (guild_id BIGINT PRIMARY KEY, status TEXT DEFAULT 'active', removed_at TIMESTAMPTZ, auto_partner_default BOOLEAN DEFAULT TRUE);
+             CREATE TABLE streamer_guilds (twitch_user_id TEXT, guild_id BIGINT REFERENCES discord_guilds(guild_id), active BOOLEAN NOT NULL, source TEXT NOT NULL, deactivated_by TEXT, deactivated_at TIMESTAMPTZ, PRIMARY KEY(twitch_user_id, guild_id));
+             CREATE TABLE twitch_exclusions (twitch_user_id TEXT PRIMARY KEY, kind TEXT, reactivated_at TIMESTAMPTZ);",
+        ).execute(&pool).await.unwrap();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(
+            include_str!("../../../migrations/20261013150100_multiserver_partner_contract.sql")
+                .replace("public.", ""),
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query(
+            "CREATE VIEW twitch_partners_all_state AS SELECT * FROM twitch_partners_legacy_state",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(
+            include_str!("../../../migrations/20261013150300_multiserver_partner_cutover.sql")
+                .replace("public.", ""),
+        ))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
         pool
     }
 
@@ -3346,7 +3363,10 @@ mod callback_tests {
             .expect("auth_url");
         let parsed = url::Url::parse(&auth_url).unwrap();
         let pairs: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
-        assert_eq!(pairs.get("redirect_uri").map(String::as_str), Some(configured));
+        assert_eq!(
+            pairs.get("redirect_uri").map(String::as_str),
+            Some(configured)
+        );
         let result = imp
             .oauth_callback("code-1", pairs.get("state").unwrap(), "")
             .await
@@ -3411,7 +3431,7 @@ mod callback_tests {
     async fn signup_block_lookup_fehler_speichert_keine_credentials() {
         let db = super::auth_test_database::Database::empty().await;
         let pool = make_pool(&db.pool).await;
-        sqlx::query("DROP TABLE twitch_partner_signup_denylist")
+        sqlx::query("DROP TABLE twitch_partner_signup_denylist CASCADE")
             .execute(&pool)
             .await
             .unwrap();
@@ -3436,26 +3456,19 @@ mod callback_tests {
         assert_eq!(auth_rows.0, 0, "DB-Fehler darf nicht still durchlassen");
     }
 
+    async fn seed_legacy_recovery(pool: &PgPool) {
+        sqlx::raw_sql("INSERT INTO discord_guilds (guild_id) VALUES (1289721245281292288);
+            INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth) VALUES ('222', 'reauthme', FALSE, TRUE);
+            INSERT INTO twitch_partners (twitch_user_id, twitch_login, status, manual_partner_opt_out, raid_bot_enabled, technical_pause_reason) VALUES ('222', 'reauthme', 'active', 0, 0, 'token_error');
+            INSERT INTO streamer_guilds VALUES ('222', 1289721245281292288, FALSE, 'migration', 'migration', NOW());")
+            .execute(pool).await.unwrap();
+    }
+
     #[tokio::test]
     async fn reauth_ohne_discord_state_fuehrt_partner_sync_aus() {
         let db = super::auth_test_database::Database::empty().await;
         let pool = make_pool(&db.pool).await;
-        sqlx::query(
-            "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth)
-             VALUES ('222', 'reauthme', FALSE, TRUE)",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status,
-                manual_partner_opt_out, raid_bot_enabled, technical_pause_reason)
-             VALUES ('222', 'reauthme', 'active', 1, 0, 'token_error')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
+        seed_legacy_recovery(&pool).await;
         let state = seed_state(&pool, "reauthme", None, None).await;
         let imp = make_impl_with_partner_setup(
             &pool,
@@ -3463,98 +3476,75 @@ mod callback_tests {
             Some(partner_setup_service(&pool)),
         )
         .await;
-
-        let result = imp
-            .oauth_callback("code-1", &state, "")
-            .await
-            .expect("callback");
-        assert_eq!(result.status, 200, "body: {}", result.body_html);
-
-        for _ in 0..50 {
-            let (opt_out, raid_enabled, pause): (Option<i32>, Option<i32>, Option<String>) =
-                sqlx::query_as(
-                    "SELECT manual_partner_opt_out, raid_bot_enabled, technical_pause_reason
-                     FROM twitch_partners WHERE twitch_user_id = '222'",
-                )
-                .fetch_one(&pool)
+        assert_eq!(
+            imp.oauth_callback("synthetic-code", &state, "")
                 .await
-                .unwrap();
-            if opt_out == Some(0) && raid_enabled == Some(1) && pause.is_none() {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-
-        let state: (Option<i32>, Option<i32>, Option<String>) = sqlx::query_as(
-            "SELECT manual_partner_opt_out, raid_bot_enabled, technical_pause_reason
-             FROM twitch_partners WHERE twitch_user_id = '222'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        panic!("Partner-Sync nach Reauth ohne Discord-ID blieb aus: {state:?}");
+                .unwrap()
+                .status,
+            200
+        );
+        let row: (bool, Option<String>, bool, i32, String) = sqlx::query_as("SELECT sg.active, sg.deactivated_by, sg.deactivated_at IS NULL, p.is_partner_active, p.operational_state FROM streamer_guilds sg JOIN twitch_partners_all_state p USING(twitch_user_id) WHERE twitch_user_id = '222'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(row, (true, None, true, 1, "active".into()));
+        let config: (i32, i32, Option<String>) = sqlx::query_as("SELECT manual_partner_opt_out, raid_bot_enabled, technical_pause_reason FROM twitch_partners WHERE twitch_user_id = '222'").fetch_one(&pool).await.unwrap();
+        assert_eq!(config, (0, 1, None));
     }
 
     #[tokio::test]
-    async fn reauth_ohne_discord_state_holt_getrennten_partner_zurueck() {
-        // Der Weg, den das Dashboard bei inaktivem Partner anbietet:
-        // „Jetzt neu autorisieren" → /twitch/raid/auth → Callback, ohne
-        // Discord-ID im State. Vorher ein No-op — der Streamer blieb passiv.
-        let db = super::auth_test_database::Database::empty().await;
-        let pool = make_pool(&db.pool).await;
-        sqlx::query(
-            "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled)
-             VALUES ('333', 'getrennt', FALSE)",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status,
-                manual_partner_opt_out, raid_bot_enabled, departnered_at, silent_ban)
-             VALUES ('333', 'getrennt', 'departnered', 1, 0, '2026-08-03T15:36:21+00:00', 1)",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let state = seed_state(&pool, "getrennt", None, None).await;
-        let imp = make_impl_with_partner_setup(
-            &pool,
-            StubTokenClient::ok(&raid_scopes(), "333", "getrennt"),
-            Some(partner_setup_service(&pool)),
-        )
-        .await;
-
-        let result = imp
-            .oauth_callback("code-1", &state, "")
-            .await
-            .expect("callback");
-        assert_eq!(result.status, 200, "body: {}", result.body_html);
-
-        for _ in 0..50 {
-            let row: (i64, Option<String>, Option<i32>, Option<i32>) = sqlx::query_as(
-                "SELECT COUNT(*) OVER (), status, manual_partner_opt_out, silent_ban
-                 FROM twitch_partners WHERE twitch_user_id = '333' ORDER BY status LIMIT 1",
+    async fn reauth_ohne_discord_state_bewahrt_deaktivierung() {
+        for change in [
+            "UPDATE streamer_guilds SET deactivated_by = 'discord:admin'",
+            "UPDATE twitch_partners SET manual_partner_opt_out = 1",
+            "UPDATE twitch_partners SET admin_archived_at = '2026-01-01T00:00:00Z'",
+            "UPDATE twitch_partners SET status = 'archived'",
+            "UPDATE twitch_partners SET technical_pause_reason = 'blocked'",
+            "UPDATE twitch_partners SET technical_pause_reason = ' Bot_Banned '",
+            "INSERT INTO twitch_exclusions VALUES ('222', 'banned', NULL)",
+            "UPDATE discord_guilds SET removed_at = NOW()",
+        ] {
+            let db = super::auth_test_database::Database::empty().await;
+            let pool = make_pool(&db.pool).await;
+            seed_legacy_recovery(&pool).await;
+            sqlx::query(sqlx::AssertSqlSafe(change))
+                .execute(&pool)
+                .await
+                .unwrap();
+            let before: serde_json::Value = sqlx::query_scalar(
+                "SELECT to_jsonb(p) FROM twitch_partners p WHERE twitch_user_id = '222'",
             )
             .fetch_one(&pool)
             .await
             .unwrap();
-            if row.1.as_deref() == Some("active") && row.2 == Some(0) {
-                assert_eq!(row.0, 1, "keine zweite Partner-Zeile");
-                assert_eq!(row.3, Some(1), "Kanal-Konfiguration überlebt");
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            let state = seed_state(&pool, "reauthme", None, None).await;
+            let imp = make_impl_with_partner_setup(
+                &pool,
+                StubTokenClient::ok(&raid_scopes(), "222", "reauthme"),
+                Some(partner_setup_service(&pool)),
+            )
+            .await;
+            assert_eq!(
+                imp.oauth_callback("synthetic-code", &state, "")
+                    .await
+                    .unwrap()
+                    .status,
+                200,
+                "{change}"
+            );
+            let after: serde_json::Value = sqlx::query_scalar(
+                "SELECT to_jsonb(p) FROM twitch_partners p WHERE twitch_user_id = '222'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(before, after, "{change}");
+            let active: bool = sqlx::query_scalar(
+                "SELECT active FROM streamer_guilds WHERE twitch_user_id = '222'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert!(!active, "{change}");
         }
-
-        let state: (Option<String>, Option<i32>) = sqlx::query_as(
-            "SELECT status, manual_partner_opt_out FROM twitch_partners WHERE twitch_user_id = '333'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        panic!("Re-Auth hat den getrennten Partner nicht reaktiviert: {state:?}");
     }
 
     #[tokio::test]

@@ -1,6 +1,3 @@
-//! Hermetische Tests des Onboarding-/Re-Auth-Writes. Round-Trip-Verifikation
-//! über RaidAuthStore; Scope-Validierung + raid_enabled-Erhalt geprüft.
-
 use chrono::Utc;
 use std::sync::Arc;
 use tb_crypto::{FieldCipher, KID};
@@ -44,7 +41,6 @@ fn cipher() -> Arc<FieldCipher> {
     Arc::new(FieldCipher::from_hex_key(TEST_KEY_HEX, KID).unwrap())
 }
 
-/// Die exakten BASE-Profil-Scopes (Reihenfolge egal — store validiert per Set).
 const BASE_SCOPES: &[&str] = &[
     "channel:manage:raids",
     "channel:manage:moderators",
@@ -69,11 +65,24 @@ fn base_auth(user_id: &str, activate: bool) -> NewAuth {
     }
 }
 
+async fn runtime_database() -> Database {
+    let db = Database::new().await;
+    sqlx::raw_sql("ALTER TABLE twitch_partners ADD COLUMN twitch_login TEXT DEFAULT 'drag', ADD COLUMN status TEXT DEFAULT 'active', ADD COLUMN admin_archived_at TEXT, ADD COLUMN departnered_at TEXT;
+        CREATE TABLE discord_guilds (guild_id BIGINT PRIMARY KEY, status TEXT DEFAULT 'active', removed_at TIMESTAMPTZ);
+        CREATE TABLE streamer_guilds (twitch_user_id TEXT, guild_id BIGINT REFERENCES discord_guilds(guild_id), active BOOLEAN, source TEXT, deactivated_by TEXT, deactivated_at TIMESTAMPTZ);
+        CREATE TABLE twitch_exclusions (twitch_user_id TEXT, reactivated_at TIMESTAMPTZ);
+        CREATE TABLE twitch_partner_signup_denylist (twitch_user_id TEXT, twitch_login TEXT);
+        INSERT INTO discord_guilds VALUES (1289721245281292288, 'active', NULL);
+        INSERT INTO streamer_guilds VALUES ('42', 1289721245281292288, FALSE, 'migration', 'migration', NOW());")
+        .execute(&db.pool).await.unwrap();
+    db
+}
+
 type PartnerPauseRow = (String, Option<String>, Option<i32>, Option<i32>);
 
 #[tokio::test]
 async fn neuer_auth_wird_verschluesselt_gespeichert_und_ist_lesbar() {
-    let db = Database::new().await;
+    let db = runtime_database().await;
     let pool = db.pool.clone();
     let cipher = cipher();
     let writer = AuthWriter::new(pool.clone(), cipher.clone());
@@ -101,7 +110,7 @@ async fn neuer_auth_wird_verschluesselt_gespeichert_und_ist_lesbar() {
 
 #[tokio::test]
 async fn falsche_scopes_werden_abgelehnt_ohne_zu_schreiben() {
-    let db = Database::new().await;
+    let db = runtime_database().await;
     let pool = db.pool.clone();
     let writer = AuthWriter::new(pool.clone(), cipher());
 
@@ -126,11 +135,10 @@ async fn falsche_scopes_werden_abgelehnt_ohne_zu_schreiben() {
 
 #[tokio::test]
 async fn bestehendes_raid_enabled_bleibt_bei_reauth_erhalten() {
-    let db = Database::new().await;
+    let db = runtime_database().await;
     let pool = db.pool.clone();
     let writer = AuthWriter::new(pool.clone(), cipher());
 
-    // Bestehende Zeile: raid_enabled=true, needs_reauth=true.
     sqlx::query(
         "INSERT INTO twitch_raid_auth (twitch_user_id, twitch_login, raid_enabled, needs_reauth)
          VALUES ('42', 'drag', TRUE, TRUE)",
@@ -139,7 +147,6 @@ async fn bestehendes_raid_enabled_bleibt_bei_reauth_erhalten() {
     .await
     .unwrap();
 
-    // Re-Auth OHNE activate_raid_features → raid_enabled bleibt true (Erhalt).
     writer
         .store_new_auth(&base_auth("42", false), &valid_client(), Utc::now())
         .await
@@ -157,11 +164,10 @@ async fn bestehendes_raid_enabled_bleibt_bei_reauth_erhalten() {
 
 #[tokio::test]
 async fn reauth_entfernt_blacklist_und_loest_token_error_pause() {
-    let db = Database::new().await;
+    let db = runtime_database().await;
     let pool = db.pool.clone();
     let writer = AuthWriter::new(pool.clone(), cipher());
 
-    // Ausgangslage: wegen invalid_grant blacklisteter + technisch pausierter Partner.
     sqlx::query(
         "INSERT INTO twitch_token_blacklist (twitch_user_id, twitch_login) VALUES ('42', 'drag')",
     )
@@ -171,12 +177,11 @@ async fn reauth_entfernt_blacklist_und_loest_token_error_pause() {
     sqlx::query(
         "INSERT INTO twitch_partners (twitch_user_id, technical_pause_reason,
             manual_partner_opt_out, raid_bot_enabled)
-         VALUES ('42', 'token_error', 1, 0)",
+         VALUES ('42', 'token_error', 0, 0)",
     )
     .execute(&pool)
     .await
     .unwrap();
-    // Fremder Partner mit anderem Pause-Grund bleibt unangetastet.
     sqlx::query(
         "INSERT INTO twitch_partners (twitch_user_id, technical_pause_reason, raid_bot_enabled)
          VALUES ('99', 'bot_banned', 0)",
@@ -185,13 +190,11 @@ async fn reauth_entfernt_blacklist_und_loest_token_error_pause() {
     .await
     .unwrap();
 
-    // Erfolgreiche Re-Autorisierung.
     writer
         .store_new_auth(&base_auth("42", true), &valid_client(), Utc::now())
         .await
         .unwrap();
 
-    // Blacklist-Eintrag entfernt.
     let bl: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM twitch_token_blacklist WHERE twitch_user_id='42'")
             .fetch_one(&pool)
@@ -199,8 +202,6 @@ async fn reauth_entfernt_blacklist_und_loest_token_error_pause() {
             .unwrap();
     assert_eq!(bl, 0, "Blacklist-Eintrag nach Re-Auth gelöscht");
 
-    // technical_pause_reason='token_error' aufgehoben, technischer Opt-out
-    // zurückgesetzt und Raid wieder aktiviert.
     let (pause, opt_out, raid_enabled): (Option<String>, Option<i32>, Option<i32>) =
         sqlx::query_as("SELECT technical_pause_reason, manual_partner_opt_out, raid_bot_enabled FROM twitch_partners WHERE twitch_user_id='42'")
             .fetch_one(&pool)
@@ -227,8 +228,8 @@ async fn reauth_entfernt_blacklist_und_loest_token_error_pause() {
 }
 
 #[tokio::test]
-async fn reauth_loest_token_error_suffix_pause_auch_ohne_aktivierung() {
-    let db = Database::new().await;
+async fn reauth_bewahrt_token_error_suffix_pause_ohne_aktivierung() {
+    let db = runtime_database().await;
     let pool = db.pool.clone();
     let writer = AuthWriter::new(pool.clone(), cipher());
 
@@ -264,14 +265,14 @@ async fn reauth_loest_token_error_suffix_pause_auch_ohne_aktivierung() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(pause, None, "token_error*-Pause aufgehoben");
-    assert_eq!(opt_out, Some(0), "technischer Opt-out zurückgesetzt");
-    assert_eq!(raid_enabled, Some(1));
+    assert_eq!(pause.as_deref(), Some("token_error_expired"));
+    assert_eq!(opt_out, Some(1));
+    assert_eq!(raid_enabled, Some(0));
 }
 
 #[tokio::test]
 async fn reauth_reaktiviert_hard_pause_nicht() {
-    let db = Database::new().await;
+    let db = runtime_database().await;
     let pool = db.pool.clone();
     let writer = AuthWriter::new(pool.clone(), cipher());
 
@@ -304,7 +305,7 @@ async fn reauth_reaktiviert_hard_pause_nicht() {
 
 #[tokio::test]
 async fn reauth_respektiert_echte_optouts_und_hard_pauses() {
-    let db = Database::new().await;
+    let db = runtime_database().await;
     let pool = db.pool.clone();
     let writer = AuthWriter::new(pool.clone(), cipher());
 

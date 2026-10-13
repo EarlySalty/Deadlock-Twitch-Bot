@@ -1,10 +1,5 @@
-//! Hermetische DB-Tests für das Partner-Setup nach OAuth-Auth
-//! (`promote_streamer_to_partner` + `PartnerSetupService`).
-//!
-//! DDL prod-treu (Schema-Dump 11.6.): `twitch_partners`-Timestamps TEXT,
-//! Flags INTEGER, `live_ping_role_id` BIGINT; `twitch_streamer_identities`
-//! created_at/updated_at TEXT; `twitch_streamers` nur noch Identitäts-Spalten.
-
+#[path = "../../../test-support/postgres.rs"]
+mod test_postgres;
 #[path = "../../../test-support/schema_sql.rs"]
 mod test_sql;
 
@@ -76,7 +71,6 @@ mod referral_test_support {
 
 async fn apply_ddl(pool: &PgPool) {
     for ddl in [
-        // Prod: alle Timestamp-Spalten TEXT, Flags INTEGER, live_ping_role_id BIGINT.
         r#"CREATE TABLE twitch_partners (
             id BIGSERIAL PRIMARY KEY,
             twitch_user_id TEXT,
@@ -123,10 +117,6 @@ async fn apply_ddl(pool: &PgPool) {
             twitch_user_id TEXT PRIMARY KEY,
             twitch_login TEXT
         )"#,
-        // Signup-Denylist: eigenstaendiger Zustand "gehoert nicht ins
-        // Partnerprogramm". Muss hier stehen, weil der Promote-Guard
-        // fail-closed ist — eine fehlende Tabelle wuerde jede Promotion
-        // abbrechen statt sie durchzulassen.
         r#"CREATE TABLE twitch_partner_signup_denylist (
             twitch_user_id TEXT PRIMARY KEY,
             twitch_login TEXT NOT NULL,
@@ -195,13 +185,17 @@ async fn apply_ddl(pool: &PgPool) {
             deactivated_at TIMESTAMPTZ,
             joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             source TEXT NOT NULL DEFAULT 'onboarding',
-            PRIMARY KEY (twitch_user_id, guild_id)
+            PRIMARY KEY (twitch_user_id, guild_id),
+            CHECK (active OR deactivated_at IS NOT NULL)
         )"#,
+        r#"CREATE TABLE twitch_exclusions (
+            twitch_user_id TEXT PRIMARY KEY, kind TEXT NOT NULL, reactivated_at TIMESTAMPTZ
+        )"#,
+        r#"INSERT INTO discord_guilds (guild_id, name, language)
+            VALUES (1289721245281292288, 'Deutsche Deadlock Community', 'de')"#,
     ] {
         sqlx::query(ddl).execute(pool).await.unwrap();
     }
-    // Die produktive SQL-Funktion prüft ihre Tabellen bereits beim Anlegen.
-    // Deshalb erst installieren, wenn auch twitch_partners vorhanden ist.
     referral_test_support::schema(pool).await;
 }
 
@@ -214,7 +208,7 @@ fn default_args(login: &str, uid: &str) -> PromotePartnerArgs {
         is_on_discord: 0,
         activate_partner_features: true,
         clear_source: true,
-        guild_id: None,
+        guild_id: Some(tb_raid::partner_setup::COMMUNITY_GUILD_ID),
     }
 }
 
@@ -225,10 +219,6 @@ async fn promote(pool: &PgPool, args: &PromotePartnerArgs) {
         .unwrap();
     tx.commit().await.unwrap();
 }
-
-// ---------------------------------------------------------------------------
-// promote_streamer_to_partner
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn erst_promotion_legt_partner_an_und_loescht_quelle() {
@@ -266,10 +256,8 @@ async fn erst_promotion_legt_partner_an_und_loescht_quelle() {
     assert_eq!(login, "neuling");
     assert_eq!(status, "active");
     assert_eq!((opt_out, raid), (0, 1));
-    // partnered_at = created_at der Quell-Zeile (::text-Rendering).
     assert!(partnered_at.is_some());
 
-    // Identität geschrieben: expliziter Parameter gewinnt vor Quell-Zeile.
     let (discord_id, display, on_discord): (Option<String>, Option<String>, Option<i32>) =
         sqlx::query_as(
             "SELECT discord_user_id, discord_display_name, is_on_discord
@@ -282,7 +270,6 @@ async fn erst_promotion_legt_partner_an_und_loescht_quelle() {
     assert_eq!(display.as_deref(), Some("Discord-Name"));
     assert_eq!(on_discord, Some(1));
 
-    // clear_source: Quelle gelöscht.
     let remaining: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)::bigint FROM twitch_streamers WHERE twitch_user_id = '111'",
     )
@@ -294,8 +281,6 @@ async fn erst_promotion_legt_partner_an_und_loescht_quelle() {
 
 #[tokio::test]
 async fn re_promotion_bewahrt_partner_einstellungen() {
-    // Der dokumentierte Bugfix: Python wipet silent_ban/silent_raid/
-    // live_ping_role_id/require_discord_link bei Re-Promotion — Rust bewahrt.
     let pool = pool_or_skip!("ps_update");
     sqlx::query(
         "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status, silent_ban,
@@ -344,7 +329,7 @@ async fn re_promotion_bewahrt_partner_einstellungen() {
         Some("2025-01-01T00:00:00+00:00"),
         "partnered_at bewahrt"
     );
-    assert_eq!(row.7, None, "admin_archived_at = NULL (Re-Aktivierung)");
+    assert_eq!(row.7.as_deref(), Some("2025-06-01T00:00:00+00:00"));
     assert_eq!(row.8, "active");
 }
 
@@ -386,7 +371,6 @@ async fn identity_steal_entfernt_discord_id_von_anderem_streamer() {
 
 #[tokio::test]
 async fn identity_upsert_coalesce_bewahrt_bestehende_werte() {
-    // Python: COALESCE(EXCLUDED.x, bestehend) — None-Parameter überschreiben nicht.
     let pool = pool_or_skip!("ps_coalesce");
     sqlx::query(
         "INSERT INTO twitch_streamer_identities
@@ -396,9 +380,6 @@ async fn identity_upsert_coalesce_bewahrt_bestehende_werte() {
     .execute(&pool)
     .await
     .unwrap();
-    // Re-Promotion ohne Discord-Parameter: sync-Flow liest die bestehende
-    // Identität vorher und reicht sie durch — hier simulieren wir den
-    // promote-Aufruf mit None (z. B. Identität nicht auflösbar).
     promote(&pool, &default_args("kanal", "555")).await;
 
     let (discord_id, display): (Option<String>, Option<String>) = sqlx::query_as(
@@ -455,14 +436,6 @@ async fn ungueltige_identitaet_wird_abgewiesen() {
     assert!(result.is_err(), "leerer Login → InvalidIdentity");
 }
 
-// ---------------------------------------------------------------------------
-// B11-PR-7: Hard-Pause-Guard (technical_pause_reason in {blocked, bot_banned})
-// ---------------------------------------------------------------------------
-
-/// Python `reactivate_partner_after_valid_auth` (`partner_registry.py:1366`):
-/// Hard-Kills dürfen durch einen OAuth-Followup NICHT reaktiviert werden.
-/// Der Followup ruft hier `promote_streamer_to_partner` — ohne den Guard würde
-/// `technical_pause_reason = NULL` (Z.581) den Bann bedingungslos aufheben.
 #[tokio::test]
 async fn hard_pause_blocked_wird_nicht_reaktiviert() {
     let pool = pool_or_skip!("ps_hardpause_blocked");
@@ -490,7 +463,6 @@ async fn hard_pause_blocked_wird_nicht_reaktiviert() {
     assert!(!result.reactivated, "Hard-Kill blockiert Reaktivierung");
     assert_eq!(result.hard_pause_reason.as_deref(), Some("blocked"));
 
-    // Pause-Grund + Deaktivierung bleiben unangetastet.
     let (pause, opt_out, raid): (Option<String>, i32, i32) = sqlx::query_as(
         "SELECT technical_pause_reason, manual_partner_opt_out, raid_bot_enabled
          FROM twitch_partners WHERE twitch_user_id = '1001'",
@@ -547,12 +519,11 @@ async fn hard_pause_bot_banned_case_insensitive() {
 
 #[tokio::test]
 async fn weiche_pause_wird_normal_reaktiviert() {
-    // token_error o.ä. sind KEINE Hard-Kills → Promotion läuft, Pause wird aufgehoben.
     let pool = pool_or_skip!("ps_softpause");
     sqlx::query(
         "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status,
             manual_partner_opt_out, raid_bot_enabled, technical_pause_reason)
-         VALUES ('1003', 'tokenweg', 'active', 1, 0, 'token_error')",
+         VALUES ('1003', 'tokenweg', 'active', 0, 0, 'token_error')",
     )
     .execute(&pool)
     .await
@@ -585,7 +556,7 @@ async fn weiche_pause_wird_normal_reaktiviert() {
 }
 
 #[tokio::test]
-async fn inaktive_admin_archivierung_blockiert_reauth_nicht() {
+async fn inaktive_admin_archivierung_blockiert_reauth() {
     let pool = pool_or_skip!("ps_inactive_admin_archived");
     sqlx::query(
         "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status,
@@ -609,30 +580,29 @@ async fn inaktive_admin_archivierung_blockiert_reauth_nicht() {
         r
     };
     assert!(
-        result.reactivated,
-        "admin_archived_at darf Reauth nicht blocken"
+        !result.reactivated,
+        "admin_archived_at muss erhalten bleiben"
     );
-    assert_eq!(result.hard_pause_reason, None);
+    assert_eq!(
+        result.hard_pause_reason.as_deref(),
+        Some("partner_configuration_inactive")
+    );
 
     let (status, opt_out, raid, pause): (String, i32, i32, Option<String>) = sqlx::query_as(
         "SELECT status, manual_partner_opt_out, raid_bot_enabled, technical_pause_reason
          FROM twitch_partners
-         WHERE twitch_user_id = '1004' AND status = 'active'",
+         WHERE twitch_user_id = '1004' AND status = 'archived'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(status, "active");
-    assert_eq!((opt_out, raid), (0, 1));
+    assert_eq!(status, "archived");
+    assert_eq!((opt_out, raid), (1, 0));
     assert_eq!(pause, None);
 }
 
 #[tokio::test]
-async fn selfservice_disconnect_wird_per_reauth_reaktiviert() {
-    // Selbst getrennter Streamer: status='departnered', manual_partner_opt_out=1,
-    // technical_pause_reason LEER. Ein Re-Auth muss ihn zurückholen — und dabei
-    // seine Zeile reaktivieren statt eine zweite anzulegen, sonst verliert er
-    // seine gesamte Kanal-Konfiguration.
+async fn selfservice_disconnect_bleibt_per_reauth_deaktiviert() {
     let pool = pool_or_skip!("ps_selfservice_disconnect");
     sqlx::query(
         "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status,
@@ -658,8 +628,11 @@ async fn selfservice_disconnect_wird_per_reauth_reaktiviert() {
         tx.commit().await.unwrap();
         r
     };
-    assert!(result.reactivated, "Opt-out ist kein Hard-Kill");
-    assert_eq!(result.hard_pause_reason, None);
+    assert!(!result.reactivated);
+    assert_eq!(
+        result.hard_pause_reason.as_deref(),
+        Some("partner_configuration_inactive")
+    );
 
     let zeilen: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM twitch_partners WHERE twitch_user_id = '1005'")
@@ -675,11 +648,10 @@ async fn selfservice_disconnect_wird_per_reauth_reaktiviert() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(status, "active");
-    assert_eq!((opt_out, raid), (0, 1), "voll reaktiviert");
-    assert_eq!(departnered, None, "Trenn-Zeitpunkt geräumt");
+    assert_eq!(status, "departnered");
+    assert_eq!((opt_out, raid), (1, 0));
+    assert_eq!(departnered.as_deref(), Some("2026-08-03T15:36:21+00:00"));
 
-    // Konfiguration überlebt den Reconnect.
     let flags: (i32, i32, i32, Option<i64>, i32) = sqlx::query_as(
         "SELECT require_discord_link, silent_ban, silent_raid, live_ping_role_id,
                 live_ping_enabled
@@ -714,8 +686,6 @@ async fn selfservice_disconnect_wird_per_reauth_reaktiviert() {
 
 #[tokio::test]
 async fn departnerte_hard_kill_zeile_bleibt_unangetastet() {
-    // Hard-Kill auf einer inaktiven Zeile: der Fallback auf die inaktive Zeile
-    // darf den bestehenden Guard nicht aushebeln.
     let pool = pool_or_skip!("ps_departnered_hardkill");
     sqlx::query(
         "INSERT INTO twitch_partners (twitch_user_id, twitch_login, status,
@@ -754,10 +724,6 @@ async fn departnerte_hard_kill_zeile_bleibt_unangetastet() {
     assert_eq!(pause.as_deref(), Some("bot_banned"));
 }
 
-// ---------------------------------------------------------------------------
-// record_first_login
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn first_login_coalesce_bewahrt_ersten_timestamp() {
     let pool = pool_or_skip!("ps_firstlogin");
@@ -779,10 +745,6 @@ async fn first_login_coalesce_bewahrt_ersten_timestamp() {
     .unwrap();
     assert_eq!(first, second, "COALESCE bewahrt den ersten Timestamp");
 }
-
-// ---------------------------------------------------------------------------
-// PartnerSetupService-Orchestrierung (Mock-Ports)
-// ---------------------------------------------------------------------------
 
 #[derive(Default)]
 struct Recorder {
@@ -854,9 +816,14 @@ fn service(pool: PgPool, recorder: Arc<Recorder>, bot_id: Option<&str>) -> Partn
     .with_pauses(Duration::ZERO, Duration::ZERO)
 }
 
+async fn legacy_partner(pool: &PgPool, uid: &str, login: &str) {
+    promote(pool, &default_args(login, uid)).await;
+}
+
 #[tokio::test]
 async fn sync_loest_discord_auf_und_setzt_rolle() {
     let pool = pool_or_skip!("ps_sync");
+    legacy_partner(&pool, "901", "synckanal").await;
     let recorder = Arc::new(Recorder {
         resolve_result: Some("Globaler Name".to_string()),
         greeter_ok: true,
@@ -871,7 +838,6 @@ async fn sync_loest_discord_auf_und_setzt_rolle() {
     assert_eq!(result.discord_user_id.as_deref(), Some("123456789"));
     assert!(result.signup_block.is_none());
 
-    // Display-Name kam aus dem Resolve (keine bestehende Identität).
     let display: Option<String> = sqlx::query_scalar(
         "SELECT discord_display_name FROM twitch_streamer_identities WHERE twitch_user_id = '901'",
     )
@@ -890,6 +856,7 @@ async fn sync_loest_discord_auf_und_setzt_rolle() {
 #[tokio::test]
 async fn sync_ohne_discord_id_setzt_keine_rolle() {
     let pool = pool_or_skip!("ps_sync_no_discord");
+    legacy_partner(&pool, "902", "ohnediscord").await;
     let recorder = Arc::new(Recorder::default());
     let svc = service(pool.clone(), recorder.clone(), Some("botid"));
 
@@ -913,6 +880,7 @@ async fn sync_ohne_discord_id_setzt_keine_rolle() {
 #[tokio::test]
 async fn complete_setup_voller_ablauf() {
     let pool = pool_or_skip!("ps_complete");
+    legacy_partner(&pool, "903", "vollkanal").await;
     let recorder = Arc::new(Recorder {
         greeter_ok: true,
         ..Default::default()
@@ -932,7 +900,6 @@ async fn complete_setup_voller_ablauf() {
     assert_eq!(chat_calls.len(), 3, "drei Begrüßungsnachrichten: {calls:?}");
     assert!(chat_calls[0].contains("Deadlock Chatbot Guard verbunden"));
 
-    // Partner + first_login geschrieben.
     let status: String =
         sqlx::query_scalar("SELECT status FROM twitch_partners WHERE twitch_user_id = '903'")
             .fetch_one(&pool)
@@ -951,6 +918,7 @@ async fn complete_setup_voller_ablauf() {
 #[tokio::test]
 async fn complete_setup_ohne_bot_id_ueberspringt_mod_und_chat() {
     let pool = pool_or_skip!("ps_no_botid");
+    legacy_partner(&pool, "904", "kein_bot").await;
     let recorder = Arc::new(Recorder {
         greeter_ok: true,
         ..Default::default()
@@ -973,7 +941,6 @@ async fn complete_setup_ohne_bot_id_ueberspringt_mod_und_chat() {
             .any(|c| c.starts_with("mod:") || c.starts_with("chat:")),
         "ohne Bot-ID weder Moderator noch Chat: {calls:?}"
     );
-    // Partner-Sync + first_login liefen trotzdem (Python: früher Return NACH Schritt 1+2).
     let status: String =
         sqlx::query_scalar("SELECT status FROM twitch_partners WHERE twitch_user_id = '904'")
             .fetch_one(&pool)
@@ -985,6 +952,7 @@ async fn complete_setup_ohne_bot_id_ueberspringt_mod_und_chat() {
 #[tokio::test]
 async fn complete_setup_bleibt_bei_moderator_fehler_erfolgreich() {
     let pool = pool_or_skip!("ps_mod_error");
+    legacy_partner(&pool, "907", "mod_fehler").await;
     let recorder = Arc::new(Recorder {
         moderator_error: Some("keine Moderator-Rechte".to_string()),
         ..Default::default()
@@ -1015,6 +983,7 @@ async fn complete_setup_gibt_partner_sync_fehler_zurueck() {
 #[tokio::test]
 async fn greeter_nicht_verfuegbar_bricht_restliche_nachrichten_ab() {
     let pool = pool_or_skip!("ps_greeter_off");
+    legacy_partner(&pool, "905", "stiller_kanal").await;
     let recorder = Arc::new(Recorder {
         greeter_ok: false,
         ..Default::default()
@@ -1036,6 +1005,7 @@ async fn greeter_nicht_verfuegbar_bricht_restliche_nachrichten_ab() {
 #[tokio::test]
 async fn backfill_ist_idempotent() {
     let pool = pool_or_skip!("ps_backfill");
+    legacy_partner(&pool, "906", "backkanal").await;
     sqlx::query(
         "INSERT INTO twitch_stats_category (ts_utc, streamer, viewer_count)
          VALUES ('2026-06-01T00:00:00Z', 'backkanal', 10), ('2026-06-01T00:01:00Z', 'backkanal', 12)",
@@ -1062,10 +1032,6 @@ async fn backfill_ist_idempotent() {
     assert_eq!(tracked, 2, "NOT-EXISTS-Guard verhindert Duplikate");
 }
 
-// ---------------------------------------------------------------------------
-// B10: revoke_streamer_role-Port (ohne DB)
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn revoke_streamer_role_ruft_port_und_loggt() {
     let recorder = Recorder::default();
@@ -1076,8 +1042,6 @@ async fn revoke_streamer_role_ruft_port_und_loggt() {
     );
 }
 
-/// Eine Implementierung, die `revoke_streamer_role` NICHT überschreibt, nutzt
-/// den Default (No-op-Log) — kein Panic, kein Hard-Fail.
 struct GrantOnly;
 
 #[async_trait]
@@ -1091,13 +1055,8 @@ impl DiscordDirectoryPort for GrantOnly {
 #[tokio::test]
 async fn revoke_streamer_role_default_ist_noop() {
     let port = GrantOnly;
-    // Darf nicht panicken; Default-Impl ist ein reines Debug-Log.
     DiscordDirectoryPort::revoke_streamer_role(&port, "999", "egal").await;
 }
-
-// ---------------------------------------------------------------------------
-// Signup-Block
-// ---------------------------------------------------------------------------
 
 async fn block_setzen(pool: &PgPool, uid: &str, login: &str, public_message: Option<&str>) {
     sqlx::query(
@@ -1121,8 +1080,6 @@ async fn partner_zeilen(pool: &PgPool, uid: &str) -> i64 {
         .unwrap()
 }
 
-/// Beweisziel: ein geblockter Streamer bekommt keine Partner-Zeile — auch nicht
-/// halb, auch nicht pausiert. Der Guard gibt No-op zurueck, kein Fehler.
 #[tokio::test]
 async fn signup_block_legt_keine_partner_zeile_an() {
     let pool = pool_or_skip!("ps_block_kein_insert");
@@ -1148,14 +1105,11 @@ async fn signup_block_legt_keine_partner_zeile_an() {
     );
 }
 
-/// Beweisziel: der Block haengt an der stabilen ID. Benennt sich der Streamer
-/// um, greift er trotzdem — sonst waere er per Namenswechsel aushebelbar.
 #[tokio::test]
 async fn signup_block_greift_nach_umbenennung() {
     let pool = pool_or_skip!("ps_block_rename");
     block_setzen(&pool, "173926844", "temmiee985", None).await;
 
-    // Gleiche ID, neuer Login.
     let args = default_args("temmiee_neu", "173926844");
     let mut tx = pool.begin().await.unwrap();
     let result = promote_streamer_to_partner(&mut tx, &args, chrono::Utc::now())
@@ -1167,9 +1121,6 @@ async fn signup_block_greift_nach_umbenennung() {
     assert_eq!(partner_zeilen(&pool, "173926844").await, 0);
 }
 
-/// Beweisziel: die Richtungsregel gilt nur in eine Richtung. Ein Streamer, der
-/// aus einem anderen Grund auf der Raid-Blacklist steht (Bot-Ban), darf sich
-/// weiterhin ganz normal ins Partnerprogramm melden.
 #[tokio::test]
 async fn raid_blacklist_allein_blockt_signup_nicht() {
     let pool = pool_or_skip!("ps_block_nur_raid");
@@ -1196,8 +1147,6 @@ async fn raid_blacklist_allein_blockt_signup_nicht() {
     );
 }
 
-/// Beweisziel: faellt der Nachschlag aus (Tabelle weg, DB-Fehler), bricht die
-/// Promotion ab, statt den Block still zu uebergehen.
 #[tokio::test]
 async fn signup_block_nachschlag_fehler_bricht_ab() {
     let pool = pool_or_skip!("ps_block_failclosed");
@@ -1220,8 +1169,6 @@ async fn signup_block_nachschlag_fehler_bricht_ab() {
     assert_eq!(partner_zeilen(&pool, "555").await, 0);
 }
 
-/// Beweisziel: der Absagetext aus der DB schlaegt den Standardtext durch bis in
-/// das Objekt, das die Antwort baut.
 #[tokio::test]
 async fn signup_block_liefert_eigenen_absagetext() {
     let pool = pool_or_skip!("ps_block_text");
@@ -1237,11 +1184,9 @@ async fn signup_block_liefert_eigenen_absagetext() {
     let block = result.signup_block.expect("Block erwartet");
     assert_eq!(block.public_text(), "Eigener Text.");
     assert_eq!(block.public_body_html(), "<p>Eigener Text.</p>");
-    // Der interne Grund darf nie im user-sichtbaren Text auftauchen.
     assert!(!block.public_text().contains("owner_decision"));
 }
 
-/// Beweisziel: ohne eigenen Text kommt der Standard-Absagetext, wortgleich.
 #[tokio::test]
 async fn signup_block_ohne_eigenen_text_nutzt_standard() {
     let pool = pool_or_skip!("ps_block_standardtext");
@@ -1272,6 +1217,51 @@ async fn promote_schreibt_aktive_streamer_guilds_zeile() {
     assert_eq!(row.0, tb_raid::partner_setup::COMMUNITY_GUILD_ID);
     assert!(row.1);
     assert_eq!(row.2, "onboarding");
+}
+
+#[tokio::test]
+async fn migrated_technical_reauth_restores_service_followups() {
+    let db = test_postgres::TestPostgres::start().await;
+    apply_ddl(&db.pool).await;
+    sqlx::raw_sql("INSERT INTO twitch_partners (twitch_user_id, twitch_login, status, manual_partner_opt_out, raid_bot_enabled, technical_pause_reason) VALUES ('8801', 'legacy', 'active', 0, 0, 'token_error');
+        INSERT INTO streamer_guilds (twitch_user_id, guild_id, active, source, deactivated_by, deactivated_at) VALUES ('8801', 1289721245281292288, FALSE, 'migration', 'migration', NOW());")
+        .execute(&db.pool).await.unwrap();
+    let recorder = Arc::new(Recorder::default());
+    let svc = service(db.pool.clone(), recorder.clone(), None);
+    let outcome = svc
+        .sync_partner_state_after_auth("8801", "legacy", Some("9911"), true)
+        .await
+        .unwrap();
+    assert!(outcome.reactivated);
+    assert!(recorder
+        .calls()
+        .iter()
+        .any(|call| call.starts_with("role:9911:")));
+    let state: (bool, Option<String>) = sqlx::query_as("SELECT sg.active, p.technical_pause_reason FROM streamer_guilds sg JOIN twitch_partners p USING (twitch_user_id) WHERE sg.twitch_user_id = '8801'")
+        .fetch_one(&db.pool).await.unwrap();
+    assert_eq!(state, (true, None));
+}
+
+#[tokio::test]
+async fn pending_membership_does_not_run_setup_side_effects() {
+    let db = test_postgres::TestPostgres::start().await;
+    apply_ddl(&db.pool).await;
+    sqlx::raw_sql("INSERT INTO discord_guilds (guild_id, auto_partner_default) VALUES (88, FALSE);
+        INSERT INTO streamer_guilds (twitch_user_id, guild_id, active, source, deactivated_by, deactivated_at) VALUES ('8801', 88, FALSE, 'onboarding', 'onboarding', NOW());")
+        .execute(&db.pool).await.unwrap();
+    let recorder = Arc::new(Recorder::default());
+    let svc = service(db.pool.clone(), recorder.clone(), Some("botid"));
+    svc.complete_setup_for_streamer("8801", "pending", "test-only", None)
+        .await
+        .unwrap();
+    assert!(recorder.calls().is_empty());
+    let counts: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT COUNT(*) FROM twitch_partners), (SELECT COUNT(*) FROM streamer_plans)",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(counts, (0, 0));
 }
 
 include!("fixtures/streamer_referral_cases.rs");

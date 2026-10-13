@@ -1,18 +1,3 @@
-//! Onboarding-/Re-Auth-Schreibpfad (`twitch_raid_auth`) — Port von
-//! `RaidAuthManager.save_auth`. **Security-Kern** — selbst gebaut.
-//!
-//! Schreibt frische OAuth-Tokens verschlüsselt in die DB (UPSERT), validiert
-//! die gewährten Scopes gegen das aufgelöste Profil und setzt `needs_reauth`
-//! zurück. Bewusste Invarianten (1:1 zu Python):
-//!
-//! - Der validierte Token muss alle Rechte des Profils besitzen, sonst `ScopeMismatch`
-//!   (kein Speichern halb-autorisierter Tokens).
-//! - Verschlüsseln fehlgeschlagen → `EncryptionFailed`, nichts geschrieben.
-//! - `raid_enabled` eines bestehenden Eintrags bleibt erhalten
-//!   (`activate_raid_features OR existing`).
-//! - Re-Auth heilt technische Token-Pausen (`token_error*`) inklusive
-//!   `raid_bot_enabled`, bevor der Blacklist-Eintrag entfernt wird.
-
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -26,7 +11,6 @@ use tb_crypto::{aad, FieldCipher};
 use crate::scope_profiles::{hat_alle_uplink_scopes, scopes_for_profile};
 use crate::util::mask_log_identifier as mask;
 
-/// Eingabe für [`AuthWriter::store_new_auth`].
 #[derive(Clone)]
 pub struct NewAuth {
     pub twitch_user_id: String,
@@ -34,12 +18,9 @@ pub struct NewAuth {
     pub access_token: String,
     pub refresh_token: String,
     pub expires_in: i64,
-    /// Tatsächlich gewährte Scopes (aus der Twitch-Token-Antwort).
     pub granted_scopes: Vec<String>,
-    /// Bereits aufgelöstes Scope-Profil (über `oauth_flow::build_state_info`).
     pub resolved_scope_profile: String,
     pub activate_raid_features: bool,
-    /// Vertrauenswürdiges created_at des einmalig verbrauchten OAuth-States.
     pub state_created_at: DateTime<Utc>,
 }
 impl std::fmt::Debug for NewAuth {
@@ -52,14 +33,9 @@ impl std::fmt::Debug for NewAuth {
     }
 }
 
-/// Fehler des Onboarding-Writes.
 #[derive(Debug)]
 pub enum AuthWriteError {
-    /// Gewährte Scopes passen nicht zum Profil (Python `unexpected_scopes_for_profile`).
-    ScopeMismatch {
-        profile: String,
-    },
-    /// Verschlüsseln fehlgeschlagen — nichts geschrieben (Sicherheits-Policy).
+    ScopeMismatch { profile: String },
     EncryptionFailed,
     InvalidIdentity,
     InvalidToken,
@@ -119,7 +95,6 @@ impl AuthWriter {
         Self { pool, cipher }
     }
 
-    /// Speichert frische Tokens verschlüsselt (UPSERT) + `needs_reauth`-Reset.
     pub async fn store_new_auth(
         &self,
         new: &NewAuth,
@@ -162,7 +137,6 @@ impl AuthWriter {
         }
         let verified_at = Utc::now();
         let verified = verify(client, &new.access_token, uid).await?;
-        // Scope-Set gegen Profil prüfen (getrimmt, Reihenfolge egal).
         let expected: BTreeSet<&str> = scopes_for_profile(&new.resolved_scope_profile)
             .iter()
             .copied()
@@ -253,7 +227,6 @@ impl AuthWriter {
             return Err(AuthWriteError::EncryptionFailed);
         };
 
-        // Genau die validierten Rechte des ausgewählten Tokens, keine Profilvereinigung.
         let scopes_for_db = selected_scopes.into_iter().collect::<Vec<_>>().join(" ");
 
         sqlx::query!(
@@ -286,7 +259,6 @@ impl AuthWriter {
         .execute(&mut *tx)
         .await?;
 
-        // Re-Auth abgeschlossen → needs_reauth zurücksetzen.
         sqlx::query!(
             "UPDATE twitch_raid_auth SET needs_reauth = FALSE, reauth_notified_at = NULL
              WHERE twitch_user_id = $1",
@@ -295,38 +267,39 @@ impl AuthWriter {
         .execute(&mut *tx)
         .await?;
 
-        // Token-Blacklist-Eintrag entfernen (Python: save_auth ruft
-        // token_error_handler.remove_from_blacklist). Ohne dies bleibt ein wegen
-        // invalid_grant (error_count ≥ 3) blacklisteter Streamer nach erfolgreicher
-        // Re-Autorisierung DAUERHAFT gesperrt: der Blacklist-Check in get_valid_token
-        // greift vor allem anderen und liefert None. Nur technische Partner-
-        // Pause-Gründe `token_error*` aufheben, den technischen Opt-out resetten
-        // und Raid reaktivieren, dann den Blacklist-Eintrag löschen.
-        sqlx::query(
-            "UPDATE twitch_partners
-                SET manual_partner_opt_out = CASE
-                        WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%' THEN 0
-                        ELSE manual_partner_opt_out
-                    END,
-                    technical_pause_reason = CASE
-                        WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%' THEN NULL
-                        ELSE technical_pause_reason
-                    END,
-                    raid_bot_enabled = CASE
-                        WHEN NOT raid_admin_enabled THEN 0
-                        WHEN LOWER(TRIM(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%' THEN 1
-                        WHEN $2
-                             AND COALESCE(manual_partner_opt_out, 0) = 0
-                             AND LOWER(TRIM(COALESCE(technical_pause_reason, ''))) NOT IN ('blocked', 'bot_banned')
-                        THEN 1
-                        ELSE raid_bot_enabled
-                    END
-              WHERE twitch_user_id = $1",
-        )
-        .bind(uid)
-        .bind(new.activate_raid_features)
-        .execute(&mut *tx)
-        .await?;
+        if new.activate_raid_features {
+            crate::partner_setup::restore_legacy_technical_membership(&mut tx, uid).await?;
+            sqlx::query(
+                "UPDATE twitch_partners p
+                    SET technical_pause_reason = NULL,
+                        raid_bot_enabled = CASE WHEN raid_admin_enabled THEN 1 ELSE 0 END
+                  WHERE p.twitch_user_id = $1 AND p.status = 'active'
+                    AND COALESCE(p.manual_partner_opt_out, 0) = 0
+                    AND p.admin_archived_at IS NULL AND p.departnered_at IS NULL
+                    AND LOWER(TRIM(COALESCE(p.technical_pause_reason, ''))) LIKE 'token_error%'
+                    AND EXISTS (
+                        SELECT 1 FROM streamer_guilds sg JOIN discord_guilds g USING (guild_id)
+                         WHERE sg.twitch_user_id = p.twitch_user_id AND sg.active
+                           AND g.status = 'active' AND g.removed_at IS NULL
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM twitch_exclusions e
+                         WHERE e.twitch_user_id = p.twitch_user_id AND e.reactivated_at IS NULL
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM twitch_partner_signup_denylist d
+                         WHERE d.twitch_user_id = p.twitch_user_id OR LOWER(d.twitch_login) = LOWER(p.twitch_login)
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM twitch_partners blocked
+                         WHERE blocked.twitch_user_id = p.twitch_user_id
+                           AND LOWER(TRIM(COALESCE(blocked.technical_pause_reason, ''))) IN ('blocked', 'bot_banned')
+                    )",
+            )
+            .bind(uid)
+            .execute(&mut *tx)
+            .await?;
+        }
         sqlx::query!(
             "DELETE FROM twitch_token_blacklist WHERE twitch_user_id = $1",
             uid
@@ -349,20 +322,6 @@ impl AuthWriter {
         Ok(())
     }
 
-    /// Nimmt die gespeicherten Tokens zurück, ohne die Zeile zu löschen.
-    ///
-    /// Explizite Gesamttrennung: die Blobs werden geleert und `needs_reauth` gesetzt,
-    /// damit jeder Lesepfad sofort erkennt, dass hier nichts mehr zu holen ist.
-    /// Ein DELETE der Zeile wäre falsch: sie trägt auch `raid_enabled`,
-    /// `authorized_at` und die Verknüpfung zur Partnerhistorie, und die
-    /// gehören nicht dem Uplink. Uplink verwendet ausschließlich disconnect_uplink.
-    ///
-    /// `reauth_notified_at` wird bewusst mitgesetzt. Die Erinnerungs-DM prüft
-    /// dieses Feld; ohne den Stempel bekäme der Streamer eine Mahnung, seinen
-    /// Zugang zu erneuern, direkt nachdem er ihn selbst getrennt hat.
-    ///
-    /// Kein Fehler, wenn es die Zeile nicht gibt: Trennen soll wiederholbar
-    /// sein.
     pub async fn clear_tokens(
         &self,
         twitch_user_id: &str,
@@ -402,8 +361,6 @@ impl AuthWriter {
         Ok(())
     }
 
-    /// Beendet nur die Uplink-Nutzung. Gemeinsame Raid-/Bot-Grants bleiben
-    /// bestehen; ein Widerruf bei Twitch wird ausdrücklich nicht behauptet.
     pub async fn disconnect_uplink(
         &self,
         uid: &str,
@@ -416,8 +373,6 @@ impl AuthWriter {
         .await
         .map_err(|_| AuthWriteError::Timeout)?
     }
-    /// Nur nach bestätigtem Relay-DELETE derselben Generation abschließen.
-    /// Ein inzwischen neuer Connect bleibt erhalten (false = überholt).
     pub async fn finish_uplink_disconnect(
         &self,
         uid: &str,
@@ -447,10 +402,6 @@ pub(crate) fn valid_uid(uid: &str) -> bool {
         && !uid.starts_with('0')
         && uid.bytes().all(|b| b.is_ascii_digit())
 }
-// Lockreihenfolge für Callback, Refresh, Blacklist und Trennen:
-// Pool-Verbindung → UID-Advisory-Lock → Auth-/Intent-/Partner-/Blacklist-Zeilen.
-// Unter dem Lock keine zweite Poolanforderung; alle Schreibpfade verwenden
-// dieselbe Transaktion. HTTP bleibt zeitlich begrenzt, Gesamtoperation 35 s.
 pub(crate) async fn auth_transaction<'a>(
     pool: &'a PgPool,
     uid: &str,
