@@ -162,18 +162,52 @@ fn negation_word(word: &str) -> bool {
         || NEGATION_STEMS.iter().any(|stem| word.starts_with(stem))
 }
 
-fn negated(clause: &str) -> bool {
+fn words(clause: &str) -> Vec<String> {
     clause
         .replace('’', "'")
         .split(|c: char| !(c.is_alphanumeric() || c == '\''))
-        .any(negation_word)
+        .filter(|word| !word.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
-fn kept_reaction(clause: &str) -> bool {
-    if !contains_any(clause, &["reaktion", "reaction"]) {
-        return false;
-    }
-    let mut rest = clause.to_owned();
+fn negated(clause: &str) -> bool {
+    words(clause).iter().any(|word| negation_word(word))
+}
+
+const REMOVAL_STEMS: &[&str] = &[
+    "weg", "raus", "heraus", "entfern", "streich", "schneid", "kürz", "kuerz", "lösch", "loesch",
+    "remov", "drop", "cut", "trim", "delet", "skip",
+];
+const KEEP_STEMS: &[&str] = &[
+    "behalt",
+    "behält",
+    "behaelt",
+    "keep",
+    "drin",
+    "komplett",
+    "ganz",
+    "full",
+    "vollständig",
+    "vollstaendig",
+];
+
+fn has_stem(clause: &str, stems: &[&str]) -> bool {
+    words(clause)
+        .iter()
+        .any(|word| stems.iter().any(|stem| word.starts_with(stem)))
+}
+
+fn keep_request(clause: &str, extra: &[&str]) -> bool {
+    let wants_keep = has_stem(clause, KEEP_STEMS)
+        || words(clause)
+            .iter()
+            .any(|word| extra.contains(&word.as_str()));
+    wants_keep && !has_stem(clause, REMOVAL_STEMS)
+}
+
+fn without_keep_phrases(clause: &str) -> Option<String> {
+    let mut rest = clause.replace('’', "'");
     let mut found = false;
     for phrase in KEEP_PHRASES {
         if rest.contains(phrase) {
@@ -181,7 +215,19 @@ fn kept_reaction(clause: &str) -> bool {
             rest = rest.replace(phrase, " ");
         }
     }
-    found && !negated(&rest)
+    found.then_some(rest)
+}
+
+fn mentions_reaction(clause: &str) -> bool {
+    contains_any(clause, &["reaktion", "reaction"])
+}
+
+fn kept_reaction(sentence: &str) -> bool {
+    if !mentions_reaction(sentence) {
+        return false;
+    }
+    without_keep_phrases(sentence)
+        .is_some_and(|rest| !negated(&rest) && !has_stem(&rest, REMOVAL_STEMS))
 }
 
 fn affirmative_parts(text: &str, signals: &mut Vec<Signal>) -> Vec<String> {
@@ -244,16 +290,11 @@ fn classify(feedback: &str) -> Vec<Signal> {
             signals.push(Signal::Toward(Dimension::EditingPace, 1));
         }
         if contains_any(clause, &["teamfight", "kampf", "fight"])
-            && contains_any(
-                clause,
-                &["mehr", "more", "behalt", "keep", "ganz", "komplett", "full"],
-            )
+            && keep_request(clause, &["mehr", "more"])
         {
             signals.push(Signal::Toward(Dimension::KeepAction, 1));
         }
-        if contains_any(clause, &["reaktion", "reaction"])
-            && contains_any(clause, &["behalt", "keep", "lass", "drin"])
-        {
+        if mentions_reaction(clause) && keep_request(clause, &[]) {
             signals.push(Signal::Toward(Dimension::KeepReaction, 1));
         }
         if contains_any(clause, &["facecam", "webcam", "kamera", "camera"])
@@ -643,6 +684,7 @@ async fn apply_skill(
     rules: &[&GlobalRule],
     max_bytes: usize,
 ) -> Result<Option<i32>, SkillRegistryError> {
+    let active = skill_registry::active_skill(pool, id, max_bytes).await?;
     let vetoed = vetoed_guidance(pool, id).await?;
     let rules: Vec<&GlobalRule> = rules
         .iter()
@@ -650,7 +692,6 @@ async fn apply_skill(
         .filter(|rule| !vetoed.contains(guidance(rule.dimension, rule.direction)))
         .collect();
     let rules = rules.as_slice();
-    let active = skill_registry::active_skill(pool, id, max_bytes).await?;
     let candidate = compose_skill_text(&active.text, rules);
     let sha256 = skill_registry::sha256_hex(&candidate);
     if sha256 == active.sha256

@@ -165,6 +165,33 @@ fn negated_instructions_teach_nothing() {
 }
 
 #[test]
+fn removal_requests_never_become_keep_preferences() {
+    for text in [
+        "Reaktion weglassen",
+        "Die Reaktion rausschneiden",
+        "Mehr vom Teamfight rausschneiden",
+        "Remove the reaction",
+        "Cut more of the fight",
+        "Reaktion weglassen und Intro nicht schneiden",
+        "Intro nicht schneiden, Reaktion entfernen",
+    ] {
+        assert!(classify(text).is_empty(), "{text}");
+    }
+    assert_eq!(
+        classify("Reaktion drin lassen"),
+        vec![Signal::Toward(Dimension::KeepReaction, 1)]
+    );
+    assert_eq!(
+        classify("Den Teamfight komplett behalten"),
+        vec![Signal::Toward(Dimension::KeepAction, 1)]
+    );
+    assert_eq!(
+        classify("Reaktion und Intro nicht schneiden"),
+        vec![Signal::Toward(Dimension::KeepReaction, 1)]
+    );
+}
+
+#[test]
 fn global_rules_need_several_agreeing_users() {
     let preference = |direction| PersonalProfile {
         preferences: vec![PersonalPreference {
