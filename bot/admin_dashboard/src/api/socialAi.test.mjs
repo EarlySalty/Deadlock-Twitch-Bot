@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
-import { limits, totals, usage } from './socialAiFixtures.mjs';
-import { requireLimits, requireUsage } from './socialAiValidation.ts';
+import { limits, skills, totals, usage } from './socialAiFixtures.mjs';
+import { requireLimits, requireSkills, requireUsage } from './socialAiValidation.ts';
 import { costTotal, formatCount, formatDuration, formatMicroUsd, parseMicroUsd, usdInput } from '../utils/socialAi.ts';
 
 const source = await readFile(new URL('./client.ts', import.meta.url), 'utf8');
@@ -96,4 +96,14 @@ test('Nicht bestätigte Schreibantworten werden nicht als gespeicherter Stand ü
     await assert.rejects(api.saveGlobalControl({ expected_revision: 1, paused: true, reason: 'synthetic' }));
     await assert.rejects(api.saveUserLimit({ expected_revision: 1, twitch_user_id: '100000001', paused: false, monthly_cap_micro_usd: 1000000, reason: 'synthetic' }));
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test('Skill-Historie verlangt eine vorhandene aktive Version und gültige Diffzeilen', () => {
+  assert.equal(requireSkills(structuredClone(skills)).skills[0].current_version, '2');
+  const missing = structuredClone(skills);
+  missing.skills[0].current_version = '9';
+  assert.throws(() => requireSkills(missing));
+  const badDiff = structuredClone(skills);
+  badDiff.skills[0].versions[0].diff[0].kind = 'changed';
+  assert.throws(() => requireSkills(badDiff));
 });

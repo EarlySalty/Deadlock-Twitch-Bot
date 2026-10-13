@@ -126,7 +126,10 @@ impl PreparingSnapshot {
             || self.skills.iter().any(|skill| {
                 skill.text.is_empty()
                     || skill.text.len() > runtime.limits.max_skill_bytes
-                    || skill.version != "1"
+                    || skill
+                        .version
+                        .parse::<u32>()
+                        .map_or(true, |version| version == 0)
                     || skill.sha256
                         != Sha256::digest(skill.text.as_bytes())
                             .iter()
@@ -441,18 +444,19 @@ async fn prepare(ctx: &StageContext<'_>) -> Result<StageCheckpoint, AiEditorErro
     let settings = autopilot_settings::load(ctx.pool, ctx.owner)
         .await
         .map_err(|_| AiEditorError::Storage)?;
-    let skills = PRODUCTION_SKILLS
-        .into_iter()
-        .map(|id| {
-            let skill = super::skill_snapshot(id);
-            FrozenSkill {
-                id,
-                version: skill.version.into(),
-                sha256: skill.sha256,
-                text: skill.text.into(),
-            }
-        })
-        .collect();
+    let mut skills = Vec::with_capacity(PRODUCTION_SKILLS.len());
+    for id in PRODUCTION_SKILLS {
+        let skill =
+            super::skill_registry::active_skill(ctx.pool, id, ctx.current.limits.max_skill_bytes)
+                .await
+                .map_err(|_| AiEditorError::Storage)?;
+        skills.push(FrozenSkill {
+            id,
+            version: skill.version.to_string(),
+            sha256: skill.sha256,
+            text: skill.text,
+        });
+    }
     let frozen = PreparingSnapshot {
         source: identity,
         media: media.clone(),

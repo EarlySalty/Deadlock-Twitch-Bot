@@ -18,3 +18,12 @@ export function usage(groupBy = 'user', offset = 0) {
     group_by: groupBy, offset, has_more: offset === 0, period_start: '2026-10-01T00:00:00Z', period_end: '2026-10-11T12:00:00Z',
   };
 }
+
+export const skills = {
+  rollback_available: true,
+  skills: [{ skill_id: 'copywriting', name: 'Texte', current_version: '2', versions: [
+    { version: '2', content_hash: 'b'.repeat(64), previous_version: '1', changed_at: '2026-10-12T08:00:00Z', summary: 'Eigene Formulierungen', reason: 'Wiederholte Korrekturen', evidence: { summary: 'Wiederholte Korrekturen', sample_count: 6 }, diff: [{ kind: 'removed', text: '# Copywriting v1' }, { kind: 'added', text: '# Copywriting v2' }] },
+    { version: '1', content_hash: 'a'.repeat(64), previous_version: null, changed_at: '2026-10-11T12:00:00Z', summary: 'Mitgelieferte Ausgangsversion', reason: 'Ausgangsstand', evidence: null, diff: [] },
+  ] }],
+  proposals: [{ id: '1', title: 'Feld vorschlagen', created_at: '2026-10-12T08:00:00Z', summary: 'Zusatzfeld', reason: 'Häufige Nachfrage', status: 'proposed', evidence: null }],
+};

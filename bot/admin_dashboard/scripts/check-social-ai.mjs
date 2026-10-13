@@ -119,8 +119,8 @@ async function run(width) {
   try {
     await page.goto(`${origin}/twitch/admin/content/social-ai`, { waitUntil: 'networkidle' });
     assert.ok(page.url().endsWith('/content/social-ai/usage'));
-    assert.equal(await page.locator('.social-ai nav a').count(), 2);
-    assert.equal(await page.locator('a[href*="social-ai/skills"]').count(), 0);
+    assert.equal(await page.locator('.social-ai nav a').count(), 3);
+    assert.equal(await page.locator('a[href*="social-ai/skills"]').count(), 1);
     await page.locator('.social-ai-table').waitFor({ state: 'attached' });
     await page.screenshot();
     await capture('usage');
