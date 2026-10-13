@@ -4,7 +4,7 @@
 
 Official Twitch reference: https://dev.twitch.tv/docs/api/reference/#create-clip and https://dev.twitch.tv/docs/api/reference/#create-clip-from-vod. Native clips accept title and duration query parameters, with duration from 5 to 60 seconds in 0.1-second increments. Creation is asynchronous. The transport sends the non-idempotent creation POST once; the runtime confirms publication using GET before reporting a completed clip.
 
-The optional multi-minute VOD feature is not implemented. AUFTRAG.md explicitly permits shipping native improvements when existing infrastructure cannot provide the requested longer video. Existing whole-VOD archiving does not provide bounded chat-selected range jobs with a private expiring download. Recommended decision: private dashboard downloads with bounded jobs, retention and authorization, not automatic publication. No placeholder command or timestamp-link substitute was added.
+This independently accepted native milestone does not yet implement the multi-minute VOD feature. The user has since explicitly approved private dashboard downloads with expiring owner-only authenticated access, bounded processing and actual expired-file cleanup. AUFTRAG.md records that approval and supersedes the earlier architecture blocker. Native improvements ship independently first, then the approved !vodclip range path remains required within the same package. Existing whole-VOD archiving does not already provide that private delivery contract. No placeholder command or timestamp-link substitute was added; native acceptance and ALLOW do not cover an unimplemented VOD path.
 
 ## Completed checks
 
