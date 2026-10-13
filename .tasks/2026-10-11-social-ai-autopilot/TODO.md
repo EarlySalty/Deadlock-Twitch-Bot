@@ -1,4 +1,11 @@
-# TODO at usage limit, 2026-10-13 00:50 CEST
+# TODO, state 2026-10-13 08:55 CEST
+
+Wakeups: `t3-wakeup` chain social-ai every 5h into thread 98e836a5 (next 13:53). Fresh agents A-E spawned 08:55.
+Live 5c50fe47c: P3 M2 dashboard, P2 M4 usage limits + admin usage pages.
+On main, not yet deployed: P2 M2 revisions (643553a13), head ac46bdf44 (B deploys).
+Open: A Track B gate/merge/deploy (b0f361cf8); B produce wiring after A; C skill versions r4 (39dedc5dc) + M3 learning; D Track C after A (197b84414); E UI mounting (feat/p3-social-mount-e-20261013).
+
+## Earlier state (00:50)
 
 Resume at 03:50 CEST (scheduled wakeup in session d7e0c71c). Sol threads P1/P2/P3 stay stopped until 2026-10-18.
 
