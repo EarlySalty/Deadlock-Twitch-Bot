@@ -1,10 +1,3 @@
-//! Retention-Worker (Port von `bot/social_media/retention_worker.py`).
-//!
-//! Löscht abgelaufene Social-Media-Clips — aber erst, wenn sie entweder
-//! verworfen (`discarded_at`) ODER auf allen aktiven Plattformen veröffentlicht
-//! sind. Pro Treffer wird die lokale Datei entfernt und die Clip-Zeile gelöscht.
-//! An/Aus 1:1: in Python dauerhaft an (kein Gate), Intervall 30min.
-
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -12,8 +5,8 @@ use chrono::Utc;
 use sqlx::PgPool;
 
 use crate::retention::{
-    delete_clips_by_ids, is_clip_published_on_all_active_platforms,
-    iter_expired_clips_for_retention, ExpiredClip,
+    delete_locked_retention_clip, is_clip_published_on_all_active_platforms_on,
+    iter_expired_clips_for_retention, lock_retention_clip, ExpiredClip,
 };
 use crate::upload_worker::vertical_output_path;
 
@@ -75,27 +68,37 @@ impl RetentionWorker {
         }
     }
 
-    /// Ein Durchlauf (Python `_cleanup_expired_clips`).
     pub async fn run_once(&self) {
         let now = Utc::now().to_rfc3339();
-        let candidates = iter_expired_clips_for_retention(&self.pool, &now).await;
-        let mut deleted_ids: Vec<i64> = Vec::new();
-
-        for clip in candidates {
-            // Noch nicht verworfen UND nicht voll veröffentlicht → noch behalten.
-            if clip.discarded_at.is_none()
-                && !is_clip_published_on_all_active_platforms(&self.pool, clip.id).await
-            {
-                continue;
+        for clip in iter_expired_clips_for_retention(&self.pool, &now).await {
+            if let Err(error) = self.cleanup_clip(clip.id, &now).await {
+                tracing::warn!(%error, clip_id = clip.id, "Social-Media-Retention: Clip konnte nicht bereinigt werden");
             }
-
-            if remove_clip_files(&clip).await.is_err() {
-                continue;
-            }
-            deleted_ids.push(clip.id);
         }
+    }
 
-        delete_clips_by_ids(&self.pool, &deleted_ids).await;
+    async fn cleanup_clip(&self, clip_id: i64, now: &str) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        let Some(clip) = lock_retention_clip(&mut tx, clip_id).await? else {
+            return Ok(());
+        };
+        let expired: bool = sqlx::query_scalar(
+            "SELECT COALESCE(retention_until <= $2::text::timestamptz, FALSE)
+             FROM twitch_clips_social_media WHERE id = $1",
+        )
+        .bind(clip_id)
+        .bind(now)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !expired
+            || (clip.discarded_at.is_none()
+                && !is_clip_published_on_all_active_platforms_on(&mut tx, clip.id).await?)
+            || remove_clip_files(&clip).await.is_err()
+        {
+            return Ok(());
+        }
+        delete_locked_retention_clip(&mut tx, clip.id).await?;
+        tx.commit().await
     }
 
     /// Hintergrund-Loop (30s Initial-Delay + 30min-Intervall). Noch nicht in

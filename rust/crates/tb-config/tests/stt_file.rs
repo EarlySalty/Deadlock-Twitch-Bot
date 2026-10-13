@@ -13,8 +13,7 @@ fn config(section: &str) -> Result<BotConfigSnapshot, tb_config::file::FileError
 #[test]
 fn client_und_server_haben_denselben_endpunkt_ohne_zweite_einstellung() {
     let snapshot =
-        config("host='::1'\nport=19091\nmodel='ggml-large-v3-turbo-q5_0'\nthreads=3")
-            .unwrap();
+        config("host='::1'\nport=19091\nmodel='ggml-large-v3-turbo-q5_0'\nthreads=3").unwrap();
     let stt = &snapshot.settings().stt;
     assert_eq!(stt.local_origin(), "http://[::1]:19091");
     assert_eq!(
@@ -34,6 +33,7 @@ fn stt_default_transkribiert_lokal_und_erkennt_die_sprache() {
         "http://127.0.0.1:8791/v1/audio/transcriptions"
     );
     assert_eq!(stt.model, "ggml-large-v3-turbo-q5_0");
+    assert!(stt.model_directory.is_none());
     assert_eq!(stt.threads, 8);
     assert_eq!(stt.language, None);
     assert_eq!(stt.no_speech_max, 0.6);
@@ -61,6 +61,9 @@ fn stt_falsche_typen_unbekannte_felder_und_grenzen_sind_fatal() {
         "max_upload_bytes=0",
         "max_upload_bytes=26214401",
         "language=''",
+        "model_directory=''",
+        "model_directory='bad\u{7}path'",
+        "model_directory=12",
         "language='de?REDACTION_SENTINEL'",
         "model='https://secret.invalid/?token=REDACTION_SENTINEL'",
         "modell='unbekannt'",
@@ -73,10 +76,30 @@ fn stt_falsche_typen_unbekannte_felder_und_grenzen_sind_fatal() {
 }
 
 #[test]
+fn model_directory_resolves_relative_to_snapshot_and_preserves_absolute_paths() {
+    let relative = config("model_directory='../models'").unwrap();
+    let path = relative.settings().stt.model_directory.as_ref().unwrap();
+    assert_eq!(
+        relative.resolve(path).unwrap(),
+        Path::new("/srv/twitch/models")
+    );
+    let absolute = config("model_directory='/opt/deadlock/stt-models'").unwrap();
+    let path = absolute.settings().stt.model_directory.as_ref().unwrap();
+    assert_eq!(
+        absolute.resolve(path).unwrap(),
+        Path::new("/opt/deadlock/stt-models")
+    );
+}
+
+#[test]
 fn nur_bestehende_remote_freigabe_keine_neuen_audio_anbieter() {
     let remote =
         config("remote_endpoint='https://api.openai.com/v1/audio/transcriptions'").unwrap();
     assert_eq!(remote.settings().stt.request_model(), "whisper-1");
+    assert!(config(
+        "model_directory='/opt/deadlock/stt-models'\nremote_endpoint='https://api.openai.com/v1/audio/transcriptions'"
+    )
+    .is_err());
     for endpoint in [
         "https://other.invalid/v1/audio/transcriptions",
         "http://api.openai.com/v1/audio/transcriptions",

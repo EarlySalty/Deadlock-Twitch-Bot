@@ -25,7 +25,7 @@ pub use replay::{EvalResponse, LocalClient};
 /// Zeitgrenze, wenn der Aufrufer keine nennt.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(240);
 /// Obergrenze fuer eine vom Anbieter genannte Wartezeit.
-const MAX_RETRY_AFTER_SECS: u64 = 5;
+pub(crate) const MAX_RETRY_AFTER_SECS: u64 = 5;
 
 /// Eine Nachricht im Verlauf.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +105,7 @@ pub struct Request {
     /// Fester Endpunkt statt Anbieterwahl. Fuer Tests und fuer Aufrufer, die
     /// aus fachlichen Gruenden an genau einer Adresse haengen.
     pub endpoint: Option<LlmEndpoint>,
+    pub twitch_broadcaster: Option<String>,
 }
 
 impl Request {
@@ -196,6 +197,10 @@ impl Request {
     }
     pub fn endpoint(mut self, endpoint: LlmEndpoint) -> Self {
         self.endpoint = Some(endpoint);
+        self
+    }
+    pub fn twitch_broadcaster(mut self, broadcaster_id: impl Into<String>) -> Self {
+        self.twitch_broadcaster = Some(broadcaster_id.into());
         self
     }
 }
@@ -296,6 +301,21 @@ pub async fn complete(use_case: &str, request: Request) -> Result<Response, LlmE
 /// technische Details stehen auf `debug!`. Aufrufer ergänzen höchstens eine
 /// Debug-Meldung, damit derselbe Fehler nicht doppelt gewarnt wird.
 pub async fn complete_detailed(use_case: &str, request: Request) -> Result<Response, LlmFailure> {
+    complete_routed(use_case, request, crate::brain_route::installed(use_case)).await
+}
+
+pub(crate) async fn complete_routed(
+    use_case: &str,
+    request: Request,
+    brain: Option<Arc<crate::brain_route::BrainRoute>>,
+) -> Result<Response, LlmFailure> {
+    match brain {
+        Some(route) => route.complete(use_case, &request).await,
+        None => complete_direct(use_case, request).await,
+    }
+}
+
+async fn complete_direct(use_case: &str, request: Request) -> Result<Response, LlmFailure> {
     let chain: Vec<LlmEndpoint> = match &request.endpoint {
         Some(endpoint) => vec![endpoint.clone()],
         None if request.failover => endpoint_chain(use_case),
@@ -598,6 +618,8 @@ pub(crate) async fn call_endpoint(
                 error_code,
                 http_status,
                 latency_ms: started.elapsed().as_millis() as i64,
+                social_accounting: None,
+                model: None,
             };
             ledger::journal_completion(&completion);
             let finish = tokio::spawn(ledger::finish(completion));
@@ -716,7 +738,7 @@ struct ResponseMetadata {
     request_id: Option<String>,
     status: Option<i32>,
 }
-fn safe_request_id(id: &str) -> Option<String> {
+pub(crate) fn safe_request_id(id: &str) -> Option<String> {
     if !id.is_empty()
         && id.len() <= 256
         && id
@@ -853,7 +875,7 @@ fn kurz(body: &str) -> String {
     body.chars().take(500).collect()
 }
 
-fn transport_error(error: &reqwest::Error) -> LlmError {
+pub(crate) fn transport_error(error: &reqwest::Error) -> LlmError {
     if error.is_timeout() {
         LlmError::Timeout(error.to_string())
     } else if error.is_decode() {
@@ -959,8 +981,7 @@ mod tests {
                 .unwrap();
             let error = finish(response)
                 .await
-                .err()
-                .expect("Große Antwort muss abgewiesen werden");
+                .expect_err("Große Antwort muss abgewiesen werden");
             match (status, error) {
                 (
                     429,

@@ -1,15 +1,12 @@
-//! Betriebseigentümer für den lokalen Rust-Whisper-Dienst und seine Aufrufer.
-//!
-//! Dienst und Clients lesen denselben unveränderlichen Snapshot. Ein Modell wird
-//! geladen, aber ohne Audio kein Transkriptionsjob gestartet. Änderungen an
-//! Listener, Modell und Threads verlangen Neustart.
-
 use crate::{
     file::FileError,
     global::{public_url, range},
 };
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::PathBuf,
+};
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -17,16 +14,14 @@ pub struct SttConfig {
     pub host: IpAddr,
     pub port: u16,
     pub model: String,
+    pub model_directory: Option<PathBuf>,
     pub threads: u16,
-    /// `None` bedeutet Spracherkennung. Ein Client darf sie nicht überschreiben.
     pub language: Option<String>,
     pub no_speech_max: f64,
     pub avg_logprob_min: f64,
     pub max_upload_bytes: u64,
     pub timeout_seconds: u64,
     pub extraction_timeout_seconds: u64,
-    /// Ausdrückliche bisherige Ausnahme für OpenAI. Kein Anbieterwechsel.
-    /// Ohne diesen Wert bleibt Stream-Audio auf dem lokalen Rechner.
     pub remote_endpoint: Option<String>,
     pub remote_model: String,
 }
@@ -37,6 +32,7 @@ impl Default for SttConfig {
             host: IpAddr::V4(Ipv4Addr::LOCALHOST),
             port: 8791,
             model: "ggml-large-v3-turbo-q5_0".into(),
+            model_directory: None,
             threads: 8,
             language: None,
             no_speech_max: 0.6,
@@ -88,8 +84,13 @@ impl SttConfig {
             3_600,
             "stt.extraction_timeout_seconds",
         )?;
-        // Explizite lokale Pfade sind keine Hub-Bezeichner. Ihre Existenz
-        // prüft der Launcher nach Auflösung gegen die Konfigurationsdatei.
+        if self.model_directory.as_ref().is_some_and(|path| {
+            path.as_os_str().is_empty()
+                || path.to_string_lossy().len() > 4096
+                || path.to_string_lossy().chars().any(char::is_control)
+        }) {
+            return Err(FileError::invalid("stt.model_directory"));
+        }
         let local_model = std::path::Path::new(&self.model).is_absolute()
             || self.model.starts_with("./")
             || self.model.starts_with("../");
@@ -119,6 +120,9 @@ impl SttConfig {
         }
         if !self.avg_logprob_min.is_finite() || !(-20.0..=0.0).contains(&self.avg_logprob_min) {
             return Err(FileError::invalid("stt.avg_logprob_min"));
+        }
+        if self.model_directory.is_some() && self.remote_endpoint.is_some() {
+            return Err(FileError::invalid("stt.remote_endpoint"));
         }
         if let Some(endpoint) = &self.remote_endpoint {
             public_url(endpoint, "stt.remote_endpoint", false)?;

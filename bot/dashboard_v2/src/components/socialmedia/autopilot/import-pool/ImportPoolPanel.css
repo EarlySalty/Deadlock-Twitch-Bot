@@ -1,0 +1,256 @@
+.import-pool {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+  color: var(--color-text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.import-pool * {
+  box-sizing: border-box;
+}
+.import-pool h2,
+.import-pool h3,
+.import-pool h4,
+.import-pool p {
+  margin: 0;
+}
+.import-pool h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 20px;
+  font-weight: 600;
+}
+.import-pool h3 {
+  font-size: 16px;
+  font-weight: 600;
+}
+.import-pool h4 {
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.import-pool-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.import-pool-heading p {
+  margin-top: 4px;
+  color: var(--color-text-secondary);
+  max-width: 70ch;
+}
+.import-pool-preferences,
+.import-pool-import,
+.import-pool-library {
+  border-top: 1px solid var(--color-border);
+  padding-top: 20px;
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+.import-pool fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.import-pool-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.import-pool-fields label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  min-width: 0;
+}
+.import-pool-fields input,
+.import-pool-fields select {
+  width: 100%;
+  min-width: 0;
+}
+.import-pool-help,
+.import-pool-identity {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.import-pool-help {
+  max-width: 75ch;
+}
+.import-pool-identity {
+  margin-top: 4px !important;
+}
+.import-pool-text-button {
+  color: var(--color-primary);
+  padding: 8px 0;
+  background: transparent;
+  border: 0;
+  min-height: 44px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.import-pool-text-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.import-pool-save {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.import-pool-save > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.import-pool-error {
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger);
+  padding: 12px;
+  border-radius: 8px;
+}
+.import-pool-feedback {
+  color: var(--color-success);
+  font-size: 13px;
+}
+.import-pool-feedback:empty {
+  display: none;
+}
+.import-pool-warning {
+  color: var(--color-warning);
+}
+.import-pool-progress {
+  display: grid;
+  gap: 8px;
+}
+.import-pool-progress-title {
+  font-weight: 600;
+}
+.import-pool-counts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 24px;
+  margin: 4px 0;
+}
+.import-pool-counts > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+.import-pool-counts dt {
+  color: var(--color-text-secondary);
+}
+.import-pool-counts dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.import-pool details summary {
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.import-pool details ul {
+  padding-left: 20px;
+  margin: 0;
+}
+.import-pool-clips {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.import-pool-clip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--color-border);
+  padding: 16px 0;
+}
+.import-pool-clip > div {
+  min-width: 0;
+}
+.import-pool-clip-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  margin-top: 6px !important;
+}
+.import-pool-clip-status svg {
+  flex-shrink: 0;
+}
+.import-pool-clip-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.import-pool-clip-actions label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.import-pool-pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+}
+.import-pool :is(input, button, select, a, summary):focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+.import-pool ::selection {
+  background: var(--color-primary);
+  color: var(--color-on-gold);
+}
+.import-pool .studio-primary {
+  background: var(--color-primary);
+}
+.import-pool .studio-primary:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+@media (max-width: 960px) {
+  .import-pool-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 600px) {
+  .import-pool-fields,
+  .import-pool-counts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .import-pool-clip {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .import-pool-save > div {
+    width: 100%;
+  }
+  .import-pool-save button {
+    flex: 1;
+  }
+}

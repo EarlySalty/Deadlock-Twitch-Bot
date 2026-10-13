@@ -14,6 +14,10 @@ pub mod process_info;
 /// Strangler-Fig-Fallback-Proxy (→ Python 8765), siehe Modul-Doku.
 pub mod proxy;
 pub mod query_int;
+#[path = "handlers/social_media_ai_admin_skills.rs"]
+mod social_media_ai_admin_skills;
+#[path = "handlers/social_media_ai_admin_usage.rs"]
+mod social_media_ai_admin_usage;
 #[cfg(test)]
 #[path = "../../../test-support/postgres.rs"]
 mod test_postgres;
@@ -261,7 +265,9 @@ fn build_authed_router_with_analysis_store(
     let uplink_connect_rl =
         RateLimitLayerConfig::new(rate_limiter.clone(), "uplink_connect", 30, 60);
 
+    let ai_runtime = handlers::social_media_ai::AiRuntime::packaged();
     let social_routes = Router::new()
+        .merge(handlers::social_media_ai::routes(ai_runtime.clone()))
         .route("/social-media/api/stats", get(social_media::stats_handler))
         .route("/social-media/api/clips", get(social_media::clips_handler))
         .route(
@@ -365,6 +371,81 @@ fn build_authed_router_with_analysis_store(
             get(social_media::platforms_status_handler),
         )
         // Admin-Clips: paginierte Liste, Detail, Verwerfen.
+        .route(
+            "/social-media/api/autopilot/schedule",
+            get(social_media::autopilot_schedule_get_handler)
+                .put(social_media::autopilot_schedule_put_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/queue/order",
+            put(social_media::autopilot_queue_order_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/queue/{job_id}/next",
+            post(social_media::autopilot_queue_next_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/queue/{job_id}/cancel",
+            post(social_media::autopilot_queue_cancel_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/pool",
+            get(social_media::autopilot::pool_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/preferences",
+            get(social_media::autopilot::preferences_get_handler)
+                .put(social_media::autopilot::preferences_put_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/imports",
+            get(social_media::autopilot::import_latest_handler)
+                .post(social_media::autopilot::import_start_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/imports/{id}",
+            get(social_media::autopilot::import_get_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/imports/{id}/resume",
+            post(social_media::autopilot::import_resume_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/pool/{clip_id}/selection",
+            put(social_media::autopilot::selection_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/publish",
+            get(social_media::autopilot::publish_snapshot_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/publish/mode",
+            put(social_media::autopilot::publish_mode_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/publish/pause",
+            put(social_media::autopilot::publish_pause_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/publish/notifications",
+            put(social_media::autopilot::publish_notifications_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/publish/videos/{id}/approval",
+            put(social_media::autopilot::publish_approval_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/publish/videos/{id}/schedule",
+            post(social_media::autopilot::publish_schedule_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/publish/videos/{id}/retry",
+            post(social_media::autopilot::publish_retry_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/publish/videos/{id}/file",
+            get(handlers::social_media_ai::produced_file).layer(Extension(ai_runtime)),
+        )
         .route(
             "/social-media/api/admin/clips",
             get(social_media::admin_clips_handler),
@@ -601,6 +682,14 @@ fn build_authed_router_with_analysis_store(
         )
         // Streamer-Selbstbedienung: !clip-Command-Toggle. Default aktiviert
         // (bestehendes Verhalten), Spalte streamer_plans.clip_command_enabled.
+        .route(
+            "/twitch/api/v2/streamer/private-vod-clips",
+            get(handlers::private_vod::list_handler).post(handlers::private_vod::settings_handler),
+        )
+        .route(
+            "/twitch/api/v2/streamer/private-vod-clips/{id}/download",
+            get(handlers::private_vod::download_handler),
+        )
         .route(
             "/twitch/api/v2/streamer/clip-command-settings",
             get(clip_command_settings::get_handler).post(clip_command_settings::post_handler),
@@ -1158,6 +1247,8 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
     };
 
     Router::new()
+        .merge(social_media_ai_admin_usage::routes())
+        .merge(social_media_ai_admin_skills::routes())
         .route(
             "/twitch/api/admin/config/overview",
             get(admin_config::config_overview_handler),

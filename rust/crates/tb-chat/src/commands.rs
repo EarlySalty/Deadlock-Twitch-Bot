@@ -303,14 +303,25 @@ pub struct AutobanEntry {
 /// Helix-Client und Krypto-Key vorhanden sind).
 #[async_trait]
 pub trait ClipPort: Send + Sync {
-    async fn create_clip(&self, broadcaster_user_id: &str, broadcaster_login: &str) -> ClipOutcome;
+    async fn create_clip(
+        &self,
+        broadcaster_user_id: &str,
+        broadcaster_login: &str,
+        duration_seconds: f64,
+        title: &str,
+    ) -> ClipOutcome;
 }
 
 /// Ergebnis eines `!clip`-Versuchs (Port von `commands.py:284-408`).
 #[derive(Debug, Clone)]
 pub enum ClipOutcome {
     /// Clip erstellt — fertige Clip-URL.
-    Created { url: String },
+    Created {
+        url: String,
+    },
+    Pending {
+        url: String,
+    },
     /// Keine gültige Broadcaster-Autorisierung (`clips:edit` fehlt / nicht verbunden).
     OAuthMissing,
     /// Twitch-Fehler oder kein Clip zurück.
@@ -349,6 +360,15 @@ pub trait ScamGuardCommandPort: Send + Sync {
     async fn overturn(&self, channel_login: &str, chatter_id: &str) -> bool;
 }
 
+#[async_trait]
+pub trait VodClipPort: Send + Sync {
+    async fn submit(
+        &self,
+        owner_id: &str,
+        range: tb_domain::vod_range::VodRange,
+    ) -> Result<(), String>;
+}
+
 pub struct CommandEngine {
     title_context: Option<crate::steam_lookup::CoStreamRuntime>,
     sub_reminder: Option<Arc<crate::sub_reminder::SubReminder>>,
@@ -361,6 +381,8 @@ pub struct CommandEngine {
     autoban: Arc<dyn LastAutobanStore>,
     /// Optionaler Clip-Port (`!clip`). `None` → Migrations-Hinweis.
     clip: Option<Arc<dyn ClipPort>>,
+    vod_clip: Option<Arc<dyn VodClipPort>>,
+    vod_clip_cooldowns: Mutex<HashMap<String, Instant>>,
     /// Optionaler Scam-Guard-Port (`!explain` / `!unban`-overturn). `None` → inaktiv.
     scam: Option<Arc<dyn ScamGuardCommandPort>>,
     /// Optionale Clip-Contest-Einreichung (`!clipcontest`). `None` → Hinweis,
@@ -402,6 +424,8 @@ impl CommandEngine {
             _super_mod: super_mod,
             autoban,
             clip: None,
+            vod_clip: None,
+            vod_clip_cooldowns: Mutex::new(HashMap::new()),
             scam: None,
             clip_contest: None,
             invite_reply_notifier: None,
@@ -458,6 +482,78 @@ impl CommandEngine {
         self
     }
 
+    pub fn set_vod_clip_port(mut self, port: Arc<dyn VodClipPort>) -> Self {
+        self.vod_clip = Some(port);
+        self
+    }
+
+    async fn cmd_vodclip(&self, event: &ChatMessageEvent, args: &str) {
+        use crate::clip_contest_submit::{chat_recht, ChatRecht};
+        let permission = chat_recht(event);
+        if matches!(permission, ChatRecht::FremderKanal) {
+            return;
+        }
+        let enabled = sqlx::query_scalar::<_, bool>(
+            "SELECT enabled FROM twitch_private_vod_settings WHERE owner_id=$1",
+        )
+        .bind(&event.broadcaster_user_id)
+        .fetch_optional(&self.pool)
+        .await;
+        match enabled {
+            Ok(Some(true)) => {}
+            Ok(_) => return,
+            Err(_) => {
+                self.reply(event, "Die VOD-Einstellung kann ich gerade nicht abrufen.")
+                    .await;
+                return;
+            }
+        }
+        if matches!(permission, ChatRecht::NichtErlaubt) {
+            self.reply(
+                event,
+                "VOD-Ausschnitte können der Kanalinhaber und die Mods anfordern.",
+            )
+            .await;
+            return;
+        }
+        let range = match tb_domain::vod_range::VodRange::parse(args) {
+            Ok(range) => range,
+            Err(message) => {
+                self.reply(event, message).await;
+                return;
+            }
+        };
+        if !matches!(
+            self.get_partner(&event.broadcaster_user_id).await,
+            Ok(Some(_))
+        ) {
+            self.reply(
+                event,
+                "Der Kanal ist gerade nicht als aktiver Partner verfügbar.",
+            )
+            .await;
+            return;
+        }
+        {
+            let mut cooldowns = self.vod_clip_cooldowns.lock().await;
+            let now = Instant::now();
+            cooldowns.retain(|_, last| now.duration_since(*last).as_secs() < 60);
+            if cooldowns.contains_key(&event.broadcaster_user_id) {
+                return;
+            }
+            cooldowns.insert(event.broadcaster_user_id.clone(), now);
+        }
+        let Some(port) = &self.vod_clip else {
+            self.reply(event, "VOD-Ausschnitte sind gerade nicht verfügbar.")
+                .await;
+            return;
+        };
+        match port.submit(&event.broadcaster_user_id,range).await {
+            Ok(()) => self.reply(event,"Der VOD-Ausschnitt wird vorbereitet. Der Kanalinhaber kann ihn im Dashboard unter Chat herunterladen. Er ist 24 Stunden ab der Anfrage verfügbar: https://deutsche-deadlock-community.de/twitch/verwaltung#chat").await,
+            Err(message) => self.reply(event,&message).await,
+        }
+    }
+
     async fn command_name_overrides(
         &self,
         broadcaster_id: &str,
@@ -503,7 +599,13 @@ impl CommandEngine {
         if crate::stat_commands::StatCommand::from_chat(command).is_some()
             || matches!(
                 command,
-                "!clip" | "!clipcontest" | "!dldc" | "!dlde" | "!invite" | "!trustpilot"
+                "!clip"
+                    | "!vodclip"
+                    | "!clipcontest"
+                    | "!dldc"
+                    | "!dlde"
+                    | "!invite"
+                    | "!trustpilot"
             )
         {
             return false;
@@ -677,12 +779,16 @@ impl CommandEngine {
                 self.cmd_clip(event, args).await;
                 true
             }
+            "!vodclip" => {
+                self.cmd_vodclip(event, args).await;
+                true
+            }
             "!clipcontest" => {
                 self.cmd_clipcontest(event, args).await;
                 true
             }
             "!silentban" => {
-                if event.is_mod_or_broadcaster() {
+                if self.can_control_bot(event).await {
                     self.cmd_silentban(event).await;
                 } else {
                     self.reply(
@@ -694,7 +800,7 @@ impl CommandEngine {
                 true
             }
             "!silentraid" => {
-                if event.is_mod_or_broadcaster() {
+                if self.can_control_bot(event).await {
                     self.cmd_silentraid(event).await;
                 } else {
                     self.reply(
@@ -858,7 +964,7 @@ impl CommandEngine {
         }
     }
 
-    async fn can_toggle_engagement(&self, event: &ChatMessageEvent) -> bool {
+    async fn can_control_bot(&self, event: &ChatMessageEvent) -> bool {
         event.is_mod_or_broadcaster() || self._super_mod.is_super_mod(&event.chatter_user_id).await
     }
 
@@ -1783,8 +1889,8 @@ impl CommandEngine {
         // Dashboard-Toggle (streamer_plans.clip_command_enabled). Aus heißt:
         // kein Helix-Call und keine Antwort im Chat. Bei DB-Fehlern erklärt
         // eine Antwort den Ausfall; eine fehlende Zeile behält den Default an.
-        let enabled = sqlx::query_scalar(
-            "SELECT COALESCE(clip_command_enabled, 1)
+        let settings = sqlx::query_as::<_, (i32, Option<f64>)>(
+            "SELECT COALESCE(clip_command_enabled, 1), clip_command_duration_seconds
                FROM streamer_plans
               WHERE twitch_user_id = $1
               LIMIT 1",
@@ -1792,16 +1898,25 @@ impl CommandEngine {
         .bind(&event.broadcaster_user_id)
         .fetch_optional(&self.pool)
         .await;
-        let enabled = match enabled {
-            Ok(value) => value.unwrap_or(1) != 0,
+        let (enabled, duration) = match settings {
+            Ok(value) => value.unwrap_or((1, None)),
             Err(error) => {
-                tracing::warn!(%error, channel = %event.broadcaster_user_login, "!clip Toggle konnte nicht gelesen werden");
+                tracing::warn!(%error, channel = %event.broadcaster_user_login, "!clip Einstellungen konnten nicht gelesen werden");
                 self.reply(event, "Die Einstellung kann ich gerade nicht abrufen.")
                     .await;
                 return;
             }
         };
-        if !enabled {
+        if enabled == 0 {
+            return;
+        }
+        let duration = duration.unwrap_or(tb_domain::clip::DEFAULT_DURATION_SECONDS);
+        if !tb_domain::clip::valid_duration(duration) {
+            self.reply(
+                event,
+                "Die Clip-Dauer ist ungültig. Bitte im Dashboard 5 bis 60 Sekunden einstellen.",
+            )
+            .await;
             return;
         }
 
@@ -1872,20 +1987,29 @@ impl CommandEngine {
         };
 
         match clip_port
-            .create_clip(&partner.twitch_user_id, &partner.twitch_login)
+            .create_clip(
+                &partner.twitch_user_id,
+                &partner.twitch_login,
+                duration,
+                &title,
+            )
             .await
         {
             ClipOutcome::Created { url } => {
                 let suffix = if title.is_empty() {
                     String::new()
                 } else {
-                    format!(" – \"{title}\"")
+                    format!(" (\"{title}\")")
                 };
                 self.reply(
                     event,
-                    &format!("🎬 Clip erstellt{suffix} (ca. letzte 30s): {url}"),
+                    &format!("🎬 Clip erstellt{suffix} (ca. letzte {duration}s): {url}"),
                 )
                 .await;
+            }
+            ClipOutcome::Pending { url } => {
+                self.reply(event, &format!("Twitch verarbeitet den Clip noch. Die Erstellung ist noch nicht bestätigt: {url}"))
+                    .await;
             }
             ClipOutcome::OAuthMissing => {
                 self.reply(event, CLIP_OAUTH_MISSING_REPLY).await;
@@ -2286,7 +2410,7 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
 
     async fn cmd_engagement_set_enabled(&self, event: &ChatMessageEvent, enabled: bool) {
-        if !self.can_toggle_engagement(event).await {
+        if !self.can_control_bot(event).await {
             self.reply(event, "Nur Broadcaster, Mods oder Super-Mod dürfen das.")
                 .await;
             return;
@@ -3119,6 +3243,7 @@ mod tests {
                 stat_command_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
                 command_name_overrides JSONB NOT NULL DEFAULT '{}'::jsonb,
                 clip_command_enabled INTEGER DEFAULT 1,
+                clip_command_duration_seconds DOUBLE PRECISION,
                 promo_disabled INTEGER DEFAULT 0,
                 manual_plan_id TEXT,
                 manual_plan_expires_at TIMESTAMPTZ,
@@ -3162,6 +3287,103 @@ mod tests {
                 login: "spammer".to_string(),
             }))),
         )
+    }
+
+    struct MockVodClip {
+        calls: Mutex<Vec<(String, tb_domain::vod_range::VodRange)>>,
+    }
+
+    #[async_trait]
+    impl VodClipPort for MockVodClip {
+        async fn submit(
+            &self,
+            owner_id: &str,
+            range: tb_domain::vod_range::VodRange,
+        ) -> Result<(), String> {
+            self.calls.lock().await.push((owner_id.to_string(), range));
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn vodclip_dispatch_preserves_grammar_permissions_toggle_and_cooldown() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        apply_ddl(&database.pool).await;
+        seed_partner(&database.pool).await;
+        sqlx::query(
+            "CREATE TABLE twitch_private_vod_settings (owner_id TEXT PRIMARY KEY, enabled BOOLEAN)",
+        )
+        .execute(&database.pool)
+        .await
+        .unwrap();
+        let api = MockApi::new();
+        let port = Arc::new(MockVodClip {
+            calls: Mutex::new(Vec::new()),
+        });
+        let engine = make_engine_with_pool(database.pool.clone(), api.clone())
+            .set_vod_clip_port(port.clone());
+        let mut foreign = make_event("!vodclip 55 58", true, false);
+        foreign.source_broadcaster_user_id = Some("foreign".into());
+        assert!(engine.handle(&foreign).await);
+        assert_eq!(api.message_count().await, 0);
+        engine
+            .handle(&make_event("!vodclip 55 58", true, false))
+            .await;
+        engine
+            .handle(&make_event("!vodclip 55 58", false, false))
+            .await;
+        assert_eq!(api.message_count().await, 0);
+        sqlx::query("INSERT INTO twitch_private_vod_settings VALUES ('bc123',true)")
+            .execute(&database.pool)
+            .await
+            .unwrap();
+        engine
+            .handle(&make_event("!vodclip 55 58", false, false))
+            .await;
+        assert!(port.calls.lock().await.is_empty());
+        for args in ["58 55", "55:60 58", "55 58 extra"] {
+            engine
+                .handle(&make_event(&format!("!vodclip {args}"), true, false))
+                .await;
+            assert!(port.calls.lock().await.is_empty());
+        }
+        engine
+            .handle(&make_event("!vodclip 1.55.00 1.58.00", true, false))
+            .await;
+        assert_eq!(
+            port.calls.lock().await.as_slice(),
+            &[(
+                "bc123".into(),
+                tb_domain::vod_range::VodRange {
+                    start: 6900,
+                    end: 7080
+                }
+            )]
+        );
+        engine
+            .handle(&make_event("!vodclip 55 58", true, false))
+            .await;
+        assert_eq!(port.calls.lock().await.len(), 1);
+        sqlx::query("INSERT INTO streamer_plans (twitch_user_id,command_name_overrides) VALUES ('bc123','{\"vodclip\":\"!ausschnitt\"}'::jsonb)").execute(&database.pool).await.unwrap();
+        engine.vod_clip_cooldowns.lock().await.clear();
+        assert!(
+            !engine
+                .handle(&make_event("!vodclip 55 58", true, false))
+                .await
+        );
+        assert!(
+            engine
+                .handle(&make_event("!ausschnitt 55:00 58:00", true, false))
+                .await
+        );
+        assert_eq!(port.calls.lock().await.len(), 2);
+        assert_eq!(
+            port.calls.lock().await[1].1,
+            tb_domain::vod_range::VodRange {
+                start: 3300,
+                end: 3480
+            }
+        );
     }
 
     #[tokio::test]
@@ -3675,6 +3897,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn silent_toggles_erlauben_super_mod_ohne_mod_badge() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        let api = MockApi::new();
+        seed_partner(&pool).await;
+        sqlx::query(
+            "INSERT INTO twitch_raid_auth (twitch_user_id, raid_enabled, needs_reauth) VALUES ('bc123', TRUE, FALSE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let raid = MockRaid::default_arc();
+        let engine = CommandEngine::new(
+            pool,
+            api.clone(),
+            raid.clone(),
+            Arc::new(MockDiscordLink { url: None }),
+            Arc::new(MockInvite { reply: None }),
+            Arc::new(MockSuperMod(true)),
+            Arc::new(MockAutoban(None)),
+        );
+
+        engine.handle(&make_event("!silentban", false, false)).await;
+        engine
+            .handle(&make_event("!silentraid", false, false))
+            .await;
+
+        assert_eq!(raid.silent_ban_call_count().await, 1);
+        assert_eq!(raid.silent_raid_call_count().await, 1);
+    }
+
+    #[tokio::test]
     async fn silentraid_reauth_gate_blockt_toggle() {
         let database = crate::test_postgres::TestPostgres::start().await;
         let pool = database.pool.clone();
@@ -4137,7 +4393,13 @@ mod tests {
 
     #[async_trait]
     impl ClipPort for CountingClipPort {
-        async fn create_clip(&self, _broadcaster_user_id: &str, _login: &str) -> ClipOutcome {
+        async fn create_clip(
+            &self,
+            _broadcaster_user_id: &str,
+            _login: &str,
+            _duration_seconds: f64,
+            _title: &str,
+        ) -> ClipOutcome {
             self.calls.fetch_add(1, Ordering::SeqCst);
             ClipOutcome::Created {
                 url: "https://clips.twitch.tv/testclip".to_string(),

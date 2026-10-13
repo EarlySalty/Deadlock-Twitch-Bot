@@ -30,10 +30,12 @@ pub struct ClipCommandQuery {
 
 #[derive(Deserialize)]
 pub struct ClipCommandUpdate {
-    pub clip_command_enabled: bool,
+    pub clip_command_enabled: Option<bool>,
+    pub clip_command_duration_seconds: Option<f64>,
 }
 
-const SELECT_SQL: &str = "SELECT COALESCE(clip_command_enabled, 1) AS enabled \
+const SELECT_SQL: &str = "SELECT COALESCE(clip_command_enabled, 1) AS enabled, \
+       clip_command_duration_seconds \
        FROM streamer_plans \
       WHERE ($2 = '' AND LOWER(COALESCE(twitch_login, '')) = $1) \
          OR ($2 <> '' AND twitch_user_id = $2) \
@@ -68,15 +70,20 @@ pub async fn get_handler(
         .await
     {
         Ok(Some(row)) => {
-            let enabled: i32 = row.try_get("enabled").unwrap_or(1);
+            let enabled: i32 = row.get("enabled");
+            let duration: Option<f64> = row.get("clip_command_duration_seconds");
             Json(json!({
                 "clip_command_enabled": enabled != 0,
+                "clip_command_duration_seconds": duration.unwrap_or(tb_domain::clip::DEFAULT_DURATION_SECONDS),
+                "clip_command_duration_configured": duration.is_some(),
                 "kontingent": kontingent.als_json(),
             }))
             .into_response()
         }
         Ok(None) => Json(json!({
             "clip_command_enabled": true,
+            "clip_command_duration_seconds": tb_domain::clip::DEFAULT_DURATION_SECONDS,
+            "clip_command_duration_configured": false,
             "kontingent": kontingent.als_json(),
         }))
         .into_response(),
@@ -101,46 +108,67 @@ pub async fn post_handler(
         Ok(t) => t,
         Err(resp) => return resp,
     };
-    let flag = i32::from(body.clip_command_enabled);
+    if body.clip_command_enabled.is_none() && body.clip_command_duration_seconds.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "Bitte eine Einstellung angeben."})),
+        )
+            .into_response();
+    }
+    if body
+        .clip_command_duration_seconds
+        .is_some_and(|value| !tb_domain::clip::valid_duration(value))
+    {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "Die Clip-Dauer muss zwischen 5 und 60 Sekunden liegen, in Schritten von 0,1 Sekunden."}))).into_response();
+    }
+    let flag = body.clip_command_enabled.map(i32::from);
 
     let result = if !user_id.is_empty() {
-        sqlx::query(
-            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, clip_command_enabled) \
-             VALUES ($1, $2, $3) \
+        sqlx::query_as::<_, (i32, Option<f64>)>(
+            "INSERT INTO streamer_plans (twitch_user_id, twitch_login, clip_command_enabled, clip_command_duration_seconds) \
+             VALUES ($1, $2, COALESCE($3, 1), $4) \
              ON CONFLICT (twitch_user_id) \
-             DO UPDATE SET clip_command_enabled = EXCLUDED.clip_command_enabled, \
-                           twitch_login = COALESCE(streamer_plans.twitch_login, EXCLUDED.twitch_login)",
+             DO UPDATE SET clip_command_enabled = COALESCE($3, streamer_plans.clip_command_enabled), \
+                           clip_command_duration_seconds = COALESCE($4, streamer_plans.clip_command_duration_seconds), \
+                           twitch_login = COALESCE(streamer_plans.twitch_login, EXCLUDED.twitch_login) \
+             RETURNING COALESCE(clip_command_enabled, 1), clip_command_duration_seconds",
         )
         .bind(&user_id)
         .bind(&login)
         .bind(flag)
-        .execute(&pool)
+        .bind(body.clip_command_duration_seconds)
+        .fetch_optional(&pool)
         .await
     } else {
-        sqlx::query(
-            "UPDATE streamer_plans SET clip_command_enabled = $2 \
-              WHERE LOWER(COALESCE(twitch_login, '')) = $1",
+        sqlx::query_as::<_, (i32, Option<f64>)>(
+            "UPDATE streamer_plans SET clip_command_enabled = COALESCE($2, clip_command_enabled), \
+             clip_command_duration_seconds = COALESCE($3, clip_command_duration_seconds) \
+             WHERE LOWER(COALESCE(twitch_login, '')) = $1 \
+             RETURNING COALESCE(clip_command_enabled, 1), clip_command_duration_seconds",
         )
         .bind(&login)
         .bind(flag)
-        .execute(&pool)
+        .bind(body.clip_command_duration_seconds)
+        .fetch_optional(&pool)
         .await
     };
 
     match result {
-        Ok(res) if res.rows_affected() > 0 => {
+        Ok(Some((enabled, duration))) => {
             let stufe = crate::auth::stufe_fuer_auth(&pool, &auth).await;
             let kontingent = tb_analytics::stufe::clip_kontingent(&pool, stufe, &login).await;
             Json(json!({
                 "ok": true,
-                "clip_command_enabled": body.clip_command_enabled,
+                "clip_command_enabled": enabled != 0,
+                "clip_command_duration_seconds": duration.unwrap_or(tb_domain::clip::DEFAULT_DURATION_SECONDS),
+                "clip_command_duration_configured": duration.is_some(),
                 "kontingent": kontingent.als_json(),
             }))
             .into_response()
         }
-        Ok(_) => (
+        Ok(None) => (
             StatusCode::NOT_FOUND,
-            Json(json!({ "error": "no plan row" })),
+            Json(json!({ "error": "Keine Kanaleinstellung gefunden." })),
         )
             .into_response(),
         Err(error) => {
@@ -199,7 +227,8 @@ mod tests {
             .unwrap();
         sqlx::query(
             "CREATE TABLE streamer_plans (twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT, \
-             plan_name TEXT DEFAULT 'free' NOT NULL, clip_command_enabled INTEGER DEFAULT 1 NOT NULL)",
+             plan_name TEXT DEFAULT 'free' NOT NULL, clip_command_enabled INTEGER DEFAULT 1 NOT NULL, \
+             clip_command_duration_seconds DOUBLE PRECISION)",
         )
         .execute(&pool)
         .await
@@ -248,7 +277,8 @@ mod tests {
                 State(pool.clone()),
                 Query(ClipCommandQuery::default()),
                 Json(ClipCommandUpdate {
-                    clip_command_enabled: false,
+                    clip_command_enabled: Some(false),
+                    clip_command_duration_seconds: None,
                 }),
             )
             .await,
@@ -291,7 +321,8 @@ mod tests {
                 State(pool.clone()),
                 Query(query),
                 Json(ClipCommandUpdate {
-                    clip_command_enabled: false,
+                    clip_command_enabled: Some(false),
+                    clip_command_duration_seconds: None,
                 }),
             )
             .await,
@@ -313,6 +344,101 @@ mod tests {
         .await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["clip_command_enabled"], false);
+    }
+
+    #[tokio::test]
+    async fn duration_roundtrip_preserves_explicit_choice_and_channel_scope() {
+        let Some(pool) = make_pool("t_clipcmd_duration").await else {
+            return;
+        };
+        let (_, defaults) = body_of(
+            get_handler(
+                partner("nani", "42"),
+                State(pool.clone()),
+                Query(ClipCommandQuery::default()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(defaults["clip_command_duration_seconds"], 60.0);
+        assert_eq!(defaults["clip_command_duration_configured"], false);
+        for duration in [Some(30.0), None, Some(59.9)] {
+            let (status, body) = body_of(
+                post_handler(
+                    partner("nani", "42"),
+                    State(pool.clone()),
+                    Query(ClipCommandQuery {
+                        streamer: Some("foreign".into()),
+                    }),
+                    Json(ClipCommandUpdate {
+                        clip_command_enabled: if duration.is_none() {
+                            Some(false)
+                        } else {
+                            None
+                        },
+                        clip_command_duration_seconds: duration,
+                    }),
+                )
+                .await,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(
+                body["clip_command_duration_seconds"],
+                duration.unwrap_or(30.0)
+            );
+            assert_eq!(body["clip_command_duration_configured"], true);
+        }
+        let (_, reloaded) = body_of(
+            get_handler(
+                partner("nani", "42"),
+                State(pool.clone()),
+                Query(ClipCommandQuery::default()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(reloaded["clip_command_duration_seconds"], 59.9);
+        assert_eq!(reloaded["clip_command_enabled"], false);
+        let (_, foreign) = body_of(
+            get_handler(
+                partner("foreign", "99"),
+                State(pool),
+                Query(ClipCommandQuery::default()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(foreign["clip_command_duration_seconds"], 60.0);
+        assert_eq!(foreign["clip_command_duration_configured"], false);
+    }
+
+    #[tokio::test]
+    async fn invalid_duration_does_not_write() {
+        let Some(pool) = make_pool("t_clipcmd_invalid").await else {
+            return;
+        };
+        for duration in [4.9, 60.1, 30.01, f64::NAN, f64::INFINITY] {
+            let (status, _) = body_of(
+                post_handler(
+                    partner("nani", "42"),
+                    State(pool.clone()),
+                    Query(ClipCommandQuery::default()),
+                    Json(ClipCommandUpdate {
+                        clip_command_enabled: Some(false),
+                        clip_command_duration_seconds: Some(duration),
+                    }),
+                )
+                .await,
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+        }
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM streamer_plans")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[tokio::test]

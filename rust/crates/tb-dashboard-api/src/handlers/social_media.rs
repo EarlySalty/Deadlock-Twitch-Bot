@@ -33,8 +33,8 @@ use tb_social_media::analytics::{
     list_clip_analytics, list_reports, ClipAnalyticsSnapshot, SocialMediaReportRecord,
 };
 use tb_social_media::approval::{
-    cancel_scheduled_uploads, get_approval_record, handle_decision, normalize_decision,
-    serialize_approval_record, ApprovalError, DECISION_APPROVE,
+    cancel_scheduled_uploads, handle_decision, normalize_decision, serialize_approval_record,
+    ApprovalError, ApprovalRecord, DECISION_APPROVE, STATE_AWAITING, SUPPORTED_PLATFORMS,
 };
 use tb_social_media::clip_analytics::get_analytics_summary;
 use tb_social_media::clip_manager::{
@@ -104,6 +104,17 @@ pub use tiktok_editor::{
 mod vod_archive_management;
 pub use vod_archive_management::{
     action_handler as vod_archive_action_handler, list_handler as vod_archive_list_handler,
+};
+
+#[path = "social_media_autopilot.rs"]
+pub mod autopilot;
+
+#[path = "social_media_autopilot_schedule.rs"]
+mod autopilot_schedule;
+pub use autopilot_schedule::{
+    cancel_handler as autopilot_queue_cancel_handler,
+    get_handler as autopilot_schedule_get_handler, next_handler as autopilot_queue_next_handler,
+    order_handler as autopilot_queue_order_handler, put_handler as autopilot_schedule_put_handler,
 };
 
 const MAX_PARAMETER_LAENGE: usize = 64;
@@ -1833,8 +1844,67 @@ fn build_credential_manager(pool: PgPool) -> Option<CredentialManager> {
     Some(CredentialManager::new(pool, cipher))
 }
 
-/// Serialisiert einen Plattform-Status. Bei aktivem Streamer-Scope + globalem
-/// Fallback werden username/user_id maskiert (Python-Logik).
+fn stored_platform_scopes(raw: Option<&str>) -> Option<Vec<&str>> {
+    let scopes: Vec<_> = raw?
+        .split(|character: char| character == ',' || character.is_ascii_whitespace())
+        .filter(|scope| !scope.is_empty())
+        .collect();
+    if scopes.is_empty()
+        || scopes.iter().any(|scope| {
+            !scope
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._:/-".contains(&byte))
+        })
+    {
+        return None;
+    }
+    Some(scopes)
+}
+
+fn platform_authorization_json(status: &PlatformStatus, has_scope: bool) -> Value {
+    let required: &[&str] = match status.platform.as_str() {
+        "tiktok" => &["video.publish"],
+        "youtube" => &["youtube.upload"],
+        "instagram" => &[
+            "instagram_business_basic",
+            "instagram_business_content_publish",
+        ],
+        _ => return Value::Null,
+    };
+    let missing = stored_platform_scopes(status.scopes.as_deref()).map(|scopes| {
+        required
+            .iter()
+            .copied()
+            .filter(|required_scope| {
+                !scopes.iter().any(|scope| {
+                    if status.platform == "youtube" {
+                        matches!(
+                            scope
+                                .strip_prefix("https://www.googleapis.com/auth/")
+                                .unwrap_or(scope),
+                            "youtube.upload" | "youtube" | "youtube.force-ssl"
+                        )
+                    } else {
+                        scope == required_scope
+                    }
+                })
+            })
+            .collect::<Vec<_>>()
+    });
+    let upload_scope_status = match &missing {
+        None => "unknown",
+        Some(scopes) if scopes.is_empty() => "sufficient",
+        Some(_) => "missing",
+    };
+    json!({
+        "source": "stored",
+        "upload_scope_status": upload_scope_status,
+        "required_upload_scopes": required,
+        "missing_upload_scopes": missing,
+        "channel_account_required": has_scope && status.platform == "tiktok" && status.uses_global_fallback,
+    })
+}
+
 fn platform_status_json(s: &PlatformStatus, has_scope: bool) -> Value {
     let mask = has_scope && s.uses_global_fallback;
     json!({
@@ -1850,6 +1920,7 @@ fn platform_status_json(s: &PlatformStatus, has_scope: bool) -> Value {
         "automatically_renewed": s.automatically_renewed,
         "uses_global_fallback": s.uses_global_fallback,
         "capabilities": tb_social_media::capabilities::platform_capabilities(&s.platform),
+        "authorization": platform_authorization_json(s, has_scope),
     })
 }
 
@@ -1982,15 +2053,13 @@ struct UploadQueueEntry {
 type UploadQueueInfo =
     std::collections::HashMap<i64, std::collections::HashMap<String, UploadQueueEntry>>;
 
-/// Lädt Termin und Fehlergrund für eine ganze Clip-Seite in EINER Abfrage.
-///
-/// Bewusst nicht je Clip einzeln: bei `page_size=100` wären das sonst hundert
-/// Rundreisen zur Datenbank. Aktive TikTok-Vorgänge und bestätigte Abschlüsse
-/// behalten Vorrang vor verworfenen Doppelaufträgen.
-async fn load_upload_queue_info(pool: &PgPool, clip_ids: &[i64]) -> UploadQueueInfo {
+async fn load_upload_queue_info(
+    pool: &PgPool,
+    clip_ids: &[i64],
+) -> Result<UploadQueueInfo, sqlx::Error> {
     let mut info: UploadQueueInfo = std::collections::HashMap::new();
     if clip_ids.is_empty() {
-        return info;
+        return Ok(info);
     }
     let rows = sqlx::query(
         "SELECT DISTINCT ON (clip_id, platform) clip_id, platform, scheduled_at, last_error, status, youtube_visibility, \
@@ -2002,35 +2071,18 @@ async fn load_upload_queue_info(pool: &PgPool, clip_ids: &[i64]) -> UploadQueueI
     )
     .bind(clip_ids)
     .fetch_all(pool)
-    .await;
-    let rows = match rows {
-        Ok(rows) => rows,
-        Err(e) => {
-            // Ein fehlender Queue-Stand darf die Clip-Liste nicht abschießen;
-            // dann bleiben Termin und Fehlergrund eben leer.
-            tracing::warn!(error = %e, "failed to load social media upload queue info");
-            return info;
-        }
-    };
+    .await?;
     for r in &rows {
-        let (Ok(clip_id), Ok(platform)) = (
-            r.try_get::<i64, _>("clip_id"),
-            r.try_get::<String, _>("platform"),
-        ) else {
-            continue;
-        };
+        let clip_id = r.try_get::<i64, _>("clip_id")?;
+        let platform = r.try_get::<String, _>("platform")?;
         let scheduled_at = r
-            .try_get::<Option<DateTime<Utc>>, _>("scheduled_at")
-            .unwrap_or(None)
+            .try_get::<Option<DateTime<Utc>>, _>("scheduled_at")?
             .map(|ts| ts.to_rfc3339());
-        let mut status = r.try_get::<Option<String>, _>("status").unwrap_or(None);
+        let mut status = r.try_get::<Option<String>, _>("status")?;
         let mut last_error = r
-            .try_get::<Option<String>, _>("last_error")
-            .unwrap_or(None)
+            .try_get::<Option<String>, _>("last_error")?
             .filter(|s| !s.trim().is_empty());
-        let options = r
-            .try_get::<Option<Value>, _>("tiktok_options")
-            .unwrap_or(None);
+        let options = r.try_get::<Option<Value>, _>("tiktok_options")?;
         if platform == "tiktok"
             && matches!(
                 status.as_deref(),
@@ -2048,19 +2100,15 @@ async fn load_upload_queue_info(pool: &PgPool, clip_ids: &[i64]) -> UploadQueueI
         info.entry(clip_id).or_default().insert(
             platform.trim().to_lowercase(),
             UploadQueueEntry {
-                youtube_visibility: r
-                    .try_get::<Option<String>, _>("youtube_visibility")
-                    .unwrap_or(None),
+                youtube_visibility: r.try_get::<Option<String>, _>("youtube_visibility")?,
                 scheduled_at,
                 last_error,
                 status,
-                publish_status: r
-                    .try_get::<Option<String>, _>("publish_status")
-                    .unwrap_or(None),
+                publish_status: r.try_get::<Option<String>, _>("publish_status")?,
             },
         );
     }
-    info
+    Ok(info)
 }
 
 /// Objekt mit einem Schlüssel je Plattform (`youtube`/`tiktok`/`instagram`);
@@ -2081,22 +2129,18 @@ fn platform_value_map<'a>(
     Value::Object(out)
 }
 
-/// Baut den Clip-Detail-JSON inkl. Effective-Layout, Enrichment-Summary und
-/// Approval (Python `_serialize_clip_record`).
-///
-/// Für Einzelclips; die Listen-Endpoints holen den Queue-Stand einmal für die
-/// ganze Seite und rufen [`serialize_clip_record_with`] direkt auf.
-async fn serialize_clip_record(pool: &PgPool, row: &ClipRow) -> Value {
-    let queue = load_upload_queue_info(pool, &[row.id]).await;
+async fn serialize_clip_record(pool: &PgPool, row: &ClipRow) -> Result<Value, Response> {
+    let queue = load_upload_queue_info(pool, &[row.id])
+        .await
+        .map_err(upload_queue_load_failed)?;
     serialize_clip_record_with(pool, row, queue.get(&row.id)).await
 }
 
-/// Wie [`serialize_clip_record`], nur mit schon geladenem Queue-Stand.
 async fn serialize_clip_record_with(
     pool: &PgPool,
     row: &ClipRow,
     queue: Option<&std::collections::HashMap<String, UploadQueueEntry>>,
-) -> Value {
+) -> Result<Value, Response> {
     let layout_override = row
         .layout_override_json
         .as_deref()
@@ -2121,7 +2165,6 @@ async fn serialize_clip_record_with(
     let (enrichment_status, enrichment_summary) = match child_clip_db_id {
         Some(id) => match get_enrichment(pool, id).await {
             Some(e) => {
-                // Dedup youtube→tiktok→instagram, erste 5.
                 let mut seen = std::collections::HashSet::new();
                 let mut top: Vec<String> = Vec::new();
                 for tag in e
@@ -2146,15 +2189,9 @@ async fn serialize_clip_record_with(
         },
         None => (Value::Null, Value::Null),
     };
-    let approval = match child_clip_db_id {
-        Some(id) => match get_approval_record(pool, id).await {
-            Some(rec) => serialize_approval_record(&rec),
-            None => Value::Null,
-        },
-        None => Value::Null,
-    };
+    let approval = optional_approval_json(pool, row.id).await?;
 
-    json!({
+    Ok(json!({
         "clip_db_id": row.id,
         "clip_id": row.clip_id,
         "clip_url": row.clip_url,
@@ -2180,16 +2217,12 @@ async fn serialize_clip_record_with(
         "enrichment_status": enrichment_status,
         "enrichment_summary": enrichment_summary,
         "approval": approval,
-        // Geplanter Termin je Plattform (RFC 3339) und Fehlergrund je
-        // Plattform. Ohne Queue-Zeile steht dort `null`. Ohne diese beiden
-        // Felder zeigte das Dashboard nur ein nacktes „Fehler" ohne Grund und
-        // in den Zeitplan-Modi keinen Termin.
         "scheduled_at": platform_value_map(queue, |e| e.scheduled_at.as_deref()),
         "upload_errors": platform_value_map(queue, |e| e.last_error.as_deref()),
         "upload_states": platform_value_map(queue, |e| e.status.as_deref()),
         "youtube_visibility": queue.and_then(|entries| entries.get("youtube")).and_then(|entry| entry.youtube_visibility.as_deref()),
         "publish_states": platform_value_map(queue, |e| e.publish_status.as_deref()),
-    })
+    }))
 }
 
 fn child_clip_db_id_or_500(clip_db_id: i64, operation: &str) -> Result<i32, Response> {
@@ -2215,6 +2248,11 @@ fn clip_load_failed() -> Response {
         .into_response()
 }
 
+fn upload_queue_load_failed(error: sqlx::Error) -> Response {
+    tracing::error!(%error, "failed to load social media upload queue info");
+    clip_load_failed()
+}
+
 async fn require_clip_row(pool: &PgPool, clip_db_id: i64) -> Result<ClipRow, Response> {
     match load_clip_row(pool, clip_db_id).await {
         Ok(Some(clip)) => Ok(clip),
@@ -2232,18 +2270,58 @@ async fn require_clip_child_id(
     child_clip_db_id_or_500(clip_db_id, operation)
 }
 
-async fn optional_approval_json(pool: &PgPool, clip_db_id: i64) -> Value {
+async fn load_clip_approval_json(pool: &PgPool, clip_db_id: i32) -> Result<Value, sqlx::Error> {
+    let row = sqlx::query(
+        "SELECT clip_db_id, state, approved_platforms, approver_user_id, \
+         decided_at::text AS decided_at, dm_message_id, dm_channel_id, \
+         last_sent_at::text AS last_sent_at FROM social_media_clip_approval \
+         WHERE clip_db_id = $1 LIMIT 1",
+    )
+    .bind(clip_db_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(row) = row else {
+        return Ok(Value::Null);
+    };
+    let platforms: Vec<String> = serde_json::from_value(row.try_get("approved_platforms")?)
+        .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+    let mut seen = std::collections::HashSet::new();
+    let approved_platforms = platforms
+        .into_iter()
+        .map(|platform| platform.trim().to_lowercase())
+        .filter(|platform| {
+            SUPPORTED_PLATFORMS.contains(&platform.as_str()) && seen.insert(platform.clone())
+        })
+        .collect();
+    Ok(serialize_approval_record(&ApprovalRecord {
+        clip_db_id: row.try_get("clip_db_id")?,
+        state: row
+            .try_get::<Option<String>, _>("state")?
+            .unwrap_or_else(|| STATE_AWAITING.to_string()),
+        approved_platforms,
+        approver_user_id: row.try_get("approver_user_id")?,
+        decided_at: row.try_get("decided_at")?,
+        dm_message_id: row.try_get("dm_message_id")?,
+        dm_channel_id: row.try_get("dm_channel_id")?,
+        last_sent_at: row.try_get("last_sent_at")?,
+        nicht_eingeplant: Vec::new(),
+    }))
+}
+
+async fn optional_approval_json(pool: &PgPool, clip_db_id: i64) -> Result<Value, Response> {
     let Ok(child_id) = i32::try_from(clip_db_id) else {
         tracing::warn!(
             clip_db_id,
             "clip id exceeds int4-backed approval table; approval omitted"
         );
-        return Value::Null;
+        return Ok(Value::Null);
     };
-    match get_approval_record(pool, child_id).await {
-        Some(rec) => serialize_approval_record(&rec),
-        None => Value::Null,
-    }
+    load_clip_approval_json(pool, child_id)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, clip_db_id, "failed to load social media clip approval");
+            clip_load_failed()
+        })
 }
 
 fn invalid_clip_db_id() -> Response {
@@ -2348,7 +2426,7 @@ pub async fn admin_clips_handler(
         }
     };
 
-    let mut qb = QueryBuilder::<Postgres>::new(&format!(
+    let mut qb = QueryBuilder::<Postgres>::new(format!(
         "SELECT {CLIP_COLUMNS} FROM twitch_clips_social_media WHERE 1=1"
     ));
     push_clips_where(&mut qb, &auth, twitch_user_id, status.as_deref());
@@ -2374,13 +2452,17 @@ pub async fn admin_clips_handler(
             }
         }
     }
-    // Termin und Fehlergrund einmal für die ganze Seite holen, nicht je Clip
-    // (sonst N+1 bei page_size=100).
     let clip_ids: Vec<i64> = clips.iter().map(|c| c.id).collect();
-    let queue_info = load_upload_queue_info(&pool, &clip_ids).await;
+    let queue_info = match load_upload_queue_info(&pool, &clip_ids).await {
+        Ok(info) => info,
+        Err(error) => return upload_queue_load_failed(error),
+    };
     let mut items: Vec<Value> = Vec::with_capacity(clips.len());
     for clip in &clips {
-        items.push(serialize_clip_record_with(&pool, clip, queue_info.get(&clip.id)).await);
+        match serialize_clip_record_with(&pool, clip, queue_info.get(&clip.id)).await {
+            Ok(value) => items.push(value),
+            Err(error) => return error,
+        }
     }
     Json(json!({ "items": items, "page": page, "page_size": page_size, "total": total }))
         .into_response()
@@ -2403,7 +2485,10 @@ pub async fn admin_clip_detail_handler(
         return e;
     }
     match load_clip_row(&pool, clip_db_id).await {
-        Ok(Some(clip)) => Json(serialize_clip_record(&pool, &clip).await).into_response(),
+        Ok(Some(clip)) => match serialize_clip_record(&pool, &clip).await {
+            Ok(value) => Json(value).into_response(),
+            Err(error) => error,
+        },
         Ok(None) => clip_not_found(),
         Err(_) => clip_load_failed(),
     }
@@ -2433,7 +2518,10 @@ pub async fn admin_clip_discard_handler(
         return clip_not_found();
     }
     match load_clip_row(&pool, clip_db_id).await {
-        Ok(Some(clip)) => Json(serialize_clip_record(&pool, &clip).await).into_response(),
+        Ok(Some(clip)) => match serialize_clip_record(&pool, &clip).await {
+            Ok(value) => Json(value).into_response(),
+            Err(error) => error,
+        },
         Ok(None) => Json(json!({ "clip_db_id": clip_db_id, "discarded": true })).into_response(),
         Err(_) => clip_load_failed(),
     }
@@ -2982,7 +3070,10 @@ pub async fn approval_get_handler(
     if let Err(e) = require_clip_row(&pool, clip_db_id).await {
         return e;
     }
-    let approval = optional_approval_json(&pool, clip_db_id).await;
+    let approval = match optional_approval_json(&pool, clip_db_id).await {
+        Ok(approval) => approval,
+        Err(error) => return error,
+    };
     Json(json!({ "clip_db_id": clip_db_id, "approval": approval })).into_response()
 }
 
@@ -3058,7 +3149,10 @@ pub async fn approval_decision_handler(
     {
         Ok(record) => {
             let clip = match load_clip_row(&pool, clip_db_id).await {
-                Ok(Some(c)) => serialize_clip_record(&pool, &c).await,
+                Ok(Some(c)) => match serialize_clip_record(&pool, &c).await {
+                    Ok(value) => value,
+                    Err(error) => return error,
+                },
                 Ok(None) => Value::Null,
                 Err(_) => return clip_load_failed(),
             };
@@ -3551,7 +3645,7 @@ pub async fn posting_plan_category_put_handler(
 /// führt vorher schon zu 403. Ein Admin muss den Kanal benennen, „alle" gibt es
 /// hier nicht: VOD-Archiv und Zeitplan sind Entscheidungen je Kanal.
 #[allow(clippy::result_large_err)]
-async fn required_streamer_scope(
+pub(crate) async fn required_streamer_scope(
     auth: &DashboardAuthLevel,
     pool: &PgPool,
     requested_twitch_user_id: Option<&str>,
@@ -4558,7 +4652,7 @@ mod tests {
                 .execute(&pool)
                 .await
                 .unwrap();
-            let info = load_upload_queue_info(&pool, &[clip]).await;
+            let info = load_upload_queue_info(&pool, &[clip]).await.unwrap();
             let entry = &info[&clip]["tiktok"];
             assert_eq!(entry.status.as_deref(), Some(status));
             assert!(entry.last_error.is_none());

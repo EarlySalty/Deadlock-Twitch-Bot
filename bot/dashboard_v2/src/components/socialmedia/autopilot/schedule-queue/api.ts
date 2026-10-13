@@ -1,0 +1,86 @@
+import { fetchJson, withCookieCredentials } from '@/api/core';
+
+export interface WeeklySlot {
+  weekday: number;
+  local_time: string;
+}
+
+export interface ScheduleSettings {
+  enabled: boolean;
+  paused: boolean;
+  ai_editing_enabled: boolean;
+  lead_time_hours: number;
+  timezone: string;
+  schedule_slots: WeeklySlot[];
+}
+
+export type SchedulePatch = Partial<ScheduleSettings>;
+export type ProductionHold = 'disabled' | 'paused' | 'review_backlog' | 'empty_pool' | 'no_schedule' | 'outside_lead' | null;
+
+export interface QueueJob {
+  id: number;
+  clip_id: number;
+  clip_title: string;
+  source: 'autopilot' | 'manual';
+  mode: 'static' | 'ai' | null;
+  requested_mode: 'static' | 'ai' | null;
+  status: 'queued' | 'running' | 'review' | 'completed' | 'failed' | 'cancelled';
+  stage: string;
+  attempts: number;
+  max_attempts: number;
+  scheduled_at: string | null;
+  started_at: string | null;
+  last_error: string | null;
+  review_reasons: string[];
+}
+
+export interface ScheduleQueueSnapshot {
+  settings: ScheduleSettings;
+  persisted: boolean;
+  next_slot: string | null;
+  jobs: QueueJob[];
+  review_count: number;
+  production_hold: ProductionHold;
+}
+
+export interface ScheduleQueueApi {
+  load(twitchUserId?: string, signal?: AbortSignal): Promise<ScheduleQueueSnapshot>;
+  save(patch: SchedulePatch, twitchUserId?: string): Promise<ScheduleQueueSnapshot>;
+  reorder(jobIds: number[], twitchUserId?: string): Promise<ScheduleQueueSnapshot>;
+  next(jobId: number, twitchUserId?: string): Promise<ScheduleQueueSnapshot>;
+  cancel(jobId: number, twitchUserId?: string): Promise<ScheduleQueueSnapshot>;
+}
+
+const PREFIX = '/twitch/social-media/api/autopilot';
+
+export const scheduleQueueApi: ScheduleQueueApi = {
+  load(twitchUserId, signal) {
+    const query = new URLSearchParams();
+    if (twitchUserId) query.set('twitch_user_id', twitchUserId);
+    return fetchJson(`${PREFIX}/schedule${query.size ? `?${query}` : ''}`, withCookieCredentials({ signal }));
+  },
+  save(patch, twitchUserId) {
+    return fetchJson(`${PREFIX}/schedule`, withCookieCredentials({
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ twitch_user_id: twitchUserId, ...patch }),
+    }));
+  },
+  reorder(jobIds, twitchUserId) {
+    return fetchJson(`${PREFIX}/queue/order`, withCookieCredentials({
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ twitch_user_id: twitchUserId, job_ids: jobIds }),
+    }));
+  },
+  next(jobId, twitchUserId) {
+    return fetchJson(`${PREFIX}/queue/${jobId}/next`, withCookieCredentials({
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ twitch_user_id: twitchUserId }),
+    }));
+  },
+  cancel(jobId, twitchUserId) {
+    return fetchJson(`${PREFIX}/queue/${jobId}/cancel`, withCookieCredentials({
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ twitch_user_id: twitchUserId }),
+    }));
+  },
+};

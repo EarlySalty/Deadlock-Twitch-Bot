@@ -253,8 +253,9 @@ pub async fn batch_upload_all_new(
             _ => continue,
         };
         let clips: Vec<PendingClipRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT id, clip_title, streamer_login, game_name, custom_description, hashtags \
-             FROM twitch_clips_social_media WHERE twitch_user_id = $1 AND {col} = FALSE ORDER BY created_at DESC"
+            "SELECT c.id, c.clip_title, c.streamer_login, c.game_name, c.custom_description, c.hashtags \
+             FROM twitch_clips_social_media c WHERE c.twitch_user_id = $1 AND c.{col} = FALSE \
+               AND to_jsonb(c)->>'pool_managed_at' IS NULL ORDER BY c.created_at DESC"
         )))
         .bind(twitch_user_id)
         .fetch_all(pool)

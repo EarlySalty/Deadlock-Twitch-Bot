@@ -13,11 +13,10 @@ name = "tb-local-replay"
 path = "src/bin/tb-local-replay.rs"
 required-features = ["local-eval"]
 
-# Gemeinsame LLM-Schicht des Twitch-Bots: ein zentraler HTTP-Weg (`hub`) nur
-# für das freigegebene DeepSeek-V4-Flash-Modell bei Fireworks. Jeder
-# erfolgreiche Call verbucht Tokens best-effort ins
-# gemeinsame Usage-Ledger (Tabelle `llm_usage`, zentrale Postgres).
 [dependencies]
+async-trait = { workspace = true }
+brain-client = { workspace = true }
+uuid = { workspace = true }
 tb-observability = { workspace = true }
 fireworks-model-selection = { path = "../fireworks-model-selection" }
 uplink-infisical-transport = { path = "../../vendor/uplink-infisical-transport" }
@@ -31,21 +30,17 @@ chrono      = { workspace = true }
 regex       = { workspace = true }
 reqwest     = { workspace = true }
 serde_json  = { workspace = true }
+base64 = { workspace = true }
 tokio       = { workspace = true, features = ["time", "sync"] }
 tracing     = { workspace = true }
 tracing-subscriber = { workspace = true }
-# sqlx mit Postgres-Feature: das Usage-Ledger liegt jetzt in der zentralen
-# Postgres der übrigen Crates (Tabelle `llm_usage`, per Migration angelegt),
-# NICHT mehr in einer separaten SQLite-WAL-Datei. sqlx-postgres ist über den
-# Workspace ohnehin im Lockfile — keine neue Version. Bewusst OHNE `macros`:
-# die Ledger-Queries sind laufzeit-geprüft (`sqlx::query`/`query_scalar`), damit
-# tb-llm keinen Compile-Time-`.sqlx`-Cache braucht und der Workspace-schema-gate
-# nicht über eine gesonderte tb-llm-Cache-Datei stolpert.
 sqlx = { version = "=0.9.0", default-features = false, features = ["postgres", "runtime-tokio"] }
+jsonschema = { version = "=0.33.0", default-features = false }
 
 [dev-dependencies]
 tokio    = { workspace = true, features = ["rt-multi-thread", "macros"] }
 wiremock = { workspace = true }
+tempfile = "3"
 
 [[bin]]
 name = "tb-llm-usage-recover"

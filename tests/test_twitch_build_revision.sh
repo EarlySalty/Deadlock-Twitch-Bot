@@ -20,32 +20,29 @@ git -C "$scratch" init -q
 git -C "$scratch" add .
 git -C "$scratch" -c user.name=Test -c user.email=test@example.invalid commit -qm initial
 build_and_check() {
-  cargo build --quiet --manifest-path "$scratch/Cargo.toml"
+  /home/nathanael/.local/bin/cargo-slot build --quiet --release --jobs 3 --manifest-path "$scratch/Cargo.toml"
   local actual
-  actual="$("$scratch/target/debug/revision-check" --build-revision)"
+  actual="$("$scratch/target/release/revision-check" --build-revision)"
   [[ "$actual" == "$1" ]]
-  [[ "$(readelf --string-dump=.twitch_build "$scratch/target/debug/revision-check" | awk '/\[/{print $NF}')" == "$1" ]]
+  [[ "$(readelf --string-dump=.twitch_build "$scratch/target/release/revision-check" | awk '/\[/{print $NF}')" == "$1" ]]
 }
 first="$(git -C "$scratch" rev-parse HEAD)"
-# Cargo.lock muss vor dem sauberen Vergleich vorhanden und versioniert sein.
-cargo generate-lockfile --quiet --manifest-path "$scratch/Cargo.toml"
+/home/nathanael/.cargo/bin/cargo generate-lockfile --quiet --manifest-path "$scratch/Cargo.toml"
 git -C "$scratch" add Cargo.lock
 git -C "$scratch" -c user.name=Test -c user.email=test@example.invalid commit -qm lock
 first="$(git -C "$scratch" rev-parse HEAD)"
 build_and_check "$first"
-printf '// lokale Änderung\n' >> "$scratch/src/main.rs"
+printf 'const _LOCAL_CHANGE: () = ();\n' >> "$scratch/src/main.rs"
 build_and_check "$first-dirty"
 git -C "$scratch" add src/main.rs
 git -C "$scratch" -c user.name=Test -c user.email=test@example.invalid commit -qm next
 second="$(git -C "$scratch" rev-parse HEAD)"
 build_and_check "$second"
-# Auch ein reiner Commit-Wechsel ohne geänderte Rust-Datei aktualisiert den Cache.
 git -C "$scratch" -c user.name=Test -c user.email=test@example.invalid commit --allow-empty -qm empty
 third="$(git -C "$scratch" rev-parse HEAD)"
 build_and_check "$third"
 git -C "$scratch" checkout -q "$second"
 build_and_check "$second"
-# Ein tatsächlich mitkompiliertes, unversioniertes Modul macht den Build dirty.
 printf '\nmod extra;\n' >> "$scratch/src/main.rs"
 git -C "$scratch" add src/main.rs
 git -C "$scratch" -c user.name=Test -c user.email=test@example.invalid commit -qm module
@@ -58,17 +55,18 @@ tracked_revision="$(git -C "$scratch" rev-parse HEAD)"
 build_and_check "$tracked_revision"
 git -C "$scratch" checkout -q "$second"
 build_and_check "$second"
-# Exakt die Installer-Prüfung testen, ohne root, Dienste oder Release-Verzeichnis.
 sed -n '/^check_binary_revisions() {$/,/^}$/p' "$repo/ops/systemd/install-twitch-release.sh" > "$scratch/check.sh"
 source "$scratch/check.sh"
 mkdir -p "$scratch/package/rust/target/release"
-for name in tb-bot tb-dashboard tb-stream-audit tb-config-check; do
-  cp "$scratch/target/debug/revision-check" "$scratch/package/rust/target/release/$name"
+for name in tb-bot tb-dashboard tb-stream-audit tb-config-check tb-llm-usage-recover tb-stt-server; do
+  cp "$scratch/target/release/revision-check" "$scratch/package/rust/target/release/$name"
 done
 git_sha="$second"
+social_ai_expected=1
 collector_expected=0
 clip_context_expected=0
 watchdog_expected=0
+storage_expected=0
 check_binary_revisions "$scratch/package"
 git_sha="$third"
 if (check_binary_revisions "$scratch/package") 2>/dev/null; then
@@ -83,7 +81,17 @@ rm -- "$scratch/package/rust/target/release/tb-config-check"
 if (check_binary_revisions "$scratch/package") 2>/dev/null; then
   echo 'Release ohne Editor wurde akzeptiert' >&2; exit 1
 fi
-cp "$scratch/target/debug/revision-check" "$scratch/package/rust/target/release/tb-config-check"
+cp "$scratch/target/release/revision-check" "$scratch/package/rust/target/release/tb-config-check"
+check_binary_revisions "$scratch/package"
+cp /usr/bin/true "$scratch/package/rust/target/release/tb-stt-server"
+if (check_binary_revisions "$scratch/package") 2>/dev/null; then
+  printf 'STT-Binary ohne Herkunft wurde akzeptiert\n' >&2; exit 1
+fi
+rm -- "$scratch/package/rust/target/release/tb-stt-server"
+if (check_binary_revisions "$scratch/package") 2>/dev/null; then
+  printf 'Release ohne STT-Binary wurde akzeptiert\n' >&2; exit 1
+fi
+cp "$scratch/target/release/revision-check" "$scratch/package/rust/target/release/tb-stt-server"
 check_binary_revisions "$scratch/package"
 cp /usr/bin/true "$scratch/package/rust/target/release/tb-bot"
 if (check_binary_revisions "$scratch/package") 2>/dev/null; then

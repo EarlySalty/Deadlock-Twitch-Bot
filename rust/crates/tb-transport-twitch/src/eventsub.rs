@@ -186,6 +186,25 @@ impl HelixClient {
         &self,
         status: Option<&str>,
     ) -> Result<Vec<EventSubSubscription>, HelixError> {
+        let filter = status
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| ("status", s.to_string()));
+        self.list_eventsub_subscriptions_by(filter).await
+    }
+
+    pub async fn list_eventsub_subscriptions_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<EventSubSubscription>, HelixError> {
+        self.list_eventsub_subscriptions_by(Some(("user_id", user_id.trim().to_string())))
+            .await
+    }
+
+    async fn list_eventsub_subscriptions_by(
+        &self,
+        filter: Option<(&'static str, String)>,
+    ) -> Result<Vec<EventSubSubscription>, HelixError> {
         /// Max. Seiten, um eine Endlosschleife bei defektem API-Cursor auszuschließen.
         const MAX_PAGES: u32 = 100;
         let mut out = Vec::new();
@@ -200,10 +219,7 @@ impl HelixClient {
                 break;
             }
             pages += 1;
-            let mut params: Vec<(&str, String)> = Vec::new();
-            if let Some(status) = status.map(str::trim).filter(|s| !s.is_empty()) {
-                params.push(("status", status.to_string()));
-            }
+            let mut params: Vec<(&str, String)> = filter.iter().cloned().collect();
             if let Some(cursor) = &after {
                 params.push(("after", cursor.clone()));
             }
@@ -321,6 +337,33 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(outcome, CreateOutcome::AlreadyExists);
+    }
+
+    #[tokio::test]
+    async fn list_for_user_sendet_user_id_filter() {
+        let server = MockServer::start().await;
+        let client = client_with(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/helix/eventsub/subscriptions"))
+            .and(query_param("user_id", "42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{
+                    "id": "sub-r", "status": "enabled", "type": "channel.raid",
+                    "version": "1",
+                    "condition": {"to_broadcaster_user_id": "42"},
+                    "transport": {"method": "webhook", "callback": "https://cb/x"}
+                }],
+                "pagination": {}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let subs = client
+            .list_eventsub_subscriptions_for_user("42")
+            .await
+            .unwrap();
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].sub_type, "channel.raid");
     }
 
     #[tokio::test]

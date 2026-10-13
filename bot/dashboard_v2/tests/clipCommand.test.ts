@@ -1,7 +1,7 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { fetchClipCommandSettings, toggleClipCommand } from '../src/api/clipCommand';
+import { fetchClipCommandSettings, setClipCommandDuration, toggleClipCommand, fetchPrivateVodClips, setPrivateVodCommand, privateVodDownloadUrl } from '../src/api/clipCommand';
 
 const originalFetch = globalThis.fetch;
 
@@ -21,6 +21,40 @@ function mockFetch(status: number, body: unknown) {
   }) as unknown as typeof fetch;
   return calls;
 }
+
+test('private VOD listing uses only the authenticated owner session', async () => {
+  const calls = mockFetch(200, { enabled: false, jobs: [] });
+  const data = await fetchPrivateVodClips();
+  assert.equal(calls[0].url, '/twitch/api/v2/streamer/private-vod-clips');
+  assert.equal(calls[0].init.credentials, 'same-origin');
+  assert.deepEqual(data, { enabled: false, jobs: [] });
+});
+
+test('private VOD opt-in is independent of native clip settings', async () => {
+  const calls = mockFetch(200, { enabled: true });
+  assert.deepEqual(await setPrivateVodCommand(true), { enabled: true });
+  assert.equal(calls[0].url, '/twitch/api/v2/streamer/private-vod-clips');
+  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(calls[0].init.credentials, 'same-origin');
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)), { enabled: true });
+});
+
+test('private VOD download remains a same-origin authenticated route', () => {
+  assert.equal(
+    privateVodDownloadUrl('00000000-0000-4000-8000-000000000001'),
+    '/twitch/api/v2/streamer/private-vod-clips/00000000-0000-4000-8000-000000000001/download',
+  );
+  assert.equal(privateVodDownloadUrl('../foreign?token=value'), '/twitch/api/v2/streamer/private-vod-clips/..%2Fforeign%3Ftoken%3Dvalue/download');
+});
+
+test('saves duration without overwriting the enable switch', async () => {
+  const calls = mockFetch(200, { ok: true, clip_command_enabled: false, clip_command_duration_seconds: 59.9, clip_command_duration_configured: true });
+  const data = await setClipCommandDuration(59.9);
+  assert.equal(calls[0].init.method, 'POST');
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)), { clip_command_duration_seconds: 59.9 });
+  assert.equal(data.clip_command_duration_seconds, 59.9);
+  assert.equal(data.clip_command_enabled, false);
+});
 
 test('liest den Status ohne Streamer-Parameter aus der Session', async () => {
   const calls = mockFetch(200, { clip_command_enabled: true });

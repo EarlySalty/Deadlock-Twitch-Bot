@@ -210,9 +210,9 @@ async fn credential(fd: u32) -> Result<Zeroizing<String>, &'static str> {
         .ok_or("Infisical-FD ist ungültig.")?;
     let borrowed = unsafe { BorrowedFd::borrow_raw(raw) };
     let flags =
-        fcntl(&borrowed, FcntlArg::F_GETFD).map_err(|_| "Infisical-FD ist nicht verfügbar.")?;
+        fcntl(borrowed, FcntlArg::F_GETFD).map_err(|_| "Infisical-FD ist nicht verfügbar.")?;
     fcntl(
-        &borrowed,
+        borrowed,
         FcntlArg::F_SETFD(FdFlag::from_bits_retain(flags) | FdFlag::FD_CLOEXEC),
     )
     .map_err(|_| "Infisical-FD konnte nicht geschützt werden.")?;
@@ -844,7 +844,7 @@ mod tests {
         use std::io::{Seek, Write};
         let fd = nix::sys::memfd::memfd_create(
             c"uplink-public-test",
-            nix::sys::memfd::MemFdCreateFlag::empty(),
+            nix::sys::memfd::MFdFlags::empty(),
         )
         .unwrap();
         let mut file = std::fs::File::from(fd);

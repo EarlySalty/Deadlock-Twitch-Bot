@@ -55,7 +55,6 @@ if [[ -f "$git_dir/objects/info/alternates" ]] ||
   exit 1
 fi
 
-# Ersetzungsobjekte könnten selbst einen expliziten SHA transparent umbiegen.
 export GIT_NO_REPLACE_OBJECTS=1
 export GIT_OPTIONAL_LOCKS=0
 export GIT_NO_LAZY_FETCH=1
@@ -74,10 +73,6 @@ if [[ "$("${git_safe[@]}" -C "$checkout" rev-parse --absolute-git-dir)" != "$git
   echo "Checkout und angegebener Git-SHA stimmen nicht überein." >&2
   exit 1
 fi
-# Kein `git status` als root: lokale Filter/Attribute des zuvor unprivilegierten
-# Builders könnten dabei Programme ausführen. Vertrauenswürdige Skripte und SQL
-# kommen unten ausschließlich per `git archive` aus dem expliziten SHA;
-# generierte Artefakte werden separat auf Typ, Eigentum und Schreibschutz geprüft.
 
 dashboard_source=bot/dashboard_v2/dist
 if [[ ! -d "$checkout/$dashboard_source" ]]; then
@@ -94,6 +89,15 @@ generated=(
   bot/admin_dashboard/dist
   website/dist
 )
+social_ai_expected=0
+social_ai_config_extension=yaml
+if "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:rust/crates/tb-social-media/src/ai_editor/mod.rs" 2>/dev/null; then
+  social_ai_expected=1
+  if "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:ops/social-ai/editor.toml" 2>/dev/null; then
+    social_ai_config_extension=toml
+  fi
+  generated+=(rust/target/release/tb-stt-server)
+fi
 collector_expected=0
 if "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:rust/bin/tb-category-collector/Cargo.toml" 2>/dev/null &&
    ! "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:rust/bin/tb-category-collector/src/lib.rs" 2>/dev/null; then
@@ -132,11 +136,10 @@ for relative in "${generated[@]}"; do
   fi
 done
 
-# Herkunft direkt aus ELF-Daten lesen; niemals ein Build-Artefakt als root
-# ausführen. Ein neuer Checkout-Name macht eine kopierte alte Binary nicht neu.
 check_binary_revisions() {
   local source_root="$1" binary embedded_revision
   local binaries=(tb-bot tb-dashboard tb-stream-audit tb-config-check tb-llm-usage-recover)
+  if [[ "$social_ai_expected" == 1 ]]; then binaries+=(tb-stt-server); fi
   if [[ "$collector_expected" == 1 ]]; then binaries+=(tb-category-collector); fi
   if [[ "$clip_context_expected" == 1 ]]; then binaries+=(clip_context_learn); fi
   if [[ "$watchdog_expected" == 1 ]]; then binaries+=(tb-twitch-watchdog); fi
@@ -150,6 +153,36 @@ check_binary_revisions() {
   done
 }
 check_binary_revisions "$checkout"
+
+required_files=(
+  rust/scripts/run_tb_bot_service.sh
+  rust/scripts/run_tb_dashboard_service.sh
+  rust/scripts/run_stream_audit_service.sh
+  ops/systemd/twitch-runtime-roles.sql
+)
+if [[ "$social_ai_expected" == 1 ]]; then
+  required_files+=(
+    "ops/social-ai/editor.$social_ai_config_extension"
+    "ops/social-ai/pricing-v1.$social_ai_config_extension"
+    ops/social-ai/skills/deadlock-understanding.md
+    ops/social-ai/skills/highlight-analysis.md
+    ops/social-ai/skills/editing-strategy.md
+    ops/social-ai/skills/video-layout.md
+    ops/social-ai/skills/subtitles.md
+    ops/social-ai/skills/copywriting.md
+    ops/social-ai/skills/quality-validation.md
+    ops/social-ai/skills/feedback-learning.md
+  )
+fi
+check_required_sources() {
+  local source_root="$1" required_file
+  for required_file in "${required_files[@]}"; do
+    if [[ ! -f "$source_root/$required_file" || -L "$source_root/$required_file" ]]; then
+      echo "Erforderliche Release-Quelle fehlt oder ist ein Symlink: $required_file" >&2
+      exit 1
+    fi
+  done
+}
 
 release_root=/opt/deadlock/twitch/releases
 install -d -o root -g root -m 0755 "$release_root"
@@ -180,6 +213,9 @@ if [[ ! -e "$release" ]]; then
   install -m 0755 "$checkout/rust/target/release/tb-stream-audit" "$stage/rust/target/release/tb-stream-audit"
   install -m 0755 "$checkout/rust/target/release/tb-config-check" "$stage/rust/target/release/tb-config-check"
   install -m 0755 "$checkout/rust/target/release/tb-llm-usage-recover" "$stage/rust/target/release/tb-llm-usage-recover"
+  if [[ "$social_ai_expected" == 1 ]]; then
+    install -m 0755 "$checkout/rust/target/release/tb-stt-server" "$stage/rust/target/release/tb-stt-server"
+  fi
   if [[ "$collector_expected" == 1 ]]; then
     install -m 0755 "$checkout/rust/target/release/tb-category-collector" "$stage/rust/target/release/tb-category-collector"
   fi
@@ -193,22 +229,6 @@ if [[ ! -e "$release" ]]; then
     install -m 0755 "$checkout/rust/target/release/tb-category-storage" "$stage/rust/target/release/tb-category-storage"
   fi
 
-  # Skripte, Migrationen und Rollen-SQL kommen direkt aus dem Git-Objekt des
-  # angegebenen SHA. Unversionierte Dateien aus dem Build-Baum werden niemals
-  # mit postgres- oder Dienstrechten ausgeführt.
-  "${git_safe[@]}" -C "$checkout" archive --format=tar "$git_sha" -- \
-    rust/scripts/run_tb_bot_service.sh \
-    rust/scripts/run_tb_dashboard_service.sh \
-    rust/scripts/run_stream_audit_service.sh \
-    rust/migrations \
-    rust/knowledge \
-    ops/systemd \
-    | tar --extract --file=- --directory="$stage" --no-same-owner --no-same-permissions
-
-  # Vor jedem root-seitigen chmod/chown müssen archivierte Quellen echte
-  # reguläre Dateien sein. Ein getrackter Symlink dürfte sonst beim chmod sein
-  # Ziel außerhalb des Releases verändern. Außerdem muss der extrahierte
-  # Umfang exakt dem Git-Baum entsprechen; export-ignore darf nichts verbergen.
   archived_roots=(
     rust/scripts/run_tb_bot_service.sh
     rust/scripts/run_tb_dashboard_service.sh
@@ -217,6 +237,13 @@ if [[ ! -e "$release" ]]; then
     rust/knowledge
     ops/systemd
   )
+  if [[ "$social_ai_expected" == 1 ]]; then
+    archived_roots+=(ops/social-ai)
+  fi
+  "${git_safe[@]}" -C "$checkout" archive --format=tar "$git_sha" -- \
+    "${archived_roots[@]}" \
+    | tar --extract --file=- --directory="$stage" --no-same-owner --no-same-permissions
+
   unsafe_archived="$({
     cd "$stage"
     find "${archived_roots[@]}" -xdev ! \( -type f -o -type d \) -print -quit
@@ -225,16 +252,7 @@ if [[ ! -e "$release" ]]; then
     echo "Archivierte Release-Quelle ist keine reguläre Datei: $unsafe_archived" >&2
     exit 1
   fi
-  for required_file in \
-    rust/scripts/run_tb_bot_service.sh \
-    rust/scripts/run_tb_dashboard_service.sh \
-    rust/scripts/run_stream_audit_service.sh \
-    ops/systemd/twitch-runtime-roles.sql; do
-    if [[ ! -f "$stage/$required_file" || -L "$stage/$required_file" ]]; then
-      echo "Erforderliche Release-Quelle fehlt oder ist ein Symlink: $required_file" >&2
-      exit 1
-    fi
-  done
+  check_required_sources "$stage"
   expected_archive=
   actual_archive=
   cleanup_archive_lists() {
@@ -272,8 +290,6 @@ if [[ ! -e "$release" ]]; then
 
   chown -R root:root "$stage"
   chmod -R go-w "$stage"
-  # mktemp legt die Stage-Wurzel mit 0700 an. Die Laufzeitnutzer brauchen
-  # Traversal-Rechte, dürfen den root-eigenen Release-Baum aber nie ändern.
   chmod 0755 "$stage"
   if [[ -n "$(find "$stage" -xdev ! \( -type f -o -type d \) -print -quit)" ]]; then
     echo "Der erzeugte Release-Baum enthält einen Symlink oder Sonderdateityp." >&2
@@ -281,8 +297,6 @@ if [[ ! -e "$release" ]]; then
   fi
   (
     cd "$stage"
-    # Die Ausgabedatei existiert durch die Shell-Umleitung bereits, bevor
-    # `find` startet. Sie darf deshalb nicht ihren eigenen Vorzustand hashen.
     find . -type f ! -path ./SHA256SUMS -print0 \
       | sort -z \
       | xargs -0 sha256sum > SHA256SUMS
@@ -305,6 +319,7 @@ fi
   cd "$release"
   sha256sum --check --strict SHA256SUMS >/dev/null
 )
+check_required_sources "$release"
 check_binary_revisions "$release"
 
 current_tmp=/opt/deadlock/twitch/.current-next

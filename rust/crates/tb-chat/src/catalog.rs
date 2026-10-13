@@ -110,6 +110,12 @@ pub fn catalog() -> &'static [CommandInfo] {
             summary: "Erstellt einen Clip vom aktuellen Stream.",
         },
         CommandInfo {
+            name: "!vodclip",
+            aliases: &[],
+            group: Mod,
+            summary: "Privater VOD-Ausschnitt für den Kanalinhaber: !vodclip 55 58. Mods und Kanalinhaber; im Dashboard einschaltbar.",
+        },
+        CommandInfo {
             name: "!invite",
             aliases: &[],
             group: Fun,

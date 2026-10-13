@@ -38,9 +38,16 @@
 //! - `report_writer` — Report-Aggregation + Markdown (social_media_reports).
 //! - `report_dispatcher` — wöchentlicher Admin-Report-Generator (DM=B10 aus).
 
+pub mod ai_editor;
 pub mod analytics;
 pub mod approval;
 pub mod approval_worker;
+#[cfg(test)]
+mod autopilot_contract_tests;
+pub mod autopilot_publish;
+#[path = "autopilot_schedule/runner.rs"]
+pub mod autopilot_runner;
+pub mod autopilot_settings;
 pub mod batch;
 pub mod capabilities;
 pub mod clip;
@@ -48,6 +55,7 @@ pub mod clip_analytics;
 pub mod clip_context;
 pub mod clip_context_harvest;
 pub mod clip_manager;
+pub mod clip_pool;
 pub mod clip_prep_worker;
 pub mod clip_queue;
 pub mod clip_templates;
@@ -67,6 +75,9 @@ pub mod oauth;
 pub mod partner_access;
 pub mod posting_plan;
 pub mod preview;
+pub mod produced_video;
+pub mod production_jobs;
+pub mod production_lease;
 pub mod reauth;
 pub mod refresh_worker;
 pub mod render;
@@ -113,3 +124,6 @@ pub fn build_clip_fetch_task(pool: PgPool, helix: Arc<HelixClient>) -> ClipFetch
 #[cfg(test)]
 #[path = "../../../test-support/schema_sql.rs"]
 mod test_sql;
+
+#[cfg(test)]
+mod autopilot_compatibility_tests;

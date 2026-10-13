@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 tb-config   = { workspace = true }
+tb-domain   = { workspace = true }
 reqwest     = { workspace = true }
 chrono      = { workspace = true }
 regex       = { workspace = true }

@@ -29,6 +29,10 @@ import BotControlPage from '@/pages/operations/BotControl';
 import ScopesPage from '@/pages/operations/Scopes';
 import AuditLogPage from '@/pages/money/AuditLog';
 import { StreamerDetailPage } from '@/pages/streamers/StreamerDetail';
+import { SocialAiLayout } from '@/pages/socialAi/SocialAiLayout';
+import { SocialAiUsagePage } from '@/pages/socialAi/SocialAiUsage';
+import { SocialAiLimitsPage } from '@/pages/socialAi/SocialAiLimits';
+import { SocialAiSkillsPage } from '@/pages/socialAi/SocialAiSkills';
 import { StreamerList } from '@/pages/streamers/StreamerList';
 
 interface LegacyRedirectProps {
@@ -77,6 +81,12 @@ const router = createBrowserRouter(
         { path: 'content/announcements', element: <AnnouncementsPage /> },
         { path: 'content/caster-overlay', element: <CasterOverlayPage /> },
         { path: 'content/build-lab', element: <BrainBuildLab /> },
+        { path: 'content/social-ai', element: <SocialAiLayout />, children: [
+          { index: true, element: <Navigate to="usage" replace /> },
+          { path: 'usage', element: <SocialAiUsagePage /> },
+          { path: 'limits', element: <SocialAiLimitsPage /> },
+          { path: 'skills', element: <SocialAiSkillsPage /> },
+        ] },
         { path: 'content/roadmap', element: <RoadmapPage /> },
         { path: 'content/changelog', element: <ChangelogPage /> },
         { path: 'content/legal', element: <LegalPage /> },

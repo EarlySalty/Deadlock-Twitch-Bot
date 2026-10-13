@@ -7,7 +7,7 @@
 //! Erfolg die Clip-Upload-Spalten + den Publication-Status.
 
 use chrono::{Duration, Utc};
-use sqlx::{PgPool, Row};
+use sqlx::{PgConnection, PgPool, Row};
 
 use crate::retention::refresh_clip_publication_status;
 
@@ -19,6 +19,8 @@ const PLATFORMS: [&str; 3] = ["tiktok", "youtube", "instagram"];
 pub enum QueueError {
     #[error("Invalid platform: {0}")]
     InvalidPlatform(String),
+    #[error("Dieser Clip wird im Clip-Pool verwaltet")]
+    PoolManaged,
     #[error("db: {0}")]
     Db(#[from] sqlx::Error),
 }
@@ -124,25 +126,54 @@ pub async fn queue_upload_with_schedule(
     pool: &PgPool,
     request: QueueUploadRequest<'_>,
 ) -> Result<i64, QueueError> {
-    let clip_db_id = request.clip_db_id;
+    if !PLATFORMS.contains(&request.platform) {
+        return Err(QueueError::InvalidPlatform(request.platform.to_string()));
+    }
+    let reason = upload_wait_reason_for_clip(pool, request.clip_db_id, request.platform).await?;
+    let mut tx = pool.begin().await?;
+    lock_clip_owner(&mut tx, request.clip_db_id).await?;
+    let id = queue_upload_on(&mut tx, request, reason.as_deref()).await?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+pub(crate) async fn lock_clip_owner(
+    connection: &mut PgConnection,
+    clip_id: i64,
+) -> Result<Option<String>, sqlx::Error> {
+    let owner: Option<String> =
+        sqlx::query_scalar("SELECT twitch_user_id FROM twitch_clips_social_media WHERE id = $1")
+            .bind(clip_id)
+            .fetch_one(&mut *connection)
+            .await?;
+    if let Some(owner) = &owner {
+        crate::autopilot_settings::lock_owner(connection, owner).await?;
+    }
+    Ok(owner)
+}
+
+pub(crate) async fn queue_upload_on(
+    connection: &mut PgConnection,
+    request: QueueUploadRequest<'_>,
+    reason: Option<&str>,
+) -> Result<i64, QueueError> {
     let platform = request.platform;
     let explicit_schedule = matches!(request.schedule, UploadSchedule::Replace(_));
-    let queue_id = queue_upload_record_with_schedule(pool, request).await?;
-    let reason = upload_wait_reason_for_clip(pool, clip_db_id, platform).await?;
+    let queue_id = queue_upload_record_on(connection, request).await?;
     let awaiting_choice = if platform == "tiktok" {
         let (has_column, options): (bool, Option<serde_json::Value>) = sqlx::query_as(
             "SELECT to_jsonb(q) ? 'tiktok_post_options', NULLIF(to_jsonb(q)->'tiktok_post_options', 'null'::jsonb) \
              FROM twitch_clips_upload_queue q WHERE id = $1",
         )
         .bind(queue_id)
-        .fetch_one(pool)
+        .fetch_one(&mut *connection)
         .await?;
         has_column && !tiktok_choice_is_complete(options.as_ref())
     } else {
         false
     };
     sqlx::query("UPDATE twitch_clips_upload_queue SET status = CASE WHEN $3 OR (platform = 'tiktok' AND status = 'waiting_tiktok_approval') THEN 'waiting_tiktok_approval' WHEN $2::text IS NULL THEN 'pending' ELSE 'waiting_connection' END, last_error = $2, last_attempt_at = CASE WHEN $2::text IS NULL THEN NULL ELSE NOW() END WHERE id = $1 AND (status IN ('pending', 'waiting_connection', 'waiting_tiktok_approval') OR (status = 'waiting_schedule' AND (scheduled_at > NOW() OR $4)))")
-        .bind(queue_id).bind(reason).bind(awaiting_choice).bind(explicit_schedule).execute(pool).await?;
+        .bind(queue_id).bind(reason).bind(awaiting_choice).bind(explicit_schedule).execute(connection).await?;
     Ok(queue_id)
 }
 
@@ -277,8 +308,20 @@ async fn queue_upload_record(
     .await
 }
 
+#[cfg(test)]
 async fn queue_upload_record_with_schedule(
     pool: &PgPool,
+    request: QueueUploadRequest<'_>,
+) -> Result<i64, QueueError> {
+    let mut tx = pool.begin().await?;
+    lock_clip_owner(&mut tx, request.clip_db_id).await?;
+    let id = queue_upload_record_on(&mut tx, request).await?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+async fn queue_upload_record_on(
+    connection: &mut PgConnection,
     request: QueueUploadRequest<'_>,
 ) -> Result<i64, QueueError> {
     let QueueUploadRequest {
@@ -298,19 +341,18 @@ async fn queue_upload_record_with_schedule(
     let tags = hashtags_json(hashtags);
     if platform == "tiktok" {
         if let Some(id) = sqlx::query_scalar::<_, i64>(
-            "SELECT id FROM twitch_clips_upload_queue \
+            "SELECT id::bigint FROM twitch_clips_upload_queue \
              WHERE clip_id = $1 AND platform = 'tiktok' AND status IN ('inbox', 'inbox_pending') \
              ORDER BY id DESC LIMIT 1",
         )
         .bind(clip_db_id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *connection)
         .await?
         {
             return Ok(id);
         }
     }
 
-    // 1) Pending wiederverwenden.
     if let Some(id) = sqlx::query_scalar::<_, i64>(
         "SELECT id::bigint FROM twitch_clips_upload_queue \
          WHERE clip_id = $1 AND platform = $2 AND status IN ('pending', 'waiting_connection', 'waiting_tiktok_approval', 'waiting_schedule') \
@@ -318,7 +360,7 @@ async fn queue_upload_record_with_schedule(
     )
     .bind(clip_db_id)
     .bind(platform)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *connection)
     .await?
     {
         sqlx::query(
@@ -336,30 +378,28 @@ async fn queue_upload_record_with_schedule(
         .bind(priority)
         .bind(id)
         .bind(explicit_schedule)
-        .execute(pool)
+        .execute(&mut *connection)
         .await?;
         return Ok(id);
     }
 
-    // 2) Processing: frisch → wiederverwenden; stale → re-queuen.
     let stale_cutoff = (Utc::now() - Duration::minutes(PROCESSING_STALE_MINUTES)).to_rfc3339();
-    if let Some(row) = sqlx::query!(
-        "SELECT id AS \"id!\", \
+    if let Some((id, is_fresh)) = sqlx::query_as::<_, (i64, bool)>(
+        "SELECT id::bigint, \
                 (COALESCE(last_attempt_at, created_at) IS NOT NULL \
-                 AND COALESCE(last_attempt_at, created_at) >= $3::text::timestamptz) AS \"is_fresh!\" \
+                 AND COALESCE(last_attempt_at, created_at) >= $3::text::timestamptz) \
          FROM twitch_clips_upload_queue \
          WHERE clip_id = $1 AND platform = $2 AND status = 'processing' \
          ORDER BY COALESCE(last_attempt_at, created_at) DESC, id DESC LIMIT 1",
-        clip_db_id,
-        platform,
-        stale_cutoff
     )
-    .fetch_optional(pool)
+    .bind(clip_db_id)
+    .bind(platform)
+    .bind(stale_cutoff)
+    .fetch_optional(&mut *connection)
     .await?
     {
-        let id = row.id;
-        if row.is_fresh {
-            return Ok(id); // wird noch verarbeitet
+        if is_fresh {
+            return Ok(id);
         }
         sqlx::query!(
             "UPDATE twitch_clips_upload_queue SET status = 'pending', title = $1, description = $2, \
@@ -372,27 +412,31 @@ async fn queue_upload_record_with_schedule(
             priority,
             id
         )
-        .execute(pool)
+        .execute(&mut *connection)
         .await?;
         return Ok(id);
     }
 
-    // 3) Neu einfügen.
-    let id: i64 = sqlx::query_scalar!(
+    let allowed = sqlx::query_scalar::<_, bool>("SELECT to_jsonb(c)->>'pool_managed_at' IS NULL FROM twitch_clips_social_media c WHERE id = $1")
+        .bind(clip_db_id).fetch_optional(&mut *connection).await?.unwrap_or(false);
+    if !allowed {
+        return Err(QueueError::PoolManaged);
+    }
+    let id = sqlx::query_scalar(
         "INSERT INTO twitch_clips_upload_queue \
             (clip_id, platform, title, description, hashtags, scheduled_at, priority, status, created_at) \
          VALUES ($1, $2, $3, $4, $5, $6::text::timestamptz, $7, 'pending', $8::text::timestamptz) \
-         RETURNING id AS \"id!\"",
-        clip_db_id,
-        platform,
-        title,
-        description,
-        tags.as_deref(),
-        scheduled_at,
-        priority,
-        Utc::now().to_rfc3339()
+         RETURNING id::bigint",
     )
-    .fetch_one(pool)
+    .bind(clip_db_id)
+    .bind(platform)
+    .bind(title)
+    .bind(description)
+    .bind(tags.as_deref())
+    .bind(scheduled_at)
+    .bind(priority)
+    .bind(Utc::now().to_rfc3339())
+    .fetch_one(&mut *connection)
     .await?;
     Ok(id)
 }
@@ -426,7 +470,9 @@ pub async fn get_upload_queue(
          FROM twitch_clips_upload_queue q \
          JOIN twitch_clips_social_media c ON c.id = q.clip_id WHERE ",
     );
-    sql.push_str("q.status = $1");
+    sql.push_str(
+        "q.status = $1 AND NULLIF(to_jsonb(q)->'produced_video_id', 'null'::jsonb) IS NULL",
+    );
     if status == "waiting_connection" {
         sql.push_str(
             " AND (q.last_attempt_at IS NULL OR q.last_attempt_at <= NOW() - INTERVAL '5 minutes')",
@@ -508,6 +554,15 @@ pub async fn reschedule_upload(
     error: Option<&str>,
     konto: VertagungsKonto,
 ) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let clip_id: Option<i64> =
+        sqlx::query_scalar("SELECT clip_id::bigint FROM twitch_clips_upload_queue WHERE id = $1")
+            .bind(queue_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if let Some(clip_id) = clip_id {
+        lock_clip_owner(&mut tx, clip_id).await?;
+    }
     let now = Utc::now().to_rfc3339();
     sqlx::query!(
         "UPDATE twitch_clips_upload_queue \
@@ -525,9 +580,9 @@ pub async fn reschedule_upload(
         konto == VertagungsKonto::Versuch,
         konto == VertagungsKonto::Kontingent
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
-    Ok(())
+    tx.commit().await
 }
 
 pub async fn update_upload_status(
@@ -695,6 +750,63 @@ mod tests {
 
     async fn seed_clip(pool: &PgPool) -> i64 {
         sqlx::query_scalar("INSERT INTO twitch_clips_social_media (clip_id, clip_url, streamer_login, clip_title) VALUES ('c1', 'https://clips.test/c1', 'nani', 'T') RETURNING id").fetch_one(pool).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn legacy_int4_queue_ids_survive_all_reuse_paths() {
+        let pool = make_pool("t_sm_queue_int4_contract")
+            .await
+            .expect("isolated database");
+        sqlx::query("ALTER TABLE twitch_clips_upload_queue ALTER COLUMN id TYPE INTEGER")
+            .execute(&pool)
+            .await
+            .expect("legacy int4 queue ids");
+        let clip = seed_clip(&pool).await;
+        let id = queue_upload(&pool, clip, "youtube", None, None, None, None, 0)
+            .await
+            .expect("insert with int4 id");
+        assert_eq!(
+            queue_upload(&pool, clip, "youtube", None, None, None, None, 0)
+                .await
+                .expect("pending reuse with int4 id"),
+            id
+        );
+        sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'processing', last_attempt_at = '2999-01-01'::timestamptz WHERE id = $1")
+            .bind(id).execute(&pool).await.expect("fresh processing boundary");
+        assert_eq!(
+            queue_upload(&pool, clip, "youtube", None, None, None, None, 0)
+                .await
+                .expect("fresh processing reuse with int4 id"),
+            id
+        );
+        sqlx::query("UPDATE twitch_clips_upload_queue SET last_attempt_at = '2000-01-01'::timestamptz WHERE id = $1")
+            .bind(id).execute(&pool).await.expect("stale processing boundary");
+        assert_eq!(
+            queue_upload(&pool, clip, "youtube", None, None, None, None, 0)
+                .await
+                .expect("stale processing reuse with int4 id"),
+            id
+        );
+        let inbox = queue_upload(&pool, clip, "tiktok", None, None, None, None, 0)
+            .await
+            .expect("TikTok insert with int4 id");
+        sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'inbox' WHERE id = $1")
+            .bind(inbox)
+            .execute(&pool)
+            .await
+            .expect("existing inbox transfer");
+        assert_eq!(
+            queue_upload(&pool, clip, "tiktok", None, None, None, None, 0)
+                .await
+                .expect("inbox reuse with int4 id"),
+            inbox
+        );
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM twitch_clips_upload_queue")
+            .fetch_one(&pool)
+            .await
+            .expect("deduplicated int4 queue");
+        assert_eq!(count, 2);
+        pool.close().await;
     }
 
     #[tokio::test]

@@ -509,3 +509,35 @@ BEGIN
 END
 $audit_usage$;
 ALTER ROLE twitchaudit IN DATABASE twitch_analytics SET search_path=public,pg_catalog;
+
+DO $social_ai_consent_roles$
+BEGIN
+    IF to_regprocedure('public.twitch_apply_social_ai_consent_roles()') IS NOT NULL THEN
+        PERFORM public.twitch_apply_social_ai_consent_roles();
+    END IF;
+END
+$social_ai_consent_roles$;
+
+DO $social_ai_limit_roles$
+BEGIN
+    IF to_regprocedure('public.twitch_apply_social_ai_limit_roles()') IS NOT NULL THEN
+        PERFORM public.twitch_apply_social_ai_limit_roles();
+    END IF;
+END
+$social_ai_limit_roles$;
+
+DO $social_ai_skill_roles$
+BEGIN
+    IF to_regprocedure('public.twitch_apply_social_ai_skill_roles()') IS NOT NULL THEN
+        PERFORM public.twitch_apply_social_ai_skill_roles();
+    END IF;
+END
+$social_ai_skill_roles$;
+
+DO $private_vod_roles$
+BEGIN
+    IF to_regprocedure('public.twitch_apply_private_vod_roles()') IS NOT NULL THEN
+        PERFORM public.twitch_apply_private_vod_roles();
+    END IF;
+END
+$private_vod_roles$;

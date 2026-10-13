@@ -14,7 +14,7 @@ use tb_monitoring::{
     SubscriptionManager, SubscriptionTransport, VodPreviewSource,
 };
 use tb_transport_discord::{BrokerRelay, DiscordBackend, EditRichMessage, SendRichMessage};
-use tb_transport_twitch::eventsub::{CreateOutcome, EventSubCreateError};
+use tb_transport_twitch::eventsub::{CreateOutcome, EventSubCreateError, EventSubSubscription};
 use tb_transport_twitch::{HelixClient, HelixStream};
 
 /// Helix-Adapter für den Subscription-Port (App-Token, Core-Subs).
@@ -62,33 +62,42 @@ impl SubscriptionTransport for HelixSubscriptionTransport {
 
     async fn list(&self) -> Result<Vec<RemoteSubscription>, SourceError> {
         let subs = self.helix.list_eventsub_subscriptions(None).await?;
-        Ok(subs
-            .into_iter()
-            .map(|sub| RemoteSubscription {
-                id: sub.id,
-                sub_type: sub.sub_type,
-                status: sub.status,
-                callback: sub.transport.callback,
-                // Ziel-Extraktion wie Python `_eventsub_target_user_id`:
-                // channel.raid trägt `to_broadcaster_user_id`.
-                broadcaster_user_id: [
-                    "broadcaster_user_id",
-                    "to_broadcaster_user_id",
-                    "from_broadcaster_user_id",
-                    "user_id",
-                ]
-                .iter()
-                .find_map(|key| sub.condition.get(key).and_then(Value::as_str))
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .map(str::to_string),
-            })
-            .collect())
+        Ok(subs.into_iter().map(to_remote_subscription).collect())
+    }
+
+    async fn list_for_user(&self, user_id: &str) -> Result<Vec<RemoteSubscription>, SourceError> {
+        let subs = self
+            .helix
+            .list_eventsub_subscriptions_for_user(user_id)
+            .await?;
+        Ok(subs.into_iter().map(to_remote_subscription).collect())
     }
 
     async fn delete(&self, id: &str) -> Result<(), SourceError> {
         self.helix.delete_eventsub_subscription(id).await?;
         Ok(())
+    }
+}
+
+fn to_remote_subscription(sub: EventSubSubscription) -> RemoteSubscription {
+    RemoteSubscription {
+        id: sub.id,
+        sub_type: sub.sub_type,
+        status: sub.status,
+        callback: sub.transport.callback,
+        // Ziel-Extraktion wie Python `_eventsub_target_user_id`:
+        // channel.raid trägt `to_broadcaster_user_id`.
+        broadcaster_user_id: [
+            "broadcaster_user_id",
+            "to_broadcaster_user_id",
+            "from_broadcaster_user_id",
+            "user_id",
+        ]
+        .iter()
+        .find_map(|key| sub.condition.get(key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string),
     }
 }
 

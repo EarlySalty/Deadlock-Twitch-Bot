@@ -1,0 +1,166 @@
+.social-ai {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.social-ai .admin-button {
+  min-height: 44px;
+  font-size: 0.875rem;
+}
+
+.social-ai .admin-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.social-ai :is(button, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-primary-hover);
+  outline-offset: 3px;
+}
+
+.social-ai-active {
+  border-color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 14%, var(--color-bg));
+}
+
+.social-ai-notice {
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 1rem;
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.social-ai-form-grid,
+.social-ai-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.social-ai label {
+  font-size: 0.875rem;
+}
+
+.social-ai input[type="checkbox"] {
+  width: 1.1rem;
+  height: 1.1rem;
+  flex-shrink: 0;
+  accent-color: var(--color-primary);
+}
+
+.social-ai :is(input, textarea) {
+  caret-color: var(--color-primary-hover);
+}
+
+.social-ai [aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.social-ai-summary > div {
+  padding-block: 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.social-ai-summary dt,
+.social-ai-facts dt {
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+}
+
+.social-ai-summary dd {
+  margin: 0.35rem 0 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.social-ai-facts {
+  display: grid;
+  gap: 1rem;
+}
+
+.social-ai-facts dd {
+  margin: 0.35rem 0 0;
+  line-height: 1.6;
+}
+
+.social-ai-table {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+}
+
+.social-ai-table table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.social-ai-table :is(th, td) {
+  padding: 0.85rem 1rem;
+  vertical-align: top;
+  border-bottom: 1px solid var(--color-border);
+  min-width: 10rem;
+}
+
+.social-ai-table th {
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  font-weight: 600;
+}
+
+.social-ai-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.social-ai-table small {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--color-text-secondary);
+}
+
+@media (max-width: 900px) {
+  .social-ai-form-grid,
+  .social-ai-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.social-ai-version-label {
+  width: min(100%, 18rem);
+}
+
+.social-ai-diff {
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+  overflow: auto;
+  max-height: 30rem;
+  background: var(--color-bg);
+}
+
+.social-ai-diff > div {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr);
+  padding: 0.4rem 0.75rem;
+}
+
+.social-ai-diff pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.social-ai-diff-added {
+  background: color-mix(in srgb, var(--color-success) 8%, var(--color-bg));
+}
+
+.social-ai-diff-removed {
+  background: color-mix(in srgb, var(--color-danger) 9%, var(--color-bg));
+}

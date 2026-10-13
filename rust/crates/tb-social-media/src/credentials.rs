@@ -211,12 +211,9 @@ impl CredentialManager {
                 .get_credentials_scoped(platform, twitch_user_id, true)
                 .await?
             {
-                match sqlx::query_as::<_, (Option<chrono::DateTime<chrono::Utc>>, bool)>(
+                sqlx::query_as::<_, (Option<chrono::DateTime<chrono::Utc>>, bool)>(
                     "SELECT refresh_expires_at, needs_reauth FROM social_media_platform_auth WHERE id = $1 AND enabled = 1",
-                ).bind(creds.id).fetch_optional(&self.pool).await? {
-                    Some(metadata) => Some((creds, metadata)),
-                    None => None,
-                }
+                ).bind(creds.id).fetch_optional(&self.pool).await?.map(|metadata| (creds, metadata))
             } else {
                 None
             };

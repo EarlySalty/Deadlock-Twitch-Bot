@@ -20,6 +20,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
@@ -30,6 +31,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { dictionaryFor, translate } from '../src/i18n/dictionary';
 import { LanguageProvider } from '../src/context/LanguageContext';
 import { resolveSocialMediaChannel } from '../src/utils/socialMediaChannel';
+import { socialWorkspaceDepartureAllowed } from '../src/components/socialmedia/studioNavigation';
 import {
   clipFehler,
   istGesperrt,
@@ -208,60 +210,153 @@ test('kein deutscher Text traegt in zwei Tabellen zwei Bedeutungen', () => {
   }
 });
 
-// ── 3. Gebaute URLs gegen die Routen des Backends ────────────────────────────
-
-const API_MODUL = 'src/api/socialMedia.ts';
+const API_MODULE = [
+  'src/api/socialMedia.ts',
+  'src/components/socialmedia/autopilot/import-pool/api.ts',
+  'src/components/socialmedia/autopilot/schedule-queue/api.ts',
+  'src/components/socialmedia/autopilot/publish-review/api.ts',
+];
 const RUST_ROUTEN = path.join(REPO, 'rust/crates/tb-dashboard-api/src/lib.rs');
 
-/** `:clip_db_id` und `${clipDbId}` sind derselbe Platzhalter. */
 function normalisiere(pfad: string): string {
   return pfad
     .replace(/\{[A-Za-z_][A-Za-z0-9_]*\}/g, ':p')
     .replace(/:[A-Za-z_][A-Za-z0-9_]*/g, ':p');
 }
 
-/**
- * Alle Pfade, die das API-Modul zusammenbaut. Konstanten werden vorher
- * eingesetzt, Query-Anhaenge fallen weg, Ausdruecke werden Platzhalter.
- */
-function gebautePfade(): string[] {
-  const quelle = lies(API_MODUL);
-
-  const konstanten = new Map<string, string>();
-  const konstantenMuster = /const\s+([A-Z_]+)\s*=\s*'([^']+)';/g;
-  let k: RegExpExecArray | null;
-  while ((k = konstantenMuster.exec(quelle))) konstanten.set(k[1], k[2]);
-  // Die Deklaration selbst ist keine aufgerufene URL.
-  const rumpf = quelle.replace(konstantenMuster, '');
-
-  const roh = new Set<string>();
-  // Sowohl '/twitch/social-media/...' als auch `${ADMIN_PREFIX}/...`.
-  const pfadMuster = /['"`](\/twitch\/social-media[^'"`]*)['"`]|`\$\{([A-Z_]+)\}([^`]*)`/g;
-  let m: RegExpExecArray | null;
-  while ((m = pfadMuster.exec(rumpf))) {
-    if (m[1]) roh.add(m[1]);
-    else if (m[2] && konstanten.has(m[2])) roh.add(`${konstanten.get(m[2])}${m[3]}`);
-  }
-  // Eine Konstante, die direkt an fetch() geht, ist selbst die URL.
-  for (const [name, wert] of konstanten) {
-    const direkt = new RegExp(`(^|[^{])\\b${name}\\b`, 'm');
-    if (direkt.test(rumpf)) roh.add(wert);
+function modulePaths(source: string): string[] {
+  const syntax = ts.createSourceFile(
+    'api.ts',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const constants = new Map<string, string>();
+  for (const statement of syntax.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (
+        ts.isIdentifier(declaration.name) &&
+        declaration.initializer &&
+        ts.isStringLiteralLike(declaration.initializer)
+      ) {
+        constants.set(declaration.name.text, declaration.initializer.text);
+      }
+    }
   }
 
-  const pfade = new Set<string>();
-  for (const eintrag of roh) {
-    let pfad = eintrag
-      // `${qs}` ist der zusammengebaute Query-String, kein Pfadsegment.
-      .replace(/\$\{qs\}/g, '')
-      .replace(/\$\{[^}]*\}/g, ':p');
-    const fragezeichen = pfad.indexOf('?');
-    if (fragezeichen >= 0) pfad = pfad.slice(0, fragezeichen);
-    if (pfad.startsWith('/twitch/social-media')) pfade.add(normalisiere(pfad));
+  const helpers = new Map<
+    string,
+    {
+      parameters: ts.NodeArray<ts.ParameterDeclaration>;
+      result: ts.TemplateExpression;
+    }
+  >();
+  for (const statement of syntax.statements) {
+    if (
+      !ts.isFunctionDeclaration(statement) ||
+      !statement.name ||
+      !statement.body
+    )
+      continue;
+    const result = statement.body.statements.find(
+      ts.isReturnStatement,
+    )?.expression;
+    if (!result || !ts.isTemplateExpression(result) || result.head.text !== '')
+      continue;
+    const [prefix, suffix] = result.templateSpans;
+    if (
+      prefix &&
+      suffix &&
+      ts.isIdentifier(prefix.expression) &&
+      constants.has(prefix.expression.text) &&
+      prefix.literal.text === '' &&
+      ts.isIdentifier(suffix.expression) &&
+      statement.parameters.some(
+        (parameter) =>
+          parameter.name.getText(syntax) === suffix.expression.getText(syntax),
+      )
+    ) {
+      helpers.set(statement.name.text, {
+        parameters: statement.parameters,
+        result,
+      });
+    }
   }
-  return [...pfade].sort();
+
+  function resolve(expression: ts.Expression, values = constants): string {
+    if (ts.isStringLiteralLike(expression)) return expression.text;
+    if (ts.isIdentifier(expression))
+      return (
+        values.get(expression.text) ?? (expression.text === 'qs' ? '' : ':p')
+      );
+    if (ts.isConditionalExpression(expression)) {
+      const alternatives = [expression.whenTrue, expression.whenFalse].map(
+        (branch) => resolve(branch, values),
+      );
+      if (alternatives.every((value) => value === '' || value.startsWith('?')))
+        return '';
+    }
+    if (ts.isTemplateExpression(expression)) {
+      return (
+        expression.head.text +
+        expression.templateSpans
+          .map((span) => resolve(span.expression, values) + span.literal.text)
+          .join('')
+      );
+    }
+    return ':p';
+  }
+
+  const paths = new Set<string>();
+  function add(value: string): void {
+    const pathname = value.split('?')[0];
+    if (pathname.startsWith('/twitch/social-media'))
+      paths.add(normalisiere(pathname));
+  }
+
+  function visit(node: ts.Node): void {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      constants.has(node.name.text)
+    )
+      return;
+    if (
+      ts.isFunctionDeclaration(node) &&
+      node.name &&
+      helpers.has(node.name.text)
+    )
+      return;
+    if (ts.isStringLiteralLike(node) || ts.isTemplateExpression(node))
+      add(resolve(node));
+    if (ts.isCallExpression(node)) {
+      const helper = ts.isIdentifier(node.expression)
+        ? helpers.get(node.expression.text)
+        : undefined;
+      if (helper) {
+        const values = new Map(constants);
+        helper.parameters.forEach((parameter, index) => {
+          if (ts.isIdentifier(parameter.name) && node.arguments[index])
+            values.set(parameter.name.text, resolve(node.arguments[index]));
+        });
+        add(resolve(helper.result, values));
+      }
+      for (const argument of node.arguments) {
+        if (ts.isIdentifier(argument) && constants.has(argument.text))
+          add(resolve(argument));
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(syntax);
+  return [...paths];
 }
 
-/** Alle `/twitch/social-media`-Routen aus der Axum-Registrierung. Nur lesen. */
+function gebautePfade(quellen = API_MODULE.map(lies)): string[] {
+  return [...new Set(quellen.flatMap(modulePaths))].sort();
+}
+
 function registrierteRouten(): string[] {
   const quelle = fs.readFileSync(RUST_ROUTEN, 'utf8');
   const routen = new Set<string>();
@@ -272,10 +367,6 @@ function registrierteRouten(): string[] {
   return [...routen].sort();
 }
 
-/**
- * Routen, die es im Backend gibt und die die Oberflaeche bewusst nicht ruft.
- * Das sind durchweg Vorgaenger des Admin-Pfades aus der Python-Zeit.
- */
 const BEWUSST_OHNE_UI = new Set([
   '/twitch/social-media/api/stats',
   '/twitch/social-media/api/clips',
@@ -288,6 +379,70 @@ const BEWUSST_OHNE_UI = new Set([
   '/twitch/social-media/api/templates/streamer',
   '/twitch/social-media/api/templates/apply',
 ]);
+
+test('route discovery observes nonexistent static and encoded paths in the real import client', () => {
+  const source = lies(API_MODULE[1]);
+  const routes = new Set(registrierteRouten());
+  for (const [original, replacement, missing] of [
+    [
+      '"/pool"',
+      '"/contract-missing"',
+      '/twitch/social-media/api/autopilot/contract-missing',
+    ],
+    [
+      '/selection`',
+      '/contract-missing`',
+      '/twitch/social-media/api/autopilot/pool/:p/contract-missing',
+    ],
+  ]) {
+    const changed = source.replace(original, replacement);
+    assert.notEqual(changed, source);
+    const paths = gebautePfade([lies(API_MODULE[0]), changed]);
+    assert.deepEqual(
+      paths.filter((pathname) => !routes.has(pathname)),
+      [missing],
+    );
+  }
+});
+
+test('route discovery observes schedule and queue callers with optional query strings', () => {
+  const source = lies(API_MODULE[2]);
+  const prefix = '/twitch/social-media/api/autopilot';
+  assert.deepEqual(gebautePfade([source]), [
+    `${prefix}/queue/:p/cancel`,
+    `${prefix}/queue/:p/next`,
+    `${prefix}/queue/order`,
+    `${prefix}/schedule`,
+  ]);
+  const routes = new Set(registrierteRouten());
+  for (const [original, replacement, missing] of [
+    [
+      '/schedule${query.size',
+      '/contract-missing${query.size',
+      `${prefix}/contract-missing`,
+    ],
+    ['/queue/order`', '/queue/contract-missing`', `${prefix}/queue/contract-missing`],
+    ['/next`', '/contract-missing`', `${prefix}/queue/:p/contract-missing`],
+    ['/cancel`', '/contract-missing`', `${prefix}/queue/:p/contract-missing`],
+  ]) {
+    const changed = source.replace(original, replacement);
+    assert.notEqual(changed, source);
+    assert.deepEqual(
+      gebautePfade([changed]).filter((pathname) => !routes.has(pathname)),
+      [missing],
+    );
+  }
+});
+
+test('unused path constants do not count as callers', () => {
+  const sources = API_MODULE.map(lies);
+  for (const index of [1, 2]) {
+    const changed = [...sources];
+    changed[index] +=
+      '\nconst UNUSED_PATH = "/twitch/social-media/api/contract-missing";';
+    assert.deepEqual(gebautePfade(changed), gebautePfade(sources));
+  }
+});
 
 test('jede gebaute URL gibt es als Route', () => {
   const routen = new Set(registrierteRouten());
@@ -596,6 +751,39 @@ test('Kanalwahl hält URL, sichtbaren Kanal und Uploadziel gemeinsam an derselbe
   const renamed = [{ login: 'old_alpha', twitchUserId: '11' }, { login: 'alpha', twitchUserId: '22' }];
   assert.deepEqual(resolveSocialMediaChannel(renamed, '11'), renamed[0]);
   assert.equal(resolveSocialMediaChannel(renamed, '11', 'alpha'), undefined);
+});
+
+test('metadata departure preserves rejected drafts and blocks pending saves before confirmation', () => {
+  const studio = lies(SEITE);
+  const start = studio.indexOf('  const changeView = ');
+  const end = studio.indexOf('  const statusClip = ', start);
+  assert.ok(start >= 0 && end > start);
+  const createGuard = new Function('document', 'window', 't', 'activeView', 'selectedAiClipId', 'setActiveView', 'setSelectedAiClipId', 'socialViewSearch', 'socialWorkspaceDepartureAllowed', `${studio.slice(start, end).replace('next: SocialMediaView', 'next')} return changeView;`);
+  for (const [saving, dirty, accepted, expected] of [[true, true, true, false], [false, true, false, false], [false, true, true, true], [false, false, false, true]]) {
+    const updates: unknown[] = [];
+    let prompts = 0;
+    const guard = createGuard(
+      { querySelector: (selector: string) => selector.includes('data-saving') ? saving : dirty },
+      { confirm: () => { prompts++; return accepted; }, location: { search: '', pathname: '/social-media', hash: '' }, history: { replaceState: (...args: unknown[]) => updates.push(args) } },
+      (text: string) => text, 'pool', undefined,
+      (view: string) => updates.push(view), (id: number) => updates.push(id),
+      (_search: string, view: string, id: number) => `view=${view}&clip_db_id=${id}`,
+      socialWorkspaceDepartureAllowed,
+    );
+    assert.equal(guard('ai', 42), expected);
+    assert.equal(prompts, !saving && dirty ? 1 : 0);
+    assert.deepEqual(updates, expected ? ['ai', 42, [{}, '', '/social-media?view=ai&clip_db_id=42']] : []);
+  }
+  assert.match(lies('src/components/socialmedia/LayoutEditor.tsx'), /<div\b[^>]*data-unsaved=\{isDirty \|\| isSaving \? 'true' : undefined\}[^>]*data-saving=\{isSaving \? 'true' : undefined\}/);
+  const panel = lies('src/components/socialmedia/EnrichmentPanel.tsx');
+  assert.match(panel, /data-unsaved=\{dirty \|\| saveMutation\.isPending/);
+  assert.match(panel, /data-saving=\{saveMutation\.isPending/);
+  assert.match(panel, /onSavingChange\?\.\(saveMutation\.isPending\)/);
+  assert.match(panel, /if \(saveMutation\.isPending\) return;/);
+  assert.match(studio, /const busy = isSaving \|\| enrichmentSaving/);
+  assert.match(studio, /onSavingChange=\{setEnrichmentSaving\}/);
+  assert.match(lies('src/components/socialmedia/WorkspaceDialog.tsx'), /if \(busy \|\| dialog\.current\?\.querySelector\('\[data-saving="true"\]'\)\) return;/);
+  assert.match(lies('src/pages/SocialMediaManager.tsx'), /if \(!socialWorkspaceDepartureAllowed\(document, \(\) => window\.confirm\(t\('Ungespeicherte Änderungen verwerfen\?'\)\)\)\) return;/);
 });
 
 test('VOD-Archiv kehrt nach Ausblenden, Bestandsänderung und Kanalwechsel auf eine gültige Seite zurück', () => {

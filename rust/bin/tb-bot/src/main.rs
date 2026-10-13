@@ -45,6 +45,7 @@ mod score_refresh;
 mod scout_chat;
 mod shadow_review_wiring;
 mod smalltalk_loop_wiring;
+mod social_autopilot_notify;
 mod social_reauth;
 mod streamer_link;
 mod streamer_role_sync;
@@ -52,6 +53,22 @@ mod task_supervisor;
 mod token_lifecycle_wiring;
 mod user_id_backfill;
 mod wiring;
+
+fn install_title_ai_brain_route(
+    options: &tb_config::dashboard_options::BrainClientOptions,
+    token: Option<&str>,
+) {
+    if !options.title_ai_via_brain {
+        return;
+    }
+    if let Err(error) = tb_llm::brain_route::install_title_ai(
+        options.endpoint.as_deref(),
+        token,
+        options.timeout_ms.map(std::time::Duration::from_millis),
+    ) {
+        tracing::error!(fehler = ?error, "Brain-Route für Titel konnte nicht installiert werden");
+    }
+}
 
 /// Sucht das yt-dlp-Binary: `YT_DLP_PATH`, dann das Repo-venv im Arbeitsverzeichnis,
 /// dann `~/.local/bin/yt-dlp`, sonst der blanke Name für die PATH-Suche.
@@ -502,6 +519,10 @@ async fn main() {
         "deadlock-twitch-bot-rust",
     )
     .expect("Verbrauchserfassung initialisieren");
+    install_title_ai_brain_route(
+        &config.bot.brain_client,
+        Some(settings.internal_api.token.as_str()),
+    );
 
     // Vorhandene Feldchiffre einmal laden und an die Verbraucher weiterreichen.
     let runtime_cipher = FieldCipher::from_env().map(Arc::new);
@@ -1337,6 +1358,10 @@ async fn main() {
                     ),
                     manual_raid: manual_raid_port.clone(),
                     clip_port,
+                    vod_clip_port: chat_wiring::build_vod_clip_port(
+                        helix.as_ref().clone(),
+                        pool.clone(),
+                    ),
                     clip_contest: chat_wiring::build_clip_contest(
                         pool.clone(),
                         helix.as_ref().clone(),
@@ -1732,6 +1757,53 @@ async fn main() {
             async move { preview.run().await },
         );
 
+        match tb_social_media::ai_editor::EditorRuntime::load_packaged() {
+            Ok(runtime) => {
+                let worker = tb_social_media::ai_editor::ManualWorker::new(
+                    pool.clone(),
+                    runtime,
+                    Some(settings.internal_api.token.clone()),
+                );
+                supervisor.spawn("social_manual_ai_worker", async move { worker.run().await });
+            }
+            Err(error) => tracing::warn!(error = %error, "Manual AI production is unavailable"),
+        }
+
+        match tb_social_media::ai_editor::MediaRuntime::load_packaged() {
+            Ok(media) => {
+                let editor = match tb_social_media::ai_editor::EditorRuntime::load_packaged() {
+                    Ok(runtime) => Some(runtime),
+                    Err(error) => {
+                        tracing::warn!(error = %error, "Auto-Pilot AI production is unavailable");
+                        None
+                    }
+                };
+                let worker_config =
+                    tb_social_media::autopilot_runner::WorkerConfig::from_media_runtime(
+                        &media,
+                        editor,
+                        Some(settings.internal_api.token.clone()),
+                    );
+                let downloader = Arc::new(tb_social_media::clip_prep_worker::YtDlpDownloader::new(
+                    yt_dlp_path(snapshot).to_string_lossy().into_owned(),
+                ));
+                match tb_social_media::autopilot_runner::AutopilotWorker::new(
+                    pool.clone(),
+                    worker_config,
+                    downloader,
+                    tb_social_media::video_processor::VideoProcessor::default(),
+                ) {
+                    Ok(worker) => supervisor.spawn("social_autopilot_worker", worker.run()),
+                    Err(error) => {
+                        tracing::warn!(error = %error, "Auto-Pilot production is unavailable")
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::error!(error = %error, "Auto-Pilot media configuration is unavailable")
+            }
+        }
+
         tracing::info!("Clip-Anreicherung und Transkription abgeschaltet");
 
         // Upload + Token-Refresh + Insights brauchen den Field-Cipher
@@ -1751,6 +1823,36 @@ async fn main() {
                     tb_social_media::upload_worker::UploadWorker::new(pool.clone(), upload_creds)
                         .with_yt_dlp(yt_dlp_path(snapshot).to_string_lossy().into_owned());
                 supervisor.spawn("social_upload_worker", async move { upload.run().await });
+
+                let publisher = tb_social_media::autopilot_publish::PlatformPublisher::new(
+                    tb_social_media::credentials::CredentialManager::new(
+                        pool.clone(),
+                        cipher.clone(),
+                    ),
+                );
+                let mut executor = tb_social_media::autopilot_publish::PublishExecutor::new(
+                    pool.clone(),
+                    Arc::new(publisher),
+                );
+                match BrokerRelay::new(&settings.broker) {
+                    Ok(relay) => {
+                        let dm = token_lifecycle_wiring::BrokerTokenLifecycleNotifier::from_config(
+                            Some(relay),
+                            &config.discord.token_lifecycle,
+                            pool.clone(),
+                        );
+                        executor = executor.with_notifier(Arc::new(
+                            social_autopilot_notify::AutopilotDiscordNotifier::new(
+                                pool.clone(),
+                                dm,
+                            ),
+                        ));
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "Auto-Pilot notification broker unavailable")
+                    }
+                }
+                supervisor.spawn("social_autopilot_publisher", executor.run());
 
                 let refresh_oauth =
                     tb_social_media::oauth::OAuthManager::new(pool.clone(), cipher.clone());
@@ -1938,6 +2040,17 @@ async fn main() {
 
     // Auch der Twitch-Clip-Fetch bleibt vorerst deaktiviert. Der reparierte
     // Datenpfad kann später mit explizitem Opt-in wieder aufgenommen werden.
+    if let Some(ref h) = *helix {
+        let importer = tb_social_media::clip_pool::ClipImportWorker::new(
+            pool.clone(),
+            tb_social_media::HelixClipSource::new(Arc::new(h.clone())),
+        );
+        supervisor.spawn(
+            "social_clip_import_worker",
+            async move { importer.run().await },
+        );
+    }
+
     if config.bot.clip_fetcher_enabled {
         if let Some(ref h) = *helix {
             tb_social_media::build_clip_fetch_task(pool.clone(), std::sync::Arc::new(h.clone()))

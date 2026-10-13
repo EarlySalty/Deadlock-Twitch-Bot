@@ -424,7 +424,11 @@ llm_model_cache|model|text|NO|
 llm_model_cache|provider|text|NO|
 llm_model_cache|resolved_at|timestamp with time zone|NO|now()
 llm_usage|attempt_state|text|NO|'legacy'::text
+llm_usage|cache_creation_input_tokens|bigint|YES|
+llm_usage|cache_read_input_tokens|bigint|YES|
+llm_usage|cost_basis|text|YES|
 llm_usage|error_code|text|YES|
+llm_usage|estimated_micro_usd|bigint|YES|
 llm_usage|finished_at|timestamp with time zone|YES|
 llm_usage|http_status|integer|YES|
 llm_usage|id|bigint|NO|nextval('llm_usage_id_seq'::regclass)
@@ -435,7 +439,11 @@ llm_usage|project|text|YES|
 llm_usage|provider|text|YES|
 llm_usage|purpose|text|YES|
 llm_usage|request_id|text|YES|
+llm_usage|reserved_micro_usd|bigint|YES|
 llm_usage|service|text|YES|
+llm_usage|social_ai_job_id|text|YES|
+llm_usage|social_ai_stage|text|YES|
+llm_usage|social_ai_twitch_user_id|text|YES|
 llm_usage|source|text|NO|
 llm_usage|success|bigint|YES|1
 llm_usage|tokens_in|bigint|YES|0
@@ -549,6 +557,178 @@ platform_connections|updated_at|timestamp with time zone|NO|now()
 schema_version|component|text|NO|
 schema_version|updated_at|timestamp with time zone|NO|now()
 schema_version|version|integer|NO|
+social_ai_change_proposals|created_at|timestamp with time zone|NO|now()
+social_ai_change_proposals|evidence|text|YES|
+social_ai_change_proposals|id|bigint|NO|nextval('social_ai_change_proposals_id_seq'::regclass)
+social_ai_change_proposals|reason|text|NO|
+social_ai_change_proposals|status|text|NO|'proposed'::text
+social_ai_change_proposals|summary|text|NO|
+social_ai_change_proposals|title|text|NO|
+social_ai_jobs|attempts|jsonb|NO|'{}'::jsonb
+social_ai_jobs|checkpoints|jsonb|NO|'{}'::jsonb
+social_ai_jobs|clip_db_id|bigint|NO|
+social_ai_jobs|completed_at|timestamp with time zone|YES|
+social_ai_jobs|created_at|timestamp with time zone|NO|now()
+social_ai_jobs|decisions|jsonb|NO|'[]'::jsonb
+social_ai_jobs|estimated_provider_cost_usd|double precision|YES|
+social_ai_jobs|failure_code|text|YES|
+social_ai_jobs|failure_message|text|YES|
+social_ai_jobs|highlights|jsonb|NO|'[]'::jsonb
+social_ai_jobs|id|bigint|NO|nextval('social_ai_jobs_id_seq'::regclass)
+social_ai_jobs|input_tokens|bigint|YES|
+social_ai_jobs|measured_provider_cost_usd|double precision|YES|
+social_ai_jobs|model|text|YES|
+social_ai_jobs|original_duration_ms|bigint|YES|
+social_ai_jobs|output_duration_ms|bigint|YES|
+social_ai_jobs|output_tokens|bigint|YES|
+social_ai_jobs|parent_version_id|bigint|YES|
+social_ai_jobs|processing_ms|bigint|YES|
+social_ai_jobs|produced_video_id|bigint|YES|
+social_ai_jobs|provider|text|YES|
+social_ai_jobs|rendering_ms|bigint|YES|
+social_ai_jobs|review_reasons|jsonb|NO|'[]'::jsonb
+social_ai_jobs|revision_confirmed|boolean|NO|false
+social_ai_jobs|revision_feedback|text|YES|
+social_ai_jobs|revision_proposal|jsonb|YES|
+social_ai_jobs|revision_reanalysis_confirmed|boolean|NO|false
+social_ai_jobs|root_job_id|bigint|YES|
+social_ai_jobs|selected_version_id|bigint|YES|
+social_ai_jobs|source_clip_id|bigint|YES|
+social_ai_jobs|source_twitch_clip_id|text|NO|
+social_ai_jobs|stage|text|NO|'preparing'::text
+social_ai_jobs|started_at|timestamp with time zone|YES|
+social_ai_jobs|status|text|NO|'queued'::text
+social_ai_jobs|twitch_user_id|bigint|NO|
+social_ai_jobs|uncertainty|jsonb|NO|'[]'::jsonb
+social_ai_jobs|updated_at|timestamp with time zone|NO|now()
+social_ai_personal_preferences|last_event_id|bigint|NO|
+social_ai_personal_preferences|profile|jsonb|NO|
+social_ai_personal_preferences|twitch_user_id|bigint|NO|
+social_ai_personal_preferences|updated_at|timestamp with time zone|NO|now()
+social_ai_plan_limit_drafts|monthly_ai_jobs|bigint|YES|
+social_ai_plan_limit_drafts|monthly_cap_micro_usd|bigint|YES|
+social_ai_plan_limit_drafts|monthly_revisions|bigint|YES|
+social_ai_plan_limit_drafts|plan_id|text|NO|
+social_ai_plan_limit_drafts|reason|text|NO|
+social_ai_plan_limit_drafts|revision|bigint|NO|
+social_ai_plan_limit_drafts|updated_at|timestamp with time zone|NO|now()
+social_ai_plan_limit_drafts|updated_by|text|NO|
+social_ai_processing_control|paused|boolean|NO|false
+social_ai_processing_control|reason|text|NO|''::text
+social_ai_processing_control|revision|bigint|NO|1
+social_ai_processing_control|singleton|boolean|NO|true
+social_ai_processing_control|updated_at|timestamp with time zone|NO|now()
+social_ai_processing_control|updated_by|text|NO|'system'::text
+social_ai_revision_events|created_at|timestamp with time zone|NO|now()
+social_ai_revision_events|event_kind|text|NO|
+social_ai_revision_events|id|bigint|NO|nextval('social_ai_revision_events_id_seq'::regclass)
+social_ai_revision_events|job_id|bigint|NO|
+social_ai_revision_events|payload|jsonb|NO|
+social_ai_revision_events|produced_video_id|bigint|YES|
+social_ai_revision_events|root_job_id|bigint|NO|
+social_ai_revision_events|twitch_user_id|bigint|NO|
+social_ai_skill_activations|actor|text|NO|
+social_ai_skill_activations|created_at|timestamp with time zone|NO|now()
+social_ai_skill_activations|from_version|integer|NO|
+social_ai_skill_activations|id|bigint|NO|nextval('social_ai_skill_activations_id_seq'::regclass)
+social_ai_skill_activations|kind|text|NO|
+social_ai_skill_activations|reason|text|NO|
+social_ai_skill_activations|skill_id|text|NO|
+social_ai_skill_activations|to_version|integer|NO|
+social_ai_skill_active|skill_id|text|NO|
+social_ai_skill_active|updated_at|timestamp with time zone|NO|now()
+social_ai_skill_active|updated_by|text|NO|
+social_ai_skill_active|version|integer|NO|
+social_ai_skill_versions|content|text|NO|
+social_ai_skill_versions|created_at|timestamp with time zone|NO|now()
+social_ai_skill_versions|created_by|text|NO|
+social_ai_skill_versions|evidence|jsonb|YES|
+social_ai_skill_versions|origin|text|NO|
+social_ai_skill_versions|previous_version|integer|YES|
+social_ai_skill_versions|reason|text|NO|
+social_ai_skill_versions|sha256|text|NO|
+social_ai_skill_versions|skill_id|text|NO|
+social_ai_skill_versions|summary|text|NO|
+social_ai_skill_versions|version|integer|NO|
+social_ai_user_consent|external_ai_consent|boolean|NO|false
+social_ai_user_consent|twitch_user_id|text|NO|
+social_ai_user_consent|updated_at|timestamp with time zone|NO|now()
+social_ai_user_consent|updated_by|text|NO|
+social_ai_user_limits|monthly_cap_micro_usd|bigint|YES|
+social_ai_user_limits|paused|boolean|NO|false
+social_ai_user_limits|reason|text|NO|
+social_ai_user_limits|revision|bigint|NO|
+social_ai_user_limits|twitch_user_id|text|NO|
+social_ai_user_limits|updated_at|timestamp with time zone|NO|now()
+social_ai_user_limits|updated_by|text|NO|
+social_autopilot_notifications|content|text|NO|
+social_autopilot_notifications|created_at|timestamp with time zone|NO|now()
+social_autopilot_notifications|dedupe_key|text|NO|
+social_autopilot_notifications|discord_sent_at|timestamp with time zone|YES|
+social_autopilot_notifications|discord_state|text|NO|'disabled'::text
+social_autopilot_notifications|id|bigint|NO|nextval('social_autopilot_notifications_id_seq'::regclass)
+social_autopilot_notifications|kind|text|NO|
+social_autopilot_notifications|link|text|NO|
+social_autopilot_notifications|read_at|timestamp with time zone|YES|
+social_autopilot_notifications|show_in_dashboard|boolean|NO|true
+social_autopilot_notifications|twitch_user_id|text|NO|
+social_autopilot_schedule_state|planned_at|timestamp with time zone|NO|
+social_autopilot_schedule_state|production_hold|text|YES|
+social_autopilot_schedule_state|twitch_user_id|text|NO|
+social_clip_import_jobs|active_window|jsonb|YES|
+social_clip_import_jobs|attempts|integer|NO|0
+social_clip_import_jobs|clip_date_filter|jsonb|NO|
+social_clip_import_jobs|completed_at|timestamp with time zone|YES|
+social_clip_import_jobs|completed_windows|bigint|NO|0
+social_clip_import_jobs|created_at|timestamp with time zone|NO|now()
+social_clip_import_jobs|cursor|text|YES|
+social_clip_import_jobs|eligible_fetched|bigint|NO|0
+social_clip_import_jobs|ended_at|timestamp with time zone|NO|
+social_clip_import_jobs|id|bigint|NO|nextval('social_clip_import_jobs_id_seq'::regclass)
+social_clip_import_jobs|incomplete_windows|jsonb|NO|'[]'::jsonb
+social_clip_import_jobs|last_error|text|YES|
+social_clip_import_jobs|lease_generation|bigint|NO|0
+social_clip_import_jobs|lease_until|timestamp with time zone|YES|
+social_clip_import_jobs|next_retry_at|timestamp with time zone|YES|
+social_clip_import_jobs|pending_windows|jsonb|NO|
+social_clip_import_jobs|persisted_count|bigint|NO|0
+social_clip_import_jobs|raw_fetched|bigint|NO|0
+social_clip_import_jobs|started_at|timestamp with time zone|NO|
+social_clip_import_jobs|status|text|NO|'queued'::text
+social_clip_import_jobs|streamer_login|text|NO|
+social_clip_import_jobs|timezone|text|NO|
+social_clip_import_jobs|total_attempts|bigint|NO|0
+social_clip_import_jobs|twitch_user_id|text|NO|
+social_clip_pool_owners|managed_since|timestamp with time zone|NO|clock_timestamp()
+social_clip_pool_owners|twitch_user_id|text|NO|
+social_clip_pool|clip_db_id|bigint|YES|
+social_clip_pool|clip_id|text|NO|
+social_clip_pool|first_selected_at|timestamp with time zone|YES|
+social_clip_pool|game_id|text|NO|
+social_clip_pool|imported_at|timestamp with time zone|NO|now()
+social_clip_pool|legacy_reserved|boolean|NO|false
+social_clip_pool|processed_at|timestamp with time zone|YES|
+social_clip_pool|published_at|timestamp with time zone|YES|
+social_clip_pool|selected_at|timestamp with time zone|YES|
+social_clip_pool|source_created_at|timestamp with time zone|NO|
+social_clip_pool|source_metadata|jsonb|NO|
+social_clip_pool|twitch_user_id|text|NO|
+social_media_autopilot_settings|ai_editing_enabled|boolean|NO|false
+social_media_autopilot_settings|clip_date_filter|jsonb|NO|'{"kind": "all"}'::jsonb
+social_media_autopilot_settings|clip_sort|text|NO|'oldest_first'::text
+social_media_autopilot_settings|enabled|boolean|NO|false
+social_media_autopilot_settings|experimental_ai_layout|boolean|NO|false
+social_media_autopilot_settings|lead_time_hours|integer|NO|24
+social_media_autopilot_settings|multi_output_enabled|boolean|NO|false
+social_media_autopilot_settings|notifications|jsonb|NO|'{}'::jsonb
+social_media_autopilot_settings|paused|boolean|NO|false
+social_media_autopilot_settings|publish_language|text|NO|'de'::text
+social_media_autopilot_settings|publish_mode|text|NO|'review'::text
+social_media_autopilot_settings|schedule_slots|jsonb|NO|'[]'::jsonb
+social_media_autopilot_settings|target_platforms|jsonb|NO|'[]'::jsonb
+social_media_autopilot_settings|timezone|text|NO|'Europe/Berlin'::text
+social_media_autopilot_settings|twitch_user_id|text|NO|
+social_media_autopilot_settings|updated_at|timestamp with time zone|NO|now()
 social_media_category_settings|auto_post|boolean|NO|false
 social_media_category_settings|category_key|text|NO|
 social_media_category_settings|streamer_login|text|NO|
@@ -562,14 +742,17 @@ social_media_category|enrichment_enabled|boolean|NO|false
 social_media_category|match_game_names|ARRAY|NO|'{}'::text[]
 social_media_category|sort_order|integer|NO|100
 social_media_category|twitch_game_id|text|YES|
+social_media_clip_approval|approval_id|bigint|NO|nextval('social_media_clip_approval_approval_id_seq'::regclass)
 social_media_clip_approval|approved_platforms|jsonb|NO|'[]'::jsonb
 social_media_clip_approval|approver_user_id|text|YES|
-social_media_clip_approval|clip_db_id|integer|NO|
+social_media_clip_approval|clip_db_id|integer|YES|
 social_media_clip_approval|decided_at|timestamp with time zone|YES|
 social_media_clip_approval|dm_channel_id|text|YES|
 social_media_clip_approval|dm_message_id|text|YES|
 social_media_clip_approval|last_sent_at|timestamp with time zone|YES|
 social_media_clip_approval|letzter_nachreih_versuch|timestamp with time zone|YES|
+social_media_clip_approval|platform|text|YES|
+social_media_clip_approval|produced_video_id|bigint|YES|
 social_media_clip_approval|state|text|NO|'awaiting_approval'::text
 social_media_clip_enrichment|clip_db_id|integer|NO|
 social_media_clip_enrichment|completed_at|timestamp with time zone|YES|
@@ -674,6 +857,47 @@ social_media_vod_archive|streamer_login|text|NO|
 social_media_vod_archive|twitch_user_id|text|YES|
 social_media_vod_archive|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 social_media_vod_archive|updated_by|text|YES|
+social_produced_videos|artifact_deleted_at|timestamp with time zone|YES|
+social_produced_videos|autopilot_deferred_stage|text|YES|
+social_produced_videos|autopilot_deferred_until|timestamp with time zone|YES|
+social_produced_videos|cleanup_error|text|YES|
+social_produced_videos|clip_id|bigint|NO|
+social_produced_videos|created_at|timestamp with time zone|NO|now()
+social_produced_videos|duration_ms|bigint|YES|
+social_produced_videos|expires_at|timestamp with time zone|YES|
+social_produced_videos|file_path|text|YES|
+social_produced_videos|id|bigint|NO|nextval('social_produced_videos_id_seq'::regclass)
+social_produced_videos|job_id|bigint|YES|
+social_produced_videos|metadata|jsonb|NO|'{}'::jsonb
+social_produced_videos|mode|text|NO|
+social_produced_videos|needs_review|boolean|NO|true
+social_produced_videos|parent_version_id|bigint|YES|
+social_produced_videos|publication_completed_at|timestamp with time zone|YES|
+social_produced_videos|publication_executed_at|timestamp with time zone|YES|
+social_produced_videos|review_reasons|jsonb|NO|'[]'::jsonb
+social_produced_videos|scheduled_at|timestamp with time zone|YES|
+social_produced_videos|status|text|NO|'rendering'::text
+social_produced_videos|twitch_user_id|text|NO|
+social_produced_videos|variant_index|integer|NO|0
+social_produced_videos|version_no|integer|NO|1
+social_production_jobs|attempts|integer|NO|0
+social_production_jobs|clip_id|bigint|NO|
+social_production_jobs|created_at|timestamp with time zone|NO|now()
+social_production_jobs|finished_at|timestamp with time zone|YES|
+social_production_jobs|id|bigint|NO|nextval('social_production_jobs_id_seq'::regclass)
+social_production_jobs|last_error|text|YES|
+social_production_jobs|max_attempts|integer|NO|3
+social_production_jobs|metadata|jsonb|NO|'{}'::jsonb
+social_production_jobs|mode|text|YES|
+social_production_jobs|queue_order|bigint|NO|
+social_production_jobs|requested_mode|text|YES|
+social_production_jobs|review_reasons|jsonb|NO|'[]'::jsonb
+social_production_jobs|scheduled_at|timestamp with time zone|YES|
+social_production_jobs|source|text|NO|'autopilot'::text
+social_production_jobs|stage|text|NO|'queued'::text
+social_production_jobs|started_at|timestamp with time zone|YES|
+social_production_jobs|status|text|NO|'queued'::text
+social_production_jobs|twitch_user_id|text|NO|
 streamer_dim|archived_at|timestamp with time zone|YES|
 streamer_dim|discord_display_name|text|YES|
 streamer_dim|discord_user_id|text|YES|
@@ -692,6 +916,7 @@ streamer_onboarding|twitch_login|text|NO|
 streamer_onboarding|twitch_user_id|text|NO|
 streamer_onboarding|updated_at|timestamp with time zone|NO|now()
 streamer_plans|activated_at|text|NO|CURRENT_TIMESTAMP
+streamer_plans|clip_command_duration_seconds|double precision|YES|
 streamer_plans|clip_command_enabled|integer|NO|1
 streamer_plans|command_name_overrides|jsonb|NO|'{}'::jsonb
 streamer_plans|expires_at|text|YES|
@@ -1236,6 +1461,9 @@ twitch_clips_social_media|last_analytics_sync|timestamp with time zone|YES|
 twitch_clips_social_media|layout_override_json|jsonb|YES|
 twitch_clips_social_media|local_file_path|text|YES|
 twitch_clips_social_media|music_track|text|YES|
+twitch_clips_social_media|pool_legacy_prerequisite|boolean|NO|false
+twitch_clips_social_media|pool_legacy_reserved|boolean|NO|false
+twitch_clips_social_media|pool_managed_at|timestamp with time zone|YES|
 twitch_clips_social_media|preview_error|text|YES|
 twitch_clips_social_media|preview_path|text|YES|
 twitch_clips_social_media|preview_status|text|YES|
@@ -1257,17 +1485,24 @@ twitch_clips_social_media|vod_id|text|YES|
 twitch_clips_social_media|vod_offset_s|integer|YES|
 twitch_clips_social_media|youtube_uploaded_at|timestamp with time zone|YES|
 twitch_clips_social_media|youtube_video_id|text|YES|
+twitch_clips_upload_queue|account_id|text|YES|
 twitch_clips_upload_queue|attempts|integer|YES|0
+twitch_clips_upload_queue|claim_generation|bigint|NO|0
 twitch_clips_upload_queue|clip_id|bigint|NO|
 twitch_clips_upload_queue|completed_at|timestamp with time zone|YES|
 twitch_clips_upload_queue|created_at|timestamp with time zone|NO|now()
 twitch_clips_upload_queue|description|text|YES|
+twitch_clips_upload_queue|effect_started_at|timestamp with time zone|YES|
+twitch_clips_upload_queue|external_id|text|YES|
 twitch_clips_upload_queue|hashtags|text|YES|
 twitch_clips_upload_queue|id|bigint|NO|nextval('twitch_clips_upload_queue_id_seq'::regclass)
 twitch_clips_upload_queue|last_attempt_at|timestamp with time zone|YES|
 twitch_clips_upload_queue|last_error|text|YES|
+twitch_clips_upload_queue|next_retry_at|timestamp with time zone|YES|
+twitch_clips_upload_queue|outcome_reason|text|YES|
 twitch_clips_upload_queue|platform|text|NO|
 twitch_clips_upload_queue|priority|integer|YES|0
+twitch_clips_upload_queue|produced_video_id|bigint|YES|
 twitch_clips_upload_queue|quota_deferrals|integer|NO|0
 twitch_clips_upload_queue|scheduled_at|timestamp with time zone|YES|
 twitch_clips_upload_queue|status|text|YES|'pending'::text
@@ -1888,6 +2123,19 @@ twitch_player_steam_links|revision|bigint|NO|0
 twitch_player_steam_links|steam_id64|bigint|YES|
 twitch_player_steam_links|twitch_user_id|text|NO|
 twitch_player_steam_links|updated_at|timestamp with time zone|NO|now()
+twitch_private_vod_jobs|created_at|timestamp with time zone|NO|now()
+twitch_private_vod_jobs|end_seconds|integer|NO|
+twitch_private_vod_jobs|error_code|text|YES|
+twitch_private_vod_jobs|expires_at|timestamp with time zone|NO|(now() + '24:00:00'::interval)
+twitch_private_vod_jobs|file_bytes|bigint|YES|
+twitch_private_vod_jobs|id|text|NO|
+twitch_private_vod_jobs|owner_id|text|NO|
+twitch_private_vod_jobs|start_seconds|integer|NO|
+twitch_private_vod_jobs|started_at|timestamp with time zone|YES|
+twitch_private_vod_jobs|status|text|NO|'queued'::text
+twitch_private_vod_jobs|video_id|text|NO|
+twitch_private_vod_settings|enabled|boolean|NO|false
+twitch_private_vod_settings|owner_id|text|NO|
 twitch_promo_cooldowns|cooldown_type|text|NO|
 twitch_promo_cooldowns|login|text|NO|
 twitch_promo_cooldowns|twitch_user_id|text|YES|

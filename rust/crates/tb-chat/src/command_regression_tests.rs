@@ -1,3 +1,68 @@
+struct RequestClipPort(tb_transport_twitch::HelixClient);
+
+#[async_trait]
+impl ClipPort for RequestClipPort {
+    async fn create_clip(&self, id: &str, _login: &str, duration: f64, title: &str) -> ClipOutcome {
+        let clip = self
+            .0
+            .create_clip(id, "fixture-token", duration, title)
+            .await
+            .unwrap()
+            .unwrap();
+        ClipOutcome::Created {
+            url: format!("https://clips.twitch.tv/{}", clip.id),
+        }
+    }
+}
+
+#[tokio::test]
+async fn clip_duration_title_command_to_http_contract() {
+    use wiremock::matchers::{header, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let db = crate::test_postgres::TestPostgres::start().await;
+    apply_ddl(&db.pool).await;
+    seed_partner(&db.pool).await;
+    let server = MockServer::start().await;
+    let client = tb_transport_twitch::HelixClient::new(tb_transport_twitch::HelixConfig {
+        client_id: "fixture-client".into(),
+        client_secret: "fixture-secret".into(),
+        token_url: format!("{}/unused", server.uri()),
+        helix_base: server.uri(),
+    })
+    .unwrap();
+    for (command, duration, title) in [
+        ("!clip Krasser Headshot", 60.0, "Krasser Headshot"),
+        ("!createclip Grüße & Spaß", 30.0, "Grüße & Spaß"),
+        ("!moment\tEin neuer Titel", 59.9, "Ein neuer Titel"),
+    ] {
+        if command.starts_with("!createclip") {
+            sqlx::query("INSERT INTO streamer_plans (twitch_user_id,twitch_login,clip_command_duration_seconds) VALUES ('bc123','testchannel',30),('foreign','other',5)")
+                .execute(&db.pool).await.unwrap();
+        }
+        if command.starts_with("!moment") {
+            sqlx::query("UPDATE streamer_plans SET clip_command_duration_seconds=59.9, command_name_overrides='{\"clip\":\"!moment\"}'::jsonb WHERE twitch_user_id='bc123'")
+                .execute(&db.pool).await.unwrap();
+        }
+        Mock::given(method("POST")).and(path("/clips"))
+            .and(header("Authorization", "Bearer fixture-token"))
+            .and(query_param("broadcaster_id", "bc123"))
+            .and(query_param("duration", duration.to_string()))
+            .and(query_param("title", title))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({"data":[{"id":"fixture-clip","edit_url":"https://example.invalid/edit"}]})))
+            .expect(1).mount(&server).await;
+        let api = MockApi::new();
+        let engine = make_engine_with_pool(db.pool.clone(), api.clone())
+            .set_clip_port(Arc::new(RequestClipPort(client.clone())));
+        assert!(engine.handle(&make_event(command, false, false)).await);
+        assert!(api
+            .last_message()
+            .await
+            .unwrap()
+            .contains(&duration.to_string()));
+    }
+    server.verify().await;
+}
+
 #[tokio::test]
 async fn regression_lurker_eigenes_checkout_login_abo_ohne_override() {
     let db = crate::test_postgres::TestPostgres::start().await;

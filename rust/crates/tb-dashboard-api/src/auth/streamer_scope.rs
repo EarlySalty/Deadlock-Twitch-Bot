@@ -313,6 +313,7 @@ mod tests {
             greeting_reply_enabled INTEGER DEFAULT 1,
             lurk_command_enabled INTEGER DEFAULT 1,
             clip_command_enabled INTEGER DEFAULT 1,
+            clip_command_duration_seconds DOUBLE PRECISION,
             title_command_enabled INTEGER DEFAULT 1,
             lurker_tax_enabled INTEGER DEFAULT 1,
             stat_command_settings JSONB DEFAULT '{}');
@@ -329,12 +330,21 @@ mod tests {
             }),
         };
         macro_rules! toggle {
-            ($module:ident, $query:ident, $update:ident, $field:ident) => {{
+            ($module:ident, $query:ident, $update:ident, $field:ident) => {
+                toggle!(
+                    $module,
+                    $query,
+                    $update,
+                    $field,
+                    $module::$update { $field: false }
+                );
+            };
+            ($module:ident, $query:ident, $update:ident, $field:ident, $body:expr) => {{
                 let response = $module::post_handler(
                     auth.clone(),
                     State(pool.clone()),
                     Query($module::$query::default()),
-                    Json($module::$update { $field: false }),
+                    Json($body),
                 )
                 .await;
                 assert_eq!(response.status(), StatusCode::OK, stringify!($module));
@@ -377,7 +387,11 @@ mod tests {
             clip_command_settings,
             ClipCommandQuery,
             ClipCommandUpdate,
-            clip_command_enabled
+            clip_command_enabled,
+            clip_command_settings::ClipCommandUpdate {
+                clip_command_enabled: Some(false),
+                clip_command_duration_seconds: Some(30.0),
+            }
         );
         toggle!(
             title_command_settings,

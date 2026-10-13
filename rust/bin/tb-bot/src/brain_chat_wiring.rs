@@ -1,5 +1,4 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -14,11 +13,6 @@ use tb_config::dashboard_options::{BrainClientMode, BrainClientOptions};
 use tb_config::operations::BrainChatOptions;
 use tb_knowledge::brain::{BrainAdapterError, BrainKnowledgeAdapter, KnowledgeReply};
 
-const NO_EVIDENCE_REPLIES: [&str; 3] = [
-    "Dazu finde ich gerade keine sichere Antwort. Frag lieber im Discord nach.",
-    "Das kann ich nicht sicher belegen. Im Discord kann dir jemand weiterhelfen.",
-    "Dazu habe ich keine verlässliche Antwort. Frag am besten im Discord nach.",
-];
 const UNUSABLE_REPLY: &str =
     "Die Antwort kann ich hier nicht sicher wiedergeben. Frag bitte im Discord nach.";
 const UNAVAILABLE_REPLY: &str =
@@ -298,7 +292,6 @@ struct BrainChatService {
     bot_login: String,
     limit: BrainRateLimit,
     backend_state: Mutex<BackendState>,
-    no_evidence_index: AtomicUsize,
 }
 
 impl BrainChatService {
@@ -314,11 +307,6 @@ impl BrainChatService {
             );
         }
         *previous = current;
-    }
-
-    fn no_evidence_reply(&self) -> &'static str {
-        NO_EVIDENCE_REPLIES
-            [self.no_evidence_index.fetch_add(1, Ordering::Relaxed) % NO_EVIDENCE_REPLIES.len()]
     }
 
     async fn finish(
@@ -445,7 +433,12 @@ impl BrainChatPort for BrainChatService {
             }
             Ok(KnowledgeReply::NoEvidence) => {
                 self.backend_state(BackendState::Available);
-                (self.no_evidence_reply().to_string(), "NoEvidence")
+                tracing::info!(
+                    reason = "no_evidence",
+                    "Brain-Chat schweigt ohne gesicherte Antwort"
+                );
+                self.finish(id, "", "NoEvidence", false, started).await;
+                return true;
             }
             Err(error) => {
                 tracing::info!(reason = "answer_failed", "Brain-Chat meldet Antwortausfall");
@@ -546,7 +539,6 @@ pub fn build(
         bot_login: bot_login.to_string(),
         limit: BrainRateLimit::new(options.clone()),
         backend_state: Mutex::new(backend_state),
-        no_evidence_index: AtomicUsize::new(0),
     }))
 }
 
@@ -740,6 +732,7 @@ use crate::chat_wiring::invite_test_postgres as brain_test_postgres;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tb_chat::types::ChatMessageBody;
 
     #[tokio::test]
@@ -1185,14 +1178,6 @@ mod tests {
         assert!(limits.reserve("101", "200", now).is_none());
     }
 
-    #[test]
-    fn no_evidence_wechselt_zwischen_ehrlichen_antworten() {
-        assert_eq!(NO_EVIDENCE_REPLIES.len(), 3);
-        assert!(NO_EVIDENCE_REPLIES
-            .iter()
-            .all(|reply| safe_chat_answer(reply).as_deref() == Some(*reply)));
-    }
-
     struct FakeAnswer(Mutex<VecDeque<Result<KnowledgeReply, BrainAdapterError>>>);
 
     #[async_trait]
@@ -1272,7 +1257,12 @@ mod tests {
         ) -> Result<SendOutcome, String> {
             if let Some(log) = &self.audit {
                 assert_eq!(
-                    log.results.lock().unwrap().len(),
+                    log.results
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|row| !row.0.is_empty())
+                        .count(),
                     self.sends.lock().unwrap().len() + 1
                 );
             }
@@ -1345,7 +1335,6 @@ mod tests {
             }),
             Ok(KnowledgeReply::NoEvidence),
             Ok(KnowledgeReply::NoEvidence),
-            Ok(KnowledgeReply::NoEvidence),
             Err(BrainAdapterError::Backend),
         ]))));
         let log = Arc::new(FakeLog::default());
@@ -1362,13 +1351,12 @@ mod tests {
             bot_login: "deadlockbot".into(),
             limit: BrainRateLimit::new(BrainChatOptions::default()),
             backend_state: Mutex::new(BackendState::Unknown),
-            no_evidence_index: AtomicUsize::new(0),
         };
-        for index in 0..7 {
+        for index in 0..6 {
             assert!(service.maybe_respond(&event(index)).await);
         }
         let sends = chat.sends.lock().unwrap().clone();
-        assert_eq!(sends.len(), 7);
+        assert_eq!(sends.len(), 4);
         assert_eq!(
             sends[0],
             (
@@ -1379,10 +1367,8 @@ mod tests {
         );
         assert_eq!(sends[1].2, UNUSABLE_REPLY);
         assert_eq!(sends[2].2, UNUSABLE_REPLY);
-        assert_eq!(sends[3].2, NO_EVIDENCE_REPLIES[0]);
-        assert_eq!(sends[4].2, NO_EVIDENCE_REPLIES[1]);
-        assert_eq!(sends[5].2, NO_EVIDENCE_REPLIES[2]);
-        assert_eq!(sends[6].2, UNAVAILABLE_REPLY);
+        assert_eq!(sends[3].1, "message-5");
+        assert_eq!(sends[3].2, UNAVAILABLE_REPLY);
         let records = log.results.lock().unwrap().clone();
         assert_eq!(
             records.iter().map(|row| row.1.as_str()).collect::<Vec<_>>(),
@@ -1392,25 +1378,25 @@ mod tests {
                 "Fehler",
                 "NoEvidence",
                 "NoEvidence",
-                "NoEvidence",
                 "Fehler"
             ]
         );
+        assert!(records[3..5].iter().all(|row| row.0.is_empty()));
         assert!(records.iter().all(|row| row.2 >= 0));
-        assert_eq!(log.deliveries.lock().unwrap().len(), 7);
+        assert_eq!(log.deliveries.lock().unwrap().len(), 4);
         assert!(log.deliveries.lock().unwrap().iter().all(|row| row.0));
-        assert_eq!(log.questions.lock().unwrap().len(), 7);
+        assert_eq!(log.questions.lock().unwrap().len(), 6);
         assert!(matches!(
             *service.backend_state.lock().unwrap(),
             BackendState::Unavailable
         ));
-        let mut self_message = event(8);
+        let mut self_message = event(10);
         self_message.chatter_user_id = "999".into();
         assert!(!service.maybe_respond(&self_message).await);
-        let mut command = event(9);
+        let mut command = event(11);
         command.message.text = "!status @DeadlockBot".into();
         assert!(!service.maybe_respond(&command).await);
-        assert_eq!(log.questions.lock().unwrap().len(), 7);
+        assert_eq!(log.questions.lock().unwrap().len(), 6);
     }
 
     #[tokio::test]
@@ -1432,7 +1418,6 @@ mod tests {
                 ..BrainChatOptions::default()
             }),
             backend_state: Mutex::new(BackendState::Unavailable),
-            no_evidence_index: AtomicUsize::new(0),
         };
         assert!(service.accepts(&event(0)));
         assert!(service.maybe_respond(&event(0)).await);
@@ -1482,7 +1467,6 @@ mod tests {
             bot_login: "deadlockbot".into(),
             limit: BrainRateLimit::new(BrainChatOptions::default()),
             backend_state: Mutex::new(BackendState::Unknown),
-            no_evidence_index: AtomicUsize::new(0),
         };
         tokio::time::pause();
         let clock_guard = tokio::spawn(async {
@@ -1528,7 +1512,6 @@ mod tests {
             bot_login: "deadlockbot".into(),
             limit: BrainRateLimit::new(BrainChatOptions::default()),
             backend_state: Mutex::new(BackendState::Unknown),
-            no_evidence_index: AtomicUsize::new(0),
         };
         assert!(service.maybe_respond(&event(0)).await);
         assert!(chat.sends.lock().unwrap().is_empty());
