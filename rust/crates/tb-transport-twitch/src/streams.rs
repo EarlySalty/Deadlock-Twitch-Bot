@@ -110,7 +110,71 @@ struct ChannelsResponse {
 /// Hartes Limit der Kategorie-Pagination (Python: `min(limit, 1200)`).
 const CATEGORY_HARD_CAP: usize = 1200;
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct HelixArchiveVideo {
+    pub id: String,
+    pub user_id: String,
+    pub stream_id: Option<String>,
+    pub duration: String,
+}
+
+impl HelixArchiveVideo {
+    pub fn duration_seconds(&self) -> Option<u32> {
+        let mut value = 0u32;
+        let mut digits = String::new();
+        for character in self.duration.chars() {
+            if character.is_ascii_digit() {
+                digits.push(character);
+                continue;
+            }
+            let multiplier = match character {
+                'h' => 3600,
+                'm' => 60,
+                's' => 1,
+                _ => return None,
+            };
+            value = value.checked_add(digits.parse::<u32>().ok()?.checked_mul(multiplier)?)?;
+            digits.clear();
+        }
+        if !digits.is_empty() || value == 0 {
+            return None;
+        }
+        Some(value)
+    }
+}
+
 impl HelixClient {
+    pub async fn archive_videos(
+        &self,
+        owner_id: &str,
+    ) -> Result<Vec<HelixArchiveVideo>, HelixError> {
+        let response = self
+            .send_with_retry(self.get("/videos").await?.query(&[
+                ("user_id", owner_id),
+                ("type", "archive"),
+                ("first", "5"),
+            ]))
+            .await?;
+        #[derive(Deserialize)]
+        struct ArchiveResponse {
+            data: Vec<HelixArchiveVideo>,
+        }
+        let body: ArchiveResponse = check_status_and_json(response).await?;
+        Ok(body.data)
+    }
+
+    pub async fn archive_video(&self, id: &str) -> Result<Option<HelixArchiveVideo>, HelixError> {
+        let response = self
+            .send_with_retry(self.get("/videos").await?.query(&[("id", id)]))
+            .await?;
+        #[derive(Deserialize)]
+        struct ArchiveResponse {
+            data: Vec<HelixArchiveVideo>,
+        }
+        let body: ArchiveResponse = check_status_and_json(response).await?;
+        Ok(body.data.into_iter().find(|video| video.id == id))
+    }
+
     /// Prüft genau ein VOD über den bestehenden Helix-Zugang.
     pub async fn video_verfuegbar(&self, twitch_id: &str) -> Result<bool, HelixError> {
         let id = twitch_id.strip_prefix('v').unwrap_or(twitch_id);
