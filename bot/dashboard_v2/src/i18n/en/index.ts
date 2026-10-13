@@ -5,6 +5,7 @@ import { CHAT_EN } from './chat';
 import { COACHING_EN } from './coaching';
 import { MONETIZATION_EN } from './monetization';
 import { OVERLAY_EN } from './overlay';
+import { SERVER_ADMIN_EN } from './serverAdmin';
 import { SHELL_EN } from './shell';
 import { UPLINK_EN } from './uplink';
 import { VERWALTUNG_EN } from './verwaltung';
@@ -19,6 +20,7 @@ export const EN_AREAS: Record<string, Record<string, string>> = {
   overlay: OVERLAY_EN,
   uplink: UPLINK_EN,
   monetization: MONETIZATION_EN,
+  serverAdmin: SERVER_ADMIN_EN,
   backend: BACKEND_EN,
 };
 

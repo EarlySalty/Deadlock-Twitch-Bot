@@ -2,13 +2,45 @@ import { motion } from 'framer-motion';
 import { Rise } from '@/motion/Rise';
 import { SidebarLink, type SidebarNavItem } from '@/components/layout/SidebarLink';
 import { SERVER_ADMIN_LOGOUT_URL, type GuildSettings, type ServerAdminSection } from '@/api/serverAdmin';
+import { useLanguage } from '@/context/LanguageContext';
+import { LANGUAGES, LANGUAGE_LABELS } from '@/i18n/dictionary';
 import { Globe2, Hash, LayoutDashboard, LogOut, Swords, Users } from 'lucide-react';
 
-/**
- * Navigation des Server-Admin-Dashboards. Gleiche Optik wie die Partner-
- * Sidebar (panel-card, Abschnitts-Labels, SidebarLink), aber eigene, getrennte
- * Navigation: keine Partner-Seiten, kein Admin-Modus, keine globalen Werkzeuge.
- */
+export function ServerAdminLanguageSwitch() {
+  const { language, setLanguage, t } = useLanguage();
+  return (
+    <div className="space-y-2">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
+        {t('Dashboard-Sprache')}
+      </div>
+      <div
+        className="inline-flex items-center rounded-xl border border-border bg-background/70 p-1.5"
+        role="group"
+        aria-label={t('Dashboard-Sprache')}
+      >
+        {LANGUAGES.map((option) => (
+          <button
+            key={option}
+            type="button"
+            lang={option}
+            aria-label={LANGUAGE_LABELS[option]}
+            aria-pressed={language === option}
+            title={LANGUAGE_LABELS[option]}
+            onClick={() => setLanguage(option)}
+            className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${
+              language === option
+                ? 'gradient-accent text-on-gold'
+                : 'text-text-secondary hover:text-white'
+            }`}
+          >
+            {option.toUpperCase()}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function ServerAdminSidebar({
   displayName,
   guilds,
@@ -22,12 +54,13 @@ export function ServerAdminSidebar({
   onGuildChange: (guildId: string) => void;
   activeSection: ServerAdminSection;
 }) {
+  const { t } = useLanguage();
   const navItems: SidebarNavItem[] = [
-    { href: '#overview', label: 'Server-Übersicht', icon: LayoutDashboard, active: activeSection === 'overview' },
-    { href: '#streamers', label: 'Streamer', icon: Users, active: activeSection === 'streamers' },
-    { href: '#channels', label: 'Kanäle & Rollen', icon: Hash, active: activeSection === 'channels' },
-    { href: '#language', label: 'Sprache & Einladung', icon: Globe2, active: activeSection === 'language' },
-    { href: '#raids', label: 'Raids', icon: Swords, active: activeSection === 'raids' },
+    { href: '#overview', label: t('Server-Übersicht'), icon: LayoutDashboard, active: activeSection === 'overview' },
+    { href: '#streamers', label: t('Streamer'), icon: Users, active: activeSection === 'streamers' },
+    { href: '#channels', label: t('Kanäle & Rollen'), icon: Hash, active: activeSection === 'channels' },
+    { href: '#language', label: t('Sprache & Einladung'), icon: Globe2, active: activeSection === 'language' },
+    { href: '#raids', label: t('Raids'), icon: Swords, active: activeSection === 'raids' },
   ];
 
   return (
@@ -40,7 +73,7 @@ export function ServerAdminSidebar({
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-white">{displayName}</div>
             <div className="mt-1 inline-flex max-w-full items-center rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
-              Server-Admin
+              {t('Server-Admin')}
             </div>
           </div>
         </div>
@@ -51,7 +84,7 @@ export function ServerAdminSidebar({
               htmlFor="server-admin-guild"
               className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary"
             >
-              Server
+              {t('Server')}
             </label>
             <select
               id="server-admin-guild"
@@ -68,11 +101,12 @@ export function ServerAdminSidebar({
           </div>
         ) : null}
 
+        <ServerAdminLanguageSwitch />
         <div className="border-t border-border" />
 
         <div className="space-y-2">
           <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
-            Server verwalten
+            {t('Server verwalten')}
           </div>
           <nav className="flex gap-2 overflow-x-auto pb-1 lg:block lg:space-y-1 lg:overflow-visible lg:pb-0">
             {navItems.map((item, index) => (
@@ -91,14 +125,14 @@ export function ServerAdminSidebar({
         <div className="border-t border-border" />
         <div className="space-y-2">
           <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
-            Konto
+            {t('Konto')}
           </div>
           <a
             href={SERVER_ADMIN_LOGOUT_URL}
             className="flex items-center gap-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-sm font-medium text-text-secondary transition-colors hover:border-border-hover hover:text-white"
           >
             <LogOut className="h-4 w-4" />
-            Abmelden
+            {t('Abmelden')}
           </a>
         </div>
       </div>

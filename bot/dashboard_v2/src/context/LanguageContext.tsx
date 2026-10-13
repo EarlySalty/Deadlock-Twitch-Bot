@@ -1,5 +1,4 @@
 import {
-  Fragment,
   createContext,
   useCallback,
   useContext,
@@ -17,24 +16,15 @@ import {
   translate,
   type Language,
   type TranslateParams,
-  // Relativ statt ueber den @-Alias: die Node-Tests laufen ohne Vite und
-  // koennen den Alias nicht aufloesen.
 } from '../i18n/dictionary';
 
 export interface LanguageContextValue {
   language: Language;
   setLanguage: (next: Language) => void;
-  /** Uebersetzt einen deutschen Text; ohne Eintrag bleibt er auf Deutsch. */
   t: (text: string, params?: TranslateParams) => string;
-  /** Passendes Locale fuer toLocaleString & Co. */
   locale: string;
 }
 
-/**
- * Der Default ist bewusst kein `null`: `useLanguage()` darf auch ausserhalb
- * des Providers nichts kaputt machen. Seiten, die noch nicht umgestellt sind
- * oder in Tests einzeln gerendert werden, laufen dann auf Deutsch weiter.
- */
 const LanguageContext = createContext<LanguageContextValue>({
   language: DEFAULT_LANGUAGE,
   setLanguage: () => {},
@@ -59,7 +49,6 @@ export function LanguageProvider({
     onLanguageChange?.(next);
   }, [onLanguageChange]);
 
-  // Screenreader und Browser-Uebersetzer richten sich nach dem lang-Attribut.
   useEffect(() => {
     document.documentElement.lang = language;
   }, [language]);
@@ -74,18 +63,13 @@ export function LanguageProvider({
     [language, setLanguage],
   );
 
-  return (
-    <LanguageContext.Provider value={value}>
-      <Fragment key={language}>{children}</Fragment>
-    </LanguageContext.Provider>
-  );
+  return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;
 }
 
 export function useLanguage(): LanguageContextValue {
   return useContext(LanguageContext);
 }
 
-/** Kurzform fuer Komponenten, die nur uebersetzen wollen. */
 export function useT(): LanguageContextValue['t'] {
   return useContext(LanguageContext).t;
 }
