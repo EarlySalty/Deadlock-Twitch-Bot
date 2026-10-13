@@ -139,7 +139,7 @@ export const ANALYTICS_EN: Record<string, string> = {
   '70 bis 100': '70 to 100',
   '40 bis 69': '40 to 69',
   '0 bis 39': '0 to 39',
-  'Chatters-API zeigt Chat-Audience, nicht alle Video-Viewer.': 'The Chatters API shows the chat audience, not all video viewers.',
+  'Chatters-API zeigt Chat-Audience, nicht alle Video-Viewer.': 'The Chatters API shows your chat audience, not every video viewer.',
   'Peer-Group Vergleich': 'Peer group comparison',
   'Nicht genug Daten für einen Peer-Group-Vergleich. Streame weiter, damit eine Zuordnung erfolgen kann.': 'Not enough data for a peer group comparison yet. Keep streaming so you can be placed in a group.',
   'Gesamt-Kategorie (alle {count} Streamer)': 'Whole category (all {count} streamers)',

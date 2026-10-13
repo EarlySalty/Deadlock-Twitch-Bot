@@ -217,4 +217,12 @@ export const CHAT_EN: Record<string, string> = {
     'Raw value {value} messages per 100 viewer minutes · No baseline from earlier streams yet',
   'Median: {median} · Basis: {minutes} Viewer-Minuten': 'Median: {median} · Based on {minutes} viewer minutes',
   'Keine Chat-Daten verfügbar': 'No chat data available',
+  '— Chat Penetration kann nicht berechnet werden. Daten stammen nur aus Chat-Nachrichten.':
+    '- Chat penetration cannot be calculated. Data comes from chat messages only.',
+  'Nur {count} Stunden mit Daten — zu wenig für aussagekräftige Tageszeit-Analyse.':
+    'Only {count} hours with data - too little for a meaningful time-of-day analysis.',
+  'Nur {count} Stunde mit Daten — zu wenig für aussagekräftige Tageszeit-Analyse.':
+    'Only {count} hour with data - too little for a meaningful time-of-day analysis.',
+  'Aktuelle Session — {title}': 'Current session - {title}',
+  '{date} — {title} (Ø {mpm} MPM)': '{date} - {title} (avg {mpm} MPM)',
 };

@@ -404,8 +404,4 @@ export const IGNORED_LITERALS: Record<string, string[]> = {
   ],
 };
 
-export const PENDING_FILES: string[] = [
-  'src/components/verwaltung/OverlayBuilderSection.tsx',
-  'src/pages/chatAnalyticsContent.tsx',
-  'src/pages/chatAnalyticsDeepSections.tsx',
-];
+export const PENDING_FILES: string[] = [];

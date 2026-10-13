@@ -274,4 +274,6 @@ export const OVERLAY_EN: Record<string, string> = {
   'Overlay einrichten': 'Set up overlay',
   'Dein Browser-Overlay für OBS, mit Adresse zum Einbinden und den Bausteinen deiner Wahl.': 'Your browser overlay for OBS, with a URL to add it and the modules you choose.',
   '← Zurück zur Verwaltung': '← Back to management',
+  'Zieh die Quelle an die gewünschte Stelle — sie aktualisiert sich automatisch.':
+    'Drag the source to the place you want - it updates automatically.',
 };
