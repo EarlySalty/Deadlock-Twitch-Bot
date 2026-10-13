@@ -6,7 +6,7 @@ export PATH
 usage() {
   cat >&2 <<'EOF'
 Aufruf:
-  deploy-twitch-release --pruefen
+  deploy-twitch-release --pruefen [--hub]
   deploy-twitch-release <40-stelliger-git-sha> [quell-checkout]
   deploy-twitch-release <40-stelliger-git-sha> [quell-checkout] --restart <dienst> [--restart <dienst> ...]
   deploy-twitch-release <40-stelliger-git-sha> [quell-checkout] --install-stt-models [--restart <dienst> ...]
@@ -14,12 +14,15 @@ Aufruf:
 STT-Modelle werden nur mit --install-stt-models aus dem geprüften Release installiert.
 Ohne --restart werden wie bisher Dashboard, Bot und Coaching-Watch neu gestartet.
 Mit --restart werden nur die explizit genannten Twitch-Dienste neu gestartet.
+Der Hub wird nur mit --restart discord-hub gestartet, niemals durch all.
+--pruefen --hub prüft ausschließlich den Hub und verändert nichts.
 
 Erlaubte Restart-Ziele:
   twitch-dashboard
   twitch-bot
   twitch-audit
   coaching-watch
+  discord-hub
   all
 EOF
 }
@@ -33,6 +36,9 @@ pruefen() {
     deadlock-twitch-dashboard-rust
     deadlock-twitch-stream-coaching-watch
   )
+  if [[ "${1:-}" == discord-hub ]]; then
+    units=(deadlock-twitch-discord-hub)
+  fi
 
   if ! current_target=$(readlink -e -- "$current"); then
     printf 'FEHLER: current ist nicht auflösbar.\n' >&2
@@ -79,6 +85,11 @@ pruefen() {
       printf 'FEHLER: %s: exe liegt nicht in einem SHA-Release.\n' "$unit" >&2
       result=1
     fi
+    if [[ "$unit" == deadlock-twitch-discord-hub &&
+          "$exe" != "/opt/deadlock/twitch/releases/$current_sha/rust/target/release/tb-discord-hub" ]]; then
+      printf 'FEHLER: %s: exe ist nicht das geprüfte Hub-Binary.\n' "$unit" >&2
+      result=1
+    fi
     if [[ -z "$current_sha" || "$release_sha" != "$current_sha" ]]; then
       printf 'FEHLER: %s: Release-SHA stimmt nicht mit current überein.\n' "$unit" >&2
       result=1
@@ -108,11 +119,14 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 if [[ "${1:-}" == --pruefen ]]; then
-  if [[ $# -ne 1 ]]; then
+  if [[ $# -eq 1 ]]; then
+    pruefen
+  elif [[ $# -eq 2 && "$2" == --hub ]]; then
+    pruefen discord-hub
+  else
     usage
     exit 1
   fi
-  pruefen
   exit $?
 fi
 
@@ -157,6 +171,9 @@ add_restart_target() {
       ;;
     twitch-audit|coaching-watch|twitch-coaching-watch|deadlock-twitch-stream-coaching-watch|deadlock-twitch-stream-coaching-watch.service)
       canonical="coaching-watch"
+      ;;
+    discord-hub|twitch-discord-hub|deadlock-twitch-discord-hub|deadlock-twitch-discord-hub.service)
+      canonical="discord-hub"
       ;;
     all)
       add_restart_target twitch-dashboard
@@ -287,6 +304,19 @@ required_artifacts=(
   bot/admin_dashboard/dist
   website/dist
 )
+hub_expected=0
+if GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$src" cat-file -e "$sha:rust/bin/tb-discord-hub/Cargo.toml" 2>/dev/null; then
+  hub_expected=1
+  required_artifacts+=(rust/target/release/tb-discord-hub)
+fi
+if [[ -n "${restart_seen[discord-hub]:-}" ]]; then
+  if [[ $hub_expected -ne 1 ||
+        $(systemctl show deadlock-twitch-discord-hub.service --property=LoadState --value) != loaded ||
+        ! -f /etc/deadlock-twitch/discord-hub.conf ]]; then
+    printf 'Hub-Aktivierung fehlt: zuerst deaktivierte Unit installieren und App, Infisical und discord-hub.conf einrichten.\n' >&2
+    exit 1
+  fi
+fi
 social_ai_expected=0
 if GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -C "$src" cat-file -e "$sha:rust/crates/tb-social-media/src/ai_editor/mod.rs" 2>/dev/null; then
   social_ai_expected=1
@@ -719,6 +749,9 @@ if [[ $native_expected -eq 1 ]]; then
     install -m 0644 "$candidate/ops/systemd/deadlock-twitch-bot-watchdog.conf" /etc/deadlock-twitch/bot-watchdog.conf
   fi
 fi
+if [[ $hub_expected -eq 1 ]]; then
+  install -m 0644 "$candidate/ops/systemd/deadlock-twitch-discord-hub.service" /etc/systemd/system/deadlock-twitch-discord-hub.service
+fi
 systemctl daemon-reload
 systemctl enable --now deadlock-twitch-llm-usage-recover.timer
 
@@ -797,6 +830,22 @@ for target in "${restart_targets[@]}"; do
       ;;
     coaching-watch)
       systemctl restart deadlock-twitch-stream-coaching-watch.service
+      ;;
+    discord-hub)
+      systemctl restart deadlock-twitch-discord-hub.service
+      hub_ready=0
+      for ((attempt=0; attempt<30; attempt++)); do
+        if hub_proof=$(pruefen discord-hub 2>&1); then
+          hub_ready=1
+          printf '%s\n' "$hub_proof"
+          break
+        fi
+        sleep 1
+      done
+      if [[ $hub_ready -ne 1 ]]; then
+        printf '%s\nHub-Start nicht belegt.\n' "$hub_proof" >&2
+        exit 1
+      fi
       ;;
   esac
 done
