@@ -34,6 +34,7 @@ import { PostingPlanDraft } from '@/components/socialmedia/PostingPlanDraft';
 import { PublishReviewPanel } from '@/components/socialmedia/autopilot/publish-review/PublishReviewPanel';
 import { PlatformStatusDialog } from '@/components/socialmedia/PlatformStatusDialog';
 import { ImportPoolPanel } from '@/components/socialmedia/autopilot/import-pool';
+import { ScheduleQueuePanel } from '@/components/socialmedia/autopilot/schedule-queue';
 import { socialAiClipFromSearch, socialViewFromSearch, socialViewSearch, socialWorkspaceDepartureAllowed, socialWorkspaceView, type AiEditorMountProps } from '@/components/socialmedia/studioNavigation';
 import { authorizationFact } from '@/components/socialmedia/platformPresentation';
 import {
@@ -535,11 +536,12 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
         ) : activeView === 'archiv' ? (
           <VodArchiveTab twitchUserId={twitchUserId} isAdmin={isAdmin} />
         ) : activeView === 'plan' ? (
-          <>
-          {workspaceSlots?.publishReview ?? (twitchUserId && <PublishReviewPanel twitchUserId={twitchUserId} />)}
-          {workspaceSlots?.automation ?? (
+          <div className="studio-plan-workspace">
+            {workspaceSlots?.publishReview ?? (twitchUserId && <PublishReviewPanel twitchUserId={twitchUserId} />)}
+            {workspaceSlots?.automation ?? <ScheduleQueuePanel twitchUserId={twitchUserId} />}
           <div className="studio-legacy-plan">
-            <p className="studio-workspace-note">{t('Der bisherige Posting-Plan bleibt nutzbar. Der gemeinsame Auto-Pilot-Zeitplan ist noch nicht verfügbar.')}</p>
+            <h2 className="studio-legacy-plan-title">{t('Bisheriger Posting-Plan')}</h2>
+            <p className="studio-workspace-note">{t('Freigabemodus und Plattformzeiten der bisherigen Clip-Pipeline bleiben hier einstellbar.')}</p>
           <PostingPlanDraft
             twitchUserId={twitchUserId}
             key={twitchUserId}
@@ -642,8 +644,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
             )}
           </PostingPlanDraft>
           </div>
-          )}
-          </>
+          </div>
         ) : workspaceView === 'konten' ? (
           <div className="studio-settings space-y-6">
             <div className="studio-accounts grid grid-cols-1 xl:grid-cols-2 gap-4">

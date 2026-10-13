@@ -1358,6 +1358,10 @@ async fn main() {
                     ),
                     manual_raid: manual_raid_port.clone(),
                     clip_port,
+                    vod_clip_port: chat_wiring::build_vod_clip_port(
+                        helix.as_ref().clone(),
+                        pool.clone(),
+                    ),
                     clip_contest: chat_wiring::build_clip_contest(
                         pool.clone(),
                         helix.as_ref().clone(),

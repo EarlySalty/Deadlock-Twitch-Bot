@@ -21,7 +21,7 @@
 .publish-message { color: var(--color-success); }
 .publish-note, .publish-expiry, .publish-review dt { color: var(--color-text-secondary); }
 .publish-video { padding: 24px 0; border-bottom: 1px solid var(--color-border); }
-.publish-preview { display: block; width: min(100%, 320px); max-height: 480px; margin: 12px 0; border-radius: 8px; background: #000; }
+.publish-preview { display: block; width: min(100%, 320px); max-height: 480px; margin: 12px 0; border-radius: 8px; background: var(--color-bg); }
 .publish-destinations { display: flex; flex-wrap: wrap; gap: 24px; margin: 20px 0; }
 .publish-destination { flex: 1 1 220px; min-width: 0; }
 .publish-destination > label { font-weight: 600; }

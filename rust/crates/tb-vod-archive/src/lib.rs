@@ -26,6 +26,7 @@ pub mod config;
 mod discovery;
 pub mod error;
 pub mod metadata;
+pub mod private_range;
 pub mod store;
 pub mod twitch;
 pub mod worker;
