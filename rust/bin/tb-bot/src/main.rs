@@ -1664,9 +1664,11 @@ async fn main() {
             Some((token_provider, raid_auth)) => ad_manager_wiring::spawn(
                 &supervisor,
                 pool.clone(),
-                helix_client,
-                token_provider,
-                raid_auth,
+                ad_manager_wiring::AdManagerTwitch {
+                    helix: helix_client,
+                    tokens: token_provider,
+                    auth: raid_auth,
+                },
                 ad_manager_chat_api.clone(),
                 settings.internal_api.token.clone(),
                 raid_ad_vorlauf.clone(),
@@ -2759,4 +2761,7 @@ mod test_sql;
 
 #[cfg(test)]
 #[path = "../../../test-support/postgres.rs"]
-mod role_test_postgres;
+mod test_postgres;
+
+#[cfg(test)]
+use test_postgres as role_test_postgres;
