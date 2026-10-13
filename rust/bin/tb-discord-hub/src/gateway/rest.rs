@@ -52,6 +52,7 @@ pub struct SessionStartLimit {
 #[derive(Debug, Clone)]
 pub struct GuildInfo {
     pub owner_id: Option<u64>,
+    pub name: String,
     pub roles: Vec<Role>,
 }
 
@@ -185,6 +186,13 @@ impl DiscordRest {
         };
         Ok(GuildInfo {
             owner_id: snowflake(v.get("owner_id")),
+            name: v
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .chars()
+                .take(200)
+                .collect(),
             roles,
         })
     }
@@ -250,10 +258,60 @@ pub fn setup_command_definition() -> Value {
     json!([{
         "name": "setup",
         "type": 1,
-        "description": "Check the Deadlock Hub permissions and role setup on this server",
+        "description": "Check permissions and save this server's Deadlock Hub channels and roles",
         "default_member_permissions": MANAGE_GUILD.to_string(),
         "dm_permission": false,
-        "contexts": [0]
+        "contexts": [0],
+        "options": [
+            {
+                "name": "language",
+                "description": "Language for bot messages on this server",
+                "type": 3,
+                "required": false,
+                "choices": [
+                    {"name": "German", "value": "de"},
+                    {"name": "English", "value": "en"}
+                ]
+            },
+            {
+                "name": "announce_channel",
+                "description": "Channel for go-live announcements",
+                "type": 7,
+                "required": false,
+                "channel_types": [0]
+            },
+            {
+                "name": "alert_channel",
+                "description": "Channel for moderation alerts",
+                "type": 7,
+                "required": false,
+                "channel_types": [0]
+            },
+            {
+                "name": "streamer_role",
+                "description": "Role assigned to partnered streamers",
+                "type": 8,
+                "required": false
+            },
+            {
+                "name": "ping_role",
+                "description": "Mentionable role for live pings",
+                "type": 8,
+                "required": false
+            },
+            {
+                "name": "invite",
+                "description": "Discord invite URL used in promotions",
+                "type": 3,
+                "required": false
+            },
+            {
+                "name": "auto_partner",
+                "description": "New streamers become partners of this server automatically",
+                "type": 5,
+                "required": false
+            }
+        ]
     }])
 }
 
@@ -286,6 +344,24 @@ mod tests {
         assert_eq!(v[0]["name"], "setup");
         assert_eq!(v[0]["default_member_permissions"], "32");
         assert_eq!(v[0]["dm_permission"], false);
+        let names: Vec<&str> = v[0]["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "language",
+                "announce_channel",
+                "alert_channel",
+                "streamer_role",
+                "ping_role",
+                "invite",
+                "auto_partner"
+            ]
+        );
     }
 
     #[test]

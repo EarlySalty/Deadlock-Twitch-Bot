@@ -14,7 +14,7 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::Message;
 
-use super::events::{map_dispatch, HubEvent, SetupInteraction};
+use super::events::{map_dispatch, HubEvent, SetupInteraction, SetupOptions};
 use super::permissions::{
     compute_report, render_check_failed, render_community_notice, render_setup_report,
 };
@@ -80,16 +80,23 @@ pub(crate) struct Ctx {
     pub community_guild_id: u64,
     pub application_id: Option<u64>,
     pub bot_user_id: AtomicU64,
+    pub pool: Option<sqlx::PgPool>,
     commands_registered: AtomicBool,
 }
 
 impl Ctx {
-    pub fn new(rest: DiscordRest, community_guild_id: u64, application_id: Option<u64>) -> Self {
+    pub fn new(
+        rest: DiscordRest,
+        community_guild_id: u64,
+        application_id: Option<u64>,
+        pool: Option<sqlx::PgPool>,
+    ) -> Self {
         Self {
             rest,
             community_guild_id,
             application_id,
             bot_user_id: AtomicU64::new(0),
+            pool,
             commands_registered: AtomicBool::new(false),
         }
     }
@@ -123,6 +130,7 @@ pub(crate) async fn run(
         rest,
         config.community_guild_id,
         config.application_id,
+        config.pool,
     ));
     let (tx, rx) = mpsc::unbounded_channel();
     let worker = tokio::spawn(sink_worker(rx, sink));
@@ -451,7 +459,7 @@ pub(crate) async fn handle_setup(ctx: &Ctx, inter: SetupInteraction) {
         return;
     }
     let bot_user_id = ctx.bot_user_id.load(Ordering::Relaxed);
-    let content = match check_guild(ctx, guild_id, bot_user_id).await {
+    let content = match check_guild(ctx, guild_id, bot_user_id, &inter.options).await {
         Ok(text) => text,
         Err(e) => {
             tracing::warn!(error = %e, guild_id, "Rechteprüfung für /setup fehlgeschlagen");
@@ -467,7 +475,12 @@ pub(crate) async fn handle_setup(ctx: &Ctx, inter: SetupInteraction) {
     }
 }
 
-async fn check_guild(ctx: &Ctx, guild_id: u64, bot_user_id: u64) -> Result<String, String> {
+async fn check_guild(
+    ctx: &Ctx,
+    guild_id: u64,
+    bot_user_id: u64,
+    options: &SetupOptions,
+) -> Result<String, String> {
     if bot_user_id == 0 {
         return Err("Bot-User-ID noch unbekannt (kein READY)".to_string());
     }
@@ -484,7 +497,78 @@ async fn check_guild(ctx: &Ctx, guild_id: u64, bot_user_id: u64) -> Result<Strin
         &guild.roles,
         &member_roles,
     );
-    Ok(render_setup_report(&report))
+    let persist = validated_setup_persist(&report, &guild.roles, options);
+    let mut text = render_setup_report(&report);
+    if let Some(note) = persist_notes(&persist, options) {
+        text.push('\n');
+        text.push_str(&note);
+    }
+    if let Some(pool) = ctx.pool.as_ref() {
+        if let Err(error) =
+            crate::guilds::persist_setup(pool, guild_id, &guild.name, &persist).await
+        {
+            tracing::warn!(error = %error, guild_id, "Speichern der /setup-Optionen fehlgeschlagen");
+            text.push_str("\nCould not save the server settings right now. Please try again.");
+        } else if persist.has_updates() {
+            text.push_str("\nSaved the settings you passed to `/setup`.");
+        }
+    }
+    Ok(text)
+}
+
+fn to_positive_id(id: Option<u64>) -> Option<i64> {
+    id.and_then(|v| i64::try_from(v).ok()).filter(|v| *v > 0)
+}
+
+fn validated_setup_persist(
+    report: &super::permissions::SetupReport,
+    roles: &[super::permissions::Role],
+    options: &SetupOptions,
+) -> crate::guilds::SetupPersist {
+    let top_pos = report.top_role.as_ref().map(|(_, pos)| *pos).unwrap_or(0);
+    let role_ok = |id: Option<u64>| -> Option<i64> {
+        let id = to_positive_id(id)?;
+        let role = roles
+            .iter()
+            .find(|role| i64::try_from(role.id).ok() == Some(id))?;
+        if role.managed || role.position >= top_pos {
+            return None;
+        }
+        Some(id)
+    };
+    let ping_ok = |id: Option<u64>| -> Option<i64> {
+        let id = role_ok(id)?;
+        let role = roles
+            .iter()
+            .find(|role| i64::try_from(role.id).ok() == Some(id))?;
+        role.mentionable.then_some(id)
+    };
+    crate::guilds::SetupPersist {
+        language: options.language.clone(),
+        announce_channel_id: to_positive_id(options.announce_channel_id),
+        alert_channel_id: to_positive_id(options.alert_channel_id),
+        streamer_role_id: role_ok(options.streamer_role_id),
+        ping_role_id: ping_ok(options.ping_role_id),
+        promo_invite_url: options.invite.clone(),
+        auto_partner_default: options.auto_partner,
+    }
+}
+
+fn persist_notes(persist: &crate::guilds::SetupPersist, options: &SetupOptions) -> Option<String> {
+    let mut notes = Vec::new();
+    if options.ping_role_id.is_some() && persist.ping_role_id.is_none() {
+        notes.push(
+            "The ping role was not saved. It must be mentionable and sit below the Hub role.",
+        );
+    }
+    if options.streamer_role_id.is_some() && persist.streamer_role_id.is_none() {
+        notes.push("The streamer role was not saved. Move the Hub role above it first.");
+    }
+    if notes.is_empty() {
+        None
+    } else {
+        Some(notes.join("\n"))
+    }
 }
 
 #[cfg(test)]
@@ -590,6 +674,7 @@ mod tests {
             bot_token: "tok".into(),
             application_id: app,
             community_guild_id: 1,
+            pool: None,
         }
     }
 
@@ -817,6 +902,7 @@ mod tests {
             application_id: 77,
             guild_id,
             app_permissions: None,
+            options: SetupOptions::default(),
         }
     }
 
@@ -855,7 +941,7 @@ mod tests {
             .mount(&api)
             .await;
 
-        let ctx = Ctx::new(DiscordRest::new(api.uri(), "tok"), 1, Some(77));
+        let ctx = Ctx::new(DiscordRest::new(api.uri(), "tok"), 1, Some(77), None);
         ctx.bot_user_id.store(50, Ordering::Relaxed);
         handle_setup(&ctx, inter(Some(2))).await;
 
@@ -886,14 +972,67 @@ mod tests {
             .expect(1)
             .mount(&api)
             .await;
-        let ctx = Ctx::new(DiscordRest::new(api.uri(), "tok"), 1, Some(77));
+        let ctx = Ctx::new(DiscordRest::new(api.uri(), "tok"), 1, Some(77), None);
         handle_setup(&ctx, inter(Some(1))).await;
         let reqs = api.received_requests().await.unwrap();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].method.as_str(), "POST");
         let body: Value = serde_json::from_slice(&reqs[0].body).unwrap();
         assert!(body["data"]["content"]
             .as_str()
             .unwrap()
             .contains("main Deadlock bot"));
+    }
+
+    #[test]
+    fn setup_persist_lehnt_ungueltige_rollen_ab() {
+        let report = super::super::permissions::SetupReport {
+            permissions: 0,
+            top_role: Some(("Hub".into(), 10)),
+            roles_above: vec![],
+            manageable_roles: 2,
+        };
+        let role = |id: u64, position: i64, managed: bool, mentionable: bool| {
+            super::super::permissions::Role {
+                id,
+                name: id.to_string(),
+                permissions: 0,
+                position,
+                managed,
+                mentionable,
+            }
+        };
+        let roles = vec![
+            role(1, 10, true, false),
+            role(2, 5, false, false),
+            role(3, 4, false, true),
+            role(4, 11, false, true),
+            role(5, 3, false, false),
+        ];
+        let ok = validated_setup_persist(
+            &report,
+            &roles,
+            &SetupOptions {
+                streamer_role_id: Some(2),
+                ping_role_id: Some(3),
+                language: Some("en".into()),
+                ..SetupOptions::default()
+            },
+        );
+        assert_eq!(ok.streamer_role_id, Some(2));
+        assert_eq!(ok.ping_role_id, Some(3));
+        assert_eq!(ok.language.as_deref(), Some("en"));
+        let rejected = SetupOptions {
+            streamer_role_id: Some(4),
+            ping_role_id: Some(5),
+            ..SetupOptions::default()
+        };
+        let persist = validated_setup_persist(&report, &roles, &rejected);
+        assert!(persist.streamer_role_id.is_none());
+        assert!(persist.ping_role_id.is_none());
+        let notes = persist_notes(&persist, &rejected).unwrap();
+        assert!(notes.contains("streamer role"));
+        assert!(notes.contains("ping role"));
     }
 
     #[tokio::test]
@@ -914,7 +1053,7 @@ mod tests {
             .expect(1)
             .mount(&api)
             .await;
-        let ctx = Ctx::new(DiscordRest::new(api.uri(), "tok"), 1, Some(77));
+        let ctx = Ctx::new(DiscordRest::new(api.uri(), "tok"), 1, Some(77), None);
         ctx.bot_user_id.store(50, Ordering::Relaxed);
         let mut i = inter(Some(2));
         i.app_permissions = Some(1024);

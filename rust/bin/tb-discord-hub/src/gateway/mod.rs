@@ -38,6 +38,7 @@ pub struct GatewayConfig {
     pub application_id: Option<u64>,
     /// Deutscher Community-Server (wird vom Haupt-Bot betreut).
     pub community_guild_id: u64,
+    pub pool: Option<sqlx::PgPool>,
 }
 
 impl std::fmt::Debug for GatewayConfig {
@@ -46,6 +47,7 @@ impl std::fmt::Debug for GatewayConfig {
             .field("bot_token", &"<verborgen>")
             .field("application_id", &self.application_id)
             .field("community_guild_id", &self.community_guild_id)
+            .field("pool", &self.pool.as_ref().map(|_| "PgPool"))
             .finish()
     }
 }
@@ -63,8 +65,7 @@ pub fn spawn(config: GatewayConfig, sink: Arc<dyn GuildEventSink>) -> tokio::tas
     })
 }
 
-/// Standard-Senke bis Paket G: protokolliert die Ereignisse nur.
-/// Idempotent – `guild_added` kommt beim Start für jede Guild erneut.
+/// Fallback ohne `DATABASE_URL`: nur Logs. READY-Replay bleibt idempotent.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct LoggingSink;
 
@@ -93,6 +94,7 @@ mod tests {
             bot_token: "sehr-geheim".into(),
             application_id: Some(1),
             community_guild_id: 2,
+            pool: None,
         };
         let s = format!("{cfg:?}");
         assert!(!s.contains("sehr-geheim"));

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tb_discord_hub::config::HubConfig;
 use tb_discord_hub::forward::BrokerForwarder;
 use tb_discord_hub::gateway::{self, GatewayConfig, LoggingSink};
+use tb_discord_hub::guilds::PgSink;
 use tb_discord_hub::rest::DiscordRest;
 use tb_discord_hub::server::{router, AppState};
 use tb_discord_hub::{BrokerForward, DirectDiscord, GuildEventSink};
@@ -55,16 +56,32 @@ async fn main() -> Result<(), String> {
             .map_err(|e| format!("Broker-Weiterleitung: {e}"))?,
     );
 
+    let pool = match config.database_url.as_deref() {
+        Some(url) => Some(
+            sqlx::PgPool::connect(url)
+                .await
+                .map_err(|e| format!("Datenbank: {e}"))?,
+        ),
+        None => {
+            tracing::warn!("DATABASE_URL fehlt: Guild-Ereignisse werden nur protokolliert");
+            None
+        }
+    };
+
     let mut gateway_task = None;
     let direct: Option<Arc<dyn DirectDiscord>> = match config.bot_token.as_deref() {
         Some(bot_token) => {
             let rest = DiscordRest::new(bot_token).map_err(|e| format!("Discord-REST: {e}"))?;
-            let sink: Arc<dyn GuildEventSink> = Arc::new(LoggingSink);
+            let sink: Arc<dyn GuildEventSink> = match &pool {
+                Some(pool) => Arc::new(PgSink::new(pool.clone())),
+                None => Arc::new(LoggingSink),
+            };
             gateway_task = Some(gateway::spawn(
                 GatewayConfig {
                     bot_token: bot_token.to_string(),
                     application_id: config.application_id,
                     community_guild_id: config.community_guild_id,
+                    pool: pool.clone(),
                 },
                 sink,
             ));

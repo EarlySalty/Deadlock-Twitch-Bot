@@ -14,6 +14,7 @@
 pub mod config;
 pub mod forward;
 pub mod gateway;
+pub mod guilds;
 pub mod rest;
 pub mod server;
 
@@ -117,8 +118,7 @@ pub trait DirectDiscord: Send + Sync {
     ) -> Result<OutboundResponse, HubError>;
 }
 
-/// Ereignisse aus dem Gateway. Persistenz folgt mit Paket G (`discord_guilds`,
-/// `streamer_guilds`); bis dahin protokolliert die Standard-Senke nur.
+/// Gateway-Ereignisse. `PgSink` schreibt nach `discord_guilds` / `streamer_guilds`.
 #[async_trait::async_trait]
 pub trait GuildEventSink: Send + Sync {
     async fn guild_added(&self, guild_id: u64, name: &str);
