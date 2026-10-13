@@ -79,7 +79,7 @@ test('real editor preview reuses accepted job contracts without media or write r
   assert.ok(review.provider_latency_ms);
   assert.ok(review.highlights.length);
   assert.ok(review.decisions.length);
-  assert.equal(review.versions[0].status, 'ready');
+  assert.equal(review.versions[0].status, 'review');
   assert.equal(review.versions[1].parent_version_id, review.versions[0].id);
   for (const [fixture, status] of [
     ['ai-rendering', 'rendering'],

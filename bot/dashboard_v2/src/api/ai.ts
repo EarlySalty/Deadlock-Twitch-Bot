@@ -1,4 +1,4 @@
-import { buildApiUrl, fetchApi, withCookieCredentials } from './core';
+import { buildApiUrl, fetchApi, withCookieCredentials, withLanguageHeader } from './core';
 import { tr } from '../i18n/dictionary';
 import type { AIAnalysisResult, AIChatResponse, AIHistoryEntry } from '@/types/analytics';
 
@@ -39,9 +39,10 @@ export async function fetchAIChat(
   analysisId: number,
   message: string
 ): Promise<AIChatResponse> {
+  const url = buildApiUrl('/ai/chat');
   const response = await fetch(
-    buildApiUrl('/ai/chat'),
-    withCookieCredentials({
+    url,
+    withLanguageHeader(url, withCookieCredentials({
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -52,7 +53,7 @@ export async function fetchAIChat(
         analysis_id: analysisId,
         message,
       }),
-    })
+    }))
   );
 
   const payload = await response.json().catch(() => null) as {

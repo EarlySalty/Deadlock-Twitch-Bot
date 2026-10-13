@@ -54,7 +54,7 @@ export function Overview({ streamer, days, onSessionClick }: OverviewProps) {
   if (!overview || overview.empty) {
     return (
       <div className="p-8 text-center text-text-secondary">
-        {overview?.error || t('Keine Daten verfügbar')}
+        {overview?.error ? t(overview.error) : t('Keine Daten verfügbar')}
       </div>
     );
   }

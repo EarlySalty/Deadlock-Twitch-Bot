@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchOverview } from '@/api/analytics';
-import { buildApiUrl, withCookieCredentials } from '@/api/core';
+import { buildApiUrl, withCookieCredentials, withLanguageHeader } from '@/api/core';
 import { usePlan } from '@/context/PlanContext';
 import { useStreamReport } from '@/hooks/useAnalytics';
 import { useT } from '@/context/LanguageContext';
@@ -210,7 +210,8 @@ function trendBadgeClass(value: string): string {
 async function readMutationError(response: Response): Promise<string> {
   try {
     const payload = (await response.json()) as { message?: string; error?: string };
-    return payload.message || payload.error || tr('Server-Fehler (HTTP {status})', { status: response.status });
+    const message = payload.message || payload.error;
+    return message ? tr(message) : tr('Server-Fehler (HTTP {status})', { status: response.status });
   } catch {
     return tr('Server-Fehler (HTTP {status})', { status: response.status });
   }
@@ -224,7 +225,7 @@ function useABVote(streamer: string | null, sessionId?: number) {
         streamer: streamer || '',
         session_id: sessionId!,
       });
-      const res = await fetch(url, { credentials: 'same-origin' });
+      const res = await fetch(url, withLanguageHeader(url, { credentials: 'same-origin' }));
       if (!res.ok) throw new Error(tr('Abstimmung konnte nicht geladen werden'));
       return res.json();
     },
@@ -717,9 +718,10 @@ function RatingBar({
     setCurrentRating(optimisticRating);
 
     try {
+      const url = buildApiUrl('/stream-report/rate');
       const response = await fetch(
-        buildApiUrl('/stream-report/rate'),
-        withCookieCredentials({
+        url,
+        withLanguageHeader(url, withCookieCredentials({
           method: 'POST',
           headers: {
             Accept: 'application/json',
@@ -732,7 +734,7 @@ function RatingBar({
             rating: pendingRating,
             comment: trimmedComment || undefined,
           }),
-        })
+        }))
       );
 
       if (!response.ok) {
@@ -897,9 +899,10 @@ function ABVoteSection({
     setSaveError(null);
 
     try {
+      const url = buildApiUrl('/stream-report/ab-vote');
       const response = await fetch(
-        buildApiUrl('/stream-report/ab-vote'),
-        withCookieCredentials({
+        url,
+        withLanguageHeader(url, withCookieCredentials({
           method: 'POST',
           headers: {
             Accept: 'application/json',
@@ -911,7 +914,7 @@ function ABVoteSection({
             winner: pendingWinner,
             comment: trimmedComment || undefined,
           }),
-        })
+        }))
       );
 
       if (!response.ok) {

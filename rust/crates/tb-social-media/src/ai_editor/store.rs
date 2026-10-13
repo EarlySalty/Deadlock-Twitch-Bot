@@ -301,6 +301,11 @@ pub struct AiVideoVersion {
     pub duration_ms: Option<i64>,
     pub file_url: Option<String>,
     pub parent_version_id: Option<i64>,
+    pub job_id: i64,
+    pub variant_index: i32,
+    pub original_url: Option<String>,
+    pub decisions: Vec<TimelineEntry>,
+    pub approved_platforms: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -334,6 +339,10 @@ pub struct AiJobView {
     pub failure_code: Option<String>,
     pub failure_message: Option<String>,
     pub can_retry: bool,
+    pub root_job_id: i64,
+    pub parent_version_id: Option<i64>,
+    pub selected_version_id: Option<i64>,
+    pub revision_proposal: Option<super::revision::RevisionProposal>,
 }
 
 #[derive(Debug, Clone)]
@@ -403,6 +412,8 @@ macro_rules! public_job_query {
     ($tail:literal) => {
         concat!(
             "SELECT j.id, j.clip_db_id, j.status, j.stage, j.created_at, \
+             COALESCE(j.root_job_id,j.id) AS root_job_id, j.parent_version_id, j.revision_proposal::text AS revision_proposal_text, \
+             (SELECT r.selected_version_id FROM social_ai_jobs r WHERE r.id=COALESCE(j.root_job_id,j.id) AND r.twitch_user_id=j.twitch_user_id) AS selected_version_id, \
              j.updated_at, j.completed_at, j.provider, j.model, j.original_duration_ms, \
              j.output_duration_ms, j.processing_ms, j.rendering_ms, j.input_tokens, j.output_tokens, \
              j.estimated_provider_cost_usd, j.measured_provider_cost_usd, j.failure_code, j.failure_message, \
@@ -411,7 +422,7 @@ macro_rules! public_job_query {
              j.attempts::text AS attempts_text, \
              EXISTS (SELECT 1 FROM social_ai_jobs sibling WHERE sibling.twitch_user_id = j.twitch_user_id \
              AND sibling.clip_db_id = j.clip_db_id AND sibling.id <> j.id \
-             AND sibling.status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating')) AS active_sibling, \
+             AND sibling.status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating','awaiting_confirmation')) AS active_sibling, \
              EXISTS (SELECT 1 FROM twitch_clips_social_media c WHERE c.id = j.source_clip_id \
              AND c.id = j.clip_db_id AND c.clip_id = j.source_twitch_clip_id \
              AND c.twitch_user_id = j.twitch_user_id::text AND c.category_key = 'deadlock' \
@@ -469,6 +480,13 @@ fn view_from_row(row: &PgRow, limit: AttemptLimit) -> Result<AiJobView, AiStoreE
         failure_code: row.try_get("failure_code")?,
         failure_message: row.try_get("failure_message")?,
         can_retry,
+        root_job_id: row.try_get("root_job_id")?,
+        parent_version_id: row.try_get("parent_version_id")?,
+        selected_version_id: row.try_get("selected_version_id")?,
+        revision_proposal: row
+            .try_get::<Option<String>, _>("revision_proposal_text")?
+            .map(|text| parse_json(&text))
+            .transpose()?,
     })
 }
 
@@ -483,15 +501,17 @@ async fn load_versions(
     let ids: Vec<i64> = jobs.iter().map(|job| job.id).collect();
     let rows = sqlx::query(
         "SELECT j.id AS job_id, p.id, p.version_no, p.created_at, p.status, \
-         p.duration_ms, p.parent_version_id FROM social_ai_jobs j \
+         p.duration_ms, p.parent_version_id, p.variant_index, p.maker_job_id, p.decisions_text, p.planning_text FROM social_ai_jobs j \
          JOIN LATERAL (SELECT p.id, p.version_no, p.created_at, \
          CASE WHEN p.status IN ('rendering','review','failed') AND p.expires_at <= NOW() THEN 'expired' ELSE p.status END AS status, \
-         p.duration_ms, p.parent_version_id FROM social_produced_videos p \
-         WHERE p.twitch_user_id = j.twitch_user_id::text AND p.clip_id = j.clip_db_id \
-         AND p.mode = 'ai' AND p.metadata ->> 'manual_ai_job_id' = j.id::text \
-         ORDER BY p.version_no, p.id LIMIT 50) p ON TRUE \
+         p.duration_ms, p.parent_version_id, p.variant_index, maker.id AS maker_job_id, maker.decisions::text AS decisions_text, (p.metadata->'planning')::text AS planning_text FROM social_ai_jobs maker \
+         JOIN social_produced_videos p ON p.metadata->>'manual_ai_job_id'=maker.id::text \
+         WHERE COALESCE(maker.root_job_id,maker.id)=COALESCE(j.root_job_id,j.id) AND maker.twitch_user_id=j.twitch_user_id AND maker.clip_db_id=j.clip_db_id \
+         AND p.twitch_user_id = j.twitch_user_id::text AND p.clip_id = j.clip_db_id \
+         AND p.mode = 'ai' \
+         ORDER BY p.version_no, p.variant_index, p.id LIMIT 50) p ON TRUE \
          WHERE j.twitch_user_id = $1 AND j.id = ANY($2::bigint[]) \
-         ORDER BY j.id DESC, p.version_no, p.id",
+         ORDER BY j.id DESC, p.version_no, p.variant_index, p.id",
     )
     .bind(owner)
     .bind(&ids)
@@ -499,6 +519,20 @@ async fn load_versions(
     .await?;
     let mut versions: HashMap<i64, Vec<AiVideoVersion>> = HashMap::new();
     for row in &rows {
+        let mut decisions = parse_json(row.try_get("decisions_text")?)?;
+        if let Some(text) = row.try_get::<Option<String>, _>("planning_text")? {
+            let planning: super::stage_contract::Planning = parse_json(&text)?;
+            decisions = planning
+                .plan
+                .kept_intervals
+                .into_iter()
+                .map(|interval| TimelineEntry {
+                    start_ms: interval.start_ms as i64,
+                    end_ms: interval.end_ms as i64,
+                    description: interval.reason,
+                })
+                .collect();
+        }
         versions
             .entry(row.try_get("job_id")?)
             .or_default()
@@ -510,6 +544,11 @@ async fn load_versions(
                 duration_ms: row.try_get("duration_ms")?,
                 file_url: None,
                 parent_version_id: row.try_get("parent_version_id")?,
+                job_id: row.try_get("maker_job_id")?,
+                variant_index: row.try_get("variant_index")?,
+                original_url: None,
+                decisions,
+                approved_platforms: Vec::new(),
             });
     }
     for job in jobs {
@@ -588,7 +627,7 @@ pub async fn create_job(
          AND c.category_key = 'deadlock' AND c.discarded_at IS NULL \
          AND c.source_kind = 'twitch' \
          ON CONFLICT (twitch_user_id, clip_db_id) \
-         WHERE status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating') \
+         WHERE status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating','awaiting_confirmation') \
          DO UPDATE SET updated_at = social_ai_jobs.updated_at \
          WHERE social_ai_jobs.source_twitch_clip_id = EXCLUDED.source_twitch_clip_id RETURNING id",
     )
@@ -610,7 +649,7 @@ async fn fail_missing_source(
         "UPDATE social_ai_jobs j SET status = 'failed', failure_code = 'source_unavailable', \
          failure_message = 'Der Clip ist nicht verfügbar.', updated_at = NOW() \
          WHERE j.id = $1 AND j.twitch_user_id = $2 \
-         AND j.status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating') \
+         AND j.status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating','awaiting_confirmation') \
          AND NOT EXISTS (SELECT 1 FROM twitch_clips_social_media c \
          WHERE c.id = j.source_clip_id AND c.id = j.clip_db_id AND c.clip_id = j.source_twitch_clip_id \
          AND c.twitch_user_id = j.twitch_user_id::text \
@@ -793,7 +832,10 @@ pub async fn save_stage(
     let saved: Option<i64> = sqlx::query_scalar(
         "UPDATE social_ai_jobs SET \
          checkpoints = jsonb_set(checkpoints, ARRAY[$3::text], $4::jsonb), \
-         stage = $5, status = CASE WHEN $3 = 'validating' THEN 'validating' ELSE 'queued' END, \
+         stage = $5, status = CASE WHEN $3 = 'validating' THEN 'validating' \
+             WHEN $3='planning' AND revision_feedback IS NOT NULL AND NOT revision_confirmed \
+             AND COALESCE(($4::jsonb->'result'->'edit_plan'->'revision_proposal'->>'requires_confirmation')::boolean,FALSE) THEN 'awaiting_confirmation' ELSE 'queued' END, \
+         revision_proposal = CASE WHEN $3='planning' AND revision_feedback IS NOT NULL THEN $4::jsonb->'result'->'edit_plan'->'revision_proposal' ELSE revision_proposal END, \
          highlights = COALESCE($6::jsonb, highlights), \
          decisions = COALESCE($7::jsonb, decisions), \
          uncertainty = COALESCE($8::jsonb, uncertainty), \
@@ -1004,7 +1046,7 @@ pub async fn retry_job(
          AND NOT EXISTS (SELECT 1 FROM social_ai_jobs sibling \
          WHERE sibling.twitch_user_id = social_ai_jobs.twitch_user_id \
          AND sibling.clip_db_id = social_ai_jobs.clip_db_id AND sibling.id <> social_ai_jobs.id \
-         AND sibling.status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating'))",
+         AND sibling.status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating','awaiting_confirmation'))",
     )
     .bind(job_id)
     .bind(owner)
@@ -1112,7 +1154,7 @@ pub(super) async fn fail_invalid_checkpoint(
 ) -> Result<(), AiStoreError> {
     lease.ensure_held().await?;
     let owner = numeric_owner(twitch_user_id)?;
-    let changed = sqlx::query("UPDATE social_ai_jobs SET status='failed', failure_code='invalid_checkpoint', failure_message='Die gespeicherten Auftragsdaten konnten nicht sicher geprüft werden.', updated_at=NOW() WHERE id=$1 AND twitch_user_id=$2 AND status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating')")
+    let changed = sqlx::query("UPDATE social_ai_jobs SET status='failed', failure_code='invalid_checkpoint', failure_message='Die gespeicherten Auftragsdaten konnten nicht sicher geprüft werden.', updated_at=NOW() WHERE id=$1 AND twitch_user_id=$2 AND status IN ('queued','preparing','transcribing','analyzing','planning','rendering','validating','awaiting_confirmation')")
         .bind(job_id).bind(owner).execute(&mut *lease.connection).await?.rows_affected();
     if changed != 1 {
         return Err(AiStoreError::Conflict);

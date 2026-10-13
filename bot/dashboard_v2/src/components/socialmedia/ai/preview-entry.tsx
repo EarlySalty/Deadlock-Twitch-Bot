@@ -22,6 +22,7 @@ const labels: Record<AiPreviewScenario, string> = {
   failed: 'Fehlgeschlagen',
   handoff: 'Clip-Übergabe',
   race: 'Kanalwechsel',
+  revisions: 'Revisionen und Freigaben',
 };
 
 export function PreviewShell() {

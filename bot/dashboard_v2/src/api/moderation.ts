@@ -1,3 +1,6 @@
+import { tr } from '../i18n/dictionary';
+import { withLanguageHeader } from './languageHeader';
+
 const BASE = '/twitch/api/v2/streamer/moderation';
 
 export interface ModerationSettings {
@@ -8,13 +11,10 @@ export interface ModerationSettings {
 }
 
 async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
-    credentials: 'same-origin',
-    ...init,
-  });
+  const response = await fetch(path, withLanguageHeader(path, { credentials: 'same-origin', ...init }));
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(payload?.error || `HTTP ${response.status}`);
+    throw new Error(tr(payload?.error || `HTTP ${response.status}`));
   }
   return (await response.json()) as T;
 }

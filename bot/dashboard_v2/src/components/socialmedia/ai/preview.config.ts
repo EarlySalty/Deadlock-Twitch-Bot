@@ -9,6 +9,7 @@ const output = readFileSync(new URL('./preview-output.mp4', import.meta.url));
 export default defineConfig(async (environment) => {
   const base = typeof baseConfig === 'function' ? await baseConfig(environment) : await baseConfig;
   return mergeConfig(base, {
+    resolve: { alias: [{find:'@/preview/routes',replacement:new URL('./preview-routes.ts',import.meta.url).pathname}] },
     plugins: [{
       name: 'social-ai-local-media-fixtures',
       configureServer(server: ViteDevServer) {

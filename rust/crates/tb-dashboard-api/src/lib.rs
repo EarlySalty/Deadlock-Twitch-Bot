@@ -9,6 +9,7 @@ pub mod ai_state;
 pub(crate) mod ai_store;
 pub mod auth;
 pub mod handlers;
+pub mod language;
 pub mod obs;
 pub mod onboarding_guild;
 pub mod process_info;
@@ -1469,9 +1470,10 @@ pub fn build_server_admin_router(rate_limiter: RateLimiter) -> Router {
         )
         .route(
             "/twitch/server-admin/auth/callback",
-            get(server_admin_login::callback_handler).layer(
-                axum::middleware::from_fn_with_state(callback_rl, rate_limit_middleware),
-            ),
+            get(server_admin_login::callback_handler).layer(axum::middleware::from_fn_with_state(
+                callback_rl,
+                rate_limit_middleware,
+            )),
         )
         .route(
             "/twitch/server-admin/auth/logout",

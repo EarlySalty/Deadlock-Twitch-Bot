@@ -6,7 +6,8 @@ import {
   isPreviewModeEnabled,
 } from '../preview/routes';
 import { ApiHttpError } from './httpError';
-import { getActiveLanguage, tr } from '../i18n/dictionary';
+import { tr } from '../i18n/dictionary';
+import { withLanguageHeader } from './languageHeader';
 
 const API_BASE = dashboardRuntimeConfig.apiBase;
 const INTERNAL_REDIRECT_PREFIX = '/twitch';
@@ -16,7 +17,6 @@ export const DASHBOARD_V2_LOGIN_FALLBACK = isPreviewModeEnabled()
   ? PREVIEW_HOME_ROUTE
   : LIVE_LOGIN_FALLBACK;
 const COOKIE_FETCH_CREDENTIALS: RequestCredentials = 'same-origin';
-export const LANGUAGE_HEADER = 'X-Dashboard-Language';
 
 interface ApiErrorPayload {
   error?: string;
@@ -25,6 +25,7 @@ interface ApiErrorPayload {
 }
 
 export { ApiHttpError } from './httpError';
+export { LANGUAGE_HEADER, withLanguageHeader } from './languageHeader';
 
 export interface FetchJsonOptions {
   loginFallback?: string;
@@ -124,29 +125,11 @@ async function handleUnauthorizedResponse(
   throw new ApiHttpError(tr(unauthorized?.error || 'Unauthorized'), response.status);
 }
 
-export function withLanguageHeader(input: RequestInfo | URL, init: RequestInit = {}): RequestInit {
-  if (typeof Request !== 'undefined' && input instanceof Request) return init;
-  try {
-    if (new URL(String(input), window.location.origin).origin !== window.location.origin) return init;
-  } catch {
-    return init;
-  }
-  const headers = new Headers(init.headers);
-  headers.set(LANGUAGE_HEADER, getActiveLanguage());
-  return { ...init, headers };
-}
-
 export async function fetchJson<T>(
   input: RequestInfo | URL,
   init: RequestInit = {},
   options: FetchJsonOptions = {}
 ): Promise<T> {
-  // Aufrufe mit absolutem Pfad (Uplink etwa) gehen nicht ueber `fetchApi` und
-  // haetten im Preview sonst keinen Gegenueber. Nur auf dem lokalen
-  // Preview-Host, im Betrieb ist dieser Zweig tot.
-  // Nur lesende Aufrufe: eine Fixture auf ein PUT waere ein erfundener
-  // Schreib-Erfolg, und die Oberflaeche zeigte danach einen Zustand, den es
-  // nirgends gibt.
   if (isPreviewLocalhost() && (init.method ?? 'GET').toUpperCase() === 'GET') {
     const pfad = typeof input === 'string' ? input : input.toString();
     const fixture = getPreviewPathFixture(pfad.split('?')[0]);
@@ -193,7 +176,6 @@ export async function fetchApi<T>(
   const url = buildApiUrl(endpoint, params);
   const abortCtrl = timeoutMs ? new AbortController() : null;
   const timer = abortCtrl ? setTimeout(() => abortCtrl.abort(), timeoutMs!) : null;
-  // Preserve timeout callers while also allowing queries to cancel obsolete requests.
   const forwardAbort = () => abortCtrl?.abort(signal?.reason);
   if (abortCtrl && signal) {
     if (signal.aborted) forwardAbort();

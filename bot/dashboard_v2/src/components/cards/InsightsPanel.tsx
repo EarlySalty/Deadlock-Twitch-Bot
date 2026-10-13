@@ -96,7 +96,7 @@ export function InsightsPanel({ findings, actions }: InsightsPanelProps) {
                 className="bg-black/25 p-4 rounded-lg border-l-4 border-accent"
               >
                 <span className="text-xs font-bold text-accent uppercase tracking-wider mb-1 block">
-                  {action.tag}
+                  {t(action.tag)}
                 </span>
                 <p className="text-text-secondary text-sm">{t(action.text)}</p>
               </motion.div>

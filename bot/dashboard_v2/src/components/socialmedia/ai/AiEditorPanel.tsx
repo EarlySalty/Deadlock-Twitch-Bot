@@ -7,6 +7,8 @@ import { fetchAiConsent, fetchAiJob, fetchAiJobs, retryAiJob, saveAiConsent, sta
 import { chooseUsableVersion } from './versions';
 import { findChannelClip, isSelectableClip } from './clipLookup';
 import { failureExplanation } from './failure';
+import { RevisionControls } from './RevisionControls';
+import { EditorOptionsPanel } from './EditorOptionsPanel';
 import './AiEditorPanel.css';
 
 interface AiEditorPanelProps {
@@ -27,6 +29,8 @@ const statusLabels: Record<AiJobView['status'], string> = {
   validating: 'Video wird geprüft',
   review: 'Bereit zur Sichtung',
   failed: 'Bearbeitung fehlgeschlagen',
+  awaiting_confirmation: 'Wartet auf deine Bestätigung',
+  rejected: 'Änderung verworfen',
 };
 
 const stageLabels: Record<string, string> = {
@@ -75,8 +79,10 @@ function TimeRanges({ title, items }: { title: string; items: AiTimeRange[] }) {
   </section>;
 }
 
-function Review({ job, selectedVersion, onVersionChange }: { job: AiJobView; selectedVersion?: number; onVersionChange: (id: number) => void }) {
-  const version = chooseUsableVersion(job.versions, selectedVersion);
+function Review({ job, selectedVersion, onVersionChange, channel, canStart, onJob, onReload }: { job: AiJobView; selectedVersion?: number; onVersionChange: (id: number) => void; channel: string; canStart: boolean; onJob: (job: AiJobView) => void; onReload: () => Promise<boolean> }) {
+  const version = chooseUsableVersion(job.versions, selectedVersion ?? job.selected_version_id ?? undefined);
+  const [comparison,setComparison] = useState<number | null>(null);
+  const previous = chooseUsableVersion(job.versions.filter((item) => item.id !== version?.id), comparison ?? version?.parent_version_id ?? undefined);
   const newest = [...job.versions].sort((a, b) => b.version_no - a.version_no)[0];
   return <div className="social-ai-review">
     <div className="social-ai-review-heading">
@@ -84,27 +90,29 @@ function Review({ job, selectedVersion, onVersionChange }: { job: AiJobView; sel
       {job.versions.length > 0 && <label className="social-ai-version-label">Videofassung
         <select className="studio-select" value={version?.id ?? ''} onChange={(event) => onVersionChange(Number(event.target.value))} disabled={!version}>
           {!version && <option value="">Keine abspielbare Fassung</option>}
-          {job.versions.map((item) => <option key={item.id} value={item.id} disabled={!chooseUsableVersion([item])}>Fassung {item.version_no} · {item.file_url ? timestamp(item.created_at) : 'nicht verfügbar'}</option>)}
+          {job.versions.map((item) => <option key={item.id} value={item.id} disabled={!chooseUsableVersion([item])}>Fassung {item.version_no}{item.variant_index > 0 ? ` · Variante ${item.variant_index + 1}` : ''} · {item.file_url ? timestamp(item.created_at) : 'nicht verfügbar'}</option>)}
         </select>
       </label>}
     </div>
     {newest && !chooseUsableVersion([newest]) && <p className="social-ai-caution" role="status">Die neueste Fassung ist nicht abspielbar. Die letzte nutzbare Fassung bleibt zur Sichtung erhalten.</p>}
     <div className="social-ai-video-grid">
-      <figure><figcaption><span>Originalclip</span><strong>{duration(job.original_duration_ms)}</strong></figcaption><VideoPlayer key={`source-${job.id}-${job.original_url}`} url={job.original_url} label="Originalclip abspielen" shape="source" /></figure>
+      <figure><figcaption><span>Originalclip</span><strong>{duration(job.original_duration_ms)}</strong></figcaption><VideoPlayer key={`source-${job.id}-${version?.original_url ?? job.original_url}`} url={version?.original_url ?? job.original_url} label="Originalclip abspielen" shape="source" /></figure>
       <figure><figcaption><span>Bearbeitete Fassung {version ? version.version_no : ''}</span><strong>{duration(version ? version.duration_ms : job.output_duration_ms)}</strong></figcaption><VideoPlayer key={`output-${job.id}-${version?.id}`} url={version?.file_url ?? null} label="Bearbeitetes Video abspielen" shape="output" /></figure>
     </div>
     <div className="social-ai-explanations">
       <TimeRanges title="Erkannte Höhepunkte" items={job.highlights} />
-      <TimeRanges title="Schnitte und Entscheidungen" items={job.decisions} />
+      <TimeRanges title="Schnitte und Entscheidungen" items={version?.decisions ?? job.decisions} />
     </div>
     {(job.uncertainty.length > 0 || job.review_reasons.length > 0) && <div className="social-ai-review-notices">
       {job.uncertainty.length > 0 && <section><h4>Unsicher bei der Einordnung</h4><ul>{job.uncertainty.map((item, index) => <li key={index}>{item}</li>)}</ul></section>}
       {job.review_reasons.length > 0 && <section><h4>Bitte genauer prüfen</h4><ul>{job.review_reasons.map((item, index) => <li key={index}>{item}</li>)}</ul></section>}
     </div>}
+    {version && previous && <details className="social-ai-compare"><summary>Mit früherer Fassung vergleichen</summary><label>Vergleichsfassung<select className="studio-select" value={previous.id} onChange={(event) => setComparison(Number(event.target.value))}>{job.versions.filter((item) => item.id !== version.id && chooseUsableVersion([item])).map((item) => <option key={item.id} value={item.id}>Fassung {item.version_no}{item.variant_index > 0 ? `, Variante ${item.variant_index + 1}` : ''}</option>)}</select></label><div className="social-ai-video-grid"><figure><figcaption>Vergleichsfassung {previous.version_no} · {duration(previous.duration_ms)}</figcaption><VideoPlayer key={`previous-${previous.id}`} url={previous.file_url} label="Frühere Fassung abspielen" shape="output" /></figure><figure><figcaption>Ausgewählte Fassung {version.version_no} · {duration(version.duration_ms)}</figcaption><VideoPlayer key={`current-${version.id}`} url={version.file_url} label="Ausgewählte Fassung abspielen" shape="output" /></figure></div></details>}
+    <RevisionControls key={`${job.id}-${version?.id ?? 'none'}`} channel={channel} job={job} version={version} canStart={canStart} onJob={onJob} onReload={onReload} />
   </div>;
 }
 
-function JobDetails({ job, canStart, onRetry, retryPending, retryError }: { job: AiJobView; canStart: boolean; onRetry: () => void; retryPending: boolean; retryError: boolean }) {
+function JobDetails({ job, canStart, onRetry, retryPending, retryError, channel, onJob, onReload }: { job: AiJobView; canStart: boolean; onRetry: () => void; retryPending: boolean; retryError: boolean; channel: string; onJob: (job: AiJobView) => void; onReload: () => Promise<boolean> }) {
   const [versionSelection, setVersionSelection] = useState<{ job: number; version: number } | null>(null);
   const activeVersionId = versionSelection?.job === job.id ? versionSelection.version : undefined;
   const stage = stageLabels[job.stage] ?? 'Phase unbekannt';
@@ -122,7 +130,7 @@ function JobDetails({ job, canStart, onRetry, retryPending, retryError }: { job:
       <div><dt>Vom Anbieter abgerechnete Kosten</dt><dd>{job.cost_basis === 'provider_billed' && job.measured_provider_cost_usd !== null ? `${moneyFormat.format(job.measured_provider_cost_usd)} US-Dollar` : 'Noch unbekannt'}</dd></div>
       <div><dt>Fertiggestellt</dt><dd>{timestamp(job.completed_at)}</dd></div>
     </dl>
-    {(job.original_url || job.versions.length > 0 || job.status === 'review') && <Review job={job} selectedVersion={activeVersionId} onVersionChange={(version) => setVersionSelection({ job: job.id, version })} />}
+    {(job.original_url || job.versions.length > 0 || job.status === 'review') && <Review job={job} selectedVersion={activeVersionId} onVersionChange={(version) => setVersionSelection({ job: job.id, version })} channel={channel} canStart={canStart} onJob={onJob} onReload={onReload} />}
   </article>;
 }
 
@@ -177,7 +185,7 @@ function AiEditorContent({ twitchUserId, streamer, clipDbId }: AiEditorPanelProp
     enabled: hasChannel && Number.isSafeInteger(selectedJobId) && !jobs.isError,
     retry: false,
     refetchOnWindowFocus: false,
-    refetchInterval: (query) => query.state.status === 'success' && query.state.data && !['review', 'failed'].includes(query.state.data.status) ? 5000 : false,
+    refetchInterval: (query) => query.state.status === 'success' && query.state.data && !['review', 'failed', 'rejected', 'awaiting_confirmation'].includes(query.state.data.status) ? 5000 : false,
   });
   const savingConsent = useMutation({
     mutationFn: ({ channel, allow }: { channel: string; allow: boolean; revision: number }) => saveAiConsent(channel, allow),
@@ -249,8 +257,9 @@ function AiEditorContent({ twitchUserId, streamer, clipDbId }: AiEditorPanelProp
           {start.isError && currentStartAction && <EditorError>Die Bearbeitung konnte nicht gestartet werden. Es wurde kein fertiges Video bestätigt. Bitte prüfe Freigabe und Clip und versuche es erneut.</EditorError>}
         </div>
       </section>
+      <EditorOptionsPanel key={twitchUserId} channel={twitchUserId} />
       <div className="social-ai-history"><div><h3>Bearbeitungsaufträge</h3><p>Zuletzt gestartete Aufträge für diesen Kanal.</p></div>{jobs.data && jobs.data.length > 0 && <label>Auftrag ansehen<select className="studio-select" value={selectedJobId ?? ''} onChange={(event) => { advanceSelection(); setJobSelection({ channel: twitchUserId, id: Number(event.target.value) }); }}>{jobs.data.map((item) => <option key={item.id} value={item.id}>Auftrag {item.id} · {statusLabels[item.status]}</option>)}</select></label>}</div>
-      {jobs.isPending ? <p role="status">Aufträge werden geladen…</p> : jobs.isError ? <EditorError retry={() => jobs.refetch()}>Die Aufträge konnten nicht geladen werden. Der Start bleibt gesperrt, bis der Stand bekannt ist.</EditorError> : jobs.data?.length === 0 ? <p className="social-ai-empty">Noch kein Auftrag für diesen Kanal. Wähle oben einen Clip für einen manuellen Test.</p> : job.isPending ? <p role="status">Auftrag wird geladen…</p> : job.isError ? <EditorError retry={() => job.refetch()}>Der Auftrag konnte nicht geladen werden. Die letzte bekannte Fassung wird nicht als aktueller Stand angezeigt.</EditorError> : job.data && <JobDetails key={`${twitchUserId}-${job.data.id}`} job={job.data} canStart={canStart} onRetry={() => { if (canStart && job.data?.status === 'failed' && job.data.can_retry) retry.mutate({ channel: twitchUserId, id: job.data.id, revision: jobSelectionRevision.current }); }} retryPending={retry.isPending && currentRetryAction} retryError={retry.isError && currentRetryAction} />}
+      {jobs.isPending ? <p role="status">Aufträge werden geladen…</p> : jobs.isError ? <EditorError retry={() => jobs.refetch()}>Die Aufträge konnten nicht geladen werden. Der Start bleibt gesperrt, bis der Stand bekannt ist.</EditorError> : jobs.data?.length === 0 ? <p className="social-ai-empty">Noch kein Auftrag für diesen Kanal. Wähle oben einen Clip für einen manuellen Test.</p> : job.isPending ? <p role="status">Auftrag wird geladen…</p> : job.isError ? <EditorError retry={() => job.refetch()}>Der Auftrag konnte nicht geladen werden. Die letzte bekannte Fassung wird nicht als aktueller Stand angezeigt.</EditorError> : job.data && <JobDetails key={`${twitchUserId}-${job.data.id}`} job={job.data} channel={twitchUserId} onReload={async () => (await job.refetch()).isSuccess} onJob={(value) => {client.setQueryData(['social-ai','job',twitchUserId,value.id],value);client.invalidateQueries({queryKey:jobsKey});if (selectionRevision === jobSelectionRevision.current && value.id !== selectedJobId) setJobSelection({channel:twitchUserId,id:value.id});}} canStart={canStart} onRetry={() => { if (canStart && job.data?.status === 'failed' && job.data.can_retry) retry.mutate({ channel: twitchUserId, id: job.data.id, revision: jobSelectionRevision.current }); }} retryPending={retry.isPending && currentRetryAction} retryError={retry.isError && currentRetryAction} />}
     </>}
   </section>;
 }

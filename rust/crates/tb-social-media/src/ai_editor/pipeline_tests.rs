@@ -39,6 +39,12 @@ async fn database() -> postgres::TestPostgres {
     .execute(&db.pool)
     .await
     .expect("jobs migration after provider migration");
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261011203001_social_ai_revisions.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .expect("revision migration");
     sqlx::query("INSERT INTO social_media_settings(key,value) VALUES ('external_llm_consent','true'::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value")
         .execute(&db.pool).await.expect("synthetic global consent");
     super::super::store::upsert_user_consent(&db.pool, "101", true, "fixture-owner")
@@ -147,6 +153,9 @@ async fn prepared(
         },
     );
     let plan = Planning {
+        subtitle_scale_percent: 100,
+        revision_proposal: None,
+        variants: Vec::new(),
         plan: super::super::EditPlan {
             schema_version: 1,
             source_duration_ms: frozen.media.duration_ms,
@@ -1388,6 +1397,453 @@ async fn expiry_after_queueing_does_not_spend_validation_attempts_when_rendering
     );
 }
 
+async fn revision_fixture(
+    pool: &PgPool,
+    runtime: &EditorRuntime,
+    clip: i64,
+) -> (i64, ProducedVideo, BTreeMap<AiStage, StageCheckpoint>) {
+    let job = super::super::create_manual_job(pool, runtime, "101", clip)
+        .await
+        .expect("manual root");
+    let mut lease = super::super::store::acquire_production_lease(pool)
+        .await
+        .expect("lease")
+        .expect("free");
+    let checkpoints = prepared(pool, runtime, &mut lease, clip, Identity::Manual(job.id)).await;
+    let limit = super::super::store::AttemptLimit::from_server_config(2).expect("limit");
+    for checkpoint in checkpoints.values() {
+        super::super::store::claim_job(&mut lease, "101", job.id, limit)
+            .await
+            .expect("claim");
+        super::super::store::save_stage(&mut lease, "101", job.id, checkpoint, None)
+            .await
+            .expect("checkpoint");
+    }
+    lease.release().await.expect("release");
+    super::super::ManualWorker::new(pool.clone(), runtime.clone(), None)
+        .process_next()
+        .await
+        .expect("real render and validation");
+    let video = produced_video::find_ai_version(pool, "101", clip, Some(job.id), None)
+        .await
+        .expect("C2")
+        .expect("version");
+    assert_eq!(video.status, "review");
+    (job.id, video, checkpoints)
+}
+
+fn proposed_plan(
+    checkpoints: &BTreeMap<AiStage, StageCheckpoint>,
+    reanalyze: bool,
+) -> StageCheckpoint {
+    let mut checkpoint = checkpoints
+        .get(&AiStage::Planning)
+        .expect("parent plan")
+        .clone();
+    if let StageCheckpoint::Planning { edit_plan, .. } = &mut checkpoint {
+        edit_plan.insert("revision_proposal".into(),json!({"summary":"Einstieg prüfen","impact":"Der Zusammenhang bleibt erhalten.","reanalyze":reanalyze,"requires_confirmation":true,"estimated_provider_cost_usd":null}));
+    }
+    checkpoint
+}
+
+async fn save_revision_plan(pool: &PgPool, job: i64, checkpoint: &StageCheckpoint) {
+    let mut lease = super::super::store::acquire_production_lease(pool)
+        .await
+        .expect("lease")
+        .expect("free");
+    super::super::store::claim_job(
+        &mut lease,
+        "101",
+        job,
+        super::super::store::AttemptLimit::from_server_config(2).expect("limit"),
+    )
+    .await
+    .expect("planning claim");
+    super::super::store::save_stage(&mut lease, "101", job, checkpoint, None)
+        .await
+        .expect("atomic confirmation pause");
+    lease.release().await.expect("release");
+}
+
+#[tokio::test]
+async fn revisions_preserve_parent_reuse_checkpoints_and_confirm_before_rendering() {
+    use super::super::revision;
+    let db = database().await;
+    let directory = tempfile::tempdir().expect("root");
+    let runtime = runtime(directory.path());
+    let clip = source(&db.pool, &runtime).await;
+    let (root, parent, parent_checkpoints) = revision_fixture(&db.pool, &runtime, clip).await;
+    let parent_path = parent.file_path.as_deref().expect("file");
+    let parent_bytes = tokio::fs::read(parent_path).await.expect("parent bytes");
+    assert!(matches!(
+        revision::owned_version(&db.pool, "202", root, parent.id).await,
+        Err(AiEditorError::NotFound)
+    ));
+    assert!(matches!(
+        revision::create_revision(&db.pool, &runtime, "101", root, parent.id, " ").await,
+        Err(AiEditorError::Input)
+    ));
+    let child = revision::create_revision(
+        &db.pool,
+        &runtime,
+        "101",
+        root,
+        parent.id,
+        "Kürze den Einstieg",
+    )
+    .await
+    .expect("revision");
+    assert_eq!(
+        (child.root_job_id, child.parent_version_id),
+        (root, Some(parent.id))
+    );
+    assert_eq!(child.stage, "planning");
+    let reused = super::super::store::checkpoints(&db.pool, "101", child.id)
+        .await
+        .expect("child checkpoints");
+    assert_eq!(reused.len(), 3);
+    for stage in [AiStage::Transcribing, AiStage::Analyzing] {
+        assert_eq!(
+            serde_json::to_value(&reused[&stage]).expect("child"),
+            serde_json::to_value(&parent_checkpoints[&stage]).expect("parent")
+        );
+    }
+    let attempts: serde_json::Value =
+        sqlx::query_scalar("SELECT attempts FROM social_ai_jobs WHERE id=$1")
+            .bind(child.id)
+            .fetch_one(&db.pool)
+            .await
+            .expect("no copied attempts");
+    assert_eq!(attempts, json!({}));
+    assert!(child.input_tokens.is_none() && child.estimated_provider_cost_usd.is_none());
+    let skills = frozen_skills(&reused, &runtime).expect("frozen skills");
+    assert_eq!(skills.len(), 8);
+    assert!(skills.iter().all(|skill| !skill.version.is_empty()
+        && skill.sha256.len() == 64
+        && !skill.text.is_empty()));
+    assert!(matches!(
+        revision::create_revision(&db.pool, &runtime, "101", root, parent.id, "Noch kürzer").await,
+        Err(AiEditorError::Conflict)
+    ));
+    let mut lease = super::super::store::acquire_production_lease(&db.pool)
+        .await
+        .expect("lease")
+        .expect("free");
+    assert!(matches!(
+        execute_stage(
+            &mut StageContext {
+                pool: &db.pool,
+                current: &runtime,
+                lease: &mut lease,
+                owner: "101",
+                clip_id: clip,
+                identity: Identity::Manual(child.id),
+                expected_twitch_clip_id: Some("fixture-original"),
+                checkpoints: &reused,
+                brain_token: None
+            },
+            AiStage::Analyzing
+        )
+        .await,
+        Err(AiEditorError::Conflict)
+    ));
+    lease.release().await.expect("release");
+    save_revision_plan(
+        &db.pool,
+        child.id,
+        &proposed_plan(&parent_checkpoints, false),
+    )
+    .await;
+    let awaiting = super::super::get_manual_job(&db.pool, &runtime, "101", child.id)
+        .await
+        .expect("awaiting");
+    assert_eq!(awaiting.status, "awaiting_confirmation");
+    let worker = super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None);
+    assert!(!worker.process_next().await.expect("paused worker"));
+    assert!(
+        produced_video::find_ai_version(&db.pool, "101", clip, Some(child.id), None)
+            .await
+            .expect("C2")
+            .is_none()
+    );
+    revision::decide_proposal(&db.pool, &runtime, "101", child.id, true)
+        .await
+        .expect("explicit confirmation");
+    assert!(worker
+        .process_next()
+        .await
+        .expect("confirmed real FFmpeg path"));
+    let completed = super::super::get_manual_job(&db.pool, &runtime, "101", child.id)
+        .await
+        .expect("completed revision");
+    assert_eq!(completed.status, "review");
+    assert_eq!(completed.versions.len(), 2);
+    let new = produced_video::find_ai_version(&db.pool, "101", clip, Some(child.id), None)
+        .await
+        .expect("C2")
+        .expect("child output");
+    assert_eq!(new.parent_version_id, Some(parent.id));
+    assert_eq!(new.metadata["original_preview"]["rendering_ms"], 0);
+    assert_eq!(
+        tokio::fs::read(parent_path).await.expect("preserved"),
+        parent_bytes
+    );
+    assert_eq!(
+        tokio::fs::read(original_preview_path(&runtime, parent.id))
+            .await
+            .expect("parent preview"),
+        tokio::fs::read(original_preview_path(&runtime, new.id))
+            .await
+            .expect("reused preview")
+    );
+    revision::record_version_decision(&db.pool, "101", child.id, new.id, true)
+        .await
+        .expect("accept");
+    revision::record_version_decision(&db.pool, "101", root, new.id, true)
+        .await
+        .expect("deduplicated accept");
+    revision::record_version_decision(&db.pool, "101", root, new.id, false)
+        .await
+        .expect("reject");
+    revision::record_version_decision(&db.pool, "101", root, new.id, true)
+        .await
+        .expect("accept again");
+    revision::select_version(&db.pool, &runtime, "101", root, parent.id)
+        .await
+        .expect("preferred parent");
+    assert_eq!(
+        super::super::get_manual_job(&db.pool, &runtime, "101", child.id)
+            .await
+            .expect("root preference")
+            .selected_version_id,
+        Some(parent.id)
+    );
+    assert!(matches!(
+        revision::publish_version(&db.pool, "101", child.id, new.id, &["youtube".into()]).await,
+        Err(AiEditorError::Publishing(
+            crate::produced_video::ProducedVideoError::ApprovalRequired
+        ))
+    ));
+    revision::approve_version(&db.pool, "101", root, new.id, &["youtube".into()])
+        .await
+        .expect("explicit platform");
+    assert!(matches!(
+        revision::publish_version(&db.pool, "101", child.id, new.id, &["tiktok".into()]).await,
+        Err(AiEditorError::Publishing(
+            crate::produced_video::ProducedVideoError::ApprovalRequired
+        ))
+    ));
+    let mut settings = autopilot_settings::load(&db.pool, "101")
+        .await
+        .expect("settings");
+    settings.schedule_slots = (1..=7)
+        .map(|weekday| autopilot_settings::ScheduleSlot {
+            weekday,
+            local_time: "18:00".into(),
+        })
+        .collect();
+    autopilot_settings::save(&db.pool, "101", &settings)
+        .await
+        .expect("schedule slots");
+    let exact_bytes = tokio::fs::read(new.file_path.as_deref().expect("exact file"))
+        .await
+        .expect("before queue");
+    let reservation = revision::publish_version(&db.pool, "101", root, new.id, &["youtube".into()])
+        .await
+        .expect("existing exact-file queue");
+    let (id, status): (i64, String) = sqlx::query_as(
+        "SELECT produced_video_id,status FROM twitch_clips_upload_queue WHERE id::bigint=$1",
+    )
+    .bind(reservation.queue_ids[0].1)
+    .fetch_one(&db.pool)
+    .await
+    .expect("queue");
+    assert_eq!((id, status), (new.id, "waiting_exact_file".into()));
+    assert_eq!(
+        tokio::fs::read(new.file_path.as_deref().expect("exact file"))
+            .await
+            .expect("queued bytes"),
+        exact_bytes
+    );
+    let decisions: Vec<String> = sqlx::query_scalar("SELECT event_kind FROM social_ai_revision_events WHERE produced_video_id=$1 AND event_kind IN ('version_accepted','version_rejected') ORDER BY id").bind(new.id).fetch_all(&db.pool).await.expect("events");
+    assert_eq!(
+        decisions,
+        vec!["version_accepted", "version_rejected", "version_accepted"]
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM llm_usage")
+            .fetch_one(&db.pool)
+            .await
+            .expect("no paid calls"),
+        0
+    );
+    sqlx::query("UPDATE social_produced_videos SET expires_at='2000-01-01' WHERE id=$1")
+        .bind(new.id)
+        .execute(&db.pool)
+        .await
+        .expect("retention fixture");
+    assert!(revision::usable(
+        &produced_video::get(&db.pool, "101", new.id)
+            .await
+            .expect("C2")
+            .expect("scheduled")
+    ));
+    let mut lease = super::super::store::acquire_production_lease(&db.pool)
+        .await
+        .expect("lease")
+        .expect("free");
+    cleanup_expired_artifacts(&db.pool, &runtime, &mut lease)
+        .await
+        .expect("seven-day cleanup");
+    assert!(Path::new(new.file_path.as_deref().expect("scheduled exact file")).is_file());
+    assert!(!original_preview_path(&runtime, new.id).exists());
+    lease.release().await.expect("release");
+    sqlx::query("UPDATE social_produced_videos SET status='published' WHERE id=$1")
+        .bind(new.id)
+        .execute(&db.pool)
+        .await
+        .expect("isolated published version");
+    let published = revision::select_version(&db.pool, &runtime, "101", root, new.id)
+        .await
+        .expect("published history remains selectable");
+    assert_eq!(published.selected_version_id, Some(new.id));
+    assert!(published.versions.iter().any(|version| version.id == new.id
+        && version.status == "published"
+        && version.file_url.is_some()
+        && version.original_url.is_none()));
+}
+
+#[tokio::test]
+async fn reanalysis_and_final_plan_have_separate_confirmation_and_failed_child_keeps_parent() {
+    use super::super::{revision, store};
+    let db = database().await;
+    let directory = tempfile::tempdir().expect("root");
+    let runtime = runtime(directory.path());
+    let clip = source(&db.pool, &runtime).await;
+    let (root, parent, checkpoints) = revision_fixture(&db.pool, &runtime, clip).await;
+    let child = revision::create_revision(
+        &db.pool,
+        &runtime,
+        "101",
+        root,
+        parent.id,
+        "Prüfe die Spielsituation neu",
+    )
+    .await
+    .expect("revision");
+    save_revision_plan(&db.pool, child.id, &proposed_plan(&checkpoints, true)).await;
+    let confirmed = revision::decide_proposal(&db.pool, &runtime, "101", child.id, true)
+        .await
+        .expect("reanalysis permission");
+    assert_eq!(
+        (confirmed.status.as_str(), confirmed.stage.as_str()),
+        ("queued", "analyzing")
+    );
+    let reused = store::checkpoints(&db.pool, "101", child.id)
+        .await
+        .expect("reanalysis invalidation");
+    assert_eq!(reused.len(), 2);
+    assert!(!reused.contains_key(&AiStage::Analyzing) && !reused.contains_key(&AiStage::Planning));
+    let request = revision::request(&db.pool, "101", child.id)
+        .await
+        .expect("request")
+        .expect("revision");
+    assert!(request.reanalysis_confirmed && !request.confirmed);
+    let mut lease = store::acquire_production_lease(&db.pool)
+        .await
+        .expect("lease")
+        .expect("free");
+    let limit = store::AttemptLimit::from_server_config(2).expect("limit");
+    store::claim_job(&mut lease, "101", child.id, limit)
+        .await
+        .expect("analysis claim");
+    store::save_stage(
+        &mut lease,
+        "101",
+        child.id,
+        &checkpoints[&AiStage::Analyzing],
+        None,
+    )
+    .await
+    .expect("synthetic analysis checkpoint without provider");
+    store::claim_job(&mut lease, "101", child.id, limit)
+        .await
+        .expect("planning");
+    store::save_stage(
+        &mut lease,
+        "101",
+        child.id,
+        &proposed_plan(&checkpoints, false),
+        None,
+    )
+    .await
+    .expect("new final proposal");
+    lease.release().await.expect("release");
+    assert_eq!(
+        super::super::get_manual_job(&db.pool, &runtime, "101", child.id)
+            .await
+            .expect("second pause")
+            .status,
+        "awaiting_confirmation"
+    );
+    let rejected = revision::decide_proposal(&db.pool, &runtime, "101", child.id, false)
+        .await
+        .expect("reject final plan");
+    assert_eq!(rejected.status, "rejected");
+    assert!(matches!(
+        revision::decide_proposal(&db.pool, &runtime, "101", child.id, true).await,
+        Err(AiEditorError::Conflict)
+    ));
+    let failure = revision::create_revision(
+        &db.pool,
+        &runtime,
+        "101",
+        root,
+        parent.id,
+        "Kleine Änderung",
+    )
+    .await
+    .expect("another revision");
+    save_revision_plan(&db.pool, failure.id, &proposed_plan(&checkpoints, false)).await;
+    revision::decide_proposal(&db.pool, &runtime, "101", failure.id, true)
+        .await
+        .expect("confirm");
+    let mut lease = store::acquire_production_lease(&db.pool)
+        .await
+        .expect("lease")
+        .expect("free");
+    store::claim_job(&mut lease, "101", failure.id, limit)
+        .await
+        .expect("rendering claim");
+    store::fail_job(
+        &mut lease,
+        "101",
+        failure.id,
+        AiStage::Rendering,
+        store::JobFailure::RenderingFailed,
+        None,
+    )
+    .await
+    .expect("failed revision");
+    lease.release().await.expect("release");
+    let failed = super::super::get_manual_job(&db.pool, &runtime, "101", failure.id)
+        .await
+        .expect("failed family view");
+    assert_eq!(failed.status, "failed");
+    assert!(failed
+        .versions
+        .iter()
+        .any(|version| version.id == parent.id && version.file_url.is_some()));
+    assert!(Path::new(parent.file_path.as_deref().expect("parent output")).is_file());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM llm_usage")
+            .fetch_one(&db.pool)
+            .await
+            .expect("no paid calls"),
+        0
+    );
+}
+
 #[tokio::test]
 async fn c3_consent_failure_stays_review_without_static_fallback_or_manual_identity() {
     let db = database().await;
@@ -1447,4 +1903,382 @@ async fn c3_consent_failure_stays_review_without_static_fallback_or_manual_ident
         Identity::Production(id).namespace()
     );
     lease.release().await.expect("release");
+}
+
+#[tokio::test]
+async fn variants_require_frozen_opt_in_and_preserve_concrete_parent_plan_and_subtitles() {
+    let db = database().await;
+    let directory = tempfile::tempdir().expect("root");
+    let runtime = runtime(directory.path());
+    let clip = source(&db.pool, &runtime).await;
+    let mut settings = autopilot_settings::load(&db.pool, "101")
+        .await
+        .expect("settings");
+    assert!(!settings.multi_output_enabled);
+    settings.multi_output_enabled = true;
+    autopilot_settings::save(&db.pool, "101", &settings)
+        .await
+        .expect("explicit isolated opt-in");
+    let job = super::super::create_manual_job(&db.pool, &runtime, "101", clip)
+        .await
+        .expect("job");
+    let mut lease = super::super::store::acquire_production_lease(&db.pool)
+        .await
+        .expect("lease")
+        .expect("free");
+    let mut checkpoints = prepared(
+        &db.pool,
+        &runtime,
+        &mut lease,
+        clip,
+        Identity::Manual(job.id),
+    )
+    .await;
+    let (frozen, _) = preparing(&checkpoints, &runtime).expect("snapshot");
+    let (base, validated) = planning(&checkpoints, &frozen, &runtime).expect("base plan");
+    let mapped = subtitles(&checkpoints, &validated, &runtime).expect("real speech cues");
+    let ordinary =
+        super::super::validation::build_scaled_subtitle_ass(&validated, &mapped, "", "", 0, 100)
+            .expect("ordinary ASS");
+    let larger =
+        super::super::validation::build_scaled_subtitle_ass(&validated, &mapped, "", "", 0, 140)
+            .expect("scaled ASS");
+    let style_size = |ass: &str| {
+        ass.lines()
+            .find(|line| line.starts_with("Style: Default,"))
+            .expect("speech style")
+            .split(',')
+            .nth(2)
+            .expect("size")
+            .parse::<u16>()
+            .expect("numeric size")
+    };
+    assert!(style_size(&larger) > style_size(&ordinary));
+    assert_eq!(
+        ordinary
+            .lines()
+            .filter(|line| line.starts_with("Dialogue:"))
+            .collect::<Vec<_>>(),
+        larger
+            .lines()
+            .filter(|line| line.starts_with("Dialogue:"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(mapped[0].language.as_deref(), Some("de"));
+    assert!(super::super::validation::build_scaled_subtitle_ass(
+        &validated, &mapped, "", "", 0, 141
+    )
+    .is_err());
+    let mut distinct = base.plan.clone();
+    distinct.kept_intervals[0].start_ms = 100;
+    let mut plan = base.clone();
+    plan.subtitle_scale_percent = 140;
+    plan.variants
+        .push(super::super::stage_contract::VariantPlan {
+            plan: distinct,
+            platforms: base.platforms.clone(),
+            subtitle_scale_percent: 100,
+        });
+    assert!(validate_variants(&plan, &json!({"multi_output_enabled":false}), &runtime).is_err());
+    validate_variants(&plan, &frozen.publication, &runtime).expect("opt-in");
+    plan.validate(
+        frozen.media.duration_ms,
+        &runtime.limits.plan,
+        &runtime.limits.copy,
+        &analysis(&checkpoints).expect("persisted analysis"),
+    )
+    .expect("bounded variant");
+    let mut duplicate = plan.clone();
+    duplicate.variants[0].plan = base.plan.clone();
+    assert!(validate_variants(&duplicate, &frozen.publication, &runtime).is_err());
+    let mut proposal = super::super::revision::RevisionProposal {
+        summary: "Kleine Änderung".into(),
+        impact: "Der Inhalt bleibt erhalten".into(),
+        reanalyze: false,
+        requires_confirmation: false,
+        estimated_provider_cost_usd: Some(0.01),
+    };
+    super::super::revision::validate_proposal(&mut proposal, &base, &base, &runtime, Some(0.5))
+        .expect("small revision");
+    assert!(!proposal.requires_confirmation && proposal.estimated_provider_cost_usd == Some(0.0));
+    let mut changed = base.clone();
+    changed.plan.kept_intervals[0].start_ms = 500;
+    super::super::revision::validate_proposal(&mut proposal, &base, &changed, &runtime, None)
+        .expect("server classification");
+    assert!(proposal.requires_confirmation);
+    proposal.reanalyze = true;
+    super::super::revision::validate_proposal(&mut proposal, &base, &changed, &runtime, Some(0.04))
+        .expect("reanalysis estimate from the measured root job");
+    assert_eq!(proposal.estimated_provider_cost_usd, Some(0.04));
+    super::super::revision::validate_proposal(&mut proposal, &base, &changed, &runtime, None)
+        .expect("unknown reanalysis estimate");
+    assert!(proposal.estimated_provider_cost_usd.is_none());
+    if let Some(StageCheckpoint::Planning { edit_plan, .. }) =
+        checkpoints.get_mut(&AiStage::Planning)
+    {
+        *edit_plan = serde_json::to_value(&plan)
+            .expect("plan")
+            .as_object()
+            .cloned()
+            .expect("object");
+    }
+    let limit = super::super::store::AttemptLimit::from_server_config(2).expect("limit");
+    for checkpoint in checkpoints.values() {
+        super::super::store::claim_job(&mut lease, "101", job.id, limit)
+            .await
+            .expect("claim");
+        super::super::store::save_stage(&mut lease, "101", job.id, checkpoint, None)
+            .await
+            .expect("checkpoint");
+    }
+    lease.release().await.expect("release");
+    super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None)
+        .process_next()
+        .await
+        .expect("actual multiple FFmpeg outputs");
+    let view = super::super::get_manual_job(&db.pool, &runtime, "101", job.id)
+        .await
+        .expect("variants view");
+    assert_eq!(view.versions.len(), 2);
+    assert_eq!(view.versions[0].version_no, view.versions[1].version_no);
+    assert_eq!(
+        (
+            view.versions[0].variant_index,
+            view.versions[1].variant_index
+        ),
+        (0, 1)
+    );
+    assert_ne!(view.versions[0].id, view.versions[1].id);
+    assert!(view
+        .versions
+        .iter()
+        .all(|version| version.file_url.is_some() && version.approved_platforms.is_empty()));
+    let selected = super::super::revision::parent_planning(&db.pool, "101", view.versions[1].id)
+        .await
+        .expect("concrete variant plan");
+    assert_eq!(selected.plan.kept_intervals[0].start_ms, 100);
+    let child = super::super::revision::create_revision(
+        &db.pool,
+        &runtime,
+        "101",
+        job.id,
+        view.versions[1].id,
+        "Behalte diese Variante",
+    )
+    .await
+    .expect("variant revision");
+    assert_eq!(child.parent_version_id, Some(view.versions[1].id));
+    let payload: Value = sqlx::query_scalar(
+        "SELECT payload FROM social_ai_revision_events WHERE job_id=$1 AND event_kind='feedback'",
+    )
+    .bind(child.id)
+    .fetch_one(&db.pool)
+    .await
+    .expect("normalized event");
+    assert_eq!(
+        payload["previous"]["plan"]["kept_intervals"][0]["start_ms"],
+        100
+    );
+    assert_eq!(payload["parent_version_id"], view.versions[1].id);
+}
+
+#[tokio::test]
+async fn secondary_variant_expiry_recovers_without_replacing_retained_primary_or_provider_work() {
+    let db = database().await;
+    let directory = tempfile::tempdir().expect("package root");
+    let runtime = runtime(directory.path());
+    let clip = source(&db.pool, &runtime).await;
+    let mut settings = autopilot_settings::load(&db.pool, "101")
+        .await
+        .expect("settings");
+    settings.multi_output_enabled = true;
+    autopilot_settings::save(&db.pool, "101", &settings)
+        .await
+        .expect("isolated opt-in");
+    production_jobs::insert(
+        &db.pool,
+        &production_jobs::NewProductionJob {
+            twitch_user_id: "101".into(),
+            clip_id: clip,
+            source: production_jobs::JobSource::Manual,
+            requested_mode: Some(ProductionMode::Ai),
+            scheduled_at: None,
+            max_attempts: 2,
+        },
+    )
+    .await
+    .expect("C3 request");
+    let mut job = production_jobs::claim_next(&db.pool)
+        .await
+        .expect("claim")
+        .expect("job");
+    let identity = Identity::Production(job.id);
+    usage_fixture(&db.pool, identity).await;
+    let mut lease = super::super::store::acquire_production_lease(&db.pool)
+        .await
+        .expect("lease")
+        .expect("free");
+    let mut checkpoints = prepared(&db.pool, &runtime, &mut lease, clip, identity).await;
+    let (frozen, _) = preparing(&checkpoints, &runtime).expect("snapshot");
+    let (mut plan, _) = planning(&checkpoints, &frozen, &runtime).expect("main plan");
+    let mut alternate = plan.plan.clone();
+    alternate.kept_intervals[0].start_ms = 100;
+    plan.variants
+        .push(super::super::stage_contract::VariantPlan {
+            plan: alternate,
+            platforms: plan.platforms.clone(),
+            subtitle_scale_percent: 100,
+        });
+    if let Some(StageCheckpoint::Planning { edit_plan, .. }) =
+        checkpoints.get_mut(&AiStage::Planning)
+    {
+        *edit_plan = serde_json::to_value(plan)
+            .expect("plan")
+            .as_object()
+            .cloned()
+            .expect("object");
+    }
+    let earlier = serde_json::to_value(&checkpoints).expect("saved provider work");
+    job.metadata["ai_editor"] = serde_json::to_value(ProductionState {
+        checkpoints,
+        attempts: BTreeMap::new(),
+    })
+    .expect("state");
+    production_jobs::update_progress(&db.pool, "101", job.id, "rendering", &job.metadata)
+        .await
+        .expect("saved C3 checkpoints");
+    let first = produce(
+        ProductionContext {
+            pool: &db.pool,
+            runtime: &runtime,
+            lease: &mut lease,
+            brain_token: None,
+        },
+        job.clone(),
+    )
+    .await
+    .expect("real variant rendering");
+    assert_eq!(first.produced_video_ids.len(), 2);
+    let primary = first.produced_video_ids[0];
+    let secondary = first.produced_video_ids[1];
+    let primary_bytes = tokio::fs::read(output_path(&runtime, primary))
+        .await
+        .expect("retained main bytes");
+    produced_video::approve(&db.pool, "101", primary, &["youtube".into()])
+        .await
+        .expect("isolated primary approval");
+    expire_fixture(&db.pool, primary).await;
+    expire_fixture(&db.pool, secondary).await;
+    cleanup_expired_artifacts(&db.pool, &runtime, &mut lease)
+        .await
+        .expect("independent review and preview retention");
+    assert!(!original_preview_path(&runtime, primary).exists());
+    assert!(!output_path(&runtime, secondary).exists());
+    let fresh = produce(
+        ProductionContext {
+            pool: &db.pool,
+            runtime: &runtime,
+            lease: &mut lease,
+            brain_token: None,
+        },
+        job.clone(),
+    )
+    .await
+    .expect("secondary expiry is detected and rewound");
+    assert_eq!(fresh.produced_video_ids[0], primary);
+    assert_ne!(fresh.produced_video_ids[1], secondary);
+    assert!(fresh.needs_review);
+    assert_eq!(
+        tokio::fs::read(output_path(&runtime, primary))
+            .await
+            .expect("unchanged main"),
+        primary_bytes
+    );
+    assert!(!original_preview_path(&runtime, primary).exists());
+    let retained = produced_video::get(&db.pool, "101", primary)
+        .await
+        .expect("primary")
+        .expect("row");
+    assert_eq!(retained.status, "approved");
+    let replaced = produced_video::get(&db.pool, "101", fresh.produced_video_ids[1])
+        .await
+        .expect("replacement")
+        .expect("row");
+    assert_eq!(
+        (replaced.status.as_str(), replaced.variant_index),
+        ("review", 1)
+    );
+    assert!(replaced.version_no > retained.version_no);
+    let persisted = production_jobs::get(&db.pool, "101", job.id)
+        .await
+        .expect("C3")
+        .expect("job");
+    let mut state: ProductionState =
+        serde_json::from_value(persisted.metadata["ai_editor"].clone()).expect("recovered state");
+    assert_eq!(state.attempts[&AiStage::Rendering], 2);
+    assert_eq!(state.attempts[&AiStage::Validating], 2);
+    state.checkpoints.remove(&AiStage::Rendering);
+    state.checkpoints.remove(&AiStage::Validating);
+    assert_eq!(
+        serde_json::to_value(state.checkpoints).expect("reused checkpoints"),
+        earlier
+    );
+    assert_usage_preserved(&db.pool, identity).await;
+    let replay = produce(
+        ProductionContext {
+            pool: &db.pool,
+            runtime: &runtime,
+            lease: &mut lease,
+            brain_token: None,
+        },
+        job,
+    )
+    .await
+    .expect("reconciled exact versions");
+    assert_eq!(replay.produced_video_ids, fresh.produced_video_ids);
+    assert_eq!(
+        produced_video::list(&db.pool, "101", 50)
+            .await
+            .expect("bounded history")
+            .len(),
+        3
+    );
+    lease.release().await.expect("release");
+}
+
+#[tokio::test]
+async fn editor_options_default_off_and_save_without_touching_other_settings() {
+    let db = database().await;
+    let defaults = super::super::options::load(&db.pool, "101")
+        .await
+        .expect("defaults");
+    assert!(!defaults.multi_output_enabled && !defaults.experimental_ai_layout);
+    let mut settings = autopilot_settings::load(&db.pool, "101")
+        .await
+        .expect("settings");
+    settings.enabled = true;
+    settings.target_platforms = vec!["youtube".into()];
+    autopilot_settings::save(&db.pool, "101", &settings)
+        .await
+        .expect("existing autopilot settings");
+    let saved = super::super::options::save(
+        &db.pool,
+        "101",
+        crate::ai_editor::EditorOptions {
+            multi_output_enabled: true,
+            experimental_ai_layout: true,
+        },
+    )
+    .await
+    .expect("opt-in");
+    assert!(saved.multi_output_enabled && saved.experimental_ai_layout);
+    let after = autopilot_settings::load(&db.pool, "101")
+        .await
+        .expect("settings after");
+    assert!(after.enabled && after.multi_output_enabled && after.experimental_ai_layout);
+    assert_eq!(after.target_platforms, vec!["youtube".to_string()]);
+    let other = super::super::options::load(&db.pool, "202")
+        .await
+        .expect("other user");
+    assert!(!other.multi_output_enabled && !other.experimental_ai_layout);
 }

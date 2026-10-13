@@ -50,6 +50,10 @@ pub fn routes(runtime: AiRuntime) -> Router<PgPool> {
             get(consent_get).put(consent_put),
         )
         .route(
+            "/social-media/api/ai/options",
+            get(options_get).put(options_put),
+        )
+        .route(
             "/social-media/api/ai/jobs",
             get(jobs_list).post(jobs_create),
         )
@@ -66,6 +70,34 @@ pub fn routes(runtime: AiRuntime) -> Router<PgPool> {
             "/social-media/api/ai/jobs/{id}/versions/{version}/file",
             get(version_file),
         )
+        .route(
+            "/social-media/api/ai/jobs/{id}/proposal",
+            axum::routing::post(proposal_decide),
+        )
+        .route(
+            "/social-media/api/ai/jobs/{id}/versions/{version}/revision",
+            axum::routing::post(version_revise),
+        )
+        .route(
+            "/social-media/api/ai/jobs/{id}/versions/{version}/select",
+            axum::routing::post(version_select),
+        )
+        .route(
+            "/social-media/api/ai/jobs/{id}/versions/{version}/decision",
+            axum::routing::post(version_decide),
+        )
+        .route(
+            "/social-media/api/ai/jobs/{id}/versions/{version}/approve",
+            axum::routing::post(version_approve),
+        )
+        .route(
+            "/social-media/api/ai/jobs/{id}/versions/{version}/schedule",
+            axum::routing::post(version_schedule),
+        )
+        .route(
+            "/social-media/api/ai/jobs/{id}/versions/{version}/original",
+            get(version_original),
+        )
         .layer(Extension(runtime))
 }
 
@@ -80,6 +112,15 @@ impl IntoResponse for ApiError {
 impl From<AiEditorError> for ApiError {
     fn from(error: AiEditorError) -> Self {
         let status = match error {
+            AiEditorError::Input => StatusCode::BAD_REQUEST,
+            AiEditorError::Publishing(ref error) => match error {
+                produced_video::ProducedVideoError::NotFound
+                | produced_video::ProducedVideoError::Ownership => StatusCode::NOT_FOUND,
+                produced_video::ProducedVideoError::Database(_) => StatusCode::SERVICE_UNAVAILABLE,
+                produced_video::ProducedVideoError::Invalid
+                | produced_video::ProducedVideoError::NoPlatforms => StatusCode::BAD_REQUEST,
+                _ => StatusCode::CONFLICT,
+            },
             AiEditorError::NotFound | AiEditorError::Source => StatusCode::NOT_FOUND,
             AiEditorError::Consent => StatusCode::FORBIDDEN,
             AiEditorError::Conflict | AiEditorError::Attempts => StatusCode::CONFLICT,
@@ -119,6 +160,14 @@ pub struct ConsentInput {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct OptionsInput {
+    twitch_user_id: String,
+    multi_output_enabled: bool,
+    experimental_ai_layout: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateInput {
     twitch_user_id: String,
     clip_db_id: i64,
@@ -128,6 +177,27 @@ pub struct CreateInput {
 #[serde(deny_unknown_fields)]
 pub struct RetryInput {
     twitch_user_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevisionInput {
+    twitch_user_id: String,
+    feedback: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DecisionInput {
+    twitch_user_id: String,
+    accept: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlatformsInput {
+    twitch_user_id: String,
+    platforms: Vec<String>,
 }
 
 async fn channel(
@@ -204,6 +274,30 @@ pub async fn consent_put(
     Ok(Json(consent_view(&pool, &owner).await?))
 }
 
+pub async fn options_get(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Query(query): Query<ChannelQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let owner = channel(&pool, &auth, query.twitch_user_id.as_deref()).await?;
+    Ok(Json(json!(ai_editor::options::load(&pool, &owner).await?)))
+}
+
+pub async fn options_put(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Json(input): Json<OptionsInput>,
+) -> Result<Json<Value>, ApiError> {
+    let owner = channel(&pool, &auth, Some(&input.twitch_user_id)).await?;
+    let options = ai_editor::EditorOptions {
+        multi_output_enabled: input.multi_output_enabled,
+        experimental_ai_layout: input.experimental_ai_layout,
+    };
+    Ok(Json(json!(
+        ai_editor::options::save(&pool, &owner, options).await?
+    )))
+}
+
 pub async fn jobs_list(
     State(pool): State<PgPool>,
     auth: DashboardAuthLevel,
@@ -254,6 +348,108 @@ pub async fn job_retry(
     ))
 }
 
+pub async fn version_revise(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Extension(runtime): Extension<AiRuntime>,
+    Path((id, version)): Path<(i64, i64)>,
+    Json(input): Json<RevisionInput>,
+) -> Result<Json<Value>, ApiError> {
+    let owner = channel(&pool, &auth, Some(&input.twitch_user_id)).await?;
+    Ok(Json(
+        json!({"job":ai_editor::revision::create_revision(&pool,runtime.required()?,&owner,id,version,&input.feedback).await?}),
+    ))
+}
+
+pub async fn proposal_decide(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Extension(runtime): Extension<AiRuntime>,
+    Path(id): Path<i64>,
+    Json(input): Json<DecisionInput>,
+) -> Result<Json<Value>, ApiError> {
+    let owner = channel(&pool, &auth, Some(&input.twitch_user_id)).await?;
+    Ok(Json(
+        json!({"job":ai_editor::revision::decide_proposal(&pool,runtime.required()?,&owner,id,input.accept).await?}),
+    ))
+}
+
+pub async fn version_select(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Extension(runtime): Extension<AiRuntime>,
+    Path((id, version)): Path<(i64, i64)>,
+    Json(input): Json<RetryInput>,
+) -> Result<Json<Value>, ApiError> {
+    let owner = channel(&pool, &auth, Some(&input.twitch_user_id)).await?;
+    Ok(Json(
+        json!({"job":ai_editor::revision::select_version(&pool,runtime.required()?,&owner,id,version).await?}),
+    ))
+}
+
+pub async fn version_decide(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Extension(runtime): Extension<AiRuntime>,
+    Path((id, version)): Path<(i64, i64)>,
+    Json(input): Json<DecisionInput>,
+) -> Result<Json<Value>, ApiError> {
+    let owner = channel(&pool, &auth, Some(&input.twitch_user_id)).await?;
+    ai_editor::revision::record_version_decision(&pool, &owner, id, version, input.accept).await?;
+    Ok(Json(
+        json!({"job":ai_editor::get_manual_job(&pool,runtime.required()?,&owner,id).await?}),
+    ))
+}
+
+pub async fn version_approve(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Extension(runtime): Extension<AiRuntime>,
+    Path((id, version)): Path<(i64, i64)>,
+    Json(input): Json<PlatformsInput>,
+) -> Result<Json<Value>, ApiError> {
+    let owner = channel(&pool, &auth, Some(&input.twitch_user_id)).await?;
+    ai_editor::revision::approve_version(&pool, &owner, id, version, &input.platforms).await?;
+    Ok(Json(
+        json!({"job":ai_editor::get_manual_job(&pool,runtime.required()?,&owner,id).await?}),
+    ))
+}
+
+pub async fn version_schedule(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Extension(runtime): Extension<AiRuntime>,
+    Path((id, version)): Path<(i64, i64)>,
+    Json(input): Json<PlatformsInput>,
+) -> Result<Json<Value>, ApiError> {
+    let owner = channel(&pool, &auth, Some(&input.twitch_user_id)).await?;
+    let reservation =
+        ai_editor::revision::publish_version(&pool, &owner, id, version, &input.platforms).await?;
+    Ok(Json(
+        json!({"reservation":reservation,"job":ai_editor::get_manual_job(&pool,runtime.required()?,&owner,id).await?}),
+    ))
+}
+
+pub async fn version_original(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Extension(runtime): Extension<AiRuntime>,
+    Path((id, version)): Path<(i64, i64)>,
+    Query(query): Query<ChannelQuery>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let owner = channel(&pool, &auth, query.twitch_user_id.as_deref()).await?;
+    let runtime = runtime.required()?;
+    let path = ai_editor::manual_version_original_file(&pool, runtime, &owner, id, version).await?;
+    stream_file(
+        &runtime.limits.output_root,
+        &path,
+        runtime.limits.original_preview.max_output_bytes,
+        &headers,
+    )
+    .await
+}
+
 pub async fn original_file(
     State(pool): State<PgPool>,
     auth: DashboardAuthLevel,
@@ -284,31 +480,8 @@ pub async fn version_file(
 ) -> Result<Response, ApiError> {
     let owner = channel(&pool, &auth, query.twitch_user_id.as_deref()).await?;
     let runtime = runtime.required()?;
-    let job = store::get_job(
-        &pool,
-        &owner,
-        id,
-        store::AttemptLimit::from_server_config(runtime.limits.stage_attempts)?,
-    )
-    .await?;
-    let video = produced_video::get(&pool, &owner, version)
-        .await
-        .map_err(|_| AiEditorError::Storage)?
-        .ok_or(AiEditorError::NotFound)?;
-    if video.clip_id != job.clip_db_id
-        || video.mode != produced_video::ProductionMode::Ai
-        || video.job_id.is_some()
-        || !video.metadata.get("manual_ai_job_id").is_some_and(|value| {
-            value.as_i64() == Some(id) || value.as_str() == Some(id.to_string().as_str())
-        })
-        || !matches!(
-            video.status.as_str(),
-            "review" | "approved" | "scheduled" | "published"
-        )
-        || video
-            .expires_at
-            .is_some_and(|expires| expires <= chrono::Utc::now())
-    {
+    let video = ai_editor::revision::owned_version(&pool, &owner, id, version).await?;
+    if !ai_editor::revision::usable(&video) {
         return Err(AiEditorError::NotFound.into());
     }
     let path = PathBuf::from(video.file_path.ok_or(AiEditorError::NotFound)?);

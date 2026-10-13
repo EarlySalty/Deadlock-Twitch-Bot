@@ -1,3 +1,5 @@
+import { withLanguageHeader } from './languageHeader';
+
 export interface CommandNameSetting {
   command: string;
   default_name: string;
@@ -33,14 +35,9 @@ export class CommandNameApiError extends Error {
 const BASE = '/twitch/api/v2/streamer/command-names';
 
 async function fetchJson<T>(init: RequestInit = {}): Promise<T> {
-  const response = await fetch(BASE, { credentials: 'same-origin', ...init });
+  const response = await fetch(BASE, withLanguageHeader(BASE, { credentials: 'same-origin', ...init }));
   if (!response.ok) {
-    let payload: { error?: string; message?: string } = {};
-    try {
-      payload = await response.json() as { error?: string; message?: string };
-    } catch {
-      // HTTP-Status bleibt als Fallback sichtbar.
-    }
+    const payload = await response.json().catch(() => ({})) as { error?: string; message?: string };
     throw new CommandNameApiError(
       response.status,
       payload.error ?? 'http_error',

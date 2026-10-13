@@ -49,8 +49,10 @@ use tb_analytics::billing::{
 use tb_analytics::plan::resolve_plan_snapshot;
 use tb_analytics::stripe::StripeClient;
 use tb_analytics::stufe::{stufe_fuer_plan, Stufe};
+use tb_domain::DashboardLanguage;
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::language::RequestLanguage;
 
 /// Default-Public-Origin für success/cancel/return-URLs, wenn keine konfiguriert
 /// ist (Pythons letzter `_billing_configured_public_origin`-Fallback).
@@ -594,12 +596,11 @@ fn ist_aktuelle_stufe(plan_id: &str, current: &tb_analytics::plan::PlanSnapshot)
     }
 }
 
-/// Ruhiger Zusatz unter dem Knopf, wenn der Streamer die Stufe zwar gerade
-/// nutzt, sie aber nicht dauerhaft bezahlt.
-///
-/// Der Knopf bleibt in beiden Faellen stehen, der Hinweis sagt nur, warum er da
-/// ist: sonst wirkt "Netzwerk Plus buchen" auf jemanden im Test wie ein Fehler.
-fn stufen_hinweis(plan_id: &str, current: &tb_analytics::plan::PlanSnapshot) -> Option<String> {
+fn stufen_hinweis(
+    plan_id: &str,
+    current: &tb_analytics::plan::PlanSnapshot,
+    lang: DashboardLanguage,
+) -> Option<String> {
     if laufende_bezahlte_stufe(current).is_some() {
         return None;
     }
@@ -609,12 +610,25 @@ fn stufen_hinweis(plan_id: &str, current: &tb_analytics::plan::PlanSnapshot) -> 
     }
     if current.plan_id == tb_analytics::trial::ANALYTICS_TRIAL_PLAN_ID {
         return Some(match resttage(current.expires_at.as_deref()) {
-            Some(1) => "Läuft noch einen Tag als Test.".to_string(),
-            Some(tage) if tage > 1 => format!("Läuft noch {tage} Tage als Test."),
-            _ => "Läuft gerade als Test.".to_string(),
+            Some(1) => lang
+                .pick("Läuft noch einen Tag als Test.", "Trial ends in one day.")
+                .to_string(),
+            Some(tage) if tage > 1 => lang.pick(
+                format!("Läuft noch {tage} Tage als Test."),
+                format!("Trial ends in {tage} days."),
+            ),
+            _ => lang
+                .pick("Läuft gerade als Test.", "Currently running as a trial.")
+                .to_string(),
         });
     }
-    Some("Du nutzt diese Stufe über einen älteren Tarif.".to_string())
+    Some(
+        lang.pick(
+            "Du nutzt diese Stufe über einen älteren Tarif.",
+            "You have this tier through an older plan.",
+        )
+        .to_string(),
+    )
 }
 
 /// Volle Tage bis zum Ablauf, aus dem ISO-Zeitstempel des Snapshots.
@@ -642,6 +656,7 @@ pub struct CatalogQuery {
 /// Nicht authentifiziert → 401 `auth_required`.
 pub async fn catalog_handler(
     auth: DashboardAuthLevel,
+    RequestLanguage(lang): RequestLanguage,
     config: Option<Extension<BillingPageConfig>>,
     State(pool): State<PgPool>,
     Query(params): Query<CatalogQuery>,
@@ -685,7 +700,7 @@ pub async fn catalog_handler(
                 .unwrap_or("")
                 .to_string();
             plan["is_current"] = json!(ist_aktuelle_stufe(&pid, &current));
-            if let Some(text) = stufen_hinweis(&pid, &current) {
+            if let Some(text) = stufen_hinweis(&pid, &current, lang) {
                 plan["hinweis"] = json!(text);
             }
             if !is_paid_plan_id(&pid) {
@@ -1675,9 +1690,14 @@ mod tests {
         sqlx::query("INSERT INTO twitch_billing_subscriptions (stripe_subscription_id, stripe_customer_id, customer_reference, status, updated_at) VALUES ('sub_fremd', 'cus_fremd', '', 'active', '2026-10-03'), ('sub_eigen', 'cus_eigen', '42', 'active', '2026-10-02')")
             .execute(&pool).await.unwrap();
         let record = active_customer_record(&pool, "  ", "42", "42")
-            .await.unwrap().unwrap();
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(record.stripe_customer_id, "cus_eigen");
-        assert!(active_customer_record(&pool, "", "", "").await.unwrap().is_none());
+        assert!(active_customer_record(&pool, "", "", "")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     use sqlx::postgres::PgPoolOptions;
@@ -1910,6 +1930,7 @@ mod tests {
         let server = MockServer::start().await;
         let resp = catalog_handler(
             partner("login", "5"),
+            RequestLanguage::default(),
             Some(Extension(cfg_with_base(&server.uri()))),
             State(pool.clone()),
             Query(CatalogQuery {
@@ -1988,7 +2009,8 @@ mod tests {
         assert!(!ist_aktuelle_stufe("plus", &trial), "Trial ist keine Stufe");
         assert!(!ist_aktuelle_stufe("free", &trial));
         assert!(
-            stufen_hinweis("plus", &trial).is_some_and(|text| text.contains("Test")),
+            stufen_hinweis("plus", &trial, DashboardLanguage::De)
+                .is_some_and(|text| text.contains("Test")),
             "Trial braucht einen ruhigen Hinweis neben dem Knopf"
         );
 
@@ -1997,7 +2019,7 @@ mod tests {
         assert!(!ist_aktuelle_stufe("plus", &alt));
         assert!(!ist_aktuelle_stufe("free", &alt));
         assert_eq!(
-            stufen_hinweis("plus", &alt).as_deref(),
+            stufen_hinweis("plus", &alt, DashboardLanguage::De).as_deref(),
             Some("Du nutzt diese Stufe über einen älteren Tarif.")
         );
     }
@@ -2015,7 +2037,7 @@ mod tests {
         assert!(ist_aktuelle_stufe("plus", &stripe));
         assert!(!ist_aktuelle_stufe("free", &stripe));
         assert!(!ist_aktuelle_stufe("pro", &stripe));
-        assert!(stufen_hinweis("plus", &stripe).is_none());
+        assert!(stufen_hinweis("plus", &stripe, DashboardLanguage::De).is_none());
 
         // Unbefristetes Admin-Geschenk auf einer Katalog-Stufe zaehlt auch.
         let geschenk = snapshot("pro", "manual_override", "active", None);
@@ -2039,7 +2061,7 @@ mod tests {
         let frei = snapshot("raid_free", "default_basic", "active", None);
         assert!(ist_aktuelle_stufe("free", &frei));
         assert!(!ist_aktuelle_stufe("plus", &frei));
-        assert!(stufen_hinweis("free", &frei).is_none());
+        assert!(stufen_hinweis("free", &frei, DashboardLanguage::De).is_none());
     }
 
     /// Katalog ohne Auth → 401 auth_required.
@@ -2050,6 +2072,7 @@ mod tests {
         };
         let resp = catalog_handler(
             DashboardAuthLevel::None,
+            RequestLanguage::default(),
             None,
             State(pool.clone()),
             Query(CatalogQuery { cycle: None }),

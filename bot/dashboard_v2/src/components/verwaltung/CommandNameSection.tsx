@@ -49,7 +49,6 @@ export function CommandNamesProvider({ children }: { children: ReactNode }) {
   return <CommandNamesContext.Provider value={{ commands, loading, error, update }}>{children}</CommandNamesContext.Provider>;
 }
 
-// Shared by the inline editor and the remaining command list.
 // eslint-disable-next-line react-refresh/only-export-components
 export function useCommandNames() {
   const context = useContext(CommandNamesContext);
@@ -59,7 +58,7 @@ export function useCommandNames() {
 
 function messageFor(error: unknown): string {
   if (error instanceof CommandNameApiError && (error.code === 'name_conflict' || error.code === 'invalid_name')) {
-    return error.message;
+    return tr(error.message);
   }
   return tr('Speichern fehlgeschlagen. Bitte erneut tippen.');
 }
