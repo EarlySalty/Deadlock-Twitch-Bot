@@ -696,10 +696,21 @@ class CollectorPackagingTests(unittest.TestCase):
                 self.assertEqual(wrapper_result.stdout.splitlines(), installer_result.stdout.splitlines())
                 expected = ai_expected if target == "tb-stt-server" else not native or target == "tb-category-storage"
                 if target == "tb-discord-hub":
-                    expected = subprocess.run(
-                        ["git", "-C", str(repository), "cat-file", "-e", f"{sha}:rust/bin/tb-discord-hub/Cargo.toml"],
-                        capture_output=True,
-                    ).returncode == 0
+                    expected = (
+                        subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                str(repository),
+                                "cat-file",
+                                "-e",
+                                f"{sha}:rust/bin/tb-discord-hub/Cargo.toml",
+                            ],
+                            capture_output=True,
+                            check=False,
+                        ).returncode
+                        == 0
+                    )
                 self.assertEqual(collector in installer_result.stdout.splitlines(), expected)
                 self.assertEqual((stage / collector).exists(), expected)
                 if expected:
@@ -897,9 +908,31 @@ class ModelInstallationDeploymentTests(unittest.TestCase):
 
 
 class HubLauncherTests(unittest.TestCase):
-    def launch(self, scenario):
+    blank_values = (
+        "",
+        " \t\r\n\v\f",
+        *(
+            chr(code)
+            for code in (
+                0x85,
+                0xA0,
+                0x1680,
+                *range(0x2000, 0x200B),
+                0x2028,
+                0x2029,
+                0x202F,
+                0x205F,
+                0x3000,
+            )
+        ),
+    )
+
+    def launch(self, scenario="healthy", **overrides):
         source = WRAPPER.with_name("run-discord-hub").read_text()
-        source = "\n".join("root_dir=/synthetic-release" if line.startswith("root_dir=") else line for line in source.splitlines())
+        source = "\n".join(
+            "root_dir=/synthetic-release" if line.startswith("root_dir=") else line
+            for line in source.splitlines()
+        )
         source = source.replace('exec "$binary"', "exec /usr/bin/env", 1)
         values = {
             "DISCORD_HUB_BOT_TOKEN": "synthetic-bot",
@@ -910,15 +943,80 @@ class HubLauncherTests(unittest.TestCase):
             "MASTER_BROKER_BASE_URL": "http://wrong-host:1",
             "UNRELATED_SECRET": "synthetic-unrelated",
             "INFISICAL_SERVICE_TOKEN": "synthetic-bootstrap",
+            "LC_ALL": "C",
         }
-        if scenario in values:
-            del values[scenario]
+        values.pop(scenario, None)
         if scenario == "mismatch":
             values["DISCORD_HUB_APPLICATION_ID"] = "43"
+        for name, value in overrides.items():
+            if value is None:
+                values.pop(name, None)
+            else:
+                values[name] = value
         return subprocess.run(
-            ["/bin/bash", "-c", source, "run-discord-hub", "--infisical-loaded", "8779"],
-            env=values, capture_output=True, text=True, timeout=5,
+            [
+                "/bin/bash",
+                "-c",
+                source,
+                "run-discord-hub",
+                "--infisical-loaded",
+                "8779",
+            ],
+            env=values,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
         )
+
+    def bootstrap(
+        self, token, project="synthetic-project", environment="synthetic-env"
+    ):
+        source = WRAPPER.with_name("run-discord-hub").read_text()
+        source = "\n".join(
+            "root_dir=/synthetic-release" if line.startswith("root_dir=") else line
+            for line in source.splitlines()
+        )
+        source = source.replace(
+            "config=/etc/deadlock-twitch/discord-hub.conf",
+            'config="$HUB_TEST_CONFIG"',
+            1,
+        )
+        source = source.replace(
+            'binary="$root_dir/rust/target/release/tb-discord-hub"',
+            "binary=/usr/bin/true",
+            1,
+        )
+        source = source.replace(
+            "set +x\n",
+            "set +x\nstat() { if [[ $2 == %u ]]; then printf '0'; else printf '600'; fi; }\n",
+            1,
+        )
+        source = source.replace(
+            'exec /usr/local/libexec/dl-infisical-env --profile all -- /usr/bin/bash "$0" --infisical-loaded "$port"',
+            'printf "%s" "$INFISICAL_SERVICE_TOKEN"; exit 0',
+            1,
+        )
+        with tempfile.TemporaryDirectory(prefix="hub-bootstrap-fixture-") as directory:
+            fixture = Path(directory)
+            config = fixture / "discord-hub.conf"
+            config.write_text(
+                f"INFISICAL_PROJECT_ID={project}\nINFISICAL_ENV={environment}\n"
+                "DISCORD_HUB_ENABLED=1\nDISCORD_HUB_PORT=8779\n"
+            )
+            (fixture / "infisical-token").write_text(token)
+            return subprocess.run(
+                ["/bin/bash", "-c", source, "run-discord-hub"],
+                env={
+                    "HUB_TEST_CONFIG": str(config),
+                    "CREDENTIALS_DIRECTORY": str(fixture),
+                    "LC_ALL": "C",
+                },
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
 
     def test_hub_environment_is_scoped_and_loopback_is_enforced(self):
         result = self.launch("healthy")
@@ -933,19 +1031,125 @@ class HubLauncherTests(unittest.TestCase):
         self.assertNotIn("DISCORD_HUB_CLIENT_ID", values)
 
     def test_missing_provisioning_fails_without_printing_values(self):
-        for scenario in ("DISCORD_HUB_BOT_TOKEN", "DISCORD_HUB_CLIENT_ID", "MASTER_BROKER_TOKEN", "DISCORD_HUB_DATABASE_URL", "mismatch"):
+        for scenario in (
+            "DISCORD_HUB_BOT_TOKEN",
+            "DISCORD_HUB_CLIENT_ID",
+            "MASTER_BROKER_TOKEN",
+            "DISCORD_HUB_DATABASE_URL",
+            "mismatch",
+        ):
             with self.subTest(scenario=scenario):
                 result = self.launch(scenario)
                 self.assertEqual(result.returncode, 1)
                 self.assertNotIn("synthetic", result.stdout + result.stderr)
 
+    def test_blank_required_credentials_fail_before_execution(self):
+        broker_names = (
+            "MASTER_BROKER_TOKEN",
+            "MAIN_BOT_INTERNAL_TOKEN",
+            "TWITCH_INTERNAL_API_TOKEN",
+        )
+        for name in (
+            "DISCORD_HUB_BOT_TOKEN",
+            "DISCORD_HUB_DATABASE_URL",
+            *broker_names,
+        ):
+            for value in self.blank_values:
+                with self.subTest(name=name, value=repr(value)):
+                    scenario = (
+                        "MASTER_BROKER_TOKEN" if name in broker_names else "healthy"
+                    )
+                    result = self.launch(scenario, **{name: value})
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertEqual(result.stdout, "")
+                    self.assertTrue(result.stderr)
+                    self.assertNotIn("synthetic", result.stderr)
+
+    def test_blank_explicit_internal_token_does_not_fall_back_silently(self):
+        for value in self.blank_values[1:]:
+            with self.subTest(value=repr(value)):
+                result = self.launch(DISCORD_HUB_INTERNAL_TOKEN=value)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(result.stdout, "")
+                self.assertTrue(result.stderr)
+                self.assertNotIn("synthetic", result.stderr)
+
+    def test_valid_credential_contents_and_fallbacks_are_preserved(self):
+        bot = " \tsynthetic-bot\t "
+        broker = " \tsynthetic-broker\t "
+        database = " \tpostgres://synthetic-hub\t "
+        for name in (
+            "MASTER_BROKER_TOKEN",
+            "MAIN_BOT_INTERNAL_TOKEN",
+            "TWITCH_INTERNAL_API_TOKEN",
+        ):
+            for internal in (None, "", " \tsynthetic-internal\t "):
+                with self.subTest(name=name, internal=internal):
+                    result = self.launch(
+                        "MASTER_BROKER_TOKEN",
+                        **{
+                            name: broker,
+                            "DISCORD_HUB_BOT_TOKEN": bot,
+                            "DISCORD_HUB_DATABASE_URL": database,
+                            "DISCORD_HUB_INTERNAL_TOKEN": internal,
+                        },
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    values = dict(
+                        line.split("=", 1) for line in result.stdout.splitlines()
+                    )
+                    self.assertEqual(values["DISCORD_HUB_BOT_TOKEN"], bot)
+                    self.assertEqual(values["MASTER_BROKER_TOKEN"], broker)
+                    self.assertEqual(values["DATABASE_URL"], database)
+                    self.assertEqual(
+                        values["DISCORD_HUB_INTERNAL_TOKEN"], internal or broker
+                    )
+
+    def test_blank_infisical_bootstrap_values_fail_before_execution(self):
+        for value in self.blank_values:
+            with self.subTest(token=repr(value)):
+                result = self.bootstrap(value)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(result.stdout, "")
+                self.assertTrue(result.stderr)
+                self.assertNotIn("synthetic", result.stderr)
+        for name in ("project", "environment"):
+            with self.subTest(name=name):
+                result = self.bootstrap("synthetic-bootstrap", **{name: " \t "})
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(result.stdout, "")
+                self.assertNotIn("synthetic", result.stderr)
+
+    def test_valid_infisical_bootstrap_token_is_not_trimmed(self):
+        token = " \tsynthetic-bootstrap\t "
+        result = self.bootstrap(token)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, token)
+
     def test_hub_restart_is_opt_in_and_default_all_stays_unchanged(self):
         source = WRAPPER.read_text()
-        parser = source.split('src=""\nrestart_explicit=0\n', 1)[1].split('\nsrc="${src:-', 1)[0]
-        for args, expected in (((), ["twitch-dashboard", "twitch-bot", "coaching-watch"]), (("--restart", "discord-hub"), ["discord-hub"])):
+        parser = source.split('src=""\nrestart_explicit=0\n', 1)[1].split(
+            '\nsrc="${src:-', 1
+        )[0]
+        for args, expected in (
+            ((), ["twitch-dashboard", "twitch-bot", "coaching-watch"]),
+            (("--restart", "discord-hub"), ["discord-hub"]),
+        ):
             result = subprocess.run(
-                ["/bin/bash", "-c", 'set -euo pipefail\nsrc=""\nrestart_explicit=0\n' + parser + '\nprintf "%s\\n" "${restart_targets[@]}"', "hub-options", *args],
-                env={}, capture_output=True, text=True, timeout=5,
+                [
+                    "/bin/bash",
+                    "-c",
+                    'set -euo pipefail\nsrc=""\nrestart_explicit=0\n'
+                    + parser
+                    + '\nprintf "%s\\n" "${restart_targets[@]}"',
+                    "hub-options",
+                    *args,
+                ],
+                env={},
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.splitlines(), expected)
