@@ -34,6 +34,7 @@ fn feedback_sequence_that_restores_the_original_learns_nothing() {
             "feedback",
             Some("Die Untertitel bitte kleiner"),
         ));
+        events.push(event(root, root + 1, "version_accepted", None));
         events.push(event(
             root,
             root + 2,
@@ -45,7 +46,7 @@ fn feedback_sequence_that_restores_the_original_learns_nothing() {
     let profile = personal_profile(&events);
     assert!(profile.preferences.is_empty());
     assert_eq!(profile.feedback_count, 6);
-    assert_eq!(profile.accepted_versions, 3);
+    assert_eq!(profile.accepted_versions, 6);
 }
 
 #[test]
@@ -453,4 +454,34 @@ fn planning_input_carries_personal_preferences_only_when_present() {
         value["personal_preferences"]["preferences"][0],
         "Prefer fewer, calmer cuts."
     );
+}
+
+async fn add_events_for_users(pool: &PgPool, last_user: i64) {
+    sqlx::query("INSERT INTO public.social_ai_revision_events (twitch_user_id, root_job_id, job_id, event_kind, payload) SELECT u, u, u + 1, 'feedback', '{}'::jsonb FROM generate_series(1::bigint, $1) AS u")
+        .bind(last_user)
+        .execute(pool)
+        .await
+        .expect("bulk fixture events");
+}
+
+#[tokio::test]
+async fn refresh_queue_reaches_users_beyond_one_pass_while_others_stay_active() {
+    let db = database().await;
+    let pool = &db.pool;
+    let last_user = MAX_USERS_PER_PASS + 1;
+    add_events_for_users(pool, last_user).await;
+    assert_eq!(
+        refresh_personal(pool).await.expect("first pass"),
+        MAX_USERS_PER_PASS as usize
+    );
+    add_events_for_users(pool, MAX_USERS_PER_PASS).await;
+    refresh_personal(pool).await.expect("second pass");
+    let refreshed: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM public.social_ai_personal_preferences WHERE twitch_user_id = $1)",
+    )
+    .bind(last_user)
+    .fetch_one(pool)
+    .await
+    .expect("refresh state");
+    assert!(refreshed);
 }

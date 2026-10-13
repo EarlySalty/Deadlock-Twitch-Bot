@@ -554,7 +554,7 @@ pub async fn personal_hints(pool: &PgPool, owner: &str) -> Result<Vec<String>, s
 
 async fn stale_users(pool: &PgPool) -> Result<Vec<i64>, sqlx::Error> {
     sqlx::query_scalar(
-        "SELECT e.twitch_user_id FROM public.social_ai_revision_events e LEFT JOIN public.social_ai_personal_preferences p ON p.twitch_user_id = e.twitch_user_id GROUP BY e.twitch_user_id, p.last_event_id HAVING MAX(e.id) > COALESCE(p.last_event_id, 0) ORDER BY e.twitch_user_id LIMIT $1",
+        "SELECT e.twitch_user_id FROM public.social_ai_revision_events e LEFT JOIN public.social_ai_personal_preferences p ON p.twitch_user_id = e.twitch_user_id GROUP BY e.twitch_user_id, p.last_event_id, p.updated_at HAVING MAX(e.id) > COALESCE(p.last_event_id, 0) ORDER BY p.updated_at ASC NULLS FIRST, MIN(e.id) FILTER (WHERE e.id > COALESCE(p.last_event_id, 0)), e.twitch_user_id LIMIT $1",
     )
     .bind(MAX_USERS_PER_PASS)
     .fetch_all(pool)
