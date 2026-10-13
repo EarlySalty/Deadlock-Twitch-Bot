@@ -1,10 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
 
-/**
- * Navigationslink der Dashboard-Sidebars (gold hervorgehobener aktiver Eintrag).
- * Geteilt von Partner-Sidebar und Server-Admin-Sidebar; enthaelt bewusst keine
- * Rollen- oder Admin-Logik.
- */
 export function SidebarLink({
   href,
   icon: Icon,
