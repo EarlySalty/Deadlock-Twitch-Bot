@@ -31,6 +31,7 @@ pub use auth::discord_admin_login::{discord_admin_login_config_from_env, Discord
 pub use auth::level::DashboardAuthLevel;
 pub use auth::oauth_login::{HelixOAuthClient, TwitchIdentity, TwitchOAuthClient};
 pub use auth::security::{require_internal, RateLimiter};
+pub use auth::server_admin_login::{server_admin_login_config_from_env, ServerAdminLoginConfig};
 pub use auth::session::{
     build_session_cookie, clear_session_cookie, DashboardAuthState, OAuthLoginState, SameSite,
     SessionCreation, ADMIN_COOKIE_NAME, OAUTH_STATE_SESSION_TYPE, OAUTH_STATE_TTL_SECS,
@@ -1467,6 +1468,43 @@ pub fn build_auth_router(rate_limiter: RateLimiter) -> Router {
         )
 }
 
+/// Server-Admin-Dashboard für fremde Discord-Server (Multi-Server Paket A).
+///
+/// Eigener Login (Discord, Recht „Server verwalten“), eigene Session, eigene
+/// API unter `/twitch/api/server-admin/*`. Liegt bewusst außerhalb der Admin-
+/// und Partner-Router samt `csrf_protect`: Die Rechte-Schranke
+/// (`auth::server_admin_gate`) prüft Login, Guild und CSRF selbst.
+pub fn build_server_admin_router(rate_limiter: RateLimiter) -> Router {
+    use auth::server_admin_login;
+
+    let login_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "server_admin_login", 10, 60);
+    let callback_rl = RateLimitLayerConfig::new(rate_limiter, "server_admin_callback", 20, 60);
+
+    Router::new()
+        .route(
+            "/twitch/server-admin",
+            get(handlers::spa::main_domain_spa_shell_handler),
+        )
+        .route(
+            "/twitch/server-admin/auth/login",
+            get(server_admin_login::login_handler).layer(axum::middleware::from_fn_with_state(
+                login_rl,
+                rate_limit_middleware,
+            )),
+        )
+        .route(
+            "/twitch/server-admin/auth/callback",
+            get(server_admin_login::callback_handler).layer(
+                axum::middleware::from_fn_with_state(callback_rl, rate_limit_middleware),
+            ),
+        )
+        .route(
+            "/twitch/server-admin/auth/logout",
+            get(server_admin_login::logout_handler),
+        )
+        .merge(handlers::server_admin::api_routes())
+}
+
 /// Baut den Router für Affiliate-Onboarding (separate Affiliate-Session,
 /// `session_type='affiliate'`, kein Partner-Gate).
 pub fn build_affiliate_router(pool: PgPool, rate_limiter: RateLimiter) -> Router {
@@ -2276,6 +2314,7 @@ pub fn build_router_with_analysis_writer(
     let mut app = build_public_router_with_brain(pool.clone(), brain_runtime)
         .merge(pause_loop_router)
         .merge(build_auth_router(rate_limiter.clone()))
+        .merge(build_server_admin_router(rate_limiter.clone()))
         .merge(build_partner_login_router(
             pool.clone(),
             rate_limiter.clone(),
