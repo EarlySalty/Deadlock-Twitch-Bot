@@ -151,14 +151,24 @@ function useSettingsForm<K extends keyof GuildSettingsPatch>(
   const dirty = fields.some((field) => draft[field] !== initial[field]);
 
   const mutation = useMutation({
-    mutationFn: () => {
+    mutationFn: (submitted: Pick<GuildSettings, K>) => {
       const patch: GuildSettingsPatch = {};
       for (const field of fields) {
-        if (draft[field] !== initial[field]) Object.assign(patch, { [field]: draft[field] });
+        if (submitted[field] !== initial[field]) Object.assign(patch, { [field]: submitted[field] });
       }
       return patchGuildSettings(guild.guildId, patch, csrfToken);
     },
-    onSuccess: (updated) => {
+    onSuccess: (updated, submitted) => {
+      const acknowledged = { ...submitted };
+      for (const field of fields) acknowledged[field] = updated[field];
+      previousInitial.current = acknowledged;
+      setDraft((current) => {
+        const next = { ...current };
+        for (const field of fields) {
+          if (current[field] === submitted[field]) next[field] = updated[field];
+        }
+        return next;
+      });
       queryClient.setQueryData<ServerAdminMe>(ME_KEY, (me) =>
         me ? { ...me, guilds: me.guilds.map((g) => (g.guildId === updated.guildId ? updated : g)) } : me,
       );
@@ -166,11 +176,11 @@ function useSettingsForm<K extends keyof GuildSettingsPatch>(
   });
 
   const set = <F extends K>(field: F, value: GuildSettings[F]) => {
-    mutation.reset();
+    if (!mutation.isPending) mutation.reset();
     setDraft((current) => ({ ...current, [field]: value }));
   };
 
-  return { draft, set, dirty, mutation };
+  return { draft, set, dirty, mutation: { ...mutation, mutate: () => mutation.mutate(draft) } };
 }
 
 function SaveRow({ dirty, invalid, mutation }: {
@@ -446,7 +456,7 @@ export function ServerAdminPage() {
     );
   }
   if (error instanceof ServerAdminLoginRequired || (!me && !error)) return <LoginCard />;
-  if (error || !me) {
+  if (!me) {
     return (
       <CenteredCard title={t('Server verwalten')}>
         <p role="alert" className="text-danger">{errorText(error, t)}</p>
@@ -484,6 +494,7 @@ export function ServerAdminPage() {
         />
       }
     >
+      {error ? <p role="alert" className="text-sm text-danger">{errorText(error, t)}</p> : null}
       <Rise
         step={{ seconds: 0.04 }}
         as="section"
