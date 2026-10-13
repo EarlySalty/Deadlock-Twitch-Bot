@@ -6,6 +6,7 @@ pub mod login;
 pub mod partner;
 pub mod referral_window;
 pub mod signup_block;
+pub mod vod_range;
 
 pub use ids::{StreamerLogin, TwitchUserId};
 pub use login::normalize_twitch_login;
