@@ -87,13 +87,59 @@ fn rejected_edits_do_not_count_as_preferences() {
 
 #[test]
 fn contradicting_reviews_block_a_preference() {
+    let mut events = Vec::new();
+    for (root, text) in [
+        (10, "Untertitel kleiner"),
+        (20, "Untertitel kleiner"),
+        (30, "Untertitel größer"),
+        (40, "Untertitel größer"),
+    ] {
+        events.push(event(root, root + 1, "feedback", Some(text)));
+        events.push(event(root, root + 1, "version_accepted", None));
+    }
+    assert!(personal_profile(&events).preferences.is_empty());
+}
+
+#[test]
+fn pending_feedback_is_not_evidence() {
     let events = vec![
         event(10, 11, "feedback", Some("Untertitel kleiner")),
         event(20, 21, "feedback", Some("Untertitel kleiner")),
-        event(30, 31, "feedback", Some("Untertitel größer")),
-        event(40, 41, "feedback", Some("Untertitel größer")),
+        event(30, 31, "feedback", Some("Untertitel kleiner")),
     ];
     assert!(personal_profile(&events).preferences.is_empty());
+}
+
+#[test]
+fn accepted_then_rejected_version_does_not_count() {
+    let mut events: Vec<_> = [10, 20].into_iter().flat_map(smaller_subtitles).collect();
+    events.push(event(20, 21, "version_rejected", None));
+    assert!(personal_profile(&events).preferences.is_empty());
+}
+
+#[test]
+fn negated_instructions_teach_nothing() {
+    for text in [
+        "Untertitel nicht kleiner",
+        "Intro nicht kürzer",
+        "Die Untertitel sind nicht zu groß",
+        "Don't make the subtitles smaller",
+        "Keine schnelleren Schnitte, nicht mehr Schnitte",
+        "Die Facecam verdeckt nichts",
+        "Teamfight nicht komplett zeigen",
+        "Reaktion nicht drin lassen",
+        "Die Fähigkeit wurde nicht falsch verstanden",
+    ] {
+        assert!(classify(text).is_empty(), "{text}");
+    }
+    assert_eq!(
+        classify("Die Reaktion bitte nicht rausschneiden"),
+        vec![Signal::Toward(Dimension::KeepReaction, 1)]
+    );
+    assert_eq!(
+        classify("Untertitel kleiner, nicht größer"),
+        vec![Signal::Toward(Dimension::SubtitleSize, -1)]
+    );
 }
 
 #[test]
@@ -198,6 +244,17 @@ async fn recurring_feedback_creates_versioned_skill_change_and_respects_rollback
     for user in [101, 202] {
         confirmed(pool, user, "Untertitel kleiner bitte").await;
     }
+    let mut holder = pool.begin().await.expect("lock holder");
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+        .bind(PASS_LOCK)
+        .execute(&mut *holder)
+        .await
+        .expect("hold pass lock");
+    assert_eq!(
+        run_pass(pool, 4096).await.expect("concurrent pass"),
+        PassReport::default()
+    );
+    holder.rollback().await.expect("release pass lock");
     let first = run_pass(pool, 4096).await.expect("first pass");
     assert_eq!(first.profiles_updated, 2);
     assert!(first.skills_changed.is_empty());
