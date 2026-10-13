@@ -59,6 +59,8 @@ pub enum PublishError {
     ApprovalRequired,
     #[error("Dieses Ziel kann nicht erneut versucht werden")]
     RetryBlocked,
+    #[error("Die Videodatei wurde bereits gelöscht. Ein neuer Versuch ist nicht möglich")]
+    ArtifactDeleted,
     #[error("Im gemeinsamen Zeitplan ist kein freier Termin verfügbar")]
     NoSlot,
     #[error(transparent)]
@@ -774,8 +776,10 @@ pub async fn retry(
     let mut tx = pool.begin().await?;
     autopilot_settings::lock_owner(&mut tx, owner).await?;
     let settings = autopilot_settings::load_on(&mut tx, owner).await?;
-    let row: Option<(i64, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT q.id::bigint, q.status, q.outcome_reason FROM twitch_clips_upload_queue q
+    let row: Option<(i64, Option<String>, Option<String>, bool)> = sqlx::query_as(
+        "SELECT q.id::bigint, q.status, q.outcome_reason,
+            v.artifact_deleted_at IS NULL AND v.file_path IS NOT NULL
+         FROM twitch_clips_upload_queue q
          JOIN social_produced_videos v ON v.id = q.produced_video_id
          WHERE q.produced_video_id = $1 AND q.platform = $2 AND v.twitch_user_id = $3 FOR UPDATE OF q",
     )
@@ -784,7 +788,7 @@ pub async fn retry(
     .bind(owner)
     .fetch_optional(&mut *tx)
     .await?;
-    let (queue_id, status, reason) = row.ok_or(PublishError::NotFound)?;
+    let (queue_id, status, reason, artifact_present) = row.ok_or(PublishError::NotFound)?;
     let status = status.unwrap_or_default();
     if status != queue_status::RETRY && status != queue_status::HELD {
         return Err(PublishError::RetryBlocked);
@@ -794,6 +798,9 @@ pub async fn retry(
         .is_some_and(|reason| RETRY_BLOCKING_REASONS.contains(&reason))
     {
         return Err(PublishError::RetryBlocked);
+    }
+    if !artifact_present {
+        return Err(PublishError::ArtifactDeleted);
     }
     if !valid_approvals_on(&mut tx, id, owner, settings.publish_mode)
         .await?

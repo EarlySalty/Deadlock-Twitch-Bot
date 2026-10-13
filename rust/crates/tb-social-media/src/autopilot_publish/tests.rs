@@ -597,3 +597,94 @@ async fn notifications_respect_preferences_and_are_sent_once_with_dashboard_link
     assert!(messages[0].1.ends_with(DASHBOARD_LINK));
     cleanup(pool).await;
 }
+
+async fn artifact(pool: &PgPool, id: i64) -> Option<chrono::DateTime<chrono::Utc>> {
+    sqlx::query_scalar("SELECT artifact_deleted_at FROM social_produced_videos WHERE id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .expect("artifact state")
+}
+
+#[tokio::test]
+async fn open_destination_keeps_file_past_retention_and_deleted_file_is_never_retried() {
+    let pool = pool().await;
+    configure(
+        &pool,
+        &["youtube", "tiktok"],
+        &[("youtube", "yt-1"), ("tiktok", "tt-1")],
+    )
+    .await;
+    let (id, file) = video(&pool, "open").await;
+    approve(&pool, "owner", id, &decisions(&["youtube", "tiktok"]))
+        .await
+        .expect("approve");
+    make_due(&pool, id).await;
+    let publisher = ScriptedPublisher::with(vec![published("yt-video")]);
+    let executor = PublishExecutor::new(pool.clone(), publisher.clone());
+    executor.tick().await.expect("publish tick");
+    assert_eq!(
+        destinations(&pool, id).await,
+        vec![
+            (
+                "tiktok".into(),
+                queue_status::HELD.into(),
+                Some("tiktok_effect_boundary_pending".into())
+            ),
+            ("youtube".into(), queue_status::PUBLISHED.into(), None),
+        ]
+    );
+    sqlx::query("UPDATE social_produced_videos SET publication_executed_at = clock_timestamp() - INTERVAL '8 days' WHERE id = $1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("old publication");
+    executor.tick().await.expect("held tick");
+    assert!(artifact(&pool, id).await.is_none());
+    assert!(file.exists());
+    for status in [queue_status::FAILED, queue_status::UNCERTAIN] {
+        sqlx::query("UPDATE twitch_clips_upload_queue SET status = $2 WHERE produced_video_id = $1 AND platform = 'tiktok'")
+            .bind(id)
+            .bind(status)
+            .execute(&pool)
+            .await
+            .expect("open destination");
+        executor.tick().await.expect("open tick");
+        assert!(artifact(&pool, id).await.is_none());
+        assert!(file.exists());
+    }
+    sqlx::query("UPDATE twitch_clips_upload_queue SET status = $2, outcome_reason = 'platform_error', next_retry_at = clock_timestamp() + INTERVAL '1 hour' WHERE produced_video_id = $1 AND platform = 'tiktok'")
+        .bind(id)
+        .bind(queue_status::RETRY)
+        .execute(&pool)
+        .await
+        .expect("retryable destination");
+    sqlx::query(
+        "UPDATE social_produced_videos SET artifact_deleted_at = clock_timestamp() WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .expect("deleted artifact");
+    std::fs::remove_file(&file).expect("remove file");
+    assert!(matches!(
+        retry(&pool, "owner", id, "tiktok").await,
+        Err(PublishError::ArtifactDeleted)
+    ));
+    sqlx::query("UPDATE twitch_clips_upload_queue SET next_retry_at = clock_timestamp() - INTERVAL '1 minute' WHERE produced_video_id = $1 AND platform = 'tiktok'")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("due retry");
+    executor.tick().await.expect("deleted tick");
+    assert_eq!(publisher.calls().len(), 1);
+    let status: String = sqlx::query_scalar(
+        "SELECT status FROM twitch_clips_upload_queue WHERE produced_video_id = $1 AND platform = 'tiktok'",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .expect("tiktok destination");
+    assert_eq!(status, queue_status::RETRY);
+    cleanup(pool).await;
+}
