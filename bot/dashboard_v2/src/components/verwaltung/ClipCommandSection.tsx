@@ -1,4 +1,5 @@
 import { EditableCommandName } from './CommandNameSection';
+import { PrivateVodSection } from './PrivateVodSection';
 import { useEffect, useId, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Loader2, Power, PowerOff } from 'lucide-react';
@@ -197,6 +198,7 @@ export function ClipCommandSection() {
           </form>
         </div>
       )}
+      <PrivateVodSection />
     </motion.section>
   );
 }

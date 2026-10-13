@@ -8,6 +8,38 @@ export interface ClipCommandUpdateResponse extends ClipCommandSettingsResponse {
   ok: boolean;
 }
 
+export interface PrivateVodJob {
+  id: string;
+  video_id: string;
+  start_seconds: number;
+  end_seconds: number;
+  status: 'queued' | 'running' | 'ready' | 'failed' | 'expired';
+  expires_at: string;
+  file_bytes: number | null;
+  error_code: string | null;
+}
+
+export interface PrivateVodClipsResponse {
+  enabled: boolean;
+  jobs: PrivateVodJob[];
+}
+
+export function fetchPrivateVodClips(): Promise<PrivateVodClipsResponse> {
+  return fetchJson('/twitch/api/v2/streamer/private-vod-clips');
+}
+
+export function setPrivateVodCommand(enabled: boolean): Promise<{ enabled: boolean }> {
+  return fetchJson('/twitch/api/v2/streamer/private-vod-clips', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+export function privateVodDownloadUrl(id: string): string {
+  return `/twitch/api/v2/streamer/private-vod-clips/${encodeURIComponent(id)}/download`;
+}
+
 const BASE = '/twitch/api/v2/streamer/clip-command-settings';
 
 async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
