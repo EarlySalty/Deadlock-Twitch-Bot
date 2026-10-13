@@ -34,10 +34,18 @@ BEGIN
         job_subject := NEW.job_id;
         video_subject := NEW.id;
     ELSE
-        IF NEW.produced_video_id IS NULL OR COALESCE(NEW.status, '') IN ('failed', 'cancelled') THEN
+        IF COALESCE(NEW.status, '') IN ('failed', 'cancelled') THEN
+            RETURN NEW;
+        END IF;
+        IF TG_OP = 'UPDATE' AND NEW.produced_video_id IS NULL
+            AND OLD.scheduled_at IS NOT DISTINCT FROM NEW.scheduled_at
+            AND COALESCE(OLD.status, '') NOT IN ('failed', 'cancelled') THEN
             RETURN NEW;
         END IF;
         SELECT c.twitch_user_id INTO owner_id FROM twitch_clips_social_media c WHERE c.id = NEW.clip_id;
+        IF owner_id IS NULL THEN
+            RETURN NEW;
+        END IF;
         clip_subject := NEW.clip_id;
         video_subject := NEW.produced_video_id;
         SELECT v.job_id INTO job_subject FROM social_produced_videos v WHERE v.id = video_subject;

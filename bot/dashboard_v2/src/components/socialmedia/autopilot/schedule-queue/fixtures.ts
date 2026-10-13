@@ -11,7 +11,7 @@ export function createScheduleQueueFixture(): ScheduleQueueFixture {
   const state: ScheduleQueueSnapshot = {
     persisted: true,
     settings: { enabled: true, paused: false, ai_editing_enabled: false, lead_time_hours: 24, timezone: 'Europe/Berlin', schedule_slots: [{ weekday: 1, local_time: '18:00' }, { weekday: 3, local_time: '19:00' }, { weekday: 5, local_time: '17:30' }] },
-    next_slot: '2026-10-12T16:00:00Z', review_count: 1, production_hold: null,
+    next_slot: '2026-10-12T16:00:00Z', review_count: 1, production_hold: 'review_backlog',
     jobs: [
       { id: 101, clip_id: 41, clip_title: 'Teamfight am Mid-Boss', source: 'autopilot', mode: 'static', requested_mode: null, status: 'running', stage: 'rendering', attempts: 1, max_attempts: 3, scheduled_at: '2026-10-12T16:00:00Z', started_at: '2026-10-11T17:15:00Z', last_error: null, review_reasons: [] },
       { id: 102, clip_id: 42, clip_title: 'Letzter Push mit dem Team', source: 'autopilot', mode: null, requested_mode: null, status: 'queued', stage: 'queued', attempts: 0, max_attempts: 3, scheduled_at: '2026-10-14T17:00:00Z', started_at: null, last_error: null, review_reasons: [] },
@@ -34,7 +34,7 @@ export function createScheduleQueueFixture(): ScheduleQueueFixture {
       try { new Intl.DateTimeFormat('de-DE', { timeZone: patch.timezone ?? state.settings.timezone }); } catch { throw new Error('Unbekannte IANA-Zeitzone.'); }
       Object.assign(state.settings, patch);
       state.persisted = true;
-      state.production_hold = !state.settings.enabled ? 'disabled' : state.settings.paused ? 'paused' : null;
+      state.production_hold = !state.settings.enabled ? 'disabled' : state.settings.paused ? 'paused' : 'review_backlog';
       return copy();
     },
     async reorder(ids, owner) { requests.push({ method: 'PUT', path: '/autopilot/queue/order', body: { twitch_user_id: owner, job_ids: ids } }); order(ids); return copy(); },

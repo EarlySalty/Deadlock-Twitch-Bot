@@ -642,13 +642,74 @@ async fn legacy_uploads_sharing_a_slot_keep_their_status_lifecycle() {
                 .expect("legacy status update in a shared slot");
         }
     }
-    sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,platform,status,scheduled_at) VALUES ($1,'instagram','pending',$2)")
-        .bind(rows[0].0).bind(slot).execute(&pool).await.expect("legacy insert into a shared slot");
+    let rejected = sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,platform,status,scheduled_at) VALUES ($1,'instagram','pending',$2)")
+        .bind(rows[0].0).bind(slot).execute(&pool).await.expect_err("legacy insert into a foreign occupied slot");
+    assert_eq!(
+        rejected
+            .as_database_error()
+            .expect("actual shared slot guard")
+            .code()
+            .as_deref(),
+        Some("23505")
+    );
     sqlx::query("UPDATE twitch_clips_upload_queue SET scheduled_at = $2 WHERE id = $1")
         .bind(rows[1].1)
         .bind(slot + Duration::hours(1))
         .execute(&pool)
         .await
         .expect("legacy reschedule");
+    sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,platform,status,scheduled_at) VALUES ($1,'instagram','pending',$2)")
+        .bind(rows[0].0).bind(slot).execute(&pool).await.expect("legacy insert next to its own clip");
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn legacy_upload_cannot_take_a_reserved_production_slot() {
+    let pool = pool().await;
+    let reserved = clip(&pool, "owner", "reserved", utc("2025-01-01T00:00:00Z")).await;
+    let legacy: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (twitch_user_id, clip_id, clip_title, streamer_login, clip_url, source_kind)
+        VALUES ('owner','legacy','legacy','owner','https://clips.test/legacy','manual_upload') RETURNING id::bigint")
+        .fetch_one(&pool).await.expect("unmanaged legacy clip");
+    let slot = utc("2026-10-15T16:00:00Z");
+    production_jobs::insert(
+        &pool,
+        &NewProductionJob {
+            twitch_user_id: "owner".into(),
+            clip_id: reserved,
+            source: JobSource::Manual,
+            requested_mode: Some(ProductionMode::Static),
+            scheduled_at: Some(slot),
+            max_attempts: 3,
+        },
+    )
+    .await
+    .expect("production reservation");
+    let rejected = sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,platform,status,scheduled_at) VALUES ($1,'youtube','pending',$2)")
+        .bind(legacy).bind(slot).execute(&pool).await.expect_err("legacy upload in a reserved slot");
+    assert_eq!(
+        rejected
+            .as_database_error()
+            .expect("actual shared slot guard")
+            .code()
+            .as_deref(),
+        Some("23505")
+    );
+    let moved: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id,platform,status,scheduled_at) VALUES ($1,'youtube','pending',$2) RETURNING id")
+        .bind(legacy).bind(slot + Duration::hours(1)).fetch_one(&pool).await.expect("legacy upload in a free slot");
+    let rejected =
+        sqlx::query("UPDATE twitch_clips_upload_queue SET scheduled_at = $2 WHERE id = $1")
+            .bind(moved)
+            .bind(slot)
+            .execute(&pool)
+            .await
+            .expect_err("legacy reschedule into a reserved slot");
+    assert_eq!(
+        rejected
+            .as_database_error()
+            .expect("actual shared slot guard")
+            .code()
+            .as_deref(),
+        Some("23505")
+    );
     cleanup(pool).await;
 }
