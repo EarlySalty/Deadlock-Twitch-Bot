@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Archive, Check, ExternalLink, RefreshCw, Save } from "lucide-react";
 import { getBrowserTimezone } from "@/api/core";
-import { useT } from "@/context/LanguageContext";
+import { useLanguage, useT } from "@/context/LanguageContext";
 import { importPoolApi } from "./api";
 import {
   activeImport,
@@ -69,6 +69,7 @@ function OwnerImportPool({
   onChanged?: () => void;
 }) {
   const t = useT();
+  const { locale } = useLanguage();
   const queryClient = useQueryClient();
   const id = useId();
   const mounted = useRef(false);
@@ -465,7 +466,7 @@ function OwnerImportPool({
           </fieldset>
           <p id={`${id}-date-help`} className="import-pool-help">
             {parsed?.preferences
-              ? `${t(filterDescription(parsed.preferences.clip_date_filter))}. ${t("Kalendertage gelten in der gewählten Zeitzone. Zukünftige Clips werden nicht importiert.")}`
+              ? `${filterDescription(parsed.preferences.clip_date_filter, t)}. ${t("Kalendertage gelten in der gewählten Zeitzone. Zukünftige Clips werden nicht importiert.")}`
               : t(parsed?.error ?? "")}
           </p>
           <p className="import-pool-help">
@@ -626,9 +627,10 @@ function OwnerImportPool({
                       {localTimestamp(
                         clip.source_created_at,
                         page.preferences.timezone,
+                        locale,
                       )}
                       {metadata.duration !== null
-                        ? ` · ${metadata.duration} s`
+                        ? ` · ${metadata.duration.toLocaleString(locale)} s`
                         : ""}
                     </p>
                     <p className="import-pool-identity">
@@ -644,6 +646,7 @@ function OwnerImportPool({
                         {localTimestamp(
                           clip.first_selected_at,
                           page.preferences.timezone,
+                          locale,
                         )}
                       </p>
                     )}
@@ -653,6 +656,7 @@ function OwnerImportPool({
                         {localTimestamp(
                           clip.processed_at,
                           page.preferences.timezone,
+                          locale,
                         )}
                       </p>
                     )}
@@ -662,6 +666,7 @@ function OwnerImportPool({
                         {localTimestamp(
                           clip.published_at,
                           page.preferences.timezone,
+                          locale,
                         )}
                       </p>
                     )}

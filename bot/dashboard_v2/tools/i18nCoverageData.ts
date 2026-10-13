@@ -3,7 +3,7 @@ export const EXCLUDED_PATHS: RegExp[] = [
   /^src\/preview\//,
   /^src\/types\//,
   /\.test\.tsx?$/,
-  /social/i,
+  /social(?!media\/autopilot\/import-pool\/ImportProgress\.tsx$)/i,
   /^src\/main\.tsx$/,
   /^src\/runtimeConfig\.ts$/,
   /^src\/tabAliases\.ts$/,
