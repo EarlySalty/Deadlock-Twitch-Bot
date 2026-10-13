@@ -35,6 +35,11 @@ const REMINDER_DEDUPE_WINDOW: Duration = Duration::from_secs(300);
 /// byte-identisch (inkl. der ASCII-Schreibweise „Fuer"), damit die nativ
 /// gesendete Chat-Nachricht 1:1 der Python-Variante entspricht (Parität).
 const REAUTH_REMINDER_TEXT: &str = "Kurze Erinnerung: Fuer den Raid-/Stats-Bot fehlt noch die neue Twitch-Autorisierung. Bitte im Dashboard einloggen und Twitch neu verbinden. Falls du die DM brauchst: Der Re-Auth-Link wurde dir bereits auf Discord geschickt.";
+const REAUTH_REMINDER_TEXT_EN: &str = "Quick reminder: the raid/stats bot still needs the new Twitch authorization. Please log into the dashboard and reconnect Twitch. If you need the DM: the re-auth link was already sent to you on Discord.";
+
+fn reauth_reminder_text(lang: tb_domain::UiLang) -> &'static str {
+    lang.pick(REAUTH_REMINDER_TEXT, REAUTH_REMINDER_TEXT_EN)
+}
 
 /// Sendet beim Go-Live einmalig eine Re-Auth-Erinnerung an Partner mit
 /// `needs_reauth`. Hält ein In-Memory-Dedupe pro Broadcaster.
@@ -88,9 +93,10 @@ impl ReauthReminder {
             }
         }
 
+        let lang = tb_chat::channel_ui_lang(&self.pool, broadcaster_id).await;
         match self
             .chat
-            .send_message(broadcaster_id, REAUTH_REMINDER_TEXT)
+            .send_message(broadcaster_id, reauth_reminder_text(lang))
             .await
         {
             Ok(SendOutcome::Sent) => {

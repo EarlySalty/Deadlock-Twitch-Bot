@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 tb-config = { workspace = true }
+tb-domain = { workspace = true }
 async-trait = { workspace = true }
 chrono      = { workspace = true }
 axum        = { workspace = true }

@@ -203,6 +203,7 @@ pub struct RaidGreetingMonitor {
     live: Option<Arc<dyn RaidTargetLiveProbe>>,
     courtesy: Option<Arc<dyn CourtesyRecorder>>,
     aliases: Option<Arc<dyn AliasResolver>>,
+    pool: Option<sqlx::PgPool>,
     pending: Arc<Mutex<HashMap<String, PendingGreeting>>>,
     greeting_window: Duration,
 }
@@ -215,9 +216,15 @@ impl RaidGreetingMonitor {
             live: None,
             courtesy: None,
             aliases: None,
+            pool: None,
             pending: Arc::new(Mutex::new(HashMap::new())),
             greeting_window: GREETING_WINDOW,
         }
+    }
+
+    pub fn with_pool(mut self, pool: sqlx::PgPool) -> Self {
+        self.pool = Some(pool);
+        self
     }
 
     /// Endet der Zielstream innerhalb des Fensters (Stream-Ende oder Weiter-Raid),
@@ -254,6 +261,7 @@ impl RaidGreetingMonitor {
             live: None,
             courtesy: None,
             aliases: None,
+            pool: None,
             pending: Arc::new(Mutex::new(HashMap::new())),
             greeting_window,
         }
@@ -517,6 +525,7 @@ impl RaidGreetingMonitor {
         let probe = self.probe.clone();
         let live = self.live.clone();
         let courtesy = self.courtesy.clone();
+        let pool = self.pool.clone();
         let greeting_window = self.greeting_window;
         tokio::spawn(async move {
             tokio::time::sleep(greeting_window).await;
@@ -576,7 +585,7 @@ impl RaidGreetingMonitor {
                     .await
                     .map(|last| (Utc::now() - last).num_days());
                 if should_remind(outcome, history.class, days_since) {
-                    whisper_sent = send_reminder(&chat, &item).await;
+                    whisper_sent = send_reminder(&chat, &item, pool.as_ref()).await;
                 } else {
                     tracing::info!(
                         from = %item.from_broadcaster_login,
@@ -590,7 +599,7 @@ impl RaidGreetingMonitor {
             } else if outcome == CourtesyOutcome::Classified(CourtesyClass::Silent) {
                 // Ohne Recorder gibt es keine Historie und keine Drosselung;
                 // dann bleibt es beim bisherigen Verhalten.
-                whisper_sent = send_reminder(&chat, &item).await;
+                whisper_sent = send_reminder(&chat, &item, pool.as_ref()).await;
             }
 
             tracing::info!(
@@ -640,13 +649,21 @@ async fn target_stream_ended(live: &Option<Arc<dyn RaidTargetLiveProbe>>, login:
 ///
 /// Ziel ist der als Haupt markierte Account der Person, falls es einen gibt:
 /// ein selten genutzter Zweitaccount sieht die Whisper womöglich nie.
-async fn send_reminder(chat: &Arc<dyn ChatApi>, item: &PendingGreeting) -> bool {
+async fn send_reminder(
+    chat: &Arc<dyn ChatApi>,
+    item: &PendingGreeting,
+    pool: Option<&sqlx::PgPool>,
+) -> bool {
     let target_id = item
         .alias_group
         .as_ref()
         .and_then(|group| group.primary_user_id.as_deref())
         .unwrap_or(&item.from_broadcaster_id);
-    match chat.send_whisper(target_id, WHISPER_REMINDER).await {
+    let lang = match pool {
+        Some(pool) => tb_chat::channel_ui_lang(pool, &item.from_broadcaster_id).await,
+        None => tb_domain::UiLang::De,
+    };
+    match chat.send_whisper(target_id, whisper_reminder(lang)).await {
         Ok(true) => {
             tracing::info!(
                 from = %item.from_broadcaster_login,
@@ -758,6 +775,11 @@ impl RaidTargetLiveProbe for LiveStateTargetProbe {
 
 /// Der Whisper geht als DM direkt an den Raider, ein @-Mention wäre doppelt gemoppelt.
 const WHISPER_REMINDER: &str = "Hey, denk nach dem Raid dran: Ein kurzes Hallo und Tschüss im Chat gehört zum guten Ton :) Das macht den Raid viel persönlicher, so bleibt man am besten im Kopf und stärkt die Connection!";
+const WHISPER_REMINDER_EN: &str = "Hey, after the raid remember: a quick hello and goodbye in chat is good manners :) It makes the raid more personal, so you stay in people's minds and strengthen the connection!";
+
+fn whisper_reminder(lang: tb_domain::UiLang) -> &'static str {
+    lang.pick(WHISPER_REMINDER, WHISPER_REMINDER_EN)
+}
 
 #[cfg(test)]
 mod tests {
@@ -1265,6 +1287,15 @@ mod tests {
         assert!(lower.contains("tschüss"), "{WHISPER_REMINDER}");
         // DM an den Raider: ein @-Mention wäre doppelt gemoppelt
         assert!(!WHISPER_REMINDER.contains('@'), "{WHISPER_REMINDER}");
+    }
+
+    #[test]
+    fn whisper_reminder_english() {
+        let text = whisper_reminder(tb_domain::UiLang::En);
+        assert!(text.to_lowercase().contains("hello"));
+        assert!(text.to_lowercase().contains("goodbye"));
+        assert!(!text.contains('\u{2014}'));
+        assert!(!text.contains('@'));
     }
 
     #[test]

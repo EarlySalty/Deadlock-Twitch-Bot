@@ -44,7 +44,17 @@ const GREETING_OFFLINE_WINDOW_HOURS: i32 = 6;
 // Rückgruß, keine Begrüßung: der Bot weiß nicht, ob jemand neu ist — "willkommen
 // im Chat" an einen Stammgast liest sich falsch.
 const GREETING_REPLY: &str = "@{chatter} Hey, schön dass du da bist! 💜";
+const GREETING_REPLY_EN: &str = "@{chatter} Hey, glad you're here! 💜";
 const RELEASE_REPLY: &str = "@{chatter} Ein offizielles Release-Datum gibt es leider noch nicht, das Warten nervt uns auch. Wenn du trotzdem schon reinschauen magst: tipp !invite, dann zeige ich dir den Weg zu einer Einladung.";
+const RELEASE_REPLY_EN: &str = "@{chatter} There is no official release date yet, waiting sucks for us too. If you still want to look around: type !invite and I will show you the way to an invite.";
+
+pub fn greeting_reply(lang: tb_domain::UiLang) -> &'static str {
+    lang.pick(GREETING_REPLY, GREETING_REPLY_EN)
+}
+
+pub fn release_reply(lang: tb_domain::UiLang) -> &'static str {
+    lang.pick(RELEASE_REPLY, RELEASE_REPLY_EN)
+}
 
 /// Grußformeln — die Nachricht darf praktisch nur daraus bestehen.
 fn greeting_re() -> &'static Regex {
@@ -277,9 +287,10 @@ impl StandardReplies {
             return false;
         };
 
+        let lang = crate::ui_lang::channel_ui_lang(&self.pool, &event.broadcaster_user_id).await;
         let template = match kind {
-            StandardReply::Greeting => GREETING_REPLY,
-            StandardReply::ReleaseDate => RELEASE_REPLY,
+            StandardReply::Greeting => greeting_reply(lang),
+            StandardReply::ReleaseDate => release_reply(lang),
         };
         let message = template.replace("{chatter}", &event.chatter_user_login);
 
@@ -346,6 +357,16 @@ impl StandardReplies {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn greeting_and_release_follow_language() {
+        assert!(greeting_reply(tb_domain::UiLang::De).contains("schön"));
+        assert!(greeting_reply(tb_domain::UiLang::En).contains("glad you're here"));
+        assert!(release_reply(tb_domain::UiLang::De).contains("Release-Datum"));
+        assert!(release_reply(tb_domain::UiLang::En).contains("release date"));
+        assert!(!greeting_reply(tb_domain::UiLang::En).contains('\u{2014}'));
+        assert!(!release_reply(tb_domain::UiLang::En).contains('\u{2014}'));
+    }
 
     use crate::api::BanOutcome;
     use crate::types::ChatMessageBody;

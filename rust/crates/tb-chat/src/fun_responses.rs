@@ -19,8 +19,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use sqlx::PgPool;
+
 use crate::api::ChatApi;
 use crate::types::ChatMessageEvent;
+use crate::ui_lang::channel_ui_lang;
 
 // ---------------------------------------------------------------------------
 // Konstanten — exakt aus bot/chat/bot.py Z. 869–872
@@ -31,6 +34,10 @@ use crate::types::ChatMessageEvent;
 const THANKS_REPLIES: &[&str] = &[
     "Danke, ich wusste ja, dass ich gut bin. WiltedRose",
     "Ach hör auf, sonst werd ich noch rot. WiltedRose",
+];
+const THANKS_REPLIES_EN: &[&str] = &[
+    "Thanks, I knew I was good. WiltedRose",
+    "Stop it, you'll make me blush. WiltedRose",
 ];
 
 /// Trigger-Wörter für den Danke-Check (bot.py Z. 865).
@@ -53,6 +60,7 @@ const FUN_REPLY_COOLDOWN_SECS: u64 = 90;
 /// ```
 pub struct FunResponses {
     api: Arc<dyn ChatApi>,
+    pool: Option<PgPool>,
     /// Aktivierungs-Flag — `false` unterdrückt alle Antworten.
     /// Entspricht `_fun_thanks_reply_enabled` (bot.py Z. 190).
     enabled: bool,
@@ -72,10 +80,16 @@ impl FunResponses {
     pub fn new(api: Arc<dyn ChatApi>, enabled: bool) -> Self {
         Self {
             api,
+            pool: None,
             enabled,
             cooldowns: Mutex::new(HashMap::new()),
             counter: Mutex::new(0),
         }
+    }
+
+    pub fn with_pool(mut self, pool: PgPool) -> Self {
+        self.pool = Some(pool);
+        self
     }
 
     /// Prüft ob eine Danke-Antwort ausgelöst werden soll und sendet sie ggf.
@@ -115,7 +129,11 @@ impl FunResponses {
             return;
         }
 
-        let reply = self.pick_reply();
+        let lang = match &self.pool {
+            Some(pool) => channel_ui_lang(pool, &event.broadcaster_user_id).await,
+            None => tb_domain::UiLang::De,
+        };
+        let reply = self.pick_reply(lang);
         // Fehler beim Senden werden weiter ignoriert (bot.py Z. 874), aber nicht verschluckt.
         if let Err(error) = self
             .api
@@ -143,12 +161,15 @@ impl FunResponses {
         true
     }
 
-    /// Wählt deterministisch-abwechselnd eine Antwort (bot.py Z. 868 `random.choice`).
-    fn pick_reply(&self) -> &'static str {
+    fn pick_reply(&self, lang: tb_domain::UiLang) -> &'static str {
+        let replies = match lang {
+            tb_domain::UiLang::De => THANKS_REPLIES,
+            tb_domain::UiLang::En => THANKS_REPLIES_EN,
+        };
         let mut ctr = self.counter.lock().expect("FunResponses counter lock");
-        let idx = *ctr % THANKS_REPLIES.len();
+        let idx = *ctr % replies.len();
         *ctr = ctr.wrapping_add(1);
-        THANKS_REPLIES[idx]
+        replies[idx]
     }
 }
 
@@ -179,6 +200,17 @@ mod tests {
         fn messages(&self) -> Vec<(String, String)> {
             self.sent.lock().unwrap().clone()
         }
+    }
+
+    #[test]
+    fn thanks_replies_follow_language() {
+        assert!(THANKS_REPLIES[0].contains("Danke"));
+        assert!(THANKS_REPLIES_EN[0].contains("Thanks"));
+        assert!(!THANKS_REPLIES_EN.iter().any(|s| s.contains('\u{2014}')));
+        let de = FunResponses::new(MockApi::new(), true);
+        assert!(de.pick_reply(tb_domain::UiLang::De).contains("Danke"));
+        let en = FunResponses::new(MockApi::new(), true);
+        assert!(en.pick_reply(tb_domain::UiLang::En).contains("Thanks"));
     }
 
     #[async_trait]

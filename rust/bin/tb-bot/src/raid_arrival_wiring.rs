@@ -13,7 +13,7 @@ use chrono::Utc;
 use sqlx::PgPool;
 use tb_monitoring::sessions::tracker::FollowerCountSource;
 use tb_raid::{
-    build_partner_raid_message, build_recruitment_message, classify_partner_raid_arrival,
+    build_partner_raid_message_for, build_recruitment_message_for, classify_partner_raid_arrival,
     classify_partner_raid_arrival_with_expectation, decide_blacklist_action,
     plan_recruitment_delivery, serialize_confirmation_signals, ArrivalConfirmationService,
     ArrivalSignalContext, ArrivalTrackingStore, BlacklistScheduleAction,
@@ -687,7 +687,9 @@ impl RaidArrivalSinkImpl {
         };
 
         // 4. Nachricht bauen (build_partner_raid_message, raid_messaging.rs:28).
-        let message = build_partner_raid_message(
+        let lang = tb_chat::channel_ui_lang(&self.pool, to_broadcaster_id).await;
+        let message = build_partner_raid_message_for(
+            lang,
             from_broadcaster_login,
             to_broadcaster_login,
             viewer_count,
@@ -861,7 +863,8 @@ impl RaidArrivalSinkImpl {
             return;
         };
 
-        let message = build_recruitment_message(message_variant, to_broadcaster_login);
+        let lang = tb_chat::channel_ui_lang(&self.pool, to_broadcaster_id).await;
+        let message = build_recruitment_message_for(lang, message_variant, to_broadcaster_login);
 
         let pool = self.pool.clone();
         let outbound_suppression = self.outbound_suppression.clone();
