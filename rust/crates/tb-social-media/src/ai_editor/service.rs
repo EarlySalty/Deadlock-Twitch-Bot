@@ -12,6 +12,8 @@ use super::{
     AiEditorError, EditorRuntime,
 };
 
+const LEARNING_INTERVAL: Duration = Duration::from_secs(900);
+
 fn attempt_limit(runtime: &EditorRuntime) -> Result<AttemptLimit, AiEditorError> {
     AttemptLimit::from_server_config(runtime.limits.stage_attempts).map_err(Into::into)
 }
@@ -241,11 +243,31 @@ impl ManualWorker {
     }
 
     pub async fn run(self) {
+        let mut last_learning: Option<Instant> = None;
         loop {
             if let Err(error) = self.process_next().await {
                 tracing::warn!(error = %error, "Manual AI production could not finish");
             }
+            if last_learning.is_none_or(|at| at.elapsed() >= LEARNING_INTERVAL) {
+                last_learning = Some(Instant::now());
+                self.learn().await;
+            }
             tokio::time::sleep(Duration::from_millis(self.runtime.limits.worker_poll_ms)).await;
+        }
+    }
+
+    pub async fn learn(&self) {
+        match super::learning::run_pass(&self.pool, self.runtime.limits.max_skill_bytes).await {
+            Ok(report) if report.profiles_updated > 0 || !report.skills_changed.is_empty() => {
+                tracing::info!(
+                    profiles = report.profiles_updated,
+                    skills = report.skills_changed.len(),
+                    proposals = report.proposals_recorded,
+                    "AI feedback learning updated"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => tracing::warn!(error = %error, "AI feedback learning failed"),
         }
     }
 
