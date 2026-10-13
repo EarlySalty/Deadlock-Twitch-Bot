@@ -185,8 +185,8 @@ pub fn render_setup_report(report: &SetupReport) -> String {
          The Hub needs neither Administrator nor \"Mention @everyone\".\n",
     );
     out.push_str(
-        "\nChannels and roles (announcements, streamer role, ping role) will be \
-         configured in a later step. Channel-specific overrides are checked then.",
+        "\nPass channel, role, language, invite and auto-partner options to `/setup` \
+         to save them for this server. Channel-specific overrides are checked then.",
     );
     out
 }
@@ -343,7 +343,7 @@ mod tests {
         assert!(text.contains("below"));
         assert!(text.contains("@mention this role"));
         assert!(text.contains("neither Administrator"));
-        assert!(text.contains("later step"));
+        assert!(text.contains("Pass channel, role, language"));
         assert!(text.len() < 2000);
     }
 

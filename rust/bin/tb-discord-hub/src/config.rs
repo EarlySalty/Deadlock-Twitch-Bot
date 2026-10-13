@@ -38,6 +38,7 @@ pub struct HubConfig {
     pub bot_token: Option<String>,
     pub application_id: Option<u64>,
     pub community_guild_id: u64,
+    pub database_url: Option<String>,
 }
 
 impl std::fmt::Debug for HubConfig {
@@ -52,6 +53,10 @@ impl std::fmt::Debug for HubConfig {
             .field("bot_token", &self.bot_token.as_ref().map(|_| "[geschützt]"))
             .field("application_id", &self.application_id)
             .field("community_guild_id", &self.community_guild_id)
+            .field(
+                "database_url",
+                &self.database_url.as_ref().map(|_| "[geschützt]"),
+            )
             .finish()
     }
 }
@@ -128,6 +133,7 @@ impl HubConfig {
         let application_id = parse_opt::<u64>(get, "DISCORD_HUB_APPLICATION_ID")?;
         let community_guild_id = parse_opt::<u64>(get, "DISCORD_HUB_COMMUNITY_GUILD_ID")?
             .unwrap_or(DEFAULT_COMMUNITY_GUILD_ID);
+        let database_url = value(get, "DATABASE_URL");
 
         Ok(Self {
             host,
@@ -138,6 +144,7 @@ impl HubConfig {
             bot_token,
             application_id,
             community_guild_id,
+            database_url,
         })
     }
 
@@ -175,6 +182,7 @@ mod tests {
         assert_eq!(c.broker_token, "t");
         assert!(c.bot_token.is_none());
         assert!(c.application_id.is_none());
+        assert!(c.database_url.is_none());
         assert_eq!(c.community_guild_id, DEFAULT_COMMUNITY_GUILD_ID);
         assert_eq!(c.bind_addr(), "127.0.0.1:8771");
     }
@@ -192,6 +200,7 @@ mod tests {
             ("DISCORD_HUB_BOT_TOKEN", "bot"),
             ("DISCORD_HUB_APPLICATION_ID", "42"),
             ("DISCORD_HUB_COMMUNITY_GUILD_ID", "7"),
+            ("DATABASE_URL", "postgres://x"),
         ])
         .unwrap();
         assert_eq!(c.internal_token, "hub");
@@ -201,6 +210,7 @@ mod tests {
         assert_eq!(c.bot_token.as_deref(), Some("bot"));
         assert_eq!(c.application_id, Some(42));
         assert_eq!(c.community_guild_id, 7);
+        assert_eq!(c.database_url.as_deref(), Some("postgres://x"));
     }
 
     #[test]
@@ -253,6 +263,7 @@ mod tests {
             ("TWITCH_INTERNAL_API_TOKEN", "geheim-intern"),
             ("MASTER_BROKER_TOKEN", "geheim-broker"),
             ("DISCORD_HUB_BOT_TOKEN", "geheim-bot"),
+            ("DATABASE_URL", "postgres://geheim-db"),
         ])
         .unwrap();
         let s = format!("{c:?}");

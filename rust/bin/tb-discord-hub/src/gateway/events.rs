@@ -33,6 +33,18 @@ pub struct SetupInteraction {
     pub guild_id: Option<u64>,
     /// `app_permissions` der Interaction (Rechte des Bots im Kanal), als Rückfall.
     pub app_permissions: Option<u64>,
+    pub options: SetupOptions,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SetupOptions {
+    pub language: Option<String>,
+    pub announce_channel_id: Option<u64>,
+    pub alert_channel_id: Option<u64>,
+    pub streamer_role_id: Option<u64>,
+    pub ping_role_id: Option<u64>,
+    pub invite: Option<String>,
+    pub auto_partner: Option<bool>,
 }
 
 /// Interaction-Typ APPLICATION_COMMAND.
@@ -89,10 +101,47 @@ pub fn map_dispatch(name: &str, d: &Value) -> Option<HubEvent> {
                 application_id: snowflake(d.get("application_id"))?,
                 guild_id: snowflake(d.get("guild_id")),
                 app_permissions: snowflake(d.get("app_permissions")),
+                options: parse_setup_options(d.get("data").and_then(|data| data.get("options"))),
             }))
         }
         _ => None,
     }
+}
+
+fn parse_setup_options(options: Option<&Value>) -> SetupOptions {
+    let mut parsed = SetupOptions::default();
+    let Some(options) = options.and_then(Value::as_array) else {
+        return parsed;
+    };
+    for option in options {
+        let Some(name) = option.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let value = option.get("value");
+        match name {
+            "language" => {
+                if let Some(lang) = value.and_then(Value::as_str) {
+                    if lang == "de" || lang == "en" {
+                        parsed.language = Some(lang.to_string());
+                    }
+                }
+            }
+            "announce_channel" => parsed.announce_channel_id = snowflake(value),
+            "alert_channel" => parsed.alert_channel_id = snowflake(value),
+            "streamer_role" => parsed.streamer_role_id = snowflake(value),
+            "ping_role" => parsed.ping_role_id = snowflake(value),
+            "invite" => {
+                parsed.invite = value
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty() && s.len() <= 200)
+                    .map(str::to_string);
+            }
+            "auto_partner" => parsed.auto_partner = value.and_then(Value::as_bool),
+            _ => {}
+        }
+    }
+    parsed
 }
 
 #[cfg(test)]
@@ -176,6 +225,7 @@ mod tests {
                 application_id: 77,
                 guild_id: Some(5),
                 app_permissions: Some(268454912),
+                options: SetupOptions::default(),
             }))
         );
     }
@@ -197,5 +247,32 @@ mod tests {
     #[test]
     fn unbekannt_ignoriert() {
         assert_eq!(map_dispatch("MESSAGE_CREATE", &json!({})), None);
+    }
+
+    #[test]
+    fn setup_optionen() {
+        let d = json!({
+            "id": "11", "type": 2, "token": "tok", "application_id": "77",
+            "guild_id": "5",
+            "data": {
+                "name": "setup",
+                "options": [
+                    {"name": "language", "type": 3, "value": "en"},
+                    {"name": "announce_channel", "type": 7, "value": "9"},
+                    {"name": "auto_partner", "type": 5, "value": false},
+                    {"name": "invite", "type": 3, "value": "https://discord.gg/abc"}
+                ]
+            }
+        });
+        let Some(HubEvent::SetupCommand(inter)) = map_dispatch("INTERACTION_CREATE", &d) else {
+            panic!("setup erwartet");
+        };
+        assert_eq!(inter.options.language.as_deref(), Some("en"));
+        assert_eq!(inter.options.announce_channel_id, Some(9));
+        assert_eq!(inter.options.auto_partner, Some(false));
+        assert_eq!(
+            inter.options.invite.as_deref(),
+            Some("https://discord.gg/abc")
+        );
     }
 }
