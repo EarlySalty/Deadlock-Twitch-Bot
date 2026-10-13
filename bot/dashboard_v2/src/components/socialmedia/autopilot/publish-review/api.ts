@@ -99,7 +99,11 @@ export interface PublishReviewClient {
 
 const base = '/twitch/social-media/api/autopilot/publish';
 
-async function request<T>(owner: string, path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
+function publishUrl(path: string): string {
+  return `${base}${path}`;
+}
+
+async function request<T>(owner: string, url: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (method !== 'GET') {
     const auth = await fetchAuthStatus();
@@ -107,15 +111,15 @@ async function request<T>(owner: string, path: string, method = 'GET', body?: un
     if (csrf) headers['X-CSRF-Token'] = csrf;
     headers['Content-Type'] = 'application/json';
   }
-  return fetchJson<T>(`${base}${path}?${new URLSearchParams({ twitch_user_id: owner })}`, withCookieCredentials({ method, headers, signal, body: body === undefined ? undefined : JSON.stringify(body) }));
+  return fetchJson<T>(`${url}?${new URLSearchParams({ twitch_user_id: owner })}`, withCookieCredentials({ method, headers, signal, body: body === undefined ? undefined : JSON.stringify(body) }));
 }
 
 export const publishReviewClient: PublishReviewClient = {
-  load: (owner, signal) => request(owner, '', 'GET', undefined, signal),
-  transition: (owner, input) => request(owner, '/mode', 'PUT', input),
-  pause: (owner, paused) => request(owner, '/pause', 'PUT', { paused }),
-  preferences: (owner, input) => request(owner, '/notifications', 'PUT', input),
-  approve: (owner, video, destinations) => request(owner, `/videos/${video}/approval`, 'PUT', { destinations }),
-  schedule: (owner, video, platforms) => request(owner, `/videos/${video}/schedule`, 'POST', { platforms }),
-  retry: (owner, video, platform) => request(owner, `/videos/${video}/retry`, 'POST', { platform }),
+  load: (owner, signal) => request(owner, publishUrl(''), 'GET', undefined, signal),
+  transition: (owner, input) => request(owner, publishUrl('/mode'), 'PUT', input),
+  pause: (owner, paused) => request(owner, publishUrl('/pause'), 'PUT', { paused }),
+  preferences: (owner, input) => request(owner, publishUrl('/notifications'), 'PUT', input),
+  approve: (owner, video, destinations) => request(owner, publishUrl(`/videos/${video}/approval`), 'PUT', { destinations }),
+  schedule: (owner, video, platforms) => request(owner, publishUrl(`/videos/${video}/schedule`), 'POST', { platforms }),
+  retry: (owner, video, platform) => request(owner, publishUrl(`/videos/${video}/retry`), 'POST', { platform }),
 };

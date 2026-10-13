@@ -214,6 +214,7 @@ const API_MODULE = [
   'src/api/socialMedia.ts',
   'src/components/socialmedia/autopilot/import-pool/api.ts',
   'src/components/socialmedia/autopilot/schedule-queue/api.ts',
+  'src/components/socialmedia/autopilot/publish-review/api.ts',
 ];
 const RUST_ROUTEN = path.join(REPO, 'rust/crates/tb-dashboard-api/src/lib.rs');
 

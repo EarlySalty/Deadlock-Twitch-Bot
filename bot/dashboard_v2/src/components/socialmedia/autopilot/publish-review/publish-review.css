@@ -1,26 +1,26 @@
-.publish-review { color: var(--color-text-primary, #f1f1ed); font-family: var(--font-sans, sans-serif); font-size: 14px; line-height: 1.6; min-width: 0; color-scheme: dark; }
+.publish-review { color: var(--color-text-primary); font-family: var(--font-sans, sans-serif); font-size: 14px; line-height: 1.6; min-width: 0; color-scheme: dark; }
 .publish-review h2 { font-family: var(--font-display, sans-serif); font-size: 24px; font-weight: 600; line-height: 1.25; margin: 0 0 8px; }
 .publish-review h3 { font-size: 17px; font-weight: 600; line-height: 1.4; margin: 0 0 6px; }
-.publish-review h3 span { display: inline-block; font-size: 13px; font-weight: 400; color: var(--color-text-secondary, #b4b5b8); }
+.publish-review h3 span { display: inline-block; font-size: 13px; font-weight: 400; color: var(--color-text-secondary); }
 .publish-review p { margin: 0 0 12px; max-width: 72ch; overflow-wrap: anywhere; }
 .publish-review-header, .publish-mode-row, .publish-video > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .publish-review-header { margin-bottom: 24px; }
-.publish-mode-row { padding: 20px 0; border-top: 1px solid var(--color-border, #393b40); border-bottom: 1px solid var(--color-border, #393b40); margin-bottom: 24px; }
+.publish-mode-row { padding: 20px 0; border-top: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border); margin-bottom: 24px; }
 .publish-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
-.publish-review button { padding: 9px 14px; min-height: 44px; border: 1px solid var(--color-border, #393b40); border-radius: 8px; color: inherit; background: var(--color-card, #222429); font: inherit; font-weight: 600; cursor: pointer; }
-.publish-review button:hover:not(:disabled) { border-color: var(--color-primary, #d4af37); background: var(--color-bg, #292c31); }
-.publish-review button.publish-primary { background: var(--color-primary, #d4af37); color: var(--color-on-gold, #17191d); border-color: var(--color-primary, #d4af37); }
+.publish-review button { padding: 9px 14px; min-height: 44px; border: 1px solid var(--color-border); border-radius: 8px; color: inherit; background: var(--color-card); font: inherit; font-weight: 600; cursor: pointer; }
+.publish-review button:hover:not(:disabled) { border-color: var(--color-primary); background: var(--color-bg); }
+.publish-review button.publish-primary { background: var(--color-primary); color: var(--color-on-gold); border-color: var(--color-primary); }
 .publish-review button:disabled { opacity: .48; cursor: not-allowed; }
-.publish-review :focus-visible { outline: 2px solid var(--color-primary, #d4af37); outline-offset: 3px; }
-.publish-review input { accent-color: var(--color-primary, #d4af37); caret-color: var(--color-primary, #d4af37); }
+.publish-review :focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; }
+.publish-review input { accent-color: var(--color-primary); caret-color: var(--color-primary); }
 .publish-review input[type='checkbox'], .publish-review input[type='radio'] { width: 18px; height: 18px; flex-shrink: 0; }
 .publish-review label { display: flex; align-items: center; gap: 10px; min-height: 44px; }
-.publish-review ::selection { color: var(--color-on-gold, #17191d); background: var(--color-primary, #d4af37); }
+.publish-review ::selection { color: var(--color-on-gold); background: var(--color-primary); }
 .publish-error, .publish-message, .publish-note { padding: 10px 0; }
-.publish-error { color: var(--color-danger, #f6aaa6); }
-.publish-message { color: var(--color-success, #ade4be); }
-.publish-note, .publish-expiry, .publish-review dt { color: var(--color-text-secondary, #b4b5b8); }
-.publish-video { padding: 24px 0; border-bottom: 1px solid var(--color-border, #393b40); }
+.publish-error { color: var(--color-danger); }
+.publish-message { color: var(--color-success); }
+.publish-note, .publish-expiry, .publish-review dt { color: var(--color-text-secondary); }
+.publish-video { padding: 24px 0; border-bottom: 1px solid var(--color-border); }
 .publish-destinations { display: flex; flex-wrap: wrap; gap: 24px; margin: 20px 0; }
 .publish-destination { flex: 1 1 220px; min-width: 0; }
 .publish-destination > label { font-weight: 600; }
@@ -33,9 +33,9 @@
 .publish-preferences form { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 24px; margin-top: 12px; }
 .publish-review fieldset { border: 0; padding: 0; margin: 0 0 16px; min-width: 0; }
 .publish-review legend { font-weight: 600; margin-bottom: 8px; }
-.publish-review input[type='number'] { width: 82px; min-height: 44px; padding: 8px; border: 1px solid var(--color-border, #393b40); border-radius: 6px; background: var(--color-card, #222429); color: inherit; font: inherit; }
-.publish-mode-dialog { display: block; position: fixed; inset: 0; z-index: 100; margin: auto; width: min(560px, calc(100% - 32px)); max-height: calc(100dvh - 48px); padding: 24px; border: 1px solid var(--color-border, #393b40); border-radius: 12px; background: var(--color-card, #222429); color: var(--color-text-primary, #f1f1ed); overflow: auto; }
+.publish-review input[type='number'] { width: 82px; min-height: 44px; padding: 8px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-card); color: inherit; font: inherit; }
+.publish-mode-dialog { display: block; position: fixed; inset: 0; z-index: 100; margin: auto; width: min(560px, calc(100% - 32px)); max-height: calc(100dvh - 48px); padding: 24px; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-card); color: var(--color-text-primary); overflow: auto; }
 .publish-mode-dialog::backdrop { background: rgb(0 0 0 / .68); }
 .publish-notifications { margin-top: 28px; }
-.publish-notifications p { padding: 12px 0; border-bottom: 1px solid var(--color-border, #393b40); }
+.publish-notifications p { padding: 12px 0; border-bottom: 1px solid var(--color-border); }
 @media (max-width: 600px) { .publish-review-header, .publish-mode-row, .publish-video > header { flex-direction: column; gap: 12px; } .publish-review-header > button { align-self: flex-start; } .publish-actions { width: 100%; } .publish-actions button { flex: 1 1 150px; } .publish-mode-dialog { padding: 20px; } .publish-destinations { gap: 16px; } }
