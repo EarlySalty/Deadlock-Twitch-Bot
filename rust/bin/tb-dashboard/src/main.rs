@@ -588,6 +588,21 @@ async fn main() {
         }
     }
 
+    // Multi-Server Paket A: Discord-Login des Server-Admin-Dashboards über die
+    // Hub-Anwendung. Ohne DISCORD_HUB_CLIENT_ID/SECRET und
+    // TB_SERVER_ADMIN_OAUTH_REDIRECT_URI bleibt er aus (503).
+    match tb_dashboard_api::server_admin_login_config_from_env() {
+        Some(config) => {
+            app = app.layer(axum::Extension(config));
+            tracing::info!("Server-Admin-Login aktiv");
+        }
+        None => {
+            tracing::warn!(
+                "Server-Admin-Login-Config fehlt (DISCORD_HUB_CLIENT_ID/SECRET/TB_SERVER_ADMIN_OAUTH_REDIRECT_URI) — Server-Admin-Login deaktiviert"
+            );
+        }
+    }
+
     // P0 (B2): Nativer Stripe-Webhook (Quelle der Wahrheit fürs Bezahlt-Sein).
     // Ohne STRIPE_WEBHOOK_SECRET bleibt er aus → der Webhook-Pfad liefert 503
     // (statt in den toten Python-Proxy zu fallen). Secret aus Env (Infisical),

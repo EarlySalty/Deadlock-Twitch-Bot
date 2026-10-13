@@ -105,6 +105,7 @@ pub mod scam_guard_enforce;
 pub mod scam_guard_queue;
 pub mod scam_guard_settings;
 pub mod self_explainer;
+pub mod server_admin;
 pub mod session_detail;
 pub mod silent_settings;
 pub mod social_media;
