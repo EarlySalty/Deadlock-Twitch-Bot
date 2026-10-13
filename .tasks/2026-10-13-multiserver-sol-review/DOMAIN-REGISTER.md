@@ -55,6 +55,24 @@ Urgent fixes `wf_6130ec2d-a92` have non-overlapping ownership: Hub gateway REST 
 
 Operations implementation `wf_76bf0133-723` owns missing Hub release installer/launcher/unit support and Hub config default only, not Caddy, Cargo, relay, or gateway REST. App activation remains blocked: Infisical name inventory contains none of the three required Hub credential names, Hub unit/binary absent, old default8771 occupied. International public streamer URL still returns308, callback404. These are actual unmet prerequisites, not permission to publish or enable a broken service.
 
-Read-only migration/shadow proof `wf_77b32055-f7e` completed without writes. Production guild/shadow tables are absent. Applied version metadata is NOT confirmed: the selected credential's migration SELECT was denied, exit3, despite schema/aggregate queries passing. The earlier operations claim of three unapplied versions needs reconciliation before any migration file is renamed or edited.
+Read-only migration/shadow proof `wf_77b32055-f7e` completed without writes. Production guild/shadow tables are absent. Its restricted runtime credential could not read the migration ledger, exit3. Parent subsequently used the existing local postgres-peer migrator access, without credentials or privilege changes: read-only transaction on canonical `twitch_analytics`, port5432, returned 0 rows for versions20261012120000,20261012140000,20261012140100,20261012150000,20261013120000, exit0. These incoming versions are confirmed unapplied there. Fetch fresh origin/main and check version collisions before assigning a replacement migration identity.
 
 Anonymous projected shadow:77 existing streamers,61 canonical active partners. G-only projection matches; R-only and R-then-G produce8 false positives. R's inactive-membership constraint is incompatible with G's16 proposed inactive tuples without deactivated_at. These are projections, not post-migration/runtime parity proof. Correct the combined path and require actual zero-mismatch runtime evidence before cutover.
+
+## Stable assembly and repair ownership
+
+Assembly V2 is clean, committed and pushed at `7a15931f34fa8d0e40e85e5581eceb1504ded2ac`, branch `feat/multiserver-sol-assembly-v2-20261013`. It contains board79a3376a, main643553a and the four existing D follow-ups. Mechanical verification: dashboard Rust check, TypeScript, scoped Rustfmt and ESLint exited0;17 existing tests passed,0ignored. This is not semantic acceptance.
+
+Hub log redaction `5d6b8ade2faed7420272a87f8362a81f242952f7` and optional deployment support `1b21f0f0c844ceb4f349d49c492704898c0601ab` are clean local commits, not yet pushed or integrated. Independent exact-commit review: workflow `wf_7e897b16-337`, task `woz7cmi3i`, Rust log review, shell/unit review and Python-test review. No repeat compiler loops or production mutation in this phase.
+
+Stopped core pipeline `wf_1ca91233-373`, task `w9hvonbwc`, after the membership continuation reported changes appearing during its edits. No external actor is established. The workflow was explicitly stopped; targeted agent-stop calls then reported no registered task. Preserve all original dirty UI, membership and Hub-effects worktrees, including the complete typed-denylist draft. Do not resume these writers. Recovery uses fresh writers and fresh worktrees, reconciling drafts read-only instead of overwriting them.
+
+| Workflow | Exclusive repair ownership |
+| --- | --- |
+| `wf_35a331a5-0aa`, `wr55t9c67` | UI language state and ServerAdmin localization; Hub guild effects; membership service, canonical partner schema/backfill, runtime roles and typed-denylist caller fix |
+| `wf_886391d7-8ca`, `w8hd7tgk2` | Dashboard OAuth/onboarding/tenant authorization; central AI runtime guard and contributor provenance |
+| `wf_50f6349b-f7b`, `wi00qhpct` | Raid policy; chat/DM language and home advertising; international Caddy/FAQ/pricing; language-aware analytics/discovery |
+
+All writers inherit requested Sol and start from exact assembly7a15931f. Parent alone integrates and deploys. Pipelines independently review each finished branch. No same-file writers across scopes: bot main belongs to Hub until handover; bot raid_oauth_impl belongs to membership for typed error only until handover; Auth owns shared dashboard routing/session handlers; UI owns App and dictionary indices; DB owns existing incoming migrations and new versions13130000/13130100; Auth owns new version13140000. Discovery startup, bot OAuth domain wiring and any further shared edits are serialized after these owners finish.
+
+Static recovery `wf_9cf872ae-854` completed32 agents. Findings were independently verified, not assumed from initial drafts. Refuted claims excluded from fixes: foreign dashboard AI page hiding is unresolved product policy, and stated non-partner recruitment delivery is blocked by the actual ChatApi. All surviving findings are tracked in native journals and exact repair briefs, not duplicated as code structure here. Gate, combined acceptance, main merge, deployment and live mutation remain unperformed.
