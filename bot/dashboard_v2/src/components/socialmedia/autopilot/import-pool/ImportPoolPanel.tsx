@@ -1,34 +1,13 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Archive, ExternalLink, Film, RefreshCw, Save } from "lucide-react";
-import { getBrowserTimezone } from "@/api/core";
+
 import { useLanguage, useT } from "@/context/LanguageContext";
 import { importPoolApi } from "./api";
-import {
-  activeImport,
-  clipDuration,
-  clipStatus,
-  clipStatusTone,
-  clipThumbnail,
-  filterDescription,
-  localTimestamp,
-  parsePreferencesDraft,
-  poolError,
-  preferencesDraft,
-  samePreferences,
-  selectionAllowed,
-  sourceMetadata,
-  unauthorized,
-  type PreferencesDraft,
-} from "./presentation";
+import { activeImport, clipDuration, clipStatus, clipStatusTone, clipThumbnail, filterDescription, localTimestamp, parsePreferencesDraft, poolError, preferencesDraft, samePreferences, selectionAllowed, sourceMetadata, unauthorized, type PreferencesDraft } from "./presentation";
 import { ImportProgress } from "./ImportProgress";
 import { StudioSectionHeading } from '../../StudioSectionHeading';
-import type {
-  ImportJob,
-  ImportPoolApi,
-  ImportPoolPanelProps,
-  PoolPreferences,
-} from "./types";
+import type { ImportJob, ImportPoolApi, ImportPoolPanelProps, PoolPreferences } from "./types";
 import "./ImportPoolPanel.css";
 
 const PAGE_SIZE = 24;
@@ -473,25 +452,8 @@ function OwnerImportPool({
                   </option>
                 </select>
               </label>
-              <label htmlFor={`${id}-timezone`}>
-                {t("Zeitzone")}
-                <input
-                  id={`${id}-timezone`}
-                  className="studio-input"
-                  required
-                  spellCheck={false}
-                  value={current.timezone}
-                  onChange={(event) => edit({ timezone: event.target.value })}
-                />
-              </label>
             </div>
-            <button
-              className="import-pool-text-button"
-              type="button"
-              onClick={() => edit({ timezone: getBrowserTimezone() })}
-            >
-              {t("Browser-Zeitzone übernehmen")}
-            </button>
+            <a href="/twitch/verwaltung?tab=konto">{t("Zeitzone in Verwaltung ändern")}</a>
           </fieldset>
           <p id={`${id}-date-help`} className="import-pool-help">
             {parsed?.preferences

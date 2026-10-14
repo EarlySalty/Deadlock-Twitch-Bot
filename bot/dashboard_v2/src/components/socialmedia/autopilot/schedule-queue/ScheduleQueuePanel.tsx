@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Calendar, Clock3, RefreshCw, Trash2 } from 'lucide-react';
 import { StudioSectionHeading } from '../../StudioSectionHeading';
-import { ApiHttpError, getBrowserTimezone } from '@/api/core';
+import { ApiHttpError } from '@/api/core';
 import { scheduleQueueApi } from './api';
 import { ReviewJobActions } from './ReviewJobActions';
 import type { QueueJob, SchedulePatch, ScheduleQueueApi, ScheduleQueueSnapshot, ScheduleSettings } from './api';
@@ -110,12 +110,7 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
         if (!live.current || controller.signal.aborted || generation !== epoch.current) return;
         setSnapshot(result);
         if (!dirty.current) {
-          const timezone = result.persisted ? result.settings.timezone : getBrowserTimezone();
-          setDraft({ ...result.settings, timezone });
-          if (!result.persisted) {
-            setPatch({ timezone });
-            dirty.current = true;
-          }
+          setDraft(result.settings);
         }
         setError('');
         if (readMessage) {
@@ -233,8 +228,7 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
             {!draft.target_platforms.length && <p className="sq-help">Noch keine Zielplattform ausgewählt. Ohne Zielplattform wird kein Video veröffentlicht.</p>}
           </fieldset>
           <div className="sq-fields">
-            <label htmlFor={`${id}-zone`}>Zeitzone<input id={`${id}-zone`} value={draft.timezone} required list={`${id}-zones`} onChange={event => edit({ timezone: event.target.value })} /></label>
-            <datalist id={`${id}-zones`}><option value="Europe/Berlin" /><option value="Europe/Vienna" /><option value="Europe/Zurich" /><option value="UTC" /></datalist>
+            <a href="/twitch/verwaltung?tab=konto">Zeitzone in Verwaltung ändern</a>
             <label htmlFor={`${id}-lead`}>Vorlauf in Stunden<input id={`${id}-lead`} type="number" min="0" max="720" required value={Number.isFinite(draft.lead_time_hours) ? draft.lead_time_hours : ''} onChange={event => edit({ lead_time_hours: event.target.valueAsNumber })} /></label>
           </div>
           <p className="sq-help">Sommerzeit wird berücksichtigt. Auch bei kürzerem Vorlauf kann die Produktion starten. Verpasste Termine werden nicht gesammelt.</p>

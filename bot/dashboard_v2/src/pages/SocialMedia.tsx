@@ -3,9 +3,9 @@ import { ClipCard } from '@/components/socialmedia/ClipCard';
 import { StudioHero } from '@/components/socialmedia/StudioHero';
 import { useEffect, useMemo, useRef, useState, type ComponentType, type DragEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertCircle, ChevronDown, CheckCircle2, Archive, Film, Loader2, ShieldAlert, Layers3, Calendar, Gamepad2, ExternalLink, Pencil, SlidersHorizontal, Languages, DownloadCloud, Crop, List, LayoutGrid } from 'lucide-react';
+import { AlertCircle, ChevronDown, CheckCircle2, Archive, Film, Loader2, ShieldAlert, Layers3, Calendar, Gamepad2, ExternalLink, Pencil, SlidersHorizontal, DownloadCloud, Crop, List, LayoutGrid } from 'lucide-react';
 import { useLanguage, useT } from '@/context/LanguageContext';
-import { LANGUAGES, LANGUAGE_LABELS, type Language } from '@/i18n/dictionary';
+
 import { TikTokPostDialog } from '@/components/socialmedia/TikTokPostDialog';
 
 import { WorkspaceDialog } from '@/components/socialmedia/WorkspaceDialog';
@@ -521,9 +521,6 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
                         ),
                       }))
                     }
-                    isZeitzoneSaving={busy}
-                    zeitzoneError={null}
-                    onTimezoneChange={(timezone) => patch((plan) => ({ ...plan, timezone }))}
                   />
                   <CategoryCard
                     plan={draft}
@@ -613,7 +610,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
                   error={vodArchiveMutation.error}
                   onChange={(next) => vodArchiveMutation.mutate(next)}
                 />
-                <LanguageCard />
+
               </div>
             </div>
             <StudioSectionHeading
@@ -1317,22 +1314,6 @@ function pruefeZeiten(eingabe: string): { zeiten: string[] } | { fehler: string 
   return { zeiten };
 }
 
-/** Zeitzonenliste des Browsers, der eigene Standard steht vorn. */
-function zeitzonenListe(aktuelle: string): string[] {
-  let alle: string[];
-  try {
-    alle = Intl.supportedValuesOf('timeZone');
-  } catch {
-    // Aeltere Browser kennen supportedValuesOf nicht; dann bleibt die Liste
-    // auf dem eigenen Standard plus der gespeicherten Zone.
-    alle = [];
-  }
-  const vorn = ['Europe/Berlin', aktuelle].filter(
-    (zone, index, liste) => zone && liste.indexOf(zone) === index,
-  );
-  return [...vorn, ...alle.filter((zone) => !vorn.includes(zone))];
-}
-
 function PostingScheduleCard({
   availablePlatforms,
   plan,
@@ -1341,9 +1322,6 @@ function PostingScheduleCard({
   isSaving,
   error,
   onChange,
-  isZeitzoneSaving,
-  zeitzoneError,
-  onTimezoneChange,
 }: {
   availablePlatforms: string[];
   plan: PostingPlan | null;
@@ -1356,25 +1334,15 @@ function PostingScheduleCard({
     platform: SocialPlatform,
     payload: Partial<Omit<PlatformScheduleEntry, 'platform' | 'next_slot'>>,
   ) => void;
-  isZeitzoneSaving: boolean;
-  zeitzoneError: unknown;
-  onTimezoneChange: (timezone: string) => void;
 }) {
   const t = useT();
   const { language } = useLanguage();
   const locale = language === 'en' ? 'en-GB' : 'de-DE';
   const zeitzone = plan?.timezone ?? 'Europe/Berlin';
-  const zonen = useMemo(() => zeitzonenListe(zeitzone), [zeitzone]);
   // Ohne Plan zeigt die Karte Europe/Berlin und eine leere Plattformliste.
   // Beides ist geraten, deshalb bleibt hier bis zum naechsten erfolgreichen
   // Abruf alles gesperrt.
   const gesperrt = istGesperrt({ isLoading, isSaving, ladeFehler });
-  const zeitzoneGesperrt = istGesperrt({
-    isLoading,
-    isSaving: isZeitzoneSaving,
-    ladeFehler,
-  });
-
   const [formular, setFormular] = useState<Record<string, ZeitplanFormular>>({});
   const [feldFehler, setFeldFehler] = useState<Record<string, string>>({});
 
@@ -1445,32 +1413,14 @@ function PostingScheduleCard({
       <div className="flex items-center gap-2">
         <Calendar className="h-4 w-4 text-ui-accent" />
         <h3 className="text-sm font-semibold text-white">{t('Zeitplan')}</h3>
-        {(isSaving || isZeitzoneSaving) && (
+        {isSaving && (
           <Loader2 className="ml-auto h-4 w-4 animate-spin text-ui-accent" />
         )}
       </div>
 
       <LadeFehlerHinweis fehler={ladeFehler} />
 
-      <label className="block">
-        <span className="text-xs font-medium text-ui-faint">{t('Zeitzone des Kanals')}</span>
-        <select
-          value={zeitzone}
-          disabled={zeitzoneGesperrt}
-          onChange={(event) => onTimezoneChange(event.target.value)}
-          className="mt-1 w-full rounded-lg border border-border bg-ui-elevated px-3 py-2 text-sm text-ui-text outline-none transition-colors focus:border-ui-accent-strong/35 disabled:opacity-60"
-        >
-          {zonen.map((zone) => (
-            <option key={zone} value={zone}>
-              {zone}
-            </option>
-          ))}
-        </select>
-      </label>
-      <p className="text-sm text-ui-muted">{t('Zeiten gelten in {tz}.', { tz: zeitzone })}</p>
-      {zeitzoneError ? (
-        <div className="text-xs text-danger">{fehlerText(zeitzoneError, t)}</div>
-      ) : null}
+      <p className="text-sm text-ui-muted">{t('Zeiten gelten in {tz}.', { tz: zeitzone })} <a href="/twitch/verwaltung?tab=konto">{t('Zeitzone in Verwaltung ändern')}</a></p>
 
       <div className="space-y-3">
         {(plan?.platforms ?? []).map((eintrag) => {
@@ -2066,45 +2016,6 @@ function VodArchiveCard({
       </div>
 
       {error ? <div className="text-xs text-danger">{fehlerText(error, t)}</div> : null}
-    </div>
-  );
-}
-
-/**
- * Sprache der Oberflaeche. Steht bewusst neben den anderen Schaltern in den
- * Einstellungen und nicht im Kopf: es ist eine Einstellung, die man einmal
- * setzt. Die Wahl liegt im Browser (localStorage) und gilt fuer alle Routen
- * dieses Dashboards, ein Datenbankfeld braucht es dafuer nicht.
- */
-function LanguageCard() {
-  const { language, setLanguage, t } = useLanguage();
-
-  return (
-    <div className="space-y-4 rounded-2xl border border-border bg-ui-panel p-4">
-      <StudioSectionHeading title={t('Sprache')} icon={Languages} level={3} />
-      <p className="text-sm leading-6 text-ui-muted">
-        {t(
-          'Gilt für dieses Dashboard in diesem Browser. Nicht übersetzte Stellen bleiben auf Deutsch.',
-        )}
-      </p>
-      <div className="grid grid-cols-2 gap-2">
-        {LANGUAGES.map((option: Language) => (
-          <button
-            key={option}
-            type="button"
-            lang={option}
-            aria-pressed={language === option}
-            onClick={() => setLanguage(option)}
-            className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
-              language === option
-                ? 'border-ui-accent-strong/30 bg-ui-accent-strong/12 text-ui-accent-ink'
-                : 'border-border bg-white/[0.02] text-ui-muted hover:bg-white/[0.06] hover:text-white'
-            }`}
-          >
-            {LANGUAGE_LABELS[option]}
-          </button>
-        ))}
-      </div>
     </div>
   );
 }

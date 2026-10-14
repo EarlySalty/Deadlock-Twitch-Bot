@@ -1,3 +1,4 @@
+import { GlobalTimezone } from '@/components/verwaltung/GlobalTimezone';
 import { useEffect, useState, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
 import { Rise } from '../motion/Rise';
@@ -158,6 +159,7 @@ export function VerwaltungPage() {
 
   const kontoTab = (
     <>
+      {authStatus?.twitchUserId && <GlobalTimezone owner={String(authStatus.twitchUserId)} />}
       {/* Twitch OAuth Section */}
       <motion.section
         className="panel-card rounded-2xl p-5 md:p-6"

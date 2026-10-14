@@ -1,4 +1,12 @@
 export const SOCIAL_STUDIO_EN: Record<string, string> = {
+  'Zeitzone in Verwaltung ändern': 'Change timezone in account settings',
+  'Zeitzone speichern': 'Save timezone',
+  'Gilt für neue Twitch-Clips, den Auto-Pilot und den Clip-Vorrat. Bestehende Termine bleiben unverändert.': 'Applies to new Twitch clips, Auto-Pilot and the clip supply. Existing dates remain unchanged.',
+  'Die Zeitzonen konnten nicht geladen werden.': 'Timezones could not be loaded.',
+  'Die gespeicherten Zeitzonen unterscheiden sich: {zones}. Speichern gleicht alle drei Bereiche ab.': 'Stored timezones differ: {zones}. Saving synchronizes all three areas.',
+  'Zeitzone nicht überall gespeichert. Prüfe den aktuellen Stand und versuche es erneut.': 'Timezone was not saved everywhere. Check the current state and try again.',
+  'Zeitzone für alle drei Bereiche gespeichert.': 'Timezone saved for all three areas.',
+
   'KI-Bearbeitung verwenden': 'Use AI editing',
 
   'Speichern oder Laden fehlgeschlagen. Bitte erneut versuchen.': 'Saving or loading failed. Please try again.',
