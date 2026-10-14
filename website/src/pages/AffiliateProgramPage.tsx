@@ -1,8 +1,9 @@
+import { landingText, landingLink } from "@/lib/landingLocale";
 import {
   ArrowRight,
   CheckCircle2,
   CreditCard,
-  Infinity,
+  Infinity as InfinityIcon,
   LayoutDashboard,
   LifeBuoy,
   LogIn,
@@ -20,107 +21,131 @@ import { affiliateFeatures } from "@/data/affiliateFeatures";
 import { DISCORD_INVITE_URL, TWITCH_AFFILIATE_URL } from "@/data/externalLinks";
 
 const HERO_HIGHLIGHTS = [
-  { label: "Provision", value: "30%" },
-  { label: "Modell", value: "Dauerhaft" },
-  { label: "Auszahlung", value: "Automatisch" },
+  { label: landingText("Provision"), value: "30%" },
+  { label: landingText("Modell"), value: landingText("Dauerhaft") },
+  { label: landingText("Auszahlung"), value: landingText("Automatisch") },
 ];
 
 const HOW_IT_WORKS_STEPS = [
   {
-    eyebrow: "1. Mit Twitch anmelden",
-    title: "Ein Klick, kein Formular",
-    description:
+    eyebrow: landingText("1. Mit Twitch anmelden"),
+    title: landingText("Ein Klick, kein Formular"),
+    description: landingText(
       "Du meldest dich mit deinem Twitch-Account an und bist sofort registriert. Keine Adressdaten, kein Papierkram.",
+    ),
     bullets: [
-      "Mit deinem Twitch-Account anmelden und direkt loslegen.",
-      "Sofort registriert ohne manuelles Formular.",
-      "Keine Adressdaten und kein zusätzlicher Papierkram nötig.",
+      landingText("Mit deinem Twitch-Account anmelden und direkt loslegen."),
+      landingText("Sofort registriert ohne manuelles Formular."),
+      landingText("Keine Adressdaten und kein zusätzlicher Papierkram nötig."),
     ],
   },
   {
-    eyebrow: "2. Stripe-Konto verbinden",
-    title: "Auszahlungen sauber aufsetzen",
-    description:
-      "Im Portal klickst du auf \"Stripe-Konto verbinden\". Stripe ist der Zahlungsdienstleister, über den deine Provisionen automatisch auf dein Bankkonto kommen. Die Einrichtung dauert ca. 5 Minuten. Ohne Stripe werden Provisionen bis 50€ für dich gespeichert.",
+    eyebrow: landingText("2. Stripe-Konto verbinden"),
+    title: landingText("Auszahlungen sauber aufsetzen"),
+    description: landingText(
+      'Im Portal klickst du auf "Stripe-Konto verbinden". Stripe ist der Zahlungsdienstleister, über den deine Provisionen automatisch auf dein Bankkonto kommen. Die Einrichtung dauert ca. 5 Minuten. Ohne Stripe werden Provisionen bis 50€ für dich gespeichert.',
+    ),
     bullets: [
-      "Stripe Connect einmalig mit deinem Bankkonto verknüpfen.",
-      "Die Einrichtung dauert ungefähr 5 Minuten inklusive Verifizierung.",
-      "Ohne Stripe werden Provisionen bis 50€ zwischengespeichert.",
+      landingText("Stripe Connect einmalig mit deinem Bankkonto verknüpfen."),
+      landingText(
+        "Die Einrichtung dauert ungefähr 5 Minuten inklusive Verifizierung.",
+      ),
+      landingText(
+        "Ohne Stripe werden Provisionen bis 50€ zwischengespeichert.",
+      ),
     ],
   },
   {
-    eyebrow: "3. Streamer finden und werben",
-    title: "Direkt im Deadlock-Umfeld akquirieren",
-    description:
+    eyebrow: landingText("3. Streamer finden und werben"),
+    title: landingText("Direkt im Deadlock-Umfeld akquirieren"),
+    description: landingText(
       "Finde Deadlock-Streamer, die noch nicht bei Deutsche Deadlock Community sind, auf Twitch, in Discord-Servern oder in Deadlock-Communities. Empfiehl Deutsche Deadlock Community direkt oder teile deinen Referral-Link.",
+    ),
     bullets: [
-      "Deadlock-Streamer auf Twitch, Discord und in Communities identifizieren.",
-      "Deutsche Deadlock Community direkt empfehlen oder deinen Referral-Link teilen.",
-      "Nur neue Streamer bringen dir laufende Provisionen.",
+      landingText(
+        "Deadlock-Streamer auf Twitch, Discord und in Communities identifizieren.",
+      ),
+      landingText(
+        "Deutsche Deadlock Community direkt empfehlen oder deinen Referral-Link teilen.",
+      ),
+      landingText("Nur neue Streamer bringen dir laufende Provisionen."),
     ],
   },
   {
-    eyebrow: "4. Streamer im Portal beanspruchen",
-    title: "Zuordnung sichern",
-    description:
-      "Gib den Twitch-Namen des Streamers im Portal ein und klicke \"Beanspruchen\". Damit wird er dir zugeordnet. Jeder Streamer kann nur von einem Vertriebler beansprucht werden: first come, first served.",
+    eyebrow: landingText("4. Streamer im Portal beanspruchen"),
+    title: landingText("Zuordnung sichern"),
+    description: landingText(
+      'Gib den Twitch-Namen des Streamers im Portal ein und klicke "Beanspruchen". Damit wird er dir zugeordnet. Jeder Streamer kann nur von einem Vertriebler beansprucht werden: first come, first served.',
+    ),
     bullets: [
-      "Den Twitch-Login im Portal eintragen.",
-      "Per Klick dem eigenen Account zuordnen.",
-      "Jeder Streamer kann nur einmal beansprucht werden.",
+      landingText("Den Twitch-Login im Portal eintragen."),
+      landingText("Per Klick dem eigenen Account zuordnen."),
+      landingText("Jeder Streamer kann nur einmal beansprucht werden."),
     ],
   },
   {
-    eyebrow: "5. Provision kassieren",
-    title: "Automatisch mitverdienen",
-    description:
+    eyebrow: landingText("5. Provision kassieren"),
+    title: landingText("Automatisch mitverdienen"),
+    description: landingText(
       "Bei jeder Zahlung deines Streamers bekommst du automatisch 30%. Die Auszahlung läuft über Stripe direkt auf dein Konto. Im Portal siehst du in Echtzeit deine Verdienste, ausstehende Zahlungen und die History.",
+    ),
     bullets: [
-      "30% Provision auf jede Zahlung deiner geworbenen Streamer.",
-      "Automatische Auszahlung über Stripe auf dein Bankkonto.",
-      "Verdienste, offene Zahlungen und History im Portal live im Blick.",
+      landingText("30% Provision auf jede Zahlung deiner geworbenen Streamer."),
+      landingText("Automatische Auszahlung über Stripe auf dein Bankkonto."),
+      landingText(
+        "Verdienste, offene Zahlungen und History im Portal live im Blick.",
+      ),
     ],
   },
 ];
 
 const AFFILIATE_FAQ = [
   {
-    question: "Muss ich selbst Streamer sein?",
-    answer:
+    question: landingText("Muss ich selbst Streamer sein?"),
+    answer: landingText(
       "Nein. Du kannst Deutsche Deadlock Community auch dann empfehlen, wenn du selbst nicht streamst. Entscheidend ist nur, dass du neue Deadlock-Streamer wirbst.",
+    ),
   },
   {
-    question: "Wie funktioniert die Auszahlung?",
-    answer:
+    question: landingText("Wie funktioniert die Auszahlung?"),
+    answer: landingText(
       "Die Auszahlung läuft über Stripe Connect. Sobald dein Stripe-Konto verbunden ist, werden Provisionen bei jeder Streamer-Zahlung automatisch auf dein Bankkonto ausgezahlt.",
+    ),
   },
   {
-    question: "Was passiert ohne Stripe-Konto?",
-    answer:
+    question: landingText("Was passiert ohne Stripe-Konto?"),
+    answer: landingText(
       "Provisionen werden bis 50€ für dich gespeichert. Alles darüber hinaus verfällt, solange kein Stripe-Konto verbunden ist.",
+    ),
   },
   {
-    question: "Gibt es ein Limit?",
-    answer:
+    question: landingText("Gibt es ein Limit?"),
+    answer: landingText(
       "Nein. Es gibt keine Obergrenze und keine zeitliche Begrenzung. Solange dein geworbener Streamer zahlt, verdienst du dauerhaft mit.",
+    ),
   },
   {
-    question: "Was wenn ein Streamer kündigt?",
-    answer:
+    question: landingText("Was wenn ein Streamer kündigt?"),
+    answer: landingText(
       "Dann endet die laufende Provision für diesen Streamer. Bereits ausgezahlte Provisionen bleiben natürlich bei dir.",
+    ),
   },
   {
-    question: "Muss ich Steuern zahlen?",
-    answer:
+    question: landingText("Muss ich Steuern zahlen?"),
+    answer: landingText(
       "Ja, du bist selbst für die Versteuerung deiner Einnahmen verantwortlich. Deutsche Deadlock Community übernimmt keine steuerliche Bewertung für dich.",
+    ),
   },
 ];
 
-const iconMap: Record<string, ComponentType<{ size?: number; className?: string }>> = {
+const iconMap: Record<
+  string,
+  ComponentType<{ size?: number; className?: string }>
+> = {
   Percent,
   UserPlus,
   CreditCard,
-  Infinity,
+  Infinity: InfinityIcon,
   LayoutDashboard,
   LogIn,
 };
@@ -141,7 +166,7 @@ export default function AffiliateProgramPage() {
                 transition={{ duration: 0.5 }}
                 className="inline-flex rounded-full border border-border bg-[rgba(44, 35, 24,0.76)] px-4 py-1.5 text-sm text-accent"
               >
-                Affiliate-Programm
+                {landingText("Affiliate-Programm")}
               </motion.div>
 
               <motion.h1
@@ -150,10 +175,10 @@ export default function AffiliateProgramPage() {
                 transition={{ duration: 0.6, delay: 0.1 }}
                 className="mt-6 max-w-5xl text-5xl font-bold leading-tight text-text-primary md:text-6xl lg:text-7xl"
               >
-                Verdiene 30% Provision
+                {landingText("Verdiene 30% Provision")}
                 <br />
                 <span className="bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-                  dauerhaft, ohne Limit
+                  {landingText("dauerhaft, ohne Limit")}
                 </span>
               </motion.h1>
 
@@ -163,9 +188,9 @@ export default function AffiliateProgramPage() {
                 transition={{ duration: 0.6, delay: 0.2 }}
                 className="mt-6 max-w-3xl text-lg leading-relaxed text-text-secondary md:text-xl"
               >
-                Werde Deutsche Deadlock Community-Vertriebler, wirb Deadlock-Streamer und verdiene
-                bei jeder Zahlung mit. Anmeldung in 2 Minuten über deinen
-                Twitch-Account.
+                {landingText(
+                  "Werde Deutsche Deadlock Community-Vertriebler, wirb Deadlock-Streamer und verdiene bei jeder Zahlung mit. Anmeldung in 2 Minuten über deinen Twitch-Account.",
+                )}
               </motion.p>
 
               <motion.div
@@ -175,17 +200,17 @@ export default function AffiliateProgramPage() {
                 className="mt-10 flex flex-wrap gap-4"
               >
                 <a
-                  href={TWITCH_AFFILIATE_URL}
+                  href={landingLink(TWITCH_AFFILIATE_URL)}
                   className="gradient-accent inline-flex items-center gap-2 rounded-xl px-7 py-3.5 font-semibold no-underline transition-all duration-200 hover:brightness-110"
                 >
-                  Jetzt Vertriebler werden
+                  {landingText("Jetzt Vertriebler werden")}
                   <ArrowRight size={18} />
                 </a>
                 <a
                   href="#ablauf"
                   className="inline-flex items-center gap-2 rounded-xl border border-border px-7 py-3.5 font-semibold text-text-primary no-underline transition-all duration-200 hover:border-border-hover hover:bg-white/5"
                 >
-                  So funktioniert es
+                  {landingText("So funktioniert es")}
                 </a>
               </motion.div>
             </div>
@@ -198,7 +223,7 @@ export default function AffiliateProgramPage() {
             >
               <div className="flex items-center gap-3 text-sm uppercase tracking-[0.16em] text-accent">
                 <LifeBuoy size={16} />
-                Schnellüberblick
+                {landingText("Schnellüberblick")}
               </div>
 
               <div className="mt-6 space-y-4">
@@ -219,11 +244,12 @@ export default function AffiliateProgramPage() {
 
               <div className="mt-6 rounded-2xl border border-border bg-[rgba(36, 28, 17,0.74)] p-4">
                 <p className="text-sm font-semibold text-text-primary">
-                  Start in wenigen Minuten
+                  {landingText("Start in wenigen Minuten")}
                 </p>
                 <p className="mt-2 text-sm leading-relaxed text-text-secondary">
-                  Mit Twitch anmelden, Stripe verbinden, Streamer beanspruchen und
-                  Provisionen automatisch aufbauen.
+                  {landingText(
+                    "Mit Twitch anmelden, Stripe verbinden, Streamer beanspruchen und Provisionen automatisch aufbauen.",
+                  )}
                 </p>
               </div>
             </motion.aside>
@@ -234,8 +260,10 @@ export default function AffiliateProgramPage() {
           <div className="mx-auto max-w-7xl">
             <SectionHeading
               badge="How it works"
-              title="So läuft das Affiliate-Programm ab"
-              subtitle="Vom Twitch-Login bis zur automatischen Auszahlung ist der Ablauf klar und ohne unnötige Zwischenschritte aufgebaut."
+              title={landingText("So läuft das Affiliate-Programm ab")}
+              subtitle={landingText(
+                "Vom Twitch-Login bis zur automatischen Auszahlung ist der Ablauf klar und ohne unnötige Zwischenschritte aufgebaut.",
+              )}
             />
 
             <div className="mt-12 grid gap-5 lg:grid-cols-2">
@@ -247,7 +275,8 @@ export default function AffiliateProgramPage() {
                         {step.eyebrow}
                       </p>
                       <span className="rounded-full border border-border px-3 py-1 text-xs text-text-secondary">
-                        Schritt {index + 1}
+                        {landingText("Schritt ")}
+                        {index + 1}
                       </span>
                     </div>
 
@@ -260,8 +289,14 @@ export default function AffiliateProgramPage() {
 
                     <ul className="mt-5 space-y-3">
                       {step.bullets.map((bullet) => (
-                        <li key={bullet} className="flex gap-3 text-sm leading-relaxed text-text-secondary">
-                          <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-accent" />
+                        <li
+                          key={bullet}
+                          className="flex gap-3 text-sm leading-relaxed text-text-secondary"
+                        >
+                          <CheckCircle2
+                            size={18}
+                            className="mt-0.5 shrink-0 text-accent"
+                          />
                           <span>{bullet}</span>
                         </li>
                       ))}
@@ -276,9 +311,11 @@ export default function AffiliateProgramPage() {
         <section id="features" className="px-6 py-20">
           <div className="mx-auto max-w-7xl">
             <SectionHeading
-              badge="Vorteile"
-              title="Was du als Vertriebler konkret bekommst"
-              subtitle="Die Produktfläche ist auf laufende Provisionen, klare Zuordnung und automatische Auszahlung ausgelegt."
+              badge={landingText("Vorteile")}
+              title={landingText("Was du als Vertriebler konkret bekommst")}
+              subtitle={landingText(
+                "Die Produktfläche ist auf laufende Provisionen, klare Zuordnung und automatische Auszahlung ausgelegt.",
+              )}
             />
 
             <div className="mt-12 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
@@ -314,9 +351,11 @@ export default function AffiliateProgramPage() {
         <section id="faq" className="px-6 py-20">
           <div className="mx-auto max-w-7xl">
             <SectionHeading
-              badge="Affiliate-FAQ"
-              title="Die wichtigsten Fragen direkt beantwortet"
-              subtitle="Die Kernpunkte zu Anmeldung, Stripe, Limits und Steuern ohne Umweg durch das Portal."
+              badge={landingText("Affiliate-FAQ")}
+              title={landingText("Die wichtigsten Fragen direkt beantwortet")}
+              subtitle={landingText(
+                "Die Kernpunkte zu Anmeldung, Stripe, Limits und Steuern ohne Umweg durch das Portal.",
+              )}
             />
 
             <div className="mt-12 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
@@ -324,7 +363,8 @@ export default function AffiliateProgramPage() {
                 <ScrollReveal key={item.question} delay={index * 0.04}>
                   <article className="panel-card h-full rounded-[1.75rem] p-6">
                     <p className="inline-flex rounded-full border border-border px-3 py-1 text-xs uppercase tracking-[0.14em] text-accent">
-                      Frage {index + 1}
+                      {landingText("Frage ")}
+                      {index + 1}
                     </p>
                     <h2 className="mt-5 text-2xl font-bold text-text-primary">
                       {item.question}
@@ -345,31 +385,33 @@ export default function AffiliateProgramPage() {
               <div className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
                 <div>
                   <p className="text-sm uppercase tracking-[0.16em] text-primary">
-                    Nächster Schritt
+                    {landingText("Nächster Schritt")}
                   </p>
                   <h2 className="mt-4 text-4xl font-bold text-text-primary md:text-5xl">
-                    Jetzt Vertriebler werden und die ersten Streamer sichern.
+                    {landingText(
+                      "Jetzt Vertriebler werden und die ersten Streamer sichern.",
+                    )}
                   </h2>
                   <p className="mt-5 max-w-2xl text-base leading-relaxed text-text-secondary">
-                    Der Einstieg läuft über deinen Twitch-Account. Für Fragen,
-                    Austausch und Support kannst du direkt zusätzlich in den
-                    Discord kommen.
+                    {landingText(
+                      "Der Einstieg läuft über deinen Twitch-Account. Für Fragen, Austausch und Support kannst du direkt zusätzlich in den Discord kommen.",
+                    )}
                   </p>
                 </div>
 
                 <div className="grid gap-4">
                   <a
-                    href={TWITCH_AFFILIATE_URL}
+                    href={landingLink(TWITCH_AFFILIATE_URL)}
                     className="gradient-accent inline-flex items-center justify-between gap-4 rounded-2xl px-6 py-5 font-semibold no-underline transition-all duration-200 hover:brightness-110"
                   >
-                    <span>Jetzt Vertriebler werden</span>
+                    <span>{landingText("Jetzt Vertriebler werden")}</span>
                     <ArrowRight size={18} />
                   </a>
                   <a
                     href={DISCORD_INVITE_URL}
                     className="inline-flex items-center justify-between gap-4 rounded-2xl border border-border px-6 py-5 font-semibold text-text-primary no-underline transition-colors duration-200 hover:border-border-hover hover:bg-white/5"
                   >
-                    <span>Discord beitreten</span>
+                    <span>{landingText("Discord beitreten")}</span>
                     <LifeBuoy size={18} />
                   </a>
                 </div>

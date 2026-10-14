@@ -1,11 +1,15 @@
+import { landingText, landingLink } from "@/lib/landingLocale";
 import { useState } from "react";
 import { Check, Link as LinkIcon } from "lucide-react";
 import { SectionHeading } from "@/components/ui/SectionHeading";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
 import { DiscordLogo } from "@/components/ui/DiscordLogo";
-import { DISCORD_INVITE_URL, EARLYSALTY_WEBSITE_URL } from "@/data/externalLinks";
+import {
+  DISCORD_INVITE_URL,
+  EARLYSALTY_WEBSITE_URL,
+} from "@/data/externalLinks";
 
-const STREAMER_LINK = EARLYSALTY_WEBSITE_URL;
+const STREAMER_LINK = landingLink(EARLYSALTY_WEBSITE_URL);
 
 type KopierStatus = "leer" | "ok" | "fehler";
 
@@ -14,7 +18,9 @@ export function CommunityPitch() {
 
   async function linkKopieren() {
     try {
-      await navigator.clipboard.writeText(STREAMER_LINK);
+      await navigator.clipboard.writeText(
+        new URL(STREAMER_LINK, window.location.origin).toString(),
+      );
       setKopierStatus("ok");
       window.setTimeout(() => setKopierStatus("leer"), 2500);
     } catch {
@@ -27,15 +33,17 @@ export function CommunityPitch() {
       <div className="max-w-4xl mx-auto px-6">
         <SectionHeading
           badge="Community"
-          title="Du streamst nicht selbst?"
-          subtitle="Hol deine Lieblings-Streamer in das Netz: schick ihnen den Link zur Seite oder sag im Discord Bescheid."
+          title={landingText("Du streamst nicht selbst?")}
+          subtitle={landingText(
+            "Hol deine Lieblings-Streamer in das Netz: schick ihnen den Link zur Seite oder sag im Discord Bescheid.",
+          )}
         />
 
         <div className="mt-12 grid grid-cols-1 md:grid-cols-2 gap-6">
           <ScrollReveal>
             <div className="panel-card rounded-2xl p-7 h-full text-center soft-elevate">
               <h3 className="text-lg font-semibold text-[var(--color-text-primary)]">
-                Den Link weitergeben
+                {landingText("Den Link weitergeben")}
               </h3>
               <p className="mt-2 text-sm text-[var(--color-text-secondary)]">
                 {STREAMER_LINK}
@@ -48,18 +56,20 @@ export function CommunityPitch() {
                 {kopierStatus === "ok" ? (
                   <>
                     <Check size={17} />
-                    Link kopiert
+                    {landingText("Link kopiert")}
                   </>
                 ) : (
                   <>
                     <LinkIcon size={17} />
-                    Link kopieren
+                    {landingText("Link kopieren")}
                   </>
                 )}
               </button>
               {kopierStatus === "fehler" ? (
                 <p className="mt-3 text-xs text-[var(--color-text-secondary)]">
-                  Kopieren geht hier nicht. Markiere den Link oben von Hand.
+                  {landingText(
+                    "Kopieren geht hier nicht. Markiere den Link oben von Hand.",
+                  )}
                 </p>
               ) : null}
             </div>
@@ -68,11 +78,12 @@ export function CommunityPitch() {
           <ScrollReveal delay={0.1}>
             <div className="panel-card rounded-2xl p-7 h-full text-center soft-elevate">
               <h3 className="text-lg font-semibold text-[var(--color-text-primary)]">
-                Im Discord Bescheid geben
+                {landingText("Im Discord Bescheid geben")}
               </h3>
               <p className="mt-2 text-sm text-[var(--color-text-secondary)]">
-                Im Streamer-Bereich des Community-Discords erreichen dich die
-                Partner direkt.
+                {landingText(
+                  "Im Streamer-Bereich des Community-Discords erreichen dich die Partner direkt.",
+                )}
               </p>
               <a
                 href={DISCORD_INVITE_URL}
@@ -82,7 +93,7 @@ export function CommunityPitch() {
                 style={{ background: "#5865F2" }}
               >
                 <DiscordLogo size={19} className="text-white" />
-                Community-Discord öffnen
+                {landingText("Community-Discord öffnen")}
               </a>
             </div>
           </ScrollReveal>
