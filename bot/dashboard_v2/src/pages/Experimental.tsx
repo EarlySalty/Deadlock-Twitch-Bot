@@ -431,18 +431,18 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
         >
           <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
             <Gamepad2 className="w-4 h-4 text-primary" />
-            Spiel-Statistiken
+            {t('Spiel-Statistiken')}
           </h3>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-text-secondary border-b border-border">
-                  <th className="text-left py-2 pr-4 font-medium">Spiel</th>
-                  <th className="text-right py-2 pr-4 font-medium">Sessions</th>
-                  <th className="text-right py-2 pr-4 font-medium">Ø Viewer</th>
-                  <th className="text-right py-2 pr-4 font-medium">Peak</th>
-                  <th className="text-right py-2 pr-4 font-medium">Ø Dauer</th>
-                  <th className="text-right py-2 font-medium">Ø Follower</th>
+                  <th className="text-left py-2 pr-4 font-medium">{t('Spiel')}</th>
+                  <th className="text-right py-2 pr-4 font-medium">{t('Sessions')}</th>
+                  <th className="text-right py-2 pr-4 font-medium">{t('Ø Viewer')}</th>
+                  <th className="text-right py-2 pr-4 font-medium">{t('Peak')}</th>
+                  <th className="text-right py-2 pr-4 font-medium">{t('Ø Dauer')}</th>
+                  <th className="text-right py-2 font-medium">{t('Ø Follower')}</th>
                 </tr>
               </thead>
               <tbody>
