@@ -21,7 +21,8 @@ Main = LIVE 5f1dc5bd2 (D2, D-core, O, O2, D3a, D3b, D4-D9, W1-W3; G0 reverted), 
 | W3 sub-sites | done | - | deleted | 607a00eb7 | merged 637da79b1 |
 | D8 AIAnalysis, CategoryCollector | done | - | deleted | b28192cb7 | merged 5f1dc5bd2 |
 | D9 demo insights | done | - | deleted | 667a3cef7 | merged e98e607dc |
-| D10 Experimental, chat analytics | a0fb24a120536adb5 | ttb-opus-d10-20261014 | feat/opus-d10-pages-english-20261014 | - | building |
+| D10 Experimental, chat analytics | done | - | deleted | 18b9e034f | merged 1a46231ee, release building |
+| D11-D13 remaining EN strings | sol x3 | ttb-opus-d1{1,2,3}-20261014 | feat/opus-d1{1,2,3}-pages-english-20261014 | - | building (verwaltung 75, uplink/social 46, trial/onboarding 53) |
 
 Main test fix bacbd6838. Local object store had missing tree 31c7ae2f; repaired via fetch --refetch origin main.
 Queue: 390px live overflow check, A, C (after G), K and G re-land (after rotation).
