@@ -62,17 +62,12 @@ const EN: Record<string, string> = {
   'Gespeicherte Hashtags einfügen': 'Insert saved hashtags',
   'Speichern hat nicht geklappt. Versuch es nochmal.': 'Saving failed. Please try again.',
   'TikTok-Veröffentlichung': 'TikTok publication',
-  'Meine Standardwerte übernehmen': 'Apply my defaults',
   'Wird gespeichert…': 'Saving…',
   'Gespeicherten Entwurf laden': 'Load saved draft',
   'Gespeicherte Einstellungen werden geladen.': 'Loading saved settings.',
   'Deine gespeicherten Einstellungen konnten nicht geladen werden.': 'Your saved settings could not be loaded.',
   'Gespeichert. Der Clip wurde nicht eingeplant.': 'Saved. The clip was not scheduled.',
   'Deine Standardwerte sind gespeichert.': 'Your defaults are saved.',
-  'Übernimm deine Standardwerte oder lade deinen gespeicherten Entwurf. Die Musikzustimmung kannst du im Standard speichern. Markenpartner bestätigst du für jeden Clip.': 'Apply your defaults or load your saved draft. You can save music consent in your defaults. Confirm branded content for each clip.',
-  'Der Musiknutzung von TikTok für alle meine Clips zustimmen': 'Agree to TikTok music usage for all my clips',
-  'Gilt für dieses TikTok-Konto. Zum Widerrufen ohne Haken als Standard speichern.': 'Applies to this TikTok account. To revoke consent, save your defaults with the box unchecked.',
-  'Deine Musikzustimmung ist im Standard gespeichert.': 'Your music consent is saved in your defaults.',
   'und': 'and',
   'Abbrechen': 'Cancel',
   'Wird eingeplant…': 'Scheduling…',
@@ -95,7 +90,13 @@ const EN: Record<string, string> = {
   'Vollbild': 'Fullscreen',
   'Vollbild konnte nicht geöffnet werden. Nutze die Videosteuerung oder versuche es erneut.': 'Fullscreen could not be opened. Use the video controls or try again.',
   '{duration} Sekunden, für dieses Konto höchstens {max} Sekunden.': '{duration} seconds, up to {max} seconds for this account.',
-  'Beschreibung für TikTok': 'TikTok description',
+  'Beschreibung des Clips': 'Clip description',
+  'Standard-Beschreibung': 'Default description',
+  'Wird unter jede Clip-Beschreibung gesetzt.': 'Added below every clip description.',
+  'Einmalig: Musiknutzung bestätigen': 'One-time music usage confirmation',
+  'Damit wir deine Clips auf TikTok veröffentlichen dürfen, musst du einmal TikToks Bestätigung zur Musiknutzung zustimmen. Wir speichern deine Zustimmung dauerhaft für dieses TikTok-Konto.': 'To publish your clips on TikTok, you need to accept TikTok’s music usage confirmation once. We permanently save your consent for this TikTok account.',
+  'Zustimmen und speichern': 'Agree and save',
+  'Für diesen Clip stimme ich TikToks': 'For this clip I agree to TikTok’s',
   'Wer darf den Clip sehen?': 'Who can see this clip?',
   'Sichtbarkeit wählen': 'Select visibility',
   'Nur ich': 'Only me',
@@ -816,8 +817,17 @@ export function browserLanguage(): Language {
   return primary.toLowerCase().startsWith('de') ? 'de' : 'en';
 }
 
+export function isEnglishDashboardHost(): boolean {
+  if (typeof window === 'undefined') return false;
+  return ['dead-lock.de', 'www.dead-lock.de'].includes(window.location?.hostname ?? '');
+}
+
 export function readInitialLanguage(): Language {
-  return readPersistedLanguage() ?? browserLanguage();
+  const query = typeof window === 'undefined'
+    ? null
+    : new URLSearchParams(window.location?.search).get('lang');
+  if (isLanguage(query)) return query;
+  return readPersistedLanguage() ?? (isEnglishDashboardHost() ? 'en' : browserLanguage());
 }
 
 export function storeLanguage(language: Language): void {

@@ -1,3 +1,4 @@
+import { useT } from '../../context/LanguageContext';
 import { useMemo, useState } from 'react';
 import { Rise } from '../../motion/Rise';
 import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
@@ -84,6 +85,7 @@ function resolveMessage(): BannerMessage | null {
  * verständlichen Hinweis statt eines nackten URL-Parameters. Schließbar.
  */
 export default function BillingStatusBanner() {
+  const t = useT();
   const message = useMemo(() => resolveMessage(), []);
   const [dismissed, setDismissed] = useState(false);
 
@@ -97,11 +99,11 @@ export default function BillingStatusBanner() {
       role="status"
     >
       <Icon className="mt-0.5 h-4 w-4 flex-shrink-0" />
-      <p className="flex-1 text-sm leading-relaxed">{message.text}</p>
+      <p className="flex-1 text-sm leading-relaxed">{t(message.text)}</p>
       <button
         onClick={() => setDismissed(true)}
         className="-mr-1 flex-shrink-0 rounded-md p-1 opacity-60 transition-opacity hover:opacity-100"
-        aria-label="Hinweis schließen"
+        aria-label={t("Hinweis schließen")}
       >
         <X className="h-4 w-4" />
       </button>

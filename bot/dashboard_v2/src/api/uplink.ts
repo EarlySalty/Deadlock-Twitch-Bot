@@ -1,4 +1,5 @@
 import { fetchJson, withCookieCredentials } from './core';
+import { mainDomainOAuthUrl } from '../i18n/oauthLinks';
 import { normalisiereCaps } from '../uplinkEmpfehlung';
 import type { UplinkCaps, UplinkCapsRoh } from '../uplinkEmpfehlung';
 import type { ZielBetriebsdaten } from '../uplinkBetrieb';
@@ -116,9 +117,9 @@ export async function rotateUplinkDockToken(): Promise<DockUrls> {
  * der falsche war.
  */
 export function uplinkConnectUrl(platform: UplinkPlattform): string {
-  if (platform === 'twitch') return '/twitch/raid/auth?scope_profile=uplink';
-  if (platform === 'kick') return '/twitch/uplink/connect/kick';
-  if (platform === 'youtube') return '/twitch/uplink/connect/youtube';
+  if (platform === 'twitch') return mainDomainOAuthUrl('/twitch/raid/auth?scope_profile=uplink');
+  if (platform === 'kick') return mainDomainOAuthUrl('/twitch/uplink/connect/kick');
+  if (platform === 'youtube') return mainDomainOAuthUrl('/twitch/uplink/connect/youtube');
   return '';
 }
 

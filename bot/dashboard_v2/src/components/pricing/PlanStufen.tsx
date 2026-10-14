@@ -1,3 +1,5 @@
+import { useLanguage, useOAuthLink, useT } from '../../context/LanguageContext';
+import { translatePageText } from '../../i18n/pageText';
 import { motion } from 'framer-motion';
 import { Check } from 'lucide-react';
 import { getPlanCheckoutHref } from '../../preview/routes';
@@ -31,9 +33,9 @@ const AKZENT: Record<string, string> = {
 const AKZENT_FALLBACK = '#C5A059';
 
 /** Cent-Betrag als deutscher Endpreis, z. B. `499` → `4,99 €`. */
-function eur(cents: number): string {
+function eur(cents: number, locale: string): string {
   const sicher = Math.max(0, Math.round(cents));
-  return `${Math.floor(sicher / 100)},${String(sicher % 100).padStart(2, '0')} €`;
+  return new Intl.NumberFormat(locale, { style: 'currency', currency: 'EUR' }).format(sicher / 100);
 }
 
 /** Fälliger Endpreis der Stufe im gewählten Zyklus, in Cent. */
@@ -97,6 +99,9 @@ interface PlanStufenProps {
 }
 
 export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
+  const t = useT();
+  const { locale } = useLanguage();
+  const oauthLink = useOAuthLink();
   if (plans.length === 0) {
     return null;
   }
@@ -114,9 +119,9 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
     <div>
       <div className="mb-7">
         <p className="text-xl font-semibold text-white mb-1.5">
-          {ueberschriftFuer(obenAngezeigt.length)}
+          {t(ueberschriftFuer(obenAngezeigt.length))}
         </p>
-        <p className="text-sm text-white/45">{unterzeileFuer(obenAngezeigt.length)}</p>
+        <p className="text-sm text-white/45">{t(unterzeileFuer(obenAngezeigt.length))}</p>
       </div>
 
       <div
@@ -144,28 +149,27 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
                 backgroundColor: akzent + '0B',
               }}
             >
-              <p className="font-semibold text-white text-xl">{plan.name}</p>
+              <p className="font-semibold text-white text-xl">{t(plan.name)}</p>
               {plan.description && (
                 <p className="text-white/45 text-sm leading-relaxed mt-2 max-w-md">
-                  {plan.description}
+                  {t(plan.description)}
                 </p>
               )}
 
               <div className="mt-7 mb-1 flex items-baseline gap-2">
                 <span className="text-4xl font-bold text-white tracking-tight">
-                  {gratis ? '0 €' : eur(cents)}
+                  {gratis ? '0 €' : eur(cents, locale)}
                 </span>
                 <span className="text-white/45 text-base">
-                  {gratis ? 'für immer' : cycle === 12 ? '/ Jahr' : '/ Monat'}
+                  {gratis ? t("für immer") : cycle === 12 ? t("/ Jahr") : t("/ Monat")}
                 </span>
               </div>
               {!gratis && cycle === 12 && (
                 <p className="text-white/35 text-sm">
-                  entspricht {eur(monatlich)} im Monat, zwei Monate geschenkt
-                </p>
+                  {t("entspricht {p0} im Monat, zwei Monate geschenkt", { p0: eur(monatlich, locale) })}</p>
               )}
               {!gratis && cycle === 1 && (
-                <p className="text-white/35 text-sm">monatlich kündbar</p>
+                <p className="text-white/35 text-sm">{t("monatlich kündbar")}</p>
               )}
 
               <ul className="space-y-3 mt-8 mb-8 flex-1">
@@ -178,37 +182,35 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
                       className="w-4 h-4 mt-0.5 flex-shrink-0"
                       style={{ color: akzent }}
                     />
-                    {feature}
+                    {t(feature)}
                   </li>
                 ))}
               </ul>
 
               {plan.is_current ? (
                 <span className="px-6 py-3.5 rounded-xl text-sm font-semibold text-center bg-white/5 text-white/50">
-                  Deine aktuelle Stufe
-                </span>
+                  {t("Deine aktuelle Stufe")}</span>
               ) : buchbar ? (
                 <a
-                  href={getPlanCheckoutHref(gratis ? null : plan.id, gratis, cycle)}
+                  href={oauthLink(getPlanCheckoutHref(gratis ? null : plan.id, gratis, cycle))}
                   className={`px-6 py-3.5 rounded-xl text-sm font-semibold text-center transition-[background-color,border-color,color,box-shadow,transform,translate,scale] duration-200 ${
                     gratis
                       ? 'bg-white/10 hover:bg-white/15 text-white'
                       : 'bg-white/15 hover:bg-white/20 text-white'
                   }`}
                 >
-                  {gratis ? 'Kostenlos nutzen' : `${plan.name} buchen`}
+                  {gratis ? t("Kostenlos nutzen") : t("{p0} buchen", { p0: t(plan.name) })}
                 </a>
               ) : (
                 <span className="px-6 py-3.5 rounded-xl text-sm font-semibold text-center bg-white/5 text-white/40">
-                  Bald buchbar
-                </span>
+                  {t("Bald buchbar")}</span>
               )}
 
               {/* Wer im Test oder auf einem alten Tarif steht, nutzt die Stufe
                   schon, hat sie aber nicht dauerhaft gekauft. Der Knopf bleibt
                   deshalb stehen, der Hinweis sagt nur, warum. */}
               {plan.hinweis && (
-                <p className="text-white/35 text-sm mt-3 text-center">{plan.hinweis}</p>
+                <p className="text-white/35 text-sm mt-3 text-center">{translatePageText(t, plan.hinweis, locale)}</p>
               )}
             </motion.div>
           );
@@ -218,25 +220,21 @@ export default function PlanStufen({ plans, cycle }: PlanStufenProps) {
       {pro && !proGehoertNachOben && (
         <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] px-8 py-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div className="max-w-2xl">
-            <p className="text-white/80 font-medium">{pro.name} ist noch nicht buchbar.</p>
+            <p className="text-white/80 font-medium">{t("{p0} ist noch nicht buchbar.", { p0: t(pro.name) })}</p>
             <p className="text-white/40 text-sm mt-1.5 leading-relaxed">
-              Die Stufe bekommt Inhalt, sobald die Werkzeuge dafür stehen.
-            </p>
+              {t("Die Stufe bekommt Inhalt, sobald die Werkzeuge dafür stehen.")}</p>
           </div>
           {/* Kein hartkodierter Ersatzpreis: fällt das Katalogfeld weg, steht
               hier lieber nichts als stumm eine veraltete Zahl. */}
           {typeof pro.monthly_gross_cents === 'number' && (
             <span className="text-white/35 text-sm whitespace-nowrap">
-              später {eur(pro.monthly_gross_cents)} im Monat
-            </span>
+              {t("später {p0} im Monat", { p0: eur(pro.monthly_gross_cents, locale) })}</span>
           )}
         </div>
       )}
 
       <p className="text-white/30 text-sm mt-6 text-center">
-        Alle Beträge sind Endpreise. Kleinunternehmer nach Paragraph 19 UStG, kein
-        Umsatzsteuerausweis.
-      </p>
+        {t("Alle Beträge sind Endpreise. Kleinunternehmer nach Paragraph 19 UStG, kein Umsatzsteuerausweis.")}</p>
     </div>
   );
 }

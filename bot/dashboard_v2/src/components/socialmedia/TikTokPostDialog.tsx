@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { fetchTikTokCreatorInfo, fetchTikTokEditor, saveTikTokChoices, getPreviewStatus, requestPreview, previewFileUrl, SocialMediaApiError, type TikTokDraft, type TikTokEditorState, type TikTokPostOptions } from '@/api/socialMedia';
+import { fetchTikTokCreatorInfo, fetchTikTokEditor, saveTikTokChoices, saveTikTokMusicConsent, getPreviewStatus, requestPreview, previewFileUrl, SocialMediaApiError, type TikTokDraft, type TikTokEditorState, type TikTokPostOptions } from '@/api/socialMedia';
 import { WorkspaceDialog } from './WorkspaceDialog';
 import { VideoFullscreenButton } from './VideoFullscreenButton';
 import { useT } from '@/context/LanguageContext';
@@ -72,6 +72,7 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
     retry: false,
   });
   const [caption, setCaption] = useState('');
+  const [standardDescription, setStandardDescription] = useState('');
   const [privacy, setPrivacy] = useState('');
   const [comment, setComment] = useState(false);
   const [duet, setDuet] = useState(false);
@@ -80,8 +81,6 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
   const [ownBrand, setOwnBrand] = useState(false);
   const [partnerBrand, setPartnerBrand] = useState(false);
   const [consent, setConsent] = useState(false);
-  const [saveMusicConsent, setSaveMusicConsent] = useState(false);
-  const [presetConsent, setPresetConsent] = useState<{ clip: number; account: string } | null>(null);
   const [saveMessage, setSaveMessage] = useState('');
   const editor = useQuery({
     queryKey: ['social-media', 'tiktok-editor', clipDbId],
@@ -95,55 +94,41 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
       const key = ['social-media', 'tiktok-editor', request.clip];
       await queryClient.cancelQueries({ queryKey: key });
       queryClient.setQueryData<TikTokEditorState>(key, (previous) => ({
+        music_consent: previous?.music_consent ?? false,
+        music_consent_platform_user_id: previous?.music_consent_platform_user_id ?? null,
         draft: previous?.draft ?? null,
         defaults: previous?.defaults ?? null,
         [request.kind]: response.choices,
       }));
       if (request.clip !== clipDbId) return;
-      if (request.kind === 'defaults') {
-        const values = response.choices;
-        setPresetConsent(values.music_consent && values.music_consent_at && values.music_consent_platform_user_id
-          ? { clip: request.clip, account: values.music_consent_platform_user_id } : null);
-        setSaveMusicConsent(false);
-        setConsent(false);
-      }
       setSaveMessage(request.kind === 'draft' ? 'Gespeichert. Der Clip wurde nicht eingeplant.' : 'Deine Standardwerte sind gespeichert.');
       void queryClient.invalidateQueries({ queryKey: ['social-media', 'tiktok-editor', request.clip] });
     },
   });
-  const busy = pending || save.isPending;
+  const musicConsent = useMutation({
+    mutationFn: (request: { clip: number; account: string }) => saveTikTokMusicConsent(request.clip, request.account),
+    onSuccess: async (_response, request) => {
+      const key = ['social-media', 'tiktok-editor', request.clip];
+      await queryClient.cancelQueries({ queryKey: key });
+      queryClient.setQueryData<TikTokEditorState>(key, (previous) => previous ? {
+        ...previous, music_consent: true, music_consent_platform_user_id: request.account,
+      } : previous);
+      void queryClient.invalidateQueries({ queryKey: key });
+    },
+  });
+  const busy = pending || save.isPending || musicConsent.isPending;
+  const combinedCaption = [caption.trim(), standardDescription.trim()].filter(Boolean).join('\n\n');
+  const captionLength = Array.from(combinedCaption).length;
   const choices: TikTokDraft = {
-    caption, privacy_level: privacy, allow_comment: comment, allow_duet: duet, allow_stitch: stitch,
+    caption, standard_description: standardDescription, privacy_level: privacy, allow_comment: comment, allow_duet: duet, allow_stitch: stitch,
     commercial_content: commercial, brand_organic_toggle: ownBrand, brand_content_toggle: partnerBrand,
   };
   const saveChoices = (kind: 'draft' | 'defaults') => {
     setSaveMessage('');
     const payload = kind === 'draft' ? choices : {
-      ...choices, commercial_content: false, brand_organic_toggle: false, brand_content_toggle: false,
-      music_consent: saveMusicConsent,
-      music_consent_platform_user_id: saveMusicConsent ? context.data?.platform_user_id : undefined,
+      ...choices, caption: '', commercial_content: false, brand_organic_toggle: false, brand_content_toggle: false,
     };
     save.mutate({ clip: clipDbId, kind, choices: payload });
-  };
-  const applyChoices = (values: TikTokDraft, kind: 'draft' | 'defaults') => {
-    if (busy || editor.isError || editor.isFetching || context.isError || context.isFetching || !context.data) return;
-    const creator = context.data.creator;
-    setCaption(values.caption);
-    setPrivacy(creator.privacy_level_options.includes(values.privacy_level) ? values.privacy_level : '');
-    setComment(values.allow_comment && !creator.comment_disabled);
-    setDuet(values.allow_duet && !creator.duet_disabled);
-    setStitch(values.allow_stitch && !creator.stitch_disabled);
-    setCommercial(kind === 'draft' && values.commercial_content);
-    setOwnBrand(kind === 'draft' && values.commercial_content && values.brand_organic_toggle);
-    setPartnerBrand(kind === 'draft' && values.commercial_content && values.brand_content_toggle);
-    setPresetConsent(kind === 'defaults' && values.music_consent && values.music_consent_at
-      && values.music_consent_platform_user_id === context.data.platform_user_id
-      && context.data.platform_user_id
-      ? { clip: clipDbId, account: context.data.platform_user_id } : null);
-    setSaveMusicConsent(false);
-    setConsent(false);
-    setSaveMessage('');
-    save.reset();
   };
   const mutateRender = render.mutate;
   const requestRender = useCallback(() => {
@@ -157,26 +142,28 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
     if (!preview.isSuccess || preview.data.status !== null || requested.current === clipDbId) return;
     requestRender();
   }, [clipDbId, preview.isSuccess, preview.data?.status, requestRender]);
-  const initializedClip = useRef<number | null>(null);
+  const initializedClip = useRef('');
   const approvedContext = useRef('');
-  useEffect(() => {
-    setPresetConsent(null);
-    setSaveMusicConsent(false);
-    setConsent(false);
-  }, [clipDbId, context.data?.platform_user_id]);
+  useEffect(() => { setConsent(false); }, [clipDbId, context.data?.platform_user_id]);
   useEffect(() => {
     const data = context.data;
-    if (!data) return;
-    if (initializedClip.current !== clipDbId) {
-      initializedClip.current = clipDbId;
-      setCaption(data.caption);
-      setPrivacy('');
-      setComment(false);
-      setDuet(false);
-      setStitch(false);
-      setCommercial(false);
-      setOwnBrand(false);
-      setPartnerBrand(false);
+    if (!data || !editor.data || editor.isFetching || editor.isError) return;
+    const clipAccount = JSON.stringify([clipDbId, data.platform_user_id]);
+    if (initializedClip.current !== clipAccount) {
+      initializedClip.current = clipAccount;
+      const draft = editor.data.draft;
+      const values = draft ?? editor.data.defaults;
+      setCaption(draft?.caption ?? data.caption);
+      setStandardDescription(values?.standard_description ?? '');
+      setPrivacy(values && data.creator.privacy_level_options.includes(values.privacy_level) ? values.privacy_level : '');
+      setComment(!!values?.allow_comment && !data.creator.comment_disabled);
+      setDuet(!!values?.allow_duet && !data.creator.duet_disabled);
+      setStitch(!!values?.allow_stitch && !data.creator.stitch_disabled);
+      setCommercial(!!draft?.commercial_content);
+      setOwnBrand(!!draft?.commercial_content && draft.brand_organic_toggle);
+      setPartnerBrand(!!draft?.commercial_content && draft.brand_content_toggle);
+      setConsent(false);
+      setSaveMessage('');
     }
     const identity = JSON.stringify([
       clipDbId, data.credential_id, data.platform_user_id, data.approved_video_sha256, data.creator,
@@ -189,24 +176,25 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
       if (data.creator.duet_disabled) setDuet(false);
       if (data.creator.stitch_disabled) setStitch(false);
     }
-  }, [clipDbId, context.data]);
+  }, [clipDbId, context.data, editor.data, editor.isFetching, editor.isError]);
   const data = context.data;
   const issue = error ?? render.error ?? preview.error ?? context.error;
-  const presetMusicConsent = !!data?.platform_user_id && presetConsent?.clip === clipDbId
-    && presetConsent.account === data.platform_user_id && !partnerBrand;
-  const postConsent = consent || presetMusicConsent;
-  const valid = data && previewReady && !context.isError && !context.isFetching && privacy && caption.length <= 2200 && postConsent
+  const storedMusicConsent = !!data?.platform_user_id && !!editor.data?.music_consent
+    && editor.data.music_consent_platform_user_id === data.platform_user_id;
+  const postConsent = storedMusicConsent && (!partnerBrand || consent);
+  const valid = data && previewReady && !context.isError && !context.isFetching
+    && !editor.isError && !editor.isFetching && privacy && captionLength <= 2200 && postConsent
     && (!commercial || ownBrand || partnerBrand)
     && !(partnerBrand && privacy === 'SELF_ONLY');
   const change = (action: () => void) => { action(); setConsent(false); setSaveMessage(''); save.reset(); };
-  const consentNotice = <>{t('Mit der Veröffentlichung stimmst du TikToks')} {partnerBrand && <><a className="text-accent underline" href="https://www.tiktok.com/legal/page/global/bc-policy/en" target="_blank" rel="noreferrer">{t('Richtlinie für Markeninhalte')}</a> {t('und')} </>}<a className="text-accent underline" href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noreferrer">{t('Bestätigung zur Musiknutzung')}</a> {t('zu.')}</>;
+  const consentNotice = <>{t('Mit der Veröffentlichung stimmst du TikToks')} <a className="text-accent underline" href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noreferrer">{t('Bestätigung zur Musiknutzung')}</a> {t('zu.')}</>;
   return (
     <WorkspaceDialog eyebrow="" title={t('TikTok-Veröffentlichung')} onClose={onClose} busy={busy}>
       <form className="space-y-5" onSubmit={(event) => {
         event.preventDefault();
         if (!valid || busy || !data) return;
         onConfirm({
-          caption, privacy_level: privacy,
+          caption: combinedCaption, privacy_level: privacy,
           allow_comment: comment, allow_duet: duet, allow_stitch: stitch,
           commercial_content: commercial,
           brand_organic_toggle: ownBrand, brand_content_toggle: partnerBrand,
@@ -234,27 +222,19 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
           {preview.isError && <button type="button" className="studio-button" disabled={pending || preview.isFetching} onClick={() => preview.refetch()}>{t('Vorschau erneut prüfen')}</button>}
           {context.isError && previewReady && <button type="button" className="studio-button" disabled={pending || context.isFetching} onClick={() => context.refetch()}>{t('Erneut laden')}</button>}
         </div>}
-        {data && previewReady && !context.isError && !context.isFetching && <>
+        {editor.isFetching && <p role="status" className="text-sm">{t('Gespeicherte Einstellungen werden geladen.')}</p>}
+        {editor.isError && <div role="alert" className="space-y-2 text-danger"><p>{t('Deine gespeicherten Einstellungen konnten nicht geladen werden.')}</p><button type="button" className="studio-button" disabled={busy || editor.isFetching} onClick={() => editor.refetch()}>{t('Erneut laden')}</button></div>}
+        {data && previewReady && !context.isError && !context.isFetching && editor.data && !editor.isError && !editor.isFetching && !storedMusicConsent && <section className="space-y-4">
+          <h3 className="font-medium">{t('Einmalig: Musiknutzung bestätigen')}</h3>
+          <p>{t('Damit wir deine Clips auf TikTok veröffentlichen dürfen, musst du einmal TikToks Bestätigung zur Musiknutzung zustimmen. Wir speichern deine Zustimmung dauerhaft für dieses TikTok-Konto.')}</p>
+          <a className="text-accent underline" href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noreferrer">{t('Bestätigung zur Musiknutzung')}</a>
+          {musicConsent.isError && <p role="alert" className="text-danger">{musicConsent.error instanceof SocialMediaApiError ? musicConsent.error.message : t('Speichern hat nicht geklappt. Versuch es nochmal.')}</p>}
+          <div className="flex justify-end"><button type="button" className="studio-primary" disabled={busy || !data.platform_user_id} onClick={() => musicConsent.mutate({ clip: clipDbId, account: data.platform_user_id })}>{musicConsent.isPending ? t('Wird gespeichert…') : t('Zustimmen und speichern')}</button></div>
+        </section>}
+        {data && previewReady && !context.isError && !context.isFetching && storedMusicConsent && editor.data && !editor.isFetching && !editor.isError && <>
           <p className="text-sm">{t('Veröffentlichung auf')} <strong>{data.creator.creator_nickname}</strong> (@{data.creator.creator_username})</p>
-          <div className="space-y-3 border-b border-border pb-4">
-            <p className="text-sm text-text-secondary">{t('Übernimm deine Standardwerte oder lade deinen gespeicherten Entwurf. Die Musikzustimmung kannst du im Standard speichern. Markenpartner bestätigst du für jeden Clip.')}</p>
-            <label className="flex items-start gap-2 text-sm">
-              <input type="checkbox" className="mt-1" checked={saveMusicConsent} disabled={busy} onChange={(event) => setSaveMusicConsent(event.target.checked)} aria-describedby={`${id}-music-defaults`} />
-              <span>{t('Der Musiknutzung von TikTok für alle meine Clips zustimmen')}</span>
-            </label>
-            <p id={`${id}-music-defaults`} className="text-xs text-text-secondary">
-              <a className="text-accent underline" href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noreferrer">{t('Bestätigung zur Musiknutzung')}</a>. {t('Gilt für dieses TikTok-Konto. Zum Widerrufen ohne Haken als Standard speichern.')}
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <button type="button" className="studio-button" disabled={busy || editor.isError || editor.isFetching || !editor.data?.defaults} onClick={() => editor.data?.defaults && applyChoices(editor.data.defaults, 'defaults')}>{t('Meine Standardwerte übernehmen')}</button>
-              <button type="button" className="studio-button" disabled={busy || caption.length > 2200} onClick={() => saveChoices('defaults')}>{t('Als Standard speichern')}</button>
-              {editor.data?.draft && <button type="button" className="studio-button" disabled={busy || editor.isError || editor.isFetching} onClick={() => editor.data?.draft && applyChoices(editor.data.draft, 'draft')}>{t('Gespeicherten Entwurf laden')}</button>}
-            </div>
-            {editor.isFetching && <p role="status" className="text-sm">{t('Gespeicherte Einstellungen werden geladen.')}</p>}
-            {editor.isError && <div role="alert" className="space-y-2 text-danger"><p>{t('Deine gespeicherten Einstellungen konnten nicht geladen werden.')}</p><button type="button" className="studio-button" disabled={busy || editor.isFetching} onClick={() => editor.refetch()}>{t('Erneut laden')}</button></div>}
-            {save.isError && <p role="alert" className="text-danger">{t('Speichern hat nicht geklappt. Versuch es nochmal.')}</p>}
-            {saveMessage && <p role="status" className="text-sm">{t(saveMessage)}</p>}
-          </div>
+          {save.isError && <p role="alert" className="text-danger">{t('Speichern hat nicht geklappt. Versuch es nochmal.')}</p>}
+          {saveMessage && <p role="status" className="text-sm">{t(saveMessage)}</p>}
           <div className="grid gap-5 md:grid-cols-[minmax(0,180px)_minmax(0,1fr)]">
             <div>
               <video ref={videoRef} className="max-h-72 w-full rounded-lg bg-black" src={`${previewFileUrl(clipDbId)}?v=${encodeURIComponent(data.approved_video_sha256)}`} controls preload="metadata" aria-label={t('TikTok-Videovorschau')} />
@@ -263,10 +243,16 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
             </div>
             <div className="space-y-4">
               <label className="block space-y-2" htmlFor={`${id}-caption`}>
-                <span className="font-medium">{t('Beschreibung für TikTok')}</span>
-                <textarea id={`${id}-caption`} className="studio-input min-h-32 w-full" value={caption} maxLength={2200} disabled={busy} onChange={(event) => change(() => setCaption(event.target.value))} />
-                <span className="text-xs text-text-secondary">{caption.length}/2200</span>
+                <span className="font-medium">{t('Beschreibung des Clips')}</span>
+                <textarea id={`${id}-caption`} className="studio-input min-h-32 w-full" value={caption} disabled={busy} onChange={(event) => change(() => setCaption(event.target.value))} />
+                <span className="text-xs text-text-secondary">{captionLength}/2200</span>
               </label>
+              <label className="block space-y-2" htmlFor={`${id}-standard-description`}>
+                <span className="font-medium">{t('Standard-Beschreibung')}</span>
+                <textarea id={`${id}-standard-description`} className="studio-input min-h-24 w-full" value={standardDescription} disabled={busy} onChange={(event) => change(() => setStandardDescription(event.target.value))} />
+                <span className="text-xs text-text-secondary">{t('Wird unter jede Clip-Beschreibung gesetzt.')}</span>
+              </label>
+              <button type="button" className="studio-button" disabled={busy || captionLength > 2200} onClick={() => saveChoices('defaults')}>{t('Als Standard speichern')}</button>
               <label className="block space-y-2" htmlFor={`${id}-privacy`}>
                 <span className="font-medium">{t('Wer darf den Clip sehen?')}</span>
                 <select id={`${id}-privacy`} className="studio-input w-full" value={privacy} disabled={busy} required onChange={(event) => change(() => setPrivacy(event.target.value))}>
@@ -308,16 +294,14 @@ export function TikTokPostDialog({ clipDbId, pending, error, onConfirm, onClose 
             </div>}
           </fieldset>
           <div className="space-y-3 border-t border-border pt-4">
-            {presetMusicConsent ? <div className="space-y-1 text-sm">
-              <p>{consentNotice}</p>
-              <p className="text-text-secondary">{t('Deine Musikzustimmung ist im Standard gespeichert.')}</p>
-            </div> : <label className="flex items-start gap-2 text-sm">
+            <p className="text-sm">{consentNotice}</p>
+            {partnerBrand && <label className="flex items-start gap-2 text-sm">
               <input type="checkbox" className="mt-1" checked={consent} disabled={busy} onChange={(event) => setConsent(event.target.checked)} />
-              <span>{consentNotice}</span>
+              <span>{t('Für diesen Clip stimme ich TikToks')} <a className="text-accent underline" href="https://www.tiktok.com/legal/page/global/bc-policy/en" target="_blank" rel="noreferrer">{t('Richtlinie für Markeninhalte')}</a> {t('zu.')}</span>
             </label>}
             <p className="text-sm text-text-secondary">{t('Der Clip wird zum geplanten Termin direkt veröffentlicht. TikTok kann danach einige Minuten für die Verarbeitung benötigen. Den Stand siehst du an der Clipkarte.')}</p>
             <div className="flex flex-wrap justify-end gap-2">
-              <button type="button" className="studio-button" disabled={busy || caption.length > 2200} onClick={() => saveChoices('draft')}>{save.isPending && save.variables?.kind === 'draft' ? t('Wird gespeichert…') : t('Speichern')}</button>
+              <button type="button" className="studio-button" disabled={busy || captionLength > 2200} onClick={() => saveChoices('draft')}>{save.isPending && save.variables?.kind === 'draft' ? t('Wird gespeichert…') : t('Speichern')}</button>
               <button type="button" className="studio-button" disabled={busy} onClick={onClose}>{t('Abbrechen')}</button>
               <button type="submit" className="studio-primary" disabled={!valid || busy}>{pending ? t('Wird eingeplant…') : t('Clip mit TikTok einplanen')}</button>
             </div>

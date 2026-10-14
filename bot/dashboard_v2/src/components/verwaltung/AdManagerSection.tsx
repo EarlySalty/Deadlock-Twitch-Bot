@@ -35,6 +35,7 @@ import {
   type AdManagerStrategy,
 } from '@/api/adManager';
 import { ApiHttpError } from '@/api/httpError';
+import { useOAuthLink } from '@/context/LanguageContext';
 import { beschreibeEintrag, budgetVorschau, statusSatz } from './adManagerTexte';
 
 interface AdManagerSectionProps {
@@ -276,6 +277,7 @@ function NumberSetting({
 }
 
 export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
+  const oauthLink = useOAuthLink();
   const [data, setData] = useState<AdManagerResponse | null>(null);
   const [history, setHistory] = useState<AdManagerHistory | null>(null);
   const [draft, setDraft] = useState<AdManagerSettingsInput | null>(null);
@@ -437,7 +439,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
         <div role="alert" className="rounded-xl border border-danger/40 bg-danger/10 p-4 text-sm text-danger">
           <p>{error ?? 'Der Werbemanager ist gerade nicht verfügbar.'}</p>
           <a
-            href={reauthUrl}
+            href={oauthLink(reauthUrl)}
             className="mt-3 inline-flex items-center gap-2 rounded-lg border border-danger/40 px-4 py-2 font-semibold transition-colors hover:bg-danger/10"
           >
             Twitch neu verbinden <ExternalLink className="h-4 w-4" />
@@ -547,7 +549,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
               </p>
             </div>
             <a
-              href={reauthUrl}
+              href={oauthLink(reauthUrl)}
               className="inline-flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-4 py-2 text-sm font-semibold text-warning transition-colors hover:bg-warning/20"
             >
               Twitch neu verbinden <ExternalLink className="h-4 w-4" />

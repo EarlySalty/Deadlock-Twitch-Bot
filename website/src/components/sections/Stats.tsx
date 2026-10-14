@@ -1,3 +1,4 @@
+import { landingText } from "@/lib/landingLocale";
 import { stats } from "@/data/stats";
 import { AnimatedCounter } from "@/components/ui/AnimatedCounter";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
@@ -16,7 +17,9 @@ export function Stats() {
                 // Die "Streamer"-Kachel zieht die echte Netzwerk-Groesse live
                 // aus der DB (/public/network). Faellt der Fetch aus, greift der
                 // statische Default (30+) aus data/stats.ts.
-                const live = stat.label === "Streamer" && streamerCount != null;
+                const live =
+                  stat.label === landingText("Streamer") &&
+                  streamerCount != null;
                 return (
                   <AnimatedCounter
                     key={stat.label}

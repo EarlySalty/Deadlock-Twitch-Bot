@@ -1,3 +1,4 @@
+import { useLanguage } from '../../context/LanguageContext';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Rise } from '../../motion/Rise';
 import type { CalendarHeatmapData } from '@/types/analytics';
@@ -11,20 +12,16 @@ interface CalendarHeatmapProps {
   days?: number;
 }
 
-const dayLabel = new Intl.DateTimeFormat('de-DE', {
-  day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC',
-});
-const monthLabel = new Intl.DateTimeFormat('de-DE', {
-  month: 'long', year: 'numeric', timeZone: 'UTC',
-});
-const formatDay = (key: string) => dayLabel.format(new Date(`${key}T00:00:00Z`));
-
 export function CalendarHeatmap({
   data,
   title = 'Stream-Aktivität',
   metric = 'hoursWatched',
   days = 365,
 }: CalendarHeatmapProps) {
+  const { t, locale } = useLanguage();
+  const dayLabel = new Intl.DateTimeFormat(locale, { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  const monthLabel = new Intl.DateTimeFormat(locale, { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const formatDay = (key: string) => dayLabel.format(new Date(`${key}T00:00:00Z`));
   const today = new Date().toISOString().slice(0, 10);
   const model = useMemo(
     () => buildCalendarHeatmap(data, days, metric, new Date(`${today}T00:00:00Z`)),
@@ -45,9 +42,9 @@ export function CalendarHeatmap({
 
   const describe = (cell: CalendarCell) => {
     const date = monthly
-      ? `${monthLabel.format(new Date(`${cell.key}-01T00:00:00Z`))} (${formatDay(cell.startDate)} bis ${formatDay(cell.endDate)})`
+      ? t('{month} ({start} bis {end})', { month: monthLabel.format(new Date(`${cell.key}-01T00:00:00Z`)), start: formatDay(cell.startDate), end: formatDay(cell.endDate) })
       : formatDay(cell.startDate);
-    return `${date} · ${formatHours(cell.hoursWatched)} Zuschauerzeit · ${formatNumber(cell.streamCount)} Streams`;
+    return t('{date} · {hours} Zuschauerzeit · {count} Streams', { date, hours: formatHours(cell.hoursWatched, locale), count: formatNumber(cell.streamCount, 0, locale) });
   };
 
   const renderCell = (cell: CalendarCell | null, index: number) => {
@@ -77,18 +74,18 @@ export function CalendarHeatmap({
       data-resolution={model.resolution}
       className="bg-card rounded-xl border border-border p-5 h-full min-w-0 flex flex-col"
     >
-      <h3 className="text-lg font-bold text-white">{title}</h3>
+      <h3 className="text-lg font-bold text-white">{t(title)}</h3>
       <p className="text-xs text-text-secondary mt-1 mb-4">
-        {monthly ? 'Monatsansicht' : 'Tagesansicht'} · {formatDay(model.startDate)} bis {formatDay(model.endDate)}
+        {t(monthly ? 'Monatsansicht · {start} bis {end}' : 'Tagesansicht · {start} bis {end}', { start: formatDay(model.startDate), end: formatDay(model.endDate) })}
       </p>
 
-      <div ref={scrollRef} className="min-w-0 overflow-x-auto flex-1 pb-1" data-calendar-scroll="">
+      <div ref={scrollRef} className="min-w-0 overflow-x-auto shrink-0 pb-1" data-calendar-scroll="">
         {monthly ? (
           <div className="min-w-[400px]">
             <div className="grid gap-1 mb-2 text-xs text-text-secondary" style={{ gridTemplateColumns: yearColumns }}>
-              <span>Jahr</span>
+              <span>{t("Jahr")}</span>
               {Array.from({ length: 12 }, (_, month) => (
-                <span key={month} className="text-center">{getMonthLabel(month + 1)}</span>
+                <span key={month} className="text-center">{getMonthLabel(month + 1, locale)}</span>
               ))}
             </div>
             <div className="space-y-1">
@@ -114,7 +111,7 @@ export function CalendarHeatmap({
                   className="text-xs text-text-secondary whitespace-nowrap"
                   style={{ gridColumn: `${weekIndex + 1} / span ${weekSpan}` }}
                 >
-                  {getMonthLabel(month)}
+                  {getMonthLabel(month, locale)}
                 </div>
               ))}
             </div>
@@ -132,14 +129,14 @@ export function CalendarHeatmap({
         )}
       </div>
 
-      {/* Details stay outside the scroll area, including on touch and keyboard. */}
+
       <p className="text-xs text-text-secondary min-h-10 pt-2" data-calendar-details="">
-        {selected ? describe(selected) : `Für Details einen ${monthly ? 'Monat' : 'Tag'} auswählen.`}
+        {selected ? describe(selected) : t(monthly ? 'Für Details einen Monat auswählen.' : 'Für Details einen Tag auswählen.')}
       </p>
       <div className="flex flex-wrap items-center justify-between gap-3 mt-3 text-xs text-text-secondary">
-        <span>{formatNumber(model.totalStreams)} Streams in den letzten {model.days} Tagen</span>
+        <span>{t('{count} Streams in den letzten {days} Tagen', { count: formatNumber(model.totalStreams, 0, locale), days: model.days })}</span>
         <div className="flex items-center gap-2">
-          <span>Weniger</span>
+          <span>{t("Weniger")}</span>
           <div className="flex gap-1">
             {[0, 0.25, 0.5, 0.75, 1].map(intensity => (
               <div
@@ -149,7 +146,7 @@ export function CalendarHeatmap({
               />
             ))}
           </div>
-          <span>Mehr</span>
+          <span>{t("Mehr")}</span>
         </div>
       </div>
     </Rise>

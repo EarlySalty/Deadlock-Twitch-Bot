@@ -1,14 +1,16 @@
+import { useLanguage, useT } from '@/context/LanguageContext';
 import { useEffect, useId, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AiJobView, AiVideoVersion } from './api';
 import { approveAiVersion, decideAiProposal, decideAiVersion, fetchAiPublishingContext, reviseAiVersion, scheduleAiVersion, selectAiVersion } from './api';
 import { MetadataPanel } from './MetadataPanel';
+import { editorErrorExplanation } from './failure';
 
 type Action = 'revise' | 'confirm' | 'cancel' | 'select' | 'accept' | 'reject' | 'approve' | 'schedule';
-function proposalCost(proposal: NonNullable<AiJobView['revision_proposal']>) {
-  if (proposal.estimated_provider_cost_usd === null) return 'Die zusätzlichen Anbieter-Kosten sind noch nicht zuverlässig schätzbar.';
-  if (!proposal.reanalyze) return 'Dafür fallen keine weiteren KI-Kosten an, nur die Videoerstellung auf unserem Server.';
-  return `Geschätzte zusätzliche Anbieter-Kosten: etwa ${proposal.estimated_provider_cost_usd.toLocaleString('de-DE',{maximumFractionDigits:4})} US-Dollar, gemessen am ersten Durchlauf dieses Clips.`;
+function proposalCost(proposal: NonNullable<AiJobView['revision_proposal']>, locale: string, t: ReturnType<typeof useT>) {
+  if (proposal.estimated_provider_cost_usd === null) return t('Die zusätzlichen Anbieter-Kosten sind noch nicht zuverlässig schätzbar.');
+  if (!proposal.reanalyze) return t('Dafür fallen keine weiteren KI-Kosten an, nur die Videoerstellung auf unserem Server.');
+  return t('Geschätzte zusätzliche Anbieter-Kosten: etwa {cost} US-Dollar, gemessen am ersten Durchlauf dieses Clips.', { cost: proposal.estimated_provider_cost_usd.toLocaleString(locale, { maximumFractionDigits: 4 }) });
 }
 
 const platforms = [{id:'youtube',label:'YouTube'},{id:'tiktok',label:'TikTok'},{id:'instagram',label:'Instagram'}];
@@ -17,6 +19,8 @@ export function RevisionControls({channel,job,version,canStart,onJob,onReload,pu
   channel: string; job: AiJobView; version: AiVideoVersion | null; canStart: boolean; publishing?: boolean;
   onJob: (job: AiJobView) => void; onReload: () => Promise<boolean>; onBusyChange?: (busy: boolean) => void;
 }) {
+  const t = useT();
+  const { locale } = useLanguage();
   const feedbackId = useId();
   const client = useQueryClient();
   const videoId = version?.id;
@@ -31,7 +35,7 @@ export function RevisionControls({channel,job,version,canStart,onJob,onReload,pu
   const [feedback,setFeedback] = useState('');
   const [selected,setSelected] = useState<string[]>([]);
   const [confirmed,setConfirmed] = useState(false);
-  const [message,setMessage] = useState('');
+  const [message,setMessage] = useState<string | { scheduledAt: string }>('');
   const [reloading,setReloading] = useState(false);
   const busyJob = !['review','failed','rejected'].includes(job.status);
   const feedbackBytes = new TextEncoder().encode(feedback).length;
@@ -44,7 +48,7 @@ export function RevisionControls({channel,job,version,canStart,onJob,onReload,pu
       if (kind === 'accept' || kind === 'reject') return {job:await decideAiVersion(channel,job.id,version.id,kind === 'accept'),message:kind === 'accept' ? 'Positive Bewertung gespeichert. Zum Veröffentlichen sind gesonderte Plattformfreigaben erforderlich.' : 'Negative Bewertung gespeichert. Die Fassung bleibt zum Vergleichen erhalten.'};
       if (kind === 'approve') return {job:await approveAiVersion(channel,job.id,version.id,selected),message:'Videofreigabe für die ausgewählten Plattformen gespeichert. Das Video ist noch nicht neu eingeplant.'};
       const result = await scheduleAiVersion(channel,job.id,version.id,selected);
-      return {job:result.job,message:`Ohne erneutes Rendern eingeplant für ${new Date(result.scheduledAt).toLocaleString('de-DE')} (Ortszeit deines Browsers).`};
+      return {job:result.job,message: { scheduledAt: result.scheduledAt }};
     },
     onMutate: () => setMessage(''),
     onSuccess: (result,kind) => { setMessage(result.message); setConfirmed(false); if (kind === 'revise') setFeedback(''); onJob(result.job); },
@@ -66,40 +70,40 @@ export function RevisionControls({channel,job,version,canStart,onJob,onReload,pu
     }
   };
   const canSchedule = version && selected.length > 0 && selected.every((platform) => version.approved_platforms.includes(platform));
-  return <section className="social-ai-revisions" aria-label="Änderungen und Veröffentlichung">
-    {job.status === 'awaiting_confirmation' && job.revision_proposal && <div className="social-ai-confirm" role="group" aria-label="Aufwendige Änderung bestätigen">
-      <h4>Vor dem nächsten Schritt bestätigen</h4>
+  return <section className="social-ai-revisions" aria-label={t("Änderungen und Veröffentlichung")}>
+    {job.status === 'awaiting_confirmation' && job.revision_proposal && <div className="social-ai-confirm" role="group" aria-label={t("Aufwendige Änderung bestätigen")}>
+      <h4>{t("Vor dem nächsten Schritt bestätigen")}</h4>
       <p>{job.revision_proposal.summary}</p><p>{job.revision_proposal.impact}</p>
-      <p>{job.revision_proposal.reanalyze ? 'Dafür ist eine erneute KI-Analyse nötig.' : 'Der geplante Schnitt verändert die bisherige Fassung deutlich.'} {proposalCost(job.revision_proposal)}</p>
-      <label><input type="checkbox" checked={confirmed} disabled={blocked || !canStart} onChange={(event) => setConfirmed(event.target.checked)} />Ich bestätige den vorgeschlagenen nächsten Bearbeitungsschritt und mögliche zusätzliche KI-Kosten.</label>
-      <div className="social-ai-actions"><button type="button" className="studio-primary" disabled={!confirmed || !canStart || blocked} onClick={() => action.mutate('confirm')}>Änderung bestätigen</button><button type="button" className="studio-button" disabled={blocked} onClick={() => action.mutate('cancel')}>Änderung verwerfen</button></div>
-      <p>Bis zur Bestätigung wird keine neue Analyse oder Videofassung erstellt. Die kurze Schnittplanung ist bereits in den Auftragskosten enthalten.</p>
+      <p>{job.revision_proposal.reanalyze ? t("Dafür ist eine erneute KI-Analyse nötig.") : t("Der geplante Schnitt verändert die bisherige Fassung deutlich.")} {proposalCost(job.revision_proposal, locale, t)}</p>
+      <label><input type="checkbox" checked={confirmed} disabled={blocked || !canStart} onChange={(event) => setConfirmed(event.target.checked)} />{t("Ich bestätige den vorgeschlagenen nächsten Bearbeitungsschritt und mögliche zusätzliche KI-Kosten.")}</label>
+      <div className="social-ai-actions"><button type="button" className="studio-primary" disabled={!confirmed || !canStart || blocked} onClick={() => action.mutate('confirm')}>{t("Änderung bestätigen")}</button><button type="button" className="studio-button" disabled={blocked} onClick={() => action.mutate('cancel')}>{t("Änderung verwerfen")}</button></div>
+      <p>{t("Bis zur Bestätigung wird keine neue Analyse oder Videofassung erstellt. Die kurze Schnittplanung ist bereits in den Auftragskosten enthalten.")}</p>
     </div>}
-    {job.status === 'rejected' && <p role="status">Der Änderungsvorschlag wurde verworfen. Die vorherige Fassung ist weiterhin zur Sichtung verfügbar.</p>}
+    {job.status === 'rejected' && <p role="status">{t("Der Änderungsvorschlag wurde verworfen. Die vorherige Fassung ist weiterhin zur Sichtung verfügbar.")}</p>}
     {version && <>
-      <div className="social-ai-version-actions"><h4>Fassung {version.version_no}{version.variant_index > 0 ? `, Variante ${version.variant_index + 1}` : ''} beurteilen</h4><p>Bewertungen und bevorzugte Fassung sind unabhängig von der Videofreigabe.</p>
-        <div className="social-ai-actions"><button type="button" className="studio-button" disabled={blocked || historical || job.selected_version_id === version.id} onClick={() => action.mutate('select')}>{job.selected_version_id === version.id ? 'Bevorzugte Fassung' : 'Diese Fassung verwenden'}</button><button type="button" className="studio-button" disabled={blocked || historical} onClick={() => action.mutate('accept')}>Fassung gefällt mir</button><button type="button" className="studio-button" disabled={blocked || version.status !== 'review'} onClick={() => action.mutate('reject')}>Fassung gefällt mir nicht</button></div>
+      <div className="social-ai-version-actions"><h4>{t('Fassung {version}{variant} beurteilen', { version: version.version_no, variant: version.variant_index > 0 ? t(', Variante {variant}', { variant: version.variant_index + 1 }) : '' })}</h4><p>{t("Bewertungen und bevorzugte Fassung sind unabhängig von der Videofreigabe.")}</p>
+        <div className="social-ai-actions"><button type="button" className="studio-button" disabled={blocked || historical || job.selected_version_id === version.id} onClick={() => action.mutate('select')}>{job.selected_version_id === version.id ? t("Bevorzugte Fassung") : t("Diese Fassung verwenden")}</button><button type="button" className="studio-button" disabled={blocked || historical} onClick={() => action.mutate('accept')}>{t("Fassung gefällt mir")}</button><button type="button" className="studio-button" disabled={blocked || version.status !== 'review'} onClick={() => action.mutate('reject')}>{t("Fassung gefällt mir nicht")}</button></div>
       </div>
       <form onSubmit={(event) => {event.preventDefault(); if (canStart && !historical && !busyJob && !blocked && feedback.trim() && feedbackBytes <= 2000) action.mutate('revise');}}>
-        <label htmlFor={feedbackId}>Was soll sich an dieser Fassung ändern?</label>
-        <textarea id={feedbackId} value={feedback} rows={3} maxLength={2000} disabled={blocked || busyJob || historical} onChange={(event) => setFeedback(event.target.value)} placeholder="Zum Beispiel: Kürze den Einstieg, aber behalte die ursprüngliche Reaktion." aria-describedby={`${feedbackId}-help`} />
-        <p id={`${feedbackId}-help`}>Kleine Änderungen nutzen die gespeicherte Analyse. Umfangreiche Änderungen brauchen deine Bestätigung. Die bisherige Fassung wird nicht überschrieben.</p>
-        {feedbackBytes > 2000 && <p className="social-ai-caution" role="alert">Bitte kürze deine Anweisung, bevor du sie abschickst.</p>}
-        <button type="submit" className="studio-primary" disabled={!canStart || historical || busyJob || blocked || !feedback.trim() || feedbackBytes > 2000}>Änderung anfordern</button>
+        <label htmlFor={feedbackId}>{t("Was soll sich an dieser Fassung ändern?")}</label>
+        <textarea id={feedbackId} value={feedback} rows={3} maxLength={2000} disabled={blocked || busyJob || historical} onChange={(event) => setFeedback(event.target.value)} placeholder={t("Zum Beispiel: Kürze den Einstieg, aber behalte die ursprüngliche Reaktion.")} aria-describedby={`${feedbackId}-help`} />
+        <p id={`${feedbackId}-help`}>{t("Kleine Änderungen nutzen die gespeicherte Analyse. Umfangreiche Änderungen brauchen deine Bestätigung. Die bisherige Fassung wird nicht überschrieben.")}</p>
+        {feedbackBytes > 2000 && <p className="social-ai-caution" role="alert">{t("Bitte kürze deine Anweisung, bevor du sie abschickst.")}</p>}
+        <button type="submit" className="studio-primary" disabled={!canStart || historical || busyJob || blocked || !feedback.trim() || feedbackBytes > 2000}>{t("Änderung anfordern")}</button>
       </form>
       <MetadataPanel key={version.id} channel={channel} videoId={version.id} disabled={action.isPending || busyJob || reloading || version.status !== 'review'} onEditingChange={setMetadataEditing} />
-      {metadataEditing && <p role="status">Speichere oder verwirf die Textänderungen vor der nächsten Aktion.</p>}
-      {publishingContext.isError && publishing && <p className="social-ai-caution" role="alert">Der Veröffentlichungsweg konnte nicht geprüft werden. <button type="button" className="studio-button" onClick={() => { void publishingContext.refetch(); }}>Erneut prüfen</button></p>}
-      {(!publishing || publishingContext.data === true) && <p>Die Plattformfreigabe dieser Fassung erfolgt im Veröffentlichungspanel.</p>}
-      {showPublishing && <fieldset disabled={blocked || historical || busyJob} className="social-ai-platform-approval"><legend>Videofreigabe und Zeitplan</legend>
-        <p>Nur ausdrücklich freigegebene Plattformen können eingeplant werden. Eine Videofreigabe verbindet kein Plattformkonto.</p>
-        <div className="social-ai-platforms">{platforms.map((platform) => <label key={platform.id}><input type="checkbox" checked={selected.includes(platform.id)} onChange={(event) => setSelected(event.target.checked ? [...selected,platform.id] : selected.filter((item) => item !== platform.id))} /><span>{platform.label}</span><small>{version.approved_platforms.includes(platform.id) ? 'Video freigegeben' : 'Noch keine Videofreigabe'}</small></label>)}</div>
-        <div className="social-ai-actions"><button type="button" className="studio-button" onClick={() => setSelected(platforms.map((platform) => platform.id))}>Alle Plattformen auswählen</button><button type="button" className="studio-button" disabled={selected.length === 0} onClick={() => action.mutate('approve')}>Ausgewählte Plattformen freigeben</button><button type="button" className="studio-primary" disabled={!canSchedule} onClick={() => action.mutate('schedule')}>In den Zeitplan übernehmen</button></div>
-        <p>Die Übernahme verwendet genau diese fertige Datei, ohne erneute Analyse oder Videoerstellung. {version.status === 'scheduled' ? 'Diese Fassung ist bereits im Zeitplan. Weitere Plattformen brauchen eine gesonderte Freigabe und Übernahme.' : 'Nur die ausdrücklich übernommenen Plattformen werden eingeplant.'}</p>
+      {metadataEditing && <p role="status">{t("Speichere oder verwirf die Textänderungen vor der nächsten Aktion.")}</p>}
+      {publishingContext.isError && publishing && <p className="social-ai-caution" role="alert">{t("Der Veröffentlichungsweg konnte nicht geprüft werden.")} <button type="button" className="studio-button" onClick={() => { void publishingContext.refetch(); }}>{t("Erneut prüfen")}</button></p>}
+      {(!publishing || publishingContext.data === true) && <p>{t("Die Plattformfreigabe dieser Fassung erfolgt im Veröffentlichungspanel.")}</p>}
+      {showPublishing && <fieldset disabled={blocked || historical || busyJob} className="social-ai-platform-approval"><legend>{t("Videofreigabe und Zeitplan")}</legend>
+        <p>{t("Nur ausdrücklich freigegebene Plattformen können eingeplant werden. Eine Videofreigabe verbindet kein Plattformkonto.")}</p>
+        <div className="social-ai-platforms">{platforms.map((platform) => <label key={platform.id}><input type="checkbox" checked={selected.includes(platform.id)} onChange={(event) => setSelected(event.target.checked ? [...selected,platform.id] : selected.filter((item) => item !== platform.id))} /><span>{platform.label}</span><small>{version.approved_platforms.includes(platform.id) ? t("Video freigegeben") : t("Noch keine Videofreigabe")}</small></label>)}</div>
+        <div className="social-ai-actions"><button type="button" className="studio-button" onClick={() => setSelected(platforms.map((platform) => platform.id))}>{t("Alle Plattformen auswählen")}</button><button type="button" className="studio-button" disabled={selected.length === 0} onClick={() => action.mutate('approve')}>{t("Ausgewählte Plattformen freigeben")}</button><button type="button" className="studio-primary" disabled={!canSchedule} onClick={() => action.mutate('schedule')}>{t("In den Zeitplan übernehmen")}</button></div>
+        <p>{t("Die Übernahme verwendet genau diese fertige Datei, ohne erneute Analyse oder Videoerstellung.")} {version.status === 'scheduled' ? t("Diese Fassung ist bereits im Zeitplan. Weitere Plattformen brauchen eine gesonderte Freigabe und Übernahme.") : t("Nur die ausdrücklich übernommenen Plattformen werden eingeplant.")}</p>
       </fieldset>}
     </>}
-    {action.isPending && <p role="status">Änderung wird gespeichert…</p>}
-    {message && <p role="status">{message}</p>}
-    {action.isError && <div className="social-ai-alert" role="alert"><div><p>{action.error instanceof Error ? action.error.message : 'Die Änderung konnte nicht bestätigt werden.'} Lade den aktuellen Stand neu, bevor du eine weitere Aktion ausführst.</p><button type="button" className="studio-button" disabled={reloading} onClick={() => { void reload(); }}>{reloading ? 'Stand wird geladen…' : 'Aktuellen Stand neu laden'}</button></div></div>}
+    {action.isPending && <p role="status">{t("Änderung wird gespeichert…")}</p>}
+    {message && <p role="status">{typeof message === 'string' ? t(message) : t('Ohne erneutes Rendern eingeplant für {date} (Ortszeit deines Browsers).', { date: new Date(message.scheduledAt).toLocaleString(locale) })}</p>}
+    {action.isError && <div className="social-ai-alert" role="alert"><div><p>{editorErrorExplanation(action.error, t)} {t("Lade den aktuellen Stand neu, bevor du eine weitere Aktion ausführst.")}</p><button type="button" className="studio-button" disabled={reloading} onClick={() => { void reload(); }}>{reloading ? t("Stand wird geladen…") : t("Aktuellen Stand neu laden")}</button></div></div>}
   </section>;
 }

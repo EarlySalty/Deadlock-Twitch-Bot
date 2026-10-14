@@ -1,3 +1,5 @@
+import { formatNumber } from '@/utils/formatters';
+import { useLanguage } from '../../context/LanguageContext';
 import { Rise } from '../../motion/Rise';
 import {
   RadarChart,
@@ -22,6 +24,7 @@ export function RetentionRadar({
   categoryAvg,
   title = 'Performance Mix',
 }: RetentionRadarProps) {
+  const { t, locale } = useLanguage();
   const data = [
     {
       metric: 'Reach',
@@ -92,11 +95,11 @@ export function RetentionRadar({
           <p className="text-white font-medium mb-2">{payload[0]?.payload?.metric}</p>
           <div className="space-y-1 text-sm">
             <p className="text-accent">
-              Du: <span className="text-white">{payload[0]?.value}</span>
+              {t("Du:")} <span className="text-white">{formatNumber(payload[0]?.value, 0, locale)}</span>
             </p>
             {categoryAvg && (
               <p className="text-text-secondary">
-                Kategorie: <span className="text-white">{payload[1]?.value}</span>
+                {t("Kategorie:")} <span className="text-white">{formatNumber(payload[1]?.value, 0, locale)}</span>
               </p>
             )}
           </div>
@@ -110,7 +113,7 @@ export function RetentionRadar({
     <Rise
       className="panel-card p-6 rounded-2xl h-full flex flex-col"
     >
-      <h3 className="text-lg font-bold text-white mb-4">{title}</h3>
+      <h3 className="text-lg font-bold text-white mb-4">{t(title)}</h3>
       <div className="flex-1 min-h-[320px] relative">
         <ResponsiveContainer width="100%" height="100%">
           <RadarChart data={data} outerRadius="70%" margin={{ top: 20, right: 30, bottom: 20, left: 30 }}>
@@ -132,7 +135,7 @@ export function RetentionRadar({
                 height={36}
                 formatter={(value) => (
                   <span className="text-text-secondary text-sm">
-                    {value === 'you' ? 'Dein Kanal' : 'Kategorie Ø'}
+                    {value === 'you' ? t('Dein Kanal') : t('Kategorie Ø')}
                   </span>
                 )}
               />
@@ -163,7 +166,7 @@ export function RetentionRadar({
         </ResponsiveContainer>
       </div>
       <div className="mt-4 text-xs text-center text-text-secondary">
-        Scores von 0 bis 100 je Bereich
+        {t("Scores von 0 bis 100 je Bereich")}
       </div>
     </Rise>
   );

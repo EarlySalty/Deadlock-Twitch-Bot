@@ -1,3 +1,4 @@
+import { useLanguage } from '../../context/LanguageContext';
 import { motion } from 'framer-motion';
 import { Rise } from '../../motion/Rise';
 import type { HourlyHeatmapData } from '@/types/analytics';
@@ -9,6 +10,7 @@ interface HourlyHeatmapProps {
 }
 
 export function HourlyHeatmap({ data, title = 'Beste Streaming-Zeiten' }: HourlyHeatmapProps) {
+  const { t, locale } = useLanguage();
   const weekdays = [0, 1, 2, 3, 4, 5, 6]; // Sun-Sat
   const hours = Array.from({ length: 24 }, (_, i) => i);
 
@@ -25,13 +27,13 @@ export function HourlyHeatmap({ data, title = 'Beste Streaming-Zeiten' }: Hourly
     <Rise
       className="bg-card rounded-xl border border-border p-5"
     >
-      <h3 className="text-lg font-bold text-white mb-4">{title}</h3>
+      <h3 className="text-lg font-bold text-white mb-4">{t(title)}</h3>
 
       <div className="overflow-x-auto">
         <div className="min-w-[600px]">
-          {/* Hour Labels */}
+
           <div className="flex mb-1">
-            <div className="w-10" /> {/* Spacer for weekday labels */}
+            <div className="w-10" />
             {hours.map(hour => (
               <div
                 key={hour}
@@ -42,15 +44,15 @@ export function HourlyHeatmap({ data, title = 'Beste Streaming-Zeiten' }: Hourly
             ))}
           </div>
 
-          {/* Grid */}
+
           {weekdays.map(weekday => (
             <div key={weekday} className="flex mb-1">
-              {/* Weekday Label */}
+
               <div className="w-10 text-xs text-text-secondary flex items-center">
-                {getWeekdayLabel(weekday)}
+                {getWeekdayLabel(weekday, locale)}
               </div>
 
-              {/* Hour Cells */}
+
               {hours.map(hour => {
                 const cellData = dataMap.get(`${weekday}-${hour}`);
                 const viewers = cellData?.avgViewers ?? 0;
@@ -65,18 +67,18 @@ export function HourlyHeatmap({ data, title = 'Beste Streaming-Zeiten' }: Hourly
                     className="flex-1 aspect-square mx-0.5 rounded-sm relative group cursor-pointer"
                     style={{ backgroundColor: getHeatmapColor(viewers, maxViewers) }}
                   >
-                    {/* Tooltip */}
+
                     {streamCount > 0 && (
                       <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 opacity-0 group-hover:opacity-100 transition-opacity z-10 pointer-events-none">
                         <div className="bg-card border border-border rounded px-2 py-1 text-xs whitespace-nowrap shadow-xl">
                           <div className="text-white font-medium">
-                            {getWeekdayLabel(weekday)} {hour}:00
+                            {getWeekdayLabel(weekday, locale)} {hour}:00
                           </div>
                           <div className="text-text-secondary">
-                            {formatNumber(viewers)} Ø Viewer
+                            {t("{viewers} Ø Viewer", { viewers: formatNumber(viewers, 0, locale) })}
                           </div>
                           <div className="text-text-secondary">
-                            {streamCount} Streams
+                            {t("{count} Streams", { count: formatNumber(streamCount, 0, locale) })}
                           </div>
                         </div>
                       </div>
@@ -87,9 +89,9 @@ export function HourlyHeatmap({ data, title = 'Beste Streaming-Zeiten' }: Hourly
             </div>
           ))}
 
-          {/* Legend */}
+
           <div className="flex items-center justify-end mt-4 gap-2 text-xs text-text-secondary">
-            <span>Weniger</span>
+            <span>{t("Weniger")}</span>
             <div className="flex gap-1">
               {[0.1, 0.3, 0.5, 0.7, 0.9].map(intensity => (
                 <div
@@ -99,7 +101,7 @@ export function HourlyHeatmap({ data, title = 'Beste Streaming-Zeiten' }: Hourly
                 />
               ))}
             </div>
-            <span>Mehr Viewer</span>
+            <span>{t("Mehr Viewer")}</span>
           </div>
         </div>
       </div>

@@ -52,9 +52,9 @@ export function healthScoreBand(value: number): HealthScoreBand {
   return 'Ausbaufähig';
 }
 
-export function healthScoreBandRange(value: number): string {
+export function healthScoreBandRange(value: number, t: (text: string) => string = (text) => text): string {
   const band = healthScoreBand(value);
-  if (band === 'Stark') return '70 bis 100';
-  if (band === 'Solide') return '40 bis 69';
-  return '0 bis 39';
+  if (band === 'Stark') return t('70 bis 100');
+  if (band === 'Solide') return t('40 bis 69');
+  return t('0 bis 39');
 }

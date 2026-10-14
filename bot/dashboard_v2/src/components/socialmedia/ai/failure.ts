@@ -1,4 +1,6 @@
 import type { AiJobView } from './api';
+import { dictionaryFor, type TranslateParams } from '@/i18n/dictionary';
+import { FEHLER_TEXTE, fehlerText } from '../labels';
 
 const explanations: Record<string, string> = {
   source_unavailable: 'Der Originalclip konnte nicht bereitgestellt werden.',
@@ -22,4 +24,17 @@ export function failureExplanation(code: string | null): string {
   return code && Object.hasOwn(explanations, code)
     ? explanations[code]
     : 'Bitte prüfe den Auftrag und versuche die fehlgeschlagene Phase erneut, falls ein weiterer Versuch angeboten wird.';
+}
+
+export function editorErrorExplanation(
+  error: unknown,
+  t: (text: string, params?: TranslateParams) => string,
+): string {
+  if (error instanceof Error) {
+    const code = (error as Error & { code?: string }).code;
+    if (code && Object.hasOwn(FEHLER_TEXTE, code)) return fehlerText(error, t) ?? t('Die Änderung konnte nicht bestätigt werden.');
+    if (code && Object.hasOwn(explanations, code)) return t(explanations[code]);
+    if (Object.hasOwn(dictionaryFor('en'), error.message)) return t(error.message);
+  }
+  return t('Die Änderung konnte nicht bestätigt werden.');
 }

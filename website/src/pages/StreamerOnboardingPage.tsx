@@ -1,3 +1,4 @@
+import { landingText, landingLink } from "@/lib/landingLocale";
 import { useState } from "react";
 import { ArrowRight, CheckCircle2, LifeBuoy } from "lucide-react";
 import { motion } from "framer-motion";
@@ -16,7 +17,7 @@ import { ONBOARDING_VISUAL_STEPS } from "@/data/twitchKnowledgeBase";
 
 const NAV_LINKS = [
   { label: "Features", href: "#features" },
-  { label: "Frag den Bot", href: "#frag-bot" },
+  { label: landingText("Frag den Bot"), href: "#frag-bot" },
   { label: "FAQ", href: "#faq-hinweis" },
 ];
 
@@ -44,9 +45,7 @@ function NetworkVisualization() {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.3 }}
-      >
-        DU
-      </motion.text>
+      >{landingText("DU ")}</motion.text>
 
       {/* Surrounding nodes */}
       {[0, 60, 120, 180, 240, 300].map((angle, i) => {
@@ -171,9 +170,9 @@ function RaidDiagram() {
 // Checklist diagram for the fourth step
 function ChecklistVisual() {
   const items = [
-    "Kanal verbunden",
-    "Auto-Raid aktiv",
-    "Dashboard offen",
+    landingText("Kanal verbunden"),
+    landingText("Auto-Raid aktiv"),
+    landingText("Dashboard offen"),
   ];
 
   return (
@@ -200,7 +199,7 @@ export function StreamerOnboardingPage() {
   const [currentStep, setCurrentStep] = useState(0);
   const onboardingAuthUrl = buildTwitchBotAuthUrl();
 
-  const stepLabels = ONBOARDING_VISUAL_STEPS.map((s) => s.eyebrow.split(". ")[1]);
+  const stepLabels = ONBOARDING_VISUAL_STEPS.map((s) => landingText(s.eyebrow).split(". ")[1]);
 
   // Visual content for each step
   const visualContent = [
@@ -216,10 +215,10 @@ export function StreamerOnboardingPage() {
       <PublicInfoHeader
         navLinks={NAV_LINKS}
         primaryAction={{
-          label: "Bot für deinen Kanal aktivieren",
+          label: landingText("Bot für deinen Kanal aktivieren"),
           href: onboardingAuthUrl,
         }}
-        secondaryAction={{ label: "Zur FAQ", href: TWITCH_FAQ_URL, variant: "ghost" }}
+        secondaryAction={{ label: landingText("Zur FAQ"), href: TWITCH_FAQ_URL, variant: "ghost" }}
       />
 
       <main className="relative z-10">
@@ -231,21 +230,15 @@ export function StreamerOnboardingPage() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5 }}
               className="inline-flex rounded-full border border-border bg-[rgba(44, 35, 24,0.76)] px-4 py-1.5 text-sm text-accent"
-            >
-              Streamer Onboarding auf deutsche-deadlock-community.de
-            </motion.div>
+            >{landingText("Streamer Onboarding auf deutsche-deadlock-community.de ")}</motion.div>
 
             <motion.h1
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.6, delay: 0.1 }}
               className="mt-6 text-4xl font-bold leading-tight text-text-primary md:text-5xl lg:text-6xl"
-            >
-              Werde Teil des
-              <br />
-              <span className="bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-                Deadlock-Partnernetzwerks
-              </span>
+            >{landingText("Werde Teil des ")}<br />
+              <span className="bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">{landingText("Deadlock-Partnernetzwerks ")}</span>
             </motion.h1>
 
             <motion.p
@@ -253,10 +246,7 @@ export function StreamerOnboardingPage() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.6, delay: 0.2 }}
               className="mt-6 text-lg leading-relaxed text-text-secondary md:text-xl"
-            >
-              Aktiviere den Bot und vernetze dich mit 30+ Deadlock-Streamern.
-              Auto-Raids, Dashboard und mehr.
-            </motion.p>
+            >{landingText("Aktiviere den Bot und vernetze dich mit 30+ Deadlock-Streamern. Auto-Raids, Dashboard und mehr. ")}</motion.p>
 
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -265,11 +255,9 @@ export function StreamerOnboardingPage() {
               className="mt-10"
             >
               <a
-                href={onboardingAuthUrl}
+                href={landingLink(onboardingAuthUrl)}
                 className="gradient-accent inline-flex items-center gap-2 rounded-xl px-8 py-4 font-semibold no-underline transition-all duration-200 hover:brightness-110"
-              >
-                Jetzt Kanal verbinden
-                <ArrowRight size={18} />
+              >{landingText("Jetzt Kanal verbinden ")}<ArrowRight size={18} />
               </a>
             </motion.div>
           </div>
@@ -297,14 +285,14 @@ export function StreamerOnboardingPage() {
                 transition={{ duration: 0.4, delay: index * 0.1 }}
               >
                 <StepCard
-                  eyebrow={step.eyebrow}
-                  title={step.title}
-                  description={step.description}
+                  eyebrow={landingText(step.eyebrow)}
+                  title={landingText(step.title)}
+                  description={landingText(step.description)}
                   visualType={step.visualType}
                   visualSrc={step.visualSrc}
                   visualContent={visualContent[index]}
-                  ctaLabel={step.ctaLabel}
-                  ctaHref={step.ctaHref}
+                  ctaLabel={landingText(step.ctaLabel)}
+                  ctaHref={step.ctaHref ? landingLink(step.ctaHref) : undefined}
                   isActive={currentStep === index}
                 />
               </motion.div>
@@ -325,31 +313,24 @@ export function StreamerOnboardingPage() {
             <div className="panel-card overflow-hidden rounded-[2rem] p-8 md:p-10">
               <div className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
                 <div>
-                  <p className="text-sm uppercase tracking-[0.16em] text-primary">
-                    FAQ und Support
-                  </p>
-                  <h2 className="mt-4 text-4xl font-bold text-text-primary md:text-5xl">
-                    Alle Details findest du in der FAQ.
-                  </h2>
-                  <p className="mt-5 max-w-2xl text-base leading-relaxed text-text-secondary">
-                    Auto-Raid, Dashboard, Discord und weitere Funktionen -
-                    alles erklärt.
-                  </p>
+                  <p className="text-sm uppercase tracking-[0.16em] text-primary">{landingText("FAQ und Support ")}</p>
+                  <h2 className="mt-4 text-4xl font-bold text-text-primary md:text-5xl">{landingText("Alle Details findest du in der FAQ. ")}</h2>
+                  <p className="mt-5 max-w-2xl text-base leading-relaxed text-text-secondary">{landingText("Auto-Raid, Dashboard, Discord und weitere Funktionen - alles erklärt. ")}</p>
                 </div>
 
                 <div className="grid gap-4">
                   <a
-                    href={TWITCH_FAQ_URL}
+                    href={landingLink(TWITCH_FAQ_URL)}
                     className="gradient-accent inline-flex items-center justify-between gap-4 rounded-2xl px-6 py-5 font-semibold no-underline transition-all duration-200 hover:brightness-110"
                   >
-                    <span>Komplette FAQ</span>
+                    <span>{landingText("Komplette FAQ")}</span>
                     <ArrowRight size={18} />
                   </a>
                   <a
-                    href={DISCORD_INVITE_URL}
+                    href={landingLink(DISCORD_INVITE_URL)}
                     className="inline-flex items-center justify-between gap-4 rounded-2xl border border-border px-6 py-5 font-semibold text-text-primary no-underline transition-colors duration-200 hover:border-border-hover hover:bg-white/5"
                   >
-                    <span>Discord und Support</span>
+                    <span>{landingText("Discord und Support")}</span>
                     <LifeBuoy size={18} />
                   </a>
                 </div>

@@ -12,7 +12,7 @@
 .schedule-queue h2 { font-family: var(--font-display, inherit); font-size: 24px; margin: 0 0 8px; font-weight: 600; }
 .schedule-queue h3 { font-size: 17px; margin: 0 0 16px; font-weight: 600; }
 .schedule-queue p { margin: 6px 0; line-height: 1.6; }
-.schedule-queue button, .schedule-queue input, .schedule-queue select { font: inherit; }
+.schedule-queue button, .schedule-queue input, .schedule-queue select, .schedule-queue textarea { font: inherit; }
 .schedule-queue button {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   min-height: 44px; padding: 9px 12px; border: 1px solid var(--sq-border); border-radius: 8px;
@@ -20,8 +20,8 @@
 }
 .schedule-queue button:hover:not(:disabled) { background: #ffffff08; border-color: var(--sq-accent); }
 .schedule-queue button:disabled { opacity: .45; cursor: not-allowed; }
-.schedule-queue :is(button, input, select):focus-visible { outline: 2px solid var(--sq-accent); outline-offset: 3px; }
-.schedule-queue input, .schedule-queue select {
+.schedule-queue :is(button, input, select, textarea):focus-visible { outline: 2px solid var(--sq-accent); outline-offset: 3px; }
+.schedule-queue input, .schedule-queue select, .schedule-queue textarea {
   min-height: 44px; min-width: 0; max-width: 100%; width: 100%; padding: 9px 10px;
   border: 1px solid var(--sq-border); border-radius: 8px; color: inherit; background: #121212;
   caret-color: var(--sq-accent); font-size: 14px;
@@ -62,6 +62,11 @@
 .schedule-queue .sq-error { color: var(--color-danger, #ffc9b8); font-size: 13px; overflow-wrap: anywhere; }
 .schedule-queue .sq-notice { color: var(--sq-accent); font-size: 13px; margin-bottom: 16px; }
 .sq-sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; clip: rect(0, 0, 0, 0); overflow: hidden; white-space: nowrap; }
+.schedule-queue .sq-platforms { margin-top: 24px; }
+.sq-platforms legend { margin-bottom: 8px; font-size: 14px; font-weight: 600; }
+.sq-review-actions { margin-top: 14px; }
+.sq-review-actions label { display: block; margin-bottom: 8px; color: var(--sq-muted); font-size: 13px; }
+.sq-review-actions textarea { resize: vertical; }
 .schedule-queue ::selection { background: var(--sq-accent); color: #241a12; }
 @media (max-width: 800px) { .sq-columns { grid-template-columns: minmax(0, 1fr); gap: 36px; } }
 @media (max-width: 420px) { .sq-fields { grid-template-columns: minmax(0, 1fr); } .sq-slot { grid-template-columns: minmax(0, 1fr) 112px 44px; gap: 6px; } .sq-job-head { flex-wrap: wrap; } }

@@ -1,3 +1,4 @@
+import { landingText, landingLink } from "@/lib/landingLocale";
 import { ArrowUpRight, MessagesSquare, Radio, Rocket } from "lucide-react";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
 import { SectionHeading } from "@/components/ui/SectionHeading";
@@ -6,34 +7,56 @@ const phases = [
   {
     icon: Radio,
     step: "01",
-    title: "Du gehst live",
-    intro: "Der Bot merkt es von selbst. Du musst nirgendwo Bescheid sagen.",
+    title: landingText("Du gehst live"),
+    intro: landingText(
+      "Der Bot merkt es von selbst. Du musst nirgendwo Bescheid sagen.",
+    ),
     points: [
-      "Dein Deadlock-Stream wird automatisch erkannt, rund um die Uhr.",
-      "Der Bot postet dich im Community-Discord, auf Wunsch mit Ping-Rolle.",
-      "Hunderte Community-Mitglieder sehen dich ab der ersten Minute.",
+      landingText(
+        "Dein Deadlock-Stream wird automatisch erkannt, rund um die Uhr.",
+      ),
+      landingText(
+        "Der Bot postet dich im Community-Discord, auf Wunsch mit Ping-Rolle.",
+      ),
+      landingText(
+        "Hunderte Community-Mitglieder sehen dich ab der ersten Minute.",
+      ),
     ],
   },
   {
     icon: MessagesSquare,
     step: "02",
-    title: "Während du streamst",
-    intro: "Der Bot arbeitet im Hintergrund, damit du dich aufs Spiel konzentrierst.",
+    title: landingText("Während du streamst"),
+    intro: landingText(
+      "Der Bot arbeitet im Hintergrund, damit du dich aufs Spiel konzentrierst.",
+    ),
     points: [
-      "Chat-Befehle wie !clip und !lurk laufen mit, einzeln abschaltbar.",
-      "Ein KI-Wächter bannt Scam-Konten, bevor dein Chat sie überhaupt sieht.",
-      "Zuschauer-, Chat- und Raid-Zahlen werden automatisch mitgeschrieben.",
+      landingText(
+        "Chat-Befehle wie !clip und !lurk laufen mit, einzeln abschaltbar.",
+      ),
+      landingText(
+        "Ein KI-Wächter bannt Scam-Konten, bevor dein Chat sie überhaupt sieht.",
+      ),
+      landingText(
+        "Zuschauer-, Chat- und Raid-Zahlen werden automatisch mitgeschrieben.",
+      ),
     ],
   },
   {
     icon: Rocket,
     step: "03",
-    title: "Dein Stream endet",
-    intro: "Der Moment, für den es das Netzwerk gibt: Deine Viewer gehen nicht verloren.",
+    title: landingText("Dein Stream endet"),
+    intro: landingText(
+      "Der Moment, für den es das Netzwerk gibt: Deine Viewer gehen nicht verloren.",
+    ),
     points: [
-      "Auto-Raid schickt deine Viewer zum passendsten Live-Partner im Netzwerk.",
-      "Gehen andere offline, landen ihre Raids genauso bei dir.",
-      "Im Dashboard wartet die Auswertung: Bestwerte, Trends, Netzwerk-Vergleich.",
+      landingText(
+        "Auto-Raid schickt deine Viewer zum passendsten Live-Partner im Netzwerk.",
+      ),
+      landingText("Gehen andere offline, landen ihre Raids genauso bei dir."),
+      landingText(
+        "Im Dashboard wartet die Auswertung: Bestwerte, Trends, Netzwerk-Vergleich.",
+      ),
     ],
   },
 ];
@@ -43,9 +66,11 @@ export function StreamDay() {
     <section id="ablauf" className="py-24">
       <div className="max-w-7xl mx-auto px-6">
         <SectionHeading
-          badge="So funktioniert's"
-          title="Was der Bot für dich macht"
-          subtitle="Die deutsche Deadlock-Szene ist klein. Wer allein streamt, kämpft allein um jeden Viewer. Der Bot hängt deinen Kanal an ein Netzwerk aus Streamern und einen aktiven Community-Discord: Zuschauer werden geteilt statt verloren."
+          badge={landingText("So funktioniert's")}
+          title={landingText("Was der Bot für dich macht")}
+          subtitle={landingText(
+            "Die deutsche Deadlock-Szene ist klein. Wer allein streamt, kämpft allein um jeden Viewer. Der Bot hängt deinen Kanal an ein Netzwerk aus Streamern und einen aktiven Community-Discord: Zuschauer werden geteilt statt verloren.",
+          )}
         />
 
         <div className="mt-16 grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -63,7 +88,10 @@ export function StreamDay() {
                         border: "1px solid rgba(85, 151, 143, 0.45)",
                       }}
                     >
-                      <Icon size={20} className="text-[var(--color-accent-hover)]" />
+                      <Icon
+                        size={20}
+                        className="text-[var(--color-accent-hover)]"
+                      />
                     </div>
                     <span className="text-sm font-semibold tracking-[0.2em] text-[var(--color-accent)] opacity-70">
                       {phase.step}
@@ -99,17 +127,17 @@ export function StreamDay() {
         <ScrollReveal delay={0.3}>
           <div className="mt-10 flex flex-wrap justify-center gap-x-8 gap-y-3">
             <a
-              href="/twitch/demo"
+              href={landingLink("/twitch/demo")}
               className="inline-flex items-center gap-1.5 text-sm font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors duration-200"
             >
-              Dashboard mit Demo-Daten ansehen
+              {landingText("Dashboard mit Demo-Daten ansehen")}
               <ArrowUpRight size={15} />
             </a>
             <a
-              href="/streamer/vergleich/"
+              href={landingLink("/streamer/vergleich/")}
               className="inline-flex items-center gap-1.5 text-sm font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors duration-200"
             >
-              Alle Funktionen im Vergleich
+              {landingText("Alle Funktionen im Vergleich")}
               <ArrowUpRight size={15} />
             </a>
           </div>

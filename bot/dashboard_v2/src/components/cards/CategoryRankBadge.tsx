@@ -1,3 +1,4 @@
+import { useLanguage } from '@/context/LanguageContext';
 import { motion } from 'framer-motion';
 import { Trophy } from 'lucide-react';
 
@@ -7,6 +8,7 @@ interface CategoryRankBadgeProps {
 }
 
 export function CategoryRankBadge({ rank, total }: CategoryRankBadgeProps) {
+  const { t, locale } = useLanguage();
   const percentile = total > 0 ? Math.round(((total - rank) / total) * 100) : 0;
 
   // Color based on ranking
@@ -28,10 +30,10 @@ export function CategoryRankBadge({ rank, total }: CategoryRankBadgeProps) {
       </div>
       <div className="min-w-0">
         <div className="text-2xl font-bold text-transparent bg-gradient-to-r from-primary to-accent bg-clip-text">
-          Platz {rank}
+          {t('Platz {rank}', { rank: rank.toLocaleString(locale) })}
         </div>
         <div className="text-sm text-text-secondary">
-          von {total} Deadlock-Streamern (Top {100 - percentile}%)
+          {t('von {total} Deadlock-Streamern (Top {top}%)', { total: total.toLocaleString(locale), top: 100 - percentile })}
         </div>
       </div>
     </motion.div>

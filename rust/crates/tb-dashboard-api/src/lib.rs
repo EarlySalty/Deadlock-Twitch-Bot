@@ -299,6 +299,10 @@ fn build_authed_router_with_analysis_store(
             get(social_media::tiktok_editor_get_handler),
         )
         .route(
+            "/social-media/api/clips/{clip_db_id}/tiktok/music-consent",
+            put(social_media::tiktok_music_consent_put_handler),
+        )
+        .route(
             "/social-media/api/clips/{clip_db_id}/tiktok/draft",
             put(social_media::tiktok_draft_put_handler),
         )
@@ -387,6 +391,10 @@ fn build_authed_router_with_analysis_store(
         .route(
             "/social-media/api/autopilot/queue/{job_id}/cancel",
             post(social_media::autopilot_queue_cancel_handler),
+        )
+        .route(
+            "/social-media/api/autopilot/queue/{job_id}/resolve",
+            post(social_media::autopilot_queue_resolve_handler),
         )
         .route(
             "/social-media/api/autopilot/pool",
@@ -1257,6 +1265,11 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
             "/twitch/api/admin/config/operating",
             get(handlers::admin_operating_config::get_handler)
                 .post(handlers::admin_operating_config::save_handler),
+        )
+        .route(
+            "/twitch/api/admin/config/operating/settings",
+            get(handlers::admin_operating_config::settings_get_handler)
+                .put(handlers::admin_operating_config::settings_save_handler),
         )
         .route("/twitch/api/admin/audit-log", get(admin_audit_log::handler))
         .route(

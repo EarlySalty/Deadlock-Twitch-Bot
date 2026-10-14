@@ -1,12 +1,15 @@
-import { StrictMode } from 'react'
-import { createRoot, hydrateRoot } from 'react-dom/client'
-import './index.css'
-import './theme-v2.css'
-import './streamer-v3.css'
-import { StreamerNetworkV3Page } from '@/pages/StreamerNetworkV3Page'
+import { isEnglishLanding } from "@/lib/landingLocale";
+import { StrictMode } from "react";
+import { createRoot, hydrateRoot } from "react-dom/client";
+import "./index.css";
+import "./theme-v2.css";
+import "./streamer-v3.css";
+import { StreamerNetworkV3Page } from "@/pages/StreamerNetworkV3Page";
 
-if (typeof window !== 'undefined') {
-  const container = document.getElementById('root')!
+if (typeof window !== "undefined") {
+  const container = document.getElementById("root")!;
+
+  if (isEnglishLanding()) container.replaceChildren();
 
   if (container.hasChildNodes()) {
     hydrateRoot(
@@ -14,12 +17,12 @@ if (typeof window !== 'undefined') {
       <StrictMode>
         <StreamerNetworkV3Page />
       </StrictMode>,
-    )
+    );
   } else {
     createRoot(container).render(
       <StrictMode>
         <StreamerNetworkV3Page />
       </StrictMode>,
-    )
+    );
   }
 }

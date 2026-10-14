@@ -1,4 +1,5 @@
 import { withCookieCredentials } from './core';
+import { mainDomainOAuthUrl } from '../i18n/oauthLinks';
 import { isPreviewLocalhost, PREVIEW_SOCIAL_ROUTE } from '@/preview/routes';
 import { getPreviewSocialResponse } from '@/preview/fixtures';
 import { fetchAuthStatus } from './auth';
@@ -385,18 +386,27 @@ export interface TikTokPostOptions {
 export type TikTokDraft = Pick<TikTokPostOptions,
   'caption' | 'privacy_level' | 'allow_comment' | 'allow_duet' | 'allow_stitch'
   | 'commercial_content' | 'brand_organic_toggle' | 'brand_content_toggle'> & {
+    standard_description: string;
     music_consent?: boolean;
     music_consent_at?: string;
     music_consent_platform_user_id?: string;
   };
 
 export interface TikTokEditorState {
+  music_consent: boolean;
+  music_consent_platform_user_id: string | null;
   draft: TikTokDraft | null;
   defaults: TikTokDraft | null;
 }
 
 export function fetchTikTokEditor(clipDbId: number): Promise<TikTokEditorState> {
   return fetchJson(`/twitch/social-media/api/clips/${clipDbId}/tiktok/editor`, { cache: 'no-store' });
+}
+
+export function saveTikTokMusicConsent(clipDbId: number, platformUserId: string): Promise<{ success: boolean }> {
+  return fetchJson(`/twitch/social-media/api/clips/${clipDbId}/tiktok/music-consent`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ platform_user_id: platformUserId }),
+  });
 }
 
 export function saveTikTokChoices(clipDbId: number, kind: 'draft' | 'defaults', choices: TikTokDraft): Promise<{ success: boolean; choices: TikTokDraft }> {
@@ -722,7 +732,7 @@ export async function fetchPlatformStatus(
 export function oauthStartUrl(platform: string, twitchUserId: string | undefined): string {
   if (isPreviewLocalhost()) return `${PREVIEW_SOCIAL_ROUTE}?view=konten#preview-read-only`;
   const qs = buildQuery({ twitch_user_id: twitchUserId });
-  return `/twitch/social-media/oauth/start/${platform}${qs}`;
+  return mainDomainOAuthUrl(`/twitch/social-media/oauth/start/${platform}${qs}`);
 }
 
 /**
@@ -735,3 +745,13 @@ export async function disconnectPlatform(platform: string, twitchUserId: string 
 }
 
 export const fetchSocialAiJson = fetchJson;
+
+export { scheduleQueueApi } from '@/components/socialmedia/autopilot/schedule-queue/api';
+export type {
+  QueueJob,
+  ReviewDecision,
+  SchedulePatch,
+  ScheduleQueueApi,
+  ScheduleQueueSnapshot,
+  ScheduleSettings,
+} from '@/components/socialmedia/autopilot/schedule-queue/api';

@@ -200,7 +200,9 @@ pub async fn insert(pool: &PgPool, job: &NewProductionJob) -> Result<ProductionJ
 async fn eligible_head_on(
     connection: &mut PgConnection,
 ) -> Result<Option<(i64, String)>, JobError> {
-    Ok(sqlx::query_as(
+    let backlog = autopilot_schedule::review_backlog_sql("j.twitch_user_id");
+    let limit = autopilot_schedule::REVIEW_LIMIT;
+    Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT j.id, j.twitch_user_id FROM social_production_jobs j WHERE j.status = 'queued'
          AND j.attempts < j.max_attempts
          AND COALESCE((j.metadata->>'retry_after')::timestamptz, '-infinity'::timestamptz) <= clock_timestamp()
@@ -210,16 +212,11 @@ async fn eligible_head_on(
              AND (j.scheduled_at IS NULL OR (j.scheduled_at > clock_timestamp()
                  AND j.scheduled_at <= clock_timestamp() + make_interval(hours => s.lead_time_hours)
                      + CASE WHEN s.lead_time_hours = 0 THEN INTERVAL '1 minute' ELSE INTERVAL '0' END))
-             AND NOT EXISTS(SELECT 1 FROM social_production_jobs h WHERE h.twitch_user_id = j.twitch_user_id
-                 AND h.source = 'autopilot' AND h.status = 'review')
-             AND (s.publish_mode = 'full_auto' OR ((SELECT COUNT(*) FROM social_produced_videos v WHERE v.twitch_user_id = j.twitch_user_id
-                 AND v.status = 'review' AND (v.expires_at IS NULL OR v.expires_at > clock_timestamp()))
-                 + (SELECT COUNT(*) FROM social_production_jobs h WHERE h.twitch_user_id = j.twitch_user_id
-                     AND h.status = 'review' AND NOT EXISTS(SELECT 1 FROM social_produced_videos v
-                         WHERE v.job_id = h.id AND v.status = 'review'
-                         AND (v.expires_at IS NULL OR v.expires_at > clock_timestamp())))) < 2)))
-         ORDER BY j.queue_order, j.id LIMIT 1",
-    ).fetch_optional(connection).await?)
+             AND (s.publish_mode = 'full_auto' OR {backlog} < {limit})))
+         ORDER BY j.queue_order, j.id LIMIT 1"
+    )))
+    .fetch_optional(connection)
+    .await?)
 }
 
 pub async fn claim_next(pool: &PgPool) -> Result<Option<ProductionJob>, JobError> {
@@ -268,8 +265,8 @@ pub async fn claim_next(pool: &PgPool) -> Result<Option<ProductionJob>, JobError
         if !settings.enabled
             || settings.paused
             || settings.schedule_slots.is_empty()
-            || autopilot_schedule::has_automatic_review_on(&mut tx, &owner).await?
-            || (settings.publish_mode == autopilot_settings::PublishMode::Review && reviews >= 2)
+            || (settings.publish_mode == autopilot_settings::PublishMode::Review
+                && reviews >= autopilot_schedule::REVIEW_LIMIT)
             || job.scheduled_at.is_some_and(|slot| {
                 slot <= now || slot > autopilot_schedule::production_horizon(&settings, now)
             })
@@ -357,6 +354,41 @@ pub async fn finish(
     let changed = sqlx::query("UPDATE social_production_jobs SET status = $3, stage = $3, review_reasons = $4::text::jsonb, last_error = $5, finished_at = NOW() WHERE id = $1 AND twitch_user_id = $2 AND status = 'running'")
         .bind(id).bind(twitch_user_id).bind(status).bind(serde_json::to_string(reasons)?).bind(error)
         .execute(&mut *tx).await?.rows_affected();
+    if changed != 1 {
+        return Err(JobError::State);
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+pub const UNSUITABLE_REASON: &str = "unsuitable_clip";
+const MAX_EXPLANATION_CHARS: usize = 1000;
+
+pub async fn flag_unsuitable(
+    pool: &PgPool,
+    twitch_user_id: &str,
+    id: i64,
+    explanation: &str,
+) -> Result<(), JobError> {
+    let explanation = explanation.trim();
+    if explanation.is_empty() || explanation.chars().count() > MAX_EXPLANATION_CHARS {
+        return Err(JobError::Invalid("Ungültige Begründung".into()));
+    }
+    let mut tx = pool.begin().await?;
+    autopilot_settings::lock_owner(&mut tx, twitch_user_id).await?;
+    let changed = sqlx::query(
+        "UPDATE social_production_jobs SET status = 'review', stage = 'review',
+        review_reasons = jsonb_build_array($3::text), last_error = NULL, finished_at = NOW(),
+        metadata = metadata || jsonb_build_object('review_explanation', $4::text)
+        WHERE id = $1 AND twitch_user_id = $2 AND status = 'running'",
+    )
+    .bind(id)
+    .bind(twitch_user_id)
+    .bind(UNSUITABLE_REASON)
+    .bind(explanation)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
     if changed != 1 {
         return Err(JobError::State);
     }

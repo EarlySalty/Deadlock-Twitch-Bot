@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { RefreshCw, Save } from 'lucide-react';
 import { fetchOperatingConfig, saveOperatingConfig, type OperatingOptions } from '@/api/client';
 import { PageHeader } from '@/components/layout/PageHeader';
+import { SettingsCatalogSection } from './SettingsCatalogSection';
 
 const fields: Array<{ key: keyof OperatingOptions; label: string; hint: string; min: number; max: number }> = [
   { key: 'pool_max', label: 'Verbindungen je Dienst', hint: 'Maximale gleichzeitige Datenbankverbindungen für Bot und Dashboard.', min: 1, max: 1000 },
@@ -38,7 +39,7 @@ export function OperatingConfigPage() {
   }
 
   return <section className="space-y-5">
-    <PageHeader title="Betriebseinstellungen" description="Datenbankverbindungen von Twitch-Bot und Dashboard einstellen. Änderungen werden nach einem Neustart wirksam." />
+    <PageHeader title="Betriebseinstellungen" description="Datenbankverbindungen und alle weiteren Einstellungen des Twitch-Bots. Änderungen werden nach einem Neustart wirksam." />
     <div className="flex flex-wrap items-center justify-between gap-3">
       <p className="text-sm text-text-secondary">Der aktive Stand wird für jeden Dienst einzeln geprüft.</p>
       <button type="button" className="admin-button admin-button-secondary" disabled={query.isFetching || save.isPending} onClick={() => void reload()}>
@@ -79,12 +80,13 @@ export function OperatingConfigPage() {
           </div>)}
         </div>
         <p className="text-sm text-text-secondary">Speichern startet keinen Dienst neu. Bis zum Neustart arbeiten laufende Dienste mit ihrem bisherigen Stand.</p>
-        {save.error && <p role="alert" className="text-sm text-red-300">{save.error.message}</p>}
+        {save.error && <p role="alert" className="text-sm text-danger">{save.error.message}</p>}
         <button type="submit" className="admin-button admin-button-primary" disabled={!draft || save.isPending}>
           <Save size={16} aria-hidden="true" /> {save.isPending ? 'Wird gespeichert …' : 'Änderungen speichern'}
         </button>
       </form>
     </>}
     <p role="status" aria-live="polite" className="text-sm text-text-secondary">{notice}</p>
+    <SettingsCatalogSection />
   </section>;
 }
