@@ -4,11 +4,12 @@ export function isEnglishLanding(
   location: (Pick<Location, "hostname" | "pathname"> & Partial<Pick<Location, "search">>) | undefined = typeof window === "undefined" ? undefined : window.location,
 ): boolean {
   if (!location) return false;
-  const path = location.pathname.replace(/\/index\.html$/, "/").replace(/\/$/, "") || "/";
-  if (!["/", "/streamer", "/streamer/faq", "/streamer/onboarding", "/streamer/vergleich", "/streamer/clips", "/twitch/faq", "/twitch/onboarding", "/clips"].includes(path)) return false;
   const language = new URLSearchParams(location.search ?? "").get("lang");
   if (language === "de") return false;
-  return language === "en" || ["dead-lock.de", "www.dead-lock.de"].includes(location.hostname.toLowerCase());
+  if (["dead-lock.de", "www.dead-lock.de"].includes(location.hostname.toLowerCase())) return true;
+  const path = location.pathname.replace(/\/index\.html$/, "/").replace(/\/$/, "") || "/";
+  if (!["/", "/streamer", "/streamer/faq", "/streamer/onboarding", "/streamer/vergleich", "/streamer/clips", "/twitch/faq", "/twitch/onboarding", "/clips"].includes(path)) return false;
+  return language === "en";
 }
 
 export function landingText(text: string): string {
