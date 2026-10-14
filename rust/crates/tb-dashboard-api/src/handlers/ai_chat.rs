@@ -5,6 +5,10 @@
 //! History-Kontext und Follow-up-Ratelimit. (Der KI-Pfad bleibt im Dispatch
 //! für historische Sessions erhalten; neue Analysen nutzen ausschließlich Opus.)
 
+#[cfg(test)]
+#[path = "ai_guard_test_fixture.rs"]
+mod guard_fixture;
+
 use std::time::Duration;
 
 use axum::{
@@ -86,7 +90,8 @@ impl From<tb_llm::LlmError> for ChatCallError {
     fn from(error: tb_llm::LlmError) -> Self {
         let known_rejection = matches!(
             error,
-            tb_llm::LlmError::Unavailable(_)
+            tb_llm::LlmError::Disabled(_)
+                | tb_llm::LlmError::Unavailable(_)
                 | tb_llm::LlmError::Http {
                     status: 400 | 401 | 403 | 404 | 409 | 422 | 429,
                     ..
@@ -110,7 +115,11 @@ impl From<tb_engagement::llm_chat::GenerateError> for ChatCallError {
         Self { known_rejection }
     }
 }
-async fn call_ai_chat(session: &ChatSession, message: &str) -> Result<String, ChatCallError> {
+async fn call_ai_chat(
+    session: &ChatSession,
+    message: &str,
+    (twitch_user_id, streamer): (&str, &str),
+) -> Result<String, ChatCallError> {
     let system_prompt = build_chat_system_prompt(session);
     let history = history_messages(session);
 
@@ -130,7 +139,9 @@ async fn call_ai_chat(session: &ChatSession, message: &str) -> Result<String, Ch
             tb_llm::Request::history(messages)
                 .system(&system_prompt)
                 .max_tokens(4000)
-                .ledger_purpose("ai-chat"),
+                .ledger_purpose("ai-chat")
+                .twitch_broadcaster(twitch_user_id)
+                .twitch_channel(streamer),
         )
         .await
         .map_err(ChatCallError::from)?;
@@ -142,7 +153,8 @@ async fn call_ai_chat(session: &ChatSession, message: &str) -> Result<String, Ch
         let mut messages = vec![json!({ "role": "system", "content": system_prompt })];
         messages.extend(history);
         messages.push(json!({ "role": "user", "content": message }));
-        let client = EngagementLlmClient::new(None, None, None, Some(Duration::from_secs(240)));
+        let client = EngagementLlmClient::new(None, None, None, Some(Duration::from_secs(240)))
+            .twitch_subject(twitch_user_id, streamer);
         // raw_text bereits getrimmt (= extract_text_response auf String).
         client
             .messages_completion(Value::Array(messages), 4000, 0.5, "dashboard_ai_chat")
@@ -276,7 +288,7 @@ pub(crate) async fn ai_chat_handler(
         }
     };
     let model = turn.session.model.clone();
-    let reply = match call_ai_chat(&turn.session, &message).await {
+    let reply = match call_ai_chat(&turn.session, &message, (&twitch_user_id, &streamer)).await {
         Ok(r) if !r.trim().is_empty() => r,
         Ok(_) => {
             if let Err(error) = turn.fail(false).await {
@@ -357,6 +369,132 @@ mod tests {
             follow_up_count: 0,
             created_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn guard_denial_is_known_but_uncertain_provider_outcomes_are_not() {
+        assert!(ChatCallError::from(tb_llm::LlmError::Disabled("denied".into())).known_rejection);
+        assert!(
+            ChatCallError::from(tb_engagement::llm_chat::GenerateError::from(
+                tb_llm::LlmError::Disabled("denied".into())
+            ))
+            .known_rejection
+        );
+        for error in [
+            tb_llm::LlmError::Timeout("timeout".into()),
+            tb_llm::LlmError::Transport("connection lost".into()),
+            tb_llm::LlmError::Unparsable("invalid response".into()),
+            tb_llm::LlmError::Http {
+                status: 503,
+                body: String::new(),
+            },
+        ] {
+            assert!(!ChatCallError::from(error.clone()).known_rejection);
+            assert!(
+                !ChatCallError::from(tb_engagement::llm_chat::GenerateError::from(error))
+                    .known_rejection
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_guard_denial_refunds_quota_and_allowed_uid_reaches_provider() {
+        if !guard_fixture::in_isolated_process(
+            "handlers::ai_chat::tests::chat_guard_denial_refunds_quota_and_allowed_uid_reaches_provider",
+        ) {
+            return;
+        }
+        let database = make_pool("chat_guard").await;
+        let pool = &database.pool;
+        let server = guard_fixture::initialize(pool).await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/chat/completions"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{"message": {"content": "synthetic reply"}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2}
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let store = AiStore::new(pool);
+        for (id, model, remaining) in [(7, AI_MODEL_OPUS, 2), (8, AI_MODEL_LLM, 9)] {
+            sqlx::query("INSERT INTO ai_analyses VALUES ($1) ON CONFLICT DO NOTHING")
+                .bind(id)
+                .execute(pool)
+                .await
+                .unwrap();
+            let mut saved = session(model);
+            saved.analysis_id = id;
+            saved.streamer = "obsolete-session-login".into();
+            let mut guard =
+                crate::ai_store::SessionGuard::acquire(&store.lock_pool, "guard-fixture")
+                    .await
+                    .unwrap();
+            crate::ai_store::save_session(&mut guard, "42", &saved)
+                .await
+                .unwrap();
+            drop(guard);
+            sqlx::query("UPDATE public.discord_guilds SET ai_features = false")
+                .execute(pool)
+                .await
+                .unwrap();
+            for _ in 0..4 {
+                let response = ai_chat_handler(
+                    DashboardAuthLevel::admin(),
+                    State(pool.clone()),
+                    Extension(store.clone()),
+                    json!({"streamer":"nani", "analysis_id":id, "message":"synthetic question"})
+                        .to_string(),
+                )
+                .await
+                .into_response();
+                assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+                let body = axum::body::to_bytes(response.into_body(), 8192)
+                    .await
+                    .unwrap();
+                let payload: Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(payload["outcomeUnknown"], false);
+            }
+            let unchanged: (i64, i64) = sqlx::query_as(
+                "SELECT follow_up_count, jsonb_array_length(history)::bigint FROM twitch_ai_chat_sessions WHERE analysis_id = $1",
+            ).bind(id).fetch_one(pool).await.unwrap();
+            assert_eq!(unchanged, (0, 0));
+            let pending: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM twitch_ai_chat_reservations WHERE analysis_id = $1 AND state <> 'failed'",
+            ).bind(id).fetch_one(pool).await.unwrap();
+            assert_eq!(pending, 0);
+            let hourly: i64 = sqlx::query_scalar("SELECT count(*) FROM twitch_ai_chat_hourly")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+            assert_eq!(hourly, 0);
+            sqlx::query("UPDATE public.discord_guilds SET ai_features = true")
+                .execute(pool)
+                .await
+                .unwrap();
+            let response = ai_chat_handler(
+                DashboardAuthLevel::admin(),
+                State(pool.clone()),
+                Extension(store.clone()),
+                json!({"streamer":"nani", "analysis_id":id, "message":"synthetic question"})
+                    .to_string(),
+            )
+            .await
+            .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = axum::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap();
+            let payload: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(payload["message"], "synthetic reply");
+            assert_eq!(payload["followUpsRemaining"], remaining);
+        }
+        let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM llm_usage")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(attempts, 2);
+        server.verify().await;
     }
 
     #[test]

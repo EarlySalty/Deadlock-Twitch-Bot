@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "ai_guard_test_fixture.rs"]
+mod guard_fixture;
+
 use std::time::Duration;
 
 use axum::{
@@ -134,13 +138,19 @@ pub(crate) async fn ai_analysis_handler(
     .await
 }
 
-async fn call_ai_analysis(ai_model: &str, prompt: &str) -> Result<Vec<Value>, String> {
+async fn call_ai_analysis(
+    ai_model: &str,
+    prompt: &str,
+    (twitch_user_id, streamer): (&str, &str),
+) -> Result<Vec<Value>, String> {
     if ai_model == AI_MODEL_OPUS {
         let response = tb_llm::complete(
             "ai_analysis",
             tb_llm::Request::prompt(prompt)
                 .max_tokens(60000)
-                .ledger_purpose("ai-analysis"),
+                .ledger_purpose("ai-analysis")
+                .twitch_broadcaster(twitch_user_id)
+                .twitch_channel(streamer),
         )
         .await
         .map_err(|e| e.to_string())?;
@@ -150,7 +160,8 @@ async fn call_ai_analysis(ai_model: &str, prompt: &str) -> Result<Vec<Value>, St
             "ai-analysis",
         ))
     } else {
-        let client = EngagementLlmClient::new(None, None, None, Some(Duration::from_secs(240)));
+        let client = EngagementLlmClient::new(None, None, None, Some(Duration::from_secs(240)))
+            .twitch_subject(twitch_user_id, streamer);
         let raw = client
             .raw_completion_tracked("", prompt, 60000, 0.5, "dashboard_ai_analysis")
             .await
@@ -186,7 +197,7 @@ async fn run_ai_analysis(
     };
 
     let prompt = build_ai_analysis_prompt(streamer, days, &ctx, game_filter, user_context);
-    let points = match call_ai_analysis(ai_model, &prompt).await {
+    let points = match call_ai_analysis(ai_model, &prompt, (twitch_user_id, streamer)).await {
         Ok(p) => p,
         Err(msg) => {
             tracing::error!("ai/analysis Modell-Fehler ({ai_model}): {msg}");
@@ -297,6 +308,50 @@ mod tests {
             game_filter: None,
             user_context: user_context.map(String::from),
         }
+    }
+
+    #[tokio::test]
+    async fn analysis_dispatch_preserves_guard_subject() {
+        if !guard_fixture::in_isolated_process(
+            "handlers::ai_analysis::tests::analysis_dispatch_preserves_guard_subject",
+        ) {
+            return;
+        }
+        let database = make_pool("analysis_guard").await;
+        let server = guard_fixture::initialize(&database.pool).await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/chat/completions"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{"message": {"content": "[{\"number\":1}]"}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2}
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        for model in [AI_MODEL_OPUS, crate::ai_state::AI_MODEL_LLM] {
+            let points = call_ai_analysis(model, "synthetic context", ("42", "nani"))
+                .await
+                .expect("authorized stable UID reaches provider");
+            assert_eq!(points, vec![json!({"number": 1})]);
+            assert!(call_ai_analysis(model, "synthetic context", ("43", "nani"))
+                .await
+                .is_err());
+        }
+        sqlx::query("UPDATE public.discord_guilds SET ai_features = false")
+            .execute(&database.pool)
+            .await
+            .unwrap();
+        for model in [AI_MODEL_OPUS, crate::ai_state::AI_MODEL_LLM] {
+            assert!(call_ai_analysis(model, "synthetic context", ("42", "nani"))
+                .await
+                .is_err());
+        }
+        let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM llm_usage")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+        assert_eq!(attempts, 2);
+        server.verify().await;
     }
 
     #[tokio::test]

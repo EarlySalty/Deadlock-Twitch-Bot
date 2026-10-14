@@ -698,6 +698,7 @@ pub struct EngagementLlmClient {
     /// wird bewusst ignoriert.
     festgenagelt: bool,
     timeout: Duration,
+    twitch_subject: Option<(String, String)>,
 }
 
 impl EngagementLlmClient {
@@ -740,7 +741,17 @@ impl EngagementLlmClient {
             endpoint,
             festgenagelt,
             timeout: timeout.unwrap_or_else(|| Duration::from_secs(30)),
+            twitch_subject: None,
         }
+    }
+
+    pub fn twitch_subject(
+        mut self,
+        broadcaster_id: impl Into<String>,
+        channel_login: impl Into<String>,
+    ) -> Self {
+        self.twitch_subject = Some((broadcaster_id.into(), channel_login.into()));
+        self
     }
 
     /// Das gelockte Modell (für Logging/Persistenz).
@@ -946,6 +957,10 @@ impl EngagementLlmClient {
     /// Ohne explizite Testparameter läuft der Aufruf über die zentrale Kette,
     /// die genau den freigegebenen Fireworks-Endpunkt enthält.
     async fn call(&self, request: tb_llm::Request) -> Result<tb_llm::Response, GenerateError> {
+        let request = match &self.twitch_subject {
+            Some((id, login)) => request.twitch_broadcaster(id).twitch_channel(login),
+            None => request,
+        };
         let request = request.timeout(self.timeout).total_deadline(self.timeout);
         let request = if self.festgenagelt {
             request.endpoint(self.endpoint.clone())
