@@ -1,4 +1,6 @@
 export const SOCIAL_EN: Record<string, string> = {
+  'Zeitzone für Kanal {channel}': 'Timezone for channel {channel}',
+  'Bitte einen gültigen Twitch-Kanal für die Zeitzone auswählen.': 'Please select a valid Twitch channel for the timezone.',
   'bis': 'to',
   'Videofassung': 'Video version',
   'Fassung': 'Version',
@@ -110,6 +112,7 @@ export const SOCIAL_EN: Record<string, string> = {
   'Bitte Clip wählen': 'Please select a clip',
   'Clip {id}': 'Clip {id}',
   '{count} Einträge im Clipbestand · Seite {page}': '{count} entries in the clip library · Page {page}',
+  'Alle Clips: {count} · Seite {page}': 'All clips: {count} · Page {page}',
   'Weitere Clips': 'More clips',
   'Übernommener Clip wird im Kanalbestand geprüft…': 'Checking the transferred clip in the channel library…',
   'Der übernommene Clip konnte nicht geprüft werden. Wähle einen Clip aus dem Kanalbestand oder versuche es erneut.': 'The transferred clip could not be checked. Select a clip from the channel library or try again.',

@@ -10,6 +10,7 @@ import './publish-review.css';
 
 export interface PublishReviewPanelProps {
   twitchUserId: string;
+  section?: 'all' | 'videos' | 'mode' | 'notifications';
   client?: PublishReviewClient;
   onChanged?: () => void;
   onOpenVideo?: (videoId: number) => void;
@@ -47,7 +48,7 @@ export function PublishReviewPanel(props: PublishReviewPanelProps) {
   return <OwnerPanel key={props.twitchUserId} {...props} />;
 }
 
-function OwnerPanel({ twitchUserId, client = publishReviewClient, onChanged, onOpenVideo, onConfigureTikTok }: PublishReviewPanelProps) {
+function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClient, onChanged, onOpenVideo, onConfigureTikTok }: PublishReviewPanelProps) {
   const { t } = useLanguage();
   const [editorVideo, setEditorVideo] = useState<number | null>(null);
   const [editorBusy, setEditorBusy] = useState(false);
@@ -107,26 +108,26 @@ function OwnerPanel({ twitchUserId, client = publishReviewClient, onChanged, onO
   }
 
   return <section className="publish-review" aria-label={t('Freigabe und Veröffentlichung')} aria-busy={busy} data-unsaved={preferencesDirty || pending !== null || busy ? 'true' : undefined} data-saving={busy ? 'true' : undefined}>
-    <StudioSectionHeading title={t('Freigabe & Veröffentlichung')} icon={ShieldCheck}
+    <StudioSectionHeading title={t(section === 'videos' ? 'Fertige Videos' : section === 'mode' ? 'Veröffentlichungsmodus' : section === 'notifications' ? 'Benachrichtigungen' : 'Freigabe & Veröffentlichung')} icon={ShieldCheck}
       description={t('Prüfe die fertige Videoversion. Eine Kontoverbindung ist noch keine Freigabe.')}
       actions={<button type="button" disabled={busy} onClick={() => void act(async () => {}, { key: 'Stand aktualisiert.' })}>{t('Aktualisieren')}</button>} />
     {error && <p role="alert" className="publish-error">{'raw' in error ? error.raw : t(error.key, error.params)}</p>}
     {message && <p role="status" className="publish-message">{t(message.key, message.params)}</p>}
     {!snapshot && !error && <p role="status">{t('Veröffentlichungsdaten werden geladen.')}</p>}
     {snapshot && <>
-      <div className="publish-mode-row">
-        <div><strong>{t(snapshot.settings.publish_mode === 'review' ? 'Prüfung vor Veröffentlichung' : 'Vollautomatik')}</strong><p>{t(snapshot.settings.publish_mode === 'review' ? 'Ohne deine Videofreigabe wird nichts veröffentlicht.' : 'Automatische Videos werden ohne regelmäßige Freigabe veröffentlicht. Qualitätsbedenken bleiben zur Prüfung.')}</p></div>
+      {(section === 'all' || section === 'mode') && <div className="publish-mode-row">
+        <div><strong>{t(snapshot.settings.publish_mode === 'review' ? 'Prüfung vor Veröffentlichung' : 'Fertige Videos ohne Prüfung veröffentlichen')}</strong><p>{t(snapshot.settings.publish_mode === 'review' ? 'Ohne deine Videofreigabe wird nichts veröffentlicht.' : 'Automatische Videos werden ohne regelmäßige Freigabe veröffentlicht. Qualitätsbedenken bleiben zur Prüfung.')}</p></div>
         <div className="publish-actions">
-          <button type="button" disabled={busy} onClick={() => { setPending(null); setModeDialog(true); }}>{t(snapshot.settings.publish_mode === 'review' ? 'Vollautomatik einrichten' : 'Zur Prüfung wechseln')}</button>
+          <button type="button" disabled={busy} onClick={() => { setPending(null); setModeDialog(true); }}>{t(snapshot.settings.publish_mode === 'review' ? 'Fertige Videos ohne Prüfung veröffentlichen' : 'Zur Prüfung wechseln')}</button>
           <button type="button" disabled={busy} onClick={() => void act(() => client.pause(twitchUserId, !snapshot.settings.paused), { key: snapshot.settings.paused ? 'Auto-Pilot fortgesetzt. Verpasste Termine werden nicht gesammelt nachgeholt.' : 'Auto-Pilot pausiert. Laufende Verarbeitung kann fertig werden.' })}>{t(snapshot.settings.paused ? 'Fortsetzen' : 'Pausieren')}</button>
         </div>
-      </div>
+      </div>}
       {snapshot.settings.paused && <p className="publish-note" role="status">{t('Pausiert. Keine neuen geplanten Veröffentlichungen. Deine Warteschlange bleibt erhalten.')}</p>}
       {editorVideo !== null && <AiRevisionPanel key={editorVideo} owner={twitchUserId} videoId={editorVideo} onBusyChange={setEditorBusy} onClose={() => setEditorVideo(null)} onRefresh={() => act(async () => {}, { key: 'Stand aktualisiert.' })} />}
-      <div className="publish-video-list">
+      {(section === 'all' || section === 'videos') && <div className="publish-video-list">
         {snapshot.videos.length === 0 ? <p>{t('Noch keine fertigen Videos. Sobald ein Video gerendert ist, findest du es hier.')}</p> : snapshot.videos.map((video) => <VideoRow key={video.id} video={video} snapshot={snapshot} busy={busy || editorBusy || editorVideo === video.id} onRevise={editorVideo === null ? setEditorVideo : undefined} onOpenVideo={onOpenVideo} onConfigureTikTok={onConfigureTikTok} act={act} client={client} owner={twitchUserId} />)}
-      </div>
-      {preferences && <details className="publish-preferences"><summary>{t('Benachrichtigungen & Aufbewahrung')}</summary>
+      </div>}
+      {(section === 'all' || section === 'notifications') && preferences && <details className="publish-preferences"><summary>{t('Benachrichtigungen & Aufbewahrung')}</summary>
         <p>{t('Ungeprüfte Videos bleiben sieben Tage ab dem fertigen Rendern verfügbar. Freigegebene Videos sowie laufende, fehlgeschlagene oder unklare Veröffentlichungen bleiben geschützt.')}</p>
         <form onSubmit={(event) => { event.preventDefault(); void act(() => client.preferences(twitchUserId, preferences), { key: 'Benachrichtigungen gespeichert.' }, true); }}>
           <fieldset disabled={busy}><legend>{t('Wo möchtest du Hinweise erhalten?')}</legend>
@@ -141,7 +142,7 @@ function OwnerPanel({ twitchUserId, client = publishReviewClient, onChanged, onO
           <button type="submit" disabled={busy}>{t('Benachrichtigungen speichern')}</button>
         </form>
       </details>}
-      {snapshot.notifications.length > 0 && <section className="publish-notifications" aria-label={t('Hinweise')}><h3>{t('Deine Hinweise')}</h3>{snapshot.notifications.map((notification) => <p key={notification.id}>{notification.content}</p>)}</section>}
+      {(section === 'all' || section === 'notifications') && snapshot.notifications.length > 0 && <section className="publish-notifications" aria-label={t('Hinweise')}><h3>{t('Deine Hinweise')}</h3>{snapshot.notifications.map((notification) => <p key={notification.id}>{notification.content}</p>)}</section>}
     </>}
     {modeDialog && <dialog ref={dialog} className="publish-mode-dialog" aria-labelledby="publish-mode-title" onCancel={(event) => { if (busy) event.preventDefault(); else { setPending(null); setModeDialog(false); } }} onClose={() => { if (!busy) { setPending(null); setModeDialog(false); } }}>
       <h3 id="publish-mode-title">{t(snapshot?.settings.publish_mode === 'review' ? 'Vollautomatik aktivieren?' : 'Zur manuellen Prüfung wechseln?')}</h3>

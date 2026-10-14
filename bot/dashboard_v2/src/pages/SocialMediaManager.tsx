@@ -120,7 +120,7 @@ export function SocialMediaManager() {
         </div>
         {isAdminView && <div className="studio-channel-controls">
             {!streamer && <a
-              href={`${PREVIEW_SOCIAL_ROUTE}?view=archiv`}
+              href={`${PREVIEW_SOCIAL_ROUTE}?view=veroeffentlicht`}
               className="studio-button"
               onClick={(event) => {
                 if (!socialWorkspaceDepartureAllowed(document, () => window.confirm(t('Ungespeicherte Änderungen verwerfen?')))) event.preventDefault();

@@ -1,26 +1,33 @@
-import type { SocialMediaView } from './labels';
+import type { ScheduleQueueApi } from '@/components/socialmedia/autopilot/schedule-queue';
+import type { SocialMediaView, SocialMediaViewTarget } from './labels';
 
 export interface AiEditorMountProps {
   twitchUserId: string;
   streamer: string;
   clipDbId?: number;
+  settingsOnly?: boolean;
+  scheduleApi?: ScheduleQueueApi;
 }
 
 export function socialViewFromSearch(search: string): SocialMediaView {
   const params = new URLSearchParams(search);
-  if (params.has('oauth_success') || params.has('oauth_error')) return 'konten';
+  if (params.has('oauth_success') || params.has('oauth_error')) return 'einstellungen';
   const view = params.get('view');
-  if (view === 'plan' || view === 'library' || view === 'layout' || view === 'konten' || view === 'archiv' || view === 'ai') return view;
-  if (view === 'schedule' || view === 'autopilot') return 'plan';
-  if (view === 'import') return 'library';
-  if (view === 'review') return 'ai';
-  if (view === 'settings') return 'konten';
-  if (view === 'vod') return 'archiv';
-  return 'pool';
+  if (view === 'heute' || view === 'freigabe' || view === 'planen' || view === 'veroeffentlicht' || view === 'einstellungen') return view;
+  if (view === 'pool' || view === 'ai' || view === 'review') return 'freigabe';
+  if (view === 'plan' || view === 'schedule' || view === 'autopilot' || view === 'library' || view === 'import') return 'planen';
+  if (view === 'konten' || view === 'settings' || view === 'layout') return 'einstellungen';
+  if (view === 'archiv' || view === 'vod') return 'veroeffentlicht';
+  return 'heute';
 }
 
-export function socialWorkspaceView(view: SocialMediaView): SocialMediaView {
-  return view === 'layout' ? 'konten' : view;
+export function socialWorkspaceView(view: SocialMediaViewTarget) {
+  const canonical = socialViewFromSearch(`?view=${view}`);
+  if (canonical === 'freigabe') return 'pool';
+  if (canonical === 'planen') return 'plan';
+  if (canonical === 'einstellungen') return 'konten';
+  if (canonical === 'veroeffentlicht') return 'archiv';
+  return 'heute';
 }
 
 export function socialAiClipFromSearch(search: string): number | undefined {
@@ -38,12 +45,13 @@ export function socialWorkspaceDepartureAllowed(
   return !scope.querySelector('[data-unsaved="true"]') || confirmDiscard();
 }
 
-export function socialViewSearch(search: string, view: SocialMediaView, clipDbId?: number): string {
+export function socialViewSearch(search: string, view: SocialMediaViewTarget, clipDbId?: number): string {
   const params = new URLSearchParams(search);
-  params.set('view', view);
+  const canonical = socialViewFromSearch(`?view=${view}`);
+  params.set('view', canonical);
   params.delete('oauth_success');
   params.delete('oauth_error');
-  if (view === 'ai' && clipDbId !== undefined) params.set('clip_db_id', String(clipDbId));
+  if (canonical === 'freigabe' && clipDbId !== undefined) params.set('clip_db_id', String(clipDbId));
   else params.delete('clip_db_id');
   return params.toString();
 }

@@ -11,14 +11,14 @@ import { getPreviewSocialResponse } from '../src/preview/fixtures';
 
 test('grouped workspaces keep old aliases and numeric channel context', () => {
   for (const [alias, view] of [
-    ['autopilot', 'plan'],
-    ['schedule', 'plan'],
-    ['library', 'library'],
-    ['import', 'library'],
-    ['review', 'ai'],
-    ['clips', 'pool'],
-    ['settings', 'konten'],
-    ['vod', 'archiv'],
+    ['autopilot', 'planen'],
+    ['schedule', 'planen'],
+    ['library', 'planen'],
+    ['import', 'planen'],
+    ['review', 'freigabe'],
+    ['clips', 'heute'],
+    ['settings', 'einstellungen'],
+    ['vod', 'veroeffentlicht'],
   ] as const) {
     assert.equal(socialViewFromSearch(`?view=${alias}`), view);
   }
@@ -33,7 +33,7 @@ test('grouped workspaces keep old aliases and numeric channel context', () => {
   assert.equal(params.get('fixture'), 'ai-rendering');
   assert.equal(
     socialViewFromSearch(`?${search}&oauth_error=provider_error`),
-    'konten',
+    'einstellungen',
   );
 });
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, ExternalLink, Loader2, CircleCheck, HardDrive, Download, Clock, CircleDashed, CircleX, TriangleAlert } from 'lucide-react';
-import { archiveAction, fetchArchivedVods, fetchVodArchiveSettings, saveVodArchiveSettings, oauthStartUrl, type ArchivedVod } from '@/api/socialMedia';
+import { archiveAction, fetchArchivedVods, oauthStartUrl, type ArchivedVod } from '@/api/socialMedia';
 import { useLanguage } from '@/context/LanguageContext';
 
 export const VOD_UPLOAD_PARTS_LABEL = 'Frühere Uploadbestätigung: {done} von {total} Teilen';
@@ -58,6 +58,7 @@ export function VodArchiveEntry({ vod, pending, onAction }: {
       <span className="tabular-nums">{Math.floor(vod.duration_sec / 3600)}:{String(Math.floor(vod.duration_sec % 3600 / 60)).padStart(2, '0')} h</span>
       {completedAt ? <time dateTime={vod.uploaded_at!}>{t('Abgeschlossen: {date}', { date: completedAt })}</time> : attemptedAt && <time dateTime={vod.last_attempt_at!}>{t('Letzter Versuch: {date}', { date: attemptedAt })}</time>}
     </div>
+    <details className="studio-vod-details"><summary>{t("Details & Aktionen")}</summary>
     {checkedAt && <p className="mt-2 text-sm text-text-secondary"><time dateTime={check!.last_success_at!}>{t('Zuletzt geprüft: {date}', { date: checkedAt })}</time></p>}
     {check?.error && <p className="mt-2 max-w-prose text-sm text-warning" role="status">{t(check.error === 'connection' || check.error === 'channel_changed' ? 'Für den Abgleich braucht YouTube eine erneute Verbindung mit deinem Kanal.' : check.error === 'quota' ? 'YouTube lässt gerade keine weiteren Prüfungen zu. Der Abgleich wird später fortgesetzt.' : 'YouTube konnte gerade nicht abgefragt werden. Der letzte Nachweis bleibt erhalten.')}{checkAttemptAt && <> <time dateTime={check.last_attempt_at!}>{t('Prüfversuch: {date}', { date: checkAttemptAt })}</time></>}</p>}
     {check?.state === 'partial' && <p className="mt-2 max-w-prose text-sm text-warning">{t('Videos gefunden, aber die vollständige Zuordnung aller Teile ist noch nicht belegt.')}</p>}
@@ -81,6 +82,7 @@ export function VodArchiveEntry({ vod, pending, onAction }: {
       {vod.can_drive && <button type="button" className="studio-button" disabled={pending} onClick={() => onAction(vod, 'drive')}>{t('Auf Drive ausweichen')}</button>}
       <button type="button" className="min-h-11 rounded-md px-2 text-sm text-text-secondary underline underline-offset-4 hover:text-text-primary focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50" disabled={pending} onClick={() => onAction(vod, 'hide')}>{t('Aus der Liste ausblenden')}</button>
     </div>
+    </details>
   </article>;
 }
 
@@ -107,16 +109,6 @@ export function VodArchiveTab({ twitchUserId, isAdmin }: { twitchUserId?: string
       setPage((current) => Math.min(current, lastPage));
     }
   }, [list.data]);
-  const settings = useQuery({
-    queryKey: ['social-media', 'vod-archive-settings', twitchUserId],
-    queryFn: () => fetchVodArchiveSettings(twitchUserId),
-    enabled: !!twitchUserId,
-    retry: false,
-  });
-  const toggle = useMutation({
-    mutationFn: () => saveVodArchiveSettings(twitchUserId, { enabled: !settings.data!.enabled, privacy: settings.data!.privacy }),
-    onSuccess: (data) => client.setQueryData(['social-media', 'vod-archive-settings', twitchUserId], data),
-  });
   const action = useMutation({
     mutationFn: ({ vod, kind }: { vod: ArchivedVod; kind: 'retry' | 'drive' | 'hide' | 'check' }) => archiveAction(vod.id, kind, vod.twitch_user_id ?? undefined),
     onSuccess: (_, { kind }) => {
@@ -135,15 +127,11 @@ export function VodArchiveTab({ twitchUserId, isAdmin }: { twitchUserId?: string
         <p className="mt-2 max-w-prose text-sm text-text-secondary">{t('Hier findest du deine gesicherten Streams und offene Uploads. Nach bestätigtem Upload werden die temporären Dateien gelöscht.')}</p>
         <p className="mt-2 max-w-prose text-sm text-text-secondary">{t('Gespeicherter Uploadabschluss und aktueller YouTube-Nachweis werden getrennt angezeigt. Der Abgleich prüft auch private und nicht gelistete Videos im verbundenen Kanal.')}</p>
       </div>
-      {twitchUserId && <button type="button" role="switch" aria-checked={settings.data?.enabled ?? false} disabled={!settings.data || toggle.isPending} className="studio-button" onClick={() => toggle.mutate()}>
-        {settings.isPending ? t('Einstellung wird geladen…') : settings.data?.enabled ? t('VOD-Archiv: an') : t('VOD-Archiv: aus')}
-      </button>}
     </div>
     {isAdmin && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={allChannels} onChange={(event) => { setAllChannels(event.target.checked); setPage(1); }} />{t('Alle Kanäle anzeigen')}</label>}
-    {(settings.isError || toggle.isError) && <p role="alert" className="text-sm text-danger">{t('Die Archiveinstellung konnte nicht geladen oder gespeichert werden. Bitte versuche es erneut.')}</p>}
     {notice && <p role="status" className="text-sm text-success">{notice}</p>}
     {action.isError && <p role="alert" className="text-sm text-danger">{t('Die Aktion konnte nicht ausgeführt werden. Das VOD wird gerade bearbeitet oder ist bereits fertig. Lade die Liste erneut.')}</p>}
-    {list.isPending ? <p role="status" className="flex items-center gap-2 text-sm text-text-secondary"><Loader2 className="h-4 w-4 animate-spin" />{t('VODs werden geladen…')}</p> : list.isError ? <div role="alert"><p>{t('Die VOD-Liste konnte nicht geladen werden.')}</p><button className="studio-button mt-3" onClick={() => list.refetch()}>{t('Erneut laden')}</button></div> : list.data?.items.length === 0 ? <p className="rounded-xl border border-border p-6 text-text-secondary">{t('Hier stehen noch keine VODs. Schalte das Archiv für deinen Kanal ein, damit neue Streams gesichert werden.')}</p> : <div className="divide-y divide-border rounded-xl border border-border">
+    {list.isPending ? <p role="status" className="flex items-center gap-2 text-sm text-text-secondary"><Loader2 className="h-4 w-4 animate-spin" />{t('VODs werden geladen…')}</p> : list.isError ? <div role="alert"><p>{t('Die VOD-Liste konnte nicht geladen werden.')}</p><button className="studio-button mt-3" onClick={() => list.refetch()}>{t('Erneut laden')}</button></div> : list.data?.items.length === 0 ? <p className="rounded-xl border border-border p-6 text-text-secondary">{t('Hier stehen noch keine VODs. Schalte das Archiv für deinen Kanal ein, damit neue Streams gesichert werden.')}</p> : <div className="divide-y divide-border">
       {list.data?.items.map((vod) => <VodArchiveEntry key={vod.id} vod={vod} pending={action.isPending} onAction={act} />)}
     </div>}
     {list.data && (page > 1 || list.data.total > 50) && <div className="flex flex-wrap items-center justify-between gap-3"><button className="studio-button" disabled={page <= 1} onClick={() => setPage(page - 1)}>{t('Zurück')}</button><span className="text-sm text-text-secondary">{t('Seite {page}', { page })}</span><button className="studio-button" disabled={page * 50 >= list.data.total} onClick={() => setPage(page + 1)}>{t('Weiter')}</button></div>}
