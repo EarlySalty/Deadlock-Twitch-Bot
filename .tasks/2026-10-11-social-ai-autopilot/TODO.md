@@ -1,3 +1,15 @@
+# TODO, state 2026-10-14 (finish wave, native Opus subagents of session 8d18a769)
+
+Audit of BRIEF 32 on origin/main 437b641ad: code wired, never run live (0 AI jobs, 0 autopilot jobs). Blockers: target_platforms not settable, review jobs block queue forever, no publish_language/metadata UI. User: dashboard needs a real redesign.
+Packages (worktree / branch):
+- AP autopilot critical path: tb-social-ap-finish / feat/social-ap-finish-20261014 (target platforms, review resolve + unsuitable, selection priority, retime, failed state)
+- AI editor gaps: tb-social-ai-finish / feat/social-ai-finish-20261014 (publish language, metadata panel, review polish, autopilot revisions, transient retry, validation)
+- LA learning + admin: tb-social-la-finish / feat/social-la-finish-20261014
+- RD redesign: tb-social-rd / feat/social-rd-redesign-20261014 (owns all visual layout)
+- REL upload cleanup: tb-social-rel / fix/social-rel-cleanup-20261014
+Open with user: paid AI acceptance run (cap $2), Brain config (maintenance off), YAML->TOML deviation accepted?
+Resume: fresh agents per package from these branches (memory nach-limit-neue-agenten).
+
 # TODO, state 2026-10-14 01:45 CEST
 
 D (P1 Track C) live on release 00e750557 (merged to main as fast-forward from feat/social-p1-c-modes-20261013).
