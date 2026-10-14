@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::autopilot_settings::PublishLanguage;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EditPlan {
@@ -39,6 +41,7 @@ pub enum LayoutIntent {
 pub struct EditorOptions {
     pub multi_output_enabled: bool,
     pub experimental_ai_layout: bool,
+    pub publish_language: PublishLanguage,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

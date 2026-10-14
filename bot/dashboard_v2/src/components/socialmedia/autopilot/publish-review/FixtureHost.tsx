@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot } from 'react-dom/client';
+import type { AiJobView } from '../../ai/api';
+import { createAiPreviewFetch } from '../../ai/preview';
 import { LanguageProvider, useLanguage } from '../../../../context/LanguageContext';
 import { PublishReviewPanel } from './PublishReviewPanel';
 import { createPublishReviewFixture } from './fixtures';
@@ -8,14 +11,30 @@ import '../../studio.css';
 
 const fixture = createPublishReviewFixture();
 const initial = fixture.snapshot();
-if (initial.videos[0]) initial.videos[0].duration_ms = 55425;
+const reviewVideo = { ...initial.videos[0], id: 2203, version_no: 3, duration_ms: 38000 };
+if (initial.videos[1]) initial.videos[1].duration_ms = 55425;
 for (const connection of initial.connections) {
   if (connection.platform === 'tiktok') {
     connection.connected = true;
     connection.account_id = 'synthetic-tiktok';
   }
 }
-fixture.replace(initial);
+fixture.replace({ ...initial, videos: [reviewVideo, ...initial.videos.slice(1)] });
+const queryClient = new QueryClient();
+const aiFetch = createAiPreviewFetch(window.fetch.bind(window), 'revisions', true);
+window.fetch = async (input, init) => {
+  const response = await aiFetch(input, init);
+  const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, window.location.origin);
+  if (url.pathname.includes('/social-media/api/ai/') && response.ok) {
+    const value = await response.clone().json();
+    const job = (value.job ?? value) as Partial<AiJobView>;
+    if (Array.isArray(job.versions)) {
+      const current = fixture.snapshot();
+      fixture.replace({ ...current, videos: [...current.videos.filter((video) => video.clip_id !== reviewVideo.clip_id), ...job.versions.filter((version) => version.status === 'review').map((version) => ({ ...reviewVideo, id: version.id, version_no: version.version_no, duration_ms: version.duration_ms, approvals: [], event: null }))] });
+    }
+  }
+  return response;
+};
 const callbacks: { method: string; id: number; }[] = [];
 let tikTokCancelled = false;
 
@@ -39,4 +58,4 @@ export function FixtureHost() {
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Fixture root missing');
-createRoot(root).render(<LanguageProvider><FixtureHost /></LanguageProvider>);
+createRoot(root).render(<LanguageProvider><QueryClientProvider client={queryClient}><FixtureHost /></QueryClientProvider></LanguageProvider>);

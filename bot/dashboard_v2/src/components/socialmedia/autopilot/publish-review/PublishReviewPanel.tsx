@@ -3,6 +3,7 @@ import { useLanguage } from '../../../../context/LanguageContext';
 import type { TranslateParams } from '../../../../i18n/dictionary';
 import { publishReviewClient } from './api';
 import type { DestinationDecision, NotificationPreferences, PendingHandling, PublishDestination, PublishPlatform, PublishReviewClient, PublishSnapshot, PublishVideo, TikTokVersionOptions } from './api';
+import { AiRevisionPanel } from './AiRevisionPanel';
 import './publish-review.css';
 
 export interface PublishReviewPanelProps {
@@ -45,6 +46,8 @@ export function PublishReviewPanel(props: PublishReviewPanelProps) {
 
 function OwnerPanel({ twitchUserId, client = publishReviewClient, onOpenVideo, onConfigureTikTok }: PublishReviewPanelProps) {
   const { t } = useLanguage();
+  const [editorVideo, setEditorVideo] = useState<number | null>(null);
+  const [editorBusy, setEditorBusy] = useState(false);
   const [snapshot, setSnapshot] = useState<PublishSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<PanelError | null>(null);
@@ -116,8 +119,9 @@ function OwnerPanel({ twitchUserId, client = publishReviewClient, onOpenVideo, o
         </div>
       </div>
       {snapshot.settings.paused && <p className="publish-note" role="status">{t('Pausiert. Keine neuen geplanten Veröffentlichungen. Deine Warteschlange bleibt erhalten.')}</p>}
+      {editorVideo !== null && <AiRevisionPanel key={editorVideo} owner={twitchUserId} videoId={editorVideo} onBusyChange={setEditorBusy} onClose={() => setEditorVideo(null)} onRefresh={() => act(async () => {}, { key: 'Stand aktualisiert.' })} />}
       <div className="publish-video-list">
-        {snapshot.videos.length === 0 ? <p>{t('Noch keine fertigen Videos. Sobald ein Video gerendert ist, findest du es hier.')}</p> : snapshot.videos.map((video) => <VideoRow key={video.id} video={video} snapshot={snapshot} busy={busy} onOpenVideo={onOpenVideo} onConfigureTikTok={onConfigureTikTok} act={act} client={client} owner={twitchUserId} />)}
+        {snapshot.videos.length === 0 ? <p>{t('Noch keine fertigen Videos. Sobald ein Video gerendert ist, findest du es hier.')}</p> : snapshot.videos.map((video) => <VideoRow key={video.id} video={video} snapshot={snapshot} busy={busy || editorBusy || editorVideo === video.id} onRevise={editorVideo === null ? setEditorVideo : undefined} onOpenVideo={onOpenVideo} onConfigureTikTok={onConfigureTikTok} act={act} client={client} owner={twitchUserId} />)}
       </div>
       {preferences && <details className="publish-preferences"><summary>{t('Benachrichtigungen & Aufbewahrung')}</summary>
         <p>{t('Ungeprüfte Videos bleiben sieben Tage ab dem fertigen Rendern verfügbar. Freigegebene Videos sowie laufende, fehlgeschlagene oder unklare Veröffentlichungen bleiben geschützt.')}</p>
@@ -160,11 +164,12 @@ interface VideoRowProps {
   owner: string;
   client: PublishReviewClient;
   act: (action: () => Promise<void>, success: PanelMessage) => Promise<boolean>;
+  onRevise?: (videoId: number) => void;
   onOpenVideo?: PublishReviewPanelProps['onOpenVideo'];
   onConfigureTikTok?: PublishReviewPanelProps['onConfigureTikTok'];
 }
 
-function VideoRow({ video, snapshot, busy, owner, client, act, onOpenVideo, onConfigureTikTok }: VideoRowProps) {
+function VideoRow({ video, snapshot, busy, owner, client, act, onOpenVideo, onConfigureTikTok, onRevise }: VideoRowProps) {
   const { t, locale } = useLanguage();
   const date = (value: string | null) => value ? new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : t('Noch kein Termin');
   const [selected, setSelected] = useState<PublishPlatform[]>([]);
@@ -210,6 +215,7 @@ function VideoRow({ video, snapshot, busy, owner, client, act, onOpenVideo, onCo
         </section>;
       })}
     </div>
+    {video.mode === 'ai' && actionable && onRevise && !video.event?.executed_at && (!video.event || video.event.destinations.every((destination) => ['pending', 'held'].includes(destination.state))) && <div className="publish-actions"><button type="button" disabled={busy} onClick={() => { setSelected([]); onRevise(video.id); }}>{t('KI-Fassung überarbeiten')}</button></div>}
     {actionable && <div className="publish-actions">
       <button type="button" disabled={busy || platforms.every((platform) => !snapshot.connections.some((connection) => connection.platform === platform && connection.connected))} onClick={() => setSelected(platforms.filter((platform) => snapshot.connections.some((connection) => connection.platform === platform && connection.connected) && (platform !== 'tiktok' || Boolean(onConfigureTikTok))))}>{t('Alle verfügbaren Ziele auswählen')}</button>
       <button type="button" className="publish-primary" disabled={busy || selected.length === 0} onClick={() => void act(approve, { key: 'Ausgewählte Ziele für genau diese Videoversion freigegeben.' }).then((saved) => { if (saved && mounted.current) setSelected([]); })}>{t('Ausgewählte Ziele freigeben')}</button>

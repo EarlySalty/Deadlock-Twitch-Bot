@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{postgres::PgRow, PgPool, Row};
+use sqlx::{postgres::PgRow, Connection, PgPool, Row};
 use thiserror::Error;
 
 pub use crate::production_lease::{acquire_production_lease, ProductionLease};
@@ -343,6 +343,8 @@ pub struct AiJobView {
     pub parent_version_id: Option<i64>,
     pub selected_version_id: Option<i64>,
     pub revision_proposal: Option<super::revision::RevisionProposal>,
+    #[serde(default)]
+    pub publishing_in_autopilot: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -483,6 +485,7 @@ fn view_from_row(row: &PgRow, limit: AttemptLimit) -> Result<AiJobView, AiStoreE
         root_job_id: row.try_get("root_job_id")?,
         parent_version_id: row.try_get("parent_version_id")?,
         selected_version_id: row.try_get("selected_version_id")?,
+        publishing_in_autopilot: false,
         revision_proposal: row
             .try_get::<Option<String>, _>("revision_proposal_text")?
             .map(|text| parse_json(&text))
@@ -1032,6 +1035,27 @@ pub async fn retry_job(
     limit: AttemptLimit,
 ) -> Result<AiJobView, AiStoreError> {
     let owner = numeric_owner(twitch_user_id)?;
+    let mut tx = pool.begin().await?;
+    crate::autopilot_settings::lock_owner(&mut tx, twitch_user_id).await?;
+    let parent: Option<i64> = sqlx::query_scalar("SELECT parent_version_id FROM social_ai_jobs WHERE id=$1 AND twitch_user_id=$2 AND status='failed'")
+        .bind(job_id).bind(owner).fetch_optional(&mut *tx).await?.flatten();
+    if let Some(parent_id) = parent {
+        let video = crate::produced_video::get(pool, twitch_user_id, parent_id)
+            .await
+            .map_err(|error| match error {
+                crate::produced_video::ProducedVideoError::Database(error) => {
+                    AiStoreError::Database(error)
+                }
+                _ => AiStoreError::Conflict,
+            })?
+            .ok_or(AiStoreError::NotFound)?;
+        super::autopilot_revision::hold_parent(&mut tx, twitch_user_id, &video, job_id)
+            .await
+            .map_err(|error| match error {
+                super::AiEditorError::Storage => AiStoreError::InvalidStoredData,
+                _ => AiStoreError::Conflict,
+            })?;
+    }
     let changed = sqlx::query(
         "UPDATE social_ai_jobs SET status = 'queued', failure_code = NULL, \
          failure_message = NULL, updated_at = NOW() \
@@ -1051,10 +1075,11 @@ pub async fn retry_job(
     .bind(job_id)
     .bind(owner)
     .bind(limit.0)
-    .execute(pool)
+    .execute(&mut *tx)
     .await;
     match changed {
         Ok(result) if result.rows_affected() == 1 => {
+            tx.commit().await?;
             get_job(pool, twitch_user_id, job_id, limit).await
         }
         Ok(_) => {
@@ -1091,6 +1116,8 @@ pub async fn finish_job(
     if produced_video_id <= 0 {
         return Err(AiStoreError::InvalidInput);
     }
+    let mut tx = lease.connection.begin().await?;
+    crate::autopilot_settings::lock_owner(&mut tx, twitch_user_id).await?;
     let changed = sqlx::query(
         "UPDATE social_ai_jobs j SET status = 'review', produced_video_id = $3, \
          completed_at = NOW(), updated_at = NOW() \
@@ -1110,9 +1137,17 @@ pub async fn finish_job(
     .bind(owner)
     .bind(produced_video_id)
     .bind(owner.to_string())
-    .execute(&mut *lease.connection)
+    .execute(&mut *tx)
     .await?;
     if changed.rows_affected() == 1 {
+        super::autopilot_revision::replace_parent_on(
+            &mut tx,
+            twitch_user_id,
+            job_id,
+            produced_video_id,
+        )
+        .await?;
+        tx.commit().await?;
         Ok(())
     } else {
         Err(AiStoreError::Conflict)

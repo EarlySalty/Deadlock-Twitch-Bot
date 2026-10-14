@@ -10,9 +10,12 @@ export interface AiConsent {
   global_allowed: boolean;
 }
 
+export type AiPublishLanguage = 'de' | 'en' | 'auto';
+
 export interface AiEditorOptions {
   multi_output_enabled: boolean;
   experimental_ai_layout: boolean;
+  publish_language: AiPublishLanguage;
 }
 
 export interface AiVideoVersion {
@@ -253,7 +256,8 @@ export async function saveAiConsent(twitchUserId: string, externalAiConsent: boo
 
 export function decodeAiOptions(value: unknown): AiEditorOptions {
   const item = record(value);
-  return { multi_output_enabled: flag(item.multi_output_enabled), experimental_ai_layout: flag(item.experimental_ai_layout) };
+  const language = item.publish_language === 'en' || item.publish_language === 'auto' ? item.publish_language : 'de';
+  return { multi_output_enabled: flag(item.multi_output_enabled), experimental_ai_layout: flag(item.experimental_ai_layout), publish_language: language };
 }
 
 export async function fetchAiOptions(twitchUserId: string, signal?: AbortSignal): Promise<AiEditorOptions> {
@@ -349,4 +353,71 @@ export async function scheduleAiVersion(channel: string, id: number, version: nu
   });
   if (queues.length !== platforms.length || new Set(queues.map((queue) => queue.platform)).size !== platforms.length || queues.some((queue) => !platforms.includes(queue.platform))) invalidResponse();
   return {job,scheduledAt:date(reservation.scheduled_at)};
+}
+
+export type AiCopyPlatform = 'youtube' | 'tiktok' | 'instagram';
+
+export interface AiPlatformCopy {
+  title: string;
+  description: string;
+  hashtags: string[];
+}
+
+export interface AiVersionMetadata {
+  video_id: number;
+  editable: boolean;
+  platforms: Record<AiCopyPlatform, AiPlatformCopy>;
+}
+
+export const AI_COPY_PLATFORMS: AiCopyPlatform[] = ['youtube', 'tiktok', 'instagram'];
+
+function plainText(value: unknown): string {
+  if (typeof value !== 'string') invalidResponse();
+  return value;
+}
+
+function decodePlatformCopy(value: unknown): AiPlatformCopy {
+  const item = record(value);
+  return { title: plainText(item.title), description: plainText(item.description), hashtags: list(item.hashtags, plainText) };
+}
+
+export function decodeAiVersionMetadata(value: unknown): AiVersionMetadata {
+  const item = record(value);
+  const platforms = record(item.platforms);
+  return {
+    video_id: number(item.video_id, true),
+    editable: flag(item.editable),
+    platforms: { youtube: decodePlatformCopy(platforms.youtube), tiktok: decodePlatformCopy(platforms.tiktok), instagram: decodePlatformCopy(platforms.instagram) },
+  };
+}
+
+export async function fetchAiVersionMetadata(channel: string, videoId: number, signal?: AbortSignal): Promise<AiVersionMetadata> {
+  const query = new URLSearchParams({ twitch_user_id: channelId(channel) });
+  const result = decodeAiVersionMetadata(await fetchSocialAiJson(`${AI_PREFIX}/videos/${jobId(videoId)}/metadata?${query}`, { signal, cache: 'no-store' }));
+  if (result.video_id !== videoId) invalidResponse();
+  return result;
+}
+
+export async function saveAiVersionMetadata(channel: string, videoId: number, platforms: Record<AiCopyPlatform, AiPlatformCopy>): Promise<AiVersionMetadata> {
+  const result = decodeAiVersionMetadata(await fetchSocialAiJson(`${AI_PREFIX}/videos/${jobId(videoId)}/metadata`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ twitch_user_id: channelId(channel), platforms }),
+  }));
+  if (result.video_id !== videoId) invalidResponse();
+  return result;
+}
+
+export async function openAiVideoEditor(channel: string, videoId: number): Promise<AiJobView> {
+  const response = record(await fetchSocialAiJson(`${AI_PREFIX}/videos/${jobId(videoId)}/editor`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ twitch_user_id: channelId(channel) }),
+  }));
+  return decodeAiJob(response.job);
+}
+
+export async function fetchAiPublishingContext(channel: string, id: number): Promise<boolean> {
+  const query = new URLSearchParams({ twitch_user_id: channelId(channel) });
+  const item = record(await fetchSocialAiJson(`${AI_PREFIX}/jobs/${jobId(id)}?${query}`, { cache: 'no-store' }));
+  return item.publishing_in_autopilot === true;
 }
