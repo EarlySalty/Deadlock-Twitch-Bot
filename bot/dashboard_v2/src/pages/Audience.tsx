@@ -9,6 +9,7 @@ import { LurkerAnalysis } from '@/components/charts/LurkerAnalysis';
 import { ViewerProfiles } from '@/components/charts/ViewerProfiles';
 import { PlanGateCard } from '@/components/cards/PlanGateCard';
 import type { TimeRange } from '@/types/analytics';
+import { useLanguage } from '@/context/LanguageContext';
 
 interface AudienceProps {
   streamer: string;
@@ -16,6 +17,7 @@ interface AudienceProps {
 }
 
 export function Audience({ streamer, days }: AudienceProps) {
+  const { t, locale } = useLanguage();
   const {
     data: watchTime,
     isLoading: loadingWatchTime,
@@ -42,18 +44,18 @@ export function Audience({ streamer, days }: AudienceProps) {
 
   const isLoading = loadingWatchTime || loadingFunnel || loadingDemographics || loadingLurker || loadingViewerProfiles;
   const failedQueries = [
-    { label: 'Watch Time', isError: watchTimeError, error: watchTimeErrorDetail, retry: refetchWatchTime },
-    { label: 'Follower-Funnel', isError: funnelError, error: funnelErrorDetail, retry: refetchFunnel },
-    { label: 'Demographics', isError: demographicsError, error: demographicsErrorDetail, retry: refetchDemographics },
+    { label: t('Watch Time'), isError: watchTimeError, error: watchTimeErrorDetail, retry: refetchWatchTime },
+    { label: t('Follower-Funnel'), isError: funnelError, error: funnelErrorDetail, retry: refetchFunnel },
+    { label: t('Demographics'), isError: demographicsError, error: demographicsErrorDetail, retry: refetchDemographics },
   ].filter(q => q.isError);
-  const formatError = (err: unknown) => (err instanceof Error ? err.message : 'Unbekannter Fehler');
+  const formatError = (err: unknown) => (err instanceof Error ? err.message : t('Unbekannter Fehler'));
   const retryFailed = () => failedQueries.forEach(q => q.retry());
 
   if (!streamer) {
     return (
       <div className="flex flex-col items-center justify-center h-64">
         <AlertCircle className="w-12 h-12 text-text-secondary mb-4" />
-        <p className="text-text-secondary text-lg">Wähle einen Streamer aus</p>
+        <p className="text-text-secondary text-lg">{t('Wähle einen Streamer aus')}</p>
       </div>
     );
   }
@@ -85,7 +87,7 @@ export function Audience({ streamer, days }: AudienceProps) {
         <div className="bg-error/10 border border-error/30 rounded-lg p-4 text-error space-y-2">
           <div className="flex items-center gap-2 font-semibold">
             <AlertCircle className="w-5 h-5" />
-            <span>Daten konnten nicht vollständig geladen werden.</span>
+            <span>{t('Daten konnten nicht vollständig geladen werden.')}</span>
           </div>
           <ul className="text-sm text-error/80 list-disc pl-5 space-y-1">
             {failedQueries.map(q => (
@@ -96,7 +98,7 @@ export function Audience({ streamer, days }: AudienceProps) {
             onClick={retryFailed}
             className="px-3 py-1.5 rounded-md bg-error/20 text-error text-sm font-semibold hover:bg-error/30 transition"
           >
-            Erneut laden
+            {t('Erneut laden')}
           </button>
         </div>
       )}
@@ -104,15 +106,14 @@ export function Audience({ streamer, days }: AudienceProps) {
       {noData && (
         <div className="flex flex-col items-center justify-center h-48 text-center space-y-2 border border-border rounded-lg">
           <AlertCircle className="w-8 h-8 text-text-secondary" />
-          <p className="text-white font-medium">Keine Daten für diesen Zeitraum.</p>
-          <p className="text-sm text-text-secondary">Bitte Zeitraum oder Streamer anpassen und erneut versuchen.</p>
+          <p className="text-white font-medium">{t('Keine Daten für diesen Zeitraum.')}</p>
+          <p className="text-sm text-text-secondary">{t('Bitte Zeitraum oder Streamer anpassen und erneut versuchen.')}</p>
         </div>
       )}
 
       {noData && <></>}
       {!noData && (
         <>
-          {/* Header Stats */}
           {(() => {
             const cards = [];
             if (watchTimeData && hasReliableWatchTime) {
@@ -120,8 +121,8 @@ export function Audience({ streamer, days }: AudienceProps) {
                 <QuickStatCard
                   key="watch"
                   icon={<Clock className="w-5 h-5" />}
-                  label="Ø Watch Time"
-                  value={`${watchTimeData.avgWatchTime.toFixed(0)} Min`}
+                  label={t('Ø Watch Time')}
+                  value={t('{minutes} Min', { minutes: watchTimeData.avgWatchTime.toFixed(0) })}
                   color="primary"
                 />
               );
@@ -131,7 +132,7 @@ export function Audience({ streamer, days }: AudienceProps) {
                 <QuickStatCard
                   key="conv"
                   icon={<Target className="w-5 h-5" />}
-                  label="Conversion Rate"
+                  label={t('Conversion Rate')}
                   value={`${funnelData.conversionRate.toFixed(2)}%`}
                   color="success"
                 />
@@ -140,8 +141,8 @@ export function Audience({ streamer, days }: AudienceProps) {
                 <QuickStatCard
                   key="unique"
                   icon={<Users className="w-5 h-5" />}
-                  label="Unique Viewer"
-                  value={funnelData.uniqueViewers.toLocaleString('de-DE')}
+                  label={t('Unique Viewer')}
+                  value={funnelData.uniqueViewers.toLocaleString(locale)}
                   color="accent"
                 />
               );
@@ -149,7 +150,7 @@ export function Audience({ streamer, days }: AudienceProps) {
                 <QuickStatCard
                   key="newf"
                   icon={<UserPlus className="w-5 h-5" />}
-                  label="Neue Follower"
+                  label={t('Neue Follower')}
                   value={`+${funnelData.newFollowers}`}
                   color="warning"
                 />
@@ -164,7 +165,6 @@ export function Audience({ streamer, days }: AudienceProps) {
             ) : null;
           })()}
 
-          {/* Watch Time & Funnel Side by Side */}
           {(watchTimeData || funnelData) && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {watchTimeData && <WatchTimeDistribution data={watchTimeData} />}
@@ -172,14 +172,13 @@ export function Audience({ streamer, days }: AudienceProps) {
             </div>
           )}
 
-          {/* Audience-Komposition */}
           {(demographicsData || lurkerData) && (
             <div className="space-y-4">
-              <h3 className="px-1 text-base font-semibold text-text-secondary">Audience-Komposition</h3>
+              <h3 className="px-1 text-base font-semibold text-text-secondary">{t('Audience-Komposition')}</h3>
               {demographicsData && <AudienceDemographics data={demographicsData} />}
-              <PlanGateCard featureId="lurker_analysis" title="Lurker-Analyse">
+              <PlanGateCard featureId="lurker_analysis" title={t('Lurker-Analyse')}>
                 <div>
-                  <h2 className="text-lg font-semibold text-white mb-4">Lurker-Analyse</h2>
+                  <h2 className="text-lg font-semibold text-white mb-4">{t('Lurker-Analyse')}</h2>
                   <LurkerAnalysis data={lurkerData} />
                 </div>
               </PlanGateCard>
@@ -188,18 +187,17 @@ export function Audience({ streamer, days }: AudienceProps) {
 
           {viewerProfilesData && (
             <div className="space-y-4">
-              <h3 className="px-1 text-base font-semibold text-text-secondary">Zuschauer-Segmente</h3>
+              <h3 className="px-1 text-base font-semibold text-text-secondary">{t('Zuschauer-Segmente')}</h3>
               <div className="panel-card rounded-2xl p-6">
                 <div className="mb-6 flex items-center gap-3">
                   <Users className="h-6 w-6 text-accent" />
-                  <h2 className="text-xl font-bold text-white">Zuschauer-Profile</h2>
+                  <h2 className="text-xl font-bold text-white">{t('Zuschauer-Profile')}</h2>
                 </div>
                 <ViewerProfiles data={viewerProfilesData} />
               </div>
             </div>
           )}
 
-          {/* Audience Insights Summary */}
           {(hasWatchTimeInsight || hasFunnelInsight || hasLurkerInsight || hasDemographicsInsight) && (
             <Rise
               step={{ seconds: 0.3 }}
@@ -207,17 +205,17 @@ export function Audience({ streamer, days }: AudienceProps) {
             >
               <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
                 <Target className="w-5 h-5 text-primary" />
-                Audience Insights Zusammenfassung
+                {t('Audience Insights Zusammenfassung')}
               </h3>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {hasWatchTimeInsight && watchTimeData && (
                   <InsightCard
-                    title="Viewer Engagement"
+                    title={t('Viewer Engagement')}
                     description={
                       watchTimeData.avgWatchTime > 25
-                        ? `Starkes Engagement! Deine Viewer bleiben im Schnitt ${watchTimeData.avgWatchTime.toFixed(0)} Minuten.`
-                        : `Verbesserungspotential: Viewer bleiben nur ${watchTimeData.avgWatchTime.toFixed(0)} Min - teste interaktive Segmente.`
+                        ? t('Starkes Engagement! Deine Viewer bleiben im Schnitt {minutes} Minuten.', { minutes: watchTimeData.avgWatchTime.toFixed(0) })
+                        : t('Verbesserungspotential: Viewer bleiben nur {minutes} Min - teste interaktive Segmente.', { minutes: watchTimeData.avgWatchTime.toFixed(0) })
                     }
                     type={watchTimeData.avgWatchTime > 25 ? 'success' : 'warning'}
                   />
@@ -225,11 +223,11 @@ export function Audience({ streamer, days }: AudienceProps) {
 
                 {hasFunnelInsight && funnelData && (
                   <InsightCard
-                    title="Follower Conversion"
+                    title={t('Follower Conversion')}
                     description={
                       funnelData.conversionRate > 5
-                        ? `Exzellente Conversion von ${funnelData.conversionRate.toFixed(2)}%! Dein Content überzeugt.`
-                        : `Conversion bei ${funnelData.conversionRate.toFixed(2)}% - nutze mehr Call-to-Actions.`
+                        ? t('Exzellente Conversion von {rate}%! Dein Content überzeugt.', { rate: funnelData.conversionRate.toFixed(2) })
+                        : t('Conversion bei {rate}% - nutze mehr Call-to-Actions.', { rate: funnelData.conversionRate.toFixed(2) })
                     }
                     type={funnelData.conversionRate > 5 ? 'success' : 'info'}
                   />
@@ -237,11 +235,11 @@ export function Audience({ streamer, days }: AudienceProps) {
 
                 {hasLurkerInsight && lurkerPct !== undefined && (
                   <InsightCard
-                    title="Lurker-Anteil"
+                    title={t('Lurker-Anteil')}
                     description={
                       lurkerPct > 70
-                        ? `${lurkerPct.toFixed(0)}% deiner Zuschauer sind stumme Lurker – teste mehr direkte Interaktion.`
-                        : `Solider Lurker-Anteil von ${lurkerPct.toFixed(0)}%. Ein guter Mix aus aktiven und passiven Zuschauern.`
+                        ? t('{pct}% deiner Zuschauer sind stumme Lurker – teste mehr direkte Interaktion.', { pct: lurkerPct.toFixed(0) })
+                        : t('Solider Lurker-Anteil von {pct}%. Ein guter Mix aus aktiven und passiven Zuschauern.', { pct: lurkerPct.toFixed(0) })
                     }
                     type={lurkerPct > 70 ? 'warning' : 'success'}
                   />
@@ -249,8 +247,8 @@ export function Audience({ streamer, days }: AudienceProps) {
 
                 {hasDemographicsInsight && (
                   <InsightCard
-                    title="Audience-Zusammensetzung"
-                    description="Deine Audience-Demographiken zeigen die Viewer-Herkunft und -Zusammensetzung im gewählten Zeitraum."
+                    title={t('Audience-Zusammensetzung')}
+                    description={t('Deine Audience-Demographiken zeigen die Viewer-Herkunft und -Zusammensetzung im gewählten Zeitraum.')}
                     type="info"
                   />
                 )}
