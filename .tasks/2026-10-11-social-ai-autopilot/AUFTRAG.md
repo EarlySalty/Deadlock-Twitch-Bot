@@ -14,7 +14,7 @@ First milestone (highest priority): manual end-to-end AI processing of one real 
 | Pkg | Area | Owns (write) | Brief sections |
 |---|---|---|---|
 | P1 | Auto-Pilot, clip pool, scheduling, publishing, retention, notifications | `tb-social-media` scheduler/queue/approval/upload/retention/clip import modules and new modules for them; new handler file `social_media_autopilot.rs`; migrations prefixed `2026101110*`; new frontend component files under `components/socialmedia/autopilot/` | 3 (toggle storage), 4, 5, 6, 7, 8, 9, 24, 25, 26 (queue side), 28 |
-| P2 | AI editor pipeline, feedback, learning, costs, admin AI pages | new module tree `tb-social-media/src/ai_editor/`; TOML global config (`ops/social-ai/editor.toml`); new handler file `social_media_ai.rs`; admin handlers for skill history and budgets; migrations prefixed `2026101120*`; new frontend files under `components/socialmedia/ai/`; new admin_dashboard pages for skill diff/rollback, budgets, usage | 10 to 23, 26 (AI side), 27 |
+| P2 | AI editor pipeline, feedback, learning, costs, admin AI pages | new module tree `tb-social-media/src/ai_editor/`; section `[social_ai]` of the one main bot TOML (`bot.toml`), editable under admin Betriebseinstellungen; new handler file `social_media_ai.rs`; admin handlers for skill history and budgets; migrations prefixed `2026101120*`; new frontend files under `components/socialmedia/ai/`; new admin_dashboard pages for skill diff/rollback, budgets, usage | 10 to 23, 26 (AI side), 27 |
 | P3 | Dashboard redesign and platform status | existing `pages/SocialMedia*.tsx`, shell/navigation, `studio.css`, existing socialmedia components, generalized platform status (replacing TikTok-only check), mounting P1/P2 components | 29, 9 "Generalized Platform Status", 18 layout shell |
 
 Shared files with trivial edits only (module declarations, route registration, worker wiring): `tb-social-media/src/lib.rs`, `tb-dashboard-api/src/lib.rs`, `rust/bin/tb-bot/src/main.rs`, `bot/dashboard_v2/src/api/socialMedia.ts` (append-only new functions; P3 may restructure only after P1/P2 merged). Keep these edits minimal and isolated so merges stay mechanical.
@@ -31,7 +31,7 @@ C3 Production queue (owner P1): table `social_production_jobs` (sequential, one 
 
 C4 Manual AI test (owner P2): runs outside the Auto-Pilot queue, works with Auto-Pilot off or paused, never auto-publishes. "Transfer to schedule" calls a P1 function `produced_video::enqueue_for_publishing(pool, produced_video_id, platforms)` that assigns the next free slot without re-rendering.
 
-C5 AI calls go through the bot's central provider (`tb-llm` / `llm_dispatch.rs`). Provider/model/limits come from the global TOML config (`ops/social-ai/editor.toml`), never hard-coded. Respect the existing per-user external-AI consent switch. Record tokens, provider cost, latency per call; record FFmpeg runtime separately as internal compute, never as billed cost.
+C5 AI calls go through the bot's central provider (`tb-llm` / `llm_dispatch.rs`). Provider/model/limits come from section `[social_ai]` of the one main bot TOML (`bot.toml`), never hard-coded. Respect the existing per-user external-AI consent switch. Record tokens, provider cost, latency per call; record FFmpeg runtime separately as internal compute, never as billed cost.
 
 Migration rule: never edit applied migrations; only add new ones with your package prefix.
 

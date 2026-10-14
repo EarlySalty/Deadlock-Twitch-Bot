@@ -7,7 +7,7 @@ Packages (worktree / branch):
 - LA learning + admin: tb-social-la-finish / feat/social-la-finish-20261014
 - RD redesign: tb-social-rd / feat/social-rd-redesign-20261014 (owns all visual layout)
 - REL upload cleanup: tb-social-rel / fix/social-rel-cleanup-20261014
-Open with user: paid AI acceptance run (cap $2), Brain config (maintenance off); TOML config confirmed by user 2026-10-14 (spec corrected)
+Open with user: paid AI acceptance run (cap $2), Brain config (maintenance off); config lives only in the main bot TOML section [social_ai], editable via admin Betriebseinstellungen (user 2026-10-14; package CFG, branch feat/social-cfg-bot-toml-20261014)
 Resume: fresh agents per package from these branches (memory nach-limit-neue-agenten).
 
 # TODO, state 2026-10-14 01:45 CEST

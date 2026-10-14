@@ -452,7 +452,7 @@ Do not build a dedicated model comparison dashboard at this stage.
 
 ### Global TOML Configuration
 
-Use TOML (like the rest of the Twitch bot, `ops/social-ai/editor.toml`) for global system settings, such as:
+Use the one main Twitch bot TOML (`bot.toml`, section `[social_ai]`; no separate Social AI TOML files) for global system settings, editable in the admin under Betriebseinstellungen like the Discord bot, such as:
 
 - AI provider.
 - AI model.
