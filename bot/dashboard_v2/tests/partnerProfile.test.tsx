@@ -115,11 +115,11 @@ test('English profile labels preserve user content and German rendering', async 
   const original = window.location;
   try {
     Object.defineProperty(window, 'location', { configurable: true, value: new URL('https://example.test/twitch/verwaltung?lang=en#profil') });
-    const html = renderToStaticMarkup(<LanguageProvider><ProfileEditor initial={initial} onReload={() => {}} /></LanguageProvider>);
+    const html = renderToStaticMarkup(<LanguageProvider><ProfileEditor initial={{ ...initial, profile: { ...initial.profile, playstyles: ['educational'] } }} onReload={() => {}} /></LanguageProvider>);
     assert.match(html, /My public profile/);
     assert.match(html, /Not published yet/);
     assert.match(html, /Save changes/);
-    assert.doesNotMatch(html, /Mein öffentliches Profil|Nicht angegeben|Typische Streamingzeiten|Zeichen|Termin am/);
+    assert.doesNotMatch(html, /Mein öffentliches Profil|Nicht angegeben|Typische Streamingzeiten|Zeichen|Termin am|Erklärend|Unter der Woche|Am Wochenende/);
     assert.match(html, /Grüße &amp; Spaß/);
   } finally {
     Object.defineProperty(window, 'location', { configurable: true, value: original });

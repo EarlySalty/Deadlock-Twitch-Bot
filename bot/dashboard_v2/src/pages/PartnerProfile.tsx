@@ -592,7 +592,7 @@ export function ProfileEditor({
                 {profile.main_heroes.map(hero => <span key={hero} className="rounded-full border border-border bg-card px-2.5 py-1 text-text-secondary">{t("Main: {p0}", { p0: hero })}</span>)}
                 {profile.playstyles.map(style => {
                   const label = PLAYSTYLE_OPTIONS.find(([value]) => value === style)?.[1] ?? style;
-                  return <span key={style} className="rounded-full border border-border bg-card px-2.5 py-1 text-text-secondary">{label}</span>;
+                  return <span key={style} className="rounded-full border border-border bg-card px-2.5 py-1 text-text-secondary">{t(label)}</span>;
                 })}
                 <span className="rounded-full border border-border bg-card px-2.5 py-1 text-text-secondary">
                   {t("{p0} Links", { p0: profile.socials.length })}</span>
@@ -770,7 +770,7 @@ export function ProfileEditor({
                         checked={checked}
                         onChange={() => change({ preferred_times: checked ? profile.preferred_times.filter(item => item !== value) : [...profile.preferred_times, value] })}
                       />
-                      {label}
+                      {t(label)}
                     </label>
                   );
                 })}
