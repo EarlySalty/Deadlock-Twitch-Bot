@@ -124,6 +124,9 @@
 .social-ai-option-list input { margin-top: 3px; }
 .social-ai-option-list span { font-size: 14px; font-weight: 650; }
 .social-ai-option-list small { grid-column: 2; color: var(--ai-muted); font-size: 13px; line-height: 1.5; }
+.social-ai-option-list label.social-ai-language { grid-template-columns: minmax(0, 1fr); cursor: default; }
+.social-ai-option-list .social-ai-language small { grid-column: 1; }
+.social-ai-language select { max-width: 320px; min-height: 36px; }
 .social-ai-options [role="status"] p { font-size: 13px; color: var(--ai-muted); }
 
 @media (min-width: 960px) {
@@ -140,3 +143,11 @@
   .social-ai-status::before { border: 1px solid currentColor; }
   .social-ai-confirm { border: 1px solid CanvasText; }
 }
+.social-ai-metadata fieldset { display: grid; gap: 6px; min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--ai-line); border-radius: 6px; }
+.social-ai-metadata fieldset:disabled { opacity: .7; }
+.social-ai-metadata legend { padding: 0 4px; font-size: 14px; font-weight: 650; }
+.social-ai-metadata label { font-size: 13px; font-weight: 650; }
+.social-ai-metadata input[type="text"] { width: 100%; min-width: 0; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--ai-line); border-radius: 6px; background: var(--ai-backdrop); color: var(--ai-ink); font: inherit; font-size: 14px; }
+.social-ai-metadata small { color: var(--ai-muted); font-size: 12px; }
+.social-ai-sync { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 10px; align-items: start; font-size: 14px; font-weight: 650; cursor: pointer; }
+.social-ai-sync small { grid-column: 2; color: var(--ai-muted); font-size: 13px; font-weight: 400; }

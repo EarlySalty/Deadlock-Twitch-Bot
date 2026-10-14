@@ -1,5 +1,7 @@
+pub mod autopilot_revision;
 pub mod learning;
 mod media;
+pub mod metadata;
 mod model;
 pub mod options;
 mod pipeline;

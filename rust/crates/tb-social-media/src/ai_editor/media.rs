@@ -632,6 +632,28 @@ pub(super) async fn validate_output(
     Ok(info)
 }
 
+pub(super) fn framing_reasons(layout: Option<&StreamerLayout>, source: &MediaInfo) -> Vec<String> {
+    let Some(layout) = layout else {
+        return Vec::new();
+    };
+    if !layout.cam_enabled || layout.mode.trim().eq_ignore_ascii_case("blur_pad") {
+        return Vec::new();
+    }
+    let width = i64::from(source.width);
+    let height = i64::from(source.height);
+    let outside = |crop: &crate::layout::LayoutBox| {
+        crop.x < 0 || crop.y < 0 || crop.x + crop.w > width || crop.y + crop.h > height
+    };
+    if layout.source.width != width
+        || layout.source.height != height
+        || outside(&layout.game_crop)
+        || outside(&layout.cam_crop)
+    {
+        return vec!["Das gespeicherte Layout passt nicht zur Auflösung dieses Clips. Bitte prüfe Bildausschnitt und Facecam.".into()];
+    }
+    Vec::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
