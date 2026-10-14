@@ -388,7 +388,7 @@ pub(super) fn subtitle_bounds_reasons(ass: &str, output_duration_ms: u64) -> Vec
             continue;
         }
         match (ass_seconds(fields[1]), ass_seconds(fields[2])) {
-            (Some(start), Some(end)) if start < duration && end > start => {}
+            (Some(start), Some(end)) if start >= 0.0 && end > start && end <= duration => {}
             _ => outside = true,
         }
         too_wide |= fields[9]
@@ -634,6 +634,8 @@ mod tests {
             subtitle_bounds_reasons(&wide, plan.output_duration_ms()).len(),
             1
         );
+        assert!(subtitle_bounds_reasons(&normal, 1000).is_empty());
+        assert_eq!(subtitle_bounds_reasons(&normal, 500).len(), 1);
         assert_eq!(subtitle_bounds_reasons(&normal, 0).len(), 1);
         assert_eq!(subtitle_bounds_reasons("[Events]", 1000).len(), 1);
     }
