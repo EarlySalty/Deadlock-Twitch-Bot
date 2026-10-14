@@ -31,7 +31,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { dictionaryFor, translate } from '../src/i18n/dictionary';
 import { LanguageProvider } from '../src/context/LanguageContext';
 import { resolveSocialMediaChannel } from '../src/utils/socialMediaChannel';
-import { socialWorkspaceDepartureAllowed } from '../src/components/socialmedia/studioNavigation';
+import { socialViewFromSearch, socialWorkspaceDepartureAllowed } from '../src/components/socialmedia/studioNavigation';
 import {
   clipFehler,
   istGesperrt,
@@ -70,6 +70,8 @@ function lies(relativ: string): string {
 /** Dateien, deren Texte ein englischsprachiger Nutzer zu sehen bekommt. */
 const OBERFLAECHE = [
   'src/pages/SocialMedia.tsx',
+  'src/components/socialmedia/ClipCard.tsx',
+  'src/components/socialmedia/StudioHero.tsx',
   'src/components/socialmedia/PostingPlanDraft.tsx',
   'src/components/socialmedia/WorkspaceDialog.tsx',
   'src/components/socialmedia/TikTokPostDialog.tsx',
@@ -157,7 +159,7 @@ test('Wartecodes und Altaufträge nutzen übersetzbare Vorlagen statt Servertext
       translate('en', UPLOAD_WAIT_TEXTE.connection_required, { platform: 'YouTube' }),
     );
   }
-  assert.match(lies('src/pages/SocialMedia.tsx'), /uploadWaitText\(clip\.upload_errors\?\.\[platform\], platform, t\)/);
+  assert.match(lies('src/components/socialmedia/ClipCard.tsx'), /uploadWaitText\(clip\.upload_errors\?\.\[platform\], platform, t\)/);
 });
 
 test('der Regex findet ueberhaupt Schluessel', () => {
@@ -173,6 +175,8 @@ test('der Regex findet ueberhaupt Schluessel', () => {
  * deshalb dieselbe Uebersetzung bekommen. Alles andere ist ein Befund.
  */
 const BEWUSST_GETEILT: Record<string, string> = {
+  Freigabe: 'Clip state and workspace both identify the approval stage.',
+  Veröffentlicht: 'Clip state and workspace both identify published content.',
   Fehler: 'Clip-Status und Enrichment-Status meinen beide "fehlgeschlagen".',
   'Clip freigegeben': 'Clip-Status und Approval-Zustand meinen dieselbe Entscheidung.',
   Übersprungen: 'Clip-Status und Approval-Zustand meinen dasselbe Ueberspringen.',
@@ -411,6 +415,7 @@ test('route discovery observes schedule and queue callers with optional query st
   assert.deepEqual(gebautePfade([source]), [
     `${prefix}/queue/:p/cancel`,
     `${prefix}/queue/:p/next`,
+    `${prefix}/queue/:p/resolve`,
     `${prefix}/queue/order`,
     `${prefix}/schedule`,
   ]);
@@ -424,6 +429,7 @@ test('route discovery observes schedule and queue callers with optional query st
     ['/queue/order`', '/queue/contract-missing`', `${prefix}/queue/contract-missing`],
     ['/next`', '/contract-missing`', `${prefix}/queue/:p/contract-missing`],
     ['/cancel`', '/contract-missing`', `${prefix}/queue/:p/contract-missing`],
+    ['/resolve`', '/contract-missing`', `${prefix}/queue/:p/contract-missing`],
   ]) {
     const changed = source.replace(original, replacement);
     assert.notEqual(changed, source);
@@ -758,7 +764,7 @@ test('metadata departure preserves rejected drafts and blocks pending saves befo
   const start = studio.indexOf('  const changeView = ');
   const end = studio.indexOf('  const statusClip = ', start);
   assert.ok(start >= 0 && end > start);
-  const createGuard = new Function('document', 'window', 't', 'activeView', 'selectedAiClipId', 'setActiveView', 'setSelectedAiClipId', 'socialViewSearch', 'socialWorkspaceDepartureAllowed', `${studio.slice(start, end).replace('next: SocialMediaView', 'next')} return changeView;`);
+  const createGuard = new Function('document', 'window', 't', 'activeView', 'selectedAiClipId', 'setActiveView', 'setSelectedAiClipId', 'socialViewSearch', 'socialWorkspaceDepartureAllowed', 'socialViewFromSearch', `${studio.slice(start, end).replace('target: SocialMediaViewTarget', 'target')} return changeView;`);
   for (const [saving, dirty, accepted, expected] of [[true, true, true, false], [false, true, false, false], [false, true, true, true], [false, false, false, true]]) {
     const updates: unknown[] = [];
     let prompts = 0;
@@ -769,10 +775,11 @@ test('metadata departure preserves rejected drafts and blocks pending saves befo
       (view: string) => updates.push(view), (id: number) => updates.push(id),
       (_search: string, view: string, id: number) => `view=${view}&clip_db_id=${id}`,
       socialWorkspaceDepartureAllowed,
+      socialViewFromSearch,
     );
     assert.equal(guard('ai', 42), expected);
     assert.equal(prompts, !saving && dirty ? 1 : 0);
-    assert.deepEqual(updates, expected ? ['ai', 42, [{}, '', '/social-media?view=ai&clip_db_id=42']] : []);
+    assert.deepEqual(updates, expected ? ['freigabe', 42, [{}, '', '/social-media?view=freigabe&clip_db_id=42']] : []);
   }
   assert.match(lies('src/components/socialmedia/LayoutEditor.tsx'), /<div\b[^>]*data-unsaved=\{isDirty \|\| isSaving \? 'true' : undefined\}[^>]*data-saving=\{isSaving \? 'true' : undefined\}/);
   const panel = lies('src/components/socialmedia/EnrichmentPanel.tsx');
@@ -789,7 +796,7 @@ test('metadata departure preserves rejected drafts and blocks pending saves befo
 test('VOD-Archiv kehrt nach Ausblenden, Bestandsänderung und Kanalwechsel auf eine gültige Seite zurück', () => {
   const source = lies('src/components/socialmedia/VodArchiveTab.tsx');
   const start = source.indexOf('  useEffect(() => {');
-  const end = source.indexOf('  const settings = useQuery({', start);
+  const end = source.indexOf('  const action = useMutation({', start);
   assert.ok(start >= 0 && end > start);
   const register = new Function('useEffect', 'setPage', 'list', 'scope', source.slice(start, end));
   for (const [total, current, expected] of [[51, 2, 2], [50, 2, 1], [0, 2, 1], [149, 8, 3], [150, 1, 1]]) {
@@ -821,4 +828,27 @@ test('VOD-Archiv kehrt nach Ausblenden, Bestandsänderung und Kanalwechsel auf e
   assert.equal(navigation({ data: { total: 0 } }, 2), true);
   assert.equal(navigation({ data: { total: 50 } }, 1), false);
   assert.equal(navigation({ data: { total: 51 } }, 1), true);
+});
+
+test('global timezone writes all existing stores and preserves import selection preferences', async () => {
+  const source = ts.createSourceFile('GlobalTimezone.tsx', lies('src/components/verwaltung/GlobalTimezone.tsx'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let mutation = '';
+  const visit = (node: ts.Node) => {
+    if (ts.isPropertyAssignment(node) && node.name.getText(source) === 'mutationFn') mutation = node.initializer.getText(source);
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  assert.ok(mutation);
+  for (const failSchedule of [false, true]) {
+    const calls: unknown[] = [];
+    const preferences = { timezone: 'Europe/Berlin', clip_sort: 'newest_first', clip_date_filter: { kind: 'year', year: 2025 } };
+    const save = new Function('savePostingPlanSettings', 'scheduleQueueApi', 'importPoolApi', 'owner', 'timezone', `return (${mutation});`)(
+      async (owner: string, payload: unknown) => { calls.push(['legacy', owner, payload]); },
+      { save: async (payload: unknown, owner: string) => { calls.push(['schedule', owner, payload]); if (failSchedule) throw new Error('test failure'); } },
+      { getPreferences: async () => preferences, savePreferences: async (owner: string, payload: unknown) => { calls.push(['import', owner, payload]); } },
+      '42', 'UTC',
+    );
+    if (failSchedule) await assert.rejects(save(), /nicht überall gespeichert/); else await save();
+    assert.deepEqual(calls, [['legacy', '42', { timezone: 'UTC' }], ['schedule', '42', { timezone: 'UTC' }], ['import', '42', { ...preferences, timezone: 'UTC' }]]);
+  }
 });

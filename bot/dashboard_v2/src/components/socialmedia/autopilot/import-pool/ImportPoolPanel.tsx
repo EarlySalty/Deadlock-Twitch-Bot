@@ -1,34 +1,15 @@
+import { globalTimezoneUrl } from '@/utils/socialMediaChannel';
+import { ImportPopover } from '../../ImportPopover';
 import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Archive, ExternalLink, Film, RefreshCw, Save } from "lucide-react";
-import { getBrowserTimezone } from "@/api/core";
+
 import { useLanguage, useT } from "@/context/LanguageContext";
 import { importPoolApi } from "./api";
-import {
-  activeImport,
-  clipDuration,
-  clipStatus,
-  clipStatusTone,
-  clipThumbnail,
-  filterDescription,
-  localTimestamp,
-  parsePreferencesDraft,
-  poolError,
-  preferencesDraft,
-  samePreferences,
-  selectionAllowed,
-  sourceMetadata,
-  unauthorized,
-  type PreferencesDraft,
-} from "./presentation";
+import { activeImport, clipDuration, clipStatus, clipStatusTone, clipThumbnail, filterDescription, localTimestamp, parsePreferencesDraft, poolError, preferencesDraft, samePreferences, selectionAllowed, sourceMetadata, unauthorized, type PreferencesDraft } from "./presentation";
 import { ImportProgress } from "./ImportProgress";
 import { StudioSectionHeading } from '../../StudioSectionHeading';
-import type {
-  ImportJob,
-  ImportPoolApi,
-  ImportPoolPanelProps,
-  PoolPreferences,
-} from "./types";
+import type { ImportJob, ImportPoolApi, ImportPoolPanelProps, PoolPreferences } from "./types";
 import "./ImportPoolPanel.css";
 
 const PAGE_SIZE = 24;
@@ -317,13 +298,13 @@ function OwnerImportPool({
   return (
     <section
       className="import-pool"
-      aria-label={t("Historische Clips")}
+      aria-label={t("Clip-Vorrat")}
       data-owner={owner}
       data-unsaved={dirty || busy ? "true" : undefined}
       data-saving={busy ? "true" : undefined}
     >
       <StudioSectionHeading
-        title={t("Historische Clips")}
+        title={t("Clip-Vorrat")}
         description={t("Deadlock-Clips erfassen. Markierte Clips werden in deiner gewählten Reihenfolge zuerst verarbeitet, danach die übrigen passenden Clips.")}
         icon={Archive}
         actions={<button className="studio-button" type="button" onClick={reload} disabled={busy}>
@@ -344,7 +325,7 @@ function OwnerImportPool({
         <p role="status">{t("Gespeicherten Zeitraum laden …")}</p>
       )}
       {current && (
-        <form
+        <ImportPopover><form
           className="import-pool-preferences"
           onSubmit={(event) => {
             event.preventDefault();
@@ -473,29 +454,12 @@ function OwnerImportPool({
                   </option>
                 </select>
               </label>
-              <label htmlFor={`${id}-timezone`}>
-                {t("Zeitzone")}
-                <input
-                  id={`${id}-timezone`}
-                  className="studio-input"
-                  required
-                  spellCheck={false}
-                  value={current.timezone}
-                  onChange={(event) => edit({ timezone: event.target.value })}
-                />
-              </label>
             </div>
-            <button
-              className="import-pool-text-button"
-              type="button"
-              onClick={() => edit({ timezone: getBrowserTimezone() })}
-            >
-              {t("Browser-Zeitzone übernehmen")}
-            </button>
+            <a href={globalTimezoneUrl(owner)}>{t("Zeitzone in Verwaltung ändern")}</a>
           </fieldset>
           <p id={`${id}-date-help`} className="import-pool-help">
             {parsed?.preferences
-              ? `${t(filterDescription(parsed.preferences.clip_date_filter))}. ${t("Kalendertage gelten in der gewählten Zeitzone. Zukünftige Clips werden nicht importiert.")}`
+              ? `${filterDescription(parsed.preferences.clip_date_filter, t)}. ${t("Kalendertage gelten in der gewählten Zeitzone. Zukünftige Clips werden nicht importiert.")}`
               : t(parsed?.error ?? "")}
           </p>
           <p className="import-pool-help">
@@ -536,7 +500,7 @@ function OwnerImportPool({
               </button>
             </div>
           </div>
-        </form>
+        </form></ImportPopover>
       )}
       <section
         className="import-pool-import"
@@ -616,7 +580,7 @@ function OwnerImportPool({
                 )}
                 {" · "}
                 {page
-                  ? `${page.total.toLocaleString(locale)} ${t("erfasste Clips")}`
+                  ? `${t("Im Clip-Vorrat erfasst")}: ${page.total.toLocaleString(locale)}`
                   : t(
                       poolQuery.isError
                         ? "Clip-Pool nicht geladen"
@@ -681,11 +645,11 @@ function OwnerImportPool({
               const timezone = page.preferences.timezone;
               const notes = [
                 clip.first_selected_at &&
-                  `${t("Erstmals ausgewählt")}: ${localTimestamp(clip.first_selected_at, timezone)}`,
+                  `${t("Erstmals ausgewählt")}: ${localTimestamp(clip.first_selected_at, timezone, locale)}`,
                 clip.processed_at &&
-                  `${t("Verarbeitet am")}: ${localTimestamp(clip.processed_at, timezone)}`,
+                  `${t("Verarbeitet am")}: ${localTimestamp(clip.processed_at, timezone, locale)}`,
                 clip.published_at &&
-                  `${t("Veröffentlicht am")}: ${localTimestamp(clip.published_at, timezone)}`,
+                  `${t("Veröffentlicht am")}: ${localTimestamp(clip.published_at, timezone, locale)}`,
                 !clip.eligible &&
                   (clip.selected_at ||
                     clip.processed_at ||
@@ -715,8 +679,8 @@ function OwnerImportPool({
                         type="checkbox"
                         checked={selected}
                         disabled={selectionLocked || !selectionAllowed(clip)}
-                        aria-label={`${t("Clip bevorzugen")}: ${metadata.title}`}
-                        title={t(selected ? "Bevorzugt" : "Zuerst verarbeiten")}
+                        aria-label={`${t("Vorziehen")}: ${metadata.title}`}
+                        title={t("Auto-Pilot nimmt diesen Clip zuerst")}
                         onChange={(event) => {
                           setFeedback("");
                           selectionMutation.mutate({
@@ -726,6 +690,7 @@ function OwnerImportPool({
                           });
                         }}
                       />
+                      <span>{t("Vorziehen")}</span>
                     </label>
                     {metadata.duration !== null && (
                       <span className="import-pool-duration">
@@ -738,7 +703,7 @@ function OwnerImportPool({
                       {metadata.title}
                     </h4>
                     <p className="import-pool-help">
-                      {localTimestamp(clip.source_created_at, timezone)}
+                      {localTimestamp(clip.source_created_at, timezone, locale)}
                       {typeof clip.view_count === "number" &&
                         ` · ${clip.view_count.toLocaleString(locale)} ${t("Aufrufe")}`}
                     </p>

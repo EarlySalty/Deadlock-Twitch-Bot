@@ -42,9 +42,9 @@ export function queueStage(clip: SocialClipMitPosting): Exclude<QueueStage, 'all
   if (clip.status === 'discarded' || clip.status === 'skipped' || clip.discarded_at)
     return 'archive';
   if (clip.status === 'published_all') return 'posted';
-  if (['waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.tiktok ?? ''))
-    return 'review';
   if (clip.status === 'failed' || clip.status === 'published_partial') return 'failed';
+  if (['waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.tiktok ?? ''))
+    return clip.status === 'approved' || clip.status === 'publishing' ? 'planned' : 'review';
   if (clip.status === 'publishing' || queuedSlots(clip) > 0) return 'planned';
   if (clip.status === 'awaiting_approval') return 'review';
   return 'new';
@@ -69,7 +69,7 @@ export function filterQueue(
   return clips.filter(
     (clip) =>
       (stage === 'all' || queueStage(clip) === stage) &&
-      (!needle || `${clip.title} ${clip.streamer_login}`.toLocaleLowerCase().includes(needle)) &&
+      (!needle || `${clip.title} ${clip.generated_title ?? ''} ${clip.streamer_login}`.toLocaleLowerCase().includes(needle)) &&
       (platform === 'all' ||
         clip.platform_status[platform] ||
         Boolean(clip.scheduled_at?.[platform]) ||

@@ -1,3 +1,4 @@
+import { useT } from '@/context/LanguageContext';
 import { Lock, Sparkles } from 'lucide-react';
 import { usePlan } from '../../context/PlanContext';
 import { PREVIEW_PRICING_ROUTE } from '../../preview/routes';
@@ -10,30 +11,31 @@ interface PlanGateCardProps {
 }
 
 export function PlanGateCard({ featureId, title, children }: PlanGateCardProps) {
+  const t = useT();
   const { isFeatureLocked, isPreviewMode } = usePlan();
   const locked = isFeatureLocked(featureId);
 
   if (!locked) return <>{children}</>;
 
   return (
-    <div className="relative">
-      <div className="blur-sm pointer-events-none select-none opacity-50">
+    <div className="grid min-w-0">
+      <div aria-hidden="true" inert className="col-start-1 row-start-1 min-w-0 blur-sm pointer-events-none select-none opacity-50">
         {children}
       </div>
-      <div className="absolute inset-0 flex items-center justify-center bg-black/20 rounded-xl backdrop-blur-[2px]">
+      <div className="relative col-start-1 row-start-1 flex items-center justify-center bg-black/20 rounded-xl backdrop-blur-[2px]">
         <div className="text-center p-6">
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-white/5 border border-white/10 mb-3">
             <Lock className="w-5 h-5 text-white/40" />
           </div>
-          <p className="text-sm font-medium text-white/70">{title}</p>
-          <p className="text-xs text-white/40 mt-1">Mit dem Analyse-Zugang freischalten</p>
+          <p className="text-sm font-medium text-white/70">{t(title)}</p>
+          <p className="text-xs text-white/40 mt-1">{t('Mit dem Analyse-Zugang freischalten')}</p>
           {isPreviewMode && (
             <a
               href={PREVIEW_PRICING_ROUTE}
               className="inline-flex items-center gap-1 mt-3 px-3 py-1.5 rounded-lg bg-primary/20 text-primary text-xs font-medium hover:bg-primary/30 transition-colors"
             >
               <Sparkles className="w-3 h-3" />
-              Freischalten
+              {t('Freischalten')}
             </a>
           )}
         </div>

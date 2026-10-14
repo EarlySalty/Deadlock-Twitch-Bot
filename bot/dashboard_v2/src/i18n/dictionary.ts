@@ -816,8 +816,17 @@ export function browserLanguage(): Language {
   return primary.toLowerCase().startsWith('de') ? 'de' : 'en';
 }
 
+export function isEnglishDashboardHost(): boolean {
+  if (typeof window === 'undefined') return false;
+  return ['dead-lock.de', 'www.dead-lock.de'].includes(window.location?.hostname ?? '');
+}
+
 export function readInitialLanguage(): Language {
-  return readPersistedLanguage() ?? browserLanguage();
+  const query = typeof window === 'undefined'
+    ? null
+    : new URLSearchParams(window.location?.search).get('lang');
+  if (isLanguage(query)) return query;
+  return readPersistedLanguage() ?? (isEnglishDashboardHost() ? 'en' : browserLanguage());
 }
 
 export function storeLanguage(language: Language): void {

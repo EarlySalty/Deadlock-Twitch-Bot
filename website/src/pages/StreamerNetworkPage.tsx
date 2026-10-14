@@ -22,7 +22,7 @@ export function StreamerNetworkPage() {
     <>
       <GlowOrb />
       <Navbar />
-      <main>
+      <main className="overflow-x-clip">
         <Hero />
         <PartnerPitch streamers={streamers} status={status} />
         <PartnerNetwork streamers={streamers} status={status} />
