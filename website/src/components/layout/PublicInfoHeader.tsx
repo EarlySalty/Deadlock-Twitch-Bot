@@ -1,3 +1,4 @@
+import { landingText, landingLink } from "@/lib/landingLocale";
 import { useEffect, useRef, useState } from "react";
 import { Menu, X } from "lucide-react";
 
@@ -29,11 +30,11 @@ function ActionButton({ action }: { action: ActionLink }) {
 
   return (
     <a
-      href={action.href}
+      href={landingLink(action.href)}
       className={`${baseClass} ${variantClass}`}
       onClick={action.onClick}
     >
-      {action.label}
+      {landingText(action.label)}
     </a>
   );
 }
@@ -77,20 +78,18 @@ export function PublicInfoHeader({
     >
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-6">
         <a
-          href="/twitch/onboarding"
+          href={landingLink("/twitch/onboarding")}
           className="min-w-0 bg-gradient-to-r from-primary to-accent bg-clip-text text-base sm:text-xl leading-tight font-bold font-display text-transparent no-underline"
-        >
-          Deutsche Deadlock Community
-</a>
+        >{landingText("Deutsche Deadlock Community")}</a>
 
-        <nav className="hidden shrink-0 items-center gap-6 xl:flex" aria-label="Seitennavigation">
+        <nav className="hidden shrink-0 items-center gap-6 xl:flex" aria-label={landingText("Seitennavigation")}>
           {navLinks.map((link) => (
             <a
               key={link.href}
-              href={link.href}
+              href={landingLink(link.href)}
               className="text-sm font-medium text-text-secondary transition-colors duration-200 hover:text-text-primary no-underline"
             >
-              {link.label}
+              {landingText(link.label)}
             </a>
           ))}
         </nav>
@@ -104,7 +103,7 @@ export function PublicInfoHeader({
           type="button"
           className="shrink-0 border-0 bg-transparent p-2 text-text-secondary transition-colors duration-200 hover:text-text-primary xl:hidden"
           onClick={() => setMenuOpen((value) => !value)}
-          aria-label={menuOpen ? "Navigation schließen" : "Navigation öffnen"}
+          aria-label={menuOpen ? landingText("Navigation schließen") : landingText("Navigation öffnen")}
           aria-expanded={menuOpen}
           ref={menuButton}
           aria-controls="public-mobile-navigation"
@@ -114,16 +113,16 @@ export function PublicInfoHeader({
       </div>
 
       {menuOpen ? (
-        <nav id="public-mobile-navigation" aria-label="Seitennavigation" className="glass border-t border-border max-h-[calc(100dvh-4rem)] overflow-y-auto xl:hidden">
+        <nav id="public-mobile-navigation" aria-label={landingText("Seitennavigation")} className="glass border-t border-border max-h-[calc(100dvh-4rem)] overflow-y-auto xl:hidden">
           <div className="mx-auto flex max-w-7xl flex-col gap-2 px-6 py-4">
             {navLinks.map((link) => (
               <a
                 key={link.href}
-                href={link.href}
+                href={landingLink(link.href)}
                 className="py-2 text-sm font-medium text-text-secondary no-underline transition-colors duration-200 hover:text-text-primary"
                 onClick={() => setMenuOpen(false)}
               >
-                {link.label}
+                {landingText(link.label)}
               </a>
             ))}
             <div className="mt-3 flex flex-col gap-2 border-t border-border pt-3">

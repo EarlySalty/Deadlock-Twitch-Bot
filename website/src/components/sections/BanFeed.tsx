@@ -1,3 +1,4 @@
+import { landingText, landingLocale } from "@/lib/landingLocale";
 import { AnimatePresence } from "framer-motion";
 import { Shield, BarChart3, Hash } from "lucide-react";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
@@ -6,9 +7,13 @@ import { BanFeedEntry } from "@/components/ui/BanFeedEntry";
 import { useBanFeed } from "@/hooks/useBanFeed";
 
 const statCards = [
-  { key: "today", label: "Bans heute", icon: Shield },
-  { key: "total_30d", label: "Letzte 30 Tage", icon: BarChart3 },
-  { key: "channels_protected", label: "Geschützte Kanäle", icon: Hash },
+  { key: "today", label: landingText("Bans heute"), icon: Shield },
+  { key: "total_30d", label: landingText("Letzte 30 Tage"), icon: BarChart3 },
+  {
+    key: "channels_protected",
+    label: landingText("Geschützte Kanäle"),
+    icon: Hash,
+  },
 ] as const;
 
 export function BanFeed() {
@@ -24,7 +29,6 @@ export function BanFeed() {
     <section id="moderation" className="py-24">
       <div className="max-w-7xl mx-auto px-6">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-start">
-
           {/* LEFT — Text + Stats */}
           <ScrollReveal>
             <p className="text-sm text-[var(--color-accent)] font-medium uppercase tracking-wider mb-4">
@@ -32,18 +36,20 @@ export function BanFeed() {
             </p>
 
             <h2 className="text-3xl md:text-4xl font-bold text-[var(--color-text-primary)] mb-6">
-              <GradientText>Spam-Schutz</GradientText> in Echtzeit
+              <GradientText>{landingText("Spam-Schutz")}</GradientText>{" "}
+              {landingText(" in Echtzeit")}
             </h2>
 
             <p className="text-[var(--color-text-secondary)] text-lg mb-4 leading-relaxed">
-              Unser Bot erkennt Spam-Bots automatisch und bannt sie in Echtzeit.
-              Pattern-Erkennung, Account-Analyse und Community-Schutz — rund um
-              die Uhr.
+              {landingText(
+                "Unser Bot erkennt Spam-Bots automatisch und bannt sie in Echtzeit. Pattern-Erkennung, Account-Analyse und Community-Schutz — rund um die Uhr.",
+              )}
             </p>
 
             <p className="text-[var(--color-text-secondary)] text-base mb-8 leading-relaxed">
-              Verdächtige Accounts werden anhand bekannter Spam-Muster, Account-Alter
-              und Verhaltensanalyse identifiziert, bevor sie Schaden anrichten können.
+              {landingText(
+                "Verdächtige Accounts werden anhand bekannter Spam-Muster, Account-Alter und Verhaltensanalyse identifiziert, bevor sie Schaden anrichten können.",
+              )}
             </p>
 
             {/* Stat cards */}
@@ -63,14 +69,17 @@ export function BanFeed() {
                         border: "1px solid rgba(85, 151, 143, 0.45)",
                       }}
                     >
-                      <Icon size={18} className="text-[var(--color-accent-hover)]" />
+                      <Icon
+                        size={18}
+                        className="text-[var(--color-accent-hover)]"
+                      />
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="text-xs text-[var(--color-text-secondary)] uppercase tracking-wider">
                         {card.label}
                       </p>
                       <p className="text-2xl font-bold font-display text-[var(--color-text-primary)]">
-                        {statValues[card.key].toLocaleString("de-DE")}
+                        {statValues[card.key].toLocaleString(landingLocale())}
                       </p>
                     </div>
                   </div>
@@ -89,7 +98,7 @@ export function BanFeed() {
                   <span className="relative rounded-full h-2.5 w-2.5 bg-success" />
                 </span>
                 <span className="text-sm font-semibold text-[var(--color-text-primary)]">
-                  Live Ban-Feed
+                  {landingText("Live Ban-Feed")}
                 </span>
               </div>
 
@@ -111,7 +120,6 @@ export function BanFeed() {
               </div>
             </div>
           </ScrollReveal>
-
         </div>
       </div>
     </section>

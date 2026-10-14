@@ -98,6 +98,7 @@ mod tiktok_editor;
 pub use tiktok_editor::{
     defaults_put_handler as tiktok_defaults_put_handler,
     draft_put_handler as tiktok_draft_put_handler, get_handler as tiktok_editor_get_handler,
+    music_consent_put_handler as tiktok_music_consent_put_handler,
 };
 
 #[path = "social_media_vod_archive.rs"]

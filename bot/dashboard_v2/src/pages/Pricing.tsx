@@ -1,3 +1,4 @@
+import { useT } from '../context/LanguageContext';
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronDown, HelpCircle } from 'lucide-react';
@@ -65,6 +66,7 @@ function FAQItem({ question, answer }: { question: string; answer: string }) {
 }
 
 export default function Pricing() {
+  const t = useT();
   const [cycle, setCycle] = useState<1 | 12>(1);
   const { data } = useBillingCatalog(cycle);
   const plans = data?.plans ?? [];
@@ -96,8 +98,7 @@ export default function Pricing() {
                 : 'text-white/50 hover:text-white/70'
             }`}
           >
-            Monatlich
-          </button>
+            {t("Monatlich")}</button>
           <button
             onClick={() => setCycle(12)}
             className={`relative px-5 py-2 rounded-lg text-sm font-medium transition-[background-color,border-color,color,box-shadow,transform,translate,scale] duration-200 ${
@@ -106,10 +107,9 @@ export default function Pricing() {
                 : 'text-white/50 hover:text-white/70'
             }`}
           >
-            Jährlich
+            {t("Jährlich")}
             <span className="ml-2 px-1.5 py-0.5 rounded-md text-xs font-semibold bg-[#00D9FF]/20 text-[#00D9FF]">
-              2 Mo. gratis
-            </span>
+              {t("2 Mo. gratis")}</span>
           </button>
         </div>
       </div>
@@ -133,11 +133,11 @@ export default function Pricing() {
       >
         <div className="flex items-center gap-3 mb-6">
           <HelpCircle className="w-5 h-5 text-[#C5A059]" />
-          <h2 className="text-xl font-bold text-white">Häufige Fragen</h2>
+          <h2 className="text-xl font-bold text-white">{t("Häufige Fragen")}</h2>
         </div>
         <div>
           {faqData.map((faq, index) => (
-            <FAQItem key={index} question={faq.question} answer={faq.answer} />
+            <FAQItem key={index} question={t(faq.question)} answer={t(faq.answer)} />
           ))}
         </div>
       </motion.div>

@@ -1,3 +1,4 @@
+import { landingText } from "@/lib/landingLocale";
 import { motion } from "framer-motion";
 import { ExternalLink } from "lucide-react";
 import { GradientText } from "@/components/ui/GradientText";
@@ -20,7 +21,7 @@ export function Hero() {
             transition={{ duration: 0.5 }}
             className="inline-flex items-center rounded-full px-4 py-1.5 bg-[var(--color-card)] border border-[var(--color-border)] text-sm text-[var(--color-accent)]"
           >
-            Größtes Deadlock-Raid-Netzwerk auf Twitch
+            {landingText("Größtes Deadlock-Raid-Netzwerk auf Twitch")}
           </motion.div>
 
           {/* Headline */}
@@ -30,9 +31,9 @@ export function Hero() {
             transition={{ duration: 0.6, delay: 0.1 }}
             className="mt-6 text-5xl md:text-6xl lg:text-7xl font-bold leading-tight text-[var(--color-text-primary)]"
           >
-            Kein Stream endet
+            {landingText("Kein Stream endet")}
             <br />
-            <GradientText>im Leeren.</GradientText>
+            <GradientText>{landingText("im Leeren.")}</GradientText>
           </motion.h1>
 
           {/* Subheadline */}
@@ -42,12 +43,10 @@ export function Hero() {
             transition={{ duration: 0.6, delay: 0.2 }}
             className="mt-6 text-xl text-[var(--color-text-secondary)] max-w-2xl mx-auto"
           >
-            Der Bot postet deinen Stream im Community-Discord, schützt deinen
-            Chat und sammelt deine Zahlen. Und wenn du offline gehst, reicht er
-            deine Viewer an den nächsten Deadlock-Partner weiter, statt sie zu
-            verlieren.
+            {landingText(
+              "Der Bot postet deinen Stream im Community-Discord, schützt deinen Chat und sammelt deine Zahlen. Und wenn du offline gehst, reicht er deine Viewer an den nächsten Deadlock-Partner weiter, statt sie zu verlieren.",
+            )}
           </motion.p>
-
         </div>
 
         {/* Raid-Demo */}
@@ -67,13 +66,13 @@ export function Hero() {
             className="gradient-accent rounded-xl px-7 py-3.5 font-semibold inline-flex items-center gap-2 transition-all duration-200 hover:brightness-110 hover:shadow-[0_0_24px_4px_rgba(201,168,106,0.3)]"
           >
             <ExternalLink size={18} />
-            Partner werden
+            {landingText("Partner werden")}
           </a>
           <a
             href="#raid"
             className="rounded-xl px-7 py-3.5 font-semibold text-[var(--color-text-primary)] border border-[rgba(255,255,255,0.14)] inline-flex items-center gap-2 transition-all duration-200 hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
           >
-            Mehr erfahren
+            {landingText("Mehr erfahren")}
           </a>
         </motion.div>
       </div>

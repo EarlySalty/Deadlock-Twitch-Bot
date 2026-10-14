@@ -1,4 +1,12 @@
-import { ShieldCheck, KeyRound, PowerOff, Layers, ArrowRight, Lock } from "lucide-react";
+import { landingText, landingLink } from "@/lib/landingLocale";
+import {
+  ShieldCheck,
+  KeyRound,
+  PowerOff,
+  Layers,
+  ArrowRight,
+  Lock,
+} from "lucide-react";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
 import { GradientText } from "@/components/ui/GradientText";
 import { TWITCH_SECURITY_URL } from "@/data/externalLinks";
@@ -7,30 +15,40 @@ import { TWITCH_SECURITY_URL } from "@/data/externalLinks";
 // identisch zur Darstellung auf der Sicherheitskonzept-Seite (/twitch/sicherheit).
 // Als ggshield-False-Positive in .gitguardian.yaml gelistet.
 // eslint-disable-next-line max-len
-const ACCESS_TOKEN_BLOB = "01027631cc1a318fc855cd096f414d4eb9140a1efaabbe7033619b7376eb2ade6399c5600e0bde49e5a9a314708da992a6e6c430146335861b9766631c795c9379b40f03da76d94ee642ec";
+const ACCESS_TOKEN_BLOB =
+  "01027631cc1a318fc855cd096f414d4eb9140a1efaabbe7033619b7376eb2ade6399c5600e0bde49e5a9a314708da992a6e6c430146335861b9766631c795c9379b40f03da76d94ee642ec";
 // eslint-disable-next-line max-len
-const REFRESH_TOKEN_BLOB = "010276315877678bb2ed322b62caed1893dda920643dafb46c11418b47095a2276fa41c0b95787b2fba008224c4d32173bfd6631bbca88554ed73a66aea84ff9de382af161cde3f65398480e";
+const REFRESH_TOKEN_BLOB =
+  "010276315877678bb2ed322b62caed1893dda920643dafb46c11418b47095a2276fa41c0b95787b2fba008224c4d32173bfd6631bbca88554ed73a66aea84ff9de382af161cde3f65398480e";
 
 const pillars = [
   {
     icon: ShieldCheck,
-    title: "Keine Broadcaster-Rechte",
-    body: "Der Bot moderiert — mehr nicht. Streamtitel, Kategorie oder Kanal-Einstellungen kann er technisch gar nicht anfassen.",
+    title: landingText("Keine Broadcaster-Rechte"),
+    body: landingText(
+      "Der Bot moderiert — mehr nicht. Streamtitel, Kategorie oder Kanal-Einstellungen kann er technisch gar nicht anfassen.",
+    ),
   },
   {
     icon: KeyRound,
-    title: "Tokens einzeln verschlüsselt",
-    body: "Deine Zugangs-Tokens liegen feldweise mit AES-256-GCM verschlüsselt — der Schlüssel getrennt davon. Selbst ein Datenbank-Leak gibt sie nicht preis.",
+    title: landingText("Tokens einzeln verschlüsselt"),
+    body: landingText(
+      "Deine Zugangs-Tokens liegen feldweise mit AES-256-GCM verschlüsselt — der Schlüssel getrennt davon. Selbst ein Datenbank-Leak gibt sie nicht preis.",
+    ),
   },
   {
     icon: PowerOff,
-    title: "Jederzeit widerrufbar",
-    body: "Ein Klick in deinen Twitch-Einstellungen entzieht dem Bot den Zugriff. Er erkennt das und schaltet sich für deinen Kanal selbst ab.",
+    title: landingText("Jederzeit widerrufbar"),
+    body: landingText(
+      "Ein Klick in deinen Twitch-Einstellungen entzieht dem Bot den Zugriff. Er erkennt das und schaltet sich für deinen Kanal selbst ab.",
+    ),
   },
   {
     icon: Layers,
-    title: "Schutz in mehreren Schichten",
-    body: "Doppelte Firewall, Zwei-Faktor auf allen Konten, verschlüsselter Secret-Tresor und rund-um-die-Uhr-Überwachung mit Sofort-Alarm.",
+    title: landingText("Schutz in mehreren Schichten"),
+    body: landingText(
+      "Doppelte Firewall, Zwei-Faktor auf allen Konten, verschlüsselter Secret-Tresor und rund-um-die-Uhr-Überwachung mit Sofort-Alarm.",
+    ),
   },
 ];
 
@@ -43,14 +61,16 @@ export function Security() {
       <div className="max-w-7xl mx-auto px-6 relative z-10">
         <ScrollReveal className="text-center">
           <p className="text-sm uppercase tracking-wider font-medium text-[var(--color-primary)] mb-3">
-            Sicherheit &amp; Vertrauen
+            {landingText("Sicherheit & Vertrauen")}
           </p>
           <h2 className="text-4xl md:text-5xl font-bold text-[var(--color-text-primary)] font-display">
-            Du gibst dem Bot <GradientText>Mod-Rechte</GradientText>.
+            {landingText("Du gibst dem Bot ")}
+            <GradientText>{landingText("Mod-Rechte")}</GradientText>.
           </h2>
           <p className="text-lg text-[var(--color-text-secondary)] mt-4 max-w-2xl mx-auto">
-            Fair, dass du genau weißt, was wir damit tun — und was wir bewusst
-            nicht können. Hier ohne Marketing, einfach wie es ist.
+            {landingText(
+              "Fair, dass du genau weißt, was wir damit tun — und was wir bewusst nicht können. Hier ohne Marketing, einfach wie es ist.",
+            )}
           </p>
         </ScrollReveal>
 
@@ -90,12 +110,13 @@ export function Security() {
               <div className="flex items-center gap-2 mb-1">
                 <Lock size={15} className="text-[var(--color-primary)]" />
                 <span className="text-sm font-semibold text-[var(--color-text-primary)]">
-                  So liegt dein Zugang bei uns
+                  {landingText("So liegt dein Zugang bei uns")}
                 </span>
               </div>
               <p className="text-xs text-[var(--color-text-secondary)] mb-4">
-                Ein echtes Token sieht in unserer Datenbank so aus — verschlüsselt,
-                ohne unseren getrennt verwahrten Schlüssel reiner Datenmüll:
+                {landingText(
+                  "Ein echtes Token sieht in unserer Datenbank so aus — verschlüsselt, ohne unseren getrennt verwahrten Schlüssel reiner Datenmüll:",
+                )}
               </p>
 
               <div
@@ -107,11 +128,15 @@ export function Security() {
                 }}
               >
                 <div>
-                  <span className="text-[var(--color-text-secondary)]">access_token&nbsp;=&nbsp;</span>
+                  <span className="text-[var(--color-text-secondary)]">
+                    access_token&nbsp;=&nbsp;
+                  </span>
                   {ACCESS_TOKEN_BLOB}
                 </div>
                 <div>
-                  <span className="text-[var(--color-text-secondary)]">refresh_token&nbsp;=&nbsp;</span>
+                  <span className="text-[var(--color-text-secondary)]">
+                    refresh_token&nbsp;=&nbsp;
+                  </span>
                   {REFRESH_TOKEN_BLOB}
                 </div>
               </div>
@@ -122,23 +147,23 @@ export function Security() {
                   <span className="relative rounded-full h-2 w-2 bg-[var(--color-success)]" />
                 </span>
                 <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
-                  Format-Beispiel mit Wegwerf-Schlüssel — kein echter Zugang. Beim
-                  Original ist jeder Wert einzeln verschlüsselt und fest an dein Konto
-                  gebunden, sodass er sich nicht auf einen anderen Streamer übertragen lässt.
+                  {landingText(
+                    "Format-Beispiel mit Wegwerf-Schlüssel — kein echter Zugang. Beim Original ist jeder Wert einzeln verschlüsselt und fest an dein Konto gebunden, sodass er sich nicht auf einen anderen Streamer übertragen lässt.",
+                  )}
                 </p>
               </div>
             </div>
 
             <div className="mt-6 flex flex-wrap gap-4 items-center">
               <a
-                href={TWITCH_SECURITY_URL}
+                href={landingLink(TWITCH_SECURITY_URL)}
                 className="gradient-accent rounded-xl px-7 py-3.5 font-semibold inline-flex items-center gap-2"
               >
-                Ganzes Sicherheitskonzept lesen
+                {landingText("Ganzes Sicherheitskonzept lesen")}
                 <ArrowRight size={18} />
               </a>
               <span className="text-sm text-[var(--color-text-secondary)]">
-                Tokens · Server · KI-Schutz · Notfall-Kontakt
+                {landingText("Tokens · Server · KI-Schutz · Notfall-Kontakt")}
               </span>
             </div>
           </ScrollReveal>

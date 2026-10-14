@@ -1,9 +1,6 @@
 (() => {
-  if (
-    !["dead-lock.de", "www.dead-lock.de"].includes(
-      window.location.hostname.toLowerCase(),
-    )
-  )
+  const language = new URLSearchParams(window.location.search ?? "").get("lang");
+  if (language === "de" || (language !== "en" && !["dead-lock.de", "www.dead-lock.de"].includes(window.location.hostname.toLowerCase())))
     return;
   document.documentElement.lang = "en";
   const canonical = "https://dead-lock.de/streamer/";
