@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { draftFromSaved, isDraftChanged, parseDraft, uniqueFields } from './settingsCatalog.ts';
+import { draftFromSaved, isDraftChanged, parseDraft, uniqueFields, withoutSubmitted } from './settingsCatalog.ts';
 import { settingsCatalogFixture } from './settingsCatalogFixture.ts';
 
 const field = path => settingsCatalogFixture.fields.find(entry => entry.path === path);
@@ -30,4 +30,12 @@ test('decimal input with comma matches saved number', () => {
 
 test('duplicate catalog paths render once', () => {
   assert.equal(uniqueFields(settingsCatalogFixture.fields).length, settingsCatalogFixture.fields.length - 1);
+});
+
+test('save completion keeps drafts edited after submission', () => {
+  const submittedList = ['1'];
+  const newerList = ['1', '2'];
+  const drafts = { a: submittedList, b: '5', c: true };
+  const remaining = withoutSubmitted({ ...drafts, a: newerList }, { a: submittedList, b: '5' });
+  assert.deepEqual(remaining, { a: newerList, c: true });
 });

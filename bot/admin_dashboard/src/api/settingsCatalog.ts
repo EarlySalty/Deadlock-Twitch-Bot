@@ -176,3 +176,11 @@ export function readValidationError(payload: unknown): { path: string | null; me
   const message = [record.message, record.error].find(value => typeof value === 'string');
   return { path: typeof path === 'string' ? path : null, message: typeof message === 'string' ? message : null };
 }
+
+export function withoutSubmitted(drafts: Record<string, SettingsDraft>, submitted: Record<string, SettingsDraft>) {
+  const next = { ...drafts };
+  for (const [path, draft] of Object.entries(submitted)) {
+    if (next[path] === draft) delete next[path];
+  }
+  return next;
+}
