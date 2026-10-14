@@ -9,6 +9,7 @@ use super::skills::{skill_snapshot, SkillId};
 const MAX_TEXT_FIELD: usize = 1000;
 const MAX_ACTOR: usize = 200;
 const MAX_PROPOSALS: i64 = 50;
+const MAX_ACTIVATIONS: i64 = 50;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum SkillRegistryError {
@@ -69,11 +70,22 @@ pub struct SkillVersionView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct SkillActivationView {
+    pub kind: String,
+    pub from_version: String,
+    pub to_version: String,
+    pub actor: String,
+    pub reason: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SkillHistory {
     pub skill_id: String,
     pub name: String,
     pub current_version: String,
     pub versions: Vec<SkillVersionView>,
+    pub activations: Vec<SkillActivationView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,6 +97,24 @@ pub struct ChangeProposal {
     pub reason: String,
     pub status: String,
     pub evidence: Option<String>,
+    pub reviewed_at: Option<String>,
+    pub reviewed_by: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposalDecision {
+    Reviewed,
+    Dismissed,
+}
+
+impl ProposalDecision {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Reviewed => "reviewed",
+            Self::Dismissed => "dismissed",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -379,6 +409,28 @@ pub async fn rollback(
     reason: &str,
     actor: &str,
 ) -> Result<i32, SkillRegistryError> {
+    switch_version(pool, id, (expected, target), "rollback", reason, actor).await
+}
+
+pub async fn auto_rollback(
+    pool: &PgPool,
+    id: SkillId,
+    expected: i32,
+    target: i32,
+    reason: &str,
+    actor: &str,
+) -> Result<i32, SkillRegistryError> {
+    switch_version(pool, id, (expected, target), "auto_rollback", reason, actor).await
+}
+
+async fn switch_version(
+    pool: &PgPool,
+    id: SkillId,
+    (expected, target): (i32, i32),
+    kind: &str,
+    reason: &str,
+    actor: &str,
+) -> Result<i32, SkillRegistryError> {
     let reason = bounded(reason, MAX_TEXT_FIELD, false)?;
     let actor = bounded(actor, MAX_ACTOR, false)?;
     if expected == target || target < 1 {
@@ -400,7 +452,7 @@ pub async fn rollback(
     if exists.is_none() {
         return Err(SkillRegistryError::NotFound);
     }
-    record_activation(&mut tx, id, current, target, "rollback", &actor, &reason).await?;
+    record_activation(&mut tx, id, current, target, kind, &actor, &reason).await?;
     tx.commit().await?;
     Ok(target)
 }
@@ -557,12 +609,51 @@ async fn stored_versions(
         .map_err(SkillRegistryError::from)
 }
 
+async fn stored_activations(
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<Vec<(String, SkillActivationView)>, SkillRegistryError> {
+    let rows = sqlx::query(
+        "SELECT skill_id, kind, from_version, to_version, actor, reason, created_at FROM (SELECT a.*, row_number() OVER (PARTITION BY skill_id ORDER BY id DESC) AS position FROM public.social_ai_skill_activations a) ranked WHERE position <= $1 ORDER BY skill_id, id DESC",
+    )
+    .bind(MAX_ACTIVATIONS)
+    .fetch_all(&mut **tx)
+    .await?;
+    rows.iter()
+        .map(|row| {
+            let from: i32 = row.try_get("from_version")?;
+            let to: i32 = row.try_get("to_version")?;
+            let created_at: DateTime<Utc> = row.try_get("created_at")?;
+            Ok((
+                row.try_get("skill_id")?,
+                SkillActivationView {
+                    kind: row.try_get("kind")?,
+                    from_version: from.to_string(),
+                    to_version: to.to_string(),
+                    actor: row.try_get("actor")?,
+                    reason: row.try_get("reason")?,
+                    created_at: created_at.to_rfc3339(),
+                },
+            ))
+        })
+        .collect::<Result<_, sqlx::Error>>()
+        .map_err(SkillRegistryError::from)
+}
+
+fn take_skill<T>(items: &mut Vec<(String, T)>, id: SkillId) -> Vec<T> {
+    let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(items)
+        .into_iter()
+        .partition(|(skill, _)| skill == id.as_str());
+    *items = rest;
+    mine.into_iter().map(|(_, item)| item).collect()
+}
+
 pub async fn history(pool: &PgPool) -> Result<Vec<SkillHistory>, SkillRegistryError> {
     let mut tx = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         .execute(&mut *tx)
         .await?;
     let mut stored = stored_versions(&mut tx).await?;
+    let mut activations = stored_activations(&mut tx).await?;
     let active: Vec<(String, i32)> =
         sqlx::query_as("SELECT skill_id, version FROM public.social_ai_skill_active")
             .fetch_all(&mut *tx)
@@ -571,13 +662,7 @@ pub async fn history(pool: &PgPool) -> Result<Vec<SkillHistory>, SkillRegistryEr
     Ok(SkillId::ALL
         .into_iter()
         .map(|id| {
-            let versions: Vec<StoredVersion> = {
-                let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut stored)
-                    .into_iter()
-                    .partition(|(skill, _)| skill == id.as_str());
-                stored = rest;
-                mine.into_iter().map(|(_, version)| version).collect()
-            };
+            let versions = take_skill(&mut stored, id);
             let current = active
                 .iter()
                 .find(|(skill, _)| skill == id.as_str())
@@ -595,6 +680,7 @@ pub async fn history(pool: &PgPool) -> Result<Vec<SkillHistory>, SkillRegistryEr
                 name: id.display_name().into(),
                 current_version: current.to_string(),
                 versions: views,
+                activations: take_skill(&mut activations, id),
             }
         })
         .collect())
@@ -602,7 +688,7 @@ pub async fn history(pool: &PgPool) -> Result<Vec<SkillHistory>, SkillRegistryEr
 
 pub async fn proposals(pool: &PgPool) -> Result<Vec<ChangeProposal>, SkillRegistryError> {
     let rows = sqlx::query(
-        "SELECT id, title, summary, reason, evidence, status, created_at FROM public.social_ai_change_proposals ORDER BY created_at DESC, id DESC LIMIT $1",
+        "SELECT id, title, summary, reason, evidence, status, created_at, reviewed_at, reviewed_by FROM public.social_ai_change_proposals ORDER BY created_at DESC, id DESC LIMIT $1",
     )
     .bind(MAX_PROPOSALS)
     .fetch_all(pool)
@@ -611,6 +697,7 @@ pub async fn proposals(pool: &PgPool) -> Result<Vec<ChangeProposal>, SkillRegist
         .map(|row| {
             let id: i64 = row.try_get("id")?;
             let created_at: DateTime<Utc> = row.try_get("created_at")?;
+            let reviewed_at: Option<DateTime<Utc>> = row.try_get("reviewed_at")?;
             Ok(ChangeProposal {
                 id: id.to_string(),
                 title: row.try_get("title")?,
@@ -619,10 +706,30 @@ pub async fn proposals(pool: &PgPool) -> Result<Vec<ChangeProposal>, SkillRegist
                 reason: row.try_get("reason")?,
                 status: row.try_get("status")?,
                 evidence: row.try_get("evidence")?,
+                reviewed_at: reviewed_at.map(|at| at.to_rfc3339()),
+                reviewed_by: row.try_get("reviewed_by")?,
             })
         })
         .collect::<Result<_, sqlx::Error>>()
         .map_err(SkillRegistryError::from)
+}
+
+pub async fn decide_proposal(
+    pool: &PgPool,
+    id: i64,
+    decision: ProposalDecision,
+    actor: &str,
+) -> Result<(), SkillRegistryError> {
+    let actor = bounded(actor, MAX_ACTOR, false)?;
+    let updated: Option<i64> = sqlx::query_scalar(
+        "UPDATE public.social_ai_change_proposals SET status = $2, reviewed_at = now(), reviewed_by = $3 WHERE id = $1 RETURNING id",
+    )
+    .bind(id)
+    .bind(decision.as_str())
+    .bind(&actor)
+    .fetch_optional(pool)
+    .await?;
+    updated.map(|_| ()).ok_or(SkillRegistryError::NotFound)
 }
 
 pub async fn record_proposal(

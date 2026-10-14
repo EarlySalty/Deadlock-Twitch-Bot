@@ -287,6 +287,12 @@ impl DisposablePostgres {
             .execute(&pool)
             .await
             .expect("admin limits migration");
+            sqlx::raw_sql(include_str!(
+                "../../../../migrations/20261014150000_social_ai_admin_console_limits.sql"
+            ))
+            .execute(&pool)
+            .await
+            .expect("admin console limits migration");
         }
         static LEDGER_IDENTITY: std::sync::Once = std::sync::Once::new();
         LEDGER_IDENTITY.call_once(|| {

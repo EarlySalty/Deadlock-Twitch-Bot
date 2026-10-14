@@ -14,10 +14,13 @@ function parseCount(value: string): number | null {
 
 function LimitForms({ data, blocked, saving, save }: { data: ProcessingLimits; blocked: boolean; saving: boolean; save: (change: LimitChange) => void }) {
   const [paused, setPaused] = useState(data.global.paused);
+  const [globalCap, setGlobalCap] = useState(usdInput(data.global.monthly_cap_micro_usd));
   const [globalReason, setGlobalReason] = useState('');
   const [userId, setUserId] = useState('');
   const [userPaused, setUserPaused] = useState(false);
   const [userCap, setUserCap] = useState('');
+  const [userJobs, setUserJobs] = useState('');
+  const [userRevisions, setUserRevisions] = useState('');
   const [userReason, setUserReason] = useState('');
   const [planId, setPlanId] = useState(data.plans[0]?.plan_id ?? '');
   const initialPlan = data.plans[0];
@@ -27,12 +30,17 @@ function LimitForms({ data, blocked, saving, save }: { data: ProcessingLimits; b
   const [planReason, setPlanReason] = useState('');
   const user = data.users.find(user => user.twitch_user_id === userId.trim());
   const plan = data.plans.find(plan => plan.plan_id === planId);
+  const globalAmount = globalCap.trim() === '' ? null : parseMicroUsd(globalCap);
   const userAmount = userCap.trim() === '' ? null : parseMicroUsd(userCap);
+  const userJobCount = userJobs.trim() === '' ? null : parseCount(userJobs);
+  const userRevisionCount = userRevisions.trim() === '' ? null : parseCount(userRevisions);
+  const validUserCounts = (userJobs.trim() === '' || userJobCount !== null) && (userRevisions.trim() === '' || userRevisionCount !== null);
+  const globalChanged = paused !== data.global.paused || globalAmount !== data.global.monthly_cap_micro_usd;
   const planAmount = planCap.trim() === '' ? null : parseMicroUsd(planCap);
   const validMoney = (input: string, amount: number | null) => input.trim() === '' || (amount !== null && amount <= GLOBAL_CAP_MICRO_USD);
   const userBlocked = blocked || !data.enforcement_available;
   const planBlocked = blocked || !data.plan_configuration_available;
-  const userChanged = !user || user.paused !== userPaused || user.monthly_cap_micro_usd !== userAmount;
+  const userChanged = !user || user.paused !== userPaused || user.monthly_cap_micro_usd !== userAmount || user.monthly_ai_jobs !== userJobCount || user.monthly_revisions !== userRevisionCount;
   const jobs = planJobs.trim() === '' ? null : parseCount(planJobs);
   const revisions = planRevisions.trim() === '' ? null : parseCount(planRevisions);
   const validCounts = (planJobs.trim() === '' || jobs !== null) && (planRevisions.trim() === '' || revisions !== null);
@@ -40,7 +48,7 @@ function LimitForms({ data, blocked, saving, save }: { data: ProcessingLimits; b
 
   function selectUser(id: string) {
     const existing = data.users.find(user => user.twitch_user_id === id.trim());
-    setUserId(id); setUserPaused(existing?.paused ?? false); setUserCap(existing ? usdInput(existing.monthly_cap_micro_usd) : ''); setUserReason('');
+    setUserId(id); setUserPaused(existing?.paused ?? false); setUserCap(existing ? usdInput(existing.monthly_cap_micro_usd) : ''); setUserJobs(existing?.monthly_ai_jobs?.toString() ?? ''); setUserRevisions(existing?.monthly_revisions?.toString() ?? ''); setUserReason('');
   }
 
   function selectPlan(id: string) {
@@ -51,33 +59,37 @@ function LimitForms({ data, blocked, saving, save }: { data: ProcessingLimits; b
   return <div className="space-y-5">
     <form className="panel-card rounded-2xl p-5 space-y-4" onSubmit={event => {
       event.preventDefault();
-      if (!userBlocked && globalReason.trim() && paused !== data.global.paused) save({ kind: 'global', body: { expected_revision: data.global.revision, paused, reason: globalReason.trim() } });
+      if (!userBlocked && globalReason.trim() && globalChanged && validMoney(globalCap, globalAmount)) save({ kind: 'global', body: { expected_revision: data.global.revision, paused, monthly_cap_micro_usd: globalAmount, reason: globalReason.trim() } });
     }}>
       <h3 className="text-lg font-semibold">Globale Verarbeitung</h3>
       <dl className="social-ai-facts"><div><dt>Unveränderliche gemeinsame Testgrenze</dt><dd>{formatMicroUsd(GLOBAL_CAP_MICRO_USD)} <span className="text-sm text-text-secondary">(2.000.000 Mikro-USD)</span></dd></div><div><dt>Gespeicherter Stand</dt><dd>{data.global.paused ? 'Pausiert' : 'Nicht pausiert'} · Revision {data.global.revision}</dd></div></dl>
       <p className="text-sm text-text-secondary">Die gemeinsame Grenze wird nicht durch Nutzer- oder Planregeln angehoben. Das zentrale Verbrauchsprotokoll bleibt maßgeblich.</p>
       {!data.enforcement_available && <p className="social-ai-notice">Die serverseitige Durchsetzung ist noch nicht angebunden. Pause und Nutzergrenzen sind deshalb gesperrt.</p>}
       <label className="flex items-center gap-3"><input type="checkbox" checked={paused} disabled={userBlocked} onChange={event => setPaused(event.target.checked)} /> Neue KI-Anfragen global pausieren</label>
+      <label className="block">Globales Monatsbudget in USD<input className="admin-input mt-2" inputMode="decimal" value={globalCap} disabled={userBlocked} aria-invalid={!validMoney(globalCap, globalAmount)} aria-describedby="global-cap-hint" onChange={event => setGlobalCap(event.target.value)} /><span id="global-cap-hint" className="mt-2 block text-sm text-text-secondary">0 bis 2 USD. Leer: keine zusätzliche Monatsgrenze. Die gemeinsame Testgrenze bleibt bestehen.</span></label>
       <label className="block">Begründung für die globale Änderung<textarea className="admin-input mt-2" rows={2} maxLength={1000} value={globalReason} disabled={userBlocked} onChange={event => setGlobalReason(event.target.value)} /></label>
-      <button type="submit" className="admin-button admin-button-primary" disabled={userBlocked || !globalReason.trim() || paused === data.global.paused}>{saving ? 'Wird gespeichert …' : 'Globale Pause speichern'}</button>
+      <button type="submit" className="admin-button admin-button-primary" disabled={userBlocked || !globalReason.trim() || !globalChanged || !validMoney(globalCap, globalAmount)}>{saving ? 'Wird gespeichert …' : 'Globale Grenzen speichern'}</button>
       <p className="text-sm text-text-secondary">Stand vom {formatDate(data.global.updated_at)} · {data.global.updated_by}. {data.global.reason}</p>
     </form>
     <form className="panel-card rounded-2xl p-5 space-y-4" onSubmit={event => {
       event.preventDefault();
-      if (!userBlocked && /^\d+$/.test(userId.trim()) && userReason.trim() && userChanged && validMoney(userCap, userAmount)) save({ kind: 'user', body: { twitch_user_id: userId.trim(), expected_revision: user?.revision ?? 0, paused: userPaused, monthly_cap_micro_usd: userAmount, reason: userReason.trim() } });
+      if (!userBlocked && /^\d+$/.test(userId.trim()) && userReason.trim() && userChanged && validMoney(userCap, userAmount) && validUserCounts) save({ kind: 'user', body: { twitch_user_id: userId.trim(), expected_revision: user?.revision ?? 0, paused: userPaused, monthly_cap_micro_usd: userAmount, monthly_ai_jobs: userJobCount, monthly_revisions: userRevisionCount, reason: userReason.trim() } });
     }}>
       <h3 className="text-lg font-semibold">Individuelle Nutzergrenzen</h3>
       <p className="text-sm text-text-secondary">Nutzergrenzen gelten zusätzlich zur gemeinsamen Grenze. Das Monatsbudget zählt den Verbrauch im aktuellen UTC-Monat und ungeklärte Reservierungen aus früheren Monaten. Ein leeres Budget entfernt die zusätzliche Monatsgrenze; 0 USD sperrt neue Anfragen. Bereits gestartete Anfragen werden nicht abgebrochen.</p>
       <div className="social-ai-form-grid">
         <label>Twitch-Nutzer-ID<input className="admin-input mt-2" inputMode="numeric" maxLength={32} value={userId} disabled={userBlocked} onChange={event => selectUser(event.target.value)} /></label>
         <label>Monatsbudget in USD<input className="admin-input mt-2" inputMode="decimal" value={userCap} disabled={userBlocked} aria-invalid={!validMoney(userCap, userAmount)} aria-describedby="user-cap-hint" onChange={event => setUserCap(event.target.value)} /><span id="user-cap-hint" className="mt-2 block text-sm text-text-secondary">0 bis 2 USD, bis zu sechs Nachkommastellen. Leer: keine zusätzliche Monatsgrenze.</span></label>
+        <label>Erstproduktionen pro Monat<input className="admin-input mt-2" inputMode="numeric" value={userJobs} disabled={userBlocked} aria-invalid={userJobs.trim() !== '' && userJobCount === null} onChange={event => setUserJobs(event.target.value)} /></label>
+        <label>Revisionen pro Monat<input className="admin-input mt-2" inputMode="numeric" value={userRevisions} disabled={userBlocked} aria-invalid={userRevisions.trim() !== '' && userRevisionCount === null} onChange={event => setUserRevisions(event.target.value)} /></label>
       </div>
+      <p className="text-sm text-text-secondary">Anzahlgrenzen zählen neu begonnene Aufträge im UTC-Monat, keine einzelnen Analyseschritte. Leer: keine zusätzliche Anzahlgrenze. 0: keine neuen Aufträge dieser Art. Bereits begonnene Aufträge dürfen fortgesetzt werden.</p>
       <label className="flex items-center gap-3"><input type="checkbox" checked={userPaused} disabled={userBlocked} onChange={event => setUserPaused(event.target.checked)} /> Für diesen Nutzer pausieren</label>
       <label className="block">Begründung für die Nutzergrenze<textarea className="admin-input mt-2" rows={2} maxLength={1000} value={userReason} disabled={userBlocked} onChange={event => setUserReason(event.target.value)} /></label>
       {user && <p className="text-sm text-text-secondary">Nutzerrevision {user.revision}, Stand vom {formatDate(user.updated_at)}. {user.reason}</p>}
-      <button type="submit" className="admin-button admin-button-primary" disabled={userBlocked || !/^\d+$/.test(userId.trim()) || !userReason.trim() || !userChanged || !validMoney(userCap, userAmount)}>Nutzergrenze speichern</button>
+      <button type="submit" className="admin-button admin-button-primary" disabled={userBlocked || !/^\d+$/.test(userId.trim()) || !userReason.trim() || !userChanged || !validMoney(userCap, userAmount) || !validUserCounts}>Nutzergrenze speichern</button>
       {data.users.length === 0 ? <p className="text-text-secondary">Keine individuellen Nutzergrenzen gespeichert.</p> : <ul className="divide-y divide-border">{data.users.map(user => <li key={user.twitch_user_id} className="py-3 flex flex-wrap items-center justify-between gap-3">
-        <div><p>Nutzer {user.twitch_user_id}: {user.paused ? 'pausiert' : 'nicht pausiert'}</p><p className="text-sm text-text-secondary">{user.monthly_cap_micro_usd === null ? 'Keine zusätzliche Monatsgrenze' : `${formatMicroUsd(user.monthly_cap_micro_usd)} pro Monat`} · Revision {user.revision}</p></div><button type="button" className="admin-button admin-button-secondary" disabled={userBlocked} onClick={() => selectUser(user.twitch_user_id)}>Nutzer {user.twitch_user_id} bearbeiten</button>
+        <div><p>Nutzer {user.twitch_user_id}: {user.paused ? 'pausiert' : 'nicht pausiert'}</p><p className="text-sm text-text-secondary">{user.monthly_cap_micro_usd === null ? 'Keine zusätzliche Monatsgrenze' : `${formatMicroUsd(user.monthly_cap_micro_usd)} pro Monat`} · Revision {user.revision}</p><p className="text-sm text-text-secondary">Erstproduktionen: {user.monthly_ai_jobs ?? 'Ohne Zusatzgrenze'} · Revisionen: {user.monthly_revisions ?? 'Ohne Zusatzgrenze'} pro Monat</p></div><button type="button" className="admin-button admin-button-secondary" disabled={userBlocked} onClick={() => selectUser(user.twitch_user_id)}>Nutzer {user.twitch_user_id} bearbeiten</button>
       </li>)}</ul>}
     </form>
     <form className="panel-card rounded-2xl p-5 space-y-4" onSubmit={event => {
