@@ -1,3 +1,16 @@
+(dead_lock_oauth_redirects) {
+	@oauth path /twitch/auth /twitch/auth/* /callback /callback/* /twitch/raid/auth /twitch/raid/callback /twitch/discord_link /twitch/social-media/oauth/start/* /twitch/social-media/oauth/callback /twitch/social-media/oauth/callback/* /social-media/oauth/start/* /social-media/oauth/callback /social-media/oauth/callback/* /twitch/uplink/connect/kick /twitch/uplink/connect/youtube /auth /auth/* /link/steam /link/steam/login /link/steam/callback /link/callback/* /link/auth/* /linked-role/* /api/auth/* /builds/auth/* /aktivitaet/auth/* /turnier/auth/* /clips/auth/*
+	handle @oauth {
+		route {
+			@language_hint query lang=*
+			@existing_query expression `{http.request.uri.query} != ""`
+			redir @language_hint https://deutsche-deadlock-community.de{uri} 302
+			redir @existing_query https://deutsche-deadlock-community.de{uri}&lang=en 302
+			redir https://deutsche-deadlock-community.de{uri}?lang=en 302
+		}
+	}
+}
+
 (dead_lock_english_dashboard) {
 	import common_probe_blockers
 	encode zstd gzip
@@ -42,16 +55,7 @@
 	header @legal_noindex X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex"
 
 	route {
-		@oauth path /twitch/auth /twitch/auth/* /callback /callback/* /twitch/raid/auth /twitch/raid/callback /twitch/discord_link /twitch/social-media/oauth /twitch/social-media/oauth/* /social-media/oauth /social-media/oauth/* /twitch/uplink/connect/kick /twitch/uplink/connect/youtube /auth /auth/* /link/steam /link/steam/login /link/steam/callback /link/callback/* /link/auth/* /linked-role/* /api/auth/* /builds/auth/* /aktivitaet/auth/* /turnier/auth/* /clips/auth/*
-		handle @oauth {
-			route {
-				@language_hint query lang=*
-				@existing_query expression `{http.request.uri.query} != ""`
-				redir @language_hint https://deutsche-deadlock-community.de{uri} 302
-				redir @existing_query https://deutsche-deadlock-community.de{uri}&lang=en 302
-				redir https://deutsche-deadlock-community.de{uri}?lang=en 302
-			}
-		}
+		import dead_lock_oauth_redirects
 		handle /twitch/onboarding* {
 			@onboarding_asset_request path_regexp onboarding_asset_request (?i)^/twitch/onboarding/.+\.(js|mjs|css|map|json|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|eot|txt|xml)$
 			handle @onboarding_asset_request {
@@ -166,7 +170,13 @@
 
 http://dead-lock.de, http://www.dead-lock.de {
 	bind 195.90.216.148
-	import dead_lock_english_dashboard
+	import common_probe_blockers
+	route {
+		import dead_lock_oauth_redirects
+		@dashboard path /twitch /twitch/*
+		redir @dashboard https://{host}{uri} 308
+		redir https://deutsche-deadlock-community.de{uri} 308
+	}
 }
 
 dead-lock.de, www.dead-lock.de {

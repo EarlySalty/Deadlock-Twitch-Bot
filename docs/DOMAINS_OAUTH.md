@@ -4,9 +4,9 @@
 
 ## Routing
 
-`ops/caddy/dead-lock-de.caddy` replaces only the two dead-lock.de HTTP and HTTPS site blocks. It serves `/twitch` and `/twitch/*` through the same public dashboard upstream and special handlers as the main domain, without changing the incoming Host header. Main-domain admin redirects, static onboarding/FAQ pages, legal handlers, EventSub upstream and dashboard security headers are retained.
+`ops/caddy/dead-lock-de.caddy` replaces only the two dead-lock.de HTTP and HTTPS site blocks. On HTTPS it serves `/twitch` and `/twitch/*` through the same public dashboard upstream and special handlers as the main domain, without changing the incoming Host header. Main-domain admin redirects, static onboarding/FAQ pages, legal handlers, EventSub upstream and dashboard security headers are retained.
 
-OAuth starts and callbacks, including `/twitch/auth/*`, `/callback/*`, raid authorization, social-media OAuth and platform connects, return a 302 to the same path and query on the main domain. An absent `lang` parameter is appended as `lang=en`; existing hints and query bytes are preserved. EventSub is a webhook, not an OAuth callback. Other paths return a 308 to the main domain, except the existing common probe blockers.
+OAuth starts and callbacks, including `/twitch/auth/*`, `/callback/*`, raid authorization, social-media OAuth and platform connects, return a 302 to the same path and query on the main domain. An absent `lang` parameter is appended as `lang=en`; existing hints and query bytes are preserved. EventSub is a webhook, not an OAuth callback. HTTP dashboard requests first return a 308 to the same English host over HTTPS, so no dashboard HTML, JavaScript or API response is served over plaintext. HTTP OAuth navigation goes directly to the main domain over HTTPS with a 302. Other paths return a 308 to the main domain, except the existing common probe blockers. Social OAuth disconnect endpoints are mutation APIs, not OAuth navigation: they remain on the dashboard upstream and retain their POST method.
 
 ## Language and navigation
 
