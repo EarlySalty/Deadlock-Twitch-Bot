@@ -20,6 +20,7 @@ export interface PoolClip {
   source_created_at: string;
   game_id: string;
   source_metadata: unknown;
+  view_count?: number | null;
   selected_at: string | null;
   first_selected_at: string | null;
   processed_at: string | null;

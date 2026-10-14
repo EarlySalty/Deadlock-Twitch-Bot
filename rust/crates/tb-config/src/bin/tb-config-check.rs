@@ -5,17 +5,46 @@ use std::{
     io::{Read, Write},
 };
 use tb_config::{
-    BotConfigSnapshot,
     editor::{
-        BRAIN_CONFIG_PATH, BrainInspection, BrainPatch, EditError, inspect_brain, save_brain,
+        inspect_brain, inspect_social_ai, save_brain, save_social_ai, BrainInspection, BrainPatch,
+        EditError, SocialAiInspection, BRAIN_CONFIG_PATH,
     },
     file::ConfigArguments,
+    BotConfigSnapshot,
 };
 
 fn print_brain(inspection: &BrainInspection) -> Result<(), EditError> {
     let mut output = std::io::stdout().lock();
     serde_json::to_writer(&mut output, inspection).map_err(|_| EditError::Io)?;
     output.write_all(b"\n").map_err(|_| EditError::Io)
+}
+
+fn print_social_ai(inspection: &SocialAiInspection) -> Result<(), EditError> {
+    let mut output = std::io::stdout().lock();
+    serde_json::to_writer(&mut output, inspection).map_err(|_| EditError::Io)?;
+    output.write_all(b"\n").map_err(|_| EditError::Io)
+}
+
+fn read_social_ai(input: impl Read) -> Result<toml::Table, EditError> {
+    const MAX_SECTION_BYTES: u64 = 64 * 1024;
+    let mut bytes = Vec::new();
+    input
+        .take(MAX_SECTION_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| EditError::Io)?;
+    if bytes.len() as u64 <= MAX_SECTION_BYTES {
+        std::str::from_utf8(&bytes)
+            .ok()
+            .and_then(|text| toml::from_str::<toml::Table>(text).ok())
+    } else {
+        None
+    }
+    .ok_or_else(|| tb_config::file::FileError::invalid("social_ai").into())
+}
+
+fn apply_social_ai(expected_revision: &str) -> Result<(), EditError> {
+    let section = read_social_ai(std::io::stdin().lock())?;
+    print_social_ai(&save_social_ai(expected_revision, &section)?)
 }
 
 fn report_edit(result: Result<(), EditError>) -> std::process::ExitCode {
@@ -25,7 +54,7 @@ fn report_edit(result: Result<(), EditError>) -> std::process::ExitCode {
             match error {
                 EditError::Invalid(error) => eprintln!("{error}"),
                 EditError::Conflict => eprintln!(
-                    "Die gespeicherte Konfiguration wurde verändert. Brain-Stand erneut prüfen."
+                    "Die gespeicherte Konfiguration wurde verändert. Stand erneut prüfen."
                 ),
                 EditError::Busy => {
                     eprintln!("Die Konfiguration wird gerade bearbeitet. Später erneut versuchen.")
@@ -34,7 +63,7 @@ fn report_edit(result: Result<(), EditError>) -> std::process::ExitCode {
                     "Konfiguration und Sperre müssen reguläre Dateien ohne Verknüpfungen sein und außerhalb eines Git-Checkouts liegen."
                 ),
                 EditError::Io => eprintln!(
-                    "Brain-Konfiguration konnte nicht gelesen oder gespeichert werden. Dateirechte und Betriebsablage prüfen."
+                    "Die Konfiguration konnte nicht gelesen oder gespeichert werden. Dateirechte und Betriebsablage prüfen."
                 ),
             }
             std::process::ExitCode::from(2)
@@ -79,25 +108,33 @@ fn main() -> std::process::ExitCode {
                 inspect_brain(&arguments.path).and_then(|state| print_brain(&state)),
             );
         }
+        [action] if action == "--social-ai-inspect" => {
+            return report_edit(
+                inspect_social_ai(&arguments.path).and_then(|state| print_social_ai(&state)),
+            );
+        }
         [action, expected, hash]
-            if action == "--brain-apply" && expected == "--expected-revision" =>
+            if (action == "--brain-apply" || action == "--social-ai-apply")
+                && expected == "--expected-revision" =>
         {
             if arguments.path.as_os_str() != OsStr::new(BRAIN_CONFIG_PATH) {
-                eprintln!(
-                    "Brain-Änderungen sind auf /var/lib/deadlock-twitch/config/bot.toml begrenzt."
-                );
+                eprintln!("Änderungen sind auf /var/lib/deadlock-twitch/config/bot.toml begrenzt.");
                 return std::process::ExitCode::from(2);
             }
             let Some(hash) = hash.to_str() else {
                 eprintln!("Der erwartete alte SHA-256 muss als Hexadezimalwert angegeben werden.");
                 return std::process::ExitCode::from(2);
             };
-            return report_edit(apply_brain(hash));
+            return report_edit(if action == "--brain-apply" {
+                apply_brain(hash)
+            } else {
+                apply_social_ai(hash)
+            });
         }
         [] => {}
         _ => {
             eprintln!(
-                "Erlaubt sind --config, zusätzlich --brain-inspect oder --brain-apply --expected-revision mit dem alten SHA-256."
+                "Erlaubt sind --config, zusätzlich --brain-inspect, --social-ai-inspect, --brain-apply oder --social-ai-apply mit --expected-revision und dem alten SHA-256."
             );
             return std::process::ExitCode::from(2);
         }

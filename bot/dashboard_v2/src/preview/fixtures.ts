@@ -377,7 +377,7 @@ const SESSION_EVENTS_FIXTURE = {
   subscriptions: [{ minute: 77, count: 3 }],
 };
 
-const SOCIAL_POSTER = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="960" height="540" fill="#242321"/><path d="M0 400 230 150 460 350 700 90 960 360V540H0" fill="#37342d"/><circle cx="740" cy="155" r="62" fill="#8e7549"/><path d="M0 450H960M160 0V540M480 0V540M800 0V540" stroke="#c5a059" opacity=".15"/><text x="48" y="480" font-family="sans-serif" font-size="28" fill="#ded7c5">Synthetische Clip-Vorschau</text></svg>')}`;
+export const SOCIAL_POSTER = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="960" height="540" fill="#242321"/><path d="M0 400 230 150 460 350 700 90 960 360V540H0" fill="#37342d"/><circle cx="740" cy="155" r="62" fill="#8e7549"/><path d="M0 450H960M160 0V540M480 0V540M800 0V540" stroke="#c5a059" opacity=".15"/><text x="48" y="480" font-family="sans-serif" font-size="28" fill="#ded7c5">Synthetische Clip-Vorschau</text></svg>')}`;
 
 function socialApproval(platforms: ClipApprovalRecord['approved_platforms'], approved = true): ClipApprovalRecord {
   return {

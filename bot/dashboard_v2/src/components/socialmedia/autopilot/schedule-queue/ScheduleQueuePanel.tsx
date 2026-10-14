@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, Clock3, RefreshCw, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Calendar, Clock3, RefreshCw, Trash2 } from 'lucide-react';
+import { StudioSectionHeading } from '../../StudioSectionHeading';
 import { ApiHttpError, getBrowserTimezone } from '@/api/core';
 import { scheduleQueueApi } from './api';
 import type { QueueJob, SchedulePatch, ScheduleQueueApi, ScheduleQueueSnapshot, ScheduleSettings } from './api';
@@ -188,10 +189,9 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
   }
 
   return <section className="schedule-queue" aria-labelledby={`${id}-heading`} data-unsaved={unsaved} data-saving={saving ? 'true' : undefined}>
-    <header className="sq-heading">
-      <div><h2 id={`${id}-heading`}>Auto-Pilot und Zeitplan</h2><p>Ein Video pro Termin, gemeinsam für deine ausgewählten Plattformen.</p></div>
-      <button type="button" disabled={busy} onClick={() => refresh.current?.('Aktualisiert.')}><RefreshCw size={16} />Aktualisieren</button>
-    </header>
+    <StudioSectionHeading id={`${id}-heading`} title="Auto-Pilot und Zeitplan" icon={Calendar}
+      description="Ein Video pro Termin, gemeinsam für deine ausgewählten Plattformen."
+      actions={<button type="button" disabled={busy} onClick={() => refresh.current?.('Aktualisiert.')}><RefreshCw size={16} />Aktualisieren</button>} />
     <div className="sq-status" role="status">
       <Clock3 size={18} aria-hidden="true" />
       <div><strong>Nächster freier Termin: {slotLabel(snapshot.next_slot, snapshot.settings.timezone)}</strong>
@@ -206,9 +206,9 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
         <fieldset disabled={busy}>
           <legend className="sq-sr-only">Auto-Pilot-Einstellungen</legend>
           <div className="sq-toggles">
-            <label><input type="checkbox" checked={draft.enabled} onChange={event => edit({ enabled: event.target.checked })} /><span>Auto-Pilot einschalten</span></label>
-            <label><input type="checkbox" checked={draft.paused} onChange={event => edit({ paused: event.target.checked })} /><span>Neue Produktionen pausieren</span></label>
-            <label><input type="checkbox" checked={draft.ai_editing_enabled} onChange={event => edit({ ai_editing_enabled: event.target.checked })} /><span>KI-Bearbeitung verwenden</span></label>
+            <label><input type="checkbox" role="switch" checked={draft.enabled} onChange={event => edit({ enabled: event.target.checked })} /><span>Auto-Pilot einschalten</span></label>
+            <label><input type="checkbox" role="switch" checked={draft.paused} onChange={event => edit({ paused: event.target.checked })} /><span>Neue Produktionen pausieren</span></label>
+            <label><input type="checkbox" role="switch" checked={draft.ai_editing_enabled} onChange={event => edit({ ai_editing_enabled: event.target.checked })} /><span>KI-Bearbeitung verwenden</span></label>
           </div>
           <p className="sq-help">Die KI-Einstellung gilt erst beim Produktionsstart. Sie ersetzt nicht deine Zustimmung zur externen KI-Verarbeitung.</p>
           <div className="sq-fields">

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ComponentType, type DragEven
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
+  ChevronDown,
   BarChart3,
   CheckCircle2,
   Archive,
@@ -32,13 +33,16 @@ import { VideoFullscreenButton } from '@/components/socialmedia/VideoFullscreenB
 import { WorkspaceDialog } from '@/components/socialmedia/WorkspaceDialog';
 import { PostingPlanDraft } from '@/components/socialmedia/PostingPlanDraft';
 import { PublishReviewPanel } from '@/components/socialmedia/autopilot/publish-review/PublishReviewPanel';
+import { publishReviewClient, type PublishReviewClient } from '@/components/socialmedia/autopilot/publish-review/api';
 import { PlatformStatusDialog } from '@/components/socialmedia/PlatformStatusDialog';
 import { ImportPoolPanel } from '@/components/socialmedia/autopilot/import-pool';
-import { ScheduleQueuePanel } from '@/components/socialmedia/autopilot/schedule-queue';
+import { ScheduleQueuePanel, scheduleQueueApi, type ScheduleQueueApi } from '@/components/socialmedia/autopilot/schedule-queue';
+import { PipelineOverview, StudioStatusStrip, type StudioOverviewData } from '@/components/socialmedia/StudioOverview';
 import { socialAiClipFromSearch, socialViewFromSearch, socialViewSearch, socialWorkspaceDepartureAllowed, socialWorkspaceView, type AiEditorMountProps } from '@/components/socialmedia/studioNavigation';
 import { authorizationFact } from '@/components/socialmedia/platformPresentation';
 import {
   filterQueue,
+  formatTerminInZone,
   queueStats,
   queueStage,
   loadQueueSnapshot,
@@ -46,6 +50,8 @@ import {
   type QueueStage,
 } from '@/components/socialmedia/queuePresentation';
 import '@/components/socialmedia/studio.css';
+import { LayoutSchematic } from '@/components/socialmedia/LayoutSchematic';
+import { StudioSectionHeading } from '@/components/socialmedia/StudioSectionHeading';
 import { AnalyticsTab } from '@/components/socialmedia/AnalyticsTab';
 import { VodArchiveTab } from '@/components/socialmedia/VodArchiveTab';
 import { LayoutEditor, type VorschauClip } from '@/components/socialmedia/LayoutEditor';
@@ -114,6 +120,8 @@ export interface SocialMediaProps {
   twitchUserId?: string;
   isAdmin?: boolean;
   aiEditor?: ComponentType<AiEditorMountProps>;
+  scheduleApi?: ScheduleQueueApi;
+  publishClient?: PublishReviewClient;
   workspaceSlots?: {
     automation?: ReactNode;
     libraryImport?: ReactNode;
@@ -125,30 +133,6 @@ type Translate = (text: string, params?: Record<string, string | number>) => str
 
 const PLATTFORMEN: SocialPlatform[] = ['youtube', 'tiktok', 'instagram'];
 
-/**
- * Termin in der Zeitzone des Kanals. Eine kaputte Zeitzone aus der Datenbank
- * darf die Karte nicht kippen, deshalb faellt die Formatierung still auf die
- * Browserzeit zurueck.
- */
-function formatTerminInZone(iso: string, locale: string, timezone: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  const optionen: Intl.DateTimeFormatOptions = {
-    weekday: 'short',
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  };
-  try {
-    return date.toLocaleString(locale, { ...optionen, timeZone: timezone });
-  } catch {
-    return date.toLocaleString(locale, optionen);
-  }
-}
-
-// Clip-Laenge als m:ss auf der Kachel. Reine Sekunden ("30s") lasen sich in der
-// Metazeile schlecht, sobald ein Clip ueber eine Minute geht.
 function formatClipDauer(sekunden: number | null | undefined): string {
   const gesamt = Math.max(0, Math.round(sekunden ?? 0));
   const minuten = Math.floor(gesamt / 60);
@@ -180,7 +164,7 @@ const TAB_ICONS: Record<SocialMediaView, React.ComponentType<{ className?: strin
   archiv: Archive,
 };
 
-export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor: AiEditor, workspaceSlots }: SocialMediaProps) {
+export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor: AiEditor, scheduleApi = scheduleQueueApi, publishClient = publishReviewClient, workspaceSlots }: SocialMediaProps) {
   const queryClient = useQueryClient();
   const t = useT();
   const [statusFilter, setStatusFilter] = useState<QueueStage>('all');
@@ -278,6 +262,24 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
       if (err instanceof SocialMediaForbiddenError) return false;
       return failureCount < 2;
     },
+  });
+
+  const scheduleQuery = useQuery({
+    queryKey: ['social-media', 'autopilot-schedule', twitchUserId],
+    queryFn: ({ signal }) => scheduleApi.load(twitchUserId, signal),
+    enabled: !!twitchUserId,
+    staleTime: 15 * 1000,
+    refetchInterval: 30 * 1000,
+    retry: (failureCount, err) => !(err instanceof SocialMediaForbiddenError) && failureCount < 1,
+  });
+
+  const publishQuery = useQuery({
+    queryKey: ['social-media', 'autopilot-publish', twitchUserId],
+    queryFn: ({ signal }) => publishClient.load(twitchUserId!, signal),
+    enabled: !!twitchUserId,
+    staleTime: 15 * 1000,
+    refetchInterval: 30 * 1000,
+    retry: (failureCount, err) => !(err instanceof SocialMediaForbiddenError) && failureCount < 1,
   });
 
   const isForbidden =
@@ -442,6 +444,33 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
     [postingPlanQuery.data],
   );
 
+  const overviewData: StudioOverviewData = {
+    schedule: scheduleQuery.data,
+    scheduleFailed: scheduleQuery.isError,
+    publish: publishQuery.data,
+    publishFailed: publishQuery.isError,
+    clips: clipsQuery.data?.items,
+    clipsFailed: clipsQuery.isError,
+    platforms: platformStatusQuery.data?.platforms,
+    platformsFailed: platformStatusQuery.isError,
+    timezone: postingPlanQuery.data?.timezone ?? 'Europe/Berlin',
+  };
+  const openView = (view: SocialMediaView, stage?: QueueStage) => {
+    if (!changeView(view)) return;
+    if (!stage) return;
+    setStatusFilter(stage);
+    setSearch('');
+    setPlatformFilter('all');
+    setPage(1);
+    window.requestAnimationFrame(() => document.getElementById('studio-clip-list')?.scrollIntoView({ block: 'start' }));
+  };
+  const refreshSchedule = () => {
+    void queryClient.invalidateQueries({ queryKey: ['social-media', 'autopilot-schedule', twitchUserId] });
+    void queryClient.invalidateQueries({ queryKey: ['social-media', 'autopilot-publish', twitchUserId] });
+  };
+  const legacyPlan = postingPlanQuery.data;
+  const legacyWeekly = legacyPlan?.platforms.filter((entry) => entry.auto_post).reduce((sum, entry) => sum + entry.posts_per_week, 0);
+
   if (isForbidden) {
     return (
       <div className="panel-card rounded-2xl p-12 text-center max-w-2xl mx-auto mt-12">
@@ -476,6 +505,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
         onUpload={() => setShowUpload(true)}
         onOpenAnalytics={() => setShowAnalytics(true)}
       />
+      {activeView !== 'archiv' && <StudioStatusStrip data={overviewData} onNavigate={openView} />}
 
       <nav className="studio-tabs" role="tablist" aria-label={t('Social Studio')}>
         {SOCIAL_MEDIA_TABS.map(({ id, label }, index) => {
@@ -537,11 +567,29 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
           <VodArchiveTab twitchUserId={twitchUserId} isAdmin={isAdmin} />
         ) : activeView === 'plan' ? (
           <div className="studio-plan-workspace">
-            {workspaceSlots?.publishReview ?? (twitchUserId && <PublishReviewPanel twitchUserId={twitchUserId} />)}
-            {workspaceSlots?.automation ?? <ScheduleQueuePanel twitchUserId={twitchUserId} />}
+            <div className="studio-card studio-plan-card">
+              {workspaceSlots?.automation ?? <ScheduleQueuePanel twitchUserId={twitchUserId} api={scheduleApi} onChanged={refreshSchedule} />}
+            </div>
+            <div className="studio-card studio-plan-card">
+              {workspaceSlots?.publishReview ?? (twitchUserId && <PublishReviewPanel twitchUserId={twitchUserId} client={publishClient} onChanged={refreshSchedule} />)}
+            </div>
+          <details className="studio-legacy-pipeline">
+            <summary>
+              <span className="studio-legacy-summary-text">
+                <strong>{t('Bisherige Pipeline')}</strong>
+                <span>
+                  {legacyPlan
+                    ? t('{mode} · {count} Posts pro Woche · steuert weiterhin die Clip-Freigaben in der Übersicht', {
+                        mode: t(APPROVAL_MODE_TEXTE[legacyPlan.approval_mode].label),
+                        count: legacyWeekly ?? 0,
+                      })
+                    : t('Freigabemodus, Plattformzeiten und Kategorien der bisherigen Clip-Pipeline')}
+                </span>
+              </span>
+              <ChevronDown className="studio-legacy-chevron h-4 w-4" aria-hidden="true" />
+            </summary>
           <div className="studio-legacy-plan">
-            <h2 className="studio-legacy-plan-title">{t('Bisheriger Posting-Plan')}</h2>
-            <p className="studio-workspace-note">{t('Freigabemodus und Plattformzeiten der bisherigen Clip-Pipeline bleiben hier einstellbar.')}</p>
+            <p className="studio-workspace-note">{t('Diese Einstellungen gelten weiter für Clips, die du in der Pipeline freigibst. Der Auto-Pilot oben nutzt seinen eigenen Zeitplan.')}</p>
           <PostingPlanDraft
             twitchUserId={twitchUserId}
             key={twitchUserId}
@@ -644,6 +692,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
             )}
           </PostingPlanDraft>
           </div>
+          </details>
           </div>
         ) : workspaceView === 'konten' ? (
           <div className="studio-settings space-y-6">
@@ -673,19 +722,18 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
                 <LanguageCard />
               </div>
             </div>
-            <h2 className="text-lg font-semibold">{t('Templates & Layouts')}</h2>
-            <p className="text-sm text-text-secondary">
-              {t(
-                'Lege den Standard-Ausschnitt für neue Clips fest. Einzelne Clips kannst du weiterhin separat anpassen.',
-              )}
-            </p>
+            <StudioSectionHeading
+              title={t('Vorlagen & Layouts')}
+              icon={Crop}
+              description={t('Lege den Standard-Ausschnitt für neue Clips fest. Einzelne Clips kannst du weiterhin separat anpassen.')}
+            />
             {layoutQuery.isError ? <LadeFehlerHinweis fehler={layoutQuery.error} /> : null}
             <div className="grid gap-4 md:grid-cols-3">
               {(
                 [
-                  { mode: 'blur_pad', title: 'Gameplay mit Hintergrund', cam: false },
-                  { mode: 'pip', title: 'Facecam & Gameplay', cam: true },
-                  { mode: 'stacked', title: 'Kamera oben mit DDC-Branding', cam: true },
+                  { mode: 'blur_pad', title: 'Gameplay mit Hintergrund', cam: false, description: 'Das ganze Spielbild bleibt sichtbar, der Hintergrund füllt das Hochformat.' },
+                  { mode: 'pip', title: 'Facecam & Gameplay', cam: true, description: 'Deine Kamera sitzt über dem vollständigen Spielbild.' },
+                  { mode: 'stacked', title: 'Kamera oben mit DDC-Branding', cam: true, description: 'Kamera und Spielbild untereinander, mit DDC-Trenner.' },
                 ] as const
               ).map((preset) => (
                 <button
@@ -705,12 +753,12 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
                     });
                   }}
                 >
-                  <div aria-hidden="true" className="studio-template-preview">
-                    <span>9:16</span>
-                    {preset.cam && <i className={`studio-template-cam ${preset.mode}`} />}
+                  <LayoutSchematic mode={preset.mode} />
+                  <div className="studio-template-copy">
+                    <h3>{t(preset.title)}</h3>
+                    <p>{t(preset.description)}</p>
+                    <span className="studio-template-action">{t('Layout anpassen')} <Pencil className="h-3.5 w-3.5" aria-hidden="true" /></span>
                   </div>
-                  <h3 className="text-sm font-semibold">{t(preset.title)}</h3>
-                  <p className="mt-2 text-sm text-text-secondary">{t('Layout anpassen')}</p>
                 </button>
               ))}
             </div>
@@ -726,64 +774,24 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
               {t('Gespeichertes Layout öffnen')}
             </button>
           </div>
+        ) : activeView === 'library' ? (
+          <div className="studio-library-import">
+            {workspaceSlots?.libraryImport ?? (
+              <ImportPoolPanel twitchUserId={twitchUserId} />
+            )}
+          </div>
         ) : (
           <>
-            {activeView === 'library' ? (
-              <div className="studio-library-import">
-                {workspaceSlots?.libraryImport ?? (
-                  <ImportPoolPanel twitchUserId={twitchUserId} />
-                )}
-              </div>
-            ) : (
-            <>
-            <div className="studio-metrics">
-              <SocialMetric
-                label={t('Wartet auf Freigabe')}
-                value={clipsQuery.isError ? '—' : !clipsQuery.data ? '…' : stats.awaitingApproval}
-                detail={!clipsQuery.data ? t(clipsQuery.isError ? 'Bestand nicht erreichbar' : 'Bestand wird geladen') : t('{count} Clips im Pool', { count: stats.total })}
-                tone="gold"
-              />
-              <SocialMetric
-                label={t('Puffer')}
-                value={
-                  !postingPlanQuery.data
-                    ? '…'
-                    : postingPlanQuery.data.pool.reicht_fuer_tage == null
-                      ? t('Manuell')
-                      : t('{days} Tage', { days: postingPlanQuery.data.pool.reicht_fuer_tage })
-                }
-                detail={postingPlanQuery.data ? t('{count} Posts pro Woche', { count: postingPlanQuery.data.pool.posts_pro_woche }) : t(postingPlanQuery.isError ? 'Zeitplan nicht erreichbar' : 'Zeitplan wird geladen')}
-                tone={postingPlanQuery.data?.pool.warnung ? 'warning' : 'success'}
-              />
-              <SocialMetric
-                label={t('Geplante Posts')}
-                value={clipsQuery.isError ? '—' : !clipsQuery.data ? '…' : stats.scheduled}
-                detail={t('Ein Post je Zielplattform')}
-                tone="neutral"
-              />
-              <SocialMetric
-                label={t('Fehler')}
-                value={clipsQuery.isError ? '—' : !clipsQuery.data ? '…' : stats.failed}
-                detail={!clipsQuery.data ? t(clipsQuery.isError ? 'Bestand nicht erreichbar' : 'Bestand wird geladen') : stats.failed === 0 ? t('Keine offenen Fehler') : t('Bitte prüfen')}
-                tone={!clipsQuery.data || stats.failed === 0 ? 'neutral' : 'danger'}
-              />
-            </div>
+            <PipelineOverview data={overviewData} now={now} onNavigate={openView} />
 
             <VorratsHinweis
               pool={postingPlanQuery.data?.pool ?? null}
               onClipsHolen={() => clipsHolenMutation.mutate()}
               isHolend={clipsHolenMutation.isPending}
             />
-            <div className="studio-overview-actions">
-              <button type="button" className="studio-button" onClick={() => changeView('plan')}>{t('Auto-Pilot & Zeitplan')}</button>
-              <button type="button" className="studio-button" onClick={() => changeView('library')}>{t('Clip-Bibliothek & Import')}</button>
-              <button type="button" className="studio-button" onClick={() => changeView('konten')}>{t('Verbindungen prüfen')}</button>
-            </div>
-            </>
-            )}
 
-            <div className="space-y-3">
-              <div className="studio-toolbar mt-6">
+            <div id="studio-clip-list" className="studio-clip-list space-y-3">
+              <div className="studio-toolbar">
                 <StatusFilter
                   value={statusFilter}
                   onChange={(next) => {
@@ -1020,7 +1028,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
       )}
       {layoutChoice && (
         <WorkspaceDialog
-          eyebrow={t('Template & Layout')}
+          eyebrow={t('Vorlage & Layout')}
           title={t('9:16 Layout-Editor')}
           busy={saveLayoutMutation.isPending}
           onClose={() => setLayoutChoice(null)}
@@ -1156,34 +1164,6 @@ function SocialHero({
         </button>
       </div>
     </header>
-  );
-}
-
-function SocialMetric({
-  label,
-  value,
-  detail,
-  tone,
-}: {
-  label: string;
-  value: string | number;
-  detail: string;
-  tone: 'gold' | 'success' | 'warning' | 'danger' | 'neutral';
-}) {
-  const toneClass = {
-    gold: 'text-ui-accent',
-    success: 'text-ui-success',
-    warning: 'text-ui-warning',
-    danger: 'text-ui-danger',
-    neutral: 'text-ui-text',
-  }[tone];
-
-  return (
-    <div className="studio-metric">
-      <p className="text-xs font-medium text-ui-faint">{label}</p>
-      <p className={`studio-metric-value ${toneClass}`}>{value}</p>
-      <p className="mt-1 text-xs text-ui-faint">{detail}</p>
-    </div>
   );
 }
 
@@ -1873,7 +1853,7 @@ function CategoryCard({
         {(plan?.categories ?? []).map((kategorie) => (
           <label
             key={kategorie.category_key}
-            className="flex items-center justify-between gap-3 rounded-xl border border-border bg-white/[0.02] px-3 py-2.5"
+            className="studio-switch flex items-center justify-between gap-3 rounded-xl border border-border bg-white/[0.02] px-3 py-2.5"
           >
             <span>
               <span className="block text-sm font-medium text-ui-text">
@@ -1885,6 +1865,7 @@ function CategoryCard({
             </span>
             <input
               type="checkbox"
+              role="switch"
               checked={kategorie.auto_post}
               disabled={gesperrt}
               onChange={(event) => onChange(kategorie.category_key, event.target.checked)}
@@ -2024,13 +2005,8 @@ function PlatformConnectionsCard({
 
   return (
     <div className="space-y-4 rounded-2xl border border-border bg-ui-panel p-4">
-      <div className="flex items-center gap-2">
-        <ExternalLink className="h-4 w-4 text-ui-accent" />
-        <h3 className="text-sm font-semibold text-white">
-          {t('Verbindungen')} · {streamer}
-        </h3>
-        {isLoading && <Loader2 className="ml-auto h-4 w-4 animate-spin text-ui-accent" />}
-      </div>
+      <StudioSectionHeading title={`${t('Verbindungen')} · ${streamer}`} icon={ExternalLink} level={3}
+        actions={isLoading && <Loader2 className="h-4 w-4 animate-spin text-ui-accent" />} />
 
       {rueckmeldung?.art === 'ok' && (
         <div className="rounded-xl border border-success/40 bg-success/10 px-4 py-3 text-xs text-success">
@@ -2204,20 +2180,16 @@ function VodArchiveCard({
 
   return (
     <div className="space-y-4 rounded-2xl border border-border bg-ui-panel p-4">
-      <div className="flex items-center gap-2">
-        <Archive className="h-4 w-4 text-ui-accent" />
-        <h3 className="text-sm font-semibold text-white">
-          {t('VOD-Archiv')} · {settings?.streamer_login ?? streamer}
-        </h3>
-        {isSaving && <Loader2 className="ml-auto h-4 w-4 animate-spin text-ui-accent" />}
-      </div>
+      <StudioSectionHeading title={`${t('VOD-Archiv')} · ${settings?.streamer_login ?? streamer}`} icon={Archive} level={3}
+        actions={isSaving && <Loader2 className="h-4 w-4 animate-spin text-ui-accent" />} />
 
       <LadeFehlerHinweis fehler={ladeFehler} />
 
-      <label className="flex items-center justify-between gap-3 rounded-xl border border-border bg-white/[0.02] px-3 py-2.5">
+      <label className="studio-switch flex items-center justify-between gap-3 rounded-xl border border-border bg-white/[0.02] px-3 py-2.5">
         <span className="text-sm font-medium text-ui-text">{t('Automatisch sichern')}</span>
         <input
           type="checkbox"
+          role="switch"
           checked={enabled}
           disabled={gesperrt}
           onChange={(event) => onChange({ enabled: event.target.checked, privacy })}
@@ -2270,10 +2242,7 @@ function LanguageCard() {
 
   return (
     <div className="space-y-4 rounded-2xl border border-border bg-ui-panel p-4">
-      <div className="flex items-center gap-2">
-        <Languages className="h-4 w-4 text-ui-accent" />
-        <h3 className="text-sm font-semibold text-white">{t('Sprache')}</h3>
-      </div>
+      <StudioSectionHeading title={t('Sprache')} icon={Languages} level={3} />
       <p className="text-sm leading-6 text-ui-muted">
         {t(
           'Gilt für dieses Dashboard in diesem Browser. Nicht übersetzte Stellen bleiben auf Deutsch.',

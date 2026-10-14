@@ -34,6 +34,7 @@ import type {
 } from '@/types/socialMedia';
 import { useLanguage } from '@/context/LanguageContext';
 import { fehlerText, REPORT_KIND_LABELS } from './labels';
+import { StudioSectionHeading } from './StudioSectionHeading';
 
 const BUCKET_ORDER = ['24h', '7d', '30d'] as const;
 
@@ -179,28 +180,15 @@ export function AnalyticsTab({ streamer, twitchUserId, isAdmin, statisticsPlatfo
         }`}
       >
         <section className="panel-card rounded-2xl p-5 md:p-6 space-y-5 overflow-hidden relative">
-          <div className="absolute -top-12 -right-10 h-44 w-44 rounded-full bg-orange/12 blur-3xl pointer-events-none" />
-          <div className="relative flex flex-wrap items-center gap-3">
-            <div>
-              <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.16em] font-bold text-orange/90">
-                <BarChart3 className="w-3.5 h-3.5" /> {t('Phase 3 · Performance')}
-              </div>
-              <h3 className="text-xl font-bold text-white mt-1">{t('Analytics je Clip und Plattform')}</h3>
-            </div>
-            <div className="ml-auto flex items-center gap-2">
-              <select
-                value={selectedClipId ?? ''}
-                onChange={(event) => setSelectedClipId(Number(event.target.value))}
-                className="rounded-xl border border-border bg-bg/70 px-3 py-2 text-sm text-white min-w-[220px]"
-              >
-                {eligibleClips.map((clip) => (
-                  <option key={clip.clip_db_id} value={clip.clip_db_id}>
-                    {clip.title}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+          <StudioSectionHeading level={3} title={t('Analytics je Clip und Plattform')} icon={BarChart3}
+            actions={<select
+              aria-label={t('Clip für die Auswertung')}
+              value={selectedClipId ?? ''}
+              onChange={(event) => setSelectedClipId(Number(event.target.value))}
+              className="studio-select w-full max-w-80"
+            >
+              {eligibleClips.map((clip) => <option key={clip.clip_db_id} value={clip.clip_db_id}>{clip.title}</option>)}
+            </select>} />
 
           <p className="text-sm text-text-secondary">{t('TikTok-Statistiken sind in dieser Beta nicht verfügbar.')}</p>
           {publishedLoading ? (
@@ -213,7 +201,7 @@ export function AnalyticsTab({ streamer, twitchUserId, isAdmin, statisticsPlatfo
             </div>
           ) : !eligibleClips.length ? (
             <div className="rounded-2xl border border-border bg-bg/40 p-8 text-sm text-text-secondary text-center">
-              {t('Noch keine veroeffentlichten Clips mit Plattform-ID vorhanden.')}
+              {t('Noch keine veröffentlichten Clips mit Plattform-ID vorhanden.')}
             </div>
           ) : analyticsQuery.isLoading ? (
             <div className="h-[320px] flex items-center justify-center">
@@ -269,10 +257,7 @@ export function AnalyticsTab({ streamer, twitchUserId, isAdmin, statisticsPlatfo
 
         {isAdmin && (
         <aside className="panel-card rounded-2xl p-5 md:p-6 space-y-4">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-accent" />
-            <h3 className="text-lg font-bold text-white">{t('LLM-Reports')}</h3>
-          </div>
+          <StudioSectionHeading level={3} title={t('LLM-Reports')} icon={Sparkles} />
           <div className="grid grid-cols-2 gap-3">
             <button
               type="button"
@@ -281,7 +266,7 @@ export function AnalyticsTab({ streamer, twitchUserId, isAdmin, statisticsPlatfo
               className="rounded-xl border border-orange/30 bg-orange/12 px-4 py-3 text-left hover:bg-orange/18 transition disabled:opacity-50"
             >
               <div className="text-xs font-bold uppercase tracking-[0.14em] text-orange">{t('Streamer')}</div>
-              <div className="text-sm text-white mt-1">{t('Wochenreport fuer {streamer}', { streamer })}</div>
+              <div className="text-sm text-white mt-1">{t('Wochenreport für {streamer}', { streamer })}</div>
             </button>
             <button
               type="button"
@@ -290,7 +275,7 @@ export function AnalyticsTab({ streamer, twitchUserId, isAdmin, statisticsPlatfo
               className="rounded-xl border border-accent/30 bg-accent/12 px-4 py-3 text-left hover:bg-accent/18 transition disabled:opacity-50"
             >
               <div className="text-xs font-bold uppercase tracking-[0.14em] text-accent">{t('Cross')}</div>
-              <div className="text-sm text-white mt-1">{t('Monatsreport ueber alle Streamer')}</div>
+              <div className="text-sm text-white mt-1">{t('Monatsreport über alle Streamer')}</div>
             </button>
           </div>
           {(streamerReportMutation.isPending || crossReportMutation.isPending) && (
@@ -317,13 +302,8 @@ export function AnalyticsTab({ streamer, twitchUserId, isAdmin, statisticsPlatfo
 
       {isAdmin && (
       <section className="panel-card rounded-2xl p-5 md:p-6 space-y-4">
-        <div className="flex items-center gap-2">
-          <FileText className="w-4 h-4 text-orange" />
-          <h3 className="text-lg font-bold text-white">{t('Gespeicherte Reports')}</h3>
-          <div className="ml-auto text-xs text-text-secondary inline-flex items-center gap-1.5">
-            <CalendarRange className="w-3.5 h-3.5" /> {t('{count} Eintraege', { count: reportItems.length })}
-          </div>
-        </div>
+        <StudioSectionHeading level={3} title={t('Gespeicherte Reports')} icon={FileText}
+          actions={<span className="text-xs text-text-secondary inline-flex items-center gap-1.5"><CalendarRange className="w-3.5 h-3.5" aria-hidden />{t('{count} Eintraege', { count: reportItems.length })}</span>} />
 
         {reportsQuery.isLoading ? (
           <div className="py-10 flex items-center justify-center">

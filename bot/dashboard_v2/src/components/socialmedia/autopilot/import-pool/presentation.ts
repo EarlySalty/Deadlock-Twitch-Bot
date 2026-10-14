@@ -229,6 +229,36 @@ export function sourceMetadata(clip: PoolClip): {
   };
 }
 
+export function clipThumbnail(clip: PoolClip): string | null {
+  const metadata =
+    clip.source_metadata && typeof clip.source_metadata === "object"
+      ? (clip.source_metadata as Record<string, unknown>)
+      : {};
+  if (typeof metadata.thumbnail_url !== "string") return null;
+  if (import.meta.env?.MODE === 'preview' && metadata.thumbnail_url.startsWith('data:image/svg+xml,'))
+    return metadata.thumbnail_url;
+  try {
+    const parsed = new URL(metadata.thumbnail_url);
+    return parsed.protocol === "https:" ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clipStatusTone(clip: PoolClip): string {
+  if (clip.published_at) return "success";
+  if (clip.processed_at) return "info";
+  if (clip.legacy_reserved) return "muted";
+  if (clip.selected_at) return "gold";
+  if (!clip.eligible || !clip.selectable) return "muted";
+  return "neutral";
+}
+
+export function clipDuration(seconds: number): string {
+  const whole = Math.round(seconds);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+
 export function localTimestamp(value: string, timezone: string): string {
   try {
     return new Intl.DateTimeFormat("de-DE", {
