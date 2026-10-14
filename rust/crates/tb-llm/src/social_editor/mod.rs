@@ -1,11 +1,15 @@
 pub mod admin_limits;
 pub mod admin_usage;
 mod config;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod fixture;
 mod read_side;
 mod schema;
 mod usage;
 
-pub use config::{EditorConfig, Effort, Pricing, ProviderConfig, ProviderKind};
+pub use config::{
+    EditorConfig, Effort, Pricing, ProviderConfig, ProviderKind, SocialAiSection, TrustedPricing,
+};
 pub use read_side::{consent_allowed, global_consent, job_usage, JobUsage};
 pub use usage::Usage;
 

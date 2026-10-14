@@ -1,4 +1,4 @@
-schema_version = 1
+pub const SOCIAL_AI_SECTION: &str = r#"schema_version = 1
 
 [provider]
 kind = "anthropic"
@@ -19,6 +19,16 @@ initial_total_cap_micro_usd = 2000000
 pricing_version = 1
 
 [provider.pricing]
+input_micro_usd_per_million = 4000000
+output_micro_usd_per_million = 20000000
+cache_creation_micro_usd_per_million = 5000000
+cache_read_micro_usd_per_million = 200000
+
+[pricing]
+version = 1
+model = "claude-opus-5-5"
+
+[pricing.rates]
 input_micro_usd_per_million = 4000000
 output_micro_usd_per_million = 20000000
 cache_creation_micro_usd_per_million = 5000000
@@ -100,3 +110,4 @@ max_upload_bytes = 26214400
 timeout_seconds = 120
 extraction_timeout_seconds = 300
 remote_model = "whisper-1"
+"#;

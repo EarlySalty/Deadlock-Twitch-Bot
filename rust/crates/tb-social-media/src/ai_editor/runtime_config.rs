@@ -1,12 +1,11 @@
 use std::{
-    io::Read,
     path::{Component, Path, PathBuf},
     time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
 use tb_config::{stt::SttConfig, BotConfigSnapshot};
-use tb_llm::social_editor::EditorConfig;
+use tb_llm::social_editor::{EditorConfig, SocialAiSection};
 
 use super::{brain::BrainRetrieveConfig, stt::SttJobConfig, PlanLimits, ResourceLimits};
 
@@ -163,6 +162,21 @@ fn packaged_root() -> Result<PathBuf, super::AiEditorError> {
         .ok_or(super::AiEditorError::Configuration)
 }
 
+fn active_section() -> Result<&'static toml::Table, super::AiEditorError> {
+    tb_config::runtime::settings()
+        .ok()
+        .and_then(|settings| settings.social_ai.as_ref())
+        .ok_or(super::AiEditorError::Configuration)
+}
+
+fn typed_section<T: serde::de::DeserializeOwned>(
+    section: &toml::Table,
+) -> Result<T, super::AiEditorError> {
+    toml::Value::Table(section.clone())
+        .try_into()
+        .map_err(|_| super::AiEditorError::Configuration)
+}
+
 fn validate_media(
     source_root: &Path,
     work_root: &Path,
@@ -198,35 +212,15 @@ fn validate_media(
 
 impl MediaRuntime {
     pub fn load_packaged() -> Result<Self, super::AiEditorError> {
-        Self::load(&packaged_root()?)
+        Self::load(&packaged_root()?, active_section()?)
     }
 
-    pub fn load(package_root: &Path) -> Result<Self, super::AiEditorError> {
+    pub fn load(package_root: &Path, section: &toml::Table) -> Result<Self, super::AiEditorError> {
         #[derive(Deserialize)]
         struct Document {
             runtime: MediaConfiguration,
         }
-        const MAX_CONFIG_BYTES: u64 = 64 * 1024;
-        let path = package_root.join("ops/social-ai/editor.toml");
-        let metadata = std::fs::metadata(&path).map_err(|_| super::AiEditorError::Configuration)?;
-        if !metadata.is_file() || metadata.len() > MAX_CONFIG_BYTES {
-            return Err(super::AiEditorError::Configuration);
-        }
-        let mut bytes = Vec::new();
-        std::fs::File::open(&path)
-            .map_err(|_| super::AiEditorError::Configuration)?
-            .take(MAX_CONFIG_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| super::AiEditorError::Configuration)?;
-        if bytes.len() as u64 > MAX_CONFIG_BYTES {
-            return Err(super::AiEditorError::Configuration);
-        }
-        let text = std::str::from_utf8(&bytes).map_err(|_| super::AiEditorError::Configuration)?;
-        let value: toml::Value =
-            toml::from_str(text).map_err(|_| super::AiEditorError::Configuration)?;
-        let document: Document = value
-            .try_into()
-            .map_err(|_| super::AiEditorError::Configuration)?;
+        let document: Document = typed_section(section)?;
         Self::from_configuration(package_root, document.runtime)
     }
 
@@ -255,11 +249,12 @@ impl MediaRuntime {
 
 impl EditorRuntime {
     pub fn load_packaged() -> Result<Self, super::AiEditorError> {
-        Self::load(&packaged_root()?)
+        Self::load(&packaged_root()?, active_section()?)
     }
 
-    pub fn load(package_root: &Path) -> Result<Self, super::AiEditorError> {
-        let configuration = EditorConfig::load(&package_root.join("ops/social-ai/editor.toml"))
+    pub fn load(package_root: &Path, section: &toml::Table) -> Result<Self, super::AiEditorError> {
+        let configuration = typed_section::<SocialAiSection>(section)?
+            .into_editor_config()
             .map_err(|_| super::AiEditorError::Configuration)?;
         Self::from_configuration(package_root, configuration)
     }

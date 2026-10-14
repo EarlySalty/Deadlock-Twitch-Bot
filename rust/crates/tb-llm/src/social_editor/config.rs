@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::{io::Read, path::Path};
 
 use super::{EditorError, ErrorKind};
 
-const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 const APPROVED_INITIAL_CAP_MICRO_USD: i64 = 2_000_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,38 +59,37 @@ pub struct Pricing {
     pub cache_read_micro_usd_per_million: i64,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct TrustedPricing {
-    version: u32,
-    model: String,
-    pricing: Pricing,
+pub struct TrustedPricing {
+    pub version: u32,
+    pub model: String,
+    pub rates: Pricing,
 }
 
-impl EditorConfig {
-    pub fn load(path: &Path) -> Result<Self, EditorError> {
-        let metadata =
-            std::fs::metadata(path).map_err(|_| EditorError::new(ErrorKind::Configuration))?;
-        if !metadata.is_file() || metadata.len() > MAX_CONFIG_BYTES {
-            return Err(EditorError::new(ErrorKind::Configuration));
-        }
-        let mut bytes = Vec::new();
-        std::fs::File::open(path)
-            .map_err(|_| EditorError::new(ErrorKind::Configuration))?
-            .take(MAX_CONFIG_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| EditorError::new(ErrorKind::Configuration))?;
-        if bytes.len() as u64 > MAX_CONFIG_BYTES {
-            return Err(EditorError::new(ErrorKind::Configuration));
-        }
-        let text =
-            std::str::from_utf8(&bytes).map_err(|_| EditorError::new(ErrorKind::Configuration))?;
-        let config: Self =
-            toml::from_str(text).map_err(|_| EditorError::new(ErrorKind::Configuration))?;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SocialAiSection {
+    pub schema_version: u32,
+    pub provider: ProviderConfig,
+    pub pricing: TrustedPricing,
+    pub runtime: serde_json::Value,
+}
+
+impl SocialAiSection {
+    pub fn into_editor_config(self) -> Result<EditorConfig, EditorError> {
+        self.provider.check_trusted(&self.pricing)?;
+        let config = EditorConfig {
+            schema_version: self.schema_version,
+            provider: self.provider,
+            runtime: self.runtime,
+        };
         config.validate()?;
         Ok(config)
     }
+}
 
+impl EditorConfig {
     pub fn validate(&self) -> Result<(), EditorError> {
         if self.schema_version != 1 || !self.runtime.is_object() {
             return Err(EditorError::new(ErrorKind::Configuration));
@@ -102,16 +99,18 @@ impl EditorConfig {
 }
 
 impl ProviderConfig {
-    pub fn validate(&self) -> Result<(), EditorError> {
-        let trusted: TrustedPricing =
-            toml::from_str(include_str!("../../../../../ops/social-ai/pricing-v1.toml"))
-                .map_err(|_| EditorError::new(ErrorKind::Configuration))?;
+    pub fn check_trusted(&self, trusted: &TrustedPricing) -> Result<(), EditorError> {
         if self.pricing_version != trusted.version
             || self.model != trusted.model
-            || self.pricing != trusted.pricing
+            || self.pricing != trusted.rates
+            || !trusted.rates.valid()
         {
             return Err(EditorError::new(ErrorKind::Configuration));
         }
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<(), EditorError> {
         let url = reqwest::Url::parse(&self.endpoint)
             .map_err(|_| EditorError::new(ErrorKind::Configuration))?;
         let official = url.scheme() == "https"
@@ -210,23 +209,19 @@ impl Pricing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::social_editor::fixture::SOCIAL_AI_SECTION;
+
+    fn section(raw: &str) -> SocialAiSection {
+        toml::from_str(raw).expect("TOML")
+    }
 
     #[test]
     fn toml_is_strict_and_cap_cannot_be_raised() {
-        let raw = include_str!("../../../../../ops/social-ai/editor.toml");
-        let mut config: EditorConfig = toml::from_str(raw).expect("TOML");
-        config.validate().expect("valid initial config");
+        let raw = SOCIAL_AI_SECTION;
+        let mut config = section(raw)
+            .into_editor_config()
+            .expect("valid initial config");
         config.provider.initial_total_cap_micro_usd += 1;
-        assert!(config.validate().is_err());
-        config.provider.initial_total_cap_micro_usd -= 1;
-        let approved_rate = config.provider.pricing.input_micro_usd_per_million;
-        config.provider.pricing.input_micro_usd_per_million = 1;
-        assert!(config.validate().is_err());
-        config.provider.pricing.input_micro_usd_per_million = approved_rate;
-        config.provider.pricing_version += 1;
-        assert!(config.validate().is_err());
-        config.provider.pricing_version -= 1;
-        config.provider.model = "unapproved-model".to_owned();
         assert!(config.validate().is_err());
         for unknown in [
             format!("unknown_setting = true\n{raw}"),
@@ -235,35 +230,40 @@ mod tests {
                 "[provider.pricing]",
                 "[provider.pricing]\nunknown_setting = true",
             ),
+            raw.replace("[pricing]", "[pricing]\nunknown_setting = true"),
+            raw.replace("[pricing.rates]", "[pricing.rates]\nunknown_setting = true"),
         ] {
-            let error = toml::from_str::<EditorConfig>(&unknown).expect_err("unknown setting");
-            assert!(error.to_string().contains("unknown field"));
-            assert!(error.to_string().contains("unknown_setting"));
-            let directory = tempfile::tempdir().expect("configuration directory");
-            let path = directory.path().join("editor.toml");
-            std::fs::write(&path, unknown).expect("unknown setting fixture");
-            assert_eq!(
-                EditorConfig::load(&path).err().map(|error| error.kind),
-                Some(ErrorKind::Configuration)
-            );
-        }
-        let trusted = include_str!("../../../../../ops/social-ai/pricing-v1.toml");
-        for unknown in [
-            format!("unknown_setting = true\n{trusted}"),
-            trusted.replace("[pricing]", "[pricing]\nunknown_setting = true"),
-        ] {
-            let error = toml::from_str::<TrustedPricing>(&unknown)
-                .err()
-                .expect("unknown trusted pricing setting");
+            let error = toml::from_str::<SocialAiSection>(&unknown).expect_err("unknown setting");
             assert!(error.to_string().contains("unknown field"));
             assert!(error.to_string().contains("unknown_setting"));
         }
     }
 
     #[test]
+    fn provider_must_match_the_trusted_pricing_table() {
+        let mutations: [fn(&mut SocialAiSection); 6] = [
+            |s| s.provider.pricing.input_micro_usd_per_million = 1,
+            |s| s.provider.pricing_version += 1,
+            |s| s.provider.model = "unapproved-model".to_owned(),
+            |s| s.pricing.rates.output_micro_usd_per_million = 1,
+            |s| s.pricing.version += 1,
+            |s| s.pricing.model = "unapproved-model".to_owned(),
+        ];
+        for mutate in mutations {
+            let mut config = section(SOCIAL_AI_SECTION);
+            mutate(&mut config);
+            assert_eq!(
+                config.into_editor_config().err().map(|error| error.kind),
+                Some(ErrorKind::Configuration)
+            );
+        }
+    }
+
+    #[test]
     fn exact_integer_pricing_ceil() {
-        let config: EditorConfig =
-            toml::from_str(include_str!("../../../../../ops/social-ai/editor.toml")).expect("TOML");
+        let config = section(SOCIAL_AI_SECTION)
+            .into_editor_config()
+            .expect("configuration");
         assert_eq!(config.provider.pricing.reservation(1, 1), Some(25));
     }
 }

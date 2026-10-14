@@ -66,9 +66,12 @@ async fn database() -> postgres::TestPostgres {
 }
 
 fn runtime(root: &Path) -> EditorRuntime {
-    let mut configuration: EditorConfig =
-        toml::from_str(include_str!("../../../../../ops/social-ai/editor.toml"))
-            .expect("packaged configuration");
+    let mut configuration: EditorConfig = toml::from_str::<tb_llm::social_editor::SocialAiSection>(
+        tb_llm::social_editor::fixture::SOCIAL_AI_SECTION,
+    )
+    .expect("social_ai fixture")
+    .into_editor_config()
+    .expect("trusted configuration");
     configuration.runtime["source_root"] = json!("clips");
     configuration.runtime["output_root"] = json!("clips");
     configuration.runtime["work_root"] = json!("clips/.ai-editor-work");

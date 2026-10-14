@@ -202,16 +202,18 @@ fn config_cli_bestehende_pruefung_und_begrenzte_brain_inspektion() {
 fn config_cli_schreibt_nicht_an_frei_gewaehlte_ziele() {
     let fixture = Fixture::new();
     let expected = load_saved(&fixture.path()).unwrap();
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_tb-config-check"))
-        .arg("--config")
-        .arg(fixture.path())
-        .arg("--brain-apply")
-        .arg("--expected-revision")
-        .arg(&expected.revision)
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
+    for action in ["--brain-apply", "--social-ai-apply"] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_tb-config-check"))
+            .arg("--config")
+            .arg(fixture.path())
+            .arg(action)
+            .arg("--expected-revision")
+            .arg(&expected.revision)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+    }
     assert_eq!(std::fs::read_to_string(fixture.path()).unwrap(), CONFIG);
     assert!(!fixture.0.join(".bot.toml.lock").exists());
 }
