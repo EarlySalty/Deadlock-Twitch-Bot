@@ -1,3 +1,4 @@
+import { useLanguage } from '@/context/LanguageContext';
 import { useMemo, useState } from 'react';
 import { Rise } from '../motion/Rise';
 import {
@@ -78,6 +79,7 @@ function resolveColor(game: string, medalRank: number): string {
 }
 
 function ExpGameBreakdownChart({ data }: { data: ExpGameBreakdown[] }) {
+  const { t, locale } = useLanguage();
   const [sortKey, setSortKey] = useState<SortKey>('avgViewers');
 
   const { chartData, medalGames } = useMemo(() => {
@@ -106,17 +108,15 @@ function ExpGameBreakdownChart({ data }: { data: ExpGameBreakdown[] }) {
 
   if (!chartData.length) {
     return (
-      <div className="flex items-center justify-center h-40 text-text-secondary text-sm">
-        Noch keine Daten vorhanden
-      </div>
+      <div className="flex items-center justify-center h-40 text-text-secondary text-sm">{t("Noch keine Daten vorhanden")}</div>
     );
   }
 
   return (
     <div className="space-y-3">
       {/* Sort Controls */}
-      <div className="flex items-center gap-1.5">
-        <span className="text-xs text-text-secondary mr-1">Sortiert nach:</span>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className="text-xs text-text-secondary mr-1">{t("Sortiert nach:")}</span>
         {SORT_OPTIONS.map(opt => (
           <button
             key={opt.key}
@@ -128,7 +128,7 @@ function ExpGameBreakdownChart({ data }: { data: ExpGameBreakdown[] }) {
                 : 'text-text-secondary hover:text-white border border-transparent hover:border-border',
             ].join(' ')}
           >
-            {opt.label}
+            {t(opt.label)}
           </button>
         ))}
         {/* Legend dots */}
@@ -161,7 +161,7 @@ function ExpGameBreakdownChart({ data }: { data: ExpGameBreakdown[] }) {
             textAnchor="end"
             interval={0}
           />
-          <YAxis tick={{ fill: '#B5A488', fontSize: 11 }} />
+          <YAxis tick={{ fill: '#B5A488', fontSize: 11 }} tickFormatter={(value) => Number(value).toLocaleString(locale)} />
           <Tooltip
             contentStyle={{
               backgroundColor: 'var(--color-card)',
@@ -172,14 +172,14 @@ function ExpGameBreakdownChart({ data }: { data: ExpGameBreakdown[] }) {
             formatter={((value: number | undefined, _name: string, props: any) => {
               const medal = props?.payload?.medal ?? '';
               const label = sortKey === 'avgViewers'
-                ? 'Ø Viewer'
+                ? t("Ø Viewer")
                 : sortKey === 'sessions'
-                  ? 'Sessions'
-                  : 'Peak Viewer';
-              return [`${formatNumber(value, 1)} ${medal}`.trim(), label];
+                  ? t("Sessions")
+                  : t("Peak Viewer");
+              return [`${formatNumber(value, 1, locale)} ${medal}`.trim(), label];
             }) as any}
           />
-          <Bar dataKey={sortKey} name="Wert" radius={[4, 4, 0, 0]} isAnimationActive={false}>
+          <Bar dataKey={sortKey} name={t("Wert")} radius={[4, 4, 0, 0]} isAnimationActive={false}>
             {chartData.map((entry, i) => (
               <Cell key={i} fill={entry.fill} fillOpacity={entry.isSpecial ? 1 : 0.85} />
             ))}
@@ -191,6 +191,7 @@ function ExpGameBreakdownChart({ data }: { data: ExpGameBreakdown[] }) {
 }
 
 function ExpGrowthCurvesChart({ data }: { data: ExpGrowthCurve[] }) {
+  const { t, locale } = useLanguage();
   // Filter out null/undefined/empty game names to prevent Recharts 3.x toString crash
   const games = useMemo(
     () => [...new Set(data.map(d => d.game).filter((g): g is string => !!g))].slice(0, 6),
@@ -211,9 +212,7 @@ function ExpGrowthCurvesChart({ data }: { data: ExpGrowthCurve[] }) {
 
   if (!pivoted.length) {
     return (
-      <div className="flex items-center justify-center h-40 text-text-secondary text-sm">
-        Noch keine Verlaufsdaten vorhanden
-      </div>
+      <div className="flex items-center justify-center h-40 text-text-secondary text-sm">{t("Noch keine Verlaufsdaten vorhanden")}</div>
     );
   }
 
@@ -226,7 +225,7 @@ function ExpGrowthCurvesChart({ data }: { data: ExpGrowthCurve[] }) {
           tick={{ fill: '#B5A488', fontSize: 11 }}
           tickFormatter={(v) => `${v}m`}
         />
-        <YAxis tick={{ fill: '#B5A488', fontSize: 11 }} />
+        <YAxis tick={{ fill: '#B5A488', fontSize: 11 }} tickFormatter={(value) => Number(value).toLocaleString(locale)} />
         <Tooltip
           contentStyle={{
             backgroundColor: 'var(--color-card)',
@@ -234,8 +233,8 @@ function ExpGrowthCurvesChart({ data }: { data: ExpGrowthCurve[] }) {
             borderRadius: 8,
             color: '#fff',
           }}
-          labelFormatter={(v) => `Minute ${v}`}
-          formatter={((value: number) => [formatNumber(value, 1), 'Ø Viewer']) as any}
+          labelFormatter={(v) => t("Minute {value0}", { value0: String(v) })}
+          formatter={((value: number) => [formatNumber(value, 1, locale), t("Ø Viewer")]) as any}
         />
         <Legend wrapperStyle={{ color: '#B5A488', fontSize: 12 }} />
         {games.map((game) => (
@@ -270,19 +269,20 @@ function KpiCard({
 }) {
   return (
     <Rise
-      className="bg-card rounded-xl border border-border p-5 flex flex-col gap-2"
+      className="bg-card rounded-xl border border-border p-5 flex min-w-0 flex-col gap-2"
     >
       <div className="flex items-center gap-2 text-text-secondary text-sm">
         <Icon className="w-4 h-4 text-primary" />
         <span>{label}</span>
       </div>
-      <p className="text-2xl font-bold text-white">{value}</p>
+      <p className="text-2xl font-bold text-white break-words">{value}</p>
       {sub && <p className="text-xs text-text-secondary">{sub}</p>}
     </Rise>
   );
 }
 
 export function Experimental({ streamer, days }: ExperimentalProps) {
+  const { t, locale } = useLanguage();
   const { data: overview, isLoading: loadingOverview } = useExpOverview(streamer, days);
   const { data: breakdown = [], isLoading: loadingBreakdown } = useExpGameBreakdown(streamer, days);
   const { data: transitions = [], isLoading: loadingTransitions } = useExpGameTransitions(streamer, days);
@@ -294,7 +294,7 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-3">
         <AlertCircle className="w-10 h-10 text-text-secondary" />
-        <p className="text-text-secondary text-lg">Waehle einen Streamer aus</p>
+        <p className="text-text-secondary text-lg">{t("Wähle einen Streamer aus")}</p>
       </div>
     );
   }
@@ -305,15 +305,11 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
       <div className="flex items-center gap-3">
         <FlaskConical className="w-6 h-6 text-accent" />
         <div>
-          <h2 className="text-xl font-bold text-white flex items-center gap-2">
-            Labor – Experimentelle Analytics
-            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-accent/20 text-accent border border-accent/30">
+          <h2 className="text-xl font-bold text-white flex flex-wrap items-center gap-2">{t("Labor – Experimentelle Analytics")}<span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-accent/20 text-accent border border-accent/30">
               Beta
             </span>
           </h2>
-          <p className="text-sm text-text-secondary mt-0.5">
-            Alle Spiele – Session-Tracking jenseits von Deadlock
-          </p>
+          <p className="text-sm text-text-secondary mt-0.5">{t("Alle Spiele – Session-Tracking jenseits von Deadlock")}</p>
         </div>
         {isAnyLoading && <Loader2 className="w-5 h-5 animate-spin text-primary ml-auto" />}
       </div>
@@ -321,27 +317,27 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <KpiCard
-          label="Sessions"
-          value={overview ? formatNumber(overview.totalSessions) : '–'}
+          label={t("Sessions")}
+          value={overview ? formatNumber(overview.totalSessions, 0, locale) : '–'}
           icon={BarChart3}
-          sub={`letzte ${days} Tage`}
+          sub={t("letzte {value0} Tage", { value0: days })}
         />
         <KpiCard
-          label="Spiele gespielt"
-          value={overview ? formatNumber(overview.gamesPlayed) : '–'}
+          label={t("Spiele gespielt")}
+          value={overview ? formatNumber(overview.gamesPlayed, 0, locale) : '–'}
           icon={Gamepad2}
         />
         <KpiCard
-          label="Bestes Spiel"
+          label={t("Bestes Spiel")}
           value={overview?.bestGame || '–'}
-          sub={overview?.bestGameAvgViewers ? `Ø ${formatNumber(overview.bestGameAvgViewers, 1)} Viewer` : undefined}
+          sub={overview?.bestGameAvgViewers ? t("Ø {value0} Viewer", { value0: formatNumber(overview.bestGameAvgViewers, 1, locale) }) : undefined}
           icon={TrendingUp}
         />
         <KpiCard
-          label="Ø Viewer"
-          value={overview ? formatNumber(overview.avgViewers, 1) : '–'}
+          label={t("Ø Viewer")}
+          value={overview ? formatNumber(overview.avgViewers, 1, locale) : '–'}
           icon={Users}
-          sub="alle Spiele"
+          sub={t("alle Spiele")}
         />
       </div>
 
@@ -351,9 +347,7 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
         className="bg-card rounded-xl border border-border p-5"
       >
         <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-          <BarChart3 className="w-4 h-4 text-primary" />
-          Ø Viewer pro Spiel
-        </h3>
+          <BarChart3 className="w-4 h-4 text-primary" />{t("Ø Viewer pro Spiel")}</h3>
         {loadingBreakdown ? (
           <div className="flex items-center justify-center h-40">
             <Loader2 className="w-6 h-6 animate-spin text-primary" />
@@ -369,9 +363,7 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
         className="bg-card rounded-xl border border-border p-5"
       >
         <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-          <TrendingUp className="w-4 h-4 text-primary" />
-          Viewer-Verlauf pro Spiel (Minuten ab Streamstart)
-        </h3>
+          <TrendingUp className="w-4 h-4 text-primary" />{t("Viewer-Verlauf pro Spiel (Minuten ab Streamstart)")}</h3>
         {loadingCurves ? (
           <div className="flex items-center justify-center h-40">
             <Loader2 className="w-6 h-6 animate-spin text-primary" />
@@ -387,26 +379,22 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
         className="bg-card rounded-xl border border-border p-5"
       >
         <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-          <ArrowRight className="w-4 h-4 text-primary" />
-          Spielwechsel
-        </h3>
+          <ArrowRight className="w-4 h-4 text-primary" />{t("Spielwechsel")}</h3>
         {loadingTransitions ? (
           <div className="flex items-center justify-center h-32">
             <Loader2 className="w-6 h-6 animate-spin text-primary" />
           </div>
         ) : transitions.length === 0 ? (
-          <p className="text-text-secondary text-sm text-center py-8">
-            Noch keine Spielwechsel aufgezeichnet
-          </p>
+          <p className="text-text-secondary text-sm text-center py-8">{t("Noch keine Spielwechsel aufgezeichnet")}</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-text-secondary border-b border-border">
-                  <th className="text-left py-2 pr-4 font-medium">Von</th>
-                  <th className="text-left py-2 pr-4 font-medium">Nach</th>
-                  <th className="text-right py-2 pr-4 font-medium">Anzahl</th>
-                  <th className="text-right py-2 font-medium">Ø Viewer</th>
+                  <th className="text-left py-2 pr-4 font-medium">{t("Von")}</th>
+                  <th className="text-left py-2 pr-4 font-medium">{t("Nach")}</th>
+                  <th className="text-right py-2 pr-4 font-medium">{t("Anzahl")}</th>
+                  <th className="text-right py-2 font-medium">{t("Ø Viewer")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -422,10 +410,10 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
                       {t.toGame}
                     </td>
                     <td className="py-2 pr-4 text-right text-white font-mono">
-                      {formatNumber(t.count)}
+                      {formatNumber(t.count, 0, locale)}
                     </td>
                     <td className="py-2 text-right text-text-secondary font-mono">
-                      {formatNumber(t.avgViewersBefore, 0)}
+                      {formatNumber(t.avgViewersBefore, 0, locale)}
                     </td>
                   </tr>
                 ))}
@@ -471,20 +459,20 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
                       <span className="text-white truncate max-w-[180px]">{row.game}</span>
                     </td>
                     <td className="py-2 pr-4 text-right text-text-secondary font-mono">
-                      {formatNumber(row.sessions)}
+                      {formatNumber(row.sessions, 0, locale)}
                     </td>
                     <td className="py-2 pr-4 text-right text-white font-mono">
-                      {formatNumber(row.avgViewers, 1)}
+                      {formatNumber(row.avgViewers, 1, locale)}
                     </td>
                     <td className="py-2 pr-4 text-right text-text-secondary font-mono">
-                      {formatNumber(row.peakViewers)}
+                      {formatNumber(row.peakViewers, 0, locale)}
                     </td>
                     <td className="py-2 pr-4 text-right text-text-secondary font-mono">
-                      {formatNumber(row.avgDurationMin, 0)}m
+                      {formatNumber(row.avgDurationMin, 0, locale)}m
                     </td>
                     <td className="py-2 text-right text-text-secondary font-mono">
                       {row.avgFollowerDelta >= 0 ? '+' : ''}
-                      {formatNumber(row.avgFollowerDelta, 1)}
+                      {formatNumber(row.avgFollowerDelta, 1, locale)}
                     </td>
                   </tr>
                 ))}
