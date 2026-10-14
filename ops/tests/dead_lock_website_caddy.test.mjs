@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { once } from 'node:events';
+import { once, EventEmitter } from 'node:events';
 import test from 'node:test';
 
 async function listen(server) {
@@ -13,9 +13,31 @@ async function listen(server) {
   return server.address().port;
 }
 
+async function stopChild(child) {
+  if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return;
+  const exited = once(child, 'exit');
+  child.kill('SIGTERM');
+  await exited;
+}
+
+test('cleanup skips failed spawns and completed exits but awaits running children', async () => {
+  let kills = 0;
+  for (const state of [{ exitCode: null, signalCode: null }, { pid: 1, exitCode: 1, signalCode: null }, { pid: 1, exitCode: null, signalCode: 'SIGTERM' }]) {
+    await stopChild({ ...state, kill() { kills++; } });
+  }
+  assert.equal(kills, 0);
+  const running = Object.assign(new EventEmitter(), { pid: 1, exitCode: null, signalCode: null });
+  running.kill = signal => { kills++; assert.equal(signal, 'SIGTERM'); running.emit('exit', null, signal); };
+  await stopChild(running);
+  assert.equal(kills, 1);
+});
+
 test('English website mounts retain OAuth precedence and unrelated domain redirects', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'dead-lock-website-'));
-  const upstream = createServer((request, response) => response.end(`upstream:${request.url}`));
+  const upstream = createServer((request, response) => {
+    response.setHeader('Content-Security-Policy', "default-src 'self'");
+    response.end(`upstream:${request.url}`);
+  });
   const reservation = createServer();
   let child;
   try {
@@ -31,9 +53,11 @@ test('English website mounts retain OAuth precedence and unrelated domain redire
     writeFileSync(join(dist, 'assets', 'app.js'), 'website-asset');
     const repo = new URL('../caddy/', import.meta.url).pathname;
     const source = readFileSync(join(repo, 'dead-lock-de.caddy'), 'utf8');
+    const profiles = join(directory, 'partner-profiles.caddy');
+    writeFileSync(profiles, readFileSync(join(repo, 'partner-profiles.caddy'), 'utf8').replaceAll('127.0.0.1:8769', `127.0.0.1:${upstreamPort}`));
     const snippets = source.slice(0, source.indexOf('http://dead-lock.de'))
       .replaceAll('/opt/deadlock/twitch/current/website/dist', dist)
-      .replaceAll('/etc/caddy/partner-profiles.caddy', join(repo, 'partner-profiles.caddy'))
+      .replaceAll('/etc/caddy/partner-profiles.caddy', profiles)
       .replaceAll('127.0.0.1:8769', `127.0.0.1:${upstreamPort}`);
     const config = join(directory, 'Caddyfile');
     writeFileSync(config, `{\n admin off\n auto_https off\n}\n(common_probe_blockers) {\n @probe path /.git/*\n handle @probe {\n  respond 404\n }\n}\n${snippets}\nhttp://127.0.0.1:${port} {\n import dead_lock_english_dashboard\n}\n`);
@@ -69,6 +93,23 @@ test('English website mounts retain OAuth precedence and unrelated domain redire
       assert.equal(response.headers.get('location'), location, path);
       await response.text();
     }
+    for (const [path, target, status] of [
+      ['/', '/streamer/', 302],
+      ['/streamer', '/streamer/', 308],
+      ['/streamer/index.html', '/streamer/', 308],
+      ['/streamer/onboarding', '/twitch/onboarding', 308],
+      ['/streamer/onboarding/', '/twitch/onboarding', 308],
+      ['/streamer/v1', '/streamer/v1/', 308],
+      ['/streamer/v2', '/streamer/', 308],
+      ['/streamer/v2/', '/streamer/', 308],
+      ['/streamer/v2/legacy.js', '/streamer/', 308],
+    ]) {
+      const query = '?lang=de&next=%2Ftwitch%2Fdashboard&x=1';
+      const response = await request(path + query);
+      assert.equal(response.status, status, path);
+      assert.equal(response.headers.get('location'), target + query, path);
+      await response.text();
+    }
     for (const [path, body] of [
       ['/streamer/', 'website:landing'],
       ['/streamer/faq/', 'website:faq'],
@@ -81,6 +122,8 @@ test('English website mounts retain OAuth precedence and unrelated domain redire
       ['/twitch/dashboard', 'upstream:/twitch/dashboard'],
       ['/streamer/commands', 'upstream:/streamer/commands'],
       ['/streamer/faq', 'upstream:/streamer/faq'],
+      ['/streamer/alice', 'upstream:/streamer/alice'],
+      ['/streamer/alice/?month=2026-10', 'upstream:/streamer/alice/?month=2026-10'],
     ]) {
       const response = await request(path);
       assert.equal(response.status, 200, path);
@@ -93,7 +136,7 @@ test('English website mounts retain OAuth precedence and unrelated domain redire
     assert.match(source, /@english_site path \/ \/streamer\* \/website\* \/twitch \/twitch\/\*/);
     assert.match(source, /redir @english_site https:\/\/\{host\}\{uri\} 308/);
   } finally {
-    if (child && child.exitCode === null) { child.kill('SIGTERM'); await once(child, 'exit'); }
+    await stopChild(child);
     upstream.closeAllConnections();
     await new Promise(resolve => upstream.close(resolve));
     reservation.close();
