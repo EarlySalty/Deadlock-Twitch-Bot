@@ -6,8 +6,11 @@ import {
   toggleGreeting,
   type GreetingSettingsResponse,
 } from '@/api/greeting';
+import { useT } from '../../context/LanguageContext';
+import { tr } from '../../i18n/dictionary';
 
 export function GreetingSection() {
+  const t = useT();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -20,7 +23,7 @@ export function GreetingSection() {
     try {
       setSettings(await fetchGreetingSettings());
     } catch {
-      setError('Status konnte nicht geladen werden. Bitte Seite neu laden.');
+      setError(tr('Status konnte nicht geladen werden. Bitte Seite neu laden.'));
     } finally {
       setLoading(false);
     }
@@ -62,37 +65,36 @@ export function GreetingSection() {
     >
       <div className="mb-5">
         <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">
-          Chat-Antwort
+          {t('Chat-Antwort')}
         </p>
         <h2 className="display-font text-2xl font-bold text-white mb-1">
-          Begrüßung
+          {t('Begrüßung')}
         </h2>
         <p className="text-sm text-text-secondary">
-          Steuert, ob der Bot auf ein „hi“ oder „moin“ im Chat zurückgrüßt. Aus heißt: er
-          bleibt bei Grüßen still — alles andere macht er weiter wie bisher.
+          {t('Steuert, ob der Bot auf ein „hi“ oder „moin“ im Chat zurückgrüßt. Aus heißt: er bleibt bei Grüßen still — alles andere macht er weiter wie bisher.')}
         </p>
       </div>
 
       {error && (
         <div className="mb-4 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
-          {error}
+          {t(error)}
         </div>
       )}
 
       {success && (
         <div className="mb-4 rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-sm text-success">
-          {success}
+          {t(success)}
         </div>
       )}
 
       {loading ? (
         <div className="flex items-center gap-3 text-text-secondary text-sm">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          Status wird geladen …
+          {t('Status wird geladen …')}
         </div>
       ) : !settings ? (
         <div className="rounded-xl border border-border bg-background/40 px-4 py-6 text-sm text-text-secondary text-center">
-          Einstellung gerade nicht verfügbar.
+          {t('Einstellung gerade nicht verfügbar.')}
         </div>
       ) : (
         <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4">
@@ -104,13 +106,13 @@ export function GreetingSection() {
                 }`}
               >
                 {enabled
-                  ? 'Begrüßung ist aktiv'
-                  : 'Begrüßung ist aus'}
+                  ? t('Begrüßung ist aktiv')
+                  : t('Begrüßung ist aus')}
               </p>
               <p className="text-xs text-text-secondary mt-0.5">
                 {enabled
-                  ? 'Der Bot grüßt zurück, höchstens einmal alle 10 Minuten.'
-                  : 'Der Bot grüßt niemanden mehr zurück.'}
+                  ? t('Der Bot grüßt zurück, höchstens einmal alle 10 Minuten.')
+                  : t('Der Bot grüßt niemanden mehr zurück.')}
               </p>
             </div>
             <button
@@ -130,7 +132,7 @@ export function GreetingSection() {
               ) : (
                 <Power className="h-4 w-4" />
               )}
-              {enabled ? 'Begrüßung deaktivieren' : 'Begrüßung aktivieren'}
+              {enabled ? t('Begrüßung deaktivieren') : t('Begrüßung aktivieren')}
             </button>
           </div>
         </div>

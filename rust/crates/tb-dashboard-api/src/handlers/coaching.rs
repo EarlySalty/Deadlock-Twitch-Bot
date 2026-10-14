@@ -1,10 +1,3 @@
-//! Handler für `/twitch/api/v2/coaching`.
-//!
-//! Port von `bot/analytics/api_insights.py:_api_v2_coaching`.
-//! Auth + Extended-Plan-Gate, `streamer` (Pflicht, Original-Case wird echot),
-//! `days` (7..3650, Default 30). Lädt die volle regelbasierte Coaching-Engine
-//! ([`tb_analytics::coaching::get_coaching_data`]).
-
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -16,38 +9,30 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::language::RequestLanguage;
 use crate::query_int::parse_bounded_query_int;
 
 #[derive(Deserialize)]
 pub struct CoachingQuery {
     #[serde(default)]
     pub streamer: Option<String>,
-    // Rohwert statt Option<i32>: nicht-numerisches `days` muss Python-konform
-    // 400-JSON liefern ({"error":"days must be an integer"}), nicht den
-    // generischen serde-Plaintext-400. Siehe crate::query_int.
     #[serde(default)]
     pub days: Option<String>,
 }
 
-/// `GET /twitch/api/v2/coaching?streamer=&days=30`
 pub async fn coaching_handler(
     auth: DashboardAuthLevel,
+    RequestLanguage(lang): RequestLanguage,
     State(pool): State<PgPool>,
     Query(params): Query<CoachingQuery>,
 ) -> impl IntoResponse {
     if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
         return resp;
     }
-    // days VOR der streamer-Pflichtprüfung (Python-Reihenfolge in _api_v2_coaching:
-    // erst _parse_bounded_query_int → 400, dann streamer-Check).
     let days = match parse_bounded_query_int(params.days.as_deref(), "days", 30, 7, 3650) {
         Ok(d) => d,
         Err(resp) => return resp.into_response(),
     };
-    // IDOR-Guard: Partner auf eigenen Login geklemmt (Cross-Account → 403),
-    // Admin/Localhost frei. `required=true`: fehlender Streamer → 400. Der
-    // Resolver lowercased den Login (für Partner ohnehin der eigene); get_coaching_data
-    // lowercased intern weiter — der Echo-Wert ist damit kleingeschrieben.
     let streamer =
         match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), true) {
             Ok(Some(s)) => s,
@@ -61,7 +46,7 @@ pub async fn coaching_handler(
             Err(resp) => return resp,
         };
 
-    match tb_analytics::coaching::get_coaching_data(&pool, &streamer, days).await {
+    match tb_analytics::coaching::get_coaching_data(&pool, &streamer, days, lang).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => {
             tracing::error!("coaching Fehler: {e}");
@@ -114,6 +99,7 @@ mod tests {
         };
         let resp = coaching_handler(
             DashboardAuthLevel::admin(),
+            RequestLanguage::default(),
             State(pool),
             Query(CoachingQuery {
                 streamer: None,
@@ -133,6 +119,7 @@ mod tests {
         // Localhost bypasst Gate, streamer vorhanden, keine Sessions → empty:true/200.
         let resp = coaching_handler(
             DashboardAuthLevel::admin(),
+            RequestLanguage::default(),
             State(pool),
             Query(CoachingQuery {
                 streamer: Some("Nani".into()),
@@ -164,6 +151,7 @@ mod tests {
             .ok();
         let resp = coaching_handler(
             partner("earlysalty"),
+            RequestLanguage::default(),
             State(pool),
             Query(CoachingQuery {
                 streamer: Some("ismile_e".into()),
@@ -184,6 +172,7 @@ mod tests {
         // days-Check läuft VOR streamer-Pflicht (deshalb streamer: None ok).
         let resp = coaching_handler(
             DashboardAuthLevel::admin(),
+            RequestLanguage::default(),
             State(pool),
             Query(CoachingQuery {
                 streamer: None,

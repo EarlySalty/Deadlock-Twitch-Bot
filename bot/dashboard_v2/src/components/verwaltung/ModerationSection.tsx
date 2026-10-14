@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { messageFromError, presentMessage, type DisplayMessage } from '../../i18n/errorMessage';
+import { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Loader2, ShieldCheck } from 'lucide-react';
 import {
@@ -6,60 +7,81 @@ import {
   saveModerationSettings,
   type ModerationSettings,
 } from '@/api/moderation';
+import { useT } from '../../context/LanguageContext';
+import { tr } from '../../i18n/dictionary';
+import { useAuthStatus } from '@/hooks/useAnalytics';
 
 type ModerationKey = keyof ModerationSettings;
 
-const TASKS: Array<{ key: ModerationKey; label: string; desc: string }> = [
-  {
-    key: 'global_ban_enabled',
-    label: 'Bekannte Betrüger fernhalten',
-    desc: 'Accounts, die in der Community schon als Betrüger aufgefallen sind, kommen in deinem Chat gar nicht erst zum Zug.',
-  },
-  {
-    key: 'scam_pitch_enabled',
-    label: 'Vor Abzock-Maschen warnen',
-    desc: 'Der Bot erkennt typische Anwerb- und Abzock-Nachrichten und warnt frühzeitig davor.',
-  },
-  {
-    key: 'spam_autoban_enabled',
-    label: 'Werbe-Spam automatisch stoppen',
-    desc: 'Offensichtliche Werbung und Viewer-Kauf-Nachrichten fliegen automatisch aus deinem Chat.',
-  },
-  {
-    key: 'sus_invite_enabled',
-    label: 'Verdächtige Discord-Einladungen bremsen',
-    desc: 'Fremde Discord-Einladungen von ganz neuen Zuschauern werden kurz ausgebremst, damit niemand in eine Falle gelockt wird.',
-  },
-];
+function moderationTasks(): Array<{ key: ModerationKey; label: string; desc: string }> {
+  return [
+    {
+      key: 'global_ban_enabled',
+      label: tr('Bekannte Betrüger fernhalten'),
+      desc: tr('Accounts, die in der Community schon als Betrüger aufgefallen sind, kommen in deinem Chat gar nicht erst zum Zug.'),
+    },
+    {
+      key: 'scam_pitch_enabled',
+      label: tr('Vor Abzock-Maschen warnen'),
+      desc: tr('Der Bot erkennt typische Anwerb- und Abzock-Nachrichten und warnt frühzeitig davor.'),
+    },
+    {
+      key: 'spam_autoban_enabled',
+      label: tr('Werbe-Spam automatisch stoppen'),
+      desc: tr('Offensichtliche Werbung und Viewer-Kauf-Nachrichten fliegen automatisch aus deinem Chat.'),
+    },
+    {
+      key: 'sus_invite_enabled',
+      label: tr('Verdächtige Discord-Einladungen bremsen'),
+      desc: tr('Fremde Discord-Einladungen von ganz neuen Zuschauern werden kurz ausgebremst, damit niemand in eine Falle gelockt wird.'),
+    },
+  ];
+}
 
 export function ModerationSection() {
+  const t = useT();
+  const tasks = moderationTasks();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<DisplayMessage | null>(null);
   const [saved, setSaved] = useState(false);
   const [draft, setDraft] = useState<ModerationSettings | null>(null);
   const [baseline, setBaseline] = useState<ModerationSettings | null>(null);
+  const { data: auth, isPending: loadingAuth } = useAuthStatus();
+  const owner = auth?.twitchUserId;
+  const generation = useRef(0);
 
   useEffect(() => {
-    let active = true;
+    const request = ++generation.current;
     setLoading(true);
-    fetchModerationSettings()
-      .then((data) => {
-        if (!active) return;
-        setDraft(data);
-        setBaseline(data);
-      })
-      .catch((e) => active && setError(e instanceof Error ? e.message : 'Unbekannter Fehler'))
-      .finally(() => active && setLoading(false));
+    setDraft(null);
+    setBaseline(null);
+    setError(null);
+    setSaved(false);
+    setSaving(false);
+    if (!loadingAuth) {
+      fetchModerationSettings()
+        .then((data) => {
+          if (request !== generation.current) return;
+          setDraft(data);
+          setBaseline(data);
+        })
+        .catch(
+          (cause) =>
+            request === generation.current &&
+            setError(messageFromError(cause, 'Einstellungen konnten nicht geladen werden.')),
+        )
+        .finally(() => request === generation.current && setLoading(false));
+    }
     return () => {
-      active = false;
+      generation.current += 1;
     };
-  }, []);
+  }, [owner, loadingAuth]);
 
   const dirty =
     draft !== null &&
     baseline !== null &&
-    TASKS.some((task) => draft[task.key] !== baseline[task.key]);
+    tasks.some((task) => draft[task.key] !== baseline[task.key]);
 
   const toggle = (key: ModerationKey) => {
     setSaved(false);
@@ -67,19 +89,21 @@ export function ModerationSection() {
   };
 
   const onSave = async () => {
-    if (!draft) return;
+    if (!draft || saving) return;
+    const request = generation.current;
     setSaving(true);
     setError(null);
     setSaved(false);
     try {
       const result = await saveModerationSettings(draft);
+      if (request !== generation.current) return;
       setDraft(result);
       setBaseline(result);
       setSaved(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Speichern fehlgeschlagen');
+    } catch (cause) {
+      if (request === generation.current) setError(messageFromError(cause, 'Speichern fehlgeschlagen'));
     } finally {
-      setSaving(false);
+      if (request === generation.current) setSaving(false);
     }
   };
 
@@ -97,34 +121,33 @@ export function ModerationSection() {
     >
       <div className="mb-5">
         <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1 flex items-center gap-2">
-          <ShieldCheck className="h-4 w-4" /> Moderation
+          <ShieldCheck className="h-4 w-4" /> {t('Moderation')}
         </p>
-        <h2 className="display-font text-2xl font-bold text-white mb-1">Was der Bot übernimmt</h2>
+        <h2 className="display-font text-2xl font-bold text-white mb-1">{t('Was der Bot übernimmt')}</h2>
         <p className="text-sm text-text-secondary">
-          Lege fest, welche Aufgaben der Bot in deinem Chat automatisch übernimmt. Alles ist von
-          Haus aus an. Schaltest du etwas aus, lässt der Bot diesen Bereich in Ruhe.
+          {t('Lege fest, welche Aufgaben der Bot in deinem Chat automatisch übernimmt. Alles ist von Haus aus an. Schaltest du etwas aus, lässt der Bot diesen Bereich in Ruhe.')}
         </p>
       </div>
 
       {loading ? (
         <div className="flex items-center gap-3 text-text-secondary text-sm">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          Einstellungen werden geladen ...
+          {t('Einstellungen werden geladen ...')}
         </div>
       ) : !draft ? (
-        <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
-          {error ?? 'Einstellungen konnten nicht geladen werden.'}
+        <div role="alert" className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
+          {presentMessage(error ?? { key: 'Einstellungen konnten nicht geladen werden.' }, t)}
         </div>
       ) : (
         <div className="space-y-5">
           {error && (
-            <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
-              {error}
+            <div role="alert" className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
+              {presentMessage(error, t)}
             </div>
           )}
 
           <div className="space-y-3">
-            {TASKS.map((task) => {
+            {tasks.map((task) => {
               const on = draft[task.key];
               return (
                 <div
@@ -166,11 +189,11 @@ export function ModerationSection() {
               className="inline-flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-5 py-2.5 text-sm font-semibold text-primary transition-colors hover:border-primary/60 hover:bg-primary/20 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-              Einstellungen speichern
+              {t('Einstellungen speichern')}
             </button>
-            {saved && !dirty && <span className="text-sm text-success">Gespeichert.</span>}
+            {saved && !dirty && <span className="text-sm text-success">{t('Gespeichert.')}</span>}
             {dirty && !saving && (
-              <span className="text-sm text-text-secondary">Ungespeicherte Änderungen.</span>
+              <span className="text-sm text-text-secondary">{t('Ungespeicherte Änderungen.')}</span>
             )}
           </div>
         </div>

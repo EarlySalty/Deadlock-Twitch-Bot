@@ -15,7 +15,7 @@ const API = read('api/challenges.ts');
 test('Challenges nutzt die gemeinsame Dashboard Route und Sidebar', () => {
   assert.match(APP, /path === '\/twitch\/challenges'/);
   assert.match(APP, /<DashboardShell activeRoute="challenges"><Challenges \/><\/DashboardShell>/);
-  assert.match(SIDEBAR, /href: '\/twitch\/challenges', label: 'Rangliste & Erfolge'/);
+  assert.match(SIDEBAR, /href: '\/twitch\/challenges', label: t\('Rangliste & Erfolge'\)/);
 });
 
 test('Sidebar zeigt Challenges nur für aktive Partner und Admins', () => {

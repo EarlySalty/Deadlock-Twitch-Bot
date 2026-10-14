@@ -653,16 +653,14 @@ mod tests {
             ] {
                 let error = channel(&pool, auth, requested)
                     .await
-                    .err()
-                    .expect("explicit numeric channel");
+                    .expect_err("explicit numeric channel");
                 assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
             }
         }
         assert_eq!(
             channel(&pool, &partner, Some("202"))
                 .await
-                .err()
-                .expect("foreign channel")
+                .expect_err("foreign channel")
                 .into_response()
                 .status(),
             StatusCode::FORBIDDEN
@@ -670,8 +668,7 @@ mod tests {
         assert_eq!(
             channel(&pool, &DashboardAuthLevel::None, Some("101"))
                 .await
-                .err()
-                .expect("authentication")
+                .expect_err("authentication")
                 .into_response()
                 .status(),
             StatusCode::UNAUTHORIZED

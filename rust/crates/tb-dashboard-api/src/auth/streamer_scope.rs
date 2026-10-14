@@ -34,13 +34,13 @@ pub(crate) async fn resolve_clip_upload_target(
     pool: &sqlx::PgPool,
     auth: &DashboardAuthLevel,
     requested_twitch_user_id: Option<&str>,
-) -> Result<(String, String), Response> {
+) -> Result<(String, String), Box<Response>> {
     let target = match auth {
         DashboardAuthLevel::Partner { twitch_user_id, .. } => {
             if twitch_user_id.is_empty()
                 || !twitch_user_id.bytes().all(|byte| byte.is_ascii_digit())
             {
-                return Err(unauthorized());
+                return Err(Box::new(unauthorized()));
             }
             sqlx::query_as::<_, (String, Option<String>)>(
                 "SELECT twitch_login, twitch_user_id FROM twitch_streamers WHERE twitch_user_id = $1 LIMIT 1",
@@ -51,7 +51,7 @@ pub(crate) async fn resolve_clip_upload_target(
         }
         DashboardAuthLevel::Admin { .. } => {
             let Some(id) = requested_twitch_user_id.filter(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit())) else {
-                return Err((StatusCode::BAD_REQUEST, "twitch_user_id required").into_response());
+                return Err(Box::new((StatusCode::BAD_REQUEST, "twitch_user_id required").into_response()));
             };
             sqlx::query_as::<_, (String, Option<String>)>(
                 "SELECT twitch_login, twitch_user_id FROM twitch_streamers WHERE twitch_user_id = $1 LIMIT 1",
@@ -60,7 +60,7 @@ pub(crate) async fn resolve_clip_upload_target(
             .fetch_optional(pool)
             .await
         }
-        DashboardAuthLevel::None => return Err(unauthorized()),
+        DashboardAuthLevel::None => return Err(Box::new(unauthorized())),
     }
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
     match target {
@@ -69,11 +69,13 @@ pub(crate) async fn resolve_clip_upload_target(
         {
             Ok((login, id))
         }
-        _ => Err((
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "unknown_streamer"})),
-        )
-            .into_response()),
+        _ => Err(Box::new(
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "unknown_streamer"})),
+            )
+                .into_response(),
+        )),
     }
 }
 
@@ -178,31 +180,53 @@ pub(crate) fn resolve_streamer_scope(
 /// Partner bringen dessen ID aus der Authentifizierung mit. Nur die zentrale
 /// Scope-Schicht löst ausdrücklich gewählte Adminziele aus dem Bestand auf.
 pub(crate) async fn resolve_analysis_target(
-    pool: &sqlx::PgPool, auth: &DashboardAuthLevel, requested: Option<&str>,
-) -> Result<(String, String), Response> {
+    pool: &sqlx::PgPool,
+    auth: &DashboardAuthLevel,
+    requested: Option<&str>,
+) -> Result<(String, String), Box<Response>> {
     let Some(login) = resolve_streamer_scope(auth, requested, true)? else {
-        return Err((StatusCode::BAD_REQUEST, "streamer required").into_response());
+        return Err(Box::new(
+            (StatusCode::BAD_REQUEST, "streamer required").into_response(),
+        ));
     };
     let authenticated_id = match auth {
         DashboardAuthLevel::Partner { twitch_user_id, .. } => Some(twitch_user_id.as_str()),
         DashboardAuthLevel::Admin { actor: Some(actor) }
-            if actor.twitch_login.eq_ignore_ascii_case(&login) => Some(actor.twitch_user_id.as_str()),
+            if actor.twitch_login.eq_ignore_ascii_case(&login) =>
+        {
+            Some(actor.twitch_user_id.as_str())
+        }
         _ => None,
     };
     if let Some(id) = authenticated_id {
         if id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_digit()) {
-            return Err(unauthorized());
+            return Err(Box::new(unauthorized()));
         }
         return Ok((login, id.to_owned()));
     }
-    let ids: Vec<String> = sqlx::query_scalar("SELECT DISTINCT twitch_user_id FROM twitch_streamers
-        WHERE LOWER(twitch_login) = $1 AND twitch_user_id IS NOT NULL")
-        .bind(&login).fetch_all(pool).await.map_err(|error| {
-            tracing::error!(%error, "Analyse-Zielidentität nicht verfügbar");
-            (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error":"analysis_identity_unavailable"}))).into_response()
-        })?;
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT twitch_user_id FROM twitch_streamers
+        WHERE LOWER(twitch_login) = $1 AND twitch_user_id IS NOT NULL",
+    )
+    .bind(&login)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "Analyse-Zielidentität nicht verfügbar");
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error":"analysis_identity_unavailable"})),
+        )
+            .into_response()
+    })?;
     if ids.len() != 1 || ids[0].is_empty() || !ids[0].bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"error":"analysis_target_identity_missing"}))).into_response());
+        return Err(Box::new(
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error":"analysis_target_identity_missing"})),
+            )
+                .into_response(),
+        ));
     }
     Ok((login, ids[0].clone()))
 }

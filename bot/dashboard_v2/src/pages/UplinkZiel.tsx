@@ -13,10 +13,11 @@ import {
   saveUplinkDestination,
   fetchUplinkDestinations,
   trenneUplinkPlattform,
-  TRENNEN_HINWEIS,
-  VERBINDEN_HINWEIS,
-  VERBINDEN_KURZ,
+  trennenHinweis,
+  verbindenHinweis,
+  verbindenKurz,
   uplinkConnectUrl,
+  uplinkProfilHinweis,
 } from '@/api/uplink';
 import type {
   UplinkCaps,
@@ -27,6 +28,7 @@ import type {
   UplinkProfilAnsicht,
   UplinkProfilName,
 } from '@/api/uplink';
+import { useLanguage, useT } from '@/context/LanguageContext';
 import { useUplinkDisclosure } from '@/uplinkDisclosure';
 import { uplinkHelpUrl } from '@/uplinkHelp';
 import { profilText, zielBetrieb } from '@/uplinkBetrieb';
@@ -60,6 +62,7 @@ function ZahlFeld({
   wert: string;
   onChange: (wert: string) => void;
 }) {
+  const t = useT();
   const zahl = Number(wert);
   const darueber = empfehlung !== null && Number.isFinite(zahl) && zahl > empfehlung;
   return (
@@ -84,14 +87,17 @@ function ZahlFeld({
           im Satz darunter, nicht viermal nebeneinander. */}
       {empfehlung !== null ? (
         <span className="block text-[11px] text-text-secondary">
-          {darueber ? `über der Empfehlung: ${empfehlung}` : `Empfehlung: ${empfehlung}`}
+          {darueber ? t('über der Empfehlung: {wert}', { wert: empfehlung }) : t('Empfehlung: {wert}', { wert: empfehlung })}
         </span>
       ) : null}
     </label>
   );
 }
 
-/** Gleiche Werte? Entscheidet, ob im Kopf "nicht gespeichert" steht. */
+function wunschText(t: ReturnType<typeof useT>, profil: string | null): string {
+  return profil ? t('Wunsch: {profil}', { profil }) : t('Wunsch: noch nicht vollständig');
+}
+
 function gleicheWerte(a: UplinkProfilAnsicht | undefined, b: UplinkProfilAnsicht | undefined) {
   if (!a || !b) return false;
   return (
@@ -132,6 +138,7 @@ function StreamKeyKnopf({
   beschriftung: string;
   klasse: string;
 }) {
+  const t = useT();
   const queryClient = useQueryClient();
   const holen = useMutation({
     mutationFn: () => holeUplinkStreamKey(platform, csrfToken ?? ''),
@@ -151,15 +158,15 @@ function StreamKeyKnopf({
         }}
         className={klasse}
       >
-        {holen.isPending ? 'Wird geholt' : beschriftung}
+        {holen.isPending ? t('Wird geholt') : beschriftung}
       </button>
       {holen.isError ? (
         <span role="alert" className="text-[11px] text-warning">
-          Der Stream-Schlüssel kam gerade nicht durch. Bitte gleich noch einmal versuchen.
+          {t('Der Stream-Schlüssel kam gerade nicht durch. Bitte gleich noch einmal versuchen.')}
         </span>
       ) : null}
       {holen.isSuccess ? (
-        <span className="text-[11px] text-success">Stream-Schlüssel ist im Uplink hinterlegt.</span>
+        <span className="text-[11px] text-success">{t('Stream-Schlüssel ist im Uplink hinterlegt.')}</span>
       ) : null}
     </>
   );
@@ -172,6 +179,7 @@ function PlattformVerbindung({
   chat: UplinkPlattformVerbindung;
   csrfToken: string | null;
 }) {
+  const t = useT();
   const queryClient = useQueryClient();
   const [nachfrage, setNachfrage] = useState(false);
   const trennen = useMutation({
@@ -212,7 +220,7 @@ function PlattformVerbindung({
           <StreamKeyKnopf
             platform={chat.id}
             csrfToken={csrfToken}
-            beschriftung="Stream-Schlüssel holen"
+            beschriftung={t('Stream-Schlüssel holen')}
             klasse={knopfKlasse}
           />
         ) : null}
@@ -225,7 +233,7 @@ function PlattformVerbindung({
             }}
             className={stillKlasse}
           >
-            Trennen
+            {t('Trennen')}
           </button>
         ) : null}
       </span>
@@ -235,18 +243,18 @@ function PlattformVerbindung({
           in der Rueckfrage, wo er auch etwas entscheidet. */}
       {chat.status === 'getrennt' ? (
         <span className="flex flex-wrap items-baseline gap-1.5 text-[11px] text-text-secondary">
-          <span>{chat.id === 'tiktok' ? 'Video benötigt einen freigeschalteten RTMP-Zugang. Chat-Zugang ist hier nicht bestätigt.' : VERBINDEN_KURZ}</span>
+          <span>{chat.id === 'tiktok' ? t('Video benötigt einen freigeschalteten RTMP-Zugang. Chat-Zugang ist hier nicht bestätigt.') : verbindenKurz()}</span>
           {chat.aktiv && chat.id === 'twitch' ? <details className="inline">
             <summary className="cursor-pointer list-none text-primary underline decoration-dotted underline-offset-2">
-              Welche Rechte?
+              {t('Welche Rechte?')}
             </summary>
-            <span className="mt-1 block max-w-prose">{VERBINDEN_HINWEIS}</span>
+            <span className="mt-1 block max-w-prose">{verbindenHinweis()}</span>
           </details> : null}
         </span>
       ) : null}
       {nachfrage ? (
         <span className="flex flex-col gap-1 rounded-xl border border-warning/40 bg-warning/5 px-3 py-2">
-          <span className="text-[11px] text-warning">{TRENNEN_HINWEIS}</span>
+          <span className="text-[11px] text-warning">{trennenHinweis()}</span>
           <span className="flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -257,7 +265,7 @@ function PlattformVerbindung({
               }}
               className={stillKlasse}
             >
-              {trennen.isPending ? 'Wird getrennt' : 'Ja, trennen'}
+              {trennen.isPending ? t('Wird getrennt') : t('Ja, trennen')}
             </button>
             <button
               type="button"
@@ -267,14 +275,14 @@ function PlattformVerbindung({
               }}
               className={stillKlasse}
             >
-              Abbrechen
+              {t('Abbrechen')}
             </button>
           </span>
         </span>
       ) : null}
       {trennen.isError ? (
         <span role="alert" className="text-[11px] text-warning">
-          Das Trennen hat gerade nicht geklappt. Bitte gleich noch einmal versuchen.
+          {t('Das Trennen hat gerade nicht geklappt. Bitte gleich noch einmal versuchen.')}
         </span>
       ) : null}
     </span>
@@ -310,6 +318,7 @@ export function ZielKarte({
   csrfToken?: string | null;
   offenStart: boolean;
 }) {
+  const { t, locale, language } = useLanguage();
   const queryClient = useQueryClient();
   const basisId = useId();
   const eingerichtet = Boolean(ziel);
@@ -430,17 +439,17 @@ export function ZielKarte({
       bitrate_kbps: Number(manuell.bitrate_kbps),
     };
     const felder: [keyof typeof zahlen, string][] = [
-      ['width', 'Breite'],
-      ['height', 'Höhe'],
-      ['fps', 'Bildrate'],
-      ['bitrate_kbps', 'Bitrate'],
+      ['width', t('Breite fehlt.')],
+      ['height', t('Höhe fehlt.')],
+      ['fps', t('Bildrate fehlt.')],
+      ['bitrate_kbps', t('Bitrate fehlt.')],
     ];
-    for (const [feld, name] of felder) {
+    for (const [feld, meldung] of felder) {
       const wert = zahlen[feld];
-      if (!Number.isFinite(wert) || wert <= 0) return `${name} fehlt.`;
+      if (!Number.isFinite(wert) || wert <= 0) return meldung;
     }
     if (zahlen.width % 2 !== 0 || zahlen.height % 2 !== 0) {
-      return 'Breite und Höhe müssen gerade Zahlen sein.';
+      return t('Breite und Höhe müssen gerade Zahlen sein.');
     }
     return zahlen;
   }
@@ -460,10 +469,10 @@ export function ZielKarte({
       const key = automatisch ? '' : streamKey.trim();
       if (!automatisch) {
         if (key && !url) {
-          throw new Error('Ohne Serveradresse können wir den Schlüssel nicht zuordnen.');
+          throw new Error(t('Ohne Serveradresse können wir den Schlüssel nicht zuordnen.'));
         }
         if (!key && !eingerichtet) {
-          throw new Error(`Für ${label} fehlt uns noch der Stream-Schlüssel.`);
+          throw new Error(t('Für {label} fehlt uns noch der Stream-Schlüssel.', { label }));
         }
       }
       // Adresse und Schluessel gehoeren zusammen: das Relay nimmt sie nur
@@ -474,7 +483,7 @@ export function ZielKarte({
       // Deshalb hier ein Halt mit Grund statt eines verworfenen Feldes.
       if (!automatisch && !key && eingerichtet && url !== (ziel?.rtmp_url ?? '')) {
         throw new Error(
-          'Die Serveradresse können wir nur zusammen mit dem Stream-Schlüssel ändern. Trag beides ein.',
+          t('Die Serveradresse können wir nur zusammen mit dem Stream-Schlüssel ändern. Trag beides ein.'),
         );
       }
       const body: Parameters<typeof saveUplinkDestination>[0] = { platform, ...twitchOutputPayload(platform, outputEntwurf) };
@@ -507,7 +516,7 @@ export function ZielKarte({
         await bestaetigeUplinkSpeichern(antwort, queryClient, fetchUplinkDestinations);
       } catch {
         setGespeichert(false);
-        setFehlertext('Gespeichert, aber der aktuelle Zielstatus konnte nicht geladen werden. Deine Auswahl bleibt sichtbar; bitte den Status erneut laden.');
+        setFehlertext(t('Gespeichert, aber der aktuelle Zielstatus konnte nicht geladen werden. Deine Auswahl bleibt sichtbar; bitte den Status erneut laden.'));
         return;
       }
       const unveraendert = gesendeteRevision === revision.current;
@@ -515,16 +524,16 @@ export function ZielKarte({
       setFehlertext('');
       setGespeichert(unveraendert);
       setLivetext(unveraendert ? antwort.live_quality?.message ?? ''
-        : 'Der vorherige Stand wurde gespeichert. Deine neuen Änderungen sind noch offen.');
+        : t('Der vorherige Stand wurde gespeichert. Deine neuen Änderungen sind noch offen.'));
       queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
     },
     onError: (e) =>
       setFehlertext(
-        e instanceof Error && e.message ? e.message : 'Speichern hat nicht geklappt.',
+        e instanceof Error && e.message ? e.message : t('Speichern hat nicht geklappt.'),
       ),
   });
 
-  const gewaehlteStufe = UPLINK_PROFILE.find((e) => e.name === profil);
+  const stufenHinweis = uplinkProfilHinweis(profil);
 
   /**
    * Die Werte, die gerade im Formular stehen.
@@ -565,12 +574,15 @@ export function ZielKarte({
     : ziel?.input_codec === 'av1' ? 'AV1' : null;
   const eingangsBitrate = typeof ziel?.input_bitrate_kbps === 'number'
     && Number.isFinite(ziel.input_bitrate_kbps) && ziel.input_bitrate_kbps >= 0
-    ? ziel.input_bitrate_kbps.toLocaleString('de-DE', { maximumFractionDigits: 0 }) : null;
-  const eingangsMessung = eingangsCodec !== null || eingangsBitrate !== null
-    ? `Eingang: ${eingangsCodec ?? 'Codec wird ermittelt'} · ${eingangsBitrate !== null
-      ? `Upload Ø ${eingangsBitrate} kbit/s seit Streamstart (Bild und Ton)` : 'Upload wird gemessen'}`
-    : betrieb.state === 'starting' || betrieb.state === 'sending'
-      ? 'Eingang wird gemessen' : 'Eingang: noch kein Messwert';
+    ? ziel.input_bitrate_kbps.toLocaleString(locale, { maximumFractionDigits: 0 }) : null;
+  const eingangsMessung = eingangsCodec !== null && eingangsBitrate !== null
+    ? t('Eingang: {codec} · Upload Ø {bitrate} kbit/s seit Streamstart (Bild und Ton)', { codec: eingangsCodec, bitrate: eingangsBitrate })
+    : eingangsCodec !== null
+      ? t('Eingang: {codec} · Upload wird gemessen', { codec: eingangsCodec })
+      : eingangsBitrate !== null
+        ? t('Eingang: Codec wird ermittelt · Upload Ø {bitrate} kbit/s seit Streamstart (Bild und Ton)', { bitrate: eingangsBitrate })
+        : betrieb.state === 'starting' || betrieb.state === 'sending'
+          ? t('Eingang wird gemessen') : t('Eingang: noch kein Messwert');
   const kartenStatus = betrieb.state;
   const statusText = betrieb.label;
   const liveBestaetigt = betrieb.tone === 'success';
@@ -620,15 +632,19 @@ export function ZielKarte({
             <span className="mt-0.5 block text-xs font-normal text-text-secondary">
               {eingerichtet && kopfWerte
                 ? mehrspurGewaehlt
-                  ? native2kHevcGewaehlt ? 'Gewünscht: Native 2K (HEVC)'
-                    : native2kAv1Gewaehlt ? 'Gewünscht: Native 2K (AV1 Test)'
-                      : 'Gewünscht: Enhanced Broadcasting'
-                  : `Wunsch: ${profilText(kopfWerte) ?? 'noch nicht vollständig'}`
-                : 'Server, Schlüssel und Qualität hinterlegen'}
-              {ungespeichert ? <span className="ml-1.5 text-primary">nicht gespeichert</span> : null}
+                  ? native2kHevcGewaehlt ? t('Gewünscht: Native 2K (HEVC)')
+                    : native2kAv1Gewaehlt ? t('Gewünscht: Native 2K (AV1 Test)')
+                      : t('Gewünscht: Enhanced Broadcasting')
+                  : wunschText(t, profilText(kopfWerte))
+                : t('Server, Schlüssel und Qualität hinterlegen')}
+              {ungespeichert ? <span className="ml-1.5 text-primary">{t('nicht gespeichert')}</span> : null}
             </span>
             <span className="mt-1 block text-xs font-normal text-text-secondary">
-              {betrieb.activeProfile ? `${betrieb.activeProfile.profile_origin === 'running_graph' ? 'Laufendes Encoderprofil' : 'Aktuelle Ausgabe'}: ${profilText(betrieb.activeProfile)}` : 'Aktuelle Ausgabe: noch nicht bestätigt'}
+              {betrieb.activeProfile
+                ? betrieb.activeProfile.profile_origin === 'running_graph'
+                  ? t('Laufendes Encoderprofil: {profil}', { profil: profilText(betrieb.activeProfile) ?? '' })
+                  : t('Aktuelle Ausgabe: {profil}', { profil: profilText(betrieb.activeProfile) ?? '' })
+                : t('Aktuelle Ausgabe: noch nicht bestätigt')}
             </span>
             {eingerichtet ? <span className="mt-1 block text-xs font-normal text-text-secondary">{eingangsMessung}</span> : null}
             {betrieb.reason ? <span className="mt-1 block text-xs font-normal text-warning">{betrieb.reason}</span> : null}
@@ -636,14 +652,14 @@ export function ZielKarte({
           </span>
         </span>
         <span className={`flex min-h-9 items-center gap-2 rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors ${eingerichtet ? 'border-primary/25 bg-primary/10 text-primary' : 'border-primary/35 bg-primary/15 text-primary'}`}>
-          {eingerichtet ? 'Einstellungen' : 'Einrichten'}
+          {eingerichtet ? t('Einstellungen') : t('Einrichten')}
           <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open:rotate-180" />
         </span>
       </summary>
 
       <div
         role="group"
-        aria-label={`${label}-Einstellungen`}
+        aria-label={t('{label}-Einstellungen', { label })}
         className="space-y-4 border-t border-border/60 px-4 py-4"
       >
         {/* Kommen Adresse und Schluessel von der Plattform-Verbindung, sind die
@@ -656,18 +672,18 @@ export function ZielKarte({
             <StreamKeyKnopf
               platform={platform}
               csrfToken={csrfToken ?? null}
-              beschriftung="Schlüssel erneut holen"
+              beschriftung={t('Schlüssel erneut holen')}
               klasse="inline-flex min-h-11 items-center rounded-xl border border-border px-3 py-2 text-xs font-semibold text-white transition-colors hover:border-primary/50 disabled:opacity-60"
             />
             <span className="text-[11px] text-text-secondary">
-              Nötig nur, wenn du deinen Schlüssel bei {label} neu erzeugt hast.
+              {t('Nötig nur, wenn du deinen Schlüssel bei {label} neu erzeugt hast.', { label })}
             </span>
           </div>
         ) : (
           <>
             <div className="space-y-1">
               <label htmlFor={rtmpId} className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
-                Serveradresse von {label}
+                {t('Serveradresse von {label}', { label })}
               </label>
               <input
                 id={rtmpId}
@@ -681,13 +697,13 @@ export function ZielKarte({
               />
               {eingerichtet && (
                 <p className="text-[11px] text-text-secondary">
-                  Adresse ändern geht nur zusammen mit dem Stream-Schlüssel: wir prüfen beide gemeinsam.
+                  {t('Adresse ändern geht nur zusammen mit dem Stream-Schlüssel: wir prüfen beide gemeinsam.')}
                 </p>
               )}
             </div>
             <div className="space-y-1">
               <label htmlFor={keyId} className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
-                Stream-Schlüssel von {label}
+                {t('Stream-Schlüssel von {label}', { label })}
               </label>
               <input
                 id={keyId}
@@ -697,13 +713,13 @@ export function ZielKarte({
                   angefasst();
                 }}
                 type="password"
-                placeholder={eingerichtet ? 'liegt bei uns, leer lassen' : `Stream-Key von ${label}`}
+                placeholder={eingerichtet ? t('liegt bei uns, leer lassen') : t('Stream-Key von {label}', { label })}
                 className="min-h-11 w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white"
               />
               <p className="text-[11px] text-text-secondary">
                 {eingerichtet
-                  ? 'Leer lassen, wenn du nur die Qualität ändern willst. Dein Schlüssel bleibt liegen.'
-                  : 'Wird verschlüsselt gespeichert und nie wieder ausgegeben.'}
+                  ? t('Leer lassen, wenn du nur die Qualität ändern willst. Dein Schlüssel bleibt liegen.')
+                  : t('Wird verschlüsselt gespeichert und nie wieder ausgegeben.')}
               </p>
             </div>
           </>
@@ -716,41 +732,41 @@ export function ZielKarte({
           >
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div>
-                <h3 id={`${basisId}-audio-titel`} className="text-xs font-semibold text-white">Twitch-Ton automatisch getrennt</h3>
+                <h3 id={`${basisId}-audio-titel`} className="text-xs font-semibold text-white">{t('Twitch-Ton automatisch getrennt')}</h3>
                 <p className="mt-1 text-xs text-text-secondary">
-                  Keine Auswahl nötig. Uplink verwendet immer zwei verschiedene OBS-Mischungen.
+                  {t('Keine Auswahl nötig. Uplink verwendet immer zwei verschiedene OBS-Mischungen.')}
                 </p>
               </div>
               <span className="rounded-full border border-primary/35 bg-primary/10 px-2 py-1 text-[11px] font-semibold text-primary">
-                Automatisch
+                {t('Automatisch')}
               </span>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               <div className="rounded-xl border border-border bg-background/70 p-3">
-                <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-text-secondary">OBS-Spur 1</span>
-                <span className="mt-1 block text-sm font-semibold text-white">Livestream</span>
-                <span className="mt-1 block text-xs text-text-secondary">Der Mix, den Zuschauer live hören.</span>
+                <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-text-secondary">{t('OBS-Spur 1')}</span>
+                <span className="mt-1 block text-sm font-semibold text-white">{t('Livestream')}</span>
+                <span className="mt-1 block text-xs text-text-secondary">{t('Der Mix, den Zuschauer live hören.')}</span>
               </div>
               <div className="rounded-xl border border-border bg-background/70 p-3">
-                <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-text-secondary">OBS-Spur 2</span>
-                <span className="mt-1 block text-sm font-semibold text-white">Twitch-VOD</span>
-                <span className="mt-1 block text-xs text-text-secondary">Der getrennte Mix für die Aufzeichnung.</span>
+                <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-text-secondary">{t('OBS-Spur 2')}</span>
+                <span className="mt-1 block text-sm font-semibold text-white">{t('Twitch-VOD')}</span>
+                <span className="mt-1 block text-xs text-text-secondary">{t('Der getrennte Mix für die Aufzeichnung.')}</span>
               </div>
             </div>
             <p className="text-xs text-text-secondary">
-              Fehlt Spur 2, hält Uplink nur den Twitch-Ausgang an. Spur 1 wird nie als VOD-Ersatz kopiert.
+              {t('Fehlt Spur 2, hält Uplink nur den Twitch-Ausgang an. Spur 1 wird nie als VOD-Ersatz kopiert.')}
             </p>
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs" aria-live="polite">
               <span className={ziel?.active_audio_mode === 'separate_vod' && ziel?.output_state === 'sending'
                 ? 'font-semibold text-success' : 'text-text-secondary'}>
                 {ziel?.active_audio_mode === 'separate_vod' && ziel?.output_state === 'sending'
-                  ? 'Live und VOD laufen getrennt.'
+                  ? t('Live und VOD laufen getrennt.')
                   : ziel?.output_state === 'sending'
-                    ? 'Zweite Tonspur noch nicht als laufend bestätigt.'
-                    : 'Wird beim nächsten Stream geprüft.'}
+                    ? t('Zweite Tonspur noch nicht als laufend bestätigt.')
+                    : t('Wird beim nächsten Stream geprüft.')}
               </span>
-              <a href={`${uplinkHelpUrl('obs.html')}#vod`} className="font-semibold text-primary underline underline-offset-2">
-                OBS-Tonspur einrichten
+              <a href={`${uplinkHelpUrl('obs.html', language)}#vod`} className="font-semibold text-primary underline underline-offset-2">
+                {t('OBS-Tonspur einrichten')}
               </a>
             </div>
           </section>
@@ -763,9 +779,9 @@ export function ZielKarte({
         {!mehrspurGewaehlt ? <div className="space-y-2 rounded-xl border border-border/60 bg-background/40 p-3">
           <div className="flex items-center justify-between gap-3">
             <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
-              Gewünschte Ausgabe für {label}
+              {t('Gewünschte Ausgabe für {label}', { label })}
             </span>
-            <div role="group" aria-label={`Qualitätsmodus für ${label}`} className="flex shrink-0 overflow-hidden rounded-lg border border-border text-xs font-semibold">
+            <div role="group" aria-label={t('Qualitätsmodus für {label}', { label })} className="flex shrink-0 overflow-hidden rounded-lg border border-border text-xs font-semibold">
               <button
                 type="button"
                 aria-pressed={modus === 'stufe'}
@@ -775,7 +791,7 @@ export function ZielKarte({
                 }}
                 className={`min-h-11 px-3 py-1 ${modus === 'stufe' ? 'bg-primary text-[#0D0806]' : 'text-text-secondary hover:text-white'}`}
               >
-                Stufe
+                {t('Stufe')}
               </button>
               <button
                 type="button"
@@ -786,14 +802,14 @@ export function ZielKarte({
                 }}
                 className={`min-h-11 px-3 py-1 ${modus === 'manuell' ? 'bg-primary text-[#0D0806]' : 'text-text-secondary hover:text-white'}`}
               >
-                Manuell
+                {t('Manuell')}
               </button>
             </div>
           </div>
 
           {modus === 'stufe' ? (
             <div className="space-y-1">
-              <label htmlFor={profilId} className="sr-only">Qualitätsstufe für {label}</label>
+              <label htmlFor={profilId} className="sr-only">{t('Qualitätsstufe für {label}', { label })}</label>
               <select
                 id={profilId}
                 value={profil}
@@ -809,10 +825,10 @@ export function ZielKarte({
                   </option>
                 ))}
               </select>
-              <p className="text-xs text-text-secondary">{gewaehlteStufe?.hinweis}</p>
-              {gewaehlteStufe?.warnung && platform === 'twitch' ? (
+              <p className="text-xs text-text-secondary">{stufenHinweis.hinweis}</p>
+              {stufenHinweis.warnung && platform === 'twitch' ? (
                 <p className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-                  {gewaehlteStufe.warnung}
+                  {stufenHinweis.warnung}
                 </p>
               ) : null}
             </div>
@@ -820,7 +836,7 @@ export function ZielKarte({
             <div className="space-y-2">
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 <ZahlFeld
-                  label="Breite"
+                  label={t('Breite')}
                   einheit="px"
                   wert={manuell.width}
                   empfehlung={plattformEmpfehlung.width}
@@ -830,7 +846,7 @@ export function ZielKarte({
                   }}
                 />
                 <ZahlFeld
-                  label="Höhe"
+                  label={t('Höhe')}
                   einheit="px"
                   wert={manuell.height}
                   empfehlung={plattformEmpfehlung.height}
@@ -840,7 +856,7 @@ export function ZielKarte({
                   }}
                 />
                 <ZahlFeld
-                  label="Bildrate"
+                  label={t('Bildrate')}
                   einheit="fps"
                   wert={manuell.fps}
                   empfehlung={plattformEmpfehlung.fps}
@@ -850,7 +866,7 @@ export function ZielKarte({
                   }}
                 />
                 <ZahlFeld
-                  label="Bitrate"
+                  label={t('Bitrate')}
                   einheit="kbps"
                   wert={manuell.bitrate_kbps}
                   empfehlung={plattformEmpfehlung.bitrate_kbps}
@@ -862,13 +878,13 @@ export function ZielKarte({
               </div>
               {Object.values(plattformEmpfehlung).every(wert => wert === null) && (
                 <p className="text-xs text-text-secondary">
-                  Eine passende Empfehlung ist noch nicht geprüft. Dafür benötigt Uplink deinen tatsächlichen Eingang und die Freigaben dieses Ziels. Deine gespeicherten Wunschwerte bleiben erhalten.
+                  {t('Eine passende Empfehlung ist noch nicht geprüft. Dafür benötigt Uplink deinen tatsächlichen Eingang und die Freigaben dieses Ziels. Deine gespeicherten Wunschwerte bleiben erhalten.')}
                 </p>
               )}
               <p className="text-xs text-text-secondary">
-                Du speicherst ein Wunschprofil. Der Dienst prüft es anhand deines Eingangs, der verfügbaren Verarbeitung und der Plattformfreigabe.
+                {t('Du speicherst ein Wunschprofil. Der Dienst prüft es anhand deines Eingangs, der verfügbaren Verarbeitung und der Plattformfreigabe.')}
                 {caps?.force_cbr
-                  ? ` ${label} benötigt ein geprüftes Profil mit fester Zielbitrate.`
+                  ? ` ${t('{label} benötigt ein geprüftes Profil mit fester Zielbitrate.', { label })}`
                   : ''}
               </p>
             </div>
@@ -876,10 +892,10 @@ export function ZielKarte({
         </div>
 
         : <p className="text-xs text-text-secondary">{native2kHevcGewaehlt
-          ? 'Native 2K HEVC verlangt 2560×1440@60 HEVC aus OBS und ein gültiges Quellrechner-Hardwareprofil. Die 2K-Spur wird nicht neu encodiert.'
+          ? t('Native 2K HEVC verlangt 2560×1440@60 HEVC aus OBS und ein gültiges Quellrechner-Hardwareprofil. Die 2K-Spur wird nicht neu encodiert.')
           : native2kAv1Gewaehlt
-            ? 'Native 2K AV1 verlangt 2560×1440@60 AV1 aus OBS. Uplink erzeugt daraus die Twitch-HEVC-Topspur; der Modus bleibt auf Servern ohne bestandene Echtzeit-Lastmessung gesperrt.'
-            : 'Die Qualitätsstufen werden aus deinem OBS-Eingang und der Twitch-Freigabe ermittelt. Falls Enhanced nicht verfügbar ist, bleibt dein gespeichertes Einzelprofil erhalten.'}</p>}
+            ? t('Native 2K AV1 verlangt 2560×1440@60 AV1 aus OBS. Uplink erzeugt daraus die Twitch-HEVC-Topspur; der Modus bleibt auf Servern ohne bestandene Echtzeit-Lastmessung gesperrt.')
+            : t('Die Qualitätsstufen werden aus deinem OBS-Eingang und der Twitch-Freigabe ermittelt. Falls Enhanced nicht verfügbar ist, bleibt dein gespeichertes Einzelprofil erhalten.')}</p>}
 
         {fehlertext && <p id={fehlerId} role="alert" className="text-xs text-warning">{fehlertext}</p>}
         {livetext && <p role="status" className="text-xs text-text-secondary">{livetext}</p>}
@@ -893,10 +909,10 @@ export function ZielKarte({
           >
             {speichern.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             {speichern.isPending
-              ? `${label} wird gespeichert`
+              ? t('{label} wird gespeichert', { label })
               : gespeichert
-                ? 'Gespeichert'
-                : `${label} speichern`}
+                ? t('Gespeichert')
+                : t('{label} speichern', { label })}
           </button>
           {eingerichtet && (
             <button
@@ -906,7 +922,7 @@ export function ZielKarte({
               className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border px-4 py-2 text-sm font-semibold text-text-secondary transition-colors hover:text-white disabled:opacity-60"
             >
               <Power className="h-3.5 w-3.5" />
-              {ziel?.enabled ? 'Ziel pausieren' : 'Ziel einschalten'}
+              {ziel?.enabled ? t('Ziel pausieren') : t('Ziel einschalten')}
             </button>
           )}
         </div>
@@ -920,15 +936,17 @@ export function ZielKarte({
                 Clients im JSON stehen. */}
             <span>
               {automatisch
-                ? `Adresse und Stream-Schlüssel kommen von deiner ${label}-Verbindung.`
-                : 'Schlüssel liegt verschlüsselt bei uns.'}
+                ? t('Adresse und Stream-Schlüssel kommen von deiner {label}-Verbindung.', { label })
+                : t('Schlüssel liegt verschlüsselt bei uns.')}
               {bestellt ? (
                 <>
-                  {' '}{mehrspurGewaehlt ? 'Gespeichertes Einzelprofil' : 'Gespeicherter Wunsch'}: {profilText(bestellt)}.
+                  {' '}{mehrspurGewaehlt
+                    ? t('Gespeichertes Einzelprofil: {profil}.', { profil: profilText(bestellt) ?? '' })
+                    : t('Gespeicherter Wunsch: {profil}.', { profil: profilText(bestellt) ?? '' })}
                 </>
               ) : null}
               {ungespeichert ? (
-                <> Im Formular stehen andere Werte, die noch nicht gespeichert sind.</>
+                <> {t('Im Formular stehen andere Werte, die noch nicht gespeichert sind.')}</>
               ) : null}
             </span>
           </div>

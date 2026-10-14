@@ -1,8 +1,55 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chooseUsableVersion } from '../src/components/socialmedia/ai/versions';
-import { failureExplanation } from '../src/components/socialmedia/ai/failure';
+import { failureExplanation, editorErrorExplanation } from '../src/components/socialmedia/ai/failure';
+import { dictionaryFor, translate } from '../src/i18n/dictionary';
+import { SOCIAL_EN } from '../src/i18n/en/social';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
+import { NEUTRAL_TEXTS } from '../tools/i18nCoverageData';
 import { aiPreviewJob } from '../src/components/socialmedia/ai/preview';
+
+test('social presentation dictionaries cover fixed labels and preserve interpolation parameters', () => {
+  const en = dictionaryFor('en');
+  for (const key of Object.keys(SOCIAL_EN)) {
+    assert.ok(Object.hasOwn(en, key), key);
+    const value = en[key];
+    assert.ok(value.length > 0, key);
+    assert.deepEqual([...key.matchAll(/\{(\w+)\}/g)].map((item) => item[1]).sort(), [...value.matchAll(/\{(\w+)\}/g)].map((item) => item[1]).sort());
+  }
+  for (const path of [
+    'ai/AiEditorPanel.tsx', 'ai/EditorOptionsPanel.tsx', 'ai/RevisionControls.tsx', 'ai/failure.ts',
+    'autopilot/import-pool/ImportPoolPanel.tsx', 'autopilot/import-pool/ImportProgress.tsx', 'autopilot/import-pool/presentation.ts',
+  ]) {
+    const source = readFileSync(new URL(`../src/components/socialmedia/${path}`, import.meta.url), 'utf8');
+    const tree = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, path.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+    const visit = (node: ts.Node) => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 't' && node.arguments[0] && ts.isStringLiteral(node.arguments[0])) {
+        const key = node.arguments[0].text;
+        if (/[a-zäöüß]/i.test(key) && key !== 'Clip') assert.ok(Object.hasOwn(en, key), `${path}: ${key}`);
+      }
+      if (ts.isStringLiteral(node) && !NEUTRAL_TEXTS.has(node.text) && (/^[A-ZÄÖÜ]/.test(node.text) || /[ÄÖÜäöüß]/.test(node.text) || /\b(wird|werden|nicht|keine|bitte|für|und|auf|noch|nur|Die|Der)\b/.test(node.text)) && !node.text.startsWith('social-ai') && !node.text.startsWith('studio-')) {
+        assert.ok(Object.hasOwn(en, node.text), `${path}: ${node.text}`);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(tree);
+  }
+});
+
+test('editor action errors translate approved codes and do not expose arbitrary server text', () => {
+  for (const language of ['de', 'en'] as const) {
+    const t = (text: string, params?: Record<string, string | number>) => translate(language, text, params);
+    const error = Object.assign(new Error('admin_required'), { code: 'admin_required' });
+    assert.equal(editorErrorExplanation(error, t), t('Dafür fehlt deinem Zugang die Berechtigung.'));
+    assert.equal(editorErrorExplanation(new Error('opaque-server-text'), t), editorErrorExplanation(null, t));
+    for (const code of ['rendering_failed', 'consent_missing', 'provider_unavailable']) {
+      const key = failureExplanation(code);
+      assert.ok(Object.hasOwn(dictionaryFor('en'), key));
+      assert.equal(editorErrorExplanation(Object.assign(new Error(code), { code }), t), t(key));
+    }
+  }
+});
 
 Object.assign(globalThis, { window: { location: { pathname: '/' } } });
 const { findChannelClip, isSelectableClip } = await import('../src/components/socialmedia/ai/clipLookup');

@@ -1,5 +1,3 @@
-//! FD9-Nachweis mit dem echten Launcher und dem Dashboard-Argumentvertrag.
-//! Ohne Argumente ausschließlich synthetischer Infisical-Server über Unixsocket.
 #[path = "../tests/support/infisical.rs"]
 mod infisical;
 use std::{
@@ -40,7 +38,7 @@ async fn main() -> Result<(), &'static str> {
     let peer = infisical::InfisicalMock::start(&server);
     let descriptor = nix::sys::memfd::memfd_create(
         c"uplink-public-probe",
-        nix::sys::memfd::MemFdCreateFlag::MFD_CLOEXEC,
+        nix::sys::memfd::MFdFlags::MFD_CLOEXEC,
     )
     .map_err(|_| "Test-memfd fehlt.")?;
     let mut credential = std::fs::File::from(descriptor);

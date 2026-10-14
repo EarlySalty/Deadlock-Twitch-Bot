@@ -1,5 +1,6 @@
 import { createPreviewChangelogEntry } from '../preview/fixtures';
 import { PREVIEW_HOME_ROUTE, isPreviewLocalhost, isPreviewModeEnabled } from '../preview/routes';
+import { activeLocale, tr } from '../i18n/dictionary';
 import { buildApiUrl, fetchApi, fetchJson, sanitizeInternalRedirectUrl, withCookieCredentials } from './core';
 
 const INTERNAL_HOME_LOGIN_FALLBACK = isPreviewModeEnabled()
@@ -392,8 +393,11 @@ function mapImpactEntry(
       targetId,
       actorLogin,
       reason: reason || null,
-      summary: summary || reason || (actorLogin ? `Mod: @${actorLogin}` : 'Ban ausgeführt'),
-      title: title || (target ? `Ban gegen @${target}` : 'Ban ausgeführt'),
+      summary:
+        summary ||
+        reason ||
+        (actorLogin ? tr('Mod: @{actor}', { actor: actorLogin }) : tr('Ban ausgeführt')),
+      title: title || (target ? tr('Ban gegen @{target}', { target }) : tr('Ban ausgeführt')),
       description: description || null,
       metric: metric || null,
       severity: normalizedSeverity || 'warning',
@@ -411,8 +415,11 @@ function mapImpactEntry(
       targetId,
       actorLogin,
       reason: reason || null,
-      summary: summary || reason || (actorLogin ? `Unban durch @${actorLogin}` : 'Unban ausgeführt'),
-      title: title || (target ? `Unban für @${target}` : 'Unban ausgeführt'),
+      summary:
+        summary ||
+        reason ||
+        (actorLogin ? tr('Unban durch @{actor}', { actor: actorLogin }) : tr('Unban ausgeführt')),
+      title: title || (target ? tr('Unban für @{target}', { target }) : tr('Unban ausgeführt')),
       description: description || null,
       metric: metric || null,
       severity: normalizedSeverity || 'success',
@@ -432,11 +439,16 @@ function mapImpactEntry(
       actorLogin,
       reason: reason || null,
       summary:
-        summary || reason || (success ? 'Raid erfolgreich ausgeführt' : 'Raid nicht erfolgreich'),
-      title: title || (target ? `Raid zu @${target}` : 'Raid-Aktivität'),
+        summary ||
+        reason ||
+        (success ? tr('Raid erfolgreich ausgeführt') : tr('Raid nicht erfolgreich')),
+      title: title || (target ? tr('Raid zu @{target}', { target }) : tr('Raid-Aktivität')),
       description: description || null,
       metric:
-        metric || (viewers !== undefined ? `${viewers.toLocaleString('de-DE')} Viewer` : null),
+        metric ||
+        (viewers !== undefined
+          ? tr('{count} Viewer', { count: viewers.toLocaleString(activeLocale()) })
+          : null),
       viewerCount: viewers ?? null,
       success,
       severity: success ? 'info' : 'warning',
@@ -453,8 +465,8 @@ function mapImpactEntry(
     targetId,
     actorLogin,
     reason: reason || null,
-    summary: summary || description || reason || 'Neues Bot-Ereignis',
-    title: title || 'Bot Update',
+    summary: summary || description || reason || tr('Neues Bot-Ereignis'),
+    title: title || tr('Bot Update'),
     description: description || null,
     metric: metric || null,
     viewerCount: viewers ?? null,
@@ -511,8 +523,6 @@ export async function fetchInternalHome(streamer?: string | null): Promise<Inter
     ? sanitizeInternalRedirectUrl(rawDiscordConnectUrl, INTERNAL_HOME_LOGIN_FALLBACK)
     : null;
   const steamConnected = Boolean(steam.connected);
-  // Server-generierte, absolute externe https-URL (Community-Link) — NICHT durch
-  // sanitizeInternalRedirectUrl (nur interne Pfade) schicken, sonst verworfen.
   const steamConnectUrl =
     typeof steam.connect_url === 'string' && steam.connect_url.startsWith('https://')
       ? steam.connect_url
@@ -530,7 +540,7 @@ export async function fetchInternalHome(streamer?: string | null): Promise<Inter
       eventType: 'note',
       statusLabel: '[INFO]',
       summary: note,
-      title: 'Hinweis',
+      title: tr('Hinweis'),
       description: note,
       severity: 'info',
     });
@@ -552,9 +562,9 @@ export async function fetchInternalHome(streamer?: string | null): Promise<Inter
 
   return {
     greeting: profile.display_name
-      ? `Willkommen zurück, ${profile.display_name}`
+      ? tr('Willkommen zurück, {name}', { name: profile.display_name })
       : profile.twitch_login
-        ? `Willkommen zurück, ${profile.twitch_login}`
+        ? tr('Willkommen zurück, {name}', { name: profile.twitch_login })
         : null,
     twitchLogin: profile.twitch_login || null,
     displayName: profile.display_name || profile.twitch_login || null,
@@ -583,8 +593,11 @@ export async function fetchInternalHome(streamer?: string | null): Promise<Inter
     },
     raid: {
       active: String(raidStatus.state || '').toLowerCase() === 'active',
-      statusText: String(raidStatus.state || '').toLowerCase() === 'active' ? 'Auto-Raid: Aktiv' : 'Auto-Raid: Unbekannt',
-      note: raidStatus.read_only ? 'Raid-Status ist schreibgeschützt (read-only).' : null,
+      statusText:
+        String(raidStatus.state || '').toLowerCase() === 'active'
+          ? tr('Auto-Raid: Aktiv')
+          : tr('Auto-Raid: Unbekannt'),
+      note: raidStatus.read_only ? tr('Raid-Status ist schreibgeschützt (read-only).') : null,
       lastEventAt: impactEvents[0]?.timestamp || null,
     },
     kpis30d: {

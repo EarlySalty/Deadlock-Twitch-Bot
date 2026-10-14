@@ -102,8 +102,7 @@ async fn get_invite_url(pool: &PgPool, channel_login: &str) -> Result<Option<Str
 }
 
 #[cfg(test)]
-#[path = "../../../../test-support/postgres.rs"]
-mod test_postgres;
+use crate::test_postgres;
 
 #[cfg(test)]
 mod tests {

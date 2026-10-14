@@ -83,11 +83,7 @@ function mockFetch(status: number, body: unknown) {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   globalThis.fetch = (async (url: string, init: RequestInit) => {
     calls.push({ url, init });
-    return {
-      ok: status >= 200 && status < 300,
-      status,
-      json: async () => body,
-    };
+    return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
   }) as unknown as typeof fetch;
   return calls;
 }
@@ -157,8 +153,8 @@ test('Werbemanager-UI nutzt die zweispaltige Konfiguration-und-Live-Struktur ohn
     /xl:grid-cols-\[minmax\(0,13fr\)_minmax\(20rem,7fr\)\]/,
     'Desktop muss Konfiguration und Live-Status im 65-zu-35-Layout trennen',
   );
-  assert.match(adManagerSectionSource, />Konfiguration</);
-  assert.match(adManagerSectionSource, />Live-Status</);
+  assert.match(adManagerSectionSource, />\{t\('Konfiguration'\)\}</);
+  assert.match(adManagerSectionSource, />\{t\('Live-Status'\)\}</);
   assert.match(adManagerSectionSource, /role="radiogroup"/);
   assert.doesNotMatch(
     adManagerSectionSource,

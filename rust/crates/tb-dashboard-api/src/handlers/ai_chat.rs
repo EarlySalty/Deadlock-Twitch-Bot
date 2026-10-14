@@ -79,11 +79,19 @@ fn history_messages(session: &ChatSession) -> Vec<Value> {
 }
 
 /// LLM-Dispatch des Folgechats (Python `_call_ai_chat`). Fehler als String.
-struct ChatCallError { known_rejection: bool }
+struct ChatCallError {
+    known_rejection: bool,
+}
 impl From<tb_llm::LlmError> for ChatCallError {
     fn from(error: tb_llm::LlmError) -> Self {
-        let known_rejection = matches!(error, tb_llm::LlmError::Unavailable(_) |
-            tb_llm::LlmError::Http { status: 400 | 401 | 403 | 404 | 409 | 422 | 429, .. });
+        let known_rejection = matches!(
+            error,
+            tb_llm::LlmError::Unavailable(_)
+                | tb_llm::LlmError::Http {
+                    status: 400 | 401 | 403 | 404 | 409 | 422 | 429,
+                    ..
+                }
+        );
         Self { known_rejection }
     }
 }
@@ -92,7 +100,8 @@ impl From<tb_engagement::llm_chat::GenerateError> for ChatCallError {
         use tb_engagement::llm_chat::GenerateError;
         let known_rejection = match error {
             GenerateError::Unavailable(_) => true,
-            GenerateError::Http(text) => text.strip_prefix("LLM-Aufruf fehlgeschlagen: HTTP ")
+            GenerateError::Http(text) => text
+                .strip_prefix("LLM-Aufruf fehlgeschlagen: HTTP ")
                 .and_then(|rest| rest.split_whitespace().next())
                 .and_then(|status| status.trim_end_matches(':').parse::<u16>().ok())
                 .is_some_and(|status| matches!(status, 400 | 401 | 403 | 404 | 409 | 422 | 429)),
@@ -179,7 +188,9 @@ pub(crate) async fn ai_chat_handler(
             json!({ "error": "streamer required" }),
         );
     }
-    if let Err(response) = crate::auth::streamer_scope::resolve_streamer_scope(&auth, Some(requested_streamer), true) {
+    if let Err(response) =
+        crate::auth::streamer_scope::resolve_streamer_scope(&auth, Some(requested_streamer), true)
+    {
         return response;
     }
     let analysis_id = match parse_analysis_id(payload.get("analysis_id")) {
@@ -204,9 +215,15 @@ pub(crate) async fn ai_chat_handler(
         );
     }
 
-    let (streamer, twitch_user_id) = match crate::auth::streamer_scope::resolve_analysis_target(&pool, &auth, Some(requested_streamer)).await {
+    let (streamer, twitch_user_id) = match crate::auth::streamer_scope::resolve_analysis_target(
+        &pool,
+        &auth,
+        Some(requested_streamer),
+    )
+    .await
+    {
         Ok(target) => target,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     // Plan-Gate für Nicht-Admin/Localhost.
@@ -231,14 +248,31 @@ pub(crate) async fn ai_chat_handler(
 
     let mut turn = match store.reserve(&twitch_user_id, analysis_id).await {
         Ok(turn) => turn,
-        Err(StoreError::NotFound) => return json_err(StatusCode::NOT_FOUND, json!({"error":"chat_session_not_found"})),
-        Err(StoreError::Busy) => return json_err(StatusCode::CONFLICT, json!({"error":"chat_turn_in_progress"})),
-        Err(StoreError::Limit { reset }) => return json_err(StatusCode::TOO_MANY_REQUESTS,
-            json!({"error":"follow_up_limit_reached", "followUpsRemaining":0,
-                "retry_after":reset.map(|at| (at - Utc::now().timestamp()).max(0)), "rateLimitReset":reset})),
+        Err(StoreError::NotFound) => {
+            return json_err(
+                StatusCode::NOT_FOUND,
+                json!({"error":"chat_session_not_found"}),
+            )
+        }
+        Err(StoreError::Busy) => {
+            return json_err(
+                StatusCode::CONFLICT,
+                json!({"error":"chat_turn_in_progress"}),
+            )
+        }
+        Err(StoreError::Limit { reset }) => {
+            return json_err(
+                StatusCode::TOO_MANY_REQUESTS,
+                json!({"error":"follow_up_limit_reached", "followUpsRemaining":0,
+                "retry_after":reset.map(|at| (at - Utc::now().timestamp()).max(0)), "rateLimitReset":reset}),
+            )
+        }
         Err(error) => {
             tracing::error!(%error, "Analyse-Unterhaltung nicht verfügbar");
-            return json_err(StatusCode::SERVICE_UNAVAILABLE, json!({"error":"analysis_store_unavailable"}));
+            return json_err(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"analysis_store_unavailable"}),
+            );
         }
     };
     let model = turn.session.model.clone();
@@ -247,15 +281,24 @@ pub(crate) async fn ai_chat_handler(
         Ok(_) => {
             if let Err(error) = turn.fail(false).await {
                 tracing::error!(%error, "Analyse-Anfragestatus konnte nicht gespeichert werden");
-                return json_err(StatusCode::SERVICE_UNAVAILABLE, json!({"error":"analysis_store_unavailable"}));
+                return json_err(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({"error":"analysis_store_unavailable"}),
+                );
             }
-            return json_err(StatusCode::BAD_GATEWAY, json!({"error":"KI-Chat konnte nicht geladen werden.", "code":"ai_chat_failed", "outcomeUnknown":true}));
+            return json_err(
+                StatusCode::BAD_GATEWAY,
+                json!({"error":"KI-Chat konnte nicht geladen werden.", "code":"ai_chat_failed", "outcomeUnknown":true}),
+            );
         }
         Err(error) => {
             let known_rejection = error.known_rejection;
             if let Err(error) = turn.fail(known_rejection).await {
                 tracing::error!(%error, "Analyse-Anfragestatus konnte nicht gespeichert werden");
-                return json_err(StatusCode::SERVICE_UNAVAILABLE, json!({"error":"analysis_store_unavailable"}));
+                return json_err(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({"error":"analysis_store_unavailable"}),
+                );
             }
             return json_err(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -267,7 +310,10 @@ pub(crate) async fn ai_chat_handler(
         Ok(remaining) => remaining,
         Err(error) => {
             tracing::error!(%error, "Antwort und Analyse-Kontingent konnten nicht bestätigt werden");
-            return json_err(StatusCode::SERVICE_UNAVAILABLE, json!({"error":"analysis_store_unavailable"}));
+            return json_err(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"analysis_store_unavailable"}),
+            );
         }
     };
 
@@ -288,8 +334,12 @@ mod tests {
         let database = postgres::TestPostgres::start().await;
         sqlx::raw_sql("CREATE TABLE ai_analyses(id BIGINT PRIMARY KEY); INSERT INTO ai_analyses VALUES (7); CREATE TABLE twitch_streamers(twitch_login TEXT, twitch_user_id TEXT); INSERT INTO twitch_streamers VALUES ('nani','42'),('t6inprogstreamer','42'),('t6uctxstreamer','42'),('t6chatnosession','42'),('t6chat429','42');")
             .execute(&database.pool).await.unwrap();
-        sqlx::raw_sql(include_str!("../../../../migrations/20261003010000_ai_chat_persistenz.sql"))
-            .execute(&database.pool).await.unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/20261003010000_ai_chat_persistenz.sql"
+        ))
+        .execute(&database.pool)
+        .await
+        .unwrap();
         database
     }
 
@@ -347,9 +397,14 @@ mod tests {
     async fn none_auth_401() {
         let database = make_pool("t_ai_chat_401").await;
         let pool = database.pool.clone();
-        let resp = ai_chat_handler(DashboardAuthLevel::None, State(pool.clone()), Extension(AiStore::new(&pool)), "{}".into())
-            .await
-            .into_response();
+        let resp = ai_chat_handler(
+            DashboardAuthLevel::None,
+            State(pool.clone()),
+            Extension(AiStore::new(&pool)),
+            "{}".into(),
+        )
+        .await
+        .into_response();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -359,7 +414,8 @@ mod tests {
         let pool = database.pool.clone();
         let resp = ai_chat_handler(
             DashboardAuthLevel::admin(),
-            State(pool.clone()), Extension(AiStore::new(&pool)),
+            State(pool.clone()),
+            Extension(AiStore::new(&pool)),
             "nicht json".into(),
         )
         .await
@@ -374,7 +430,8 @@ mod tests {
         // analysis_id fehlt.
         let resp = ai_chat_handler(
             DashboardAuthLevel::admin(),
-            State(pool.clone()), Extension(AiStore::new(&pool)),
+            State(pool.clone()),
+            Extension(AiStore::new(&pool)),
             json!({"streamer": "nani", "message": "hi"}).to_string(),
         )
         .await
@@ -392,7 +449,8 @@ mod tests {
                 twitch_user_id: "42".into(),
                 display_name: "Owner".into(),
             },
-            State(pool.clone()), Extension(AiStore::new(&pool)),
+            State(pool.clone()),
+            Extension(AiStore::new(&pool)),
             json!({"streamer": "other", "analysis_id": 7, "message": "hi"}).to_string(),
         )
         .await
@@ -407,7 +465,8 @@ mod tests {
         // Localhost (kein Plan-Gate), gültige Felder, aber keine Session.
         let resp = ai_chat_handler(
             DashboardAuthLevel::admin(),
-            State(pool.clone()), Extension(AiStore::new(&pool)),
+            State(pool.clone()),
+            Extension(AiStore::new(&pool)),
             json!({"streamer": "t6chatnosession", "analysis_id": 999999, "message": "hi"})
                 .to_string(),
         )
@@ -425,13 +484,21 @@ mod tests {
         s.streamer = "t6chat429".into();
         s.follow_up_count = 3;
         let store = AiStore::new(&pool);
-        let mut guard = crate::ai_store::SessionGuard::acquire(&store.lock_pool, "test-save").await.unwrap();
-        crate::ai_store::save_session(&mut guard, "42", &s).await.unwrap();
-        sqlx::query("UPDATE twitch_ai_chat_sessions SET follow_up_count = 3").execute(&pool).await.unwrap();
+        let mut guard = crate::ai_store::SessionGuard::acquire(&store.lock_pool, "test-save")
+            .await
+            .unwrap();
+        crate::ai_store::save_session(&mut guard, "42", &s)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE twitch_ai_chat_sessions SET follow_up_count = 3")
+            .execute(&pool)
+            .await
+            .unwrap();
         drop(guard);
         let resp = ai_chat_handler(
             DashboardAuthLevel::admin(),
-            State(pool.clone()), Extension(AiStore::new(&pool)),
+            State(pool.clone()),
+            Extension(AiStore::new(&pool)),
             json!({"streamer": "t6chat429", "analysis_id": 7, "message": "hi"}).to_string(),
         )
         .await

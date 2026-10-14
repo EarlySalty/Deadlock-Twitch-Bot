@@ -1662,13 +1662,15 @@ async fn main() {
         Some(helix_client) => match build_telemetry_sub_auth(pool.clone(), helix_client.clone()) {
             Some((token_provider, raid_auth)) => ad_manager_wiring::spawn(
                 &supervisor,
-                pool.clone(),
-                helix_client,
-                token_provider,
-                raid_auth,
-                ad_manager_chat_api.clone(),
-                settings.internal_api.token.clone(),
-                raid_ad_vorlauf.clone(),
+                ad_manager_wiring::WorkerDependencies {
+                    pool: pool.clone(),
+                    helix: helix_client,
+                    tokens: token_provider,
+                    auth: raid_auth,
+                    chat_api: ad_manager_chat_api.clone(),
+                    internal_token: settings.internal_api.token.clone(),
+                    raid_vorlauf: raid_ad_vorlauf.clone(),
+                },
             ),
             None => tracing::error!(
                 "Werbemanager wurde nicht gestartet: Broadcaster-Tokenzugriff fehlt"

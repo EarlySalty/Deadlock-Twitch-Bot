@@ -1,11 +1,3 @@
-//! Handler für `GET /twitch/api/v2/ai/analysis`.
-//!
-//! Port von `api_ai.py:_api_v2_ai_analysis`. Erstellt eine tiefe, daten-basierte
-//! KI-Analyse (10-Punkte-Plan) via Claude Opus (Admin/Localhost ODER ein Plan mit
-//! dem konsolidierten `analytics`-Flag). Verdrahtet die
-//! Bausteine aus tb-analytics (collect_ai_context/build_prompt/parse) + die
-//! Bestehende KI-Aufrufe und den persistenten Analyse-Folgechat.
-
 use std::time::Duration;
 
 use axum::{
@@ -47,33 +39,32 @@ fn json_err(status: StatusCode, body: Value) -> Response {
     (status, Json(body)).into_response()
 }
 
-/// `GET /twitch/api/v2/ai/analysis?streamer=&days=&game_filter=&user_context=`
 pub(crate) async fn ai_analysis_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
     Extension(store): Extension<AiStore>,
     Query(params): Query<AnalysisQuery>,
 ) -> impl IntoResponse {
-    // _require_v2_auth: jede gültige Auth genügt, None → 401.
     if matches!(auth, DashboardAuthLevel::None) {
         return crate::auth::unauthorized_v2_response();
     }
 
-    // IDOR-Guard: Partner werden auf den eigenen Login geklemmt (Cross-Account →
-    // 403); Admin/Localhost dürfen `streamer` frei wählen.
-    let (streamer, twitch_user_id) =
-        match crate::auth::streamer_scope::resolve_analysis_target(&pool, &auth, params.streamer.as_deref()).await {
-            Ok(target) => target,
-            Err(resp) => return resp,
-        };
-    // days: parse-or-30, clamp 7..3650 (Python int()-ValueError → 30).
+    let (streamer, twitch_user_id) = match crate::auth::streamer_scope::resolve_analysis_target(
+        &pool,
+        &auth,
+        params.streamer.as_deref(),
+    )
+    .await
+    {
+        Ok(target) => target,
+        Err(resp) => return *resp,
+    };
     let days = params
         .days
         .as_deref()
         .and_then(|d| d.trim().parse::<i64>().ok())
         .map(|d| d.clamp(7, 3650))
         .unwrap_or(30);
-    // game_filter: deadlock|all, sonst all.
     let gf = params
         .game_filter
         .as_deref()
@@ -94,15 +85,12 @@ pub(crate) async fn ai_analysis_handler(
         );
     }
 
-    // Modellwahl: Localhost/Admin → Opus; sonst Plan des Streamers.
     let ai_model: &str = if matches!(auth, DashboardAuthLevel::Admin { .. }) {
         AI_MODEL_OPUS
     } else {
         match plan_ai_model(&pool, &streamer).await {
             Ok(Some(m)) => m,
             Ok(None) => {
-                // Eine Quelle fuer den 403-Body: derselbe Aufbau wie bei allen
-                // anderen Plan-Sperren (vorher stand hier die alte Plan-Liste fest).
                 return crate::auth::stufe_required_response(tb_analytics::stufe::Stufe::Plus);
             }
             Err(e) => {
@@ -115,21 +103,37 @@ pub(crate) async fn ai_analysis_handler(
         }
     };
 
-    let mut guard = match SessionGuard::acquire(&store.lock_pool, &format!("ai-analysis:{twitch_user_id}")).await {
-        Ok(guard) => guard,
-        Err(StoreError::Busy) => return json_err(StatusCode::CONFLICT, json!({"error":"analysis_in_progress"})),
-        Err(error) => {
-            tracing::error!(%error, "Analyse-Speicher nicht verfügbar");
-            return json_err(StatusCode::SERVICE_UNAVAILABLE, json!({"error":"analysis_store_unavailable"}));
-        }
-    };
-    run_ai_analysis(&pool, &mut guard, &twitch_user_id, &streamer, days, game_filter, ai_model, &user_context).await
+    let mut guard =
+        match SessionGuard::acquire(&store.lock_pool, &format!("ai-analysis:{twitch_user_id}"))
+            .await
+        {
+            Ok(guard) => guard,
+            Err(StoreError::Busy) => {
+                return json_err(
+                    StatusCode::CONFLICT,
+                    json!({"error":"analysis_in_progress"}),
+                )
+            }
+            Err(error) => {
+                tracing::error!(%error, "Analyse-Speicher nicht verfügbar");
+                return json_err(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({"error":"analysis_store_unavailable"}),
+                );
+            }
+        };
+    run_ai_analysis(
+        &pool,
+        &mut guard,
+        (&twitch_user_id, &streamer),
+        days,
+        game_filter,
+        ai_model,
+        &user_context,
+    )
+    .await
 }
 
-/// LLM-Dispatch (Python `_call_ai_analysis`): Opus ueber den zentralen Eingang
-/// `tb_llm::complete` mit Use-Case `ai_analysis` (max_tokens 60000), KI
-/// via raw_completion (temp 0.5, max_tokens 60000). Fehler als String
-/// (Aufrufer prüft „credit balance is too low").
 async fn call_ai_analysis(ai_model: &str, prompt: &str) -> Result<Vec<Value>, String> {
     if ai_model == AI_MODEL_OPUS {
         let response = tb_llm::complete(
@@ -162,8 +166,7 @@ async fn call_ai_analysis(ai_model: &str, prompt: &str) -> Result<Vec<Value>, St
 async fn run_ai_analysis(
     pool: &PgPool,
     guard: &mut SessionGuard,
-    twitch_user_id: &str,
-    streamer: &str,
+    (twitch_user_id, streamer): (&str, &str),
     days: i64,
     game_filter: &str,
     ai_model: &str,
@@ -171,7 +174,6 @@ async fn run_ai_analysis(
 ) -> Response {
     let since = Utc::now() - chrono::Duration::days(days);
 
-    // Step 1: Kontext sammeln.
     let ctx = match collect_ai_context(pool, streamer, since, game_filter).await {
         Ok(c) => c,
         Err(e) => {
@@ -183,7 +185,6 @@ async fn run_ai_analysis(
         }
     };
 
-    // Step 2: Modell aufrufen.
     let prompt = build_ai_analysis_prompt(streamer, days, &ctx, game_filter, user_context);
     let points = match call_ai_analysis(ai_model, &prompt).await {
         Ok(p) => p,
@@ -206,29 +207,52 @@ async fn run_ai_analysis(
     let points_value = Value::Array(points);
     let summary = ctx.get("summary").cloned().unwrap_or_else(|| json!({}));
 
-    // Beide Schreibpfade müssen vor der Erfolgsmeldung abgeschlossen sein.
-    let record_id = match save_analysis(pool, streamer, days, model_name_for(ai_model), generated_at, &summary, &points_value).await {
+    let record_id = match save_analysis(
+        pool,
+        streamer,
+        days,
+        model_name_for(ai_model),
+        generated_at,
+        &summary,
+        &points_value,
+    )
+    .await
+    {
         Some(id) => id,
-        None => return json_err(StatusCode::SERVICE_UNAVAILABLE, json!({"error":"analysis_store_unavailable"})),
+        None => {
+            return json_err(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"analysis_store_unavailable"}),
+            )
+        }
     };
     let session = ChatSession {
-                model: ai_model.to_string(),
-                streamer: streamer.to_string(),
-                analysis_id: record_id,
-                days,
-                game_filter: game_filter.to_string(),
-                user_context: user_context.to_string(),
-                ctx: ctx.clone(),
-                points: points_value.clone(),
-                history: Vec::new(),
-                follow_up_count: 0,
-                created_at: generated_at,
+        model: ai_model.to_string(),
+        streamer: streamer.to_string(),
+        analysis_id: record_id,
+        days,
+        game_filter: game_filter.to_string(),
+        user_context: user_context.to_string(),
+        ctx: ctx.clone(),
+        points: points_value.clone(),
+        history: Vec::new(),
+        follow_up_count: 0,
+        created_at: generated_at,
     };
-    let (follow_ups_remaining, _) = match crate::ai_store::save_session(guard, twitch_user_id, &session).await {
+    let (follow_ups_remaining, _) = match crate::ai_store::save_session(
+        guard,
+        twitch_user_id,
+        &session,
+    )
+    .await
+    {
         Ok(remaining) => remaining,
         Err(error) => {
             tracing::error!(%error, "Analyse und Unterhaltung konnten nicht gespeichert werden");
-            return json_err(StatusCode::SERVICE_UNAVAILABLE, json!({"error":"analysis_store_unavailable"}));
+            return json_err(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"analysis_store_unavailable"}),
+            );
         }
     };
     let record_id = session.analysis_id;
@@ -257,8 +281,12 @@ mod tests {
         let database = postgres::TestPostgres::start().await;
         sqlx::raw_sql("CREATE TABLE ai_analyses(id BIGINT PRIMARY KEY); INSERT INTO ai_analyses VALUES (7); CREATE TABLE twitch_streamers(twitch_login TEXT, twitch_user_id TEXT); INSERT INTO twitch_streamers VALUES ('nani','42'),('t6inprogstreamer','42'),('t6uctxstreamer','42'),('t6chatnosession','42'),('t6chat429','42');")
             .execute(&database.pool).await.unwrap();
-        sqlx::raw_sql(include_str!("../../../../migrations/20261003010000_ai_chat_persistenz.sql"))
-            .execute(&database.pool).await.unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/20261003010000_ai_chat_persistenz.sql"
+        ))
+        .execute(&database.pool)
+        .await
+        .unwrap();
         database
     }
 
@@ -277,7 +305,8 @@ mod tests {
         let pool = database.pool.clone();
         let resp = ai_analysis_handler(
             DashboardAuthLevel::None,
-            State(pool.clone()), Extension(AiStore::new(&pool)),
+            State(pool.clone()),
+            Extension(AiStore::new(&pool)),
             Query(query(Some("nani"), None)),
         )
         .await
@@ -291,7 +320,8 @@ mod tests {
         let pool = database.pool.clone();
         let resp = ai_analysis_handler(
             DashboardAuthLevel::admin(),
-            State(pool.clone()), Extension(AiStore::new(&pool)),
+            State(pool.clone()),
+            Extension(AiStore::new(&pool)),
             Query(query(None, None)),
         )
         .await
@@ -304,10 +334,13 @@ mod tests {
         let database = make_pool("t_ai_an_409").await;
         let pool = database.pool.clone();
         let store = AiStore::new(&pool);
-        let guard = SessionGuard::acquire(&store.lock_pool, "ai-analysis:42").await.unwrap();
+        let guard = SessionGuard::acquire(&store.lock_pool, "ai-analysis:42")
+            .await
+            .unwrap();
         let resp = ai_analysis_handler(
             DashboardAuthLevel::admin(),
-            State(pool.clone()), Extension(AiStore::new(&pool)),
+            State(pool.clone()),
+            Extension(AiStore::new(&pool)),
             Query(query(Some("t6inprogstreamer"), None)),
         )
         .await
@@ -324,14 +357,14 @@ mod tests {
         }
     }
 
-    // IDOR-Guard: Partner mit fremdem ?streamer= → 403 (vor jedem DB-/LLM-Zugriff).
     #[tokio::test]
     async fn partner_fremder_streamer_403() {
         let database = make_pool("t_ai_an_idor").await;
         let pool = database.pool.clone();
         let resp = ai_analysis_handler(
             partner("earlysalty"),
-            State(pool.clone()), Extension(AiStore::new(&pool)),
+            State(pool.clone()),
+            Extension(AiStore::new(&pool)),
             Query(query(Some("ismile_e"), None)),
         )
         .await
@@ -346,7 +379,8 @@ mod tests {
         let long = "x".repeat(2001);
         let resp = ai_analysis_handler(
             DashboardAuthLevel::admin(),
-            State(pool.clone()), Extension(AiStore::new(&pool)),
+            State(pool.clone()),
+            Extension(AiStore::new(&pool)),
             Query(query(Some("t6uctxstreamer"), Some(&long))),
         )
         .await

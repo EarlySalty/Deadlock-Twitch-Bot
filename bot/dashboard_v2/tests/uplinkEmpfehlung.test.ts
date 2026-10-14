@@ -2,6 +2,8 @@ import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { normalisiereCaps } from '../src/uplinkEmpfehlung';
+import { fetchUplinkHelp, uplinkHelpUrl, UPLINK_HELP_PAGES } from '../src/uplinkHelp';
+import { obsZugang } from '../src/uplinkBetrieb';
 
 test('normalisiereCaps liest die neuen Empfehlungsfelder', () => {
   const caps = normalisiereCaps({
@@ -23,7 +25,6 @@ test('normalisiereCaps liest die neuen Empfehlungsfelder', () => {
 });
 
 test('alte Obergrenzen sind keine geprüfte Profilempfehlung', () => {
-  // Eine Obergrenze allein kennt weder Quelle, Codec noch Konto.
   const caps = normalisiereCaps({
     platform: 'kick',
     max_width: 1920,
@@ -44,14 +45,34 @@ test('fehlende oder unbrauchbare Werte werden zu null statt zu 0', () => {
   assert.equal(caps.force_cbr, false);
 });
 
-test('OBS-Hilfe trennt Uploadbudget und geprüfte Plattformausgabe', () => {
-  const page = readFileSync(new URL('../src/pages/Uplink.tsx', import.meta.url), 'utf8');
+test('OBS-Hilfe trennt Uploadbudget und geprüfte Plattformausgabe', async (t) => {
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+    const page = UPLINK_HELP_PAGES.find((entry) => uplinkHelpUrl(entry.file) === String(input));
+    assert.ok(page);
+    return new Response(readFileSync(new URL(`../public/uplink/${page.file}`, import.meta.url), 'utf8'));
+  });
+  const pages = await fetchUplinkHelp();
+  assert.equal(pages.length, UPLINK_HELP_PAGES.length);
+  const embedded = pages.find((page) => page.file === 'obs.html');
+  assert.ok(embedded);
+  assert.match(embedded.html, /^<div class="uplink-doc" data-doc="obs">/);
   const help = readFileSync(new URL('../public/uplink/obs.html', import.meta.url), 'utf8');
-  for (const content of [page, help]) {
+  for (const content of [embedded.html, help]) {
     assert.match(content, /CBR/);
     assert.match(content, /AV1/);
     assert.doesNotMatch(content, /obsBitrateEmpfehlung|VBR|SRT-Adresse|Streamschlüssel leer lassen/);
   }
+});
+
+test('OBS-Zugang weist ASCII-Steuerzeichen zurück und erhält gültige Werte unverändert', () => {
+  const server = 'rtmps://synthetic.example/live';
+  for (let code = 0; code <= 0x7f; code += 1) {
+    const key = `synthetic${String.fromCharCode(code)}input`;
+    const actual = obsZugang({ service_status: 'ready', public_ingest_url: server, ingest_key: key });
+    assert.deepEqual(actual, code <= 0x20 || code === 0x7f ? null : { server, key }, `ASCII ${code}`);
+  }
+  const key = `synthetic-ä-中-${String.fromCodePoint(0x1f3ae)}`;
+  assert.deepEqual(obsZugang({ service_status: 'ready', public_ingest_url: server, ingest_key: key }), { server, key });
 });
 
 test('ausdrücklich ungeprüfte Empfehlungen übernehmen keine alten Maximalwerte', () => {

@@ -1,3 +1,5 @@
+import { tr } from '../../i18n/dictionary';
+
 export interface HochkantRahmen {
   x: number;
   y: number;
@@ -247,60 +249,60 @@ export function hochkantPruefen(
   const fehler: string[] = [];
 
   if (!imBild(layout.gameplay)) {
-    fehler.push('Der Gameplay-Rahmen liegt nicht vollständig im Bild.');
+    fehler.push(tr('Der Gameplay-Rahmen liegt nicht vollständig im Bild.'));
   }
   if (kanteZuKlein(layout.gameplay)) {
-    fehler.push('Der Gameplay-Rahmen unterschreitet die Mindestkante von fünf Prozent.');
+    fehler.push(tr('Der Gameplay-Rahmen unterschreitet die Mindestkante von fünf Prozent.'));
   }
   if (pixelUeberlauf(layout.gameplay, quelle.breite, quelle.hoehe)) {
-    fehler.push('Der Gameplay-Rahmen überschreitet nach der Pixelrundung das Bild.');
+    fehler.push(tr('Der Gameplay-Rahmen überschreitet nach der Pixelrundung das Bild.'));
   }
 
   if (layout.kamera) {
     if (!imBild(layout.kamera)) {
-      fehler.push('Der Kamera-Rahmen liegt nicht vollständig im Bild.');
+      fehler.push(tr('Der Kamera-Rahmen liegt nicht vollständig im Bild.'));
     }
     if (kanteZuKlein(layout.kamera)) {
-      fehler.push('Der Kamera-Rahmen unterschreitet die Mindestkante von fünf Prozent.');
+      fehler.push(tr('Der Kamera-Rahmen unterschreitet die Mindestkante von fünf Prozent.'));
     }
     if (pixelUeberlauf(layout.kamera, quelle.breite, quelle.hoehe)) {
-      fehler.push('Der Kamera-Rahmen überschreitet nach der Pixelrundung das Bild.');
+      fehler.push(tr('Der Kamera-Rahmen überschreitet nach der Pixelrundung das Bild.'));
     }
   }
 
   const ratios = zielverhaeltnisse(layout, ziel);
   if (!nahBeiVerhaeltnis(rahmenVerhaeltnis(layout.gameplay, quelle), ratios.gameplay)) {
-    fehler.push('Das Gameplay-Seitenverhältnis passt nicht zum Zielbild.');
+    fehler.push(tr('Das Gameplay-Seitenverhältnis passt nicht zum Zielbild.'));
   }
 
   if (layout.modus === 'nur_gameplay') {
     if (layout.kamera || layout.kameraBand || layout.kameraBox) {
-      fehler.push('Kamera aus, aber Kameradaten gesetzt.');
+      fehler.push(tr('Kamera aus, aber Kameradaten gesetzt.'));
     }
   }
 
   if (layout.modus === 'gestapelt') {
     if (!layout.kamera) {
-      fehler.push('Der gestapelte Modus braucht eine Kamera.');
+      fehler.push(tr('Der gestapelte Modus braucht eine Kamera.'));
     }
     if (layout.kameraBox) {
-      fehler.push('Das Kamerafenster gehört nur in den Bild-im-Bild-Modus.');
+      fehler.push(tr('Das Kamerafenster gehört nur in den Bild-im-Bild-Modus.'));
     }
     if (!layout.kameraBand) {
-      fehler.push('Im gestapelten Modus fehlt das Kameraband.');
+      fehler.push(tr('Im gestapelten Modus fehlt das Kameraband.'));
     } else {
       if (layout.kameraBand.hoehe < 0.1 - 1e-9 || layout.kameraBand.hoehe > 0.5 + 1e-9) {
-        fehler.push('Die Bandhöhe muss zwischen zehn und fünfzig Prozent liegen.');
+        fehler.push(tr('Die Bandhöhe muss zwischen zehn und fünfzig Prozent liegen.'));
       }
       if (layout.kameraBand.lage === 'oben') {
-        fehler.push('Kamera oben unterstützt Uplink noch nicht.');
+        fehler.push(tr('Kamera oben unterstützt Uplink noch nicht.'));
       }
       if (geradeGroesse(layout.kameraBand.hoehe * ziel.hoehe) > ziel.hoehe - 2) {
-        fehler.push('Das Kameraband ist zu hoch für das Zielbild.');
+        fehler.push(tr('Das Kameraband ist zu hoch für das Zielbild.'));
       }
       if (layout.kamera && ratios.kamera != null) {
         if (!nahBeiVerhaeltnis(rahmenVerhaeltnis(layout.kamera, quelle), ratios.kamera)) {
-          fehler.push('Das Kamera-Seitenverhältnis passt nicht zum Kameraband.');
+          fehler.push(tr('Das Kamera-Seitenverhältnis passt nicht zum Kameraband.'));
         }
       }
     }
@@ -308,26 +310,26 @@ export function hochkantPruefen(
 
   if (layout.modus === 'bild_im_bild') {
     if (!layout.kamera) {
-      fehler.push('Der Bild-im-Bild-Modus braucht eine Kamera.');
+      fehler.push(tr('Der Bild-im-Bild-Modus braucht eine Kamera.'));
     }
     if (layout.kameraBand) {
-      fehler.push('Das Kameraband gehört nur in den gestapelten Modus.');
+      fehler.push(tr('Das Kameraband gehört nur in den gestapelten Modus.'));
     }
     if (!layout.kameraBox) {
-      fehler.push('Im Bild-im-Bild-Modus fehlt das Kamerafenster.');
+      fehler.push(tr('Im Bild-im-Bild-Modus fehlt das Kamerafenster.'));
     } else {
       if (!imBild(layout.kameraBox)) {
-        fehler.push('Das Kamerafenster liegt nicht vollständig im Zielbild.');
+        fehler.push(tr('Das Kamerafenster liegt nicht vollständig im Zielbild.'));
       }
       if (kanteZuKlein(layout.kameraBox)) {
-        fehler.push('Das Kamerafenster unterschreitet die Mindestkante von fünf Prozent.');
+        fehler.push(tr('Das Kamerafenster unterschreitet die Mindestkante von fünf Prozent.'));
       }
       if (pixelUeberlauf(layout.kameraBox, ziel.breite, ziel.hoehe)) {
-        fehler.push('Das Kamerafenster überschreitet nach der Pixelrundung das Zielbild.');
+        fehler.push(tr('Das Kamerafenster überschreitet nach der Pixelrundung das Zielbild.'));
       }
       if (layout.kamera) {
         if (!nahBeiVerhaeltnis(verhaeltnisImZielraum(layout.kameraBox, ziel), rahmenVerhaeltnis(layout.kamera, quelle))) {
-          fehler.push('Das Kamerafenster hat ein anderes Seitenverhältnis als die Kamera.');
+          fehler.push(tr('Das Kamerafenster hat ein anderes Seitenverhältnis als die Kamera.'));
         }
       }
     }

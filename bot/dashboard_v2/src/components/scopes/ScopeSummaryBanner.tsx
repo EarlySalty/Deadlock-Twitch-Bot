@@ -1,4 +1,5 @@
 import { AlertTriangle, CheckCircle2, ChevronRight, ShieldQuestion } from 'lucide-react';
+import { useT } from '@/context/LanguageContext';
 import { useScopes } from '@/hooks/useScopes';
 
 interface ScopeSummaryBannerProps {
@@ -6,6 +7,7 @@ interface ScopeSummaryBannerProps {
 }
 
 export function ScopeSummaryBanner({ onOpenTab }: ScopeSummaryBannerProps) {
+  const t = useT();
   const { summary } = useScopes();
   const preview = summary.missing.slice(0, 3);
 
@@ -18,16 +20,16 @@ export function ScopeSummaryBanner({ onOpenTab }: ScopeSummaryBannerProps) {
           </div>
           <div className="space-y-1">
             <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-text-secondary">
-              <span>OAuth Scope Check</span>
+              <span>{t('OAuth Scope Check')}</span>
               {summary.criticalMissing.length > 0 && (
                 <span className="rounded-full bg-danger/10 px-2 py-0.5 text-[10px] font-semibold text-danger">
-                  kritisch
+                  {t('kritisch')}
                 </span>
               )}
             </div>
-            <h3 className="text-lg font-semibold text-white">Autorisation im Blick</h3>
+            <h3 className="text-lg font-semibold text-white">{t('Autorisation im Blick')}</h3>
             <p className="text-sm text-text-secondary">
-              Schnelltest für Partner: Welche Scopes fehlen dem aktuellen Token?
+              {t('Schnelltest für Partner: Welche Scopes fehlen dem aktuellen Token?')}
             </p>
           </div>
         </div>
@@ -36,8 +38,8 @@ export function ScopeSummaryBanner({ onOpenTab }: ScopeSummaryBannerProps) {
           <div className="flex items-center gap-2 rounded-lg border border-border bg-black/30 px-3 py-2">
             <div className="text-lg font-bold text-white">{summary.granted}</div>
             <div className="text-xs leading-tight text-text-secondary">
-              <div>von {summary.total}</div>
-              <div>Scopes aktiv</div>
+              <div>{t('von {total}', { total: summary.total })}</div>
+              <div>{t('Scopes aktiv')}</div>
             </div>
           </div>
 
@@ -46,7 +48,7 @@ export function ScopeSummaryBanner({ onOpenTab }: ScopeSummaryBannerProps) {
             onClick={onOpenTab}
             className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-bg transition hover:bg-accent/80"
           >
-            Details
+            {t('Details')}
             <ChevronRight className="h-4 w-4" />
           </button>
         </div>
@@ -56,13 +58,13 @@ export function ScopeSummaryBanner({ onOpenTab }: ScopeSummaryBannerProps) {
         {summary.missing.length === 0 ? (
           <span className="flex items-center gap-1 rounded-full bg-success/10 px-3 py-1 text-success">
             <CheckCircle2 className="h-4 w-4" />
-            Alle Scopes sind autorisiert.
+            {t('Alle Scopes sind autorisiert.')}
           </span>
         ) : (
           <>
             <span className="flex items-center gap-1 rounded-full bg-warning/10 px-3 py-1 text-warning">
               <AlertTriangle className="h-4 w-4" />
-              {summary.missing.length} fehlen
+              {t('{count} fehlen', { count: summary.missing.length })}
             </span>
             {preview.map(scope => (
               <span

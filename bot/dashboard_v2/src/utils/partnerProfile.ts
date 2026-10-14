@@ -1,3 +1,4 @@
+
 const berlin = new Intl.DateTimeFormat('sv-SE', {
   timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit',
   hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
@@ -8,14 +9,12 @@ export function berlinInput(iso: string): string {
   const parts = Object.fromEntries(berlin.formatToParts(at).map(p => [p.type, p.value]));
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
 }
-/** No silent DST correction and no dependence on the browser's timezone. */
 export function fromBerlinInput(value: string, original?: string): string {
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) throw new Error('Bitte Datum und Uhrzeit vollständig eintragen.');
   if (original && berlinInput(original) === value) return original;
   const nominal = Date.parse(`${value}:00Z`);
   if (!Number.isFinite(nominal)) throw new Error('Ungültiges Datum.');
   const matches: string[] = [];
-  // All modern Berlin offsets are resolved through Intl, not a fixed UTC+1/2.
   for (let minutes = -180; minutes <= 180; minutes += 15) {
     const iso = new Date(nominal + minutes * 60_000).toISOString();
     if (berlinInput(iso) === value) matches.push(iso);

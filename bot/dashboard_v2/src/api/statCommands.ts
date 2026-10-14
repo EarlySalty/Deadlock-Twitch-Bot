@@ -1,3 +1,5 @@
+import { withLanguageHeader } from './languageHeader';
+
 export const STAT_COMMANDS = [
   { command: 'rank', label: '!rank', description: 'Dein aktueller Rang.' },
   { command: 'wins', label: '!wins', description: 'Deine Siege.' },
@@ -14,7 +16,10 @@ export type StatCommandSettings = Record<StatCommand, boolean>;
 const BASE = '/twitch/api/v2/streamer/stat-command-settings';
 
 async function fetchJson<T>(init: RequestInit = {}): Promise<T> {
-  const response = await fetch(BASE, { credentials: 'same-origin', ...init });
+  const response = await fetch(
+    BASE,
+    withLanguageHeader(BASE, { credentials: 'same-origin', ...init })
+  );
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return await response.json() as T;
 }

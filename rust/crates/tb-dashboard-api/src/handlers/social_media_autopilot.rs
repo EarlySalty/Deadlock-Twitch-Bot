@@ -39,9 +39,7 @@ async fn target(
     let scope = super::require_sm_access(auth, pool, requested)
         .await
         .map_err(Box::new)?;
-    crate::auth::streamer_scope::resolve_clip_upload_target(pool, auth, scope.as_deref())
-        .await
-        .map_err(Box::new)
+    crate::auth::streamer_scope::resolve_clip_upload_target(pool, auth, scope.as_deref()).await
 }
 
 fn error_response(error: PoolError) -> Response {

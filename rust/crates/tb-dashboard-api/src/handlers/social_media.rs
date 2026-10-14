@@ -997,7 +997,7 @@ pub async fn upload_clip_handler(
         .await
         {
             Ok(target) => target,
-            Err(error) => return error,
+            Err(error) => return *error,
         };
     // Partner-Freigabe-Guard: nach Streamer-Auflösung, vor Wirkung.
     if let Some(guard_response) = check_partner_access_guard(&pool, &auth, &streamer_login).await {
@@ -1450,7 +1450,7 @@ pub async fn fetch_clips_handler(
     .await
     {
         Ok(target) => target,
-        Err(error) => return error,
+        Err(error) => return *error,
     };
     let mut limit = body.limit.filter(|n| *n > 0).unwrap_or(20).clamp(1, 100) as u32;
 
@@ -1573,7 +1573,7 @@ pub async fn batch_upload_handler(
     .await
     {
         Ok(target) => target,
-        Err(error) => return error,
+        Err(error) => return *error,
     };
     let stats = batch_upload_all_new(&pool, &id, &platforms, apply_default_template).await;
     Json(json!({
@@ -2935,7 +2935,7 @@ pub async fn reports_run_handler(
         .await
         {
             Ok(target) => Some(target),
-            Err(error) => return error,
+            Err(error) => return *error,
         }
     } else {
         None
@@ -2990,7 +2990,7 @@ pub async fn reports_list_handler(
         .await
         {
             Ok(target) => Some(target),
-            Err(error) => return error,
+            Err(error) => return *error,
         }
     } else {
         None
@@ -3656,7 +3656,8 @@ pub(crate) async fn required_streamer_scope(
         auth,
         requested_twitch_user_id,
     )
-    .await?;
+    .await
+    .map_err(|response| *response)?;
     Ok(id)
 }
 
@@ -3678,6 +3679,7 @@ async fn required_platform_scope(
         query.twitch_user_id.as_deref(),
     )
     .await
+    .map_err(|response| *response)
     .map(Some)
 }
 

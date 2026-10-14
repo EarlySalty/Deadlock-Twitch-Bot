@@ -9,15 +9,15 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import {
   UplinkYouTubeLive,
-  entwurfAus,
-  naechsterEntwurf,
-  speichernErlaubt,
   type UplinkYouTubeLiveProps,
   type YouTubeLiveEntwurf,
   type YouTubeLiveEinstellungen,
   type YouTubeLiveStatus,
   type YouTubeLiveZustand,
 } from '../src/components/uplink/UplinkYouTubeLive';
+import { entwurfAus, naechsterEntwurf, speichernErlaubt } from '../src/components/uplink/youtubeLiveEntwurf';
+import { LanguageProvider } from '../src/context/LanguageContext';
+import { LANGUAGE_STORAGE_KEY, setActiveLanguage, translate } from '../src/i18n/dictionary';
 
 const QUELLE = readFileSync(
   join(import.meta.dirname, '../src/components/uplink/UplinkYouTubeLive.tsx'),
@@ -32,8 +32,8 @@ function basis(): UplinkYouTubeLiveProps {
     status: null,
     beschaeftigt: false,
     fehlerText: null,
-    onSpeichern: () => {},
-    onBeenden: () => {},
+    onSpeichern: () => { },
+    onBeenden: () => { },
   };
 }
 
@@ -163,6 +163,29 @@ test('die Sichtbarkeit hat genau drei Radios mit den erwarteten Werten', () => {
   assert.match(html, /value="private"/);
   assert.match(html, /value="unlisted"/);
   assert.match(html, /value="public"/);
+});
+
+test('Livestream-Aktion und Anleitung teilen den Kontext ohne den Admin-Ausstieg zu ändern', (t) => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  t.after(() => {
+    if (descriptor) Object.defineProperty(globalThis, 'window', descriptor);
+    else Reflect.deleteProperty(globalThis, 'window');
+    setActiveLanguage('de');
+  });
+  for (const language of ['de', 'en'] as const) {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { localStorage: { getItem: (key: string) => key === LANGUAGE_STORAGE_KEY ? language : null } },
+    });
+    const html = renderToStaticMarkup(
+      <LanguageProvider><UplinkYouTubeLive {...basis()} status={status('live')} /></LanguageProvider>,
+    );
+    const label = html.match(/<button[^>]*data-knopf="beenden"[^>]*>([^<]+)<\/button>/)?.[1];
+    assert.ok(label);
+    assert.equal(label, translate(language, language === 'de' ? 'Beenden' : 'Livestream beenden'));
+    assert.ok(html.includes(`&quot;${label}&quot;`));
+    if (language === 'en') assert.notEqual(label, translate(language, 'Beenden'));
+  }
 });
 
 test('entwurfAus setzt die Anfangswerte und übernimmt gespeicherte Werte', () => {

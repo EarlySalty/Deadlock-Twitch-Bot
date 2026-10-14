@@ -12,6 +12,8 @@ import {
 } from 'recharts';
 import type { ViewerTimelinePoint } from '@/types/analytics';
 import { formatNumber } from '@/utils/formatters';
+import { useT } from '../../context/LanguageContext';
+import { tr } from '../../i18n/dictionary';
 
 interface ViewerTimelineChartProps {
   data: ViewerTimelinePoint[];
@@ -19,11 +21,11 @@ interface ViewerTimelineChartProps {
 }
 
 export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerTimelineChartProps) {
+  const t = useT();
   if (!data || data.length === 0) {
     return null;
   }
 
-  // Format timestamp for display
   const chartData = data.map(point => ({
     ...point,
     label: formatTimestamp(point.timestamp),
@@ -38,13 +40,13 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
           <p className="text-white font-medium mb-2">{label}</p>
           <div className="space-y-1 text-sm">
             <p className="text-accent">
-              Avg: <span className="text-white">{formatNumber(payload[0]?.value)}</span>
+              {t('Avg:')} <span className="text-white">{formatNumber(payload[0]?.value)}</span>
             </p>
             <p className="text-accent">
-              Peak: <span className="text-white">{formatNumber(payload[1]?.value)}</span>
+              {t('Peak:')} <span className="text-white">{formatNumber(payload[1]?.value)}</span>
             </p>
             <p className="text-text-secondary">
-              Min: <span className="text-white">{formatNumber(payload[2]?.value)}</span>
+              {t('Min:')} <span className="text-white">{formatNumber(payload[2]?.value)}</span>
             </p>
           </div>
         </div>
@@ -97,7 +99,7 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
               height={36}
               formatter={(value: string) => (
                 <span className="text-text-secondary text-sm">
-                  {value === 'avgViewers' ? 'Avg' : value === 'peakViewers' ? 'Peak' : 'Min'}
+                  {value === 'avgViewers' ? t('Avg') : value === 'peakViewers' ? 'Peak' : t('Min')}
                 </span>
               )}
             />
@@ -144,15 +146,13 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
 }
 
 function formatTimestamp(ts: string): string {
-  // Timestamps look like "2025-12-06 20:05" or "2025-12-06 20:00"
   if (!ts) return '';
   const parts = ts.split(' ');
   if (parts.length >= 2) {
     const datePart = parts[0];
     const timePart = parts[1];
-    // Show "DD.MM HH:MM"
     const [, m, d] = datePart.split('-');
-    return `${d}.${m} ${timePart}`;
+    return tr('{day}.{month} {time}', { day: d, month: m, time: timePart });
   }
   return ts;
 }

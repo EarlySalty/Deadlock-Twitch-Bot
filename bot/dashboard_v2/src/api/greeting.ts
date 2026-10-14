@@ -1,3 +1,5 @@
+import { withLanguageHeader } from './languageHeader';
+
 export interface GreetingSettingsResponse {
   greeting_reply_enabled: boolean;
 }
@@ -10,34 +12,33 @@ export interface GreetingUpdateResponse {
 const BASE = '/twitch/api/v2/streamer/greeting-settings';
 
 async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
-    credentials: 'same-origin',
-    ...init,
-  });
+  const response = await fetch(
+    path,
+    withLanguageHeader(path, { credentials: 'same-origin', ...init })
+  );
   if (!response.ok) {
-    let message = `HTTP ${response.status}`;
-    try {
-      const body = await response.json();
-      if (body?.error) message = String(body.error);
-      else if (body?.message) message = String(body.message);
-    } catch {
-      // keep default message
-    }
+    const body = (await response.json().catch(() => null)) as {
+      error?: unknown;
+      message?: unknown;
+    } | null;
+    const message = body?.error
+      ? String(body.error)
+      : body?.message
+        ? String(body.message)
+        : `HTTP ${response.status}`;
     throw new Error(message);
   }
   return (await response.json()) as T;
 }
 
-export async function fetchGreetingSettings(
-  streamer?: string,
-): Promise<GreetingSettingsResponse> {
+export async function fetchGreetingSettings(streamer?: string): Promise<GreetingSettingsResponse> {
   const qs = streamer ? `?streamer=${encodeURIComponent(streamer)}` : '';
   return fetchJson(`${BASE}${qs}`);
 }
 
 export async function toggleGreeting(
   enabled: boolean,
-  streamer?: string,
+  streamer?: string
 ): Promise<GreetingUpdateResponse> {
   const qs = streamer ? `?streamer=${encodeURIComponent(streamer)}` : '';
   return fetchJson(`${BASE}${qs}`, {

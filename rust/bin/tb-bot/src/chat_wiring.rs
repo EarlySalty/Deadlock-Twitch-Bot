@@ -4278,8 +4278,7 @@ mod db_tests {
 }
 
 #[cfg(test)]
-#[path = "../../../test-support/postgres.rs"]
-pub(crate) mod invite_test_postgres;
+use crate::role_test_postgres as invite_test_postgres;
 
 #[cfg(test)]
 mod invite_offline_tests {

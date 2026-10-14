@@ -467,7 +467,7 @@ pub async fn claim_handler(
     // sind überschreibbar.
     let streamer_user_id = match verified_claim_target(&streamer_login).await {
         Ok(id) => id,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     match claim_streamer_verified_at(
         &pool,
@@ -837,7 +837,7 @@ enum ClaimStatus {
     AlreadyClaimed,
 }
 
-async fn verified_claim_target(login: &str) -> Result<String, Response> {
+async fn verified_claim_target(login: &str) -> Result<String, Box<Response>> {
     let client = crate::uplink_config::runtime()
         .ok()
         .and_then(|runtime| runtime.helix.as_ref())
@@ -852,10 +852,10 @@ async fn verified_claim_target(login: &str) -> Result<String, Response> {
         .await
         .map_err(|_| json_error(StatusCode::SERVICE_UNAVAILABLE, "twitch_unavailable"))?;
     if !response.status().is_success() {
-        return Err(json_error(
+        return Err(Box::new(json_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "twitch_unavailable",
-        ));
+        )));
     }
     let body: Value = response
         .json()
@@ -879,6 +879,7 @@ async fn verified_claim_target(login: &str) -> Result<String, Response> {
         })
         .map(str::to_owned)
         .ok_or_else(|| json_error(StatusCode::UNPROCESSABLE_ENTITY, "streamer_not_found"))
+        .map_err(Box::new)
 }
 
 #[cfg(test)]

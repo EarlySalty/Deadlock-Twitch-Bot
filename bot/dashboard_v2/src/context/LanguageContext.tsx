@@ -10,29 +10,21 @@ import {
 import {
   DEFAULT_LANGUAGE,
   LOCALES,
-  readStoredLanguage,
+  readInitialLanguage,
+  setActiveLanguage,
   storeLanguage,
   translate,
   type Language,
   type TranslateParams,
-  // Relativ statt ueber den @-Alias: die Node-Tests laufen ohne Vite und
-  // koennen den Alias nicht aufloesen.
 } from '../i18n/dictionary';
 
 export interface LanguageContextValue {
   language: Language;
   setLanguage: (next: Language) => void;
-  /** Uebersetzt einen deutschen Text; ohne Eintrag bleibt er auf Deutsch. */
   t: (text: string, params?: TranslateParams) => string;
-  /** Passendes Locale fuer toLocaleString & Co. */
   locale: string;
 }
 
-/**
- * Der Default ist bewusst kein `null`: `useLanguage()` darf auch ausserhalb
- * des Providers nichts kaputt machen. Seiten, die noch nicht umgestellt sind
- * oder in Tests einzeln gerendert werden, laufen dann auf Deutsch weiter.
- */
 const LanguageContext = createContext<LanguageContextValue>({
   language: DEFAULT_LANGUAGE,
   setLanguage: () => {},
@@ -40,15 +32,23 @@ const LanguageContext = createContext<LanguageContextValue>({
   locale: LOCALES[DEFAULT_LANGUAGE],
 });
 
-export function LanguageProvider({ children }: { children: ReactNode }) {
-  const [language, setLanguageState] = useState<Language>(() => readStoredLanguage());
+export function LanguageProvider({
+  children,
+  onLanguageChange,
+}: {
+  children: ReactNode;
+  onLanguageChange?: (next: Language) => void;
+}) {
+  const [language, setLanguageState] = useState<Language>(() => readInitialLanguage());
+  setActiveLanguage(language);
 
   const setLanguage = useCallback((next: Language) => {
+    setActiveLanguage(next);
     setLanguageState(next);
     storeLanguage(next);
-  }, []);
+    onLanguageChange?.(next);
+  }, [onLanguageChange]);
 
-  // Screenreader und Browser-Uebersetzer richten sich nach dem lang-Attribut.
   useEffect(() => {
     document.documentElement.lang = language;
   }, [language]);
@@ -70,7 +70,6 @@ export function useLanguage(): LanguageContextValue {
   return useContext(LanguageContext);
 }
 
-/** Kurzform fuer Komponenten, die nur uebersetzen wollen. */
 export function useT(): LanguageContextValue['t'] {
   return useContext(LanguageContext).t;
 }
