@@ -1,6 +1,6 @@
 # Register (max 30 lines)
 
-Main 637da79b1 (+D6, W3, not yet deployed). Deployed 0a695264d (D2, D-core, O, D3a, W1, D3b, D4, D5, W2; G0 reverted). LIVE 0a695264d (deployed 16:3x, --pruefen ok). Caddy dead-lock.de splice applied (backup Caddyfile.before-dead-lock-en-20261014); /twitch English verified. Reporting: directly to the user.
+Main 0a2ce1e11 (+D6, W3, D7, O2; release building via ops/twitch-release-build, not yet deployed). Deployed 0a695264d (D2, D-core, O, D3a, W1, D3b, D4, D5, W2; G0 reverted). LIVE 0a695264d (deployed 16:3x, --pruefen ok). Caddy dead-lock.de splice applied (backup Caddyfile.before-dead-lock-en-20261014); /twitch English verified. Reporting: directly to the user.
 
 | Pkg | Agent | Worktree | Branch | HEAD | Status |
 |---|---|---|---|---|---|
@@ -13,10 +13,10 @@ Main 637da79b1 (+D6, W3, not yet deployed). Deployed 0a695264d (D2, D-core, O, D
 | D3b charts | done | - | deleted | 213cebc63 | merged 8d9124a38 |
 | D4 pages | done | - | deleted | 475d59525 | merged 27376adcc |
 | D5 Community | done | - | deleted | 8f0306806 | merged 8677271c1 |
-| H1 hub fix | round 4 fixer | ttb-opus-h1-20261014 | feat/opus-h1-discord-hub-20261014 | fae3a3599 | BLOCK round 3 (retries, role race, empty 200, ratelimit reservations); round 4 running |
+| H1 hub fix | round 5 fixer | ttb-opus-h1-20261014 | feat/opus-h1-discord-hub-20261014 | a29616569 | BLOCK round 4 (ratelimit window reservations); round 5 = last round |
 | D6 pages | done | - | deleted | aa9f3dbfd | merged 0a10934d6 |
-| O2 website on dead-lock.de | a9de02eb730b9e607 | ttb-opus-o2-20261014 | feat/opus-o2-dead-lock-website-20261014 | 5ac2da8ac | gate running; integrator applies Caddy |
-| D7 pages | a8308e50820c0717e | ttb-opus-d7-20261014 | feat/opus-d7-pages-english-20261014 | 50eff72ea | ALLOW but conflicts with D6; worker merging origin/main, re-gate |
+| O2 website on dead-lock.de | done | - | deleted | 5221e8b3b | merged 0a2ce1e11; Caddy splice /tmp/ttb-opus-o2-Caddyfile pending after deploy |
+| D7 pages | done | - | deleted | f9c0f1303 | merged 1775f131c (in 0a2ce1e11) |
 | W2 sub-sites | done | - | deleted | 80c078327 | merged 0a695264d (faq, vergleich, onboarding, clips) |
 | W3 sub-sites | done | - | deleted | 607a00eb7 | merged 637da79b1 |
 
