@@ -13,10 +13,11 @@ import {
   buildTwitchBotAuthUrl,
 } from "@/data/externalLinks";
 import { ONBOARDING_VISUAL_STEPS } from "@/data/twitchKnowledgeBase";
+import { tx } from "@/i18n/locale";
 
 const NAV_LINKS = [
   { label: "Features", href: "#features" },
-  { label: "Frag den Bot", href: "#frag-bot" },
+  { label: tx("Frag den Bot", "Ask the bot"), href: "#frag-bot" },
   { label: "FAQ", href: "#faq-hinweis" },
 ];
 
@@ -45,7 +46,7 @@ function NetworkVisualization() {
         animate={{ opacity: 1 }}
         transition={{ delay: 0.3 }}
       >
-        DU
+        {tx("DU", "YOU")}
       </motion.text>
 
       {/* Surrounding nodes */}
@@ -170,11 +171,18 @@ function RaidDiagram() {
 
 // Checklist diagram for the fourth step
 function ChecklistVisual() {
-  const items = [
-    "Kanal verbunden",
-    "Auto-Raid aktiv",
-    "Dashboard offen",
-  ];
+  const items = tx(
+    [
+      "Kanal verbunden",
+      "Auto-Raid aktiv",
+      "Dashboard offen",
+    ],
+    [
+      "Channel connected",
+      "Auto-raid active",
+      "Dashboard open",
+    ],
+  );
 
   return (
     <div className="flex flex-col gap-3 w-full px-4">
@@ -216,10 +224,10 @@ export function StreamerOnboardingPage() {
       <PublicInfoHeader
         navLinks={NAV_LINKS}
         primaryAction={{
-          label: "Bot für deinen Kanal aktivieren",
+          label: tx("Bot für deinen Kanal aktivieren", "Activate the bot for your channel"),
           href: onboardingAuthUrl,
         }}
-        secondaryAction={{ label: "Zur FAQ", href: TWITCH_FAQ_URL, variant: "ghost" }}
+        secondaryAction={{ label: tx("Zur FAQ", "Read the FAQ"), href: TWITCH_FAQ_URL, variant: "ghost" }}
       />
 
       <main className="relative z-10">
@@ -232,7 +240,10 @@ export function StreamerOnboardingPage() {
               transition={{ duration: 0.5 }}
               className="inline-flex rounded-full border border-border bg-[rgba(44, 35, 24,0.76)] px-4 py-1.5 text-sm text-accent"
             >
-              Streamer Onboarding auf deutsche-deadlock-community.de
+              {tx(
+                "Streamer Onboarding auf deutsche-deadlock-community.de",
+                "Streamer onboarding on dead-lock.de",
+              )}
             </motion.div>
 
             <motion.h1
@@ -241,10 +252,10 @@ export function StreamerOnboardingPage() {
               transition={{ duration: 0.6, delay: 0.1 }}
               className="mt-6 text-4xl font-bold leading-tight text-text-primary md:text-5xl lg:text-6xl"
             >
-              Werde Teil des
+              {tx("Werde Teil des", "Join the")}
               <br />
               <span className="bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-                Deadlock-Partnernetzwerks
+                {tx("Deadlock-Partnernetzwerks", "Deadlock Partner Network")}
               </span>
             </motion.h1>
 
@@ -254,8 +265,16 @@ export function StreamerOnboardingPage() {
               transition={{ duration: 0.6, delay: 0.2 }}
               className="mt-6 text-lg leading-relaxed text-text-secondary md:text-xl"
             >
-              Aktiviere den Bot und vernetze dich mit 30+ Deadlock-Streamern.
-              Auto-Raids, Dashboard und mehr.
+              {tx(
+                <>
+                  Aktiviere den Bot und vernetze dich mit 30+ Deadlock-Streamern.
+                  Auto-Raids, Dashboard und mehr.
+                </>,
+                <>
+                  Activate the bot and connect with 30+ Deadlock streamers.
+                  Auto-raids, dashboard and more.
+                </>,
+              )}
             </motion.p>
 
             <motion.div
@@ -268,7 +287,7 @@ export function StreamerOnboardingPage() {
                 href={onboardingAuthUrl}
                 className="gradient-accent inline-flex items-center gap-2 rounded-xl px-8 py-4 font-semibold no-underline transition-all duration-200 hover:brightness-110"
               >
-                Jetzt Kanal verbinden
+                {tx("Jetzt Kanal verbinden", "Connect your channel now")}
                 <ArrowRight size={18} />
               </a>
             </motion.div>
@@ -326,14 +345,19 @@ export function StreamerOnboardingPage() {
               <div className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
                 <div>
                   <p className="text-sm uppercase tracking-[0.16em] text-primary">
-                    FAQ und Support
+                    {tx("FAQ und Support", "FAQ and support")}
                   </p>
                   <h2 className="mt-4 text-4xl font-bold text-text-primary md:text-5xl">
-                    Alle Details findest du in der FAQ.
+                    {tx("Alle Details findest du in der FAQ.", "You'll find all the details in the FAQ.")}
                   </h2>
                   <p className="mt-5 max-w-2xl text-base leading-relaxed text-text-secondary">
-                    Auto-Raid, Dashboard, Discord und weitere Funktionen -
-                    alles erklärt.
+                    {tx(
+                      <>
+                        Auto-Raid, Dashboard, Discord und weitere Funktionen -
+                        alles erklärt.
+                      </>,
+                      <>Auto-raid, dashboard, Discord and more - all explained.</>,
+                    )}
                   </p>
                 </div>
 
@@ -342,14 +366,14 @@ export function StreamerOnboardingPage() {
                     href={TWITCH_FAQ_URL}
                     className="gradient-accent inline-flex items-center justify-between gap-4 rounded-2xl px-6 py-5 font-semibold no-underline transition-all duration-200 hover:brightness-110"
                   >
-                    <span>Komplette FAQ</span>
+                    <span>{tx("Komplette FAQ", "Full FAQ")}</span>
                     <ArrowRight size={18} />
                   </a>
                   <a
                     href={DISCORD_INVITE_URL}
                     className="inline-flex items-center justify-between gap-4 rounded-2xl border border-border px-6 py-5 font-semibold text-text-primary no-underline transition-colors duration-200 hover:border-border-hover hover:bg-white/5"
                   >
-                    <span>Discord und Support</span>
+                    <span>{tx("Discord und Support", "Discord and support")}</span>
                     <LifeBuoy size={18} />
                   </a>
                 </div>

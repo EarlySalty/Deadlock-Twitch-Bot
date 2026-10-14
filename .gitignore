@@ -27,6 +27,7 @@ bot/admin_dashboard/node_modules
 bot/dashboard_v2/node_modules
 website/node_modules/
 website/dist/
+website/dist-en/
 website/.vite/
 
 # Datenbanken

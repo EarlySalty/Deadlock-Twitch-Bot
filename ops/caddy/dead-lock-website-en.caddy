@@ -1,0 +1,34 @@
+# Englische Website fuer dead-lock.de (Plan 4.10, Paket W).
+#
+# Import im eigenen dead-lock.de-Block aus Paket O, an der Stelle, an der der
+# Hauptdomain-Block heute /streamer*, /twitch/onboarding* und /twitch/faq* aus
+# website/dist bedient. Gleiche Reihenfolge, gleiche Partnerprofil-Regel, nur
+# der Ordner ist website/dist-en (`npm run build:en`).
+#
+# DEADLOCK_WEBSITE_EN_DIR zeigt auf den absoluten Pfad von website/dist-en.
+# Die Hauptdomain bleibt unveraendert.
+
+handle /twitch/onboarding* {
+    root * {$DEADLOCK_WEBSITE_EN_DIR}/onboarding
+    uri strip_prefix /twitch/onboarding
+    try_files {path} /index.html
+    file_server
+}
+
+handle /twitch/faq* {
+    root * {$DEADLOCK_WEBSITE_EN_DIR}/faq
+    uri strip_prefix /twitch/faq
+    try_files {path} /index.html
+    file_server
+}
+
+handle /streamer* {
+    import partner-profiles.caddy
+    root * {$DEADLOCK_WEBSITE_EN_DIR}
+    uri strip_prefix /streamer
+    # Nur Landing, Onboarding und FAQ sind uebersetzt. Alle anderen deutschen
+    # Unterseiten (vergleich, vertriebler, v1, v3, clips ...) gibt es hier nicht;
+    # unbekannte Pfade fallen auf die englische Landing zurueck.
+    try_files {path} {path}/index.html /index.html
+    file_server
+}

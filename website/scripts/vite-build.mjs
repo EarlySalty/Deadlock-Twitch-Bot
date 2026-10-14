@@ -6,6 +6,9 @@ import { renderToString } from "react-dom/server";
 // ponytail: vite-prerender-plugin leaves an open handle after a successful Vite build.
 await build();
 
+// Die englische Fassung hat keine v3-Seite; nur der deutsche Build rendert sie vor.
+if (process.env.VITE_SITE_LANG === "en") process.exit(0);
+
 const server = await createServer({
   server: { middlewareMode: true },
   appType: "custom",

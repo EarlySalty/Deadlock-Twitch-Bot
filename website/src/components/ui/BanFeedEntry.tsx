@@ -1,18 +1,19 @@
 import { motion } from "framer-motion";
 import type { BanEntry } from "@/hooks/useBanFeed";
+import { SITE_LANG, tx } from "@/i18n/locale";
 
 interface BanFeedEntryProps {
   ban: BanEntry;
   isNew?: boolean;
 }
 
-const rtf = new Intl.RelativeTimeFormat("de", { numeric: "auto" });
+const rtf = new Intl.RelativeTimeFormat(SITE_LANG, { numeric: "auto" });
 
 function relativeTime(isoString: string): string {
   const diffMs = Date.now() - new Date(isoString).getTime();
   const diffMin = Math.round(diffMs / 60_000);
 
-  if (diffMin < 1) return "gerade eben";
+  if (diffMin < 1) return tx("gerade eben", "just now");
   if (diffMin < 60) return rtf.format(-diffMin, "minute");
 
   const diffHours = Math.round(diffMin / 60);

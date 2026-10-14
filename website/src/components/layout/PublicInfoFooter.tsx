@@ -9,18 +9,19 @@ import {
   TWITCH_IMPRESSUM_URL,
   TWITCH_ONBOARDING_URL,
 } from "@/data/externalLinks";
+import { IS_EN, STREAMER_URL_DE, STREAMER_URL_EN, tx } from "@/i18n/locale";
 
 const FOOTER_LINKS = [
-  { label: "Streamer-Vergleich", href: "/streamer/vergleich/" },
+  { label: tx("Streamer-Vergleich", "Streamer comparison"), href: "/streamer/vergleich/" },
   { label: "Onboarding", href: TWITCH_ONBOARDING_URL },
   { label: "FAQ", href: TWITCH_FAQ_URL },
-  { label: "Partner-Dashboard", href: TWITCH_DASHBOARD_URL },
-  { label: "Dashboard-Demo", href: TWITCH_DEMO_DASHBOARD_URL },
+  { label: tx("Partner-Dashboard", "Partner Dashboard"), href: TWITCH_DASHBOARD_URL },
+  { label: tx("Dashboard-Demo", "Dashboard demo"), href: TWITCH_DEMO_DASHBOARD_URL },
   { label: "Website", href: EARLYSALTY_WEBSITE_URL },
   { label: "Discord", href: DISCORD_INVITE_URL },
-  { label: "Impressum", href: TWITCH_IMPRESSUM_URL },
-  { label: "Datenschutz", href: TWITCH_DATENSCHUTZ_URL },
-  { label: "AGB", href: TWITCH_AGB_URL },
+  { label: tx("Impressum", "Legal notice (German)"), href: TWITCH_IMPRESSUM_URL },
+  { label: tx("Datenschutz", "Privacy"), href: TWITCH_DATENSCHUTZ_URL },
+  { label: tx("AGB", "Terms (German)"), href: TWITCH_AGB_URL },
 ];
 
 export function PublicInfoFooter() {
@@ -30,12 +31,21 @@ export function PublicInfoFooter() {
         <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div className="max-w-xl">
             <p className="bg-gradient-to-r from-primary to-accent bg-clip-text text-xl font-bold font-display text-transparent">
-              Deutsche Deadlock Community
+              {tx("Deutsche Deadlock Community", "Deadlock Partner Network")}
 </p>
             <p className="mt-3 text-sm leading-relaxed text-text-secondary">
-              Öffentliche Produktflächen für neue und bestehende Streamer. Die
-              Seite erklärt den Partner-Flow und die dokumentierten Bot-Funktionen
-              auf derselben Domain wie das Dashboard.
+              {tx(
+                <>
+                  Öffentliche Produktflächen für neue und bestehende Streamer. Die
+                  Seite erklärt den Partner-Flow und die dokumentierten Bot-Funktionen
+                  auf derselben Domain wie das Dashboard.
+                </>,
+                <>
+                  Public pages for new and existing streamers. They explain the
+                  partner flow and the documented bot features, on the same domain
+                  as the dashboard.
+                </>,
+              )}
             </p>
           </div>
 
@@ -52,9 +62,27 @@ export function PublicInfoFooter() {
           </div>
         </div>
 
-        <div className="mt-8 border-t border-border pt-6 text-sm text-text-secondary">
-          &copy; 2026 Deutsche Deadlock Community. Twitch-Onboarding, FAQ und Partner-Dashboard
-          gehören zusammen.
+        <div className="mt-8 flex flex-col gap-3 border-t border-border pt-6 text-sm text-text-secondary sm:flex-row sm:items-center sm:justify-between">
+          <p>
+            {tx(
+              <>
+                &copy; 2026 Deutsche Deadlock Community. Twitch-Onboarding, FAQ und Partner-Dashboard
+                gehören zusammen.
+              </>,
+              <>
+                &copy; 2026 Deadlock Partner Network. Twitch onboarding, FAQ and Partner Dashboard
+                belong together.
+              </>,
+            )}
+          </p>
+          <a
+            href={IS_EN ? STREAMER_URL_DE : STREAMER_URL_EN}
+            hrefLang={IS_EN ? "de" : "en"}
+            lang={IS_EN ? "de" : "en"}
+            className="text-text-secondary no-underline transition-colors duration-200 hover:text-text-primary"
+          >
+            {IS_EN ? "Deutsche Version" : "English version"}
+          </a>
         </div>
       </div>
     </footer>

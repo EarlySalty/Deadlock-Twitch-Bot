@@ -1,19 +1,28 @@
+import { IS_EN, STREAMER_URL_DE, STREAMER_URL_EN } from "@/i18n/locale";
+
 export const DISCORD_INVITE_URL = "https://discord.gg/z5TfVHuQq2";
-export const EARLYSALTY_WEBSITE_URL = "https://deutsche-deadlock-community.de/streamer/";
-export const TWITCH_PUBLIC_ORIGIN = "https://deutsche-deadlock-community.de";
+export const EARLYSALTY_WEBSITE_URL = IS_EN ? STREAMER_URL_EN : STREAMER_URL_DE;
+// Die englische Fassung bleibt auf ihrer Domain: Login, Onboarding und OAuth
+// starten auf dead-lock.de und kehren dorthin zurueck (Plan 4.3, Paket O).
+export const TWITCH_PUBLIC_ORIGIN = IS_EN
+  ? "https://dead-lock.de"
+  : "https://deutsche-deadlock-community.de";
 export const TWITCH_ONBOARDING_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/onboarding`;
 export const TWITCH_FAQ_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/faq`;
 export const TWITCH_LOGIN_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/auth/login`;
 export const TWITCH_DASHBOARD_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/dashboard`;
 export const TWITCH_DASHBOARD_V2_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/dashboard-v2`;
-export const TWITCH_DEMO_DASHBOARD_URL = "https://deutsche-deadlock-community.de/demo/twitch/demo/";
+export const TWITCH_DEMO_DASHBOARD_URL = `${TWITCH_PUBLIC_ORIGIN}/demo/twitch/demo/`;
 export const TWITCH_LIVE_ANNOUNCEMENT_URL =
   `${TWITCH_PUBLIC_ORIGIN}/twitch/live-announcement`;
 export const TWITCH_ABBO_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/abbo`;
 export const TWITCH_AFFILIATE_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/affiliate`;
 export const TWITCH_SOCIAL_MEDIA_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/social-media`;
 export const TWITCH_IMPRESSUM_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/impressum`;
-export const TWITCH_DATENSCHUTZ_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/datenschutz`;
+// Englische Datenschutzerklaerung unter eigenem Pfad; das Impressum bleibt deutsch.
+export const TWITCH_DATENSCHUTZ_URL = IS_EN
+  ? `${TWITCH_PUBLIC_ORIGIN}/twitch/privacy`
+  : `${TWITCH_PUBLIC_ORIGIN}/twitch/datenschutz`;
 export const TWITCH_AGB_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/agb`;
 export const TWITCH_SECURITY_URL = `${TWITCH_PUBLIC_ORIGIN}/twitch/sicherheit`;
 

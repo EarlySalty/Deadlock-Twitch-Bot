@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { tx } from '@/i18n/locale'
 
 // ─── Typen ───────────────────────────────────────────────────────────────────
 interface Streamer {
@@ -247,7 +248,7 @@ export function RaidDemo() {
     function setupScenario(src: Streamer, tgt: Streamer) {
       if (sourceIframeRef.current) { sourceIframeRef.current.src = src.video; sourceIframeRef.current.play().catch(() => {}) }
       if (sourceStreamerRef.current) sourceStreamerRef.current.textContent = src.name
-      if (sourceViewersRef.current) sourceViewersRef.current.textContent = `${src.viewers} Zuschauer`
+      if (sourceViewersRef.current) sourceViewersRef.current.textContent = `${src.viewers} ${tx('Zuschauer', 'viewers')}`
       if (sourceAvatarRef.current) {
         // Echtes Twitch-Profilbild (self-hosted: public/clips/pfp/<login>.png,
         // Dateiname = Streamer-Login). Farbe bleibt Fallback-Flaeche.
@@ -267,7 +268,7 @@ export function RaidDemo() {
 
       if (targetIframeRef.current) { targetIframeRef.current.src = tgt.video; targetIframeRef.current.play().catch(() => {}) }
       if (targetStreamerRef.current) targetStreamerRef.current.textContent = tgt.name
-      if (targetViewersRef.current) targetViewersRef.current.textContent = `${tgt.viewers} Zuschauer`
+      if (targetViewersRef.current) targetViewersRef.current.textContent = `${tgt.viewers} ${tx('Zuschauer', 'viewers')}`
       if (targetAvatarRef.current) {
         // Echtes Twitch-Profilbild (self-hosted, Dateiname = Login); color = Fallback.
         targetAvatarRef.current.textContent = ''
@@ -311,10 +312,10 @@ export function RaidDemo() {
 
       // Phase 0 — Stream endet
       setPillActive(0)
-      if (stepBadgeRef.current) stepBadgeRef.current.textContent = '① Stream endet'
+      if (stepBadgeRef.current) stepBadgeRef.current.textContent = tx('① Stream endet', '① Stream ends')
       if (searchTextRef.current) {
         searchTextRef.current.style.opacity = '1'
-        await typewriter(searchTextRef.current, `${src.name} beendet den Stream`, 35)
+        await typewriter(searchTextRef.current, tx(`${src.name} beendet den Stream`, `${src.name} ends the stream`), 35)
       }
       if (!running) return
       await sleep(600)
@@ -328,18 +329,18 @@ export function RaidDemo() {
 
       // Phase 1 — Partner suchen
       setPillActive(1)
-      if (stepBadgeRef.current) stepBadgeRef.current.textContent = '② Partner suchen'
+      if (stepBadgeRef.current) stepBadgeRef.current.textContent = tx('② Partner suchen', '② Find a partner')
       if (searchTextRef.current) searchTextRef.current.style.opacity = '0'
       await sleep(200)
       if (!running) return
       if (searchTextRef.current) {
         searchTextRef.current.style.opacity = '1'
-        await typewriter(searchTextRef.current, 'Suche aktiven Stream …', 40)
+        await typewriter(searchTextRef.current, tx('Suche aktiven Stream …', 'Looking for a live stream …'), 40)
       }
       if (!running) return
       if (searchSubRef.current) {
         searchSubRef.current.style.opacity = '1'
-        searchSubRef.current.textContent = 'Gleiche Kategorie · Aktiv live'
+        searchSubRef.current.textContent = tx('Gleiche Kategorie · Aktiv live', 'Same category · Live now')
       }
       await sleep(1200)
       if (!running) return
@@ -347,7 +348,7 @@ export function RaidDemo() {
       if (searchSubRef.current) { searchSubRef.current.style.opacity = '0'; searchSubRef.current.textContent = '' }
       await sleep(200)
       if (!running) return
-      if (stepBadgeRef.current) stepBadgeRef.current.textContent = `✓ ${tgt.name} gefunden`
+      if (stepBadgeRef.current) stepBadgeRef.current.textContent = tx(`✓ ${tgt.name} gefunden`, `✓ Found ${tgt.name}`)
       if (targetEmbedRef.current) {
         targetEmbedRef.current.style.opacity = '1'
         targetEmbedRef.current.style.transform = 'scale(1)'
@@ -358,10 +359,10 @@ export function RaidDemo() {
 
       // Phase 2 — Raid ausführen
       setPillActiveRaid(2)
-      if (stepBadgeRef.current) stepBadgeRef.current.textContent = '③ Raid läuft …'
+      if (stepBadgeRef.current) stepBadgeRef.current.textContent = tx('③ Raid läuft …', '③ Raiding …')
       if (searchTextRef.current) {
         searchTextRef.current.style.opacity = '1'
-        await typewriter(searchTextRef.current, `Sende ${src.viewers} Viewer zu ${tgt.name}`, 30)
+        await typewriter(searchTextRef.current, tx(`Sende ${src.viewers} Viewer zu ${tgt.name}`, `Sending ${src.viewers} viewers to ${tgt.name}`), 30)
       }
       if (!running) return
       if (raidCounterRef.current) raidCounterRef.current.style.opacity = '1'
@@ -396,14 +397,14 @@ export function RaidDemo() {
 
       // Phase 3 — Angekommen
       setPillActiveSuccess(3)
-      if (stepBadgeRef.current) stepBadgeRef.current.textContent = '④ Angekommen!'
+      if (stepBadgeRef.current) stepBadgeRef.current.textContent = tx('④ Angekommen!', '④ Arrived!')
       if (searchTextRef.current) { searchTextRef.current.style.opacity = '0'; searchTextRef.current.textContent = '' }
       if (raidCounterRef.current) raidCounterRef.current.style.opacity = '0'
       if (targetViewersRef.current)
-        targetViewersRef.current.textContent = `${tgt.viewers + src.viewers} Zuschauer`
+        targetViewersRef.current.textContent = `${tgt.viewers + src.viewers} ${tx('Zuschauer', 'viewers')}`
       if (finalTextRef.current) {
         finalTextRef.current.style.opacity = '1'
-        await typewriter(finalTextRef.current, `+${src.viewers} Viewer angekommen! 🎉`, 25)
+        await typewriter(finalTextRef.current, tx(`+${src.viewers} Viewer angekommen! 🎉`, `+${src.viewers} viewers arrived! 🎉`), 25)
       }
       if (!running) return
 
@@ -715,14 +716,14 @@ export function RaidDemo() {
                   <div className="rd-duration-pill" ref={sourceDurationRef}>0:00:00</div>
                 </div>
                 <div className="rd-overlay-bottom">
-                  <div className="rd-overlay-streamer" ref={sourceStreamerRef}>Deutsche Deadlock Community</div>
+                  <div className="rd-overlay-streamer" ref={sourceStreamerRef}>{tx('Deutsche Deadlock Community', 'Deadlock Partner Network')}</div>
                   <div className="rd-overlay-category">Deadlock</div>
                   <div className="rd-overlay-viewers">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
                       <circle cx="12" cy="12" r="3" />
                     </svg>
-                    <span ref={sourceViewersRef}>247 Zuschauer</span>
+                    <span ref={sourceViewersRef}>{tx('247 Zuschauer', '247 viewers')}</span>
                   </div>
                 </div>
               </div>
@@ -737,7 +738,7 @@ export function RaidDemo() {
                   <line x1="12" y1="20" x2="12.01" y2="20" />
                 </svg>
                 <div className="rd-offline-text">Stream Offline</div>
-                <div className="rd-offline-subtext">Der Stream ist beendet</div>
+                <div className="rd-offline-subtext">{tx('Der Stream ist beendet', 'The stream has ended')}</div>
               </div>
             </div>
             <div className="rd-info-bar">
@@ -745,7 +746,7 @@ export function RaidDemo() {
                 <div className="rd-avatar" ref={sourceAvatarRef} style={{ background: '#c8a86b' }}>D</div>
                 <div>
                   <a className="rd-info-name rd-info-link" ref={sourceInfoNameRef} href="https://twitch.tv/miracleghost9" target="_blank" rel="noopener noreferrer">miracleghost9</a>
-                  <div className="rd-info-game">Spielt Deadlock</div>
+                  <div className="rd-info-game">{tx('Spielt Deadlock', 'Playing Deadlock')}</div>
                 </div>
               </div>
             </div>
@@ -758,7 +759,7 @@ export function RaidDemo() {
             <div className="rd-search-sub" ref={searchSubRef} style={{ opacity: 0 }} />
             <div className="rd-raid-counter" ref={raidCounterRef} style={{ opacity: 0 }}>
               <div className="rd-raid-count-num" ref={raidCountNumRef}>0</div>
-              <div className="rd-raid-count-label">Viewer werden geraided</div>
+              <div className="rd-raid-count-label">{tx('Viewer werden geraided', 'viewers being raided')}</div>
             </div>
             <div className="rd-final-text" ref={finalTextRef} style={{ opacity: 0 }} />
             <div className="rd-energy-beam" ref={energyBeamRef} />
@@ -791,7 +792,7 @@ export function RaidDemo() {
                       <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
                       <circle cx="12" cy="12" r="3" />
                     </svg>
-                    <span ref={targetViewersRef}>183 Zuschauer</span>
+                    <span ref={targetViewersRef}>{tx('183 Zuschauer', '183 viewers')}</span>
                   </div>
                 </div>
               </div>
@@ -801,7 +802,7 @@ export function RaidDemo() {
                 <div className="rd-avatar" ref={targetAvatarRef} style={{ background: '#55978f' }}>P</div>
                 <div>
                   <a className="rd-info-name rd-info-link" ref={targetInfoNameRef} href="https://twitch.tv/whysolowkey" target="_blank" rel="noopener noreferrer">whysolowkey</a>
-                  <div className="rd-info-game">Spielt Deadlock</div>
+                  <div className="rd-info-game">{tx('Spielt Deadlock', 'Playing Deadlock')}</div>
                 </div>
               </div>
             </div>
@@ -812,13 +813,13 @@ export function RaidDemo() {
 
       {/* Status Bar */}
       <div className="rd-status-bar">
-        <div className="rd-pill" ref={pill0Ref}>① Stream endet</div>
+        <div className="rd-pill" ref={pill0Ref}>{tx('① Stream endet', '① Stream ends')}</div>
         <span className="rd-pill-arrow">→</span>
-        <div className="rd-pill" ref={pill1Ref}>② Partner suchen</div>
+        <div className="rd-pill" ref={pill1Ref}>{tx('② Partner suchen', '② Find a partner')}</div>
         <span className="rd-pill-arrow">→</span>
-        <div className="rd-pill" ref={pill2Ref}>③ Raid ausführen</div>
+        <div className="rd-pill" ref={pill2Ref}>{tx('③ Raid ausführen', '③ Run the raid')}</div>
         <span className="rd-pill-arrow">→</span>
-        <div className="rd-pill" ref={pill3Ref}>④ Angekommen</div>
+        <div className="rd-pill" ref={pill3Ref}>{tx('④ Angekommen', '④ Arrived')}</div>
       </div>
       <div className="rd-raid-display">Raid #<span ref={raidIndexRef}>1</span></div>
     </>
