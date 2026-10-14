@@ -5,6 +5,7 @@ import { Clock, Calendar, Zap, TrendingUp, AlertCircle, Loader2, Star, Crown, Us
 import { useQuery } from '@tanstack/react-query';
 import { fetchHourlyHeatmap, fetchWeekdayStats } from '@/api/analytics';
 import { wochentagBalkenHoehe } from '@/types/analytics';
+import { useLanguage, useT } from '@/context/LanguageContext';
 import type { HourlyHeatmapData, WeekdayStats, TimeRange } from '@/types/analytics';
 
 interface ScheduleProps {
@@ -13,6 +14,7 @@ interface ScheduleProps {
 }
 
 export function Schedule({ streamer, days }: ScheduleProps) {
+  const t = useT();
   const { data: heatmapData, isLoading: loadingHeatmap } = useQuery<HourlyHeatmapData[]>({
     queryKey: ['hourlyHeatmap', streamer, days],
     queryFn: () => fetchHourlyHeatmap(streamer, days),
@@ -25,7 +27,6 @@ export function Schedule({ streamer, days }: ScheduleProps) {
     enabled: true,
   });
 
-  // Find optimal times
   const analysis = useMemo(() => {
     if (!heatmapData || heatmapData.length === 0) return null;
 
@@ -33,14 +34,12 @@ export function Schedule({ streamer, days }: ScheduleProps) {
     const bestSlots = sorted.slice(0, 5);
     const worstSlots = sorted.slice(-5).reverse();
 
-    // Group by weekday
     const byWeekday = new Map<number, HourlyHeatmapData[]>();
     heatmapData.forEach(d => {
       if (!byWeekday.has(d.weekday)) byWeekday.set(d.weekday, []);
       byWeekday.get(d.weekday)!.push(d);
     });
 
-    // Find best time per day
     const bestPerDay: { weekday: number; hour: number; viewers: number }[] = [];
     byWeekday.forEach((slots, weekday) => {
       const best = slots.reduce((a, b) => a.avgViewers > b.avgViewers ? a : b);
@@ -62,24 +61,23 @@ export function Schedule({ streamer, days }: ScheduleProps) {
     return (
       <div className="flex flex-col items-center justify-center h-64">
         <AlertCircle className="w-12 h-12 text-text-secondary mb-4" />
-        <p className="text-text-secondary text-lg">Keine Zeitplandaten verfügbar</p>
-        <p className="text-text-secondary text-sm mt-2">Streame mehr, um Daten zu sammeln!</p>
+        <p className="text-text-secondary text-lg">{t('Keine Zeitplandaten verfügbar')}</p>
+        <p className="text-text-secondary text-sm mt-2">{t('Streame mehr, um Daten zu sammeln!')}</p>
       </div>
     );
   }
 
-  const weekdayNames = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
-  const weekdayShort = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+  const weekdayNames = [t('Sonntag'), t('Montag'), t('Dienstag'), t('Mittwoch'), t('Donnerstag'), t('Freitag'), t('Samstag')];
+  const weekdayShort = [t('So'), t('Mo'), t('Di'), t('Mi'), t('Do'), t('Fr'), t('Sa')];
 
   return (
     <div className="space-y-6">
-      {/* Best Time Recommendations */}
       <Rise
         className="bg-gradient-to-r from-primary/20 to-accent/20 rounded-xl border border-primary/30 p-6"
       >
         <div className="flex items-center gap-3 mb-6">
           <Star className="w-6 h-6 text-warning" />
-          <h2 className="text-xl font-bold text-white">Optimale Streaming-Zeiten</h2>
+          <h2 className="text-xl font-bold text-white">{t('Optimale Streaming-Zeiten')}</h2>
         </div>
 
         {analysis && (
@@ -102,7 +100,7 @@ export function Schedule({ streamer, days }: ScheduleProps) {
                   {weekdayShort[slot.weekday]} {slot.hour}:00
                 </div>
                 <div className="text-sm text-text-secondary">
-                  Ø {Math.round(slot.avgViewers)} Viewer
+                  {t('Ø {viewers} Viewer', { viewers: Math.round(slot.avgViewers) })}
                 </div>
               </motion.div>
             ))}
@@ -117,7 +115,7 @@ export function Schedule({ streamer, days }: ScheduleProps) {
         >
           <div className="flex items-center gap-3 mb-6">
             <Calendar className="w-6 h-6 text-accent" />
-            <h2 className="text-xl font-bold text-white">Wochentags-Analyse</h2>
+            <h2 className="text-xl font-bold text-white">{t('Wochentags-Analyse')}</h2>
           </div>
           <WeekdayCards data={weeklyData} />
         </Rise>
@@ -129,25 +127,33 @@ export function Schedule({ streamer, days }: ScheduleProps) {
       >
         <div className="flex items-center gap-3 mb-6">
           <Zap className="w-6 h-6 text-warning" />
-          <h2 className="text-xl font-bold text-white">Tipps zur Zeitplanung</h2>
+          <h2 className="text-xl font-bold text-white">{t('Tipps zur Zeitplanung')}</h2>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {analysis && analysis.bestSlots[0] && (
             <InsightCard
               type="positive"
-              title="Beste Streaming-Zeit"
-              text={`${weekdayNames[analysis.bestSlots[0].weekday]} um ${analysis.bestSlots[0].hour}:00 Uhr bringt die meisten Viewer (Ø ${Math.round(analysis.bestSlots[0].avgViewers)}).`}
+              title={t('Beste Streaming-Zeit')}
+              text={t('{day} um {hour}:00 Uhr bringt die meisten Viewer (Ø {viewers}).', {
+                day: weekdayNames[analysis.bestSlots[0].weekday],
+                hour: analysis.bestSlots[0].hour,
+                viewers: Math.round(analysis.bestSlots[0].avgViewers),
+              })}
             />
           )}
           {analysis && analysis.worstSlots[0] && (
             <InsightCard
               type="warning"
-              title="Zu vermeiden"
-              text={`${weekdayNames[analysis.worstSlots[0].weekday]} um ${analysis.worstSlots[0].hour}:00 Uhr zeigt weniger Performance (Ø ${Math.round(analysis.worstSlots[0].avgViewers)} Viewer).`}
+              title={t('Zu vermeiden')}
+              text={t('{day} um {hour}:00 Uhr zeigt weniger Performance (Ø {viewers} Viewer).', {
+                day: weekdayNames[analysis.worstSlots[0].weekday],
+                hour: analysis.worstSlots[0].hour,
+                viewers: Math.round(analysis.worstSlots[0].avgViewers),
+              })}
             />
           )}
-          {weeklyData && generateScheduleInsights(weeklyData).map((insight, i) => (
+          {weeklyData && generateScheduleInsights(weeklyData, t).map((insight, i) => (
             <InsightCard
               key={i}
               type={insight.priority === 'high' ? 'positive' : 'info'}
@@ -158,23 +164,21 @@ export function Schedule({ streamer, days }: ScheduleProps) {
         </div>
       </Rise>
 
-      {/* Hourly Heatmap (7x24) */}
       <Rise
         step={{ seconds: 0.3 }}
         className="bg-card rounded-xl border border-border p-6"
       >
         <div className="flex items-center gap-3 mb-6">
           <Clock className="w-6 h-6 text-primary" />
-          <h2 className="text-xl font-bold text-white">Stunden-Heatmap</h2>
+          <h2 className="text-xl font-bold text-white">{t('Stunden-Heatmap')}</h2>
         </div>
 
         <div className="overflow-x-auto">
           <HeatmapGrid data={heatmapData} weekdayNames={weekdayShort} />
         </div>
 
-        {/* Legend */}
         <div className="flex items-center justify-end gap-2 mt-4 text-xs text-text-secondary">
-          <span>Weniger Viewer</span>
+          <span>{t('Weniger Viewer')}</span>
           <div className="flex gap-0.5">
             {[0.1, 0.3, 0.5, 0.7, 0.9].map(intensity => (
               <div
@@ -184,18 +188,17 @@ export function Schedule({ streamer, days }: ScheduleProps) {
               />
             ))}
           </div>
-          <span>Mehr Viewer</span>
+          <span>{t('Mehr Viewer')}</span>
         </div>
       </Rise>
 
-      {/* Best Time Per Day */}
       <Rise
         step={{ seconds: 0.4 }}
         className="bg-card rounded-xl border border-border p-6"
       >
         <div className="flex items-center gap-3 mb-6">
           <Calendar className="w-6 h-6 text-accent" />
-          <h2 className="text-xl font-bold text-white">Beste Zeit pro Tag</h2>
+          <h2 className="text-xl font-bold text-white">{t('Beste Zeit pro Tag')}</h2>
         </div>
 
         {analysis && (
@@ -214,10 +217,10 @@ export function Schedule({ streamer, days }: ScheduleProps) {
                   >
                     <div className="text-sm text-text-secondary mb-2">{weekdayNames[day.weekday]}</div>
                     <div className="text-2xl font-bold text-white">{day.hour}:00</div>
-                    <div className="text-xs text-primary mt-1">Ø {Math.round(day.viewers)} Viewer</div>
+                    <div className="text-xs text-primary mt-1">{t('Ø {viewers} Viewer', { viewers: Math.round(day.viewers) })}</div>
                     {weekdayStats && (
                       <div className="text-xs text-text-secondary mt-2">
-                        {weekdayStats.streamCount} Streams
+                        {t('{count} Streams', { count: weekdayStats.streamCount })}
                       </div>
                     )}
                   </motion.div>
@@ -236,9 +239,9 @@ interface HeatmapGridProps {
 }
 
 function HeatmapGrid({ data, weekdayNames }: HeatmapGridProps) {
+  const t = useT();
   const maxViewers = Math.max(...data.map(d => d.avgViewers), 1);
 
-  // Create lookup map
   const dataMap = new Map<string, HourlyHeatmapData>();
   data.forEach(d => dataMap.set(`${d.weekday}-${d.hour}`, d));
 
@@ -246,7 +249,6 @@ function HeatmapGrid({ data, weekdayNames }: HeatmapGridProps) {
 
   return (
     <div className="min-w-[700px]">
-      {/* Hour labels */}
       <div className="flex ml-12 mb-2">
         {hours.filter(h => h % 3 === 0).map(hour => (
           <div
@@ -259,7 +261,6 @@ function HeatmapGrid({ data, weekdayNames }: HeatmapGridProps) {
         ))}
       </div>
 
-      {/* Grid */}
       {Array.from({ length: 7 }, (_, weekday) => (
         <div key={weekday} className="flex items-center mb-1">
           <div className="w-12 text-xs text-text-secondary">{weekdayNames[weekday]}</div>
@@ -282,7 +283,6 @@ function HeatmapGrid({ data, weekdayNames }: HeatmapGridProps) {
                       : 'rgba(31, 24, 21, 0.3)',
                   }}
                 >
-                  {/* Tooltip */}
                   <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 opacity-0 group-hover:opacity-100 transition-opacity z-20 pointer-events-none">
                     <div className="bg-card border border-border rounded px-2 py-1 text-xs whitespace-nowrap shadow-xl">
                       <div className="font-medium text-white">
@@ -291,14 +291,14 @@ function HeatmapGrid({ data, weekdayNames }: HeatmapGridProps) {
                       {cell ? (
                         <>
                           <div className="text-text-secondary">
-                            Ø {Math.round(cell.avgViewers)} Viewer
+                            {t('Ø {viewers} Viewer', { viewers: Math.round(cell.avgViewers) })}
                           </div>
                           <div className="text-text-secondary">
-                            {cell.streamCount} Streams
+                            {t('{count} Streams', { count: cell.streamCount })}
                           </div>
                         </>
                       ) : (
-                        <div className="text-text-secondary">Keine Daten</div>
+                        <div className="text-text-secondary">{t('Keine Daten')}</div>
                       )}
                     </div>
                   </div>
@@ -351,6 +351,7 @@ function InsightCard({ type, title, text }: InsightCardProps) {
 }
 
 function WeekdayCards({ data }: { data: WeekdayStats[] }) {
+  const { t, locale } = useLanguage();
   const aktiveWerte = data.filter(d => d.streamCount > 0).map(d => d.avgViewers);
   const minViewers = aktiveWerte.length ? Math.min(...aktiveWerte) : 0;
   const maxViewers = aktiveWerte.length ? Math.max(...aktiveWerte) : 0;
@@ -403,7 +404,7 @@ function WeekdayCards({ data }: { data: WeekdayStats[] }) {
               </div>
             )}
             <div className={`text-center text-sm font-semibold mb-3 ${isBest ? 'text-accent' : 'text-text-secondary'}`}>
-              {day.weekdayLabel}
+              {t(day.weekdayLabel)}
             </div>
             <div className="h-24 flex items-end justify-center mb-3">
               <motion.div
@@ -422,27 +423,27 @@ function WeekdayCards({ data }: { data: WeekdayStats[] }) {
             <div className="text-center">
               <div className={`text-lg font-bold ${isBest ? 'text-white' : hasStreams ? 'text-white' : 'text-text-secondary'}`}>
                 {hasStreams
-                  ? day.avgViewers.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+                  ? day.avgViewers.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })
                   : '-'}
               </div>
               <div className="text-[10px] text-text-secondary uppercase tracking-wider">
                 <Users className="w-3 h-3 inline mr-0.5 -mt-0.5" />
-                Ø Viewer
+                {t('Ø Viewer')}
               </div>
               {abweichungGerundet !== null && (
                 <div className={`mt-1 text-xs font-semibold ${abweichungFarbe}`}>
                   {abweichungVorzeichen}
-                  {Math.abs(abweichungGerundet)}% ggü. Schnitt
+                  {t('{pct}% ggü. Schnitt', { pct: Math.abs(abweichungGerundet) })}
                 </div>
               )}
             </div>
             <div className="mt-3 pt-3 border-t border-border/50 space-y-1.5">
               <div className="flex items-center justify-between text-xs">
-                <span className="text-text-secondary flex items-center gap-1"><Play className="w-3 h-3" />Streams</span>
+                <span className="text-text-secondary flex items-center gap-1"><Play className="w-3 h-3" />{t('Streams')}</span>
                 <span className="text-white font-medium">{day.streamCount}</span>
               </div>
               <div className="flex items-center justify-between text-xs">
-                <span className="text-text-secondary flex items-center gap-1"><Clock className="w-3 h-3" />Ø Dauer</span>
+                <span className="text-text-secondary flex items-center gap-1"><Clock className="w-3 h-3" />{t('Ø Dauer')}</span>
                 <span className="text-white font-medium">{day.avgHours > 0 ? `${day.avgHours.toFixed(1)}h` : '-'}</span>
               </div>
               <div className="flex items-center justify-between text-xs">
@@ -457,7 +458,7 @@ function WeekdayCards({ data }: { data: WeekdayStats[] }) {
   );
 }
 
-function generateScheduleInsights(data: WeekdayStats[]): Array<{ priority: string; title: string; text: string }> {
+function generateScheduleInsights(data: WeekdayStats[], t: ReturnType<typeof useT>): Array<{ priority: string; title: string; text: string }> {
   const insights = [];
   const sorted = [...data].sort((a, b) => b.avgViewers - a.avgViewers);
   const best = sorted[0];
@@ -465,15 +466,20 @@ function generateScheduleInsights(data: WeekdayStats[]): Array<{ priority: strin
 
   insights.push({
     priority: 'high',
-    title: `Fokus auf ${best.weekdayLabel}`,
-    text: `${best.weekdayLabel} zeigt die besten Viewer-Zahlen (Ø ${Math.round(best.avgViewers)}). Plane wichtige Content-Events an diesem Tag.`,
+    title: t('Fokus auf {day}', { day: t(best.weekdayLabel) }),
+    text: t('{day} zeigt die besten Viewer-Zahlen (Ø {viewers}). Plane wichtige Content-Events an diesem Tag.', {
+      day: t(best.weekdayLabel),
+      viewers: Math.round(best.avgViewers),
+    }),
   });
 
   if (underperforming.length > 0) {
     insights.push({
       priority: 'medium',
-      title: 'Optimierungspotential',
-      text: `${underperforming.map(d => d.weekdayLabel).join(', ')} haben unterdurchschnittliche Performance. Experimentiere mit anderen Zeiten.`,
+      title: t('Optimierungspotential'),
+      text: t('{days} haben unterdurchschnittliche Performance. Experimentiere mit anderen Zeiten.', {
+        days: underperforming.map(d => t(d.weekdayLabel)).join(', '),
+      }),
     });
   }
 
@@ -481,8 +487,8 @@ function generateScheduleInsights(data: WeekdayStats[]): Array<{ priority: strin
   if (noStreams.length > 0) {
     insights.push({
       priority: 'medium',
-      title: 'Ungenutzte Tage',
-      text: `Keine Streams an ${noStreams.map(d => d.weekdayLabel).join(', ')}. Teste diese Slots!`,
+      title: t('Ungenutzte Tage'),
+      text: t('Keine Streams an {days}. Teste diese Slots!', { days: noStreams.map(d => t(d.weekdayLabel)).join(', ') }),
     });
   }
 
