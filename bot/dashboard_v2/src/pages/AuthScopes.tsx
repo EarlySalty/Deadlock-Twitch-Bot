@@ -58,7 +58,7 @@ function ScopeCard({ scope }: { scope: ScopeStatus }) {
           }`}
         >
           {isMissing ? <ShieldOff className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4" />}
-          {isMissing ? 'Fehlt' : t("Aktiv")}
+          {t(isMissing ? 'Fehlt' : 'Aktiv')}
         </div>
       </div>
 
@@ -117,7 +117,7 @@ export function AuthScopes() {
               <div className="mt-2 h-2 w-40 overflow-hidden rounded-full bg-white/5">
                 <div
                   className="h-full rounded-full bg-gradient-to-r from-accent to-primary"
-                  style={{ width: `${summary.coverage.toLocaleString(locale)}%` }}
+                  style={{ width: `${summary.coverage}%` }}
                 />
               </div>
             </div>

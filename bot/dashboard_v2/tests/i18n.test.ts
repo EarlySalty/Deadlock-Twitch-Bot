@@ -195,3 +195,10 @@ test('Ad-manager helper messages translate with locale-aware numbers and keep Ge
   const state = { enabled: true, isLive: true, currentReason: 'in_match', nextBlockLabel: 'in 5 min.', fit: null };
   assert.equal(statusSatz(state, t), "Running. Next block in 5 min. You're in a match. The bot uses available Twitch snoozes and won't start ads itself.");
 });
+
+test('Named raid history translates without changing channel names or German defaults', async () => {
+  const { beschreibeEintrag } = await import('../src/components/verwaltung/adManagerTexte');
+  const entry = { reason: 'recent_raid', detail: 'example_channel', decision: 'none' } as Parameters<typeof beschreibeEintrag>[0];
+  assert.equal(beschreibeEintrag(entry), 'Verschoben, Raid von example_channel');
+  assert.equal(beschreibeEintrag(entry, translate.bind(null, 'en')), 'Postponed, raid from example_channel');
+});

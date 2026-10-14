@@ -31,7 +31,7 @@ const ENTRY_TEXTE: Record<string, string> = {
 
 export function beschreibeEintrag(entry: AdManagerHistoryEntry, t: LanguageContextValue['t'] = translate.bind(null, 'de')): string {
   if (entry.reason === 'recent_raid') {
-    return entry.detail ? `Verschoben, Raid von ${entry.detail}` : t("Verschoben, frischer Raid");
+    return entry.detail ? t('Verschoben, Raid von {channel}', { channel: entry.detail }) : t("Verschoben, frischer Raid");
   }
   const text = ENTRY_TEXTE[entry.reason];
   if (text) return t(text);

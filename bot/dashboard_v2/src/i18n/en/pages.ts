@@ -20,6 +20,8 @@ export const PAGES_EN: Record<string, string> = {
   "Fehlend:": "Missing:",
   "Fehlende Scopes (": "Missing scopes (",
   "Fehlt:": "Missing:",
+  "Fehlt": "Missing",
+  "Verschoben, Raid von {channel}": "Postponed, raid from {channel}",
   "Grace endet:": "Grace period ends:",
   "Kritisch": "Critical",
   "Mit": "With",

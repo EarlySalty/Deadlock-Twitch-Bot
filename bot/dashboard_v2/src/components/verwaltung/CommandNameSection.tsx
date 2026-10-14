@@ -137,7 +137,7 @@ export function EditableCommandName({ command, className = '' }: { command: stri
             latestDraft.current = next;
             saveQueue.current.lastAttempt = null;
             setDraft(next);
-            setMessage(validCommandNameInput(next) ? '' : t("Nur Buchstaben und Zahlen eingeben; das ! steht bereits davor."));
+            setMessage(validCommandNameInput(next) ? '' : 'Nur Buchstaben und Zahlen eingeben; das ! steht bereits davor.');
           }}
           className="min-w-0 w-[12ch] max-w-[22ch] bg-transparent py-2 outline-none placeholder:text-text-secondary/60"
         />
