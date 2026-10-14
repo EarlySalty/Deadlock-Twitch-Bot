@@ -86,7 +86,7 @@ export function ViewerProfiles({ data }: ViewerProfilesProps) {
 
           <div className="flex-1 space-y-2">
             {pieData.map((entry, i) => (
-              <div key={t(entry.name)} className="flex items-center justify-between">
+              <div key={entry.name} className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <div
                     className="w-3 h-3 rounded-full"

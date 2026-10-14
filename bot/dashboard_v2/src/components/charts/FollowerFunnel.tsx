@@ -247,7 +247,7 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
           const Icon = stage.icon;
           return (
             <motion.div
-              key={t(stage.label)}
+              key={stage.label}
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: Math.min(i * 0.04, 0.24) }}
@@ -292,7 +292,7 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
             const percentage = totalSourceFollowers > 0 ? (source.value / totalSourceFollowers) * 100 : 0;
             return (
               <motion.div
-                key={t(source.label)}
+                key={source.label}
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
                 transition={{ delay: Math.min(0.1 + i * 0.04, 0.24) }}

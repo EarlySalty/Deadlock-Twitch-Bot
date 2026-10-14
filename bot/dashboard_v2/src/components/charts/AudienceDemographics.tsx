@@ -160,7 +160,7 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
                     >
                       {data.viewerTypes.map((type, index) => (
                         <Cell
-                          key={t(type.label)}
+                          key={type.label}
                           fill={VIEWER_COLORS[index % VIEWER_COLORS.length]}
                           stroke={activeViewerType === type.label ? 'var(--color-text-primary)' : 'none'}
                           strokeWidth={2}
@@ -185,7 +185,7 @@ export function AudienceDemographics({ data }: AudienceDemographicsProps) {
               <div className="w-full min-w-0 flex-1 space-y-2">
                 {data.viewerTypes.map((type, i) => (
                   <button
-                    key={t(type.label)}
+                    key={type.label}
                     type="button"
                     className={`flex w-full items-center justify-between gap-3 rounded-lg border px-2 py-1.5 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${activeViewerType === type.label ? 'border-primary bg-primary/10' : 'border-transparent'}`}
                     onMouseEnter={() => setHoveredViewerType(type.label)}
