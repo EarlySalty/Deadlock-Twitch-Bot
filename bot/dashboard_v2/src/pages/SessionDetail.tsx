@@ -342,7 +342,7 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-text-secondary text-xs uppercase tracking-wider border-b border-border">
-                      <th className="text-left px-3 py-2">Chatter</th>
+                      <th className="text-left px-3 py-2">{t("Chatter")}</th>
                       <th className="text-right px-3 py-2">{t('Nachrichten')}</th>
                     </tr>
                   </thead>

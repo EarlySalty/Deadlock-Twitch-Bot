@@ -441,3 +441,11 @@ export const SHELL_EN: Record<string, string> = {
   'Alle Scopes sind autorisiert.': 'All scopes are authorized.',
   '{count} fehlen': '{count} missing',
 };
+
+Object.assign(SHELL_EN, {
+  "Hier verwaltest du deinen Bot und änderst deine Einstellungen. Speichere dir diese Seite jetzt als": "Manage your bot and change your settings here. Save this page as a",
+  ", damit du sie später nicht suchen musst.": ", so you can find it easily later.",
+  "Du findest es auch auf unserer": "You can also find it on our",
+  "unter": "under",
+  "{days} Tage verbleibend": "{days} days remaining"
+});
