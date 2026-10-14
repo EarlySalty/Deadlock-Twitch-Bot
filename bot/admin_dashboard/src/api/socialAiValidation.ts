@@ -37,6 +37,14 @@ export function requireUsage(value: unknown, grouping: UsageGrouping, offset: nu
   requireValid(data.group_by === grouping && data.offset === offset && typeof data.has_more === 'boolean');
   requireValid((data.period_start === null || string(data.period_start)) && (data.period_end === null || string(data.period_end)));
   requireTotals(record(data.totals));
+  const stageKeys = new Set<string>();
+  for (const stage of rows(data.stages)) {
+    requireValid(['analysis', 'planning', 'other'].includes(String(stage.stage)) && ['first_run', 'revision'].includes(String(stage.run)));
+    const key = `${stage.stage}:${stage.run}`;
+    requireValid(!stageKeys.has(key));
+    stageKeys.add(key);
+    requireTotals(stage);
+  }
   for (const group of rows(data.groups)) {
     requireTotals(group);
     for (const key of ['twitch_user_id', 'provider', 'model', 'job_id']) requireValid(group[key] === null || string(group[key]));
@@ -50,12 +58,14 @@ export function requireLimits(value: unknown): ProcessingLimits {
   requireValid(typeof data.enforcement_available === 'boolean' && typeof data.plan_configuration_available === 'boolean' && data.plan_policies_active === false);
   const global = record(data.global);
   requireValid(count(global.revision) && global.initial_total_cap_micro_usd === 2_000_000 && typeof global.paused === 'boolean' && string(global.updated_at) && string(global.updated_by) && string(global.reason));
+  requireValid(nullableCount(global.monthly_cap_micro_usd) && (global.monthly_cap_micro_usd === null || Number(global.monthly_cap_micro_usd) <= 2_000_000));
   const users = rows(data.users);
   const userIds = new Set<unknown>();
   for (const user of users) {
     requireValid(string(user.twitch_user_id) && /^\d+$/.test(user.twitch_user_id) && !userIds.has(user.twitch_user_id) && count(user.revision) && typeof user.paused === 'boolean' && nullableCount(user.monthly_cap_micro_usd) && string(user.updated_at) && string(user.updated_by) && string(user.reason));
     userIds.add(user.twitch_user_id);
     requireValid(user.monthly_cap_micro_usd === null || Number(user.monthly_cap_micro_usd) <= 2_000_000);
+    requireValid(nullableCount(user.monthly_ai_jobs) && nullableCount(user.monthly_revisions));
   }
   const planIds = new Set<unknown>();
   for (const plan of rows(data.plans)) {
@@ -88,9 +98,13 @@ export function requireSkills(value: unknown): SkillsReport {
       for (const line of rows(version.diff)) requireValid(['added', 'removed', 'context'].includes(String(line.kind)) && string(line.text));
     }
     requireValid(versions.length === 0 || versionIds.has(skill.current_version));
+    for (const activation of rows(skill.activations)) {
+      requireValid(['learned', 'rollback', 'auto_rollback'].includes(String(activation.kind)) && string(activation.from_version) && string(activation.to_version) && string(activation.actor) && string(activation.reason) && string(activation.created_at));
+    }
   }
   for (const proposal of rows(data.proposals)) {
     requireValid(string(proposal.id) && string(proposal.title) && string(proposal.created_at) && string(proposal.summary) && string(proposal.reason) && ['proposed', 'reviewed', 'dismissed'].includes(String(proposal.status)) && (proposal.evidence === null || string(proposal.evidence)));
+    requireValid((proposal.reviewed_at === null || string(proposal.reviewed_at)) && (proposal.reviewed_by === null || string(proposal.reviewed_by)));
   }
   return data as unknown as SkillsReport;
 }

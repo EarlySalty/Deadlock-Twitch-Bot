@@ -9,12 +9,14 @@ use tower::ServiceExt;
 async fn fixture() -> (crate::test_database::Database, DashboardAuthState, Router) {
     let database = crate::test_database::Database::new().await;
     let pool = &database.pool;
-    sqlx::raw_sql("CREATE TABLE public.twitch_streamers(twitch_user_id TEXT PRIMARY KEY); INSERT INTO public.twitch_streamers VALUES ('101'); CREATE TABLE public.twitch_clips_social_media(id BIGINT PRIMARY KEY); CREATE TABLE public.llm_usage(id BIGSERIAL PRIMARY KEY,ts TEXT NOT NULL,purpose TEXT,provider TEXT,model TEXT,attempt_state TEXT,tokens_in BIGINT,tokens_out BIGINT,latency_ms BIGINT); CREATE TABLE public.dashboard_sessions(session_id TEXT PRIMARY KEY,session_type TEXT NOT NULL,payload_enc BYTEA NOT NULL,created_at DOUBLE PRECISION NOT NULL,expires_at DOUBLE PRECISION NOT NULL); CREATE TABLE public.twitch_partners(id BIGINT PRIMARY KEY,twitch_login TEXT NOT NULL,twitch_user_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'active',technical_pause_reason TEXT,admin_archived_at TEXT,departnered_at TEXT,partnered_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+    sqlx::raw_sql("CREATE TABLE public.twitch_streamers(twitch_user_id TEXT PRIMARY KEY); INSERT INTO public.twitch_streamers VALUES ('101'); CREATE TABLE public.twitch_clips_social_media(id BIGINT PRIMARY KEY); CREATE TABLE public.social_produced_videos(id BIGSERIAL PRIMARY KEY,twitch_user_id TEXT NOT NULL,mode TEXT NOT NULL,metadata JSONB NOT NULL DEFAULT '{}'); CREATE TABLE public.llm_usage(id BIGSERIAL PRIMARY KEY,ts TEXT NOT NULL,purpose TEXT,provider TEXT,model TEXT,attempt_state TEXT,tokens_in BIGINT,tokens_out BIGINT,latency_ms BIGINT); CREATE TABLE public.dashboard_sessions(session_id TEXT PRIMARY KEY,session_type TEXT NOT NULL,payload_enc BYTEA NOT NULL,created_at DOUBLE PRECISION NOT NULL,expires_at DOUBLE PRECISION NOT NULL); CREATE TABLE public.twitch_partners(id BIGINT PRIMARY KEY,twitch_login TEXT NOT NULL,twitch_user_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'active',technical_pause_reason TEXT,admin_archived_at TEXT,departnered_at TEXT,partnered_at TEXT DEFAULT CURRENT_TIMESTAMP)")
         .execute(pool).await.expect("isolated schema");
     for migration in [
         include_str!("../../../../migrations/20261011200001_social_ai_provider_usage.sql"),
         include_str!("../../../../migrations/20261011200002_social_ai_jobs.sql"),
+        include_str!("../../../../migrations/20261011203001_social_ai_revisions.sql"),
         include_str!("../../../../migrations/20261011204000_social_ai_admin_limits.sql"),
+        include_str!("../../../../migrations/20261014150000_social_ai_admin_console_limits.sql"),
     ] {
         sqlx::raw_sql(migration)
             .execute(pool)
@@ -163,7 +165,33 @@ async fn m4_registered_routes_enforce_real_admin_session_and_csrf() {
     );
     let unchanged = data(call(&app, "/limits", None, Some(&cookie), None).await).await;
     assert_eq!(unchanged["global"], saved["global"]);
-    let forbidden = json!({"expected_revision":2,"paused":false,"reason":"fixture","initial_total_cap_micro_usd":4000000,"csrf_token":admin.csrf_token});
+    let capped = json!({"expected_revision":2,"paused":true,"monthly_cap_micro_usd":1_500_000,"reason":"fixture","csrf_token":admin.csrf_token});
+    let saved = data(
+        call(
+            &app,
+            "/limits/global",
+            Some(capped),
+            Some(&cookie),
+            Some(&admin.csrf_token),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(saved["global"]["monthly_cap_micro_usd"], 1_500_000);
+    let too_high = json!({"expected_revision":3,"paused":true,"monthly_cap_micro_usd":2_000_001,"reason":"fixture","csrf_token":admin.csrf_token});
+    assert_eq!(
+        call(
+            &app,
+            "/limits/global",
+            Some(too_high),
+            Some(&cookie),
+            Some(&admin.csrf_token)
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    let forbidden = json!({"expected_revision":3,"paused":false,"reason":"fixture","initial_total_cap_micro_usd":4000000,"csrf_token":admin.csrf_token});
     assert_eq!(
         call(
             &app,
@@ -176,7 +204,7 @@ async fn m4_registered_routes_enforce_real_admin_session_and_csrf() {
         .status(),
         StatusCode::BAD_REQUEST
     );
-    let user = json!({"twitch_user_id":"101","expected_revision":0,"paused":true,"monthly_cap_micro_usd":0,"reason":"fixture","csrf_token":admin.csrf_token});
+    let user = json!({"twitch_user_id":"101","expected_revision":0,"paused":true,"monthly_cap_micro_usd":0,"monthly_ai_jobs":12,"monthly_revisions":3,"reason":"fixture","csrf_token":admin.csrf_token});
     let saved = data(
         call(
             &app,
@@ -189,6 +217,8 @@ async fn m4_registered_routes_enforce_real_admin_session_and_csrf() {
     )
     .await;
     assert_eq!(saved["users"][0]["revision"], 1);
+    assert_eq!(saved["users"][0]["monthly_ai_jobs"], 12);
+    assert_eq!(saved["users"][0]["monthly_revisions"], 3);
     assert_eq!(
         call(
             &app,
@@ -239,6 +269,7 @@ async fn m4_registered_routes_enforce_real_admin_session_and_csrf() {
     .await;
     assert_eq!(usage["totals"]["attempts"], 0);
     assert_eq!(usage["group_by"], "job");
+    assert_eq!(usage["stages"], json!([]));
     assert_eq!(
         call(&app, "/usage?limit=101", None, Some(&cookie), None)
             .await

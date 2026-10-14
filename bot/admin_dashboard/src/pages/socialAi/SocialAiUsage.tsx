@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { RefreshCw, ReceiptText } from 'lucide-react';
 import { fetchUsage, socialAiKeys } from '@/api/socialAi';
-import type { UsageFilter, UsageGrouping, UsageTotals } from '@/api/socialAiTypes';
+import type { StageUsage, UsageFilter, UsageGrouping, UsageTotals } from '@/api/socialAiTypes';
 import { EmptyState } from '@/components/shared/EmptyState';
 import { costTotal, formatCount, formatDate, formatDuration, formatMicroUsd } from '@/utils/socialAi';
 import { QueryState } from './SocialAiLayout';
@@ -19,6 +19,24 @@ function Totals({ totals }: { totals: UsageTotals }) {
     <div><dt>Eingabe- / Ausgabetoken</dt><dd>{formatCount(totals.input_tokens)} / {formatCount(totals.output_tokens)}</dd></div>
     <div><dt>Cache geschrieben / gelesen</dt><dd>{formatCount(totals.cache_creation_input_tokens)} / {formatCount(totals.cache_read_input_tokens)}</dd></div>
   </dl>;
+}
+
+const STAGE_LABELS = { analysis: 'Analyse', planning: 'Schnittplanung', other: 'Weitere Schritte' } as const;
+
+function StageCosts({ stages }: { stages: StageUsage[] }) {
+  if (stages.length === 0) return null;
+  return <div className="space-y-3">
+    <h3 className="text-lg font-semibold">Kosten nach Arbeitsschritt</h3>
+    <p className="text-sm text-text-secondary">Erstproduktion und Revision werden getrennt ausgewiesen. Eine Revision kann Analyse und Schnittplanung enthalten.</p>
+    <div className="social-ai-table" role="region" aria-label="Kosten nach Arbeitsschritt, horizontal scrollbar" tabIndex={0}>
+      <table><caption className="sr-only">KI-Verbrauch nach Arbeitsschritt und Durchlauf</caption>
+        <thead><tr><th scope="col">Arbeitsschritt</th><th scope="col">Durchlauf</th><th scope="col">Anfragen</th><th scope="col">Kostenschätzung</th><th scope="col">Belastetes Budget</th><th scope="col">Anbieterzeit</th></tr></thead>
+        <tbody>{stages.map(stage => <tr key={`${stage.stage}:${stage.run}`}>
+          <th scope="row">{STAGE_LABELS[stage.stage]}</th><td>{stage.run === 'revision' ? 'Revision' : 'Erstproduktion'}</td><td>{formatCount(stage.attempts)}</td><td>{formatMicroUsd(costTotal(stage, 'estimated_micro_usd'))}</td><td>{formatMicroUsd(stage.charged_micro_usd)}</td><td>{formatDuration(stage.provider_latency_ms)}</td>
+        </tr>)}</tbody>
+      </table>
+    </div>
+  </div>;
 }
 
 export function SocialAiUsagePage() {
@@ -41,12 +59,13 @@ export function SocialAiUsagePage() {
         <h3 className="text-lg font-semibold">Verbrauch im angewendeten Filter</h3>
         <p className="text-sm text-text-secondary">Zeitraum: {formatDate(data.period_start)} bis {formatDate(data.period_end)}. Summen beziehen sich auf den gesamten Filter, die Tabelle ist seitenweise geladen.</p>
         <Totals totals={data.totals} />
+        <StageCosts stages={data.stages} />
         {(data.totals.incomplete_attempts > 0 || data.totals.unknown_cost_attempts > 0) && <p role="status" className="social-ai-notice">Offen oder ungeklärt: {formatCount(data.totals.incomplete_attempts)}. Ohne Kostenangaben: {formatCount(data.totals.unknown_cost_attempts)}. Vollständige Kostensummen sind unbekannt.</p>}
         {data.groups.length === 0 ? <EmptyState icon={ReceiptText} title="Keine Verbrauchsdaten in diesem Filter" description="Ohne Anbieteranfragen liegen keine gemessenen Kosten vor." /> : <>
           <div className="social-ai-table" role="region" aria-label="Verbrauch nach Gruppierung, horizontal scrollbar" tabIndex={0}>
-            <table><caption className="sr-only">Verbrauch nach {filter.group_by === 'user' ? 'Nutzer' : filter.group_by === 'provider' ? 'Anbieter und Modell' : 'Auftrag'}</caption><thead><tr><th scope="col">Nutzer / Auftrag</th><th scope="col">Anbieter / Modell</th><th scope="col">Anfragen / ungeklärt</th><th scope="col">Token ein / aus</th><th scope="col">Schätzung</th><th scope="col">Gemessen / Beleg</th><th scope="col">Anbieterzeit</th>{filter.group_by === 'job' && <><th scope="col">Gesamtlaufzeit</th><th scope="col">FFmpeg-Laufzeit</th></>}</tr></thead>
+            <table><caption className="sr-only">Verbrauch nach {filter.group_by === 'user' ? 'Nutzer' : filter.group_by === 'provider' ? 'Anbieter und Modell' : 'Auftrag'}</caption><thead><tr><th scope="col">Nutzer / Auftrag</th><th scope="col">Anbieter / Modell</th><th scope="col">Anfragen / ungeklärt</th><th scope="col">Token ein / aus</th><th scope="col">Schätzung</th><th scope="col">Gemessen / Beleg</th><th scope="col">Anbieterzeit</th>{filter.group_by === 'job' && <th scope="col">Gesamtlaufzeit</th>}{filter.group_by !== 'provider' && <th scope="col">FFmpeg-Laufzeit</th>}</tr></thead>
               <tbody>{data.groups.map((group, index) => <tr key={`${filter.offset}:${index}`}>
-                <td>{group.twitch_user_id ?? 'Nicht zugeordnet'}<small>{group.job_id ?? 'Gruppierte Aufträge'}</small></td><td>{group.provider ?? 'Gruppierte Anbieter'}<small>{group.model ?? 'Modell nicht einzeln ausgewiesen'}</small></td><td>{formatCount(group.attempts)} / {formatCount(group.incomplete_attempts)}<small>Unbekannte Kosten: {formatCount(group.unknown_cost_attempts)}</small></td><td>{formatCount(group.input_tokens)} / {formatCount(group.output_tokens)}</td><td>{formatMicroUsd(costTotal(group, 'estimated_micro_usd'))}</td><td>{formatMicroUsd(costTotal(group, 'measured_micro_usd'))}<small>Beleg: {formatMicroUsd(costTotal(group, 'invoiced_micro_usd'))}</small></td><td>{formatDuration(group.provider_latency_ms)}</td>{filter.group_by === 'job' && <><td>{formatDuration(group.processing_ms)}</td><td>{formatDuration(group.rendering_ms)}</td></>}
+                <td>{group.twitch_user_id ?? 'Nicht zugeordnet'}<small>{group.job_id ?? 'Gruppierte Aufträge'}</small></td><td>{group.provider ?? 'Gruppierte Anbieter'}<small>{group.model ?? 'Modell nicht einzeln ausgewiesen'}</small></td><td>{formatCount(group.attempts)} / {formatCount(group.incomplete_attempts)}<small>Unbekannte Kosten: {formatCount(group.unknown_cost_attempts)}</small></td><td>{formatCount(group.input_tokens)} / {formatCount(group.output_tokens)}</td><td>{formatMicroUsd(costTotal(group, 'estimated_micro_usd'))}</td><td>{formatMicroUsd(costTotal(group, 'measured_micro_usd'))}<small>Beleg: {formatMicroUsd(costTotal(group, 'invoiced_micro_usd'))}</small></td><td>{formatDuration(group.provider_latency_ms)}</td>{filter.group_by === 'job' && <td>{formatDuration(group.processing_ms)}</td>}{filter.group_by !== 'provider' && <td>{formatDuration(group.rendering_ms)}</td>}
               </tr>)}</tbody>
             </table>
           </div>
