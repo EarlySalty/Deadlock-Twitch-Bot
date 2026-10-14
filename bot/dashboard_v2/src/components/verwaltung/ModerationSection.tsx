@@ -141,7 +141,7 @@ export function ModerationSection() {
                       type="button"
                       role="switch"
                       aria-checked={on}
-                      aria-label={task.label}
+                      aria-label={t(task.label)}
                       onClick={() => toggle(task.key)}
                       className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors ${
                         on ? 'bg-primary' : 'bg-border'

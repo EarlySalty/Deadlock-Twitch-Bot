@@ -192,8 +192,9 @@ test('Ad-manager helper messages translate with locale-aware numbers and keep Ge
   const t = translate.bind(null, 'en');
   assert.equal(budgetVorschau(3, null), '6 Blöcke à 30 Sek., etwa alle 10 Min.');
   assert.equal(budgetVorschau(3, null, t, 'en-US'), '6 blocks of 30 sec., about every 10 min.');
-  const state = { enabled: true, isLive: true, currentReason: 'in_match', nextBlockLabel: 'in 5 min.', fit: null };
+  const state = { enabled: true, isLive: true, currentReason: 'in_match', nextBlockLabel: t('in {value0} Min.', { value0: 5 }), fit: null };
   assert.equal(statusSatz(state, t), "Running. Next block in 5 min. You're in a match. The bot uses available Twitch snoozes and won't start ads itself.");
+  assert.equal(statusSatz({ ...state, nextBlockLabel: 'now' }, t), "Running. Next block now. You're in a match. The bot uses available Twitch snoozes and won't start ads itself.");
 });
 
 test('Named raid history translates without changing channel names or German defaults', async () => {
