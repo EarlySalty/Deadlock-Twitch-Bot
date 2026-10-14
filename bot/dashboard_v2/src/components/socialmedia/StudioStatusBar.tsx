@@ -1,3 +1,4 @@
+import { HintChip } from './HintChip';
 import { useLanguage } from '@/context/LanguageContext';
 import type { ClipPoolForecast } from '@/types/socialMedia';
 import type { StudioOverviewData } from './StudioOverview';
@@ -31,5 +32,5 @@ export function StudioStatusBar({ data, pool, now, onNavigate }: {
     <button type="button" data-tone={pool?.warnung ? 'warning' : 'neutral'} onClick={() => onNavigate('planen')}>
       {!pool ? t('Bestand wird geladen') : pool.reicht_fuer_tage === null ? t('Vorrat ohne Posting-Rhythmus') : t('Vorrat reicht {days} Tage', { days: pool.reicht_fuer_tage })}
     </button>
-  </section>;
+<HintChip hint={t("Der Vorrat wird aus dem Posting-Rhythmus für neue Twitch-Clips berechnet.")} /></section>;
 }

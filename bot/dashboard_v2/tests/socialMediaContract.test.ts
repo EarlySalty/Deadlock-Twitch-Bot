@@ -796,7 +796,7 @@ test('metadata departure preserves rejected drafts and blocks pending saves befo
 test('VOD-Archiv kehrt nach Ausblenden, Bestandsänderung und Kanalwechsel auf eine gültige Seite zurück', () => {
   const source = lies('src/components/socialmedia/VodArchiveTab.tsx');
   const start = source.indexOf('  useEffect(() => {');
-  const end = source.indexOf('  const settings = useQuery({', start);
+  const end = source.indexOf('  const action = useMutation({', start);
   assert.ok(start >= 0 && end > start);
   const register = new Function('useEffect', 'setPage', 'list', 'scope', source.slice(start, end));
   for (const [total, current, expected] of [[51, 2, 2], [50, 2, 1], [0, 2, 1], [149, 8, 3], [150, 1, 1]]) {

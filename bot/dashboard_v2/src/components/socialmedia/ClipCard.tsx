@@ -1,3 +1,4 @@
+import { StatusChip } from './StatusChip';
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Archive, Film, Loader2, ExternalLink, Pencil, XCircle, Clapperboard, Crop, MoreHorizontal, Trophy } from 'lucide-react';
@@ -161,14 +162,6 @@ export function ClipCard({
     render.isPending || preview.data?.status === 'pending' || preview.data?.status === 'rendering';
   const ready = preview.data?.status === 'ready';
   const fehlerZeile = fehlerText(fehler, t);
-  const tone = {
-    orange: 'text-primary',
-    messing: 'text-accent',
-    success: 'text-success',
-    warning: 'text-warning',
-    danger: 'text-danger',
-    muted: 'text-text-secondary',
-  }[status.tone];
   const runMenu = (action: () => void) => {
     const trigger = menu.current?.querySelector('summary');
     menu.current?.removeAttribute('open');
@@ -216,7 +209,7 @@ export function ClipCard({
         </div>
         <div className="min-w-0 space-y-2.5">
           {ready && <VideoFullscreenButton videoRef={videoRef} />}
-          <span className={`studio-status ${tone}`}>
+          <StatusChip tone={queueStage(clip) === 'failed' ? 'danger' : queueStage(clip) === 'planned' ? 'info' : queueStage(clip) === 'posted' ? 'success' : queueStage(clip) === 'review' ? 'warning' : 'neutral'}>
             {waitingPlatforms.length > 0
               ? t('Wartet auf Verbindung')
               : stoppbar
@@ -226,7 +219,7 @@ export function ClipCard({
                   : clip.youtube_visibility === 'private' && clip.platform_status.youtube && !clip.platform_status.tiktok && !clip.platform_status.instagram
                     ? t('Privat auf YouTube')
                     : t(status.label)}
-          </span>
+          </StatusChip>
           <h3 className="break-words text-sm font-semibold leading-6">
             {clip.title || t('Clip ohne Titel')}
           </h3>

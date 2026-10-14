@@ -1,3 +1,4 @@
+import { ImportPopover } from '../../ImportPopover';
 import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Archive, ExternalLink, Film, RefreshCw, Save } from "lucide-react";
@@ -296,13 +297,13 @@ function OwnerImportPool({
   return (
     <section
       className="import-pool"
-      aria-label={t("Historische Clips")}
+      aria-label={t("Clip-Vorrat")}
       data-owner={owner}
       data-unsaved={dirty || busy ? "true" : undefined}
       data-saving={busy ? "true" : undefined}
     >
       <StudioSectionHeading
-        title={t("Historische Clips")}
+        title={t("Clip-Vorrat")}
         description={t("Deadlock-Clips erfassen. Markierte Clips werden in deiner gewählten Reihenfolge zuerst verarbeitet, danach die übrigen passenden Clips.")}
         icon={Archive}
         actions={<button className="studio-button" type="button" onClick={reload} disabled={busy}>
@@ -323,7 +324,7 @@ function OwnerImportPool({
         <p role="status">{t("Gespeicherten Zeitraum laden …")}</p>
       )}
       {current && (
-        <form
+        <ImportPopover><form
           className="import-pool-preferences"
           onSubmit={(event) => {
             event.preventDefault();
@@ -498,7 +499,7 @@ function OwnerImportPool({
               </button>
             </div>
           </div>
-        </form>
+        </form></ImportPopover>
       )}
       <section
         className="import-pool-import"
@@ -678,7 +679,7 @@ function OwnerImportPool({
                         checked={selected}
                         disabled={selectionLocked || !selectionAllowed(clip)}
                         aria-label={`${t("Clip bevorzugen")}: ${metadata.title}`}
-                        title={t(selected ? "Bevorzugt" : "Zuerst verarbeiten")}
+                        title={t("Auto-Pilot nimmt diesen Clip zuerst")}
                         onChange={(event) => {
                           setFeedback("");
                           selectionMutation.mutate({

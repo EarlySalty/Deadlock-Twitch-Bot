@@ -1,3 +1,4 @@
+import { PlatformCheck } from '@/components/socialmedia/PlatformCheck';
 import { StudioActivity } from '@/components/socialmedia/StudioActivity';
 import { ClipCard } from '@/components/socialmedia/ClipCard';
 import { StudioHero } from '@/components/socialmedia/StudioHero';
@@ -24,7 +25,7 @@ import '@/components/socialmedia/studio.css';
 import { LayoutSchematic } from '@/components/socialmedia/LayoutSchematic';
 import { StudioSectionHeading } from '@/components/socialmedia/StudioSectionHeading';
 import { AnalyticsTab } from '@/components/socialmedia/AnalyticsTab';
-import { VodArchiveTab } from '@/components/socialmedia/VodArchiveTab';
+import { VodArchiveList } from '@/components/socialmedia/VodArchiveList';
 import { LayoutEditor, type VorschauClip } from '@/components/socialmedia/LayoutEditor';
 import { EnrichmentPanel } from '@/components/socialmedia/EnrichmentPanel';
 import { LadeFehlerHinweis } from '@/components/socialmedia/LadeFehlerHinweis';
@@ -895,7 +896,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
         <button type="button" className="studio-button" onClick={() => setShowAiEditor(true)}>{t('KI-Aufträge ansehen')}</button>
         {workspaceSlots?.publishReview ?? <PublishReviewPanel twitchUserId={twitchUserId} client={publishClient} section="videos" onChanged={refreshSchedule} />}
       </>}
-      {activeView === 'veroeffentlicht' && <VodArchiveTab twitchUserId={twitchUserId} isAdmin={isAdmin} />}
+      {activeView === 'veroeffentlicht' && <VodArchiveList twitchUserId={twitchUserId} isAdmin={isAdmin} />}
       {(showAiEditor || selectedAiClipId !== undefined) && <WorkspaceDialog eyebrow={t('Mit KI bearbeiten')} title={selectedAiClip?.title ?? t('KI-Bearbeitung & Prüfung')} onClose={() => { setShowAiEditor(false); setSelectedAiClipId(undefined); const params = new URLSearchParams(window.location.search); params.delete('clip_db_id'); window.history.replaceState({}, '', `${window.location.pathname}?${params}${window.location.hash}`); }}>
         {AiEditor && twitchUserId ? <AiEditor twitchUserId={twitchUserId} streamer={streamer} clipDbId={selectedAiClipId} /> : <p>{t('KI-Bearbeitung noch nicht verfügbar')}</p>}
       </WorkspaceDialog>}
@@ -1872,10 +1873,7 @@ function PlatformConnectionsCard({
           }
 
           return (
-            <div
-              key={platform}
-              className="flex flex-col items-start justify-between gap-3 rounded-xl border border-border bg-white/[0.02] px-3 py-2.5 sm:flex-row sm:items-center"
-            >
+            <PlatformCheck key={platform} platform={platform}>
               <div className="min-w-0">
                 <div className="text-sm font-medium text-ui-text">
                   {PLATFORM_LABELS[platform] ?? platform}
@@ -1925,7 +1923,7 @@ function PlatformConnectionsCard({
                   {status?.uses_global_fallback ? t('Eigenes Konto verbinden') : abgelaufen ? t('Neu verbinden') : t('Verbinden')}
                 </a>
               )}
-            </div>
+            </PlatformCheck>
           );
         })}
       </div>

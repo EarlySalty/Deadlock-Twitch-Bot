@@ -1,4 +1,11 @@
 export const SOCIAL_STUDIO_EN: Record<string, string> = {
+  'Clip-Vorrat': 'Clip supply',
+  'Vorziehen': 'Prioritize',
+  'Auto-Pilot nimmt diesen Clip zuerst': 'Auto-Pilot takes this clip first',
+  'Zeitraum & Reihenfolge': 'Date range and order',
+  'Details & Aktionen': 'Details and actions',
+  'Der Vorrat wird aus dem Posting-Rhythmus für neue Twitch-Clips berechnet.': 'Supply is estimated using the posting cadence for new Twitch clips.',
+
   'Zeitzone in Verwaltung ändern': 'Change timezone in account settings',
   'Zeitzone speichern': 'Save timezone',
   'Gilt für neue Twitch-Clips, den Auto-Pilot und den Clip-Vorrat. Bestehende Termine bleiben unverändert.': 'Applies to new Twitch clips, Auto-Pilot and the clip supply. Existing dates remain unchanged.',
