@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { subReminderSettings, type SubReminderSettings } from '../../api/subReminder';
 import { EditableCommandName, useCommandNames } from './CommandNameSection';
+import { useT } from '../../context/LanguageContext';
 
 export function SubReminderSection() {
+  const t = useT();
   const { commands } = useCommandNames();
   const subName = commands.find(row => row.command === 'sub')?.effective_name ?? '!sub';
   const [settings, setSettings] = useState<SubReminderSettings | null>(null);
@@ -22,18 +24,18 @@ export function SubReminderSection() {
     finally { setBusy(false); }
   }
   return <section className="panel-card rounded-2xl p-5 md:p-6">
-    <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">Chat-Befehl</p>
-    <h2 className="display-font text-2xl font-bold text-white mb-1">Abo-Link und Erinnerungen</h2>
+    <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">{t('Chat-Befehl')}</p>
+    <h2 className="display-font text-2xl font-bold text-white mb-1">{t('Abo-Link und Erinnerungen')}</h2>
     <EditableCommandName command="sub" className="my-3" />
-    <p className="text-sm text-text-secondary mb-4">Mit {subName} bekommt dein Chat den Abo-Link zu deinem Kanal.</p>
-    <p className="text-sm text-text-secondary mb-4">Erinnerungen sind freiwillig und zunächst aus. Wenn du sie einschaltest, kann jeder Zuschauer mit {subName} erinnerung an selbst zustimmen. Meldet Twitch sein Abo danach als beendet, erinnert der Bot ihn einmal bei seiner nächsten Chatnachricht öffentlich im Chat. Mit {subName} erinnerung aus kann er jederzeit abbestellen.</p>
-    {error && <p role="alert" className="text-danger mb-4">{error}</p>}
-    {!settings && !error && <p role="status" className="text-text-secondary">Status wird geladen …</p>}
+    <p className="text-sm text-text-secondary mb-4">{t('Mit {subName} bekommt dein Chat den Abo-Link zu deinem Kanal.', { subName })}</p>
+    <p className="text-sm text-text-secondary mb-4">{t('Erinnerungen sind freiwillig und zunächst aus. Wenn du sie einschaltest, kann jeder Zuschauer mit {subName} erinnerung an selbst zustimmen. Meldet Twitch sein Abo danach als beendet, erinnert der Bot ihn einmal bei seiner nächsten Chatnachricht öffentlich im Chat. Mit {subName} erinnerung aus kann er jederzeit abbestellen.', { subName })}</p>
+    {error && <p role="alert" className="text-danger mb-4">{t(error)}</p>}
+    {!settings && !error && <p role="status" className="text-text-secondary">{t('Status wird geladen …')}</p>}
     {settings && <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4">
-      <p role="status" className={settings.enabled ? 'font-bold text-success' : 'font-bold text-text-secondary'}>{settings.enabled ? 'Abo-Erinnerungen sind an' : 'Abo-Erinnerungen sind aus'}</p>
-      {!settings.available && <p className="text-sm text-text-secondary mt-2">Der Bot darf deine Abos noch nicht lesen. Verbinde Twitch unter „Konto & Verbindungen“ erneut. Erst dann kannst du Erinnerungen einschalten.</p>}
+      <p role="status" className={settings.enabled ? 'font-bold text-success' : 'font-bold text-text-secondary'}>{settings.enabled ? t('Abo-Erinnerungen sind an') : t('Abo-Erinnerungen sind aus')}</p>
+      {!settings.available && <p className="text-sm text-text-secondary mt-2">{t('Der Bot darf deine Abos noch nicht lesen. Verbinde Twitch unter „Konto & Verbindungen“ erneut. Erst dann kannst du Erinnerungen einschalten.')}</p>}
       <button type="button" disabled={busy || (!settings.available && !settings.enabled)} onClick={() => void toggle()} className="mt-3 rounded-lg border border-primary/40 bg-primary/10 px-5 py-2.5 font-semibold text-primary disabled:opacity-50 disabled:cursor-not-allowed">
-        {busy ? 'Wird gespeichert …' : settings.enabled ? 'Erinnerungen ausschalten' : 'Erinnerungen einschalten'}
+        {busy ? t('Wird gespeichert …') : settings.enabled ? t('Erinnerungen ausschalten') : t('Erinnerungen einschalten')}
       </button>
     </div>}
   </section>;

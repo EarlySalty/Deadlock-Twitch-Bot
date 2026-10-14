@@ -35,41 +35,45 @@ import {
   type AdManagerStrategy,
 } from '@/api/adManager';
 import { ApiHttpError } from '@/api/httpError';
+import { useT } from '../../context/LanguageContext';
+import { activeLocale, tr } from '../../i18n/dictionary';
 import { beschreibeEintrag, budgetVorschau, statusSatz } from './adManagerTexte';
 
 interface AdManagerSectionProps {
   reconnectUrl: string;
 }
 
-const STRATEGIES: Array<{
+function strategies(): Array<{
   id: AdManagerStrategy;
   label: string;
   description: string;
   badge?: string;
   emphasis?: 'passive' | 'recommended';
   points?: string[];
-}> = [
-  {
-    id: 'snooze',
-    label: 'Nur Twitch-Pausen nutzen',
-    badge: 'Passiv',
-    emphasis: 'passive',
-    description: 'Verschiebt fällige Werbung, wenn Twitch eine Pause anbietet.',
-    points: ['Twitch-Pausen nutzen', 'Keine Werbung durch den Bot'],
-  },
-  {
-    id: 'smart',
-    label: 'Match schützen & Queue nutzen',
-    badge: 'Empfohlen',
-    emphasis: 'recommended',
-    description: 'Schützt Matches und nutzt Queue oder Menü als Werbefenster.',
-    points: [
-      'Im Match: Werbung verschieben',
-      'Queue oder Menü: Werbung starten',
-      'Ohne frischen Steam-Status: keine eigene Werbung',
-    ],
-  },
-];
+}> {
+  return [
+    {
+      id: 'snooze',
+      label: tr('Nur Twitch-Pausen nutzen'),
+      badge: tr('Passiv'),
+      emphasis: 'passive',
+      description: tr('Verschiebt fällige Werbung, wenn Twitch eine Pause anbietet.'),
+      points: [tr('Twitch-Pausen nutzen'), tr('Keine Werbung durch den Bot')],
+    },
+    {
+      id: 'smart',
+      label: tr('Match schützen & Queue nutzen'),
+      badge: tr('Empfohlen'),
+      emphasis: 'recommended',
+      description: tr('Schützt Matches und nutzt Queue oder Menü als Werbefenster.'),
+      points: [
+        tr('Im Match: Werbung verschieben'),
+        tr('Queue oder Menü: Werbung starten'),
+        tr('Ohne frischen Steam-Status: keine eigene Werbung'),
+      ],
+    },
+  ];
+}
 
 function steamStatusView(steam: AdManagerSteamStatus): {
   value: string;
@@ -78,51 +82,51 @@ function steamStatusView(steam: AdManagerSteamStatus): {
 } {
   if (steam.state === 'unavailable') {
     return {
-      value: 'Matchstatus nicht verfügbar',
-      hint: 'Der Bot startet keine eigene Werbung. Geplante Twitch-Werbung wird mit verfügbaren Pausen verschoben.',
+      value: tr('Matchstatus nicht verfügbar'),
+      hint: tr('Der Bot startet keine eigene Werbung. Geplante Twitch-Werbung wird mit verfügbaren Pausen verschoben.'),
       tone: 'text-warning',
     };
   }
   if (!steam.linked) {
     return {
-      value: 'Nicht verbunden',
-      hint: 'Verbinde Steam über die Kontoverknüpfung oder hinterlege deine SteamID64 unter Bot & Schutz. Ohne frischen Matchstatus startet der Bot keine eigene Werbung.',
+      value: tr('Nicht verbunden'),
+      hint: tr('Verbinde Steam über die Kontoverknüpfung oder hinterlege deine SteamID64 unter Bot & Schutz. Ohne frischen Matchstatus startet der Bot keine eigene Werbung.'),
       tone: 'text-text-secondary',
     };
   }
   switch (steam.state) {
     case 'in_match':
       return {
-        value: 'Im Match',
+        value: tr('Im Match'),
         hint: steam.hero
-          ? `${steam.hero}. Werbung wird so lange wie möglich verschoben.`
-          : 'Werbung wird so lange wie möglich verschoben.',
+          ? tr('{hero}. Werbung wird so lange wie möglich verschoben.', { hero: steam.hero })
+          : tr('Werbung wird so lange wie möglich verschoben.'),
         tone: 'text-warning',
       };
     case 'in_queue':
       return {
-        value: 'In der Queue',
-        hint: 'Gutes Werbefenster: Fällt Werbung an, startet sie jetzt.',
+        value: tr('In der Queue'),
+        hint: tr('Gutes Werbefenster: Fällt Werbung an, startet sie jetzt.'),
         tone: 'text-success',
       };
     case 'out_of_game':
       return {
-        value: 'Nicht im Spiel',
-        hint: 'Werbung ist gerade unkritisch.',
+        value: tr('Nicht im Spiel'),
+        hint: tr('Werbung ist gerade unkritisch.'),
         tone: 'text-text-secondary',
       };
     case 'stale':
       return {
-        value: 'Status zu alt',
+        value: tr('Status zu alt'),
         hint: steam.observedAt
-          ? `Letzter Stand: ${formatDateTime(steam.observedAt)}. Eigene Werbestarts warten auf einen frischen Matchstatus.`
-          : 'Eigene Werbestarts warten auf einen frischen Matchstatus.',
+          ? tr('Letzter Stand: {time}. Eigene Werbestarts warten auf einen frischen Matchstatus.', { time: formatDateTime(steam.observedAt) })
+          : tr('Eigene Werbestarts warten auf einen frischen Matchstatus.'),
         tone: 'text-warning',
       };
     default:
       return {
-        value: 'Warten auf Status',
-        hint: 'Sobald Steam-Daten ankommen, erscheint hier dein Match-Status.',
+        value: tr('Warten auf Status'),
+        hint: tr('Sobald Steam-Daten ankommen, erscheint hier dein Match-Status.'),
         tone: 'text-text-secondary',
       };
   }
@@ -136,7 +140,7 @@ function formatDateTime(iso: string | null): string {
   if (!iso) return '–';
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString('de-DE', {
+  return date.toLocaleString(activeLocale(), {
     day: '2-digit',
     month: '2-digit',
     hour: '2-digit',
@@ -147,7 +151,7 @@ function formatDateTime(iso: string | null): string {
 function formatTime(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  return date.toLocaleTimeString(activeLocale(), { hour: '2-digit', minute: '2-digit' });
 }
 
 function formatRelativeMinutes(iso: string | null): string | null {
@@ -155,31 +159,33 @@ function formatRelativeMinutes(iso: string | null): string | null {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return null;
   const diff = Math.ceil((date.getTime() - Date.now()) / 60_000);
-  if (diff <= 0) return 'jetzt';
-  if (diff < 60) return `in ${diff} Min.`;
+  if (diff <= 0) return tr('jetzt');
+  if (diff < 60) return tr('in {minutes} Min.', { minutes: diff });
   const hours = Math.floor(diff / 60);
   const rest = diff % 60;
-  return rest > 0 ? `in ${hours} Std. ${rest} Min.` : `in ${hours} Std.`;
+  return rest > 0
+    ? tr('in {hours} Std. {minutes} Min.', { hours, minutes: rest })
+    : tr('in {hours} Std.', { hours });
 }
 
 function formatNextAd(iso: string | null): string {
-  if (!iso) return 'Nicht geplant';
+  if (!iso) return tr('Nicht geplant');
   return formatRelativeMinutes(iso) ?? formatDateTime(iso);
 }
 
 function actionKindLabel(kind: string): string {
-  if (kind === 'snooze') return 'Werbung pausiert';
-  if (kind === 'commercial') return 'Werbung gestartet';
-  return 'Werbeaktion';
+  if (kind === 'snooze') return tr('Werbung pausiert');
+  if (kind === 'commercial') return tr('Werbung gestartet');
+  return tr('Werbeaktion');
 }
 
 function actionOutcomeLabel(outcome: string): string {
-  if (outcome === 'succeeded') return 'Ausgeführt';
-  if (outcome === 'failed') return 'Fehlgeschlagen';
-  if (outcome === 'cancelled') return 'Abgebrochen';
-  if (outcome === 'unknown') return 'Ausgang noch unklar';
-  if (outcome === 'unresolved') return 'Nicht eindeutig geklärt';
-  return 'Status unbekannt';
+  if (outcome === 'succeeded') return tr('Ausgeführt');
+  if (outcome === 'failed') return tr('Fehlgeschlagen');
+  if (outcome === 'cancelled') return tr('Abgebrochen');
+  if (outcome === 'unknown') return tr('Ausgang noch unklar');
+  if (outcome === 'unresolved') return tr('Nicht eindeutig geklärt');
+  return tr('Status unbekannt');
 }
 
 function InfoHint({ label, text }: { label: string; text: string }) {
@@ -245,6 +251,7 @@ function NumberSetting({
   disabled?: boolean;
   onChange: (value: number) => void;
 }) {
+  const t = useT();
   const inputId = useId();
   const descriptionId = `${inputId}-beschreibung`;
   const unitId = `${inputId}-einheit`;
@@ -253,7 +260,7 @@ function NumberSetting({
     <div className={`min-w-0 ${disabled ? 'opacity-50' : ''}`}>
       <div className="flex items-center gap-1.5">
         <label htmlFor={inputId} className="text-[13px] font-semibold text-white">{label}</label>
-        <InfoHint label={`${label} erklären`} text={description} />
+        <InfoHint label={t('{label} erklären', { label })} text={description} />
       </div>
       <span id={descriptionId} className="sr-only">{description}</span>
       <span className="mt-1.5 flex items-center gap-1.5">
@@ -276,6 +283,7 @@ function NumberSetting({
 }
 
 export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
+  const t = useT();
   const [data, setData] = useState<AdManagerResponse | null>(null);
   const [history, setHistory] = useState<AdManagerHistory | null>(null);
   const [draft, setDraft] = useState<AdManagerSettingsInput | null>(null);
@@ -326,14 +334,14 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
       } catch (loadError) {
         if (!active) return;
         const message = timedOut
-          ? 'Die Anfrage hat nach 10 Sekunden nicht geantwortet.'
+          ? tr('Die Anfrage hat nach 10 Sekunden nicht geantwortet.')
           : loadError instanceof Error
             ? loadError.message
-            : 'Werbemanager konnte nicht geladen werden.';
+            : tr('Werbemanager konnte nicht geladen werden.');
         if (initial) {
           setError(message);
         } else {
-          setRefreshError(`Live-Status konnte nicht aktualisiert werden: ${message}`);
+          setRefreshError(tr('Live-Status konnte nicht aktualisiert werden: {message}', { message }));
         }
       } finally {
         window.clearTimeout(timeout);
@@ -379,7 +387,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
       setBaseline(settings);
       setNotice('Einstellungen gespeichert.');
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Speichern fehlgeschlagen.');
+      setError(saveError instanceof Error ? saveError.message : t('Speichern fehlgeschlagen.'));
     } finally {
       setSaving(false);
     }
@@ -401,19 +409,19 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
       );
       if (!result.queued) {
         delete actionRetryKeys.current[action];
-        throw new Error('Twitch-Aktion wurde nicht eingeplant.');
+        throw new Error(t('Twitch-Aktion wurde nicht eingeplant.'));
       }
       delete actionRetryKeys.current[action];
       setNotice(
         action === 'snooze'
-          ? 'Anfrage zum Pausieren eingereiht. Der Bot prüft vor der Ausführung Streamstatus und Twitch-Zugriff.'
-          : `Anfrage für ${draft.adDurationSeconds} Sekunden Werbung eingereiht. Der Bot prüft vor der Ausführung Streamstatus und Twitch-Zugriff.`,
+          ? t('Anfrage zum Pausieren eingereiht. Der Bot prüft vor der Ausführung Streamstatus und Twitch-Zugriff.')
+          : t('Anfrage für {seconds} Sekunden Werbung eingereiht. Der Bot prüft vor der Ausführung Streamstatus und Twitch-Zugriff.', { seconds: draft.adDurationSeconds }),
       );
     } catch (actionError) {
       if (actionError instanceof ApiHttpError) {
         delete actionRetryKeys.current[action];
       }
-      setError(actionError instanceof Error ? actionError.message : 'Twitch-Aktion fehlgeschlagen.');
+      setError(actionError instanceof Error ? actionError.message : t('Twitch-Aktion fehlgeschlagen.'));
     } finally {
       setActionPending(null);
     }
@@ -424,7 +432,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
       <section className="panel-card rounded-2xl p-6">
         <div className="flex items-center gap-3 text-sm text-text-secondary">
           <Loader2 className="h-5 w-5 animate-spin text-primary" />
-          Werbemanager wird geladen ...
+          {t('Werbemanager wird geladen ...')}
         </div>
       </section>
     );
@@ -435,12 +443,12 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
     return (
       <section className="panel-card rounded-2xl p-6">
         <div role="alert" className="rounded-xl border border-danger/40 bg-danger/10 p-4 text-sm text-danger">
-          <p>{error ?? 'Der Werbemanager ist gerade nicht verfügbar.'}</p>
+          <p>{error ?? t('Der Werbemanager ist gerade nicht verfügbar.')}</p>
           <a
             href={reauthUrl}
             className="mt-3 inline-flex items-center gap-2 rounded-lg border border-danger/40 px-4 py-2 font-semibold transition-colors hover:bg-danger/10"
           >
-            Twitch neu verbinden <ExternalLink className="h-4 w-4" />
+            {t('Twitch neu verbinden')} <ExternalLink className="h-4 w-4" />
           </a>
         </div>
       </section>
@@ -453,9 +461,9 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
   const nextBlockLabel = formatRelativeMinutes(plan?.nextBlockAt ?? null);
   const steamView = steamStatusView(status.steam);
   const missingScopeLabels = [
-    !status.scopes.read ? 'Werbeplan lesen' : null,
-    !status.scopes.snooze ? 'Werbung pausieren' : null,
-    !status.scopes.commercial ? 'Werbung starten' : null,
+    !status.scopes.read ? t('Werbeplan lesen') : null,
+    !status.scopes.snooze ? t('Werbung pausieren') : null,
+    !status.scopes.commercial ? t('Werbung starten') : null,
   ].filter((label): label is string => label !== null);
   const needsReauth = missingScopeLabels.length > 0;
   const canSnooze = status.isLive && status.scopes.snooze && (status.snoozeCount ?? 0) > 0;
@@ -485,7 +493,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
       transition={{ duration: 0.32 }}
     >
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h2 className="display-font text-2xl font-bold text-white">Intelligenter Werbemanager</h2>
+        <h2 className="display-font text-2xl font-bold text-white">{t('Intelligenter Werbemanager')}</h2>
         <div className="flex flex-wrap items-center gap-2">
           <span
             className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
@@ -497,14 +505,14 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
                 draft.enabled && status.workerHealthy ? 'animate-pulse bg-primary' : 'bg-text-secondary'
               }`}
             />
-            {draft.enabled ? 'Aktiv' : 'Aus'}
+            {draft.enabled ? t('Aktiv') : t('Aus')}
           </span>
           <button
             type="button"
             role="switch"
             aria-checked={draft.enabled}
-            aria-label="Werbemanager aktiv"
-            title={draft.enabled ? 'Werbemanager ausschalten' : 'Werbemanager einschalten'}
+            aria-label={t('Werbemanager aktiv')}
+            title={draft.enabled ? t('Werbemanager ausschalten') : t('Werbemanager einschalten')}
             onClick={() => patch({ enabled: !draft.enabled })}
             className={`relative inline-flex h-8 w-14 shrink-0 items-center rounded-full border-2 transition-colors ${
               draft.enabled ? 'border-primary bg-primary/25' : 'border-border bg-background'
@@ -521,7 +529,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
 
       {error ? (
         <div role="alert" className="mb-4 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
-          {error}
+          {t(error)}
         </div>
       ) : null}
       {refreshError ? (
@@ -531,7 +539,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
       ) : null}
       {notice ? (
         <div role="status" className="mb-4 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-sm text-accent">
-          {notice}
+          {t(notice)}
         </div>
       ) : null}
 
@@ -540,17 +548,17 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="flex items-center gap-2 text-sm font-semibold text-warning">
-                <ShieldCheck className="h-4 w-4" /> Twitch-Berechtigungen fehlen
+                <ShieldCheck className="h-4 w-4" /> {t('Twitch-Berechtigungen fehlen')}
               </p>
               <p className="mt-1 text-xs text-text-secondary">
-                Fehlend: {missingScopeLabels.join(', ')}.
+                {t('Fehlend: {scopes}.', { scopes: missingScopeLabels.join(', ') })}
               </p>
             </div>
             <a
               href={reauthUrl}
               className="inline-flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-4 py-2 text-sm font-semibold text-warning transition-colors hover:bg-warning/20"
             >
-              Twitch neu verbinden <ExternalLink className="h-4 w-4" />
+              {t('Twitch neu verbinden')} <ExternalLink className="h-4 w-4" />
             </a>
           </div>
         </div>
@@ -562,12 +570,12 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,13fr)_minmax(20rem,7fr)]">
         <div className="min-w-0 rounded-xl border border-border bg-background/60 p-4 md:p-5">
-          <h3 className="text-lg font-bold text-white">Konfiguration</h3>
+          <h3 className="text-lg font-bold text-white">{t('Konfiguration')}</h3>
 
           <section className="mt-4">
-            <h4 className="text-sm font-semibold text-white">Strategie</h4>
-            <div className="mt-2 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Werbestrategie">
-              {STRATEGIES.map((strategy) => {
+            <h4 className="text-sm font-semibold text-white">{t('Strategie')}</h4>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label={t('Werbestrategie')}>
+              {strategies().map((strategy) => {
                 const selected = strategy.id === draft.strategy;
                 const recommended = strategy.emphasis === 'recommended';
                 const tooltip = strategy.points?.length
@@ -616,18 +624,18 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
           <section className="mt-5 border-t border-border pt-4">
             <div className="flex items-center justify-between gap-4">
               <div className="flex min-w-0 items-center gap-1.5">
-                <h4 className="text-sm font-semibold text-white">Chat-Hinweis</h4>
+                <h4 className="text-sm font-semibold text-white">{t('Chat-Hinweis')}</h4>
                 <InfoHint
-                  label="Chat-Hinweis erklären"
-                  text="Der Bot schreibt kurz vor einer Werbung eine Zeile in den Chat, wenn der Werbemanager aktiv ist."
+                  label={t('Chat-Hinweis erklären')}
+                  text={t('Der Bot schreibt kurz vor einer Werbung eine Zeile in den Chat, wenn der Werbemanager aktiv ist.')}
                 />
               </div>
               <button
                 type="button"
                 role="switch"
                 aria-checked={chatNoticeOn}
-                aria-label="Chat vor Werbung informieren"
-                title={chatNoticeOn ? 'Hinweis im Chat ausschalten' : 'Hinweis im Chat einschalten'}
+                aria-label={t('Chat vor Werbung informieren')}
+                title={chatNoticeOn ? t('Hinweis im Chat ausschalten') : t('Hinweis im Chat einschalten')}
                 onClick={() => patch({ chatNoticeBeforeAd: !chatNoticeOn })}
                 className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border-2 transition-colors ${
                   chatNoticeOn ? 'border-primary bg-primary/25' : 'border-border bg-background'
@@ -644,21 +652,21 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
 
           <section className="mt-5 border-t border-border pt-4">
             <div className="flex items-center gap-1.5">
-              <h4 className="text-sm font-semibold text-white">Budget</h4>
+              <h4 className="text-sm font-semibold text-white">{t('Budget')}</h4>
               <InfoHint
-                label="Budget erklären"
-                text="Der Werbemanager nutzt den Twitch-Werbeplan, wenn Twitch einen Plan liefert. Sonst gilt dein eigenes Stundenbudget."
+                label={t('Budget erklären')}
+                text={t('Der Werbemanager nutzt den Twitch-Werbeplan, wenn Twitch einen Plan liefert. Sonst gilt dein eigenes Stundenbudget.')}
               />
             </div>
             {budgetSource === 'twitch' ? (
               <div className="mt-2">
-                <p className="text-sm font-semibold text-white">Twitch-Werbungs-Manager</p>
+                <p className="text-sm font-semibold text-white">{t('Twitch-Werbungs-Manager')}</p>
                 <p className="mt-1 text-xs text-text-secondary">{budgetVorschau(draft.budgetMinutesPerHour, plan)}</p>
               </div>
             ) : (
               <div className="mt-2 flex flex-wrap items-end gap-3">
                 <label htmlFor="budget-minutes" className="block">
-                  <span className="block text-xs font-medium text-text-secondary">Minuten pro Stunde</span>
+                  <span className="block text-xs font-medium text-text-secondary">{t('Minuten pro Stunde')}</span>
                   <input
                     id="budget-minutes"
                     type="number"
@@ -677,52 +685,52 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
 
           <details className="group mt-5 border-t border-border pt-4">
             <summary className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-primary">
-              <SlidersHorizontal className="h-4 w-4" /> Feineinstellungen
+              <SlidersHorizontal className="h-4 w-4" /> {t('Feineinstellungen')}
             </summary>
             <div className="mt-4 grid gap-x-4 gap-y-4 sm:grid-cols-2">
               <NumberSetting
-                label="Mindestabstand"
-                description="Gilt für Twitch-Pausen und für Werbung, die du selbst startest."
+                label={t('Mindestabstand')}
+                description={t('Gilt für Twitch-Pausen und für Werbung, die du selbst startest.')}
                 value={draft.minIntervalMinutes}
                 min={8}
                 max={180}
-                unit="Min."
+                unit={t('Min.')}
                 disabled={smartFieldsDisabled}
                 onChange={(value) => patch({ minIntervalMinutes: value })}
               />
               <NumberSetting
-                label="Startschutz"
-                description="Nach Streamstart startet der Bot in diesem Zeitraum keine Werbung."
+                label={t('Startschutz')}
+                description={t('Nach Streamstart startet der Bot in diesem Zeitraum keine Werbung.')}
                 value={draft.startupDelayMinutes}
                 min={0}
                 max={180}
-                unit="Min."
+                unit={t('Min.')}
                 disabled={smartFieldsDisabled}
                 onChange={(value) => patch({ startupDelayMinutes: value })}
               />
               <NumberSetting
-                label="Chat-Ruhe"
-                description="Chat-Ruhe außerhalb von Deadlock. Ein fehlender oder veralteter Matchstatus bleibt eine Sperre für eigene Werbestarts."
+                label={t('Chat-Ruhe')}
+                description={t('Chat-Ruhe außerhalb von Deadlock. Ein fehlender oder veralteter Matchstatus bleibt eine Sperre für eigene Werbestarts.')}
                 value={draft.quietWindowMinutes}
                 min={0}
                 max={60}
-                unit="Min."
+                unit={t('Min.')}
                 disabled={smartFieldsDisabled}
                 onChange={(value) => patch({ quietWindowMinutes: value })}
               />
               <NumberSetting
-                label="Vorlauf"
-                description="Vorlauf vor geplanter Werbung. Der Bot nutzt mindestens 60 Sekunden, damit seine regelmäßige Prüfung rechtzeitig greift."
+                label={t('Vorlauf')}
+                description={t('Vorlauf vor geplanter Werbung. Der Bot nutzt mindestens 60 Sekunden, damit seine regelmäßige Prüfung rechtzeitig greift.')}
                 value={draft.actionLeadSeconds}
                 min={10}
                 max={300}
-                unit="Sek."
+                unit={t('Sek.')}
                 onChange={(value) => patch({ actionLeadSeconds: value })}
               />
             </div>
             {smartFieldsDisabled ? (
               <p className="mt-3 text-[11px] text-text-secondary">
-                Abstand, Startschutz und Chat-Ruhe gelten bei „Match schützen & Queue nutzen“.
+                {t('Abstand, Startschutz und Chat-Ruhe gelten bei „Match schützen & Queue nutzen“.')}
               </p>
             ) : null}
           </details>
@@ -735,11 +743,11 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
               className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3.5 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              Speichern
+              {t('Speichern')}
             </button>
             {dirty && !saving ? (
               <span className="text-[11px] text-text-secondary">
-                {needsInitialSave ? 'Noch nicht eingerichtet.' : 'Ungespeicherte Änderungen.'}
+                {needsInitialSave ? t('Noch nicht eingerichtet.') : t('Ungespeicherte Änderungen.')}
               </span>
             ) : null}
           </div>
@@ -749,7 +757,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
           <section className="rounded-xl border border-border bg-background/60 p-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <h3 className="text-lg font-bold text-white">Live-Status</h3>
+                <h3 className="text-lg font-bold text-white">{t('Live-Status')}</h3>
                 <p className="mt-1 text-xs leading-5 text-text-secondary">{laufText}</p>
               </div>
               <span
@@ -758,7 +766,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
                 }`}
               >
                 <span className={`h-1.5 w-1.5 rounded-full ${status.isLive ? 'animate-pulse bg-error' : 'bg-text-secondary'}`} />
-                {status.isLive ? 'Stream läuft' : 'Offline'}
+                {status.isLive ? t('Stream läuft') : 'Offline'}
               </span>
             </div>
 
@@ -766,7 +774,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
               <div className="mt-3 flex items-center gap-2 text-xs text-danger">
                 <AlertTriangle className="h-4 w-4 shrink-0" />
                 <span>
-                  Bot nicht erreichbar
+                  {t('Bot nicht erreichbar')}
                   {status.workerHeartbeatAt ? ` · ${formatDateTime(status.workerHeartbeatAt)}` : ''}
                 </span>
               </div>
@@ -775,28 +783,28 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
             <div className="mt-4 grid grid-cols-2 gap-2">
               <StatusMetric
                 icon={<Clock3 className="h-4 w-4" />}
-                label="Nächste Werbung"
+                label={t('Nächste Werbung')}
                 value={formatNextAd(status.nextAdAt)}
                 hint={status.nextAdAt ? formatDateTime(status.nextAdAt) : null}
               />
               <StatusMetric
                 icon={<PauseCircle className="h-4 w-4" />}
-                label="Pausen"
+                label={t('Pausen')}
                 value={status.snoozeCount === null ? '–' : `${status.snoozeCount}`}
-                hint={status.snoozeRefreshAt ? `Neue ab ${formatDateTime(status.snoozeRefreshAt)}` : null}
+                hint={status.snoozeRefreshAt ? t('Neue ab {time}', { time: formatDateTime(status.snoozeRefreshAt) }) : null}
                 tone={(status.snoozeCount ?? 0) > 0 ? 'text-success' : 'text-warning'}
               />
               <StatusMetric
                 icon={<Gamepad2 className="h-4 w-4" />}
-                label="Match-Status"
+                label={t('Match-Status')}
                 value={steamView.value}
                 hint={steamView.hint}
                 tone={steamView.tone}
               />
               <StatusMetric
                 icon={<Clock3 className="h-4 w-4" />}
-                label="Letzte Bot-Aktion"
-                value={status.lastAction ? actionKindLabel(status.lastAction.kind) : 'Noch keine'}
+                label={t('Letzte Bot-Aktion')}
+                value={status.lastAction ? actionKindLabel(status.lastAction.kind) : t('Noch keine')}
                 hint={status.lastAction ? `${actionOutcomeLabel(status.lastAction.outcome)} · ${formatDateTime(status.lastAction.at)}` : null}
                 tone={status.lastAction ? 'text-text-secondary' : 'text-white'}
               />
@@ -804,16 +812,16 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
 
             <div className="mt-4 flex items-center gap-2 border-t border-border pt-3 text-xs text-text-secondary">
               <InfoHint
-                label="Twitch-Steuerung erklären"
-                text="Twitch entscheidet, wann Werbung fällig wird. Der Bot kann innerhalb der Twitch-Funktionen pausieren oder einen Werbeblock starten."
+                label={t('Twitch-Steuerung erklären')}
+                text={t('Twitch entscheidet, wann Werbung fällig wird. Der Bot kann innerhalb der Twitch-Funktionen pausieren oder einen Werbeblock starten.')}
               />
-              <span>Twitch legt Fälligkeit und Pausen fest.</span>
+              <span>{t('Twitch legt Fälligkeit und Pausen fest.')}</span>
             </div>
 
             <div className="mt-4 border-t border-border pt-4">
               <div className="flex items-center justify-between gap-3">
-                <h4 className="text-sm font-semibold text-white">Von Hand</h4>
-                {!status.isLive ? <span className="text-[10px] text-text-secondary">Im Stream verfügbar</span> : null}
+                <h4 className="text-sm font-semibold text-white">{t('Von Hand')}</h4>
+                {!status.isLive ? <span className="text-[10px] text-text-secondary">{t('Im Stream verfügbar')}</span> : null}
               </div>
               <div className="mt-2 flex flex-wrap gap-2">
                 <button
@@ -823,7 +831,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
                   className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-sm font-semibold text-accent transition-colors hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {actionPending === 'snooze' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                  5 Min. pausieren
+                  {t('5 Min. pausieren')}
                 </button>
                 <button
                   type="button"
@@ -832,7 +840,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
                   className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-1.5 text-sm font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {actionPending === 'commercial' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                  {draft.adDurationSeconds} Sek. Werbung
+                  {t('{seconds} Sek. Werbung', { seconds: draft.adDurationSeconds })}
                 </button>
               </div>
               <div className="mt-2 inline-flex max-w-full flex-wrap gap-1 rounded-lg border border-border bg-card p-1">
@@ -858,26 +866,26 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
           <section className="rounded-xl border border-border bg-background/60 p-4">
             <div className="flex items-center gap-2">
               <History className="h-4 w-4 text-primary" />
-              <h3 className="text-sm font-semibold text-white">Verlauf</h3>
+              <h3 className="text-sm font-semibold text-white">{t('Verlauf')}</h3>
             </div>
 
             {summary ? (
               <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3">
                 <div>
                   <p className="text-base font-bold text-white">{summary.blocksRun}</p>
-                  <p className="text-[10px] uppercase tracking-wider text-text-secondary">Blöcke</p>
+                  <p className="text-[10px] uppercase tracking-wider text-text-secondary">{t('Blöcke')}</p>
                 </div>
                 <div>
                   <p className="text-base font-bold text-success">{summary.blocksInWindow}</p>
-                  <p className="text-[10px] uppercase tracking-wider text-text-secondary">Im Fenster</p>
+                  <p className="text-[10px] uppercase tracking-wider text-text-secondary">{t('Im Fenster')}</p>
                 </div>
                 <div>
-                  <p className="text-base font-bold text-white">{summary.budgetSecondsUsed} / {summary.budgetSecondsPlanned} Sek.</p>
-                  <p className="text-[10px] uppercase tracking-wider text-text-secondary">Budget</p>
+                  <p className="text-base font-bold text-white">{t('{used} / {planned} Sek.', { used: summary.budgetSecondsUsed, planned: summary.budgetSecondsPlanned })}</p>
+                  <p className="text-[10px] uppercase tracking-wider text-text-secondary">{t('Budget')}</p>
                 </div>
                 <div>
                   <p className="text-base font-bold text-text-secondary">{summary.postponed}</p>
-                  <p className="text-[10px] uppercase tracking-wider text-text-secondary">Verschoben</p>
+                  <p className="text-[10px] uppercase tracking-wider text-text-secondary">{t('Verschoben')}</p>
                 </div>
               </div>
             ) : null}
@@ -892,7 +900,7 @@ export function AdManagerSection({ reconnectUrl }: AdManagerSectionProps) {
                 ))}
               </ul>
             ) : (
-              <p className="mt-3 border-t border-border pt-3 text-xs text-text-secondary">Noch keine Entscheidungen in dieser Session.</p>
+              <p className="mt-3 border-t border-border pt-3 text-xs text-text-secondary">{t('Noch keine Entscheidungen in dieser Session.')}</p>
             )}
           </section>
         </div>

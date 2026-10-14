@@ -233,7 +233,7 @@ async fn kanal_kennung(
     pool: &PgPool,
     auth: &DashboardAuthLevel,
     login: &str,
-) -> Result<String, Response> {
+) -> Result<String, Box<Response>> {
     if let DashboardAuthLevel::Partner {
         twitch_login,
         twitch_user_id,
@@ -262,13 +262,15 @@ async fn kanal_kennung(
     })
     .flatten();
 
-    gefunden.ok_or_else(|| {
-        fehler(
-            StatusCode::NOT_FOUND,
-            "kanal_unbekannt",
-            "Zu diesem Kanal ist keine Twitch-Kennung hinterlegt.",
-        )
-    })
+    gefunden
+        .ok_or_else(|| {
+            fehler(
+                StatusCode::NOT_FOUND,
+                "kanal_unbekannt",
+                "Zu diesem Kanal ist keine Twitch-Kennung hinterlegt.",
+            )
+        })
+        .map_err(Box::new)
 }
 
 /// Prueft im laufenden Betrieb, ob die Sitzung noch traegt.
@@ -466,7 +468,7 @@ pub async fn obs_ws_handler(
     };
     let channel_id = match kanal_kennung(&pool, &auth, &login).await {
         Ok(kennung) => kennung,
-        Err(antwort) => return antwort,
+        Err(antwort) => return *antwort,
     };
     let Some(upgrade) = upgrade else {
         return fehler(

@@ -1,9 +1,3 @@
-//! Handler für `/twitch/api/v2/monetization`.
-//!
-//! Port von `bot/analytics/api_insights.py:_api_v2_monetization`.
-//! Auth + Extended-Plan-Gate, `streamer` (optional, leer = ohne Filter),
-//! `days` (7..90, Default 30).
-
 use axum::{
     extract::{Query, State},
     response::IntoResponse,
@@ -13,6 +7,7 @@ use serde::Deserialize;
 use sqlx::PgPool;
 
 use crate::auth::level::DashboardAuthLevel;
+use crate::language::RequestLanguage;
 use crate::query_int::parse_bounded_query_int;
 
 #[cfg(test)]
@@ -24,23 +19,19 @@ use serde_json::json;
 pub struct MonetizationQuery {
     #[serde(default)]
     pub streamer: Option<String>,
-    // Rohwert: nicht-numerisches `days` → Python-konformes 400-JSON, siehe query_int.
     #[serde(default)]
     pub days: Option<String>,
 }
 
-/// `GET /twitch/api/v2/monetization?streamer=&days=30`
 pub async fn monetization_handler(
     auth: DashboardAuthLevel,
+    RequestLanguage(lang): RequestLanguage,
     State(pool): State<PgPool>,
     Query(params): Query<MonetizationQuery>,
 ) -> impl IntoResponse {
     if let Some(resp) = crate::auth::extended_gate(&pool, &auth).await {
         return resp;
     }
-    // streamer: getrimmt + kleingeschrieben, "" wenn fehlend (Python `.strip().lower()`).
-    // IDOR-Guard: Partner sind auf den eigenen Login geklemmt; Admin darf "" (kein
-    // Filter) oder einen beliebigen Login wählen.
     let streamer =
         match crate::auth::resolve_streamer_scope(&auth, params.streamer.as_deref(), false) {
             Ok(Some(s)) => s,
@@ -52,7 +43,8 @@ pub async fn monetization_handler(
         Err(resp) => return resp.into_response(),
     };
 
-    match tb_analytics::monetization::load_monetization_payload(&pool, &streamer, days).await {
+    match tb_analytics::monetization::load_monetization_payload(&pool, &streamer, days, lang).await
+    {
         Ok(v) => Json(v).into_response(),
         Err(e) => {
             tracing::error!("monetization SELECT-Fehler: {e}");
@@ -109,6 +101,7 @@ mod tests {
         // Localhost = privilegiert (bypass Paywall) → 200.
         let resp = monetization_handler(
             DashboardAuthLevel::admin(),
+            RequestLanguage::default(),
             State(pool),
             Query(MonetizationQuery {
                 streamer: None,
@@ -127,6 +120,7 @@ mod tests {
         };
         let resp = monetization_handler(
             DashboardAuthLevel::admin(),
+            RequestLanguage::default(),
             State(pool),
             Query(MonetizationQuery {
                 streamer: None,
@@ -173,6 +167,7 @@ mod tests {
         grant_partner_analytics(&pool, "earlysalty").await;
         let resp = monetization_handler(
             partner("earlysalty"),
+            RequestLanguage::default(),
             State(pool),
             Query(MonetizationQuery {
                 streamer: Some("ismile_e".into()),

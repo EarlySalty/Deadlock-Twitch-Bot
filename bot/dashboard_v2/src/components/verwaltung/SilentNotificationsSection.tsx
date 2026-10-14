@@ -7,30 +7,35 @@ import {
   type SilentSettings,
 } from '@/api/silentNotifications';
 import { EditableCommandName } from './CommandNameSection';
+import { useT } from '../../context/LanguageContext';
+import { tr } from '../../i18n/dictionary';
 
 type FlagKey = keyof SilentSettings;
 
-const ROWS: Array<{
+function silentRows(): Array<{
   key: FlagKey;
   icon: typeof ShieldAlert;
   title: string;
   desc: string;
-}> = [
-  {
-    key: 'silent_ban',
-    icon: ShieldAlert,
-    title: 'Auto-Ban-Hinweise stummschalten',
-    desc: 'Wenn aktiv, postet der Bot keine Chat-Notiz mehr, sobald er jemanden automatisch bannt.',
-  },
-  {
-    key: 'silent_raid',
-    icon: MessageSquare,
-    title: 'Raid-Hinweise stummschalten',
-    desc: 'Wenn aktiv, postet der Bot keine Chat-Notiz mehr zu automatischen Raids.',
-  },
-];
+}> {
+  return [
+    {
+      key: 'silent_ban',
+      icon: ShieldAlert,
+      title: tr('Auto-Ban-Hinweise stummschalten'),
+      desc: tr('Wenn aktiv, postet der Bot keine Chat-Notiz mehr, sobald er jemanden automatisch bannt.'),
+    },
+    {
+      key: 'silent_raid',
+      icon: MessageSquare,
+      title: tr('Raid-Hinweise stummschalten'),
+      desc: tr('Wenn aktiv, postet der Bot keine Chat-Notiz mehr zu automatischen Raids.'),
+    },
+  ];
+}
 
 export function SilentNotificationsSection() {
+  const t = useT();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [settings, setSettings] = useState<SilentSettings>({
@@ -49,7 +54,7 @@ export function SilentNotificationsSection() {
         silent_raid: Boolean(data.silent_raid),
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Unbekannter Fehler');
+      setError(e instanceof Error ? t(e.message) : t('Unbekannter Fehler'));
     } finally {
       setLoading(false);
     }
@@ -74,7 +79,7 @@ export function SilentNotificationsSection() {
       });
     } catch (e) {
       setSettings(settings);
-      setError(e instanceof Error ? e.message : 'Speichern fehlgeschlagen');
+      setError(e instanceof Error ? t(e.message) : t('Speichern fehlgeschlagen'));
     } finally {
       setPendingKey(null);
     }
@@ -90,11 +95,11 @@ export function SilentNotificationsSection() {
     >
       <div className="mb-5">
         <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1 flex items-center gap-2">
-          <BellOff className="h-4 w-4" /> Chat-Benachrichtigungen
+          <BellOff className="h-4 w-4" /> {t('Chat-Benachrichtigungen')}
         </p>
-        <h2 className="display-font text-2xl font-bold text-white mb-1">Stille Hinweise</h2>
+        <h2 className="display-font text-2xl font-bold text-white mb-1">{t('Stille Hinweise')}</h2>
         <p className="text-sm text-text-secondary">
-          Steuere, ob der Bot Chat-Notizen zu Auto-Bans und Raids postet. Das geht auch mit den Chat-Befehlen in den Feldern darunter.
+          {t('Steuere, ob der Bot Chat-Notizen zu Auto-Bans und Raids postet. Das geht auch mit den Chat-Befehlen in den Feldern darunter.')}
         </p>
       </div>
 
@@ -107,11 +112,11 @@ export function SilentNotificationsSection() {
       {loading ? (
         <div className="flex items-center gap-3 text-text-secondary text-sm">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          Einstellungen werden geladen ...
+          {t('Einstellungen werden geladen ...')}
         </div>
       ) : (
         <div className="space-y-3">
-          {ROWS.map(({ key, icon: Icon, title, desc }) => {
+          {silentRows().map(({ key, icon: Icon, title, desc }) => {
             const on = settings[key];
             const pending = pendingKey === key;
             return (

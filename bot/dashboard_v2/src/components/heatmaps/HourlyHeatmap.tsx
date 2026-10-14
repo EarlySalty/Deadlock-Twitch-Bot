@@ -2,36 +2,35 @@ import { motion } from 'framer-motion';
 import { Rise } from '../../motion/Rise';
 import type { HourlyHeatmapData } from '@/types/analytics';
 import { getWeekdayLabel, formatNumber, getHeatmapColor } from '@/utils/formatters';
+import { useT } from '../../context/LanguageContext';
 
 interface HourlyHeatmapProps {
   data: HourlyHeatmapData[];
   title?: string;
 }
 
-export function HourlyHeatmap({ data, title = 'Beste Streaming-Zeiten' }: HourlyHeatmapProps) {
-  const weekdays = [0, 1, 2, 3, 4, 5, 6]; // Sun-Sat
+export function HourlyHeatmap({ data, title }: HourlyHeatmapProps) {
+  const t = useT();
+  const weekdays = [0, 1, 2, 3, 4, 5, 6];
   const hours = Array.from({ length: 24 }, (_, i) => i);
 
-  // Create lookup map
   const dataMap = new Map<string, HourlyHeatmapData>();
   data.forEach(d => {
     dataMap.set(`${d.weekday}-${d.hour}`, d);
   });
 
-  // Find max for color scaling
   const maxViewers = Math.max(...data.map(d => d.avgViewers), 1);
 
   return (
     <Rise
       className="bg-card rounded-xl border border-border p-5"
     >
-      <h3 className="text-lg font-bold text-white mb-4">{title}</h3>
+      <h3 className="text-lg font-bold text-white mb-4">{title ?? t('Beste Streaming-Zeiten')}</h3>
 
       <div className="overflow-x-auto">
         <div className="min-w-[600px]">
-          {/* Hour Labels */}
           <div className="flex mb-1">
-            <div className="w-10" /> {/* Spacer for weekday labels */}
+            <div className="w-10" />
             {hours.map(hour => (
               <div
                 key={hour}
@@ -42,15 +41,12 @@ export function HourlyHeatmap({ data, title = 'Beste Streaming-Zeiten' }: Hourly
             ))}
           </div>
 
-          {/* Grid */}
           {weekdays.map(weekday => (
             <div key={weekday} className="flex mb-1">
-              {/* Weekday Label */}
               <div className="w-10 text-xs text-text-secondary flex items-center">
                 {getWeekdayLabel(weekday)}
               </div>
 
-              {/* Hour Cells */}
               {hours.map(hour => {
                 const cellData = dataMap.get(`${weekday}-${hour}`);
                 const viewers = cellData?.avgViewers ?? 0;
@@ -65,7 +61,6 @@ export function HourlyHeatmap({ data, title = 'Beste Streaming-Zeiten' }: Hourly
                     className="flex-1 aspect-square mx-0.5 rounded-sm relative group cursor-pointer"
                     style={{ backgroundColor: getHeatmapColor(viewers, maxViewers) }}
                   >
-                    {/* Tooltip */}
                     {streamCount > 0 && (
                       <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 opacity-0 group-hover:opacity-100 transition-opacity z-10 pointer-events-none">
                         <div className="bg-card border border-border rounded px-2 py-1 text-xs whitespace-nowrap shadow-xl">
@@ -73,7 +68,7 @@ export function HourlyHeatmap({ data, title = 'Beste Streaming-Zeiten' }: Hourly
                             {getWeekdayLabel(weekday)} {hour}:00
                           </div>
                           <div className="text-text-secondary">
-                            {formatNumber(viewers)} Ø Viewer
+                            {t('{viewers} Ø Viewer', { viewers: formatNumber(viewers) })}
                           </div>
                           <div className="text-text-secondary">
                             {streamCount} Streams
@@ -87,9 +82,8 @@ export function HourlyHeatmap({ data, title = 'Beste Streaming-Zeiten' }: Hourly
             </div>
           ))}
 
-          {/* Legend */}
           <div className="flex items-center justify-end mt-4 gap-2 text-xs text-text-secondary">
-            <span>Weniger</span>
+            <span>{t('Weniger')}</span>
             <div className="flex gap-1">
               {[0.1, 0.3, 0.5, 0.7, 0.9].map(intensity => (
                 <div
@@ -99,7 +93,7 @@ export function HourlyHeatmap({ data, title = 'Beste Streaming-Zeiten' }: Hourly
                 />
               ))}
             </div>
-            <span>Mehr Viewer</span>
+            <span>{t('Mehr Viewer')}</span>
           </div>
         </div>
       </div>

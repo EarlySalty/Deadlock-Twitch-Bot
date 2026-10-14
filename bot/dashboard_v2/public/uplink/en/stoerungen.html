@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#241c11">
+  <title>Troubleshooting</title>
+  <link rel="stylesheet" href="../doc.css">
+</head>
+<body>
+<main class="uplink-doc" data-doc="stoerungen">
+  <p class="nur-standalone"><a href="index.html">Back to help</a></p>
+  <h1>Troubleshooting</h1>
+  <section><h2>OBS is sending, but nothing reaches the platform</h2><p>Check the input and the affected destination's status in the dashboard. Turning it on is a setting; Sending media confirms local outgoing traffic. A published platform broadcast needs its own confirmation.</p></section>
+  <section><h2>OBS cannot connect</h2><p>Use Custom, the public RTMPS server address and the separate private Uplink key from the dashboard. Copy both fields in full. An old combined address with the key embedded in it is invalid.</p></section>
+  <section><h2>Renew access</h2><p>The Reconnect button takes you through the existing platform authorization. Missing chat permissions do not automatically mean that stored media access is invalid too. Each feature's status remains visible separately.</p></section>
+  <section><h2>The video stutters</h2><p>Check the actual bitrate, available upload capacity and skipped frames in OBS. If your connection is tight, lower the CBR budget or the source resolution or frame rate. A higher output resolution cannot restore missing detail.</p></section>
+  <section><h2>Your internet connection drops</h2><p>Check the current connection status and the reconnect grace period saved in the dashboard. A dropped transport connection does not automatically mean you ended the stream on purpose. Only rely on the behavior actually shown; a waiting screen or a seamless switch cannot be inferred from a destination being turned on.</p></section>
+</main>
+</body>
+</html>

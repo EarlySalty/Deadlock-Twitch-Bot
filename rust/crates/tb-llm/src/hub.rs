@@ -106,6 +106,7 @@ pub struct Request {
     /// aus fachlichen Gruenden an genau einer Adresse haengen.
     pub endpoint: Option<LlmEndpoint>,
     pub twitch_broadcaster: Option<String>,
+    pub twitch_channel: Option<String>,
 }
 
 impl Request {
@@ -203,6 +204,10 @@ impl Request {
         self.twitch_broadcaster = Some(broadcaster_id.into());
         self
     }
+    pub fn twitch_channel(mut self, channel_login: impl Into<String>) -> Self {
+        self.twitch_channel = Some(channel_login.into());
+        self
+    }
 }
 
 /// Was zurueckkommt.
@@ -227,12 +232,16 @@ pub enum LlmError {
     Timeout(String),
     /// Antwort kam, war aber kein Erfolg. Der Body haengt dran, damit der
     /// Aufrufer Anbietertexte wie "credit balance is too low" lesen kann.
-    Http { status: u16, body: String },
+    Http {
+        status: u16,
+        body: String,
+    },
     /// Verbindung, TLS, Abbruch.
     Transport(String),
     /// Antwort kam an, taugte aber nicht: leerer Text oder abgelehnt vom
     /// `accept`-Praedikat des Aufrufers.
     Unparsable(String),
+    Disabled(String),
 }
 
 impl LlmError {
@@ -244,6 +253,7 @@ impl LlmError {
             Self::Http { .. } => "http_status",
             Self::Transport(_) => "transport",
             Self::Unparsable(_) => "unparsable",
+            Self::Disabled(_) => "ai_disabled",
         }
     }
 }
@@ -261,6 +271,7 @@ impl std::fmt::Display for LlmError {
             }
             Self::Transport(e) => write!(f, "LLM-Aufruf fehlgeschlagen: {e}"),
             Self::Unparsable(e) => write!(f, "LLM-Antwort unbrauchbar: {e}"),
+            Self::Disabled(e) => write!(f, "KI ausgeschaltet: {e}"),
         }
     }
 }
@@ -309,9 +320,24 @@ pub(crate) async fn complete_routed(
     request: Request,
     brain: Option<Arc<crate::brain_route::BrainRoute>>,
 ) -> Result<Response, LlmFailure> {
+    let purpose = ledger_purpose(use_case, &request);
+    crate::ai_guard::check(use_case, &purpose, &request)
+        .await
+        .map_err(|error| LlmFailure {
+            provider: "ki-schalter".to_string(),
+            model: String::new(),
+            error,
+        })?;
     match brain {
         Some(route) => route.complete(use_case, &request).await,
         None => complete_direct(use_case, request).await,
+    }
+}
+
+fn ledger_purpose(use_case: &str, request: &Request) -> String {
+    match &request.ledger {
+        Some(Ledger::Purpose(p)) => p.clone(),
+        Some(Ledger::Off) | None => use_case.to_string(),
     }
 }
 
@@ -394,11 +420,7 @@ async fn complete_chain(
         });
     }
 
-    let purpose = match &request.ledger {
-        Some(Ledger::Off) => Some(use_case.to_string()),
-        Some(Ledger::Purpose(p)) => Some(p.clone()),
-        None => Some(use_case.to_string()),
-    };
+    let purpose = Some(ledger_purpose(use_case, &request));
 
     // Gesamtfrist: ohne Angabe die Summe der Einzelfristen, also das
     // bisherige Verhalten. Mit Angabe bekommt jedes weitere Glied nur noch,
@@ -959,6 +981,7 @@ fn http_client() -> Result<reqwest::Client, LlmError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hub_test_fixture::{authorized_database, TWITCH_USER_ID};
     use serde_json::json;
     use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1058,6 +1081,11 @@ mod tests {
 
     #[tokio::test]
     async fn openai_pfad_liefert_text_und_tokens() {
+        let Some(_database) =
+            authorized_database("hub::tests::openai_pfad_liefert_text_und_tokens").await
+        else {
+            return;
+        };
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
@@ -1075,6 +1103,7 @@ mod tests {
             Request::simple("sys", "hi")
                 .temperature(0.25)
                 .no_ledger()
+                .twitch_broadcaster(TWITCH_USER_ID)
                 .endpoint(endpoint(&server, "fireworks")),
         )
         .await
@@ -1087,16 +1116,26 @@ mod tests {
 
     #[tokio::test]
     async fn zentraler_hub_weist_andere_anbieter_vor_dem_http_aufruf_ab() {
+        let Some(_database) = authorized_database(
+            "hub::tests::zentraler_hub_weist_andere_anbieter_vor_dem_http_aufruf_ab",
+        )
+        .await
+        else {
+            return;
+        };
         let server = MockServer::start().await;
 
         let error = complete(
             "test",
-            Request::prompt("hi").no_ledger().endpoint(LlmEndpoint {
-                provider: "minimax",
-                base_url: server.uri(),
-                model: "MiniMax-M3".to_string(),
-                api_key: Some("k".to_string()),
-            }),
+            Request::prompt("hi")
+                .no_ledger()
+                .twitch_broadcaster(TWITCH_USER_ID)
+                .endpoint(LlmEndpoint {
+                    provider: "minimax",
+                    base_url: server.uri(),
+                    model: "MiniMax-M3".to_string(),
+                    api_key: Some("k".to_string()),
+                }),
         )
         .await
         .expect_err("MiniMax muss bereits im zentralen Hub abgewiesen werden");
@@ -1107,6 +1146,11 @@ mod tests {
 
     #[tokio::test]
     async fn title_ai_weist_glm_ohne_nutzerfreigabe_ab() {
+        let Some(_database) =
+            authorized_database("hub::tests::title_ai_weist_glm_ohne_nutzerfreigabe_ab").await
+        else {
+            return;
+        };
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
@@ -1123,6 +1167,7 @@ mod tests {
             Request::prompt("titel")
                 .denken_aus()
                 .no_ledger()
+                .twitch_broadcaster(TWITCH_USER_ID)
                 .endpoint(LlmEndpoint {
                     provider: "zai",
                     base_url: server.uri(),
@@ -1137,14 +1182,23 @@ mod tests {
 
     #[tokio::test]
     async fn zentraler_hub_weist_anderes_fireworks_modell_ab() {
+        let Some(_database) =
+            authorized_database("hub::tests::zentraler_hub_weist_anderes_fireworks_modell_ab")
+                .await
+        else {
+            return;
+        };
         let error = complete(
             "test",
-            Request::prompt("hi").no_ledger().endpoint(LlmEndpoint {
-                provider: "fireworks",
-                base_url: "http://127.0.0.1:1".to_string(),
-                model: "accounts/fireworks/models/anderes-modell".to_string(),
-                api_key: Some("k".to_string()),
-            }),
+            Request::prompt("hi")
+                .no_ledger()
+                .twitch_broadcaster(TWITCH_USER_ID)
+                .endpoint(LlmEndpoint {
+                    provider: "fireworks",
+                    base_url: "http://127.0.0.1:1".to_string(),
+                    model: "accounts/fireworks/models/anderes-modell".to_string(),
+                    api_key: Some("k".to_string()),
+                }),
         )
         .await
         .expect_err("ein anderes Fireworks-Modell darf nicht aufgerufen werden");
@@ -1185,8 +1239,12 @@ mod tests {
 
     #[tokio::test]
     async fn negative_und_fehlende_token_zahlen_bleiben_unbekannt() {
-        // Ein Anbieter, der Unsinn meldet, darf keine negativen Zeilen ins
-        // Ledger schreiben.
+        let Some(_database) =
+            authorized_database("hub::tests::negative_und_fehlende_token_zahlen_bleiben_unbekannt")
+                .await
+        else {
+            return;
+        };
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -1200,6 +1258,7 @@ mod tests {
             "test",
             Request::prompt("hi")
                 .no_ledger()
+                .twitch_broadcaster(TWITCH_USER_ID)
                 .endpoint(endpoint(&server, "fireworks")),
         )
         .await
@@ -1210,6 +1269,11 @@ mod tests {
 
     #[tokio::test]
     async fn reasoning_content_greift_nur_mit_opt_in() {
+        let Some(_database) =
+            authorized_database("hub::tests::reasoning_content_greift_nur_mit_opt_in").await
+        else {
+            return;
+        };
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -1218,22 +1282,22 @@ mod tests {
             .mount(&server)
             .await;
 
-        // Ohne Opt-in bleibt Denktext Denktext: die Antwort ist leer.
         let response = complete(
             "test",
             Request::prompt("hi")
                 .no_ledger()
+                .twitch_broadcaster(TWITCH_USER_ID)
                 .endpoint(endpoint(&server, "minimax")),
         )
         .await
         .expect("Antwort");
         assert_eq!(response.text, "");
 
-        // Mit Opt-in (Spam-Judge) kommt der Text durch.
         let response = complete(
             "test",
             Request::prompt("hi")
                 .no_ledger()
+                .twitch_broadcaster(TWITCH_USER_ID)
                 .allow_reasoning_content()
                 .endpoint(endpoint(&server, "minimax")),
         )
@@ -1244,6 +1308,11 @@ mod tests {
 
     #[tokio::test]
     async fn fehlerbody_kommt_beim_aufrufer_an() {
+        let Some(_database) =
+            authorized_database("hub::tests::fehlerbody_kommt_beim_aufrufer_an").await
+        else {
+            return;
+        };
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(400).set_body_string("credit balance is too low"))
@@ -1254,6 +1323,7 @@ mod tests {
             "test",
             Request::prompt("hi")
                 .no_ledger()
+                .twitch_broadcaster(TWITCH_USER_ID)
                 .endpoint(endpoint(&server, "fireworks")),
         )
         .await
@@ -1269,6 +1339,11 @@ mod tests {
 
     #[tokio::test]
     async fn abgelehnte_antwort_gilt_als_unbrauchbar() {
+        let Some(_database) =
+            authorized_database("hub::tests::abgelehnte_antwort_gilt_als_unbrauchbar").await
+        else {
+            return;
+        };
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -1281,6 +1356,7 @@ mod tests {
             "test",
             Request::prompt("hi")
                 .no_ledger()
+                .twitch_broadcaster(TWITCH_USER_ID)
                 .accept(|text| text.starts_with('{'))
                 .endpoint(endpoint(&server, "fireworks")),
         )
@@ -1291,14 +1367,23 @@ mod tests {
 
     #[tokio::test]
     async fn ohne_schluessel_ist_der_aufruf_nicht_verfuegbar() {
+        let Some(_database) =
+            authorized_database("hub::tests::ohne_schluessel_ist_der_aufruf_nicht_verfuegbar")
+                .await
+        else {
+            return;
+        };
         let error = complete(
             "test",
-            Request::prompt("hi").no_ledger().endpoint(LlmEndpoint {
-                provider: "fireworks",
-                base_url: "http://127.0.0.1:1".to_string(),
-                model: crate::selection::configured_fireworks_model().to_string(),
-                api_key: None,
-            }),
+            Request::prompt("hi")
+                .no_ledger()
+                .twitch_broadcaster(TWITCH_USER_ID)
+                .endpoint(LlmEndpoint {
+                    provider: "fireworks",
+                    base_url: "http://127.0.0.1:1".to_string(),
+                    model: crate::selection::configured_fireworks_model().to_string(),
+                    api_key: None,
+                }),
         )
         .await
         .expect_err("Fehler");
@@ -1307,6 +1392,11 @@ mod tests {
 
     #[tokio::test]
     async fn wiederholung_nach_429_holt_die_antwort() {
+        let Some(_database) =
+            authorized_database("hub::tests::wiederholung_nach_429_holt_die_antwort").await
+        else {
+            return;
+        };
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "0"))
@@ -1324,6 +1414,7 @@ mod tests {
             "test",
             Request::prompt("hi")
                 .no_ledger()
+                .twitch_broadcaster(TWITCH_USER_ID)
                 .retry_on_429(2)
                 .endpoint(endpoint(&server, "fireworks")),
         )
@@ -1334,6 +1425,13 @@ mod tests {
 
     #[tokio::test]
     async fn erschoepfte_429_wiederholung_traegt_body_und_absender() {
+        let Some(_database) = authorized_database(
+            "hub::tests::erschoepfte_429_wiederholung_traegt_body_und_absender",
+        )
+        .await
+        else {
+            return;
+        };
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(
@@ -1348,6 +1446,7 @@ mod tests {
             "test",
             Request::prompt("hi")
                 .no_ledger()
+                .twitch_broadcaster(TWITCH_USER_ID)
                 .retry_on_429(1)
                 .endpoint(endpoint(&server, "fireworks")),
         )

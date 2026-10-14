@@ -9,11 +9,13 @@ import {
   toggleClipCommand,
   type ClipCommandSettingsResponse,
 } from '@/api/clipCommand';
+import { useT } from '../../context/LanguageContext';
 
 export function ClipCommandSection() {
+  const t = useT();
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const [error, setError] = useState<'load' | 'toggle' | 'invalidDuration' | 'duration' | null>(null);
+  const [success, setSuccess] = useState<'toggle' | 'duration' | null>(null);
   const [settings, setSettings] = useState<ClipCommandSettingsResponse | null>(null);
   const [pending, setPending] = useState(false);
   const [duration, setDuration] = useState('60');
@@ -27,7 +29,7 @@ export function ClipCommandSection() {
       setSettings(data);
       setDuration(String(data.clip_command_duration_seconds));
     } catch {
-      setError('Status konnte nicht geladen werden. Bitte Seite neu laden.');
+      setError('load');
     } finally {
       setLoading(false);
     }
@@ -46,9 +48,9 @@ export function ClipCommandSection() {
     try {
       const data = await toggleClipCommand(want);
       setSettings(data);
-      setSuccess('Gespeichert.');
+      setSuccess('toggle');
     } catch {
-      setError('Speichern fehlgeschlagen. Bitte nochmal versuchen.');
+      setError('toggle');
     } finally {
       setPending(false);
     }
@@ -59,7 +61,7 @@ export function ClipCommandSection() {
     if (!duration || !Number.isFinite(seconds) || seconds < 5 || seconds > 60
       || Math.abs(seconds * 10 - Math.round(seconds * 10)) >= 1e-7) {
       setSuccess(null);
-      setError('Bitte 5 bis 60 Sekunden eingeben, in Schritten von 0,1 Sekunden.');
+      setError('invalidDuration');
       return;
     }
     setPending(true);
@@ -69,15 +71,25 @@ export function ClipCommandSection() {
       const data = await setClipCommandDuration(seconds);
       setSettings(data);
       setDuration(String(data.clip_command_duration_seconds));
-      setSuccess('Clip-Dauer gespeichert.');
+      setSuccess('duration');
     } catch {
-      setError('Clip-Dauer konnte nicht gespeichert werden. Bitte nochmal versuchen.');
+      setError('duration');
     } finally {
       setPending(false);
     }
   };
 
   const enabled = Boolean(settings?.clip_command_enabled);
+  const errorMessages = {
+    load: t('Status konnte nicht geladen werden. Bitte Seite neu laden.'),
+    toggle: t('Speichern fehlgeschlagen. Bitte nochmal versuchen.'),
+    invalidDuration: t('Bitte 5 bis 60 Sekunden eingeben, in Schritten von 0,1 Sekunden.'),
+    duration: t('Clip-Dauer konnte nicht gespeichert werden. Bitte nochmal versuchen.'),
+  };
+  const successMessages = {
+    toggle: t('Gespeichert.'),
+    duration: t('Clip-Dauer gespeichert.'),
+  };
 
   return (
     <motion.section
@@ -89,37 +101,36 @@ export function ClipCommandSection() {
     >
       <div className="mb-5">
         <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">
-          Chat-Befehl
+          {t('Chat-Befehl')}
         </p>
         <h2 className="display-font text-2xl font-bold text-white mb-1">
-          Clip-Befehl
+          {t('Clip-Befehl')}
         </h2>
         <p className="text-sm text-text-secondary">
-          Steuert, ob dein Chat per Befehl einen Twitch-Clip erstellen kann. Aus heißt: der
-          Bot legt keinen Clip mehr an und antwortet auch nicht darauf.
+          {t('Steuert, ob dein Chat per Befehl einen Twitch-Clip erstellen kann. Aus heißt: der Bot legt keinen Clip mehr an und antwortet auch nicht darauf.')}
         </p>
       </div>
 
       {error && (
         <div role="alert" className="mb-4 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
-          {error}
+          {errorMessages[error]}
         </div>
       )}
 
       {success && (
         <div role="status" className="mb-4 rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-sm text-success">
-          {success}
+          {successMessages[success]}
         </div>
       )}
 
       {loading ? (
         <div className="flex items-center gap-3 text-text-secondary text-sm">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          Status wird geladen …
+          {t('Status wird geladen …')}
         </div>
       ) : !settings ? (
         <div className="rounded-xl border border-border bg-background/40 px-4 py-6 text-sm text-text-secondary text-center">
-          Einstellung gerade nicht verfügbar.
+          {t('Einstellung gerade nicht verfügbar.')}
         </div>
       ) : (
         <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4">
@@ -131,17 +142,17 @@ export function ClipCommandSection() {
                   enabled ? 'text-success' : 'text-text-secondary'
                 }`}
               >
-                {enabled ? 'Befehl ist aktiv' : 'Befehl ist aus'}
+                {enabled ? t('Befehl ist aktiv') : t('Befehl ist aus')}
               </p>
               <p className="text-xs text-text-secondary mt-0.5">
                 {enabled
-                  ? 'Dein Chat kann per Befehl einen Clip erstellen.'
-                  : 'Der Bot erstellt damit nichts mehr und bleibt stumm.'}
+                  ? t('Dein Chat kann per Befehl einen Clip erstellen.')
+                  : t('Der Bot erstellt damit nichts mehr und bleibt stumm.')}
               </p>
             </div>
             <button
               type="button"
-              aria-label={`Clip-Befehl ${enabled ? 'deaktivieren' : 'aktivieren'}`}
+              aria-label={enabled ? t('Clip-Befehl deaktivieren') : t('Clip-Befehl aktivieren')}
               disabled={pending}
               onClick={() => void onToggle()}
               className={`inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold transition-colors ${
@@ -157,7 +168,7 @@ export function ClipCommandSection() {
               ) : (
                 <Power className="h-4 w-4" />
               )}
-              {enabled ? 'Deaktivieren' : 'Aktivieren'}
+              {enabled ? t('Deaktivieren') : t('Aktivieren')}
             </button>
           </div>
           <form
@@ -165,7 +176,7 @@ export function ClipCommandSection() {
             onSubmit={(event) => { event.preventDefault(); void onSaveDuration(); }}
           >
             <label htmlFor={durationId} className="block text-sm font-semibold text-white mb-2">
-              Clip-Dauer in Sekunden
+              {t('Clip-Dauer in Sekunden')}
             </label>
             <div className="flex flex-wrap items-center gap-3">
               <input
@@ -186,14 +197,14 @@ export function ClipCommandSection() {
                 disabled={pending || Number(duration) === settings.clip_command_duration_seconds}
                 className="rounded-lg border border-primary/40 bg-primary/10 px-4 py-2.5 text-sm font-semibold text-primary hover:bg-primary/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Dauer speichern
+                {t('Dauer speichern')}
               </button>
             </div>
             <p id={`${durationId}-hint`} className="mt-2 text-sm text-text-secondary">
-              5 bis 60 Sekunden, Standard: 60 Sekunden. Am Streamanfang oder Streamende kann Twitch einen kürzeren Clip liefern.
+              {t('5 bis 60 Sekunden, Standard: 60 Sekunden. Am Streamanfang oder Streamende kann Twitch einen kürzeren Clip liefern.')}
             </p>
             <p className="mt-2 text-sm text-text-secondary">
-              Eigener Titel: Schreibe den gewünschten Titel hinter den Clip-Befehl, zum Beispiel „Krasser Headshot“.
+              {t('Eigener Titel: Schreibe den gewünschten Titel hinter den Clip-Befehl, zum Beispiel „Krasser Headshot“.')}
             </p>
           </form>
         </div>

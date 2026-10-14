@@ -102,4 +102,11 @@ export const BACKEND_EN: Record<string, string> = {
   'Das Profil ist gerade nicht erreichbar. Bitte erneut versuchen.': 'The profile is not available right now. Please try again.',
   'DB-Fehler': 'Database error',
   'Engagement': 'Engagement',
+  'Bitte eine Einstellung angeben.': 'Please provide a setting.',
+  'Die Clip-Dauer muss zwischen 5 und 60 Sekunden liegen, in Schritten von 0,1 Sekunden.': 'The clip duration must be between 5 and 60 seconds, in 0.1-second steps.',
+  'Keine Kanaleinstellung gefunden.': 'No channel setting found.',
+  'Bitte melde dich mit deinem Twitch-Konto an.': 'Please sign in with your Twitch account.',
+  'Für diesen Download ist die Anmeldung des Kanalinhabers erforderlich.': 'The channel owner must be signed in for this download.',
+  'Die VOD-Ausschnitte sind gerade nicht abrufbar.': 'VOD excerpts are unavailable right now.',
+  'Die Einstellung konnte nicht gespeichert werden.': 'The setting could not be saved.',
 };

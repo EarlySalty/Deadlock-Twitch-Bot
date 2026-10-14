@@ -3,8 +3,8 @@ import test from 'node:test';
 
 import {
   CATEGORY_HEARTBEAT_MAX_AGE_MS,
-  COLLECTOR_STATE_TEXT,
   collectorCoverageState,
+  collectorStateTexts,
   collectorHeartbeatStale,
   type CollectorCoverage,
 } from '../src/pages/categoryCollectorStaleness';
@@ -114,7 +114,7 @@ test('Ältere Payloads und ungültiger Messtakt bekommen keine erfundene Deaktiv
 
 test('Jeder Betriebszustand hat einen gemeinsamen Anzeigetext', () => {
   for (const state of ['disabled', 'heartbeat_stale', 'disk_paused', 'snapshots_missing', 'raw_paused', 'discovery_pending', 'active'] as const) {
-    assert.ok(COLLECTOR_STATE_TEXT[state].title.length > 0);
-    assert.ok(COLLECTOR_STATE_TEXT[state].detail.length > 0);
+    assert.ok(collectorStateTexts()[state].title.length > 0);
+    assert.ok(collectorStateTexts()[state].detail.length > 0);
   }
 });

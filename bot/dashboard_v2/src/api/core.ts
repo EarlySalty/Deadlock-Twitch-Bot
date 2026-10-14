@@ -6,6 +6,8 @@ import {
   isPreviewModeEnabled,
 } from '../preview/routes';
 import { ApiHttpError } from './httpError';
+import { messageFromText } from '../i18n/errorMessage';
+import { withLanguageHeader } from './languageHeader';
 
 const API_BASE = dashboardRuntimeConfig.apiBase;
 const INTERNAL_REDIRECT_PREFIX = '/twitch';
@@ -19,10 +21,12 @@ const COOKIE_FETCH_CREDENTIALS: RequestCredentials = 'same-origin';
 interface ApiErrorPayload {
   error?: string;
   message?: string;
+  code?: string;
   loginUrl?: string;
 }
 
 export { ApiHttpError } from './httpError';
+export { LANGUAGE_HEADER, withLanguageHeader } from './languageHeader';
 
 export interface FetchJsonOptions {
   loginFallback?: string;
@@ -107,7 +111,21 @@ export function getBrowserTimezone(): string {
 }
 
 async function readErrorPayload(response: Response): Promise<ApiErrorPayload | null> {
-  return response.json().catch(() => null) as Promise<ApiErrorPayload | null>;
+  const raw = await response.text().catch(() => '');
+  if (!raw) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!value || typeof value !== 'object') return { message: raw };
+    const payload = value as Record<string, unknown>;
+    return {
+      error: typeof payload.error === 'string' ? payload.error : undefined,
+      message: typeof payload.message === 'string' ? payload.message : undefined,
+      code: typeof payload.code === 'string' ? payload.code : undefined,
+      loginUrl: typeof payload.loginUrl === 'string' ? payload.loginUrl : undefined,
+    };
+  } catch {
+    return { message: raw };
+  }
 }
 
 async function handleUnauthorizedResponse(
@@ -119,7 +137,8 @@ async function handleUnauthorizedResponse(
     window.location.href = sanitizeInternalRedirectUrl(unauthorized.loginUrl, loginFallback);
     throw new Error('Redirecting to Twitch login');
   }
-  throw new ApiHttpError(unauthorized?.error || 'Unauthorized', response.status);
+  const message = unauthorized?.error || unauthorized?.message || 'Unauthorized';
+  throw new ApiHttpError(message, response.status, messageFromText(message), unauthorized ?? undefined);
 }
 
 export async function fetchJson<T>(
@@ -127,12 +146,6 @@ export async function fetchJson<T>(
   init: RequestInit = {},
   options: FetchJsonOptions = {}
 ): Promise<T> {
-  // Aufrufe mit absolutem Pfad (Uplink etwa) gehen nicht ueber `fetchApi` und
-  // haetten im Preview sonst keinen Gegenueber. Nur auf dem lokalen
-  // Preview-Host, im Betrieb ist dieser Zweig tot.
-  // Nur lesende Aufrufe: eine Fixture auf ein PUT waere ein erfundener
-  // Schreib-Erfolg, und die Oberflaeche zeigte danach einen Zustand, den es
-  // nirgends gibt.
   if (isPreviewLocalhost() && (init.method ?? 'GET').toUpperCase() === 'GET') {
     const pfad = typeof input === 'string' ? input : input.toString();
     const fixture = getPreviewPathFixture(pfad.split('?')[0]);
@@ -141,21 +154,24 @@ export async function fetchJson<T>(
     }
   }
 
-  const response = await fetch(input, init);
+  const response = await fetch(input, withLanguageHeader(input, init));
 
   if (response.status === 401) {
     await handleUnauthorizedResponse(response, options.loginFallback || DASHBOARD_V2_LOGIN_FALLBACK);
   }
 
   if (options.notFoundMessage && response.status === 404) {
-    throw new ApiHttpError(options.notFoundMessage, response.status);
+    throw new ApiHttpError(options.notFoundMessage, response.status, messageFromText(options.notFoundMessage));
   }
 
   if (!response.ok) {
     const error = await readErrorPayload(response);
+    const message = error?.message || error?.error;
     throw new ApiHttpError(
-      error?.message || error?.error || `Server-Fehler (HTTP ${response.status})`,
-      response.status
+      message || `Server-Fehler (HTTP ${response.status})`,
+      response.status,
+      message ? messageFromText(message) : { key: 'Server-Fehler (HTTP {status})', params: { status: response.status } },
+      error ?? undefined,
     );
   }
 
@@ -178,7 +194,6 @@ export async function fetchApi<T>(
   const url = buildApiUrl(endpoint, params);
   const abortCtrl = timeoutMs ? new AbortController() : null;
   const timer = abortCtrl ? setTimeout(() => abortCtrl.abort(), timeoutMs!) : null;
-  // Preserve timeout callers while also allowing queries to cancel obsolete requests.
   const forwardAbort = () => abortCtrl?.abort(signal?.reason);
   if (abortCtrl && signal) {
     if (signal.aborted) forwardAbort();

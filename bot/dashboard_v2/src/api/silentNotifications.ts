@@ -1,11 +1,4 @@
-/**
- * Silent-Notification-Flags (Verwaltung) — JSON-API gegen
- * /twitch/api/v2/streamer/silent-settings (nativer Rust-Handler auf tb-dashboard).
- *
- * Auth: same-origin cookie (gleicher Mechanismus wie der Rest des Dashboards).
- * Synchron zu den Chat-Befehlen !silentban / !silentraid — dieselben
- * twitch_partners-Spalten (silent_ban, silent_raid).
- */
+import { withLanguageHeader } from './languageHeader';
 
 const BASE = '/twitch/api/v2/streamer/silent-settings';
 
@@ -15,10 +8,10 @@ export interface SilentSettings {
 }
 
 async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
-    credentials: 'same-origin',
-    ...init,
-  });
+  const response = await fetch(
+    path,
+    withLanguageHeader(path, { credentials: 'same-origin', ...init })
+  );
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
   }

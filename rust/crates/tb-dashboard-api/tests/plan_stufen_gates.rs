@@ -218,6 +218,7 @@ async fn coaching_ohne_plus_403_mit_plus_200() {
 
     let frei = coaching::coaching_handler(
         partner("freistreamer"),
+        Default::default(),
         State(pool.clone()),
         Query(coaching::CoachingQuery {
             streamer: None,
@@ -233,6 +234,7 @@ async fn coaching_ohne_plus_403_mit_plus_200() {
 
     let bezahlt = coaching::coaching_handler(
         partner("plusstreamer"),
+        Default::default(),
         State(pool),
         Query(coaching::CoachingQuery {
             streamer: None,
@@ -902,6 +904,7 @@ async fn ohne_auth_kein_zugang() {
     };
     let resp = coaching::coaching_handler(
         DashboardAuthLevel::None,
+        Default::default(),
         State(pool.clone()),
         Query(coaching::CoachingQuery {
             streamer: Some("freistreamer".into()),

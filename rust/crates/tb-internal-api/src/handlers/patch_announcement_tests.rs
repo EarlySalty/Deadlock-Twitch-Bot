@@ -1,8 +1,5 @@
 use super::*;
-#[allow(clippy::duplicate_mod)]
-#[path = "../../../../test-support/postgres.rs"]
-mod postgres;
-use postgres::TestPostgres;
+use crate::test_postgres::TestPostgres;
 use std::{
     collections::HashSet,
     process::Command,

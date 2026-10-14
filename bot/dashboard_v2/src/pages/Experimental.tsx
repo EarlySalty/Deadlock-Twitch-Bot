@@ -30,6 +30,8 @@ import {
   useExpGrowthCurves,
 } from '@/hooks/useAnalytics';
 import { formatNumber } from '@/utils/formatters';
+import { useT } from '@/context/LanguageContext';
+import { tr } from '../i18n/dictionary';
 import type { TimeRange, ExpGameBreakdown, ExpGrowthCurve } from '@/types/analytics';
 
 interface ExperimentalProps {
@@ -37,12 +39,6 @@ interface ExperimentalProps {
   days: TimeRange;
 }
 
-// ---------------------------------------------------------------------------
-//  Game Color System
-//  - Deadlock / Just Chatting → first two categorical brand colors
-//  - Top-3 by avg viewers → Gold / Silver / Bronze (always, regardless of sort)
-//  - All other games → hash-based color from palette (same game = same color)
-// ---------------------------------------------------------------------------
 const SPECIAL_COLORS: Record<string, string> = {
   'Deadlock':      '#C5A059',
   'Just Chatting': '#00D9FF',
@@ -60,16 +56,17 @@ function hashGameColor(name: string | null | undefined): string {
   return HASH_PALETTE[h % HASH_PALETTE.length];
 }
 
-// Medal tiers are always computed from avgViewers, independent of current sort
-const MEDAL = ['#C5A059', '#B5A488', '#FF5A3C'] as const; // gold / silver / bronze
+const MEDAL = ['#C5A059', '#B5A488', '#FF5A3C'] as const;
 
 type SortKey = 'avgViewers' | 'sessions' | 'peakViewers';
 
-const SORT_OPTIONS: { key: SortKey; label: string }[] = [
-  { key: 'avgViewers',  label: 'Ø Viewer' },
-  { key: 'sessions',    label: 'Sessions' },
-  { key: 'peakViewers', label: 'Peak'     },
-];
+function sortOptions(): { key: SortKey; label: string }[] {
+  return [
+    { key: 'avgViewers',  label: tr('Ø Viewer') },
+    { key: 'sessions',    label: tr('Sessions') },
+    { key: 'peakViewers', label: tr('Peak')     },
+  ];
+}
 
 function resolveColor(game: string, medalRank: number): string {
   if (SPECIAL_COLORS[game]) return SPECIAL_COLORS[game];
@@ -78,10 +75,10 @@ function resolveColor(game: string, medalRank: number): string {
 }
 
 function ExpGameBreakdownChart({ data }: { data: ExpGameBreakdown[] }) {
+  const t = useT();
   const [sortKey, setSortKey] = useState<SortKey>('avgViewers');
 
   const { chartData, medalGames } = useMemo(() => {
-    // Medal tier always based on avgViewers regardless of active sort
     const byViewers = [...data]
       .filter(d => !SPECIAL_COLORS[d.game])
       .sort((a, b) => b.avgViewers - a.avgViewers)
@@ -107,17 +104,16 @@ function ExpGameBreakdownChart({ data }: { data: ExpGameBreakdown[] }) {
   if (!chartData.length) {
     return (
       <div className="flex items-center justify-center h-40 text-text-secondary text-sm">
-        Noch keine Daten vorhanden
+        {t('Noch keine Daten vorhanden')}
       </div>
     );
   }
 
   return (
     <div className="space-y-3">
-      {/* Sort Controls */}
       <div className="flex items-center gap-1.5">
-        <span className="text-xs text-text-secondary mr-1">Sortiert nach:</span>
-        {SORT_OPTIONS.map(opt => (
+        <span className="text-xs text-text-secondary mr-1">{t('Sortiert nach:')}</span>
+        {sortOptions().map(opt => (
           <button
             key={opt.key}
             onClick={() => setSortKey(opt.key)}
@@ -131,7 +127,6 @@ function ExpGameBreakdownChart({ data }: { data: ExpGameBreakdown[] }) {
             {opt.label}
           </button>
         ))}
-        {/* Legend dots */}
         <div className="ml-auto flex items-center gap-3 text-xs text-text-secondary">
           {medalGames[0] && (
             <span className="flex items-center gap-1">
@@ -150,7 +145,6 @@ function ExpGameBreakdownChart({ data }: { data: ExpGameBreakdown[] }) {
         </div>
       </div>
 
-      {/* key={sortKey} forces full remount on sort change → no Recharts 3.x animation-interpolation crash */}
       <ResponsiveContainer width="100%" height={280}>
         <BarChart key={sortKey} data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 60 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
@@ -172,14 +166,14 @@ function ExpGameBreakdownChart({ data }: { data: ExpGameBreakdown[] }) {
             formatter={((value: number | undefined, _name: string, props: any) => {
               const medal = props?.payload?.medal ?? '';
               const label = sortKey === 'avgViewers'
-                ? 'Ø Viewer'
+                ? t('Ø Viewer')
                 : sortKey === 'sessions'
-                  ? 'Sessions'
-                  : 'Peak Viewer';
+                  ? t('Sessions')
+                  : t('Peak Viewer');
               return [`${formatNumber(value, 1)} ${medal}`.trim(), label];
             }) as any}
           />
-          <Bar dataKey={sortKey} name="Wert" radius={[4, 4, 0, 0]} isAnimationActive={false}>
+          <Bar dataKey={sortKey} name={t('Wert')} radius={[4, 4, 0, 0]} isAnimationActive={false}>
             {chartData.map((entry, i) => (
               <Cell key={i} fill={entry.fill} fillOpacity={entry.isSpecial ? 1 : 0.85} />
             ))}
@@ -191,7 +185,7 @@ function ExpGameBreakdownChart({ data }: { data: ExpGameBreakdown[] }) {
 }
 
 function ExpGrowthCurvesChart({ data }: { data: ExpGrowthCurve[] }) {
-  // Filter out null/undefined/empty game names to prevent Recharts 3.x toString crash
+  const t = useT();
   const games = useMemo(
     () => [...new Set(data.map(d => d.game).filter((g): g is string => !!g))].slice(0, 6),
     [data],
@@ -212,7 +206,7 @@ function ExpGrowthCurvesChart({ data }: { data: ExpGrowthCurve[] }) {
   if (!pivoted.length) {
     return (
       <div className="flex items-center justify-center h-40 text-text-secondary text-sm">
-        Noch keine Verlaufsdaten vorhanden
+        {t('Noch keine Verlaufsdaten vorhanden')}
       </div>
     );
   }
@@ -234,8 +228,8 @@ function ExpGrowthCurvesChart({ data }: { data: ExpGrowthCurve[] }) {
             borderRadius: 8,
             color: '#fff',
           }}
-          labelFormatter={(v) => `Minute ${v}`}
-          formatter={((value: number) => [formatNumber(value, 1), 'Ø Viewer']) as any}
+          labelFormatter={(v) => t('Minute {minute}', { minute: String(v) })}
+          formatter={((value: number) => [formatNumber(value, 1), t('Ø Viewer')]) as any}
         />
         <Legend wrapperStyle={{ color: '#B5A488', fontSize: 12 }} />
         {games.map((game) => (
@@ -283,6 +277,7 @@ function KpiCard({
 }
 
 export function Experimental({ streamer, days }: ExperimentalProps) {
+  const t = useT();
   const { data: overview, isLoading: loadingOverview } = useExpOverview(streamer, days);
   const { data: breakdown = [], isLoading: loadingBreakdown } = useExpGameBreakdown(streamer, days);
   const { data: transitions = [], isLoading: loadingTransitions } = useExpGameTransitions(streamer, days);
@@ -294,65 +289,62 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-3">
         <AlertCircle className="w-10 h-10 text-text-secondary" />
-        <p className="text-text-secondary text-lg">Waehle einen Streamer aus</p>
+        <p className="text-text-secondary text-lg">{t('Waehle einen Streamer aus')}</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex items-center gap-3">
         <FlaskConical className="w-6 h-6 text-accent" />
         <div>
           <h2 className="text-xl font-bold text-white flex items-center gap-2">
-            Labor – Experimentelle Analytics
+            {t('Labor – Experimentelle Analytics')}
             <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-accent/20 text-accent border border-accent/30">
-              Beta
+              {t('Beta')}
             </span>
           </h2>
           <p className="text-sm text-text-secondary mt-0.5">
-            Alle Spiele – Session-Tracking jenseits von Deadlock
+            {t('Alle Spiele – Session-Tracking jenseits von Deadlock')}
           </p>
         </div>
         {isAnyLoading && <Loader2 className="w-5 h-5 animate-spin text-primary ml-auto" />}
       </div>
 
-      {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <KpiCard
-          label="Sessions"
+          label={t('Sessions')}
           value={overview ? formatNumber(overview.totalSessions) : '–'}
           icon={BarChart3}
-          sub={`letzte ${days} Tage`}
+          sub={t('letzte {days} Tage', { days })}
         />
         <KpiCard
-          label="Spiele gespielt"
+          label={t('Spiele gespielt')}
           value={overview ? formatNumber(overview.gamesPlayed) : '–'}
           icon={Gamepad2}
         />
         <KpiCard
-          label="Bestes Spiel"
+          label={t('Bestes Spiel')}
           value={overview?.bestGame || '–'}
-          sub={overview?.bestGameAvgViewers ? `Ø ${formatNumber(overview.bestGameAvgViewers, 1)} Viewer` : undefined}
+          sub={overview?.bestGameAvgViewers ? t('Ø {viewers} Viewer', { viewers: formatNumber(overview.bestGameAvgViewers, 1) }) : undefined}
           icon={TrendingUp}
         />
         <KpiCard
-          label="Ø Viewer"
+          label={t('Ø Viewer')}
           value={overview ? formatNumber(overview.avgViewers, 1) : '–'}
           icon={Users}
-          sub="alle Spiele"
+          sub={t('alle Spiele')}
         />
       </div>
 
-      {/* Game Breakdown Bar Chart */}
       <Rise
         step={{ seconds: 0.1 }}
         className="bg-card rounded-xl border border-border p-5"
       >
         <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
           <BarChart3 className="w-4 h-4 text-primary" />
-          Ø Viewer pro Spiel
+          {t('Ø Viewer pro Spiel')}
         </h3>
         {loadingBreakdown ? (
           <div className="flex items-center justify-center h-40">
@@ -363,14 +355,13 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
         )}
       </Rise>
 
-      {/* Growth Curves */}
       <Rise
         step={{ seconds: 0.15 }}
         className="bg-card rounded-xl border border-border p-5"
       >
         <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
           <TrendingUp className="w-4 h-4 text-primary" />
-          Viewer-Verlauf pro Spiel (Minuten ab Streamstart)
+          {t('Viewer-Verlauf pro Spiel (Minuten ab Streamstart)')}
         </h3>
         {loadingCurves ? (
           <div className="flex items-center justify-center h-40">
@@ -381,14 +372,13 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
         )}
       </Rise>
 
-      {/* Game Transitions Table */}
       <Rise
         step={{ seconds: 0.2 }}
         className="bg-card rounded-xl border border-border p-5"
       >
         <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
           <ArrowRight className="w-4 h-4 text-primary" />
-          Spielwechsel
+          {t('Spielwechsel')}
         </h3>
         {loadingTransitions ? (
           <div className="flex items-center justify-center h-32">
@@ -396,17 +386,17 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
           </div>
         ) : transitions.length === 0 ? (
           <p className="text-text-secondary text-sm text-center py-8">
-            Noch keine Spielwechsel aufgezeichnet
+            {t('Noch keine Spielwechsel aufgezeichnet')}
           </p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-text-secondary border-b border-border">
-                  <th className="text-left py-2 pr-4 font-medium">Von</th>
-                  <th className="text-left py-2 pr-4 font-medium">Nach</th>
-                  <th className="text-right py-2 pr-4 font-medium">Anzahl</th>
-                  <th className="text-right py-2 font-medium">Ø Viewer</th>
+                  <th className="text-left py-2 pr-4 font-medium">{t('Von')}</th>
+                  <th className="text-left py-2 pr-4 font-medium">{t('Nach')}</th>
+                  <th className="text-right py-2 pr-4 font-medium">{t('Anzahl')}</th>
+                  <th className="text-right py-2 font-medium">{t('Ø Viewer')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -435,7 +425,6 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
         )}
       </Rise>
 
-      {/* Per-Game Stats Table */}
       {breakdown.length > 0 && (
         <Rise
           step={{ seconds: 0.25 }}
@@ -443,18 +432,18 @@ export function Experimental({ streamer, days }: ExperimentalProps) {
         >
           <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
             <Gamepad2 className="w-4 h-4 text-primary" />
-            Spiel-Statistiken
+            {t('Spiel-Statistiken')}
           </h3>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-text-secondary border-b border-border">
-                  <th className="text-left py-2 pr-4 font-medium">Spiel</th>
-                  <th className="text-right py-2 pr-4 font-medium">Sessions</th>
-                  <th className="text-right py-2 pr-4 font-medium">Ø Viewer</th>
-                  <th className="text-right py-2 pr-4 font-medium">Peak</th>
-                  <th className="text-right py-2 pr-4 font-medium">Ø Dauer</th>
-                  <th className="text-right py-2 font-medium">Ø Follower</th>
+                  <th className="text-left py-2 pr-4 font-medium">{t('Spiel')}</th>
+                  <th className="text-right py-2 pr-4 font-medium">{t('Sessions')}</th>
+                  <th className="text-right py-2 pr-4 font-medium">{t('Ø Viewer')}</th>
+                  <th className="text-right py-2 pr-4 font-medium">{t('Peak')}</th>
+                  <th className="text-right py-2 pr-4 font-medium">{t('Ø Dauer')}</th>
+                  <th className="text-right py-2 font-medium">{t('Ø Follower')}</th>
                 </tr>
               </thead>
               <tbody>

@@ -23,10 +23,11 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tb_domain::DashboardLanguage;
 
 use crate::handlers::spa;
+use crate::language::RequestLanguage;
 
-/// Default-Origin, die das Demo einbetten darf (Python-Default).
 const DEFAULT_DEMO_EMBED_ORIGIN: &str = "https://deutsche-deadlock-community.de";
 
 /// Demo-Streamer-Login, der durchgängig in den Payloads erscheint.
@@ -144,13 +145,15 @@ pub async fn demo_streamers() -> Response {
     .into_response()
 }
 
-/// `GET /twitch/demo/api/v2/overview` — kompaktes Demo-Overview.
-pub async fn demo_overview(Query(q): Query<DemoOverviewQuery>) -> Response {
+pub async fn demo_overview(
+    RequestLanguage(lang): RequestLanguage,
+    Query(q): Query<DemoOverviewQuery>,
+) -> Response {
     let days = q.days.unwrap_or(30).clamp(7, 3650);
-    Json(demo_overview_payload(days)).into_response()
+    Json(demo_overview_payload(days, lang)).into_response()
 }
 
-fn demo_overview_payload(days: i64) -> Value {
+fn demo_overview_payload(days: i64, lang: DashboardLanguage) -> Value {
     json!({
         "streamer": DEMO_LOGIN,
         "days": days,
@@ -197,11 +200,32 @@ fn demo_overview_payload(days: i64) -> Value {
               "followersStart": 12387, "followersEnd": 12412, "title": "Community Scrims am Abend" }
         ],
         "findings": [
-            { "type": "pos", "title": "Starke Bindung", "text": "10-Minuten-Retention über dem Kategorie-Schnitt." },
-            { "type": "info", "title": "Wachstum stabil", "text": "Follower pro Stunde im oberen Drittel." }
+            {
+                "type": "pos",
+                "title": lang.pick("Starke Bindung", "Strong retention"),
+                "text": lang.pick(
+                    "10-Minuten-Retention über dem Kategorie-Schnitt.",
+                    "10-minute retention above the category average."
+                )
+            },
+            {
+                "type": "info",
+                "title": lang.pick("Wachstum stabil", "Steady growth"),
+                "text": lang.pick(
+                    "Follower pro Stunde im oberen Drittel.",
+                    "Followers per hour in the top third."
+                )
+            }
         ],
         "actions": [
-            { "tag": "Titel", "text": "Patch-Keywords früh in den Titel ziehen.", "priority": "high" }
+            {
+                "tag": lang.pick("Titel", "Title"),
+                "text": lang.pick(
+                    "Patch-Keywords früh in den Titel ziehen.",
+                    "Move patch keywords to the start of your title."
+                ),
+                "priority": "high"
+            }
         ],
         "correlations": { "durationVsViewers": 0.42, "chatVsRetention": 0.61 },
         "network": { "sent": 8, "received": 5, "sentViewers": 2840 },
@@ -242,15 +266,27 @@ fn demo_ai_snapshot(game_filter: &str) -> Value {
     })
 }
 
-/// Baut das 10-Punkte-Demo-Plan-Array im Prod-`points`-Schema
-/// (`number/priority/title/analysis/action/expectedImpact`).
-fn demo_ai_points() -> Value {
-    // 3x kritisch, 4x hoch, 3x mittel — entspricht Pythons Demo-Verteilung.
+type DemoPoint = (&'static str, &'static str, &'static str, &'static str);
+
+const DEMO_POINTS_EN: [DemoPoint; 10] = [
+    ("Stream titles without search terms", "Your recent titles mention neither \"Deadlock\" nor your rank, so you are hard to find in the category search.", "Put \"Deadlock\" and your current rank at the start of the title.", "More visibility in the category, an estimated +10 to 15% first-time viewers."),
+    ("Irregular start times", "Your start times vary by several hours, so regular viewers find it hard to plan around you.", "Pick two fixed weekdays with a set time and announce them in your channel.", "Steadier opening viewer numbers and a higher return rate."),
+    ("No clear stream focus", "You often switch content within a single stream, which makes it harder for new viewers to stick around.", "Set one main theme per stream, e.g. ranked grind or a hero guide.", "Longer watch time in the first ten minutes."),
+    ("Little chat interaction in slow phases", "When viewer numbers dip, you talk to chat noticeably less.", "Ask chat targeted questions during quiet moments.", "More messages per viewer."),
+    ("Raids are rarely used", "You often end streams without a raid and give away reach in the partner network.", "Raid an active partner at the end of every stream.", "More viewer handoffs in both directions."),
+    ("Category set too late", "The category is sometimes only set correctly after the stream has started.", "Set the category and title before you go live.", "Better discoverability from the first minute."),
+    ("Highlights go unused", "Hardly any clips or highlights from your streams get reused.", "Create one or two clips per stream for short video platforms.", "Extra reach outside of Twitch."),
+    ("Incomplete panels", "Your channel panels contain little info about your schedule and social media.", "Add panels for your schedule, rules and social media.", "More follows thanks to clear channel info."),
+    ("Few polls or votes", "Interactive elements like polls hardly ever come up.", "Start a short chat poll in every stream.", "Stronger loyalty from your regular viewers."),
+    ("Little off-stream communication", "There are hardly any announcements between streams.", "Announce your next stream on Discord and social media.", "Higher viewer count at the start of your stream."),
+];
+
+fn demo_ai_points(lang: DashboardLanguage) -> Value {
     let priorities = [
         "kritisch", "kritisch", "kritisch", "hoch", "hoch", "hoch", "hoch", "mittel", "mittel",
         "mittel",
     ];
-    const DEMO_POINTS: [(&str, &str, &str, &str); 10] = [
+    const DEMO_POINTS: [DemoPoint; 10] = [
         ("Streamtitel ohne Suchbegriffe", "Deine letzten Titel enthalten weder \"Deadlock\" noch deinen Rang – in der Kategorie-Suche bist du dadurch kaum auffindbar.", "Setze \"Deadlock\" und deinen aktuellen Rang an den Titelanfang.", "Mehr Sichtbarkeit in der Kategorie, geschätzt +10–15 % Erstzuschauer."),
         ("Unregelmäßige Startzeiten", "Deine Startzeiten schwanken um mehrere Stunden – Stammzuschauer können dich schlecht einplanen.", "Lege zwei feste Wochentage mit fixer Uhrzeit fest und kommuniziere sie im Kanal.", "Stabilere Anfangszuschauer und höhere Wiederkehrrate."),
         ("Kein klarer Stream-Fokus", "Du wechselst innerhalb eines Streams häufig die Inhalte – das erschwert neuen Zuschauern das Hängenbleiben.", "Definiere pro Stream ein Leitthema, z. B. Ranked-Grind oder Hero-Guide.", "Längere Verweildauer in den ersten zehn Minuten."),
@@ -262,9 +298,10 @@ fn demo_ai_points() -> Value {
         ("Selten Umfragen oder Votings", "Interaktive Elemente wie Umfragen kommen kaum vor.", "Starte pro Stream eine kurze Chat-Umfrage.", "Stärkere Bindung der Stammzuschauer."),
         ("Wenig Off-Stream-Kommunikation", "Zwischen den Streams gibt es kaum Ankündigungen.", "Kündige den nächsten Stream über Discord und Social Media an.", "Höhere Anfangszuschauerzahl."),
     ];
+    let texts = lang.pick(&DEMO_POINTS, &DEMO_POINTS_EN);
     let points: Vec<Value> = priorities
         .iter()
-        .zip(DEMO_POINTS.iter())
+        .zip(texts.iter())
         .enumerate()
         .map(|(i, (prio, (title, analysis, action, expected)))| {
             json!({
@@ -280,8 +317,13 @@ fn demo_ai_points() -> Value {
     Value::Array(points)
 }
 
-/// Baut eine vollständige Demo-AI-Analyse im Prod-Schema (P1.28).
-fn demo_ai_analysis_payload(days: i64, game_filter: &str, generated_at: &str, id: i64) -> Value {
+fn demo_ai_analysis_payload(
+    days: i64,
+    game_filter: &str,
+    generated_at: &str,
+    id: i64,
+    lang: DashboardLanguage,
+) -> Value {
     json!({
         "id": id,
         "streamer": DEMO_LOGIN,
@@ -289,7 +331,7 @@ fn demo_ai_analysis_payload(days: i64, game_filter: &str, generated_at: &str, id
         "gameFilter": game_filter,
         "model": "opus",
         "generatedAt": generated_at,
-        "points": demo_ai_points(),
+        "points": demo_ai_points(lang),
         "dataSnapshot": demo_ai_snapshot(game_filter),
     })
 }
@@ -302,12 +344,10 @@ fn count_priority(points: &Value, prio: &str) -> usize {
         .unwrap_or(0)
 }
 
-/// `GET|POST /twitch/demo/api/v2/ai/analysis` — Demo-KI-Coach im Prod-Schema.
-///
-/// P1.28: liefert `id/streamer/days/gameFilter/model/generatedAt/points[]/dataSnapshot`
-/// statt der alten `summary/sections`-Form, damit die AI-Coach-Komponente die
-/// gleichen Felder wie unter `/twitch/api/v2/ai/analysis` rendert.
-pub async fn demo_ai_analysis(Query(q): Query<DemoAiQuery>) -> Response {
+pub async fn demo_ai_analysis(
+    RequestLanguage(lang): RequestLanguage,
+    Query(q): Query<DemoAiQuery>,
+) -> Response {
     let days = q.days.unwrap_or(30).clamp(7, 3650);
     let game_filter = normalize_game_filter(q.game_filter.as_deref());
     Json(demo_ai_analysis_payload(
@@ -315,6 +355,7 @@ pub async fn demo_ai_analysis(Query(q): Query<DemoAiQuery>) -> Response {
         game_filter,
         "2026-06-13T11:00:00Z",
         9030,
+        lang,
     ))
     .into_response()
 }
@@ -325,13 +366,11 @@ pub struct DemoAiHistoryQuery {
     pub limit: Option<i64>,
 }
 
-/// `GET /twitch/demo/api/v2/ai/history` — Demo-Verlauf im Prod-Schema (P1.28).
-///
-/// Jeder Eintrag trägt `generatedAt/points/dataSnapshot` plus die drei
-/// Prioritäts-Zähler (`kritischCount/hochCount/mittelCount`).
-pub async fn demo_ai_history(Query(q): Query<DemoAiHistoryQuery>) -> Response {
+pub async fn demo_ai_history(
+    RequestLanguage(lang): RequestLanguage,
+    Query(q): Query<DemoAiHistoryQuery>,
+) -> Response {
     let limit = q.limit.unwrap_or(20).clamp(1, 50) as usize;
-    // (days, game_filter, generatedAt, id) — neueste zuerst.
     let presets = [
         (90i64, "all", "2026-06-02T14:00:00Z", 7003i64),
         (30, "all", "2026-06-10T11:00:00Z", 7002),
@@ -340,7 +379,7 @@ pub async fn demo_ai_history(Query(q): Query<DemoAiHistoryQuery>) -> Response {
     let entries: Vec<Value> = presets
         .iter()
         .map(|(days, gf, gen_at, id)| {
-            let mut entry = demo_ai_analysis_payload(*days, gf, gen_at, *id);
+            let mut entry = demo_ai_analysis_payload(*days, gf, gen_at, *id, lang);
             let points = entry["points"].clone();
             entry["kritischCount"] = json!(count_priority(&points, "kritisch"));
             entry["hochCount"] = json!(count_priority(&points, "hoch"));
@@ -564,8 +603,7 @@ pub async fn demo_category_leaderboard() -> Response {
     .into_response()
 }
 
-/// `GET /twitch/demo/api/v2/coaching` — Coaching-Hinweise (Fixture, Texte später).
-pub async fn demo_coaching() -> Response {
+pub async fn demo_coaching(RequestLanguage(lang): RequestLanguage) -> Response {
     Json(json!({
         "streamer": DEMO_LOGIN,
         "days": 30,
@@ -663,7 +701,10 @@ pub async fn demo_coaching() -> Response {
             ],
             "isolatedChatters": 286,
             "isolatedPercentage": 45.1,
-            "ecosystemSummary": "Rund 55 % deiner Chatter teilst du mit anderen Deadlock-Kanälen — vor allem mit zwei Partnern, die zusammen über die Hälfte eurer Überschneidung ausmachen. Die übrigen 45 % schauen ausschließlich bei dir: ein loyaler Kern, auf dem sich aufbauen lässt."
+            "ecosystemSummary": lang.pick(
+                "Rund 55 % deiner Chatter teilst du mit anderen Deadlock-Kanälen — vor allem mit zwei Partnern, die zusammen über die Hälfte eurer Überschneidung ausmachen. Die übrigen 45 % schauen ausschließlich bei dir: ein loyaler Kern, auf dem sich aufbauen lässt.",
+                "About 55% of your chatters are shared with other Deadlock channels, mostly with two partners who together make up more than half of the overlap. The other 45% watch only you: a loyal core you can build on."
+            )
         },
         "tagOptimization": {
             "yourTags": [
@@ -815,13 +856,98 @@ pub async fn demo_coaching() -> Response {
             ]
         },
         "recommendations": [
-            { "priority": "critical", "category": "Retention", "title": "Die ersten fünf Minuten festziehen", "description": "Dein größter Zuschauerverlust passiert direkt nach dem Einstieg: Nach fünf Minuten ist rund ein Fünftel schon wieder weg. Ein klarer Einstieg mit Tagesziel und direkter Ansprache neuer Zuschauer hält mehr Leute im Stream.", "estimatedImpact": "Bis zu +6 Prozentpunkte 5-Minuten-Retention.", "evidence": "Nach 5 Minuten hältst du 78 % — die Kategorie-Spitze hält in derselben Phase rund 85 %.", "icon": "TrendingDown" },
-            { "priority": "high", "category": "Schedule", "title": "Aus der vollsten Sendezeit ausweichen", "description": "Deine Streams liegen vor allem Mittwoch und Freitag um 20 Uhr — genau dann konkurrieren 13 bis 15 andere Deadlock-Kanäle um dieselben Zuschauer. Dienstag 18 Uhr ist deutlich freier bei fast gleicher Nachfrage.", "estimatedImpact": "Mehr Sichtbarkeit pro Stream, geschätzt +8 % Anfangszuschauer.", "evidence": "Dein bester freier Slot (Di 18 Uhr) erreicht Chancen-Score 82 bei nur 7 Konkurrenten — deine 20-Uhr-Slots liegen bei 13 bis 15.", "icon": "Calendar" },
-            { "priority": "high", "category": "Titel", "title": "Suchbegriffe in den Titelanfang", "description": "In deinen Titeln fehlen die Begriffe, über die neue Zuschauer dich finden — Rang, Patch oder Hero. Außerdem wiederholst du dich öfter als vergleichbare Kanäle, das macht jeden Stream schwerer unterscheidbar.", "estimatedImpact": "Geschätzt +10–15 % Erstzuschauer aus der Kategorie-Suche.", "evidence": "Deine Titel-Vielfalt liegt bei 36 % — vergleichbare Kanäle kommen auf 50 bis 65 %.", "icon": "Type" },
-            { "priority": "medium", "category": "Tags", "title": "Die starken Kategorie-Tags übernehmen", "description": "Drei Tags, die in der Kategorie überdurchschnittlich ziehen, fehlen bei dir komplett: High MMR, Analysis und Viewer Games. Wer sie setzt, taucht in mehr Filter-Suchen auf.", "estimatedImpact": "Breitere Auffindbarkeit über die Tag-Suche.", "evidence": "Die Top-Tags der Kategorie bringen im Schnitt 812 Zuschauer — deine aktuellen Tags liegen bei 438.", "icon": "Tag" },
-            { "priority": "medium", "category": "Community", "title": "Raids gezielter platzieren", "description": "Knapp die Hälfte deiner Chatter kommt nur zu dir — dein Netzwerk ist noch dünn. An rookroute und bridgeboss raidest du regelmäßig, zurück kommt aber nichts. Setz deine Raids stärker auf Partner, die zurückraiden.", "estimatedImpact": "Mehr eingehende Zuschauer über gegenseitige Raids.", "evidence": "45 % deiner Chatter tauchen nur bei dir auf; bei zwei deiner fünf Raid-Partner ist die Bilanz einseitig.", "icon": "Users" }
+            {
+                "priority": "critical",
+                "category": "Retention",
+                "title": lang.pick("Die ersten fünf Minuten festziehen", "Tighten up the first five minutes"),
+                "description": lang.pick(
+                    "Dein größter Zuschauerverlust passiert direkt nach dem Einstieg: Nach fünf Minuten ist rund ein Fünftel schon wieder weg. Ein klarer Einstieg mit Tagesziel und direkter Ansprache neuer Zuschauer hält mehr Leute im Stream.",
+                    "Your biggest viewer loss happens right after the start: after five minutes, about a fifth are already gone. A clear opening with a goal for the day and greeting new viewers directly keeps more people in the stream."
+                ),
+                "estimatedImpact": lang.pick(
+                    "Bis zu +6 Prozentpunkte 5-Minuten-Retention.",
+                    "Up to +6 percentage points of 5-minute retention."
+                ),
+                "evidence": lang.pick(
+                    "Nach 5 Minuten hältst du 78 % — die Kategorie-Spitze hält in derselben Phase rund 85 %.",
+                    "After 5 minutes you keep 78%, while the top of the category keeps about 85% in the same phase."
+                ),
+                "icon": "TrendingDown"
+            },
+            {
+                "priority": "high",
+                "category": "Schedule",
+                "title": lang.pick("Aus der vollsten Sendezeit ausweichen", "Move away from the busiest time slot"),
+                "description": lang.pick(
+                    "Deine Streams liegen vor allem Mittwoch und Freitag um 20 Uhr — genau dann konkurrieren 13 bis 15 andere Deadlock-Kanäle um dieselben Zuschauer. Dienstag 18 Uhr ist deutlich freier bei fast gleicher Nachfrage.",
+                    "Your streams mostly run Wednesday and Friday at 8 pm, exactly when 13 to 15 other Deadlock channels compete for the same viewers. Tuesday at 6 pm is much less crowded with almost the same demand."
+                ),
+                "estimatedImpact": lang.pick(
+                    "Mehr Sichtbarkeit pro Stream, geschätzt +8 % Anfangszuschauer.",
+                    "More visibility per stream, an estimated +8% opening viewers."
+                ),
+                "evidence": lang.pick(
+                    "Dein bester freier Slot (Di 18 Uhr) erreicht Chancen-Score 82 bei nur 7 Konkurrenten — deine 20-Uhr-Slots liegen bei 13 bis 15.",
+                    "Your best open slot (Tue 6 pm) reaches an opportunity score of 82 with only 7 competitors, while your 8 pm slots face 13 to 15."
+                ),
+                "icon": "Calendar"
+            },
+            {
+                "priority": "high",
+                "category": "Titel",
+                "title": lang.pick("Suchbegriffe in den Titelanfang", "Put search terms at the start of your title"),
+                "description": lang.pick(
+                    "In deinen Titeln fehlen die Begriffe, über die neue Zuschauer dich finden — Rang, Patch oder Hero. Außerdem wiederholst du dich öfter als vergleichbare Kanäle, das macht jeden Stream schwerer unterscheidbar.",
+                    "Your titles are missing the terms new viewers use to find you: rank, patch or hero. You also repeat yourself more than comparable channels, which makes each stream harder to tell apart."
+                ),
+                "estimatedImpact": lang.pick(
+                    "Geschätzt +10–15 % Erstzuschauer aus der Kategorie-Suche.",
+                    "An estimated +10 to 15% first-time viewers from the category search."
+                ),
+                "evidence": lang.pick(
+                    "Deine Titel-Vielfalt liegt bei 36 % — vergleichbare Kanäle kommen auf 50 bis 65 %.",
+                    "Your title variety is 36%, while comparable channels reach 50 to 65%."
+                ),
+                "icon": "Type"
+            },
+            {
+                "priority": "medium",
+                "category": "Tags",
+                "title": lang.pick("Die starken Kategorie-Tags übernehmen", "Adopt the strong category tags"),
+                "description": lang.pick(
+                    "Drei Tags, die in der Kategorie überdurchschnittlich ziehen, fehlen bei dir komplett: High MMR, Analysis und Viewer Games. Wer sie setzt, taucht in mehr Filter-Suchen auf.",
+                    "Three tags that perform above average in the category are missing from your streams entirely: High MMR, Analysis and Viewer Games. Using them puts you in more filtered searches."
+                ),
+                "estimatedImpact": lang.pick(
+                    "Breitere Auffindbarkeit über die Tag-Suche.",
+                    "Wider discoverability through tag search."
+                ),
+                "evidence": lang.pick(
+                    "Die Top-Tags der Kategorie bringen im Schnitt 812 Zuschauer — deine aktuellen Tags liegen bei 438.",
+                    "The top tags in the category bring 812 viewers on average, while your current tags are at 438."
+                ),
+                "icon": "Tag"
+            },
+            {
+                "priority": "medium",
+                "category": "Community",
+                "title": lang.pick("Raids gezielter platzieren", "Place your raids more deliberately"),
+                "description": lang.pick(
+                    "Knapp die Hälfte deiner Chatter kommt nur zu dir — dein Netzwerk ist noch dünn. An rookroute und bridgeboss raidest du regelmäßig, zurück kommt aber nichts. Setz deine Raids stärker auf Partner, die zurückraiden.",
+                    "Almost half of your chatters only come to you, so your network is still thin. You raid rookroute and bridgeboss regularly, but nothing comes back. Focus your raids on partners who raid back."
+                ),
+                "estimatedImpact": lang.pick(
+                    "Mehr eingehende Zuschauer über gegenseitige Raids.",
+                    "More incoming viewers through mutual raids."
+                ),
+                "evidence": lang.pick(
+                    "45 % deiner Chatter tauchen nur bei dir auf; bei zwei deiner fünf Raid-Partner ist die Bilanz einseitig.",
+                    "45% of your chatters only show up in your channel, and with two of your five raid partners the balance is one-sided."
+                ),
+                "icon": "Users"
+            }
         ],
-        "aiSummary": "Dein Kanal steht solide: 382 Zuschauer im Schnitt, starke Bindung und gesundes Follower-Wachstum bringen dich auf Rang 12 von 58 in der Kategorie. Die größten Hebel liegen woanders als bei der reinen Reichweite — die ersten fünf Minuten kosten dich noch zu viele Zuschauer, und deine besten Sendezeiten fallen in die vollste Konkurrenzphase. Wer hier nachschärft und Titel wie Tags auf Auffindbarkeit trimmt, rückt aus dem oberen Mittelfeld Richtung Kategorie-Spitze."
+        "aiSummary": lang.pick("Dein Kanal steht solide: 382 Zuschauer im Schnitt, starke Bindung und gesundes Follower-Wachstum bringen dich auf Rang 12 von 58 in der Kategorie. Die größten Hebel liegen woanders als bei der reinen Reichweite — die ersten fünf Minuten kosten dich noch zu viele Zuschauer, und deine besten Sendezeiten fallen in die vollste Konkurrenzphase. Wer hier nachschärft und Titel wie Tags auf Auffindbarkeit trimmt, rückt aus dem oberen Mittelfeld Richtung Kategorie-Spitze.", "Your channel is in a solid position: an average of 382 viewers, strong retention and healthy follower growth place you 12th out of 58 in the category. The biggest opportunities go beyond reach: you still lose too many viewers in the first five minutes, and your best streaming times overlap with peak competition. Refining your opening and making titles and tags easier to discover can move you towards the top of the category.")
     }))
     .into_response()
 }
@@ -1160,7 +1286,10 @@ pub fn build_demo_router() -> Router {
     Router::new()
         .route("/twitch/demo", get(demo_index_handler))
         .route("/twitch/demo/", get(demo_index_handler))
-        .route("/twitch/demo/dashboard-v2/{*path}", get(demo_assets_handler))
+        .route(
+            "/twitch/demo/dashboard-v2/{*path}",
+            get(demo_assets_handler),
+        )
         .route("/twitch/demo/api/v2/auth-status", get(demo_auth_status))
         .route("/twitch/demo/api/v2/streamers", get(demo_streamers))
         .route("/twitch/demo/api/v2/overview", get(demo_overview))

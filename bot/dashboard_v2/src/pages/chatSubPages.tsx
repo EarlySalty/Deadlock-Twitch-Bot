@@ -1,5 +1,6 @@
 import { AlertCircle, Loader2, MessageCircle } from 'lucide-react';
 
+import { useT } from '@/context/LanguageContext';
 import type { TimeRange } from '@/types/analytics';
 
 import { ChatAktivitaetContent, ChatTiefeContent, ChatTreueContent } from './chatAnalyticsContent';
@@ -24,12 +25,13 @@ export function ChatTreue({ streamer, days }: ChatSubPageProps) {
     hourlyChartGradientId,
     chatSocialGraphEnabled,
   } = useChatAnalyticsPage(streamer, days);
+  const t = useT();
 
   if (!streamer) {
     return (
       <div className="flex h-64 flex-col items-center justify-center">
         <AlertCircle className="mb-4 h-12 w-12 text-text-secondary" />
-        <p className="text-lg text-text-secondary">Wähle einen Streamer aus</p>
+        <p className="text-lg text-text-secondary">{t('Wähle einen Streamer aus')}</p>
       </div>
     );
   }
@@ -46,7 +48,7 @@ export function ChatTreue({ streamer, days }: ChatSubPageProps) {
     return (
       <div className="flex h-64 flex-col items-center justify-center">
         <MessageCircle className="mb-4 h-12 w-12 text-text-secondary" />
-        <p className="text-lg text-text-secondary">Keine Chat-Daten verfügbar</p>
+        <p className="text-lg text-text-secondary">{t('Keine Chat-Daten verfügbar')}</p>
       </div>
     );
   }
@@ -83,12 +85,13 @@ export function ChatAktivitaet({ streamer, days }: ChatSubPageProps) {
     hourlyChartGradientId,
     chatSocialGraphEnabled,
   } = useChatAnalyticsPage(streamer, days);
+  const t = useT();
 
   if (!streamer) {
     return (
       <div className="flex h-64 flex-col items-center justify-center">
         <AlertCircle className="mb-4 h-12 w-12 text-text-secondary" />
-        <p className="text-lg text-text-secondary">Wähle einen Streamer aus</p>
+        <p className="text-lg text-text-secondary">{t('Wähle einen Streamer aus')}</p>
       </div>
     );
   }
@@ -105,7 +108,7 @@ export function ChatAktivitaet({ streamer, days }: ChatSubPageProps) {
     return (
       <div className="flex h-64 flex-col items-center justify-center">
         <MessageCircle className="mb-4 h-12 w-12 text-text-secondary" />
-        <p className="text-lg text-text-secondary">Keine Chat-Daten verfügbar</p>
+        <p className="text-lg text-text-secondary">{t('Keine Chat-Daten verfügbar')}</p>
       </div>
     );
   }
@@ -142,12 +145,13 @@ export function ChatTiefe({ streamer, days }: ChatSubPageProps) {
     hourlyChartGradientId,
     chatSocialGraphEnabled,
   } = useChatAnalyticsPage(streamer, days);
+  const t = useT();
 
   if (!streamer) {
     return (
       <div className="flex h-64 flex-col items-center justify-center">
         <AlertCircle className="mb-4 h-12 w-12 text-text-secondary" />
-        <p className="text-lg text-text-secondary">Wähle einen Streamer aus</p>
+        <p className="text-lg text-text-secondary">{t('Wähle einen Streamer aus')}</p>
       </div>
     );
   }
@@ -164,7 +168,7 @@ export function ChatTiefe({ streamer, days }: ChatSubPageProps) {
     return (
       <div className="flex h-64 flex-col items-center justify-center">
         <MessageCircle className="mb-4 h-12 w-12 text-text-secondary" />
-        <p className="text-lg text-text-secondary">Keine Chat-Daten verfügbar</p>
+        <p className="text-lg text-text-secondary">{t('Keine Chat-Daten verfügbar')}</p>
       </div>
     );
   }

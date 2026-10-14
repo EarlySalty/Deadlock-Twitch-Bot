@@ -652,9 +652,7 @@ where
 }
 
 #[cfg(test)]
-#[allow(clippy::duplicate_mod)]
-#[path = "../../../test-support/postgres.rs"]
-mod postgres;
+use crate::role_test_postgres as postgres;
 
 #[cfg(test)]
 mod tests {

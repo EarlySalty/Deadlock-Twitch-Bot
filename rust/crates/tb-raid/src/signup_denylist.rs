@@ -1,18 +1,3 @@
-//! Nachschlag in der Signup-Denylist (`twitch_partner_signup_denylist`).
-//!
-//! Eigenständiger Zustand, getrennt von [`crate::raid_blacklist`]: die
-//! Raid-Blacklist steuert die Raid-Ziel-Auswahl, dieser Zustand steuert die
-//! Aufnahme ins Partnerprogramm. Richtungsregel: ein Signup-Block zieht einen
-//! Raid-Blacklist-Eintrag nach sich (Präfix
-//! [`tb_domain::RAID_BLACKLIST_REASON_PREFIX`]), ein Raid-Blacklist-Eintrag
-//! aber keinen Signup-Block.
-//!
-//! Die Queries hier nutzen bewusst `sqlx::query_as` mit `bind` statt der
-//! compile-time-geprüften Makros: die Tabelle ist neu und liegt noch nicht im
-//! Offline-Cache (`rust/scripts/sqlx-prepare.sh`), sonst bräuchte jeder Build
-//! eine erreichbare DB. Präzedenz im selben Crate:
-//! `raid_blacklist.rs::is_hard_banned`.
-
 use sqlx::{postgres::PgRow, PgExecutor, Row};
 use tb_domain::SignupBlock;
 
@@ -25,13 +10,6 @@ fn row_to_block(row: PgRow) -> SignupBlock {
     }
 }
 
-/// Schlägt einen Signup-Block nach. Match per `twitch_user_id` ODER
-/// `lower(twitch_login)` — der Login ist der Fallback, wenn an der Aufrufstelle
-/// nur er bekannt ist. Die ID gewinnt, damit eine Umbenennung den Block nicht
-/// aushebelt.
-///
-/// `Ok(None)` heißt nachweislich "kein Block". Ein DB-Fehler kommt als `Err`
-/// zurück und darf an der Aufrufstelle NICHT als "kein Block" behandelt werden.
 pub async fn lookup<'e, E>(
     executor: E,
     twitch_user_id: Option<&str>,
@@ -64,16 +42,23 @@ where
     Ok(row.map(row_to_block))
 }
 
-/// Wie [`lookup`], aber loggt das Ergebnis inklusive Pfadangabe und gibt bei
-/// einem DB-Fehler `Err(())` zurück. Aufrufer behandeln `Err` als "Signup
-/// abbrechen" (fail-closed): ein nicht beantwortbarer Nachschlag darf keinen
-/// gesperrten Streamer durchlassen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SignupBlockLookupFailed;
+
+impl std::fmt::Display for SignupBlockLookupFailed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("signup_block_lookup_failed")
+    }
+}
+
+impl std::error::Error for SignupBlockLookupFailed {}
+
 pub async fn lookup_or_fail_closed<'e, E>(
     executor: E,
     twitch_user_id: Option<&str>,
     twitch_login: &str,
     pfad: &str,
-) -> Result<Option<SignupBlock>, ()>
+) -> Result<Option<SignupBlock>, SignupBlockLookupFailed>
 where
     E: PgExecutor<'e>,
 {
@@ -105,7 +90,28 @@ where
                 %pfad,
                 "Signup-Block-Nachschlag fehlgeschlagen, Signup wird abgebrochen (fail-closed)"
             );
-            Err(())
+            Err(SignupBlockLookupFailed)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn closed_pool_returns_typed_failure() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgresql://fixture@127.0.0.1:1/fixture")
+            .expect("lazy fixture pool");
+        pool.close().await;
+        assert_eq!(
+            lookup_or_fail_closed(&pool, Some("42"), "fixture", "typed").await,
+            Err(SignupBlockLookupFailed)
+        );
+        assert_eq!(
+            lookup_or_fail_closed(&pool, None, "", "typed-empty").await,
+            Ok(None)
+        );
     }
 }

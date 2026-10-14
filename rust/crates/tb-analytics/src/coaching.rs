@@ -15,6 +15,7 @@ use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde_json::{json, Value};
 use sqlx::PgPool;
+use tb_domain::DashboardLanguage;
 
 type EfficiencyRow = (String, Option<f64>, Option<f64>, Option<f64>);
 type TitleRow = (String, Option<f64>, Option<i32>, Option<f64>, i64);
@@ -669,6 +670,7 @@ pub async fn cross_community(
     pool: &PgPool,
     streamer: &str,
     since: DateTime<Utc>,
+    lang: DashboardLanguage,
 ) -> Result<Value, sqlx::Error> {
     // 1) Eigene Unique-Chatter.
     let total_unique: i64 = sqlx::query_scalar!(
@@ -689,7 +691,7 @@ pub async fn cross_community(
             "chatterSources": [],
             "isolatedChatters": 0,
             "isolatedPercentage": 0,
-            "ecosystemSummary": "Keine Chatter-Daten verfuegbar.",
+            "ecosystemSummary": lang.text("Keine Chatter-Daten verfuegbar."),
         }));
     }
 
@@ -755,11 +757,11 @@ pub async fn cross_community(
 
     // Schwellen-Vergleich auf dem GERUNDETEN Wert (1:1 Python).
     let summary = if isolated_pct > 60.0 {
-        "Deine Community ist stark eigenstaendig - die meisten Chatter sind nur in deinem Channel aktiv."
+        lang.text("Deine Community ist stark eigenstaendig - die meisten Chatter sind nur in deinem Channel aktiv.")
     } else if isolated_pct > 30.0 {
-        "Gute Mischung: Ein Teil deiner Zuschauer kommt aus der Deadlock-Community, viele sind aber deine eigenen."
+        lang.text("Gute Mischung: Ein Teil deiner Zuschauer kommt aus der Deadlock-Community, viele sind aber deine eigenen.")
     } else {
-        "Dein Channel profitiert stark vom Community-Oekoystem. Viele Zuschauer kennst du aus anderen Channels."
+        lang.text("Dein Channel profitiert stark vom Community-Oekoystem. Viele Zuschauer kennst du aus anderen Channels.")
     };
 
     Ok(json!({
@@ -1960,41 +1962,46 @@ fn prio_rank(r: &Value) -> u8 {
     }
 }
 
-/// Regelbasierte Empfehlungs-Engine (Python `_build_recommendations`).
-/// Konsumiert die 12 zusammengesetzten Analyse-Resultate (`data`) und erzeugt
-/// priorisierte Empfehlungen, sortiert nach Priorität (critical→low).
-pub fn build_recommendations(data: &Value) -> Vec<Value> {
+pub fn build_recommendations(data: &Value, lang: DashboardLanguage) -> Vec<Value> {
     let null = Value::Null;
     let mut recs: Vec<Value> = Vec::new();
 
-    // Doppel-Streams erkannt.
     let ds = data.get("doubleStreamDetection").unwrap_or(&null);
     if truthy(ds, "detected") && int_of(ds, "count") > 0 {
         let mut impact = String::new();
         if truthy(ds, "singleDayAvg") && truthy(ds, "doubleDayAvg") {
             let diff = num(ds, "singleDayAvg") - num(ds, "doubleDayAvg");
             if diff > 0.0 {
-                impact = format!("An Single-Stream-Tagen hast du {:.0} mehr Ø Viewer.", diff);
+                impact = lang.pick(
+                    format!("An Single-Stream-Tagen hast du {:.0} mehr Ø Viewer.", diff),
+                    format!(
+                        "On single-stream days you average {:.0} more viewers.",
+                        diff
+                    ),
+                );
             }
         }
         let count = int_of(ds, "count");
         let est = if impact.is_empty() {
-            "Konsistenter Schedule = bessere Zuschauerbindung".to_string()
+            lang.pick(
+                "Konsistenter Schedule = bessere Zuschauerbindung",
+                "A consistent schedule keeps viewers coming back",
+            )
+            .to_string()
         } else {
             impact
         };
         recs.push(json!({
             "priority": "critical",
             "category": "Schedule",
-            "title": "Doppel-Streams erkannt",
-            "description": format!("{}x hast du an einem Tag mehrfach gestreamt. Das kann dein Wachstum bremsen, weil Viewer nicht wissen, wann du ON bist.", count),
+            "title": lang.pick("Doppel-Streams erkannt", "Double streams detected"),
+            "description": lang.pick(format!("{}x hast du an einem Tag mehrfach gestreamt. Das kann dein Wachstum bremsen, weil Viewer nicht wissen, wann du ON bist.", count), format!("{} times you streamed more than once on the same day. That can slow your growth because viewers don't know when you're live.", count)),
             "estimatedImpact": est,
-            "evidence": format!("{} Tage mit mehreren Sessions", count),
+            "evidence": lang.pick(format!("{} Tage mit mehreren Sessions", count), format!("{} days with multiple sessions", count)),
             "icon": "AlertTriangle",
         }));
     }
 
-    // Effizienz unter 25. Perzentil.
     let eff = data.get("efficiency").unwrap_or(&null);
     if eff
         .get("percentile")
@@ -2006,15 +2013,14 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
         recs.push(json!({
             "priority": "critical",
             "category": "Effizienz",
-            "title": "Unterdurchschnittliche Effizienz",
-            "description": format!("Deine Viewer-Hours pro Stream-Hour ({}) liegen unter dem 25. Perzentil. Der Kategorie-Durchschnitt liegt bei {}.", pyfmt(eff.get("viewerHoursPerStreamHour")), pyfmt(eff.get("categoryAvg"))),
-            "estimatedImpact": "Kuerzere, fokussiertere Streams koennten deine Effizienz deutlich steigern",
-            "evidence": format!("Perzentil {}% | Du: {} vs Kat: {}", pyfmt(eff.get("percentile")), pyfmt(eff.get("viewerHoursPerStreamHour")), pyfmt(eff.get("categoryAvg"))),
+            "title": lang.pick("Unterdurchschnittliche Effizienz", "Below-average efficiency"),
+            "description": lang.pick(format!("Deine Viewer-Hours pro Stream-Hour ({}) liegen unter dem 25. Perzentil. Der Kategorie-Durchschnitt liegt bei {}.", pyfmt(eff.get("viewerHoursPerStreamHour")), pyfmt(eff.get("categoryAvg"))), format!("Your viewer hours per stream hour ({}) are below the 25th percentile. The category average is {}.", pyfmt(eff.get("viewerHoursPerStreamHour")), pyfmt(eff.get("categoryAvg")))),
+            "estimatedImpact": lang.pick("Kuerzere, fokussiertere Streams koennten deine Effizienz deutlich steigern", "Shorter, more focused streams could raise your efficiency significantly"),
+            "evidence": lang.pick(format!("Perzentil {}% | Du: {} vs Kat: {}", pyfmt(eff.get("percentile")), pyfmt(eff.get("viewerHoursPerStreamHour")), pyfmt(eff.get("categoryAvg"))), format!("Percentile {}% | You: {} vs category: {}", pyfmt(eff.get("percentile")), pyfmt(eff.get("viewerHoursPerStreamHour")), pyfmt(eff.get("categoryAvg")))),
             "icon": "TrendingDown",
         }));
     }
 
-    // Retention unter 50 % des Kategorie-Schnitts.
     let ret = data.get("retentionCoaching").unwrap_or(&null);
     if truthy(ret, "category5mRetention") && truthy(ret, "your5mRetention") {
         let yours = num(ret, "your5mRetention");
@@ -2023,16 +2029,15 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
             recs.push(json!({
                 "priority": "high",
                 "category": "Retention",
-                "title": "Niedrige 5-Minuten-Retention",
-                "description": format!("Deine 5-Min-Retention ({}%) liegt deutlich unter dem Kategorie-Schnitt ({}%). Viewer springen frueh ab.", pyfmt(ret.get("your5mRetention")), pyfmt(ret.get("category5mRetention"))),
-                "estimatedImpact": "Bessere Intros und fruehe Interaktion koennen die Retention verdoppeln",
-                "evidence": format!("Du: {}% vs Kategorie: {}%", pyfmt(ret.get("your5mRetention")), pyfmt(ret.get("category5mRetention"))),
+                "title": lang.pick("Niedrige 5-Minuten-Retention", "Low 5-minute retention"),
+                "description": lang.pick(format!("Deine 5-Min-Retention ({}%) liegt deutlich unter dem Kategorie-Schnitt ({}%). Viewer springen frueh ab.", pyfmt(ret.get("your5mRetention")), pyfmt(ret.get("category5mRetention"))), format!("Your 5-min retention ({}%) is well below the category average ({}%). Viewers leave early.", pyfmt(ret.get("your5mRetention")), pyfmt(ret.get("category5mRetention")))),
+                "estimatedImpact": lang.pick("Bessere Intros und fruehe Interaktion koennen die Retention verdoppeln", "Better intros and early interaction can double your retention"),
+                "evidence": lang.pick(format!("Du: {}% vs Kategorie: {}%", pyfmt(ret.get("your5mRetention")), pyfmt(ret.get("category5mRetention"))), format!("You: {}% vs category: {}%", pyfmt(ret.get("your5mRetention")), pyfmt(ret.get("category5mRetention")))),
                 "icon": "UserMinus",
             }));
         }
     }
 
-    // Dauer über 150 % des Optimums.
     let dur = data.get("durationAnalysis").unwrap_or(&null);
     if truthy(dur, "optimalLabel") && truthy(dur, "currentAvgHours") {
         let optimal_mid = match text_of(dur, "optimalLabel").as_str() {
@@ -2049,16 +2054,15 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
             recs.push(json!({
                 "priority": "high",
                 "category": "Dauer",
-                "title": "Streams zu lang",
-                "description": format!("Dein Ø Stream dauert {:.1}h, aber dein Sweet-Spot liegt bei {}. Laengere Streams verwassern deine Metriken.", cur, text_of(dur, "optimalLabel")),
-                "estimatedImpact": format!("Kuerze auf {} fuer bessere Viewer-Zahlen", text_of(dur, "optimalLabel")),
-                "evidence": format!("Optimaler Bucket: {} | Aktuell: {:.1}h", text_of(dur, "optimalLabel"), cur),
+                "title": lang.pick("Streams zu lang", "Streams too long"),
+                "description": lang.pick(format!("Dein Ø Stream dauert {:.1}h, aber dein Sweet-Spot liegt bei {}. Laengere Streams verwassern deine Metriken.", cur, text_of(dur, "optimalLabel")), format!("Your average stream lasts {:.1}h, but your sweet spot is {}. Longer streams dilute your metrics.", cur, text_of(dur, "optimalLabel"))),
+                "estimatedImpact": lang.pick(format!("Kuerze auf {} fuer bessere Viewer-Zahlen", text_of(dur, "optimalLabel")), format!("Cut down to {} for better viewer numbers", text_of(dur, "optimalLabel"))),
+                "evidence": lang.pick(format!("Optimaler Bucket: {} | Aktuell: {:.1}h", text_of(dur, "optimalLabel"), cur), format!("Optimal bucket: {} | Current: {:.1}h", text_of(dur, "optimalLabel"), cur)),
                 "icon": "Clock",
             }));
         }
     }
 
-    // Schedule-Mismatch (zu viel Konkurrenz in eigenen Slots).
     let sched = data.get("scheduleOptimizer").unwrap_or(&null);
     if truthy(sched, "yourCurrentSlots") && truthy(sched, "competitionHeatmap") {
         let slots = sched
@@ -2088,17 +2092,16 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
                 recs.push(json!({
                     "priority": "high",
                     "category": "Schedule",
-                    "title": "Zu viel Konkurrenz in deinen Slots",
-                    "description": format!("{:.0}% deiner Streams laufen in den konkurrenzstaerksten Zeitfenstern. Verschiebe einige Streams in Sweet-Spots.", overlap_pct),
-                    "estimatedImpact": "Weniger Konkurrenz = mehr Discovery durch Browse-Tab",
-                    "evidence": format!("{}/{} Slots in Top-25% Konkurrenz", overlap, your_slots_set.len()),
+                    "title": lang.pick("Zu viel Konkurrenz in deinen Slots", "Too much competition in your slots"),
+                    "description": lang.pick(format!("{:.0}% deiner Streams laufen in den konkurrenzstaerksten Zeitfenstern. Verschiebe einige Streams in Sweet-Spots.", overlap_pct), format!("{:.0}% of your streams run in the most competitive time slots. Move some streams into sweet spots.", overlap_pct)),
+                    "estimatedImpact": lang.pick("Weniger Konkurrenz = mehr Discovery durch Browse-Tab", "Less competition means more discovery through the Browse tab"),
+                    "evidence": lang.pick(format!("{}/{} Slots in Top-25% Konkurrenz", overlap, your_slots_set.len()), format!("{}/{} slots in the top 25% for competition", overlap, your_slots_set.len())),
                     "icon": "Calendar",
                 }));
             }
         }
     }
 
-    // Fehlende Top-Tags.
     let tags = data.get("tagOptimization").unwrap_or(&null);
     if truthy(tags, "missingHighPerformers") {
         let full = tags.get("missingHighPerformers").and_then(Value::as_array);
@@ -2113,15 +2116,14 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
         recs.push(json!({
             "priority": "high",
             "category": "Tags",
-            "title": "Erfolgreiche Tags fehlen",
-            "description": format!("Dir fehlen Tags, die in der Kategorie gut performen: {}. Tags beeinflussen die Sichtbarkeit im Browse-Tab.", missing.join(", ")),
-            "estimatedImpact": "Bessere Tags = mehr Discovery ueber Twitch Browse",
-            "evidence": format!("{} fehlende High-Performer Tags", full.map_or(0, |a| a.len())),
+            "title": lang.pick("Erfolgreiche Tags fehlen", "Successful tags missing"),
+            "description": lang.pick(format!("Dir fehlen Tags, die in der Kategorie gut performen: {}. Tags beeinflussen die Sichtbarkeit im Browse-Tab.", missing.join(", ")), format!("You're missing tags that perform well in the category: {}. Tags affect your visibility in the Browse tab.", missing.join(", "))),
+            "estimatedImpact": lang.pick("Bessere Tags = mehr Discovery ueber Twitch Browse", "Better tags mean more discovery through Twitch Browse"),
+            "evidence": lang.pick(format!("{} fehlende High-Performer Tags", full.map_or(0, |a| a.len())), format!("{} missing high-performer tags", full.map_or(0, |a| a.len()))),
             "icon": "Tag",
         }));
     }
 
-    // Titel zu oft wiederholt (> 5x).
     let titles = data.get("titleAnalysis").unwrap_or(&null);
     if truthy(titles, "yourTitles") {
         let your_titles = titles.get("yourTitles").and_then(Value::as_array);
@@ -2134,23 +2136,25 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
                 .unwrap_or_default();
             let evidence = if let Some(first) = reused.first() {
                 let t40: String = text_of(first, "title").chars().take(40).collect();
-                format!("'{}...' wurde {}x benutzt", t40, max_reuse)
+                lang.pick(
+                    format!("'{}...' wurde {}x benutzt", t40, max_reuse),
+                    format!("'{}...' was used {} times", t40, max_reuse),
+                )
             } else {
                 String::new()
             };
             recs.push(json!({
                 "priority": "medium",
                 "category": "Titel",
-                "title": "Titel-Wiederholung",
-                "description": format!("Du nutzt denselben Titel zu oft ({}x). Variiere deine Titel, um im Browse-Tab aufzufallen.", max_reuse),
-                "estimatedImpact": "Einzigartige Titel erhoehen die Klickrate",
+                "title": lang.pick("Titel-Wiederholung", "Repeated titles"),
+                "description": lang.pick(format!("Du nutzt denselben Titel zu oft ({}x). Variiere deine Titel, um im Browse-Tab aufzufallen.", max_reuse), format!("You use the same title too often ({} times). Vary your titles to stand out in the Browse tab.", max_reuse)),
+                "estimatedImpact": lang.pick("Einzigartige Titel erhoehen die Klickrate", "Unique titles raise your click rate"),
                 "evidence": evidence,
                 "icon": "Type",
             }));
         }
     }
 
-    // Community-Abhängigkeit (> 80 % extern).
     let comm = data.get("crossCommunity").unwrap_or(&null);
     if present_non_null(comm, "isolatedPercentage")
         && num(comm, "isolatedPercentage") < 20.0
@@ -2159,15 +2163,14 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
         recs.push(json!({
             "priority": "medium",
             "category": "Community",
-            "title": "Hohe Abhaengigkeit vom Oekosystem",
-            "description": format!("Nur {:.0}% deiner Chatter sind exklusiv in deinem Channel. Du bist stark vom Deadlock-Oekosystem abhaengig.", num(comm, "isolatedPercentage")),
-            "estimatedImpact": "Eigene Community aufbauen = nachhaltiges Wachstum",
-            "evidence": format!("{} von {} Chattern nur bei dir", int_of(comm, "isolatedChatters"), int_of(comm, "totalUniqueChatters")),
+            "title": lang.pick("Hohe Abhaengigkeit vom Oekosystem", "High dependence on the ecosystem"),
+            "description": lang.pick(format!("Nur {:.0}% deiner Chatter sind exklusiv in deinem Channel. Du bist stark vom Deadlock-Oekosystem abhaengig.", num(comm, "isolatedPercentage")), format!("Only {:.0}% of your chatters are exclusive to your channel. You rely heavily on the Deadlock ecosystem.", num(comm, "isolatedPercentage"))),
+            "estimatedImpact": lang.pick("Eigene Community aufbauen = nachhaltiges Wachstum", "Building your own community means sustainable growth"),
+            "evidence": lang.pick(format!("{} von {} Chattern nur bei dir", int_of(comm, "isolatedChatters"), int_of(comm, "totalUniqueChatters")), format!("{} of {} chatters only chat with you", int_of(comm, "isolatedChatters"), int_of(comm, "totalUniqueChatters"))),
             "icon": "Users",
         }));
     }
 
-    // Fehlende Titel-Keywords.
     if truthy(titles, "yourMissingPatterns") {
         let full = titles.get("yourMissingPatterns").and_then(Value::as_array);
         let keywords: Vec<String> = full
@@ -2181,28 +2184,26 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
         recs.push(json!({
             "priority": "low",
             "category": "Titel",
-            "title": "Fehlende Titel-Keywords",
-            "description": format!("Erfolgreiche Streamer nutzen Keywords, die du nicht verwendest: {}.", keywords.join(", ")),
-            "estimatedImpact": "Kleine Optimierung fuer bessere Discoverability",
-            "evidence": format!("{} fehlende Patterns", full.map_or(0, |a| a.len())),
+            "title": lang.pick("Fehlende Titel-Keywords", "Missing title keywords"),
+            "description": lang.pick(format!("Erfolgreiche Streamer nutzen Keywords, die du nicht verwendest: {}.", keywords.join(", ")), format!("Successful streamers use keywords you don't use: {}.", keywords.join(", "))),
+            "estimatedImpact": lang.pick("Kleine Optimierung fuer bessere Discoverability", "A small tweak for better discoverability"),
+            "evidence": lang.pick(format!("{} fehlende Patterns", full.map_or(0, |a| a.len())), format!("{} missing patterns", full.map_or(0, |a| a.len()))),
             "icon": "Search",
         }));
     }
 
-    // Negative Korrelation Dauer↔Viewer.
     if present_non_null(dur, "correlation") && num(dur, "correlation") < -0.3 {
         recs.push(json!({
             "priority": "medium",
             "category": "Dauer",
-            "title": "Negative Korrelation: Laenge vs Viewer",
-            "description": format!("Je laenger du streamst, desto weniger Viewer hast du (r={:.2}). Das deutet auf Ermuedung hin.", num(dur, "correlation")),
-            "estimatedImpact": "Kuerzere Streams koennen den Viewer-Schnitt steigern",
+            "title": lang.pick("Negative Korrelation: Laenge vs Viewer", "Negative correlation: length vs viewers"),
+            "description": lang.pick(format!("Je laenger du streamst, desto weniger Viewer hast du (r={:.2}). Das deutet auf Ermuedung hin.", num(dur, "correlation")), format!("The longer you stream, the fewer viewers you have (r={:.2}). That points to fatigue.", num(dur, "correlation"))),
+            "estimatedImpact": lang.pick("Kuerzere Streams koennen den Viewer-Schnitt steigern", "Shorter streams can raise your average viewers"),
             "evidence": format!("Pearson r = {:.2}", num(dur, "correlation")),
             "icon": "TrendingDown",
         }));
     }
 
-    // Titel-Vielfalt extrem gering.
     if present_non_null(titles, "varietyPct") && truthy(titles, "avgPeerVarietyPct") {
         let own_var = num(titles, "varietyPct");
         let peer_var = num(titles, "avgPeerVarietyPct");
@@ -2210,16 +2211,15 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
             recs.push(json!({
                 "priority": "critical",
                 "category": "Titel",
-                "title": "Extrem geringe Titel-Vielfalt",
-                "description": format!("Nur {}% einzigartige Titel vs {}% Peer-Durchschnitt. {} verschiedene bei {} Sessions.", pyfmt(titles.get("varietyPct")), pyfmt(titles.get("avgPeerVarietyPct")), int_of(titles, "uniqueTitleCount"), int_of(titles, "totalSessionCount")),
-                "estimatedImpact": "Verschiedene Titel locken verschiedene Zielgruppen in der Browse-Page an",
-                "evidence": format!("Du: {}% | Peers: {}%", pyfmt(titles.get("varietyPct")), pyfmt(titles.get("avgPeerVarietyPct"))),
+                "title": lang.pick("Extrem geringe Titel-Vielfalt", "Very low title variety"),
+                "description": lang.pick(format!("Nur {}% einzigartige Titel vs {}% Peer-Durchschnitt. {} verschiedene bei {} Sessions.", pyfmt(titles.get("varietyPct")), pyfmt(titles.get("avgPeerVarietyPct")), int_of(titles, "uniqueTitleCount"), int_of(titles, "totalSessionCount")), format!("Only {}% unique titles vs {}% peer average. {} different titles across {} sessions.", pyfmt(titles.get("varietyPct")), pyfmt(titles.get("avgPeerVarietyPct")), int_of(titles, "uniqueTitleCount"), int_of(titles, "totalSessionCount"))),
+                "estimatedImpact": lang.pick("Verschiedene Titel locken verschiedene Zielgruppen in der Browse-Page an", "Different titles attract different audiences on the Browse page"),
+                "evidence": lang.pick(format!("Du: {}% | Peers: {}%", pyfmt(titles.get("varietyPct")), pyfmt(titles.get("avgPeerVarietyPct"))), format!("You: {}% | Peers: {}%", pyfmt(titles.get("varietyPct")), pyfmt(titles.get("avgPeerVarietyPct")))),
                 "icon": "Type",
             }));
         }
     }
 
-    // Chat-Konzentration.
     let chat = data.get("chatConcentration").unwrap_or(&null);
     if num(chat, "top1Pct") > 50.0 && num(chat, "totalMessages") > 50.0 {
         let evidence = if truthy(chat, "topChatters") {
@@ -2228,16 +2228,19 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
                 .and_then(|a| a.get(0))
                 .map(|t| text_of(t, "login"))
                 .unwrap_or_default();
-            format!("Top-Chatter: {} ({}%)", login, pyfmt(chat.get("top1Pct")))
+            lang.pick(
+                format!("Top-Chatter: {} ({}%)", login, pyfmt(chat.get("top1Pct"))),
+                format!("Top chatter: {} ({}%)", login, pyfmt(chat.get("top1Pct"))),
+            )
         } else {
             String::new()
         };
         recs.push(json!({
             "priority": "high",
             "category": "Community",
-            "title": "Chat abhaengig von einer Person",
-            "description": format!("Ein einzelner Chatter macht {}% aller Nachrichten aus. Wenn diese Person wegfaellt, stirbt der Chat.", pyfmt(chat.get("top1Pct"))),
-            "estimatedImpact": "Neue Chatter aktiv einbinden, Fragen stellen, namentlich ansprechen",
+            "title": lang.pick("Chat abhaengig von einer Person", "Chat depends on one person"),
+            "description": lang.pick(format!("Ein einzelner Chatter macht {}% aller Nachrichten aus. Wenn diese Person wegfaellt, stirbt der Chat.", pyfmt(chat.get("top1Pct"))), format!("A single chatter writes {}% of all messages. If that person leaves, your chat dies.", pyfmt(chat.get("top1Pct")))),
+            "estimatedImpact": lang.pick("Neue Chatter aktiv einbinden, Fragen stellen, namentlich ansprechen", "Actively involve new chatters, ask questions and address them by name"),
             "evidence": evidence,
             "icon": "Users",
         }));
@@ -2245,44 +2248,41 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
         recs.push(json!({
             "priority": "high",
             "category": "Community",
-            "title": "Chat von Top-3 dominiert",
-            "description": format!("Top 3 Chatter machen {}% aller Nachrichten. Dein Chat ist fragil - diversifiziere die Beteiligung.", pyfmt(chat.get("top3Pct"))),
-            "estimatedImpact": "Interaktive Formate (Coaching, Q&A) bringen neue Stimmen",
-            "evidence": format!("HHI-Index: {:.0} (>2500 = hochkonzentriert)", num(chat, "concentrationIndex")),
+            "title": lang.pick("Chat von Top-3 dominiert", "Chat dominated by the top 3"),
+            "description": lang.pick(format!("Top 3 Chatter machen {}% aller Nachrichten. Dein Chat ist fragil - diversifiziere die Beteiligung.", pyfmt(chat.get("top3Pct"))), format!("Your top 3 chatters write {}% of all messages. Your chat is fragile, so spread out participation.", pyfmt(chat.get("top3Pct")))),
+            "estimatedImpact": lang.pick("Interaktive Formate (Coaching, Q&A) bringen neue Stimmen", "Interactive formats (coaching, Q&A) bring in new voices"),
+            "evidence": lang.pick(format!("HHI-Index: {:.0} (>2500 = hochkonzentriert)", num(chat, "concentrationIndex")), format!("HHI index: {:.0} (>2500 = highly concentrated)", num(chat, "concentrationIndex"))),
             "icon": "Users",
         }));
     }
 
-    // One-Timer-Rate über Peer-Schnitt +10.
     if num(chat, "ownOneTimerPct") > num(chat, "avgPeerOneTimerPct") + 10.0
         && int_of(chat, "totalChatters") >= 5
     {
         recs.push(json!({
             "priority": "medium",
             "category": "Community",
-            "title": "Zu viele Einmal-Chatter",
-            "description": format!("{}% deiner Chatter kommen nur einmal (Peers: {}%). Follow-up Strategien einsetzen: Discord, Social Media, persoenliche Begruessung.", pyfmt(chat.get("ownOneTimerPct")), pyfmt(chat.get("avgPeerOneTimerPct"))),
-            "estimatedImpact": "Senkung der One-Timer-Rate um 10% = deutlich stabilerer Chat",
-            "evidence": format!("Du: {}% | Peers: {}%", pyfmt(chat.get("ownOneTimerPct")), pyfmt(chat.get("avgPeerOneTimerPct"))),
+            "title": lang.pick("Zu viele Einmal-Chatter", "Too many one-time chatters"),
+            "description": lang.pick(format!("{}% deiner Chatter kommen nur einmal (Peers: {}%). Follow-up Strategien einsetzen: Discord, Social Media, persoenliche Begruessung.", pyfmt(chat.get("ownOneTimerPct")), pyfmt(chat.get("avgPeerOneTimerPct"))), format!("{}% of your chatters only show up once (peers: {}%). Use follow-up strategies: Discord, social media, personal greetings.", pyfmt(chat.get("ownOneTimerPct")), pyfmt(chat.get("avgPeerOneTimerPct")))),
+            "estimatedImpact": lang.pick("Senkung der One-Timer-Rate um 10% = deutlich stabilerer Chat", "Cutting the one-timer rate by 10% makes your chat much more stable"),
+            "evidence": lang.pick(format!("Du: {}% | Peers: {}%", pyfmt(chat.get("ownOneTimerPct")), pyfmt(chat.get("avgPeerOneTimerPct"))), format!("You: {}% | Peers: {}%", pyfmt(chat.get("ownOneTimerPct")), pyfmt(chat.get("avgPeerOneTimerPct")))),
             "icon": "UserMinus",
         }));
     }
 
-    // Einseitiges Raid-Netzwerk.
     let raids = data.get("raidNetwork").unwrap_or(&null);
     if num(raids, "totalSent") > 5.0 && num(raids, "reciprocityRatio") < 0.3 {
         recs.push(json!({
             "priority": "medium",
             "category": "Netzwerk",
-            "title": "Einseitiges Raid-Netzwerk",
-            "description": format!("Du sendest {} Raids, erhaeltst aber nur {}. Reziprozitaet: {}x. Aktiv gegenseitige Raid-Partnerschaften aufbauen.", int_of(raids, "totalSent"), int_of(raids, "totalReceived"), pyfmt(raids.get("reciprocityRatio"))),
-            "estimatedImpact": "Gegenseitige Raids bringen neue Viewer in deinen Channel",
-            "evidence": format!("Gesendet: {} | Erhalten: {} | Mutual: {}", int_of(raids, "totalSent"), int_of(raids, "totalReceived"), int_of(raids, "mutualPartners")),
+            "title": lang.pick("Einseitiges Raid-Netzwerk", "One-sided raid network"),
+            "description": lang.pick(format!("Du sendest {} Raids, erhaeltst aber nur {}. Reziprozitaet: {}x. Aktiv gegenseitige Raid-Partnerschaften aufbauen.", int_of(raids, "totalSent"), int_of(raids, "totalReceived"), pyfmt(raids.get("reciprocityRatio"))), format!("You send {} raids but only receive {}. Reciprocity: {}x. Actively build mutual raid partnerships.", int_of(raids, "totalSent"), int_of(raids, "totalReceived"), pyfmt(raids.get("reciprocityRatio")))),
+            "estimatedImpact": lang.pick("Gegenseitige Raids bringen neue Viewer in deinen Channel", "Mutual raids bring new viewers to your channel"),
+            "evidence": lang.pick(format!("Gesendet: {} | Erhalten: {} | Mutual: {}", int_of(raids, "totalSent"), int_of(raids, "totalReceived"), int_of(raids, "mutualPartners")), format!("Sent: {} | Received: {} | Mutual: {}", int_of(raids, "totalSent"), int_of(raids, "totalReceived"), int_of(raids, "mutualPartners"))),
             "icon": "Users",
         }));
     }
 
-    // Ungenutzter Sweet-Spot.
     let comp = data.get("competitionDensity").unwrap_or(&null);
     let sweet_non_empty = comp
         .get("sweetSpots")
@@ -2299,16 +2299,15 @@ pub fn build_recommendations(data: &Value) -> Vec<Value> {
             recs.push(json!({
                 "priority": "high",
                 "category": "Schedule",
-                "title": format!("Ungenutzter Sweet-Spot: {:02}:00 UTC", hour),
-                "description": format!("Um {:02}:00 UTC gibt es nur {} aktive Streamer bei {} Ø Viewern. Du streamst dort nicht.", hour, int_of(best, "activeStreamers"), pyfmt(best.get("avgViewers"))),
-                "estimatedImpact": format!("Opportunity-Score {} - hoechstes Viewer/Konkurrenz-Verhaeltnis", pyfmt(best.get("opportunityScore"))),
-                "evidence": format!("{} Streamer | {} Ø Viewer", int_of(best, "activeStreamers"), pyfmt(best.get("avgViewers"))),
+                "title": lang.pick(format!("Ungenutzter Sweet-Spot: {:02}:00 UTC", hour), format!("Unused sweet spot: {:02}:00 UTC", hour)),
+                "description": lang.pick(format!("Um {:02}:00 UTC gibt es nur {} aktive Streamer bei {} Ø Viewern. Du streamst dort nicht.", hour, int_of(best, "activeStreamers"), pyfmt(best.get("avgViewers"))), format!("At {:02}:00 UTC there are only {} active streamers with {} average viewers. You don't stream then.", hour, int_of(best, "activeStreamers"), pyfmt(best.get("avgViewers")))),
+                "estimatedImpact": lang.pick(format!("Opportunity-Score {} - hoechstes Viewer/Konkurrenz-Verhaeltnis", pyfmt(best.get("opportunityScore"))), format!("Opportunity score {}: best ratio of viewers to competition", pyfmt(best.get("opportunityScore")))),
+                "evidence": lang.pick(format!("{} Streamer | {} Ø Viewer", int_of(best, "activeStreamers"), pyfmt(best.get("avgViewers"))), format!("{} streamers | {} avg viewers", int_of(best, "activeStreamers"), pyfmt(best.get("avgViewers")))),
                 "icon": "Calendar",
             }));
         }
     }
 
-    // Nach Priorität sortieren (stabil → Regel-Reihenfolge bleibt bei Gleichstand).
     recs.sort_by_key(prio_rank);
     recs
 }
@@ -2321,6 +2320,7 @@ pub async fn get_coaching_data(
     pool: &PgPool,
     streamer: &str,
     days: i64,
+    lang: DashboardLanguage,
 ) -> Result<Value, sqlx::Error> {
     let streamer_login = streamer.to_lowercase();
     let since = Utc::now() - chrono::Duration::days(days);
@@ -2351,7 +2351,7 @@ pub async fn get_coaching_data(
     let title_v = title_analysis(pool, &streamer_login, since).await?;
     let schedule_v = schedule_optimizer(pool, &streamer_login, since).await?;
     let duration_v = duration_analysis(pool, &streamer_login, since).await?;
-    let cross_v = cross_community(pool, &streamer_login, since).await?;
+    let cross_v = cross_community(pool, &streamer_login, since, lang).await?;
     let tag_v = tag_optimization(pool, &streamer_login, since).await?;
     let retention_v = retention_coaching(pool, &streamer_login, since).await?;
     let double_v = double_stream_detection(pool, &streamer_login, since).await?;
@@ -2378,8 +2378,7 @@ pub async fn get_coaching_data(
         "competitionDensity": competition_v,
     });
 
-    // recommendations konsumiert die 12 Analysen (ohne recommendations/aiSummary).
-    let recommendations = build_recommendations(&result);
+    let recommendations = build_recommendations(&result, lang);
     result["recommendations"] = Value::Array(recommendations);
     result["aiSummary"] = Value::Null;
 
@@ -2656,9 +2655,14 @@ mod tests {
         .await
         .unwrap();
 
-        let v = cross_community(&pool, "nani", Utc::now() - chrono::Duration::days(30))
-            .await
-            .unwrap();
+        let v = cross_community(
+            &pool,
+            "nani",
+            Utc::now() - chrono::Duration::days(30),
+            DashboardLanguage::De,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(v["totalUniqueChatters"], 4);
         // Quellen nach geteilten Chattern DESC: rivalx (2) vor rivaly (1).
@@ -2681,9 +2685,14 @@ mod tests {
         let Some(pool) = make_rollup_pool("t_coach_cross_empty").await else {
             return;
         };
-        let v = cross_community(&pool, "nani", Utc::now() - chrono::Duration::days(30))
-            .await
-            .unwrap();
+        let v = cross_community(
+            &pool,
+            "nani",
+            Utc::now() - chrono::Duration::days(30),
+            DashboardLanguage::De,
+        )
+        .await
+        .unwrap();
         assert_eq!(v["totalUniqueChatters"], 0);
         assert_eq!(v["chatterSources"], json!([]));
         assert_eq!(v["ecosystemSummary"], "Keine Chatter-Daten verfuegbar.");
@@ -3086,7 +3095,7 @@ mod tests {
             "efficiency": {"percentile": 10, "totalStreamHours": 20.0, "viewerHoursPerStreamHour": 50.0, "categoryAvg": 133.3},
             "raidNetwork": {"totalSent": 10, "totalReceived": 2, "reciprocityRatio": 0.2, "mutualPartners": 1},
         });
-        let recs = build_recommendations(&data);
+        let recs = build_recommendations(&data, DashboardLanguage::De);
 
         // 2 critical (double, efficiency) + 1 medium (raid), critical zuerst.
         assert_eq!(recs.len(), 3);
@@ -3123,7 +3132,7 @@ mod tests {
     #[test]
     fn build_recommendations_leer() {
         // Leere Daten → keine Regel feuert.
-        assert!(build_recommendations(&json!({})).is_empty());
+        assert!(build_recommendations(&json!({}), DashboardLanguage::De).is_empty());
     }
 
     /// Pool mit ALLEN Tabellen, die get_coaching_data anfasst.
@@ -3142,7 +3151,9 @@ mod tests {
             return;
         };
         // Keine Sessions → empty-Guard.
-        let v = get_coaching_data(&pool, "Nani", 30).await.unwrap();
+        let v = get_coaching_data(&pool, "Nani", 30, DashboardLanguage::De)
+            .await
+            .unwrap();
         assert_eq!(v["streamer"], "Nani"); // Original-Case echot
         assert_eq!(v["days"], 30);
         assert_eq!(v["empty"], true);
@@ -3166,7 +3177,9 @@ mod tests {
         .unwrap();
 
         // Eingabe in Original-Case "Nani" → intern lowercase-Match.
-        let v = get_coaching_data(&pool, "Nani", 30).await.unwrap();
+        let v = get_coaching_data(&pool, "Nani", 30, DashboardLanguage::De)
+            .await
+            .unwrap();
         assert_eq!(v["streamer"], "Nani");
         assert_eq!(v["empty"], false);
         // Alle 12 Analyse-Keys + recommendations + aiSummary vorhanden.

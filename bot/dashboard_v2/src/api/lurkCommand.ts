@@ -1,3 +1,5 @@
+import { withLanguageHeader } from './languageHeader';
+
 export interface LurkCommandSettingsResponse {
   lurk_command_enabled: boolean;
 }
@@ -10,26 +12,27 @@ export interface LurkCommandUpdateResponse {
 const BASE = '/twitch/api/v2/streamer/lurk-command-settings';
 
 async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
-    credentials: 'same-origin',
-    ...init,
-  });
+  const response = await fetch(
+    path,
+    withLanguageHeader(path, { credentials: 'same-origin', ...init })
+  );
   if (!response.ok) {
-    let message = `HTTP ${response.status}`;
-    try {
-      const body = await response.json();
-      if (body?.error) message = String(body.error);
-      else if (body?.message) message = String(body.message);
-    } catch {
-      // keep default message
-    }
+    const body = (await response.json().catch(() => null)) as {
+      error?: unknown;
+      message?: unknown;
+    } | null;
+    const message = body?.error
+      ? String(body.error)
+      : body?.message
+        ? String(body.message)
+        : `HTTP ${response.status}`;
     throw new Error(message);
   }
   return (await response.json()) as T;
 }
 
 export async function fetchLurkCommandSettings(
-  streamer?: string,
+  streamer?: string
 ): Promise<LurkCommandSettingsResponse> {
   const qs = streamer ? `?streamer=${encodeURIComponent(streamer)}` : '';
   return fetchJson(`${BASE}${qs}`);
@@ -37,7 +40,7 @@ export async function fetchLurkCommandSettings(
 
 export async function toggleLurkCommand(
   enabled: boolean,
-  streamer?: string,
+  streamer?: string
 ): Promise<LurkCommandUpdateResponse> {
   const qs = streamer ? `?streamer=${encodeURIComponent(streamer)}` : '';
   return fetchJson(`${BASE}${qs}`, {

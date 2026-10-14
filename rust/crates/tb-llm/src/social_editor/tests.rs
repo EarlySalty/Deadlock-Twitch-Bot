@@ -2,6 +2,8 @@ use super::*;
 
 #[path = "admin_contract_tests.rs"]
 mod admin_contract_tests;
+#[path = "authorized_test_fixture.rs"]
+mod authorized_test_fixture;
 
 fn config() -> EditorConfig {
     toml::from_str(include_str!("../../../../../ops/social-ai/editor.toml")).expect("configuration")
@@ -516,10 +518,17 @@ async fn structured_provider_codes_are_bounded_and_saved_without_messages() {
         matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
     };
-    let database = DisposablePostgres::start().await;
+    let Some(database) = authorized_test_fixture::start(
+        "social_editor::tests::structured_provider_codes_are_bounded_and_saved_without_messages",
+        crate::hub_test_fixture::TWITCH_USER_ID,
+    )
+    .await
+    else {
+        return;
+    };
     let pool = &database.pool;
     let context = EditorContext {
-        twitch_user_id: "person".into(),
+        twitch_user_id: crate::hub_test_fixture::TWITCH_USER_ID.into(),
         job_id: "job".into(),
         stage: "caption".into(),
     };
@@ -882,10 +891,17 @@ async fn consent_budget_and_native_mock_contract() {
         matchers::{body_json, method, path},
         Mock, MockServer, ResponseTemplate,
     };
-    let database = DisposablePostgres::start().await;
+    let Some(database) = authorized_test_fixture::start(
+        "social_editor::tests::consent_budget_and_native_mock_contract",
+        crate::hub_test_fixture::TWITCH_USER_ID,
+    )
+    .await
+    else {
+        return;
+    };
     let pool = &database.pool;
     let context = EditorContext {
-        twitch_user_id: "person".into(),
+        twitch_user_id: crate::hub_test_fixture::TWITCH_USER_ID.into(),
         job_id: "job".into(),
         stage: "caption".into(),
     };
@@ -1044,4 +1060,88 @@ async fn consent_budget_and_native_mock_contract() {
             .len(),
         2
     );
+}
+
+#[tokio::test]
+async fn ki_schalter_des_servers_sperrt_den_editor_vor_jeder_reservierung() {
+    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+    let database = DisposablePostgres::start().await;
+    let pool = &database.pool;
+    sqlx::raw_sql(include_str!(
+        "../../../../test-support/multiserver_ai_schema.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("guild schema");
+    sqlx::raw_sql(include_str!(
+        "../../../../test-support/20261012140000_ai_features_rule.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("ai rule");
+    sqlx::raw_sql(
+        "INSERT INTO discord_guilds (guild_id, ai_features) VALUES (1289721245281292288, true), (900000000000000001, false); \
+         INSERT INTO streamer_guilds (twitch_user_id, guild_id, active) VALUES \
+             ('100', 1289721245281292288, true), ('200', 900000000000000001, true), \
+             ('300', 1289721245281292288, true), ('300', 900000000000000001, true), \
+             ('500', 1289721245281292288, true), ('600', 1289721245281292288, false); \
+         INSERT INTO twitch_streamer_identities VALUES ('100', 'de_kanal'), ('200', 'fremd_kanal'), \
+             ('300', 'gemischt_kanal'), ('500', 'kein_partner'), ('600', 'inaktiv_kanal'); \
+         INSERT INTO twitch_partners_all_state VALUES ('100', 1), ('200', 1), ('300', 1), ('500', 0), ('600', 1); \
+         INSERT INTO public.social_ai_user_consent(twitch_user_id,external_ai_consent) VALUES \
+             ('100',true), ('200',true), ('300',true), ('400',true), ('500',true), ('600',true); \
+         INSERT INTO public.social_media_settings(key,value) VALUES ('external_llm_consent','true'::jsonb)",
+    )
+    .execute(pool)
+    .await
+    .expect("seed");
+    let mut configuration = config();
+    let mock = MockServer::start().await;
+    configuration.provider.endpoint = mock.uri();
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "model": configuration.provider.model,
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "{\"title\":\"clip\"}"}],
+            "usage": {"input_tokens": 100, "output_tokens": 20, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+        })))
+        .expect(1)
+        .mount(&mock)
+        .await;
+    for user in ["200", "300", "400", "500", "600"] {
+        let context = EditorContext {
+            twitch_user_id: user.into(),
+            job_id: "job".into(),
+            stage: "caption".into(),
+        };
+        let denied = complete_with_key(pool, &context, &configuration, &request(), "fake-key")
+            .await
+            .expect_err("KI-Zugriff ist gesperrt");
+        assert_eq!(denied.kind, ErrorKind::Consent, "user={user}");
+        let reserved: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM public.llm_usage")
+            .fetch_one(pool)
+            .await
+            .expect("ledger");
+        assert_eq!(reserved, 0, "keine Reservierung bei gesperrter KI: {user}");
+        assert!(mock
+            .received_requests()
+            .await
+            .expect("mock requests")
+            .is_empty());
+    }
+    let context = EditorContext {
+        twitch_user_id: "100".into(),
+        job_id: "job".into(),
+        stage: "caption".into(),
+    };
+    let allowed = complete_with_key(pool, &context, &configuration, &request(), "fake-key")
+        .await
+        .expect("deutscher Server mit aktiver Partnerschaft");
+    assert_eq!(allowed.content["title"], "clip");
+    mock.verify().await;
+    let reserved: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM public.llm_usage")
+        .fetch_one(pool)
+        .await
+        .expect("allowed ledger");
+    assert_eq!(reserved, 1);
 }

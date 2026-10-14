@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
@@ -33,10 +33,12 @@ import {
   saveUplinkReconnectWait,
   saveUplinkNative2kHardware,
   holeUplinkStreamKey,
-  UPLINK_RECONNECT_WAIT_TEXT,
+  uplinkReconnectWaitText,
 } from '@/api/uplink';
 import type { UplinkAdminWaitlistEntry, UplinkMe } from '@/api/uplink';
+import { useLanguage, useT } from '@/context/LanguageContext';
 import { useAuthStatus } from '@/hooks/useAnalytics';
+import { tr } from '@/i18n/dictionary';
 import { ZielKarte } from './UplinkZiel';
 import { UplinkEingang } from './UplinkEingang';
 import { PREVIEW_PRICING_ROUTE } from '@/preview/routes';
@@ -68,6 +70,7 @@ import type { UplinkEncoderAnalyse } from '@/uplinkEncoderAnalyse';
  * Fenstern, die dasselbe für alle Plattformen tun.
  */
 function DockSchrittInhalt({ me }: { me: UplinkMe }) {
+  const t = useT();
   const [nachfrage, setNachfrage] = useState(false);
   const queryClient = useQueryClient();
   const erzeugen = useMutation({
@@ -93,14 +96,19 @@ function DockSchrittInhalt({ me }: { me: UplinkMe }) {
   const darfAufdecken = me.live_status === 'aus' && !me.session?.active;
   const grundVerdeckt =
     me.live_status === 'live' || me.session?.active
-      ? 'Du bist gerade live. Solange bleiben die Adressen verdeckt, damit sie nicht im Stream landen. Kopieren geht trotzdem.'
-      : 'Wir wissen gerade nicht sicher, ob du live bist. Solange bleiben die Adressen verdeckt. Kopieren geht trotzdem.';
+      ? t('Du bist gerade live. Solange bleiben die Adressen verdeckt, damit sie nicht im Stream landen. Kopieren geht trotzdem.')
+      : t('Wir wissen gerade nicht sicher, ob du live bist. Solange bleiben die Adressen verdeckt. Kopieren geht trotzdem.');
 
   return (
     <div className="space-y-3">
       <p className="text-xs text-text-secondary">
-        In OBS unter <strong>Docks</strong>, <strong>Benutzerdefinierte Browser-Docks</strong> Namen
-        und Adresse eintragen. Verbinden geht in der jeweiligen Plattform-Karte.
+        {mitElementen(
+          t('In OBS unter {docks}, {browserDocks} Namen und Adresse eintragen. Verbinden geht in der jeweiligen Plattform-Karte.'),
+          {
+            docks: <strong>{t('Docks')}</strong>,
+            browserDocks: <strong>{t('Benutzerdefinierte Browser-Docks')}</strong>,
+          },
+        )}
       </p>
 
       <div data-section="eigenes-dock" className="space-y-3">
@@ -129,8 +137,8 @@ function DockSchrittInhalt({ me }: { me: UplinkMe }) {
                   <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5" />
                 </span>
                 <p className="pt-0.5 leading-relaxed">
-                  <strong className="font-semibold text-white">Privat:</strong> Wer eine dieser Adressen
-                  hat, kann in deinem Namen im Chat schreiben. Nicht im Stream zeigen.
+                  <strong className="font-semibold text-white">{t('Privat:')}</strong>{' '}
+                  {t('Wer eine dieser Adressen hat, kann in deinem Namen im Chat schreiben. Nicht im Stream zeigen.')}
                 </p>
               </div>
             </div>
@@ -138,16 +146,15 @@ function DockSchrittInhalt({ me }: { me: UplinkMe }) {
         ) : (
           <p className="text-xs text-text-secondary">
             {vorhanden
-              ? 'Deine Fenster laufen weiter, ihre Adressen lassen sich hier aber nicht mehr anzeigen. Erzeuge sie einmal neu, dann stehen sie dauerhaft hier.'
-              : 'Noch keine Adressen erzeugt.'}
+              ? t('Deine Fenster laufen weiter, ihre Adressen lassen sich hier aber nicht mehr anzeigen. Erzeuge sie einmal neu, dann stehen sie dauerhaft hier.')
+              : t('Noch keine Adressen erzeugt.')}
           </p>
         )}
 
         {nachfrage ? (
           <div className="flex flex-col gap-2 rounded-xl border border-warning/40 bg-warning/5 px-3 py-2">
             <p className="text-xs text-warning">
-              Die vier Adressen, die jetzt in OBS stehen, gelten danach nicht mehr. Du musst sie dort
-              alle vier neu eintragen.
+              {t('Die vier Adressen, die jetzt in OBS stehen, gelten danach nicht mehr. Du musst sie dort alle vier neu eintragen.')}
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <button
@@ -159,7 +166,7 @@ function DockSchrittInhalt({ me }: { me: UplinkMe }) {
                 {erzeugen.isPending ? (
                   <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
                 ) : null}
-                {erzeugen.isPending ? 'Wird erzeugt' : 'Ja, neu erzeugen'}
+                {erzeugen.isPending ? t('Wird erzeugt') : t('Ja, neu erzeugen')}
               </button>
               <button
                 type="button"
@@ -171,7 +178,7 @@ function DockSchrittInhalt({ me }: { me: UplinkMe }) {
                 }}
                 className="inline-flex min-h-11 items-center rounded-xl border border-border px-3 py-2 text-xs font-semibold text-text-secondary transition-colors hover:text-white"
               >
-                Abbrechen
+                {t('Abbrechen')}
               </button>
             </div>
           </div>
@@ -185,13 +192,13 @@ function DockSchrittInhalt({ me }: { me: UplinkMe }) {
             {erzeugen.isPending ? (
               <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
             ) : null}
-            {vorhanden ? 'Neu erzeugen' : 'Adressen erzeugen'}
+            {vorhanden ? t('Neu erzeugen') : t('Adressen erzeugen')}
           </button>
         )}
 
         {erzeugen.isError ? (
           <p role="alert" className="text-xs text-warning">
-            Die Adressen konnten gerade nicht erzeugt werden. Bitte gleich noch einmal versuchen.
+            {t('Die Adressen konnten gerade nicht erzeugt werden. Bitte gleich noch einmal versuchen.')}
           </p>
         ) : null}
       </div>
@@ -214,7 +221,17 @@ function Feld({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Eine Station im OBS-Menue. Mehrere hintereinander lesen sich als Pfad. */
+function Code({ children }: { children: React.ReactNode }) {
+  return <code className="font-mono text-white">{children}</code>;
+}
+
+function mitElementen(text: string, elemente: Record<string, React.ReactNode>): React.ReactNode {
+  return text.split(/(\{\w+\})/).map((teil, index) => {
+    const name = /^\{(\w+)\}$/.exec(teil)?.[1];
+    return <Fragment key={index}>{name !== undefined && name in elemente ? elemente[name] : teil}</Fragment>;
+  });
+}
+
 function Weg({ children }: { children: React.ReactNode }) {
   return (
     <span className="font-semibold text-white">
@@ -243,6 +260,7 @@ function ObsSchritt({
   offenStart?: boolean;
   children: React.ReactNode;
 }) {
+  const t = useT();
   const [offen, setOffen] = useUplinkDisclosure(`obs-${nummer}`, offenStart);
 
   return (
@@ -260,9 +278,9 @@ function ObsSchritt({
             </span>
             <span>
               <span className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-text-secondary">
-                Schritt {nummer} von 6
+                {t('Schritt {nummer} von 6', { nummer })}
               </span>
-              <span className="block text-sm font-bold text-white">{titel}</span>
+              <span className="block text-sm font-bold text-white">{t(titel)}</span>
             </span>
           </span>
           <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open:rotate-180" />
@@ -291,31 +309,23 @@ function HilfeKapitel({ datei, label, html }: { datei: string; label: string; ht
   );
 }
 
-/**
- * Warum diese Bitrate. Ein Satz je Zustand, danach fuer alle derselbe
- * Hinweis auf den Upload.
- *
- * Der Fall `unbekannt` ist der Grund, warum das hier drei Zweige sind und
- * nicht zwei: der Abruf der Ziele laeuft ohne Wiederholung, und faellt er
- * aus, stand hier vorher "solange kein Ziel eingerichtet ist" bei jemandem
- * mit vier eingerichteten Zielen.
- */
-function obsAusgabe() {
+function obsAusgabe(t: ReturnType<typeof useT>) {
   return [
-    { feld: 'Videoencoder', wert: 'Hardwareencoder passend zu deinem System',
-      warum: 'Nutze die Analyse direkt darüber. Software-AV1 über AOM/SVT wird für den Live-Uplink nicht automatisch empfohlen.' },
-    { feld: 'Ratensteuerung', wert: 'Aus der Encoder-Analyse übernehmen',
-      warum: 'AMD und NVIDIA benennen und unterstützen unterschiedliche Verfahren. Uplink zeigt nur die zum erkannten Hardwareweg passende Empfehlung.' },
-    { feld: 'Auflösung und Bildrate', wert: 'Dein gewünschtes Quellprofil',
-      warum: 'Die Ausgabeziele werden anhand deines Eingangs geprüft. Gespeicherte 1440p sind noch kein Nachweis einer aktiven 1440p-Ausgabe.' },
-    { feld: 'Keyframe-Intervall', wert: '2 s',
-      warum: 'Die endgültigen Anforderungen prüft Uplink je Plattform und Ausgabeprofil.' },
-    { feld: 'Audio', wert: 'Live-Mix auf Spur 1, Twitch-VOD auf Spur 2',
-      warum: 'Die VOD-Spur wird im nächsten Schritt ausdrücklich freigeschaltet und getrennt zu Uplink gesendet.' },
+    { feld: t('Videoencoder'), wert: t('Hardwareencoder passend zu deinem System'),
+      warum: t('Nutze die Analyse direkt darüber. Software-AV1 über AOM/SVT wird für den Live-Uplink nicht automatisch empfohlen.') },
+    { feld: t('Ratensteuerung'), wert: t('Aus der Encoder-Analyse übernehmen'),
+      warum: t('AMD und NVIDIA benennen und unterstützen unterschiedliche Verfahren. Uplink zeigt nur die zum erkannten Hardwareweg passende Empfehlung.') },
+    { feld: t('Auflösung und Bildrate'), wert: t('Dein gewünschtes Quellprofil'),
+      warum: t('Die Ausgabeziele werden anhand deines Eingangs geprüft. Gespeicherte 1440p sind noch kein Nachweis einer aktiven 1440p-Ausgabe.') },
+    { feld: t('Keyframe-Intervall'), wert: '2 s',
+      warum: t('Die endgültigen Anforderungen prüft Uplink je Plattform und Ausgabeprofil.') },
+    { feld: 'Audio', wert: t('Live-Mix auf Spur 1, Twitch-VOD auf Spur 2'),
+      warum: t('Die VOD-Spur wird im nächsten Schritt ausdrücklich freigeschaltet und getrennt zu Uplink gesendet.') },
   ];
 }
 
 function ObsEncoderAnalyse() {
+  const t = useT();
   const queryClient = useQueryClient();
   const [analyse, setAnalyse] = useState<UplinkEncoderAnalyse | null>(null);
   const [fehler, setFehler] = useState<string | null>(null);
@@ -326,7 +336,7 @@ function ObsEncoderAnalyse() {
       setFehler(null);
       await queryClient.invalidateQueries({ queryKey: ['uplink-native-2k-hardware'] });
     },
-    onError: (error) => setFehler(error instanceof Error ? error.message : '2K-Hardwaredaten konnten nicht gespeichert werden.'),
+    onError: (error) => setFehler(error instanceof Error ? error.message : t('2K-Hardwaredaten konnten nicht gespeichert werden.')),
   });
 
   async function dateiAnalysieren(datei: File) {
@@ -337,7 +347,7 @@ function ObsEncoderAnalyse() {
       const ergebnis = analysiereObsLog(text);
       if (!ergebnis.gpu && !ergebnis.hardware.av1 && !ergebnis.hardware.hevc && !ergebnis.hardware.h264) {
         setAnalyse(null);
-        setFehler('In dieser Datei wurden keine OBS-GPU-/Encoderangaben gefunden. Nimm eine aktuelle OBS-Logdatei nach einem normalen OBS-Start.');
+        setFehler(t('In dieser Datei wurden keine OBS-GPU-/Encoderangaben gefunden. Nimm eine aktuelle OBS-Logdatei nach einem normalen OBS-Start.'));
         return;
       }
       setAnalyse(ergebnis);
@@ -346,7 +356,7 @@ function ObsEncoderAnalyse() {
       }
     } catch {
       setAnalyse(null);
-      setFehler('Die Logdatei konnte im Browser nicht gelesen werden.');
+      setFehler(t('Die Logdatei konnte im Browser nicht gelesen werden.'));
     } finally {
       setLaedt(false);
     }
@@ -358,14 +368,14 @@ function ObsEncoderAnalyse() {
         <div>
           <div className="flex items-center gap-2 text-sm font-bold text-white">
             <FileSearch className="h-4 w-4 text-primary" />
-            Optimale Encoder-Einstellung analysieren
+            {t('Optimale Encoder-Einstellung analysieren')}
           </div>
           <p className="mt-1 text-xs text-text-secondary">
-            Das geht vor dem ersten Stream. OBS schreibt GPU und verfügbare Encoder bereits beim Start in die Logdatei.
+            {t('Das geht vor dem ersten Stream. OBS schreibt GPU und verfügbare Encoder bereits beim Start in die Logdatei.')}
           </p>
         </div>
         <label className="inline-flex min-h-10 cursor-pointer items-center rounded-xl border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/15">
-          {laedt ? 'Analysiere…' : 'OBS-Log auswählen'}
+          {laedt ? t('Analysiere…') : t('OBS-Log auswählen')}
           <input
             type="file"
             accept=".txt,.log,text/plain"
@@ -381,7 +391,16 @@ function ObsEncoderAnalyse() {
       </div>
 
       <p className="text-[11px] text-text-secondary">
-        In OBS: <Weg>Hilfe</Weg> <Weg>Logdateien</Weg> <Feld>Aktuelle Logdatei anzeigen</Feld>. Die ausgewählte Datei wird nur lokal in deinem Browser gelesen und nicht zu Uplink hochgeladen.
+        {mitElementen(
+          t('In OBS: {pfad}. Die ausgewählte Datei wird nur lokal in deinem Browser gelesen und nicht zu Uplink hochgeladen.'),
+          {
+            pfad: (
+              <>
+                <Weg>{t('Hilfe')}</Weg> <Weg>{t('Logdateien')}</Weg> <Feld>{t('Aktuelle Logdatei anzeigen')}</Feld>
+              </>
+            ),
+          },
+        )}
       </p>
 
       {fehler ? (
@@ -394,15 +413,15 @@ function ObsEncoderAnalyse() {
         <div className="space-y-3 rounded-lg border border-success/35 bg-success/10 p-3">
           <div className="flex items-center gap-2 text-sm font-bold text-white">
             <CheckCircle2 className="h-4 w-4 text-success" />
-            Empfehlung für dieses OBS-System
+            {t('Empfehlung für dieses OBS-System')}
           </div>
           <dl className="grid gap-2 text-xs sm:grid-cols-2">
             <div>
-              <dt className="text-text-secondary">OBS-Renderadapter</dt>
-              <dd className="font-semibold text-white">{analyse.gpu ?? 'Nicht erkannt'}</dd>
+              <dt className="text-text-secondary">{t('OBS-Renderadapter')}</dt>
+              <dd className="font-semibold text-white">{analyse.gpu ?? t('Nicht erkannt')}</dd>
               {analyse.gpus.length > 1 ? (
                 <span className="block text-[11px] font-normal text-text-secondary">
-                  {analyse.gpus.length} Grafikadapter erkannt; die Encoderwahl berücksichtigt Multi-GPU.
+                  {t('{anzahl} Grafikadapter erkannt; die Encoderwahl berücksichtigt Multi-GPU.', { anzahl: analyse.gpus.length })}
                 </span>
               ) : null}
             </div>
@@ -411,11 +430,11 @@ function ObsEncoderAnalyse() {
               <dd className="font-semibold text-white">{analyse.empfehlung.codec}</dd>
             </div>
             <div>
-              <dt className="text-text-secondary">Videoencoder</dt>
+              <dt className="text-text-secondary">{t('Videoencoder')}</dt>
               <dd className="font-semibold text-white">{analyse.empfehlung.encoder}</dd>
             </div>
             <div>
-              <dt className="text-text-secondary">Ratensteuerung</dt>
+              <dt className="text-text-secondary">{t('Ratensteuerung')}</dt>
               <dd className="font-semibold text-white">{analyse.empfehlung.ratensteuerung}</dd>
             </div>
           </dl>
@@ -436,22 +455,22 @@ function ObsEncoderAnalyse() {
           {analyse.native2kProfile ? (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/35 bg-primary/10 px-3 py-2">
               <p className="text-xs text-text-secondary">
-                CPU, RAM, Windows, GPU, PCI-ID, VRAM, Treiber sowie HEVC/H.264-Encoder wurden vollständig erkannt. Für Twitch wird nur dieses normalisierte Hardwareprofil gespeichert, nicht deine Logdatei.
+                {t('CPU, RAM, Windows, GPU, PCI-ID, VRAM, Treiber sowie HEVC/H.264-Encoder wurden vollständig erkannt. Für Twitch wird nur dieses normalisierte Hardwareprofil gespeichert, nicht deine Logdatei.')}
               </p>
               <button type="button" disabled={hardwareSpeichern.isPending}
                 onClick={() => hardwareSpeichern.mutate(analyse.native2kProfile!)}
                 className="min-h-10 shrink-0 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-[#0D0806] disabled:opacity-50">
-                {hardwareSpeichern.isPending ? 'Übernehme…' : hardwareSpeichern.isSuccess ? '2K-Hardware übernommen' : 'Für Native 2K übernehmen'}
+                {hardwareSpeichern.isPending ? t('Übernehme…') : hardwareSpeichern.isSuccess ? t('2K-Hardware übernommen') : t('Für Native 2K übernehmen')}
               </button>
             </div>
           ) : analyse.native2kFehlendeFelder.length ? (
             <div className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-              Für die automatische 2K-Hardwareweitergabe fehlen in dieser OBS-Logdatei: {analyse.native2kFehlendeFelder.join(', ')}. Eine neu gestartete aktuelle OBS-Logdatei enthält diese Angaben meist vollständig.
+              {t('Für die automatische 2K-Hardwareweitergabe fehlen in dieser OBS-Logdatei: {felder}. Eine neu gestartete aktuelle OBS-Logdatei enthält diese Angaben meist vollständig.', { felder: analyse.native2kFehlendeFelder.join(', ') })}
             </div>
           ) : null}
           {analyse.softwareAv1 && !analyse.hardware.av1 ? (
             <div className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-              Software-AV1 erkannt: AOM/SVT wird nicht als Live-Empfehlung verwendet, wenn die GPU AV1 nicht selbst encodieren kann.
+              {t('Software-AV1 erkannt: AOM/SVT wird nicht als Live-Empfehlung verwendet, wenn die GPU AV1 nicht selbst encodieren kann.')}
             </div>
           ) : null}
         </div>
@@ -467,21 +486,31 @@ function ObsEncoderAnalyse() {
  * der Einrichtung und nicht nur in einem Hilfelink.
  */
 function ObsVodTrackEinrichtung() {
+  const t = useT();
   return (
     <>
       <div className="rounded-xl border border-primary/30 bg-primary/10 px-3 py-3 text-xs text-white">
-        <strong>Wenn „Twitch-VOD-Spur“ in OBS bereits sichtbar ist:</strong>{' '}
-        Überspringe die Dateiänderung und stelle unten direkt Live auf Spur 1 und VOD auf Spur 2.
+        <strong>{t('Wenn „Twitch-VOD-Spur“ in OBS bereits sichtbar ist:')}</strong>{' '}
+        {t('Überspringe die Dateiänderung und stelle unten direkt Live auf Spur 1 und VOD auf Spur 2.')}
       </div>
 
       <ol className="space-y-3 text-xs text-text-secondary">
         <li className="space-y-1">
-          <strong className="block text-white">1. OBS vollständig beenden</strong>
-          <span>Auch das OBS-Symbol im Infobereich/Tray schließen. Sonst kann OBS die Datei beim Beenden wieder überschreiben.</span>
+          <strong className="block text-white">{t('1. OBS vollständig beenden')}</strong>
+          <span>{t('Auch das OBS-Symbol im Infobereich/Tray schließen. Sonst kann OBS die Datei beim Beenden wieder überschreiben.')}</span>
         </li>
         <li className="space-y-2">
-          <strong className="block text-white">2. Die Datei user.ini öffnen</strong>
-          <p>Unter Windows: <Feld>Win + R</Feld> drücken, <code className="font-mono text-white">%APPDATA%\obs-studio</code> eingeben und <code className="font-mono text-white">user.ini</code> mit einem Texteditor öffnen. Standardpfade:</p>
+          <strong className="block text-white">{t('2. Die Datei user.ini öffnen')}</strong>
+          <p>
+            {mitElementen(
+              t('Unter Windows: {tasten} drücken, {ordner} eingeben und {datei} mit einem Texteditor öffnen. Standardpfade:'),
+              {
+                tasten: <Feld>Win + R</Feld>,
+                ordner: <Code>%APPDATA%\obs-studio</Code>,
+                datei: <Code>user.ini</Code>,
+              },
+            )}
+          </p>
           <dl className="grid gap-1 rounded-xl border border-border bg-background/65 px-3 py-2 font-mono text-[11px] text-white">
             <div className="grid gap-1 sm:grid-cols-[5rem_minmax(0,1fr)]">
               <dt className="font-sans font-semibold text-text-secondary">Windows</dt>
@@ -500,40 +529,55 @@ function ObsVodTrackEinrichtung() {
               <dd className="break-all">~/.var/app/com.obsproject.Studio/config/obs-studio/user.ini</dd>
             </div>
           </dl>
-          <p>Bei Portable-OBS liegt <code className="font-mono text-white">user.ini</code> im verwendeten lokalen OBS-Konfigurationsordner.</p>
+          <p>
+            {mitElementen(t('Bei Portable-OBS liegt {datei} im verwendeten lokalen OBS-Konfigurationsordner.'), {
+              datei: <Code>user.ini</Code>,
+            })}
+          </p>
         </li>
         <li className="space-y-2">
-          <strong className="block text-white">3. Unter dem vorhandenen Abschnitt [General] diese Zeile ergänzen</strong>
+          <strong className="block text-white">{t('3. Unter dem vorhandenen Abschnitt [General] diese Zeile ergänzen')}</strong>
           <CopyField
-            label="OBS-Einstellung für benutzerdefinierte VOD-Spur"
+            label={t('OBS-Einstellung für benutzerdefinierte VOD-Spur')}
             value="EnableCustomServerVodTrack=true"
             privat={false}
             darfAufdecken
             grundVerdeckt=""
           />
           <p className="text-warning">
-            Keinen zweiten <code className="font-mono text-white">[General]</code>-Block anlegen. Die Zeile gehört in den bereits vorhandenen Abschnitt.
+            {mitElementen(t('Keinen zweiten {abschnitt}-Block anlegen. Die Zeile gehört in den bereits vorhandenen Abschnitt.'), { abschnitt: <Code>[General]</Code> })}
           </p>
         </li>
         <li className="space-y-1">
-          <strong className="block text-white">4. OBS neu starten und die beiden Streaming-Spuren auswählen</strong>
+          <strong className="block text-white">{t('4. OBS neu starten und die beiden Streaming-Spuren auswählen')}</strong>
           <p>
-            <Weg>Einstellungen</Weg> <Weg>Ausgabe</Weg> <Weg>Stream</Weg>. Setze <Feld>Audiospur</Feld> auf <strong className="text-white">1</strong>{' '}
-            und <Feld>Twitch-VOD-Spur</Feld> auf <strong className="text-white">2</strong>.
+            {mitElementen(t('{pfad}. Setze {audiospur} auf {eins} und {vodSpur} auf {zwei}.'), {
+              pfad: (
+                <>
+                  <Weg>{t('Einstellungen')}</Weg> <Weg>{t('Ausgabe')}</Weg> <Weg>Stream</Weg>
+                </>
+              ),
+              audiospur: <Feld>{t('Audiospur')}</Feld>,
+              eins: <strong className="text-white">1</strong>,
+              vodSpur: <Feld>{t('Twitch-VOD-Spur')}</Feld>,
+              zwei: <strong className="text-white">2</strong>,
+            })}
           </p>
         </li>
         <li className="space-y-1">
-          <strong className="block text-white">5. Audioquellen den beiden Mischungen zuordnen</strong>
+          <strong className="block text-white">{t('5. Audioquellen den beiden Mischungen zuordnen')}</strong>
           <p>
-            In <Feld>Erweiterte Audioeigenschaften</Feld> ist Spur 1 der Livestream. Spur 2 ist das Twitch-VOD.
-            Quellen, die nicht im VOD landen sollen – zum Beispiel Musik – bekommen nur Spur 1.
+            {mitElementen(
+              t('In {feld} ist Spur 1 der Livestream. Spur 2 ist das Twitch-VOD. Quellen, die nicht im VOD landen sollen – zum Beispiel Musik – bekommen nur Spur 1.'),
+              { feld: <Feld>{t('Erweiterte Audioeigenschaften')}</Feld> },
+            )}
           </p>
         </li>
       </ol>
 
       <div role="note" className="rounded-xl border border-success/30 bg-success/10 px-3 py-2.5 text-xs text-white">
-        <strong>Uplink prüft das beim nächsten Stream:</strong>{' '}
-        Es müssen zwei verschiedene AAC-Spuren ankommen. Fehlt Spur 2, bleibt nur der Twitch-Ausgang angehalten; der Live-Mix wird nicht als VOD-Ersatz verwendet.
+        <strong>{t('Uplink prüft das beim nächsten Stream:')}</strong>{' '}
+        {t('Es müssen zwei verschiedene AAC-Spuren ankommen. Fehlt Spur 2, bleibt nur der Twitch-Ausgang angehalten; der Live-Mix wird nicht als VOD-Ersatz verwendet.')}
       </div>
     </>
   );
@@ -574,6 +618,7 @@ function CopyField({
   grundAnzeigen?: boolean;
   privat?: boolean;
 }) {
+  const t = useT();
   const [stand, setStand] = useState<'ruhe' | 'ok' | 'fehler'>('ruhe');
   const [privatOffen, setOffen] = useState(false);
   const offen = !privat || privatOffen;
@@ -598,7 +643,7 @@ function CopyField({
     window.setTimeout(() => setStand('ruhe'), 2000);
   };
 
-  const knopfText = stand === 'ok' ? 'Kopiert' : stand === 'fehler' ? 'Ging nicht' : 'Kopieren';
+  const knopfText = stand === 'ok' ? t('Kopiert') : stand === 'fehler' ? t('Ging nicht') : t('Kopieren');
   return (
     <div className="space-y-1">
       <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-secondary">
@@ -615,7 +660,7 @@ function CopyField({
           data-1p-ignore
           data-lpignore="true"
           value={value}
-          aria-label={`${label}: ${offen ? 'sichtbar' : 'verdeckt'}`}
+          aria-label={offen ? t('{label}: sichtbar', { label }) : t('{label}: verdeckt', { label })}
           className="flex min-h-11 min-w-0 flex-1 items-center truncate rounded-xl border border-border bg-background/70 px-3 py-2 font-mono text-xs text-white"
         />
         <div className="flex gap-2">
@@ -628,11 +673,11 @@ function CopyField({
             className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-text-secondary transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-text-secondary"
           >
             {offen ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-            {offen ? 'Verdecken' : 'Zeigen'}
+            {offen ? t('Verdecken') : t('Zeigen')}
           </button> : null}
           <button
             type="button"
-            aria-label={`${label} kopieren`}
+            aria-label={t('{label} kopieren', { label })}
             className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-text-secondary transition-colors hover:border-primary/40 hover:text-white"
             onClick={kopieren}
           >
@@ -644,12 +689,12 @@ function CopyField({
       {/* aria-live, weil die Rueckmeldung sonst nur im Knopftext steht und von
           einem Screenreader nicht angesagt wird. */}
       <p aria-live="polite" className="sr-only">
-        {stand === 'ok' ? 'In die Zwischenablage kopiert' : ''}
-        {stand === 'fehler' ? 'Kopieren hat nicht geklappt' : ''}
+        {stand === 'ok' ? t('In die Zwischenablage kopiert') : ''}
+        {stand === 'fehler' ? t('Kopieren hat nicht geklappt') : ''}
       </p>
       {stand === 'fehler' && (
         <p className="text-xs text-warning">
-          Dein Browser hat das automatische Kopieren nicht erlaubt. Das Feld ist markiert; kopier es mit Strg+C.
+          {t('Dein Browser hat das automatische Kopieren nicht erlaubt. Das Feld ist markiert; kopier es mit Strg+C.')}
         </p>
       )}
       {!darfAufdecken && grundAnzeigen && (
@@ -670,13 +715,14 @@ function ReconnectWaitKarte({
   verfuegbar: boolean;
   onSaved: () => void;
 }) {
+  const t = useT();
   const [entwurf, setEntwurf] = useState<string | null>(null);
   const eingabe = entwurf ?? reconnectWaitEingabe(wert);
   const payload = reconnectWaitPayload(eingabe);
   const speichern = useMutation({
     mutationFn: () => {
       if (!verfuegbar || payload === null) {
-        throw new Error('Gib eine ganze Zahl ab 0 Sekunden ein.');
+        throw new Error(t('Gib eine ganze Zahl ab 0 Sekunden ein.'));
       }
       return saveUplinkReconnectWait(payload);
     },
@@ -690,21 +736,21 @@ function ReconnectWaitKarte({
     <Rise className="panel-card grid gap-4 rounded-2xl p-5 md:grid-cols-[minmax(0,1fr)_minmax(18rem,0.7fr)] md:items-end">
       <div className="min-w-0">
         <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
-          Verbindung
+          {t('Verbindung')}
         </div>
-        <h2 className="mt-1 text-base font-bold text-white">Verhalten bei Internetabriss</h2>
-        <p className="mt-1 text-sm text-text-secondary">{UPLINK_RECONNECT_WAIT_TEXT}</p>
+        <h2 className="mt-1 text-base font-bold text-white">{t('Verhalten bei Internetabriss')}</h2>
+        <p className="mt-1 text-sm text-text-secondary">{uplinkReconnectWaitText()}</p>
         <p className="mt-2 text-xs text-text-secondary">
           {verfuegbar
-            ? `0 bis ${max} Sekunden. Die Änderung gilt für die nächste Session.`
-            : 'Die gespeicherte Frist wird derzeit noch nicht angewendet. Die Einstellung wird freigegeben, sobald die Wiederverbindung im Dienst verfügbar ist.'}
+            ? t('0 bis {max} Sekunden. Die Änderung gilt für die nächste Session.', { max })
+            : t('Die gespeicherte Frist wird derzeit noch nicht angewendet. Die Einstellung wird freigegeben, sobald die Wiederverbindung im Dienst verfügbar ist.')}
         </p>
       </div>
       <div className="space-y-2">
         <div className="flex flex-wrap items-end gap-2">
           <label className="min-w-[11rem] flex-1 space-y-1">
           <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-text-secondary">
-            Wartezeit in Sekunden
+            {t('Wartezeit in Sekunden')}
           </span>
           <input
             type="number"
@@ -716,7 +762,7 @@ function ReconnectWaitKarte({
             onChange={(e) => setEntwurf(e.target.value)}
             inputMode="numeric"
             className="min-h-11 w-full rounded-xl border border-border bg-background/70 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-primary"
-            aria-label="Wartezeit nach Internetabriss in Sekunden"
+            aria-label={t('Wartezeit nach Internetabriss in Sekunden')}
           />
           </label>
           <button
@@ -725,14 +771,14 @@ function ReconnectWaitKarte({
             onClick={() => speichern.mutate()}
             className="min-h-11 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-[#0D0806] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {speichern.isPending ? 'Speichert …' : speichern.isSuccess ? 'Gespeichert' : 'Speichern'}
+            {speichern.isPending ? t('Speichert …') : speichern.isSuccess ? t('Gespeichert') : t('Speichern')}
           </button>
         </div>
         {speichern.isError && (
           <p role="alert" className="text-xs text-warning">
           {speichern.error instanceof Error
             ? speichern.error.message
-            : 'Die Wartezeit ließ sich gerade nicht speichern.'}
+            : t('Die Wartezeit ließ sich gerade nicht speichern.')}
           </p>
         )}
       </div>
@@ -740,16 +786,17 @@ function ReconnectWaitKarte({
   );
 }
 
-function wartelistenZeit(roh: string): string {
+function wartelistenZeit(roh: string, locale: string): string {
   const datum = new Date(roh);
   if (Number.isNaN(datum.getTime())) return roh;
-  return new Intl.DateTimeFormat('de-DE', {
+  return new Intl.DateTimeFormat(locale, {
     dateStyle: 'short',
     timeStyle: 'short',
   }).format(datum);
 }
 
 function AdminUplinkWarteliste({ csrfToken }: { csrfToken: string | null }) {
+  const { t, locale } = useLanguage();
   const queryClient = useQueryClient();
   const warteliste = useQuery({
     queryKey: ['uplink-admin-waitlist'],
@@ -760,7 +807,7 @@ function AdminUplinkWarteliste({ csrfToken }: { csrfToken: string | null }) {
   const freischalten = useMutation({
     mutationFn: (streamerId: number) => {
       if (!csrfToken) {
-        throw new Error('Der Sitzungsschutz fehlt. Lade die Seite neu.');
+        throw new Error(t('Der Sitzungsschutz fehlt. Lade die Seite neu.'));
       }
       return acceptUplinkAdminWaitlistEntry(streamerId, csrfToken);
     },
@@ -777,7 +824,7 @@ function AdminUplinkWarteliste({ csrfToken }: { csrfToken: string | null }) {
   const ablehnen = useMutation({
     mutationFn: (streamerId: number) => {
       if (!csrfToken) {
-        throw new Error('Der Sitzungsschutz fehlt. Lade die Seite neu.');
+        throw new Error(t('Der Sitzungsschutz fehlt. Lade die Seite neu.'));
       }
       return rejectUplinkAdminWaitlistEntry(streamerId, csrfToken);
     },
@@ -806,11 +853,11 @@ function AdminUplinkWarteliste({ csrfToken }: { csrfToken: string | null }) {
           </span>
           <div className="min-w-0">
             <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-warning">
-              Verwaltung
+              {t('Verwaltung')}
             </div>
-            <h2 className="text-base font-bold text-white">Uplink-Warteliste</h2>
+            <h2 className="text-base font-bold text-white">{t('Uplink-Warteliste')}</h2>
             <p className="mt-1 text-xs text-text-secondary">
-              Freischalten gibt dem Streamer einen Uplink-Zugang und entfernt den Eintrag aus der Liste.
+              {t('Freischalten gibt dem Streamer einen Uplink-Zugang und entfernt den Eintrag aus der Liste.')}
             </p>
           </div>
         </div>
@@ -821,30 +868,30 @@ function AdminUplinkWarteliste({ csrfToken }: { csrfToken: string | null }) {
 
       {warteliste.isLoading ? (
         <p role="status" className="rounded-xl border border-border bg-background/50 px-3 py-2 text-xs text-text-secondary">
-          Warteliste wird geladen …
+          {t('Warteliste wird geladen …')}
         </p>
       ) : null}
 
       {warteliste.isError ? (
         <p role="alert" className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-          Die Warteliste ist gerade nicht erreichbar.
+          {t('Die Warteliste ist gerade nicht erreichbar.')}
         </p>
       ) : null}
 
       {!csrfToken ? (
         <p role="alert" className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-          Der Sitzungsschutz fehlt. Lade die Seite neu, bevor du jemanden freischaltest.
+          {t('Der Sitzungsschutz fehlt. Lade die Seite neu, bevor du jemanden freischaltest.')}
         </p>
       ) : null}
 
       {!warteliste.isLoading && !warteliste.isError && eintraege.length === 0 ? (
         <p className="rounded-xl border border-border bg-background/45 px-3 py-3 text-xs text-text-secondary">
-          Gerade wartet niemand auf eine Freischaltung.
+          {t('Gerade wartet niemand auf eine Freischaltung.')}
         </p>
       ) : null}
 
       {eintraege.length > 0 ? (
-        <ul className="max-h-72 space-y-2 overflow-y-auto pr-1" aria-label="Uplink-Warteliste">
+        <ul className="max-h-72 space-y-2 overflow-y-auto pr-1" aria-label={t('Uplink-Warteliste')}>
           {eintraege.map((eintrag) => {
             const wirdFreigeschaltet =
               freischalten.isPending && freischalten.variables === eintrag.streamer_id;
@@ -867,14 +914,14 @@ function AdminUplinkWarteliste({ csrfToken }: { csrfToken: string | null }) {
                         ) : null}
                       </p>
                       <p className="mt-0.5 text-[11px] text-text-secondary">
-                        Twitch-ID {eintrag.streamer_id} · Anfrage {wartelistenZeit(eintrag.requested_at)}
+                        {t('Twitch-ID {id} · Anfrage {zeit}', { id: eintrag.streamer_id, zeit: wartelistenZeit(eintrag.requested_at, locale) })}
                       </p>
                     </>
                   ) : (
                     <>
-                      <p className="truncate text-sm font-semibold text-white">Twitch-ID {eintrag.streamer_id}</p>
+                      <p className="truncate text-sm font-semibold text-white">{t('Twitch-ID {id}', { id: eintrag.streamer_id })}</p>
                       <p className="mt-0.5 text-[11px] text-text-secondary">
-                        Anfrage {wartelistenZeit(eintrag.requested_at)}
+                        {t('Anfrage {zeit}', { zeit: wartelistenZeit(eintrag.requested_at, locale) })}
                       </p>
                     </>
                   )}
@@ -888,7 +935,7 @@ function AdminUplinkWarteliste({ csrfToken }: { csrfToken: string | null }) {
                     className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-[#0D0806] disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <UserPlus aria-hidden="true" className="h-3.5 w-3.5" />
-                    {wirdFreigeschaltet ? 'Wird freigeschaltet …' : 'Freischalten'}
+                    {wirdFreigeschaltet ? t('Wird freigeschaltet …') : t('Freischalten')}
                   </button>
                   <button
                     type="button"
@@ -897,7 +944,7 @@ function AdminUplinkWarteliste({ csrfToken }: { csrfToken: string | null }) {
                     className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-border bg-background/70 px-3 py-2 text-xs font-semibold text-text-secondary hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <UserMinus aria-hidden="true" className="h-3.5 w-3.5" />
-                    {wirdAbgelehnt ? 'Wird abgelehnt …' : 'Ablehnen'}
+                    {wirdAbgelehnt ? t('Wird abgelehnt …') : t('Ablehnen')}
                   </button>
                 </div>
               </li>
@@ -910,7 +957,7 @@ function AdminUplinkWarteliste({ csrfToken }: { csrfToken: string | null }) {
         <p role="alert" className="text-xs text-warning">
           {freischalten.error instanceof Error
             ? freischalten.error.message
-            : 'Die Freischaltung hat nicht geklappt.'}
+            : t('Die Freischaltung hat nicht geklappt.')}
         </p>
       ) : null}
 
@@ -918,7 +965,7 @@ function AdminUplinkWarteliste({ csrfToken }: { csrfToken: string | null }) {
         <p role="alert" className="text-xs text-warning">
           {ablehnen.error instanceof Error
             ? ablehnen.error.message
-            : 'Das Ablehnen hat nicht geklappt.'}
+            : t('Das Ablehnen hat nicht geklappt.')}
         </p>
       ) : null}
     </Rise>
@@ -976,7 +1023,7 @@ function useRueckkehrVomVerbinden(
     );
     if (fehler) {
       setMeldung(
-        'Das Verbinden hat gerade nicht geklappt. Bitte versuch es noch einmal.'
+        tr('Das Verbinden hat gerade nicht geklappt. Bitte versuch es noch einmal.')
       );
       return;
     }
@@ -988,11 +1035,11 @@ function useRueckkehrVomVerbinden(
     queryClient.invalidateQueries({ queryKey: ['uplink-destinations'] });
     if (neuVerbinden) {
       setMeldung(
-        'Fast geschafft. Bitte verbinde dich noch einmal, damit der Zugang dauerhaft hält.'
+        tr('Fast geschafft. Bitte verbinde dich noch einmal, damit der Zugang dauerhaft hält.')
       );
     } else if (zielOffen) {
       setMeldung(
-        "Verbunden, aber der Stream-Key konnte noch nicht übernommen werden. Bitte 'Stream-Key erneut holen' drücken."
+        tr("Verbunden, aber der Stream-Key konnte noch nicht übernommen werden. Bitte 'Stream-Key erneut holen' drücken.")
       );
     }
   }, [queryClient]);
@@ -1009,7 +1056,7 @@ function useRueckkehrVomVerbinden(
       .catch(() => {
         setAusstehend(false);
         setMeldung(
-          'Die Verbindung steht. Nur dein Stream-Key kam noch nicht durch: hol ihn unten in der Twitch-Karte noch einmal oder trag ihn von Hand ein.'
+          tr('Die Verbindung steht. Nur dein Stream-Key kam noch nicht durch: hol ihn unten in der Twitch-Karte noch einmal oder trag ihn von Hand ein.')
         );
       });
   }, [ausstehend, authGeladen, csrfToken, queryClient]);
@@ -1018,6 +1065,7 @@ function useRueckkehrVomVerbinden(
 }
 
 export function UplinkPage() {
+  const { t, language } = useLanguage();
   const queryClient = useQueryClient();
   const { data: authStatus, isLoading: authLaedt } = useAuthStatus();
   const [qualitaetOffen, setQualitaetOffen] = useUplinkDisclosure('qualitaet-erklaerung', false);
@@ -1034,8 +1082,8 @@ export function UplinkPage() {
     refetchOnWindowFocus: true,
   });
   const { data: helpPages, isError: isHelpError } = useQuery({
-    queryKey: ['uplink-help'],
-    queryFn: fetchUplinkHelp,
+    queryKey: ['uplink-help', language],
+    queryFn: () => fetchUplinkHelp(language),
     staleTime: Infinity,
   });
   // Die gespeicherten Ziele. Ohne sie sieht ein hinterlegtes Ziel aus wie ein
@@ -1079,22 +1127,22 @@ export function UplinkPage() {
   const capsFuer = (platform: string) => caps?.platforms.find((c) => c.platform === platform);
   const streamStatus =
     !isError && data?.live_status === 'live'
-      ? { text: 'Twitch live', klasse: 'border-success/35 bg-success/10 text-success' }
+      ? { text: t('Twitch live'), klasse: 'border-success/35 bg-success/10 text-success' }
       : !isError && data?.live_status === 'aus'
-        ? { text: 'Twitch offline', klasse: 'border-border bg-background/60 text-text-secondary' }
-        : { text: isLoading ? 'Streamstatus lädt' : 'Streamstatus unbekannt', klasse: 'border-warning/30 bg-warning/10 text-warning' };
+        ? { text: t('Twitch offline'), klasse: 'border-border bg-background/60 text-text-secondary' }
+        : { text: isLoading ? t('Streamstatus lädt') : t('Streamstatus unbekannt'), klasse: 'border-warning/30 bg-warning/10 text-warning' };
 
   return (
     <>
             <Rise className="panel-card rounded-2xl p-5 md:p-6">
               <div className="mb-1 text-[11px] font-bold uppercase tracking-[0.18em] text-primary">
-                Eigenes Modul
+                {t('Eigenes Modul')}
               </div>
               <div className="flex flex-wrap items-end justify-between gap-3">
                 <div>
                   <h1 className="display-font text-2xl font-extrabold text-white">Uplink</h1>
                   <p className="mt-2 max-w-2xl text-sm text-text-secondary">
-                    Ein Stream zu uns, passend verteilt an deine Plattformen. Start und Stop bleiben in OBS.
+                    {t('Ein Stream zu uns, passend verteilt an deine Plattformen. Start und Stop bleiben in OBS.')}
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -1108,7 +1156,7 @@ export function UplinkPage() {
                   </span>
                   {data?.enabled ? (
                     <span className="rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
-                      Uplink freigeschaltet
+                      {t('Uplink freigeschaltet')}
                     </span>
                   ) : null}
                 </div>
@@ -1118,13 +1166,13 @@ export function UplinkPage() {
             {isLoading && (
               <div className="panel-card flex items-center gap-2 rounded-2xl p-5 text-sm text-text-secondary">
                 <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />
-                Zugang wird geladen
+                {t('Zugang wird geladen')}
               </div>
             )}
 
             {isError && (
               <div role="alert" className="panel-card rounded-2xl p-5 text-sm text-warning">
-                {error instanceof Error ? error.message : 'Uplink ist gerade nicht erreichbar.'}
+                {error instanceof Error ? error.message : t('Uplink ist gerade nicht erreichbar.')}
               </div>
             )}
 
@@ -1135,16 +1183,16 @@ export function UplinkPage() {
                   <div className="inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/5">
                     <Lock className="h-5 w-5 text-white/40" />
                   </div>
-                  <h2 className="text-lg font-bold text-white">Uplink ist ein bezahltes Add-on</h2>
+                  <h2 className="text-lg font-bold text-white">{t('Uplink ist ein bezahltes Add-on')}</h2>
                   <p className="max-w-xl text-sm text-text-secondary">
-                    Ohne Freischaltung kannst du auf die Warteliste. Danach richtet EarlySalty den Slot ein.
+                    {t('Ohne Freischaltung kannst du auf die Warteliste. Danach richtet EarlySalty den Slot ein.')}
                   </p>
                   <div className="flex flex-wrap gap-2">
                     <a
                       href={PREVIEW_PRICING_ROUTE}
                       className="inline-flex min-h-11 items-center rounded-xl border border-border px-4 py-2 text-sm font-semibold text-white no-underline"
                     >
-                      Preise ansehen
+                      {t('Preise ansehen')}
                     </a>
                     <button
                       type="button"
@@ -1152,7 +1200,7 @@ export function UplinkPage() {
                       onClick={() => waitlist.mutate()}
                       className="min-h-11 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-[#0D0806] disabled:opacity-60"
                     >
-                      {data.waitlisted ? 'Stehst auf der Warteliste' : 'Auf die Warteliste'}
+                      {data.waitlisted ? t('Stehst auf der Warteliste') : t('Auf die Warteliste')}
                     </button>
                   </div>
                 </div>
@@ -1169,60 +1217,78 @@ export function UplinkPage() {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
-                        Einmalig
+                        {t('Einmalig')}
                       </div>
-                      <h2 className="text-lg font-bold text-white">OBS einrichten</h2>
+                      <h2 className="text-lg font-bold text-white">{t('OBS einrichten')}</h2>
                       <p className="mt-1 text-sm text-text-secondary">
-                        Sechs kurze Schritte. Die Twitch-VOD-Spur wird ausdrücklich mit eingerichtet.
+                        {t('Sechs kurze Schritte. Die Twitch-VOD-Spur wird ausdrücklich mit eingerichtet.')}
                       </p>
                     </div>
                     <span className="rounded-full border border-border bg-background/60 px-3 py-1 text-xs font-semibold text-text-secondary">
-                      6 Schritte
+                      {t('6 Schritte')}
                     </span>
                   </div>
 
-                  <ol aria-label="OBS einrichten" className="space-y-2">
+                  <ol aria-label={t('OBS einrichten')} className="space-y-2">
                     <ObsSchritt nummer={1} titel="„Benutzerdefiniert“ wählen">
                       <p className="text-xs text-text-secondary">
-                        In OBS <Weg>Einstellungen</Weg> <Weg>Stream</Weg>. Beim Feld <Feld>Dienst</Feld>{' '}
-                        von „Twitch“ auf <Feld>Benutzerdefiniert…</Feld> wechseln.
+                        {mitElementen(t('In OBS {pfad}. Beim Feld {dienst} von „Twitch“ auf {benutzerdefiniert} wechseln.'), {
+                          pfad: (
+                            <>
+                              <Weg>{t('Einstellungen')}</Weg> <Weg>Stream</Weg>
+                            </>
+                          ),
+                          dienst: <Feld>{t('Dienst')}</Feld>,
+                          benutzerdefiniert: <Feld>{t('Benutzerdefiniert…')}</Feld>,
+                        })}
                       </p>
                     </ObsSchritt>
 
                     <ObsSchritt nummer={2} titel="Serveradresse einfügen" offenStart>
                       {obs ? (
                         <>
-                          <CopyField label="Serveradresse für OBS" value={obs.server}
+                          <CopyField label={t('Serveradresse für OBS')} value={obs.server}
                             privat={false} darfAufdecken grundVerdeckt="" />
-                          <p className="text-xs text-text-secondary">Diese öffentliche Adresse gehört in das OBS-Feld <Feld>Server</Feld>.</p>
+                          <p className="text-xs text-text-secondary">{mitElementen(t('Diese öffentliche Adresse gehört in das OBS-Feld {feld}.'), { feld: <Feld>Server</Feld> })}</p>
                         </>
                       ) : (
                         <p role="alert" className="text-sm text-warning">
-                          Die RTMPS-Einrichtung ist gerade nicht vollständig verfügbar. Deine Plattformziele bleiben gespeichert.
+                          {t('Die RTMPS-Einrichtung ist gerade nicht vollständig verfügbar. Deine Plattformziele bleiben gespeichert.')}
                         </p>
                       )}
                     </ObsSchritt>
 
                     <ObsSchritt nummer={3} titel="Privaten Streamschlüssel einfügen" offenStart>
-                      {obs ? <CopyField label="Privater Streamschlüssel für OBS" value={obs.key}
+                      {obs ? <CopyField label={t('Privater Streamschlüssel für OBS')} value={obs.key}
                         darfAufdecken={data.live_status === 'aus' && !data.session?.active}
-                        grundVerdeckt="Solange Uplink Medien empfängt oder dein Plattformstatus live oder unbekannt ist, bleibt der Schlüssel verdeckt. Kopieren geht trotzdem." /> : null}
+                        grundVerdeckt={t('Solange Uplink Medien empfängt oder dein Plattformstatus live oder unbekannt ist, bleibt der Schlüssel verdeckt. Kopieren geht trotzdem.')} /> : null}
                       <p className="text-xs text-text-secondary">
-                        Kopiere deinen Uplink-Schlüssel in <Feld>Streamschlüssel</Feld>. Serveradresse und Schlüssel sind zwei getrennte Felder.
+                        {mitElementen(
+                          t('Kopiere deinen Uplink-Schlüssel in {feld}. Serveradresse und Schlüssel sind zwei getrennte Felder.'),
+                          { feld: <Feld>{t('Streamschlüssel')}</Feld> },
+                        )}
                       </p>
                       <div data-uplink-private-warning role="note"
                         className="rounded-xl border border-warning/45 bg-warning/10 px-3 py-2.5 text-xs text-warning">
-                        <strong className="text-white">Privat:</strong> Den Streamschlüssel nicht im Stream zeigen oder weitergeben.
+                        <strong className="text-white">{t('Privat:')}</strong>{' '}
+                        {t('Den Streamschlüssel nicht im Stream zeigen oder weitergeben.')}
                       </div>
                     </ObsSchritt>
 
                     <ObsSchritt nummer={4} titel="Ausgabe einstellen">
                       <p className="text-xs text-text-secondary">
-                        <Weg>Einstellungen</Weg> <Weg>Ausgabe</Weg>, Ausgabemodus auf <Feld>Erweitert</Feld>.
+                        {mitElementen(t('{pfad}, Ausgabemodus auf {modus}.'), {
+                          pfad: (
+                            <>
+                              <Weg>{t('Einstellungen')}</Weg> <Weg>{t('Ausgabe')}</Weg>
+                            </>
+                          ),
+                          modus: <Feld>{t('Erweitert')}</Feld>,
+                        })}
                       </p>
                       <ObsEncoderAnalyse />
                       <dl className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border">
-                        {obsAusgabe().map((zeile) => (
+                        {obsAusgabe(t).map((zeile) => (
                           <div key={zeile.feld} className="grid gap-1 px-3 py-2 sm:grid-cols-[8rem_minmax(0,1fr)]">
                             <dt className="text-[11px] font-semibold uppercase tracking-[0.12em] text-text-secondary">
                               {zeile.feld}
@@ -1235,15 +1301,20 @@ export function UplinkPage() {
                         ))}
                       </dl>
                       <p className="mt-3 text-xs text-text-secondary">
-                        Die VOD-Spur richtest du direkt im nächsten Schritt ein. Bei „Benutzerdefiniert“ blendet OBS dieses Feld sonst oft aus.
+                        {t('Die VOD-Spur richtest du direkt im nächsten Schritt ein. Bei „Benutzerdefiniert“ blendet OBS dieses Feld sonst oft aus.')}
                       </p>
                     </ObsSchritt>
 
                     <ObsSchritt nummer={5} titel="Twitch-VOD-Spur freischalten" offenStart>
                       <ObsVodTrackEinrichtung />
                       <p className="text-xs text-text-secondary">
-                        Mehr Hintergrund findest du in der{' '}
-                        <a href={`${uplinkHelpUrl('obs.html')}#vod`} className="underline underline-offset-2">OBS-Hilfe zur VOD-Spur</a>.
+                        {mitElementen(t('Mehr Hintergrund findest du in der {link}.'), {
+                          link: (
+                            <a href={`${uplinkHelpUrl('obs.html', language)}#vod`} className="underline underline-offset-2">
+                              {t('OBS-Hilfe zur VOD-Spur')}
+                            </a>
+                          ),
+                        })}
                       </p>
                     </ObsSchritt>
 
@@ -1253,7 +1324,9 @@ export function UplinkPage() {
                   </ol>
 
                   <p className="rounded-xl border border-primary/25 bg-primary/10 px-3 py-2 text-xs text-white">
-                    Danach startest du in OBS wie immer über <Feld>Stream starten</Feld>. Den Rest übernimmt Uplink.
+                    {mitElementen(t('Danach startest du in OBS wie immer über {knopf}. Den Rest übernimmt Uplink.'), {
+                      knopf: <Feld>{t('Stream starten')}</Feld>,
+                    })}
                   </p>
                 </Rise>
 
@@ -1262,21 +1335,24 @@ export function UplinkPage() {
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
                         <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
-                          Hauptbereich
+                          {t('Hauptbereich')}
                         </div>
-                        <h2 className="text-lg font-bold text-white">Plattformen</h2>
+                        <h2 className="text-lg font-bold text-white">{t('Plattformen')}</h2>
                         <p className="mt-1 text-sm text-text-secondary">
-                          Status und Qualität stehen im Kartenkopf. Zum Ändern die Karte öffnen.
+                          {t('Status und Qualität stehen im Kartenkopf. Zum Ändern die Karte öffnen.')}
                         </p>
                       </div>
                       <span
                         className={`rounded-full border px-3 py-1 text-xs font-semibold ${zieleLaden || zieleFehler ? 'border-border bg-background/60 text-text-secondary' : 'border-primary/30 bg-primary/10 text-primary'}`}
                       >
                         {zieleLaden
-                          ? 'Ziele werden geladen'
+                          ? t('Ziele werden geladen')
                           : zieleFehler
-                            ? 'Status unbekannt'
-                            : `${gespeicherteZiele.filter((ziel) => zielBetrieb(ziel).state === 'sending').length} mit Medienfluss · ${gespeicherteZiele.filter((ziel) => ziel.enabled).length} eingeschaltet`}
+                            ? t('Status unbekannt')
+                            : t('{medienfluss} mit Medienfluss · {eingeschaltet} eingeschaltet', {
+                              medienfluss: gespeicherteZiele.filter((ziel) => zielBetrieb(ziel).state === 'sending').length,
+                              eingeschaltet: gespeicherteZiele.filter((ziel) => ziel.enabled).length,
+                            })}
                       </span>
                     </div>
 
@@ -1285,7 +1361,7 @@ export function UplinkPage() {
                         role="status"
                         className="rounded-xl border border-border bg-background/50 px-3 py-2 text-xs text-text-secondary"
                       >
-                        Plattformziele werden geladen …
+                        {t('Plattformziele werden geladen …')}
                       </p>
                     ) : null}
 
@@ -1294,8 +1370,7 @@ export function UplinkPage() {
                         role="alert"
                         className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
                       >
-                        Deine gespeicherten Ziele sind gerade nicht abrufbar. Sie sind nicht weg; bitte nichts
-                        doppelt speichern und die Seite später neu laden.
+                        {t('Deine gespeicherten Ziele sind gerade nicht abrufbar. Sie sind nicht weg; bitte nichts doppelt speichern und die Seite später neu laden.')}
                       </p>
                     ) : null}
 
@@ -1328,8 +1403,7 @@ export function UplinkPage() {
 
                     {gespeicherteZiele.length === 0 && !zieleFehler && !zieleLaden ? (
                       <p className="text-xs text-text-secondary">
-                        Noch kein Ziel gespeichert. Dein Stream kommt bei Uplink an, wird aber noch nicht
-                        weitergesendet.
+                        {t('Noch kein Ziel gespeichert. Dein Stream kommt bei Uplink an, wird aber noch nicht weitergesendet.')}
                       </p>
                     ) : null}
 
@@ -1339,12 +1413,11 @@ export function UplinkPage() {
                       className="group rounded-xl border border-border bg-background/40"
                     >
                       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-xs font-semibold text-white [&::-webkit-details-marker]:hidden">
-                        Warum Eingangs- und Zielqualität verschieden sind
+                        {t('Warum Eingangs- und Zielqualität verschieden sind')}
                         <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open:rotate-180" />
                       </summary>
                       <p className="border-t border-border/60 px-3 py-3 text-xs text-text-secondary">
-                        Schick uns AV1 oder H.264 mit den Werten aus Schritt 4. In jeder Plattformkarte
-                        siehst du getrennt, welche Ausgabe du gespeichert hast und welche gerade läuft.
+                        {t('Schick uns AV1 oder H.264 mit den Werten aus Schritt 4. In jeder Plattformkarte siehst du getrennt, welche Ausgabe du gespeichert hast und welche gerade läuft.')}
                       </p>
                     </details>
                   </Rise>
@@ -1376,18 +1449,21 @@ export function UplinkPage() {
               >
                 <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 [&::-webkit-details-marker]:hidden">
                   <span>
-                    <span className="block text-base font-bold text-white">Uplink-Hilfe</span>
-                    <span className="mt-0.5 block text-xs text-text-secondary">Einrichtung, Grundlagen und Störungen</span>
+                    <span className="block text-base font-bold text-white">{t('Uplink-Hilfe')}</span>
+                    <span className="mt-0.5 block text-xs text-text-secondary">{t('Einrichtung, Grundlagen und Störungen')}</span>
                   </span>
                   <ChevronDown className="h-4 w-4 shrink-0 text-text-secondary transition-transform group-open:rotate-180" />
                 </summary>
                 <div className="space-y-3 border-t border-border/60 px-5 py-4">
                   {isHelpError && (
-                    <p role="alert" className="text-sm text-warning">Die Uplink-Hilfe ist gerade nicht erreichbar.</p>
+                    <p role="alert" className="text-sm text-warning">{t('Die Uplink-Hilfe ist gerade nicht erreichbar.')}</p>
                   )}
                   {helpPages && helpPages.length < UPLINK_HELP_PAGES.length && (
                     <p role="alert" className="text-sm text-warning">
-                      {UPLINK_HELP_PAGES.length - helpPages.length} von {UPLINK_HELP_PAGES.length} Kapiteln konnten nicht geladen werden.
+                      {t('{fehlend} von {gesamt} Kapiteln konnten nicht geladen werden.', {
+                        fehlend: UPLINK_HELP_PAGES.length - helpPages.length,
+                        gesamt: UPLINK_HELP_PAGES.length,
+                      })}
                     </p>
                   )}
                   <div className="space-y-2">
@@ -1396,18 +1472,18 @@ export function UplinkPage() {
                         <HilfeKapitel
                           key={page.file}
                           datei={page.file}
-                          label={page.label}
+                          label={t(page.label)}
                           html={page.html}
                         />
                       ) : (
                         <div key={page.file} className="rounded-xl border border-border bg-background/70 p-4 text-sm text-text-secondary">
-                          Hilfe wird geladen: {page.label}
+                          {t('Hilfe wird geladen: {label}', { label: t(page.label) })}
                         </div>
                       ),
                     )}
                   </div>
-                  <a className="inline-flex min-h-11 items-center text-sm font-semibold text-primary" href={uplinkHelpUrl('index.html')}>
-                    Uplink-Hilfe als eigene Seite öffnen
+                  <a className="inline-flex min-h-11 items-center text-sm font-semibold text-primary" href={uplinkHelpUrl('index.html', language)}>
+                    {t('Uplink-Hilfe als eigene Seite öffnen')}
                   </a>
                 </div>
               </details>

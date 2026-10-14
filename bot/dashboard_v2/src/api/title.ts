@@ -1,6 +1,7 @@
 import { getPreviewTitleInsights, getPreviewTitleSuggestion } from '../preview/fixtures';
 import { isPreviewLocalhost } from '../preview/routes';
 import { buildApiUrl, fetchApi, fetchJson, withCookieCredentials } from './core';
+import { tr } from '../i18n/dictionary';
 
 export interface TitleSuggestRequest {
   keywords?: string;
@@ -60,10 +61,10 @@ export interface TitleFeedbackRequest {
 
 function previewSettings(): TitleSettings {
   return {
-    style_preference: 'Direkt, trocken, eher ein Satz als Keyword-Liste. Keine übertriebenen Emojis.',
+    style_preference: tr('Direkt, trocken, eher ein Satz als Keyword-Liste. Keine übertriebenen Emojis.'),
     experimental_auto_set: false,
     never_words: [],
-    style_summary: 'Ø ca. 72 Zeichen; Emojis sind untypisch; häufiger Trenner |; eher ruhige Satzzeichen.',
+    style_summary: tr('Ø ca. 72 Zeichen; Emojis sind untypisch; häufiger Trenner |; eher ruhige Satzzeichen.'),
     oauth_connected: true,
     oauth_url: '/twitch/raid/auth?scope_profile=title&source=title_generator',
     model: 'glm-5.3-flash',
