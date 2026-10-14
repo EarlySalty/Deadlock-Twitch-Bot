@@ -55,14 +55,14 @@ pub(crate) enum Decision {
 
 pub(crate) struct IdempotencyStore {
     config: IdempotencyConfig,
-    inner: tokio::sync::Mutex<Inner>,
+    inner: std::sync::Mutex<Inner>,
 }
 
 impl IdempotencyStore {
     pub(crate) fn new(config: IdempotencyConfig) -> Self {
         Self {
             config,
-            inner: tokio::sync::Mutex::new(Inner::default()),
+            inner: std::sync::Mutex::new(Inner::default()),
         }
     }
 
@@ -72,7 +72,7 @@ impl IdempotencyStore {
 
     pub(crate) async fn begin(&self, cache_key: &str, payload_hash: &str) -> Result<Decision, ()> {
         let now = Instant::now();
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         Self::prune(&mut inner, &self.config, now);
         if let Some(record) = inner.records.get(cache_key) {
             if record.payload_hash != payload_hash {
@@ -99,7 +99,7 @@ impl IdempotencyStore {
         Ok(Decision::Execute)
     }
 
-    pub(crate) async fn settle(
+    pub(crate) fn settle(
         &self,
         cache_key: &str,
         payload_hash: &str,
@@ -108,7 +108,7 @@ impl IdempotencyStore {
         cache_response: bool,
     ) {
         let now = Instant::now();
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         Self::prune(&mut inner, &self.config, now);
         if cache_response {
             inner.records.insert(
@@ -170,16 +170,14 @@ mod tests {
     async fn cache_konflikt_und_verdraengung() {
         let s = store(1);
         assert!(matches!(s.begin("a:k1", "h1").await, Ok(Decision::Execute)));
-        s.settle("a:k1", "h1", 200, &json!({"ok": true}), true)
-            .await;
+        s.settle("a:k1", "h1", 200, &json!({"ok": true}), true);
         assert!(matches!(
             s.begin("a:k1", "h1").await,
             Ok(Decision::Cached(200, _))
         ));
         assert!(s.begin("a:k1", "anders").await.is_err());
         assert!(matches!(s.begin("a:k2", "h2").await, Ok(Decision::Execute)));
-        s.settle("a:k2", "h2", 200, &json!({"ok": true}), true)
-            .await;
+        s.settle("a:k2", "h2", 200, &json!({"ok": true}), true);
         assert!(matches!(s.begin("a:k1", "h1").await, Ok(Decision::Execute)));
     }
 
@@ -187,8 +185,7 @@ mod tests {
     async fn fehler_werden_nicht_gespeichert() {
         let s = store(8);
         let _ = s.begin("a:k", "h").await;
-        s.settle("a:k", "h", 502, &json!({"ok": false}), false)
-            .await;
+        s.settle("a:k", "h", 502, &json!({"ok": false}), false);
         assert!(matches!(s.begin("a:k", "h").await, Ok(Decision::Execute)));
     }
 }

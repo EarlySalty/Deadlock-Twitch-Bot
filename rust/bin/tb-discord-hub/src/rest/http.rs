@@ -22,6 +22,7 @@ pub(crate) enum RestError {
     },
     RateLimited,
     Transport(String),
+    InvalidResponse,
 }
 
 impl RestError {
@@ -46,6 +47,7 @@ impl std::fmt::Display for RestError {
                 message,
             } => write!(f, "Discord-Status {status} (Code {code:?}): {message}"),
             RestError::RateLimited => write!(f, "Discord-Rate-Limit nicht aufgelöst"),
+            RestError::InvalidResponse => write!(f, "Ungültige Discord-Antwort"),
             RestError::Transport(e) => write!(f, "Discord nicht erreichbar: {e}"),
         }
     }
@@ -121,13 +123,15 @@ impl DiscordHttp {
         let url = format!("{}{}", self.base_url, path);
 
         for attempt in 1..=MAX_ATTEMPTS {
-            let wait = self.limiter.acquire(&route);
-            if wait > MAX_RETRY_WAIT {
-                tracing::warn!(route = %route.template, ?wait, "Discord-Bucket zu lange gesperrt");
-                return Err(RestError::RateLimited);
-            }
-            if !wait.is_zero() {
-                tracing::debug!(route = %route.template, ?wait, "Warte auf Discord-Rate-Limit");
+            let waiting_since = std::time::Instant::now();
+            loop {
+                let wait = self.limiter.acquire(&route);
+                if wait.is_zero() {
+                    break;
+                }
+                if waiting_since.elapsed().saturating_add(wait) > MAX_RETRY_WAIT {
+                    return Err(RestError::RateLimited);
+                }
                 tokio::time::sleep(wait).await;
             }
 
@@ -138,11 +142,26 @@ impl DiscordHttp {
             if let Some(body) = body {
                 builder = builder.json(body);
             }
+            let writes = method != Method::GET && path != "/users/@me/channels";
+            let previous_write = super::WRITE_UNCERTAIN
+                .try_with(|state| {
+                    if writes {
+                        state.swap(true, std::sync::atomic::Ordering::Relaxed)
+                    } else {
+                        state.load(std::sync::atomic::Ordering::Relaxed)
+                    }
+                })
+                .unwrap_or(false);
             let response = builder
                 .send()
                 .await
                 .map_err(|e| RestError::Transport(e.without_url().to_string()))?;
             let status = response.status().as_u16();
+            if writes && (400..500).contains(&status) {
+                let _ = super::WRITE_UNCERTAIN.try_with(|state| {
+                    state.store(previous_write, std::sync::atomic::Ordering::Relaxed);
+                });
+            }
             let headers = response.headers().clone();
             self.limiter.update(&route, &headers);
             let bytes = response
@@ -152,7 +171,13 @@ impl DiscordHttp {
             let json: Value = if bytes.is_empty() {
                 Value::Null
             } else {
-                serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+                match serde_json::from_slice(&bytes) {
+                    Ok(value) => value,
+                    Err(_) if (200..300).contains(&status) => {
+                        return Err(RestError::InvalidResponse)
+                    }
+                    Err(_) => Value::Null,
+                }
             };
 
             if (200..300).contains(&status) {

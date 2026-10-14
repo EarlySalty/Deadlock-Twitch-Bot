@@ -7,8 +7,8 @@ mod ratelimit;
 mod tests;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
@@ -20,6 +20,33 @@ use crate::{DirectDiscord, HubError, InboundRequest, OutboundResponse, INTERNAL_
 pub use http::DISCORD_API_BASE;
 use http::{DiscordHttp, RestError};
 use idempotency::{Decision, IdempotencyConfig, IdempotencyStore, CONFLICT_MESSAGE};
+
+tokio::task_local! {
+    static WRITE_UNCERTAIN: Arc<AtomicBool>;
+}
+
+struct ExecutionGuard<'a> {
+    store: &'a IdempotencyStore,
+    key: &'a str,
+    hash: &'a str,
+    uncertain: Arc<AtomicBool>,
+    cancellation_body: Value,
+    settled: bool,
+}
+
+impl Drop for ExecutionGuard<'_> {
+    fn drop(&mut self) {
+        if !self.settled {
+            self.store.settle(
+                self.key,
+                self.hash,
+                502,
+                &self.cancellation_body,
+                self.uncertain.load(Ordering::Relaxed),
+            );
+        }
+    }
+}
 
 const CHANNEL_CACHE_TTL: Duration = Duration::from_secs(60);
 const CHANNEL_CACHE_MAX: usize = 2048;
@@ -335,10 +362,29 @@ impl DiscordRest {
                 }
             }
             Decision::Execute => {
-                let (status, body) = operation.await;
-                self.store
-                    .settle(&cache_key, hash, status, &body, true)
-                    .await;
+                let uncertain = Arc::new(AtomicBool::new(false));
+                let mut guard = ExecutionGuard {
+                    store: &self.store,
+                    key: &cache_key,
+                    hash,
+                    uncertain: uncertain.clone(),
+                    cancellation_body: error_body(
+                        &ctx.rid,
+                        Some(idem),
+                        "operation_cancelled",
+                        "operation cancelled; write outcome may be unknown",
+                    ),
+                    settled: false,
+                };
+                let (status, body) = WRITE_UNCERTAIN.scope(uncertain.clone(), operation).await;
+                self.store.settle(
+                    &cache_key,
+                    hash,
+                    status,
+                    &body,
+                    status < 400 || uncertain.load(Ordering::Relaxed),
+                );
+                guard.settled = true;
                 respond(status, body)
             }
         }

@@ -726,3 +726,187 @@ async fn role_member_errors_and_malformed_roles_are_not_missing_roles() {
         assert_eq!(json_of(&response)["error"]["code"], "discord_error");
     }
 }
+
+#[tokio::test]
+async fn recoverable_failures_are_retryable() {
+    for (verb, route, status) in [
+        ("GET", "/channels/111", 500),
+        ("POST", "/channels/111/messages", 403),
+        ("POST", "/channels/111/messages", 429),
+    ] {
+        let server = MockServer::start().await;
+        mount_channel(&server, 111, GUILD).await;
+        Mock::given(method(verb))
+            .and(path(route))
+            .respond_with(ResponseTemplate::new(status).set_body_json(json!({"retry_after": 0})))
+            .up_to_n_times(if status == 429 { 3 } else { 1 })
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/channels/111/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "9"})))
+            .with_priority(2)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = rest(&server);
+        for expected in [502, 200] {
+            let response = client
+                .handle(
+                    GUILD,
+                    post("discord/send-rich-message", Some("retry"), rich_payload()),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status, expected);
+            assert_eq!(json_of(&response)["cached"], false);
+        }
+    }
+}
+
+#[tokio::test]
+async fn explicit_user_mentions_are_honoured() {
+    let server = MockServer::start().await;
+    mount_channel(&server, 111, GUILD).await;
+    for (action, verb, route) in [
+        (
+            "discord/send-rich-message",
+            "POST",
+            "/channels/111/messages",
+        ),
+        (
+            "discord/edit-rich-message",
+            "PATCH",
+            "/channels/111/messages/5",
+        ),
+    ] {
+        Mock::given(method(verb))
+            .and(path(route))
+            .and(body_partial_json(
+                json!({"allowed_mentions": {"parse": [], "users": ["5"], "roles": ["7"]}}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "9"})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut payload = rich_payload();
+        payload["allowed_user_ids"] = json!([5]);
+        payload["message_id"] = json!(5);
+        assert_eq!(
+            rest(&server)
+                .handle(GUILD, post(action, Some("mentions"), payload))
+                .await
+                .expect("response")
+                .status,
+            200
+        );
+    }
+}
+
+#[tokio::test]
+async fn malformed_members_and_repeated_pages_fail() {
+    for page in [
+        json!([{}]),
+        json!(vec![
+            json!({"user": {"id": "5", "username": "test"}, "roles": ["7"]});
+            1000
+        ]),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/guilds/42/roles"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([{"id": "7", "name": "Live"}])),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/guilds/42/members"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(page))
+            .mount(&server)
+            .await;
+        let client = rest(&server);
+        for (request, expected) in [
+            (get("discord/members", ""), 502),
+            (get("discord/role-members", "role_id=7&live=true"), 503),
+        ] {
+            let response = client.handle(GUILD, request).await.expect("response");
+            assert_eq!(response.status, expected);
+            assert_ne!(json_of(&response)["complete"], true);
+        }
+    }
+}
+
+#[tokio::test]
+async fn malformed_role_discovery_never_writes_and_can_retry() {
+    for body in ["not-json", "{}", "[{}]"] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/guilds/42/roles"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/guilds/42/roles"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([{"id": "7", "name": "Live"}])),
+            )
+            .with_priority(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/guilds/42/roles"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let client = rest(&server);
+        for expected in [502, 200] {
+            let response = client
+                .handle(
+                    GUILD,
+                    post(
+                        "discord/role/create",
+                        Some("role"),
+                        json!({"guild_id": GUILD, "name": "Live"}),
+                    ),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status, expected);
+        }
+    }
+}
+
+#[tokio::test]
+async fn cancellation_settles_reservations_without_duplicate_writes() {
+    for wrote in [false, true] {
+        let server = MockServer::start().await;
+        let client = rest(&server);
+        let ctx = super::Ctx {
+            guild_id: GUILD,
+            rid: "cancel".into(),
+        };
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let operation = async {
+            super::WRITE_UNCERTAIN
+                .with(|state| state.store(wrote, std::sync::atomic::Ordering::Relaxed));
+            let _ = tx.send(());
+            std::future::pending::<(u16, Value)>().await
+        };
+        let mut executing =
+            Box::pin(client.run_idempotent(&ctx, "cancel", "key", "hash", operation));
+        tokio::select! { _ = &mut executing => panic!("must remain pending"), _ = rx => {} }
+        drop(executing);
+        let response = client
+            .run_idempotent(&ctx, "cancel", "key", "hash", async {
+                assert!(!wrote, "must not duplicate an ambiguous write");
+                (200, json!({"ok": true}))
+            })
+            .await;
+        assert_eq!(response.status, if wrote { 502 } else { 200 });
+    }
+}

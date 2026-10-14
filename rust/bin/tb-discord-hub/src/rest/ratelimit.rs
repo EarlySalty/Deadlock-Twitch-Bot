@@ -85,7 +85,7 @@ impl RateLimiter {
             }
             if state.remaining == 0 {
                 wait = wait.max(state.reset_at - now);
-            } else {
+            } else if wait.is_zero() {
                 state.remaining -= 1;
             }
         }
@@ -125,8 +125,14 @@ impl RateLimiter {
                     inner.buckets.clear();
                 }
             }
+            let key = format!("{hash}:{}", route.major);
+            if let Some(state) = inner.buckets.get(&key) {
+                if state.remaining == 0 && state.reset_at > now {
+                    return;
+                }
+            }
             inner.buckets.insert(
-                format!("{hash}:{}", route.major),
+                key,
                 BucketState {
                     remaining,
                     reset_at: reset_after,
@@ -145,8 +151,14 @@ impl RateLimiter {
             return;
         }
         if let Some(hash) = inner.route_bucket.get(&route.template).cloned() {
+            let key = format!("{hash}:{}", route.major);
+            let until = inner
+                .buckets
+                .get(&key)
+                .filter(|state| state.remaining == 0)
+                .map_or(until, |state| state.reset_at.max(until));
             inner.buckets.insert(
-                format!("{hash}:{}", route.major),
+                key,
                 BucketState {
                     remaining: 0,
                     reset_at: until,
@@ -205,5 +217,19 @@ mod tests {
         limiter.block(&route, Duration::from_secs(3), true);
         let other = RouteKey::new("POST", "/channels/2/messages");
         assert!(limiter.acquire(&other) > Duration::from_secs(2));
+    }
+    #[test]
+    fn active_blocks_survive_success_and_shorter_blocks() {
+        let limiter = RateLimiter::default();
+        let route = RouteKey::new("POST", "/channels/1/messages");
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-bucket", HeaderValue::from_static("abc"));
+        headers.insert("x-ratelimit-remaining", HeaderValue::from_static("5"));
+        headers.insert("x-ratelimit-reset-after", HeaderValue::from_static("1"));
+        limiter.update(&route, &headers);
+        limiter.block(&route, Duration::from_secs(5), false);
+        limiter.update(&route, &headers);
+        limiter.block(&route, Duration::from_secs(1), false);
+        assert!(limiter.acquire(&route) > Duration::from_secs(4));
     }
 }

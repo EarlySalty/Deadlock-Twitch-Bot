@@ -109,10 +109,10 @@ fn view_components(spec: &ViewSpec) -> Option<Value> {
     }
 }
 
-fn allowed_mentions(guild_id: u64, role_ids: &[u64]) -> Value {
+fn allowed_mentions(guild_id: u64, user_ids: &[u64], role_ids: &[u64]) -> Value {
     json!({
         "parse": [],
-        "users": [],
+        "users": user_ids.iter().map(u64::to_string).collect::<Vec<_>>(),
         "roles": role_ids
             .iter()
             .filter(|id| **id != guild_id)
@@ -138,7 +138,7 @@ fn rich_body(guild_id: u64, rich: &Rich, editing: bool) -> Value {
         body.insert("components".into(), Value::Array(rows));
         body.insert(
             "allowed_mentions".into(),
-            allowed_mentions(guild_id, &rich.allowed_role_ids),
+            allowed_mentions(guild_id, &rich.allowed_user_ids, &rich.allowed_role_ids),
         );
         return Value::Object(body);
     }
@@ -150,7 +150,7 @@ fn rich_body(guild_id: u64, rich: &Rich, editing: bool) -> Value {
     }
     body.insert(
         "allowed_mentions".into(),
-        allowed_mentions(guild_id, &rich.allowed_role_ids),
+        allowed_mentions(guild_id, &rich.allowed_user_ids, &rich.allowed_role_ids),
     );
     if let Some(view) = view {
         body.insert("components".into(), view);
@@ -516,7 +516,9 @@ impl DiscordRest {
                 )
                 .await
             {
-                Ok(_) => {}
+                Ok(member)
+                    if member.get("user").and_then(|u| snowflake(u, "id")) == Some(user_id) => {}
+                Ok(_) => return fail("invalid member response"),
                 Err(err) if is_not_found(&err) => {
                     return (
                         404,
@@ -807,6 +809,9 @@ impl DiscordRest {
                 .await
             {
                 Ok(Value::Array(roles)) => {
+                    if !valid_roles(&roles) {
+                        return map_err(RestError::InvalidResponse);
+                    }
                     if let Some(id) = roles
                         .iter()
                         .find(|r| r.get("name").and_then(Value::as_str) == Some(name.as_str()))
@@ -815,7 +820,7 @@ impl DiscordRest {
                         return ok(id);
                     }
                 }
-                Ok(_) => {}
+                Ok(_) => return map_err(RestError::InvalidResponse),
                 Err(err) => return map_err(err),
             }
             match self
@@ -973,7 +978,7 @@ impl DiscordRest {
             )
             .await
         {
-            Ok(Value::Array(roles)) => respond(
+            Ok(Value::Array(roles)) if valid_roles(&roles) => respond(
                 200,
                 json!({
                     "ok": true,
@@ -1013,16 +1018,21 @@ impl DiscordRest {
             let Value::Array(page) = page else {
                 return Err(RestError::Transport("Ungültige Mitgliederliste".into()));
             };
+            if page.iter().any(|member| !valid_member(member, after)) {
+                return Err(RestError::InvalidResponse);
+            }
             let cursor = page
                 .iter()
                 .filter_map(|m| m.get("user").and_then(|u| snowflake(u, "id")))
                 .max();
             let full = page.len() >= 1000;
             out.extend(page);
-            match cursor {
-                Some(c) if full && c > after => after = c,
-                _ => return Ok(out),
+            if !full {
+                return Ok(out);
             }
+            after = cursor
+                .filter(|cursor| *cursor > after)
+                .ok_or(RestError::InvalidResponse)?;
         }
         tracing::warn!(guild_id, "Mitgliederliste bei Seitenlimit abgeschnitten");
         Err(RestError::Transport(
@@ -1109,7 +1119,7 @@ impl DiscordRest {
             )
             .await
         {
-            Ok(Value::Array(roles)) => roles,
+            Ok(Value::Array(roles)) if valid_roles(&roles) => roles,
             Ok(_) | Err(_) if live => return unavailable(),
             Ok(_) => return lookup_failed(ctx),
             Err(err) if is_not_found(&err) => {
@@ -1254,4 +1264,27 @@ fn lookup_failed(ctx: &Ctx) -> OutboundResponse {
             "Discord-Abfrage fehlgeschlagen",
         ),
     )
+}
+
+fn valid_roles(roles: &[Value]) -> bool {
+    roles.iter().all(|role| {
+        snowflake(role, "id").is_some_and(|id| id > 0)
+            && role.get("name").and_then(Value::as_str).is_some()
+    })
+}
+
+fn valid_member(member: &Value, after: u64) -> bool {
+    member.get("user").is_some_and(|user| {
+        snowflake(user, "id").is_some_and(|id| id > after)
+            && user.get("username").and_then(Value::as_str).is_some()
+    }) && member
+        .get("roles")
+        .and_then(Value::as_array)
+        .is_some_and(|roles| {
+            roles.iter().all(|role| {
+                role.as_str()
+                    .and_then(|id| id.parse::<u64>().ok())
+                    .is_some_and(|id| id > 0)
+            })
+        })
 }
