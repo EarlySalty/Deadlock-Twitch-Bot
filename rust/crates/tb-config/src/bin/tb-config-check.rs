@@ -1,4 +1,4 @@
-include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
+include!("../../../../bin/build_revision.rs");
 
 use std::{
     ffi::OsStr,

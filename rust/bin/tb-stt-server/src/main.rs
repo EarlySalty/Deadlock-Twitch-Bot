@@ -11,7 +11,7 @@ use std::{
 };
 
 mod recovery;
-include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
+include!("../../build_revision.rs");
 
 use axum::{
     extract::{DefaultBodyLimit, Multipart, State},

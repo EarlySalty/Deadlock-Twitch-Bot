@@ -177,6 +177,40 @@ test('Without a browser the initial language remains German', () => {
   }
 });
 
+test('Priority page translations retain commands and cover feedback statuses', () => {
+  for (const label of ['Eingegangen', 'In Prüfung', 'Geplant', 'In Arbeit', 'Umgesetzt', 'Derzeit nicht vorgesehen', 'Beantwortet']) {
+    assert.notEqual(translate('en', label), label);
+    assert.equal(translate('de', label), label);
+  }
+  const summary = 'Abo-Link für diesen Kanal. Freiwillige Erinnerung: !sub erinnerung an/aus/status.';
+  assert.equal(translate('en', summary), 'Subscription link for this channel. Optional reminder: !sub erinnerung an/aus/status.');
+  assert.equal(translate('de', summary), summary);
+});
+
+test('Ad-manager helper messages translate with locale-aware numbers and keep German defaults', async () => {
+  const { budgetVorschau, statusSatz } = await import('../src/components/verwaltung/adManagerTexte');
+  const t = translate.bind(null, 'en');
+  assert.equal(budgetVorschau(3, null), '6 Blöcke à 30 Sek., etwa alle 10 Min.');
+  assert.equal(budgetVorschau(3, null, t, 'en-US'), '6 blocks of 30 sec., about every 10 min.');
+  const state = { enabled: true, isLive: true, currentReason: 'in_match', nextBlockLabel: t('in {value0} Min.', { value0: 5 }), fit: null };
+  assert.equal(statusSatz(state, t), "Running. Next block in 5 min. You're in a match. The bot uses available Twitch snoozes and won't start ads itself.");
+  assert.equal(statusSatz({ ...state, nextBlockLabel: 'now' }, t), "Running. Next block now. You're in a match. The bot uses available Twitch snoozes and won't start ads itself.");
+});
+
+test('Named raid history translates without changing channel names or German defaults', async () => {
+  const { beschreibeEintrag } = await import('../src/components/verwaltung/adManagerTexte');
+  const entry = { reason: 'recent_raid', detail: 'example_channel', decision: 'none' } as Parameters<typeof beschreibeEintrag>[0];
+  assert.equal(beschreibeEintrag(entry), 'Verschoben, Raid von example_channel');
+  assert.equal(beschreibeEintrag(entry, translate.bind(null, 'en')), 'Postponed, raid from example_channel');
+});
+
+test('Connected accounts and unread requests use English status labels', () => {
+  for (const [source, english] of [['Verbunden', 'Connected'], ['Ungelesen', 'Unread'], ['Wunsch', 'Request']]) {
+    assert.equal(translate('en', source), english);
+    assert.equal(translate('de', source), source);
+  }
+});
+
 test('D6 translates generated coaching and quest copy without changing German', async () => {
   const { translatePageText, translateGoalRoute } = await import('../src/i18n/pageText');
   const en = (text: string, params?: Record<string, string | number>) => translate('en', text, params);

@@ -1,3 +1,4 @@
+import { useLanguage, useT } from '../context/LanguageContext';
 import {
   CircleHelp,
   ClipboardCopy,
@@ -8,7 +9,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { useMemo } from 'react';
-import { useScopes } from '@/hooks/useScopes';
+import { useScopes } from '../hooks/useScopes';
 import type { ScopeStatus } from '@/types/scopes';
 
 const demoScopes = new Set<string>([
@@ -18,6 +19,7 @@ const demoScopes = new Set<string>([
 ]);
 
 function ScopeCard({ scope }: { scope: ScopeStatus }) {
+  const t = useT();
   const isMissing = scope.status === 'missing';
   const isCritical = scope.importance === 'critical';
   const isNew = !!scope.addedAt;
@@ -33,15 +35,15 @@ function ScopeCard({ scope }: { scope: ScopeStatus }) {
       <div className="flex items-start justify-between gap-3">
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-wide text-text-secondary">
-            <span>{scope.label}</span>
+            <span>{t(scope.label)}</span>
             {isCritical && (
               <span className="rounded-full bg-danger/10 px-2 py-0.5 text-[10px] font-semibold text-danger">
-                Kritisch
+                {t("Kritisch")}
               </span>
             )}
             {isNew && (
               <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-semibold text-accent">
-                Neu
+                {t("Neu")}
               </span>
             )}
           </div>
@@ -56,33 +58,36 @@ function ScopeCard({ scope }: { scope: ScopeStatus }) {
           }`}
         >
           {isMissing ? <ShieldOff className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4" />}
-          {isMissing ? 'Fehlt' : 'Aktiv'}
+          {t(isMissing ? 'Fehlt' : 'Aktiv')}
         </div>
       </div>
 
-      <p className="mt-2 text-sm text-text-secondary">{scope.description}</p>
+      <p className="mt-2 text-sm text-text-secondary">{t(scope.description)}</p>
 
       <div className="mt-3 flex items-center gap-2 text-xs text-text-secondary">
         <div className="relative group">
           <CircleHelp className="h-4 w-4 text-text-secondary" />
           <div className="absolute left-0 top-6 z-20 w-72 rounded-lg border border-border bg-bg px-3 py-2 text-[12px] text-white opacity-0 shadow-xl transition-opacity duration-150 group-hover:opacity-100">
-            {scope.why}
+            {t(scope.why)}
           </div>
         </div>
-        <span className="hidden sm:inline">Warum:</span>
-        <span className="line-clamp-1 sm:line-clamp-none">{scope.why}</span>
+        <span className="hidden sm:inline">{t("Warum:")}</span>
+        <span className="line-clamp-1 sm:line-clamp-none">{t(scope.why)}</span>
       </div>
     </div>
   );
 }
 
 export function AuthScopes() {
+  const t = useT();
+  const { locale } = useLanguage();
+  const formatDate = (raw: string) => locale === 'de-DE' ? raw : new Date(`${raw}T00:00:00`).toLocaleDateString(locale, { dateStyle: 'medium' });
   const { input, setInput, statuses, summary, changelog, setFromList, reset, scopeCatalog } =
     useScopes();
 
   const missingLabels = useMemo(
-    () => summary.missing.map(scope => scope.label).slice(0, 3),
-    [summary.missing],
+    () => summary.missing.map(scope => t(scope.label)).slice(0, 3),
+    [summary.missing, t],
   );
 
   const allScopeIds = useMemo(() => scopeCatalog.map(scope => scope.id), [scopeCatalog]);
@@ -96,21 +101,19 @@ export function AuthScopes() {
             <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-text-secondary">
               <span>Scopes</span>
               <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-text-secondary">
-                Frontend Preview
+                {t("Frontend Preview")}
               </span>
             </div>
-            <h2 className="text-2xl font-bold text-white">OAuth Scope Checker</h2>
+            <h2 className="text-2xl font-bold text-white">{t("OAuth Scope Checker")}</h2>
             <p className="max-w-3xl text-sm text-text-secondary">
-              Vergleicht die aktuell erteilten Broadcaster-/Streamer-Scopes mit unserer
-              benötigten Liste. Bot-User-Scopes wie <code>user:read:chat</code> laufen zentral über
-              den Bot-Account und sind bewusst nicht Teil dieser Streamer-Matrix.
+              {t("Vergleicht die aktuell erteilten Broadcaster-/Streamer-Scopes mit unserer benötigten Liste. Bot-User-Scopes wie")} <code>user:read:chat</code> {t("laufen zentral über den Bot-Account und sind bewusst nicht Teil dieser Streamer-Matrix.")}
             </p>
           </div>
 
           <div className="flex items-center gap-3">
             <div className="rounded-xl border border-border bg-black/30 px-4 py-3 text-center">
-              <div className="text-sm text-text-secondary">Abdeckung</div>
-              <div className="text-2xl font-semibold text-white">{summary.coverage}%</div>
+              <div className="text-sm text-text-secondary">{t("Abdeckung")}</div>
+              <div className="text-2xl font-semibold text-white">{summary.coverage.toLocaleString(locale)}%</div>
               <div className="mt-2 h-2 w-40 overflow-hidden rounded-full bg-white/5">
                 <div
                   className="h-full rounded-full bg-gradient-to-r from-accent to-primary"
@@ -119,9 +122,9 @@ export function AuthScopes() {
               </div>
             </div>
             <div className="rounded-xl border border-border bg-black/30 px-4 py-3 text-center">
-              <div className="text-sm text-text-secondary">Kritisch fehlen</div>
-              <div className="text-2xl font-semibold text-danger">{summary.criticalMissing.length}</div>
-              <div className="text-xs text-text-secondary">von {summary.total}</div>
+              <div className="text-sm text-text-secondary">{t("Kritisch fehlen")}</div>
+              <div className="text-2xl font-semibold text-danger">{summary.criticalMissing.length.toLocaleString(locale)}</div>
+              <div className="text-xs text-text-secondary">{t("von")} {summary.total.toLocaleString(locale)}</div>
             </div>
           </div>
         </div>
@@ -130,13 +133,13 @@ export function AuthScopes() {
           <div className="rounded-lg border border-border bg-black/20 px-4 py-3 text-sm text-text-secondary">
             <div className="mb-1 flex items-center gap-2 text-white">
               <Sparkles className="h-4 w-4 text-accent" />
-              Streamer-Scopes
+              {t("Streamer-Scopes")}
             </div>
             {summary.missing.length === 0 ? (
-              <span className="text-success">Alle Scopes vorhanden ✔</span>
+              <span className="text-success">{t("Alle Scopes vorhanden ✔")}</span>
             ) : (
               <span>
-                Fehlt: {missingLabels.join(', ')}
+                {t("Fehlt:")} {missingLabels.join(', ')}
                 {summary.missing.length > missingLabels.length && ' …'}
               </span>
             )}
@@ -145,19 +148,19 @@ export function AuthScopes() {
           <div className="rounded-lg border border-border bg-black/20 px-4 py-3 text-sm text-text-secondary">
             <div className="mb-1 flex items-center gap-2 text-white">
               <History className="h-4 w-4 text-accent" />
-              Letzter Change
+              {t("Letzter Change")}
             </div>
-            <span>{summary.lastChange || '—'}</span>
+            <span>{summary.lastChange ? formatDate(summary.lastChange) : t("—")}</span>
           </div>
 
           <div className="rounded-lg border border-border bg-black/20 px-4 py-3 text-sm text-text-secondary">
             <div className="mb-1 flex items-center gap-2 text-white">
               <RefreshCw className="h-4 w-4 text-accent" />
-              Bot-Scopes
+              {t("Bot-Scopes")}
             </div>
             <span className="text-xs text-text-secondary">
-              Zentral: <code>user:read:chat</code>, <code>user:write:chat</code>.
-              <code>user:bot</code> erst bei App-Token-Chat-EventSub.
+              {t("Zentral:")} <code>user:read:chat</code>, <code>user:write:chat</code>.
+              <code>user:bot</code> {t("erst bei App-Token-Chat-EventSub.")}
             </span>
           </div>
         </div>
@@ -167,10 +170,9 @@ export function AuthScopes() {
       <div className="rounded-2xl border border-border bg-card/80 p-5 shadow">
         <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-white">Aktuelle Streamer-Scopes</h3>
+            <h3 className="text-lg font-semibold text-white">{t("Aktuelle Streamer-Scopes")}</h3>
             <p className="text-sm text-text-secondary">
-              Füge hier die Broadcaster-Scopes des Streamer-Tokens ein (Komma oder Leerzeichen
-              getrennt). Bot-Scopes werden getrennt zentral geprüft.
+              {t("Füge hier die Broadcaster-Scopes des Streamer-Tokens ein (Komma oder Leerzeichen getrennt). Bot-Scopes werden getrennt zentral geprüft.")}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -180,7 +182,7 @@ export function AuthScopes() {
               className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm text-text-secondary transition hover:border-border-hover"
             >
               <ClipboardCopy className="h-4 w-4" />
-              Demo füllen
+              {t("Demo füllen")}
             </button>
             <button
               type="button"
@@ -188,7 +190,7 @@ export function AuthScopes() {
               className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm text-text-secondary transition hover:border-border-hover"
             >
               <ShieldCheck className="h-4 w-4 text-success" />
-              Alles autorisiert
+              {t("Alles autorisiert")}
             </button>
             <button
               type="button"
@@ -196,7 +198,7 @@ export function AuthScopes() {
               className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm text-text-secondary transition hover:border-border-hover"
             >
               <RefreshCw className="h-4 w-4" />
-              Zurücksetzen
+              {t("Zurücksetzen")}
             </button>
           </div>
         </div>
@@ -209,9 +211,8 @@ export function AuthScopes() {
           placeholder="channel:manage:raids channel:bot bits:read …"
         />
         <p className="mt-2 text-xs text-text-secondary">
-          Tipp: Du kannst Scopes auch per URL setzen (&quot;?scopes=channel:manage:raids,channel:bot&quot;), wir
-          lesen sie beim Laden ein und speichern sie lokal. <code>user:read:chat</code> oder
-          <code>user:bot</code> gehoeren nicht in diese Streamer-Liste.
+          {t("Tipp: Du kannst Scopes auch per URL setzen (\"?scopes=channel:manage:raids,channel:bot\"), wir lesen sie beim Laden ein und speichern sie lokal.")} <code>user:read:chat</code> {t("oder")}{' '}
+          <code>user:bot</code> {t("gehoeren nicht in diese Streamer-Liste.")}
         </p>
       </div>
 
@@ -227,26 +228,26 @@ export function AuthScopes() {
         <div className="mb-3 flex items-center justify-between">
           <div>
             <p className="text-xs uppercase tracking-wide text-text-secondary">What&apos;s new</p>
-            <h3 className="text-lg font-semibold text-white">Changelog (Scopes)</h3>
+            <h3 className="text-lg font-semibold text-white">{t("Changelog (Scopes)")}</h3>
             <p className="text-sm text-text-secondary">
-              Platzhalter-Einträge – hier kannst du Updates posten, wenn Backend/Scopes sich ändern.
+              {t("Platzhalter-Einträge – hier kannst du Updates posten, wenn Backend/Scopes sich ändern.")}
             </p>
           </div>
           <span className="rounded-full bg-white/5 px-3 py-1 text-xs text-text-secondary">
-            Sichtbar für Streamer
+            {t("Sichtbar für Streamer")}
           </span>
         </div>
 
         <div className="space-y-3">
           {changelog.map(entry => (
             <div
-              key={`${entry.date}-${entry.title}`}
+              key={`${formatDate(entry.date)}-${entry.title}`}
               className="rounded-xl border border-border bg-black/20 p-4"
             >
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <p className="text-xs uppercase tracking-wide text-text-secondary">{entry.date}</p>
-                  <h4 className="text-base font-semibold text-white">{entry.title}</h4>
+                  <p className="text-xs uppercase tracking-wide text-text-secondary">{formatDate(entry.date)}</p>
+                  <h4 className="text-base font-semibold text-white">{t(entry.title)}</h4>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {entry.tags?.map(tag => (
@@ -254,7 +255,7 @@ export function AuthScopes() {
                       key={tag}
                       className="rounded-full bg-white/5 px-3 py-1 text-xs text-text-secondary"
                     >
-                      {tag}
+                      {t(tag)}
                     </span>
                   ))}
                 </div>
@@ -263,7 +264,7 @@ export function AuthScopes() {
                 {entry.items.map(item => (
                   <li key={item} className="flex items-start gap-2">
                     <span className="mt-[6px] h-1.5 w-1.5 rounded-full bg-accent" />
-                    <span>{item}</span>
+                    <span>{t(item)}</span>
                   </li>
                 ))}
               </ul>
