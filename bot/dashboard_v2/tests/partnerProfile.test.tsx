@@ -109,3 +109,19 @@ test('demo profile editor never starts a live request', () => {
   assert.equal(client.getQueryCache().getAll()[0].state.fetchStatus, 'idle');
   client.clear();
 });
+
+test('English profile labels preserve user content and German rendering', async () => {
+  const { LanguageProvider } = await import('../src/context/LanguageContext');
+  const original = window.location;
+  try {
+    Object.defineProperty(window, 'location', { configurable: true, value: new URL('https://example.test/twitch/verwaltung?lang=en#profil') });
+    const html = renderToStaticMarkup(<LanguageProvider><ProfileEditor initial={initial} onReload={() => {}} /></LanguageProvider>);
+    assert.match(html, /My public profile/);
+    assert.match(html, /Not published yet/);
+    assert.match(html, /Save changes/);
+    assert.doesNotMatch(html, /Mein öffentliches Profil|Nicht angegeben|Typische Streamingzeiten|Zeichen|Termin am/);
+    assert.match(html, /Grüße &amp; Spaß/);
+  } finally {
+    Object.defineProperty(window, 'location', { configurable: true, value: original });
+  }
+});
