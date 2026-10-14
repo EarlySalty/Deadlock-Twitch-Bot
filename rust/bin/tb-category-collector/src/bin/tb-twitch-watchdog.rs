@@ -53,6 +53,27 @@ const NOTIFICATION_QUERY: &str = "SELECT id,service,started_at,recovered_at FROM
     AND (last_attempt_at IS NULL OR last_attempt_at <= $1 - make_interval(secs => $4))
     AND ($5 OR service <> 'bot-token') ORDER BY id LIMIT 2";
 
+const TOKEN_NOTIFICATION_FILTER: &str = "AND (service <> 'bot-token' OR ($5
+    AND EXISTS(SELECT 1 FROM twitch_bot_token_health WHERE singleton AND monitoring_enabled)
+    AND EXISTS(SELECT 1 FROM twitch_bot_token_outages o
+        WHERE o.id=twitch_watchdog_incidents.token_outage_id AND o.suppressed_at IS NULL)))";
+const BOT_TOKEN_RECOVERY_QUERY: &str =
+    "UPDATE twitch_watchdog_incidents i SET recovered_at=o.recovered_at
+    FROM twitch_bot_token_outages o WHERE i.token_outage_id=o.id
+    AND i.recovered_at IS NULL AND o.recovered_at IS NOT NULL AND o.suppressed_at IS NULL
+    AND EXISTS(SELECT 1 FROM twitch_bot_token_health WHERE singleton AND monitoring_enabled)";
+
+fn outage_notification_query(token_health_installed: bool) -> sqlx::AssertSqlSafe<String> {
+    sqlx::AssertSqlSafe(if token_health_installed {
+        NOTIFICATION_QUERY.replace(
+            "AND ($5 OR service <> 'bot-token')",
+            TOKEN_NOTIFICATION_FILTER,
+        )
+    } else {
+        NOTIFICATION_QUERY.to_owned()
+    })
+}
+
 #[cfg(test)]
 #[path = "../../../../test-support/database.rs"]
 mod test_database;
@@ -102,13 +123,7 @@ async fn observe_bot_token(pool: &PgPool, bot_running: bool, now: DateTime<Utc>)
     if monitoring != Some(true) {
         return Ok(());
     }
-    sqlx::query(
-        "UPDATE twitch_watchdog_incidents i SET recovered_at=o.recovered_at
-        FROM twitch_bot_token_outages o WHERE i.token_outage_id=o.id
-        AND i.recovered_at IS NULL AND o.recovered_at IS NOT NULL",
-    )
-    .execute(pool)
-    .await?;
+    sqlx::query(BOT_TOKEN_RECOVERY_QUERY).execute(pool).await?;
     sqlx::query("INSERT INTO twitch_watchdog_incidents(service,started_at,recovered_at,token_outage_id)
         SELECT $1,o.started_at,o.recovered_at,o.id FROM twitch_bot_token_outages o
         WHERE o.suppressed_at IS NULL AND COALESCE(o.recovered_at,$2)-o.started_at >= interval '90 seconds'
@@ -416,14 +431,16 @@ async fn outage_notifications(
     notification: &Result<NotifyCredential>,
     broker: &str,
 ) -> Result<()> {
-    let incidents: Vec<Incident> = sqlx::query_as(NOTIFICATION_QUERY)
-        .bind(now)
-        .bind(BOT)
-        .bind(bot_delay as i32)
-        .bind(retry as i32)
-        .bind(bot_running)
-        .fetch_all(pool)
-        .await?;
+    let token_health_installed = bot_token_health_installed(pool).await?;
+    let incidents: Vec<Incident> =
+        sqlx::query_as(outage_notification_query(token_health_installed))
+            .bind(now)
+            .bind(BOT)
+            .bind(bot_delay as i32)
+            .bind(retry as i32)
+            .bind(bot_running && token_health_installed)
+            .fetch_all(pool)
+            .await?;
     for incident in incidents {
         let content = if incident.service == BOT_TOKEN {
             token_outage_event_content(incident.started_at)
@@ -489,6 +506,9 @@ async fn token_recovery_notifications(
         "SELECT id,service,started_at,recovered_at FROM twitch_watchdog_incidents
          WHERE service=$1 AND recovered_at IS NOT NULL AND notified_at IS NOT NULL
          AND superseded_at IS NULL AND recovery_notified_at IS NULL
+         AND EXISTS(SELECT 1 FROM twitch_bot_token_health WHERE singleton AND monitoring_enabled)
+         AND EXISTS(SELECT 1 FROM twitch_bot_token_outages o
+            WHERE o.id=twitch_watchdog_incidents.token_outage_id AND o.suppressed_at IS NULL)
          AND (last_recovery_attempt_at IS NULL OR last_recovery_attempt_at <= $2 - make_interval(secs => $3))
          ORDER BY id LIMIT 2",
     ).bind(BOT_TOKEN).bind(now).bind(retry as i32).fetch_all(pool).await?;
@@ -857,7 +877,7 @@ mod tests {
                     start + chrono::Duration::seconds(110)
                 );
             }
-            let pending: Vec<Incident> = sqlx::query_as(NOTIFICATION_QUERY)
+            let pending: Vec<Incident> = sqlx::query_as(outage_notification_query(true))
                 .bind(now)
                 .bind(BOT)
                 .bind(3600_i32)
@@ -867,6 +887,55 @@ mod tests {
                 .await
                 .expect("notifications");
             assert_eq!(pending.len(), expected);
+        }
+        sqlx::query("TRUNCATE twitch_watchdog_incidents,twitch_bot_token_outages")
+            .execute(&pool)
+            .await
+            .expect("reset cancellation fixture");
+        sqlx::query(
+            "INSERT INTO twitch_bot_token_outages(started_at,recovered_at) VALUES($1,$2),($3,NULL)",
+        )
+        .bind(start)
+        .bind(start + chrono::Duration::seconds(120))
+        .bind(start + chrono::Duration::seconds(130))
+        .execute(&pool)
+        .await
+        .expect("episodes");
+        sqlx::query("INSERT INTO twitch_watchdog_incidents(service,started_at,recovered_at,token_outage_id,notified_at)
+            SELECT $1,started_at,recovered_at,id,CASE WHEN recovered_at IS NULL THEN $2 END FROM twitch_bot_token_outages")
+            .bind(BOT_TOKEN).bind(start+chrono::Duration::seconds(220)).execute(&pool).await.expect("pending notifications before cancellation");
+        let server = wiremock::MockServer::start().await;
+        let credential = Ok(NotifyCredential {
+            user_id: 1,
+            token: "test-broker".into(),
+        });
+        let now = start + chrono::Duration::seconds(250);
+        for (enabled, suppressed) in [(false, false), (false, true), (true, true)] {
+            sqlx::query("UPDATE twitch_bot_token_health SET monitoring_enabled=$1")
+                .bind(enabled)
+                .execute(&pool)
+                .await
+                .expect("monitoring state");
+            sqlx::query("UPDATE twitch_bot_token_outages SET suppressed_at=$1,recovered_at=COALESCE(recovered_at,$2)")
+                .bind(suppressed.then_some(now)).bind(now).execute(&pool).await.expect("publisher disablement after observer check");
+            sqlx::query("UPDATE twitch_watchdog_incidents SET recovered_at=NULL WHERE notified_at IS NOT NULL").execute(&pool).await.expect("open notified incident");
+            sqlx::query(BOT_TOKEN_RECOVERY_QUERY)
+                .execute(&pool)
+                .await
+                .expect("recovery copy after cancellation");
+            let copied: bool = sqlx::query_scalar("SELECT recovered_at IS NOT NULL FROM twitch_watchdog_incidents WHERE notified_at IS NOT NULL").fetch_one(&pool).await.expect("copy state");
+            assert!(!copied);
+            sqlx::query("UPDATE twitch_watchdog_incidents SET recovered_at=$1 WHERE notified_at IS NOT NULL").bind(now).execute(&pool).await.expect("previously copied recovery");
+            outage_notifications(&pool, now, 3600, 60, true, &credential, &server.uri())
+                .await
+                .expect("cancelled selections");
+            assert!(server
+                .received_requests()
+                .await
+                .expect("broker requests")
+                .is_empty());
+            let attempted: i64 = sqlx::query_scalar("SELECT count(*) FROM twitch_watchdog_incidents WHERE last_attempt_at IS NOT NULL OR last_recovery_attempt_at IS NOT NULL").fetch_one(&pool).await.expect("attempts");
+            assert_eq!(attempted, 0);
         }
         sqlx::query("UPDATE twitch_bot_token_health SET monitoring_enabled=false")
             .execute(&pool)
