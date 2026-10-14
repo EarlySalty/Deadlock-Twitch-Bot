@@ -1,6 +1,6 @@
 # Register (max 30 lines)
 
-Base main 45779a5bc. Live 6cac863ac.
+Base main 45779a5bc. Live 6cac863ac. Reporting: directly to the user in this thread (63e21335 no longer contact).
 
 | Pkg | Agent | Worktree | Branch | HEAD | Status |
 |---|---|---|---|---|---|
