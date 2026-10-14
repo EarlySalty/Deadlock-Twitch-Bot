@@ -184,6 +184,7 @@ test('D6 translates generated coaching and quest copy without changing German', 
   const source = 'Deine Viewer-Hours pro Stream-Hour (1234.5) liegen unter dem 25. Perzentil. Der Kategorie-Durchschnitt liegt bei 2500.';
   assert.equal(translatePageText(en, source, 'en-US'), 'Your viewer hours per stream hour (1,234.5) are below the 25th percentile. The category average is 2,500.');
   assert.equal(translatePageText(de, source, 'de-DE'), source);
+  assert.equal(translatePageText(en, 'Je laenger du streamst, desto weniger Viewer hast du (r=0.004). Das deutet auf Ermuedung hin.', 'en-US'), 'The longer you stream, the fewer viewers you have (r=0.004). This suggests fatigue.');
   assert.equal(translatePageText(en, 'Streame 45 Minuten länger als dein 4-Wochen-Mittel von 1 Minute'), 'Stream 45 minutes longer than your 4-week average of 1 minute');
   assert.equal(translateGoalRoute(en, 'Noch 1 geworbener Partner und 2 Clip-Einreichungen', 'en-US'), '1 referred partner and 2 clip submissions more');
   assert.equal(translateGoalRoute(de, 'Noch 1 geworbener Partner und 2 Clip-Einreichungen', 'de-DE'), 'Noch 1 geworbener Partner und 2 Clip-Einreichungen');

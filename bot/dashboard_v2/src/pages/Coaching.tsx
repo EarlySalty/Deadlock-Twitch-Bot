@@ -976,7 +976,7 @@ export function PeerComparisonSection({ data }: { data: CoachingData }) {
             </div>
             <div className="flex items-end gap-2">
               <span className="text-lg font-bold text-white">
-                {typeof ranking.value === 'number' ? (ranking.value % 1 === 0 ? ranking.value : ranking.value.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })) : ranking.value}
+                {typeof ranking.value === 'number' ? (ranking.value % 1 === 0 ? ranking.value.toLocaleString(locale) : ranking.value.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })) : ranking.value}
               </span>
             </div>
             {/* Mini rank bar */}

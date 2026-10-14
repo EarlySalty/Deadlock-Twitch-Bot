@@ -26,7 +26,7 @@ export function translatePageText(t: Translator, text: string, locale?: string):
     names.forEach((name, index) => {
       const value = match[index + 1];
       params[name] = locale && /^-?\d+(\.\d+)?$/.test(value)
-        ? Number(value).toLocaleString(locale, { maximumFractionDigits: 2 })
+        ? Number(value).toLocaleString(locale, { maximumSignificantDigits: 21 })
         : key.startsWith('Streame ') && ['Minute', 'Minuten'].includes(value) ? t(value) : value;
     });
     return t(key, params);
