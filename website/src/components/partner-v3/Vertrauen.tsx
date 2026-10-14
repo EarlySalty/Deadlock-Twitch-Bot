@@ -1,5 +1,12 @@
+import { landingText, landingLink } from "@/lib/landingLocale";
 import type { ComponentType, ReactNode } from "react";
-import { ArrowRight, KeyRound, Lock, PowerOff, ShieldCheck } from "lucide-react";
+import {
+  ArrowRight,
+  KeyRound,
+  Lock,
+  PowerOff,
+  ShieldCheck,
+} from "lucide-react";
 import { SectionHeading } from "@/components/ui/SectionHeading";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
 import {
@@ -20,16 +27,16 @@ const karten: Karte[] = [
   {
     id: "zugang-darf",
     icon: ShieldCheck,
-    titel: "Was der Bot mit dem Partner-Zugang darf",
+    titel: landingText("Was der Bot mit dem Partner-Zugang darf"),
     inhalt: (
       <ul className="mt-3 space-y-1.5">
         {[
-          "Raiden",
-          "Moderieren",
-          "Im Chat schreiben",
-          "Clips erstellen",
-          "Kanalpunkt-Einlösungen lesen",
-          "Bits und Werbezeiten lesen",
+          landingText("Raiden"),
+          landingText("Moderieren"),
+          landingText("Im Chat schreiben"),
+          landingText("Clips erstellen"),
+          landingText("Kanalpunkt-Einlösungen lesen"),
+          landingText("Bits und Werbezeiten lesen"),
         ].map((zeile) => (
           <li
             key={zeile}
@@ -45,43 +52,43 @@ const karten: Karte[] = [
   {
     id: "zugang-nicht",
     icon: Lock,
-    titel: "Was er mit diesem Zugang nicht kann",
+    titel: landingText("Was er mit diesem Zugang nicht kann"),
     inhalt: (
       <p className="mt-3 text-sm leading-relaxed text-[var(--color-text-secondary)]">
-        Streamtitel, Kategorie und Kanal-Einstellungen ändern. Das gilt für
-        diesen Zugang: Zusatzrechte wie Titel oder Uplink holt sich niemand
-        automatisch. Sie kommen nur über einen eigenen Knopf in der Verwaltung,
-        den du selbst drückst.
+        {landingText(
+          "Streamtitel, Kategorie und Kanal-Einstellungen ändern. Das gilt für diesen Zugang: Zusatzrechte wie Titel oder Uplink holt sich niemand automatisch. Sie kommen nur über einen eigenen Knopf in der Verwaltung, den du selbst drückst.",
+        )}
       </p>
     ),
   },
   {
     id: "nicht-haben",
     icon: KeyRound,
-    titel: "Was wir nicht haben",
+    titel: landingText("Was wir nicht haben"),
     inhalt: (
       <p className="mt-3 text-sm leading-relaxed text-[var(--color-text-secondary)]">
-        Keine E-Mail-Adresse, kein Passwort, keine Zahlungsdaten. Der Login
-        läuft bei Twitch, mehr als deinen Kanal sehen wir dadurch nicht.
+        {landingText(
+          "Keine E-Mail-Adresse, kein Passwort, keine Zahlungsdaten. Der Login läuft bei Twitch, mehr als deinen Kanal sehen wir dadurch nicht.",
+        )}
       </p>
     ),
   },
   {
     id: "rauskommen",
     icon: PowerOff,
-    titel: "Wie du rauskommst",
+    titel: landingText("Wie du rauskommst"),
     inhalt: (
       <>
         <p className="mt-3 text-sm leading-relaxed text-[var(--color-text-secondary)]">
-          Ein Klick in deinen Twitch-Einstellungen unter Verbindungen genügt.
-          Der Bot merkt es und schaltet sich für deinen Kanal ab. Denselben Weg
-          gibt es hier selbstbedient:
+          {landingText(
+            "Ein Klick in deinen Twitch-Einstellungen unter Verbindungen genügt. Der Bot merkt es und schaltet sich für deinen Kanal ab. Denselben Weg gibt es hier selbstbedient:",
+          )}
         </p>
         <a
-          href={VERWALTUNG_URL}
+          href={landingLink(VERWALTUNG_URL)}
           className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-[var(--color-accent)] transition-colors hover:text-[var(--color-accent-hover)]"
         >
-          Zur Selbstverwaltung für deinen Kanal
+          {landingText("Zur Selbstverwaltung für deinen Kanal")}
           <ArrowRight size={15} />
         </a>
       </>
@@ -94,9 +101,11 @@ export function Vertrauen() {
     <section id="sicherheit" className="py-24">
       <div className="max-w-7xl mx-auto px-6">
         <SectionHeading
-          badge="Klartext"
-          title="Vertrauen in Klartext"
-          subtitle="Was der Zugang darf, was er nicht kann, was bei uns liegt und wie du wieder rauskommst."
+          badge={landingText("Klartext")}
+          title={landingText("Vertrauen in Klartext")}
+          subtitle={landingText(
+            "Was der Zugang darf, was er nicht kann, was bei uns liegt und wie du wieder rauskommst.",
+          )}
         />
 
         <div className="mt-14 grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -129,10 +138,10 @@ export function Vertrauen() {
 
         <ScrollReveal className="mt-10 text-center">
           <a
-            href={TWITCH_SECURITY_URL}
+            href={landingLink(TWITCH_SECURITY_URL)}
             className="inline-flex items-center gap-2 text-[var(--color-accent)] transition-colors hover:text-[var(--color-accent-hover)]"
           >
-            Ganzes Sicherheitskonzept lesen
+            {landingText("Ganzes Sicherheitskonzept lesen")}
             <ArrowRight size={16} />
           </a>
         </ScrollReveal>
