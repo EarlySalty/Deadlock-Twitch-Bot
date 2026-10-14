@@ -1,30 +1,30 @@
 # Multi-server release register
 
-Owner: 329e3031-ae2f-4a4f-b59c-c701973629e6. Task records stay off main.
-Binding: STEER-1/2/3 and ABLAUF.md “Durchsatz statt Zeremonie”.
-One Sol writer and one critic per slice, then single-Sol gate; at most four workflows. Unchanged Main findings do not block.
-STEER-3: direct production DB access prohibited; verified-main wrapper deployments and service-identity migrations authorized.
+Owner: T3 c042a18e-f92d-453c-89ad-54138295a8ef, native session 329e3031-ae2f-4a4f-b59c-c701973629e6; coordinator 51e1498f-f4ca-4c6f-8900-6a73abd53c2a.
+USER STOP 2026-10-14: hand over all open work; NO new agents, workflows, automatic restarts or queued starts. Await the user's new input.
+STEER-1/2/3 remain binding. Direct production DB access prohibited; wrapper migrations permitted. Task records stay off Main.
 
-| Package | Branch or source | SHA | Status | Blocker |
+| Package | Branch or source | SHA | Status | Remaining boundary |
 |---|---|---|---|---|
-| Main | origin/main | 19b1d54df269139f6915358229e1957ba4966e2f | Contains own D merge 501; newer foreign social configuration work preserved | Not our deployed release |
-| D activation delivery | integration/dashboard-english-activation-sol-20261014 | 50125b0bb67fc2d32b440594a5cd5e95add21c4d | Exact critic ACCEPT, canonical Sol ALLOW, Main merge, nine-binary and three frontend builds 0; wrapper deploy 0; 9/9 installed stamps match, 6/6 public assets match, anonymous publish 401 | Partial D only; no authenticated/provider publication claim |
-| D small source | feat/dashboard-english-activation-sol-20261014 | c450ac0e712e2a1ff55363c23906f6d7ef1ce173 | 54 suite passes/0 ignored; four compiled locale cases; current live proof has eight visual cases and four locale cases, all passing, eight images viewed | Sidebar and other unbound texts remain German |
-| D publishing panel | integration/dashboard-publishing-language-sol-20261014 | d21e72c6a82949ee746758848c42f4a6dc4b80be | Historic independent ACCEPT, Sol ALLOW, Main merge/deploy; now included in 501 | Mobile capture shows heading below existing shell, not full panel |
-| D remaining frontend | db0 plus F15 input | 71e394d1a6e94bc5b43378376bfa4580be88af5b | Fresh core-shell/analytics writer ad687aeea4648f089 active on own scope from Main 501 | No new source acceptance or full D closure |
-| A aggregate | fix/slice-a-current-main-sol-20261014 | 2330954563279a96da0e81d2f74ef71c76e807a2 | Pushed; earlier scoped check/clippy/build 0; 49 Rust and 39 Node passes/0 ignored; semantic review complete | Critic BLOCK: two caller/accounting bugs and K policy production-install prerequisite |
-| A correction | fix/slice-a-ai-attribution-sol-20261014 | 8ca49e045cb60586eca183b3f91ac7dd5826d59a | Pushed/clean; scoped compile/fmt 0, 32 real guard/store passes/0 ignored; critic verified both fixes, no new C/S/D | K still held; clippy unchanged Main findings; lib retry had no slot result |
-| K fixtures | fix/multiserver-sol-k-complete-fixtures-r3-20261014 | 63213dcb3da789cadc8b3da4d1da3cfdc336f2bc | Scoped source accepted, salvage input | Policy installation only in reviewed test SQL; live presence UNVERIFIED, not proven absent |
-| G schema | schema48 plus fixture156 | 48cc89162e15b2ebf57a6589555e3ac628c93f09 | Fresh non-activating current-Main writer a07867d0f647aa5e4 active; original source read-only | New migration identities; no partner cutover; parity 78/62/61/1 requires approved rotation; foreign guilds inactive until H |
-| G membership | Runtime recovery source | cf7a64d3acf24e8d18eabc2d410273f82e784e18 | Scoped source accepted | Current-Main slice and authorized parity pending |
-| R6 and F3 | Preserved stopped drafts | 9a3ad772ecd9f8e69142272c83df45d43f96221d | Inputs consolidated into A | Not separate release acceptance |
-| C and R | Preserved source drafts | Pending | Not released | G/current-Main slices pending |
-| H, O, W, A-auth | Preserved source drafts | Pending | All seven PRs linked; #1077 corrected to draft; board remains not Done | Fresh metadata scan with positive control: Hub bot token/application ID absent; expected system units not found; redirects, authorized guild and legal approval remain |
-| L | Already on Main | 9524ffe1689290004e2d478145afecb8ef9a6163 | Source complete; board In Progress, issue closed | Positive live provider-accounting proof absent |
-| Installed release | Wrapper deploy and targeted process checks | 50125b0bb67fc2d32b440594a5cd5e95add21c4d | Dashboard PID 3854446 on 501; unchanged bot 3723639 and watch 3725276 on source-equivalent backend 215; all active, NRestarts 0 | Full --pruefen assumes uniform release SHA; targeted restarts intentionally preserve unchanged processes |
+| Main | origin/main | 6cac863acfaa394970ef40b8efc01c441a8ff128 | Remote confirmed at handover | No new Main push during handover |
+| G0 | integration/guild-schema-shadow-sol-20261014 | 4658ed2f5a65ec453076312ad9f2f0da8b87a14d | Pushed; exact independent ACCEPT and canonical Sol ALLOW; 11 real PG contracts | NOT Main/live; inactive schema only, no cutover/K/foreign activation; parity awaits approved rotation |
+| D core | fix/dashboard-core-stable-keys-sol-r1-20261014 | d8245c65c739ba5b5581adda1a3bdf7be9473cd3 | Pushed; fixes translated React keys; 95 existing plus 4 Moli contracts; fixer gate ALLOW | Independent correction review pending; exclude two .tasks artifacts from future Main delta; NOT Main/live |
+| D2 tools | integration/dashboard-tools-english-sol-20261014 | e83718037289aa9f69c9dbaf0fadb30065a3ac9b | Pushed; preserves Main6cac; earlier exact a85 integration independently ACCEPTed | Current integration needs exact carry review/gate; final visual/draft proof incomplete; NOT Main/live |
+| D3 components | feat/dashboard-components-english-sol-20261014 | 4da96ee4251447bc3ffbf1336efabbab9432fb4b | Pushed; 27 files, 149968-byte delta; build/lint 0, 60 existing plus 5 formatter tests | No independent review/gate; explicit visual/number-format limitations; NOT Main/live |
+| K current WIP | feat/central-ai-guard-current-sol-20261014 | 7772737047639ad96ab72e607e0778ca4a565df5 | Pushed/clean, writer stopped; 13 files including new production policy migration | UNVERIFIED, incomplete callers/editor fixtures; NO build/fmt/clippy/tests/gate; DO NOT MERGE/DEPLOY |
+| A correction input | fix/slice-a-ai-attribution-sol-20261014 | 8ca49e045cb60586eca183b3f91ac7dd5826d59a | Read-only salvage input; 32 real guard/store passes, both caller/accounting corrections independently verified | Not Main/live; preserve newer Main social code |
+| A aggregate input | fix/slice-a-current-main-sol-20261014 | 2330954563279a96da0e81d2f74ef71c76e807a2 | Read-only draft, original critic BLOCK | Not a release; do not wholesale merge |
+| C and R | Preserved source drafts | Pending | No current-Main release | Implementation/integration still open; not an invented external blocker |
+| H | #1061 | Pending | Foreign guilds remain inactive | Name-only Hub credentials absent; expected system units absent; authorized test guild access unresolved |
+| O | #1062 | Pending | dead-lock.de/streamer observed 308 to primary | Provider callback registration UNVERIFIED, not proven absent; current-Main implementation pending |
+| W | #1068 | Pending | Not accepted/live | Legal approval for English privacy copy absent |
+| L | Already on Main | 9524ffe1689290004e2d478145afecb8ef9a6163 | Source complete; last board In Progress, issue closed | Positive live provider-accounting proof absent |
+| Installed pointer | /opt/deadlock/twitch/current | 3250999ca9e1488c6ed33bf2c9c68956b051a327 | Readlink confirmed 2026-10-14 11:02 CEST; not our handover deployment | Current process SHAs and public assets NOT reverified; do not downgrade |
+| Own historic D live proof | D activation release | 50125b0bb67fc2d32b440594a5cd5e95add21c4d | Then Main/Sol ALLOW/wrapper live; 9/9 binary stamps, 6/6 assets, anonymous publishing401 | HISTORICAL, not the current installed pointer; partial D only |
 
-Current live proof: /tmp/ttb-slice-a-live-ui-dOJ7V8/evidence.json, eight DE/EN screenshots at 1440/390 viewed; four browser/storage cases, 112 synthetic API reads, 0 mutations/external requests. Overview fixture missing: shell/error state only. /tmp/ttb-language-activation-{live-assets,build-proof}.json and live-services.txt. First UI driver stopped at unbounded font wait; bounded retry exit 0. No other-browser claim.
-Historic D21 proof: /tmp/ttb-d21-live-ui-0rxVio/evidence.json; then-deployed assets and anonymous 401. Protected original worktrees stay read-only; no bulk cleanup, production queries, credential rotation or real-account changes.
-TESTNACHWEIS[TW-1]: 54 passed, 0 ignored | Baseline: 3 rot
-MERGEPROTOKOLL[MS-1]: 3 Git-Schritte einzeln | Anläufe: 1 | Gate: ALLOW
-Progress means Main merge. Exact 501 completion window: clean status, own branch push, HEAD:main push. Task records remain off Main; no TODO except quota exception. Continue D core and safe G0; K stays held.
+G0 proof: canonical task bz2xnlzsc.output, independent critic a116f55a7255a58b6; remaining current-login denylist raw-import NIT is candidate-specific, not inherited Main.
+D core proof: /tmp/ttb-sol-d-core-fix1-gate.log and /tmp/ttb-dashboard-language-identity-Olf1KO/result.json. D2 proof: /tmp/ttb-d2-native-critic-wLk3Oi/. D3 proof: /tmp/ttb-d3-components-evidence-20261014/.
+No active native workers after K stop. Do not resume completed critics/writers or create replacements before new user input.
+Foreign REGISTER.md and STEER-2/3.md changes untouched. Protected original draft worktrees remain read-only; no cleanup, direct production queries, rotation or real-account mutations.
+Full handover, package gaps and evidence: [HANDOVER-PAUSED-20261014-329e3031.md](HANDOVER-PAUSED-20261014-329e3031.md).
+Roadmap remains incomplete. Board/PR reconciliation pending; no new Done claim or thread settlement as full roadmap completion.
