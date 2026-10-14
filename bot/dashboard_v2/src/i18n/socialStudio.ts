@@ -1,4 +1,24 @@
 export const SOCIAL_STUDIO_EN: Record<string, string> = {
+  'KI-Bearbeitung verwenden': 'Use AI editing',
+
+  'Speichern oder Laden fehlgeschlagen. Bitte erneut versuchen.': 'Saving or loading failed. Please try again.',
+
+  'Produktion': 'Production',
+  'Laufende KI-Aufträge: {count}': 'Running AI jobs: {count}',
+  'Import läuft': 'Import running',
+  'Aktivität nicht abrufbar': 'Activity unavailable',
+  'Verbindung läuft bald ab: {platform}': 'Connection expires soon: {platform}',
+
+  'Neue Twitch-Clips': 'New Twitch clips',
+  'KI-Aufträge ansehen': 'View AI jobs',
+  'Mit KI bearbeiten': 'Edit with AI',
+  'Fertige Videos': 'Produced videos',
+  'Veröffentlichungsmodus': 'Publication mode',
+  'Fertige Videos ohne Prüfung veröffentlichen': 'Publish produced videos without review',
+  'Freigaben prüfen': 'Review approvals',
+  'Termine festlegen': 'Set scheduled slots',
+  'Produktionen prüfen': 'Review productions',
+
   'Planen': 'Plan',
   'Auto-Pilot an': 'Auto-Pilot on',
   'Auto-Pilot aus': 'Auto-Pilot off',

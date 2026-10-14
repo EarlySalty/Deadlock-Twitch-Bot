@@ -70,6 +70,8 @@ function lies(relativ: string): string {
 /** Dateien, deren Texte ein englischsprachiger Nutzer zu sehen bekommt. */
 const OBERFLAECHE = [
   'src/pages/SocialMedia.tsx',
+  'src/components/socialmedia/ClipCard.tsx',
+  'src/components/socialmedia/StudioHero.tsx',
   'src/components/socialmedia/PostingPlanDraft.tsx',
   'src/components/socialmedia/WorkspaceDialog.tsx',
   'src/components/socialmedia/TikTokPostDialog.tsx',
@@ -157,7 +159,7 @@ test('Wartecodes und Altaufträge nutzen übersetzbare Vorlagen statt Servertext
       translate('en', UPLOAD_WAIT_TEXTE.connection_required, { platform: 'YouTube' }),
     );
   }
-  assert.match(lies('src/pages/SocialMedia.tsx'), /uploadWaitText\(clip\.upload_errors\?\.\[platform\], platform, t\)/);
+  assert.match(lies('src/components/socialmedia/ClipCard.tsx'), /uploadWaitText\(clip\.upload_errors\?\.\[platform\], platform, t\)/);
 });
 
 test('der Regex findet ueberhaupt Schluessel', () => {

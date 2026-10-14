@@ -1,35 +1,13 @@
+import { StudioActivity } from '@/components/socialmedia/StudioActivity';
+import { ClipCard } from '@/components/socialmedia/ClipCard';
+import { StudioHero } from '@/components/socialmedia/StudioHero';
 import { useEffect, useMemo, useRef, useState, type ComponentType, type DragEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  AlertCircle,
-  ChevronDown,
-  BarChart3,
-  CheckCircle2,
-  Archive,
-  Film,
-  Loader2,
-  ShieldAlert,
-  Layers3,
-  Calendar,
-  Gamepad2,
-  ExternalLink,
-  Pencil,
-  SlidersHorizontal,
-  Languages,
-  DownloadCloud,
-  XCircle,
-  Clapperboard,
-  Crop,
-  MoreHorizontal,
-  Plus,
-  List,
-  LayoutGrid,
-  Trophy,
-} from 'lucide-react';
+import { AlertCircle, ChevronDown, CheckCircle2, Archive, Film, Loader2, ShieldAlert, Layers3, Calendar, Gamepad2, ExternalLink, Pencil, SlidersHorizontal, Languages, DownloadCloud, Crop, List, LayoutGrid } from 'lucide-react';
 import { useLanguage, useT } from '@/context/LanguageContext';
 import { LANGUAGES, LANGUAGE_LABELS, type Language } from '@/i18n/dictionary';
 import { TikTokPostDialog } from '@/components/socialmedia/TikTokPostDialog';
-import { VideoFullscreenButton } from '@/components/socialmedia/VideoFullscreenButton';
+
 import { WorkspaceDialog } from '@/components/socialmedia/WorkspaceDialog';
 import { PostingPlanDraft } from '@/components/socialmedia/PostingPlanDraft';
 import { PublishReviewPanel } from '@/components/socialmedia/autopilot/publish-review/PublishReviewPanel';
@@ -41,15 +19,7 @@ import { PipelineOverview, type StudioOverviewData } from '@/components/socialme
 import { StudioStatusBar } from '@/components/socialmedia/StudioStatusBar';
 import { socialAiClipFromSearch, socialViewFromSearch, socialViewSearch, socialWorkspaceDepartureAllowed, socialWorkspaceView, type AiEditorMountProps } from '@/components/socialmedia/studioNavigation';
 import { authorizationFact } from '@/components/socialmedia/platformPresentation';
-import {
-  filterQueue,
-  formatTerminInZone,
-  queueStats,
-  queueStage,
-  loadQueueSnapshot,
-  QUEUE_FILTERS,
-  type QueueStage,
-} from '@/components/socialmedia/queuePresentation';
+import { filterQueue, formatTerminInZone, queueStats, queueStage, loadQueueSnapshot, QUEUE_FILTERS, type QueueStage } from '@/components/socialmedia/queuePresentation';
 import '@/components/socialmedia/studio.css';
 import { LayoutSchematic } from '@/components/socialmedia/LayoutSchematic';
 import { StudioSectionHeading } from '@/components/socialmedia/StudioSectionHeading';
@@ -58,64 +28,10 @@ import { VodArchiveTab } from '@/components/socialmedia/VodArchiveTab';
 import { LayoutEditor, type VorschauClip } from '@/components/socialmedia/LayoutEditor';
 import { EnrichmentPanel } from '@/components/socialmedia/EnrichmentPanel';
 import { LadeFehlerHinweis } from '@/components/socialmedia/LadeFehlerHinweis';
-import {
-  clipFehler,
-  istGesperrt,
-  istStandUnbekannt,
-  zeitplanFeldSchluessel,
-  zeitplanFeldVerlassen,
-  zeitplanFormularAbgleichen,
-  type ZeitplanFormular,
-} from '@/components/socialmedia/kartenZustand';
-import {
-  cancelScheduledPost,
-  decideClipApproval,
-  type TikTokPostOptions,
-  SocialMediaForbiddenError,
-  discardClip,
-  fetchPostingPlan,
-  fetchClips,
-  fetchTwitchClips,
-  fetchVodArchiveSettings,
-  fetchPlatformStatus,
-  disconnectPlatform,
-  oauthStartUrl,
-  type PlatformStatus,
-  type SocialClipMitPosting,
-  fetchStreamerLayout,
-  saveStreamerLayout,
-  saveVodArchiveSettings,
-  setClipLayoutOverride,
-  uploadClip,
-  requestPreview,
-  getPreviewStatus,
-  previewFileUrl,
-  submitClipToContest,
-} from '@/api/socialMedia';
-import {
-  APPROVAL_MODE_TEXTE,
-  FELD_FEHLER,
-  fehlerText,
-  uploadWaitText,
-  kategorieLabel,
-  PLATFORM_LABELS,
-  SOCIAL_MEDIA_TABS,
-  STATUS_LABELS,
-  type SocialMediaView,
-  type SocialMediaViewTarget,
-} from '@/components/socialmedia/labels';
-import {
-  type ApprovalMode,
-  type ClipPoolForecast,
-  type PlatformScheduleEntry,
-  type PostingPlan,
-  DEFAULT_LAYOUT,
-  type LayoutPayload,
-  type SocialPlatform,
-  type StreamerLayoutResponse,
-  type VodArchivePrivacy,
-  type VodArchiveSettings,
-} from '@/types/socialMedia';
+import { clipFehler, istGesperrt, istStandUnbekannt, zeitplanFeldSchluessel, zeitplanFeldVerlassen, zeitplanFormularAbgleichen, type ZeitplanFormular } from '@/components/socialmedia/kartenZustand';
+import { cancelScheduledPost, decideClipApproval, type TikTokPostOptions, SocialMediaForbiddenError, discardClip, fetchPostingPlan, fetchClips, fetchTwitchClips, fetchVodArchiveSettings, fetchPlatformStatus, disconnectPlatform, oauthStartUrl, type PlatformStatus, type SocialClipMitPosting, fetchStreamerLayout, saveStreamerLayout, saveVodArchiveSettings, setClipLayoutOverride, uploadClip } from '@/api/socialMedia';
+import { APPROVAL_MODE_TEXTE, FELD_FEHLER, fehlerText, kategorieLabel, PLATFORM_LABELS, SOCIAL_MEDIA_TABS, type SocialMediaView, type SocialMediaViewTarget } from '@/components/socialmedia/labels';
+import { type ApprovalMode, type ClipPoolForecast, type PlatformScheduleEntry, type PostingPlan, DEFAULT_LAYOUT, type LayoutPayload, type SocialPlatform, type StreamerLayoutResponse, type VodArchivePrivacy, type VodArchiveSettings } from '@/types/socialMedia';
 
 export interface SocialMediaProps {
   streamer: string;
@@ -131,28 +47,7 @@ export interface SocialMediaProps {
   };
 }
 
-type Translate = (text: string, params?: Record<string, string | number>) => string;
-
 const PLATTFORMEN: SocialPlatform[] = ['youtube', 'tiktok', 'instagram'];
-
-function formatClipDauer(sekunden: number | null | undefined): string {
-  const gesamt = Math.max(0, Math.round(sekunden ?? 0));
-  const minuten = Math.floor(gesamt / 60);
-  const rest = gesamt % 60;
-  return `${minuten}:${String(rest).padStart(2, '0')}`;
-}
-
-function formatRetention(retentionUntil: string | null, t: Translate): string {
-  if (!retentionUntil) return '—';
-  const target = new Date(retentionUntil);
-  const now = new Date();
-  const ms = target.getTime() - now.getTime();
-  const days = Math.floor(ms / (1000 * 60 * 60 * 24));
-  if (days < 0) return t('überfällig');
-  if (days === 0) return t('heute');
-  if (days === 1) return t('morgen');
-  return t('{days} Tage', { days });
-}
 
 type EditMode = 'layout' | 'enrichment';
 
@@ -189,6 +84,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
     params.set('view', socialViewFromSearch(window.location.search));
     window.history.replaceState({}, '', `${window.location.pathname}?${params}${window.location.hash}`);
   }, []);
+  const [showAiEditor, setShowAiEditor] = useState(() => ['ai', 'review'].includes(new URLSearchParams(window.location.search).get('view') ?? ''));
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -420,8 +316,8 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
 
   const stats = useMemo(() => queueStats(clipsQuery.data?.items ?? []), [clipsQuery.data]);
   const filteredClips = useMemo(
-    () => filterQueue(clipsQuery.data?.items ?? [], statusFilter, search, platformFilter),
-    [clipsQuery.data, statusFilter, search, platformFilter],
+    () => filterQueue((clipsQuery.data?.items ?? []).filter(clip => activeView !== 'veroeffentlicht' || ['posted', 'failed'].includes(queueStage(clip))), statusFilter, search, platformFilter),
+    [clipsQuery.data, activeView, statusFilter, search, platformFilter],
   );
   const pageCount = Math.max(1, Math.ceil(filteredClips.length / 24));
   const currentPage = Math.min(page, pageCount);
@@ -505,11 +401,14 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
 
   return (
     <div className="social-studio space-y-6" data-studio-version="industrial-gold-live-v1">
-      <SocialHero
+      <StudioHero
         streamer={streamer}
         activeView={activeView}
         onUpload={() => setShowUpload(true)}
         onOpenAnalytics={() => setShowAnalytics(true)}
+        onNavigate={openView}
+        data={overviewData}
+        onOpenLayout={() => setLayoutChoice(layoutForEditor)}
       />
       <StudioStatusBar data={overviewData} pool={postingPlanQuery.data?.pool} now={now} onNavigate={openView} />
 
@@ -526,7 +425,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
               aria-selected={activeView === id}
               tabIndex={activeView === id ? 0 : -1}
               className="studio-tab"
-              onClick={() => changeView(id)}
+              onClick={() => { if (changeView(id)) { setStatusFilter('all'); setPage(1); } }}
               onKeyDown={(event) => {
                 const nextIndex =
                   event.key === 'Home'
@@ -558,33 +457,19 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
         className={workspaceView === 'pool' || false ? 'studio-pipeline min-w-0 space-y-4' : workspaceView === 'archiv' ? 'studio-archive min-w-0' : selectedAiClipId !== undefined ? 'studio-ai-workspace min-w-0' : 'studio-automation-workspace min-w-0'}
       >
         {activeView === 'heute' ? (
-          <PipelineOverview data={overviewData} now={now} onNavigate={openView} />
-        ) : selectedAiClipId !== undefined ? (
-          AiEditor && twitchUserId ? (
-            <AiEditor twitchUserId={twitchUserId} streamer={streamer} clipDbId={selectedAiClipId} />
-          ) : (
-            <div className="studio-ai-reserved">
-              <Clapperboard aria-hidden="true" className="h-6 w-6 text-primary" />
-              <h2 className="text-lg font-semibold">{t('KI-Bearbeitung noch nicht verfügbar')}</h2>
-              <p className="max-w-prose text-sm leading-6 text-text-secondary">{t('Hier kannst du künftig einzelne Clips bearbeiten und das Ergebnis prüfen. Die bisherige Clip-Bearbeitung bleibt in der Pipeline verfügbar.')}</p>
-              {selectedAiClipId !== undefined && <p className="text-sm">{selectedAiClip?.title ?? t('Ausgewählter Clip: {id}', { id: selectedAiClipId })}</p>}
-              <button type="button" className="studio-button" onClick={() => changeView('pool')}>{t('Zur Pipeline')}</button>
-            </div>
-          )
-        ) : workspaceView === 'archiv' ? (
-          <VodArchiveTab twitchUserId={twitchUserId} isAdmin={isAdmin} />
+          <><PipelineOverview data={overviewData} now={now} onNavigate={openView} /><StudioActivity twitchUserId={twitchUserId} data={overviewData} now={now} onNavigate={openView} onAi={() => setShowAiEditor(true)} /></>
         ) : workspaceView === 'plan' ? (
           <div className="studio-plan-workspace">
             <div className="studio-card studio-plan-card">
               {workspaceSlots?.automation ?? <ScheduleQueuePanel twitchUserId={twitchUserId} api={scheduleApi} onChanged={refreshSchedule} />}
             </div>
             <div className="studio-card studio-plan-card">
-              {workspaceSlots?.publishReview ?? (twitchUserId && <PublishReviewPanel twitchUserId={twitchUserId} client={publishClient} onChanged={refreshSchedule} />)}
+              {workspaceSlots?.publishReview ?? (twitchUserId && <PublishReviewPanel twitchUserId={twitchUserId} client={publishClient} section="mode" onChanged={refreshSchedule} />)}
             </div>
           <details className="studio-legacy-pipeline">
             <summary>
               <span className="studio-legacy-summary-text">
-                <strong>{t('Bisherige Pipeline')}</strong>
+                <strong>{t('Neue Twitch-Clips')}</strong>
                 <span>
                   {legacyPlan
                     ? t('{mode} · {count} Posts pro Woche · steuert weiterhin die Clip-Freigaben in der Übersicht', {
@@ -782,17 +667,12 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
             >
               {t('Gespeichertes Layout öffnen')}
             </button>
+            <h2 className="studio-section-title">{t('Produktion')}</h2>
+            {AiEditor && twitchUserId && <AiEditor twitchUserId={twitchUserId} streamer={streamer} settingsOnly scheduleApi={scheduleApi} />}
+            {twitchUserId && <PublishReviewPanel twitchUserId={twitchUserId} client={publishClient} section="notifications" onChanged={refreshSchedule} />}
           </div>
         ) : (
           <>
-            <PipelineOverview data={overviewData} now={now} onNavigate={openView} />
-
-            <VorratsHinweis
-              pool={postingPlanQuery.data?.pool ?? null}
-              onClipsHolen={() => clipsHolenMutation.mutate()}
-              isHolend={clipsHolenMutation.isPending}
-            />
-
             <div id="studio-clip-list" className="studio-clip-list space-y-3">
               <div className="studio-toolbar">
                 <StatusFilter
@@ -1014,6 +894,14 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
           </>
         )}
       </section>
+      {activeView === 'freigabe' && twitchUserId && <>
+        <button type="button" className="studio-button" onClick={() => setShowAiEditor(true)}>{t('KI-Aufträge ansehen')}</button>
+        {workspaceSlots?.publishReview ?? <PublishReviewPanel twitchUserId={twitchUserId} client={publishClient} section="videos" onChanged={refreshSchedule} />}
+      </>}
+      {activeView === 'veroeffentlicht' && <VodArchiveTab twitchUserId={twitchUserId} isAdmin={isAdmin} />}
+      {(showAiEditor || selectedAiClipId !== undefined) && <WorkspaceDialog eyebrow={t('Mit KI bearbeiten')} title={selectedAiClip?.title ?? t('KI-Bearbeitung & Prüfung')} onClose={() => { setShowAiEditor(false); setSelectedAiClipId(undefined); const params = new URLSearchParams(window.location.search); params.delete('clip_db_id'); window.history.replaceState({}, '', `${window.location.pathname}?${params}${window.location.hash}`); }}>
+        {AiEditor && twitchUserId ? <AiEditor twitchUserId={twitchUserId} streamer={streamer} clipDbId={selectedAiClipId} /> : <p>{t('KI-Bearbeitung noch nicht verfügbar')}</p>}
+      </WorkspaceDialog>}
       {showUpload && (
         <WorkspaceDialog
           eyebrow={t('MP4 hochladen')}
@@ -1115,58 +1003,6 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
         </WorkspaceDialog>
       )}
     </div>
-  );
-}
-
-function SocialHero({
-  streamer,
-  activeView,
-  onUpload,
-  onOpenAnalytics,
-}: {
-  streamer: string;
-  activeView: SocialMediaView;
-  onUpload: () => void;
-  onOpenAnalytics: () => void;
-}) {
-  const t = useT();
-  const titles = {
-    pool: 'Deine Clip-Pipeline',
-    plan: 'Auto-Pilot & Zeitplan',
-    library: 'Clip-Bibliothek & Import',
-    ai: 'KI-Bearbeitung & Prüfung',
-    layout: 'Vorlagen & Konten',
-    konten: 'Vorlagen & Konten',
-    archiv: 'VOD-Archiv',
-  };
-  const descriptions = {
-    pool: 'Freigaben, geplante Posts und Plattformstatus im Überblick.',
-    plan: 'Produktion und Veröffentlichung planen. Laufende Arbeit bleibt erhalten.',
-    library: 'Clips auswählen und Nachschub verwalten, ohne eine Bearbeitung zu starten.',
-    ai: 'Einen Clip gezielt bearbeiten und das Ergebnis mit dem Original vergleichen.',
-    layout: 'Standard-Layouts und verbundene Plattformkonten für diesen Kanal.',
-    konten: 'Standard-Layouts und verbundene Plattformkonten für diesen Kanal.',
-    archiv: 'Gesicherte Twitch-Aufzeichnungen und ihr Übertragungsstatus.',
-  };
-  return (
-    <header className="studio-header">
-      <div className="min-w-0">
-        <h1 className="studio-heading">{t(activeView === 'heute' ? 'Heute' : titles[socialWorkspaceView(activeView) as keyof typeof titles])}</h1>
-        <p className="mt-2 text-sm text-text-secondary">
-          {streamer ? `${streamer} · ` : ''}{t(activeView === 'heute' ? 'Social Media' : descriptions[socialWorkspaceView(activeView) as keyof typeof descriptions])}
-        </p>
-      </div>
-      <div className="studio-header-actions">
-        <button type="button" onClick={onOpenAnalytics} className="studio-button">
-          <BarChart3 className="h-4 w-4" />
-          {t('Auswertung')}
-        </button>
-        <button type="button" onClick={onUpload} className="studio-primary">
-          <Plus className="h-4 w-4" />
-          {t('Clip hinzufügen')}
-        </button>
-      </div>
-    </header>
   );
 }
 
@@ -2273,495 +2109,3 @@ function LanguageCard() {
   );
 }
 
-interface ClipCardProps {
-  clip: SocialClipMitPosting;
-  now: number;
-  onOpenPlatformStatus: () => void;
-  onOpenAiEditor: () => void;
-  /** Zeitzone des Kanals, damit geplante Termine nicht in UTC dastehen. */
-  timezone: string;
-  /** Vorauswahl aus dem Auto-Pilot, falls am Clip noch keine Zielplattformen stehen. */
-  defaultPlatforms: SocialPlatform[];
-  availablePlatforms: SocialPlatform[];
-  onOpenConnections: () => void;
-  onOpenEditor: (mode: EditMode) => void;
-  onDiscard: () => void;
-  onApprovalDecision: (decision: 'approve' | 'skip' | 'edit', platforms: SocialPlatform[]) => void;
-  approvalPending: boolean;
-  onCancelScheduled: () => void;
-  cancelPending: boolean;
-  cancelResult: { cancelled: number; already_running: number } | null;
-  nichtEingeplant: SocialPlatform[];
-  /** Fehler der letzten Aktion an genau diesem Clip. */
-  fehler: unknown;
-}
-
-function ClipCard({
-  clip,
-  now,
-  onOpenPlatformStatus,
-  onOpenAiEditor,
-  timezone,
-  defaultPlatforms,
-  availablePlatforms,
-  onOpenConnections,
-  onOpenEditor,
-  onDiscard,
-  onApprovalDecision,
-  approvalPending,
-  onCancelScheduled,
-  cancelPending,
-  cancelResult,
-  nichtEingeplant,
-  fehler,
-}: ClipCardProps) {
-  const { t, locale } = useLanguage();
-  const queryClient = useQueryClient();
-  const status = STATUS_LABELS[clip.status] ?? STATUS_LABELS.pending;
-  const canDecide = clip.status !== 'approved' && queueStage(clip) === 'review';
-  const termine = PLATTFORMEN.flatMap((platform) =>
-    clip.scheduled_at?.[platform] && !clip.platform_status[platform] && !['inbox', 'inbox_pending', 'waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.[platform] ?? '')
-      ? [{ platform, zeit: clip.scheduled_at[platform] as string }]
-      : [],
-  );
-  const waitingPlatforms = PLATTFORMEN.filter((platform) => clip.upload_states?.[platform] === 'waiting_connection');
-  const stoppbar = clip.status === 'approved' && (termine.length > 0 || waitingPlatforms.length > 0
-    || ['waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.tiktok ?? ''));
-  const terminal =
-    clip.status === 'discarded' || clip.status === 'skipped' || Boolean(clip.discarded_at);
-  const uploadFehler = PLATTFORMEN.flatMap((platform) =>
-    clip.upload_errors?.[platform] && !['waiting_connection', 'waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.[platform] ?? '') ? [{ platform, text: clip.upload_errors[platform] }] : [],
-  );
-  const tiktokInbox = clip.upload_states?.tiktok === 'inbox';
-  const tiktokPending = clip.upload_states?.tiktok === 'inbox_pending';
-  const initialPlatforms = clip.approval?.approved_platforms?.length
-    ? clip.approval.approved_platforms
-    : defaultPlatforms;
-  const [selectedPlatforms, setSelectedPlatforms] = useState<SocialPlatform[]>(initialPlatforms);
-  const eligiblePlatforms = selectedPlatforms.filter((platform) => availablePlatforms.includes(platform));
-  const touchedPlatforms = useRef(false);
-  const platformKey = JSON.stringify(initialPlatforms);
-  useEffect(() => {
-    if (!touchedPlatforms.current) setSelectedPlatforms(JSON.parse(platformKey));
-  }, [platformKey]);
-  const [vorschauFehlt, setVorschauFehlt] = useState<string | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menu = useRef<HTMLDetailsElement>(null);
-  useEffect(() => {
-    if (!menuOpen) return;
-    const close = (event: PointerEvent) => {
-      if (!menu.current?.contains(event.target as Node)) menu.current?.removeAttribute('open');
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        menu.current?.removeAttribute('open');
-        menu.current?.querySelector('summary')?.focus();
-      }
-    };
-    document.addEventListener('pointerdown', close);
-    document.addEventListener('keydown', escape);
-    return () => {
-      document.removeEventListener('pointerdown', close);
-      document.removeEventListener('keydown', escape);
-    };
-  }, [menuOpen]);
-  const [previewActive, setPreviewActive] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const previewKey = ['social-media', 'preview', clip.clip_db_id];
-  const preview = useQuery({
-    queryKey: previewKey,
-    queryFn: () => getPreviewStatus(clip.clip_db_id),
-    enabled: previewActive,
-    refetchOnWindowFocus: false,
-    retry: false,
-    refetchInterval: (query) =>
-      ['pending', 'rendering'].includes(query.state.data?.status ?? '') ? 3000 : false,
-  });
-  const render = useMutation({
-    mutationFn: () => requestPreview(clip.clip_db_id),
-    onSuccess: (response) => {
-      queryClient.setQueryData(previewKey, {
-        clip_db_id: clip.clip_db_id,
-        status: response.status ?? 'pending',
-        ready: response.status === 'ready',
-      });
-      setPreviewActive(true);
-      void queryClient.invalidateQueries({ queryKey: previewKey });
-    },
-  });
-  // Wochen-Contest im Discord: gleicher Dienst wie !clipcontest im Chat.
-  const contest = useMutation({
-    mutationFn: () => submitClipToContest(clip.clip_db_id),
-  });
-  const rendering =
-    render.isPending || preview.data?.status === 'pending' || preview.data?.status === 'rendering';
-  const ready = preview.data?.status === 'ready';
-  const fehlerZeile = fehlerText(fehler, t);
-  const tone = {
-    orange: 'text-primary',
-    messing: 'text-accent',
-    success: 'text-success',
-    warning: 'text-warning',
-    danger: 'text-danger',
-    muted: 'text-text-secondary',
-  }[status.tone];
-  const runMenu = (action: () => void) => {
-    const trigger = menu.current?.querySelector('summary');
-    menu.current?.removeAttribute('open');
-    trigger?.focus();
-    action();
-  };
-  return (
-    <article className="studio-clip" aria-label={clip.title}>
-      <div className="studio-clip-row">
-        <div className="studio-clip-media">
-          {ready ? (
-            <video
-              ref={videoRef}
-              controls
-              preload="metadata"
-              src={previewFileUrl(clip.clip_db_id)}
-              aria-label={clip.title}
-            />
-          ) : clip.thumbnail_url && vorschauFehlt !== clip.thumbnail_url ? (
-            <img
-              src={clip.thumbnail_url}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              onError={() => setVorschauFehlt(clip.thumbnail_url)}
-            />
-          ) : (
-            <div className="grid h-full min-h-28 place-items-center text-text-secondary">
-              <Film className="h-8 w-8" />
-            </div>
-          )}
-          {!ready && (
-            <span className="absolute bottom-2 right-2 rounded bg-black/80 px-1.5 py-0.5 text-xs text-white">
-              {formatClipDauer(clip.duration_seconds)}
-            </span>
-          )}
-          {rendering && (
-            <div className="absolute inset-0 grid place-items-center bg-black/75 p-3 text-center text-sm text-white">
-              <span>
-                <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin text-primary" />
-                {t('Vorschau wird gerendert…')}
-              </span>
-            </div>
-          )}
-        </div>
-        <div className="min-w-0 space-y-2.5">
-          {ready && <VideoFullscreenButton videoRef={videoRef} />}
-          <span className={`studio-status ${tone}`}>
-            {waitingPlatforms.length > 0
-              ? t('Wartet auf Verbindung')
-              : stoppbar
-                ? t('Geplant')
-                : tiktokInbox && !clip.platform_status.youtube && !clip.platform_status.instagram
-                  ? t('Im TikTok-Postfach')
-                  : clip.youtube_visibility === 'private' && clip.platform_status.youtube && !clip.platform_status.tiktok && !clip.platform_status.instagram
-                    ? t('Privat auf YouTube')
-                    : t(status.label)}
-          </span>
-          <h3 className="break-words text-sm font-semibold leading-6">
-            {clip.title || t('Clip ohne Titel')}
-          </h3>
-          <p className="text-xs text-text-secondary">
-            {clip.source_kind === 'manual_upload' ? t('Upload') : 'Twitch'} / {clip.streamer_login}{' '}
-            · {t('{views} Views', { views: clip.view_count.toLocaleString(locale) })}
-          </p>
-          {canDecide ? (
-            <fieldset className="studio-platforms" disabled={approvalPending}>
-              <legend className="sr-only">{t('Zielplattformen')}</legend>
-              {PLATTFORMEN.map((platform) => (
-                <label key={platform} className="studio-platform-choice">
-                  <input
-                    type="checkbox"
-                    checked={eligiblePlatforms.includes(platform)}
-                    disabled={!availablePlatforms.includes(platform)}
-                    onChange={(event) => {
-                      touchedPlatforms.current = true;
-                      setSelectedPlatforms((current) =>
-                        event.target.checked
-                          ? [...current.filter((p) => p !== platform), platform]
-                          : current.filter((p) => p !== platform),
-                      );
-                    }}
-                  />
-                  {PLATFORM_LABELS[platform]}
-                </label>
-              ))}
-              {eligiblePlatforms.length === 0 && (
-                <span className="w-full text-warning">
-                  {t('Wähle zuerst mindestens eine Zielplattform.')}
-                </span>
-              )}
-            </fieldset>
-          ) : (
-            <p className="text-xs text-text-secondary">
-              {PLATTFORMEN.filter(
-                (p) => clip.platform_status[p] || clip.approval?.approved_platforms.includes(p),
-              )
-                .map((p) => PLATFORM_LABELS[p])
-                .join(' · ')}
-            </p>
-          )}
-          {termine.length > 0 && (stoppbar || clip.status === 'publishing') && (
-            <div className="space-y-1 text-xs text-text-secondary">
-              {termine.map(({ platform, zeit }) => (
-                <p key={platform}>
-                  {PLATFORM_LABELS[platform]}: {formatTerminInZone(zeit, locale, timezone)}
-                </p>
-              ))}
-            </div>
-          )}
-          {tiktokInbox && (
-            <p role="status" className="text-sm text-accent">
-              {t('TikTok: Der Clip liegt in deinem Postfach. Öffne TikTok, bearbeite ihn und veröffentliche ihn dort.')}
-            </p>
-          )}
-          {tiktokPending && (
-            <p role="status" className="text-sm text-text-secondary">
-              {t('Die TikTok-Übertragung ist noch nicht bestätigt. Wir prüfen den Vorgang weiter; ein zweiter Upload bleibt gesperrt.')}
-            </p>
-          )}
-          {['waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.tiktok ?? '') && (
-            <p role="status" className="text-sm text-warning">
-              {clip.upload_errors?.tiktok}
-            </p>
-          )}
-          {waitingPlatforms.length > 0 && (
-            <div role="status" className="space-y-2 text-sm text-warning">
-              {waitingPlatforms.map((platform) => (
-                <p key={platform}>{uploadWaitText(clip.upload_errors?.[platform], platform, t)}</p>
-              ))}
-              <button type="button" className="studio-button" onClick={onOpenConnections}>{t('Verbindungen öffnen')}</button>
-            </div>
-          )}
-          {clip.platform_status.youtube && (
-            <p role="status" className="text-sm text-text-secondary">
-              {clip.youtube_visibility === 'private'
-                ? t('YouTube hat dieses Video privat gespeichert. Es ist nicht öffentlich sichtbar.')
-                : clip.youtube_visibility === 'unlisted'
-                  ? t('YouTube: Nicht gelistet. Das Video ist über den Link erreichbar.')
-                  : clip.youtube_visibility === 'public'
-                    ? t('YouTube: Öffentlich sichtbar.')
-                    : t('YouTube: Upload abgeschlossen, Sichtbarkeit noch nicht bestätigt.')}
-            </p>
-          )}
-          {clip.publish_states?.tiktok && (
-            <p role="status" className="text-sm text-text-secondary">
-              {t(({
-                PROCESSING_UPLOAD: 'TikTok: Die Videodatei wird verarbeitet.',
-                PROCESSING_DOWNLOAD: 'TikTok: Die Videodatei wird geladen.',
-                PUBLISH_COMPLETE: 'TikTok: Veröffentlichung bestätigt.',
-                FAILED: 'TikTok: Veröffentlichung abgelehnt.',
-                STATUS_UNAVAILABLE: 'TikTok: Bestätigung steht noch aus.',
-                SEND_TO_USER_INBOX: 'TikTok: Frühere Übertragung ins Postfach.',
-              } as Record<string, string>)[clip.publish_states.tiktok] ?? 'TikTok: Bestätigung steht noch aus.')}
-            </p>
-          )}
-          {clip.layout_override && <p className="text-xs text-accent">{t('Eigenes Layout')}</p>}
-          {uploadFehler.length > 0 && (
-            <div role="alert" className="break-words text-sm text-danger">
-              {uploadFehler.map(({ platform, text }) => (
-                <p key={platform}>
-                  {PLATFORM_LABELS[platform]}: {platform === 'tiktok' && text?.includes('unaudited_client_can_only_post_to_private_accounts')
-                    ? t('TikTok erlaubt für diese App derzeit nur „Nur ich“. Prüfe die TikTok-Freigabe und plane den Clip erneut ein.')
-                    : text?.replace(/^validation failed:\s*/i, '')}
-                </p>
-              ))}
-            </div>
-          )}
-          {previewActive && preview.data?.status === null && (
-            <p role="status" className="text-sm text-text-secondary">{t('Noch keine Vorschau vorhanden. Über „Weitere Aktionen“ kannst du sie rendern.')}</p>
-          )}
-          {(render.isError || preview.isError || preview.data?.status === 'error') && (
-            <p role="alert" className="text-sm text-danger">
-              {t('Vorschau konnte nicht gerendert werden.')}
-            </p>
-          )}
-          {cancelResult && (
-            <p role="status" className="text-sm text-text-secondary">
-              {cancelResult.already_running
-                ? t('Geplante Posts gestoppt. Bei {count} Plattformen hat die Übertragung bereits begonnen und lässt sich hier nicht mehr stoppen.', {
-                    count: cancelResult.already_running,
-                  })
-                : t('{count} geplante Posts gestoppt.', { count: cancelResult.cancelled })}
-            </p>
-          )}
-          {nichtEingeplant.length > 0 && (
-            <p role="status" className="text-sm text-warning">
-              {t('Auf {platforms} passiert nichts, dort steht die Kadenz auf null.', {
-                platforms: nichtEingeplant.map((p) => PLATFORM_LABELS[p]).join(', '),
-              })}
-            </p>
-          )}
-          {fehlerZeile && (
-            <p role="alert" className="text-sm text-danger">
-              {fehlerZeile}
-            </p>
-          )}
-          {contest.data && (
-            <p
-              role={contest.data.ok ? 'status' : 'alert'}
-              className={`text-sm ${contest.data.ok ? 'text-success' : 'text-danger'}`}
-            >
-              {t(contest.data.message)}
-            </p>
-          )}
-          {contest.isError && (
-            <p role="alert" className="text-sm text-danger">
-              {t('Das klappt gerade nicht. Versuch es gleich nochmal.')}
-            </p>
-          )}
-        </div>
-        <div className="studio-clip-actions">
-          <button type="button" className="studio-button" onClick={onOpenPlatformStatus}>
-            {t('Plattformstatus')}
-          </button>
-          {!canDecide && !terminal && !clip.platform_status.tiktok
-            && clip.approval?.state === 'approved'
-            && clip.approval.approved_platforms.includes('tiktok')
-            && ['pending', 'failed', 'waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.tiktok ?? 'pending') && (
-            <button type="button" className="studio-button" disabled={approvalPending}
-              onClick={() => onApprovalDecision('approve', clip.approval?.approved_platforms ?? ['tiktok'])}>
-              {clip.upload_states?.tiktok === 'waiting_schedule'
-                || (clip.upload_states?.tiktok === 'waiting_tiktok_approval'
-                  && (!clip.scheduled_at?.tiktok || Date.parse(clip.scheduled_at.tiktok) <= now))
-                ? t('TikTok erneut einplanen')
-                : t('TikTok-Veröffentlichung vorbereiten')}
-            </button>
-          )}
-          {canDecide ? (
-            <>
-              <button
-                type="button"
-                className="studio-primary"
-                disabled={approvalPending || eligiblePlatforms.length === 0}
-                onClick={() => onApprovalDecision('approve', eligiblePlatforms)}
-              >
-                <CheckCircle2 className="h-4 w-4" />
-                {t('Clip freigeben')}
-              </button>
-              <button
-                type="button"
-                className="studio-icon-button"
-                title={t('Ablehnen')}
-                aria-label={t('Ablehnen')}
-                disabled={approvalPending}
-                onClick={() => onApprovalDecision('skip', selectedPlatforms)}
-              >
-                <XCircle className="h-4 w-4" />
-              </button>
-            </>
-          ) : stoppbar ? (
-            <button
-              type="button"
-              className="studio-button"
-              disabled={approvalPending || cancelPending}
-              onClick={onCancelScheduled}
-            >
-              <XCircle className="h-4 w-4" />
-              {t('Post stoppen')}
-            </button>
-          ) : (
-            !terminal &&
-            clip.status !== 'publishing' && (
-              <button
-                type="button"
-                className="studio-button"
-                disabled={approvalPending}
-                onClick={onDiscard}
-              >
-                <Archive className="h-4 w-4" />
-                {t('Archivieren')}
-              </button>
-            )
-          )}
-          <details
-            ref={menu}
-            className="relative"
-            onToggle={(event) => setMenuOpen(event.currentTarget.open)}
-          >
-            <summary className="studio-icon-button" aria-label={t('Weitere Aktionen')}>
-              <MoreHorizontal className="h-4 w-4" />
-            </summary>
-            <div className="studio-menu">
-              <button
-                type="button"
-                disabled={terminal || clip.status === 'publishing' || clip.source_kind === 'manual_upload'}
-                onClick={() => runMenu(onOpenAiEditor)}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-white/5"
-              >
-                <Clapperboard className="h-4 w-4" />
-                {t('KI-Bearbeitung & Prüfung')}
-              </button>
-              <button
-                type="button"
-                disabled={approvalPending || terminal || clip.status === 'publishing'}
-                onClick={() => runMenu(() => onOpenEditor('layout'))}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-white/5"
-              >
-                <Crop className="h-4 w-4" />
-                {t('Layout anpassen')}
-              </button>
-              <button
-                type="button"
-                disabled={approvalPending || terminal || clip.status === 'publishing'}
-                onClick={() => runMenu(() => onOpenEditor('enrichment'))}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-white/5"
-              >
-                <Pencil className="h-4 w-4" />
-                {t('Titel, Beschreibung & Hashtags')}
-              </button>
-              <button
-                type="button"
-                disabled={preview.isFetching || terminal}
-                onClick={() => runMenu(() => { setPreviewActive(true); if (previewActive) void preview.refetch(); })}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-white/5"
-              >
-                <Film className="h-4 w-4" />
-                {t('Vorschau prüfen')}
-              </button>
-              <button
-                type="button"
-                disabled={rendering || terminal}
-                onClick={() => runMenu(() => render.mutate())}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-white/5"
-              >
-                <Clapperboard className="h-4 w-4" />
-                {ready ? t('Vorschau neu rendern') : t('Vorschau rendern')}
-              </button>
-              {clip.source_kind !== 'manual_upload' && (
-                <button
-                  type="button"
-                  disabled={contest.isPending || contest.data?.status === 'accepted'}
-                  onClick={() => runMenu(() => contest.mutate())}
-                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-white/5"
-                >
-                  <Trophy className="h-4 w-4" />
-                  {t('Für Clip-Contest einreichen')}
-                </button>
-              )}
-              {clip.clip_url && (
-                <a
-                  href={clip.clip_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-white/5"
-                >
-                  <ExternalLink className="h-4 w-4" />
-                  {t('Original ansehen')}
-                </a>
-              )}
-              <p className="mt-2 border-t border-border px-3 pt-2 text-xs text-text-secondary">
-                {t('Aufbewahrung')}: {formatRetention(clip.retention_until, t)}
-              </p>
-            </div>
-          </details>
-        </div>
-      </div>
-    </article>
-  );
-}

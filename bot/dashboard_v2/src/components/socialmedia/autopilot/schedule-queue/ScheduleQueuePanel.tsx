@@ -211,7 +211,7 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
           <div className="sq-toggles">
             <label><input type="checkbox" role="switch" checked={draft.enabled} onChange={event => edit({ enabled: event.target.checked })} /><span>Auto-Pilot einschalten</span></label>
             <label><input type="checkbox" role="switch" checked={draft.paused} onChange={event => edit({ paused: event.target.checked })} /><span>Neue Produktionen pausieren</span></label>
-            <label><input type="checkbox" role="switch" checked={draft.ai_editing_enabled} onChange={event => edit({ ai_editing_enabled: event.target.checked })} /><span>KI-Bearbeitung verwenden</span></label>
+
           </div>
           <p className="sq-help">Die KI-Einstellung gilt erst beim Produktionsstart. Sie ersetzt nicht deine Zustimmung zur externen KI-Verarbeitung.</p>
           <fieldset className="sq-platforms">

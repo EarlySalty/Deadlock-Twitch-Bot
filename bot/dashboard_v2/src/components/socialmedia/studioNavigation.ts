@@ -1,9 +1,12 @@
+import type { ScheduleQueueApi } from '@/components/socialmedia/autopilot/schedule-queue';
 import type { SocialMediaView, SocialMediaViewTarget } from './labels';
 
 export interface AiEditorMountProps {
   twitchUserId: string;
   streamer: string;
   clipDbId?: number;
+  settingsOnly?: boolean;
+  scheduleApi?: ScheduleQueueApi;
 }
 
 export function socialViewFromSearch(search: string): SocialMediaView {
