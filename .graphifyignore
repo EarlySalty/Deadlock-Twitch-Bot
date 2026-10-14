@@ -9,3 +9,4 @@ agent-docs/
 vendor/
 .preview-python-*/
 .social-preview-*/
+*.md
