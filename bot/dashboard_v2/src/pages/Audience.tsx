@@ -44,9 +44,9 @@ export function Audience({ streamer, days }: AudienceProps) {
 
   const isLoading = loadingWatchTime || loadingFunnel || loadingDemographics || loadingLurker || loadingViewerProfiles;
   const failedQueries = [
-    { label: t('Watch Time'), isError: watchTimeError, error: watchTimeErrorDetail, retry: refetchWatchTime },
-    { label: t('Follower-Funnel'), isError: funnelError, error: funnelErrorDetail, retry: refetchFunnel },
-    { label: t('Demographics'), isError: demographicsError, error: demographicsErrorDetail, retry: refetchDemographics },
+    { id: 'watchTimeDistribution', label: t('Watch Time'), isError: watchTimeError, error: watchTimeErrorDetail, retry: refetchWatchTime },
+    { id: 'followerFunnel', label: t('Follower-Funnel'), isError: funnelError, error: funnelErrorDetail, retry: refetchFunnel },
+    { id: 'audienceDemographics', label: t('Demographics'), isError: demographicsError, error: demographicsErrorDetail, retry: refetchDemographics },
   ].filter(q => q.isError);
   const formatError = (err: unknown) => (err instanceof Error ? err.message : t('Unbekannter Fehler'));
   const retryFailed = () => failedQueries.forEach(q => q.retry());
@@ -91,7 +91,7 @@ export function Audience({ streamer, days }: AudienceProps) {
           </div>
           <ul className="text-sm text-error/80 list-disc pl-5 space-y-1">
             {failedQueries.map(q => (
-              <li key={q.label}>{q.label}: {formatError(q.error)}</li>
+              <li key={q.id}>{q.label}: {formatError(q.error)}</li>
             ))}
           </ul>
           <button

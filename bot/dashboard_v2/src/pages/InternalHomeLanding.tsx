@@ -844,7 +844,7 @@ export function InternalHomeLanding() {
 
                   <div className="mt-5 space-y-3">
                     {healthItems.map((item) => (
-                      <div key={t(item.label)} className="flex items-center gap-3">
+                      <div key={item.key} className="flex items-center gap-3">
                         <div
                           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${item.iconClass}`}
                         >

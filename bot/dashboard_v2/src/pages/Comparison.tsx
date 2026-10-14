@@ -343,6 +343,7 @@ function PeerGroupSection({ peerGroup, yourStats }: PeerGroupSectionProps) {
   const { t } = useLanguage();
   const metrics = [
     {
+      id: 'avgViewers',
       label: t('Ø Viewer'),
       yours: yourStats.avgViewers,
       peerMedian: peerGroup.peerAvg.avgViewers,
@@ -350,6 +351,7 @@ function PeerGroupSection({ peerGroup, yourStats }: PeerGroupSectionProps) {
       format: 'number' as const,
     },
     {
+      id: 'peakViewers',
       label: t('Peak Viewer'),
       yours: yourStats.peakViewers,
       peerMedian: peerGroup.peerAvg.peakViewers,
@@ -357,6 +359,7 @@ function PeerGroupSection({ peerGroup, yourStats }: PeerGroupSectionProps) {
       format: 'number' as const,
     },
     {
+      id: 'retention10m',
       label: t('10-Min Retention'),
       yours: yourStats.retention10m,
       peerMedian: peerGroup.peerAvg.retention10m,
@@ -364,6 +367,7 @@ function PeerGroupSection({ peerGroup, yourStats }: PeerGroupSectionProps) {
       format: 'percent' as const,
     },
     {
+      id: 'chatHealth',
       label: t('Chat Health'),
       yours: yourStats.chatHealth,
       peerMedian: peerGroup.peerAvg.chatHealth,
@@ -394,7 +398,7 @@ function PeerGroupSection({ peerGroup, yourStats }: PeerGroupSectionProps) {
       <div className="space-y-4">
         {metrics.map((m, i) => (
           <PeerMetricBar
-            key={m.label}
+            key={m.id}
             label={m.label}
             yours={m.yours}
             peerMedian={m.peerMedian}

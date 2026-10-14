@@ -1,0 +1,989 @@
+{
+  "base": "64e681e42f367e0614b68814147077c809864498",
+  "main": "6cac863acfaa394970ef40b8efc01c441a8ff128",
+  "rules": [
+    "Display language changes text and locale only.",
+    "Entity identity must remain independent of display text.",
+    "Nested keyed and animated nodes must remain connected and retain identity across de/en/de.",
+    "Non-null peer group, all Audience failure rows and all Home health items must execute with actual components and LanguageProvider.",
+    "State, query cache, request count, URL, owner, effects and math must remain unchanged."
+  ],
+  "files": [
+    {
+      "file": "bot/dashboard_v2/src/components/layout/DashboardSidebar.tsx",
+      "origin": "Navigation hrefs from route helpers/constants; translating item.label does not alter item.href.",
+      "before": [
+        {
+          "kind": "key",
+          "line": 214,
+          "expression": "{item.href}",
+          "collection": "mainNavItems"
+        },
+        {
+          "kind": "key",
+          "line": 232,
+          "expression": "{item.href}",
+          "collection": "toolNavItems"
+        }
+      ],
+      "after": [
+        {
+          "kind": "key",
+          "line": 214,
+          "expression": "{item.href}",
+          "collection": "mainNavItems"
+        },
+        {
+          "kind": "key",
+          "line": 232,
+          "expression": "{item.href}",
+          "collection": "toolNavItems"
+        }
+      ]
+    },
+    {
+      "file": "bot/dashboard_v2/src/components/layout/Header.tsx",
+      "origin": "Untranslated view option values, fixed dropdown identity, API streamer logins, numeric day values and language codes. Fixed layoutId strings are unchanged. Only merge conflict resolved, preserving Main without w-full.",
+      "before": [
+        {
+          "kind": "key",
+          "line": 128,
+          "expression": "{option.value}",
+          "collection": "viewOptions"
+        },
+        {
+          "kind": "layoutId",
+          "line": 137,
+          "expression": "\"headerViewIndicator\"",
+          "collection": "viewOptions"
+        },
+        {
+          "kind": "key",
+          "line": 164,
+          "expression": "\"streamer-dropdown\"",
+          "collection": null
+        },
+        {
+          "kind": "key",
+          "line": 206,
+          "expression": "{s.login}",
+          "collection": "visiblePartners"
+        },
+        {
+          "kind": "key",
+          "line": 229,
+          "expression": "{s.login}",
+          "collection": "visibleOthers"
+        },
+        {
+          "kind": "key",
+          "line": 257,
+          "expression": "{range.value}",
+          "collection": "timeRanges"
+        },
+        {
+          "kind": "layoutId",
+          "line": 271,
+          "expression": "\"headerRangeIndicator\"",
+          "collection": "timeRanges"
+        },
+        {
+          "kind": "layoutId",
+          "line": 283,
+          "expression": "\"headerRangeIndicator\"",
+          "collection": null
+        },
+        {
+          "kind": "key",
+          "line": 327,
+          "expression": "{option}",
+          "collection": "LANGUAGES"
+        }
+      ],
+      "after": [
+        {
+          "kind": "key",
+          "line": 128,
+          "expression": "{option.value}",
+          "collection": "viewOptions"
+        },
+        {
+          "kind": "layoutId",
+          "line": 137,
+          "expression": "\"headerViewIndicator\"",
+          "collection": "viewOptions"
+        },
+        {
+          "kind": "key",
+          "line": 164,
+          "expression": "\"streamer-dropdown\"",
+          "collection": null
+        },
+        {
+          "kind": "key",
+          "line": 206,
+          "expression": "{s.login}",
+          "collection": "visiblePartners"
+        },
+        {
+          "kind": "key",
+          "line": 229,
+          "expression": "{s.login}",
+          "collection": "visibleOthers"
+        },
+        {
+          "kind": "key",
+          "line": 257,
+          "expression": "{range.value}",
+          "collection": "timeRanges"
+        },
+        {
+          "kind": "layoutId",
+          "line": 271,
+          "expression": "\"headerRangeIndicator\"",
+          "collection": "timeRanges"
+        },
+        {
+          "kind": "layoutId",
+          "line": 283,
+          "expression": "\"headerRangeIndicator\"",
+          "collection": null
+        },
+        {
+          "kind": "key",
+          "line": 327,
+          "expression": "{option}",
+          "collection": "LANGUAGES"
+        }
+      ]
+    },
+    {
+      "file": "bot/dashboard_v2/src/components/layout/SubTabs.tsx",
+      "origin": "Tab configuration IDs are independent of translated tab labels.",
+      "before": [
+        {
+          "kind": "key",
+          "line": 34,
+          "expression": "{tab.id}",
+          "collection": "tabs"
+        }
+      ],
+      "after": [
+        {
+          "kind": "key",
+          "line": 34,
+          "expression": "{tab.id}",
+          "collection": "tabs"
+        }
+      ]
+    },
+    {
+      "file": "bot/dashboard_v2/src/pages/Audience.tsx",
+      "origin": "The four fixed KPI keys are unchanged. failedQueries labels were translated before key selection; now semantic query-family IDs identify watch time, funnel and demographics failures.",
+      "before": [
+        {
+          "kind": "key",
+          "line": 94,
+          "expression": "{q.label}",
+          "collection": "failedQueries"
+        },
+        {
+          "kind": "key",
+          "line": 122,
+          "expression": "\"watch\"",
+          "collection": null
+        },
+        {
+          "kind": "key",
+          "line": 133,
+          "expression": "\"conv\"",
+          "collection": null
+        },
+        {
+          "kind": "key",
+          "line": 142,
+          "expression": "\"unique\"",
+          "collection": null
+        },
+        {
+          "kind": "key",
+          "line": 151,
+          "expression": "\"newf\"",
+          "collection": null
+        }
+      ],
+      "after": [
+        {
+          "kind": "key",
+          "line": 94,
+          "expression": "{q.id}",
+          "collection": "failedQueries"
+        },
+        {
+          "kind": "key",
+          "line": 122,
+          "expression": "\"watch\"",
+          "collection": null
+        },
+        {
+          "kind": "key",
+          "line": 133,
+          "expression": "\"conv\"",
+          "collection": null
+        },
+        {
+          "kind": "key",
+          "line": 142,
+          "expression": "\"unique\"",
+          "collection": null
+        },
+        {
+          "kind": "key",
+          "line": 151,
+          "expression": "\"newf\"",
+          "collection": null
+        }
+      ]
+    },
+    {
+      "file": "bot/dashboard_v2/src/pages/Category.tsx",
+      "origin": "Partner-filter codes, literal scope codes all/peer and API streamer IDs. Display labels are translated separately.",
+      "before": [
+        {
+          "kind": "key",
+          "line": 231,
+          "expression": "{f}",
+          "collection": "(['all', 'partner', 'community'] as PartnerFilter[])"
+        },
+        {
+          "kind": "key",
+          "line": 248,
+          "expression": "{key}",
+          "collection": "([['all', t('Alle Streamer')], ['peer', t('Meine Peer-Group')]] as const)"
+        },
+        {
+          "kind": "key",
+          "line": 328,
+          "expression": "{entry.streamer}",
+          "collection": "paginated"
+        },
+        {
+          "kind": "key",
+          "line": 466,
+          "expression": "{entry.streamer}",
+          "collection": "entries"
+        }
+      ],
+      "after": [
+        {
+          "kind": "key",
+          "line": 231,
+          "expression": "{f}",
+          "collection": "(['all', 'partner', 'community'] as PartnerFilter[])"
+        },
+        {
+          "kind": "key",
+          "line": 248,
+          "expression": "{key}",
+          "collection": "([['all', t('Alle Streamer')], ['peer', t('Meine Peer-Group')]] as const)"
+        },
+        {
+          "kind": "key",
+          "line": 328,
+          "expression": "{entry.streamer}",
+          "collection": "paginated"
+        },
+        {
+          "kind": "key",
+          "line": 466,
+          "expression": "{entry.streamer}",
+          "collection": "entries"
+        }
+      ]
+    },
+    {
+      "file": "bot/dashboard_v2/src/pages/Comparison.tsx",
+      "origin": "Overlap API streamerB is stable. Peer metrics previously keyed translated labels; now avgViewers/peakViewers/retention10m/chatHealth identify the same fields used by their statistics.",
+      "before": [
+        {
+          "kind": "key",
+          "line": 166,
+          "expression": "{item.streamerB}",
+          "collection": "overlap.slice(0, 10)"
+        },
+        {
+          "kind": "key",
+          "line": 397,
+          "expression": "{m.label}",
+          "collection": "metrics"
+        }
+      ],
+      "after": [
+        {
+          "kind": "key",
+          "line": 166,
+          "expression": "{item.streamerB}",
+          "collection": "overlap.slice(0, 10)"
+        },
+        {
+          "kind": "key",
+          "line": 401,
+          "expression": "{m.id}",
+          "collection": "metrics"
+        }
+      ]
+    },
+    {
+      "file": "bot/dashboard_v2/src/pages/Growth.tsx",
+      "origin": "API numeric month/year, pre-existing balance-cell index, API raid source/time tuple and API raider source. Translated balance names are not keys.",
+      "before": [
+        {
+          "kind": "key",
+          "line": 76,
+          "expression": "{`${month.year}-${month.month}`}",
+          "collection": "monthlyData.slice(0, 4)"
+        },
+        {
+          "kind": "key",
+          "line": 307,
+          "expression": "{index}",
+          "collection": "balanceData"
+        },
+        {
+          "kind": "key",
+          "line": 391,
+          "expression": "{`${raid.from_channel}-${raid.detected_at}-${i}`}",
+          "collection": "incomingRaids.slice(0, 20)"
+        },
+        {
+          "kind": "key",
+          "line": 426,
+          "expression": "{raider.from_channel}",
+          "collection": "topRaiders"
+        }
+      ],
+      "after": [
+        {
+          "kind": "key",
+          "line": 76,
+          "expression": "{`${month.year}-${month.month}`}",
+          "collection": "monthlyData.slice(0, 4)"
+        },
+        {
+          "kind": "key",
+          "line": 307,
+          "expression": "{index}",
+          "collection": "balanceData"
+        },
+        {
+          "kind": "key",
+          "line": 391,
+          "expression": "{`${raid.from_channel}-${raid.detected_at}-${i}`}",
+          "collection": "incomingRaids.slice(0, 20)"
+        },
+        {
+          "kind": "key",
+          "line": 426,
+          "expression": "{raider.from_channel}",
+          "collection": "topRaiders"
+        }
+      ]
+    },
+    {
+      "file": "bot/dashboard_v2/src/pages/InternalHomeLanding.tsx",
+      "origin": "Pre-existing constant skeleton indices, API partner logins, HEALTH_SCORE_METRICS.key and changelog ID with unchanged pre-existing index fallback. The health row previously keyed t(item.label), now reuses the existing metric.key also used for detail rows and sub_scores lookup.",
+      "before": [
+        {
+          "kind": "key",
+          "line": 284,
+          "expression": "{`hs-bar-${i}`}",
+          "collection": "[0, 1, 2, 3]"
+        },
+        {
+          "kind": "key",
+          "line": 301,
+          "expression": "{`ls-stat-${i}`}",
+          "collection": "[0, 1, 2, 3]"
+        },
+        {
+          "kind": "key",
+          "line": 313,
+          "expression": "{`week-kpi-${i}`}",
+          "collection": "[0, 1, 2, 3]"
+        },
+        {
+          "kind": "key",
+          "line": 326,
+          "expression": "{`bottom-${i}`}",
+          "collection": "[0, 1]"
+        },
+        {
+          "kind": "key",
+          "line": 331,
+          "expression": "{`row-${i}-${j}`}",
+          "collection": "[0, 1, 2, 3]"
+        },
+        {
+          "kind": "key",
+          "line": 542,
+          "expression": "{channel.login}",
+          "collection": "partnerStreamers"
+        },
+        {
+          "kind": "key",
+          "line": 663,
+          "expression": "{channel.login}",
+          "collection": "partnerStreamers"
+        },
+        {
+          "kind": "key",
+          "line": 847,
+          "expression": "{t(item.label)}",
+          "collection": "healthItems"
+        },
+        {
+          "kind": "key",
+          "line": 897,
+          "expression": "{item.key}",
+          "collection": "healthItems"
+        },
+        {
+          "kind": "key",
+          "line": 1091,
+          "expression": "{changelogKey(entry, index)}",
+          "collection": "(showAllUpdates ? changelogEntries : changelogEntries.slice(0, 3))"
+        }
+      ],
+      "after": [
+        {
+          "kind": "key",
+          "line": 284,
+          "expression": "{`hs-bar-${i}`}",
+          "collection": "[0, 1, 2, 3]"
+        },
+        {
+          "kind": "key",
+          "line": 301,
+          "expression": "{`ls-stat-${i}`}",
+          "collection": "[0, 1, 2, 3]"
+        },
+        {
+          "kind": "key",
+          "line": 313,
+          "expression": "{`week-kpi-${i}`}",
+          "collection": "[0, 1, 2, 3]"
+        },
+        {
+          "kind": "key",
+          "line": 326,
+          "expression": "{`bottom-${i}`}",
+          "collection": "[0, 1]"
+        },
+        {
+          "kind": "key",
+          "line": 331,
+          "expression": "{`row-${i}-${j}`}",
+          "collection": "[0, 1, 2, 3]"
+        },
+        {
+          "kind": "key",
+          "line": 542,
+          "expression": "{channel.login}",
+          "collection": "partnerStreamers"
+        },
+        {
+          "kind": "key",
+          "line": 663,
+          "expression": "{channel.login}",
+          "collection": "partnerStreamers"
+        },
+        {
+          "kind": "key",
+          "line": 847,
+          "expression": "{item.key}",
+          "collection": "healthItems"
+        },
+        {
+          "kind": "key",
+          "line": 897,
+          "expression": "{item.key}",
+          "collection": "healthItems"
+        },
+        {
+          "kind": "key",
+          "line": 1091,
+          "expression": "{changelogKey(entry, index)}",
+          "collection": "(showAllUpdates ? changelogEntries : changelogEntries.slice(0, 3))"
+        }
+      ]
+    },
+    {
+      "file": "bot/dashboard_v2/src/pages/Monetization.tsx",
+      "origin": "Horizon IDs plus_1/plus_3/plus_5, fixed moment codes, raw duration/position object keys and pre-existing recommendation/history/worst-ad indices. Translation affects their labels/contents, not key selection.",
+      "before": [
+        {
+          "kind": "key",
+          "line": 112,
+          "expression": "{key}",
+          "collection": "horizons"
+        },
+        {
+          "kind": "key",
+          "line": 132,
+          "expression": "{key}",
+          "collection": "MOMENT_ORDER"
+        },
+        {
+          "kind": "key",
+          "line": 141,
+          "expression": "{key}",
+          "collection": "MOMENT_ORDER"
+        },
+        {
+          "kind": "key",
+          "line": 168,
+          "expression": "{i}",
+          "collection": "recommendations"
+        },
+        {
+          "kind": "key",
+          "line": 293,
+          "expression": "{i}",
+          "collection": "history"
+        },
+        {
+          "kind": "key",
+          "line": 453,
+          "expression": "{key}",
+          "collection": "Object.entries(durationLabels)"
+        },
+        {
+          "kind": "key",
+          "line": 476,
+          "expression": "{key}",
+          "collection": "Object.entries(positionLabels)"
+        },
+        {
+          "kind": "key",
+          "line": 523,
+          "expression": "{key}",
+          "collection": "Object.entries(durationLabels)"
+        },
+        {
+          "kind": "key",
+          "line": 569,
+          "expression": "{i}",
+          "collection": "ads.worst_ads"
+        }
+      ],
+      "after": [
+        {
+          "kind": "key",
+          "line": 112,
+          "expression": "{key}",
+          "collection": "horizons"
+        },
+        {
+          "kind": "key",
+          "line": 132,
+          "expression": "{key}",
+          "collection": "MOMENT_ORDER"
+        },
+        {
+          "kind": "key",
+          "line": 141,
+          "expression": "{key}",
+          "collection": "MOMENT_ORDER"
+        },
+        {
+          "kind": "key",
+          "line": 168,
+          "expression": "{i}",
+          "collection": "recommendations"
+        },
+        {
+          "kind": "key",
+          "line": 293,
+          "expression": "{i}",
+          "collection": "history"
+        },
+        {
+          "kind": "key",
+          "line": 453,
+          "expression": "{key}",
+          "collection": "Object.entries(durationLabels)"
+        },
+        {
+          "kind": "key",
+          "line": 476,
+          "expression": "{key}",
+          "collection": "Object.entries(positionLabels)"
+        },
+        {
+          "kind": "key",
+          "line": 523,
+          "expression": "{key}",
+          "collection": "Object.entries(durationLabels)"
+        },
+        {
+          "kind": "key",
+          "line": 569,
+          "expression": "{i}",
+          "collection": "ads.worst_ads"
+        }
+      ]
+    },
+    {
+      "file": "bot/dashboard_v2/src/pages/Overview.tsx",
+      "origin": "No JSX key or layoutId expressions.",
+      "before": [],
+      "after": []
+    },
+    {
+      "file": "bot/dashboard_v2/src/pages/Schedule.tsx",
+      "origin": "API numeric weekday/hour and intensity values, pre-existing insight indices, and raw API day.weekdayLabel from fetchWeekdayStats. The latter is not translated in the dataset: only rendered t(day.weekdayLabel) changes, so no language-dependent key twin exists here.",
+      "before": [
+        {
+          "kind": "key",
+          "line": 87,
+          "expression": "{`${slot.weekday}-${slot.hour}`}",
+          "collection": "analysis.bestSlots"
+        },
+        {
+          "kind": "key",
+          "line": 158,
+          "expression": "{i}",
+          "collection": "generateScheduleInsights(weeklyData, t)"
+        },
+        {
+          "kind": "key",
+          "line": 185,
+          "expression": "{intensity}",
+          "collection": "[0.1, 0.3, 0.5, 0.7, 0.9]"
+        },
+        {
+          "kind": "key",
+          "line": 212,
+          "expression": "{day.weekday}",
+          "collection": "analysis.bestPerDay\n              .sort((a, b) => a.weekday - b.weekday)"
+        },
+        {
+          "kind": "key",
+          "line": 255,
+          "expression": "{hour}",
+          "collection": "hours.filter(h => h % 3 === 0)"
+        },
+        {
+          "kind": "key",
+          "line": 265,
+          "expression": "{weekday}",
+          "collection": null
+        },
+        {
+          "kind": "key",
+          "line": 275,
+          "expression": "{hour}",
+          "collection": "hours"
+        },
+        {
+          "kind": "key",
+          "line": 387,
+          "expression": "{day.weekdayLabel}",
+          "collection": "data"
+        }
+      ],
+      "after": [
+        {
+          "kind": "key",
+          "line": 87,
+          "expression": "{`${slot.weekday}-${slot.hour}`}",
+          "collection": "analysis.bestSlots"
+        },
+        {
+          "kind": "key",
+          "line": 158,
+          "expression": "{i}",
+          "collection": "generateScheduleInsights(weeklyData, t)"
+        },
+        {
+          "kind": "key",
+          "line": 185,
+          "expression": "{intensity}",
+          "collection": "[0.1, 0.3, 0.5, 0.7, 0.9]"
+        },
+        {
+          "kind": "key",
+          "line": 212,
+          "expression": "{day.weekday}",
+          "collection": "analysis.bestPerDay\n              .sort((a, b) => a.weekday - b.weekday)"
+        },
+        {
+          "kind": "key",
+          "line": 255,
+          "expression": "{hour}",
+          "collection": "hours.filter(h => h % 3 === 0)"
+        },
+        {
+          "kind": "key",
+          "line": 265,
+          "expression": "{weekday}",
+          "collection": null
+        },
+        {
+          "kind": "key",
+          "line": 275,
+          "expression": "{hour}",
+          "collection": "hours"
+        },
+        {
+          "kind": "key",
+          "line": 387,
+          "expression": "{day.weekdayLabel}",
+          "collection": "data"
+        }
+      ]
+    },
+    {
+      "file": "bot/dashboard_v2/src/pages/SessionDetail.tsx",
+      "origin": "Literal tab IDs, pre-existing event marker indices and API chatter login IDs.",
+      "before": [
+        {
+          "kind": "key",
+          "line": 248,
+          "expression": "{tabId}",
+          "collection": "[\n          ['overview', 'Overview'],\n          ['events', t('Events & Chat')],\n          ['viewer-timeline', t('Viewer-Timeline')],\n        ]"
+        },
+        {
+          "kind": "key",
+          "line": 303,
+          "expression": "{`ev-${i}`}",
+          "collection": "eventMarkers"
+        },
+        {
+          "kind": "key",
+          "line": 352,
+          "expression": "{c.login}",
+          "collection": "chatters"
+        }
+      ],
+      "after": [
+        {
+          "kind": "key",
+          "line": 248,
+          "expression": "{tabId}",
+          "collection": "[\n          ['overview', 'Overview'],\n          ['events', t('Events & Chat')],\n          ['viewer-timeline', t('Viewer-Timeline')],\n        ]"
+        },
+        {
+          "kind": "key",
+          "line": 303,
+          "expression": "{`ev-${i}`}",
+          "collection": "eventMarkers"
+        },
+        {
+          "kind": "key",
+          "line": 352,
+          "expression": "{c.login}",
+          "collection": "chatters"
+        }
+      ]
+    },
+    {
+      "file": "bot/dashboard_v2/src/pages/Sessions.tsx",
+      "origin": "API session IDs and chatter logins.",
+      "before": [
+        {
+          "kind": "key",
+          "line": 80,
+          "expression": "{session.id}",
+          "collection": "data.sessions"
+        },
+        {
+          "kind": "key",
+          "line": 297,
+          "expression": "{c.login}",
+          "collection": "detail.chatters.slice(0, 10)"
+        }
+      ],
+      "after": [
+        {
+          "kind": "key",
+          "line": 80,
+          "expression": "{session.id}",
+          "collection": "data.sessions"
+        },
+        {
+          "kind": "key",
+          "line": 297,
+          "expression": "{c.login}",
+          "collection": "detail.chatters.slice(0, 10)"
+        }
+      ]
+    },
+    {
+      "file": "bot/dashboard_v2/src/pages/ViewerTimeline.tsx",
+      "origin": "Segment option values, API viewer logins and login/span-index tuples. Translated segment labels do not become option values.",
+      "before": [
+        {
+          "kind": "key",
+          "line": 165,
+          "expression": "{option.value}",
+          "collection": "segmentOptions(t)"
+        },
+        {
+          "kind": "key",
+          "line": 221,
+          "expression": "{viewer.login}",
+          "collection": "viewers"
+        },
+        {
+          "kind": "key",
+          "line": 258,
+          "expression": "{`${viewer.login}-${spanIndex}`}",
+          "collection": "viewer.spans"
+        }
+      ],
+      "after": [
+        {
+          "kind": "key",
+          "line": 165,
+          "expression": "{option.value}",
+          "collection": "segmentOptions(t)"
+        },
+        {
+          "kind": "key",
+          "line": 221,
+          "expression": "{viewer.login}",
+          "collection": "viewers"
+        },
+        {
+          "kind": "key",
+          "line": 258,
+          "expression": "{`${viewer.login}-${spanIndex}`}",
+          "collection": "viewer.spans"
+        }
+      ]
+    },
+    {
+      "file": "bot/dashboard_v2/src/pages/Viewers.tsx",
+      "origin": "API streamer/login IDs, raw personality map keys, fixed segment/filter codes and pre-existing donut-cell indices. Translated display names are not keys.",
+      "before": [
+        {
+          "kind": "key",
+          "line": 350,
+          "expression": "{cc.streamer}",
+          "collection": "data.crossChannelPresence.slice(0, 5)"
+        },
+        {
+          "kind": "key",
+          "line": 413,
+          "expression": "{key}",
+          "collection": "Object.keys(data.personality.distribution)"
+        },
+        {
+          "kind": "key",
+          "line": 433,
+          "expression": "{key}",
+          "collection": "Object.entries(data.personality.distribution)\n                .sort(([, a], [, b]) => b - a)"
+        },
+        {
+          "kind": "key",
+          "line": 542,
+          "expression": "{seg}",
+          "collection": "['dedicated', 'regular', 'casual', 'lurker', 'new']"
+        },
+        {
+          "kind": "key",
+          "line": 576,
+          "expression": "{v.login}",
+          "collection": "segments.churnRisk.atRiskViewers.slice(0, 8)"
+        },
+        {
+          "kind": "key",
+          "line": 617,
+          "expression": "{ch.streamer}",
+          "collection": "segments.crossChannelStats.topSharedChannels.slice(0, 5)"
+        },
+        {
+          "kind": "key",
+          "line": 656,
+          "expression": "{idx}",
+          "collection": "donutData"
+        },
+        {
+          "kind": "key",
+          "line": 722,
+          "expression": "{opt.value}",
+          "collection": "filterOptions(t)"
+        },
+        {
+          "kind": "key",
+          "line": 777,
+          "expression": "{viewer.login}",
+          "collection": "directory?.viewers"
+        }
+      ],
+      "after": [
+        {
+          "kind": "key",
+          "line": 350,
+          "expression": "{cc.streamer}",
+          "collection": "data.crossChannelPresence.slice(0, 5)"
+        },
+        {
+          "kind": "key",
+          "line": 413,
+          "expression": "{key}",
+          "collection": "Object.keys(data.personality.distribution)"
+        },
+        {
+          "kind": "key",
+          "line": 433,
+          "expression": "{key}",
+          "collection": "Object.entries(data.personality.distribution)\n                .sort(([, a], [, b]) => b - a)"
+        },
+        {
+          "kind": "key",
+          "line": 542,
+          "expression": "{seg}",
+          "collection": "['dedicated', 'regular', 'casual', 'lurker', 'new']"
+        },
+        {
+          "kind": "key",
+          "line": 576,
+          "expression": "{v.login}",
+          "collection": "segments.churnRisk.atRiskViewers.slice(0, 8)"
+        },
+        {
+          "kind": "key",
+          "line": 617,
+          "expression": "{ch.streamer}",
+          "collection": "segments.crossChannelStats.topSharedChannels.slice(0, 5)"
+        },
+        {
+          "kind": "key",
+          "line": 656,
+          "expression": "{idx}",
+          "collection": "donutData"
+        },
+        {
+          "kind": "key",
+          "line": 722,
+          "expression": "{opt.value}",
+          "collection": "filterOptions(t)"
+        },
+        {
+          "kind": "key",
+          "line": 777,
+          "expression": "{viewer.login}",
+          "collection": "directory?.viewers"
+        }
+      ]
+    },
+    {
+      "file": "bot/dashboard_v2/tests/dashboardShell.test.ts",
+      "origin": "No JSX key or layoutId expressions; existing static contract tests are unchanged by the fix.",
+      "before": [],
+      "after": []
+    }
+  ]
+}

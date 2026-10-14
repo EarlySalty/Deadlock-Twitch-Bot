@@ -1,0 +1,63 @@
+{
+  "base": "64e681e42f367e0614b68814147077c809864498",
+  "mergedMain": "6cac863acfaa394970ef40b8efc01c441a8ff128",
+  "mergeCommit": "d515672d3",
+  "scope": "Three translated-label key origins only, plus the necessary Header merge conflict preserving newer Main layout. No backend, provider, dictionary, API, query key, CSS, URL, math or owner changes.",
+  "identityAudit": { "originalFiles": 16, "reactKeys": 68, "layoutIds": 3, "actualTranslatedKeyOrigins": 3, "path": "key-audit.json" },
+  "checks": {
+    "command": "node /tmp/ttb-sol-d-core-fix1-checks.mjs",
+    "exit": 0,
+    "details": "/tmp/ttb-sol-d-core-fix1-checks.json",
+    "build": { "command": "npm run build", "cwd": "/home/nathanael/.worktrees/ttb-sol-d-core-fix1-20261014/bot/dashboard_v2", "exit": 0 },
+    "existingTests": { "passed": 95, "failed": 0, "ignored": 0, "filtered": 0, "exit": 0, "log": "/tmp/ttb-sol-d-core-fix1-tests.log" },
+    "lint": { "originalDCoreFiles": 16, "mainErrors": 0, "mainWarnings": 1, "currentErrors": 0, "currentWarnings": 1, "warning": "Unchanged ViewerTimeline react-hooks/exhaustive-deps", "exit": 0 },
+    "regressionTestLint": { "command": "node /tmp/ttb-sol-d-core-fix1-test-lint.mjs", "errors": 0, "warnings": 0, "exit": 0 },
+    "format": { "configuredFormatter": false, "command": "git -C /home/nathanael/.worktrees/ttb-sol-d-core-fix1-20261014 diff --check", "exit": 0 }
+  },
+  "runtime": {
+    "command": "node --test /home/nathanael/.worktrees/ttb-sol-d-core-fix1-20261014/bot/dashboard_v2/tests/dashboardLanguageIdentity.browser.test.mjs",
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "filtered": 0,
+    "exit": 0,
+    "evidence": "/tmp/ttb-dashboard-language-identity-Olf1KO/result.json",
+    "browser": "/home/nathanael/.local/bin/moli",
+    "compiled": true,
+    "actualComponents": ["Comparison", "Audience", "InternalHomeLanding", "LanguageProvider", "PlanProvider", "QueryClientProvider"],
+    "io": "Synthetic fetch responses only, production-mode compiled components; no preview-mode data bypass, real accounts or mutations.",
+    "cases": [
+      { "case": "non-null peerGroup", "rows": 4, "nestedElements": 80, "requests": 3 },
+      { "case": "all home health items", "rows": 4, "nestedElements": 48, "requests": 3 },
+      { "case": "all three Audience failures", "rows": 3, "nestedElements": 3, "requests": 5 }
+    ],
+    "transitions": ["de to en", "en to de"],
+    "disconnectedElements": 0,
+    "removedTrackedSubtrees": 0,
+    "pageErrors": 0,
+    "urlRequestsAndQueryCachePreserved": true,
+    "baseline": {
+      "source": "b4b5ba52b9fccb8b782374e473e57e74ff95f62b",
+      "readOnlyWorktree": "/home/nathanael/.worktrees/ttb-sol-d-core-20261014",
+      "command": "TTB_IDENTITY_FRONTEND=/home/nathanael/.worktrees/ttb-sol-d-core-20261014/bot/dashboard_v2 node --test /home/nathanael/.worktrees/ttb-sol-d-core-fix1-20261014/bot/dashboard_v2/tests/dashboardLanguageIdentity.browser.test.mjs",
+      "passed": 0,
+      "failed": 4,
+      "ignored": 0,
+      "filtered": 0,
+      "exit": 1,
+      "evidence": "/tmp/ttb-dashboard-language-identity-pMx78A/result.json",
+      "detachedElements": { "comparison": 80, "home": 48, "audienceErrors": 2 }
+    },
+    "openedImages": [
+      "/tmp/ttb-dashboard-language-identity-Olf1KO/comparison-en.png",
+      "/tmp/ttb-dashboard-language-identity-Olf1KO/home-en.png",
+      "/tmp/ttb-dashboard-language-identity-Olf1KO/audience-errors-en.png",
+      "/tmp/ttb-sol-d-core-evidence-20261014/final/comparison-en-390-01.png",
+      "/tmp/ttb-sol-d-core-evidence-20261014/final/home-en-390-01.png",
+      "/tmp/ttb-sol-d-core-evidence-20261014/final/audience-en-390-01.png"
+    ],
+    "unchangedLayoutEvidence": "/tmp/ttb-sol-d-core-evidence-20261014/final",
+    "ownedProcessesStopped": true
+  },
+  "handover": "Branch only. Parent owns independent critic, Main integration and deployment. Canonical gate is run after committing exact final HEAD; its result is reported separately without modifying that HEAD."
+}
