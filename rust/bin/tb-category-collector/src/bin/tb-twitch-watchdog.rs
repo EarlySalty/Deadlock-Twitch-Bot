@@ -145,7 +145,15 @@ async fn observe_bot_token(pool: &PgPool, bot_running: bool, now: DateTime<Utc>)
     let started = health
         .as_ref()
         .map_or(now, |health| health.outage_started(now));
-    record(pool, BOT_TOKEN, healthy, now, started).await
+    let event_at = if healthy {
+        health
+            .as_ref()
+            .and_then(|health| health.last_ok_at)
+            .unwrap_or(now)
+    } else {
+        now
+    };
+    record(pool, BOT_TOKEN, healthy, event_at, started).await
 }
 
 #[derive(sqlx::FromRow)]
@@ -911,7 +919,10 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .expect("recovery state");
-        assert!(recovered.is_some());
+        assert_eq!(
+            recovered.expect("successful validation").timestamp_micros(),
+            (now + chrono::Duration::seconds(101)).timestamp_micros()
+        );
         sqlx::query("UPDATE twitch_bot_token_health SET monitoring_enabled=false")
             .execute(&pool)
             .await
@@ -957,6 +968,50 @@ mod tests {
         .await
         .expect("open count");
         assert_eq!(open, 0);
+        sqlx::query("TRUNCATE twitch_watchdog_incidents")
+            .execute(&pool)
+            .await
+            .expect("reset incidents for delayed observation");
+        let failed_at = DateTime::from_timestamp(1_800_000_000, 0).expect("failure time");
+        let validated_at = failed_at + chrono::Duration::seconds(80);
+        let observed_at = failed_at + chrono::Duration::seconds(100);
+        sqlx::query("UPDATE twitch_bot_token_health SET monitoring_enabled=true,last_ok_at=NULL,last_failure_at=$1")
+            .bind(failed_at)
+            .execute(&pool)
+            .await
+            .expect("failed validation");
+        observe_bot_token(&pool, true, failed_at + chrono::Duration::seconds(10))
+            .await
+            .expect("delayed failure observation");
+        sqlx::query("UPDATE twitch_bot_token_health SET last_ok_at=$1")
+            .bind(validated_at)
+            .execute(&pool)
+            .await
+            .expect("successful validation before notification threshold");
+        observe_bot_token(&pool, true, observed_at)
+            .await
+            .expect("delayed recovery observation");
+        let incident: Incident = sqlx::query_as(
+            "SELECT id,service,started_at,recovered_at FROM twitch_watchdog_incidents",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("short recovered incident");
+        assert_eq!(incident.started_at, failed_at);
+        assert_eq!(incident.recovered_at, Some(validated_at));
+        let content = outage_content(&incident);
+        assert!(content.contains(&local_time(validated_at)));
+        assert!(!content.contains(&local_time(observed_at)));
+        let notifications: Vec<Incident> = sqlx::query_as(NOTIFICATION_QUERY)
+            .bind(observed_at)
+            .bind(BOT)
+            .bind(3600_i32)
+            .bind(30_i32)
+            .bind(true)
+            .fetch_all(&pool)
+            .await
+            .expect("short outage notification decision");
+        assert!(notifications.is_empty());
         pool.close().await;
         sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
             .execute(&admin)

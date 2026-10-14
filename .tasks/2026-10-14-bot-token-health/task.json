@@ -26,6 +26,7 @@
     "Both token notification phases describe historical validation observations, never present chat availability; HTTP errors can leave a usable cached token.",
     "All boot and runtime publications use one nonblocking serialized retry owner that survives terminal boot paths until the latest desired state is committed.",
     "Retries persist observation time, not retry time; transactional statement timeouts prevent timed-out writes from overtaking newer observations.",
-    "Outage and recovery delivery failures have independent durable first-error markers."
+    "Outage and recovery delivery failures have independent durable first-error markers.",
+    "Bot-token incident boundaries use failure and successful validation event timestamps, not watchdog polling time; notification eligibility uses the actual recovered outage duration."
   ]
 }
