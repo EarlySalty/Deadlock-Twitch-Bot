@@ -1,8 +1,6 @@
-// Formatting utilities for the dashboard
-
-export function formatNumber(n: number | null | undefined, decimals = 0): string {
+export function formatNumber(n: number | null | undefined, decimals = 0, locale = 'de-DE'): string {
   if (n === null || n === undefined) return '-';
-  return n.toLocaleString('de-DE', {
+  return n.toLocaleString(locale, {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   });
@@ -37,30 +35,30 @@ export function formatDurationShort(seconds: number): string {
   return `${minutes}m`;
 }
 
-export function formatHours(hours: number): string {
+export function formatHours(hours: number, locale?: string): string {
   if (hours < 1) {
     return `${Math.round(hours * 60)}m`;
   }
   if (hours < 100) {
-    return `${hours.toFixed(1)}h`;
+    return `${locale ? formatNumber(hours, 1, locale) : hours.toFixed(1)}h`;
   }
-  return `${Math.round(hours)}h`;
+  return `${locale ? formatNumber(Math.round(hours), 0, locale) : Math.round(hours)}h`;
 }
 
-export function formatDate(dateStr: string): string {
+export function formatDate(dateStr: string, locale = 'de-DE'): string {
   if (!dateStr) return '-';
   const date = new Date(dateStr);
-  return date.toLocaleDateString('de-DE', {
+  return date.toLocaleDateString(locale, {
     day: '2-digit',
     month: '2-digit',
     year: '2-digit',
   });
 }
 
-export function formatDateFull(dateStr: string): string {
+export function formatDateFull(dateStr: string, locale = 'de-DE'): string {
   if (!dateStr) return '-';
   const date = new Date(dateStr);
-  return date.toLocaleDateString('de-DE', {
+  return date.toLocaleDateString(locale, {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
@@ -93,22 +91,34 @@ export function formatCompact(n: number): string {
   return n.toString();
 }
 
-export function getWeekdayLabel(weekday: number): string {
+export function getWeekdayLabel(weekday: number, locale?: string): string {
+  if (locale && Number.isInteger(weekday) && weekday >= 0 && weekday <= 6) {
+    return new Intl.DateTimeFormat(locale, { weekday: 'short', timeZone: 'UTC' }).format(new Date(Date.UTC(2024, 0, 7 + weekday)));
+  }
   const days = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
   return days[weekday] || '';
 }
 
-export function getWeekdayLabelFull(weekday: number): string {
+export function getWeekdayLabelFull(weekday: number, locale?: string): string {
+  if (locale && Number.isInteger(weekday) && weekday >= 0 && weekday <= 6) {
+    return new Intl.DateTimeFormat(locale, { weekday: 'long', timeZone: 'UTC' }).format(new Date(Date.UTC(2024, 0, 7 + weekday)));
+  }
   const days = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
   return days[weekday] || '';
 }
 
-export function getMonthLabel(month: number): string {
+export function getMonthLabel(month: number, locale?: string): string {
+  if (locale && Number.isInteger(month) && month >= 1 && month <= 12) {
+    return new Intl.DateTimeFormat(locale, { month: 'short', timeZone: 'UTC' }).format(new Date(Date.UTC(2024, month - 1, 1)));
+  }
   const months = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
   return months[month - 1] || '';
 }
 
-export function getMonthLabelFull(month: number): string {
+export function getMonthLabelFull(month: number, locale?: string): string {
+  if (locale && Number.isInteger(month) && month >= 1 && month <= 12) {
+    return new Intl.DateTimeFormat(locale, { month: 'long', timeZone: 'UTC' }).format(new Date(Date.UTC(2024, month - 1, 1)));
+  }
   const months = [
     'Januar', 'Februar', 'März', 'April', 'Mai', 'Juni',
     'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'

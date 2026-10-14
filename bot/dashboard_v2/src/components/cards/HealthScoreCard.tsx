@@ -2,12 +2,14 @@ import { motion } from 'framer-motion';
 import { Rise } from '../../motion/Rise';
 import { Zap } from 'lucide-react';
 import type { HealthScore } from '@/types/analytics';
+import { useT } from '../../context/LanguageContext';
 
 interface HealthScoreCardProps {
   scores: HealthScore;
 }
 
 export function HealthScoreCard({ scores }: HealthScoreCardProps) {
+  const t = useT();
   const subScores = [
     { label: 'Reach', value: scores.reach },
     { label: 'Ret.', value: scores.retention },
@@ -26,7 +28,7 @@ export function HealthScoreCard({ scores }: HealthScoreCardProps) {
       </div>
 
       <h2 className="text-text-secondary font-semibold uppercase tracking-[0.14em] text-xs mb-4">
-        Channel Health
+        {t('Channel Health')}
       </h2>
 
       {/* Main Score */}

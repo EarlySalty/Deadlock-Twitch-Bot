@@ -1,3 +1,5 @@
+import { useLanguage } from '../../context/LanguageContext';
+import { formatNumber } from '@/utils/formatters';
 import { Rise } from '../../motion/Rise';
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -29,6 +31,7 @@ export function KpiCard({
   color = 'blue',
   size = 'normal',
 }: KpiCardProps) {
+  const { locale } = useLanguage();
   const TrendIcon = trend && trend > 0 ? TrendingUp : trend && trend < 0 ? TrendingDown : Minus;
   const trendColor =
     trend && trend > 0
@@ -65,12 +68,12 @@ export function KpiCard({
 
       <div className="flex items-end gap-3 mt-1">
         <span className={`display-font font-bold text-white ${size === 'large' ? 'text-4xl' : 'text-3xl'}`}>
-          {value}
+          {typeof value === 'number' ? value.toLocaleString(locale) : value}
         </span>
         {trend != null && (
           <span className={`text-sm font-medium mb-1 flex items-center gap-1 ${trendColor}`}>
             <TrendIcon className="w-3 h-3" />
-            {Math.abs(trend).toFixed(1)}%
+            {formatNumber(Math.abs(trend), 1, locale)}%
           </span>
         )}
       </div>

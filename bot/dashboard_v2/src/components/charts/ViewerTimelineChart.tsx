@@ -12,6 +12,7 @@ import {
 } from 'recharts';
 import type { ViewerTimelinePoint } from '@/types/analytics';
 import { formatNumber } from '@/utils/formatters';
+import { useLanguage } from '../../context/LanguageContext';
 
 interface ViewerTimelineChartProps {
   data: ViewerTimelinePoint[];
@@ -19,6 +20,7 @@ interface ViewerTimelineChartProps {
 }
 
 export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerTimelineChartProps) {
+  const { t, locale } = useLanguage();
   if (!data || data.length === 0) {
     return null;
   }
@@ -26,7 +28,7 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
   // Format timestamp for display
   const chartData = data.map(point => ({
     ...point,
-    label: formatTimestamp(point.timestamp),
+    label: formatTimestamp(point.timestamp, t),
   }));
 
   const showBrush = chartData.length > 100;
@@ -38,13 +40,13 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
           <p className="text-white font-medium mb-2">{label}</p>
           <div className="space-y-1 text-sm">
             <p className="text-accent">
-              Avg: <span className="text-white">{formatNumber(payload[0]?.value)}</span>
+              {t('Avg:')} <span className="text-white">{formatNumber(payload[0]?.value, 0, locale)}</span>
             </p>
             <p className="text-accent">
-              Peak: <span className="text-white">{formatNumber(payload[1]?.value)}</span>
+              {t('Peak:')} <span className="text-white">{formatNumber(payload[1]?.value, 0, locale)}</span>
             </p>
             <p className="text-text-secondary">
-              Min: <span className="text-white">{formatNumber(payload[2]?.value)}</span>
+              {t('Min:')} <span className="text-white">{formatNumber(payload[2]?.value, 0, locale)}</span>
             </p>
           </div>
         </div>
@@ -57,7 +59,7 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
     <Rise
       className="bg-card rounded-xl border border-border p-5"
     >
-      <h3 className="text-lg font-bold text-white mb-4">{title}</h3>
+      <h3 className="text-lg font-bold text-white mb-4">{t(title)}</h3>
       <div className={showBrush ? 'h-80' : 'h-64'}>
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
@@ -89,7 +91,7 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
               fontSize={12}
               tickLine={false}
               axisLine={false}
-              tickFormatter={(v) => formatNumber(v)}
+              tickFormatter={(v) => formatNumber(v, 0, locale)}
             />
             <Tooltip content={<CustomTooltip />} />
             <Legend
@@ -143,8 +145,7 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
   );
 }
 
-function formatTimestamp(ts: string): string {
-  // Timestamps look like "2025-12-06 20:05" or "2025-12-06 20:00"
+function formatTimestamp(ts: string, t: ReturnType<typeof useLanguage>['t']): string {
   if (!ts) return '';
   const parts = ts.split(' ');
   if (parts.length >= 2) {
@@ -152,7 +153,7 @@ function formatTimestamp(ts: string): string {
     const timePart = parts[1];
     // Show "DD.MM HH:MM"
     const [, m, d] = datePart.split('-');
-    return `${d}.${m} ${timePart}`;
+    return t('{day}.{month} {time}', { day: d, month: m, time: timePart });
   }
   return ts;
 }

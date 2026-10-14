@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import { Rise } from '../../motion/Rise';
 import { AlertTriangle, CheckCircle, Info, TrendingUp } from 'lucide-react';
 import type { Insight, ActionItem } from '@/types/analytics';
+import { useT } from '../../context/LanguageContext';
 
 interface InsightsPanelProps {
   findings: Insight[];
@@ -36,6 +37,7 @@ const typeConfig = {
 };
 
 export function InsightsPanel({ findings, actions }: InsightsPanelProps) {
+  const t = useT();
   if ((!findings || findings.length === 0) && (!actions || actions.length === 0)) {
     return null;
   }
@@ -47,7 +49,7 @@ export function InsightsPanel({ findings, actions }: InsightsPanelProps) {
       {/* Findings */}
       {findings && findings.length > 0 && (
         <div>
-          <h3 className="text-lg font-bold text-white mb-4">Key Findings</h3>
+          <h3 className="text-lg font-bold text-white mb-4">{t('Key Findings')}</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {findings.map((insight, i) => {
               const config = typeConfig[insight.type];
@@ -65,9 +67,9 @@ export function InsightsPanel({ findings, actions }: InsightsPanelProps) {
                     <Icon className={`w-5 h-5 ${config.textClass} flex-shrink-0 mt-0.5`} />
                     <div>
                       <h4 className={`text-sm font-bold mb-1 ${config.textClass}`}>
-                        {insight.title}
+                        {t(insight.title)}
                       </h4>
-                      <p className="text-text-secondary text-sm">{insight.text}</p>
+                      <p className="text-text-secondary text-sm">{t(insight.text)}</p>
                     </div>
                   </div>
                 </motion.div>
@@ -84,7 +86,7 @@ export function InsightsPanel({ findings, actions }: InsightsPanelProps) {
             <span className="bg-accent/20 p-1.5 rounded text-accent">
               <TrendingUp className="w-5 h-5" />
             </span>
-            Action Plan
+            {t('Action Plan')}
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {actions.map((action, i) => (
@@ -96,9 +98,9 @@ export function InsightsPanel({ findings, actions }: InsightsPanelProps) {
                 className="bg-black/25 p-4 rounded-lg border-l-4 border-accent"
               >
                 <span className="text-xs font-bold text-accent uppercase tracking-wider mb-1 block">
-                  {action.tag}
+                  {t(action.tag)}
                 </span>
-                <p className="text-text-secondary text-sm">{action.text}</p>
+                <p className="text-text-secondary text-sm">{t(action.text)}</p>
               </motion.div>
             ))}
           </div>

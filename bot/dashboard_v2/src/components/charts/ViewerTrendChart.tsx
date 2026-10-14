@@ -11,6 +11,7 @@ import {
 } from 'recharts';
 import type { StreamSession } from '@/types/analytics';
 import { formatNumber, formatDate } from '@/utils/formatters';
+import { useLanguage } from '../../context/LanguageContext';
 
 interface ViewerTrendChartProps {
   sessions: StreamSession[];
@@ -18,11 +19,11 @@ interface ViewerTrendChartProps {
 }
 
 export function ViewerTrendChart({ sessions, title = 'Viewer Trend' }: ViewerTrendChartProps) {
-  // Sort sessions chronologically
+  const { t, locale } = useLanguage();
   const data = [...sessions]
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
     .map(session => ({
-      date: formatDate(session.date),
+      date: formatDate(session.date, locale),
       avgViewers: Math.round(session.avgViewers),
       peakViewers: session.peakViewers,
     }));
@@ -34,10 +35,10 @@ export function ViewerTrendChart({ sessions, title = 'Viewer Trend' }: ViewerTre
           <p className="text-white font-medium mb-2">{label}</p>
           <div className="space-y-1 text-sm">
             <p className="text-accent">
-              Avg: <span className="text-white">{formatNumber(payload[0]?.value)}</span>
+              {t('Avg:')} <span className="text-white">{formatNumber(payload[0]?.value, 0, locale)}</span>
             </p>
             <p className="text-accent">
-              Peak: <span className="text-white">{formatNumber(payload[1]?.value)}</span>
+              {t('Peak:')} <span className="text-white">{formatNumber(payload[1]?.value, 0, locale)}</span>
             </p>
           </div>
         </div>
@@ -50,7 +51,7 @@ export function ViewerTrendChart({ sessions, title = 'Viewer Trend' }: ViewerTre
     <Rise
       className="bg-card rounded-xl border border-border p-5"
     >
-      <h3 className="text-lg font-bold text-white mb-4">{title}</h3>
+      <h3 className="text-lg font-bold text-white mb-4">{t(title)}</h3>
       <div className="h-64">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
@@ -77,7 +78,7 @@ export function ViewerTrendChart({ sessions, title = 'Viewer Trend' }: ViewerTre
               fontSize={12}
               tickLine={false}
               axisLine={false}
-              tickFormatter={(v) => formatNumber(v)}
+              tickFormatter={(v) => formatNumber(v, 0, locale)}
             />
             <Tooltip content={<CustomTooltip />} />
             <Legend
@@ -85,7 +86,7 @@ export function ViewerTrendChart({ sessions, title = 'Viewer Trend' }: ViewerTre
               height={36}
               formatter={(value) => (
                 <span className="text-text-secondary text-sm">
-                  {value === 'avgViewers' ? 'Avg Viewers' : 'Peak Viewers'}
+                  {value === 'avgViewers' ? t('Avg Viewers') : t('Peak Viewers')}
                 </span>
               )}
             />

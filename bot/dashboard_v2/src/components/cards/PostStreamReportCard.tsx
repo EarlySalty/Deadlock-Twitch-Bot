@@ -21,6 +21,7 @@ import type {
   StreamReportV2Body,
   StreamReportWordGroup,
 } from '@/types/analytics';
+import { useLanguage, useT } from '../../context/LanguageContext';
 
 interface PostStreamReportCardProps {
   streamer: string | null;
@@ -89,6 +90,7 @@ function InsightList({
   items: Array<{ title?: string; evidence?: string; why_it_matters?: string; impact?: string }>;
   tone: 'good' | 'bad';
 }) {
+  const t = useT();
   if (!items.length) return null;
   const color = tone === 'good' ? 'text-success' : 'text-danger';
   const border = tone === 'good' ? 'border-success/20 bg-success-soft' : 'border-danger/20 bg-danger-soft';
@@ -96,8 +98,8 @@ function InsightList({
     <div className="space-y-2">
       {items.map((item, index) => (
         <div key={index} className={`rounded-lg border p-3 ${border}`}>
-          <p className={`text-sm font-medium ${color}`}>{item.title || 'Insight'}</p>
-          {item.evidence && <p className="mt-1 text-xs text-white/60">Beleg: {item.evidence}</p>}
+          <p className={`text-sm font-medium ${color}`}>{item.title || t('Insight')}</p>
+          {item.evidence && <p className="mt-1 text-xs text-white/60">{t('Beleg: {evidence}', { evidence: item.evidence })}</p>}
           {(item.why_it_matters || item.impact) && (
             <p className="mt-1 text-xs text-text-secondary">{item.why_it_matters || item.impact}</p>
           )}
@@ -127,12 +129,13 @@ function V2RecommendationList({ items }: { items: NonNullable<StreamReportV2Body
 }
 
 function WordGroups({ groups }: { groups: StreamReportWordGroup[] }) {
+  const t = useT();
   if (groups.length === 0) return null;
 
   return (
     <div className="space-y-2">
       <span className="text-xs font-bold uppercase tracking-wide text-text-secondary">
-        Chat-Wortgruppen
+        {t('Chat-Wortgruppen')}
       </span>
       <div className="flex flex-wrap gap-2">
         {groups.map((group, index) => (
@@ -152,6 +155,7 @@ function WordGroups({ groups }: { groups: StreamReportWordGroup[] }) {
 }
 
 export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCardProps) {
+  const { t, locale } = useLanguage();
   const { isFeatureLocked } = usePlan();
   const locked = isFeatureLocked('post_stream_report');
   const { data, isLoading, error } = useStreamReport(locked ? null : streamer, sessionId);
@@ -162,15 +166,15 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
         <div className="mb-4 flex items-center gap-2">
           <Sparkles className="h-5 w-5 text-primary" />
           <h3 className="text-sm font-bold uppercase tracking-wide text-text-secondary">
-            Letzte Stream-Analyse
+            {t('Letzte Stream-Analyse')}
           </h3>
         </div>
         <div className="flex flex-col items-center justify-center gap-3 py-8">
           <Lock className="h-8 w-8 text-white/30" />
           <p className="text-center text-sm text-text-secondary">
-            Automatische Stream-Analyse nach jedem Stream
+            {t('Automatische Stream-Analyse nach jedem Stream')}
           </p>
-          <p className="text-xs text-white/40">Mit dem Analyse-Zugang freischalten</p>
+          <p className="text-xs text-white/40">{t('Mit dem Analyse-Zugang freischalten')}</p>
         </div>
       </div>
     );
@@ -182,12 +186,12 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
         <div className="mb-4 flex items-center gap-2">
           <Sparkles className="h-5 w-5 text-primary" />
           <h3 className="text-sm font-bold uppercase tracking-wide text-text-secondary">
-            Letzte Stream-Analyse
+            {t('Letzte Stream-Analyse')}
           </h3>
         </div>
         <div className="flex items-center justify-center gap-3 py-8">
           <Loader2 className="h-5 w-5 animate-spin text-accent" />
-          <span className="text-sm text-text-secondary">Lade Report...</span>
+          <span className="text-sm text-text-secondary">{t('Lade Report...')}</span>
         </div>
       </div>
     );
@@ -199,13 +203,13 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
         <div className="mb-4 flex items-center gap-2">
           <Sparkles className="h-5 w-5 text-primary" />
           <h3 className="text-sm font-bold uppercase tracking-wide text-text-secondary">
-            Letzte Stream-Analyse
+            {t('Letzte Stream-Analyse')}
           </h3>
         </div>
         <p className="py-4 text-center text-sm text-text-secondary">
           {!data || data.empty
-            ? 'Nach dem nächsten Stream wird hier automatisch eine KI-Analyse erstellt.'
-            : 'Kein Report verfügbar.'}
+            ? t('Nach dem nächsten Stream wird hier automatisch eine KI-Analyse erstellt.')
+            : t('Kein Report verfügbar.')}
         </p>
       </div>
     );
@@ -217,12 +221,12 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
         <div className="mb-4 flex items-center gap-2">
           <Sparkles className="h-5 w-5 text-primary" />
           <h3 className="text-sm font-bold uppercase tracking-wide text-text-secondary">
-            Letzte Stream-Analyse
+            {t('Letzte Stream-Analyse')}
           </h3>
         </div>
         <div className="flex items-center gap-3 py-4">
           <Loader2 className="h-5 w-5 animate-spin text-accent" />
-          <span className="text-sm text-text-secondary">Analyse wird erstellt...</span>
+          <span className="text-sm text-text-secondary">{t('Analyse wird erstellt...')}</span>
         </div>
       </div>
     );
@@ -234,11 +238,11 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
         <div className="mb-4 flex items-center gap-2">
           <AlertCircle className="h-5 w-5 text-danger" />
           <h3 className="text-sm font-bold uppercase tracking-wide text-text-secondary">
-            Letzte Stream-Analyse
+            {t('Letzte Stream-Analyse')}
           </h3>
         </div>
         <p className="text-sm text-danger">
-          Analyse fehlgeschlagen: {data.error || 'Unbekannter Fehler'}
+          {t('Analyse fehlgeschlagen: {error}', { error: data.error || t('Unbekannter Fehler') })}
         </p>
       </div>
     );
@@ -252,9 +256,9 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
   const legacyChanges: StreamReportChange[] = legacyReport?.veraenderungen || [];
   const legacyRecommendations: StreamReportRecommendation[] = legacyReport?.empfehlungen || [];
   const wordGroups = data.word_groups || [];
-  const modelLabel = data.model === 'opus' ? 'Claude Opus' : 'KI';
+  const modelLabel = data.model === 'opus' ? 'Claude Opus' : t('KI');
   const dateLabel = data.generated_at
-    ? new Date(data.generated_at).toLocaleString('de-DE', {
+    ? new Date(data.generated_at).toLocaleString(locale, {
         dateStyle: 'short',
         timeStyle: 'short',
       })
@@ -266,7 +270,7 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
         <div className="flex items-center gap-2">
           <Sparkles className="h-5 w-5 text-primary" />
           <h3 className="text-sm font-bold uppercase tracking-wide text-text-secondary">
-            Letzte Stream-Analyse
+            {t('Letzte Stream-Analyse')}
           </h3>
         </div>
         <div className="flex items-center gap-2">
@@ -280,7 +284,7 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
           {v2Report?.summary && (
             <div className="rounded-xl border border-primary/20 bg-primary/10 p-4">
               <div className="mb-2 flex items-center justify-between gap-3">
-                <h4 className="font-semibold text-white">{v2Report.summary.headline || 'Stream Report'}</h4>
+                <h4 className="font-semibold text-white">{v2Report.summary.headline || t('Stream Report')}</h4>
                 {v2Report.summary.overall_rating && (
                   <span className="rounded-full border border-primary/30 bg-primary/15 px-2.5 py-1 text-xs font-bold text-primary">
                     {v2Report.summary.overall_rating}
@@ -311,7 +315,7 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <ThumbsDown className="h-4 w-4 text-danger" />
-                <span className="text-xs font-bold uppercase tracking-wide text-danger">Probleme</span>
+                <span className="text-xs font-bold uppercase tracking-wide text-danger">{t('Probleme')}</span>
               </div>
               <InsightList items={v2Report.problems || []} tone="bad" />
             </div>
@@ -321,7 +325,7 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <TrendingUp className="h-4 w-4 text-primary" />
-                <span className="text-xs font-bold uppercase tracking-wide text-primary">Empfehlungen</span>
+                <span className="text-xs font-bold uppercase tracking-wide text-primary">{t('Empfehlungen')}</span>
               </div>
               <V2RecommendationList items={v2Report.recommendations || []} />
             </div>
@@ -332,7 +336,7 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
               <div className="flex items-center gap-2">
                 <ThumbsUp className="h-4 w-4 text-success" />
                 <span className="text-xs font-bold uppercase tracking-wide text-success">
-                  Was lief gut
+                  {t('Was lief gut')}
                 </span>
               </div>
               <div className="space-y-2">
@@ -348,7 +352,7 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
               <div className="flex items-center gap-2">
                 <ThumbsDown className="h-4 w-4 text-danger" />
                 <span className="text-xs font-bold uppercase tracking-wide text-danger">
-                  Verbesserungspotenzial
+                  {t('Verbesserungspotenzial')}
                 </span>
               </div>
               <div className="space-y-2">
@@ -364,7 +368,7 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
               <div className="flex items-center gap-2">
                 <BarChart2 className="h-4 w-4 text-accent" />
                 <span className="text-xs font-bold uppercase tracking-wide text-accent">
-                  Erkennbare Veränderungen
+                  {t('Erkennbare Veränderungen')}
                 </span>
               </div>
               <ChangeList items={legacyChanges} />
@@ -376,7 +380,7 @@ export function PostStreamReportCard({ streamer, sessionId }: PostStreamReportCa
               <div className="flex items-center gap-2">
                 <TrendingUp className="h-4 w-4 text-primary" />
                 <span className="text-xs font-bold uppercase tracking-wide text-primary">
-                  Empfehlungen
+                  {t('Empfehlungen')}
                 </span>
               </div>
               <RecommendationList items={legacyRecommendations} />
