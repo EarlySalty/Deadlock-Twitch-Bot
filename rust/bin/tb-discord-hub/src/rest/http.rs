@@ -171,7 +171,7 @@ impl DiscordHttp {
                 });
             }
             let headers = response.headers().clone();
-            self.limiter.update(&route, &headers);
+            reservation.update(&headers);
             drop(reservation);
             let bytes = response
                 .bytes()
