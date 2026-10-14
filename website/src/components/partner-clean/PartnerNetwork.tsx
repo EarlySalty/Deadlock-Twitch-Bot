@@ -93,7 +93,7 @@ function ChannelBar({ partner }: { partner: NetworkStreamer }) {
         </span>
         <span className="flex items-center gap-1 text-xs text-[var(--color-text-secondary)]">
           <Users size={12} />
-          {partner.viewers} {partner.isLive ? "gerade" : "zuletzt"}
+          {partner.viewers} {landingText(partner.isLive ? "gerade" : "zuletzt")}
           {partner.game ? <span>· {partner.game}</span> : null}
         </span>
       </span>

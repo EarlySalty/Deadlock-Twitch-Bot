@@ -234,5 +234,7 @@ export const landingEnglish: Record<string, string> = {
   "183 Zuschauer": "183 viewers",
   "③ Raid ausführen": "③ Start the raid",
   "④ Angekommen": "④ Arrived",
+  gerade: "now",
+  zuletzt: "last seen",
   "gerade eben": "just now",
 };
