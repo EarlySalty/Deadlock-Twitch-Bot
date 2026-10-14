@@ -1,4 +1,4 @@
-import type { AiConsent, AiJobView } from './api';
+import type { AiConsent, AiJobView, AiVersionMetadata } from './api';
 
 export type AiPreviewScenario = 'consent-off' | 'global-off' | 'render' | 'review' | 'failed' | 'handoff' | 'race' | 'revisions';
 
@@ -20,7 +20,7 @@ const BASE_JOB: AiJobView = {
   provider: 'Anbieter aus Konfiguration',
   model: 'Modell aus Konfiguration',
   original_duration_ms: 54800,
-  output_duration_ms: 42400,
+  output_duration_ms: 40600,
   processing_ms: 183000,
   provider_latency_ms: 78200,
   rendering_ms: 42900,
@@ -34,14 +34,14 @@ const BASE_JOB: AiJobView = {
     { start_ms: 26500, end_ms: 50500, description: 'Der Teamkampf und die Reaktion bleiben erhalten.' },
   ],
   decisions: [
-    { start_ms: 0, end_ms: 4200, description: 'Die ruhige Einleitung wurde entfernt.' },
-    { start_ms: 16500, end_ms: 26500, description: 'Eine Pause ohne neue Spielhandlung wurde gekürzt.' },
+    { start_ms: 4200, end_ms: 16500, description: 'Der Einstieg und die Vorbereitung bleiben erhalten.' },
+    { start_ms: 26500, end_ms: 54800, description: 'Teamkampf und ursprüngliche Reaktion bleiben erhalten.' },
   ],
   uncertainty: ['Eine Spielfähigkeit ist aus den Einzelbildern nicht sicher erkennbar.'],
   review_reasons: ['Prüfe, ob die Untertitel den gesprochenen Begriff korrekt wiedergeben.'],
   original_url: ORIGINAL,
   versions: [
-    { id: 2201, version_no: 1, created_at: '2026-10-11T08:18:03Z', status: 'review', duration_ms: 42400, file_url: OUTPUT, parent_version_id: null, job_id: 1101, variant_index: 0, original_url: ORIGINAL, decisions: [{start_ms:0,end_ms:4200,description:'Die ruhige Einleitung wurde entfernt.'}], approved_platforms: [] },
+    { id: 2201, version_no: 1, created_at: '2026-10-11T08:18:03Z', status: 'review', duration_ms: 40600, file_url: OUTPUT, parent_version_id: null, job_id: 1101, variant_index: 0, original_url: ORIGINAL, decisions: [{start_ms:4200,end_ms:16500,description:'Einstieg behalten.'},{start_ms:26500,end_ms:54800,description:'Teamkampf und Reaktion behalten.'}], approved_platforms: [] },
     { id: 2202, version_no: 2, created_at: '2026-10-11T08:25:00Z', status: 'failed', duration_ms: null, file_url: null, parent_version_id: 2201, job_id: 1102, variant_index: 0, original_url: null, decisions: [], approved_platforms: [] },
   ],
   failure_code: null,
@@ -67,7 +67,7 @@ export function aiPreviewJob(scenario: AiPreviewScenario): AiJobView | null {
   };
   if (scenario === 'revisions') return {
     ...BASE_JOB,
-    versions: [...BASE_JOB.versions, {...BASE_JOB.versions[0],id:2203,version_no:3,parent_version_id:2201,job_id:1103,duration_ms:38000,created_at:'2026-10-11T09:00:00Z'}],
+    versions: [...BASE_JOB.versions, {...BASE_JOB.versions[0],id:2203,version_no:3,parent_version_id:2201,job_id:1103,duration_ms:38000,decisions:[{start_ms:4200,end_ms:12000,description:'Kurzen Einstieg behalten.'},{start_ms:24600,end_ms:54800,description:'Teamkampf und Reaktion behalten.'}],created_at:'2026-10-11T09:00:00Z'}],
   };
   return BASE_JOB;
 }
@@ -80,12 +80,14 @@ function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
-export function createAiPreviewFetch(originalFetch: typeof fetch, scenario: AiPreviewScenario): typeof fetch {
+export function createAiPreviewFetch(originalFetch: typeof fetch, scenario: AiPreviewScenario, autopilot = false): typeof fetch {
   let consent = aiPreviewConsent(scenario);
   let job = aiPreviewJob(scenario);
+  if (autopilot && job) job = {...job,selected_version_id:2203,versions:job.versions.map((version) => version.id === 2201 ? {...version,status:'rejected'} : version)};
   let polls = 0;
   let secondConsent = false;
-  let options = { multi_output_enabled: false, experimental_ai_layout: false };
+  let options = { multi_output_enabled: false, experimental_ai_layout: false, publish_language: 'de' };
+  const metadata = new Map<number, AiVersionMetadata['platforms']>();
   const secondJob: AiJobView = { ...BASE_JOB, id: 1201, clip_db_id: 601, status: 'review', original_url: null, versions: [] };
   let secondFailure: AiJobView = { ...BASE_JOB, id: 1202, clip_db_id: 601, status: 'failed', stage: 'rendering', original_url: null, versions: [], failure_code: 'render_failed', failure_message: 'Die Prüfung ist fehlgeschlagen. Der Anbieter meldet SIMULIERTER_WERT aus /var/test/mock.', can_retry: true };
   let secondStarted: AiJobView | null = null;
@@ -97,7 +99,7 @@ export function createAiPreviewFetch(originalFetch: typeof fetch, scenario: AiPr
     const channel = method === 'GET' ? url.searchParams.get('twitch_user_id') : body.twitch_user_id;
     if (url.pathname === `${PREFIX}/options` && method === 'GET') return response(options);
     if (url.pathname === `${PREFIX}/options` && method === 'PUT' && typeof body.multi_output_enabled === 'boolean' && typeof body.experimental_ai_layout === 'boolean') {
-      options = { multi_output_enabled: body.multi_output_enabled, experimental_ai_layout: body.experimental_ai_layout };
+      options = { multi_output_enabled: body.multi_output_enabled, experimental_ai_layout: body.experimental_ai_layout, publish_language: typeof body.publish_language === 'string' ? body.publish_language : options.publish_language };
       return response(options);
     }
     if (scenario === 'race' && channel === '987654321') {
@@ -125,6 +127,20 @@ export function createAiPreviewFetch(originalFetch: typeof fetch, scenario: AiPr
       return response({ error: 'not_found' }, 404);
     }
     if (channel !== CHANNEL) return response({ error: 'channel_not_found' }, 403);
+    if (/\/videos\/\d+\/editor$/.test(url.pathname) && method === 'POST' && job) return response({ job });
+    const copyMatch = url.pathname.match(/\/videos\/(\d+)\/metadata$/);
+    if (copyMatch && job) {
+      const id = Number(copyMatch[1]);
+      const version = job.versions.find((item) => item.id === id);
+      if (!version) return response({ error: 'not_found' }, 404);
+      const editable = version.status === 'review';
+      if (method === 'PUT') {
+        if (!editable) return response({ error: 'Diese Fassung ist nicht mehr zur Sichtung offen.' }, 409);
+        metadata.set(id, body.platforms as AiVersionMetadata['platforms']);
+      }
+      const copy = { title: 'Teamkampf am letzten Wächter', description: 'Der entscheidende Spielmoment aus dem Deadlock-Clip.', hashtags: ['Deadlock', 'Clips'] };
+      return response({video_id: id, editable, platforms: metadata.get(id) ?? {youtube: copy, tiktok: copy, instagram: copy}});
+    }
     if (scenario === 'handoff' && url.pathname === '/twitch/social-media/api/admin/clips' && method === 'GET') {
       const page = Number(url.searchParams.get('page'));
       const pageSize = Number(url.searchParams.get('page_size'));
@@ -162,7 +178,7 @@ export function createAiPreviewFetch(originalFetch: typeof fetch, scenario: AiPr
       const action = versionAction[3];
       if (action === 'revision') {
         if (!consent.external_ai_consent || !consent.global_allowed || typeof body.feedback !== 'string' || !body.feedback.trim()) return response({error:'not_allowed'},403);
-        job = {...job,id:1104,parent_version_id:version.id,status:'awaiting_confirmation',stage:'planning',completed_at:null,revision_proposal:{summary:'Der Einstieg wird stärker gekürzt.',impact:'Die neue Fassung behält den Teamkampf und die ursprüngliche Reaktion.',reanalyze:false,requires_confirmation:true,estimated_provider_cost_usd:0}};
+        job = {...job,id:1104,parent_version_id:version.id,versions:autopilot ? job.versions.map((item) => item.id === version.id ? {...item,status:'rejected',approved_platforms:[]} : item) : job.versions,status:'awaiting_confirmation',stage:'planning',completed_at:null,revision_proposal:{summary:'Der Einstieg wird stärker gekürzt.',impact:'Die neue Fassung behält den Teamkampf und die ursprüngliche Reaktion.',reanalyze:false,requires_confirmation:true,estimated_provider_cost_usd:0}};
       } else if (action === 'select') job = {...job,selected_version_id:version.id};
       else if (action === 'approve' || action === 'schedule') {
         const selected = Array.isArray(body.platforms) ? body.platforms.filter((item): item is string => typeof item === 'string' && ['youtube','tiktok','instagram'].includes(item)) : [];
@@ -173,13 +189,13 @@ export function createAiPreviewFetch(originalFetch: typeof fetch, scenario: AiPr
       return response({job});
     }
     if (url.pathname === `${PREFIX}/jobs/1104/proposal` && method === 'POST' && job?.id === 1104 && job.status === 'awaiting_confirmation') {
-      job = {...job,status:body.accept === true ? 'rendering' : 'rejected',stage:body.accept === true ? 'rendering' : 'planning'};
+      job = {...job,status:body.accept === true ? 'rendering' : 'rejected',stage:body.accept === true ? 'rendering' : 'planning',versions:autopilot && body.accept !== true ? job.versions.map((item) => item.id === job?.parent_version_id ? {...item,status:'review'} : item) : job.versions};
       polls = 0;
       return response({job});
     }
     if (url.pathname === `${PREFIX}/jobs/${job?.id}` && method === 'GET' && job) {
-      if (job.status === 'rendering' && ++polls >= 4) job = job.id === 1104 ? {...job,status:'review',stage:'review',versions:[...job.versions,{...BASE_JOB.versions[0],id:2204,version_no:4,job_id:1104,parent_version_id:job.parent_version_id,duration_ms:33000}],revision_proposal:null} : { ...BASE_JOB, clip_db_id: job.clip_db_id };
-      return response(job);
+      if (job.status === 'rendering' && ++polls >= 4) job = job.id === 1104 ? {...job,status:'review',stage:'review',selected_version_id:2204,versions:[...job.versions,{...BASE_JOB.versions[0],id:2204,version_no:4,job_id:1104,parent_version_id:job.parent_version_id,duration_ms:33000,decisions:[{start_ms:8500,end_ms:12000,description:'Kürzeren Einstieg behalten.'},{start_ms:25300,end_ms:54800,description:'Teamkampf und Reaktion behalten.'}]}],revision_proposal:null} : { ...BASE_JOB, clip_db_id: job.clip_db_id };
+      return response({...job,publishing_in_autopilot:autopilot});
     }
     return response({ error: 'not_found' }, 404);
   };
