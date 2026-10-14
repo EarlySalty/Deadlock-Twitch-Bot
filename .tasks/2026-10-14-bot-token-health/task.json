@@ -11,7 +11,7 @@
     "Persist only health timestamps and short failure codes, never token material",
     "Validate the current token hourly and retain the existing refresh cadence",
     "Health write failures do not disable chat",
-    "Detect missing health, newer failures, and success older than two hours only while the bot service runs",
+    "Read producer-owned outage episodes only while the bot service runs and monitoring is enabled",
     "Reuse incident delay of 90 seconds and idempotent broker delivery",
     "Persist recovery delivery and retry state",
     "Pass affected package build, formatting, linting, token tests and isolated PostgreSQL watchdog tests",
@@ -24,12 +24,13 @@
     "Credential state and success or failure health publication share the same critical section.",
     "Boot success is published only after the persisted bot identity has been bound.",
     "Both token notification phases describe historical validation observations, never present chat availability; HTTP errors can leave a usable cached token.",
-    "All boot and runtime publications use one nonblocking serialized retry owner that survives terminal boot paths until the latest desired state is committed.",
     "Retries persist observation time, not retry time; transactional statement timeouts prevent timed-out writes from overtaking newer observations.",
     "Outage and recovery delivery failures have independent durable first-error markers.",
     "Bot-token incident boundaries use failure and successful validation event timestamps, not watchdog polling time; notification eligibility uses the actual recovered outage duration.",
-    "Pending publication merges retain the maximum success and failure timestamps independently, including across database retries.",
     "An intervening success closes an open token incident even if a newer failure already exists; that newer failure opens a separate incident.",
-    "Recovery event timestamps are clamped to incident start, including delayed success after missing health."
+    "Every boot and runtime transition is queued and retried in order without merging, including after publisher handles are dropped.",
+    "The first failure opens an episode; repeated failures preserve its start; the first subsequent success closes it and later successes preserve its end.",
+    "Watchdog observations use durable episode ids and original boundaries, including fully recovered episodes first seen after 90 seconds.",
+    "Disabling monitoring suppresses prior episodes and closes any open episode without recovery notification."
   ]
 }

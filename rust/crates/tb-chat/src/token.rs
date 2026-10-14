@@ -727,8 +727,6 @@ struct TokenHealthObservation {
     failure_kind: Option<String>,
     monitoring_enabled: bool,
     observed_at: DateTime<Utc>,
-    last_ok_at: Option<DateTime<Utc>>,
-    last_failure_at: Option<DateTime<Utc>>,
 }
 
 impl TokenHealthObservation {
@@ -741,18 +739,6 @@ impl TokenHealthObservation {
             failure_kind: failure_kind.map(str::to_owned),
             monitoring_enabled,
             observed_at,
-            last_ok_at: (monitoring_enabled && failure_kind.is_none()).then_some(observed_at),
-            last_failure_at: (monitoring_enabled && failure_kind.is_some()).then_some(observed_at),
-        }
-    }
-
-    fn merge(&mut self, latest: Self) {
-        self.last_ok_at = self.last_ok_at.max(latest.last_ok_at);
-        self.last_failure_at = self.last_failure_at.max(latest.last_failure_at);
-        if latest.observed_at >= self.observed_at {
-            self.failure_kind = latest.failure_kind;
-            self.monitoring_enabled = latest.monitoring_enabled;
-            self.observed_at = latest.observed_at;
         }
     }
 }
@@ -762,30 +748,11 @@ impl TokenHealthPublisher {
         let (sender, mut receiver) =
             tokio::sync::mpsc::unbounded_channel::<TokenHealthObservation>();
         tokio::spawn(async move {
-            while let Some(mut desired) = receiver.recv().await {
+            while let Some(desired) = receiver.recv().await {
                 let mut backoff = Duration::from_secs(1);
-                loop {
-                    while let Ok(latest) = receiver.try_recv() {
-                        desired.merge(latest);
-                    }
-                    if write_token_health(&pool, &desired).await {
-                        break;
-                    }
+                while !write_token_health(&pool, &desired).await {
                     tracing::warn!("Bot-Token-Zustand konnte nicht gespeichert werden; erneuter Versuch folgt, Chat läuft weiter");
-                    if receiver.is_closed() {
-                        tokio::time::sleep(backoff).await;
-                    } else {
-                        tokio::select! {
-                            latest = receiver.recv() => {
-                                if let Some(latest) = latest {
-                                    desired.merge(latest);
-                                    backoff = Duration::from_secs(1);
-                                    continue;
-                                }
-                            }
-                            _ = tokio::time::sleep(backoff) => {}
-                        }
-                    }
+                    tokio::time::sleep(backoff).await;
                     backoff = (backoff * 2).min(Duration::from_secs(60));
                 }
             }
@@ -823,13 +790,40 @@ async fn write_token_health(pool: &PgPool, observation: &TokenHealthObservation)
             .execute(&mut *transaction)
             .await?;
         sqlx::query(
-        "INSERT INTO twitch_bot_token_health(singleton,last_ok_at,last_failure_at,failure_kind,monitoring_enabled)
-         VALUES(TRUE,$3,$4,$1,$2)
-         ON CONFLICT(singleton) DO UPDATE SET
-             last_ok_at=GREATEST(excluded.last_ok_at,twitch_bot_token_health.last_ok_at),
-             last_failure_at=GREATEST(excluded.last_failure_at,twitch_bot_token_health.last_failure_at),
+            "INSERT INTO twitch_bot_token_health(singleton,failure_kind,monitoring_enabled)
+             VALUES(TRUE,$1,$2) ON CONFLICT(singleton) DO UPDATE SET
              failure_kind=excluded.failure_kind,monitoring_enabled=excluded.monitoring_enabled",
-        ).bind(observation.failure_kind.as_deref()).bind(observation.monitoring_enabled).bind(observation.last_ok_at).bind(observation.last_failure_at).execute(&mut *transaction).await?;
+        )
+        .bind(observation.failure_kind.as_deref())
+        .bind(observation.monitoring_enabled)
+        .execute(&mut *transaction)
+        .await?;
+        if !observation.monitoring_enabled {
+            sqlx::query(
+                "UPDATE twitch_bot_token_outages SET suppressed_at=COALESCE(suppressed_at,$1),
+                recovered_at=COALESCE(recovered_at,GREATEST(started_at,$1))",
+            )
+            .bind(observation.observed_at)
+            .execute(&mut *transaction)
+            .await?;
+        } else if observation.failure_kind.is_some() {
+            sqlx::query(
+                "INSERT INTO twitch_bot_token_outages(started_at,failure_kind) VALUES($1,$2)
+                ON CONFLICT ((true)) WHERE recovered_at IS NULL DO NOTHING",
+            )
+            .bind(observation.observed_at)
+            .bind(observation.failure_kind.as_deref())
+            .execute(&mut *transaction)
+            .await?;
+        } else {
+            sqlx::query(
+                "UPDATE twitch_bot_token_outages SET recovered_at=$1
+                WHERE recovered_at IS NULL AND started_at <= $1",
+            )
+            .bind(observation.observed_at)
+            .execute(&mut *transaction)
+            .await?;
+        }
         transaction.commit().await
     };
     matches!(
@@ -932,20 +926,14 @@ mod tests {
         })
         .await
         .expect("initial health landed");
-        let initial_ok: DateTime<Utc> =
-            sqlx::query_scalar("SELECT last_ok_at FROM twitch_bot_token_health")
-                .fetch_one(&pool)
-                .await
-                .expect("initial timestamp");
         let (failure, recovery) = tokio::join!(manager.force_refresh(), manager.force_refresh());
         assert!(failure.is_err());
         recovery.expect("successful recovery");
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let healthy: bool = sqlx::query_scalar(
-                    "SELECT failure_kind IS NULL AND last_ok_at > $1 FROM twitch_bot_token_health",
+                    "SELECT EXISTS(SELECT 1 FROM twitch_bot_token_outages WHERE recovered_at IS NOT NULL)",
                 )
-                .bind(initial_ok)
                 .fetch_one(&pool)
                 .await
                 .expect("health decision");
@@ -1012,6 +1000,59 @@ mod tests {
             .execute(&pool)
             .await
             .expect("disabled baseline");
+        let start = DateTime::from_timestamp(1_800_000_000, 0).expect("start");
+        for (events, expected) in [
+            (vec![(0, true), (120, false)], vec![(0, Some(120))]),
+            (
+                vec![(0, true), (10, false), (120, false)],
+                vec![(0, Some(10))],
+            ),
+            (vec![(0, true), (60, true), (120, true)], vec![(0, None)]),
+            (
+                vec![(0, true), (100, false), (110, true)],
+                vec![(0, Some(100)), (110, None)],
+            ),
+        ] {
+            sqlx::query("TRUNCATE twitch_bot_token_outages")
+                .execute(&pool)
+                .await
+                .expect("reset episodes");
+            for (seconds, failed) in events {
+                let observation = TokenHealthObservation::new(
+                    failed.then_some("invalid"),
+                    true,
+                    start + chrono::Duration::seconds(seconds),
+                );
+                assert!(write_token_health(&pool, &observation).await);
+                assert!(write_token_health(&pool, &observation).await);
+            }
+            let episodes: Vec<(DateTime<Utc>, Option<DateTime<Utc>>)> = sqlx::query_as(
+                "SELECT started_at,recovered_at FROM twitch_bot_token_outages ORDER BY id",
+            )
+            .fetch_all(&pool)
+            .await
+            .expect("episodes");
+            let boundaries: Vec<_> = episodes
+                .into_iter()
+                .map(|(at, recovered)| {
+                    (
+                        (at - start).num_seconds(),
+                        recovered.map(|at| (at - start).num_seconds()),
+                    )
+                })
+                .collect();
+            assert_eq!(boundaries, expected);
+        }
+        sqlx::query("TRUNCATE twitch_bot_token_outages")
+            .execute(&pool)
+            .await
+            .expect("reset replay");
+        sqlx::query(
+            "UPDATE twitch_bot_token_health SET monitoring_enabled=false,failure_kind=NULL",
+        )
+        .execute(&pool)
+        .await
+        .expect("reset baseline");
         for enabled in [true, false] {
             let held = pool.acquire().await.expect("hold unavailable pool");
             let publisher = TokenHealthPublisher::new(pool.clone());
@@ -1034,20 +1075,44 @@ mod tests {
             drop(held);
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
-                    let state: (bool, Option<String>, Option<DateTime<Utc>>) = sqlx::query_as("SELECT monitoring_enabled,failure_kind,last_failure_at FROM twitch_bot_token_health").fetch_one(&pool).await.expect("health state");
-                    if state.0 == enabled && state.1.as_deref() == enabled.then_some("boot_failed") {
+                    let state: (bool, Option<String>) = sqlx::query_as(
+                        "SELECT monitoring_enabled,failure_kind FROM twitch_bot_token_health",
+                    )
+                    .fetch_one(&pool)
+                    .await
+                    .expect("health state");
+                    let episodes: Vec<(DateTime<Utc>, Option<DateTime<Utc>>)> = sqlx::query_as(
+                        "SELECT started_at,recovered_at FROM twitch_bot_token_outages ORDER BY id",
+                    )
+                    .fetch_all(&pool)
+                    .await
+                    .expect("episodes");
+                    if state.0 == enabled
+                        && state.1.as_deref() == enabled.then_some("boot_failed")
+                        && (!enabled || episodes.len() == 2)
+                    {
                         if enabled {
-                            let observed = state.2.expect("failure timestamp");
-                            assert_eq!(observed.timestamp_micros(), failed_again_at.timestamp_micros());
-                            let last_ok: DateTime<Utc> = sqlx::query_scalar("SELECT last_ok_at FROM twitch_bot_token_health")
-                                .fetch_one(&pool).await.expect("retained intervening success");
-                            assert_eq!(last_ok.timestamp_micros(), successful_at.timestamp_micros());
+                            assert_eq!(
+                                episodes[0].0.timestamp_micros(),
+                                observed_before.timestamp_micros()
+                            );
+                            assert_eq!(
+                                episodes[0].1.expect("first recovery").timestamp_micros(),
+                                successful_at.timestamp_micros()
+                            );
+                            assert_eq!(
+                                episodes[1].0.timestamp_micros(),
+                                failed_again_at.timestamp_micros()
+                            );
+                            assert!(episodes[1].1.is_none());
                         }
                         break;
                     }
                     tokio::task::yield_now().await;
                 }
-            }).await.expect("terminal publication eventually lands");
+            })
+            .await
+            .expect("terminal publication eventually lands");
         }
         pool.close().await;
         sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
