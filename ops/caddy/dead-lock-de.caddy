@@ -11,6 +11,14 @@
 	}
 }
 
+(dead_lock_local_redirect) {
+	route {
+		@redirect_query expression `{http.request.uri.query} != ""`
+		redir @redirect_query {args[0]}?{query} {args[1]}
+		redir * {args[0]} {args[1]}
+	}
+}
+
 (dead_lock_english_dashboard) {
 	import common_probe_blockers
 	encode zstd gzip
@@ -56,6 +64,69 @@
 
 	route {
 		import dead_lock_oauth_redirects
+		@website_root path /
+		handle @website_root {
+			import dead_lock_local_redirect /streamer/ 302
+		}
+		@streamer_onboarding_alt path /streamer/onboarding /streamer/onboarding/
+		handle @streamer_onboarding_alt {
+			import dead_lock_local_redirect /twitch/onboarding 308
+		}
+		@streamer_bare path /streamer /streamer/index.html
+		handle @streamer_bare {
+			import dead_lock_local_redirect /streamer/ 308
+		}
+		handle /streamer* {
+			route {
+				@non_static_clip not path /streamer/clips /streamer/clips/
+				route @non_static_clip {
+					import /etc/caddy/partner-profiles.caddy
+				}
+				@streamer_v1_bare path /streamer/v1
+				handle @streamer_v1_bare {
+					import dead_lock_local_redirect /streamer/v1/ 308
+				}
+				@streamer_v2_alt path /streamer/v2 /streamer/v2/ /streamer/v2/*
+				handle @streamer_v2_alt {
+					import dead_lock_local_redirect /streamer/ 308
+				}
+
+				@streamer_dynamic path /streamer/commands /streamer/help /streamer/faq
+				handle @streamer_dynamic {
+					header {
+						Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com https://news.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://static-cdn.jtvnw.net; font-src 'self'; connect-src 'self' https://cloudflareinsights.com https://news.google.com https://www.google.com; frame-src 'self' https://clips.twitch.tv https://www.twitch.tv https://player.twitch.tv https://medal.tv https://demo.deutsche-deadlock-community.de; base-uri 'none'; frame-ancestors 'none'"
+					}
+					reverse_proxy 127.0.0.1:8769 {
+						header_up X-Forwarded-For {remote_host}
+						header_up X-Forwarded-Proto https
+					}
+				}
+				@streamer_asset_request path *.js *.mjs *.css *.map *.json *.png *.jpg *.jpeg *.gif *.svg *.webp *.ico *.woff *.woff2 *.ttf *.eot *.txt *.xml *.mp4 *.webm
+				handle @streamer_asset_request {
+					uri strip_prefix /streamer
+					root * /opt/deadlock/twitch/current/website/dist
+					@streamer_asset_exists file
+					handle @streamer_asset_exists {
+						file_server
+					}
+					respond "Not Found" 404
+				}
+				handle {
+					header {
+						Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com https://news.google.com https://widget.trustpilot.com https://invitejs.trustpilot.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://static-cdn.jtvnw.net; font-src 'self'; connect-src 'self' https://cloudflareinsights.com https://news.google.com https://www.google.com; frame-src 'self' https://clips.twitch.tv https://www.twitch.tv https://player.twitch.tv https://medal.tv https://demo.deutsche-deadlock-community.de https://widget.trustpilot.com; base-uri 'none'; frame-ancestors 'none'"
+					}
+					uri strip_prefix /streamer
+					root * /opt/deadlock/twitch/current/website/dist
+					try_files {path} {path}index.html /index.html
+					file_server
+				}
+			}
+		}
+		handle_path /website* {
+			root * /opt/deadlock/twitch/current/website/dist
+			file_server
+		}
+
 		handle /twitch/onboarding* {
 			@onboarding_asset_request path_regexp onboarding_asset_request (?i)^/twitch/onboarding/.+\.(js|mjs|css|map|json|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|eot|txt|xml)$
 			handle @onboarding_asset_request {
@@ -173,8 +244,8 @@ http://dead-lock.de, http://www.dead-lock.de {
 	import common_probe_blockers
 	route {
 		import dead_lock_oauth_redirects
-		@dashboard path /twitch /twitch/*
-		redir @dashboard https://{host}{uri} 308
+		@english_site path / /streamer* /website* /twitch /twitch/*
+		redir @english_site https://{host}{uri} 308
 		redir https://deutsche-deadlock-community.de{uri} 308
 	}
 }

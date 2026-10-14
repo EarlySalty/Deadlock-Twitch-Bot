@@ -1,5 +1,5 @@
 import { globalTimezoneOwner } from '@/utils/socialMediaChannel';
-import { useT } from '@/context/LanguageContext';
+import { useLanguage, useT } from '../context/LanguageContext';
 import { GlobalTimezone } from '@/components/verwaltung/GlobalTimezone';
 import { useEffect, useState, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
@@ -51,10 +51,11 @@ interface VerwaltungTabDef {
 export function VerwaltungPage() {
   const oauthLink = useOAuthLink();
   const t = useT();
+  const { locale } = useLanguage();
   const { data: authStatus, isLoading: loadingAuth } = useAuthStatus();
   const timezoneOwner = globalTimezoneOwner(window.location.search, authStatus?.twitchUserId ?? undefined);
   const onboarding = useOnboarding();
-  const [connectionNotice, setConnectionNotice] = useState('');
+  const [connectionNotice, setConnectionNotice] = useState<'checking' | { discord: string; steam: string } | null>(null);
   const [returnMessage] = useState(() => {
     const params = new URLSearchParams(window.location.search);
     const failed = params.has('err');
@@ -93,7 +94,7 @@ export function VerwaltungPage() {
       <div className="panel-card rounded-2xl p-6 md:p-8">
         <div className="flex items-center gap-3 text-text-secondary">
           <Loader2 className="h-5 w-5 animate-spin text-primary" />
-          <span>Konto wird geladen ...</span>
+          <span>{t("Konto wird geladen ...")}</span>
         </div>
       </div>
     );
@@ -103,14 +104,14 @@ export function VerwaltungPage() {
     const errorMessage = error instanceof Error ? error.message : 'Unbekannter Fehler';
     return (
       <div className="panel-card rounded-2xl p-6 md:p-8">
-        <h2 className="text-xl font-bold text-white">Konto-Daten nicht verfügbar</h2>
-        <p className="mt-1 text-sm text-text-secondary">{errorMessage}</p>
+        <h2 className="text-xl font-bold text-white">{t("Konto-Daten nicht verfügbar")}</h2>
+        <p className="mt-1 text-sm text-text-secondary">{t(errorMessage)}</p>
         <button
           onClick={() => void refetch()}
           className="mt-4 inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-border-hover hover:bg-card-hover"
         >
           <ArrowRight className="h-4 w-4" />
-          Erneut laden
+          {t("Erneut laden")}
         </button>
       </div>
     );
@@ -133,12 +134,12 @@ export function VerwaltungPage() {
   const discordError = isError || home.discord?.status === 'error';
   const steamError = isError || home.steam?.status === 'error';
   const checkConnections = async () => {
-    setConnectionNotice('Verbindungen werden geprüft …');
+    setConnectionNotice('checking');
     onboarding.refresh();
     const result = await refetch();
     const status = (service: 'discord' | 'steam') => result.isError || result.data?.[service]?.status === 'error'
       ? 'gerade nicht prüfbar' : result.data?.[service]?.connected ? 'verbunden' : 'nicht verbunden';
-    setConnectionNotice(`Prüfung abgeschlossen. Discord ${status('discord')}. Steam ${status('steam')}.`);
+    setConnectionNotice({ discord: status('discord'), steam: status('steam') });
   };
   const discordConnectUrl = home.discord?.connectUrl ? oauthLink(home.discord.connectUrl) : null;
   const steamConnected = Boolean(home.steam?.connected);
@@ -158,7 +159,7 @@ export function VerwaltungPage() {
     : needsReauth
       ? 'Das bestehende Twitch-OAuth ist zur Re-Auth markiert. Bitte neu autorisieren.'
       : missingScopeCount > 1
-      ? `${missingScopeCount} Scopes fehlen. Neu autorisieren, um alle Funktionen zu nutzen.`
+      ? t('{count} Scopes fehlen. Neu autorisieren, um alle Funktionen zu nutzen.', { count: missingScopeCount.toLocaleString(locale) })
       : '1 Scope fehlt. Bitte neu autorisieren.';
   const partnerStatus = String((authStatus as any)?.partnerStatus || '').trim().toLowerCase();
   const tokenErrorGraceExpiresAt = String((authStatus as any)?.tokenErrorGraceExpiresAt || '').trim();
@@ -176,7 +177,7 @@ export function VerwaltungPage() {
       >
         <div className="mb-5">
           <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">OAuth</p>
-          <h2 className="display-font text-2xl font-bold text-white mb-1">Twitch-Verbindung</h2>
+          <h2 className="display-font text-2xl font-bold text-white mb-1">{t("Twitch-Verbindung")}</h2>
         </div>
 
         <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-4">
@@ -187,8 +188,8 @@ export function VerwaltungPage() {
                 : <ShieldAlert className="h-5 w-5 text-on-gold" />}
             </div>
             <div className="min-w-0 flex-1">
-              <p className={`text-base font-bold ${oauthStatusClass}`}>{oauthStatusText}</p>
-              <p className="mt-0.5 text-xs text-text-secondary">{oauthHintText}</p>
+              <p className={`text-base font-bold ${oauthStatusClass}`}>{t(oauthStatusText)}</p>
+              <p className="mt-0.5 text-xs text-text-secondary">{t(oauthHintText)}</p>
             </div>
           </div>
         </div>
@@ -198,7 +199,7 @@ export function VerwaltungPage() {
           <div className="mb-5 space-y-2">
             {grantedScopes.length > 0 && (
               <div>
-                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-secondary">Aktive Scopes ({grantedScopes.length})</p>
+                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-secondary">{t("Aktive Scopes (")}{grantedScopes.length.toLocaleString(locale)})</p>
                 <div className="flex flex-wrap gap-1.5">
                   {grantedScopes.map((scope: string) => (
                     <span key={scope} className="rounded-full border border-success/30 bg-success/10 px-2.5 py-0.5 text-[11px] font-medium text-success">
@@ -210,7 +211,7 @@ export function VerwaltungPage() {
             )}
             {missingScopes.length > 0 && (
               <div>
-                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-secondary">Fehlende Scopes ({missingScopes.length})</p>
+                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-secondary">{t("Fehlende Scopes (")}{missingScopes.length.toLocaleString(locale)})</p>
                 <div className="flex flex-wrap gap-1.5">
                   {missingScopes.map((scope: string) => (
                     <span key={scope} className="rounded-full border border-error/40 bg-error/10 px-2.5 py-0.5 text-[11px] font-medium text-error">
@@ -228,7 +229,7 @@ export function VerwaltungPage() {
           className="inline-flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-5 py-2.5 text-sm font-semibold text-primary transition-colors hover:border-primary/60 hover:bg-primary/20"
         >
           <ShieldCheck className="h-4 w-4" />
-          Jetzt neu autorisieren
+          {t("Jetzt neu autorisieren")}
         </a>
       </motion.section>
 
@@ -245,7 +246,7 @@ export function VerwaltungPage() {
       >
         <div className="mb-5">
           <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">Discord</p>
-          <h2 className="display-font text-2xl font-bold text-white mb-1">Discord verbinden</h2>
+          <h2 className="display-font text-2xl font-bold text-white mb-1">{t("Discord verbinden")}</h2>
         </div>
 
         <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-5">
@@ -255,10 +256,10 @@ export function VerwaltungPage() {
             </div>
             <div className="min-w-0 flex-1">
               <p className={`text-base font-bold ${discordConnected ? 'text-success' : 'text-warning'}`}>
-                {isFetching ? 'Wird geprüft …' : discordError ? 'Gerade nicht prüfbar' : discordConnected ? 'Verbunden' : 'Nicht verbunden'}
+                {isFetching ? t("Wird geprüft …") : discordError ? t("Gerade nicht prüfbar") : discordConnected ? t('Verbunden') : t("Nicht verbunden")}
               </p>
               <p className="mt-0.5 text-xs text-text-secondary">
-                {discordError ? 'Der Status konnte nicht geprüft werden. Das bedeutet nicht, dass deine Verbindung fehlt.' : discordConnected ? 'Dein Discord-Konto ist mit Twitch verknüpft.' : 'Verbinde Discord zuerst, damit du danach Steam zuordnen kannst.'}
+                {discordError ? t("Der Status konnte nicht geprüft werden. Das bedeutet nicht, dass deine Verbindung fehlt.") : discordConnected ? t("Dein Discord-Konto ist mit Twitch verknüpft.") : t("Verbinde Discord zuerst, damit du danach Steam zuordnen kannst.")}
               </p>
             </div>
           </div>
@@ -270,7 +271,7 @@ export function VerwaltungPage() {
             className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-5 py-2.5 text-sm font-semibold text-accent transition-colors hover:border-accent/60 hover:bg-accent/20"
           >
             <MessageSquare className="h-4 w-4" />
-            {discordConnected ? 'Erneut verbinden' : 'Discord verknüpfen'}
+            {discordConnected ? t("Erneut verbinden") : t("Discord verknüpfen")}
           </a>
         ) : (
           <div className="space-y-2">
@@ -280,11 +281,11 @@ export function VerwaltungPage() {
               className="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-border bg-background/70 px-5 py-2.5 text-sm font-semibold text-text-secondary"
             >
               <MessageSquare className="h-4 w-4" />
-              {discordError || isFetching ? 'Status prüfen' : discordConnected ? 'Discord verbunden' : 'Discord-Verbindung nicht verfügbar'}
+              {discordError || isFetching ? t("Status prüfen") : discordConnected ? t("Discord verbunden") : t("Discord-Verbindung nicht verfügbar")}
             </button>
             {!discordConnected && !discordError && !isFetching && (
               <p className="text-xs text-text-secondary">
-                Öffne deine persönliche Partner-Ansicht, um Discord zu verbinden.
+                {t("Öffne deine persönliche Partner-Ansicht, um Discord zu verbinden.")}
               </p>
             )}
           </div>
@@ -304,7 +305,7 @@ export function VerwaltungPage() {
       >
         <div className="mb-5">
           <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">Steam</p>
-          <h2 className="display-font text-2xl font-bold text-white mb-1">Steam verbinden</h2>
+          <h2 className="display-font text-2xl font-bold text-white mb-1">{t("Steam verbinden")}</h2>
         </div>
 
         <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-5">
@@ -314,10 +315,10 @@ export function VerwaltungPage() {
             </div>
             <div className="min-w-0 flex-1">
               <p className={`text-base font-bold ${steamConnected ? 'text-success' : 'text-warning'}`}>
-                {isFetching ? 'Wird geprüft …' : steamError ? 'Gerade nicht prüfbar' : steamConnected ? 'Verbunden' : 'Nicht verbunden'}
+                {isFetching ? t("Wird geprüft …") : steamError ? t("Gerade nicht prüfbar") : steamConnected ? t('Verbunden') : t("Nicht verbunden")}
               </p>
               <p className="mt-0.5 text-xs text-text-secondary">
-                {steamError ? 'Der Status konnte nicht geprüft werden. Eine bestehende Verbindung kann weiterhin gültig sein.' : steamConnected ? 'Dein Steam-Account ist verknüpft.' : discordConnected ? 'Verknüpfe Steam für deinen Deadlock-Rang und deine Spielstatistiken.' : 'Verbinde zuerst Discord, danach Steam.'}
+                {steamError ? t("Der Status konnte nicht geprüft werden. Eine bestehende Verbindung kann weiterhin gültig sein.") : steamConnected ? t("Dein Steam-Account ist verknüpft.") : discordConnected ? t("Verknüpfe Steam für deinen Deadlock-Rang und deine Spielstatistiken.") : t("Verbinde zuerst Discord, danach Steam.")}
               </p>
             </div>
           </div>
@@ -329,7 +330,7 @@ export function VerwaltungPage() {
             className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-5 py-2.5 text-sm font-semibold text-accent transition-colors hover:border-accent/60 hover:bg-accent/20"
           >
             <Gamepad2 className="h-4 w-4" />
-            {steamConnected ? 'Erneut verknüpfen' : 'Steam verknüpfen'}
+            {steamConnected ? t("Erneut verknüpfen") : t("Steam verknüpfen")}
           </a>
         ) : (
           <div className="space-y-2">
@@ -339,18 +340,18 @@ export function VerwaltungPage() {
               className="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-border bg-background/70 px-5 py-2.5 text-sm font-semibold text-text-secondary"
             >
               <Gamepad2 className="h-4 w-4" />
-              Steam verknüpfen
+              {t("Steam verknüpfen")}
             </button>
             <p className="text-xs text-text-secondary">
-              {steamError || isFetching ? 'Bitte prüfe den Status erneut, bevor du ein Konto neu verknüpfst.' : discordConnected ? 'Der Verbindungslink ist gerade nicht verfügbar. Bitte prüfe den Status erneut.' : 'Verknüpfe zuerst deinen Discord-Account. Die Steam-Verknüpfung läuft darüber.'}
+              {steamError || isFetching ? t("Bitte prüfe den Status erneut, bevor du ein Konto neu verknüpfst.") : discordConnected ? t("Der Verbindungslink ist gerade nicht verfügbar. Bitte prüfe den Status erneut.") : t("Verknüpfe zuerst deinen Discord-Account. Die Steam-Verknüpfung läuft darüber.")}
             </p>
           </div>
         )}
       </motion.section>
 
-      <button type="button" onClick={checkConnections} disabled={isFetching} className="min-h-11 w-fit rounded-lg border border-primary/50 px-4 py-2 text-sm font-semibold text-primary disabled:opacity-50">Status prüfen</button>
+      <button type="button" onClick={checkConnections} disabled={isFetching} className="min-h-11 w-fit rounded-lg border border-primary/50 px-4 py-2 text-sm font-semibold text-primary disabled:opacity-50">{t("Status prüfen")}</button>
 
-      <p role="status" aria-atomic="true" className="text-sm text-text-secondary">{connectionNotice}</p>
+      <p role="status" aria-atomic="true" className="text-sm text-text-secondary">{connectionNotice === 'checking' ? t('Verbindungen werden geprüft …') : connectionNotice ? t('Prüfung abgeschlossen. Discord {discord}. Steam {steam}.', { discord: t(connectionNotice.discord), steam: t(connectionNotice.steam) }) : ''}</p>
 
       {/* Profile Section */}
       <motion.section
@@ -361,27 +362,27 @@ export function VerwaltungPage() {
         transition={{ duration: 0.32, delay: 0.12 }}
       >
         <div className="mb-5">
-          <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">Profil</p>
-          <h2 className="display-font text-2xl font-bold text-white mb-1">Account-Details</h2>
+          <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">{t("Profil")}</p>
+          <h2 className="display-font text-2xl font-bold text-white mb-1">{t("Account-Details")}</h2>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3 mb-4">
           <div className="soft-elevate rounded-xl border border-border bg-background/60 p-3.5">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary mb-1.5">Twitch Login</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary mb-1.5">{t("Twitch Login")}</p>
             <p className="text-sm font-semibold text-white font-mono">{twitchLogin ? `@${twitchLogin}` : '–'}</p>
           </div>
           <div className="soft-elevate rounded-xl border border-border bg-background/60 p-3.5">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary mb-1.5">Display Name</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary mb-1.5">{t("Display Name")}</p>
             <p className="text-sm font-semibold text-white">{displayName || '–'}</p>
           </div>
           <div className="soft-elevate rounded-xl border border-border bg-background/60 p-3.5">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary mb-1.5">User-ID</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary mb-1.5">{t("User-ID")}</p>
             <p className="text-sm font-semibold text-white font-mono">{userId || '–'}</p>
           </div>
         </div>
 
         <div className="rounded-xl border border-border/50 bg-background/40 px-4 py-3 text-xs text-text-secondary">
-          Profiländerungen direkt auf Twitch vornehmen. Daten werden beim nächsten Login synchronisiert.
+          {t("Profiländerungen direkt auf Twitch vornehmen. Daten werden beim nächsten Login synchronisiert.")}
         </div>
       </motion.section>
     </>
@@ -421,13 +422,13 @@ export function VerwaltungPage() {
     >
       <div className="mb-5">
         <p className="mb-1 text-sm font-medium uppercase tracking-wider text-primary">
-          Stream-Overlay
+          {t("Stream-Overlay")}
         </p>
         <h2 className="display-font mb-1 text-2xl font-bold text-white">
-          Overlay für OBS
+          {t("Overlay für OBS")}
         </h2>
         <p className="text-sm text-text-secondary">
-          Stell dir dein Stream-Overlay zusammen — Rang, Winrate, Serie und Live-Match als einblendbare Karte für OBS.
+          {t("Stell dir dein Stream-Overlay zusammen — Rang, Winrate, Serie und Live-Match als einblendbare Karte für OBS.")}
         </p>
       </div>
 
@@ -436,7 +437,7 @@ export function VerwaltungPage() {
         className="inline-flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-5 py-2.5 text-sm font-semibold text-primary transition-colors hover:border-primary/60 hover:bg-primary/20"
       >
         <ArrowRight className="h-4 w-4" />
-        Overlay-Baukasten öffnen
+        {t("Overlay-Baukasten öffnen")}
       </a>
     </motion.section>
   );
@@ -463,21 +464,19 @@ export function VerwaltungPage() {
             <div className="space-y-3">
               <h2 className="text-lg font-bold text-white">
                 {partnerStatus === 'token_error'
-                  ? 'Twitch OAuth braucht Re-Auth'
+                  ? t("Twitch OAuth braucht Re-Auth")
                   : partnerStatus === 'departnered'
-                  ? 'Du bist aktuell kein aktiver Partner'
+                  ? t("Du bist aktuell kein aktiver Partner")
                   : partnerStatus === 'archived'
-                  ? 'Dein Account ist im Admin-Archiv'
-                  : 'Partner-Status inaktiv'}
+                  ? t("Dein Account ist im Admin-Archiv")
+                  : t("Partner-Status inaktiv")}
               </h2>
               <p className="text-sm text-text-secondary">
-                Verwaltung, Pläne und Affiliate bleiben offen. Analyse, Social Media und
-                Title-Generator sind gesperrt. Eine erfolgreiche Twitch-OAuth setzt den Status
-                automatisch wieder auf aktiv (außer Bot-Bann oder permanenter Block).
+                {t("Verwaltung, Pläne und Affiliate bleiben offen. Analyse, Social Media und Title-Generator sind gesperrt. Eine erfolgreiche Twitch-OAuth setzt den Status automatisch wieder auf aktiv (außer Bot-Bann oder permanenter Block).")}
               </p>
               {tokenErrorGraceExpiresAt ? (
                 <p className="text-xs text-text-secondary">
-                  Grace endet: {tokenErrorGraceExpiresAt}
+                  {t("Grace endet:")} {new Date(tokenErrorGraceExpiresAt).toLocaleString(locale)}
                 </p>
               ) : null}
               <a
@@ -485,25 +484,25 @@ export function VerwaltungPage() {
                 className="inline-flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2 text-sm font-semibold text-primary transition-colors hover:border-primary/60 hover:bg-primary/20"
               >
                 <ShieldCheck className="h-4 w-4" />
-                Jetzt neu autorisieren
+                {t("Jetzt neu autorisieren")}
               </a>
             </div>
           </Rise>
         ) : null}
 
-        {returnMessage && <p role="status" className={`rounded-xl border p-4 text-sm ${returnMessage.failed ? 'border-warning/40 text-warning' : 'border-success/40 text-success'}`}>{returnMessage.text}</p>}
-        {isError && data && <p role="alert" className="text-sm text-warning">Der aktuelle Kontostatus konnte nicht geladen werden. <button onClick={checkConnections} className="underline">Status prüfen</button></p>}
+        {returnMessage && <p role="status" className={`rounded-xl border p-4 text-sm ${returnMessage.failed ? 'border-warning/40 text-warning' : 'border-success/40 text-success'}`}>{t(returnMessage.text)}</p>}
+        {isError && data && <p role="alert" className="text-sm text-warning">{t("Der aktuelle Kontostatus konnte nicht geladen werden.")} <button onClick={checkConnections} className="underline">{t("Status prüfen")}</button></p>}
         <Rise as="section" className="panel-card rounded-2xl p-5 md:p-6">
           <div className="mb-1 text-[11px] font-bold uppercase tracking-[0.18em] text-primary">
-            Konto
+            {t("Konto")}
           </div>
-          <h1 className="display-font text-2xl font-extrabold text-white">Dein Bot, deine Einstellungen</h1>
+          <h1 className="display-font text-2xl font-extrabold text-white">{t("Dein Bot, deine Einstellungen")}</h1>
           <p className="mt-2 max-w-2xl text-sm text-text-secondary">
-            Hier verbindest du deine Konten und schaltest Funktionen an oder aus. Wähle einen Bereich und passe den Bot an deinen Kanal an.
+            {t("Hier verbindest du deine Konten und schaltest Funktionen an oder aus. Wähle einen Bereich und passe den Bot an deinen Kanal an.")}
           </p>
         </Rise>
 
-        <nav aria-label="Verwaltungsbereiche" className="sticky top-2 z-20 flex flex-wrap gap-1.5 rounded-xl border border-border bg-card/90 p-1.5 backdrop-blur">
+        <nav aria-label={t("Verwaltungsbereiche")} className="sticky top-2 z-20 flex flex-wrap gap-1.5 rounded-xl border border-border bg-card/90 p-1.5 backdrop-blur">
           {tabs.map((item) => {
             const Icon = item.icon;
             const isActive = item.id === activeTab.id;
@@ -517,13 +516,13 @@ export function VerwaltungPage() {
                 }`}
               >
                 <Icon className="h-4 w-4" />
-                {item.label}
+                {t(item.label)}
               </a>
             );
           })}
         </nav>
 
-        {onboarding.status?.paused && onboarding.error && <p role="alert" className="rounded-lg border border-warning/40 p-3 text-sm text-warning">{onboarding.error} <button type="button" onClick={() => void onboarding.save({paused: true})} className="underline">Pause speichern</button></p>}
+        {onboarding.status?.paused && onboarding.error && <p role="alert" className="rounded-lg border border-warning/40 p-3 text-sm text-warning">{t(onboarding.error)} <button type="button" onClick={() => void onboarding.save({paused: true})} className="underline">{t("Pause speichern")}</button></p>}
         <OnboardingGuide tab={activeTab.id} />
         <div className="space-y-4 md:space-y-5">{activeTab.render()}</div>
     </>

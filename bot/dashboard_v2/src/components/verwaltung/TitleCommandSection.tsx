@@ -1,3 +1,4 @@
+import { useT } from '../../context/LanguageContext';
 import { EditableCommandName } from './CommandNameSection';
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
@@ -9,6 +10,7 @@ import {
 } from '@/api/titleCommand';
 
 export function TitleCommandSection() {
+  const t = useT();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -60,38 +62,36 @@ export function TitleCommandSection() {
     >
       <div className="mb-5">
         <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">
-          Chat-Befehl
+          {t("Chat-Befehl")}
         </p>
         <h2 className="display-font text-2xl font-bold text-white mb-1">
-          Titel-Befehl
+          {t("Titel-Befehl")}
         </h2>
         <p className="text-sm text-text-secondary">
-          Du und deine Mods können damit Stichwörter für neue Stream-Titel vorschlagen lassen.
-          Aus heißt: Der Bot reagiert auf den Befehl nicht mehr –
-          auch wenn ein anderer Bot sie nutzt.
+          {t("Du und deine Mods können damit Stichwörter für neue Stream-Titel vorschlagen lassen. Aus heißt: Der Bot reagiert auf den Befehl nicht mehr – auch wenn ein anderer Bot sie nutzt.")}
         </p>
       </div>
 
       {error && (
         <div role="alert" className="mb-4 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
-          {error}
+          {t(error)}
         </div>
       )}
 
       {success && (
         <div role="status" className="mb-4 rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-sm text-success">
-          {success}
+          {t(success)}
         </div>
       )}
 
       {loading ? (
         <div className="flex items-center gap-3 text-text-secondary text-sm">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          Status wird geladen …
+          {t("Status wird geladen …")}
         </div>
       ) : !settings ? (
         <div className="rounded-xl border border-border bg-background/40 px-4 py-6 text-sm text-text-secondary text-center">
-          Einstellung gerade nicht verfügbar.
+          {t("Einstellung gerade nicht verfügbar.")}
         </div>
       ) : (
         <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4">
@@ -104,18 +104,18 @@ export function TitleCommandSection() {
                 }`}
               >
                 {enabled
-                  ? 'Befehl ist aktiv'
-                  : 'Befehl ist aus'}
+                  ? t("Befehl ist aktiv")
+                  : t("Befehl ist aus")}
               </p>
               <p className="text-xs text-text-secondary mt-0.5">
                 {enabled
-                  ? 'Du und deine Mods können Titelvorschläge anfordern.'
-                  : 'Der Bot bleibt auf den Befehl stumm.'}
+                  ? t("Du und deine Mods können Titelvorschläge anfordern.")
+                  : t("Der Bot bleibt auf den Befehl stumm.")}
               </p>
             </div>
             <button
               type="button"
-              aria-label={`Titel-Befehl ${enabled ? 'deaktivieren' : 'aktivieren'}`}
+              aria-label={t(enabled ? 'Titel-Befehl deaktivieren' : 'Titel-Befehl aktivieren')}
               disabled={pending}
               onClick={() => void onToggle()}
               className={`inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold transition-colors ${
@@ -131,7 +131,7 @@ export function TitleCommandSection() {
               ) : (
                 <Power className="h-4 w-4" />
               )}
-              {enabled ? 'Deaktivieren' : 'Aktivieren'}
+              {enabled ? t("Deaktivieren") : t("Aktivieren")}
             </button>
           </div>
         </div>

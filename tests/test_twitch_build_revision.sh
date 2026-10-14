@@ -4,7 +4,7 @@ repo="$(cd -- "$(dirname -- "$0")/.." && pwd)"
 scratch="$(mktemp -d)"
 trap 'rm -rf -- "$scratch"' EXIT
 mkdir -p "$scratch/src"
-cp "$repo/rust/bin/build_revision.rs" "$scratch/build.rs"
+cp "$repo/rust/bin/build_revision.rs" "$scratch/build_revision.rs"
 cat > "$scratch/Cargo.toml" <<'EOF'
 [package]
 name = "revision-check"
@@ -12,19 +12,28 @@ version = "0.1.0"
 edition = "2021"
 EOF
 cat > "$scratch/src/main.rs" <<'EOF'
-include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
+include!("../build_revision.rs");
 fn main() { assert!(print_build_revision()); }
 EOF
-printf '/target/\n' > "$scratch/.gitignore"
+printf '/target/\n/stamped/\n/package/\n/check.sh\n' > "$scratch/.gitignore"
 git -C "$scratch" init -q
 git -C "$scratch" add .
 git -C "$scratch" -c user.name=Test -c user.email=test@example.invalid commit -qm initial
+fail() { printf '%s\n' "$1" >&2; exit 1; }
+eval "$(sed -n '/^stamp_binary() {$/,/^}$/p' "$repo/ops/twitch-release-build")"
+mkdir -p "$scratch/stamped"
 build_and_check() {
-  /home/nathanael/.local/bin/cargo-slot build --quiet --release --jobs 3 --manifest-path "$scratch/Cargo.toml"
-  local actual
-  actual="$("$scratch/target/release/revision-check" --build-revision)"
+  /home/nathanael/.local/bin/cargo-slot build --quiet --jobs 4 --manifest-path "$scratch/Cargo.toml" --target-dir "$scratch/target" --config 'profile.verify.opt-level=3' --config 'profile.verify.lto="thin"'
+  local actual revision
+  [[ $("$scratch/target/verify/revision-check" --build-revision) == unstamped ]]
+  revision=$(git -C "$scratch" rev-parse HEAD)
+  if [[ -n $(git -C "$scratch" status --porcelain --untracked-files=all) ]]; then revision+=-dirty; fi
+  [[ $revision == "$1" ]]
+  cp -L "$scratch/target/verify/revision-check" "$scratch/stamped/revision-check"
+  stamp_binary "$scratch/stamped/revision-check" "$revision"
+  actual="$("$scratch/stamped/revision-check" --build-revision)"
   [[ "$actual" == "$1" ]]
-  [[ "$(readelf --string-dump=.twitch_build "$scratch/target/release/revision-check" | awk '/\[/{print $NF}')" == "$1" ]]
+  [[ $("$scratch/target/verify/revision-check" --build-revision) == unstamped ]]
 }
 first="$(git -C "$scratch" rev-parse HEAD)"
 /home/nathanael/.cargo/bin/cargo generate-lockfile --quiet --manifest-path "$scratch/Cargo.toml"
@@ -38,9 +47,11 @@ git -C "$scratch" add src/main.rs
 git -C "$scratch" -c user.name=Test -c user.email=test@example.invalid commit -qm next
 second="$(git -C "$scratch" rev-parse HEAD)"
 build_and_check "$second"
+unchanged_mtime=$(stat -c %y "$scratch/target/verify/revision-check")
 git -C "$scratch" -c user.name=Test -c user.email=test@example.invalid commit --allow-empty -qm empty
 third="$(git -C "$scratch" rev-parse HEAD)"
 build_and_check "$third"
+[[ $(stat -c %y "$scratch/target/verify/revision-check") == "$unchanged_mtime" ]]
 git -C "$scratch" checkout -q "$second"
 build_and_check "$second"
 printf '\nmod extra;\n' >> "$scratch/src/main.rs"
@@ -55,24 +66,28 @@ tracked_revision="$(git -C "$scratch" rev-parse HEAD)"
 build_and_check "$tracked_revision"
 git -C "$scratch" checkout -q "$second"
 build_and_check "$second"
-sed -n '/^check_binary_revisions() {$/,/^}$/p' "$repo/ops/systemd/install-twitch-release.sh" > "$scratch/check.sh"
-source "$scratch/check.sh"
+eval "$(sed -n '/^check_binary_revisions() {$/,/^}$/p' "$repo/ops/systemd/install-twitch-release.sh")"
 mkdir -p "$scratch/package/rust/target/release"
 for name in tb-bot tb-dashboard tb-stream-audit tb-config-check tb-llm-usage-recover tb-stt-server; do
-  cp "$scratch/target/release/revision-check" "$scratch/package/rust/target/release/$name"
+  cp "$scratch/stamped/revision-check" "$scratch/package/rust/target/release/$name"
 done
-git_sha="$second"
-social_ai_expected=1
-collector_expected=0
-clip_context_expected=0
-watchdog_expected=0
-storage_expected=0
+export git_sha="$second"
+export social_ai_expected=1
+export collector_expected=0
+export clip_context_expected=0
+export watchdog_expected=0
+export storage_expected=0
 check_binary_revisions "$scratch/package"
-git_sha="$third"
+cp "$scratch/target/verify/revision-check" "$scratch/package/rust/target/release/tb-bot"
+if (check_binary_revisions "$scratch/package") 2>/dev/null; then
+  printf 'Ungestempeltes Binary wurde akzeptiert\n' >&2; exit 1
+fi
+cp "$scratch/stamped/revision-check" "$scratch/package/rust/target/release/tb-bot"
+export git_sha="$third"
 if (check_binary_revisions "$scratch/package") 2>/dev/null; then
   echo 'Veraltete Binaries wurden akzeptiert' >&2; exit 1
 fi
-git_sha="$second"
+export git_sha="$second"
 cp /usr/bin/true "$scratch/package/rust/target/release/tb-config-check"
 if (check_binary_revisions "$scratch/package") 2>/dev/null; then
   echo 'Editor ohne Herkunft wurde akzeptiert' >&2; exit 1
@@ -81,7 +96,7 @@ rm -- "$scratch/package/rust/target/release/tb-config-check"
 if (check_binary_revisions "$scratch/package") 2>/dev/null; then
   echo 'Release ohne Editor wurde akzeptiert' >&2; exit 1
 fi
-cp "$scratch/target/release/revision-check" "$scratch/package/rust/target/release/tb-config-check"
+cp "$scratch/stamped/revision-check" "$scratch/package/rust/target/release/tb-config-check"
 check_binary_revisions "$scratch/package"
 cp /usr/bin/true "$scratch/package/rust/target/release/tb-stt-server"
 if (check_binary_revisions "$scratch/package") 2>/dev/null; then
@@ -91,7 +106,7 @@ rm -- "$scratch/package/rust/target/release/tb-stt-server"
 if (check_binary_revisions "$scratch/package") 2>/dev/null; then
   printf 'Release ohne STT-Binary wurde akzeptiert\n' >&2; exit 1
 fi
-cp "$scratch/target/release/revision-check" "$scratch/package/rust/target/release/tb-stt-server"
+cp "$scratch/stamped/revision-check" "$scratch/package/rust/target/release/tb-stt-server"
 check_binary_revisions "$scratch/package"
 cp /usr/bin/true "$scratch/package/rust/target/release/tb-bot"
 if (check_binary_revisions "$scratch/package") 2>/dev/null; then

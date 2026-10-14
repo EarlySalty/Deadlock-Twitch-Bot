@@ -1,4 +1,4 @@
-include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
+include!("../../../build_revision.rs");
 
 use std::sync::Arc;
 

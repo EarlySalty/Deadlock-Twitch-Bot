@@ -1,3 +1,4 @@
+import { useT } from '../../context/LanguageContext';
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { AlertTriangle, Loader2, PlugZap } from 'lucide-react';
@@ -17,6 +18,7 @@ interface Props {
 }
 
 export function DisconnectBotSection({ login }: Props) {
+  const t = useT();
   const [stage, setStage] = useState<Stage>('idle');
   const [confirm, setConfirm] = useState('');
   const [pending, setPending] = useState(false);
@@ -56,18 +58,16 @@ export function DisconnectBotSection({ login }: Props) {
       transition={{ duration: 0.32, delay: 0.2 }}
     >
       <div className="mb-5">
-        <p className="text-sm uppercase tracking-wider font-medium text-danger mb-1">Kanal</p>
-        <h2 className="display-font text-2xl font-bold text-white mb-1">Bot vom Kanal trennen</h2>
+        <p className="text-sm uppercase tracking-wider font-medium text-danger mb-1">{t("Kanal")}</p>
+        <h2 className="display-font text-2xl font-bold text-white mb-1">{t("Bot vom Kanal trennen")}</h2>
         <p className="text-sm text-text-secondary">
-          Der Bot verlässt deinen Kanal: er gibt seine Moderator-Rechte ab, die Partnerschaft endet
-          und er kommt nicht von selbst zurück. Deine Twitch-Verbindung bleibt bestehen — meldest du
-          dich später wieder an, moddet er sich erneut selbst.
+          {t("Der Bot verlässt deinen Kanal: er gibt seine Moderator-Rechte ab, die Partnerschaft endet und er kommt nicht von selbst zurück. Deine Twitch-Verbindung bleibt bestehen — meldest du dich später wieder an, moddet er sich erneut selbst.")}
         </p>
       </div>
 
       {error && (
         <div className="mb-4 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
-          {error}
+          {t(error)}
         </div>
       )}
 
@@ -79,19 +79,19 @@ export function DisconnectBotSection({ login }: Props) {
               : 'border-success/40 bg-success/10 text-success'
           }`}
         >
-          <p className="font-semibold">{report.message}</p>
+          <p className="font-semibold">{t(report.message)}</p>
           <ul className="mt-2 space-y-1 text-xs text-text-secondary">
             <li>
-              Moderator-Rechte:{' '}
+              {t("Moderator-Rechte:")}{' '}
               {report.unmod === 'removed'
-                ? 'entzogen'
+                ? t("entzogen")
                 : report.unmod === 'not_moderator'
-                  ? 'war ohnehin kein Moderator'
-                  : `ACHTUNG — bleiben bestehen (${report.unmod}). Bitte im Twitch-Chat mit /unmod entfernen.`}
+                  ? t("war ohnehin kein Moderator")
+                  : t("ACHTUNG — bleiben bestehen ({outcome}). Bitte im Twitch-Chat mit /unmod entfernen.", { outcome: report.unmod })}
             </li>
-            <li>Partnerschaft: {report.departnered ? 'beendet' : 'war nicht mehr aktiv'}</li>
-            <li>Opt-out: {report.opt_out ? 'gesetzt' : 'ACHTUNG — nicht gesetzt'}</li>
-            <li>Discord-Streamer-Rolle: {roleLabel(report.discord_role)}</li>
+            <li>{t("Partnerschaft:")} {report.departnered ? t("beendet") : t("war nicht mehr aktiv")}</li>
+            <li>Opt-out: {report.opt_out ? t("gesetzt") : t("ACHTUNG — nicht gesetzt")}</li>
+            <li>{t("Discord-Streamer-Rolle:")} {roleLabel(report.discord_role, t)}</li>
           </ul>
         </div>
       )}
@@ -107,7 +107,7 @@ export function DisconnectBotSection({ login }: Props) {
           className="inline-flex items-center gap-2 rounded-lg border border-danger/40 bg-danger/10 px-5 py-2.5 text-sm font-semibold text-danger transition-colors hover:bg-danger/20 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <PlugZap className="h-4 w-4" />
-          Bot vom Kanal trennen
+          {t("Bot vom Kanal trennen")}
         </button>
       )}
 
@@ -116,8 +116,7 @@ export function DisconnectBotSection({ login }: Props) {
           <p className="flex items-start gap-2 text-sm text-white">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-danger" />
             <span>
-              Danach laufen keine Chat-Funktionen, Raids, Statistiken oder Overlays mehr auf deinem
-              Kanal. Bereits erfasste Daten bleiben erhalten.
+              {t("Danach laufen keine Chat-Funktionen, Raids, Statistiken oder Overlays mehr auf deinem Kanal. Bereits erfasste Daten bleiben erhalten.")}
             </span>
           </p>
           <div className="mt-4 flex flex-wrap gap-3">
@@ -126,14 +125,14 @@ export function DisconnectBotSection({ login }: Props) {
               onClick={() => setStage('type')}
               className="inline-flex items-center gap-2 rounded-lg border border-danger/40 bg-danger/10 px-4 py-2 text-sm font-semibold text-danger transition-colors hover:bg-danger/20"
             >
-              Verstanden, weiter
+              {t("Verstanden, weiter")}
             </button>
             <button
               type="button"
               onClick={reset}
               className="rounded-lg border border-border px-4 py-2 text-sm font-semibold text-text-secondary transition-colors hover:text-white"
             >
-              Abbrechen
+              {t("Abbrechen")}
             </button>
           </div>
         </div>
@@ -142,7 +141,7 @@ export function DisconnectBotSection({ login }: Props) {
       {stage === 'type' && (
         <div className="soft-elevate rounded-xl border border-danger/40 bg-background/60 p-4">
           <label className="block text-sm text-text-secondary" htmlFor="disconnect-confirm">
-            Tippe zur Bestätigung <span className="font-semibold text-white">{expected}</span> ein:
+            {t("Tippe zur Bestätigung")} <span className="font-semibold text-white">{expected}</span> {t("ein:")}
           </label>
           <input
             id="disconnect-confirm"
@@ -160,7 +159,7 @@ export function DisconnectBotSection({ login }: Props) {
               className="inline-flex items-center gap-2 rounded-lg border border-danger/40 bg-danger/10 px-4 py-2 text-sm font-semibold text-danger transition-colors hover:bg-danger/20 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />}
-              Jetzt trennen
+              {t("Jetzt trennen")}
             </button>
             <button
               type="button"
@@ -168,7 +167,7 @@ export function DisconnectBotSection({ login }: Props) {
               onClick={reset}
               className="rounded-lg border border-border px-4 py-2 text-sm font-semibold text-text-secondary transition-colors hover:text-white disabled:opacity-50"
             >
-              Abbrechen
+              {t("Abbrechen")}
             </button>
           </div>
         </div>

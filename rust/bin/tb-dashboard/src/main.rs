@@ -5,7 +5,7 @@
 //!
 //! **Nicht automatisch starten** — Start ist user-gated (erfordert echtes DSN).
 
-include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
+include!("../../build_revision.rs");
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};

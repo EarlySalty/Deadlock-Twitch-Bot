@@ -42,8 +42,13 @@ test("only the two English hosts select English on the main landing page", () =>
       "/streamer/v3/",
       "/streamer/vertriebler/",
       "/streamer/affiliate-portal/",
+      "/streamer/faq/index.html",
+      "/website/vergleich/",
+      "/twitch/onboarding/index.html",
     ]) {
       assert.equal(loadLocale(host, path).isEnglishLanding(), true);
+      assert.equal(loadLocale(host, path, "?lang=de").isEnglishLanding(), false);
+      assert.equal(loadLocale("deutsche-deadlock-community.de", path).isEnglishLanding(), false);
     }
   }
   for (const host of [
