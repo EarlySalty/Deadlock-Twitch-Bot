@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { Rise } from '@/motion/Rise';
@@ -24,6 +24,7 @@ import {
   Film,
   Home,
   Loader2,
+  Menu,
   MonitorPlay,
   MessageSquare,
   Radio,
@@ -99,6 +100,9 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
   const queryClient = useQueryClient();
   const onboarding = useOnboarding();
   const [avatarFailed, setAvatarFailed] = useState(false);
+  const [navigationOpen, setNavigationOpen] = useState(false);
+  const navigationId = useId();
+  const compactNavigation = activeRoute === 'social';
   const shownAvatar = avatarFailed ? null : avatarUrl;
   const canSeeChallenges = Boolean(
     authStatus?.authenticated && authStatus.twitchUserId && (authStatus.isAdmin || authStatus.partnerStatus === 'active'),
@@ -185,6 +189,14 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
           </div>
         </div>
 
+        {compactNavigation && <button
+          type="button"
+          aria-expanded={navigationOpen}
+          aria-controls={navigationId}
+          onClick={() => setNavigationOpen(open => !open)}
+          className="flex min-h-11 w-full items-center justify-between rounded-xl border border-border px-3 py-2 text-sm text-text-secondary lg:hidden"
+        ><span>Navigation</span><Menu className="h-4 w-4" aria-hidden /></button>}
+        <div id={navigationId} className={`space-y-4 ${compactNavigation && !navigationOpen ? 'hidden lg:block' : ''}`}>
         <div className="border-t border-border" />
 
         <div className="space-y-2">
@@ -303,6 +315,7 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
           </button>}
           <a href="/twitch/feedback" aria-current={activeRoute === 'feedback' ? 'page' : undefined} className="flex min-h-11 items-center gap-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-sm font-medium text-text-secondary hover:text-white"><MessageSquare className="h-4 w-4 shrink-0" /><span className="flex-1">Kritik &amp; Wünsche</span><FeedbackBadge isAdmin={adminMode} /></a>
           <a href="/twitch/faq" className="flex items-center gap-2 px-3 py-2 text-sm text-text-secondary hover:text-white"><CircleHelp className="h-4 w-4 shrink-0" />Häufige Fragen</a>
+        </div>
         </div>
       </div>
     </Rise>

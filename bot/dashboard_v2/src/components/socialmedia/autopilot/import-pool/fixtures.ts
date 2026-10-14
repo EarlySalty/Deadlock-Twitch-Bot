@@ -83,6 +83,7 @@ function fixtureClip(
       thumbnail_url: "",
       streamer_login: "fixture_channel",
     },
+    view_count: 40 + (clipId.length * 37) % 900,
     selected_at: null,
     first_selected_at: null,
     processed_at: null,

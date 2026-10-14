@@ -12,6 +12,19 @@ export const QUEUE_FILTERS: Array<{ id: QueueStage; label: string }> = [
   { id: 'archive', label: 'Archiv' },
 ];
 
+export function formatTerminInZone(iso: string, locale: string, timezone: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const options: Intl.DateTimeFormatOptions = {
+    weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  };
+  try {
+    return date.toLocaleString(locale, { ...options, timeZone: timezone });
+  } catch {
+    return date.toLocaleString(locale, options);
+  }
+}
+
 export function queuedSlots(clip: SocialClipMitPosting): number {
   if (clip.status !== 'approved' && clip.status !== 'publishing') return 0;
   return Object.entries(clip.scheduled_at ?? {}).filter(

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { ShieldCheck } from 'lucide-react';
+import { StudioSectionHeading } from '../../StudioSectionHeading';
 import { publishReviewClient } from './api';
 import type { DestinationDecision, NotificationPreferences, PendingHandling, PublishDestination, PublishPlatform, PublishReviewClient, PublishSnapshot, PublishVideo, TikTokVersionOptions } from './api';
 import './publish-review.css';
@@ -6,6 +8,7 @@ import './publish-review.css';
 export interface PublishReviewPanelProps {
   twitchUserId: string;
   client?: PublishReviewClient;
+  onChanged?: () => void;
   onOpenVideo?: (videoId: number) => void;
   onConfigureTikTok?: (videoId: number) => Promise<TikTokVersionOptions | null>;
 }
@@ -33,7 +36,7 @@ export function PublishReviewPanel(props: PublishReviewPanelProps) {
   return <OwnerPanel key={props.twitchUserId} {...props} />;
 }
 
-function OwnerPanel({ twitchUserId, client = publishReviewClient, onOpenVideo, onConfigureTikTok }: PublishReviewPanelProps) {
+function OwnerPanel({ twitchUserId, client = publishReviewClient, onChanged, onOpenVideo, onConfigureTikTok }: PublishReviewPanelProps) {
   const [snapshot, setSnapshot] = useState<PublishSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +75,7 @@ function OwnerPanel({ twitchUserId, client = publishReviewClient, onOpenVideo, o
     setBusy(true); setError(null); setMessage(null);
     try {
       await action();
+      onChanged?.();
       const data = await client.load(twitchUserId);
       if (mounted.current) {
         setSnapshot(data);
@@ -89,10 +93,9 @@ function OwnerPanel({ twitchUserId, client = publishReviewClient, onOpenVideo, o
   }
 
   return <section className="publish-review" aria-label="Freigabe und Veröffentlichung" aria-busy={busy} data-unsaved={preferencesDirty || pending !== null || busy ? 'true' : undefined} data-saving={busy ? 'true' : undefined}>
-    <header className="publish-review-header">
-      <div><h2>Freigabe & Veröffentlichung</h2><p>Prüfe die fertige Videoversion. Eine Kontoverbindung ist noch keine Freigabe.</p></div>
-      <button type="button" disabled={busy} onClick={() => void act(async () => {}, 'Stand aktualisiert.')}>Aktualisieren</button>
-    </header>
+    <StudioSectionHeading title="Freigabe & Veröffentlichung" icon={ShieldCheck}
+      description="Prüfe die fertige Videoversion. Eine Kontoverbindung ist noch keine Freigabe."
+      actions={<button type="button" disabled={busy} onClick={() => void act(async () => {}, 'Stand aktualisiert.')}>Aktualisieren</button>} />
     {error && <p role="alert" className="publish-error">{error}</p>}
     {message && <p role="status" className="publish-message">{message}</p>}
     {!snapshot && !error && <p role="status">Veröffentlichungsdaten werden geladen.</p>}
@@ -112,12 +115,12 @@ function OwnerPanel({ twitchUserId, client = publishReviewClient, onOpenVideo, o
         <p>Ungeprüfte Videos bleiben sieben Tage ab dem fertigen Rendern verfügbar. Freigegebene Videos sowie laufende, fehlgeschlagene oder unklare Veröffentlichungen bleiben geschützt.</p>
         <form onSubmit={(event) => { event.preventDefault(); void act(() => client.preferences(twitchUserId, preferences), 'Benachrichtigungen gespeichert.', true); }}>
           <fieldset disabled={busy}><legend>Wo möchtest du Hinweise erhalten?</legend>
-            <label><input type="checkbox" checked={preferences.dashboard} onChange={(event) => setPreferences({ ...preferences, dashboard: event.target.checked })} />Im Dashboard</label>
-            <label><input type="checkbox" checked={preferences.discord} disabled={!snapshot.capabilities.discord} onChange={(event) => setPreferences({ ...preferences, discord: event.target.checked })} />Discord, nur nach deiner Auswahl</label>
+            <label><input type="checkbox" role="switch" checked={preferences.dashboard} onChange={(event) => setPreferences({ ...preferences, dashboard: event.target.checked })} />Im Dashboard</label>
+            <label><input type="checkbox" role="switch" checked={preferences.discord} disabled={!snapshot.capabilities.discord} onChange={(event) => setPreferences({ ...preferences, discord: event.target.checked })} />Discord, nur nach deiner Auswahl</label>
             <p className="publish-note">E-Mail ist nicht verfügbar. Freigaben erfolgen ausschließlich im Dashboard.</p>
           </fieldset>
           <fieldset disabled={busy}><legend>Welche Hinweise möchtest du?</legend>
-            {events.map(({ key, label }) => <label key={key}><input type="checkbox" checked={Boolean(preferences[key])} onChange={(event) => setPreferences({ ...preferences, [key]: event.target.checked })} />{label}</label>)}
+            {events.map(({ key, label }) => <label key={key}><input type="checkbox" role="switch" checked={Boolean(preferences[key])} onChange={(event) => setPreferences({ ...preferences, [key]: event.target.checked })} />{label}</label>)}
             <label>Vorwarnung in Stunden<input aria-label="Vorwarnung in Stunden" type="number" min="1" max="168" value={preferences.reminder_hours} onChange={(event) => setPreferences({ ...preferences, reminder_hours: Number(event.target.value) })} /></label>
           </fieldset>
           <button type="submit" disabled={busy}>Benachrichtigungen speichern</button>
