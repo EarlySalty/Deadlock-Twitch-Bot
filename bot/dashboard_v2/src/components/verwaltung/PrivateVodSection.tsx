@@ -1,3 +1,4 @@
+import { useLanguage } from '@/context/LanguageContext';
 import { useEffect, useRef, useState } from 'react';
 import { Download, Loader2, Power, PowerOff, RefreshCw } from 'lucide-react';
 import {
@@ -29,6 +30,7 @@ function jobStatus(job: PrivateVodJob, now: number): string {
 }
 
 export function PrivateVodSection() {
+  const { t, locale } = useLanguage();
   const [data, setData] = useState<PrivateVodClipsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -89,57 +91,57 @@ export function PrivateVodSection() {
 
   return (
     <div className="mt-6 border-t border-border pt-6">
-      <h3 className="text-lg font-semibold text-white">Private VOD-Ausschnitte</h3>
+      <h3 className="text-lg font-semibold text-white">{t("Private VOD-Ausschnitte")}</h3>
       <p className="mt-2 text-sm text-text-secondary">
-        Schneide einen längeren Bereich aus der Twitch-Aufzeichnung. Im laufenden Stream wird dessen Aufzeichnung verwendet, offline die neueste. Twitch muss den gewählten Abschnitt bereits bereitstellen.
+        {t("Schneide einen längeren Bereich aus der Twitch-Aufzeichnung. Im laufenden Stream wird dessen Aufzeichnung verwendet, offline die neueste. Twitch muss den gewählten Abschnitt bereits bereitstellen.")}
       </p>
       <p className="mt-2 text-sm text-text-secondary">
-        Der Kanalinhaber und die Mods können 1 bis 10 Minuten anfordern. Ein Auftrag gleichzeitig pro Kanal, höchstens drei pro Stunde. Der Download ist für den angemeldeten Kanalinhaber verfügbar, wird nicht veröffentlicht und nach 24 Stunden ab der Anfrage gelöscht.
+        {t("Der Kanalinhaber und die Mods können 1 bis 10 Minuten anfordern. Ein Auftrag gleichzeitig pro Kanal, höchstens drei pro Stunde. Der Download ist für den angemeldeten Kanalinhaber verfügbar, wird nicht veröffentlicht und nach 24 Stunden ab der Anfrage gelöscht.")}
       </p>
       <p className="mt-2 text-sm text-text-secondary">
-        Bis zu 64 MiB als MP4, Vorbereitung höchstens 15 Minuten. Insgesamt werden höchstens 20 Aufträge aufbewahrt und einer nach dem anderen verarbeitet.
+        {t("Bis zu 64 MiB als MP4, Vorbereitung höchstens 15 Minuten. Insgesamt werden höchstens 20 Aufträge aufbewahrt und einer nach dem anderen verarbeitet.")}
       </p>
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <EditableCommandName command="vodclip" className="mb-2" />
-          <p className="text-sm text-text-secondary">{data ? (data.enabled ? 'Befehl ist aktiv' : 'Befehl ist aus') : 'Status wird geladen …'}</p>
+          <p className="text-sm text-text-secondary">{data ? (data.enabled ? t('Befehl ist aktiv') : t('Befehl ist aus')) : t('Status wird geladen …')}</p>
         </div>
         <button
           type="button"
           onClick={() => void toggle()}
           disabled={!data || pending}
-          aria-label={`VOD-Befehl ${data?.enabled ? 'deaktivieren' : 'aktivieren'}`}
+          aria-label={data?.enabled ? t('VOD-Befehl deaktivieren') : t('VOD-Befehl aktivieren')}
           className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2.5 text-sm font-semibold text-primary hover:bg-primary/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50"
         >
           {pending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : data?.enabled ? <PowerOff className="h-4 w-4" aria-hidden="true" /> : <Power className="h-4 w-4" aria-hidden="true" />}
-          {data?.enabled ? 'Deaktivieren' : 'Aktivieren'}
+          {data?.enabled ? t('Deaktivieren') : t('Aktivieren')}
         </button>
       </div>
       <p className="mt-4 text-sm text-text-secondary">
-        Beispiel: <code>!vodclip 55 58</code> für Minute 55 bis 58. Auch <code>55:00 58:00</code>, <code>1:55:00 1:58:00</code> und Punkte statt Doppelpunkten funktionieren. Bei einem eigenen Befehlsnamen verwendest du diesen statt <code>!vodclip</code>.
+        {t("Beispiel:")} <code>!vodclip 55 58</code> {t("für Minute 55 bis 58. Auch")} <code>55:00 58:00</code>, <code>1:55:00 1:58:00</code> {t("und Punkte statt Doppelpunkten funktionieren. Bei einem eigenen Befehlsnamen verwendest du diesen statt")} <code>!vodclip</code>.
       </p>
-      {error && <p role="alert" className="mt-3 text-sm text-danger">{error}</p>}
-      {success && <p role="status" className="mt-3 text-sm text-success">{success}</p>}
+      {error && <p role="alert" className="mt-3 text-sm text-danger">{t(error)}</p>}
+      {success && <p role="status" className="mt-3 text-sm text-success">{t(success)}</p>}
       <div className="mt-5 flex items-center justify-between gap-3">
-        <h4 className="text-sm font-semibold text-white">Deine Downloads</h4>
+        <h4 className="text-sm font-semibold text-white">{t("Deine Downloads")}</h4>
         <button type="button" onClick={() => void refresh()} disabled={refreshing} className="inline-flex min-h-11 items-center gap-2 rounded-lg px-3 py-2 text-sm text-primary hover:bg-primary/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50">
           <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />
-          Neu laden
+          {t("Neu laden")}
         </button>
       </div>
-      {data && data.jobs.length === 0 && <p className="mt-2 text-sm text-text-secondary">Noch keine VOD-Ausschnitte. Fordere im Chat einen Bereich an, nachdem du den Befehl eingeschaltet hast.</p>}
+      {data && data.jobs.length === 0 && <p className="mt-2 text-sm text-text-secondary">{t("Noch keine VOD-Ausschnitte. Fordere im Chat einen Bereich an, nachdem du den Befehl eingeschaltet hast.")}</p>}
       {data && data.jobs.length > 0 && (
         <ul className="mt-2 divide-y divide-border">
           {data.jobs.map(job => (
             <li key={job.id} className="flex flex-wrap items-center justify-between gap-3 py-4">
               <div className="min-w-0">
-                <p className="text-sm font-semibold text-white">{timestamp(job.start_seconds)} bis {timestamp(job.end_seconds)}</p>
-                <p className="mt-1 text-sm text-text-secondary">{jobStatus(job, now)}</p>
-                {job.status === 'ready' && <p className="mt-1 text-xs text-text-secondary">Verfügbar bis {new Date(job.expires_at).toLocaleString('de-DE')}{job.file_bytes ? ` · ${(job.file_bytes / 1024 / 1024).toFixed(1)} MiB` : ''}</p>}
+                <p className="text-sm font-semibold text-white">{timestamp(job.start_seconds)} {t("bis")} {timestamp(job.end_seconds)}</p>
+                <p className="mt-1 text-sm text-text-secondary">{t(jobStatus(job, now))}</p>
+                {job.status === 'ready' && <p className="mt-1 text-xs text-text-secondary">{t("Verfügbar bis")} {new Date(job.expires_at).toLocaleString(locale)}{job.file_bytes ? ` · ${(job.file_bytes / 1024 / 1024).toFixed(1)} MiB` : ''}</p>}
               </div>
               {job.status === 'ready' && Date.parse(job.expires_at) > now && (
-                <a href={privateVodDownloadUrl(job.id)} download className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2.5 text-sm font-semibold text-primary hover:bg-primary/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" aria-label={`MP4 herunterladen: ${timestamp(job.start_seconds)} bis ${timestamp(job.end_seconds)}`}>
-                  <Download className="h-4 w-4" aria-hidden="true" />MP4 herunterladen
+                <a href={privateVodDownloadUrl(job.id)} download className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2.5 text-sm font-semibold text-primary hover:bg-primary/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" aria-label={t('MP4 herunterladen: {start} bis {end}', { start: timestamp(job.start_seconds), end: timestamp(job.end_seconds) })}>
+                  <Download className="h-4 w-4" aria-hidden="true" />{t("MP4 herunterladen")}
                 </a>
               )}
             </li>

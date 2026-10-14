@@ -276,4 +276,16 @@ export const OVERLAY_EN: Record<string, string> = {
   '← Zurück zur Verwaltung': '← Back to management',
   'Zieh die Quelle an die gewünschte Stelle — sie aktualisiert sich automatisch.':
     'Drag the source to the place you want - it updates automatically.',
+  "Stream-Overlay": "Stream overlay",
+  "an": "on",
+  "aus": "off",
+  "Horizontal": "Horizontal",
+  "Aktive Quelle der Gruppe": "Active source in the group",
+  "Ausgewählte Quelle": "Selected source",
+  " · Gilt nur für die aktive Quelle, die Gruppe bleibt ausgewählt.": " · Applies only to the active source; the group stays selected.",
+  "{label} verschieben und auswählen": "Move and select {label}",
+  "{label}: ziehen zum Verschieben": "{label}: drag to move",
+  "{label}: Größe ändern": "{label}: resize",
+  "{label}: ziehen zum Vergrößern oder Verkleinern": "{label}: drag to resize",
+  "Vertikal": "Vertical",
 };
