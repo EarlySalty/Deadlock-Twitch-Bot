@@ -256,7 +256,7 @@ export function VerwaltungPage() {
             </div>
             <div className="min-w-0 flex-1">
               <p className={`text-base font-bold ${discordConnected ? 'text-success' : 'text-warning'}`}>
-                {isFetching ? t("Wird geprüft …") : discordError ? t("Gerade nicht prüfbar") : discordConnected ? 'Verbunden' : t("Nicht verbunden")}
+                {isFetching ? t("Wird geprüft …") : discordError ? t("Gerade nicht prüfbar") : discordConnected ? t('Verbunden') : t("Nicht verbunden")}
               </p>
               <p className="mt-0.5 text-xs text-text-secondary">
                 {discordError ? t("Der Status konnte nicht geprüft werden. Das bedeutet nicht, dass deine Verbindung fehlt.") : discordConnected ? t("Dein Discord-Konto ist mit Twitch verknüpft.") : t("Verbinde Discord zuerst, damit du danach Steam zuordnen kannst.")}
@@ -315,7 +315,7 @@ export function VerwaltungPage() {
             </div>
             <div className="min-w-0 flex-1">
               <p className={`text-base font-bold ${steamConnected ? 'text-success' : 'text-warning'}`}>
-                {isFetching ? t("Wird geprüft …") : steamError ? t("Gerade nicht prüfbar") : steamConnected ? 'Verbunden' : t("Nicht verbunden")}
+                {isFetching ? t("Wird geprüft …") : steamError ? t("Gerade nicht prüfbar") : steamConnected ? t('Verbunden') : t("Nicht verbunden")}
               </p>
               <p className="mt-0.5 text-xs text-text-secondary">
                 {steamError ? t("Der Status konnte nicht geprüft werden. Eine bestehende Verbindung kann weiterhin gültig sein.") : steamConnected ? t("Dein Steam-Account ist verknüpft.") : discordConnected ? t("Verknüpfe Steam für deinen Deadlock-Rang und deine Spielstatistiken.") : t("Verbinde zuerst Discord, danach Steam.")}

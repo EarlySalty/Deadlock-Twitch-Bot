@@ -202,3 +202,10 @@ test('Named raid history translates without changing channel names or German def
   assert.equal(beschreibeEintrag(entry), 'Verschoben, Raid von example_channel');
   assert.equal(beschreibeEintrag(entry, translate.bind(null, 'en')), 'Postponed, raid from example_channel');
 });
+
+test('Connected accounts and unread requests use English status labels', () => {
+  for (const [source, english] of [['Verbunden', 'Connected'], ['Ungelesen', 'Unread'], ['Wunsch', 'Request']]) {
+    assert.equal(translate('en', source), english);
+    assert.equal(translate('de', source), source);
+  }
+});

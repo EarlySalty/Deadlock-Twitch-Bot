@@ -142,8 +142,8 @@ function EntryListItem({ entry, inbox, onOpen }: { entry: FeedbackEntry; inbox: 
     <button type="button" data-feedback-entry={entry.id} className="w-full rounded-xl border border-border bg-background p-4 text-left transition-colors hover:border-primary" onClick={onOpen}>
       <div className="flex flex-wrap items-center gap-2">
         <Status status={entry.status} />
-        {(inbox ? entry.admin_unread : entry.unread) && <span className="rounded-full bg-primary px-2 py-0.5 text-xs font-bold text-black">{inbox ? t("Neu") : 'Ungelesen'}</span>}
-        <span className="text-xs text-text-secondary">{entry.kind === 'feature' ? 'Wunsch' : 'Feedback'}</span>
+        {(inbox ? entry.admin_unread : entry.unread) && <span className="rounded-full bg-primary px-2 py-0.5 text-xs font-bold text-black">{inbox ? t("Neu") : t('Ungelesen')}</span>}
+        <span className="text-xs text-text-secondary">{entry.kind === 'feature' ? t('Wunsch') : 'Feedback'}</span>
       </div>
       <p className="feedback-text mt-3 font-semibold text-white">{entry.title}</p>
       <p className="mt-2 text-xs text-text-secondary">{inbox ? `#${entry.id} · ${entry.author_label} · ` : ''}{dateLabel(entry.created_at, locale)}</p>
