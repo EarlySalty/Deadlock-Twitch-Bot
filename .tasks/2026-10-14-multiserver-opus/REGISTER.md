@@ -13,7 +13,7 @@ Main 0a2ce1e11 (+D6, W3, D7, O2; release building via ops/twitch-release-build, 
 | D3b charts | done | - | deleted | 213cebc63 | merged 8d9124a38 |
 | D4 pages | done | - | deleted | 475d59525 | merged 27376adcc |
 | D5 Community | done | - | deleted | 8f0306806 | merged 8677271c1 |
-| H1 hub fix | round 5 fixer | ttb-opus-h1-20261014 | feat/opus-h1-discord-hub-20261014 | a29616569 | BLOCK round 4 (ratelimit window reservations); round 5 = last round |
+| H1 hub fix | blocked | ttb-opus-h1-20261014 | feat/opus-h1-discord-hub-20261014 | f97e73bfd (local) | BLOCKER after 5 rounds: ratelimit.rs:195 stale-response misclassification; proposal per-bucket serialization, awaiting user |
 | D6 pages | done | - | deleted | aa9f3dbfd | merged 0a10934d6 |
 | O2 website on dead-lock.de | done | - | deleted | 5221e8b3b | merged 0a2ce1e11; Caddy splice /tmp/ttb-opus-o2-Caddyfile pending after deploy |
 | D7 pages | done | - | deleted | f9c0f1303 | merged 1775f131c (in 0a2ce1e11) |
