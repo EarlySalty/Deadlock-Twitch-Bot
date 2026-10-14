@@ -1,26 +1,26 @@
 # Multi-server release register
 
 Owner: 329e3031-ae2f-4a4f-b59c-c701973629e6. Task records stay off main.
-Binding: STEER-1, STEER-2 and ABLAUF.md “Durchsatz statt Zeremonie”.
-One writer and one critic per slice, then local single-Sol gate. At most four workflows.
+Binding: STEER-1/2/3 and ABLAUF.md “Durchsatz statt Zeremonie”.
+One Sol writer and one critic per slice, then local single-Sol gate; at most four workflows.
 Unchanged main findings do not block; workspace-internal signatures may change with all callers updated.
-No production DB access or normal deployment until approved credential rotation. No bypass.
+STEER-3: direct production DB access stays prohibited; verified-main deployment through /usr/local/bin/deploy-twitch-release, including service-identity migrations, is authorized.
 
 | Package | Branch or source | SHA | Status | Blocker |
-| Main | origin/main | d21e72c6a82949ee746758848c42f4a6dc4b80be | Publishing language merged, remote confirmed | Deploy held by DB restriction |
-| A: D English, central K, R5 | feat/slice-a-english-ai-sol-20261014 | Pending | One writer, wf_d3a0d83f-0ce | Combined candidate not yet handed over |
-| D frontend | db0 plus F15 checkpoint | 71e394d1a6e94bc5b43378376bfa4580be88af5b | Frozen salvage input | No delta blocker inferred from inherited branding or Moli |
-| D publishing panel | integration/dashboard-publishing-language-sol-20261014 | d21e72c6a82949ee746758848c42f4a6dc4b80be | One independent critic, local Sol ALLOW, merged | DB hold prevents deploy; historical dynamic text remains bounded |
-| K fixtures | fix/multiserver-sol-k-complete-fixtures-r3-20261014 | 63213dcb3da789cadc8b3da4d1da3cfdc336f2bc | Scoped fixture source accepted | Not full K or current-main integration |
-| R6 and F3 | Own stopped draft worktrees | 9a3ad772ecd9f8e69142272c83df45d43f96221d | Dirty inputs preserved, writers stopped for A consolidation | No new reviews of these micro-branches |
-| B: G schema | schema48 plus fixture156 | 48cc89162e15b2ebf57a6589555e3ac628c93f09 | Prepared source, not merged | DB rotation, parity 78/62/61/1; no foreign activation before H |
+| Main | origin/main | d915c030aa08fa65dd730bad4f4edd8feded36e7 | Other LA integration follows our D21 merge | A must preserve newer main changes |
+| A: D English, central K, R5 | fix/slice-a-current-main-sol-20261014 | Pending | Fresh sole Sol finisher a8ca2d777472ce315 | Combined Rust/Postgres checks and independent review pending |
+| A frozen input | feat/slice-a-english-ai-sol-20261014 | tree 40867b4537949f97981ae8d11413bf2b4d168087 | 267 staged paths preserved; prior critic incomplete, no semantic rejection | Prior checks timed out; no verified feature commit |
+| D frontend | db0 plus F15 checkpoint | 71e394d1a6e94bc5b43378376bfa4580be88af5b | Salvaged into A input | Broad English activation not yet merged |
+| D publishing panel | integration/dashboard-publishing-language-sol-20261014 | d21e72c6a82949ee746758848c42f4a6dc4b80be | Independent critic, local Sol ALLOW, merged and deployed | Authenticated/provider publication not exercised |
+| K fixtures | fix/multiserver-sol-k-complete-fixtures-r3-20261014 | 63213dcb3da789cadc8b3da4d1da3cfdc336f2bc | Scoped source accepted, A salvage input | Not full K acceptance |
+| R6 and F3 | Stopped draft worktrees | 9a3ad772ecd9f8e69142272c83df45d43f96221d | Inputs preserved and consolidated into A | No separate micro-branch reviews |
+| B: G schema | schema48 plus fixture156 | 48cc89162e15b2ebf57a6589555e3ac628c93f09 | Prepared source, not merged | DB rotation, parity 78/62/61/1; foreign guilds inactive until H |
 | B: membership | Runtime recovery source | cf7a64d3acf24e8d18eabc2d410273f82e784e18 | Scoped source accepted | Current-main slice and parity pending |
 | C: bot English and R | Preserved source drafts | Pending | After A and B | No current-main slice yet |
-| H, O, W, A-auth | Preserved source drafts | Pending | Prepare after preceding release slices | Hub credentials, redirects, authorized guild and legal approval |
+| H, O, W, A-auth | Preserved source drafts | Pending | After preceding release slices | Hub credentials, redirects, authorized guild and legal approval |
 | L | Already on main | 9524ffe1689290004e2d478145afecb8ef9a6163 | Source complete; project In Progress, issue closed | Positive live provider proof absent |
-| Installed release | Historical wrapper observation | 00e750557de1dd93571e66285fbb01178605b14c | Three matching active units, no own deployment | Not current-main or roadmap live acceptance |
+| Installed release | Approved deploy wrapper, exit 0 | d21e72c6a82949ee746758848c42f4a6dc4b80be | Dashboard PID 2354395 and bot PID 2354089 active, NRestarts 0; watch PID 3422664 unchanged on 00e750557de1dd93571e66285fbb01178605b14c | Not full roadmap live acceptance |
 
-Progress means main merge. Latest merge: publishing language d21e72c6; cut smaller after three further active hours without a merge.
-MERGEPROTOKOLL[MS-1]: 9 Git-Schritte einzeln | Anläufe: 2 | Gate: ALLOW. Initial push hook had no verdict; canonical origin/main/HEAD review fixed branch binding.
-Report only merges, live proof and concrete blockers; inherited findings go in the final report, no TODO file.
-Original worktrees remain read-only. No other sessions, model fallback, credential rotation or real-account changes.
+Live evidence: /tmp/ttb-d21-live-ui-0rxVio/evidence.json; DE/EN at 1440/390 using deployed HTML/JS/CSS and synthetic API data, 0 live API requests or mutations. Desktop images viewed; mobile shows only panel heading below existing shell. Six advertised assets byte-match D21; real anonymous publish GET returns 401.
+MERGEPROTOKOLL[MS-1]: 9 Git-Schritte einzeln | Anläufe: 2 | Gate: ALLOW. Canonical origin/main/HEAD review fixed initial branch binding; deploy wrapper verification passed, 9/9 embedded binary revisions matched.
+Progress means main merge; report only merges, live proof and concrete blockers. Baseline findings go in final report, no TODO file. Original worktrees stay read-only; no other sessions, model fallback, credential rotation or real-account changes.
