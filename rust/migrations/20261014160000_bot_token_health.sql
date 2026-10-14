@@ -10,7 +10,8 @@ ALTER TABLE twitch_watchdog_incidents ADD CONSTRAINT twitch_watchdog_incidents_s
     CHECK (service IN ('deadlock-twitch-bot-rust.service', 'tb-category-collector.service', 'category-collector', 'bot-token'));
 ALTER TABLE twitch_watchdog_incidents
     ADD COLUMN recovery_notified_at timestamptz,
-    ADD COLUMN last_recovery_attempt_at timestamptz;
+    ADD COLUMN last_recovery_attempt_at timestamptz,
+    ADD COLUMN recovery_delivery_error_at timestamptz;
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchbot') THEN

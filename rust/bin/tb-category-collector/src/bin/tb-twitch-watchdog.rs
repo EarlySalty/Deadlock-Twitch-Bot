@@ -369,6 +369,11 @@ async fn first_delivery_error(pool: &PgPool, id: i64, now: DateTime<Utc>) -> Res
         .bind(id).bind(now).execute(pool).await?.rows_affected() == 1)
 }
 
+async fn first_recovery_delivery_error(pool: &PgPool, id: i64, now: DateTime<Utc>) -> Result<bool> {
+    Ok(sqlx::query("UPDATE twitch_watchdog_incidents SET recovery_delivery_error_at=$2 WHERE id=$1 AND recovery_delivery_error_at IS NULL")
+        .bind(id).bind(now).execute(pool).await?.rows_affected() == 1)
+}
+
 async fn notify_credential() -> Result<NotifyCredential> {
     let output = tokio::time::timeout(
         Duration::from_secs(5),
@@ -541,7 +546,7 @@ async fn token_recovery_notifications(
                 .bind(now)
                 .execute(pool)
                 .await?;
-        } else if first_delivery_error(pool, incident.id, now).await? {
+        } else if first_recovery_delivery_error(pool, incident.id, now).await? {
             eprintln!("Entwarnung zum Bot-Chat-Zugang noch nicht zugestellt; derselbe Versuch folgt erneut.");
         }
     }
@@ -1023,11 +1028,19 @@ mod tests {
         let now = Utc::now();
         let id: i64 = sqlx::query_scalar("INSERT INTO twitch_watchdog_incidents(service,started_at,recovered_at) VALUES($1,$2,$3) RETURNING id")
             .bind(BOT_TOKEN).bind(now - chrono::Duration::seconds(180)).bind(now - chrono::Duration::seconds(60)).fetch_one(&pool).await.expect("recovered incident");
+        assert!(first_delivery_error(&pool, id, now)
+            .await
+            .expect("outage failure marker"));
         outage_notifications(&pool, now, 3600, 60, true, &credential, &server.uri())
             .await
             .expect("first delivery");
         let state: (bool,bool,bool) = sqlx::query_as("SELECT notified_at IS NOT NULL,recovery_notified_at IS NOT NULL,last_recovery_attempt_at IS NOT NULL FROM twitch_watchdog_incidents WHERE id=$1").bind(id).fetch_one(&pool).await.expect("delivery state");
         assert_eq!(state, (true, false, true));
+        let recovery_error: bool = sqlx::query_scalar("SELECT recovery_delivery_error_at IS NOT NULL FROM twitch_watchdog_incidents WHERE id=$1").bind(id).fetch_one(&pool).await.expect("independent recovery error marker");
+        assert!(recovery_error);
+        assert!(!first_recovery_delivery_error(&pool, id, now)
+            .await
+            .expect("recovery error deduplication"));
         sqlx::query(
             "INSERT INTO twitch_bot_token_health(last_ok_at,last_failure_at) VALUES($1,$2)",
         )

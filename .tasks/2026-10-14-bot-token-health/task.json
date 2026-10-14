@@ -23,6 +23,9 @@
     "Outage delivery is a stable historical event; recovery uses a distinct durable idempotency key and retry state.",
     "Credential state and success or failure health publication share the same critical section.",
     "Boot success is published only after the persisted bot identity has been bound.",
-    "Both token notification phases describe historical validation observations, never present chat availability; HTTP errors can leave a usable cached token."
+    "Both token notification phases describe historical validation observations, never present chat availability; HTTP errors can leave a usable cached token.",
+    "All boot and runtime publications use one nonblocking serialized retry owner that survives terminal boot paths until the latest desired state is committed.",
+    "Retries persist observation time, not retry time; transactional statement timeouts prevent timed-out writes from overtaking newer observations.",
+    "Outage and recovery delivery failures have independent durable first-error markers."
   ]
 }

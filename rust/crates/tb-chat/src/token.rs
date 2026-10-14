@@ -251,7 +251,7 @@ pub struct BotTokenManager {
     /// Optionale Persistenz-Senke (Infisical-Write-Back). `None` = deaktiviert,
     /// Verhalten dann exakt wie vor ADR 0005.
     sink: Option<Arc<dyn SecretSink>>,
-    health_pool: Option<PgPool>,
+    health_publisher: Option<TokenHealthPublisher>,
 }
 
 impl BotTokenManager {
@@ -272,7 +272,7 @@ impl BotTokenManager {
             token_url: TOKEN_URL.to_string(),
             users_url: HELIX_USERS_URL.to_string(),
             sink: None,
-            health_pool: None,
+            health_publisher: None,
         })
     }
 
@@ -283,14 +283,14 @@ impl BotTokenManager {
         self
     }
 
-    pub fn with_health_pool(mut self, pool: PgPool) -> Self {
-        self.health_pool = Some(pool);
+    pub fn with_health_publisher(mut self, publisher: TokenHealthPublisher) -> Self {
+        self.health_publisher = Some(publisher);
         self
     }
 
     async fn report_health(&self, failure_kind: Option<&str>) {
-        if let Some(pool) = &self.health_pool {
-            record_token_health(pool, failure_kind).await;
+        if let Some(publisher) = &self.health_publisher {
+            publisher.record(failure_kind);
         }
     }
 
@@ -718,30 +718,97 @@ impl BotTokenManager {
     }
 }
 
-pub async fn record_token_health(pool: &PgPool, failure_kind: Option<&str>) {
-    write_token_health(pool, failure_kind, true).await;
+#[derive(Clone)]
+pub struct TokenHealthPublisher {
+    sender: tokio::sync::mpsc::UnboundedSender<TokenHealthObservation>,
 }
 
-pub async fn disable_token_health(pool: &PgPool) {
-    write_token_health(pool, None, false).await;
+struct TokenHealthObservation {
+    failure_kind: Option<String>,
+    monitoring_enabled: bool,
+    observed_at: DateTime<Utc>,
 }
 
-async fn write_token_health(pool: &PgPool, failure_kind: Option<&str>, monitoring_enabled: bool) {
-    let write = sqlx::query(
+impl TokenHealthPublisher {
+    pub fn new(pool: PgPool) -> Self {
+        let (sender, mut receiver) =
+            tokio::sync::mpsc::unbounded_channel::<TokenHealthObservation>();
+        tokio::spawn(async move {
+            while let Some(mut desired) = receiver.recv().await {
+                let mut backoff = Duration::from_secs(1);
+                loop {
+                    while let Ok(latest) = receiver.try_recv() {
+                        desired = latest;
+                    }
+                    if write_token_health(&pool, &desired).await {
+                        break;
+                    }
+                    tracing::warn!("Bot-Token-Zustand konnte nicht gespeichert werden; erneuter Versuch folgt, Chat läuft weiter");
+                    if receiver.is_closed() {
+                        tokio::time::sleep(backoff).await;
+                    } else {
+                        tokio::select! {
+                            latest = receiver.recv() => {
+                                if let Some(latest) = latest {
+                                    desired = latest;
+                                    backoff = Duration::from_secs(1);
+                                    continue;
+                                }
+                            }
+                            _ = tokio::time::sleep(backoff) => {}
+                        }
+                    }
+                    backoff = (backoff * 2).min(Duration::from_secs(60));
+                }
+            }
+        });
+        Self { sender }
+    }
+
+    pub fn record(&self, failure_kind: Option<&str>) {
+        self.publish(failure_kind, true);
+    }
+
+    pub fn disable(&self) {
+        self.publish(None, false);
+    }
+
+    fn publish(&self, failure_kind: Option<&str>, monitoring_enabled: bool) {
+        if self
+            .sender
+            .send(TokenHealthObservation {
+                failure_kind: failure_kind.map(str::to_owned),
+                monitoring_enabled,
+                observed_at: Utc::now(),
+            })
+            .is_err()
+        {
+            tracing::error!("Bot-Token-Zustandsüberwachung unerwartet beendet");
+        }
+    }
+}
+
+async fn write_token_health(pool: &PgPool, observation: &TokenHealthObservation) -> bool {
+    let write = async {
+        let mut transaction = pool.begin().await?;
+        sqlx::query("SET LOCAL statement_timeout = '1500ms'")
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query(
         "INSERT INTO twitch_bot_token_health(singleton,last_ok_at,last_failure_at,failure_kind,monitoring_enabled)
-         VALUES(TRUE,CASE WHEN $2 AND $1::text IS NULL THEN clock_timestamp() END,
-             CASE WHEN $2 AND $1::text IS NOT NULL THEN clock_timestamp() END,$1,$2)
+         VALUES(TRUE,CASE WHEN $2 AND $1::text IS NULL THEN $3 END,
+             CASE WHEN $2 AND $1::text IS NOT NULL THEN $3 END,$1,$2)
          ON CONFLICT(singleton) DO UPDATE SET
              last_ok_at=COALESCE(excluded.last_ok_at,twitch_bot_token_health.last_ok_at),
              last_failure_at=COALESCE(excluded.last_failure_at,twitch_bot_token_health.last_failure_at),
              failure_kind=excluded.failure_kind,monitoring_enabled=excluded.monitoring_enabled",
-    ).bind(failure_kind).bind(monitoring_enabled).execute(pool);
-    if !matches!(
+        ).bind(observation.failure_kind.as_deref()).bind(observation.monitoring_enabled).bind(observation.observed_at).execute(&mut *transaction).await?;
+        transaction.commit().await
+    };
+    matches!(
         tokio::time::timeout(Duration::from_secs(2), write).await,
         Ok(Ok(_))
-    ) {
-        tracing::warn!("Bot-Token-Zustand konnte nicht gespeichert werden; Chat läuft weiter");
-    }
+    )
 }
 
 #[cfg(test)]
@@ -792,7 +859,7 @@ mod tests {
         .execute(&pool)
         .await
         .expect("health table");
-        sqlx::raw_sql("CREATE FUNCTION delay_failed_health() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.failure_kind IS NOT NULL THEN PERFORM pg_sleep(0.2); NEW.last_failure_at := clock_timestamp(); END IF; RETURN NEW; END $$;
+        sqlx::raw_sql("CREATE FUNCTION delay_failed_health() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.failure_kind IS NOT NULL THEN PERFORM pg_sleep(0.2); END IF; RETURN NEW; END $$;
             CREATE TRIGGER delay_failure BEFORE INSERT ON twitch_bot_token_health FOR EACH ROW EXECUTE FUNCTION delay_failed_health()")
             .execute(&pool).await.expect("failure publication delay");
         let server = MockServer::start().await;
@@ -817,16 +884,52 @@ mod tests {
                 format!("{}/validate", server.uri()),
                 format!("{}/token", server.uri()),
             )
-            .with_health_pool(pool.clone());
+            .with_health_publisher(TokenHealthPublisher::new(pool.clone()));
         manager
             .initialize(Some("seed"), "refresh")
             .await
             .expect("initial validation");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS(SELECT 1 FROM twitch_bot_token_health)",
+                )
+                .fetch_one(&pool)
+                .await
+                .expect("initial publication")
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("initial health landed");
+        let initial_ok: DateTime<Utc> =
+            sqlx::query_scalar("SELECT last_ok_at FROM twitch_bot_token_health")
+                .fetch_one(&pool)
+                .await
+                .expect("initial timestamp");
         let (failure, recovery) = tokio::join!(manager.force_refresh(), manager.force_refresh());
         assert!(failure.is_err());
         recovery.expect("successful recovery");
-        let healthy: bool = sqlx::query_scalar("SELECT last_ok_at > last_failure_at AND failure_kind IS NULL FROM twitch_bot_token_health").fetch_one(&pool).await.expect("health decision");
-        assert!(healthy);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let healthy: bool = sqlx::query_scalar(
+                    "SELECT failure_kind IS NULL AND last_ok_at > $1 FROM twitch_bot_token_health",
+                )
+                .bind(initial_ok)
+                .fetch_one(&pool)
+                .await
+                .expect("health decision");
+                if healthy {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("recovery health landed");
         assert_eq!(
             manager
                 .access_token()
@@ -834,6 +937,81 @@ mod tests {
                 .expect("usable recovered token"),
             "new-access"
         );
+        pool.close().await;
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+            .execute(&admin)
+            .await
+            .expect("cleanup");
+        admin.close().await;
+    }
+
+    #[tokio::test]
+    async fn terminal_boot_token_health_retries_after_publisher_is_dropped() {
+        use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+        use std::str::FromStr;
+        let options = PgConnectOptions::from_str(
+            &token_test_database::database_url().expect("isolated test database"),
+        )
+        .expect("options");
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options.clone())
+            .await
+            .expect("admin");
+        let schema = format!(
+            "token_retry_{}_{}",
+            std::process::id(),
+            Utc::now().timestamp_subsec_nanos()
+        );
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+            .execute(&admin)
+            .await
+            .expect("schema");
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options.options([("search_path", schema.as_str())]))
+            .await
+            .expect("pool");
+        sqlx::raw_sql(
+            include_str!("../../../migrations/20261014160000_bot_token_health.sql")
+                .split("ALTER TABLE")
+                .next()
+                .expect("DDL"),
+        )
+        .execute(&pool)
+        .await
+        .expect("health table");
+        sqlx::query("INSERT INTO twitch_bot_token_health(monitoring_enabled) VALUES(false)")
+            .execute(&pool)
+            .await
+            .expect("disabled baseline");
+        for enabled in [true, false] {
+            let held = pool.acquire().await.expect("hold unavailable pool");
+            let publisher = TokenHealthPublisher::new(pool.clone());
+            let observed_before = Utc::now();
+            if enabled {
+                publisher.record(Some("boot_failed"));
+            } else {
+                publisher.disable();
+            }
+            drop(publisher);
+            tokio::time::sleep(Duration::from_millis(2200)).await;
+            drop(held);
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let state: (bool, Option<String>, Option<DateTime<Utc>>) = sqlx::query_as("SELECT monitoring_enabled,failure_kind,last_failure_at FROM twitch_bot_token_health").fetch_one(&pool).await.expect("health state");
+                    if state.0 == enabled && state.1.as_deref() == enabled.then_some("boot_failed") {
+                        if enabled {
+                            let observed = state.2.expect("failure timestamp");
+                            assert!(observed >= observed_before);
+                            assert!(observed < observed_before + chrono::Duration::seconds(1));
+                        }
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            }).await.expect("terminal publication eventually lands");
+        }
         pool.close().await;
         sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
             .execute(&admin)
