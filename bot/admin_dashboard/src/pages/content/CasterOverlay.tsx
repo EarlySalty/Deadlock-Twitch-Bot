@@ -22,9 +22,9 @@ import {
 const OBS_URL = 'https://deutsche-deadlock-community.de/twitch/caster-overlay';
 const OBS_ORIGIN = new URL(OBS_URL).origin;
 const button =
-  'min-h-11 rounded-lg border border-white/20 px-3 py-2 text-sm hover:border-amber-400 focus-visible:outline-2 focus-visible:outline-amber-400 disabled:cursor-not-allowed disabled:opacity-40';
+  'min-h-11 rounded-lg border border-white/20 px-3 py-2 text-sm hover:border-primary focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-40';
 const input =
-  'min-h-11 w-full rounded-lg border border-white/15 bg-black/50 px-3 text-white focus-visible:outline-2 focus-visible:outline-amber-400';
+  'min-h-11 w-full rounded-lg border border-white/15 bg-black/50 px-3 text-white focus-visible:outline-2 focus-visible:outline-primary';
 
 type AccountOption = { login: string; displayName: string };
 const layoutMeta: Record<CasterLayout, { label: string; slots: number; description: string }> = {
@@ -313,7 +313,7 @@ export default function CasterOverlayPage() {
   return (
     <div className="space-y-6 pb-8">
       {blocker.state === 'blocked' && (
-        <div role="alert" className="rounded-xl border border-amber-400/40 bg-zinc-950 p-4 text-white">
+        <div role="alert" className="rounded-xl border border-primary/40 bg-bg p-4 text-white">
           Deine Änderungen sind noch nicht live. Seite wirklich verlassen?
           <div className="mt-3 flex gap-3">
             <button className={button} onClick={() => blocker.reset()}>Weiter bearbeiten</button>
@@ -328,7 +328,7 @@ export default function CasterOverlayPage() {
       />
 
       {error && (
-        <div role="alert" className="rounded-xl border border-red-400/50 bg-red-950/40 p-4 text-red-100">
+        <div role="alert" className="rounded-xl border border-danger/50 bg-danger/10 p-4 text-danger">
           {error}
           <button
             className={`${button} ml-3`}
@@ -352,7 +352,7 @@ export default function CasterOverlayPage() {
                 <h2 className="text-lg font-semibold text-white">Layout & Live-Vorschau</h2>
                 <p className="mt-1 text-sm text-white/60">Die OBS-Adresse bleibt für alle Layouts identisch.</p>
               </div>
-              <span className={`rounded-full px-3 py-1 text-sm ${dirty ? 'bg-amber-400/15 text-amber-200' : 'bg-emerald-400/15 text-emerald-200'}`}>
+              <span className={`rounded-full px-3 py-1 text-sm ${dirty ? 'bg-primary/15 text-primary-hover' : 'bg-success/15 text-success'}`}>
                 {dirty ? 'Noch nicht live' : 'Gespeichert'}
               </span>
             </div>
@@ -364,7 +364,7 @@ export default function CasterOverlayPage() {
                 return (
                   <button
                     key={layout}
-                    className={`rounded-xl border p-4 text-left transition ${active ? 'border-amber-400 bg-amber-400/10' : 'border-white/15 bg-black/30 hover:border-white/30'}`}
+                    className={`rounded-xl border p-4 text-left transition ${active ? 'border-primary bg-primary/10' : 'border-white/15 bg-black/30 hover:border-white/30'}`}
                     onClick={() => setLayout(layout)}
                     disabled={busy}
                   >
@@ -399,7 +399,7 @@ export default function CasterOverlayPage() {
                     if (scene.roster.some((person) => person.id === id)) assign(index, id);
                     setDragged(null);
                   }}
-                  className={`rounded-xl border p-3 ${dragged ? 'border-amber-400/60 bg-amber-400/5' : 'border-white/10 bg-black/25'}`}
+                  className={`rounded-xl border p-3 ${dragged ? 'border-primary/60 bg-primary/5' : 'border-white/10 bg-black/25'}`}
                 >
                   <label className="text-sm text-white/65" htmlFor={`caster-slot-${index}`}>Kamera {index + 1}</label>
                   <select
@@ -432,7 +432,7 @@ export default function CasterOverlayPage() {
               </p>
             </div>
             {contextReason && (
-              <div className="rounded-lg border border-amber-400/30 bg-amber-400/5 p-3 text-sm text-amber-100">
+              <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-primary-hover">
                 Automatische Teamdaten gerade nicht verfügbar: {contextReason}
               </div>
             )}
@@ -507,7 +507,7 @@ export default function CasterOverlayPage() {
                     setDragged(person.id);
                   }}
                   onDragEnd={() => setDragged(null)}
-                  className="cursor-grab rounded-lg border border-amber-400/30 bg-black/40 px-3 py-2 text-sm text-amber-100"
+                  className="cursor-grab rounded-lg border border-primary/30 bg-black/40 px-3 py-2 text-sm text-primary-hover"
                 >
                   ⠿ {person.name}
                 </span>
@@ -657,8 +657,8 @@ export default function CasterOverlayPage() {
             </div>
 
             {createdCamera && (
-              <div className="rounded-xl border border-amber-400/35 bg-amber-400/5 p-4">
-                <strong className="text-amber-100">Link jetzt an @{createdCamera.ownerLogin} schicken</strong>
+              <div className="rounded-xl border border-primary/35 bg-primary/5 p-4">
+                <strong className="text-primary-hover">Link jetzt an @{createdCamera.ownerLogin} schicken</strong>
                 <p className="mt-1 text-xs text-white/50">Das Publish-Geheimnis steckt nur im Fragment dieses Links und wird nicht erneut aus der Datenbank gelesen.</p>
                 <div className="mt-3 flex flex-col gap-2 md:flex-row">
                   <input className={input} readOnly value={createdCamera.inviteUrl} onFocus={(event) => event.target.select()} />
@@ -685,7 +685,7 @@ export default function CasterOverlayPage() {
                   <div>
                     <div className="font-semibold text-white">{camera.label} · @{camera.ownerLogin}</div>
                     <div className="mt-1 text-xs text-white/45">{camera.cameraId}</div>
-                    <div className={`mt-2 text-sm ${camera.online ? 'text-emerald-300' : camera.consentEnabled ? 'text-amber-200' : 'text-white/45'}`}>
+                    <div className={`mt-2 text-sm ${camera.online ? 'text-success' : camera.consentEnabled ? 'text-primary-hover' : 'text-white/45'}`}>
                       {camera.online ? 'Online · Live abrufbar' : camera.consentEnabled ? 'Freigegeben · aktuell offline' : 'Noch nicht freigegeben'}
                     </div>
                   </div>
@@ -696,10 +696,10 @@ export default function CasterOverlayPage() {
             </div>
           </section>
 
-          <div className="sticky bottom-3 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-400/40 bg-zinc-950 p-4 shadow-xl">
+          <div className="sticky bottom-3 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-primary/40 bg-bg p-4 shadow-xl">
             <p role="status" className="text-sm text-white/75">{status || 'Bereit.'}</p>
             <button
-              className={`${button} border-amber-400 bg-amber-400/15 font-semibold text-amber-100`}
+              className={`${button} border-primary bg-primary/15 font-semibold text-primary-hover`}
               disabled={busy || !dirty || scene.roster.some((person) => !person.name.trim())}
               onClick={() => void publish()}
             >

@@ -79,7 +79,7 @@ export function OperatingConfigPage() {
           </div>)}
         </div>
         <p className="text-sm text-text-secondary">Speichern startet keinen Dienst neu. Bis zum Neustart arbeiten laufende Dienste mit ihrem bisherigen Stand.</p>
-        {save.error && <p role="alert" className="text-sm text-red-300">{save.error.message}</p>}
+        {save.error && <p role="alert" className="text-sm text-danger">{save.error.message}</p>}
         <button type="submit" className="admin-button admin-button-primary" disabled={!draft || save.isPending}>
           <Save size={16} aria-hidden="true" /> {save.isPending ? 'Wird gespeichert …' : 'Änderungen speichern'}
         </button>
