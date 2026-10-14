@@ -28,19 +28,85 @@ fn endpoint(server: &MockServer) -> tb_llm::LlmEndpoint {
     }
 }
 
+async fn assert_denied_without_effects(
+    pool: &sqlx::PgPool,
+    server: &MockServer,
+    request: tb_llm::Request,
+    unavailable: bool,
+) {
+    let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM public.llm_usage")
+        .fetch_one(pool)
+        .await
+        .expect("ledger count");
+    let sent = server.received_requests().await.expect("requests").len();
+    let result = tb_llm::complete("engagement", request).await;
+    assert!(
+        matches!(
+            (&result, unavailable),
+            (Err(tb_llm::LlmError::Unavailable(_)), true)
+                | (Err(tb_llm::LlmError::Disabled(_)), false)
+        ),
+        "{result:?}"
+    );
+    let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM public.llm_usage")
+        .fetch_one(pool)
+        .await
+        .expect("ledger count");
+    assert_eq!(after, before);
+    assert_eq!(
+        server.received_requests().await.expect("requests").len(),
+        sent
+    );
+}
+
 #[tokio::test]
 async fn ki_schalter_sperrt_fremde_server_und_belegt_im_ledger() {
     let database = test_postgres::TestPostgres::start().await;
     let pool = database.pool.clone();
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1}
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let request = || {
+        tb_llm::Request::prompt("Fixture")
+            .timeout(Duration::from_secs(5))
+            .endpoint(endpoint(&server))
+    };
 
     sqlx::raw_sql(LLM_USAGE_SCHEMA)
         .execute(&pool)
         .await
         .expect("llm_usage");
+    sqlx::raw_sql(PAKET_K_LEDGER)
+        .execute(&pool)
+        .await
+        .expect("ledger migration");
+    assert_eq!(
+        tb_llm::streamer_ai_allowed(Some("100"), None).await,
+        Ok(false)
+    );
+    assert_denied_without_effects(&pool, &server, request().twitch_broadcaster("100"), true).await;
+    tb_llm::ledger::initialize(pool.clone(), "twitch-test", "ai-guard").unwrap();
+    assert_denied_without_effects(&pool, &server, request().twitch_broadcaster("100"), true).await;
+    assert!(matches!(
+        tb_llm::streamer_ai_allowed(Some("100"), None).await,
+        Err(tb_llm::LlmError::Unavailable(_))
+    ));
     sqlx::raw_sql(GUILD_SCHEMA)
         .execute(&pool)
         .await
         .expect("guild schema");
+    assert_denied_without_effects(&pool, &server, request().twitch_broadcaster("100"), true).await;
+    assert!(matches!(
+        tb_llm::streamer_ai_allowed(Some("100"), None).await,
+        Err(tb_llm::LlmError::Unavailable(_))
+    ));
     for _ in 0..2 {
         sqlx::raw_sql(PAKET_K_REGEL)
             .execute(&pool)
@@ -123,7 +189,11 @@ async fn ki_schalter_sperrt_fremde_server_und_belegt_im_ledger() {
         }
     }
 
-    tb_llm::ledger::initialize(pool.clone(), "twitch-test", "ai-guard").unwrap();
+    assert_eq!(tb_llm::streamer_ai_allowed(None, None).await, Ok(false));
+    assert_eq!(
+        tb_llm::streamer_ai_allowed(Some(" "), Some("\t")).await,
+        Ok(false)
+    );
 
     assert_eq!(
         tb_llm::streamer_ai_allowed(Some("200"), None).await,
@@ -134,21 +204,15 @@ async fn ki_schalter_sperrt_fremde_server_und_belegt_im_ledger() {
         Ok(true)
     );
 
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/chat/completions"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "choices": [{"message": {"content": "ok"}}],
-            "usage": {"prompt_tokens": 3, "completion_tokens": 1}
-        })))
-        .expect(2)
-        .mount(&server)
-        .await;
-    let request = || {
-        tb_llm::Request::prompt("Fixture")
-            .timeout(Duration::from_secs(5))
-            .endpoint(endpoint(&server))
-    };
+    assert_denied_without_effects(
+        &pool,
+        &server,
+        request()
+            .twitch_broadcaster("100")
+            .twitch_channel("FREMD_KANAL"),
+        false,
+    )
+    .await;
 
     for id in [
         "200", "300", "400", "500", "600", "700", "800", "900", "1000", "1100", "1200", "1300",
@@ -173,9 +237,115 @@ async fn ki_schalter_sperrt_fremde_server_und_belegt_im_ledger() {
     tb_llm::complete("engagement", request().twitch_channel("de_kanal"))
         .await
         .expect("deutscher Kanal");
-    tb_llm::complete("community_sentiment", request())
+    for purpose in [
+        "community_sentiment",
+        "conversation_scam_guidance",
+        "social-media-fireworks",
+        "unbekannter_zweck",
+    ] {
+        assert_denied_without_effects(&pool, &server, request().ledger_purpose(purpose), false)
+            .await;
+    }
+    tb_llm::complete("community_sentiment", request().twitch_broadcaster("100"))
         .await
-        .expect("globaler Job");
+        .expect("zugeordneter Aufruf");
+    assert_denied_without_effects(
+        &pool,
+        &server,
+        request()
+            .twitch_broadcaster("100")
+            .twitch_channel("fremd_kanal"),
+        false,
+    )
+    .await;
+    assert_eq!(
+        tb_llm::streamer_ai_allowed(Some("100"), Some("fremd_kanal")).await,
+        Ok(false)
+    );
+    for (revoke, restore) in [
+        (
+            "UPDATE public.discord_guilds SET ai_features=false WHERE guild_id=1289721245281292288",
+            "UPDATE public.discord_guilds SET ai_features=true WHERE guild_id=1289721245281292288",
+        ),
+        (
+            "UPDATE public.streamer_guilds SET active=false WHERE twitch_user_id='100'",
+            "UPDATE public.streamer_guilds SET active=true WHERE twitch_user_id='100'",
+        ),
+        (
+            "INSERT INTO public.streamer_guilds(twitch_user_id,guild_id) VALUES ('100',900000000000000001)",
+            "DELETE FROM public.streamer_guilds WHERE twitch_user_id='100' AND guild_id=900000000000000001",
+        ),
+        (
+            "UPDATE public.twitch_partners_all_state SET is_partner_active=0 WHERE twitch_user_id='100'",
+            "UPDATE public.twitch_partners_all_state SET is_partner_active=1 WHERE twitch_user_id='100'",
+        ),
+        (
+            "INSERT INTO public.twitch_exclusions VALUES ('100',NULL)",
+            "DELETE FROM public.twitch_exclusions WHERE twitch_user_id='100'",
+        ),
+    ] {
+        assert_eq!(tb_llm::streamer_ai_allowed(Some("100"), None).await, Ok(true));
+        assert_eq!(tb_llm::streamer_ai_allowed(None, Some("de_kanal")).await, Ok(true));
+        sqlx::raw_sql(revoke).execute(&pool).await.expect("revoke");
+        assert_eq!(tb_llm::streamer_ai_allowed(Some("100"), None).await, Ok(false));
+        assert_eq!(tb_llm::streamer_ai_allowed(None, Some("de_kanal")).await, Ok(false));
+        for scoped in [
+            request().twitch_broadcaster("100"),
+            request().twitch_channel("de_kanal"),
+        ] {
+            assert_denied_without_effects(&pool, &server, scoped, false).await;
+        }
+        sqlx::raw_sql(restore).execute(&pool).await.expect("restore");
+        assert_eq!(tb_llm::streamer_ai_allowed(Some("100"), None).await, Ok(true));
+        assert_eq!(tb_llm::streamer_ai_allowed(None, Some("de_kanal")).await, Ok(true));
+    }
+    sqlx::query("UPDATE public.discord_guilds SET ai_features=true")
+        .execute(&pool)
+        .await
+        .expect("all guilds on");
+    for unscoped in [
+        request(),
+        request().twitch_broadcaster(" ").twitch_channel("\t"),
+        request().ledger_purpose("community_sentiment"),
+        request().ledger_purpose("unbekannter_zweck"),
+        request().twitch_channel("unbekannt"),
+    ] {
+        assert_denied_without_effects(&pool, &server, unscoped, false).await;
+    }
+    sqlx::query("ALTER TABLE public.discord_guilds RENAME TO hidden_guilds")
+        .execute(&pool)
+        .await
+        .expect("missing table");
+    assert_denied_without_effects(&pool, &server, request().twitch_broadcaster("100"), true).await;
+    assert!(matches!(
+        tb_llm::streamer_ai_allowed(Some("100"), None).await,
+        Err(tb_llm::LlmError::Unavailable(_))
+    ));
+    sqlx::query("ALTER TABLE public.hidden_guilds RENAME TO discord_guilds")
+        .execute(&pool)
+        .await
+        .expect("restore table");
+    assert_eq!(
+        tb_llm::streamer_ai_allowed(Some("100"), None).await,
+        Ok(true)
+    );
+    sqlx::query("DROP FUNCTION public.twitch_streamer_ai_allowed(text,text)")
+        .execute(&pool)
+        .await
+        .expect("missing function");
+    assert_denied_without_effects(&pool, &server, request().twitch_channel("de_kanal"), true).await;
+    assert!(matches!(
+        tb_llm::streamer_ai_allowed(None, Some("de_kanal")).await,
+        Err(tb_llm::LlmError::Unavailable(_))
+    ));
+    sqlx::raw_sql(MULTISERVER_REGEL)
+        .execute(&pool)
+        .await
+        .expect("restore actual function");
+    assert_eq!(
+        tb_llm::streamer_ai_allowed(Some("100"), None).await,
+        Ok(true)
+    );
     server.verify().await;
 
     let zeilen: Vec<(String, Option<String>)> =
@@ -187,9 +357,18 @@ async fn ki_schalter_sperrt_fremde_server_und_belegt_im_ledger() {
         zeilen,
         vec![
             ("engagement".to_string(), Some("100".to_string())),
-            ("community_sentiment".to_string(), None),
+            ("community_sentiment".to_string(), Some("100".to_string())),
         ]
     );
 
     pool.close().await;
+    assert!(matches!(
+        tb_llm::complete("engagement", request().twitch_broadcaster("100")).await,
+        Err(tb_llm::LlmError::Unavailable(_))
+    ));
+    assert!(matches!(
+        tb_llm::streamer_ai_allowed(Some("100"), None).await,
+        Err(tb_llm::LlmError::Unavailable(_))
+    ));
+    assert_eq!(server.received_requests().await.expect("requests").len(), 2);
 }
