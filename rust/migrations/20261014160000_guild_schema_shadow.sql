@@ -219,14 +219,14 @@ WHERE sg.active AND g.status = 'active' AND g.removed_at IS NULL
   );
 
 CREATE OR REPLACE VIEW public.partner_status_shadow_mismatch AS
-SELECT s.twitch_user_id,
+SELECT COALESCE(s.twitch_user_id, g.twitch_user_id) AS twitch_user_id,
        max(COALESCE(s.is_partner_active, 0)) AS old_is_partner_active,
-       max(CASE WHEN s.is_partner_active = 1 AND g.twitch_user_id IS NOT NULL THEN 1 ELSE 0 END) AS new_is_partner_active
+       max(CASE WHEN g.twitch_user_id IS NOT NULL THEN 1 ELSE 0 END) AS new_is_partner_active
 FROM public.twitch_partners_all_state s
-LEFT JOIN public.partner_guild_active g ON g.twitch_user_id = s.twitch_user_id
-GROUP BY s.twitch_user_id
+FULL JOIN public.partner_guild_active g ON g.twitch_user_id = s.twitch_user_id
+GROUP BY COALESCE(s.twitch_user_id, g.twitch_user_id)
 HAVING max(COALESCE(s.is_partner_active, 0))
-    IS DISTINCT FROM max(CASE WHEN s.is_partner_active = 1 AND g.twitch_user_id IS NOT NULL THEN 1 ELSE 0 END);
+    IS DISTINCT FROM max(CASE WHEN g.twitch_user_id IS NOT NULL THEN 1 ELSE 0 END);
 
 CREATE OR REPLACE FUNCTION public.twitch_partner_shadow_summary()
 RETURNS TABLE (streamers bigint, legacy_active bigint, guild_active bigint, mismatches bigint)
@@ -235,8 +235,6 @@ STABLE
 AS $$
     SELECT (SELECT count(*) FROM public.twitch_partners_all_state),
            (SELECT count(*) FROM public.twitch_partners_all_state WHERE is_partner_active = 1),
-           (SELECT count(*) FROM public.twitch_partners_all_state s
-            JOIN public.partner_guild_active g ON g.twitch_user_id = s.twitch_user_id
-            WHERE s.is_partner_active = 1),
+           (SELECT count(*) FROM public.partner_guild_active),
            (SELECT count(*) FROM public.partner_status_shadow_mismatch);
 $$;

@@ -278,6 +278,69 @@ class MultiserverSchemaContract(unittest.TestCase):
             ),
             "1",
         )
+        self.assertEqual(
+            self.sql(
+                "SELECT old_is_partner_active, new_is_partner_active FROM partner_status_shadow_mismatch WHERE twitch_user_id='990000000001'"
+            ),
+            "1|0",
+        )
+        self.assertEqual(
+            self.sql("SELECT * FROM twitch_partner_shadow_summary()"), "11|5|1|4"
+        )
+
+    def test_shadow_reports_legacy_opt_out_after_import(self):
+        self.seed()
+        self.migration(GUILD)
+        self.sql(
+            "UPDATE twitch_partners SET manual_partner_opt_out=1 WHERE twitch_user_id='990000000001'"
+        )
+        self.assertEqual(
+            self.sql(
+                "SELECT is_partner_active FROM twitch_partners_all_state WHERE twitch_user_id='990000000001'"
+            ),
+            "0",
+        )
+        self.assertEqual(
+            self.sql(
+                "SELECT count(*) FROM partner_guild_active WHERE twitch_user_id='990000000001'"
+            ),
+            "1",
+        )
+        self.assertEqual(
+            self.sql(
+                "SELECT old_is_partner_active, new_is_partner_active FROM partner_status_shadow_mismatch WHERE twitch_user_id='990000000001'"
+            ),
+            "0|1",
+        )
+        self.assertEqual(
+            self.sql("SELECT * FROM twitch_partner_shadow_summary()"), "11|4|2|4"
+        )
+
+    def test_shadow_reports_active_guild_without_legacy_partner(self):
+        self.seed()
+        self.migration(GUILD)
+        self.sql("DELETE FROM twitch_partners WHERE twitch_user_id='990000000001'")
+        self.assertEqual(
+            self.sql(
+                "SELECT count(*) FROM twitch_partners_all_state WHERE twitch_user_id='990000000001'"
+            ),
+            "0",
+        )
+        self.assertEqual(
+            self.sql(
+                "SELECT count(*) FROM partner_guild_active WHERE twitch_user_id='990000000001'"
+            ),
+            "1",
+        )
+        self.assertEqual(
+            self.sql(
+                "SELECT old_is_partner_active, new_is_partner_active FROM partner_status_shadow_mismatch WHERE twitch_user_id='990000000001'"
+            ),
+            "0|1",
+        )
+        self.assertEqual(
+            self.sql("SELECT * FROM twitch_partner_shadow_summary()"), "10|4|2|4"
+        )
 
     def test_repetition_preserves_admin_deactivation_and_configuration(self):
         self.seed()
