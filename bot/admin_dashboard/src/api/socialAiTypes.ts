@@ -33,8 +33,14 @@ export interface UsageFilter {
   job_id: string;
 }
 
+export interface StageUsage extends UsageTotals {
+  stage: 'analysis' | 'planning' | 'other';
+  run: 'first_run' | 'revision';
+}
+
 export interface UsageReport {
   totals: UsageTotals;
+  stages: StageUsage[];
   groups: UsageGroup[];
   group_by: UsageGrouping;
   offset: number;
@@ -47,6 +53,7 @@ export interface ProcessingControl {
   revision: number;
   paused: boolean;
   initial_total_cap_micro_usd: 2000000;
+  monthly_cap_micro_usd: number | null;
   updated_at: string;
   updated_by: string;
   reason: string;
@@ -57,6 +64,8 @@ export interface UserLimit {
   revision: number;
   paused: boolean;
   monthly_cap_micro_usd: number | null;
+  monthly_ai_jobs: number | null;
+  monthly_revisions: number | null;
   updated_at: string;
   updated_by: string;
   reason: string;
@@ -84,12 +93,14 @@ export interface ProcessingLimits {
 export interface GlobalControlChange {
   expected_revision: number;
   paused: boolean;
+  monthly_cap_micro_usd: number | null;
   reason: string;
 }
 
 export interface UserLimitChange extends GlobalControlChange {
   twitch_user_id: string;
-  monthly_cap_micro_usd: number | null;
+  monthly_ai_jobs: number | null;
+  monthly_revisions: number | null;
 }
 
 export interface PlanLimitChange {
@@ -117,11 +128,21 @@ export interface SkillVersion {
   diff: SkillDiffLine[];
 }
 
+export interface SkillActivation {
+  kind: 'learned' | 'rollback' | 'auto_rollback';
+  from_version: string;
+  to_version: string;
+  actor: string;
+  reason: string;
+  created_at: string;
+}
+
 export interface SkillHistory {
   skill_id: string;
   name: string;
   current_version: string;
   versions: SkillVersion[];
+  activations: SkillActivation[];
 }
 
 export interface ChangeProposal {
@@ -132,6 +153,8 @@ export interface ChangeProposal {
   reason: string;
   status: 'proposed' | 'reviewed' | 'dismissed';
   evidence: string | null;
+  reviewed_at: string | null;
+  reviewed_by: string | null;
 }
 
 export interface SkillsReport {
