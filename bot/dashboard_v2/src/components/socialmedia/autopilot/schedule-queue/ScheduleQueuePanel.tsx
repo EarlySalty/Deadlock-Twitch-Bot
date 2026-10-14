@@ -1,7 +1,8 @@
+import { globalTimezoneUrl } from '@/utils/socialMediaChannel';
 import { useEffect, useId, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Calendar, Clock3, RefreshCw, Trash2 } from 'lucide-react';
 import { StudioSectionHeading } from '../../StudioSectionHeading';
-import { ApiHttpError, getBrowserTimezone } from '@/api/core';
+import { ApiHttpError } from '@/api/core';
 import { useLanguage, type LanguageContextValue } from '@/context/LanguageContext';
 import { SOCIAL_EN } from '@/i18n/en/social';
 import { scheduleQueueApi } from './api';
@@ -113,12 +114,7 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
         if (!live.current || controller.signal.aborted || generation !== epoch.current) return;
         setSnapshot(result);
         if (!dirty.current) {
-          const timezone = result.persisted ? result.settings.timezone : getBrowserTimezone();
-          setDraft({ ...result.settings, timezone });
-          if (!result.persisted) {
-            setPatch({ timezone });
-            dirty.current = true;
-          }
+          setDraft(result.settings);
         }
         setError('');
         if (readMessage) {
@@ -214,7 +210,6 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
           <div className="sq-toggles">
             <label><input type="checkbox" role="switch" checked={draft.enabled} onChange={event => edit({ enabled: event.target.checked })} /><span>{t('Auto-Pilot einschalten')}</span></label>
             <label><input type="checkbox" role="switch" checked={draft.paused} onChange={event => edit({ paused: event.target.checked })} /><span>{t('Neue Produktionen pausieren')}</span></label>
-            <label><input type="checkbox" role="switch" checked={draft.ai_editing_enabled} onChange={event => edit({ ai_editing_enabled: event.target.checked })} /><span>{t('KI-Bearbeitung verwenden')}</span></label>
           </div>
           <p className="sq-help">{t('Die KI-Einstellung gilt erst beim Produktionsstart. Sie ersetzt nicht deine Zustimmung zur externen KI-Verarbeitung.')}</p>
           <fieldset className="sq-platforms">
@@ -236,8 +231,7 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
             {!draft.target_platforms.length && <p className="sq-help">{t('Noch keine Zielplattform ausgewählt. Ohne Zielplattform wird kein Video veröffentlicht.')}</p>}
           </fieldset>
           <div className="sq-fields">
-            <label htmlFor={`${id}-zone`}>{t('Zeitzone')}<input id={`${id}-zone`} value={draft.timezone} required list={`${id}-zones`} onChange={event => edit({ timezone: event.target.value })} /></label>
-            <datalist id={`${id}-zones`}><option value="Europe/Berlin" /><option value="Europe/Vienna" /><option value="Europe/Zurich" /><option value="UTC" /></datalist>
+            <a href={globalTimezoneUrl(twitchUserId)}>{t('Zeitzone in Verwaltung ändern')}</a>
             <label htmlFor={`${id}-lead`}>{t('Vorlauf in Stunden')}<input id={`${id}-lead`} type="number" min="0" max="720" required value={Number.isFinite(draft.lead_time_hours) ? draft.lead_time_hours : ''} onChange={event => edit({ lead_time_hours: event.target.valueAsNumber })} /></label>
           </div>
           <p className="sq-help">{t('Sommerzeit wird berücksichtigt. Auch bei kürzerem Vorlauf kann die Produktion starten. Verpasste Termine werden nicht gesammelt.')}</p>
@@ -261,7 +255,7 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
             const movable = job.status === 'queued' && !job.started_at;
             const position = unstarted.findIndex(value => value.id === job.id);
             return <li key={job.id} className="sq-job">
-              <div className="sq-job-head"><strong>{job.clip_title || t('Clip {number}', { number: job.clip_id })}</strong><span className={job.status === 'running' ? 'sq-running' : 'sq-badge'}>{t(STATUS[job.status])}</span></div>
+              <div className="sq-job-head"><strong>{job.clip_title || t('Clip {number}', { number: job.clip_id })}</strong><span data-status={job.status} className={job.status === 'running' ? 'sq-running' : 'sq-badge'}>{t(STATUS[job.status])}</span></div>
               <p className="sq-help">{slotLabel(job.scheduled_at, snapshot.settings.timezone, locale, t)} · {t(job.mode ? (job.mode === 'ai' ? 'KI-Bearbeitung' : 'Statisches Layout') : job.source === 'manual' ? 'Manueller Auftrag' : 'Modus wird beim Start festgelegt')}</p>
               {job.review_reasons.map(reason => <p className="sq-help" key={reason}>{t(REASONS[reason] ?? 'Die Produktion benötigt eine Prüfung.')}</p>)}
               {job.review_explanation && <p className="sq-help">{job.review_explanation}</p>}
