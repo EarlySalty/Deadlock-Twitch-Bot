@@ -1,3 +1,5 @@
+import { formatNumber } from '@/utils/formatters';
+import { useLanguage } from '../../context/LanguageContext';
 import { Rise } from '../../motion/Rise';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis } from 'recharts';
 import { NoDataCard } from '@/components/cards/NoDataCard';
@@ -23,8 +25,9 @@ const PROFILE_LABELS: Record<string, string> = {
 };
 
 export function ViewerProfiles({ data }: ViewerProfilesProps) {
+  const { t, locale } = useLanguage();
   if (!data || !data.dataAvailable) {
-    return <NoDataCard message={data?.message || "Keine Profil-Daten vorhanden"} />;
+    return <NoDataCard message={t(data?.message || "Keine Profil-Daten vorhanden")} />;
   }
 
   const { profiles, exclusivityDistribution } = data;
@@ -40,9 +43,9 @@ export function ViewerProfiles({ data }: ViewerProfilesProps) {
       <Rise
         className="panel-card rounded-2xl p-6"
       >
-        <h4 className="text-sm font-medium text-text-secondary mb-4">Zuschauer-Segmente</h4>
+        <h4 className="text-sm font-medium text-text-secondary mb-4">{t("Zuschauer-Segmente")}</h4>
         <div className="flex flex-col lg:flex-row items-center gap-6">
-          {/* Pie Chart */}
+
           <div className="w-48 h-48">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -65,6 +68,7 @@ export function ViewerProfiles({ data }: ViewerProfilesProps) {
                   ))}
                 </Pie>
                 <Tooltip
+                  labelFormatter={label => t(String(label))}
                   contentStyle={{
                     backgroundColor: 'var(--color-popover)',
                     border: '1px solid var(--color-border)',
@@ -72,35 +76,35 @@ export function ViewerProfiles({ data }: ViewerProfilesProps) {
                   }}
                   formatter={(value) => {
                     const numericValue = Array.isArray(value) ? Number(value[0] ?? 0) : Number(value ?? 0);
-                    return [numericValue, 'Zuschauer'];
+                    return [formatNumber(numericValue, 0, locale), t('Zuschauer')];
                   }}
                 />
               </PieChart>
             </ResponsiveContainer>
           </div>
 
-          {/* Legend */}
+
           <div className="flex-1 space-y-2">
             {pieData.map((entry, i) => (
-              <div key={entry.name} className="flex items-center justify-between">
+              <div key={t(entry.name)} className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <div
                     className="w-3 h-3 rounded-full"
                     style={{ backgroundColor: PROFILE_COLORS[i] }}
                   />
-                  <span className="text-sm text-text-secondary">{entry.name}</span>
+                  <span className="text-sm text-text-secondary">{t(entry.name)}</span>
                 </div>
-                <span className="text-sm font-medium text-white">{entry.value}</span>
+                <span className="text-sm font-medium text-white">{formatNumber(entry.value, 0, locale)}</span>
               </div>
             ))}
           <div className="pt-2 border-t border-border">
             <div className="flex items-center justify-between">
-              <span className="text-sm text-text-secondary">Gesamt</span>
-              <span className="text-sm font-bold text-white">{profiles.total}</span>
+              <span className="text-sm text-text-secondary">{t("Gesamt")}</span>
+              <span className="text-sm font-bold text-white">{formatNumber(profiles.total, 0, locale)}</span>
             </div>
             {passiveNote && (
               <p className="text-[11px] text-text-secondary mt-2">
-                Passiv: Keine Daten (Lurker anonym).
+                {t("Passiv: Keine Daten (Lurker anonym).")}
               </p>
             )}
           </div>
@@ -108,14 +112,14 @@ export function ViewerProfiles({ data }: ViewerProfilesProps) {
       </div>
     </Rise>
 
-      {/* Exclusivity Distribution */}
+
       {exclusivityDistribution.length > 0 && (
         <Rise
           step={{ seconds: 0.1 }}
           className="panel-card rounded-2xl p-6"
         >
           <h4 className="text-sm font-medium text-text-secondary mb-4">
-            Exklusivitats-Verteilung (Anzahl verfolgter Streamer)
+            {t('Exklusivitäts-Verteilung (Anzahl verfolgter Streamer)')}
           </h4>
           <div className="h-[200px]">
             <ResponsiveContainer width="100%" height="100%">
@@ -124,9 +128,9 @@ export function ViewerProfiles({ data }: ViewerProfilesProps) {
                   dataKey="streamerCount"
                   stroke="#B5A488"
                   fontSize={12}
-                  tickFormatter={(v: number) => `${v} Streamer`}
+                  tickFormatter={(v: number) => t('{count} Streamer', { count: formatNumber(v, 0, locale) })}
                 />
-                <YAxis stroke="#B5A488" fontSize={12} />
+                <YAxis tickFormatter={value => formatNumber(value, 0, locale)} stroke="#B5A488" fontSize={12} />
                 <Tooltip
                   contentStyle={{
                     backgroundColor: 'var(--color-popover)',
@@ -135,11 +139,11 @@ export function ViewerProfiles({ data }: ViewerProfilesProps) {
                   }}
                   formatter={(value) => {
                     const numericValue = Array.isArray(value) ? Number(value[0] ?? 0) : Number(value ?? 0);
-                    return [numericValue, 'Zuschauer'];
+                    return [formatNumber(numericValue, 0, locale), t('Zuschauer')];
                   }}
                   labelFormatter={(label: React.ReactNode, _payload) =>
                     typeof label === 'number' || typeof label === 'string'
-                      ? `${label} Streamer`
+                      ? t('{count} Streamer', { count: formatNumber(Number(label), 0, locale) })
                       : ''
                   }
                 />
