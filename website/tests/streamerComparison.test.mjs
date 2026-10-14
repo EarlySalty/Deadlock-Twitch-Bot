@@ -45,7 +45,7 @@ test("Sortierung stellt belastbar gerankte Werte vor kleine Stichproben", () => 
 test("Suche und Berechnungszeit sind explizit zugänglich", () => {
   const source = readFileSync(pagePath, "utf8");
 
-  assert.match(source, /aria-label="Streamer suchen"/);
+  assert.match(source, /aria-label=\{landingText\("Streamer suchen"\)\}/);
   assert.match(source, /timeZone:\s*"Europe\/Berlin"/);
   assert.match(source, /aria-pressed=\{days === option\}/);
 });
