@@ -1015,3 +1015,153 @@ async fn snapshot_keeps_old_unresolved_work_visible() {
     assert!(view.videos.iter().any(|video| video.id == open));
     cleanup(pool).await;
 }
+
+async fn executed(
+    pool: &PgPool,
+    name: &str,
+    offset: i32,
+    statuses: &[(&str, &str)],
+) -> (i64, std::path::PathBuf) {
+    let (id, file) = video(pool, name).await;
+    sqlx::query("UPDATE social_produced_videos SET status = 'approved', needs_review = FALSE, publication_executed_at = clock_timestamp() - INTERVAL '8 days' WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .expect("executed video");
+    for (platform, status) in statuses {
+        sqlx::query(
+            "INSERT INTO twitch_clips_upload_queue (clip_id, produced_video_id, platform, status, scheduled_at, last_attempt_at, next_retry_at)
+             SELECT v.clip_id, v.id, $2, $3, clock_timestamp() - INTERVAL '8 days' - make_interval(mins => $4),
+                 CASE WHEN $3 = $6 THEN clock_timestamp() ELSE clock_timestamp() - INTERVAL '8 days' END,
+                 CASE WHEN $3 = $5 THEN clock_timestamp() + INTERVAL '1 hour' END
+             FROM social_produced_videos v WHERE v.id = $1",
+        )
+        .bind(id)
+        .bind(platform)
+        .bind(status)
+        .bind(offset)
+        .bind(queue_status::RETRY)
+        .bind(queue_status::PREPARING)
+        .execute(pool)
+        .await
+        .expect("destination");
+    }
+    (id, file)
+}
+
+async fn set_retention_start(pool: &PgPool, id: i64, days: i32) {
+    sqlx::query("UPDATE social_produced_videos SET metadata = jsonb_set(metadata, '{artifact_retention}', jsonb_build_object('unresolved_since', clock_timestamp() - make_interval(days => $2))) WHERE id = $1")
+        .bind(id)
+        .bind(days)
+        .execute(pool)
+        .await
+        .expect("retention start");
+}
+
+async fn retention(pool: &PgPool, id: i64) -> Option<serde_json::Value> {
+    sqlx::query_scalar(
+        "SELECT metadata -> 'artifact_retention' FROM social_produced_videos WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .expect("retention")
+}
+
+#[tokio::test]
+async fn unresolved_destinations_release_file_only_after_grace_period() {
+    let pool = pool().await;
+    configure(&pool, &["youtube", "tiktok"], &[("youtube", "yt-1")]).await;
+    let publisher = ScriptedPublisher::with(vec![]);
+    let executor = PublishExecutor::new(pool.clone(), publisher.clone());
+    let expiring: [(&str, &[(&str, &str)]); 4] = [
+        ("failed", &[("youtube", queue_status::FAILED)]),
+        ("held", &[("youtube", queue_status::HELD)]),
+        ("uncertain", &[("youtube", queue_status::UNCERTAIN)]),
+        (
+            "mixed",
+            &[
+                ("youtube", queue_status::PUBLISHED),
+                ("tiktok", queue_status::UNCERTAIN),
+            ],
+        ),
+    ];
+    let keeping: [(&str, &[(&str, &str)]); 4] = [
+        ("retry", &[("youtube", queue_status::RETRY)]),
+        ("preparing", &[("youtube", queue_status::PREPARING)]),
+        (
+            "effect",
+            &[
+                ("youtube", queue_status::FAILED),
+                ("tiktok", queue_status::EFFECT_STARTED),
+            ],
+        ),
+        (
+            "waiting",
+            &[
+                ("youtube", queue_status::HELD),
+                ("tiktok", queue_status::RETRY),
+            ],
+        ),
+    ];
+    let mut offset = 0;
+    let mut expired = Vec::new();
+    for (name, statuses) in expiring {
+        offset += 1;
+        let (id, file) = executed(&pool, name, offset, statuses).await;
+        expired.push((id, file, statuses.len()));
+    }
+    let mut kept = Vec::new();
+    for (name, statuses) in keeping {
+        offset += 1;
+        kept.push(executed(&pool, name, offset, statuses).await);
+    }
+    let (recent, recent_file) =
+        executed(&pool, "recent", 99, &[("youtube", queue_status::UNCERTAIN)]).await;
+    sqlx::query("UPDATE twitch_clips_upload_queue SET last_attempt_at = clock_timestamp() - INTERVAL '2 days' WHERE produced_video_id = $1")
+        .bind(recent)
+        .execute(&pool)
+        .await
+        .expect("recent attempt");
+    executor.tick().await.expect("marking tick");
+    for (id, file, _) in &expired {
+        assert!(artifact(&pool, *id).await.is_none());
+        assert!(file.exists());
+        assert!(retention(&pool, *id).await.is_some());
+        set_retention_start(&pool, *id, 8).await;
+    }
+    for (id, _) in &kept {
+        assert!(retention(&pool, *id).await.is_none());
+        set_retention_start(&pool, *id, 30).await;
+    }
+    set_retention_start(&pool, recent, 8).await;
+    executor.tick().await.expect("cleanup tick");
+    for (id, file, count) in &expired {
+        assert!(artifact(&pool, *id).await.is_some());
+        assert!(!file.exists());
+        let record = retention(&pool, *id).await.expect("cleanup record");
+        assert_eq!(record["reason"], "unresolved_destinations_expired");
+        assert_eq!(
+            record["destinations"].as_object().map(|map| map.len()),
+            Some(*count)
+        );
+        let rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE produced_video_id = $1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .expect("kept destinations");
+        assert_eq!(rows, *count as i64);
+    }
+    for (id, file) in &kept {
+        assert!(artifact(&pool, *id).await.is_none());
+        assert!(file.exists());
+        assert!(retention(&pool, *id).await.is_none());
+    }
+    assert!(artifact(&pool, recent).await.is_none());
+    assert!(recent_file.exists());
+    executor.tick().await.expect("settled tick");
+    assert!(publisher.calls().is_empty());
+    cleanup(pool).await;
+}
