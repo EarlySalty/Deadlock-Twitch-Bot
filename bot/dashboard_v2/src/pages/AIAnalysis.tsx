@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react';
+import { useLanguage } from '@/context/LanguageContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Rise } from '../motion/Rise';
 import {
@@ -74,6 +75,7 @@ function getPriorityConfig(priority: string) {
 type GameFilter = 'deadlock' | 'all';
 
 export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
+  const { t, locale } = useLanguage();
   const { data: authStatus, isLoading: loadingAuth } = useAuthStatus();
   const { hasEntitlement } = usePlan();
   const [result, setResult] = useState<AIAnalysisResult | null>(null);
@@ -124,9 +126,9 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
           </div>
         </div>
         <div className="text-center max-w-xs">
-          <p className="text-white font-semibold text-lg mb-1">Analyse-Zugang erforderlich</p>
+          <p className="text-white font-semibold text-lg mb-1">{t("Analyse-Zugang erforderlich")}</p>
           <p className="text-text-secondary text-sm leading-relaxed">
-            KI-Analysen sind mit dem Analyse-Zugang verfügbar.
+            {t("KI-Analysen sind mit dem Analyse-Zugang verfügbar.")}
           </p>
         </div>
       </div>
@@ -222,9 +224,9 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
               <Brain className="w-6 h-6 text-primary" />
             </div>
             <div>
-              <h2 className="text-xl font-bold text-white">KI Tiefenanalyse</h2>
+              <h2 className="text-xl font-bold text-white">{t("KI Tiefenanalyse")}</h2>
               <p className="text-text-secondary text-sm mt-0.5">
-                KI analysiert {days} Tage Streaming-Daten
+                {t('KI analysiert {days} Tage Streaming-Daten', { days: days.toLocaleString(locale) })}
                 {streamer && (
                   <span className="text-primary font-medium"> · {streamer}</span>
                 )}
@@ -232,9 +234,9 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
             </div>
           </div>
 
-          <div className="flex items-center gap-3 flex-shrink-0">
+          <div className="flex flex-wrap items-center gap-3">
             {/* Game Filter Toggle */}
-            <div className="flex rounded-xl border border-border overflow-hidden text-sm">
+            <div className="flex rounded-xl border border-border overflow-hidden text-sm whitespace-nowrap">
               <button
                 onClick={() => setGameFilter('all')}
                 disabled={isLoading}
@@ -244,7 +246,7 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
                     : 'text-text-secondary hover:text-white hover:bg-background/60'
                 }`}
               >
-                Alle Spiele
+                {t("Alle Spiele")}
               </button>
               <button
                 onClick={() => setGameFilter('deadlock')}
@@ -267,12 +269,12 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
               {isLoading ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Analysiere...
+                  {t("Analysiere...")}
                 </>
               ) : (
                 <>
                   <Sparkles className="w-4 h-4" />
-                  {result ? 'Neu analysieren' : 'Analyse starten'}
+                  {t(result ? 'Neu analysieren' : 'Analyse starten')}
                 </>
               )}
             </button>
@@ -282,24 +284,24 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
         {!streamer && (
           <div className="mt-4 p-3 bg-warning/10 border border-warning/20 rounded-xl flex items-center gap-2 text-warning text-sm">
             <AlertCircle className="w-4 h-4 flex-shrink-0" />
-            Bitte zuerst einen Streamer auswählen
+            {t("Bitte zuerst einen Streamer auswählen")}
           </div>
         )}
 
         <div className="mt-4">
           <label className="block text-sm font-medium text-white mb-2">
-            Deine eigenen Eindrücke / Fragen an die KI
-            <span className="text-text-secondary font-normal"> (optional)</span>
+            {t("Deine eigenen Eindrücke / Fragen an die KI")}
+            <span className="text-text-secondary font-normal">{t(' (optional)')}</span>
           </label>
           <textarea
             value={userContext}
             onChange={(event) => setUserContext(event.target.value.slice(0, 2000))}
             disabled={isLoading}
-            placeholder="z.B. Warum performen manche Titel schlechter? Welche Streams sollte ich wiederholen?"
+            placeholder={t("z.B. Warum performen manche Titel schlechter? Welche Streams sollte ich wiederholen?")}
             className="w-full min-h-[110px] rounded-2xl border border-border bg-background/60 px-4 py-3 text-sm text-white placeholder:text-text-secondary outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/15 resize-y"
           />
           <div className="mt-2 text-xs text-text-secondary text-right">
-            {userContext.length}/2000
+            {locale === 'de-DE' ? userContext.length : userContext.length.toLocaleString(locale)}/{locale === 'de-DE' ? '2000' : (2000).toLocaleString(locale)}
           </div>
         </div>
 
@@ -316,7 +318,7 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
                 className="flex items-center gap-1.5 px-3 py-1 text-xs text-text-secondary bg-background/60 rounded-full border border-border"
               >
                 <Icon className="w-3 h-3" />
-                {label === 'Nur für dich sichtbar' && isDemoMode ? 'Snapshot-basiert' : label}
+                {t(label === 'Nur für dich sichtbar' && isDemoMode ? 'Snapshot-basiert' : label)}
               </span>
             ))}
           </div>
@@ -331,9 +333,9 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
             <Brain className="w-7 h-7 text-primary absolute inset-0 m-auto" />
           </div>
           <div className="text-center">
-            <p className="text-white font-semibold">KI analysiert...</p>
+            <p className="text-white font-semibold">{t("KI analysiert...")}</p>
             <p className="text-text-secondary text-sm mt-1 max-w-xs">
-              Alle Stream-Daten werden ausgewertet. Das kann 1–3 Minuten dauern.
+              {t("Alle Stream-Daten werden ausgewertet. Das kann 1–3 Minuten dauern.")}
             </p>
           </div>
           <div className="flex gap-1.5 mt-2">
@@ -353,8 +355,8 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
         <div className="panel-card rounded-2xl p-4 flex items-start gap-3 border border-error/20 bg-error/5">
           <AlertCircle className="w-5 h-5 text-error flex-shrink-0 mt-0.5" />
           <div>
-            <p className="text-error font-medium text-sm">Analyse fehlgeschlagen</p>
-            <p className="text-text-secondary text-xs mt-0.5">{error}</p>
+            <p className="text-error font-medium text-sm">{t("Analyse fehlgeschlagen")}</p>
+            <p className="text-text-secondary text-xs mt-0.5">{t(error)}</p>
           </div>
         </div>
       )}
@@ -372,8 +374,8 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
             <div className="flex items-center gap-2">
               <Brain className="w-3 h-3 text-primary" />
               <span>
-                {result.model === 'opus' ? 'Premium-Analyse' : 'KI-Analyse'} · generiert am{' '}
-                {new Date(result.generatedAt).toLocaleString('de-DE', {
+                {t(result.model === 'opus' ? 'Premium-Analyse' : 'KI-Analyse')} · {t('generiert am')}{' '}
+                {new Date(result.generatedAt).toLocaleString(locale, {
                   day: '2-digit',
                   month: '2-digit',
                   year: 'numeric',
@@ -383,10 +385,10 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
               </span>
             </div>
             <span className="px-2 py-0.5 rounded-full bg-background/60 border border-border font-medium">
-              {result.gameFilter === 'deadlock' ? '🎮 Deadlock' : '🌐 Alle Spiele'}
+              {result.gameFilter === 'deadlock' ? '🎮 Deadlock' : t('🌐 Alle Spiele')}
             </span>
             <span className="px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20 text-primary font-medium">
-              {result.model === 'opus' ? 'Premium-Analyse' : 'KI-Analyse'}
+              {t(result.model === 'opus' ? 'Premium-Analyse' : 'KI-Analyse')}
             </span>
           </div>
 
@@ -397,7 +399,7 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
               return (
                 <span key={p} className="flex items-center gap-1.5 text-xs text-text-secondary">
                   <span className={`w-2 h-2 rounded-full ${cfg.dot}`} />
-                  {cfg.label}
+                  {t(cfg.label)}
                 </span>
               );
             })}
@@ -407,7 +409,7 @@ export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
           <div className="space-y-3">
             {result.points.map((point, i) => (
               <AnalysisPointCard
-                key={point.number}
+                key={locale === 'de-DE' ? point.number : point.number.toLocaleString(locale)}
                 point={point}
                 index={i}
                 isExpanded={expandedPoint === point.number}
@@ -460,29 +462,30 @@ interface DataSnapshotGridProps {
 }
 
 function DataSnapshotGrid({ snapshot }: DataSnapshotGridProps) {
+  const { t, locale } = useLanguage();
   const items = [
     {
       icon: <TrendingUp className="w-4 h-4" />,
       label: 'Streams',
-      value: snapshot.streamCount.toString(),
+      value: locale === 'de-DE' ? snapshot.streamCount.toString() : snapshot.streamCount.toLocaleString(locale),
       color: 'primary',
     },
     {
       icon: <Clock className="w-4 h-4" />,
       label: 'Stunden',
-      value: `${snapshot.totalHours.toFixed(1)}h`,
+      value: `${locale === 'de-DE' ? snapshot.totalHours.toFixed(1) : snapshot.totalHours.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}h`,
       color: 'accent',
     },
     {
       icon: <Users className="w-4 h-4" />,
       label: 'Ø Viewer',
-      value: Math.round(snapshot.avgViewers).toLocaleString('de-DE'),
+      value: Math.round(snapshot.avgViewers).toLocaleString(locale),
       color: 'success',
     },
     {
       icon: <MessageCircle className="w-4 h-4" />,
       label: 'Ø Chatter',
-      value: snapshot.avgChatters.toLocaleString('de-DE'),
+      value: snapshot.avgChatters.toLocaleString(locale),
       color: 'warning',
     },
   ] as const;
@@ -501,7 +504,7 @@ function DataSnapshotGrid({ snapshot }: DataSnapshotGridProps) {
           <div className={`w-8 h-8 rounded-lg ${colorMap[item.color]} flex items-center justify-center mb-2`}>
             {item.icon}
           </div>
-          <div className="text-xs text-text-secondary">{item.label}</div>
+          <div className="text-xs text-text-secondary">{t(item.label)}</div>
           <div className="text-lg font-bold text-white">{item.value}</div>
         </div>
       ))}
@@ -517,6 +520,7 @@ interface AnalysisPointCardProps {
 }
 
 function AnalysisPointCard({ point, index, isExpanded, onToggle }: AnalysisPointCardProps) {
+  const { t, locale } = useLanguage();
   const cfg = getPriorityConfig(point.priority);
 
   return (
@@ -537,7 +541,7 @@ function AnalysisPointCard({ point, index, isExpanded, onToggle }: AnalysisPoint
             <div
               className={`flex-shrink-0 w-8 h-8 rounded-lg ${cfg.numberBg} ${cfg.border} border flex items-center justify-center`}
             >
-              <span className={`text-sm font-bold ${cfg.text}`}>{point.number}</span>
+              <span className={`text-sm font-bold ${cfg.text}`}>{locale === 'de-DE' ? point.number : point.number.toLocaleString(locale)}</span>
             </div>
 
             <div className="flex-1 min-w-0">
@@ -546,7 +550,7 @@ function AnalysisPointCard({ point, index, isExpanded, onToggle }: AnalysisPoint
                 <span
                   className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${cfg.bg} ${cfg.text} border ${cfg.border} leading-none flex-shrink-0`}
                 >
-                  {cfg.label}
+                  {t(cfg.label)}
                 </span>
               </div>
 
@@ -577,13 +581,13 @@ function AnalysisPointCard({ point, index, isExpanded, onToggle }: AnalysisPoint
             className="border-t border-border"
           >
             <div className="p-4 space-y-4">
-              <DetailSection label="Analyse" content={point.analysis} />
+              <DetailSection label={t("Analyse")} content={point.analysis} />
               {point.action && (
-                <DetailSection label="Handlungsempfehlung" content={point.action} />
+                <DetailSection label={t("Handlungsempfehlung")} content={point.action} />
               )}
               {point.expectedImpact && (
                 <DetailSection
-                  label="Erwarteter Impact"
+                  label={t("Erwarteter Impact")}
                   content={point.expectedImpact}
                   className={cfg.text}
                 />
@@ -638,22 +642,28 @@ function AIChatPanel({
   onInputChange,
   onSend,
 }: AIChatPanelProps) {
+  const { t, locale } = useLanguage();
   const [renderedAt] = useState(() => Date.now());
   const limitLabel = model === 'opus'
-    ? `Noch ${followUpsRemaining} Rückfragen verfügbar`
-    : `Noch ${followUpsRemaining}/10 Rückfragen in dieser Stunde`;
+    ? t('Noch {count} Rückfragen verfügbar', { count: followUpsRemaining.toLocaleString(locale) })
+    : t('Noch {count}/10 Rückfragen in dieser Stunde', { count: followUpsRemaining.toLocaleString(locale) });
+
+  const errorMinutes = error?.match(/^Limit erreicht\. Wieder verfügbar in (\d+) Minuten\.$/)?.[1];
+  const errorLabel = errorMinutes
+    ? t('Limit erreicht. Wieder verfügbar in {minutes} Minuten.', { minutes: Number(errorMinutes).toLocaleString(locale) })
+    : error ? t(error) : null;
 
   const rateLimitLabel = rateLimitReset
-    ? `Limit erreicht. Wieder verfügbar in ${Math.max(1, Math.ceil((rateLimitReset * 1000 - renderedAt) / 60000))} Minuten.`
+    ? t('Limit erreicht. Wieder verfügbar in {minutes} Minuten.', { minutes: Math.max(1, Math.ceil((rateLimitReset * 1000 - renderedAt) / 60000)).toLocaleString(locale) })
     : null;
 
   return (
     <div className="panel-card rounded-2xl p-5 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="text-white font-semibold">Rückfragen zur Analyse</div>
+          <div className="text-white font-semibold">{t("Rückfragen zur Analyse")}</div>
           <div className="text-sm text-text-secondary">
-            Analyse #{analysisId}
+            {t('Analyse #{id}', { id: analysisId })}
           </div>
         </div>
         <div className="text-xs px-3 py-1.5 rounded-full border border-border bg-background/60 text-text-secondary">
@@ -664,7 +674,7 @@ function AIChatPanel({
       <div className="space-y-3">
         {messages.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border bg-background/40 px-4 py-5 text-sm text-text-secondary">
-            Stelle gezielte Rückfragen zur bestehenden Analyse, z.B. zu Titeln, Wochentagen oder den wichtigsten Hebeln.
+            {t("Stelle gezielte Rückfragen zur bestehenden Analyse, z.B. zu Titeln, Wochentagen oder den wichtigsten Hebeln.")}
           </div>
         ) : (
           messages.map((message, index) => (
@@ -684,7 +694,7 @@ function AIChatPanel({
 
       {(error || rateLimitLabel) && (
         <div className="rounded-xl border border-warning/20 bg-warning/5 px-4 py-3 text-sm text-warning">
-          {error || rateLimitLabel}
+          {errorLabel || rateLimitLabel}
         </div>
       )}
 
@@ -693,7 +703,7 @@ function AIChatPanel({
           value={inputValue}
           onChange={(event) => onInputChange(event.target.value)}
           disabled={isSending || followUpsRemaining <= 0}
-          placeholder="Deine Rückfrage zur Analyse..."
+          placeholder={t("Deine Rückfrage zur Analyse...")}
           className="w-full min-h-[96px] rounded-2xl border border-border bg-background/60 px-4 py-3 text-sm text-white placeholder:text-text-secondary outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/15 resize-y disabled:opacity-60"
         />
         <div className="flex justify-end">
@@ -706,12 +716,12 @@ function AIChatPanel({
             {isSending ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Sende...
+                {t("Sende...")}
               </>
             ) : (
               <>
                 <MessageCircle className="w-4 h-4" />
-                Rückfrage senden
+                {t("Rückfrage senden")}
               </>
             )}
           </button>
@@ -730,6 +740,7 @@ interface HistoryPanelProps {
 }
 
 function HistoryPanel({ history, activeId, onRestore }: HistoryPanelProps) {
+  const { t, locale } = useLanguage();
   const [open, setOpen] = useState(false);
 
   return (
@@ -741,9 +752,9 @@ function HistoryPanel({ history, activeId, onRestore }: HistoryPanelProps) {
       >
         <div className="flex items-center gap-2 text-sm font-semibold text-text-secondary">
           <History className="w-4 h-4" />
-          Vergangene Analysen
+          {t("Vergangene Analysen")}
           <span className="px-1.5 py-0.5 text-[10px] bg-background rounded-full border border-border">
-            {history.length}
+            {locale === 'de-DE' ? history.length : history.length.toLocaleString(locale)}
           </span>
         </div>
         {open ? (
@@ -765,7 +776,7 @@ function HistoryPanel({ history, activeId, onRestore }: HistoryPanelProps) {
             <div className="divide-y divide-border">
               {history.map((entry) => {
                 const isActive = entry.id === activeId;
-                const date = new Date(entry.generatedAt).toLocaleString('de-DE', {
+                const date = new Date(entry.generatedAt).toLocaleString(locale, {
                   day: '2-digit',
                   month: '2-digit',
                   year: 'numeric',
@@ -784,11 +795,11 @@ function HistoryPanel({ history, activeId, onRestore }: HistoryPanelProps) {
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-xs text-white font-medium">{date}</span>
                         <span className="text-[10px] text-text-secondary px-1.5 py-0.5 rounded-full border border-border">
-                          {entry.days}d
+                          {locale === 'de-DE' ? entry.days : entry.days.toLocaleString(locale)}d
                         </span>
                         {isActive && (
                           <span className="text-[10px] text-primary px-1.5 py-0.5 rounded-full bg-primary/10 border border-primary/30">
-                            aktiv
+                            {t("aktiv")}
                           </span>
                         )}
                       </div>
@@ -797,23 +808,23 @@ function HistoryPanel({ history, activeId, onRestore }: HistoryPanelProps) {
                         {entry.kritischCount > 0 && (
                           <span className="flex items-center gap-1 text-[10px] text-error">
                             <span className="w-1.5 h-1.5 rounded-full bg-error" />
-                            {entry.kritischCount}k
+                            {t('{count}k', { count: locale === 'de-DE' ? entry.kritischCount : entry.kritischCount.toLocaleString(locale) })}
                           </span>
                         )}
                         {entry.hochCount > 0 && (
                           <span className="flex items-center gap-1 text-[10px] text-warning">
                             <span className="w-1.5 h-1.5 rounded-full bg-warning" />
-                            {entry.hochCount}h
+                            {locale === 'de-DE' ? entry.hochCount : entry.hochCount.toLocaleString(locale)}h
                           </span>
                         )}
                         {entry.mittelCount > 0 && (
                           <span className="flex items-center gap-1 text-[10px] text-primary">
                             <span className="w-1.5 h-1.5 rounded-full bg-primary" />
-                            {entry.mittelCount}m
+                            {locale === 'de-DE' ? entry.mittelCount : entry.mittelCount.toLocaleString(locale)}m
                           </span>
                         )}
                         <span className="text-[10px] text-text-secondary">
-                          Ø {Math.round(entry.dataSnapshot.avgViewers)} Viewer
+                          {t('Ø {count} Viewer', { count: locale === 'de-DE' ? Math.round(entry.dataSnapshot.avgViewers) : Math.round(entry.dataSnapshot.avgViewers).toLocaleString(locale) })}
                         </span>
                       </div>
                     </div>
@@ -822,10 +833,10 @@ function HistoryPanel({ history, activeId, onRestore }: HistoryPanelProps) {
                       <button
                         onClick={() => onRestore(entry)}
                         className="flex-shrink-0 flex items-center gap-1 px-2.5 py-1.5 text-xs text-text-secondary hover:text-white border border-border hover:border-primary/40 rounded-lg transition-colors"
-                        title="Diese Analyse laden"
+                        title={t("Diese Analyse laden")}
                       >
                         <RotateCcw className="w-3 h-3" />
-                        Laden
+                        {t("Laden")}
                       </button>
                     )}
                   </div>
