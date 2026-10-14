@@ -450,9 +450,9 @@ We do not yet know which model will deliver the best practical results.
 
 Do not build a dedicated model comparison dashboard at this stage.
 
-### Global YAML Configuration
+### Global TOML Configuration
 
-Use YAML for global system settings, such as:
+Use TOML (like the rest of the Twitch bot, `ops/social-ai/editor.toml`) for global system settings, such as:
 
 - AI provider.
 - AI model.
@@ -460,7 +460,7 @@ Use YAML for global system settings, such as:
 - Global technical limits.
 - Relevant service configuration.
 
-**Do not use YAML for per-user preferences or per-user feature states.**
+**Do not use TOML config files for per-user preferences or per-user feature states.**
 
 These belong in the existing backend persistence system.
 
