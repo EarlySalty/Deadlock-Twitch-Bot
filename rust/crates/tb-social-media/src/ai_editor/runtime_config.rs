@@ -292,6 +292,16 @@ impl EditorRuntime {
         })
     }
 
+    pub fn restore_configuration(
+        &self,
+        mut configuration: EditorConfig,
+    ) -> Result<Self, super::AiEditorError> {
+        configuration
+            .restore_trusted_pricing(&self.configuration)
+            .map_err(|_| super::AiEditorError::Configuration)?;
+        Self::from_configuration(&self.package_root, configuration)
+    }
+
     pub fn media(&self) -> &MediaRuntime {
         &self.media
     }

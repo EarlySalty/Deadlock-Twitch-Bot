@@ -10,6 +10,8 @@ pub struct EditorConfig {
     pub schema_version: u32,
     pub provider: ProviderConfig,
     pub runtime: serde_json::Value,
+    #[serde(skip)]
+    trusted_pricing: Option<TrustedPricing>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +85,7 @@ impl SocialAiSection {
             schema_version: self.schema_version,
             provider: self.provider,
             runtime: self.runtime,
+            trusted_pricing: Some(self.pricing),
         };
         config.validate()?;
         Ok(config)
@@ -94,7 +97,18 @@ impl EditorConfig {
         if self.schema_version != 1 || !self.runtime.is_object() {
             return Err(EditorError::new(ErrorKind::Configuration));
         }
-        self.provider.validate()
+        self.provider.validate()?;
+        self.provider.check_trusted(
+            self.trusted_pricing
+                .as_ref()
+                .ok_or_else(|| EditorError::new(ErrorKind::Configuration))?,
+        )
+    }
+
+    pub fn restore_trusted_pricing(&mut self, current: &Self) -> Result<(), EditorError> {
+        current.validate()?;
+        self.trusted_pricing = current.trusted_pricing.clone();
+        self.validate()
     }
 }
 
@@ -257,6 +271,38 @@ mod tests {
                 Some(ErrorKind::Configuration)
             );
         }
+    }
+
+    #[test]
+    fn deserialized_checkpoints_require_current_trusted_pricing() {
+        let current = section(SOCIAL_AI_SECTION)
+            .into_editor_config()
+            .expect("trusted current config");
+        let checkpoint = serde_json::to_value(&current).expect("checkpoint");
+        assert!(checkpoint.get("trusted_pricing").is_none());
+        let mut restored: EditorConfig =
+            serde_json::from_value(checkpoint.clone()).expect("old checkpoint contract");
+        assert!(restored.validate().is_err());
+        restored
+            .restore_trusted_pricing(&current)
+            .expect("unchanged trusted pricing");
+        restored.validate().expect("safe before reservation");
+        let mutations: [fn(&mut serde_json::Value); 3] = [
+            |v| v["provider"]["model"] = serde_json::json!("unapproved-model"),
+            |v| v["provider"]["pricing_version"] = serde_json::json!(2),
+            |v| v["provider"]["pricing"]["input_micro_usd_per_million"] = serde_json::json!(1),
+        ];
+        for mutate in mutations {
+            let mut changed = checkpoint.clone();
+            mutate(&mut changed);
+            let mut restored: EditorConfig = serde_json::from_value(changed).expect("checkpoint");
+            assert!(restored.restore_trusted_pricing(&current).is_err());
+            assert!(restored.validate().is_err());
+        }
+        let mut untrusted: EditorConfig = serde_json::from_value(checkpoint).expect("checkpoint");
+        assert!(untrusted
+            .restore_trusted_pricing(&untrusted.clone())
+            .is_err());
     }
 
     #[test]

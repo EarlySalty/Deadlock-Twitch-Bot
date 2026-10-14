@@ -163,12 +163,10 @@ fn provider_relative_resource_checks_remain_editor_only() {
         let root = package(&document);
         root.media().expect("intrinsic media resource limits");
         assert!(root.editor().is_err());
-        document
-            .as_object_mut()
-            .expect("document object")
-            .remove("pricing");
-        let configuration: EditorConfig =
-            serde_json::from_value(document).expect("typed editor configuration");
+        let configuration = serde_json::from_value::<SocialAiSection>(document)
+            .expect("typed main section")
+            .into_editor_config()
+            .expect("trusted editor configuration");
         assert!(EditorRuntime::from_configuration(root.path(), configuration).is_err());
     }
 }
@@ -383,6 +381,42 @@ fn social_ai_section_keeps_optional_services_disabled_and_the_shared_cap() {
     assert!(runtime.limits.brain.is_none());
     assert!(runtime.limits.stt.settings.language.is_none());
     assert!(runtime.limits.stt.settings.remote_endpoint.is_none());
+}
+
+#[test]
+fn checkpoint_runtime_uses_main_toml_trust_without_changing_frozen_settings() {
+    let root = package(&document());
+    let runtime = root.editor().expect("current trusted runtime");
+    let mut checkpoint = serde_json::to_value(&runtime.configuration).expect("frozen config");
+    checkpoint["provider"]["request_timeout_ms"] = json!(31_000);
+    let restore = |value| {
+        runtime.restore_configuration(
+            serde_json::from_value::<EditorConfig>(value).expect("persisted checkpoint"),
+        )
+    };
+    let restored = restore(checkpoint.clone()).expect("unchanged trusted prices");
+    assert_eq!(restored.configuration.provider.request_timeout_ms, 31_000);
+    assert_eq!(restored.limits.source_root, runtime.limits.source_root);
+    for (field, value) in [
+        ("model", json!("unapproved-model")),
+        ("pricing_version", json!(2)),
+        (
+            "pricing",
+            json!({
+                "input_micro_usd_per_million": 1,
+                "output_micro_usd_per_million": 1,
+                "cache_creation_micro_usd_per_million": 1,
+                "cache_read_micro_usd_per_million": 1,
+            }),
+        ),
+    ] {
+        let mut changed = checkpoint.clone();
+        changed["provider"][field] = value;
+        assert!(matches!(
+            restore(changed),
+            Err(AiEditorError::Configuration)
+        ));
+    }
 }
 
 #[test]

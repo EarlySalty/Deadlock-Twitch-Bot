@@ -1764,7 +1764,10 @@ async fn main() {
                     runtime,
                     Some(settings.internal_api.token.clone()),
                 );
-                supervisor.spawn("social_manual_ai_worker", async move { worker.run().await });
+                supervisor.spawn("social_manual_ai_worker", async move {
+                    tracing::info!(task = "social_manual_ai_worker", "SOCIAL_AI_WORKER_STARTED");
+                    worker.run().await;
+                });
             }
             Err(error) => tracing::warn!(error = %error, "Manual AI production is unavailable"),
         }
