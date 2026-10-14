@@ -38,6 +38,9 @@
 		Content-Security-Policy "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://gql.twitch.tv; media-src https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 	}
 
+	@legal_noindex path_regexp legal_noindex (?i)/(impressum|datenschutz|agb|privacy|imprint|terms|legal)(\.html)?(/|$)
+	header @legal_noindex X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex"
+
 	route {
 		@oauth path /twitch/auth /twitch/auth/* /callback /callback/* /twitch/raid/auth /twitch/raid/callback /twitch/discord_link /twitch/social-media/oauth /twitch/social-media/oauth/* /social-media/oauth /social-media/oauth/* /twitch/uplink/connect/kick /twitch/uplink/connect/youtube /auth /auth/* /link/steam /link/steam/login /link/steam/callback /link/callback/* /link/auth/* /linked-role/* /api/auth/* /builds/auth/* /aktivitaet/auth/* /turnier/auth/* /clips/auth/*
 		handle @oauth {
@@ -122,9 +125,6 @@
 				header_down -Server
 			}
 		}
-
-		@legal_noindex path_regexp legal_noindex (?i)/(impressum|datenschutz|agb|privacy|imprint|terms|legal)(\.html)?(/|$)
-		header @legal_noindex X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex"
 
 		@legal_pages {
 			path /twitch/impressum /twitch/datenschutz /twitch/agb /twitch/sicherheit
