@@ -46,9 +46,12 @@ test('fehlende oder unbrauchbare Werte werden zu null statt zu 0', () => {
 
 test('OBS-Hilfe trennt Uploadbudget und geprüfte Plattformausgabe', () => {
   const page = readFileSync(new URL('../src/pages/Uplink.tsx', import.meta.url), 'utf8');
+  const encoderAnalyse = readFileSync(new URL('../src/uplinkEncoderAnalyse.ts', import.meta.url), 'utf8');
   const help = readFileSync(new URL('../public/uplink/obs.html', import.meta.url), 'utf8');
+  assert.match(page, /analyse\.empfehlung\.ratensteuerung/);
+  assert.match(encoderAnalyse, /ratensteuerung: 'CBR'/);
+  assert.match(help, /CBR/);
   for (const content of [page, help]) {
-    assert.match(content, /CBR/);
     assert.match(content, /AV1/);
     assert.doesNotMatch(content, /obsBitrateEmpfehlung|VBR|SRT-Adresse|Streamschlüssel leer lassen/);
   }
