@@ -404,7 +404,7 @@ fn local_time(at: DateTime<Utc>) -> String {
 
 fn token_outage_event_content(started_at: DateTime<Utc>) -> String {
     let at = local_time(started_at);
-    format!("Am {at} ist der Chat-Zugang des Twitch-Bots ausgefallen. Der Bot lief weiter, konnte aber nicht im Chat schreiben. Bitte den Chat-Zugang prüfen und den Bot bei Bedarf neu autorisieren.")
+    format!("Am {at} konnte der Chat-Zugang des Twitch-Bots nicht zuverlässig bestätigt werden. Bitte den Chat-Zugang prüfen und den Bot bei Bedarf neu autorisieren.")
 }
 
 fn outage_content(incident: &Incident) -> String {
@@ -412,7 +412,7 @@ fn outage_content(incident: &Incident) -> String {
     match (incident.service.as_str(), incident.recovered_at) {
         (BOT_TOKEN, Some(recovered_at)) => {
             let recovered = local_time(recovered_at);
-            format!("Der Chat-Zugang des Twitch-Bots funktionierte vom {at} bis {recovered} nicht. Dieser Ausfall ist beendet. Der Bot kann wieder im Chat schreiben.")
+            format!("Der Chat-Zugang des Twitch-Bots konnte vom {at} bis {recovered} nicht zuverlässig bestätigt werden. Am {recovered} wurde der Zugang wieder erfolgreich geprüft. Diese Meldung betrifft diesen abgeschlossenen Zeitraum.")
         }
         (BOT_TOKEN, None) => token_outage_event_content(incident.started_at),
         (COLLECTOR, Some(recovered_at)) => {
@@ -1028,6 +1028,17 @@ mod tests {
             .expect("first delivery");
         let state: (bool,bool,bool) = sqlx::query_as("SELECT notified_at IS NOT NULL,recovery_notified_at IS NOT NULL,last_recovery_attempt_at IS NOT NULL FROM twitch_watchdog_incidents WHERE id=$1").bind(id).fetch_one(&pool).await.expect("delivery state");
         assert_eq!(state, (true, false, true));
+        sqlx::query(
+            "INSERT INTO twitch_bot_token_health(last_ok_at,last_failure_at) VALUES($1,$2)",
+        )
+        .bind(now - chrono::Duration::seconds(60))
+        .bind(now + chrono::Duration::seconds(58))
+        .execute(&pool)
+        .await
+        .expect("new failed validation");
+        observe_bot_token(&pool, true, now + chrono::Duration::seconds(58))
+            .await
+            .expect("new outage while recovery awaits retry");
         outage_notifications(
             &pool,
             now + chrono::Duration::seconds(59),
@@ -1071,7 +1082,7 @@ mod tests {
         assert!(messages[0]["content"]
             .as_str()
             .expect("content")
-            .contains("ist der Chat-Zugang des Twitch-Bots ausgefallen"));
+            .contains("konnte der Chat-Zugang des Twitch-Bots nicht zuverlässig bestätigt werden"));
         assert!(!messages[0]["content"]
             .as_str()
             .expect("content")
@@ -1079,12 +1090,24 @@ mod tests {
         assert!(messages[1]["content"]
             .as_str()
             .expect("content")
-            .contains("kann wieder im Chat schreiben"));
+            .contains("wurde der Zugang wieder erfolgreich geprüft"));
         assert_ne!(
             messages[0]["idempotency_key"],
             messages[1]["idempotency_key"]
         );
         assert_eq!(messages[1], messages[2]);
+        for message in &messages {
+            let content = message["content"].as_str().expect("content");
+            assert!(!content.contains("kann wieder im Chat schreiben"));
+            assert!(!content.contains("konnte aber nicht im Chat schreiben"));
+        }
+        assert!(messages[2]["content"]
+            .as_str()
+            .expect("content")
+            .contains(&local_time(now - chrono::Duration::seconds(60))));
+        let open: i64 = sqlx::query_scalar("SELECT count(*) FROM twitch_watchdog_incidents WHERE service=$1 AND recovered_at IS NULL")
+            .bind(BOT_TOKEN).fetch_one(&pool).await.expect("new outage remains open");
+        assert_eq!(open, 1);
         let notified: bool = sqlx::query_scalar(
             "SELECT recovery_notified_at IS NOT NULL FROM twitch_watchdog_incidents WHERE id=$1",
         )
