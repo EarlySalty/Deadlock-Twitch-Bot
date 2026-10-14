@@ -1,3 +1,11 @@
 # Der Bot läuft vollständig in Rust. Die verbliebenen Python-Dateien sind
 # Einmal-/Analyseskripte und gehören nicht in den Code-Graphen.
 *.py
+
+# Doku, Task-Notizen und Fremdcode verzerren die Architekturkarte.
+.tasks/
+docs/
+agent-docs/
+vendor/
+.preview-python-*/
+.social-preview-*/
