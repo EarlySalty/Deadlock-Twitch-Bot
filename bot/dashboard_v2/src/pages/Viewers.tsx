@@ -44,6 +44,7 @@ import type {
   ViewerEntry,
   SegmentData,
 } from '@/types/analytics';
+import { useLanguage, useT } from '@/context/LanguageContext';
 
 interface ViewersProps {
   streamer: string | null;
@@ -59,51 +60,56 @@ export const SEGMENT_CONFIG: Record<string, { label: string; color: string; bgCl
   new: { label: 'Neu', color: 'var(--color-accent)', bgClass: 'bg-accent/10 text-accent border-accent/20' },
 };
 
-const FILTER_OPTIONS: { value: ViewerFilterType; label: string }[] = [
-  { value: 'all', label: 'Alle' },
-  { value: 'active', label: 'Aktiv' },
-  { value: 'lurker', label: 'Lurker' },
-  { value: 'exclusive', label: 'Exklusiv' },
-  { value: 'shared', label: 'Shared' },
-  { value: 'new', label: 'Neu' },
-  { value: 'churned', label: 'Churned' },
-];
+function filterOptions(t: ReturnType<typeof useT>): { value: ViewerFilterType; label: string }[] {
+  return [
+    { value: 'all', label: t('Alle') },
+    { value: 'active', label: t('Aktiv') },
+    { value: 'lurker', label: t('Lurker') },
+    { value: 'exclusive', label: t('Exklusiv') },
+    { value: 'shared', label: t('Shared') },
+    { value: 'new', label: t('Neu') },
+    { value: 'churned', label: t('Churned') },
+  ];
+}
 
-const PERSONALITY_LABELS: Record<string, string> = {
-  'Command': 'Befehlsgeber',
-  'Greeting': 'Willkommener',
-  'Question': 'Fragesteller',
-  'Reaction': 'Reactor',
-  'Hype': 'Hype-Leader',
-  'Game-Related': 'Game-Diskutierer',
-  'Feedback': 'Kritiker/Lobender',
-  'Technical': 'Technik-Check',
-  'Social': 'Socializer',
-  'Other': 'Allrounder',
-};
+function personalityLabels(t: ReturnType<typeof useT>): Record<string, string> {
+  return {
+    'Command': t('Befehlsgeber'),
+    'Greeting': t('Willkommener'),
+    'Question': t('Fragesteller'),
+    'Reaction': t('Reactor'),
+    'Hype': t('Hype-Leader'),
+    'Game-Related': t('Game-Diskutierer'),
+    'Feedback': t('Kritiker/Lobender'),
+    'Technical': t('Technik-Check'),
+    'Social': t('Socializer'),
+    'Other': t('Allrounder'),
+  };
+}
 
 const PERSONALITY_COLORS = [
-  '#C5A059', // Command
-  '#00D9FF', // Greeting
-  '#FF5A3C', // Question
-  '#00C46A', // Reaction
-  '#B5A488', // Hype
-  'var(--color-warning)', // Game-Related
-  '#C5A059', // Feedback
-  '#00D9FF', // Technical
-  '#FF5A3C', // Social
-  '#00C46A', // Other
+  '#C5A059',
+  '#00D9FF',
+  '#FF5A3C',
+  '#00C46A',
+  '#B5A488',
+  'var(--color-warning)',
+  '#C5A059',
+  '#00D9FF',
+  '#FF5A3C',
+  '#00C46A',
 ];
 
-function formatNumber(n: number): string {
-  return n.toLocaleString('de-DE');
+function formatNumber(n: number, locale: string): string {
+  return n.toLocaleString(locale);
 }
 
 function CategoryBadge({ category }: { category: string }) {
+  const t = useT();
   const config = SEGMENT_CONFIG[category] || SEGMENT_CONFIG.casual;
   return (
     <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${config.bgClass}`}>
-      {config.label}
+      {t(config.label)}
     </span>
   );
 }
@@ -119,6 +125,7 @@ function RawChatGapNotice({
   status?: RawChatStatus;
   compact?: boolean;
 }) {
+  const t = useT();
   const warnung = Boolean(status?.suspectedIngestionIssue);
   if (!chatLueckeSichtbar(status)) {
     return null;
@@ -136,10 +143,10 @@ function RawChatGapNotice({
         <AlertTriangle className={`${compact ? 'mt-0.5 h-3.5 w-3.5' : 'mt-0.5 h-4 w-4'} shrink-0`} />
         <div>
           <p className="font-medium text-white">
-            {warnung ? CHAT_LUECKE_TITEL : CHAT_KEINE_TITEL}
+            {warnung ? t(CHAT_LUECKE_TITEL) : t(CHAT_KEINE_TITEL)}
           </p>
           <p className="mt-1 leading-5">
-            {warnung ? CHAT_LUECKE_TEXT : CHAT_KEINE_TEXT}
+            {warnung ? t(CHAT_LUECKE_TEXT) : t(CHAT_KEINE_TEXT)}
           </p>
         </div>
       </div>
@@ -148,6 +155,7 @@ function RawChatGapNotice({
 }
 
 function SegmentCard({ name, data }: { name: string; data: SegmentData }) {
+  const { t, locale } = useLanguage();
   const config = SEGMENT_CONFIG[name] || SEGMENT_CONFIG.casual;
   return (
     <motion.div
@@ -157,16 +165,15 @@ function SegmentCard({ name, data }: { name: string; data: SegmentData }) {
     >
       <div className="flex items-center justify-between mb-2">
         <span className={`px-2 py-0.5 rounded-full text-xs font-bold border ${config.bgClass}`}>
-          {config.label}
+          {t(config.label)}
         </span>
         <span className="text-xs text-text-secondary">{data.pct}%</span>
       </div>
-      <div className="text-2xl font-bold text-white mb-1">{formatNumber(data.count)}</div>
+      <div className="text-2xl font-bold text-white mb-1">{formatNumber(data.count, locale)}</div>
       <div className="text-xs text-text-secondary space-y-0.5">
-        <div>Ø {data.avgSessions.toFixed(1)} Sessions</div>
-        <div>Ø {data.avgMessages.toFixed(1)} Messages</div>
+        <div>{t('Ø {count} Sessions', { count: data.avgSessions.toFixed(1) })}</div>
+        <div>{t('Ø {count} Messages', { count: data.avgMessages.toFixed(1) })}</div>
       </div>
-      {/* Mini progress bar */}
       <div className="mt-2 h-1.5 bg-background rounded-full overflow-hidden">
         <div
           className="h-full rounded-full transition-[width]"
@@ -190,6 +197,7 @@ function ViewerRow({
   streamer: string;
   days: TimeRange;
 }) {
+  const { t, locale } = useLanguage();
   return (
     <>
       <tr
@@ -203,18 +211,18 @@ function ViewerRow({
           {viewer.presenceOnlyInWindow && (
             <div className="mt-1 flex items-center gap-1 text-xs text-warning">
               <AlertTriangle className="h-3.5 w-3.5" />
-              <span>Nur Presence-Daten im gewählten Zeitraum</span>
+              <span>{t('Nur Presence-Daten im gewählten Zeitraum')}</span>
             </div>
           )}
         </td>
-        <td className="py-3 px-4 text-text-secondary">{formatNumber(viewer.totalSessions)}</td>
-        <td className="py-3 px-4 text-text-secondary">{formatNumber(viewer.totalMessages)}</td>
+        <td className="py-3 px-4 text-text-secondary">{formatNumber(viewer.totalSessions, locale)}</td>
+        <td className="py-3 px-4 text-text-secondary">{formatNumber(viewer.totalMessages, locale)}</td>
         <td className="py-3 px-4 text-text-secondary">
           {viewer.daysSinceLastSeen === 0
-            ? 'Heute'
+            ? t('Heute')
             : viewer.daysSinceLastSeen === 1
-              ? 'Gestern'
-              : `vor ${viewer.daysSinceLastSeen}d`}
+              ? t('Gestern')
+              : t('vor {days}d', { days: viewer.daysSinceLastSeen })}
         </td>
         <td className="py-3 px-4 text-text-secondary">
           {viewer.otherChannels > 0 ? (
@@ -225,7 +233,7 @@ function ViewerRow({
           ) : (
             <span className="flex items-center gap-1 text-success">
               <Lock className="w-3 h-3" />
-              Exklusiv
+              {t('Exklusiv')}
             </span>
           )}
         </td>
@@ -262,6 +270,7 @@ function ViewerExpandedRow({
   streamer: string;
   days: TimeRange;
 }) {
+  const t = useT();
   const { data, isLoading } = useViewerDetail(streamer, login, days);
 
   if (isLoading) {
@@ -301,11 +310,10 @@ function ViewerExpandedRow({
         </div>
       )}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Activity Timeline */}
         <div className="bg-card rounded-lg border border-border p-4">
           <h4 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
             <Clock className="w-4 h-4 text-primary" />
-            Aktivität (letzte 90 Tage)
+            {t('Aktivität (letzte 90 Tage)')}
           </h4>
           {data.activityTimeline.length > 0 ? (
             <div className="h-[120px]">
@@ -327,67 +335,64 @@ function ViewerExpandedRow({
               </ResponsiveContainer>
             </div>
           ) : (
-            <p className="text-xs text-text-secondary">Keine Aktivitätsdaten</p>
+            <p className="text-xs text-text-secondary">{t('Keine Aktivitätsdaten')}</p>
           )}
         </div>
 
-        {/* Cross-Channel Presence */}
         <div className="bg-card rounded-lg border border-border p-4">
           <h4 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
             <Share2 className="w-4 h-4 text-accent" />
-            Andere Channels
+            {t('Andere Channels')}
           </h4>
           {data.crossChannelPresence.length > 0 ? (
             <div className="space-y-2 max-h-[120px] overflow-y-auto">
               {data.crossChannelPresence.slice(0, 5).map(cc => (
                 <div key={cc.streamer} className="flex items-center justify-between text-xs">
                   <span className="text-white font-medium truncate">{cc.streamer}</span>
-                  <span className="text-text-secondary">{cc.sessions} Sessions</span>
+                  <span className="text-text-secondary">{t('{count} Sessions', { count: cc.sessions })}</span>
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-xs text-text-secondary">Exklusiver Viewer</p>
+            <p className="text-xs text-text-secondary">{t('Exklusiver Viewer')}</p>
           )}
         </div>
 
-        {/* Chat Patterns */}
         <div className="bg-card rounded-lg border border-border p-4">
           <h4 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
             <MessageSquare className="w-4 h-4 text-warning" />
-            Chat-Muster
+            {t('Chat-Muster')}
           </h4>
           <div className="space-y-2 text-xs">
             <div className="flex justify-between">
-              <span className="text-text-secondary">Ø Messages/Session</span>
+              <span className="text-text-secondary">{t('Ø Messages/Session')}</span>
               <span className="text-white font-medium">{data.chatPatterns.avgMessagesPerSession}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-text-secondary">Aktivster Tag</span>
-              <span className="text-white font-medium">{data.chatPatterns.mostActiveDay}</span>
+              <span className="text-text-secondary">{t('Aktivster Tag')}</span>
+              <span className="text-white font-medium">{t(data.chatPatterns.mostActiveDay)}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-text-secondary">Peak-Stunden</span>
+              <span className="text-text-secondary">{t('Peak-Stunden')}</span>
               <span className="text-white font-medium">
                 {data.chatPatterns.peakHours.map(h => `${h}:00`).join(', ')}
               </span>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-text-secondary">Trend</span>
+              <span className="text-text-secondary">{t('Trend')}</span>
               <span className="flex items-center gap-1">{trendIcon}</span>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Personality Panel */}
       {data.personality && (
         <div className="mt-4 bg-card rounded-lg border border-border p-4">
           <h4 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
             <Users className="w-4 h-4 text-success" />
-            Personality
+            {t('Personality')}
             <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-success/10 text-success border border-success/20">
-              {PERSONALITY_LABELS[data.personality.primary] || data.personality.primary}
+              {personalityLabels(t)[data.personality.primary] || data.personality.primary}
             </span>
           </h4>
           <div className="flex items-center gap-4">
@@ -443,6 +448,7 @@ function ViewerExpandedRow({
 }
 
 export function Viewers({ streamer, days }: ViewersProps) {
+  const { t, locale } = useLanguage();
   const [sort, setSort] = useState<ViewerSortField>('sessions');
   const [order, setOrder] = useState<'asc' | 'desc'>('desc');
   const [filter, setFilter] = useState<ViewerFilterType>('all');
@@ -451,8 +457,6 @@ export function Viewers({ streamer, days }: ViewersProps) {
   const [page, setPage] = useState(1);
   const [expandedViewer, setExpandedViewer] = useState<string | null>(null);
 
-  // Event-handler return values are not cleanups. Cancel the previous timer
-  // on every edit/unmount and update the search + page together after the pause.
   useEffect(() => {
     if (search === debouncedSearch) return;
     const timeout = setTimeout(() => {
@@ -495,14 +499,13 @@ export function Viewers({ streamer, days }: ViewersProps) {
     setPage(1);
   };
 
-  // Donut chart data for exclusive vs shared
   const donutData = useMemo(() => {
     if (!directory?.summary) return [];
     return [
-      { name: 'Exklusiv', value: directory.summary.exclusiveViewers, color: '#C5A059' },
-      { name: 'Shared', value: directory.summary.sharedViewers, color: '#00D9FF' },
+      { name: t('Exklusiv'), value: directory.summary.exclusiveViewers, color: '#C5A059' },
+      { name: t('Shared'), value: directory.summary.sharedViewers, color: '#00D9FF' },
     ];
-  }, [directory?.summary]);
+  }, [directory?.summary, t]);
 
   const totalPages = directory ? Math.ceil(directory.total / directory.perPage) : 1;
 
@@ -510,7 +513,7 @@ export function Viewers({ streamer, days }: ViewersProps) {
     return (
       <div className="flex flex-col items-center justify-center h-64">
         <AlertCircle className="w-12 h-12 text-text-secondary mb-4" />
-        <p className="text-text-secondary text-lg">Wähle einen Streamer aus</p>
+        <p className="text-text-secondary text-lg">{t('Wähle einen Streamer aus')}</p>
       </div>
     );
   }
@@ -523,14 +526,13 @@ export function Viewers({ streamer, days }: ViewersProps) {
 
       {segmentsError && (
         <div role="alert" className="bg-error/10 border border-error/30 rounded-lg p-4 text-error">
-          Die Zuschauer-Übersicht konnte nicht geladen werden.
+          {t('Die Zuschauer-Übersicht konnte nicht geladen werden.')}
           <button onClick={() => refetchSegments()} className="ml-3 underline">
-            Übersicht erneut laden
+            {t('Übersicht erneut laden')}
           </button>
         </div>
       )}
 
-      {/* ── Segment Cards ── */}
       {segments && (
         <Rise
           className="grid grid-cols-2 md:grid-cols-5 gap-3"
@@ -546,29 +548,27 @@ export function Viewers({ streamer, days }: ViewersProps) {
         </Rise>
       )}
 
-      {/* ── Insights Row ── */}
       <Rise
         step={{ seconds: 0.1 }}
         className="grid grid-cols-1 md:grid-cols-3 gap-4"
       >
-        {/* Churn Risk — "Vermisst"-Liste */}
         <div className="bg-card rounded-xl border border-border p-5">
           <div className="flex items-center gap-3 mb-3">
             <div className="w-10 h-10 rounded-lg bg-error/20 flex items-center justify-center">
               <AlertTriangle className="w-5 h-5 text-error" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white">Vermisste Chatter</h3>
-              <p className="text-xs text-text-secondary">Aktive Viewer die fehlen</p>
+              <h3 className="text-sm font-bold text-white">{t('Vermisste Chatter')}</h3>
+              <p className="text-xs text-text-secondary">{t('Aktive Viewer die fehlen')}</p>
             </div>
           </div>
           {segments ? (
             <div className="space-y-2">
               <div className="flex items-baseline gap-2 mb-2">
                 <span className="text-2xl font-bold text-error">{segments.churnRisk.atRisk}</span>
-                <span className="text-sm text-text-secondary">vermisst</span>
+                <span className="text-sm text-text-secondary">{t('vermisst')}</span>
                 <span className="text-text-secondary mx-1">·</span>
-                <span className="text-sm text-text-secondary">{segments.churnRisk.recentlyChurned} abgewandert</span>
+                <span className="text-sm text-text-secondary">{t('{count} abgewandert', { count: segments.churnRisk.recentlyChurned })}</span>
               </div>
               {segments.churnRisk.atRiskViewers.length > 0 ? (
                 <div className="space-y-1.5 max-h-[140px] overflow-y-auto">
@@ -576,37 +576,38 @@ export function Viewers({ streamer, days }: ViewersProps) {
                     <div key={v.login} className="flex items-center justify-between text-xs">
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="text-white font-medium truncate">{v.login}</span>
-                        <span className="text-text-secondary shrink-0">vor {v.daysSinceLastSeen}d</span>
+                        <span className="text-text-secondary shrink-0">{t('vor {days}d', { days: v.daysSinceLastSeen })}</span>
                       </div>
                       <div className="text-text-secondary truncate ml-2 text-right">
                         {v.recentlySeenAt && v.recentlySeenAt.length > 0
-                          ? <span className="text-accent">bei {v.recentlySeenAt.slice(0, 2).join(', ')}</span>
-                          : <span className="text-text-secondary/50">offline</span>}
+                          ? <span className="text-accent">{t('bei {channels}', { channels: v.recentlySeenAt.slice(0, 2).join(', ') })}</span>
+                          : <span className="text-text-secondary/50">{t('offline')}</span>}
                       </div>
                     </div>
                   ))}
                 </div>
               ) : (
-                <p className="text-xs text-success">Keine vermissten Chatter</p>
+                <p className="text-xs text-success">{t('Keine vermissten Chatter')}</p>
               )}
             </div>
           ) : loadingSegments ? (
-            <Loader2 aria-label="Zuschauer-Übersicht wird geladen" className="w-5 h-5 animate-spin text-text-secondary" />
+            <Loader2 aria-label={t('Zuschauer-Übersicht wird geladen')} className="w-5 h-5 animate-spin text-text-secondary" />
           ) : (
-            <p className="text-xs text-text-secondary">Keine Daten verfügbar</p>
+            <p className="text-xs text-text-secondary">{t('Keine Daten verfügbar')}</p>
           )}
         </div>
 
-        {/* Top Shared Channels */}
         <div className="bg-card rounded-xl border border-border p-5">
           <div className="flex items-center gap-3 mb-3">
             <div className="w-10 h-10 rounded-lg bg-accent/20 flex items-center justify-center">
               <Share2 className="w-5 h-5 text-accent" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white">Top Shared Channels</h3>
+              <h3 className="text-sm font-bold text-white">{t('Top Shared Channels')}</h3>
               <p className="text-xs text-text-secondary">
-                Ø {segments?.crossChannelStats.avgOtherChannels ?? directory?.summary.avgOtherChannels ?? '…'} andere Channels
+                {t('Ø {count} andere Channels', {
+                  count: segments?.crossChannelStats.avgOtherChannels ?? directory?.summary.avgOtherChannels ?? '…',
+                })}
               </p>
             </div>
           </div>
@@ -615,25 +616,28 @@ export function Viewers({ streamer, days }: ViewersProps) {
               {segments.crossChannelStats.topSharedChannels.slice(0, 5).map(ch => (
                 <div key={ch.streamer} className="flex items-center justify-between text-xs">
                   <span className="text-white font-medium truncate">{ch.streamer}</span>
-                  <span className="text-text-secondary">{formatNumber(ch.sharedCount)} gemeinsam</span>
+                  <span className="text-text-secondary">{t('{count} gemeinsam', { count: formatNumber(ch.sharedCount, locale) })}</span>
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-xs text-text-secondary">{loadingSegments ? 'Wird geladen …' : 'Keine Shared-Channel-Daten'}</p>
+            <p className="text-xs text-text-secondary">{loadingSegments ? t('Wird geladen …') : t('Keine Shared-Channel-Daten')}</p>
           )}
         </div>
 
-        {/* Exclusive vs Shared Donut */}
         <div className="bg-card rounded-xl border border-border p-5">
           <div className="flex items-center gap-3 mb-3">
             <div className="w-10 h-10 rounded-lg bg-success/20 flex items-center justify-center">
               <Users className="w-5 h-5 text-success" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white">Exklusiv vs Shared</h3>
+              <h3 className="text-sm font-bold text-white">{t('Exklusiv vs Shared')}</h3>
               <p className="text-xs text-text-secondary">
-                {segments ? `${segments.crossChannelStats.exclusiveViewersPct}% exklusiv` : loadingSegments ? 'Wird geladen …' : 'Keine Daten verfügbar'}
+                {segments
+                  ? t('{pct}% exklusiv', { pct: segments.crossChannelStats.exclusiveViewersPct })
+                  : loadingSegments
+                    ? t('Wird geladen …')
+                    : t('Keine Daten verfügbar')}
               </p>
             </div>
           </div>
@@ -659,7 +663,7 @@ export function Viewers({ streamer, days }: ViewersProps) {
                       borderRadius: '8px',
                       fontSize: '12px',
                     }}
-                    formatter={(value) => formatNumber(Number(value))}
+                    formatter={(value) => formatNumber(Number(value), locale)}
                   />
                 </PieChart>
               </ResponsiveContainer>
@@ -668,23 +672,25 @@ export function Viewers({ streamer, days }: ViewersProps) {
         </div>
       </Rise>
 
-      {/* ── Viewer Directory ── */}
       <Rise
         step={{ seconds: 0.2 }}
         className="bg-card rounded-xl border border-border p-5"
       >
-        {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-primary/20 flex items-center justify-center">
               <UserSearch className="w-5 h-5 text-primary" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-white">Viewer-Verzeichnis</h3>
+              <h3 className="text-lg font-bold text-white">{t('Viewer-Verzeichnis')}</h3>
               <p className="text-sm text-text-secondary">
-                {directory ? `${formatNumber(directory.total)} Viewer` : loadingDirectory ? 'Viewer werden geladen …' : 'Keine Viewer-Daten verfügbar'}
-                {directory?.summary ? ` · ${formatNumber(directory.summary.totalViewers)} gesamt` : ''}
-                {` · Fenster ${days} Tage`}
+                {directory
+                  ? t('{count} Viewer', { count: formatNumber(directory.total, locale) })
+                  : loadingDirectory
+                    ? t('Viewer werden geladen …')
+                    : t('Keine Viewer-Daten verfügbar')}
+                {directory?.summary ? ` · ${t('{count} gesamt', { count: formatNumber(directory.summary.totalViewers, locale) })}` : ''}
+                {` ${t('· Fenster {days} Tage', { days })}`}
               </p>
             </div>
           </div>
@@ -694,25 +700,24 @@ export function Viewers({ streamer, days }: ViewersProps) {
           {directoryBusy && directory && (
             <span className="inline-flex items-center gap-2">
               <Loader2 aria-hidden="true" className="w-3 h-3 animate-spin" />
-              Liste wird aktualisiert …
+              {t('Liste wird aktualisiert …')}
             </span>
           )}
         </div>
 
-        {/* Search + Filter */}
         <div className="flex flex-col sm:flex-row gap-3 mb-4">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-secondary" />
             <input
               type="text"
-              placeholder="Viewer suchen..."
+              placeholder={t('Viewer suchen...')}
               value={search}
               onChange={e => setSearch(e.target.value)}
               className="w-full pl-9 pr-3 py-2 rounded-lg bg-background border border-border text-white text-sm placeholder:text-text-secondary focus:outline-none focus:border-primary/50"
             />
           </div>
           <div className="flex gap-1.5 flex-wrap">
-            {FILTER_OPTIONS.map(opt => (
+            {filterOptions(t).map(opt => (
               <button
                 key={opt.value}
                 onClick={() => handleFilterChange(opt.value)}
@@ -732,28 +737,27 @@ export function Viewers({ streamer, days }: ViewersProps) {
           <div role="alert" className="bg-error/10 border border-error/30 rounded-lg p-4 mb-4 text-error">
             <div className="flex items-center gap-2 font-semibold mb-2">
               <AlertCircle className="w-5 h-5" />
-              <span>Die Viewer-Liste konnte nicht geladen werden.</span>
+              <span>{t('Die Viewer-Liste konnte nicht geladen werden.')}</span>
             </div>
             <button
               onClick={() => refetchDirectory()}
               className="px-3 py-1.5 rounded-md bg-error/20 text-error text-sm font-semibold hover:bg-error/30"
             >
-              Erneut laden
+              {t('Erneut laden')}
             </button>
           </div>
         )}
 
-        {/* Keep the controls mounted; only this table is busy. */}
         <div className="overflow-x-auto" aria-busy={directoryBusy}>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border text-text-secondary text-left">
-                <SortHeader label="Login" field="first_seen" currentSort={sort} order={order} onSort={handleSort} />
-                <SortHeader label="Sessions" field="sessions" currentSort={sort} order={order} onSort={handleSort} />
-                <SortHeader label="Messages" field="messages" currentSort={sort} order={order} onSort={handleSort} />
-                <SortHeader label="Letzte Aktivität" field="last_seen" currentSort={sort} order={order} onSort={handleSort} />
-                <SortHeader label="Andere Ch." field="other_channels" currentSort={sort} order={order} onSort={handleSort} />
-                <th className="py-2 px-4 font-semibold text-xs uppercase tracking-wide">Kategorie</th>
+                <SortHeader label={t('Login')} field="first_seen" currentSort={sort} order={order} onSort={handleSort} />
+                <SortHeader label={t('Sessions')} field="sessions" currentSort={sort} order={order} onSort={handleSort} />
+                <SortHeader label={t('Messages')} field="messages" currentSort={sort} order={order} onSort={handleSort} />
+                <SortHeader label={t('Letzte Aktivität')} field="last_seen" currentSort={sort} order={order} onSort={handleSort} />
+                <SortHeader label={t('Andere Ch.')} field="other_channels" currentSort={sort} order={order} onSort={handleSort} />
+                <th className="py-2 px-4 font-semibold text-xs uppercase tracking-wide">{t('Kategorie')}</th>
                 <th className="py-2 px-2 w-8"></th>
               </tr>
             </thead>
@@ -763,7 +767,7 @@ export function Viewers({ streamer, days }: ViewersProps) {
                   <td colSpan={7} className="py-12 text-center text-text-secondary">
                     <span role="status" className="inline-flex items-center gap-2">
                       <Loader2 aria-hidden="true" className="w-4 h-4 animate-spin" />
-                      Viewer werden geladen …
+                      {t('Viewer werden geladen …')}
                     </span>
                   </td>
                 </tr>
@@ -783,7 +787,7 @@ export function Viewers({ streamer, days }: ViewersProps) {
               {directory?.viewers.length === 0 && !directoryBusy && (
                 <tr>
                   <td colSpan={7} className="py-12 text-center text-text-secondary">
-                    Keine Viewer gefunden
+                    {t('Keine Viewer gefunden')}
                   </td>
                 </tr>
               )}
@@ -791,7 +795,6 @@ export function Viewers({ streamer, days }: ViewersProps) {
           </table>
         </div>
 
-        {/* Pagination */}
         {totalPages > 1 && (
           <div className="flex items-center justify-between mt-4 pt-4 border-t border-border">
             <button
@@ -799,17 +802,17 @@ export function Viewers({ streamer, days }: ViewersProps) {
               disabled={directoryBusy || page <= 1}
               className="px-3 py-1.5 rounded-lg text-sm font-semibold bg-background border border-border text-text-secondary hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              Zurück
+              {t('Zurück')}
             </button>
             <span className="text-sm text-text-secondary">
-              Seite {directory?.page ?? page} von {totalPages}
+              {t('Seite {page} von {pages}', { page: directory?.page ?? page, pages: totalPages })}
             </span>
             <button
               onClick={() => setPage(p => Math.min(totalPages, p + 1))}
               disabled={directoryBusy || page >= totalPages}
               className="px-3 py-1.5 rounded-lg text-sm font-semibold bg-background border border-border text-text-secondary hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              Weiter
+              {t('Weiter')}
             </button>
           </div>
         )}

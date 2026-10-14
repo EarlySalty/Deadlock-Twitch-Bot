@@ -10,7 +10,7 @@ import { useStreamerList, useAuthStatus } from '@/hooks/useAnalytics';
 import {
   analyticsTabHref,
 } from '@/preview/routes';
-import { formatNumber, formatDuration } from '@/utils/formatters';
+import { formatDuration } from '@/utils/formatters';
 import { HEALTH_SCORE_METRICS, healthScoreBand } from '@/utils/healthScoreContext';
 import {
   ArrowRight,
@@ -28,7 +28,7 @@ import {
 import { EinrichtungCard } from '@/components/onboarding/EinrichtungCard';
 import { FeedbackBox } from '@/components/feedback/FeedbackBox';
 import { StreamRecapCard } from '@/components/cards/StreamRecapCard';
-import { useT } from '@/context/LanguageContext';
+import { useLanguage, useT } from '@/context/LanguageContext';
 
 function MiniSparkline({
   values,
@@ -110,11 +110,11 @@ function MiniSparkline({
   );
 }
 
-function formatTrendPct(value: number): string {
+function formatTrendPct(value: number, locale: string): string {
   const rounded = Math.round(value * 10) / 10;
   return (
     (rounded > 0 ? '+' : '') +
-    rounded.toLocaleString('de-DE', { maximumFractionDigits: 1 }) +
+    rounded.toLocaleString(locale, { maximumFractionDigits: 1 }) +
     '%'
   );
 }
@@ -142,6 +142,8 @@ function MiniStat({
   trendPct?: number | null;
   markPeak?: boolean;
 }) {
+  const { t, locale } = useLanguage();
+  const formatNumber = new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format;
   const accentColor = {
     primary: 'bg-primary/15 border-primary/25 text-primary',
     accent: 'bg-accent/15 border-accent/25 text-accent',
@@ -224,7 +226,7 @@ function MiniStat({
                     trendClass
                   }
                 >
-                  {formatTrendPct(trendPct)}
+                  {formatTrendPct(trendPct, locale)}
                 </div>
               ) : null}
             </div>
@@ -235,7 +237,7 @@ function MiniStat({
               <MiniSparkline
                 values={series}
                 accent={accent}
-                label={seriesLabel || label + ' Verlauf'}
+                label={seriesLabel || t('{label} Verlauf', { label })}
                 markPeak={markPeak}
               />
             </div>
@@ -349,11 +351,11 @@ function initialInternalHomeStreamer(): string | null {
   return streamer || null;
 }
 
-function formatDateTime(value: string | null | undefined): string {
-  if (!value) return 'Unbekannt';
+function formatDateTime(value: string | null | undefined, t: ReturnType<typeof useT>, locale: string): string {
+  if (!value) return t('Unbekannt');
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'Unbekannt';
-  return date.toLocaleString('de-DE', {
+  if (Number.isNaN(date.getTime())) return t('Unbekannt');
+  return date.toLocaleString(locale, {
     day: '2-digit',
     month: '2-digit',
     hour: '2-digit',
@@ -361,22 +363,22 @@ function formatDateTime(value: string | null | undefined): string {
   });
 }
 
-function formatCalendarDate(value: string | null | undefined): string {
-  if (!value) return 'Unbekannt';
+function formatCalendarDate(value: string | null | undefined, t: ReturnType<typeof useT>, locale: string): string {
+  if (!value) return t('Unbekannt');
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'Unbekannt';
-  return date.toLocaleDateString('de-DE', {
+  if (Number.isNaN(date.getTime())) return t('Unbekannt');
+  return date.toLocaleDateString(locale, {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
   });
 }
 
-function formatDateWithTime(iso: string | null | undefined): string {
+function formatDateWithTime(iso: string | null | undefined, locale: string): string {
   if (!iso) return '\u2013';
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '\u2013';
-  return date.toLocaleDateString('de-DE', {
+  return date.toLocaleDateString(locale, {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
@@ -390,19 +392,19 @@ function formatDurationFromSeconds(seconds: number | null | undefined): string {
   return formatDuration(seconds);
 }
 
-function formatRelativeShort(value: string | null | undefined): string | null {
+function formatRelativeShort(value: string | null | undefined, t: ReturnType<typeof useT>, locale: string): string | null {
   if (!value) return null;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
   const diffMs = Date.now() - date.getTime();
   const diffMin = Math.round(diffMs / 60000);
-  if (diffMin < 1) return 'gerade eben';
-  if (diffMin < 60) return `vor ${diffMin} min`;
+  if (diffMin < 1) return t('gerade eben');
+  if (diffMin < 60) return t('vor {count} min', { count: diffMin });
   const diffH = Math.round(diffMin / 60);
-  if (diffH < 24) return `vor ${diffH} h`;
+  if (diffH < 24) return t('vor {count} h', { count: diffH });
   const diffD = Math.round(diffH / 24);
-  if (diffD < 14) return `vor ${diffD} Tagen`;
-  return formatCalendarDate(value);
+  if (diffD < 14) return t('vor {count} Tagen', { count: diffD });
+  return formatCalendarDate(value, t, locale);
 }
 
 function changelogKey(entry: InternalHomeChangelogEntry, index: number): string {
@@ -418,7 +420,8 @@ export function InternalHomeLanding() {
   );
   const [showAllUpdates, setShowAllUpdates] = useState(false);
   const normalizedSelectedStreamer = selectedStreamer?.trim().toLowerCase() || null;
-  const t = useT();
+  const { t, locale } = useLanguage();
+  const formatNumber = new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format;
 
   const partnerStreamers = useMemo(
     () =>
@@ -518,23 +521,23 @@ export function InternalHomeLanding() {
       <div className="panel-card rounded-2xl p-6 md:p-8">
         {noPartnersAtAll ? (
           <div className="space-y-2">
-            <h2 className="text-xl font-bold text-white">Kein Partner auswählbar</h2>
+            <h2 className="text-xl font-bold text-white">{t('Kein Partner auswählbar')}</h2>
             <p className="text-sm text-text-secondary">
-              In der Admin-Ansicht werden nur aktive Partner-Profile angezeigt.
+              {t('In der Admin-Ansicht werden nur aktive Partner-Profile angezeigt.')}
             </p>
           </div>
         ) : needsAdminPick ? (
           <div className="space-y-3">
-            <h2 className="text-xl font-bold text-white">Partner auswählen</h2>
+            <h2 className="text-xl font-bold text-white">{t('Partner auswählen')}</h2>
             <p className="text-sm text-text-secondary">
-              Wähle einen Partner, dessen Dashboard du ansehen möchtest.
+              {t('Wähle einen Partner, dessen Dashboard du ansehen möchtest.')}
             </p>
             <select
               value={normalizedSelectedStreamer || ''}
               onChange={(event) => setSelectedStreamer(event.target.value || null)}
               className="w-full max-w-sm rounded-xl border border-border bg-background/80 px-3 py-2 text-sm font-medium text-white outline-none transition-colors focus:border-border-hover"
             >
-              <option value="">Partner wählen</option>
+              <option value="">{t('Partner wählen')}</option>
               {partnerStreamers.map((channel) => (
                 <option key={channel.login} value={channel.login}>
                   {channel.login}
@@ -545,7 +548,7 @@ export function InternalHomeLanding() {
         ) : (
           <div className="flex items-center gap-3 text-text-secondary">
             <Loader2 className="h-5 w-5 animate-spin text-primary" />
-            <span>Admin-Profil wird vorbereitet ...</span>
+            <span>{t('Admin-Profil wird vorbereitet ...')}</span>
           </div>
         )}
       </div>
@@ -557,18 +560,18 @@ export function InternalHomeLanding() {
   }
 
   if (isError) {
-    const errorMessage = error instanceof Error ? error.message : 'Unbekannter Fehler';
+    const errorMessage = error instanceof Error ? error.message : t('Unbekannter Fehler');
 
     return (
       <div className="panel-card rounded-2xl p-6 md:p-8">
-        <h2 className="text-xl font-bold text-white">Startseite nicht verfuegbar</h2>
+        <h2 className="text-xl font-bold text-white">{t('Startseite nicht verfuegbar')}</h2>
         <p className="mt-1 text-sm text-text-secondary">{errorMessage}</p>
         <button
           onClick={() => void refetch()}
           className="mt-4 inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-border-hover hover:bg-card-hover"
         >
           <ArrowRight className="h-4 w-4" />
-          Erneut laden
+          {t('Erneut laden')}
         </button>
       </div>
     );
@@ -576,7 +579,7 @@ export function InternalHomeLanding() {
 
   const home = data ?? {};
   const twitchLogin = home.twitchLogin?.trim() || '';
-  const displayName = home.displayName?.trim() || twitchLogin || 'Creator';
+  const displayName = home.displayName?.trim() || twitchLogin || t('Creator');
   const canAccessAnalyticsDashboard = Boolean(
     authStatus?.canAccessAnalyticsDashboard ?? authStatus?.access?.analytics ?? true
   );
@@ -644,7 +647,7 @@ export function InternalHomeLanding() {
                 className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-text-secondary"
                 htmlFor="internal-home-streamer-switch"
               >
-                Partner
+                {t('Partner')}
               </label>
               <select
                 id="internal-home-streamer-switch"
@@ -654,7 +657,7 @@ export function InternalHomeLanding() {
                 className="mt-2 w-full max-w-sm rounded-xl border border-border bg-background/80 px-3 py-2 text-sm font-medium text-white outline-none transition-colors focus:border-border-hover disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {partnerStreamers.length === 0 ? (
-                  <option value="">Keine Partner</option>
+                  <option value="">{t('Keine Partner')}</option>
                 ) : (
                   partnerStreamers.map((channel) => (
                     <option key={channel.login} value={channel.login}>
@@ -671,7 +674,7 @@ export function InternalHomeLanding() {
               >
                 <div className="flex items-center gap-2 text-sm font-medium text-warning">
                   <ShieldCheck className="h-4 w-4 shrink-0" />
-                  Admin-Modus aktiv, du siehst alle Inhalte entsperrt, nicht die echte Nutzer-Ansicht.
+                  {t('Admin-Modus aktiv, du siehst alle Inhalte entsperrt, nicht die echte Nutzer-Ansicht.')}
                 </div>
                 <button
                   type="button"
@@ -679,7 +682,7 @@ export function InternalHomeLanding() {
                   disabled={adminModeMutation.isPending}
                   className="rounded-lg border border-warning/40 bg-warning/15 px-3 py-1 text-xs font-semibold text-warning transition-colors hover:bg-warning/25 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Beenden
+                  {t('Beenden')}
                 </button>
               </Rise>
             ) : null}
@@ -692,7 +695,7 @@ export function InternalHomeLanding() {
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-secondary">
-                    Willkommen zurueck
+                    {t('Willkommen zurueck')}
                   </div>
                   {liveStatus ? (
                     liveStatus.is_live ? (
@@ -701,13 +704,13 @@ export function InternalHomeLanding() {
                           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75" />
                           <span className="relative inline-flex h-2 w-2 rounded-full bg-danger" />
                         </span>
-                        Live · {formatNumber(liveStatus.viewer_count || 0)}
+                        {t('Live · {count}', { count: formatNumber(liveStatus.viewer_count || 0) })}
                       </span>
                     ) : (
                       <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background/60 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
                         <span className="h-2 w-2 rounded-full bg-text-secondary/60" />
                         Offline
-                        {liveStatus.last_seen_at ? ` · ${formatRelativeShort(liveStatus.last_seen_at)}` : ''}
+                        {liveStatus.last_seen_at ? ` · ${formatRelativeShort(liveStatus.last_seen_at, t, locale)}` : ''}
                       </span>
                     )
                   ) : null}
@@ -718,7 +721,7 @@ export function InternalHomeLanding() {
                 <p className="mt-1 text-sm text-text-secondary">
                   {liveStatus?.is_live && liveStatus.title
                     ? liveStatus.title
-                    : 'Dein Kanal auf einen Blick'}
+                    : t('Dein Kanal auf einen Blick')}
                 </p>
               </div>
 
@@ -733,7 +736,7 @@ export function InternalHomeLanding() {
                   ) : (
                     <ArrowRight className="h-4 w-4" />
                   )}
-                  Neu laden
+                  {t('Neu laden')}
                 </button>
                 {canAccessAnalyticsDashboard ? (
                   <a
@@ -755,12 +758,12 @@ export function InternalHomeLanding() {
               >
                 <div className="space-y-1">
                   <div className="text-sm font-semibold text-white">
-                    Analyse-Zugriff aktuell eingeschraenkt
+                    {t('Analyse-Zugriff aktuell eingeschraenkt')}
                   </div>
                   <p className="text-sm text-text-secondary">
                     {restrictedPartnerStatus === 'token_error'
-                      ? 'Dein Twitch-OAuth hat aktuell einen Fehler. Home, Verwaltung und Pricing bleiben offen, bis du die Verbindung neu autorisierst.'
-                      : 'Dieser Account hat aktuell keinen Zugriff auf die Analyse. Home, Verwaltung und Pricing bleiben weiterhin erreichbar.'}
+                      ? t('Dein Twitch-OAuth hat aktuell einen Fehler. Home, Verwaltung und Pricing bleiben offen, bis du die Verbindung neu autorisierst.')
+                      : t('Dieser Account hat aktuell keinen Zugriff auf die Analyse. Home, Verwaltung und Pricing bleiben weiterhin erreichbar.')}
                   </p>
                 </div>
               </Rise>
@@ -782,9 +785,9 @@ export function InternalHomeLanding() {
                     </div>
                     <div>
                       <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
-                        Health Score
+                        {t('Health Score')}
                       </div>
-                      <h2 className="text-lg font-semibold text-white">Kanal-Gesundheit</h2>
+                      <h2 className="text-lg font-semibold text-white">{t('Kanal-Gesundheit')}</h2>
                     </div>
                   </div>
 
@@ -820,12 +823,11 @@ export function InternalHomeLanding() {
 
                     <div className="mt-3 text-center">
                       <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background/55 px-2.5 py-1">
-                        <span className="text-xs font-semibold text-white">{overallHealthBand}</span>
-                        <span className="text-[10px] text-text-secondary">letzte 7 Tage</span>
+                        <span className="text-xs font-semibold text-white">{t(overallHealthBand)}</span>
+                        <span className="text-[10px] text-text-secondary">{t('letzte 7 Tage')}</span>
                       </div>
                       <p className="mt-2 text-xs leading-relaxed text-text-secondary">
-                        Ein gewichteter Mix aus Wachstum, Konstanz, Chat-Aktivität und Stammcommunity.
-                        Kein Twitch-Ranking und kein Vergleich mit anderen Kanälen.
+                        {t('Ein gewichteter Mix aus Wachstum, Konstanz, Chat-Aktivität und Stammcommunity. Kein Twitch-Ranking und kein Vergleich mit anderen Kanälen.')}
                       </p>
                     </div>
 
@@ -835,15 +837,14 @@ export function InternalHomeLanding() {
                           healthScore.trend >= 0 ? 'text-success' : 'text-danger'
                         }`}
                       >
-                        Ø Viewer {healthScore.trend >= 0 ? '\u2191' : '\u2193'}{' '}
-                        {Math.abs(healthScore.trend)}% gegenüber den 7 Tagen davor
+                        {t('Ø Viewer {arrow} {percent}% gegenüber den 7 Tagen davor', { arrow: healthScore.trend >= 0 ? '\u2191' : '\u2193', percent: Math.abs(healthScore.trend) })}
                       </div>
                     ) : null}
                   </div>
 
                   <div className="mt-5 space-y-3">
                     {healthItems.map((item) => (
-                      <div key={item.label} className="flex items-center gap-3">
+                      <div key={item.key} className="flex items-center gap-3">
                         <div
                           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${item.iconClass}`}
                         >
@@ -851,13 +852,13 @@ export function InternalHomeLanding() {
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-3">
-                            <span className="text-sm font-medium text-white">{item.label}</span>
+                            <span className="text-sm font-medium text-white">{t(item.label)}</span>
                             <span className="shrink-0 text-xs font-semibold text-text-secondary">
-                              {item.value}/100 · {item.band}
+                              {item.value}/100 · {t(item.band)}
                             </span>
                           </div>
                           <p className="mt-0.5 text-[11px] leading-snug text-text-secondary">
-                            {item.summary} · {item.weight}% im Gesamtscore
+                            {t('{summary} · {weight}% im Gesamtscore', { summary: t(item.summary), weight: item.weight })}
                           </p>
                           <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/6">
                             <div
@@ -882,30 +883,29 @@ export function InternalHomeLanding() {
                   <details className="group mt-5 rounded-xl border border-border bg-background/45 p-3">
                     <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold text-white focus-visible:outline-2 focus-visible:outline-primary">
                       <Info className="h-4 w-4 shrink-0 text-primary" />
-                      Wie kommt der Score zustande?
+                      {t('Wie kommt der Score zustande?')}
                       <span className="ml-auto text-[10px] font-medium uppercase tracking-[0.14em] text-text-secondary">
-                        Erklärung
+                        {t('Erklärung')}
                       </span>
                     </summary>
                     <div className="mt-3 space-y-3 border-t border-border pt-3 text-xs leading-relaxed text-text-secondary">
                       <p>
-                        Der Gesamtscore setzt sich aus vier Signalen zusammen. Er beschreibt nur deinen
-                        eigenen Kanal im aktuellen Zeitraum.
+                        {t('Der Gesamtscore setzt sich aus vier Signalen zusammen. Er beschreibt nur deinen eigenen Kanal im aktuellen Zeitraum.')}
                       </p>
                       <div className="space-y-2.5">
                         {healthItems.map((item) => (
                           <div key={item.key}>
                             <div className="font-semibold text-white">
-                              {item.label} · {item.weight}%
+                              {t(item.label)} · {item.weight}%
                             </div>
-                            <p className="mt-0.5">{item.detail}</p>
+                            <p className="mt-0.5">{t(item.detail)}</p>
                           </div>
                         ))}
                       </div>
                       <div className="rounded-lg border border-border bg-card/60 p-2.5">
-                        <div className="font-semibold text-white">Einordnung</div>
+                        <div className="font-semibold text-white">{t('Einordnung')}</div>
                         <p className="mt-1">
-                          0 bis 39: ausbaufähig · 40 bis 69: solide · 70 bis 100: stark.
+                          {t('0 bis 39: ausbaufähig · 40 bis 69: solide · 70 bis 100: stark.')}
                         </p>
                       </div>
                     </div>
@@ -924,13 +924,13 @@ export function InternalHomeLanding() {
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between sm:gap-5">
                     <div>
                       <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-primary">
-                        Letzter Stream
+                        {t('Letzter Stream')}
                       </div>
 
                       {lastStream?.started_at ? (
                         <div className="mt-1 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
                           <h2 className="text-2xl font-semibold tracking-tight text-white">
-                            {formatCalendarDate(lastStream.started_at)}
+                            {formatCalendarDate(lastStream.started_at, t, locale)}
                           </h2>
                           <span className="hidden h-5 w-px bg-border sm:block" aria-hidden="true" />
                           <span className="kpi-number text-base font-semibold text-white/85 md:text-lg">
@@ -939,46 +939,46 @@ export function InternalHomeLanding() {
                         </div>
                       ) : (
                         <h2 className="mt-1 text-xl font-semibold text-white">
-                          Keine Stream-Daten verfuegbar
+                          {t('Keine Stream-Daten verfuegbar')}
                         </h2>
                       )}
                     </div>
 
                     <p className="text-sm text-text-secondary sm:pb-0.5 sm:text-right">
                       {lastStream?.ended_at
-                        ? 'Ende: ' + formatDateWithTime(lastStream.ended_at)
-                        : 'Sobald ein Stream abgeschlossen ist, erscheint die Zusammenfassung hier.'}
+                        ? t('Ende: {date}', { date: formatDateWithTime(lastStream.ended_at, locale) })
+                        : t('Sobald ein Stream abgeschlossen ist, erscheint die Zusammenfassung hier.')}
                     </p>
                   </div>
 
                   {lastStream ? (
                     <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
                       <MiniStat
-                        label={'\u00D8 Viewer'}
+                        label={t('Ø Viewer')}
                         value={lastStream.avg_viewers}
                         icon={Users}
                         accent="primary"
                         series={streamViewerSeries}
-                        seriesLabel="Zuschauerverlauf im letzten Stream"
+                        seriesLabel={t('Zuschauerverlauf im letzten Stream')}
                       />
                       <MiniStat
-                        label="Peak"
+                        label={t('Peak')}
                         value={lastStream.peak_viewers}
                         icon={TrendingUp}
                         accent="accent"
                         series={streamViewerSeries}
-                        seriesLabel="Zuschauerverlauf mit Peak im letzten Stream"
+                        seriesLabel={t('Zuschauerverlauf mit Peak im letzten Stream')}
                         markPeak
                       />
                       <MiniStat
-                        label="Follower"
+                        label={t('Follower')}
                         value={lastStream.follower_delta}
                         prefix="+"
                         icon={Heart}
                         accent="success"
                       />
                       <MiniStat
-                        label="Chat"
+                        label={t('Chat')}
                         value={lastStream.chat_messages}
                         icon={MessageSquare}
                         accent="warning"
@@ -997,46 +997,46 @@ export function InternalHomeLanding() {
                         }}
                       />
                       <div className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
-                        Woche vs. Vorwoche
+                        {t('Woche vs. Vorwoche')}
                       </div>
                       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                         <MiniStat
-                          label={'\u00D8 Viewer'}
+                          label={t('Ø Viewer')}
                           value={weekComp.current_week.avg_viewers}
                           icon={Users}
                           accent="primary"
                           trendPct={weekComp.changes.avg_viewers_pct}
                           series={weekDailySeries?.avg_viewers ?? []}
-                          seriesLabel="Durchschnittliche Zuschauer der letzten sieben Tage"
+                          seriesLabel={t('Durchschnittliche Zuschauer der letzten sieben Tage')}
                         />
                         <MiniStat
-                          label="Follower"
+                          label={t('Follower')}
                           value={weekComp.current_week.total_followers}
                           icon={TrendingUp}
                           accent="success"
                           trendPct={weekComp.changes.followers_pct}
                           series={weekDailySeries?.followers ?? []}
-                          seriesLabel="Neue Follower der letzten sieben Tage"
+                          seriesLabel={t('Neue Follower der letzten sieben Tage')}
                         />
                         <MiniStat
-                          label="Chat-Aktivität"
+                          label={t('Chat-Aktivität')}
                           value={weekComp.current_week.chat_activity}
                           suffix="/h"
                           icon={MessageSquare}
                           accent="warning"
                           trendPct={weekComp.changes.chat_activity_pct}
                           series={weekDailySeries?.chat_activity ?? []}
-                          seriesLabel="Chat-Aktivität der letzten sieben Tage"
+                          seriesLabel={t('Chat-Aktivität der letzten sieben Tage')}
                         />
                         <MiniStat
-                          label="Stream-Stunden"
+                          label={t('Stream-Stunden')}
                           value={weekComp.current_week.stream_hours}
                           suffix="h"
                           icon={BarChart3}
                           accent="accent"
                           trendPct={weekComp.changes.stream_hours_pct}
                           series={weekDailySeries?.stream_hours ?? []}
-                          seriesLabel="Stream-Stunden der letzten sieben Tage"
+                          seriesLabel={t('Stream-Stunden der letzten sieben Tage')}
                         />
                       </div>
                     </div>
@@ -1063,27 +1063,27 @@ export function InternalHomeLanding() {
         >
             <div className="mb-4">
               <p className="mb-1 text-sm font-medium uppercase tracking-wider text-primary">
-                Updates
+                {t('Updates')}
               </p>
               <h2 className="display-font text-xl font-bold text-white">
-                Was gibt&apos;s Neues
+                {t("Was gibt's Neues")}
               </h2>
             </div>
 
             {changelogEntries.length === 0 ? (
               <div className="rounded-xl border border-border bg-background/60 p-4 text-sm text-text-secondary">
-                Keine neuen Updates verfügbar.
+                {t('Keine neuen Updates verfügbar.')}
               </div>
             ) : (
               <div
                 id="home-news-list"
                 tabIndex={0}
-                aria-label="Neuigkeiten"
+                aria-label={t('Neuigkeiten')}
                 className="max-h-72 space-y-2 overflow-y-auto rounded-xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
               >
                 {(showAllUpdates ? changelogEntries : changelogEntries.slice(0, 3)).map((entry, index) => {
-                  const title = entry.title?.trim() || 'Update';
-                  const content = entry.content?.trim() || 'Kein Beschreibungstext';
+                  const title = entry.title?.trim() || t('Update');
+                  const content = entry.content?.trim() || t('Kein Beschreibungstext');
                   const primaryDate = entry.entryDate || entry.createdAt;
 
                   return (
@@ -1093,11 +1093,11 @@ export function InternalHomeLanding() {
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
                         <span className="rounded-full border border-border/70 bg-background/80 px-2.5 py-1 font-semibold text-white">
-                          {formatCalendarDate(primaryDate)}
+                          {formatCalendarDate(primaryDate, t, locale)}
                         </span>
                         {showAllUpdates && entry.createdAt ? (
                           <span className="text-text-secondary">
-                            {formatDateTime(entry.createdAt)}
+                            {formatDateTime(entry.createdAt, t, locale)}
                           </span>
                         ) : null}
                       </div>
@@ -1121,18 +1121,18 @@ export function InternalHomeLanding() {
                 aria-controls="home-news-list"
                 className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-lg px-1 text-sm font-semibold text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
               >
-                {showAllUpdates ? 'Neuigkeiten einklappen' : 'Alle Neuigkeiten lesen'}
+                {showAllUpdates ? t('Neuigkeiten einklappen') : t('Alle Neuigkeiten lesen')}
                 <ArrowRight size={16} aria-hidden="true" />
               </a>
             )}
         </Rise>
           <aside aria-labelledby="home-trustpilot-heading" className="panel-card rounded-2xl p-4 md:p-5">
-            <p className="mb-1 text-sm font-medium text-primary">Trustpilot</p>
+            <p className="mb-1 text-sm font-medium text-primary">{t('Trustpilot')}</p>
             <h2 id="home-trustpilot-heading" className="display-font text-lg font-bold text-white">
-              Wie läuft es für dich?
+              {t('Wie läuft es für dich?')}
             </h2>
             <p className="mt-2 text-sm leading-6 text-text-secondary">
-              Teile deine Erfahrung mit unserer Community. Ehrliches Feedback hilft uns weiter.
+              {t('Teile deine Erfahrung mit unserer Community. Ehrliches Feedback hilft uns weiter.')}
             </p>
             <a
               href="https://de.trustpilot.com/evaluate/deutsche-deadlock-community.de"
@@ -1140,7 +1140,7 @@ export function InternalHomeLanding() {
               rel="noopener noreferrer"
               className="mt-3 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl gradient-accent px-4 py-2.5 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
             >
-              Community bewerten
+              {t('Community bewerten')}
               <ExternalLink size={16} aria-hidden="true" />
             </a>
           </aside>
