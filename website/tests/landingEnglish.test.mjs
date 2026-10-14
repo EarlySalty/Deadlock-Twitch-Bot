@@ -5,7 +5,7 @@ import { runInNewContext } from "node:vm";
 import ts from "typescript";
 
 const root = new URL("../", import.meta.url);
-function loadLocale(hostname, pathname = "/streamer/") {
+function loadLocale(hostname, pathname = "/streamer/", search = "") {
   const dictionary = ts.transpileModule(
     readFileSync(new URL("src/data/landingEnglish.ts", root), "utf8"),
     { compilerOptions: { module: ts.ModuleKind.CommonJS } },
@@ -20,7 +20,8 @@ function loadLocale(hostname, pathname = "/streamer/") {
     exports: {},
     require: () => english.exports,
     URL,
-    window: { location: { hostname, pathname } },
+    URLSearchParams,
+    window: { location: { hostname, pathname, search } },
   };
   runInNewContext(source, context);
   return context.exports;
@@ -39,11 +40,7 @@ test("only the two English hosts select English on the main landing page", () =>
     for (const path of [
       "/streamer/v1/",
       "/streamer/v3/",
-      "/streamer/clips/",
-      "/streamer/vergleich/",
       "/streamer/vertriebler/",
-      "/twitch/onboarding",
-      "/twitch/faq",
     ]) {
       assert.equal(loadLocale(host, path).isEnglishLanding(), false);
     }
@@ -101,7 +98,7 @@ test("English login and dashboard links select English on the main domain, inclu
   );
   assert.equal(
     locale.landingLink("/streamer/vergleich/"),
-    "https://deutsche-deadlock-community.de/streamer/vergleich/",
+    "/streamer/vergleich/?lang=en",
   );
   assert.equal(
     loadLocale("deutsche-deadlock-community.de").landingLink(
@@ -158,7 +155,7 @@ test("metadata uses matching English language, canonical and social descriptions
         return node;
       },
     };
-    runInNewContext(source, { document, window: { location: { hostname } } });
+    runInNewContext(source, { URLSearchParams, document, window: { location: { hostname } } });
     if (hostname === "deutsche-deadlock-community.de") {
       assert.equal(document.documentElement.lang, "de");
       assert.equal(document.title, "German title");
@@ -186,4 +183,24 @@ test("metadata uses matching English language, canonical and social descriptions
       );
     }
   }
+});
+
+
+test("priority subpages share the host default and explicit language overrides", () => {
+  for (const path of ["/streamer/faq/", "/streamer/onboarding/index.html", "/streamer/vergleich", "/streamer/clips/", "/twitch/faq", "/twitch/onboarding", "/clips"]) {
+    assert.equal(loadLocale("dead-lock.de", path).isEnglishLanding(), true);
+    assert.equal(loadLocale("deutsche-deadlock-community.de", path).isEnglishLanding(), false);
+    assert.equal(loadLocale("localhost", path, "?lang=en").isEnglishLanding(), true);
+    assert.equal(loadLocale("dead-lock.de", path, "?lang=de").isEnglishLanding(), false);
+  }
+});
+
+test("English public navigation stays local while backend and OAuth use the main domain", () => {
+  const locale = loadLocale("localhost", "/streamer/onboarding/", "?lang=en");
+  assert.equal(locale.landingLink("https://deutsche-deadlock-community.de/twitch/faq#raids"), "/streamer/faq/?lang=en#raids");
+  assert.equal(locale.landingLink("/streamer/vergleich/?days=7#vergleich"), "/streamer/vergleich/?days=7&lang=en#vergleich");
+  assert.equal(locale.landingLink("#features"), "#features");
+  assert.equal(locale.landingLink("/clips/auth/discord/login"), "https://deutsche-deadlock-community.de/clips/auth/discord/login?lang=en");
+  assert.equal(locale.landingText("Clip des Monats"), "Clip of the month");
+  assert.equal(locale.landingText("Empfang"), "Reception");
 });
