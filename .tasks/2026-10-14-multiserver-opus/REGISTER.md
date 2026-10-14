@@ -1,6 +1,6 @@
 # Register (max 30 lines)
 
-Main f047f6c7b (D2, D-core, O, D3a, W1; G0 reverted; rustls fix from other session). Live 45779a5bc (none of ours). Release build of main after D3b/D4/D5 merge; build script now uses CARGO_SLOT_DEPLOY=1. Reporting: directly to the user.
+Main b65a61d81 (D2, D-core, O, D3a, W1, D3b, D4, D5; G0 reverted). Live 45779a5bc (none of ours). Release build b65a61d81 running (CARGO_SLOT_DEPLOY=1). Reporting: directly to the user.
 
 | Pkg | Agent | Worktree | Branch | HEAD | Status |
 |---|---|---|---|---|---|
@@ -10,10 +10,14 @@ Main f047f6c7b (D2, D-core, O, D3a, W1; G0 reverted; rustls fix from other sessi
 | D3a cards | done | - | deleted | 9a0cd62da | merged d58b58b60 |
 | G0 schema | done | - | kept feat/opus-g0-shadow-schema-20261014 | b3c7b5dc8 | merged 3fb21fee4, reverted 47f3e26ab: prod parity unverifiable before rotation |
 | W1 landing | done | - | deleted | 6e060d9ec | merged 84da6947d |
-| D3b charts | a6675eaead8b8c678 | ttb-opus-d3b-20261014 | feat/opus-d3b-charts-english-20261014 | b89038957 | ALLOW, merging main, pushing |
-| D4 pages | ade756a9b7d9fabfe | ttb-opus-d4-20261014 | feat/opus-d4-pages-english-20261014 | 642f70318 | ALLOW f1e665bc9, merging main, regate delta |
-| H1 hub | a681ac43e5f90142d | ttb-opus-h1-20261014 | feat/opus-h1-discord-hub-20261014 | - | building |
-| D5 pages | afca89931a89cc0ec | ttb-opus-d5-20261014 | feat/opus-d5-pages-english-20261014 | 9b6c15d61 | ALLOW (Community), merging main, pushing |
+| D3b charts | done | - | deleted | 213cebc63 | merged 8d9124a38 |
+| D4 pages | done | - | deleted | 475d59525 | merged 27376adcc |
+| D5 Community | done | - | deleted | 8f0306806 | merged 8677271c1 |
+| H1 hub fix | a66d80a8299d6e742 | ttb-opus-h1-20261014 | feat/opus-h1-discord-hub-20261014 | ab23182b9 | BLOCK round 1 (idempotency, stale edit, lookup errors), fixer running |
+| D6 pages | a038a62ae5706eee3 | ttb-opus-d6-20261014 | feat/opus-d6-pages-english-20261014 | - | building |
+| D7 pages | a8308e50820c0717e | ttb-opus-d7-20261014 | feat/opus-d7-pages-english-20261014 | - | building |
+| W2 sub-sites | a7d99302f2509a875 | ttb-opus-w2-20261014 | feat/opus-w2-website-subsites-english-20261014 | - | building |
 
-Queue: D remaining pages (AIAnalysis, AuthScopes, CategoryCollector, Challenges, Coaching, Community, Experimental, PartnerProfile, Pricing, Verwaltung, feedback, chat/coaching subpages), D-core leftovers (Etabliert, Beste Streaming-Zeiten, Stream-Aktivität, Scores-Text), W sub-sites, A, C (after G), K and G re-land (after rotation).
+Main test fix bacbd6838: challenges sidebar regex after D-core t() label.
+Queue: A, C (after G), K and G re-land (after rotation).
 L: parked, blocked by user decision.
