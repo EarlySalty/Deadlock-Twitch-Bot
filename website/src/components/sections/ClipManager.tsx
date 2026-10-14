@@ -89,7 +89,11 @@ function ClipPreview({
     <button
       type="button"
       onClick={onSelect}
-      aria-label={`${side === "left" ? landingText("Linken") : landingText("Rechten")} Clip auswählen`}
+      aria-label={
+        isEnglishLanding()
+          ? `Select ${side} clip`
+          : `${side === "left" ? "Linken" : "Rechten"} Clip auswählen`
+      }
       className={[
         "absolute hidden md:block top-1/2 -translate-y-1/2 z-0",
         "w-[75%] aspect-video rounded-xl overflow-hidden",
