@@ -4,7 +4,10 @@ use super::*;
 mod admin_contract_tests;
 
 fn config() -> EditorConfig {
-    toml::from_str(include_str!("../../../../../ops/social-ai/editor.toml")).expect("configuration")
+    toml::from_str::<SocialAiSection>(fixture::SOCIAL_AI_SECTION)
+        .expect("configuration")
+        .into_editor_config()
+        .expect("trusted configuration")
 }
 
 fn request() -> EditorRequest {

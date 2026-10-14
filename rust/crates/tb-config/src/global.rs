@@ -43,6 +43,8 @@ pub struct BotConfig {
     pub media: crate::shared_options::MediaPublicOptions,
     #[serde(default)]
     pub category_archive: crate::category_archive::CategoryArchive,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub social_ai: Option<toml::Table>,
 }
 
 impl fmt::Debug for BotConfig {

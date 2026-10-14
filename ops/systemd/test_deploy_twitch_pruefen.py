@@ -11,6 +11,7 @@ SHA = "a" * 40
 LEGACY_SHA = "12987b689642b630f9b62b786f2002a6843add73"
 GATE_BASE_SHA = "b0be1e4c46776b10d08255623b02e070e1977fbf"
 AI_YAML_SHA = "759e7bc78f2e39dfa97c158ad8efea7f7e96bf35"
+AI_TOML_SHA = "437b641adb7215935c667fcc6a1ce42778530576"
 MOCKS = r'''
 systemctl() {
   [[ "$1" == show ]] || exit 90
@@ -814,7 +815,7 @@ class CollectorPackagingTests(unittest.TestCase):
 
 
 class ArchivedSourceTests(unittest.TestCase):
-    def check_archive(self, revision, missing=None, ai_expected=True, existing=False, extension="toml"):
+    def check_archive(self, revision, missing=None, ai_expected=True, existing=False, extension=None):
         repository = WRAPPER.parents[2]
         sha = subprocess.check_output(["git", "-C", str(repository), "rev-parse", revision], text=True).strip()
         installer = WRAPPER.with_name("install-twitch-release.sh").read_text()
@@ -841,9 +842,11 @@ class ArchivedSourceTests(unittest.TestCase):
             else:
                 self.assertEqual(result.returncode, 0, result.stderr)
                 for name in ("editor", "pricing-v1"):
-                    self.assertEqual((stage / f"ops/social-ai/{name}.{extension}").is_file(), ai_expected)
-                    other = "yaml" if extension == "toml" else "toml"
-                    self.assertFalse((stage / f"ops/social-ai/{name}.{other}").exists())
+                    for candidate in ("toml", "yaml"):
+                        self.assertEqual(
+                            (stage / f"ops/social-ai/{name}.{candidate}").exists(),
+                            ai_expected and candidate == extension,
+                        )
                 if ai_expected:
                     self.assertEqual(len(list((stage / "ops/social-ai/skills").glob("*.md"))), 8)
 
@@ -860,29 +863,26 @@ class ArchivedSourceTests(unittest.TestCase):
                 with self.subTest(existing=existing, missing=missing):
                     self.check_archive(AI_YAML_SHA, missing, existing=existing, extension="yaml")
 
-    def test_current_revision_archives_all_ai_configuration_and_skills(self):
+    def test_previous_ai_revision_keeps_its_toml_packaging_contract(self):
+        self.check_archive(AI_TOML_SHA, extension="toml")
+        for existing in (False, True):
+            for missing in ("ops/social-ai/editor.toml", "ops/social-ai/pricing-v1.toml"):
+                with self.subTest(existing=existing, missing=missing):
+                    self.check_archive(AI_TOML_SHA, missing, existing=existing, extension="toml")
+
+    def test_current_revision_archives_skills_without_separate_ai_configuration(self):
         self.check_archive("HEAD")
 
-    def test_current_revision_never_accepts_missing_ai_configuration_or_skills(self):
-        for missing in ("ops/social-ai/editor.toml", "ops/social-ai/pricing-v1.toml", *(
-            f"ops/social-ai/skills/{skill}.md" for skill in (
-                "deadlock-understanding", "highlight-analysis", "editing-strategy", "video-layout",
-                "subtitles", "copywriting", "quality-validation", "feedback-learning",
-            )
-        )):
-            with self.subTest(missing=missing):
-                self.check_archive("HEAD", missing)
-
-
-    def test_existing_ai_release_never_accepts_missing_configuration_or_skills(self):
-        for missing in ("ops/social-ai/editor.toml", "ops/social-ai/pricing-v1.toml", *(
-            f"ops/social-ai/skills/{skill}.md" for skill in (
-                "deadlock-understanding", "highlight-analysis", "editing-strategy", "video-layout",
-                "subtitles", "copywriting", "quality-validation", "feedback-learning",
-            )
-        )):
-            with self.subTest(missing=missing):
-                self.check_archive("HEAD", missing, existing=True)
+    def test_current_revision_never_accepts_missing_skills(self):
+        for existing in (False, True):
+            for missing in (
+                f"ops/social-ai/skills/{skill}.md" for skill in (
+                    "deadlock-understanding", "highlight-analysis", "editing-strategy", "video-layout",
+                    "subtitles", "copywriting", "quality-validation", "feedback-learning",
+                )
+            ):
+                with self.subTest(existing=existing, missing=missing):
+                    self.check_archive("HEAD", missing, existing=existing)
 
 
 class ModelInstallationDeploymentTests(unittest.TestCase):

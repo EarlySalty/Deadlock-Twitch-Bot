@@ -13,6 +13,7 @@
 
 import { VOD_ARCHIVE_EN } from './vodArchive';
 import { SOCIAL_STUDIO_EN } from './socialStudio';
+import { EN_AREA_ENTRIES } from './en';
 
 export type Language = 'de' | 'en';
 
@@ -48,6 +49,7 @@ export const MESSAGE_TYPE_LABELS: Record<string, string> = {
 };
 
 const EN: Record<string, string> = {
+  ...EN_AREA_ENTRIES,
   ...VOD_ARCHIVE_EN,
   ...SOCIAL_STUDIO_EN,
   'Diesen Streamer für den eigenen Social-Media-Manager freischalten': 'Enable this streamer’s own social media manager',
@@ -794,20 +796,28 @@ export function isLanguage(value: unknown): value is Language {
   return value === 'de' || value === 'en';
 }
 
-/**
- * Die Wahl liegt im Browser, nicht in der Datenbank: sie ist eine Anzeigesache
- * und soll ohne Backend-Umbau ueber alle Routen dieses Bundles gelten.
- * Gesperrter Speicher (privates Fenster) darf die Oberflaeche nicht kippen,
- * deshalb faellt beides still auf Deutsch beziehungsweise auf "nicht gemerkt".
- */
-export function readStoredLanguage(): Language {
-  if (typeof window === 'undefined') return DEFAULT_LANGUAGE;
+function readPersistedLanguage(): Language | null {
+  if (typeof window === 'undefined') return null;
   try {
     const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
-    return isLanguage(stored) ? stored : DEFAULT_LANGUAGE;
+    return isLanguage(stored) ? stored : null;
   } catch {
-    return DEFAULT_LANGUAGE;
+    return null;
   }
+}
+
+export function readStoredLanguage(): Language {
+  return readPersistedLanguage() ?? DEFAULT_LANGUAGE;
+}
+
+export function browserLanguage(): Language {
+  if (typeof window === 'undefined' || !window.navigator) return DEFAULT_LANGUAGE;
+  const primary = window.navigator.languages?.[0] ?? window.navigator.language ?? '';
+  return primary.toLowerCase().startsWith('de') ? 'de' : 'en';
+}
+
+export function readInitialLanguage(): Language {
+  return readPersistedLanguage() ?? browserLanguage();
 }
 
 export function storeLanguage(language: Language): void {
