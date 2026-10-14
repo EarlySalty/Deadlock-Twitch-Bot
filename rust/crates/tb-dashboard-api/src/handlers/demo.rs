@@ -26,8 +26,15 @@ use serde_json::{json, Value};
 
 use crate::handlers::spa;
 
-/// Default-Origin, die das Demo einbetten darf (Python-Default).
-const DEFAULT_DEMO_EMBED_ORIGIN: &str = "https://deutsche-deadlock-community.de";
+/// Default-Origins, die das Demo einbetten dürfen: beide öffentlichen Domains
+/// (Paket O; Python-Default war nur die Hauptdomain).
+fn default_demo_embed_origins() -> String {
+    tb_config::PublicSite::ALL
+        .iter()
+        .map(|site| site.origin())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 
 /// Demo-Streamer-Login, der durchgängig in den Payloads erscheint.
 const DEMO_LOGIN: &str = "midcore_live";
@@ -44,7 +51,7 @@ fn demo_csp_value() -> String {
     let origins = std::env::var("TWITCH_DEMO_EMBED_ORIGINS")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_DEMO_EMBED_ORIGIN.to_string());
+        .unwrap_or_else(default_demo_embed_origins);
     format!("frame-ancestors 'self' {}", origins.trim())
 }
 

@@ -270,10 +270,12 @@ pub async fn page(state: Option<Extension<DashboardAuthState>>, headers: HeaderM
 pub async fn twitch_login(
     state: Option<Extension<DashboardAuthState>>,
     config: Option<Extension<OAuthLoginConfig>>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
     let mut response = super::auth_login::login_handler(
         state,
         config,
+        headers,
         axum::extract::Query(LoginQuery {
             next: Some(CONNECT_PATH.into()),
         }),

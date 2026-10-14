@@ -362,7 +362,7 @@ impl AffiliateGutschriftSeller {
         let website_fallback = public_url
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .unwrap_or("https://deutsche-deadlock-community.de");
+            .unwrap_or(tb_config::public_site::PRIMARY_ORIGIN);
         Self {
             name: load_or_default(
                 &mut loader,

@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 tb-transport-twitch = { workspace = true }
+tb-config  = { workspace = true }
 async-trait = { workspace = true }
 chrono     = { workspace = true }
 regex      = { workspace = true }

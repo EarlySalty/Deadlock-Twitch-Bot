@@ -411,8 +411,10 @@ pub(super) fn page(
             };
             let _ = write!(
                 body,
-                "<article class=\"clip-card\"><div class=\"clip-media\"><iframe src=\"https://clips.twitch.tv/embed?clip={}&amp;parent=deutsche-deadlock-community.de&amp;autoplay=false&amp;muted=true\" title=\"{}\" loading=\"lazy\" allow=\"fullscreen\" referrerpolicy=\"no-referrer\"></iframe></div><a class=\"clip-copy\" href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\"><strong>{}</strong><span>{} Aufrufe · Auf Twitch ansehen ↗</span></a></article>",
+                "<article class=\"clip-card\"><div class=\"clip-media\"><iframe src=\"https://clips.twitch.tv/embed?clip={}&amp;parent={}&amp;parent={}&amp;autoplay=false&amp;muted=true\" title=\"{}\" loading=\"lazy\" allow=\"fullscreen\" referrerpolicy=\"no-referrer\"></iframe></div><a class=\"clip-copy\" href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\"><strong>{}</strong><span>{} Aufrufe · Auf Twitch ansehen ↗</span></a></article>",
                 clip.id,
+                tb_config::PublicSite::Primary.host(),
+                tb_config::PublicSite::International.host(),
                 escape(title),
                 escape(&clip.url),
                 escape(title),
@@ -622,10 +624,7 @@ pub(super) fn page(
         document(
             &format!("@{} · Deutsche Deadlock Community", record.login),
             headline,
-            Some(&format!(
-                "https://deutsche-deadlock-community.de/streamer/{}",
-                record.login
-            )),
+            Some(&tb_config::PublicSite::Primary.url(&format!("/streamer/{}", record.login))),
             &body,
             accent,
         ),

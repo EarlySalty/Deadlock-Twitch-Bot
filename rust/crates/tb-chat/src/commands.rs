@@ -83,10 +83,13 @@ const CLIP_OAUTH_MISSING_REPLY: &str =
 const CLIP_FAILED_REPLY: &str =
     "Clip konnte nicht erstellt werden. Bitte in 10 Sekunden nochmal versuchen.";
 
-const HELP_BASE_URL: &str = "https://deutsche-deadlock-community.de/streamer/help";
-const COMMANDS_URL: &str = "https://deutsche-deadlock-community.de/streamer/commands";
-const DASHBOARD_URL: &str = "https://deutsche-deadlock-community.de/twitch/dashboard";
-const TRUSTPILOT_URL: &str = "https://de.trustpilot.com/evaluate/deutsche-deadlock-community.de";
+const HELP_BASE_URL: &str = tb_config::primary_url!("/streamer/help");
+const COMMANDS_URL: &str = tb_config::primary_url!("/streamer/commands");
+const DASHBOARD_URL: &str = tb_config::primary_url!("/twitch/dashboard");
+const TRUSTPILOT_URL: &str = concat!(
+    "https://de.trustpilot.com/evaluate/",
+    tb_config::primary_host!()
+);
 const TRUSTPILOT_REPLIES: &[&str] = &[
     "Wie erlebst du die Deutsche Deadlock Community? Teile deine Erfahrung auf Trustpilot:",
     "Du möchtest die Deutsche Deadlock Community bewerten? Hier kannst du deine Erfahrung teilen:",

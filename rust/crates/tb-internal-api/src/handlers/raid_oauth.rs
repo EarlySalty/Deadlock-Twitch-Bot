@@ -162,6 +162,20 @@ pub trait RaidOAuthPort: Send + Sync {
         scope_profile: Option<&str>,
     ) -> Result<String, RaidOAuthError>;
 
+    /// Wie [`auth_url`](Self::auth_url), aber mit der öffentlichen Domain, auf
+    /// der der Ablauf gestartet wurde (Paket O). Redirect-URI, Code-Tausch und
+    /// Rücksprung bleiben auf dieser Domain. Standard: Hauptdomain.
+    async fn auth_url_for_site(
+        &self,
+        login: &str,
+        discord_user_id: Option<&str>,
+        scope_profile: Option<&str>,
+        site: tb_config::PublicSite,
+    ) -> Result<String, RaidOAuthError> {
+        let _ = site;
+        self.auth_url(login, discord_user_id, scope_profile).await
+    }
+
     /// Gibt den OAuth-Auth-State für einen Discord-User zurück.
     ///
     /// Python: `_raid_auth_state(discord_user_id)`.
@@ -228,6 +242,10 @@ pub struct AuthUrlQuery {
     pub discord_user_id: Option<String>,
     #[serde(default)]
     pub scope_profile: Option<String>,
+    /// Öffentliche Startdomain (`primary`/`international`, Paket O). Unbekannte
+    /// Werte → Hauptdomain.
+    #[serde(default)]
+    pub public_site: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -464,8 +482,18 @@ pub async fn auth_url_handler(
         discord_user_id = Some(target_discord_id.to_string());
     }
 
+    let site = params
+        .public_site
+        .as_deref()
+        .and_then(tb_config::PublicSite::parse)
+        .unwrap_or_default();
     let auth_url_result = port
-        .auth_url(&login, discord_user_id.as_deref(), scope_profile.as_deref())
+        .auth_url_for_site(
+            &login,
+            discord_user_id.as_deref(),
+            scope_profile.as_deref(),
+            site,
+        )
         .await;
 
     let auth_url = match auth_url_result {
@@ -891,6 +919,17 @@ mod tests {
             ))
         }
 
+        async fn auth_url_for_site(
+            &self,
+            login: &str,
+            discord_user_id: Option<&str>,
+            scope_profile: Option<&str>,
+            site: tb_config::PublicSite,
+        ) -> Result<String, RaidOAuthError> {
+            let url = self.auth_url(login, discord_user_id, scope_profile).await?;
+            Ok(format!("{url}&site={}", site.as_str()))
+        }
+
         async fn auth_state(
             &self,
             discord_user_id: &str,
@@ -1133,6 +1172,36 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn auth_url_reicht_startdomain_nur_aus_allowlist_durch() {
+        for (query, expected) in [
+            ("", "primary"),
+            ("&public_site=international", "international"),
+            ("&public_site=dead-lock.de", "international"),
+            ("&public_site=evil.test", "primary"),
+        ] {
+            let app = make_router(Some(Arc::new(StubPort::ready())));
+            let resp = app
+                .oneshot(req(
+                    "GET",
+                    &format!("{BASE}/raid/auth-url?login=dragscope{query}"),
+                    "",
+                    Some("tok"),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            let j = json_body(resp).await;
+            assert!(
+                j["auth_url"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with(&format!("&site={expected}")),
+                "{query}: {j}"
+            );
+        }
     }
 
     #[tokio::test]

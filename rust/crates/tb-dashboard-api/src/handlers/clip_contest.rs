@@ -633,7 +633,7 @@ pub async fn discord_login_handler(headers: HeaderMap) -> Response {
     };
     let payload = json!({
         "scope": "identify",
-        "redirect_after": "https://deutsche-deadlock-community.de/clips/auth/discord/callback",
+        "redirect_after": tb_config::primary_url!("/clips/auth/discord/callback"),
         "requesting_service": "twitch-clip-contest",
         "metadata": {
             "clip_contest": true,

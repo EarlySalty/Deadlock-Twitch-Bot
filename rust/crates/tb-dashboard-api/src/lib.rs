@@ -13,6 +13,7 @@ pub mod obs;
 pub mod process_info;
 /// Strangler-Fig-Fallback-Proxy (→ Python 8765), siehe Modul-Doku.
 pub mod proxy;
+pub mod public_site;
 pub mod query_int;
 #[path = "handlers/social_media_ai_admin_skills.rs"]
 mod social_media_ai_admin_skills;
