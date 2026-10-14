@@ -44,21 +44,21 @@ export function CommunityAnnouncementsEditor() {
       }}>
         <fieldset disabled={mutation.isPending} className="min-w-0 space-y-5">
           <label className="flex items-center gap-3 text-sm font-semibold text-white">
-            <input type="checkbox" className="h-5 w-5 accent-[#d4af37]" checked={settings.enabled} onChange={event => change({ ...settings, enabled: event.target.checked })} />
+            <input type="checkbox" className="h-5 w-5 accent-primary" checked={settings.enabled} onChange={event => change({ ...settings, enabled: event.target.checked })} />
             Ankündigungen für dach_lock aktiv
           </label>
           <p className="text-sm text-text-secondary">{settings.enabled ? `${settings.entries.filter(entry => entry.enabled).length} Kanaltexte aktiv. Die Zeitabstände stellst du unten unter „Unser Kanal · dach_lock“ ein.` : 'Alle Ankündigungen aus dieser Rotation sind pausiert, auch globale Event-Einblendungen.'}</p>
           <label className="flex items-start gap-3 text-sm text-white">
-            <input type="checkbox" className="mt-0.5 h-5 w-5 shrink-0 accent-[#d4af37]" checked={settings.includeGlobalEvent} onChange={event => change({ ...settings, includeGlobalEvent: event.target.checked })} />
+            <input type="checkbox" className="mt-0.5 h-5 w-5 shrink-0 accent-primary" checked={settings.includeGlobalEvent} onChange={event => change({ ...settings, includeGlobalEvent: event.target.checked })} />
             <span>Globale Event-Ankündigung auch auf dach_lock einblenden<span className="mt-1 block text-text-secondary">Wenn oben ein globales Event aktiv ist, erscheint es einmal pro Runde. Dieser Schalter ändert nur dach_lock; Text und Zeitfenster des globalen Events gelten weiterhin für alle Kanäle.</span></span>
           </label>
-          {settings.enabled && !settings.entries.some(entry => entry.enabled) && <p role="status" className="text-sm text-amber-200">{settings.includeGlobalEvent ? 'Keine Kanaltexte aktiv. Nur ein aktives globales Event kann noch eingeblendet werden.' : 'Keine Ankündigung aktiv. Der Bot sendet aus dieser Rotation nichts.'}</p>}
+          {settings.enabled && !settings.entries.some(entry => entry.enabled) && <p role="status" className="text-sm text-warning">{settings.includeGlobalEvent ? 'Keine Kanaltexte aktiv. Nur ein aktives globales Event kann noch eingeblendet werden.' : 'Keine Ankündigung aktiv. Der Bot sendet aus dieser Rotation nichts.'}</p>}
           <div className="grid min-w-0 gap-5 xl:grid-cols-2">
-            {settings.entries.map((entry, index) => <article key={index} aria-label={`Kanal-Ankündigung ${index + 1}`} className="min-w-0 rounded-2xl border border-[#d4af37]/50 bg-black/40 p-5 shadow-lg">
+            {settings.entries.map((entry, index) => <article key={index} aria-label={`Kanal-Ankündigung ${index + 1}`} className="min-w-0 rounded-2xl border border-primary/50 bg-black/40 p-5 shadow-lg">
               <div className="mb-4 flex items-center justify-between gap-3">
                 <h3 className="font-semibold text-white">Ankündigung {index + 1}</h3>
                 <label className="flex items-center gap-2 text-sm text-white">
-                  <input type="checkbox" className="h-4 w-4 accent-[#d4af37]" aria-label={`Ankündigung ${index + 1} aktiv`} checked={entry.enabled} onChange={event => changeEntry(index, { enabled: event.target.checked })} />
+                  <input type="checkbox" className="h-4 w-4 accent-primary" aria-label={`Ankündigung ${index + 1} aktiv`} checked={entry.enabled} onChange={event => changeEntry(index, { enabled: event.target.checked })} />
                   {entry.enabled ? 'Aktiv' : 'Deaktiviert'}
                 </label>
               </div>
@@ -84,7 +84,7 @@ export function CommunityAnnouncementsEditor() {
           <button type="button" className="admin-button admin-button-secondary disabled:opacity-50" disabled={!draft || mutation.isPending} onClick={() => void reload()}>{conflict ? 'Aktuellen Stand laden und Entwurf verwerfen' : 'Verwerfen'}</button>
           {draft && <span className="text-sm text-text-secondary">Ungespeicherte Änderungen</span>}
         </div>
-        {notice && <p role={notice.error ? 'alert' : 'status'} className={`mt-4 text-sm ${notice.error ? 'text-red-300' : 'text-green-300'}`}>{notice.text}</p>}
+        {notice && <p role={notice.error ? 'alert' : 'status'} className={`mt-4 text-sm ${notice.error ? 'text-danger' : 'text-success'}`}>{notice.text}</p>}
       </form>}
   </Section>;
 }
