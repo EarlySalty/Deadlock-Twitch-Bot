@@ -13,6 +13,26 @@ import {
   translate,
 } from '../src/i18n/dictionary';
 import { EN_AREAS } from '../src/i18n/en';
+import { readFileSync } from 'node:fs';
+
+test('Demo overview insights and actions translate the actual Rust snapshot copy', () => {
+  const source = readFileSync(new URL('../../../rust/crates/tb-dashboard-api/src/handlers/demo.rs', import.meta.url), 'utf8');
+  const fields = source.match(/"findings": (\[[\s\S]*?\]),\s*"actions": (\[[\s\S]*?\])/);
+  assert.ok(fields, 'Demo overview findings and actions must be present');
+  const findings = JSON.parse(fields[1]) as { title: string; text: string }[];
+  const actions = JSON.parse(fields[2]) as { tag: string; text: string }[];
+  assert.equal(findings.length, 2);
+  assert.equal(actions.length, 1);
+  for (const text of [
+    ...findings.flatMap(finding => [finding.title, finding.text]),
+    ...actions.flatMap(action => [action.tag, action.text]),
+  ]) {
+    assert.notEqual(translate('en', text), text, `Missing English demo copy: ${text}`);
+    assert.equal(translate('de', text), text);
+  }
+  assert.equal(translate('en', findings[0].title), 'Strong retention');
+  assert.equal(translate('en', actions[0].text), 'Put patch keywords near the start of the title.');
+});
 
 test('Deutsch ist die Standardsprache und laesst Texte unveraendert', () => {
   assert.equal(DEFAULT_LANGUAGE, 'de');
