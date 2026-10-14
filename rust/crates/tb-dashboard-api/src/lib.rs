@@ -299,6 +299,10 @@ fn build_authed_router_with_analysis_store(
             get(social_media::tiktok_editor_get_handler),
         )
         .route(
+            "/social-media/api/clips/{clip_db_id}/tiktok/music-consent",
+            put(social_media::tiktok_music_consent_put_handler),
+        )
+        .route(
             "/social-media/api/clips/{clip_db_id}/tiktok/draft",
             put(social_media::tiktok_draft_put_handler),
         )

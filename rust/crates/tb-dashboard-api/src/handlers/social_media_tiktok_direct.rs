@@ -246,6 +246,20 @@ pub(super) async fn save_choice(
             "Das TikTok-Konto hat sich geändert. Bitte öffne die Freigabe erneut.",
         ));
     }
+    let user: String =
+        sqlx::query_scalar("SELECT twitch_user_id FROM twitch_clips_social_media WHERE id = $1")
+            .bind(clip_id)
+            .fetch_one(pool)
+            .await
+            .map_err(|_| clip_load_failed())?;
+    if !tiktok_editor::valid_music_consent(pool, &user, credentials.platform_user_id.as_deref())
+        .await?
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "Bitte bestätige zuerst einmalig die Musiknutzung für dieses TikTok-Konto.",
+        ));
+    }
     let info = creator(&credentials).await?;
     let (path, duration, digest) = duration(pool, clip_id).await?;
     if options.approved_video_sha256 != digest {

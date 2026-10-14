@@ -5,6 +5,8 @@ use serde::Serialize;
 #[serde(deny_unknown_fields)]
 pub struct TikTokDraft {
     caption: String,
+    #[serde(default)]
+    standard_description: String,
     privacy_level: String,
     allow_comment: bool,
     allow_duet: bool,
@@ -25,7 +27,10 @@ pub struct TikTokDraft {
 
 impl TikTokDraft {
     fn validate(&self) -> Result<(), Response> {
-        if self.caption.chars().count() > 2200
+        if combined_caption(&self.caption, &self.standard_description)
+            .chars()
+            .count()
+            > 2200
             || !matches!(
                 self.privacy_level.as_str(),
                 "" | "PUBLIC_TO_EVERYONE"
@@ -142,20 +147,17 @@ pub async fn get_handler(
         Ok(defaults) => defaults.map(TikTokDraft::without_disclosure),
         Err(response) => return response,
     };
-    let defaults = match defaults {
-        Some(defaults) if defaults.music_consent => {
-            let account = match tiktok_account(&pool, &user).await {
-                Ok(account) => account,
-                Err(response) => return response,
-            };
-            Some(defaults.for_account(account.as_deref()))
-        }
-        Some(defaults) => Some(defaults.without_music_consent()),
-        None => None,
+    let account = match tiktok_account(&pool, &user).await {
+        Ok(account) => account,
+        Err(response) => return response,
+    };
+    let music_consent = match valid_music_consent(&pool, &user, account.as_deref()).await {
+        Ok(valid) => valid,
+        Err(response) => return response,
     };
     (
         [(header::CACHE_CONTROL, "no-store")],
-        Json(json!({"draft": draft, "defaults": defaults})),
+        Json(json!({"draft": draft, "defaults": defaults, "music_consent": music_consent, "music_consent_platform_user_id": account})),
     )
         .into_response()
 }
@@ -206,27 +208,106 @@ pub async fn defaults_put_handler(
         Ok(owner) => owner,
         Err(response) => return response,
     };
-    let mut draft = draft.without_disclosure();
-    if draft.music_consent {
-        let account = match tiktok_account(&pool, &user).await {
-            Ok(account) => account,
-            Err(response) => return response,
-        };
-        if account.as_deref().is_none_or(str::is_empty)
-            || draft.music_consent_platform_user_id.as_deref() != account.as_deref()
-        {
-            return (
-                StatusCode::CONFLICT,
-                Json(json!({"error": "tiktok_posting", "message": "Das TikTok-Konto hat sich geändert. Bitte öffne die Freigabe erneut."})),
-            )
-                .into_response();
-        }
-        draft.music_consent_at = Some(chrono::Utc::now());
-        draft.music_consent_platform_user_id = account;
-    } else {
-        draft = draft.without_music_consent();
+    if let Err(response) = draft.validate() {
+        return response;
     }
+    let legacy = match load(&pool, &defaults_key(&user)).await {
+        Ok(legacy) => legacy,
+        Err(response) => return response,
+    };
+    let mut draft = draft.without_disclosure().without_music_consent();
+    if let Some(legacy) = legacy {
+        draft.music_consent = legacy.music_consent;
+        draft.music_consent_at = legacy.music_consent_at;
+        draft.music_consent_platform_user_id = legacy.music_consent_platform_user_id;
+    }
+    draft.caption.clear();
     save(&pool, defaults_key(&user), &user, draft).await
+}
+
+fn combined_caption(caption: &str, standard: &str) -> String {
+    [caption.trim(), standard.trim()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct MusicConsent {
+    platform_user_id: String,
+    consented_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MusicConsentRequest {
+    platform_user_id: String,
+}
+
+fn consent_key(user: &str, account: &str) -> String {
+    format!("tiktok_music_consent:{user}:{account}")
+}
+
+pub(super) async fn valid_music_consent(
+    pool: &PgPool,
+    user: &str,
+    account: Option<&str>,
+) -> Result<bool, Response> {
+    let Some(account) = account.filter(|account| !account.is_empty()) else {
+        return Ok(false);
+    };
+    let raw: Option<String> =
+        sqlx::query_scalar("SELECT value::text FROM social_media_settings WHERE key = $1")
+            .bind(consent_key(user, account))
+            .fetch_optional(pool)
+            .await
+            .map_err(|_| clip_load_failed())?
+            .flatten();
+    if let Some(raw) = raw {
+        let consent: MusicConsent = serde_json::from_str(&raw).map_err(|_| clip_load_failed())?;
+        if consent.platform_user_id == account && consent.consented_at.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(load(pool, &defaults_key(user))
+        .await?
+        .is_some_and(|draft| draft.for_account(Some(account)).music_consent))
+}
+
+pub async fn music_consent_put_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Path(raw): Path<String>,
+    Json(request): Json<MusicConsentRequest>,
+) -> Response {
+    let (_, user) = match owner(&pool, &auth, raw).await {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
+    let account = match tiktok_account(&pool, &user).await {
+        Ok(account) => account,
+        Err(response) => return response,
+    };
+    if request.platform_user_id.is_empty()
+        || Some(request.platform_user_id.as_str()) != account.as_deref()
+    {
+        return (StatusCode::CONFLICT, Json(json!({"error": "tiktok_posting", "message": "Das TikTok-Konto hat sich geändert. Bitte öffne die Freigabe erneut."}))).into_response();
+    }
+    let key = consent_key(&user, &request.platform_user_id);
+    let consent = MusicConsent {
+        platform_user_id: request.platform_user_id,
+        consented_at: Some(chrono::Utc::now()),
+    };
+    let value = match serde_json::to_value(consent) {
+        Ok(value) => value,
+        Err(_) => return invalid_payload(),
+    };
+    match tb_social_media::settings::set_setting(&pool, &key, &value, Some(&user)).await {
+        Ok(()) => Json(json!({"success": true})).into_response(),
+        Err(_) => clip_load_failed(),
+    }
 }
 
 #[cfg(test)]
@@ -240,6 +321,7 @@ mod tests {
             "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMPTZ, updated_by TEXT)",
             "CREATE TABLE twitch_clips_social_media (id BIGINT PRIMARY KEY, twitch_user_id TEXT, tiktok_post_options JSONB)",
             "CREATE TABLE social_media_partner_access (twitch_user_id TEXT PRIMARY KEY, granted BOOLEAN)",
+            "CREATE TABLE IF NOT EXISTS social_media_platform_auth (id INTEGER PRIMARY KEY, platform TEXT, twitch_user_id TEXT, platform_user_id TEXT, enabled INTEGER, authorized_at TIMESTAMPTZ)",
             "INSERT INTO twitch_clips_social_media VALUES (1, '42', NULL), (2, '43', NULL), (3, '42', NULL)",
             "INSERT INTO social_media_partner_access VALUES ('42', TRUE), ('43', TRUE)",
         ] {
@@ -279,7 +361,11 @@ mod tests {
         );
         assert_eq!(
             load(&db.pool, &defaults_key("42")).await.unwrap(),
-            Some(draft.clone().without_disclosure())
+            Some({
+                let mut defaults = draft.clone().without_disclosure();
+                defaults.caption.clear();
+                defaults
+            })
         );
         assert_eq!(
             draft_put_handler(
@@ -357,16 +443,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn music_consent_is_server_dated_account_bound_and_revocable() {
+    async fn legacy_consent_survives_saving_defaults_and_new_consent_is_account_bound() {
         let db = crate::test_database::Database::new().await;
         for statement in [
             "CREATE TABLE social_media_settings (key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMPTZ, updated_by TEXT)",
-            "CREATE TABLE twitch_clips_social_media (id BIGINT PRIMARY KEY, twitch_user_id TEXT, tiktok_post_options JSONB)",
+            "CREATE TABLE twitch_clips_social_media (id BIGINT PRIMARY KEY, twitch_user_id TEXT)",
             "CREATE TABLE social_media_partner_access (twitch_user_id TEXT PRIMARY KEY, granted BOOLEAN)",
             "CREATE TABLE social_media_platform_auth (id INTEGER PRIMARY KEY, platform TEXT, twitch_user_id TEXT, platform_user_id TEXT, enabled INTEGER, authorized_at TIMESTAMPTZ)",
-            "INSERT INTO twitch_clips_social_media VALUES (1, '42', NULL)",
+            "INSERT INTO twitch_clips_social_media VALUES (1, '42')",
             "INSERT INTO social_media_partner_access VALUES ('42', TRUE)",
-            "INSERT INTO social_media_platform_auth VALUES (1, 'tiktok', '42', 'account-a', 1, '2026-01-01'), (2, 'tiktok', '42', 'disabled-account', 0, '2026-02-01'), (3, 'tiktok', NULL, 'global-account', 1, '2026-03-01'), (4, 'tiktok', '43', 'other-account', 1, '2026-04-01')",
+            "INSERT INTO social_media_platform_auth VALUES (1, 'tiktok', '42', 'account-a', 1, NOW())",
         ] {
             sqlx::query(statement).execute(&db.pool).await.unwrap();
         }
@@ -375,128 +461,141 @@ mod tests {
             twitch_user_id: "42".into(),
             display_name: "Test".into(),
         };
-        let draft: TikTokDraft = serde_json::from_value(json!({
-            "caption": "Beschreibung", "privacy_level": "SELF_ONLY",
-            "allow_comment": true, "allow_duet": false, "allow_stitch": false,
-            "commercial_content": true, "brand_content_toggle": true,
-            "music_consent": true, "music_consent_at": "2000-01-01T00:00:00Z",
-            "music_consent_platform_user_id": "account-a"
-        }))
-        .unwrap();
+        let legacy: TikTokDraft = serde_json::from_value(json!({
+            "caption": "Old clip", "privacy_level": "SELF_ONLY", "allow_comment": true,
+            "allow_duet": false, "allow_stitch": false, "music_consent": true,
+            "music_consent_at": "2026-01-01T00:00:00Z", "music_consent_platform_user_id": "account-a"
+        })).unwrap();
         assert_eq!(
-            draft_put_handler(
-                partner.clone(),
-                State(db.pool.clone()),
-                Path("1".into()),
-                Json(draft.clone())
-            )
-            .await
-            .status(),
-            StatusCode::OK
-        );
-        let stored_draft = load(&db.pool, &draft_key(1, "42")).await.unwrap().unwrap();
-        assert_eq!(stored_draft, draft.clone().without_music_consent());
-        let raw_draft = serde_json::to_value(&stored_draft).unwrap();
-        assert!(raw_draft.get("music_consent").is_none());
-        assert!(raw_draft.get("music_consent_at").is_none());
-        assert!(raw_draft.get("music_consent_platform_user_id").is_none());
-        assert_eq!(
-            defaults_put_handler(
-                partner.clone(),
-                State(db.pool.clone()),
-                Path("1".into()),
-                Json(draft.clone())
-            )
-            .await
-            .status(),
-            StatusCode::OK
-        );
-        let stored = load(&db.pool, &defaults_key("42")).await.unwrap().unwrap();
-        assert!(stored.music_consent);
-        assert!(stored.music_consent_at.is_some());
-        assert_ne!(stored.music_consent_at, draft.music_consent_at);
-        assert_eq!(
-            stored.music_consent_platform_user_id.as_deref(),
-            Some("account-a")
-        );
-        assert!(!stored.commercial_content);
-        assert!(!stored.brand_content_toggle);
-        let response = get_handler(partner.clone(), State(db.pool.clone()), Path("1".into())).await;
-        let body: Value = serde_json::from_slice(
-            &axum::body::to_bytes(response.into_body(), usize::MAX)
+            save(&db.pool, defaults_key("42"), "42", legacy.clone())
                 .await
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(body["defaults"]["music_consent"], true);
-        let mut wrong_account = draft.clone();
-        wrong_account.music_consent_platform_user_id = Some("other-account".into());
+                .status(),
+            StatusCode::OK
+        );
+        assert!(valid_music_consent(&db.pool, "42", Some("account-a"))
+            .await
+            .unwrap());
+        assert!(!valid_music_consent(&db.pool, "42", Some("account-b"))
+            .await
+            .unwrap());
         assert_eq!(
             defaults_put_handler(
                 partner.clone(),
                 State(db.pool.clone()),
                 Path("1".into()),
-                Json(wrong_account)
-            )
-            .await
-            .status(),
-            StatusCode::CONFLICT
-        );
-        assert_eq!(
-            load(&db.pool, &defaults_key("42")).await.unwrap(),
-            Some(stored.clone())
-        );
-        sqlx::query(
-            "UPDATE social_media_platform_auth SET platform_user_id = 'account-b' WHERE id = 1",
-        )
-        .execute(&db.pool)
-        .await
-        .unwrap();
-        let response = get_handler(partner.clone(), State(db.pool.clone()), Path("1".into())).await;
-        let body: Value = serde_json::from_slice(
-            &axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        assert!(body["defaults"].get("music_consent").is_none());
-        assert_eq!(
-            defaults_put_handler(
-                partner.clone(),
-                State(db.pool.clone()),
-                Path("1".into()),
-                Json(draft.clone())
-            )
-            .await
-            .status(),
-            StatusCode::CONFLICT
-        );
-        let revoked = draft.without_music_consent();
-        assert_eq!(
-            defaults_put_handler(
-                partner,
-                State(db.pool.clone()),
-                Path("1".into()),
-                Json(revoked.clone())
+                Json(legacy.without_music_consent())
             )
             .await
             .status(),
             StatusCode::OK
         );
-        let stored = load(&db.pool, &defaults_key("42")).await.unwrap().unwrap();
-        assert_eq!(stored, revoked.without_disclosure());
-        assert!(serde_json::to_value(stored)
+        assert!(valid_music_consent(&db.pool, "42", Some("account-a"))
+            .await
+            .unwrap());
+        assert!(load(&db.pool, &defaults_key("42"))
+            .await
             .unwrap()
-            .get("music_consent_at")
-            .is_none());
-        let published: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM twitch_clips_social_media WHERE tiktok_post_options IS NOT NULL",
+            .unwrap()
+            .caption
+            .is_empty());
+        assert_eq!(
+            music_consent_put_handler(
+                partner.clone(),
+                State(db.pool.clone()),
+                Path("1".into()),
+                Json(MusicConsentRequest {
+                    platform_user_id: "account-b".into()
+                })
+            )
+            .await
+            .status(),
+            StatusCode::CONFLICT
+        );
+        sqlx::query("UPDATE social_media_platform_auth SET platform_user_id = 'account-b'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert!(!valid_music_consent(&db.pool, "42", Some("account-b"))
+            .await
+            .unwrap());
+        assert_eq!(
+            music_consent_put_handler(
+                partner.clone(),
+                State(db.pool.clone()),
+                Path("1".into()),
+                Json(MusicConsentRequest {
+                    platform_user_id: "account-b".into()
+                })
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert!(valid_music_consent(&db.pool, "42", Some("account-b"))
+            .await
+            .unwrap());
+        let raw: String = sqlx::query_scalar(
+            "SELECT value::text FROM social_media_settings WHERE key = 'tiktok_music_consent:42:account-b'",
         )
         .fetch_one(&db.pool)
         .await
         .unwrap();
-        assert_eq!(published, 0);
+        let stored: MusicConsent = serde_json::from_str(&raw).unwrap();
+        assert!(stored.consented_at.unwrap() > chrono::Utc::now() - chrono::Duration::minutes(1));
+        let defaults = load(&db.pool, &defaults_key("42")).await.unwrap().unwrap();
+        assert_eq!(
+            defaults_put_handler(
+                partner.clone(),
+                State(db.pool.clone()),
+                Path("1".into()),
+                Json(defaults)
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert!(valid_music_consent(&db.pool, "42", Some("account-b"))
+            .await
+            .unwrap());
+        sqlx::query("UPDATE social_media_platform_auth SET platform_user_id = 'account-c'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            music_consent_put_handler(
+                partner.clone(),
+                State(db.pool.clone()),
+                Path("1".into()),
+                Json(MusicConsentRequest {
+                    platform_user_id: "account-c".into()
+                })
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert!(valid_music_consent(&db.pool, "42", Some("account-b"))
+            .await
+            .unwrap());
+        let response = get_handler(partner, State(db.pool.clone()), Path("1".into())).await;
+        let body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["music_consent"], true);
+        assert_eq!(body["music_consent_platform_user_id"], "account-c");
         db.close().await;
+    }
+
+    #[test]
+    fn combined_description_limit_counts_separator_and_unicode() {
+        let mut draft: TikTokDraft = serde_json::from_value(json!({"caption": "ä".repeat(2197), "standard_description": "ß", "privacy_level": "", "allow_comment": false, "allow_duet": false, "allow_stitch": false})).unwrap();
+        assert!(draft.validate().is_ok());
+        draft.standard_description.push('ß');
+        assert!(draft.validate().is_err());
+        assert_eq!(combined_caption(" Clip ", " #tag "), "Clip\n\n#tag");
     }
 
     #[test]
