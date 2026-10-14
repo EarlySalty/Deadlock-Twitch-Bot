@@ -614,6 +614,12 @@ mod tests {
         .execute(&db.pool)
         .await
         .unwrap();
+        sqlx::raw_sql(
+            "ALTER TABLE twitch_smalltalk_sessions ADD COLUMN live_test BOOLEAN NOT NULL DEFAULT FALSE",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
         sqlx::raw_sql("CREATE TABLE twitch_partner_outreach (streamer_login TEXT PRIMARY KEY, cooldown_until TEXT)")
             .execute(&db.pool).await.unwrap();
         for existed in [false, true] {
