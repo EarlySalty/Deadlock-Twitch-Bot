@@ -1,6 +1,6 @@
 # Register (max 30 lines)
 
-Main b65a61d81 (D2, D-core, O, D3a, W1, D3b, D4, D5; G0 reverted). Live 45779a5bc (none of ours). Release build b65a61d81 running (CARGO_SLOT_DEPLOY=1). Reporting: directly to the user.
+Main 0a695264d (D2, D-core, O, D3a, W1, D3b, D4, D5, W2; G0 reverted). Live 7e15101b2 (none of ours). Release build 0a695264d queued on deploy lock. Reporting: directly to the user.
 
 | Pkg | Agent | Worktree | Branch | HEAD | Status |
 |---|---|---|---|---|---|
@@ -13,10 +13,11 @@ Main b65a61d81 (D2, D-core, O, D3a, W1, D3b, D4, D5; G0 reverted). Live 45779a5b
 | D3b charts | done | - | deleted | 213cebc63 | merged 8d9124a38 |
 | D4 pages | done | - | deleted | 475d59525 | merged 27376adcc |
 | D5 Community | done | - | deleted | 8f0306806 | merged 8677271c1 |
-| H1 hub fix | a66d80a8299d6e742 | ttb-opus-h1-20261014 | feat/opus-h1-discord-hub-20261014 | ab23182b9 | BLOCK round 1 (idempotency, stale edit, lookup errors), fixer running |
+| H1 hub fix | a355804b1a46f5e7f | ttb-opus-h1-20261014 | feat/opus-h1-discord-hub-20261014 | 56368d569 | BLOCK round 2, round 3 fixer (correctness/security/data loss only) |
 | D6 pages | a038a62ae5706eee3 | ttb-opus-d6-20261014 | feat/opus-d6-pages-english-20261014 | - | building |
 | D7 pages | a8308e50820c0717e | ttb-opus-d7-20261014 | feat/opus-d7-pages-english-20261014 | - | building |
-| W2 sub-sites | a7d99302f2509a875 | ttb-opus-w2-20261014 | feat/opus-w2-website-subsites-english-20261014 | - | building |
+| W2 sub-sites | done | - | deleted | 80c078327 | merged 0a695264d (faq, vergleich, onboarding, clips) |
+| W3 sub-sites | a5c85b5b455e6ff00 | ttb-opus-w3-20261014 | feat/opus-w3-website-subsites-english-20261014 | - | building (affiliate-portal, vertriebler, v1, v3) |
 
 Main test fix bacbd6838: challenges sidebar regex after D-core t() label.
 Queue: A, C (after G), K and G re-land (after rotation).
