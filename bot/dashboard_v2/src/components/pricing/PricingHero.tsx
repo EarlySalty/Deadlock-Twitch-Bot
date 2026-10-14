@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Zap, TrendingUp, Users, Loader2, Sparkles, CreditCard, ArrowRight } from 'lucide-react';
 import { PREVIEW_BILLING_ROUTE, isPreviewModeEnabled } from '../../preview/routes';
+import { mainDomainOAuthUrl } from '../../i18n/oauthLinks';
 
 type TrialState = 'idle' | 'loading' | 'granted' | 'already_used' | 'has_paid_plan' | 'error';
 
@@ -19,7 +20,7 @@ async function startTrial(): Promise<TrialState> {
     });
     if (res.status === 401) {
       const data = await res.json().catch(() => ({}));
-      window.location.href = data.login_url ?? '/twitch/auth/login?next=%2Ftwitch%2Fpricing';
+      window.location.href = mainDomainOAuthUrl(data.login_url ?? '/twitch/auth/login?next=%2Ftwitch%2Fpricing');
       return 'loading';
     }
     const data = await res.json().catch(() => ({}));

@@ -9,6 +9,7 @@ import {
 } from 'react';
 import {
   DEFAULT_LANGUAGE,
+  isLanguage,
   LOCALES,
   readInitialLanguage,
   storeLanguage,
@@ -16,6 +17,8 @@ import {
   type Language,
   type TranslateParams,
 } from '../i18n/dictionary';
+
+import { mainDomainOAuthUrl } from '../i18n/oauthLinks';
 
 export interface LanguageContextValue {
   language: Language;
@@ -41,6 +44,13 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     document.documentElement.lang = language;
+    const url = new URL(window.location.href);
+    const queryLanguage = url.searchParams.get('lang');
+    if (isLanguage(queryLanguage)) {
+      storeLanguage(queryLanguage);
+      url.searchParams.delete('lang');
+      window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+    }
   }, [language]);
 
   const value = useMemo<LanguageContextValue>(
@@ -58,6 +68,11 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
 
 export function useLanguage(): LanguageContextValue {
   return useContext(LanguageContext);
+}
+
+export function useOAuthLink(): (url: string) => string {
+  const { language } = useLanguage();
+  return useCallback((url: string) => mainDomainOAuthUrl(url, language), [language]);
 }
 
 export function useT(): LanguageContextValue['t'] {

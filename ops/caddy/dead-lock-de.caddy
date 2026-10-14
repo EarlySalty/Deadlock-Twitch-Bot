@@ -1,0 +1,174 @@
+(dead_lock_english_dashboard) {
+	import common_probe_blockers
+	encode zstd gzip
+	header {
+		defer
+		Strict-Transport-Security "max-age=31536000"
+		Referrer-Policy "no-referrer"
+		X-Content-Type-Options "nosniff"
+		Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=(), interest-cohort=()"
+		Server "Caddy"
+		Speculation-Rules `"/brand/speculation.json"`
+	}
+
+	@non_demo_embed not path /demo/twitch/demo /demo/twitch/demo/* /streamer /streamer/* /clips /clips/* /analyse /analyse/* /social-media /social-media/* /twitch/social-media /twitch/social-media/* /social-media-admin /social-media-admin/* /twitch/dashboard /twitch/dashboard/* /twitch/dashboard-v2 /twitch/dashboard-v2/* /twitch/analyse /twitch/analyse/* /twitch/verwaltung /twitch/verwaltung/* /twitch/hilfe /twitch/hilfe/* /twitch/feedback /twitch/feedback/* /twitch/uplink /twitch/uplink/* /twitch/connect /twitch/connect/* /twitch/titel /twitch/titel/* /twitch/legal/access /twitch/legal/verify /coaching /coaching/* /patch /patch/* /patchnotes /patchnotes/* /turnier /turnier/* /yoshi/* /twitch/overlay /twitch/overlay/* /twitch/pause-loop /uplink/dock /uplink/dock/* /twitch/pricing /twitch/pricing/* /twitch/caster-overlay /twitch/kategorie /twitch/kategorie/* /twitch/challenges /twitch/challenges/*
+	header @non_demo_embed {
+		defer
+		X-Frame-Options "DENY"
+		Content-Security-Policy "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com https://news.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self' https://discord.com https://discordapp.com https://cloudflareinsights.com https://news.google.com https://www.google.com; base-uri 'none'; frame-ancestors 'none'"
+	}
+
+	@dashboard_paths path /analyse /analyse/* /social-media /social-media/* /twitch/social-media /twitch/social-media/* /social-media-admin /social-media-admin/* /twitch/dashboard /twitch/dashboard/* /twitch/dashboard-v2 /twitch/dashboard-v2/* /twitch/analyse /twitch/analyse/* /twitch/verwaltung /twitch/verwaltung/* /twitch/hilfe /twitch/hilfe/* /twitch/feedback /twitch/feedback/* /twitch/uplink /twitch/uplink/* /twitch/connect /twitch/connect/* /twitch/titel /twitch/titel/* /twitch/pricing /twitch/pricing/* /twitch/kategorie /twitch/kategorie/* /twitch/challenges /twitch/challenges/*
+	header @dashboard_paths {
+		defer
+		X-Frame-Options "DENY"
+		Content-Security-Policy "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com https://static-cdn.jtvnw.net https://clips-media-assets2.twitch.tv; font-src 'self' data:; connect-src 'self' https://discord.com https://discordapp.com https://cloudflareinsights.com; base-uri 'none'; frame-ancestors 'none'"
+	}
+	@overlay_embed path /twitch/overlay /twitch/overlay/*
+	header @overlay_embed {
+		defer
+		X-Frame-Options "SAMEORIGIN"
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://assets-bucket.deadlock-api.com https://assets.deadlock-api.com https://api.deadlock-api.com https://static-cdn.jtvnw.net; font-src 'self' data:; connect-src 'self' https://assets.deadlock-api.com; base-uri 'none'; frame-ancestors 'self'"
+	}
+
+	@pause_loop_page path /twitch/pause-loop
+	header @pause_loop_page {
+		defer
+		X-Frame-Options "DENY"
+		Content-Security-Policy "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://gql.twitch.tv; media-src https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+	}
+
+	route {
+		@oauth path /twitch/auth /twitch/auth/* /callback /callback/* /twitch/raid/auth /twitch/raid/callback /twitch/discord_link /twitch/social-media/oauth /twitch/social-media/oauth/* /social-media/oauth /social-media/oauth/* /twitch/uplink/connect/kick /twitch/uplink/connect/youtube /auth /auth/* /link/steam /link/steam/login /link/steam/callback /link/callback/* /link/auth/* /linked-role/* /api/auth/* /builds/auth/* /aktivitaet/auth/* /turnier/auth/* /clips/auth/*
+		handle @oauth {
+			route {
+				@language_hint query lang=*
+				@existing_query expression `{http.request.uri.query} != ""`
+				redir @language_hint https://deutsche-deadlock-community.de{uri} 302
+				redir @existing_query https://deutsche-deadlock-community.de{uri}&lang=en 302
+				redir https://deutsche-deadlock-community.de{uri}?lang=en 302
+			}
+		}
+		handle /twitch/onboarding* {
+			@onboarding_asset_request path_regexp onboarding_asset_request (?i)^/twitch/onboarding/.+\.(js|mjs|css|map|json|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|eot|txt|xml)$
+			handle @onboarding_asset_request {
+				uri strip_prefix /twitch/onboarding
+				root * /opt/deadlock/twitch/current/website/dist/onboarding
+				file_server
+			}
+			handle {
+				uri strip_prefix /twitch/onboarding
+				root * /opt/deadlock/twitch/current/website/dist/onboarding
+				try_files {path} /index.html
+				file_server
+			}
+		}
+
+		handle /twitch/faq* {
+			@faq_asset_request path_regexp faq_asset_request (?i)^/twitch/faq/.+\.(js|mjs|css|map|json|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|eot|txt|xml)$
+			handle @faq_asset_request {
+				uri strip_prefix /twitch/faq
+				root * /opt/deadlock/twitch/current/website/dist/faq
+				file_server
+			}
+			handle {
+				uri strip_prefix /twitch/faq
+				root * /opt/deadlock/twitch/current/website/dist/faq
+				try_files {path} /index.html
+				file_server
+			}
+		}
+
+		@blocked_admin {
+			path /twitch/admin /twitch/admin/* /twitch/live /twitch/live/*
+		}
+		handle @blocked_admin {
+			redir https://admin.deutsche-deadlock-community.de{uri} 302
+		}
+
+		@legal_gate_page {
+			path /twitch/legal/access
+			method GET HEAD
+		}
+		handle @legal_gate_page {
+			header {
+				Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+			}
+			reverse_proxy 127.0.0.1:8769 {
+				header_up X-Forwarded-For {remote_host}
+				header_up X-Forwarded-Proto https
+			}
+		}
+
+		@legal_gate_verify {
+			path /twitch/legal/verify
+			method POST
+		}
+		handle @legal_gate_verify {
+			reverse_proxy 127.0.0.1:8769 {
+				header_up X-Forwarded-For {remote_host}
+				header_up X-Forwarded-Proto https
+			}
+		}
+
+		@security_report {
+			path /twitch/sicherheit/report
+			method POST
+		}
+		handle @security_report {
+			reverse_proxy 127.0.0.1:8769 {
+				header_up X-Forwarded-For {remote_host}
+				header_up X-Forwarded-Proto https
+				header_down -Server
+			}
+		}
+
+		@legal_noindex path_regexp legal_noindex (?i)/(impressum|datenschutz|agb|privacy|imprint|terms|legal)(\.html)?(/|$)
+		header @legal_noindex X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex"
+
+		@legal_pages {
+			path /twitch/impressum /twitch/datenschutz /twitch/agb /twitch/sicherheit
+			method GET HEAD
+		}
+		handle @legal_pages {
+			reverse_proxy 127.0.0.1:8769 {
+				header_up X-Forwarded-For {remote_host}
+				header_up X-Forwarded-Proto https
+				header_down -Server
+			}
+		}
+
+		@eventsub_callback {
+			path /twitch/eventsub/callback
+			method POST
+		}
+		handle @eventsub_callback {
+			reverse_proxy 127.0.0.1:8786 {
+				header_up X-Forwarded-For {remote_host}
+				header_up X-Forwarded-Proto https
+				header_down -Server
+			}
+		}
+		@dashboard path /twitch /twitch/*
+		handle @dashboard {
+			reverse_proxy 127.0.0.1:8769 {
+				header_up X-Forwarded-For {remote_host}
+				header_up X-Forwarded-Proto https
+				header_up X-Dashboard-Context public
+				header_down -Server
+			}
+		}
+		handle {
+			redir https://deutsche-deadlock-community.de{uri} 308
+		}
+	}
+}
+
+http://dead-lock.de, http://www.dead-lock.de {
+	bind 195.90.216.148
+	import dead_lock_english_dashboard
+}
+
+dead-lock.de, www.dead-lock.de {
+	import dead_lock_english_dashboard
+}

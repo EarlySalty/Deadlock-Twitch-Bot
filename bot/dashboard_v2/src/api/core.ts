@@ -6,6 +6,7 @@ import {
   isPreviewModeEnabled,
 } from '../preview/routes';
 import { ApiHttpError } from './httpError';
+import { mainDomainOAuthUrl } from '../i18n/oauthLinks';
 
 const API_BASE = dashboardRuntimeConfig.apiBase;
 const INTERNAL_REDIRECT_PREFIX = '/twitch';
@@ -116,7 +117,7 @@ async function handleUnauthorizedResponse(
 ): Promise<never> {
   const unauthorized = await readErrorPayload(response);
   if (unauthorized?.loginUrl) {
-    window.location.href = sanitizeInternalRedirectUrl(unauthorized.loginUrl, loginFallback);
+    window.location.href = mainDomainOAuthUrl(sanitizeInternalRedirectUrl(unauthorized.loginUrl, loginFallback));
     throw new Error('Redirecting to Twitch login');
   }
   throw new ApiHttpError(unauthorized?.error || 'Unauthorized', response.status);
