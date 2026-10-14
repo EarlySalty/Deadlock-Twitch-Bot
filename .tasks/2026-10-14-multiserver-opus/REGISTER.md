@@ -1,6 +1,6 @@
 # Register (max 30 lines)
 
-Main 0a2ce1e11 (+D6, W3, D7, O2; release building via ops/twitch-release-build, not yet deployed). Deployed 0a695264d (D2, D-core, O, D3a, W1, D3b, D4, D5, W2; G0 reverted). LIVE 0a695264d (deployed 16:3x, --pruefen ok). Caddy dead-lock.de splice applied (backup Caddyfile.before-dead-lock-en-20261014); /twitch English verified. Reporting: directly to the user.
+Main = LIVE 0a2ce1e11 (D2, D-core, O, O2, D3a, D3b, D4-D7, W1-W3; G0 reverted), --pruefen ok. Caddy dead-lock.de website splice applied (backup Caddyfile.before-dead-lock-website-20261014). #1062, #1068 closed. Reporting: directly to the user.
 
 | Pkg | Agent | Worktree | Branch | HEAD | Status |
 |---|---|---|---|---|---|
@@ -15,11 +15,13 @@ Main 0a2ce1e11 (+D6, W3, D7, O2; release building via ops/twitch-release-build, 
 | D5 Community | done | - | deleted | 8f0306806 | merged 8677271c1 |
 | H1 hub fix | blocked | ttb-opus-h1-20261014 | feat/opus-h1-discord-hub-20261014 | f97e73bfd (local) | BLOCKER after 5 rounds: ratelimit.rs:195 stale-response misclassification; proposal per-bucket serialization, awaiting user |
 | D6 pages | done | - | deleted | aa9f3dbfd | merged 0a10934d6 |
-| O2 website on dead-lock.de | done | - | deleted | 5221e8b3b | merged 0a2ce1e11; Caddy splice /tmp/ttb-opus-o2-Caddyfile pending after deploy |
+| O2 website on dead-lock.de | done | - | deleted | 5221e8b3b | merged, live 0a2ce1e11, Caddy applied |
 | D7 pages | done | - | deleted | f9c0f1303 | merged 1775f131c (in 0a2ce1e11) |
 | W2 sub-sites | done | - | deleted | 80c078327 | merged 0a695264d (faq, vergleich, onboarding, clips) |
 | W3 sub-sites | done | - | deleted | 607a00eb7 | merged 637da79b1 |
+| D8 AIAnalysis, CategoryCollector | a9ef728b251c4b9e7 | ttb-opus-d8-20261014 | feat/opus-d8-pages-english-20261014 | - | building |
+| D9 demo insights | a9416a961a1121348 | ttb-opus-d9-20261014 | feat/opus-d9-demo-insights-english-20261014 | - | building |
 
 Main test fix bacbd6838. Local object store had missing tree 31c7ae2f; repaired via fetch --refetch origin main.
-Queue: demo snapshot English insight texts, 390px live overflow check, A, C (after G), K and G re-land (after rotation).
+Queue: D10 Experimental + chat analytics, 390px live overflow check, A, C (after G), K and G re-land (after rotation).
 L: parked, blocked by user decision.
