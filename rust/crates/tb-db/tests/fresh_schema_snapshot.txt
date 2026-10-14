@@ -379,6 +379,22 @@ deadlock_vocab|source|text|NO|'manual'::text
 deadlock_vocab|term|text|NO|
 deadlock_vocab|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 deadlock_vocab|weight|integer|NO|1
+discord_guilds|ai_features|boolean|NO|false
+discord_guilds|alert_channel_id|bigint|YES|
+discord_guilds|announce_channel_id|bigint|YES|
+discord_guilds|auto_partner_default|boolean|NO|true
+discord_guilds|cross_server_raids|boolean|NO|true
+discord_guilds|guild_id|bigint|NO|
+discord_guilds|installed_at|timestamp with time zone|NO|now()
+discord_guilds|language|text|NO|'en'::text
+discord_guilds|name|text|YES|
+discord_guilds|ping_role_id|bigint|YES|
+discord_guilds|promo_invite_url|text|YES|
+discord_guilds|removed_at|timestamp with time zone|YES|
+discord_guilds|status|text|NO|'inactive'::text
+discord_guilds|streamer_role_id|bigint|YES|
+discord_guilds|updated_at|timestamp with time zone|NO|now()
+discord_guilds|updated_by|text|YES|
 discord_invite_codes|created_at|text|YES|CURRENT_TIMESTAMP
 discord_invite_codes|guild_id|bigint|NO|
 discord_invite_codes|invite_code|text|NO|
@@ -542,6 +558,10 @@ partner_effort_weeks|partner_twitch_user_id|text|NO|
 partner_effort_weeks|streak|integer|NO|0
 partner_effort_weeks|streamed|boolean|NO|false
 partner_effort_weeks|week_start|date|NO|
+partner_guild_active|twitch_user_id|text|YES|
+partner_status_shadow_mismatch|new_is_partner_active|integer|YES|
+partner_status_shadow_mismatch|old_is_partner_active|integer|YES|
+partner_status_shadow_mismatch|twitch_user_id|text|YES|
 platform_connections|access_token_enc|bytea|NO|
 platform_connections|created_at|timestamp with time zone|NO|now()
 platform_connections|enc_kid|text|NO|'v1'::text
@@ -911,6 +931,15 @@ streamer_dim|is_partner|boolean|YES|false
 streamer_dim|twitch_login|text|NO|
 streamer_dim|twitch_user_id|text|YES|
 streamer_dim|updated_at|timestamp with time zone|YES|now()
+streamer_guilds|active|boolean|NO|false
+streamer_guilds|deactivated_at|timestamp with time zone|YES|now()
+streamer_guilds|deactivated_by|text|YES|
+streamer_guilds|guild_id|bigint|NO|
+streamer_guilds|is_on_discord|boolean|NO|false
+streamer_guilds|joined_at|timestamp with time zone|NO|now()
+streamer_guilds|require_discord_link|boolean|NO|false
+streamer_guilds|source|text|NO|'onboarding'::text
+streamer_guilds|twitch_user_id|text|NO|
 streamer_onboarding|active_step|text|NO|'bookmark'::text
 streamer_onboarding|completed_at|timestamp with time zone|YES|
 streamer_onboarding|completed_step_ids|ARRAY|NO|'{}'::text[]
@@ -2578,6 +2607,8 @@ twitch_streamer_aliases|note|text|YES|
 twitch_streamer_aliases|person_key|text|NO|
 twitch_streamer_aliases|twitch_login|text|NO|
 twitch_streamer_aliases|twitch_user_id|text|NO|
+twitch_streamer_identities|broadcaster_language_updated_at|timestamp with time zone|YES|
+twitch_streamer_identities|broadcaster_language|text|YES|
 twitch_streamer_identities|created_at|text|YES|CURRENT_TIMESTAMP
 twitch_streamer_identities|discord_display_name|text|YES|
 twitch_streamer_identities|discord_user_id|text|YES|
