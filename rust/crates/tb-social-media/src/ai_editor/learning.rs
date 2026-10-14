@@ -28,6 +28,8 @@ pub enum Dimension {
     KeepReaction,
     FacecamOcclusion,
     GameUnderstanding,
+    FacecamPosition,
+    FacecamSize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +42,7 @@ enum Signal {
 enum Outcome {
     Accepted,
     Rejected,
+    Discarded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +59,8 @@ pub struct PersonalPreference {
     pub direction: i8,
     pub supporting_reviews: u32,
     pub opposing_reviews: u32,
+    #[serde(default)]
+    pub rejected_reviews: u32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +84,8 @@ pub struct PassReport {
     pub profiles_updated: usize,
     pub skills_changed: Vec<(SkillId, i32)>,
     pub proposals_recorded: usize,
+    pub rules_held_back: usize,
+    pub skills_reverted: Vec<(SkillId, i32)>,
 }
 
 fn contains_any(text: &str, needles: &[&str]) -> bool {
@@ -130,6 +137,28 @@ fn directed_signal(
         (false, true) => Some(Signal::Toward(dimension, 1)),
         _ => None,
     }
+}
+
+const FACECAM: &[&str] = &["facecam", "webcam", "kamera", "camera"];
+const HIGHER_PLACE: &[&str] = &["oben", "höher", "hoeher", "higher", "top"];
+const LOWER_PLACE: &[&str] = &["unten", "tiefer", "lower", "bottom"];
+
+fn facecam_signals(clause: &str) -> Vec<Signal> {
+    if !contains_any(clause, FACECAM) {
+        return Vec::new();
+    }
+    [
+        directed_signal(
+            Dimension::FacecamPosition,
+            clause,
+            LOWER_PLACE,
+            HIGHER_PLACE,
+        ),
+        size_signal(Dimension::FacecamSize, clause),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 fn size_signal(dimension: Dimension, text: &str) -> Option<Signal> {
@@ -297,7 +326,8 @@ fn classify(feedback: &str) -> Vec<Signal> {
         if mentions_reaction(clause) && keep_request(clause, &[]) {
             signals.push(Signal::Toward(Dimension::KeepReaction, 1));
         }
-        if contains_any(clause, &["facecam", "webcam", "kamera", "camera"])
+        signals.extend(facecam_signals(clause));
+        if contains_any(clause, FACECAM)
             && contains_any(
                 clause,
                 &[
@@ -337,8 +367,11 @@ fn outcomes(events: &[FeedbackEvent]) -> BTreeMap<i64, Outcome> {
             "version_accepted" => {
                 map.insert(event.job_id, Outcome::Accepted);
             }
-            "version_rejected" | "proposal_rejected" => {
+            "version_rejected" => {
                 map.insert(event.job_id, Outcome::Rejected);
+            }
+            "proposal_rejected" => {
+                map.insert(event.job_id, Outcome::Discarded);
             }
             _ => {}
         }
@@ -346,60 +379,118 @@ fn outcomes(events: &[FeedbackEvent]) -> BTreeMap<i64, Outcome> {
     map
 }
 
-fn review_directions(events: &[FeedbackEvent]) -> BTreeMap<i64, BTreeMap<Dimension, i32>> {
-    let decided = outcomes(events);
-    let mut reviews: BTreeMap<i64, BTreeMap<Dimension, i32>> = BTreeMap::new();
-    for event in events.iter().filter(|event| event.kind == "feedback") {
-        if decided.get(&event.job_id) != Some(&Outcome::Accepted) {
-            continue;
+#[derive(Debug, Default)]
+struct RootReview {
+    accepted: BTreeMap<Dimension, i32>,
+    rejected: BTreeMap<Dimension, i32>,
+}
+
+impl RootReview {
+    fn nets(&mut self, outcome: Outcome) -> Option<&mut BTreeMap<Dimension, i32>> {
+        match outcome {
+            Outcome::Accepted => Some(&mut self.accepted),
+            Outcome::Rejected => Some(&mut self.rejected),
+            Outcome::Discarded => None,
         }
-        let Some(feedback) = &event.feedback else {
+    }
+
+    fn rejected_against(&self) -> impl Iterator<Item = (Dimension, i8)> + '_ {
+        self.rejected.iter().filter_map(|(dimension, net)| {
+            let accepted = self.accepted.get(dimension).is_some_and(|net| *net != 0);
+            (!accepted && *net != 0).then_some((*dimension, net.signum() as i8))
+        })
+    }
+}
+
+fn apply_signals(nets: &mut BTreeMap<Dimension, i32>, feedback: &str) {
+    for signal in classify(feedback) {
+        match signal {
+            Signal::Toward(dimension, direction) => {
+                *nets.entry(dimension).or_default() += i32::from(direction);
+            }
+            Signal::Restore(dimension) => {
+                nets.insert(dimension, 0);
+            }
+        }
+    }
+}
+
+fn root_reviews(events: &[FeedbackEvent]) -> BTreeMap<i64, RootReview> {
+    let decided = outcomes(events);
+    let mut reviews: BTreeMap<i64, RootReview> = BTreeMap::new();
+    for event in events.iter().filter(|event| event.kind == "feedback") {
+        let (Some(outcome), Some(feedback)) = (decided.get(&event.job_id), &event.feedback) else {
             continue;
         };
-        let nets = reviews.entry(event.root_job_id).or_default();
-        for signal in classify(feedback) {
-            match signal {
-                Signal::Toward(dimension, direction) => {
-                    *nets.entry(dimension).or_default() += i32::from(direction);
-                }
-                Signal::Restore(dimension) => {
-                    nets.insert(dimension, 0);
-                }
-            }
+        if let Some(nets) = reviews.entry(event.root_job_id).or_default().nets(*outcome) {
+            apply_signals(nets, feedback);
         }
     }
     reviews
 }
 
-pub fn personal_profile(events: &[FeedbackEvent]) -> PersonalProfile {
-    let mut tally: BTreeMap<Dimension, (u32, u32)> = BTreeMap::new();
-    for nets in review_directions(events).values() {
-        for (dimension, net) in nets {
+#[derive(Debug, Default, Clone, Copy)]
+struct Tally {
+    up: u32,
+    down: u32,
+    rejected_up: u32,
+    rejected_down: u32,
+}
+
+impl Tally {
+    fn preference(self, dimension: Dimension) -> Option<PersonalPreference> {
+        let (direction, supporting, opposing, rejected) = if self.up >= self.down {
+            (1, self.up, self.down, self.rejected_up)
+        } else {
+            (-1, self.down, self.up, self.rejected_down)
+        };
+        let opposing = opposing + rejected;
+        (supporting >= PERSONAL_MIN_REVIEWS && supporting >= 2 * opposing).then_some(
+            PersonalPreference {
+                dimension,
+                direction,
+                supporting_reviews: supporting,
+                opposing_reviews: opposing,
+                rejected_reviews: rejected,
+            },
+        )
+    }
+}
+
+fn tally(reviews: &BTreeMap<i64, RootReview>) -> BTreeMap<Dimension, Tally> {
+    let mut tally: BTreeMap<Dimension, Tally> = BTreeMap::new();
+    for review in reviews.values() {
+        for (dimension, net) in &review.accepted {
             let entry = tally.entry(*dimension).or_default();
             match net.signum() {
-                1 => entry.0 += 1,
-                -1 => entry.1 += 1,
+                1 => entry.up += 1,
+                -1 => entry.down += 1,
                 _ => {}
             }
         }
-    }
-    let preferences = tally
-        .into_iter()
-        .filter_map(|(dimension, (up, down))| {
-            let (direction, supporting, opposing) = if up >= down {
-                (1, up, down)
+        for (dimension, direction) in review.rejected_against() {
+            let entry = tally.entry(dimension).or_default();
+            if direction > 0 {
+                entry.rejected_up += 1;
             } else {
-                (-1, down, up)
-            };
-            (supporting >= PERSONAL_MIN_REVIEWS && supporting >= 2 * opposing).then_some(
-                PersonalPreference {
-                    dimension,
-                    direction,
-                    supporting_reviews: supporting,
-                    opposing_reviews: opposing,
-                },
-            )
-        })
+                entry.rejected_down += 1;
+            }
+        }
+    }
+    tally
+}
+
+pub(super) fn rejected_directions(events: &[FeedbackEvent]) -> BTreeSet<(Dimension, i8)> {
+    root_reviews(events)
+        .values()
+        .flat_map(RootReview::rejected_against)
+        .collect()
+}
+
+pub fn personal_profile(events: &[FeedbackEvent]) -> PersonalProfile {
+    let preferences = tally(&root_reviews(events))
+        .into_iter()
+        .filter_map(|(dimension, tally)| tally.preference(dimension))
         .collect();
     let count = |kind: &str| events.iter().filter(|event| event.kind == kind).count() as u32;
     PersonalProfile {
@@ -440,16 +531,17 @@ pub fn global_rules(profiles: &[PersonalProfile]) -> Vec<GlobalRule> {
         .collect()
 }
 
-fn target_skill(dimension: Dimension) -> SkillId {
+fn target_skill(dimension: Dimension) -> Option<SkillId> {
     match dimension {
-        Dimension::SubtitleSize => SkillId::Subtitles,
+        Dimension::SubtitleSize => Some(SkillId::Subtitles),
         Dimension::IntroLength
         | Dimension::VideoLength
         | Dimension::EditingPace
-        | Dimension::KeepReaction => SkillId::EditingStrategy,
-        Dimension::KeepAction => SkillId::HighlightAnalysis,
-        Dimension::FacecamOcclusion => SkillId::VideoLayout,
-        Dimension::GameUnderstanding => SkillId::DeadlockUnderstanding,
+        | Dimension::KeepReaction => Some(SkillId::EditingStrategy),
+        Dimension::KeepAction => Some(SkillId::HighlightAnalysis),
+        Dimension::FacecamOcclusion => Some(SkillId::VideoLayout),
+        Dimension::GameUnderstanding => Some(SkillId::DeadlockUnderstanding),
+        Dimension::FacecamPosition | Dimension::FacecamSize => None,
     }
 }
 
@@ -467,6 +559,10 @@ fn guidance(dimension: Dimension, direction: i8) -> &'static str {
         (Dimension::KeepReaction, _) => "Keep the streamer's original reaction after the key moment.",
         (Dimension::FacecamOcclusion, _) => "Check that the facecam does not cover important action and flag the video for review when unsure.",
         (Dimension::GameUnderstanding, _) => "Mark hero ability interpretations as uncertain unless they are clearly visible.",
+        (Dimension::FacecamPosition, false) => "The streamer prefers the facecam placed lower. The layout is fixed, so flag the video for review when the facecam placement hurts the result.",
+        (Dimension::FacecamPosition, true) => "The streamer prefers the facecam placed higher. The layout is fixed, so flag the video for review when the facecam placement hurts the result.",
+        (Dimension::FacecamSize, false) => "The streamer prefers a smaller facecam. The layout is fixed, so flag the video for review when the facecam takes too much space.",
+        (Dimension::FacecamSize, true) => "The streamer prefers a larger facecam. The layout is fixed, so flag the video for review when the facecam is hard to see.",
     }
 }
 
@@ -484,6 +580,10 @@ fn summary(dimension: Dimension, direction: i8) -> &'static str {
         (Dimension::KeepReaction, _) => "Originalreaktion behalten",
         (Dimension::FacecamOcclusion, _) => "Facecam-Überdeckung prüfen",
         (Dimension::GameUnderstanding, _) => "Fähigkeiten vorsichtiger deuten",
+        (Dimension::FacecamPosition, false) => "Facecam weiter unten bevorzugt",
+        (Dimension::FacecamPosition, true) => "Facecam weiter oben bevorzugt",
+        (Dimension::FacecamSize, false) => "Kleinere Facecam bevorzugt",
+        (Dimension::FacecamSize, true) => "Größere Facecam bevorzugt",
     }
 }
 
@@ -496,6 +596,10 @@ fn proposal_for(dimension: Dimension) -> Option<(&'static str, &'static str)> {
         Dimension::GameUnderstanding => Some((
             "Fähigkeitserkennung im Spielverständnis verbessern",
             "Wiederholte Hinweise auf falsch verstandene Fähigkeiten deuten auf fehlende Spieldaten im Analysekontext hin. Eine gezielte Anreicherung mit Fähigkeitsdaten aus dem Deadlock Brain sollte manuell geprüft werden.",
+        )),
+        Dimension::FacecamPosition | Dimension::FacecamSize => Some((
+            "Facecam-Position und -Größe je Kanal einstellbar machen",
+            "Mehrere Kanäle wünschen wiederholt eine andere Position oder Größe der Facecam. Das stabile Layout lässt das bisher nicht zu; eine Einstellung im Layout-Schritt bräuchte eine Codeänderung.",
         )),
         _ => None,
     }
@@ -615,7 +719,7 @@ async fn all_profiles(pool: &PgPool) -> Result<Vec<PersonalProfile>, sqlx::Error
 
 async fn was_rolled_back(pool: &PgPool, id: SkillId, sha256: &str) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM public.social_ai_skill_activations a JOIN public.social_ai_skill_versions v ON v.skill_id = a.skill_id AND v.version = a.from_version WHERE a.skill_id = $1 AND a.kind = 'rollback' AND v.sha256 = $2)",
+        "SELECT EXISTS(SELECT 1 FROM public.social_ai_skill_activations a JOIN public.social_ai_skill_versions v ON v.skill_id = a.skill_id AND v.version = a.from_version WHERE a.skill_id = $1 AND a.kind IN ('rollback', 'auto_rollback') AND v.sha256 = $2)",
     )
     .bind(id.as_str())
     .bind(sha256)
@@ -635,7 +739,7 @@ fn learned_lines(text: &str) -> BTreeSet<&str> {
 
 async fn vetoed_guidance(pool: &PgPool, id: SkillId) -> Result<BTreeSet<String>, sqlx::Error> {
     let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT f.content, t.content FROM public.social_ai_skill_activations a JOIN public.social_ai_skill_versions f ON f.skill_id = a.skill_id AND f.version = a.from_version JOIN public.social_ai_skill_versions t ON t.skill_id = a.skill_id AND t.version = a.to_version WHERE a.skill_id = $1 AND a.kind = 'rollback'",
+        "SELECT f.content, t.content FROM public.social_ai_skill_activations a JOIN public.social_ai_skill_versions f ON f.skill_id = a.skill_id AND f.version = a.from_version JOIN public.social_ai_skill_versions t ON t.skill_id = a.skill_id AND t.version = a.to_version WHERE a.skill_id = $1 AND a.kind IN ('rollback', 'auto_rollback')",
     )
     .bind(id.as_str())
     .fetch_all(pool)
@@ -695,7 +799,7 @@ async fn apply_skill(
     let candidate = compose_skill_text(&active.text, rules);
     let sha256 = skill_registry::sha256_hex(&candidate);
     if sha256 == active.sha256
-        || skill_registry::validate_candidate(id, &candidate, max_bytes).is_err()
+        || !guard::valid_structure(id, &active.text, &candidate, max_bytes)
         || was_rolled_back(pool, id, &sha256).await?
     {
         return Ok(None);
@@ -794,13 +898,18 @@ async fn locked_pass(
     max_skill_bytes: usize,
 ) -> Result<PassReport, SkillRegistryError> {
     let profiles_updated = refresh_personal(pool).await?;
-    let rules = global_rules(&all_profiles(pool).await?);
+    let skills_reverted = guard::revert_regressions(pool).await?;
+    let candidates = global_rules(&all_profiles(pool).await?);
+    let rejections = guard::recent_rejections(pool).await?;
+    let (rules, held_back): (Vec<GlobalRule>, Vec<GlobalRule>) = candidates
+        .into_iter()
+        .partition(|rule| !guard::regresses(rule, &rejections));
     let learned = learned_skills(pool).await?;
     let mut skills_changed = Vec::new();
     for id in SkillId::ALL {
         let mine: Vec<&GlobalRule> = rules
             .iter()
-            .filter(|rule| target_skill(rule.dimension) == id)
+            .filter(|rule| target_skill(rule.dimension) == Some(id))
             .collect();
         if mine.is_empty() && !learned.contains(&id) {
             continue;
@@ -814,6 +923,8 @@ async fn locked_pass(
         profiles_updated,
         skills_changed,
         proposals_recorded,
+        rules_held_back: held_back.len(),
+        skills_reverted,
     })
 }
 
@@ -825,6 +936,9 @@ async fn learned_skills(pool: &PgPool) -> Result<Vec<SkillId>, SkillRegistryErro
     .await?;
     Ok(ids.iter().filter_map(|id| SkillId::parse(id)).collect())
 }
+
+#[path = "learning_guard.rs"]
+mod guard;
 
 #[cfg(test)]
 #[path = "learning_tests.rs"]

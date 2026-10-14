@@ -372,7 +372,7 @@ async fn begin_attempt(
     }) {
         return Err(EditorError::new(ErrorKind::Budget));
     }
-    admin_limits::admit_on(&mut tx, &context.twitch_user_id, reservation).await?;
+    admin_limits::admit_on(&mut tx, context, reservation).await?;
     let id: i64 = sqlx::query_scalar("INSERT INTO public.llm_usage (ts,source,purpose,model,tokens_in,tokens_out,total,success,project,service,provider,attempt_state,social_ai_twitch_user_id,social_ai_job_id,social_ai_stage,reserved_micro_usd,cost_basis) VALUES ($1,$2,$3,$4,NULL,NULL,NULL,0,$5,$6,$7,'started',$8,$9,$10,$11,'reserved_upper_bound') RETURNING id")
         .bind(Utc::now().to_rfc3339_opts(SecondsFormat::Secs, false))
         .bind(crate::ledger::SOURCE).bind(PURPOSE).bind(&config.model).bind(project).bind(service).bind(PROVIDER)

@@ -22,14 +22,14 @@ export async function fetchLimits(signal?: AbortSignal) {
 
 export async function saveGlobalControl(body: GlobalControlChange) {
   const data = requireLimits(await postAdminJson<unknown, GlobalControlChange>('/social-ai/limits/global', body));
-  if (data.global.revision <= body.expected_revision || data.global.paused !== body.paused) throw new Error('Die Änderung wurde nicht bestätigt. Bitte den Stand neu laden.');
+  if (data.global.revision <= body.expected_revision || data.global.paused !== body.paused || data.global.monthly_cap_micro_usd !== body.monthly_cap_micro_usd) throw new Error('Die Änderung wurde nicht bestätigt. Bitte den Stand neu laden.');
   return data;
 }
 
 export async function saveUserLimit(body: UserLimitChange) {
   const data = requireLimits(await postAdminJson<unknown, UserLimitChange>('/social-ai/limits/user', body));
   const user = data.users.find(user => user.twitch_user_id === body.twitch_user_id);
-  if (!user || user.revision <= body.expected_revision || user.paused !== body.paused || user.monthly_cap_micro_usd !== body.monthly_cap_micro_usd) throw new Error('Die Nutzergrenze wurde nicht bestätigt. Bitte den Stand neu laden.');
+  if (!user || user.revision <= body.expected_revision || user.paused !== body.paused || user.monthly_cap_micro_usd !== body.monthly_cap_micro_usd || user.monthly_ai_jobs !== body.monthly_ai_jobs || user.monthly_revisions !== body.monthly_revisions) throw new Error('Die Nutzergrenze wurde nicht bestätigt. Bitte den Stand neu laden.');
   return data;
 }
 
@@ -42,6 +42,15 @@ export async function savePlanLimit(body: PlanLimitChange) {
 
 export async function fetchSkills(signal?: AbortSignal) {
   return requireSkills(await admin<unknown>('/social-ai/skills', { cache: 'no-store', signal }));
+}
+
+export async function reviewProposal(proposalId: string, status: 'reviewed' | 'dismissed') {
+  const data = requireSkills(await postAdminJson<unknown, { status: string }>(`/social-ai/proposals/${encodeURIComponent(proposalId)}/status`, { status }));
+  const proposal = data.proposals.find(proposal => proposal.id === proposalId);
+  if (!proposal || proposal.status !== status || !proposal.reviewed_at || !proposal.reviewed_by) {
+    throw new Error('Der Vorschlagsstatus wurde nicht bestätigt. Bitte den Stand neu laden.');
+  }
+  return data;
 }
 
 export async function rollbackSkill(skillId: string, body: RollbackChange) {

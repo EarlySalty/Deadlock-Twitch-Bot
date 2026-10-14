@@ -42,6 +42,22 @@ pub(super) async fn assert_limit_roles(pool: &PgPool) {
     assert!(!exposed);
 }
 
+async fn job_schema(pool: &PgPool) {
+    sqlx::raw_sql("CREATE TABLE public.twitch_clips_social_media(id BIGINT PRIMARY KEY); CREATE TABLE public.social_produced_videos(id BIGSERIAL PRIMARY KEY, twitch_user_id TEXT NOT NULL, mode TEXT NOT NULL, metadata JSONB NOT NULL DEFAULT '{}')")
+        .execute(pool)
+        .await
+        .expect("job dependencies");
+    for migration in [
+        include_str!("../../../../migrations/20261011200002_social_ai_jobs.sql"),
+        include_str!("../../../../migrations/20261011203001_social_ai_revisions.sql"),
+    ] {
+        sqlx::raw_sql(migration)
+            .execute(pool)
+            .await
+            .expect("actual job migrations");
+    }
+}
+
 async fn consent(pool: &PgPool) {
     sqlx::raw_sql("INSERT INTO public.twitch_streamers VALUES ('101'); INSERT INTO public.social_ai_user_consent(twitch_user_id,external_ai_consent,updated_by) VALUES ('101',true,'fixture'); INSERT INTO public.social_media_settings VALUES ('external_llm_consent','true'::jsonb)")
         .execute(pool).await.expect("consented synthetic owner");
@@ -63,6 +79,7 @@ async fn m4_pauses_conflicts_and_inactive_plan_drafts_control_real_admission() {
     let global = GlobalControlChange {
         expected_revision: 1,
         paused: true,
+        monthly_cap_micro_usd: None,
         reason: "fixture".into(),
     };
     admin_limits::save_global_control(pool, &global, "discord:42")
@@ -88,6 +105,7 @@ async fn m4_pauses_conflicts_and_inactive_plan_drafts_control_real_admission() {
         &GlobalControlChange {
             expected_revision: 2,
             paused: false,
+            monthly_cap_micro_usd: None,
             reason: "fixture".into(),
         },
         "discord:42",
@@ -99,6 +117,8 @@ async fn m4_pauses_conflicts_and_inactive_plan_drafts_control_real_admission() {
         expected_revision: 0,
         paused: true,
         monthly_cap_micro_usd: None,
+        monthly_ai_jobs: None,
+        monthly_revisions: None,
         reason: "fixture".into(),
     };
     admin_limits::save_user_limit(pool, &user, "discord:42")
@@ -172,6 +192,8 @@ async fn m4_monthly_reservations_are_atomic_and_keep_old_unknown_higher_debits()
         expected_revision: 0,
         paused: false,
         monthly_cap_micro_usd: Some(reservation),
+        monthly_ai_jobs: None,
+        monthly_revisions: None,
         reason: "fixture".into(),
     };
     admin_limits::save_user_limit(pool, &policy, "discord:42")
@@ -264,16 +286,7 @@ async fn m4_monthly_reservations_are_atomic_and_keep_old_unknown_higher_debits()
 async fn m4_usage_aggregates_all_attempts_and_binds_filters_with_safe_separate_metrics() {
     let database = DisposablePostgres::start().await;
     let pool = &database.pool;
-    sqlx::query("CREATE TABLE public.twitch_clips_social_media(id BIGINT PRIMARY KEY)")
-        .execute(pool)
-        .await
-        .expect("job dependency");
-    sqlx::raw_sql(include_str!(
-        "../../../../migrations/20261011200002_social_ai_jobs.sql"
-    ))
-    .execute(pool)
-    .await
-    .expect("actual jobs migration");
+    job_schema(pool).await;
     sqlx::query("INSERT INTO public.social_ai_jobs(id,twitch_user_id,clip_db_id,source_twitch_clip_id,status,processing_ms,rendering_ms,completed_at) VALUES (1,101,1,'synthetic','failed',18400,6800,now()),(2,202,2,'synthetic','failed',9007199254740992,1,now())").execute(pool).await.expect("separate processing source");
     sqlx::raw_sql("INSERT INTO public.llm_usage(ts,purpose,provider,model,attempt_state,social_ai_twitch_user_id,social_ai_job_id,reserved_micro_usd,estimated_micro_usd,cost_basis,tokens_in,tokens_out,cache_creation_input_tokens,cache_read_input_tokens,latency_ms) VALUES ('2026-10-01T00:00:00Z','social_editor','anthropic','model-a','failed','101','manual:1',1000,500,'usage_priced_estimate',100,20,0,10,12),('2026-10-02T00:00:00Z','social_editor','other','model-b','succeeded','101','manual:1',1000,1200,'usage_priced_estimate',150,30,3,20,18),('2026-10-03T00:00:00Z','social_editor','other','model-b','failed','202','manual:2',2000,NULL,'reserved_upper_bound',50,NULL,NULL,NULL,9)").execute(pool).await.expect("all-provider attempts");
     let report = admin_usage::usage_report(
@@ -345,4 +358,221 @@ async fn m4_usage_aggregates_all_attempts_and_binds_filters_with_safe_separate_m
     ] {
         assert!(!serialized.contains(private));
     }
+}
+
+const CURRENT_TS: &str = "to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')";
+
+async fn usage_row(pool: &PgPool, user: &str, job: &str, stage: &str, estimated: i64) {
+    sqlx::query(sqlx::AssertSqlSafe(format!("INSERT INTO public.llm_usage(ts,purpose,provider,model,attempt_state,social_ai_twitch_user_id,social_ai_job_id,social_ai_stage,reserved_micro_usd,estimated_micro_usd,cost_basis,tokens_in,tokens_out,cache_creation_input_tokens,cache_read_input_tokens,latency_ms) VALUES ({CURRENT_TS},'social_editor','anthropic','model-a','succeeded',$1,$2,$3,$4,$4,'usage_priced_estimate',10,5,0,0,7)")))
+        .bind(user)
+        .bind(job)
+        .bind(stage)
+        .bind(estimated)
+        .execute(pool)
+        .await
+        .expect("usage fixture");
+}
+
+async fn revision_jobs(pool: &PgPool) {
+    sqlx::query("INSERT INTO public.social_ai_jobs(id,twitch_user_id,clip_db_id,source_twitch_clip_id,status,completed_at,root_job_id,parent_version_id,revision_feedback) VALUES (1,101,1,'synthetic','failed',now(),NULL,NULL,NULL),(2,101,1,'synthetic','failed',now(),1,1,'Kürzer'),(3,101,1,'synthetic','failed',now(),1,1,'Länger'),(4,101,2,'synthetic','failed',now(),NULL,NULL,NULL)")
+        .execute(pool)
+        .await
+        .expect("first run and revision jobs");
+}
+
+async fn admit(pool: &PgPool, job: &str, reservation: i64) -> Option<ErrorKind> {
+    let mut connection = pool.acquire().await.expect("admission connection");
+    let ctx = EditorContext {
+        job_id: job.into(),
+        ..context()
+    };
+    admin_limits::admit_on(&mut connection, &ctx, reservation)
+        .await
+        .err()
+        .map(|error| error.kind)
+}
+
+fn global(expected_revision: i64, cap: Option<i64>) -> GlobalControlChange {
+    GlobalControlChange {
+        expected_revision,
+        paused: false,
+        monthly_cap_micro_usd: cap,
+        reason: "fixture".into(),
+    }
+}
+
+#[tokio::test]
+async fn m5_global_monthly_cap_counts_only_this_month_across_users() {
+    let database = DisposablePostgres::start().await;
+    let pool = &database.pool;
+    consent(pool).await;
+    job_schema(pool).await;
+    let configuration = config().provider;
+    let reservation = configuration
+        .pricing
+        .reservation(
+            u64::from(configuration.max_input_tokens),
+            u64::from(configuration.max_output_tokens),
+        )
+        .expect("reservation");
+    assert_eq!(
+        admin_limits::save_global_control(pool, &global(1, Some(2_000_001)), "discord:42").await,
+        Err(LimitError::Invalid)
+    );
+    admin_limits::save_global_control(pool, &global(1, Some(reservation - 1)), "discord:42")
+        .await
+        .expect("global monthly cap");
+    assert_eq!(
+        begin_attempt(pool, &configuration, &context())
+            .await
+            .err()
+            .map(|e| e.kind),
+        Some(ErrorKind::Budget)
+    );
+    let limits = admin_limits::processing_limits(pool, &[])
+        .await
+        .expect("limits");
+    assert_eq!(limits.global.monthly_cap_micro_usd, Some(reservation - 1));
+    admin_limits::save_global_control(pool, &global(2, Some(reservation)), "discord:42")
+        .await
+        .expect("raise cap");
+    sqlx::query("INSERT INTO public.llm_usage(ts,purpose,provider,model,attempt_state,social_ai_twitch_user_id,social_ai_job_id,reserved_micro_usd,estimated_micro_usd,cost_basis) VALUES ('2000-01-01T00:00:00Z','social_editor','anthropic','model-a','succeeded','202','manual:99',5000,5000,'usage_priced_estimate')")
+        .execute(pool)
+        .await
+        .expect("old month spend");
+    assert_eq!(admit(pool, "manual:1", reservation).await, None);
+    usage_row(pool, "202", "manual:98", "planning", 1).await;
+    assert_eq!(
+        admit(pool, "manual:1", reservation).await,
+        Some(ErrorKind::Budget)
+    );
+    admin_limits::save_global_control(pool, &global(3, None), "discord:42")
+        .await
+        .expect("remove cap");
+    assert_eq!(admit(pool, "manual:1", reservation).await, None);
+}
+
+#[tokio::test]
+async fn m5_user_job_and_revision_limits_count_new_jobs_per_month() {
+    let database = DisposablePostgres::start().await;
+    let pool = &database.pool;
+    consent(pool).await;
+    job_schema(pool).await;
+    revision_jobs(pool).await;
+    let mut policy = UserLimitChange {
+        twitch_user_id: "101".into(),
+        expected_revision: 0,
+        paused: false,
+        monthly_cap_micro_usd: None,
+        monthly_ai_jobs: Some(-1),
+        monthly_revisions: Some(1),
+        reason: "fixture".into(),
+    };
+    assert_eq!(
+        admin_limits::save_user_limit(pool, &policy, "discord:42").await,
+        Err(LimitError::Invalid)
+    );
+    policy.monthly_ai_jobs = Some(1);
+    admin_limits::save_user_limit(pool, &policy, "discord:42")
+        .await
+        .expect("job limits");
+    let limits = admin_limits::processing_limits(pool, &[])
+        .await
+        .expect("limits");
+    assert_eq!(limits.users[0].monthly_ai_jobs, Some(1));
+    assert_eq!(limits.users[0].monthly_revisions, Some(1));
+    usage_row(pool, "101", "manual:1", "analyzing", 100).await;
+    usage_row(pool, "202", "manual:50", "analyzing", 100).await;
+    assert_eq!(admit(pool, "manual:1", 1).await, None);
+    assert_eq!(admit(pool, "manual:4", 1).await, Some(ErrorKind::Budget));
+    assert_eq!(
+        admit(pool, "production:7", 1).await,
+        Some(ErrorKind::Budget)
+    );
+    assert_eq!(admit(pool, "manual:2", 1).await, None);
+    usage_row(pool, "101", "manual:2", "planning", 100).await;
+    assert_eq!(admit(pool, "manual:2", 1).await, None);
+    assert_eq!(admit(pool, "manual:3", 1).await, Some(ErrorKind::Budget));
+    sqlx::query(
+        "UPDATE public.llm_usage SET ts='2000-01-01T00:00:00Z' WHERE social_ai_job_id='manual:1'",
+    )
+    .execute(pool)
+    .await
+    .expect("previous month job");
+    assert_eq!(admit(pool, "manual:4", 1).await, None);
+}
+
+#[tokio::test]
+async fn m5_usage_splits_stages_and_revisions_and_sums_user_rendering() {
+    let database = DisposablePostgres::start().await;
+    let pool = &database.pool;
+    job_schema(pool).await;
+    revision_jobs(pool).await;
+    usage_row(pool, "101", "manual:1", "analyzing", 100).await;
+    usage_row(pool, "101", "manual:1", "planning", 200).await;
+    usage_row(pool, "101", "manual:2", "planning", 50).await;
+    usage_row(pool, "101", "production:5", "caption", 10).await;
+    sqlx::raw_sql("INSERT INTO public.social_produced_videos(twitch_user_id,mode,metadata) VALUES ('101','ai','{\"manual_ai_job_id\":1,\"rendering_ms\":1200}'),('101','ai','{\"manual_ai_job_id\":2,\"rendering_ms\":800}'),('101','ai','{\"production_ai_job_id\":5,\"rendering_ms\":300}'),('101','ai','{\"manual_ai_job_id\":99,\"rendering_ms\":900}'),('101','static','{\"rendering_ms\":999}'),('101','ai','{\"rendering_ms\":\"x\"}'),('202','ai','{\"rendering_ms\":5000}')")
+        .execute(pool)
+        .await
+        .expect("render fixtures");
+    let report = admin_usage::usage_report(pool, &UsageFilter::default())
+        .await
+        .expect("report");
+    let stages: Vec<_> = report
+        .stages
+        .iter()
+        .map(|stage| (stage.stage, stage.run, stage.totals.charged_micro_usd))
+        .collect();
+    assert_eq!(
+        stages,
+        vec![
+            (
+                admin_usage::UsageStage::Analysis,
+                admin_usage::UsageRun::FirstRun,
+                Some(100)
+            ),
+            (
+                admin_usage::UsageStage::Other,
+                admin_usage::UsageRun::FirstRun,
+                Some(10)
+            ),
+            (
+                admin_usage::UsageStage::Planning,
+                admin_usage::UsageRun::FirstRun,
+                Some(200)
+            ),
+            (
+                admin_usage::UsageStage::Planning,
+                admin_usage::UsageRun::Revision,
+                Some(50)
+            ),
+        ]
+    );
+    assert_eq!(report.groups.len(), 1);
+    assert_eq!(report.groups[0].twitch_user_id.as_deref(), Some("101"));
+    assert_eq!(report.groups[0].rendering_ms, Some(2300));
+    let filtered = admin_usage::usage_report(
+        pool,
+        &UsageFilter {
+            job_id: Some("manual:1".into()),
+            ..UsageFilter::default()
+        },
+    )
+    .await
+    .expect("filtered render totals");
+    assert_eq!(filtered.groups[0].rendering_ms, Some(1200));
+    let serialized = serde_json::to_value(&report).expect("dto");
+    assert_eq!(serialized["stages"][3]["run"], "revision");
+    assert_eq!(serialized["stages"][3]["stage"], "planning");
+    let by_provider = admin_usage::usage_report(
+        pool,
+        &UsageFilter {
+            group_by: UsageGrouping::Provider,
+            ..UsageFilter::default()
+        },
+    )
+    .await
+    .expect("provider report");
+    assert_eq!(by_provider.groups[0].rendering_ms, None);
 }
