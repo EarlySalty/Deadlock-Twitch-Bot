@@ -1940,6 +1940,17 @@ select.studio-select {
   background: var(--color-card);
   grid-template-columns: minmax(0, 1fr) auto;
 }
+.social-studio .social-ai-option-list label.social-ai-language {
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr);
+}
+.social-studio .social-ai-language select {
+  grid-column: 1;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  min-height: 44px;
+}
 .social-studio .social-ai-option-list input {
   grid-column: 2;
   grid-row: 1;

@@ -89,7 +89,7 @@ pub async fn owned_version(
     job_id: i64,
     version_id: i64,
 ) -> Result<ProducedVideo, AiEditorError> {
-    let valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM social_ai_jobs j JOIN social_ai_jobs maker ON COALESCE(maker.root_job_id,maker.id)=COALESCE(j.root_job_id,j.id) AND maker.twitch_user_id=j.twitch_user_id AND maker.clip_db_id=j.clip_db_id JOIN social_produced_videos p ON p.metadata->>'manual_ai_job_id'=maker.id::text AND p.clip_id=j.clip_db_id AND p.twitch_user_id=j.twitch_user_id::text AND p.mode='ai' AND p.job_id IS NULL WHERE j.id=$1 AND j.twitch_user_id::text=$2 AND p.id=$3)")
+    let valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM social_ai_jobs j JOIN social_ai_jobs maker ON COALESCE(maker.root_job_id,maker.id)=COALESCE(j.root_job_id,j.id) AND maker.twitch_user_id=j.twitch_user_id AND maker.clip_db_id=j.clip_db_id JOIN social_produced_videos p ON p.metadata->>'manual_ai_job_id'=maker.id::text AND p.clip_id=j.clip_db_id AND p.twitch_user_id=j.twitch_user_id::text AND p.mode='ai' WHERE j.id=$1 AND j.twitch_user_id::text=$2 AND p.id=$3)")
         .bind(job_id).bind(owner).bind(version_id).fetch_one(pool).await.map_err(|_| AiEditorError::Storage)?;
     if !valid {
         return Err(AiEditorError::NotFound);
@@ -111,11 +111,13 @@ pub(super) fn maker_id(video: &ProducedVideo) -> Result<i64, AiEditorError> {
 
 pub fn usable(video: &ProducedVideo) -> bool {
     video.file_path.is_some()
-        && matches!(
+        && (matches!(
             video.status.as_str(),
             "review" | "approved" | "scheduled" | "published"
-        )
-        && (video.status != "review"
+        ) || (video.status == "rejected"
+            && (video.metadata.get("revision_pending").is_some()
+                || video.metadata.get("superseded_by").is_some())))
+        && (!matches!(video.status.as_str(), "review" | "rejected")
             || video
                 .expires_at
                 .is_some_and(|expiry| expiry > chrono::Utc::now()))
@@ -233,6 +235,7 @@ pub async fn create_revision(
     }
     let id: i64 = sqlx::query_scalar("INSERT INTO social_ai_jobs(twitch_user_id,clip_db_id,source_clip_id,source_twitch_clip_id,root_job_id,parent_version_id,revision_feedback,stage,checkpoints,original_duration_ms,highlights,uncertainty) SELECT twitch_user_id,clip_db_id,source_clip_id,source_twitch_clip_id,$3,$4,$5,'planning',$6::text::jsonb,original_duration_ms,highlights,uncertainty FROM social_ai_jobs WHERE id=$1 AND twitch_user_id::text=$2 RETURNING id")
         .bind(maker).bind(owner).bind(root).bind(version_id).bind(feedback.trim()).bind(serde_json::to_string(&checkpoints).map_err(|_| AiEditorError::Storage)?).fetch_one(&mut *tx).await.map_err(|_| AiEditorError::Storage)?;
+    super::autopilot_revision::hold_parent(&mut tx, owner, &video, id).await?;
     append_event(&mut tx, owner, id, version_id, RevisionEventKind::Feedback, json!({"feedback":feedback.trim(),"parent_version_id":version_id,"previous":previous,"frozen_skills":skills})).await?;
     tx.commit().await.map_err(|_| AiEditorError::Storage)?;
     super::service::get_manual_job(pool, runtime, owner, id).await
@@ -263,7 +266,11 @@ pub async fn decide_proposal(
         .try_get("parent_version_id")
         .map_err(|_| AiEditorError::Storage)?;
     if confirm {
-        ensure_ready(&mut tx, owner, parent).await?;
+        let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM social_produced_videos WHERE id=$1 AND twitch_user_id=$2 AND status='rejected' AND metadata->>'revision_pending'=$3::text AND expires_at>NOW() AND file_path IS NOT NULL)")
+            .bind(parent).bind(owner).bind(job_id).fetch_one(&mut *tx).await.map_err(|_| AiEditorError::Storage)?;
+        if !pending {
+            ensure_ready(&mut tx, owner, parent).await?;
+        }
     }
     let reanalyze = confirm
         && proposal.reanalyze
@@ -272,6 +279,9 @@ pub async fn decide_proposal(
             .map_err(|_| AiEditorError::Storage)?;
     sqlx::query("UPDATE social_ai_jobs SET status=$3, revision_confirmed=$4,revision_reanalysis_confirmed=revision_reanalysis_confirmed OR $5,stage=CASE WHEN $5 THEN 'analyzing' ELSE stage END,checkpoints=CASE WHEN $5 THEN checkpoints-'analyzing'-'planning' ELSE checkpoints END,updated_at=NOW() WHERE id=$1 AND twitch_user_id::text=$2")
         .bind(job_id).bind(owner).bind(if confirm { "queued" } else { "rejected" }).bind(confirm && !reanalyze).bind(reanalyze).execute(&mut *tx).await.map_err(|_| AiEditorError::Storage)?;
+    if !confirm {
+        super::autopilot_revision::restore_parent_on(&mut tx, owner, job_id).await?;
+    }
     append_event(
         &mut tx,
         owner,
@@ -373,7 +383,10 @@ pub async fn approve_version(
     version_id: i64,
     platforms: &[String],
 ) -> Result<(), AiEditorError> {
-    owned_version(pool, owner, job_id, version_id).await?;
+    let video = owned_version(pool, owner, job_id, version_id).await?;
+    if super::autopilot_revision::production_id(&video).is_some() {
+        return Err(AiEditorError::Conflict);
+    }
     produced_video::approve(pool, owner, version_id, platforms).await?;
     record_version_decision(pool, owner, job_id, version_id, true).await
 }
@@ -385,7 +398,10 @@ pub async fn publish_version(
     version_id: i64,
     platforms: &[String],
 ) -> Result<produced_video::PublishingReservation, AiEditorError> {
-    owned_version(pool, owner, job_id, version_id).await?;
+    let video = owned_version(pool, owner, job_id, version_id).await?;
+    if super::autopilot_revision::production_id(&video).is_some() {
+        return Err(AiEditorError::Conflict);
+    }
     produced_video::enqueue_for_publishing_for_user(pool, owner, version_id, platforms)
         .await
         .map_err(Into::into)

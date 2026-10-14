@@ -352,6 +352,90 @@ pub(super) fn build_scaled_subtitle_ass(
     Ok(result)
 }
 
+pub(super) fn subtitle_bounds_reasons(ass: &str, output_duration_ms: u64) -> Vec<String> {
+    let play_width = ass
+        .lines()
+        .find_map(|line| line.strip_prefix("PlayResX:"))
+        .and_then(|value| value.trim().parse::<f64>().ok());
+    let style: Vec<Option<f64>> = ass
+        .lines()
+        .find_map(|line| line.strip_prefix("Style: Default,"))
+        .map(|fields| {
+            fields
+                .split(',')
+                .map(|value| value.trim().parse::<f64>().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let field = |index: usize| style.get(index).copied().flatten();
+    let (Some(play_width), Some(font_size), Some(outline), Some(margin_l), Some(margin_r)) =
+        (play_width, field(1), field(15), field(18), field(19))
+    else {
+        return vec!["Die Untertitel konnten nicht auf ihre Lage im Bild geprüft werden.".into()];
+    };
+    let center = (margin_l + play_width - margin_r) / 2.0;
+    let max_width = 2.0 * center.min(play_width - center) - 2.0 * outline;
+    let em = font_size / DEJAVU_CELL_HEIGHT_EM;
+    let duration = output_duration_ms as f64 / 1000.0;
+    let mut too_wide = false;
+    let mut outside = false;
+    for line in ass
+        .lines()
+        .filter_map(|line| line.strip_prefix("Dialogue: "))
+    {
+        let fields: Vec<&str> = line.splitn(10, ',').collect();
+        if fields.len() != 10 || fields[3] != "Default" {
+            continue;
+        }
+        match (ass_seconds(fields[1]), ass_seconds(fields[2])) {
+            (Some(start), Some(end)) if start >= 0.0 && end > start && end <= duration => {}
+            _ => outside = true,
+        }
+        too_wide |= fields[9]
+            .split("\\N")
+            .any(|text| line_width_em(text) * em > max_width);
+    }
+    let mut reasons = Vec::new();
+    if too_wide {
+        reasons.push(
+            "Einige Untertitelzeilen sind zu breit für das Bild und könnten abgeschnitten werden."
+                .into(),
+        );
+    }
+    if outside {
+        reasons.push("Einige Untertitel liegen außerhalb der Videolänge.".into());
+    }
+    reasons
+}
+
+fn ass_seconds(value: &str) -> Option<f64> {
+    let mut parts = value.trim().split(':');
+    let hours: f64 = parts.next()?.parse().ok()?;
+    let minutes: f64 = parts.next()?.parse().ok()?;
+    let seconds: f64 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(hours * 3600.0 + minutes * 60.0 + seconds)
+}
+
+const DEJAVU_CELL_HEIGHT_EM: f64 = 1.164;
+
+fn line_width_em(text: &str) -> f64 {
+    text.chars()
+        .map(|c| match c {
+            ' ' | 'i' | 'l' | 'j' | '.' | ',' | ':' | ';' | '\'' | '|' => 0.35,
+            '!' | 'f' | 't' | 'r' | '(' | ')' => 0.47,
+            'm' => 1.04,
+            'w' => 0.92,
+            'M' => 1.0,
+            'W' => 1.1,
+            c if c.is_uppercase() => 0.78,
+            _ => 0.69,
+        })
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -529,5 +613,30 @@ mod tests {
         assert!(validate_plan(uncertain, 10_000, &limits())
             .expect("review")
             .needs_review());
+    }
+
+    #[test]
+    fn subtitle_bounds_flag_overwide_lines_and_cues_past_the_end() {
+        let plan = validate_plan(plan(), 10_000, &limits()).expect("valid plan");
+        let source = vec![SourceSubtitle {
+            segment: SubtitleSegment {
+                start: 1.0,
+                end: 2.0,
+                text: "Wahnsinn das war echt krass!".into(),
+            },
+            language: Some("de".into()),
+        }];
+        let mapped = rebase_subtitles(&plan, &source, &limits()).expect("rebase");
+        let normal = build_scaled_subtitle_ass(&plan, &mapped, "", "", 600, 100).expect("ass");
+        assert!(subtitle_bounds_reasons(&normal, plan.output_duration_ms()).is_empty());
+        let wide = build_scaled_subtitle_ass(&plan, &mapped, "", "", 600, 140).expect("ass");
+        assert_eq!(
+            subtitle_bounds_reasons(&wide, plan.output_duration_ms()).len(),
+            1
+        );
+        assert!(subtitle_bounds_reasons(&normal, 1000).is_empty());
+        assert_eq!(subtitle_bounds_reasons(&normal, 500).len(), 1);
+        assert_eq!(subtitle_bounds_reasons(&normal, 0).len(), 1);
+        assert_eq!(subtitle_bounds_reasons("[Events]", 1000).len(), 1);
     }
 }

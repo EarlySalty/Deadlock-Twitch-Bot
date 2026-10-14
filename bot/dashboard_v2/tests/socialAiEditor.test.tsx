@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chooseUsableVersion } from '../src/components/socialmedia/ai/versions';
-import { failureExplanation } from '../src/components/socialmedia/ai/failure';
+import { canRetryJob, failureExplanation } from '../src/components/socialmedia/ai/failure';
 import { aiPreviewJob } from '../src/components/socialmedia/ai/preview';
 
 Object.assign(globalThis, { window: { location: { pathname: '/' } } });
@@ -64,6 +64,19 @@ test('manual jobs and failed-stage retry send exactly the scoped API payloads', 
     assert.ok(calls.every((call) => call.init.credentials === 'same-origin'));
   } finally {
     globalThis.fetch = previous;
+  }
+});
+
+test('failed-stage retry respects metadata locks, consent and pending attempts', () => {
+  const job = { status: 'failed', can_retry: true } as const;
+  const ready = { canStart: true, retryPending: false, locked: false };
+  assert.equal(canRetryJob(job, ready), true);
+  assert.equal(canRetryJob(job, { ...ready, locked: true }), false);
+  assert.equal(canRetryJob(job, { ...ready, canStart: false }), false);
+  assert.equal(canRetryJob(job, { ...ready, retryPending: true }), false);
+  assert.equal(canRetryJob({ ...job, can_retry: false }, ready), false);
+  for (const status of ['review', 'rejected', 'awaiting_confirmation', 'queued', 'preparing', 'transcribing', 'analyzing', 'planning', 'rendering', 'validating'] as const) {
+    assert.equal(canRetryJob({ ...job, status }, ready), false);
   }
 });
 
