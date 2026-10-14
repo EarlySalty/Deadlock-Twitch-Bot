@@ -27,6 +27,9 @@
     "All boot and runtime publications use one nonblocking serialized retry owner that survives terminal boot paths until the latest desired state is committed.",
     "Retries persist observation time, not retry time; transactional statement timeouts prevent timed-out writes from overtaking newer observations.",
     "Outage and recovery delivery failures have independent durable first-error markers.",
-    "Bot-token incident boundaries use failure and successful validation event timestamps, not watchdog polling time; notification eligibility uses the actual recovered outage duration."
+    "Bot-token incident boundaries use failure and successful validation event timestamps, not watchdog polling time; notification eligibility uses the actual recovered outage duration.",
+    "Pending publication merges retain the maximum success and failure timestamps independently, including across database retries.",
+    "An intervening success closes an open token incident even if a newer failure already exists; that newer failure opens a separate incident.",
+    "Recovery event timestamps are clamped to incident start, including delayed success after missing health."
   ]
 }

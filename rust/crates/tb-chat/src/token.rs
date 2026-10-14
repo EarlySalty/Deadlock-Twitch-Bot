@@ -727,6 +727,34 @@ struct TokenHealthObservation {
     failure_kind: Option<String>,
     monitoring_enabled: bool,
     observed_at: DateTime<Utc>,
+    last_ok_at: Option<DateTime<Utc>>,
+    last_failure_at: Option<DateTime<Utc>>,
+}
+
+impl TokenHealthObservation {
+    fn new(
+        failure_kind: Option<&str>,
+        monitoring_enabled: bool,
+        observed_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            failure_kind: failure_kind.map(str::to_owned),
+            monitoring_enabled,
+            observed_at,
+            last_ok_at: (monitoring_enabled && failure_kind.is_none()).then_some(observed_at),
+            last_failure_at: (monitoring_enabled && failure_kind.is_some()).then_some(observed_at),
+        }
+    }
+
+    fn merge(&mut self, latest: Self) {
+        self.last_ok_at = self.last_ok_at.max(latest.last_ok_at);
+        self.last_failure_at = self.last_failure_at.max(latest.last_failure_at);
+        if latest.observed_at >= self.observed_at {
+            self.failure_kind = latest.failure_kind;
+            self.monitoring_enabled = latest.monitoring_enabled;
+            self.observed_at = latest.observed_at;
+        }
+    }
 }
 
 impl TokenHealthPublisher {
@@ -738,7 +766,7 @@ impl TokenHealthPublisher {
                 let mut backoff = Duration::from_secs(1);
                 loop {
                     while let Ok(latest) = receiver.try_recv() {
-                        desired = latest;
+                        desired.merge(latest);
                     }
                     if write_token_health(&pool, &desired).await {
                         break;
@@ -750,7 +778,7 @@ impl TokenHealthPublisher {
                         tokio::select! {
                             latest = receiver.recv() => {
                                 if let Some(latest) = latest {
-                                    desired = latest;
+                                    desired.merge(latest);
                                     backoff = Duration::from_secs(1);
                                     continue;
                                 }
@@ -776,11 +804,11 @@ impl TokenHealthPublisher {
     fn publish(&self, failure_kind: Option<&str>, monitoring_enabled: bool) {
         if self
             .sender
-            .send(TokenHealthObservation {
-                failure_kind: failure_kind.map(str::to_owned),
+            .send(TokenHealthObservation::new(
+                failure_kind,
                 monitoring_enabled,
-                observed_at: Utc::now(),
-            })
+                Utc::now(),
+            ))
             .is_err()
         {
             tracing::error!("Bot-Token-Zustandsüberwachung unerwartet beendet");
@@ -796,13 +824,12 @@ async fn write_token_health(pool: &PgPool, observation: &TokenHealthObservation)
             .await?;
         sqlx::query(
         "INSERT INTO twitch_bot_token_health(singleton,last_ok_at,last_failure_at,failure_kind,monitoring_enabled)
-         VALUES(TRUE,CASE WHEN $2 AND $1::text IS NULL THEN $3 END,
-             CASE WHEN $2 AND $1::text IS NOT NULL THEN $3 END,$1,$2)
+         VALUES(TRUE,$3,$4,$1,$2)
          ON CONFLICT(singleton) DO UPDATE SET
-             last_ok_at=COALESCE(excluded.last_ok_at,twitch_bot_token_health.last_ok_at),
-             last_failure_at=COALESCE(excluded.last_failure_at,twitch_bot_token_health.last_failure_at),
+             last_ok_at=GREATEST(excluded.last_ok_at,twitch_bot_token_health.last_ok_at),
+             last_failure_at=GREATEST(excluded.last_failure_at,twitch_bot_token_health.last_failure_at),
              failure_kind=excluded.failure_kind,monitoring_enabled=excluded.monitoring_enabled",
-        ).bind(observation.failure_kind.as_deref()).bind(observation.monitoring_enabled).bind(observation.observed_at).execute(&mut *transaction).await?;
+        ).bind(observation.failure_kind.as_deref()).bind(observation.monitoring_enabled).bind(observation.last_ok_at).bind(observation.last_failure_at).execute(&mut *transaction).await?;
         transaction.commit().await
     };
     matches!(
@@ -946,7 +973,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminal_boot_token_health_retries_after_publisher_is_dropped() {
+    async fn retried_token_publication_keeps_intervening_success_after_publisher_is_dropped() {
         use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
         use std::str::FromStr;
         let options = PgConnectOptions::from_str(
@@ -989,8 +1016,16 @@ mod tests {
             let held = pool.acquire().await.expect("hold unavailable pool");
             let publisher = TokenHealthPublisher::new(pool.clone());
             let observed_before = Utc::now();
+            let successful_at = observed_before + chrono::Duration::milliseconds(1);
+            let failed_again_at = observed_before + chrono::Duration::milliseconds(2);
             if enabled {
-                publisher.record(Some("boot_failed"));
+                for observation in [
+                    TokenHealthObservation::new(Some("boot_failed"), true, observed_before),
+                    TokenHealthObservation::new(None, true, successful_at),
+                    TokenHealthObservation::new(Some("boot_failed"), true, failed_again_at),
+                ] {
+                    publisher.sender.send(observation).expect("queued health");
+                }
             } else {
                 publisher.disable();
             }
@@ -1003,8 +1038,10 @@ mod tests {
                     if state.0 == enabled && state.1.as_deref() == enabled.then_some("boot_failed") {
                         if enabled {
                             let observed = state.2.expect("failure timestamp");
-                            assert!(observed >= observed_before);
-                            assert!(observed < observed_before + chrono::Duration::seconds(1));
+                            assert_eq!(observed.timestamp_micros(), failed_again_at.timestamp_micros());
+                            let last_ok: DateTime<Utc> = sqlx::query_scalar("SELECT last_ok_at FROM twitch_bot_token_health")
+                                .fetch_one(&pool).await.expect("retained intervening success");
+                            assert_eq!(last_ok.timestamp_micros(), successful_at.timestamp_micros());
                         }
                         break;
                     }

@@ -142,6 +142,17 @@ async fn observe_bot_token(pool: &PgPool, bot_running: bool, now: DateTime<Utc>)
         return Ok(());
     }
     let healthy = health.as_ref().is_some_and(|health| health.healthy(now));
+    if let Some(last_ok_at) = health.as_ref().and_then(|health| health.last_ok_at) {
+        sqlx::query(
+            "UPDATE twitch_watchdog_incidents SET recovered_at=GREATEST($2,started_at)
+             WHERE service=$1 AND recovered_at IS NULL AND ($3 OR $2 > started_at)",
+        )
+        .bind(BOT_TOKEN)
+        .bind(last_ok_at)
+        .bind(healthy)
+        .execute(pool)
+        .await?;
+    }
     let started = health
         .as_ref()
         .map_or(now, |health| health.outage_started(now));
@@ -356,7 +367,7 @@ async fn record(
     started: DateTime<Utc>,
 ) -> Result<()> {
     if healthy {
-        sqlx::query("UPDATE twitch_watchdog_incidents SET recovered_at=$2 WHERE service=$1 AND recovered_at IS NULL")
+        sqlx::query("UPDATE twitch_watchdog_incidents SET recovered_at=GREATEST($2,started_at) WHERE service=$1 AND recovered_at IS NULL")
             .bind(service).bind(now).execute(pool).await?;
     } else {
         sqlx::query(
@@ -1018,6 +1029,103 @@ mod tests {
             .await
             .expect("cleanup");
         admin.close().await;
+    }
+
+    async fn delayed_token_transition_fixture(success_before_start: bool) {
+        use std::str::FromStr;
+        let options = PgConnectOptions::from_str(
+            &test_database::database_url().expect("isolated Postgres configuration required"),
+        )
+        .expect("options");
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options.clone())
+            .await
+            .expect("admin");
+        let schema = format!(
+            "token_transition_{}_{}",
+            std::process::id(),
+            Utc::now().timestamp_subsec_nanos()
+        );
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+            .execute(&admin)
+            .await
+            .expect("schema");
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(options.options([("search_path", schema.as_str())]))
+            .await
+            .expect("pool");
+        for migration in [
+            include_str!("../../../../migrations/20261001220000_twitch_watchdog_incidents.sql"),
+            include_str!("../../../../migrations/20261008161000_category_watchdog_native.sql"),
+            include_str!("../../../../migrations/20261014160000_bot_token_health.sql"),
+        ] {
+            sqlx::raw_sql(migration)
+                .execute(&pool)
+                .await
+                .expect("migration");
+        }
+        let started_at = DateTime::from_timestamp(1_800_000_000, 0).expect("start");
+        if !success_before_start {
+            sqlx::query("INSERT INTO twitch_bot_token_health(last_failure_at) VALUES($1)")
+                .bind(started_at)
+                .execute(&pool)
+                .await
+                .expect("initial failure");
+        }
+        observe_bot_token(&pool, true, started_at)
+            .await
+            .expect("initial outage opens incident");
+        let success_at =
+            started_at + chrono::Duration::seconds(if success_before_start { -10 } else { 100 });
+        let next_failure_at = success_at + chrono::Duration::seconds(10);
+        sqlx::query(
+            "INSERT INTO twitch_bot_token_health(last_ok_at,last_failure_at) VALUES($1,$2)
+             ON CONFLICT(singleton) DO UPDATE SET last_ok_at=excluded.last_ok_at,last_failure_at=excluded.last_failure_at",
+        )
+        .bind(success_at)
+        .bind((!success_before_start).then_some(next_failure_at))
+        .execute(&pool)
+        .await
+        .expect("delayed health events");
+        observe_bot_token(&pool, true, started_at + chrono::Duration::seconds(120))
+            .await
+            .expect("recover despite delayed observation");
+        observe_bot_token(&pool, true, started_at + chrono::Duration::seconds(121))
+            .await
+            .expect("stable next observation");
+        let incidents: Vec<Incident> = sqlx::query_as(
+            "SELECT id,service,started_at,recovered_at FROM twitch_watchdog_incidents ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("incidents");
+        assert_eq!(incidents[0].started_at, started_at);
+        assert_eq!(incidents[0].recovered_at, Some(success_at.max(started_at)));
+        if success_before_start {
+            assert_eq!(incidents.len(), 1);
+        } else {
+            assert_eq!(incidents.len(), 2);
+            assert_eq!(incidents[1].started_at, next_failure_at);
+            assert_eq!(incidents[1].recovered_at, None);
+        }
+        pool.close().await;
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+            .execute(&admin)
+            .await
+            .expect("cleanup");
+        admin.close().await;
+    }
+
+    #[tokio::test]
+    async fn bot_token_failure_success_failure_before_observation_recovers_and_reopens() {
+        delayed_token_transition_fixture(false).await;
+    }
+
+    #[tokio::test]
+    async fn bot_token_delayed_success_clamps_recovery_to_incident_start() {
+        delayed_token_transition_fixture(true).await;
     }
 
     #[tokio::test]
