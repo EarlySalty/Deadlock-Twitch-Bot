@@ -1,6 +1,6 @@
 # Register (max 30 lines)
 
-Main 5f1dc5bd2 (+D8, D9; release building). LIVE 0a2ce1e11 (D2, D-core, O, O2, D3a, D3b, D4-D7, W1-W3; G0 reverted), --pruefen ok. Caddy dead-lock.de website splice applied (backup Caddyfile.before-dead-lock-website-20261014). #1062, #1068 closed. Reporting: directly to the user.
+Main = LIVE 5f1dc5bd2 (D2, D-core, O, O2, D3a, D3b, D4-D9, W1-W3; G0 reverted), --pruefen ok, demo EN insights verified. Caddy dead-lock.de website splice applied (backup Caddyfile.before-dead-lock-website-20261014). #1062, #1068 closed. Reporting: directly to the user.
 
 | Pkg | Agent | Worktree | Branch | HEAD | Status |
 |---|---|---|---|---|---|
