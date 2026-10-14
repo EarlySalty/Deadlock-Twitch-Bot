@@ -31,6 +31,7 @@ import {
   type TitleSuggestResult,
 } from '@/api/title';
 import { useAuthStatus } from '@/hooks/useAnalytics';
+import { useT } from '../context/LanguageContext';
 
 interface TitleGeneratorProps {
   streamer: string | null;
@@ -44,6 +45,7 @@ function ScoreBadge({ value }: { value: number }) {
 }
 
 function CopyButton({ text }: { text: string }) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
   return (
     <button
@@ -56,7 +58,7 @@ function CopyButton({ text }: { text: string }) {
       className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:bg-card-hover hover:text-white"
     >
       {copied ? <CheckCircle2 className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
-      {copied ? 'Kopiert' : 'Kopieren'}
+      {copied ? t('Kopiert') : t('Kopieren')}
     </button>
   );
 }
@@ -77,6 +79,7 @@ function Toggle({ checked, onChange, disabled = false }: { checked: boolean; onC
 }
 
 export function TitleGenerator({ streamer }: TitleGeneratorProps) {
+  const t = useT();
   const queryClient = useQueryClient();
   const { data: authStatus } = useAuthStatus();
   const canEditSettings = Boolean(authStatus?.twitchUserId && streamer === authStatus.twitchUserId);
@@ -105,8 +108,6 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
     setNeverWords((settings.never_words ?? []).join('\n'));
     setAutoSet(settings.experimental_auto_set ?? false);
   }, [settings]);
-
-
 
   const insightQuery = useQuery({
     queryKey: ['title-insights', streamer],
@@ -225,11 +226,11 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-accent">
-            <WandSparkles className="h-4 w-4" /> Titel-Studio
+            <WandSparkles className="h-4 w-4" /> {t('Titel-Studio')}
           </div>
-          <h1 className="text-2xl font-bold text-white">Titel, die nach dir klingen</h1>
+          <h1 className="text-2xl font-bold text-white">{t('Titel, die nach dir klingen')}</h1>
           <p className="mt-1 max-w-2xl text-sm text-text-secondary">
-            Deine bisherigen Titel, deine Rückmeldungen und starke Deadlock-Titel fließen zusammen. 2–3 Stichwörter helfen – ohne Eingabe wird ein sinnvoller Auto-Titel gebaut.
+            {t('Deine bisherigen Titel, deine Rückmeldungen und starke Deadlock-Titel fließen zusammen. 2–3 Stichwörter helfen – ohne Eingabe wird ein sinnvoller Auto-Titel gebaut.')}
           </p>
         </div>
       </div>
@@ -238,9 +239,9 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-sm font-semibold">
-              <Sparkles className="h-4 w-4 text-accent" /> Dein Standard-Stil
+              <Sparkles className="h-4 w-4 text-accent" /> {t('Dein Standard-Stil')}
             </div>
-            <p className="mt-1 text-xs text-text-secondary">Diese Präferenz gilt dauerhaft und steht über allgemeinen Community-Mustern.</p>
+            <p className="mt-1 text-xs text-text-secondary">{t('Diese Präferenz gilt dauerhaft und steht über allgemeinen Community-Mustern.')}</p>
           </div>
           <button
             type="button"
@@ -249,34 +250,34 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
             className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:text-white disabled:opacity-40"
           >
             {settingsMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-            Speichern
+            {t('Speichern')}
           </button>
         </div>
-        {!canEditSettings && <p className="text-xs text-text-secondary">Dauerhafte Titelwünsche kann nur der Kanalinhaber ändern.</p>}
+        {!canEditSettings && <p className="text-xs text-text-secondary">{t('Dauerhafte Titelwünsche kann nur der Kanalinhaber ändern.')}</p>}
         <textarea
           disabled={!canEditSettings}
           value={stylePreference}
           onChange={(event) => setStylePreference(event.target.value)}
           maxLength={1200}
           rows={3}
-          placeholder="z.B. trocken und direkt, gerne Wortspiele, keine Emojis, keine ALL CAPS, eher 60–90 Zeichen…"
+          placeholder={t('z.B. trocken und direkt, gerne Wortspiele, keine Emojis, keine ALL CAPS, eher 60–90 Zeichen…')}
           className="w-full resize-y rounded-xl border border-border bg-background px-3.5 py-3 text-sm leading-relaxed outline-none transition-colors placeholder:text-text-secondary/45 focus:border-primary/60"
         />
         {settings?.style_summary && (
           <div className="rounded-xl border border-border/60 bg-background/50 px-3.5 py-2.5 text-xs text-text-secondary">
-            <span className="font-semibold text-white/80">Aus deiner Historie erkannt:</span> {settings.style_summary}
+            <span className="font-semibold text-white/80">{t('Aus deiner Historie erkannt:')}</span> {settings.style_summary}
           </div>
         )}
 
         <div>
-          <div className="text-sm font-medium text-white">Das will ich nie im Titel</div>
-          <p className="mt-1 text-xs text-text-secondary">Ein Wort oder Satz je Zeile, bis zu 40 Einträge mit jeweils 60 Zeichen. Die gespeicherten Formulierungen werden aus den Vorschlägen ausgeschlossen.</p>
+          <div className="text-sm font-medium text-white">{t('Das will ich nie im Titel')}</div>
+          <p className="mt-1 text-xs text-text-secondary">{t('Ein Wort oder Satz je Zeile, bis zu 40 Einträge mit jeweils 60 Zeichen. Die gespeicherten Formulierungen werden aus den Vorschlägen ausgeschlossen.')}</p>
           <textarea
             disabled={!canEditSettings}
             value={neverWords}
             onChange={(event) => setNeverWords(event.target.value)}
             rows={3}
-            placeholder={'z.B.\nRanked Grind\ncringe\nheute wird abgeliefert'}
+            placeholder={t('z.B.\nRanked Grind\ncringe\nheute wird abgeliefert')}
             className="mt-2 w-full resize-y rounded-xl border border-border bg-background px-3.5 py-3 text-sm leading-relaxed outline-none transition-colors placeholder:text-text-secondary/45 focus:border-primary/60"
           />
         </div>
@@ -284,19 +285,19 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
         <div className="flex flex-col gap-3 rounded-xl border border-warning/20 bg-warning/5 p-3.5 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-medium text-white">
-              <Zap className="h-4 w-4 text-warning" /> Experimentell: automatisch auf Twitch setzen
+              <Zap className="h-4 w-4 text-warning" /> {t('Experimentell: automatisch auf Twitch setzen')}
             </div>
             <p className="mt-1 text-xs text-text-secondary">
-              Nach der Generierung wird der Hauptvorschlag direkt als Twitch-Titel gesetzt. Benötigt die Freigabe, deinen Twitch-Titel zu ändern.
+              {t('Nach der Generierung wird der Hauptvorschlag direkt als Twitch-Titel gesetzt. Benötigt die Freigabe, deinen Twitch-Titel zu ändern.')}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2.5">
             {settings && !settings.oauth_connected ? (
               <a href={settings.oauth_url} className="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/15">
-                Twitch verbinden <ExternalLink className="h-3.5 w-3.5" />
+                {t('Twitch verbinden')} <ExternalLink className="h-3.5 w-3.5" />
               </a>
             ) : (
-              <span className="flex items-center gap-1 text-xs text-success"><Check className="h-3.5 w-3.5" /> Schreibrecht verbunden</span>
+              <span className="flex items-center gap-1 text-xs text-success"><Check className="h-3.5 w-3.5" /> {t('Schreibrecht verbunden')}</span>
             )}
             <Toggle checked={autoSet} disabled={!canEditSettings || !settings?.oauth_connected} onChange={setAutoSet} />
           </div>
@@ -305,8 +306,8 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
 
       <div className="panel-card rounded-2xl p-5 space-y-4">
         <div>
-          <div className="flex items-center gap-2 text-sm font-semibold"><Lightbulb className="h-4 w-4 text-accent" /> Was ist heute besonders?</div>
-          <p className="mt-1 text-xs text-text-secondary">Optional. Zwei oder drei Stichwörter reichen; leer = Auto-Modus.</p>
+          <div className="flex items-center gap-2 text-sm font-semibold"><Lightbulb className="h-4 w-4 text-accent" /> {t('Was ist heute besonders?')}</div>
+          <p className="mt-1 text-xs text-text-secondary">{t('Optional. Zwei oder drei Stichwörter reichen; leer = Auto-Modus.')}</p>
         </div>
         <div className="flex flex-col gap-3 sm:flex-row">
           <input
@@ -315,7 +316,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
             onChange={(event) => setKeywords(event.target.value)}
             onKeyDown={(event) => event.key === 'Enter' && !generateMutation.isPending && generateMutation.mutate()}
             maxLength={300}
-            placeholder="z.B. Haze, Duo, Asc 4 — oder einfach leer lassen"
+            placeholder={t('z.B. Haze, Duo, Asc 4 — oder einfach leer lassen')}
             className="min-w-0 flex-1 rounded-xl border border-border bg-background px-3.5 py-2.5 text-sm outline-none transition-colors placeholder:text-text-secondary/45 focus:border-primary/60"
           />
           <button
@@ -325,23 +326,27 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
             className="flex items-center justify-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-bg transition-colors hover:bg-accent-hover disabled:opacity-40"
           >
             {generateMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            {generateMutation.isPending ? 'Denke…' : keywords.trim() ? 'Titel bauen' : 'Auto-Titel bauen'}
+            {generateMutation.isPending ? t('Denke…') : keywords.trim() ? t('Titel bauen') : t('Auto-Titel bauen')}
           </button>
         </div>
         <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary">
           <Toggle checked={includeLive} onChange={setIncludeLive} />
-          <span>Rang, gespielten Helden und gemeinsames Streamen berücksichtigen</span>
+          <span>{t('Rang, gespielten Helden und gemeinsames Streamen berücksichtigen')}</span>
         </label>
         {includeLive && result?.co_streamers && result.co_streamers.length > 0 && (
           <p className="text-xs text-text-secondary">
-            Erkannt: du streamst mit {result.co_streamers.map((login) => `@${login}`).join(' und ')}
+            {t('Erkannt: du streamst mit {names}', { names: result.co_streamers.map((login) => `@${login}`).join(` ${t('und')} `) })}
           </p>
         )}
         <AnimatePresence>
           {error && (
             <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="flex items-start gap-2 text-xs text-error">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              {isRateLimit ? `Zu viele Anfragen. Bitte ${retryAfter ?? 'kurz'} warten.` : 'Titel konnte gerade nicht generiert werden.'}
+              {isRateLimit
+                ? retryAfter == null
+                  ? t('Zu viele Anfragen. Bitte kurz warten.')
+                  : t('Zu viele Anfragen. Bitte {wait} warten.', { wait: retryAfter })
+                : t('Titel konnte gerade nicht generiert werden.')}
             </motion.div>
           )}
         </AnimatePresence>
@@ -351,11 +356,11 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
         {result && (
           <Rise className="panel-card rounded-2xl border border-accent/20 p-5 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-sm font-semibold text-accent"><Sparkles className="h-4 w-4" /> Vorschlag</div>
+              <div className="flex items-center gap-2 text-sm font-semibold text-accent"><Sparkles className="h-4 w-4" /> {t('Vorschlag')}</div>
               <div className="flex items-center gap-2 text-[11px] text-text-secondary">
-                {result.auto_mode && <span className="rounded-full border border-border px-2 py-0.5">Auto-Modus</span>}
-                {result.generated_by === 'fallback' && <span className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-warning">Ersatzvorschlag</span>}
-                {result.live_context_used && <span className="rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-success">Live-Kontext</span>}
+                {result.auto_mode && <span className="rounded-full border border-border px-2 py-0.5">{t('Auto-Modus')}</span>}
+                {result.generated_by === 'fallback' && <span className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-warning">{t('Ersatzvorschlag')}</span>}
+                {result.live_context_used && <span className="rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-success">{t('Live-Kontext')}</span>}
               </div>
             </div>
 
@@ -369,10 +374,10 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
             <div className="flex flex-wrap items-center gap-2">
               <CopyButton text={editableTitle} />
               <button type="button" onClick={() => submitFeedback('liked')} disabled={feedbackMutation.isPending} className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-colors ${feedbackState === 'liked' ? 'border-success/40 bg-success/10 text-success' : 'border-border bg-card text-text-secondary hover:text-white'}`}>
-                <ThumbsUp className="h-3.5 w-3.5" /> Passt zu mir
+                <ThumbsUp className="h-3.5 w-3.5" /> {t('Passt zu mir')}
               </button>
               <button type="button" onClick={() => submitFeedback('disliked')} disabled={feedbackMutation.isPending} className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-colors ${feedbackState === 'disliked' ? 'border-error/40 bg-error/10 text-error' : 'border-border bg-card text-text-secondary hover:text-white'}`}>
-                <ThumbsDown className="h-3.5 w-3.5" /> So nicht
+                <ThumbsDown className="h-3.5 w-3.5" /> {t('So nicht')}
               </button>
               <button
                 type="button"
@@ -381,18 +386,18 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
                 className="flex items-center gap-1.5 rounded-lg border border-danger/20 bg-danger-soft px-3 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/25 disabled:opacity-50"
               >
                 {setTitleStatus === 'loading' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : setTitleStatus === 'done' ? <CheckCircle2 className="h-3.5 w-3.5 text-success" /> : <Tv2 className="h-3.5 w-3.5" />}
-                {setTitleStatus === 'done' ? 'Auf Twitch gesetzt' : 'Auf Twitch setzen'}
+                {setTitleStatus === 'done' ? t('Auf Twitch gesetzt') : t('Auf Twitch setzen')}
               </button>
             </div>
 
             {setTitleStatus === 'scope_missing' && (
               <div className="flex flex-wrap items-center gap-2 rounded-lg border border-warning/20 bg-warning/5 px-3 py-2 text-xs text-warning">
-                <AlertCircle className="h-3.5 w-3.5" /> Schreibrecht fehlt oder muss erneuert werden.
-                <a href={result.oauth_url || settings?.oauth_url || '/twitch/raid/auth?scope_profile=title'} className="font-semibold underline">Twitch verbinden</a>
+                <AlertCircle className="h-3.5 w-3.5" /> {t('Schreibrecht fehlt oder muss erneuert werden.')}
+                <a href={result.oauth_url || settings?.oauth_url || '/twitch/raid/auth?scope_profile=title'} className="font-semibold underline">{t('Twitch verbinden')}</a>
               </div>
             )}
-            {setTitleStatus === 'error' && <p className="text-xs text-error">Twitch hat das Setzen des Titels gerade nicht bestätigt.</p>}
-            {result.auto_set_status === 'set' && <p className="text-xs text-success">Dieser Titel wurde automatisch auf Twitch übernommen.</p>}
+            {setTitleStatus === 'error' && <p className="text-xs text-error">{t('Twitch hat das Setzen des Titels gerade nicht bestätigt.')}</p>}
+            {result.auto_set_status === 'set' && <p className="text-xs text-success">{t('Dieser Titel wurde automatisch auf Twitch übernommen.')}</p>}
 
             {canEditSettings && feedbackState === 'disliked' && neverWordList(neverWords).length < 40 && editableTitle.trim() && !neverWordList(neverWords).some((entry) => entry.toLowerCase() === (neverWordList(editableTitle)[0] ?? '').toLowerCase()) && (
               <button
@@ -400,37 +405,37 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
                 onClick={() => addNeverWord(editableTitle)}
                 className="text-xs text-text-secondary underline decoration-dotted underline-offset-2 hover:text-white"
               >
-                Diese Formulierung in "Das will ich nie im Titel" übernehmen (danach speichern)
+                {t('Diese Formulierung in "Das will ich nie im Titel" übernehmen (danach speichern)')}
               </button>
             )}
 
             {canEditSettings && feedbackState === 'disliked' && neverWordList(neverWords).length >= 40 && (
-              <p className="text-xs text-text-secondary">Deine Liste enthält bereits 40 Einträge. Entferne dort einen Eintrag, bevor du eine weitere Formulierung übernimmst.</p>
+              <p className="text-xs text-text-secondary">{t('Deine Liste enthält bereits 40 Einträge. Entferne dort einen Eintrag, bevor du eine weitere Formulierung übernimmst.')}</p>
             )}
 
             {result.alternatives.length > 0 && (
               <div className="space-y-2 pt-1">
-                <p className="text-xs font-medium text-text-secondary">Andere Richtungen</p>
+                <p className="text-xs font-medium text-text-secondary">{t('Andere Richtungen')}</p>
                 {result.alternatives.map((alternative) => (
                   <div key={alternative} className="flex flex-col gap-2 rounded-xl border border-border/60 bg-background px-3.5 py-3 sm:flex-row sm:items-center sm:justify-between">
                     <span className="text-sm text-text-secondary">{alternative}</span>
-                    <button type="button" onClick={() => chooseAlternative(alternative)} className="shrink-0 rounded-lg border border-border px-2.5 py-1 text-xs text-text-secondary hover:text-white">Übernehmen</button>
+                    <button type="button" onClick={() => chooseAlternative(alternative)} className="shrink-0 rounded-lg border border-border px-2.5 py-1 text-xs text-text-secondary hover:text-white">{t('Übernehmen')}</button>
                   </div>
                 ))}
               </div>
             )}
 
-            {result.style_summary && <p className="border-t border-border/60 pt-3 text-[11px] text-text-secondary">Stilbasis: {result.style_summary}</p>}
+            {result.style_summary && <p className="border-t border-border/60 pt-3 text-[11px] text-text-secondary">{t('Stilbasis:')} {result.style_summary}</p>}
           </Rise>
         )}
       </AnimatePresence>
 
       {result && result.title_analysis.length > 0 && (
         <div className="panel-card rounded-2xl p-5 space-y-3">
-          <div className="text-sm font-semibold">Eigene Titel-Historie</div>
+          <div className="text-sm font-semibold">{t('Eigene Titel-Historie')}</div>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
-              <thead><tr className="border-b border-border text-text-secondary"><th className="py-2 pr-4 text-left font-medium">Titel</th><th className="py-2 pr-4 text-right font-medium">Ø Viewer</th><th className="py-2 text-right font-medium">relativ</th></tr></thead>
+              <thead><tr className="border-b border-border text-text-secondary"><th className="py-2 pr-4 text-left font-medium">{t('Titel')}</th><th className="py-2 pr-4 text-right font-medium">{t('Ø Viewer')}</th><th className="py-2 text-right font-medium">{t('relativ')}</th></tr></thead>
               <tbody>
                 {result.title_analysis.slice(0, 12).map((item: TitleHistoryEntry, index) => (
                   <tr key={`${item.title}-${index}`} className="border-b border-border/40">
@@ -442,15 +447,15 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
               </tbody>
             </table>
           </div>
-          <p className="text-[11px] text-text-secondary/60">Zuschauerzahlen sind nur ein Signal. Deine Rückmeldungen und deine gespeicherten Stilwünsche wiegen beim Erstellen der Titel stärker.</p>
+          <p className="text-[11px] text-text-secondary/60">{t('Zuschauerzahlen sind nur ein Signal. Deine Rückmeldungen und deine gespeicherten Stilwünsche wiegen beim Erstellen der Titel stärker.')}</p>
         </div>
       )}
 
       {insightQuery.data?.insight && (
         <div className="panel-card rounded-2xl p-5 space-y-2">
-          <div className="flex items-center gap-2 text-sm font-semibold"><Lightbulb className="h-4 w-4 text-warning" /> Titel-Insight</div>
-          {insightQuery.data.insight.strengths && <p className="text-xs text-text-secondary"><span className="font-semibold text-white/80">Stark:</span> {insightQuery.data.insight.strengths}</p>}
-          {insightQuery.data.insight.patterns && <p className="text-xs text-text-secondary"><span className="font-semibold text-white/80">Muster:</span> {insightQuery.data.insight.patterns}</p>}
+          <div className="flex items-center gap-2 text-sm font-semibold"><Lightbulb className="h-4 w-4 text-warning" /> {t('Titel-Insight')}</div>
+          {insightQuery.data.insight.strengths && <p className="text-xs text-text-secondary"><span className="font-semibold text-white/80">{t('Stark:')}</span> {insightQuery.data.insight.strengths}</p>}
+          {insightQuery.data.insight.patterns && <p className="text-xs text-text-secondary"><span className="font-semibold text-white/80">{t('Muster:')}</span> {insightQuery.data.insight.patterns}</p>}
           {insightQuery.data.insight.recommendations && <pre className="whitespace-pre-wrap font-sans text-xs leading-relaxed text-text-secondary">{insightQuery.data.insight.recommendations}</pre>}
         </div>
       )}
