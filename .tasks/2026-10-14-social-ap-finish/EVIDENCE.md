@@ -6,7 +6,7 @@
 - Edition-correct formatting checkpoint: fedc7515a, pushed.
 - Latest integrated upstream: 50125b0bb67fc2d32b440594a5cd5e95add21c4d.
 - Attributed upstream merge checkpoints: 949b94143, dd48554946fe7d1e52815081397e4054e7db9b45, and 83f2d65fb7a758bfc0365eb84898a6c3cb5c0d8c.
-- Authenticated target/resolve regression checkpoint: fc9bec76a59a89cb984f505273729e9665cdd01f, pushed and confirmed on the remote feature branch. Lifecycle corrections are awaiting their final package checks and commit.
+- Authenticated target/resolve regression checkpoint: fc9bec76a59a89cb984f505273729e9665cdd01f, pushed and confirmed on the remote feature branch. Lifecycle checkpoint a14986a24 and final partial-variant skip checkpoint 0ce78ea81 are committed and pushed; the integrated matching checks are complete below.
 
 ## Completed checks
 
@@ -39,7 +39,8 @@ The first PostgreSQL/FFmpeg run executed 35 tests: 29 passed, 6 failed. Four fai
 - Final Rust run bbcp6b9vl compiled successfully and executed 37 tests: 36 passed, 1 failed, 0 ignored, 445 filtered. The new real-executor regression reached an incomplete legacy fixture table: last_attempt_at was missing. Matched the upload-queue prerequisite columns to the incumbent real-executor fixture in autopilot_publish/tests.rs. No production query or assertion was relaxed. Corrected final checks are bscx9ik98: AP PostgreSQL/FFmpeg, authenticated routes, then Clippy. Do not duplicate the queued job.
 
 - Corrected AP run bscx9ik98 passed: 37 passed, 0 failed, 0 ignored, 445 filtered. This includes all six partial-variant executor cases, owner isolation, cleanup claims, real static FFmpeg and zero-social_editor usage. API test compilation was then terminated by signal 9, so that run did not execute API tests or Clippy. Kernel/earlyoom inspection did not establish a specific cause; no code failure or confirmed OOM is claimed. Targeted retry bzpjrwa21 runs only the interrupted API checks followed by Clippy; the passing AP suite is not repeated.
-- The dedicated standalone release clone /home/nathanael/repos/twitch-release-ap-finish-20261014 was prepared with its three locked frontend dependency installs, exit 0. It has not built or deployed AP; after main integration it must be frozen to the verified origin/main revision before its release build.
+- Targeted retry bzpjrwa21 completed with exit 0: authenticated API namespace 5 passed, 0 failed, 0 ignored, 1398 filtered, using the real composed routes and migration schema. Package Clippy then completed with exit 0 under the normal workspace policy, reporting 20 warnings outside AP-owned changes (tb-raid 1, tb-chat 1, tb-dashboard-api 18). No warning-free or strict-baseline claim is made. The passing 37-test AP suite was not repeated.
+- The dedicated standalone release clone /home/nathanael/repos/twitch-release-ap-finish-20261014 was prepared with its three locked frontend dependency installs, exit 0. It has not built or deployed AP. After main integration, check live ancestry and active release work first; build from verified origin/main only if no existing or pending release contains the AP merge.
 
 ## Gate
 
