@@ -1,0 +1,15 @@
+# Social AI finish build, common rules (2026-10-14)
+
+Repo: Deadlock-Twitch-Bot (~/repos/Deadlock-Twitch-Bot). Live release 00e750557, origin/main 437b641ad or newer.
+Spec: /home/nathanael/.worktrees/tb-social-coord/.tasks/2026-10-11-social-ai-autopilot/BRIEF.md (binding; acceptance = section 32), contracts AUFTRAG.md. Gap audit findings for your package are in your package brief.
+Rules: /home/nathanael/.claude/CLAUDE.md and /home/nathanael/Documents/claude-config/orchestrierung/ABLAUF.md (sections "Schlank arbeiten" and "Selbstständig weiterarbeiten") apply. Highlights:
+- Own worktree: `git -C ~/repos/Deadlock-Twitch-Bot worktree add -b <your-branch> ~/.worktrees/<your-name> origin/main`. Touch only your package's write paths; other packages run in parallel on other paths.
+- No code comments. Rust: no unwrap in production paths, small functions. All visible UI text in natural German with real umlauts and ß. Reuse existing components and styles (studio.css, existing socialmedia components).
+- Migrations: only new files, timestamp later than every migration on origin/main; never edit applied ones. Update the fresh schema snapshot test if one covers your tables.
+- Builds only via `cargo-slot <cargo args> --jobs 3` (see ABLAUF section "Kontingent und Wiederaufnahme"); at most one release build host-wide (cargo-slot takes the release lock). check/clippy/test go to ionos via cargo-slot. Frontend: npm build plus typecheck in bot/dashboard_v2 or bot/admin_dashboard.
+- Code search: graphify query/explain first (skill code-suche), then grep.
+- NO paid AI calls, NO real publishing, NO enabling the autopilot or changing settings on real streamer accounts. Prove AI and publishing paths with tests and fixtures only.
+- Gate: commit, then run the merge gate per skill `rolle-merge-schleuse` (`~/Documents/.claude/gpt-workers/gate_hook.py --review` in your worktree). On BLOCK fix the findings (fresh subagent per round if you can spawn one), rerun, at most 5 rounds, then report the concrete blocker.
+- After ALLOW: merge fresh origin/main into your branch, rerun affected checks, merge to main and push yourself (one git command per tool call, no && chains, no pipes). Then deploy per skill `deploy-restart-selbstdienst` (wrapper `deploy-twitch-release <full-sha>`; 8 release binaries plus 3 dist folders, memory file twitch-release-deploy-weg.md under ~/.claude/projects/-home-nathanael-Documents/memory/). If another package is deploying, wait on its lock instead of racing; if main already moved past your merge and someone deployed that, just verify live.
+- Live proof: `readlink /opt/deadlock/twitch/current`, units active, `journalctl -p err` clean since restart, new routes answer 401 (not 404) unauthenticated, new German strings present in the public bundle. UI changes: screenshots at 390 and 1440 of the dashboard preview (Moli browser only, read ~/Documents/claude-config/wissen/agent-browser.md first; never Brave), and actually look at them.
+- Then remove your worktree and branch. Final report at most 8 lines: SHA on main, gate verdict, deployed release, live proof, what is still open.
