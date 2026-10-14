@@ -1,3 +1,4 @@
+import { useLanguage } from '@/context/LanguageContext';
 import { motion } from 'framer-motion';
 import { Rise } from '../../motion/Rise';
 import { Zap } from 'lucide-react';
@@ -8,6 +9,7 @@ interface HealthScoreCardProps {
 }
 
 export function HealthScoreCard({ scores }: HealthScoreCardProps) {
+  const { t, locale } = useLanguage();
   const subScores = [
     { label: 'Reach', value: scores.reach },
     { label: 'Ret.', value: scores.retention },
@@ -26,7 +28,7 @@ export function HealthScoreCard({ scores }: HealthScoreCardProps) {
       </div>
 
       <h2 className="text-text-secondary font-semibold uppercase tracking-[0.14em] text-xs mb-4">
-        Channel Health
+        {t('Channel Health')}
       </h2>
 
       {/* Main Score */}
@@ -36,7 +38,7 @@ export function HealthScoreCard({ scores }: HealthScoreCardProps) {
           as="span"
           className="display-font text-6xl font-bold text-white"
         >
-          {scores.total}
+          {scores.total.toLocaleString(locale)}
         </Rise>
         <span className="text-xl text-primary">/100</span>
       </div>
@@ -45,14 +47,14 @@ export function HealthScoreCard({ scores }: HealthScoreCardProps) {
       <div className="mt-4 w-full grid grid-cols-3 gap-2 text-xs text-text-secondary">
         {subScores.map((sub, i) => (
           <motion.div
-            key={sub.label}
+            key={t(sub.label)}
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: Math.min(0.1 + i * 0.04, 0.24) }}
             className="bg-black/25 rounded-lg p-2 border border-border/40"
           >
-            <span className="block">{sub.label}</span>
-            <strong className="text-white text-sm">{sub.value}</strong>
+            <span className="block">{t(sub.label)}</span>
+            <strong className="text-white text-sm">{sub.value.toLocaleString(locale)}</strong>
           </motion.div>
         ))}
       </div>

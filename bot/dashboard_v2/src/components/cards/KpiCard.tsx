@@ -1,3 +1,4 @@
+import { useLanguage } from '@/context/LanguageContext';
 import { Rise } from '../../motion/Rise';
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -29,6 +30,7 @@ export function KpiCard({
   color = 'blue',
   size = 'normal',
 }: KpiCardProps) {
+  const { t, locale } = useLanguage();
   const TrendIcon = trend && trend > 0 ? TrendingUp : trend && trend < 0 ? TrendingDown : Minus;
   const trendColor =
     trend && trend > 0
@@ -54,7 +56,7 @@ export function KpiCard({
       <div className={`absolute inset-x-6 top-0 h-px bg-gradient-to-r ${topGlow[color]} via-white/20 to-transparent`} />
       <div className="flex justify-between items-start mb-2">
         <span className="text-text-secondary text-[11px] font-semibold uppercase tracking-[0.14em]">
-          {title}
+          {t(title)}
         </span>
         {Icon && (
           <div className={`p-2.5 rounded-xl ${colorClasses[color]}`}>
@@ -63,20 +65,20 @@ export function KpiCard({
         )}
       </div>
 
-      <div className="flex items-end gap-3 mt-1">
+      <div className="flex flex-wrap items-end gap-3 mt-1">
         <span className={`display-font font-bold text-white ${size === 'large' ? 'text-4xl' : 'text-3xl'}`}>
-          {value}
+          {typeof value === 'number' ? value.toLocaleString(locale) : value}
         </span>
         {trend != null && (
           <span className={`text-sm font-medium mb-1 flex items-center gap-1 ${trendColor}`}>
             <TrendIcon className="w-3 h-3" />
-            {Math.abs(trend).toFixed(1)}%
+            {Math.abs(trend).toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
           </span>
         )}
       </div>
 
       {subValue && (
-        <div className="mt-3 text-xs text-text-secondary font-medium">{subValue}</div>
+        <div className="mt-3 text-xs text-text-secondary font-medium">{t(subValue)}</div>
       )}
     </Rise>
   );
