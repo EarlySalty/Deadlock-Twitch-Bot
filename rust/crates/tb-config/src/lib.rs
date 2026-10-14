@@ -14,6 +14,7 @@ pub mod global;
 pub mod operations;
 pub mod reliability;
 pub mod runtime;
+pub mod settings_catalog;
 pub mod shared_options;
 pub mod stt;
 pub mod vod_archive;

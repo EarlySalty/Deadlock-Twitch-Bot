@@ -2,6 +2,7 @@ use crate::{
     dashboard_options::BrainClientMode,
     file::{ErrorKind, FileError, Schema, MAX_CONFIG_BYTES},
     global::Database,
+    settings_catalog::{self, CatalogError, CatalogResponse, ChangeRequest},
     BotConfigSnapshot,
 };
 use serde::{Deserialize, Deserializer, Serialize};
@@ -99,7 +100,7 @@ pub struct SavedConfig {
     pub revision: String,
 }
 
-fn revision(text: &str) -> String {
+pub(crate) fn revision(text: &str) -> String {
     Sha256::digest(text.as_bytes())
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -400,6 +401,35 @@ fn save_social_ai_at(
         Ok(())
     })?;
     Ok(inspect_social_ai_saved(&saved))
+}
+
+fn catalog_error(error: CatalogError) -> EditError {
+    match error {
+        CatalogError::StaleRevision => EditError::Conflict,
+        CatalogError::Rejected(error) => EditError::Invalid(error),
+        CatalogError::InvalidValue(path) => FileError::invalid(path).into(),
+        CatalogError::UnknownPath | CatalogError::InvalidRequest => {
+            FileError::invalid("settings_catalog").into()
+        }
+        CatalogError::InvalidDocument => FileError::new(ErrorKind::InvalidDocument).into(),
+    }
+}
+
+pub fn inspect_catalog(source: &Path) -> Result<CatalogResponse, EditError> {
+    let (_, text, _) = read_saved(source)?;
+    settings_catalog::read_catalog(&text).map_err(catalog_error)
+}
+
+pub fn save_catalog(
+    source: &Path,
+    request: &ChangeRequest,
+    check: impl FnOnce(&str) -> Result<(), EditError>,
+) -> Result<SavedConfig, EditError> {
+    valid_revision(&request.revision)?;
+    save_with(source, &request.revision, |_, document| {
+        settings_catalog::apply_to_document(document, &request.changes).map_err(catalog_error)?;
+        check(&document.to_string())
+    })
 }
 
 fn replace_value(
@@ -1260,5 +1290,39 @@ pool_max=17
         let mut value = serde_json::to_value(snapshot.settings()).unwrap();
         value.as_object_mut().unwrap().remove("social_ai");
         value
+    }
+
+    #[test]
+    fn katalog_speichert_ueber_den_geprueften_editor() {
+        let fixture = Fixture::new(CONFIG);
+        let inspection = inspect_catalog(&fixture.path()).unwrap();
+        let request: ChangeRequest = serde_json::from_value(serde_json::json!({
+            "revision": inspection.revision,
+            "changes": [{"path": "bot.brain_client.timeout_ms", "value": "9000"}]
+        }))
+        .unwrap();
+        let rejected = save_catalog(&fixture.path(), &request, |_| {
+            Err(FileError::invalid("social_ai").into())
+        });
+        assert!(matches!(rejected, Err(EditError::Invalid(_))));
+        assert_eq!(
+            load_saved(&fixture.path()).unwrap().revision,
+            inspection.revision
+        );
+        let saved = save_catalog(&fixture.path(), &request, |candidate| {
+            assert!(candidate.contains("timeout_ms=9000"));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            saved.snapshot.settings().bot.brain_client.timeout_ms,
+            Some(9000)
+        );
+        let text = fs::read_to_string(fixture.path()).unwrap();
+        assert!(text.contains("mode=\"legacy\" # Ausgangsmodus"));
+        assert!(matches!(
+            save_catalog(&fixture.path(), &request, |_| Ok(())),
+            Err(EditError::Conflict)
+        ));
     }
 }
