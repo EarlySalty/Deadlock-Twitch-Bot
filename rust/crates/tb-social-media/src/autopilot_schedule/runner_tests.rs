@@ -268,7 +268,8 @@ async fn autopilot_runner_static_local_media_and_restart_preserve_immutable_vers
         .await
         .expect("held job")
         .expect("owned job");
-    assert_eq!(held.status, "review");
+    assert_eq!(held.status, "failed");
+    assert_eq!(held.review_reasons, json!(["attempts_exhausted"]));
     let held = produced_video::list(&pool, "42", 50)
         .await
         .expect("held version");

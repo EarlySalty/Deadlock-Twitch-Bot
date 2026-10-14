@@ -178,8 +178,8 @@ async fn manual_ai_reviews_do_not_consume_the_autopilot_backlog() {
             .execute(&pool)
             .await
             .expect("manual complete");
-        sqlx::query("INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, status, expires_at)
-            VALUES ('owner', $1, $2, 'ai', 'review', clock_timestamp() + INTERVAL '7 days')")
+        sqlx::query("INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, status, file_path, duration_ms, expires_at)
+            VALUES ('owner', $1, $2, 'ai', 'review', '/fixture/manual.mp4', 1000, clock_timestamp() + INTERVAL '7 days')")
             .bind(id).bind(manual.id).execute(&pool).await.expect("manual review");
     }
     assert_eq!(
@@ -218,8 +218,8 @@ async fn changed_schedule_retimes_queued_and_overdue_videos_without_catch_up() {
         let completed = job(&pool, "owner", id, None).await;
         sqlx::query("UPDATE social_production_jobs SET status = 'completed', scheduled_at = $2 WHERE id = $1")
             .bind(completed.id).bind(utc(at)).execute(&pool).await.expect("completed reservation");
-        let video: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, status, scheduled_at)
-            VALUES ('owner', $1, $2, 'static', 'scheduled', $3) RETURNING id")
+        let video: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, status, file_path, duration_ms, scheduled_at)
+            VALUES ('owner', $1, $2, 'static', 'scheduled', '/fixture/scheduled.mp4', 1000, $3) RETURNING id")
             .bind(id).bind(completed.id).bind(utc(at)).fetch_one(&pool).await.expect("ready video");
         sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, produced_video_id, platform, scheduled_at)
             VALUES ($1, $2, 'youtube', $3)")
@@ -293,5 +293,192 @@ async fn changed_schedule_retimes_queued_and_overdue_videos_without_catch_up() {
             .await
             .expect("preserved approvals");
     assert_eq!(approvals, videos.len() as i64);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn retiming_preserves_artifacts_of_started_unfinished_jobs() {
+    for status in ["running", "queued"] {
+        let pool = pool().await;
+        save_schedule(&pool, "owner", &schedule())
+            .await
+            .expect("schedule");
+        let clip_id = clip(&pool, "owner", "interrupted", utc("2025-01-01T00:00:00Z")).await;
+        let job = job(&pool, "owner", clip_id, None).await;
+        let original = utc("2020-01-01T00:00:00Z");
+        sqlx::query("UPDATE social_production_jobs SET status = $2, mode = 'static', started_at = $3, scheduled_at = $3 WHERE id = $1")
+            .bind(job.id).bind(status).bind(original).execute(&pool).await.expect("unfinished job");
+        let video: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, status, file_path, duration_ms, scheduled_at)
+            VALUES ('owner', $1, $2, 'static', 'review', '/fixture/interrupted.mp4', 1000, $3) RETURNING id")
+            .bind(clip_id).bind(job.id).bind(original).fetch_one(&pool).await.expect("finished rendering before job completion");
+        save_schedule(
+            &pool,
+            "owner",
+            &SchedulePatch {
+                timezone: Some("UTC".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("changed schedule");
+        let slots: (Option<DateTime<Utc>>, Option<DateTime<Utc>>) = sqlx::query_as(
+            "SELECT j.scheduled_at, v.scheduled_at FROM social_production_jobs j JOIN social_produced_videos v ON v.job_id = j.id WHERE v.id = $1")
+            .bind(video).fetch_one(&pool).await.expect("consistent recovery reservations");
+        assert_eq!(slots, (Some(original), Some(original)));
+        cleanup(pool).await;
+    }
+}
+
+#[tokio::test]
+async fn skipping_releases_unpublished_review_outputs_and_preserves_other_owners() {
+    let pool = pool().await;
+    let mut fixtures = Vec::new();
+    for owner in ["owner", "other"] {
+        let clip_id = clip(
+            &pool,
+            owner,
+            "partial-variants",
+            utc("2025-01-01T00:00:00Z"),
+        )
+        .await;
+        let job = job(&pool, owner, clip_id, None).await;
+        sqlx::query("UPDATE social_production_jobs SET status = 'review', finished_at = NOW() WHERE id = $1")
+            .bind(job.id).execute(&pool).await.expect("partial production review");
+        let video: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, status, file_path, duration_ms, scheduled_at, metadata)
+            VALUES ($1, $2, $3, 'ai', 'review', '/fixture/partial.mp4', 1000, $4, jsonb_build_object('production_ai_job_id', $3::bigint)) RETURNING id")
+            .bind(owner).bind(clip_id).bind(job.id).bind(utc("2035-01-01T00:00:00Z"))
+            .fetch_one(&pool).await.expect("partial review output");
+        sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, produced_video_id, platform, status, scheduled_at) VALUES ($1, $2, 'youtube', $3, $4)")
+            .bind(clip_id).bind(video).bind(crate::autopilot_publish::queue_status::PENDING)
+            .bind(utc("2035-01-01T00:00:00Z")).execute(&pool).await.expect("pending exact-file reservation");
+        fixtures.push((job.id, video));
+    }
+    resolve_review(
+        &pool,
+        "owner",
+        fixtures[0].0,
+        ReviewDecision::Skip,
+        Some("Nicht verwenden"),
+    )
+    .await
+    .expect("atomic skip");
+    let output: (String, Option<DateTime<Utc>>) =
+        sqlx::query_as("SELECT status, scheduled_at FROM social_produced_videos WHERE id = $1")
+            .bind(fixtures[0].1)
+            .fetch_one(&pool)
+            .await
+            .expect("discarded output");
+    assert_eq!(output, ("review".into(), None));
+    let uploads: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE produced_video_id = $1",
+    )
+    .bind(fixtures[0].1)
+    .fetch_one(&pool)
+    .await
+    .expect("released reservation");
+    assert_eq!(uploads, 0);
+    let other: (String, Option<DateTime<Utc>>) =
+        sqlx::query_as("SELECT status, scheduled_at FROM social_produced_videos WHERE id = $1")
+            .bind(fixtures[1].1)
+            .fetch_one(&pool)
+            .await
+            .expect("other owner unchanged");
+    assert_eq!(other, ("review".into(), Some(utc("2035-01-01T00:00:00Z"))));
+    let backlog = review_count_on(&mut pool.acquire().await.expect("connection"), "owner")
+        .await
+        .expect("review backlog");
+    assert_eq!(backlog, 0);
+    let expiry = crate::produced_video::claim_expired_ai_artifacts(&pool, "owner", fixtures[0].1)
+        .await
+        .expect("existing AI artifact expiry consumer");
+    assert_eq!(expiry.as_deref(), Some("expired"));
+    let skipped = production_jobs::get(&pool, "owner", fixtures[0].0)
+        .await
+        .expect("audit")
+        .expect("job");
+    assert_eq!(
+        skipped.metadata["review_decision"]["note"],
+        "Nicht verwenden"
+    );
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn skipping_static_reviews_preserves_the_existing_expiry_cleanup_path() {
+    let pool = pool().await;
+    let clip_id = clip(
+        &pool,
+        "owner",
+        "skipped-static",
+        utc("2025-01-01T00:00:00Z"),
+    )
+    .await;
+    let job = job(&pool, "owner", clip_id, None).await;
+    sqlx::query(
+        "UPDATE social_production_jobs SET status = 'review', finished_at = NOW() WHERE id = $1",
+    )
+    .bind(job.id)
+    .execute(&pool)
+    .await
+    .expect("static review job");
+    let video: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id, clip_id, job_id, mode, status, file_path, duration_ms, expires_at)
+        VALUES ('owner', $1, $2, 'static', 'review', '/fixture/skipped.mp4', 1000, clock_timestamp() + INTERVAL '7 days') RETURNING id")
+        .bind(clip_id).bind(job.id).fetch_one(&pool).await.expect("static artifact");
+    resolve_review(&pool, "owner", job.id, ReviewDecision::Skip, None)
+        .await
+        .expect("skip static output");
+    let cleanup_due: bool = sqlx::query_scalar(
+        "SELECT status = 'review' AND expires_at <= clock_timestamp()
+        AND publication_executed_at IS NULL AND scheduled_at IS NULL
+        AND NOT (metadata ? 'manual_ai_job_id') AND NOT (metadata ? 'production_ai_job_id')
+        FROM social_produced_videos WHERE id = $1",
+    )
+    .bind(video)
+    .fetch_one(&pool)
+    .await
+    .expect("existing publisher expiry predicate");
+    assert!(cleanup_due);
+    assert_eq!(
+        review_count_on(&mut pool.acquire().await.expect("connection"), "owner")
+            .await
+            .expect("backlog released"),
+        0
+    );
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn explicit_retry_resets_unfinished_ai_attempts_without_losing_checkpoints() {
+    let pool = pool().await;
+    let clip_id = clip(
+        &pool,
+        "owner",
+        "exhausted-stage",
+        utc("2025-01-01T00:00:00Z"),
+    )
+    .await;
+    let job = job(&pool, "owner", clip_id, None).await;
+    let checkpoints = json!({"preparing":{"stage":"preparing","fixture":"preserved"}});
+    let metadata = json!({"ai_editor":{"checkpoints":checkpoints,"attempts":{"preparing":1,"transcribing":3,"rendering":3}},
+        "retry_after":"2035-01-01T00:00:00Z","static":{"stale":true},"retained":"audit"});
+    sqlx::query("UPDATE social_production_jobs SET status = 'review', attempts = 3, finished_at = NOW(), metadata = $2 WHERE id = $1")
+        .bind(job.id).bind(metadata).execute(&pool).await.expect("exhausted stage");
+    resolve_review(&pool, "owner", job.id, ReviewDecision::Process, None)
+        .await
+        .expect("explicit retry");
+    let resumed = production_jobs::get(&pool, "owner", job.id)
+        .await
+        .expect("persisted retry")
+        .expect("owned job");
+    assert_eq!(resumed.attempts, 0);
+    assert_eq!(resumed.metadata["ai_editor"]["checkpoints"], checkpoints);
+    assert_eq!(
+        resumed.metadata["ai_editor"]["attempts"],
+        json!({"preparing":1})
+    );
+    assert_eq!(resumed.metadata["retained"], "audit");
+    assert!(resumed.metadata.get("retry_after").is_none());
+    assert!(resumed.metadata.get("static").is_none());
+    assert_eq!(resumed.status, "queued");
     cleanup(pool).await;
 }

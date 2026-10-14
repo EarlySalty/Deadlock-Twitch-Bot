@@ -228,9 +228,16 @@ async fn one_failed_or_review_job_does_not_block_the_next_clip_in_both_publish_m
         for failure in ["resource", "retry_exhausted", "recovery_exhausted"] {
             let pool = pool().await;
             choose_year(&pool, 2025, ClipSort::OldestFirst).await;
-            save_schedule(&pool, "owner", &schedule())
-                .await
-                .expect("enabled schedule");
+            save_schedule(
+                &pool,
+                "owner",
+                &SchedulePatch {
+                    lead_time_hours: Some(720),
+                    ..schedule()
+                },
+            )
+            .await
+            .expect("enabled schedule with an eligible next weekly slot");
             if full_auto {
                 let mut settings = autopilot_settings::load(&pool, "owner")
                     .await
@@ -286,7 +293,11 @@ async fn one_failed_or_review_job_does_not_block_the_next_clip_in_both_publish_m
                 "failed"
             };
             assert_eq!(ended.status, expected);
-            let report = plan_owner(&pool, "owner", utc("2026-10-11T18:00:00Z"))
+            let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+                .fetch_one(&pool)
+                .await
+                .expect("claim clock");
+            let report = plan_owner(&pool, "owner", now + Duration::minutes(2))
                 .await
                 .expect("planning continues");
             assert_ne!(report.production_hold, Some(ProductionHold::ReviewBacklog));

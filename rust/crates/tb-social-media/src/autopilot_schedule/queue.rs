@@ -157,9 +157,9 @@ async fn require_review(
     connection: &mut PgConnection,
     owner: &str,
     id: i64,
-) -> Result<serde_json::Value, ScheduleError> {
-    let state: Option<(String, String)> = sqlx::query_as(
-        "SELECT status, review_reasons::text FROM social_production_jobs
+) -> Result<(serde_json::Value, serde_json::Value), ScheduleError> {
+    let state: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT status, review_reasons::text, metadata::text FROM social_production_jobs
         WHERE id = $1 AND twitch_user_id = $2 FOR UPDATE",
     )
     .bind(id)
@@ -168,7 +168,10 @@ async fn require_review(
     .await?;
     match state {
         None => Err(ScheduleError::NotFound),
-        Some((status, reasons)) if status == "review" => Ok(serde_json::from_str(&reasons)?),
+        Some((status, reasons, metadata)) if status == "review" => Ok((
+            serde_json::from_str(&reasons)?,
+            serde_json::from_str(&metadata)?,
+        )),
         Some(_) => Err(ScheduleError::NotInReview),
     }
 }
@@ -181,6 +184,54 @@ fn normalized_note(note: Option<&str>) -> Result<Option<String>, ScheduleError> 
         ));
     }
     Ok(note.map(str::to_owned))
+}
+
+async fn discard_review_outputs_on(
+    connection: &mut PgConnection,
+    owner: &str,
+    id: i64,
+) -> Result<(), ScheduleError> {
+    let videos: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM social_produced_videos WHERE job_id = $1 AND twitch_user_id = $2
+        AND status IN ('rendering', 'review') AND publication_executed_at IS NULL FOR UPDATE",
+    )
+    .bind(id)
+    .bind(owner)
+    .fetch_all(&mut *connection)
+    .await?;
+    for video in videos {
+        crate::autopilot_publish::release_slot(connection, video).await?;
+        sqlx::query(
+            "UPDATE social_produced_videos SET expires_at = clock_timestamp(),
+            status = CASE WHEN mode = 'ai' OR status = 'review' THEN status ELSE 'rejected' END
+            WHERE id = $1",
+        )
+        .bind(video)
+        .execute(&mut *connection)
+        .await?;
+    }
+    Ok(())
+}
+
+fn retry_metadata(mut metadata: serde_json::Value) -> serde_json::Value {
+    if let Some(object) = metadata.as_object_mut() {
+        object.remove("retry_after");
+        object.remove("static");
+    }
+    if let Some(editor) = metadata.get_mut("ai_editor") {
+        let completed: HashSet<String> = editor
+            .get("checkpoints")
+            .and_then(serde_json::Value::as_object)
+            .map(|checkpoints| checkpoints.keys().cloned().collect())
+            .unwrap_or_default();
+        if let Some(attempts) = editor
+            .get_mut("attempts")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            attempts.retain(|stage, _| completed.contains(stage));
+        }
+    }
+    metadata
 }
 
 async fn skip_on(
@@ -200,6 +251,7 @@ async fn skip_on(
     .bind(serde_json::to_string(decision)?)
     .execute(&mut *connection)
     .await?;
+    discard_review_outputs_on(connection, owner, id).await?;
     clear_stale_slots_on(connection, owner, id).await
 }
 
@@ -208,6 +260,7 @@ async fn process_on(
     owner: &str,
     id: i64,
     decision: &serde_json::Value,
+    metadata: serde_json::Value,
 ) -> Result<(), ScheduleError> {
     let produced: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM social_produced_videos WHERE job_id = $1
@@ -227,12 +280,13 @@ async fn process_on(
         mode = NULL, started_at = NULL, finished_at = NULL, last_error = NULL,
         review_reasons = '[]'::jsonb, scheduled_at = CASE WHEN source = 'autopilot' THEN NULL ELSE scheduled_at END,
         queue_order = (SELECT COALESCE(MAX(queue_order), 0) + 1 FROM social_production_jobs),
-        metadata = (metadata - 'retry_after' - 'static') || jsonb_build_object('review_decision', $3::text::jsonb)
+        metadata = $4::text::jsonb || jsonb_build_object('review_decision', $3::text::jsonb)
         WHERE id = $1 AND twitch_user_id = $2",
     )
     .bind(id)
     .bind(owner)
     .bind(serde_json::to_string(decision)?)
+    .bind(serde_json::to_string(&retry_metadata(metadata))?)
     .execute(&mut *connection)
     .await?;
     let mut ids = vec![id];
@@ -256,14 +310,14 @@ pub async fn resolve_review(
     let note = normalized_note(note)?;
     let mut tx = pool.begin().await?;
     autopilot_settings::lock_owner(&mut tx, owner).await?;
-    let reasons = require_review(&mut tx, owner, id).await?;
+    let (reasons, metadata) = require_review(&mut tx, owner, id).await?;
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut *tx)
         .await?;
     let decision = json!({"action": action, "note": note, "reasons": reasons, "decided_at": now});
     match action {
         ReviewDecision::Skip => skip_on(&mut tx, owner, id, &decision).await?,
-        ReviewDecision::Process => process_on(&mut tx, owner, id, &decision).await?,
+        ReviewDecision::Process => process_on(&mut tx, owner, id, &decision, metadata).await?,
     }
     tx.commit().await?;
     Ok(())

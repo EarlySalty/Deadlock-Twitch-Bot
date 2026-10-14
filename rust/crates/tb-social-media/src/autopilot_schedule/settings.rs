@@ -167,9 +167,13 @@ async fn stale_videos_on(
     now: DateTime<Utc>,
 ) -> Result<Vec<ScheduledVideo>, ScheduleError> {
     let videos: Vec<ScheduledVideo> = sqlx::query_as(
-        "SELECT id, job_id, scheduled_at FROM social_produced_videos
-        WHERE twitch_user_id = $1 AND scheduled_at IS NOT NULL AND publication_executed_at IS NULL
-        AND status IN ('review', 'approved', 'scheduled') ORDER BY scheduled_at, id FOR UPDATE",
+        "SELECT v.id, v.job_id, v.scheduled_at FROM social_produced_videos v
+        WHERE v.twitch_user_id = $1 AND v.scheduled_at IS NOT NULL AND v.publication_executed_at IS NULL
+        AND v.status IN ('review', 'approved', 'scheduled')
+        AND NOT EXISTS (SELECT 1 FROM social_production_jobs j WHERE j.id = v.job_id
+            AND j.twitch_user_id = v.twitch_user_id AND j.status IN ('queued', 'running')
+            AND j.started_at IS NOT NULL AND j.finished_at IS NULL)
+        ORDER BY v.scheduled_at, v.id FOR UPDATE OF v",
     )
     .bind(owner)
     .fetch_all(connection)
