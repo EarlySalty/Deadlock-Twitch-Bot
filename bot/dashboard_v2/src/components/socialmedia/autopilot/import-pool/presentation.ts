@@ -1,4 +1,5 @@
 import { ApiHttpError } from "@/api/core";
+import { translate } from "@/i18n/dictionary";
 import type {
   ClipDateFilter,
   ClipSort,
@@ -121,20 +122,24 @@ export function samePreferences(
   );
 }
 
-export function filterDescription(filter: ClipDateFilter): string {
+export function filterDescription(
+  filter: ClipDateFilter,
+  t: (text: string, params?: Record<string, string | number>) => string = (text, params) =>
+    translate('de', text, params),
+): string {
   switch (filter.kind) {
     case "all":
-      return "Alle verfügbaren historischen Clips";
+      return t("Alle verfügbaren historischen Clips");
     case "year":
-      return `Gesamtes Jahr ${filter.year}`;
+      return t("Gesamtes Jahr {year}", { year: filter.year });
     case "quarter":
-      return `Quartal ${filter.quarter} im Jahr ${filter.year}`;
+      return t("Quartal {quarter} im Jahr {year}", { quarter: filter.quarter, year: filter.year });
     case "range":
-      return `${filter.start} bis ${filter.end}, einschließlich beider Tage`;
+      return t("{start} bis {end}, einschließlich beider Tage", { start: filter.start, end: filter.end });
     case "before":
-      return `Vor dem ${filter.date}, ohne diesen Tag`;
+      return t("Vor dem {date}, ohne diesen Tag", { date: filter.date });
     case "after":
-      return `Nach dem ${filter.date}, ab dem folgenden Tag`;
+      return t("Nach dem {date}, ab dem folgenden Tag", { date: filter.date });
   }
 }
 
@@ -259,9 +264,9 @@ export function clipDuration(seconds: number): string {
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
 }
 
-export function localTimestamp(value: string, timezone: string): string {
+export function localTimestamp(value: string, timezone: string, locale = "de-DE"): string {
   try {
-    return new Intl.DateTimeFormat("de-DE", {
+    return new Intl.DateTimeFormat(locale, {
       dateStyle: "medium",
       timeStyle: "short",
       timeZone: timezone,

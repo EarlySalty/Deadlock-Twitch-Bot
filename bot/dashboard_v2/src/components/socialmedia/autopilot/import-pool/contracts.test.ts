@@ -17,7 +17,43 @@ const {
   samePreferences,
   selectionAllowed,
   sourceMetadata,
+  filterDescription,
+  localTimestamp,
 } = await import("./presentation");
+const { dictionaryFor, translate } = await import('@/i18n/dictionary');
+
+test('filter descriptions translate stable keys with intact parameters for all six filters', () => {
+  const filters: ClipDateFilter[] = [
+    { kind: 'all' },
+    { kind: 'year', year: 2025 },
+    { kind: 'quarter', year: 2025, quarter: 4 },
+    { kind: 'range', start: '2025-03-30', end: '2025-04-01' },
+    { kind: 'before', date: '2025-03-30' },
+    { kind: 'after', date: '2025-03-30' },
+  ];
+  for (const filter of filters) {
+    let calls = 0;
+    const en = filterDescription(filter, (key, params) => {
+      calls += 1;
+      assert.ok(Object.hasOwn(dictionaryFor('en'), key));
+      for (const value of Object.values(params ?? {})) assert.ok(translate('en', key, params).includes(String(value)));
+      return translate('en', key, params);
+    });
+    assert.equal(calls, 1);
+    assert.notEqual(en, filterDescription(filter));
+    assert.doesNotMatch(en, /\{\w+\}/);
+    assert.equal(filterDescription(filter, (key, params) => translate('de', key, params)), filterDescription(filter));
+  }
+});
+
+test('import timestamps use the display locale without changing the stored timezone', () => {
+  const value = '2025-03-30T10:15:00Z';
+  const timezone = 'Europe/Berlin';
+  for (const locale of ['de-DE', 'en-US']) {
+    assert.equal(localTimestamp(value, timezone, locale), new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', timeZone: timezone }).format(new Date(value)));
+  }
+  assert.notEqual(localTimestamp(value, timezone, 'en-US'), localTimestamp(value, timezone, 'de-DE'));
+});
 
 const preferences: PoolPreferences = {
   clip_date_filter: { kind: "all" },

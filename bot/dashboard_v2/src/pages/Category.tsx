@@ -11,6 +11,7 @@ import { useCategoryActivitySeries } from '@/hooks/useAnalytics';
 import { CategoryTimingsChart } from '@/components/charts/CategoryTimingsChart';
 import { PlanGateCard } from '@/components/cards/PlanGateCard';
 import type { TimeRange, TabId } from '@/types/analytics';
+import { useLanguage } from '@/context/LanguageContext';
 
 interface CategoryProps {
   streamer: string | null;
@@ -27,6 +28,7 @@ type TierFilter = 'all' | 'peer';
 const ITEMS_PER_PAGE = 50;
 
 export function Category({ streamer, days, onStreamerSelect, onNavigate }: CategoryProps) {
+  const { t, locale } = useLanguage();
   const [search, setSearch] = useState('');
   const [partnerFilter, setPartnerFilter] = useState<PartnerFilter>('all');
   const [tierFilter, setTierFilter] = useState<TierFilter>('all');
@@ -34,12 +36,10 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [page, setPage] = useState(0);
   const [activeView] = useState<'category' | 'tracked'>('category');
-  // When true: hide streamers with external reach (>100 Ø-Viewer) from the overview
   const [excludeExternal, setExcludeExternal] = useState(false);
 
   const { data: activitySeries } = useCategoryActivitySeries(days);
 
-  // Fetch streamer's tier for peer-group filtering
   const { data: streamerLeaderboard } = useQuery({
     queryKey: ['category-leaderboard-streamer-tier', streamer, days],
     queryFn: () => fetchCategoryLeaderboard(streamer, days, 5, 'avg', false),
@@ -89,15 +89,12 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
   const filtered = useMemo(() => {
     let list = [...rawEntries];
 
-    // Partner filter
     if (partnerFilter === 'partner') list = list.filter(e => e.isPartner);
     if (partnerFilter === 'community') list = list.filter(e => !e.isPartner);
 
-    // Search
     const q = search.trim().toLowerCase();
     if (q) list = list.filter(e => e.streamer.toLowerCase().includes(q));
 
-    // Sort
     list.sort((a, b) => {
       let va: number, vb: number;
       if (sortKey === 'avgViewers') { va = a.avgViewers; vb = b.avgViewers; }
@@ -146,41 +143,39 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
     onNavigate('overview');
   }
 
-  // Summary stats
   const avgViewersAll = rawEntries.length
     ? rawEntries.reduce((s, e) => s + e.avgViewers, 0) / rawEntries.length
     : 0;
   const top1 = rawEntries[0];
+  const [hintBefore, hintAfter] = t('Klick auf {icon} öffnet die vollständige Analyse des Streamers.').split('{icon}');
 
   return (
     <div className="space-y-6">
-      {/* Summary Row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <SummaryCard
-          label="Streamer gesamt"
-          value={totalStreamers.toLocaleString('de-DE')}
+          label={t('Streamer gesamt')}
+          value={totalStreamers.toLocaleString(locale)}
           icon={<Users className="w-4 h-4 text-primary" />}
         />
         <SummaryCard
-          label="Partner (Tracked)"
-          value={partnerCount.toLocaleString('de-DE')}
+          label={t('Partner (Tracked)')}
+          value={partnerCount.toLocaleString(locale)}
           icon={<Star className="w-4 h-4 text-accent" />}
         />
         <SummaryCard
-          label="Kategorie Ø Viewer"
-          value={avgViewersAll.toLocaleString('de-DE', { maximumFractionDigits: 0 })}
+          label={t('Kategorie Ø Viewer')}
+          value={avgViewersAll.toLocaleString(locale, { maximumFractionDigits: 0 })}
           icon={<TrendingUp className="w-4 h-4 text-success" />}
         />
         <SummaryCard
-          label="Platz #1"
+          label={t('Platz #1')}
           value={top1?.streamer ?? '-'}
-          sub={top1 ? `${top1.avgViewers.toLocaleString('de-DE', { maximumFractionDigits: 0 })} Ø` : undefined}
+          sub={top1 ? t('{value} Ø', { value: top1.avgViewers.toLocaleString(locale, { maximumFractionDigits: 0 }) }) : undefined}
           icon={<Crown className="w-4 h-4 text-primary" />}
         />
       </div>
 
-      {/* Timings Charts */}
-      <PlanGateCard featureId="category_timings" title="Kategorie-Timings">
+      <PlanGateCard featureId="category_timings" title={t('Kategorie-Timings')}>
         {activitySeries && (
           <Rise
             className="bg-card border border-border rounded-xl p-5"
@@ -190,51 +185,45 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
         )}
       </PlanGateCard>
 
-      {/* Top Partner Streamer */}
       {!loadingCat && topPartners.length > 0 && (
         <Rise
           className="bg-card border border-border rounded-xl overflow-hidden"
         >
           <div className="px-5 py-3 border-b border-border bg-background/30 flex items-center gap-2">
             <Star className="w-4 h-4 text-accent" />
-            <h3 className="font-semibold text-white text-sm">Top Partner Streamer</h3>
-            <span className="text-xs text-text-secondary ml-auto">Top {topPartners.length}</span>
+            <h3 className="font-semibold text-white text-sm">{t('Top Partner Streamer')}</h3>
+            <span className="text-xs text-text-secondary ml-auto">{t('Top {count}', { count: topPartners.length })}</span>
           </div>
           <TopStreamerTable entries={topPartners} selected={streamer} onSelect={handleSelect} />
         </Rise>
       )}
 
-      {/* Top Deadlock Streamer (Kategorie gesamt) */}
       {!loadingCat && topAll.length > 0 && (
         <Rise
           className="bg-card border border-border rounded-xl overflow-hidden"
         >
           <div className="px-5 py-3 border-b border-border bg-background/30 flex items-center gap-2">
             <TrendingUp className="w-4 h-4 text-success" />
-            <h3 className="font-semibold text-white text-sm">Top Deadlock Streamer (Kategorie gesamt)</h3>
-            <span className="text-xs text-text-secondary ml-auto">Top {topAll.length}</span>
+            <h3 className="font-semibold text-white text-sm">{t('Top Deadlock Streamer (Kategorie gesamt)')}</h3>
+            <span className="text-xs text-text-secondary ml-auto">{t('Top {count}', { count: topAll.length })}</span>
           </div>
           <TopStreamerTable entries={topAll} selected={streamer} onSelect={handleSelect} />
         </Rise>
       )}
 
-      {/* Controls */}
       <div className="bg-card border border-border rounded-xl p-4 space-y-3">
-        {/* Search + Filter row */}
         <div className="flex flex-wrap gap-3 items-center">
-          {/* Search */}
           <div className="relative flex-1 min-w-[200px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-secondary" />
             <input
               type="text"
-              placeholder="Streamer suchen…"
+              placeholder={t('Streamer suchen…')}
               value={search}
               onChange={e => { setSearch(e.target.value); setPage(0); }}
               className="w-full pl-9 pr-4 py-2 bg-background border border-border rounded-lg text-white text-sm placeholder:text-text-secondary focus:outline-none focus:border-accent"
             />
           </div>
 
-          {/* Partner filter */}
           <div className="flex items-center gap-1 bg-background border border-border rounded-lg p-1">
             <Filter className="w-3.5 h-3.5 text-text-secondary ml-1" />
             {(['all', 'partner', 'community'] as PartnerFilter[]).map(f => (
@@ -247,15 +236,14 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
                     : 'text-text-secondary hover:text-white'
                 }`}
               >
-                {f === 'all' ? 'Alle' : f === 'partner' ? 'Partner' : 'Community'}
+                {f === 'all' ? t('Alle') : f === 'partner' ? t('Partner') : t('Community')}
               </button>
             ))}
           </div>
 
-          {/* Tier filter (peer group) */}
           {streamer && yourTier && (
             <div className="flex items-center gap-1 bg-background border border-border rounded-lg p-1">
-              {([['all', 'Alle Streamer'], ['peer', 'Meine Peer-Group']] as const).map(([key, label]) => (
+              {([['all', t('Alle Streamer')], ['peer', t('Meine Peer-Group')]] as const).map(([key, label]) => (
                 <button
                   key={key}
                   onClick={() => { setTierFilter(key); setPage(0); }}
@@ -271,10 +259,9 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
             </div>
           )}
 
-          {/* External-reach filter */}
           <button
             onClick={() => { setExcludeExternal(e => !e); setPage(0); }}
-            title="Streamer mit externer Reichweite (Ø > 100 Viewer) ausblenden"
+            title={t('Streamer mit externer Reichweite (Ø > 100 Viewer) ausblenden')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
               excludeExternal
                 ? 'bg-accent/15 text-accent border-accent/30'
@@ -282,19 +269,17 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
             }`}
           >
             <Filter className="w-3 h-3" />
-            Nur organisch
+            {t('Nur organisch')}
           </button>
         </div>
 
-        {/* Result count */}
         <div className="text-xs text-text-secondary">
-          {filtered.length} von {rawEntries.length} Streamern
-          {tierFilter === 'peer' && yourTier && ` (Peer-Group: ${yourTier})`}
-          {search && ` – Filter: "${search}"`}
+          {t('{shown} von {total} Streamern', { shown: filtered.length, total: rawEntries.length })}
+          {tierFilter === 'peer' && yourTier && ` ${t('(Peer-Group: {tier})', { tier: yourTier })}`}
+          {search && ` ${t('– Filter: "{search}"', { search })}`}
         </div>
       </div>
 
-      {/* Table */}
       <div className="bg-card border border-border rounded-xl overflow-hidden">
         {isLoading ? (
           <div className="flex items-center justify-center h-48">
@@ -314,7 +299,7 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
                     <th className="text-left px-4 py-3 text-text-secondary font-medium">Streamer</th>
                     <th className="text-right px-4 py-3 text-text-secondary font-medium">
                       <button className="flex items-center gap-1 ml-auto hover:text-white transition-colors" onClick={() => toggleSort('avgViewers')}>
-                        Ø Viewer <SortIcon k="avgViewers" />
+                        {t('Ø Viewer')} <SortIcon k="avgViewers" />
                       </button>
                     </th>
                     <th className="text-right px-4 py-3 text-text-secondary font-medium">
@@ -330,7 +315,7 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
                   {paginated.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="text-center py-12 text-text-secondary">
-                        Keine Streamer gefunden.
+                        {t('Keine Streamer gefunden.')}
                       </td>
                     </tr>
                   ) : (
@@ -350,53 +335,47 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
                               : 'hover:bg-background/60'
                           }`}
                         >
-                          {/* Rank */}
                           <td className="px-4 py-3">
                             <RankBadge rank={globalRank} />
                           </td>
 
-                          {/* Name */}
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-2">
                               <span className={`font-medium ${isSelected ? 'text-accent' : 'text-white'}`}>
                                 {entry.streamer}
                               </span>
                               {isSelected && (
-                                <span className="text-xs px-1.5 py-0.5 bg-accent/20 text-accent rounded">Ausgewählt</span>
+                                <span className="text-xs px-1.5 py-0.5 bg-accent/20 text-accent rounded">{t('Ausgewählt')}</span>
                               )}
                             </div>
                           </td>
 
-                          {/* Avg Viewers */}
                           <td className="px-4 py-3 text-right">
                             <span className="font-bold text-white">
-                              {entry.avgViewers.toLocaleString('de-DE', { maximumFractionDigits: 0 })}
+                              {entry.avgViewers.toLocaleString(locale, { maximumFractionDigits: 0 })}
                             </span>
                           </td>
 
-                          {/* Peak */}
                           <td className="px-4 py-3 text-right text-text-secondary">
-                            {entry.peakViewers.toLocaleString('de-DE', { maximumFractionDigits: 0 })}
+                            {entry.peakViewers.toLocaleString(locale, { maximumFractionDigits: 0 })}
                           </td>
 
-                          {/* Status */}
                           <td className="px-4 py-3 text-center">
                             {entry.isPartner ? (
                               <span className="text-xs px-2 py-0.5 bg-accent/20 text-accent rounded-full">
-                                Partner
+                                {t('Partner')}
                               </span>
                             ) : (
                               <span className="text-xs px-2 py-0.5 bg-border/50 text-text-secondary rounded-full">
-                                Community
+                                {t('Community')}
                               </span>
                             )}
                           </td>
 
-                          {/* Action */}
                           <td className="px-4 py-3 text-center">
                             <button
                               onClick={() => handleSelect(entry.streamer)}
-                              title="Analyse öffnen"
+                              title={t('Analyse öffnen')}
                               className="p-1.5 rounded-lg text-text-secondary hover:text-accent hover:bg-accent/10 transition-colors"
                             >
                               <ExternalLink className="w-3.5 h-3.5" />
@@ -410,11 +389,10 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
               </table>
             </div>
 
-            {/* Pagination */}
             {totalPages > 1 && (
               <div className="flex items-center justify-between px-4 py-3 border-t border-border bg-background/30">
                 <span className="text-xs text-text-secondary">
-                  Seite {page + 1} von {totalPages} ({filtered.length} Einträge)
+                  {t('Seite {page} von {pages} ({count} Einträge)', { page: page + 1, pages: totalPages, count: filtered.length })}
                 </span>
                 <div className="flex gap-2">
                   <button
@@ -422,14 +400,14 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
                     onClick={() => setPage(p => p - 1)}
                     className="px-3 py-1.5 rounded-lg text-xs bg-background border border-border text-white disabled:opacity-40 hover:border-accent transition-colors"
                   >
-                    Zurück
+                    {t('Zurück')}
                   </button>
                   <button
                     disabled={page >= totalPages - 1}
                     onClick={() => setPage(p => p + 1)}
                     className="px-3 py-1.5 rounded-lg text-xs bg-background border border-border text-white disabled:opacity-40 hover:border-accent transition-colors"
                   >
-                    Weiter
+                    {t('Weiter')}
                   </button>
                 </div>
               </div>
@@ -438,9 +416,8 @@ export function Category({ streamer, days, onStreamerSelect, onNavigate }: Categ
         )}
       </div>
 
-      {/* Hint */}
       <p className="text-xs text-text-secondary text-center">
-        Klick auf <ExternalLink className="w-3 h-3 inline" /> öffnet die vollständige Analyse des Streamers.
+        {hintBefore}<ExternalLink className="w-3 h-3 inline" />{hintAfter}
       </p>
     </div>
   );
@@ -468,6 +445,7 @@ function TopStreamerTable({
   selected: string | null;
   onSelect: (login: string) => void;
 }) {
+  const { t, locale } = useLanguage();
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -475,7 +453,7 @@ function TopStreamerTable({
           <tr className="border-b border-border bg-background/20">
             <th className="text-left px-4 py-2 text-text-secondary font-medium w-12 text-xs">#</th>
             <th className="text-left px-4 py-2 text-text-secondary font-medium text-xs">Streamer</th>
-            <th className="text-right px-4 py-2 text-text-secondary font-medium text-xs">Ø Viewer</th>
+            <th className="text-right px-4 py-2 text-text-secondary font-medium text-xs">{t('Ø Viewer')}</th>
             <th className="text-right px-4 py-2 text-text-secondary font-medium text-xs">Peak</th>
             <th className="px-4 py-2 w-10" />
           </tr>
@@ -502,15 +480,15 @@ function TopStreamerTable({
                   )}
                 </td>
                 <td className="px-4 py-2 text-right font-bold text-white text-sm">
-                  {entry.avgViewers.toLocaleString('de-DE', { maximumFractionDigits: 0 })}
+                  {entry.avgViewers.toLocaleString(locale, { maximumFractionDigits: 0 })}
                 </td>
                 <td className="px-4 py-2 text-right text-text-secondary text-sm">
-                  {entry.peakViewers.toLocaleString('de-DE', { maximumFractionDigits: 0 })}
+                  {entry.peakViewers.toLocaleString(locale, { maximumFractionDigits: 0 })}
                 </td>
                 <td className="px-4 py-2 text-center">
                   <button
                     onClick={() => onSelect(entry.streamer)}
-                    title="Analyse öffnen"
+                    title={t('Analyse öffnen')}
                     className="p-1.5 rounded-lg text-text-secondary hover:text-accent hover:bg-accent/10 transition-colors"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />

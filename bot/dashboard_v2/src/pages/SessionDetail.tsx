@@ -22,7 +22,8 @@ import { useSessionDetail, useSessionEvents } from '@/hooks/useAnalytics';
 import { SessionEventTimeline } from '@/components/SessionEventTimeline';
 import { NoDataCard } from '@/components/cards/NoDataCard';
 import { ViewerTimeline } from '@/pages/ViewerTimeline';
-import { formatNumber, formatPercent, formatDuration, formatDateFull } from '@/utils/formatters';
+import { formatPercent, formatDuration } from '@/utils/formatters';
+import { useLanguage, useT } from '@/context/LanguageContext';
 import type { SessionEvent } from '@/types/analytics';
 
 interface SessionDetailProps {
@@ -31,7 +32,6 @@ interface SessionDetailProps {
   onBack: () => void;
 }
 
-// KPI tile
 function KpiTile({
   label,
   value,
@@ -60,10 +60,10 @@ function retentionColor(pct: number): string {
   return 'text-danger';
 }
 
-// Build event markers for the viewer chart
 function buildEventMarkers(
   events: SessionEvent | undefined,
-  sessionStart: string
+  sessionStart: string,
+  t: ReturnType<typeof useT>
 ): Array<{ minute: number; color: string; label: string }> {
   if (!events) return [];
   const startMs = new Date(sessionStart).getTime();
@@ -76,9 +76,9 @@ function buildEventMarkers(
     const gameChanged = prevGame !== null && cu.game !== prevGame;
     const titleChanged = prevTitle !== null && cu.title !== prevTitle;
     if (gameChanged) {
-      markers.push({ minute: min, color: '#00D9FF', label: cu.game || 'Spielwechsel' });
+      markers.push({ minute: min, color: '#00D9FF', label: cu.game || t('Spielwechsel') });
     } else if (titleChanged) {
-      markers.push({ minute: min, color: '#E8A33D', label: 'Titel' });
+      markers.push({ minute: min, color: '#E8A33D', label: t('Titel') });
     }
     prevGame = cu.game;
     prevTitle = cu.title;
@@ -89,7 +89,10 @@ function buildEventMarkers(
     markers.push({
       minute: min,
       color: raid.direction === 'incoming' ? '#00FF88' : '#00D9FF',
-      label: `${raid.direction === 'incoming' ? 'Raid von' : 'Raid an'} ${raid.channel}`,
+      label:
+        raid.direction === 'incoming'
+          ? t('Raid von {channel}', { channel: raid.channel })
+          : t('Raid an {channel}', { channel: raid.channel }),
     });
   }
 
@@ -97,6 +100,9 @@ function buildEventMarkers(
 }
 
 export function SessionDetail({ sessionId, streamer: _streamer, onBack }: SessionDetailProps) {
+  const { t, locale } = useLanguage();
+  const formatNumber = (value: number | null | undefined): string =>
+    value == null ? '-' : value.toLocaleString(locale, { maximumFractionDigits: 0 });
   const [activeTab, setActiveTab] = useState<'overview' | 'events' | 'viewer-timeline'>('overview');
   const { data: detail, isLoading: loadingDetail, error: detailError } = useSessionDetail(sessionId);
   const { data: events, isLoading: loadingEvents } = useSessionEvents(sessionId);
@@ -117,17 +123,16 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
           className="flex items-center gap-2 text-text-secondary hover:text-white transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
-          Zuruck
+          {t('Zuruck')}
         </button>
         <div className="flex flex-col items-center justify-center h-64">
           <AlertCircle className="w-12 h-12 text-text-secondary mb-4" />
-          <p className="text-text-secondary text-lg">Session nicht gefunden</p>
+          <p className="text-text-secondary text-lg">{t('Session nicht gefunden')}</p>
         </div>
       </div>
     );
   }
 
-  // detail fields from the API — cast through unknown to access camelCase keys
   const d = detail as unknown as Record<string, unknown>;
   const title = String(d.title || d.stream_title || '');
   const startedAt = String(d.startedAt || d.started_at || '');
@@ -146,17 +151,16 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
   const chatters = (d.chatters as Array<{ login: string; messages: number }>) || [];
 
   const startDate = startedAt ? new Date(startedAt) : null;
-  const dateLabel = startDate ? formatDateFull(startedAt) : '-';
+  const dateLabel = startDate ? startDate.toLocaleDateString(locale, { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
   const timeLabel = startDate
-    ? startDate.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })
+    ? startDate.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
     : '';
   const sessionDurationMin = Math.max(0, Math.round(duration / 60));
 
-  const eventMarkers = buildEventMarkers(events, startedAt);
+  const eventMarkers = buildEventMarkers(events, startedAt, t);
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <Rise
         className="flex items-start gap-4"
       >
@@ -168,67 +172,65 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
         </button>
         <div className="flex-1 min-w-0">
           <h2 className="text-xl font-bold text-white truncate">
-            {title || 'Stream Session'}
+            {title || t('Stream Session')}
           </h2>
           <p className="text-sm text-text-secondary mt-0.5">
-            {dateLabel} um {timeLabel} &middot; {formatDuration(duration)}
+            {t('{date} um {time}', { date: dateLabel, time: timeLabel })} &middot; {formatDuration(duration)}
           </p>
         </div>
       </Rise>
 
-      {/* KPI Row */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <KpiTile
-          label="Start Viewer"
+          label={t('Start Viewer')}
           value={formatNumber(startViewers)}
           color="text-white"
         />
         <KpiTile
-          label="Peak Viewer"
+          label={t('Peak Viewer')}
           value={formatNumber(peakViewers)}
           color="text-accent"
         />
         <KpiTile
-          label="End Viewer"
+          label={t('End Viewer')}
           value={formatNumber(endViewers)}
           color="text-white"
         />
         <KpiTile
-          label="Ø Viewer"
+          label={t('Ø Viewer')}
           value={formatNumber(avgViewers)}
           color="text-primary"
         />
         <KpiTile
-          label="Follower"
+          label={t('Follower')}
           value={followerDelta >= 0 ? `+${formatNumber(followerDelta)}` : formatNumber(followerDelta)}
           color={followerDelta >= 0 ? 'text-success' : 'text-danger'}
         />
       </div>
 
-      {/* Retention + Chatters */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <KpiTile
-          label="5m Retention"
+          label={t('5m Retention')}
           value={formatPercent(retention5m)}
           color={retentionColor(retention5m)}
         />
         <KpiTile
-          label="10m Retention"
+          label={t('10m Retention')}
           value={formatPercent(retention10m)}
           color={retentionColor(retention10m)}
         />
         <KpiTile
-          label="20m Retention"
+          label={t('20m Retention')}
           value={formatPercent(retention20m)}
           color={retentionColor(retention20m)}
         />
         <KpiTile
-          label="Unique Chatters"
+          label={t('Unique Chatters')}
           value={formatNumber(uniqueChatters)}
           color="text-white"
         />
         <KpiTile
-          label="Erstchatter"
+          label={t('Erstchatter')}
           value={formatNumber(firstTimeChatters)}
           color="text-accent"
         />
@@ -237,8 +239,8 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
       <div className="flex flex-wrap gap-2">
         {[
           ['overview', 'Overview'],
-          ['events', 'Events & Chat'],
-          ['viewer-timeline', 'Viewer-Timeline'],
+          ['events', t('Events & Chat')],
+          ['viewer-timeline', t('Viewer-Timeline')],
         ].map(([tabId, label]) => {
           const isActive = activeTab === tabId;
           return (
@@ -264,10 +266,10 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
         >
           <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
             <Eye className="w-5 h-5 text-primary" />
-            Viewer-Verlauf
+            {t('Viewer-Verlauf')}
           </h3>
           {timeline.length === 0 ? (
-            <NoDataCard message="Keine Timeline-Daten" submessage="" />
+            <NoDataCard message={t('Keine Timeline-Daten')} submessage="" />
           ) : (
             <ResponsiveContainer width="100%" height={300}>
               <LineChart data={timeline}>
@@ -285,8 +287,8 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
                     borderRadius: '8px',
                     color: '#fff',
                   }}
-                  labelFormatter={(v) => `Minute ${v}`}
-                  formatter={(v) => [formatNumber(Number(v)), 'Viewer']}
+                  labelFormatter={(v) => t('Minute {minute}', { minute: String(v) })}
+                  formatter={(v) => [formatNumber(Number(v)), t('Viewer')]}
                 />
                 <Line
                   type="monotone"
@@ -331,17 +333,17 @@ export function SessionDetail({ sessionId, streamer: _streamer, onBack }: Sessio
           >
             <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
               <MessageCircle className="w-5 h-5 text-accent" />
-              Top Chatters
+              {t('Top Chatters')}
             </h3>
             {chatters.length === 0 ? (
-              <NoDataCard message="Keine Chatter-Daten" submessage="" />
+              <NoDataCard message={t('Keine Chatter-Daten')} submessage="" />
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-text-secondary text-xs uppercase tracking-wider border-b border-border">
                       <th className="text-left px-3 py-2">Chatter</th>
-                      <th className="text-right px-3 py-2">Nachrichten</th>
+                      <th className="text-right px-3 py-2">{t('Nachrichten')}</th>
                     </tr>
                   </thead>
                   <tbody>

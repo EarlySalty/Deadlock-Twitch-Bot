@@ -458,7 +458,7 @@ function OwnerImportPool({
           </fieldset>
           <p id={`${id}-date-help`} className="import-pool-help">
             {parsed?.preferences
-              ? `${t(filterDescription(parsed.preferences.clip_date_filter))}. ${t("Kalendertage gelten in der gewählten Zeitzone. Zukünftige Clips werden nicht importiert.")}`
+              ? `${filterDescription(parsed.preferences.clip_date_filter, t)}. ${t("Kalendertage gelten in der gewählten Zeitzone. Zukünftige Clips werden nicht importiert.")}`
               : t(parsed?.error ?? "")}
           </p>
           <p className="import-pool-help">
@@ -644,11 +644,11 @@ function OwnerImportPool({
               const timezone = page.preferences.timezone;
               const notes = [
                 clip.first_selected_at &&
-                  `${t("Erstmals ausgewählt")}: ${localTimestamp(clip.first_selected_at, timezone)}`,
+                  `${t("Erstmals ausgewählt")}: ${localTimestamp(clip.first_selected_at, timezone, locale)}`,
                 clip.processed_at &&
-                  `${t("Verarbeitet am")}: ${localTimestamp(clip.processed_at, timezone)}`,
+                  `${t("Verarbeitet am")}: ${localTimestamp(clip.processed_at, timezone, locale)}`,
                 clip.published_at &&
-                  `${t("Veröffentlicht am")}: ${localTimestamp(clip.published_at, timezone)}`,
+                  `${t("Veröffentlicht am")}: ${localTimestamp(clip.published_at, timezone, locale)}`,
                 !clip.eligible &&
                   (clip.selected_at ||
                     clip.processed_at ||
@@ -702,7 +702,7 @@ function OwnerImportPool({
                       {metadata.title}
                     </h4>
                     <p className="import-pool-help">
-                      {localTimestamp(clip.source_created_at, timezone)}
+                      {localTimestamp(clip.source_created_at, timezone, locale)}
                       {typeof clip.view_count === "number" &&
                         ` · ${clip.view_count.toLocaleString(locale)} ${t("Aufrufe")}`}
                     </p>

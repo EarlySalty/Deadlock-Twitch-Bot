@@ -8,9 +8,6 @@ import { LANGUAGES, LANGUAGE_LABELS, type Language } from '@/i18n/dictionary';
 import type { TimeRange } from '@/types/analytics';
 import { clampDays, MAX_ANALYTICS_DAYS } from '@/utils/zeitraum';
 
-// Der Marker unter dem aktiven Segment gleitet, statt hart umzuspringen: die
-// Auswahl behaelt ihren Ort im Raum. Kritisch gedaempft (bounce 0) — ein
-// Ueberschwingen gehoert nur dorthin, wo vorher eine Wischbewegung war.
 const SEGMENT_SPRING = { type: 'spring', bounce: 0, duration: 0.32 } as const;
 const PRESET_RANGE_VALUES = [7, 30, 90, 365] as const;
 
@@ -18,8 +15,6 @@ function isPresetRange(days: number): boolean {
   return PRESET_RANGE_VALUES.some(value => value === days);
 }
 
-// Menue-Eintritt: 200ms ease-out, aus dem Ausloeser heraus statt aus der Mitte,
-// und nie von scale(0) — nichts in der echten Welt entsteht aus dem Nichts.
 const MENU_MOTION = {
   initial: { opacity: 0, scale: 0.96, y: -4 },
   animate: { opacity: 1, scale: 1, y: 0 },
@@ -49,8 +44,6 @@ export function Header({
 }: HeaderProps) {
   const { view, setView, hasFullAccess, hasEntitlement } = usePlan();
   const t = useT();
-  // Der Umschalter hing bisher nur in einem Reiter der Social-Media-Seite. Wer
-  // dort nicht freigeschaltet ist, hatte keinen Weg zur Sprachwahl.
   const { language, setLanguage } = useLanguage();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -95,8 +88,6 @@ export function Header({
     setTageInput('');
   };
 
-  // Escape schliesst das Menue. Ein Menue, das nur per Klick daneben weggeht,
-  // sperrt den Nutzer gefuehlt ein — es muss immer einen Weg heraus geben.
   useEffect(() => {
     if (!dropdownOpen) return;
     const onKey = (event: KeyboardEvent) => {
@@ -119,18 +110,16 @@ export function Header({
     : t('Alle Partner');
   const canPreviewExtended = !hasFullAccess && !hasEntitlement('analytics');
 
-  // In Beta: Partner koennen vorerst alle Streamer sehen.
   const visiblePartners = partners;
   const visibleOthers = canViewAllStreamers ? others : [];
 
   return (
     <DashboardHeader
-      title="Channel Intelligence"
+      title={t('Channel Intelligence')}
       icon={<Activity className="w-6 h-6 text-primary" />}
       isLoading={isLoading}
       description={<>{t('Fokus: {focus}', { focus: streamer || allLabel })}{' '}<span className="mx-1 text-border">•</span> {t('Zeitraum: letzte {days} Tage', { days })}</>}
     >
-        {/* Controls */}
         <div className="flex min-w-0 flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3">
           {canPreviewExtended && (
             <div className="flex items-center bg-background/70 rounded-xl border border-border p-1.5">
@@ -157,7 +146,6 @@ export function Header({
             </div>
           )}
 
-          {/* Streamer Dropdown */}
           <div className="relative">
             <button
               onClick={() => setDropdownOpen(!dropdownOpen)}
@@ -167,9 +155,6 @@ export function Header({
               <ChevronDown className="w-4 h-4 text-text-secondary" />
             </button>
 
-            {/* Die Klickflaeche liegt ausserhalb der AnimatePresence: ein
-                Fragment als direktes Kind laesst sich nicht animieren, das
-                Menue waere beim Schliessen hart verschwunden. */}
             {dropdownOpen && (
               <div className="fixed inset-0 z-40" onClick={() => { setDropdownOpen(false); setSearch(''); }} />
             )}
@@ -182,7 +167,6 @@ export function Header({
                   style={{ transformOrigin: 'top right' }}
                   className="absolute top-full right-0 mt-2 w-full sm:w-72 panel-card rounded-xl z-50 flex flex-col"
                 >
-                  {/* Search */}
                   <div className="p-2 border-b border-border">
                     <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-background/60 border border-border">
                       <Search className="w-3.5 h-3.5 text-text-secondary shrink-0" />
@@ -197,7 +181,6 @@ export function Header({
                     </div>
                   </div>
                   <div className="max-h-80 overflow-y-auto">
-                  {/* All Partners Option */}
                   {!isDemoMode && (
                     <button
                       onClick={() => {
@@ -213,7 +196,6 @@ export function Header({
                     </button>
                   )}
 
-                  {/* Partners */}
                   {visiblePartners.length > 0 && (
                     <>
                       <div className="px-4 py-1.5 text-[11px] text-text-secondary uppercase tracking-[0.14em] bg-black/25">
@@ -237,7 +219,6 @@ export function Header({
                     </>
                   )}
 
-                  {/* Others (Admin only) */}
                   {visibleOthers.length > 0 && (
                     <>
                       <div className="px-4 py-1.5 text-[11px] text-text-secondary uppercase tracking-[0.14em] bg-black/25">
@@ -261,13 +242,12 @@ export function Header({
                       ))}
                     </>
                   )}
-                  </div>{/* end scrollable */}
+                  </div>
                 </motion.div>
             )}
             </AnimatePresence>
           </div>
 
-          {/* Time Range Selector */}
           <div className="flex flex-wrap items-center bg-background/70 rounded-xl border border-border p-1.5">
             <div className="px-2 text-text-secondary">
               <SlidersHorizontal className="w-4 h-4" />
@@ -337,7 +317,6 @@ export function Header({
             </div>
           </div>
 
-          {/* Sprachwahl */}
           <div
             className="flex items-center bg-background/70 rounded-xl border border-border p-1.5"
             role="group"
