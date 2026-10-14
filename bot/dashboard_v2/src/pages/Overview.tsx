@@ -12,10 +12,11 @@ import { CalendarHeatmap } from '@/components/heatmaps/CalendarHeatmap';
 import { InsightsPanel } from '@/components/cards/InsightsPanel';
 import { PostStreamReportCard } from '@/components/cards/PostStreamReportCard';
 import { CategoryRankBadge } from '@/components/cards/CategoryRankBadge';
-import { formatNumber, formatPercent, formatHours } from '@/utils/formatters';
+import { formatPercent, formatHours } from '@/utils/formatters';
 import { PlanGateCard } from '@/components/cards/PlanGateCard';
 import type { TimeRange } from '@/types/analytics';
 import { kalenderFenster } from '@/utils/zeitraum';
+import { useLanguage } from '@/context/LanguageContext';
 
 interface OverviewProps {
   streamer: string | null;
@@ -24,6 +25,12 @@ interface OverviewProps {
 }
 
 export function Overview({ streamer, days, onSessionClick }: OverviewProps) {
+  const { t, locale } = useLanguage();
+  const formatNumber = (value: number | null | undefined, decimals = 0): string =>
+    value == null ? '-' : value.toLocaleString(locale, {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    });
   const { data: overview, isLoading, error } = useOverview(streamer, days);
   const { data: hourlyData } = useHourlyHeatmap(streamer, days);
   const { data: calendarData } = useCalendarHeatmap(streamer, kalenderFenster(days));
@@ -34,7 +41,7 @@ export function Overview({ streamer, days, onSessionClick }: OverviewProps) {
       <div className="flex items-center justify-center min-h-[400px]">
         <div className="flex items-center gap-3 text-accent">
           <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-          <span>Lade Analytics...</span>
+          <span>{t('Lade Analytics...')}</span>
         </div>
       </div>
     );
@@ -43,7 +50,7 @@ export function Overview({ streamer, days, onSessionClick }: OverviewProps) {
   if (error) {
     return (
       <div className="p-8 text-center">
-        <h2 className="text-danger text-xl font-bold mb-2">Fehler beim Laden</h2>
+        <h2 className="text-danger text-xl font-bold mb-2">{t('Fehler beim Laden')}</h2>
         <p className="text-text-secondary">{(error as Error).message}</p>
       </div>
     );
@@ -52,45 +59,45 @@ export function Overview({ streamer, days, onSessionClick }: OverviewProps) {
   if (!overview || overview.empty) {
     return (
       <div className="p-8 text-center text-text-secondary">
-        {overview?.error || 'Keine Daten verfügbar'}
+        {overview?.error ? t(overview.error) : t('Keine Daten verfügbar')}
       </div>
     );
   }
 
   const { scores, summary, sessions, findings, actions, network } = overview;
+  const followersPerHour = `${summary.followersPerHour >= 0 ? '+' : ''}${summary.followersPerHour.toFixed(2)}`;
 
   return (
     <div className="space-y-8">
-      {/* Top KPIs */}
       <div data-tour-id="tour-analytics-kpis" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-        <PlanGateCard featureId="health_scores" title="Health Scores">
+        <PlanGateCard featureId="health_scores" title={t('Health Scores')}>
           <HealthScoreCard scores={scores} />
         </PlanGateCard>
 
         <KpiCard
-          title="Ø Viewers"
+          title={t('Ø Viewers')}
           value={formatNumber(summary.avgViewers, 1)}
-          subValue={`Peak: ${formatNumber(summary.peakViewers)}`}
+          subValue={t('Peak: {value}', { value: formatNumber(summary.peakViewers) })}
           trend={summary.avgViewersTrend ?? undefined}
           icon={Users}
           color="blue"
         />
 
         <KpiCard
-          title="Hours Watched"
+          title={t('Hours Watched')}
           value={formatHours(summary.totalHoursWatched)}
-          subValue={`${formatHours(summary.totalAirtime)} Airtime`}
+          subValue={t('{value} Airtime', { value: formatHours(summary.totalAirtime) })}
           icon={Clock}
           color="purple"
         />
 
         <KpiCard
-          title="Follower"
+          title={t('Follower')}
           value={`${summary.followersDelta >= 0 ? '+' : ''}${formatNumber(summary.followersDelta)}`}
           subValue={
             summary.followersGained && summary.followersGained !== summary.followersDelta
-              ? `+${formatNumber(summary.followersGained)} gewonnen · ${summary.followersPerHour >= 0 ? '+' : ''}${summary.followersPerHour.toFixed(2)}/h netto`
-              : `${summary.followersPerHour >= 0 ? '+' : ''}${summary.followersPerHour.toFixed(2)} / Stunde`
+              ? t('+{gained} gewonnen · {perHour}/h netto', { gained: formatNumber(summary.followersGained), perHour: followersPerHour })
+              : t('{perHour} / Stunde', { perHour: followersPerHour })
           }
           trend={
             summary.followersTrend != null
@@ -102,92 +109,83 @@ export function Overview({ streamer, days, onSessionClick }: OverviewProps) {
         />
 
         <KpiCard
-          title="Retention (10m)"
+          title={t('Retention (10m)')}
           value={summary.retentionReliable === false ? '—' : formatPercent(summary.retention10m)}
-          subValue={summary.retentionReliable === false ? 'Zu wenig Daten' : 'Ziel: >40%'}
+          subValue={summary.retentionReliable === false ? t('Zu wenig Daten') : t('Ziel: >40%')}
           trend={summary.retentionReliable === false ? undefined : summary.retentionTrend}
           icon={Target}
           color="yellow"
         />
       </div>
 
-      {/* Category Rank Badge */}
       {overview.categoryRank != null && overview.categoryTotal != null && (
         <CategoryRankBadge rank={overview.categoryRank} total={overview.categoryTotal} />
       )}
 
-      {/* Insights */}
       <div data-tour-id="tour-analytics-insights">
-        <PlanGateCard featureId="insights_panel" title="Insights">
+        <PlanGateCard featureId="insights_panel" title={t('Insights')}>
           {findings && findings.length > 0 && (
             <InsightsPanel findings={findings} actions={actions} />
           )}
         </PlanGateCard>
       </div>
 
-      {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 h-full">
           {timelineData && timelineData.length > 0 ? (
-            <ViewerTimelineChart data={timelineData} title="Viewer Timeline (Live-Daten)" />
+            <ViewerTimelineChart data={timelineData} title={t('Viewer Timeline (Live-Daten)')} />
           ) : (
-            <ViewerTrendChart sessions={sessions} title="Viewer Entwicklung" />
+            <ViewerTrendChart sessions={sessions} title={t('Viewer Entwicklung')} />
           )}
         </div>
         <div className="h-full">
-          <RetentionRadar scores={scores} title="Performance Mix" />
+          <RetentionRadar scores={scores} title={t('Performance Mix')} />
         </div>
       </div>
 
-      {/* Heatmaps Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {hourlyData && <HourlyHeatmap data={hourlyData} />}
-        <PlanGateCard featureId="calendar_heatmap" title="Kalender-Heatmap">
+        <PlanGateCard featureId="calendar_heatmap" title={t('Kalender-Heatmap')}>
           {calendarData && <CalendarHeatmap data={calendarData} days={kalenderFenster(days)} />}
         </PlanGateCard>
       </div>
 
-      {/* Score Gauges & Network */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Score Gauges */}
         <div className="lg:col-span-2 grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <ScoreGauge score={scores.growth} label="Growth" hint="Neue Follower je Stunde" />
-          <ScoreGauge score={scores.monetization} label="Revenue" hint="Subs, Bits und Hype Trains je Stream" />
-          <ScoreGauge score={scores.network} label="Network" hint="Raids je Stream, gesendet und erhalten" />
-          <ScoreGauge score={scores.retention} label="Retention" hint="Ø Zuschauer im Verhältnis zum Peak" />
+          <ScoreGauge score={scores.growth} label={t('Growth')} hint={t('Neue Follower je Stunde')} />
+          <ScoreGauge score={scores.monetization} label={t('Revenue')} hint={t('Subs, Bits und Hype Trains je Stream')} />
+          <ScoreGauge score={scores.network} label={t('Network')} hint={t('Raids je Stream, gesendet und erhalten')} />
+          <ScoreGauge score={scores.retention} label={t('Retention')} hint={t('Ø Zuschauer im Verhältnis zum Peak')} />
         </div>
 
-        {/* Network Activity */}
         <div className="bg-card p-5 rounded-xl border border-border">
           <h4 className="text-sm font-bold text-text-secondary mb-4 uppercase tracking-wide flex items-center gap-2">
             <MessageSquare className="w-4 h-4" />
-            Raid-Aktivität
+            {t('Raid-Aktivität')}
           </h4>
           <div className="space-y-3">
             <div className="flex justify-between items-center p-3 bg-black/20 rounded-lg">
-              <span className="text-text-secondary text-sm">Raids gesendet</span>
+              <span className="text-text-secondary text-sm">{t('Raids gesendet')}</span>
               <span className="text-white font-bold">{network?.sent ?? 0}</span>
             </div>
             <div className="flex justify-between items-center p-3 bg-black/20 rounded-lg">
-              <span className="text-text-secondary text-sm">Raids erhalten</span>
+              <span className="text-text-secondary text-sm">{t('Raids erhalten')}</span>
               <span className="text-white font-bold">{network?.received ?? 0}</span>
             </div>
             <div className="flex justify-between items-center p-3 bg-black/20 rounded-lg">
-              <span className="text-text-secondary text-sm">Viewer weitergeleitet</span>
+              <span className="text-text-secondary text-sm">{t('Viewer weitergeleitet')}</span>
               <span className="text-white font-bold">{formatNumber(network?.sentViewers ?? 0)}</span>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Sessions Table */}
       <SessionTable
         sessions={sessions}
         limit={10}
         onSessionClick={onSessionClick}
       />
 
-      {/* Post-Stream KI-Analyse */}
       <PostStreamReportCard streamer={streamer} />
     </div>
   );
