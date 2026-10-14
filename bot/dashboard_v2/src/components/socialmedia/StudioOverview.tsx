@@ -6,7 +6,7 @@ import type { QueueJob, ScheduleQueueSnapshot } from './autopilot/schedule-queue
 import type { PublishSnapshot, PublishVideo } from './autopilot/publish-review/api';
 import { connectionFact } from './platformPresentation';
 import { PLATFORM_LABELS, type SocialMediaView } from './labels';
-import { formatTerminInZone, queueStage, queuedSlots, type QueueStage } from './queuePresentation';
+import { formatTerminInZone, queueStage, queuedPostings, type QueueStage } from './queuePresentation';
 import type { SocialPlatform } from '@/types/socialMedia';
 
 type Tone = 'neutral' | 'success' | 'warning' | 'danger' | 'gold';
@@ -57,10 +57,9 @@ function countStage(clips: SocialClipMitPosting[] | undefined, stage: Exclude<Qu
 }
 
 function upcomingPosts(clips: SocialClipMitPosting[] | undefined, now: number) {
-  return (clips ?? []).filter(clip => queuedSlots(clip) > 0).flatMap(clip =>
-    Object.entries(clip.scheduled_at ?? {})
-      .filter(([platform, at]) => Boolean(at) && !clip.platform_status[platform as SocialPlatform] && Date.parse(at as string) >= now)
-      .map(([platform, at]) => ({ key: `${clip.clip_db_id}-${platform}`, title: clip.title || clip.clip_id, platform: platform as SocialPlatform, at: at as string })),
+  return (clips ?? []).flatMap(clip => queuedPostings(clip)
+    .filter(({ at }) => Date.parse(at) >= now)
+    .map(({ platform, at }) => ({ key: `${clip.clip_db_id}-${platform}`, title: clip.title || clip.clip_id, platform, at })),
   ).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 }
 
@@ -101,18 +100,22 @@ export function StudioStatusStrip({ data, onNavigate }: {
   const clipReviews = countStage(data.clips, 'review');
   const reviewsKnown = Boolean(schedule) && Boolean(data.clips) && !data.clipsFailed;
   const reviews = unavailable(data.scheduleFailed || data.clipsFailed);
-  const terms = [schedule?.next_slot, ...jobsWithStatus(schedule, 'queued').map(job => job.scheduled_at),
-    ...jobsWithStatus(schedule, 'running').map(job => job.scheduled_at), ...scheduledVideos(publish).map(video => video.event!.scheduled_at)]
-    .filter((value): value is string => Boolean(value) && Number.isFinite(Date.parse(value!))).sort((a, b) => Date.parse(a) - Date.parse(b));
-  const nextKnown = Boolean(schedule) && Boolean(publish);
-  const nextUnavailable = unavailable(data.scheduleFailed || data.publishFailed);
+  const terms = [
+    ...[schedule?.next_slot, ...jobsWithStatus(schedule, 'queued').map(job => job.scheduled_at),
+      ...jobsWithStatus(schedule, 'running').map(job => job.scheduled_at), ...scheduledVideos(publish).map(video => video.event!.scheduled_at)]
+      .filter((value): value is string => Boolean(value))
+      .map(at => ({ at, timezone: schedule?.settings.timezone ?? data.timezone })),
+    ...(data.clipsFailed ? [] : data.clips ?? []).flatMap(clip => queuedPostings(clip).map(({ at }) => ({ at, timezone: data.timezone }))),
+  ].filter(term => Number.isFinite(Date.parse(term.at))).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  const nextKnown = Boolean(schedule) && Boolean(publish) && Boolean(data.clips) && !data.clipsFailed;
+  const nextUnavailable = unavailable(data.scheduleFailed || data.publishFailed || data.clipsFailed);
   const uploads = uploadPlatforms(platforms);
   const attention = platformsNeedingAttention(platforms);
   return <section className="studio-status-strip" aria-label={t('Stand auf einen Blick')}>
     <StatusItem icon={Power} label={t('Auto-Pilot')} {...autopilot} onClick={() => onNavigate('plan')} />
     <StatusItem icon={CalendarClock} label={t('Nächster Termin')}
-      value={!nextKnown ? nextUnavailable.value : terms[0] ? formatTerminInZone(terms[0], locale, schedule!.settings.timezone) : t('Keiner')}
-      detail={!nextKnown ? nextUnavailable.detail : terms[0] ? schedule!.settings.timezone : t('Lege Termine im Zeitplan fest')}
+      value={!nextKnown ? nextUnavailable.value : terms[0] ? formatTerminInZone(terms[0].at, locale, terms[0].timezone) : t('Keiner')}
+      detail={!nextKnown ? nextUnavailable.detail : terms[0] ? terms[0].timezone : t('Lege Termine im Zeitplan fest')}
       tone="neutral" onClick={() => onNavigate('plan')} />
     <StatusItem icon={ListOrdered} label={t('Warteschlange')}
       value={!schedule ? unavailable(data.scheduleFailed).value : String(running + queued)}

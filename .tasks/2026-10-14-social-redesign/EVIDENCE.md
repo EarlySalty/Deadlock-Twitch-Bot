@@ -48,6 +48,11 @@ The new language label inherited two grid tracks, compressing mobile label/help 
 
 Post-integration functional checks pass for the five existing synthetic workflows and the AI workspace mutation boundary. The generic workspace fixture intentionally returns 409 for AI option writes; the test verifies the visible save error and retained stored language, not a successful production save. Moli's selectOption did not dispatch the needed event, so the boundary check uses a DOM change event on the real rendered select. No fixture mutation guard or production API was altered to make the test pass.
 
+## Merge-gate follow-up
+The first local gate returned ALLOW with nonblocking observations. Both scheduling observations were verified and corrected before release: all legacy destinations now use the same queued-posting eligibility as the queue count, and the next-appointment strip includes legacy appointments with their own timezone. Its value remains unknown if any required source fails.
+
+Two new concrete regressions cover a blocked TikTok destination alongside an eligible YouTube destination and an earlier legacy appointment in a different timezone. The affected overview/workspace run passes 13, fails 0, skips 0. Production build and targeted ESLint pass. The full synthetic functional check passes again. Final overview viewport captures at 1440 and 390 were opened: final-overview-1440-small.png and final-overview-390-small.png; measured widths match their viewports, with no page errors. Logs: /tmp/rd-resume-tools/gate-nits-{tests,build,lint,browser,functional}.log.
+
 ## Legacy schedule and safety
 Legacy approval still delegates to posting_plan for platform selection, automatic approval and next-slot planning. ApprovalWorker and AutoPilotWorker both run. The effective legacy settings remain collapsed as Bisherige Pipeline; migrating their behavior into the shared schedule is outside RD.
 

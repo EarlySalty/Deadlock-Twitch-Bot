@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { PipelineOverview, StudioStatusStrip, type StudioOverviewData } from '../src/components/socialmedia/StudioOverview';
 import { createScheduleQueueFixture } from '../src/components/socialmedia/autopilot/schedule-queue/fixtures';
 import { createPublishReviewFixture } from '../src/components/socialmedia/autopilot/publish-review/fixtures';
+import { SOCIAL_CLIPS_FIXTURE } from '../src/preview/fixtures';
 
 const complete = (): StudioOverviewData => ({
   schedule: { ...createScheduleQueueFixture().snapshot(), jobs: [], review_count: 0, next_slot: null },
@@ -57,6 +58,31 @@ test('scheduled primary publication remains visible after its production job lea
   const html = renderToStaticMarkup(<PipelineOverview data={data} now={Date.parse('2026-10-14T12:00:00Z')} onNavigate={() => {}} />);
   assert.match(html, /15\.10\./);
   assert.match(html, /16\.10\./);
+});
+
+test('legacy next appointment retains its own timezone and waits for all schedule sources', () => {
+  const data = complete();
+  data.schedule!.next_slot = '2026-10-16T16:00:00Z';
+  data.schedule!.settings.timezone = 'America/New_York';
+  data.clips = [{ ...SOCIAL_CLIPS_FIXTURE[0], status: 'approved', platform_status: { youtube: false, tiktok: false, instagram: false },
+    scheduled_at: { youtube: '2026-10-15T16:00:00Z' }, upload_states: { youtube: 'pending' } }];
+  const strip = renderToStaticMarkup(<StudioStatusStrip data={data} onNavigate={() => {}} />);
+  assert.match(statusValues(data)[1], /15\.10\./);
+  assert.match(strip, /18:00/);
+  assert.match(strip, /title="Europe\/Berlin"/);
+  assert.equal(statusValues({ ...data, clips: undefined })[1], '…');
+  assert.equal(statusValues({ ...data, clipsFailed: true })[1], '?');
+});
+
+test('one approved legacy destination does not make a blocked destination upcoming', () => {
+  const data = complete();
+  data.clips = [{ ...SOCIAL_CLIPS_FIXTURE[0], status: 'approved', platform_status: { youtube: false, tiktok: false, instagram: false },
+    scheduled_at: { youtube: '2026-10-16T16:00:00Z', tiktok: '2026-10-15T16:00:00Z' },
+    upload_states: { youtube: 'pending', tiktok: 'waiting_tiktok_approval' } }];
+  assert.match(statusValues(data)[1], /16\.10\./);
+  const html = renderToStaticMarkup(<PipelineOverview data={data} now={Date.parse('2026-10-14T12:00:00Z')} onNavigate={() => {}} />);
+  assert.match(html, /16\.10\./);
+  assert.doesNotMatch(html, /15\.10\./);
 });
 
 test('empty pool is an actionable warning rather than an all-clear', () => {

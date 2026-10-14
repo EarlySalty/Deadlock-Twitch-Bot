@@ -25,12 +25,17 @@ export function formatTerminInZone(iso: string, locale: string, timezone: string
   }
 }
 
+export function queuedPostings(clip: SocialClipMitPosting): Array<{ platform: SocialPlatform; at: string }> {
+  if (clip.status !== 'approved' && clip.status !== 'publishing') return [];
+  return Object.entries(clip.scheduled_at ?? {}).flatMap(([platform, at]) =>
+    at && !clip.platform_status[platform as SocialPlatform]
+      && !['waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.[platform as SocialPlatform] ?? '')
+      ? [{ platform: platform as SocialPlatform, at }] : [],
+  );
+}
+
 export function queuedSlots(clip: SocialClipMitPosting): number {
-  if (clip.status !== 'approved' && clip.status !== 'publishing') return 0;
-  return Object.entries(clip.scheduled_at ?? {}).filter(
-    ([platform, time]) => Boolean(time) && !clip.platform_status[platform as SocialPlatform]
-      && !['waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.[platform as SocialPlatform] ?? ''),
-  ).length;
+  return queuedPostings(clip).length;
 }
 
 export function queueStage(clip: SocialClipMitPosting): Exclude<QueueStage, 'all'> {
