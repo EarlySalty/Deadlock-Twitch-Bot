@@ -24,8 +24,7 @@ async fn owner_scope(
         .map_err(Box::new)?;
     let (_, owner) =
         crate::auth::streamer_scope::resolve_clip_upload_target(pool, auth, authorized.as_deref())
-            .await
-            .map_err(Box::new)?;
+            .await?;
     Ok(owner)
 }
 

@@ -75,17 +75,17 @@ async fn resolve_channel_user_id(
     auth: &DashboardAuthLevel,
     streamer: &Option<String>,
     pool: &PgPool,
-) -> Result<String, Response> {
+) -> Result<String, Box<Response>> {
     let scope = resolve_streamer_scope(auth, streamer.as_deref(), false)?;
     match auth {
         DashboardAuthLevel::Partner { twitch_user_id, .. } => {
             let id = twitch_user_id.trim();
             if id.is_empty() {
-                return Err(error_response(
+                return Err(Box::new(error_response(
                     StatusCode::BAD_REQUEST,
                     "streamer_required",
                     "streamer is required",
-                ));
+                )));
             }
             Ok(id.to_string())
         }
@@ -93,11 +93,11 @@ async fn resolve_channel_user_id(
             let login = match scope {
                 Some(login) => login,
                 None => {
-                    return Err(error_response(
+                    return Err(Box::new(error_response(
                         StatusCode::BAD_REQUEST,
                         "streamer_required",
                         "streamer is required",
-                    ))
+                    )))
                 }
             };
             let row: Option<(Option<String>,)> = sqlx::query_as(
@@ -122,18 +122,18 @@ async fn resolve_channel_user_id(
                 .filter(|id| !id.is_empty())
             {
                 Some(id) => Ok(id),
-                None => Err(error_response(
+                None => Err(Box::new(error_response(
                     StatusCode::NOT_FOUND,
                     "unknown_streamer",
                     "streamer not found",
-                )),
+                ))),
             }
         }
-        DashboardAuthLevel::None => Err(error_response(
+        DashboardAuthLevel::None => Err(Box::new(error_response(
             StatusCode::UNAUTHORIZED,
             "unauthorized",
             "authentication required",
-        )),
+        ))),
     }
 }
 
@@ -144,7 +144,7 @@ pub async fn get_handler(
 ) -> Response {
     let channel_user_id = match resolve_channel_user_id(&auth, &query.streamer, &pool).await {
         Ok(id) => id,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
 
     match load_settings(&pool, &channel_user_id).await {
@@ -174,7 +174,7 @@ pub async fn post_handler(
 ) -> Response {
     let channel_user_id = match resolve_channel_user_id(&auth, &query.streamer, &pool).await {
         Ok(id) => id,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
 
     let result = sqlx::query(

@@ -60,7 +60,7 @@ async fn is_super_mod(pool: &PgPool, user_id: &str) -> bool {
 /// (`enabled_by`). Python (`dashboard_api.py:214`) extrahiert die Session-Identität
 /// IMMER zuerst, auch bei auth_level='admin'. Partner → eigener Login/ID, admin nur
 /// wenn super_mod. None → 401.
-async fn resolve_actor(auth: &DashboardAuthLevel, pool: &PgPool) -> Result<Actor, Response> {
+async fn resolve_actor(auth: &DashboardAuthLevel, pool: &PgPool) -> Result<Actor, Box<Response>> {
     match auth {
         DashboardAuthLevel::Admin { actor } => Ok(Actor {
             actor_id: actor.as_ref().map(|a| a.twitch_user_id.clone()),
@@ -79,7 +79,10 @@ async fn resolve_actor(auth: &DashboardAuthLevel, pool: &PgPool) -> Result<Actor
                 admin,
             })
         }
-        DashboardAuthLevel::None => Err(err(StatusCode::UNAUTHORIZED, "Authentication required.")),
+        DashboardAuthLevel::None => Err(Box::new(err(
+            StatusCode::UNAUTHORIZED,
+            "Authentication required.",
+        ))),
     }
 }
 
@@ -153,7 +156,7 @@ pub async fn get_settings_handler(
 ) -> Response {
     let actor = match resolve_actor(&auth, &pool).await {
         Ok(a) => a,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let channel = q
         .channel
@@ -197,7 +200,7 @@ pub async fn post_toggle_handler(
 ) -> Response {
     let actor = match resolve_actor(&auth, &pool).await {
         Ok(a) => a,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let channel = payload
         .get("channelLogin")
@@ -248,7 +251,7 @@ pub async fn post_update_handler(
 ) -> Response {
     let actor = match resolve_actor(&auth, &pool).await {
         Ok(a) => a,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let channel = payload
         .get("channelLogin")
@@ -341,7 +344,7 @@ pub async fn get_log_handler(
 ) -> Response {
     let actor = match resolve_actor(&auth, &pool).await {
         Ok(a) => a,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let channel = q.channel.as_deref().unwrap_or("").trim().to_lowercase();
     if channel.is_empty() {
@@ -467,7 +470,7 @@ pub async fn sender_auth_start_handler(
 ) -> Response {
     let actor = match resolve_actor(&auth, &pool).await {
         Ok(a) => a,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if !actor.admin {
         return err(

@@ -1130,10 +1130,54 @@ mod tests {
             .all(|message| message.content.chars().count() <= MAX_HISTORY_CONTENT));
     }
 
-    #[test]
-    fn zeitbudget_bleibt_unter_zwei_minuten() {
-        assert!(MODEL_TIMEOUT_SEC < ANSWER_TIMEOUT_SEC);
-        assert!(ANSWER_TIMEOUT_SEC < 120);
+    #[tokio::test]
+    async fn zeitbudget_bleibt_unter_zwei_minuten() {
+        const {
+            assert!(MODEL_TIMEOUT_SEC < ANSWER_TIMEOUT_SEC);
+            assert!(ANSWER_TIMEOUT_SEC < 120);
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("local fixture listener");
+        let endpoint = format!("http://{}", listener.local_addr().expect("fixture address"));
+        let adapter = tb_knowledge::brain::BrainKnowledgeAdapter::new(
+            &endpoint,
+            "fixture-token",
+            Duration::from_secs(180),
+            std::collections::BTreeSet::from(["fixture.public".into()]),
+        )
+        .expect("fixture adapter");
+        let runtime = SelfExplainerBrainRuntime {
+            mode: BrainRouteMode::Typed,
+            adapter: Some(Arc::new(adapter)),
+        };
+        let (received_tx, received_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let (mut socket, _) = listener.accept().await.expect("fixture request");
+            let mut byte = [0];
+            socket.read_exact(&mut byte).await.expect("request started");
+            received_tx.send(()).expect("request signal");
+            std::future::pending::<()>().await;
+        });
+        let started = tokio::time::Instant::now();
+        let answer = tokio::spawn(async move { typed_route_answer(&runtime, &[], "Abrams").await });
+        received_rx.await.expect("actual production request");
+        tokio::time::pause();
+        let deadline = started + Duration::from_secs(ANSWER_TIMEOUT_SEC);
+        tokio::time::advance(deadline - tokio::time::Instant::now() - Duration::from_secs(1)).await;
+        assert!(!answer.is_finished());
+        tokio::time::advance(Duration::from_secs(2)).await;
+        let error = answer
+            .await
+            .expect("answer task")
+            .expect_err("answer deadline");
+        assert_eq!(error, tb_knowledge::brain::BrainAdapterError::Backend);
+        server.abort();
+        assert!(server
+            .await
+            .expect_err("fixture server stopped")
+            .is_cancelled());
     }
 
     #[test]
