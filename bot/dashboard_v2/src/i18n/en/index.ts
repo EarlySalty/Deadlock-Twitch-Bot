@@ -1,3 +1,4 @@
+import { DEMO_EN } from './demo';
 import { PAGE_DYNAMIC_EN } from './pageDynamic';
 import { PAGES_EN } from './pages';
 import { ANALYTICS_EN } from './analytics';
@@ -26,6 +27,7 @@ export const EN_AREAS: Record<string, Record<string, string>> = {
   backend: BACKEND_EN,
   pages: PAGES_EN,
   pageDynamic: PAGE_DYNAMIC_EN,
+  demo: DEMO_EN,
 };
 
 export const EN_AREA_ENTRIES: Record<string, string> = Object.assign({}, ...Object.values(EN_AREAS));
