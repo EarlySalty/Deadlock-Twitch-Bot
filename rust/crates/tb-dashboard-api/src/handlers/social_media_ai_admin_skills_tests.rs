@@ -18,6 +18,12 @@ async fn fixture() -> (crate::test_database::Database, DashboardAuthState, Route
     .execute(pool)
     .await
     .expect("real migration");
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261014150100_social_ai_skill_review.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("review migration");
     let state = DashboardAuthState::new(
         pool.clone(),
         "dGVzdGtleTEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU=".to_owned(),
@@ -255,5 +261,123 @@ async fn skill_history_shows_learned_diff_and_rollback_restores_bundled_version(
         audit,
         ("rollback".to_owned(), 2, 1, "discord:42".to_owned())
     );
+    let activations = skill(&rolled, "copywriting")["activations"]
+        .as_array()
+        .expect("activations");
+    assert_eq!(activations[0]["kind"], "rollback");
+    assert_eq!(activations[0]["actor"], "discord:42");
+    assert_eq!(activations[1]["kind"], "learned");
+    database.close().await;
+}
+
+#[tokio::test]
+async fn admin_marks_proposals_reviewed_or_dismissed() {
+    let (database, state, app) = fixture().await;
+    let id = skill_registry::record_proposal(
+        &database.pool,
+        NewProposal {
+            title: "Feld vorschlagen",
+            summary: "Zusatzfeld",
+            reason: "Häufige Nachfrage",
+            evidence: None,
+        },
+    )
+    .await
+    .expect("proposal");
+    let path = format!("/proposals/{id}/status");
+    assert_eq!(
+        call(&app, &path, Some(json!({"status":"reviewed"})), None, None)
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let admin = state
+        .create_admin_session("42", "Fixture Admin")
+        .await
+        .expect("admin session");
+    let cookie = format!(
+        "{}={}",
+        crate::auth::session::ADMIN_COOKIE_NAME,
+        admin.session_id
+    );
+    let cross_origin = Request::builder()
+        .method("POST")
+        .uri(format!("/twitch/api/admin/social-ai{path}"))
+        .header("host", "admin.test")
+        .header("origin", "https://attacker.example")
+        .header("x-dashboard-context", "admin")
+        .header("cookie", &cookie)
+        .header("Content-Type", "application/json")
+        .body(Body::from(json!({"status":"reviewed"}).to_string()))
+        .expect("request");
+    assert_eq!(
+        app.clone()
+            .oneshot(cross_origin)
+            .await
+            .expect("response")
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    for (bad_path, body, status) in [
+        (
+            path.as_str(),
+            json!({"status":"proposed","csrf_token":admin.csrf_token}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            path.as_str(),
+            json!({"status":"reviewed","actor":"forged","csrf_token":admin.csrf_token}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "/proposals/999/status",
+            json!({"status":"reviewed","csrf_token":admin.csrf_token}),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            "/proposals/abc/status",
+            json!({"status":"reviewed","csrf_token":admin.csrf_token}),
+            StatusCode::NOT_FOUND,
+        ),
+    ] {
+        assert_eq!(
+            call(
+                &app,
+                bad_path,
+                Some(body),
+                Some(&cookie),
+                Some(&admin.csrf_token)
+            )
+            .await
+            .status(),
+            status
+        );
+    }
+    let reviewed = data(
+        call(
+            &app,
+            &path,
+            Some(json!({"status":"reviewed","csrf_token":admin.csrf_token})),
+            Some(&cookie),
+            Some(&admin.csrf_token),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(reviewed["proposals"][0]["status"], "reviewed");
+    assert_eq!(reviewed["proposals"][0]["reviewed_by"], "discord:42");
+    assert!(reviewed["proposals"][0]["reviewed_at"].is_string());
+    let dismissed = data(
+        call(
+            &app,
+            &path,
+            Some(json!({"status":"dismissed","csrf_token":admin.csrf_token})),
+            Some(&cookie),
+            Some(&admin.csrf_token),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(dismissed["proposals"][0]["status"], "dismissed");
     database.close().await;
 }

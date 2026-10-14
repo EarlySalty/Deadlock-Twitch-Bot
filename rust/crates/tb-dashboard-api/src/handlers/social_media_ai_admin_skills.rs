@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tb_http_core::ApiError;
 use tb_social_media::ai_editor::{
-    skill_registry::{self, ChangeProposal, SkillHistory, SkillRegistryError},
+    skill_registry::{self, ChangeProposal, ProposalDecision, SkillHistory, SkillRegistryError},
     SkillId,
 };
 
@@ -26,6 +26,10 @@ pub fn routes() -> Router<PgPool> {
         .route(
             "/twitch/api/admin/social-ai/skills/{skill_id}/rollback",
             post(rollback),
+        )
+        .route(
+            "/twitch/api/admin/social-ai/proposals/{proposal_id}/status",
+            post(proposal_status),
         )
         .layer(DefaultBodyLimit::max(4096))
 }
@@ -43,6 +47,12 @@ struct RollbackChange {
     expected_version: String,
     target_version: String,
     reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposalStatusChange {
+    status: ProposalDecision,
 }
 
 fn registry_error(error: SkillRegistryError) -> ApiError {
@@ -71,6 +81,29 @@ fn version_number(value: &str) -> Result<i32, ApiError> {
         .ok()
         .filter(|version| *version >= 1)
         .ok_or_else(|| ApiError::bad_request("Die Versionsangabe ist ungültig."))
+}
+
+fn proposal_id(value: &str) -> Result<i64, ApiError> {
+    value
+        .parse::<i64>()
+        .ok()
+        .filter(|id| *id >= 1)
+        .ok_or_else(|| {
+            failure(
+                StatusCode::NOT_FOUND,
+                "Dieser Vorschlag ist nicht vorhanden.",
+            )
+        })
+}
+
+fn proposal_error(error: SkillRegistryError) -> ApiError {
+    match error {
+        SkillRegistryError::NotFound => failure(
+            StatusCode::NOT_FOUND,
+            "Dieser Vorschlag ist nicht vorhanden.",
+        ),
+        other => registry_error(other),
+    }
 }
 
 async fn report(pool: &PgPool) -> Result<Response, ApiError> {
@@ -119,6 +152,27 @@ pub async fn rollback(
     skill_registry::rollback(&pool, id, expected, target, &change.reason, &actor)
         .await
         .map_err(registry_error)?;
+    report(&pool).await
+}
+
+pub async fn proposal_status(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Path(proposal): Path<String>,
+    state: Option<Extension<DashboardAuthState>>,
+    session: Option<Extension<AuthenticatedAdminSessionId>>,
+    partner: Option<Extension<AuthenticatedPartnerSessionId>>,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    if let Some(error) = crate::auth::require_admin(&auth) {
+        return Err(error);
+    }
+    let id = proposal_id(&proposal)?;
+    let change: ProposalStatusChange = parse(&body)?;
+    let actor = actor(&auth, state, session, partner).await?;
+    skill_registry::decide_proposal(&pool, id, change.status, &actor)
+        .await
+        .map_err(proposal_error)?;
     report(&pool).await
 }
 

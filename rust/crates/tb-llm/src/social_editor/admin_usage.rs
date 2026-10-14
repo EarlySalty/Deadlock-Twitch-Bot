@@ -73,9 +73,33 @@ pub struct UsageGroup {
     pub rendering_ms: Option<i64>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageStage {
+    Analysis,
+    Planning,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageRun {
+    FirstRun,
+    Revision,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StageUsage {
+    pub stage: UsageStage,
+    pub run: UsageRun,
+    #[serde(flatten)]
+    pub totals: UsageTotals,
+}
+
 #[derive(Debug, Serialize)]
 pub struct UsageReport {
     pub totals: UsageTotals,
+    pub stages: Vec<StageUsage>,
     pub groups: Vec<UsageGroup>,
     pub group_by: UsageGrouping,
     pub offset: i64,
@@ -85,6 +109,8 @@ pub struct UsageReport {
 }
 
 const FILTERED: &str = "WITH filtered AS (SELECT * FROM public.llm_usage WHERE purpose='social_editor' AND ($1::text IS NULL OR social_ai_twitch_user_id=$1) AND ($2::text IS NULL OR provider=$2) AND ($3::text IS NULL OR social_ai_job_id=$3))";
+const STAGED: &str = "staged AS (SELECT filtered.*, CASE filtered.social_ai_stage WHEN 'analyzing' THEN 'analysis' WHEN 'planning' THEN 'planning' ELSE 'other' END AS stage_group, CASE WHEN j.root_job_id IS NOT NULL THEN 'revision' ELSE 'first_run' END AS run_kind FROM filtered LEFT JOIN public.social_ai_jobs j ON filtered.social_ai_job_id = 'manual:' || j.id::text)";
+const USER_RENDERING: &str = "LEFT JOIN LATERAL (SELECT SUM((v.metadata->>'rendering_ms')::bigint)::bigint AS rendering_ms FROM public.social_produced_videos v WHERE $4::text='user' AND v.twitch_user_id = grouped.social_ai_twitch_user_id AND v.mode='ai' AND v.metadata->>'rendering_ms' ~ '^[0-9]{1,15}$' AND EXISTS(SELECT 1 FROM filtered f WHERE f.social_ai_twitch_user_id=v.twitch_user_id AND (f.social_ai_job_id='manual:' || (v.metadata->>'manual_ai_job_id') OR f.social_ai_job_id='production:' || (v.metadata->>'production_ai_job_id')))) r ON true";
 const UNFINISHED: &str = "attempt_state IS NULL OR attempt_state NOT IN ('succeeded','failed')";
 const UNKNOWN_COST: &str = "estimated_micro_usd IS NULL OR estimated_micro_usd < 0 OR cost_basis IS DISTINCT FROM 'usage_priced_estimate'";
 
@@ -174,6 +200,43 @@ fn period(row: &PgRow, name: &str) -> Result<Option<String>, EditorError> {
         .map(|date| date.to_rfc3339()))
 }
 
+fn stage_usage(row: &PgRow) -> Result<StageUsage, EditorError> {
+    let ledger = || EditorError::new(ErrorKind::Ledger);
+    let stage: String = row.try_get("stage_group").map_err(|_| ledger())?;
+    let run: String = row.try_get("run_kind").map_err(|_| ledger())?;
+    let stage = match stage.as_str() {
+        "analysis" => UsageStage::Analysis,
+        "planning" => UsageStage::Planning,
+        _ => UsageStage::Other,
+    };
+    let run = match run.as_str() {
+        "revision" => UsageRun::Revision,
+        _ => UsageRun::FirstRun,
+    };
+    Ok(StageUsage {
+        stage,
+        run,
+        totals: totals(row)?,
+    })
+}
+
+async fn stages(
+    tx: &mut sqlx::PgConnection,
+    filter: &UsageFilter,
+    columns: &str,
+) -> Result<Vec<StageUsage>, EditorError> {
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{FILTERED}, {STAGED} SELECT {columns}, stage_group, run_kind FROM staged GROUP BY stage_group, run_kind ORDER BY stage_group, run_kind"
+    )))
+    .bind(&filter.twitch_user_id)
+    .bind(&filter.provider)
+    .bind(&filter.job_id)
+    .fetch_all(tx)
+    .await
+    .map_err(|_| EditorError::new(ErrorKind::Ledger))?;
+    rows.iter().map(stage_usage).collect()
+}
+
 pub async fn usage_report(pool: &PgPool, filter: &UsageFilter) -> Result<UsageReport, EditorError> {
     if !filter.validate() {
         return Err(EditorError::new(ErrorKind::InvalidRequest));
@@ -194,6 +257,7 @@ pub async fn usage_report(pool: &PgPool, filter: &UsageFilter) -> Result<UsageRe
     .fetch_one(&mut *tx)
     .await
     .map_err(|_| ledger())?;
+    let stages = stages(&mut tx, filter, &columns).await?;
     let group_by = match filter.group_by {
         UsageGrouping::User => "social_ai_twitch_user_id",
         UsageGrouping::Provider => "provider, model",
@@ -210,7 +274,7 @@ pub async fn usage_report(pool: &PgPool, filter: &UsageFilter) -> Result<UsageRe
     ]
     .map(single)
     .join(", ");
-    let query = format!("{FILTERED}, grouped AS (SELECT {columns}, {identities}, MIN(id) AS first_id FROM filtered GROUP BY {group_by}) SELECT grouped.*, j.processing_ms, j.rendering_ms FROM grouped LEFT JOIN public.social_ai_jobs j ON $4::text='job' AND grouped.social_ai_job_id='manual:' || j.id::text AND grouped.social_ai_twitch_user_id=j.twitch_user_id::text AND j.completed_at IS NOT NULL ORDER BY first_id LIMIT $5 OFFSET $6");
+    let query = format!("{FILTERED}, grouped AS (SELECT {columns}, {identities}, MIN(id) AS first_id FROM filtered GROUP BY {group_by}) SELECT grouped.*, j.processing_ms, COALESCE(j.rendering_ms, r.rendering_ms) AS rendering_ms FROM grouped LEFT JOIN public.social_ai_jobs j ON $4::text='job' AND grouped.social_ai_job_id='manual:' || j.id::text AND grouped.social_ai_twitch_user_id=j.twitch_user_id::text AND j.completed_at IS NOT NULL {USER_RENDERING} ORDER BY first_id LIMIT $5 OFFSET $6");
     let grouping = match filter.group_by {
         UsageGrouping::User => "user",
         UsageGrouping::Provider => "provider",
@@ -248,6 +312,7 @@ pub async fn usage_report(pool: &PgPool, filter: &UsageFilter) -> Result<UsageRe
     tx.commit().await.map_err(|_| ledger())?;
     Ok(UsageReport {
         totals: totals(&all)?,
+        stages,
         groups,
         group_by: filter.group_by,
         offset: filter.offset,
