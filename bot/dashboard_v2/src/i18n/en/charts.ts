@@ -284,4 +284,11 @@ export const CHARTS_EN: Record<string, string> = {
   '({count} neu)': '({count} new)',
   'Details': 'Details',
   'Keine Sessions im gewählten Zeitraum': 'No sessions in the selected period',
+  "Performance Mix": "Performance mix",
+  "Viewer Timeline": "Viewer timeline",
+  "Viewer Trend": "Viewer trend",
+  "Jahr": "Year",
+  "Reguläre Lurker": "Regular lurkers",
+  "Exklusivitäts-Verteilung (Anzahl verfolgter Streamer)": "Exclusivity distribution (number of streamers followed)",
+  "{count} Streams": "{count} streams",
 };

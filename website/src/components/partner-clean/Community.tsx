@@ -1,3 +1,4 @@
+import { landingText } from "@/lib/landingLocale";
 import { Trophy, Link, Award, Bell, ArrowRight } from "lucide-react";
 import type { ReactNode } from "react";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
@@ -12,7 +13,12 @@ interface CommunityCardProps {
   delay?: number;
 }
 
-function CommunityCard({ icon, title, description, delay = 0 }: CommunityCardProps) {
+function CommunityCard({
+  icon,
+  title,
+  description,
+  delay = 0,
+}: CommunityCardProps) {
   return (
     <ScrollReveal delay={delay}>
       <div className="panel-card rounded-xl p-6 flex items-start gap-4 h-full">
@@ -38,33 +44,43 @@ export function Community() {
       <div className="max-w-7xl mx-auto px-6">
         <SectionHeading
           badge="Community"
-          title="Deine Community, organisiert"
-          subtitle="Mach aus neuen Viewern eine aktive Stamm-Community, mit automatischen Belohnungen, Rollen und Live-Signalen."
+          title={landingText("Deine Community, organisiert")}
+          subtitle={landingText(
+            "Mach aus neuen Viewern eine aktive Stamm-Community, mit automatischen Belohnungen, Rollen und Live-Signalen.",
+          )}
         />
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-16">
           <CommunityCard
             icon={<Trophy size={20} />}
             title="Leaderboard"
-            description="Automatisches Ranking basierend auf Watch-Time, Aktivität und Treue"
+            description={landingText(
+              "Automatisches Ranking basierend auf Watch-Time, Aktivität und Treue",
+            )}
             delay={0}
           />
           <CommunityCard
             icon={<Link size={20} />}
-            title="Discord-Integration"
-            description="Nahtlose Verbindung zwischen Twitch-Chat und Discord-Server"
+            title={landingText("Discord-Integration")}
+            description={landingText(
+              "Nahtlose Verbindung zwischen Twitch-Chat und Discord-Server",
+            )}
             delay={0.1}
           />
           <CommunityCard
             icon={<Award size={20} />}
-            title="Rollen-System"
-            description="Automatische Rollenvergabe basierend auf Abonnement und Aktivität"
+            title={landingText("Rollen-System")}
+            description={landingText(
+              "Automatische Rollenvergabe basierend auf Abonnement und Aktivität",
+            )}
             delay={0.2}
           />
           <CommunityCard
             icon={<Bell size={20} />}
-            title="Live-Benachrichtigungen"
-            description="Automatische Benachrichtigungen in Discord, wenn du live gehst"
+            title={landingText("Live-Benachrichtigungen")}
+            description={landingText(
+              "Automatische Benachrichtigungen in Discord, wenn du live gehst",
+            )}
             delay={0.3}
           />
         </div>
@@ -80,11 +96,12 @@ export function Community() {
               </div>
               <div>
                 <h3 className="text-2xl font-bold text-[var(--color-text-primary)] font-display">
-                  Komm auf unseren Discord
+                  {landingText("Komm auf unseren Discord")}
                 </h3>
                 <p className="text-[var(--color-text-secondary)] mt-1 max-w-md">
-                  Hier läuft die Community zusammen. Mitspieler finden, Hilfe bekommen,
-                  Updates verfolgen und direkt mit uns reden.
+                  {landingText(
+                    "Hier läuft die Community zusammen. Mitspieler finden, Hilfe bekommen, Updates verfolgen und direkt mit uns reden.",
+                  )}
                 </p>
               </div>
             </div>
@@ -97,7 +114,7 @@ export function Community() {
               style={{ background: "#5865F2" }}
             >
               <DiscordLogo size={20} />
-              Discord beitreten
+              {landingText("Discord beitreten")}
               <ArrowRight size={18} />
             </a>
           </div>

@@ -2163,7 +2163,7 @@ async fn serialize_clip_record_with(
         }
     };
 
-    let (enrichment_status, enrichment_summary) = match child_clip_db_id {
+    let (enrichment_status, enrichment_summary, generated_title) = match child_clip_db_id {
         Some(id) => match get_enrichment(pool, id).await {
             Some(e) => {
                 let mut seen = std::collections::HashSet::new();
@@ -2181,14 +2181,25 @@ async fn serialize_clip_record_with(
                         }
                     }
                 }
+                let generated_title = [
+                    e.title_youtube.as_deref(),
+                    e.title_tiktok.as_deref(),
+                    e.title_instagram.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .map(str::trim)
+                .find(|title| !title.is_empty())
+                .map(str::to_owned);
                 (
                     json!(e.status),
                     json!({ "top_hashtags": top, "provider": e.llm_provider }),
+                    json!(generated_title),
                 )
             }
-            None => (Value::Null, Value::Null),
+            None => (Value::Null, Value::Null, Value::Null),
         },
-        None => (Value::Null, Value::Null),
+        None => (Value::Null, Value::Null, Value::Null),
     };
     let approval = optional_approval_json(pool, row.id).await?;
 
@@ -2197,6 +2208,7 @@ async fn serialize_clip_record_with(
         "clip_id": row.clip_id,
         "clip_url": row.clip_url,
         "title": row.clip_title,
+        "generated_title": generated_title,
         "thumbnail_url": row.clip_thumbnail_url,
         "streamer_login": row.streamer_login,
         "created_at": row.created_at,
