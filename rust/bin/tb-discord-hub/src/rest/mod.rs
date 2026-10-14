@@ -336,10 +336,8 @@ impl DiscordRest {
             }
             Decision::Execute => {
                 let (status, body) = operation.await;
-                let cache = body.get("ok").and_then(Value::as_bool).unwrap_or(false)
-                    && (200..300).contains(&status);
                 self.store
-                    .settle(&cache_key, hash, status, &body, cache)
+                    .settle(&cache_key, hash, status, &body, true)
                     .await;
                 respond(status, body)
             }

@@ -483,3 +483,246 @@ async fn malformed_member_page_never_claims_complete_live_result() {
     assert_eq!(json_of(&response)["error"]["code"], "unavailable");
     assert_ne!(json_of(&response)["complete"], true);
 }
+
+#[tokio::test]
+async fn ambiguous_write_failures_are_not_reexecuted() {
+    for (action, verb, route, payload) in [
+        (
+            "discord/send-rich-message",
+            "POST",
+            "/channels/111/messages",
+            rich_payload(),
+        ),
+        (
+            "discord/edit-rich-message",
+            "PATCH",
+            "/channels/111/messages/5",
+            json!({"channel_id": 111, "message_id": 5, "content": "new", "embed": {}}),
+        ),
+        (
+            "discord/delete-message",
+            "DELETE",
+            "/channels/111/messages/5",
+            json!({"channel_id": 111, "message_id": 5, "reason": "test"}),
+        ),
+        (
+            "discord/send-dm",
+            "POST",
+            "/channels/222/messages",
+            json!({"user_id": 5, "content": "test"}),
+        ),
+        (
+            "discord/member/add-role",
+            "PUT",
+            "/guilds/42/members/5/roles/7",
+            json!({"guild_id": GUILD, "user_id": 5, "role_id": 7}),
+        ),
+        (
+            "discord/member/remove-role",
+            "DELETE",
+            "/guilds/42/members/5/roles/7",
+            json!({"guild_id": GUILD, "user_id": 5, "role_id": 7}),
+        ),
+        (
+            "discord/role/create",
+            "POST",
+            "/guilds/42/roles",
+            json!({"guild_id": GUILD, "name": "new"}),
+        ),
+        (
+            "discord/create-invite",
+            "POST",
+            "/channels/111/invites",
+            json!({"channel_id": 111}),
+        ),
+    ] {
+        let server = MockServer::start().await;
+        mount_channel(&server, 111, GUILD).await;
+        Mock::given(method("GET"))
+            .and(path("/guilds/42/members/5"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"user": {"id": "5"}})))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/users/@me/channels"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "222"})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/guilds/42/roles"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(&server)
+            .await;
+        Mock::given(method(verb))
+            .and(path(route))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = rest(&server);
+        let first = client
+            .handle(GUILD, post(action, Some("ambiguous"), payload.clone()))
+            .await
+            .expect("first");
+        let second = client
+            .handle(GUILD, post(action, Some("ambiguous"), payload))
+            .await
+            .expect("retry");
+        assert_eq!(first.status, 502, "{action}");
+        assert_eq!(second.status, 502, "{action}");
+        assert_eq!(json_of(&second)["cached"], true, "{action}");
+    }
+}
+
+#[tokio::test]
+async fn transport_failure_keeps_write_reservation() {
+    let server = MockServer::start().await;
+    mount_channel(&server, 111, GUILD).await;
+    Mock::given(method("POST"))
+        .and(path("/channels/111/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"id": "5"}))
+                .set_delay(std::time::Duration::from_secs(11)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = rest(&server);
+    for cached in [false, true] {
+        let response = client
+            .handle(
+                GUILD,
+                post("discord/send-rich-message", Some("timeout"), rich_payload()),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status, 502);
+        assert_eq!(json_of(&response)["cached"], cached);
+    }
+}
+
+#[tokio::test]
+async fn edits_clear_prior_state() {
+    for (payload, expected) in [
+        (
+            json!({"channel_id": 111, "message_id": 5, "content": "new", "embed": {}, "view_spec": null}),
+            json!({"content": "new", "embeds": [], "components": []}),
+        ),
+        (
+            json!({"channel_id": 111, "message_id": 5, "embed": {}, "components": [{"type": 10, "content": "new"}]}),
+            json!({"content": null, "embeds": [], "flags": 32768, "components": [{"type": 10, "content": "new"}]}),
+        ),
+        (
+            json!({"channel_id": 111, "message_id": 5, "content": "new", "embed": {}, "components": []}),
+            json!({"content": "new", "embeds": [], "components": []}),
+        ),
+    ] {
+        let server = MockServer::start().await;
+        mount_channel(&server, 111, GUILD).await;
+        Mock::given(method("PATCH"))
+            .and(path("/channels/111/messages/5"))
+            .and(body_partial_json(expected))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "5"})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let response = rest(&server)
+            .handle(
+                GUILD,
+                post("discord/edit-rich-message", Some("edit"), payload),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status, 200);
+    }
+}
+
+#[tokio::test]
+async fn components_do_not_discard_text_or_embeds() {
+    let server = MockServer::start().await;
+    let client = rest(&server);
+    for action in ["discord/send-rich-message", "discord/edit-rich-message"] {
+        for field in ["content", "embed"] {
+            let mut payload = json!({"channel_id": 111, "message_id": 5, "embed": {}, "components": [{"type": 10, "content": "new"}]});
+            payload[field] = if field == "content" {
+                json!("text")
+            } else {
+                json!({"title": "embed"})
+            };
+            let response = client
+                .handle(GUILD, post(action, Some("mixed"), payload))
+                .await
+                .expect("response");
+            assert_eq!(response.status, 400);
+        }
+    }
+    assert!(server
+        .received_requests()
+        .await
+        .expect("requests")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn lookup_errors_are_not_absence() {
+    for status in [403, 429, 500, 404] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(json!({"retry_after": 20})))
+            .mount(&server)
+            .await;
+        let client = rest(&server);
+        for request in [
+            post("discord/resolve-user", None, json!({"user_id": 5})),
+            get("discord/roles", ""),
+            get("discord/members", ""),
+            get("discord/role-members", "role_id=7"),
+        ] {
+            let resolve = request.path.ends_with("resolve-user");
+            let response = client.handle(GUILD, request).await.expect("response");
+            let expected = if status == 404 {
+                if resolve {
+                    200
+                } else {
+                    404
+                }
+            } else {
+                502
+            };
+            assert_eq!(response.status, expected, "upstream {status}");
+            if status != 404 {
+                assert_eq!(json_of(&response)["error"]["code"], "discord_error");
+            } else if resolve {
+                assert_eq!(json_of(&response)["result"]["found"], false);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn role_member_errors_and_malformed_roles_are_not_missing_roles() {
+    for malformed in [false, true] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/guilds/42/roles"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(if malformed {
+                json!({"unexpected": true})
+            } else {
+                json!([{"id": "7", "name": "Live"}])
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/guilds/42/members"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let response = rest(&server)
+            .handle(GUILD, get("discord/role-members", "role_id=7"))
+            .await
+            .expect("response");
+        assert_eq!(response.status, 502);
+        assert_eq!(json_of(&response)["error"]["code"], "discord_error");
+    }
+}

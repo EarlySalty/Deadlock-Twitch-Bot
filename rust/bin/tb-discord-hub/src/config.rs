@@ -92,7 +92,11 @@ impl HubConfig {
                 let port = parse_opt::<u16>(get, "MASTER_BROKER_PORT")?
                     .filter(|p| *p >= 1)
                     .unwrap_or(8770);
-                format!("http://{host}:{port}")
+                if host.contains(':') && !host.starts_with('[') {
+                    format!("http://[{host}]:{port}")
+                } else {
+                    format!("http://{host}:{port}")
+                }
             }
         };
         let broker_token = value(get, "MASTER_BROKER_TOKEN")
@@ -194,6 +198,19 @@ mod tests {
         .unwrap();
         assert_eq!(c.broker_base_url, "http://10.0.0.1:9999");
         assert_eq!(c.broker_token, "broker");
+    }
+
+    #[test]
+    fn broker_ipv6_host_is_bracketed() {
+        for host in ["::1", "[::1]"] {
+            let config = load(&[
+                ("MASTER_BROKER_TOKEN", "synthetic"),
+                ("MASTER_BROKER_HOST", host),
+            ])
+            .expect("config");
+            assert_eq!(config.broker_base_url, "http://[::1]:8770");
+            assert!(reqwest::Url::parse(&config.broker_base_url).is_ok());
+        }
     }
 
     #[test]

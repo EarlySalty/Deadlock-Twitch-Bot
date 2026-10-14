@@ -39,10 +39,14 @@ fn parse_rich(payload: &Map<String, Value>) -> Result<Rich, String> {
     let channel_id = payload::positive_int(payload, "channel_id")?;
     let content = payload::optional_content(payload, "content")?;
     let embed = payload::embed_dict(payload)?;
-    let components = payload::components(payload)?;
+    let components = payload::components(payload)?
+        .filter(|value| value.as_array().is_some_and(|rows| !rows.is_empty()));
     let allowed_user_ids = payload::id_list(payload, "allowed_user_ids")?;
     let allowed_role_ids = payload::id_list(payload, "allowed_role_ids")?;
     let view_spec = payload::view_spec(payload)?;
+    if components.is_some() && (content.is_some() || !embed.is_empty()) {
+        return Err("components V2 cannot be combined with content or embed".to_string());
+    }
     if content.is_none() && embed.is_empty() && components.is_none() {
         return Err("content or embed is required".to_string());
     }
@@ -118,13 +122,17 @@ fn allowed_mentions(guild_id: u64, role_ids: &[u64]) -> Value {
     })
 }
 
-fn rich_body(guild_id: u64, rich: &Rich) -> Value {
+fn rich_body(guild_id: u64, rich: &Rich, editing: bool) -> Value {
     let mut body = Map::new();
     let view = rich.view_spec.as_ref().and_then(view_components);
     if let Some(components) = &rich.components {
         let mut rows = components.as_array().cloned().unwrap_or_default();
         if let Some(Value::Array(extra)) = view {
             rows.extend(extra);
+        }
+        if editing {
+            body.insert("content".into(), Value::Null);
+            body.insert("embeds".into(), json!([]));
         }
         body.insert("flags".into(), json!(FLAG_COMPONENTS_V2));
         body.insert("components".into(), Value::Array(rows));
@@ -137,6 +145,8 @@ fn rich_body(guild_id: u64, rich: &Rich) -> Value {
     body.insert("content".into(), json!(rich.content));
     if rich.embed.as_object().is_some_and(|e| !e.is_empty()) {
         body.insert("embeds".into(), json!([rich.embed]));
+    } else if editing {
+        body.insert("embeds".into(), json!([]));
     }
     body.insert(
         "allowed_mentions".into(),
@@ -144,6 +154,8 @@ fn rich_body(guild_id: u64, rich: &Rich) -> Value {
     );
     if let Some(view) = view {
         body.insert("components".into(), view);
+    } else if editing {
+        body.insert("components".into(), json!([]));
     }
     Value::Object(body)
 }
@@ -254,7 +266,7 @@ impl DiscordRest {
             {
                 return into_pair(resp);
             }
-            let body = rich_body(ctx.guild_id, &rich);
+            let body = rich_body(ctx.guild_id, &rich, false);
             match self
                 .http
                 .request(
@@ -340,7 +352,7 @@ impl DiscordRest {
             {
                 return into_pair(resp);
             }
-            let body = rich_body(ctx.guild_id, &rich);
+            let body = rich_body(ctx.guild_id, &rich, true);
             match self
                 .http
                 .request(
@@ -616,11 +628,12 @@ impl DiscordRest {
                     }),
                 )
             }
-            Err(err) => {
-                if !is_not_found(&err) {
-                    tracing::warn!(%err, user_id, "resolve_user fehlgeschlagen");
-                }
+            Err(err) if is_not_found(&err) => {
                 respond(200, json!({"ok": true, "result": {"found": false}}))
+            }
+            Err(err) => {
+                tracing::warn!(%err, user_id, "resolve_user fehlgeschlagen");
+                lookup_failed(ctx)
             }
         }
     }
@@ -976,10 +989,11 @@ impl DiscordRest {
                     }).collect::<Vec<_>>(),
                 }),
             ),
-            Ok(_) | Err(_) => respond(
+            Err(err) if is_not_found(&err) => respond(
                 404,
                 error_body(&ctx.rid, None, "not_found", "guild not found"),
             ),
+            Ok(_) | Err(_) => lookup_failed(ctx),
         }
     }
 
@@ -1038,12 +1052,13 @@ impl DiscordRest {
                     .collect();
                 respond(200, json!({"ok": true, "members": members}))
             }
+            Err(err) if is_not_found(&err) => respond(
+                404,
+                error_body(&ctx.rid, None, "not_found", "guild not found"),
+            ),
             Err(err) => {
                 tracing::error!(%err, guild_id = ctx.guild_id, "members fehlgeschlagen");
-                respond(
-                    404,
-                    error_body(&ctx.rid, None, "not_found", "guild not found"),
-                )
+                lookup_failed(ctx)
             }
         }
     }
@@ -1096,14 +1111,14 @@ impl DiscordRest {
         {
             Ok(Value::Array(roles)) => roles,
             Ok(_) | Err(_) if live => return unavailable(),
-            Ok(_) => return role_missing(),
+            Ok(_) => return lookup_failed(ctx),
             Err(err) if is_not_found(&err) => {
                 return respond(
                     404,
                     error_body(&ctx.rid, None, "not_found", "guild not found"),
                 )
             }
-            Err(_) => return role_missing(),
+            Err(_) => return lookup_failed(ctx),
         };
         let Some(role) = roles.iter().find(|r| snowflake(r, "id") == Some(role_id)) else {
             return if live { unavailable() } else { role_missing() };
@@ -1112,7 +1127,16 @@ impl DiscordRest {
             Ok(m) => m,
             Err(err) => {
                 tracing::warn!(%err, guild_id, role_id, "Rollenmitglieder nicht abrufbar");
-                return if live { unavailable() } else { role_missing() };
+                return if live {
+                    unavailable()
+                } else if is_not_found(&err) {
+                    respond(
+                        404,
+                        error_body(&ctx.rid, None, "not_found", "guild not found"),
+                    )
+                } else {
+                    lookup_failed(ctx)
+                };
             }
         };
         let role_str = role_id.to_string();
@@ -1218,4 +1242,16 @@ impl DiscordRest {
 fn into_pair(resp: OutboundResponse) -> (u16, Value) {
     let body = serde_json::from_slice(&resp.body).unwrap_or(Value::Null);
     (resp.status, body)
+}
+
+fn lookup_failed(ctx: &Ctx) -> OutboundResponse {
+    respond(
+        502,
+        error_body(
+            &ctx.rid,
+            None,
+            "discord_error",
+            "Discord-Abfrage fehlgeschlagen",
+        ),
+    )
 }
