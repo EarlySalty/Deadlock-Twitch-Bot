@@ -26,7 +26,7 @@ cat >"$test_root/bin/cargo-slot" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 [[ $CARGO_SLOT_DEPLOY == 1 ]]
-[[ $* == *'--release --locked --timings'* ]]
+[[ $* == *'--release --locked --timings --jobs 12'* ]]
 printf '%s\n' "$*" >>"$HOME/cargo-calls"
 mkdir -p target/release
 for binary in tb-bot tb-dashboard tb-stream-audit tb-config-check tb-llm-usage-recover tb-stt-server tb-twitch-watchdog tb-category-storage clip_context_learn; do
@@ -71,4 +71,12 @@ if FAIL_FRONTEND=1 "$script" "$sha" >/dev/null 2>&1; then exit 1; fi
 [[ ! -e "$staging" ]]
 "$script" "$sha" >/dev/null 2>&1
 [[ $(cat "$staging/website/dist/index.html") == "$sha" ]]
+old_mtime=$(stat -c %Y "$HOME/repos/twitch-release-build/rust/bin/tb-dashboard/src/bin/clip_context_learn.rs")
+printf 'new frontend revision\n' >>"$test_root/source/website/input"
+git -C "$test_root/source" -c user.name=Test -c user.email=test@localhost commit -qam second-revision
+next_sha=$(git -C "$test_root/source" rev-parse HEAD)
+"$script" "$next_sha" >/dev/null 2>&1
+[[ $(cat "$HOME/repos/twitch-release-$next_sha/website/dist/index.html") == "$next_sha" ]]
+[[ $(cat "$HOME/repos/twitch-release-$next_sha/rust/target/release/tb-bot") == "$next_sha" ]]
+[[ $(stat -c %Y "$HOME/repos/twitch-release-build/rust/bin/tb-dashboard/src/bin/clip_context_learn.rs") == "$old_mtime" ]]
 printf 'Release build contract checks passed.\n'

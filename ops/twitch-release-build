@@ -53,7 +53,7 @@ for package in "${packages[@]}"; do
 done
 (
   cd "$build/rust"
-  CARGO_SLOT_DEPLOY=1 cargo-slot build --release --locked --timings --target-dir "$build/rust/target" "${args[@]}"
+  CARGO_SLOT_DEPLOY=1 cargo-slot build --release --locked --timings --jobs 12 --target-dir "$build/rust/target" "${args[@]}"
 )
 for binary in "${binaries[@]}"; do
   artifact="$build/rust/target/release/$binary"
