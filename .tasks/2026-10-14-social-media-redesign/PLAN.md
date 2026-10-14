@@ -86,4 +86,7 @@ Each step: tsc, lint, vitest, Moli check, commit, push.
 
 ## Open questions
 
-See chat; answers recorded here when given.
+Decisions (2026-10-14, user: "Bring it live", recommended options taken):
+1. Legacy pipeline and Auto-Pilot stay as separate, clearly named sections in Planen ("Neue Twitch-Clips" and "Auto-Pilot"). No backend merge.
+2. Timezone option A: one field in the global dashboard settings (Verwaltung > Konto) that writes all three existing stores through their existing endpoints; prefilled from the current values; hint when they differ. No new backend setting.
+3. Clip list gets a read-only generated title (first non-empty of enrichment title_youtube, title_tiktok, title_instagram) from Rust; fallback in the UI is the Twitch title plus date and time when titles repeat.
