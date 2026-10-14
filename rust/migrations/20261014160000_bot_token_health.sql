@@ -1,5 +1,6 @@
 CREATE TABLE twitch_bot_token_health (
     singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    monitoring_enabled boolean NOT NULL DEFAULT true,
     last_ok_at timestamptz,
     last_failure_at timestamptz,
     failure_kind text CHECK (length(failure_kind) <= 32)

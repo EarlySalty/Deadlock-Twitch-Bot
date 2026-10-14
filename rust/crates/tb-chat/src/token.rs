@@ -324,6 +324,7 @@ impl BotTokenManager {
         seed_access_token: Option<&str>,
         seed_refresh_token: &str,
     ) -> Result<(), TokenError> {
+        let _refresh_guard = self.refresh_lock.lock().await;
         let result = self
             .initialize_inner(seed_access_token, seed_refresh_token)
             .await;
@@ -336,7 +337,6 @@ impl BotTokenManager {
         seed_access_token: Option<&str>,
         seed_refresh_token: &str,
     ) -> Result<(), TokenError> {
-        let _refresh_guard = self.refresh_lock.lock().await;
         let has_pending = self.pending.lock().await.is_some();
         if has_pending {
             return self.persist_pending().await;
@@ -373,6 +373,7 @@ impl BotTokenManager {
 
     /// Aktueller Access-Token; refresht lazy wenn < 1 h Restlaufzeit.
     pub async fn access_token(&self) -> Result<String, TokenError> {
+        let _refresh_guard = self.refresh_lock.lock().await;
         let result = self.access_token_inner().await;
         self.report_result(&result).await;
         result
@@ -387,7 +388,7 @@ impl BotTokenManager {
             return Err(TokenError::CredentialRejected);
         }
         match self.persist_pending().await {
-            Err(TokenError::ValidationExpired) => self.force_refresh().await?,
+            Err(TokenError::ValidationExpired) => self.force_refresh_inner().await?,
             result => result?,
         }
         {
@@ -398,7 +399,7 @@ impl BotTokenManager {
                 }
             }
         }
-        self.force_refresh().await?;
+        self.force_refresh_inner().await?;
         let guard = self.state.read().await;
         guard
             .as_ref()
@@ -408,13 +409,13 @@ impl BotTokenManager {
 
     /// Erzwingt einen Refresh (z. B. nach Helix-401).
     pub async fn force_refresh(&self) -> Result<(), TokenError> {
+        let _refresh_guard = self.refresh_lock.lock().await;
         let result = self.force_refresh_inner().await;
         self.report_result(&result).await;
         result
     }
 
     async fn force_refresh_inner(&self) -> Result<(), TokenError> {
-        let _refresh_guard = self.refresh_lock.lock().await;
         let had_pending = self.pending.lock().await.is_some();
         let expired = match self.persist_pending().await {
             Err(TokenError::ValidationExpired) => true,
@@ -482,8 +483,7 @@ impl BotTokenManager {
                 tokio::select! {
                     _ = tick.tick() => {},
                     _ = validation_tick.tick() => {
-                        if let Err(error) = manager.validate_current().await {
-                            manager.report_result::<()>(&Err(error)).await;
+                        if manager.validate_current().await.is_err() {
                             if let Err(error) = manager.force_refresh().await {
                                 tracing::error!(%error, "Bot-Token-Prüfung und Wiederherstellung fehlgeschlagen");
                             }
@@ -508,6 +508,12 @@ impl BotTokenManager {
 
     async fn validate_current(&self) -> Result<(), TokenError> {
         let _refresh_guard = self.refresh_lock.lock().await;
+        let result = self.validate_current_inner().await;
+        self.report_result(&result).await;
+        result
+    }
+
+    async fn validate_current_inner(&self) -> Result<(), TokenError> {
         if self
             .sink
             .as_ref()
@@ -713,15 +719,23 @@ impl BotTokenManager {
 }
 
 pub async fn record_token_health(pool: &PgPool, failure_kind: Option<&str>) {
+    write_token_health(pool, failure_kind, true).await;
+}
+
+pub async fn disable_token_health(pool: &PgPool) {
+    write_token_health(pool, None, false).await;
+}
+
+async fn write_token_health(pool: &PgPool, failure_kind: Option<&str>, monitoring_enabled: bool) {
     let write = sqlx::query(
-        "INSERT INTO twitch_bot_token_health(singleton,last_ok_at,last_failure_at,failure_kind)
-         VALUES(TRUE,CASE WHEN $1::text IS NULL THEN clock_timestamp() END,
-             CASE WHEN $1::text IS NOT NULL THEN clock_timestamp() END,$1)
+        "INSERT INTO twitch_bot_token_health(singleton,last_ok_at,last_failure_at,failure_kind,monitoring_enabled)
+         VALUES(TRUE,CASE WHEN $2 AND $1::text IS NULL THEN clock_timestamp() END,
+             CASE WHEN $2 AND $1::text IS NOT NULL THEN clock_timestamp() END,$1,$2)
          ON CONFLICT(singleton) DO UPDATE SET
              last_ok_at=COALESCE(excluded.last_ok_at,twitch_bot_token_health.last_ok_at),
              last_failure_at=COALESCE(excluded.last_failure_at,twitch_bot_token_health.last_failure_at),
-             failure_kind=excluded.failure_kind",
-    ).bind(failure_kind).execute(pool);
+             failure_kind=excluded.failure_kind,monitoring_enabled=excluded.monitoring_enabled",
+    ).bind(failure_kind).bind(monitoring_enabled).execute(pool);
     if !matches!(
         tokio::time::timeout(Duration::from_secs(2), write).await,
         Ok(Ok(_))
@@ -731,10 +745,102 @@ pub async fn record_token_health(pool: &PgPool, failure_kind: Option<&str>) {
 }
 
 #[cfg(test)]
+#[path = "../../../test-support/database.rs"]
+mod token_test_database;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn delayed_failure_publication_cannot_overtake_successful_refresh() {
+        use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+        use std::str::FromStr;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let options = PgConnectOptions::from_str(
+            &token_test_database::database_url().expect("isolated test database"),
+        )
+        .expect("test options");
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options.clone())
+            .await
+            .expect("test database");
+        let schema = format!(
+            "token_order_{}_{}",
+            std::process::id(),
+            Utc::now().timestamp_subsec_nanos()
+        );
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+            .execute(&admin)
+            .await
+            .expect("schema");
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(options.options([("search_path", schema.as_str())]))
+            .await
+            .expect("schema pool");
+        let migration = include_str!("../../../migrations/20261014160000_bot_token_health.sql");
+        sqlx::raw_sql(
+            migration
+                .split("ALTER TABLE")
+                .next()
+                .expect("health table DDL"),
+        )
+        .execute(&pool)
+        .await
+        .expect("health table");
+        sqlx::raw_sql("CREATE FUNCTION delay_failed_health() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.failure_kind IS NOT NULL THEN PERFORM pg_sleep(0.2); NEW.last_failure_at := clock_timestamp(); END IF; RETURN NEW; END $$;
+            CREATE TRIGGER delay_failure BEFORE INSERT ON twitch_bot_token_health FOR EACH ROW EXECUTE FUNCTION delay_failed_health()")
+            .execute(&pool).await.expect("failure publication delay");
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/validate"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"login":"bot","user_id":"42","scopes":[],"expires_in":7200}),
+            ))
+            .mount(&server)
+            .await;
+        let attempts = AtomicUsize::new(0);
+        Mock::given(method("POST")).and(path("/token")).respond_with(move |_: &wiremock::Request| {
+            if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(500)
+            } else {
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"access_token":"new-access","refresh_token":"new-refresh","expires_in":7200}))
+            }
+        }).mount(&server).await;
+        let manager = BotTokenManager::new("client".into(), "test-secret".into())
+            .expect("manager")
+            .with_urls(
+                format!("{}/validate", server.uri()),
+                format!("{}/token", server.uri()),
+            )
+            .with_health_pool(pool.clone());
+        manager
+            .initialize(Some("seed"), "refresh")
+            .await
+            .expect("initial validation");
+        let (failure, recovery) = tokio::join!(manager.force_refresh(), manager.force_refresh());
+        assert!(failure.is_err());
+        recovery.expect("successful recovery");
+        let healthy: bool = sqlx::query_scalar("SELECT last_ok_at > last_failure_at AND failure_kind IS NULL FROM twitch_bot_token_health").fetch_one(&pool).await.expect("health decision");
+        assert!(healthy);
+        assert_eq!(
+            manager
+                .access_token()
+                .await
+                .expect("usable recovered token"),
+            "new-access"
+        );
+        pool.close().await;
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+            .execute(&admin)
+            .await
+            .expect("cleanup");
+        admin.close().await;
+    }
 
     type PersistedTokenCall = (String, Option<String>);
 

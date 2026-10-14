@@ -79,6 +79,7 @@ struct Incident {
 
 #[derive(sqlx::FromRow)]
 struct BotTokenHealth {
+    monitoring_enabled: bool,
     last_ok_at: Option<DateTime<Utc>>,
     last_failure_at: Option<DateTime<Utc>>,
 }
@@ -121,10 +122,25 @@ async fn observe_bot_token(pool: &PgPool, bot_running: bool, now: DateTime<Utc>)
         return Ok(());
     }
     let health: Option<BotTokenHealth> = sqlx::query_as(
-        "SELECT last_ok_at,last_failure_at FROM twitch_bot_token_health WHERE singleton",
+        "SELECT monitoring_enabled,last_ok_at,last_failure_at FROM twitch_bot_token_health WHERE singleton",
     )
     .fetch_optional(pool)
     .await?;
+    if health
+        .as_ref()
+        .is_some_and(|health| !health.monitoring_enabled)
+    {
+        sqlx::query(
+            "UPDATE twitch_watchdog_incidents SET superseded_at=$2,
+            recovered_at=COALESCE(recovered_at,$2) WHERE service=$1
+            AND superseded_at IS NULL AND recovery_notified_at IS NULL",
+        )
+        .bind(BOT_TOKEN)
+        .bind(now)
+        .execute(pool)
+        .await?;
+        return Ok(());
+    }
     let healthy = health.as_ref().is_some_and(|health| health.healthy(now));
     let started = health
         .as_ref()
@@ -386,6 +402,11 @@ fn local_time(at: DateTime<Utc>) -> String {
         .to_string()
 }
 
+fn token_outage_event_content(started_at: DateTime<Utc>) -> String {
+    let at = local_time(started_at);
+    format!("Am {at} ist der Chat-Zugang des Twitch-Bots ausgefallen. Der Bot lief weiter, konnte aber nicht im Chat schreiben. Bitte den Chat-Zugang prüfen und den Bot bei Bedarf neu autorisieren.")
+}
+
 fn outage_content(incident: &Incident) -> String {
     let at = local_time(incident.started_at);
     match (incident.service.as_str(), incident.recovered_at) {
@@ -393,9 +414,7 @@ fn outage_content(incident: &Incident) -> String {
             let recovered = local_time(recovered_at);
             format!("Der Chat-Zugang des Twitch-Bots funktionierte vom {at} bis {recovered} nicht. Dieser Ausfall ist beendet. Der Bot kann wieder im Chat schreiben.")
         }
-        (BOT_TOKEN, None) => {
-            format!("Seit {at} funktioniert der Chat-Zugang des Twitch-Bots nicht mehr. Der Bot läuft, kann aber nicht im Chat schreiben. Bitte den Bot neu autorisieren.")
-        }
+        (BOT_TOKEN, None) => token_outage_event_content(incident.started_at),
         (COLLECTOR, Some(recovered_at)) => {
             let recovered = local_time(recovered_at);
             format!("Vom {at} bis {recovered} fehlten Daten des Deadlock-Kategoriesammlers im Twitch-Bot. Diese Messlücke ist beendet. Kategorie- und Chatdaten können für diesen Zeitraum Lücken enthalten. Bereits erfasste Daten bleiben erhalten.")
@@ -413,11 +432,80 @@ fn outage_content(incident: &Incident) -> String {
     }
 }
 
+async fn outage_notifications(
+    pool: &PgPool,
+    now: DateTime<Utc>,
+    bot_delay: i64,
+    retry: i64,
+    bot_running: bool,
+    notification: &Result<NotifyCredential>,
+    broker: &str,
+) -> Result<()> {
+    let incidents: Vec<Incident> = sqlx::query_as(NOTIFICATION_QUERY)
+        .bind(now)
+        .bind(BOT)
+        .bind(bot_delay as i32)
+        .bind(retry as i32)
+        .bind(bot_running)
+        .fetch_all(pool)
+        .await?;
+    for incident in incidents {
+        let content = if incident.service == BOT_TOKEN {
+            token_outage_event_content(incident.started_at)
+        } else {
+            outage_content(&incident)
+        };
+        sqlx::query("UPDATE twitch_watchdog_incidents SET last_attempt_at=$2 WHERE id=$1")
+            .bind(incident.id)
+            .bind(now)
+            .execute(pool)
+            .await?;
+        let delivery = match notification {
+            Ok(credential) => {
+                send_to_broker(
+                    &content,
+                    &format!("twitch-watchdog-incident-{}", incident.id),
+                    credential,
+                    broker,
+                )
+                .await
+            }
+            Err(_) => Err("existing notification credential unavailable".into()),
+        };
+        match delivery {
+            Ok(()) => {
+                sqlx::query("UPDATE twitch_watchdog_incidents SET notified_at=$2 WHERE id=$1")
+                    .bind(incident.id)
+                    .bind(now)
+                    .execute(pool)
+                    .await?;
+                println!(
+                    "Ausfallmeldung zugestellt: {} Vorfall {}",
+                    incident.service, incident.id
+                );
+            }
+            Err(error) => {
+                if first_delivery_error(pool, incident.id, now).await? {
+                    eprintln!(
+                        "Ausfallmeldung fehlgeschlagen: {}: {error}",
+                        incident.service
+                    );
+                }
+            }
+        }
+    }
+    if bot_running {
+        token_recovery_notifications(pool, now, retry, notification, broker).await?;
+    }
+    Ok(())
+}
+
 async fn token_recovery_notifications(
     pool: &PgPool,
     now: DateTime<Utc>,
     retry: i64,
     credential: &Result<NotifyCredential>,
+    broker: &str,
 ) -> Result<()> {
     if !bot_token_health_installed(pool).await? {
         return Ok(());
@@ -437,10 +525,11 @@ async fn token_recovery_notifications(
             .await?;
         let delivery = match credential {
             Ok(credential) => {
-                send(
+                send_to_broker(
                     &outage_content(&incident),
                     &format!("twitch-watchdog-incident-{}-recovery", incident.id),
                     credential,
+                    broker,
                 )
                 .await
             }
@@ -460,12 +549,21 @@ async fn token_recovery_notifications(
 }
 
 async fn send(content: &str, key: &str, credential: &NotifyCredential) -> Result<()> {
+    send_to_broker(content, key, credential, BROKER).await
+}
+
+async fn send_to_broker(
+    content: &str,
+    key: &str,
+    credential: &NotifyCredential,
+    broker: &str,
+) -> Result<()> {
     let response = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(15))
         .build()?
-        .post(BROKER)
+        .post(broker)
         .header("X-Internal-Token", credential.token.as_str())
         .json(&json!({"user_id":credential.user_id,"content":content,"idempotency_key":key}))
         .send()
@@ -676,59 +774,16 @@ async fn main() -> Result<()> {
     for service in warnings {
         eprintln!("Dienst oder Datenquelle ausgefallen: {service}");
     }
-    let incidents: Vec<Incident> = sqlx::query_as(NOTIFICATION_QUERY)
-        .bind(now)
-        .bind(BOT)
-        .bind(bot_delay as i32)
-        .bind(retry as i32)
-        .bind(bot_running)
-        .fetch_all(&pool)
-        .await?;
-    for mut incident in incidents {
-        if incident.service == BOT_TOKEN {
-            incident.recovered_at = None;
-        }
-        sqlx::query("UPDATE twitch_watchdog_incidents SET last_attempt_at=$2 WHERE id=$1")
-            .bind(incident.id)
-            .bind(now)
-            .execute(&pool)
-            .await?;
-        let delivery = match &notification {
-            Ok(credential) => {
-                send(
-                    &outage_content(&incident),
-                    &format!("twitch-watchdog-incident-{}", incident.id),
-                    credential,
-                )
-                .await
-            }
-            Err(_) => Err("existing notification credential unavailable".into()),
-        };
-        match delivery {
-            Ok(()) => {
-                sqlx::query("UPDATE twitch_watchdog_incidents SET notified_at=$2 WHERE id=$1")
-                    .bind(incident.id)
-                    .bind(now)
-                    .execute(&pool)
-                    .await?;
-                println!(
-                    "Ausfallmeldung zugestellt: {} Vorfall {}",
-                    incident.service, incident.id
-                );
-            }
-            Err(error) => {
-                if first_delivery_error(&pool, incident.id, now).await? {
-                    eprintln!(
-                        "Ausfallmeldung fehlgeschlagen: {}: {error}",
-                        incident.service
-                    );
-                }
-            }
-        }
-    }
-    if bot_running {
-        token_recovery_notifications(&pool, now, retry, &notification).await?;
-    }
+    outage_notifications(
+        &pool,
+        now,
+        bot_delay,
+        retry,
+        bot_running,
+        &notification,
+        BROKER,
+    )
+    .await?;
     storage_notifications(&pool, now, retry, &notification).await?;
     archive_notifications(&pool, now, retry, &notification).await?;
     lock.commit().await?;
@@ -743,6 +798,7 @@ mod tests {
     fn bot_token_health_requires_fresh_success_after_failure() {
         let now = Utc::now();
         let mut health = BotTokenHealth {
+            monitoring_enabled: true,
             last_ok_at: None,
             last_failure_at: None,
         };
@@ -851,6 +907,192 @@ mod tests {
                 .await
                 .expect("recovery state");
         assert!(recovered.is_some());
+        sqlx::query("UPDATE twitch_bot_token_health SET monitoring_enabled=false")
+            .execute(&pool)
+            .await
+            .expect("disable monitoring");
+        observe_bot_token(&pool, true, now + chrono::Duration::seconds(104))
+            .await
+            .expect("disabled monitoring");
+        let superseded: bool =
+            sqlx::query_scalar("SELECT superseded_at IS NOT NULL FROM twitch_watchdog_incidents")
+                .fetch_one(&pool)
+                .await
+                .expect("canceled incident");
+        assert!(superseded);
+        sqlx::query(
+            "UPDATE twitch_bot_token_health SET monitoring_enabled=true,last_failure_at=$1",
+        )
+        .bind(now + chrono::Duration::seconds(105))
+        .execute(&pool)
+        .await
+        .expect("reenable with failure");
+        observe_bot_token(&pool, true, now + chrono::Duration::seconds(106))
+            .await
+            .expect("new incident after reenable");
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM twitch_watchdog_incidents")
+            .fetch_one(&pool)
+            .await
+            .expect("incident count");
+        assert_eq!(count, 2);
+        sqlx::query("UPDATE twitch_bot_token_health SET monitoring_enabled=false")
+            .execute(&pool)
+            .await
+            .expect("disable active outage");
+        observe_bot_token(&pool, true, now + chrono::Duration::seconds(107))
+            .await
+            .expect("cancel active token outage");
+        observe_bot_token(&pool, true, now + chrono::Duration::seconds(108))
+            .await
+            .expect("disabled stays quiet");
+        let open: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM twitch_watchdog_incidents WHERE recovered_at IS NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("open count");
+        assert_eq!(open, 0);
+        pool.close().await;
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+            .execute(&admin)
+            .await
+            .expect("cleanup");
+        admin.close().await;
+    }
+
+    #[tokio::test]
+    async fn recovered_token_incident_delivers_truthful_outage_and_retries_recovery_once() {
+        use std::str::FromStr;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let options =
+            PgConnectOptions::from_str(&test_database::database_url().expect("isolated database"))
+                .expect("options");
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options.clone())
+            .await
+            .expect("database");
+        let schema = format!(
+            "token_delivery_{}_{}",
+            std::process::id(),
+            Utc::now().timestamp_subsec_nanos()
+        );
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+            .execute(&admin)
+            .await
+            .expect("schema");
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(options.options([("search_path", schema.as_str())]))
+            .await
+            .expect("pool");
+        for migration in [
+            include_str!("../../../../migrations/20261001220000_twitch_watchdog_incidents.sql"),
+            include_str!("../../../../migrations/20261008161000_category_watchdog_native.sql"),
+            include_str!("../../../../migrations/20261014160000_bot_token_health.sql"),
+        ] {
+            sqlx::raw_sql(migration)
+                .execute(&pool)
+                .await
+                .expect("migration");
+        }
+        let server = MockServer::start().await;
+        let recovery_attempts = AtomicUsize::new(0);
+        Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(move |request: &wiremock::Request| {
+                let body: serde_json::Value =
+                    serde_json::from_slice(&request.body).expect("broker JSON");
+                if body["idempotency_key"]
+                    .as_str()
+                    .expect("key")
+                    .ends_with("-recovery")
+                    && recovery_attempts.fetch_add(1, Ordering::SeqCst) == 0
+                {
+                    ResponseTemplate::new(500)
+                } else {
+                    ResponseTemplate::new(200)
+                }
+            })
+            .mount(&server)
+            .await;
+        let credential = Ok(NotifyCredential {
+            user_id: 1,
+            token: "test-broker".into(),
+        });
+        let now = Utc::now();
+        let id: i64 = sqlx::query_scalar("INSERT INTO twitch_watchdog_incidents(service,started_at,recovered_at) VALUES($1,$2,$3) RETURNING id")
+            .bind(BOT_TOKEN).bind(now - chrono::Duration::seconds(180)).bind(now - chrono::Duration::seconds(60)).fetch_one(&pool).await.expect("recovered incident");
+        outage_notifications(&pool, now, 3600, 60, true, &credential, &server.uri())
+            .await
+            .expect("first delivery");
+        let state: (bool,bool,bool) = sqlx::query_as("SELECT notified_at IS NOT NULL,recovery_notified_at IS NOT NULL,last_recovery_attempt_at IS NOT NULL FROM twitch_watchdog_incidents WHERE id=$1").bind(id).fetch_one(&pool).await.expect("delivery state");
+        assert_eq!(state, (true, false, true));
+        outage_notifications(
+            &pool,
+            now + chrono::Duration::seconds(59),
+            3600,
+            60,
+            true,
+            &credential,
+            &server.uri(),
+        )
+        .await
+        .expect("retry delay");
+        assert_eq!(server.received_requests().await.expect("requests").len(), 2);
+        outage_notifications(
+            &pool,
+            now + chrono::Duration::seconds(60),
+            3600,
+            60,
+            true,
+            &credential,
+            &server.uri(),
+        )
+        .await
+        .expect("recovery retry");
+        outage_notifications(
+            &pool,
+            now + chrono::Duration::seconds(120),
+            3600,
+            60,
+            true,
+            &credential,
+            &server.uri(),
+        )
+        .await
+        .expect("no duplicate recovery");
+        let requests = server.received_requests().await.expect("requests");
+        assert_eq!(requests.len(), 3);
+        let messages: Vec<serde_json::Value> = requests
+            .iter()
+            .map(|request| serde_json::from_slice(&request.body).expect("message"))
+            .collect();
+        assert!(messages[0]["content"]
+            .as_str()
+            .expect("content")
+            .contains("ist der Chat-Zugang des Twitch-Bots ausgefallen"));
+        assert!(!messages[0]["content"]
+            .as_str()
+            .expect("content")
+            .contains("funktioniert"));
+        assert!(messages[1]["content"]
+            .as_str()
+            .expect("content")
+            .contains("kann wieder im Chat schreiben"));
+        assert_ne!(
+            messages[0]["idempotency_key"],
+            messages[1]["idempotency_key"]
+        );
+        assert_eq!(messages[1], messages[2]);
+        let notified: bool = sqlx::query_scalar(
+            "SELECT recovery_notified_at IS NOT NULL FROM twitch_watchdog_incidents WHERE id=$1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .expect("recovery acknowledged");
+        assert!(notified);
         pool.close().await;
         sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
             .execute(&admin)

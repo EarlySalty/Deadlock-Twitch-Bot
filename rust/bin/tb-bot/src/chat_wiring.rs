@@ -714,7 +714,7 @@ pub async fn try_build_api(
 ) -> Result<Option<ChatApiHandle>, tb_chat::db_token_store::BootstrapError> {
     if !enabled {
         tracing::info!("Nativer Chat laut Betriebskonfiguration deaktiviert");
-        tb_chat::token::record_token_health(&pool, Some("boot_failed")).await;
+        tb_chat::token::disable_token_health(&pool).await;
         return Ok(None);
     }
 
@@ -764,11 +764,7 @@ pub async fn try_build_api(
         return Ok(None);
     };
     let token_manager = match BotTokenManager::new(client_id, client_secret) {
-        Ok(manager) => Arc::new(
-            manager
-                .with_sink(store.clone())
-                .with_health_pool(pool.clone()),
-        ),
+        Ok(manager) => manager.with_sink(store.clone()),
         Err(_) => {
             tracing::error!("BotTokenManager nicht initialisierbar");
             tb_chat::token::record_token_health(&pool, Some("boot_failed")).await;
@@ -780,6 +776,7 @@ pub async fn try_build_api(
         .initialize(seed_access.as_deref(), &refresh_token)
         .await
     {
+        tb_chat::token::record_token_health(&pool, Some("boot_failed")).await;
         if matches!(
             e,
             tb_chat::token::TokenError::PersistenceFailed
@@ -846,6 +843,8 @@ pub async fn try_build_api(
         }
     }
 
+    let token_manager = Arc::new(token_manager.with_health_pool(pool.clone()));
+    tb_chat::token::record_token_health(&pool, None).await;
     let api: Arc<dyn ChatApi> = Arc::new(HelixChatClient::new(
         Arc::new(helix),
         Arc::clone(&token_manager),
