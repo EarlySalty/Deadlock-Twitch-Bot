@@ -28,6 +28,20 @@ ALTER TABLE public.discord_guilds
 ALTER TABLE public.discord_guilds
     ADD CONSTRAINT discord_guilds_status_check CHECK (status IN ('inactive', 'active', 'removed'));
 
+DO $legacy_guild_language$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.discord_guilds'::regclass
+          AND conname = 'discord_guilds_language_check'
+          AND contype = 'c'
+          AND pg_get_expr(conbin, conrelid) = '(language = ANY (ARRAY[''de''::text, ''en''::text]))'
+    ) THEN
+        ALTER TABLE public.discord_guilds DROP CONSTRAINT discord_guilds_language_check;
+    END IF;
+END
+$legacy_guild_language$;
+
 CREATE TABLE IF NOT EXISTS public.streamer_guilds (
     twitch_user_id text NOT NULL,
     guild_id bigint NOT NULL,
@@ -171,6 +185,12 @@ ALTER TABLE public.twitch_streamer_identities
 ALTER TABLE public.twitch_streamer_identities
     ALTER COLUMN broadcaster_language DROP DEFAULT,
     ALTER COLUMN broadcaster_language DROP NOT NULL;
+
+UPDATE public.twitch_streamer_identities
+SET broadcaster_language = NULL,
+    broadcaster_language_updated_at = NULL
+WHERE broadcaster_language IS NULL
+   OR lower(btrim(broadcaster_language)) IN ('', 'und', 'other');
 
 WITH observations AS (
     SELECT u.twitch_user_id, lower(btrim(u.language)) AS language, u.recorded_at AS observed_at

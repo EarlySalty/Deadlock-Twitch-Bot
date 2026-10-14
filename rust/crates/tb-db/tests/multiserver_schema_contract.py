@@ -459,17 +459,181 @@ class MultiserverSchemaContract(unittest.TestCase):
             self.sql("SELECT to_regclass('public.partner_guild_active') IS NULL"), "t"
         )
 
+    def test_guild_language_domain_matches_fresh_and_prepared_schemas(self):
+        for variant in (None, 1, 2):
+            with self.subTest(variant=variant):
+                if variant is not None:
+                    self.setUp()
+                    self.legacy_schema(variant)
+                    self.sql("""
+                        ALTER TABLE discord_guilds ADD CONSTRAINT fixture_name_guard
+                        CHECK (name IS DISTINCT FROM 'blocked_fixture');
+                    """)
+                self.migration(GUILD)
+                self.sql("INSERT INTO discord_guilds (guild_id) VALUES (42)")
+                for language in (
+                    "de",
+                    "en",
+                    "fr",
+                    "pt-br",
+                    "zh-hant",
+                    "abcdefgh-12345678",
+                ):
+                    self.sql(
+                        f"UPDATE discord_guilds SET language='{language}' WHERE guild_id=42"
+                    )
+                    self.assertEqual(
+                        self.sql(
+                            "SELECT language FROM discord_guilds WHERE guild_id=42"
+                        ),
+                        language,
+                    )
+                for language in ("", "DE", "en_US", "a", "abcdefghi", "en-123456789"):
+                    self.rejected_sql(
+                        f"UPDATE discord_guilds SET language='{language}' WHERE guild_id=42"
+                    )
+                if variant is not None:
+                    self.rejected_sql(
+                        "UPDATE discord_guilds SET name='blocked_fixture' WHERE guild_id=42"
+                    )
+                    self.sql("""
+                        ALTER TABLE discord_guilds DROP CONSTRAINT IF EXISTS discord_guilds_language_check;
+                        ALTER TABLE discord_guilds ADD CONSTRAINT discord_guilds_language_check
+                        CHECK (name IS DISTINCT FROM 'other_blocked_fixture');
+                    """)
+                    self.migration(GUILD)
+                    self.rejected_sql(
+                        "UPDATE discord_guilds SET name='other_blocked_fixture' WHERE guild_id=42"
+                    )
+
+    def test_legacy_unknown_languages_use_history_or_remain_null(self):
+        for variant in (1, 2):
+            with self.subTest(variant=variant):
+                if variant == 2:
+                    self.setUp()
+                self.seed()
+                self.legacy_schema(variant)
+                self.sql("""
+                    ALTER TABLE twitch_streamer_identities
+                        ADD COLUMN IF NOT EXISTS broadcaster_language text,
+                        ADD COLUMN IF NOT EXISTS broadcaster_language_updated_at timestamptz;
+                    UPDATE twitch_streamer_identities
+                    SET broadcaster_language = CASE twitch_user_id
+                        WHEN '990000000002' THEN 'other'
+                        WHEN '990000000003' THEN ''
+                        WHEN '990000000004' THEN ' UND '
+                        WHEN '990000000005' THEN 'es'
+                        WHEN '990000000007' THEN 'other'
+                        WHEN '990000000008' THEN ''
+                        WHEN '990000000009' THEN ' OTHER '
+                        WHEN '990000000010' THEN '  '
+                        WHEN '990000000011' THEN 'de'
+                        ELSE broadcaster_language END,
+                        broadcaster_language_updated_at = '2026-09-30Z';
+                    INSERT INTO twitch_channel_updates (twitch_user_id, language, recorded_at) VALUES
+                        ('990000000001', 'DE', '2026-10-01Z'),
+                        ('990000000001', ' EN-gb ', '2026-10-02Z'),
+                        ('990000000001', 'und', '2026-10-09Z'),
+                        ('990000000003', 'it', '2026-10-04Z'),
+                        ('990000000005', 'fr', '2026-10-09Z'),
+                        ('990000000007', 'other', '2026-10-09Z'),
+                        ('990000000008', 'invalid_value', '2026-10-09Z');
+                    INSERT INTO twitch_stream_sessions (twitch_user_id, streamer_login, language, started_at) VALUES
+                        ('990000000001', 'schema_fixture_1', 'fr', '2026-09-30Z'),
+                        ('990000000002', 'schema_fixture_2', ' FR ', '2026-10-03Z'),
+                        ('990000000002', 'schema_fixture_2', ' OTHER ', '2026-10-09Z'),
+                        ('990000000004', 'schema_fixture_4', 'pt-BR', '2026-10-05Z'),
+                        ('990000000009', 'schema_fixture_9', '', '2026-10-09Z'),
+                        ('990000000010', 'schema_fixture_10', NULL, '2026-10-09Z');
+                """)
+                self.migration(GUILD)
+                self.assertEqual(
+                    self.sql("""
+                        SELECT twitch_user_id, broadcaster_language,
+                               broadcaster_language_updated_at = expected.observed_at
+                        FROM twitch_streamer_identities
+                        JOIN (VALUES
+                            ('990000000001', '2026-10-02Z'::timestamptz),
+                            ('990000000002', '2026-10-03Z'::timestamptz),
+                            ('990000000003', '2026-10-04Z'::timestamptz),
+                            ('990000000004', '2026-10-05Z'::timestamptz),
+                            ('990000000005', '2026-09-30Z'::timestamptz),
+                            ('990000000011', '2026-09-30Z'::timestamptz)
+                        ) expected(twitch_user_id, observed_at) USING (twitch_user_id)
+                        ORDER BY twitch_user_id
+                    """),
+                    "990000000001|en-gb|t\n990000000002|fr|t\n990000000003|it|t\n"
+                    "990000000004|pt-br|t\n990000000005|es|t\n990000000011|de|t",
+                )
+                self.assertEqual(
+                    self.sql("""
+                        SELECT count(*), bool_and(broadcaster_language IS NULL
+                            AND broadcaster_language_updated_at IS NULL)
+                        FROM twitch_streamer_identities
+                        WHERE twitch_user_id BETWEEN '990000000006' AND '990000000010'
+                    """),
+                    "5|t",
+                )
+                self.assertEqual(
+                    self.sql("""
+                        SELECT is_nullable, column_default IS NULL
+                        FROM information_schema.columns
+                        WHERE table_schema='public' AND table_name='twitch_streamer_identities'
+                            AND column_name='broadcaster_language'
+                    """),
+                    "YES|t",
+                )
+                before = self.sql(
+                    "SELECT twitch_user_id, broadcaster_language, broadcaster_language_updated_at FROM twitch_streamer_identities ORDER BY twitch_user_id"
+                )
+                self.migration(GUILD)
+                self.assertEqual(
+                    before,
+                    self.sql(
+                        "SELECT twitch_user_id, broadcaster_language, broadcaster_language_updated_at FROM twitch_streamer_identities ORDER BY twitch_user_id"
+                    ),
+                )
+
     def test_language_backfill_is_latest_stable_and_non_overwriting(self):
         self.seed()
-        self.sql(
-            "INSERT INTO twitch_channel_updates (twitch_user_id,language,recorded_at) VALUES ('990000000001','DE','2026-10-01Z'),('990000000001',' EN-gb ','2026-10-02Z'),('990000000001','invalid_value','2026-10-03Z'); INSERT INTO twitch_stream_sessions (twitch_user_id,streamer_login,language,started_at) VALUES ('990000000001','schema_fixture_1','fr','2026-09-30Z')"
-        )
+        self.sql("""
+            INSERT INTO twitch_channel_updates (twitch_user_id, language, recorded_at) VALUES
+                ('990000000001', 'DE', '2026-10-01Z'),
+                ('990000000001', ' EN-gb ', '2026-10-02Z'),
+                ('990000000001', 'invalid_value', '2026-10-03Z'),
+                ('990000000002', 'de', '2026-10-01Z'),
+                ('990000000003', 'en', '2026-10-04Z');
+            INSERT INTO twitch_stream_sessions (twitch_user_id, streamer_login, language, started_at) VALUES
+                ('990000000001', 'schema_fixture_1', 'fr', '2026-09-30Z'),
+                ('990000000002', 'old_fixture_login', 'fr', '2026-10-04Z'),
+                ('990000000003', 'schema_fixture_3', 'fr', '2026-10-04Z');
+            INSERT INTO twitch_channel_updates (twitch_user_id, language, recorded_at)
+            SELECT '990000000004', language, '2026-10-09Z'
+            FROM (VALUES (NULL::text), (''), ('  '), (' UND '), ('other'), ('invalid_value')) invalid(language);
+            INSERT INTO twitch_stream_sessions (twitch_user_id, streamer_login, language, started_at)
+            SELECT '990000000004', 'schema_fixture_4', language, '2026-10-09Z'
+            FROM (VALUES (NULL::text), (''), ('  '), ('und'), (' OTHER '), ('invalid_value')) invalid(language);
+        """)
         self.migration(GUILD)
         self.assertEqual(
+            self.sql("""
+                SELECT twitch_user_id, broadcaster_language,
+                       broadcaster_language_updated_at = expected.observed_at
+                FROM twitch_streamer_identities
+                JOIN (VALUES
+                    ('990000000001', '2026-10-02Z'::timestamptz),
+                    ('990000000002', '2026-10-04Z'::timestamptz),
+                    ('990000000003', '2026-10-04Z'::timestamptz)
+                ) expected(twitch_user_id, observed_at) USING (twitch_user_id)
+                ORDER BY twitch_user_id
+            """),
+            "990000000001|en-gb|t\n990000000002|fr|t\n990000000003|en|t",
+        )
+        self.assertEqual(
             self.sql(
-                "SELECT broadcaster_language FROM twitch_streamer_identities WHERE twitch_user_id='990000000001'"
+                "SELECT broadcaster_language IS NULL, broadcaster_language_updated_at IS NULL FROM twitch_streamer_identities WHERE twitch_user_id='990000000004'"
             ),
-            "en-gb",
+            "t|t",
         )
         self.sql(
             "UPDATE twitch_streamer_identities SET broadcaster_language='es' WHERE twitch_user_id='990000000001'"
@@ -477,9 +641,9 @@ class MultiserverSchemaContract(unittest.TestCase):
         self.migration(GUILD)
         self.assertEqual(
             self.sql(
-                "SELECT broadcaster_language FROM twitch_streamer_identities WHERE twitch_user_id='990000000001'"
+                "SELECT broadcaster_language, broadcaster_language_updated_at='2026-10-02Z'::timestamptz FROM twitch_streamer_identities WHERE twitch_user_id='990000000001'"
             ),
-            "es",
+            "es|t",
         )
 
 
