@@ -1,6 +1,6 @@
 # Register (max 30 lines)
 
-Main = LIVE 0a2ce1e11 (D2, D-core, O, O2, D3a, D3b, D4-D7, W1-W3; G0 reverted), --pruefen ok. Caddy dead-lock.de website splice applied (backup Caddyfile.before-dead-lock-website-20261014). #1062, #1068 closed. Reporting: directly to the user.
+Main 5f1dc5bd2 (+D8, D9; release building). LIVE 0a2ce1e11 (D2, D-core, O, O2, D3a, D3b, D4-D7, W1-W3; G0 reverted), --pruefen ok. Caddy dead-lock.de website splice applied (backup Caddyfile.before-dead-lock-website-20261014). #1062, #1068 closed. Reporting: directly to the user.
 
 | Pkg | Agent | Worktree | Branch | HEAD | Status |
 |---|---|---|---|---|---|
@@ -19,9 +19,10 @@ Main = LIVE 0a2ce1e11 (D2, D-core, O, O2, D3a, D3b, D4-D7, W1-W3; G0 reverted), 
 | D7 pages | done | - | deleted | f9c0f1303 | merged 1775f131c (in 0a2ce1e11) |
 | W2 sub-sites | done | - | deleted | 80c078327 | merged 0a695264d (faq, vergleich, onboarding, clips) |
 | W3 sub-sites | done | - | deleted | 607a00eb7 | merged 637da79b1 |
-| D8 AIAnalysis, CategoryCollector | a9ef728b251c4b9e7 | ttb-opus-d8-20261014 | feat/opus-d8-pages-english-20261014 | - | building |
-| D9 demo insights | a9416a961a1121348 | ttb-opus-d9-20261014 | feat/opus-d9-demo-insights-english-20261014 | - | building |
+| D8 AIAnalysis, CategoryCollector | done | - | deleted | b28192cb7 | merged 5f1dc5bd2 |
+| D9 demo insights | done | - | deleted | 667a3cef7 | merged e98e607dc |
+| D10 Experimental, chat analytics | a0fb24a120536adb5 | ttb-opus-d10-20261014 | feat/opus-d10-pages-english-20261014 | - | building |
 
 Main test fix bacbd6838. Local object store had missing tree 31c7ae2f; repaired via fetch --refetch origin main.
-Queue: D10 Experimental + chat analytics, 390px live overflow check, A, C (after G), K and G re-land (after rotation).
+Queue: 390px live overflow check, A, C (after G), K and G re-land (after rotation).
 L: parked, blocked by user decision.
