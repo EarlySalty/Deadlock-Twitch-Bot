@@ -1,3 +1,6 @@
+import { translate } from '../../i18n/dictionary';
+import type { LanguageContextValue } from '../../context/LanguageContext';
+
 import type {
   AdManagerHistoryEntry,
   AdManagerPlan,
@@ -26,15 +29,15 @@ const ENTRY_TEXTE: Record<string, string> = {
   offline: 'Stream ist offline',
 };
 
-export function beschreibeEintrag(entry: AdManagerHistoryEntry): string {
+export function beschreibeEintrag(entry: AdManagerHistoryEntry, t: LanguageContextValue['t'] = translate.bind(null, 'de')): string {
   if (entry.reason === 'recent_raid') {
-    return entry.detail ? `Verschoben, Raid von ${entry.detail}` : 'Verschoben, frischer Raid';
+    return entry.detail ? `Verschoben, Raid von ${entry.detail}` : t("Verschoben, frischer Raid");
   }
   const text = ENTRY_TEXTE[entry.reason];
-  if (text) return text;
-  if (entry.decision === 'commercial') return 'Werbung gestartet';
-  if (entry.decision === 'none') return 'Keine Aktion';
-  return 'Verschoben';
+  if (text) return t(text);
+  if (entry.decision === 'commercial') return t("Werbung gestartet");
+  if (entry.decision === 'none') return t("Keine Aktion");
+  return t("Verschoben");
 }
 
 const GEGENWART_TEXTE: Record<string, string> = {
@@ -69,25 +72,25 @@ export function statusSatz(input: {
   currentReason: string | null;
   nextBlockLabel: string | null;
   fit: AdManagerPlanFit | null;
-}): string {
-  if (!input.enabled) return 'Aus. Der Bot schaut nur zu.';
-  if (!input.isLive) return 'An. Sobald dein Stream läuft, kümmert sich der Bot um die Werbung.';
-  const teile = ['Läuft.'];
-  if (input.nextBlockLabel) teile.push(`Nächster Block ${input.nextBlockLabel}.`);
+}, t: LanguageContextValue['t'] = translate.bind(null, 'de')): string {
+  if (!input.enabled) return t("Aus. Der Bot schaut nur zu.");
+  if (!input.isLive) return t("An. Sobald dein Stream läuft, kümmert sich der Bot um die Werbung.");
+  const teile = [t("Läuft.")];
+  if (input.nextBlockLabel) teile.push(t("Nächster Block {value0}.", { value0: input.nextBlockLabel }));
   const gegenwart = input.currentReason ? GEGENWART_TEXTE[input.currentReason] : undefined;
-  if (gegenwart) teile.push(gegenwart);
+  if (gegenwart) teile.push(t(gegenwart));
   const fitText = input.fit ? FIT_TEXTE[input.fit] : undefined;
-  if (fitText) teile.push(fitText);
-  if (teile.length === 1) teile.push('Der Bot verteilt die Werbung über deinen Stream.');
+  if (fitText) teile.push(t(fitText));
+  if (teile.length === 1) teile.push(t("Der Bot verteilt die Werbung über deinen Stream."));
   return teile.join(' ');
 }
 
-export function budgetVorschau(minutes: number, plan: AdManagerPlan | null): string {
+export function budgetVorschau(minutes: number, plan: AdManagerPlan | null, t: LanguageContextValue['t'] = translate.bind(null, 'de'), locale = 'de-DE'): string {
   const blockSeconds = plan && plan.blockSeconds > 0 ? plan.blockSeconds : 30;
   const blocks = plan && plan.blocksPerHour > 0
     ? plan.blocksPerHour
     : Math.round((minutes * 60) / blockSeconds);
-  if (blocks <= 0) return 'Noch kein Budget gesetzt.';
+  if (blocks <= 0) return t("Noch kein Budget gesetzt.");
   const intervalMin = Math.max(1, Math.round(60 / blocks));
-  return `${blocks} Blöcke à ${blockSeconds} Sek., etwa alle ${intervalMin} Min.`;
+  return t("{value0} Blöcke à {value1} Sek., etwa alle {value2} Min.", { value0: blocks.toLocaleString(locale), value1: blockSeconds.toLocaleString(locale), value2: intervalMin.toLocaleString(locale) });
 }

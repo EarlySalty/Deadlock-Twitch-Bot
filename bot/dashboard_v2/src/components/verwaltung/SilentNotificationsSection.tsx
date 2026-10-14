@@ -1,3 +1,4 @@
+import { useT } from '../../context/LanguageContext';
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { BellOff, Loader2, MessageSquare, ShieldAlert } from 'lucide-react';
@@ -31,6 +32,7 @@ const ROWS: Array<{
 ];
 
 export function SilentNotificationsSection() {
+  const t = useT();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [settings, setSettings] = useState<SilentSettings>({
@@ -57,7 +59,6 @@ export function SilentNotificationsSection() {
 
   useEffect(() => {
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const onToggle = async (key: FlagKey) => {
@@ -90,24 +91,24 @@ export function SilentNotificationsSection() {
     >
       <div className="mb-5">
         <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1 flex items-center gap-2">
-          <BellOff className="h-4 w-4" /> Chat-Benachrichtigungen
+          <BellOff className="h-4 w-4" /> {t("Chat-Benachrichtigungen")}
         </p>
-        <h2 className="display-font text-2xl font-bold text-white mb-1">Stille Hinweise</h2>
+        <h2 className="display-font text-2xl font-bold text-white mb-1">{t("Stille Hinweise")}</h2>
         <p className="text-sm text-text-secondary">
-          Steuere, ob der Bot Chat-Notizen zu Auto-Bans und Raids postet. Das geht auch mit den Chat-Befehlen in den Feldern darunter.
+          {t("Steuere, ob der Bot Chat-Notizen zu Auto-Bans und Raids postet. Das geht auch mit den Chat-Befehlen in den Feldern darunter.")}
         </p>
       </div>
 
       {error && (
         <div className="mb-4 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
-          {error}
+          {t(error)}
         </div>
       )}
 
       {loading ? (
         <div className="flex items-center gap-3 text-text-secondary text-sm">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          Einstellungen werden geladen ...
+          {t("Einstellungen werden geladen ...")}
         </div>
       ) : (
         <div className="space-y-3">
@@ -125,8 +126,8 @@ export function SilentNotificationsSection() {
                       className={`h-5 w-5 mt-0.5 ${on ? 'text-primary' : 'text-text-secondary'}`}
                     />
                     <div className="min-w-0">
-                      <p className="text-base font-bold text-white">{title}</p>
-                      <p className="text-xs text-text-secondary mt-0.5">{desc}</p>
+                      <p className="text-base font-bold text-white">{t(title)}</p>
+                      <p className="text-xs text-text-secondary mt-0.5">{t(desc)}</p>
                       <EditableCommandName command={key === 'silent_ban' ? 'silentban' : 'silentraid'} className="mt-2" />
                     </div>
                   </div>
@@ -134,7 +135,7 @@ export function SilentNotificationsSection() {
                     type="button"
                     role="switch"
                     aria-checked={on}
-                    aria-label={title}
+                    aria-label={t(title)}
                     disabled={pending}
                     onClick={() => void onToggle(key)}
                     className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors ${

@@ -1,3 +1,4 @@
+import { useT } from '../../context/LanguageContext';
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Loader2, ShieldCheck } from 'lucide-react';
@@ -31,6 +32,7 @@ function asPercent(value: number): number {
 }
 
 function SettingsBlock() {
+  const t = useT();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -88,7 +90,7 @@ function SettingsBlock() {
     return (
       <div className="flex items-center gap-3 text-text-secondary text-sm">
         <Loader2 className="h-4 w-4 animate-spin text-primary" />
-        Einstellungen werden geladen ...
+        {t("Einstellungen werden geladen ...")}
       </div>
     );
   }
@@ -101,7 +103,7 @@ function SettingsBlock() {
     <div className="space-y-5" data-unsaved={dirty}>
       {error && (
         <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
-          {error}
+          {t(error)}
         </div>
       )}
 
@@ -109,16 +111,16 @@ function SettingsBlock() {
       <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="min-w-0">
-            <p className="text-base font-bold text-white">Scam-Schutz aktiv</p>
+            <p className="text-base font-bold text-white">{t("Scam-Schutz aktiv")}</p>
             <p className="text-xs text-text-secondary mt-0.5">
-              Prüft Erstschreiber in deinem Chat auf aufgesetzte Betrugsmaschen.
+              {t("Prüft Erstschreiber in deinem Chat auf aufgesetzte Betrugsmaschen.")}
             </p>
           </div>
           <button
             type="button"
             role="switch"
             aria-checked={draft.enabled}
-            aria-label="Scam-Schutz aktiv"
+            aria-label={t("Scam-Schutz aktiv")}
             onClick={() => patch({ enabled: !draft.enabled })}
             className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors ${
               draft.enabled ? 'bg-primary' : 'bg-border'
@@ -135,8 +137,8 @@ function SettingsBlock() {
 
       {/* Modus */}
       <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4">
-        <p className="text-base font-bold text-white mb-1">Verhalten bei hoher Sicherheit</p>
-        <p className="text-xs text-text-secondary mb-3">{activeMode.desc}</p>
+        <p className="text-base font-bold text-white mb-1">{t("Verhalten bei hoher Sicherheit")}</p>
+        <p className="text-xs text-text-secondary mb-3">{t(activeMode.desc)}</p>
         <div className="grid grid-cols-3 gap-2">
           {MODE_OPTIONS.map((option) => {
             const selected = draft.mode === option.key;
@@ -151,7 +153,7 @@ function SettingsBlock() {
                     : 'border-border bg-background/40 text-text-secondary hover:border-border-hover hover:text-white'
                 }`}
               >
-                {option.label}
+                {t(option.label)}
               </button>
             );
           })}
@@ -162,11 +164,11 @@ function SettingsBlock() {
       <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 space-y-5">
         <div>
           <div className="flex items-center justify-between mb-1">
-            <p className="text-sm font-semibold text-white">Schwelle für die automatische Aktion</p>
+            <p className="text-sm font-semibold text-white">{t("Schwelle für die automatische Aktion")}</p>
             <span className="text-sm font-bold text-primary tabular-nums">{asPercent(draft.threshold)} %</span>
           </div>
           <p className="text-xs text-text-secondary mb-2">
-            Ab dieser Sicherheit greift {draft.mode === 'alert_only' ? 'die Auto-Aktion (aktuell deaktiviert)' : 'der gewählte Modus'}.
+            {t("Ab dieser Sicherheit greift")} {draft.mode === 'alert_only' ? t("die Auto-Aktion (aktuell deaktiviert)") : t("der gewählte Modus")}.
           </p>
           <input
             type="range"
@@ -180,17 +182,17 @@ function SettingsBlock() {
               patch({ threshold: t, suggestion_floor: Math.min(draft.suggestion_floor, t) });
             }}
             className="w-full accent-primary"
-            aria-label="Schwelle für die automatische Aktion"
+            aria-label={t("Schwelle für die automatische Aktion")}
           />
         </div>
 
         <div>
           <div className="flex items-center justify-between mb-1">
-            <p className="text-sm font-semibold text-white">Schwelle für Vorschläge</p>
+            <p className="text-sm font-semibold text-white">{t("Schwelle für Vorschläge")}</p>
             <span className="text-sm font-bold text-accent tabular-nums">{asPercent(draft.suggestion_floor)} %</span>
           </div>
           <p className="text-xs text-text-secondary mb-2">
-            Ab dieser Sicherheit wird ein verdächtiger Fall gespeichert (höchstens so hoch wie die Auto-Schwelle).
+            {t("Ab dieser Sicherheit wird ein verdächtiger Fall gespeichert (höchstens so hoch wie die Auto-Schwelle).")}
           </p>
           <input
             type="range"
@@ -200,7 +202,7 @@ function SettingsBlock() {
             value={asPercent(draft.suggestion_floor)}
             onChange={(e) => patch({ suggestion_floor: Number(e.target.value) / 100 })}
             className="w-full accent-accent"
-            aria-label="Schwelle für Vorschläge"
+            aria-label={t("Schwelle für Vorschläge")}
           />
         </div>
       </div>
@@ -213,16 +215,17 @@ function SettingsBlock() {
           className="inline-flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-5 py-2.5 text-sm font-semibold text-primary transition-colors hover:border-primary/60 hover:bg-primary/20 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-          Einstellungen speichern
+          {t("Einstellungen speichern")}
         </button>
-        {saved && !dirty && <span className="text-sm text-success">Gespeichert.</span>}
-        {dirty && !saving && <span className="text-sm text-text-secondary">Ungespeicherte Änderungen.</span>}
+        {saved && !dirty && <span className="text-sm text-success">{t("Gespeichert.")}</span>}
+        {dirty && !saving && <span className="text-sm text-text-secondary">{t("Ungespeicherte Änderungen.")}</span>}
       </div>
     </div>
   );
 }
 
 export function ScamGuardSection() {
+  const t = useT();
   return (
     <motion.section
       className="panel-card rounded-2xl p-5 md:p-6"
@@ -235,10 +238,9 @@ export function ScamGuardSection() {
         <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1 flex items-center gap-2">
           <ShieldCheck className="h-4 w-4" /> Moderation
         </p>
-        <h2 className="display-font text-2xl font-bold text-white mb-1">Scam-Schutz</h2>
+        <h2 className="display-font text-2xl font-bold text-white mb-1">{t("Scam-Schutz")}</h2>
         <p className="text-sm text-text-secondary">
-          Ein KI-Wächter prüft Erstschreiber auf aufgesetzte Betrugsmaschen (z. B. Beziehungs- oder
-          Wachstums-Pitches), die einfache Wortfilter durchrutschen. Du steuerst hier das Verhalten.
+          {t("Ein KI-Wächter prüft Erstschreiber auf aufgesetzte Betrugsmaschen (z. B. Beziehungs- oder Wachstums-Pitches), die einfache Wortfilter durchrutschen. Du steuerst hier das Verhalten.")}
         </p>
       </div>
 
