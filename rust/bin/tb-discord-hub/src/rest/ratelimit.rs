@@ -9,6 +9,8 @@ const MAX_BUCKETS: usize = 4096;
 #[derive(Debug, Clone, Copy)]
 struct BucketState {
     remaining: u64,
+    limit: u64,
+    window: Duration,
     reset_at: Instant,
 }
 
@@ -17,6 +19,7 @@ struct Inner {
     route_bucket: HashMap<String, String>,
     buckets: HashMap<String, BucketState>,
     global_until: Option<Instant>,
+    pending: HashMap<RouteKey, u64>,
 }
 
 #[derive(Debug, Default)]
@@ -24,7 +27,7 @@ pub(crate) struct RateLimiter {
     inner: Mutex<Inner>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct RouteKey {
     pub template: String,
     pub major: String,
@@ -59,12 +62,45 @@ impl RouteKey {
     }
 }
 
+pub(crate) struct Reservation<'a> {
+    limiter: &'a RateLimiter,
+    route: RouteKey,
+}
+
+impl Drop for Reservation<'_> {
+    fn drop(&mut self) {
+        let mut inner = self.limiter.lock();
+        if let Some(pending) = inner.pending.get_mut(&self.route) {
+            *pending = pending.saturating_sub(1);
+            if *pending == 0 {
+                inner.pending.remove(&self.route);
+            }
+        }
+    }
+}
+
+impl Inner {
+    fn outstanding(&self, hash: &str, major: &str) -> u64 {
+        self.pending
+            .iter()
+            .filter(|(route, _)| {
+                route.major == major
+                    && self
+                        .route_bucket
+                        .get(&route.template)
+                        .is_some_and(|h| h == hash)
+            })
+            .map(|(_, count)| *count)
+            .sum()
+    }
+}
+
 impl RateLimiter {
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    pub(crate) fn acquire(&self, route: &RouteKey) -> Duration {
+    pub(crate) fn acquire(&self, route: &RouteKey) -> Result<Reservation<'_>, Duration> {
         let now = Instant::now();
         let mut inner = self.lock();
         let mut wait = Duration::ZERO;
@@ -75,21 +111,29 @@ impl RateLimiter {
                 inner.global_until = None;
             }
         }
-        let Some(hash) = inner.route_bucket.get(&route.template).cloned() else {
-            return wait;
-        };
-        let key = format!("{hash}:{}", route.major);
-        if let Some(state) = inner.buckets.get_mut(&key) {
-            if state.reset_at <= now {
-                return wait;
-            }
-            if state.remaining == 0 {
-                wait = wait.max(state.reset_at - now);
-            } else if wait.is_zero() {
-                state.remaining -= 1;
+        if let Some(hash) = inner.route_bucket.get(&route.template).cloned() {
+            let key = format!("{hash}:{}", route.major);
+            let outstanding = inner.outstanding(&hash, &route.major);
+            if let Some(state) = inner.buckets.get_mut(&key) {
+                if state.reset_at <= now {
+                    state.remaining = state.limit.saturating_sub(outstanding);
+                    state.reset_at = now.checked_add(state.window).unwrap_or(now);
+                }
+                if state.remaining == 0 {
+                    wait = wait.max(state.reset_at.saturating_duration_since(now));
+                } else if wait.is_zero() {
+                    state.remaining -= 1;
+                }
             }
         }
-        wait
+        if !wait.is_zero() {
+            return Err(wait);
+        }
+        *inner.pending.entry(route.clone()).or_default() += 1;
+        Ok(Reservation {
+            limiter: self,
+            route: route.clone(),
+        })
     }
 
     pub(crate) fn update(&self, route: &RouteKey, headers: &HeaderMap) {
@@ -104,10 +148,13 @@ impl RateLimiter {
             return;
         };
         let remaining = header("x-ratelimit-remaining").and_then(|v| v.parse::<u64>().ok());
-        let reset_after = header("x-ratelimit-reset-after")
+        let limit = header("x-ratelimit-limit")
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|limit| *limit > 0);
+        let window = header("x-ratelimit-reset-after")
             .and_then(|v| v.parse::<f64>().ok())
             .and_then(|v| Duration::try_from_secs_f64(v).ok())
-            .and_then(|duration| Instant::now().checked_add(duration));
+            .map(|window| window.max(Duration::from_millis(1)));
         let now = Instant::now();
         let mut inner = self.lock();
         if inner.route_bucket.len() >= MAX_BUCKETS
@@ -118,31 +165,46 @@ impl RateLimiter {
         inner
             .route_bucket
             .insert(route.template.clone(), hash.to_string());
-        if let (Some(remaining), Some(reset_after)) = (remaining, reset_after) {
+        let (Some(remaining), Some(window)) = (remaining, window) else {
+            return;
+        };
+        let Some(reset_at) = now.checked_add(window) else {
+            return;
+        };
+        let own_reservation = u64::from(inner.pending.get(route).is_some_and(|count| *count > 0));
+        let outstanding = inner
+            .outstanding(hash, &route.major)
+            .saturating_sub(own_reservation);
+        let available = remaining.saturating_sub(outstanding);
+        let key = format!("{hash}:{}", route.major);
+        if let Some(state) = inner.buckets.get_mut(&key) {
+            state.remaining = if state.reset_at > now {
+                state.remaining.min(available)
+            } else {
+                available
+            };
+            state.limit = limit.unwrap_or(state.limit);
+            state.window = state.window.max(window);
+            state.reset_at = state.reset_at.max(reset_at);
+        } else {
             if inner.buckets.len() >= MAX_BUCKETS {
-                inner.buckets.retain(|_, s| s.reset_at > now);
-                if inner.buckets.len() >= MAX_BUCKETS {
-                    inner.buckets.clear();
-                }
-            }
-            let key = format!("{hash}:{}", route.major);
-            if let Some(state) = inner.buckets.get(&key) {
-                if state.remaining == 0 && state.reset_at > now {
-                    return;
-                }
+                inner.buckets.retain(|_, state| state.reset_at > now);
             }
             inner.buckets.insert(
                 key,
                 BucketState {
-                    remaining,
-                    reset_at: reset_after,
+                    remaining: available,
+                    limit: limit.unwrap_or_else(|| remaining.saturating_add(1)),
+                    window,
+                    reset_at,
                 },
             );
         }
     }
 
     pub(crate) fn block(&self, route: &RouteKey, retry_after: Duration, global: bool) {
-        let Some(until) = Instant::now().checked_add(retry_after) else {
+        let window = retry_after.max(Duration::from_millis(1));
+        let Some(until) = Instant::now().checked_add(window) else {
             return;
         };
         let mut inner = self.lock();
@@ -152,18 +214,20 @@ impl RateLimiter {
         }
         if let Some(hash) = inner.route_bucket.get(&route.template).cloned() {
             let key = format!("{hash}:{}", route.major);
-            let until = inner
-                .buckets
-                .get(&key)
-                .filter(|state| state.remaining == 0)
-                .map_or(until, |state| state.reset_at.max(until));
-            inner.buckets.insert(
-                key,
-                BucketState {
-                    remaining: 0,
-                    reset_at: until,
-                },
-            );
+            if let Some(state) = inner.buckets.get_mut(&key) {
+                state.remaining = 0;
+                state.reset_at = state.reset_at.max(until);
+            } else {
+                inner.buckets.insert(
+                    key,
+                    BucketState {
+                        remaining: 0,
+                        limit: 1,
+                        window,
+                        reset_at: until,
+                    },
+                );
+            }
         }
     }
 }
@@ -193,9 +257,9 @@ mod tests {
         headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
         headers.insert("x-ratelimit-reset-after", HeaderValue::from_static("5"));
         limiter.update(&route, &headers);
-        assert!(limiter.acquire(&route) > Duration::from_secs(4));
+        assert!(limiter.acquire(&route).err().expect("wait") > Duration::from_secs(4));
         let other = RouteKey::new("POST", "/channels/2/messages");
-        assert_eq!(limiter.acquire(&other), Duration::ZERO);
+        assert!(limiter.acquire(&other).is_ok());
     }
 
     #[test]
@@ -207,7 +271,7 @@ mod tests {
         headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
         headers.insert("x-ratelimit-reset-after", HeaderValue::from_static("1e100"));
         limiter.update(&route, &headers);
-        assert_eq!(limiter.acquire(&route), Duration::ZERO);
+        assert!(limiter.acquire(&route).is_ok());
     }
 
     #[test]
@@ -216,7 +280,7 @@ mod tests {
         let route = RouteKey::new("GET", "/users/1");
         limiter.block(&route, Duration::from_secs(3), true);
         let other = RouteKey::new("POST", "/channels/2/messages");
-        assert!(limiter.acquire(&other) > Duration::from_secs(2));
+        assert!(limiter.acquire(&other).err().expect("wait") > Duration::from_secs(2));
     }
     #[test]
     fn active_blocks_survive_success_and_shorter_blocks() {
@@ -230,6 +294,65 @@ mod tests {
         limiter.block(&route, Duration::from_secs(5), false);
         limiter.update(&route, &headers);
         limiter.block(&route, Duration::from_secs(1), false);
-        assert!(limiter.acquire(&route) > Duration::from_secs(4));
+        assert!(limiter.acquire(&route).err().expect("wait") > Duration::from_secs(4));
+    }
+    fn quota_headers(remaining: &'static str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-bucket", HeaderValue::from_static("quota"));
+        headers.insert("x-ratelimit-limit", HeaderValue::from_static("3"));
+        headers.insert("x-ratelimit-remaining", HeaderValue::from_static(remaining));
+        headers.insert("x-ratelimit-reset-after", HeaderValue::from_static("60"));
+        headers
+    }
+
+    #[test]
+    fn response_counts_preserve_outstanding_reservations() {
+        let limiter = RateLimiter::default();
+        let route = RouteKey::new("POST", "/channels/1/messages");
+        limiter.update(&route, &quota_headers("3"));
+        let first = limiter.acquire(&route).expect("first");
+        let second = limiter.acquire(&route).expect("second");
+        limiter.update(&route, &quota_headers("2"));
+        drop(first);
+        let third = limiter.acquire(&route).expect("third");
+        assert!(limiter.acquire(&route).is_err());
+        limiter.update(&route, &quota_headers("1"));
+        drop(second);
+        assert!(limiter.acquire(&route).is_err());
+        drop(third);
+    }
+
+    #[test]
+    fn reset_admission_reserves_capacity_and_preserves_pending_requests() {
+        let limiter = RateLimiter::default();
+        let route = RouteKey::new("POST", "/channels/1/messages");
+        limiter.update(&route, &quota_headers("1"));
+        let pending = limiter.acquire(&route).expect("pending");
+        limiter
+            .lock()
+            .buckets
+            .get_mut("quota:1")
+            .expect("bucket")
+            .reset_at = Instant::now() - Duration::from_secs(1);
+        let first = limiter.acquire(&route).expect("first after reset");
+        let second = limiter.acquire(&route).expect("second after reset");
+        assert!(limiter.acquire(&route).is_err());
+        drop((pending, first, second));
+        assert!(limiter.lock().pending.is_empty());
+    }
+
+    #[test]
+    fn newly_discovered_shared_bucket_accounts_for_pending_requests() {
+        let limiter = RateLimiter::default();
+        let first_route = RouteKey::new("GET", "/channels/1/messages/5");
+        let second_route = RouteKey::new("DELETE", "/channels/1/messages/5");
+        let first = limiter.acquire(&first_route).expect("first");
+        let second = limiter.acquire(&second_route).expect("second");
+        limiter.update(&second_route, &quota_headers("2"));
+        limiter.update(&first_route, &quota_headers("2"));
+        drop(first);
+        let third = limiter.acquire(&first_route).expect("third");
+        assert!(limiter.acquire(&second_route).is_err());
+        drop((second, third));
     }
 }

@@ -124,16 +124,17 @@ impl DiscordHttp {
 
         for attempt in 1..=MAX_ATTEMPTS {
             let waiting_since = std::time::Instant::now();
-            loop {
-                let wait = self.limiter.acquire(&route);
-                if wait.is_zero() {
-                    break;
+            let reservation = loop {
+                match self.limiter.acquire(&route) {
+                    Ok(reservation) => break reservation,
+                    Err(wait) => {
+                        if waiting_since.elapsed().saturating_add(wait) > MAX_RETRY_WAIT {
+                            return Err(RestError::RateLimited);
+                        }
+                        tokio::time::sleep(wait).await;
+                    }
                 }
-                if waiting_since.elapsed().saturating_add(wait) > MAX_RETRY_WAIT {
-                    return Err(RestError::RateLimited);
-                }
-                tokio::time::sleep(wait).await;
-            }
+            };
 
             let mut builder = self.client.request(method.clone(), &url);
             if let Some(reason) = reason {
@@ -152,10 +153,17 @@ impl DiscordHttp {
                     }
                 })
                 .unwrap_or(false);
-            let response = builder
-                .send()
-                .await
-                .map_err(|e| RestError::Transport(e.without_url().to_string()))?;
+            let response = match builder.send().await {
+                Ok(response) => response,
+                Err(err) => {
+                    if writes && err.is_connect() {
+                        let _ = super::WRITE_UNCERTAIN.try_with(|state| {
+                            state.store(previous_write, std::sync::atomic::Ordering::Relaxed);
+                        });
+                    }
+                    return Err(RestError::Transport(err.without_url().to_string()));
+                }
+            };
             let status = response.status().as_u16();
             if writes && (400..500).contains(&status) {
                 let _ = super::WRITE_UNCERTAIN.try_with(|state| {
@@ -164,6 +172,7 @@ impl DiscordHttp {
             }
             let headers = response.headers().clone();
             self.limiter.update(&route, &headers);
+            drop(reservation);
             let bytes = response
                 .bytes()
                 .await

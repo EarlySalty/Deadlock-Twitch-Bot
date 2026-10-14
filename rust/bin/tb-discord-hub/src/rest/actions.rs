@@ -606,6 +606,11 @@ impl DiscordRest {
             .await
         {
             Ok(user) => {
+                if snowflake(&user, "id") != Some(user_id)
+                    || user.get("username").and_then(Value::as_str).is_none()
+                {
+                    return lookup_failed(ctx);
+                }
                 let name = user
                     .get("username")
                     .and_then(Value::as_str)
@@ -769,6 +774,8 @@ impl DiscordRest {
         let hash = payload_hash(&op);
         let rid = ctx.rid.clone();
         self.run_idempotent(ctx, "discord.create_role", &idem, &hash, async {
+            let lock = self.role_lock(guild_id, &name);
+            let _guard = lock.lock().await;
             let ok = |role_id: u64| {
                 (
                     200,
@@ -1215,6 +1222,11 @@ impl DiscordRest {
             .await
         {
             Ok(message) => {
+                if snowflake(&message, "id") != Some(message_id)
+                    || snowflake(&message, "channel_id") != Some(channel_id)
+                {
+                    return failed();
+                }
                 let reactions: Vec<Value> = message
                     .get("reactions")
                     .and_then(Value::as_array)

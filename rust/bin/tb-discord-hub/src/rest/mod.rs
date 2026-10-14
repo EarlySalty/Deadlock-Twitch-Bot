@@ -8,7 +8,7 @@ mod tests;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
@@ -51,10 +51,13 @@ impl Drop for ExecutionGuard<'_> {
 const CHANNEL_CACHE_TTL: Duration = Duration::from_secs(60);
 const CHANNEL_CACHE_MAX: usize = 2048;
 
+type RoleLocks = HashMap<(u64, String), Weak<tokio::sync::Mutex<()>>>;
+
 pub struct DiscordRest {
     http: DiscordHttp,
     store: IdempotencyStore,
     channel_cache: Mutex<HashMap<u64, (Option<u64>, Instant)>>,
+    role_locks: Mutex<RoleLocks>,
 }
 
 impl std::fmt::Debug for DiscordRest {
@@ -75,6 +78,7 @@ impl DiscordRest {
             http: DiscordHttp::new(bot_token, base_url)?,
             store: IdempotencyStore::new(IdempotencyConfig::default()),
             channel_cache: Mutex::new(HashMap::new()),
+            role_locks: Mutex::new(HashMap::new()),
         })
     }
 }
@@ -243,6 +247,18 @@ pub(crate) fn snowflake(value: &Value, key: &str) -> Option<u64> {
 }
 
 impl DiscordRest {
+    pub(crate) fn role_lock(&self, guild_id: u64, name: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.role_locks.lock().unwrap_or_else(|p| p.into_inner());
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        let key = (guild_id, name.to_string());
+        if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+            return lock;
+        }
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        locks.insert(key, Arc::downgrade(&lock));
+        lock
+    }
+
     pub(crate) async fn check_channel(&self, guild_id: u64, channel_id: u64) -> ChannelCheck {
         let cached = {
             let cache = self.channel_cache.lock().unwrap_or_else(|p| p.into_inner());
@@ -260,6 +276,14 @@ impl DiscordRest {
                     .await
                 {
                     Ok(channel) => {
+                        if snowflake(&channel, "id") != Some(channel_id)
+                            || channel.get("guild_id").is_some_and(|value| {
+                                !value.is_null()
+                                    && !snowflake(&channel, "guild_id").is_some_and(|id| id > 0)
+                            })
+                        {
+                            return ChannelCheck::Failed(RestError::InvalidResponse);
+                        }
                         let g = snowflake(&channel, "guild_id");
                         let mut cache =
                             self.channel_cache.lock().unwrap_or_else(|p| p.into_inner());

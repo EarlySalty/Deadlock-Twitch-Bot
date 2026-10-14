@@ -910,3 +910,194 @@ async fn cancellation_settles_reservations_without_duplicate_writes() {
         assert_eq!(response.status, if wrote { 502 } else { 200 });
     }
 }
+
+#[tokio::test]
+async fn definite_connection_failures_allow_same_key_retry_for_all_writes() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    drop(listener);
+    let client = DiscordRest::with_base_url(TOKEN, &format!("http://{address}")).expect("client");
+    let ctx = super::Ctx {
+        guild_id: GUILD,
+        rid: "connect".into(),
+    };
+    let routes = [
+        (Method::POST, "/channels/111/messages"),
+        (Method::PATCH, "/channels/111/messages/5"),
+        (Method::DELETE, "/channels/111/messages/5"),
+        (Method::POST, "/channels/222/messages"),
+        (Method::PUT, "/guilds/42/members/5/roles/7"),
+        (Method::DELETE, "/guilds/42/members/5/roles/7"),
+        (Method::POST, "/guilds/42/roles"),
+        (Method::POST, "/channels/111/invites"),
+    ];
+    for (method, path) in &routes {
+        let action = format!("{method} {path}");
+        let response = client
+            .run_idempotent(&ctx, &action, "connect", "hash", async {
+                assert!(client
+                    .http
+                    .request(method.clone(), path, None, None)
+                    .await
+                    .is_err());
+                (502, json!({"cached": false}))
+            })
+            .await;
+        assert_eq!(response.status, 502);
+    }
+    let listener = std::net::TcpListener::bind(address).expect("restored listener");
+    let server = MockServer::builder().listener(listener).start().await;
+    Mock::given(wiremock::matchers::any())
+        .respond_with(ResponseTemplate::new(204))
+        .expect(routes.len() as u64)
+        .mount(&server)
+        .await;
+    for (method, path) in &routes {
+        let action = format!("{method} {path}");
+        let response = client
+            .run_idempotent(&ctx, &action, "connect", "hash", async {
+                assert!(client
+                    .http
+                    .request(method.clone(), path, None, None)
+                    .await
+                    .is_ok());
+                (200, json!({"cached": false}))
+            })
+            .await;
+        assert_eq!(response.status, 200, "{action}");
+        assert_eq!(json_of(&response)["cached"], false);
+    }
+}
+
+#[tokio::test]
+async fn connection_failure_preserves_prior_uncertain_write() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    drop(listener);
+    let client = DiscordRest::with_base_url(TOKEN, &format!("http://{address}")).expect("client");
+    let state = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    super::WRITE_UNCERTAIN
+        .scope(state.clone(), async {
+            assert!(client
+                .http
+                .request(Method::POST, "/channels/1/messages", None, None)
+                .await
+                .is_err());
+        })
+        .await;
+    assert!(state.load(std::sync::atomic::Ordering::Relaxed));
+}
+
+#[tokio::test]
+async fn concurrent_role_creation_with_distinct_keys_creates_once() {
+    let server = MockServer::start().await;
+    let created = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let lookup_state = created.clone();
+    Mock::given(method("GET"))
+        .and(path("/guilds/42/roles"))
+        .respond_with(move |_: &wiremock::Request| {
+            let roles = if lookup_state.load(std::sync::atomic::Ordering::SeqCst) {
+                json!([{"id": "900", "name": "Live"}])
+            } else {
+                json!([])
+            };
+            ResponseTemplate::new(200)
+                .set_body_json(roles)
+                .set_delay(std::time::Duration::from_millis(40))
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/guilds/42/roles"))
+        .respond_with(move |_: &wiremock::Request| {
+            created.store(true, std::sync::atomic::Ordering::SeqCst);
+            ResponseTemplate::new(200).set_body_json(json!({"id": "900", "name": "Live"}))
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = rest(&server);
+    let payload = json!({"guild_id": GUILD, "name": "Live"});
+    let (first, second) = tokio::join!(
+        client.handle(
+            GUILD,
+            post("discord/role/create", Some("first"), payload.clone())
+        ),
+        client.handle(GUILD, post("discord/role/create", Some("second"), payload)),
+    );
+    for response in [first.expect("first"), second.expect("second")] {
+        assert_eq!(response.status, 200);
+        assert_eq!(json_of(&response)["result"]["role_id"], 900);
+    }
+    assert!(client
+        .role_locks
+        .lock()
+        .expect("locks")
+        .values()
+        .all(|lock| lock.strong_count() == 0));
+}
+
+#[tokio::test]
+async fn malformed_lookup_resources_never_report_found() {
+    for malformed in [
+        Value::Null,
+        json!({}),
+        json!([]),
+        json!({"id": "6", "username": "wrong", "channel_id": "112"}),
+    ] {
+        let server = MockServer::start().await;
+        mount_channel(&server, 111, GUILD).await;
+        Mock::given(method("GET"))
+            .and(path("/users/5"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(malformed.clone()))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/channels/111/messages/5"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(malformed))
+            .mount(&server)
+            .await;
+        let client = rest(&server);
+        for request in [
+            post("discord/resolve-user", None, json!({"user_id": 5})),
+            get("discord/message-reactions", "channel_id=111&message_id=5"),
+        ] {
+            let response = client.handle(GUILD, request).await.expect("response");
+            assert_eq!(response.status, 502);
+            assert_ne!(json_of(&response)["result"]["found"], true);
+            assert_ne!(json_of(&response)["found"], true);
+        }
+    }
+}
+
+#[tokio::test]
+async fn malformed_channel_resources_are_not_cached_as_foreign() {
+    for malformed in [
+        Value::Null,
+        json!({}),
+        json!([]),
+        json!({"id": "112", "guild_id": "42"}),
+        json!({"id": "111", "guild_id": "invalid"}),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/channels/111"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(malformed))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        mount_channel(&server, 111, GUILD).await;
+        let client = rest(&server);
+        assert!(matches!(
+            client.check_channel(GUILD, 111).await,
+            super::ChannelCheck::Failed(super::http::RestError::InvalidResponse)
+        ));
+        assert!(client.channel_cache.lock().expect("cache").is_empty());
+        assert!(matches!(
+            client.check_channel(GUILD, 111).await,
+            super::ChannelCheck::Ok
+        ));
+    }
+}
