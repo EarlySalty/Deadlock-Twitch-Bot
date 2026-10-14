@@ -31,7 +31,7 @@ import {
   type TitleSuggestResult,
 } from '@/api/title';
 import { useAuthStatus } from '@/hooks/useAnalytics';
-import { useT } from '../context/LanguageContext';
+import { useOAuthLink, useT } from '../context/LanguageContext';
 
 interface TitleGeneratorProps {
   streamer: string | null;
@@ -80,6 +80,7 @@ function Toggle({ checked, onChange, disabled = false }: { checked: boolean; onC
 
 export function TitleGenerator({ streamer }: TitleGeneratorProps) {
   const t = useT();
+  const oauthLink = useOAuthLink();
   const queryClient = useQueryClient();
   const { data: authStatus } = useAuthStatus();
   const canEditSettings = Boolean(authStatus?.twitchUserId && streamer === authStatus.twitchUserId);
@@ -293,7 +294,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
           </div>
           <div className="flex shrink-0 items-center gap-2.5">
             {settings && !settings.oauth_connected ? (
-              <a href={settings.oauth_url} className="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/15">
+              <a href={settings.oauth_url ? oauthLink(settings.oauth_url) : undefined} className="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/15">
                 {t('Twitch verbinden')} <ExternalLink className="h-3.5 w-3.5" />
               </a>
             ) : (
@@ -393,7 +394,7 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
             {setTitleStatus === 'scope_missing' && (
               <div className="flex flex-wrap items-center gap-2 rounded-lg border border-warning/20 bg-warning/5 px-3 py-2 text-xs text-warning">
                 <AlertCircle className="h-3.5 w-3.5" /> {t('Schreibrecht fehlt oder muss erneuert werden.')}
-                <a href={result.oauth_url || settings?.oauth_url || '/twitch/raid/auth?scope_profile=title'} className="font-semibold underline">{t('Twitch verbinden')}</a>
+                <a href={oauthLink(result.oauth_url || settings?.oauth_url || '/twitch/raid/auth?scope_profile=title')} className="font-semibold underline">{t('Twitch verbinden')}</a>
               </div>
             )}
             {setTitleStatus === 'error' && <p className="text-xs text-error">{t('Twitch hat das Setzen des Titels gerade nicht bestätigt.')}</p>}
