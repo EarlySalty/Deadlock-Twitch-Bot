@@ -5,7 +5,7 @@ import { useLanguage } from '@/context/LanguageContext';
 import type { PlatformStatus, SocialClipMitPosting } from '@/api/socialMedia';
 import type { QueueJob, ScheduleQueueSnapshot } from './autopilot/schedule-queue';
 import type { PublishSnapshot, PublishVideo } from './autopilot/publish-review/api';
-import { upcomingTerms } from './upcomingTerms';
+import { upcomingTerms, upcomingTermView } from './upcomingTerms';
 import { connectionFact } from './platformPresentation';
 import { PLATFORM_LABELS, type SocialMediaViewTarget } from './labels';
 import { formatTerminInZone, queueStage, queuedPostings, type QueueStage } from './queuePresentation';
@@ -103,10 +103,11 @@ export function StudioStatusStrip({ data, onNavigate }: {
   const reviews = unavailable(data.scheduleFailed || data.clipsFailed);
   const terms = [
     ...[schedule?.next_slot, ...jobsWithStatus(schedule, 'queued').map(job => job.scheduled_at),
-      ...jobsWithStatus(schedule, 'running').map(job => job.scheduled_at), ...scheduledVideos(publish).map(video => video.event!.scheduled_at)]
+      ...jobsWithStatus(schedule, 'running').map(job => job.scheduled_at)]
       .filter((value): value is string => Boolean(value))
-      .map(at => ({ at, timezone: schedule?.settings.timezone ?? data.timezone })),
-    ...(data.clipsFailed ? [] : data.clips ?? []).flatMap(clip => queuedPostings(clip).map(({ at }) => ({ at, timezone: data.timezone }))),
+      .map(at => ({ at, timezone: schedule?.settings.timezone ?? data.timezone, view: 'planen' as const })),
+    ...scheduledVideos(publish).map(video => ({ at: video.event!.scheduled_at, timezone: schedule?.settings.timezone ?? data.timezone, view: 'freigabe' as const })),
+    ...(data.clipsFailed ? [] : data.clips ?? []).flatMap(clip => queuedPostings(clip).map(({ at }) => ({ at, timezone: data.timezone, view: 'freigabe' as const }))),
   ].filter(term => Number.isFinite(Date.parse(term.at))).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   const nextKnown = Boolean(schedule) && Boolean(publish) && Boolean(data.clips) && !data.clipsFailed;
   const nextUnavailable = unavailable(data.scheduleFailed || data.publishFailed || data.clipsFailed);
@@ -117,7 +118,7 @@ export function StudioStatusStrip({ data, onNavigate }: {
     <StatusItem icon={CalendarClock} label={t('Nächster Termin')}
       value={!nextKnown ? nextUnavailable.value : terms[0] ? formatTerminInZone(terms[0].at, locale, terms[0].timezone) : t('Keiner')}
       detail={!nextKnown ? nextUnavailable.detail : terms[0] ? terms[0].timezone : t('Lege Termine im Zeitplan fest')}
-      tone="neutral" onClick={() => onNavigate('plan')} />
+      tone="neutral" onClick={() => onNavigate(terms[0]?.view ?? 'planen')} />
     <StatusItem icon={ListOrdered} label={t('Warteschlange')}
       value={!schedule ? unavailable(data.scheduleFailed).value : String(running + queued)}
       detail={!schedule ? unavailable(data.scheduleFailed).detail : running > 0 ? t('{count} in Produktion', { count: running }) : t('Keine Produktion aktiv')}
@@ -126,7 +127,7 @@ export function StudioStatusStrip({ data, onNavigate }: {
       value={reviewsKnown ? String(productionReviews + clipReviews) : reviews.value}
       detail={reviewsKnown ? t('{productions} Produktionen & Videos · {clips} Clip-Freigaben', { productions: productionReviews, clips: clipReviews }) : reviews.detail}
       tone={reviewsKnown && productionReviews + clipReviews > 0 ? 'warning' : 'neutral'}
-      onClick={() => productionReviews > 0 || clipReviews === 0 ? onNavigate('plan') : onNavigate('pool', 'review')} />
+      onClick={() => jobsWithStatus(schedule, 'review').length > 0 ? onNavigate('planen') : productionReviews > 0 || clipReviews === 0 ? onNavigate('freigabe') : onNavigate('freigabe', 'review')} />
     <StatusItem icon={Plug} label={t('Plattformen')}
       value={!platforms ? unavailable(data.platformsFailed).value : `${uploads.length - attention.length} / ${uploads.length}`}
       detail={!platforms ? unavailable(data.platformsFailed).detail : attention.length === 0 ? t('Alle verbunden') : t('{count} brauchen Aufmerksamkeit', { count: attention.length })}
@@ -193,7 +194,7 @@ export function PipelineOverview({ data, now, onNavigate, activity }: {
       key: term.key,
       title: video ? videoTitle(video) : job ? clipTitle(job) : post ? post.title : t('Nächster freier Auto-Pilot-Termin'),
       meta: post ? `${PLATFORM_LABELS[post.platform]} · ${when(term.at, term.timezone)}` : when(term.at, term.timezone),
-      onClick: () => post ? onNavigate('freigabe', post.stage) : onNavigate('planen'),
+      onClick: () => post ? onNavigate('freigabe', post.stage) : onNavigate(upcomingTermView(term.key)),
     };
   });
 

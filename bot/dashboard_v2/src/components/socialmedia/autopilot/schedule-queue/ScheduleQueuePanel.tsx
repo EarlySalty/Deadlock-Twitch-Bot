@@ -1,3 +1,4 @@
+import { globalTimezoneUrl } from '@/utils/socialMediaChannel';
 import { useEffect, useId, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Calendar, Clock3, RefreshCw, Trash2 } from 'lucide-react';
 import { StudioSectionHeading } from '../../StudioSectionHeading';
@@ -230,7 +231,7 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
             {!draft.target_platforms.length && <p className="sq-help">{t('Noch keine Zielplattform ausgewählt. Ohne Zielplattform wird kein Video veröffentlicht.')}</p>}
           </fieldset>
           <div className="sq-fields">
-            <a href="/twitch/verwaltung?tab=konto">{t('Zeitzone in Verwaltung ändern')}</a>
+            <a href={globalTimezoneUrl(twitchUserId)}>{t('Zeitzone in Verwaltung ändern')}</a>
             <label htmlFor={`${id}-lead`}>{t('Vorlauf in Stunden')}<input id={`${id}-lead`} type="number" min="0" max="720" required value={Number.isFinite(draft.lead_time_hours) ? draft.lead_time_hours : ''} onChange={event => edit({ lead_time_hours: event.target.valueAsNumber })} /></label>
           </div>
           <p className="sq-help">{t('Sommerzeit wird berücksichtigt. Auch bei kürzerem Vorlauf kann die Produktion starten. Verpasste Termine werden nicht gesammelt.')}</p>

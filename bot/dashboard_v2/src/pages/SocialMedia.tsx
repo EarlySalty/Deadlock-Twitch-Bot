@@ -1,3 +1,4 @@
+import { globalTimezoneUrl } from '@/utils/socialMediaChannel';
 import { AlertTriangle } from 'lucide-react';
 import { clipDisplayTitles } from '@/components/socialmedia/clipTitles';
 import { PlatformCheck } from '@/components/socialmedia/PlatformCheck';
@@ -513,6 +514,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
                     }
                   />
                   <PostingScheduleCard
+                    twitchUserId={twitchUserId}
                     availablePlatforms={platformStatusQuery.data?.platforms.filter((status) => status.capabilities?.upload).map((status) => status.platform) ?? []}
                     plan={draft}
                     isLoading={postingPlanQuery.isLoading}
@@ -1322,6 +1324,7 @@ function pruefeZeiten(eingabe: string): { zeiten: string[] } | { fehler: string 
 }
 
 function PostingScheduleCard({
+  twitchUserId,
   availablePlatforms,
   plan,
   isLoading,
@@ -1330,6 +1333,7 @@ function PostingScheduleCard({
   error,
   onChange,
 }: {
+  twitchUserId?: string;
   availablePlatforms: string[];
   plan: PostingPlan | null;
   isLoading: boolean;
@@ -1427,7 +1431,7 @@ function PostingScheduleCard({
 
       <LadeFehlerHinweis fehler={ladeFehler} />
 
-      <p className="text-sm text-ui-muted">{t('Zeiten gelten in {tz}.', { tz: zeitzone })} <a href="/twitch/verwaltung?tab=konto">{t('Zeitzone in Verwaltung ändern')}</a></p>
+      <p className="text-sm text-ui-muted">{t('Zeiten gelten in {tz}.', { tz: zeitzone })} <a href={globalTimezoneUrl(twitchUserId)}>{t('Zeitzone in Verwaltung ändern')}</a></p>
 
       <div className="space-y-3">
         {(plan?.platforms ?? []).map((eintrag) => {

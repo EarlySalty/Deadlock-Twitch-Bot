@@ -1,3 +1,5 @@
+import { globalTimezoneOwner } from '@/utils/socialMediaChannel';
+import { useT } from '@/context/LanguageContext';
 import { GlobalTimezone } from '@/components/verwaltung/GlobalTimezone';
 import { useEffect, useState, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
@@ -46,7 +48,9 @@ interface VerwaltungTabDef {
 }
 
 export function VerwaltungPage() {
+  const t = useT();
   const { data: authStatus, isLoading: loadingAuth } = useAuthStatus();
+  const timezoneOwner = globalTimezoneOwner(window.location.search, authStatus?.twitchUserId ?? undefined);
   const onboarding = useOnboarding();
   const [connectionNotice, setConnectionNotice] = useState('');
   const [returnMessage] = useState(() => {
@@ -159,7 +163,7 @@ export function VerwaltungPage() {
 
   const kontoTab = (
     <>
-      {authStatus?.twitchUserId && <GlobalTimezone owner={String(authStatus.twitchUserId)} />}
+      {timezoneOwner ? <GlobalTimezone owner={timezoneOwner} channelScoped={new URLSearchParams(window.location.search).has('twitch_user_id')} /> : <p role="alert">{t('Bitte einen gültigen Twitch-Kanal für die Zeitzone auswählen.')}</p>}
       {/* Twitch OAuth Section */}
       <motion.section
         className="panel-card rounded-2xl p-5 md:p-6"

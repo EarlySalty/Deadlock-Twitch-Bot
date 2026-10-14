@@ -1,4 +1,6 @@
 export const SOCIAL_EN: Record<string, string> = {
+  'Zeitzone für Kanal {channel}': 'Timezone for channel {channel}',
+  'Bitte einen gültigen Twitch-Kanal für die Zeitzone auswählen.': 'Please select a valid Twitch channel for the timezone.',
   'bis': 'to',
   'Videofassung': 'Video version',
   'Fassung': 'Version',

@@ -18,3 +18,7 @@ export function upcomingTerms(data: StudioOverviewData, now: number) {
   ].filter(term => Number.isFinite(Date.parse(term.at)) && Date.parse(term.at) >= now)
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 }
+
+export function upcomingTermView(key: string): 'planen' | 'freigabe' {
+  return key === 'slot' || key.startsWith('job-') ? 'planen' : 'freigabe';
+}

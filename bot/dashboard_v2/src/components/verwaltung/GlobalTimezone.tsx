@@ -6,11 +6,11 @@ import { useT } from '@/context/LanguageContext';
 import { scheduleQueueApi } from '@/components/socialmedia/autopilot/schedule-queue';
 import { importPoolApi } from '@/components/socialmedia/autopilot/import-pool/api';
 
-export function GlobalTimezone({ owner }: { owner: string }) {
-  return <TimezoneEditor key={owner} owner={owner} />;
+export function GlobalTimezone({ owner, channelScoped = false }: { owner: string; channelScoped?: boolean }) {
+  return <TimezoneEditor key={owner} owner={owner} channelScoped={channelScoped} />;
 }
 
-function TimezoneEditor({ owner }: { owner: string }) {
+function TimezoneEditor({ owner, channelScoped }: { owner: string; channelScoped: boolean }) {
   const t = useT();
   const client = useQueryClient();
   const [draft, setDraft] = useState<string | null>(null);
@@ -38,7 +38,7 @@ function TimezoneEditor({ owner }: { owner: string }) {
     await client.invalidateQueries({ queryKey: ['social-posting-plan'] });
   } });
   return <section className="panel-card rounded-2xl p-5" data-unsaved={draft !== null && dirty ? 'true' : undefined} data-saving={save.isPending ? 'true' : undefined}>
-    <h2 className="text-xl font-semibold">{t('Zeitzone')}</h2>
+    <h2 className="text-xl font-semibold">{channelScoped ? t('Zeitzone für Kanal {channel}', { channel: owner }) : t('Zeitzone')}</h2>
     <p>{t('Gilt für neue Twitch-Clips, den Auto-Pilot und den Clip-Vorrat. Bestehende Termine bleiben unverändert.')}</p>
     {current.isPending && <p role="status">{t('Wird geladen')}</p>}
     {current.isError && <p role="alert">{t('Die Zeitzonen konnten nicht geladen werden.')}</p>}

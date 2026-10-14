@@ -15,7 +15,7 @@ export function studioActions(data: StudioOverviewData, now: number, t: Translat
   const platforms = data.platformsFailed ? [] : data.platforms ?? [];
   const rows: StudioAction[] = [];
   if (schedule?.production_hold === 'empty_pool' || schedule?.production_hold === 'no_schedule') rows.push({ key: 'hold', title: t(schedule.production_hold === 'empty_pool' ? 'Keine passenden Clips verfügbar' : 'Wöchentliche Termine fehlen'), meta: t('Der Auto-Pilot wartet auf deine Aktion'), tone: 'warning', view: 'planen' });
-  if (schedule?.review_count) rows.push({ key: 'reviews', title: t(schedule.review_count === 1 ? '{count} Produktion prüfen' : '{count} Produktionen prüfen', { count: schedule.review_count }), meta: t('Auftrag oder Videofreigabe prüfen'), tone: 'warning', view: 'planen' });
+  if (schedule?.review_count) rows.push({ key: 'reviews', title: t(schedule.review_count === 1 ? '{count} Produktion prüfen' : '{count} Produktionen prüfen', { count: schedule.review_count }), meta: t('Auftrag oder Videofreigabe prüfen'), tone: 'warning', view: schedule.jobs.some(job => job.status === 'review') ? 'planen' : 'freigabe' });
   const videoReviews = publish?.videos.filter(video => video.artifact_state === 'present' && video.status === 'review').length ?? 0;
   if (videoReviews) rows.push({ key: 'video-reviews', title: t(videoReviews === 1 ? '{count} fertiges Video prüfen' : '{count} fertige Videos prüfen', { count: videoReviews }), meta: t('Fertige Videos'), tone: 'warning', view: 'freigabe' });
   const clipReviews = clips.filter(clip => queueStage(clip) === 'review').length;

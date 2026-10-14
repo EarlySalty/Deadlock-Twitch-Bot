@@ -1,3 +1,5 @@
+import { globalTimezoneOwner, globalTimezoneUrl } from '../src/utils/socialMediaChannel';
+import { readFileSync } from 'node:fs';
 import { studioActions } from '../src/components/socialmedia/studioActions';
 import { clipDisplayTitles } from '../src/components/socialmedia/clipTitles';
 import { test } from 'node:test';
@@ -9,7 +11,7 @@ import {
   loadQueueSnapshot,
 } from '../src/components/socialmedia/queuePresentation';
 import type { SocialClipMitPosting } from '../src/api/socialMedia';
-import { upcomingTerms } from '../src/components/socialmedia/upcomingTerms';
+import { upcomingTerms, upcomingTermView } from '../src/components/socialmedia/upcomingTerms';
 import { DEFAULT_LAYOUT } from '../src/types/socialMedia';
 import { approvalFact, authorizationFact, clipPlatformPresentation, connectionFact, publicationFact, transferFact } from '../src/components/socialmedia/platformPresentation';
 import { socialAiClipFromSearch, socialViewFromSearch, socialViewSearch, socialWorkspaceView } from '../src/components/socialmedia/studioNavigation';
@@ -273,4 +275,45 @@ test('Today prioritizes the same action as its overview and ignores failed sourc
   const t = (key: string) => key;
   assert.deepEqual(studioActions(data, 0, t).map(action => [action.key, action.view, action.stage]), [['clips', 'freigabe', 'review']]);
   assert.deepEqual(studioActions({ ...data, clipsFailed: true }, 0, t), []);
+});
+
+
+test('timezone links and the editor preserve the selected channel instead of the authenticated account', () => {
+  for (const owner of ['123', '456']) {
+    const url = new URL(globalTimezoneUrl(owner), 'https://example.test');
+    assert.equal(url.pathname, '/twitch/verwaltung');
+    assert.equal(url.hash, '#konto');
+    assert.equal(globalTimezoneOwner(url.search, '999'), owner);
+  }
+  assert.equal(globalTimezoneOwner('', '999'), '999');
+  for (const search of ['?twitch_user_id=', '?twitch_user_id=invalid']) {
+    assert.equal(globalTimezoneOwner(search, '999'), undefined);
+  }
+  assert.equal(globalTimezoneOwner(new URL(globalTimezoneUrl(undefined), 'https://example.test').search, '999'), undefined);
+  const source = (path: string) => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8');
+  for (const [path, owner] of [
+    ['pages/SocialMedia.tsx', 'twitchUserId'],
+    ['components/socialmedia/autopilot/schedule-queue/ScheduleQueuePanel.tsx', 'twitchUserId'],
+    ['components/socialmedia/autopilot/import-pool/ImportPoolPanel.tsx', 'owner'],
+  ]) {
+    assert.ok(source(path).includes(`href={globalTimezoneUrl(${owner})}`));
+    assert.ok(!source(path).includes('/twitch/verwaltung?tab=konto'));
+  }
+  assert.match(source('pages/Verwaltung.tsx'), /GlobalTimezone owner=\{timezoneOwner\}/);
+  const editor = source('components/verwaltung/GlobalTimezone.tsx');
+  for (const call of ['fetchPostingPlan(owner)', 'scheduleQueueApi.load(owner)', 'importPoolApi.getPreferences(owner)', 'savePostingPlanSettings(owner, { timezone })', 'scheduleQueueApi.save({ timezone }, owner)', 'importPoolApi.savePreferences(owner, { ...preferences, timezone })']) assert.ok(editor.includes(call));
+});
+
+test('upcoming produced videos open video review while production jobs keep their queue target', () => {
+  const source = readFileSync(new URL('../src/components/socialmedia/StudioOverview.tsx', import.meta.url), 'utf8');
+  assert.ok(source.includes("post ? onNavigate('freigabe', post.stage) : onNavigate(upcomingTermView(term.key))"));
+  assert.equal(upcomingTermView('video-42'), 'freigabe');
+  assert.equal(upcomingTermView('42-youtube'), 'freigabe');
+  assert.equal(upcomingTermView('job-42'), 'planen');
+  assert.equal(upcomingTermView('slot'), 'planen');
+  const schedule = { review_count: 1, jobs: [] } as unknown as NonNullable<Parameters<typeof studioActions>[0]['schedule']>;
+  const data = { schedule, scheduleFailed: false, publishFailed: false, clipsFailed: false, platformsFailed: false, timezone: 'UTC' };
+  assert.equal(studioActions(data, 0, key => key)[0].view, 'freigabe');
+  schedule.jobs = [{ status: 'review' }] as typeof schedule.jobs;
+  assert.equal(studioActions(data, 0, key => key)[0].view, 'planen');
 });
