@@ -211,7 +211,7 @@ export function AuthScopes() {
           placeholder="channel:manage:raids channel:bot bits:read …"
         />
         <p className="mt-2 text-xs text-text-secondary">
-          {t("Tipp: Du kannst Scopes auch per URL setzen (\"?scopes=channel:manage:raids,channel:bot\"), wir lesen sie beim Laden ein und speichern sie lokal.")} <code>user:read:chat</code> {t("oder")}
+          {t("Tipp: Du kannst Scopes auch per URL setzen (\"?scopes=channel:manage:raids,channel:bot\"), wir lesen sie beim Laden ein und speichern sie lokal.")} <code>user:read:chat</code> {t("oder")}{' '}
           <code>user:bot</code> {t("gehoeren nicht in diese Streamer-Liste.")}
         </p>
       </div>

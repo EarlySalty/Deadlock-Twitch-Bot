@@ -99,6 +99,7 @@ test('Scope checker renders its catalog and changelog in the selected language',
       Object.assign(window, { location: { search: '' } });
       const html = renderToStaticMarkup(<LanguageProvider><ScopeProvider><AuthScopes /></ScopeProvider></LanguageProvider>);
       assert.ok(html.includes(translate(language, 'Abdeckung')));
+      assert.ok(html.includes(translate(language, 'oder') + ' <code>user:bot</code>'));
       assert.ok(html.includes(translate(language, 'Raids direkt aus Deadlock vorbereiten und auslösen.')));
       assert.ok(html.includes(translate(language, 'Basis-Auth entschlackt')));
       if (language === 'en') {
