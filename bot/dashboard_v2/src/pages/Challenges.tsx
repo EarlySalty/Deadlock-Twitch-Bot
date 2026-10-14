@@ -118,7 +118,7 @@ function QuestCard({ quest }: { quest: ChallengeQuest }) {
   return (
     <article className="panel-card challenge-quest rounded-2xl border border-primary/25 p-5 md:p-6">
       <div className="flex items-start justify-between gap-3">
-        <h3 className="font-semibold leading-snug text-white">{translatePageText(t, quest.text)}</h3>
+        <h3 className="font-semibold leading-snug text-white">{translatePageText(t, quest.text, locale)}</h3>
         <div
           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border ${
             quest.completed
@@ -136,7 +136,7 @@ function QuestCard({ quest }: { quest: ChallengeQuest }) {
             {(Math.min(quest.progress, quest.goal)).toLocaleString(locale)} / {(quest.goal).toLocaleString(locale)}
           </span>
         </div>
-        <ProgressBar current={quest.progress} target={quest.goal} label={translatePageText(t, quest.text)} />
+        <ProgressBar current={quest.progress} target={quest.goal} label={translatePageText(t, quest.text, locale)} />
       </div>
     </article>
   );

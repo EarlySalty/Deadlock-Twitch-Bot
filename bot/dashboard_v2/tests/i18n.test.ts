@@ -187,6 +187,7 @@ test('D6 translates generated coaching and quest copy without changing German', 
   assert.equal(translatePageText(en, 'Streame 45 Minuten länger als dein 4-Wochen-Mittel von 1 Minute'), 'Stream 45 minutes longer than your 4-week average of 1 minute');
   assert.equal(translateGoalRoute(en, 'Noch 1 geworbener Partner und 2 Clip-Einreichungen', 'en-US'), '1 referred partner and 2 clip submissions more');
   assert.equal(translateGoalRoute(de, 'Noch 1 geworbener Partner und 2 Clip-Einreichungen', 'de-DE'), 'Noch 1 geworbener Partner und 2 Clip-Einreichungen');
+  assert.equal(translatePageText(en, 'Erfolgreiche Streamer nutzen Keywords, die du nicht verwendest: Etabliert.'), 'Successful streamers use keywords you are not using: Etabliert.');
   assert.equal(translatePageText(en, 'A user-written title: Grüße & Spaß'), 'A user-written title: Grüße & Spaß');
   for (const text of ['Etabliert', 'Beste Streaming-Zeiten', 'Stream-Aktivität', 'Scores von 0 bis 100 je Bereich']) {
     assert.notEqual(en(text), text);
