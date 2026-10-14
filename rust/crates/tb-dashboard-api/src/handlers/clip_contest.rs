@@ -413,13 +413,13 @@ fn valid_write_origin(headers: &HeaderMap) -> bool {
         && is_allowed_origin(headers)
 }
 
-async fn fetch_helix_clip(clip_id: &str) -> Result<HelixClip, Response> {
+async fn fetch_helix_clip(clip_id: &str) -> Result<HelixClip, Box<Response>> {
     tokio::time::timeout(StdDuration::from_secs(8), fetch_helix_clip_inner(clip_id))
         .await
         .map_err(|_| unavailable())?
 }
 
-async fn fetch_helix_clip_inner(clip_id: &str) -> Result<HelixClip, Response> {
+async fn fetch_helix_clip_inner(clip_id: &str) -> Result<HelixClip, Box<Response>> {
     let client = uplink_config::runtime()
         .ok()
         .and_then(|runtime| runtime.helix.as_ref())
@@ -439,11 +439,11 @@ async fn fetch_helix_clip_inner(clip_id: &str) -> Result<HelixClip, Response> {
         )
     })?;
     if !response.status().is_success() {
-        return Err(json_error(
+        return Err(Box::new(json_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "twitch_unavailable",
             "Die Twitch-Prüfung ist gerade nicht verfügbar.",
-        ));
+        )));
     }
     let value: Value = response.json().await.map_err(|_| {
         json_error(
@@ -461,11 +461,11 @@ async fn fetch_helix_clip_inner(clip_id: &str) -> Result<HelixClip, Response> {
                 .find(|clip| clip.get("id").and_then(Value::as_str) == Some(clip_id))
         })
     else {
-        return Err(json_error(
+        return Err(Box::new(json_error(
             StatusCode::NOT_FOUND,
             "clip_not_found",
             "Diesen Twitch-Clip gibt es nicht oder er ist nicht mehr verfügbar.",
-        ));
+        )));
     };
     let text = |name: &str| {
         clip.get(name)
@@ -516,7 +516,7 @@ async fn fetch_helix_clip_inner(clip_id: &str) -> Result<HelixClip, Response> {
     })
 }
 
-async fn deadlock_game_id(pool: &PgPool) -> Result<String, Response> {
+async fn deadlock_game_id(pool: &PgPool) -> Result<String, Box<Response>> {
     Ok(sqlx::query_scalar::<_, String>(
         "SELECT twitch_game_id
            FROM social_media_category
@@ -577,7 +577,7 @@ fn membership_eligibility_at(
 async fn discord_eligibility(
     pool: &PgPool,
     discord_id: &str,
-) -> Result<DiscordEligibility, Response> {
+) -> Result<DiscordEligibility, Box<Response>> {
     let id = discord_id.parse::<i64>().map_err(|_| unavailable())?;
     let row = sqlx::query("SELECT d.joined_at, d.present, d.synced_at, d.is_bot,
         e.event_type, e.occurred_at
@@ -592,11 +592,11 @@ async fn discord_eligibility(
     let present: Option<bool> = row.try_get("present").map_err(|_| unavailable())?;
     let bot: Option<bool> = row.try_get("is_bot").map_err(|_| unavailable())?;
     if bot == Some(true) {
-        return Err(json_error(
+        return Err(Box::new(json_error(
             StatusCode::FORBIDDEN,
             "bot_account",
             "Bot-Konten können nicht abstimmen.",
-        ));
+        )));
     }
     membership_eligibility_at(
         discord_id,
@@ -606,7 +606,6 @@ async fn discord_eligibility(
         row.try_get("synced_at").map_err(|_| unavailable())?,
         kind.zip(occurred),
     )
-    .map_err(|response| *response)
 }
 
 mod contest;

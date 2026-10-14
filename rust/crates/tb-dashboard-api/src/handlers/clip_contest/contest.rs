@@ -42,18 +42,18 @@ async fn begin_write(
     pool: &PgPool,
     expected: &ContestClock,
     phase: Phase,
-) -> Result<Transaction<'static, Postgres>, Response> {
+) -> Result<Transaction<'static, Postgres>, Box<Response>> {
     let mut tx = pool.begin().await.map_err(|_| unavailable())?;
     lock_month(&mut tx, expected.month)
         .await
         .map_err(|_| unavailable())?;
     let actual = contest_clock(database_now(&mut tx).await.map_err(|_| unavailable())?);
     if !phase_matches(expected, &actual, phase) {
-        return Err(json_error(
+        return Err(Box::new(json_error(
             StatusCode::CONFLICT,
             "phase_changed",
             "Die Monatsphase hat gewechselt. Bitte die Seite neu laden.",
-        ));
+        )));
     }
     sqlx::query(
         "INSERT INTO twitch_clip_contest_months (contest_month) VALUES ($1) ON CONFLICT DO NOTHING",
@@ -70,11 +70,11 @@ async fn begin_write(
     .await
     .map_err(|_| unavailable())?;
     if finalized {
-        return Err(json_error(
+        return Err(Box::new(json_error(
             StatusCode::CONFLICT,
             "month_finalized",
             "Dieser Monat ist bereits abgeschlossen.",
-        ));
+        )));
     }
     Ok(tx)
 }
@@ -426,7 +426,7 @@ async fn persist_submission(
     channel: &str,
     clip_db_id: i64,
     valid_until: DateTime<Utc>,
-) -> Result<i64, Response> {
+) -> Result<i64, Box<Response>> {
     let used: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM twitch_clip_contest_submissions WHERE contest_month=$1
         AND (submitter_person_key=ANY($2) OR submitter_aliases && $2)",
@@ -437,11 +437,11 @@ async fn persist_submission(
     .await
     .map_err(|_| unavailable())?;
     if used >= MAX_SUBMISSIONS_PER_MONTH {
-        return Err(json_error(
+        return Err(Box::new(json_error(
             StatusCode::TOO_MANY_REQUESTS,
             "submission_limit",
             "Du hast diesen Monat bereits drei Clips eingereicht.",
-        ));
+        )));
     }
     let row: Option<(i64,DateTime<Utc>)> = sqlx::query_as("INSERT INTO twitch_clip_contest_submissions
         (contest_month,clip_db_id,twitch_clip_id,clip_url,clip_title,clip_thumbnail_url,
@@ -517,14 +517,14 @@ pub async fn submit_handler(
     };
     let clip = match fetch_helix_clip(&clip_id).await {
         Ok(clip) => clip,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     if let Err(response) = validate_clip_age(&clip, Utc::now()) {
         return *response;
     }
     let game = match deadlock_game_id(&pool).await {
         Ok(game) => game,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     if clip.game_id != game {
         return json_error(
@@ -604,7 +604,7 @@ pub async fn submit_handler(
     };
     let mut tx = match begin_write(&pool, &clock, Phase::Submission).await {
         Ok(tx) => tx,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     // No secondary pool checkout while holding the month lock. Revalidate the
     // partner under a row lock because status or login may have changed during I/O.
@@ -656,7 +656,7 @@ pub async fn submit_handler(
     .await
     {
         Ok(id) => id,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     if tx.commit().await.is_err() {
         return unavailable();
@@ -671,45 +671,45 @@ async fn persist_vote(
     aliases: &[String],
     id: i64,
     valid_until: DateTime<Utc>,
-) -> Result<i64, Response> {
+) -> Result<i64, Box<Response>> {
     let row = sqlx::query("SELECT * FROM twitch_clip_contest_submissions WHERE id=$1 AND contest_month=$2 AND hidden_at IS NULL")
         .bind(id).bind(month).fetch_optional(&mut **tx).await.map_err(|_| unavailable())?
         .ok_or_else(|| json_error(StatusCode::NOT_FOUND,"submission_not_found","Dieser Clip steht nicht zur Abstimmung."))?;
     if is_own(&row, aliases) {
-        return Err(json_error(
+        return Err(Box::new(json_error(
             StatusCode::FORBIDDEN,
             "own_clip",
             "Für deinen eigenen Clip kannst du nicht abstimmen.",
-        ));
+        )));
     }
     let already: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM twitch_clip_contest_votes WHERE submission_id=$1 AND voter_discord_id=$2)")
         .bind(id).bind(discord_id).fetch_one(&mut **tx).await.map_err(|_| unavailable())?;
     if already {
-        return Err(json_error(
+        return Err(Box::new(json_error(
             StatusCode::CONFLICT,
             "already_voted",
             "Für diesen Clip hast du bereits abgestimmt.",
-        ));
+        )));
     }
     let used: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clip_contest_votes WHERE contest_month=$1 AND voter_discord_id=$2")
         .bind(month).bind(discord_id).fetch_one(&mut **tx).await.map_err(|_| unavailable())?;
     if used >= MAX_VOTES_PER_MONTH {
-        return Err(json_error(
+        return Err(Box::new(json_error(
             StatusCode::TOO_MANY_REQUESTS,
             "vote_limit",
             "Du hast deine fünf Stimmen für diesen Monat bereits vergeben.",
-        ));
+        )));
     }
     let written = sqlx::query("INSERT INTO twitch_clip_contest_votes (submission_id,voter_discord_id,contest_month,vote_slot)
         SELECT $1,$2,$3,$4 WHERE clock_timestamp() < $5")
         .bind(id).bind(discord_id).bind(month).bind((used+1) as i16).bind(valid_until)
         .execute(&mut **tx).await.map_err(|_| unavailable())?;
     if written.rows_affected() == 0 {
-        return Err(json_error(
+        return Err(Box::new(json_error(
             StatusCode::CONFLICT,
             "voting_closed",
             "Die Abstimmung ist beendet.",
-        ));
+        )));
     }
     Ok(used + 1)
 }
@@ -748,7 +748,7 @@ pub async fn vote_handler(
     };
     let eligibility = match discord_eligibility(&central.0 .0, &discord.user_id).await {
         Ok(e) => e,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     if !eligibility.account_age_ok {
         return json_error(
@@ -770,7 +770,7 @@ pub async fn vote_handler(
     };
     let mut tx = match begin_write(&pool, &clock, Phase::Voting).await {
         Ok(tx) => tx,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let used = match persist_vote(
         &mut tx,
@@ -783,7 +783,7 @@ pub async fn vote_handler(
     .await
     {
         Ok(n) => n,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     if tx.commit().await.is_err() {
         return unavailable();

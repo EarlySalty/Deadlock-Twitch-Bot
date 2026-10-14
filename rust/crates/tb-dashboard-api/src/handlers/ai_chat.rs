@@ -206,7 +206,7 @@ pub(crate) async fn ai_chat_handler(
 
     let (streamer, twitch_user_id) = match crate::auth::streamer_scope::resolve_analysis_target(&pool, &auth, Some(requested_streamer)).await {
         Ok(target) => target,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     // Plan-Gate für Nicht-Admin/Localhost.

@@ -216,51 +216,119 @@ pub fn history_mode(matches: &[serde_json::Value], now: i64) -> (Option<GameMode
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn at(v: &str) -> DateTime<Utc> { v.parse().unwrap() }
-    fn session(start: &str, end: &str) -> Session { Session {streamer_login:"test".into(), started_at:at(start), ended_at:at(end), game_name:Some("Deadlock".into()),stream_title:None} }
-    #[test] fn midnight_and_sunday_wrap_are_local() {
-        assert_eq!(slot_index(at("2026-09-13T22:00:00Z")),0);
-        assert_eq!(slot_index(at("2026-09-13T21:30:00Z")),335);
+    fn at(v: &str) -> DateTime<Utc> {
+        v.parse().unwrap()
     }
-    #[test] fn dst_uses_real_instants() {
-        assert_eq!(slot_index(at("2026-03-29T00:30:00Z")),6*48+3);
-        assert_eq!(slot_index(at("2026-03-29T01:00:00Z")),6*48+6);
-        assert_eq!(slot_index(at("2026-10-25T00:00:00Z")),slot_index(at("2026-10-25T01:00:00Z")));
+    fn session(start: &str, end: &str) -> Session {
+        Session {
+            streamer_login: "test".into(),
+            started_at: at(start),
+            ended_at: at(end),
+            game_name: Some("Deadlock".into()),
+            stream_title: None,
+        }
     }
-    #[test] fn duplicates_and_future_sessions_do_not_boost_history() {
-        let s=session("2026-09-10T18:00:00Z","2026-09-10T20:00:00Z");
-        let single=schedule(&[s.clone()],at("2026-09-01T00:00:00Z"),at("2026-09-18T00:00:00Z"));
-        let duplicate=schedule(&[s.clone(),s,session("2026-09-20T18:00:00Z","2026-09-20T20:00:00Z")],at("2026-09-01T00:00:00Z"),at("2026-09-18T00:00:00Z"));
-        assert_eq!(single.slots,duplicate.slots); assert_eq!(duplicate.sessions,1);
-        assert_eq!(observed_overlap_minutes(&single,&duplicate),120);
+    #[test]
+    fn midnight_and_sunday_wrap_are_local() {
+        assert_eq!(slot_index(at("2026-09-13T22:00:00Z")), 0);
+        assert_eq!(slot_index(at("2026-09-13T21:30:00Z")), 335);
     }
-    #[test] fn disjoint_halves_are_not_observed_overlap() {
-        let a=schedule(&[session("2026-09-10T18:00:00Z","2026-09-10T18:15:00Z")],at("2026-09-01T00:00:00Z"),at("2026-09-18T00:00:00Z"));
-        let b=schedule(&[session("2026-09-10T18:15:00Z","2026-09-10T18:30:00Z")],at("2026-09-01T00:00:00Z"),at("2026-09-18T00:00:00Z"));
-        assert_eq!(observed_overlap_minutes(&a,&b),0);
+    #[test]
+    fn dst_uses_real_instants() {
+        assert_eq!(slot_index(at("2026-03-29T00:30:00Z")), 6 * 48 + 3);
+        assert_eq!(slot_index(at("2026-03-29T01:00:00Z")), 6 * 48 + 6);
+        assert_eq!(
+            slot_index(at("2026-10-25T00:00:00Z")),
+            slot_index(at("2026-10-25T01:00:00Z"))
+        );
     }
-    #[test] fn unknown_is_not_perfect_match() {
-        let empty=schedule(&[],at("2026-09-01T00:00:00Z"),at("2026-09-18T00:00:00Z"));
-        let score=match_score(&empty,&empty,&PlayerProfile::default(),&PlayerProfile::default());
-        assert_eq!(score.score,None); assert!(score.reasons.is_empty());
+    #[test]
+    fn duplicates_and_future_sessions_do_not_boost_history() {
+        let s = session("2026-09-10T18:00:00Z", "2026-09-10T20:00:00Z");
+        let single = schedule(
+            std::slice::from_ref(&s),
+            at("2026-09-01T00:00:00Z"),
+            at("2026-09-18T00:00:00Z"),
+        );
+        let duplicate = schedule(
+            &[
+                s.clone(),
+                s,
+                session("2026-09-20T18:00:00Z", "2026-09-20T20:00:00Z"),
+            ],
+            at("2026-09-01T00:00:00Z"),
+            at("2026-09-18T00:00:00Z"),
+        );
+        assert_eq!(single.slots, duplicate.slots);
+        assert_eq!(duplicate.sessions, 1);
+        assert_eq!(observed_overlap_minutes(&single, &duplicate), 120);
     }
-    #[test] fn conflicting_modes_and_far_ranks_are_flagged() {
-        let empty=schedule(&[],at("2026-09-01T00:00:00Z"),at("2026-09-18T00:00:00Z"));
-        let own=PlayerProfile {rank_tier:Some(3),mode:Some(GameMode::Normal),..Default::default()};
-        let other=PlayerProfile {rank_tier:Some(9),mode:Some(GameMode::StreetBrawl),..Default::default()};
-        assert!(!match_score(&empty,&empty,&own,&other).compatible);
+    #[test]
+    fn disjoint_halves_are_not_observed_overlap() {
+        let a = schedule(
+            &[session("2026-09-10T18:00:00Z", "2026-09-10T18:15:00Z")],
+            at("2026-09-01T00:00:00Z"),
+            at("2026-09-18T00:00:00Z"),
+        );
+        let b = schedule(
+            &[session("2026-09-10T18:15:00Z", "2026-09-10T18:30:00Z")],
+            at("2026-09-01T00:00:00Z"),
+            at("2026-09-18T00:00:00Z"),
+        );
+        assert_eq!(observed_overlap_minutes(&a, &b), 0);
     }
-    #[test] fn titles_are_conservative() {
-        assert_eq!(title_mode("Street Brawl mit euch"),Some(GameMode::StreetBrawl));
-        assert_eq!(title_mode("kein ranked heute"),None);
-        assert_eq!(title_mode("Ranked und danach Brawl"),None);
-        assert_eq!(title_mode("BrawlerFan spielt"),None);
+    #[test]
+    fn unknown_is_not_perfect_match() {
+        let empty = schedule(&[], at("2026-09-01T00:00:00Z"), at("2026-09-18T00:00:00Z"));
+        let score = match_score(
+            &empty,
+            &empty,
+            &PlayerProfile::default(),
+            &PlayerProfile::default(),
+        );
+        assert_eq!(score.score, None);
+        assert!(score.reasons.is_empty());
     }
-    #[test] fn mode_requires_recent_explicit_evidence() {
-        let now=1_800_000_000;
-        let matches=vec![serde_json::json!({"game_mode":4,"start_time":now-100});3];
-        assert_eq!(history_mode(&matches,now),(Some(GameMode::StreetBrawl),3));
-        assert_eq!(history_mode(&[serde_json::json!({"not_scored":true,"start_time":now})],now),(None,0));
-        assert_eq!(history_mode(&matches,now+15*86400),(None,0));
+    #[test]
+    fn conflicting_modes_and_far_ranks_are_flagged() {
+        let empty = schedule(&[], at("2026-09-01T00:00:00Z"), at("2026-09-18T00:00:00Z"));
+        let own = PlayerProfile {
+            rank_tier: Some(3),
+            mode: Some(GameMode::Normal),
+            ..Default::default()
+        };
+        let other = PlayerProfile {
+            rank_tier: Some(9),
+            mode: Some(GameMode::StreetBrawl),
+            ..Default::default()
+        };
+        assert!(!match_score(&empty, &empty, &own, &other).compatible);
+    }
+    #[test]
+    fn titles_are_conservative() {
+        assert_eq!(
+            title_mode("Street Brawl mit euch"),
+            Some(GameMode::StreetBrawl)
+        );
+        assert_eq!(title_mode("kein ranked heute"), None);
+        assert_eq!(title_mode("Ranked und danach Brawl"), None);
+        assert_eq!(title_mode("BrawlerFan spielt"), None);
+    }
+    #[test]
+    fn mode_requires_recent_explicit_evidence() {
+        let now = 1_800_000_000;
+        let matches = vec![serde_json::json!({"game_mode":4,"start_time":now-100}); 3];
+        assert_eq!(
+            history_mode(&matches, now),
+            (Some(GameMode::StreetBrawl), 3)
+        );
+        assert_eq!(
+            history_mode(
+                &[serde_json::json!({"not_scored":true,"start_time":now})],
+                now
+            ),
+            (None, 0)
+        );
+        assert_eq!(history_mode(&matches, now + 15 * 86400), (None, 0));
     }
 }
