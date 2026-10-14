@@ -109,8 +109,7 @@ struct PreparingSnapshot {
 
 impl PreparingSnapshot {
     fn runtime(&self, current: &EditorRuntime) -> Result<EditorRuntime, AiEditorError> {
-        let runtime =
-            EditorRuntime::from_configuration(&current.package_root, self.configuration.clone())?;
+        let runtime = current.restore_configuration(self.configuration.clone())?;
         if self.media.duration_ms == 0
             || self.media.duration_ms > runtime.limits.resources.max_media_duration_ms
             || !(PRODUCTION_SKILLS.len()..=PRODUCTION_SKILLS.len() + 1).contains(&self.skills.len())

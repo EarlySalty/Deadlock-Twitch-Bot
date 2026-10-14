@@ -90,12 +90,18 @@ generated=(
   website/dist
 )
 social_ai_expected=0
-social_ai_config_extension=yaml
+social_ai_config_files=()
 if "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:rust/crates/tb-social-media/src/ai_editor/mod.rs" 2>/dev/null; then
   social_ai_expected=1
-  if "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:ops/social-ai/editor.toml" 2>/dev/null; then
-    social_ai_config_extension=toml
-  fi
+  for social_ai_config_extension in toml yaml; do
+    if "${git_safe[@]}" -C "$checkout" cat-file -e "$git_sha:ops/social-ai/editor.$social_ai_config_extension" 2>/dev/null; then
+      social_ai_config_files=(
+        "ops/social-ai/editor.$social_ai_config_extension"
+        "ops/social-ai/pricing-v1.$social_ai_config_extension"
+      )
+      break
+    fi
+  done
   generated+=(rust/target/release/tb-stt-server)
 fi
 collector_expected=0
@@ -162,8 +168,7 @@ required_files=(
 )
 if [[ "$social_ai_expected" == 1 ]]; then
   required_files+=(
-    "ops/social-ai/editor.$social_ai_config_extension"
-    "ops/social-ai/pricing-v1.$social_ai_config_extension"
+    "${social_ai_config_files[@]}"
     ops/social-ai/skills/deadlock-understanding.md
     ops/social-ai/skills/highlight-analysis.md
     ops/social-ai/skills/editing-strategy.md

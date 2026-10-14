@@ -26,7 +26,10 @@ fn configuration(root: &Path) -> WorkerConfig {
         .ancestors()
         .nth(3)
         .expect("owned source package");
-    let mut media = MediaRuntime::load(package_root).expect("existing packaged media runtime");
+    let section: toml::Table = toml::from_str(tb_llm::social_editor::fixture::SOCIAL_AI_SECTION)
+        .expect("social_ai fixture");
+    let mut media =
+        MediaRuntime::load(package_root, &section).expect("existing packaged media runtime");
     media.package_root = root.canonicalize().expect("owned isolated package root");
     media.source_root = media.package_root.join("clips");
     media.output_root = media.source_root.clone();
