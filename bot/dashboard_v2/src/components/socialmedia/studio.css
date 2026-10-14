@@ -2073,3 +2073,10 @@ select.studio-select {
   .social-studio .studio-platform-check-content { align-items: flex-start; flex-direction: column; }
   .social-studio .studio-header-actions { flex-wrap: wrap; }
 }
+
+.social-studio .sq-running { color: var(--color-info); border-color: currentColor; }
+.social-studio .sq-badge[data-status="review"] { color: var(--color-warning); border-color: currentColor; }
+.social-studio .sq-badge[data-status="failed"] { color: var(--color-danger); border-color: currentColor; }
+.social-studio .sq-badge[data-status="completed"] { color: var(--color-success); border-color: currentColor; }
+
+.social-studio .import-pool-pick { width: 100%; height: 44px; font-size: 12px; }

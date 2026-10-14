@@ -579,7 +579,7 @@ function OwnerImportPool({
                 )}
                 {" · "}
                 {page
-                  ? `${page.total.toLocaleString(locale)} ${t("erfasste Clips")}`
+                  ? `${t("Im Clip-Vorrat erfasst")}: ${page.total.toLocaleString(locale)}`
                   : t(
                       poolQuery.isError
                         ? "Clip-Pool nicht geladen"
@@ -678,7 +678,7 @@ function OwnerImportPool({
                         type="checkbox"
                         checked={selected}
                         disabled={selectionLocked || !selectionAllowed(clip)}
-                        aria-label={`${t("Clip bevorzugen")}: ${metadata.title}`}
+                        aria-label={`${t("Vorziehen")}: ${metadata.title}`}
                         title={t("Auto-Pilot nimmt diesen Clip zuerst")}
                         onChange={(event) => {
                           setFeedback("");
@@ -689,6 +689,7 @@ function OwnerImportPool({
                           });
                         }}
                       />
+                      <span>{t("Vorziehen")}</span>
                     </label>
                     {metadata.duration !== null && (
                       <span className="import-pool-duration">

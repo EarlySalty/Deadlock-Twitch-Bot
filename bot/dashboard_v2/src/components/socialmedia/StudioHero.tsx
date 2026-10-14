@@ -1,10 +1,11 @@
+import { studioActions } from './studioActions';
 import { BarChart3, Plus } from 'lucide-react';
 import { useT } from '@/context/LanguageContext';
 import { SOCIAL_MEDIA_TABS, type SocialMediaView, type SocialMediaViewTarget } from './labels';
 import type { StudioOverviewData } from './StudioOverview';
-import { queueStage, type QueueStage } from './queuePresentation';
+import { type QueueStage } from './queuePresentation';
 
-export function StudioHero({ streamer, activeView, onUpload, onOpenAnalytics, onNavigate, onOpenLayout, data }: {
+export function StudioHero({ streamer, activeView, onUpload, onOpenAnalytics, onNavigate, onOpenLayout, data, now }: {
   streamer: string;
   activeView: SocialMediaView;
   onUpload: () => void;
@@ -12,12 +13,12 @@ export function StudioHero({ streamer, activeView, onUpload, onOpenAnalytics, on
   onNavigate: (view: SocialMediaViewTarget, stage?: QueueStage) => void;
   onOpenLayout: () => void;
   data: StudioOverviewData;
+  now: number;
 }) {
   const t = useT();
-  const review = !data.clipsFailed && data.clips?.some(clip => queueStage(clip) === 'review');
+  const firstAction = studioActions(data, now, t)[0];
   const primary = activeView === 'heute'
-    ? review ? { label: 'Freigaben prüfen', run: () => onNavigate('freigabe', 'review') }
-      : data.schedule?.review_count ? { label: 'Produktionen prüfen', run: () => onNavigate('planen') }
+    ? firstAction ? { label: firstAction.title, run: () => onNavigate(firstAction.view, firstAction.stage) }
       : { label: 'Auto-Pilot & Zeitplan', run: () => onNavigate('planen') }
     : activeView === 'freigabe' ? { label: 'Freigaben prüfen', run: () => onNavigate('freigabe', 'review') }
     : activeView === 'planen' ? { label: 'Termine festlegen', run: () => document.querySelector('.sq-slots')?.scrollIntoView({ behavior: 'smooth', block: 'center' }) }

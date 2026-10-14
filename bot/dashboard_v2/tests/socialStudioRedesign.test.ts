@@ -1,3 +1,5 @@
+import { studioActions } from '../src/components/socialmedia/studioActions';
+import { clipDisplayTitles } from '../src/components/socialmedia/clipTitles';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -249,4 +251,26 @@ test('volle Seite ohne Fortschritt startet die Bestandsabfrage neu statt abzubre
   });
   assert.deepEqual(calls, [1, 2, 1]);
   assert.equal(data.items.length, 4);
+});
+
+test('approved clips awaiting TikTok remain planned rather than needing clip approval', () => {
+  const approved = clip(1, { status: 'approved', upload_states: { tiktok: 'waiting_tiktok_approval' }, scheduled_at: { youtube: '2026-10-15T12:00:00Z' } });
+  assert.equal(queueStage(approved), 'planned');
+  assert.equal(filterQueue([approved], 'review', '', 'all').length, 0);
+  assert.equal(queueStage(clip(2, { status: 'awaiting_approval', upload_states: { tiktok: 'waiting_tiktok_approval' } })), 'review');
+});
+
+test('generated titles win while duplicate Twitch titles gain date and time', () => {
+  const clips = [clip(1, { title: 'Streamtitel', generated_title: '  Mid-Boss gerettet  ' }), clip(2, { title: 'Streamtitel', generated_title: ' ' }), clip(3, { title: 'Eigenständiger Titel' })];
+  const titles = clipDisplayTitles(clips, 'de-DE', 'Europe/Berlin');
+  assert.equal(titles.get(1), 'Mid-Boss gerettet');
+  assert.match(titles.get(2) ?? '', /Streamtitel.*21\.09\..*14:00/);
+  assert.equal(titles.get(3), 'Eigenständiger Titel');
+});
+
+test('Today prioritizes the same action as its overview and ignores failed sources', () => {
+  const data = { clips: [clip(1, { status: 'awaiting_approval' })], clipsFailed: false, platforms: [], platformsFailed: false, scheduleFailed: false, publishFailed: false, timezone: 'Europe/Berlin' };
+  const t = (key: string) => key;
+  assert.deepEqual(studioActions(data, 0, t).map(action => [action.key, action.view, action.stage]), [['clips', 'freigabe', 'review']]);
+  assert.deepEqual(studioActions({ ...data, clipsFailed: true }, 0, t), []);
 });

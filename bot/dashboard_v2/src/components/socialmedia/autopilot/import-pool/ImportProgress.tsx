@@ -12,6 +12,8 @@ export function ImportProgress({ job }: { job: ImportJob }) {
     job.incomplete_windows.length > 0 || job.status === "incomplete";
   return (
     <div className="import-pool-progress" data-import-status={job.status}>
+      <p className="import-pool-result">{t("{count} Clips im Clip-Vorrat erfasst", { count: job.persisted_count })}</p>
+      <details><summary>{t("Importdetails")}</summary>
       <p
         className={
           incomplete || job.status === "error"
@@ -26,11 +28,11 @@ export function ImportProgress({ job }: { job: ImportJob }) {
         {t("Festgelegter Zeitraum")}:{" "}
         {t(filterDescription(job.clip_date_filter))}. {job.timezone}
       </p>
-      <p className="import-pool-help">
+      {job.clip_date_filter.kind === "all" ? <p className="import-pool-help">{t("Alle verfügbaren Clips")}</p> : <p className="import-pool-help">
         {t("Erfassung von")} {localTimestamp(job.started_at, job.timezone)}{" "}
         {t("bis")} {localTimestamp(job.ended_at, job.timezone)} (
         {t("Endzeitpunkt ausgeschlossen")}).
-      </p>
+      </p>}
       <dl className="import-pool-counts">
         <div>
           <dt>{t("Neu im Pool gespeichert")}</dt>
@@ -101,6 +103,7 @@ export function ImportProgress({ job }: { job: ImportJob }) {
           )}
         </div>
       )}
+      </details>
     </div>
   );
 }

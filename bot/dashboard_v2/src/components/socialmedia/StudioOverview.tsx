@@ -1,3 +1,4 @@
+import { studioActions } from './studioActions';
 import type { ComponentType, ReactNode } from 'react';
 import { AlertTriangle, ArrowRight, CalendarClock, CircleDot, Clock3, ListOrdered, Plug, Power } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
@@ -8,7 +9,6 @@ import { upcomingTerms } from './upcomingTerms';
 import { connectionFact } from './platformPresentation';
 import { PLATFORM_LABELS, type SocialMediaViewTarget } from './labels';
 import { formatTerminInZone, queueStage, queuedPostings, type QueueStage } from './queuePresentation';
-import type { SocialPlatform } from '@/types/socialMedia';
 
 type Tone = 'neutral' | 'success' | 'warning' | 'danger' | 'gold';
 type IconComponent = ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
@@ -162,13 +162,18 @@ function OverviewColumn({ icon: Icon, title, count, rows, empty, footer }: {
   </section>;
 }
 
-export function PipelineOverview({ data, now, onNavigate }: {
+export function PipelineOverview({ data, now, onNavigate, activity }: {
   data: StudioOverviewData;
   now: number;
+  activity?: ReactNode;
   onNavigate: (view: SocialMediaViewTarget, stage?: QueueStage) => void;
 }) {
   const { t, locale } = useLanguage();
-  const { schedule, publish, clips, platforms, timezone } = data;
+  const { timezone } = data;
+  const schedule = data.scheduleFailed ? undefined : data.schedule;
+  const publish = data.publishFailed ? undefined : data.publish;
+  const clips = data.clipsFailed ? undefined : data.clips;
+  const platforms = data.platformsFailed ? undefined : data.platforms;
   const zone = schedule?.settings.timezone ?? timezone;
   const when = (iso: string | null, timeZone = zone) => iso ? `${formatTerminInZone(iso, locale, timeZone)} · ${timeZone}` : t('Ohne Termin');
   const clipTitle = (job: QueueJob) => job.clip_title || t('Clip {id}', { id: job.clip_id });
@@ -176,28 +181,9 @@ export function PipelineOverview({ data, now, onNavigate }: {
   const nowRows: OverviewRow[] = [
     ...jobsWithStatus(schedule, 'running').map(job => ({ key: `job-${job.id}`, title: clipTitle(job), meta: job.mode === 'ai' ? t('KI-Bearbeitung läuft') : t('Produktion läuft'), tone: 'gold' as Tone, onClick: () => onNavigate('plan') })),
     ...(clips ?? []).filter(clip => clip.status === 'publishing').map(clip => ({ key: `publish-${clip.clip_db_id}`, title: clip.title || clip.clip_id, meta: t('Wird veröffentlicht'), tone: 'gold' as Tone, onClick: () => onNavigate('pool', queueStage(clip)) })),
-    ...(publish?.videos ?? []).filter(video => video.event?.destinations.some(destination => ['preparing', 'effect_started', 'processing'].includes(destination.state))).map(video => ({ key: `video-${video.id}`, title: videoTitle(video), meta: t('Wird veröffentlicht'), tone: 'gold' as Tone, onClick: () => onNavigate('plan') })),
+    ...(publish?.videos ?? []).filter(video => video.event?.destinations.some(destination => ['preparing', 'effect_started', 'processing'].includes(destination.state))).map(video => ({ key: `video-${video.id}`, title: videoTitle(video), meta: t('Wird veröffentlicht'), tone: 'gold' as Tone, onClick: () => onNavigate('freigabe') })),
   ];
-  const productionReviews = schedule?.review_count ?? 0;
-  const clipReviews = countStage(clips, 'review');
-  const failedClips = countStage(clips, 'failed');
-  const failedJobs = jobsWithStatus(schedule, 'failed').length;
-  const actionRows: OverviewRow[] = [];
-  if (schedule?.production_hold === 'empty_pool' || schedule?.production_hold === 'no_schedule')
-    actionRows.push({ key: 'hold', title: t(HOLDS[schedule.production_hold]), meta: t('Der Auto-Pilot wartet auf deine Aktion'), tone: 'warning', onClick: () => onNavigate(schedule.production_hold === 'empty_pool' ? 'library' : 'plan') });
-  if (productionReviews > 0)
-    actionRows.push({ key: 'reviews', title: t('{count} Produktionen & Videos prüfen', { count: productionReviews }), meta: t('Auftrag oder Videofreigabe prüfen'), tone: 'warning', onClick: () => onNavigate('plan') });
-  if (clipReviews > 0)
-    actionRows.push({ key: 'clips', title: t('{count} Clips freigeben', { count: clipReviews }), meta: t('Freigabe aus der bisherigen Pipeline'), tone: 'warning', onClick: () => onNavigate('pool', 'review') });
-  if (failedJobs > 0)
-    actionRows.push({ key: 'jobs', title: t('{count} Produktionen fehlgeschlagen', { count: failedJobs }), meta: t('Auftrag prüfen oder entfernen'), tone: 'danger', onClick: () => onNavigate('plan') });
-  if (failedClips > 0)
-    actionRows.push({ key: 'failed', title: t('{count} Clips mit Fehler', { count: failedClips }), meta: t('Veröffentlichung erneut prüfen'), tone: 'danger', onClick: () => onNavigate('pool', 'failed') });
-  for (const video of publish?.videos ?? [])
-    if (video.event?.destinations.some(destination => ['retry', 'held', 'uncertain', 'failed'].includes(destination.state)))
-      actionRows.push({ key: `publish-${video.id}`, title: videoTitle(video), meta: t('Veröffentlichung erneut prüfen'), tone: 'warning', onClick: () => onNavigate('plan') });
-  for (const status of platformsNeedingAttention(platforms))
-    actionRows.push({ key: `platform-${status.platform}`, title: PLATFORM_LABELS[status.platform as SocialPlatform] ?? status.platform, meta: t(connectionFact(status).label), tone: 'warning', onClick: () => onNavigate('konten') });
+  const actionRows: OverviewRow[] = studioActions(data, now, t).map(action => ({ ...action, onClick: () => onNavigate(action.view, action.stage) }));
 
   const nextRows: OverviewRow[] = upcomingTerms(data, now).slice(0, 8).map(term => {
     const video = publish?.videos.find(video => `video-${video.id}` === term.key);
@@ -216,7 +202,7 @@ export function PipelineOverview({ data, now, onNavigate }: {
   const unavailable = failed ? t('Nicht abrufbar') : loading ? t('Wird geladen') : null;
   return <div className="studio-overview" aria-busy={loading || undefined}>
     {failed && <p className="studio-overview-notice" role="status">{t('Die Übersicht ist nicht vollständig abrufbar. Bereits geladene Einträge bleiben sichtbar.')}</p>}
-    <OverviewColumn icon={CircleDot} title={t('Jetzt')} count={nowRows.length} rows={nowRows} empty={unavailable ?? t('Gerade läuft nichts.')} />
+    <OverviewColumn icon={CircleDot} title={t('Läuft gerade')} count={null} rows={nowRows} empty={activity ? '' : unavailable ?? t('Gerade läuft nichts.')} footer={activity} />
     <OverviewColumn icon={AlertTriangle} title={t('Braucht dich')} count={actionRows.length} rows={actionRows} empty={unavailable ?? t('Nichts offen. Du bist auf dem aktuellen Stand.')} />
     <OverviewColumn icon={Clock3} title={t('Als Nächstes')} count={null} rows={nextRows} empty={unavailable ?? t('Noch nichts eingeplant.')}
       footer={<button type="button" className="studio-overview-link" onClick={() => onNavigate('plan')}>{t('Zeitplan öffnen')}<ArrowRight className="h-4 w-4" aria-hidden /></button>} />

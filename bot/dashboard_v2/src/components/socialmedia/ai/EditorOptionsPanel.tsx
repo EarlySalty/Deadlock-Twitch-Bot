@@ -23,7 +23,7 @@ export function EditorOptionsPanel({ channel, disabled = false, scheduleApi }: {
     mutationFn: (value: AiEditorOptions) => saveAiOptions(channel, value),
     onSuccess: (value) => client.setQueryData(key, value),
   });
-  return <section className="social-ai-options" aria-label="Optionen für die KI-Bearbeitung">
+  return <section data-saving={save.isPending ? "true" : undefined} className="social-ai-options" aria-label="Optionen für die KI-Bearbeitung">
     <div className="social-ai-section-head"><h3>Optionen für die KI-Bearbeitung</h3><p>Gilt für neue Bearbeitungen in deinem Kanal. Mehrere Videos und das KI-Layout sind standardmäßig aus.</p></div>
     {options.isPending ? <p role="status">Optionen werden geladen…</p> : options.isError ? <p className="social-ai-caution" role="alert">Die Optionen konnten nicht geladen werden.</p> : <div className="social-ai-option-list">
       {choices.map((choice) => <label className="studio-switch" key={choice.key}><input type="checkbox" checked={options.data[choice.key]} disabled={disabled || save.isPending || options.isFetching} onChange={(event) => save.mutate({ ...options.data, [choice.key]: event.target.checked })} /><span>{choice.label}</span><small>{choice.help}</small></label>)}

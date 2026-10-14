@@ -252,7 +252,7 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
             const movable = job.status === 'queued' && !job.started_at;
             const position = unstarted.findIndex(value => value.id === job.id);
             return <li key={job.id} className="sq-job">
-              <div className="sq-job-head"><strong>{job.clip_title || `Clip ${job.clip_id}`}</strong><span className={job.status === 'running' ? 'sq-running' : 'sq-badge'}>{STATUS[job.status]}</span></div>
+              <div className="sq-job-head"><strong>{job.clip_title || `Clip ${job.clip_id}`}</strong><span data-status={job.status} className={job.status === 'running' ? 'sq-running' : 'sq-badge'}>{STATUS[job.status]}</span></div>
               <p className="sq-help">{slotLabel(job.scheduled_at, snapshot.settings.timezone)} · {job.mode ? (job.mode === 'ai' ? 'KI-Bearbeitung' : 'Statisches Layout') : job.source === 'manual' ? 'Manueller Auftrag' : 'Modus wird beim Start festgelegt'}</p>
               {job.review_reasons.map(reason => <p className="sq-help" key={reason}>{REASONS[reason] ?? 'Die Produktion benötigt eine Prüfung.'}</p>)}
               {job.review_explanation && <p className="sq-help">{job.review_explanation}</p>}

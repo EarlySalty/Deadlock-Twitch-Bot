@@ -1,4 +1,21 @@
 export const SOCIAL_STUDIO_EN: Record<string, string> = {
+  '{count} Produktion prüfen': 'Review {count} production',
+  '{count} fertiges Video prüfen': 'Review {count} produced video',
+  '{count} Clip freigeben': 'Approve {count} clip',
+  '{count} Produktionen prüfen': 'Review {count} productions',
+  '{count} fertige Videos prüfen': 'Review {count} produced videos',
+  'Verbindung läuft bald ab': 'Connection expires soon',
+  'Im Clip-Vorrat erfasst': 'Captured in clip supply',
+
+  '{clips} Clips verfügbar': '{clips} clips available',
+  '{clips} Clips verfügbar, reicht für etwa {days} Tage': '{clips} clips available, lasts about {days} days',
+  'Posting-Rhythmus: {proWoche} Posts pro Woche.': 'Posting cadence: {proWoche} posts per week.',
+  'Alle verfügbaren Clips': 'All available clips',
+  '{count} Clips im Clip-Vorrat erfasst': '{count} clips captured in the clip supply',
+  'Importdetails': 'Import details',
+  'TikTok für {title} vorbereiten': 'Prepare TikTok for {title}',
+  'Läuft gerade': 'Running now',
+
   'Clip-Vorrat': 'Clip supply',
   'Vorziehen': 'Prioritize',
   'Auto-Pilot nimmt diesen Clip zuerst': 'Auto-Pilot takes this clip first',

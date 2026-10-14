@@ -7,9 +7,10 @@ import { connectionFact } from './platformPresentation';
 import { formatTerminInZone, type QueueStage } from './queuePresentation';
 import { upcomingTerms } from './upcomingTerms';
 
-export function StudioStatusBar({ data, pool, now, onNavigate }: {
+export function StudioStatusBar({ data, pool, poolFailed, now, onNavigate }: {
   data: StudioOverviewData;
   pool: ClipPoolForecast | undefined;
+  poolFailed?: boolean;
   now: number;
   onNavigate: (view: SocialMediaViewTarget, stage?: QueueStage) => void;
 }) {
@@ -27,10 +28,10 @@ export function StudioStatusBar({ data, pool, now, onNavigate }: {
       {settings?.paused && ` · ${t('Pausiert')}`}
     </button>
     <button type="button" data-tone={connected === 3 ? 'success' : 'warning'} onClick={() => onNavigate('einstellungen')}>
-      {t('Konten verbunden {count}/3', { count: connected ?? '…' })}
+      {connected === null ? `${t('Konten')} · ${t(data.platformsFailed ? 'Nicht abrufbar' : 'Wird geladen')}` : t('Konten verbunden {count}/3', { count: connected })}
     </button>
     <button type="button" data-tone={pool?.warnung ? 'warning' : 'neutral'} onClick={() => onNavigate('planen')}>
-      {!pool ? t('Bestand wird geladen') : pool.reicht_fuer_tage === null ? t('Vorrat ohne Posting-Rhythmus') : t('Vorrat reicht {days} Tage', { days: pool.reicht_fuer_tage })}
+      {poolFailed ? `${t('Vorrat')} · ${t('Nicht abrufbar')}` : !pool ? t('Bestand wird geladen') : pool.reicht_fuer_tage === null ? t('Vorrat ohne Posting-Rhythmus') : t('Vorrat reicht {days} Tage', { days: pool.reicht_fuer_tage })}
     </button>
 <HintChip hint={t("Der Vorrat wird aus dem Posting-Rhythmus für neue Twitch-Clips berechnet.")} /></section>;
 }

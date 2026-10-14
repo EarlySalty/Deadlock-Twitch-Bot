@@ -40,6 +40,7 @@ type EditMode = 'layout' | 'enrichment';
 
 interface ClipCardProps {
   clip: SocialClipMitPosting;
+  displayTitle?: string;
   now: number;
   onOpenPlatformStatus: () => void;
   onOpenAiEditor: () => void;
@@ -63,6 +64,7 @@ interface ClipCardProps {
 
 export function ClipCard({
   clip,
+  displayTitle,
   now,
   onOpenPlatformStatus,
   onOpenAiEditor,
@@ -169,7 +171,7 @@ export function ClipCard({
     action();
   };
   return (
-    <article className="studio-clip" aria-label={clip.title}>
+    <article className="studio-clip" aria-label={displayTitle || clip.title}>
       <div className="studio-clip-row">
         <div className="studio-clip-media">
           {ready ? (
@@ -178,7 +180,7 @@ export function ClipCard({
               controls
               preload="metadata"
               src={previewFileUrl(clip.clip_db_id)}
-              aria-label={clip.title}
+              aria-label={displayTitle || clip.title}
             />
           ) : clip.thumbnail_url && vorschauFehlt !== clip.thumbnail_url ? (
             <img
@@ -221,7 +223,7 @@ export function ClipCard({
                     : t(status.label)}
           </StatusChip>
           <h3 className="break-words text-sm font-semibold leading-6">
-            {clip.title || t('Clip ohne Titel')}
+            {displayTitle || clip.title || t('Clip ohne Titel')}
           </h3>
           <p className="text-xs text-text-secondary">
             {clip.source_kind === 'manual_upload' ? t('Upload') : 'Twitch'} / {clip.streamer_login}{' '}

@@ -1,3 +1,5 @@
+import { AlertTriangle } from 'lucide-react';
+import { clipDisplayTitles } from '@/components/socialmedia/clipTitles';
 import { PlatformCheck } from '@/components/socialmedia/PlatformCheck';
 import { StudioActivity } from '@/components/socialmedia/StudioActivity';
 import { ClipCard } from '@/components/socialmedia/ClipCard';
@@ -63,6 +65,7 @@ const TAB_ICONS: Record<SocialMediaView, React.ComponentType<{ className?: strin
 export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor: AiEditor, scheduleApi = scheduleQueueApi, publishClient = publishReviewClient, workspaceSlots }: SocialMediaProps) {
   const queryClient = useQueryClient();
   const t = useT();
+  const { locale } = useLanguage();
   const [statusFilter, setStatusFilter] = useState<QueueStage>('all');
   const [search, setSearch] = useState('');
   const [platformFilter, setPlatformFilter] = useState<SocialPlatform | 'all'>('all');
@@ -316,6 +319,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
   });
 
   const stats = useMemo(() => queueStats(clipsQuery.data?.items ?? []), [clipsQuery.data]);
+  const displayTitles = useMemo(() => clipDisplayTitles(clipsQuery.data?.items ?? [], locale, postingPlanQuery.data?.timezone ?? 'Europe/Berlin'), [clipsQuery.data, locale, postingPlanQuery.data?.timezone]);
   const filteredClips = useMemo(
     () => filterQueue((clipsQuery.data?.items ?? []).filter(clip => activeView !== 'veroeffentlicht' || ['posted', 'failed'].includes(queueStage(clip))), statusFilter, search, platformFilter),
     [clipsQuery.data, activeView, statusFilter, search, platformFilter],
@@ -409,9 +413,10 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
         onOpenAnalytics={() => setShowAnalytics(true)}
         onNavigate={openView}
         data={overviewData}
+        now={now}
         onOpenLayout={() => setLayoutChoice(layoutForEditor)}
       />
-      <StudioStatusBar data={overviewData} pool={postingPlanQuery.data?.pool} now={now} onNavigate={openView} />
+      <StudioStatusBar poolFailed={postingPlanQuery.isError} data={overviewData} pool={postingPlanQuery.isError ? undefined : postingPlanQuery.data?.pool} now={now} onNavigate={openView} />
 
       <nav className="studio-tabs" role="tablist" aria-label={t('Social Studio')}>
         {SOCIAL_MEDIA_TABS.map(({ id, label }, index) => {
@@ -458,7 +463,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
         className={workspaceView === 'pool' || false ? 'studio-pipeline min-w-0 space-y-4' : workspaceView === 'archiv' ? 'studio-archive min-w-0' : selectedAiClipId !== undefined ? 'studio-ai-workspace min-w-0' : 'studio-automation-workspace min-w-0'}
       >
         {activeView === 'heute' ? (
-          <><PipelineOverview data={overviewData} now={now} onNavigate={openView} /><StudioActivity twitchUserId={twitchUserId} data={overviewData} now={now} onNavigate={openView} onAi={() => setShowAiEditor(true)} /></>
+          <PipelineOverview data={overviewData} now={now} onNavigate={openView} activity={<StudioActivity twitchUserId={twitchUserId} data={overviewData} now={now} onNavigate={openView} onAi={() => setShowAiEditor(true)} />} />
         ) : workspaceView === 'plan' ? (
           <div className="studio-plan-workspace">
             <div className="studio-card studio-plan-card">
@@ -783,6 +788,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
                       <ClipCard
                         key={clip.clip_db_id}
                         clip={clip}
+                        displayTitle={displayTitles.get(clip.clip_db_id)}
                         now={now}
                         onOpenPlatformStatus={() => setStatusClipId(clip.clip_db_id)}
                         onOpenAiEditor={() => changeView('ai', clip.clip_db_id)}
@@ -1693,16 +1699,16 @@ function VorratsHinweis({
         knapp ? 'border-warning/45 bg-warning/10' : 'border-border bg-bg/40'
       }`}
     >
-      <AlertCircle className={`w-4 h-4 shrink-0 ${knapp ? 'text-warning' : 'text-primary'}`} />
+      {knapp ? <AlertTriangle className="w-4 h-4 shrink-0 text-warning" /> : <CheckCircle2 className="w-4 h-4 shrink-0 text-success" />}
       <div>
         <div className={`text-sm font-semibold ${knapp ? 'text-warning' : 'text-white'}`}>
-          {t('Vorrat reicht noch für {posts} Posts.', { posts: pool.reicht_fuer_posts })}
+          {pool.reicht_fuer_tage === null ? t('{clips} Clips verfügbar', { clips: pool.verfuegbare_clips }) : t('{clips} Clips verfügbar, reicht für etwa {days} Tage', { clips: pool.verfuegbare_clips, days: pool.reicht_fuer_tage })}
         </div>
         <div className="text-xs text-text-secondary mt-0.5">
           {pool.reicht_fuer_tage === null
-            ? t('{clips} Clips im Pool.', { clips: pool.verfuegbare_clips })
+            ? t('Vorrat ohne Posting-Rhythmus')
             : t(
-                '{clips} Clips im Pool, das sind rund {tage} Tage bei {proWoche} Posts pro Woche.',
+                'Posting-Rhythmus: {proWoche} Posts pro Woche.',
                 {
                   clips: pool.verfuegbare_clips,
                   tage: pool.reicht_fuer_tage,
