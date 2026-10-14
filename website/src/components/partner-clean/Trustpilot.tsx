@@ -1,11 +1,20 @@
+import { landingText, landingLocale } from "@/lib/landingLocale";
 import { useEffect, useRef } from "react";
 import { ExternalLink } from "lucide-react";
-import { loadTrustpilotWidget, registerTrustpilot, TRUSTPILOT_PROFILE_URL, TRUSTPILOT_REVIEW_URL } from "@/lib/trustpilot";
+import {
+  loadTrustpilotWidget,
+  registerTrustpilot,
+  TRUSTPILOT_PROFILE_URL,
+  TRUSTPILOT_REVIEW_URL,
+} from "@/lib/trustpilot";
 
 export function TrustpilotLauncher() {
   useEffect(() => {
     void registerTrustpilot().catch((error: unknown) => {
-      console.warn("Die Trustpilot-Einbindung konnte nicht geladen werden.", error);
+      console.warn(
+        "Die Trustpilot-Einbindung konnte nicht geladen werden.",
+        error,
+      );
     });
   }, []);
 
@@ -15,12 +24,16 @@ export function TrustpilotLauncher() {
       href={TRUSTPILOT_REVIEW_URL}
       target="_blank"
       rel="noopener noreferrer"
-      aria-label="Community auf Trustpilot bewerten"
+      aria-label={landingText("Community auf Trustpilot bewerten")}
       className="fixed bottom-24 right-5 flex min-h-11 items-center gap-3 rounded-2xl border border-accent/60 bg-background px-4 py-3 text-text-primary shadow-xl sm:bottom-auto sm:right-7 sm:top-[min(55dvh,calc(100dvh-8rem))] sm:-translate-y-1/2 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
     >
       <span>
-        <span className="block text-xs font-semibold text-accent">Trustpilot</span>
-        <span className="block text-sm">Community bewerten</span>
+        <span className="block text-xs font-semibold text-accent">
+          Trustpilot
+        </span>
+        <span className="block text-sm">
+          {landingText("Community bewerten")}
+        </span>
       </span>
       <ExternalLink size={16} aria-hidden="true" />
     </a>
@@ -33,29 +46,49 @@ export function Trustpilot() {
   useEffect(() => {
     if (widget.current) {
       void loadTrustpilotWidget(widget.current).catch((error: unknown) => {
-        console.warn("Das Trustpilot-Widget konnte nicht geladen werden.", error);
+        console.warn(
+          "Das Trustpilot-Widget konnte nicht geladen werden.",
+          error,
+        );
       });
     }
     void registerTrustpilot().catch((error: unknown) => {
-      console.warn("Die Trustpilot-Einbindung konnte nicht geladen werden.", error);
+      console.warn(
+        "Die Trustpilot-Einbindung konnte nicht geladen werden.",
+        error,
+      );
     });
   }, []);
 
   return (
-    <section aria-label="Community-Bewertungen auf Trustpilot" className="shrink-0 border-b border-border px-4 py-2">
+    <section
+      aria-label={landingText("Community-Bewertungen auf Trustpilot")}
+      className="shrink-0 border-b border-border px-4 py-2"
+    >
       <div className="flex items-center justify-between gap-3">
-        <a href={TRUSTPILOT_PROFILE_URL} target="_blank" rel="noopener noreferrer" className="flex min-h-11 min-w-0 flex-col justify-center rounded-lg text-xs text-text-secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+        <a
+          href={TRUSTPILOT_PROFILE_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex min-h-11 min-w-0 flex-col justify-center rounded-lg text-xs text-text-secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        >
           <span className="font-semibold text-accent">Trustpilot</span>
-          <span>Bewertungen ansehen</span>
+          <span>{landingText("Bewertungen ansehen")}</span>
         </a>
-        <a href={TRUSTPILOT_REVIEW_URL} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
-          Bewerten <ExternalLink size={13} aria-hidden="true" />
+        <a
+          href={TRUSTPILOT_REVIEW_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        >
+          {landingText("Bewerten")}{" "}
+          <ExternalLink size={13} aria-hidden="true" />
         </a>
       </div>
       <div
         ref={widget}
         className="trustpilot-widget [@media(max-height:500px)]:hidden"
-        data-locale="de-DE"
+        data-locale={landingLocale()}
         data-template-id="56278e9abfbbba0bdcd568bc"
         data-businessunit-id="6ac13d8b89ce8ac6e14678b8"
         data-style-height="52px"
@@ -64,7 +97,13 @@ export function Trustpilot() {
         data-token="67ca1866-b9c4-4cdb-a307-946f9817a6a5"
         style={{ minHeight: 52 }}
       >
-        <a href={TRUSTPILOT_PROFILE_URL} target="_blank" rel="noopener noreferrer">Trustpilot</a>
+        <a
+          href={TRUSTPILOT_PROFILE_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Trustpilot
+        </a>
       </div>
     </section>
   );

@@ -1,3 +1,7 @@
+import { globalTimezoneOwner, globalTimezoneUrl } from '../src/utils/socialMediaChannel';
+import { readFileSync } from 'node:fs';
+import { studioActions } from '../src/components/socialmedia/studioActions';
+import { clipDisplayTitles } from '../src/components/socialmedia/clipTitles';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -7,6 +11,7 @@ import {
   loadQueueSnapshot,
 } from '../src/components/socialmedia/queuePresentation';
 import type { SocialClipMitPosting } from '../src/api/socialMedia';
+import { upcomingTerms, upcomingTermView } from '../src/components/socialmedia/upcomingTerms';
 import { DEFAULT_LAYOUT } from '../src/types/socialMedia';
 import { approvalFact, authorizationFact, clipPlatformPresentation, connectionFact, publicationFact, transferFact } from '../src/components/socialmedia/platformPresentation';
 import { socialAiClipFromSearch, socialViewFromSearch, socialViewSearch, socialWorkspaceView } from '../src/components/socialmedia/studioNavigation';
@@ -161,16 +166,54 @@ test('Übertragung, Postfach und private YouTube-Sichtbarkeit bedeuten keine öf
 });
 
 test('alte Studio-Adressen und OAuth-Rückkehr bleiben erreichbar', () => {
-  for (const view of ['pool', 'clips', 'unrecognized']) assert.equal(socialViewFromSearch(`?view=${view}`), 'pool');
-  for (const [alias, view] of [['schedule', 'plan'], ['settings', 'konten'], ['vod', 'archiv'], ['layout', 'layout'], ['ai', 'ai']]) {
+  assert.equal(socialViewFromSearch('?view=pool'), 'freigabe');
+  for (const view of ['clips', 'unrecognized']) assert.equal(socialViewFromSearch(`?view=${view}`), 'heute');
+  for (const [alias, view] of [['schedule', 'planen'], ['settings', 'einstellungen'], ['vod', 'veroeffentlicht'], ['layout', 'einstellungen'], ['ai', 'freigabe']]) {
     assert.equal(socialViewFromSearch(`?view=${alias}`), view);
   }
   assert.equal(socialWorkspaceView('layout'), 'konten');
-  for (const callback of ['oauth_success=youtube', 'oauth_error=provider_error']) assert.equal(socialViewFromSearch(`?view=pool&${callback}`), 'konten');
+  for (const callback of ['oauth_success=youtube', 'oauth_error=provider_error']) assert.equal(socialViewFromSearch(`?view=pool&${callback}`), 'einstellungen');
   const search = socialViewSearch('?twitch_user_id=1&streamer=alpha&oauth_success=youtube', 'plan');
-  assert.equal(socialViewFromSearch(`?${search}`), 'plan');
+  assert.equal(socialViewFromSearch(`?${search}`), 'planen');
   assert.equal(new URLSearchParams(search).get('twitch_user_id'), '1');
   assert.equal(new URLSearchParams(search).get('streamer'), 'alpha');
+});
+
+test('upcoming terms exclude past and invalid dates while preserving legacy timezones', () => {
+  const data = {
+    schedule: undefined,
+    scheduleFailed: false,
+    publish: undefined,
+    publishFailed: false,
+    clips: [
+      clip(1, { status: 'approved', scheduled_at: { youtube: '2026-10-13T10:00:00Z' } }),
+      clip(2, { status: 'approved', scheduled_at: { youtube: '2026-10-15T10:00:00Z' } }),
+      clip(3, { status: 'approved', scheduled_at: { youtube: 'invalid' } }),
+    ],
+    clipsFailed: false,
+    platforms: [],
+    platformsFailed: false,
+    timezone: 'Europe/Berlin',
+  };
+  assert.deepEqual(upcomingTerms(data, Date.parse('2026-10-14T12:00:00Z')), [
+    { key: '2-youtube', at: '2026-10-15T10:00:00Z', timezone: 'Europe/Berlin' },
+  ]);
+  assert.deepEqual(upcomingTerms({ ...data, clipsFailed: true }, Date.parse('2026-10-14T12:00:00Z')), []);
+});
+
+test('five canonical views resolve every historical workspace without dropping OAuth', () => {
+  const groups = {
+    freigabe: ['pool', 'ai', 'review'],
+    planen: ['plan', 'schedule', 'autopilot', 'library', 'import'],
+    einstellungen: ['konten', 'settings', 'layout'],
+    veroeffentlicht: ['archiv', 'vod'],
+    heute: [],
+  } as const;
+  for (const [view, aliases] of Object.entries(groups)) {
+    assert.equal(socialViewFromSearch(`?view=${view}`), view);
+    for (const alias of aliases) assert.equal(socialViewFromSearch(`?view=${alias}`), view);
+  }
+  assert.equal(socialViewFromSearch(''), 'heute');
 });
 
 test('KI-Einstieg bewahrt Clipkontext beim Neuladen und entfernt ihn außerhalb der KI-Ansicht', () => {
@@ -210,4 +253,67 @@ test('volle Seite ohne Fortschritt startet die Bestandsabfrage neu statt abzubre
   });
   assert.deepEqual(calls, [1, 2, 1]);
   assert.equal(data.items.length, 4);
+});
+
+test('approved clips awaiting TikTok remain planned rather than needing clip approval', () => {
+  const approved = clip(1, { status: 'approved', upload_states: { tiktok: 'waiting_tiktok_approval' }, scheduled_at: { youtube: '2026-10-15T12:00:00Z' } });
+  assert.equal(queueStage(approved), 'planned');
+  assert.equal(filterQueue([approved], 'review', '', 'all').length, 0);
+  assert.equal(queueStage(clip(2, { status: 'awaiting_approval', upload_states: { tiktok: 'waiting_tiktok_approval' } })), 'review');
+});
+
+test('generated titles win while duplicate Twitch titles gain date and time', () => {
+  const clips = [clip(1, { title: 'Streamtitel', generated_title: '  Mid-Boss gerettet  ' }), clip(2, { title: 'Streamtitel', generated_title: ' ' }), clip(3, { title: 'Eigenständiger Titel' })];
+  const titles = clipDisplayTitles(clips, 'de-DE', 'Europe/Berlin');
+  assert.equal(titles.get(1), 'Mid-Boss gerettet');
+  assert.match(titles.get(2) ?? '', /Streamtitel.*21\.09\..*14:00/);
+  assert.equal(titles.get(3), 'Eigenständiger Titel');
+});
+
+test('Today prioritizes the same action as its overview and ignores failed sources', () => {
+  const data = { clips: [clip(1, { status: 'awaiting_approval' })], clipsFailed: false, platforms: [], platformsFailed: false, scheduleFailed: false, publishFailed: false, timezone: 'Europe/Berlin' };
+  const t = (key: string) => key;
+  assert.deepEqual(studioActions(data, 0, t).map(action => [action.key, action.view, action.stage]), [['clips', 'freigabe', 'review']]);
+  assert.deepEqual(studioActions({ ...data, clipsFailed: true }, 0, t), []);
+});
+
+
+test('timezone links and the editor preserve the selected channel instead of the authenticated account', () => {
+  for (const owner of ['123', '456']) {
+    const url = new URL(globalTimezoneUrl(owner), 'https://example.test');
+    assert.equal(url.pathname, '/twitch/verwaltung');
+    assert.equal(url.hash, '#konto');
+    assert.equal(globalTimezoneOwner(url.search, '999'), owner);
+  }
+  assert.equal(globalTimezoneOwner('', '999'), '999');
+  for (const search of ['?twitch_user_id=', '?twitch_user_id=invalid']) {
+    assert.equal(globalTimezoneOwner(search, '999'), undefined);
+  }
+  assert.equal(globalTimezoneOwner(new URL(globalTimezoneUrl(undefined), 'https://example.test').search, '999'), undefined);
+  const source = (path: string) => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8');
+  for (const [path, owner] of [
+    ['pages/SocialMedia.tsx', 'twitchUserId'],
+    ['components/socialmedia/autopilot/schedule-queue/ScheduleQueuePanel.tsx', 'twitchUserId'],
+    ['components/socialmedia/autopilot/import-pool/ImportPoolPanel.tsx', 'owner'],
+  ]) {
+    assert.ok(source(path).includes(`href={globalTimezoneUrl(${owner})}`));
+    assert.ok(!source(path).includes('/twitch/verwaltung?tab=konto'));
+  }
+  assert.match(source('pages/Verwaltung.tsx'), /GlobalTimezone owner=\{timezoneOwner\}/);
+  const editor = source('components/verwaltung/GlobalTimezone.tsx');
+  for (const call of ['fetchPostingPlan(owner)', 'scheduleQueueApi.load(owner)', 'importPoolApi.getPreferences(owner)', 'savePostingPlanSettings(owner, { timezone })', 'scheduleQueueApi.save({ timezone }, owner)', 'importPoolApi.savePreferences(owner, { ...preferences, timezone })']) assert.ok(editor.includes(call));
+});
+
+test('upcoming produced videos open video review while production jobs keep their queue target', () => {
+  const source = readFileSync(new URL('../src/components/socialmedia/StudioOverview.tsx', import.meta.url), 'utf8');
+  assert.ok(source.includes("post ? onNavigate('freigabe', post.stage) : onNavigate(upcomingTermView(term.key))"));
+  assert.equal(upcomingTermView('video-42'), 'freigabe');
+  assert.equal(upcomingTermView('42-youtube'), 'freigabe');
+  assert.equal(upcomingTermView('job-42'), 'planen');
+  assert.equal(upcomingTermView('slot'), 'planen');
+  const schedule = { review_count: 1, jobs: [] } as unknown as NonNullable<Parameters<typeof studioActions>[0]['schedule']>;
+  const data = { schedule, scheduleFailed: false, publishFailed: false, clipsFailed: false, platformsFailed: false, timezone: 'UTC' };
+  assert.equal(studioActions(data, 0, key => key)[0].view, 'freigabe');
+  schedule.jobs = [{ status: 'review' }] as typeof schedule.jobs;
+  assert.equal(studioActions(data, 0, key => key)[0].view, 'planen');
 });
