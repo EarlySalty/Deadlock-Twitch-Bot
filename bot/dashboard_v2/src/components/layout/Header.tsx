@@ -131,7 +131,7 @@ export function Header({
       description={<>{t('Fokus: {focus}', { focus: streamer || allLabel })}{' '}<span className="mx-1 text-border">•</span> {t('Zeitraum: letzte {days} Tage', { days })}</>}
     >
         {/* Controls */}
-        <div className="flex w-full min-w-0 flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3">
+        <div className="flex min-w-0 flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3">
           {canPreviewExtended && (
             <div className="flex items-center bg-background/70 rounded-xl border border-border p-1.5">
               {viewOptions.map(option => (
