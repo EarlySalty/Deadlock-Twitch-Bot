@@ -1,5 +1,4 @@
 [package]
-build = "../build_revision.rs"
 name = "tb-stream-audit-bin"
 version = "0.1.0"
 edition.workspace = true

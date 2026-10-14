@@ -8,7 +8,7 @@
 //! Die noch offenen Fachverbraucher und ihre bisherigen Quellen sind in
 //! `.tasks/2026-09-20-global-toml/KLASSIFIKATION.md` dokumentiert.
 
-include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
+include!("../../build_revision.rs");
 
 mod ad_manager_wiring;
 mod auto_raid;

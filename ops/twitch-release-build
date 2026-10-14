@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+  printf '%s\n' "$1" >&2
+  exit 1
+}
+
+stamp_binary() {
+  local artifact=$1 revision=$2 marker="$1.stamp"
+  [[ $revision =~ ^[0-9a-f]{40}(-dirty)?$ ]] || fail 'Ungültige Build-Herkunft.'
+  [[ $("$artifact" --build-revision) == unstamped ]] || fail 'Das Build-Artefakt enthält keine unveränderte Herkunftsmarke.'
+  objcopy --dump-section ".twitch_build=$marker" "$artifact" || fail 'Die Herkunftsmarke fehlt.'
+  [[ $(stat -c %s "$marker") == 47 ]] || fail 'Die Herkunftsmarke hat eine falsche Größe.'
+  printf '%-47s' "$revision" | tr ' ' '\000' >"$marker"
+  objcopy --update-section ".twitch_build=$marker" "$artifact" || fail 'Die Herkunftsmarke konnte nicht gesetzt werden.'
+  rm -- "$marker"
+  [[ $("$artifact" --build-revision) == "$revision" ]] || fail 'Das Release-Artefakt ist ungestempelt oder enthält eine falsche Build-Herkunft.'
+  [[ $(readelf --string-dump=.twitch_build "$artifact" | awk '/\[/{print $NF}') == "$revision" ]] || fail 'Die Herkunftsmarke im Release-Artefakt stimmt nicht überein.'
+}
+
+[[ $# -eq 1 && $1 =~ ^[0-9a-f]{40}$ ]] || fail 'Aufruf: ops/twitch-release-build <40-stelliger Git-SHA>'
+sha=$1
+repo=$(git -C "$(dirname "$(realpath "$0")")" rev-parse --show-toplevel)
+remote=$(git -C "$repo" remote get-url origin)
+build="$HOME/repos/twitch-release-build"
+staging="$HOME/repos/twitch-release-$sha"
+mkdir -p "$HOME/repos" "$HOME/.cache"
+exec 9>"$HOME/.cache/twitch-release-build.lock"
+flock 9
+[[ ! -e "$staging" && ! -L "$staging" ]] || fail 'Der Staging-Clone existiert bereits; er wird nicht überschrieben.'
+[[ ! -L "$build" ]] || fail 'Der Build-Clone darf kein Symlink sein.'
+if [[ ! -e "$build" ]]; then
+  git clone --no-hardlinks -- "$remote" "$build"
+fi
+[[ -d "$build/.git" && ! -L "$build/.git" ]] || fail 'Der Build-Pfad muss ein eigenständiger Clone sein.'
+[[ $(git -C "$build" remote get-url origin) == "$remote" ]] || fail 'Der Build-Clone gehört zu einem anderen Repository.'
+[[ -z $(git -C "$build" status --porcelain --untracked-files=all) ]] || fail 'Der Build-Clone enthält uncommittete Änderungen.'
+git -C "$build" fetch --prune origin
+git -C "$build" cat-file -e "$sha^{commit}"
+git -C "$build" checkout --detach "$sha"
+
+packages=(tb-bot tb-dashboard tb-stream-audit-bin tb-config tb-llm)
+binaries=(tb-bot tb-dashboard tb-stream-audit tb-config-check tb-llm-usage-recover)
+if [[ -f "$build/rust/crates/tb-social-media/src/ai_editor/mod.rs" ]]; then
+  packages+=(tb-stt-server)
+  binaries+=(tb-stt-server)
+fi
+if [[ -f "$build/rust/bin/tb-category-collector/Cargo.toml" ]]; then
+  packages+=(tb-category-collector)
+  if [[ ! -f "$build/rust/bin/tb-category-collector/src/lib.rs" ]]; then
+    binaries+=(tb-category-collector)
+  fi
+  for binary in tb-twitch-watchdog tb-category-storage; do
+    if [[ -f "$build/rust/bin/tb-category-collector/src/bin/$binary.rs" ]]; then
+      binaries+=("$binary")
+    fi
+  done
+fi
+if [[ -f "$build/rust/bin/tb-dashboard/src/bin/clip_context_learn.rs" ]]; then
+  binaries+=(clip_context_learn)
+fi
+args=()
+for package in "${packages[@]}"; do
+  args+=(-p "$package")
+done
+(
+  cd "$build/rust"
+  CARGO_SLOT_DEPLOY=1 cargo-slot build --release --locked --timings --jobs 12 --target-dir "$build/rust/target" "${args[@]}"
+)
+for binary in "${binaries[@]}"; do
+  artifact="$build/rust/target/release/$binary"
+  [[ -f "$artifact" && -x "$artifact" ]] || fail "Release-Artefakt fehlt: $binary"
+done
+frontends=(bot/dashboard_v2 bot/admin_dashboard website)
+for frontend in "${frontends[@]}"; do
+  (
+    cd "$build/$frontend"
+    npm ci --no-audit --no-fund
+    npm run build
+  )
+  [[ -f "$build/$frontend/dist/index.html" ]] || fail "Frontend-Artefakt fehlt: $frontend"
+done
+[[ $(git -C "$build" rev-parse HEAD) == "$sha" && -z $(git -C "$build" status --porcelain --untracked-files=all) ]] || fail 'Der Build hat den Quellstand verändert.'
+temporary=$(mktemp -d "$HOME/repos/.twitch-release-$sha.XXXXXX")
+trap 'rm -rf -- "$temporary"' EXIT
+git clone --no-hardlinks --no-checkout -- "$build" "$temporary"
+git -C "$temporary" remote set-url origin "$remote"
+git -C "$temporary" checkout --detach "$sha"
+mkdir -p "$temporary/rust/target/release"
+revision=$(git -C "$temporary" rev-parse HEAD)
+if [[ -n $(git -C "$temporary" status --porcelain --untracked-files=all) ]]; then
+  revision+=-dirty
+fi
+[[ $revision == "$sha" ]] || fail 'Der Staging-Quellstand ist nicht sauber oder stimmt nicht mit dem angeforderten SHA überein.'
+for binary in "${binaries[@]}"; do
+  artifact="$temporary/rust/target/release/$binary"
+  cp -L -- "$build/rust/target/release/$binary" "$artifact"
+  stamp_binary "$artifact" "$revision"
+done
+for frontend in "${frontends[@]}"; do
+  cp -RL -- "$build/$frontend/dist" "$temporary/$frontend/dist"
+done
+[[ -z $(git -C "$temporary" status --porcelain --untracked-files=all) ]] || fail 'Der Staging-Clone ist nicht sauber.'
+mv -T -- "$temporary" "$staging"
+trap - EXIT
+printf 'Release gebaut: %s\nStaging-Clone: %s\nKein Deploy und kein Dienstneustart ausgeführt.\n' "$sha" "$staging"

@@ -1,5 +1,5 @@
 //! Liefert ausschließlich strukturierte Verbrauchszähler aus dem Systemjournal nach.
-include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
+include!("../../../../bin/build_revision.rs");
 
 use serde::Deserialize;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
