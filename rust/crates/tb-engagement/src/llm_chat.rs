@@ -670,7 +670,7 @@ const USE_CASE: &str = "engagement";
 impl From<tb_llm::LlmError> for GenerateError {
     fn from(error: tb_llm::LlmError) -> Self {
         match error {
-            tb_llm::LlmError::Unavailable(detail) => {
+            tb_llm::LlmError::Unavailable(detail) | tb_llm::LlmError::Disabled(detail) => {
                 Self::Unavailable(LlmProviderUnavailable(detail))
             }
             tb_llm::LlmError::Timeout(detail) => Self::Timeout(detail),
@@ -698,6 +698,7 @@ pub struct EngagementLlmClient {
     /// wird bewusst ignoriert.
     festgenagelt: bool,
     timeout: Duration,
+    twitch_subject: Option<(String, String)>,
 }
 
 impl EngagementLlmClient {
@@ -740,7 +741,17 @@ impl EngagementLlmClient {
             endpoint,
             festgenagelt,
             timeout: timeout.unwrap_or_else(|| Duration::from_secs(30)),
+            twitch_subject: None,
         }
+    }
+
+    pub fn twitch_subject(
+        mut self,
+        broadcaster_id: impl Into<String>,
+        channel_login: impl Into<String>,
+    ) -> Self {
+        self.twitch_subject = Some((broadcaster_id.into(), channel_login.into()));
+        self
     }
 
     /// Das gelockte Modell (für Logging/Persistenz).
@@ -946,9 +957,11 @@ impl EngagementLlmClient {
     /// Ohne explizite Testparameter läuft der Aufruf über die zentrale Kette,
     /// die genau den freigegebenen Fireworks-Endpunkt enthält.
     async fn call(&self, request: tb_llm::Request) -> Result<tb_llm::Response, GenerateError> {
-        let request = request
-            .timeout(self.timeout)
-            .total_deadline(self.timeout);
+        let request = match &self.twitch_subject {
+            Some((id, login)) => request.twitch_broadcaster(id).twitch_channel(login),
+            None => request,
+        };
+        let request = request.timeout(self.timeout).total_deadline(self.timeout);
         let request = if self.festgenagelt {
             request.endpoint(self.endpoint.clone())
         } else {
@@ -1015,12 +1028,7 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn client_for(server: &MockServer) -> EngagementLlmClient {
-        EngagementLlmClient::new(
-            Some("test-key".to_string()),
-            Some(server.uri()),
-            None,
-            None,
-        )
+        EngagementLlmClient::new(Some("test-key".to_string()), Some(server.uri()), None, None)
     }
 
     /// Serialisiert die Env-Mutationen der Provider-Tests.
@@ -1093,10 +1101,16 @@ mod tests {
             .model()
             .contains("deepseek"));
 
-        std::env::set_var("TB_LLM_MODEL_ENGAGEMENT", "accounts/fireworks/models/anders");
+        std::env::set_var(
+            "TB_LLM_MODEL_ENGAGEMENT",
+            "accounts/fireworks/models/anders",
+        );
         let client = EngagementLlmClient::new(None, None, None, None);
         assert_eq!(client.endpoint.provider, "fireworks");
-        assert_eq!(client.model(), tb_llm::selection::configured_fireworks_model());
+        assert_eq!(
+            client.model(),
+            tb_llm::selection::configured_fireworks_model()
+        );
         clear_provider_env();
     }
 
@@ -1108,7 +1122,10 @@ mod tests {
         let client = EngagementLlmClient::new(None, None, None, None);
         assert_eq!(client.endpoint.api_key, None);
         assert_eq!(client.endpoint.provider, "fireworks");
-        assert_eq!(client.model(), tb_llm::selection::configured_fireworks_model());
+        assert_eq!(
+            client.model(),
+            tb_llm::selection::configured_fireworks_model()
+        );
         clear_provider_env();
     }
 
@@ -1456,7 +1473,10 @@ mod tests {
             Some("nicht-freigegebenes-modell".to_string()),
             None,
         );
-        assert_eq!(client.model(), tb_llm::selection::configured_fireworks_model());
+        assert_eq!(
+            client.model(),
+            tb_llm::selection::configured_fireworks_model()
+        );
 
         clear_provider_env();
     }

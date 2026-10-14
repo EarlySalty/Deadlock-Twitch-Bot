@@ -297,6 +297,13 @@ async fn check_consent_on(
     connection: &mut PgConnection,
     twitch_user_id: &str,
 ) -> Result<(), EditorError> {
+    if !crate::ai_guard::twitch_user_ai_allowed_on(connection, twitch_user_id)
+        .await
+        .map_err(|_| EditorError::new(ErrorKind::Consent))?
+    {
+        tracing::warn!(twitch_user_id, "KI_GUARD: Social-Editor-Aufruf abgewiesen");
+        return Err(EditorError::new(ErrorKind::Consent));
+    }
     let row = sqlx::query("SELECT (SELECT external_ai_consent FROM public.social_ai_user_consent WHERE twitch_user_id=$1) AS person, (SELECT value::text FROM public.social_media_settings WHERE key='external_llm_consent') AS global")
         .bind(twitch_user_id)
         .fetch_one(connection).await.map_err(|_| EditorError::new(ErrorKind::Consent))?;
