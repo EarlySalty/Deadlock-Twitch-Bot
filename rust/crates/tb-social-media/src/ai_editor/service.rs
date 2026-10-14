@@ -13,6 +13,20 @@ use super::{
 };
 
 const LEARNING_INTERVAL: Duration = Duration::from_secs(900);
+const MAX_POLL_BACKOFF: Duration = Duration::from_secs(60);
+
+enum WorkerError {
+    Poll(AiEditorError),
+    Job { id: i64, error: AiEditorError },
+}
+
+impl WorkerError {
+    fn into_inner(self) -> AiEditorError {
+        match self {
+            Self::Poll(error) | Self::Job { error, .. } => error,
+        }
+    }
+}
 
 fn attempt_limit(runtime: &EditorRuntime) -> Result<AttemptLimit, AiEditorError> {
     AttemptLimit::from_server_config(runtime.limits.stage_attempts).map_err(Into::into)
@@ -57,8 +71,12 @@ async fn project(
             Err(_) => false,
         };
     }
-    let totals =
-        social_editor::job_usage(pool, owner, &Identity::Manual(job.id).namespace()).await?;
+    let production: Option<i64> = sqlx::query_scalar("SELECT p.job_id FROM social_produced_videos p WHERE p.twitch_user_id=$1 AND p.metadata->>'manual_ai_job_id'=$2::text AND p.job_id IS NOT NULL ORDER BY p.id LIMIT 1")
+        .bind(owner).bind(job.id).fetch_optional(pool).await.map_err(|_| AiEditorError::Storage)?.flatten();
+    let identity = production
+        .map(Identity::Production)
+        .unwrap_or(Identity::Manual(job.id));
+    let totals = social_editor::job_usage(pool, owner, &identity.namespace()).await?;
     job.provider = totals.provider;
     job.model = totals.model;
     job.input_tokens = totals.input_tokens;
@@ -75,18 +93,17 @@ async fn project(
     job.original_url = None;
     for version in &mut job.versions {
         let video = super::revision::owned_version(pool, owner, job.id, version.id).await?;
+        job.publishing_in_autopilot |= super::autopilot_revision::production_id(&video).is_some();
         if super::revision::usable(&video) {
             version.file_url = Some(format!(
                 "/twitch/social-media/api/ai/jobs/{}/versions/{}/file?twitch_user_id={owner}",
                 job.id, version.id
             ));
         }
-        if matches!(
-            video.status.as_str(),
-            "review" | "approved" | "scheduled" | "published"
-        ) && video
-            .expires_at
-            .is_some_and(|expiry| expiry > chrono::Utc::now())
+        if super::revision::usable(&video)
+            && video
+                .expires_at
+                .is_some_and(|expiry| expiry > chrono::Utc::now())
             && video.metadata.get("original_preview").is_some()
         {
             version.original_url = Some(format!(
@@ -136,6 +153,15 @@ pub async fn manual_original_file(
     store::original_file_path(pool, owner, job_id).await?;
     let checkpoints = store::checkpoints(pool, owner, job_id).await?;
     let job = store::get_job(pool, owner, job_id, attempt_limit(runtime)?).await?;
+    if let Some(version_id) = job.selected_version_id.or_else(|| {
+        job.versions
+            .iter()
+            .rev()
+            .find(|version| version.file_url.is_some())
+            .map(|version| version.id)
+    }) {
+        return manual_version_original_file(pool, runtime, owner, job_id, version_id).await;
+    }
     pipeline::original_source(
         pool,
         runtime,
@@ -244,15 +270,26 @@ impl ManualWorker {
 
     pub async fn run(self) {
         let mut last_learning: Option<Instant> = None;
+        let poll = Duration::from_millis(self.runtime.limits.worker_poll_ms);
+        let mut delay = poll;
         loop {
-            if let Err(error) = self.process_next().await {
-                tracing::warn!(error = %error, "Manual AI production could not finish");
-            }
+            delay = match self.poll().await {
+                Ok(_) => poll,
+                Err(WorkerError::Job { id, error }) => {
+                    tracing::warn!(job_id = id, error = %error, "Manual AI production job failed");
+                    poll
+                }
+                Err(WorkerError::Poll(error)) => {
+                    let backoff = delay.saturating_mul(2).min(MAX_POLL_BACKOFF).max(poll);
+                    tracing::warn!(error = %error, retry_in_ms = backoff.as_millis(), "Manual AI queue could not be polled");
+                    backoff
+                }
+            };
             if last_learning.is_none_or(|at| at.elapsed() >= LEARNING_INTERVAL) {
                 last_learning = Some(Instant::now());
                 self.learn().await;
             }
-            tokio::time::sleep(Duration::from_millis(self.runtime.limits.worker_poll_ms)).await;
+            tokio::time::sleep(delay).await;
         }
     }
 
@@ -272,9 +309,13 @@ impl ManualWorker {
     }
 
     pub async fn process_next(&self) -> Result<bool, AiEditorError> {
+        self.poll().await.map_err(WorkerError::into_inner)
+    }
+
+    async fn poll(&self) -> Result<bool, WorkerError> {
         let Some(mut lease) = store::acquire_production_lease(&self.pool)
             .await
-            .map_err(|_| AiEditorError::Storage)?
+            .map_err(|_| WorkerError::Poll(AiEditorError::Storage))?
         else {
             return Ok(false);
         };
@@ -282,18 +323,36 @@ impl ManualWorker {
             lease
                 .ensure_held()
                 .await
-                .map_err(|_| AiEditorError::Conflict)?;
-            pipeline::cleanup_expired_artifacts(&self.pool, &self.runtime, &mut lease).await?;
-            store::recover_all_stale_jobs(&mut lease, self.runtime.limits.recovery_limit).await?;
-            let Some((owner, id)) = store::next_queued_job(&mut lease).await? else {
+                .map_err(|_| WorkerError::Poll(AiEditorError::Conflict))?;
+            pipeline::cleanup_expired_artifacts(&self.pool, &self.runtime, &mut lease)
+                .await
+                .map_err(WorkerError::Poll)?;
+            store::recover_all_stale_jobs(&mut lease, self.runtime.limits.recovery_limit)
+                .await
+                .map_err(|error| WorkerError::Poll(error.into()))?;
+            super::autopilot_revision::restore_failed_parents(&mut lease)
+                .await
+                .map_err(|error| WorkerError::Poll(error.into()))?;
+            let Some((owner, id)) = store::next_queued_job(&mut lease)
+                .await
+                .map_err(|error| WorkerError::Poll(error.into()))?
+            else {
                 return Ok(false);
             };
-            self.process_job(&mut lease, &owner, id).await?;
+            let processed = self.process_job(&mut lease, &owner, id).await;
+            super::autopilot_revision::restore_failed_parents(&mut lease)
+                .await
+                .map_err(|error| WorkerError::Poll(error.into()))?;
+            processed.map_err(|error| WorkerError::Job { id, error })?;
             Ok(true)
         }
         .await;
-        lease.release().await.map_err(|_| AiEditorError::Storage)?;
-        result
+        let released = lease
+            .release()
+            .await
+            .map_err(|_| WorkerError::Poll(AiEditorError::Storage));
+        let processed = result?;
+        released.map(|()| processed)
     }
 
     async fn metrics(

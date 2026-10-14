@@ -8,8 +8,12 @@ type Draft = Record<AiCopyPlatform, { title: string; description: string; hashta
 const labels: Record<AiCopyPlatform, string> = { youtube: 'YouTube', tiktok: 'TikTok', instagram: 'Instagram' };
 const encoder = new TextEncoder();
 
+function trimWhitespace(value: string): string {
+  return value.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '');
+}
+
 function parseHashtags(value: string): string[] {
-  return value.split(/[\s,]+/).map((tag) => tag.replace(/^#+/, '').trim()).filter(Boolean);
+  return value.split(/[\p{White_Space},]+/u).map((tag) => trimWhitespace(tag.replace(/^#+/, ''))).filter(Boolean);
 }
 
 function formatHashtags(tags: string[]): string {
@@ -26,7 +30,7 @@ function toDraft(metadata: AiVersionMetadata): Draft {
 }
 
 function toCopy(draft: Draft): Record<AiCopyPlatform, AiPlatformCopy> {
-  const entry = (platform: AiCopyPlatform) => ({ title: draft[platform].title.trim(), description: draft[platform].description.trim(), hashtags: parseHashtags(draft[platform].hashtags) });
+  const entry = (platform: AiCopyPlatform) => ({ title: trimWhitespace(draft[platform].title), description: trimWhitespace(draft[platform].description), hashtags: parseHashtags(draft[platform].hashtags) });
   return { youtube: entry('youtube'), tiktok: entry('tiktok'), instagram: entry('instagram') };
 }
 
@@ -39,7 +43,7 @@ function copyIssues(platform: AiCopyPlatform, copy: AiPlatformCopy): string[] {
     if (!copy.title) issues.push('Bitte gib einen Titel ein.');
     else if (Array.from(copy.title).length > 100) issues.push('Der YouTube-Titel darf höchstens 100 Zeichen lang sein.');
     else if (/[<>]/.test(copy.title)) issues.push('YouTube erlaubt im Titel keine spitzen Klammern.');
-    const description = `${copy.description}\n\n${tags}`.replace(/[<>]/g, '').trimEnd();
+    const description = `${copy.description}\n\n${tags}`.replace(/[<>]/g, '').replace(/\p{White_Space}+$/u, '');
     if (encoder.encode(`${description}\n\n#Shorts`).length > 5000) issues.push('Beschreibung und Hashtags sind für YouTube zusammen zu lang. Bitte kürze sie.');
   } else if (platform === 'tiktok') {
     if (!copy.title) issues.push('Bitte gib einen Titel ein.');

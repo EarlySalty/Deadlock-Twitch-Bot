@@ -296,10 +296,7 @@ pub(super) async fn version_original(
     checkpoints: &BTreeMap<AiStage, StageCheckpoint>,
 ) -> Result<PathBuf, AiEditorError> {
     let (frozen, runtime) = preparing(checkpoints, current)?;
-    if !matches!(
-        video.status.as_str(),
-        "review" | "approved" | "scheduled" | "published"
-    ) {
+    if !super::revision::usable(video) {
         return Err(AiEditorError::NotFound);
     }
     frozen
@@ -927,10 +924,19 @@ async fn allocation(
     let metadata = match ctx.identity {
         Identity::Manual(id) => {
             let root: i64 = sqlx::query_scalar("SELECT COALESCE(root_job_id,id) FROM social_ai_jobs WHERE id=$1 AND twitch_user_id::text=$2").bind(id).bind(ctx.owner).fetch_one(ctx.pool).await.map_err(|_| AiEditorError::Storage)?;
+            let mut metadata = json!({ "manual_ai_job_id": id, "root_ai_job_id":root });
             if let Some(request) = super::revision::request(ctx.pool, ctx.owner, id).await? {
                 parent_version_id = Some(request.parent_version_id);
+                let parent = produced_video::get(ctx.pool, ctx.owner, request.parent_version_id)
+                    .await
+                    .map_err(|_| AiEditorError::Storage)?
+                    .ok_or(AiEditorError::NotFound)?;
+                if let Some(production_id) = super::autopilot_revision::production_id(&parent) {
+                    metadata["production_ai_job_id"] = json!(production_id);
+                    metadata["manual_review"] = json!(true);
+                }
             }
-            json!({ "manual_ai_job_id": id, "root_ai_job_id":root })
+            metadata
         }
         Identity::Production(id) => json!({ "production_ai_job_id": id }),
     };
@@ -1217,7 +1223,7 @@ async fn cleanup_expired_video(
         return Ok(());
     };
     let mut paths = vec![original_preview_path(runtime, id)];
-    if status == "expired" {
+    if matches!(status.as_str(), "expired" | "rejected") {
         paths.push(output_path(runtime, id));
     }
     for path in paths {
@@ -1500,15 +1506,37 @@ async fn validate_one(
                 .into(),
         );
     }
-    if validated.intervals().len() > 1 {
-        reasons.push("Der Schnitt enthält mehrere Abschnitte. Bitte prüfe die Übergänge und den Zusammenhang.".into());
-    }
-    if frozen.layout.is_none() {
-        reasons.push("Es ist kein eigenes Layout gespeichert. Bitte prüfe die Darstellung im Standardformat.".into());
-    }
-    reasons.push("Die Analyse nutzt einzelne Bilder. Bitte prüfe, ob die Spielsituation richtig verstanden wurde.".into());
+    let layout = frozen
+        .layout
+        .as_ref()
+        .map(|value| StreamerLayout::from_stored_value(value, None, None))
+        .transpose()
+        .map_err(|_| AiEditorError::Source)?;
+    let cam_height = layout
+        .as_ref()
+        .filter(|layout| layout.cam_enabled)
+        .map(|layout| layout.cam_position.h)
+        .unwrap_or(0);
+    let ass = super::validation::build_scaled_subtitle_ass(
+        &validated,
+        &mapped,
+        &frozen.source.title,
+        &frozen.source.login,
+        cam_height,
+        planning.subtitle_scale_percent,
+    )?;
+    reasons.extend(super::validation::subtitle_bounds_reasons(
+        &ass,
+        validated.output_duration_ms(),
+    ));
+    reasons.extend(super::media::framing_reasons(
+        layout.as_ref(),
+        &frozen.media,
+    ));
     reasons.sort();
     reasons.dedup();
+    let needs_review =
+        validated.needs_review() || !reasons.is_empty() || review_required(ctx).await?;
     if video.status == "rendering" {
         ctx.lease
             .ensure_held()
@@ -1516,13 +1544,44 @@ async fn validate_one(
             .map_err(|_| AiEditorError::Conflict)?;
         produced_video::complete_render(ctx.pool, ctx.owner, video.id, &RenderedVideo {
             file_path: output.to_string_lossy().into_owned(), duration_ms: media.duration_ms as i64,
-            needs_review: true, review_reasons: reasons.clone(),
-            metadata: json!({ "platforms": planning.platforms, "planning":planning, "rendering_ms": rendering_ms, "qa": { "decode": "passed", "aspect_ratio": "9:16", "original_audio_retained": frozen.media.has_audio, "subtitle_partial_cues": mapped.iter().filter(|cue| cue.partial).count(), "skill_versions": frozen.skills.iter().map(|skill| json!({ "id": skill.id, "version": skill.version, "sha256": skill.sha256 })).collect::<Vec<_>>() } }),
+            needs_review, review_reasons: reasons.clone(),
+            metadata: json!({ "platforms": publication_copy(planning), "planning":planning, "rendering_ms": rendering_ms, "qa": { "decode": "passed", "aspect_ratio": "9:16", "original_audio_retained": frozen.media.has_audio, "subtitle_partial_cues": mapped.iter().filter(|cue| cue.partial).count(), "skill_versions": frozen.skills.iter().map(|skill| json!({ "id": skill.id, "version": skill.version, "sha256": skill.sha256 })).collect::<Vec<_>>() } }),
         }).await.map_err(|_| AiEditorError::Storage)?;
     }
     Ok(StageCheckpoint::Validating {
         review_reasons: reasons,
     })
+}
+
+fn publication_copy(planning: &Planning) -> BTreeMap<String, super::metadata::PlatformCopy> {
+    planning
+        .platforms
+        .iter()
+        .map(|(platform, copy)| {
+            (
+                platform.clone(),
+                super::metadata::PlatformCopy {
+                    title: copy.title.clone(),
+                    description: copy.description.clone(),
+                    hashtags: copy
+                        .hashtags
+                        .iter()
+                        .map(|tag| super::metadata::normalize_hashtag(tag))
+                        .collect(),
+                },
+            )
+        })
+        .collect()
+}
+
+async fn review_required(ctx: &StageContext<'_>) -> Result<bool, AiEditorError> {
+    if ctx.identity.manual().is_some() {
+        return Ok(true);
+    }
+    let settings = autopilot_settings::load(ctx.pool, ctx.owner)
+        .await
+        .map_err(|_| AiEditorError::Storage)?;
+    Ok(settings.publish_mode == autopilot_settings::PublishMode::Review)
 }
 
 pub(super) async fn produced_outcome(
@@ -1606,6 +1665,26 @@ pub(super) async fn produced_outcome(
 struct ProductionState {
     checkpoints: BTreeMap<AiStage, StageCheckpoint>,
     attempts: BTreeMap<AiStage, i32>,
+}
+
+pub(super) fn production_checkpoints(
+    metadata: &Value,
+) -> Result<BTreeMap<AiStage, StageCheckpoint>, AiEditorError> {
+    let state: ProductionState = serde_json::from_value(
+        metadata
+            .get("ai_editor")
+            .cloned()
+            .ok_or(AiEditorError::Plan)?,
+    )
+    .map_err(|_| AiEditorError::Plan)?;
+    if state.checkpoints.len() != 6
+        || state.checkpoints.iter().any(|(stage, checkpoint)| {
+            *stage != checkpoint.stage() || checkpoint.validate().is_err()
+        })
+    {
+        return Err(AiEditorError::Plan);
+    }
+    Ok(state.checkpoints)
 }
 
 async fn save_production_state(
@@ -1749,6 +1828,21 @@ async fn produce_inner(
     .await
 }
 
+const PRODUCTION_STAGES: u32 = 6;
+const RETRY_DELAY: Duration = Duration::from_secs(5);
+
+fn transient(error: &AiEditorError) -> bool {
+    matches!(
+        error,
+        AiEditorError::Provider
+            | AiEditorError::Transcription
+            | AiEditorError::Render
+            | AiEditorError::Validation
+            | AiEditorError::Storage
+            | AiEditorError::Deadline
+    )
+}
+
 pub async fn produce(
     mut ctx: ProductionContext<'_>,
     mut job: ProductionJob,
@@ -1771,7 +1865,20 @@ pub async fn produce(
         return Err(AiEditorError::Conflict);
     }
     ctx.lease.mark_claimed_work();
-    let result = produce_inner(&mut ctx, &mut job).await;
+    let mut result = produce_inner(&mut ctx, &mut job).await;
+    let max_retries = u32::try_from(ctx.runtime.limits.stage_attempts.max(1))
+        .map_err(|_| AiEditorError::Configuration)?
+        * PRODUCTION_STAGES;
+    let mut retries = 0_u32;
+    while let Err(error) = &result {
+        if !transient(error) || retries >= max_retries {
+            break;
+        }
+        retries += 1;
+        tracing::info!(job_id = job.id, retry = retries, error = %error, "AI Auto-Pilot production retries a transient failure");
+        tokio::time::sleep(RETRY_DELAY).await;
+        result = produce_inner(&mut ctx, &mut job).await;
+    }
     if let Err(error) = &result {
         ctx.lease
             .ensure_held()

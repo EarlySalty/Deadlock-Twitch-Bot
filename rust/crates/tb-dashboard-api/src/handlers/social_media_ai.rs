@@ -98,6 +98,14 @@ pub fn routes(runtime: AiRuntime) -> Router<PgPool> {
             "/social-media/api/ai/jobs/{id}/versions/{version}/original",
             get(version_original),
         )
+        .route(
+            "/social-media/api/ai/videos/{video}/metadata",
+            get(metadata_get).put(metadata_put),
+        )
+        .route(
+            "/social-media/api/ai/videos/{video}/editor",
+            axum::routing::post(video_editor),
+        )
         .layer(Extension(runtime))
 }
 
@@ -164,6 +172,8 @@ pub struct OptionsInput {
     twitch_user_id: String,
     multi_output_enabled: bool,
     experimental_ai_layout: bool,
+    #[serde(default)]
+    publish_language: Option<tb_social_media::autopilot_settings::PublishLanguage>,
 }
 
 #[derive(Deserialize)]
@@ -191,6 +201,13 @@ pub struct RevisionInput {
 pub struct DecisionInput {
     twitch_user_id: String,
     accept: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MetadataInput {
+    twitch_user_id: String,
+    platforms: std::collections::BTreeMap<String, ai_editor::metadata::PlatformCopy>,
 }
 
 #[derive(Deserialize)]
@@ -289,9 +306,18 @@ pub async fn options_put(
     Json(input): Json<OptionsInput>,
 ) -> Result<Json<Value>, ApiError> {
     let owner = channel(&pool, &auth, Some(&input.twitch_user_id)).await?;
+    let publish_language = match input.publish_language {
+        Some(language) => language,
+        None => {
+            ai_editor::options::load(&pool, &owner)
+                .await?
+                .publish_language
+        }
+    };
     let options = ai_editor::EditorOptions {
         multi_output_enabled: input.multi_output_enabled,
         experimental_ai_layout: input.experimental_ai_layout,
+        publish_language,
     };
     Ok(Json(json!(
         ai_editor::options::save(&pool, &owner, options).await?
@@ -428,6 +454,60 @@ pub async fn version_schedule(
     Ok(Json(
         json!({"reservation":reservation,"job":ai_editor::get_manual_job(&pool,runtime.required()?,&owner,id).await?}),
     ))
+}
+
+pub async fn video_editor(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Extension(runtime): Extension<AiRuntime>,
+    Path(video): Path<i64>,
+    Json(input): Json<RetryInput>,
+) -> Result<Json<Value>, ApiError> {
+    let owner = channel(&pool, &auth, Some(&input.twitch_user_id)).await?;
+    Ok(Json(
+        json!({"job": ai_editor::autopilot_revision::open_editor(&pool, runtime.required()?, &owner, video).await?}),
+    ))
+}
+
+pub async fn metadata_get(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Path(video): Path<i64>,
+    Query(query): Query<ChannelQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let owner = channel(&pool, &auth, query.twitch_user_id.as_deref()).await?;
+    Ok(Json(json!(
+        ai_editor::metadata::load(&pool, &owner, video).await?
+    )))
+}
+
+pub async fn metadata_put(
+    State(pool): State<PgPool>,
+    auth: DashboardAuthLevel,
+    Path(video): Path<i64>,
+    Json(input): Json<MetadataInput>,
+) -> Result<Json<Value>, ApiError> {
+    let owner = channel(&pool, &auth, Some(&input.twitch_user_id)).await?;
+    match ai_editor::metadata::save(&pool, &owner, video, input.platforms).await {
+        Ok(view) => Ok(Json(json!(view))),
+        Err(ai_editor::metadata::MetadataError::Editor(AiEditorError::Conflict)) => {
+            Err(response_error(
+                StatusCode::CONFLICT,
+                "Diese Fassung ist nicht mehr zur Sichtung offen. Titel und Beschreibung lassen sich nicht mehr ändern.",
+            ))
+        }
+        Err(ai_editor::metadata::MetadataError::Editor(error)) => Err(error.into()),
+        Err(ai_editor::metadata::MetadataError::Invalid(issues)) => Err(ApiError(Box::new(
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({
+                    "error": ai_editor::metadata::summary(&issues),
+                    "issues": issues
+                })),
+            )
+                .into_response(),
+        ))),
+    }
 }
 
 pub async fn version_original(
@@ -653,16 +733,14 @@ mod tests {
             ] {
                 let error = channel(&pool, auth, requested)
                     .await
-                    .err()
-                    .expect("explicit numeric channel");
+                    .expect_err("explicit numeric channel");
                 assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
             }
         }
         assert_eq!(
             channel(&pool, &partner, Some("202"))
                 .await
-                .err()
-                .expect("foreign channel")
+                .expect_err("foreign channel")
                 .into_response()
                 .status(),
             StatusCode::FORBIDDEN
@@ -670,8 +748,7 @@ mod tests {
         assert_eq!(
             channel(&pool, &DashboardAuthLevel::None, Some("101"))
                 .await
-                .err()
-                .expect("authentication")
+                .expect_err("authentication")
                 .into_response()
                 .status(),
             StatusCode::UNAUTHORIZED

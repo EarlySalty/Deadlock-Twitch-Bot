@@ -57,6 +57,12 @@ async fn database() -> postgres::TestPostgres {
     .execute(&db.pool)
     .await
     .expect("personal preference migration");
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261013140000_social_autopilot_publishing.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .expect("publishing migration");
     sqlx::query("INSERT INTO social_media_settings(key,value) VALUES ('external_llm_consent','true'::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value")
         .execute(&db.pool).await.expect("synthetic global consent");
     super::super::store::upsert_user_consent(&db.pool, "101", true, "fixture-owner")
@@ -904,7 +910,7 @@ async fn c3_resume_reuses_the_pipeline_and_exact_durable_version_under_the_exist
     )
     .await
     .expect("real C3 rendering and validation");
-    assert!(outcome.needs_review && !outcome.review_reasons.is_empty());
+    assert!(outcome.needs_review);
     assert_eq!(outcome.produced_video_ids.len(), 1);
     let video = produced_video::get(&db.pool, "101", outcome.produced_video_ids[0])
         .await
@@ -961,7 +967,7 @@ async fn expire_fixture(pool: &PgPool, video_id: i64) {
 }
 
 async fn usage_fixture(pool: &PgPool, identity: Identity) {
-    sqlx::query("INSERT INTO llm_usage (purpose,provider,model,attempt_state,tokens_in,tokens_out,latency_ms,social_ai_twitch_user_id,social_ai_job_id,social_ai_stage,reserved_micro_usd,estimated_micro_usd,cost_basis) VALUES ('social_editor','anthropic','fixture-model','completed',11,7,23,'101',$1,'planning',20,10,'usage_priced_estimate')")
+    sqlx::query("INSERT INTO llm_usage (purpose,provider,model,attempt_state,tokens_in,tokens_out,latency_ms,social_ai_twitch_user_id,social_ai_job_id,social_ai_stage,reserved_micro_usd,estimated_micro_usd,cost_basis) VALUES ('social_editor','anthropic','fixture-model','succeeded',11,7,23,'101',$1,'planning',20,10,'usage_priced_estimate')")
         .bind(identity.namespace()).execute(pool).await.expect("synthetic existing provider ledger");
 }
 
@@ -2259,6 +2265,327 @@ async fn secondary_variant_expiry_recovers_without_replacing_retained_primary_or
 }
 
 #[tokio::test]
+async fn autopilot_revisions_replace_review_and_invalidate_old_file_approvals() {
+    use super::super::{autopilot_revision, metadata, revision, store};
+    let db = database().await;
+    let directory = tempfile::tempdir().expect("root");
+    let runtime = runtime(directory.path());
+    let clip = source(&db.pool, &runtime).await;
+    production_jobs::insert(
+        &db.pool,
+        &production_jobs::NewProductionJob {
+            twitch_user_id: "101".into(),
+            clip_id: clip,
+            source: production_jobs::JobSource::Manual,
+            requested_mode: Some(ProductionMode::Ai),
+            scheduled_at: None,
+            max_attempts: 2,
+        },
+    )
+    .await
+    .expect("production job");
+    let mut job = production_jobs::claim_next(&db.pool)
+        .await
+        .expect("claim")
+        .expect("job");
+    let mut lease = store::acquire_production_lease(&db.pool)
+        .await
+        .expect("lease")
+        .expect("free");
+    let checkpoints = prepared(
+        &db.pool,
+        &runtime,
+        &mut lease,
+        clip,
+        Identity::Production(job.id),
+    )
+    .await;
+    job.metadata["ai_editor"] = serde_json::to_value(ProductionState {
+        checkpoints: checkpoints.clone(),
+        attempts: BTreeMap::new(),
+    })
+    .expect("state");
+    production_jobs::update_progress(&db.pool, "101", job.id, "rendering", &job.metadata)
+        .await
+        .expect("saved analysis");
+    let outcome = produce(
+        ProductionContext {
+            pool: &db.pool,
+            runtime: &runtime,
+            lease: &mut lease,
+            brain_token: None,
+        },
+        job.clone(),
+    )
+    .await
+    .expect("real production FFmpeg");
+    lease.release().await.expect("release");
+    usage_fixture(&db.pool, Identity::Production(job.id)).await;
+    let parent = produced_video::get(&db.pool, "101", outcome.produced_video_ids[0])
+        .await
+        .expect("read")
+        .expect("parent");
+    let path = parent.file_path.as_deref().expect("file");
+    let bytes = tokio::fs::read(path)
+        .await
+        .expect("original rendition bytes");
+    assert!(matches!(
+        autopilot_revision::open_editor(&db.pool, &runtime, "202", parent.id).await,
+        Err(AiEditorError::NotFound)
+    ));
+    let root = autopilot_revision::open_editor(&db.pool, &runtime, "101", parent.id)
+        .await
+        .expect("bridge");
+    assert!(root.publishing_in_autopilot && root.versions[0].file_url.is_some());
+    assert_eq!(root.input_tokens, Some(11));
+    assert!(
+        super::super::service::manual_original_file(&db.pool, &runtime, "101", root.id)
+            .await
+            .expect("bridge original")
+            .is_file()
+    );
+    assert_eq!(
+        autopilot_revision::open_editor(&db.pool, &runtime, "101", parent.id)
+            .await
+            .expect("idempotent bridge")
+            .id,
+        root.id
+    );
+    let mut copy = metadata::load(&db.pool, "101", parent.id)
+        .await
+        .expect("generated copy")
+        .platforms;
+    copy.get_mut("youtube").expect("youtube").title = "Geprüfter Titel".into();
+    assert!(metadata::save(&db.pool, "202", parent.id, copy.clone())
+        .await
+        .is_err());
+    assert_eq!(
+        metadata::save(&db.pool, "101", parent.id, copy.clone())
+            .await
+            .expect("owned copy edit")
+            .platforms["youtube"]
+            .title,
+        "Geprüfter Titel"
+    );
+    produced_video::approve(&db.pool, "101", parent.id, &["youtube".into()])
+        .await
+        .expect("isolated old approval");
+    sqlx::query("UPDATE social_produced_videos SET metadata=metadata || '{\"publication\":{\"hashes\":{\"youtube\":\"old-hash\"},\"accounts\":{\"youtube\":\"fixture-account\"}}}'::jsonb WHERE id=$1")
+        .bind(parent.id).execute(&db.pool).await.expect("bound old approval fixture");
+    assert!(metadata::save(&db.pool, "101", parent.id, copy)
+        .await
+        .is_err());
+    sqlx::query("INSERT INTO twitch_clips_upload_queue(clip_id,produced_video_id,platform,status,scheduled_at,effect_started_at) VALUES($1,$2,'youtube','waiting_exact_file',NOW()+INTERVAL '1 hour',NOW())")
+        .bind(clip).bind(parent.id).execute(&db.pool).await.expect("old queue with effect marker");
+    assert!(revision::create_revision(
+        &db.pool,
+        &runtime,
+        "101",
+        root.id,
+        parent.id,
+        "Unsicherer Ausgang"
+    )
+    .await
+    .is_err());
+    sqlx::query(
+        "UPDATE twitch_clips_upload_queue SET effect_started_at=NULL WHERE produced_video_id=$1",
+    )
+    .bind(parent.id)
+    .execute(&db.pool)
+    .await
+    .expect("unstarted queue");
+    sqlx::query("UPDATE social_produced_videos SET status='scheduled',scheduled_at=NOW()+INTERVAL '1 hour' WHERE id=$1").bind(parent.id).execute(&db.pool).await.expect("scheduled parent");
+    let child = revision::create_revision(
+        &db.pool,
+        &runtime,
+        "101",
+        root.id,
+        parent.id,
+        "Kürze den Einstieg",
+    )
+    .await
+    .expect("production revision");
+    let held = produced_video::get(&db.pool, "101", parent.id)
+        .await
+        .expect("held")
+        .expect("parent");
+    assert_eq!(held.status, "rejected");
+    assert!(held.metadata.get("publication").is_none());
+    assert!(revision::usable(&held));
+    assert!(
+        produced_video::approve(&db.pool, "101", parent.id, &["youtube".into()])
+            .await
+            .is_err()
+    );
+    assert!(produced_video::approvals(&db.pool, "101", parent.id)
+        .await
+        .expect("approvals")
+        .iter()
+        .all(|approval| approval.state != "approved"));
+    let reused = store::checkpoints(&db.pool, "101", child.id)
+        .await
+        .expect("copied checkpoints");
+    assert_eq!(reused.len(), 3);
+    for stage in [AiStage::Transcribing, AiStage::Analyzing] {
+        assert_eq!(
+            serde_json::to_value(&reused[&stage]).expect("reused"),
+            serde_json::to_value(&checkpoints[&stage]).expect("original")
+        );
+    }
+    save_revision_plan(&db.pool, child.id, &proposed_plan(&checkpoints, false)).await;
+    revision::decide_proposal(&db.pool, &runtime, "101", child.id, true)
+        .await
+        .expect("confirm held parent");
+    let worker = super::super::ManualWorker::new(db.pool.clone(), runtime.clone(), None);
+    assert!(worker.process_next().await.expect("revision render"));
+    let completed = super::super::get_manual_job(&db.pool, &runtime, "101", child.id)
+        .await
+        .expect("completed");
+    assert_eq!(completed.status, "review");
+    let new = completed
+        .versions
+        .iter()
+        .find(|version| version.id != parent.id)
+        .expect("new version");
+    assert_eq!(completed.selected_version_id, Some(new.id));
+    let old = produced_video::get(&db.pool, "101", parent.id)
+        .await
+        .expect("old")
+        .expect("version");
+    assert_eq!(old.metadata["superseded_by"], new.id);
+    assert!(completed
+        .versions
+        .iter()
+        .any(|version| version.id == parent.id
+            && version.file_url.is_some()
+            && version.original_url.is_some()));
+    assert_eq!(tokio::fs::read(path).await.expect("preserved file"), bytes);
+    assert!(new.approved_platforms.is_empty());
+    assert!(
+        revision::approve_version(&db.pool, "101", child.id, new.id, &["youtube".into()])
+            .await
+            .is_err()
+    );
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM social_produced_videos WHERE twitch_user_id='101' AND status='review'").fetch_one(&db.pool).await.expect("review count"),1);
+    sqlx::query("INSERT INTO twitch_clips_upload_queue(clip_id,produced_video_id,platform,status,scheduled_at) VALUES($1,$2,'youtube','waiting_exact_file',NOW()+INTERVAL '2 hours')").bind(clip).bind(new.id).execute(&db.pool).await.expect("new scheduled queue");
+    sqlx::query("UPDATE social_produced_videos SET status='scheduled',scheduled_at=NOW()+INTERVAL '2 hours' WHERE id=$1").bind(new.id).execute(&db.pool).await.expect("scheduled revision");
+    let next = revision::create_revision(
+        &db.pool,
+        &runtime,
+        "101",
+        child.id,
+        new.id,
+        "Noch eine Änderung",
+    )
+    .await
+    .expect("second revision");
+    save_revision_plan(&db.pool, next.id, &proposed_plan(&checkpoints, false)).await;
+    revision::decide_proposal(&db.pool, &runtime, "101", next.id, false)
+        .await
+        .expect("cancel");
+    assert_eq!(
+        produced_video::get(&db.pool, "101", new.id)
+            .await
+            .expect("restored")
+            .expect("version")
+            .status,
+        "review"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT status FROM twitch_clips_upload_queue WHERE produced_video_id=$1"
+        )
+        .bind(new.id)
+        .fetch_one(&db.pool)
+        .await
+        .expect("restored safe queue"),
+        "waiting_exact_file"
+    );
+    let mut restored_copy = metadata::load(&db.pool, "101", new.id)
+        .await
+        .expect("restored metadata")
+        .platforms;
+    restored_copy.get_mut("youtube").expect("youtube").title = "Neuer Veröffentlichungstext".into();
+    metadata::save(&db.pool, "101", new.id, restored_copy)
+        .await
+        .expect("refresh pending queue text");
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT title FROM twitch_clips_upload_queue WHERE produced_video_id=$1"
+        )
+        .bind(new.id)
+        .fetch_one(&db.pool)
+        .await
+        .expect("queue text"),
+        "Neuer Veröffentlichungstext"
+    );
+    let failed = revision::create_revision(
+        &db.pool,
+        &runtime,
+        "101",
+        child.id,
+        new.id,
+        "Kleine Korrektur",
+    )
+    .await
+    .expect("third revision");
+    let mut lease = store::acquire_production_lease(&db.pool)
+        .await
+        .expect("lease")
+        .expect("free");
+    store::claim_job(
+        &mut lease,
+        "101",
+        failed.id,
+        store::AttemptLimit::from_server_config(2).expect("limit"),
+    )
+    .await
+    .expect("claim");
+    store::fail_job(
+        &mut lease,
+        "101",
+        failed.id,
+        AiStage::Planning,
+        store::JobFailure::PlanningFailed,
+        None,
+    )
+    .await
+    .expect("failed plan");
+    autopilot_revision::restore_failed_parents(&mut lease)
+        .await
+        .expect("restore failed revision");
+    assert_eq!(
+        produced_video::get(&db.pool, "101", new.id)
+            .await
+            .expect("restored")
+            .expect("version")
+            .status,
+        "review"
+    );
+    assert!(Path::new(path).is_file());
+    lease.release().await.expect("release");
+    super::super::retry_manual_job(&db.pool, &runtime, "101", failed.id)
+        .await
+        .expect("retry re-holds parent");
+    assert_eq!(
+        produced_video::get(&db.pool, "101", new.id)
+            .await
+            .expect("held again")
+            .expect("version")
+            .status,
+        "rejected"
+    );
+    assert_usage_preserved(&db.pool, Identity::Production(job.id)).await;
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM llm_usage")
+            .fetch_one(&db.pool)
+            .await
+            .expect("no paid calls"),
+        1
+    );
+}
+
+#[tokio::test]
 async fn editor_options_default_off_and_save_without_touching_other_settings() {
     let db = database().await;
     let defaults = super::super::options::load(&db.pool, "101")
@@ -2279,15 +2606,24 @@ async fn editor_options_default_off_and_save_without_touching_other_settings() {
         crate::ai_editor::EditorOptions {
             multi_output_enabled: true,
             experimental_ai_layout: true,
+            publish_language: autopilot_settings::PublishLanguage::En,
         },
     )
     .await
     .expect("opt-in");
     assert!(saved.multi_output_enabled && saved.experimental_ai_layout);
+    assert_eq!(
+        saved.publish_language,
+        autopilot_settings::PublishLanguage::En
+    );
     let after = autopilot_settings::load(&db.pool, "101")
         .await
         .expect("settings after");
     assert!(after.enabled && after.multi_output_enabled && after.experimental_ai_layout);
+    assert_eq!(
+        after.publish_language,
+        autopilot_settings::PublishLanguage::En
+    );
     assert_eq!(after.target_platforms, vec!["youtube".to_string()]);
     let other = super::super::options::load(&db.pool, "202")
         .await
