@@ -1,3 +1,5 @@
+import { formatNumber } from '@/utils/formatters';
+import { useLanguage } from '../../context/LanguageContext';
 import { motion } from 'framer-motion';
 import { Rise } from '../../motion/Rise';
 import { UserPlus, Users, Heart, TrendingUp, TrendingDown, Zap, Radio, Share2, Info, ArrowRight } from 'lucide-react';
@@ -50,6 +52,7 @@ function rateConversion(rate: number): { label: string; color: string; bgColor: 
 }
 
 export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelProps) {
+  const { t, locale } = useLanguage();
   const [showExplainer, setShowExplainer] = useState(false);
 
   const conversionTrend = previousConversionRate
@@ -95,41 +98,41 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
 
   return (
     <Rise
-      className="bg-card rounded-xl border border-border p-6"
+      className="bg-card rounded-xl border border-border p-4 sm:p-6 min-w-0"
     >
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-primary/15 flex items-center justify-center">
+          <div className="w-10 h-10 shrink-0 rounded-lg bg-primary/15 flex items-center justify-center">
             <UserPlus className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h3 className="text-lg font-bold text-white">Follower Conversion Funnel</h3>
-            <p className="text-sm text-text-secondary">Von Viewer zu Follower</p>
+            <h3 className="text-lg font-bold text-white">{t("Follower Conversion Funnel")}</h3>
+            <p className="text-sm text-text-secondary">{t("Von Viewer zu Follower")}</p>
           </div>
         </div>
       </div>
 
-      {/* Conversion Rate Hero Section */}
+
       <div className="bg-background rounded-xl p-5 mb-6 border border-primary/25">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <span className="text-sm text-text-secondary">Conversion Rate</span>
+            <span className="text-sm text-text-secondary">{t("Conversion Rate")}</span>
             <button
               onClick={() => setShowExplainer(!showExplainer)}
               className="text-text-secondary hover:text-white transition-colors"
-              title="Was ist die Conversion Rate?"
+              title={t("Was ist die Conversion Rate?")}
             >
               <Info className="w-4 h-4" />
             </button>
           </div>
           {rating.label && (
             <span className={`text-xs font-medium px-2 py-0.5 rounded ${rating.color} ${rating.bgColor}`}>
-              {rating.label}
+              {t(rating.label)}
             </span>
           )}
         </div>
 
-        {/* Explainer dropdown */}
+
         {showExplainer && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
@@ -137,76 +140,74 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
             exit={{ opacity: 0, height: 0 }}
             className="mb-4 p-3 bg-background/60 rounded-lg text-xs text-text-secondary space-y-2"
           >
-            <p className="font-medium text-white text-sm">Was bedeutet Conversion Rate?</p>
+            <p className="font-medium text-white text-sm">{t("Was bedeutet Conversion Rate?")}</p>
             <p>
-              Die Conversion Rate zeigt, wie viele deiner Zuschauer zu Followern werden.
-              Sie berechnet sich aus: <span className="text-white font-mono">Neue Follower / Unique Viewer × 100</span>
+              {t("Die Conversion Rate zeigt, wie viele deiner Zuschauer zu Followern werden. Sie berechnet sich aus:")} <span className="text-white font-mono">{t("Neue Follower / Unique Viewer × 100")}</span>
             </p>
             <p>
-              Unique Viewer basieren jetzt auf den echten Chatters: alle Nutzer, die im Zeitraum im Chat
-              aufgetaucht sind (mit oder ohne Nachricht) laut Chatters-API. Keine Schätzungen mehr.
+              {t("Unique Viewer basieren jetzt auf den echten Chatters: alle Nutzer, die im Zeitraum im Chat aufgetaucht sind (mit oder ohne Nachricht) laut Chatters-API. Keine Schätzungen mehr.")}
             </p>
-            <div className="grid grid-cols-4 gap-2 pt-2 border-t border-border">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-border">
               <div className="text-center">
-                <div className="text-error font-medium">&lt; 0.5%</div>
-                <div className="text-[10px]">Niedrig</div>
+                <div className="text-error font-medium">&lt; {formatNumber(0.5, 1, locale)}%</div>
+                <div className="text-[10px]">{t("Niedrig")}</div>
               </div>
               <div className="text-center">
-                <div className="text-warning font-medium">0.5-2%</div>
-                <div className="text-[10px]">Durchschnitt</div>
+                <div className="text-warning font-medium">{formatNumber(0.5, 1, locale)}-2%</div>
+                <div className="text-[10px]">{t("Durchschnitt")}</div>
               </div>
               <div className="text-center">
                 <div className="text-success font-medium">2-5%</div>
-                <div className="text-[10px]">Gut</div>
+                <div className="text-[10px]">{t("Gut")}</div>
               </div>
               <div className="text-center">
                 <div className="text-success font-medium">&gt; 5%</div>
-                <div className="text-[10px]">Exzellent</div>
+                <div className="text-[10px]">{t("Exzellent")}</div>
               </div>
             </div>
           </motion.div>
         )}
 
-        {/* Rate + Formula */}
-        <div className="flex items-center justify-between">
+
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <div className="flex items-baseline gap-3">
-              <span className="text-4xl font-bold text-white">{data.conversionRate.toFixed(2)}%</span>
+            <div className="flex flex-wrap items-baseline gap-3">
+              <span className="text-4xl font-bold text-white">{formatNumber(data.conversionRate, 2, locale)}%</span>
               {conversionTrend !== null && (
                 <span className={`flex items-center gap-1 text-sm ${conversionTrend >= 0 ? 'text-success' : 'text-error'}`}>
                   {conversionTrend >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                  {Math.abs(conversionTrend).toFixed(1)}% vs. Vorperiode
+                  {t("{trend}% vs. Vorperiode", { trend: formatNumber(Math.abs(conversionTrend), 1, locale) })}
                 </span>
               )}
             </div>
-            {/* Formula breakdown */}
-            <div className="flex items-center gap-2 mt-2 text-xs text-text-secondary">
-              <span className="text-white font-medium">+{data.newFollowers}</span>
-              <span>gewonnen</span>
+
+            <div className="flex flex-wrap items-center gap-2 mt-2 text-xs text-text-secondary">
+              <span className="text-white font-medium">+{formatNumber(data.newFollowers, 0, locale)}</span>
+              <span>{t("gewonnen")}</span>
               <span>/</span>
-              <span className="text-white font-medium">{data.uniqueViewers.toLocaleString('de-DE')}</span>
-              <span>Viewer</span>
+              <span className="text-white font-medium">{data.uniqueViewers.toLocaleString(locale)}</span>
+              <span>{t("Viewer")}</span>
               <ArrowRight className="w-3 h-3" />
-              <span className={rating.color}>{data.conversionRate.toFixed(2)}%</span>
+              <span className={rating.color}>{formatNumber(data.conversionRate, 2, locale)}%</span>
             </div>
             {data.netFollowerDelta !== undefined && data.netFollowerDelta !== data.newFollowers && (
               <div className="flex items-center gap-2 mt-1 text-xs">
                 <span className={data.netFollowerDelta >= 0 ? 'text-success' : 'text-error'}>
-                  Netto: {data.netFollowerDelta >= 0 ? '+' : ''}{data.netFollowerDelta}
+                  {t("Netto: {delta}", { delta: `${data.netFollowerDelta >= 0 ? '+' : ''}${formatNumber(data.netFollowerDelta, 0, locale)}` })}
                 </span>
                 <span className="text-text-secondary">
-                  ({Math.abs(data.netFollowerDelta - data.newFollowers)} verloren)
+                  {t("({count} verloren)", { count: formatNumber(Math.abs(data.netFollowerDelta - data.newFollowers), 0, locale) })}
                 </span>
               </div>
             )}
           </div>
-          <div className="text-right">
-            <div className="text-sm text-text-secondary mb-1">Ø Zeit bis Follow</div>
-            <div className="text-2xl font-bold text-white">{avgTimeToFollow.toFixed(0)} Min</div>
+          <div className="sm:text-right">
+            <div className="text-sm text-text-secondary mb-1">{t("Ø Zeit bis Follow")}</div>
+            <div className="text-2xl font-bold text-white">{t("{minutes} Min", { minutes: formatNumber(avgTimeToFollow, 0, locale) })}</div>
           </div>
         </div>
 
-        {/* Benchmark Gauge */}
+
         <div className="mt-4">
           <div className="relative h-2 rounded-full overflow-hidden flex">
             <div className="flex-1 bg-danger/70" />
@@ -225,22 +226,22 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
           )}
           <div className="flex justify-between text-[10px] text-text-secondary mt-0.5">
             <span>0%</span>
-            <span>0.5%</span>
+            <span>{formatNumber(0.5, 1, locale)}%</span>
             <span>2%</span>
             <span>5%</span>
             <span>10%+</span>
           </div>
         </div>
 
-        {/* Rating tip */}
+
         {rating.description && (
           <div className={`mt-3 text-xs ${rating.color}`}>
-            {rating.description}
+            {t(rating.description)}
           </div>
         )}
       </div>
 
-      {/* Funnel Visualization */}
+
       <div className="space-y-3 mb-6">
         {funnelStages.map((stage, i) => {
           const Icon = stage.icon;
@@ -256,11 +257,11 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
                 <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style={{ backgroundColor: stage.color }}>
                   <Icon className="w-5 h-5 text-on-gold" />
                 </div>
-                <div className="flex-1">
+                <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-medium text-white">{stage.label}</span>
+                    <span className="text-sm font-medium text-white">{t(stage.label)}</span>
                     <span className="text-sm text-text-secondary">
-                      {stage.value.toLocaleString('de-DE')}
+                      {stage.value.toLocaleString(locale)}
                     </span>
                   </div>
                   <div className="h-3 bg-background rounded-full overflow-hidden">
@@ -282,9 +283,9 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
         })}
       </div>
 
-      {/* Follower Sources */}
+
       <div className="border-t border-border pt-4">
-        <h4 className="text-sm font-medium text-text-secondary mb-3">Follower-Quellen</h4>
+        <h4 className="text-sm font-medium text-text-secondary mb-3">{t("Follower-Quellen")}</h4>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {sourceData.map((source, i) => {
             const Icon = source.icon;
@@ -298,40 +299,40 @@ export function FollowerFunnel({ data, previousConversionRate }: FollowerFunnelP
                 className="bg-background rounded-lg p-3 text-center"
               >
                 <Icon className="w-5 h-5 mx-auto mb-2" style={{ color: source.color }} />
-                <div className="text-xs text-text-secondary mb-1">{source.label}</div>
-                <div className="text-lg font-bold text-white">{source.value}</div>
-                <div className="text-xs text-text-secondary">{percentage.toFixed(1)}%</div>
+                <div className="text-xs text-text-secondary mb-1">{t(source.label)}</div>
+                <div className="text-lg font-bold text-white">{formatNumber(source.value, 0, locale)}</div>
+                <div className="text-xs text-text-secondary">{formatNumber(percentage, 1, locale)}%</div>
               </motion.div>
             );
           })}
         </div>
       </div>
 
-      {/* Insights */}
+
       <div className="mt-4 pt-4 border-t border-border">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {data.conversionRate > 2 && (
             <InsightBadge
               type="success"
-              text={`Überdurchschnittliche Conversion von ${data.conversionRate.toFixed(2)}%!`}
+              text={t("Überdurchschnittliche Conversion von {rate}%!", { rate: formatNumber(data.conversionRate, 2, locale) })}
             />
           )}
           {data.conversionRate < 0.5 && (
             <InsightBadge
               type="warning"
-              text="Niedrige Conversion - teste Call-to-Actions während des Streams"
+              text={t("Niedrige Conversion - teste Call-to-Actions während des Streams")}
             />
           )}
           {data.followersBySource.raids > data.followersBySource.organic * 0.5 && totalSourceFollowers > 0 && (
             <InsightBadge
               type="info"
-              text={`${((data.followersBySource.raids / totalSourceFollowers) * 100).toFixed(0)}% der Follower kommen über Raids - pflege dein Netzwerk!`}
+              text={t("{percent}% der Follower kommen über Raids - pflege dein Netzwerk!", { percent: formatNumber(data.followersBySource.raids / totalSourceFollowers * 100, 0, locale) })}
             />
           )}
           {hasFastConversion && (
             <InsightBadge
               type="success"
-              text={`Schnelle Conversion! Viewer folgen im Schnitt nach ${avgTimeToFollow.toFixed(0)} Min`}
+              text={t("Schnelle Conversion! Viewer folgen im Schnitt nach {minutes} Min", { minutes: formatNumber(avgTimeToFollow, 0, locale) })}
             />
           )}
         </div>

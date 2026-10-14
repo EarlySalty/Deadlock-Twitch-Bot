@@ -1,4 +1,10 @@
 export const ANALYTICS_EN: Record<string, string> = {
+  'peak': 'peak',
+  'A / Compact': 'A / Compact',
+  'B / Full': 'B / Full',
+  'Gleich': 'Tie',
+  'Chatter': 'Chatters',
+  'Peak': 'Peak',
   'Watch Time': 'Watch time',
   'Follower-Funnel': 'Follower funnel',
   'Demographics': 'Demographics',

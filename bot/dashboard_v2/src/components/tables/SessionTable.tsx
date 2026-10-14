@@ -1,3 +1,4 @@
+import { useLanguage } from '../../context/LanguageContext';
 import { motion } from 'framer-motion';
 import { Rise } from '../../motion/Rise';
 import { ExternalLink } from 'lucide-react';
@@ -19,35 +20,36 @@ export function SessionTable({
   onViewAll,
   onSessionClick,
 }: SessionTableProps) {
+  const { t, locale } = useLanguage();
   const displaySessions = limit ? sessions.slice(0, limit) : sessions;
 
   return (
     <Rise
       className="bg-card rounded-xl border border-border overflow-hidden"
     >
-      {/* Header */}
+
       <div className="p-5 border-b border-border flex justify-between items-center">
-        <h3 className="text-lg font-bold text-white">Recent Sessions</h3>
+        <h3 className="text-lg font-bold text-white">{t("Recent Sessions")}</h3>
         {showViewAll && onViewAll && (
           <button
             onClick={onViewAll}
             className="text-xs bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition text-text-secondary hover:text-white"
           >
-            View All
+            {t("View All")}
           </button>
         )}
       </div>
 
-      {/* Table */}
+
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm text-text-secondary">
           <thead className="bg-black/20 text-xs uppercase font-semibold text-text-secondary">
             <tr>
-              <th className="px-5 py-3">Datum</th>
-              <th className="px-5 py-3">Dauer</th>
-              <th className="px-5 py-3">Avg</th>
+              <th className="px-5 py-3">{t("Datum")}</th>
+              <th className="px-5 py-3">{t("Dauer")}</th>
+              <th className="px-5 py-3">{t("Avg")}</th>
               <th className="px-5 py-3">Peak</th>
-              <th className="px-5 py-3">Bindung</th>
+              <th className="px-5 py-3">{t("Bindung")}</th>
               <th className="px-5 py-3">Chat</th>
               <th className="px-5 py-3"></th>
             </tr>
@@ -65,12 +67,12 @@ export function SessionTable({
                 onClick={() => onSessionClick?.(session.id)}
               >
                 <td className="px-5 py-3">
-                  <span className="text-white font-medium">{formatDate(session.date)}</span>
+                  <span className="text-white font-medium">{formatDate(session.date, locale)}</span>
                   <span className="text-text-secondary text-xs ml-2">{formatTime(session.startTime)}</span>
                 </td>
                 <td className="px-5 py-3">{formatDurationShort(session.duration)}</td>
-                <td className="px-5 py-3 text-white">{formatNumber(session.avgViewers)}</td>
-                <td className="px-5 py-3">{formatNumber(session.peakViewers)}</td>
+                <td className="px-5 py-3 text-white">{formatNumber(session.avgViewers, 0, locale)}</td>
+                <td className="px-5 py-3">{formatNumber(session.peakViewers, 0, locale)}</td>
                 <td className="px-5 py-3">
                   <div className="flex items-center gap-2">
                     <div className="w-16 h-1.5 bg-border rounded-full overflow-hidden">
@@ -82,13 +84,13 @@ export function SessionTable({
                         }}
                       />
                     </div>
-                    <span className="text-xs">{holdPct.toFixed(0)}%</span>
+                    <span className="text-xs">{formatNumber(holdPct, 0, locale)}%</span>
                   </div>
                 </td>
                 <td className="px-5 py-3">
-                  <span className="text-white">{session.totalChatterSessions}</span>
+                  <span className="text-white">{formatNumber(session.totalChatterSessions, 0, locale)}</span>
                   <span className="text-text-secondary text-xs ml-1">
-                    ({session.firstTimeChatters} neu)
+                    {t("({count} neu)", { count: formatNumber(session.firstTimeChatters, 0, locale) })}
                   </span>
                 </td>
                 <td className="px-5 py-3">
@@ -100,7 +102,7 @@ export function SessionTable({
                     className="text-accent hover:text-accent-hover font-semibold text-xs border border-accent/30 px-2 py-1 rounded flex items-center gap-1"
                   >
                     <ExternalLink className="w-3 h-3" />
-                    Details
+                    {t("Details")}
                   </button>
                 </td>
               </motion.tr>
@@ -111,7 +113,7 @@ export function SessionTable({
 
         {sessions.length === 0 && (
           <div className="p-8 text-center text-text-secondary">
-            Keine Sessions im gewählten Zeitraum
+            {t("Keine Sessions im gewählten Zeitraum")}
           </div>
         )}
       </div>

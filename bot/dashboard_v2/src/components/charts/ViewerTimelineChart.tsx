@@ -1,3 +1,4 @@
+import { useLanguage } from '../../context/LanguageContext';
 import { Rise } from '../../motion/Rise';
 import {
   AreaChart,
@@ -19,6 +20,7 @@ interface ViewerTimelineChartProps {
 }
 
 export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerTimelineChartProps) {
+  const { t, locale } = useLanguage();
   if (!data || data.length === 0) {
     return null;
   }
@@ -26,7 +28,7 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
   // Format timestamp for display
   const chartData = data.map(point => ({
     ...point,
-    label: formatTimestamp(point.timestamp),
+    label: formatTimestamp(point.timestamp, locale),
   }));
 
   const showBrush = chartData.length > 100;
@@ -38,13 +40,13 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
           <p className="text-white font-medium mb-2">{label}</p>
           <div className="space-y-1 text-sm">
             <p className="text-accent">
-              Avg: <span className="text-white">{formatNumber(payload[0]?.value)}</span>
+              {t("Avg:")} <span className="text-white">{formatNumber(payload[0]?.value, 0, locale)}</span>
             </p>
             <p className="text-accent">
-              Peak: <span className="text-white">{formatNumber(payload[1]?.value)}</span>
+              {t("Peak:")} <span className="text-white">{formatNumber(payload[1]?.value, 0, locale)}</span>
             </p>
             <p className="text-text-secondary">
-              Min: <span className="text-white">{formatNumber(payload[2]?.value)}</span>
+              {t("Min:")} <span className="text-white">{formatNumber(payload[2]?.value, 0, locale)}</span>
             </p>
           </div>
         </div>
@@ -57,7 +59,7 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
     <Rise
       className="bg-card rounded-xl border border-border p-5"
     >
-      <h3 className="text-lg font-bold text-white mb-4">{title}</h3>
+      <h3 className="text-lg font-bold text-white mb-4">{t(title)}</h3>
       <div className={showBrush ? 'h-80' : 'h-64'}>
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
@@ -89,7 +91,7 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
               fontSize={12}
               tickLine={false}
               axisLine={false}
-              tickFormatter={(v) => formatNumber(v)}
+              tickFormatter={(v) => formatNumber(v, 0, locale)}
             />
             <Tooltip content={<CustomTooltip />} />
             <Legend
@@ -97,7 +99,7 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
               height={36}
               formatter={(value: string) => (
                 <span className="text-text-secondary text-sm">
-                  {value === 'avgViewers' ? 'Avg' : value === 'peakViewers' ? 'Peak' : 'Min'}
+                  {value === 'avgViewers' ? t('Avg') : value === 'peakViewers' ? t('Peak') : t('Min')}
                 </span>
               )}
             />
@@ -143,7 +145,7 @@ export function ViewerTimelineChart({ data, title = 'Viewer Timeline' }: ViewerT
   );
 }
 
-function formatTimestamp(ts: string): string {
+function formatTimestamp(ts: string, locale: string): string {
   // Timestamps look like "2025-12-06 20:05" or "2025-12-06 20:00"
   if (!ts) return '';
   const parts = ts.split(' ');
@@ -152,7 +154,9 @@ function formatTimestamp(ts: string): string {
     const timePart = parts[1];
     // Show "DD.MM HH:MM"
     const [, m, d] = datePart.split('-');
-    return `${d}.${m} ${timePart}`;
+    const date = new Date(`${datePart}T00:00:00Z`);
+    const label = Number.isNaN(date.getTime()) ? `${d}.${m}` : date.toLocaleDateString(locale, { day: '2-digit', month: '2-digit', timeZone: 'UTC' });
+    return `${label} ${timePart}`;
   }
   return ts;
 }

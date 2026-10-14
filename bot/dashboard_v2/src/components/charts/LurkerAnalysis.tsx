@@ -1,3 +1,5 @@
+import { formatNumber } from '@/utils/formatters';
+import { useLanguage } from '../../context/LanguageContext';
 import { Rise } from '../../motion/Rise';
 import { Eye, UserCheck, Users } from 'lucide-react';
 import { NoDataCard } from '@/components/cards/NoDataCard';
@@ -8,65 +10,66 @@ interface LurkerAnalysisProps {
 }
 
 export function LurkerAnalysis({ data }: LurkerAnalysisProps) {
+  const { t, locale } = useLanguage();
   if (!data || !data.dataAvailable) {
-    return <NoDataCard message={data?.message || "Keine Lurker-Daten vorhanden"} />;
+    return <NoDataCard message={t(data?.message || "Keine Lurker-Daten vorhanden")} />;
   }
 
   const { lurkerStats, conversionStats, regularLurkers } = data;
 
   return (
     <div className="space-y-4">
-      {/* Stat Cards */}
+
       <Rise
         className="grid grid-cols-1 md:grid-cols-3 gap-4"
       >
         <StatCard
           icon={<Eye className="w-5 h-5" />}
-          label="Lurker-Ratio"
-          value={`${(lurkerStats.ratio * 100).toFixed(1)}%`}
-          sublabel={`${lurkerStats.totalLurkers} von ${lurkerStats.totalViewers} Zuschauern`}
+          label={t("Lurker-Ratio")}
+          value={`${formatNumber((lurkerStats.ratio * 100), 1, locale)}%`}
+          sublabel={t("{lurkers} von {viewers} Zuschauern", { lurkers: formatNumber(lurkerStats.totalLurkers, 0, locale), viewers: formatNumber(lurkerStats.totalViewers, 0, locale) })}
           color="primary"
         />
         <StatCard
           icon={<UserCheck className="w-5 h-5" />}
-          label="LurkerChatter Conversion"
-          value={`${(conversionStats.rate * 100).toFixed(1)}%`}
-          sublabel={`${conversionStats.converted} von ${conversionStats.eligible} konvertiert`}
+          label={t("LurkerChatter Conversion")}
+          value={`${formatNumber((conversionStats.rate * 100), 1, locale)}%`}
+          sublabel={t("{converted} von {eligible} konvertiert", { converted: formatNumber(conversionStats.converted, 0, locale), eligible: formatNumber(conversionStats.eligible, 0, locale) })}
           color="success"
         />
         <StatCard
           icon={<Users className="w-5 h-5" />}
-          label="Regulare Lurker"
-          value={regularLurkers.length.toString()}
-          sublabel={`Ø ${lurkerStats.avgSessions.toFixed(1)} Sessions`}
+          label={t('Reguläre Lurker')}
+          value={formatNumber(regularLurkers.length, 0, locale)}
+          sublabel={t("Ø {sessions} Sessions", { sessions: formatNumber(lurkerStats.avgSessions, 1, locale) })}
           color="accent"
         />
       </Rise>
 
-      {/* Lurker Table */}
+
       {regularLurkers.length > 0 && (
         <Rise
           step={{ seconds: 0.1 }}
           className="bg-card rounded-xl border border-border p-6"
         >
-          <h4 className="text-sm font-medium text-text-secondary mb-4">Top Lurker</h4>
+          <h4 className="text-sm font-medium text-text-secondary mb-4">{t("Top Lurker")}</h4>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border">
-                  <th className="text-left py-2 text-text-secondary font-medium">Viewer</th>
-                  <th className="text-right py-2 text-text-secondary font-medium">Sessions</th>
-                  <th className="text-right py-2 text-text-secondary font-medium">Zuletzt gesehen</th>
+                  <th className="text-left py-2 text-text-secondary font-medium">{t("Viewer")}</th>
+                  <th className="text-right py-2 text-text-secondary font-medium">{t("Sessions")}</th>
+                  <th className="text-right py-2 text-text-secondary font-medium">{t("Zuletzt gesehen")}</th>
                 </tr>
               </thead>
               <tbody>
                 {regularLurkers.slice(0, 15).map((lurker) => (
                   <tr key={lurker.login} className="border-b border-border/50 hover:bg-background/50">
                     <td className="py-2 text-white">{lurker.login}</td>
-                    <td className="py-2 text-right text-text-secondary">{lurker.lurkSessions}</td>
+                    <td className="py-2 text-right text-text-secondary">{formatNumber(lurker.lurkSessions, 0, locale)}</td>
                     <td className="py-2 text-right text-text-secondary">
                       {lurker.lastSeen
-                        ? new Date(lurker.lastSeen).toLocaleDateString('de-DE')
+                        ? new Date(lurker.lastSeen).toLocaleDateString(locale)
                         : '-'}
                     </td>
                   </tr>

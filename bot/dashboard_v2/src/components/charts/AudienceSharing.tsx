@@ -1,3 +1,5 @@
+import { formatNumber } from '@/utils/formatters';
+import { useLanguage } from '../../context/LanguageContext';
 import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Rise } from '../../motion/Rise';
@@ -41,6 +43,7 @@ function lineColor(index: number): string {
 }
 
 export function AudienceSharing({ data }: AudienceSharingProps) {
+  const { t, locale } = useLanguage();
   const current = useMemo(() => data?.current ?? [], [data]);
   const timeline = useMemo(() => data?.timeline ?? [], [data]);
   const totalUniqueViewers = data?.totalUniqueViewers ?? 0;
@@ -83,36 +86,36 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
   }, [timeline, topStreamers]);
 
   if (!data || !data.dataAvailable) {
-    return <NoDataCard message={data?.message || "Keine Sharing-Daten vorhanden"} />;
+    return <NoDataCard message={t(data?.message || "Keine Sharing-Daten vorhanden")} />;
   }
 
   return (
     <div className="space-y-4">
-      {/* Summary */}
+
       <Rise
         className="panel-card rounded-2xl p-4"
       >
         <div className="flex items-center justify-between">
-          <span className="text-sm text-text-secondary">Einzigartige Zuschauer gesamt</span>
+          <span className="text-sm text-text-secondary">{t("Einzigartige Zuschauer gesamt")}</span>
           <span className="text-lg font-bold text-white">
-            {totalUniqueViewers.toLocaleString('de-DE')}
+            {totalUniqueViewers.toLocaleString(locale)}
           </span>
         </div>
       </Rise>
 
-      {/* Horizontal Bar Chart: Top Partners */}
+
       {barData.length > 0 && (
         <Rise
           step={{ seconds: 0.1 }}
           className="panel-card rounded-2xl p-6"
         >
           <h4 className="text-sm font-medium text-text-secondary mb-4">
-            Top Partner nach geteilten Zuschauern
+            {t("Top Partner nach geteilten Zuschauern")}
           </h4>
           <div className="h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={barData} layout="vertical" margin={{ left: 80 }}>
-                <XAxis type="number" stroke="#B5A488" fontSize={12} />
+                <XAxis tickFormatter={value => formatNumber(value, 0, locale)} type="number" stroke="#B5A488" fontSize={12} />
                 <YAxis
                   type="category"
                   dataKey="streamer"
@@ -121,6 +124,7 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
                   width={75}
                 />
                 <Tooltip
+                  formatter={value => formatNumber(Number(value), 0, locale)}
                   contentStyle={{
                     backgroundColor: 'var(--color-popover)',
                     border: '1px solid var(--color-border)',
@@ -137,14 +141,14 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
                       <div className="bg-card border border-border rounded-lg p-3 text-sm">
                         <div className="text-white font-medium mb-1">{entry.streamer}</div>
                         <div className="text-text-secondary">
-                          Geteilt: {entry.sharedViewers}
+                          {t("Geteilt: {count}", { count: formatNumber(entry.sharedViewers, 0, locale) })}
                         </div>
                         <div className="flex gap-3 mt-1">
-                          <span className="text-success">Inflow: {entry.inflow}</span>
-                          <span className="text-danger">Outflow: {entry.outflow}</span>
+                          <span className="text-success">{t("Inflow: {count}", { count: formatNumber(entry.inflow, 0, locale) })}</span>
+                          <span className="text-danger">{t("Outflow: {count}", { count: formatNumber(entry.outflow, 0, locale) })}</span>
                         </div>
                         <div className="text-text-secondary mt-1">
-                          Jaccard: {(entry.jaccardSimilarity * 100).toFixed(1)}%
+                          {t("Jaccard: {value}%", { value: formatNumber(entry.jaccardSimilarity * 100, 1, locale) })}
                         </div>
                       </div>
                     );
@@ -155,14 +159,14 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
             </ResponsiveContainer>
           </div>
 
-          {/* Inflow/Outflow indicators */}
+
           <div className="mt-4 space-y-1">
             {barData.slice(0, 5).map((entry) => (
               <div key={entry.streamer} className="flex items-center justify-between text-sm">
                 <span className="text-text-secondary">{entry.streamer}</span>
                 <div className="flex items-center gap-3">
-                  <span className="text-success text-xs">Inflow: {entry.inflow}</span>
-                  <span className="text-danger text-xs">Outflow: {entry.outflow}</span>
+                  <span className="text-success text-xs">{t("Inflow: {count}", { count: formatNumber(entry.inflow, 0, locale) })}</span>
+                  <span className="text-danger text-xs">{t("Outflow: {count}", { count: formatNumber(entry.outflow, 0, locale) })}</span>
                 </div>
               </div>
             ))}
@@ -170,7 +174,7 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
         </Rise>
       )}
 
-      {/* Timeline Line Chart */}
+
       {lineData.length > 1 && topStreamers.length > 0 && (
         <Rise
           step={{ seconds: 0.2 }}
@@ -178,7 +182,7 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
         >
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <h4 className="text-sm font-medium text-text-secondary">
-              Zuschauer-Sharing Timeline (Top {topN})
+              {t("Zuschauer-Sharing Timeline (Top {count})", { count: formatNumber(topN, 0, locale) })}
             </h4>
             <div className="flex items-center bg-background/70 rounded-xl border border-border p-1.5">
               {SHARING_TOPN_OPTIONS.map(option => (
@@ -198,7 +202,7 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
                       transition={SEGMENT_SPRING}
                     />
                   )}
-                  <span className="relative z-10">Top {option}</span>
+                  <span className="relative z-10">{t("Top {count}", { count: formatNumber(option, 0, locale) })}</span>
                 </button>
               ))}
             </div>
@@ -207,8 +211,9 @@ export function AudienceSharing({ data }: AudienceSharingProps) {
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={lineData}>
                 <XAxis dataKey="month" stroke="#B5A488" fontSize={12} />
-                <YAxis stroke="#B5A488" fontSize={12} />
+                <YAxis tickFormatter={value => formatNumber(value, 0, locale)} stroke="#B5A488" fontSize={12} />
                 <Tooltip
+                  formatter={value => formatNumber(Number(value), 0, locale)}
                   contentStyle={{
                     backgroundColor: 'var(--color-popover)',
                     border: '1px solid var(--color-border)',

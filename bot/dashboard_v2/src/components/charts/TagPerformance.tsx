@@ -1,3 +1,5 @@
+import { formatNumber } from '@/utils/formatters';
+import { useLanguage } from '../../context/LanguageContext';
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Rise } from '../../motion/Rise';
@@ -11,6 +13,7 @@ interface TagPerformanceProps {
 }
 
 export function TagPerformanceChart({ tagData, titleData, peerBenchmark }: TagPerformanceProps) {
+  const { t, locale } = useLanguage();
   const [activeTab, setActiveTab] = useState<'tags' | 'titles'>('tags');
   const [expandedTag, setExpandedTag] = useState<string | null>(null);
 
@@ -30,18 +33,18 @@ export function TagPerformanceChart({ tagData, titleData, peerBenchmark }: TagPe
       className="bg-card rounded-xl border border-border p-6"
     >
       <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap min-w-0 items-center gap-3">
           <div className="w-10 h-10 rounded-lg bg-accent/20 flex items-center justify-center">
             <Tag className="w-5 h-5 text-accent" />
           </div>
           <div>
-            <h3 className="text-lg font-bold text-white">Tag & Titel Performance</h3>
-            <p className="text-sm text-text-secondary">Welche Tags/Titel bringen die besten Ergebnisse?</p>
+            <h3 className="text-lg font-bold text-white">{t("Tag & Titel Performance")}</h3>
+            <p className="text-sm text-text-secondary">{t("Welche Tags/Titel bringen die besten Ergebnisse?")}</p>
           </div>
         </div>
       </div>
 
-      {/* Tab Switcher */}
+
       <div className="flex gap-2 mb-6">
         <button
           onClick={() => setActiveTab('tags')}
@@ -52,7 +55,7 @@ export function TagPerformanceChart({ tagData, titleData, peerBenchmark }: TagPe
           }`}
         >
           <Tag className="w-4 h-4 inline mr-2" />
-          Tags ({sortedTags.length})
+          {t("Tags ({count})", { count: formatNumber(sortedTags.length, 0, locale) })}
         </button>
         {sortedTitles.length > 0 && (
           <button
@@ -64,12 +67,12 @@ export function TagPerformanceChart({ tagData, titleData, peerBenchmark }: TagPe
             }`}
           >
             <Target className="w-4 h-4 inline mr-2" />
-            Titel ({sortedTitles.length})
+            {t("Titel ({count})", { count: formatNumber(sortedTitles.length, 0, locale) })}
           </button>
         )}
       </div>
 
-      {/* Tags View */}
+
       <AnimatePresence mode="wait">
         {activeTab === 'tags' && (
           <motion.div
@@ -79,25 +82,25 @@ export function TagPerformanceChart({ tagData, titleData, peerBenchmark }: TagPe
             exit={{ opacity: 0, x: 20 }}
             className="space-y-3"
           >
-            {/* Top 3 Highlight */}
+
             {sortedTags.length >= 3 && (
-              <div className="grid grid-cols-3 gap-3 mb-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
                 {sortedTags.slice(0, 3).map((tag, i) => (
                   <TopTagCard key={tag.tagName} tag={tag} rank={i + 1} />
                 ))}
               </div>
             )}
 
-            {/* Peer Benchmark Legend */}
+
             {peerBenchmark && (
-              <div className="flex items-center gap-3 mb-3 text-xs text-text-secondary">
+              <div className="flex flex-wrap items-center gap-3 mb-3 text-xs text-text-secondary">
                 <span className="flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full bg-success inline-block" />
-                  Über Peer-Median ({peerBenchmark.avgViewers.toFixed(0)} Ø)
+                  {t("Über Peer-Median ({avg} Ø)", { avg: formatNumber(peerBenchmark.avgViewers, 0, locale) })}
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full bg-error inline-block" />
-                  Unter Peer-Median
+                  {t("Unter Peer-Median")}
                 </span>
               </div>
             )}
@@ -106,11 +109,11 @@ export function TagPerformanceChart({ tagData, titleData, peerBenchmark }: TagPe
               <InsightBadge
                 type="info"
                 icon={<Info className="w-4 h-4" />}
-                text="Alle Streams nutzen aktuell dieselben Tags, darum zeigen alle Tags identische Werte."
+                text={t("Alle Streams nutzen aktuell dieselben Tags, darum zeigen alle Tags identische Werte.")}
               />
             )}
 
-            {/* Full List */}
+
             <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2">
               {sortedTags.map((tag, i) => (
                 <TagRow
@@ -147,20 +150,20 @@ export function TagPerformanceChart({ tagData, titleData, peerBenchmark }: TagPe
         )}
       </AnimatePresence>
 
-      {/* Summary Insights */}
+
       {sortedTags.length > 0 && (
         <div className="mt-6 pt-4 border-t border-border">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <InsightBadge
               type="success"
               icon={<Trophy className="w-4 h-4" />}
-              text={`"${sortedTags[0].tagName}" ist dein Top-Tag mit Ø ${sortedTags[0].avgViewers.toFixed(0)} Viewern`}
+              text={t("\"{tag}\" ist dein Top-Tag mit Ø {viewers} Viewern", { tag: sortedTags[0].tagName, viewers: formatNumber(sortedTags[0].avgViewers, 0, locale) })}
             />
             {strongestGrowingTag && (
               <InsightBadge
                 type="info"
                 icon={<TrendingUp className="w-4 h-4" />}
-                text={`"${strongestGrowingTag.tagName}" wächst stark (+${(strongestGrowingTag.trendValue ?? 0).toFixed(0)}%)`}
+                text={t("\"{tag}\" wächst stark (+{percent}%)", { tag: strongestGrowingTag.tagName, percent: formatNumber(strongestGrowingTag.trendValue ?? 0, 0, locale) })}
               />
             )}
           </div>
@@ -176,6 +179,7 @@ interface TopTagCardProps {
 }
 
 function TopTagCard({ tag, rank }: TopTagCardProps) {
+  const { t, locale } = useLanguage();
   const rankStyles = {
     1: 'from-primary/20 to-primary/10 border-primary/30',
     2: 'from-text-secondary/20 to-card/10 border-border',
@@ -192,7 +196,7 @@ function TopTagCard({ tag, rank }: TopTagCardProps) {
       transition={{ delay: Math.min(rank * 0.04, 0.24) }}
       className={`bg-gradient-to-br ${rankStyles[rank as 1 | 2 | 3]} rounded-lg p-4 border`}
     >
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
         <span className="text-xs text-text-secondary">#{rank}</span>
         <TrendIcon className={`w-4 h-4 ${trendColor}`} />
       </div>
@@ -201,12 +205,12 @@ function TopTagCard({ tag, rank }: TopTagCardProps) {
       </div>
       <div className="grid grid-cols-2 gap-2 text-xs">
         <div>
-          <div className="text-text-secondary">Ø Viewer</div>
-          <div className="font-medium text-white">{tag.avgViewers.toFixed(0)}</div>
+          <div className="text-text-secondary">{t("Ø Viewer")}</div>
+          <div className="font-medium text-white">{formatNumber(tag.avgViewers, 0, locale)}</div>
         </div>
         <div>
-          <div className="text-text-secondary">Retention</div>
-          <div className="font-medium text-white">{tag.avgRetention10m.toFixed(0)}%</div>
+          <div className="text-text-secondary">{t("Retention")}</div>
+          <div className="font-medium text-white">{formatNumber(tag.avgRetention10m, 0, locale)}%</div>
         </div>
       </div>
     </motion.div>
@@ -223,6 +227,7 @@ interface TagRowProps {
 }
 
 function TagRow({ tag, index, maxViewers, isExpanded, onToggle, peerBenchmark }: TagRowProps) {
+  const { t, locale } = useLanguage();
   const barWidth = (tag.avgViewers / maxViewers) * 100;
   const TrendIcon = tag.trend === 'up' ? TrendingUp : tag.trend === 'down' ? TrendingDown : Minus;
   const trendColor = tag.trend === 'up' ? 'text-success' : tag.trend === 'down' ? 'text-error' : 'text-text-secondary';
@@ -239,18 +244,18 @@ function TagRow({ tag, index, maxViewers, isExpanded, onToggle, peerBenchmark }:
         className="p-3 cursor-pointer hover:bg-white/5 transition-colors"
         onClick={onToggle}
       >
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <div className="flex flex-wrap min-w-0 items-center gap-3">
             <span className="text-xs text-text-secondary w-6">#{index + 1}</span>
             <span className="font-medium text-white truncate max-w-[200px]" title={tag.tagName}>
               {tag.tagName}
             </span>
-            <span className="text-xs text-text-secondary">({tag.usageCount}x)</span>
+            <span className="text-xs text-text-secondary">({formatNumber(tag.usageCount, 0, locale)}x)</span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap min-w-0 items-center gap-3">
             <span className={`flex items-center gap-1 text-xs ${trendColor}`}>
               <TrendIcon className="w-3 h-3" />
-              {(tag.trendValue ?? 0) > 0 ? '+' : ''}{(tag.trendValue ?? 0).toFixed(0)}%
+              {(tag.trendValue ?? 0) > 0 ? '+' : ''}{formatNumber((tag.trendValue ?? 0), 0, locale)}%
             </span>
             {isExpanded ? (
               <ChevronUp className="w-4 h-4 text-text-secondary" />
@@ -260,7 +265,7 @@ function TagRow({ tag, index, maxViewers, isExpanded, onToggle, peerBenchmark }:
           </div>
         </div>
 
-        {/* Progress Bar */}
+
         <div className="h-2 bg-border rounded-full overflow-hidden">
           <motion.div
             initial={{ width: 0 }}
@@ -276,26 +281,26 @@ function TagRow({ tag, index, maxViewers, isExpanded, onToggle, peerBenchmark }:
           />
         </div>
 
-        {/* Quick Stats */}
-        <div className="flex items-center gap-4 mt-2 text-xs text-text-secondary">
+
+        <div className="flex flex-wrap items-center gap-4 mt-2 text-xs text-text-secondary">
           <span className={`flex items-center gap-1 ${
             abovePeerMedian === true ? 'text-success' : abovePeerMedian === false ? 'text-error' : ''
           }`}>
             <Users className="w-3 h-3" />
-            Ø {tag.avgViewers.toFixed(0)}
+            {t("Ø {value}", { value: formatNumber(tag.avgViewers, 0, locale) })}
           </span>
           <span className="flex items-center gap-1">
             <Target className="w-3 h-3" />
-            {tag.avgRetention10m.toFixed(0)}% Ret.
+            {t("{value}% Ret.", { value: formatNumber(tag.avgRetention10m, 0, locale) })}
           </span>
           <span className="flex items-center gap-1">
             <UserPlus className="w-3 h-3" />
-            +{tag.avgFollowerGain.toFixed(1)} Fol.
+            {t("+{value} Fol.", { value: formatNumber(tag.avgFollowerGain, 1, locale) })}
           </span>
         </div>
       </div>
 
-      {/* Expanded Details */}
+
       <AnimatePresence>
         {isExpanded && (
           <motion.div
@@ -305,10 +310,10 @@ function TagRow({ tag, index, maxViewers, isExpanded, onToggle, peerBenchmark }:
             className="border-t border-border"
           >
             <div className="p-3 grid grid-cols-2 md:grid-cols-4 gap-3">
-              <DetailBox label="Beste Zeit" value={tag.bestTimeSlot} icon={<Clock className="w-4 h-4" />} />
-              <DetailBox label="Ø Stream-Dauer" value={`${(tag.avgStreamDuration / 3600).toFixed(1)}h`} icon={<Clock className="w-4 h-4" />} />
-              <DetailBox label="Kategorie-Rang" value={`#${tag.categoryRank}`} icon={<Trophy className="w-4 h-4" />} />
-              <DetailBox label="Nutzungen" value={tag.usageCount.toString()} icon={<Tag className="w-4 h-4" />} />
+              <DetailBox label={t("Beste Zeit")} value={tag.bestTimeSlot} icon={<Clock className="w-4 h-4" />} />
+              <DetailBox label={t("Ø Stream-Dauer")} value={`${formatNumber((tag.avgStreamDuration / 3600), 1, locale)}h`} icon={<Clock className="w-4 h-4" />} />
+              <DetailBox label={t("Kategorie-Rang")} value={`#${formatNumber(tag.categoryRank, 0, locale)}`} icon={<Trophy className="w-4 h-4" />} />
+              <DetailBox label={t("Nutzungen")} value={formatNumber(tag.usageCount, 0, locale)} icon={<Tag className="w-4 h-4" />} />
             </div>
           </motion.div>
         )}
@@ -324,6 +329,7 @@ interface TitleRowProps {
 }
 
 function TitleRow({ title, index, maxViewers }: TitleRowProps) {
+  const { t, locale } = useLanguage();
   const barWidth = (title.avgViewers / maxViewers) * 100;
 
   return (
@@ -333,17 +339,17 @@ function TitleRow({ title, index, maxViewers }: TitleRowProps) {
       transition={{ delay: Math.min(index * 0.03, 0.24) }}
       className="bg-background rounded-lg p-3"
     >
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
         <div className="flex items-center gap-3 flex-1 min-w-0">
           <span className="text-xs text-text-secondary w-6 flex-shrink-0">#{index + 1}</span>
           <span className="font-medium text-white truncate" title={title.title}>
             {title.title}
           </span>
         </div>
-        <span className="text-xs text-text-secondary flex-shrink-0 ml-2">({title.usageCount}x)</span>
+        <span className="text-xs text-text-secondary flex-shrink-0 ml-2">({formatNumber(title.usageCount, 0, locale)}x)</span>
       </div>
 
-      {/* Progress Bar */}
+
       <div className="h-2 bg-border rounded-full overflow-hidden mb-2">
         <motion.div
           initial={{ width: 0 }}
@@ -353,27 +359,27 @@ function TitleRow({ title, index, maxViewers }: TitleRowProps) {
         />
       </div>
 
-      {/* Stats */}
-      <div className="flex items-center gap-4 text-xs text-text-secondary">
+
+      <div className="flex flex-wrap items-center gap-4 text-xs text-text-secondary">
         <span className="flex items-center gap-1">
           <Users className="w-3 h-3" />
-          Ø {title.avgViewers.toFixed(0)}
+          {t("Ø {value}", { value: formatNumber(title.avgViewers, 0, locale) })}
         </span>
         <span className="flex items-center gap-1">
           <TrendingUp className="w-3 h-3" />
-          Peak {title.peakViewers}
+          Peak {formatNumber(title.peakViewers, 0, locale)}
         </span>
         <span className="flex items-center gap-1">
           <Target className="w-3 h-3" />
-          {title.avgRetention10m.toFixed(0)}%
+          {formatNumber(title.avgRetention10m, 0, locale)}%
         </span>
         <span className="flex items-center gap-1">
           <UserPlus className="w-3 h-3" />
-          +{title.avgFollowerGain.toFixed(1)}
+          +{formatNumber(title.avgFollowerGain, 1, locale)}
         </span>
       </div>
 
-      {/* Keywords */}
+
       {title.keywords && title.keywords.length > 0 && (
         <div className="flex flex-wrap gap-1 mt-2">
           {title.keywords.slice(0, 5).map(keyword => (
