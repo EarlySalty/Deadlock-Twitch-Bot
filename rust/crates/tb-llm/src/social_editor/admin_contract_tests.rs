@@ -57,7 +57,14 @@ fn context() -> EditorContext {
 
 #[tokio::test]
 async fn m4_pauses_conflicts_and_inactive_plan_drafts_control_real_admission() {
-    let database = DisposablePostgres::start().await;
+    let Some(database) = authorized_test_fixture::start(
+        "social_editor::tests::admin_contract_tests::m4_pauses_conflicts_and_inactive_plan_drafts_control_real_admission",
+        "101",
+    )
+    .await
+    else {
+        return;
+    };
     let pool = &database.pool;
     consent(pool).await;
     let global = GlobalControlChange {

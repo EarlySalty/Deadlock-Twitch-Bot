@@ -42,12 +42,15 @@ pub mod model_resolver;
 pub mod selection;
 pub mod social_editor;
 
+#[cfg(test)]
+mod hub_test_fixture;
+
 #[cfg(feature = "local-eval")]
 pub mod local_eval;
 
+pub use ai_guard::streamer_ai_allowed;
 pub use hub::{
     complete, complete_detailed, strip_think, Accept, Ledger, LlmError, LlmFailure, Message,
     Request, Response,
 };
-pub use ai_guard::streamer_ai_allowed;
 pub use selection::{endpoint_chain, endpoint_for, LlmEndpoint};

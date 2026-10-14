@@ -161,6 +161,11 @@ mod tests {
 
     #[tokio::test]
     async fn ohne_ledger_pool_sperrt_der_guard() {
+        if !crate::hub_test_fixture::in_isolated_process(
+            "ai_guard::tests::ohne_ledger_pool_sperrt_der_guard",
+        ) {
+            return;
+        }
         for request in [
             Request::prompt("x").twitch_channel("Kanal"),
             Request::prompt("x").twitch_broadcaster("42"),

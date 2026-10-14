@@ -2,6 +2,8 @@ use super::*;
 
 #[path = "admin_contract_tests.rs"]
 mod admin_contract_tests;
+#[path = "authorized_test_fixture.rs"]
+mod authorized_test_fixture;
 
 fn config() -> EditorConfig {
     toml::from_str(include_str!("../../../../../ops/social-ai/editor.toml")).expect("configuration")
@@ -510,10 +512,17 @@ async fn structured_provider_codes_are_bounded_and_saved_without_messages() {
         matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
     };
-    let database = DisposablePostgres::start().await;
+    let Some(database) = authorized_test_fixture::start(
+        "social_editor::tests::structured_provider_codes_are_bounded_and_saved_without_messages",
+        crate::hub_test_fixture::TWITCH_USER_ID,
+    )
+    .await
+    else {
+        return;
+    };
     let pool = &database.pool;
     let context = EditorContext {
-        twitch_user_id: "person".into(),
+        twitch_user_id: crate::hub_test_fixture::TWITCH_USER_ID.into(),
         job_id: "job".into(),
         stage: "caption".into(),
     };
@@ -876,10 +885,17 @@ async fn consent_budget_and_native_mock_contract() {
         matchers::{body_json, method, path},
         Mock, MockServer, ResponseTemplate,
     };
-    let database = DisposablePostgres::start().await;
+    let Some(database) = authorized_test_fixture::start(
+        "social_editor::tests::consent_budget_and_native_mock_contract",
+        crate::hub_test_fixture::TWITCH_USER_ID,
+    )
+    .await
+    else {
+        return;
+    };
     let pool = &database.pool;
     let context = EditorContext {
-        twitch_user_id: "person".into(),
+        twitch_user_id: crate::hub_test_fixture::TWITCH_USER_ID.into(),
         job_id: "job".into(),
         stage: "caption".into(),
     };
