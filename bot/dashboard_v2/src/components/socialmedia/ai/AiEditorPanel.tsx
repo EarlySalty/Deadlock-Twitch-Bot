@@ -6,7 +6,7 @@ import type { AiJobView, AiTimeRange } from './api';
 import { fetchAiConsent, fetchAiJob, fetchAiJobs, retryAiJob, saveAiConsent, startAiJob } from './api';
 import { chooseUsableVersion } from './versions';
 import { findChannelClip, isSelectableClip } from './clipLookup';
-import { failureExplanation } from './failure';
+import { canRetryJob, failureExplanation } from './failure';
 import { RevisionControls } from './RevisionControls';
 import { EditorOptionsPanel } from './EditorOptionsPanel';
 import { removedSections } from './timeline';
@@ -135,13 +135,16 @@ function Review({ job, selectedVersion, onVersionChange, channel, canStart, onJo
 
 export function AiJobDetails({ job, canStart, onRetry, retryPending, retryError, channel, onJob, onReload, publishing, onBusyChange }: { job: AiJobView; canStart: boolean; onRetry: () => void; retryPending: boolean; retryError: boolean; channel: string; onJob: (job: AiJobView) => void; onReload: () => Promise<boolean>; publishing?: boolean; onBusyChange?: (busy: boolean) => void }) {
   const headingId = useId();
+  const [locked, setLocked] = useState(false);
+  const reportBusy = useCallback((busy: boolean) => { setLocked(busy); onBusyChange?.(busy); }, [onBusyChange]);
   const [versionSelection, setVersionSelection] = useState<{ job: number; version: number } | null>(null);
   const activeVersionId = versionSelection?.job === job.id ? versionSelection.version : undefined;
+  const retryAllowed = canRetryJob(job, { canStart, retryPending, locked });
   const stage = stageLabels[job.stage] ?? 'Phase unbekannt';
   return <article className="social-ai-job" aria-labelledby={headingId}>
     <div className="social-ai-job-head"><div><h3 id={headingId}>Auftrag {numberFormat.format(job.id)}</h3><p>Clip {numberFormat.format(job.clip_db_id)} · Angelegt am {timestamp(job.created_at)}</p></div><span className={`social-ai-status social-ai-status--${job.status}`}>{statusLabels[job.status]}</span></div>
     <div className="social-ai-stage" role="status"><Clock3 aria-hidden="true" size={17} /><span>Aktuelle Phase: <strong>{stage}</strong></span><span>Zuletzt aktualisiert: {timestamp(job.updated_at)}</span></div>
-    {job.status === 'failed' && <div className="social-ai-failure"><EditorError>Die Bearbeitung ist in der Phase „{stage}“ fehlgeschlagen. {failureExplanation(job.failure_code)} Durch diesen Auftrag wird nichts automatisch veröffentlicht.</EditorError>{job.can_retry ? <button type="button" className="studio-button" disabled={!canStart || retryPending} onClick={onRetry}><RotateCcw aria-hidden="true" size={16} />{retryPending ? 'Wiederholung wird gestartet…' : 'Fehlgeschlagene Phase erneut versuchen'}</button> : <p>Für diesen Auftrag ist kein weiterer Versuch vorgesehen.</p>}{retryError && <EditorError>Der erneute Versuch konnte nicht gestartet werden. Bitte prüfe die Freigabe und versuche es später erneut.</EditorError>}</div>}
+    {job.status === 'failed' && <div className="social-ai-failure"><EditorError>Die Bearbeitung ist in der Phase „{stage}“ fehlgeschlagen. {failureExplanation(job.failure_code)} Durch diesen Auftrag wird nichts automatisch veröffentlicht.</EditorError>{job.can_retry ? <button type="button" className="studio-button" disabled={!retryAllowed} onClick={() => { if (retryAllowed) onRetry(); }}><RotateCcw aria-hidden="true" size={16} />{retryPending ? 'Wiederholung wird gestartet…' : 'Fehlgeschlagene Phase erneut versuchen'}</button> : <p>Für diesen Auftrag ist kein weiterer Versuch vorgesehen.</p>}{retryError && <EditorError>Der erneute Versuch konnte nicht gestartet werden. Bitte prüfe die Freigabe und versuche es später erneut.</EditorError>}</div>}
     <dl className="social-ai-facts" aria-label="Verarbeitung und Kosten">
       <div><dt>KI-Anbieter und Modell</dt><dd>{job.provider && job.model ? `${job.provider} · ${job.model}` : 'Noch unbekannt'}</dd></div>
       <div><dt>Gesamte Bearbeitungszeit</dt><dd>{duration(job.processing_ms)}</dd></div>
@@ -152,7 +155,7 @@ export function AiJobDetails({ job, canStart, onRetry, retryPending, retryError,
       <div><dt>Vom Anbieter abgerechnete Kosten</dt><dd>{job.cost_basis === 'provider_billed' && job.measured_provider_cost_usd !== null ? `${moneyFormat.format(job.measured_provider_cost_usd)} US-Dollar` : 'Noch unbekannt'}</dd></div>
       <div><dt>Fertiggestellt</dt><dd>{timestamp(job.completed_at)}</dd></div>
     </dl>
-    {(job.original_url || job.versions.length > 0 || job.status === 'review') && <Review job={job} selectedVersion={activeVersionId} onVersionChange={(version) => setVersionSelection({ job: job.id, version })} channel={channel} canStart={canStart} onJob={onJob} onReload={onReload} publishing={publishing} onBusyChange={onBusyChange} />}
+    {(job.original_url || job.versions.length > 0 || job.status === 'review') && <Review job={job} selectedVersion={activeVersionId} onVersionChange={(version) => setVersionSelection({ job: job.id, version })} channel={channel} canStart={canStart} onJob={onJob} onReload={onReload} publishing={publishing} onBusyChange={reportBusy} />}
   </article>;
 }
 
@@ -282,7 +285,7 @@ function AiEditorContent({ twitchUserId, streamer, clipDbId }: AiEditorPanelProp
       </section>
       <EditorOptionsPanel key={twitchUserId} channel={twitchUserId} />
       <div className="social-ai-history"><div><h3>Bearbeitungsaufträge</h3><p>Zuletzt gestartete Aufträge für diesen Kanal.</p></div>{jobs.data && jobs.data.length > 0 && <label>Auftrag ansehen<select className="studio-select" value={selectedJobId ?? ''} disabled={detailsLocked} onChange={(event) => { advanceSelection(); setJobSelection({ channel: twitchUserId, id: Number(event.target.value) }); }}>{jobs.data.map((item) => <option key={item.id} value={item.id}>Auftrag {item.id} · {statusLabels[item.status]}</option>)}</select></label>}</div>
-      {jobs.isPending ? <p role="status">Aufträge werden geladen…</p> : jobs.isError ? <EditorError retry={() => jobs.refetch()}>Die Aufträge konnten nicht geladen werden. Der Start bleibt gesperrt, bis der Stand bekannt ist.</EditorError> : jobs.data?.length === 0 ? <p className="social-ai-empty">Noch kein Auftrag für diesen Kanal. Wähle oben einen Clip für einen manuellen Test.</p> : job.isPending ? <p role="status">Auftrag wird geladen…</p> : job.isError ? <EditorError retry={() => job.refetch()}>Der Auftrag konnte nicht geladen werden. Die letzte bekannte Fassung wird nicht als aktueller Stand angezeigt.</EditorError> : job.data && <AiJobDetails key={`${twitchUserId}-${job.data.id}`} job={job.data} channel={twitchUserId} onBusyChange={setDetailsLocked} onReload={async () => (await job.refetch()).isSuccess} onJob={(value) => {client.setQueryData(['social-ai','job',twitchUserId,value.id],value);client.invalidateQueries({queryKey:jobsKey});if (selectionRevision === jobSelectionRevision.current && value.id !== selectedJobId) setJobSelection({channel:twitchUserId,id:value.id});}} canStart={canStart} onRetry={() => { if (canStart && job.data?.status === 'failed' && job.data.can_retry) retry.mutate({ channel: twitchUserId, id: job.data.id, revision: jobSelectionRevision.current }); }} retryPending={retry.isPending && currentRetryAction} retryError={retry.isError && currentRetryAction} />}
+      {jobs.isPending ? <p role="status">Aufträge werden geladen…</p> : jobs.isError ? <EditorError retry={() => jobs.refetch()}>Die Aufträge konnten nicht geladen werden. Der Start bleibt gesperrt, bis der Stand bekannt ist.</EditorError> : jobs.data?.length === 0 ? <p className="social-ai-empty">Noch kein Auftrag für diesen Kanal. Wähle oben einen Clip für einen manuellen Test.</p> : job.isPending ? <p role="status">Auftrag wird geladen…</p> : job.isError ? <EditorError retry={() => job.refetch()}>Der Auftrag konnte nicht geladen werden. Die letzte bekannte Fassung wird nicht als aktueller Stand angezeigt.</EditorError> : job.data && <AiJobDetails key={`${twitchUserId}-${job.data.id}`} job={job.data} channel={twitchUserId} onBusyChange={setDetailsLocked} onReload={async () => (await job.refetch()).isSuccess} onJob={(value) => {client.setQueryData(['social-ai','job',twitchUserId,value.id],value);client.invalidateQueries({queryKey:jobsKey});if (selectionRevision === jobSelectionRevision.current && value.id !== selectedJobId) setJobSelection({channel:twitchUserId,id:value.id});}} canStart={canStart} onRetry={() => { if (job.data && canRetryJob(job.data, { canStart, retryPending: retry.isPending, locked: detailsLocked })) retry.mutate({ channel: twitchUserId, id: job.data.id, revision: jobSelectionRevision.current }); }} retryPending={retry.isPending && currentRetryAction} retryError={retry.isError && currentRetryAction} />}
     </>}
   </section>;
 }

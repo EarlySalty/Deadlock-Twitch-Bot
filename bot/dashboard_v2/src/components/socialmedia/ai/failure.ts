@@ -1,3 +1,5 @@
+import type { AiJobView } from './api';
+
 const explanations: Record<string, string> = {
   source_unavailable: 'Der Originalclip konnte nicht bereitgestellt werden.',
   transcription_failed: 'Die Spracherkennung konnte nicht abgeschlossen werden.',
@@ -11,6 +13,10 @@ const explanations: Record<string, string> = {
   consent_missing: 'Die erforderliche Freigabe für externe KI fehlt.',
   interrupted: 'Die Bearbeitung wurde unterbrochen.',
 };
+
+export function canRetryJob(job: Pick<AiJobView, 'status' | 'can_retry'>, state: { canStart: boolean; retryPending: boolean; locked: boolean }): boolean {
+  return job.status === 'failed' && job.can_retry && state.canStart && !state.retryPending && !state.locked;
+}
 
 export function failureExplanation(code: string | null): string {
   return code && Object.hasOwn(explanations, code)

@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AiJobView, AiVideoVersion } from './api';
 import { approveAiVersion, decideAiProposal, decideAiVersion, fetchAiPublishingContext, reviseAiVersion, scheduleAiVersion, selectAiVersion } from './api';
 import { MetadataPanel } from './MetadataPanel';
@@ -18,6 +18,12 @@ export function RevisionControls({channel,job,version,canStart,onJob,onReload,pu
   onJob: (job: AiJobView) => void; onReload: () => Promise<boolean>; onBusyChange?: (busy: boolean) => void;
 }) {
   const feedbackId = useId();
+  const client = useQueryClient();
+  const videoId = version?.id;
+  const videoStatus = version?.status;
+  useEffect(() => {
+    if (videoId !== undefined) void client.invalidateQueries({ queryKey: ['social-ai', 'metadata', channel, videoId] });
+  }, [client, channel, videoId, videoStatus]);
   const publishingContext = useQuery({queryKey: ['social-ai-publishing-context', channel, job.id], queryFn: () => fetchAiPublishingContext(channel, job.id), enabled: publishing, staleTime: Infinity});
   const showPublishing = publishing && publishingContext.data === false;
   const historical = version?.status === 'rejected';
@@ -81,7 +87,7 @@ export function RevisionControls({channel,job,version,canStart,onJob,onReload,pu
         {feedbackBytes > 2000 && <p className="social-ai-caution" role="alert">Bitte kürze deine Anweisung, bevor du sie abschickst.</p>}
         <button type="submit" className="studio-primary" disabled={!canStart || historical || busyJob || blocked || !feedback.trim() || feedbackBytes > 2000}>Änderung anfordern</button>
       </form>
-      <MetadataPanel key={`${version.id}-${version.status}`} channel={channel} videoId={version.id} disabled={action.isPending || busyJob || reloading} onEditingChange={setMetadataEditing} />
+      <MetadataPanel key={version.id} channel={channel} videoId={version.id} disabled={action.isPending || busyJob || reloading || version.status !== 'review'} onEditingChange={setMetadataEditing} />
       {metadataEditing && <p role="status">Speichere oder verwirf die Textänderungen vor der nächsten Aktion.</p>}
       {publishingContext.isError && publishing && <p className="social-ai-caution" role="alert">Der Veröffentlichungsweg konnte nicht geprüft werden. <button type="button" className="studio-button" onClick={() => { void publishingContext.refetch(); }}>Erneut prüfen</button></p>}
       {(!publishing || publishingContext.data === true) && <p>Die Plattformfreigabe dieser Fassung erfolgt im Veröffentlichungspanel.</p>}
