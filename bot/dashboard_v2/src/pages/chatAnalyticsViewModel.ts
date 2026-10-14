@@ -1,3 +1,5 @@
+import { formatNumber } from '@/utils/formatters';
+import { translate, type TranslateParams } from '@/i18n/dictionary';
 import type { ChatAnalytics as ChatAnalyticsType, TimeRange } from '@/types/analytics';
 import {
   CHAT_AUDIENCE_TOOLTIP,
@@ -47,7 +49,9 @@ export interface ChatAnalyticsViewModel {
 export function buildChatAnalyticsViewModel(
   data: ChatAnalyticsType,
   days: TimeRange,
-  hourlyChartGradientId: string
+  hourlyChartGradientId: string,
+  t: (text: string, params?: TranslateParams) => string = (text, params) => translate('de', text, params),
+  locale = 'de-DE'
 ): ChatAnalyticsViewModel {
   const totalChatters = data.totalChatterSessions ?? data.uniqueChatters ?? 0;
   const totalTrackedViewers = data.totalTrackedViewers ?? totalChatters;
@@ -90,15 +94,15 @@ export function buildChatAnalyticsViewModel(
   const newViewerShare = totalChatters > 0 ? (firstTimeChatters / totalChatters) * 100 : 0;
   const activeChattersShare = totalTrackedViewers > 0 ? (totalChatters / totalTrackedViewers) * 100 : 0;
   const activeChattersDescription = totalTrackedViewers > 0
-    ? `${totalChatters.toLocaleString('de-DE')} von ${totalTrackedViewers.toLocaleString('de-DE')} getrackten Accounts haben im Zeitraum geschrieben.`
-    : 'Anteil der getrackten Chat-Accounts mit mindestens einer Nachricht im Zeitraum.';
+    ? t("{value0} von {value1} getrackten Accounts haben im Zeitraum geschrieben.", { value0: totalChatters.toLocaleString(locale), value1: totalTrackedViewers.toLocaleString(locale) })
+    : t("Anteil der getrackten Chat-Accounts mit mindestens einer Nachricht im Zeitraum.");
   const chatPenetrationGaugeValue =
     chattersApiInactive && data.legacyInteractionActivePerAvgViewer != null
       ? Math.min(100, data.legacyInteractionActivePerAvgViewer)
       : interactionRate;
   const messagesBenchmarkText = (() => {
     if (messagesPer100ViewerMinutes === null) {
-      return 'Keine Viewer-Minuten im Zeitraum';
+      return t("Keine Viewer-Minuten im Zeitraum");
     }
     if (
       messagesPer100ViewerMinutesPercentile !== null &&
@@ -107,20 +111,20 @@ export function buildChatAnalyticsViewModel(
     ) {
       const rating =
         messagesPer100ViewerMinutesPercentile >= 75
-          ? 'Uber deinem ublichen Niveau'
+          ? t("Über deinem üblichen Niveau")
           : messagesPer100ViewerMinutesPercentile >= 40
-            ? 'Im typischen Bereich'
-            : 'Unter deinem ublichen Niveau';
-      return `${rating} · Rohwert ${messagesPer100ViewerMinutes.toFixed(1)} Nachrichten pro 100 Viewer-Minuten · besser als ${messagesPer100ViewerMinutesPercentile.toFixed(0)}% deiner ${messagesPer100ViewerMinutesBenchmarkSessions} Streams`;
+            ? t("Im typischen Bereich")
+            : t("Unter deinem üblichen Niveau");
+      return t("{value0} · Rohwert {value1} Nachrichten pro 100 Viewer-Minuten · besser als {value2}% deiner {value3} Streams", { value0: rating, value1: formatNumber(messagesPer100ViewerMinutes, 1, locale), value2: formatNumber(messagesPer100ViewerMinutesPercentile, 0, locale), value3: messagesPer100ViewerMinutesBenchmarkSessions.toLocaleString(locale) });
     }
     return messagesPer100ViewerMinutesBenchmarkSessions > 0
-      ? `Rohwert ${messagesPer100ViewerMinutes.toFixed(1)} Nachrichten pro 100 Viewer-Minuten · Eigenvergleich noch instabil (${messagesPer100ViewerMinutesBenchmarkSessions} Streams)`
-      : `Rohwert ${messagesPer100ViewerMinutes.toFixed(1)} Nachrichten pro 100 Viewer-Minuten · Noch keine Vergleichsbasis aus fruheren Streams`;
+      ? t("Rohwert {value0} Nachrichten pro 100 Viewer-Minuten · Eigenvergleich noch instabil ({value1} Streams)", { value0: formatNumber(messagesPer100ViewerMinutes, 1, locale), value1: messagesPer100ViewerMinutesBenchmarkSessions.toLocaleString(locale) })
+      : t("Rohwert {value0} Nachrichten pro 100 Viewer-Minuten · Noch keine Vergleichsbasis aus früheren Streams", { value0: formatNumber(messagesPer100ViewerMinutes, 1, locale) });
   })();
   const messagesBenchmarkFootnote =
     data.viewerMinutes && data.viewerMinutes > 0
-      ? `Median: ${messagesPer100ViewerMinutesMedian?.toFixed(1) ?? '-'} · Basis: ${data.viewerMinutes.toFixed(0)} Viewer-Minuten`
-      : 'Keine Viewer-Minuten im Zeitraum';
+      ? t("Median: {value0} · Basis: {value1} Viewer-Minuten", { value0: formatNumber(messagesPer100ViewerMinutesMedian, 1, locale), value1: formatNumber(data.viewerMinutes, 0, locale) })
+      : t("Keine Viewer-Minuten im Zeitraum");
   const messagesGaugeProgress =
     messagesGaugeHasBenchmark
       ? Math.min(100, Math.max(0, messagesPer100ViewerMinutesPercentile ?? 0))
@@ -160,6 +164,6 @@ export function buildChatAnalyticsViewModel(
     messagesBenchmarkFootnote,
     messagesGaugeProgress,
     hourlyChartGradientId,
-    chatAudienceTooltip: CHAT_AUDIENCE_TOOLTIP,
+    chatAudienceTooltip: t(CHAT_AUDIENCE_TOOLTIP),
   };
 }
