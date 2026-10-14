@@ -65,10 +65,12 @@ async fn autopilot_runner_lease_precedes_claim_and_unavailable_ai_has_no_static_
         .await
         .expect("lease acquisition")
         .expect("owned lease");
-    assert!(!worker
-        .run_once()
-        .await
-        .expect("busy lease is a truthful hold"));
+    assert!(
+        !worker
+            .run_once()
+            .await
+            .expect("busy lease is a truthful hold")
+    );
     let current = production_jobs::get(&pool, "owner", queued.id)
         .await
         .expect("queued job")
@@ -84,10 +86,12 @@ async fn autopilot_runner_lease_precedes_claim_and_unavailable_ai_has_no_static_
     assert_eq!(current.mode, Some(ProductionMode::Ai));
     assert_eq!(current.status, "review");
     assert_eq!(current.review_reasons, json!(["ai_editor_unavailable"]));
-    assert!(produced_video::list(&pool, "owner", 50)
-        .await
-        .expect("produced versions")
-        .is_empty());
+    assert!(
+        produced_video::list(&pool, "owner", 50)
+            .await
+            .expect("produced versions")
+            .is_empty()
+    );
     let lease = acquire_production_lease(&pool)
         .await
         .expect("released lease")
@@ -158,9 +162,18 @@ async fn autopilot_runner_static_local_media_and_restart_preserve_immutable_vers
     let original = tokio::fs::read(&source)
         .await
         .expect("synthetic original bytes");
+    sqlx::raw_sql("CREATE TABLE llm_usage (id BIGSERIAL PRIMARY KEY, ts TEXT, purpose TEXT,
+        provider TEXT, model TEXT, attempt_state TEXT, tokens_in BIGINT, tokens_out BIGINT, latency_ms BIGINT)")
+        .execute(&pool).await.expect("usage ledger fixture");
     let queued = job(&pool, "42", clip_id, Some(ProductionMode::Static)).await;
     let runner = worker(&pool, root.path(), VideoProcessor::default());
     assert!(runner.run_once().await.expect("concrete static dispatch"));
+    let usage: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM llm_usage WHERE purpose = 'social_editor'")
+            .fetch_one(&pool)
+            .await
+            .expect("no static gameplay analysis");
+    assert_eq!(usage, 0);
     let videos = produced_video::list(&pool, "42", 50)
         .await
         .expect("immutable versions");
@@ -177,9 +190,11 @@ async fn autopilot_runner_static_local_media_and_restart_preserve_immutable_vers
     assert_eq!(video.mode, ProductionMode::Static);
     assert_eq!(video.status, "review");
     assert!(video.needs_review);
-    assert!(video.metadata["rendering_ms"]
-        .as_i64()
-        .is_some_and(|ms| ms > 0));
+    assert!(
+        video.metadata["rendering_ms"]
+            .as_i64()
+            .is_some_and(|ms| ms > 0)
+    );
     let rendered = tokio::fs::read(&expected)
         .await
         .expect("persisted local output");
@@ -216,10 +231,12 @@ async fn autopilot_runner_static_local_media_and_restart_preserve_immutable_vers
         root.path(),
         VideoProcessor::new("unavailable-ffmpeg", "unavailable-ffprobe"),
     );
-    assert!(restart
-        .run_once()
-        .await
-        .expect("actual recovery and dispatch"));
+    assert!(
+        restart
+            .run_once()
+            .await
+            .expect("actual recovery and dispatch")
+    );
     let recovered = produced_video::list(&pool, "42", 50)
         .await
         .expect("recovered version");
@@ -251,10 +268,12 @@ async fn autopilot_runner_static_local_media_and_restart_preserve_immutable_vers
     .expect("wrong immutable file checkpoint");
     sqlx::query("UPDATE social_production_jobs SET status='running', stage='rendered', finished_at=NULL WHERE id=$1")
         .bind(queued.id).execute(&pool).await.expect("interrupted wrong-file checkpoint");
-    assert!(restart
-        .run_once()
-        .await
-        .expect("wrong file is held without rendering a replacement"));
+    assert!(
+        restart
+            .run_once()
+            .await
+            .expect("wrong file is held without rendering a replacement")
+    );
     let held = production_jobs::get(&pool, "42", queued.id)
         .await
         .expect("held job")
@@ -404,14 +423,18 @@ async fn autopilot_runner_cleared_schedule_preserves_queued_work_and_manual_inde
             .await
             .expect("preserved automatic job")
             .expect("job still exists");
+        let mut expected = queued.clone();
+        expected.scheduled_at = None;
         assert_eq!(
-            serde_json::to_value(&unchanged).expect("unchanged job state"),
-            serde_json::to_value(&queued).expect("original job state")
+            serde_json::to_value(&unchanged).expect("preserved job state"),
+            serde_json::to_value(&expected).expect("only the removed schedule reservation changes")
         );
-        assert!(produced_video::list(&pool, "42", 50)
-            .await
-            .expect("no automatic versions or progress")
-            .is_empty());
+        assert!(
+            produced_video::list(&pool, "42", 50)
+                .await
+                .expect("no automatic versions or progress")
+                .is_empty()
+        );
         let state = super::snapshot(&pool, "42")
             .await
             .expect("truthful snapshot");
@@ -435,10 +458,12 @@ async fn autopilot_runner_cleared_schedule_preserves_queued_work_and_manual_inde
                 .await
                 .expect("separate manual clip with real local synthetic media");
             let manual = job(&pool, "42", manual_clip, Some(mode)).await;
-            assert!(runner
-                .run_once()
-                .await
-                .expect("manual dispatch without slots"));
+            assert!(
+                runner
+                    .run_once()
+                    .await
+                    .expect("manual dispatch without slots")
+            );
             let result = production_jobs::get(&pool, "42", manual.id)
                 .await
                 .expect("manual result")
@@ -519,26 +544,37 @@ async fn autopilot_runner_repeated_resource_holds_do_not_drain_the_pool() {
                 clips.push(id);
             }
             let runner = worker(&pool, root.path(), VideoProcessor::default());
-            assert!(runner
-                .run_once()
-                .await
-                .expect("actual unavailable/resource dispatch"));
+            let expected_reviews = if full_auto { clips.len() } else { 2 };
+            for _ in 0..expected_reviews {
+                assert!(
+                    runner
+                        .run_once()
+                        .await
+                        .expect("one review job does not block the next clip")
+                );
+            }
             for _ in 0..8 {
-                assert!(!runner
-                    .run_once()
-                    .await
-                    .expect("backpressure, not repeated clip consumption"));
+                assert!(
+                    !runner
+                        .run_once()
+                        .await
+                        .expect("backpressure, not repeated clip consumption")
+                );
             }
             let state = super::snapshot(&pool, "42")
                 .await
                 .expect("actual queue snapshot");
-            assert_eq!(state.jobs.len(), 1);
-            assert_eq!(state.jobs[0].status, "review");
+            assert_eq!(state.jobs.len(), expected_reviews);
+            assert!(state.jobs.iter().all(|job| job.status == "review"));
             assert_eq!(state.jobs[0].attempts, 1);
-            assert_eq!(state.review_count, 1);
+            assert_eq!(state.review_count, expected_reviews as i64);
             assert_eq!(
                 state.production_hold,
-                Some(super::ProductionHold::ReviewBacklog)
+                Some(if full_auto {
+                    super::ProductionHold::EmptyPool
+                } else {
+                    super::ProductionHold::ReviewBacklog
+                })
             );
             assert_eq!(
                 state.jobs[0].review_reasons,
@@ -554,11 +590,13 @@ async fn autopilot_runner_repeated_resource_holds_do_not_drain_the_pool() {
             .fetch_one(&pool)
             .await
             .expect("bounded pool consumption");
-            assert_eq!(selected, 1);
-            assert!(produced_video::list(&pool, "42", 50)
-                .await
-                .expect("no fallback versions")
-                .is_empty());
+            assert_eq!(selected, expected_reviews as i64);
+            assert!(
+                produced_video::list(&pool, "42", 50)
+                    .await
+                    .expect("no fallback versions")
+                    .is_empty()
+            );
             super::save_schedule(
                 &pool,
                 "42",
@@ -570,11 +608,13 @@ async fn autopilot_runner_repeated_resource_holds_do_not_drain_the_pool() {
             )
             .await
             .expect("automatic controls independent of manual AI");
-            let manual = job(&pool, "42", clips[1], Some(ProductionMode::Ai)).await;
-            assert!(runner
-                .run_once()
-                .await
-                .expect("manual AI remains independently dispatchable"));
+            let manual = job(&pool, "42", clips[2], Some(ProductionMode::Ai)).await;
+            assert!(
+                runner
+                    .run_once()
+                    .await
+                    .expect("manual AI remains independently dispatchable")
+            );
             let manual = production_jobs::get(&pool, "42", manual.id)
                 .await
                 .expect("manual result")
@@ -637,10 +677,12 @@ async fn autopilot_runner_transient_progress_and_finish_failures_reuse_the_versi
             );
             sqlx::query("UPDATE social_production_jobs SET status = 'running', stage = 'rendered', finished_at = NULL WHERE id = $1")
                 .bind(queued.id).execute(&pool).await.expect("restart before final bookkeeping");
-            assert!(runner
-                .run_once()
-                .await
-                .expect("existing-output completion fault"));
+            assert!(
+                runner
+                    .run_once()
+                    .await
+                    .expect("existing-output completion fault")
+            );
         }
         let failed_attempt = production_jobs::get(&pool, "42", queued.id)
             .await
@@ -688,10 +730,12 @@ async fn autopilot_runner_transient_progress_and_finish_failures_reuse_the_versi
                 VideoProcessor::new("unavailable-ffmpeg", "unavailable-ffprobe"),
             )
         };
-        assert!(restart
-            .run_once()
-            .await
-            .expect("real retry or immutable completion recovery"));
+        assert!(
+            restart
+                .run_once()
+                .await
+                .expect("real retry or immutable completion recovery")
+        );
         let done = production_jobs::get(&pool, "42", queued.id)
             .await
             .expect("finished retry")
@@ -725,12 +769,9 @@ async fn autopilot_runner_transient_progress_and_finish_failures_reuse_the_versi
             .await
             .expect("real fault executed");
         assert!(fault_calls >= 2);
-        assert!(!super::has_automatic_review_on(
-            &mut pool.acquire().await.expect("count connection"),
-            "42"
-        )
-        .await
-        .expect("Full Auto is not blocked by completed output"));
+        let review_jobs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM social_production_jobs WHERE twitch_user_id = '42' AND source = 'autopilot' AND status = 'review'")
+            .fetch_one(&pool).await.expect("no unfinished review job");
+        assert_eq!(review_jobs, 0);
         let uploads: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue")
             .fetch_one(&pool)
             .await
@@ -798,7 +839,7 @@ async fn autopilot_runner_persistent_database_failures_stop_at_max_attempts() {
             .await
             .expect("bounded result")
             .expect("owned job");
-        assert_eq!(held.status, "review");
+        assert_eq!(held.status, "failed");
         assert_eq!(held.attempts, 2);
         assert_eq!(held.review_reasons, json!(["attempts_exhausted"]));
         let finished = produced_video::list(&pool, "42", 50)
@@ -820,10 +861,12 @@ async fn autopilot_runner_persistent_database_failures_stop_at_max_attempts() {
                 bytes
             );
         }
-        assert!(!restart
-            .run_once()
-            .await
-            .expect("no work beyond the maximum"));
+        assert!(
+            !restart
+                .run_once()
+                .await
+                .expect("no work beyond the maximum")
+        );
         let unchanged = production_jobs::get(&pool, "42", queued.id)
             .await
             .expect("stable terminal result")
@@ -864,10 +907,12 @@ async fn autopilot_runner_recovers_when_the_retry_write_also_fails_transiently()
         .expect("rendering checkpoint");
     assert_eq!(video.len(), 1);
     assert_eq!(video[0].status, "rendering");
-    assert!(runner
-        .run_once()
-        .await
-        .expect("real recovery after transient database rollback"));
+    assert!(
+        runner
+            .run_once()
+            .await
+            .expect("real recovery after transient database rollback")
+    );
     let done = production_jobs::get(&pool, "42", queued.id)
         .await
         .expect("recovered job")

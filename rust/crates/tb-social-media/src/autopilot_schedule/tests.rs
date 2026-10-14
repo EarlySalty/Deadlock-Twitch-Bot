@@ -1,8 +1,8 @@
 use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 use sqlx::{
-    postgres::{PgConnectOptions, PgPoolOptions},
     PgPool,
+    postgres::{PgConnectOptions, PgPoolOptions},
 };
 use std::{
     str::FromStr,
@@ -17,6 +17,8 @@ use crate::{
 
 #[path = "edge_tests.rs"]
 mod edges;
+#[path = "finish_tests.rs"]
+mod finish;
 #[path = "runner_tests.rs"]
 mod runner;
 
@@ -74,6 +76,8 @@ async fn pool_before_slot_guards() -> PgPool {
         .expect("test pool");
     sqlx::raw_sql("CREATE TABLE twitch_streamers (twitch_user_id TEXT PRIMARY KEY);
         INSERT INTO twitch_streamers VALUES ('owner'), ('other');
+        CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT NOT NULL, twitch_user_id TEXT,
+            platform_user_id TEXT, enabled INTEGER DEFAULT 1, authorized_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, twitch_user_id TEXT, clip_id TEXT,
             clip_url TEXT, clip_title TEXT, streamer_login TEXT, local_file_path TEXT, converted_file_path TEXT,
             status TEXT DEFAULT 'pending', game_id TEXT DEFAULT '2132205352', source_kind TEXT DEFAULT 'twitch',
@@ -96,6 +100,12 @@ async fn pool_before_slot_guards() -> PgPool {
     .execute(&pool)
     .await
     .expect("actual merged M1 migration");
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261013140000_social_autopilot_publishing.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("actual publishing migration");
     pool
 }
 
@@ -203,26 +213,30 @@ async fn schedule_narrow_writes_preserve_other_settings_and_validate() {
     assert_eq!(stored.clip_sort, ClipSort::NewestFirst);
     assert_eq!(stored.target_platforms, vec!["youtube"]);
     assert!(!stored.notifications.dashboard);
-    assert!(save_schedule(
-        &pool,
-        "owner",
-        &SchedulePatch {
-            lead_time_hours: Some(721),
-            ..Default::default()
-        }
-    )
-    .await
-    .is_err());
-    assert!(save_schedule(
-        &pool,
-        "owner",
-        &SchedulePatch {
-            timezone: Some("Unknown/Zone".into()),
-            ..Default::default()
-        }
-    )
-    .await
-    .is_err());
+    assert!(
+        save_schedule(
+            &pool,
+            "owner",
+            &SchedulePatch {
+                lead_time_hours: Some(721),
+                ..Default::default()
+            }
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        save_schedule(
+            &pool,
+            "owner",
+            &SchedulePatch {
+                timezone: Some("Unknown/Zone".into()),
+                ..Default::default()
+            }
+        )
+        .await
+        .is_err()
+    );
     assert!(serde_json::from_value::<SchedulePatch>(json!({"publish_mode":"full_auto"})).is_err());
     let loaded = snapshot(&pool, "owner").await.expect("snapshot");
     assert!(loaded.persisted);
@@ -375,7 +389,7 @@ async fn claims_are_global_recovery_keeps_mode_and_checkpoint() {
         recovered,
         Recovery {
             resumed: 1,
-            held: 0
+            failed: 0
         }
     );
     let resumed = production_jobs::claim_next(&pool)
@@ -416,13 +430,21 @@ async fn two_reviews_block_automatic_claims_but_not_manual_work() {
             utc("2025-01-01T00:00:00Z"),
         )
         .await;
-        sqlx::query("INSERT INTO social_produced_videos (twitch_user_id,clip_id,mode,status,file_path,duration_ms,expires_at) VALUES ('owner',$1,'static','review','test.mp4',1000,clock_timestamp()+INTERVAL '7 days')")
-            .bind(id).execute(&pool).await.expect("review backlog");
+        let review_job = job(&pool, "owner", id, None).await;
+        sqlx::query("UPDATE social_production_jobs SET status = 'completed' WHERE id = $1")
+            .bind(review_job.id)
+            .execute(&pool)
+            .await
+            .expect("completed automatic production");
+        sqlx::query("INSERT INTO social_produced_videos (twitch_user_id,clip_id,job_id,mode,status,file_path,duration_ms,expires_at) VALUES ('owner',$1,$2,'static','review','test.mp4',1000,clock_timestamp()+INTERVAL '7 days')")
+            .bind(id).bind(review_job.id).execute(&pool).await.expect("review backlog");
     }
-    assert!(production_jobs::claim_next(&pool)
-        .await
-        .expect("backpressure")
-        .is_none());
+    assert!(
+        production_jobs::claim_next(&pool)
+            .await
+            .expect("backpressure")
+            .is_none()
+    );
     let id = clip(&pool, "owner", "manual", utc("2025-01-01T00:00:00Z")).await;
     let manual = job(&pool, "owner", id, Some(ProductionMode::Ai)).await;
     let running_manual = production_jobs::claim_next(&pool)
@@ -534,19 +556,21 @@ async fn shared_slot_guard_covers_produced_and_upload_races() {
     cancel(&pool, "owner", first.id)
         .await
         .expect("unstarted cancellation");
-    assert!(production_jobs::insert(
-        &pool,
-        &NewProductionJob {
-            twitch_user_id: "owner".into(),
-            clip_id: two,
-            source: JobSource::Manual,
-            requested_mode: Some(ProductionMode::Static),
-            scheduled_at: Some(scheduled),
-            max_attempts: 3
-        }
-    )
-    .await
-    .is_err());
+    assert!(
+        production_jobs::insert(
+            &pool,
+            &NewProductionJob {
+                twitch_user_id: "owner".into(),
+                clip_id: two,
+                source: JobSource::Manual,
+                requested_mode: Some(ProductionMode::Static),
+                scheduled_at: Some(scheduled),
+                max_attempts: 3
+            }
+        )
+        .await
+        .is_err()
+    );
     let third = clip(&pool, "owner", "race-job", utc("2025-01-03T00:00:00Z")).await;
     let fourth = clip(&pool, "owner", "race-video", utc("2025-01-04T00:00:00Z")).await;
     let next_slot = scheduled + Duration::days(7);

@@ -10,20 +10,14 @@ fn autopilot_review_backpressure_does_not_hold_full_auto() {
         ..Default::default()
     };
     assert_eq!(
-        hold(&settings, 2, false, next, now),
+        hold(&settings, 2, next, now),
         Some(ProductionHold::ReviewBacklog)
     );
+    assert_eq!(hold(&settings, 1, next, now), None);
     settings.publish_mode = autopilot_settings::PublishMode::FullAuto;
-    assert_eq!(hold(&settings, 2, false, next, now), None);
-    assert_eq!(
-        hold(&settings, 1, true, next, now),
-        Some(ProductionHold::ReviewBacklog)
-    );
+    assert_eq!(hold(&settings, 2, next, now), None);
     settings.paused = true;
-    assert_eq!(
-        hold(&settings, 2, false, next, now),
-        Some(ProductionHold::Paused)
-    );
+    assert_eq!(hold(&settings, 2, next, now), Some(ProductionHold::Paused));
 }
 
 #[tokio::test]
@@ -53,16 +47,20 @@ async fn snapshot_uses_real_serial_clip_ids_and_hides_internal_checkpoints() {
         .expect("real serial ID decoding");
     assert_eq!(snapshot.jobs[0].id, second.id);
     assert_eq!(snapshot.jobs.len(), 2);
-    assert!(snapshot
-        .jobs
-        .iter()
-        .all(|job| job.clip_title == "same-clip"));
+    assert!(
+        snapshot
+            .jobs
+            .iter()
+            .all(|job| job.clip_title == "same-clip")
+    );
     let public = serde_json::to_value(&snapshot).expect("public snapshot");
-    assert!(public["jobs"]
-        .as_array()
-        .expect("queue array")
-        .iter()
-        .all(|job| job.get("metadata").is_none() && job.get("internal_analysis").is_none()));
+    assert!(
+        public["jobs"]
+            .as_array()
+            .expect("queue array")
+            .iter()
+            .all(|job| job.get("metadata").is_none() && job.get("internal_analysis").is_none())
+    );
     cleanup(pool).await;
 }
 
@@ -175,7 +173,11 @@ async fn zero_lead_uses_poll_window_and_changed_filters_preserve_queued_clips() 
         .expect("preserved queue");
     assert_eq!(after[0].id, first[0].id);
     assert_eq!(after[0].clip_id, old);
-    assert_eq!(after[0].scheduled_at, first[0].scheduled_at);
+    assert!(
+        after[0]
+            .scheduled_at
+            .is_some_and(|slot| slot > first[0].scheduled_at.expect("old scheduled slot"))
+    );
     assert_eq!(after[1].clip_id, current);
     cleanup(pool).await;
 }
@@ -207,7 +209,7 @@ async fn exhausted_crash_recovery_keeps_checkpoint_and_releases_running_constrai
         recover_after_lease(&pool).await.expect("bounded recovery"),
         Recovery {
             resumed: 0,
-            held: 1
+            failed: 1
         }
     );
     let recovered = production_jobs::get(&pool, "owner", queued.id)
@@ -216,7 +218,7 @@ async fn exhausted_crash_recovery_keeps_checkpoint_and_releases_running_constrai
         .expect("kept history");
     assert_eq!(recovered.mode, claimed.mode);
     assert_eq!(recovered.metadata["analysis"]["saved"], true);
-    assert_eq!(recovered.status, "review");
+    assert_eq!(recovered.status, "failed");
     let running: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM social_production_jobs WHERE status = 'running'")
             .fetch_one(&pool)
@@ -227,7 +229,7 @@ async fn exhausted_crash_recovery_keeps_checkpoint_and_releases_running_constrai
 }
 
 #[tokio::test]
-async fn automatic_retry_and_recovery_reviews_stop_reselection_in_both_publish_modes() {
+async fn one_failed_or_review_job_does_not_block_the_next_clip_in_both_publish_modes() {
     for full_auto in [false, true] {
         for failure in ["resource", "retry_exhausted", "recovery_exhausted"] {
             let pool = pool().await;
@@ -245,7 +247,7 @@ async fn automatic_retry_and_recovery_reviews_stop_reselection_in_both_publish_m
                     .expect("Full Auto");
             }
             let id = clip(&pool, "owner", "held", utc("2025-01-01T00:00:00Z")).await;
-            let untouched = clip(&pool, "owner", "untouched", utc("2025-01-02T00:00:00Z")).await;
+            let next = clip(&pool, "owner", "next", utc("2025-01-02T00:00:00Z")).await;
             let queued = job(&pool, "owner", id, None).await;
             let mut running = production_jobs::claim_next(&pool)
                 .await
@@ -267,7 +269,7 @@ async fn automatic_retry_and_recovery_reviews_stop_reselection_in_both_publish_m
                     recover_after_lease(&pool)
                         .await
                         .expect("actual recovery")
-                        .held,
+                        .failed,
                     1
                 );
             } else {
@@ -278,48 +280,107 @@ async fn automatic_retry_and_recovery_reviews_stop_reselection_in_both_publish_m
                     failure != "resource",
                 )
                 .await
-                .expect("actual terminal retry hold");
+                .expect("terminal outcome");
             }
-            for week in 0..4 {
-                let report = plan_owner(
-                    &pool,
-                    "owner",
-                    utc("2026-10-11T18:00:00Z") + Duration::weeks(week),
-                )
+            let ended = production_jobs::get(&pool, "owner", queued.id)
                 .await
-                .expect("repeated planning");
-                assert_eq!(report.production_hold, Some(ProductionHold::ReviewBacklog));
-                assert_eq!(report.created, 0);
-                assert!(production_jobs::claim_next(&pool)
-                    .await
-                    .expect("automatic backpressure")
-                    .is_none());
-            }
-            let state = snapshot(&pool, "owner")
+                .expect("job")
+                .expect("kept history");
+            let expected = if failure == "resource" {
+                "review"
+            } else {
+                "failed"
+            };
+            assert_eq!(ended.status, expected);
+            let report = plan_owner(&pool, "owner", utc("2026-10-11T18:00:00Z"))
                 .await
-                .expect("truthful hold snapshot");
-            assert_eq!(state.review_count, 1);
-            assert_eq!(state.production_hold, Some(ProductionHold::ReviewBacklog));
-            let selected: bool = sqlx::query_scalar(
-                "SELECT selected_at IS NOT NULL FROM social_clip_pool WHERE clip_db_id = $1",
-            )
-            .bind(untouched)
-            .fetch_one(&pool)
-            .await
-            .expect("pool remains eligible");
-            assert!(!selected);
-            let manual = job(&pool, "owner", untouched, Some(ProductionMode::Ai)).await;
-            assert_eq!(
-                production_jobs::claim_next(&pool)
-                    .await
-                    .expect("manual claim")
-                    .expect("independent manual AI")
-                    .id,
-                manual.id
-            );
+                .expect("planning continues");
+            assert_ne!(report.production_hold, Some(ProductionHold::ReviewBacklog));
+            assert_eq!(report.created, 1);
+            let claimed = production_jobs::claim_next(&pool)
+                .await
+                .expect("claim next")
+                .expect("next clip produced");
+            assert_eq!(claimed.clip_id, next);
             cleanup(pool).await;
         }
     }
+}
+
+async fn park_in_review(pool: &sqlx::PgPool, clip_id: i64) -> i64 {
+    let queued = job(pool, "owner", clip_id, None).await;
+    let running = production_jobs::claim_next(pool)
+        .await
+        .expect("claim")
+        .expect("automatic job");
+    assert_eq!(running.id, queued.id);
+    retry_or_review(pool, &running, "resource_unavailable", false)
+        .await
+        .expect("review outcome");
+    queued.id
+}
+
+#[tokio::test]
+async fn two_review_jobs_hold_until_one_is_resolved() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    save_schedule(&pool, "owner", &schedule())
+        .await
+        .expect("enabled schedule");
+    let first = clip(&pool, "owner", "first", utc("2025-01-01T00:00:00Z")).await;
+    let second = clip(&pool, "owner", "second", utc("2025-01-02T00:00:00Z")).await;
+    clip(&pool, "owner", "third", utc("2025-01-03T00:00:00Z")).await;
+    let skipped = park_in_review(&pool, first).await;
+    let processed = park_in_review(&pool, second).await;
+    let held = plan_owner(&pool, "owner", utc("2026-10-11T18:00:00Z"))
+        .await
+        .expect("held planning");
+    assert_eq!(held.production_hold, Some(ProductionHold::ReviewBacklog));
+    assert_eq!(held.created, 0);
+    assert!(matches!(
+        resolve_review(&pool, "other", skipped, ReviewDecision::Skip, None).await,
+        Err(ScheduleError::NotFound)
+    ));
+    resolve_review(
+        &pool,
+        "owner",
+        skipped,
+        ReviewDecision::Skip,
+        Some("  Passt nicht  "),
+    )
+    .await
+    .expect("skip");
+    let skipped_job = production_jobs::get(&pool, "owner", skipped)
+        .await
+        .expect("job")
+        .expect("skipped job");
+    assert_eq!(skipped_job.status, "cancelled");
+    assert_eq!(skipped_job.metadata["review_decision"]["action"], "skip");
+    assert_eq!(
+        skipped_job.metadata["review_decision"]["note"],
+        "Passt nicht"
+    );
+    assert!(matches!(
+        resolve_review(&pool, "owner", skipped, ReviewDecision::Process, None).await,
+        Err(ScheduleError::NotInReview)
+    ));
+    resolve_review(&pool, "owner", processed, ReviewDecision::Process, None)
+        .await
+        .expect("process anyway");
+    let report = plan_owner(&pool, "owner", utc("2026-10-11T18:00:00Z"))
+        .await
+        .expect("planning resumes");
+    assert_ne!(report.production_hold, Some(ProductionHold::ReviewBacklog));
+    let state = snapshot(&pool, "owner").await.expect("snapshot");
+    let first_queued = state
+        .jobs
+        .iter()
+        .find(|job| job.status == "queued")
+        .expect("queued job");
+    assert_eq!(first_queued.id, processed);
+    assert_eq!(first_queued.attempts, 0);
+    assert!(first_queued.review_reasons.is_empty());
+    cleanup(pool).await;
 }
 
 async fn waiter_behind(pool: &sqlx::PgPool, blocker: i32) -> i32 {
@@ -518,11 +579,13 @@ async fn clearing_schedule_while_claim_waits_for_owner_prevents_first_start() {
         .await
         .expect("clear weekly slots under the real owner lock");
     owner_tx.commit().await.expect("release changed schedule");
-    assert!(claim
-        .await
-        .expect("claim task")
-        .expect("locked recheck")
-        .is_none());
+    assert!(
+        claim
+            .await
+            .expect("claim task")
+            .expect("locked recheck")
+            .is_none()
+    );
     let unchanged = production_jobs::get(&pool, "owner", queued.id)
         .await
         .expect("queue after rejected claim")

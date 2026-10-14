@@ -5,20 +5,20 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 
 use crate::production_jobs::autopilot_schedule::{
-    plan_owner, recover_after_lease, retry_or_review, ScheduleError,
+    ScheduleError, plan_owner, recover_after_lease, retry_or_review,
 };
 use crate::{
     ai_editor::{self, EditorRuntime, MediaInfo, MediaRuntime, ProductionContext, ResourceLimits},
     autopilot_settings,
-    clip_prep_worker::{download_atomic, register_local_file, ClipDownloader},
+    clip_prep_worker::{ClipDownloader, download_atomic, register_local_file},
     clip_templates,
     produced_video::{self, NewProducedVideo, ProducedVideo, ProducedVideoError, RenderedVideo},
     production_jobs::{self, JobCompletion, JobSource, ProductionJob, ProductionMode},
-    production_lease::{acquire_production_lease, ProductionLease, ProductionLeaseError},
+    production_lease::{ProductionLease, ProductionLeaseError, acquire_production_lease},
     render::render_clip_vertical_with_lease,
     video_processor::{VideoProcessor, VideoProcessorError},
 };
@@ -274,9 +274,16 @@ impl AutopilotWorker {
         &self,
         job: &ProductionJob,
     ) -> Result<Option<ProducedVideo>, RunnerError> {
-        let id: Option<i64> = sqlx::query_scalar("SELECT id FROM social_produced_videos
-            WHERE job_id = $1 AND twitch_user_id = $2 AND clip_id = $3 AND mode = 'static' ORDER BY id LIMIT 1")
-            .bind(job.id).bind(&job.twitch_user_id).bind(job.clip_id).fetch_optional(&self.pool).await?;
+        let id: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM social_produced_videos
+            WHERE job_id = $1 AND twitch_user_id = $2 AND clip_id = $3 AND mode = 'static'
+            AND status NOT IN ('failed', 'rejected', 'expired') ORDER BY id LIMIT 1",
+        )
+        .bind(job.id)
+        .bind(&job.twitch_user_id)
+        .bind(job.clip_id)
+        .fetch_optional(&self.pool)
+        .await?;
         match id {
             Some(id) => Ok(produced_video::get(&self.pool, &job.twitch_user_id, id).await?),
             None => Ok(None),

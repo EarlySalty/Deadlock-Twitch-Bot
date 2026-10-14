@@ -286,7 +286,7 @@ function OwnerImportPool({
           </h2>
           <p>
             {t(
-              "Deadlock-Clips erfassen und für die spätere Verarbeitung auswählen.",
+              "Deadlock-Clips erfassen. Markierte Clips werden in deiner gewählten Reihenfolge zuerst verarbeitet, danach die übrigen passenden Clips.",
             )}
           </p>
         </div>
@@ -704,7 +704,7 @@ function OwnerImportPool({
                           !poolKnown ||
                           !selectionAllowed(clip)
                         }
-                        aria-label={`${t("Clip auswählen")}: ${metadata.title}`}
+                        aria-label={`${t("Clip bevorzugen")}: ${metadata.title}`}
                         onChange={(event) => {
                           setFeedback("");
                           selectionMutation.mutate({
@@ -714,7 +714,7 @@ function OwnerImportPool({
                           });
                         }}
                       />
-                      {t(clip.selected_at ? "Ausgewählt" : "Auswählen")}
+                      {t(clip.selected_at ? "Bevorzugt" : "Zuerst verarbeiten")}
                     </label>
                   </div>
                 </li>

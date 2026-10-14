@@ -3,17 +3,17 @@ mod queue;
 mod recovery;
 mod settings;
 
-pub use planner::{plan_owner, PlanReport};
+pub use planner::{PlanReport, plan_owner};
 
-pub use queue::{cancel, mark_next, reorder};
-pub use recovery::{recover_after_lease, retry_or_review, Recovery};
-pub use settings::{save_schedule, SchedulePatch, ScheduleSettings};
+pub use queue::{ReviewDecision, cancel, mark_next, reorder, resolve_review};
+pub use recovery::{Recovery, recover_after_lease, retry_or_review};
+pub use settings::{SchedulePatch, ScheduleSettings, save_schedule};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgConnection, PgPool};
 
-use super::{from_row, JobError, JobSource, ProductionJob, ProductionMode, SELECT};
+use super::{JobError, JobSource, ProductionJob, ProductionMode, SELECT, from_row};
 use crate::autopilot_settings::{self, AutopilotSettings, SettingsError};
 
 #[derive(Debug, thiserror::Error)]
@@ -26,6 +26,8 @@ pub enum ScheduleError {
     QueueChanged,
     #[error("Der Auftrag wurde bereits gestartet und kann nicht mehr geändert werden")]
     Started,
+    #[error("Der Auftrag wartet nicht mehr auf eine Entscheidung")]
+    NotInReview,
     #[error("Der Zeitplan konnte nicht gespeichert oder geladen werden")]
     Database(#[from] sqlx::Error),
     #[error(transparent)]
@@ -63,6 +65,7 @@ pub struct QueueJob {
     pub started_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
     pub review_reasons: Vec<String>,
+    pub review_explanation: Option<String>,
 }
 
 impl QueueJob {
@@ -82,6 +85,11 @@ impl QueueJob {
             started_at: job.started_at,
             last_error: job.last_error,
             review_reasons: serde_json::from_value(job.review_reasons)?,
+            review_explanation: job
+                .metadata
+                .get("review_explanation")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
         })
     }
 }
@@ -94,33 +102,29 @@ pub struct ScheduleQueueSnapshot {
     pub jobs: Vec<QueueJob>,
     pub review_count: i64,
     pub production_hold: Option<ProductionHold>,
+    pub connected_platforms: Vec<String>,
+}
+
+pub(crate) fn review_backlog_sql(owner: &str) -> String {
+    format!(
+        "((SELECT COUNT(*) FROM social_produced_videos v JOIN social_production_jobs vj ON vj.id = v.job_id
+            WHERE v.twitch_user_id = {owner} AND vj.source = 'autopilot' AND v.status = 'review'
+            AND (v.expires_at IS NULL OR v.expires_at > clock_timestamp()))
+        + (SELECT COUNT(*) FROM social_production_jobs rj WHERE rj.twitch_user_id = {owner}
+            AND rj.source = 'autopilot' AND rj.status = 'review' AND NOT EXISTS (SELECT 1 FROM social_produced_videos v
+                WHERE v.job_id = rj.id AND v.status = 'review'
+                AND (v.expires_at IS NULL OR v.expires_at > clock_timestamp()))))"
+    )
 }
 
 pub(crate) async fn review_count_on(
     connection: &mut PgConnection,
     owner: &str,
 ) -> Result<i64, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT (SELECT COUNT(*) FROM social_produced_videos WHERE twitch_user_id = $1
-            AND status = 'review' AND (expires_at IS NULL OR expires_at > clock_timestamp()))
-        + (SELECT COUNT(*) FROM social_production_jobs j WHERE j.twitch_user_id = $1
-            AND j.status = 'review' AND NOT EXISTS (SELECT 1 FROM social_produced_videos v
-                WHERE v.job_id = j.id AND v.status = 'review'
-                AND (v.expires_at IS NULL OR v.expires_at > clock_timestamp())))",
-    )
-    .bind(owner)
-    .fetch_one(connection)
-    .await
-}
-
-pub(crate) async fn has_automatic_review_on(
-    connection: &mut PgConnection,
-    owner: &str,
-) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM social_production_jobs
-        WHERE twitch_user_id = $1 AND source = 'autopilot' AND status = 'review')",
-    )
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT {}",
+        review_backlog_sql("$1")
+    )))
     .bind(owner)
     .fetch_one(connection)
     .await
@@ -140,6 +144,8 @@ pub(crate) async fn taken_on(
         .bind(owner).fetch_all(connection).await
 }
 
+pub(crate) const REVIEW_LIMIT: i64 = 2;
+
 pub(crate) fn production_horizon(
     settings: &AutopilotSettings,
     now: DateTime<Utc>,
@@ -151,7 +157,6 @@ pub(crate) fn production_horizon(
 pub(crate) fn hold(
     settings: &AutopilotSettings,
     reviews: i64,
-    held_automatic: bool,
     next: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
 ) -> Option<ProductionHold> {
@@ -161,9 +166,7 @@ pub(crate) fn hold(
     if settings.paused {
         return Some(ProductionHold::Paused);
     }
-    if held_automatic
-        || (settings.publish_mode == autopilot_settings::PublishMode::Review && reviews >= 2)
-    {
+    if settings.publish_mode == autopilot_settings::PublishMode::Review && reviews >= REVIEW_LIMIT {
         return Some(ProductionHold::ReviewBacklog);
     }
     if settings.schedule_slots.is_empty() {
@@ -220,8 +223,7 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<ScheduleQueueSnapsho
             QueueJob::from_job(job, title)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let held_automatic = has_automatic_review_on(&mut tx, owner).await?;
-    let mut production_hold = hold(&settings, review_count, held_automatic, next_slot, now);
+    let mut production_hold = hold(&settings, review_count, next_slot, now);
     if production_hold.is_none() {
         let empty: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM social_autopilot_schedule_state
             WHERE twitch_user_id = $1 AND production_hold = 'empty_pool' AND planned_at > $2 - INTERVAL '2 minutes')")
@@ -230,6 +232,13 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<ScheduleQueueSnapsho
             production_hold = Some(ProductionHold::EmptyPool);
         }
     }
+    let mut connected_platforms: Vec<String> =
+        crate::autopilot_publish::connections_on(&mut tx, owner)
+            .await?
+            .into_keys()
+            .filter(|platform| crate::posting_plan::PLATFORMS.contains(&platform.as_str()))
+            .collect();
+    connected_platforms.sort_unstable();
     tx.commit().await?;
     Ok(ScheduleQueueSnapshot {
         settings: ScheduleSettings::from(&settings),
@@ -238,6 +247,7 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<ScheduleQueueSnapsho
         jobs: queued,
         review_count,
         production_hold,
+        connected_platforms,
     })
 }
 

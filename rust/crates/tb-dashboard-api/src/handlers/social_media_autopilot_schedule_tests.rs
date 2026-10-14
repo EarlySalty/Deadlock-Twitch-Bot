@@ -1,7 +1,7 @@
 use super::*;
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::Request;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::postgres::PgPoolOptions;
 use tower::ServiceExt;
 
@@ -234,6 +234,7 @@ async fn autopilot_schedule_composed_routes_require_authentication() {
             ("PUT", "/queue/order", "{\"job_ids\":[]}"),
             ("POST", "/queue/1/next", "{}"),
             ("POST", "/queue/1/cancel", "{}"),
+            ("POST", "/queue/1/resolve", "{\"action\":\"skip\"}"),
         ] {
             let response = router
                 .clone()
@@ -285,6 +286,15 @@ fn queue_actions_do_not_accept_mode_or_another_job_payload() {
         serde_json::from_value::<QueueOrderWrite>(json!({"job_ids":[1,2],"enabled":true})).is_err()
     );
     assert!(serde_json::from_value::<QueueOrderWrite>(json!({"job_ids":["1"]})).is_err());
+    assert!(serde_json::from_value::<ReviewDecisionWrite>(json!({"action":"publish"})).is_err());
+    assert!(
+        serde_json::from_value::<ReviewDecisionWrite>(json!({"action":"skip","mode":"ai"}))
+            .is_err()
+    );
+    let decision: ReviewDecisionWrite =
+        serde_json::from_value(json!({"action":"process","note":"Trotzdem"}))
+            .expect("review decision");
+    assert_eq!(decision.action, ReviewDecision::Process);
 }
 
 #[tokio::test]
@@ -296,6 +306,11 @@ async fn handler_errors_keep_stable_status_and_safe_response_shapes() {
             "job_not_found",
         ),
         (ScheduleError::Started, StatusCode::CONFLICT, "job_started"),
+        (
+            ScheduleError::NotInReview,
+            StatusCode::CONFLICT,
+            "job_not_in_review",
+        ),
         (
             ScheduleError::QueueChanged,
             StatusCode::CONFLICT,

@@ -2,10 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgConnection, PgPool};
 
-use super::{
-    has_automatic_review_on, hold, production_horizon, review_count_on, taken_on, ProductionHold,
-    ScheduleError,
-};
+use super::{ProductionHold, ScheduleError, hold, production_horizon, review_count_on, taken_on};
 use crate::autopilot_settings::{self, AutopilotSettings, ClipSort};
 
 type ClipBounds = (DateTime<Utc>, DateTime<Utc>);
@@ -32,7 +29,7 @@ async fn select_on(
         AND NOT EXISTS(SELECT 1 FROM social_production_jobs j WHERE j.clip_id = p.clip_db_id)
         AND NOT EXISTS(SELECT 1 FROM social_produced_videos v WHERE v.clip_id = p.clip_db_id)
         AND NOT EXISTS(SELECT 1 FROM twitch_clips_upload_queue q WHERE q.clip_id = p.clip_db_id)
-        ORDER BY CASE WHEN $4 THEN p.source_created_at END DESC,
+        ORDER BY p.selected_at IS NULL, CASE WHEN $4 THEN p.source_created_at END DESC,
             CASE WHEN NOT $4 THEN p.source_created_at END ASC, p.clip_id ASC
         LIMIT 1 FOR UPDATE OF p")
         .bind(owner).bind(bounds.0).bind(bounds.1).bind(sort == ClipSort::NewestFirst)
@@ -123,8 +120,7 @@ pub async fn plan_owner(
         )?,
         ..Default::default()
     };
-    let held_automatic = has_automatic_review_on(&mut tx, owner).await?;
-    report.production_hold = hold(&settings, reviews, held_automatic, report.next_slot, now);
+    report.production_hold = hold(&settings, reviews, report.next_slot, now);
     if matches!(
         report.production_hold,
         Some(

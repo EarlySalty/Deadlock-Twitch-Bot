@@ -1,15 +1,15 @@
 use axum::{
-    extract::{rejection::JsonRejection, Path, Query, State},
+    Json,
+    extract::{Path, Query, State, rejection::JsonRejection},
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde::Deserialize;
 use serde_json::json;
 use sqlx::PgPool;
 use tb_social_media::{
     autopilot_settings::ScheduleSlot,
-    production_jobs::autopilot_schedule::{self, ScheduleError, SchedulePatch},
+    production_jobs::autopilot_schedule::{self, ReviewDecision, ScheduleError, SchedulePatch},
 };
 
 use super::{DashboardAuthLevel, StreamerQuery};
@@ -46,6 +46,7 @@ pub struct ScheduleWrite {
     pub lead_time_hours: Option<i32>,
     pub timezone: Option<String>,
     pub schedule_slots: Option<Vec<SlotWrite>>,
+    pub target_platforms: Option<Vec<String>>,
 }
 
 impl ScheduleWrite {
@@ -65,6 +66,7 @@ impl ScheduleWrite {
                     })
                     .collect()
             }),
+            target_platforms: self.target_platforms,
         }
     }
 }
@@ -82,6 +84,14 @@ pub struct QueueActionWrite {
     pub twitch_user_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewDecisionWrite {
+    pub twitch_user_id: Option<String>,
+    pub action: ReviewDecision,
+    pub note: Option<String>,
+}
+
 fn invalid_body() -> Response {
     (StatusCode::BAD_REQUEST, Json(json!({"error":"invalid_schedule", "message":"Die Zeitplandaten sind ungültig. Bitte prüfe deine Eingaben."}))).into_response()
 }
@@ -94,6 +104,7 @@ fn failure(error: ScheduleError) -> Response {
         }
         ScheduleError::NotFound => (StatusCode::NOT_FOUND, "job_not_found"),
         ScheduleError::Started => (StatusCode::CONFLICT, "job_started"),
+        ScheduleError::NotInReview => (StatusCode::CONFLICT, "job_not_in_review"),
         ScheduleError::QueueChanged => (StatusCode::CONFLICT, "queue_changed"),
         _ => (StatusCode::INTERNAL_SERVER_ERROR, "schedule_unavailable"),
     };
@@ -195,6 +206,28 @@ pub async fn cancel_handler(
         Err(error) => return *error,
     };
     if let Err(error) = autopilot_schedule::cancel(&pool, &owner, id).await {
+        return failure(error);
+    }
+    response(&pool, &owner).await
+}
+
+pub async fn resolve_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Path(id): Path<i64>,
+    body: Result<Json<ReviewDecisionWrite>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = body else {
+        return invalid_body();
+    };
+    let owner = match owner_scope(&auth, &pool, body.twitch_user_id.as_deref()).await {
+        Ok(owner) => owner,
+        Err(error) => return *error,
+    };
+    let note = body.note.as_deref();
+    if let Err(error) =
+        autopilot_schedule::resolve_review(&pool, &owner, id, body.action, note).await
+    {
         return failure(error);
     }
     response(&pool, &owner).await
