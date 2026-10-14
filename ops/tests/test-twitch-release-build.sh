@@ -30,13 +30,28 @@ set -euo pipefail
 printf '%s\n' "$*" >>"$HOME/cargo-calls"
 mkdir -p target/release
 for binary in tb-bot tb-dashboard tb-stream-audit tb-config-check tb-llm-usage-recover tb-stt-server tb-twitch-watchdog tb-category-storage clip_context_learn; do
-  printf '%s\n' "$(git rev-parse HEAD)" >"target/release/$binary"
+  printf '%s\n' '#!/usr/bin/env bash' '[[ ${1:-} == --build-revision ]]' "printf 'unstamped\\n'" >"target/release/$binary"
   chmod +x "target/release/$binary"
 done
 SH
 cat >"$test_root/bin/readelf" <<'SH'
 #!/usr/bin/env bash
-cat "${@: -1}"
+printf '  [     0]  %s\n' "$("${@: -1}" --build-revision)"
+SH
+cat >"$test_root/bin/objcopy" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+marker=${2#*=}
+artifact=$3
+case $1 in
+  --dump-section) printf '%47s' '' >"$marker" ;;
+  --update-section)
+    [[ ${FAIL_STAMP:-0} == 0 ]] || exit 0
+    revision=$(tr -d '\000' <"$marker")
+    printf '%s\n' '#!/usr/bin/env bash' '[[ ${1:-} == --build-revision ]]' "printf '%s\\n' '$revision'" >"$artifact"
+    ;;
+  *) exit 1 ;;
+esac
 SH
 cat >"$test_root/bin/npm" <<'SH'
 #!/usr/bin/env bash
@@ -69,14 +84,18 @@ if "$script" "$sha" >/dev/null 2>&1; then exit 1; fi
 git -C "$HOME/repos/twitch-release-build" restore website/input
 if FAIL_FRONTEND=1 "$script" "$sha" >/dev/null 2>&1; then exit 1; fi
 [[ ! -e "$staging" ]]
+if FAIL_STAMP=1 "$script" "$sha" >/dev/null 2>&1; then exit 1; fi
+[[ ! -e "$staging" ]]
 "$script" "$sha" >/dev/null 2>&1
 [[ $(cat "$staging/website/dist/index.html") == "$sha" ]]
-old_mtime=$(stat -c %Y "$HOME/repos/twitch-release-build/rust/bin/tb-dashboard/src/bin/clip_context_learn.rs")
+[[ $("$staging/rust/target/release/tb-bot" --build-revision) == "$sha" ]]
+[[ $("$HOME/repos/twitch-release-build/rust/target/release/tb-bot" --build-revision) == unstamped ]]
+old_mtime=$(stat -c %y "$HOME/repos/twitch-release-build/rust/bin/tb-dashboard/src/bin/clip_context_learn.rs")
 printf 'new frontend revision\n' >>"$test_root/source/website/input"
 git -C "$test_root/source" -c user.name=Test -c user.email=test@localhost commit -qam second-revision
 next_sha=$(git -C "$test_root/source" rev-parse HEAD)
 "$script" "$next_sha" >/dev/null 2>&1
 [[ $(cat "$HOME/repos/twitch-release-$next_sha/website/dist/index.html") == "$next_sha" ]]
-[[ $(cat "$HOME/repos/twitch-release-$next_sha/rust/target/release/tb-bot") == "$next_sha" ]]
-[[ $(stat -c %Y "$HOME/repos/twitch-release-build/rust/bin/tb-dashboard/src/bin/clip_context_learn.rs") == "$old_mtime" ]]
+[[ $("$HOME/repos/twitch-release-$next_sha/rust/target/release/tb-bot" --build-revision) == "$next_sha" ]]
+[[ $(stat -c %y "$HOME/repos/twitch-release-build/rust/bin/tb-dashboard/src/bin/clip_context_learn.rs") == "$old_mtime" ]]
 printf 'Release build contract checks passed.\n'

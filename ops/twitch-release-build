@@ -6,6 +6,19 @@ fail() {
   exit 1
 }
 
+stamp_binary() {
+  local artifact=$1 revision=$2 marker="$1.stamp"
+  [[ $revision =~ ^[0-9a-f]{40}(-dirty)?$ ]] || fail 'Ungültige Build-Herkunft.'
+  [[ $("$artifact" --build-revision) == unstamped ]] || fail 'Das Build-Artefakt enthält keine unveränderte Herkunftsmarke.'
+  objcopy --dump-section ".twitch_build=$marker" "$artifact" || fail 'Die Herkunftsmarke fehlt.'
+  [[ $(stat -c %s "$marker") == 47 ]] || fail 'Die Herkunftsmarke hat eine falsche Größe.'
+  printf '%-47s' "$revision" | tr ' ' '\000' >"$marker"
+  objcopy --update-section ".twitch_build=$marker" "$artifact" || fail 'Die Herkunftsmarke konnte nicht gesetzt werden.'
+  rm -- "$marker"
+  [[ $("$artifact" --build-revision) == "$revision" ]] || fail 'Das Release-Artefakt ist ungestempelt oder enthält eine falsche Build-Herkunft.'
+  [[ $(readelf --string-dump=.twitch_build "$artifact" | awk '/\[/{print $NF}') == "$revision" ]] || fail 'Die Herkunftsmarke im Release-Artefakt stimmt nicht überein.'
+}
+
 [[ $# -eq 1 && $1 =~ ^[0-9a-f]{40}$ ]] || fail 'Aufruf: ops/twitch-release-build <40-stelliger Git-SHA>'
 sha=$1
 repo=$(git -C "$(dirname "$(realpath "$0")")" rev-parse --show-toplevel)
@@ -58,8 +71,6 @@ done
 for binary in "${binaries[@]}"; do
   artifact="$build/rust/target/release/$binary"
   [[ -f "$artifact" && -x "$artifact" ]] || fail "Release-Artefakt fehlt: $binary"
-  revision=$(readelf -p .twitch_build "$artifact")
-  [[ $revision == *"$sha"* && $revision != *-dirty* ]] || fail "Falsche Build-Herkunft: $binary"
 done
 frontends=(bot/dashboard_v2 bot/admin_dashboard website)
 for frontend in "${frontends[@]}"; do
@@ -70,15 +81,22 @@ for frontend in "${frontends[@]}"; do
   )
   [[ -f "$build/$frontend/dist/index.html" ]] || fail "Frontend-Artefakt fehlt: $frontend"
 done
-[[ -z $(git -C "$build" status --porcelain --untracked-files=all) ]] || fail 'Der Build hat den Quellstand verändert.'
+[[ $(git -C "$build" rev-parse HEAD) == "$sha" && -z $(git -C "$build" status --porcelain --untracked-files=all) ]] || fail 'Der Build hat den Quellstand verändert.'
 temporary=$(mktemp -d "$HOME/repos/.twitch-release-$sha.XXXXXX")
 trap 'rm -rf -- "$temporary"' EXIT
 git clone --no-hardlinks --no-checkout -- "$build" "$temporary"
 git -C "$temporary" remote set-url origin "$remote"
 git -C "$temporary" checkout --detach "$sha"
 mkdir -p "$temporary/rust/target/release"
+revision=$(git -C "$temporary" rev-parse HEAD)
+if [[ -n $(git -C "$temporary" status --porcelain --untracked-files=all) ]]; then
+  revision+=-dirty
+fi
+[[ $revision == "$sha" ]] || fail 'Der Staging-Quellstand ist nicht sauber oder stimmt nicht mit dem angeforderten SHA überein.'
 for binary in "${binaries[@]}"; do
-  cp -L -- "$build/rust/target/release/$binary" "$temporary/rust/target/release/$binary"
+  artifact="$temporary/rust/target/release/$binary"
+  cp -L -- "$build/rust/target/release/$binary" "$artifact"
+  stamp_binary "$artifact" "$revision"
 done
 for frontend in "${frontends[@]}"; do
   cp -RL -- "$build/$frontend/dist" "$temporary/$frontend/dist"

@@ -1,5 +1,4 @@
 [package]
-build = "../../bin/build_revision.rs"
 name = "tb-config"
 version = "0.1.0"
 edition.workspace = true
