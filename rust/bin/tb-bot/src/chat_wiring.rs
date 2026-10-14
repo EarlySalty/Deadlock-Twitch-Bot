@@ -712,13 +712,16 @@ pub async fn try_build_api(
     enabled: bool,
     cipher: Option<Arc<FieldCipher>>,
 ) -> Result<Option<ChatApiHandle>, tb_chat::db_token_store::BootstrapError> {
+    let health_publisher = tb_chat::token::TokenHealthPublisher::new(pool.clone());
     if !enabled {
         tracing::info!("Nativer Chat laut Betriebskonfiguration deaktiviert");
+        health_publisher.disable();
         return Ok(None);
     }
 
     let Some(helix) = helix else {
         tracing::error!("TB_CHAT_ENABLED=1, aber kein HelixClient — Chat kann nicht starten");
+        health_publisher.record(Some("boot_failed"));
         return Ok(None);
     };
     let (Ok(client_id), Ok(client_secret)) = (
@@ -726,12 +729,14 @@ pub async fn try_build_api(
         std::env::var("TWITCH_CLIENT_SECRET"),
     ) else {
         tracing::error!("TB_CHAT_ENABLED=1, aber TWITCH_CLIENT_ID/SECRET fehlen");
+        health_publisher.record(Some("boot_failed"));
         return Ok(None);
     };
     let cipher = match cipher {
         Some(cipher) => cipher,
         None => {
             tracing::error!("Bot-Zugang: Datenbank-Verschlüsselungsschlüssel fehlt");
+            health_publisher.record(Some("boot_failed"));
             return Ok(None);
         }
     };
@@ -750,17 +755,20 @@ pub async fn try_build_api(
         }
         Err(reason) => {
             tracing::error!(%reason, "Bot-Zugang aus Datenbank gesperrt");
+            health_publisher.record(Some("boot_failed"));
             return Ok(None);
         }
     };
     let Some(refresh_token) = seeds.refresh_token else {
         tracing::error!("Bot-Refresh-Token fehlt in der Datenbank");
+        health_publisher.record(Some("boot_failed"));
         return Ok(None);
     };
     let token_manager = match BotTokenManager::new(client_id, client_secret) {
-        Ok(manager) => Arc::new(manager.with_sink(store.clone())),
+        Ok(manager) => manager.with_sink(store.clone()),
         Err(_) => {
             tracing::error!("BotTokenManager nicht initialisierbar");
+            health_publisher.record(Some("boot_failed"));
             return Ok(None);
         }
     };
@@ -769,6 +777,7 @@ pub async fn try_build_api(
         .initialize(seed_access.as_deref(), &refresh_token)
         .await
     {
+        health_publisher.record(Some("boot_failed"));
         if matches!(
             e,
             tb_chat::token::TokenError::PersistenceFailed
@@ -788,12 +797,14 @@ pub async fn try_build_api(
                     ) => continue,
                     Err(error) => {
                         tracing::error!(%error, "Bot-Token-Boot nach Rückschreibung fehlgeschlagen");
+                        health_publisher.record(Some("boot_failed"));
                         return Ok(None);
                     }
                 }
             }
         } else {
             tracing::error!("Bot-Token-Boot fehlgeschlagen: {e} — nativer Chat bleibt aus");
+            health_publisher.record(Some("boot_failed"));
             return Ok(None);
         }
     }
@@ -808,6 +819,7 @@ pub async fn try_build_api(
         }
         Err(reason) => {
             tracing::error!(%reason, "Bot-Zugang konnte nicht dem richtigen Konto zugeordnet werden");
+            health_publisher.record(Some("boot_failed"));
             return Ok(None);
         }
     }
@@ -832,6 +844,8 @@ pub async fn try_build_api(
         }
     }
 
+    let token_manager = Arc::new(token_manager.with_health_publisher(health_publisher.clone()));
+    health_publisher.record(None);
     let api: Arc<dyn ChatApi> = Arc::new(HelixChatClient::new(
         Arc::new(helix),
         Arc::clone(&token_manager),
