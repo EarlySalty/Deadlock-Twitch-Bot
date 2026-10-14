@@ -386,18 +386,27 @@ export interface TikTokPostOptions {
 export type TikTokDraft = Pick<TikTokPostOptions,
   'caption' | 'privacy_level' | 'allow_comment' | 'allow_duet' | 'allow_stitch'
   | 'commercial_content' | 'brand_organic_toggle' | 'brand_content_toggle'> & {
+    standard_description: string;
     music_consent?: boolean;
     music_consent_at?: string;
     music_consent_platform_user_id?: string;
   };
 
 export interface TikTokEditorState {
+  music_consent: boolean;
+  music_consent_platform_user_id: string | null;
   draft: TikTokDraft | null;
   defaults: TikTokDraft | null;
 }
 
 export function fetchTikTokEditor(clipDbId: number): Promise<TikTokEditorState> {
   return fetchJson(`/twitch/social-media/api/clips/${clipDbId}/tiktok/editor`, { cache: 'no-store' });
+}
+
+export function saveTikTokMusicConsent(clipDbId: number, platformUserId: string): Promise<{ success: boolean }> {
+  return fetchJson(`/twitch/social-media/api/clips/${clipDbId}/tiktok/music-consent`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ platform_user_id: platformUserId }),
+  });
 }
 
 export function saveTikTokChoices(clipDbId: number, kind: 'draft' | 'defaults', choices: TikTokDraft): Promise<{ success: boolean; choices: TikTokDraft }> {
