@@ -25,6 +25,23 @@ const MAX_LATENESS_MINUTES: i64 = 120;
 const PREPARING_STALE_MINUTES: i64 = 10;
 const EFFECT_STALE_MINUTES: i64 = 120;
 const DEFERRAL_MINUTES: i32 = 15;
+const UNRESOLVED_RETENTION_DAYS: i32 = 7;
+const UNRESOLVED_CLEANUP_REASON: &str = "unresolved_destinations_expired";
+const CLEANUP_FAILED: &str =
+    "Die Videodatei konnte nicht gelöscht werden. Wir versuchen es nicht automatisch erneut.";
+const UNRESOLVED: &str = "v.file_path IS NOT NULL AND v.artifact_deleted_at IS NULL
+    AND v.cleanup_error IS NULL AND v.publication_executed_at IS NOT NULL
+    AND EXISTS (SELECT 1 FROM twitch_clips_upload_queue q
+        WHERE q.produced_video_id = v.id AND q.status = ANY($2))
+    AND NOT EXISTS (SELECT 1 FROM twitch_clips_upload_queue q
+        WHERE q.produced_video_id = v.id AND NOT COALESCE(q.status = ANY($1), FALSE))";
+const RETENTION_OVER: &str = "v.metadata #> '{artifact_retention,unresolved_since}' IS NOT NULL
+    AND GREATEST(v.publication_executed_at,
+        (v.metadata #>> '{artifact_retention,unresolved_since}')::timestamptz,
+        (SELECT MAX(GREATEST(q.scheduled_at, q.last_attempt_at, q.effect_started_at,
+            q.completed_at, q.next_retry_at))
+         FROM twitch_clips_upload_queue q WHERE q.produced_video_id = v.id))
+        < clock_timestamp() - make_interval(days => $3)";
 const NOT_DEFERRED: &str = "NOT COALESCE(v.autopilot_deferred_stage = $1
     AND v.autopilot_deferred_until > clock_timestamp(), FALSE)";
 
@@ -161,6 +178,7 @@ impl PublishExecutor {
         report.uploads = self.upload_due().await?;
         report.finished = self.finalize().await?;
         report.cleaned = self.cleanup_published().await?;
+        report.cleaned += self.cleanup_unresolved().await?;
         report.expired = self.expire_reviews().await?;
         notify::collect(&self.pool).await?;
         if let Some(notifier) = &self.notifier {
@@ -809,13 +827,82 @@ impl PublishExecutor {
         Ok(expired)
     }
 
-    async fn delete_artifact(&self, id: i64, path: &str) -> Result<bool, PublishError> {
-        let result = match tokio::fs::remove_file(path).await {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
+    async fn cleanup_unresolved(&self) -> Result<usize, PublishError> {
+        self.track_unresolved().await?;
+        let rows: Vec<(i64, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT v.id, v.twitch_user_id FROM social_produced_videos v
+             WHERE {UNRESOLVED} AND {RETENTION_OVER} ORDER BY v.id LIMIT 20"
+        )))
+        .bind(settled_states())
+        .bind(unresolved_states())
+        .bind(UNRESOLVED_RETENTION_DAYS)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut cleaned = 0;
+        for (id, owner) in rows {
+            if self.expire_unresolved(id, &owner).await? {
+                cleaned += 1;
+            }
+        }
+        Ok(cleaned)
+    }
+
+    async fn track_unresolved(&self) -> Result<(), PublishError> {
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE social_produced_videos v SET metadata = v.metadata - 'artifact_retention'
+             WHERE v.metadata ? 'artifact_retention' AND v.artifact_deleted_at IS NULL
+             AND NOT ({UNRESOLVED})"
+        )))
+        .bind(settled_states())
+        .bind(unresolved_states())
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE social_produced_videos v SET metadata = jsonb_set(v.metadata, '{{artifact_retention}}',
+                 jsonb_build_object('unresolved_since', clock_timestamp()))
+             WHERE {UNRESOLVED} AND NOT (v.metadata ? 'artifact_retention')"
+        )))
+        .bind(settled_states())
+        .bind(unresolved_states())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn expire_unresolved(&self, id: i64, owner: &str) -> Result<bool, PublishError> {
+        let mut tx = self.pool.begin().await?;
+        autopilot_settings::lock_owner(&mut tx, owner).await?;
+        let path: Option<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT v.file_path FROM social_produced_videos v
+             WHERE v.id = $4 AND {UNRESOLVED} AND {RETENTION_OVER} FOR UPDATE OF v"
+        )))
+        .bind(settled_states())
+        .bind(unresolved_states())
+        .bind(UNRESOLVED_RETENTION_DAYS)
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(path) = path else {
+            tx.commit().await?;
+            return Ok(false);
         };
-        match result {
+        let removed = match remove_artifact(&path).await {
+            Ok(()) => {
+                record_unresolved_cleanup(&mut tx, id).await?;
+                true
+            }
+            Err(error) => {
+                tracing::warn!(%error, video = id, "Auto-Pilot video file could not be removed");
+                record_cleanup_error(&mut tx, id).await?;
+                false
+            }
+        };
+        tx.commit().await?;
+        Ok(removed)
+    }
+
+    async fn delete_artifact(&self, id: i64, path: &str) -> Result<bool, PublishError> {
+        match remove_artifact(path).await {
             Ok(()) => {
                 sqlx::query("UPDATE social_produced_videos SET artifact_deleted_at = clock_timestamp(), cleanup_error = NULL WHERE id = $1")
                     .bind(id)
@@ -825,14 +912,64 @@ impl PublishExecutor {
             }
             Err(error) => {
                 tracing::warn!(%error, video = id, "Auto-Pilot video file could not be removed");
-                sqlx::query("UPDATE social_produced_videos SET cleanup_error = 'Die Videodatei konnte nicht gelöscht werden. Wir versuchen es nicht automatisch erneut.' WHERE id = $1")
-                    .bind(id)
-                    .execute(&self.pool)
-                    .await?;
+                let mut connection = self.pool.acquire().await?;
+                record_cleanup_error(&mut connection, id).await?;
                 Ok(false)
             }
         }
     }
+}
+
+async fn remove_artifact(path: &str) -> std::io::Result<()> {
+    match tokio::fs::remove_file(path).await {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
+}
+
+async fn record_unresolved_cleanup(tx: &mut PgConnection, id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE social_produced_videos v SET artifact_deleted_at = clock_timestamp(), cleanup_error = NULL,
+         metadata = jsonb_set(v.metadata, '{artifact_retention}',
+             COALESCE(v.metadata -> 'artifact_retention', '{}'::jsonb) || jsonb_build_object(
+                 'reason', $2::text,
+                 'deleted_at', clock_timestamp(),
+                 'destinations', (SELECT COALESCE(jsonb_object_agg(q.platform, q.status), '{}'::jsonb)
+                     FROM twitch_clips_upload_queue q WHERE q.produced_video_id = v.id)))
+         WHERE v.id = $1",
+    )
+    .bind(id)
+    .bind(UNRESOLVED_CLEANUP_REASON)
+    .execute(&mut *tx)
+    .await?;
+    Ok(())
+}
+
+async fn record_cleanup_error(connection: &mut PgConnection, id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE social_produced_videos SET cleanup_error = $2 WHERE id = $1")
+        .bind(id)
+        .bind(CLEANUP_FAILED)
+        .execute(&mut *connection)
+        .await?;
+    Ok(())
+}
+
+fn settled_states() -> [&'static str; 5] {
+    [
+        queue_status::PUBLISHED,
+        queue_status::DISCARDED,
+        queue_status::FAILED,
+        queue_status::HELD,
+        queue_status::UNCERTAIN,
+    ]
+}
+
+fn unresolved_states() -> [&'static str; 3] {
+    [
+        queue_status::FAILED,
+        queue_status::HELD,
+        queue_status::UNCERTAIN,
+    ]
 }
 
 #[derive(Clone, Copy)]
