@@ -2,6 +2,8 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Calendar, Clock3, RefreshCw, Trash2 } from 'lucide-react';
 import { StudioSectionHeading } from '../../StudioSectionHeading';
 import { ApiHttpError, getBrowserTimezone } from '@/api/core';
+import { useLanguage, type LanguageContextValue } from '@/context/LanguageContext';
+import { SOCIAL_EN } from '@/i18n/en/social';
 import { scheduleQueueApi } from './api';
 import { ReviewJobActions } from './ReviewJobActions';
 import type { QueueJob, SchedulePatch, ScheduleQueueApi, ScheduleQueueSnapshot, ScheduleSettings } from './api';
@@ -34,14 +36,14 @@ const REASONS: Record<string, string> = {
   unsuitable_clip: 'Die KI hält diesen Clip möglicherweise für ungeeignet. Entscheide, ob er trotzdem verarbeitet werden soll.',
 };
 
-function slotLabel(value: string | null, timezone: string): string {
-  if (!value) return 'Noch kein Termin';
+function slotLabel(value: string | null, timezone: string, locale: string, t: LanguageContextValue['t']): string {
+  if (!value) return t('Noch kein Termin');
   try {
-    return new Intl.DateTimeFormat('de-DE', {
+    return new Intl.DateTimeFormat(locale, {
       timeZone: timezone, weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
     }).format(new Date(value));
   } catch {
-    return 'Termin nicht verfügbar';
+    return t('Termin nicht verfügbar');
   }
 }
 
@@ -52,7 +54,7 @@ function errorText(error: unknown): string {
   if (error instanceof ApiHttpError && error.status === 400 && error.message.startsWith('Server-Fehler')) return 'Wähle einen Twitch-Kanal und prüfe deine Eingaben.';
   if (error instanceof ApiHttpError && error.status >= 500) return 'Der Zeitplan ist gerade nicht verfügbar. Bitte versuche es später erneut.';
   if (error instanceof TypeError) return 'Die Verbindung ist unterbrochen. Bitte versuche es erneut.';
-  return error instanceof ApiHttpError ? error.message : 'Die Änderung konnte nicht gespeichert werden. Bitte versuche es erneut.';
+  return error instanceof ApiHttpError ? Object.entries(SOCIAL_EN).find(([, translated]) => translated === error.message)?.[0] ?? error.message : 'Die Änderung konnte nicht gespeichert werden. Bitte versuche es erneut.';
 }
 
 export function ScheduleQueuePanel(props: ScheduleQueuePanelProps) {
@@ -60,6 +62,7 @@ export function ScheduleQueuePanel(props: ScheduleQueuePanelProps) {
 }
 
 function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }: ScheduleQueuePanelProps) {
+  const { t, locale } = useLanguage();
   const id = useId();
   const [snapshot, setSnapshot] = useState<ScheduleQueueSnapshot | null>(null);
   const [draft, setDraft] = useState<ScheduleSettings | null>(null);
@@ -176,8 +179,8 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
   }
 
   if (!snapshot || !draft) return <section className="schedule-queue" aria-busy={!error} data-unsaved={unsaved} data-saving={saving ? 'true' : undefined}>
-    <h2>Auto-Pilot und Zeitplan</h2>
-    {error ? <><p role="alert">{error}</p><button onClick={() => refresh.current?.('Aktualisiert.')}>Erneut laden</button></> : <p role="status">Zeitplan wird geladen.</p>}
+    <h2>{t('Auto-Pilot und Zeitplan')}</h2>
+    {error ? <><p role="alert">{t(error)}</p><button onClick={() => refresh.current?.('Aktualisiert.')}>{t('Erneut laden')}</button></> : <p role="status">{t('Zeitplan wird geladen.')}</p>}
   </section>;
 
   const unstarted = snapshot.jobs.filter(job => job.status === 'queued' && !job.started_at);
@@ -192,30 +195,30 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
   }
 
   return <section className="schedule-queue" aria-labelledby={`${id}-heading`} data-unsaved={unsaved} data-saving={saving ? 'true' : undefined}>
-    <StudioSectionHeading id={`${id}-heading`} title="Auto-Pilot und Zeitplan" icon={Calendar}
-      description="Ein Video pro Termin, gemeinsam für deine ausgewählten Plattformen."
-      actions={<button type="button" disabled={busy} onClick={() => refresh.current?.('Aktualisiert.')}><RefreshCw size={16} />Aktualisieren</button>} />
+    <StudioSectionHeading id={`${id}-heading`} title={t('Auto-Pilot und Zeitplan')} icon={Calendar}
+      description={t('Ein Video pro Termin, gemeinsam für deine ausgewählten Plattformen.')}
+      actions={<button type="button" disabled={busy} onClick={() => refresh.current?.('Aktualisiert.')}><RefreshCw size={16} />{t('Aktualisieren')}</button>} />
     <div className="sq-status" role="status">
       <Clock3 size={18} aria-hidden="true" />
-      <div><strong>Nächster freier Termin: {slotLabel(snapshot.next_slot, snapshot.settings.timezone)}</strong>
-        <p>{snapshot.production_hold ? HOLDS[snapshot.production_hold] : 'Produktion nach Bedarf. Fertige Videos bleiben zunächst zur Prüfung.'}</p>
+      <div><strong>{t('Nächster freier Termin')}: {slotLabel(snapshot.next_slot, snapshot.settings.timezone, locale, t)}</strong>
+        <p>{t(snapshot.production_hold ? HOLDS[snapshot.production_hold] : 'Produktion nach Bedarf. Fertige Videos bleiben zunächst zur Prüfung.')}</p>
       </div>
     </div>
-    {error && <p className="sq-error" role="alert">{error}</p>}
-    {notice && <p className="sq-notice" role="status">{notice}</p>}
+    {error && <p className="sq-error" role="alert">{t(error)}</p>}
+    {notice && <p className="sq-notice" role="status">{t(notice)}</p>}
     <div className="sq-columns">
       <form className="sq-editor" onSubmit={event => { event.preventDefault(); void act(() => api.save(patch, twitchUserId), 'Zeitplan gespeichert.', true); }}>
-        <h3>Wöchentliche Termine</h3>
+        <h3>{t('Wöchentliche Termine')}</h3>
         <fieldset disabled={busy}>
-          <legend className="sq-sr-only">Auto-Pilot-Einstellungen</legend>
+          <legend className="sq-sr-only">{t('Auto-Pilot-Einstellungen')}</legend>
           <div className="sq-toggles">
-            <label><input type="checkbox" role="switch" checked={draft.enabled} onChange={event => edit({ enabled: event.target.checked })} /><span>Auto-Pilot einschalten</span></label>
-            <label><input type="checkbox" role="switch" checked={draft.paused} onChange={event => edit({ paused: event.target.checked })} /><span>Neue Produktionen pausieren</span></label>
-            <label><input type="checkbox" role="switch" checked={draft.ai_editing_enabled} onChange={event => edit({ ai_editing_enabled: event.target.checked })} /><span>KI-Bearbeitung verwenden</span></label>
+            <label><input type="checkbox" role="switch" checked={draft.enabled} onChange={event => edit({ enabled: event.target.checked })} /><span>{t('Auto-Pilot einschalten')}</span></label>
+            <label><input type="checkbox" role="switch" checked={draft.paused} onChange={event => edit({ paused: event.target.checked })} /><span>{t('Neue Produktionen pausieren')}</span></label>
+            <label><input type="checkbox" role="switch" checked={draft.ai_editing_enabled} onChange={event => edit({ ai_editing_enabled: event.target.checked })} /><span>{t('KI-Bearbeitung verwenden')}</span></label>
           </div>
-          <p className="sq-help">Die KI-Einstellung gilt erst beim Produktionsstart. Sie ersetzt nicht deine Zustimmung zur externen KI-Verarbeitung.</p>
+          <p className="sq-help">{t('Die KI-Einstellung gilt erst beim Produktionsstart. Sie ersetzt nicht deine Zustimmung zur externen KI-Verarbeitung.')}</p>
           <fieldset className="sq-platforms">
-            <legend>Zielplattformen</legend>
+            <legend>{t('Zielplattformen')}</legend>
             <div className="sq-toggles">
               {PLATFORMS.map(platform => {
                 const connected = snapshot.connected_platforms.includes(platform.id);
@@ -225,53 +228,53 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
                     onChange={event => edit({ target_platforms: event.target.checked
                       ? [...draft.target_platforms, platform.id]
                       : draft.target_platforms.filter(value => value !== platform.id) })} />
-                  <span>{platform.label}{!connected && ' (nicht verbunden)'}</span>
+                  <span>{platform.label}{!connected && ` (${t('nicht verbunden')})`}</span>
                 </label>;
               })}
             </div>
-            <p className="sq-help">Verbinde fehlende Plattformen unter Konten. Wähle hier, wohin die Videos veröffentlicht werden sollen.</p>
-            {!draft.target_platforms.length && <p className="sq-help">Noch keine Zielplattform ausgewählt. Ohne Zielplattform wird kein Video veröffentlicht.</p>}
+            <p className="sq-help">{t('Verbinde fehlende Plattformen unter Konten. Wähle hier, wohin die Videos veröffentlicht werden sollen.')}</p>
+            {!draft.target_platforms.length && <p className="sq-help">{t('Noch keine Zielplattform ausgewählt. Ohne Zielplattform wird kein Video veröffentlicht.')}</p>}
           </fieldset>
           <div className="sq-fields">
-            <label htmlFor={`${id}-zone`}>Zeitzone<input id={`${id}-zone`} value={draft.timezone} required list={`${id}-zones`} onChange={event => edit({ timezone: event.target.value })} /></label>
+            <label htmlFor={`${id}-zone`}>{t('Zeitzone')}<input id={`${id}-zone`} value={draft.timezone} required list={`${id}-zones`} onChange={event => edit({ timezone: event.target.value })} /></label>
             <datalist id={`${id}-zones`}><option value="Europe/Berlin" /><option value="Europe/Vienna" /><option value="Europe/Zurich" /><option value="UTC" /></datalist>
-            <label htmlFor={`${id}-lead`}>Vorlauf in Stunden<input id={`${id}-lead`} type="number" min="0" max="720" required value={Number.isFinite(draft.lead_time_hours) ? draft.lead_time_hours : ''} onChange={event => edit({ lead_time_hours: event.target.valueAsNumber })} /></label>
+            <label htmlFor={`${id}-lead`}>{t('Vorlauf in Stunden')}<input id={`${id}-lead`} type="number" min="0" max="720" required value={Number.isFinite(draft.lead_time_hours) ? draft.lead_time_hours : ''} onChange={event => edit({ lead_time_hours: event.target.valueAsNumber })} /></label>
           </div>
-          <p className="sq-help">Sommerzeit wird berücksichtigt. Auch bei kürzerem Vorlauf kann die Produktion starten. Verpasste Termine werden nicht gesammelt.</p>
+          <p className="sq-help">{t('Sommerzeit wird berücksichtigt. Auch bei kürzerem Vorlauf kann die Produktion starten. Verpasste Termine werden nicht gesammelt.')}</p>
           <div className="sq-slots">
             {draft.schedule_slots.map((slot, index) => <div className="sq-slot" key={index}>
-              <label><span className="sq-sr-only">Wochentag für Termin {index + 1}</span><select value={slot.weekday} onChange={event => edit({ schedule_slots: draft.schedule_slots.map((value, i) => i === index ? { ...value, weekday: Number(event.target.value) } : value) })}>{WEEKDAYS.map((day, i) => <option value={i + 1} key={day}>{day}</option>)}</select></label>
-              <label><span className="sq-sr-only">Uhrzeit für Termin {index + 1}</span><input type="time" required value={slot.local_time} onChange={event => edit({ schedule_slots: draft.schedule_slots.map((value, i) => i === index ? { ...value, local_time: event.target.value } : value) })} /></label>
-              <button type="button" className="sq-icon" aria-label={`Termin ${index + 1} entfernen`} onClick={() => edit({ schedule_slots: draft.schedule_slots.filter((_, i) => i !== index) })}><Trash2 size={16} /></button>
+              <label><span className="sq-sr-only">{t('Wochentag für Termin {number}', { number: index + 1 })}</span><select value={slot.weekday} onChange={event => edit({ schedule_slots: draft.schedule_slots.map((value, i) => i === index ? { ...value, weekday: Number(event.target.value) } : value) })}>{WEEKDAYS.map((day, i) => <option value={i + 1} key={day}>{t(day)}</option>)}</select></label>
+              <label><span className="sq-sr-only">{t('Uhrzeit für Termin {number}', { number: index + 1 })}</span><input type="time" required value={slot.local_time} onChange={event => edit({ schedule_slots: draft.schedule_slots.map((value, i) => i === index ? { ...value, local_time: event.target.value } : value) })} /></label>
+              <button type="button" className="sq-icon" aria-label={t('Termin {number} entfernen', { number: index + 1 })} onClick={() => edit({ schedule_slots: draft.schedule_slots.filter((_, i) => i !== index) })}><Trash2 size={16} /></button>
             </div>)}
           </div>
-          {!draft.schedule_slots.length && <p className="sq-help">Noch kein Termin. Lege fest, wann ein vorbereitetes Video erscheinen soll.</p>}
-          <div className="sq-actions"><button type="button" disabled={draft.schedule_slots.length >= 28} onClick={() => edit({ schedule_slots: [...draft.schedule_slots, { weekday: 1, local_time: '18:00' }] })}>Termin hinzufügen</button><button className="sq-primary" type="submit" disabled={!hasChanges}>{busy ? 'Wird gespeichert' : 'Änderungen speichern'}</button></div>
+          {!draft.schedule_slots.length && <p className="sq-help">{t('Noch kein Termin. Lege fest, wann ein vorbereitetes Video erscheinen soll.')}</p>}
+          <div className="sq-actions"><button type="button" disabled={draft.schedule_slots.length >= 28} onClick={() => edit({ schedule_slots: [...draft.schedule_slots, { weekday: 1, local_time: '18:00' }] })}>{t('Termin hinzufügen')}</button><button className="sq-primary" type="submit" disabled={!hasChanges}>{t(busy ? 'Wird gespeichert' : 'Änderungen speichern')}</button></div>
         </fieldset>
       </form>
       <div className="sq-queue">
-        <h3>Produktionswarteschlange</h3>
-        <p className="sq-help">Ein Auftrag nach dem anderen. Laufende Aufträge lassen sich nicht entfernen oder umordnen.</p>
-        {!visible.length && <div className="sq-empty"><strong>Die Warteschlange ist leer.</strong><p>Passende Clips werden erst ausgewählt, wenn ein freier Termin im Vorlauf liegt.</p></div>}
+        <h3>{t('Produktionswarteschlange')}</h3>
+        <p className="sq-help">{t('Ein Auftrag nach dem anderen. Laufende Aufträge lassen sich nicht entfernen oder umordnen.')}</p>
+        {!visible.length && <div className="sq-empty"><strong>{t('Die Warteschlange ist leer.')}</strong><p>{t('Passende Clips werden erst ausgewählt, wenn ein freier Termin im Vorlauf liegt.')}</p></div>}
         <ol className="sq-jobs">
           {visible.map(job => {
             const movable = job.status === 'queued' && !job.started_at;
             const position = unstarted.findIndex(value => value.id === job.id);
             return <li key={job.id} className="sq-job">
-              <div className="sq-job-head"><strong>{job.clip_title || `Clip ${job.clip_id}`}</strong><span className={job.status === 'running' ? 'sq-running' : 'sq-badge'}>{STATUS[job.status]}</span></div>
-              <p className="sq-help">{slotLabel(job.scheduled_at, snapshot.settings.timezone)} · {job.mode ? (job.mode === 'ai' ? 'KI-Bearbeitung' : 'Statisches Layout') : job.source === 'manual' ? 'Manueller Auftrag' : 'Modus wird beim Start festgelegt'}</p>
-              {job.review_reasons.map(reason => <p className="sq-help" key={reason}>{REASONS[reason] ?? 'Die Produktion benötigt eine Prüfung.'}</p>)}
+              <div className="sq-job-head"><strong>{job.clip_title || t('Clip {number}', { number: job.clip_id })}</strong><span className={job.status === 'running' ? 'sq-running' : 'sq-badge'}>{t(STATUS[job.status])}</span></div>
+              <p className="sq-help">{slotLabel(job.scheduled_at, snapshot.settings.timezone, locale, t)} · {t(job.mode ? (job.mode === 'ai' ? 'KI-Bearbeitung' : 'Statisches Layout') : job.source === 'manual' ? 'Manueller Auftrag' : 'Modus wird beim Start festgelegt')}</p>
+              {job.review_reasons.map(reason => <p className="sq-help" key={reason}>{t(REASONS[reason] ?? 'Die Produktion benötigt eine Prüfung.')}</p>)}
               {job.review_explanation && <p className="sq-help">{job.review_explanation}</p>}
-              {job.last_error && <p className="sq-error">{job.last_error}</p>}
-              {job.status === 'review' && <ReviewJobActions busy={busy} clipTitle={job.clip_title || `Clip ${job.clip_id}`}
+              {job.last_error && <p className="sq-error">{t(job.last_error)}</p>}
+              {job.status === 'review' && <ReviewJobActions busy={busy} clipTitle={job.clip_title || t('Clip {number}', { number: job.clip_id })}
                 onResolve={(action, note) => { void act(() => api.resolve(job.id, action, note, twitchUserId), action === 'process' ? 'Der Clip ist erneut zur Verarbeitung eingeplant.' : 'Clip übersprungen.'); }} />}
               {movable && <div className="sq-job-actions">
-                <button type="button" disabled={busy || position === 0} onClick={() => { void act(() => api.next(job.id, twitchUserId), 'Der Clip ist als Nächstes eingeplant.'); }}>Als Nächstes</button>
-                <button type="button" className="sq-icon" aria-label={`${job.clip_title} nach oben`} disabled={busy || position === 0} onClick={() => move(job.id, -1)}><ArrowUp size={16} /></button>
-                <button type="button" className="sq-icon" aria-label={`${job.clip_title} nach unten`} disabled={busy || position === unstarted.length - 1} onClick={() => move(job.id, 1)}><ArrowDown size={16} /></button>
-                <button type="button" disabled={busy} onClick={() => setRemoveId(job.id)}>Entfernen</button>
+                <button type="button" disabled={busy || position === 0} onClick={() => { void act(() => api.next(job.id, twitchUserId), 'Der Clip ist als Nächstes eingeplant.'); }}>{t('Als Nächstes')}</button>
+                <button type="button" className="sq-icon" aria-label={t('{title} nach oben', { title: job.clip_title ?? '' })} disabled={busy || position === 0} onClick={() => move(job.id, -1)}><ArrowUp size={16} /></button>
+                <button type="button" className="sq-icon" aria-label={t('{title} nach unten', { title: job.clip_title ?? '' })} disabled={busy || position === unstarted.length - 1} onClick={() => move(job.id, 1)}><ArrowDown size={16} /></button>
+                <button type="button" disabled={busy} onClick={() => setRemoveId(job.id)}>{t('Entfernen')}</button>
               </div>}
-              {removeId === job.id && <div className="sq-confirm"><p>Diesen Auftrag entfernen? Der Clip wird nicht automatisch erneut ausgewählt.</p><button type="button" disabled={busy} onClick={() => { void act(() => api.cancel(job.id, twitchUserId), 'Auftrag entfernt.'); }}>Auftrag entfernen</button><button type="button" disabled={busy} onClick={() => setRemoveId(null)}>Behalten</button></div>}
+              {removeId === job.id && <div className="sq-confirm"><p>{t('Diesen Auftrag entfernen? Der Clip wird nicht automatisch erneut ausgewählt.')}</p><button type="button" disabled={busy} onClick={() => { void act(() => api.cancel(job.id, twitchUserId), 'Auftrag entfernt.'); }}>{t('Auftrag entfernen')}</button><button type="button" disabled={busy} onClick={() => setRemoveId(null)}>{t('Behalten')}</button></div>}
             </li>;
           })}
         </ol>

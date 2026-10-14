@@ -6,11 +6,13 @@ import { COACHING_EN } from './coaching';
 import { MONETIZATION_EN } from './monetization';
 import { OVERLAY_EN } from './overlay';
 import { SHELL_EN } from './shell';
+import { SOCIAL_EN } from './social';
 import { UPLINK_EN } from './uplink';
 import { VERWALTUNG_EN } from './verwaltung';
 
 export const EN_AREAS: Record<string, Record<string, string>> = {
   shell: SHELL_EN,
+  social: SOCIAL_EN,
   analytics: ANALYTICS_EN,
   charts: CHARTS_EN,
   chat: CHAT_EN,

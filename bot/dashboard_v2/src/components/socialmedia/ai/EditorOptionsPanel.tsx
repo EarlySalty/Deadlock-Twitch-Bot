@@ -1,3 +1,4 @@
+import { useT } from '@/context/LanguageContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AiEditorOptions, AiPublishLanguage } from './api';
 import { fetchAiOptions, saveAiOptions } from './api';
@@ -14,6 +15,7 @@ const choices: { key: 'multi_output_enabled' | 'experimental_ai_layout'; label: 
 ];
 
 export function EditorOptionsPanel({ channel }: { channel: string }) {
+  const t = useT();
   const client = useQueryClient();
   const key = ['social-ai', 'options', channel] as const;
   const options = useQuery({ queryKey: key, queryFn: ({ signal }) => fetchAiOptions(channel, signal), retry: false, refetchOnWindowFocus: false });
@@ -21,12 +23,12 @@ export function EditorOptionsPanel({ channel }: { channel: string }) {
     mutationFn: (value: AiEditorOptions) => saveAiOptions(channel, value),
     onSuccess: (value) => client.setQueryData(key, value),
   });
-  return <section className="social-ai-options" aria-label="Optionen für die KI-Bearbeitung">
-    <div className="social-ai-section-head"><h3>Optionen für die KI-Bearbeitung</h3><p>Gilt für neue Bearbeitungen in deinem Kanal. Mehrere Videos und das KI-Layout sind standardmäßig aus.</p></div>
-    {options.isPending ? <p role="status">Optionen werden geladen…</p> : options.isError ? <p className="social-ai-caution" role="alert">Die Optionen konnten nicht geladen werden.</p> : <div className="social-ai-option-list">
-      {choices.map((choice) => <label className="studio-switch" key={choice.key}><input type="checkbox" checked={options.data[choice.key]} disabled={save.isPending || options.isFetching} onChange={(event) => save.mutate({ ...options.data, [choice.key]: event.target.checked })} /><span>{choice.label}</span><small>{choice.help}</small></label>)}
-      <label className="social-ai-language"><span>Sprache für Titel, Beschreibung und Hashtags</span><select className="studio-select" value={options.data.publish_language} disabled={save.isPending || options.isFetching} onChange={(event) => save.mutate({ ...options.data, publish_language: event.target.value as AiPublishLanguage })}>{languages.map((language) => <option key={language.value} value={language.value}>{language.label}</option>)}</select><small>Die Untertitel bleiben in der gesprochenen Sprache des Clips.</small></label>
+  return <section className="social-ai-options" aria-label={t("Optionen für die KI-Bearbeitung")}>
+    <div className="social-ai-section-head"><h3>{t("Optionen für die KI-Bearbeitung")}</h3><p>{t("Gilt für neue Bearbeitungen in deinem Kanal. Mehrere Videos und das KI-Layout sind standardmäßig aus.")}</p></div>
+    {options.isPending ? <p role="status">{t("Optionen werden geladen…")}</p> : options.isError ? <p className="social-ai-caution" role="alert">{t("Die Optionen konnten nicht geladen werden.")}</p> : <div className="social-ai-option-list">
+      {choices.map((choice) => <label className="studio-switch" key={choice.key}><input type="checkbox" checked={options.data[choice.key]} disabled={save.isPending || options.isFetching} onChange={(event) => save.mutate({ ...options.data, [choice.key]: event.target.checked })} /><span>{t(choice.label)}</span><small>{t(choice.help)}</small></label>)}
+      <label className="social-ai-language"><span>{t("Sprache für Titel, Beschreibung und Hashtags")}</span><select className="studio-select" value={options.data.publish_language} disabled={save.isPending || options.isFetching} onChange={(event) => save.mutate({ ...options.data, publish_language: event.target.value as AiPublishLanguage })}>{languages.map((language) => <option key={language.value} value={language.value}>{t(language.label)}</option>)}</select><small>{t("Die Untertitel bleiben in der gesprochenen Sprache des Clips.")}</small></label>
     </div>}
-    <div role="status" aria-live="polite">{save.isSuccess && <p>Optionen gespeichert.</p>}{save.isError && <p className="social-ai-caution">Speichern fehlgeschlagen. Bitte versuche es erneut.</p>}</div>
+    <div role="status" aria-live="polite">{save.isSuccess && <p>{t("Optionen gespeichert.")}</p>}{save.isError && <p className="social-ai-caution">{t("Speichern fehlgeschlagen. Bitte versuche es erneut.")}</p>}</div>
   </section>;
 }
