@@ -1,0 +1,7 @@
+{
+  "goal": "Send one Discord DM for a failed Twitch chat bot token and a recovery DM when token health returns.",
+  "branch": "feat/bot-token-health-alert",
+  "scope": ["rust/crates/tb-chat/src/token.rs", "rust/bin/tb-bot/src/chat_wiring.rs", "rust/bin/tb-category-collector/src/bin/tb-twitch-watchdog.rs", "rust/migrations/20261014160000_bot_token_health.sql"],
+  "acceptance": ["Persist only health timestamps and short failure codes, never token material", "Validate the current token hourly and retain the existing refresh cadence", "Health write failures do not disable chat", "Detect missing health, newer failures, and success older than two hours only while the bot service runs", "Reuse incident delay of 90 seconds and idempotent broker delivery", "Persist recovery delivery and retry state", "Pass affected package build, formatting, linting, token tests and isolated PostgreSQL watchdog tests", "Receive review gate ALLOW, commit and push; no main merge or deployment"],
+  "integration": "Apply the new migration before restarting tb-bot and the watchdog. Integrator owns deployment and live DM verification."
+}

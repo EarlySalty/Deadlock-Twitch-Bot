@@ -27,6 +27,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use sqlx::PgPool;
 use tokio::sync::{Mutex, RwLock};
 
 use crate::secret_sink::SecretSink;
@@ -250,6 +251,7 @@ pub struct BotTokenManager {
     /// Optionale Persistenz-Senke (Infisical-Write-Back). `None` = deaktiviert,
     /// Verhalten dann exakt wie vor ADR 0005.
     sink: Option<Arc<dyn SecretSink>>,
+    health_pool: Option<PgPool>,
 }
 
 impl BotTokenManager {
@@ -270,6 +272,7 @@ impl BotTokenManager {
             token_url: TOKEN_URL.to_string(),
             users_url: HELIX_USERS_URL.to_string(),
             sink: None,
+            health_pool: None,
         })
     }
 
@@ -278,6 +281,32 @@ impl BotTokenManager {
     pub fn with_sink(mut self, sink: Arc<dyn SecretSink>) -> Self {
         self.sink = Some(sink);
         self
+    }
+
+    pub fn with_health_pool(mut self, pool: PgPool) -> Self {
+        self.health_pool = Some(pool);
+        self
+    }
+
+    async fn report_health(&self, failure_kind: Option<&str>) {
+        if let Some(pool) = &self.health_pool {
+            record_token_health(pool, failure_kind).await;
+        }
+    }
+
+    async fn report_result<T>(&self, result: &Result<T, TokenError>) {
+        if let Err(error) = result {
+            let kind = match error {
+                TokenError::CredentialRejected => "credential_rejected",
+                TokenError::Rejected { .. } => "provider_rejected",
+                TokenError::Http(_) => "request_failed",
+                TokenError::NotInitialized => "not_initialized",
+                TokenError::PersistenceFailed => "persistence_failed",
+                TokenError::ValidationPending => "validation_pending",
+                TokenError::ValidationExpired => "validation_expired",
+            };
+            self.report_health(Some(kind)).await;
+        }
     }
 
     #[cfg(test)]
@@ -291,6 +320,18 @@ impl BotTokenManager {
     /// Initialisiert aus Seed-Tokens (Env): validiert den Access-Token; tot →
     /// sofortiger Refresh über den Refresh-Token (Boot-Pfad).
     pub async fn initialize(
+        &self,
+        seed_access_token: Option<&str>,
+        seed_refresh_token: &str,
+    ) -> Result<(), TokenError> {
+        let result = self
+            .initialize_inner(seed_access_token, seed_refresh_token)
+            .await;
+        self.report_result(&result).await;
+        result
+    }
+
+    async fn initialize_inner(
         &self,
         seed_access_token: Option<&str>,
         seed_refresh_token: &str,
@@ -319,6 +360,7 @@ impl BotTokenManager {
                         scopes: v.scopes,
                     });
                     *self.bootstrap_refresh.write().await = None;
+                    self.report_health(None).await;
                     return Ok(());
                 }
                 Err(e) => {
@@ -331,6 +373,12 @@ impl BotTokenManager {
 
     /// Aktueller Access-Token; refresht lazy wenn < 1 h Restlaufzeit.
     pub async fn access_token(&self) -> Result<String, TokenError> {
+        let result = self.access_token_inner().await;
+        self.report_result(&result).await;
+        result
+    }
+
+    async fn access_token_inner(&self) -> Result<String, TokenError> {
         if self
             .sink
             .as_ref()
@@ -360,6 +408,12 @@ impl BotTokenManager {
 
     /// Erzwingt einen Refresh (z. B. nach Helix-401).
     pub async fn force_refresh(&self) -> Result<(), TokenError> {
+        let result = self.force_refresh_inner().await;
+        self.report_result(&result).await;
+        result
+    }
+
+    async fn force_refresh_inner(&self) -> Result<(), TokenError> {
         let _refresh_guard = self.refresh_lock.lock().await;
         let had_pending = self.pending.lock().await.is_some();
         let expired = match self.persist_pending().await {
@@ -418,8 +472,24 @@ impl BotTokenManager {
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(REFRESH_LOOP_INTERVAL);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let validation_interval = Duration::from_secs(60 * 60);
+            let mut validation_tick = tokio::time::interval_at(
+                tokio::time::Instant::now() + validation_interval,
+                validation_interval,
+            );
+            validation_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
-                tick.tick().await;
+                tokio::select! {
+                    _ = tick.tick() => {},
+                    _ = validation_tick.tick() => {
+                        if let Err(error) = manager.validate_current().await {
+                            manager.report_result::<()>(&Err(error)).await;
+                            if let Err(error) = manager.force_refresh().await {
+                                tracing::error!(%error, "Bot-Token-Prüfung und Wiederherstellung fehlgeschlagen");
+                            }
+                        }
+                    }
+                }
                 let needs_refresh = {
                     let guard = manager.state.read().await;
                     match *guard {
@@ -434,6 +504,31 @@ impl BotTokenManager {
                 }
             }
         });
+    }
+
+    async fn validate_current(&self) -> Result<(), TokenError> {
+        let _refresh_guard = self.refresh_lock.lock().await;
+        if self
+            .sink
+            .as_ref()
+            .is_some_and(|sink| sink.terminal_failure())
+        {
+            return Err(TokenError::CredentialRejected);
+        }
+        self.persist_pending().await?;
+        let access = self
+            .state
+            .read()
+            .await
+            .as_ref()
+            .map(|state| state.access_token.clone())
+            .ok_or(TokenError::NotInitialized)?;
+        let validated = self.validate(&access).await?;
+        if validated.user_id != *self.bot_user_id.read().await {
+            return Err(TokenError::CredentialRejected);
+        }
+        self.report_health(None).await;
+        Ok(())
     }
 
     async fn validate(&self, access_token: &str) -> Result<ValidateResponse, TokenError> {
@@ -612,7 +707,26 @@ impl BotTokenManager {
         *self.bot_login.write().await = validated.login;
         *self.state.write().await = pending.take().map(|rotation| rotation.tokens);
         *self.bootstrap_refresh.write().await = None;
+        self.report_health(None).await;
         Ok(())
+    }
+}
+
+pub async fn record_token_health(pool: &PgPool, failure_kind: Option<&str>) {
+    let write = sqlx::query(
+        "INSERT INTO twitch_bot_token_health(singleton,last_ok_at,last_failure_at,failure_kind)
+         VALUES(TRUE,CASE WHEN $1::text IS NULL THEN clock_timestamp() END,
+             CASE WHEN $1::text IS NOT NULL THEN clock_timestamp() END,$1)
+         ON CONFLICT(singleton) DO UPDATE SET
+             last_ok_at=COALESCE(excluded.last_ok_at,twitch_bot_token_health.last_ok_at),
+             last_failure_at=COALESCE(excluded.last_failure_at,twitch_bot_token_health.last_failure_at),
+             failure_kind=excluded.failure_kind",
+    ).bind(failure_kind).execute(pool);
+    if !matches!(
+        tokio::time::timeout(Duration::from_secs(2), write).await,
+        Ok(Ok(_))
+    ) {
+        tracing::warn!("Bot-Token-Zustand konnte nicht gespeichert werden; Chat läuft weiter");
     }
 }
 
