@@ -252,6 +252,10 @@ impl EditorRuntime {
         Self::load(&packaged_root()?, active_section()?)
     }
 
+    pub fn validate_packaged(section: &toml::Table) -> Result<(), super::AiEditorError> {
+        Self::load(&packaged_root()?, section).map(|_| ())
+    }
+
     pub fn load(package_root: &Path, section: &toml::Table) -> Result<Self, super::AiEditorError> {
         let configuration = typed_section::<SocialAiSection>(section)?
             .into_editor_config()
