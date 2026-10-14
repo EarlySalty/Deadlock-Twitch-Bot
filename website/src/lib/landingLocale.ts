@@ -7,6 +7,14 @@ export function isEnglishLanding(
     | undefined = typeof window === "undefined" ? undefined : window.location,
 ): boolean {
   if (!location) return false;
+  const language = new URLSearchParams(location.search ?? "").get("lang");
+  if (language === "de") return false;
+  if (
+    ["dead-lock.de", "www.dead-lock.de"].includes(
+      location.hostname.toLowerCase(),
+    )
+  )
+    return true;
   const path =
     location.pathname.replace(/\/index\.html$/, "/").replace(/\/$/, "") || "/";
   if (
@@ -32,14 +40,7 @@ export function isEnglishLanding(
     ].includes(path)
   )
     return false;
-  const language = new URLSearchParams(location.search ?? "").get("lang");
-  if (language === "de") return false;
-  return (
-    language === "en" ||
-    ["dead-lock.de", "www.dead-lock.de"].includes(
-      location.hostname.toLowerCase(),
-    )
-  );
+  return language === "en";
 }
 
 export function landingText(text: string): string {
