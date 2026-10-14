@@ -3,17 +3,17 @@ mod queue;
 mod recovery;
 mod settings;
 
-pub use planner::{PlanReport, plan_owner};
+pub use planner::{plan_owner, PlanReport};
 
-pub use queue::{ReviewDecision, cancel, mark_next, reorder, resolve_review};
-pub use recovery::{Recovery, recover_after_lease, retry_or_review};
-pub use settings::{SchedulePatch, ScheduleSettings, save_schedule};
+pub use queue::{cancel, mark_next, reorder, resolve_review, ReviewDecision};
+pub use recovery::{recover_after_lease, retry_or_review, Recovery};
+pub use settings::{save_schedule, SchedulePatch, ScheduleSettings};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgConnection, PgPool};
 
-use super::{JobError, JobSource, ProductionJob, ProductionMode, SELECT, from_row};
+use super::{from_row, JobError, JobSource, ProductionJob, ProductionMode, SELECT};
 use crate::autopilot_settings::{self, AutopilotSettings, SettingsError};
 
 #[derive(Debug, thiserror::Error)]

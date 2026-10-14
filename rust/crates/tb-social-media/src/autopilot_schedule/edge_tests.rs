@@ -47,20 +47,16 @@ async fn snapshot_uses_real_serial_clip_ids_and_hides_internal_checkpoints() {
         .expect("real serial ID decoding");
     assert_eq!(snapshot.jobs[0].id, second.id);
     assert_eq!(snapshot.jobs.len(), 2);
-    assert!(
-        snapshot
-            .jobs
-            .iter()
-            .all(|job| job.clip_title == "same-clip")
-    );
+    assert!(snapshot
+        .jobs
+        .iter()
+        .all(|job| job.clip_title == "same-clip"));
     let public = serde_json::to_value(&snapshot).expect("public snapshot");
-    assert!(
-        public["jobs"]
-            .as_array()
-            .expect("queue array")
-            .iter()
-            .all(|job| job.get("metadata").is_none() && job.get("internal_analysis").is_none())
-    );
+    assert!(public["jobs"]
+        .as_array()
+        .expect("queue array")
+        .iter()
+        .all(|job| job.get("metadata").is_none() && job.get("internal_analysis").is_none()));
     cleanup(pool).await;
 }
 
@@ -173,11 +169,9 @@ async fn zero_lead_uses_poll_window_and_changed_filters_preserve_queued_clips() 
         .expect("preserved queue");
     assert_eq!(after[0].id, first[0].id);
     assert_eq!(after[0].clip_id, old);
-    assert!(
-        after[0]
-            .scheduled_at
-            .is_some_and(|slot| slot > first[0].scheduled_at.expect("old scheduled slot"))
-    );
+    assert!(after[0]
+        .scheduled_at
+        .is_some_and(|slot| slot > first[0].scheduled_at.expect("old scheduled slot")));
     assert_eq!(after[1].clip_id, current);
     cleanup(pool).await;
 }
@@ -579,13 +573,11 @@ async fn clearing_schedule_while_claim_waits_for_owner_prevents_first_start() {
         .await
         .expect("clear weekly slots under the real owner lock");
     owner_tx.commit().await.expect("release changed schedule");
-    assert!(
-        claim
-            .await
-            .expect("claim task")
-            .expect("locked recheck")
-            .is_none()
-    );
+    assert!(claim
+        .await
+        .expect("claim task")
+        .expect("locked recheck")
+        .is_none());
     let unchanged = production_jobs::get(&pool, "owner", queued.id)
         .await
         .expect("queue after rejected claim")

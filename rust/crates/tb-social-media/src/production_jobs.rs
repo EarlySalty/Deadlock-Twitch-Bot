@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{PgConnection, PgPool, Row};
 
-use crate::autopilot_settings::{self, SettingsError, json_column};
+use crate::autopilot_settings::{self, json_column, SettingsError};
 
 #[path = "autopilot_schedule/mod.rs"]
 pub mod autopilot_schedule;

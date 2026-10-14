@@ -11,18 +11,16 @@ async fn target_platforms_require_owned_enabled_connections_and_normalize() {
     .await
     .expect("connection fixtures");
     for platform in ["instagram", "tiktok", "unknown"] {
-        assert!(
-            save_schedule(
-                &pool,
-                "owner",
-                &SchedulePatch {
-                    target_platforms: Some(vec![platform.into()]),
-                    ..Default::default()
-                }
-            )
-            .await
-            .is_err()
-        );
+        assert!(save_schedule(
+            &pool,
+            "owner",
+            &SchedulePatch {
+                target_platforms: Some(vec![platform.into()]),
+                ..Default::default()
+            }
+        )
+        .await
+        .is_err());
     }
     let saved = save_schedule(
         &pool,

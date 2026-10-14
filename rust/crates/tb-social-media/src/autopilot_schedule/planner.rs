@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgConnection, PgPool};
 
-use super::{ProductionHold, ScheduleError, hold, production_horizon, review_count_on, taken_on};
+use super::{hold, production_horizon, review_count_on, taken_on, ProductionHold, ScheduleError};
 use crate::autopilot_settings::{self, AutopilotSettings, ClipSort};
 
 type ClipBounds = (DateTime<Utc>, DateTime<Utc>);

@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, PgPool};
 
-use super::{ScheduleError, taken_on};
+use super::{taken_on, ScheduleError};
 use crate::autopilot_settings::{self, AutopilotSettings, ScheduleSlot};
 
 #[derive(Debug, Clone, Serialize)]
