@@ -8,8 +8,10 @@ STEER-3: direct production DB access stays prohibited; verified-main deployment 
 
 | Package | Branch or source | SHA | Status | Blocker |
 | Main | origin/main | d915c030aa08fa65dd730bad4f4edd8feded36e7 | Other LA integration follows our D21 merge | A must preserve newer main changes |
-| A: D English, central K, R5 | fix/slice-a-current-main-sol-20261014 | Pending | Fresh sole Sol finisher a8ca2d777472ce315 | Combined Rust/Postgres checks and independent review pending |
-| A frozen input | feat/slice-a-english-ai-sol-20261014 | tree 40867b4537949f97981ae8d11413bf2b4d168087 | 267 staged paths preserved; prior critic incomplete, no semantic rejection | Prior checks timed out; no verified feature commit |
+| A: D English, central K, R5 | fix/slice-a-current-main-sol-20261014 | 2330954563279a96da0e81d2f74ef71c76e807a2 | Pushed; scoped check/clippy/build 0; 49 Rust and 39 Node passes, 0 ignored; earlier frontend/browser evidence reused | Critic BLOCK: missing caller subject and definite-denial quota consumption; extra language/ad-manager checks open |
+| A correction | fix/slice-a-ai-attribution-sol-20261014 | Pending | Fresh native fixer a7efee4a400787f73; same critic completing remaining semantic review | Narrow stable-UID propagation and guard-denial accounting |
+| A integration candidate | integration/slice-a-english-ai-sol-20261014 | 946e298b20c3f034ba403ad18afb1fc192b1dc45 | Tree equals author 233; 3 frontend builds 0; speculative release bg7abp4on stopped after correctness BLOCK | Not gated, not on main, not deployed; must integrate verified correction |
+| A frozen input | feat/slice-a-english-ai-sol-20261014 | tree 40867b4537949f97981ae8d11413bf2b4d168087 | Preserved read-only; earlier workflow critic incomplete and not resumable | Replaced once by native critic, no specialist cascade |
 | D frontend | db0 plus F15 checkpoint | 71e394d1a6e94bc5b43378376bfa4580be88af5b | Salvaged into A input | Broad English activation not yet merged |
 | D publishing panel | integration/dashboard-publishing-language-sol-20261014 | d21e72c6a82949ee746758848c42f4a6dc4b80be | Independent critic, local Sol ALLOW, merged and deployed | Authenticated/provider publication not exercised |
 | K fixtures | fix/multiserver-sol-k-complete-fixtures-r3-20261014 | 63213dcb3da789cadc8b3da4d1da3cfdc336f2bc | Scoped source accepted, A salvage input | Not full K acceptance |
