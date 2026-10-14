@@ -1,3 +1,4 @@
+import { landingText } from "@/lib/landingLocale";
 import type { ComponentType } from "react";
 import {
   Swords,
@@ -21,43 +22,48 @@ const benefits: PartnerBenefit[] = [
   {
     id: "auto-raid",
     icon: Swords,
-    title: "Auto-Raid im Netzwerk",
-    description:
+    title: landingText("Auto-Raid im Netzwerk"),
+    description: landingText(
       "Endet dein Stream, landen deine Zuschauer beim passenden Live-Partner. Gehen andere offline, landen ihre bei dir.",
+    ),
   },
   {
     id: "discord-live",
     icon: Zap,
-    title: "Sichtbar ab der ersten Minute",
-    description:
+    title: landingText("Sichtbar ab der ersten Minute"),
+    description: landingText(
       "Du gehst live, der Discord weiß es sofort. Verschluckt Twitch das Ereignis, fragt der Bot alle 15 Sekunden selbst nach.",
+    ),
   },
   {
     id: "analytics",
     icon: BarChart2,
-    title: "Deine Zahlen im Blick",
-    description:
+    title: landingText("Deine Zahlen im Blick"),
+    description: landingText(
       "Zuschauer, Chat, Raids, Bestwerte und der Vergleich mit dem Netzwerk. Nach jedem Stream siehst du, was funktioniert hat.",
+    ),
   },
   {
     id: "clip-manager",
     icon: Clapperboard,
-    title: "Clips direkt aus dem Chat",
-    description: "!clip im Chat, fertig ist der Clip.",
+    title: landingText("Clips direkt aus dem Chat"),
+    description: landingText("!clip im Chat, fertig ist der Clip."),
   },
   {
     id: "community",
     icon: Users,
-    title: "Eine Community im Rücken",
-    description:
+    title: landingText("Eine Community im Rücken"),
+    description: landingText(
       "Treue Zuschauer werden belohnt, Lurker gezielt angesprochen. Im Streamer-Bereich im Discord tauschst du dich mit den anderen aus.",
+    ),
   },
   {
     id: "moderation",
     icon: ShieldCheck,
-    title: "Ein Schutzschild für alle",
-    description:
+    title: landingText("Ein Schutzschild für alle"),
+    description: landingText(
       "Scam- und Spam-Konten fliegen aus deinem Chat, bevor jemand sie sieht. Dazu die Ban-Liste des ganzen Netzwerks, alles pro Kanal abschaltbar.",
+    ),
   },
 ];
 
@@ -66,9 +72,11 @@ export function Features() {
     <section id="features" className="py-24">
       <div className="max-w-7xl mx-auto px-6">
         <SectionHeading
-          badge="Partner-Vorteile"
-          title="Was als Partner dazugehört"
-          subtitle="Sechs Dinge, die dazukommen, sobald du Partner bist."
+          badge={landingText("Partner-Vorteile")}
+          title={landingText("Was als Partner dazugehört")}
+          subtitle={landingText(
+            "Sechs Dinge, die dazukommen, sobald du Partner bist.",
+          )}
         />
 
         <div className="mt-16 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

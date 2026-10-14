@@ -58,6 +58,7 @@ export interface SocialClip {
   clip_id: string;
   clip_url: string | null;
   title: string;
+  generated_title?: string | null;
   thumbnail_url: string | null;
   streamer_login: string;
   created_at: string;

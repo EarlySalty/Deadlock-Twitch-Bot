@@ -1,10 +1,14 @@
+import { landingText } from "@/lib/landingLocale";
 import { motion } from "framer-motion";
 import { ExternalLink } from "lucide-react";
 import { GradientText } from "@/components/ui/GradientText";
 import { DiscordLogo } from "@/components/ui/DiscordLogo";
 import { RaidDemo } from "@/components/sections/RaidDemo";
 import { useEinblendung } from "@/components/ui/ScrollReveal";
-import { buildTwitchBotAuthUrl, DISCORD_INVITE_URL } from "@/data/externalLinks";
+import {
+  buildTwitchBotAuthUrl,
+  DISCORD_INVITE_URL,
+} from "@/data/externalLinks";
 
 export function Hero() {
   const badge = useEinblendung<HTMLDivElement>();
@@ -21,36 +25,48 @@ export function Hero() {
           <motion.div
             ref={badge.ref}
             initial={false}
-            animate={{ opacity: badge.versteckt ? 0 : 1, y: badge.versteckt ? -12 : 0 }}
+            animate={{
+              opacity: badge.versteckt ? 0 : 1,
+              y: badge.versteckt ? -12 : 0,
+            }}
             transition={badge.versteckt ? { duration: 0 } : { duration: 0.5 }}
             className="inline-flex items-center rounded-full px-4 py-1.5 bg-[var(--color-card)] border border-[var(--color-border)] text-sm text-[var(--color-accent)]"
           >
-            Größtes Deadlock-Raid-Netzwerk auf Twitch
+            {landingText("Größtes Deadlock-Raid-Netzwerk auf Twitch")}
           </motion.div>
 
           <motion.h1
             ref={titel.ref}
             initial={false}
-            animate={{ opacity: titel.versteckt ? 0 : 1, y: titel.versteckt ? 20 : 0 }}
-            transition={titel.versteckt ? { duration: 0 } : { duration: 0.6, delay: 0.1 }}
+            animate={{
+              opacity: titel.versteckt ? 0 : 1,
+              y: titel.versteckt ? 20 : 0,
+            }}
+            transition={
+              titel.versteckt ? { duration: 0 } : { duration: 0.6, delay: 0.1 }
+            }
             className="mt-6 text-5xl md:text-6xl lg:text-7xl font-bold leading-tight text-[var(--color-text-primary)]"
           >
-            Kein Stream endet
+            {landingText("Kein Stream endet")}
             <br />
-            <GradientText>im Leeren.</GradientText>
+            <GradientText>{landingText("im Leeren.")}</GradientText>
           </motion.h1>
 
           <motion.p
             ref={text.ref}
             initial={false}
-            animate={{ opacity: text.versteckt ? 0 : 1, y: text.versteckt ? 20 : 0 }}
-            transition={text.versteckt ? { duration: 0 } : { duration: 0.6, delay: 0.2 }}
+            animate={{
+              opacity: text.versteckt ? 0 : 1,
+              y: text.versteckt ? 20 : 0,
+            }}
+            transition={
+              text.versteckt ? { duration: 0 } : { duration: 0.6, delay: 0.2 }
+            }
             className="mt-6 text-xl text-[var(--color-text-secondary)] max-w-2xl mx-auto"
           >
-            Der Bot ist nur der Schlüssel. Sobald du ihn aktivierst, bist du
-            Partner im deutschen Deadlock-Netzwerk. Gehst du offline, reicht das
-            Netzwerk deine Zuschauer an den nächsten deutschen Deadlock-Stream
-            weiter.
+            {landingText(
+              "Der Bot ist nur der Schlüssel. Sobald du ihn aktivierst, bist du Partner im deutschen Deadlock-Netzwerk. Gehst du offline, reicht das Netzwerk deine Zuschauer an den nächsten deutschen Deadlock-Stream weiter.",
+            )}
           </motion.p>
         </div>
 
@@ -61,8 +77,13 @@ export function Hero() {
         <motion.div
           ref={cta.ref}
           initial={false}
-          animate={{ opacity: cta.versteckt ? 0 : 1, y: cta.versteckt ? 20 : 0 }}
-          transition={cta.versteckt ? { duration: 0 } : { duration: 0.6, delay: 0.5 }}
+          animate={{
+            opacity: cta.versteckt ? 0 : 1,
+            y: cta.versteckt ? 20 : 0,
+          }}
+          transition={
+            cta.versteckt ? { duration: 0 } : { duration: 0.6, delay: 0.5 }
+          }
           className="mt-10 flex gap-4 justify-center flex-wrap"
         >
           <a
@@ -70,7 +91,7 @@ export function Hero() {
             className="gradient-accent rounded-xl px-7 py-3.5 font-semibold inline-flex items-center gap-2 transition-all duration-200 hover:brightness-110 hover:shadow-[0_0_24px_4px_rgba(201,168,106,0.3)]"
           >
             <ExternalLink size={18} />
-            Jetzt Partner werden
+            {landingText("Jetzt Partner werden")}
           </a>
           <a
             href={DISCORD_INVITE_URL}
@@ -79,7 +100,7 @@ export function Hero() {
             className="rounded-xl px-7 py-3.5 font-semibold text-[var(--color-text-primary)] border border-[rgba(255,255,255,0.14)] inline-flex items-center gap-2 transition-all duration-200 hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
           >
             <DiscordLogo size={18} />
-            Community-Discord beitreten
+            {landingText("Community-Discord beitreten")}
           </a>
         </motion.div>
       </div>

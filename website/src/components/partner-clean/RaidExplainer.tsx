@@ -1,3 +1,4 @@
+import { landingText } from "@/lib/landingLocale";
 import { motion, useInView } from "framer-motion";
 import { useRef } from "react";
 import { ArrowRight, CheckCircle2, Power, Search, Users } from "lucide-react";
@@ -6,44 +7,51 @@ import { GradientText } from "@/components/ui/GradientText";
 
 const features = [
   {
-    title: "Fließende Übergänge",
-    description:
+    title: landingText("Fließende Übergänge"),
+    description: landingText(
       "Aus einer beendeten Session wird direkt der Einstieg in den nächsten passenden Live-Stream.",
+    ),
   },
   {
-    title: "Passende Partner-Ziele",
-    description:
+    title: landingText("Passende Partner-Ziele"),
+    description: landingText(
       "Bevorzugt werden aktive Partner aus dem Netzwerk, damit Zuschauer im Deadlock-Umfeld bleiben.",
+    ),
   },
   {
-    title: "Mehr Sichtbarkeit für alle",
-    description:
+    title: landingText("Mehr Sichtbarkeit für alle"),
+    description: landingText(
       "Viewer werden sinnvoll weitergeleitet, sodass große und kleine Creator gemeinsam von mehr Discoverability profitieren.",
+    ),
   },
   {
-    title: "Volle Kontrolle",
-    description:
+    title: landingText("Volle Kontrolle"),
+    description: landingText(
       "Automatisierung, wenn sie hilft; manuelle Raids bleiben jederzeit Teil eures eigenen Ablaufs.",
+    ),
   },
 ];
 
 const flowSteps = [
   {
     title: "Offline",
-    description:
+    description: landingText(
       "Sobald ein Deadlock-Stream endet, übernimmt das Netzwerk automatisch den nächsten Schritt.",
+    ),
     icon: Power,
   },
   {
     title: "Partner",
-    description:
+    description: landingText(
       "Ein passender Live-Partner aus dem Netzwerk wird priorisiert, damit die Community im richtigen Umfeld bleibt.",
+    ),
     icon: Search,
   },
   {
     title: "Raid",
-    description:
+    description: landingText(
       "Die Viewer werden direkt in den nächsten relevanten Stream weitergeleitet statt am Ende zu verlieren.",
+    ),
     icon: Users,
   },
 ];
@@ -181,8 +189,20 @@ function NetworkSvg() {
         }}
       />
       <circle cx="14" cy="20" r="4" fill="var(--color-primary)" opacity={0.8} />
-      <circle cx="30" cy="10" r="3.5" fill="var(--color-accent)" opacity={0.8} />
-      <circle cx="30" cy="30" r="3.5" fill="var(--color-accent)" opacity={0.8} />
+      <circle
+        cx="30"
+        cy="10"
+        r="3.5"
+        fill="var(--color-accent)"
+        opacity={0.8}
+      />
+      <circle
+        cx="30"
+        cy="30"
+        r="3.5"
+        fill="var(--color-accent)"
+        opacity={0.8}
+      />
       <circle cx="46" cy="20" r="4" fill="var(--color-primary)" opacity={0.8} />
     </svg>
   );
@@ -273,25 +293,24 @@ export function RaidExplainer() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
           <ScrollReveal>
             <p className="text-sm text-[var(--color-accent)] font-medium uppercase tracking-wider mb-4">
-              Auto-Raid System
+              {landingText("Auto-Raid System")}
             </p>
 
             <h2 className="text-3xl md:text-4xl font-bold text-[var(--color-text-primary)] mb-6">
-              <GradientText>Intelligentes</GradientText> Raid-System
+              <GradientText>{landingText("Intelligentes")}</GradientText>{" "}
+              {landingText("Raid-System")}
             </h2>
 
             <p className="text-[var(--color-text-secondary)] text-lg mb-8 leading-relaxed">
-              Der Auto-Raid hält die Deadlock-Community in Bewegung. Endet ein
-              Partner-Stream nach einer Deadlock-Session, sucht das Netzwerk
-              automatisch nach einem passenden Live-Partner und leitet die
-              Community direkt weiter.
+              {landingText(
+                "Der Auto-Raid hält die Deadlock-Community in Bewegung. Endet ein Partner-Stream nach einer Deadlock-Session, sucht das Netzwerk automatisch nach einem passenden Live-Partner und leitet die Community direkt weiter.",
+              )}
             </p>
 
             <p className="text-[var(--color-text-secondary)] text-base mb-8 leading-relaxed">
-              Das sorgt für fließende Übergänge statt harter Stream-Enden: mehr
-              Sichtbarkeit, mehr gemeinsame Reichweite und mehr echte
-              Verbindungen im Netzwerk. Wer lieber selbst entscheidet, kann
-              natürlich weiterhin manuell raiden.
+              {landingText(
+                "Das sorgt für fließende Übergänge statt harter Stream-Enden: mehr Sichtbarkeit, mehr gemeinsame Reichweite und mehr echte Verbindungen im Netzwerk. Wer lieber selbst entscheidet, kann natürlich weiterhin manuell raiden.",
+              )}
             </p>
 
             <ul className="space-y-4">
@@ -315,7 +334,7 @@ export function RaidExplainer() {
           <ScrollReveal delay={0.2}>
             <div className="panel-card rounded-2xl p-8">
               <p className="text-lg font-semibold text-[var(--color-text-primary)] mb-6">
-                Flow beim Offline-Gehen
+                {landingText("Flow beim Offline-Gehen")}
               </p>
 
               <motion.div
@@ -347,7 +366,10 @@ export function RaidExplainer() {
                           border: "1px solid rgba(85, 151, 143, 0.45)",
                         }}
                       >
-                        <Icon size={18} className="text-[var(--color-accent-hover)]" />
+                        <Icon
+                          size={18}
+                          className="text-[var(--color-accent-hover)]"
+                        />
                       </div>
 
                       <Illustration />
@@ -391,8 +413,9 @@ export function RaidExplainer() {
                   </div>
 
                   <p className="text-sm text-[var(--color-text-primary)] mt-3 leading-relaxed">
-                    So bleibt eure Community in Bewegung und der Stream endet
-                    nicht einfach im Leeren.
+                    {landingText(
+                      "So bleibt eure Community in Bewegung und der Stream endet nicht einfach im Leeren.",
+                    )}
                   </p>
                 </motion.div>
               </motion.div>

@@ -1,3 +1,4 @@
+import { landingText, landingLink } from "@/lib/landingLocale";
 import {
   DISCORD_INVITE_URL,
   TWITCH_FAQ_URL,
@@ -13,31 +14,55 @@ interface FooterLink {
 }
 
 const NAV_SECTION_LINKS: FooterLink[] = [
-  { label: 'Features', href: `${WEBSITE_HOME_PATH}#features` },
-  { label: 'Community', href: `${WEBSITE_HOME_PATH}#community` },
+  { label: "Features", href: `${WEBSITE_HOME_PATH}#features` },
+  { label: "Community", href: `${WEBSITE_HOME_PATH}#community` },
 ];
 
 const MORE_LINKS: FooterLink[] = [
-  { label: 'Partner-Dashboard', href: TWITCH_DASHBOARD_URL },
-  { label: 'Bot FAQ', href: TWITCH_FAQ_URL, external: true },
-  { label: 'Affiliate-Programm', href: AFFILIATE_PROGRAM_PATH },
-  { label: 'Dashboard-Demo', href: TWITCH_DEMO_DASHBOARD_URL, external: true },
-  { label: 'Discord beitreten', href: DISCORD_INVITE_URL, external: true },
-  { label: 'Impressum', href: 'https://deutsche-deadlock-community.de/twitch/impressum', external: true },
-  { label: 'Datenschutz', href: 'https://deutsche-deadlock-community.de/twitch/datenschutz', external: true },
-  { label: 'AGB', href: 'https://deutsche-deadlock-community.de/twitch/agb', external: true },
-  { label: 'Sicherheitskonzept', href: 'https://deutsche-deadlock-community.de/twitch/sicherheit', external: true },
+  { label: landingText("Partner-Dashboard"), href: TWITCH_DASHBOARD_URL },
+  { label: landingText("Bot FAQ"), href: TWITCH_FAQ_URL, external: true },
+  { label: landingText("Affiliate-Programm"), href: AFFILIATE_PROGRAM_PATH },
+  {
+    label: landingText("Dashboard-Demo"),
+    href: TWITCH_DEMO_DASHBOARD_URL,
+    external: true,
+  },
+  {
+    label: landingText("Discord beitreten"),
+    href: DISCORD_INVITE_URL,
+    external: true,
+  },
+  {
+    label: landingText("Impressum"),
+    href: "https://deutsche-deadlock-community.de/twitch/impressum",
+    external: true,
+  },
+  {
+    label: landingText("Datenschutz"),
+    href: "https://deutsche-deadlock-community.de/twitch/datenschutz",
+    external: true,
+  },
+  {
+    label: landingText("AGB"),
+    href: "https://deutsche-deadlock-community.de/twitch/agb",
+    external: true,
+  },
+  {
+    label: landingText("Sicherheitskonzept"),
+    href: "https://deutsche-deadlock-community.de/twitch/sicherheit",
+    external: true,
+  },
 ];
 
 function FooterLinkItem({ link }: { link: FooterLink }) {
   const baseClass =
-    'text-sm text-text-secondary hover:text-text-primary transition-colors duration-200';
+    "text-sm text-text-secondary hover:text-text-primary transition-colors duration-200";
 
   return (
     <a
-      href={link.href}
-      target={link.external ? '_blank' : undefined}
-      rel={link.external ? 'noopener noreferrer' : undefined}
+      href={landingLink(link.href)}
+      target={link.external ? "_blank" : undefined}
+      rel={link.external ? "noopener noreferrer" : undefined}
       className={baseClass}
     >
       {link.label}
@@ -47,7 +72,10 @@ function FooterLinkItem({ link }: { link: FooterLink }) {
 
 export function Footer() {
   return (
-    <footer className="w-full border-t border-border" style={{ background: 'rgba(28, 21, 13, 0.5)' }}>
+    <footer
+      className="w-full border-t border-border"
+      style={{ background: "rgba(28, 21, 13, 0.5)" }}
+    >
       <div className="max-w-7xl mx-auto px-6 py-12">
         {/* Three-column grid */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
@@ -57,7 +85,7 @@ export function Footer() {
               Deutsche Deadlock Community
             </span>
             <p className="text-text-secondary text-sm leading-relaxed">
-              Erstellt für die Deadlock-Community
+              {landingText("Erstellt für die Deadlock-Community")}
             </p>
           </div>
 
@@ -76,7 +104,7 @@ export function Footer() {
           {/* Column 3 – More */}
           <div className="flex flex-col gap-3">
             <h4 className="text-sm font-semibold text-text-primary tracking-wide uppercase">
-              Mehr
+              {landingText("Mehr")}
             </h4>
             <nav className="flex flex-col gap-2">
               {MORE_LINKS.map((link) => (
@@ -89,7 +117,9 @@ export function Footer() {
         {/* Bottom bar */}
         <div className="border-t border-border mt-8 pt-8 flex flex-col sm:flex-row justify-between items-center gap-3">
           <p className="text-text-secondary text-sm">
-            &copy; 2026 Deutsche Deadlock Community. Alle Rechte vorbehalten.
+            {landingText(
+              "© 2026 Deutsche Deadlock Community. Alle Rechte vorbehalten.",
+            )}
           </p>
         </div>
       </div>
