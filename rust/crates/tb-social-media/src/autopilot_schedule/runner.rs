@@ -274,9 +274,16 @@ impl AutopilotWorker {
         &self,
         job: &ProductionJob,
     ) -> Result<Option<ProducedVideo>, RunnerError> {
-        let id: Option<i64> = sqlx::query_scalar("SELECT id FROM social_produced_videos
-            WHERE job_id = $1 AND twitch_user_id = $2 AND clip_id = $3 AND mode = 'static' ORDER BY id LIMIT 1")
-            .bind(job.id).bind(&job.twitch_user_id).bind(job.clip_id).fetch_optional(&self.pool).await?;
+        let id: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM social_produced_videos
+            WHERE job_id = $1 AND twitch_user_id = $2 AND clip_id = $3 AND mode = 'static'
+            AND status NOT IN ('failed', 'rejected', 'expired') ORDER BY id LIMIT 1",
+        )
+        .bind(job.id)
+        .bind(&job.twitch_user_id)
+        .bind(job.clip_id)
+        .fetch_optional(&self.pool)
+        .await?;
         match id {
             Some(id) => Ok(produced_video::get(&self.pool, &job.twitch_user_id, id).await?),
             None => Ok(None),

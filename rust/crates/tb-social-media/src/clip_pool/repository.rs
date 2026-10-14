@@ -32,6 +32,7 @@ pub struct PoolClip {
     pub source_created_at: DateTime<Utc>,
     pub game_id: String,
     pub source_metadata: Value,
+    pub view_count: Option<i32>,
     pub selected_at: Option<DateTime<Utc>>,
     pub first_selected_at: Option<DateTime<Utc>>,
     pub processed_at: Option<DateTime<Utc>>,
@@ -174,7 +175,8 @@ pub async fn list(
     let rows = sqlx::query("SELECT p.*, p.source_created_at >= $4 AND p.source_created_at < $5 AS eligible,
         EXISTS(SELECT 1 FROM social_production_jobs j WHERE j.clip_id = p.clip_db_id AND j.status <> 'cancelled')
         OR EXISTS(SELECT 1 FROM social_produced_videos v WHERE v.clip_id = p.clip_db_id)
-        OR EXISTS(SELECT 1 FROM twitch_clips_upload_queue q WHERE q.clip_id = p.clip_db_id) AS reserved
+        OR EXISTS(SELECT 1 FROM twitch_clips_upload_queue q WHERE q.clip_id = p.clip_db_id) AS reserved,
+        (SELECT c.view_count FROM twitch_clips_social_media c WHERE c.id = p.clip_db_id) AS view_count
         FROM social_clip_pool p WHERE p.twitch_user_id = $1
         ORDER BY CASE WHEN $6 THEN p.source_created_at END DESC, CASE WHEN NOT $6 THEN p.source_created_at END ASC, p.clip_id ASC
         LIMIT $2 OFFSET $3")
@@ -193,6 +195,7 @@ pub async fn list(
                 source_created_at: row.try_get("source_created_at")?,
                 game_id: row.try_get("game_id")?,
                 source_metadata: row.try_get("source_metadata")?,
+                view_count: row.try_get("view_count")?,
                 selected_at: row.try_get("selected_at")?,
                 first_selected_at: row.try_get("first_selected_at")?,
                 processed_at,

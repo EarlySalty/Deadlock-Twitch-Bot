@@ -4,7 +4,10 @@ use super::*;
 mod admin_contract_tests;
 
 fn config() -> EditorConfig {
-    toml::from_str(include_str!("../../../../../ops/social-ai/editor.toml")).expect("configuration")
+    toml::from_str::<SocialAiSection>(fixture::SOCIAL_AI_SECTION)
+        .expect("configuration")
+        .into_editor_config()
+        .expect("trusted configuration")
 }
 
 fn request() -> EditorRequest {
@@ -287,6 +290,12 @@ impl DisposablePostgres {
             .execute(&pool)
             .await
             .expect("admin limits migration");
+            sqlx::raw_sql(include_str!(
+                "../../../../migrations/20261014150000_social_ai_admin_console_limits.sql"
+            ))
+            .execute(&pool)
+            .await
+            .expect("admin console limits migration");
         }
         static LEDGER_IDENTITY: std::sync::Once = std::sync::Once::new();
         LEDGER_IDENTITY.call_once(|| {

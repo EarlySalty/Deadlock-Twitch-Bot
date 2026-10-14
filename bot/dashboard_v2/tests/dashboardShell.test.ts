@@ -43,12 +43,12 @@ test('App.tsx importiert die Shell und wickelt jede der sieben Routen darin ein'
 test('Deadlock weltweit nutzt die bereits veröffentlichte Analyse-Route statt eines separaten Caddy-Pfads', () => {
   assert.match(
     SIDEBAR,
-    /href: '\/twitch\/analyse\?view=category'.*label: 'Deadlock weltweit'/,
+    /href: '\/twitch\/analyse\?view=category'.*icon: BarChart3, active: activeRoute === 'category'/,
     'Die Admin-Navigation darf nicht von einer separaten /twitch/kategorie-Caddyfreigabe abhängen',
   );
   assert.doesNotMatch(
     SIDEBAR,
-    /href: '\/twitch\/kategorie'.*label: 'Deadlock weltweit'/,
+    /href: '\/twitch\/kategorie'/,
     'Die Sidebar darf den extern nicht gerouteten Legacy-Pfad nicht mehr verlinken',
   );
   assert.match(
@@ -124,10 +124,10 @@ test('App.tsx gatet die Pricing-Sidebar gegen den Auth-Status', () => {
 });
 
 test('der Analytics-Rahmen in App.tsx setzt keine eigene Gesamtbreite', () => {
-  const analytics = APP.slice(
-    APP.indexOf('function AnalyticsDashboard'),
-    APP.indexOf('export default function App'),
-  );
+  const start = APP.indexOf('function AnalyticsDashboard');
+  const end = APP.indexOf('\nfunction ', start + 1);
+  assert.ok(start >= 0 && end > start);
+  const analytics = APP.slice(start, end);
   assert.doesNotMatch(
     analytics,
     /internal-home-vibe/,

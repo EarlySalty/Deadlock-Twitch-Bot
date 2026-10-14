@@ -561,6 +561,8 @@ social_ai_change_proposals|created_at|timestamp with time zone|NO|now()
 social_ai_change_proposals|evidence|text|YES|
 social_ai_change_proposals|id|bigint|NO|nextval('social_ai_change_proposals_id_seq'::regclass)
 social_ai_change_proposals|reason|text|NO|
+social_ai_change_proposals|reviewed_at|timestamp with time zone|YES|
+social_ai_change_proposals|reviewed_by|text|YES|
 social_ai_change_proposals|status|text|NO|'proposed'::text
 social_ai_change_proposals|summary|text|NO|
 social_ai_change_proposals|title|text|NO|
@@ -613,6 +615,7 @@ social_ai_plan_limit_drafts|reason|text|NO|
 social_ai_plan_limit_drafts|revision|bigint|NO|
 social_ai_plan_limit_drafts|updated_at|timestamp with time zone|NO|now()
 social_ai_plan_limit_drafts|updated_by|text|NO|
+social_ai_processing_control|monthly_cap_micro_usd|bigint|YES|
 social_ai_processing_control|paused|boolean|NO|false
 social_ai_processing_control|reason|text|NO|''::text
 social_ai_processing_control|revision|bigint|NO|1
@@ -654,7 +657,9 @@ social_ai_user_consent|external_ai_consent|boolean|NO|false
 social_ai_user_consent|twitch_user_id|text|NO|
 social_ai_user_consent|updated_at|timestamp with time zone|NO|now()
 social_ai_user_consent|updated_by|text|NO|
+social_ai_user_limits|monthly_ai_jobs|bigint|YES|
 social_ai_user_limits|monthly_cap_micro_usd|bigint|YES|
+social_ai_user_limits|monthly_revisions|bigint|YES|
 social_ai_user_limits|paused|boolean|NO|false
 social_ai_user_limits|reason|text|NO|
 social_ai_user_limits|revision|bigint|NO|

@@ -1,15 +1,24 @@
-//! Typisierte Betriebsoptionen hinter bestehender Admin- und CSRF-Prüfung.
-//! Der Bot-Status stammt von dessen Health-API, nie vom Dashboard-Snapshot.
-
 use crate::auth::level::DashboardAuthLevel;
-use axum::{body::Bytes, http::StatusCode, response::IntoResponse, Json};
+use axum::{
+    body::Bytes,
+    http::{header::CACHE_CONTROL, StatusCode},
+    response::{IntoResponse, Response},
+    Json,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
 use tb_config::{
-    editor::{load_saved, EditError, OperatingOptions, SavedConfig},
+    editor::{inspect_catalog, load_saved, save_catalog, EditError, OperatingOptions, SavedConfig},
+    file::FileError,
+    settings_catalog::{CatalogError, CatalogResponse, ChangeRequest},
     BotConfigSnapshot,
 };
 use tb_http_core::ApiError;
+use tb_social_media::ai_editor::EditorRuntime;
+
+const SOCIAL_AI_INVALID: &str = "Die KI-Schnitt-Einstellungen bestehen die Gesamtprüfung nicht. Anbieter, Preise, Grenzwerte und Ordner müssen zusammenpassen.";
+const CATALOG_REQUEST_INVALID: &str = "Die Änderungsliste ist leer, zu lang, enthält ein Feld doppelt oder ein nicht änderbares Feld.";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -129,17 +138,132 @@ pub async fn save_handler(
         ));
     }
     let source = active()?.source().to_path_buf();
-    let saved = tokio::task::spawn_blocking(move || tb_config::editor::save(&source, &request.expected_revision, &request.options))
-        .await.map_err(|_| ApiError::internal())?
-        .map_err(|error| match error {
-            EditError::Conflict => failure(StatusCode::CONFLICT, "Die Konfiguration wurde inzwischen geändert. Bitte neu laden und Änderungen erneut prüfen."),
-            EditError::Busy => failure(StatusCode::CONFLICT, "Die Konfiguration wird gerade gespeichert. Bitte erneut versuchen."),
-            EditError::Invalid(_) => ApiError::bad_request("Ein Betriebswert liegt außerhalb des erlaubten Bereichs."),
-            EditError::UnsafeLocation => failure(StatusCode::SERVICE_UNAVAILABLE, "Die Betriebsdatei ist noch nicht sicher außerhalb des Deploy-Checkouts eingerichtet."),
-            EditError::Io => ApiError::internal_with("Der Speicherstand konnte nicht bestätigt werden. Bitte neu laden, bevor du erneut speicherst."),
-        })?;
+    let saved = tokio::task::spawn_blocking(move || {
+        tb_config::editor::save(&source, &request.expected_revision, &request.options)
+    })
+    .await
+    .map_err(|_| ApiError::internal())?
+    .map_err(edit_failure)?;
     response(saved).await
 }
+
+fn edit_failure(error: EditError) -> ApiError {
+    match error {
+        EditError::Conflict => failure(StatusCode::CONFLICT, "Die Konfiguration wurde inzwischen geändert. Bitte neu laden und Änderungen erneut prüfen."),
+        EditError::Busy => failure(StatusCode::CONFLICT, "Die Konfiguration wird gerade gespeichert. Bitte erneut versuchen."),
+        EditError::Invalid(_) => ApiError::bad_request("Ein Betriebswert liegt außerhalb des erlaubten Bereichs."),
+        EditError::UnsafeLocation => failure(StatusCode::SERVICE_UNAVAILABLE, "Die Betriebsdatei ist noch nicht sicher außerhalb des Deploy-Checkouts eingerichtet."),
+        EditError::Io => ApiError::internal_with("Der Speicherstand konnte nicht bestätigt werden. Bitte neu laden, bevor du erneut speicherst."),
+    }
+}
+
+fn structured(status: StatusCode, error: &str, message: &str, field: Option<&str>) -> ApiError {
+    let mut body = json!({ "error": error, "message": message });
+    if let Some(field) = field {
+        body["path"] = json!(field);
+        body["field"] = json!(field);
+    }
+    let mut failure = ApiError::bad_request_with_body(body);
+    failure.status = status;
+    failure
+}
+
+fn validation_failure(error: FileError) -> ApiError {
+    let message = match error.field {
+        Some("social_ai") => SOCIAL_AI_INVALID.to_owned(),
+        Some("settings_catalog") => CATALOG_REQUEST_INVALID.to_owned(),
+        _ => error.to_string(),
+    };
+    structured(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation",
+        &message,
+        error.field,
+    )
+}
+
+fn settings_failure(error: EditError) -> ApiError {
+    match error {
+        EditError::Conflict => structured(
+            StatusCode::CONFLICT,
+            "stale_revision",
+            CatalogError::StaleRevision.message(),
+            None,
+        ),
+        EditError::Invalid(error) => validation_failure(error),
+        other => edit_failure(other),
+    }
+}
+
+fn check_candidate(source: &Path, candidate: &str) -> Result<(), EditError> {
+    let snapshot = BotConfigSnapshot::parse(candidate, source)?;
+    match snapshot.settings().social_ai.as_ref() {
+        Some(section) => EditorRuntime::validate_packaged(section)
+            .map_err(|_| EditError::Invalid(FileError::invalid("social_ai"))),
+        None => Ok(()),
+    }
+}
+
+fn save_and_inspect(source: &Path, request: &ChangeRequest) -> Result<CatalogResponse, EditError> {
+    save_catalog(source, request, |candidate| {
+        check_candidate(source, candidate)
+    })?;
+    inspect_catalog(source)
+}
+
+fn catalog_response(catalog: CatalogResponse) -> Response {
+    ([(CACHE_CONTROL, "no-store")], Json(catalog)).into_response()
+}
+
+async fn read_settings(source: PathBuf) -> Result<Response, ApiError> {
+    let catalog = tokio::task::spawn_blocking(move || inspect_catalog(&source))
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(|_| {
+            failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Die gespeicherte Betriebskonfiguration ist nicht lesbar oder ungültig.",
+            )
+        })?;
+    Ok(catalog_response(catalog))
+}
+
+async fn write_settings(source: PathBuf, body: Bytes) -> Result<Response, ApiError> {
+    let request: ChangeRequest = serde_json::from_slice(&body).map_err(|_| {
+        structured(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Die Änderungsliste ist ungültig; Eingabewerte werden nicht ausgegeben.",
+            None,
+        )
+    })?;
+    let catalog = tokio::task::spawn_blocking(move || save_and_inspect(&source, &request))
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(settings_failure)?;
+    Ok(catalog_response(catalog))
+}
+
+pub async fn settings_get_handler(auth: DashboardAuthLevel) -> Result<Response, ApiError> {
+    if let Some(error) = crate::auth::require_admin(&auth) {
+        return Err(error);
+    }
+    read_settings(active()?.source().to_path_buf()).await
+}
+
+pub async fn settings_save_handler(
+    auth: DashboardAuthLevel,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    if let Some(error) = crate::auth::require_admin(&auth) {
+        return Err(error);
+    }
+    write_settings(active()?.source().to_path_buf(), body).await
+}
+
+#[cfg(test)]
+#[path = "admin_operating_config_settings_tests.rs"]
+mod settings_tests;
 
 #[cfg(test)]
 mod tests {

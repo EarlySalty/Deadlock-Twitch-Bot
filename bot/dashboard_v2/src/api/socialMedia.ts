@@ -1,4 +1,5 @@
 import { withCookieCredentials } from './core';
+import { mainDomainOAuthUrl } from '../i18n/oauthLinks';
 import { isPreviewLocalhost, PREVIEW_SOCIAL_ROUTE } from '@/preview/routes';
 import { getPreviewSocialResponse } from '@/preview/fixtures';
 import { fetchAuthStatus } from './auth';
@@ -722,7 +723,7 @@ export async function fetchPlatformStatus(
 export function oauthStartUrl(platform: string, twitchUserId: string | undefined): string {
   if (isPreviewLocalhost()) return `${PREVIEW_SOCIAL_ROUTE}?view=konten#preview-read-only`;
   const qs = buildQuery({ twitch_user_id: twitchUserId });
-  return `/twitch/social-media/oauth/start/${platform}${qs}`;
+  return mainDomainOAuthUrl(`/twitch/social-media/oauth/start/${platform}${qs}`);
 }
 
 /**
@@ -735,3 +736,13 @@ export async function disconnectPlatform(platform: string, twitchUserId: string 
 }
 
 export const fetchSocialAiJson = fetchJson;
+
+export { scheduleQueueApi } from '@/components/socialmedia/autopilot/schedule-queue/api';
+export type {
+  QueueJob,
+  ReviewDecision,
+  SchedulePatch,
+  ScheduleQueueApi,
+  ScheduleQueueSnapshot,
+  ScheduleSettings,
+} from '@/components/socialmedia/autopilot/schedule-queue/api';

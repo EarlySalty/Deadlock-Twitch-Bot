@@ -1,3 +1,4 @@
+import { useLanguage } from '@/context/LanguageContext';
 import { motion } from 'framer-motion';
 import { getScoreColor } from '@/utils/formatters';
 
@@ -16,6 +17,7 @@ export function ScoreGauge({
   size = 'medium',
   showLabel = true,
 }: ScoreGaugeProps) {
+  const { t, locale } = useLanguage();
   const circumference = 2 * Math.PI * 40;
   const offset = circumference - (score / 100) * circumference;
   const color = getScoreColor(score);
@@ -67,18 +69,18 @@ export function ScoreGauge({
             animate={{ opacity: 1, scale: 1 }}
             transition={{ delay: 0.3 }}
           >
-            {Math.round(score)}
+            {Math.round(score).toLocaleString(locale)}
           </motion.span>
         </div>
       </div>
       {showLabel && (
         <span className="mt-2 text-text-secondary font-medium tracking-wide uppercase text-xs">
-          {label}
+          {t(label)}
         </span>
       )}
       {showLabel && hint && (
         <span className="mt-1 max-w-[10rem] text-center text-[11px] leading-tight text-text-secondary/80">
-          {hint}
+          {t(hint)}
         </span>
       )}
     </div>

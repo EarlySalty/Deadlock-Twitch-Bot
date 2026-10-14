@@ -1,3 +1,6 @@
+import { globalTimezoneOwner } from '@/utils/socialMediaChannel';
+import { useT } from '@/context/LanguageContext';
+import { GlobalTimezone } from '@/components/verwaltung/GlobalTimezone';
 import { useEffect, useState, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
 import { Rise } from '../motion/Rise';
@@ -8,6 +11,7 @@ import { useOnboarding } from '@/components/onboarding/onboardingState';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { PartnerProfile } from './PartnerProfile';
 import { PlanProvider } from '../context/PlanContext';
+import { useOAuthLink } from '../context/LanguageContext';
 import { PREVIEW_HOME_ROUTE, PREVIEW_OVERLAY_ROUTE, isPreviewModeEnabled } from '@/preview/routes';
 import { AdManagerSection } from '@/components/verwaltung/AdManagerSection';
 import { CommandNamesProvider } from '@/components/verwaltung/CommandNameSection';
@@ -45,7 +49,10 @@ interface VerwaltungTabDef {
 }
 
 export function VerwaltungPage() {
+  const oauthLink = useOAuthLink();
+  const t = useT();
   const { data: authStatus, isLoading: loadingAuth } = useAuthStatus();
+  const timezoneOwner = globalTimezoneOwner(window.location.search, authStatus?.twitchUserId ?? undefined);
   const onboarding = useOnboarding();
   const [connectionNotice, setConnectionNotice] = useState('');
   const [returnMessage] = useState(() => {
@@ -121,7 +128,7 @@ export function VerwaltungPage() {
   const oauthFallbackUrl = isPreviewModeEnabled()
     ? PREVIEW_HOME_ROUTE
     : '/twitch/auth/login?next=%2Ftwitch%2Fdashboard';
-  const reconnectUrl = home.oauth?.reconnectUrl || oauthFallbackUrl;
+  const reconnectUrl = oauthLink(home.oauth?.reconnectUrl || oauthFallbackUrl);
   const discordConnected = Boolean(home.discord?.connected);
   const discordError = isError || home.discord?.status === 'error';
   const steamError = isError || home.steam?.status === 'error';
@@ -133,9 +140,9 @@ export function VerwaltungPage() {
       ? 'gerade nicht prüfbar' : result.data?.[service]?.connected ? 'verbunden' : 'nicht verbunden';
     setConnectionNotice(`Prüfung abgeschlossen. Discord ${status('discord')}. Steam ${status('steam')}.`);
   };
-  const discordConnectUrl = home.discord?.connectUrl || null;
+  const discordConnectUrl = home.discord?.connectUrl ? oauthLink(home.discord.connectUrl) : null;
   const steamConnected = Boolean(home.steam?.connected);
-  const steamConnectUrl = home.steam?.connectUrl || null;
+  const steamConnectUrl = home.steam?.connectUrl ? oauthLink(home.steam.connectUrl) : null;
   const userId = (authStatus as any)?.userId || (home as any)?.userId || '';
   // Eigener Kanal-Login für die Trenn-Aktion. Leer heißt: Aktion bleibt
   // gesperrt, statt gegen einen geratenen Login zu bestätigen.
@@ -158,6 +165,7 @@ export function VerwaltungPage() {
 
   const kontoTab = (
     <>
+      {timezoneOwner ? <GlobalTimezone owner={timezoneOwner} channelScoped={new URLSearchParams(window.location.search).has('twitch_user_id')} /> : <p role="alert">{t('Bitte einen gültigen Twitch-Kanal für die Zeitzone auswählen.')}</p>}
       {/* Twitch OAuth Section */}
       <motion.section
         className="panel-card rounded-2xl p-5 md:p-6"
@@ -433,7 +441,7 @@ export function VerwaltungPage() {
     </motion.section>
   );
 
-  const werbungTab = <AdManagerSection reconnectUrl={reconnectUrl} />;
+  const werbungTab = <AdManagerSection reconnectUrl={home.oauth?.reconnectUrl || oauthFallbackUrl} />;
 
   const tabs: VerwaltungTabDef[] = [
     { id: 'konto', label: 'Konto & Verbindungen', icon: User, render: () => kontoTab },

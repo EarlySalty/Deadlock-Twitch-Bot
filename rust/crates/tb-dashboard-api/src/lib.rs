@@ -389,6 +389,10 @@ fn build_authed_router_with_analysis_store(
             post(social_media::autopilot_queue_cancel_handler),
         )
         .route(
+            "/social-media/api/autopilot/queue/{job_id}/resolve",
+            post(social_media::autopilot_queue_resolve_handler),
+        )
+        .route(
             "/social-media/api/autopilot/pool",
             get(social_media::autopilot::pool_handler),
         )
@@ -1257,6 +1261,11 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
             "/twitch/api/admin/config/operating",
             get(handlers::admin_operating_config::get_handler)
                 .post(handlers::admin_operating_config::save_handler),
+        )
+        .route(
+            "/twitch/api/admin/config/operating/settings",
+            get(handlers::admin_operating_config::settings_get_handler)
+                .put(handlers::admin_operating_config::settings_save_handler),
         )
         .route("/twitch/api/admin/audit-log", get(admin_audit_log::handler))
         .route(

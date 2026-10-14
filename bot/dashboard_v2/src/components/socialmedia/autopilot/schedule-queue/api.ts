@@ -12,6 +12,7 @@ export interface ScheduleSettings {
   lead_time_hours: number;
   timezone: string;
   schedule_slots: WeeklySlot[];
+  target_platforms: string[];
 }
 
 export type SchedulePatch = Partial<ScheduleSettings>;
@@ -32,6 +33,7 @@ export interface QueueJob {
   started_at: string | null;
   last_error: string | null;
   review_reasons: string[];
+  review_explanation: string | null;
 }
 
 export interface ScheduleQueueSnapshot {
@@ -41,7 +43,10 @@ export interface ScheduleQueueSnapshot {
   jobs: QueueJob[];
   review_count: number;
   production_hold: ProductionHold;
+  connected_platforms: string[];
 }
+
+export type ReviewDecision = 'process' | 'skip';
 
 export interface ScheduleQueueApi {
   load(twitchUserId?: string, signal?: AbortSignal): Promise<ScheduleQueueSnapshot>;
@@ -49,6 +54,7 @@ export interface ScheduleQueueApi {
   reorder(jobIds: number[], twitchUserId?: string): Promise<ScheduleQueueSnapshot>;
   next(jobId: number, twitchUserId?: string): Promise<ScheduleQueueSnapshot>;
   cancel(jobId: number, twitchUserId?: string): Promise<ScheduleQueueSnapshot>;
+  resolve(jobId: number, action: ReviewDecision, note: string, twitchUserId?: string): Promise<ScheduleQueueSnapshot>;
 }
 
 const PREFIX = '/twitch/social-media/api/autopilot';
@@ -75,6 +81,12 @@ export const scheduleQueueApi: ScheduleQueueApi = {
     return fetchJson(`${PREFIX}/queue/${jobId}/next`, withCookieCredentials({
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ twitch_user_id: twitchUserId }),
+    }));
+  },
+  resolve(jobId, action, note, twitchUserId) {
+    return fetchJson(`${PREFIX}/queue/${jobId}/resolve`, withCookieCredentials({
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ twitch_user_id: twitchUserId, action, note }),
     }));
   },
   cancel(jobId, twitchUserId) {

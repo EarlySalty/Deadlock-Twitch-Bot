@@ -1,4 +1,4 @@
-import { useT } from "@/context/LanguageContext";
+import { useLanguage, useT } from "@/context/LanguageContext";
 import {
   filterDescription,
   importStatusLabel,
@@ -8,10 +8,13 @@ import type { ImportJob } from "./types";
 
 export function ImportProgress({ job }: { job: ImportJob }) {
   const t = useT();
+  const { locale } = useLanguage();
   const incomplete =
     job.incomplete_windows.length > 0 || job.status === "incomplete";
   return (
     <div className="import-pool-progress" data-import-status={job.status}>
+      <p className="import-pool-result">{t("{count} Clips im Clip-Vorrat erfasst", { count: job.persisted_count })}</p>
+      <details><summary>{t("Importdetails")}</summary>
       <p
         className={
           incomplete || job.status === "error"
@@ -24,13 +27,13 @@ export function ImportProgress({ job }: { job: ImportJob }) {
       </p>
       <p className="import-pool-help">
         {t("Festgelegter Zeitraum")}:{" "}
-        {t(filterDescription(job.clip_date_filter))}. {job.timezone}
+        {filterDescription(job.clip_date_filter, t)}. {job.timezone}
       </p>
-      <p className="import-pool-help">
-        {t("Erfassung von")} {localTimestamp(job.started_at, job.timezone)}{" "}
-        {t("bis")} {localTimestamp(job.ended_at, job.timezone)} (
+      {job.clip_date_filter.kind === "all" ? <p className="import-pool-help">{t("Alle verfügbaren Clips")}</p> : <p className="import-pool-help">
+        {t("Erfassung von")} {localTimestamp(job.started_at, job.timezone, locale)}{" "}
+        {t("bis")} {localTimestamp(job.ended_at, job.timezone, locale)} (
         {t("Endzeitpunkt ausgeschlossen")}).
-      </p>
+      </p>}
       <dl className="import-pool-counts">
         <div>
           <dt>{t("Neu im Pool gespeichert")}</dt>
@@ -61,19 +64,19 @@ export function ImportProgress({ job }: { job: ImportJob }) {
       {job.active_window && (
         <p className="import-pool-help">
           {t("Aktives Zeitfenster")}:{" "}
-          {localTimestamp(job.active_window.start, job.timezone)} {t("bis")}{" "}
-          {localTimestamp(job.active_window.end, job.timezone)}.{" "}
+          {localTimestamp(job.active_window.start, job.timezone, locale)} {t("bis")}{" "}
+          {localTimestamp(job.active_window.end, job.timezone, locale)}.{" "}
           {job.active_window.pages} {t("Seiten abgerufen")}.
         </p>
       )}
       {job.next_retry_at && (
         <p>
           {t("Nächster Versuch frühestens")}:{" "}
-          {localTimestamp(job.next_retry_at, job.timezone)}
+          {localTimestamp(job.next_retry_at, job.timezone, locale)}
         </p>
       )}
       {job.last_error && (
-        <p className="import-pool-warning">{job.last_error}</p>
+        <p className="import-pool-warning">{t(job.last_error)}</p>
       )}
       {incomplete && (
         <div className="import-pool-warning">
@@ -91,8 +94,8 @@ export function ImportProgress({ job }: { job: ImportJob }) {
               <ul>
                 {job.incomplete_windows.map((window, index) => (
                   <li key={`${window.start}-${window.end}-${index}`}>
-                    {localTimestamp(window.start, job.timezone)} {t("bis")}{" "}
-                    {localTimestamp(window.end, job.timezone)} (
+                    {localTimestamp(window.start, job.timezone, locale)} {t("bis")}{" "}
+                    {localTimestamp(window.end, job.timezone, locale)} (
                     {t("Endzeitpunkt ausgeschlossen")})
                   </li>
                 ))}
@@ -101,6 +104,7 @@ export function ImportProgress({ job }: { job: ImportJob }) {
           )}
         </div>
       )}
+      </details>
     </div>
   );
 }

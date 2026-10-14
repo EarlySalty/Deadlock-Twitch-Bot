@@ -2,6 +2,7 @@ use crate::{
     dashboard_options::BrainClientMode,
     file::{ErrorKind, FileError, Schema, MAX_CONFIG_BYTES},
     global::Database,
+    settings_catalog::{self, CatalogError, CatalogResponse, ChangeRequest},
     BotConfigSnapshot,
 };
 use serde::{Deserialize, Deserializer, Serialize};
@@ -99,7 +100,7 @@ pub struct SavedConfig {
     pub revision: String,
 }
 
-fn revision(text: &str) -> String {
+pub(crate) fn revision(text: &str) -> String {
     Sha256::digest(text.as_bytes())
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -236,13 +237,7 @@ fn save_brain_at(
     expected_revision: &str,
     patch: &BrainPatch,
 ) -> Result<BrainInspection, EditError> {
-    if expected_revision.len() != 64
-        || !expected_revision
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-    {
-        return Err(FileError::invalid("expected_revision").into());
-    }
+    valid_revision(expected_revision)?;
     if patch.bot_brain_chat_enabled.is_none()
         && patch.bot_brain_client.is_none()
         && patch.dashboard_brain_client.is_none()
@@ -339,6 +334,102 @@ fn save_brain_at(
         Ok(())
     })?;
     inspect_saved(&saved)
+}
+
+#[derive(Serialize)]
+pub struct SocialAiInspection {
+    revision: String,
+    social_ai: Option<toml::Table>,
+}
+
+fn inspect_social_ai_saved(saved: &SavedConfig) -> SocialAiInspection {
+    SocialAiInspection {
+        revision: saved.revision.clone(),
+        social_ai: saved.snapshot.settings().social_ai.clone(),
+    }
+}
+
+pub fn inspect_social_ai(source: &Path) -> Result<SocialAiInspection, EditError> {
+    Ok(inspect_social_ai_saved(&read_saved(source)?.0))
+}
+
+pub fn save_social_ai(
+    expected_revision: &str,
+    section: &toml::Table,
+) -> Result<SocialAiInspection, EditError> {
+    save_social_ai_at(Path::new(BRAIN_CONFIG_PATH), expected_revision, section)
+}
+
+fn valid_revision(expected_revision: &str) -> Result<(), EditError> {
+    if expected_revision.len() != 64
+        || !expected_revision
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(FileError::invalid("expected_revision").into());
+    }
+    Ok(())
+}
+
+fn social_ai_text(section: &toml::Table) -> Result<String, EditError> {
+    if section.is_empty() {
+        return Err(FileError::invalid("social_ai").into());
+    }
+    let mut wrapper = toml::Table::new();
+    wrapper.insert("social_ai".to_owned(), toml::Value::Table(section.clone()));
+    toml::to_string(&wrapper).map_err(|_| FileError::invalid("social_ai").into())
+}
+
+fn save_social_ai_at(
+    source: &Path,
+    expected_revision: &str,
+    section: &toml::Table,
+) -> Result<SocialAiInspection, EditError> {
+    valid_revision(expected_revision)?;
+    let appended = social_ai_text(section)?;
+    let saved = save_with(source, expected_revision, |_, document| {
+        document.remove("social_ai");
+        let current = document.to_string();
+        let separator = if current.ends_with('\n') {
+            "\n"
+        } else {
+            "\n\n"
+        };
+        *document = format!("{current}{separator}{appended}")
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|_| EditError::Invalid(FileError::invalid("social_ai")))?;
+        Ok(())
+    })?;
+    Ok(inspect_social_ai_saved(&saved))
+}
+
+fn catalog_error(error: CatalogError) -> EditError {
+    match error {
+        CatalogError::StaleRevision => EditError::Conflict,
+        CatalogError::Rejected(error) => EditError::Invalid(error),
+        CatalogError::InvalidValue(path) => FileError::invalid(path).into(),
+        CatalogError::UnknownPath | CatalogError::InvalidRequest => {
+            FileError::invalid("settings_catalog").into()
+        }
+        CatalogError::InvalidDocument => FileError::new(ErrorKind::InvalidDocument).into(),
+    }
+}
+
+pub fn inspect_catalog(source: &Path) -> Result<CatalogResponse, EditError> {
+    let (_, text, _) = read_saved(source)?;
+    settings_catalog::read_catalog(&text).map_err(catalog_error)
+}
+
+pub fn save_catalog(
+    source: &Path,
+    request: &ChangeRequest,
+    check: impl FnOnce(&str) -> Result<(), EditError>,
+) -> Result<SavedConfig, EditError> {
+    valid_revision(&request.revision)?;
+    save_with(source, &request.revision, |_, document| {
+        settings_catalog::apply_to_document(document, &request.changes).map_err(catalog_error)?;
+        check(&document.to_string())
+    })
 }
 
 fn replace_value(
@@ -482,6 +573,40 @@ fn same_metadata(left: &Metadata, right: &Metadata) -> bool {
     }
 }
 
+fn write_backup(directory: &Path, original: &str, metadata: &Metadata) -> Result<(), EditError> {
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let temporary = directory.join(format!(
+        ".bot.toml.{}.{}.previous.tmp",
+        std::process::id(),
+        SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut create = OpenOptions::new();
+    create.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        create.mode(0o600);
+    }
+    let mut file = create.open(&temporary).map_err(|_| EditError::Io)?;
+    let result = (|| {
+        file.write_all(original.as_bytes())
+            .map_err(|_| EditError::Io)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{fchown, MetadataExt};
+            fchown(&file, Some(metadata.uid()), Some(metadata.gid())).map_err(|_| EditError::Io)?;
+        }
+        file.set_permissions(metadata.permissions())
+            .map_err(|_| EditError::Io)?;
+        file.sync_all().map_err(|_| EditError::Io)?;
+        fs::rename(&temporary, directory.join(".bot.toml.previous")).map_err(|_| EditError::Io)
+    })();
+    if temporary.exists() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
 fn save_with(
     source: &Path,
     expected_revision: &str,
@@ -545,6 +670,7 @@ fn save_with(
         if !same_metadata(&lock.metadata().map_err(|_| EditError::Io)?, &named_lock) {
             return Err(EditError::UnsafeLocation);
         }
+        write_backup(directory, &original, &metadata)?;
         fs::rename(&temporary, &source).map_err(|_| EditError::Io)?;
         File::open(directory)
             .and_then(|f| f.sync_all())
@@ -1114,5 +1240,89 @@ pool_max=17
         fs::rename(&fifo, &lock).unwrap();
         assert!(save_brain_at(&fixture.path(), &hash, &patch).is_err());
         assert_eq!(fs::read_to_string(fixture.path()).unwrap(), CONFIG);
+    }
+
+    #[test]
+    fn social_ai_ersetzt_nur_den_abschnitt_und_sichert_den_vorstand() {
+        let fixture = Fixture::new(CONFIG);
+        let original = load_saved(&fixture.path()).unwrap();
+        let first: toml::Table = toml::from_str(
+            "schema_version = 1\n[provider]\nmodel = \"a\"\n[runtime.copy]\nmax_hashtags = 30\n",
+        )
+        .unwrap();
+        let saved = save_social_ai_at(&fixture.path(), &original.revision, &first).unwrap();
+        assert_eq!(saved.social_ai.as_ref(), Some(&first));
+        assert_eq!(
+            fs::read_to_string(fixture.0.join(".bot.toml.previous")).unwrap(),
+            CONFIG
+        );
+        let text = fs::read_to_string(fixture.path()).unwrap();
+        assert!(text.starts_with(CONFIG));
+        assert!(text.contains("mode=\"legacy\" # Ausgangsmodus"));
+        let second: toml::Table =
+            toml::from_str("schema_version = 1\n[provider]\nmodel = \"b\"\n").unwrap();
+        assert!(matches!(
+            save_social_ai_at(&fixture.path(), &original.revision, &second),
+            Err(EditError::Conflict)
+        ));
+        let current = load_saved(&fixture.path()).unwrap();
+        let replaced = save_social_ai_at(&fixture.path(), &current.revision, &second).unwrap();
+        assert_eq!(replaced.social_ai.as_ref(), Some(&second));
+        let reloaded = load_saved(&fixture.path()).unwrap();
+        assert_eq!(
+            reloaded.snapshot.settings().social_ai.as_ref(),
+            Some(&second)
+        );
+        assert_eq!(
+            unselected_social(&reloaded.snapshot),
+            unselected_social(&original.snapshot)
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.0.join(".bot.toml.previous")).unwrap(),
+            text
+        );
+        assert!(
+            save_social_ai_at(&fixture.path(), &reloaded.revision, &toml::Table::new()).is_err()
+        );
+    }
+
+    fn unselected_social(snapshot: &BotConfigSnapshot) -> serde_json::Value {
+        let mut value = serde_json::to_value(snapshot.settings()).unwrap();
+        value.as_object_mut().unwrap().remove("social_ai");
+        value
+    }
+
+    #[test]
+    fn katalog_speichert_ueber_den_geprueften_editor() {
+        let fixture = Fixture::new(CONFIG);
+        let inspection = inspect_catalog(&fixture.path()).unwrap();
+        let request: ChangeRequest = serde_json::from_value(serde_json::json!({
+            "revision": inspection.revision,
+            "changes": [{"path": "bot.brain_client.timeout_ms", "value": "9000"}]
+        }))
+        .unwrap();
+        let rejected = save_catalog(&fixture.path(), &request, |_| {
+            Err(FileError::invalid("social_ai").into())
+        });
+        assert!(matches!(rejected, Err(EditError::Invalid(_))));
+        assert_eq!(
+            load_saved(&fixture.path()).unwrap().revision,
+            inspection.revision
+        );
+        let saved = save_catalog(&fixture.path(), &request, |candidate| {
+            assert!(candidate.contains("timeout_ms=9000"));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            saved.snapshot.settings().bot.brain_client.timeout_ms,
+            Some(9000)
+        );
+        let text = fs::read_to_string(fixture.path()).unwrap();
+        assert!(text.contains("mode=\"legacy\" # Ausgangsmodus"));
+        assert!(matches!(
+            save_catalog(&fixture.path(), &request, |_| Ok(())),
+            Err(EditError::Conflict)
+        ));
     }
 }

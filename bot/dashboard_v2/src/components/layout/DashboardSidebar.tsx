@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { Rise } from '@/motion/Rise';
@@ -15,6 +15,7 @@ import {
 } from '@/preview/routes';
 import { useOnboarding } from '@/components/onboarding/onboardingState';
 import { FeedbackBadge } from '@/components/feedback/FeedbackBadge';
+import { useT } from '@/context/LanguageContext';
 import {
   BarChart3,
   BookOpen,
@@ -24,6 +25,7 @@ import {
   Film,
   Home,
   Loader2,
+  Menu,
   MonitorPlay,
   MessageSquare,
   Radio,
@@ -96,25 +98,29 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
     canAccessAnalyticsDashboard,
     profileReady,
   } = useDashboardProfile();
+  const t = useT();
   const queryClient = useQueryClient();
   const onboarding = useOnboarding();
   const [avatarFailed, setAvatarFailed] = useState(false);
+  const [navigationOpen, setNavigationOpen] = useState(false);
+  const navigationId = useId();
+  const compactNavigation = activeRoute === 'social';
   const shownAvatar = avatarFailed ? null : avatarUrl;
   const canSeeChallenges = Boolean(
     authStatus?.authenticated && authStatus.twitchUserId && (authStatus.isAdmin || authStatus.partnerStatus === 'active'),
   );
 
   const mainNavItems: SidebarNavItem[] = [
-    ...(adminEligible && adminMode ? [{ href: '/twitch/analyse?view=category', label: 'Deadlock weltweit', icon: BarChart3, active: activeRoute === 'category' }] : []),
-    { href: PREVIEW_HOME_ROUTE, label: 'Home', icon: Home, active: activeRoute === 'home' },
+    ...(adminEligible && adminMode ? [{ href: '/twitch/analyse?view=category', label: t('Deadlock weltweit'), icon: BarChart3, active: activeRoute === 'category' }] : []),
+    { href: PREVIEW_HOME_ROUTE, label: t('Home'), icon: Home, active: activeRoute === 'home' },
     ...(canSeeChallenges
-      ? [{ href: '/twitch/challenges', label: 'Rangliste & Erfolge', icon: Trophy, active: activeRoute === 'challenges' }]
+      ? [{ href: '/twitch/challenges', label: t('Rangliste & Erfolge'), icon: Trophy, active: activeRoute === 'challenges' }]
       : []),
     ...(canAccessAnalyticsDashboard
       ? [
           {
             href: analyticsTabHref('overview'),
-            label: 'Analyse',
+            label: t('Analyse'),
             icon: BarChart3,
             active: activeRoute === 'analyse',
           },
@@ -122,38 +128,38 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
       : []),
     {
       href: '/twitch/social-media',
-      label: 'Social-Media-Manager',
+      label: t('Social-Media-Manager'),
       icon: Film,
       active: activeRoute === 'social',
     },
-    { href: PREVIEW_UPLINK_ROUTE, label: 'Uplink', icon: Radio, active: activeRoute === 'uplink' },
+    { href: PREVIEW_UPLINK_ROUTE, label: t('Uplink'), icon: Radio, active: activeRoute === 'uplink' },
   ];
   const toolNavItems: SidebarNavItem[] = [
     {
       href: PREVIEW_VERWALTUNG_ROUTE,
-      label: 'Verwaltung',
+      label: t('Verwaltung'),
       icon: Settings,
       active: activeRoute === 'verwaltung',
     },
     {
       href: PREVIEW_OVERLAY_ROUTE,
-      label: 'Stream-Overlay',
+      label: t('Stream-Overlay'),
       icon: MonitorPlay,
       active: activeRoute === 'overlay',
     },
     {
       href: PREVIEW_TITLE_ROUTE,
-      label: 'Titel-Studio',
+      label: t('Titel-Studio'),
       icon: Sparkles,
       active: activeRoute === 'title',
     },
     {
       href: PREVIEW_PRICING_ROUTE,
-      label: `Plan: ${planName}`,
+      label: t('Plan: {plan}', { plan: planName }),
       icon: BadgeCheck,
       active: activeRoute === 'pricing',
     },
-    { href: PREVIEW_CHANGELOG_ROUTE, label: 'Changelog', icon: FileText },
+    { href: PREVIEW_CHANGELOG_ROUTE, label: t('Changelog'), icon: FileText },
   ];
 
   return (
@@ -185,11 +191,19 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
           </div>
         </div>
 
+        {compactNavigation && <button
+          type="button"
+          aria-expanded={navigationOpen}
+          aria-controls={navigationId}
+          onClick={() => setNavigationOpen(open => !open)}
+          className="flex min-h-11 w-full items-center justify-between rounded-xl border border-border px-3 py-2 text-sm text-text-secondary lg:hidden"
+        ><span>Navigation</span><Menu className="h-4 w-4" aria-hidden /></button>}
+        <div id={navigationId} className={`space-y-4 ${compactNavigation && !navigationOpen ? 'hidden lg:block' : ''}`}>
         <div className="border-t border-border" />
 
         <div className="space-y-2">
           <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
-            Main
+            {t('Main')}
           </div>
           <nav
             data-tour-id="tour-nav"
@@ -210,7 +224,7 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
 
         <div className="space-y-2">
           <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
-            Tools
+            {t('Tools')}
           </div>
           <div className="flex gap-2 overflow-x-auto pb-1 lg:block lg:space-y-1 lg:overflow-visible lg:pb-0">
             {toolNavItems.map((item, index) => (
@@ -231,12 +245,12 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
             <div className="border-t border-border" />
             <div className="space-y-2">
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
-                Admin
+                {t('Admin')}
               </div>
               <button
                 type="button"
                 onClick={() =>
-                  (!document.querySelector('[data-unsaved="true"]') || window.confirm('Ungespeicherte Änderungen verwerfen und die Ansicht wechseln?')) && adminModeMutation.mutate(!adminMode, {
+                  (!document.querySelector('[data-unsaved="true"]') || window.confirm(t('Ungespeicherte Änderungen verwerfen und die Ansicht wechseln?'))) && adminModeMutation.mutate(!adminMode, {
                     onSuccess: () =>
                       queryClient.invalidateQueries({
                         predicate: (query) => {
@@ -266,12 +280,12 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
                 ) : (
                   <ShieldCheck className="h-4 w-4 shrink-0" />
                 )}
-                {adminMode ? 'Admin-Modus beenden' : 'Admin-Modus aktivieren'}
+                {adminMode ? t('Admin-Modus beenden') : t('Admin-Modus aktivieren')}
               </button>
               <p className="text-[11px] leading-snug text-text-secondary">
                 {adminMode
-                  ? 'Voller Zugriff aktiv, nicht die echte Nutzer-Ansicht.'
-                  : 'Du siehst das Dashboard wie ein normaler Nutzer.'}
+                  ? t('Voller Zugriff aktiv, nicht die echte Nutzer-Ansicht.')
+                  : t('Du siehst das Dashboard wie ein normaler Nutzer.')}
               </p>
             </div>
           </>
@@ -280,14 +294,14 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
         <div className="border-t border-border" />
         <div data-tour-id="tour-help" className="space-y-2">
           <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
-            Hilfe
+            {t('Hilfe')}
           </div>
           <a
             href="/twitch/hilfe"
             className="flex items-center gap-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-sm font-medium text-text-secondary transition-colors hover:border-border-hover hover:text-white"
           >
             <BookOpen className="h-4 w-4" />
-            Hilfe &amp; Einrichtung
+            {t('Hilfe & Einrichtung')}
           </a>
           {onboarding.enabled && <button
             type="button"
@@ -299,10 +313,11 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
             className="flex w-full items-center gap-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-sm font-medium text-text-secondary transition-colors hover:border-border-hover hover:text-white"
           >
             <RotateCcw className="h-4 w-4" />
-            Tour erneut zeigen
+            {t('Tour erneut zeigen')}
           </button>}
-          <a href="/twitch/feedback" aria-current={activeRoute === 'feedback' ? 'page' : undefined} className="flex min-h-11 items-center gap-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-sm font-medium text-text-secondary hover:text-white"><MessageSquare className="h-4 w-4 shrink-0" /><span className="flex-1">Kritik &amp; Wünsche</span><FeedbackBadge isAdmin={adminMode} /></a>
-          <a href="/twitch/faq" className="flex items-center gap-2 px-3 py-2 text-sm text-text-secondary hover:text-white"><CircleHelp className="h-4 w-4 shrink-0" />Häufige Fragen</a>
+          <a href="/twitch/feedback" aria-current={activeRoute === 'feedback' ? 'page' : undefined} className="flex min-h-11 items-center gap-2 rounded-xl border border-border bg-background/60 px-3 py-2 text-sm font-medium text-text-secondary hover:text-white"><MessageSquare className="h-4 w-4 shrink-0" /><span className="flex-1">{t('Kritik & Wünsche')}</span><FeedbackBadge isAdmin={adminMode} /></a>
+          <a href="/twitch/faq" className="flex items-center gap-2 px-3 py-2 text-sm text-text-secondary hover:text-white"><CircleHelp className="h-4 w-4 shrink-0" />{t('Häufige Fragen')}</a>
+        </div>
         </div>
       </div>
     </Rise>

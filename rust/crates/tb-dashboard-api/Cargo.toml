@@ -57,7 +57,9 @@ tb-transport-twitch = { workspace = true }
 tb-vod-archive = { workspace = true }
 
 [dev-dependencies]
+tb-llm    = { workspace = true, features = ["test-fixtures"] }
 tempfile = "3"
+toml      = { version = "1.1.6", default-features = false, features = ["display", "serde", "parse"] }
 tokio     = { workspace = true, features = ["net", "rt-multi-thread", "test-util"] }
 tokio-tungstenite = "0.30"
 tower     = { workspace = true, features = ["util"] }

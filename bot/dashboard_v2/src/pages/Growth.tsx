@@ -10,9 +10,10 @@ import { TagPerformanceChart } from '@/components/charts/TagPerformance';
 import { RaidRetention } from '@/components/charts/RaidRetention';
 import { PlanGateCard } from '@/components/cards/PlanGateCard';
 import { NoDataCard } from '@/components/cards/NoDataCard';
-import { formatNumber, formatPercent, formatDate } from '@/utils/formatters';
+import { formatPercent } from '@/utils/formatters';
 import { analyticsMonthsForDays } from '@/utils/zeitraum';
 import type { MonthlyStats, TimeRange, IncomingRaid } from '@/types/analytics';
+import { useLanguage } from '@/context/LanguageContext';
 
 interface GrowthProps {
   streamer: string;
@@ -20,6 +21,7 @@ interface GrowthProps {
 }
 
 export function Growth({ streamer, days }: GrowthProps) {
+  const { t, locale } = useLanguage();
   const months = analyticsMonthsForDays(days);
   const { data: monthlyData, isLoading: loadingMonthly } = useQuery<MonthlyStats[]>({
     queryKey: ['monthlyStats', streamer, months],
@@ -30,7 +32,6 @@ export function Growth({ streamer, days }: GrowthProps) {
   const { data: tagResponse } = useTagAnalysisExtended(streamer, days);
   const { data: titleResponse } = useTitlePerformance(streamer, days);
 
-  // Extract tags/titles and peer benchmarks from response wrappers
   const tagData = tagResponse?.tags ?? null;
   const titleData = titleResponse?.titles ?? null;
   const tagPeerBenchmark = tagResponse?.peerBenchmark ?? null;
@@ -41,14 +42,14 @@ export function Growth({ streamer, days }: GrowthProps) {
   const chartData = useMemo(() => {
     if (!monthlyData) return [];
     return [...monthlyData].reverse().map(m => ({
-      name: `${m.monthLabel} ${m.year}`,
+      name: `${t(m.monthLabel)} ${m.year}`,
       hoursWatched: Math.round(m.totalHoursWatched),
       airtime: Math.round(m.totalAirtime),
       avgViewers: Math.round(m.avgViewers),
       followers: m.followerDelta,
       streams: m.streamCount,
     }));
-  }, [monthlyData]);
+  }, [monthlyData, t]);
 
   if (loadingMonthly) {
     return (
@@ -62,14 +63,13 @@ export function Growth({ streamer, days }: GrowthProps) {
     return (
       <div className="flex flex-col items-center justify-center h-64">
         <AlertCircle className="w-12 h-12 text-text-secondary mb-4" />
-        <p className="text-text-secondary text-lg">Keine Wachstumsdaten verfügbar</p>
+        <p className="text-text-secondary text-lg">{t('Keine Wachstumsdaten verfügbar')}</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      {/* Monthly Overview Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         {monthlyData.slice(0, 4).map((month, i) => (
           <motion.div
@@ -80,22 +80,22 @@ export function Growth({ streamer, days }: GrowthProps) {
             className={`panel-card rounded-2xl p-5 ${i === 0 ? 'ring-2 ring-primary/30' : ''}`}
           >
             <div className="flex items-center justify-between mb-3">
-              <span className="text-sm text-text-secondary">{month.monthLabel} {month.year}</span>
-              {i === 0 && <span className="text-xs bg-primary/20 text-primary px-2 py-0.5 rounded">Aktuell</span>}
+              <span className="text-sm text-text-secondary">{t(month.monthLabel)} {month.year}</span>
+              {i === 0 && <span className="text-xs bg-primary/20 text-primary px-2 py-0.5 rounded">{t('Aktuell')}</span>}
             </div>
             <div className="space-y-2">
               <MetricRow
-                label="Hours Watched"
-                value={month.totalHoursWatched.toLocaleString('de-DE', { maximumFractionDigits: 0 })}
+                label={t('Hours Watched')}
+                value={month.totalHoursWatched.toLocaleString(locale, { maximumFractionDigits: 0 })}
                 unit="h"
               />
               <MetricRow
-                label="Ø Viewer"
-                value={month.avgViewers.toLocaleString('de-DE', { maximumFractionDigits: 0 })}
+                label={t('Ø Viewer')}
+                value={month.avgViewers.toLocaleString(locale, { maximumFractionDigits: 0 })}
               />
               <MetricRow
-                label="Follower"
-                value={(month.followerDelta >= 0 ? '+' : '') + month.followerDelta.toLocaleString('de-DE')}
+                label={t('Follower')}
+                value={(month.followerDelta >= 0 ? '+' : '') + month.followerDelta.toLocaleString(locale)}
                 isPositive={month.followerDelta >= 0}
               />
               <MetricRow
@@ -107,14 +107,13 @@ export function Growth({ streamer, days }: GrowthProps) {
         ))}
       </div>
 
-      {/* Hours Watched Trend */}
       <Rise
         step={{ seconds: 0.2 }}
         className="panel-card rounded-2xl p-6"
       >
         <div className="flex items-center gap-3 mb-6">
           <TrendingUp className="w-6 h-6 text-primary" />
-          <h2 className="text-xl font-bold text-white">Wachstumstrend ({months} Monate)</h2>
+          <h2 className="text-xl font-bold text-white">{t('Wachstumstrend ({months} Monate)', { months })}</h2>
         </div>
 
         <div className="h-[300px]">
@@ -135,7 +134,7 @@ export function Growth({ streamer, days }: GrowthProps) {
               <Line
                 type="monotone"
                 dataKey="hoursWatched"
-                name="Hours Watched"
+                name={t('Hours Watched')}
                 stroke="var(--color-primary)"
                 strokeWidth={2}
                 dot={{ fill: 'var(--color-primary)' }}
@@ -143,7 +142,7 @@ export function Growth({ streamer, days }: GrowthProps) {
               <Line
                 type="monotone"
                 dataKey="avgViewers"
-                name="Ø Viewer"
+                name={t('Ø Viewer')}
                 stroke="#00D9FF"
                 strokeWidth={2}
                 dot={{ fill: '#00D9FF' }}
@@ -153,8 +152,7 @@ export function Growth({ streamer, days }: GrowthProps) {
         </div>
       </Rise>
 
-      {/* Tag & Title Performance */}
-      <PlanGateCard featureId="title_performance" title="Titel-Performance">
+      <PlanGateCard featureId="title_performance" title={t('Titel-Performance')}>
         {(tagData || titleData) && (
           <TagPerformanceChart
             tagData={tagData ?? []}
@@ -164,19 +162,17 @@ export function Growth({ streamer, days }: GrowthProps) {
         )}
 
         {!tagData && !titleData && (
-          <NoDataCard message="Keine Tag- oder Titel-Performance-Daten verfügbar" />
+          <NoDataCard message={t('Keine Tag- oder Titel-Performance-Daten verfügbar')} />
         )}
       </PlanGateCard>
 
-      {/* Raid Retention */}
-      <PlanGateCard featureId="raid_retention" title="Raid-Retention">
+      <PlanGateCard featureId="raid_retention" title={t('Raid-Retention')}>
         <div>
-          <h2 className="text-lg font-semibold text-white mb-4">Raid-Retention</h2>
+          <h2 className="text-lg font-semibold text-white mb-4">{t('Raid-Retention')}</h2>
           <RaidRetention data={raidRetentionData} />
         </div>
       </PlanGateCard>
 
-      {/* ── Incoming Raids Section ── */}
       <IncomingRaidsSection raidAnalyticsData={raidAnalyticsData} />
     </div>
   );
@@ -199,8 +195,6 @@ function MetricRow({ label, value, unit, isPositive }: MetricRowProps) {
     </div>
   );
 }
-
-// ── Incoming Raids Section ──
 
 function boostColor(pct: number | null): string {
   if (pct === null) return 'text-text-secondary';
@@ -252,19 +246,25 @@ interface IncomingRaidsSectionProps {
 }
 
 function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) {
+  const { t, locale } = useLanguage();
+  const formatNumber = (value: number | null | undefined, decimals = 0): string =>
+    value == null ? '-' : value.toLocaleString(locale, {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    });
   const incomingRaids = raidAnalyticsData?.incoming_raids ?? [];
   const summary = raidAnalyticsData?.incoming_summary;
 
   if (!raidAnalyticsData) {
-    return null; // Still loading or no data
+    return null;
   }
 
   if (incomingRaids.length === 0) {
     return (
       <Rise>
         <NoDataCard
-          message="Keine eingehenden Raids"
-          submessage="Es wurden noch keine Raids zu deinem Kanal erkannt."
+          message={t('Keine eingehenden Raids')}
+          submessage={t('Es wurden noch keine Raids zu deinem Kanal erkannt.')}
           icon={ArrowDownLeft}
         />
       </Rise>
@@ -273,20 +273,19 @@ function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) 
 
   const topRaiders = computeTopRaiders(incomingRaids);
   const balanceData = summary ? [
-    { name: 'Gesendet', value: summary.raid_balance.sent, fill: 'var(--color-primary)' },
-    { name: 'Empfangen', value: summary.raid_balance.received, fill: '#00D9FF' },
+    { name: t('Gesendet'), value: summary.raid_balance.sent, fill: 'var(--color-primary)' },
+    { name: t('Empfangen'), value: summary.raid_balance.received, fill: '#00D9FF' },
   ] : [];
 
   return (
     <>
-      {/* 1. Raid-Bilanz */}
       {summary && (
         <Rise
           className="bg-card rounded-xl border border-border p-5"
         >
           <div className="flex items-center gap-3 mb-4">
             <ArrowDownLeft className="w-5 h-5 text-success" />
-            <h3 className="text-lg font-bold text-white">Raid-Bilanz</h3>
+            <h3 className="text-lg font-bold text-white">{t('Raid-Bilanz')}</h3>
           </div>
           <div className="h-[200px]">
             <ResponsiveContainer width="100%" height="100%">
@@ -314,19 +313,18 @@ function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) 
           <div className="flex justify-center gap-6 mt-2 text-sm">
             <span className="flex items-center gap-2">
               <ArrowUpRight className="w-4 h-4 text-primary" />
-              <span className="text-text-secondary">Gesendet:</span>
+              <span className="text-text-secondary">{t('Gesendet:')}</span>
               <span className="text-white font-medium">{formatNumber(summary.raid_balance.sent)}</span>
             </span>
             <span className="flex items-center gap-2">
               <ArrowDownLeft className="w-4 h-4 text-success" />
-              <span className="text-text-secondary">Empfangen:</span>
+              <span className="text-text-secondary">{t('Empfangen:')}</span>
               <span className="text-white font-medium">{formatNumber(summary.raid_balance.received)}</span>
             </span>
           </div>
         </Rise>
       )}
 
-      {/* 2. Raid-Impact Zusammenfassung (KPI cards) */}
       {summary && (
         <Rise
           className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4"
@@ -335,14 +333,14 @@ function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) 
             <div className="w-10 h-10 rounded-lg bg-primary/10 text-primary flex items-center justify-center mb-3">
               <Users className="w-5 h-5" />
             </div>
-            <div className="text-sm text-text-secondary mb-1">Ø Viewer empfangen</div>
+            <div className="text-sm text-text-secondary mb-1">{t('Ø Viewer empfangen')}</div>
             <div className="text-xl font-bold text-white">{formatNumber(summary.avg_viewers_received, 1)}</div>
           </div>
           <div className="bg-card rounded-xl border border-border p-4">
             <div className="w-10 h-10 rounded-lg bg-success/10 text-success flex items-center justify-center mb-3">
               <TrendingUp className="w-5 h-5" />
             </div>
-            <div className="text-sm text-text-secondary mb-1">Ø Boost</div>
+            <div className="text-sm text-text-secondary mb-1">{t('Ø Boost')}</div>
             <div className={`text-xl font-bold ${boostColor(summary.avg_boost_pct)}`}>
               {summary.avg_boost_pct !== null ? formatPercent(summary.avg_boost_pct) : '-'}
             </div>
@@ -351,7 +349,7 @@ function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) 
             <div className="w-10 h-10 rounded-lg bg-accent/10 text-accent flex items-center justify-center mb-3">
               <Clock className="w-5 h-5" />
             </div>
-            <div className="text-sm text-text-secondary mb-1">Ø 15m Retention</div>
+            <div className="text-sm text-text-secondary mb-1">{t('Ø 15m Retention')}</div>
             <div className={`text-xl font-bold ${retentionColorIncoming(summary.avg_retention_15m)}`}>
               {summary.avg_retention_15m !== null ? formatPercent(summary.avg_retention_15m) : '-'}
             </div>
@@ -360,7 +358,7 @@ function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) 
             <div className="w-10 h-10 rounded-lg bg-warning/10 text-warning flex items-center justify-center mb-3">
               <Star className="w-5 h-5" />
             </div>
-            <div className="text-sm text-text-secondary mb-1">Bester Raider</div>
+            <div className="text-sm text-text-secondary mb-1">{t('Bester Raider')}</div>
             <div className="text-xl font-bold text-white truncate">
               {summary.best_raider ?? '-'}
             </div>
@@ -368,32 +366,31 @@ function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) 
         </Rise>
       )}
 
-      {/* 3. Incoming Raids Tabelle */}
       <Rise
         className="bg-card rounded-xl border border-border p-5"
       >
         <div className="flex items-center gap-3 mb-4">
           <ArrowDownLeft className="w-5 h-5 text-success" />
-          <h3 className="text-lg font-bold text-white">Eingehende Raids</h3>
+          <h3 className="text-lg font-bold text-white">{t('Eingehende Raids')}</h3>
           <span className="text-sm text-text-secondary ml-auto">{incomingRaids.length} Raids</span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border">
-                <th className="text-left py-2 text-text-secondary font-medium">Von</th>
-                <th className="text-left py-2 text-text-secondary font-medium">Datum</th>
-                <th className="text-right py-2 text-text-secondary font-medium">Viewer</th>
-                <th className="text-right py-2 text-text-secondary font-medium">Boost %</th>
-                <th className="text-right py-2 text-text-secondary font-medium">15m Ret.</th>
-                <th className="text-right py-2 text-text-secondary font-medium">Follows</th>
+                <th className="text-left py-2 text-text-secondary font-medium">{t('Von')}</th>
+                <th className="text-left py-2 text-text-secondary font-medium">{t('Datum')}</th>
+                <th className="text-right py-2 text-text-secondary font-medium">{t('Viewer')}</th>
+                <th className="text-right py-2 text-text-secondary font-medium">{t('Boost %')}</th>
+                <th className="text-right py-2 text-text-secondary font-medium">{t('15m Ret.')}</th>
+                <th className="text-right py-2 text-text-secondary font-medium">{t('Follows')}</th>
               </tr>
             </thead>
             <tbody>
               {incomingRaids.slice(0, 20).map((raid, i) => (
                 <tr key={`${raid.from_channel}-${raid.detected_at}-${i}`} className="border-b border-border/50 hover:bg-background/50">
                   <td className="py-2 text-white font-medium">{raid.from_channel}</td>
-                  <td className="py-2 text-text-secondary">{formatDate(raid.detected_at)}</td>
+                  <td className="py-2 text-text-secondary">{raid.detected_at ? new Date(raid.detected_at).toLocaleDateString(locale, { day: '2-digit', month: '2-digit', year: '2-digit' }) : '-'}</td>
                   <td className="py-2 text-right text-text-secondary">{formatNumber(raid.viewers_sent)}</td>
                   <td className={`py-2 text-right font-medium ${boostColor(raid.impact.boost_pct)}`}>
                     {raid.impact.boost_pct !== null ? `${raid.impact.boost_pct > 0 ? '+' : ''}${formatPercent(raid.impact.boost_pct)}` : '-'}
@@ -416,14 +413,13 @@ function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) 
         </div>
       </Rise>
 
-      {/* 4. Top Raiders */}
       {topRaiders.length > 0 && (
         <Rise
           className="bg-card rounded-xl border border-border p-5"
         >
           <div className="flex items-center gap-3 mb-4">
             <Crown className="w-5 h-5 text-warning" />
-            <h3 className="text-lg font-bold text-white">Top Raiders</h3>
+            <h3 className="text-lg font-bold text-white">{t('Top Raiders')}</h3>
           </div>
           <div className="space-y-3">
             {topRaiders.map((raider, i) => (
@@ -436,14 +432,16 @@ function IncomingRaidsSection({ raidAnalyticsData }: IncomingRaidsSectionProps) 
                 <div className="flex-1 min-w-0">
                   <div className="text-white font-medium truncate">{raider.from_channel}</div>
                   <div className="text-xs text-text-secondary">
-                    {raider.raid_count} Raid{raider.raid_count !== 1 ? 's' : ''} · Ø {formatNumber(raider.avg_viewers)} Viewer
+                    {raider.raid_count !== 1
+                      ? t('{count} Raids · Ø {viewers} Viewer', { count: raider.raid_count, viewers: formatNumber(raider.avg_viewers) })
+                      : t('{count} Raid · Ø {viewers} Viewer', { count: raider.raid_count, viewers: formatNumber(raider.avg_viewers) })}
                   </div>
                 </div>
                 <div className="text-right">
                   <div className={`text-sm font-medium ${boostColor(raider.avg_boost)}`}>
                     {raider.avg_boost !== null ? `${raider.avg_boost > 0 ? '+' : ''}${formatPercent(raider.avg_boost)}` : '-'}
                   </div>
-                  <div className="text-xs text-text-secondary">Ø Boost</div>
+                  <div className="text-xs text-text-secondary">{t('Ø Boost')}</div>
                 </div>
               </div>
             ))}

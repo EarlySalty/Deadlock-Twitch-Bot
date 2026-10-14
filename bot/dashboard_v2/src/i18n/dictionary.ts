@@ -13,6 +13,7 @@
 
 import { VOD_ARCHIVE_EN } from './vodArchive';
 import { SOCIAL_STUDIO_EN } from './socialStudio';
+import { EN_AREA_ENTRIES } from './en';
 
 export type Language = 'de' | 'en';
 
@@ -48,6 +49,7 @@ export const MESSAGE_TYPE_LABELS: Record<string, string> = {
 };
 
 const EN: Record<string, string> = {
+  ...EN_AREA_ENTRIES,
   ...VOD_ARCHIVE_EN,
   ...SOCIAL_STUDIO_EN,
   'Diesen Streamer für den eigenen Social-Media-Manager freischalten': 'Enable this streamer’s own social media manager',
@@ -132,7 +134,29 @@ const EN: Record<string, string> = {
   "Ungespeicherte Änderungen verwerfen?": "Discard unsaved changes?",
   "Deine Clip-Pipeline": "Your clip pipeline",
   "Auto-Pilot & Zeitplan": "Autopilot & schedule",
-  "Templates & Layouts": "Templates & layouts",
+  'Bisherige Pipeline': 'Existing pipeline',
+  'Die Übersicht ist nicht vollständig abrufbar. Bereits geladene Einträge bleiben sichtbar.': 'The overview could not be fully loaded. Entries already loaded remain visible.',
+  'Keine passenden Clips verfügbar': 'No suitable clips available',
+  'Wöchentliche Termine fehlen': 'No weekly slots configured',
+  'Eine Prüfung ist offen': 'A review is pending',
+  'Nächster Termin außerhalb des Vorlaufs': 'Next slot outside the production lead time',
+  'Neue Produktionen pausiert': 'New productions paused',
+  '{productions} Produktionen & Videos · {clips} Clip-Freigaben': '{productions} productions & videos · {clips} clip approvals',
+  'Video {id}': 'Video {id}',
+  'Der Auto-Pilot wartet auf deine Aktion': 'The autopilot is waiting for your action',
+  '{count} Produktionen & Videos prüfen': 'Review {count} productions & videos',
+  'Auftrag oder Videofreigabe prüfen': 'Review the production job or video approval',
+  'Geplant für {time}': 'Scheduled for {time}',
+  'Nächster freier Auto-Pilot-Termin': 'Next free autopilot slot',
+  '{mode} · {count} Posts pro Woche · steuert weiterhin die Clip-Freigaben in der Übersicht': '{mode} · {count} posts per week · still controls clip approvals in the overview',
+  'Freigabemodus, Plattformzeiten und Kategorien der bisherigen Clip-Pipeline': 'Approval mode, platform schedules and categories of the existing clip pipeline',
+  'Diese Einstellungen gelten weiter für Clips, die du in der Pipeline freigibst. Der Auto-Pilot oben nutzt seinen eigenen Zeitplan.': 'These settings still apply to clips approved in the pipeline. The autopilot above uses its own schedule.',
+  "Vorlagen & Layouts": "Templates & layouts",
+  'Gameplay': 'Gameplay',
+  '9:16 · HUD erhalten': '9:16 · HUD preserved',
+  'Das ganze Spielbild bleibt sichtbar, der Hintergrund füllt das Hochformat.': 'The entire gameplay frame stays visible, with a background filling the portrait format.',
+  'Deine Kamera sitzt über dem vollständigen Spielbild.': 'Your camera sits above the full gameplay frame.',
+  'Kamera und Spielbild untereinander, mit DDC-Trenner.': 'Camera and gameplay stacked vertically with a DDC divider.',
   "Aus guten Momenten werden deine nächsten Posts.": "Turn great moments into your next posts.",
   "Clip hinzufügen": "Add clip",
   "Dein Posting-Rhythmus": "Your posting rhythm",
@@ -270,7 +294,7 @@ const EN: Record<string, string> = {
   Einstellungen: 'Settings',
   'Auto-Pilot': 'Auto-pilot',
   'Konten & Einstellungen': 'Accounts & settings',
-  'Template & Layout': 'Template & layout',
+  'Vorlage & Layout': 'Template & layout',
   '9:16 Layout-Editor': '9:16 layout editor',
   'Lege den Standard-Ausschnitt für neue Clips fest. Einzelne Clips kannst du weiterhin separat anpassen.':
     'Set the default crop for new clips. You can still adjust individual clips separately.',
@@ -481,16 +505,17 @@ const EN: Record<string, string> = {
 
   // -- Analytics-Tab ------------------------------------------------------
   'Phase 3 · Performance': 'Phase 3 · performance',
+  'Clip für die Auswertung': 'Clip for analytics',
   'Analytics je Clip und Plattform': 'Analytics per clip and platform',
-  'Noch keine veroeffentlichten Clips mit Plattform-ID vorhanden.':
+  'Noch keine veröffentlichten Clips mit Plattform-ID vorhanden.':
     'No published clips with a platform ID yet.',
   'Views nach Bucket': 'Views by bucket',
   'Engagement-Rate': 'Engagement rate',
   'LLM-Reports': 'LLM reports',
   Streamer: 'Streamer',
-  'Wochenreport fuer {streamer}': 'Weekly report for {streamer}',
+  'Wochenreport für {streamer}': 'Weekly report for {streamer}',
   Cross: 'Cross',
-  'Monatsreport ueber alle Streamer': 'Monthly report across all streamers',
+  'Monatsreport über alle Streamer': 'Monthly report across all streamers',
   'Report wird generiert…': 'Generating report…',
   'Letzter Streamer-Report': 'Latest streamer report',
   'Letzter Admin-DM-Stand': 'Latest admin DM',
@@ -771,20 +796,37 @@ export function isLanguage(value: unknown): value is Language {
   return value === 'de' || value === 'en';
 }
 
-/**
- * Die Wahl liegt im Browser, nicht in der Datenbank: sie ist eine Anzeigesache
- * und soll ohne Backend-Umbau ueber alle Routen dieses Bundles gelten.
- * Gesperrter Speicher (privates Fenster) darf die Oberflaeche nicht kippen,
- * deshalb faellt beides still auf Deutsch beziehungsweise auf "nicht gemerkt".
- */
-export function readStoredLanguage(): Language {
-  if (typeof window === 'undefined') return DEFAULT_LANGUAGE;
+function readPersistedLanguage(): Language | null {
+  if (typeof window === 'undefined') return null;
   try {
     const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
-    return isLanguage(stored) ? stored : DEFAULT_LANGUAGE;
+    return isLanguage(stored) ? stored : null;
   } catch {
-    return DEFAULT_LANGUAGE;
+    return null;
   }
+}
+
+export function readStoredLanguage(): Language {
+  return readPersistedLanguage() ?? DEFAULT_LANGUAGE;
+}
+
+export function browserLanguage(): Language {
+  if (typeof window === 'undefined' || !window.navigator) return DEFAULT_LANGUAGE;
+  const primary = window.navigator.languages?.[0] ?? window.navigator.language ?? '';
+  return primary.toLowerCase().startsWith('de') ? 'de' : 'en';
+}
+
+export function isEnglishDashboardHost(): boolean {
+  if (typeof window === 'undefined') return false;
+  return ['dead-lock.de', 'www.dead-lock.de'].includes(window.location?.hostname ?? '');
+}
+
+export function readInitialLanguage(): Language {
+  const query = typeof window === 'undefined'
+    ? null
+    : new URLSearchParams(window.location?.search).get('lang');
+  if (isLanguage(query)) return query;
+  return readPersistedLanguage() ?? (isEnglishDashboardHost() ? 'en' : browserLanguage());
 }
 
 export function storeLanguage(language: Language): void {

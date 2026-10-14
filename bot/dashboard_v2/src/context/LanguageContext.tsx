@@ -9,30 +9,24 @@ import {
 } from 'react';
 import {
   DEFAULT_LANGUAGE,
+  isLanguage,
   LOCALES,
-  readStoredLanguage,
+  readInitialLanguage,
   storeLanguage,
   translate,
   type Language,
   type TranslateParams,
-  // Relativ statt ueber den @-Alias: die Node-Tests laufen ohne Vite und
-  // koennen den Alias nicht aufloesen.
 } from '../i18n/dictionary';
+
+import { mainDomainOAuthUrl } from '../i18n/oauthLinks';
 
 export interface LanguageContextValue {
   language: Language;
   setLanguage: (next: Language) => void;
-  /** Uebersetzt einen deutschen Text; ohne Eintrag bleibt er auf Deutsch. */
   t: (text: string, params?: TranslateParams) => string;
-  /** Passendes Locale fuer toLocaleString & Co. */
   locale: string;
 }
 
-/**
- * Der Default ist bewusst kein `null`: `useLanguage()` darf auch ausserhalb
- * des Providers nichts kaputt machen. Seiten, die noch nicht umgestellt sind
- * oder in Tests einzeln gerendert werden, laufen dann auf Deutsch weiter.
- */
 const LanguageContext = createContext<LanguageContextValue>({
   language: DEFAULT_LANGUAGE,
   setLanguage: () => {},
@@ -41,16 +35,22 @@ const LanguageContext = createContext<LanguageContextValue>({
 });
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
-  const [language, setLanguageState] = useState<Language>(() => readStoredLanguage());
+  const [language, setLanguageState] = useState<Language>(() => readInitialLanguage());
 
   const setLanguage = useCallback((next: Language) => {
     setLanguageState(next);
     storeLanguage(next);
   }, []);
 
-  // Screenreader und Browser-Uebersetzer richten sich nach dem lang-Attribut.
   useEffect(() => {
     document.documentElement.lang = language;
+    const url = new URL(window.location.href);
+    const queryLanguage = url.searchParams.get('lang');
+    if (isLanguage(queryLanguage)) {
+      storeLanguage(queryLanguage);
+      url.searchParams.delete('lang');
+      window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+    }
   }, [language]);
 
   const value = useMemo<LanguageContextValue>(
@@ -70,7 +70,11 @@ export function useLanguage(): LanguageContextValue {
   return useContext(LanguageContext);
 }
 
-/** Kurzform fuer Komponenten, die nur uebersetzen wollen. */
+export function useOAuthLink(): (url: string) => string {
+  const { language } = useLanguage();
+  return useCallback((url: string) => mainDomainOAuthUrl(url, language), [language]);
+}
+
 export function useT(): LanguageContextValue['t'] {
   return useContext(LanguageContext).t;
 }

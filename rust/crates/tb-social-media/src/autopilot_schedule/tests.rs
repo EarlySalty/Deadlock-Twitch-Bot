@@ -17,6 +17,8 @@ use crate::{
 
 #[path = "edge_tests.rs"]
 mod edges;
+#[path = "finish_tests.rs"]
+mod finish;
 #[path = "runner_tests.rs"]
 mod runner;
 
@@ -74,6 +76,8 @@ async fn pool_before_slot_guards() -> PgPool {
         .expect("test pool");
     sqlx::raw_sql("CREATE TABLE twitch_streamers (twitch_user_id TEXT PRIMARY KEY);
         INSERT INTO twitch_streamers VALUES ('owner'), ('other');
+        CREATE TABLE social_media_platform_auth (id SERIAL PRIMARY KEY, platform TEXT NOT NULL, twitch_user_id TEXT,
+            platform_user_id TEXT, enabled INTEGER DEFAULT 1, authorized_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE twitch_clips_social_media (id SERIAL PRIMARY KEY, twitch_user_id TEXT, clip_id TEXT,
             clip_url TEXT, clip_title TEXT, streamer_login TEXT, local_file_path TEXT, converted_file_path TEXT,
             status TEXT DEFAULT 'pending', game_id TEXT DEFAULT '2132205352', source_kind TEXT DEFAULT 'twitch',
@@ -82,7 +86,8 @@ async fn pool_before_slot_guards() -> PgPool {
         CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]', approver_user_id TEXT, decided_at TIMESTAMPTZ);
         CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL,
             status TEXT DEFAULT 'pending', scheduled_at TIMESTAMPTZ, title TEXT, description TEXT, hashtags TEXT,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())")
+            priority INTEGER DEFAULT 0, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ,
+            completed_at TIMESTAMPTZ, youtube_visibility TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())")
         .execute(&pool).await.expect("legacy prerequisite schema");
     sqlx::raw_sql(include_str!(
         "../../../../migrations/20261011100000_social_autopilot_contracts.sql"
@@ -96,6 +101,12 @@ async fn pool_before_slot_guards() -> PgPool {
     .execute(&pool)
     .await
     .expect("actual merged M1 migration");
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261013140000_social_autopilot_publishing.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("actual publishing migration");
     pool
 }
 
@@ -375,7 +386,7 @@ async fn claims_are_global_recovery_keeps_mode_and_checkpoint() {
         recovered,
         Recovery {
             resumed: 1,
-            held: 0
+            failed: 0
         }
     );
     let resumed = production_jobs::claim_next(&pool)
@@ -416,8 +427,14 @@ async fn two_reviews_block_automatic_claims_but_not_manual_work() {
             utc("2025-01-01T00:00:00Z"),
         )
         .await;
-        sqlx::query("INSERT INTO social_produced_videos (twitch_user_id,clip_id,mode,status,file_path,duration_ms,expires_at) VALUES ('owner',$1,'static','review','test.mp4',1000,clock_timestamp()+INTERVAL '7 days')")
-            .bind(id).execute(&pool).await.expect("review backlog");
+        let review_job = job(&pool, "owner", id, None).await;
+        sqlx::query("UPDATE social_production_jobs SET status = 'completed' WHERE id = $1")
+            .bind(review_job.id)
+            .execute(&pool)
+            .await
+            .expect("completed automatic production");
+        sqlx::query("INSERT INTO social_produced_videos (twitch_user_id,clip_id,job_id,mode,status,file_path,duration_ms,expires_at) VALUES ('owner',$1,$2,'static','review','test.mp4',1000,clock_timestamp()+INTERVAL '7 days')")
+            .bind(id).bind(review_job.id).execute(&pool).await.expect("review backlog");
     }
     assert!(production_jobs::claim_next(&pool)
         .await

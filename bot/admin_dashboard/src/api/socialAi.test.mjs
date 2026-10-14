@@ -66,24 +66,24 @@ test('Limits-Vertrag lässt weder erhöhte globale Caps noch aktive Planregeln z
   assert.throws(() => requireLimits({ ...limits, users: [{ ...limits.users[0], monthly_cap_micro_usd: 2000001 }] }));
 });
 
-test('Client verwendet Adminpfade, CSRF und erwartete Versionen ohne den Cap zu senden', async () => {
+test('Client verwendet Adminpfade, CSRF und erwartete Versionen mit Monatsbudget', async () => {
   const originalFetch = globalThis.fetch;
   const calls = [];
   globalThis.fetch = async (url, init) => {
     calls.push({ url, init });
     const body = init?.body ? JSON.parse(init.body) : null;
     let response = url.endsWith('/auth-status') ? { authenticated: true, isAdmin: true, csrfToken: 'synthetic-csrf', loginUrl: '/synthetic-login', discordLoginUrl: '/synthetic-login' } : structuredClone(limits);
-    if (url.endsWith('/limits/global')) response.global = { ...response.global, revision: 2, paused: body.paused };
+    if (url.endsWith('/limits/global')) response.global = { ...response.global, revision: 2, paused: body.paused, monthly_cap_micro_usd: body.monthly_cap_micro_usd };
     if (url.includes('/usage?')) response = usage('job', 25);
     return new Response(JSON.stringify(response), { headers: { 'Content-Type': 'application/json' } });
   };
   try {
-    await api.saveGlobalControl({ expected_revision: 1, paused: true, reason: 'synthetic' });
+    await api.saveGlobalControl({ expected_revision: 1, paused: true, monthly_cap_micro_usd: 500000, reason: 'synthetic' });
     const global = calls.at(-1);
     assert.equal(global.url, '/twitch/api/admin/social-ai/limits/global');
     assert.equal(global.init.credentials, 'include');
     assert.equal(global.init.headers['X-CSRF-Token'], 'synthetic-csrf');
-    assert.deepEqual(JSON.parse(global.init.body), { expected_revision: 1, paused: true, reason: 'synthetic', csrf_token: 'synthetic-csrf' });
+    assert.deepEqual(JSON.parse(global.init.body), { expected_revision: 1, paused: true, monthly_cap_micro_usd: 500000, reason: 'synthetic', csrf_token: 'synthetic-csrf' });
     await api.fetchUsage({ group_by: 'job', offset: 25, twitch_user_id: '', provider: 'test & value', job_id: '' });
     assert.equal(new URL(calls.at(-1).url, 'http://fixture.invalid').searchParams.get('provider'), 'test & value');
   } finally { globalThis.fetch = originalFetch; }
@@ -93,8 +93,42 @@ test('Nicht bestätigte Schreibantworten werden nicht als gespeicherter Stand ü
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify(limits), { headers: { 'Content-Type': 'application/json' } });
   try {
-    await assert.rejects(api.saveGlobalControl({ expected_revision: 1, paused: true, reason: 'synthetic' }));
-    await assert.rejects(api.saveUserLimit({ expected_revision: 1, twitch_user_id: '100000001', paused: false, monthly_cap_micro_usd: 1000000, reason: 'synthetic' }));
+    await assert.rejects(api.saveGlobalControl({ expected_revision: 1, paused: true, monthly_cap_micro_usd: 500000, reason: 'synthetic' }));
+    await assert.rejects(api.saveUserLimit({ expected_revision: 1, twitch_user_id: '100000001', paused: false, monthly_cap_micro_usd: 1000000, monthly_ai_jobs: 12, monthly_revisions: 4, reason: 'synthetic' }));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('New administration contracts reject missing or invalid stage, limit and event data', () => {
+  const missingStages = usage();
+  delete missingStages.stages;
+  assert.throws(() => requireUsage(missingStages, 'user', 0));
+  const duplicateStage = usage();
+  duplicateStage.stages.push(duplicateStage.stages[0]);
+  assert.throws(() => requireUsage(duplicateStage, 'user', 0));
+  assert.throws(() => requireLimits({ ...limits, global: { ...limits.global, monthly_cap_micro_usd: 2000001 } }));
+  assert.throws(() => requireLimits({ ...limits, users: [{ ...limits.users[0], monthly_revisions: -1 }] }));
+  const badActivation = structuredClone(skills);
+  badActivation.skills[0].activations[0].kind = 'execute';
+  assert.throws(() => requireSkills(badActivation));
+});
+
+test('Proposal decisions use CSRF and require a confirmed review result', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  let confirmed = true;
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, init });
+    const response = structuredClone(skills);
+    if (confirmed) Object.assign(response.proposals[0], { status: 'dismissed', reviewed_at: '2026-10-14T12:00:00Z', reviewed_by: 'synthetic-admin' });
+    return new Response(JSON.stringify(response), { headers: { 'Content-Type': 'application/json' } });
+  };
+  try {
+    assert.equal((await api.reviewProposal('1', 'dismissed')).proposals[0].status, 'dismissed');
+    assert.equal(calls.at(-1).url, '/twitch/api/admin/social-ai/proposals/1/status');
+    assert.equal(JSON.parse(calls.at(-1).init.body).status, 'dismissed');
+    assert.equal(calls.at(-1).init.headers['X-CSRF-Token'], 'synthetic-csrf');
+    confirmed = false;
+    await assert.rejects(api.reviewProposal('1', 'dismissed'));
   } finally { globalThis.fetch = originalFetch; }
 });
 

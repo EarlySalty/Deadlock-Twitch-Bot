@@ -56,6 +56,7 @@ import type {
   SubscriptionRecord,
   SystemHealth,
 } from '@/api/types';
+import type { SettingsCatalog, SettingsChangeRequest } from '@/api/settingsCatalog';
 import { coerceArray, coerceRecord } from '@/utils/formatters';
 
 const ADMIN_API_BASE = '/twitch/api/admin';
@@ -140,6 +141,22 @@ export const saveOperatingConfig = (expected_revision: string, options: Operatin
   postAdminJson<OperatingConfig, { expected_revision: string; options: OperatingOptions }>(
     '/config/operating', { expected_revision, options },
   );
+
+export const fetchSettingsCatalog = () =>
+  admin<SettingsCatalog>('/config/operating/settings', { cache: 'no-store' });
+
+export async function saveSettingsCatalog(body: SettingsChangeRequest) {
+  const csrfToken = await resolveJsonCsrfToken({});
+  return admin<SettingsCatalog>('/config/operating/settings', {
+    method: 'PUT',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-CSRF-Token': csrfToken,
+    },
+    body: JSON.stringify(body),
+  });
+}
 
 export function buildRaidAuthUrl(login: string): string {
   return `/twitch/raid/auth?login=${encodeURIComponent(login.trim())}`;

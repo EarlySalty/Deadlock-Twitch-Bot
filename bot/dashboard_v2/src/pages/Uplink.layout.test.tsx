@@ -18,7 +18,7 @@ test('der Kopf zeigt nur den Streamstatus und dupliziert keine Plattformzuständ
 });
 
 test('OBS ist eine geordnete Liste aus sechs nativen Disclosures', () => {
-  assert.match(UPLINK, /<ol[^>]+aria-label="OBS einrichten"/);
+  assert.match(UPLINK, /<ol[^>]+aria-label=\{t\('OBS einrichten'\)\}/);
   assert.equal((UPLINK.match(/data-obs-step=/g) ?? []).length, 1);
   assert.match(UPLINK, /function ObsSchritt[\s\S]+<details/);
   assert.match(UPLINK, /function ObsSchritt[\s\S]+<summary/);
@@ -113,7 +113,7 @@ test('Disclosure-Zustände werden mit geschlossenen Startwerten gespeichert', ()
 test('jede Plattformkarte exponiert Plattform und ausgeschriebenen Zustand', () => {
   assert.match(ZIEL, /data-platform=\{platform\}/);
   assert.match(ZIEL, /data-state=\{/);
-  assert.match(ZIEL, /aria-label=\{`\$\{label\}-Einstellungen`\}/);
+  assert.match(ZIEL, /aria-label=\{t\('\{label\}-Einstellungen', \{ label \}\)\}/);
 });
 
 test('alle vier Plattformkarten verwenden echte lokale Logos', () => {
@@ -198,7 +198,7 @@ test('verbundene_karte_zeigt_keine_zugangsfelder', () => {
     /\{automatisch \? \([\s\S]*?data-zugang="automatisch"[\s\S]*?Schlüssel erneut holen[\s\S]*?\) : \([\s\S]*?Serveradresse von \{label\}[\s\S]*?Stream-Schlüssel von \{label\}/,
   );
   // Die Herkunft steht in der Statuszeile, nicht doppelt daneben.
-  assert.match(ZIEL, /Adresse und Stream-Schlüssel kommen von deiner \$\{label\}-Verbindung/);
+  assert.match(ZIEL, /Adresse und Stream-Schlüssel kommen von deiner \{label\}-Verbindung/);
   // Und im automatischen Weg geht nichts aus dem Formular mit: ein vorher
   // getippter alter Schluessel wuerde sonst den frisch geholten ersetzen.
   assert.match(ZIEL, /const url = automatisch \? '' : rtmpUrl\.trim\(\);/);
@@ -221,7 +221,7 @@ test('trennen_sitzt_in_der_plattform_karte_mit_hinweis_auf_den_raid_bot', () => 
   assert.match(UPLINK_API, /Bot- und Raidfunktionen bleiben verbunden/);
   assert.match(ZIEL, /TRENNEN_HINWEIS/);
   assert.match(ZIEL, /trenneUplinkPlattform\(chat\.id, csrfToken/);
-  assert.match(ZIEL, /^\s+Trennen$/m);
+  assert.match(ZIEL, /^\s+\{t\('Trennen'\)\}$/m);
   assert.match(ZIEL, /Ja, trennen/);
   assert.match(UPLINK_API, /connect\/\$\{platform\}\/disconnect/);
 });
@@ -239,8 +239,8 @@ test('Schritt 6 zeigt vier verdeckte Adressen mit Zeigen und Kopieren', () => {
   // waere ein zweiter Ort, an dem die Maskierung gepflegt werden muesste.
   assert.match(UPLINK, /adressen\.map\(\(dock\) => \(/);
   assert.match(UPLINK, /adressen\.map\([\s\S]{0,400}<CopyField/);
-  assert.match(UPLINK, /\{offen \? 'Verdecken' : 'Zeigen'\}/);
-  assert.equal((UPLINK.match(/\{offen \? 'Verdecken' : 'Zeigen'\}/g) ?? []).length, 1);
+  assert.match(UPLINK, /\{offen \? t\('Verdecken'\) : t\('Zeigen'\)\}/);
+  assert.equal((UPLINK.match(/\{offen \? t\('Verdecken'\) : t\('Zeigen'\)\}/g) ?? []).length, 1);
 
   // Frisch erzeugte Adressen gehen in den Zwischenspeicher der Abfrage, nicht
   // in einen zweiten Zustand daneben: sonst zeigt die Karte weiter, was einmal

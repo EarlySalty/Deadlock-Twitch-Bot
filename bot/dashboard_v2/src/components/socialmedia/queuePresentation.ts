@@ -12,21 +12,39 @@ export const QUEUE_FILTERS: Array<{ id: QueueStage; label: string }> = [
   { id: 'archive', label: 'Archiv' },
 ];
 
+export function formatTerminInZone(iso: string, locale: string, timezone: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const options: Intl.DateTimeFormatOptions = {
+    weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  };
+  try {
+    return date.toLocaleString(locale, { ...options, timeZone: timezone });
+  } catch {
+    return date.toLocaleString(locale, options);
+  }
+}
+
+export function queuedPostings(clip: SocialClipMitPosting): Array<{ platform: SocialPlatform; at: string }> {
+  if (clip.status !== 'approved' && clip.status !== 'publishing') return [];
+  return Object.entries(clip.scheduled_at ?? {}).flatMap(([platform, at]) =>
+    at && !clip.platform_status[platform as SocialPlatform]
+      && !['waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.[platform as SocialPlatform] ?? '')
+      ? [{ platform: platform as SocialPlatform, at }] : [],
+  );
+}
+
 export function queuedSlots(clip: SocialClipMitPosting): number {
-  if (clip.status !== 'approved' && clip.status !== 'publishing') return 0;
-  return Object.entries(clip.scheduled_at ?? {}).filter(
-    ([platform, time]) => Boolean(time) && !clip.platform_status[platform as SocialPlatform]
-      && !['waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.[platform as SocialPlatform] ?? ''),
-  ).length;
+  return queuedPostings(clip).length;
 }
 
 export function queueStage(clip: SocialClipMitPosting): Exclude<QueueStage, 'all'> {
   if (clip.status === 'discarded' || clip.status === 'skipped' || clip.discarded_at)
     return 'archive';
   if (clip.status === 'published_all') return 'posted';
-  if (['waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.tiktok ?? ''))
-    return 'review';
   if (clip.status === 'failed' || clip.status === 'published_partial') return 'failed';
+  if (['waiting_tiktok_approval', 'waiting_schedule'].includes(clip.upload_states?.tiktok ?? ''))
+    return clip.status === 'approved' || clip.status === 'publishing' ? 'planned' : 'review';
   if (clip.status === 'publishing' || queuedSlots(clip) > 0) return 'planned';
   if (clip.status === 'awaiting_approval') return 'review';
   return 'new';
@@ -51,7 +69,7 @@ export function filterQueue(
   return clips.filter(
     (clip) =>
       (stage === 'all' || queueStage(clip) === stage) &&
-      (!needle || `${clip.title} ${clip.streamer_login}`.toLocaleLowerCase().includes(needle)) &&
+      (!needle || `${clip.title} ${clip.generated_title ?? ''} ${clip.streamer_login}`.toLocaleLowerCase().includes(needle)) &&
       (platform === 'all' ||
         clip.platform_status[platform] ||
         Boolean(clip.scheduled_at?.[platform]) ||
