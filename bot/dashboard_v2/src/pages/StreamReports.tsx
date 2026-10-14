@@ -794,7 +794,7 @@ function RatingBar({
         </div>
         {currentRating && (
           <div className="text-xs text-text-secondary">
-            {t('Aktuell gespeichert:')}
+            {t('Aktuell gespeichert:')}{' '}
             <span className="font-semibold text-white">{t(formatRatingLabel(currentRating.rating))}</span>
             {currentRating.updated_at ? ` · ${formatDate(currentRating.updated_at, locale)}` : ''}
           </div>
