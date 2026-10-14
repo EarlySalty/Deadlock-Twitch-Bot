@@ -31,7 +31,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { dictionaryFor, translate } from '../src/i18n/dictionary';
 import { LanguageProvider } from '../src/context/LanguageContext';
 import { resolveSocialMediaChannel } from '../src/utils/socialMediaChannel';
-import { socialWorkspaceDepartureAllowed } from '../src/components/socialmedia/studioNavigation';
+import { socialViewFromSearch, socialWorkspaceDepartureAllowed } from '../src/components/socialmedia/studioNavigation';
 import {
   clipFehler,
   istGesperrt,
@@ -173,6 +173,8 @@ test('der Regex findet ueberhaupt Schluessel', () => {
  * deshalb dieselbe Uebersetzung bekommen. Alles andere ist ein Befund.
  */
 const BEWUSST_GETEILT: Record<string, string> = {
+  Freigabe: 'Clip state and workspace both identify the approval stage.',
+  Veröffentlicht: 'Clip state and workspace both identify published content.',
   Fehler: 'Clip-Status und Enrichment-Status meinen beide "fehlgeschlagen".',
   'Clip freigegeben': 'Clip-Status und Approval-Zustand meinen dieselbe Entscheidung.',
   Übersprungen: 'Clip-Status und Approval-Zustand meinen dasselbe Ueberspringen.',
@@ -411,6 +413,7 @@ test('route discovery observes schedule and queue callers with optional query st
   assert.deepEqual(gebautePfade([source]), [
     `${prefix}/queue/:p/cancel`,
     `${prefix}/queue/:p/next`,
+    `${prefix}/queue/:p/resolve`,
     `${prefix}/queue/order`,
     `${prefix}/schedule`,
   ]);
@@ -424,6 +427,7 @@ test('route discovery observes schedule and queue callers with optional query st
     ['/queue/order`', '/queue/contract-missing`', `${prefix}/queue/contract-missing`],
     ['/next`', '/contract-missing`', `${prefix}/queue/:p/contract-missing`],
     ['/cancel`', '/contract-missing`', `${prefix}/queue/:p/contract-missing`],
+    ['/resolve`', '/contract-missing`', `${prefix}/queue/:p/contract-missing`],
   ]) {
     const changed = source.replace(original, replacement);
     assert.notEqual(changed, source);
@@ -758,7 +762,7 @@ test('metadata departure preserves rejected drafts and blocks pending saves befo
   const start = studio.indexOf('  const changeView = ');
   const end = studio.indexOf('  const statusClip = ', start);
   assert.ok(start >= 0 && end > start);
-  const createGuard = new Function('document', 'window', 't', 'activeView', 'selectedAiClipId', 'setActiveView', 'setSelectedAiClipId', 'socialViewSearch', 'socialWorkspaceDepartureAllowed', `${studio.slice(start, end).replace('next: SocialMediaView', 'next')} return changeView;`);
+  const createGuard = new Function('document', 'window', 't', 'activeView', 'selectedAiClipId', 'setActiveView', 'setSelectedAiClipId', 'socialViewSearch', 'socialWorkspaceDepartureAllowed', 'socialViewFromSearch', `${studio.slice(start, end).replace('target: SocialMediaViewTarget', 'target')} return changeView;`);
   for (const [saving, dirty, accepted, expected] of [[true, true, true, false], [false, true, false, false], [false, true, true, true], [false, false, false, true]]) {
     const updates: unknown[] = [];
     let prompts = 0;
@@ -769,10 +773,11 @@ test('metadata departure preserves rejected drafts and blocks pending saves befo
       (view: string) => updates.push(view), (id: number) => updates.push(id),
       (_search: string, view: string, id: number) => `view=${view}&clip_db_id=${id}`,
       socialWorkspaceDepartureAllowed,
+      socialViewFromSearch,
     );
     assert.equal(guard('ai', 42), expected);
     assert.equal(prompts, !saving && dirty ? 1 : 0);
-    assert.deepEqual(updates, expected ? ['ai', 42, [{}, '', '/social-media?view=ai&clip_db_id=42']] : []);
+    assert.deepEqual(updates, expected ? ['freigabe', 42, [{}, '', '/social-media?view=freigabe&clip_db_id=42']] : []);
   }
   assert.match(lies('src/components/socialmedia/LayoutEditor.tsx'), /<div\b[^>]*data-unsaved=\{isDirty \|\| isSaving \? 'true' : undefined\}[^>]*data-saving=\{isSaving \? 'true' : undefined\}/);
   const panel = lies('src/components/socialmedia/EnrichmentPanel.tsx');

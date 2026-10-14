@@ -4,8 +4,9 @@ import { useLanguage } from '@/context/LanguageContext';
 import type { PlatformStatus, SocialClipMitPosting } from '@/api/socialMedia';
 import type { QueueJob, ScheduleQueueSnapshot } from './autopilot/schedule-queue';
 import type { PublishSnapshot, PublishVideo } from './autopilot/publish-review/api';
+import { upcomingTerms } from './upcomingTerms';
 import { connectionFact } from './platformPresentation';
-import { PLATFORM_LABELS, type SocialMediaView } from './labels';
+import { PLATFORM_LABELS, type SocialMediaViewTarget } from './labels';
 import { formatTerminInZone, queueStage, queuedPostings, type QueueStage } from './queuePresentation';
 import type { SocialPlatform } from '@/types/socialMedia';
 
@@ -80,7 +81,7 @@ function StatusItem({ icon: Icon, label, value, detail, tone, onClick }: {
 
 export function StudioStatusStrip({ data, onNavigate }: {
   data: StudioOverviewData;
-  onNavigate: (view: SocialMediaView, stage?: QueueStage) => void;
+  onNavigate: (view: SocialMediaViewTarget, stage?: QueueStage) => void;
 }) {
   const { t, locale } = useLanguage();
   const schedule = data.scheduleFailed ? undefined : data.schedule;
@@ -164,7 +165,7 @@ function OverviewColumn({ icon: Icon, title, count, rows, empty, footer }: {
 export function PipelineOverview({ data, now, onNavigate }: {
   data: StudioOverviewData;
   now: number;
-  onNavigate: (view: SocialMediaView, stage?: QueueStage) => void;
+  onNavigate: (view: SocialMediaViewTarget, stage?: QueueStage) => void;
 }) {
   const { t, locale } = useLanguage();
   const { schedule, publish, clips, platforms, timezone } = data;
@@ -198,13 +199,17 @@ export function PipelineOverview({ data, now, onNavigate }: {
   for (const status of platformsNeedingAttention(platforms))
     actionRows.push({ key: `platform-${status.platform}`, title: PLATFORM_LABELS[status.platform as SocialPlatform] ?? status.platform, meta: t(connectionFact(status).label), tone: 'warning', onClick: () => onNavigate('konten') });
 
-  const nextRows: OverviewRow[] = scheduledVideos(publish).slice(0, 4).map(video => ({ key: `video-${video.id}`, title: videoTitle(video), meta: t('Geplant für {time}', { time: when(video.event!.scheduled_at) }), tone: 'gold', onClick: () => onNavigate('plan') }));
-  for (const job of jobsWithStatus(schedule, 'queued').slice(0, 3))
-    nextRows.push({ key: `queued-${job.id}`, title: clipTitle(job), meta: t('Produktion für {time}', { time: when(job.scheduled_at) }), onClick: () => onNavigate('plan') });
-  for (const post of upcomingPosts(clips, now).slice(0, 4))
-    nextRows.push({ key: post.key, title: post.title, meta: `${PLATFORM_LABELS[post.platform]} · ${when(post.at, timezone)}`, onClick: () => onNavigate('pool', post.stage) });
-  if (schedule?.settings.enabled && schedule.next_slot)
-    nextRows.push({ key: 'slot', title: t('Nächster freier Auto-Pilot-Termin'), meta: when(schedule.next_slot), onClick: () => onNavigate('plan') });
+  const nextRows: OverviewRow[] = upcomingTerms(data, now).slice(0, 8).map(term => {
+    const video = publish?.videos.find(video => `video-${video.id}` === term.key);
+    const job = schedule?.jobs.find(job => `job-${job.id}` === term.key);
+    const post = upcomingPosts(clips, now).find(post => post.key === term.key);
+    return {
+      key: term.key,
+      title: video ? videoTitle(video) : job ? clipTitle(job) : post ? post.title : t('Nächster freier Auto-Pilot-Termin'),
+      meta: post ? `${PLATFORM_LABELS[post.platform]} · ${when(term.at, term.timezone)}` : when(term.at, term.timezone),
+      onClick: () => post ? onNavigate('freigabe', post.stage) : onNavigate('planen'),
+    };
+  });
 
   const failed = data.scheduleFailed || data.publishFailed || data.clipsFailed || data.platformsFailed;
   const loading = (!schedule || !publish || !clips || !platforms) && !failed;

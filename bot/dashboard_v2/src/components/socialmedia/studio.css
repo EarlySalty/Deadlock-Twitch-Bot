@@ -2020,3 +2020,20 @@ select.studio-select {
     width: 86px;
   }
 }
+.studio-status-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.studio-status-bar button {
+  border-radius: 6px;
+  min-height: 36px;
+  padding: 6px 10px;
+  background: var(--color-ui-panel);
+  color: var(--color-ui-text);
+  font-size: 12px;
+  border: 1px solid var(--color-border);
+}
+.studio-status-bar [data-tone='success'] { color: var(--color-ui-success); }
+.studio-status-bar [data-tone='warning'] { color: var(--color-ui-warning); }

@@ -7,6 +7,7 @@ import {
   loadQueueSnapshot,
 } from '../src/components/socialmedia/queuePresentation';
 import type { SocialClipMitPosting } from '../src/api/socialMedia';
+import { upcomingTerms } from '../src/components/socialmedia/upcomingTerms';
 import { DEFAULT_LAYOUT } from '../src/types/socialMedia';
 import { approvalFact, authorizationFact, clipPlatformPresentation, connectionFact, publicationFact, transferFact } from '../src/components/socialmedia/platformPresentation';
 import { socialAiClipFromSearch, socialViewFromSearch, socialViewSearch, socialWorkspaceView } from '../src/components/socialmedia/studioNavigation';
@@ -161,16 +162,54 @@ test('Übertragung, Postfach und private YouTube-Sichtbarkeit bedeuten keine öf
 });
 
 test('alte Studio-Adressen und OAuth-Rückkehr bleiben erreichbar', () => {
-  for (const view of ['pool', 'clips', 'unrecognized']) assert.equal(socialViewFromSearch(`?view=${view}`), 'pool');
-  for (const [alias, view] of [['schedule', 'plan'], ['settings', 'konten'], ['vod', 'archiv'], ['layout', 'layout'], ['ai', 'ai']]) {
+  assert.equal(socialViewFromSearch('?view=pool'), 'freigabe');
+  for (const view of ['clips', 'unrecognized']) assert.equal(socialViewFromSearch(`?view=${view}`), 'heute');
+  for (const [alias, view] of [['schedule', 'planen'], ['settings', 'einstellungen'], ['vod', 'veroeffentlicht'], ['layout', 'einstellungen'], ['ai', 'freigabe']]) {
     assert.equal(socialViewFromSearch(`?view=${alias}`), view);
   }
   assert.equal(socialWorkspaceView('layout'), 'konten');
-  for (const callback of ['oauth_success=youtube', 'oauth_error=provider_error']) assert.equal(socialViewFromSearch(`?view=pool&${callback}`), 'konten');
+  for (const callback of ['oauth_success=youtube', 'oauth_error=provider_error']) assert.equal(socialViewFromSearch(`?view=pool&${callback}`), 'einstellungen');
   const search = socialViewSearch('?twitch_user_id=1&streamer=alpha&oauth_success=youtube', 'plan');
-  assert.equal(socialViewFromSearch(`?${search}`), 'plan');
+  assert.equal(socialViewFromSearch(`?${search}`), 'planen');
   assert.equal(new URLSearchParams(search).get('twitch_user_id'), '1');
   assert.equal(new URLSearchParams(search).get('streamer'), 'alpha');
+});
+
+test('upcoming terms exclude past and invalid dates while preserving legacy timezones', () => {
+  const data = {
+    schedule: undefined,
+    scheduleFailed: false,
+    publish: undefined,
+    publishFailed: false,
+    clips: [
+      clip(1, { status: 'approved', scheduled_at: { youtube: '2026-10-13T10:00:00Z' } }),
+      clip(2, { status: 'approved', scheduled_at: { youtube: '2026-10-15T10:00:00Z' } }),
+      clip(3, { status: 'approved', scheduled_at: { youtube: 'invalid' } }),
+    ],
+    clipsFailed: false,
+    platforms: [],
+    platformsFailed: false,
+    timezone: 'Europe/Berlin',
+  };
+  assert.deepEqual(upcomingTerms(data, Date.parse('2026-10-14T12:00:00Z')), [
+    { key: '2-youtube', at: '2026-10-15T10:00:00Z', timezone: 'Europe/Berlin' },
+  ]);
+  assert.deepEqual(upcomingTerms({ ...data, clipsFailed: true }, Date.parse('2026-10-14T12:00:00Z')), []);
+});
+
+test('five canonical views resolve every historical workspace without dropping OAuth', () => {
+  const groups = {
+    freigabe: ['pool', 'ai', 'review'],
+    planen: ['plan', 'schedule', 'autopilot', 'library', 'import'],
+    einstellungen: ['konten', 'settings', 'layout'],
+    veroeffentlicht: ['archiv', 'vod'],
+    heute: [],
+  } as const;
+  for (const [view, aliases] of Object.entries(groups)) {
+    assert.equal(socialViewFromSearch(`?view=${view}`), view);
+    for (const alias of aliases) assert.equal(socialViewFromSearch(`?view=${alias}`), view);
+  }
+  assert.equal(socialViewFromSearch(''), 'heute');
 });
 
 test('KI-Einstieg bewahrt Clipkontext beim Neuladen und entfernt ihn außerhalb der KI-Ansicht', () => {

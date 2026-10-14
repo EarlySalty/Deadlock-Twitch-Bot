@@ -1,4 +1,11 @@
 export const SOCIAL_STUDIO_EN: Record<string, string> = {
+  'Planen': 'Plan',
+  'Auto-Pilot an': 'Auto-Pilot on',
+  'Auto-Pilot aus': 'Auto-Pilot off',
+  'Konten verbunden {count}/3': 'Accounts connected {count}/3',
+  'Vorrat reicht {days} Tage': 'Supply lasts {days} days',
+  'Vorrat ohne Posting-Rhythmus': 'Supply without a posting cadence',
+
   'Clip-Bibliothek & Import': 'Clip library & import',
   'Clips & Import': 'Clips & import',
   'Verbindungen prüfen': 'Check connections',
