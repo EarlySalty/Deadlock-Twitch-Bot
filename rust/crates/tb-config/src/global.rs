@@ -145,11 +145,16 @@ impl Default for Dashboard {
 #[serde(default, deny_unknown_fields)]
 pub struct Broker {
     pub base_url: String,
+    /// Optionaler Discord-Hub (Paket H). Gesetzt ⇒ der Twitch-Bot spricht den
+    /// Hub statt des Brokers an; fehlt der Wert, bleibt alles beim Broker.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discord_hub_base_url: Option<String>,
 }
 impl Default for Broker {
     fn default() -> Self {
         Self {
             base_url: "http://127.0.0.1:8770".into(),
+            discord_hub_base_url: None,
         }
     }
 }
@@ -315,6 +320,10 @@ impl Schema for BotConfig {
             return Err(FileError::invalid("dashboard.port"));
         }
         public_url(&self.broker.base_url, "broker.base_url", true)?;
+        if let Some(hub) = &self.broker.discord_hub_base_url {
+            // Gleiche Regeln wie für den Broker: nur Loopback, keine Zugangsdaten.
+            public_url(hub, "broker.discord_hub_base_url", true)?;
+        }
         self.stt.validate()?;
         self.challenges.validate()?;
         self.knowledge.validate()?;
@@ -384,10 +393,14 @@ impl BotConfigSnapshot {
                 host: config.internal_api.host.to_string(),
                 port: config.internal_api.port,
             },
+            // Hub-Token nur abfragen, wenn die Datei auf den Hub umschaltet.
             broker: BrokerConfig {
                 base_url: config.broker.base_url.clone(),
                 token: broker_token,
-            },
+            }
+            .with_discord_hub(config.broker.discord_hub_base_url.clone(), || {
+                nonempty(secret(crate::DISCORD_HUB_INTERNAL_TOKEN))
+            }),
         })
     }
 }
