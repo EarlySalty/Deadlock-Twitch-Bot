@@ -4,8 +4,8 @@
 
 - Implementation checkpoint: 2189ab9f1, pushed to feat/social-ap-finish-20261014.
 - Edition-correct formatting checkpoint: fedc7515a, pushed.
-- Latest integrated upstream: 21515ce1f43d4a486997dd65ce61ce4dfc3c1794.
-- Attributed upstream merge checkpoints: 949b94143 and dd48554946fe7d1e52815081397e4054e7db9b45.
+- Latest integrated upstream: 50125b0bb67fc2d32b440594a5cd5e95add21c4d.
+- Attributed upstream merge checkpoints: 949b94143, dd48554946fe7d1e52815081397e4054e7db9b45, and 83f2d65fb7a758bfc0365eb84898a6c3cb5c0d8c.
 - Authenticated target/resolve regression checkpoint: fc9bec76a59a89cb984f505273729e9665cdd01f, pushed and confirmed on the remote feature branch. Lifecycle corrections are awaiting their final package checks and commit.
 
 ## Completed checks
@@ -31,7 +31,15 @@ The first PostgreSQL/FFmpeg run executed 35 tests: 29 passed, 6 failed. Four fai
 - Dashboard production build, including tsc -b: exit 0 after integration. Vite reported unresolved font URLs and its chunk-size warning; no warning-free build is claimed.
 - The first adapter invocation omitted tsconfig.app.json and failed to resolve @/api; no application code was changed to address this launcher mistake. The correct command, ./node_modules/.bin/tsx --tsconfig tsconfig.app.json --test src/components/socialmedia/autopilot/import-pool/contracts.test.ts src/components/socialmedia/autopilot/schedule-queue/api.test.ts, passed: 11 passed, 0 failed, 0 skipped.
 - Final five-file edition-2021 rustfmt --check and git diff --check: exit 0.
-- Initial integrated Rust launcher bcluqpd6t rejected a passwordless synthetic DSN with exit 78 before compiling or running tests. Confirmed the existing dl-central-test-postgres-48623 container's throwaway label and binding; bk1wdot3f uses the documented synthetic credentials and queues AP PostgreSQL/FFmpeg, authenticated route tests, then package Clippy. No production credentials or database are used.
+- Initial integrated Rust launcher bcluqpd6t rejected a passwordless synthetic DSN with exit 78 before compiling or running tests. Confirmed the existing dl-central-test-postgres-48623 container's throwaway label and binding. Replacement bk1wdot3f was stopped while awaiting a slot when the compatibility review found an additional concrete skip race. Final run bbcp6b9vl checks the corrected code with documented synthetic credentials. No production credentials or database are used.
+- Independent upstream compatibility review found that a partially successful AI production can have an already approved/scheduled variant. Final skip includes these states, rejects AI outputs through upstream's existing rejected-output cleanup path, and sets needs_review=true to defeat the owner-locked recheck of a stale promotion candidate. Ready static variants retain review with immediate expiry. A concrete six-case regression invokes the real PublishExecutor with only the external publication boundary replaced; any publisher call panics. Source acceptance confirmed this fix without editing protected publishing paths. Already-executed publication events remain intentionally untouched.
+- Verification-slot diagnosis: slots 2 and 4 are retained by old temporary Brain-test PostgreSQL processes, PIDs 3291556 and 1271923, with temporary brain-release-pg directories and process ages over twelve hours. Slot 3 belongs to a live Brain test. No foreign process or database was stopped, and no lock was bypassed.
+
+- Newly advanced upstream 50125b0b changes four language-context/dictionary/test files and no Rust files. Integrated unchanged as 83f2d65fb. Matching dashboard build/typecheck bgytryv2c passed, followed by 19 i18n/provider tests: 19 passed, 0 failed, 0 skipped. AP component markup/styles did not change.
+- Final Rust run bbcp6b9vl compiled successfully and executed 37 tests: 36 passed, 1 failed, 0 ignored, 445 filtered. The new real-executor regression reached an incomplete legacy fixture table: last_attempt_at was missing. Matched the upload-queue prerequisite columns to the incumbent real-executor fixture in autopilot_publish/tests.rs. No production query or assertion was relaxed. Corrected final checks are bscx9ik98: AP PostgreSQL/FFmpeg, authenticated routes, then Clippy. Do not duplicate the queued job.
+
+- Corrected AP run bscx9ik98 passed: 37 passed, 0 failed, 0 ignored, 445 filtered. This includes all six partial-variant executor cases, owner isolation, cleanup claims, real static FFmpeg and zero-social_editor usage. API test compilation was then terminated by signal 9, so that run did not execute API tests or Clippy. Kernel/earlyoom inspection did not establish a specific cause; no code failure or confirmed OOM is claimed. Targeted retry bzpjrwa21 runs only the interrupted API checks followed by Clippy; the passing AP suite is not repeated.
+- The dedicated standalone release clone /home/nathanael/repos/twitch-release-ap-finish-20261014 was prepared with its three locked frontend dependency installs, exit 0. It has not built or deployed AP; after main integration it must be frozen to the verified origin/main revision before its release build.
 
 ## Gate
 

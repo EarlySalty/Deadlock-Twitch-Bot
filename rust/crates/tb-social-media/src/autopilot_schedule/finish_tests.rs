@@ -368,7 +368,7 @@ async fn skipping_releases_unpublished_review_outputs_and_preserves_other_owners
             .fetch_one(&pool)
             .await
             .expect("discarded output");
-    assert_eq!(output, ("review".into(), None));
+    assert_eq!(output, ("rejected".into(), None));
     let uploads: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE produced_video_id = $1",
     )
@@ -391,7 +391,7 @@ async fn skipping_releases_unpublished_review_outputs_and_preserves_other_owners
     let expiry = crate::produced_video::claim_expired_ai_artifacts(&pool, "owner", fixtures[0].1)
         .await
         .expect("existing AI artifact expiry consumer");
-    assert_eq!(expiry.as_deref(), Some("expired"));
+    assert_eq!(expiry.as_deref(), Some("rejected"));
     let skipped = production_jobs::get(&pool, "owner", fixtures[0].0)
         .await
         .expect("audit")
@@ -445,6 +445,110 @@ async fn skipping_static_reviews_preserves_the_existing_expiry_cleanup_path() {
         0
     );
     cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn skipped_partial_variants_cannot_be_promoted_or_published() {
+    use crate::autopilot_publish::{
+        DestinationPublisher, PublishExecutor, PublishOutcome, PublishRequest,
+    };
+    use crate::uploaders::UploadError;
+    use std::sync::Arc;
+
+    struct NoPublication;
+
+    #[async_trait::async_trait]
+    impl DestinationPublisher for NoPublication {
+        async fn publish(
+            &self,
+            _: &str,
+            _: &str,
+            _: &PublishRequest,
+        ) -> Result<PublishOutcome, UploadError> {
+            panic!("skipped variants must not reach the publication boundary")
+        }
+    }
+
+    for mode in ["ai", "static"] {
+        for status in ["review", "approved", "scheduled"] {
+            let pool = pool().await;
+            save_schedule(&pool, "owner", &schedule())
+                .await
+                .expect("schedule");
+            sqlx::raw_sql("INSERT INTO social_media_platform_auth (platform, twitch_user_id, enabled) VALUES ('youtube', 'owner', 1);
+                UPDATE social_media_autopilot_settings SET publish_mode = 'full_auto', target_platforms = '[\"youtube\"]'::jsonb WHERE twitch_user_id = 'owner'")
+                .execute(&pool).await.expect("full-auto fixture with an owned connection");
+            let clip_id = clip(
+                &pool,
+                "owner",
+                "partial-variant",
+                utc("2025-01-01T00:00:00Z"),
+            )
+            .await;
+            let job = job(&pool, "owner", clip_id, None).await;
+            sqlx::query("UPDATE social_production_jobs SET status = 'review', finished_at = NOW() WHERE id = $1")
+                .bind(job.id).execute(&pool).await.expect("one variant failed after another passed validation");
+            let metadata = if mode == "ai" {
+                json!({"production_ai_job_id":job.id})
+            } else {
+                json!({})
+            };
+            let video: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos
+                (twitch_user_id, clip_id, job_id, mode, status, file_path, duration_ms, scheduled_at, needs_review, expires_at, metadata)
+                VALUES ('owner', $1, $2, $3, $4, '/fixture/skipped-variant.mp4', 1000, $5, FALSE, clock_timestamp() + INTERVAL '7 days', $6) RETURNING id")
+                .bind(clip_id).bind(job.id).bind(mode).bind(status).bind(utc("2035-01-01T00:00:00Z"))
+                .bind(metadata).fetch_one(&pool).await.expect("validated partial output");
+            sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id, produced_video_id, platform, status, scheduled_at)
+                VALUES ($1, $2, 'youtube', $3, $4)")
+                .bind(clip_id).bind(video).bind(crate::autopilot_publish::queue_status::PENDING)
+                .bind(utc("2035-01-01T00:00:00Z")).execute(&pool).await.expect("pending reservation");
+            resolve_review(&pool, "owner", job.id, ReviewDecision::Skip, None)
+                .await
+                .expect("skip every unpublished variant");
+            let state: (String, bool, Option<DateTime<Utc>>, bool) = sqlx::query_as(
+                "SELECT status, needs_review, scheduled_at, expires_at <= clock_timestamp()
+                FROM social_produced_videos WHERE id = $1",
+            )
+            .bind(video)
+            .fetch_one(&pool)
+            .await
+            .expect("skip boundary");
+            assert_eq!(
+                state,
+                (
+                    if mode == "ai" { "rejected" } else { "review" }.into(),
+                    true,
+                    None,
+                    true
+                )
+            );
+            let report = PublishExecutor::new(pool.clone(), Arc::new(NoPublication))
+                .tick()
+                .await
+                .expect("real publication executor after skip");
+            assert_eq!(report.promoted, 0);
+            assert_eq!(report.executed, 0);
+            assert_eq!(report.uploads, 0);
+            let reservations: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM twitch_clips_upload_queue WHERE produced_video_id = $1",
+            )
+            .bind(video)
+            .fetch_one(&pool)
+            .await
+            .expect("no recreated reservations");
+            assert_eq!(reservations, 0);
+            if mode == "ai" {
+                assert_eq!(
+                    crate::produced_video::claim_expired_ai_artifacts(&pool, "owner", video)
+                        .await
+                        .expect("existing rejected-output cleanup")
+                        .as_deref(),
+                    Some("rejected")
+                );
+            }
+            cleanup(pool).await;
+        }
+    }
 }
 
 #[tokio::test]

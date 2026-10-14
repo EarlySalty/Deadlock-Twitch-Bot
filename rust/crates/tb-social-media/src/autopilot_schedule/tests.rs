@@ -86,7 +86,8 @@ async fn pool_before_slot_guards() -> PgPool {
         CREATE TABLE social_media_clip_approval (clip_db_id INTEGER PRIMARY KEY, state TEXT NOT NULL DEFAULT 'awaiting_approval', approved_platforms JSONB NOT NULL DEFAULT '[]', approver_user_id TEXT, decided_at TIMESTAMPTZ);
         CREATE TABLE twitch_clips_upload_queue (id BIGSERIAL PRIMARY KEY, clip_id BIGINT NOT NULL, platform TEXT NOT NULL,
             status TEXT DEFAULT 'pending', scheduled_at TIMESTAMPTZ, title TEXT, description TEXT, hashtags TEXT,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())")
+            priority INTEGER DEFAULT 0, attempts INTEGER DEFAULT 0, last_error TEXT, last_attempt_at TIMESTAMPTZ,
+            completed_at TIMESTAMPTZ, youtube_visibility TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())")
         .execute(&pool).await.expect("legacy prerequisite schema");
     sqlx::raw_sql(include_str!(
         "../../../../migrations/20261011100000_social_autopilot_contracts.sql"

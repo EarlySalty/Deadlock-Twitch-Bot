@@ -193,7 +193,8 @@ async fn discard_review_outputs_on(
 ) -> Result<(), ScheduleError> {
     let videos: Vec<i64> = sqlx::query_scalar(
         "SELECT id FROM social_produced_videos WHERE job_id = $1 AND twitch_user_id = $2
-        AND status IN ('rendering', 'review') AND publication_executed_at IS NULL FOR UPDATE",
+        AND status IN ('rendering', 'review', 'approved', 'scheduled')
+        AND publication_executed_at IS NULL FOR UPDATE",
     )
     .bind(id)
     .bind(owner)
@@ -202,8 +203,8 @@ async fn discard_review_outputs_on(
     for video in videos {
         crate::autopilot_publish::release_slot(connection, video).await?;
         sqlx::query(
-            "UPDATE social_produced_videos SET expires_at = clock_timestamp(),
-            status = CASE WHEN mode = 'ai' OR status = 'review' THEN status ELSE 'rejected' END
+            "UPDATE social_produced_videos SET expires_at = clock_timestamp(), needs_review = TRUE,
+            status = CASE WHEN mode = 'ai' OR status = 'rendering' THEN 'rejected' ELSE 'review' END
             WHERE id = $1",
         )
         .bind(video)
