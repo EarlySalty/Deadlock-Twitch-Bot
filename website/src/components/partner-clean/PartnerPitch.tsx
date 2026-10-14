@@ -1,3 +1,4 @@
+import { landingText, isEnglishLanding } from "@/lib/landingLocale";
 import { motion, useReducedMotion } from "framer-motion";
 import { ExternalLink, Radio, ShieldCheck, Users } from "lucide-react";
 import { ScrollReveal } from "@/components/ui/ScrollReveal";
@@ -13,18 +14,22 @@ import { buildTwitchBotAuthUrl } from "@/data/externalLinks";
 const anchors = [
   {
     icon: Users,
-    lead: "Du gehörst dazu",
-    rest: "dein Kanal steht auf dieser Seite und im Discord neben allen anderen Partnern.",
+    lead: landingText("Du gehörst dazu"),
+    rest: landingText(
+      "dein Kanal steht auf dieser Seite und im Discord neben allen anderen Partnern.",
+    ),
   },
   {
     icon: ShieldCheck,
-    lead: "Der Bot managt deinen Kanal",
-    rest: "Raids, Live-Ankündigung, Chat-Schutz, Auswertung. Du richtest nichts ein.",
+    lead: landingText("Der Bot managt deinen Kanal"),
+    rest: landingText(
+      "Raids, Live-Ankündigung, Chat-Schutz, Auswertung. Du richtest nichts ein.",
+    ),
   },
   {
     icon: Radio,
-    lead: "Kein Anbieter, kein Abo",
-    rest: "eine Community, die ihre Streamer zusammenbringt.",
+    lead: landingText("Kein Anbieter, kein Abo"),
+    rest: landingText("eine Community, die ihre Streamer zusammenbringt."),
   },
 ];
 
@@ -54,7 +59,12 @@ function NetworkPulse() {
           strokeWidth="1.2"
           initial={{ opacity: 0.15 }}
           animate={{ opacity: [0.15, 0.6, 0.15] }}
-          transition={{ duration: 2.4, repeat: Infinity, delay: i * 0.35, ease: "easeInOut" }}
+          transition={{
+            duration: 2.4,
+            repeat: Infinity,
+            delay: i * 0.35,
+            ease: "easeInOut",
+          }}
         />
       ))}
       {[
@@ -63,7 +73,14 @@ function NetworkPulse() {
         [46, 122, 5],
         [176, 118, 5],
       ].map(([x, y, r], i) => (
-        <circle key={`n-${i}`} cx={x} cy={y} r={r} fill="var(--color-accent)" opacity={0.75} />
+        <circle
+          key={`n-${i}`}
+          cx={x}
+          cy={y}
+          r={r}
+          fill="var(--color-accent)"
+          opacity={0.75}
+        />
       ))}
       <motion.circle
         cx={110}
@@ -89,8 +106,10 @@ export function PartnerPitch({
   const loop = marquee.length > 0 ? [...marquee, ...marquee] : [];
   const platzText =
     status === "ready" && streamers.length > 0
-      ? `Du wärst Partner Nr. ${streamers.length + 1}.`
-      : "Die Partner siehst du unten auf der Seite.";
+      ? isEnglishLanding()
+        ? `You would be partner no. ${streamers.length + 1}.`
+        : `Du wärst Partner Nr. ${streamers.length + 1}.`
+      : landingText("Die Partner siehst du unten auf der Seite.");
 
   return (
     <section id="ablauf" className="py-24">
@@ -98,22 +117,25 @@ export function PartnerPitch({
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-14 items-center">
           <ScrollReveal>
             <div className="inline-flex items-center rounded-full px-4 py-1.5 bg-[var(--color-card)] border border-[var(--color-border)] text-sm text-[var(--color-accent)]">
-              Partner werden
+              {landingText("Partner werden")}
             </div>
 
             <h2 className="mt-6 text-3xl md:text-4xl lg:text-5xl font-bold text-[var(--color-text-primary)] font-display leading-tight">
-              Werde Partner der
+              {landingText("Werde Partner der")}
               <br />
-              <GradientText>Deutschen Deadlock Community.</GradientText>
+              <GradientText>
+                {landingText("Deutschen Deadlock Community.")}
+              </GradientText>
             </h2>
 
             <p className="mt-6 text-xl md:text-2xl text-[var(--color-text-secondary)] leading-relaxed">
-              Dein Kanal wird Teil der deutschen Deadlock-Community. Der Bot
-              managt ihn ab dann komplett.
+              {landingText(
+                "Dein Kanal wird Teil der deutschen Deadlock-Community. Der Bot managt ihn ab dann komplett.",
+              )}
             </p>
 
             <p className="mt-10 text-sm uppercase tracking-wider font-medium text-[var(--color-primary)]">
-              Was Partner heißt
+              {landingText("Was Partner heißt")}
             </p>
 
             <ul className="mt-4 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
@@ -129,7 +151,10 @@ export function PartnerPitch({
                         border: "1px solid rgba(85, 151, 143, 0.45)",
                       }}
                     >
-                      <Icon size={18} className="text-[var(--color-accent-hover)]" />
+                      <Icon
+                        size={18}
+                        className="text-[var(--color-accent-hover)]"
+                      />
                     </span>
                     <span className="text-[var(--color-text-secondary)] leading-relaxed">
                       <strong className="text-[var(--color-text-primary)] font-semibold">
@@ -148,7 +173,7 @@ export function PartnerPitch({
                 className="gradient-accent rounded-xl px-7 py-3.5 font-semibold inline-flex items-center gap-2 transition-all duration-200 hover:brightness-110 hover:shadow-[0_0_24px_4px_rgba(201,168,106,0.3)]"
               >
                 <ExternalLink size={18} />
-                Jetzt Partner werden
+                {landingText("Jetzt Partner werden")}
               </a>
             </div>
           </ScrollReveal>
@@ -163,7 +188,7 @@ export function PartnerPitch({
                 }}
               />
               <p className="relative text-sm uppercase tracking-wider font-medium text-[var(--color-primary)] mb-5">
-                Dein Platz im Netzwerk
+                {landingText("Dein Platz im Netzwerk")}
               </p>
 
               <div className="relative flex items-center gap-3.5 rounded-xl border border-[rgba(201,168,106,0.55)] bg-black/25 px-4 py-3.5">
@@ -175,10 +200,10 @@ export function PartnerPitch({
                   }}
                   aria-hidden="true"
                 >
-                  DU
+                  {landingText("DU")}
                 </span>
                 <span className="min-w-0 flex-1 truncate text-lg font-semibold text-[var(--color-text-primary)]">
-                  dein_kanal
+                  {landingText("dein_kanal")}
                 </span>
                 <span className="shrink-0 rounded bg-[var(--color-accent)] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider text-black/85">
                   Partner
@@ -186,11 +211,21 @@ export function PartnerPitch({
               </div>
 
               {loop.length > 0 ? (
-                <div className="relative overflow-hidden py-4 mt-5" style={{ maskImage: "linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent)" }}>
+                <div
+                  className="relative overflow-hidden py-4 mt-5"
+                  style={{
+                    maskImage:
+                      "linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent)",
+                  }}
+                >
                   <motion.div
                     className="flex gap-4 w-max"
                     animate={reduce ? undefined : { x: ["0%", "-50%"] }}
-                    transition={{ duration: 26, repeat: Infinity, ease: "linear" }}
+                    transition={{
+                      duration: 26,
+                      repeat: Infinity,
+                      ease: "linear",
+                    }}
                   >
                     {loop.map((s, i) => (
                       <a
@@ -201,7 +236,11 @@ export function PartnerPitch({
                         className="flex flex-col items-center gap-2 no-underline group"
                       >
                         <span className="relative">
-                          <Avatar login={s.login} avatarUrl={s.avatarUrl} size={56} />
+                          <Avatar
+                            login={s.login}
+                            avatarUrl={s.avatarUrl}
+                            size={56}
+                          />
                           {istDeadlock(s) && s.isLive ? (
                             <span className="v2-pulse absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-[var(--color-success)] ring-2 ring-[var(--color-card)]" />
                           ) : null}

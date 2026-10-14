@@ -1,3 +1,4 @@
+import { landingText, isEnglishLanding } from "@/lib/landingLocale";
 import { useState } from "react";
 import { ExternalLink, CheckCircle2 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -16,26 +17,34 @@ const CLIPS: EmbeddedClip[] = [
   {
     id: "twitch-1",
     platform: "Twitch",
-    sourceUrl: "https://www.twitch.tv/friduzockt/clip/LivelySpeedyPuddingRiPepperonis-LEDojoINvrSJqSaN",
-    embedUrl: "https://clips.twitch.tv/embed?clip=LivelySpeedyPuddingRiPepperonis-LEDojoINvrSJqSaN",
+    sourceUrl:
+      "https://www.twitch.tv/friduzockt/clip/LivelySpeedyPuddingRiPepperonis-LEDojoINvrSJqSaN",
+    embedUrl:
+      "https://clips.twitch.tv/embed?clip=LivelySpeedyPuddingRiPepperonis-LEDojoINvrSJqSaN",
   },
   {
     id: "twitch-2",
     platform: "Twitch",
-    sourceUrl: "https://www.twitch.tv/friduzockt/clip/GlutenFreeExuberantAlmondTwitchRaid-ZGcAGDDQOrrL39JO",
-    embedUrl: "https://clips.twitch.tv/embed?clip=GlutenFreeExuberantAlmondTwitchRaid-ZGcAGDDQOrrL39JO",
+    sourceUrl:
+      "https://www.twitch.tv/friduzockt/clip/GlutenFreeExuberantAlmondTwitchRaid-ZGcAGDDQOrrL39JO",
+    embedUrl:
+      "https://clips.twitch.tv/embed?clip=GlutenFreeExuberantAlmondTwitchRaid-ZGcAGDDQOrrL39JO",
   },
   {
     id: "twitch-3",
     platform: "Twitch",
-    sourceUrl: "https://www.twitch.tv/v4ntr1ko/clip/TubularFrailSwallowHumbleLife-rmmgDiaxVLs9QUjF",
-    embedUrl: "https://clips.twitch.tv/embed?clip=TubularFrailSwallowHumbleLife-rmmgDiaxVLs9QUjF",
+    sourceUrl:
+      "https://www.twitch.tv/v4ntr1ko/clip/TubularFrailSwallowHumbleLife-rmmgDiaxVLs9QUjF",
+    embedUrl:
+      "https://clips.twitch.tv/embed?clip=TubularFrailSwallowHumbleLife-rmmgDiaxVLs9QUjF",
   },
   {
     id: "twitch-4",
     platform: "Twitch",
-    sourceUrl: "https://www.twitch.tv/einsbezi/clip/EphemeralOptimisticDonkeyRlyTho-gWwwmuVOBi41L2Fs",
-    embedUrl: "https://clips.twitch.tv/embed?clip=EphemeralOptimisticDonkeyRlyTho-gWwwmuVOBi41L2Fs",
+    sourceUrl:
+      "https://www.twitch.tv/einsbezi/clip/EphemeralOptimisticDonkeyRlyTho-gWwwmuVOBi41L2Fs",
+    embedUrl:
+      "https://clips.twitch.tv/embed?clip=EphemeralOptimisticDonkeyRlyTho-gWwwmuVOBi41L2Fs",
   },
 ];
 
@@ -80,7 +89,11 @@ function ClipPreview({
     <button
       type="button"
       onClick={onSelect}
-      aria-label={`${side === "left" ? "Linken" : "Rechten"} Clip auswählen`}
+      aria-label={
+        isEnglishLanding()
+          ? `Select ${side} clip`
+          : `${side === "left" ? "Linken" : "Rechten"} Clip auswählen`
+      }
       className={[
         "absolute hidden md:block top-1/2 -translate-y-1/2 z-0",
         "w-[75%] aspect-video rounded-xl overflow-hidden",
@@ -93,7 +106,11 @@ function ClipPreview({
     >
       <iframe
         src={clipSrc(clip, false)}
-        title={`${clip.platform} Vorschau`}
+        title={
+          isEnglishLanding()
+            ? `${clip.platform} preview`
+            : `${clip.platform} Vorschau`
+        }
         className="w-full h-full border-0 pointer-events-none saturate-[0.65]"
         loading="lazy"
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
@@ -122,13 +139,20 @@ export function ClipManager() {
       <div className="max-w-7xl mx-auto px-6">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 lg:gap-28 items-center">
           <ScrollReveal direction="left">
-            <div data-clip-frame className="rounded-2xl border border-[var(--color-border)] bg-[linear-gradient(160deg,rgba(44, 35, 24,0.92),rgba(36, 28, 17,0.92))] overflow-visible p-1.5 md:p-2">
+            <div
+              data-clip-frame
+              className="rounded-2xl border border-[var(--color-border)] bg-[linear-gradient(160deg,rgba(44, 35, 24,0.92),rgba(36, 28, 17,0.92))] overflow-visible p-1.5 md:p-2"
+            >
               <div className="relative h-[205px] sm:h-[260px] lg:h-[350px] overflow-visible">
                 <AnimatePresence initial={false} custom={direction} mode="sync">
                   <motion.div
                     key={activeClip.id}
                     custom={direction}
-                    initial={{ opacity: 0, x: direction > 0 ? 42 : -42, scale: 0.995 }}
+                    initial={{
+                      opacity: 0,
+                      x: direction > 0 ? 42 : -42,
+                      scale: 0.995,
+                    }}
                     animate={{
                       opacity: 1,
                       x: 0,
@@ -145,7 +169,11 @@ export function ClipManager() {
                   >
                     <iframe
                       src={clipSrc(activeClip, true)}
-                      title={`${activeClip.platform} Hauptclip`}
+                      title={
+                        isEnglishLanding()
+                          ? `${activeClip.platform} main clip`
+                          : `${activeClip.platform} Hauptclip`
+                      }
                       className="w-full h-full border-0"
                       loading="lazy"
                       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
@@ -158,7 +186,7 @@ export function ClipManager() {
                       rel="noopener noreferrer"
                       className="absolute right-3 bottom-3 z-30 rounded-md px-3 py-1.5 text-xs font-semibold text-white bg-black/55 border border-white/20 inline-flex items-center gap-1 hover:bg-black/75 transition"
                     >
-                      Clip öffnen
+                      {landingText("Clip öffnen")}
                       <ExternalLink size={13} />
                     </a>
                   </motion.div>
@@ -179,13 +207,13 @@ export function ClipManager() {
               <div className="mt-2 grid grid-cols-2 gap-2 md:hidden">
                 <button
                   type="button"
-                  aria-label="Linke Vorschau anzeigen"
+                  aria-label={landingText("Linke Vorschau anzeigen")}
                   onClick={() => selectClip(prevIndex, -1)}
                   className="rounded-md border border-[var(--color-border)] overflow-hidden bg-black aspect-video"
                 >
                   <iframe
                     src={clipSrc(CLIPS[prevIndex], false)}
-                    title="Linke Vorschau"
+                    title={landingText("Linke Vorschau")}
                     className="w-full h-full border-0 pointer-events-none saturate-[0.65]"
                     loading="lazy"
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
@@ -195,13 +223,13 @@ export function ClipManager() {
                 </button>
                 <button
                   type="button"
-                  aria-label="Rechte Vorschau anzeigen"
+                  aria-label={landingText("Rechte Vorschau anzeigen")}
                   onClick={() => selectClip(nextIndex, 1)}
                   className="rounded-md border border-[var(--color-border)] overflow-hidden bg-black aspect-video"
                 >
                   <iframe
                     src={clipSrc(CLIPS[nextIndex], false)}
-                    title="Rechte Vorschau"
+                    title={landingText("Rechte Vorschau")}
                     className="w-full h-full border-0 pointer-events-none saturate-[0.65]"
                     loading="lazy"
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
@@ -218,29 +246,35 @@ export function ClipManager() {
               Clip Manager
             </p>
             <h2 className="text-3xl md:text-4xl font-bold text-[var(--color-text-primary)] mb-6 font-display">
-              Clips{" "}
+              {isEnglishLanding() ? "Share clips" : "Clips"}{" "}
               <span className="bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-accent)] bg-clip-text text-transparent inline">
-                automatisch
+                {landingText("automatisch")}
               </span>{" "}
-              überall teilen
+              {landingText("überall teilen")}
             </h2>
             <p className="text-[var(--color-text-secondary)] text-lg mb-8 leading-relaxed">
-              Erstelle Clips direkt aus dem Chat und verteile sie automatisch auf allen Plattformen.
+              {landingText(
+                "Erstelle Clips direkt aus dem Chat und verteile sie automatisch auf allen Plattformen.",
+              )}
             </p>
 
             <ul className="space-y-4">
               {[
                 {
-                  title: "Multi-Plattform",
-                  desc: "YouTube, TikTok und Instagram mit einem Befehl",
+                  title: landingText("Multi-Plattform"),
+                  desc: landingText(
+                    "YouTube, TikTok und Instagram mit einem Befehl",
+                  ),
                 },
                 {
                   title: "Smart Templates",
-                  desc: "Automatische Titel, Beschreibungen und Hashtags",
+                  desc: landingText(
+                    "Automatische Titel, Beschreibungen und Hashtags",
+                  ),
                 },
                 {
-                  title: "Clip-Archiv",
-                  desc: "Alle Clips organisiert und durchsuchbar",
+                  title: landingText("Clip-Archiv"),
+                  desc: landingText("Alle Clips organisiert und durchsuchbar"),
                 },
               ].map((item) => (
                 <li key={item.title} className="flex items-start gap-3">

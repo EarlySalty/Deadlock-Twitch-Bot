@@ -1,3 +1,4 @@
+import { landingText, isEnglishLanding } from "@/lib/landingLocale";
 import { useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowUpRight, ChevronDown, Users } from "lucide-react";
@@ -15,11 +16,13 @@ import {
   PARTNER_VORSCHAU,
 } from "@/lib/partnerNetwork";
 
-const EMPTY_STATE_TEXT =
-  "Die Partnerliste lädt gerade nicht. Schau auf Twitch oder im Discord vorbei.";
+const EMPTY_STATE_TEXT = landingText(
+  "Die Partnerliste lädt gerade nicht. Schau auf Twitch oder im Discord vorbei.",
+);
 
-const KEIN_DEADLOCK_TEXT =
-  "Gerade streamt kein Partner Deadlock. Schau später wieder rein.";
+const KEIN_DEADLOCK_TEXT = landingText(
+  "Gerade streamt kein Partner Deadlock. Schau später wieder rein.",
+);
 
 function TwitchEmbed({ login }: { login: string }) {
   const src =
@@ -31,7 +34,11 @@ function TwitchEmbed({ login }: { login: string }) {
       style={{ backgroundImage: `url(${previewImageUrl(login)})` }}
     >
       <iframe
-        title={`Live-Stream von ${login}`}
+        title={
+          isEnglishLanding()
+            ? `Live stream by ${login}`
+            : `Live-Stream von ${login}`
+        }
         src={src}
         className="absolute inset-0 h-full w-full"
         allow="autoplay; fullscreen"
@@ -50,7 +57,11 @@ function LivePreview({ partner }: { partner: NetworkStreamer }) {
       </span>
       <img
         src={previewImageUrl(partner.login)}
-        alt={`Vorschau von ${partner.login}`}
+        alt={
+          isEnglishLanding()
+            ? `Preview of ${partner.login}`
+            : `Vorschau von ${partner.login}`
+        }
         loading="lazy"
         className="absolute inset-0 h-full w-full object-cover"
         onError={(e) => {
@@ -111,7 +122,11 @@ function LiveCard({
       transition={{ duration: 0.4, delay: (index % 3) * 0.08 }}
       className="rounded-2xl overflow-hidden border border-[rgba(85,151,143,0.55)] bg-[var(--color-card)] shadow-[0_0_40px_-16px_rgba(201,168,106,0.85)]"
     >
-      {asPreview ? <LivePreview partner={partner} /> : <TwitchEmbed login={partner.login} />}
+      {asPreview ? (
+        <LivePreview partner={partner} />
+      ) : (
+        <TwitchEmbed login={partner.login} />
+      )}
       <ChannelBar partner={partner} />
     </motion.div>
   );
@@ -151,7 +166,7 @@ function PartnerZeile({
         </span>
         <span className="flex items-center gap-1 text-[11px] text-[var(--color-text-secondary)]">
           <Users size={11} />
-          {partner.viewers} Zuschauer
+          {partner.viewers} {landingText("Zuschauer")}
         </span>
       </span>
       <ArrowUpRight
@@ -245,7 +260,11 @@ function AllePartnerBlock({ partner }: { partner: NetworkStreamer[] }) {
   return (
     <div className="mt-8">
       <p className="mb-4 text-sm font-medium uppercase tracking-wider text-[var(--color-text-secondary)]">
-        Alle {partner.length} Partner
+        {isEnglishLanding() ? (
+          <>All {partner.length} partners</>
+        ) : (
+          <>Alle {partner.length} Partner</>
+        )}
       </p>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 min-[1800px]:grid-cols-5">
         {sichtbar.map((p, i) => (
@@ -261,7 +280,11 @@ function AllePartnerBlock({ partner }: { partner: NetworkStreamer[] }) {
             className="mt-4 flex w-full items-center justify-between gap-3 rounded-xl border border-[var(--color-border)] bg-black/20 px-4 py-3 text-left transition-colors hover:border-[var(--color-border-hover)]"
           >
             <span className="text-sm font-medium uppercase tracking-wider text-[var(--color-text-secondary)]">
-              {offen ? "Weniger anzeigen" : `${rest.length} weitere Partner anzeigen`}
+              {offen
+                ? landingText("Weniger anzeigen")
+                : isEnglishLanding()
+                  ? `Show ${rest.length} more partners`
+                  : `${rest.length} weitere Partner anzeigen`}
             </span>
             <ChevronDown
               size={18}
@@ -336,21 +359,25 @@ export function PartnerNetwork({
       <div className="max-w-[1600px] mx-auto px-6">
         <ScrollReveal className="text-center">
           <p className="text-sm uppercase tracking-wider font-medium text-[var(--color-primary)] mb-3">
-            Unsere Partner
+            {landingText("Unsere Partner")}
           </p>
           <h2 className="text-4xl md:text-5xl font-bold text-[var(--color-text-primary)] font-display">
-            Wer schon dabei ist
+            {landingText("Wer schon dabei ist")}
           </h2>
           {status === "ready" && streamers.length > 0 ? (
             <p className="mt-4 text-lg text-[var(--color-text-secondary)]">
               <span className="font-semibold text-[var(--color-accent)]">
-                {streamers.length} Partner
+                {streamers.length} {isEnglishLanding() ? "partners" : "Partner"}
               </span>{" "}
-              streamen Deadlock in diesem Netzwerk. In diese Runde steigst du ein.
+              {landingText(
+                "streamen Deadlock in diesem Netzwerk. In diese Runde steigst du ein.",
+              )}
             </p>
           ) : (
             <p className="mt-4 text-lg text-[var(--color-text-secondary)]">
-              Das sind die Kanäle, in deren Runde du als Partner einsteigst.
+              {landingText(
+                "Das sind die Kanäle, in deren Runde du als Partner einsteigst.",
+              )}
             </p>
           )}
         </ScrollReveal>
@@ -365,7 +392,12 @@ export function PartnerNetwork({
               {embeds.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {embeds.map((p, i) => (
-                    <LiveCard key={p.login} partner={p} asPreview={Boolean(reduce)} index={i} />
+                    <LiveCard
+                      key={p.login}
+                      partner={p}
+                      asPreview={Boolean(reduce)}
+                      index={i}
+                    />
                   ))}
                 </div>
               ) : (
@@ -378,7 +410,11 @@ export function PartnerNetwork({
 
               {weitereDeadlock.length > 0 ? (
                 <Ausklappliste
-                  titel={`${weitereDeadlock.length} weitere streamen gerade Deadlock`}
+                  titel={
+                    isEnglishLanding()
+                      ? `${weitereDeadlock.length} more streaming Deadlock now`
+                      : `${weitereDeadlock.length} weitere streamen gerade Deadlock`
+                  }
                 >
                   {weitereDeadlock.map((p, i) => (
                     <PartnerZeile key={p.login} partner={p} index={i} />

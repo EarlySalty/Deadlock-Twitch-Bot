@@ -1,3 +1,4 @@
+import { landingText, landingLink } from '@/lib/landingLocale';
 import { useState, useEffect, useRef } from 'react';
 import { Menu, X, MessageCircle } from 'lucide-react';
 import { useScrollSpy } from '@/hooks/useScrollSpy';
@@ -12,13 +13,13 @@ interface NavLink {
 }
 
 const NAV_LINKS: NavLink[] = [
-  { label: "So funktioniert's", id: 'ablauf' },
+  { label: landingText("So funktioniert's"), id: 'ablauf' },
   { label: 'Raids', id: 'raid' },
   { label: 'Moderation', id: 'moderation' },
   { label: 'Features', id: 'features' },
   { label: 'Community', id: 'community' },
-  { label: 'Sicherheit', id: 'sicherheit' },
-  { label: 'Streamer-Zahlen', href: '/streamer/vergleich/' },
+  { label: landingText('Sicherheit'), id: 'sicherheit' },
+  { label: landingText('Streamer-Zahlen'), href: '/streamer/vergleich/' },
 ];
 
 const SECTION_IDS = NAV_LINKS.flatMap((link) => (link.id ? [link.id] : []));
@@ -47,7 +48,13 @@ export function Navbar() {
       if (window.innerWidth >= 1720) setMenuOpen(false);
     }
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape' && menuButton.current?.getAttribute('aria-expanded') === 'true') { setMenuOpen(false); menuButton.current.focus(); }
+      if (
+        event.key === 'Escape' &&
+        menuButton.current?.getAttribute('aria-expanded') === 'true'
+      ) {
+        setMenuOpen(false);
+        menuButton.current.focus();
+      }
     }
     window.addEventListener('resize', handleResize);
     window.addEventListener('keydown', handleKeyDown);
@@ -75,7 +82,10 @@ export function Navbar() {
         </span>
 
         {/* Center nav – desktop only */}
-        <nav className="hidden min-[1720px]:flex items-center gap-4 whitespace-nowrap shrink-0" aria-label="Seitennavigation">
+        <nav
+          className="hidden min-[1720px]:flex items-center gap-4 whitespace-nowrap shrink-0"
+          aria-label={landingText('Seitennavigation')}
+        >
           {NAV_LINKS.map(({ label, id, href }) =>
             id ? (
               <button
@@ -92,7 +102,7 @@ export function Navbar() {
             ) : (
               <a
                 key={href}
-                href={href}
+                href={href ? landingLink(href) : undefined}
                 className="text-sm font-medium text-text-secondary hover:text-text-primary transition-colors duration-200"
               >
                 {label}
@@ -104,10 +114,10 @@ export function Navbar() {
         {/* Right actions – desktop only */}
         <div className="hidden sm:flex items-center gap-2.5 shrink-0">
           <a
-            href={TWITCH_DASHBOARD_URL}
+            href={landingLink(TWITCH_DASHBOARD_URL)}
             className="inline-flex items-center whitespace-nowrap rounded-lg border border-primary/60 bg-primary/10 px-4 py-2 text-sm font-semibold text-text-primary transition-colors duration-200 hover:border-primary hover:bg-primary/20"
           >
-            Partner-Dashboard
+            {landingText('Partner-Dashboard')}
           </a>
           <a
             href={DISCORD_INVITE_URL}
@@ -116,7 +126,7 @@ export function Navbar() {
             className="hidden min-[1720px]:inline-flex items-center gap-2 whitespace-nowrap rounded-lg border border-[#5865F2]/50 bg-[#5865F2]/10 px-4 py-2 text-sm text-text-primary transition-colors duration-200 hover:border-[#5865F2] hover:bg-[#5865F2]/20"
           >
             <DiscordLogo size={17} className="text-[#5865f2]" />
-            Community-Discord
+            {landingText('Community-Discord')}
           </a>
           <button
             onClick={openSiteChatbot}
@@ -124,7 +134,7 @@ export function Navbar() {
           >
             <span className="inline-flex items-center gap-2">
               <MessageCircle size={16} />
-              Hilfe bekommen
+              {landingText('Hilfe bekommen')}
             </span>
           </button>
         </div>
@@ -134,7 +144,11 @@ export function Navbar() {
           type="button"
           className="min-[1720px]:hidden shrink-0 text-text-secondary hover:text-text-primary transition-colors duration-200 bg-transparent border-none p-2 cursor-pointer"
           onClick={() => setMenuOpen((prev) => !prev)}
-          aria-label={menuOpen ? 'Navigation schließen' : 'Navigation öffnen'}
+          aria-label={
+            menuOpen
+              ? landingText('Navigation schließen')
+              : landingText('Navigation öffnen')
+          }
           aria-expanded={menuOpen}
           ref={menuButton}
           aria-controls="streamer-mobile-navigation"
@@ -145,14 +159,18 @@ export function Navbar() {
 
       {/* Mobile dropdown */}
       {menuOpen && (
-        <nav id="streamer-mobile-navigation" aria-label="Seitennavigation" className="min-[1720px]:hidden glass border-t border-border max-h-[calc(100dvh-4rem)] overflow-y-auto">
+        <nav
+          id="streamer-mobile-navigation"
+          aria-label={landingText('Seitennavigation')}
+          className="min-[1720px]:hidden glass border-t border-border max-h-[calc(100dvh-4rem)] overflow-y-auto"
+        >
           <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col gap-2">
             <a
-              href={TWITCH_DASHBOARD_URL}
+              href={landingLink(TWITCH_DASHBOARD_URL)}
               className="rounded-lg border border-primary/60 bg-primary/10 px-4 py-3 text-sm font-semibold text-text-primary transition-colors duration-200 hover:border-primary hover:bg-primary/20"
               onClick={() => setMenuOpen(false)}
             >
-              Partner-Dashboard
+              {landingText('Partner-Dashboard')}
             </a>
             {NAV_LINKS.map(({ label, id, href }) =>
               id ? (
@@ -173,7 +191,7 @@ export function Navbar() {
               ) : (
                 <a
                   key={href}
-                  href={href}
+                  href={href ? landingLink(href) : undefined}
                   className="text-sm font-medium text-left py-2 text-text-secondary hover:text-text-primary transition-colors duration-200"
                   onClick={() => setMenuOpen(false)}
                 >
@@ -190,7 +208,7 @@ export function Navbar() {
                 onClick={() => setMenuOpen(false)}
               >
                 <DiscordLogo size={17} className="text-[#5865f2]" />
-                Community-Discord
+                {landingText('Community-Discord')}
               </a>
               <button
                 onClick={() => {
@@ -201,7 +219,7 @@ export function Navbar() {
               >
                 <span className="inline-flex items-center justify-center gap-2">
                   <MessageCircle size={16} />
-                  Hilfe bekommen
+                  {landingText('Hilfe bekommen')}
                 </span>
               </button>
             </div>

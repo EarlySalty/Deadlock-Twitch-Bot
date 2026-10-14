@@ -1,16 +1,20 @@
+import { landingText } from "@/lib/landingLocale";
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Bot, Loader2, MessageCircle, Send, X } from "lucide-react";
-import { Trustpilot, TrustpilotLauncher } from "@/components/partner-clean/Trustpilot";
+import {
+  Trustpilot,
+  TrustpilotLauncher,
+} from "@/components/partner-clean/Trustpilot";
 
 const ASK_URL = "/twitch/api/v2/self-explainer/ask";
 const OPEN_EVENT = "ddc:open-support-chat";
 const REQUEST_TIMEOUT_MS = 125_000;
 
 const SUGGESTIONS = [
-  "Was macht der Bot?",
-  "Wie verbinde ich meinen Kanal?",
-  "Ist das sicher?",
+  landingText("Was macht der Bot?"),
+  landingText("Wie verbinde ich meinen Kanal?"),
+  landingText("Ist das sicher?"),
 ];
 
 interface AskResponse {
@@ -30,7 +34,11 @@ export function openSiteChatbot() {
   window.dispatchEvent(new Event(OPEN_EVENT));
 }
 
-export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boolean }) {
+export function SiteChatbot({
+  showTrustpilot = false,
+}: {
+  showTrustpilot?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -60,7 +68,11 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
     };
   }, [open]);
 
-  function addMessage(role: ChatMessage["role"], text: string, sources?: string[]) {
+  function addMessage(
+    role: ChatMessage["role"],
+    text: string,
+    sources?: string[],
+  ) {
     messageId.current += 1;
     setMessages((current) => [
       ...current,
@@ -83,7 +95,10 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
     setError(null);
 
     const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timer = window.setTimeout(
+      () => controller.abort(),
+      REQUEST_TIMEOUT_MS,
+    );
 
     try {
       const response = await fetch(ASK_URL, {
@@ -94,29 +109,40 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
       });
 
       if (response.status === 429) {
-        setError("Zu viele Fragen gerade. Probier es gleich noch einmal.");
+        setError(
+          landingText("Zu viele Fragen gerade. Probier es gleich noch einmal."),
+        );
         return;
       }
       if (!response.ok) {
-        setError("Die Antwort konnte nicht geladen werden.");
+        setError(landingText("Die Antwort konnte nicht geladen werden."));
         return;
       }
 
       const data: AskResponse = await response.json();
-      const answerParts =
-        data.parts?.length ? data.parts : data.answer ? [data.answer] : [];
+      const answerParts = data.parts?.length
+        ? data.parts
+        : data.answer
+          ? [data.answer]
+          : [];
       const sources: string[] = Array.isArray(data.sources) ? data.sources : [];
 
       if (!answerParts.length) {
-        setError("Der Bot hat keine Antwort geliefert.");
+        setError(landingText("Der Bot hat keine Antwort geliefert."));
         return;
       }
 
       answerParts.forEach((part, index) => {
-        addMessage("bot", part, index === answerParts.length - 1 ? sources : undefined);
+        addMessage(
+          "bot",
+          part,
+          index === answerParts.length - 1 ? sources : undefined,
+        );
       });
     } catch {
-      setError("Verbindung fehlgeschlagen. Probier es noch einmal.");
+      setError(
+        landingText("Verbindung fehlgeschlagen. Probier es noch einmal."),
+      );
     } finally {
       window.clearTimeout(timer);
       setLoading(false);
@@ -134,7 +160,7 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
       {open && (
         <section
           role="dialog"
-          aria-label="Hilfe zum Twitch-Bot"
+          aria-label={landingText("Hilfe zum Twitch-Bot")}
           className="mb-3 flex h-[min(620px,calc(100dvh-7rem))] w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-border bg-[color:var(--theme-chatbot-bg,#241c11f2)] shadow-2xl backdrop-blur-xl sm:w-[410px] [@media(max-height:500px)]:mb-0 [@media(max-height:500px)]:h-[calc(100dvh-3.5rem)]"
         >
           <header className="flex shrink-0 items-center justify-between border-b border-border px-5 py-4 [@media(max-height:500px)]:py-2">
@@ -143,16 +169,18 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
                 <Bot size={20} className="text-white" />
               </span>
               <div>
-                <p className="font-semibold text-text-primary">Bot-Hilfe</p>
+                <p className="font-semibold text-text-primary">
+                  {landingText("Bot-Hilfe")}
+                </p>
                 <p className="text-xs text-text-secondary">
-                  Fragen zur Einrichtung und den Funktionen
+                  {landingText("Fragen zur Einrichtung und den Funktionen")}
                 </p>
               </div>
             </div>
             <button
               type="button"
               onClick={() => setOpen(false)}
-              aria-label="Chat schließen"
+              aria-label={landingText("Chat schließen")}
               className="rounded-lg p-2 text-text-secondary transition-colors hover:bg-white/10 hover:text-text-primary"
             >
               <X size={19} />
@@ -168,9 +196,9 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
             {!messages.length && (
               <>
                 <div className="max-w-[88%] rounded-2xl rounded-tl-sm border border-border bg-white/[0.05] px-4 py-3 text-sm leading-relaxed text-text-primary">
-                  Frag mich, was der Twitch-Bot macht oder wie du deinen Kanal
-                  verbindest. Die Einrichtung ist normalerweise mit einem Klick
-                  auf „Autorisieren“ erledigt.
+                  {landingText(
+                    "Frag mich, was der Twitch-Bot macht oder wie du deinen Kanal verbindest. Die Einrichtung ist normalerweise mit einem Klick auf „Autorisieren“ erledigt.",
+                  )}
                 </div>
                 <div className="flex flex-wrap gap-2 pt-1">
                   {SUGGESTIONS.map((suggestion) => (
@@ -202,7 +230,7 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
                   <p>{message.text}</p>
                   {message.sources?.length ? (
                     <p className="mt-2 border-t border-border/60 pt-2 text-xs text-text-secondary">
-                      Quelle: {message.sources.join(", ")}
+                      {landingText("Quelle:")} {message.sources.join(", ")}
                     </p>
                   ) : null}
                 </div>
@@ -212,7 +240,7 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
             {loading && (
               <div className="flex items-center gap-2 text-sm text-text-secondary">
                 <Loader2 size={16} className="animate-spin text-accent" />
-                Antwort wird erstellt…
+                {landingText("Antwort wird erstellt…")}
               </div>
             )}
 
@@ -223,24 +251,31 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
             )}
           </div>
 
-          <form onSubmit={submit} className="flex shrink-0 gap-2 border-t border-border p-4 [@media(max-height:500px)]:p-2">
+          <form
+            onSubmit={submit}
+            className="flex shrink-0 gap-2 border-t border-border p-4 [@media(max-height:500px)]:p-2"
+          >
             <input
               ref={inputRef}
               value={question}
               onChange={(event) => setQuestion(event.target.value)}
               maxLength={500}
               disabled={loading}
-              placeholder="Deine Frage …"
-              aria-label="Frage an den Bot"
+              placeholder={landingText("Deine Frage …")}
+              aria-label={landingText("Frage an den Bot")}
               className="min-w-0 flex-1 rounded-xl border border-border bg-white/[0.05] px-4 py-3 text-sm text-text-primary outline-none placeholder:text-text-secondary/60 focus:border-accent"
             />
             <button
               type="submit"
               disabled={loading || !question.trim()}
-              aria-label="Frage senden"
+              aria-label={landingText("Frage senden")}
               className="gradient-accent flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {loading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
+              {loading ? (
+                <Loader2 size={18} className="animate-spin" />
+              ) : (
+                <Send size={18} />
+              )}
             </button>
           </form>
         </section>
@@ -250,12 +285,18 @@ export function SiteChatbot({ showTrustpilot = false }: { showTrustpilot?: boole
         ref={helpButtonRef}
         type="button"
         onClick={() => setOpen((current) => !current)}
-        aria-label={open ? "Hilfe-Chat schließen" : "Hilfe bekommen"}
+        aria-label={
+          open
+            ? landingText("Hilfe-Chat schließen")
+            : landingText("Hilfe bekommen")
+        }
         aria-expanded={open}
-        className={`ml-auto flex items-center gap-2 rounded-full gradient-accent px-5 py-3.5 font-semibold shadow-[0_12px_40px_rgba(201,168,106,0.3)] transition-transform hover:scale-[1.03] ${open ? '[@media(max-height:500px)]:hidden' : ''}`}
+        className={`ml-auto flex items-center gap-2 rounded-full gradient-accent px-5 py-3.5 font-semibold shadow-[0_12px_40px_rgba(201,168,106,0.3)] transition-transform hover:scale-[1.03] ${open ? "[@media(max-height:500px)]:hidden" : ""}`}
       >
         {open ? <X size={20} /> : <MessageCircle size={20} />}
-        <span>{open ? "Schließen" : "Hilfe bekommen"}</span>
+        <span>
+          {open ? landingText("Schließen") : landingText("Hilfe bekommen")}
+        </span>
       </button>
     </div>
   );
