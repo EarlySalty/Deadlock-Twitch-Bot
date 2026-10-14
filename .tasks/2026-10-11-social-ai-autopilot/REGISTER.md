@@ -33,3 +33,19 @@ Decisions sent: Anthropic connector scoped to social editor (Opus 5.5 via TOML c
 - P3 M2 dashboard integration (from 8ae9a1031).
 - P1 Track C modes/approval/retries/retention/notifications (contract 7878c5431), migrations 20261011105xxx.
 - All: no paid AI calls until user approves the paid live test; review mode only, no real publishing.
+
+## 2026-10-14 ~11:00Z: finish wave v2 (orchestrator session 8d18a769, native Opus subagents, effort medium)
+- Live 3250999ca: RD redesign + CFG phase 1 (+ LA, AI, REL earlier). Sol threads AP/RD/CFG stopped and handed over.
+- Rules: briefs-20261014/COMMON-v2.md. Workers end on main; orchestrator runs one integrator release.
+- AP-INT: merge origin/main into feat/social-ap-finish-20261014 (35f6e6337), gate, land on main. Running.
+- C1: tb-config settings catalog + wire types + candidate apply, branch feat/social-cfg-catalog-20261014. Running.
+- Next: C3 API (GET/PUT + Social AI semantic candidate validation) and C4 UI (OperatingConfig.tsx) after C1; then release, live check, section 32 acceptance.
+- Decision: no per-service active-value reconstruction; UI shows saved value plus restart notice.
+- RD worktree removed (a967fe458 on main).
+- On main: AP 083bc3452, C1 9b84ded35, C4 c3704057f, C3 45779a5bc (all gate ALLOW). CFG phase 2 complete.
+- Integrator (native Opus subagent a570d477c8cd1b326) re-froze clone twitch-release-ap-finish-20261014 to 45779a5bc; release build queued behind the release lock held by a foreign session's 6cac863 build. Next: deploy, live check (settings GET 401, restart notice in admin bundle), section 32 acceptance.
+- User 2026-10-14: no paid AI test, no publishing test, user tests the dashboard and uploads a clip manually; section 32 acceptance agent dropped. Goal reduced to "everything on main and deployed".
+- Branch audit: 30 social branches superseded, 3 docs-only, social EN translations missing; ported as 7e15101b2 (gate ALLOW, no multi-server code).
+- LIVE 7e15101b2 (via 45779a5bc), deploy-twitch-release --pruefen exit 0, settings route 401 via admin host, AP and EN strings in live bundles. Worktree tb-social-ap-finish removed. DONE.
+- Open nits: tests/socialMediaContract.test.ts "route discovery observes schedule" fails on main; dashboard_v2 eslint 6 errors outside this work; KPI strip and preview banner untranslated in EN; remote branch feat/social-ap-finish-20261014 not deleted (pre-push RUSTSEC hook).
+- Follow-up started: release builds on ionos (claude-config).
