@@ -80,7 +80,8 @@ async fn autopilot_schedule_authenticated_composition_persists_owned_schedule_an
         .expect("actual fresh application migrations");
     sqlx::raw_sql("INSERT INTO twitch_streamers (twitch_login,twitch_user_id) VALUES ('b_test_renamed','42'),('b_test_other','99');
         INSERT INTO twitch_partners (id,twitch_login,twitch_user_id,status) VALUES (42,'b_test_renamed','42','active');
-        INSERT INTO social_media_partner_access (twitch_user_id,streamer_login,granted) VALUES ('42','b_test_renamed',TRUE)")
+        INSERT INTO social_media_partner_access (twitch_user_id,streamer_login,granted) VALUES ('42','b_test_renamed',TRUE);
+        INSERT INTO social_media_platform_auth (platform,twitch_user_id,enabled,access_token_enc) VALUES ('youtube','42',1,decode('00','hex')),('instagram','42',0,decode('00','hex')),('tiktok','99',1,decode('00','hex'))")
         .execute(&pool).await.expect("synthetic partner and existing access policy");
     let key = base64::engine::general_purpose::URL_SAFE.encode(rand::random::<[u8; 32]>());
     let auth = crate::DashboardAuthState::new(pool.clone(), key);
@@ -114,7 +115,8 @@ async fn autopilot_schedule_authenticated_composition_persists_owned_schedule_an
         "/schedule",
         json!({
             "enabled":false,"paused":true,"ai_editing_enabled":false,"lead_time_hours":0,
-            "timezone":"Europe/Berlin","schedule_slots":[{"weekday":1,"local_time":"18:00"}]
+            "timezone":"Europe/Berlin","schedule_slots":[{"weekday":1,"local_time":"18:00"}],
+            "target_platforms":[" YouTube ","youtube"]
         }),
     )
     .await;
@@ -124,6 +126,26 @@ async fn autopilot_schedule_authenticated_composition_persists_owned_schedule_an
     assert_eq!(saved["settings"]["ai_editing_enabled"], false);
     assert_eq!(saved["settings"]["lead_time_hours"], 0);
     assert_eq!(saved["production_hold"], "disabled");
+    assert_eq!(saved["settings"]["target_platforms"], json!(["youtube"]));
+    assert_eq!(saved["connected_platforms"], json!(["youtube"]));
+    for platform in ["instagram", "tiktok"] {
+        let (status, _) = schedule_request(
+            &router,
+            &session,
+            "PUT",
+            "/schedule",
+            json!({"target_platforms":[platform]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+    let (status, unchanged) =
+        schedule_request(&router, &session, "GET", "/schedule", json!(null)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        unchanged["settings"]["target_platforms"],
+        json!(["youtube"])
+    );
     let mut jobs = Vec::new();
     for index in 0..2 {
         let clip: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (twitch_user_id,streamer_login,clip_id,clip_url,clip_title) VALUES ('42','b_test_renamed',$1,'https://clips.test/synthetic','Test clip') RETURNING id::bigint")
@@ -200,6 +222,98 @@ async fn autopilot_schedule_authenticated_composition_persists_owned_schedule_an
             .status,
         "cancelled"
     );
+    production_jobs::claim_next(&pool)
+        .await
+        .expect("claim review fixture")
+        .expect("owned manual job");
+    production_jobs::finish(
+        &pool,
+        "42",
+        jobs[0].id,
+        production_jobs::JobCompletion::Review,
+        &["synthetic_reason".into()],
+        None,
+    )
+    .await
+    .expect("review fixture");
+    let (status, _) = schedule_request(
+        &router,
+        &session,
+        "POST",
+        &format!("/queue/{}/resolve", jobs[0].id),
+        json!({"twitch_user_id":"99","action":"skip"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, processed) = schedule_request(
+        &router,
+        &session,
+        "POST",
+        &format!("/queue/{}/resolve", jobs[0].id),
+        json!({"action":"process","note":"  Szene verwenden  "}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(processed["jobs"][0]["id"], jobs[0].id);
+    assert_eq!(processed["jobs"][0]["status"], "queued");
+    let audit = production_jobs::get(&pool, "42", jobs[0].id)
+        .await
+        .expect("persisted resolution")
+        .expect("owned job");
+    assert_eq!(audit.metadata["review_decision"]["action"], "process");
+    assert_eq!(audit.metadata["review_decision"]["note"], "Szene verwenden");
+    assert_eq!(
+        audit.metadata["review_decision"]["reasons"],
+        json!(["synthetic_reason"])
+    );
+    let claimed = production_jobs::claim_next(&pool)
+        .await
+        .expect("claim explicitly processed review")
+        .expect("resumed job");
+    assert_eq!(claimed.id, jobs[0].id);
+    assert_eq!(claimed.attempts, 1);
+    production_jobs::finish(
+        &pool,
+        "42",
+        claimed.id,
+        production_jobs::JobCompletion::Review,
+        &[],
+        None,
+    )
+    .await
+    .expect("subsequent review");
+    let (status, skipped) = schedule_request(
+        &router,
+        &session,
+        "POST",
+        &format!("/queue/{}/resolve", jobs[0].id),
+        json!({"action":"skip","note":"Nicht verwenden"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(skipped["jobs"]
+        .as_array()
+        .expect("queue after skip")
+        .is_empty());
+    let skipped_job = production_jobs::get(&pool, "42", jobs[0].id)
+        .await
+        .expect("persisted skip")
+        .expect("audit retained");
+    assert_eq!(skipped_job.status, "cancelled");
+    assert_eq!(skipped_job.metadata["review_decision"]["action"], "skip");
+    assert_eq!(
+        skipped_job.metadata["review_decision"]["note"],
+        "Nicht verwenden"
+    );
+    let (status, _) = schedule_request(
+        &router,
+        &session,
+        "POST",
+        &format!("/queue/{}/resolve", jobs[0].id),
+        json!({"action":"process"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
     let uploads: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM twitch_clips_upload_queue")
         .fetch_one(&pool)
         .await
@@ -234,6 +348,7 @@ async fn autopilot_schedule_composed_routes_require_authentication() {
             ("PUT", "/queue/order", "{\"job_ids\":[]}"),
             ("POST", "/queue/1/next", "{}"),
             ("POST", "/queue/1/cancel", "{}"),
+            ("POST", "/queue/1/resolve", "{\"action\":\"skip\"}"),
         ] {
             let response = router
                 .clone()
@@ -285,6 +400,15 @@ fn queue_actions_do_not_accept_mode_or_another_job_payload() {
         serde_json::from_value::<QueueOrderWrite>(json!({"job_ids":[1,2],"enabled":true})).is_err()
     );
     assert!(serde_json::from_value::<QueueOrderWrite>(json!({"job_ids":["1"]})).is_err());
+    assert!(serde_json::from_value::<ReviewDecisionWrite>(json!({"action":"publish"})).is_err());
+    assert!(
+        serde_json::from_value::<ReviewDecisionWrite>(json!({"action":"skip","mode":"ai"}))
+            .is_err()
+    );
+    let decision: ReviewDecisionWrite =
+        serde_json::from_value(json!({"action":"process","note":"Trotzdem"}))
+            .expect("review decision");
+    assert_eq!(decision.action, ReviewDecision::Process);
 }
 
 #[tokio::test]
@@ -296,6 +420,11 @@ async fn handler_errors_keep_stable_status_and_safe_response_shapes() {
             "job_not_found",
         ),
         (ScheduleError::Started, StatusCode::CONFLICT, "job_started"),
+        (
+            ScheduleError::NotInReview,
+            StatusCode::CONFLICT,
+            "job_not_in_review",
+        ),
         (
             ScheduleError::QueueChanged,
             StatusCode::CONFLICT,

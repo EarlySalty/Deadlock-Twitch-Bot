@@ -389,6 +389,10 @@ fn build_authed_router_with_analysis_store(
             post(social_media::autopilot_queue_cancel_handler),
         )
         .route(
+            "/social-media/api/autopilot/queue/{job_id}/resolve",
+            post(social_media::autopilot_queue_resolve_handler),
+        )
+        .route(
             "/social-media/api/autopilot/pool",
             get(social_media::autopilot::pool_handler),
         )

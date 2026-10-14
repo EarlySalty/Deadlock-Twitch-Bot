@@ -735,3 +735,13 @@ export async function disconnectPlatform(platform: string, twitchUserId: string 
 }
 
 export const fetchSocialAiJson = fetchJson;
+
+export { scheduleQueueApi } from '@/components/socialmedia/autopilot/schedule-queue/api';
+export type {
+  QueueJob,
+  ReviewDecision,
+  SchedulePatch,
+  ScheduleQueueApi,
+  ScheduleQueueSnapshot,
+  ScheduleSettings,
+} from '@/components/socialmedia/autopilot/schedule-queue/api';

@@ -12,7 +12,7 @@ use crate::{
 #[derive(Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Recovery {
     pub resumed: u64,
-    pub held: u64,
+    pub failed: u64,
 }
 
 pub async fn recover_after_lease(pool: &PgPool) -> Result<Recovery, ScheduleError> {
@@ -29,8 +29,8 @@ pub async fn recover_after_lease(pool: &PgPool) -> Result<Recovery, ScheduleErro
     for owner in owners {
         autopilot_settings::lock_owner(&mut tx, &owner).await?;
     }
-    let held = sqlx::query(
-        "UPDATE social_production_jobs SET status = 'review', finished_at = NOW(),
+    let failed = sqlx::query(
+        "UPDATE social_production_jobs SET status = 'failed', stage = 'failed', finished_at = NOW(),
         last_error = 'Die Produktion wurde unterbrochen und das Versuchslimit ist erreicht.',
         review_reasons = '[\"attempts_exhausted\"]'::jsonb
         WHERE status = 'running' AND attempts >= max_attempts",
@@ -48,7 +48,7 @@ pub async fn recover_after_lease(pool: &PgPool) -> Result<Recovery, ScheduleErro
     .await?
     .rows_affected();
     tx.commit().await?;
-    Ok(Recovery { resumed, held })
+    Ok(Recovery { resumed, failed })
 }
 
 pub async fn retry_or_review(
@@ -57,18 +57,25 @@ pub async fn retry_or_review(
     reason: &str,
     retryable: bool,
 ) -> Result<(), ScheduleError> {
-    if !retryable || job.attempts >= job.max_attempts {
-        let reasons = if job.attempts >= job.max_attempts {
-            vec!["attempts_exhausted".into()]
-        } else {
-            vec![reason.into()]
-        };
+    if job.attempts >= job.max_attempts {
+        production_jobs::finish(
+            pool,
+            &job.twitch_user_id,
+            job.id,
+            JobCompletion::Failed,
+            &["attempts_exhausted".into()],
+            Some("Die Produktion ist nach mehreren Versuchen fehlgeschlagen."),
+        )
+        .await?;
+        return Ok(());
+    }
+    if !retryable {
         production_jobs::finish(
             pool,
             &job.twitch_user_id,
             job.id,
             JobCompletion::Review,
-            &reasons,
+            &[reason.into()],
             Some("Die Produktion konnte nicht abgeschlossen werden. Bitte prüfe den Auftrag."),
         )
         .await?;
