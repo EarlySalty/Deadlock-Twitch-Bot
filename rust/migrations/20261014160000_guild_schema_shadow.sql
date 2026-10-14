@@ -89,9 +89,9 @@ BEGIN
         SELECT * FROM (VALUES
             ('discord_guilds', 'discord_guilds_positive_id', 'CHECK (guild_id > 0)'),
             ('discord_guilds', 'discord_guilds_shadow_only', 'CHECK (guild_id = 1289721245281292288 OR status <> ''active'')'),
-            ('discord_guilds', 'discord_guilds_ai_community_only', 'CHECK (guild_id = 1289721245281292288 OR NOT ai_features)'),
+            ('discord_guilds', 'guild_ai_community_only', 'CHECK (guild_id = 1289721245281292288 OR NOT ai_features)'),
             ('discord_guilds', 'discord_guilds_language_code', 'CHECK (language ~ ''^[a-z]{2,8}(-[a-z0-9]{1,8})*$'')'),
-            ('discord_guilds', 'discord_guilds_positive_channels', 'CHECK ((announce_channel_id IS NULL OR announce_channel_id > 0) AND (alert_channel_id IS NULL OR alert_channel_id > 0) AND (streamer_role_id IS NULL OR streamer_role_id > 0) AND (ping_role_id IS NULL OR ping_role_id > 0))'),
+            ('discord_guilds', 'guild_positive_channels', 'CHECK ((announce_channel_id IS NULL OR announce_channel_id > 0) AND (alert_channel_id IS NULL OR alert_channel_id > 0) AND (streamer_role_id IS NULL OR streamer_role_id > 0) AND (ping_role_id IS NULL OR ping_role_id > 0))'),
             ('discord_guilds', 'discord_guilds_invite_url', 'CHECK (promo_invite_url IS NULL OR (char_length(promo_invite_url) <= 200 AND promo_invite_url ~ ''^https://(discord\.gg|discord\.com/invite)/[A-Za-z0-9-]+$''))'),
             ('streamer_guilds', 'streamer_guilds_stable_uid', 'CHECK (twitch_user_id ~ ''^[0-9]{1,20}$'')'),
             ('streamer_guilds', 'streamer_guilds_identity_fk', 'FOREIGN KEY (twitch_user_id) REFERENCES public.twitch_streamer_identities (twitch_user_id)'),
