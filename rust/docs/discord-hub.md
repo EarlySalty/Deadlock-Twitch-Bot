@@ -23,3 +23,5 @@ Gateway `/setup`, guild join/leave, member leave and persistence remain unported
 The fixed installation mask does not include Create Instant Invite for `create-invite`, Read Message History for `message-reactions`, or Manage Messages for deleting another author's message. Review operation-specific installation permissions in a later cut without broadening H1's fixed permission constants.
 
 Idempotency remains process-local and bounded by its TTL and capacity. Gateway and schema persistence remain outside H1.
+
+The round-3 gate also noted that role lists report `member_count: 0` without measuring membership. A later contract review should represent unavailable counts as unknown or calculate them.
