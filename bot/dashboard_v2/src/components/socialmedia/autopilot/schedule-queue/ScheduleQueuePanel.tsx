@@ -3,6 +3,7 @@ import { ArrowDown, ArrowUp, Calendar, Clock3, RefreshCw, Trash2 } from 'lucide-
 import { StudioSectionHeading } from '../../StudioSectionHeading';
 import { ApiHttpError, getBrowserTimezone } from '@/api/core';
 import { scheduleQueueApi } from './api';
+import { ReviewJobActions } from './ReviewJobActions';
 import type { QueueJob, SchedulePatch, ScheduleQueueApi, ScheduleQueueSnapshot, ScheduleSettings } from './api';
 import './schedule-queue.css';
 
@@ -13,10 +14,11 @@ export interface ScheduleQueuePanelProps {
 }
 
 const WEEKDAYS = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
+const PLATFORMS = [{ id: 'youtube', label: 'YouTube' }, { id: 'tiktok', label: 'TikTok' }, { id: 'instagram', label: 'Instagram' }];
 const HOLDS = {
   disabled: 'Der Auto-Pilot ist ausgeschaltet.',
   paused: 'Pausiert. Laufende Produktionen werden fertiggestellt.',
-  review_backlog: 'Eine Produktion oder ein fertiges Video benötigt deine Prüfung. Neue automatische Produktionen warten.',
+  review_backlog: 'Zwei automatische Produktionen warten auf deine Prüfung. Nach einer Entscheidung geht es weiter.',
   empty_pool: 'Keine passenden Clips verfügbar. Prüfe deinen Clip-Pool oder den Zeitraum.',
   no_schedule: 'Füge mindestens einen wöchentlichen Termin hinzu.',
   outside_lead: 'Der nächste freie Termin liegt noch außerhalb des Produktionsvorlaufs.',
@@ -29,6 +31,7 @@ const REASONS: Record<string, string> = {
   external_ai_consent_required: 'Die Zustimmung zur externen KI-Verarbeitung fehlt.',
   attempts_exhausted: 'Das Versuchslimit ist erreicht. Bitte prüfe den Auftrag.',
   production_interrupted: 'Die Produktion wurde unterbrochen und wird fortgesetzt.',
+  unsuitable_clip: 'Die KI hält diesen Clip möglicherweise für ungeeignet. Entscheide, ob er trotzdem verarbeitet werden soll.',
 };
 
 function slotLabel(value: string | null, timezone: string): string {
@@ -211,6 +214,24 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
             <label><input type="checkbox" role="switch" checked={draft.ai_editing_enabled} onChange={event => edit({ ai_editing_enabled: event.target.checked })} /><span>KI-Bearbeitung verwenden</span></label>
           </div>
           <p className="sq-help">Die KI-Einstellung gilt erst beim Produktionsstart. Sie ersetzt nicht deine Zustimmung zur externen KI-Verarbeitung.</p>
+          <fieldset className="sq-platforms">
+            <legend>Zielplattformen</legend>
+            <div className="sq-toggles">
+              {PLATFORMS.map(platform => {
+                const connected = snapshot.connected_platforms.includes(platform.id);
+                const selected = draft.target_platforms.includes(platform.id);
+                return <label key={platform.id}>
+                  <input type="checkbox" checked={selected} disabled={!connected && !selected}
+                    onChange={event => edit({ target_platforms: event.target.checked
+                      ? [...draft.target_platforms, platform.id]
+                      : draft.target_platforms.filter(value => value !== platform.id) })} />
+                  <span>{platform.label}{!connected && ' (nicht verbunden)'}</span>
+                </label>;
+              })}
+            </div>
+            <p className="sq-help">Verbinde fehlende Plattformen unter Konten. Wähle hier, wohin die Videos veröffentlicht werden sollen.</p>
+            {!draft.target_platforms.length && <p className="sq-help">Noch keine Zielplattform ausgewählt. Ohne Zielplattform wird kein Video veröffentlicht.</p>}
+          </fieldset>
           <div className="sq-fields">
             <label htmlFor={`${id}-zone`}>Zeitzone<input id={`${id}-zone`} value={draft.timezone} required list={`${id}-zones`} onChange={event => edit({ timezone: event.target.value })} /></label>
             <datalist id={`${id}-zones`}><option value="Europe/Berlin" /><option value="Europe/Vienna" /><option value="Europe/Zurich" /><option value="UTC" /></datalist>
@@ -240,7 +261,10 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
               <div className="sq-job-head"><strong>{job.clip_title || `Clip ${job.clip_id}`}</strong><span className={job.status === 'running' ? 'sq-running' : 'sq-badge'}>{STATUS[job.status]}</span></div>
               <p className="sq-help">{slotLabel(job.scheduled_at, snapshot.settings.timezone)} · {job.mode ? (job.mode === 'ai' ? 'KI-Bearbeitung' : 'Statisches Layout') : job.source === 'manual' ? 'Manueller Auftrag' : 'Modus wird beim Start festgelegt'}</p>
               {job.review_reasons.map(reason => <p className="sq-help" key={reason}>{REASONS[reason] ?? 'Die Produktion benötigt eine Prüfung.'}</p>)}
+              {job.review_explanation && <p className="sq-help">{job.review_explanation}</p>}
               {job.last_error && <p className="sq-error">{job.last_error}</p>}
+              {job.status === 'review' && <ReviewJobActions busy={busy} clipTitle={job.clip_title || `Clip ${job.clip_id}`}
+                onResolve={(action, note) => { void act(() => api.resolve(job.id, action, note, twitchUserId), action === 'process' ? 'Der Clip ist erneut zur Verarbeitung eingeplant.' : 'Clip übersprungen.'); }} />}
               {movable && <div className="sq-job-actions">
                 <button type="button" disabled={busy || position === 0} onClick={() => { void act(() => api.next(job.id, twitchUserId), 'Der Clip ist als Nächstes eingeplant.'); }}>Als Nächstes</button>
                 <button type="button" className="sq-icon" aria-label={`${job.clip_title} nach oben`} disabled={busy || position === 0} onClick={() => move(job.id, -1)}><ArrowUp size={16} /></button>

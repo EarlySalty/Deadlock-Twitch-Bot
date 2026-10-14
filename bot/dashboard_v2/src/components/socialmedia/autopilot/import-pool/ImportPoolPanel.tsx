@@ -324,7 +324,7 @@ function OwnerImportPool({
     >
       <StudioSectionHeading
         title={t("Historische Clips")}
-        description={t("Deadlock-Clips erfassen und für die spätere Verarbeitung auswählen.")}
+        description={t("Deadlock-Clips erfassen. Markierte Clips werden in deiner gewählten Reihenfolge zuerst verarbeitet, danach die übrigen passenden Clips.")}
         icon={Archive}
         actions={<button className="studio-button" type="button" onClick={reload} disabled={busy}>
           <RefreshCw size={16} aria-hidden="true" />{t("Erneut laden")}
@@ -715,7 +715,8 @@ function OwnerImportPool({
                         type="checkbox"
                         checked={selected}
                         disabled={selectionLocked || !selectionAllowed(clip)}
-                        aria-label={`${t("Clip auswählen")}: ${metadata.title}`}
+                        aria-label={`${t("Clip bevorzugen")}: ${metadata.title}`}
+                        title={t(selected ? "Bevorzugt" : "Zuerst verarbeiten")}
                         onChange={(event) => {
                           setFeedback("");
                           selectionMutation.mutate({

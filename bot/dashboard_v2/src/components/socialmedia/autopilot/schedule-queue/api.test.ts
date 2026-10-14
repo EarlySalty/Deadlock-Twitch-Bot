@@ -15,18 +15,21 @@ test('schedule adapter uses the shared cookie helper and narrow owner-bound requ
   };
   try {
     await scheduleQueueApi.load('42');
-    await scheduleQueueApi.save({ paused: true }, '42');
+    await scheduleQueueApi.save({ paused: true, target_platforms: ['youtube'] }, '42');
     await scheduleQueueApi.reorder([102, 103], '42');
     await scheduleQueueApi.next(103, '42');
     await scheduleQueueApi.cancel(103, '42');
+    await scheduleQueueApi.resolve(104, 'process', 'Weiterverarbeiten', '42');
     assert.deepEqual(calls.map(call => [call.path, call.init.method ?? 'GET', call.init.credentials]), [
       ['/twitch/social-media/api/autopilot/schedule?twitch_user_id=42', 'GET', 'same-origin'],
       ['/twitch/social-media/api/autopilot/schedule', 'PUT', 'same-origin'],
       ['/twitch/social-media/api/autopilot/queue/order', 'PUT', 'same-origin'],
       ['/twitch/social-media/api/autopilot/queue/103/next', 'POST', 'same-origin'],
       ['/twitch/social-media/api/autopilot/queue/103/cancel', 'POST', 'same-origin'],
+      ['/twitch/social-media/api/autopilot/queue/104/resolve', 'POST', 'same-origin'],
     ]);
-    assert.deepEqual(JSON.parse(String(calls[1].init.body)), { twitch_user_id: '42', paused: true });
+    assert.deepEqual(JSON.parse(String(calls[1].init.body)), { twitch_user_id: '42', paused: true, target_platforms: ['youtube'] });
+    assert.deepEqual(JSON.parse(String(calls[5].init.body)), { twitch_user_id: '42', action: 'process', note: 'Weiterverarbeiten' });
     assert.deepEqual(JSON.parse(String(calls[2].init.body)), { twitch_user_id: '42', job_ids: [102, 103] });
   } finally {
     globalThis.fetch = original;
