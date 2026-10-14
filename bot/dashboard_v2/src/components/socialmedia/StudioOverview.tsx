@@ -59,7 +59,7 @@ function countStage(clips: SocialClipMitPosting[] | undefined, stage: Exclude<Qu
 function upcomingPosts(clips: SocialClipMitPosting[] | undefined, now: number) {
   return (clips ?? []).flatMap(clip => queuedPostings(clip)
     .filter(({ at }) => Date.parse(at) >= now)
-    .map(({ platform, at }) => ({ key: `${clip.clip_db_id}-${platform}`, title: clip.title || clip.clip_id, platform, at })),
+    .map(({ platform, at }) => ({ key: `${clip.clip_db_id}-${platform}`, title: clip.title || clip.clip_id, platform, at, stage: queueStage(clip) })),
   ).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 }
 
@@ -174,7 +174,7 @@ export function PipelineOverview({ data, now, onNavigate }: {
   const videoTitle = (video: PublishVideo) => clips?.find(clip => clip.clip_db_id === video.clip_id)?.title || t('Video {id}', { id: video.id });
   const nowRows: OverviewRow[] = [
     ...jobsWithStatus(schedule, 'running').map(job => ({ key: `job-${job.id}`, title: clipTitle(job), meta: job.mode === 'ai' ? t('KI-Bearbeitung läuft') : t('Produktion läuft'), tone: 'gold' as Tone, onClick: () => onNavigate('plan') })),
-    ...(clips ?? []).filter(clip => clip.status === 'publishing').map(clip => ({ key: `publish-${clip.clip_db_id}`, title: clip.title || clip.clip_id, meta: t('Wird veröffentlicht'), tone: 'gold' as Tone, onClick: () => onNavigate('pool', 'planned') })),
+    ...(clips ?? []).filter(clip => clip.status === 'publishing').map(clip => ({ key: `publish-${clip.clip_db_id}`, title: clip.title || clip.clip_id, meta: t('Wird veröffentlicht'), tone: 'gold' as Tone, onClick: () => onNavigate('pool', queueStage(clip)) })),
     ...(publish?.videos ?? []).filter(video => video.event?.destinations.some(destination => ['preparing', 'effect_started', 'processing'].includes(destination.state))).map(video => ({ key: `video-${video.id}`, title: videoTitle(video), meta: t('Wird veröffentlicht'), tone: 'gold' as Tone, onClick: () => onNavigate('plan') })),
   ];
   const productionReviews = schedule?.review_count ?? 0;
@@ -202,7 +202,7 @@ export function PipelineOverview({ data, now, onNavigate }: {
   for (const job of jobsWithStatus(schedule, 'queued').slice(0, 3))
     nextRows.push({ key: `queued-${job.id}`, title: clipTitle(job), meta: t('Produktion für {time}', { time: when(job.scheduled_at) }), onClick: () => onNavigate('plan') });
   for (const post of upcomingPosts(clips, now).slice(0, 4))
-    nextRows.push({ key: post.key, title: post.title, meta: `${PLATFORM_LABELS[post.platform]} · ${when(post.at, timezone)}`, onClick: () => onNavigate('pool', 'planned') });
+    nextRows.push({ key: post.key, title: post.title, meta: `${PLATFORM_LABELS[post.platform]} · ${when(post.at, timezone)}`, onClick: () => onNavigate('pool', post.stage) });
   if (schedule?.settings.enabled && schedule.next_slot)
     nextRows.push({ key: 'slot', title: t('Nächster freier Auto-Pilot-Termin'), meta: when(schedule.next_slot), onClick: () => onNavigate('plan') });
 
