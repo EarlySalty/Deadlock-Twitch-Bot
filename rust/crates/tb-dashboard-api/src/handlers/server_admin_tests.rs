@@ -32,7 +32,7 @@ const OWN: i64 = 1_111_111_111_111_111_111;
 const FOREIGN: i64 = 2_222_222_222_222_222_222;
 const NOT_INSTALLED: i64 = 3_333_333_333_333_333_333;
 const MIGRATION: &str =
-    include_str!("../../../../migrations/20261012120000_server_admin_guilds.sql");
+    include_str!("../../../../migrations/20261012120100_server_admin_guilds.sql");
 
 struct Env {
     _db: crate::test_database::Database,

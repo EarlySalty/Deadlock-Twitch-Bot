@@ -1,13 +1,14 @@
+#[path = "../../../test-support/postgres.rs"]
+mod test_postgres;
 #[path = "../../../test-support/schema_sql.rs"]
 mod test_sql;
 
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tb_chat::api::{BanOutcome, ChatApi};
 use tb_chat::conversation_scam::add_conversation_scam_global_ban;
@@ -20,60 +21,40 @@ use tb_chat::moderation::ModerationEngine;
 use tb_chat::types::{ChatMessageBody, ChatMessageEvent, SendOutcome};
 use tb_engagement::llm_chat::EngagementLlmClient;
 
-macro_rules! pool_or_skip {
-    ($schema:expr) => {{
-        let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
-            if std::env::var("TB_TEST_REQUIRE_DB").as_deref() == Ok("1") {
-                panic!("TB_TEST_REQUIRE_DB=1 gesetzt, aber TB_TEST_DATABASE_URL fehlt");
-            }
-            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-            return;
-        };
-        pool_in_schema(&dsn, $schema).await
-    }};
+macro_rules! isolated_pool {
+    ($schema:expr) => {
+        pool_in_schema($schema).await
+    };
 }
 
-async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
-    let admin = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(dsn)
-        .await
-        .unwrap();
-    sqlx::query(crate::test_sql::drop_schema(schema, true))
-        .execute(&admin)
-        .await
-        .unwrap();
+async fn pool_in_schema(schema: &str) -> (test_postgres::TestPostgres, PgPool) {
+    let database = test_postgres::TestPostgres::start().await;
     sqlx::query(crate::test_sql::create_schema(schema, false))
-        .execute(&admin)
+        .execute(&database.pool)
         .await
         .unwrap();
-    admin.close().await;
-
-    let opts = PgConnectOptions::from_str(dsn)
-        .unwrap()
-        .options([("search_path", schema)]);
+    let search_path = format!("{schema},public");
+    let opts = database
+        .pool
+        .connect_options()
+        .as_ref()
+        .clone()
+        .options([("search_path", search_path.as_str())]);
     let pool = PgPoolOptions::new()
         .max_connections(4)
         .connect_with(opts)
         .await
         .unwrap();
     apply_ddl(&pool).await;
-    pool
+    (database, pool)
 }
 
 async fn drop_schema(pool: &PgPool, schema: &str) {
-    pool.close().await;
-    let dsn = std::env::var("TB_TEST_DATABASE_URL").unwrap();
-    let admin = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&dsn)
-        .await
-        .unwrap();
     sqlx::query(crate::test_sql::drop_schema(schema, true))
-        .execute(&admin)
+        .execute(pool)
         .await
         .unwrap();
-    admin.close().await;
+    pool.close().await;
 }
 
 async fn apply_ddl(pool: &PgPool) {
@@ -114,11 +95,12 @@ async fn apply_ddl(pool: &PgPool) {
     ] {
         sqlx::query(ddl).execute(pool).await.unwrap();
     }
-    // KI-Schalter pro Server (Paket K): der Lern-Korpus filtert damit.
-    sqlx::raw_sql(include_str!("../../../test-support/multiserver_ai_schema.sql"))
-        .execute(pool)
-        .await
-        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../test-support/multiserver_ai_schema.sql"
+    ))
+    .execute(pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../migrations/20261012140000_ai_features_rule.sql"
     ))
@@ -482,7 +464,7 @@ async fn run_action_guard_with_judge(
 /// Vorfälle. Die ID kommt als `broadcaster_user_id` an jedem Event mit.
 #[tokio::test]
 async fn guard_findet_settings_nach_umbenennung_ueber_die_kanal_id() {
-    let pool = pool_or_skip!("tb_conversation_scam_rename");
+    let (_database, pool) = isolated_pool!("tb_conversation_scam_rename");
     // Settings unter dem alten Login, aber mit der stabilen ID.
     sqlx::query(
         "INSERT INTO twitch_scam_guard_settings (channel_login, channel_user_id, mode) \
@@ -539,7 +521,7 @@ async fn guard_findet_settings_nach_umbenennung_ueber_die_kanal_id() {
 
 #[tokio::test]
 async fn guard_laedt_settings_trigger_und_persistiert_verdict() {
-    let pool = pool_or_skip!("tb_conversation_scam_guard");
+    let (_database, pool) = isolated_pool!("tb_conversation_scam_guard");
     sqlx::query(
         "INSERT INTO twitch_scam_guard_settings (channel_login, mode) \
          VALUES ('testchannel', 'alert_only')",
@@ -612,7 +594,7 @@ async fn guard_laedt_settings_trigger_und_persistiert_verdict() {
 
 #[tokio::test]
 async fn auto_ban_bannt_jungen_account() {
-    let pool = pool_or_skip!("tb_conversation_scam_young_autoban");
+    let (_database, pool) = isolated_pool!("tb_conversation_scam_young_autoban");
     seed_first_time_guard(&pool, "auto_ban").await;
 
     let calls = run_action_guard(&pool, Some(Utc::now() - ChronoDuration::days(10))).await;
@@ -625,7 +607,7 @@ async fn auto_ban_bannt_jungen_account() {
 
 #[tokio::test]
 async fn gemeldeter_befriending_pivot_bannt_null_tage_account_und_loescht_nachricht() {
-    let pool = pool_or_skip!("tb_conversation_scam_reported_befriending");
+    let (_database, pool) = isolated_pool!("tb_conversation_scam_reported_befriending");
     seed_first_time_guard(&pool, "auto_ban").await;
 
     let calls = run_action_guard_with_judge(
@@ -647,7 +629,7 @@ async fn gemeldeter_befriending_pivot_bannt_null_tage_account_und_loescht_nachri
 
 #[tokio::test]
 async fn auto_ban_timeoutet_alten_account_und_loescht_nachricht() {
-    let pool = pool_or_skip!("tb_conversation_scam_old_autoban");
+    let (_database, pool) = isolated_pool!("tb_conversation_scam_old_autoban");
     seed_first_time_guard(&pool, "auto_ban").await;
 
     let calls = run_action_guard(&pool, Some(Utc::now() - ChronoDuration::days(400))).await;
@@ -661,7 +643,7 @@ async fn auto_ban_timeoutet_alten_account_und_loescht_nachricht() {
 
 #[tokio::test]
 async fn auto_ban_timeoutet_bei_unbekanntem_account_alter() {
-    let pool = pool_or_skip!("tb_conversation_scam_unknown_age_autoban");
+    let (_database, pool) = isolated_pool!("tb_conversation_scam_unknown_age_autoban");
     seed_first_time_guard(&pool, "auto_ban").await;
 
     let calls = run_action_guard(&pool, None).await;
@@ -680,7 +662,7 @@ async fn auto_ban_timeoutet_bei_unbekanntem_account_alter() {
 
 #[tokio::test]
 async fn cross_channel_erstnachricht_loest_judge_bei_kurzem_hallo_aus() {
-    let pool = pool_or_skip!("tb_conversation_scam_cross_channel");
+    let (_database, pool) = isolated_pool!("tb_conversation_scam_cross_channel");
     seed_first_time_guard(&pool, "alert_only").await;
     sqlx::query(
         "UPDATE twitch_scam_guard_settings SET channel_login = 'suelze_' \
@@ -754,7 +736,7 @@ async fn cross_channel_erstnachricht_loest_judge_bei_kurzem_hallo_aus() {
 
 #[tokio::test]
 async fn timeout_mode_timeoutet_und_loescht_nachricht() {
-    let pool = pool_or_skip!("tb_conversation_scam_timeout_mode");
+    let (_database, pool) = isolated_pool!("tb_conversation_scam_timeout_mode");
     seed_first_time_guard(&pool, "timeout").await;
 
     let calls = run_action_guard(&pool, Some(Utc::now() - ChronoDuration::days(10))).await;
@@ -767,7 +749,7 @@ async fn timeout_mode_timeoutet_und_loescht_nachricht() {
 
 #[tokio::test]
 async fn self_learning_korpus_und_persistenz() {
-    let pool = pool_or_skip!("tb_conversation_scam_learning");
+    let (_database, pool) = isolated_pool!("tb_conversation_scam_learning");
 
     // Anfangs noch keine Erkenntnisse hinterlegt.
     assert_eq!(load_learnings(&pool).await.unwrap(), None);
@@ -797,26 +779,50 @@ async fn self_learning_korpus_und_persistenz() {
         .unwrap();
     }
 
-    // Ein bestätigter Fall aus einem Kanal, dessen Server die KI aus hat,
-    // geht nicht in den Korpus (Paket K).
     sqlx::raw_sql(
-        "INSERT INTO discord_guilds (guild_id, ai_features) VALUES (900000000000000001, false); \
-         INSERT INTO streamer_guilds (twitch_user_id, guild_id) VALUES ('fremd-id', 900000000000000001); \
-         INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login) VALUES ('fremd-id', 'fremdkanal'); \
-         INSERT INTO twitch_scam_guard_verdicts \
-             (channel_login, chatter_login, chatter_id, verdict, confidence, category, \
-              reasoning, transcript_snapshot, action_taken) \
-         VALUES ('fremdkanal', 'fremd_scammer', 'fremd_scammer-id', 'scam', 0.9, 'cat', \
-                 'grund-fremd', '[\"msg\"]', 'banned')",
+        "INSERT INTO discord_guilds (guild_id, ai_features) VALUES (1289721245281292288, true), (900000000000000001, false); \
+         INSERT INTO twitch_streamer_identities VALUES ('100', 'testchannel'), ('200', 'fremdkanal'), \
+             ('300', 'gemischtkanal'), ('500', 'inaktivkanal'); \
+         INSERT INTO streamer_guilds (twitch_user_id, guild_id, active) VALUES \
+             ('100', 1289721245281292288, true), ('200', 900000000000000001, true), \
+             ('300', 1289721245281292288, true), ('300', 900000000000000001, true), \
+             ('500', 1289721245281292288, false); \
+         INSERT INTO twitch_partners_all_state VALUES ('100', 1), ('200', 1), ('300', 1), ('500', 1)",
     )
     .execute(&pool)
     .await
     .unwrap();
 
+    for channel in [
+        "fremdkanal",
+        "gemischtkanal",
+        "unbekanntkanal",
+        "inaktivkanal",
+    ] {
+        for action in ["banned", "overturned"] {
+            sqlx::query(
+                "INSERT INTO twitch_scam_guard_verdicts \
+                 (channel_login, chatter_login, chatter_id, verdict, confidence, category, \
+                  reasoning, transcript_snapshot, action_taken) \
+                 VALUES ($1, 'fremd_scammer', 'fremd_scammer-id', 'scam', 0.9, 'cat', \
+                         'grund-fremd', '[\"msg\"]', $2)",
+            )
+            .bind(channel)
+            .bind(action)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+    }
+
     let corpus = fetch_learning_corpus(&pool, 40).await;
     assert!(
-        corpus.confirmed.iter().all(|s| s.reasoning != "grund-fremd"),
-        "Fälle fremder Server ohne KI bleiben draußen"
+        corpus
+            .confirmed
+            .iter()
+            .chain(&corpus.false_positives)
+            .all(|s| s.reasoning != "grund-fremd"),
+        "Nur aktive, bekannte Kanäle ohne ausgeschaltete Server-KI dürfen beitragen"
     );
     assert_eq!(corpus.confirmed.len(), 2, "banned + suggested = bestätigt");
     assert_eq!(corpus.false_positives.len(), 1, "overturned = Fehlalarm");
@@ -852,7 +858,7 @@ async fn self_learning_korpus_und_persistenz() {
 
 #[tokio::test]
 async fn chat_unban_overturn_entfernt_ai_globalban_aber_keinen_manuellen() {
-    let pool = pool_or_skip!("tb_conversation_scam_chat_unban_globalban");
+    let (_database, pool) = isolated_pool!("tb_conversation_scam_chat_unban_globalban");
     let commands = ScamGuardCommands::new(
         pool.clone(),
         EngagementLlmClient::new(None, None, None, None),
@@ -948,7 +954,7 @@ async fn chat_unban_overturn_entfernt_ai_globalban_aber_keinen_manuellen() {
 
 #[tokio::test]
 async fn ai_globalban_ueberschreibt_keine_manuellen_eintraege() {
-    let pool = pool_or_skip!("tb_conversation_scam_globalban_owner");
+    let (_database, pool) = isolated_pool!("tb_conversation_scam_globalban_owner");
 
     add_conversation_scam_global_ban(&pool, "NewScam", Some("new-id"), "ai grund")
         .await
@@ -1018,7 +1024,7 @@ async fn ai_globalban_ueberschreibt_keine_manuellen_eintraege() {
 
 #[tokio::test]
 async fn revoke_verdict_entbannt_bei_ban_und_markiert_overturned() {
-    let pool = pool_or_skip!("tb_conversation_scam_revoke");
+    let (_database, pool) = isolated_pool!("tb_conversation_scam_revoke");
 
     // Echter Ban: muss entbannen UND als overturned markieren.
     let banned_id: i64 = sqlx::query_scalar(
@@ -1179,7 +1185,7 @@ async fn revoke_verdict_entbannt_bei_ban_und_markiert_overturned() {
 
 #[tokio::test]
 async fn conversation_scam_enforce_verdict_bannt_vorschlag_mit_gespeicherter_begruendung() {
-    let pool = pool_or_skip!("tb_conversation_scam_enforce");
+    let (_database, pool) = isolated_pool!("tb_conversation_scam_enforce");
     let verdict_id: i64 = sqlx::query_scalar(
         "INSERT INTO twitch_scam_guard_verdicts \
          (channel_login, chatter_login, chatter_id, verdict, confidence, category, \
@@ -1220,7 +1226,7 @@ async fn conversation_scam_enforce_verdict_bannt_vorschlag_mit_gespeicherter_beg
 
 #[tokio::test]
 async fn conversation_scam_enforce_verdict_lehnt_bearbeitetes_urteil_ohne_ban_ab() {
-    let pool = pool_or_skip!("tb_conversation_scam_enforce_not_eligible");
+    let (_database, pool) = isolated_pool!("tb_conversation_scam_enforce_not_eligible");
     let verdict_id: i64 = sqlx::query_scalar(
         "INSERT INTO twitch_scam_guard_verdicts \
          (channel_login, chatter_login, chatter_id, verdict, confidence, category, \

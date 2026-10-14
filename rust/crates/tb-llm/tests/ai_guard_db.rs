@@ -1,25 +1,17 @@
-//! KI-Schalter pro Server (Paket K) gegen eine echte Postgres: DB-Funktion
-//! `twitch_streamer_ai_allowed`, Sperre im Eingang und Beleg im Ledger.
-//!
-//! Das Guild-Schema ist auf die Spalten reduziert, die die Funktion liest
-//! (`test-support/multiserver_ai_schema.sql`); die Migrationen von Paket K
-//! selbst laufen unverändert. Ein
-//! Testbinary, ein Test: Ledger-Pool und Guard-Cache sind prozessweit.
-
 use std::time::Duration;
 
-use sqlx::postgres::PgPoolOptions;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-#[path = "../../../test-support/database.rs"]
-mod test_database;
+#[path = "../../../test-support/postgres.rs"]
+mod test_postgres;
 
 const LLM_USAGE_SCHEMA: &str = include_str!("../sqlx/schema.sql");
 const PAKET_K_REGEL: &str = include_str!("../../../migrations/20261012140000_ai_features_rule.sql");
+const MULTISERVER_REGEL: &str =
+    include_str!("../../../migrations/20261013150200_multiserver_ai_contract.sql");
 const PAKET_K_LEDGER: &str =
     include_str!("../../../migrations/20261012140100_llm_usage_streamer.sql");
-const DB_NAME: &str = "tb_llm_ai_guard_test";
 
 const DE: i64 = 1_289_721_245_281_292_288;
 const EN: i64 = 900_000_000_000_000_001;
@@ -38,37 +30,8 @@ fn endpoint(server: &MockServer) -> tb_llm::LlmEndpoint {
 
 #[tokio::test]
 async fn ki_schalter_sperrt_fremde_server_und_belegt_im_ledger() {
-    let dsn = test_database::database_url();
-    assert!(
-        dsn.is_some() || !test_database::required(),
-        "Test-Datenbank verlangt, aber kein DSN gesetzt"
-    );
-    let Some(dsn) = dsn else {
-        eprintln!("KI-Schalter-DB-Test übersprungen: kein Test-DSN");
-        return;
-    };
-    let admin = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&dsn)
-        .await
-        .expect("admin connect");
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "DROP DATABASE IF EXISTS {DB_NAME} WITH (FORCE)"
-    )))
-    .execute(&admin)
-    .await
-    .expect("drop test db");
-    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {DB_NAME}")))
-        .execute(&admin)
-        .await
-        .expect("create test db");
-    let mut options: sqlx::postgres::PgConnectOptions = dsn.parse().expect("DSN");
-    options = options.database(DB_NAME);
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect_with(options)
-        .await
-        .expect("test db connect");
+    let database = test_postgres::TestPostgres::start().await;
+    let pool = database.pool.clone();
 
     sqlx::raw_sql(LLM_USAGE_SCHEMA)
         .execute(&pool)
@@ -78,7 +41,6 @@ async fn ki_schalter_sperrt_fremde_server_und_belegt_im_ledger() {
         .execute(&pool)
         .await
         .expect("guild schema");
-    // Idempotent: ein zweiter Lauf darf nicht scheitern.
     for _ in 0..2 {
         sqlx::raw_sql(PAKET_K_REGEL)
             .execute(&pool)
@@ -100,33 +62,65 @@ async fn ki_schalter_sperrt_fremde_server_und_belegt_im_ledger() {
              ('300', {EN}, true), ('300', {DE}, true),
              ('500', {EN}, false),
              ('600', {DE}, false),
-             ('700', {EN_ENTFERNT}, true), ('700', {EN}, true);
-         INSERT INTO twitch_streamer_identities VALUES ('200', 'fremd_kanal'), ('100', 'de_kanal');"
+             ('700', {EN_ENTFERNT}, true), ('700', {EN}, true),
+             ('800', {DE}, true), ('900', {DE}, true), ('1000', {DE}, true),
+             ('1100', {DE}, true), ('1200', {DE}, true), ('1300', {DE}, true),
+             ('1400', {DE}, true);
+         INSERT INTO twitch_streamer_identities VALUES
+             ('100', 'de_kanal'), ('200', 'fremd_kanal'), ('300', 'gemischt_kanal'),
+             ('500', 'inaktiv_fremd'), ('600', 'inaktiv_de'), ('700', 'entfernt_kanal'),
+             ('800', 'kein_partner'), ('900', 'ausgeschlossen'), ('1000', 'gesperrte_id'),
+             ('1100', 'gesperrter_login'), ('1200', 'blockiert'), ('1300', 'bot_gebannt'),
+             ('1400', 'reaktiviert');
+         INSERT INTO twitch_partners_all_state VALUES
+             ('100', 1), ('200', 1), ('300', 1), ('500', 1), ('600', 1), ('700', 1),
+             ('800', 0), ('900', 1), ('1000', 1), ('1100', 1), ('1200', 1), ('1300', 1),
+             ('1400', 1);
+         INSERT INTO twitch_exclusions VALUES ('900', NULL), ('1400', now());
+         INSERT INTO twitch_partner_signup_denylist VALUES
+             ('1000', 'anderer_login'), ('9999', 'GESPERRTER_LOGIN');
+         INSERT INTO twitch_partners VALUES ('1200', ' blocked '), ('1300', 'BOT_BANNED');"
     )))
     .execute(&pool)
     .await
     .expect("seed");
 
-    // Die Regel als DB-Funktion.
-    for (id, login, erwartet) in [
-        (Some("100"), None, true),          // deutscher Server
-        (Some("200"), None, false),         // nur fremder Server ohne KI
-        (Some("300"), None, true),          // beide Server
-        (Some("400"), None, true),          // ohne Zeile: deutscher Server
-        (Some("500"), None, false),         // nur inaktiv, fremd
-        (Some("600"), None, true),          // nur inaktiv, deutsch
-        (Some("700"), None, false),         // entfernter Server zählt nicht als aktiv
-        (None, Some("FREMD_KANAL"), false), // per Login
-        (None, Some("de_kanal"), true),
-        (None, Some("unbekannt"), true), // unbekannter Login: deutscher Server
-    ] {
-        let erlaubt: bool = sqlx::query_scalar("SELECT twitch_streamer_ai_allowed($1, $2)")
-            .bind(id)
-            .bind(login)
-            .fetch_one(&pool)
+    for migration in [PAKET_K_REGEL, MULTISERVER_REGEL] {
+        sqlx::raw_sql(migration)
+            .execute(&pool)
             .await
-            .expect("Funktion");
-        assert_eq!(erlaubt, erwartet, "id={id:?} login={login:?}");
+            .expect("source AI migration");
+        for (id, login, erwartet) in [
+            (Some("100"), None, true),
+            (Some("100"), Some("FREMD_KANAL"), false),
+            (Some("200"), None, false),
+            (Some("300"), None, false),
+            (Some("400"), None, false),
+            (Some("500"), None, false),
+            (Some("600"), None, false),
+            (Some("700"), None, false),
+            (Some("800"), None, false),
+            (Some("900"), None, false),
+            (Some("1000"), None, false),
+            (Some("1100"), None, false),
+            (Some("1200"), None, false),
+            (Some("1300"), None, false),
+            (Some("1400"), None, true),
+            (None, Some("FREMD_KANAL"), false),
+            (None, Some("gemischt_kanal"), false),
+            (None, Some("de_kanal"), true),
+            (None, Some("unbekannt"), false),
+            (None, None, false),
+        ] {
+            let erlaubt: bool =
+                sqlx::query_scalar("SELECT public.twitch_streamer_ai_allowed($1, $2)")
+                    .bind(id)
+                    .bind(login)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("Funktion");
+            assert_eq!(erlaubt, erwartet, "id={id:?} login={login:?}");
+        }
     }
 
     tb_llm::ledger::initialize(pool.clone(), "twitch-test", "ai-guard").unwrap();
@@ -156,29 +150,29 @@ async fn ki_schalter_sperrt_fremde_server_und_belegt_im_ledger() {
             .endpoint(endpoint(&server))
     };
 
-    // Gesperrt: kein HTTP-Aufruf, keine Ledger-Zeile.
-    let gesperrt = tb_llm::complete("promo_pitch", request().twitch_broadcaster("200")).await;
-    assert!(
-        matches!(gesperrt, Err(tb_llm::LlmError::Disabled(_))),
-        "{gesperrt:?}"
-    );
+    for id in [
+        "200", "300", "400", "500", "600", "700", "800", "900", "1000", "1100", "1200", "1300",
+    ] {
+        let gesperrt = tb_llm::complete("promo_pitch", request().twitch_broadcaster(id)).await;
+        assert!(
+            matches!(gesperrt, Err(tb_llm::LlmError::Disabled(_))),
+            "id={id} {gesperrt:?}"
+        );
+    }
     let gesperrt = tb_llm::complete("lfg_pitch", request().twitch_channel("Fremd_Kanal")).await;
     assert!(
         matches!(gesperrt, Err(tb_llm::LlmError::Disabled(_))),
         "{gesperrt:?}"
     );
-    // Streamer-Zweck ohne Streamerbezug, während ein Server die KI aus hat.
     let gesperrt = tb_llm::complete("promo_pitch", request()).await;
     assert!(
         matches!(gesperrt, Err(tb_llm::LlmError::Disabled(_))),
         "{gesperrt:?}"
     );
 
-    // Erlaubt: Streamer per Login aufgelöst, ID im Ledger.
     tb_llm::complete("engagement", request().twitch_channel("de_kanal"))
         .await
         .expect("deutscher Kanal");
-    // Globaler Zweck ohne Streamerbezug läuft weiter, ohne ID.
     tb_llm::complete("community_sentiment", request())
         .await
         .expect("globaler Job");
@@ -198,10 +192,4 @@ async fn ki_schalter_sperrt_fremde_server_und_belegt_im_ledger() {
     );
 
     pool.close().await;
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "DROP DATABASE IF EXISTS {DB_NAME} WITH (FORCE)"
-    )))
-    .execute(&admin)
-    .await
-    .ok();
 }

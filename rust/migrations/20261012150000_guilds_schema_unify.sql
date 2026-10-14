@@ -1,6 +1,3 @@
--- After merging Paket A and Paket R/K, both created discord_guilds.
--- R/K filename sorts first, so A's extra columns and audit table may be missing.
-
 ALTER TABLE public.discord_guilds
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     ADD COLUMN IF NOT EXISTS updated_by TEXT;

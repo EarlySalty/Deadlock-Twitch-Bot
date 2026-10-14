@@ -541,3 +541,66 @@ BEGIN
     END IF;
 END
 $private_vod_roles$;
+
+DO $discord_hub_roles$
+DECLARE membership record;
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'twitchhub') THEN
+        CREATE ROLE twitchhub LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE
+            NOREPLICATION NOBYPASSRLS PASSWORD NULL;
+    END IF;
+    ALTER ROLE twitchhub LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE
+        NOREPLICATION NOBYPASSRLS PASSWORD NULL;
+    ALTER ROLE twitchhub RESET ALL;
+    FOR membership IN
+        SELECT granted.rolname AS granted_role, members.rolname AS member_role
+        FROM pg_auth_members m
+        JOIN pg_roles granted ON granted.oid = m.roleid
+        JOIN pg_roles members ON members.oid = m.member
+        WHERE members.rolname = 'twitchhub' OR granted.rolname = 'twitchhub'
+    LOOP
+        EXECUTE format('REVOKE %I FROM %I', membership.granted_role, membership.member_role);
+    END LOOP;
+    GRANT CONNECT ON DATABASE twitch_analytics TO twitchhub;
+    GRANT USAGE ON SCHEMA public TO twitchhub;
+    REVOKE CREATE ON SCHEMA public FROM twitchhub;
+    REVOKE ALL ON ALL TABLES IN SCHEMA public FROM twitchhub;
+    REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM twitchhub;
+    IF to_regclass('public.discord_guilds') IS NOT NULL THEN
+        REVOKE ALL ON public.discord_guilds FROM PUBLIC, twitchdash, twitchlegacy;
+        GRANT SELECT ON public.discord_guilds TO twitchhub, twitchbot, twitchdash;
+        GRANT UPDATE (language, announce_channel_id, alert_channel_id,
+            streamer_role_id, ping_role_id, promo_invite_url, auto_partner_default,
+            cross_server_raids, updated_at, updated_by) ON public.discord_guilds TO twitchdash;
+        GRANT INSERT (guild_id, name, status, removed_at, updated_at) ON public.discord_guilds TO twitchhub;
+        GRANT UPDATE (name, language, announce_channel_id, alert_channel_id,
+            streamer_role_id, ping_role_id, promo_invite_url, auto_partner_default,
+            cross_server_raids, status, removed_at, updated_at, updated_by)
+            ON public.discord_guilds TO twitchhub;
+    END IF;
+    IF to_regclass('public.streamer_guilds') IS NOT NULL THEN
+        REVOKE ALL ON public.streamer_guilds FROM PUBLIC, twitchdash, twitchlegacy;
+        GRANT SELECT ON public.streamer_guilds TO twitchhub, twitchbot, twitchdash;
+        GRANT INSERT (twitch_user_id, guild_id, active, source) ON public.streamer_guilds TO twitchdash;
+        GRANT UPDATE (active, source, deactivated_by, deactivated_at) ON public.streamer_guilds TO twitchdash;
+        GRANT UPDATE (active, deactivated_by, deactivated_at) ON public.streamer_guilds TO twitchhub;
+    END IF;
+    IF to_regclass('public.server_admin_audit_log') IS NOT NULL THEN
+        REVOKE ALL ON public.server_admin_audit_log FROM PUBLIC, twitchbot, twitchdash, twitchlegacy;
+        GRANT SELECT, INSERT ON public.server_admin_audit_log TO twitchdash;
+        REVOKE ALL ON SEQUENCE public.server_admin_audit_log_id_seq FROM PUBLIC, twitchbot, twitchdash, twitchlegacy;
+        GRANT USAGE ON SEQUENCE public.server_admin_audit_log_id_seq TO twitchdash;
+    END IF;
+    IF to_regclass('public.twitch_streamer_identities') IS NOT NULL THEN
+        GRANT SELECT (twitch_user_id, discord_user_id) ON public.twitch_streamer_identities TO twitchhub;
+    END IF;
+    IF to_regprocedure('public.twitch_streamer_ai_allowed(text,text)') IS NOT NULL THEN
+        GRANT EXECUTE ON FUNCTION public.twitch_streamer_ai_allowed(text,text) TO twitchbot, twitchdash;
+    END IF;
+END
+$discord_hub_roles$;
+ALTER ROLE twitchhub IN DATABASE twitch_analytics SET search_path = public, pg_catalog;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+    REVOKE ALL ON TABLES FROM twitchhub;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+    REVOKE ALL ON SEQUENCES FROM twitchhub;

@@ -1059,8 +1059,15 @@ async fn ki_schalter_des_servers_sperrt_den_editor_vor_jeder_reservierung() {
     .expect("ai rule");
     sqlx::raw_sql(
         "INSERT INTO discord_guilds (guild_id, ai_features) VALUES (1289721245281292288, true), (900000000000000001, false); \
-         INSERT INTO streamer_guilds (twitch_user_id, guild_id) VALUES ('fremder_server', 900000000000000001); \
-         INSERT INTO public.social_ai_user_consent(twitch_user_id,external_ai_consent) VALUES ('fremder_server',true); \
+         INSERT INTO streamer_guilds (twitch_user_id, guild_id, active) VALUES \
+             ('100', 1289721245281292288, true), ('200', 900000000000000001, true), \
+             ('300', 1289721245281292288, true), ('300', 900000000000000001, true), \
+             ('500', 1289721245281292288, true), ('600', 1289721245281292288, false); \
+         INSERT INTO twitch_streamer_identities VALUES ('100', 'de_kanal'), ('200', 'fremd_kanal'), \
+             ('300', 'gemischt_kanal'), ('500', 'kein_partner'), ('600', 'inaktiv_kanal'); \
+         INSERT INTO twitch_partners_all_state VALUES ('100', 1), ('200', 1), ('300', 1), ('500', 0), ('600', 1); \
+         INSERT INTO public.social_ai_user_consent(twitch_user_id,external_ai_consent) VALUES \
+             ('100',true), ('200',true), ('300',true), ('400',true), ('500',true), ('600',true); \
          INSERT INTO public.social_media_settings(key,value) VALUES ('external_llm_consent','true'::jsonb)",
     )
     .execute(pool)
@@ -1070,23 +1077,49 @@ async fn ki_schalter_des_servers_sperrt_den_editor_vor_jeder_reservierung() {
     let mock = MockServer::start().await;
     configuration.provider.endpoint = mock.uri();
     Mock::given(method("POST"))
-        .respond_with(ResponseTemplate::new(500))
-        .expect(0)
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "model": configuration.provider.model,
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "{\"title\":\"clip\"}"}],
+            "usage": {"input_tokens": 100, "output_tokens": 20, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+        })))
+        .expect(1)
         .mount(&mock)
         .await;
+    for user in ["200", "300", "400", "500", "600"] {
+        let context = EditorContext {
+            twitch_user_id: user.into(),
+            job_id: "job".into(),
+            stage: "caption".into(),
+        };
+        let denied = complete_with_key(pool, &context, &configuration, &request(), "fake-key")
+            .await
+            .expect_err("KI-Zugriff ist gesperrt");
+        assert_eq!(denied.kind, ErrorKind::Consent, "user={user}");
+        let reserved: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM public.llm_usage")
+            .fetch_one(pool)
+            .await
+            .expect("ledger");
+        assert_eq!(reserved, 0, "keine Reservierung bei gesperrter KI: {user}");
+        assert!(mock
+            .received_requests()
+            .await
+            .expect("mock requests")
+            .is_empty());
+    }
     let context = EditorContext {
-        twitch_user_id: "fremder_server".into(),
+        twitch_user_id: "100".into(),
         job_id: "job".into(),
         stage: "caption".into(),
     };
-
-    let denied = complete_with_key(pool, &context, &configuration, &request(), "fake-key")
+    let allowed = complete_with_key(pool, &context, &configuration, &request(), "fake-key")
         .await
-        .expect_err("KI des Servers ist aus");
-    assert_eq!(denied.kind, ErrorKind::Consent);
+        .expect("deutscher Server mit aktiver Partnerschaft");
+    assert_eq!(allowed.content["title"], "clip");
+    mock.verify().await;
     let reserved: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM public.llm_usage")
         .fetch_one(pool)
         .await
-        .expect("ledger");
-    assert_eq!(reserved, 0, "keine Reservierung bei ausgeschalteter KI");
+        .expect("allowed ledger");
+    assert_eq!(reserved, 1);
 }
