@@ -80,3 +80,13 @@ pub trait DirectDiscord: Send + Sync {
         req: InboundRequest,
     ) -> Result<OutboundResponse, HubError>;
 }
+
+pub mod gateway;
+pub mod guilds;
+
+#[async_trait::async_trait]
+pub trait GuildEventSink: Send + Sync {
+    async fn guild_added(&self, guild_id: u64, name: &str);
+    async fn guild_removed(&self, guild_id: u64);
+    async fn member_left(&self, guild_id: u64, user_id: u64);
+}

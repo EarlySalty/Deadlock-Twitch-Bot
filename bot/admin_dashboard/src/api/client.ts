@@ -1008,12 +1008,12 @@ async function resolveJsonCsrfToken(body: Record<string, unknown>): Promise<stri
   throw new ApiError('CSRF-Token fehlt.', 403);
 }
 
-export async function postAdminJson<T, TBody extends object = Record<string, unknown>>(path: string, body: TBody) {
+export async function postAdminJson<T, TBody extends object = Record<string, unknown>>(path: string, body: TBody, method: 'POST' | 'PUT' = 'POST') {
   const normalizedBody = coerceRecord(body);
   const csrfToken = await resolveJsonCsrfToken(normalizedBody);
   const payload = { ...normalizedBody, csrf_token: csrfToken };
   return admin<T>(path, {
-    method: 'POST',
+    method,
     headers: {
       'Content-Type': 'application/json',
       'X-CSRF-Token': csrfToken,

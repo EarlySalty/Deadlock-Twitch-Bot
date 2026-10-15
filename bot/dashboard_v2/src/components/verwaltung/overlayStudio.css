@@ -1,0 +1,74 @@
+.overlay-studio-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 1rem;
+}
+
+.overlay-studio button:focus-visible,
+.overlay-studio summary:focus-visible,
+.overlay-studio a:focus-visible,
+.overlay-studio input:focus-visible,
+.overlay-studio select:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+
+.overlay-inspector > section + section,
+.overlay-inspector > details {
+  border-top: 1px solid var(--color-border);
+  padding-top: 1rem;
+}
+
+.overlay-inspector summary {
+  display: block;
+}
+
+.overlay-inspector summary::after {
+  content: "";
+  display: inline-block;
+  width: 0.4rem;
+  height: 0.4rem;
+  margin-left: 0.75rem;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: rotate(45deg) translateY(-0.15rem);
+}
+
+.overlay-inspector details[open] > summary::after {
+  transform: rotate(225deg);
+}
+
+.overlay-inspector input,
+.overlay-inspector select {
+  min-width: 0;
+}
+
+.overlay-inspector [hidden],
+.overlay-stage [hidden],
+.overlay-studio details:not([open]) > :not(summary) {
+  display: none;
+}
+
+.overlay-stage footer > div {
+  flex-basis: 16rem;
+}
+
+.overlay-inspector > details[open] > :not(summary) {
+  margin-top: 1rem;
+}
+
+@media (min-width: 1200px) {
+  .overlay-studio-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(360px, 32%);
+  }
+
+  .overlay-studio-grid[data-expanded] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .overlay-stage {
+    position: sticky;
+    top: 1rem;
+  }
+}

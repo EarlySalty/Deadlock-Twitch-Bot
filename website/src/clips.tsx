@@ -1,7 +1,7 @@
 import { landingText, landingLink, landingLocale, isEnglishLanding } from "@/lib/landingLocale";
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { Award, CalendarDays, Check, Crown, ExternalLink, LogIn, LogOut, Play, Send, ShieldCheck, Trophy } from 'lucide-react'
+import { Award, CalendarDays, Check, Crown, ExternalLink, LogIn, LogOut, Play, Send, ShieldCheck, Trophy, Film } from 'lucide-react'
 import './clips.css'
 
 type Clip = {
@@ -215,12 +215,13 @@ function App() {
         <p className="hero-text">{landingText("Der letzte Treffer, der größte Fail, die Rettung in letzter Sekunde. Zeig uns, was in unserem Partnernetzwerk passiert.")}</p>
         <div className="phase-pill"><CalendarDays size={17} /><b>{submissionsOpen ? landingText("Clips einreichen") : landingText("Die Abstimmung läuft")}</b><span>{landingText("bis ")}{deadline}{landingText(", 00:00 Uhr")}</span></div>
       </div>
-      <aside className="rules-card" aria-label={landingText("Ablauf")}><div className="rules-title"><ShieldCheck size={19} />{landingText(" So läuft es")}</div>
-        <ol><li><b>{landingText("1. bis 21.")}</b><span>{landingText("Bis zu 3 Twitch-Clips pro Person einreichen.")}</span></li>
-          <li><b>{landingText("22. bis Monatsende")}</b><span>{landingText("Mit Discord bis zu 5 Stimmen vergeben.")}</span></li>
-          <li><b>{landingText("Am 1.")}</b><span>{landingText("Die Top 3 bleiben in der Hall of Fame.")}</span></li></ol>
-      </aside>
     </section>
+
+    <aside className="rules-card" aria-label={landingText("Ablauf")}><div className="rules-title"><ShieldCheck size={19} />{landingText(" So läuft es")}</div>
+      <ol><li aria-current={submissionsOpen ? 'step' : undefined}><b>{landingText("1. bis 21.")}</b><span>{landingText("Bis zu 3 Twitch-Clips pro Person einreichen.")}</span></li>
+        <li aria-current={!submissionsOpen ? 'step' : undefined}><b>{landingText("22. bis Monatsende")}</b><span>{landingText("Mit Discord bis zu 5 Stimmen vergeben.")}</span></li>
+        <li><b>{landingText("Am 1.")}</b><span>{landingText("Die Top 3 bleiben in der Hall of Fame.")}</span></li></ol>
+    </aside>
 
     <section className="submission-panel" aria-label={submissionsOpen ? landingText("Clip einreichen") : landingText("Abstimmen")}>
       <div><p className="section-kicker">{submissionsOpen ? landingText("Dein Clip ist dran") : landingText("Du entscheidest")}</p>
@@ -232,11 +233,11 @@ function App() {
         <a className="button button--gold" href={landingLink("/clips/auth/discord/login")}><LogIn size={18} />{landingText(" Mit Discord anmelden")}</a>
         <a className="button button--outline" href={landingLink("/twitch/auth/login?next=%2Fclips")}><LogIn size={18} />{landingText(" Mit Twitch anmelden")}</a>
       </div> : submissionsOpen ? <form className="submit-form" onSubmit={submit}>
-        <label htmlFor="clip-url">{landingText("Twitch-Clip-Adresse")}</label><div className="input-row">
-          <input id="clip-url" type="url" required maxLength={500} placeholder="https://clips.twitch.tv/…" value={url}
+        <div className="submit-label"><label htmlFor="clip-url">{landingText("Twitch-Clip-Adresse")}</label><span id="clip-usage" className="counter">{session.submissions_used}{landingText(" von ")}{session.submissions_limit}{landingText(" Clips diesen Monat · ")}{session.display_name}</span></div><div className="input-row">
+          <input id="clip-url" type="url" required maxLength={500} placeholder="https://clips.twitch.tv/…" value={url} aria-describedby="clip-usage"
             onChange={event => setUrl(event.target.value)} disabled={busy || !session.can_submit} />
           <button className="button button--gold" type="submit" disabled={busy || !session.can_submit}><Send size={17} />{landingText(" Einreichen")}</button>
-        </div><span className="counter">{session.submissions_used}{landingText(" von ")}{session.submissions_limit}{landingText(" Clips diesen Monat · ")}{session.display_name}</span>
+        </div>
       </form> : <div className="voting-access">
         {!session.discord_authenticated && <a className="button button--gold" href={landingLink("/clips/auth/discord/login")}><LogIn size={18} />{landingText(" Mit Discord abstimmen")}</a>}
         <p className="vote-status">{session.can_vote && <Check size={18} />}{votingReason}</p>
@@ -253,7 +254,7 @@ function App() {
         <ClipPlayer clip={clip} /><div className="top-copy"><h3>{clip.title}</h3>
           <a className="channel-link" href={landingLink(`https://www.twitch.tv/${encodeURIComponent(clip.channel)}`)} target="_blank" rel="noopener noreferrer">{clip.channel_name || clip.channel}</a>
           {actions(clip)}</div>
-      </article>) : <div className="empty-card"><Trophy size={28} /><h3>{landingText("Noch kein Clip im Rennen.")}</h3><p>{submissionsOpen ? landingText("Reiche den ersten Moment aus einem Partnerkanal ein.") : landingText("Für diesen Monat wurden keine sichtbaren Clips eingereicht.")}</p></div>}</div>
+      </article>) : <div className="empty-card empty-card--podium"><span className="empty-trophy" aria-hidden="true"><Trophy size={26} /></span><h3>{landingText("Noch kein Clip im Rennen.")}</h3><p>{submissionsOpen ? landingText("Reiche den ersten Moment aus einem Partnerkanal ein.") : landingText("Für diesen Monat wurden keine sichtbaren Clips eingereicht.")}</p></div>}</div>
     </section>
 
     {current.total > 3 && <section className="all-clips"><div className="section-heading section-heading--row">
@@ -272,12 +273,12 @@ function App() {
       </select></label>}
     </div>
       {archiveError ? <div className="notice" role="status">{archiveError}</div> : shownMonth ? <div className="archive-month">
-        <h3>{monthLabel(shownMonth.month, shownMonth.month_label)}</h3><div className="archive-grid">{shownMonth.winners.map(clip => <article className="archive-card" key={clip.rank}>
+        <div className="archive-grid">{shownMonth.winners.map(clip => <article className="archive-card" key={clip.rank}>
           <span className="archive-rank">{clip.rank}{landingText(". Platz")}</span><ClipPlayer clip={clip} /><h3>{clip.title}</h3>
           <span>{clip.channel_name || clip.channel}</span><b>{voteLabel(clip.votes)}</b>
           {session.is_admin && <button className="moderate-button" disabled={busy} onClick={() => void hide(clip.id, true)}>{landingText("Ausblenden")}</button>}
-        </article>)}</div>{!shownMonth.winners.length && <p className="empty-card">{landingText("Für diesen Monat werden keine Gewinner-Clips angezeigt.")}</p>}
-      </div> : <div className="empty-card">{landingText("Die erste Hall of Fame entsteht am nächsten Monatsersten.")}</div>}
+        </article>)}</div>{!shownMonth.winners.length && <div className="empty-card empty-card--archive"><Film size={24} aria-hidden="true" /><p>{landingText("Für diesen Monat werden keine Gewinner-Clips angezeigt.")}</p></div>}
+      </div> : <div className="empty-card empty-card--archive"><Film size={24} aria-hidden="true" /><p>{landingText("Die erste Hall of Fame entsteht am nächsten Monatsersten.")}</p></div>}
       {archive.next_before && <button className="button button--outline more-button" disabled={busy} onClick={() => void olderMonths()}>{landingText("Ältere Monate laden")}</button>}
     </section>
 

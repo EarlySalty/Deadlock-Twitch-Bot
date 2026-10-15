@@ -14,6 +14,7 @@
 import { VOD_ARCHIVE_EN } from './vodArchive';
 import { SOCIAL_STUDIO_EN } from './socialStudio';
 import { EN_AREA_ENTRIES } from './en';
+import { GUILD_ONBOARDING_EN } from './guildOnboarding';
 
 export type Language = 'de' | 'en';
 
@@ -50,6 +51,7 @@ export const MESSAGE_TYPE_LABELS: Record<string, string> = {
 
 const EN: Record<string, string> = {
   ...EN_AREA_ENTRIES,
+  ...GUILD_ONBOARDING_EN,
   ...VOD_ARCHIVE_EN,
   ...SOCIAL_STUDIO_EN,
   'Diesen Streamer für den eigenen Social-Media-Manager freischalten': 'Enable this streamer’s own social media manager',

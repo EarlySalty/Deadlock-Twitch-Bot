@@ -13,6 +13,10 @@ path = "src/main.rs"
 [dependencies]
 async-trait.workspace = true
 axum.workspace = true
+futures-util.workspace = true
+sqlx.workspace = true
+whoami.workspace = true
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 hex.workspace = true
 reqwest.workspace = true
 serde.workspace = true

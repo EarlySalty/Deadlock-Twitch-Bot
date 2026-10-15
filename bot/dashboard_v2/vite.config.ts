@@ -19,19 +19,14 @@ export default defineConfig(({ mode }) => {
       outDir: isPreviewMode ? './dist-preview' : './dist',
       emptyOutDir: true,
       chunkSizeWarningLimit: 1000,
-      rollupOptions: {
+      rolldownOptions: {
         output: {
-          manualChunks(id: string) {
-            if (id.includes('/node_modules/react') || id.includes('/node_modules/react-dom')) {
-              return 'react'
-            }
-            if (id.includes('/node_modules/recharts')) {
-              return 'charts'
-            }
-            if (id.includes('/node_modules/@tanstack/react-query')) {
-              return 'query'
-            }
-            return undefined
+          codeSplitting: {
+            groups: [
+              { name: 'react', test: /\/node_modules\/(?:react(?:-dom|-is)?|scheduler)\//, priority: 30 },
+              { name: 'query', test: /\/node_modules\/@tanstack\/(?:react-query|query-core)\//, priority: 20 },
+              { name: 'charts', test: /\/node_modules\/recharts\//, priority: 10 },
+            ],
           },
         },
       },

@@ -1,0 +1,11 @@
+{
+  "goal": "Prevent Lurker Steuer announcements from selecting the channel broadcaster or configured bot account by Twitch user ID.",
+  "branch": "fix/lurker-tax-exclude-broadcaster",
+  "scope": ["rust/crates/tb-chat/src/promos.rs"],
+  "acceptance": [
+    "Selection excludes broadcaster and configured bot IDs before ranking and limiting, independent of their logins.",
+    "Existing known-bot and activity filters remain effective.",
+    "Affected crate formatting, clippy and existing tests pass, including a concrete database regression test.",
+    "Commit and push branch only; no merge or deployment."
+  ]
+}

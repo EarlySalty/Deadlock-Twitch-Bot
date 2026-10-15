@@ -52,8 +52,16 @@ test('empty draft is private, escaped, and has an actionable calendar', () => {
   assert.doesNotMatch(html, /<script>/);
   assert.match(html, /&lt;script&gt;/);
   assert.match(html, /Grüße &amp; Spaß/);
-  assert.match(html, /Termin am .* eintragen/);
+  assert.match(html, /Kalender für Zusatztermine öffnen/);
+  assert.doesNotMatch(html, /Termin am .* eintragen/);
   assert.match(html, /Keine automatische Löschung/);
+});
+test('events overlapping the current Berlin month open the calendar', () => {
+  const month = berlinInput(new Date().toISOString()).slice(0, 7);
+  const event = { id: 'existing', title: 'Community', description: '', starts_at: fromBerlinInput(`${month}-15T18:00`), ends_at: fromBerlinInput(`${month}-15T20:00`) };
+  const html = renderToStaticMarkup(<ProfileEditor initial={{ ...initial, profile: { ...initial.profile, events: [event] } }} onReload={() => {}} />);
+  assert.match(html, /Termin am .* eintragen/);
+  assert.match(html, /Kalender schließen/);
 });
 test('paused profiles have disabled edits and no public opening link', () => {
   const html = renderToStaticMarkup(<ProfileEditor initial={{ ...initial, published: true, active: false }} onReload={() => {}} />);

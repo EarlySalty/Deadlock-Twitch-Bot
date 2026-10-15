@@ -1,34 +1,14 @@
-import { useState, useEffect, useRef, Component, type ReactNode, type ErrorInfo } from 'react';
+import { useState, useEffect, useRef, useSyncExternalStore, lazy, Suspense, Component, type ReactNode, type ErrorInfo } from 'react';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/layout/Header';
 import { TabNavigation, type TabId } from '@/components/layout/TabNavigation';
-import { Overview } from '@/pages/Overview';
-import { Tagesform } from '@/pages/Tagesform';
-import { Sessions } from '@/pages/Sessions';
-import { SocialMediaManager } from '@/pages/SocialMediaManager';
-import { Monetization } from '@/pages/Monetization';
-import { Publikum } from '@/pages/Publikum';
-import { Wachstum } from '@/pages/Wachstum';
-import { Planung } from '@/pages/Planung';
-import { Community } from '@/pages/Community';
-import { Challenges } from '@/pages/Challenges';
-import { PartnerProfile } from '@/pages/PartnerProfile';
-import { CategoryCollector } from '@/pages/CategoryCollector';
-import { TitleGenerator } from '@/pages/TitleGenerator';
 import { fetchTitleStreamers } from '@/api/title';
-import { WasTun } from '@/pages/WasTun';
 import { resolveTabParam } from '@/tabAliases';
-import { SessionDetail } from '@/pages/SessionDetail';
-import { InternalHomeLanding } from '@/pages/InternalHomeLanding';
-import { UplinkPage } from '@/pages/Uplink';
-import { VerwaltungPage } from '@/pages/Verwaltung';
-import { OverlayBuilderPage } from '@/pages/OverlayBuilder';
-import Pricing from '@/pages/Pricing';
+import { GuildOnboardingPage } from '@/pages/GuildOnboarding';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { OnboardingProvider } from '@/components/onboarding/OnboardingContext';
 import { EinrichtungCard } from '@/components/onboarding/EinrichtungCard';
 import { FeedbackBox } from '@/components/feedback/FeedbackBox';
-import { FeedbackPage } from '@/pages/feedback/FeedbackPage';
 import { PlanProvider } from '@/context/PlanContext';
 import { LanguageProvider, useT } from '@/context/LanguageContext';
 import { DashboardAssistent } from '@/components/assistent/DashboardAssistent';
@@ -56,6 +36,31 @@ import {
   resolveEffectiveDemoMode,
 } from '@/runtimeConfig';
 import { AlertTriangle } from 'lucide-react';
+import { pageLoaders } from './pageLoaders';
+import { navigationSnapshot, subscribeNavigation } from './navigation';
+import { useDashboardProfile } from './hooks/useDashboardProfile';
+
+const Overview = lazy(() => pageLoaders.Overview().then(module => ({ default: module.Overview })));
+const Tagesform = lazy(() => pageLoaders.Tagesform().then(module => ({ default: module.Tagesform })));
+const Sessions = lazy(() => pageLoaders.Sessions().then(module => ({ default: module.Sessions })));
+const SocialMediaManager = lazy(() => pageLoaders.SocialMediaManager().then(module => ({ default: module.SocialMediaManager })));
+const Monetization = lazy(() => pageLoaders.Monetization().then(module => ({ default: module.Monetization })));
+const Publikum = lazy(() => pageLoaders.Publikum().then(module => ({ default: module.Publikum })));
+const Wachstum = lazy(() => pageLoaders.Wachstum().then(module => ({ default: module.Wachstum })));
+const Planung = lazy(() => pageLoaders.Planung().then(module => ({ default: module.Planung })));
+const Community = lazy(() => pageLoaders.Community().then(module => ({ default: module.Community })));
+const Challenges = lazy(() => pageLoaders.Challenges().then(module => ({ default: module.Challenges })));
+const PartnerProfile = lazy(() => pageLoaders.PartnerProfile().then(module => ({ default: module.PartnerProfile })));
+const CategoryCollector = lazy(() => pageLoaders.CategoryCollector().then(module => ({ default: module.CategoryCollector })));
+const TitleGenerator = lazy(() => pageLoaders.TitleGenerator().then(module => ({ default: module.TitleGenerator })));
+const WasTun = lazy(() => pageLoaders.WasTun().then(module => ({ default: module.WasTun })));
+const SessionDetail = lazy(() => pageLoaders.SessionDetail().then(module => ({ default: module.SessionDetail })));
+const InternalHomeLanding = lazy(() => pageLoaders.InternalHomeLanding().then(module => ({ default: module.InternalHomeLanding })));
+const UplinkPage = lazy(() => pageLoaders.UplinkPage().then(module => ({ default: module.UplinkPage })));
+const VerwaltungPage = lazy(() => pageLoaders.VerwaltungPage().then(module => ({ default: module.VerwaltungPage })));
+const OverlayBuilderPage = lazy(() => pageLoaders.OverlayBuilderPage().then(module => ({ default: module.OverlayBuilderPage })));
+const Pricing = lazy(pageLoaders.Pricing);
+const FeedbackPage = lazy(() => pageLoaders.FeedbackPage().then(module => ({ default: module.FeedbackPage })));
 
 // Error Boundary to prevent white screen on crashes
 interface ErrorBoundaryProps {
@@ -85,7 +90,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
       return (
         <ErrorFallback
           message={this.state.error?.message ?? null}
-          onRetry={() => this.setState({ hasError: false, error: null })}
+          onRetry={() => window.location.reload()}
         />
       );
     }
@@ -126,9 +131,26 @@ const queryClient = new QueryClient({
       retry: shouldRetryApiQuery,
       refetchOnWindowFocus: false,
       gcTime: 30 * 60 * 1000,
+      staleTime: 60 * 1000,
     },
   },
 });
+
+function SessionBootstrap() {
+  useDashboardProfile();
+  return null;
+}
+
+function RouteSkeleton() {
+  return (
+    <div className="space-y-4" aria-busy="true">
+      <div className="panel-card rounded-2xl p-6"><div className="h-8 w-48 max-w-full animate-pulse rounded-lg bg-white/5" /></div>
+      <div className="grid gap-4 md:grid-cols-3">
+        {[0, 1, 2].map(key => <div key={key} className="panel-card h-48 animate-pulse rounded-2xl bg-white/5" />)}
+      </div>
+    </div>
+  );
+}
 
 function normalizePathname(pathname: string): string {
   const normalized = pathname.replace(/\/+$/, '');
@@ -161,8 +183,14 @@ function OverviewOrTagesform({ streamer, days, onSessionClick }: OverviewOrTages
 
 function AnalyticsDashboard() {
   const t = useT();
-  const [streamer, setStreamer] = useState<string | null>(null);
-  const [days, setDays] = useState<TimeRange>(30);
+  const { data: authStatus } = useAuthStatus();
+  const [streamer, setStreamer] = useState<string | null>(() => {
+    const requested = new URLSearchParams(window.location.search).get('streamer')?.trim().toLowerCase();
+    const demo = resolveEffectiveDemoMode({ pathname: window.location.pathname, runtimeConfig: dashboardRuntimeConfig });
+    if (requested && streamerAusUrlErlaubt(requested, demo, dashboardRuntimeConfig.allowedDemoProfiles)) return requested;
+    return authStatus?.twitchLogin ?? authStatus?.adminDefaultStreamer ?? (demo ? dashboardRuntimeConfig.defaultDemoProfile : null);
+  });
+  const [days, setDays] = useState<TimeRange>(() => parseDaysParam(new URLSearchParams(window.location.search).get('days')));
   const [activeTab, setActiveTab] = useState<TabId | 'session-detail'>('overview');
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null);
   const [pendingSub, setPendingSub] = useState<string | null>(null);
@@ -172,7 +200,6 @@ function AnalyticsDashboard() {
   );
 
   const { data: streamers = [], isLoading: loadingStreamers } = useStreamerList();
-  const { data: authStatus } = useAuthStatus();
   const isDemoShell = resolveEffectiveDemoMode({
     pathname: window.location.pathname,
     runtimeConfig: dashboardRuntimeConfig,
@@ -395,7 +422,11 @@ function PricingRoute() {
 }
 
 export default function App() {
+  const location = useSyncExternalStore(subscribeNavigation, navigationSnapshot);
   const path = normalizePathname(window.location.pathname);
+  if (path === '/twitch/guild-onboarding') {
+    return <QueryClientProvider client={queryClient}><LanguageProvider><ErrorBoundary><GuildOnboardingPage /></ErrorBoundary></LanguageProvider></QueryClientProvider>;
+  }
   const isInternalHomeRoute = path === PREVIEW_HOME_ROUTE || path === '/twitch/onboarding';
   const isHelpRoute = path === '/twitch/hilfe';
   const isFeedbackRoute = path === '/twitch/feedback';
@@ -415,6 +446,19 @@ export default function App() {
     path === '/twitch/kategorie' ||
     (isAnalyticsRoute && new URLSearchParams(window.location.search).get('view') === 'category');
 
+  const activeRoute =
+    isInternalHomeRoute ? 'home'
+    : isChallengesRoute ? 'challenges'
+    : isOverlayBuilderRoute ? 'overlay'
+    : isVerwaltungRoute ? 'verwaltung'
+    : isUplinkRoute ? 'uplink'
+    : isTitleRoute ? 'title'
+    : isPricingRoute ? 'pricing'
+    : isSocialMediaManagerRoute ? 'social'
+    : isHelpRoute ? 'hilfe'
+    : isFeedbackRoute ? 'feedback'
+    : isCategoryRoute ? 'category' : 'analyse';
+
   const zeigeAssistent =
     path === PREVIEW_HOME_ROUTE &&
     !isPreviewModeEnabled() &&
@@ -430,7 +474,9 @@ export default function App() {
           Bundles, auch fuer die Fehlergrenze. */}
       <LanguageProvider>
         <ErrorBoundary>
+        <SessionBootstrap />
         <OnboardingProvider>
+        <Suspense fallback={<DashboardShell activeRoute={activeRoute} showSidebar={!isPricingRoute} demoMode={isAnalyticsRoute && resolveEffectiveDemoMode({ pathname: path, runtimeConfig: dashboardRuntimeConfig })}><RouteSkeleton /></DashboardShell>}>
           {isCategoryRoute ? (
             <DashboardShell activeRoute="category"><CategoryCollector /></DashboardShell>
           ) : isSocialMediaManagerRoute ? (
@@ -464,10 +510,11 @@ export default function App() {
               <InternalHome />
             </DashboardShell>
           ) : isAnalyticsRoute ? (
-            <AnalyticsDashboard />
+            <AnalyticsDashboard key={location} />
           ) : (
-            <AnalyticsDashboard />
+            <AnalyticsDashboard key={location} />
           )}
+        </Suspense>
         </OnboardingProvider>
         </ErrorBoundary>
         {zeigeAssistent && <DashboardAssistent />}
