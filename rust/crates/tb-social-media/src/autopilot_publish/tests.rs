@@ -63,6 +63,7 @@ async fn pool() -> PgPool {
         include_str!("../../../../migrations/20261011101000_social_clip_pool.sql"),
         include_str!("../../../../migrations/20261011102000_social_production_slot_guards.sql"),
         include_str!("../../../../migrations/20261013140000_social_autopilot_publishing.sql"),
+        include_str!("../../../../migrations/20261015124000_social_pipeline_policy.sql"),
         include_str!("../../../../migrations/20261015180000_social_destination_slots.sql"),
     ] {
         sqlx::raw_sql(migration)
@@ -736,6 +737,7 @@ async fn review_switch_holds_pending_destination_of_executed_event() {
         .execute(&pool)
         .await
         .expect("executed");
+    make_due(&pool, id).await;
     transition_mode(
         &pool,
         "owner",
@@ -863,6 +865,7 @@ async fn stale_claim_cannot_change_a_recovered_destination() {
     approve(&pool, "owner", id, &decisions(&["youtube"]))
         .await
         .expect("approve");
+    make_due(&pool, id).await;
     sqlx::query("UPDATE social_produced_videos SET publication_executed_at = clock_timestamp() WHERE id = $1")
         .bind(id)
         .execute(&pool)
@@ -1164,5 +1167,81 @@ async fn unresolved_destinations_release_file_only_after_grace_period() {
     assert!(recent_file.exists());
     executor.tick().await.expect("settled tick");
     assert!(publisher.calls().is_empty());
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn per_platform_schedule_publishes_each_destination_at_its_own_slot() {
+    let pool = pool().await;
+    configure(
+        &pool,
+        &["youtube", "tiktok"],
+        &[("youtube", "yt-1"), ("tiktok", "tt-1")],
+    )
+    .await;
+    let morning: Vec<serde_json::Value> = (1..=7)
+        .map(|weekday| json!({"weekday": weekday, "local_time": "06:00"}))
+        .collect();
+    let evening: Vec<serde_json::Value> = (1..=7)
+        .map(|weekday| json!({"weekday": weekday, "local_time": "18:00"}))
+        .collect();
+    sqlx::query("UPDATE social_media_autopilot_settings SET pipeline_mode = 'upload', schedule_scope = 'per_platform',
+        platform_schedule_slots = $2::text::jsonb WHERE twitch_user_id = $1")
+        .bind("owner")
+        .bind(json!({"youtube": morning, "tiktok": evening}).to_string())
+        .execute(&pool)
+        .await
+        .expect("per destination schedule");
+    let (id, _) = video(&pool, "split").await;
+    approve(&pool, "owner", id, &decisions(&["youtube", "tiktok"]))
+        .await
+        .expect("approve");
+    let times: Vec<(String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT platform, scheduled_at FROM twitch_clips_upload_queue WHERE produced_video_id = $1 ORDER BY platform",
+    )
+    .bind(id)
+    .fetch_all(&pool)
+    .await
+    .expect("destination times");
+    assert_eq!(times.len(), 2);
+    let gap = (times[0].1 - times[1].1).num_hours().abs();
+    assert_eq!(gap, 12);
+    let reference: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT scheduled_at FROM social_produced_videos WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("video slot");
+    assert_eq!(reference, times[0].1.min(times[1].1));
+    sqlx::query("UPDATE social_produced_videos SET scheduled_at = clock_timestamp() - INTERVAL '1 minute' WHERE id = $1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("due video");
+    sqlx::query("UPDATE twitch_clips_upload_queue SET scheduled_at = clock_timestamp() - INTERVAL '1 minute' WHERE produced_video_id = $1 AND platform = 'youtube'")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("due youtube");
+    let publisher = ScriptedPublisher::with(vec![published("yt-video")]);
+    PublishExecutor::new(pool.clone(), publisher.clone())
+        .tick()
+        .await
+        .expect("tick");
+    let calls: Vec<String> = publisher
+        .calls()
+        .into_iter()
+        .map(|(platform, _)| platform)
+        .collect();
+    assert_eq!(calls, vec!["youtube".to_string()]);
+    let tiktok: (String, chrono::DateTime<chrono::Utc>) = sqlx::query_as(
+        "SELECT status, scheduled_at FROM twitch_clips_upload_queue WHERE produced_video_id = $1 AND platform = 'tiktok'",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .expect("tiktok destination");
+    assert!(tiktok.1 > chrono::Utc::now());
+    assert_ne!(tiktok.0, "uploaded");
     cleanup(pool).await;
 }

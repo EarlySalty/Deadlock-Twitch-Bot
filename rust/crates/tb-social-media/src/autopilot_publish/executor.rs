@@ -258,11 +258,15 @@ impl PublishExecutor {
         let settings = autopilot_settings::load(&self.pool, owner).await?;
         let mut connection = self.pool.acquire().await?;
         let accounts = connections_on(&mut connection, owner).await?;
+        let reserved = autopilot_schedule::video_destinations_on(&mut connection, id).await?;
         drop(connection);
         let platforms: Vec<String> = settings
             .target_platforms
             .iter()
             .filter(|platform| accounts.contains_key(platform.as_str()))
+            .filter(|platform| {
+                reserved.is_empty() || reserved.iter().any(|slot| &slot.platform == *platform)
+            })
             .cloned()
             .collect();
         if platforms.is_empty() {
@@ -380,15 +384,15 @@ impl PublishExecutor {
         let mut tx = self.pool.begin().await?;
         autopilot_settings::lock_owner(&mut tx, owner).await?;
         let settings = autopilot_settings::load_on(&mut tx, owner).await?;
-        let row: Option<(Option<DateTime<Utc>>, String, i64)> = sqlx::query_as(
-            "SELECT scheduled_at, status, clip_id FROM social_produced_videos WHERE id = $1
+        let row: Option<ExecutionRow> = sqlx::query_as(
+            "SELECT scheduled_at, status, clip_id, job_id FROM social_produced_videos WHERE id = $1
              AND twitch_user_id = $2 AND publication_executed_at IS NULL FOR UPDATE",
         )
         .bind(id)
         .bind(owner)
         .fetch_optional(&mut *tx)
         .await?;
-        let Some((Some(slot), status, clip_id)) = row else {
+        let Some((Some(slot), status, clip_id, job)) = row else {
             return Ok(());
         };
         let now = now_on(&mut tx).await?;
@@ -409,9 +413,13 @@ impl PublishExecutor {
             return Ok(());
         }
         if !on_time(&settings, slot, now) {
-            let taken = autopilot_schedule::taken_on(&mut tx, owner).await?;
-            match autopilot_settings::next_shared_slot(now, &taken, &settings)? {
-                Some(next) => move_slot(&mut tx, id, next).await?,
+            let mut platforms: BTreeSet<String> = approved.iter().cloned().collect();
+            platforms.extend(autopilot_schedule::queued_platforms_on(&mut tx, id).await?);
+            let platforms: Vec<String> = platforms.into_iter().collect();
+            let mut allocator =
+                autopilot_schedule::Allocator::load_on(&mut tx, owner, &settings).await?;
+            match allocator.place(now, &[], &platforms)? {
+                Some(next) => autopilot_schedule::place_video_on(&mut tx, owner, id, &next).await?,
                 None => release_slot(&mut tx, id).await?,
             }
             tx.commit().await?;
@@ -430,10 +438,12 @@ impl PublishExecutor {
                 .bind(id)
                 .fetch_one(&mut *tx)
                 .await?;
+        let reserved = autopilot_schedule::video_destinations_on(&mut tx, id).await?;
         let event = EventRef {
             clip_id,
             video_id: id,
             slot,
+            reserved: &reserved,
             metadata: &metadata,
         };
         for platform in approved
@@ -452,7 +462,11 @@ impl PublishExecutor {
         .bind(approved.iter().cloned().collect::<Vec<_>>())
         .execute(&mut *tx)
         .await?;
-        let mut discarded: BTreeSet<String> = settings.target_platforms.iter().cloned().collect();
+        let mut discarded: BTreeSet<String> = if reserved.is_empty() {
+            settings.target_platforms.iter().cloned().collect()
+        } else {
+            reserved.iter().map(|slot| slot.platform.clone()).collect()
+        };
         let skipped: Vec<String> = sqlx::query_scalar(
             "SELECT platform FROM social_media_clip_approval WHERE produced_video_id = $1",
         )
@@ -472,6 +486,9 @@ impl PublishExecutor {
                 Some("not_approved_at_execution"),
             )
             .await?;
+        }
+        if let Some(job) = job {
+            autopilot_schedule::release_on(&mut tx, job).await?;
         }
         sqlx::query(
             "UPDATE social_produced_videos SET publication_executed_at = $2,
@@ -509,6 +526,7 @@ impl PublishExecutor {
                  WHERE v2.publication_executed_at IS NOT NULL AND NOT COALESCE(s.paused, FALSE)
                  AND v2.artifact_deleted_at IS NULL AND v2.file_path IS NOT NULL
                  AND (q2.status = $2 OR (q2.status = $3 AND q2.next_retry_at <= clock_timestamp()))
+                 AND COALESCE(q2.scheduled_at, '-infinity'::timestamptz) <= clock_timestamp()
                  ORDER BY q2.scheduled_at, q2.id LIMIT 1 FOR UPDATE OF q2 SKIP LOCKED)
              AND v.id = q.produced_video_id AND c.id = q.clip_id
              RETURNING q.id::bigint AS queue_id, q.claim_generation, v.id AS video_id, v.twitch_user_id,
@@ -1013,27 +1031,23 @@ fn on_time(settings: &AutopilotSettings, slot: DateTime<Utc>, now: DateTime<Utc>
     (7..23).contains(&hour)
 }
 
-async fn move_slot(tx: &mut PgConnection, id: i64, next: DateTime<Utc>) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE social_produced_videos SET scheduled_at = $2 WHERE id = $1")
-        .bind(id)
-        .bind(next)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query(
-        "UPDATE twitch_clips_upload_queue SET scheduled_at = $2 WHERE produced_video_id = $1",
-    )
-    .bind(id)
-    .bind(next)
-    .execute(&mut *tx)
-    .await?;
-    Ok(())
-}
+type ExecutionRow = (Option<DateTime<Utc>>, String, i64, Option<i64>);
 
 struct EventRef<'a> {
     clip_id: i64,
     video_id: i64,
     slot: DateTime<Utc>,
+    reserved: &'a [autopilot_schedule::Reservation],
     metadata: &'a str,
+}
+
+impl EventRef<'_> {
+    fn at(&self, platform: &str) -> DateTime<Utc> {
+        self.reserved
+            .iter()
+            .find(|slot| slot.platform == platform)
+            .map_or(self.slot, |slot| slot.scheduled_at.max(self.slot))
+    }
 }
 
 async fn insert_destination(
@@ -1054,7 +1068,7 @@ async fn insert_destination(
     .bind(event.video_id)
     .bind(platform)
     .bind(status)
-    .bind(event.slot)
+    .bind(event.at(platform))
     .bind(reason)
     .bind(event.metadata)
     .execute(tx)

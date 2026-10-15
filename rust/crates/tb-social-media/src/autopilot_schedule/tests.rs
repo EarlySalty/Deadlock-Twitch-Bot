@@ -1,8 +1,8 @@
 use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 use sqlx::{
-    PgPool,
     postgres::{PgConnectOptions, PgPoolOptions},
+    PgPool,
 };
 use std::{
     str::FromStr,
@@ -226,30 +226,26 @@ async fn schedule_narrow_writes_preserve_other_settings_and_validate() {
     assert_eq!(stored.clip_sort, ClipSort::NewestFirst);
     assert_eq!(stored.target_platforms, vec!["youtube"]);
     assert!(!stored.notifications.dashboard);
-    assert!(
-        save_schedule(
-            &pool,
-            "owner",
-            &SchedulePatch {
-                lead_time_hours: Some(721),
-                ..Default::default()
-            }
-        )
-        .await
-        .is_err()
-    );
-    assert!(
-        save_schedule(
-            &pool,
-            "owner",
-            &SchedulePatch {
-                timezone: Some("Unknown/Zone".into()),
-                ..Default::default()
-            }
-        )
-        .await
-        .is_err()
-    );
+    assert!(save_schedule(
+        &pool,
+        "owner",
+        &SchedulePatch {
+            lead_time_hours: Some(721),
+            ..Default::default()
+        }
+    )
+    .await
+    .is_err());
+    assert!(save_schedule(
+        &pool,
+        "owner",
+        &SchedulePatch {
+            timezone: Some("Unknown/Zone".into()),
+            ..Default::default()
+        }
+    )
+    .await
+    .is_err());
     assert!(serde_json::from_value::<SchedulePatch>(json!({"publish_mode":"full_auto"})).is_err());
     let loaded = snapshot(&pool, "owner").await.expect("snapshot");
     assert!(loaded.persisted);
@@ -452,12 +448,10 @@ async fn two_reviews_block_automatic_claims_but_not_manual_work() {
         sqlx::query("INSERT INTO social_produced_videos (twitch_user_id,clip_id,job_id,mode,status,file_path,duration_ms,expires_at) VALUES ('owner',$1,$2,'static','review','test.mp4',1000,clock_timestamp()+INTERVAL '7 days')")
             .bind(id).bind(review_job.id).execute(&pool).await.expect("review backlog");
     }
-    assert!(
-        production_jobs::claim_next(&pool)
-            .await
-            .expect("backpressure")
-            .is_none()
-    );
+    assert!(production_jobs::claim_next(&pool)
+        .await
+        .expect("backpressure")
+        .is_none());
     let id = clip(&pool, "owner", "manual", utc("2025-01-01T00:00:00Z")).await;
     let manual = job(&pool, "owner", id, Some(ProductionMode::Ai)).await;
     let running_manual = production_jobs::claim_next(&pool)

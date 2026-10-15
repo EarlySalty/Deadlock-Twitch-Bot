@@ -1,13 +1,16 @@
+mod placement;
 mod planner;
 mod queue;
 mod recovery;
 mod settings;
 
-pub use planner::{PlanReport, plan_owner};
+pub(crate) use placement::{place_video_on, queued_platforms_on};
+pub use planner::{plan_owner, PlanReport};
 
-pub use queue::{ReviewDecision, cancel, mark_next, reorder, resolve_review};
-pub use recovery::{Recovery, recover_after_lease, retry_or_review};
-pub use settings::{SchedulePatch, ScheduleSettings, save_schedule};
+pub use queue::{cancel, mark_next, reorder, resolve_review, ReviewDecision};
+pub use recovery::{recover_after_lease, retry_or_review, Recovery};
+pub(crate) use settings::retime_on;
+pub use settings::{save_schedule, SchedulePatch, ScheduleSettings};
 
 use std::collections::BTreeMap;
 
@@ -15,7 +18,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgConnection, PgPool};
 
-use super::{JobError, JobSource, ProductionJob, ProductionMode, SELECT, from_row};
+use super::{from_row, JobError, JobSource, ProductionJob, ProductionMode, SELECT};
 use crate::autopilot_settings::{
     self, AutopilotSettings, DistributionPolicy, PipelinePolicy, PolicyScope, SettingsError,
 };
@@ -149,19 +152,34 @@ pub(crate) async fn review_count_on(
     .await
 }
 
-pub(crate) async fn taken_on(
+pub(crate) fn has_schedule_sql(settings: &str) -> String {
+    format!(
+        "CASE WHEN {settings}.pipeline_mode IS NOT NULL AND {settings}.schedule_scope = 'per_platform'
+            AND jsonb_array_length({settings}.target_platforms) > 0
+        THEN EXISTS (SELECT 1 FROM jsonb_array_elements_text({settings}.target_platforms) target(platform)
+            WHERE jsonb_typeof({settings}.platform_schedule_slots->target.platform) = 'array'
+            AND jsonb_array_length({settings}.platform_schedule_slots->target.platform) > 0)
+        ELSE jsonb_array_length({settings}.schedule_slots) > 0 END"
+    )
+}
+
+fn schedule_exists(settings: &AutopilotSettings, policy: &PipelinePolicy) -> bool {
+    if settings.target_platforms.is_empty() {
+        return !settings.schedule_slots.is_empty();
+    }
+    settings
+        .target_platforms
+        .iter()
+        .any(|platform| !policy.slots_for(settings, platform).is_empty())
+}
+
+pub(crate) async fn has_schedule_on(
     connection: &mut PgConnection,
     owner: &str,
-) -> Result<Vec<DateTime<Utc>>, sqlx::Error> {
-    sqlx::query_scalar("SELECT scheduled_at FROM social_production_jobs WHERE twitch_user_id = $1
-        AND scheduled_at IS NOT NULL AND status IN ('queued', 'running', 'completed')
-        UNION SELECT scheduled_at FROM social_produced_videos WHERE twitch_user_id = $1 AND scheduled_at IS NOT NULL
-        UNION SELECT scheduled_at FROM social_publication_reservations WHERE twitch_user_id = $1 AND state = 'reserved'
-        UNION SELECT q.scheduled_at FROM twitch_clips_upload_queue q
-        JOIN twitch_clips_social_media c ON c.id = q.clip_id
-        WHERE c.twitch_user_id = $1 AND q.scheduled_at IS NOT NULL
-        AND COALESCE(q.status, '') NOT IN ('failed', 'cancelled')")
-        .bind(owner).fetch_all(connection).await
+    settings: &AutopilotSettings,
+) -> Result<bool, SettingsError> {
+    let policy = autopilot_settings::load_policy_on(connection, owner).await?;
+    Ok(schedule_exists(settings, &policy))
 }
 
 #[derive(Debug, Default)]
@@ -186,7 +204,7 @@ impl Occupancy {
             UNION SELECT q.platform, q.scheduled_at FROM twitch_clips_upload_queue q
             JOIN twitch_clips_social_media c ON c.id = q.clip_id
             WHERE c.twitch_user_id = $1 AND q.scheduled_at IS NOT NULL AND q.platform IS NOT NULL
-            AND COALESCE(q.status, '') NOT IN ('failed', 'cancelled')",
+            AND COALESCE(q.status, '') NOT IN ('failed', 'cancelled', 'autopilot_discarded', 'autopilot_failed')",
         )
         .bind(owner)
         .fetch_all(connection)
@@ -234,6 +252,13 @@ pub(crate) struct Allocation {
 }
 
 impl Allocation {
+    pub(crate) fn at(&self, platform: &str) -> DateTime<Utc> {
+        self.slots
+            .iter()
+            .find(|slot| slot.platform == platform)
+            .map_or(self.reference, |slot| slot.scheduled_at)
+    }
+
     fn from_reservations(reservations: Vec<Reservation>) -> Option<Self> {
         let reference = reservations.iter().map(|slot| slot.scheduled_at).min()?;
         Some(Self {
@@ -273,10 +298,7 @@ impl Allocator {
     }
 
     pub(crate) fn has_schedule(&self) -> bool {
-        if self.settings.target_platforms.is_empty() {
-            return !self.settings.schedule_slots.is_empty();
-        }
-        !self.scheduled(&self.settings.target_platforms).is_empty()
+        schedule_exists(&self.settings, &self.policy)
     }
 
     fn next_in(
@@ -385,6 +407,59 @@ impl Allocator {
         }
     }
 
+    fn place_missing(
+        &self,
+        now: DateTime<Utc>,
+        missing: &[String],
+    ) -> Result<Vec<Reservation>, ScheduleError> {
+        if !self.independent() {
+            return Ok(self
+                .plan_for(now, missing)?
+                .map(|plan| plan.slots)
+                .unwrap_or_default());
+        }
+        let mut slots = Vec::new();
+        for platform in missing {
+            if let Some(plan) = self.plan_for(now, std::slice::from_ref(platform))? {
+                slots.extend(plan.slots);
+            }
+        }
+        Ok(slots)
+    }
+
+    pub(crate) fn place(
+        &mut self,
+        now: DateTime<Utc>,
+        kept: &[Reservation],
+        selected: &[String],
+    ) -> Result<Option<Allocation>, ScheduleError> {
+        let allocation = if selected.is_empty() {
+            self.channel_wide(now)?
+        } else {
+            let mut placed: Vec<Reservation> = kept
+                .iter()
+                .filter(|slot| selected.contains(&slot.platform))
+                .cloned()
+                .collect();
+            let missing: Vec<String> = selected
+                .iter()
+                .filter(|platform| !placed.iter().any(|slot| &slot.platform == *platform))
+                .cloned()
+                .collect();
+            if !missing.is_empty() {
+                placed.extend(self.place_missing(now, &missing)?);
+            }
+            if placed.len() < selected.len() {
+                return Ok(None);
+            }
+            Allocation::from_reservations(placed)
+        };
+        if let Some(plan) = &allocation {
+            self.commit(plan);
+        }
+        Ok(allocation)
+    }
+
     pub(crate) fn plan(&self, now: DateTime<Utc>) -> Result<Option<Allocation>, ScheduleError> {
         self.plan_for(now, &self.settings.target_platforms)
     }
@@ -472,7 +547,30 @@ pub(crate) async fn reservations_on(
         .collect())
 }
 
-async fn release_on(connection: &mut PgConnection, job: i64) -> Result<(), sqlx::Error> {
+pub(crate) async fn video_destinations_on(
+    connection: &mut PgConnection,
+    video: i64,
+) -> Result<Vec<Reservation>, sqlx::Error> {
+    let rows: Vec<(String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT r.platform, r.scheduled_at FROM social_publication_reservations r
+        JOIN social_produced_videos v ON v.job_id = r.job_id
+        WHERE v.id = $1 AND r.state = 'reserved'
+        AND (r.produced_video_id IS NULL OR r.produced_video_id = v.id)
+        ORDER BY r.scheduled_at, r.platform",
+    )
+    .bind(video)
+    .fetch_all(connection)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(platform, scheduled_at)| Reservation {
+            platform,
+            scheduled_at,
+        })
+        .collect())
+}
+
+pub(crate) async fn release_on(connection: &mut PgConnection, job: i64) -> Result<(), sqlx::Error> {
     sqlx::query(
         "UPDATE social_publication_reservations SET state = 'released', released_at = clock_timestamp()
         WHERE job_id = $1 AND state = 'reserved'",

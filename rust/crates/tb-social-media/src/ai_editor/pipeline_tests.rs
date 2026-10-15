@@ -64,6 +64,12 @@ async fn database() -> postgres::TestPostgres {
     .await
     .expect("publishing migration");
     sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261015124000_social_pipeline_policy.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .expect("pipeline policy migration");
+    sqlx::raw_sql(include_str!(
         "../../../../migrations/20261015180000_social_destination_slots.sql"
     ))
     .execute(&db.pool)

@@ -4,7 +4,7 @@ use serde_json::json;
 use sqlx::{PgConnection, PgPool};
 use std::collections::HashSet;
 
-use super::{Allocation, ScheduleError, reservations_on, reserve_on};
+use super::{reservations_on, reserve_on, Allocation, ScheduleError};
 use crate::autopilot_settings;
 
 async fn unstarted_on(

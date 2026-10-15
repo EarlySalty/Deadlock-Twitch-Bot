@@ -207,13 +207,14 @@ async fn eligible_head_on(
 ) -> Result<Option<(i64, String)>, JobError> {
     let backlog = autopilot_schedule::review_backlog_sql("j.twitch_user_id");
     let limit = autopilot_schedule::REVIEW_LIMIT;
+    let scheduled = autopilot_schedule::has_schedule_sql("s");
     Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT j.id, j.twitch_user_id FROM social_production_jobs j WHERE j.status = 'queued'
          AND j.attempts < j.max_attempts
          AND COALESCE((j.metadata->>'retry_after')::timestamptz, '-infinity'::timestamptz) <= clock_timestamp()
          AND (j.started_at IS NOT NULL OR j.source = 'manual' OR EXISTS (
              SELECT 1 FROM social_media_autopilot_settings s WHERE s.twitch_user_id = j.twitch_user_id
-             AND s.enabled AND NOT s.paused AND jsonb_array_length(s.schedule_slots) > 0
+             AND s.enabled AND NOT s.paused AND {scheduled}
              AND (j.scheduled_at IS NULL OR (j.scheduled_at > clock_timestamp()
                  AND j.scheduled_at <= clock_timestamp() + make_interval(hours => s.lead_time_hours)
                      + CASE WHEN s.lead_time_hours = 0 THEN INTERVAL '1 minute' ELSE INTERVAL '0' END))
@@ -267,9 +268,10 @@ pub async fn claim_next(pool: &PgPool) -> Result<Option<ProductionJob>, JobError
         .await?;
     if job.started_at.is_none() && job.source == JobSource::Autopilot {
         let reviews: i64 = autopilot_schedule::review_count_on(&mut tx, &owner).await?;
+        let scheduled = autopilot_schedule::has_schedule_on(&mut tx, &owner, &settings).await?;
         if !settings.enabled
             || settings.paused
-            || settings.schedule_slots.is_empty()
+            || !scheduled
             || (settings.publish_mode == autopilot_settings::PublishMode::Review
                 && reviews >= autopilot_schedule::REVIEW_LIMIT)
             || job.scheduled_at.is_some_and(|slot| {

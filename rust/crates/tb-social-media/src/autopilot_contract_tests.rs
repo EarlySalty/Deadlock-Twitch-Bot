@@ -60,6 +60,12 @@ async fn pool() -> PgPool {
     .await
     .expect("actual additive migration");
     sqlx::raw_sql(include_str!(
+        "../../../migrations/20261013140000_social_autopilot_publishing.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("publishing migration");
+    sqlx::raw_sql(include_str!(
         "../../../migrations/20261015124000_social_pipeline_policy.sql"
     ))
     .execute(&pool)

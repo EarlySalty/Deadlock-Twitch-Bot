@@ -497,6 +497,7 @@ pub async fn save_policy(
     let raw = serde_json::to_string(&policy)?;
     let mut tx = pool.begin().await?;
     lock_owner(&mut tx, owner).await?;
+    let previous = load_policy_on(&mut tx, owner).await?;
     let revision: Option<i64> = sqlx::query_scalar(
         "INSERT INTO social_media_autopilot_settings (twitch_user_id, pipeline_mode, review_policy,
             metadata_scope, text_defaults, schedule_scope, platform_schedule_slots,
@@ -518,8 +519,30 @@ pub async fn save_policy(
             "Die Einstellungen wurden zwischenzeitlich geändert. Bitte neu laden.".into(),
         )
     })?;
+    if schedule_changed(&previous, &policy) {
+        let settings = load_on(&mut tx, owner).await?;
+        crate::production_jobs::autopilot_schedule::retime_on(&mut tx, owner, &settings)
+            .await
+            .map_err(retime_error)?;
+    }
     tx.commit().await?;
     Ok(policy)
+}
+
+fn schedule_changed(previous: &PipelinePolicy, next: &PipelinePolicy) -> bool {
+    previous.schedule_scope != next.schedule_scope
+        || previous.platform_schedule_slots != next.platform_schedule_slots
+        || previous.distribution_policy != next.distribution_policy
+}
+
+fn retime_error(error: crate::production_jobs::autopilot_schedule::ScheduleError) -> SettingsError {
+    use crate::production_jobs::autopilot_schedule::ScheduleError;
+    match error {
+        ScheduleError::Database(error) => SettingsError::Database(error),
+        ScheduleError::Settings(error) => error,
+        ScheduleError::Json(error) => SettingsError::Json(error),
+        other => SettingsError::Invalid(other.to_string()),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

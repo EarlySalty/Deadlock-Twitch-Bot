@@ -3,8 +3,8 @@ use serde::Serialize;
 use sqlx::{PgConnection, PgPool};
 
 use super::{
-    Allocation, Allocator, ProductionHold, ScheduleError, hold, production_horizon,
-    reservations_on, reserve_on, review_count_on,
+    hold, production_horizon, reservations_on, reserve_on, review_count_on, Allocation, Allocator,
+    ProductionHold, ScheduleError,
 };
 use crate::autopilot_settings::{self, ClipSort};
 

@@ -2,7 +2,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, PgPool};
 
-use super::{Allocator, Reservation, ScheduleError, hold_slots_on, reservations_on, reserve_on};
+use super::{
+    hold_slots_on, place_video_on, queued_platforms_on, reservations_on, reserve_on, Allocator,
+    Reservation, ScheduleError,
+};
 use crate::autopilot_settings::{self, AutopilotSettings, ScheduleSlot};
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,35 +106,31 @@ async fn require_connected(
 
 type ScheduledVideo = (i64, Option<i64>, DateTime<Utc>);
 
-async fn move_video_on(
+async fn unschedule_video_on(
     connection: &mut PgConnection,
     video: &ScheduledVideo,
-    slot: Option<DateTime<Utc>>,
 ) -> Result<(), ScheduleError> {
     sqlx::query(
-        "UPDATE social_produced_videos SET scheduled_at = $2,
-        status = CASE WHEN $2 IS NULL AND status = 'scheduled' THEN 'approved' ELSE status END
+        "UPDATE social_produced_videos SET scheduled_at = NULL,
+        status = CASE WHEN status = 'scheduled' THEN 'approved' ELSE status END
         WHERE id = $1",
     )
     .bind(video.0)
-    .bind(slot)
     .execute(&mut *connection)
     .await?;
     sqlx::query(
-        "UPDATE social_production_jobs SET scheduled_at = $2
-        WHERE id = $1 AND status = 'completed' AND scheduled_at = $3",
+        "UPDATE social_production_jobs SET scheduled_at = NULL
+        WHERE id = $1 AND status = 'completed' AND scheduled_at = $2",
     )
     .bind(video.1)
-    .bind(slot)
     .bind(video.2)
     .execute(&mut *connection)
     .await?;
     sqlx::query(
-        "UPDATE twitch_clips_upload_queue SET scheduled_at = $2
+        "UPDATE twitch_clips_upload_queue SET scheduled_at = NULL
         WHERE produced_video_id = $1 AND scheduled_at IS NOT NULL",
     )
     .bind(video.0)
-    .bind(slot)
     .execute(connection)
     .await?;
     Ok(())
@@ -191,7 +190,7 @@ async fn stale_videos_on(
     Ok(stale)
 }
 
-async fn retime_on(
+pub(crate) async fn retime_on(
     connection: &mut PgConnection,
     owner: &str,
     settings: &AutopilotSettings,
@@ -209,19 +208,17 @@ async fn retime_on(
     }
     let mut allocator = Allocator::load_on(connection, owner, settings).await?;
     for (video, previous) in stale {
-        let platforms: Vec<String> = previous.into_iter().map(|slot| slot.platform).collect();
-        let allocation = allocator.plan_for(now, &platforms)?;
-        move_video_on(
-            connection,
-            &video,
-            allocation.as_ref().map(|plan| plan.reference),
-        )
-        .await?;
-        if let (Some(job), Some(allocation)) = (video.1, &allocation) {
-            hold_slots_on(connection, owner, job, Some(video.0), &allocation.slots).await?;
-        }
-        if let Some(allocation) = allocation {
-            allocator.commit(&allocation);
+        let mut platforms: Vec<String> = previous.into_iter().map(|slot| slot.platform).collect();
+        let queued_platforms = queued_platforms_on(connection, video.0).await?;
+        platforms.extend(
+            queued_platforms
+                .into_iter()
+                .filter(|platform| !platforms.contains(platform))
+                .collect::<Vec<_>>(),
+        );
+        match allocator.place(now, &[], &platforms)? {
+            Some(allocation) => place_video_on(connection, owner, video.0, &allocation).await?,
+            None => unschedule_video_on(connection, &video).await?,
         }
     }
     for (id, previous) in queued {

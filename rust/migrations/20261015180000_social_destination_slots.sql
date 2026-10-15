@@ -49,6 +49,22 @@ CREATE TRIGGER social_production_release_reservations
 AFTER UPDATE OF scheduled_at, status ON social_production_jobs
 FOR EACH ROW EXECUTE FUNCTION social_release_job_reservations();
 
+CREATE FUNCTION social_release_video_reservations() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    UPDATE social_publication_reservations SET state = 'released', released_at = clock_timestamp()
+    WHERE job_id = NEW.job_id AND state = 'reserved'
+    AND (produced_video_id IS NULL OR produced_video_id = NEW.id);
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER social_produced_release_reservations
+AFTER UPDATE OF scheduled_at ON social_produced_videos
+FOR EACH ROW WHEN (OLD.scheduled_at IS NOT NULL AND NEW.job_id IS NOT NULL
+    AND NEW.scheduled_at IS DISTINCT FROM OLD.scheduled_at)
+EXECUTE FUNCTION social_release_video_reservations();
+
 CREATE FUNCTION social_channel_slot_committed(owner_id TEXT, at TIMESTAMPTZ, subject BIGINT, subject_video BIGINT)
 RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
     SELECT EXISTS (
@@ -86,20 +102,20 @@ BEGIN
             LEFT JOIN social_produced_videos v ON v.id = q.produced_video_id
             WHERE c.twitch_user_id = NEW.twitch_user_id AND q.platform = NEW.platform
             AND q.scheduled_at = NEW.scheduled_at
-            AND COALESCE(q.status, '') NOT IN ('failed', 'cancelled')
+            AND COALESCE(q.status, '') NOT IN ('failed', 'cancelled', 'autopilot_discarded', 'autopilot_failed')
             AND v.job_id IS DISTINCT FROM NEW.job_id
         ) OR social_channel_slot_committed(NEW.twitch_user_id, NEW.scheduled_at, NEW.job_id, NEW.produced_video_id) THEN
             RAISE EXCEPTION 'destination slot already used' USING ERRCODE = '23505';
         END IF;
         RETURN NEW;
     END IF;
-    IF COALESCE(NEW.status, '') IN ('failed', 'cancelled') THEN
+    IF COALESCE(NEW.status, '') IN ('failed', 'cancelled', 'autopilot_discarded', 'autopilot_failed') THEN
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' AND NEW.produced_video_id IS NULL
+    IF TG_OP = 'UPDATE'
         AND OLD.scheduled_at IS NOT DISTINCT FROM NEW.scheduled_at
         AND OLD.platform IS NOT DISTINCT FROM NEW.platform
-        AND COALESCE(OLD.status, '') NOT IN ('failed', 'cancelled') THEN
+        AND COALESCE(OLD.status, '') NOT IN ('failed', 'cancelled', 'autopilot_discarded', 'autopilot_failed') THEN
         RETURN NEW;
     END IF;
     SELECT c.twitch_user_id INTO owner_id FROM twitch_clips_social_media c WHERE c.id = NEW.clip_id;
@@ -118,7 +134,7 @@ BEGIN
         JOIN twitch_clips_social_media c ON c.id = q.clip_id
         WHERE c.twitch_user_id = owner_id AND q.platform = NEW.platform
         AND q.scheduled_at = NEW.scheduled_at AND q.id IS DISTINCT FROM NEW.id
-        AND COALESCE(q.status, '') NOT IN ('failed', 'cancelled')
+        AND COALESCE(q.status, '') NOT IN ('failed', 'cancelled', 'autopilot_discarded', 'autopilot_failed')
         AND (q.produced_video_id IS DISTINCT FROM NEW.produced_video_id OR q.clip_id IS DISTINCT FROM NEW.clip_id)
     ) OR social_channel_slot_committed(owner_id, NEW.scheduled_at, job_subject, NEW.produced_video_id) THEN
         RAISE EXCEPTION 'destination slot already used' USING ERRCODE = '23505';

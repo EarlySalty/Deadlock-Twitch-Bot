@@ -4,6 +4,7 @@ use serde_json::Value;
 use sqlx::{PgPool, Row};
 
 use crate::autopilot_settings::{self, json_column, SettingsError};
+use crate::production_jobs::autopilot_schedule;
 pub use crate::production_jobs::ProductionMode;
 
 #[derive(Debug, thiserror::Error)]
@@ -512,18 +513,7 @@ async fn enqueue(
             return Err(ProducedVideoError::ApprovalRequired);
         }
     }
-    let scheduled_at = match video.scheduled_at {
-        Some(slot) => slot,
-        None => {
-            let taken = crate::production_jobs::autopilot_schedule::taken_on(
-                &mut tx,
-                &video.twitch_user_id,
-            )
-            .await?;
-            autopilot_settings::next_shared_slot(now, &taken, &settings)?
-                .ok_or(ProducedVideoError::NoSlot)?
-        }
-    };
+    let allocation = place_on(&mut tx, &video, &settings, now, &selected).await?;
     let mut queue_ids = Vec::new();
     for platform in selected {
         let existing: Option<i64> = sqlx::query_scalar("SELECT id::bigint FROM twitch_clips_upload_queue WHERE produced_video_id = $1 AND platform = $2 FOR UPDATE")
@@ -531,6 +521,7 @@ async fn enqueue(
         let queue_id = match existing {
             Some(queue_id) => queue_id,
             None => {
+                let scheduled_at = allocation.at(&platform);
                 if scheduled_at <= now {
                     return Err(ProducedVideoError::State);
                 }
@@ -544,17 +535,61 @@ async fn enqueue(
         };
         queue_ids.push((platform, queue_id));
     }
-    sqlx::query(
-        "UPDATE social_produced_videos SET status = 'scheduled', scheduled_at = $2 WHERE id = $1",
-    )
-    .bind(id)
-    .bind(scheduled_at)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("UPDATE social_produced_videos SET status = 'scheduled' WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(PublishingReservation {
         produced_video_id: id,
-        scheduled_at,
+        scheduled_at: allocation.reference,
         queue_ids,
     })
+}
+
+async fn place_on(
+    tx: &mut sqlx::PgConnection,
+    video: &ProducedVideo,
+    settings: &autopilot_settings::AutopilotSettings,
+    now: DateTime<Utc>,
+    selected: &[String],
+) -> Result<autopilot_schedule::Allocation, ProducedVideoError> {
+    let reserved: Vec<autopilot_schedule::Reservation> =
+        autopilot_schedule::video_destinations_on(tx, video.id)
+            .await?
+            .into_iter()
+            .filter(|slot| slot.scheduled_at > now)
+            .collect();
+    let kept = match (reserved.is_empty(), video.scheduled_at) {
+        (true, Some(slot)) => selected
+            .iter()
+            .map(|platform| autopilot_schedule::Reservation {
+                platform: platform.clone(),
+                scheduled_at: slot,
+            })
+            .collect(),
+        _ => reserved,
+    };
+    let mut allocator = autopilot_schedule::Allocator::load_on(tx, &video.twitch_user_id, settings)
+        .await
+        .map_err(schedule_error)?;
+    let allocation = allocator
+        .place(now, &kept, selected)
+        .map_err(schedule_error)?
+        .ok_or(ProducedVideoError::NoSlot)?;
+    autopilot_schedule::place_video_on(tx, &video.twitch_user_id, video.id, &allocation)
+        .await
+        .map_err(schedule_error)?;
+    Ok(allocation)
+}
+
+fn schedule_error(error: autopilot_schedule::ScheduleError) -> ProducedVideoError {
+    use autopilot_schedule::ScheduleError;
+    match error {
+        ScheduleError::Database(error) => ProducedVideoError::Database(error),
+        ScheduleError::Settings(error) => ProducedVideoError::Settings(error),
+        ScheduleError::Json(error) => ProducedVideoError::Json(error),
+        ScheduleError::NotFound => ProducedVideoError::NotFound,
+        _ => ProducedVideoError::Invalid,
+    }
 }

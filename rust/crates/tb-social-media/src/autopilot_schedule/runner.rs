@@ -370,8 +370,15 @@ impl AutopilotWorker {
         let settings = autopilot_settings::load(&self.pool, &job.twitch_user_id)
             .await
             .map_err(ScheduleError::from)?;
+        let mut connection = self.pool.acquire().await?;
+        let reserved =
+            crate::production_jobs::autopilot_schedule::reservations_on(&mut connection, job.id)
+                .await?;
+        drop(connection);
         let mut platforms = serde_json::Map::new();
-        for platform in settings.target_platforms {
+        for platform in settings.target_platforms.into_iter().filter(|platform| {
+            reserved.is_empty() || reserved.iter().any(|slot| &slot.platform == platform)
+        }) {
             platforms.insert(
                 platform,
                 json!({"title":title,"description":description,"hashtags":hashtags}),
