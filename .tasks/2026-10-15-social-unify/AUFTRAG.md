@@ -26,5 +26,13 @@ Global AI switch `external_llm_consent` needs an admin UI (set to true in prod o
 ## Packages
 | Pkg | Branch | Owner | Status |
 |---|---|---|---|
-| U0 plan | feat/social-unify-20261015 | sol-worker | running |
+| U0 plan | feat/social-unify-20261015 | sol-worker | done 9c89249d0 |
 | K1 admin AI switch + metadata shared/per-platform toggle | feat/social-ai-consent-meta-20261015 | sol-worker | running |
+
+## User decisions on PLAN.md questions (2026-10-15)
+- Q1: A. Automatic AI-edited output may publish without review when review is off; quality/legal holds stay; manually requested revisions keep review.
+- Q2: A. Upload-only and AI-text modes keep the original footage, only required technical conversion; layout changes only via the explicit "..." menu action.
+- Q3: Both. The system converts legacy cadence into a weekday/time pattern automatically, and the user can always edit days and times manually in the one planning editor. Committed posts stay.
+- Q4: A. Automatic intake Deadlock-only, manual uploads allowed; non-Deadlock legacy rows visible but not auto-posted.
+- Q5: User setting per channel: "same clip on all selected platforms (next free slot each)" or "each platform draws its own clips". Default: same clip on all platforms.
+- Q6: Veto window stays as a review policy: the clip posts automatically at the deadline unless the user stops it before (user responsibility). Review policy therefore has three values: off, required, veto until deadline. Legacy veto channels map to veto until deadline.
