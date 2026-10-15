@@ -209,6 +209,111 @@ async fn public_profile_prefers_twitch_avatar_and_caps_busy_calendar_days() {
     assert!(html.contains("Community Abend"));
 }
 
+#[tokio::test]
+async fn public_layout_has_one_bio_german_days_and_collapsed_extra_streams() {
+    let now = DateTime::parse_from_rfc3339("2026-10-14T22:30:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let month = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+    let record = Record {
+        twitch_user_id: "1".into(),
+        login: "alice".into(),
+        active: true,
+        published: true,
+        revision: 1,
+        content: SqlJson(Content {
+            headline: "Deadlock & Community".into(),
+            about: "Grüße & Spaß <script>nicht ausführen</script>".into(),
+            rank: "Oracle".into(),
+            main_heroes: vec!["Pocket".into(), "Ivy".into()],
+            playstyles: vec!["community".into()],
+            preferred_times: vec!["weekday_evening".into()],
+            socials: vec![Social {
+                label: "Website".into(),
+                url: "https://example.com/".into(),
+            }],
+            featured: vec!["bob".into()],
+            ..Content::default()
+        }),
+        is_live: 0,
+        last_seen_at: None,
+        last_game: None,
+    };
+    let twitch = TwitchProfileSnapshot {
+        display_name: "Alice".into(),
+        available: true,
+        schedule: (0..8)
+            .map(|index| TwitchScheduleProfile {
+                id: format!("schedule{index}"),
+                title: format!("Community-Abend {index} mit Pocket & Ivy"),
+                starts_at: now + Duration::hours(index * 24 + 18),
+                ends_at: now + Duration::hours(index * 24 + 20),
+                is_recurring: false,
+            })
+            .collect(),
+        ..TwitchProfileSnapshot::default()
+    };
+    let observed = schedule(&[], now - Duration::days(90), now);
+    let directory = vec![DirectoryEntry {
+        login: "bob".into(),
+        headline: "Gemeinsam spielen".into(),
+    }];
+    let html = body(html::page(
+        &record,
+        &twitch,
+        &observed,
+        &[],
+        &directory,
+        month,
+        now,
+        false,
+    ))
+    .await;
+    assert_eq!(
+        html.matches("Grüße &amp; Spaß &lt;script&gt;nicht ausführen&lt;/script&gt;")
+            .count(),
+        1
+    );
+    assert!(!html.contains("<script>"));
+    assert!(html.contains("<h1>Alice</h1><p class=\"hero-lead\">Deadlock &amp; Community</p>"));
+    assert!(html.contains("Do., 15.10."));
+    assert!(!html.contains("Thu,"));
+    let (visible, more) = html
+        .split_once("<details class=\"upcoming-more\">")
+        .unwrap();
+    assert_eq!(visible.matches("class=\"upcoming-card\"").count(), 5);
+    assert_eq!(more.matches("class=\"upcoming-card\"").count(), 3);
+    assert!(more.contains("<summary>Weitere Termine anzeigen</summary>"));
+    let (left, _) = visible
+        .split_once("class=\"panel schedule-panel\"")
+        .unwrap();
+    assert_eq!(html.matches("Deadlock-Profil auf einen Blick").count(), 1);
+    assert!(left.contains("Rang: Oracle"));
+    assert!(left.contains("Main: Pocket"));
+    assert!(left.contains("Unter der Woche abends"));
+    assert!(left.contains("https://example.com/"));
+    assert!(left.contains("/streamer/bob"));
+    assert_eq!(html.matches("/streamer/bob").count(), 1);
+    if let Ok(path) = std::env::var("PROFILE_LAYOUT_FIXTURE") {
+        std::fs::write(path, &html).unwrap();
+    }
+    let mut without_headline = record;
+    without_headline.content.0.headline.clear();
+    let html = body(html::page(
+        &without_headline,
+        &twitch,
+        &observed,
+        &[],
+        &directory,
+        month,
+        now,
+        false,
+    ))
+    .await;
+    assert!(!html.contains("class=\"hero-lead\""));
+    assert_eq!(html.matches("Grüße &amp; Spaß").count(), 1);
+}
+
 #[test]
 fn owners_are_bound_to_session() {
     assert!(owner(&partner(), &OwnerParams::default()).is_ok());

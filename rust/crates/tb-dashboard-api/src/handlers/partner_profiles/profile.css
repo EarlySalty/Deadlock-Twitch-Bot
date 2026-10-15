@@ -378,16 +378,19 @@ main {
   display: inline-flex;
   min-height: 29px;
   align-items: center;
-  border: 1px solid color-mix(in srgb, var(--profile-accent) 34%, var(--border));
+  border: 1px solid var(--border);
   border-radius: 999px;
   padding: 5px 10px;
-  background: color-mix(in srgb, var(--profile-accent) 9%, rgba(10, 10, 11, 0.62));
+  background: var(--surface);
   color: #ded8ce;
   font-size: 0.68rem;
   font-weight: 750;
 }
 
 .profile-tag.rank-tag {
+  gap: 5px;
+  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
   color: var(--primary-hover);
 }
 
@@ -490,7 +493,8 @@ main {
   display: grid;
   grid-template-columns: minmax(0, 0.88fr) minmax(420px, 1.12fr);
   gap: 18px;
-  align-items: stretch;
+  align-items: start;
+  margin-top: 20px;
 }
 
 .panel,
@@ -623,11 +627,22 @@ main {
   color: var(--muted);
 }
 
+.meta-block h2 {
+  margin-bottom: 14px;
+  font-size: 1.08rem;
+}
+
+.upcoming-more > summary {
+  cursor: pointer;
+  padding: 10px 0;
+  color: var(--primary-hover);
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
 .upcoming-card h3 {
-  overflow: hidden;
   margin-top: 5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .empty-inline {

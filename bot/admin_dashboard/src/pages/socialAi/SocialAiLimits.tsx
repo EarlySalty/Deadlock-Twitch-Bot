@@ -4,6 +4,7 @@ import { RefreshCw } from 'lucide-react';
 import { fetchLimits, saveGlobalControl, savePlanLimit, saveUserLimit, socialAiKeys } from '@/api/socialAi';
 import type { GlobalControlChange, PlanLimitChange, ProcessingLimits, UserLimitChange } from '@/api/socialAiTypes';
 import { formatDate, formatMicroUsd, GLOBAL_CAP_MICRO_USD, parseMicroUsd, usdInput } from '@/utils/socialAi';
+import { ExternalAiConsent } from './ExternalAiConsent';
 import { actionError, QueryState } from './SocialAiLayout';
 
 type LimitChange = { kind: 'global'; body: GlobalControlChange } | { kind: 'user'; body: UserLimitChange } | { kind: 'plan'; body: PlanLimitChange };
@@ -130,6 +131,7 @@ export function SocialAiLimitsPage() {
   const data = query.data;
   return <div className="space-y-5">
     <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-xl font-semibold">Verarbeitungsgrenzen</h2><button type="button" className="admin-button admin-button-secondary" disabled={query.isFetching || mutation.isPending} onClick={() => void reload()}><RefreshCw size={16} aria-hidden="true" /> Stand neu laden</button></div>
+    <ExternalAiConsent />
     <p className="text-sm text-text-secondary">Ohne bestätigten Stand wird keine Änderung gesendet. Nach einem Konflikt oder unklaren Speicherergebnis muss der Stand neu geladen werden.</p>
     {mutation.error && <p role="alert" className="social-ai-notice">{actionError(mutation.error)}</p>}
     <p role="status" aria-live="polite" className="text-sm text-text-secondary">{notice}</p>

@@ -1,11 +1,9 @@
 import { translateManagementError } from '@/i18n/managementErrors';
-import { Rise } from '../motion/Rise';
 import { useQuery } from '@tanstack/react-query';
 import { fetchInternalHome } from '@/api/home';
 import { OnboardingGuide } from '@/components/onboarding/OnboardingGuide';
 import { OverlayBuilderSection } from '@/components/verwaltung/OverlayBuilderSection';
 import { useAuthStatus } from '@/hooks/useAnalytics';
-import { PREVIEW_VERWALTUNG_ROUTE } from '@/preview/routes';
 import { ArrowRight, Loader2 } from 'lucide-react';
 import { useT } from '@/context/LanguageContext';
 
@@ -53,25 +51,6 @@ export function OverlayBuilderPage() {
 
   return (
     <>
-      <Rise as="section" className="panel-card rounded-2xl p-5 md:p-6">
-        <div className="mb-1 text-[11px] font-bold uppercase tracking-[0.18em] text-primary">
-          {t('Stream-Overlay')}
-        </div>
-        <h1 className="display-font text-2xl font-extrabold text-white">{t('Overlay einrichten')}</h1>
-        <p className="mt-2 max-w-2xl text-sm text-text-secondary">
-          {t('Dein Browser-Overlay für OBS, mit Adresse zum Einbinden und den Bausteinen deiner Wahl.')}
-        </p>
-      </Rise>
-
-      <Rise>
-        <a
-          href={`${PREVIEW_VERWALTUNG_ROUTE}#overlay`}
-          className="inline-flex items-center gap-2 text-sm text-text-secondary transition-colors hover:text-white"
-        >
-          {t('← Zurück zur Verwaltung')}
-        </a>
-      </Rise>
-
       <OnboardingGuide overlayBuilder />
       <OverlayBuilderSection login={twitchLogin} />
     </>

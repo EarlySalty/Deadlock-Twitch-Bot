@@ -78,7 +78,7 @@ const origin = `http://127.0.0.1:${server.address().port}`
 let browser
 try {
   await mkdir(output, { recursive: true })
-  browser = await chromium.launch({ headless: true, executablePath: process.argv[4] || undefined,
+  browser = process.env.MOLI_CDP_URL ? await chromium.connectOverCDP(process.env.MOLI_CDP_URL) : await chromium.launch({ headless: true, executablePath: process.argv[4] || undefined,
     args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] })
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: 'de-DE', timezoneId: 'Europe/Berlin' })
   const page = await context.newPage()
@@ -89,7 +89,7 @@ try {
   await page.route('https://clips.twitch.tv/**', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Test-Player</title><body style="background:#111;color:#ddd;font:16px sans-serif">Twitch-Player im Browsertest</body>' }))
   await page.goto(`${origin}/clips`)
   await page.getByRole('heading', { name: 'September 2026', exact: true }).waitFor()
-  await page.getByText('August 2026', { exact: true }).last().waitFor()
+  await page.locator('.archive-card').first().waitFor()
   assert.equal(await page.locator('.top-card .vote-button').count(), 3, 'all top-three cards must have voting controls')
   assert.equal(await page.locator('.top-card .vote-button').first().isEnabled(), true)
   await page.locator('.top-card .vote-button').first().click()
@@ -113,7 +113,8 @@ try {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), '320px viewport must not overflow')
   await page.setViewportSize({ width: 1440, height: 1000 })
   await page.locator('.archive-select select').selectOption('2026-07-01')
-  await page.locator('.archive-month').getByRole('heading', { name: 'Juli 2026' }).waitFor()
+  await page.locator('.archive-card h3').filter({ hasText: titles[3] }).waitFor()
+  assert.equal(await page.locator('.archive-month > h3').count(), 0)
   tooYoung = true
   await page.reload(); await page.getByText('Dein Discord-Konto muss mindestens 30 Tage alt sein.', { exact: true }).first().waitFor()
   assert.equal(await page.locator('.top-card .vote-button').last().isDisabled(), true)

@@ -170,7 +170,7 @@ try {
   await page.waitForFunction(() => document.activeElement?.getAttribute('role') === 'switch');
   assert.ok(await page.getByRole('button', { name: 'KI-Bearbeitung manuell starten' }).isDisabled());
   await go('global-off');
-  await page.getByText('Die globale Freigabe ist gesperrt.').waitFor();
+  await page.getByText('Ein Admin muss die externe KI erst freigeben.').waitFor();
   assert.ok(await page.getByRole('button', { name: 'KI-Bearbeitung manuell starten' }).isDisabled());
   await stableShot('ai-global-off-mobile', 390, 844, '.social-ai-global');
   await go('failed');
@@ -314,7 +314,7 @@ try {
   await page.getByRole('checkbox', { name: /Ich stimme der Übertragung/ }).evaluate((element) => element.click());
   await page.getByRole('button', { name: 'Zustimmung erteilen' }).evaluate((element) => element.click());
   await retryFailedConsentReload('Externe KI: zugestimmt', true, false, 'ai-consent-global-retry-error-mobile', 'ai-consent-global-denied-mobile');
-  assert.ok(await page.getByText('Die globale Freigabe ist gesperrt.').isVisible());
+  assert.ok(await page.getByText('Ein Admin muss die externe KI erst freigeben.').isVisible());
   await go('race');
   await page.getByRole('switch', { name: 'Externe KI: nicht zugestimmt' }).waitFor();
   await page.evaluate(() => {

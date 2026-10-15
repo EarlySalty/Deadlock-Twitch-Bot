@@ -1,0 +1,19 @@
+{
+  "package": "K1",
+  "goal": "Expose the existing global external AI consent to admins and let streamers edit identical or separate platform metadata.",
+  "boundaries": [
+    "Reuse existing admin authorization, CSRF protection and settings persistence with updated_by.",
+    "Keep the existing per-video, per-platform metadata storage and save endpoint.",
+    "No release build or deployment."
+  ],
+  "acceptance": [
+    "GET and PUT global external AI consent reject non-admin sessions and PUT requires CSRF.",
+    "The admin social AI processing settings can enable and disable the global consent.",
+    "Streamer copy explains that an admin must enable external AI first, with an English translation.",
+    "Identical stored metadata defaults to shared mode; different metadata defaults to separate mode.",
+    "Shared editing saves identical values for every platform and validates every platform's limits.",
+    "Changing from shared to separate preserves current values.",
+    "Affected Rust and frontend checks pass; inspect Moli screenshots at 390 and 1440 pixels.",
+    "Merge and push main only after ALLOW from the local review gate."
+  ]
+}
