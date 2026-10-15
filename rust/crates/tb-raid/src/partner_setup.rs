@@ -1291,7 +1291,14 @@ impl PartnerSetupService {
         // bricht die restlichen Nachrichten ab.
         tokio::time::sleep(self.greeting_initial_pause).await;
         let mut greeted = true;
+        let language = tb_db::guild_membership::twitch_language(&self.pool, twitch_user_id).await;
+        let english = [
+            "Deadlock Chatbot Guard connected! 🎮",
+            "Commands for everyone: !ping (bot status) | !clip [description] (create a clip) | !raid_history (recent raids)",
+            "Moderator commands: !raid / !traid (start a raid) | !raid_status (bot status) | !uban / !unban (undo the last auto-ban) | !silentban / !silentraid (toggle notifications)",
+        ];
         for (idx, message) in GREETING_MESSAGES.iter().enumerate() {
+            let message = language.choose(message, english[idx]);
             if idx > 0 {
                 tokio::time::sleep(self.greeting_message_pause).await;
             }

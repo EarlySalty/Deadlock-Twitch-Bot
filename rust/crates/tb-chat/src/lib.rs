@@ -63,6 +63,7 @@ pub mod style_score;
 pub mod sub_reminder;
 pub mod suppression_guard;
 pub mod sus_invite;
+mod text;
 pub mod timeout_tracking;
 pub mod title_ai;
 pub mod title_db;

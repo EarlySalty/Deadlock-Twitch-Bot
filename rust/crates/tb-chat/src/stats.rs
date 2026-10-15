@@ -31,6 +31,23 @@ pub fn command_reply<T>(
     }
 }
 
+pub fn command_reply_localized<T>(
+    language: tb_domain::language::TextLanguage,
+    name: &str,
+    result: Result<Option<T>, StatsError>,
+    render: fn(tb_domain::language::TextLanguage, &str, Option<&T>) -> String,
+) -> String {
+    match result {
+        Ok(info) => render(language, name, info.as_ref()),
+        Err(_) => language
+            .choose(
+                "Die Spielstatistik kann ich gerade nicht abrufen. Versuch es gleich nochmal.",
+                "I can’t retrieve the game stats right now. Please try again shortly.",
+            )
+            .into(),
+    }
+}
+
 /// Kompatibilität für den Dashboard-Verbindungsstatus: None bedeutet unbekannt.
 pub async fn fetch_rank(discord_id: &str, include_stats: bool) -> Option<RankInfo> {
     fetch_rank_checked(discord_id, include_stats).await.ok()
@@ -201,24 +218,29 @@ async fn fetch_json<T: serde::de::DeserializeOwned>(
 }
 
 pub fn rank_reply(name: &str, info: Option<&RankInfo>) -> String {
+    rank_reply_localized(tb_domain::language::TextLanguage::German, name, info)
+}
+
+pub fn rank_reply_localized(
+    language: tb_domain::language::TextLanguage,
+    name: &str,
+    info: Option<&RankInfo>,
+) -> String {
     match info {
-        Some(info) if info.linked && !info.is_steam_friend => format!(
-            "{name} hat Steam verknüpft, aber keiner unserer Steam-Bots ist dort als Freund verbunden — bitte die Steam-Verknüpfung im Discord erneut öffnen."
+        Some(info) if info.linked && !info.is_steam_friend => tb_domain::localized_format!(language, "{name} hat Steam verknüpft, aber keiner unserer Steam-Bots ist dort als Freund verbunden — bitte die Steam-Verknüpfung im Discord erneut öffnen.", "{name} has linked Steam, but none of our Steam bots is connected as a friend. Please reopen the Steam link in Discord."
         ),
-        Some(info) if info.linked && !info.verified => format!(
-            "{name} hat Steam verknüpft, aber die Steam-Verknüpfung ist noch nicht bestätigt."
+        Some(info) if info.linked && !info.verified => tb_domain::localized_format!(language, "{name} hat Steam verknüpft, aber die Steam-Verknüpfung ist noch nicht bestätigt.", "{name} has linked Steam, but the link hasn’t been confirmed yet."
         ),
         Some(info) if info.linked => match &info.rank_name {
             Some(rank) => match info.subrank {
-                Some(subrank @ 1..=6) => format!("Rang von {name}: {rank} {subrank}"),
-                _ => format!("Rang von {name}: {rank}"),
+                Some(subrank @ 1..=6) => tb_domain::localized_format!(language, "Rang von {name}: {rank} {subrank}", "Rank for {name}: {rank} {subrank}"),
+                _ => tb_domain::localized_format!(language, "Rang von {name}: {rank}", "Rank for {name}: {rank}"),
             },
             None => {
-                format!("{name} hat einen verknüpften Account, aber noch keinen Rang erkannt.")
+                tb_domain::localized_format!(language, "{name} hat einen verknüpften Account, aber noch keinen Rang erkannt.", "{name} has a linked account, but no rank has been detected yet.")
             }
         },
-        _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
+        _ => tb_domain::localized_format!(language, "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden.", "{name} hasn’t linked a Steam account yet. They can link it directly with !connect."
         ),
     }
 }
@@ -227,140 +249,188 @@ pub fn rank_reply(name: &str, info: Option<&RankInfo>) -> String {
 /// diesen Pfad KEINE verlässliche Gesamt-Match-Zahl (nur Siege sind sauber
 /// rekonstruierbar), daher bewusst nur Siege — keine erfundene Bilanz/Winrate.
 pub fn wins_reply(name: &str, info: Option<&RankInfo>) -> String {
+    wins_reply_localized(tb_domain::language::TextLanguage::German, name, info)
+}
+
+pub fn wins_reply_localized(
+    language: tb_domain::language::TextLanguage,
+    name: &str,
+    info: Option<&RankInfo>,
+) -> String {
     match info {
         Some(info) if info.linked => match info.wins {
-            Some(w) => format!("{name}: {w} Siege in Deadlock."),
-            None => format!("{name}: Für deinen Account liegen noch keine Sieg-Daten vor."),
+            Some(w) => tb_domain::localized_format!(language, "{name}: {w} Siege in Deadlock.", "{name}: {w} wins in Deadlock."),
+            None => tb_domain::localized_format!(language, "{name}: Für deinen Account liegen noch keine Sieg-Daten vor.", "{name}: No win data is available for your account yet."),
         },
-        _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
+        _ => tb_domain::localized_format!(language, "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden.", "{name} hasn’t linked a Steam account yet. They can link it directly with !connect."
         ),
     }
 }
 
 pub fn winrate_reply(name: &str, mh: Option<&MatchHistory>) -> String {
+    winrate_reply_localized(tb_domain::language::TextLanguage::German, name, mh)
+}
+
+pub fn winrate_reply_localized(
+    language: tb_domain::language::TextLanguage,
+    name: &str,
+    mh: Option<&MatchHistory>,
+) -> String {
     match mh {
         Some(mh) if mh.linked => {
             let s = scored(&mh.matches);
             let w = s.iter().filter(|m| m.match_result == Some(1)).count();
             let l = s.iter().filter(|m| m.match_result == Some(0)).count();
             if w + l == 0 {
-                return format!("{name}: Noch keine gewerteten Deadlock-Spiele gefunden.");
+                return tb_domain::localized_format!(language, "{name}: Noch keine gewerteten Deadlock-Spiele gefunden.", "{name}: No scored Deadlock matches found yet.");
             }
             let wr = 100.0 * w as f64 / ((w + l) as f64);
-            format!(
-                "{name}: {wr:.1}% Winrate über die letzten {} Spiele ({w}S/{l}N).",
+            tb_domain::localized_format!(language, "{name}: {wr:.1}% Winrate über die letzten {} Spiele ({w}S/{l}N).", "{name}: {wr:.1}% win rate over the last {} matches ({w}W/{l}L).",
                 w + l
             )
         }
-        _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
+        _ => tb_domain::localized_format!(language, "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden.", "{name} hasn’t linked a Steam account yet. They can link it directly with !connect."
         ),
     }
 }
 
 pub fn mmr_reply(name: &str, t: Option<&MmrTrend>) -> String {
+    mmr_reply_localized(tb_domain::language::TextLanguage::German, name, t)
+}
+
+pub fn mmr_reply_localized(
+    language: tb_domain::language::TextLanguage,
+    name: &str,
+    t: Option<&MmrTrend>,
+) -> String {
     match t {
         Some(t) if t.linked => match &t.current_rank_name {
             Some(rank) => {
                 let d = t.days.unwrap_or(7);
                 match t.delta {
                     Some(d2) if d2 > 0 => {
-                        format!("{name}: Rang {rank} — {d2} Stufen hoch in den letzten {d} Tagen.")
+                        tb_domain::localized_format!(language, "{name}: Rang {rank} — {d2} Stufen hoch in den letzten {d} Tagen.", "{name}: Rank {rank}, up {d2} levels over the last {d} days.")
                     }
                     Some(d2) if d2 < 0 => {
                         let abs = d2.abs();
-                        format!("{name}: Rang {rank} — {abs} Stufen runter in den letzten {d} Tagen.")
+                        tb_domain::localized_format!(language, "{name}: Rang {rank} — {abs} Stufen runter in den letzten {d} Tagen.", "{name}: Rank {rank}, down {abs} levels over the last {d} days.")
                     }
-                    _ => format!("{name}: Rang {rank} — stabil in den letzten {d} Tagen."),
+                    _ => tb_domain::localized_format!(language, "{name}: Rang {rank} — stabil in den letzten {d} Tagen.", "{name}: Rank {rank}, stable over the last {d} days."),
                 }
             }
-            None => format!(
-                "{name}: Noch keine Rang-Historie — der Trend baut sich ab jetzt auf."
+            None => tb_domain::localized_format!(language, "{name}: Noch keine Rang-Historie — der Trend baut sich ab jetzt auf.", "{name}: No rank history yet. The trend starts building from now on."
             ),
         },
-        _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
+        _ => tb_domain::localized_format!(language, "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden.", "{name} hasn’t linked a Steam account yet. They can link it directly with !connect."
         ),
     }
 }
 
 pub fn live_reply(name: &str, s: Option<&LiveStatus>) -> String {
+    live_reply_localized(tb_domain::language::TextLanguage::German, name, s)
+}
+
+pub fn live_reply_localized(
+    language: tb_domain::language::TextLanguage,
+    name: &str,
+    s: Option<&LiveStatus>,
+) -> String {
     match s {
         Some(s) if s.linked => {
             if s.live {
-                let mut reply = format!("{name} ist gerade live in Deadlock");
+                let mut reply = tb_domain::localized_format!(language, "{name} ist gerade live in Deadlock", "{name} is currently in a live Deadlock match");
                 if let Some(hero) = &s.hero {
-                    reply.push_str(&format!(" als {hero}"));
+                    reply.push_str(&tb_domain::localized_format!(language, " als {hero}", " as {hero}"));
                 }
                 if let Some(minutes) = s.minutes {
-                    reply.push_str(&format!(" (seit {minutes} Min)"));
+                    reply.push_str(&tb_domain::localized_format!(language, " (seit {minutes} Min)", " ({minutes} min so far)"));
                 }
                 reply.push('.');
                 reply
             } else if s.in_deadlock {
-                format!("{name} ist gerade in Deadlock, aber in keinem laufenden Match.")
+                tb_domain::localized_format!(language, "{name} ist gerade in Deadlock, aber in keinem laufenden Match.", "{name} is in Deadlock, but not in a live match.")
             } else {
-                format!("{name} ist gerade nicht in Deadlock.")
+                tb_domain::localized_format!(language, "{name} ist gerade nicht in Deadlock.", "{name} isn’t in Deadlock right now.")
             }
         }
-        _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
+        _ => tb_domain::localized_format!(language, "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden.", "{name} hasn’t linked a Steam account yet. They can link it directly with !connect."
         ),
     }
 }
 
 pub fn lastmatch_reply(name: &str, mh: Option<&MatchHistory>) -> String {
+    lastmatch_reply_localized(tb_domain::language::TextLanguage::German, name, mh)
+}
+
+pub fn lastmatch_reply_localized(
+    language: tb_domain::language::TextLanguage,
+    name: &str,
+    mh: Option<&MatchHistory>,
+) -> String {
     match mh {
         Some(mh) if mh.linked => {
             let Some(m) = mh.matches.first() else {
-                return format!("{name}: Noch kein letztes Deadlock-Spiel gefunden.");
+                return tb_domain::localized_format!(language, "{name}: Noch kein letztes Deadlock-Spiel gefunden.", "{name}: No recent Deadlock match found yet.");
             };
             let outcome = match m.match_result {
-                Some(1) => "Sieg",
-                Some(0) => "Niederlage",
-                _ => "Spiel",
+                Some(1) => language.choose("Sieg", "Win"),
+                Some(0) => language.choose("Niederlage", "Loss"),
+                _ => language.choose("Spiel", "Match"),
             };
-            let hero = m.hero_name.as_deref().unwrap_or("unbekanntem Hero");
+            let hero = m.hero_name.as_deref().unwrap_or(language.choose("unbekanntem Hero", "an unknown hero"));
             let k = m.player_kills.unwrap_or(0);
             let d = m.player_deaths.unwrap_or(0);
             let a = m.player_assists.unwrap_or(0);
-            format!("{name}: Letztes Spiel — {outcome} als {hero} ({k}/{d}/{a}).")
+            tb_domain::localized_format!(language, "{name}: Letztes Spiel — {outcome} als {hero} ({k}/{d}/{a}).", "{name}: Last match: {outcome} as {hero} ({k}/{d}/{a}).")
         }
-        _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
+        _ => tb_domain::localized_format!(language, "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden.", "{name} hasn’t linked a Steam account yet. They can link it directly with !connect."
         ),
     }
 }
 
 pub fn streak_reply(name: &str, mh: Option<&MatchHistory>) -> String {
+    streak_reply_localized(tb_domain::language::TextLanguage::German, name, mh)
+}
+
+pub fn streak_reply_localized(
+    language: tb_domain::language::TextLanguage,
+    name: &str,
+    mh: Option<&MatchHistory>,
+) -> String {
     match mh {
         Some(mh) if mh.linked => {
             let s = scored(&mh.matches);
             let Some(first) = s.first() else {
-                return format!("{name}: Noch keine gewerteten Deadlock-Spiele gefunden.");
+                return tb_domain::localized_format!(language, "{name}: Noch keine gewerteten Deadlock-Spiele gefunden.", "{name}: No scored Deadlock matches found yet.");
             };
             let sign = first.match_result;
             let n = s.iter().take_while(|m| m.match_result == sign).count();
             match sign {
-                Some(1) if n >= 2 => format!("{name}: {n} Siege in Folge!"),
-                Some(1) => format!("{name}: Letztes Spiel gewonnen."),
-                Some(0) if n >= 2 => format!("{name}: {n} Niederlagen in Folge."),
-                Some(0) => format!("{name}: Letztes Spiel verloren."),
-                _ => format!("{name}: Letztes Spiel ohne klares Ergebnis."),
+                Some(1) if n >= 2 => tb_domain::localized_format!(language, "{name}: {n} Siege in Folge!", "{name}: {n} wins in a row!"),
+                Some(1) => tb_domain::localized_format!(language, "{name}: Letztes Spiel gewonnen.", "{name}: Won the last match."),
+                Some(0) if n >= 2 => tb_domain::localized_format!(language, "{name}: {n} Niederlagen in Folge.", "{name}: {n} losses in a row."),
+                Some(0) => tb_domain::localized_format!(language, "{name}: Letztes Spiel verloren.", "{name}: Lost the last match."),
+                _ => tb_domain::localized_format!(language, "{name}: Letztes Spiel ohne klares Ergebnis.", "{name}: The last match had no clear result."),
             }
         }
-        _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
+        _ => tb_domain::localized_format!(language, "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden.", "{name} hasn’t linked a Steam account yet. They can link it directly with !connect."
         ),
     }
 }
 
 pub fn mostplayed_reply(name: &str, mh: Option<&MatchHistory>) -> String {
+    mostplayed_reply_localized(tb_domain::language::TextLanguage::German, name, mh)
+}
+
+pub fn mostplayed_reply_localized(
+    language: tb_domain::language::TextLanguage,
+    name: &str,
+    mh: Option<&MatchHistory>,
+) -> String {
     match mh {
         Some(mh) if mh.linked => {
             if mh.matches.is_empty() {
-                return format!("{name}: Noch keine Deadlock-Spiele gefunden.");
+                return tb_domain::localized_format!(language, "{name}: Noch keine Deadlock-Spiele gefunden.", "{name}: No Deadlock matches found yet.");
             }
 
             let mut counts: HashMap<Option<i64>, usize> = HashMap::new();
@@ -381,11 +451,10 @@ pub fn mostplayed_reply(name: &str, mh: Option<&MatchHistory>) -> String {
                 .iter()
                 .find(|m| m.hero_id == top_hero_id)
                 .and_then(|m| m.hero_name.as_deref())
-                .unwrap_or("unbekannter Hero");
-            format!("{name}: Meistgespielt zuletzt — {hero} ({top_count} von {total} Spielen).")
+                .unwrap_or(language.choose("unbekannter Hero", "Unknown hero"));
+            tb_domain::localized_format!(language, "{name}: Meistgespielt zuletzt — {hero} ({top_count} von {total} Spielen).", "{name}: Most played recently: {hero} ({top_count} of {total} matches).")
         }
-        _ => format!(
-            "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden."
+        _ => tb_domain::localized_format!(language, "{name} hat noch keinen Steam-Account verknüpft — die Person kann ihn mit !connect direkt verbinden.", "{name} hasn’t linked a Steam account yet. They can link it directly with !connect."
         ),
     }
 }

@@ -4,8 +4,6 @@
 //! deutsches Embed in den Aufsichts-Channel. Nur ausgeführte/vorgeschlagene
 //! Aktionen erhalten einen `scam_revoke`-`view_spec` für den „Rückgängig"-Button.
 //!
-//! Sprache bewusst nur Deutsch (Entscheidung 2026-06-18: schlicht die
-//! KI-Begründung zeigen, kein i18n-Layer).
 
 use std::sync::Arc;
 
@@ -25,6 +23,7 @@ const COLOR_CLEAN: u32 = 0x95A5A6;
 struct ScamDiscordNotifier {
     backend: Arc<dyn DiscordBackend>,
     channel_id: i64,
+    language_pool: Option<sqlx::PgPool>,
 }
 
 #[async_trait]
@@ -33,39 +32,64 @@ impl ScamGuardNotifier for ScamDiscordNotifier {
         if n.action_taken == "watching" {
             return;
         }
+        let language = match &self.language_pool {
+            Some(pool) => tb_db::guild_membership::channel_language(pool, self.channel_id).await,
+            None => tb_domain::language::TextLanguage::German,
+        };
         let (icon, aktion, color) = match (n.verdict.as_str(), n.action_taken.as_str()) {
-            (_, "banned") => ("🚨", "Gebannt", COLOR_BAN),
-            (_, "timed_out") => ("🚨", "Stummgeschaltet (Timeout)", COLOR_BAN),
+            (_, "banned") => ("🚨", language.choose("Gebannt", "Banned"), COLOR_BAN),
+            (_, "timed_out") => (
+                "🚨",
+                language.choose("Stummgeschaltet (Timeout)", "Timed out"),
+                COLOR_BAN,
+            ),
             (_, "ban_failed_no_mod") => (
                 "🚨",
-                "Ban nicht durchgesetzt, Details stehen im Bot-Log",
+                language.choose(
+                    "Ban nicht durchgesetzt, Details stehen im Bot-Log",
+                    "Ban failed; details are in the bot log",
+                ),
                 COLOR_BAN,
             ),
             (_, "suggested") => (
                 "⚠️",
-                "Moderationsvorschlag, keine automatische Aktion",
+                language.choose(
+                    "Moderationsvorschlag, keine automatische Aktion",
+                    "Moderation suggested; no automatic action",
+                ),
                 COLOR_SUGGEST,
             ),
-            ("clean", "none") => ("✅", "Unauffällig, keine Aktion", COLOR_CLEAN),
-            _ => ("🔍", "Verdacht beobachtet, keine Aktion", COLOR_UNSURE),
+            ("clean", "none") => (
+                "✅",
+                language.choose("Unauffällig, keine Aktion", "No concerns; no action"),
+                COLOR_CLEAN,
+            ),
+            _ => (
+                "🔍",
+                language.choose(
+                    "Verdacht beobachtet, keine Aktion",
+                    "Suspicious activity observed; no action",
+                ),
+                COLOR_UNSURE,
+            ),
         };
         let urteil = match n.verdict.as_str() {
-            "scam" => "Betrug",
-            "clean" => "Unbedenklich",
-            _ => "Unklar",
+            "scam" => language.choose("Betrug", "Scam"),
+            "clean" => language.choose("Unbedenklich", "Harmless"),
+            _ => language.choose("Unklar", "Unclear"),
         };
         let confidence_pct = (n.confidence * 100.0).round() as i64;
 
         let embed = serde_json::json!({
-            "title": format!("{icon} Scam-Wächter — {}", n.chatter_login),
+            "title": tb_domain::localized_format!(language, "{icon} Scam-Wächter — {}", "{icon} Scam guard: {}", n.chatter_login),
             "description": n.reasoning,
             "color": color,
             "fields": [
-                {"name": "Kanal", "value": n.channel_login, "inline": true},
-                {"name": "Kategorie", "value": n.category, "inline": true},
-                {"name": "Konfidenz", "value": format!("{confidence_pct} %"), "inline": true},
-                {"name": "Aktion", "value": aktion, "inline": true},
-                {"name": "Urteil", "value": urteil, "inline": true},
+                {"name": language.choose("Kanal", "Channel"), "value": n.channel_login, "inline": true},
+                {"name": language.choose("Kategorie", "Category"), "value": n.category, "inline": true},
+                {"name": language.choose("Konfidenz", "Confidence"), "value": format!("{confidence_pct} %"), "inline": true},
+                {"name": language.choose("Aktion", "Action"), "value": aktion, "inline": true},
+                {"name": language.choose("Urteil", "Verdict"), "value": urteil, "inline": true},
             ],
         });
 
@@ -105,11 +129,13 @@ impl ScamGuardNotifier for ScamDiscordNotifier {
 pub fn build_scam_notifier(
     broker: &tb_config::BrokerConfig,
     channel_id: i64,
+    pool: sqlx::PgPool,
 ) -> Option<Arc<dyn ScamGuardNotifier>> {
     match BrokerRelay::new(broker) {
         Ok(relay) => Some(Arc::new(ScamDiscordNotifier {
             backend: Arc::new(relay),
             channel_id,
+            language_pool: Some(pool),
         })),
         Err(error) => {
             tracing::warn!(
@@ -195,6 +221,7 @@ mod tests {
         let notifier = ScamDiscordNotifier {
             backend: backend.clone(),
             channel_id: 1374364800817303632,
+            language_pool: None,
         };
         notifier.notify(notification(verdict, action)).await;
         let captured = backend.last.lock().unwrap().clone();
@@ -272,6 +299,7 @@ mod tests {
         let notifier = ScamDiscordNotifier {
             backend: backend.clone(),
             channel_id: 1374364800817303632,
+            language_pool: None,
         };
 
         notifier.notify(notification("unsure", "watching")).await;

@@ -491,6 +491,7 @@ impl LfgPitchDecision {
 }
 
 pub struct LfgPitchResponder {
+    language_pool: Option<sqlx::PgPool>,
     api: Arc<dyn ChatApi>,
     invite_url: Arc<dyn InviteQuestionInviteUrlPort>,
     judge: Arc<dyn LfgJudge>,
@@ -506,6 +507,11 @@ pub struct LfgPitchResponder {
 }
 
 impl LfgPitchResponder {
+    pub fn with_language_pool(mut self, pool: sqlx::PgPool) -> Self {
+        self.language_pool = Some(pool);
+        self
+    }
+
     pub fn new(
         api: Arc<dyn ChatApi>,
         invite_url: Arc<dyn InviteQuestionInviteUrlPort>,
@@ -539,6 +545,7 @@ impl LfgPitchResponder {
         invite_reply_notifier: Option<Arc<dyn InviteReplyNotifier>>,
     ) -> Self {
         Self {
+            language_pool: None,
             api,
             invite_url,
             judge,
@@ -860,7 +867,10 @@ impl LfgPitchResponder {
     }
 
     async fn send_go(&self, event: &ChatMessageEvent, chatter_login: &str, invite: &str) -> bool {
-        let message = next_lfg_pitch_reply()
+        let language =
+            crate::text::channel_language(self.language_pool.as_ref(), &event.broadcaster_user_id)
+                .await;
+        let message = crate::text::reply(language, next_lfg_pitch_reply())
             .replace("{chatter}", chatter_login)
             .replace("{invite}", invite);
         self.send(event, &message).await

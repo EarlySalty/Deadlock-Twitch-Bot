@@ -754,9 +754,12 @@ impl ModerationEngine {
                     self.record_ban_event_db(broadcaster_id, chatter_login, chatter_id, content)
                         .await;
                     if !silent {
-                        let notice = notice_text
-                            .map(|t| t.replace("{login}", chatter_login))
-                            .unwrap_or_else(|| NOTICE_SPAM_BAN.replace("{login}", chatter_login));
+                        let language =
+                            tb_db::guild_membership::twitch_language(&self.pool, broadcaster_id)
+                                .await;
+                        let notice =
+                            crate::text::reply(language, notice_text.unwrap_or(NOTICE_SPAM_BAN))
+                                .replace("{login}", chatter_login);
                         self.send_autoban_notice(channel_login, broadcaster_id, &notice)
                             .await;
                     }

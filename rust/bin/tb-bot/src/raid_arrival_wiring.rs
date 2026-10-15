@@ -13,14 +13,14 @@ use chrono::Utc;
 use sqlx::PgPool;
 use tb_monitoring::sessions::tracker::FollowerCountSource;
 use tb_raid::{
-    build_partner_raid_message, build_recruitment_message, classify_partner_raid_arrival,
-    classify_partner_raid_arrival_with_expectation, decide_blacklist_action,
-    plan_recruitment_delivery, serialize_confirmation_signals, ArrivalConfirmationService,
-    ArrivalSignalContext, ArrivalTrackingStore, BlacklistScheduleAction,
-    ConfirmedExternalRecruitmentRaid, ExternalRecruitmentStore, ManualRaidSuppression, PendingRaid,
-    PendingRaidStore, RaidArrivalSink, RaidBlacklistStore, RaidHistoryStore, RecordArrivalInput,
-    RecruitmentDeliveryConfig, RecruitmentDeliveryRequest, ScoreTrackingStore,
-    EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS, EXTERNAL_RECRUITMENT_RAID_LIMIT,
+    classify_partner_raid_arrival, classify_partner_raid_arrival_with_expectation,
+    decide_blacklist_action, plan_recruitment_delivery, serialize_confirmation_signals,
+    ArrivalConfirmationService, ArrivalSignalContext, ArrivalTrackingStore,
+    BlacklistScheduleAction, ConfirmedExternalRecruitmentRaid, ExternalRecruitmentStore,
+    ManualRaidSuppression, PendingRaid, PendingRaidStore, RaidArrivalSink, RaidBlacklistStore,
+    RaidHistoryStore, RecordArrivalInput, RecruitmentDeliveryConfig, RecruitmentDeliveryRequest,
+    ScoreTrackingStore, EXTERNAL_RECRUITMENT_BLACKLIST_GRACE_SECONDS,
+    EXTERNAL_RECRUITMENT_RAID_LIMIT,
 };
 use tokio::task::JoinHandle;
 
@@ -687,7 +687,10 @@ impl RaidArrivalSinkImpl {
         };
 
         // 4. Nachricht bauen (build_partner_raid_message, raid_messaging.rs:28).
-        let message = build_partner_raid_message(
+        let language =
+            tb_db::guild_membership::twitch_language(&self.pool, to_broadcaster_id).await;
+        let message = tb_raid::raid_messaging::build_partner_raid_message_localized(
+            language,
             from_broadcaster_login,
             to_broadcaster_login,
             viewer_count,
@@ -861,7 +864,13 @@ impl RaidArrivalSinkImpl {
             return;
         };
 
-        let message = build_recruitment_message(message_variant, to_broadcaster_login);
+        let language =
+            tb_db::guild_membership::twitch_language(&self.pool, to_broadcaster_id).await;
+        let message = tb_raid::recruitment_messaging::build_recruitment_message_localized(
+            language,
+            message_variant,
+            to_broadcaster_login,
+        );
 
         let pool = self.pool.clone();
         let outbound_suppression = self.outbound_suppression.clone();

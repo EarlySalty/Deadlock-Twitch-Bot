@@ -88,11 +88,9 @@ impl ReauthReminder {
             }
         }
 
-        match self
-            .chat
-            .send_message(broadcaster_id, REAUTH_REMINDER_TEXT)
-            .await
-        {
+        let language = tb_db::guild_membership::twitch_language(&self.pool, broadcaster_id).await;
+        let text = language.choose(REAUTH_REMINDER_TEXT, "Quick reminder: the raid/stats bot needs a new Twitch authorization. Please log in to the dashboard and reconnect Twitch. If you need the DM, your reauthorization link has already been sent on Discord.");
+        match self.chat.send_message(broadcaster_id, text).await {
             Ok(SendOutcome::Sent) => {
                 tracing::info!(
                     login = %login,

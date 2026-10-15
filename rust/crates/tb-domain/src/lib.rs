@@ -2,6 +2,7 @@
 
 pub mod clip;
 pub mod ids;
+pub mod language;
 pub mod login;
 pub mod partner;
 pub mod referral_window;

@@ -293,6 +293,42 @@ pub fn build_recruitment_message(
     variant: RecruitmentMessageVariant,
     _to_broadcaster_login: &str,
 ) -> String {
+    build_recruitment_message_localized(
+        tb_domain::language::TextLanguage::German,
+        variant,
+        _to_broadcaster_login,
+    )
+}
+
+pub fn build_recruitment_message_localized(
+    language: tb_domain::language::TextLanguage,
+    variant: RecruitmentMessageVariant,
+    _to_broadcaster_login: &str,
+) -> String {
+    if language == tb_domain::language::TextLanguage::English {
+        return match variant {
+            RecruitmentMessageVariant::S1 => "Hey! We’re bringing you some support from the Deutsche Deadlock Community 💜 Have a great stream! If you’d like more support, check out our profile. Don’t worry, we’re not a scam. 😅".into(),
+            RecruitmentMessageVariant::S2 => "More support coming your way 👋 In case we haven’t met: we’re the largest and most active German Deadlock community. Enjoy the rest of your stream!".into(),
+            RecruitmentMessageVariant::S3 => "Us again 😄 Real people, real streamers, all loving Deadlock just as much as you. Glad to have you here. Have fun!".into(),
+            RecruitmentMessageVariant::S4 => "Another wave of support 💜 Want to join us regularly? Our website and Discord are linked in our profile. No pressure, just take a look. Keep it up!".into(),
+            RecruitmentMessageVariant::Light { pool_index } => [
+                "Us again 👋 Have a great stream!",
+                "A little support from the Deutsche Deadlock Community 💜 Great to see you regularly!",
+                "A few more people for you 😄 We’re keeping the German Deadlock scene alive together. Glad you’re part of it!",
+            ].get(pool_index).unwrap_or(&"Us again 👋 Have a great stream!").to_string(),
+            RecruitmentMessageVariant::Pitch { pool_index } => [
+                "Want more than viewers? We have tournaments, coaching and regular events, with over 2,400 members. Find our website and Discord in our profile 💜",
+                "We’re building the German Deadlock scene with tournaments, coaching, events and 2,400+ members. Want to join in? Our website is in our profile!",
+                "It’s not just viewers: tournaments, coaching and an active community await. Find out more on our website in our profile. Have a great stream! 💜",
+            ].get(pool_index).unwrap_or(&"Find our community website and Discord in our profile 💜").to_string(),
+            RecruitmentMessageVariant::Cheeky { pool_index, raid_count } => [
+                "Raid #{n} 💀 Enjoying the support, huh? 😄 How about joining the community? Website and Discord in our profile!",
+                "Your daily dose of support 😏 Raid #{n} for you. How many raids before you drop by? Website and Discord in our profile 💜",
+                "Raid #{n} and still not a member? We’re taking it personally 😂 Find out how to join on our website in our profile. The support keeps coming either way 👋",
+                "Raid #{n} 🫡 Respect for sticking around, but you could make it official 😅 Website in our profile!",
+            ].get(pool_index).unwrap_or(&"Raid #{n}! Website and Discord in our profile 💜").replace("{n}", &raid_count.to_string()),
+        };
+    }
     match variant {
         RecruitmentMessageVariant::S1 => OUTREACH_TRUST_STAGE_1_MESSAGE.to_string(),
         RecruitmentMessageVariant::S2 => OUTREACH_TRUST_STAGE_2_MESSAGE.to_string(),

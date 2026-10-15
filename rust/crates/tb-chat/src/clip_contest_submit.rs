@@ -404,6 +404,19 @@ impl SubmitOutcome {
 
     /// Antworttext für Chat und Dashboard. `None`: keine Antwort
     /// (Doppelsend, die erste Einreichung antwortet schon).
+    pub fn reply_localized(&self, language: tb_domain::language::TextLanguage) -> Option<String> {
+        if let Self::Rejected { reason } = self {
+            return Some(tb_domain::localized_format!(
+                language,
+                "Der Clip wurde nicht angenommen: {}",
+                "The clip wasn’t accepted: {}",
+                crate::text::reply(language, reject_reason_text(reason.as_deref()))
+            ));
+        }
+        self.reply()
+            .map(|text| crate::text::reply(language, &text).to_string())
+    }
+
     pub fn reply(&self) -> Option<String> {
         Some(match self {
             SubmitOutcome::Accepted { .. } => REPLY_ACCEPTED.to_string(),

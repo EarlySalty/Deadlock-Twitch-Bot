@@ -185,37 +185,63 @@ impl RankLookup {
         serde_json::from_value(value).map_err(|_| ApiError::Unavailable)
     }
 
+    #[cfg(test)]
     pub(crate) async fn twitch_reply(
         &self,
         pool: &PgPool,
         target: &CommandTarget,
         explicit: bool,
     ) -> String {
+        self.twitch_reply_localized(
+            tb_domain::language::TextLanguage::German,
+            pool,
+            target,
+            explicit,
+        )
+        .await
+    }
+
+    pub(crate) async fn twitch_reply_localized(
+        &self,
+        language: tb_domain::language::TextLanguage,
+        pool: &PgPool,
+        target: &CommandTarget,
+        explicit: bool,
+    ) -> String {
         let link = match crate::player_links::load(pool, &target.user_id).await {
             Ok(link) => link,
-            Err(_) => return UNAVAILABLE.into(),
+            Err(_) => return crate::text::reply(language, UNAVAILABLE).into(),
         };
         if link.as_ref().is_some_and(|l| !l.lookup_enabled) {
-            return crate::player_links::DISCONNECTED_REPLY.into();
+            return crate::text::reply(language, crate::player_links::DISCONNECTED_REPLY).into();
         }
         let revision = link.as_ref().map(|l| l.revision);
         let text = match link.as_ref().filter(|l| l.steam_id64.is_some()) {
             Some(link) => {
                 let Some(id) = link.account_id() else {
-                    return UNAVAILABLE.into();
+                    return crate::text::reply(language, UNAVAILABLE).into();
                 };
-                self.account_reply(id, &target.name, false).await
+                self.account_reply_localized(language, id, &target.name, false)
+                    .await
             }
-            None => self.legacy_reply(pool, target, explicit).await,
+            None => {
+                self.legacy_reply_localized(language, pool, target, explicit)
+                    .await
+            }
         };
         // Recheck all sources, including legacy/name fallback, after network I/O.
         match crate::player_links::load(pool, &target.user_id).await {
             Ok(Some(current)) if !current.lookup_enabled => {
-                crate::player_links::DISCONNECTED_REPLY.into()
+                crate::text::reply(language, crate::player_links::DISCONNECTED_REPLY).into()
             }
             Ok(current) if current.as_ref().map(|l| l.revision) == revision => text,
-            Ok(_) => "Die Steam-Zuordnung wurde geändert. Bitte den Rang erneut abfragen.".into(),
-            Err(_) => UNAVAILABLE.into(),
+            Ok(_) => language
+                .choose(
+                    "Die Steam-Zuordnung wurde geändert. Bitte den Rang erneut abfragen.",
+                    "The Steam link changed. Please request the rank again.",
+                )
+                .into(),
+            Err(_) => crate::text::reply(language, UNAVAILABLE).into(),
         }
     }
 
@@ -229,16 +255,22 @@ impl RankLookup {
         central_link(&info)
     }
 
-    async fn legacy_reply(&self, pool: &PgPool, target: &CommandTarget, explicit: bool) -> String {
+    async fn legacy_reply_localized(
+        &self,
+        language: tb_domain::language::TextLanguage,
+        pool: &PgPool,
+        target: &CommandTarget,
+        explicit: bool,
+    ) -> String {
         let discord_id = match stats::resolve_discord_id(pool, &target.user_id).await {
             Ok(id) => id,
-            Err(_) => return UNAVAILABLE.into(),
+            Err(_) => return crate::text::reply(language, UNAVAILABLE).into(),
         };
         let Some(discord_id) = discord_id else {
             return if explicit {
-                self.name_reply(&target.login).await
+                self.name_reply_localized(language, &target.login).await
             } else {
-                stats::rank_reply(&target.name, None)
+                stats::rank_reply_localized(language, &target.name, None)
             };
         };
         let primary = stats::fetch_rank_at(&self.steam_rank_url, &discord_id, false).await;
@@ -251,10 +283,10 @@ impl RankLookup {
                     .as_ref()
                     .is_some_and(|name| !name.trim().is_empty())
             {
-                return stats::rank_reply(&target.name, Some(info));
+                return stats::rank_reply_localized(language, &target.name, Some(info));
             }
             if !info.linked && !explicit {
-                return stats::rank_reply(&target.name, Some(info));
+                return stats::rank_reply_localized(language, &target.name, Some(info));
             }
         }
         // Never search for a different person when a real link exists, or when
@@ -264,21 +296,38 @@ impl RankLookup {
             Err(_) => Err(stats::StatsError),
         };
         match link_check {
-            Ok(Some((id, true))) => self.account_reply(id, &target.name, false).await,
-            Ok(Some((_, false))) => format!(
+            Ok(Some((id, true))) => {
+                self.account_reply_localized(language, id, &target.name, false)
+                    .await
+            }
+            Ok(Some((_, false))) => tb_domain::localized_format!(
+                language,
                 "{} hat Steam verknüpft, aber die Steam-Verknüpfung ist noch nicht bestätigt.",
+                "{} has linked Steam, but the link hasn’t been confirmed yet.",
                 target.name
             ),
             Ok(None) => match primary {
-                Ok(info) if !info.linked && explicit => self.name_reply(&target.login).await,
-                Ok(info) => stats::rank_reply(&target.name, Some(&info)),
-                Err(_) => UNAVAILABLE.into(),
+                Ok(info) if !info.linked && explicit => {
+                    self.name_reply_localized(language, &target.login).await
+                }
+                Ok(info) => stats::rank_reply_localized(language, &target.name, Some(&info)),
+                Err(_) => crate::text::reply(language, UNAVAILABLE).into(),
             },
-            Err(_) => UNAVAILABLE.into(),
+            Err(_) => crate::text::reply(language, UNAVAILABLE).into(),
         }
     }
 
+    #[cfg(test)]
     async fn name_reply(&self, login: &str) -> String {
+        self.name_reply_localized(tb_domain::language::TextLanguage::German, login)
+            .await
+    }
+
+    async fn name_reply_localized(
+        &self,
+        language: tb_domain::language::TextLanguage,
+        login: &str,
+    ) -> String {
         let profiles = match self
             .get::<Vec<SteamProfile>>(
                 "/players/steam-search",
@@ -293,29 +342,48 @@ impl RankLookup {
         {
             Ok(profiles) => profiles,
             Err(ApiError::NotFound) => Vec::new(),
-            Err(error) => return api_error_reply(error),
+            Err(error) => return api_error_reply_localized(language, error),
         };
         match select_profile(login, &profiles) {
-            ProfileSelection::Exact(profile) => self.account_reply(profile.account_id, &profile.personaname, true).await,
-            ProfileSelection::None => format!("Für @{login} gibt es noch keine Steam-Verknüpfung. Direkt geht !rank steam:<Account-ID>, sonst hier verbinden: {}", crate::player_links::CONNECT_URL),
+            ProfileSelection::Exact(profile) => self.account_reply_localized(language, profile.account_id, &profile.personaname, true).await,
+            ProfileSelection::None => tb_domain::localized_format!(language, "Für @{login} gibt es noch keine Steam-Verknüpfung. Direkt geht !rank steam:<Account-ID>, sonst hier verbinden: {}", "@{login} hasn’t linked Steam yet. Use !rank steam:<account ID> directly, or connect here: {}", crate::player_links::CONNECT_URL),
             ProfileSelection::Ambiguous(candidates) => {
                 let suggestions = candidates.into_iter().take(3).map(|profile|
                     format!("{} (!rank steam:{})", chat_label(&profile.personaname), profile.account_id)
                 ).collect::<Vec<_>>().join(" | ");
-                format!("@{login} lässt sich keinem Steam-Account eindeutig zuordnen. Mögliche Treffer: {suggestions}. Kein Rang automatisch zugeordnet.")
+                tb_domain::localized_format!(language, "@{login} lässt sich keinem Steam-Account eindeutig zuordnen. Mögliche Treffer: {suggestions}. Kein Rang automatisch zugeordnet.", "@{login} can’t be matched to a single Steam account. Possible matches: {suggestions}. No rank was automatically assigned.")
             }
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn account_reply(
         &self,
         account_id: u32,
         name: &str,
         name_only: bool,
     ) -> String {
+        self.account_reply_localized(
+            tb_domain::language::TextLanguage::German,
+            account_id,
+            name,
+            name_only,
+        )
+        .await
+    }
+
+    pub(crate) async fn account_reply_localized(
+        &self,
+        language: tb_domain::language::TextLanguage,
+        account_id: u32,
+        name: &str,
+        name_only: bool,
+    ) -> String {
         let subject = if name_only {
-            format!(
+            tb_domain::localized_format!(
+                language,
                 "Steam-Namensfund {} (ID {account_id}; Twitch-Zuordnung unbestätigt)",
+                "Steam name match {} (ID {account_id}; Twitch link unconfirmed)",
                 chat_label(name)
             )
         } else {
@@ -323,12 +391,12 @@ impl RankLookup {
         };
         let rank = match self.get::<PublicRank>(&format!("/players/{account_id}/rank"), &[]).await {
             Ok(rank) => rank,
-            Err(ApiError::Protected) => return format!("{subject}: Die Deadlock API gibt für diesen Account keine öffentlichen Rangdaten frei."),
-            Err(ApiError::NotFound) => return format!("{subject}: Keine öffentlichen Rangdaten gefunden."),
-            Err(error) => return api_error_reply(error),
+            Err(ApiError::Protected) => return tb_domain::localized_format!(language, "{subject}: Die Deadlock API gibt für diesen Account keine öffentlichen Rangdaten frei.", "{subject}: The Deadlock API doesn’t share public rank data for this account."),
+            Err(ApiError::NotFound) => return tb_domain::localized_format!(language, "{subject}: Keine öffentlichen Rangdaten gefunden.", "{subject}: No public rank data found."),
+            Err(error) => return api_error_reply_localized(language, error),
         };
         if rank.badge == 0 && rank.rank == 0 && rank.subrank == 0 {
-            return format!("{subject}: Kein Rang aus einem aktuellen Ranked-Match verfügbar (Deadlock API). Das bedeutet nicht automatisch, dass der Account noch nie gerankt war.");
+            return tb_domain::localized_format!(language, "{subject}: Kein Rang aus einem aktuellen Ranked-Match verfügbar (Deadlock API). Das bedeutet nicht automatisch, dass der Account noch nie gerankt war.", "{subject}: No rank from a recent ranked match is available (Deadlock API). This doesn’t necessarily mean the account has never been ranked.");
         }
         if rank.rank == 0
             || !(1..=6).contains(&rank.subrank)
@@ -338,7 +406,7 @@ impl RankLookup {
                 .and_then(|tier| tier.checked_add(rank.subrank))
                 != Some(rank.badge)
         {
-            return UNAVAILABLE.into();
+            return crate::text::reply(language, UNAVAILABLE).into();
         }
         let ranks = self
             .get::<Vec<RankAsset>>("/assets/ranks", &[])
@@ -348,26 +416,33 @@ impl RankLookup {
             .iter()
             .find(|asset| asset.tier == rank.rank && !asset.name.trim().is_empty())
             .map(|asset| chat_label(&asset.name))
-            .unwrap_or_else(|| format!("Rangstufe {}", rank.rank));
+            .unwrap_or_else(|| {
+                tb_domain::localized_format!(language, "Rangstufe {}", "Rank tier {}", rank.rank)
+            });
         let date = rank
             .last_match
             .as_ref()
             .and_then(|value| value.get("start_time"))
             .and_then(Value::as_i64)
             .and_then(|timestamp| chrono::DateTime::from_timestamp(timestamp, 0))
-            .map(|date| format!(" vom {}", date.format("%d.%m.%Y")))
+            .map(|date| {
+                tb_domain::localized_format!(language, " vom {}", " on {}", date.format("%d.%m.%Y"))
+            })
             .unwrap_or_default();
-        format!("Rang von {subject}: {rank_name} {} (Deadlock API; letztes erfasstes Ranked-Match{date}).", rank.subrank)
+        tb_domain::localized_format!(language, "Rang von {subject}: {rank_name} {} (Deadlock API; letztes erfasstes Ranked-Match{date}).", "Rank for {subject}: {rank_name} {} (Deadlock API; last recorded ranked match{date}).", rank.subrank)
     }
 }
 
-fn api_error_reply(error: ApiError) -> String {
+fn api_error_reply_localized(
+    language: tb_domain::language::TextLanguage,
+    error: ApiError,
+) -> String {
     match error {
         ApiError::Limited => {
-            "Die Deadlock API ist gerade ausgelastet. Bitte versuch es in einer Minute nochmal."
+            language.choose("Die Deadlock API ist gerade ausgelastet. Bitte versuch es in einer Minute nochmal.", "The Deadlock API is busy. Please try again in a minute.")
                 .into()
         }
-        _ => UNAVAILABLE.into(),
+        _ => crate::text::reply(language, UNAVAILABLE).into(),
     }
 }
 fn chat_label(value: &str) -> String {

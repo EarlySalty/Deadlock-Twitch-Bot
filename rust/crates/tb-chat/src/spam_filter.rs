@@ -60,6 +60,10 @@ const SPAM_BRAND_TOKENS: &[&str] = &[
 /// Reihenfolge und Sonderzeichen identisch mit Python (thumbs-up U+1F44D,
 /// Right Single Quotation Mark U+2019).
 const SPAM_PHRASES: &[&str] = &[
+    "Want to become famous? Buy followers",
+    "Want to become famous? Buy viewers",
+    "Buy followers and viewers at",
+    "Get cheap viewers at",
     "Best viewers streamboo.com",
     "Best viewers streamboo .com",
     "Best viewers streamboo com",

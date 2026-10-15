@@ -86,6 +86,24 @@ impl Default for AnnouncementConfig {
     }
 }
 
+impl AnnouncementConfig {
+    pub fn for_language(language: tb_domain::language::TextLanguage) -> Self {
+        if language == tb_domain::language::TextLanguage::German {
+            return Self::default();
+        }
+        Self {
+            title_template: "{channel} is LIVE playing {game}!".into(),
+            fields: vec![
+                ("Viewers".into(), "{viewer_count}".into(), true),
+                ("Category".into(), "{game}".into(), true),
+            ],
+            footer_text_template: "Watch on Twitch for more action!".into(),
+            button_label_template: "Watch on Twitch".into(),
+            ..Self::default()
+        }
+    }
+}
+
 // ── Kontext + Rendering ───────────────────────────────────────────────────────
 
 /// `{platzhalter}` ersetzen; unbekannte Platzhalter bleiben stehen (Python).
@@ -222,7 +240,8 @@ fn should_skip_zero_viewer_field(
     context
         .get("viewer_count")
         .is_some_and(|count| count.trim() == "0")
-        && name.trim().eq_ignore_ascii_case("viewer")
+        && (name.trim().eq_ignore_ascii_case("viewer")
+            || name.trim().eq_ignore_ascii_case("viewers"))
         && value.trim() == "0"
 }
 
@@ -283,13 +302,27 @@ fn context_value<'a>(context: &'a BTreeMap<String, String>, key: &str) -> &'a st
     context.get(key).map(String::as_str).unwrap_or("")
 }
 
+fn output_language(context: &BTreeMap<String, String>) -> tb_domain::language::TextLanguage {
+    tb_domain::language::TextLanguage::from_code(context.get("text_language").map(String::as_str))
+}
+
 fn live_stat_text(context: &BTreeMap<String, String>) -> String {
+    let language = output_language(context);
     let mut parts = Vec::new();
     let viewer_count = context_value(context, "viewer_count").trim();
     if !viewer_count.is_empty() && viewer_count != "0" {
-        parts.push(format!("👁 **{viewer_count}** Zuschauer"));
+        parts.push(tb_domain::localized_format!(
+            language,
+            "👁 **{viewer_count}** Zuschauer",
+            "👁 **{viewer_count}** viewers"
+        ));
     }
-    parts.push(format!("⏱ seit **{}**", context_value(context, "uptime")));
+    parts.push(tb_domain::localized_format!(
+        language,
+        "⏱ seit **{}**",
+        "⏱ live for **{}**",
+        context_value(context, "uptime")
+    ));
     parts.push(format!("🌐 {}", context_value(context, "language")));
     parts.join("   ·   ")
 }
@@ -307,8 +340,10 @@ fn tags_text(context: &BTreeMap<String, String>) -> Option<String> {
 fn live_components(context: &BTreeMap<String, String>, image_url: &str) -> Value {
     let mut children = vec![
         v2_section_with_thumbnail(
-            format!(
+            tb_domain::localized_format!(
+                output_language(context),
                 "🔴 **LIVE** · {} spielt {}\n## {}",
+                "🔴 **LIVE** · {} is playing {}\n## {}",
                 context_value(context, "channel"),
                 context_value(context, "game"),
                 context_value(context, "title")
@@ -667,6 +702,26 @@ pub fn build_offline_embed(
     target_game: &str,
     now: DateTime<Utc>,
 ) -> Value {
+    build_offline_embed_localized(
+        tb_domain::language::TextLanguage::German,
+        display_name,
+        last_title,
+        last_game,
+        preview_image_url,
+        target_game,
+        now,
+    )
+}
+
+pub fn build_offline_embed_localized(
+    language: tb_domain::language::TextLanguage,
+    display_name: &str,
+    last_title: Option<&str>,
+    last_game: Option<&str>,
+    preview_image_url: Option<&str>,
+    target_game: &str,
+    now: DateTime<Utc>,
+) -> Value {
     let game = last_game
         .map(str::trim)
         .filter(|g| !g.is_empty())
@@ -678,17 +733,20 @@ pub fn build_offline_embed(
     let description = last_title
         .map(str::trim)
         .filter(|t| !t.is_empty())
-        .unwrap_or("Letzten Stream als VOD ansehen.");
+        .unwrap_or(language.choose(
+            "Letzten Stream als VOD ansehen.",
+            "Watch the last stream as a VOD.",
+        ));
     let mut embed = serde_json::json!({
-        "title": format!("{display_name} ist OFFLINE"),
+        "title": tb_domain::localized_format!(language, "{display_name} ist OFFLINE", "{display_name} is OFFLINE"),
         "description": description,
         "color": TWITCH_BRAND_COLOR,
         "timestamp": now.to_rfc3339_opts(SecondsFormat::Secs, false),
         "fields": [
-            {"name": "Kategorie", "value": game, "inline": true},
-            {"name": "Hinweis", "value": "VOD über den Button abrufen.", "inline": false},
+            {"name": language.choose("Kategorie", "Category"), "value": game, "inline": true},
+            {"name": language.choose("Hinweis", "Note"), "value": language.choose("VOD über den Button abrufen.", "Use the button to watch the VOD."), "inline": false},
         ],
-        "footer": {"text": "Letzten Stream auf Twitch ansehen."},
+        "footer": {"text": language.choose("Letzten Stream auf Twitch ansehen.", "Watch the last stream on Twitch.")},
         "author": {"name": display_name},
     });
     if let Some(url) = preview_image_url.map(str::trim).filter(|u| !u.is_empty()) {
@@ -712,6 +770,13 @@ pub struct OfflineComponentsContext<'a> {
 /// Offline-/VOD-Components V2. Der Button bleibt Broker-Sache und wird hier
 /// bewusst nicht in den Komponentenbaum aufgenommen.
 pub fn build_offline_components(context: OfflineComponentsContext<'_>) -> Value {
+    build_offline_components_localized(tb_domain::language::TextLanguage::German, context)
+}
+
+pub fn build_offline_components_localized(
+    language: tb_domain::language::TextLanguage,
+    context: OfflineComponentsContext<'_>,
+) -> Value {
     let game = context
         .last_game
         .map(str::trim)
@@ -725,17 +790,24 @@ pub fn build_offline_components(context: OfflineComponentsContext<'_>) -> Value 
         .last_title
         .map(str::trim)
         .filter(|t| !t.is_empty())
-        .unwrap_or("Letzten Stream als VOD ansehen.");
+        .unwrap_or(language.choose(
+            "Letzten Stream als VOD ansehen.",
+            "Watch the last stream as a VOD.",
+        ));
     let mut children = vec![v2_section_with_thumbnail(
-        format!(
+        tb_domain::localized_format!(
+            language,
             "💤 **Stream beendet** · {}\n## {title}",
+            "💤 **Stream ended** · {}\n## {title}",
             context.display_name
         ),
         context.channel_avatar_url.unwrap_or(""),
     )];
     if let Some(started_at) = context.started_at {
-        children.push(v2_text_display(format!(
+        children.push(v2_text_display(tb_domain::localized_format!(
+            language,
             "🎮 {game}   ·   ⏱ Stream lief **{}**",
+            "🎮 {game}   ·   ⏱ Stream lasted **{}**",
             fmt_duration(started_at, context.now)
         )));
     }
@@ -747,9 +819,10 @@ pub fn build_offline_components(context: OfflineComponentsContext<'_>) -> Value 
     {
         children.push(v2_media_gallery(url));
     }
-    children.push(v2_text_display(
+    children.push(v2_text_display(language.choose(
         "-# Die Aufzeichnung gibt's über den Button — solange Twitch sie hält.",
-    ));
+        "-# Watch the recording using the button while it’s available on Twitch.",
+    )));
     Value::Array(vec![v2_container(
         TWITCH_OFFLINE_COMPONENT_ACCENT,
         children,

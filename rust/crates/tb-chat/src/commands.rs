@@ -94,10 +94,11 @@ const TRUSTPILOT_REPLIES: &[&str] = &[
     "Deine Meinung zur Deutschen Deadlock Community ist willkommen. Hier geht es zur Bewertung:",
 ];
 
-fn trustpilot_reply() -> String {
+fn trustpilot_reply(language: tb_domain::language::TextLanguage) -> String {
     let introduction = TRUSTPILOT_REPLIES
         .choose(&mut rand::rng())
         .expect("Trustpilot-Antworten sind fest hinterlegt");
+    let introduction = crate::text::reply(language, introduction);
     format!("{introduction} {TRUSTPILOT_URL}")
 }
 
@@ -119,7 +120,15 @@ fn knowledge_base() -> &'static KnowledgeBase {
 }
 
 /// Der Link öffnet die aktiven Befehle des aktuellen Kanals.
+#[cfg(test)]
 fn commands_reply(broadcaster_id: &str) -> String {
+    commands_reply_localized(tb_domain::language::TextLanguage::German, broadcaster_id)
+}
+
+fn commands_reply_localized(
+    _language: tb_domain::language::TextLanguage,
+    broadcaster_id: &str,
+) -> String {
     let id: String = broadcaster_id
         .bytes()
         .map(|byte| {
@@ -130,14 +139,43 @@ fn commands_reply(broadcaster_id: &str) -> String {
             }
         })
         .collect();
-    format!("Alle Befehle für diesen Kanal findest du hier: {COMMANDS_URL}?streamer_id={id}")
+    tb_domain::localized_format!(
+        _language,
+        "Alle Befehle für diesen Kanal findest du hier: {COMMANDS_URL}?streamer_id={id}",
+        "All commands for this channel: {COMMANDS_URL}?streamer_id={id}"
+    )
 }
 
+#[cfg(test)]
 fn dashboard_reply() -> String {
-    format!("Dein Dashboard findest du hier: {DASHBOARD_URL}")
+    dashboard_reply_localized(tb_domain::language::TextLanguage::German)
 }
 
+fn dashboard_reply_localized(_language: tb_domain::language::TextLanguage) -> String {
+    tb_domain::localized_format!(
+        _language,
+        "Dein Dashboard findest du hier: {DASHBOARD_URL}",
+        "Your dashboard: {DASHBOARD_URL}"
+    )
+}
+
+#[cfg(test)]
 fn watchtime_dauer(minuten: f64) -> String {
+    watchtime_dauer_localized(tb_domain::language::TextLanguage::German, minuten)
+}
+
+fn watchtime_dauer_localized(language: tb_domain::language::TextLanguage, minuten: f64) -> String {
+    if language == tb_domain::language::TextLanguage::English {
+        if minuten > 0.0 && minuten < 1.0 {
+            return "less than 1 min".into();
+        }
+        let minutes = minuten as u64;
+        return match (minutes / 60, minutes % 60) {
+            (0, m) => format!("{m} min"),
+            (h, 0) => format!("{h} hr"),
+            (h, m) => format!("{h} hr {m} min"),
+        };
+    }
     if minuten > 0.0 && minuten < 1.0 {
         return "unter 1 Min".into();
     }
@@ -149,14 +187,35 @@ fn watchtime_dauer(minuten: f64) -> String {
     }
 }
 
+#[cfg(test)]
 fn help_reply(kb: &KnowledgeBase, topic: &str) -> String {
+    help_reply_localized(tb_domain::language::TextLanguage::German, kb, topic)
+}
+
+fn help_reply_localized(
+    _language: tb_domain::language::TextLanguage,
+    kb: &KnowledgeBase,
+    topic: &str,
+) -> String {
     let topic = topic.trim();
     if topic.is_empty() {
-        return format!("Sag mir ein Thema, z. B. !help raid — oder schau hier: {HELP_BASE_URL}");
+        return tb_domain::localized_format!(
+            _language,
+            "Sag mir ein Thema, z. B. !help raid — oder schau hier: {HELP_BASE_URL}",
+            "Give me a topic, e.g. !help raid, or look here: {HELP_BASE_URL}"
+        );
     }
     match kb.select(topic, Namespace::Bot, None, 1).first() {
-        Some(doc) => format!("{}: {HELP_BASE_URL}#{}", doc.title, doc.slug),
-        None => format!("Dazu habe ich nichts gefunden — schau hier: {HELP_BASE_URL}"),
+        Some(doc) => format!(
+            "{}: {HELP_BASE_URL}#{}",
+            _language.choose(&doc.title, "Help"),
+            doc.slug
+        ),
+        None => tb_domain::localized_format!(
+            _language,
+            "Dazu habe ich nichts gefunden — schau hier: {HELP_BASE_URL}",
+            "I couldn’t find that topic. Look here: {HELP_BASE_URL}"
+        ),
     }
 }
 
@@ -630,6 +689,8 @@ impl CommandEngine {
         if !invoked_command.starts_with('!') {
             return false;
         }
+        let _language =
+            tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id).await;
         let overrides = match self
             .command_name_overrides(&event.broadcaster_user_id)
             .await
@@ -649,8 +710,7 @@ impl CommandEngine {
                     if active != "!dldc" {
                         self.reply(
                             event,
-                            &format!(
-                                "Meinst du {active}? So heißt der Community-Befehl hier im Kanal."
+                            &tb_domain::localized_format!(_language, "Meinst du {active}? So heißt der Community-Befehl hier im Kanal.", "Did you mean {active}? That’s the community command in this channel."
                             ),
                         )
                         .await;
@@ -703,7 +763,7 @@ impl CommandEngine {
 
         match cmd {
             "!connect" => {
-                self.reply(event, &format!("Verbinde Twitch und Steam (kein Discord nötig), danach klappt !rank @deinname. Hier entlang: {}", crate::player_links::CONNECT_URL)).await;
+                self.reply(event, &tb_domain::localized_format!(_language, "Verbinde Twitch und Steam (kein Discord nötig), danach klappt !rank @deinname. Hier entlang: {}", "Link Twitch and Steam (no Discord required), then use !rank @yourname. Start here: {}", crate::player_links::CONNECT_URL)).await;
                 true
             }
             "!unconnect" | "!disconnect" => {
@@ -769,7 +829,11 @@ impl CommandEngine {
                 } else {
                     self.reply(
                         event,
-                        &format!("Nur Broadcaster oder Mods können {invoked_command} benutzen."),
+                        &tb_domain::localized_format!(
+                            _language,
+                            "Nur Broadcaster oder Mods können {invoked_command} benutzen.",
+                            "Only the broadcaster or moderators can use {invoked_command}."
+                        ),
                     )
                     .await;
                 }
@@ -824,7 +888,7 @@ impl CommandEngine {
                 true
             }
             "!trustpilot" => {
-                self.reply(event, &trustpilot_reply()).await;
+                self.reply(event, &trustpilot_reply(_language)).await;
                 true
             }
             "!dashboard" => {
@@ -970,30 +1034,62 @@ impl CommandEngine {
 
     /// Sendet eine Antwort mit `@<chatter>`-Prefix.
     async fn reply(&self, event: &ChatMessageEvent, text: &str) {
-        self.reply_plain(event, &format!("@{} {}", event.chatter_user_login, text))
-            .await;
+        let language =
+            tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id).await;
+        let text = crate::text::reply(language, text);
+        crate::api::send_reply(
+            self.api.as_ref(),
+            &event.broadcaster_user_id,
+            &format!("@{} {}", event.chatter_user_login, text),
+        )
+        .await;
     }
 
     /// Sendet eine Antwort ohne `@`-Prefix.
     async fn reply_plain(&self, event: &ChatMessageEvent, text: &str) -> bool {
-        crate::api::send_reply(self.api.as_ref(), &event.broadcaster_user_id, text).await
+        let language =
+            tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id).await;
+        crate::api::send_reply(
+            self.api.as_ref(),
+            &event.broadcaster_user_id,
+            crate::text::reply(language, text),
+        )
+        .await
     }
 
     async fn cmd_commands(&self, event: &ChatMessageEvent) {
-        self.reply(event, &commands_reply(&event.broadcaster_user_id))
-            .await;
+        self.reply(
+            event,
+            &commands_reply_localized(
+                tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id)
+                    .await,
+                &event.broadcaster_user_id,
+            ),
+        )
+        .await;
     }
 
     async fn cmd_dashboard(&self, event: &ChatMessageEvent) {
-        self.reply(event, &dashboard_reply()).await;
+        self.reply(
+            event,
+            &dashboard_reply_localized(
+                tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id)
+                    .await,
+            ),
+        )
+        .await;
     }
 
     async fn cmd_watchtime(&self, event: &ChatMessageEvent, args: &str) {
+        let _language =
+            tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id).await;
         if event.broadcaster_user_id.trim().is_empty() || event.chatter_user_id.trim().is_empty() {
             self.reply_plain(
                 event,
-                &format!(
+                &tb_domain::localized_format!(
+                    _language,
                     "@{} Deine Zuschauerzeit kann ich gerade nicht zuordnen.",
+                    "@{} I can’t identify your watch time right now.",
                     event.chatter_user_login
                 ),
             )
@@ -1021,7 +1117,7 @@ impl CommandEngine {
         )
         .await;
         let text = match target {
-            Err(error) => error.reply(),
+            Err(error) => error.reply_localized(_language),
             Ok(target) => {
                 let other = target.user_id != event.chatter_user_id;
                 match tb_analytics::stream_kennzahlen::zuschauer_watchtime(
@@ -1033,32 +1129,43 @@ impl CommandEngine {
                 {
                     Ok(time) if time.gesamt_minuten == 0.0 => {
                         if other {
-                            format!(
+                            tb_domain::localized_format!(
+                                _language,
                                 "Für @{} ist hier noch keine Zuschauerzeit erfasst.",
+                                "No watch time has been recorded for @{} here yet.",
                                 target.login
                             )
                         } else {
-                            "Für dich ist hier noch keine Zuschauerzeit erfasst.".into()
+                            crate::text::reply(
+                                _language,
+                                "Für dich ist hier noch keine Zuschauerzeit erfasst.",
+                            )
+                            .into()
                         }
                     }
                     Ok(time) => {
-                        let total = watchtime_dauer(time.gesamt_minuten);
+                        let total = watchtime_dauer_localized(_language, time.gesamt_minuten);
                         let prefix = if other {
-                            format!("Zuschauerzeit von @{}: ", target.login)
+                            tb_domain::localized_format!(
+                                _language,
+                                "Zuschauerzeit von @{}: ",
+                                "Watch time for @{}: ",
+                                target.login
+                            )
                         } else {
                             String::new()
                         };
                         match time.laufend_minuten {
-                            Some(current) => format!("{prefix}Hier bisher erfasst: ca. {total}, davon {} in diesem Stream.", watchtime_dauer(current)),
-                            None => format!("{prefix}Hier bisher erfasst: ca. {total}."),
+                            Some(current) => tb_domain::localized_format!(_language, "{prefix}Hier bisher erfasst: ca. {total}, davon {} in diesem Stream.", "{prefix}Recorded here so far: about {total}, including {} this stream.", watchtime_dauer_localized(_language, current)),
+                            None => tb_domain::localized_format!(_language, "{prefix}Hier bisher erfasst: ca. {total}.", "{prefix}Recorded here so far: about {total}."),
                         }
                     }
                     Err(error) => {
                         tracing::warn!(%error, broadcaster_id = %key.0, "!watchtime Abruf fehlgeschlagen");
                         if other {
-                            format!("Die Zuschauerzeit von @{} kann ich gerade nicht abrufen. Versuch es gleich nochmal.", target.login)
+                            tb_domain::localized_format!(_language, "Die Zuschauerzeit von @{} kann ich gerade nicht abrufen. Versuch es gleich nochmal.", "I can’t retrieve the watch time for @{} right now. Please try again shortly.", target.login)
                         } else {
-                            "Deine Zuschauerzeit kann ich gerade nicht abrufen. Versuch es gleich nochmal.".into()
+                            crate::text::reply(_language, "Deine Zuschauerzeit kann ich gerade nicht abrufen. Versuch es gleich nochmal.").into()
                         }
                     }
                 }
@@ -1076,7 +1183,16 @@ impl CommandEngine {
     }
 
     async fn cmd_help(&self, event: &ChatMessageEvent, args: &str) {
-        self.reply(event, &help_reply(knowledge_base(), args)).await;
+        self.reply(
+            event,
+            &help_reply_localized(
+                tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id)
+                    .await,
+                knowledge_base(),
+                args,
+            ),
+        )
+        .await;
     }
 
     async fn stat_target(
@@ -1085,6 +1201,8 @@ impl CommandEngine {
         args: &str,
         is_rank: bool,
     ) -> Option<crate::command_target::CommandTarget> {
+        let _language =
+            tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id).await;
         let rank_me = is_rank && args.trim().eq_ignore_ascii_case("me");
         match crate::command_target::resolve(
             self.api.as_ref(),
@@ -1118,7 +1236,7 @@ impl CommandEngine {
                                 _ => false,
                             };
                         if !same_legacy {
-                            self.reply(event, &format!("{} hat Steam direkt verbunden. Über diese Verbindung ist !rank verfügbar; dieser Statistikbefehl benötigt noch die zusätzliche Discord-/Steam-Verknüpfung.", target.name)).await;
+                            self.reply(event, &tb_domain::localized_format!(_language, "{} hat Steam direkt verbunden. Über diese Verbindung ist !rank verfügbar; dieser Statistikbefehl benötigt noch die zusätzliche Discord-/Steam-Verknüpfung.", "{} linked Steam directly. This supports !rank; this stats command still needs the additional Discord/Steam link.", target.name)).await;
                             return None;
                         }
                     }
@@ -1131,11 +1249,11 @@ impl CommandEngine {
                 Some(target)
             }
             Err(crate::command_target::TargetError::NotFound(login)) if is_rank => {
-                self.reply(event, &format!("Für @{login} gibt es noch keine Steam-Verknüpfung. Verbinden geht hier: {}", crate::player_links::CONNECT_URL)).await;
+                self.reply(event, &tb_domain::localized_format!(_language, "Für @{login} gibt es noch keine Steam-Verknüpfung. Verbinden geht hier: {}", "@{login} hasn’t linked Steam yet. Connect here: {}", crate::player_links::CONNECT_URL)).await;
                 None
             }
             Err(error) => {
-                self.reply(event, &error.reply()).await;
+                self.reply(event, &error.reply_localized(_language)).await;
                 None
             }
         }
@@ -1146,7 +1264,16 @@ impl CommandEngine {
             Ok(Some(account_id)) => {
                 let text = self
                     .rank_lookup
-                    .account_reply(account_id, &format!("Steam-Account {account_id}"), false)
+                    .account_reply_localized(
+                        tb_db::guild_membership::twitch_language(
+                            &self.pool,
+                            &event.broadcaster_user_id,
+                        )
+                        .await,
+                        account_id,
+                        &format!("Steam-Account {account_id}"),
+                        false,
+                    )
                     .await;
                 self.reply(event, &text).await;
             }
@@ -1163,7 +1290,16 @@ impl CommandEngine {
                 };
                 let text = self
                     .rank_lookup
-                    .twitch_reply(&self.pool, &target, !args.is_empty())
+                    .twitch_reply_localized(
+                        tb_db::guild_membership::twitch_language(
+                            &self.pool,
+                            &event.broadcaster_user_id,
+                        )
+                        .await,
+                        &self.pool,
+                        &target,
+                        !args.is_empty(),
+                    )
                     .await;
                 self.reply(event, &text).await;
             }
@@ -1183,7 +1319,13 @@ impl CommandEngine {
         };
         self.reply(
             event,
-            &crate::stats::command_reply(&target.name, info, crate::stats::wins_reply),
+            &crate::stats::command_reply_localized(
+                tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id)
+                    .await,
+                &target.name,
+                info,
+                crate::stats::wins_reply_localized,
+            ),
         )
         .await;
     }
@@ -1199,7 +1341,13 @@ impl CommandEngine {
         };
         self.reply(
             event,
-            &crate::stats::command_reply(&target.name, info, crate::stats::winrate_reply),
+            &crate::stats::command_reply_localized(
+                tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id)
+                    .await,
+                &target.name,
+                info,
+                crate::stats::winrate_reply_localized,
+            ),
         )
         .await;
     }
@@ -1215,7 +1363,13 @@ impl CommandEngine {
         };
         self.reply(
             event,
-            &crate::stats::command_reply(&target.name, info, crate::stats::mmr_reply),
+            &crate::stats::command_reply_localized(
+                tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id)
+                    .await,
+                &target.name,
+                info,
+                crate::stats::mmr_reply_localized,
+            ),
         )
         .await;
     }
@@ -1231,7 +1385,13 @@ impl CommandEngine {
         };
         self.reply(
             event,
-            &crate::stats::command_reply(&target.name, info, crate::stats::live_reply),
+            &crate::stats::command_reply_localized(
+                tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id)
+                    .await,
+                &target.name,
+                info,
+                crate::stats::live_reply_localized,
+            ),
         )
         .await;
     }
@@ -1247,7 +1407,13 @@ impl CommandEngine {
         };
         self.reply(
             event,
-            &crate::stats::command_reply(&target.name, info, crate::stats::lastmatch_reply),
+            &crate::stats::command_reply_localized(
+                tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id)
+                    .await,
+                &target.name,
+                info,
+                crate::stats::lastmatch_reply_localized,
+            ),
         )
         .await;
     }
@@ -1263,7 +1429,13 @@ impl CommandEngine {
         };
         self.reply(
             event,
-            &crate::stats::command_reply(&target.name, info, crate::stats::streak_reply),
+            &crate::stats::command_reply_localized(
+                tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id)
+                    .await,
+                &target.name,
+                info,
+                crate::stats::streak_reply_localized,
+            ),
         )
         .await;
     }
@@ -1279,7 +1451,13 @@ impl CommandEngine {
         };
         self.reply(
             event,
-            &crate::stats::command_reply(&target.name, info, crate::stats::mostplayed_reply),
+            &crate::stats::command_reply_localized(
+                tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id)
+                    .await,
+                &target.name,
+                info,
+                crate::stats::mostplayed_reply_localized,
+            ),
         )
         .await;
     }
@@ -1343,6 +1521,7 @@ impl CommandEngine {
 
         let task_channel = channel.clone();
         let handle = tokio::spawn(async move {
+            let language = tb_db::guild_membership::twitch_language(&pool, &streamer_id).await;
             // Streamer-Existenz + discord_user_id. broadcaster_user_id ist die
             // twitch_user_id des Streamers (= der Kanal). Python sucht über den
             // Login; hier direkt über die schon bekannte ID.
@@ -1366,7 +1545,10 @@ impl CommandEngine {
                 crate::api::send_reply(
                     api.as_ref(),
                     &streamer_id,
-                    "Streamer nicht gefunden. Bitte Onboarding prüfen.",
+                    crate::text::reply(
+                        language,
+                        "Streamer nicht gefunden. Bitte Onboarding prüfen.",
+                    ),
                 )
                 .await;
                 return;
@@ -1447,7 +1629,7 @@ impl CommandEngine {
             {
                 Ok(preferences) => preferences.never_words,
                 Err(_) => {
-                    crate::api::send_reply(api.as_ref(), &streamer_id, "Deine gespeicherten Titelwünsche sind gerade nicht verfügbar. Versuch es gleich noch einmal.").await;
+                    crate::api::send_reply(api.as_ref(), &streamer_id, crate::text::reply(language, "Deine gespeicherten Titelwünsche sind gerade nicht verfügbar. Versuch es gleich noch einmal.")).await;
                     return;
                 }
             };
@@ -1467,22 +1649,42 @@ impl CommandEngine {
             let reply = match result {
                 Ok(r) => {
                     let primary = if r.primary.is_empty() {
-                        "Kein Titel generiert".to_string()
+                        language
+                            .choose("Kein Titel generiert", "No title generated")
+                            .to_string()
                     } else {
                         r.primary
                     };
                     let alt_str = if r.alternatives.is_empty() {
                         String::new()
                     } else {
-                        format!(" | Alternativen: {}", r.alternatives.join(" | "))
+                        tb_domain::localized_format!(
+                            language,
+                            " | Alternativen: {}",
+                            " | Alternatives: {}",
+                            r.alternatives.join(" | ")
+                        )
                     };
-                    format!("Titel: {primary}{alt_str}")
+                    tb_domain::localized_format!(
+                        language,
+                        "Titel: {primary}{alt_str}",
+                        "Title: {primary}{alt_str}"
+                    )
                 }
-                Err(crate::title_ai::GenerateTitleError::RateLimit(e)) => format!(
-                    "Bitte warte noch {} Sekunden vor der nächsten Anfrage.",
-                    e.retry_after
-                ),
-                Err(_) => "Fehler beim Generieren. Bitte später erneut versuchen.".to_string(),
+                Err(crate::title_ai::GenerateTitleError::RateLimit(e)) => {
+                    tb_domain::localized_format!(
+                        language,
+                        "Bitte warte noch {} Sekunden vor der nächsten Anfrage.",
+                        "Please wait {} seconds before your next request.",
+                        e.retry_after
+                    )
+                }
+                Err(_) => language
+                    .choose(
+                        "Fehler beim Generieren. Bitte später erneut versuchen.",
+                        "Couldn’t generate a title. Please try again later.",
+                    )
+                    .to_string(),
             };
             crate::api::send_reply(api.as_ref(), &streamer_id, &reply).await;
         });
@@ -1546,6 +1748,8 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
 
     async fn cmd_raid_history(&self, event: &ChatMessageEvent) {
+        let _language =
+            tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id).await;
         // kein Partner → stilles Return — commands.py:253
         let partner = match self.get_partner(&event.broadcaster_user_id).await {
             Err(error) => {
@@ -1621,7 +1825,12 @@ impl CommandEngine {
             })
             .collect();
 
-        let msg = format!("Letzte Raids: {}", parts.join(" | "));
+        let msg = tb_domain::localized_format!(
+            _language,
+            "Letzte Raids: {}",
+            "Recent raids: {}",
+            parts.join(" | ")
+        );
         self.reply_plain(event, &msg).await;
     }
 
@@ -1630,6 +1839,8 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
 
     async fn cmd_raid_status(&self, event: &ChatMessageEvent) {
+        let _language =
+            tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id).await;
         let partner = match self.get_partner(&event.broadcaster_user_id).await {
             Err(error) => {
                 tracing::warn!(%error, "Partnerstatus nicht abrufbar");
@@ -1663,13 +1874,16 @@ impl CommandEngine {
         };
 
         // Status-String — commands.py:120–125
-        let status = raid_status_line(info.raid_enabled);
+        let status = crate::text::reply(_language, raid_status_line(info.raid_enabled));
 
         // Statistik-Anhang — commands.py:124
         let stats_part = if info.total_raids > 0 {
-            format!(
+            tb_domain::localized_format!(
+                _language,
                 " | Statistik: {} Raids ({} erfolgreich)",
-                info.total_raids, info.successful_raids
+                " | Stats: {} raids ({} successful)",
+                info.total_raids,
+                info.successful_raids
             )
         } else {
             String::new()
@@ -1688,7 +1902,11 @@ impl CommandEngine {
                 None => "❔",
             };
             let formatted = at.format("%Y-%m-%d %H:%M").to_string();
-            format!(" | Letzter Raid {icon}: {login} ({viewers} Viewer) am {formatted}")
+            tb_domain::localized_format!(
+                _language,
+                " | Letzter Raid {icon}: {login} ({viewers} Viewer) am {formatted}",
+                " | Last raid {icon}: {login} ({viewers} viewers) on {formatted}"
+            )
         } else {
             String::new()
         };
@@ -1702,6 +1920,8 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
 
     async fn cmd_uban(&self, event: &ChatMessageEvent) {
+        let _language =
+            tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id).await;
         let partner = match self.get_partner(&event.broadcaster_user_id).await {
             Err(error) => {
                 tracing::warn!(%error, "Partnerstatus nicht abrufbar");
@@ -1747,12 +1967,28 @@ impl CommandEngine {
                     scam.overturn(&event.broadcaster_user_login, &entry.user_id)
                         .await;
                 }
-                self.reply(event, &format!("Unban ausgeführt für {}.", entry.login))
-                    .await;
+                self.reply(
+                    event,
+                    &tb_domain::localized_format!(
+                        _language,
+                        "Unban ausgeführt für {}.",
+                        "Unbanned {}.",
+                        entry.login
+                    ),
+                )
+                .await;
             }
             _ => {
-                self.reply(event, &format!("Unban fehlgeschlagen für {}.", entry.login))
-                    .await;
+                self.reply(
+                    event,
+                    &tb_domain::localized_format!(
+                        _language,
+                        "Unban fehlgeschlagen für {}.",
+                        "Couldn’t unban {}.",
+                        entry.login
+                    ),
+                )
+                .await;
             }
         }
     }
@@ -1790,6 +2026,8 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
 
     async fn cmd_raid(&self, event: &ChatMessageEvent) {
+        let _language =
+            tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id).await;
         let partner = match self.get_partner(&event.broadcaster_user_id).await {
             Err(error) => {
                 tracing::warn!(%error, "Partnerstatus nicht abrufbar");
@@ -1834,17 +2072,14 @@ impl CommandEngine {
                 let chatter = &event.chatter_user_login;
                 let msg = match result.status.as_str() {
                     "started" => None,
-                    "source_not_live" => Some(format!(
-                        "@{chatter} Kein Stream gefunden, von dem aus geraidet werden kann."
+                    "source_not_live" => Some(tb_domain::localized_format!(_language, "@{chatter} Kein Stream gefunden, von dem aus geraidet werden kann.", "@{chatter} No live stream found to raid from."
                     )),
-                    "source_not_eligible" => Some(format!(
-                        "@{chatter} !raid ist nur verfügbar, wenn du gerade Deadlock streamst oder gerade erst von Deadlock auf Just Chatting gewechselt bist."
+                    "source_not_eligible" => Some(tb_domain::localized_format!(_language, "@{chatter} !raid ist nur verfügbar, wenn du gerade Deadlock streamst oder gerade erst von Deadlock auf Just Chatting gewechselt bist.", "@{chatter} !raid is only available while streaming Deadlock or shortly after switching from Deadlock to Just Chatting."
                     )),
-                    "no_target" => Some(format!(
-                        "@{chatter} Weder Deadlock-Partner noch andere deutsche Deadlock-Streamer live."
+                    "no_target" => Some(tb_domain::localized_format!(_language, "@{chatter} Weder Deadlock-Partner noch andere deutsche Deadlock-Streamer live.", "@{chatter} No Deadlock partners or other German Deadlock streamers are live."
                     )),
-                    "unavailable" => Some(format!("@{chatter} Twitch-Bot nicht verfügbar.")),
-                    other => Some(format!("@{chatter} Raid fehlgeschlagen: {other}")),
+                    "unavailable" => Some(tb_domain::localized_format!(_language, "@{chatter} Twitch-Bot nicht verfügbar.", "@{chatter} The Twitch bot is unavailable.")),
+                    other => Some(tb_domain::localized_format!(_language, "@{chatter} Raid fehlgeschlagen: {other}", "@{chatter} Raid failed: {other}")),
                 };
                 if let Some(msg) = msg {
                     self.reply_plain(event, &msg).await;
@@ -1856,8 +2091,15 @@ impl CommandEngine {
                     err = %e,
                     "manual_raid Trait-Call fehlgeschlagen"
                 );
-                self.reply(event, &format!("Raid fehlgeschlagen: {e}"))
-                    .await;
+                self.reply(
+                    event,
+                    &tb_domain::localized_format!(
+                        _language,
+                        "Raid fehlgeschlagen: {e}",
+                        "Raid failed: {e}"
+                    ),
+                )
+                .await;
             }
         }
     }
@@ -1867,6 +2109,8 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
 
     async fn cmd_clip(&self, event: &ChatMessageEvent, args: &str) {
+        let _language =
+            tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id).await;
         // Cooldown pro Kanal (10s): der zweite Aufruf innerhalb des Fensters
         // wird still verworfen — kein Helix-Call, keine Chat-Antwort, sonst
         // stünde die Cooldown-Meldung selbst doppelt im Chat.
@@ -1954,7 +2198,9 @@ impl CommandEngine {
             ]
             .choose(&mut rand::rng())
             .copied()
-            .unwrap();
+            .unwrap_or(
+                "Hier läuft gerade kein Stream. Sobald es live geht, kannst du wieder clippen.",
+            );
             self.reply(event, reply).await;
             return;
         }
@@ -1963,11 +2209,14 @@ impl CommandEngine {
         let raw_title = args.trim();
         let title = if raw_title.is_empty() {
             let mut rng = rand::rng();
-            CLIP_TITLE_FALLBACKS
-                .choose(&mut rng)
-                .copied()
-                .unwrap_or("Clip it!")
-                .to_string()
+            crate::text::reply(
+                _language,
+                CLIP_TITLE_FALLBACKS
+                    .choose(&mut rng)
+                    .copied()
+                    .unwrap_or("Clip it!"),
+            )
+            .to_string()
         } else if raw_title.chars().count() > CLIP_TITLE_MAX_LEN {
             let trimmed: String = raw_title.chars().take(CLIP_TITLE_TRIM_LEN).collect();
             format!("{}...", trimmed.trim_end())
@@ -2003,12 +2252,16 @@ impl CommandEngine {
                 };
                 self.reply(
                     event,
-                    &format!("🎬 Clip erstellt{suffix} (ca. letzte {duration}s): {url}"),
+                    &tb_domain::localized_format!(
+                        _language,
+                        "🎬 Clip erstellt{suffix} (ca. letzte {duration}s): {url}",
+                        "🎬 Clip created{suffix} (about the last {duration}s): {url}"
+                    ),
                 )
                 .await;
             }
             ClipOutcome::Pending { url } => {
-                self.reply(event, &format!("Twitch verarbeitet den Clip noch. Die Erstellung ist noch nicht bestätigt: {url}"))
+                self.reply(event, &tb_domain::localized_format!(_language, "Twitch verarbeitet den Clip noch. Die Erstellung ist noch nicht bestätigt: {url}", "Twitch is still processing the clip. Creation hasn’t been confirmed yet: {url}"))
                     .await;
             }
             ClipOutcome::OAuthMissing => {
@@ -2064,7 +2317,9 @@ impl CommandEngine {
             outcome = outcome.code(),
             "!clipcontest verarbeitet"
         );
-        if let Some(text) = outcome.reply() {
+        let language =
+            tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id).await;
+        if let Some(text) = outcome.reply_localized(language) {
             self.reply(event, &text).await;
         }
     }
@@ -2471,6 +2726,8 @@ impl CommandEngine {
     /// - `twitch_engagement_log.response_text` = text
     /// - `twitch_engagement_log.ts` = timestamp with time zone
     async fn cmd_engagement_status(&self, event: &ChatMessageEvent) {
+        let _language =
+            tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id).await;
         let channel_login = event.broadcaster_user_login.to_lowercase();
 
         let settings_result = sqlx::query_scalar::<_, bool>(
@@ -2494,7 +2751,11 @@ impl CommandEngine {
             Ok(None) => {
                 self.reply_plain(
                     event,
-                    &format!("AI-Engagement für {channel_login}: nie konfiguriert."),
+                    &tb_domain::localized_format!(
+                        _language,
+                        "AI-Engagement für {channel_login}: nie konfiguriert.",
+                        "AI engagement for {channel_login}: never configured."
+                    ),
                 )
                 .await;
                 return;
@@ -2530,7 +2791,11 @@ impl CommandEngine {
         };
 
         // engagement_commands.py:164-175 — Statuszeile.
-        let state = if enabled { "AN" } else { "AUS" };
+        let state = if enabled {
+            _language.choose("AN", "ON")
+        } else {
+            _language.choose("AUS", "OFF")
+        };
         let last_action = log_row.as_ref().and_then(|log| {
             let decision = log
                 .decision
@@ -2556,11 +2821,17 @@ impl CommandEngine {
                 } else {
                     format!(" — “{snippet}”")
                 };
-                format!(
-                    "AI-Engagement: {state}. Letzte Aktion: {last_decision} vor {ago_sec}s{tail}."
+                tb_domain::localized_format!(
+                    _language,
+                    "AI-Engagement: {state}. Letzte Aktion: {last_decision} vor {ago_sec}s{tail}.",
+                    "AI engagement: {state}. Last action: {last_decision} {ago_sec}s ago{tail}."
                 )
             }
-            None => format!("AI-Engagement: {state}. Noch keine Aktionen geloggt."),
+            None => tb_domain::localized_format!(
+                _language,
+                "AI-Engagement: {state}. Noch keine Aktionen geloggt.",
+                "AI engagement: {state}. No actions logged yet."
+            ),
         };
         self.reply_plain(event, &message).await;
     }

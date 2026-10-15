@@ -15,8 +15,9 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::announce::template::{
-    build_context, build_offline_components, build_offline_embed, render_announcement,
-    sanitize_live_content, AnnouncementConfig, OfflineComponentsContext, TWITCH_VOD_BUTTON_LABEL,
+    build_context, build_offline_components_localized, build_offline_embed_localized,
+    render_announcement, sanitize_live_content, AnnouncementConfig, OfflineComponentsContext,
+    TWITCH_VOD_BUTTON_LABEL,
 };
 use crate::poller::hooks::{
     AnnounceLiveRequest, AnnounceLiveResult, AnnouncementSink, EndAnnouncementOutcome,
@@ -140,6 +141,7 @@ struct LivePayload {
 }
 
 pub struct BrokerAnnouncementSink {
+    language_pool: Option<sqlx::PgPool>,
     transport: Arc<dyn AnnouncementTransport>,
     vod: Arc<dyn VodPreviewSource>,
     profile: Arc<dyn ChannelProfileSource>,
@@ -159,6 +161,7 @@ impl BrokerAnnouncementSink {
         live_ping_role_provider: Option<Arc<dyn LivePingRoleProvider>>,
     ) -> Self {
         Self {
+            language_pool: None,
             transport,
             vod,
             profile,
@@ -166,6 +169,21 @@ impl BrokerAnnouncementSink {
             live_ping_role_provider,
             retry: Mutex::new(HashMap::new()),
             live_sync: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn with_language_pool(mut self, pool: sqlx::PgPool) -> Self {
+        self.language_pool = Some(pool);
+        self
+    }
+
+    async fn language(&self) -> tb_domain::language::TextLanguage {
+        match &self.language_pool {
+            Some(pool) => {
+                tb_db::guild_membership::channel_language(pool, self.settings.notify_channel_id)
+                    .await
+            }
+            None => tb_domain::language::TextLanguage::German,
         }
     }
 
@@ -256,12 +274,13 @@ impl BrokerAnnouncementSink {
         tracking_token: &str,
         render_now: DateTime<Utc>,
     ) -> LivePayload {
-        let config = AnnouncementConfig::default();
+        let language = self.language().await;
+        let config = AnnouncementConfig::for_language(language);
         let mut stream = request.stream.clone();
         self.fill_profile_image_url(login, &mut stream).await;
 
         let referral_url = self.referral_url(login);
-        let context = build_context(
+        let mut context = build_context(
             login,
             &stream,
             &referral_url,
@@ -269,6 +288,7 @@ impl BrokerAnnouncementSink {
             render_now,
             stream.thumbnail_url.as_deref(),
         );
+        context.insert("text_language".into(), language.choose("de", "en").into());
         let cache_seed = Self::live_cache_seed(tracking_token, render_now);
         let rendered = render_announcement(&config, &context, render_now, Some(&cache_seed));
         let notification_text = sanitize_live_content(&rendered.content);
@@ -496,7 +516,9 @@ impl AnnouncementSink for BrokerAnnouncementSink {
                     .map(str::trim)
                     .filter(|url| !url.is_empty())
             });
-        let embed = build_offline_embed(
+        let language = self.language().await;
+        let embed = build_offline_embed_localized(
+            language,
             &request.display_name,
             request.last_title.as_deref(),
             request.last_game.as_deref(),
@@ -504,23 +526,26 @@ impl AnnouncementSink for BrokerAnnouncementSink {
             &self.settings.target_game,
             now,
         );
-        let components = build_offline_components(OfflineComponentsContext {
-            display_name: &request.display_name,
-            last_title: request.last_title.as_deref(),
-            last_game: request.last_game.as_deref(),
-            preview_image_url,
-            channel_avatar_url: avatar_url.as_deref(),
-            target_game: &self.settings.target_game,
-            started_at: request
-                .started_at_iso
-                .as_deref()
-                .and_then(crate::stream::parse_dt_utc),
-            now,
-        });
+        let components = build_offline_components_localized(
+            language,
+            OfflineComponentsContext {
+                display_name: &request.display_name,
+                last_title: request.last_title.as_deref(),
+                last_game: request.last_game.as_deref(),
+                preview_image_url,
+                channel_avatar_url: avatar_url.as_deref(),
+                target_game: &self.settings.target_game,
+                started_at: request
+                    .started_at_iso
+                    .as_deref()
+                    .and_then(crate::stream::parse_dt_utc),
+                now,
+            },
+        );
         let referral_url = self.referral_url(&login);
         let view_spec = serde_json::json!({
             "type": "link_button",
-            "label": TWITCH_VOD_BUTTON_LABEL,
+            "label": language.choose(TWITCH_VOD_BUTTON_LABEL, "Watch VOD"),
             "url": referral_url,
         });
         let discord_message_id = request.message_id.clone();

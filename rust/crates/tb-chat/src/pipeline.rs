@@ -197,6 +197,7 @@ const DEFAULT_MOD_ALERT_CHANNEL_ID: u64 = 1374364800817303632;
 /// Postet Moderations-Alerts in den Discord-Mod-Kanal — Port von
 /// `_send_moderation_alert` (moderation.py Z. 905–951). Fire-and-forget.
 pub struct ModAlerter {
+    language_pool: Option<PgPool>,
     http: reqwest::Client,
     endpoint: String,
     channel_id: u64,
@@ -285,6 +286,20 @@ fn safe_correction_pattern(outcome: &AiReviewOutcome, content: &str) -> Option<S
 }
 
 impl ModAlerter {
+    pub fn with_language_pool(mut self, pool: PgPool) -> Self {
+        self.language_pool = Some(pool);
+        self
+    }
+
+    async fn language(&self) -> tb_domain::language::TextLanguage {
+        match (&self.language_pool, i64::try_from(self.channel_id)) {
+            (Some(pool), Ok(channel_id)) => {
+                tb_db::guild_membership::channel_language(pool, channel_id).await
+            }
+            _ => tb_domain::language::TextLanguage::German,
+        }
+    }
+
     pub fn new(http: reqwest::Client) -> Self {
         Self::with_endpoint(http, "http://localhost:8899/changelog")
     }
@@ -299,6 +314,7 @@ impl ModAlerter {
         channel_id: u64,
     ) -> Self {
         Self {
+            language_pool: None,
             http,
             endpoint: endpoint.into(),
             channel_id,
@@ -315,29 +331,63 @@ impl ModAlerter {
         content: &str,
         reason: &str,
     ) {
-        // Titel + Farben exakt aus moderation.py Z. 916–921.
-        let (title, _color) = match kind {
-            "ban" => ("🔨 Ban ausgeführt", 0xED4245),
-            "global_ban" => ("🚫 Global-Ban ausgeführt", 0xED4245),
-            "sus_invite" => ("⚠️ Verdächtiger Discord-Link", 0xFEE75C),
-            "sus_spam" => ("👀 Verdächtige Nachricht", 0xFEE75C),
-            "scam_pitch_timeout" => (
+        let this = Arc::clone(self);
+        let fields = [
+            kind,
+            channel_login,
+            chatter_login,
+            chatter_id,
+            content,
+            reason,
+        ]
+        .map(str::to_owned);
+        tokio::spawn(async move {
+            let language = this.language().await;
+            this.send_localized(language, fields.each_ref().map(String::as_str));
+        });
+    }
+
+    fn send_localized(
+        self: &Arc<Self>,
+        language: tb_domain::language::TextLanguage,
+        fields: [&str; 6],
+    ) {
+        let [kind, channel_login, chatter_login, chatter_id, content, reason] = fields;
+        let title = match kind {
+            "ban" => language.choose("🔨 Ban ausgeführt", "🔨 Ban applied"),
+            "global_ban" => language.choose("🚫 Global-Ban ausgeführt", "🚫 Network ban applied"),
+            "sus_invite" => {
+                language.choose("⚠️ Verdächtiger Discord-Link", "⚠️ Suspicious Discord link")
+            }
+            "sus_spam" => language.choose("👀 Verdächtige Nachricht", "👀 Suspicious message"),
+            "scam_pitch_timeout" => language.choose(
                 "🛡️ Account-Takeover erkannt — Quarantäne (reversibel)",
-                0xFEE75C,
+                "🛡️ Possible account takeover: quarantine (reversible)",
             ),
-            "scam_pitch_warn" => ("⚠️ Scam-Pitch erkannt — Verwarnung", 0xFEE75C),
-            _ => ("ℹ️ Moderation", 0x5865F2),
+            "scam_pitch_warn" => language.choose(
+                "⚠️ Scam-Pitch erkannt — Verwarnung",
+                "⚠️ Scam pitch detected: warning",
+            ),
+            _ => "ℹ️ Moderation",
         };
 
         let mut lines = vec![
-            format!("**Kanal:** #{channel_login}"),
+            tb_domain::localized_format!(
+                language,
+                "**Kanal:** #{channel_login}",
+                "**Channel:** #{channel_login}"
+            ),
             format!("**Chatter:** {chatter_login}"),
         ];
         if !chatter_id.is_empty() {
             lines.push(format!("**ID:** {chatter_id}"));
         }
         if !reason.is_empty() {
-            lines.push(format!("**Grund:** {reason}"));
+            lines.push(tb_domain::localized_format!(
+                language,
+                "**Grund:** {reason}",
+                "**Reason:** {reason}"
+            ));
         }
         if !content.is_empty() {
             let safe: String = content
@@ -345,7 +395,11 @@ impl ModAlerter {
                 .take(300)
                 .collect::<String>()
                 .replace('`', "'");
-            lines.push(format!("**Nachricht:** `{safe}`"));
+            lines.push(tb_domain::localized_format!(
+                language,
+                "**Nachricht:** `{safe}`",
+                "**Message:** `{safe}`"
+            ));
         }
 
         let payload = serde_json::json!({
@@ -364,6 +418,41 @@ impl ModAlerter {
     /// Wird für JEDEN Judge-Ausgang gerufen (spam/safe/error/skipped) — der
     /// Judge gatet die Aktion, nie die Sichtbarkeit.
     pub fn send_sus_spam(self: &Arc<Self>, alert: SusSpamAlert<'_>) {
+        let this = Arc::clone(self);
+        let fields = [
+            alert.channel_login,
+            alert.chatter_login,
+            alert.chatter_id,
+            alert.content,
+            alert.rule_reason,
+            alert.action_taken,
+        ]
+        .map(str::to_owned);
+        let outcome = alert.outcome.clone();
+        tokio::spawn(async move {
+            let language = this.language().await;
+            let [channel_login, chatter_login, chatter_id, content, rule_reason, action_taken] =
+                fields.each_ref().map(String::as_str);
+            this.send_sus_spam_localized(
+                language,
+                SusSpamAlert {
+                    channel_login,
+                    chatter_login,
+                    chatter_id,
+                    content,
+                    rule_reason,
+                    action_taken,
+                    outcome: &outcome,
+                },
+            );
+        });
+    }
+
+    fn send_sus_spam_localized(
+        self: &Arc<Self>,
+        language: tb_domain::language::TextLanguage,
+        alert: SusSpamAlert<'_>,
+    ) {
         let SusSpamAlert {
             channel_login,
             chatter_login,
@@ -375,37 +464,107 @@ impl ModAlerter {
         } = alert;
         let (title, verdict_key, ai_line) = match outcome {
             AiReviewOutcome::Spam { reason, .. } => (
-                "🤖 Spam bestätigt — Aktion ausgeführt",
+                language.choose(
+                    "🤖 Spam bestätigt — Aktion ausgeführt",
+                    "🤖 Spam confirmed: action taken",
+                ),
                 "spam",
-                format!("**AI-Urteil:** Spam — {reason}"),
+                tb_domain::localized_format!(
+                    language,
+                    "**AI-Urteil:** Spam — {reason}",
+                    "**AI verdict:** spam: {reason}"
+                ),
             ),
             AiReviewOutcome::Safe { reason } => (
-                "👀 Verdächtige Nachricht — AI: harmlos",
+                language.choose(
+                    "👀 Verdächtige Nachricht — AI: harmlos",
+                    "👀 Suspicious message: AI considers it harmless",
+                ),
                 "safe",
-                format!("**AI-Urteil:** harmlos — {reason}"),
+                tb_domain::localized_format!(
+                    language,
+                    "**AI-Urteil:** harmlos — {reason}",
+                    "**AI verdict:** harmless: {reason}"
+                ),
             ),
             AiReviewOutcome::Error { detail } => (
-                "⚠️ Verdächtige Nachricht — AI-Review fehlgeschlagen",
+                language.choose(
+                    "⚠️ Verdächtige Nachricht — AI-Review fehlgeschlagen",
+                    "⚠️ Suspicious message: AI review failed",
+                ),
                 "error",
-                format!("**AI-Urteil:** Fehler — {detail}"),
+                tb_domain::localized_format!(
+                    language,
+                    "**AI-Urteil:** Fehler — {detail}",
+                    "**AI verdict:** error: {detail}"
+                ),
             ),
             AiReviewOutcome::Skipped => (
-                "👀 Verdächtige Nachricht — AI übersprungen",
+                language.choose(
+                    "👀 Verdächtige Nachricht — AI übersprungen",
+                    "👀 Suspicious message: AI review skipped",
+                ),
                 "skipped",
-                "**AI-Urteil:** übersprungen (Cooldown, kürzlich schon geprüft)".to_string(),
+                language
+                    .choose(
+                        "**AI-Urteil:** übersprungen (Cooldown, kürzlich schon geprüft)",
+                        "**AI verdict:** skipped (cooldown, recently reviewed)",
+                    )
+                    .to_string(),
             ),
         };
 
         let mut lines = vec![
-            format!("**Kanal:** #{channel_login}"),
+            tb_domain::localized_format!(
+                language,
+                "**Kanal:** #{channel_login}",
+                "**Channel:** #{channel_login}"
+            ),
             format!("**Chatter:** {chatter_login}"),
         ];
         if !chatter_id.is_empty() {
             lines.push(format!("**ID:** {chatter_id}"));
         }
-        lines.push(format!("**Regel-Treffer:** {rule_reason}"));
+        lines.push(tb_domain::localized_format!(
+            language,
+            "**Regel-Treffer:** {rule_reason}",
+            "**Rule match:** {rule_reason}"
+        ));
         lines.push(ai_line);
-        lines.push(format!("**Aktion:** {action_taken}"));
+        let action_taken = match action_taken {
+            "keine" => language.choose(action_taken, "none").to_string(),
+            "Nachricht gelöscht (hartes Signal)" => language
+                .choose(action_taken, "message deleted (strong signal)")
+                .to_string(),
+            "übersprungen (Mod/Broadcaster)" => language
+                .choose(action_taken, "skipped (moderator/broadcaster)")
+                .to_string(),
+            "Nachricht gelöscht + 24h Timeout" => language
+                .choose(action_taken, "message deleted and 24-hour timeout applied")
+                .to_string(),
+            "Timeout nicht durchgesetzt" => language
+                .choose(action_taken, "timeout could not be applied")
+                .to_string(),
+            value
+                if value.starts_with("keine (Safe-Wording, Judge-Confidence ")
+                    && language == tb_domain::language::TextLanguage::English =>
+            {
+                let confidence = match outcome {
+                    AiReviewOutcome::Spam { confidence, .. } => {
+                        confidence.map(|value| format!("{value:.2}"))
+                    }
+                    _ => None,
+                }
+                .unwrap_or_else(|| "missing".to_string());
+                format!("none (safe wording, judge confidence {confidence})")
+            }
+            value => value.to_string(),
+        };
+        lines.push(tb_domain::localized_format!(
+            language,
+            "**Aktion:** {action_taken}",
+            "**Action:** {action_taken}"
+        ));
 
         let mut ai_reason = String::new();
         let mut learned_entries: Vec<serde_json::Value> = Vec::new();
@@ -421,7 +580,12 @@ impl ModAlerter {
                 ai_reason = reason.clone();
                 safe_feedback_pattern_value = safe_correction_pattern(outcome, content);
                 if let Some(l) = learned {
-                    lines.push(format!("**Gelernt:** `{}`", l.pattern.replace('`', "'")));
+                    lines.push(tb_domain::localized_format!(
+                        language,
+                        "**Gelernt:** `{}`",
+                        "**Learned:** `{}`",
+                        l.pattern.replace('`', "'")
+                    ));
                     learned_entries.push(serde_json::json!({
                         "table": "spam",
                         "id": l.id,
@@ -429,14 +593,21 @@ impl ModAlerter {
                     }));
                 }
                 if let Some(rej) = rejected_pattern {
-                    lines.push(format!(
+                    lines.push(tb_domain::localized_format!(
+                        language,
                         "**Nicht gelernt:** `{}` (zu generisch, Distinktivitäts-Gate)",
+                        "**Not learned:** `{}` (too generic, distinctiveness check)",
                         rej.replace('`', "'")
                     ));
                 }
                 if *save_failed {
                     lines.push(
-                        "**Nicht gelernt:** Speichern fehlgeschlagen (DB-Fehler)".to_string(),
+                        language
+                            .choose(
+                                "**Nicht gelernt:** Speichern fehlgeschlagen (DB-Fehler)",
+                                "**Not learned:** could not save (database error)",
+                            )
+                            .to_string(),
                     );
                 }
             }
@@ -451,7 +622,11 @@ impl ModAlerter {
                 .take(300)
                 .collect::<String>()
                 .replace('`', "'");
-            lines.push(format!("**Nachricht:** `{safe}`"));
+            lines.push(tb_domain::localized_format!(
+                language,
+                "**Nachricht:** `{safe}`",
+                "**Message:** `{safe}`"
+            ));
         }
 
         let payload = serde_json::json!({
@@ -1858,10 +2033,19 @@ impl ChatPipeline {
             .spam_meta_reply_index
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             % SPAM_META_REPLIES.len();
+        let language =
+            tb_db::guild_membership::twitch_language(&self.parts.pool, &event.broadcaster_user_id)
+                .await;
+        let english = [
+            "No, I won’t ban you. I can tell the difference between talking about it and doing it.",
+            "Don’t worry, I read the conversation. Talking about spam isn’t spam.",
+            "Nice try. You’re only talking about it, so the ban button stays off.",
+        ];
+        let text = language.choose(SPAM_META_REPLIES[index], english[index]);
         if let Err(error) = self
             .parts
             .api
-            .send_message(&event.broadcaster_user_id, SPAM_META_REPLIES[index])
+            .send_message(&event.broadcaster_user_id, text)
             .await
         {
             warn!(%error, chatter = %event.chatter_user_login, "Spam-Meta-Antwort fehlgeschlagen");

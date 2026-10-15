@@ -24,18 +24,33 @@ pub(crate) enum TargetError {
 }
 
 impl TargetError {
-    pub fn reply(&self) -> String {
+    pub fn reply_localized(&self, language: tb_domain::language::TextLanguage) -> String {
         match self {
-            Self::Invalid => "Bitte genau einen Twitch-Namen angeben, z. B. @username.".into(),
-            Self::MissingId => {
-                "Die Twitch-ID kann ich gerade nicht zuordnen. Versuch es später nochmal.".into()
-            }
+            Self::Invalid => language
+                .choose(
+                    "Bitte genau einen Twitch-Namen angeben, z. B. @username.",
+                    "Please provide exactly one Twitch name, e.g. @username.",
+                )
+                .into(),
+            Self::MissingId => language
+                .choose(
+                    "Die Twitch-ID kann ich gerade nicht zuordnen. Versuch es später nochmal.",
+                    "I can’t identify that Twitch ID right now. Please try again later.",
+                )
+                .into(),
             Self::NotFound(login) => {
-                format!("Den Twitch-Account @{login} habe ich nicht gefunden.")
+                tb_domain::localized_format!(
+                    language,
+                    "Den Twitch-Account @{login} habe ich nicht gefunden.",
+                    "I couldn’t find the Twitch account @{login}."
+                )
             }
-            Self::Unavailable => {
-                "Den Twitch-Namen kann ich gerade nicht auflösen. Versuch es gleich nochmal.".into()
-            }
+            Self::Unavailable => language
+                .choose(
+                    "Den Twitch-Namen kann ich gerade nicht auflösen. Versuch es gleich nochmal.",
+                    "I can’t look up that Twitch name right now. Please try again shortly.",
+                )
+                .into(),
         }
     }
 }

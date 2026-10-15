@@ -277,9 +277,11 @@ impl StandardReplies {
             return false;
         };
 
+        let language =
+            tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id).await;
         let template = match kind {
-            StandardReply::Greeting => GREETING_REPLY,
-            StandardReply::ReleaseDate => RELEASE_REPLY,
+            StandardReply::Greeting => language.choose(GREETING_REPLY, "@{chatter} Hey, glad you’re here! 💜"),
+            StandardReply::ReleaseDate => language.choose(RELEASE_REPLY, "@{chatter} There’s no official release date yet. We’re tired of waiting too! If you’d like to try it now, type !invite and I’ll show you how to get an invitation."),
         };
         let message = template.replace("{chatter}", &event.chatter_user_login);
 

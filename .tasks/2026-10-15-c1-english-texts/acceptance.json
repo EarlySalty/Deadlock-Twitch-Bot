@@ -1,0 +1,30 @@
+{
+  "package": "C / #1067",
+  "branch": "feat/opus-c1-english-texts-20261015",
+  "base": "origin/feat/opus-g1-guilds-20261015",
+  "destinations": {
+    "twitch": "target broadcaster_language",
+    "discord": "destination discord_guilds.language",
+    "dm": "recipient active home guild language",
+    "home_guild": "configured German community membership first, otherwise earliest joined_at, ties by guild_id",
+    "fallback": "German"
+  },
+  "verification": {
+    "status": "blocked",
+    "passed": ["changed-file rustfmt", "locked cargo metadata", "staged diff whitespace", "German literal preservation audit", "catalog placeholder audit"],
+    "blocker": "cargo-slot obtained no shared build slot before the 30-minute background timeout; Clippy and tests did not start",
+    "log": "/tmp/ttb-c1-check-5.log",
+    "next": "Run affected-crate Clippy and tests with disposable PostgreSQL when build capacity is available; fix failures, commit, push and run the required gate",
+    "commit": null,
+    "gate": "not run"
+  },
+  "acceptance": [
+    "Existing German output remains unchanged",
+    "English destinations receive natural English output",
+    "Translation applies to visible text, not logs or generated user content",
+    "Language-routing contracts use disposable PostgreSQL only",
+    "Affected existing Rust tests, formatter and Clippy pass",
+    "Gate review returns ALLOW before handover",
+    "No merge, deployment or production database access"
+  ]
+}

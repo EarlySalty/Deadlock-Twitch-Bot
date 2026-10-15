@@ -1108,11 +1108,14 @@ pub async fn build_runtime(
     let account_age: Arc<dyn AccountAgePort> = Arc::new(HelixAccountAge {
         api: Arc::clone(&api),
     });
-    let alerter = Arc::new(ModAlerter::with_endpoint_and_channel_id(
-        http.clone(),
-        "http://localhost:8899/changelog",
-        discord_chat.moderation_alert_channel_id,
-    ));
+    let alerter = Arc::new(
+        ModAlerter::with_endpoint_and_channel_id(
+            http.clone(),
+            "http://localhost:8899/changelog",
+            discord_chat.moderation_alert_channel_id,
+        )
+        .with_language_pool(pool.clone()),
+    );
     let scout_crew_guard = Arc::new(CrewGuard::new(
         true,
         Arc::clone(&alerter),
@@ -1158,24 +1161,27 @@ pub async fn build_runtime(
         sus_invite: Arc::new(SusInviteCheck::new(pool.clone())),
         brain_chat: brain_chat_port,
         // _fun_thanks_reply_enabled ist in Python default false (bot.py Z. 190).
-        fun: Arc::new(FunResponses::new(Arc::clone(&api), false)),
+        fun: Arc::new(FunResponses::new(Arc::clone(&api), false).with_language_pool(pool.clone())),
         standard_replies: Arc::new(tb_chat::StandardReplies::new(
             Arc::clone(&api),
             pool.clone(),
         )),
-        invite_question: Arc::new(InviteQuestionResponder::new(
-            Arc::clone(&api),
-            Arc::new(DbInviteUrlWithFallback {
-                pool: pool.clone(),
-                fallback: discord_chat.promo_invite.clone(),
-            }),
-            Arc::new(PgInviteQuestionStore::new(pool.clone())),
-            Arc::new(LlmInviteQuestionJudge::new(EngagementLlmClient::new(
-                None, None, None, None,
-            ))),
-            Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
-            Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
-        )),
+        invite_question: Arc::new(
+            InviteQuestionResponder::new(
+                Arc::clone(&api),
+                Arc::new(DbInviteUrlWithFallback {
+                    pool: pool.clone(),
+                    fallback: discord_chat.promo_invite.clone(),
+                }),
+                Arc::new(PgInviteQuestionStore::new(pool.clone())),
+                Arc::new(LlmInviteQuestionJudge::new(EngagementLlmClient::new(
+                    None, None, None, None,
+                ))),
+                Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
+                Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
+            )
+            .with_language_pool(pool.clone()),
+        ),
         streamer_voice: voice_relay.map(|relay| {
             Arc::new(tb_chat::streamer_voice::StreamerVoiceResponder::new(
                 Arc::new(StreamerVoiceResolver {
@@ -1199,7 +1205,8 @@ pub async fn build_runtime(
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::lfg_pitch::RecentChatPort>),
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::InviteReplyNotifier>),
-            );
+            )
+            .with_language_pool(pool.clone());
             match zuschauer_register.clone() {
                 Some(register) => responder.set_zuschauer_register(register),
                 None => responder,

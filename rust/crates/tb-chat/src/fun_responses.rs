@@ -52,6 +52,7 @@ const FUN_REPLY_COOLDOWN_SECS: u64 = 90;
 /// fun.maybe_respond(&event, "streamer_login").await;
 /// ```
 pub struct FunResponses {
+    language_pool: Option<sqlx::PgPool>,
     api: Arc<dyn ChatApi>,
     /// Aktivierungs-Flag — `false` unterdrückt alle Antworten.
     /// Entspricht `_fun_thanks_reply_enabled` (bot.py Z. 190).
@@ -64,6 +65,11 @@ pub struct FunResponses {
 }
 
 impl FunResponses {
+    pub fn with_language_pool(mut self, pool: sqlx::PgPool) -> Self {
+        self.language_pool = Some(pool);
+        self
+    }
+
     /// Erstellt eine neue Instanz.
     ///
     /// # Parameter
@@ -71,6 +77,7 @@ impl FunResponses {
     /// - `enabled` — Entspricht `_fun_thanks_reply_enabled` (bot.py Z. 190); default=false.
     pub fn new(api: Arc<dyn ChatApi>, enabled: bool) -> Self {
         Self {
+            language_pool: None,
             api,
             enabled,
             cooldowns: Mutex::new(HashMap::new()),
@@ -115,7 +122,10 @@ impl FunResponses {
             return;
         }
 
-        let reply = self.pick_reply();
+        let language =
+            crate::text::channel_language(self.language_pool.as_ref(), &event.broadcaster_user_id)
+                .await;
+        let reply = crate::text::reply(language, self.pick_reply());
         // Fehler beim Senden werden weiter ignoriert (bot.py Z. 874), aber nicht verschluckt.
         if let Err(error) = self
             .api

@@ -651,6 +651,7 @@ fn truncate_log_message(raw: &str) -> String {
 }
 
 pub struct InviteQuestionResponder {
+    language_pool: Option<sqlx::PgPool>,
     api: Arc<dyn ChatApi>,
     invite_url: Arc<dyn InviteQuestionInviteUrlPort>,
     store: Arc<dyn InviteQuestionStore>,
@@ -670,6 +671,11 @@ enum CooldownKind {
 }
 
 impl InviteQuestionResponder {
+    pub fn with_language_pool(mut self, pool: sqlx::PgPool) -> Self {
+        self.language_pool = Some(pool);
+        self
+    }
+
     pub fn new(
         api: Arc<dyn ChatApi>,
         invite_url: Arc<dyn InviteQuestionInviteUrlPort>,
@@ -699,6 +705,7 @@ impl InviteQuestionResponder {
         invite_reply_notifier: Option<Arc<dyn InviteReplyNotifier>>,
     ) -> Self {
         Self {
+            language_pool: None,
             api,
             invite_url,
             store,
@@ -1132,12 +1139,19 @@ impl InviteQuestionResponder {
         event: &ChatMessageEvent,
         chatter_login: &str,
     ) -> bool {
-        let msg = next_confirm_reply().replace("{chatter}", chatter_login);
+        let language =
+            crate::text::channel_language(self.language_pool.as_ref(), &event.broadcaster_user_id)
+                .await;
+        let msg =
+            crate::text::reply(language, next_confirm_reply()).replace("{chatter}", chatter_login);
         self.send(event, &msg).await
     }
 
     async fn send_go(&self, event: &ChatMessageEvent, chatter_login: &str, invite: &str) -> bool {
-        let msg = next_go_reply()
+        let language =
+            crate::text::channel_language(self.language_pool.as_ref(), &event.broadcaster_user_id)
+                .await;
+        let msg = crate::text::reply(language, next_go_reply())
             .replace("{chatter}", chatter_login)
             .replace("{invite}", invite);
         self.send(event, &msg).await

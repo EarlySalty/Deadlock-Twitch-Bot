@@ -1,6 +1,7 @@
 //! Persistenzschicht des Twitch-Bots: sqlx-Pool, Migrationen, Row-Mapping.
 
 pub mod error;
+pub mod guild_membership;
 pub mod migrate;
 pub mod pool;
 pub mod retry;
@@ -13,3 +14,7 @@ pub use retry::{
     repeatable_read_transaction, run_transaction, serializable_transaction, IsolationLevel,
     RetryPolicy, Tx, TxFuture,
 };
+
+#[cfg(test)]
+#[path = "../../../test-support/postgres.rs"]
+mod test_postgres;

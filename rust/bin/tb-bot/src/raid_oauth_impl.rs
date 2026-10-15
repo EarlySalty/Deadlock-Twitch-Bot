@@ -1096,9 +1096,11 @@ impl RaidOAuthPort for TbRaidOAuthImpl {
             );
             return Err(RaidOAuthError::NotFound);
         };
-        let content = format!(
-            "{RAID_REQUIREMENTS_DM_BODY}\n\n[{RAID_REQUIREMENTS_BUTTON_LABEL}]({auth_url})"
-        );
+        let language =
+            tb_db::guild_membership::dm_language(&self.pool, &partner.twitch_user_id).await;
+        let body = language.choose(RAID_REQUIREMENTS_DM_BODY, "Hey! You’re a partner in the German Deadlock community’s auto-raid network. All that’s missing is your one-time Twitch authorization. This lets the bot raid another active Deadlock streamer when your stream ends, instead of leaving your viewers behind, and send raids your way too. You’re only granting raid permission, nothing else. It takes less than a minute:");
+        let label = language.choose(RAID_REQUIREMENTS_BUTTON_LABEL, "Authorize raids now");
+        let content = format!("{body}\n\n[{label}]({auth_url})");
         let result = match relay.send_user_dm(SendUserDm { user_id, content }).await {
             Ok(result) => result,
             Err(error) => {

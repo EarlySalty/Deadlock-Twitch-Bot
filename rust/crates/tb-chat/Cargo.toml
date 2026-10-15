@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
+tb-db = { workspace = true }
 arc-swap    = { workspace = true }
 async-trait = { workspace = true }
 chrono      = { workspace = true }
@@ -34,5 +35,3 @@ tokio              = { workspace = true, features = ["rt-multi-thread", "macros"
 tracing-subscriber = { workspace = true }
 wiremock           = { workspace = true }
 tempfile = "3"
-# Clip-Contest-Tests laufen gegen eine frisch migrierte Wegwerf-DB.
-tb-db    = { workspace = true }

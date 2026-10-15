@@ -901,6 +901,7 @@ async fn main() {
                 ));
             Arc::new(
                 raid_greeting::RaidGreetingMonitor::new(h.raid_api(), probe)
+                    .with_language_pool(pool.clone())
                     .with_live_probe(live_probe)
                     .with_courtesy(courtesy)
                     .with_aliases(aliases),
@@ -1341,6 +1342,7 @@ async fn main() {
             let scam_notifier = scam_notify_impl::build_scam_notifier(
                 &settings.broker,
                 config.bot.scam_guard_discord_channel_id as i64,
+                pool.clone(),
             );
             let runtime = chat_wiring::build_runtime(
                 handle,
@@ -1969,18 +1971,21 @@ async fn main() {
                                 guild_id: live_ping_guild_id,
                             })
                                 as Arc<dyn tb_monitoring::LivePingRoleProvider>);
-                            Arc::new(BrokerAnnouncementSink::new(
-                                Arc::new(BrokerAnnouncementTransport { relay }),
-                                vod,
-                                profile,
-                                AnnouncementSettings {
-                                    notify_channel_id,
-                                    alert_mention: config.bot.alert_mention.clone(),
-                                    ref_code: config.bot.discord_ref_code.clone(),
-                                    target_game: target_game.clone(),
-                                },
-                                live_ping_role_provider,
-                            ))
+                            Arc::new(
+                                BrokerAnnouncementSink::new(
+                                    Arc::new(BrokerAnnouncementTransport { relay }),
+                                    vod,
+                                    profile,
+                                    AnnouncementSettings {
+                                        notify_channel_id,
+                                        alert_mention: config.bot.alert_mention.clone(),
+                                        ref_code: config.bot.discord_ref_code.clone(),
+                                        target_game: target_game.clone(),
+                                    },
+                                    live_ping_role_provider,
+                                )
+                                .with_language_pool(pool.clone()),
+                            )
                         }
                         Err(e) => {
                             tracing::warn!(

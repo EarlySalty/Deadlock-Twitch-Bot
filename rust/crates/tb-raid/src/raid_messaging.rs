@@ -32,6 +32,31 @@ pub fn build_partner_raid_message(
     viewer_count: i32,
     received_raid_count: i64,
 ) -> String {
+    build_partner_raid_message_localized(
+        tb_domain::language::TextLanguage::German,
+        from_login,
+        target_login,
+        viewer_count,
+        received_raid_count,
+    )
+}
+
+pub fn build_partner_raid_message_localized(
+    language: tb_domain::language::TextLanguage,
+    from_login: &str,
+    target_login: &str,
+    viewer_count: i32,
+    received_raid_count: i64,
+) -> String {
+    if language == tb_domain::language::TextLanguage::English {
+        let count = received_raid_count.max(1);
+        let word = if viewer_count == 1 {
+            "viewer"
+        } else {
+            "viewers"
+        };
+        return format!("Hey @{target_login}! 🎮 @{from_login} just raided you with {viewer_count} {word}. This is raid #{count} for you from the Deadlock streamer network. ❤️");
+    }
     let count = received_raid_count.max(1);
     format!(
         "Hey @{target_login}! 🎮 @{from_login} hat dich gerade mit {viewer_count} {word} \

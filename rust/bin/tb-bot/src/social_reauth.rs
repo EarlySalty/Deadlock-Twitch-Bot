@@ -22,15 +22,29 @@ impl SocialConnectionNotifier {
     }
 }
 
+#[cfg(test)]
 fn reconnect_text(platform: &str, incident_at: chrono::DateTime<chrono::Utc>) -> Option<String> {
+    reconnect_text_localized(
+        tb_domain::language::TextLanguage::German,
+        platform,
+        incident_at,
+    )
+}
+
+fn reconnect_text_localized(
+    language: tb_domain::language::TextLanguage,
+    platform: &str,
+    incident_at: chrono::DateTime<chrono::Utc>,
+) -> Option<String> {
     let name = match platform {
         "tiktok" => "TikTok",
         "youtube" => "YouTube",
         "instagram" => "Instagram",
         _ => return None,
     };
-    Some(format!(
+    Some(tb_domain::localized_format!(language,
         "Deine Verbindung zu {name} muss erneuert werden. Bitte verbinde {name} im Social-Media-Manager neu: {SOCIAL_DASHBOARD_URL}?hinweis={}",
+        "Your {name} connection needs to be renewed. Please reconnect {name} in the social media manager: {SOCIAL_DASHBOARD_URL}?hinweis={}",
         incident_at.timestamp_micros(),
     ))
 }
@@ -44,7 +58,8 @@ impl SocialReauthNotifier for SocialConnectionNotifier {
         _needs_reauth: bool,
         incident_at: chrono::DateTime<chrono::Utc>,
     ) -> bool {
-        let Some(content) = reconnect_text(platform, incident_at) else {
+        let language = tb_db::guild_membership::dm_language(&self.pool, twitch_user_id).await;
+        let Some(content) = reconnect_text_localized(language, platform, incident_at) else {
             return false;
         };
         let Some(discord_user_id) = discord_user_id_for(&self.pool, twitch_user_id, "").await

@@ -4,6 +4,8 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
+tb-domain = { workspace = true }
+tb-db = { workspace = true }
 tb-config = { workspace = true }
 async-trait = { workspace = true }
 chrono      = { workspace = true }

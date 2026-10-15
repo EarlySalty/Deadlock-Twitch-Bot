@@ -198,6 +198,7 @@ fn merge_stats(
 }
 
 pub struct RaidGreetingMonitor {
+    language_pool: Option<sqlx::PgPool>,
     chat: Arc<dyn ChatApi>,
     probe: Option<Arc<dyn RaidTargetChatProbe>>,
     live: Option<Arc<dyn RaidTargetLiveProbe>>,
@@ -210,6 +211,7 @@ pub struct RaidGreetingMonitor {
 impl RaidGreetingMonitor {
     pub fn new(chat: Arc<dyn ChatApi>, probe: Option<Arc<dyn RaidTargetChatProbe>>) -> Self {
         Self {
+            language_pool: None,
             chat,
             probe,
             live: None,
@@ -218,6 +220,11 @@ impl RaidGreetingMonitor {
             pending: Arc::new(Mutex::new(HashMap::new())),
             greeting_window: GREETING_WINDOW,
         }
+    }
+
+    pub fn with_language_pool(mut self, pool: sqlx::PgPool) -> Self {
+        self.language_pool = Some(pool);
+        self
     }
 
     /// Endet der Zielstream innerhalb des Fensters (Stream-Ende oder Weiter-Raid),
@@ -484,8 +491,23 @@ impl RaidGreetingMonitor {
         let chat = Arc::clone(&self.chat);
         let from_id = pending.from_broadcaster_id.clone();
         let from_login = pending.from_broadcaster_login.clone();
-        let message = source_hint_message(&pending.to_broadcaster_login);
+        let to_login = pending.to_broadcaster_login.clone();
+        let pool = self.language_pool.clone();
         tokio::spawn(async move {
+            let language = match pool {
+                Some(pool) => tb_db::guild_membership::twitch_language(&pool, &from_id).await,
+                None => tb_domain::language::TextLanguage::German,
+            };
+            let message = if language == tb_domain::language::TextLanguage::English {
+                let login = clean_login(&to_login);
+                if login.is_empty() {
+                    "On to the next stream. Don’t forget to say a quick hello and goodbye :)".into()
+                } else {
+                    format!("We’re heading to @{login}! Don’t forget to say a quick hello and goodbye :)")
+                }
+            } else {
+                source_hint_message(&to_login)
+            };
             match chat.send_message(&from_id, &message).await {
                 Ok(SendOutcome::Sent) => tracing::info!(
                     from = %from_login,
@@ -518,6 +540,7 @@ impl RaidGreetingMonitor {
         let live = self.live.clone();
         let courtesy = self.courtesy.clone();
         let greeting_window = self.greeting_window;
+        let language_pool = self.language_pool.clone();
         tokio::spawn(async move {
             tokio::time::sleep(greeting_window).await;
             let item = pending
@@ -576,7 +599,8 @@ impl RaidGreetingMonitor {
                     .await
                     .map(|last| (Utc::now() - last).num_days());
                 if should_remind(outcome, history.class, days_since) {
-                    whisper_sent = send_reminder(&chat, &item).await;
+                    whisper_sent =
+                        send_reminder_localized(&chat, &item, language_pool.as_ref()).await;
                 } else {
                     tracing::info!(
                         from = %item.from_broadcaster_login,
@@ -590,7 +614,7 @@ impl RaidGreetingMonitor {
             } else if outcome == CourtesyOutcome::Classified(CourtesyClass::Silent) {
                 // Ohne Recorder gibt es keine Historie und keine Drosselung;
                 // dann bleibt es beim bisherigen Verhalten.
-                whisper_sent = send_reminder(&chat, &item).await;
+                whisper_sent = send_reminder_localized(&chat, &item, language_pool.as_ref()).await;
             }
 
             tracing::info!(
@@ -640,13 +664,22 @@ async fn target_stream_ended(live: &Option<Arc<dyn RaidTargetLiveProbe>>, login:
 ///
 /// Ziel ist der als Haupt markierte Account der Person, falls es einen gibt:
 /// ein selten genutzter Zweitaccount sieht die Whisper womöglich nie.
-async fn send_reminder(chat: &Arc<dyn ChatApi>, item: &PendingGreeting) -> bool {
+async fn send_reminder_localized(
+    chat: &Arc<dyn ChatApi>,
+    item: &PendingGreeting,
+    pool: Option<&sqlx::PgPool>,
+) -> bool {
     let target_id = item
         .alias_group
         .as_ref()
         .and_then(|group| group.primary_user_id.as_deref())
         .unwrap_or(&item.from_broadcaster_id);
-    match chat.send_whisper(target_id, WHISPER_REMINDER).await {
+    let language = match pool {
+        Some(pool) => tb_db::guild_membership::dm_language(pool, target_id).await,
+        None => tb_domain::language::TextLanguage::German,
+    };
+    let text = language.choose(WHISPER_REMINDER, "Hey, a quick reminder after the raid: saying hello and goodbye in chat is good etiquette :) It makes the raid more personal, helps people remember you and builds a connection!");
+    match chat.send_whisper(target_id, text).await {
         Ok(true) => {
             tracing::info!(
                 from = %item.from_broadcaster_login,

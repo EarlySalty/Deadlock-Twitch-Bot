@@ -226,6 +226,21 @@ pub fn admin_ban_probe_rueckname_text(twitch_login: &str) -> (String, String) {
 /// nackten OAuth-Link: nach der Neu-Autorisierung im ersten Punkt
 /// "Twitch-Verbindung" gilt das Dashboard sofort wieder als vertraut.
 pub fn user_dm_token_error_text(twitch_login: &str, reauth_url: &str) -> String {
+    user_dm_token_error_text_localized(
+        tb_domain::language::TextLanguage::German,
+        twitch_login,
+        reauth_url,
+    )
+}
+
+pub fn user_dm_token_error_text_localized(
+    language: tb_domain::language::TextLanguage,
+    twitch_login: &str,
+    reauth_url: &str,
+) -> String {
+    if language == tb_domain::language::TextLanguage::English {
+        return format!("⚠️ **Twitch connection expired**\n\nThe connection for **{twitch_login}** has expired, for example after a password or 2FA change. Auto-raids, chat protection and analytics are paused until you reconnect.\n\n**How to reconnect:**\n1️⃣ Open the dashboard: {reauth_url}\n2️⃣ Open **Twitch-Verbindung** at the top\n3️⃣ Click **Bot neu autorisieren**\n\nEverything will resume automatically.\n\n⏳ You have {GRACE_PERIOD_DAYS} days before your streamer role is removed.\n\nIf you no longer want to be a partner, you can ignore this message.");
+    }
     format!(
         "⚠️ **Twitch-Verbindung fehlgeschlagen**\n\n\
          Die Verbindung für **{twitch_login}** ist abgelaufen (z. B. nach Passwort- \
@@ -243,6 +258,21 @@ pub fn user_dm_token_error_text(twitch_login: &str, reauth_url: &str) -> String 
 
 /// User-DM-Text als Grace-Reminder (Python `is_reminder=True`).
 pub fn user_dm_reminder_text(twitch_login: &str, reauth_url: &str) -> String {
+    user_dm_reminder_text_localized(
+        tb_domain::language::TextLanguage::German,
+        twitch_login,
+        reauth_url,
+    )
+}
+
+pub fn user_dm_reminder_text_localized(
+    language: tb_domain::language::TextLanguage,
+    twitch_login: &str,
+    reauth_url: &str,
+) -> String {
+    if language == tb_domain::language::TextLanguage::English {
+        return format!("⚠️ **Twitch still needs reconnecting**\n\nThe connection for **{twitch_login}** has been disconnected for {GRACE_PERIOD_DAYS} days. Bot features remain paused.\n\n**How to reconnect:**\n1️⃣ Open the dashboard: {reauth_url}\n2️⃣ Open **Twitch-Verbindung** at the top\n3️⃣ Click **Bot neu autorisieren**\n\nIf you no longer want to be a partner, you can ignore this message.");
+    }
     format!(
         "⚠️ **Twitch-Verbindung fehlt weiterhin**\n\n\
          Für **{twitch_login}** ist die Verbindung seit {GRACE_PERIOD_DAYS} Tagen \
@@ -264,6 +294,22 @@ pub fn user_dm_reminder_text(twitch_login: &str, reauth_url: &str) -> String {
 /// entbannen (sonst kann der Bot seine Mod-Rechte nicht abgeben) und dann im
 /// Dashboard trennen.
 pub fn user_dm_bot_banned_text(twitch_login: &str, _error_message: &str) -> String {
+    user_dm_bot_banned_text_localized(
+        tb_domain::language::TextLanguage::German,
+        twitch_login,
+        _error_message,
+    )
+}
+
+pub fn user_dm_bot_banned_text_localized(
+    language: tb_domain::language::TextLanguage,
+    twitch_login: &str,
+    _error_message: &str,
+) -> String {
+    if language == tb_domain::language::TextLanguage::English {
+        let bot = bot_twitch_login();
+        return format!("⚠️ **The bot is blocked in your channel**\n\nThe bot was banned or removed as a moderator in **{twitch_login}**. Auto-raids, chat protection and analytics are paused.\n\n**Was this a mistake?** Run these commands in your chat:\n1️⃣ `/unban {bot}`\n2️⃣ `/mod {bot}`\n\nEverything will resume automatically.\n\n**Want to remove the bot?** Please follow this order:\n1️⃣ Run `/unban {bot}` in your chat so the bot can give up its permissions\n2️⃣ Open {BOT_SECTION_URL}\n3️⃣ Click **Bot vom Kanal trennen** at the bottom\n\nThe bot will then be disconnected and will no longer act on your behalf.");
+    }
     let bot = bot_twitch_login();
     format!(
         "⚠️ **Der Bot ist in deinem Kanal blockiert**\n\n\
@@ -421,7 +467,8 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
 
         let discord_user_id = self.discord_user_id_for(twitch_user_id, twitch_login).await;
         let user_dm_sent = if let Some(ref did) = discord_user_id {
-            let text = user_dm_token_error_text(twitch_login, &self.reauth_url);
+            let language = tb_db::guild_membership::dm_language(&self.pool, twitch_user_id).await;
+            let text = user_dm_token_error_text_localized(language, twitch_login, &self.reauth_url);
             let sent = self.notifier.send_user_dm(did, &text).await;
             if sent {
                 self.set_user_dm_sent(twitch_user_id).await;
@@ -533,7 +580,13 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
             // 1. Einmalig: Reminder-DM + Admin-Notify.
             if row.reminder_sent.unwrap_or(0) == 0 {
                 if let Some(ref did) = discord_user_id {
-                    let text = user_dm_reminder_text(&row.twitch_login, &self.reauth_url);
+                    let language =
+                        tb_db::guild_membership::dm_language(&self.pool, &row.twitch_user_id).await;
+                    let text = user_dm_reminder_text_localized(
+                        language,
+                        &row.twitch_login,
+                        &self.reauth_url,
+                    );
                     self.notifier.send_user_dm(did, &text).await;
                 }
                 let (title, description) = admin_grace_expired_text(
@@ -764,7 +817,8 @@ impl<N: TokenLifecycleNotifier> TokenLifecycleReactor<N> {
 
         let discord_user_id = self.discord_user_id_for(twitch_user_id, twitch_login).await;
         let user_dm_sent = if let Some(ref did) = discord_user_id {
-            let text = user_dm_bot_banned_text(twitch_login, error_message);
+            let language = tb_db::guild_membership::dm_language(&self.pool, twitch_user_id).await;
+            let text = user_dm_bot_banned_text_localized(language, twitch_login, error_message);
             self.notifier.send_user_dm(did, &text).await
         } else {
             false

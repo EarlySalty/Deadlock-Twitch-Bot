@@ -760,12 +760,48 @@ fn has_high_confidence_single_message_signal(features: &HashSet<String>) -> bool
 
 /// Warn-Text für PUBLIC/STRONG.
 /// service_pitch_warning.py Z. 778–798
+#[cfg(test)]
 fn build_warning_text(
     chatter_login: &str,
     strong: bool,
     new_account: bool,
     account_age_days: Option<i64>,
 ) -> String {
+    build_warning_text_localized(
+        tb_domain::language::TextLanguage::German,
+        chatter_login,
+        strong,
+        new_account,
+        account_age_days,
+    )
+}
+
+fn build_warning_text_localized(
+    language: tb_domain::language::TextLanguage,
+    chatter_login: &str,
+    strong: bool,
+    new_account: bool,
+    account_age_days: Option<i64>,
+) -> String {
+    if language == tb_domain::language::TextLanguage::English {
+        let mention = if chatter_login.is_empty() {
+            String::new()
+        } else {
+            format!("@{chatter_login} ")
+        };
+        let age = if new_account {
+            " (account less than 3 months old)"
+        } else if account_age_days.is_none() {
+            " (account age unknown)"
+        } else {
+            ""
+        };
+        return if strong {
+            format!("🛡️ {mention}flagged for a possible sales pitch{age}. These often involve designs, viewers or scams. We recommend ignoring and banning this user.")
+        } else {
+            format!("{mention}please don’t post service or promotional offers{age} ")
+        };
+    }
     let mention = if chatter_login.is_empty() {
         String::new()
     } else {
@@ -1113,10 +1149,12 @@ impl ScamPitchDetector {
         };
 
         // Eskalations-Aktion ausführen (außerhalb des Mutex-Locks)
+        let language =
+            tb_db::guild_membership::twitch_language(&self.pool, &event.broadcaster_user_id).await;
         if cooldown_action == Some("escalate") {
-            let escalation_text = format!(
+            let escalation_text = tb_domain::localized_format!(language,
                 "🛡️ @{chatter_login} Timeout (10m) wegen wiederholter Service-Pitches/Spam. \
-                 Empfehlung: User bannen."
+                 Empfehlung: User bannen.", "🛡️ @{chatter_login} timed out for 10 minutes for repeated service pitches/spam. We recommend banning this user."
             );
             // Den 600-s-Timeout führt die Pipeline einmalig auf StrongTimeout aus
             // (kein Doppel-Timeout mehr; Mod-/Broadcaster-Guard greift dort).
@@ -1145,7 +1183,8 @@ impl ScamPitchDetector {
 
         // Schritt 16–17: Senden + Cooldowns setzen (Z. 983–1016)
         let result = if severity != "HINT" {
-            let warning_text = build_warning_text(
+            let warning_text = build_warning_text_localized(
+                language,
                 &chatter_login,
                 severity == "WARNING_STRONG",
                 is_new_account,
