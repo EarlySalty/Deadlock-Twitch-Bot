@@ -16,7 +16,12 @@ Round 2 (Opus r2, 2026-10-15): Main = LIVE 408557c6a (D11-D13, SOC-EN, SEC-NPM, 
 | TEST | done | - | - | - | npm test green (480+20, 0 fail) |
 | 390px check | done | - | - | - | no overflow DE/EN on demo tabs, /twitch/, /twitch/demo, /twitch/social-media, dead-lock.de |
 
+| DB rotation (user ok 15.10, Opus) | coder opus | ttb-opus-dbrot-20261015 | ops/opus-db-rotation-20261015 | - | running: backup, rollback path, rotate, verify |
+| H2 hub rollout (user ok) | sol | ttb-opus-h2-20261015 | feat/opus-h2-hub-rollout-20261015 | - | running |
+| G1 guilds | sol | ttb-opus-g1-20261015 | feat/opus-g1-guilds-20261015 | - | running, merge after rotation |
+| K1 AI switch | sol | ttb-opus-k1-20261015 | feat/opus-k1-ai-switch-20261015 | - | running, merge after rotation |
+
 Blocked:
 - L #1069: Fireworks HTTP 412 (account suspended), billing = user/money decision.
-- G #1063, K: prod DB rotation after 13.10 leak not confirmed (user decision). C #1067, A #1064 depend on G.
+- C #1067, A #1064, R #1065 depend on G. Sol subscription ends 2026-10-15 evening.
 - Canonical checkout /home/nathanael/repos/Deadlock-Twitch-Bot is on a stale HEAD with rustls 0.23.45; push-gate scans from there fail. Push from worktrees on main.
