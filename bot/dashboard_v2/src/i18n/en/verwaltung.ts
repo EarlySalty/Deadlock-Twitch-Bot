@@ -287,4 +287,11 @@ export const VERWALTUNG_EN: Record<string, string> = {
   "VOD-Befehl aktivieren": "Enable VOD command",
   "MP4 herunterladen: {start} bis {end}": "Download MP4: {start} to {end}",
   "Speichern": "Save",
+  "channelLogin (str) und enabled (bool) erforderlich.": "A channel login and enabled state are required.",
+  "channelLogin erforderlich.": "A channel login is required.",
+  "steamId muss string oder null sein.": "The Steam ID must be text or empty.",
+  "personaOverride muss string oder null sein.": "The persona override must be text or empty.",
+  "tabuTopics muss array oder null sein.": "Excluded topics must be a list or empty.",
+  "channel query-param erforderlich.": "A channel query parameter is required.",
+  '{name} wird in deinem Kanal bereits für {command} verwendet.': '{name} is already used for {command} in your channel.',
 };

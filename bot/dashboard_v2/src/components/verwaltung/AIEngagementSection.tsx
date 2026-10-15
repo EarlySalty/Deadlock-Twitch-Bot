@@ -1,3 +1,4 @@
+import { translateManagementError } from '@/i18n/managementErrors';
 import { useLanguage } from '@/context/LanguageContext';
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
@@ -141,7 +142,7 @@ export function AIEngagementSection() {
 
       {error && (
         <div className="mb-4 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
-          {t(error)}
+          {translateManagementError(error, t)}
         </div>
       )}
 

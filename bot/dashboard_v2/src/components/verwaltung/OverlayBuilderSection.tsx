@@ -1,4 +1,5 @@
 import { useLanguage } from '@/context/LanguageContext';
+import { overlayPreviewTranslations } from '@/i18n/overlayPreview';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { flushSync } from 'react-dom';
 import { motion } from 'framer-motion';
@@ -191,7 +192,8 @@ type OverlayBuilderSectionProps = {
 };
 
 export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
+  const previewTranslations = useMemo(() => overlayPreviewTranslations(t), [t]);
   const normalizedLogin = login.trim();
   const [theme, setTheme] = useState<OverlayTheme>('dark');
   const [layout, setLayout] = useState<OverlayLayout>('canvas');
@@ -317,14 +319,14 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   }, [endGesture, normalizedLogin]);
 
   const syncPreview = () => {
-    iframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources }, window.location.origin);
-    outputIframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources }, window.location.origin);
+    iframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources, translations: previewTranslations, language }, window.location.origin);
+    outputIframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources, translations: previewTranslations, language }, window.location.origin);
   };
 
   useEffect(() => {
-    iframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources }, window.location.origin);
-    outputIframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources }, window.location.origin);
-  }, [sources]);
+    iframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources, translations: previewTranslations, language }, window.location.origin);
+    outputIframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources, translations: previewTranslations, language }, window.location.origin);
+  }, [sources, previewTranslations, language]);
 
   const storageKey = `ddc-overlay-layout-v1:${normalizedLogin}`;
 
@@ -487,6 +489,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const previewUrl = new URL(overlayUrl, 'http://localhost');
   previewUrl.searchParams.delete('scene');
   previewUrl.searchParams.set('editor', '1');
+  previewUrl.searchParams.set('lang', language);
   const debouncedUrl = useDebouncedValue(previewUrl.toString(), 300);
   const unsaved = retainedUrl !== null && retainedUrl !== overlayUrl;
 

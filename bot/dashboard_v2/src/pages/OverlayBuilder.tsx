@@ -1,3 +1,4 @@
+import { translateManagementError } from '@/i18n/managementErrors';
 import { Rise } from '../motion/Rise';
 import { useQuery } from '@tanstack/react-query';
 import { fetchInternalHome } from '@/api/home';
@@ -31,7 +32,7 @@ export function OverlayBuilderPage() {
   }
 
   if (isError) {
-    const errorMessage = error instanceof Error ? error.message : t('Unbekannter Fehler');
+    const errorMessage = error instanceof Error ? translateManagementError(error.message, t) : t('Unbekannter Fehler');
     return (
       <div className="panel-card rounded-2xl p-6 md:p-8">
         <h2 className="text-xl font-bold text-white">{t('Konto-Daten nicht verfügbar')}</h2>
