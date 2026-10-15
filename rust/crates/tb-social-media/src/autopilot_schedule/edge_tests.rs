@@ -1034,3 +1034,47 @@ async fn missed_job_keeps_its_valid_future_destination_slot() {
     assert_eq!(jobs[0].scheduled_at, Some(tiktok));
     cleanup(pool).await;
 }
+
+#[tokio::test]
+async fn target_change_keeps_the_queued_jobs_on_their_slots() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    let slots = (1..=7)
+        .flat_map(|weekday| [slot(weekday, "08:00"), slot(weekday, "20:00")])
+        .collect();
+    let patch = SchedulePatch {
+        lead_time_hours: Some(72),
+        schedule_slots: Some(slots),
+        ..schedule()
+    };
+    targets(&pool, "owner", &["youtube"], patch).await;
+    for name in ["a", "b"] {
+        clip(&pool, "owner", name, utc("2025-02-01T00:00:00Z")).await;
+    }
+    assert_eq!(planned(plan_owner(&pool, "owner", Utc::now()).await), 2);
+    let before = reserved(&pool, "owner").await;
+    assert_eq!(before.len(), 2);
+    sqlx::query("INSERT INTO social_media_platform_auth (platform, twitch_user_id, enabled) VALUES ('tiktok', 'owner', 1)")
+        .execute(&pool).await.expect("tiktok connected");
+    save_schedule(
+        &pool,
+        "owner",
+        &SchedulePatch {
+            target_platforms: Some(vec!["youtube".into(), "tiktok".into()]),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("retarget");
+    let expected: Vec<_> = before
+        .iter()
+        .flat_map(|(job, _, at)| {
+            [
+                (*job, "tiktok".to_owned(), *at),
+                (*job, "youtube".to_owned(), *at),
+            ]
+        })
+        .collect();
+    assert_eq!(reserved(&pool, "owner").await, expected);
+    cleanup(pool).await;
+}

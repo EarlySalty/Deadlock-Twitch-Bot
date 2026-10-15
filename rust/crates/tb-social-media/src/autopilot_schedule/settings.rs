@@ -213,13 +213,14 @@ pub(crate) async fn retime_on(
             None => unschedule_video_on(connection, &video).await?,
         }
     }
-    let mut allocator = Allocator::load_on(connection, owner, settings).await?;
     for (id, previous) in queued {
+        let subject = Subject {
+            job: Some(id),
+            video: None,
+        };
+        let allocator = Allocator::load_for(connection, owner, settings, subject).await?;
         let allocation = allocator.plan_job(now, &previous)?;
         reserve_on(connection, owner, id, allocation.as_ref()).await?;
-        if let Some(allocation) = allocation {
-            allocator.commit(&allocation);
-        }
     }
     Ok(())
 }
