@@ -66,6 +66,7 @@ export function SilentNotificationsSection() {
   }, []);
 
   const onToggle = async (key: FlagKey) => {
+    if (pendingKey) return;
     const next = { ...settings, [key]: !settings[key] };
     setPendingKey(key);
     setError(null);
@@ -110,7 +111,7 @@ export function SilentNotificationsSection() {
               title={t(title)}
               description={t(desc)}
               savedAt={savedKey?.key === key ? savedKey.at : null}
-              toggle={{ checked: settings[key], onChange: () => void onToggle(key), label: t(title), pending: pendingKey === key }}
+              toggle={{ checked: settings[key], onChange: () => void onToggle(key), label: t(title), pending: pendingKey === key, disabled: pendingKey !== null }}
             />
           ))}
         </div>

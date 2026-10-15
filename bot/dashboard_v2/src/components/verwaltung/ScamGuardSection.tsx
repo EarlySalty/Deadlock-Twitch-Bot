@@ -2,6 +2,7 @@ import { useT } from '../../context/LanguageContext';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2, ShieldCheck } from 'lucide-react';
 import { CommandRow, SectionCard } from './ui';
+import { useSerialSave, type SaveOutcome } from './useSerialSave';
 import {
   fetchScamSettings,
   saveScamSettings,
@@ -38,7 +39,6 @@ function useScamSettings() {
   const [unsaved, setUnsaved] = useState(false);
   const [draft, setDraft] = useState<ScamGuardSettings | null>(null);
   const latest = useRef<ScamGuardSettings | null>(null);
-  const version = useRef(0);
   const timer = useRef<number | null>(null);
 
   useEffect(() => {
@@ -57,29 +57,30 @@ function useScamSettings() {
     };
   }, []);
 
-  const persist = useCallback(async () => {
+  const request = useSerialSave(saveScamSettings, (sent: ScamGuardSettings, outcome: SaveOutcome<ScamGuardSettings>) => {
+    if (latest.current !== sent) return;
+    if (!outcome.ok) {
+      setError(outcome.error instanceof Error ? outcome.error.message : 'Speichern fehlgeschlagen');
+      return;
+    }
+    latest.current = outcome.result;
+    setDraft(outcome.result);
+    setUnsaved(false);
+    setSavedAt(Date.now());
+  });
+
+  const persist = useCallback(() => {
     if (timer.current !== null) window.clearTimeout(timer.current);
     timer.current = null;
     const next = latest.current;
     if (!next) return;
-    const current = ++version.current;
     setError(null);
     setSavedAt(null);
-    try {
-      const result = await saveScamSettings(next);
-      if (current !== version.current) return;
-      latest.current = result;
-      setDraft(result);
-      setUnsaved(false);
-      setSavedAt(Date.now());
-    } catch (e) {
-      if (current !== version.current) return;
-      setError(e instanceof Error ? e.message : 'Speichern fehlgeschlagen');
-    }
-  }, []);
+    request(next);
+  }, [request]);
 
   useEffect(() => () => {
-    if (timer.current !== null) void persist();
+    if (timer.current !== null) persist();
   }, [persist]);
 
   const update = (next: Partial<ScamGuardSettings>, debounce: boolean) => {
@@ -88,11 +89,11 @@ function useScamSettings() {
     setDraft(latest.current);
     setUnsaved(true);
     if (!debounce) {
-      void persist();
+      persist();
       return;
     }
     if (timer.current !== null) window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => void persist(), 600);
+    timer.current = window.setTimeout(persist, 600);
   };
 
   return { loading, error, savedAt, unsaved, draft, update };

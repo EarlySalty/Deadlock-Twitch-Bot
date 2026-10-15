@@ -34,7 +34,7 @@ export function LurkerTaxSection() {
   }, []);
 
   const onToggle = async () => {
-    if (!settings) return;
+    if (!settings || pending) return;
     const want = !settings.lurker_tax_enabled;
     setPending(true);
     setError(null);

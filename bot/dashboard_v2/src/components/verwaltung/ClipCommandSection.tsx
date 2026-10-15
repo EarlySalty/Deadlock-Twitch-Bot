@@ -8,6 +8,7 @@ import {
 } from '@/api/clipCommand';
 import { CommandRow } from './ui';
 import { SavedIndicator } from './SavedIndicator';
+import { useSerialSave, type SaveOutcome } from './useSerialSave';
 
 function validDuration(value: string): boolean {
   const seconds = Number(value);
@@ -22,34 +23,47 @@ function ClipDurationField({ settings, onSaved }: { settings: ClipCommandSetting
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const savedValue = useRef(settings.clip_command_duration_seconds);
+  const requested = useRef(settings.clip_command_duration_seconds);
   const latest = useRef(duration);
 
-  const save = useCallback(async (value: string, showInvalid: boolean) => {
+  const request = useSerialSave(
+    (value: string) => setClipCommandDuration(Number(value)),
+    (sent: string, outcome: SaveOutcome<ClipCommandSettingsResponse>) => {
+      if (outcome.ok) {
+        savedValue.current = outcome.result.clip_command_duration_seconds;
+        onSaved(outcome.result);
+      }
+      if (latest.current !== sent) return;
+      if (!outcome.ok) {
+        requested.current = savedValue.current;
+        setError('Clip-Dauer konnte nicht gespeichert werden. Bitte nochmal versuchen.');
+        return;
+      }
+      requested.current = outcome.result.clip_command_duration_seconds;
+      setDuration(String(outcome.result.clip_command_duration_seconds));
+      setSavedAt(Date.now());
+    },
+  );
+
+  const save = useCallback((value: string, showInvalid: boolean) => {
     if (!validDuration(value)) {
       if (showInvalid) setError('Bitte 5 bis 60 Sekunden eingeben, in Schritten von 0,1 Sekunden.');
       return;
     }
     const seconds = Number(value);
-    if (seconds === savedValue.current) { setError(null); return; }
     setError(null);
+    if (seconds === requested.current) return;
+    requested.current = seconds;
     setSavedAt(null);
-    try {
-      const data = await setClipCommandDuration(seconds);
-      savedValue.current = data.clip_command_duration_seconds;
-      onSaved(data);
-      if (latest.current === value) setDuration(String(data.clip_command_duration_seconds));
-      setSavedAt(Date.now());
-    } catch {
-      setError('Clip-Dauer konnte nicht gespeichert werden. Bitte nochmal versuchen.');
-    }
-  }, [onSaved]);
+    request(value);
+  }, [request]);
 
   const saveRef = useRef(save);
   useEffect(() => { saveRef.current = save; }, [save]);
-  useEffect(() => () => { void saveRef.current(latest.current, false); }, []);
+  useEffect(() => () => { saveRef.current(latest.current, false); }, []);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void save(duration, false), 600);
+    const timer = window.setTimeout(() => save(duration, false), 600);
     return () => window.clearTimeout(timer);
   }, [duration, save]);
 
@@ -70,7 +84,7 @@ function ClipDurationField({ settings, onSaved }: { settings: ClipCommandSetting
           aria-describedby={`${durationId}-hint`}
           aria-invalid={error !== null}
           onChange={(event) => { latest.current = event.target.value; setDuration(event.target.value); }}
-          onBlur={() => void save(latest.current, true)}
+          onBlur={() => save(latest.current, true)}
           className="w-24 rounded-lg border border-border bg-background px-3 py-2 text-sm text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
         />
         {savedAt && <SavedIndicator key={savedAt} />}
