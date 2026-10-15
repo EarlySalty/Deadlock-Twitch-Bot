@@ -3,18 +3,22 @@ mod queue;
 mod recovery;
 mod settings;
 
-pub use planner::{plan_owner, PlanReport};
+pub use planner::{PlanReport, plan_owner};
 
-pub use queue::{cancel, mark_next, reorder, resolve_review, ReviewDecision};
-pub use recovery::{recover_after_lease, retry_or_review, Recovery};
-pub use settings::{save_schedule, SchedulePatch, ScheduleSettings};
+pub use queue::{ReviewDecision, cancel, mark_next, reorder, resolve_review};
+pub use recovery::{Recovery, recover_after_lease, retry_or_review};
+pub use settings::{SchedulePatch, ScheduleSettings, save_schedule};
+
+use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgConnection, PgPool};
 
-use super::{from_row, JobError, JobSource, ProductionJob, ProductionMode, SELECT};
-use crate::autopilot_settings::{self, AutopilotSettings, SettingsError};
+use super::{JobError, JobSource, ProductionJob, ProductionMode, SELECT, from_row};
+use crate::autopilot_settings::{
+    self, AutopilotSettings, DistributionPolicy, PipelinePolicy, PolicyScope, SettingsError,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ScheduleError {
@@ -49,6 +53,12 @@ pub enum ProductionHold {
     OutsideLead,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Reservation {
+    pub platform: String,
+    pub scheduled_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct QueueJob {
     pub id: i64,
@@ -62,6 +72,7 @@ pub struct QueueJob {
     pub attempts: i32,
     pub max_attempts: i32,
     pub scheduled_at: Option<DateTime<Utc>>,
+    pub reservations: Vec<Reservation>,
     pub started_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
     pub review_reasons: Vec<String>,
@@ -69,7 +80,11 @@ pub struct QueueJob {
 }
 
 impl QueueJob {
-    fn from_job(job: ProductionJob, clip_title: String) -> Result<Self, ScheduleError> {
+    fn from_job(
+        job: ProductionJob,
+        clip_title: String,
+        reservations: Vec<Reservation>,
+    ) -> Result<Self, ScheduleError> {
         Ok(Self {
             id: job.id,
             clip_id: job.clip_id,
@@ -82,6 +97,7 @@ impl QueueJob {
             attempts: job.attempts,
             max_attempts: job.max_attempts,
             scheduled_at: job.scheduled_at,
+            reservations,
             started_at: job.started_at,
             last_error: job.last_error,
             review_reasons: serde_json::from_value(job.review_reasons)?,
@@ -98,7 +114,10 @@ impl QueueJob {
 pub struct ScheduleQueueSnapshot {
     pub settings: ScheduleSettings,
     pub persisted: bool,
+    pub schedule_scope: PolicyScope,
+    pub distribution_policy: DistributionPolicy,
     pub next_slot: Option<DateTime<Utc>>,
+    pub next_slots: BTreeMap<String, DateTime<Utc>>,
     pub jobs: Vec<QueueJob>,
     pub review_count: i64,
     pub production_hold: Option<ProductionHold>,
@@ -137,11 +156,378 @@ pub(crate) async fn taken_on(
     sqlx::query_scalar("SELECT scheduled_at FROM social_production_jobs WHERE twitch_user_id = $1
         AND scheduled_at IS NOT NULL AND status IN ('queued', 'running', 'completed')
         UNION SELECT scheduled_at FROM social_produced_videos WHERE twitch_user_id = $1 AND scheduled_at IS NOT NULL
+        UNION SELECT scheduled_at FROM social_publication_reservations WHERE twitch_user_id = $1 AND state = 'reserved'
         UNION SELECT q.scheduled_at FROM twitch_clips_upload_queue q
         JOIN twitch_clips_social_media c ON c.id = q.clip_id
         WHERE c.twitch_user_id = $1 AND q.scheduled_at IS NOT NULL
         AND COALESCE(q.status, '') NOT IN ('failed', 'cancelled')")
         .bind(owner).fetch_all(connection).await
+}
+
+#[derive(Debug, Default)]
+struct Occupancy {
+    channel: Vec<DateTime<Utc>>,
+    platforms: BTreeMap<String, Vec<DateTime<Utc>>>,
+}
+
+impl Occupancy {
+    async fn load_on(connection: &mut PgConnection, owner: &str) -> Result<Self, sqlx::Error> {
+        let channel = sqlx::query_scalar("SELECT j.scheduled_at FROM social_production_jobs j
+            WHERE j.twitch_user_id = $1 AND j.scheduled_at IS NOT NULL AND j.status IN ('queued', 'running', 'completed')
+            AND NOT EXISTS (SELECT 1 FROM social_publication_reservations r WHERE r.job_id = j.id AND r.state = 'reserved')
+            UNION SELECT v.scheduled_at FROM social_produced_videos v
+            WHERE v.twitch_user_id = $1 AND v.scheduled_at IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM social_publication_reservations r WHERE r.job_id = v.job_id
+                AND r.state = 'reserved' AND r.scheduled_at = v.scheduled_at)")
+            .bind(owner).fetch_all(&mut *connection).await?;
+        let rows: Vec<(String, DateTime<Utc>)> = sqlx::query_as(
+            "SELECT platform, scheduled_at FROM social_publication_reservations
+            WHERE twitch_user_id = $1 AND state = 'reserved'
+            UNION SELECT q.platform, q.scheduled_at FROM twitch_clips_upload_queue q
+            JOIN twitch_clips_social_media c ON c.id = q.clip_id
+            WHERE c.twitch_user_id = $1 AND q.scheduled_at IS NOT NULL AND q.platform IS NOT NULL
+            AND COALESCE(q.status, '') NOT IN ('failed', 'cancelled')",
+        )
+        .bind(owner)
+        .fetch_all(connection)
+        .await?;
+        let mut platforms: BTreeMap<String, Vec<DateTime<Utc>>> = BTreeMap::new();
+        for (platform, at) in rows {
+            platforms.entry(platform).or_default().extend([at]);
+        }
+        Ok(Self { channel, platforms })
+    }
+
+    fn everything(&self) -> Vec<DateTime<Utc>> {
+        self.channel
+            .iter()
+            .chain(self.platforms.values().flatten())
+            .copied()
+            .collect()
+    }
+
+    fn for_platforms(&self, platforms: &[&str]) -> Vec<DateTime<Utc>> {
+        let mut taken = self.channel.clone();
+        for platform in platforms {
+            taken.extend(self.platforms.get(*platform).into_iter().flatten());
+        }
+        taken
+    }
+
+    fn add(&mut self, allocation: &Allocation) {
+        if allocation.slots.is_empty() {
+            self.channel.extend([allocation.reference]);
+        }
+        for slot in &allocation.slots {
+            self.platforms
+                .entry(slot.platform.clone())
+                .or_default()
+                .extend([slot.scheduled_at]);
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Allocation {
+    pub reference: DateTime<Utc>,
+    pub slots: Vec<Reservation>,
+}
+
+impl Allocation {
+    fn from_reservations(reservations: Vec<Reservation>) -> Option<Self> {
+        let reference = reservations.iter().map(|slot| slot.scheduled_at).min()?;
+        Some(Self {
+            reference,
+            slots: reservations,
+        })
+    }
+}
+
+pub(crate) struct Allocator {
+    settings: AutopilotSettings,
+    policy: PipelinePolicy,
+    occupancy: Occupancy,
+}
+
+impl Allocator {
+    pub(crate) async fn load_on(
+        connection: &mut PgConnection,
+        owner: &str,
+        settings: &AutopilotSettings,
+    ) -> Result<Self, ScheduleError> {
+        let policy = autopilot_settings::load_policy_on(connection, owner).await?;
+        let occupancy = Occupancy::load_on(connection, owner).await?;
+        Ok(Self {
+            settings: settings.clone(),
+            policy,
+            occupancy,
+        })
+    }
+
+    fn scheduled<'a>(&self, platforms: &'a [String]) -> Vec<&'a str> {
+        platforms
+            .iter()
+            .map(String::as_str)
+            .filter(|platform| !self.policy.slots_for(&self.settings, platform).is_empty())
+            .collect()
+    }
+
+    pub(crate) fn has_schedule(&self) -> bool {
+        if self.settings.target_platforms.is_empty() {
+            return !self.settings.schedule_slots.is_empty();
+        }
+        !self.scheduled(&self.settings.target_platforms).is_empty()
+    }
+
+    fn next_in(
+        &self,
+        now: DateTime<Utc>,
+        taken: &[DateTime<Utc>],
+        slots: &[autopilot_settings::ScheduleSlot],
+    ) -> Result<Option<DateTime<Utc>>, ScheduleError> {
+        Ok(autopilot_settings::next_slot_in(
+            now,
+            taken,
+            slots,
+            &self.settings.timezone,
+        )?)
+    }
+
+    fn next_for(
+        &self,
+        now: DateTime<Utc>,
+        platform: &str,
+    ) -> Result<Option<Reservation>, ScheduleError> {
+        let taken = self.occupancy.for_platforms(&[platform]);
+        let slots = self.policy.slots_for(&self.settings, platform);
+        Ok(self
+            .next_in(now, &taken, slots)?
+            .map(|scheduled_at| Reservation {
+                platform: platform.to_owned(),
+                scheduled_at,
+            }))
+    }
+
+    fn channel_wide(&self, now: DateTime<Utc>) -> Result<Option<Allocation>, ScheduleError> {
+        Ok(self
+            .next_in(
+                now,
+                &self.occupancy.everything(),
+                &self.settings.schedule_slots,
+            )?
+            .map(|reference| Allocation {
+                reference,
+                slots: Vec::new(),
+            }))
+    }
+
+    fn shared(
+        &self,
+        now: DateTime<Utc>,
+        targets: &[&str],
+    ) -> Result<Option<Allocation>, ScheduleError> {
+        let taken = self.occupancy.for_platforms(targets);
+        Ok(self
+            .next_in(now, &taken, &self.settings.schedule_slots)?
+            .map(|reference| Allocation {
+                reference,
+                slots: targets
+                    .iter()
+                    .map(|platform| Reservation {
+                        platform: (*platform).to_owned(),
+                        scheduled_at: reference,
+                    })
+                    .collect(),
+            }))
+    }
+
+    fn per_platform(
+        &self,
+        now: DateTime<Utc>,
+        targets: &[&str],
+    ) -> Result<Vec<Reservation>, ScheduleError> {
+        let mut slots = Vec::new();
+        for platform in targets {
+            slots.extend(self.next_for(now, platform)?);
+        }
+        Ok(slots)
+    }
+
+    pub(crate) fn independent(&self) -> bool {
+        self.policy.distribution_policy == DistributionPolicy::IndependentClips
+    }
+
+    pub(crate) fn plan_for(
+        &self,
+        now: DateTime<Utc>,
+        platforms: &[String],
+    ) -> Result<Option<Allocation>, ScheduleError> {
+        self.settings.validate()?;
+        if platforms.is_empty() {
+            return self.channel_wide(now);
+        }
+        let targets = self.scheduled(platforms);
+        if targets.is_empty() {
+            return Ok(None);
+        }
+        if self.independent() {
+            let earliest = self
+                .per_platform(now, &targets)?
+                .into_iter()
+                .min_by_key(|slot| slot.scheduled_at);
+            return Ok(earliest.and_then(|slot| Allocation::from_reservations(vec![slot])));
+        }
+        match self.policy.schedule_scope {
+            PolicyScope::Shared => self.shared(now, &targets),
+            PolicyScope::PerPlatform => Ok(Allocation::from_reservations(
+                self.per_platform(now, &targets)?,
+            )),
+        }
+    }
+
+    pub(crate) fn plan(&self, now: DateTime<Utc>) -> Result<Option<Allocation>, ScheduleError> {
+        self.plan_for(now, &self.settings.target_platforms)
+    }
+
+    pub(crate) fn plan_job(
+        &self,
+        now: DateTime<Utc>,
+        previous: &[Reservation],
+    ) -> Result<Option<Allocation>, ScheduleError> {
+        let kept = previous
+            .iter()
+            .find(|slot| self.settings.target_platforms.contains(&slot.platform));
+        match kept {
+            Some(slot) if self.independent() => {
+                self.plan_for(now, std::slice::from_ref(&slot.platform))
+            }
+            _ => self.plan(now),
+        }
+    }
+
+    pub(crate) fn next_slots(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<BTreeMap<String, DateTime<Utc>>, ScheduleError> {
+        let targets = self.scheduled(&self.settings.target_platforms);
+        let slots = if self.independent() {
+            self.per_platform(now, &targets)?
+        } else {
+            self.plan(now)?.map(|plan| plan.slots).unwrap_or_default()
+        };
+        Ok(slots
+            .into_iter()
+            .map(|slot| (slot.platform, slot.scheduled_at))
+            .collect())
+    }
+
+    fn is_slot(
+        &self,
+        at: DateTime<Utc>,
+        slots: &[autopilot_settings::ScheduleSlot],
+    ) -> Result<bool, ScheduleError> {
+        let before = at - chrono::Duration::seconds(1);
+        Ok(self.next_in(before, &[], slots)? == Some(at))
+    }
+
+    pub(crate) fn holds(
+        &self,
+        at: DateTime<Utc>,
+        reservations: &[Reservation],
+    ) -> Result<bool, ScheduleError> {
+        if reservations.is_empty() {
+            return self.is_slot(at, &self.settings.schedule_slots);
+        }
+        for slot in reservations {
+            let slots = self.policy.slots_for(&self.settings, &slot.platform);
+            if !self.is_slot(slot.scheduled_at, slots)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    pub(crate) fn commit(&mut self, allocation: &Allocation) {
+        self.occupancy.add(allocation);
+    }
+}
+
+pub(crate) async fn reservations_on(
+    connection: &mut PgConnection,
+    job: i64,
+) -> Result<Vec<Reservation>, sqlx::Error> {
+    let rows: Vec<(String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT platform, scheduled_at FROM social_publication_reservations
+        WHERE job_id = $1 AND state = 'reserved' ORDER BY scheduled_at, platform",
+    )
+    .bind(job)
+    .fetch_all(connection)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(platform, scheduled_at)| Reservation {
+            platform,
+            scheduled_at,
+        })
+        .collect())
+}
+
+async fn release_on(connection: &mut PgConnection, job: i64) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE social_publication_reservations SET state = 'released', released_at = clock_timestamp()
+        WHERE job_id = $1 AND state = 'reserved'",
+    )
+    .bind(job)
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn hold_slots_on(
+    connection: &mut PgConnection,
+    owner: &str,
+    job: i64,
+    video: Option<i64>,
+    slots: &[Reservation],
+) -> Result<(), sqlx::Error> {
+    release_on(connection, job).await?;
+    for slot in slots {
+        sqlx::query(
+            "INSERT INTO social_publication_reservations
+            (twitch_user_id, platform, scheduled_at, job_id, produced_video_id) VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(owner)
+        .bind(&slot.platform)
+        .bind(slot.scheduled_at)
+        .bind(job)
+        .bind(video)
+        .execute(&mut *connection)
+        .await?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn reserve_on(
+    connection: &mut PgConnection,
+    owner: &str,
+    job: i64,
+    allocation: Option<&Allocation>,
+) -> Result<(), sqlx::Error> {
+    let active: bool = sqlx::query_scalar(
+        "UPDATE social_production_jobs SET scheduled_at = $3 WHERE id = $1 AND twitch_user_id = $2
+        RETURNING status IN ('queued', 'running', 'completed')",
+    )
+    .bind(job)
+    .bind(owner)
+    .bind(allocation.map(|value| value.reference))
+    .fetch_optional(&mut *connection)
+    .await?
+    .unwrap_or(false);
+    let slots = match allocation {
+        Some(value) if active => value.slots.as_slice(),
+        _ => &[],
+    };
+    hold_slots_on(connection, owner, job, None, slots).await
 }
 
 pub(crate) const REVIEW_LIMIT: i64 = 2;
@@ -156,6 +542,7 @@ pub(crate) fn production_horizon(
 
 pub(crate) fn hold(
     settings: &AutopilotSettings,
+    has_schedule: bool,
     reviews: i64,
     next: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
@@ -169,13 +556,48 @@ pub(crate) fn hold(
     if settings.publish_mode == autopilot_settings::PublishMode::Review && reviews >= REVIEW_LIMIT {
         return Some(ProductionHold::ReviewBacklog);
     }
-    if settings.schedule_slots.is_empty() {
+    if !has_schedule {
         return Some(ProductionHold::NoSchedule);
     }
     if next.is_none_or(|slot| slot > production_horizon(settings, now)) {
         return Some(ProductionHold::OutsideLead);
     }
     None
+}
+
+async fn queue_jobs_on(
+    connection: &mut PgConnection,
+    owner: &str,
+) -> Result<Vec<QueueJob>, ScheduleError> {
+    let jobs = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{SELECT} WHERE twitch_user_id = $1
+        AND status NOT IN ('completed', 'cancelled')
+        ORDER BY CASE WHEN status = 'running' THEN 0 WHEN status = 'queued' THEN 1 ELSE 2 END,
+            queue_order, id LIMIT 500"
+    )))
+    .bind(owner)
+    .fetch_all(&mut *connection)
+    .await?
+    .into_iter()
+    .map(from_row)
+    .collect::<Result<Vec<_>, _>>()?;
+    let clip_ids: Vec<i64> = jobs.iter().map(|job| job.clip_id).collect();
+    let titles: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id::bigint, COALESCE(clip_title, '') FROM twitch_clips_social_media
+        WHERE twitch_user_id = $1 AND id = ANY($2)",
+    )
+    .bind(owner)
+    .bind(&clip_ids)
+    .fetch_all(&mut *connection)
+    .await?;
+    let titles: std::collections::HashMap<i64, String> = titles.into_iter().collect();
+    let mut queued = Vec::with_capacity(jobs.len());
+    for job in jobs {
+        let title = titles.get(&job.clip_id).cloned().unwrap_or_default();
+        let reservations = reservations_on(connection, job.id).await?;
+        queued.extend([QueueJob::from_job(job, title, reservations)?]);
+    }
+    Ok(queued)
 }
 
 pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<ScheduleQueueSnapshot, ScheduleError> {
@@ -191,39 +613,18 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<ScheduleQueueSnapsho
     let now = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut *tx)
         .await?;
-    let next_slot =
-        autopilot_settings::next_shared_slot(now, &taken_on(&mut tx, owner).await?, &settings)?;
+    let allocator = Allocator::load_on(&mut tx, owner, &settings).await?;
+    let next_slot = allocator.plan(now)?.map(|plan| plan.reference);
+    let next_slots = allocator.next_slots(now)?;
     let review_count = review_count_on(&mut tx, owner).await?;
-    let jobs = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "{SELECT} WHERE twitch_user_id = $1
-        AND status NOT IN ('completed', 'cancelled')
-        ORDER BY CASE WHEN status = 'running' THEN 0 WHEN status = 'queued' THEN 1 ELSE 2 END,
-            queue_order, id LIMIT 500"
-    )))
-    .bind(owner)
-    .fetch_all(&mut *tx)
-    .await?
-    .into_iter()
-    .map(from_row)
-    .collect::<Result<Vec<_>, _>>()?;
-    let clip_ids: Vec<i64> = jobs.iter().map(|job| job.clip_id).collect();
-    let titles: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT id::bigint, COALESCE(clip_title, '') FROM twitch_clips_social_media
-        WHERE twitch_user_id = $1 AND id = ANY($2)",
-    )
-    .bind(owner)
-    .bind(&clip_ids)
-    .fetch_all(&mut *tx)
-    .await?;
-    let titles: std::collections::HashMap<i64, String> = titles.into_iter().collect();
-    let queued = jobs
-        .into_iter()
-        .map(|job| {
-            let title = titles.get(&job.clip_id).cloned().unwrap_or_default();
-            QueueJob::from_job(job, title)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut production_hold = hold(&settings, review_count, next_slot, now);
+    let jobs = queue_jobs_on(&mut tx, owner).await?;
+    let mut production_hold = hold(
+        &settings,
+        allocator.has_schedule(),
+        review_count,
+        next_slot,
+        now,
+    );
     if production_hold.is_none() {
         let empty: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM social_autopilot_schedule_state
             WHERE twitch_user_id = $1 AND production_hold = 'empty_pool' AND planned_at > $2 - INTERVAL '2 minutes')")
@@ -243,8 +644,11 @@ pub async fn snapshot(pool: &PgPool, owner: &str) -> Result<ScheduleQueueSnapsho
     Ok(ScheduleQueueSnapshot {
         settings: ScheduleSettings::from(&settings),
         persisted,
+        schedule_scope: allocator.policy.schedule_scope,
+        distribution_policy: allocator.policy.distribution_policy,
         next_slot,
-        jobs: queued,
+        next_slots,
+        jobs,
         review_count,
         production_hold,
         connected_platforms,

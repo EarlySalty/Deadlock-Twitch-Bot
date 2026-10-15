@@ -1,8 +1,8 @@
 use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 use sqlx::{
-    postgres::{PgConnectOptions, PgPoolOptions},
     PgPool,
+    postgres::{PgConnectOptions, PgPoolOptions},
 };
 use std::{
     str::FromStr,
@@ -37,6 +37,18 @@ async fn apply_slot_guards(pool: &PgPool) {
     .execute(pool)
     .await
     .expect("actual M2 migration");
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261015124000_social_pipeline_policy.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("actual pipeline policy migration");
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261015180000_social_destination_slots.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("actual destination slot migration");
 }
 
 async fn pool_before_slot_guards() -> PgPool {
@@ -214,26 +226,30 @@ async fn schedule_narrow_writes_preserve_other_settings_and_validate() {
     assert_eq!(stored.clip_sort, ClipSort::NewestFirst);
     assert_eq!(stored.target_platforms, vec!["youtube"]);
     assert!(!stored.notifications.dashboard);
-    assert!(save_schedule(
-        &pool,
-        "owner",
-        &SchedulePatch {
-            lead_time_hours: Some(721),
-            ..Default::default()
-        }
-    )
-    .await
-    .is_err());
-    assert!(save_schedule(
-        &pool,
-        "owner",
-        &SchedulePatch {
-            timezone: Some("Unknown/Zone".into()),
-            ..Default::default()
-        }
-    )
-    .await
-    .is_err());
+    assert!(
+        save_schedule(
+            &pool,
+            "owner",
+            &SchedulePatch {
+                lead_time_hours: Some(721),
+                ..Default::default()
+            }
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        save_schedule(
+            &pool,
+            "owner",
+            &SchedulePatch {
+                timezone: Some("Unknown/Zone".into()),
+                ..Default::default()
+            }
+        )
+        .await
+        .is_err()
+    );
     assert!(serde_json::from_value::<SchedulePatch>(json!({"publish_mode":"full_auto"})).is_err());
     let loaded = snapshot(&pool, "owner").await.expect("snapshot");
     assert!(loaded.persisted);
@@ -436,10 +452,12 @@ async fn two_reviews_block_automatic_claims_but_not_manual_work() {
         sqlx::query("INSERT INTO social_produced_videos (twitch_user_id,clip_id,job_id,mode,status,file_path,duration_ms,expires_at) VALUES ('owner',$1,$2,'static','review','test.mp4',1000,clock_timestamp()+INTERVAL '7 days')")
             .bind(id).bind(review_job.id).execute(&pool).await.expect("review backlog");
     }
-    assert!(production_jobs::claim_next(&pool)
-        .await
-        .expect("backpressure")
-        .is_none());
+    assert!(
+        production_jobs::claim_next(&pool)
+            .await
+            .expect("backpressure")
+            .is_none()
+    );
     let id = clip(&pool, "owner", "manual", utc("2025-01-01T00:00:00Z")).await;
     let manual = job(&pool, "owner", id, Some(ProductionMode::Ai)).await;
     let running_manual = production_jobs::claim_next(&pool)
@@ -521,117 +539,117 @@ async fn pause_resume_retimes_preserved_queue_without_missed_slot_bursts() {
     cleanup(pool).await;
 }
 
-#[tokio::test]
-async fn shared_slot_guard_covers_produced_and_upload_races() {
-    let pool = pool().await;
-    let one = clip(&pool, "owner", "one", utc("2025-01-01T00:00:00Z")).await;
-    let two = clip(&pool, "owner", "two", utc("2025-01-02T00:00:00Z")).await;
-    let scheduled = utc("2026-10-12T16:00:00Z");
-    let first = production_jobs::insert(
-        &pool,
+fn unique_violation(error: sqlx::Error) -> bool {
+    error
+        .as_database_error()
+        .and_then(|database| database.code())
+        .as_deref()
+        == Some("23505")
+}
+
+async fn manual_job(pool: &PgPool, clip: i64, scheduled_at: Option<DateTime<Utc>>) -> i64 {
+    production_jobs::insert(
+        pool,
         &NewProductionJob {
             twitch_user_id: "owner".into(),
-            clip_id: one,
+            clip_id: clip,
             source: JobSource::Manual,
             requested_mode: Some(ProductionMode::Static),
-            scheduled_at: Some(scheduled),
+            scheduled_at,
             max_attempts: 3,
         },
     )
     .await
-    .expect("production reservation");
-    assert!(sqlx::query("INSERT INTO social_produced_videos (twitch_user_id,clip_id,mode,scheduled_at) VALUES ('owner',$1,'static',$2)").bind(two).bind(scheduled).execute(&pool).await.is_err());
-    assert!(sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,platform,scheduled_at) VALUES ($1,'youtube',$2)").bind(two).bind(scheduled).execute(&pool).await.is_err());
-    let produced: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id,clip_id,job_id,mode,scheduled_at) VALUES ('owner',$1,$2,'static',$3) RETURNING id")
-        .bind(one).bind(first.id).bind(scheduled).fetch_one(&pool).await.expect("same job transfers one reservation");
-    for platform in ["youtube", "tiktok"] {
-        sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,produced_video_id,platform,status,scheduled_at) VALUES ($1,$2,$3,'waiting_exact_file',$4)")
-            .bind(one).bind(produced).bind(platform).bind(scheduled).execute(&pool).await.expect("same immutable video shared across platforms");
-    }
-    cancel(&pool, "owner", first.id)
+    .expect("production job")
+    .id
+}
+
+async fn legacy(pool: &PgPool, name: &str) -> i64 {
+    sqlx::query_scalar("INSERT INTO twitch_clips_social_media (twitch_user_id, clip_id, clip_title, streamer_login, clip_url, source_kind)
+        VALUES ('owner',$1,$1,'owner','https://clips.test/legacy','manual_upload') RETURNING id::bigint")
+        .bind(name).fetch_one(pool).await.expect("legacy clip")
+}
+
+async fn reserve(
+    pool: &PgPool,
+    job: i64,
+    platform: &str,
+    at: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO social_publication_reservations (twitch_user_id, platform, scheduled_at, job_id) VALUES ('owner', $1, $2, $3)")
+        .bind(platform).bind(at).bind(job).execute(pool).await.map(|_| ())
+}
+
+#[tokio::test]
+async fn destination_guard_covers_reservation_and_upload_races() {
+    let pool = pool().await;
+    let one = clip(&pool, "owner", "one", utc("2025-01-01T00:00:00Z")).await;
+    let two = clip(&pool, "owner", "two", utc("2025-01-02T00:00:00Z")).await;
+    let three = legacy(&pool, "three").await;
+    let slot = utc("2026-10-12T16:00:00Z");
+    let first = manual_job(&pool, one, None).await;
+    let second = manual_job(&pool, two, None).await;
+    let (left, right) = tokio::join!(
+        reserve(&pool, first, "youtube", slot),
+        reserve(&pool, second, "youtube", slot)
+    );
+    assert_ne!(left.is_ok(), right.is_ok());
+    assert!(unique_violation(
+        left.err().or(right.err()).expect("one loser")
+    ));
+    let (winner, loser) = if reservations_on(&mut pool.acquire().await.expect("connection"), first)
         .await
-        .expect("unstarted cancellation");
-    assert!(production_jobs::insert(
-        &pool,
-        &NewProductionJob {
-            twitch_user_id: "owner".into(),
-            clip_id: two,
-            source: JobSource::Manual,
-            requested_mode: Some(ProductionMode::Static),
-            scheduled_at: Some(scheduled),
-            max_attempts: 3
-        }
-    )
-    .await
-    .is_err());
-    let third = clip(&pool, "owner", "race-job", utc("2025-01-03T00:00:00Z")).await;
-    let fourth = clip(&pool, "owner", "race-video", utc("2025-01-04T00:00:00Z")).await;
-    let next_slot = scheduled + Duration::days(7);
-    let reservation = NewProductionJob {
-        twitch_user_id: "owner".into(),
-        clip_id: third,
-        source: JobSource::Manual,
-        requested_mode: Some(ProductionMode::Static),
-        scheduled_at: Some(next_slot),
-        max_attempts: 3,
+        .expect("reservations")
+        .is_empty()
+    {
+        (second, first)
+    } else {
+        (first, second)
     };
-    let (job_reservation, video_reservation) = tokio::join!(
-        production_jobs::insert(&pool, &reservation),
-        sqlx::query("INSERT INTO social_produced_videos (twitch_user_id,clip_id,mode,scheduled_at) VALUES ('owner',$1,'static',$2)")
-            .bind(fourth).bind(next_slot).execute(&pool)
-    );
-    assert_ne!(job_reservation.is_ok(), video_reservation.is_ok());
-    let video_slot = scheduled + Duration::days(14);
-    let (video_one, video_two) = tokio::join!(
-        sqlx::query("INSERT INTO social_produced_videos (twitch_user_id,clip_id,mode,version_no,scheduled_at) VALUES ('owner',$1,'static',2,$2)")
-            .bind(third).bind(video_slot).execute(&pool),
-        sqlx::query("INSERT INTO social_produced_videos (twitch_user_id,clip_id,mode,version_no,scheduled_at) VALUES ('owner',$1,'static',2,$2)")
-            .bind(fourth).bind(video_slot).execute(&pool)
-    );
-    assert_ne!(video_one.is_ok(), video_two.is_ok());
-    let rejected = video_one
-        .err()
-        .or_else(|| video_two.err())
-        .expect("one sibling video rejected");
-    assert_eq!(
-        rejected
-            .as_database_error()
-            .expect("actual unique constraint")
-            .code()
-            .as_deref(),
-        Some("23505")
-    );
-    let upload_slot = scheduled + Duration::days(21);
-    let upload_video_one: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id,clip_id,mode,version_no) VALUES ('owner',$1,'static',3) RETURNING id")
-        .bind(third).fetch_one(&pool).await.expect("unscheduled immutable version one");
-    let upload_video_two: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id,clip_id,mode,version_no) VALUES ('owner',$1,'static',3) RETURNING id")
-        .bind(fourth).fetch_one(&pool).await.expect("unscheduled immutable version two");
+    reserve(&pool, loser, "tiktok", slot)
+        .await
+        .expect("other destination at the same time");
+    let video: i64 = sqlx::query_scalar("INSERT INTO social_produced_videos (twitch_user_id,clip_id,job_id,mode,scheduled_at) SELECT 'owner', clip_id, id, 'static', $2 FROM social_production_jobs WHERE id = $1 RETURNING id")
+        .bind(winner).bind(slot).fetch_one(&pool).await.expect("winner video");
+    let winner_clip: i64 =
+        sqlx::query_scalar("SELECT clip_id FROM social_production_jobs WHERE id = $1")
+            .bind(winner)
+            .fetch_one(&pool)
+            .await
+            .expect("winner clip");
+    sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,produced_video_id,platform,status,scheduled_at) VALUES ($1,$2,'youtube','waiting_exact_file',$3)")
+        .bind(winner_clip).bind(video).bind(slot).execute(&pool).await.expect("own reserved destination");
+    let foreign = sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,platform,status,scheduled_at) VALUES ($1,'tiktok','pending',$2)")
+        .bind(three).bind(slot).execute(&pool).await.expect_err("foreign upload on a reserved destination");
+    assert!(unique_violation(foreign));
+    sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,platform,status,scheduled_at) VALUES ($1,'instagram','pending',$2)")
+        .bind(three).bind(slot).execute(&pool).await.expect("free destination at the same time");
+    let upload_slot = slot + Duration::days(7);
     let (upload_one, upload_two) = tokio::join!(
-        sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,produced_video_id,platform,scheduled_at) VALUES ($1,$2,'youtube',$3)")
-            .bind(third).bind(upload_video_one).bind(upload_slot).execute(&pool),
-        sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,produced_video_id,platform,scheduled_at) VALUES ($1,$2,'tiktok',$3)")
-            .bind(fourth).bind(upload_video_two).bind(upload_slot).execute(&pool)
+        sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,platform,scheduled_at) VALUES ($1,'youtube',$2)")
+            .bind(legacy(&pool, "upload-one").await).bind(upload_slot).execute(&pool),
+        sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,platform,scheduled_at) VALUES ($1,'youtube',$2)")
+            .bind(legacy(&pool, "upload-two").await).bind(upload_slot).execute(&pool)
     );
     assert_ne!(upload_one.is_ok(), upload_two.is_ok());
-    let (same_clip, same_video) = if upload_one.is_ok() {
-        (third, upload_video_one)
-    } else {
-        (fourth, upload_video_two)
-    };
-    let rejected = upload_one
-        .err()
-        .or_else(|| upload_two.err())
-        .expect("one sibling upload rejected");
-    assert_eq!(
-        rejected
-            .as_database_error()
-            .expect("actual shared slot guard")
-            .code()
-            .as_deref(),
-        Some("23505")
-    );
-    sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,produced_video_id,platform,scheduled_at) VALUES ($1,$2,'instagram',$3)")
-        .bind(same_clip).bind(same_video).bind(upload_slot).execute(&pool).await.expect("same immutable video reuses one slot across platforms");
+    assert!(unique_violation(
+        upload_one
+            .err()
+            .or(upload_two.err())
+            .expect("one upload loser")
+    ));
+    cancel(&pool, "owner", loser)
+        .await
+        .expect("unstarted cancellation");
+    let fourth = clip(&pool, "owner", "four", utc("2025-01-04T00:00:00Z")).await;
+    sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,platform,status,scheduled_at) VALUES ($1,'tiktok','pending',$2)")
+        .bind(legacy(&pool, "after-cancel").await).bind(slot).execute(&pool).await.expect("cancellation releases the destination");
+    let committed = slot + Duration::days(14);
+    manual_job(&pool, fourth, Some(committed)).await;
+    let blocked = reserve(&pool, winner, "instagram", committed)
+        .await
+        .expect_err("unreserved committed date stays occupied");
+    assert!(unique_violation(blocked));
     cleanup(pool).await;
 }
 
@@ -659,8 +677,8 @@ async fn legacy_uploads_sharing_a_slot_keep_their_status_lifecycle() {
                 .expect("legacy status update in a shared slot");
         }
     }
-    let rejected = sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,platform,status,scheduled_at) VALUES ($1,'instagram','pending',$2)")
-        .bind(rows[0].0).bind(slot).execute(&pool).await.expect_err("legacy insert into a foreign occupied slot");
+    let rejected = sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,platform,status,scheduled_at) VALUES ($1,'tiktok','pending',$2)")
+        .bind(rows[1].0).bind(slot).execute(&pool).await.expect_err("legacy insert into a foreign occupied destination");
     assert_eq!(
         rejected
             .as_database_error()
@@ -670,13 +688,13 @@ async fn legacy_uploads_sharing_a_slot_keep_their_status_lifecycle() {
         Some("23505")
     );
     sqlx::query("UPDATE twitch_clips_upload_queue SET scheduled_at = $2 WHERE id = $1")
-        .bind(rows[1].1)
+        .bind(rows[0].1)
         .bind(slot + Duration::hours(1))
         .execute(&pool)
         .await
         .expect("legacy reschedule");
-    sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,platform,status,scheduled_at) VALUES ($1,'instagram','pending',$2)")
-        .bind(rows[0].0).bind(slot).execute(&pool).await.expect("legacy insert next to its own clip");
+    sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,platform,status,scheduled_at) VALUES ($1,'tiktok','pending',$2)")
+        .bind(rows[1].0).bind(slot).execute(&pool).await.expect("legacy insert into the freed destination");
     cleanup(pool).await;
 }
 

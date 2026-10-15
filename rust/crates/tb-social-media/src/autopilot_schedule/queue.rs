@@ -4,7 +4,7 @@ use serde_json::json;
 use sqlx::{PgConnection, PgPool};
 use std::collections::HashSet;
 
-use super::ScheduleError;
+use super::{Allocation, ScheduleError, reservations_on, reserve_on};
 use crate::autopilot_settings;
 
 async fn unstarted_on(
@@ -32,13 +32,15 @@ async fn reorder_on(
     if requested.len() != ids.len() || requested != actual {
         return Err(ScheduleError::QueueChanged);
     }
-    let mut slots: Vec<DateTime<Utc>> = jobs
-        .iter()
-        .filter(|job| job.2 == "autopilot")
-        .filter_map(|job| job.3)
-        .collect();
-    slots.sort_unstable();
-    let mut slots = slots.into_iter();
+    let mut allocations = Vec::new();
+    for job in jobs.iter().filter(|job| job.2 == "autopilot") {
+        if let Some(reference) = job.3 {
+            let slots = reservations_on(connection, job.0).await?;
+            allocations.extend([Allocation { reference, slots }]);
+        }
+    }
+    allocations.sort_by_key(|allocation| allocation.reference);
+    let mut allocations = allocations.into_iter();
     sqlx::query("UPDATE social_production_jobs SET scheduled_at = NULL
         WHERE twitch_user_id = $1 AND status = 'queued' AND started_at IS NULL AND source = 'autopilot'")
         .bind(owner).execute(&mut *connection).await?;
@@ -47,21 +49,18 @@ async fn reorder_on(
             .iter()
             .find(|job| job.0 == *id)
             .ok_or(ScheduleError::QueueChanged)?;
-        let slot = if job.2 == "autopilot" {
-            slots.next()
-        } else {
-            job.3
-        };
         sqlx::query(
-            "UPDATE social_production_jobs SET queue_order = $3, scheduled_at = $4
+            "UPDATE social_production_jobs SET queue_order = $3
             WHERE id = $1 AND twitch_user_id = $2 AND status = 'queued' AND started_at IS NULL",
         )
         .bind(id)
         .bind(owner)
         .bind(jobs[index].1)
-        .bind(slot)
         .execute(&mut *connection)
         .await?;
+        if job.2 == "autopilot" {
+            reserve_on(connection, owner, *id, allocations.next().as_ref()).await?;
+        }
     }
     Ok(())
 }

@@ -77,6 +77,12 @@ async fn pool(name: &str) -> PgPool {
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261015180000_social_destination_slots.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
     pool
 }
 

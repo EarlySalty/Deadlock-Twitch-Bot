@@ -10,14 +10,17 @@ fn autopilot_review_backpressure_does_not_hold_full_auto() {
         ..Default::default()
     };
     assert_eq!(
-        hold(&settings, 2, next, now),
+        hold(&settings, true, 2, next, now),
         Some(ProductionHold::ReviewBacklog)
     );
-    assert_eq!(hold(&settings, 1, next, now), None);
+    assert_eq!(hold(&settings, true, 1, next, now), None);
     settings.publish_mode = autopilot_settings::PublishMode::FullAuto;
-    assert_eq!(hold(&settings, 2, next, now), None);
+    assert_eq!(hold(&settings, true, 2, next, now), None);
     settings.paused = true;
-    assert_eq!(hold(&settings, 2, next, now), Some(ProductionHold::Paused));
+    assert_eq!(
+        hold(&settings, true, 2, next, now),
+        Some(ProductionHold::Paused)
+    );
 }
 
 #[tokio::test]
@@ -47,16 +50,20 @@ async fn snapshot_uses_real_serial_clip_ids_and_hides_internal_checkpoints() {
         .expect("real serial ID decoding");
     assert_eq!(snapshot.jobs[0].id, second.id);
     assert_eq!(snapshot.jobs.len(), 2);
-    assert!(snapshot
-        .jobs
-        .iter()
-        .all(|job| job.clip_title == "same-clip"));
+    assert!(
+        snapshot
+            .jobs
+            .iter()
+            .all(|job| job.clip_title == "same-clip")
+    );
     let public = serde_json::to_value(&snapshot).expect("public snapshot");
-    assert!(public["jobs"]
-        .as_array()
-        .expect("queue array")
-        .iter()
-        .all(|job| job.get("metadata").is_none() && job.get("internal_analysis").is_none()));
+    assert!(
+        public["jobs"]
+            .as_array()
+            .expect("queue array")
+            .iter()
+            .all(|job| job.get("metadata").is_none() && job.get("internal_analysis").is_none())
+    );
     cleanup(pool).await;
 }
 
@@ -169,9 +176,11 @@ async fn zero_lead_uses_poll_window_and_changed_filters_preserve_queued_clips() 
         .expect("preserved queue");
     assert_eq!(after[0].id, first[0].id);
     assert_eq!(after[0].clip_id, old);
-    assert!(after[0]
-        .scheduled_at
-        .is_some_and(|slot| slot > first[0].scheduled_at.expect("old scheduled slot")));
+    assert!(
+        after[0]
+            .scheduled_at
+            .is_some_and(|slot| slot > first[0].scheduled_at.expect("old scheduled slot"))
+    );
     assert_eq!(after[1].clip_id, current);
     cleanup(pool).await;
 }
@@ -584,11 +593,13 @@ async fn clearing_schedule_while_claim_waits_for_owner_prevents_first_start() {
         .await
         .expect("clear weekly slots under the real owner lock");
     owner_tx.commit().await.expect("release changed schedule");
-    assert!(claim
-        .await
-        .expect("claim task")
-        .expect("locked recheck")
-        .is_none());
+    assert!(
+        claim
+            .await
+            .expect("claim task")
+            .expect("locked recheck")
+            .is_none()
+    );
     let unchanged = production_jobs::get(&pool, "owner", queued.id)
         .await
         .expect("queue after rejected claim")
@@ -681,4 +692,263 @@ async fn completion_retry_and_recovery_lock_owner_before_the_job_row() {
             .expect("transition without deadlock");
         cleanup(pool).await;
     }
+}
+
+fn slot(weekday: u8, local_time: &str) -> ScheduleSlot {
+    ScheduleSlot {
+        weekday,
+        local_time: local_time.into(),
+    }
+}
+
+async fn targets(pool: &PgPool, owner: &str, platforms: &[&str], patch: SchedulePatch) {
+    for platform in platforms {
+        sqlx::query("INSERT INTO social_media_platform_auth (platform, twitch_user_id, enabled) VALUES ($1, $2, 1)")
+            .bind(platform).bind(owner).execute(pool).await.expect("connected destination");
+    }
+    save_schedule(
+        pool,
+        owner,
+        &SchedulePatch {
+            target_platforms: Some(platforms.iter().map(|value| (*value).to_owned()).collect()),
+            ..patch
+        },
+    )
+    .await
+    .expect("targeted schedule");
+}
+
+async fn policy(
+    pool: &PgPool,
+    owner: &str,
+    scope: &str,
+    slots: serde_json::Value,
+    distribution: &str,
+) {
+    sqlx::query("UPDATE social_media_autopilot_settings SET pipeline_mode = 'upload', schedule_scope = $2,
+        platform_schedule_slots = $3::text::jsonb, distribution_policy = $4 WHERE twitch_user_id = $1")
+        .bind(owner).bind(scope).bind(slots.to_string()).bind(distribution)
+        .execute(pool).await.expect("canonical policy");
+}
+
+async fn reserved(pool: &PgPool, owner: &str) -> Vec<(i64, String, DateTime<Utc>)> {
+    sqlx::query_as(
+        "SELECT job_id, platform, scheduled_at FROM social_publication_reservations
+        WHERE twitch_user_id = $1 AND state = 'reserved' ORDER BY scheduled_at, platform, job_id",
+    )
+    .bind(owner)
+    .fetch_all(pool)
+    .await
+    .expect("reservations")
+}
+
+fn planned(report: Result<PlanReport, ScheduleError>) -> u64 {
+    report.expect("planner").created
+}
+
+#[tokio::test]
+async fn shared_schedule_reserves_every_destination_at_several_times_per_weekday() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    let patch = SchedulePatch {
+        lead_time_hours: Some(48),
+        schedule_slots: Some(vec![slot(1, "08:00"), slot(1, "22:00")]),
+        ..schedule()
+    };
+    targets(&pool, "owner", &["youtube", "tiktok"], patch).await;
+    for name in ["a", "b", "c"] {
+        clip(&pool, "owner", name, utc("2025-02-01T00:00:00Z")).await;
+    }
+    let now = utc("2026-10-11T18:00:00Z");
+    let (first, second) = tokio::join!(
+        plan_owner(&pool, "owner", now),
+        plan_owner(&pool, "owner", now)
+    );
+    assert_eq!(planned(first) + planned(second), 2);
+    let jobs = production_jobs::list(&pool, "owner", 500)
+        .await
+        .expect("queue");
+    let morning = utc("2026-10-12T06:00:00Z");
+    let evening = utc("2026-10-12T20:00:00Z");
+    assert_eq!(
+        reserved(&pool, "owner").await,
+        vec![
+            (jobs[0].id, "tiktok".into(), morning),
+            (jobs[0].id, "youtube".into(), morning),
+            (jobs[1].id, "tiktok".into(), evening),
+            (jobs[1].id, "youtube".into(), evening),
+        ]
+    );
+    let state = snapshot(&pool, "owner").await.expect("snapshot");
+    let next = utc("2026-10-19T06:00:00Z");
+    assert_eq!(state.next_slot, Some(next));
+    assert_eq!(state.next_slots.get("youtube"), Some(&next));
+    assert_eq!(state.next_slots.get("tiktok"), Some(&next));
+    assert_eq!(state.jobs[0].reservations.len(), 2);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn per_platform_schedules_take_the_next_free_slot_per_destination() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    let patch = SchedulePatch {
+        lead_time_hours: Some(48),
+        ..schedule()
+    };
+    targets(&pool, "owner", &["youtube", "tiktok"], patch).await;
+    policy(
+        &pool,
+        "owner",
+        "per_platform",
+        json!({"youtube":[{"weekday":1,"local_time":"08:00"}],
+            "tiktok":[{"weekday":1,"local_time":"12:00"},{"weekday":1,"local_time":"20:00"}]}),
+        "same_clip",
+    )
+    .await;
+    let legacy: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_social_media (twitch_user_id, clip_id, clip_title, streamer_login, clip_url, source_kind)
+        VALUES ('owner','legacy','legacy','owner','https://clips.test/legacy','manual_upload') RETURNING id::bigint")
+        .fetch_one(&pool).await.expect("committed legacy clip");
+    sqlx::query("INSERT INTO twitch_clips_upload_queue (clip_id,platform,status,scheduled_at) VALUES ($1,'tiktok','pending',$2)")
+        .bind(legacy).bind(utc("2026-10-12T10:00:00Z")).execute(&pool).await.expect("committed legacy upload");
+    clip(&pool, "owner", "a", utc("2025-02-01T00:00:00Z")).await;
+    clip(&pool, "owner", "b", utc("2025-03-01T00:00:00Z")).await;
+    let report = plan_owner(&pool, "owner", utc("2026-10-11T18:00:00Z"))
+        .await
+        .expect("per destination planner");
+    assert_eq!(report.created, 1);
+    let jobs = production_jobs::list(&pool, "owner", 500)
+        .await
+        .expect("queue");
+    assert_eq!(jobs[0].scheduled_at, Some(utc("2026-10-12T06:00:00Z")));
+    assert_eq!(
+        reserved(&pool, "owner").await,
+        vec![
+            (jobs[0].id, "youtube".into(), utc("2026-10-12T06:00:00Z")),
+            (jobs[0].id, "tiktok".into(), utc("2026-10-12T18:00:00Z")),
+        ]
+    );
+    policy(
+        &pool,
+        "owner",
+        "per_platform",
+        json!({"tiktok":[]}),
+        "same_clip",
+    )
+    .await;
+    let held = plan_owner(&pool, "owner", utc("2026-10-11T18:00:00Z"))
+        .await
+        .expect("no schedule");
+    assert_eq!(held.production_hold, Some(ProductionHold::NoSchedule));
+    assert_eq!(held.created, 0);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn independent_clips_give_each_destination_its_own_clip() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    let patch = SchedulePatch {
+        lead_time_hours: Some(48),
+        ..schedule()
+    };
+    targets(&pool, "owner", &["youtube", "tiktok"], patch).await;
+    policy(&pool, "owner", "shared", json!({}), "independent_clips").await;
+    for name in ["a", "b", "c"] {
+        clip(&pool, "owner", name, utc("2025-02-01T00:00:00Z")).await;
+    }
+    let now = utc("2026-10-11T18:00:00Z");
+    assert_eq!(planned(plan_owner(&pool, "owner", now).await), 2);
+    assert_eq!(planned(plan_owner(&pool, "owner", now).await), 0);
+    let jobs = production_jobs::list(&pool, "owner", 500)
+        .await
+        .expect("queue");
+    assert_eq!(jobs.len(), 2);
+    assert_ne!(jobs[0].clip_id, jobs[1].clip_id);
+    let slots = reserved(&pool, "owner").await;
+    let at = utc("2026-10-12T16:00:00Z");
+    assert_eq!(slots.len(), 2);
+    assert!(slots.iter().all(|slot| slot.2 == at));
+    assert_ne!(slots[0].0, slots[1].0);
+    assert_ne!(slots[0].1, slots[1].1);
+    mark_next(&pool, "owner", jobs[1].id)
+        .await
+        .expect("reorder");
+    let after = reserved(&pool, "owner").await;
+    assert_eq!(after.len(), 2);
+    assert!(after.iter().all(|slot| slot.2 == at));
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn dst_retry_pause_and_missing_targets_keep_reservations_consistent() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    let patch = SchedulePatch {
+        lead_time_hours: Some(72),
+        schedule_slots: Some(vec![slot(1, "08:00")]),
+        ..schedule()
+    };
+    targets(&pool, "owner", &["youtube"], patch).await;
+    clip(&pool, "owner", "a", utc("2025-02-01T00:00:00Z")).await;
+    let now = utc("2026-10-24T12:00:00Z");
+    assert_eq!(planned(plan_owner(&pool, "owner", now).await), 1);
+    let winter = utc("2026-10-26T07:00:00Z");
+    let jobs = production_jobs::list(&pool, "owner", 500)
+        .await
+        .expect("queue");
+    assert_eq!(jobs[0].scheduled_at, Some(winter));
+    sqlx::query("UPDATE social_production_jobs SET status = 'running', mode = 'static', started_at = NOW(), attempts = attempts + 1 WHERE id = $1")
+        .bind(jobs[0].id)
+        .execute(&pool)
+        .await
+        .expect("running job");
+    let claimed = production_jobs::list(&pool, "owner", 500)
+        .await
+        .expect("running queue")
+        .remove(0);
+    assert_eq!(reserved(&pool, "owner").await.len(), 1);
+    retry_or_review(&pool, &claimed, "temporary", true)
+        .await
+        .expect("retry");
+    assert_eq!(
+        reserved(&pool, "owner").await,
+        vec![(jobs[0].id, "youtube".into(), winter)]
+    );
+    save_schedule(
+        &pool,
+        "owner",
+        &SchedulePatch {
+            paused: Some(true),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("pause");
+    let paused = plan_owner(&pool, "owner", now)
+        .await
+        .expect("paused planner");
+    assert_eq!(paused.production_hold, Some(ProductionHold::Paused));
+    assert_eq!(reserved(&pool, "owner").await.len(), 1);
+    sqlx::query("SELECT social_clip_manage_owner('other')")
+        .execute(&pool)
+        .await
+        .expect("managed other owner");
+    save_schedule(&pool, "other", &schedule())
+        .await
+        .expect("untargeted schedule");
+    clip(&pool, "other", "untargeted", utc("2025-02-01T00:00:00Z")).await;
+    let report = plan_owner(&pool, "other", utc("2026-10-12T15:59:30Z"))
+        .await
+        .expect("untargeted planner");
+    assert_eq!(report.created, 1);
+    let untargeted = production_jobs::list(&pool, "other", 500)
+        .await
+        .expect("untargeted queue");
+    assert_eq!(
+        untargeted[0].scheduled_at,
+        Some(utc("2026-10-12T16:00:00Z"))
+    );
+    assert!(reserved(&pool, "other").await.is_empty());
+    cleanup(pool).await;
 }

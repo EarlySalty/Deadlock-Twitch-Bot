@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, PgPool};
 
-use super::{taken_on, ScheduleError};
+use super::{Allocator, Reservation, ScheduleError, hold_slots_on, reservations_on, reserve_on};
 use crate::autopilot_settings::{self, AutopilotSettings, ScheduleSlot};
 
 #[derive(Debug, Clone, Serialize)]
@@ -101,11 +101,6 @@ async fn require_connected(
     Ok(())
 }
 
-fn is_slot(settings: &AutopilotSettings, at: DateTime<Utc>) -> Result<bool, ScheduleError> {
-    let before = at - chrono::Duration::seconds(1);
-    Ok(autopilot_settings::next_shared_slot(before, &[], settings)? == Some(at))
-}
-
 type ScheduledVideo = (i64, Option<i64>, DateTime<Utc>);
 
 async fn move_video_on(
@@ -145,16 +140,21 @@ async fn move_video_on(
 async fn release_queued_on(
     connection: &mut PgConnection,
     owner: &str,
-) -> Result<Vec<i64>, ScheduleError> {
-    let queued: Vec<i64> = sqlx::query_scalar(
+) -> Result<Vec<(i64, Vec<Reservation>)>, ScheduleError> {
+    let ids: Vec<i64> = sqlx::query_scalar(
         "SELECT id FROM social_production_jobs WHERE twitch_user_id = $1 AND source = 'autopilot'
         AND status = 'queued' AND started_at IS NULL ORDER BY queue_order, id FOR UPDATE",
     )
     .bind(owner)
     .fetch_all(&mut *connection)
     .await?;
+    let mut queued = Vec::with_capacity(ids.len());
+    for id in ids {
+        let previous = reservations_on(connection, id).await?;
+        queued.extend([(id, previous)]);
+    }
     sqlx::query("UPDATE social_production_jobs SET scheduled_at = NULL WHERE id = ANY($1)")
-        .bind(&queued)
+        .bind(queued.iter().map(|job| job.0).collect::<Vec<_>>())
         .execute(connection)
         .await?;
     Ok(queued)
@@ -163,9 +163,9 @@ async fn release_queued_on(
 async fn stale_videos_on(
     connection: &mut PgConnection,
     owner: &str,
-    settings: &AutopilotSettings,
+    allocator: &Allocator,
     now: DateTime<Utc>,
-) -> Result<Vec<ScheduledVideo>, ScheduleError> {
+) -> Result<Vec<(ScheduledVideo, Vec<Reservation>)>, ScheduleError> {
     let videos: Vec<ScheduledVideo> = sqlx::query_as(
         "SELECT v.id, v.job_id, v.scheduled_at FROM social_produced_videos v
         WHERE v.twitch_user_id = $1 AND v.scheduled_at IS NOT NULL AND v.publication_executed_at IS NULL
@@ -176,12 +176,16 @@ async fn stale_videos_on(
         ORDER BY v.scheduled_at, v.id FOR UPDATE OF v",
     )
     .bind(owner)
-    .fetch_all(connection)
+    .fetch_all(&mut *connection)
     .await?;
     let mut stale = Vec::new();
     for video in videos {
-        if video.2 <= now || !is_slot(settings, video.2)? {
-            stale.extend([video]);
+        let reservations = match video.1 {
+            Some(job) => reservations_on(connection, job).await?,
+            None => Vec::new(),
+        };
+        if video.2 <= now || !allocator.holds(video.2, &reservations)? {
+            stale.extend([(video, reservations)]);
         }
     }
     Ok(stale)
@@ -196,21 +200,36 @@ async fn retime_on(
         .fetch_one(&mut *connection)
         .await?;
     let queued = release_queued_on(connection, owner).await?;
-    let stale = stale_videos_on(connection, owner, settings, now).await?;
-    let mut taken = taken_on(connection, owner).await?;
-    for video in stale {
-        let slot = autopilot_settings::next_shared_slot(now, &taken, settings)?;
-        move_video_on(connection, &video, slot).await?;
-        taken.extend(slot);
+    let probe = Allocator::load_on(connection, owner, settings).await?;
+    let stale = stale_videos_on(connection, owner, &probe, now).await?;
+    for (video, _) in &stale {
+        if let Some(job) = video.1 {
+            hold_slots_on(connection, owner, job, None, &[]).await?;
+        }
     }
-    for id in queued {
-        let slot = autopilot_settings::next_shared_slot(now, &taken, settings)?;
-        sqlx::query("UPDATE social_production_jobs SET scheduled_at = $2 WHERE id = $1")
-            .bind(id)
-            .bind(slot)
-            .execute(&mut *connection)
-            .await?;
-        taken.extend(slot);
+    let mut allocator = Allocator::load_on(connection, owner, settings).await?;
+    for (video, previous) in stale {
+        let platforms: Vec<String> = previous.into_iter().map(|slot| slot.platform).collect();
+        let allocation = allocator.plan_for(now, &platforms)?;
+        move_video_on(
+            connection,
+            &video,
+            allocation.as_ref().map(|plan| plan.reference),
+        )
+        .await?;
+        if let (Some(job), Some(allocation)) = (video.1, &allocation) {
+            hold_slots_on(connection, owner, job, Some(video.0), &allocation.slots).await?;
+        }
+        if let Some(allocation) = allocation {
+            allocator.commit(&allocation);
+        }
+    }
+    for (id, previous) in queued {
+        let allocation = allocator.plan_job(now, &previous)?;
+        reserve_on(connection, owner, id, allocation.as_ref()).await?;
+        if let Some(allocation) = allocation {
+            allocator.commit(&allocation);
+        }
     }
     Ok(())
 }

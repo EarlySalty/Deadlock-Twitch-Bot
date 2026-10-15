@@ -65,6 +65,12 @@ async fn pool() -> PgPool {
     .execute(&pool)
     .await
     .expect("canonical policy migration");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20261015180000_social_destination_slots.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("destination slot migration");
     pool
 }
 
@@ -203,7 +209,7 @@ async fn postgres_contracts_preserve_legacy_and_exact_file_reservations() {
     );
     let legacy_id: i64 = sqlx::query_scalar("INSERT INTO twitch_clips_upload_queue (clip_id, platform, status, scheduled_at) VALUES ($1, 'youtube', 'pending', NOW() - INTERVAL '1 hour') RETURNING id")
         .bind(clips[2]).fetch_one(&pool).await.expect("legacy queue");
-    sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'pending', scheduled_at = NOW() - INTERVAL '1 hour' WHERE produced_video_id IS NOT NULL")
+    sqlx::query("UPDATE twitch_clips_upload_queue SET status = 'pending', scheduled_at = NOW() - INTERVAL '1 hour' - id * INTERVAL '1 second' WHERE produced_video_id IS NOT NULL")
         .execute(&pool).await.expect("defensive legacy retrieval test");
     let queue = crate::clip_queue::get_upload_queue(&pool, None, "pending", 20, None).await;
     assert_eq!(queue.len(), 1);

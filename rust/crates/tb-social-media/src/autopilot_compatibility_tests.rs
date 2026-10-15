@@ -81,6 +81,12 @@ async fn fixture(schema: &str) -> PgPool {
     .execute(&pool)
     .await
     .expect("actual M0 migration");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20261015180000_social_destination_slots.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("destination slot migration");
     pool
 }
 

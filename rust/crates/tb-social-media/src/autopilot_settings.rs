@@ -262,12 +262,19 @@ pub fn next_shared_slot(
     settings: &AutopilotSettings,
 ) -> Result<Option<DateTime<Utc>>, SettingsError> {
     settings.validate()?;
-    let timezone = settings
-        .timezone
+    next_slot_in(now, taken, &settings.schedule_slots, &settings.timezone)
+}
+
+pub fn next_slot_in(
+    now: DateTime<Utc>,
+    taken: &[DateTime<Utc>],
+    slots: &[ScheduleSlot],
+    timezone: &str,
+) -> Result<Option<DateTime<Utc>>, SettingsError> {
+    let timezone = timezone
         .parse::<Tz>()
         .map_err(|_| SettingsError::Invalid("Unbekannte IANA-Zeitzone".into()))?;
-    let mut times = settings
-        .schedule_slots
+    let mut times = slots
         .iter()
         .map(|slot| Ok((slot.weekday, slot_time(slot)?)))
         .collect::<Result<Vec<_>, SettingsError>>()?;
@@ -381,6 +388,20 @@ pub struct PipelinePolicy {
 }
 
 impl PipelinePolicy {
+    pub fn slots_for<'a>(
+        &'a self,
+        settings: &'a AutopilotSettings,
+        platform: &str,
+    ) -> &'a [ScheduleSlot] {
+        match self.schedule_scope {
+            PolicyScope::Shared => &settings.schedule_slots,
+            PolicyScope::PerPlatform => self
+                .platform_schedule_slots
+                .get(platform)
+                .map_or(&[], Vec::as_slice),
+        }
+    }
+
     pub fn validate(&self) -> Result<(), SettingsError> {
         if self.policy_revision < 0 {
             return Err(SettingsError::Invalid(
@@ -423,11 +444,19 @@ impl PipelinePolicy {
 }
 
 pub async fn load_policy(pool: &PgPool, owner: &str) -> Result<PipelinePolicy, SettingsError> {
+    let mut connection = pool.acquire().await?;
+    load_policy_on(&mut connection, owner).await
+}
+
+pub(crate) async fn load_policy_on(
+    connection: &mut PgConnection,
+    owner: &str,
+) -> Result<PipelinePolicy, SettingsError> {
     let raw: Option<String> = sqlx::query_scalar(
         "SELECT to_jsonb(s)::text FROM social_media_autopilot_settings s WHERE twitch_user_id = $1",
     )
     .bind(owner)
-    .fetch_optional(pool)
+    .fetch_optional(connection)
     .await?;
     let Some(raw) = raw else {
         return Ok(PipelinePolicy::default());
