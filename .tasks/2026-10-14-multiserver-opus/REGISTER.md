@@ -1,18 +1,22 @@
 # Register (max 30 lines)
 
-Round 2 (Opus r2, 2026-10-15): Main = LIVE 1a46231ee (D2-D10, O, O2, W1-W3; G0 reverted). Report to main orch f52add9e-54d7-4bc7-9351-2bb88580787b. Round 1 thread 44b13b55 stopped, do not resume.
+Round 2 (Opus r2, 2026-10-15): Main = 408557c6a (D11-D13, SOC-EN, SEC-NPM, H1 on top of LIVE 1a46231ee). Release 408557c6a building/deploying. Report to main orch f52add9e-54d7-4bc7-9351-2bb88580787b. Round 1 thread 44b13b55 stopped, do not resume.
 
 | Pkg | Agent | Worktree | Branch | HEAD | Status |
 |---|---|---|---|---|---|
 | D2-D10, D-core, D3a/b | done | - | deleted | - | merged, live 1a46231ee |
 | O, O2, W1-W3 | done | - | deleted | - | merged, live; #1062, #1068 closed |
 | G0 schema | done | - | kept feat/opus-g0-shadow-schema-20261014 | b3c7b5dc8 | merged 3fb21fee4, reverted 47f3e26ab |
-| D11 Verwaltung | sol r2 | ttb-opus-d11-20261014 | feat/opus-d11-pages-english-20261014 | 995f4b061 | finishing + gate |
-| D12 Uplink/social meta | sol r2 | ttb-opus-d12-20261014 | feat/opus-d12-pages-english-20261014 | a92bf7320 | finishing + gate |
-| D13 trial/onboarding | sol r2 | ttb-opus-d13-20261014 | feat/opus-d13-pages-english-20261014 | 820001ae3 | finishing + gate |
-| H1 hub | sol r2 | ttb-opus-h1-20261014 | feat/opus-h1-discord-hub-20261014 | f97e73bfd (pushed) | user decided per-bucket serialization; rebuilding |
-| SEC rustls | done | - | - | - | main already clean (push-gate scan exit 0); feat/tiktok-dialog-presets deleted (patch-identical 091794583); social-ap-finish already gone |
-| TEST | done | - | - | - | npm test on 1a46231ee green (478+20 pass, 0 fail), no fix needed |
+| D12 + D13 | done | - | deleted | - | merged 3d96fe282, gate ALLOW |
+| SEC-NPM source-map-js | done | - | deleted | - | merged f31a1a57b |
+| D11 Verwaltung | done | - | deleted | - | merged 83389fa3f, gate ALLOW (nit: EN overlay previews vs DE OBS output) |
+| SOC-EN + approval legend | done | - | deleted | - | merged e4849ebd6, gate ALLOW |
+| H1 hub (per-bucket serialization) | done | - | deleted | df58666d6 | merged 408557c6a, gate ALLOW (sol), 73 tests; new crate, not deployed as service yet |
+| SEC rustls | done | - | - | - | main clean; feat/tiktok-dialog-presets deleted (patch-identical 091794583) |
+| TEST | done | - | - | - | npm test green (480+20, 0 fail) |
+| 390px check | done | - | - | - | no overflow DE/EN on demo tabs, /twitch/, /twitch/demo, /twitch/social-media, dead-lock.de |
 
-Queue: 390px live overflow check, C, A, L, SOC-EN (after D12 merge).
-G, K: BLOCKED by user decision: prod DB rotation after 13.10 leak not confirmed (main orch, 2026-10-15).
+Blocked:
+- L #1069: Fireworks HTTP 412 (account suspended), billing = user/money decision.
+- G #1063, K: prod DB rotation after 13.10 leak not confirmed (user decision). C #1067, A #1064 depend on G.
+- Canonical checkout /home/nathanael/repos/Deadlock-Twitch-Bot is on a stale HEAD with rustls 0.23.45; push-gate scans from there fail. Push from worktrees on main.
