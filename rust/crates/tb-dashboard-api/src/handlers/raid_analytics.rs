@@ -423,6 +423,7 @@ fn retention_pct(chatters: i64, viewers_sent: i64) -> f64 {
 pub async fn raid_analytics_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
+    cache: Option<axum::Extension<crate::aggregate_cache::AggregateCache>>,
     Query(params): Query<RaidQuery>,
 ) -> impl IntoResponse {
     // Python api_raids.py:32 / api_overview.py:1950: _require_v2_auth + _require_extended_plan.
@@ -443,6 +444,11 @@ pub async fn raid_analytics_handler(
             Err(resp) => return resp,
         };
     let days = params.days.unwrap_or(30).clamp(7, 3650);
+    let cache = cache
+        .map(|axum::Extension(cache)| cache)
+        .unwrap_or_default();
+    let key = format!("raids:{auth:?}:{streamer:?}:{days}");
+    cache.respond(key, async {
     let since: DateTime<Utc> = Utc::now() - chrono::Duration::days(days as i64);
 
     let bots: Vec<String> = KNOWN_CHAT_BOTS.iter().map(|s| s.to_string()).collect();
@@ -712,11 +718,45 @@ pub async fn raid_analytics_handler(
         }
     };
 
+    let detected_times: Vec<DateTime<Utc>> = incoming_raw.iter().map(|row| row.detected_at).collect();
+    let sessions = sqlx::query_as::<_, (i64, i64, DateTime<Utc>)>(
+        "SELECT d.position::bigint, s.id::bigint, s.started_at
+         FROM unnest($2::timestamptz[]) WITH ORDINALITY AS d(detected_at, position)
+         JOIN LATERAL (
+             SELECT id, started_at FROM twitch_stream_sessions
+             WHERE LOWER(streamer_login) = $1 AND started_at <= d.detected_at
+               AND (ended_at IS NULL OR ended_at >= d.detected_at)
+             LIMIT 1
+         ) s ON TRUE",
+    ).bind(&streamer).bind(&detected_times).fetch_all(&pool).await.unwrap_or_default();
+    let session_ids: Vec<i64> = sessions.iter().map(|(_, id, _)| *id).collect();
+    let timeline_rows = sqlx::query_as::<_, (i64, Option<i32>, i64)>(
+        "SELECT session_id::bigint, minutes_from_start, viewer_count::bigint
+         FROM twitch_session_viewers WHERE session_id = ANY($1::bigint[])
+         ORDER BY session_id, minutes_from_start",
+    ).bind(&session_ids).fetch_all(&pool).await.unwrap_or_default();
+    let mut timelines: HashMap<i64, HashMap<i32, i64>> = HashMap::new();
+    for (id, minute, viewers) in timeline_rows {
+        let timeline = timelines.entry(id).or_default();
+        if let Some(minute) = minute {
+            timeline.insert(minute, viewers);
+        }
+    }
+    let follows = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT d.position::bigint, COUNT(f.followed_at)::bigint
+         FROM unnest($2::timestamptz[]) WITH ORDINALITY AS d(detected_at, position)
+         LEFT JOIN twitch_follow_events f ON LOWER(f.streamer_login) = $1
+           AND f.followed_at BETWEEN d.detected_at AND d.detected_at + INTERVAL '30 minutes'
+         GROUP BY d.position",
+    ).bind(&streamer).bind(&detected_times).fetch_all(&pool).await.unwrap_or_default();
+    let follows: HashMap<i64, i64> = follows.into_iter().collect();
+    let sessions: HashMap<i64, (i64, DateTime<Utc>)> = sessions.into_iter().map(|(position, id, start)| (position, (id, start))).collect();
+
     let mut incoming_raids: Vec<Value> = vec![];
     let mut boost_values: Vec<f64> = vec![];
     let mut retention_15m_values: Vec<f64> = vec![];
 
-    for rr in &incoming_raw {
+    for (index, rr) in incoming_raw.iter().enumerate() {
         let detected_at = Some(rr.detected_at);
         let from_channel = rr.from_broadcaster_login.clone();
         let viewers_sent = rr.viewer_count.unwrap_or(0);
@@ -728,40 +768,10 @@ pub async fn raid_analytics_handler(
         });
 
         if let Some(det) = detected_at {
-            // Session suchen
-            let sess = sqlx::query!(
-                r#"SELECT id, started_at FROM twitch_stream_sessions
-                   WHERE LOWER(streamer_login) = $1 AND started_at <= $2
-                     AND (ended_at IS NULL OR ended_at >= $2)
-                   LIMIT 1"#,
-                &streamer,
-                det
-            )
-            .fetch_optional(&pool)
-            .await
-            .ok()
-            .flatten();
-
-            if let Some(sess_row) = sess {
-                let session_id = sess_row.id;
-                let sess_start = Some(sess_row.started_at);
-                let raid_minute = sess_start
-                    .map(|ss| ((det - ss).num_seconds() / 60) as i32)
-                    .unwrap_or(0)
-                    .max(0);
-
-                let tl_rows = sqlx::query!(
-                    "SELECT minutes_from_start, viewer_count::bigint AS \"viewer_count!\" FROM twitch_session_viewers WHERE session_id = $1 ORDER BY minutes_from_start",
-                    session_id
-                )
-                .fetch_all(&pool).await.unwrap_or_default();
-
-                if !tl_rows.is_empty() {
-                    let timeline: HashMap<i32, i64> = tl_rows
-                        .iter()
-                        .filter_map(|r| Some((r.minutes_from_start?, r.viewer_count)))
-                        .collect();
-
+            let position = index as i64 + 1;
+            if let Some((session_id, sess_start)) = sessions.get(&position) {
+                let raid_minute = ((det - *sess_start).num_seconds() / 60).max(0) as i32;
+                if let Some(timeline) = timelines.get(session_id) {
                     let before: Vec<i64> = timeline
                         .iter()
                         .filter(|(&m, _)| (raid_minute - 3) <= m && m < raid_minute)
@@ -814,15 +824,8 @@ pub async fn raid_analytics_handler(
                     }
                 }
 
-                // Follows innerhalb 30 Min nach Raid
-                let follow_row = sqlx::query!(
-                    "SELECT COUNT(*) AS \"follows!\" FROM twitch_follow_events WHERE LOWER(streamer_login) = $1 AND followed_at BETWEEN $2 AND $2 + INTERVAL '30 minutes'",
-                    &streamer,
-                    det
-                )
-                .fetch_optional(&pool).await.ok().flatten();
-                if let Some(fr) = follow_row {
-                    impact["follows_after_raid"] = json!(fr.follows);
+                if let Some(follows) = follows.get(&position) {
+                    impact["follows_after_raid"] = json!(follows);
                 }
             }
         }
@@ -912,6 +915,7 @@ pub async fn raid_analytics_handler(
         },
     }))
     .into_response()
+    }).await
 }
 
 #[cfg(test)]
@@ -1112,6 +1116,7 @@ mod tests {
         let resp = raid_analytics_handler(
             DashboardAuthLevel::admin(),
             State(pool),
+            None,
             Query(RaidQuery {
                 streamer: Some("nani".into()),
                 days: Some(30),
@@ -1145,6 +1150,7 @@ mod tests {
         let resp = raid_analytics_handler(
             auth,
             State(pool),
+            None,
             Query(RaidQuery {
                 streamer: Some("fremd".into()),
                 days: Some(30),

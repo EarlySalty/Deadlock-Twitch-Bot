@@ -49,8 +49,9 @@ pub struct LeaderboardQuery {
 }
 
 /// Eine Rangliste-Zeile aus der Snapshot-Aggregation.
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 struct TopRow {
+    tracked: Option<bool>,
     twitch_user_id: Option<String>,
     streamer: String,
     avg_viewers: Option<f64>,
@@ -66,92 +67,104 @@ struct TopRow {
 pub async fn leaderboard_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
+    cache: Option<Extension<crate::aggregate_cache::AggregateCache>>,
     Query(params): Query<LeaderboardQuery>,
 ) -> Response {
     if !auth.is_authenticated() {
         return crate::auth::unauthorized_v2_response();
     }
 
-    let sort_key = normalize_sort(params.sort.as_deref());
-    let descending = !matches!(
-        params.order.as_deref().map(str::to_lowercase).as_deref(),
-        Some("asc")
+    let cache = cache.map(|Extension(cache)| cache).unwrap_or_default();
+    let key = format!(
+        "leaderboard:{auth:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
+        params.sort, params.order, params.limit, params.min_samples, params.min_avg
     );
-    let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-    let min_samples = params.min_samples.filter(|&v| v > 0);
-    let min_avg = params.min_avg.filter(|&v| v > 0.0);
+    cache
+        .respond(key, async {
+            let sort_key = normalize_sort(params.sort.as_deref());
+            let descending = !matches!(
+                params.order.as_deref().map(str::to_lowercase).as_deref(),
+                Some("asc")
+            );
+            let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+            let min_samples = params.min_samples.filter(|&v| v > 0);
+            let min_avg = params.min_avg.filter(|&v| v > 0.0);
 
-    let tracked = match load_category(&pool, true).await {
-        Ok(rows) => rows,
-        Err(error) => {
-            tracing::error!(%error, "leaderboard tracked query failed");
-            return analytics_error();
-        }
-    };
-    let category = match load_category(&pool, false).await {
-        Ok(rows) => rows,
-        Err(error) => {
-            tracing::error!(%error, "leaderboard category query failed");
-            return analytics_error();
-        }
-    };
+            let rows = match load_categories(&pool).await {
+                Ok(rows) => rows,
+                Err(error) => {
+                    tracing::error!(%error, "leaderboard query failed");
+                    return analytics_error();
+                }
+            };
+            let tracked = rows
+                .iter()
+                .filter(|row| row.tracked == Some(true))
+                .cloned()
+                .collect();
+            let category = rows
+                .into_iter()
+                .filter(|row| row.tracked == Some(false))
+                .collect();
 
-    // P2.124: Discord-IDs/-Namen nur für privilegierte Aufrufer (Localhost/Admin)
-    // serialisieren — nicht für eingeloggte Partner (Python: localhost-only gate).
-    let show_discord = auth.is_privileged();
-    let own_login = match &auth {
-        DashboardAuthLevel::Partner { twitch_user_id, .. } => Some(twitch_user_id.as_str()),
-        DashboardAuthLevel::Admin {
-            actor: Some(actor), ..
-        } => Some(actor.twitch_user_id.as_str()),
-        DashboardAuthLevel::Admin { actor: None } | DashboardAuthLevel::None => None,
-    };
-    let shape_options = ShapeOptions {
-        sort_key,
-        descending,
-        min_samples,
-        min_avg,
-        limit,
-        show_discord,
-    };
-    let (tracked_entries, tracked_own_position) =
-        shape_entries_with_own(tracked, shape_options, own_login);
-    let category_entries = shape_entries(
-        category,
-        sort_key,
-        descending,
-        min_samples,
-        min_avg,
-        limit,
-        show_discord,
-    );
+            // P2.124: Discord-IDs/-Namen nur für privilegierte Aufrufer (Localhost/Admin)
+            // serialisieren — nicht für eingeloggte Partner (Python: localhost-only gate).
+            let show_discord = auth.is_privileged();
+            let own_login = match &auth {
+                DashboardAuthLevel::Partner { twitch_user_id, .. } => Some(twitch_user_id.as_str()),
+                DashboardAuthLevel::Admin {
+                    actor: Some(actor), ..
+                } => Some(actor.twitch_user_id.as_str()),
+                DashboardAuthLevel::Admin { actor: None } | DashboardAuthLevel::None => None,
+            };
+            let shape_options = ShapeOptions {
+                sort_key,
+                descending,
+                min_samples,
+                min_avg,
+                limit,
+                show_discord,
+            };
+            let (tracked_entries, tracked_own_position) =
+                shape_entries_with_own(tracked, shape_options, own_login);
+            let category_entries = shape_entries(
+                category,
+                sort_key,
+                descending,
+                min_samples,
+                min_avg,
+                limit,
+                show_discord,
+            );
 
-    Json(json!({
-        "window": { "days": 30 },
-        "options": {
-            "sort_key": sort_key.as_str(),
-            "sort_order": if descending { "desc" } else { "asc" },
-            "limit": limit,
-            "min_samples": min_samples,
-            "min_avg": min_avg,
-        },
-        "categories": [
-            {
-                "key": "tracked",
-                "title": "Top Tracked",
-                "count": tracked_entries.len(),
-                "entries": tracked_entries,
-                "own_position": tracked_own_position,
-            },
-            {
-                "key": "category",
-                "title": "Top Kategorie",
-                "count": category_entries.len(),
-                "entries": category_entries,
-            },
-        ],
-    }))
-    .into_response()
+            Json(json!({
+                "window": { "days": 30 },
+                "options": {
+                    "sort_key": sort_key.as_str(),
+                    "sort_order": if descending { "desc" } else { "asc" },
+                    "limit": limit,
+                    "min_samples": min_samples,
+                    "min_avg": min_avg,
+                },
+                "categories": [
+                    {
+                        "key": "tracked",
+                        "title": "Top Tracked",
+                        "count": tracked_entries.len(),
+                        "entries": tracked_entries,
+                        "own_position": tracked_own_position,
+                    },
+                    {
+                        "key": "category",
+                        "title": "Top Kategorie",
+                        "count": category_entries.len(),
+                        "entries": category_entries,
+                    },
+                ],
+            }))
+            .into_response()
+        })
+        .await
 }
 
 /// `GET /twitch/api/v2/leaderboard/effort`.
@@ -369,50 +382,50 @@ fn normalize_sort(raw: Option<&str>) -> SortKey {
 /// `ts_utc` ist Text → explizit auf `timestamptz` gecastet (Python verlässt sich
 /// auf den impliziten Cast; explizit ist robuster gegen abweichende Spaltentypen).
 /// Discord-/Partner-Felder kommen per LEFT JOIN aus der Partner-State-View.
+#[cfg(test)]
 async fn load_category(pool: &PgPool, tracked: bool) -> Result<Vec<TopRow>, sqlx::Error> {
-    // Partner-Zugehörigkeit (IN bei tracked, NOT IN bei category).
-    let membership = if tracked {
-        "LOWER(s.streamer) IN (SELECT LOWER(twitch_login) FROM twitch_streamers_partner_state WHERE is_partner_active = 1)"
-    } else {
-        "LOWER(s.streamer) NOT IN (SELECT LOWER(twitch_login) FROM twitch_streamers_partner_state WHERE is_partner_active = 1)"
-    };
+    Ok(load_categories(pool)
+        .await?
+        .into_iter()
+        .filter(|row| row.tracked == Some(tracked))
+        .collect())
+}
 
-    let sql = format!(
-        r#"
-        WITH source_rows AS (
-            SELECT streamer, viewer_count, is_partner, ts_utc FROM twitch_stats_tracked
-            UNION ALL
-            SELECT streamer, viewer_count, is_partner, ts_utc FROM twitch_stats_category
-        ),
-        agg AS (
-            SELECT s.streamer AS streamer,
-                   AVG(s.viewer_count)::float8 AS avg_viewers,
-                   MAX(s.viewer_count)::int8   AS max_viewers,
-                   COUNT(*)::int8              AS samples,
-                   MAX(CASE WHEN COALESCE(s.is_partner, FALSE) THEN 1 ELSE 0 END)::int8 AS is_partner
-              FROM source_rows s
-             WHERE s.ts_utc::timestamptz >= NOW() - INTERVAL '30 days'
-               AND {membership}
-             GROUP BY s.streamer
+async fn load_categories(pool: &PgPool) -> Result<Vec<TopRow>, sqlx::Error> {
+    let sql = r#"
+        WITH tracked_rows AS MATERIALIZED (
+            SELECT streamer, SUM(viewer_count)::numeric AS viewers, COUNT(viewer_count) AS viewer_samples,
+                   MAX(viewer_count)::bigint AS max_viewers, COUNT(*) AS samples,
+                   MAX(CASE WHEN COALESCE(is_partner, FALSE) THEN 1 ELSE 0 END) AS is_partner
+            FROM twitch_stats_tracked WHERE ts_utc >= NOW() - INTERVAL '30 days' GROUP BY streamer
+        ), category_rows AS MATERIALIZED (
+            SELECT streamer, SUM(viewer_count)::numeric AS viewers, COUNT(viewer_count) AS viewer_samples,
+                   MAX(viewer_count)::bigint AS max_viewers, COUNT(*) AS samples,
+                   MAX(CASE WHEN COALESCE(is_partner, FALSE) THEN 1 ELSE 0 END) AS is_partner
+            FROM twitch_stats_category WHERE ts_utc >= NOW() - INTERVAL '30 days' GROUP BY streamer
+        ), source_rows AS (
+            SELECT * FROM tracked_rows UNION ALL SELECT * FROM category_rows
+        ), agg AS (
+            SELECT streamer, (SUM(viewers) / NULLIF(SUM(viewer_samples), 0))::float8 AS avg_viewers,
+                   MAX(max_viewers)::bigint AS max_viewers, SUM(samples)::bigint AS samples,
+                   MAX(is_partner)::bigint AS is_partner
+            FROM source_rows GROUP BY streamer
+        ), partners AS MATERIALIZED (
+            SELECT * FROM twitch_streamers_partner_state
         )
         SELECT a.streamer, ps.twitch_user_id,
-               a.avg_viewers,
-               a.max_viewers,
-               a.samples,
+               LOWER(a.streamer) IN (SELECT LOWER(twitch_login) FROM partners WHERE is_partner_active = 1) AS tracked,
+               a.avg_viewers, a.max_viewers, a.samples,
                GREATEST(a.is_partner, CASE WHEN ps.is_partner_active = 1 THEN 1 ELSE 0 END)::int8 AS is_partner,
                CASE WHEN COALESCE(ps.is_on_discord, 0) <> 0 OR NULLIF(TRIM(COALESCE(ps.discord_user_id, '')), '') IS NOT NULL
                     THEN 1 ELSE 0 END::int8 AS is_on_discord,
-               NULLIF(TRIM(COALESCE(ps.discord_user_id, '')), '')      AS discord_user_id,
+               NULLIF(TRIM(COALESCE(ps.discord_user_id, '')), '') AS discord_user_id,
                NULLIF(TRIM(COALESCE(ps.discord_display_name, '')), '') AS discord_display_name
-          FROM agg a
-          LEFT JOIN twitch_streamers_partner_state ps
-                 ON LOWER(ps.twitch_login) = LOWER(a.streamer)
-        "#,
-    );
+        FROM agg a LEFT JOIN partners ps ON LOWER(ps.twitch_login) = LOWER(a.streamer)
+        ORDER BY a.streamer
+        "#;
 
-    sqlx::query_as::<_, TopRow>(sqlx::AssertSqlSafe(sql))
-        .fetch_all(pool)
-        .await
+    sqlx::query_as::<_, TopRow>(sql).fetch_all(pool).await
 }
 
 /// Filtert, sortiert und kürzt auf das angeforderte Limit.
@@ -528,6 +541,7 @@ mod tests {
 
     fn row(streamer: &str, avg: f64, peak: i64, samples: i64) -> TopRow {
         TopRow {
+            tracked: None,
             twitch_user_id: Some(streamer.into()),
             streamer: streamer.into(),
             avg_viewers: Some(avg),
@@ -635,6 +649,7 @@ mod tests {
     #[test]
     fn shape_gatet_discord_felder() {
         let with_discord = TopRow {
+            tracked: None,
             twitch_user_id: Some("111".into()),
             streamer: "nani".into(),
             avg_viewers: Some(100.0),
@@ -674,6 +689,7 @@ mod tests {
 
     fn clone_row(r: &TopRow) -> TopRow {
         TopRow {
+            tracked: None,
             twitch_user_id: r.twitch_user_id.clone(),
             streamer: r.streamer.clone(),
             avg_viewers: r.avg_viewers,
@@ -717,10 +733,10 @@ mod tests {
             .await
             .unwrap();
         for ddl in [
-            "CREATE TABLE twitch_stats_tracked (ts_utc TEXT, streamer TEXT, viewer_count INTEGER, is_partner BOOLEAN DEFAULT FALSE)",
-            "CREATE TABLE twitch_stats_category (ts_utc TEXT, streamer TEXT, viewer_count INTEGER, is_partner BOOLEAN DEFAULT FALSE)",
+            "CREATE TABLE twitch_stats_tracked (ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER, is_partner BOOLEAN DEFAULT FALSE)",
+            "CREATE TABLE twitch_stats_category (ts_utc TIMESTAMPTZ, streamer TEXT, viewer_count INTEGER, is_partner BOOLEAN DEFAULT FALSE)",
             // Vereinfachte Partner-State-Tabelle (Ersatz der View für den Test).
-            "CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, is_partner_active INTEGER, \
+            "CREATE TABLE twitch_streamers_partner_state (twitch_login TEXT, twitch_user_id TEXT, is_partner_active INTEGER, \
                  is_on_discord INTEGER, discord_user_id TEXT, discord_display_name TEXT)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
@@ -733,7 +749,6 @@ mod tests {
         let Some(pool) = make_pool("t_lb").await else {
             return;
         };
-        let now = chrono::Utc::now().to_rfc3339();
         // Partner "nani" (tracked), Nicht-Partner "rando" (category).
         sqlx::query("INSERT INTO twitch_streamers_partner_state (twitch_login, is_partner_active, is_on_discord, discord_user_id, discord_display_name) VALUES ('nani', 1, 1, '123', 'NaniDC')")
             .execute(&pool).await.unwrap();
@@ -743,12 +758,12 @@ mod tests {
             ("twitch_stats_category", "rando", 40),
         ] {
             sqlx::query(sqlx::AssertSqlSafe(format!("INSERT INTO {tbl} (ts_utc, streamer, viewer_count, is_partner) VALUES ($1, $2, $3, FALSE)")))
-                .bind(&now).bind(streamer).bind(vc).execute(&pool).await.unwrap();
+                .bind(chrono::Utc::now()).bind(streamer).bind(vc).execute(&pool).await.unwrap();
         }
         // Alte Zeile (>30 Tage) wird ausgefenstert.
         let old = (chrono::Utc::now() - chrono::Duration::days(40)).to_rfc3339();
         sqlx::query("INSERT INTO twitch_stats_tracked (ts_utc, streamer, viewer_count, is_partner) VALUES ($1, 'nani', 9999, FALSE)")
-            .bind(&old).execute(&pool).await.unwrap();
+            .bind(old.parse::<chrono::DateTime<chrono::Utc>>().expect("timestamp")).execute(&pool).await.unwrap();
 
         let tracked = load_category(&pool, true).await.unwrap();
         assert_eq!(tracked.len(), 1);

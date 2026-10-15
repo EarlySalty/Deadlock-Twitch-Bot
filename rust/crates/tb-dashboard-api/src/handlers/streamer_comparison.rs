@@ -453,10 +453,15 @@ async fn load_raid_metrics(
                       AND st.ts_utc < r.executed_at + INTERVAL '30 minutes'
                 ))::DOUBLE PRECISION AS post30_avg
             FROM raids r
-            LEFT JOIN twitch_stats_tracked st
-              ON LOWER(st.streamer) = r.target
-             AND st.ts_utc >= r.executed_at - INTERVAL '10 minutes'
-             AND st.ts_utc < r.executed_at + INTERVAL '30 minutes'
+            LEFT JOIN LATERAL (
+                SELECT ts_utc, viewer_count FROM twitch_stats_tracked st
+                WHERE LOWER(st.streamer) = r.target
+                  AND st.ts_utc >= r.executed_at - INTERVAL '10 minutes'
+                  AND st.ts_utc < r.executed_at + INTERVAL '30 minutes'
+                  AND st.ts_utc >= $1 - INTERVAL '10 minutes'
+                  AND st.ts_utc < $2 + INTERVAL '30 minutes'
+                OFFSET 0
+            ) st ON TRUE
             GROUP BY r.raid_id, r.executed_at, r.target, r.viewer_count_sent,
                      r.previous_raid_at, r.next_raid_at
         ), marked AS (

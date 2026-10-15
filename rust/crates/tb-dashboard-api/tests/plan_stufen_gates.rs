@@ -761,6 +761,7 @@ async fn category_comparison_ohne_plus_verkuerzt_statt_403() {
     let frei = category_comparison::category_comparison_handler(
         partner("freistreamer"),
         State(pool.clone()),
+        None,
         Query(category_comparison::ComparisonQuery {
             streamer: None,
             days: Some("365".into()),
@@ -798,6 +799,7 @@ async fn category_comparison_ohne_plus_verkuerzt_statt_403() {
     let bezahlt = category_comparison::category_comparison_handler(
         partner("plusstreamer"),
         State(pool),
+        None,
         Query(category_comparison::ComparisonQuery {
             streamer: None,
             days: Some("365".into()),

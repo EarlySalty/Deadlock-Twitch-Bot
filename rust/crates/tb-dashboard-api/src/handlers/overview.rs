@@ -493,8 +493,9 @@ async fn window_since_dates(
 pub async fn overview_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
+    cache: Option<axum::Extension<crate::aggregate_cache::AggregateCache>>,
     Query(params): Query<OverviewParams>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     if !auth.is_authenticated() {
         return Err(ApiError::unauthorized());
     }
@@ -517,187 +518,203 @@ pub async fn overview_handler(
     // das konsolidierte analytics-Flag bekommen die „Tagesform" (last_stream); der
     // Client kann das Fenster nicht überschreiben (Paywall-Durchsetzung).
     let window = resolve_read_window(&pool, auth.is_privileged(), login_ref).await;
-    let (since, prev_since) = window_since_dates(&pool, login_ref, days, window).await;
+    let cache = cache
+        .map(|axum::Extension(cache)| cache)
+        .unwrap_or_default();
+    let key = format!("overview:{auth:?}:{login:?}:{days}:{window:?}");
+    let response = cache
+        .respond(key, async {
+            let result: Result<_, ApiError> = async {
+                let (since, prev_since) = window_since_dates(&pool, login_ref, days, window).await;
 
-    // Existenz-Check
-    let count = overview_session_count(&pool, &since, login_ref)
-        .await
-        .map_err(|_| ApiError::internal())?;
+                // Existenz-Check
+                let count = overview_session_count(&pool, &since, login_ref)
+                    .await
+                    .map_err(|_| ApiError::internal())?;
 
-    if count == 0 {
-        return Ok(Json(OverviewResponse::Empty {
-            empty: true,
-            error: "Keine Daten für den Zeitraum",
-        }));
-    }
+                if count == 0 {
+                    return Ok(Json(OverviewResponse::Empty {
+                        empty: true,
+                        error: "Keine Daten für den Zeitraum",
+                    }));
+                }
 
-    // Die folgenden Kennzahlen haengen nur am aufgeloesten Fenster und nicht
-    // voneinander. Frueher lief jede einzeln nacheinander, also gut ein Dutzend
-    // Runden zur Datenbank hintereinander; jetzt laufen sie in zwei Gruppen
-    // gleichzeitig und die Antwortzeit richtet sich nach der langsamsten
-    // Abfrage einer Gruppe statt nach der Summe aller Abfragen.
-    //
-    // Bewusst hoechstens vier Abfragen auf einmal: der
-    // Verbindungs-Pool hat in der Voreinstellung zehn Plaetze
-    // (`TWITCH_ANALYTICS_POOL_MAXSIZE`, tb-config). Bei acht gleichzeitigen
-    // Abfragen belegt ein einziger Seitenaufruf fast den ganzen Pool, ein
-    // zweiter Nutzer liefe in die Wartezeit beim Verbindungholen und bekaeme
-    // einen Fehler statt Daten. Mit vier passen zwei Seitenaufrufe zeitgleich
-    // in den Pool, und der Gewinn bleibt nahezu gleich.
-    //
-    // Erste Gruppe: die Abfragen, die intern selbst mehrere Runden brauchen.
-    let (metrics_res, prev_res, net_res, mon_res) = tokio::join!(
-        // Aktuelles Fenster.
-        overview_metrics(&pool, &since, login_ref, None),
-        // Vorperiode [prev_since, since) für Trend-Pfeile (Python _get_overview_data_sync).
-        // Bei last_stream ist prev_since == since → leeres Fenster → keine Trends.
-        overview_metrics(&pool, &prev_since, login_ref, Some(&since)),
-        // Raid-Netzwerk-Kachel (zwei Abfragen).
-        overview_network_stats(&pool, &since, login_ref),
-        // Monetarisierungs-Events, drei Abfragen; fehlende Tabellen → 0.
-        overview_monetization_counts(&pool, &since, login_ref),
-    );
+                // Die folgenden Kennzahlen haengen nur am aufgeloesten Fenster und nicht
+                // voneinander. Frueher lief jede einzeln nacheinander, also gut ein Dutzend
+                // Runden zur Datenbank hintereinander; jetzt laufen sie in zwei Gruppen
+                // gleichzeitig und die Antwortzeit richtet sich nach der langsamsten
+                // Abfrage einer Gruppe statt nach der Summe aller Abfragen.
+                //
+                // Bewusst hoechstens vier Abfragen auf einmal: der
+                // Verbindungs-Pool hat in der Voreinstellung zehn Plaetze
+                // (`TWITCH_ANALYTICS_POOL_MAXSIZE`, tb-config). Bei acht gleichzeitigen
+                // Abfragen belegt ein einziger Seitenaufruf fast den ganzen Pool, ein
+                // zweiter Nutzer liefe in die Wartezeit beim Verbindungholen und bekaeme
+                // einen Fehler statt Daten. Mit vier passen zwei Seitenaufrufe zeitgleich
+                // in den Pool, und der Gewinn bleibt nahezu gleich.
+                //
+                // Erste Gruppe: die Abfragen, die intern selbst mehrere Runden brauchen.
+                let (metrics_res, prev_res, net_res, mon_res) = tokio::join!(
+                    // Aktuelles Fenster.
+                    overview_metrics(&pool, &since, login_ref, None),
+                    // Vorperiode [prev_since, since) für Trend-Pfeile (Python _get_overview_data_sync).
+                    // Bei last_stream ist prev_since == since → leeres Fenster → keine Trends.
+                    overview_metrics(&pool, &prev_since, login_ref, Some(&since)),
+                    // Raid-Netzwerk-Kachel (zwei Abfragen).
+                    overview_network_stats(&pool, &since, login_ref),
+                    // Monetarisierungs-Events, drei Abfragen; fehlende Tabellen → 0.
+                    overview_monetization_counts(&pool, &since, login_ref),
+                );
 
-    // Zweite Gruppe: je eine Abfrage.
-    let (chatter_res, category_res, chat_per_100_res, sessions_res) = tokio::join!(
-        // Chatter-abgeleitete Metriken (Bot-gefiltert).
-        overview_chatter_metrics(&pool, &since, login_ref),
-        // Kategorie-Perzentil/Rang (speist Reach-Score + categoryRank/Total).
-        overview_category_rank(&pool, &since, login_ref),
-        // Chatter pro 100 Peak-Viewer (für Chat-Insights/Actions).
-        overview_chat_per_100(&pool, &since, login_ref),
-        // Sessions-Liste (jüngste 50).
-        overview_sessions(&pool, &since, login_ref, 50),
-    );
+                // Zweite Gruppe: je eine Abfrage.
+                let (chatter_res, category_res, chat_per_100_res, sessions_res) = tokio::join!(
+                    // Chatter-abgeleitete Metriken (Bot-gefiltert).
+                    overview_chatter_metrics(&pool, &since, login_ref),
+                    // Kategorie-Perzentil/Rang (speist Reach-Score + categoryRank/Total).
+                    overview_category_rank(&pool, &since, login_ref),
+                    // Chatter pro 100 Peak-Viewer (für Chat-Insights/Actions).
+                    overview_chat_per_100(&pool, &since, login_ref),
+                    // Sessions-Liste (jüngste 50).
+                    overview_sessions(&pool, &since, login_ref, 50),
+                );
 
-    let metrics = metrics_res
-        .map_err(|_| ApiError::internal())?
-        .ok_or_else(ApiError::internal)?;
-    let prev = prev_res.map_err(|_| ApiError::internal())?;
-    let net = net_res.map_err(|_| ApiError::internal())?;
-    let mon = mon_res.map_err(|_| ApiError::internal())?;
-    let chatter = chatter_res.map_err(|_| ApiError::internal())?;
-    let category = category_res.map_err(|_| ApiError::internal())?;
-    let chat_per_100 = chat_per_100_res.map_err(|_| ApiError::internal())?;
-    let sessions = sessions_res.map_err(|_| ApiError::internal())?;
-    let correlations = calculate_correlations(&sessions);
+                let metrics = metrics_res
+                    .map_err(|_| ApiError::internal())?
+                    .ok_or_else(ApiError::internal)?;
+                let prev = prev_res.map_err(|_| ApiError::internal())?;
+                let net = net_res.map_err(|_| ApiError::internal())?;
+                let mon = mon_res.map_err(|_| ApiError::internal())?;
+                let chatter = chatter_res.map_err(|_| ApiError::internal())?;
+                let category = category_res.map_err(|_| ApiError::internal())?;
+                let chat_per_100 = chat_per_100_res.map_err(|_| ApiError::internal())?;
+                let sessions = sessions_res.map_err(|_| ApiError::internal())?;
+                let correlations = calculate_correlations(&sessions);
 
-    let airtime = metrics.total_airtime_hours.unwrap_or(0.0);
-    let total_followers = metrics.total_followers.unwrap_or(0);
-    let gained = metrics.gained_followers.unwrap_or(0);
-    let curr_ret = metrics.avg_retention_10m.unwrap_or(0.0) * 100.0;
-    let curr_ret_sample = metrics.retention_sample_count.unwrap_or(0);
-    let per_hour = |n: i64| {
-        if airtime > 0.0 {
-            n as f64 / airtime
-        } else {
-            0.0
-        }
-    };
+                let airtime = metrics.total_airtime_hours.unwrap_or(0.0);
+                let total_followers = metrics.total_followers.unwrap_or(0);
+                let gained = metrics.gained_followers.unwrap_or(0);
+                let curr_ret = metrics.avg_retention_10m.unwrap_or(0.0) * 100.0;
+                let curr_ret_sample = metrics.retention_sample_count.unwrap_or(0);
+                let per_hour = |n: i64| {
+                    if airtime > 0.0 {
+                        n as f64 / airtime
+                    } else {
+                        0.0
+                    }
+                };
 
-    let prev_avg = prev.as_ref().and_then(|p| p.avg_avg_viewers).unwrap_or(0.0);
-    let prev_fol = prev.as_ref().and_then(|p| p.total_followers).unwrap_or(0);
-    let prev_ret = prev
-        .as_ref()
-        .and_then(|p| p.avg_retention_10m)
-        .unwrap_or(0.0)
-        * 100.0;
-    let prev_ret_sample = prev
-        .as_ref()
-        .and_then(|p| p.retention_sample_count)
-        .unwrap_or(0);
+                let prev_avg = prev.as_ref().and_then(|p| p.avg_avg_viewers).unwrap_or(0.0);
+                let prev_fol = prev.as_ref().and_then(|p| p.total_followers).unwrap_or(0);
+                let prev_ret = prev
+                    .as_ref()
+                    .and_then(|p| p.avg_retention_10m)
+                    .unwrap_or(0.0)
+                    * 100.0;
+                let prev_ret_sample = prev
+                    .as_ref()
+                    .and_then(|p| p.retention_sample_count)
+                    .unwrap_or(0);
 
-    let avg_viewers_trend = calc_trend(metrics.avg_avg_viewers.unwrap_or(0.0), prev_avg);
-    // Python: bei |curr|<5 UND |prev|<5 unterdrücken, sonst auf ±999 kappen.
-    let followers_trend = if total_followers.abs() < 5 && prev_fol.abs() < 5 {
-        None
-    } else {
-        calc_trend(total_followers as f64, prev_fol as f64).map(|v| v.clamp(-999.0, 999.0))
-    };
-    // Python: nur wenn beide Perioden ≥3 Retention-Samples und prev>0.
-    let retention_trend = if curr_ret_sample >= 3 && prev_ret_sample >= 3 && prev_ret > 0.0 {
-        calc_trend(curr_ret, prev_ret)
-    } else {
-        None
-    };
+                let avg_viewers_trend =
+                    calc_trend(metrics.avg_avg_viewers.unwrap_or(0.0), prev_avg);
+                // Python: bei |curr|<5 UND |prev|<5 unterdrücken, sonst auf ±999 kappen.
+                let followers_trend = if total_followers.abs() < 5 && prev_fol.abs() < 5 {
+                    None
+                } else {
+                    calc_trend(total_followers as f64, prev_fol as f64)
+                        .map(|v| v.clamp(-999.0, 999.0))
+                };
+                // Python: nur wenn beide Perioden ≥3 Retention-Samples und prev>0.
+                let retention_trend =
+                    if curr_ret_sample >= 3 && prev_ret_sample >= 3 && prev_ret > 0.0 {
+                        calc_trend(curr_ret, prev_ret)
+                    } else {
+                        None
+                    };
 
-    let scores = calculate_health_scores(
-        metrics.avg_avg_viewers.unwrap_or(0.0),
-        metrics.avg_bindung.unwrap_or(0.0) * 100.0,
-        curr_ret_sample,
-        chatter.engagement_rate,
-        metrics.chat_sample_count.unwrap_or(0),
-        per_hour(total_followers),
-        metrics.session_count.unwrap_or(0),
-        category.map(|c| c.percentile), // Reach: Perzentil sonst avg_viewers/5-Fallback
-        mon,
-        net,
-    );
+                let scores = calculate_health_scores(
+                    metrics.avg_avg_viewers.unwrap_or(0.0),
+                    metrics.avg_bindung.unwrap_or(0.0) * 100.0,
+                    curr_ret_sample,
+                    chatter.engagement_rate,
+                    metrics.chat_sample_count.unwrap_or(0),
+                    per_hour(total_followers),
+                    metrics.session_count.unwrap_or(0),
+                    category.map(|c| c.percentile), // Reach: Perzentil sonst avg_viewers/5-Fallback
+                    mon,
+                    net,
+                );
 
-    let chat_sample = metrics.chat_sample_count.unwrap_or(0);
-    let follower_valid = metrics.follower_valid_count.unwrap_or(0);
-    let fph = per_hour(total_followers);
-    let findings = generate_insights(
-        curr_ret,
-        curr_ret_sample,
-        chat_per_100,
-        chat_sample,
-        fph,
-        per_hour(gained),
-        follower_valid,
-        total_followers,
-    );
-    let actions = generate_actions(
-        curr_ret,
-        curr_ret_sample,
-        chat_per_100,
-        chat_sample,
-        fph,
-        follower_valid,
-    );
+                let chat_sample = metrics.chat_sample_count.unwrap_or(0);
+                let follower_valid = metrics.follower_valid_count.unwrap_or(0);
+                let fph = per_hour(total_followers);
+                let findings = generate_insights(
+                    curr_ret,
+                    curr_ret_sample,
+                    chat_per_100,
+                    chat_sample,
+                    fph,
+                    per_hour(gained),
+                    follower_valid,
+                    total_followers,
+                );
+                let actions = generate_actions(
+                    curr_ret,
+                    curr_ret_sample,
+                    chat_per_100,
+                    chat_sample,
+                    fph,
+                    follower_valid,
+                );
 
-    Ok(Json(OverviewResponse::Data(OverviewData {
-        streamer: login.clone(),
-        days,
-        window: window.as_str(),
-        window_limited: window == WindowMode::LastStream,
-        scores,
-        findings,
-        actions,
-        sessions,
-        correlations,
-        data_quality: DataQuality {
-            bot_filter_applied: true,
-        },
-        category_rank: category.map(|c| c.rank),
-        category_total: category.map(|c| c.total),
-        summary: OverviewSummary {
-            avg_viewers: metrics.avg_avg_viewers.unwrap_or(0.0),
-            peak_viewers: metrics.max_peak_viewers.unwrap_or(0),
-            total_hours_watched: metrics.total_hours_watched.unwrap_or(0.0),
-            total_airtime: airtime,
-            followers_delta: total_followers,
-            total_sessions: metrics.session_count.unwrap_or(0),
-            stream_count: metrics.session_count.unwrap_or(0),
-            followers_gained: gained,
-            followers_per_hour: per_hour(total_followers),
-            followers_gained_per_hour: per_hour(gained),
-            retention_10m: curr_ret,
-            retention_reliable: curr_ret_sample >= 3,
-            avg_viewers_trend,
-            followers_trend,
-            retention_trend,
-            unique_chatters: chatter.unique_chatters,
-            active_chatters: chatter.active_chatters,
-            unique_viewers: chatter.unique_viewers,
-            engagement_rate: chatter.engagement_rate,
-        },
-        network: OverviewNetwork {
-            sent: net.sent,
-            sent_viewers: net.sent_viewers,
-            received: net.received,
-        },
-    })))
+                Ok(Json(OverviewResponse::Data(OverviewData {
+                    streamer: login.clone(),
+                    days,
+                    window: window.as_str(),
+                    window_limited: window == WindowMode::LastStream,
+                    scores,
+                    findings,
+                    actions,
+                    sessions,
+                    correlations,
+                    data_quality: DataQuality {
+                        bot_filter_applied: true,
+                    },
+                    category_rank: category.map(|c| c.rank),
+                    category_total: category.map(|c| c.total),
+                    summary: OverviewSummary {
+                        avg_viewers: metrics.avg_avg_viewers.unwrap_or(0.0),
+                        peak_viewers: metrics.max_peak_viewers.unwrap_or(0),
+                        total_hours_watched: metrics.total_hours_watched.unwrap_or(0.0),
+                        total_airtime: airtime,
+                        followers_delta: total_followers,
+                        total_sessions: metrics.session_count.unwrap_or(0),
+                        stream_count: metrics.session_count.unwrap_or(0),
+                        followers_gained: gained,
+                        followers_per_hour: per_hour(total_followers),
+                        followers_gained_per_hour: per_hour(gained),
+                        retention_10m: curr_ret,
+                        retention_reliable: curr_ret_sample >= 3,
+                        avg_viewers_trend,
+                        followers_trend,
+                        retention_trend,
+                        unique_chatters: chatter.unique_chatters,
+                        active_chatters: chatter.active_chatters,
+                        unique_viewers: chatter.unique_viewers,
+                        engagement_rate: chatter.engagement_rate,
+                    },
+                    network: OverviewNetwork {
+                        sent: net.sent,
+                        sent_viewers: net.sent_viewers,
+                        received: net.received,
+                    },
+                })))
+            }
+            .await;
+            result.into_response()
+        })
+        .await;
+    Ok(response)
 }
 
 #[cfg(test)]
@@ -862,6 +879,7 @@ mod tests {
         let res = overview_handler(
             DashboardAuthLevel::admin(),
             State(pool),
+            None,
             Query(OverviewParams {
                 streamer: Some("nobody".into()),
                 days: 30,
@@ -922,6 +940,7 @@ mod tests {
         let res = overview_handler(
             DashboardAuthLevel::admin(),
             State(pool),
+            None,
             Query(OverviewParams {
                 streamer: Some("streamer_x".into()),
                 days: 30,
@@ -996,6 +1015,7 @@ mod tests {
                 display_name: "Owner".into(),
             },
             State(pool),
+            None,
             Query(OverviewParams {
                 streamer: Some("other_login".into()),
                 days: 30,

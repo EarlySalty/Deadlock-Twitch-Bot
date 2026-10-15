@@ -5,6 +5,7 @@
 //! Auth-Routen nutzen `AuthLevel`-Extractor aus tb-http-core.
 
 pub mod admin_audit;
+mod aggregate_cache;
 pub mod ai_state;
 pub(crate) mod ai_store;
 pub mod auth;
@@ -1110,6 +1111,7 @@ fn build_authed_router_with_analysis_store(
         .route("/twitch/analyse/", get(spa::analyse_handler))
         .route("/twitch/analyse/{*path}", get(spa::analyse_assets_handler))
         .with_state(pool)
+        .layer(Extension(aggregate_cache::AggregateCache::default()))
         .layer(Extension(ExpectedToken(token)))
         .layer(axum::middleware::from_fn(
             crate::auth::partner_gate::partner_status_gate,

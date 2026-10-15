@@ -77,6 +77,7 @@ pub struct ComparisonQuery {
 pub async fn category_comparison_handler(
     auth: DashboardAuthLevel,
     State(pool): State<PgPool>,
+    cache: Option<axum::Extension<crate::aggregate_cache::AggregateCache>>,
     Query(params): Query<ComparisonQuery>,
 ) -> impl IntoResponse {
     // Kein 403 auf dem Vergleichsendpunkt: authentifiziert genuegt, die
@@ -109,6 +110,13 @@ pub async fn category_comparison_handler(
     // Plan-Klemme statt 403: ohne Plus reicht der Vergleich bis zum letzten Stream.
     let (fenster_tage, stufe, gekuerzt) =
         crate::auth::verlauf_fenster(&pool, &auth, &streamer, days).await;
+    let cache = cache
+        .map(|axum::Extension(cache)| cache)
+        .unwrap_or_default();
+    let key = format!(
+        "category:{auth:?}:{streamer:?}:{days}:{exclude_external}:{fenster_tage}:{stufe:?}:{gekuerzt}"
+    );
+    cache.respond(key, async {
     // Zwei Fenster, mit Absicht getrennt: geklemmt wird nur, was der Streamer
     // ueber SICH sieht. Die Kategorie-Aggregate (categoryAvg, Perzentile,
     // categoryRank, Peer-Gruppe) laufen weiter ueber den angefragten Zeitraum.
@@ -144,30 +152,21 @@ pub async fn category_comparison_handler(
 
     // ── Q2: Your session stats ──────────────────────────────────────────────
     let sess_row = sqlx::query(r#"
-        WITH filtered_chatters AS (
-            SELECT sc.session_id,
-                   COUNT(DISTINCT CASE WHEN COALESCE(sc.messages, 0) > 0
-                        THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) END)::BIGINT AS active_chatters
-            FROM twitch_session_chatters sc
-            WHERE sc.chatter_login IS NULL OR sc.chatter_login = ''
-               OR LOWER(sc.chatter_login) <> ALL($3::text[])
-            GROUP BY sc.session_id
-        ),
-        session_chatter_presence AS (
-            SELECT session_id, 1 AS has_any_chatters
-            FROM twitch_session_chatters
-            GROUP BY session_id
-        )
         SELECT AVG(s.avg_viewers) AS "avg_v",
                MAX(s.peak_viewers)::float8 AS "peak_v",
                AVG(s.retention_10m) AS "ret10",
                AVG(CASE WHEN s.avg_viewers > 0
-                   THEN (CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
+                   THEN (CASE WHEN fc.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
                               ELSE COALESCE(s.unique_chatters, 0) END) * 100.0 / s.avg_viewers
                    ELSE 0 END) AS "chat_h"
         FROM twitch_stream_sessions s
-        LEFT JOIN filtered_chatters fc ON fc.session_id = s.id
-        LEFT JOIN session_chatter_presence scp ON scp.session_id = s.id
+        LEFT JOIN LATERAL (
+                SELECT COUNT(DISTINCT CASE WHEN COALESCE(sc.messages, 0) > 0
+                         AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) <> ALL($3::text[]))
+                         THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) END)::bigint AS active_chatters,
+                       CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END AS has_any_chatters
+                FROM twitch_session_chatters sc WHERE sc.session_id = s.id
+            ) fc ON TRUE
         WHERE s.started_at >= $1 AND LOWER(s.streamer_login) = $2 AND s.ended_at IS NOT NULL
     "#)
     .bind(since_eigene)
@@ -206,22 +205,23 @@ pub async fn category_comparison_handler(
         .unwrap_or(0.0);
 
     // ── Q3: All category avgs (unfiltered — needed for peer group + percentile base) ─
-    let all_avgs_rows = sqlx::query!(
-        "SELECT streamer, AVG(viewer_count)::float8 AS \"avg_vc?\" FROM twitch_stats_category
-         WHERE ts_utc >= $1 GROUP BY streamer ORDER BY 2",
-        since_kategorie
+    let category_rows = sqlx::query_as::<_, (String, Option<f64>, Option<f64>, Option<f64>)>(
+        "WITH aggregates AS (
+             SELECT streamer, AVG(viewer_count)::float8 AS avg_vc, MAX(viewer_count) AS max_vc
+             FROM twitch_stats_category WHERE ts_utc >= $1 GROUP BY streamer
+         )
+         SELECT streamer, avg_vc, max_vc::float8,
+                (AVG(max_vc) FILTER (WHERE NOT $2 OR avg_vc <= $3) OVER ())::float8
+         FROM aggregates ORDER BY avg_vc",
     )
+    .bind(since_kategorie)
+    .bind(exclude_external)
+    .bind(EXTERNAL_REACH_AVG_THRESHOLD)
     .fetch_all(&pool)
     .await
     .unwrap_or_default();
-
-    let all_avgs: Vec<(String, f64)> = all_avgs_rows
-        .into_iter()
-        .filter_map(|r| {
-            let s = r.streamer;
-            let v = r.avg_vc?;
-            Some((s.to_lowercase(), v))
-        })
+    let all_avgs: Vec<(String, f64)> = category_rows.iter()
+        .filter_map(|(streamer, avg, _, _)| Some((streamer.to_lowercase(), (*avg)?)))
         .collect();
 
     // Threshold-filtered avg list for percentile calculation
@@ -243,62 +243,24 @@ pub async fn category_comparison_handler(
     };
 
     // ── Q4: Category peak avg (with optional threshold) ─────────────────────
-    let cat_avg_peak: f64 = if exclude_external {
-        sqlx::query!(
-            "SELECT AVG(max_vc)::float8 AS \"r?\" FROM (
-                 SELECT MAX(viewer_count) AS max_vc FROM twitch_stats_category
-                 WHERE ts_utc >= $1 GROUP BY streamer HAVING AVG(viewer_count)::float8 <= $2
-             ) s",
-            since_kategorie,
-            EXTERNAL_REACH_AVG_THRESHOLD
-        )
-        .fetch_optional(&pool)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|r| r.r)
-        .unwrap_or(0.0)
-    } else {
-        sqlx::query!(
-            "SELECT AVG(max_vc)::float8 AS \"r?\" FROM (
-                 SELECT MAX(viewer_count) AS max_vc FROM twitch_stats_category
-                 WHERE ts_utc >= $1 GROUP BY streamer
-             ) s",
-            since_kategorie
-        )
-        .fetch_optional(&pool)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|r| r.r)
-        .unwrap_or(0.0)
-    };
+    let cat_avg_peak = category_rows.first().and_then(|row| row.3).unwrap_or(0.0);
 
     // ── Q5: Category session averages (ret + chat) ──────────────────────────
     let (cat_avg_ret, cat_avg_chat): (f64, f64) = if exclude_external {
         let r = sqlx::query(r#"
-            WITH filtered_chatters AS (
-                SELECT sc.session_id,
-                       COUNT(DISTINCT CASE WHEN COALESCE(sc.messages, 0) > 0
-                            THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) END)::BIGINT AS active_chatters
-                FROM twitch_session_chatters sc
-                WHERE sc.chatter_login IS NULL OR sc.chatter_login = ''
-                   OR LOWER(sc.chatter_login) <> ALL($3::text[])
-                GROUP BY sc.session_id
-            ),
-            session_chatter_presence AS (
-                SELECT session_id, 1 AS has_any_chatters
-                FROM twitch_session_chatters
-                GROUP BY session_id
-            )
             SELECT AVG(s.retention_10m) AS "avg_ret",
                    AVG(CASE WHEN s.avg_viewers > 0
-                       THEN (CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
+                       THEN (CASE WHEN fc.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
                                   ELSE COALESCE(s.unique_chatters, 0) END) * 100.0 / s.avg_viewers
                        ELSE 0 END) AS "avg_chat"
             FROM twitch_stream_sessions s
-            LEFT JOIN filtered_chatters fc ON fc.session_id = s.id
-            LEFT JOIN session_chatter_presence scp ON scp.session_id = s.id
+            LEFT JOIN LATERAL (
+                SELECT COUNT(DISTINCT CASE WHEN COALESCE(sc.messages, 0) > 0
+                         AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) <> ALL($3::text[]))
+                         THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) END)::bigint AS active_chatters,
+                       CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END AS has_any_chatters
+                FROM twitch_session_chatters sc WHERE sc.session_id = s.id
+            ) fc ON TRUE
             WHERE s.started_at >= $1 AND s.ended_at IS NOT NULL
               AND LOWER(s.streamer_login) NOT IN (
                   SELECT LOWER(streamer_login) FROM twitch_stream_sessions
@@ -325,28 +287,19 @@ pub async fn category_comparison_handler(
         (ret, chat)
     } else {
         let r = sqlx::query(r#"
-            WITH filtered_chatters AS (
-                SELECT sc.session_id,
-                       COUNT(DISTINCT CASE WHEN COALESCE(sc.messages, 0) > 0
-                            THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) END)::BIGINT AS active_chatters
-                FROM twitch_session_chatters sc
-                WHERE sc.chatter_login IS NULL OR sc.chatter_login = ''
-                   OR LOWER(sc.chatter_login) <> ALL($2::text[])
-                GROUP BY sc.session_id
-            ),
-            session_chatter_presence AS (
-                SELECT session_id, 1 AS has_any_chatters
-                FROM twitch_session_chatters
-                GROUP BY session_id
-            )
             SELECT AVG(s.retention_10m) AS "avg_ret",
                    AVG(CASE WHEN s.avg_viewers > 0
-                       THEN (CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
+                       THEN (CASE WHEN fc.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
                                   ELSE COALESCE(s.unique_chatters, 0) END) * 100.0 / s.avg_viewers
                        ELSE 0 END) AS "avg_chat"
             FROM twitch_stream_sessions s
-            LEFT JOIN filtered_chatters fc ON fc.session_id = s.id
-            LEFT JOIN session_chatter_presence scp ON scp.session_id = s.id
+            LEFT JOIN LATERAL (
+                SELECT COUNT(DISTINCT CASE WHEN COALESCE(sc.messages, 0) > 0
+                         AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) <> ALL($2::text[]))
+                         THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) END)::bigint AS active_chatters,
+                       CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END AS has_any_chatters
+                FROM twitch_session_chatters sc WHERE sc.session_id = s.id
+            ) fc ON TRUE
             WHERE s.started_at >= $1 AND s.ended_at IS NOT NULL
         "#)
         .bind(since_kategorie)
@@ -386,31 +339,22 @@ pub async fn category_comparison_handler(
             .filter_map(|r| r.try_get::<Option<f64>, _>("ret").ok().flatten())
             .map(|v| v * 100.0)
             .collect();
-        ret_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        ret_sorted.sort_by(|a, b| a.total_cmp(b));
 
         let chat_rows = sqlx::query(
             r#"
-            WITH filtered_chatters AS (
-                SELECT sc.session_id,
-                       COUNT(DISTINCT CASE WHEN COALESCE(sc.messages, 0) > 0
-                            THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) END)::BIGINT AS active_chatters
-                FROM twitch_session_chatters sc
-                WHERE sc.chatter_login IS NULL OR sc.chatter_login = ''
-                   OR LOWER(sc.chatter_login) <> ALL($3::text[])
-                GROUP BY sc.session_id
-            ),
-            session_chatter_presence AS (
-                SELECT session_id, 1 AS has_any_chatters
-                FROM twitch_session_chatters
-                GROUP BY session_id
-            )
             SELECT AVG(CASE WHEN s.avg_viewers > 0
-                       THEN (CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
+                       THEN (CASE WHEN fc.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
                                   ELSE COALESCE(s.unique_chatters, 0) END) * 100.0 / s.avg_viewers
                        ELSE 0 END) AS ch
             FROM twitch_stream_sessions s
-            LEFT JOIN filtered_chatters fc ON fc.session_id = s.id
-            LEFT JOIN session_chatter_presence scp ON scp.session_id = s.id
+            LEFT JOIN LATERAL (
+                SELECT COUNT(DISTINCT CASE WHEN COALESCE(sc.messages, 0) > 0
+                         AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) <> ALL($3::text[]))
+                         THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) END)::bigint AS active_chatters,
+                       CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END AS has_any_chatters
+                FROM twitch_session_chatters sc WHERE sc.session_id = s.id
+            ) fc ON TRUE
             WHERE s.started_at >= $1 AND s.ended_at IS NOT NULL
             GROUP BY LOWER(s.streamer_login) HAVING AVG(s.avg_viewers) <= $2
             ORDER BY ch
@@ -420,7 +364,7 @@ pub async fn category_comparison_handler(
             .iter()
             .filter_map(|r| r.try_get::<Option<f64>, _>("ch").ok().flatten())
             .collect();
-        chat_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        chat_sorted.sort_by(|a, b| a.total_cmp(b));
     } else {
         let ret_rows = sqlx::query!(
             "SELECT AVG(retention_10m) AS \"ret?\" FROM twitch_stream_sessions
@@ -436,31 +380,22 @@ pub async fn category_comparison_handler(
             .filter_map(|r| r.ret)
             .map(|v| v * 100.0)
             .collect();
-        ret_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        ret_sorted.sort_by(|a, b| a.total_cmp(b));
 
         let chat_rows = sqlx::query(
             r#"
-            WITH filtered_chatters AS (
-                SELECT sc.session_id,
-                       COUNT(DISTINCT CASE WHEN COALESCE(sc.messages, 0) > 0
-                            THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) END)::BIGINT AS active_chatters
-                FROM twitch_session_chatters sc
-                WHERE sc.chatter_login IS NULL OR sc.chatter_login = ''
-                   OR LOWER(sc.chatter_login) <> ALL($2::text[])
-                GROUP BY sc.session_id
-            ),
-            session_chatter_presence AS (
-                SELECT session_id, 1 AS has_any_chatters
-                FROM twitch_session_chatters
-                GROUP BY session_id
-            )
             SELECT AVG(CASE WHEN s.avg_viewers > 0
-                       THEN (CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
+                       THEN (CASE WHEN fc.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
                                   ELSE COALESCE(s.unique_chatters, 0) END) * 100.0 / s.avg_viewers
                        ELSE 0 END) AS "ch"
             FROM twitch_stream_sessions s
-            LEFT JOIN filtered_chatters fc ON fc.session_id = s.id
-            LEFT JOIN session_chatter_presence scp ON scp.session_id = s.id
+            LEFT JOIN LATERAL (
+                SELECT COUNT(DISTINCT CASE WHEN COALESCE(sc.messages, 0) > 0
+                         AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) <> ALL($2::text[]))
+                         THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) END)::bigint AS active_chatters,
+                       CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END AS has_any_chatters
+                FROM twitch_session_chatters sc WHERE sc.session_id = s.id
+            ) fc ON TRUE
             WHERE s.started_at >= $1 AND s.ended_at IS NOT NULL
             GROUP BY LOWER(s.streamer_login) ORDER BY 1
             "#,
@@ -474,36 +409,15 @@ pub async fn category_comparison_handler(
             .into_iter()
             .filter_map(|r| r.try_get::<Option<f64>, _>("ch").ok().flatten())
             .collect();
-        chat_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        chat_sorted.sort_by(|a, b| a.total_cmp(b));
     }
 
     // ── Q8: Peak sorted list ─────────────────────────────────────────────────
-    let peak_sorted: Vec<f64> = if exclude_external {
-        sqlx::query!(
-            "SELECT MAX(viewer_count)::float8 AS \"peak?\" FROM twitch_stats_category
-             WHERE ts_utc >= $1 GROUP BY streamer HAVING AVG(viewer_count)::float8 <= $2 ORDER BY 1",
-            since_kategorie,
-            EXTERNAL_REACH_AVG_THRESHOLD
-        )
-        .fetch_all(&pool)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|r| r.peak)
-        .collect()
-    } else {
-        sqlx::query!(
-            "SELECT MAX(viewer_count)::float8 AS \"peak?\" FROM twitch_stats_category
-             WHERE ts_utc >= $1 GROUP BY streamer ORDER BY 1",
-            since_kategorie
-        )
-        .fetch_all(&pool)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|r| r.peak)
-        .collect()
-    };
+    let mut peak_sorted: Vec<f64> = category_rows.iter()
+        .filter(|row| !exclude_external || row.1.is_some_and(|avg| avg <= EXTERNAL_REACH_AVG_THRESHOLD))
+        .filter_map(|row| row.2)
+        .collect();
+    peak_sorted.sort_by(f64::total_cmp);
 
     // ── Percentiles ──────────────────────────────────────────────────────────
     //
@@ -568,31 +482,22 @@ pub async fn category_comparison_handler(
             }
 
             let peer_rows_raw = sqlx::query(r#"
-                WITH filtered_chatters AS (
-                    SELECT sc.session_id,
-                           COUNT(DISTINCT CASE WHEN COALESCE(sc.messages, 0) > 0
-                                THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) END)::BIGINT AS active_chatters
-                    FROM twitch_session_chatters sc
-                    WHERE sc.chatter_login IS NULL OR sc.chatter_login = ''
-                       OR LOWER(sc.chatter_login) <> ALL($3::text[])
-                    GROUP BY sc.session_id
-                ),
-                session_chatter_presence AS (
-                    SELECT session_id, 1 AS has_any_chatters
-                    FROM twitch_session_chatters
-                    GROUP BY session_id
-                )
                 SELECT LOWER(s.streamer_login) AS "login",
                        AVG(s.avg_viewers) AS "avg_v",
                        MAX(s.peak_viewers)::float8 AS "peak_v",
                        AVG(s.retention_10m) AS "ret10",
                        AVG(CASE WHEN s.avg_viewers > 0
-                           THEN (CASE WHEN scp.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
+                           THEN (CASE WHEN fc.has_any_chatters = 1 THEN COALESCE(fc.active_chatters, 0)
                                       ELSE COALESCE(s.unique_chatters, 0) END) * 100.0 / s.avg_viewers
                            ELSE 0 END) AS "chat_h"
                 FROM twitch_stream_sessions s
-                LEFT JOIN filtered_chatters fc ON fc.session_id = s.id
-                LEFT JOIN session_chatter_presence scp ON scp.session_id = s.id
+                LEFT JOIN LATERAL (
+                SELECT COUNT(DISTINCT CASE WHEN COALESCE(sc.messages, 0) > 0
+                         AND (sc.chatter_login IS NULL OR sc.chatter_login = '' OR LOWER(sc.chatter_login) <> ALL($3::text[]))
+                         THEN COALESCE(NULLIF(sc.chatter_login, ''), sc.chatter_id) END)::bigint AS active_chatters,
+                       CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END AS has_any_chatters
+                FROM twitch_session_chatters sc WHERE sc.session_id = s.id
+            ) fc ON TRUE
                 WHERE LOWER(s.streamer_login) = ANY($1::text[])
                   AND s.started_at >= $2 AND s.ended_at IS NOT NULL
                 GROUP BY LOWER(s.streamer_login)
@@ -614,17 +519,17 @@ pub async fn category_comparison_handler(
                 .collect();
 
             let mut avg_list: Vec<f64> = peer_rows.iter().filter_map(|r| r.avg_v).collect();
-            avg_list.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            avg_list.sort_by(|a, b| a.total_cmp(b));
             let mut peak_list: Vec<f64> = peer_rows.iter().filter_map(|r| r.peak_v).collect();
-            peak_list.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            peak_list.sort_by(|a, b| a.total_cmp(b));
             let mut ret_list: Vec<f64> = peer_rows
                 .iter()
                 .filter_map(|r| r.ret10)
                 .map(|v| v * 100.0)
                 .collect();
-            ret_list.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            ret_list.sort_by(|a, b| a.total_cmp(b));
             let mut chat_list: Vec<f64> = peer_rows.iter().filter_map(|r| r.chat_h).collect();
-            chat_list.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            chat_list.sort_by(|a, b| a.total_cmp(b));
 
             // Die eigenen Werte kommen aus dem geklemmten Fenster (Q1/Q2), nicht
             // aus der Peer-Abfrage: die laeuft ueber den vollen Zeitraum und
@@ -704,6 +609,7 @@ pub async fn category_comparison_handler(
         fenster_tage,
         gekuerzt,
     )
+    }).await
 }
 
 #[cfg(test)]
@@ -760,6 +666,7 @@ mod tests {
         let resp = category_comparison_handler(
             partner("earlysalty"),
             State(pool),
+            None,
             Query(ComparisonQuery {
                 streamer: Some("ismile_e".into()),
                 days: Some("30".into()),
