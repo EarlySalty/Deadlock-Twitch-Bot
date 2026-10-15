@@ -131,6 +131,8 @@ pub async fn mark_guild_removed(pool: &PgPool, guild_id: u64) -> Result<(), sqlx
         return Ok(());
     };
     let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE guild_onboarding_sessions SET guild_ids=array_remove(guild_ids,$1) WHERE $1=ANY(guild_ids)")
+        .bind(guild_id).execute(&mut *tx).await?;
     sqlx::query(
         r#"
         UPDATE discord_guilds
@@ -162,6 +164,9 @@ pub async fn deactivate_member(
         return Ok(());
     };
     let discord_user_id = discord_user_id.to_string();
+    let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE guild_onboarding_sessions SET guild_ids=array_remove(guild_ids,$1) WHERE discord_user_id=$2 AND $1=ANY(guild_ids)")
+        .bind(guild_id).bind(&discord_user_id).execute(&mut *tx).await?;
     sqlx::query(
         r#"
         UPDATE streamer_guilds sg
@@ -175,9 +180,10 @@ pub async fn deactivate_member(
         "#,
     )
     .bind(guild_id)
-    .bind(discord_user_id)
-    .execute(pool)
+    .bind(&discord_user_id)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -233,8 +239,38 @@ fn to_guild_id(guild_id: u64) -> Option<i64> {
 }
 
 #[cfg(test)]
+#[path = "../../../crates/tb-dashboard-api/src/test_database.rs"]
+mod test_database;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn departure_revokes_unassigned_sessions_without_an_identity_row() {
+        let db = test_database::Database::new().await;
+        sqlx::raw_sql("CREATE TABLE guild_onboarding_sessions(discord_user_id text,guild_ids bigint[]);
+            CREATE TABLE twitch_streamer_identities(twitch_user_id text,discord_user_id text);
+            CREATE TABLE streamer_guilds(twitch_user_id text,guild_id bigint,active boolean,is_on_discord boolean,deactivated_by text,deactivated_at timestamptz);
+            INSERT INTO guild_onboarding_sessions VALUES('987',ARRAY[700,701]::bigint[]),('988',ARRAY[700]::bigint[]);")
+            .execute(&db.pool).await.unwrap();
+        deactivate_member(&db.pool, 700, 987).await.unwrap();
+        let guilds: Vec<i64> = sqlx::query_scalar(
+            "SELECT guild_ids FROM guild_onboarding_sessions WHERE discord_user_id='987'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(guilds, vec![701]);
+        let guilds: Vec<i64> = sqlx::query_scalar(
+            "SELECT guild_ids FROM guild_onboarding_sessions WHERE discord_user_id='988'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(guilds, vec![700]);
+        db.close().await;
+    }
 
     #[test]
     fn setup_persist_erkennt_leere_und_gesetzte_felder() {

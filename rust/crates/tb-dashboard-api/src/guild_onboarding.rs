@@ -96,11 +96,17 @@ impl DiscordConfig {
         let mut ids = Vec::new();
         let mut after = String::new();
         loop {
-            let guilds: Vec<Value> = self
+            let request = self
                 .http
                 .get(format!("{}/users/@me/guilds", self.api_base))
                 .bearer_auth(access)
-                .query(&[("limit", "200"), ("after", after.as_str())])
+                .query(&[("limit", "200")]);
+            let request = if after.is_empty() {
+                request
+            } else {
+                request.query(&[("after", after.as_str())])
+            };
+            let guilds: Vec<Value> = request
                 .send()
                 .await
                 .map_err(|_| ())?
@@ -516,10 +522,10 @@ async fn assign(pool: &PgPool, hash: &str, guild: i64) -> Result<Option<bool>, s
                 .execute(&mut *tx)
                 .await?;
         }
-        sqlx::query("UPDATE twitch_partners SET status = 'active', departnered_at = NULL, technical_pause_reason = CASE WHEN lower(btrim(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%' THEN NULL ELSE technical_pause_reason END WHERE id = (SELECT id FROM twitch_partners WHERE twitch_user_id = $1 ORDER BY CASE COALESCE(status, '') WHEN 'active' THEN 0 WHEN 'archived' THEN 1 WHEN 'departnered' THEN 2 ELSE 3 END, COALESCE(departnered_at, admin_archived_at, partnered_at) DESC NULLS LAST LIMIT 1 FOR UPDATE) AND status <> 'active' AND admin_archived_at IS NULL AND COALESCE(manual_partner_opt_out, 0) = 0 AND lower(btrim(COALESCE(technical_pause_reason, ''))) NOT IN ('blocked','bot_banned')")
-            .bind(&session.twitch_user_id).execute(&mut *tx).await?;
-        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, status, added_by) SELECT $1,$2,'active','guild_onboarding' WHERE NOT EXISTS (SELECT 1 FROM twitch_partners WHERE twitch_user_id = $1)")
-            .bind(&session.twitch_user_id).bind(&session.twitch_login).execute(&mut *tx).await?;
+        sqlx::query("UPDATE twitch_partners SET status = 'active', departnered_at = NULL, require_discord_link = CASE WHEN $2 THEN 1 ELSE require_discord_link END, technical_pause_reason = CASE WHEN lower(btrim(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%' THEN NULL ELSE technical_pause_reason END WHERE id = (SELECT id FROM twitch_partners WHERE twitch_user_id = $1 ORDER BY CASE COALESCE(status, '') WHEN 'active' THEN 0 WHEN 'archived' THEN 1 WHEN 'departnered' THEN 2 ELSE 3 END, COALESCE(departnered_at, admin_archived_at, partnered_at) DESC NULLS LAST LIMIT 1 FOR UPDATE) AND (status <> 'active' OR $2) AND admin_archived_at IS NULL AND COALESCE(manual_partner_opt_out, 0) = 0 AND lower(btrim(COALESCE(technical_pause_reason, ''))) NOT IN ('blocked','bot_banned')")
+            .bind(&session.twitch_user_id).bind(guild == HOME).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, status, added_by, require_discord_link) SELECT $1,$2,'active','guild_onboarding',CASE WHEN $3 THEN 1 ELSE 0 END WHERE NOT EXISTS (SELECT 1 FROM twitch_partners WHERE twitch_user_id = $1)")
+            .bind(&session.twitch_user_id).bind(&session.twitch_login).bind(guild == HOME).execute(&mut *tx).await?;
     }
     tx.commit().await?;
     Ok(Some(active))

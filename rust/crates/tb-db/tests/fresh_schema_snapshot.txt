@@ -2130,6 +2130,7 @@ twitch_partners|inactivity_flagged_at|text|YES|
 twitch_partners|last_description|text|YES|
 twitch_partners|last_link_checked_at|text|YES|
 twitch_partners|last_link_ok|integer|YES|
+twitch_partners|legacy_home_admitted|boolean|NO|false
 twitch_partners|live_ping_enabled|integer|YES|1
 twitch_partners|live_ping_role_id|bigint|YES|
 twitch_partners|manual_partner_opt_out|integer|YES|0
