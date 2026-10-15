@@ -6,7 +6,7 @@ import { StudioActivity } from '@/components/socialmedia/StudioActivity';
 import { ClipCard } from '@/components/socialmedia/ClipCard';
 import { StudioHero } from '@/components/socialmedia/StudioHero';
 import { useEffect, useMemo, useRef, useState, type ComponentType, type DragEvent, type ReactNode } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useIsFetching, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, BarChart3, ChevronDown, CheckCircle2, Archive, Film, Loader2, ShieldAlert, Layers3, Calendar, Gamepad2, ExternalLink, Pencil, SlidersHorizontal, DownloadCloud, Crop, List, LayoutGrid, X } from 'lucide-react';
 import { useLanguage, useT } from '@/context/LanguageContext';
 
@@ -94,6 +94,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
   const [showAiEditor, setShowAiEditor] = useState(() => ['ai', 'review'].includes(new URLSearchParams(window.location.search).get('view') ?? ''));
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const reloading = useIsFetching({ predicate: (query) => RELOAD_QUERY_ROOTS.has(String(query.queryKey[0])) }) > 0;
   const [publishedView, setPublishedView] = useState<'clips' | 'vod'>(() => new URLSearchParams(window.location.search).get('view') === 'vod' ? 'vod' : 'clips');
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -382,6 +383,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
     void queryClient.invalidateQueries({ queryKey: ['social-media', 'autopilot-publish', twitchUserId] });
   };
   const refreshAll = () => {
+    if (reloading) return;
     void queryClient.invalidateQueries({ predicate: (query) => RELOAD_QUERY_ROOTS.has(String(query.queryKey[0])) });
     setReloadKey((key) => key + 1);
   };
@@ -540,7 +542,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
 
   return (
     <div className="social-studio space-y-6" data-studio-version="industrial-gold-live-v1">
-      <StudioHero streamer={streamer} onUpload={() => setShowUpload(true)} onRefresh={refreshAll} />
+      <StudioHero streamer={streamer} onUpload={() => setShowUpload(true)} onRefresh={refreshAll} refreshing={reloading} />
       <StudioStatusBar poolFailed={postingPlanQuery.isError} data={overviewData} pool={postingPlanQuery.isError ? undefined : postingPlanQuery.data?.pool} now={now} onNavigate={openView} />
 
       <nav className="studio-tabs" role="tablist" aria-label={t('Social Studio')}>
