@@ -134,18 +134,23 @@ fn commands_reply(broadcaster_id: &str) -> String {
 }
 
 fn is_invite_decoration(word: &str) -> bool {
-    word.starts_with('@') || !word.chars().any(char::is_alphanumeric)
+    mentioned_twitch_login(word).is_some() || !word.chars().any(char::is_alphanumeric)
+}
+
+fn mentioned_twitch_login(word: &str) -> Option<String> {
+    let login = word
+        .strip_prefix('@')?
+        .trim_end_matches(|ch: char| !ch.is_alphanumeric() && ch != '_')
+        .to_lowercase();
+    let valid = (1..=25).contains(&login.len())
+        && login
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_');
+    valid.then_some(login)
 }
 
 fn invite_mention_target(args: &str) -> Option<String> {
-    args.split_whitespace()
-        .filter_map(|word| word.strip_prefix('@'))
-        .map(|login| {
-            login
-                .trim_end_matches(|ch: char| !ch.is_alphanumeric() && ch != '_')
-                .to_lowercase()
-        })
-        .find(|login| !login.is_empty())
+    args.split_whitespace().find_map(mentioned_twitch_login)
 }
 
 fn dashboard_reply() -> String {
@@ -2369,13 +2374,11 @@ impl CommandEngine {
         }
 
         let channel_login = event.broadcaster_user_login.to_lowercase();
-        let mentioned_login = invite_mention_target(args);
-        let chatter_login = mentioned_login
-            .clone()
-            .unwrap_or_else(|| event.chatter_user_login.to_lowercase());
+        let chatter_login =
+            invite_mention_target(args).unwrap_or_else(|| event.chatter_user_login.to_lowercase());
         let cooldown_key = (
             event.broadcaster_user_id.clone(),
-            mentioned_login.unwrap_or_else(|| event.chatter_user_id.clone()),
+            event.chatter_user_id.clone(),
         );
 
         // Cooldown-Check: 1h pro (channel, chatter) — bot.py:345
@@ -4089,6 +4092,35 @@ mod tests {
             .last_message()
             .await
             .is_some_and(|message| message.ends_with("@neuling")));
+        assert!(
+            engine
+                .handle(&make_event("!join @anderer", false, false))
+                .await
+        );
+        assert_eq!(api.message_count().await, 1);
+    }
+
+    #[test]
+    fn invite_ziel_nur_gueltiger_twitch_login() {
+        assert_eq!(
+            invite_mention_target("@Neu_ling1 :)"),
+            Some("neu_ling1".to_string())
+        );
+        assert_eq!(
+            invite_mention_target("@neuling!"),
+            Some("neuling".to_string())
+        );
+        for args in [
+            "@evil.com",
+            "@https://x.y/z",
+            "@a/b",
+            "@x?y",
+            "@abcdefghijklmnopqrstuvwxyz",
+        ] {
+            assert_eq!(invite_mention_target(args), None, "{args}");
+            assert!(!args.split_whitespace().all(is_invite_decoration), "{args}");
+        }
+        assert_eq!(invite_mention_target("@ :)"), None);
     }
 
     #[tokio::test]

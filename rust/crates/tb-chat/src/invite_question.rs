@@ -1215,9 +1215,12 @@ fn is_affirmative(raw: &str) -> bool {
 }
 
 fn is_stretched_token(word: &str, token: &str) -> bool {
-    let Some(rest) = word.strip_prefix(token) else {
+    let Some(mut rest) = word.strip_prefix(token) else {
         return false;
     };
+    while let Some(next) = rest.strip_prefix(token) {
+        rest = next;
+    }
     let last = token.chars().last();
     rest.chars().all(|ch| Some(ch) == last)
 }
@@ -2569,6 +2572,7 @@ mod tests {
             ("@DeutscheDeadlockCommunity ja", true, true),
             ("!ja", false, true),
             ("Jaaa!", false, true),
+            ("jaja", false, true),
             ("@freund ja", false, false),
             ("!join", false, false),
             ("jarvis ist cool", false, false),
