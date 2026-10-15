@@ -1,4 +1,5 @@
-import { useT } from '../../../context/LanguageContext';
+import { useLanguage, useT } from '../../../context/LanguageContext';
+import { editorErrorExplanation } from './failure';
 import { useEffect, useId, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AiCopyPlatform, AiPlatformCopy, AiVersionMetadata } from './api';
@@ -64,7 +65,7 @@ function usage(platform: AiCopyPlatform, copy: AiPlatformCopy, t: ReturnType<typ
 }
 
 export function MetadataPanel({ channel, videoId, disabled = false, onEditingChange }: { channel: string; videoId: number; disabled?: boolean; onEditingChange?: (editing: boolean) => void }) {
-  const t = useT();
+  const { language, t } = useLanguage();
   const formId = useId();
   const client = useQueryClient();
   const key = ['social-ai', 'metadata', channel, videoId] as const;
@@ -108,6 +109,6 @@ export function MetadataPanel({ channel, videoId, disabled = false, onEditingCha
     })}
     {(metadata.data.editable || draft) && <div className="social-ai-actions">{metadata.data.editable && <button type="submit" className="studio-primary" disabled={!editable || !valid || !draft}>{save.isPending ? t("Texte werden gespeichert…") : t("Texte speichern")}</button>}{draft && <button type="button" className="studio-button" disabled={save.isPending || save.isError || metadata.isFetching} onClick={() => { if (!save.isPending && !save.isError && !metadata.isFetching) { save.reset(); setDraft(null); } }}>{t("Änderungen verwerfen")}</button>}</div>}
     {save.isSuccess && <p role="status">{t("Titel, Beschreibung und Hashtags sind gespeichert.")}</p>}
-    {save.isError && <div className="social-ai-caution" role="alert"><p>{save.error instanceof Error ? t(save.error.message) : t("Die Texte konnten nicht gespeichert werden.")} {t("Lade den gespeicherten Stand neu, bevor du erneut speicherst oder Änderungen verwirfst.")}</p><button type="button" className="studio-button" disabled={metadata.isFetching} onClick={async () => { const result = await metadata.refetch(); if (result.isSuccess) save.reset(); }}>{t("Gespeicherte Texte neu laden")}</button></div>}
+    {save.isError && <div className="social-ai-caution" role="alert"><p>{language === 'en' ? editorErrorExplanation(save.error, t) : save.error instanceof Error ? save.error.message : t("Die Texte konnten nicht gespeichert werden.")} {t("Lade den gespeicherten Stand neu, bevor du erneut speicherst oder Änderungen verwirfst.")}</p><button type="button" className="studio-button" disabled={metadata.isFetching} onClick={async () => { const result = await metadata.refetch(); if (result.isSuccess) save.reset(); }}>{t("Gespeicherte Texte neu laden")}</button></div>}
   </form>;
 }

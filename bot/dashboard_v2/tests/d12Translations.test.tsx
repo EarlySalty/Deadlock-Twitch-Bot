@@ -1,13 +1,34 @@
-import { test } from 'node:test';
+import { test, vi } from 'vitest';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ts from 'typescript';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MetadataPanel } from '../src/components/socialmedia/ai/MetadataPanel';
+import type { AiVersionMetadata } from '../src/components/socialmedia/ai/api';
 import { LanguageProvider } from '../src/context/LanguageContext';
 import { dictionaryFor, translate } from '../src/i18n/dictionary';
 import { UplinkHochkantEditor } from '../src/components/uplink/UplinkHochkantEditor';
 import { UplinkYouTubeLive } from '../src/components/uplink/UplinkYouTubeLive';
+
+vi.mock('../src/components/socialmedia/ai/api', () => ({
+  AI_COPY_PLATFORMS: ['youtube', 'tiktok', 'instagram'],
+  fetchAiVersionMetadata: vi.fn(),
+  saveAiVersionMetadata: vi.fn(),
+}));
+
+const mutationFailure = vi.hoisted(() => ({ message: '' }));
+vi.mock('@tanstack/react-query', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@tanstack/react-query')>();
+  return {
+    ...original,
+    useMutation: (...args: Parameters<typeof original.useMutation>) => {
+      const mutation = original.useMutation(...args);
+      return mutationFailure.message ? { ...mutation, isError: true, error: new Error(mutationFailure.message) } : mutation;
+    },
+  };
+});
 
 Object.assign(globalThis, { React });
 
@@ -53,6 +74,46 @@ test('D12 Uplink renders English labels and interpolated status, with German unc
       }
     }
   } finally {
+    mutationFailure.message = '';
+    Object.assign(globalThis, { window: previousWindow });
+  }
+});
+
+
+test('D12 metadata validation and loading states follow the dashboard language', () => {
+  const previousWindow = globalThis.window;
+  try {
+    for (const language of ['en', 'de'] as const) {
+      Object.assign(globalThis, { window: { location: { search: `?lang=${language}` } } });
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+      const metadata: AiVersionMetadata = {
+        video_id: 12,
+        editable: true,
+        platforms: {
+          youtube: { title: '<invalid>', description: 'a'.repeat(5001), hashtags: ['a'.repeat(101)] },
+          tiktok: { title: '', description: 'a'.repeat(2201), hashtags: Array.from({ length: 31 }, () => 'tag') },
+          instagram: { title: '', description: '', hashtags: [] },
+        },
+      };
+      client.setQueryData(['social-ai', 'metadata', 'synthetic', 12], metadata);
+      const render = (videoId: number) => renderToStaticMarkup(<QueryClientProvider client={client}><LanguageProvider><MetadataPanel channel="synthetic" videoId={videoId} /></LanguageProvider></QueryClientProvider>);
+      const html = render(12);
+      const expected = language === 'en'
+        ? ['Title, description and hashtags', 'Save text', 'Please enter a title.', 'Please use no more than 30 hashtags.', 'Please enter a description or hashtags.', 'YouTube does not allow angle brackets in titles.', 'hashtags together are too long for YouTube', '2,200 characters long on TikTok', '100 characters long.', 'Title 9/100 characters']
+        : ['Titel, Beschreibung und Hashtags', 'Texte speichern', 'Bitte gib einen Titel ein.', 'Bitte verwende höchstens 30 Hashtags.', 'Bitte gib eine Beschreibung oder Hashtags ein.', 'YouTube erlaubt im Titel keine spitzen Klammern.', 'Hashtags sind für YouTube zusammen zu lang', '2200 Zeichen lang sein.', '100 Zeichen lang sein.', 'Titel 9/100 Zeichen'];
+      for (const text of expected) assert.ok(html.includes(text), text);
+      if (language === 'en') assert.ok(!/Bitte|Zeichen|Beschreibung|dürfen|höchstens/.test(html));
+      assert.ok(render(13).includes(language === 'en' ? 'Loading titles and descriptions…' : 'Titel und Beschreibungen werden geladen…'));
+      assert.equal(translate(language, 'Bitte wähle zuerst einen Kanal.'), language === 'en' ? 'Please select a channel first.' : 'Bitte wähle zuerst einen Kanal.');
+      mutationFailure.message = 'Unbekannter deutscher Backendfehler';
+      const failed = render(12);
+      assert.ok(failed.includes(language === 'en' ? 'The change could not be confirmed.' : mutationFailure.message));
+      if (language === 'en') assert.ok(!failed.includes(mutationFailure.message));
+      mutationFailure.message = '';
+      client.clear();
+    }
+  } finally {
+    mutationFailure.message = '';
     Object.assign(globalThis, { window: previousWindow });
   }
 });
