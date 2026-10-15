@@ -1,3 +1,6 @@
+import { translate } from '../i18n/dictionary';
+import type { LanguageContextValue } from '../context/LanguageContext';
+
 /**
  * Streamer-Selbstbedienung: Bot vom eigenen Kanal trennen.
  *
@@ -61,19 +64,19 @@ export function roleNeedsAttention(discordRole: string | undefined): boolean {
 }
 
 /** Kurzer deutscher Klartext für den Rollen-Ausgang. */
-export function roleLabel(discordRole: string | undefined): string {
+export function roleLabel(discordRole: string | undefined, t: LanguageContextValue['t'] = translate.bind(null, 'de')): string {
   // Fehlendes Feld heißt nicht „nichts zu tun": eine ältere Server-Version
   // hat den Ausgang schlicht nicht gemeldet — das ist ungeklärt, nicht okay.
-  if (!discordRole) return 'ACHTUNG — Ausgang unbekannt (keine Angabe vom Server)';
+  if (!discordRole) return t("ACHTUNG — Ausgang unbekannt (keine Angabe vom Server)");
   if (discordRole === 'skipped:no_discord_link') {
-    return 'kein Discord-Account verknüpft';
+    return t("kein Discord-Account verknüpft");
   }
-  if (discordRole === 'revoked') return 'entzogen';
+  if (discordRole === 'revoked') return t("entzogen");
   if (discordRole.startsWith('skipped:')) {
-    return `ACHTUNG — bleibt bestehen (${discordRole.slice('skipped:'.length)})`;
+    return t("ACHTUNG — bleibt bestehen ({value0})", { value0: discordRole.slice('skipped:'.length) });
   }
   if (discordRole.startsWith('failed:')) {
-    return `ACHTUNG — Entzug fehlgeschlagen (${discordRole.slice('failed:'.length)})`;
+    return t("ACHTUNG — Entzug fehlgeschlagen ({value0})", { value0: discordRole.slice('failed:'.length) });
   }
-  return `ACHTUNG — unklarer Ausgang (${discordRole})`;
+  return t("ACHTUNG — unklarer Ausgang ({value0})", { value0: discordRole });
 }

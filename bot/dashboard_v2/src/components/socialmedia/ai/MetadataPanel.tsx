@@ -1,3 +1,5 @@
+import { useLanguage, useT } from '../../../context/LanguageContext';
+import { editorErrorExplanation } from './failure';
 import { useEffect, useId, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AiCopyPlatform, AiPlatformCopy, AiVersionMetadata } from './api';
@@ -55,14 +57,15 @@ function copyIssues(platform: AiCopyPlatform, copy: AiPlatformCopy): string[] {
   return issues;
 }
 
-function usage(platform: AiCopyPlatform, copy: AiPlatformCopy): string {
+function usage(platform: AiCopyPlatform, copy: AiPlatformCopy, t: ReturnType<typeof useT>): string {
   const tags = formatHashtags(copy.hashtags);
-  if (platform === 'youtube') return `Titel ${Array.from(copy.title).length}/100 Zeichen · ${copy.hashtags.length} Hashtags`;
-  if (platform === 'tiktok') return `Beitragstext ${joined([copy.title, copy.description, tags]).length}/2200 Zeichen · ${copy.hashtags.length} Hashtags`;
-  return `Beitragstext ${Array.from(joined([copy.description, tags])).length}/2200 Zeichen · ${copy.hashtags.length}/30 Hashtags`;
+  if (platform === 'youtube') return t('Titel {count}/100 Zeichen · {tags} Hashtags', { count: Array.from(copy.title).length, tags: copy.hashtags.length });
+  if (platform === 'tiktok') return t('Beitragstext {count}/2200 Zeichen · {tags} Hashtags', { count: joined([copy.title, copy.description, tags]).length, tags: copy.hashtags.length });
+  return t('Beitragstext {count}/2200 Zeichen · {tags}/30 Hashtags', { count: Array.from(joined([copy.description, tags])).length, tags: copy.hashtags.length });
 }
 
 export function MetadataPanel({ channel, videoId, disabled = false, onEditingChange }: { channel: string; videoId: number; disabled?: boolean; onEditingChange?: (editing: boolean) => void }) {
+  const { language, t } = useLanguage();
   const formId = useId();
   const client = useQueryClient();
   const key = ['social-ai', 'metadata', channel, videoId] as const;
@@ -76,8 +79,8 @@ export function MetadataPanel({ channel, videoId, disabled = false, onEditingCha
     onEditingChange?.(draft !== null || save.isPending || save.isError);
     return () => onEditingChange?.(false);
   }, [draft, save.isPending, save.isError, onEditingChange]);
-  if (metadata.isPending) return <p role="status">Titel und Beschreibungen werden geladen…</p>;
-  if (metadata.isError) return <div className="social-ai-alert" role="alert"><div><p>Titel und Beschreibungen konnten nicht geladen werden.</p><button type="button" className="studio-button" onClick={() => { void metadata.refetch(); }}>Erneut laden</button></div></div>;
+  if (metadata.isPending) return <p role="status">{t("Titel und Beschreibungen werden geladen…")}</p>;
+  if (metadata.isError) return <div className="social-ai-alert" role="alert"><div><p>{t("Titel und Beschreibungen konnten nicht geladen werden.")}</p><button type="button" className="studio-button" onClick={() => { void metadata.refetch(); }}>{t("Erneut laden")}</button></div></div>;
   const current = draft ?? toDraft(metadata.data);
   const copy = toCopy(current);
   const issues = AI_COPY_PLATFORMS.map((platform) => ({ platform, list: copyIssues(platform, copy[platform]) }));
@@ -87,25 +90,25 @@ export function MetadataPanel({ channel, videoId, disabled = false, onEditingCha
     save.reset();
     setDraft({ ...current, [platform]: { ...current[platform], [field]: value } });
   };
-  return <form className="social-ai-metadata" data-unsaved={draft !== null || save.isPending || save.isError ? 'true' : undefined} data-saving={save.isPending ? 'true' : undefined} aria-label="Titel, Beschreibung und Hashtags" onSubmit={(event) => { event.preventDefault(); if (editable && valid && draft) save.mutate(copy); }}>
-    <h4>Titel, Beschreibung und Hashtags</h4>
-    <p>{metadata.data.editable ? 'Diese Texte werden beim Veröffentlichen dieser Fassung verwendet. Hashtags trennst du mit Leerzeichen.' : 'Diese Fassung ist nicht zur Bearbeitung ihrer Veröffentlichungstexte freigegeben.'}</p>
+  return <form className="social-ai-metadata" data-unsaved={draft !== null || save.isPending || save.isError ? 'true' : undefined} data-saving={save.isPending ? 'true' : undefined} aria-label={t("Titel, Beschreibung und Hashtags")} onSubmit={(event) => { event.preventDefault(); if (editable && valid && draft) save.mutate(copy); }}>
+    <h4>{t("Titel, Beschreibung und Hashtags")}</h4>
+    <p>{metadata.data.editable ? t("Diese Texte werden beim Veröffentlichen dieser Fassung verwendet. Hashtags trennst du mit Leerzeichen.") : t("Diese Fassung ist nicht zur Bearbeitung ihrer Veröffentlichungstexte freigegeben.")}</p>
     {AI_COPY_PLATFORMS.map((platform) => {
       const id = `${formId}-${platform}`;
       const platformIssues = issues.find((entry) => entry.platform === platform)?.list ?? [];
       return <fieldset key={platform} disabled={!editable}>
         <legend>{labels[platform]}</legend>
-        {platform === 'instagram' ? <p>Instagram verwendet keinen Titel, nur Beschreibung und Hashtags.</p> : <><label htmlFor={`${id}-title`}>Titel</label><input id={`${id}-title`} type="text" value={current[platform].title} onChange={(event) => update(platform, 'title', event.target.value)} /></>}
-        <label htmlFor={`${id}-description`}>Beschreibung</label>
+        {platform === 'instagram' ? <p>{t("Instagram verwendet keinen Titel, nur Beschreibung und Hashtags.")}</p> : <><label htmlFor={`${id}-title`}>{t("Titel")}</label><input id={`${id}-title`} type="text" value={current[platform].title} onChange={(event) => update(platform, 'title', event.target.value)} /></>}
+        <label htmlFor={`${id}-description`}>{t("Beschreibung")}</label>
         <textarea id={`${id}-description`} rows={3} value={current[platform].description} onChange={(event) => update(platform, 'description', event.target.value)} />
-        <label htmlFor={`${id}-hashtags`}>Hashtags</label>
+        <label htmlFor={`${id}-hashtags`}>{t("Hashtags")}</label>
         <input id={`${id}-hashtags`} type="text" value={current[platform].hashtags} onChange={(event) => update(platform, 'hashtags', event.target.value)} placeholder="#deadlock #clips" />
-        <small>{usage(platform, copy[platform])}</small>
-        {platformIssues.map((issue) => <p key={issue} className="social-ai-caution" role="alert">{issue}</p>)}
+        <small>{usage(platform, copy[platform], t)}</small>
+        {platformIssues.map((issue) => <p key={issue} className="social-ai-caution" role="alert">{t(issue)}</p>)}
       </fieldset>;
     })}
-    {(metadata.data.editable || draft) && <div className="social-ai-actions">{metadata.data.editable && <button type="submit" className="studio-primary" disabled={!editable || !valid || !draft}>{save.isPending ? 'Texte werden gespeichert…' : 'Texte speichern'}</button>}{draft && <button type="button" className="studio-button" disabled={save.isPending || save.isError || metadata.isFetching} onClick={() => { if (!save.isPending && !save.isError && !metadata.isFetching) { save.reset(); setDraft(null); } }}>Änderungen verwerfen</button>}</div>}
-    {save.isSuccess && <p role="status">Titel, Beschreibung und Hashtags sind gespeichert.</p>}
-    {save.isError && <div className="social-ai-caution" role="alert"><p>{save.error instanceof Error ? save.error.message : 'Die Texte konnten nicht gespeichert werden.'} Lade den gespeicherten Stand neu, bevor du erneut speicherst oder Änderungen verwirfst.</p><button type="button" className="studio-button" disabled={metadata.isFetching} onClick={async () => { const result = await metadata.refetch(); if (result.isSuccess) save.reset(); }}>Gespeicherte Texte neu laden</button></div>}
+    {(metadata.data.editable || draft) && <div className="social-ai-actions">{metadata.data.editable && <button type="submit" className="studio-primary" disabled={!editable || !valid || !draft}>{save.isPending ? t("Texte werden gespeichert…") : t("Texte speichern")}</button>}{draft && <button type="button" className="studio-button" disabled={save.isPending || save.isError || metadata.isFetching} onClick={() => { if (!save.isPending && !save.isError && !metadata.isFetching) { save.reset(); setDraft(null); } }}>{t("Änderungen verwerfen")}</button>}</div>}
+    {save.isSuccess && <p role="status">{t("Titel, Beschreibung und Hashtags sind gespeichert.")}</p>}
+    {save.isError && <div className="social-ai-caution" role="alert"><p>{language === 'en' ? editorErrorExplanation(save.error, t) : save.error instanceof Error ? save.error.message : t("Die Texte konnten nicht gespeichert werden.")} {t("Lade den gespeicherten Stand neu, bevor du erneut speicherst oder Änderungen verwirfst.")}</p><button type="button" className="studio-button" disabled={metadata.isFetching} onClick={async () => { const result = await metadata.refetch(); if (result.isSuccess) save.reset(); }}>{t("Gespeicherte Texte neu laden")}</button></div>}
   </form>;
 }

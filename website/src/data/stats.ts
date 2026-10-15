@@ -1,3 +1,4 @@
+import { landingText } from "@/lib/landingLocale";
 export interface Stat {
   label: string;
   value: number;
@@ -6,17 +7,17 @@ export interface Stat {
 
 export const stats: Stat[] = [
   {
-    label: "Streamer",
+    label: landingText("Streamer"),
     value: 30,
     suffix: "+",
   },
   {
-    label: "Module",
+    label: landingText("Module"),
     value: 7,
     suffix: "",
   },
   {
-    label: "Analytics-Tabs",
+    label: landingText("Analytics-Tabs"),
     value: 13,
     suffix: "",
   },

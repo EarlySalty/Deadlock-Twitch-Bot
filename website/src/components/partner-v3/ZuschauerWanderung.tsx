@@ -1,3 +1,4 @@
+import { landingText, landingLocale } from "@/lib/landingLocale";
 import { motion, useInView } from "framer-motion";
 import { useRef } from "react";
 import { ArrowRight, Power, Search, Users } from "lucide-react";
@@ -144,8 +145,20 @@ function NetworkSvg() {
         }}
       />
       <circle cx="14" cy="20" r="4" fill="var(--color-primary)" opacity={0.8} />
-      <circle cx="30" cy="10" r="3.5" fill="var(--color-accent)" opacity={0.8} />
-      <circle cx="30" cy="30" r="3.5" fill="var(--color-accent)" opacity={0.8} />
+      <circle
+        cx="30"
+        cy="10"
+        r="3.5"
+        fill="var(--color-accent)"
+        opacity={0.8}
+      />
+      <circle
+        cx="30"
+        cy="30"
+        r="3.5"
+        fill="var(--color-accent)"
+        opacity={0.8}
+      />
       <circle cx="46" cy="20" r="4" fill="var(--color-primary)" opacity={0.8} />
     </svg>
   );
@@ -234,12 +247,12 @@ export function ZuschauerWanderung() {
 
   const kacheln = stats
     ? [
-        { wert: stats.activePartners, label: "Aktive Partner" },
-        { wert: stats.raidsTotal, label: "Raids gesamt" },
-        { wert: stats.raids7d, label: "Raids, letzte 7 Tage" },
+        { wert: stats.activePartners, label: landingText("Aktive Partner") },
+        { wert: stats.raidsTotal, label: landingText("Raids gesamt") },
+        { wert: stats.raids7d, label: landingText("Raids, letzte 7 Tage") },
         {
           wert: stats.viewersForwardedTotal ?? 0,
-          label: "Weitergereichte Zuschauer gesamt",
+          label: landingText("Weitergereichte Zuschauer gesamt"),
         },
       ].filter((kachel) => kachel.wert > 0)
     : [];
@@ -250,16 +263,19 @@ export function ZuschauerWanderung() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
           <ScrollReveal>
             <p className="text-sm text-[var(--color-accent)] font-medium uppercase tracking-wider mb-4">
-              Im Netz
+              {landingText("Im Netz")}
             </p>
 
             <h2 className="text-3xl md:text-4xl font-bold text-[var(--color-text-primary)] mb-6">
-              So wandern <GradientText>Zuschauer</GradientText> weiter
+              {landingText("So wandern ")}
+              <GradientText>{landingText("Zuschauer")}</GradientText>{" "}
+              {landingText(" weiter")}
             </h2>
 
             <p className="text-[var(--color-text-secondary)] text-lg leading-relaxed">
-              Endet ein Stream, sucht das Netz den passenden Live-Partner und
-              reicht die Zuschauer direkt weiter.
+              {landingText(
+                "Endet ein Stream, sucht das Netz den passenden Live-Partner und reicht die Zuschauer direkt weiter.",
+              )}
             </p>
 
             {kacheln.length > 0 ? (
@@ -270,7 +286,7 @@ export function ZuschauerWanderung() {
                     className="panel-card rounded-2xl p-5 text-center"
                   >
                     <p className="text-3xl font-bold text-[var(--color-accent)] tabular-nums">
-                      {kachel.wert.toLocaleString("de-DE")}
+                      {kachel.wert.toLocaleString(landingLocale())}
                     </p>
                     <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
                       {kachel.label}
@@ -284,7 +300,7 @@ export function ZuschauerWanderung() {
           <ScrollReveal delay={0.2}>
             <div className="panel-card rounded-2xl p-8">
               <p className="text-lg font-semibold text-[var(--color-text-primary)] mb-6">
-                Was am Stream-Ende passiert
+                {landingText("Was am Stream-Ende passiert")}
               </p>
 
               <motion.div
@@ -316,7 +332,10 @@ export function ZuschauerWanderung() {
                           border: "1px solid rgba(85, 151, 143, 0.45)",
                         }}
                       >
-                        <Icon size={18} className="text-[var(--color-accent-hover)]" />
+                        <Icon
+                          size={18}
+                          className="text-[var(--color-accent-hover)]"
+                        />
                       </div>
 
                       <Grafik />

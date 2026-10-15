@@ -23,7 +23,7 @@
 //! transkribierte Streams teilten sich dieselben Kerne wie das Modell. Aufnehmen
 //! kostet fast nichts, transkribieren viel - deshalb die Trennung.
 
-include!(concat!(env!("OUT_DIR"), "/build_revision.rs"));
+include!("../../build_revision.rs");
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

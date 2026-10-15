@@ -1,3 +1,4 @@
+import { useLanguage } from '@/context/LanguageContext';
 import { AlertCircle, Loader2, MessageCircle } from 'lucide-react';
 
 import type { TimeRange } from '@/types/analytics';
@@ -12,6 +13,7 @@ interface ChatSubPageProps {
 }
 
 export function ChatTreue({ streamer, days }: ChatSubPageProps) {
+  const { t, locale } = useLanguage();
   const {
     data,
     isLoading,
@@ -29,7 +31,7 @@ export function ChatTreue({ streamer, days }: ChatSubPageProps) {
     return (
       <div className="flex h-64 flex-col items-center justify-center">
         <AlertCircle className="mb-4 h-12 w-12 text-text-secondary" />
-        <p className="text-lg text-text-secondary">Wähle einen Streamer aus</p>
+        <p className="text-lg text-text-secondary">{t("Wähle einen Streamer aus")}</p>
       </div>
     );
   }
@@ -46,12 +48,12 @@ export function ChatTreue({ streamer, days }: ChatSubPageProps) {
     return (
       <div className="flex h-64 flex-col items-center justify-center">
         <MessageCircle className="mb-4 h-12 w-12 text-text-secondary" />
-        <p className="text-lg text-text-secondary">Keine Chat-Daten verfügbar</p>
+        <p className="text-lg text-text-secondary">{t("Keine Chat-Daten verfügbar")}</p>
       </div>
     );
   }
 
-  const model = buildChatAnalyticsViewModel(data, days, hourlyChartGradientId);
+  const model = buildChatAnalyticsViewModel(data, days, hourlyChartGradientId, t, locale);
 
   return (
     <ChatTreueContent
@@ -71,6 +73,7 @@ export function ChatTreue({ streamer, days }: ChatSubPageProps) {
 }
 
 export function ChatAktivitaet({ streamer, days }: ChatSubPageProps) {
+  const { t, locale } = useLanguage();
   const {
     data,
     isLoading,
@@ -88,7 +91,7 @@ export function ChatAktivitaet({ streamer, days }: ChatSubPageProps) {
     return (
       <div className="flex h-64 flex-col items-center justify-center">
         <AlertCircle className="mb-4 h-12 w-12 text-text-secondary" />
-        <p className="text-lg text-text-secondary">Wähle einen Streamer aus</p>
+        <p className="text-lg text-text-secondary">{t("Wähle einen Streamer aus")}</p>
       </div>
     );
   }
@@ -105,12 +108,12 @@ export function ChatAktivitaet({ streamer, days }: ChatSubPageProps) {
     return (
       <div className="flex h-64 flex-col items-center justify-center">
         <MessageCircle className="mb-4 h-12 w-12 text-text-secondary" />
-        <p className="text-lg text-text-secondary">Keine Chat-Daten verfügbar</p>
+        <p className="text-lg text-text-secondary">{t("Keine Chat-Daten verfügbar")}</p>
       </div>
     );
   }
 
-  const model = buildChatAnalyticsViewModel(data, days, hourlyChartGradientId);
+  const model = buildChatAnalyticsViewModel(data, days, hourlyChartGradientId, t, locale);
 
   return (
     <ChatAktivitaetContent
@@ -130,6 +133,7 @@ export function ChatAktivitaet({ streamer, days }: ChatSubPageProps) {
 }
 
 export function ChatTiefe({ streamer, days }: ChatSubPageProps) {
+  const { t, locale } = useLanguage();
   const {
     data,
     isLoading,
@@ -147,7 +151,7 @@ export function ChatTiefe({ streamer, days }: ChatSubPageProps) {
     return (
       <div className="flex h-64 flex-col items-center justify-center">
         <AlertCircle className="mb-4 h-12 w-12 text-text-secondary" />
-        <p className="text-lg text-text-secondary">Wähle einen Streamer aus</p>
+        <p className="text-lg text-text-secondary">{t("Wähle einen Streamer aus")}</p>
       </div>
     );
   }
@@ -164,12 +168,12 @@ export function ChatTiefe({ streamer, days }: ChatSubPageProps) {
     return (
       <div className="flex h-64 flex-col items-center justify-center">
         <MessageCircle className="mb-4 h-12 w-12 text-text-secondary" />
-        <p className="text-lg text-text-secondary">Keine Chat-Daten verfügbar</p>
+        <p className="text-lg text-text-secondary">{t("Keine Chat-Daten verfügbar")}</p>
       </div>
     );
   }
 
-  const model = buildChatAnalyticsViewModel(data, days, hourlyChartGradientId);
+  const model = buildChatAnalyticsViewModel(data, days, hourlyChartGradientId, t, locale);
 
   return (
     <ChatTiefeContent

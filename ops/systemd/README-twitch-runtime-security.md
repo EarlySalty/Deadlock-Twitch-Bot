@@ -45,6 +45,30 @@ Kompatibilität für noch nicht getrennte lokale Dienste, aber keinerlei DDL-,
 Superuser-, Rollen- oder Dateisystemrechte. Die fachliche Aufteilung dieser
 Restdienste folgt zusammen mit den späteren getrennten Infisical-Bereichen.
 
+## Release bauen
+
+`ops/twitch-release-build <voller-40-stelliger-sha>` baut Rust über
+`CARGO_SLOT_DEPLOY=1 cargo-slot build --release --timings` mit zwölf Jobs
+und alle drei Frontends. Der saubere, eigenständige Build-Clone
+`~/repos/twitch-release-build` bleibt über Releases hinweg erhalten; damit
+bleiben Cargo-Zwischenartefakte und unveränderte Quell-Mtimes wiederverwendbar.
+Der Branch-Watchdog entfernt nur verknüpfte Worktrees, nicht diesen Clone.
+Das Release-Profil verwendet 16 Codegen-Units und Thin-LTO.
+
+Die Cargo-Artefakte enthalten eine feste, ungestempelte Herkunftsmarke. Das
+Skript kopiert sie ohne Symlinks in `~/repos/twitch-release-<sha>` und setzt
+nur dort den geprüften Git-SHA mit `objcopy`. Es prüft anschließend sowohl
+`--build-revision` als auch die eingebettete Marke. Die wiederverwendbaren
+Cargo-Artefakte bleiben unverändert; ein SHA-Wechsel erzwingt deshalb keinen
+Rust-Neubau. Ungestempelte und abweichende Artefakte werden nicht ausgeliefert.
+Alle Frontends werden frisch gebaut; alte `dist`-Ordner werden nicht aus einem
+früheren Release übernommen.
+Ein vorhandener Staging-Clone oder ein unsauberer Build-Clone bricht den Lauf ab.
+Das Skript deployt nicht und startet keine Dienste neu. Erst nach separater
+Freigabe übernimmt der installierte Wrapper `deploy-twitch-release <sha>` den
+Staging-Clone. Cargo-Timings liegen unter
+`~/repos/twitch-release-build/rust/target/cargo-timings/`.
+
 ## Installation und Deploy
 
 1. Frontends und die drei Rust-Release-Binaries in einem eigenständigen Clone

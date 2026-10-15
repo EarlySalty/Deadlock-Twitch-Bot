@@ -1,3 +1,4 @@
+import { landingText } from "@/lib/landingLocale";
 import { useState, type ComponentType } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
@@ -23,43 +24,48 @@ const vorteile: Vorteil[] = [
   {
     id: "auto-raid",
     icon: Swords,
-    titel: "Auto-Raid im Netzwerk",
-    beschreibung:
+    titel: landingText("Auto-Raid im Netzwerk"),
+    beschreibung: landingText(
       "Endet dein Stream, landen deine Zuschauer beim passenden Live-Partner. Gehen andere offline, landen ihre bei dir.",
+    ),
   },
   {
     id: "discord-live",
     icon: Zap,
-    titel: "Sichtbar ab der ersten Minute",
-    beschreibung:
+    titel: landingText("Sichtbar ab der ersten Minute"),
+    beschreibung: landingText(
       "Du gehst live, der Discord weiß es sofort. Verschluckt Twitch das Ereignis, fragt der Bot alle 15 Sekunden selbst nach.",
+    ),
   },
   {
     id: "zahlen",
     icon: BarChart2,
-    titel: "Deine Zahlen im Blick",
-    beschreibung:
+    titel: landingText("Deine Zahlen im Blick"),
+    beschreibung: landingText(
       "Zuschauer, Chat, Raids, Bestwerte und der Vergleich mit dem Netzwerk. Nach jedem Stream siehst du, was funktioniert hat.",
+    ),
   },
   {
     id: "clips",
     icon: Clapperboard,
-    titel: "Clips direkt aus dem Chat",
-    beschreibung: "!clip im Chat, fertig ist der Clip.",
+    titel: landingText("Clips direkt aus dem Chat"),
+    beschreibung: landingText("!clip im Chat, fertig ist der Clip."),
   },
   {
     id: "community",
     icon: Users,
-    titel: "Eine Community im Rücken",
-    beschreibung:
+    titel: landingText("Eine Community im Rücken"),
+    beschreibung: landingText(
       "Treue Zuschauer werden belohnt, Lurker gezielt angesprochen. Im Streamer-Bereich im Discord tauschst du dich mit den anderen aus.",
+    ),
   },
   {
     id: "schutz",
     icon: ShieldCheck,
-    titel: "Ein Schutzschild für alle",
-    beschreibung:
+    titel: landingText("Ein Schutzschild für alle"),
+    beschreibung: landingText(
       "Scam- und Spam-Konten fliegen aus deinem Chat, bevor jemand sie sieht. Dazu die Ban-Liste des ganzen Netzwerks, alles pro Kanal abschaltbar.",
+    ),
   },
 ];
 
@@ -71,8 +77,10 @@ export function NebenDeinenBots() {
     <section id="neben" className="py-24">
       <div className="max-w-7xl mx-auto px-6">
         <SectionHeading
-          title="Läuft neben deinen Bots"
-          subtitle="Nichts wird ersetzt und kein bestehender Bot muss weichen. Der Anschluss gilt immer, weitergereicht wird nach Deadlock-Streams, ab und zu Deadlock reicht."
+          title={landingText("Läuft neben deinen Bots")}
+          subtitle={landingText(
+            "Nichts wird ersetzt und kein bestehender Bot muss weichen. Der Anschluss gilt immer, weitergereicht wird nach Deadlock-Streams, ab und zu Deadlock reicht.",
+          )}
         />
 
         <ScrollReveal className="mt-12">
@@ -98,7 +106,9 @@ export function NebenDeinenBots() {
               aria-expanded={ausgeklappt}
               className="inline-flex items-center gap-2 rounded-xl border border-[var(--color-border)] bg-black/20 px-5 py-2.5 text-sm font-medium uppercase tracking-wider text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-border-hover)] hover:text-[var(--color-text-primary)]"
             >
-              {ausgeklappt ? "Weniger anzeigen" : "Mehr anzeigen"}
+              {ausgeklappt
+                ? landingText("Weniger anzeigen")
+                : landingText("Mehr anzeigen")}
               <ChevronDown
                 size={16}
                 className={`transition-transform ${ausgeklappt ? "rotate-180" : ""}`}

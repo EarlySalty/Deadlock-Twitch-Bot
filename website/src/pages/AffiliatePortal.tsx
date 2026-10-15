@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { landingText, landingLocale, landingLink } from "@/lib/landingLocale";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import {
   AlertCircle,
   ArrowRightLeft,
@@ -16,7 +23,8 @@ import {
 } from "lucide-react";
 
 type View = "login" | "dashboard";
-type Tab = "overview" | "streamers" | "commissions" | "gutschriften" | "settings";
+type Tab =
+  "overview" | "streamers" | "commissions" | "gutschriften" | "settings";
 type UstStatus = "unknown" | "kleinunternehmer" | "regelbesteuert";
 
 interface GutschriftReadiness {
@@ -104,45 +112,45 @@ const EMPTY_READINESS: GutschriftReadiness = {
 };
 
 const COUNTRIES = [
-  { value: "DE", label: "Deutschland" },
-  { value: "AT", label: "Österreich" },
-  { value: "CH", label: "Schweiz" },
-  { value: "NL", label: "Niederlande" },
-  { value: "BE", label: "Belgien" },
-  { value: "LU", label: "Luxemburg" },
-  { value: "FR", label: "Frankreich" },
-  { value: "IT", label: "Italien" },
-  { value: "ES", label: "Spanien" },
-  { value: "PL", label: "Polen" },
+  { value: "DE", label: landingText("Deutschland") },
+  { value: "AT", label: landingText("Österreich") },
+  { value: "CH", label: landingText("Schweiz") },
+  { value: "NL", label: landingText("Niederlande") },
+  { value: "BE", label: landingText("Belgien") },
+  { value: "LU", label: landingText("Luxemburg") },
+  { value: "FR", label: landingText("Frankreich") },
+  { value: "IT", label: landingText("Italien") },
+  { value: "ES", label: landingText("Spanien") },
+  { value: "PL", label: landingText("Polen") },
 ];
 
 const TABS: { id: Tab; label: string; icon: typeof LayoutDashboard }[] = [
-  { id: "overview", label: "Übersicht", icon: LayoutDashboard },
-  { id: "streamers", label: "Streamer", icon: Users },
-  { id: "commissions", label: "Provisionen", icon: Receipt },
-  { id: "gutschriften", label: "Gutschriften", icon: FileText },
-  { id: "settings", label: "Einstellungen", icon: Settings },
+  { id: "overview", label: landingText("Übersicht"), icon: LayoutDashboard },
+  { id: "streamers", label: landingText("Streamer"), icon: Users },
+  { id: "commissions", label: landingText("Provisionen"), icon: Receipt },
+  { id: "gutschriften", label: landingText("Gutschriften"), icon: FileText },
+  { id: "settings", label: landingText("Einstellungen"), icon: Settings },
 ];
 
 function formatCents(cents: number, currency = "EUR"): string {
-  return new Intl.NumberFormat("de-DE", {
+  return new Intl.NumberFormat(landingLocale(), {
     style: "currency",
     currency: currency.toUpperCase(),
   }).format((cents || 0) / 100);
 }
 
 function formatDate(value: string | null | undefined): string {
-  if (!value) return "—";
+  if (!value) return landingText("—");
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return "—";
-  return parsed.toLocaleDateString("de-DE");
+  if (Number.isNaN(parsed.getTime())) return landingText("—");
+  return parsed.toLocaleDateString(landingLocale());
 }
 
 function formatDateTime(value: string | null | undefined): string {
-  if (!value) return "—";
+  if (!value) return landingText("—");
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return "—";
-  return parsed.toLocaleString("de-DE", {
+  if (Number.isNaN(parsed.getTime())) return landingText("—");
+  return parsed.toLocaleString(landingLocale(), {
     dateStyle: "medium",
     timeStyle: "short",
   });
@@ -166,7 +174,9 @@ function emptySettingsForm(): SettingsFormState {
   };
 }
 
-function normalizeProfileToForm(profile: AffiliateProfile | null): SettingsFormState {
+function normalizeProfileToForm(
+  profile: AffiliateProfile | null,
+): SettingsFormState {
   if (!profile) {
     return emptySettingsForm();
   }
@@ -179,48 +189,59 @@ function normalizeProfileToForm(profile: AffiliateProfile | null): SettingsFormS
     address_country: profile.address_country || "DE",
     tax_id: profile.tax_id ?? "",
     vat_id: profile.vat_id ?? "",
-    ust_status: profile.ust_status ?? profile.gutschrift_readiness?.ust_status ?? "unknown",
+    ust_status:
+      profile.ust_status ??
+      profile.gutschrift_readiness?.ust_status ??
+      "unknown",
   };
 }
 
 function profileErrorText(code: string): string {
   switch (code) {
     case "invalid_json":
-      return "Die Daten konnten nicht gelesen werden.";
+      return landingText("Die Daten konnten nicht gelesen werden.");
     case "invalid_payload":
-      return "Das Profilformular ist ungültig.";
+      return landingText("Das Profilformular ist ungültig.");
     case "invalid_ust_status":
-      return "Bitte wähle einen gültigen USt-Status.";
+      return landingText("Bitte wähle einen gültigen USt-Status.");
     case "not_found":
-      return "Affiliate-Profil nicht gefunden.";
+      return landingText("Affiliate-Profil nicht gefunden.");
     default:
-      return code || "Profil konnte nicht gespeichert werden.";
+      return code || landingText("Profil konnte nicht gespeichert werden.");
   }
 }
 
 function claimErrorText(code: string): string {
   switch (code) {
     case "affiliate_inactive":
-      return "Dein Affiliate-Konto ist deaktiviert. Du kannst keine neuen Streamer zuordnen.";
+      return landingText(
+        "Dein Affiliate-Konto ist deaktiviert. Du kannst keine neuen Streamer zuordnen.",
+      );
     case "invalid_login":
-      return "Bitte gib einen gültigen Twitch-Login ein.";
+      return landingText("Bitte gib einen gültigen Twitch-Login ein.");
     case "already_claimed":
-      return "Dieser Streamer wurde bereits beansprucht.";
+      return landingText("Dieser Streamer wurde bereits beansprucht.");
     case "streamer_already_registered":
-      return "Dieser Streamer ist bereits als Partner registriert.";
+      return landingText(
+        "Dieser Streamer ist bereits als Partner registriert.",
+      );
     default:
-      return code || "Fehler beim Beanspruchen.";
+      return code || landingText("Fehler beim Beanspruchen.");
   }
 }
 
 function taxHint(status: UstStatus): string {
   switch (status) {
     case "kleinunternehmer":
-      return "Gemäß § 19 UStG wird keine Umsatzsteuer berechnet.";
+      return landingText("Gemäß § 19 UStG wird keine Umsatzsteuer berechnet.");
     case "regelbesteuert":
-      return "19 % Umsatzsteuer werden auf den Nettobetrag ausgewiesen.";
+      return landingText(
+        "19 % Umsatzsteuer werden auf den Nettobetrag ausgewiesen.",
+      );
     default:
-      return "Gutschrift-Generierung blockiert, bis der USt-Status gepflegt ist.";
+      return landingText(
+        "Gutschrift-Generierung blockiert, bis der USt-Status gepflegt ist.",
+      );
   }
 }
 
@@ -253,10 +274,17 @@ export default function AffiliatePortal() {
   const [gutschriften, setGutschriften] = useState<Gutschrift[]>([]);
   const [gutschriftReadiness, setGutschriftReadiness] =
     useState<GutschriftReadiness>(EMPTY_READINESS);
-  const [settingsForm, setSettingsForm] = useState<SettingsFormState>(emptySettingsForm);
+  const [settingsForm, setSettingsForm] =
+    useState<SettingsFormState>(emptySettingsForm);
   const [claimInput, setClaimInput] = useState("");
-  const [claimMsg, setClaimMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [profileMsg, setProfileMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [claimMsg, setClaimMsg] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
+  const [profileMsg, setProfileMsg] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingProfile, setSavingProfile] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -284,7 +312,9 @@ export default function AffiliatePortal() {
       const profileData = await readJsonSafe<AffiliateProfile>(profileRes);
       setProfile(profileData);
       setSettingsForm(normalizeProfileToForm(profileData));
-      setGutschriftReadiness(profileData.gutschrift_readiness ?? EMPTY_READINESS);
+      setGutschriftReadiness(
+        profileData.gutschrift_readiness ?? EMPTY_READINESS,
+      );
       setView("dashboard");
 
       const [claimsRes, commissionsRes, gutschriftenRes] = await Promise.all([
@@ -293,7 +323,11 @@ export default function AffiliatePortal() {
         fetch("/twitch/api/affiliate/gutschriften"),
       ]);
 
-      if ([claimsRes, commissionsRes, gutschriftenRes].some((res) => res.status === 401)) {
+      if (
+        [claimsRes, commissionsRes, gutschriftenRes].some(
+          (res) => res.status === 401,
+        )
+      ) {
         setView("login");
         setProfile(null);
         return;
@@ -315,10 +349,14 @@ export default function AffiliatePortal() {
       setClaims(claimsData.claims ?? []);
       setCommissions(commissionsData.commissions ?? []);
       setGutschriften(gutschriftenData.gutschriften ?? []);
-      setGutschriftReadiness(gutschriftenData.readiness ?? profileData.gutschrift_readiness);
+      setGutschriftReadiness(
+        gutschriftenData.readiness ?? profileData.gutschrift_readiness,
+      );
       setPageError(null);
     } catch {
-      setPageError("Die Affiliate-Daten konnten nicht geladen werden.");
+      setPageError(
+        landingText("Die Affiliate-Daten konnten nicht geladen werden."),
+      );
       setView("login");
     } finally {
       if (!background) {
@@ -341,20 +379,30 @@ export default function AffiliatePortal() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ streamer_login: login }),
       });
-      const data = await readJsonSafe<{ ok?: boolean; claimed?: string; error?: string }>(res);
+      const data = await readJsonSafe<{
+        ok?: boolean;
+        claimed?: string;
+        error?: string;
+      }>(res);
       if (data.ok) {
-        setClaimMsg({ ok: true, text: `${data.claimed ?? login} erfolgreich beansprucht.` });
+        setClaimMsg({
+          ok: true,
+          text: `${data.claimed ?? login} ${landingText("erfolgreich beansprucht.")}`,
+        });
         setClaimInput("");
         void fetchData({ background: true });
         return;
       }
       setClaimMsg({ ok: false, text: claimErrorText(data.error ?? "") });
     } catch {
-      setClaimMsg({ ok: false, text: "Netzwerkfehler." });
+      setClaimMsg({ ok: false, text: landingText("Netzwerkfehler.") });
     }
   }
 
-  function updateForm<K extends keyof SettingsFormState>(field: K, value: SettingsFormState[K]) {
+  function updateForm<K extends keyof SettingsFormState>(
+    field: K,
+    value: SettingsFormState[K],
+  ) {
     setSettingsForm((current) => ({ ...current, [field]: value }));
   }
 
@@ -366,7 +414,10 @@ export default function AffiliatePortal() {
       const payload = {
         ...settingsForm,
         address_country: settingsForm.address_country || "DE",
-        vat_id: settingsForm.ust_status === "regelbesteuert" ? settingsForm.vat_id : "",
+        vat_id:
+          settingsForm.ust_status === "regelbesteuert"
+            ? settingsForm.vat_id
+            : "",
       };
       const res = await fetch("/twitch/api/affiliate/profile", {
         method: "PUT",
@@ -384,11 +435,19 @@ export default function AffiliatePortal() {
       }
       setProfile(data.profile);
       setSettingsForm(normalizeProfileToForm(data.profile));
-      setGutschriftReadiness(data.profile.gutschrift_readiness ?? EMPTY_READINESS);
-      setProfileMsg({ ok: true, text: "Profil erfolgreich gespeichert." });
+      setGutschriftReadiness(
+        data.profile.gutschrift_readiness ?? EMPTY_READINESS,
+      );
+      setProfileMsg({
+        ok: true,
+        text: landingText("Profil erfolgreich gespeichert."),
+      });
       void fetchData({ background: true });
     } catch {
-      setProfileMsg({ ok: false, text: "Profil konnte nicht gespeichert werden." });
+      setProfileMsg({
+        ok: false,
+        text: landingText("Profil konnte nicht gespeichert werden."),
+      });
     } finally {
       setSavingProfile(false);
     }
@@ -410,28 +469,33 @@ export default function AffiliatePortal() {
             <LogIn size={28} className="text-white" />
           </div>
           <h1 className="text-2xl font-bold text-[#ece0c8] font-[Sora] mb-3">
-            Affiliate-Portal
+            {landingText("Affiliate-Portal")}
           </h1>
           <p className="text-[#b7aa91] text-sm mb-8 leading-relaxed">
-            Werde Vertriebler und verdiene 30% Provision auf jede Zahlung deiner
-            geworbenen Streamer dauerhaft und ohne Limit.
+            {landingText(
+              "Werde Vertriebler und verdiene 30% Provision auf jede Zahlung deiner geworbenen Streamer dauerhaft und ohne Limit.",
+            )}
           </p>
           <button
             onClick={() => {
-              window.location.href = "/twitch/auth/affiliate/login";
+              window.location.href = landingLink(
+                "/twitch/auth/affiliate/login",
+              );
             }}
             className="gradient-accent rounded-xl px-7 py-3.5 font-semibold w-full transition-all duration-200 hover:brightness-110 hover:shadow-[0_0_24px_4px_rgba(201,168,106,0.3)]"
           >
-            Mit Twitch anmelden
+            {landingText("Mit Twitch anmelden")}
           </button>
           <div className="mt-4 rounded-xl border border-[rgba(201,168,106,0.25)] bg-[rgba(201,168,106,0.08)] px-4 py-3 text-left">
             <div className="flex items-start gap-3">
-              <AlertCircle size={18} className="text-[#c8a86b] mt-0.5 shrink-0" />
+              <AlertCircle
+                size={18}
+                className="text-[#c8a86b] mt-0.5 shrink-0"
+              />
               <p className="text-xs leading-relaxed text-[#ece0c8]">
-                Steuerhinweis: Du bist selbst für die steuerliche Behandlung
-                deiner Provisionen verantwortlich. Verbinde später Stripe,
-                damit Auszahlungen automatisch an dein Auszahlungs-Konto gehen
-                können.
+                {landingText(
+                  "Steuerhinweis: Du bist selbst für die steuerliche Behandlung deiner Provisionen verantwortlich. Verbinde später Stripe, damit Auszahlungen automatisch an dein Auszahlungs-Konto gehen können.",
+                )}
               </p>
             </div>
           </div>
@@ -440,8 +504,12 @@ export default function AffiliatePortal() {
     );
   }
 
-  const readiness = gutschriftReadiness ?? profile?.gutschrift_readiness ?? EMPTY_READINESS;
-  const totalCents = commissions.reduce((sum, item) => sum + item.commission_cents, 0);
+  const readiness =
+    gutschriftReadiness ?? profile?.gutschrift_readiness ?? EMPTY_READINESS;
+  const totalCents = commissions.reduce(
+    (sum, item) => sum + item.commission_cents,
+    0,
+  );
   const transferredCents = commissions
     .filter((item) => item.status === "transferred")
     .reduce((sum, item) => sum + item.commission_cents, 0);
@@ -449,7 +517,8 @@ export default function AffiliatePortal() {
     .filter((item) => item.status === "pending")
     .reduce((sum, item) => sum + item.commission_cents, 0);
   const stripeConnected = profile?.stripe_connect_status === "connected";
-  const needsNextSteps = claims.length === 0 || !stripeConnected || !readiness.can_generate;
+  const needsNextSteps =
+    claims.length === 0 || !stripeConnected || !readiness.can_generate;
   const openGutschriften = gutschriften.filter(
     (item) => item.status === "generated" || item.status === "email_failed",
   );
@@ -497,12 +566,15 @@ export default function AffiliatePortal() {
         {tab === "overview" && (
           <div className="space-y-6">
             <SectionCard>
-              <h2 className="text-2xl font-bold font-[Sora]">Übersicht</h2>
+              <h2 className="text-2xl font-bold font-[Sora]">
+                {landingText("Übersicht")}
+              </h2>
               <p className="mt-3 text-sm leading-relaxed text-[#b7aa91]">
-                Willkommen zurück
-                {profile?.display_name ? `, ${profile.display_name}` : ""}. Hier
-                verwaltest du deine beanspruchten Streamer, deine Provisionen
-                und die automatische Gutschrift-Erstellung.
+                {landingText("Willkommen zurück")}
+                {profile?.display_name ? `, ${profile.display_name}` : ""}
+                {landingText(
+                  ". Hier verwaltest du deine beanspruchten Streamer, deine Provisionen und die automatische Gutschrift-Erstellung.",
+                )}
               </p>
             </SectionCard>
 
@@ -511,14 +583,21 @@ export default function AffiliatePortal() {
             {needsNextSteps && (
               <SectionCard>
                 <h3 className="text-sm font-semibold text-[#b7aa91] uppercase tracking-wider">
-                  Deine nächsten Schritte
+                  {landingText("Deine nächsten Schritte")}
                 </h3>
                 <div className="mt-4 space-y-3">
                   {claims.length === 0 && (
                     <ActionHint
-                      icon={<Users size={18} className="text-[#c8a86b] mt-0.5 shrink-0" />}
-                      title="Ersten Streamer beanspruchen"
-                      text="Öffne den Tab Streamer und beanspruche einen Channel per Twitch-Login. Ab dann bekommst du 30% auf jede Zahlung dieses Streamers."
+                      icon={
+                        <Users
+                          size={18}
+                          className="text-[#c8a86b] mt-0.5 shrink-0"
+                        />
+                      }
+                      title={landingText("Ersten Streamer beanspruchen")}
+                      text={landingText(
+                        "Öffne den Tab Streamer und beanspruche einen Channel per Twitch-Login. Ab dann bekommst du 30% auf jede Zahlung dieses Streamers.",
+                      )}
                     />
                   )}
                   {!stripeConnected && (
@@ -529,15 +608,28 @@ export default function AffiliatePortal() {
                           className="text-[#55978f] mt-0.5 shrink-0"
                         />
                       }
-                      title="Stripe für automatische Auszahlungen verbinden"
-                      text="Ohne Stripe werden Provisionen nur bis 50,00 EUR gespeichert. Alles darüber verfällt, bis dein Konto verbunden ist."
+                      title={landingText(
+                        "Stripe für automatische Auszahlungen verbinden",
+                      )}
+                      text={landingText(
+                        "Ohne Stripe werden Provisionen nur bis 50,00 EUR gespeichert. Alles darüber verfällt, bis dein Konto verbunden ist.",
+                      )}
                     />
                   )}
                   {!readiness.can_generate && (
                     <ActionHint
-                      icon={<ShieldCheck size={18} className="text-[#e0912f] mt-0.5 shrink-0" />}
-                      title="Steuer- und Adressdaten vervollständigen"
-                      text="Pflege im Tab Einstellungen deine Adresse, Kontakt-E-Mail und steuerlichen Angaben, damit Gutschriften automatisch erstellt werden können."
+                      icon={
+                        <ShieldCheck
+                          size={18}
+                          className="text-[#e0912f] mt-0.5 shrink-0"
+                        />
+                      }
+                      title={landingText(
+                        "Steuer- und Adressdaten vervollständigen",
+                      )}
+                      text={landingText(
+                        "Pflege im Tab Einstellungen deine Adresse, Kontakt-E-Mail und steuerlichen Angaben, damit Gutschriften automatisch erstellt werden können.",
+                      )}
                     />
                   )}
                 </div>
@@ -546,22 +638,22 @@ export default function AffiliatePortal() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
               <StatCard
-                label="Gesamtverdienst"
+                label={landingText("Gesamtverdienst")}
                 value={formatCents(totalCents)}
                 icon={<Receipt size={20} />}
               />
               <StatCard
-                label="Ausstehend"
+                label={landingText("Ausstehend")}
                 value={formatCents(pendingCents)}
                 icon={<Clock size={20} />}
               />
               <StatCard
-                label="Übertragen"
+                label={landingText("Übertragen")}
                 value={formatCents(transferredCents)}
                 icon={<ArrowRightLeft size={20} />}
               />
               <StatCard
-                label="Gutschriften brutto"
+                label={landingText("Gutschriften brutto")}
                 value={formatCents(gutschriftGrossTotal)}
                 icon={<FileText size={20} />}
               />
@@ -570,25 +662,25 @@ export default function AffiliatePortal() {
             <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_0.8fr] gap-6">
               <SectionCard>
                 <h3 className="text-sm font-semibold text-[#b7aa91] uppercase tracking-wider">
-                  Gutschrift-Status
+                  {landingText("Gutschrift-Status")}
                 </h3>
                 <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
                   <MiniStat
-                    label="Dokumente"
+                    label={landingText("Dokumente")}
                     value={String(gutschriften.length)}
                     tone="orange"
                   />
                   <MiniStat
-                    label="Offener Versand"
+                    label={landingText("Offener Versand")}
                     value={String(openGutschriften.length)}
                     tone="teal"
                   />
                   <MiniStat
-                    label="Letzte Gutschrift"
+                    label={landingText("Letzte Gutschrift")}
                     value={
                       latestGutschrift
                         ? formatCents(latestGutschrift.gross_amount_cents)
-                        : "—"
+                        : landingText("—")
                     }
                     tone="gray"
                   />
@@ -606,25 +698,29 @@ export default function AffiliatePortal() {
         {tab === "streamers" && (
           <div className="space-y-6">
             <SectionCard>
-              <h2 className="text-2xl font-bold font-[Sora]">Streamer</h2>
+              <h2 className="text-2xl font-bold font-[Sora]">
+                {landingText("Streamer")}
+              </h2>
               <p className="mt-3 text-sm leading-relaxed text-[#b7aa91]">
-                Beanspruche Streamer über ihren Twitch-Login. Sobald ein
-                Streamer dir zugeordnet ist, erhältst du 30% Provision auf jede
-                Zahlung dieses Accounts.
+                {landingText(
+                  "Beanspruche Streamer über ihren Twitch-Login. Sobald ein Streamer dir zugeordnet ist, erhältst du 30% Provision auf jede Zahlung dieses Accounts.",
+                )}
               </p>
             </SectionCard>
 
             <SectionCard>
               <h3 className="text-sm font-semibold text-[#b7aa91] uppercase tracking-wider">
-                Streamer beanspruchen
+                {landingText("Streamer beanspruchen")}
               </h3>
               <div className="mt-4 flex flex-col sm:flex-row gap-3">
                 <input
                   type="text"
-                  placeholder="Twitch-Login eingeben..."
+                  placeholder={landingText("Twitch-Login eingeben...")}
                   value={claimInput}
                   onChange={(event) => setClaimInput(event.target.value)}
-                  onKeyDown={(event) => event.key === "Enter" && void handleClaim()}
+                  onKeyDown={(event) =>
+                    event.key === "Enter" && void handleClaim()
+                  }
                   className="flex-1 bg-[#1c150d] border border-[rgba(201,168,106,0.24)] rounded-lg px-4 py-2.5 text-sm text-[#ece0c8] placeholder-[#b7aa91]/50 focus:outline-none focus:border-[#c8a86b] transition-colors"
                 />
                 <button
@@ -633,7 +729,7 @@ export default function AffiliatePortal() {
                   }}
                   className="gradient-accent rounded-lg px-5 py-2.5 text-sm font-semibold transition-all hover:brightness-110"
                 >
-                  Beanspruchen
+                  {landingText("Beanspruchen")}
                 </button>
               </div>
               {claimMsg && (
@@ -642,7 +738,11 @@ export default function AffiliatePortal() {
                     claimMsg.ok ? "text-success" : "text-danger"
                   }`}
                 >
-                  {claimMsg.ok ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
+                  {claimMsg.ok ? (
+                    <CheckCircle size={16} />
+                  ) : (
+                    <AlertCircle size={16} />
+                  )}
                   {claimMsg.text}
                 </div>
               )}
@@ -653,21 +753,31 @@ export default function AffiliatePortal() {
                 <thead>
                   <tr className="border-b border-[rgba(201,168,106,0.24)] text-[#b7aa91] text-left">
                     <th className="px-6 py-3 font-medium">Login</th>
-                    <th className="px-6 py-3 font-medium">Anzahl</th>
-                    <th className="px-6 py-3 font-medium">Gesamtverdienst</th>
-                    <th className="px-6 py-3 font-medium">Beansprucht am</th>
+                    <th className="px-6 py-3 font-medium">
+                      {landingText("Anzahl")}
+                    </th>
+                    <th className="px-6 py-3 font-medium">
+                      {landingText("Gesamtverdienst")}
+                    </th>
+                    <th className="px-6 py-3 font-medium">
+                      {landingText("Beansprucht am")}
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {claims.map((claim, index) => {
                     const claimLogin =
-                      claim.streamer_login ?? claim.claimed_streamer_login ?? "";
+                      claim.streamer_login ??
+                      claim.claimed_streamer_login ??
+                      "";
                     return (
                       <tr
                         key={`${claimLogin || "claim"}-${claim.claimed_at}-${index}`}
                         className="border-b border-[rgba(201,168,106,0.24)] last:border-0"
                       >
-                        <td className="px-6 py-3 font-medium">{claimLogin || "—"}</td>
+                        <td className="px-6 py-3 font-medium">
+                          {claimLogin || landingText("—")}
+                        </td>
                         <td className="px-6 py-3">{claim.commission_count}</td>
                         <td className="px-6 py-3">
                           {formatCents(claim.total_commission_cents)}
@@ -680,8 +790,11 @@ export default function AffiliatePortal() {
                   })}
                   {claims.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="px-6 py-8 text-center text-[#b7aa91]">
-                        Noch keine Streamer beansprucht.
+                      <td
+                        colSpan={4}
+                        className="px-6 py-8 text-center text-[#b7aa91]"
+                      >
+                        {landingText("Noch keine Streamer beansprucht.")}
                       </td>
                     </tr>
                   )}
@@ -694,10 +807,13 @@ export default function AffiliatePortal() {
         {tab === "commissions" && (
           <div className="space-y-6">
             <SectionCard>
-              <h2 className="text-2xl font-bold font-[Sora]">Provisionen</h2>
+              <h2 className="text-2xl font-bold font-[Sora]">
+                {landingText("Provisionen")}
+              </h2>
               <p className="mt-3 text-sm leading-relaxed text-[#b7aa91]">
-                Jede Zahlung eines von dir beanspruchten Streamers erzeugt eine
-                Provision. Hier siehst du den Verlauf inklusive Status.
+                {landingText(
+                  "Jede Zahlung eines von dir beanspruchten Streamers erzeugt eine Provision. Hier siehst du den Verlauf inklusive Status.",
+                )}
               </p>
             </SectionCard>
 
@@ -705,12 +821,22 @@ export default function AffiliatePortal() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-[rgba(201,168,106,0.24)] text-[#b7aa91] text-left">
-                    <th className="px-6 py-3 font-medium">Datum</th>
-                    <th className="px-6 py-3 font-medium">Streamer</th>
-                    <th className="px-6 py-3 font-medium">Brutto</th>
-                    <th className="px-6 py-3 font-medium">Provision (30%)</th>
+                    <th className="px-6 py-3 font-medium">
+                      {landingText("Datum")}
+                    </th>
+                    <th className="px-6 py-3 font-medium">
+                      {landingText("Streamer")}
+                    </th>
+                    <th className="px-6 py-3 font-medium">
+                      {landingText("Brutto")}
+                    </th>
+                    <th className="px-6 py-3 font-medium">
+                      {landingText("Provision (30%)")}
+                    </th>
                     <th className="px-6 py-3 font-medium">Status</th>
-                    <th className="px-6 py-3 font-medium">Referenz</th>
+                    <th className="px-6 py-3 font-medium">
+                      {landingText("Referenz")}
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -722,8 +848,12 @@ export default function AffiliatePortal() {
                       <td className="px-6 py-3 text-[#b7aa91]">
                         {formatDate(commission.created_at)}
                       </td>
-                      <td className="px-6 py-3 font-medium">{commission.streamer_login}</td>
-                      <td className="px-6 py-3">{formatCents(commission.brutto_cents)}</td>
+                      <td className="px-6 py-3 font-medium">
+                        {commission.streamer_login}
+                      </td>
+                      <td className="px-6 py-3">
+                        {formatCents(commission.brutto_cents)}
+                      </td>
                       <td className="px-6 py-3 text-[#55978f] font-medium">
                         {formatCents(commission.commission_cents)}
                       </td>
@@ -737,8 +867,11 @@ export default function AffiliatePortal() {
                   ))}
                   {commissions.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-6 py-8 text-center text-[#b7aa91]">
-                        Noch keine Provisionen vorhanden.
+                      <td
+                        colSpan={6}
+                        className="px-6 py-8 text-center text-[#b7aa91]"
+                      >
+                        {landingText("Noch keine Provisionen vorhanden.")}
                       </td>
                     </tr>
                   )}
@@ -751,11 +884,13 @@ export default function AffiliatePortal() {
         {tab === "gutschriften" && (
           <div className="space-y-6">
             <SectionCard>
-              <h2 className="text-2xl font-bold font-[Sora]">Gutschriften</h2>
+              <h2 className="text-2xl font-bold font-[Sora]">
+                {landingText("Gutschriften")}
+              </h2>
               <p className="mt-3 text-sm leading-relaxed text-[#b7aa91]">
-                Monatliche Gutschriften werden automatisch auf Basis deiner
-                Provisionen erzeugt und per E-Mail versendet, sobald dein Profil
-                vollständig ist.
+                {landingText(
+                  "Monatliche Gutschriften werden automatisch auf Basis deiner Provisionen erzeugt und per E-Mail versendet, sobald dein Profil vollständig ist.",
+                )}
               </p>
             </SectionCard>
 
@@ -763,17 +898,17 @@ export default function AffiliatePortal() {
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <StatCard
-                label="Dokumente"
+                label={landingText("Dokumente")}
                 value={String(gutschriften.length)}
                 icon={<FileText size={20} />}
               />
               <StatCard
-                label="Offener Versand"
+                label={landingText("Offener Versand")}
                 value={String(openGutschriften.length)}
                 icon={<Clock size={20} />}
               />
               <StatCard
-                label="Brutto gesamt"
+                label={landingText("Brutto gesamt")}
                 value={formatCents(gutschriftGrossTotal)}
                 icon={<ShieldCheck size={20} />}
               />
@@ -781,7 +916,7 @@ export default function AffiliatePortal() {
 
             <SectionCard>
               <h3 className="text-sm font-semibold text-[#b7aa91] uppercase tracking-wider">
-                Steuerhinweis
+                {landingText("Steuerhinweis")}
               </h3>
               <p className="mt-3 text-sm leading-relaxed text-[#b7aa91]">
                 {taxHint(readiness.ust_status)}
@@ -789,9 +924,12 @@ export default function AffiliatePortal() {
               {readiness.warnings.length > 0 && (
                 <div className="mt-4 rounded-xl border border-[rgba(224, 145, 47, 0.25)] bg-[rgba(224, 145, 47,0.35)] px-4 py-3">
                   {readiness.warnings.map((warning) => (
-                    <div key={warning} className="flex items-start gap-2 text-sm text-[#c8a86b]">
+                    <div
+                      key={warning}
+                      className="flex items-start gap-2 text-sm text-[#c8a86b]"
+                    >
                       <AlertCircle size={16} className="mt-0.5 shrink-0" />
-                      <span>{warning}</span>
+                      <span>{landingText(warning)}</span>
                     </div>
                   ))}
                 </div>
@@ -802,14 +940,28 @@ export default function AffiliatePortal() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-[rgba(201,168,106,0.24)] text-[#b7aa91] text-left">
-                    <th className="px-6 py-3 font-medium">Zeitraum</th>
-                    <th className="px-6 py-3 font-medium">Nummer</th>
-                    <th className="px-6 py-3 font-medium">Buchungen</th>
-                    <th className="px-6 py-3 font-medium">Netto</th>
-                    <th className="px-6 py-3 font-medium">USt</th>
-                    <th className="px-6 py-3 font-medium">Brutto</th>
+                    <th className="px-6 py-3 font-medium">
+                      {landingText("Zeitraum")}
+                    </th>
+                    <th className="px-6 py-3 font-medium">
+                      {landingText("Nummer")}
+                    </th>
+                    <th className="px-6 py-3 font-medium">
+                      {landingText("Buchungen")}
+                    </th>
+                    <th className="px-6 py-3 font-medium">
+                      {landingText("Netto")}
+                    </th>
+                    <th className="px-6 py-3 font-medium">
+                      {landingText("USt")}
+                    </th>
+                    <th className="px-6 py-3 font-medium">
+                      {landingText("Brutto")}
+                    </th>
                     <th className="px-6 py-3 font-medium">Status</th>
-                    <th className="px-6 py-3 font-medium">Versand</th>
+                    <th className="px-6 py-3 font-medium">
+                      {landingText("Versand")}
+                    </th>
                     <th className="px-6 py-3 font-medium text-right">PDF</th>
                   </tr>
                 </thead>
@@ -820,13 +972,17 @@ export default function AffiliatePortal() {
                       className="border-b border-[rgba(201,168,106,0.24)] last:border-0"
                     >
                       <td className="px-6 py-4">
-                        <div className="font-medium">{document.period_label || "—"}</div>
+                        <div className="font-medium">
+                          {document.period_label || landingText("—")}
+                        </div>
                         <div className="text-xs text-[#b7aa91]">
-                          erstellt: {formatDate(document.generated_at)}
+                          {landingText("erstellt: ")}
+                          {formatDate(document.generated_at)}
                         </div>
                       </td>
                       <td className="px-6 py-4 font-mono text-xs text-[#ece0c8]">
-                        {document.gutschrift_number || "noch offen"}
+                        {document.gutschrift_number ||
+                          landingText("noch offen")}
                       </td>
                       <td className="px-6 py-4">{document.commission_count}</td>
                       <td className="px-6 py-4">
@@ -842,7 +998,8 @@ export default function AffiliatePortal() {
                         <StatusBadge status={document.status} />
                       </td>
                       <td className="px-6 py-4 text-[#b7aa91]">
-                        {document.status === "email_failed" && document.last_error
+                        {document.status === "email_failed" &&
+                        document.last_error
                           ? document.last_error
                           : formatDateTime(document.emailed_at)}
                       </td>
@@ -851,7 +1008,8 @@ export default function AffiliatePortal() {
                           {document.has_pdf && document.download_path ? (
                             <button
                               onClick={() => {
-                                window.location.href = document.download_path as string;
+                                window.location.href =
+                                  document.download_path as string;
                               }}
                               className="inline-flex items-center gap-2 rounded-lg border border-[rgba(201,168,106,0.24)] bg-[#2c2318] px-3 py-2 text-xs font-semibold text-[#ece0c8] transition-colors hover:border-[rgba(201,168,106,0.5)] hover:text-[#c8a86b]"
                             >
@@ -859,7 +1017,9 @@ export default function AffiliatePortal() {
                               PDF
                             </button>
                           ) : (
-                            <span className="text-[#b7aa91]">—</span>
+                            <span className="text-[#b7aa91]">
+                              {landingText("—")}
+                            </span>
                           )}
                         </div>
                       </td>
@@ -867,8 +1027,11 @@ export default function AffiliatePortal() {
                   ))}
                   {gutschriften.length === 0 && (
                     <tr>
-                      <td colSpan={9} className="px-6 py-8 text-center text-[#b7aa91]">
-                        Noch keine Gutschriften vorhanden.
+                      <td
+                        colSpan={9}
+                        className="px-6 py-8 text-center text-[#b7aa91]"
+                      >
+                        {landingText("Noch keine Gutschriften vorhanden.")}
                       </td>
                     </tr>
                   )}
@@ -881,10 +1044,13 @@ export default function AffiliatePortal() {
         {tab === "settings" && profile && (
           <div className="space-y-6">
             <SectionCard>
-              <h2 className="text-2xl font-bold font-[Sora]">Einstellungen</h2>
+              <h2 className="text-2xl font-bold font-[Sora]">
+                {landingText("Einstellungen")}
+              </h2>
               <p className="mt-3 text-sm leading-relaxed text-[#b7aa91]">
-                Pflege hier deine verschlüsselten Profil-, Adress- und
-                Steuerdaten für die automatische Gutschrift-Erstellung.
+                {landingText(
+                  "Pflege hier deine verschlüsselten Profil-, Adress- und Steuerdaten für die automatische Gutschrift-Erstellung.",
+                )}
               </p>
             </SectionCard>
 
@@ -895,49 +1061,51 @@ export default function AffiliatePortal() {
                 <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
                   <div>
                     <h3 className="text-sm font-semibold text-[#b7aa91] uppercase tracking-wider">
-                      Adresse
+                      {landingText("Adresse")}
                     </h3>
                     <p className="mt-2 text-sm leading-relaxed text-[#b7aa91]">
-                      Diese Daten werden verschlüsselt gespeichert und für die
-                      automatische Gutschrift-Erstellung benötigt.
+                      {landingText(
+                        "Diese Daten werden verschlüsselt gespeichert und für die automatische Gutschrift-Erstellung benötigt.",
+                      )}
                     </p>
                   </div>
                   <div className="rounded-xl border border-[rgba(85, 151, 143, 0.22)] bg-[rgba(85, 151, 143, 0.08)] px-4 py-3 text-sm text-[#6fb3aa] max-w-md">
-                    Diese Daten werden verschlüsselt gespeichert und für die
-                    automatische Gutschrift-Erstellung benötigt.
+                    {landingText(
+                      "Diese Daten werden verschlüsselt gespeichert und für die automatische Gutschrift-Erstellung benötigt.",
+                    )}
                   </div>
                 </div>
 
                 <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
                   <InputField
-                    label="Vollständiger Name"
+                    label={landingText("Vollständiger Name")}
                     value={settingsForm.full_name}
                     onChange={(value) => updateForm("full_name", value)}
                   />
                   <InputField
-                    label="Kontakt-E-Mail"
+                    label={landingText("Kontakt-E-Mail")}
                     type="email"
                     value={settingsForm.email}
                     onChange={(value) => updateForm("email", value)}
                   />
                   <InputField
-                    label="Straße"
+                    label={landingText("Straße")}
                     value={settingsForm.address_line1}
                     onChange={(value) => updateForm("address_line1", value)}
                   />
                   <SelectField
-                    label="Land"
+                    label={landingText("Land")}
                     value={settingsForm.address_country}
                     onChange={(value) => updateForm("address_country", value)}
                     options={COUNTRIES}
                   />
                   <InputField
-                    label="PLZ"
+                    label={landingText("PLZ")}
                     value={settingsForm.address_zip}
                     onChange={(value) => updateForm("address_zip", value)}
                   />
                   <InputField
-                    label="Ort"
+                    label={landingText("Ort")}
                     value={settingsForm.address_city}
                     onChange={(value) => updateForm("address_city", value)}
                   />
@@ -946,12 +1114,12 @@ export default function AffiliatePortal() {
 
               <SectionCard>
                 <h3 className="text-sm font-semibold text-[#b7aa91] uppercase tracking-wider">
-                  Steuerliche Angaben
+                  {landingText("Steuerliche Angaben")}
                 </h3>
                 <div className="mt-5 grid grid-cols-1 lg:grid-cols-[1.05fr_0.95fr] gap-6">
                   <div className="space-y-3">
                     <span className="text-xs text-[#b7aa91] uppercase tracking-wider">
-                      USt-Status
+                      {landingText("USt-Status")}
                     </span>
                     <label className="flex items-start gap-3 rounded-xl border border-[rgba(201,168,106,0.24)] bg-[#2c2318]/40 px-4 py-3 cursor-pointer">
                       <input
@@ -962,9 +1130,13 @@ export default function AffiliatePortal() {
                         className="mt-1 accent-[#c8a86b]"
                       />
                       <div>
-                        <div className="font-medium">Noch nicht angegeben</div>
+                        <div className="font-medium">
+                          {landingText("Noch nicht angegeben")}
+                        </div>
                         <div className="text-sm text-[#b7aa91]">
-                          Gutschrift-Generierung bleibt blockiert.
+                          {landingText(
+                            "Gutschrift-Generierung bleibt blockiert.",
+                          )}
                         </div>
                       </div>
                     </label>
@@ -973,13 +1145,19 @@ export default function AffiliatePortal() {
                         type="radio"
                         name="ust_status"
                         checked={settingsForm.ust_status === "kleinunternehmer"}
-                        onChange={() => updateForm("ust_status", "kleinunternehmer")}
+                        onChange={() =>
+                          updateForm("ust_status", "kleinunternehmer")
+                        }
                         className="mt-1 accent-[#c8a86b]"
                       />
                       <div>
-                        <div className="font-medium">Kleinunternehmer</div>
+                        <div className="font-medium">
+                          {landingText("Kleinunternehmer")}
+                        </div>
                         <div className="text-sm text-[#b7aa91]">
-                          Keine USt-Zeile, Hinweis nach § 19 UStG.
+                          {landingText(
+                            "Keine USt-Zeile, Hinweis nach § 19 UStG.",
+                          )}
                         </div>
                       </div>
                     </label>
@@ -988,13 +1166,19 @@ export default function AffiliatePortal() {
                         type="radio"
                         name="ust_status"
                         checked={settingsForm.ust_status === "regelbesteuert"}
-                        onChange={() => updateForm("ust_status", "regelbesteuert")}
+                        onChange={() =>
+                          updateForm("ust_status", "regelbesteuert")
+                        }
                         className="mt-1 accent-[#c8a86b]"
                       />
                       <div>
-                        <div className="font-medium">Regelbesteuert</div>
+                        <div className="font-medium">
+                          {landingText("Regelbesteuert")}
+                        </div>
                         <div className="text-sm text-[#b7aa91]">
-                          19 % Umsatzsteuer werden auf den Nettobetrag ausgewiesen.
+                          {landingText(
+                            "19 % Umsatzsteuer werden auf den Nettobetrag ausgewiesen.",
+                          )}
                         </div>
                       </div>
                     </label>
@@ -1002,13 +1186,13 @@ export default function AffiliatePortal() {
 
                   <div className="space-y-4">
                     <InputField
-                      label="Steuernummer"
+                      label={landingText("Steuernummer")}
                       value={settingsForm.tax_id}
                       onChange={(value) => updateForm("tax_id", value)}
                     />
                     {settingsForm.ust_status === "regelbesteuert" && (
                       <InputField
-                        label="USt-IdNr."
+                        label={landingText("USt-IdNr.")}
                         value={settingsForm.vat_id}
                         onChange={(value) => updateForm("vat_id", value)}
                       />
@@ -1022,15 +1206,27 @@ export default function AffiliatePortal() {
 
               <SectionCard>
                 <h3 className="text-sm font-semibold text-[#b7aa91] uppercase tracking-wider">
-                  Konto
+                  {landingText("Konto")}
                 </h3>
                 <div className="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                  <InfoField label="Twitch Login" value={profile.twitch_login} />
-                  <InfoField label="Anzeigename" value={profile.display_name} />
-                  <InfoField label="Stripe Status" value={profile.stripe_connect_status} />
                   <InfoField
-                    label="Stripe Konto"
-                    value={profile.stripe_account_id || "Nicht verbunden"}
+                    label="Twitch Login"
+                    value={profile.twitch_login}
+                  />
+                  <InfoField
+                    label={landingText("Anzeigename")}
+                    value={profile.display_name}
+                  />
+                  <InfoField
+                    label={landingText("Stripe Status")}
+                    value={profile.stripe_connect_status}
+                  />
+                  <InfoField
+                    label={landingText("Stripe Konto")}
+                    value={
+                      profile.stripe_account_id ||
+                      landingText("Nicht verbunden")
+                    }
                   />
                 </div>
               </SectionCard>
@@ -1041,7 +1237,9 @@ export default function AffiliatePortal() {
                   disabled={savingProfile}
                   className="gradient-accent rounded-lg px-5 py-3 text-sm font-semibold transition-all hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  {savingProfile ? "Speichert..." : "Einstellungen speichern"}
+                  {savingProfile
+                    ? landingText("Speichert...")
+                    : landingText("Einstellungen speichern")}
                 </button>
                 {profileMsg && (
                   <div
@@ -1049,7 +1247,11 @@ export default function AffiliatePortal() {
                       profileMsg.ok ? "text-success" : "text-danger"
                     }`}
                   >
-                    {profileMsg.ok ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
+                    {profileMsg.ok ? (
+                      <CheckCircle size={16} />
+                    ) : (
+                      <AlertCircle size={16} />
+                    )}
                     {profileMsg.text}
                   </div>
                 )}
@@ -1103,8 +1305,12 @@ function MiniStat({
     gray: "text-[#ece0c8] border-[rgba(201,168,106,0.24)]",
   };
   return (
-    <div className={`rounded-xl border bg-[#2c2318]/40 px-4 py-4 ${tones[tone]}`}>
-      <div className="text-xs uppercase tracking-wider text-[#b7aa91]">{label}</div>
+    <div
+      className={`rounded-xl border bg-[#2c2318]/40 px-4 py-4 ${tones[tone]}`}
+    >
+      <div className="text-xs uppercase tracking-wider text-[#b7aa91]">
+        {label}
+      </div>
       <div className="mt-2 text-xl font-semibold font-[Sora]">{value}</div>
     </div>
   );
@@ -1137,7 +1343,8 @@ function ReadinessCard({
   readiness: GutschriftReadiness;
   compact?: boolean;
 }) {
-  const hasIssues = readiness.blockers.length > 0 || readiness.warnings.length > 0;
+  const hasIssues =
+    readiness.blockers.length > 0 || readiness.warnings.length > 0;
   if (!hasIssues && compact) {
     return null;
   }
@@ -1147,23 +1354,32 @@ function ReadinessCard({
       <div className="flex items-start justify-between gap-4">
         <div>
           <h3 className="text-sm font-semibold text-[#b7aa91] uppercase tracking-wider">
-            Gutschrift-Bereitschaft
+            {landingText("Gutschrift-Bereitschaft")}
           </h3>
           <p className="mt-2 text-sm leading-relaxed text-[#b7aa91]">
             {readiness.can_generate
-              ? "Dein Profil ist bereit für die automatische Gutschrift-Erstellung."
-              : "Dein Profil blockiert aktuell die automatische Gutschrift-Erstellung."}
+              ? landingText(
+                  "Dein Profil ist bereit für die automatische Gutschrift-Erstellung.",
+                )
+              : landingText(
+                  "Dein Profil blockiert aktuell die automatische Gutschrift-Erstellung.",
+                )}
           </p>
         </div>
-        <StatusBadge status={readiness.can_generate ? "generated" : "blocked"} />
+        <StatusBadge
+          status={readiness.can_generate ? "generated" : "blocked"}
+        />
       </div>
 
       {readiness.blockers.length > 0 && (
         <div className="mt-4 rounded-xl border border-[rgba(224, 145, 47, 0.28)] bg-[rgba(224, 145, 47,0.35)] px-4 py-4">
           {readiness.blockers.map((blocker) => (
-            <div key={blocker} className="flex items-start gap-2 text-sm text-[#c8a86b]">
+            <div
+              key={blocker}
+              className="flex items-start gap-2 text-sm text-[#c8a86b]"
+            >
               <AlertCircle size={16} className="mt-0.5 shrink-0" />
-              <span>{blocker}</span>
+              <span>{landingText(blocker)}</span>
             </div>
           ))}
         </div>
@@ -1176,8 +1392,11 @@ function ReadinessCard({
               key={warning}
               className="flex items-start gap-2 rounded-xl border border-[rgba(201,168,106,0.24)] bg-[#2c2318]/40 px-4 py-3 text-sm text-[#ece0c8]"
             >
-              <AlertCircle size={16} className="mt-0.5 shrink-0 text-[#c8a86b]" />
-              <span>{warning}</span>
+              <AlertCircle
+                size={16}
+                className="mt-0.5 shrink-0 text-[#c8a86b]"
+              />
+              <span>{landingText(warning)}</span>
             </div>
           ))}
         </div>
@@ -1196,30 +1415,32 @@ function StripeCard({ profile }: { profile: AffiliateProfile | null }) {
       </h3>
       <div className="space-y-4">
         <p className="text-sm leading-relaxed text-[#b7aa91]">
-          Auszahlungen laufen automatisch über Stripe Connect auf dein
-          verbundenes Auszahlungs-Konto.
+          {landingText(
+            "Auszahlungen laufen automatisch über Stripe Connect auf dein verbundenes Auszahlungs-Konto.",
+          )}
         </p>
         {connected ? (
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-success">
               <CheckCircle size={18} />
-              <span className="font-medium">Verbunden</span>
+              <span className="font-medium">{landingText("Verbunden")}</span>
             </div>
             <p className="text-sm leading-relaxed text-[#b7aa91]">
-              Neue Provisionen können automatisch für Auszahlungen
-              verarbeitet werden, sobald Stripe Transfers auslöst.
+              {landingText(
+                "Neue Provisionen können automatisch für Auszahlungen verarbeitet werden, sobald Stripe Transfers auslöst.",
+              )}
             </p>
           </div>
         ) : (
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-warning">
               <XCircle size={18} />
-              <span className="text-sm">Nicht verbunden</span>
+              <span className="text-sm">{landingText("Nicht verbunden")}</span>
             </div>
             <p className="text-sm leading-relaxed text-[#b7aa91]">
-              Ohne Stripe werden Provisionen nur bis 50,00 EUR gespeichert.
-              Sobald weitere Provisionen darüber hinaus anfallen, verfallen
-              sie, bis du Stripe verbunden hast.
+              {landingText(
+                "Ohne Stripe werden Provisionen nur bis 50,00 EUR gespeichert. Sobald weitere Provisionen darüber hinaus anfallen, verfallen sie, bis du Stripe verbunden hast.",
+              )}
             </p>
             <button
               onClick={() => {
@@ -1227,7 +1448,7 @@ function StripeCard({ profile }: { profile: AffiliateProfile | null }) {
               }}
               className="gradient-accent rounded-lg px-5 py-2.5 text-sm font-semibold transition-all hover:brightness-110"
             >
-              Stripe-Konto verbinden
+              {landingText("Stripe-Konto verbinden")}
             </button>
           </div>
         )}
@@ -1239,8 +1460,10 @@ function StripeCard({ profile }: { profile: AffiliateProfile | null }) {
 function InfoField({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <span className="text-xs text-[#b7aa91] uppercase tracking-wider">{label}</span>
-      <p className="text-sm font-medium mt-1">{value || "—"}</p>
+      <span className="text-xs text-[#b7aa91] uppercase tracking-wider">
+        {label}
+      </span>
+      <p className="text-sm font-medium mt-1">{value || landingText("—")}</p>
     </div>
   );
 }
@@ -1258,7 +1481,9 @@ function InputField({
 }) {
   return (
     <label className="block">
-      <span className="text-xs text-[#b7aa91] uppercase tracking-wider">{label}</span>
+      <span className="text-xs text-[#b7aa91] uppercase tracking-wider">
+        {label}
+      </span>
       <input
         type={type}
         value={value}
@@ -1282,7 +1507,9 @@ function SelectField({
 }) {
   return (
     <label className="block">
-      <span className="text-xs text-[#b7aa91] uppercase tracking-wider">{label}</span>
+      <span className="text-xs text-[#b7aa91] uppercase tracking-wider">
+        {label}
+      </span>
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}

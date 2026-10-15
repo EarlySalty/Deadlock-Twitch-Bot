@@ -41,8 +41,14 @@ test("only the two English hosts select English on the main landing page", () =>
       "/streamer/v1/",
       "/streamer/v3/",
       "/streamer/vertriebler/",
+      "/streamer/affiliate-portal/",
+      "/streamer/faq/index.html",
+      "/website/vergleich/",
+      "/twitch/onboarding/index.html",
     ]) {
-      assert.equal(loadLocale(host, path).isEnglishLanding(), false);
+      assert.equal(loadLocale(host, path).isEnglishLanding(), true);
+      assert.equal(loadLocale(host, path, "?lang=de").isEnglishLanding(), false);
+      assert.equal(loadLocale("deutsche-deadlock-community.de", path).isEnglishLanding(), false);
     }
   }
   for (const host of [
@@ -155,7 +161,11 @@ test("metadata uses matching English language, canonical and social descriptions
         return node;
       },
     };
-    runInNewContext(source, { URLSearchParams, document, window: { location: { hostname } } });
+    runInNewContext(source, {
+      URLSearchParams,
+      document,
+      window: { location: { hostname } },
+    });
     if (hostname === "deutsche-deadlock-community.de") {
       assert.equal(document.documentElement.lang, "de");
       assert.equal(document.title, "German title");
@@ -185,22 +195,85 @@ test("metadata uses matching English language, canonical and social descriptions
   }
 });
 
-
 test("priority subpages share the host default and explicit language overrides", () => {
-  for (const path of ["/streamer/faq/", "/streamer/onboarding/index.html", "/streamer/vergleich", "/streamer/clips/", "/twitch/faq", "/twitch/onboarding", "/clips"]) {
+  for (const path of [
+    "/streamer/faq/",
+    "/streamer/onboarding/index.html",
+    "/streamer/vergleich",
+    "/streamer/clips/",
+    "/twitch/faq",
+    "/twitch/onboarding",
+    "/clips",
+    "/streamer/affiliate-portal/",
+    "/streamer/vertriebler/",
+    "/streamer/v1/",
+    "/streamer/v3/",
+    "/affiliate-portal/index.html",
+    "/vertriebler/",
+    "/v1/",
+    "/v3/",
+    "/twitch/affiliate/portal",
+  ]) {
     assert.equal(loadLocale("dead-lock.de", path).isEnglishLanding(), true);
-    assert.equal(loadLocale("deutsche-deadlock-community.de", path).isEnglishLanding(), false);
-    assert.equal(loadLocale("localhost", path, "?lang=en").isEnglishLanding(), true);
-    assert.equal(loadLocale("dead-lock.de", path, "?lang=de").isEnglishLanding(), false);
+    assert.equal(
+      loadLocale("deutsche-deadlock-community.de", path).isEnglishLanding(),
+      false,
+    );
+    assert.equal(
+      loadLocale("localhost", path, "?lang=en").isEnglishLanding(),
+      true,
+    );
+    assert.equal(
+      loadLocale("dead-lock.de", path, "?lang=de").isEnglishLanding(),
+      false,
+    );
   }
 });
 
 test("English public navigation stays local while backend and OAuth use the main domain", () => {
   const locale = loadLocale("localhost", "/streamer/onboarding/", "?lang=en");
-  assert.equal(locale.landingLink("https://deutsche-deadlock-community.de/twitch/faq#raids"), "/streamer/faq/?lang=en#raids");
-  assert.equal(locale.landingLink("/streamer/vergleich/?days=7#vergleich"), "/streamer/vergleich/?days=7&lang=en#vergleich");
+  assert.equal(
+    locale.landingLink(
+      "https://deutsche-deadlock-community.de/twitch/faq#raids",
+    ),
+    "/streamer/faq/?lang=en#raids",
+  );
+  assert.equal(
+    locale.landingLink("/streamer/vergleich/?days=7#vergleich"),
+    "/streamer/vergleich/?days=7&lang=en#vergleich",
+  );
   assert.equal(locale.landingLink("#features"), "#features");
-  assert.equal(locale.landingLink("/clips/auth/discord/login"), "https://deutsche-deadlock-community.de/clips/auth/discord/login?lang=en");
+  assert.equal(
+    locale.landingLink("/clips/auth/discord/login"),
+    "https://deutsche-deadlock-community.de/clips/auth/discord/login?lang=en",
+  );
   assert.equal(locale.landingText("Clip des Monats"), "Clip of the month");
   assert.equal(locale.landingText("Empfang"), "Reception");
+});
+
+test("affiliate public links stay same-origin and preserve English", () => {
+  const locale = loadLocale("dead-lock.de", "/streamer/vertriebler/");
+  assert.equal(
+    locale.landingLink("/streamer/affiliate-portal/"),
+    "/streamer/affiliate-portal/?lang=en",
+  );
+  assert.equal(
+    locale.landingLink(
+      "https://deutsche-deadlock-community.de/twitch/affiliate",
+    ),
+    "/twitch/affiliate?lang=en",
+  );
+  assert.equal(
+    locale.landingLink("/twitch/affiliate/signup"),
+    "/twitch/affiliate/signup?lang=en",
+  );
+  assert.equal(locale.landingText("Gutschriften"), "Self-billing invoices");
+  assert.equal(
+    locale.landingText("USt-Status noch nicht angegeben."),
+    "VAT status has not been provided yet.",
+  );
+  assert.equal(
+    locale.landingText("Vollstaendiger Name fehlt."),
+    "Full name is missing.",
+  );
 });
