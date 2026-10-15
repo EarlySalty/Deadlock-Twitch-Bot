@@ -342,9 +342,9 @@ BEGIN
     WHERE EXISTS (SELECT 1 FROM public.twitch_streamer_identities WHERE twitch_user_id = NEW.twitch_user_id)
       AND (eligible OR EXISTS (SELECT 1 FROM public.streamer_guilds WHERE twitch_user_id = NEW.twitch_user_id AND guild_id = 1289721245281292288))
     ON CONFLICT (twitch_user_id, guild_id) DO UPDATE
-       SET active = EXCLUDED.active AND (streamer_guilds.active OR (TG_ARGV[0] = 'admission' AND NEW.legacy_home_admitted AND NEW.status = 'active')),
-           deactivated_at = CASE WHEN NOT EXCLUDED.active THEN EXCLUDED.deactivated_at
-               WHEN streamer_guilds.active OR (TG_ARGV[0] = 'admission' AND NEW.legacy_home_admitted AND NEW.status = 'active') THEN NULL
+       SET active = EXCLUDED.active,
+           deactivated_at = CASE WHEN EXCLUDED.active THEN NULL
+               WHEN streamer_guilds.active THEN EXCLUDED.deactivated_at
                ELSE streamer_guilds.deactivated_at END,
            require_discord_link = EXCLUDED.require_discord_link
        WHERE coalesce(streamer_guilds.deactivated_by, '') <> 'admin';

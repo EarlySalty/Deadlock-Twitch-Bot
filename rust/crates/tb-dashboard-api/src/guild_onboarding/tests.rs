@@ -690,6 +690,48 @@ async fn legacy_departnership_deactivates_home_onboarding_memberships() {
 }
 
 #[tokio::test]
+async fn lifting_legacy_metadata_blocks_restores_home_access() {
+    for (block, lift) in [
+        (
+            "UPDATE twitch_partners SET technical_pause_reason='bot_banned' WHERE twitch_user_id='42'",
+            "UPDATE twitch_partners SET technical_pause_reason=NULL WHERE twitch_user_id='42'",
+        ),
+        (
+            "UPDATE twitch_partners SET manual_partner_opt_out=1 WHERE twitch_user_id='42'",
+            "UPDATE twitch_partners SET manual_partner_opt_out=0 WHERE twitch_user_id='42'",
+        ),
+        (
+            "UPDATE twitch_partners SET admin_archived_at=CURRENT_TIMESTAMP WHERE twitch_user_id='42'",
+            "UPDATE twitch_partners SET admin_archived_at=NULL WHERE twitch_user_id='42'",
+        ),
+    ] {
+        let db = fixture().await;
+        let allowed = || async {
+            sqlx::query_scalar::<_, bool>("SELECT guild_partner_allowed('42')")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap()
+        };
+        assert!(allowed().await);
+        for (change, expected) in [(block, false), (lift, true)] {
+            sqlx::query(change).execute(&db.pool).await.unwrap();
+            assert_eq!(allowed().await, expected, "{change}");
+            assert_eq!(
+                sqlx::query_scalar::<_, bool>(
+                    "SELECT deactivated_at IS NULL FROM streamer_guilds WHERE twitch_user_id='42' AND guild_id=$1"
+                )
+                .bind(HOME)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap(),
+                expected
+            );
+        }
+        db.close().await;
+    }
+}
+
+#[tokio::test]
 async fn cached_selection_cannot_undo_any_post_verification_revocation() {
     for revoke in [
         "UPDATE streamer_guilds SET active=false,is_on_discord=false,deactivated_by='discord_leave',deactivated_at=now() WHERE twitch_user_id='42' AND guild_id=700",
