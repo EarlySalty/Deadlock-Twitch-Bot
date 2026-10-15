@@ -294,4 +294,11 @@ export const VERWALTUNG_EN: Record<string, string> = {
   "tabuTopics muss array oder null sein.": "Excluded topics must be a list or empty.",
   "channel query-param erforderlich.": "A channel query parameter is required.",
   '{name} wird in deinem Kanal bereits für {command} verwendet.': '{name} is already used for {command} in your channel.',
+  'Gespeichert ✓': 'Saved ✓',
+  'VOD-Befehl': 'VOD command',
+  'Chat-Interaktion & Clips': 'Chat interaction & clips',
+  'Community, Raids & System': 'Community, raids & system',
+  '{count} Berechtigungen aktiv': '{count} permissions active',
+  'Jetzt abgleichen': 'Sync now',
+  'Abo-Erinnerungen': 'Sub reminders',
 };

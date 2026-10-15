@@ -1,13 +1,12 @@
 import { useT } from '../../context/LanguageContext';
 import { useEffect, useState } from 'react';
-import { motion } from 'framer-motion';
 import { BellOff, Loader2, MessageSquare, ShieldAlert } from 'lucide-react';
 import {
   fetchSilentSettings,
   saveSilentSettings,
   type SilentSettings,
 } from '@/api/silentNotifications';
-import { EditableCommandName } from './CommandNameSection';
+import { CommandRow, SectionCard } from './ui';
 
 type FlagKey = keyof SilentSettings;
 
@@ -31,6 +30,10 @@ const ROWS: Array<{
   },
 ];
 
+function markSaved(key: FlagKey) {
+  return { key, at: Date.now() };
+}
+
 export function SilentNotificationsSection() {
   const t = useT();
   const [loading, setLoading] = useState(true);
@@ -40,6 +43,7 @@ export function SilentNotificationsSection() {
     silent_raid: false,
   });
   const [pendingKey, setPendingKey] = useState<FlagKey | null>(null);
+  const [savedKey, setSavedKey] = useState<{ key: FlagKey; at: number } | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -65,7 +69,7 @@ export function SilentNotificationsSection() {
     const next = { ...settings, [key]: !settings[key] };
     setPendingKey(key);
     setError(null);
-    // Optimistisch umschalten, bei Fehler zurückrollen.
+    setSavedKey(null);
     setSettings(next);
     try {
       const saved = await saveSilentSettings(next);
@@ -73,6 +77,7 @@ export function SilentNotificationsSection() {
         silent_ban: Boolean(saved.silent_ban),
         silent_raid: Boolean(saved.silent_raid),
       });
+      setSavedKey(markSaved(key));
     } catch (e) {
       setSettings(settings);
       setError(e instanceof Error ? e.message : 'Speichern fehlgeschlagen');
@@ -82,81 +87,34 @@ export function SilentNotificationsSection() {
   };
 
   return (
-    <motion.section
-      className="panel-card rounded-2xl p-5 md:p-6"
-      initial={{ opacity: 0, y: 16 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true }}
-      transition={{ duration: 0.32, delay: 0.2 }}
+    <SectionCard
+      eyebrow={t("Chat-Benachrichtigungen")}
+      icon={<BellOff className="h-4 w-4" />}
+      title={t("Stille Hinweise")}
+      description={t("Steuere, ob der Bot Chat-Notizen zu Auto-Bans und Raids postet. Das geht auch mit den Chat-Befehlen in den Feldern darunter.")}
     >
-      <div className="mb-5">
-        <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1 flex items-center gap-2">
-          <BellOff className="h-4 w-4" /> {t("Chat-Benachrichtigungen")}
-        </p>
-        <h2 className="display-font text-2xl font-bold text-white mb-1">{t("Stille Hinweise")}</h2>
-        <p className="text-sm text-text-secondary">
-          {t("Steuere, ob der Bot Chat-Notizen zu Auto-Bans und Raids postet. Das geht auch mit den Chat-Befehlen in den Feldern darunter.")}
-        </p>
-      </div>
-
-      {error && (
-        <div className="mb-4 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
-          {t(error)}
-        </div>
-      )}
-
+      {error && <p role="alert" className="mb-2 text-sm text-danger">{t(error)}</p>}
       {loading ? (
         <div className="flex items-center gap-3 text-text-secondary text-sm">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
           {t("Einstellungen werden geladen ...")}
         </div>
       ) : (
-        <div className="space-y-3">
-          {ROWS.map(({ key, icon: Icon, title, desc }) => {
-            const on = settings[key];
-            const pending = pendingKey === key;
-            return (
-              <div
-                key={key}
-                className="soft-elevate rounded-xl border border-border bg-background/60 p-4"
-              >
-                <div className="flex items-center justify-between gap-4 flex-wrap">
-                  <div className="min-w-0 flex items-start gap-3">
-                    <Icon
-                      className={`h-5 w-5 mt-0.5 ${on ? 'text-primary' : 'text-text-secondary'}`}
-                    />
-                    <div className="min-w-0">
-                      <p className="text-base font-bold text-white">{t(title)}</p>
-                      <p className="text-xs text-text-secondary mt-0.5">{t(desc)}</p>
-                      <EditableCommandName command={key === 'silent_ban' ? 'silentban' : 'silentraid'} className="mt-2" />
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={on}
-                    aria-label={t(title)}
-                    disabled={pending}
-                    onClick={() => void onToggle(key)}
-                    className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors ${
-                      on ? 'bg-primary' : 'bg-border'
-                    } disabled:opacity-50 disabled:cursor-not-allowed`}
-                  >
-                    <span
-                      className={`inline-block h-5 w-5 transform rounded-full bg-white transition-[transform,translate,scale] ${
-                        on ? 'translate-x-6' : 'translate-x-1'
-                      }`}
-                    />
-                    {pending && (
-                      <Loader2 className="absolute left-1/2 -translate-x-1/2 h-3.5 w-3.5 animate-spin text-white" />
-                    )}
-                  </button>
-                </div>
-              </div>
-            );
-          })}
+        <div>
+          {ROWS.map(({ key, icon: Icon, title, desc }) => (
+            <CommandRow
+              key={key}
+              command={key === 'silent_ban' ? 'silentban' : 'silentraid'}
+              inputSide="end"
+              icon={<Icon className={`mt-0.5 h-5 w-5 shrink-0 ${settings[key] ? 'text-primary' : 'text-text-secondary'}`} />}
+              title={t(title)}
+              description={t(desc)}
+              savedAt={savedKey?.key === key ? savedKey.at : null}
+              toggle={{ checked: settings[key], onChange: () => void onToggle(key), label: t(title), pending: pendingKey === key }}
+            />
+          ))}
         </div>
       )}
-    </motion.section>
+    </SectionCard>
   );
 }

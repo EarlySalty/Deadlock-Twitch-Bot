@@ -1,9 +1,10 @@
 import { useT } from '../../context/LanguageContext';
-import { EditableCommandName, OtherCommandNames } from './CommandNameSection';
 import { useEffect, useState } from 'react';
-import { motion } from 'framer-motion';
-import { Loader2, Power, PowerOff } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { STAT_COMMANDS, fetchStatCommandSettings, toggleStatCommand, type StatCommand, type StatCommandSettings } from '../../api/statCommands';
+import { CommandRow, SectionCard } from './ui';
+
+const SAVED_MESSAGE = 'Gespeichert.';
 
 export function StatCommandSection() {
   const t = useT();
@@ -30,7 +31,7 @@ export function StatCommandSection() {
     try {
       const saved = await toggleStatCommand(command, enabled);
       setSettings(previous => previous && ({ ...previous, [saved.command]: saved.enabled }));
-      setMessages(previous => ({ ...previous, [command]: 'Gespeichert.' }));
+      setMessages(previous => ({ ...previous, [command]: SAVED_MESSAGE }));
     } catch {
       setMessages(previous => ({ ...previous, [command]: 'Speichern fehlgeschlagen. Bitte nochmal versuchen.' }));
     } finally {
@@ -39,15 +40,8 @@ export function StatCommandSection() {
   };
 
   return (
-    <motion.section className="panel-card rounded-2xl p-5 md:p-6" initial={{ opacity: 0, y: 16 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} transition={{ duration: 0.32 }}>
-      <div className="mb-5">
-        <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">Chat</p>
-        <h2 className="display-font text-2xl font-bold text-white mb-1">{t("Chat-Befehle")}</h2>
-        <p className="text-sm text-text-secondary">{t("Befehlsnamen kannst du direkt im Feld ändern. Sie werden automatisch gespeichert.")}</p>
-      </div>
-      <h3 className="mb-3 text-lg font-bold text-white">{t("Spielstatistik")}</h3>
-      <p className="mb-4 text-sm text-text-secondary">{t("Wähle einzeln, welche Statistikbefehle dein Chat nutzen kann. Aus heißt: Der Bot bleibt bei diesem Befehl still.")}</p>
-      {error && <p role="alert" className="mb-4 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{t(error)}</p>}
+    <SectionCard eyebrow={t("Spielstatistik")} description={t("Wähle einzeln, welche Statistikbefehle dein Chat nutzen kann. Aus heißt: Der Bot bleibt bei diesem Befehl still.")}>
+      {error && <p role="alert" className="mb-3 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{t(error)}</p>}
       {loading ? (
         <p className="flex items-center gap-3 text-text-secondary text-sm"><Loader2 className="h-4 w-4 animate-spin text-primary" />{t("Status wird geladen …")}</p>
       ) : !settings ? (
@@ -55,34 +49,28 @@ export function StatCommandSection() {
       ) : (
         <StatCommandRows settings={settings} pending={pending} messages={messages} onToggle={toggle} />
       )}
-      <OtherCommandNames excluded={[...STAT_COMMANDS.map(item => item.command), 'clip', 'title', 'lurk', 'sub', 'silentban', 'silentraid']} />
-    </motion.section>
+    </SectionCard>
   );
 }
 
 export function StatCommandRows({ settings, pending, messages, onToggle }: { settings: StatCommandSettings; pending: Partial<Record<StatCommand, boolean>>; messages: Partial<Record<StatCommand, string>>; onToggle: (command: StatCommand) => void }) {
   const t = useT();
   return (
-        <div className="space-y-3">
-          {STAT_COMMANDS.map(({ command, description }) => {
-            const enabled = settings[command];
-            return (
-              <div key={command} className="soft-elevate rounded-xl border border-border bg-background/60 p-4">
-                <div className="flex items-center justify-between gap-4 flex-wrap">
-                  <div>
-                    <EditableCommandName command={command} className="mb-2" />
-                    <h3 className={`text-sm font-bold ${enabled ? 'text-success' : 'text-text-secondary'}`}>{enabled ? t("Aktiv") : t("Aus")}</h3>
-                    <p className="text-xs text-text-secondary mt-0.5">{t(description)}</p>
-                  </div>
-                  <button type="button" disabled={pending[command]} onClick={() => void onToggle(command)} aria-label={t('{description} {action}', { description: t(description).replace(/\.$/, ''), action: t(enabled ? 'deaktivieren' : 'aktivieren') })} className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${enabled ? 'border border-danger/40 bg-danger/10 text-danger hover:bg-danger/20' : 'border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20'} disabled:opacity-50 disabled:cursor-not-allowed`}>
-                    {pending[command] ? <Loader2 className="h-4 w-4 animate-spin" /> : enabled ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
-                    {enabled ? t("Deaktivieren") : t("Aktivieren")}
-                  </button>
-                </div>
-                {messages[command] && <p role="status" className="mt-2 text-sm text-text-secondary">{t(messages[command] ?? '')}</p>}
-              </div>
-            );
-          })}
-        </div>
+    <div className="grid gap-x-8 md:grid-cols-2">
+      {STAT_COMMANDS.map(({ command, description }) => {
+        const message = messages[command];
+        const label = t(description).replace(/\.$/, '');
+        return (
+          <CommandRow
+            key={command}
+            command={command}
+            description={t(description)}
+            savedAt={message === SAVED_MESSAGE ? 1 : null}
+            error={message && message !== SAVED_MESSAGE ? message : null}
+            toggle={{ checked: settings[command], onChange: () => onToggle(command), label, pending: pending[command] }}
+          />
+        );
+      })}
+    </div>
   );
 }
