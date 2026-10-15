@@ -8,7 +8,7 @@ a { color: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .5; }
 h1, h2, h3, p { margin-top: 0; }
-h1, h2, h3 { font-family: var(--font-display, "Sora", sans-serif); }
+.clips-page h1, .clips-page h2, .clips-page h3, .clips-page .rules-title { font-family: var(--elevator-serif, Georgia, "Times New Roman", Times, serif); }
 .clips-page { min-height: 100vh; background: linear-gradient(rgba(255,255,255,.017) 1px, transparent 1px), linear-gradient(90deg,rgba(255,255,255,.017) 1px,transparent 1px), #070707; background-size: 52px 52px; }
 .skip-link { position: fixed; top: -100px; left: 16px; z-index: 99; padding: 12px; background: #070707; }
 .skip-link:focus { top: 12px; }
