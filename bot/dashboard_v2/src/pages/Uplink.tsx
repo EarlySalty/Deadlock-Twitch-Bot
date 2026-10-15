@@ -25,6 +25,7 @@ import {
   fetchUplinkDestinations,
   fetchUplinkMe,
   joinUplinkWaitlist,
+  newestDockRotation,
   reconnectWaitEingabe,
   plattformVerbindungen,
   reconnectWaitPayload,
@@ -35,7 +36,7 @@ import {
   holeUplinkStreamKey,
   UPLINK_RECONNECT_WAIT_TEXT,
 } from '@/api/uplink';
-import type { UplinkAdminWaitlistEntry, UplinkMe } from '@/api/uplink';
+import type { DockRotation, UplinkAdminWaitlistEntry, UplinkMe } from '@/api/uplink';
 import { useLanguage, useT } from '@/context/LanguageContext';
 import { useAuthStatus } from '@/hooks/useAnalytics';
 import { ZielKarte } from './UplinkZiel';
@@ -72,16 +73,17 @@ function DockSchrittInhalt({ me }: { me: UplinkMe }) {
   const t = useT();
   const [nachfrage, setNachfrage] = useState(false);
   const queryClient = useQueryClient();
+  const latestRotation = useRef<DockRotation | null>(null);
   const erzeugen = useMutation({
     mutationFn: rotateUplinkDockToken,
-    onSuccess: (neue) => {
-      // Die neuen Adressen gehen direkt in den Zwischenspeicher, aus dem die
-      // Karte liest. Damit stehen sie sofort da, ohne zweite Quelle daneben:
-      // ein eigener Zustand für "gerade erzeugt" wäre ein zweiter Stand, der
-      // hängen bleiben kann, während der Server längst etwas anderes führt.
-      // Der Abruf danach holt sich, was sonst noch am Nutzer hängt.
+    onSuccess: async (neue) => {
+      const latest = newestDockRotation(latestRotation.current, neue);
+      if (latest !== neue) return;
+      latestRotation.current = latest;
+      await queryClient.cancelQueries({ queryKey: ['uplink-me'] });
+      if (latestRotation.current !== neue) return;
       queryClient.setQueryData(['uplink-me'], (alt?: UplinkMe) =>
-        alt ? { ...alt, dock_urls: neue, dock_url_vorhanden: true } : alt
+        alt ? { ...alt, dock_urls: neue.dock_urls, dock_url_vorhanden: true } : alt
       );
       setNachfrage(false);
       queryClient.invalidateQueries({ queryKey: ['uplink-me'] });
