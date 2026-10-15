@@ -1438,10 +1438,17 @@ pub fn build_auth_router(rate_limiter: RateLimiter) -> Router {
     let player_router = handlers::player_connect::router().layer(
         axum::middleware::from_fn_with_state(player_rl, rate_limit_middleware),
     );
+    let onboarding_rl = RateLimitLayerConfig::new(rate_limiter.clone(), "guild_onboarding", 60, 60);
     let demo_login_rl = RateLimitLayerConfig::new(rate_limiter, "demo_login", 10, 60);
 
     Router::new()
         .merge(player_router)
+        .merge(
+            guild_onboarding::router().layer(axum::middleware::from_fn_with_state(
+                onboarding_rl,
+                rate_limit_middleware,
+            )),
+        )
         .route(
             "/twitch/auth/login",
             get(auth_login::login_handler).layer(axum::middleware::from_fn_with_state(
@@ -2781,3 +2788,5 @@ mod router_wiring_tests {
         }
     }
 }
+
+pub mod guild_onboarding;

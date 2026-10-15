@@ -4,6 +4,7 @@ import { Header } from '@/components/layout/Header';
 import { TabNavigation, type TabId } from '@/components/layout/TabNavigation';
 import { fetchTitleStreamers } from '@/api/title';
 import { resolveTabParam } from '@/tabAliases';
+import { GuildOnboardingPage } from '@/pages/GuildOnboarding';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { OnboardingProvider } from '@/components/onboarding/OnboardingContext';
 import { EinrichtungCard } from '@/components/onboarding/EinrichtungCard';
@@ -423,6 +424,9 @@ function PricingRoute() {
 export default function App() {
   const location = useSyncExternalStore(subscribeNavigation, navigationSnapshot);
   const path = normalizePathname(window.location.pathname);
+  if (path === '/twitch/guild-onboarding') {
+    return <QueryClientProvider client={queryClient}><LanguageProvider><ErrorBoundary><GuildOnboardingPage /></ErrorBoundary></LanguageProvider></QueryClientProvider>;
+  }
   const isInternalHomeRoute = path === PREVIEW_HOME_ROUTE || path === '/twitch/onboarding';
   const isHelpRoute = path === '/twitch/hilfe';
   const isFeedbackRoute = path === '/twitch/feedback';

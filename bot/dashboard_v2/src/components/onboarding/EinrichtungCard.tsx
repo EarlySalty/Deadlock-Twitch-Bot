@@ -32,6 +32,7 @@ export function EinrichtungCard({ help = false }: { help?: boolean }) {
       {status.paused && <div className="mt-5 flex flex-wrap items-center gap-4"><button type="button" disabled={pending} onClick={() => void open(status.active_step)} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-bold text-bg disabled:opacity-50"><ArrowRight className="h-4 w-4" aria-hidden />{status.completed ? t("Offene Punkte ansehen") : status.completed_step_ids.length ? t("Rundgang fortsetzen") : t("Zeig mir das Dashboard")}</button>{!help && <a href="/twitch/hilfe" className="text-sm text-text-secondary underline underline-offset-4">{t("Hilfe & Einrichtung")}</a>}</div>}
       {help && <button type="button" disabled={pending} onClick={() => void open('bookmark')} className="mt-4 inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-primary"><RotateCcw className="h-4 w-4" aria-hidden />{t("Tour erneut zeigen")}</button>}
     </>}
+    <a href="/twitch/guild-onboarding" className="mt-4 inline-flex min-h-11 items-center text-sm font-semibold text-primary underline">{t("Community wählen")}</a>
     <OnboardingGuide home />
   </section>;
 }

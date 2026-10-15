@@ -31,6 +31,9 @@ export function buildTwitchDashboardLoginUrl(
 }
 
 export function buildTwitchBotAuthUrl(): string {
+  if (typeof window !== "undefined" && ["dead-lock.de", "www.dead-lock.de"].includes(window.location.hostname.toLowerCase())) {
+    return `${window.location.origin}/twitch/guild-onboarding`;
+  }
   const url = new URL(TWITCH_BOT_AUTH_START_URL);
   url.searchParams.set("scope_profile", "base");
   url.searchParams.set("source", "website_onboarding");

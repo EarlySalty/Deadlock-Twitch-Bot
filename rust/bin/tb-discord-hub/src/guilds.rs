@@ -1,0 +1,291 @@
+use sqlx::PgPool;
+
+use crate::GuildEventSink;
+
+#[derive(Clone)]
+pub struct PgSink {
+    pool: PgPool,
+}
+
+impl PgSink {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    pub async fn reconcile(
+        &self,
+        rest: &crate::gateway::rest::DiscordRest,
+    ) -> Result<(), sqlx::Error> {
+        let guilds: Vec<i64> = sqlx::query_scalar(
+            "SELECT guild_id FROM discord_guilds WHERE status <> 'removed' AND guild_id <> $1",
+        )
+        .bind(crate::config::DEFAULT_COMMUNITY_GUILD_ID as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        for guild in guilds {
+            match rest.guild(guild as u64).await {
+                Ok(_) => {}
+                Err(crate::gateway::rest::RestError::Status {
+                    status: 403 | 404, ..
+                }) => {
+                    mark_guild_removed(&self.pool, guild as u64).await?;
+                    continue;
+                }
+                Err(_) => continue,
+            }
+            let users: Vec<String> = sqlx::query_scalar("SELECT DISTINCT i.discord_user_id FROM streamer_guilds sg JOIN twitch_streamer_identities i USING(twitch_user_id) WHERE sg.guild_id=$1 AND sg.is_on_discord AND i.discord_user_id IS NOT NULL")
+                .bind(guild).fetch_all(&self.pool).await?;
+            for user in users {
+                let Ok(user) = user.parse::<u64>() else {
+                    continue;
+                };
+                if matches!(
+                    rest.member_role_ids(guild as u64, user).await,
+                    Err(crate::gateway::rest::RestError::Status { status: 404, .. })
+                ) {
+                    deactivate_member(&self.pool, guild as u64, user).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SetupPersist {
+    pub language: Option<String>,
+    pub announce_channel_id: Option<i64>,
+    pub alert_channel_id: Option<i64>,
+    pub streamer_role_id: Option<i64>,
+    pub ping_role_id: Option<i64>,
+    pub promo_invite_url: Option<String>,
+    pub auto_partner_default: Option<bool>,
+}
+
+impl SetupPersist {
+    pub fn has_updates(&self) -> bool {
+        self.language.is_some()
+            || self.announce_channel_id.is_some()
+            || self.alert_channel_id.is_some()
+            || self.streamer_role_id.is_some()
+            || self.ping_role_id.is_some()
+            || self.promo_invite_url.is_some()
+            || self.auto_partner_default.is_some()
+    }
+}
+
+#[async_trait::async_trait]
+impl GuildEventSink for PgSink {
+    async fn guild_added(&self, guild_id: u64, name: &str) {
+        if let Err(error) = upsert_guild(&self.pool, guild_id, name).await {
+            tracing::error!(error = %error, guild_id, "Guild-Upsert fehlgeschlagen");
+        }
+    }
+
+    async fn guild_removed(&self, guild_id: u64) {
+        if let Err(error) = mark_guild_removed(&self.pool, guild_id).await {
+            tracing::error!(error = %error, guild_id, "Guild-Entfernen fehlgeschlagen");
+        }
+    }
+
+    async fn member_left(&self, guild_id: u64, user_id: u64) {
+        if let Err(error) = deactivate_member(&self.pool, guild_id, user_id).await {
+            tracing::error!(error = %error, guild_id, user_id, "Mitglied-Deaktivierung fehlgeschlagen");
+        }
+    }
+}
+
+pub async fn upsert_guild(pool: &PgPool, guild_id: u64, name: &str) -> Result<(), sqlx::Error> {
+    if guild_id == crate::config::DEFAULT_COMMUNITY_GUILD_ID {
+        return Ok(());
+    }
+
+    let Some(guild_id) = to_guild_id(guild_id) else {
+        return Ok(());
+    };
+    let name: String = name.chars().take(200).collect();
+    sqlx::query(
+        r#"
+        INSERT INTO discord_guilds (guild_id, name, status, removed_at, updated_at)
+        VALUES ($1, $2, 'inactive', NULL, NOW())
+        ON CONFLICT (guild_id) DO UPDATE SET
+            name = CASE WHEN EXCLUDED.name <> '' THEN EXCLUDED.name ELSE discord_guilds.name END,
+            status = CASE WHEN discord_guilds.status = 'removed' THEN 'inactive' ELSE discord_guilds.status END,
+            removed_at = NULL,
+            updated_at = NOW()
+        "#,
+    )
+    .bind(guild_id)
+    .bind(name)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn mark_guild_removed(pool: &PgPool, guild_id: u64) -> Result<(), sqlx::Error> {
+    if guild_id == crate::config::DEFAULT_COMMUNITY_GUILD_ID {
+        return Ok(());
+    }
+
+    let Some(guild_id) = to_guild_id(guild_id) else {
+        return Ok(());
+    };
+    let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE guild_onboarding_sessions SET guild_ids=array_remove(guild_ids,$1) WHERE $1=ANY(guild_ids)")
+        .bind(guild_id).execute(&mut *tx).await?;
+    sqlx::query(
+        r#"
+        UPDATE discord_guilds
+           SET status = 'removed',
+               removed_at = COALESCE(removed_at, NOW()),
+               updated_at = NOW()
+         WHERE guild_id = $1
+        "#,
+    )
+    .bind(guild_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("UPDATE streamer_guilds SET active=false, is_on_discord=false, deactivated_by=CASE WHEN deactivated_by='admin' THEN 'admin' ELSE 'guild_removed' END, deactivated_at=COALESCE(deactivated_at,now()) WHERE guild_id=$1")
+        .bind(guild_id).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn deactivate_member(
+    pool: &PgPool,
+    guild_id: u64,
+    discord_user_id: u64,
+) -> Result<(), sqlx::Error> {
+    if guild_id == crate::config::DEFAULT_COMMUNITY_GUILD_ID {
+        return Ok(());
+    }
+
+    let Some(guild_id) = to_guild_id(guild_id) else {
+        return Ok(());
+    };
+    let discord_user_id = discord_user_id.to_string();
+    let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE guild_onboarding_sessions SET guild_ids=array_remove(guild_ids,$1) WHERE discord_user_id=$2 AND $1=ANY(guild_ids)")
+        .bind(guild_id).bind(&discord_user_id).execute(&mut *tx).await?;
+    sqlx::query(
+        r#"
+        UPDATE streamer_guilds sg
+           SET active = FALSE, is_on_discord = FALSE,
+               deactivated_by = CASE WHEN sg.deactivated_by = 'admin' THEN 'admin' ELSE 'discord_leave' END,
+               deactivated_at = COALESCE(sg.deactivated_at, NOW())
+          FROM twitch_streamer_identities i
+         WHERE sg.twitch_user_id = i.twitch_user_id
+           AND sg.guild_id = $1
+           AND i.discord_user_id = $2
+        "#,
+    )
+    .bind(guild_id)
+    .bind(&discord_user_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn persist_setup(
+    pool: &PgPool,
+    guild_id: u64,
+    name: &str,
+    persist: &SetupPersist,
+) -> Result<(), sqlx::Error> {
+    if guild_id == crate::config::DEFAULT_COMMUNITY_GUILD_ID {
+        return Ok(());
+    }
+
+    let Some(id) = to_guild_id(guild_id) else {
+        return Ok(());
+    };
+    upsert_guild(pool, guild_id, name).await?;
+    if !persist.has_updates() {
+        return Ok(());
+    }
+    sqlx::query(
+        r#"
+        UPDATE discord_guilds
+           SET language = COALESCE($2, language),
+               announce_channel_id = COALESCE($3, announce_channel_id),
+               alert_channel_id = COALESCE($4, alert_channel_id),
+               streamer_role_id = COALESCE($5, streamer_role_id),
+               ping_role_id = COALESCE($6, ping_role_id),
+               promo_invite_url = COALESCE($7, promo_invite_url),
+               auto_partner_default = COALESCE($8, auto_partner_default),
+               status = 'active',
+               removed_at = NULL,
+               updated_at = NOW(),
+               updated_by = 'setup'
+         WHERE guild_id = $1
+        "#,
+    )
+    .bind(id)
+    .bind(persist.language.as_deref())
+    .bind(persist.announce_channel_id)
+    .bind(persist.alert_channel_id)
+    .bind(persist.streamer_role_id)
+    .bind(persist.ping_role_id)
+    .bind(persist.promo_invite_url.as_deref())
+    .bind(persist.auto_partner_default)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+fn to_guild_id(guild_id: u64) -> Option<i64> {
+    i64::try_from(guild_id).ok().filter(|id| *id > 0)
+}
+
+#[cfg(test)]
+#[path = "../../../crates/tb-dashboard-api/src/test_database.rs"]
+mod test_database;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn departure_revokes_unassigned_sessions_without_an_identity_row() {
+        let db = test_database::Database::new().await;
+        sqlx::raw_sql("CREATE TABLE guild_onboarding_sessions(discord_user_id text,guild_ids bigint[]);
+            CREATE TABLE twitch_streamer_identities(twitch_user_id text,discord_user_id text);
+            CREATE TABLE streamer_guilds(twitch_user_id text,guild_id bigint,active boolean,is_on_discord boolean,deactivated_by text,deactivated_at timestamptz);
+            INSERT INTO guild_onboarding_sessions VALUES('987',ARRAY[700,701]::bigint[]),('988',ARRAY[700]::bigint[]);")
+            .execute(&db.pool).await.unwrap();
+        deactivate_member(&db.pool, 700, 987).await.unwrap();
+        let guilds: Vec<i64> = sqlx::query_scalar(
+            "SELECT guild_ids FROM guild_onboarding_sessions WHERE discord_user_id='987'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(guilds, vec![701]);
+        let guilds: Vec<i64> = sqlx::query_scalar(
+            "SELECT guild_ids FROM guild_onboarding_sessions WHERE discord_user_id='988'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(guilds, vec![700]);
+        db.close().await;
+    }
+
+    #[test]
+    fn setup_persist_erkennt_leere_und_gesetzte_felder() {
+        assert!(!SetupPersist::default().has_updates());
+        assert!(SetupPersist {
+            language: Some("en".into()),
+            ..SetupPersist::default()
+        }
+        .has_updates());
+    }
+
+    #[test]
+    fn guild_id_null_und_overflow_werden_verworfen() {
+        assert_eq!(to_guild_id(0), None);
+        assert!(to_guild_id(1).is_some());
+        assert_eq!(to_guild_id(u64::MAX), None);
+    }
+}
