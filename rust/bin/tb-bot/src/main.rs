@@ -1128,6 +1128,7 @@ async fn main() {
                 helix_client.clone(),
                 followers.clone(),
                 pipeline,
+                pool.clone(),
                 &target_game,
                 std::time::Duration::from_secs(config.bot.auto_raid_offline_grace_seconds),
             ));

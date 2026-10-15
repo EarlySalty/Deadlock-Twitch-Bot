@@ -2761,7 +2761,7 @@ async fn block_auswerten(
     }
 
     let mut funde = tb_stream_audit::regelfunde(&segmente);
-    let (modell_funde, modell_fehler, verwendete_modelle) = modellfunde(&segmente).await;
+    let (modell_funde, modell_fehler, verwendete_modelle) = modellfunde(&segmente, &block.kanal).await;
     funde.extend(modell_funde);
     // Der Abbruch der Aufnahme steht als eigenes Feld im Bericht. Frueher lief
     // er in denselben Hinweis wie ein Modellausfall: der Bericht behauptete
@@ -2928,6 +2928,7 @@ fn segmente_bauen(block: &plan::Block, text: &str, dauer: f64) -> Vec<Segment> {
 /// besser als keines.
 async fn modellfunde(
     segmente: &[Segment],
+    kanal: &str,
 ) -> (Vec<tb_stream_audit::Fund>, Option<String>, Vec<String>) {
     let endpunkt = tb_llm::selection::endpoint_for(llm::USE_CASE);
     if !llm::fernes_modell_erlaubt(&endpunkt.base_url) {
@@ -2960,6 +2961,8 @@ async fn modellfunde(
                 .denken_aus()
                 .timeout(MODELL_ZEITGRENZE)
                 .ledger_purpose("stream_audit")
+                // Streamerbezug für den KI-Schalter pro Server (Paket K).
+                .twitch_channel(kanal)
                 .endpoint(endpunkt.clone()),
         )
         .await;

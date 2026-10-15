@@ -379,6 +379,20 @@ deadlock_vocab|source|text|NO|'manual'::text
 deadlock_vocab|term|text|NO|
 deadlock_vocab|updated_at|timestamp with time zone|NO|CURRENT_TIMESTAMP
 deadlock_vocab|weight|integer|NO|1
+discord_guilds|ai_features|boolean|NO|false
+discord_guilds|alert_channel_id|bigint|YES|
+discord_guilds|announce_channel_id|bigint|YES|
+discord_guilds|auto_partner_default|boolean|NO|true
+discord_guilds|cross_server_raids|boolean|NO|true
+discord_guilds|guild_id|bigint|NO|
+discord_guilds|installed_at|timestamp with time zone|NO|now()
+discord_guilds|language|text|NO|'en'::text
+discord_guilds|name|text|YES|
+discord_guilds|ping_role_id|bigint|YES|
+discord_guilds|promo_invite_url|text|YES|
+discord_guilds|removed_at|timestamp with time zone|YES|
+discord_guilds|status|text|NO|'active'::text
+discord_guilds|streamer_role_id|bigint|YES|
 discord_invite_codes|created_at|text|YES|CURRENT_TIMESTAMP
 discord_invite_codes|guild_id|bigint|NO|
 discord_invite_codes|invite_code|text|NO|
@@ -450,6 +464,7 @@ llm_usage|tokens_in|bigint|YES|0
 llm_usage|tokens_out|bigint|YES|0
 llm_usage|total|bigint|YES|0
 llm_usage|ts|text|NO|
+llm_usage|twitch_user_id|text|YES|
 oauth_state_tokens|consumed_at|timestamp with time zone|YES|
 oauth_state_tokens|created_at|timestamp with time zone|YES|CURRENT_TIMESTAMP
 oauth_state_tokens|expires_at|timestamp with time zone|NO|
@@ -911,6 +926,13 @@ streamer_dim|is_partner|boolean|YES|false
 streamer_dim|twitch_login|text|NO|
 streamer_dim|twitch_user_id|text|YES|
 streamer_dim|updated_at|timestamp with time zone|YES|now()
+streamer_guilds|active|boolean|NO|true
+streamer_guilds|deactivated_at|timestamp with time zone|YES|
+streamer_guilds|deactivated_by|text|YES|
+streamer_guilds|guild_id|bigint|NO|
+streamer_guilds|joined_at|timestamp with time zone|NO|now()
+streamer_guilds|source|text|NO|
+streamer_guilds|twitch_user_id|text|NO|
 streamer_onboarding|active_step|text|NO|'bookmark'::text
 streamer_onboarding|completed_at|timestamp with time zone|YES|
 streamer_onboarding|completed_step_ids|ARRAY|NO|'{}'::text[]
@@ -2578,6 +2600,8 @@ twitch_streamer_aliases|note|text|YES|
 twitch_streamer_aliases|person_key|text|NO|
 twitch_streamer_aliases|twitch_login|text|NO|
 twitch_streamer_aliases|twitch_user_id|text|NO|
+twitch_streamer_identities|broadcaster_language_updated_at|timestamp with time zone|YES|
+twitch_streamer_identities|broadcaster_language|text|YES|
 twitch_streamer_identities|created_at|text|YES|CURRENT_TIMESTAMP
 twitch_streamer_identities|discord_display_name|text|YES|
 twitch_streamer_identities|discord_user_id|text|YES|

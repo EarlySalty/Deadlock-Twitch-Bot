@@ -19,6 +19,8 @@ use tb_raid::{
 };
 use tb_transport_twitch::{HelixClient, HelixStream};
 
+use sqlx::PgPool;
+
 fn unix_now() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -69,6 +71,7 @@ fn to_stream_data(stream: &HelixStream) -> StreamData {
         followers_total: 0,
         started_at: Some(stream.started_at.clone()).filter(|s| !s.trim().is_empty()),
         game_name: Some(stream.game_name.clone()).filter(|g| !g.trim().is_empty()),
+        language: Some(stream.language.trim().to_lowercase()).filter(|l| !l.is_empty()),
     }
 }
 
@@ -118,6 +121,66 @@ struct AssembledPartners {
     eligible: Vec<tb_raid::OnlineCandidate>,
     online_count: usize,
     filtered_out: usize,
+    /// Partner, die der Netzwerk-/Sprachfilter (Paket R) aussortiert hat;
+    /// sie bleiben auch für den Kategorie-Ersatz ausgeschlossen.
+    network_excluded_ids: Vec<String>,
+    /// Sprache des Kategorie-Ersatzes (Sprachgruppe des Raiders).
+    fallback_language: String,
+}
+
+/// Netzwerk-/Sprachfilter (Paket R) auf die Online-Partner anwenden. Ist das
+/// Netzwerk nicht ladbar, bleibt es beim bisherigen Pool und Ersatz `de`.
+fn apply_network_scope(
+    broadcaster_id: &str,
+    raider_live_language: Option<&str>,
+    online: Vec<tb_raid::OnlineCandidate>,
+    networks: Result<HashMap<String, tb_domain::network::StreamerNetwork>, sqlx::Error>,
+) -> (Vec<tb_raid::OnlineCandidate>, Vec<String>, String) {
+    let mut networks = match networks {
+        Ok(networks) => networks,
+        Err(error) => {
+            tracing::error!(
+                %error,
+                broadcaster_id,
+                "Raid: Server-Netzwerk nicht ladbar — Pool wie bisher, Ersatz de"
+            );
+            return (online, Vec::new(), tb_raid::fallback_language(None));
+        }
+    };
+    let Some(raider) = networks.remove(broadcaster_id.trim()) else {
+        return (online, Vec::new(), tb_raid::fallback_language(None));
+    };
+    let raider_language = raider.language_group(raider_live_language);
+    let outcome = tb_raid::filter_candidates_by_network(
+        &raider,
+        raider_language.as_deref(),
+        online,
+        &networks,
+    );
+    for dropped in &outcome.dropped {
+        tracing::debug!(
+            broadcaster_id,
+            ziel = %dropped.twitch_login,
+            grund = dropped.reason.as_str(),
+            "Raid-Ziel ausserhalb des Netzwerks"
+        );
+    }
+    if outcome.cross_server > 0 {
+        tracing::info!(
+            broadcaster_id,
+            ueber_servergrenzen = outcome.cross_server,
+            "Raid-Pool enthält Partner anderer Server"
+        );
+    }
+    (
+        outcome.kept,
+        outcome
+            .dropped
+            .into_iter()
+            .map(|dropped| dropped.twitch_user_id)
+            .collect(),
+        tb_raid::fallback_language(raider_language.as_deref()),
+    )
 }
 
 /// Quell-Zustand für den manuellen Raid — aus dem Helix-Stream (Vorrang)
@@ -130,6 +193,8 @@ struct ManualSource {
     last_deadlock_seen_at: Option<String>,
     viewer_count: i32,
     started_at: Option<String>,
+    /// Sprache des laufenden Streams (nur aus Helix; offline unbekannt).
+    language: Option<String>,
 }
 
 impl ManualSource {
@@ -142,6 +207,7 @@ impl ManualSource {
             last_deadlock_seen_at: db.and_then(|s| s.last_deadlock_seen_at.clone()),
             viewer_count: stream.viewer_count as i32,
             started_at: Some(stream.started_at.clone()).filter(|s| !s.trim().is_empty()),
+            language: Some(stream.language.trim().to_lowercase()).filter(|l| !l.is_empty()),
         }
     }
 
@@ -167,6 +233,7 @@ impl ManualSource {
             last_deadlock_seen_at: state.last_deadlock_seen_at.clone(),
             viewer_count: state.last_viewer_count.unwrap_or(0),
             started_at: state.last_started_at.clone(),
+            language: None,
         })
     }
 
@@ -234,6 +301,8 @@ pub struct OfflineRaidHandler {
     helix: HelixClient,
     followers: Arc<dyn FollowerCountSource>,
     pipeline: AutoRaidPipeline,
+    /// Pool für das Server-Netzwerk der Streamer (Paket R, `tb_db::network`).
+    network_pool: PgPool,
     /// Spielname in Original-Schreibweise (für die Kategorie-Suche).
     target_game: String,
     target_game_lower: String,
@@ -251,6 +320,7 @@ impl OfflineRaidHandler {
         helix: HelixClient,
         followers: Arc<dyn FollowerCountSource>,
         pipeline: AutoRaidPipeline,
+        network_pool: PgPool,
         target_game: &str,
         offline_grace: std::time::Duration,
     ) -> Self {
@@ -263,6 +333,7 @@ impl OfflineRaidHandler {
             helix,
             followers,
             pipeline,
+            network_pool,
             target_game: target_game.trim().to_string(),
             target_game_lower: target_game.trim().to_lowercase(),
             category_id_cache: tokio::sync::Mutex::new(None),
@@ -349,7 +420,10 @@ impl OfflineRaidHandler {
 
         // 5.–7. Online-Partner sammeln, filtern, anreichern (gemeinsam mit
         // dem manuellen Raid).
-        let Some(assembled) = self.assemble_eligible_partners(broadcaster_id, now).await else {
+        let Some(assembled) = self
+            .assemble_eligible_partners(broadcaster_id, None, now)
+            .await
+        else {
             return;
         };
 
@@ -360,6 +434,8 @@ impl OfflineRaidHandler {
             online_partners = assembled.online_count,
             eligible_partners = assembled.eligible.len(),
             filtered_out = assembled.filtered_out,
+            netzwerk_gefiltert = assembled.network_excluded_ids.len(),
+            ersatz_sprache = %assembled.fallback_language,
             "Auto-Raid-Pipeline gestartet"
         );
         let eligible = assembled.eligible;
@@ -372,6 +448,8 @@ impl OfflineRaidHandler {
             stream_duration_sec,
             partners: eligible,
             category_id: self.resolve_category_id().await,
+            fallback_language: Some(assembled.fallback_language),
+            network_excluded_ids: assembled.network_excluded_ids,
             offline_trigger_ts: Some(offline_trigger_ts),
             reason: "auto_raid_on_offline".to_string(),
             respect_soft_raid_blacklist: true,
@@ -472,7 +550,10 @@ impl OfflineRaidHandler {
         }
 
         // 3. Kandidaten + Pipeline (wie Auto-Raid).
-        let Some(assembled) = self.assemble_eligible_partners(broadcaster_id, now).await else {
+        let Some(assembled) = self
+            .assemble_eligible_partners(broadcaster_id, source.language.as_deref(), now)
+            .await
+        else {
             return ManualRaidResponse::error("unavailable", "candidate_assembly_failed");
         };
         tracing::info!(
@@ -481,6 +562,8 @@ impl OfflineRaidHandler {
             duration_sec = source.stream_duration_sec(now),
             online_partners = assembled.online_count,
             eligible_partners = assembled.eligible.len(),
+            netzwerk_gefiltert = assembled.network_excluded_ids.len(),
+            ersatz_sprache = %assembled.fallback_language,
             "Manual-Raid-Pipeline gestartet"
         );
         let request = AutoRaidRequest {
@@ -490,6 +573,8 @@ impl OfflineRaidHandler {
             stream_duration_sec: source.stream_duration_sec(now),
             partners: assembled.eligible,
             category_id: self.resolve_category_id().await,
+            fallback_language: Some(assembled.fallback_language),
+            network_excluded_ids: assembled.network_excluded_ids,
             offline_trigger_ts: None,
             reason: "manual_chat_command".to_string(),
             respect_soft_raid_blacklist: false,
@@ -515,11 +600,14 @@ impl OfflineRaidHandler {
     }
 
     /// Schritte 5–7 des Raid-Triggers: Roster → Helix-Streams → Session-Flags
-    /// → Eligibility-Partition (aktiv vor kürzlich) → Follower-Anreicherung.
+    /// → Netzwerk-/Sprachfilter (Paket R) → Eligibility-Partition (aktiv vor
+    /// kürzlich) → Follower-Anreicherung. `raider_live_language` ist die
+    /// Sprache des laufenden Streams der Quelle, falls bekannt (manueller Raid).
     /// `None` bei I/O-Fehlern (bereits geloggt).
     async fn assemble_eligible_partners(
         &self,
         broadcaster_id: &str,
+        raider_live_language: Option<&str>,
         now: chrono::DateTime<Utc>,
     ) -> Option<AssembledPartners> {
         let roster = match self.roster.load_roster(broadcaster_id).await {
@@ -545,6 +633,15 @@ impl OfflineRaidHandler {
 
         let online = build_online_candidates(&roster, &streams_by_login);
         let online_count = online.len();
+
+        // Netzwerk-/Sprachfilter vor der Eligibility-Partition, damit der
+        // Rückfall "aktiv leer → kürzlich" nur im erlaubten Pool greift.
+        let mut network_ids: Vec<String> = Vec::with_capacity(online.len() + 1);
+        network_ids.push(broadcaster_id.trim().to_string());
+        network_ids.extend(online.iter().map(|c| c.twitch_user_id.trim().to_string()));
+        let networks = tb_db::network::load_networks(&self.network_pool, &network_ids).await;
+        let (online, network_excluded_ids, fallback_language) =
+            apply_network_scope(broadcaster_id, raider_live_language, online, networks);
 
         // Deadlock-Eligibility je Kandidat (aktiv vor kürzlich) — Partition
         // wie `filter_eligible`, hier inline weil die Session-Flags aus der
@@ -585,6 +682,8 @@ impl OfflineRaidHandler {
             eligible,
             online_count,
             filtered_out,
+            network_excluded_ids,
+            fallback_language,
         })
     }
 
@@ -695,6 +794,101 @@ mod tests {
         assert_eq!(data.viewer_count, 12);
         assert!(data.started_at.is_none(), "leere Startzeit → None");
         assert_eq!(data.game_name.as_deref(), Some("Deadlock"));
+        assert!(data.language.is_none(), "leere Sprache → None");
+
+        let english = HelixStream {
+            language: " EN ".to_string(),
+            ..stream
+        };
+        assert_eq!(to_stream_data(&english).language.as_deref(), Some("en"));
+    }
+
+    fn online(id: &str, language: &str) -> tb_raid::OnlineCandidate {
+        tb_raid::OnlineCandidate {
+            twitch_user_id: id.to_string(),
+            twitch_login: format!("login_{id}"),
+            raid_enabled: true,
+            stream: StreamData {
+                language: Some(language.to_string()),
+                ..StreamData::default()
+            },
+        }
+    }
+
+    fn english_network() -> tb_domain::network::StreamerNetwork {
+        use tb_domain::network::{GuildMembership, GuildSettings, StreamerNetwork};
+        StreamerNetwork::new(
+            vec![GuildMembership {
+                guild: GuildSettings {
+                    guild_id: 42,
+                    language: "en".to_string(),
+                    cross_server_raids: true,
+                    promo_invite_url: None,
+                    installed: true,
+                },
+                active: true,
+            }],
+            None,
+            &GuildSettings::community_default(),
+        )
+    }
+
+    #[test]
+    fn netzwerkfehler_laesst_pool_und_ersatz_wie_bisher() {
+        let (kept, excluded, language) = apply_network_scope(
+            "1",
+            Some("en"),
+            vec![online("2", "en"), online("3", "de")],
+            Err(sqlx::Error::PoolTimedOut),
+        );
+        assert_eq!(kept.len(), 2);
+        assert!(excluded.is_empty());
+        assert_eq!(language, "de");
+    }
+
+    #[test]
+    fn englischer_raider_bekommt_englischen_ersatz_und_keine_deutschen_partner() {
+        use tb_domain::network::{GuildSettings, StreamerNetwork};
+        let community = GuildSettings::community_default();
+        let networks = HashMap::from([
+            ("1".to_string(), english_network()),
+            ("2".to_string(), english_network()),
+            ("3".to_string(), StreamerNetwork::community(&community)),
+        ]);
+        let (kept, excluded, language) = apply_network_scope(
+            "1",
+            None,
+            vec![online("2", "en"), online("3", "de")],
+            Ok(networks),
+        );
+        assert_eq!(
+            kept.iter()
+                .map(|c| c.twitch_login.as_str())
+                .collect::<Vec<_>>(),
+            vec!["login_2"]
+        );
+        assert_eq!(excluded, vec!["3".to_string()]);
+        assert_eq!(language, "en");
+    }
+
+    #[test]
+    fn deutscher_raider_ohne_zeile_behaelt_alle_partner_und_de() {
+        use tb_domain::network::{GuildSettings, StreamerNetwork};
+        let community = GuildSettings::community_default();
+        let networks = HashMap::from([
+            ("1".to_string(), StreamerNetwork::community(&community)),
+            ("2".to_string(), StreamerNetwork::community(&community)),
+            ("3".to_string(), StreamerNetwork::community(&community)),
+        ]);
+        let (kept, excluded, language) = apply_network_scope(
+            "1",
+            None,
+            vec![online("2", "en"), online("3", "de")],
+            Ok(networks),
+        );
+        assert_eq!(kept.len(), 2);
+        assert!(excluded.is_empty());
+        assert_eq!(language, "de");
     }
 
     #[test]

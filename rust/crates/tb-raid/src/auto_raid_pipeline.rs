@@ -52,8 +52,8 @@ const MAX_ATTEMPTS: usize = 3;
 const STRIKE_BLACKLIST_THRESHOLD: i32 = 2;
 /// Cooldown für den Fairness-Fallback (Python `recent_raid_cooldown_days = 7`).
 const RECENT_RAID_COOLDOWN_DAYS: i32 = 7;
-/// Sprache + Limit des Kategorie-Fallbacks (Python `language="de", limit=50`).
-const FALLBACK_LANGUAGE: &str = "de";
+/// Limit des Kategorie-Fallbacks (Python `limit=50`). Die Sprache kommt aus
+/// dem Request (Sprachgruppe des Raiders), Standard bleibt `de`.
 const FALLBACK_LIMIT: usize = 50;
 
 /// Port: Live-Streams der Ziel-Kategorie für den Fairness-Fallback
@@ -323,8 +323,16 @@ pub struct AutoRaidRequest {
     pub stream_duration_sec: i32,
     /// Online-Partner nach Deadlock-Eligibility-Filter.
     pub partners: Vec<OnlineCandidate>,
-    /// Kategorie-ID für den DE-Fallback (None → kein Fallback).
+    /// Kategorie-ID für den Kategorie-Ersatz (None → kein Ersatz).
     pub category_id: Option<String>,
+    /// Sprache des Kategorie-Ersatzes (Sprachgruppe des Raiders, Paket R).
+    /// `None` oder leer → bisheriger fester Wert `de`.
+    pub fallback_language: Option<String>,
+    /// Partner, die der Netzwerk-/Sprachfilter ausgeschlossen hat (Paket R).
+    /// Sie bleiben auch im Kategorie-Ersatz und im Boost-Pfad ausgeschlossen,
+    /// sonst ginge ein Raid über diesen Umweg doch an einen Server mit
+    /// ausgeschaltetem Netzwerk-Schalter.
+    pub network_excluded_ids: Vec<String>,
     /// Unix-Zeitpunkt des Offline-Triggers (für Arrival-Latenz-Metriken).
     pub offline_trigger_ts: Option<f64>,
     /// History-Grund, z. B. `auto_raid_on_offline`.
@@ -514,6 +522,12 @@ impl AutoRaidPipeline {
         };
 
         let mut exclude_ids: HashSet<String> = [req.broadcaster_id.clone()].into();
+        exclude_ids.extend(
+            req.network_excluded_ids
+                .iter()
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty()),
+        );
         // Fallback-Streams werden lazy geholt und über Versuche gecacht
         // (Python `cached_de_streams`).
         let mut cached_fallback: Option<Vec<FairnessCandidate>> = None;
@@ -931,13 +945,15 @@ impl AutoRaidPipeline {
         let (Some(fallback), Some(category_id)) = (&self.fallback, &req.category_id) else {
             return;
         };
+        let language = crate::network_scope::fallback_language(req.fallback_language.as_deref());
         tracing::info!(
             from = %req.broadcaster_login,
             attempt,
-            "Hole Deadlock-DE-Kategorie-Streams (Boost/Fallback)"
+            sprache = %language,
+            "Hole Deadlock-Kategorie-Streams (Boost/Fallback)"
         );
         let streams = match fallback
-            .category_streams(category_id, FALLBACK_LANGUAGE, FALLBACK_LIMIT)
+            .category_streams(category_id, &language, FALLBACK_LIMIT)
             .await
         {
             Ok(streams) => streams,

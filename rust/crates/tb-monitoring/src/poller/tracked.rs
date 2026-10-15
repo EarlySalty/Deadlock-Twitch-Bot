@@ -136,6 +136,16 @@ impl TrackedStore {
         Ok((tracked, partner_logins))
     }
 
+    /// Speichert die Kanalsprache live gesehener Kanäle
+    /// (`twitch_streamer_identities.broadcaster_language`, nur bei Änderung).
+    /// Paket R braucht sie für Raids nach Sprache.
+    pub async fn record_broadcaster_languages(
+        &self,
+        observed: &[(String, String)],
+    ) -> Result<u64, sqlx::Error> {
+        tb_db::network::record_broadcaster_languages(&self.pool, observed).await
+    }
+
     /// Partner, deren letzte bekannte Stream-Aktivität vor `cutoff` liegt.
     /// Nur aktive, nicht archivierte und noch nicht informativ markierte Partner
     /// mit vorhandener Historie.

@@ -43,6 +43,7 @@ pub mod external_recruitment_store;
 pub mod flip_unraid;
 pub mod manual_suppression;
 pub mod monthly_raid_boost;
+pub mod network_scope;
 pub mod oauth_flow;
 pub mod offline_eligibility;
 pub mod outreach_boost;
@@ -123,6 +124,9 @@ pub use monthly_raid_boost::{
     previous_season_window, remaining_after_stream, stream_consumes_boost, MonthlyRaidBoostStore,
     SeasonCloseOutcome, SeasonWinner, SeasonalBoostState, MONTHLY_BOOST_STREAMS,
     MONTHLY_BOOST_TTL_DAYS, QUALIFYING_DEADLOCK_SECONDS,
+};
+pub use network_scope::{
+    fallback_language, filter_candidates_by_network, NetworkDrop, NetworkFilterOutcome,
 };
 pub use oauth_flow::{
     build_authorize_url, build_state_info, StreamerContextResolver,

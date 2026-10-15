@@ -51,7 +51,9 @@ fn env_rate(var: &str, default: f64) -> f64 {
 
 fn dispatch_error(error: tb_llm::LlmError) -> LlmError {
     match error {
-        tb_llm::LlmError::Unavailable(detail) => LlmError::ProviderUnavailable(detail),
+        tb_llm::LlmError::Unavailable(detail) | tb_llm::LlmError::Disabled(detail) => {
+            LlmError::ProviderUnavailable(detail)
+        }
         other => LlmError::ProviderError(format!("Fireworks-Fehler: {other}")),
     }
 }
@@ -92,8 +94,13 @@ impl LlmProvider for FireworksProvider {
 
     async fn generate(&self, request: &LlmRequest) -> Result<LlmResponse, LlmError> {
         let prompt = render_user_prompt(request);
+        // Streamerbezug des Clips für den KI-Schalter pro Server (Paket K).
+        let streamer = request
+            .streamer
+            .as_ref()
+            .map(|profile| profile.streamer_login.as_str());
         let text = self
-            .generate_text(SYSTEM_PROMPT, &prompt, 600, self.temperature)
+            .complete_text(SYSTEM_PROMPT, &prompt, 600, self.temperature, streamer)
             .await?;
         parse_llm_payload(
             &text.content,
@@ -110,6 +117,20 @@ impl LlmProvider for FireworksProvider {
         max_tokens: i64,
         temperature: f64,
     ) -> Result<LlmTextResponse, LlmError> {
+        self.complete_text(system_prompt, user_prompt, max_tokens, temperature, None)
+            .await
+    }
+}
+
+impl FireworksProvider {
+    async fn complete_text(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+        max_tokens: i64,
+        temperature: f64,
+        streamer_login: Option<&str>,
+    ) -> Result<LlmTextResponse, LlmError> {
         let strict_json = system_prompt.to_lowercase().contains("strict json");
         let mut request = tb_llm::Request::simple(system_prompt, user_prompt)
             .max_tokens(max_tokens)
@@ -119,6 +140,9 @@ impl LlmProvider for FireworksProvider {
             .endpoint(self.endpoint.clone());
         if strict_json {
             request = request.json_object();
+        }
+        if let Some(login) = streamer_login {
+            request = request.twitch_channel(login);
         }
         if strict_json || max_tokens <= 2000 {
             request = request.denken_aus();

@@ -37,6 +37,7 @@ pub mod db_token_store;
 pub mod fun_responses;
 pub mod global_ban_sweep;
 pub mod global_chatter_ban;
+pub mod home_invite;
 pub mod invite_question;
 mod invite_request;
 pub mod lfg_pitch;
@@ -86,6 +87,9 @@ pub use crew_guard::{screen as crew_screen, CrewGuard, CrewSignal};
 pub use fun_responses::FunResponses;
 pub use global_ban_sweep::{GlobalBanSweeper, PartnerRoster};
 pub use global_chatter_ban::GlobalChatterBanEnforcer;
+pub use home_invite::{
+    server_invite, HomeInviteResolver, InvitePurpose, ResolvedInvite, StreamerKey,
+};
 pub use invite_question::{
     InviteQuestionInviteUrlPort, InviteQuestionJudge, InviteQuestionJudgeInput,
     InviteQuestionResponder, InviteQuestionRollup, InviteQuestionStore, InviteQuestionVerdict,

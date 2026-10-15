@@ -45,11 +45,11 @@ use tb_chat::timeout_tracking::{
 use tb_chat::token::BotTokenManager;
 use tb_chat::types::ChatMessageEvent;
 use tb_chat::{
-    promo_invite_fallback, ChannelClassifier, ChatApi, ChatPipeline, ChatPipelineParts,
-    ChatterTracker, CrewGuard, FunResponses, GlobalBanSweeper, GlobalChatterBanEnforcer,
+    ChannelClassifier, ChatApi, ChatPipeline, ChatPipelineParts, ChatterTracker, CrewGuard,
+    FunResponses, GlobalBanSweeper, GlobalChatterBanEnforcer, HomeInviteResolver, InvitePurpose,
     InviteQuestionInviteUrlPort, InviteQuestionResponder, LfgPitchResponder,
     LlmInviteQuestionJudge, LlmLfgJudge, ModAlerter, PartnerRoster, PgHelixMentionResolver,
-    PgInviteQuestionStore, ReviewLog, SusInviteCheck,
+    PgInviteQuestionStore, ReviewLog, StreamerKey, SusInviteCheck,
 };
 use tb_crypto::FieldCipher;
 use tb_engagement::irc_reader::EngagementIrcReader;
@@ -992,11 +992,14 @@ pub async fn build_runtime(
     // Backfill beim Startup (P2.14) teilen sich denselben Resolver, damit beide
     // Pfade dieselbe Broker-/DB-Logik nutzen.
     let voice_relay = invite_relay.clone();
+    // Paket R: jede Einladung kommt vom Heimat-Server des Streamers; die
+    // Konfiguration `discord.chat.promo_invite` gilt nur für den deutschen Server.
+    let home_invites = HomeInviteResolver::new(pool.clone(), discord_chat.promo_invite.clone());
     let invite_resolver = Arc::new(DbInviteResolver {
         pool: pool.clone(),
+        homes: home_invites.clone(),
         relay: invite_relay,
         invite_channel_id: Some(invite_channel_id),
-        fallback: discord_chat.promo_invite.clone(),
     });
     if let Some(relay) = review_relay.clone() {
         let pool = pool.clone();
@@ -1046,7 +1049,7 @@ pub async fn build_runtime(
     });
 
     let discord_link: Arc<dyn DiscordLinkPort> = Arc::new(DbDiscordLink {
-        pool: pool.clone(),
+        homes: home_invites.clone(),
         relay: invite_resolver.relay.clone(),
     });
     let mut command_engine = CommandEngine::new(
@@ -1058,8 +1061,7 @@ pub async fn build_runtime(
         }),
         Arc::clone(&discord_link),
         Arc::new(DbInvitePort {
-            pool: pool.clone(),
-            fallback: discord_chat.promo_invite.clone(),
+            homes: home_invites.clone(),
         }),
         Arc::new(DbSuperMod { pool: pool.clone() }),
         Arc::clone(&moderation) as Arc<dyn LastAutobanStore>,
@@ -1166,8 +1168,7 @@ pub async fn build_runtime(
         invite_question: Arc::new(InviteQuestionResponder::new(
             Arc::clone(&api),
             Arc::new(DbInviteUrlWithFallback {
-                pool: pool.clone(),
-                fallback: discord_chat.promo_invite.clone(),
+                homes: home_invites.clone(),
             }),
             Arc::new(PgInviteQuestionStore::new(pool.clone())),
             Arc::new(LlmInviteQuestionJudge::new(EngagementLlmClient::new(
@@ -1191,8 +1192,7 @@ pub async fn build_runtime(
             let responder = LfgPitchResponder::new(
                 Arc::clone(&api),
                 Arc::new(DbInviteUrlWithFallback {
-                    pool: pool.clone(),
-                    fallback: discord_chat.promo_invite.clone(),
+                    homes: home_invites.clone(),
                 }),
                 Arc::clone(&lfg_judge),
                 lfg_pitch_enabled,
@@ -2688,8 +2688,10 @@ async fn toggle_partner_flag(
 }
 
 /// !dldc/!dlde — Discord-Invite des Streamers (discord_invite.rs-SQL).
+/// Persönliche Viewer-Links legt der Broker nur auf dem deutschen Server an;
+/// Streamer anderer Server bekommen den Kanallink ihres Heimat-Servers.
 struct DbDiscordLink {
-    pool: PgPool,
+    homes: HomeInviteResolver,
     relay: Option<BrokerRelay>,
 }
 
@@ -2704,6 +2706,13 @@ impl DiscordLinkPort for DbDiscordLink {
         let Some(relay) = &self.relay else {
             return self.discord_invite(broadcaster_id).await;
         };
+        let home = self
+            .homes
+            .home_guild(StreamerKey::UserId(broadcaster_id))
+            .await;
+        if !home.as_ref().is_some_and(|home| home.is_community()) {
+            return self.discord_invite(broadcaster_id).await;
+        }
         match relay
             .personal_invite(streamer_login, broadcaster_id, inviter_twitch_user_id)
             .await
@@ -2717,45 +2726,37 @@ impl DiscordLinkPort for DbDiscordLink {
     }
 
     async fn discord_invite(&self, broadcaster_id: &str) -> Result<Option<String>, String> {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT invite_url FROM twitch_streamer_invites WHERE twitch_user_id = $1",
-        )
-        .bind(broadcaster_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(row.map(|(url,)| url).filter(|u| !u.trim().is_empty()))
+        self.homes
+            .resolve(
+                StreamerKey::UserId(broadcaster_id),
+                InvitePurpose::ChannelLink,
+            )
+            .await
+            .map(|invite| invite.map(|invite| invite.url))
+            .map_err(|e| e.to_string())
     }
 }
 
-/// Invite-Question — URL wie `!invite`: Streamer-Invite, sonst Env-Fallback.
+/// Invite-Question und LFG-Pitch — URL wie `!invite`: Streamer-Invite, sonst
+/// der Rückfall des Heimat-Servers (deutscher Server: Konfiguration).
 struct DbInviteUrlWithFallback {
-    pool: PgPool,
-    fallback: Option<String>,
+    homes: HomeInviteResolver,
 }
 
 #[async_trait::async_trait]
 impl InviteQuestionInviteUrlPort for DbInviteUrlWithFallback {
     async fn invite_url(&self, channel_login: &str) -> Result<Option<String>, String> {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT invite_url FROM twitch_streamer_invites \
-             WHERE LOWER(streamer_login) = $1 LIMIT 1",
-        )
-        .bind(channel_login)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(row
-            .map(|(url,)| url)
-            .filter(|url| !url.trim().is_empty())
-            .or_else(|| self.fallback.clone()))
+        self.homes
+            .resolve(StreamerKey::Login(channel_login), InvitePurpose::Reply)
+            .await
+            .map(|invite| invite.map(|invite| invite.url))
+            .map_err(|e| e.to_string())
     }
 }
 
 /// !invite — Antwortzeile unabhängig von Streamstatus und Kategorie.
 struct DbInvitePort {
-    pool: PgPool,
-    fallback: Option<String>,
+    homes: HomeInviteResolver,
 }
 
 #[async_trait::async_trait]
@@ -2765,19 +2766,12 @@ impl InvitePort for DbInvitePort {
         broadcaster_id: &str,
         chatter_login: &str,
     ) -> Result<Option<String>, String> {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT invite_url FROM twitch_streamer_invites \
-             WHERE twitch_user_id = $1 LIMIT 1",
-        )
-        .bind(broadcaster_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-        let invite_url = row
-            .map(|(url,)| url)
-            .filter(|u| !u.trim().is_empty())
-            .or_else(|| self.fallback.clone());
-        let Some(invite_url) = invite_url else {
+        let invite = self
+            .homes
+            .resolve(StreamerKey::UserId(broadcaster_id), InvitePurpose::Reply)
+            .await
+            .map_err(|e| e.to_string())?;
+        let Some(invite_url) = invite.map(|invite| invite.url) else {
             return Ok(None);
         };
 
@@ -2836,35 +2830,37 @@ impl PartnerChannelCheck for DbPartnerCheck {
     }
 }
 
-/// Promo-Invite: streamer-spezifisch → Broker-Erstellung → globaler Fallback.
+/// Promo-Invite: streamer-spezifisch → Broker-Erstellung → Rückfall des
+/// Heimat-Servers. Broker-Einladungen entstehen nur für Streamer des deutschen
+/// Servers (der Broker gehört zum Haupt-Bot); Streamer anderer Server werben
+/// mit der Einladung ihres Servers oder gar nicht (Paket R).
 struct DbInviteResolver {
     pool: PgPool,
-    fallback: Option<String>,
+    homes: HomeInviteResolver,
     relay: Option<BrokerRelay>,
     invite_channel_id: Option<u64>,
 }
 
 #[async_trait::async_trait]
 impl InviteResolver for DbInviteResolver {
-    async fn resolve_invite(&self, channel_login: &str) -> (String, bool) {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT invite_url FROM twitch_streamer_invites \
-             WHERE LOWER(streamer_login) = $1 LIMIT 1",
-        )
-        .bind(channel_login)
-        .fetch_optional(&self.pool)
-        .await
-        .ok()
-        .flatten();
-        if let Some((url,)) = row {
-            if !url.trim().is_empty() {
-                return (url, true);
+    async fn resolve_invite(&self, channel_login: &str) -> Option<(String, bool)> {
+        let key = StreamerKey::Login(channel_login);
+        let home = self.homes.home_guild(key).await?;
+        match self.homes.fitting_personal_invite(&home, key).await {
+            Ok(Some(url)) => return Some((url, true)),
+            Ok(None) => {}
+            Err(error) => {
+                tracing::debug!(%error, channel_login, "Promo-Invite: Streamer-Invite nicht lesbar");
             }
         }
-        if let Some(url) = self.create_and_store_streamer_invite(channel_login).await {
-            return (url, true);
+        if home.is_community() {
+            if let Some(url) = self.create_and_store_streamer_invite(channel_login).await {
+                return Some((url, true));
+            }
         }
-        (promo_invite_fallback(self.fallback.as_deref()), false)
+        self.homes
+            .server_invite(&home, InvitePurpose::Promo)
+            .map(|url| (url, false))
     }
 }
 
@@ -2969,6 +2965,7 @@ impl DbInviteResolver {
                 return;
             }
         };
+        let logins = self.only_community_home(logins).await;
         if logins.is_empty() {
             tracing::debug!("Partner-Invite-Backfill: alle aktiven Partner haben einen Invite");
             return;
@@ -3010,6 +3007,25 @@ impl DbInviteResolver {
         )
         .fetch_all(&self.pool)
         .await
+    }
+
+    /// Nur Streamer des deutschen Servers bekommen eine Broker-Einladung
+    /// (Paket R). Streamer anderer Server werben mit ihrer Server-Einladung.
+    /// Ist das Netzwerk nicht ladbar, gilt der deutsche Server wie bisher.
+    async fn only_community_home(&self, logins: Vec<String>) -> Vec<String> {
+        let mut kept = Vec::with_capacity(logins.len());
+        for login in logins {
+            let home = self.homes.home_guild(StreamerKey::Login(&login)).await;
+            if home.as_ref().is_some_and(|home| home.is_community()) {
+                kept.push(login);
+            } else {
+                tracing::debug!(
+                    login,
+                    "Partner-Invite-Backfill: Streamer eines anderen Servers"
+                );
+            }
+        }
+        kept
     }
 
     /// Erstellt für jede Login einen Invite mit 0,5 s Pacing (Python-Parität:
@@ -4282,9 +4298,9 @@ mod db_tests {
 
         let resolver = DbInviteResolver {
             pool: pool.clone(),
+            homes: HomeInviteResolver::new(pool.clone(), None),
             relay: None,
             invite_channel_id: None,
-            fallback: None,
         };
         let logins = resolver.partners_without_invite().await.unwrap();
         assert_eq!(logins, vec!["fresh".to_string()]);
@@ -4298,6 +4314,78 @@ pub(crate) mod invite_test_postgres;
 #[cfg(test)]
 mod invite_offline_tests {
     use super::*;
+
+    /// Guild-Schema (Paket R) mit je einem deutschen und englischen Streamer.
+    async fn guild_schema(pool: &PgPool) {
+        sqlx::raw_sql(
+            "CREATE TABLE twitch_streamer_identities (
+                twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT NOT NULL,
+                broadcaster_language TEXT);
+             CREATE TABLE discord_guilds (
+                guild_id BIGINT PRIMARY KEY, language TEXT NOT NULL,
+                cross_server_raids BOOLEAN NOT NULL DEFAULT TRUE, promo_invite_url TEXT,
+                status TEXT NOT NULL DEFAULT 'active', removed_at TIMESTAMPTZ);
+             CREATE TABLE streamer_guilds (
+                twitch_user_id TEXT NOT NULL, guild_id BIGINT NOT NULL,
+                active BOOLEAN NOT NULL DEFAULT TRUE,
+                joined_at TIMESTAMPTZ NOT NULL DEFAULT now());
+             CREATE TABLE twitch_streamer_invites (
+                streamer_login TEXT PRIMARY KEY, twitch_user_id TEXT,
+                guild_id BIGINT NOT NULL, invite_url TEXT NOT NULL);
+             INSERT INTO discord_guilds (guild_id, language, promo_invite_url) VALUES
+                (1289721245281292288, 'de', 'https://discord.gg/z5TfVHuQq2'),
+                (42, 'en', 'https://discord.gg/english'),
+                (43, 'en', NULL);
+             INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login) VALUES
+                ('de1', 'deutsch'), ('en1', 'english'), ('en2', 'english_eigen'),
+                ('en3', 'ohne_einladung');
+             INSERT INTO streamer_guilds (twitch_user_id, guild_id) VALUES
+                ('en1', 42), ('en2', 42), ('en3', 43);
+             INSERT INTO twitch_streamer_invites VALUES
+                ('english_eigen', 'en2', 42, 'https://discord.gg/eigene');",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn promo_einladung_kommt_vom_heimat_server() {
+        let database = invite_test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        guild_schema(&pool).await;
+        let resolver = DbInviteResolver {
+            pool: pool.clone(),
+            homes: HomeInviteResolver::new(pool.clone(), None),
+            relay: None,
+            invite_channel_id: None,
+        };
+        // Deutscher Streamer ohne persönliche Einladung: feste Community-Einladung.
+        assert_eq!(
+            resolver.resolve_invite("deutsch").await,
+            Some((tb_chat::DEFAULT_PROMO_DISCORD_INVITE.to_string(), false))
+        );
+        assert_eq!(
+            resolver.resolve_invite("english").await,
+            Some(("https://discord.gg/english".to_string(), false))
+        );
+        assert_eq!(
+            resolver.resolve_invite("english_eigen").await,
+            Some(("https://discord.gg/eigene".to_string(), true))
+        );
+        assert_eq!(resolver.resolve_invite("ohne_einladung").await, None);
+
+        // Broker-Einladungen nur für Streamer des deutschen Servers.
+        let logins = vec![
+            "deutsch".to_string(),
+            "english".to_string(),
+            "unbekannt".to_string(),
+        ];
+        assert_eq!(
+            resolver.only_community_home(logins).await,
+            vec!["deutsch".to_string(), "unbekannt".to_string()]
+        );
+    }
 
     #[tokio::test]
     async fn echter_invite_port_antwortet_offline_und_bei_anderem_spiel() {
@@ -4324,8 +4412,7 @@ mod invite_offline_tests {
             .await
             .unwrap();
         let port = DbInvitePort {
-            pool: pool.clone(),
-            fallback: None,
+            homes: HomeInviteResolver::new(pool.clone(), None),
         };
         for (live, game) in [(0, "Deadlock"), (1, "Just Chatting"), (1, "Deadlock")] {
             sqlx::query("UPDATE twitch_live_state SET is_live=$1,last_game=$2")
@@ -4394,7 +4481,7 @@ mod command_adapter_regressions {
             INSERT INTO twitch_streamer_invites VALUES ('oldname','own','https://discord.gg/own'), ('newname','other','https://discord.gg/other');")
             .execute(&db.pool).await.unwrap();
         let port = DbDiscordLink {
-            pool: db.pool.clone(),
+            homes: HomeInviteResolver::new(db.pool.clone(), None),
             relay: None,
         };
         assert_eq!(
@@ -4481,8 +4568,24 @@ impl tb_chat::streamer_voice::StreamerVoicePort for StreamerVoiceResolver {
         else {
             return Ok(None);
         };
+        // Voice-Einladungen gibt es nur auf dem deutschen Server (Broker des
+        // Haupt-Bots); Streamer anderer Server bekommen keine (Paket R).
+        let home = match tb_db::network::load_network(&self.pool, broadcaster_id).await {
+            Ok(network) => network.home_guild().map(|home| home.guild_id),
+            Err(error) => {
+                tracing::warn!(%error, broadcaster_id, "Voice-Einladung: Heimat-Server nicht ladbar — deutscher Server wie bisher");
+                Some(tb_domain::network::COMMUNITY_GUILD_ID)
+            }
+        };
+        if home != Some(tb_domain::network::COMMUNITY_GUILD_ID) {
+            return Ok(None);
+        }
         self.relay
-            .streamer_voice_invite(1289721245281292288, streamer_id, message_id)
+            .streamer_voice_invite(
+                tb_domain::network::COMMUNITY_GUILD_ID as u64,
+                streamer_id,
+                message_id,
+            )
             .await
             .map(|invite| {
                 invite.map(|invite| tb_chat::streamer_voice::VoiceInvite {
