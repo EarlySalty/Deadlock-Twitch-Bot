@@ -166,18 +166,18 @@ const PITCH_MAX_CONCURRENT: usize = 8;
 const PROMO_MAX_CONCURRENT: usize = 16;
 const PROMO_DUE_CONCURRENCY: usize = 4;
 /// Fallback-Discord-Invite (constants.py: PROMO_DISCORD_INVITE).
-pub const DEFAULT_PROMO_DISCORD_INVITE: &str = "https://discord.gg/z5TfVHuQq2";
+#[cfg(test)]
+const DEFAULT_PROMO_DISCORD_INVITE: &str = "https://discord.gg/z5TfVHuQq2";
 /// Partner-Seite für Streamer-Pitches in den Promo-Texten.
 pub const STREAMER_PARTNER_URL: &str = "https://deutsche-deadlock-community.de/streamer";
 
 /// Liefert den konfigurierten globalen Promo-Invite oder den Python-paritären
 /// Default. Ein fehlendes/leeres Secret darf keinen leeren `{invite}`-Text
 /// erzeugen.
-pub fn promo_invite_fallback(configured: Option<&str>) -> String {
+#[cfg(test)]
+fn promo_invite_fallback(configured: Option<&str>) -> String {
     let configured = configured.map(str::trim).filter(|value| !value.is_empty());
-    configured
-        .unwrap_or(DEFAULT_PROMO_DISCORD_INVITE)
-        .to_string()
+    configured.unwrap_or_default().to_string()
 }
 
 fn render_promo_template(template: &str, invite: &str) -> Option<String> {
@@ -469,6 +469,10 @@ fn known_chat_bot_not_in_clause(column: &str, start: usize) -> String {
 pub trait InviteResolver: Send + Sync {
     /// Liefert (invite_url, is_specific). Fallback: PROMO_DISCORD_INVITE, false.
     async fn resolve_invite(&self, channel_login: &str) -> (String, bool);
+
+    async fn community_promotions(&self, _channel_login: &str) -> bool {
+        false
+    }
 }
 
 /// Partner-Channel-Check für Chat-Tracking. (promos.py:1422: `is_partner_channel_for_chat_tracking`).
@@ -507,7 +511,7 @@ pub struct StaticInviteResolver;
 #[async_trait]
 impl InviteResolver for StaticInviteResolver {
     async fn resolve_invite(&self, _channel_login: &str) -> (String, bool) {
-        (DEFAULT_PROMO_DISCORD_INVITE.to_string(), false)
+        (String::new(), false)
     }
 }
 
@@ -1883,8 +1887,18 @@ impl PromoEngine {
             return false;
         }
         let (invite, is_specific) = self.invite_resolver.resolve_invite(login).await;
+        if invite.trim().is_empty() {
+            return false;
+        }
 
-        let Some((text, color)) = self.build_promo_text(login, &invite).await else {
+        let Some((text, color)) = self
+            .build_promo_text(
+                login,
+                &invite,
+                self.invite_resolver.community_promotions(login).await,
+            )
+            .await
+        else {
             self.record_pitch_log(PitchLogEntry {
                 channel_login: login.to_string(),
                 target_user_id: None,
@@ -1988,9 +2002,14 @@ impl PromoEngine {
         true
     }
 
-    async fn build_promo_text(&self, login: &str, invite: &str) -> Option<(String, String)> {
+    async fn build_promo_text(
+        &self,
+        login: &str,
+        invite: &str,
+        community_scope: bool,
+    ) -> Option<(String, String)> {
         let (_, community) = self.channel_timers(login).await;
-        if community {
+        if community && community_scope {
             // Vor jedem Versand neu laden; deaktivierte Texte haben keinen Fallback.
             let settings = match tb_analytics::community_announcements::load(&self.pool).await {
                 Ok(settings) => settings,
@@ -2033,8 +2052,10 @@ impl PromoEngine {
                 }
             };
         }
-        if let Some(text) = self.load_global_promo_message(invite).await {
-            return Some(text);
+        if community_scope {
+            if let Some(text) = self.load_global_promo_message(invite).await {
+                return Some(text);
+            }
         }
 
         if let Some(text) = self.load_streamer_promo_message(login, invite).await {
@@ -3459,7 +3480,7 @@ mod tests {
     fn periodischer_promo_text_traegt_invite_am_ende_ohne_strich() {
         let invite = "https://discord.gg/deadlock";
         let out = crate::promo_pitch::finalize_channel_promo(
-            "komm vorbei und zock ne runde mit uns",
+            "Bei uns laufen aktive Voice-Lanes für gemeinsame Deadlock-Runden",
             invite,
         )
         .unwrap();
@@ -3474,15 +3495,9 @@ mod tests {
 
     #[test]
     fn promo_invite_fallback_nutzt_default_bei_fehlender_oder_leerer_config() {
-        assert_eq!(promo_invite_fallback(None), DEFAULT_PROMO_DISCORD_INVITE);
-        assert_eq!(
-            promo_invite_fallback(Some("")),
-            DEFAULT_PROMO_DISCORD_INVITE
-        );
-        assert_eq!(
-            promo_invite_fallback(Some("   ")),
-            DEFAULT_PROMO_DISCORD_INVITE
-        );
+        assert_eq!(promo_invite_fallback(None), "");
+        assert_eq!(promo_invite_fallback(Some("")), "");
+        assert_eq!(promo_invite_fallback(Some("   ")), "");
         assert_eq!(
             promo_invite_fallback(Some(" https://discord.gg/custom ")),
             "https://discord.gg/custom"
@@ -3950,7 +3965,7 @@ mod tests {
             .max_connections(1)
             .connect_lazy("postgres://localhost/nonexistent")
             .unwrap();
-        PromoEngine::new(
+        PromoEngine::new_test(
             pool,
             Arc::new(MockApi::default()),
             Arc::new(NoopSuppressionCheck),
@@ -4152,7 +4167,7 @@ mod tests {
 
     #[tokio::test]
     async fn prune_raeumt_judge_maps_nach_cooldown() {
-        let engine = PromoEngine::new(
+        let engine = PromoEngine::new_test(
             dummy_pool(),
             Arc::new(MockApi::default()),
             Arc::new(NoopSuppressionCheck),
@@ -4195,7 +4210,7 @@ mod tests {
     async fn timeout_pitch_unterdrueckt_bei_suppression() {
         // Kanal gemutet → Pitch wird NICHT gesendet (Suppression-Gate, Python source="promo").
         let api = Arc::new(MockApi::default());
-        let engine = PromoEngine::new(dummy_pool(), api.clone(), Arc::new(AlwaysMuted));
+        let engine = PromoEngine::new_test(dummy_pool(), api.clone(), Arc::new(AlwaysMuted));
         let sent = engine.send_timeout_pitch("123", "login", "PITCH").await;
         assert!(!sent, "gemuteter Kanal darf keinen Pitch bekommen");
         assert!(api.announcements.lock().await.is_empty());
@@ -4205,7 +4220,8 @@ mod tests {
     async fn timeout_pitch_sendet_blau_und_belegt_cooldown() {
         // Nicht gemutet → blaues Announcement + Promo-Cooldown belegt (kein Doppel-Promo danach).
         let api = Arc::new(MockApi::default());
-        let engine = PromoEngine::new(dummy_pool(), api.clone(), Arc::new(NoopSuppressionCheck));
+        let engine =
+            PromoEngine::new_test(dummy_pool(), api.clone(), Arc::new(NoopSuppressionCheck));
         let sent = engine.send_timeout_pitch("123", "login", "PITCH-MSG").await;
         assert!(sent);
         {
@@ -4243,6 +4259,30 @@ mod db_tests {
     use std::str::FromStr;
 
     struct FixedSuppression(bool);
+
+    #[tokio::test]
+    async fn foreign_home_does_not_use_global_community_promotions() {
+        let database = crate::test_postgres::TestPostgres::start().await;
+        let pool = database.pool.clone();
+        apply_ddl(&pool).await;
+        sqlx::raw_sql("CREATE TABLE twitch_global_promo_modes (config_key TEXT PRIMARY KEY, mode TEXT NOT NULL DEFAULT 'standard', custom_message TEXT, starts_at TEXT, ends_at TEXT, is_enabled INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_by TEXT);
+            ALTER TABLE twitch_global_promo_modes ADD COLUMN announcement_color TEXT NOT NULL DEFAULT 'purple';
+            INSERT INTO twitch_global_promo_modes(config_key,mode,custom_message,is_enabled) VALUES('global','custom_event','Community only {invite}',1);")
+            .execute(&pool).await.unwrap();
+        let engine = make_engine(pool).set_pitch_text_gen(Arc::new(FixedTextGen(Some(
+            "Server-local promotion".into(),
+        ))));
+        let (text, _) = engine
+            .build_promo_text("foreign", "https://discord.gg/foreign", false)
+            .await
+            .unwrap();
+        assert!(text.contains("Server-local promotion"));
+        assert!(!text.contains("Community only"));
+        assert!(text.contains("https://discord.gg/foreign"));
+        let fallback = StaticInviteResolver.resolve_invite("foreign").await;
+        assert!(fallback.0.is_empty());
+        assert!(!StaticInviteResolver.community_promotions("foreign").await);
+    }
 
     #[async_trait]
     impl OutboundSuppressionCheck for FixedSuppression {
@@ -4699,7 +4739,7 @@ mod db_tests {
     }
 
     fn make_engine(pool: PgPool) -> PromoEngine {
-        PromoEngine::new(
+        PromoEngine::new_test(
             pool,
             Arc::new(super::tests::MockApi::default()),
             Arc::new(NoopSuppressionCheck),
@@ -4732,7 +4772,7 @@ mod db_tests {
         seed_partner_channel(&pool, COMMUNITY_BROADCASTER_ID, "community-renamed").await;
         seed_partner_channel(&pool, "other-id", "other").await;
         let api = Arc::new(super::tests::MockApi::default());
-        let engine = Arc::new(PromoEngine::new(
+        let engine = Arc::new(PromoEngine::new_test(
             pool.clone(),
             api.clone(),
             Arc::new(NoopSuppressionCheck),
@@ -4796,7 +4836,7 @@ mod db_tests {
             )
             .await;
         assert_eq!(api.announcement_count().await, 1);
-        let restart = Arc::new(PromoEngine::new(
+        let restart = Arc::new(PromoEngine::new_test(
             pool.clone(),
             api.clone(),
             Arc::new(NoopSuppressionCheck),
@@ -4855,7 +4895,7 @@ mod db_tests {
         sqlx::query("INSERT INTO twitch_promo_pitch_log(channel_login,pfad,sent_at) SELECT 'community-renamed','periodic',now() FROM generate_series(1,6)")
             .execute(&pool).await.unwrap();
         let active_event = engine
-            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
+            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE, true)
             .await
             .unwrap();
         assert!(active_event.0.starts_with("Unser bestehender Hinweis"));
@@ -4865,7 +4905,7 @@ mod db_tests {
             .await
             .unwrap();
         let expired_event = engine
-            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
+            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE, true)
             .await
             .unwrap();
         assert_eq!(expired_event.0, format!("Scrim ohne Gegnerteam? Bei uns kannst du gezielt andere Teams suchen, statt einzelne Leute per DM abzuklappern. {}", DEFAULT_PROMO_DISCORD_INVITE));
@@ -4879,7 +4919,7 @@ mod db_tests {
         config = save(&pool, &config).await.unwrap().unwrap();
         assert!(
             engine
-                .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
+                .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE, true)
                 .await
                 .is_none(),
             "Keine versteckten Standardtexte bei deaktivierter Rotation"
@@ -4891,13 +4931,13 @@ mod db_tests {
         });
         config = save(&pool, &config).await.unwrap().unwrap();
         assert!(engine
-            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
+            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE, true)
             .await
             .is_none());
         config.entries.last_mut().unwrap().enabled = true;
         config = save(&pool, &config).await.unwrap().unwrap();
         let selected = engine
-            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
+            .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE, true)
             .await
             .unwrap();
         assert_eq!(
@@ -4928,14 +4968,14 @@ mod db_tests {
             .unwrap();
         assert!(
             engine
-                .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE)
+                .build_promo_text("community-renamed", DEFAULT_PROMO_DISCORD_INVITE, true)
                 .await
                 .is_none(),
             "Kanalpause sperrt auch das globale Event"
         );
         assert!(
             engine
-                .build_promo_text("other", DEFAULT_PROMO_DISCORD_INVITE)
+                .build_promo_text("other", DEFAULT_PROMO_DISCORD_INVITE, true)
                 .await
                 .unwrap()
                 .0
@@ -4967,7 +5007,8 @@ mod db_tests {
         .unwrap();
 
         let api = Arc::new(super::tests::MockApi::default());
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck));
 
         let now = Instant::now();
         {
@@ -5319,7 +5360,7 @@ mod db_tests {
     async fn send_promo_if_due_respektiert_promo_channel_allowed_gate() {
         let pool = pool_or_skip!("promo_slot_allowed_gate");
         let api = Arc::new(super::tests::MockApi::default());
-        let engine = Arc::new(PromoEngine::new(
+        let engine = Arc::new(PromoEngine::new_test(
             pool.clone(),
             api.clone(),
             Arc::new(NoopSuppressionCheck),
@@ -5368,7 +5409,7 @@ mod db_tests {
         let pool = pool_or_skip!("promo_ohne_targeted_global");
         let api = Arc::new(super::tests::MockApi::default());
         let engine = Arc::new(
-            PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
                 .set_pitch_text_gen(Arc::new(FixedTextGen(Some(
                     "mitspieler findest du bei uns".to_string(),
                 )))),
@@ -5444,7 +5485,7 @@ mod db_tests {
         seed_partner_channel(&pool, "c-nb", "nbkanal").await;
         let api = Arc::new(super::tests::MockApi::default());
         let engine = Arc::new(
-            PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
                 .set_pitch_text_gen(Arc::new(SlowTextGen {
                     delay: Duration::from_secs(3),
                 })),
@@ -5487,7 +5528,7 @@ mod db_tests {
         seed_partner_channel(&pool, "c-ps", "pskanal").await;
         let gen = Arc::new(CountingTextGen::new("bei uns gibts leute zum zocken"));
         let engine = Arc::new(
-            PromoEngine::new(
+            PromoEngine::new_test(
                 pool.clone(),
                 Arc::new(super::tests::MockApi::default()),
                 Arc::new(NoopSuppressionCheck),
@@ -5565,7 +5606,7 @@ mod db_tests {
         seed_partner_channel(&pool, "c-nf", "nfkanal").await;
         let gen = Arc::new(CountingTextGen::new("bei uns gibts leute zum zocken"));
         let engine = Arc::new(
-            PromoEngine::new(
+            PromoEngine::new_test(
                 pool.clone(),
                 Arc::new(super::tests::MockApi::default()),
                 Arc::new(NoopSuppressionCheck),
@@ -5639,7 +5680,7 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let gen = Arc::new(CountingTextGen::new("bei uns gibts leute zum zocken"));
         let engine = Arc::new(
-            PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
                 .set_pitch_text_gen(gen.clone()),
         );
 
@@ -5695,8 +5736,9 @@ mod db_tests {
             Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
             "deadlock ist echt unterschaetzt",
         ))));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone());
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_judge(judge.clone());
 
         let mut permits = Vec::new();
         for _ in 0..PITCH_MAX_CONCURRENT {
@@ -5742,7 +5784,7 @@ mod db_tests {
             Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
             "deadlock ist echt unterschaetzt",
         ))));
-        let engine = PromoEngine::new(
+        let engine = PromoEngine::new_test(
             pool.clone(),
             Arc::new(super::tests::MockApi::default()),
             Arc::new(NoopSuppressionCheck),
@@ -5862,9 +5904,10 @@ mod db_tests {
             Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
             "deadlock ist echt unterschaetzt. im discord findest du mitspieler für gemeinsame runden",
         ))));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone())
-            .set_zuschauer_register(test_register(pool.clone()));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_judge(judge.clone())
+                .set_zuschauer_register(test_register(pool.clone()));
 
         let event = pitch_event(
             "c-inserr",
@@ -5889,13 +5932,14 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
             Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
-            "deadlock ist echt unterschaetzt. im discord findest du mitspieler für gemeinsame runden",
+            "Deadlock ist echt unterschätzt. Bei uns laufen aktive Voice-Lanes für gemeinsame Runden",
         ))));
         let sink = RecordingReviewSink::default();
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone())
-            .set_pitch_review_sink(Arc::new(sink.clone()))
-            .set_zuschauer_register(test_register(pool.clone()));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_judge(judge.clone())
+                .set_pitch_review_sink(Arc::new(sink.clone()))
+                .set_zuschauer_register(test_register(pool.clone()));
 
         let event = pitch_event(
             "c-sym",
@@ -5944,9 +5988,10 @@ mod db_tests {
                 r#"{"occasion":"new_player","reply":"der erste tag hat es in sich. andere deadlock-spieler helfen bei uns im discord mit deinen anfängerfragen, damit du dich nicht allein durchbeißen musst.","ernst_gemeint":true,"confidence":0.95}"#,
             ),
         ));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone())
-            .set_zuschauer_register(test_register(pool.clone()));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_judge(judge.clone())
+                .set_zuschauer_register(test_register(pool.clone()));
         let mut event = pitch_event(
             "c-cryonix",
             "cryonixkanal",
@@ -5989,9 +6034,10 @@ mod db_tests {
                 r#"{"occasion":"new_player","reply":"andere spieler helfen bei deinen anfängerfragen","ernst_gemeint":false,"confidence":0.95}"#,
             ),
         ));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(negative.clone())
-            .set_zuschauer_register(test_register(pool.clone()));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_judge(negative.clone())
+                .set_zuschauer_register(test_register(pool.clone()));
         let mut event = pitch_event(
             "c-negativ",
             "negativkanal",
@@ -6029,11 +6075,12 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
             Some(crate::promo_pitch::PitchOccasion::NewcomerInterest),
-            "haze sieht wirklich spannend aus. im discord findest du mitspieler für gemeinsame runden",
+            "Haze sieht wirklich spannend aus. Bei uns laufen aktive Voice-Lanes für gemeinsame Runden",
         ))));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone())
-            .set_zuschauer_register(test_register(pool.clone()));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_judge(judge.clone())
+                .set_zuschauer_register(test_register(pool.clone()));
 
         let event = pitch_event(
             "c-neu",
@@ -6055,7 +6102,7 @@ mod db_tests {
             1,
             "neuer interessierter Zuschauer soll einen Pitch bekommen"
         );
-        assert!(msgs[0].1.contains("discord findest du mitspieler"));
+        assert!(msgs[0].1.contains("aktive Voice-Lanes"));
 
         let occasion: Option<String> = sqlx::query_scalar(
             "SELECT occasion FROM twitch_promo_pitch_log WHERE target_user_id = 'u-neu' AND sent_at IS NOT NULL",
@@ -6075,9 +6122,10 @@ mod db_tests {
             Some(crate::promo_pitch::PitchOccasion::NewcomerInterest),
             "wer bock auf deadlock hat, ist in der deutschen community gut aufgehoben",
         ))));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge)
-            .set_zuschauer_register(test_register(pool.clone()));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_judge(judge)
+                .set_zuschauer_register(test_register(pool.clone()));
 
         let event = pitch_event(
             "c-meta",
@@ -6115,9 +6163,10 @@ mod db_tests {
                 ernst_gemeint: true,
             },
         )));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge)
-            .set_zuschauer_register(test_register(pool.clone()));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_judge(judge)
+                .set_zuschauer_register(test_register(pool.clone()));
 
         let event = pitch_event(
             "c-conf",
@@ -6150,9 +6199,10 @@ mod db_tests {
             Some(crate::promo_pitch::PitchOccasion::NewcomerInterest),
             "spannend. im discord findest du mitspieler für gemeinsame runden",
         ))));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone())
-            .set_zuschauer_register(test_register(pool.clone()));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_judge(judge.clone())
+                .set_zuschauer_register(test_register(pool.clone()));
 
         let event = pitch_event(
             "c-game",
@@ -6193,8 +6243,9 @@ mod db_tests {
         let gen = Arc::new(MockPartnerPitchGen::new(Some(
             "dieser text darf nie erzeugt werden",
         )));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_partner_pitch_gen(gen.clone());
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_partner_pitch_gen(gen.clone());
 
         let event = pitch_event(
             "c-pk",
@@ -6231,9 +6282,10 @@ mod db_tests {
 
         let api = Arc::new(super::tests::MockApi::default());
         let gen = Arc::new(MockPartnerPitchGen::new(Some("partner text egal")));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_partner_pitch_gen(gen.clone())
-            .set_zuschauer_register(test_register(pool.clone()));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_partner_pitch_gen(gen.clone())
+                .set_zuschauer_register(test_register(pool.clone()));
 
         let event = pitch_event(
             "c-pkz",
@@ -6273,9 +6325,10 @@ mod db_tests {
             "dieser text darf nie erzeugt werden",
         )));
         let sink = RecordingReviewSink::default();
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_partner_pitch_gen(gen.clone())
-            .set_pitch_review_sink(Arc::new(sink.clone()));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_partner_pitch_gen(gen.clone())
+                .set_pitch_review_sink(Arc::new(sink.clone()));
 
         let event = pitch_event(
             "c-lk",
@@ -6307,13 +6360,14 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(
             Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
-            "deadlock ist echt unterschaetzt. im discord findest du mitspieler für gemeinsame runden",
+            "Deadlock ist echt unterschätzt. Bei uns laufen aktive Voice-Lanes für gemeinsame Runden",
         ))));
         let gen = Arc::new(MockPartnerPitchGen::new(Some("partner text")));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone())
-            .set_partner_pitch_gen(gen.clone())
-            .set_zuschauer_register(test_register(pool.clone()));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_judge(judge.clone())
+                .set_partner_pitch_gen(gen.clone())
+                .set_zuschauer_register(test_register(pool.clone()));
 
         let event = pitch_event(
             "c-nk",
@@ -6362,9 +6416,10 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(None));
         let gen = Arc::new(MockPartnerPitchGen::new(Some("partner text")));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone())
-            .set_partner_pitch_gen(gen.clone());
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_judge(judge.clone())
+                .set_partner_pitch_gen(gen.clone());
 
         let event = pitch_event(
             "c-ip",
@@ -6399,9 +6454,10 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(None));
         let gen = Arc::new(MockPartnerPitchGen::new(Some("partner text")));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone())
-            .set_partner_pitch_gen(gen.clone());
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_judge(judge.clone())
+                .set_partner_pitch_gen(gen.clone());
 
         let event = pitch_event(
             "c-lt",
@@ -6440,9 +6496,10 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(None));
         let gen = Arc::new(MockPartnerPitchGen::new(Some("partner text")));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone())
-            .set_partner_pitch_gen(gen.clone());
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_judge(judge.clone())
+                .set_partner_pitch_gen(gen.clone());
 
         let event = pitch_event(
             "c-tl",
@@ -6481,9 +6538,10 @@ mod db_tests {
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(None));
         let gen = Arc::new(MockPartnerPitchGen::new(Some("partner text")));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone())
-            .set_partner_pitch_gen(gen.clone());
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_judge(judge.clone())
+                .set_partner_pitch_gen(gen.clone());
 
         let event = pitch_event(
             "c-pd",
@@ -6522,8 +6580,9 @@ mod db_tests {
         let gen = Arc::new(MockPartnerPitchGen::new(Some(
             "stark gespielt, schau mal auf https://discord.gg/abc vorbei",
         )));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_partner_pitch_gen(gen.clone());
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_partner_pitch_gen(gen.clone());
 
         let event = pitch_event(
             "c-fl",
@@ -6561,8 +6620,9 @@ mod db_tests {
             Some(crate::promo_pitch::PitchOccasion::GameUnpopular),
             "deadlock ist stark",
         ))));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone());
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_judge(judge.clone());
 
         let event = pitch_event(
             "c-off",
@@ -6596,8 +6656,9 @@ mod db_tests {
             Some(crate::promo_pitch::PitchOccasion::NoMates),
             "komm vorbei",
         ))));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone());
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_judge(judge.clone());
 
         let event = pitch_event("c-kurz", "kurzkanal", "u-kurz", "Kurz", "gg wp");
         engine.on_message_pitch(&event).await;
@@ -6625,9 +6686,10 @@ mod db_tests {
             Some(crate::promo_pitch::PitchOccasion::WantsHelp),
             "klar helfen wir dir, schau auf https://discord.gg/abc vorbei",
         ))));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone())
-            .set_zuschauer_register(test_register(pool.clone()));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_judge(judge.clone())
+                .set_zuschauer_register(test_register(pool.clone()));
 
         let event = pitch_event(
             "c-filt",
@@ -6658,10 +6720,11 @@ mod db_tests {
         seed_partner_channel(&pool, "c-dr", "drkanal").await;
         let api = Arc::new(super::tests::MockApi::default());
         let judge = Arc::new(MockPitchJudge::new(Some(pitch_response(None, ""))));
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_pitch_judge(judge.clone())
-            .set_pitch_text_gen(Arc::new(FixedTextGen(None)))
-            .set_zuschauer_register(test_register(pool.clone()));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_pitch_judge(judge.clone())
+                .set_pitch_text_gen(Arc::new(FixedTextGen(None)))
+                .set_zuschauer_register(test_register(pool.clone()));
 
         let event = pitch_event(
             "c-dr",
@@ -6685,7 +6748,7 @@ mod db_tests {
         let pool = pool_or_skip!("promo_reject_entprellt");
         seed_partner_channel(&pool, "c-rej", "rejkanal").await;
         let api = Arc::new(super::tests::MockApi::default());
-        let engine = PromoEngine::new(pool.clone(), api, Arc::new(NoopSuppressionCheck));
+        let engine = PromoEngine::new_test(pool.clone(), api, Arc::new(NoopSuppressionCheck));
         let event = pitch_event(
             "c-rej",
             "rejkanal",
@@ -7315,8 +7378,9 @@ mod db_tests {
             INSERT INTO twitch_raid_auth (twitch_user_id,twitch_login,scopes) VALUES ('own','oldname',''), ('foreign','newname','moderator:read:chatters');")
             .execute(pool).await.unwrap();
         let api = Arc::new(super::tests::MockApi::default());
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_lurker_reward_checker(Arc::new(FakeReward(true)));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_lurker_reward_checker(Arc::new(FakeReward(true)));
         engine
             .maybe_send_lurker_tax_reminder("newname", "own", Instant::now())
             .await;
@@ -7385,11 +7449,12 @@ mod db_tests {
     async fn req5_reminder_blockt_wenn_belohnung_fehlt() {
         let pool = pool_or_skip!("promo_lurker_reward_absent");
         let api = Arc::new(super::tests::MockApi::default());
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_bot_scope_provider(Arc::new(super::tests::FakeBotScopes(vec![
-                "moderator:read:chatters".into(),
-            ])))
-            .set_lurker_reward_checker(Arc::new(FakeReward(false)));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_bot_scope_provider(Arc::new(super::tests::FakeBotScopes(vec![
+                    "moderator:read:chatters".into(),
+                ])))
+                .set_lurker_reward_checker(Arc::new(FakeReward(false)));
         seed_sending_channel(&pool, "rewardkanal", "u-reward").await;
 
         engine
@@ -7407,11 +7472,12 @@ mod db_tests {
     async fn req5_reminder_sendet_wenn_belohnung_aktiv() {
         let pool = pool_or_skip!("promo_lurker_reward_present");
         let api = Arc::new(super::tests::MockApi::default());
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_bot_scope_provider(Arc::new(super::tests::FakeBotScopes(vec![
-                "moderator:read:chatters".into(),
-            ])))
-            .set_lurker_reward_checker(Arc::new(FakeReward(true)));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_bot_scope_provider(Arc::new(super::tests::FakeBotScopes(vec![
+                    "moderator:read:chatters".into(),
+                ])))
+                .set_lurker_reward_checker(Arc::new(FakeReward(true)));
         seed_sending_channel(&pool, "rewardkanal2", "u-reward2").await;
 
         engine
@@ -7429,10 +7495,11 @@ mod db_tests {
     async fn reminder_blockt_ohne_reward_checker() {
         let pool = pool_or_skip!("promo_lurker_reward_ungated");
         let api = Arc::new(super::tests::MockApi::default());
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_bot_scope_provider(Arc::new(super::tests::FakeBotScopes(vec![
-                "moderator:read:chatters".into(),
-            ])));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_bot_scope_provider(Arc::new(super::tests::FakeBotScopes(vec![
+                    "moderator:read:chatters".into(),
+                ])));
         seed_sending_channel(&pool, "ungatedkanal", "u-ungated").await;
 
         engine
@@ -7450,7 +7517,8 @@ mod db_tests {
     async fn thank_blockt_bei_schalter_aus_oder_raid_free() {
         let pool = pool_or_skip!("promo_thank_gate");
         let api = Arc::new(super::tests::MockApi::default());
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck));
         sqlx::query(
             "INSERT INTO streamer_plans (twitch_user_id, twitch_login, lurker_tax_enabled, manual_plan_id)
              VALUES ('u-off', 'offkanal', 0, 'raid_boost')",
@@ -7484,7 +7552,8 @@ mod db_tests {
     async fn req3_dank_hoechstens_einmal_je_zuschauer_und_session() {
         let pool = pool_or_skip!("promo_thank_einmal");
         let api = Arc::new(super::tests::MockApi::default());
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck));
         seed_live_channel(&pool, "dankkanal", "u-dank").await;
         sqlx::query(
             "INSERT INTO streamer_plans (twitch_user_id, twitch_login, lurker_tax_enabled, manual_plan_id)
@@ -7532,7 +7601,8 @@ mod db_tests {
     async fn lurker_followup_antwortet_einmal_je_session() {
         let pool = pool_or_skip!("promo_followup_einmal");
         let api = Arc::new(super::tests::MockApi::default());
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck));
         let session_id = seed_live_channel(&pool, "fkanal", "u-f").await;
         {
             let state_ref = engine
@@ -7565,7 +7635,8 @@ mod db_tests {
     async fn lurker_followup_ignoriert_nicht_erinnerte() {
         let pool = pool_or_skip!("promo_followup_fremd");
         let api = Arc::new(super::tests::MockApi::default());
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck));
         seed_live_channel(&pool, "fkanal", "u-f").await;
         let event = followup_event("u-f", "fkanal", "fremd", "wo denn?");
         engine.maybe_answer_lurker_followup(&event).await;
@@ -7582,11 +7653,12 @@ mod db_tests {
         let pool = database.pool.clone();
         apply_ddl(&pool).await;
         let api = Arc::new(super::tests::MockApi::announcement_dropped());
-        let engine = PromoEngine::new(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
-            .set_bot_scope_provider(Arc::new(super::tests::FakeBotScopes(vec![
-                "moderator:read:chatters".into(),
-            ])))
-            .set_lurker_reward_checker(Arc::new(FakeReward(true)));
+        let engine =
+            PromoEngine::new_test(pool.clone(), api.clone(), Arc::new(NoopSuppressionCheck))
+                .set_bot_scope_provider(Arc::new(super::tests::FakeBotScopes(vec![
+                    "moderator:read:chatters".into(),
+                ])))
+                .set_lurker_reward_checker(Arc::new(FakeReward(true)));
 
         let live_session_id: i64 = sqlx::query_scalar(
             "INSERT INTO twitch_stream_sessions (streamer_login, twitch_user_id, avg_viewers)
@@ -7773,5 +7845,31 @@ mod adressat_tests {
     fn adressat_normale_nachricht_ist_kein_fremd() {
         let event = basis("solo queue ist echt die hölle heute");
         assert!(!adressat_fremd(&event, "bot_id"));
+    }
+}
+
+#[cfg(test)]
+struct TestInviteResolver;
+
+#[cfg(test)]
+#[async_trait]
+impl InviteResolver for TestInviteResolver {
+    async fn resolve_invite(&self, _login: &str) -> (String, bool) {
+        (DEFAULT_PROMO_DISCORD_INVITE.to_string(), false)
+    }
+
+    async fn community_promotions(&self, _login: &str) -> bool {
+        true
+    }
+}
+
+#[cfg(test)]
+impl PromoEngine {
+    fn new_test(
+        pool: PgPool,
+        api: Arc<dyn ChatApi>,
+        suppression: Arc<dyn OutboundSuppressionCheck>,
+    ) -> Self {
+        Self::new(pool, api, suppression).set_invite_resolver(Arc::new(TestInviteResolver))
     }
 }

@@ -1,112 +1,93 @@
-//! Tests des Partner-Roster-Readers + Online-Kandidaten-Aufbau.
-
-#[path = "../../../test-support/schema_sql.rs"]
-mod test_sql;
+#[path = "../../../test-support/guild_membership.rs"]
+mod guilds;
+#[path = "../../../test-support/postgres.rs"]
+mod postgres;
 
 use std::collections::HashMap;
-use std::str::FromStr;
-
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use sqlx::PgPool;
 use tb_raid::{build_online_candidates, PartnerRosterEntry, PartnerRosterStore, StreamData};
 
-macro_rules! pool_or_skip {
-    ($schema:expr) => {{
-        let Some(dsn) = std::env::var("TB_TEST_DATABASE_URL").ok() else {
-            eprintln!("SKIP: TB_TEST_DATABASE_URL nicht gesetzt");
-            return;
-        };
-        pool_in_schema(&dsn, $schema).await
-    }};
-}
-
-async fn pool_in_schema(dsn: &str, schema: &str) -> PgPool {
-    let admin = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(dsn)
-        .await
-        .unwrap();
-    sqlx::query(crate::test_sql::drop_schema(schema, true))
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query(crate::test_sql::create_schema(schema, false))
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
-    let opts = PgConnectOptions::from_str(dsn)
-        .unwrap()
-        .options([("search_path", schema)]);
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect_with(opts)
-        .await
-        .unwrap();
-    // is_partner_active ist INTEGER (Prod).
-    sqlx::query(
-        "CREATE TABLE twitch_streamers_partner_state (
-            twitch_login TEXT, twitch_user_id TEXT, is_partner_active INTEGER )",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "CREATE TABLE twitch_raid_auth (
-            twitch_user_id TEXT PRIMARY KEY, raid_enabled BOOLEAN, authorized_at TIMESTAMPTZ )",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    pool
-}
-
 #[tokio::test]
-async fn roster_filtert_nur_aktive_partner_und_quelle() {
-    let pool = pool_or_skip!("t6f_roster");
-    sqlx::query(
-        "INSERT INTO twitch_streamers_partner_state (twitch_login, twitch_user_id, is_partner_active) VALUES
-            ('Quelle', '100', 1),       -- Quelle selbst → raus
-            ('Enabled', '200', 1),      -- raid_enabled → rein
-            ('OnlyAuth', '300', 1),     -- nur authorized_at → rein
-            ('NoAuth', '400', 1),       -- Ziel braucht keine eigene Raid-Auth
-            ('Inaktiv', '500', 0)       -- nicht aktiv → raus",
-    ).execute(&pool).await.unwrap();
-    sqlx::query(
-        "INSERT INTO twitch_raid_auth (twitch_user_id, raid_enabled, authorized_at) VALUES
-            ('200', TRUE, NULL),
-            ('300', FALSE, NOW()),
-            ('400', FALSE, NULL)",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    let mut roster = PartnerRosterStore::new(pool)
+async fn roster_preserves_german_home_partners_and_excludes_source() {
+    let db = postgres::TestPostgres::start().await;
+    guilds::schema(&db.pool).await;
+    for (id, login) in [
+        ("100", "Quelle"),
+        ("200", "Enabled"),
+        ("300", "OnlyAuth"),
+        ("400", "NoAuth"),
+        ("500", "Inactive"),
+    ] {
+        guilds::member(&db.pool, id, login).await;
+    }
+    sqlx::query("UPDATE streamer_guilds SET active=false WHERE twitch_user_id='500'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let roster = PartnerRosterStore::new(db.pool.clone())
         .load_roster("100")
         .await
         .unwrap();
-    roster.sort_by(|a, b| a.twitch_user_id.cmp(&b.twitch_user_id));
-    assert_eq!(
-        roster,
-        vec![
-            PartnerRosterEntry {
-                twitch_login: "enabled".into(),
-                twitch_user_id: "200".into(),
-                raid_enabled: true
-            },
-            PartnerRosterEntry {
-                twitch_login: "onlyauth".into(),
-                twitch_user_id: "300".into(),
-                raid_enabled: true
-            },
-            PartnerRosterEntry {
-                twitch_login: "noauth".into(),
-                twitch_user_id: "400".into(),
-                raid_enabled: true
-            },
-        ]
-    );
+    let ids: Vec<_> = roster
+        .iter()
+        .map(|partner| partner.twitch_user_id.as_str())
+        .collect();
+    assert_eq!(ids, ["200", "300", "400"]);
+    assert!(roster.iter().all(|partner| partner.raid_enabled));
+}
+
+#[tokio::test]
+async fn pool_filters_language_and_honors_both_cross_server_switches() {
+    let db = postgres::TestPostgres::start().await;
+    guilds::schema(&db.pool).await;
+    for id in ["100", "200", "300", "400", "500"] {
+        guilds::member(&db.pool, id, &format!("streamer{id}")).await;
+    }
+    sqlx::raw_sql("INSERT INTO discord_guilds(guild_id,language,cross_server_raids) VALUES(5,'de-ch',true),(6,'en-us',true),(7,'de',false);
+        UPDATE streamer_guilds SET guild_id=5 WHERE twitch_user_id='300';
+        UPDATE streamer_guilds SET guild_id=6 WHERE twitch_user_id='400';
+        UPDATE streamer_guilds SET guild_id=7 WHERE twitch_user_id='500';
+        UPDATE twitch_streamer_identities SET broadcaster_language='DE_at' WHERE twitch_user_id='100';
+        UPDATE twitch_streamer_identities SET broadcaster_language='de-ch' WHERE twitch_user_id='300';
+        UPDATE twitch_streamer_identities SET broadcaster_language='en-gb' WHERE twitch_user_id='400';")
+        .execute(&db.pool).await.unwrap();
+    let store = PartnerRosterStore::new(db.pool.clone());
+    assert_eq!(ids(&store, "100").await, ["200", "300"]);
+    let home = tb_db::guild_membership::community_guild_id().unwrap();
+    sqlx::query("UPDATE discord_guilds SET cross_server_raids=false WHERE guild_id=$1")
+        .bind(home)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(ids(&store, "100").await, ["200"]);
+    sqlx::query("INSERT INTO streamer_guilds(twitch_user_id,guild_id) VALUES('100',7)")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(ids(&store, "100").await, ["200", "500"]);
+    sqlx::query("UPDATE twitch_streamer_identities SET broadcaster_language='en-us' WHERE twitch_user_id='100'").execute(&db.pool).await.unwrap();
+    assert!(ids(&store, "100").await.is_empty());
+    sqlx::query("UPDATE discord_guilds SET cross_server_raids=true WHERE guild_id=$1")
+        .bind(home)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(ids(&store, "100").await, ["400"]);
+    sqlx::query("UPDATE streamer_guilds SET active=false WHERE twitch_user_id='100'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert!(ids(&store, "100").await.is_empty());
+    assert_eq!(store.source_language("100").await.unwrap(), None);
+}
+
+async fn ids(store: &PartnerRosterStore, source: &str) -> Vec<String> {
+    store
+        .load_roster(source)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|partner| partner.twitch_user_id)
+        .collect()
 }
 
 #[test]
@@ -131,9 +112,8 @@ fn online_kandidaten_nur_fuer_live_partner() {
             ..Default::default()
         },
     );
-
     let candidates = build_online_candidates(&roster, &streams);
-    assert_eq!(candidates.len(), 1, "nur der live Partner");
+    assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].twitch_user_id, "1");
     assert_eq!(candidates[0].stream.viewer_count, 50);
 }

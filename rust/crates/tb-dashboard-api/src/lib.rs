@@ -1271,6 +1271,10 @@ pub fn build_admin_config_router(pool: PgPool, token: String) -> Router {
             get(handlers::admin_operating_config::settings_get_handler)
                 .put(handlers::admin_operating_config::settings_save_handler),
         )
+        .route(
+            "/twitch/api/admin/config/guild-raids",
+            get(handlers::admin_guild_raids::list).post(handlers::admin_guild_raids::save),
+        )
         .route("/twitch/api/admin/audit-log", get(admin_audit_log::handler))
         .route(
             "/twitch/api/admin/affiliates/stats",

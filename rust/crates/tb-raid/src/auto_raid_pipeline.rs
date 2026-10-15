@@ -52,8 +52,6 @@ const MAX_ATTEMPTS: usize = 3;
 const STRIKE_BLACKLIST_THRESHOLD: i32 = 2;
 /// Cooldown für den Fairness-Fallback (Python `recent_raid_cooldown_days = 7`).
 const RECENT_RAID_COOLDOWN_DAYS: i32 = 7;
-/// Sprache + Limit des Kategorie-Fallbacks (Python `language="de", limit=50`).
-const FALLBACK_LANGUAGE: &str = "de";
 const FALLBACK_LIMIT: usize = 50;
 
 /// Port: Live-Streams der Ziel-Kategorie für den Fairness-Fallback
@@ -325,6 +323,7 @@ pub struct AutoRaidRequest {
     pub partners: Vec<OnlineCandidate>,
     /// Kategorie-ID für den DE-Fallback (None → kein Fallback).
     pub category_id: Option<String>,
+    pub language: Option<String>,
     /// Unix-Zeitpunkt des Offline-Triggers (für Arrival-Latenz-Metriken).
     pub offline_trigger_ts: Option<f64>,
     /// History-Grund, z. B. `auto_raid_on_offline`.
@@ -931,13 +930,12 @@ impl AutoRaidPipeline {
         let (Some(fallback), Some(category_id)) = (&self.fallback, &req.category_id) else {
             return;
         };
-        tracing::info!(
-            from = %req.broadcaster_login,
-            attempt,
-            "Hole Deadlock-DE-Kategorie-Streams (Boost/Fallback)"
-        );
+        let Some(language) = req.language.as_deref() else {
+            return;
+        };
+        tracing::info!(from = %req.broadcaster_login, attempt, language, "Loading category streams");
         let streams = match fallback
-            .category_streams(category_id, FALLBACK_LANGUAGE, FALLBACK_LIMIT)
+            .category_streams(category_id, language, FALLBACK_LIMIT)
             .await
         {
             Ok(streams) => streams,

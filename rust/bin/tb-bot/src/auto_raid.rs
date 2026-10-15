@@ -372,6 +372,7 @@ impl OfflineRaidHandler {
             stream_duration_sec,
             partners: eligible,
             category_id: self.resolve_category_id().await,
+            language: self.raid_language(broadcaster_id).await,
             offline_trigger_ts: Some(offline_trigger_ts),
             reason: "auto_raid_on_offline".to_string(),
             respect_soft_raid_blacklist: true,
@@ -490,6 +491,7 @@ impl OfflineRaidHandler {
             stream_duration_sec: source.stream_duration_sec(now),
             partners: assembled.eligible,
             category_id: self.resolve_category_id().await,
+            language: self.raid_language(broadcaster_id).await,
             offline_trigger_ts: None,
             reason: "manual_chat_command".to_string(),
             respect_soft_raid_blacklist: false,
@@ -586,6 +588,16 @@ impl OfflineRaidHandler {
             online_count,
             filtered_out,
         })
+    }
+
+    async fn raid_language(&self, broadcaster_id: &str) -> Option<String> {
+        match self.roster.source_language(broadcaster_id).await {
+            Ok(language) => language,
+            Err(error) => {
+                tracing::warn!(%error, broadcaster_id, "Raid language lookup failed; category fallback disabled");
+                None
+            }
+        }
     }
 
     /// Kategorie-ID des Ziel-Spiels, lazy aufgelöst und gecacht.

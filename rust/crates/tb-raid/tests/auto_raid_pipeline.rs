@@ -242,6 +242,7 @@ impl ArrivalReadiness for StubReadiness {
 }
 
 struct StubFallback {
+    languages: Arc<Mutex<Vec<String>>>,
     streams: Vec<FairnessCandidate>,
 }
 #[async_trait::async_trait]
@@ -249,9 +250,10 @@ impl FallbackStreamSource for StubFallback {
     async fn category_streams(
         &self,
         _category_id: &str,
-        _language: &str,
+        language: &str,
         _limit: usize,
     ) -> Result<Vec<FairnessCandidate>, String> {
+        self.languages.lock().unwrap().push(language.to_string());
         Ok(self.streams.clone())
     }
 }
@@ -317,6 +319,7 @@ fn fixed_millis(value: u64) -> MillisSource {
 // ── Aufbau ──
 
 struct Harness {
+    fallback_languages: Arc<Mutex<Vec<String>>>,
     pipeline: AutoRaidPipeline,
     pending: Arc<Mutex<PendingRaidStore>>,
     api: Arc<TargetedRaidApi>,
@@ -378,6 +381,7 @@ fn build_with_enricher(
     let readiness = Arc::new(StubReadiness {
         calls: Mutex::new(Vec::new()),
     });
+    let fallback_languages = Arc::new(Mutex::new(Vec::new()));
     let pipeline = AutoRaidPipeline::new(
         RaidBlacklistStore::new(pool.clone()),
         ScoreStore::new(pool.clone()),
@@ -387,12 +391,14 @@ fn build_with_enricher(
         pending.clone(),
         readiness.clone(),
         Some(Arc::new(StubFallback {
+            languages: fallback_languages.clone(),
             streams: fallback_streams,
         })),
         follower_enricher,
         Some(tb_raid::OutreachBoostStore::new(pool.clone())),
     );
     Harness {
+        fallback_languages,
         pipeline,
         pending,
         api,
@@ -402,6 +408,7 @@ fn build_with_enricher(
 
 fn request(partners: Vec<OnlineCandidate>) -> AutoRaidRequest {
     AutoRaidRequest {
+        language: Some("de".to_string()),
         broadcaster_id: "100".to_string(),
         broadcaster_login: "quelle".to_string(),
         viewer_count: 42,
@@ -1258,4 +1265,25 @@ async fn fallback_filtert_nicht_partner_weiter_gegen_weiche_blacklist() {
         "der Kategorie-Fallback filtert weiche Blacklist-Eintraege unveraendert"
     );
     assert_eq!(h.api.calls.lock().unwrap().clone(), vec!["600"]);
+}
+
+#[tokio::test]
+async fn category_fallback_uses_source_language_and_skips_unknown_language() {
+    let pool = pool_or_skip!("r1_fallback_language");
+    seed_source_token(&pool, "100").await;
+    let h = build(&pool, HashMap::new(), vec![fairness("300", "english")]);
+    let mut req = request(Vec::new());
+    req.language = Some("en".to_string());
+    assert!(matches!(
+        h.pipeline.run(&req).await,
+        AutoRaidPipelineOutcome::Started { .. }
+    ));
+    assert_eq!(*h.fallback_languages.lock().unwrap(), ["en"]);
+    let h = build(&pool, HashMap::new(), vec![fairness("400", "unknown")]);
+    req.language = None;
+    assert_eq!(
+        h.pipeline.run(&req).await,
+        AutoRaidPipelineOutcome::NoTarget
+    );
+    assert!(h.fallback_languages.lock().unwrap().is_empty());
 }

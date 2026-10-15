@@ -115,9 +115,8 @@ pub use promo_pitch::{
     PitchOccasion, PitchRejectReason, PitchResponse, PitchTextGen, TargetedPitchContext,
 };
 pub use promos::{
-    lurker_tax_title_matches, promo_invite_fallback, LurkerRewardChecker, NoopSuppressionCheck,
-    PartnerChannelCheck, PitchReviewSink, PromoEngine, StaticInviteResolver,
-    DEFAULT_PROMO_DISCORD_INVITE, LURKER_TAX_REWARD_TITLE,
+    lurker_tax_title_matches, LurkerRewardChecker, NoopSuppressionCheck, PartnerChannelCheck,
+    PitchReviewSink, PromoEngine, StaticInviteResolver, LURKER_TAX_REWARD_TITLE,
 };
 pub use safe_list::{is_safe as is_safe_account, SafeAccount, SAFE_ACCOUNTS};
 pub use scam_pitch::{AccountAgePort, PitchDecision, ScamPitchDetector, SpamAiReviewer};

@@ -1515,3 +1515,13 @@ export async function buildBrainPlan(body: BrainRequest): Promise<BrainReport> {
     body: JSON.stringify(body),
   });
 }
+
+export interface GuildRaidSetting {
+  guild_id: string;
+  name: string | null;
+  cross_server_raids: boolean;
+}
+
+export const fetchGuildRaidSettings = () => admin<GuildRaidSetting[]>('/config/guild-raids', { cache: 'no-store' });
+export const saveGuildRaidSetting = (setting: Pick<GuildRaidSetting, 'guild_id' | 'cross_server_raids'>) =>
+  postAdminJson<GuildRaidSetting, typeof setting>('/config/guild-raids', setting);

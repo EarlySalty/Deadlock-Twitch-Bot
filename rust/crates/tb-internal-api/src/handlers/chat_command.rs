@@ -13,10 +13,6 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tb_http_core::ApiError;
 
-/// Env-Var-Name für den globalen Discord-Invite-Fallback.
-/// Python-paritärer Default-Fallback für den globalen Discord-Invite.
-const DEFAULT_PROMO_DISCORD_INVITE: &str = "https://discord.gg/z5TfVHuQq2";
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandRequest {
@@ -68,42 +64,22 @@ pub async fn handler(
 }
 
 async fn get_invite_url(pool: &PgPool, channel_login: &str) -> Result<Option<String>, ApiError> {
-    // 1. Streamer-spezifischer Invite (twitch_streamer_invites).
-    let row = sqlx::query!(
-        r#"SELECT invite_url AS "invite_url!"
-           FROM twitch_streamer_invites
-          WHERE LOWER(streamer_login) = $1
-          LIMIT 1"#,
-        channel_login
-    )
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("chat_command invite-Query fehlgeschlagen für {channel_login}: {e}");
-        ApiError::internal()
-    })?;
-
-    if let Some(row) = row {
-        let url = row.invite_url;
-        if !url.trim().is_empty() {
-            return Ok(Some(url));
-        }
-    }
-
-    // 2. Globaler Fallback aus Env oder Python-paritärem Default.
-    let config = tb_config::runtime::settings().map_err(|_| ApiError::internal())?;
-    let configured = &config.discord.chat.promo_invite;
-    let invite = configured
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(DEFAULT_PROMO_DISCORD_INVITE);
-    Ok(Some(invite.to_string()))
+    tb_db::guild_membership::scoped_invite(pool, channel_login)
+        .await
+        .map(|invite| invite.map(|(url, _)| url))
+        .map_err(|error| {
+            tracing::error!(%error, "Scoped invite lookup failed");
+            ApiError::internal()
+        })
 }
 
 #[cfg(test)]
 #[path = "../../../../test-support/postgres.rs"]
 mod test_postgres;
+
+#[cfg(test)]
+#[path = "../../../../test-support/guild_membership.rs"]
+mod test_guilds;
 
 #[cfg(test)]
 mod tests {
@@ -113,16 +89,24 @@ mod tests {
     async fn echter_command_handler_antwortet_offline_ohne_live_tabelle() {
         let database = test_postgres::TestPostgres::start().await;
         let pool = database.pool.clone();
-        sqlx::query("CREATE TABLE twitch_streamer_invites (streamer_login TEXT, invite_url TEXT)")
+        sqlx::query("CREATE TABLE twitch_streamer_invites (streamer_login TEXT, invite_url TEXT, guild_id BIGINT, twitch_user_id TEXT)")
             .execute(&pool)
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO twitch_streamer_invites VALUES ('testchannel', 'https://discord.gg/test')",
+            "INSERT INTO twitch_streamer_invites VALUES ('testchannel', 'https://discord.gg/test', 1, NULL)",
         )
         .execute(&pool)
         .await
         .unwrap();
+        test_guilds::schema(&pool).await;
+        test_guilds::member(&pool, "100", "testchannel").await;
+        let community = tb_db::guild_membership::community_guild_id().unwrap();
+        sqlx::query("UPDATE twitch_streamer_invites SET guild_id=$1")
+            .bind(community)
+            .execute(&pool)
+            .await
+            .unwrap();
         let response = handler(
             State(pool),
             Json(CommandRequest {
