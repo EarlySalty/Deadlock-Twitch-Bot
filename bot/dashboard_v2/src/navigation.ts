@@ -53,7 +53,10 @@ export function subscribeNavigation(
   };
   history.replaceState(history.state, '', window.location.href);
   const onNavigate = () => {
-    const nextIndex: number | undefined = history.state?.dashboardIndex;
+    const nextIndex: number = history.state?.dashboardIndex ?? currentIndex + 1;
+    if (history.state?.dashboardIndex === undefined) {
+      replaceState.call(history, { ...history.state, dashboardIndex: nextIndex }, '', window.location.href);
+    }
     if (restoring) {
       if (nextIndex === currentIndex) restoring = false;
       return;
@@ -62,12 +65,12 @@ export function subscribeNavigation(
     window.dispatchEvent(unload);
     const saving = document.querySelector('[data-saving="true"]');
     const dirty = document.querySelector('[data-unsaved="true"]') || unload.defaultPrevented;
-    if (nextIndex !== undefined && (saving || (dirty && !confirmDiscard()))) {
+    if (saving || (dirty && !confirmDiscard())) {
       restoring = true;
       history.go(currentIndex - nextIndex);
       return;
     }
-    currentIndex = nextIndex ?? currentIndex;
+    currentIndex = nextIndex;
     listener();
   };
   const onPush = () => {
