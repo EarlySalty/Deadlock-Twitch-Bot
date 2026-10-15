@@ -132,7 +132,7 @@ export function ClipCommandSection() {
     }
   };
 
-  const onDurationSaved = useCallback((data: ClipCommandSettingsResponse) => setSettings(data), []);
+  const onDurationSaved = useCallback((data: ClipCommandSettingsResponse) => setSettings(previous => previous && { ...previous, clip_command_duration_seconds: data.clip_command_duration_seconds }), []);
   const enabled = Boolean(settings?.clip_command_enabled);
   const description = loading
     ? t("Status wird geladen …")
