@@ -40,8 +40,8 @@ git -C "$build" fetch --prune origin
 git -C "$build" cat-file -e "$sha^{commit}"
 git -C "$build" checkout --detach "$sha"
 
-packages=(tb-bot tb-dashboard tb-stream-audit-bin tb-config tb-llm)
-binaries=(tb-bot tb-dashboard tb-stream-audit tb-config-check tb-llm-usage-recover)
+packages=(tb-bot tb-dashboard tb-stream-audit-bin tb-config tb-llm tb-discord-hub)
+binaries=(tb-bot tb-dashboard tb-stream-audit tb-config-check tb-llm-usage-recover tb-discord-hub)
 if [[ -f "$build/rust/crates/tb-social-media/src/ai_editor/mod.rs" ]]; then
   packages+=(tb-stt-server)
   binaries+=(tb-stt-server)

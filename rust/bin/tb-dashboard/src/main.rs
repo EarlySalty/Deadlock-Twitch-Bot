@@ -325,58 +325,6 @@ async fn main() {
         return;
     }
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
-    if arguments
-        .iter()
-        .any(|argument| argument == "--uplink-migrate")
-    {
-        let result = async {
-            // Der Dienstwrapper ergänzt --config. Der reine Uplink-Migrator
-            // startet keinen Dashboardprozess und benötigt keinen Snapshot.
-            let arguments = if arguments.iter().any(|argument| {
-                argument == "--config"
-                    || argument
-                        .to_str()
-                        .is_some_and(|value| value.starts_with("--config="))
-            }) {
-                tb_config::file::ConfigArguments::parse(arguments.clone())
-                    .map_err(|_| "Ungültiger Konfigurationspfad für den Uplink-Migrator.")?
-                    .remaining
-            } else {
-                arguments.clone()
-            };
-            if arguments.len() != 3
-                || arguments[0] != "--uplink-config"
-                || arguments[2] != "--uplink-migrate"
-            {
-                return Err("Aufruf: tb-dashboard --uplink-config <Datei> --uplink-migrate");
-            }
-            let pool = tb_dashboard_api::uplink_config::migration_pool(std::path::Path::new(
-                &arguments[1],
-            ))
-            .await?;
-            let result = tokio::time::timeout(
-                std::time::Duration::from_secs(30),
-                tb_db::migrate::run_uplink_migrations(&pool),
-            )
-            .await;
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), pool.close()).await;
-            match result {
-                Ok(Ok(())) => Ok(()),
-                _ => Err("Uplink-Migrationen fehlgeschlagen; kein Dashboard gestartet."),
-            }
-        }
-        .await;
-        match result {
-            Ok(()) => {
-                println!("Uplink-Intent und Zielgeneration sind migriert. Kein Listener gestartet.")
-            }
-            Err(error) => {
-                eprintln!("{error}");
-                std::process::exit(1);
-            }
-        }
-        return;
-    }
     let (snapshot, remaining) = tb_config::runtime::start(arguments).unwrap_or_else(|error| {
         eprintln!("{error}");
         std::process::exit(2);

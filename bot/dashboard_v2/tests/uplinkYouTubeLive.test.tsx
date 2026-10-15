@@ -199,6 +199,33 @@ test('naechsterEntwurf übernimmt nur den Serverstand, wenn das Formular unberü
   assert.deepEqual(naechsterEntwurf(getippt, null, false), entwurfAus(null));
 });
 
+test('save acknowledgement preserves failed, pending and newer drafts', () => {
+  const sent = { ...entwurfAus(null), titel: 'Submitted title' };
+  const saved: YouTubeLiveEinstellungen = {
+    titel: sent.titel,
+    sichtbarkeit: sent.sichtbarkeit,
+    autoStart: sent.autoStart,
+    autoStop: sent.autoStop,
+    freigegebenAm: null,
+  };
+  assert.strictEqual(naechsterEntwurf(sent, null, true, sent), sent);
+  assert.strictEqual(naechsterEntwurf(sent, { ...saved, titel: 'Old title' }, true, sent), sent);
+  assert.strictEqual(naechsterEntwurf(sent, saved, true, null), sent);
+  assert.deepEqual(naechsterEntwurf(sent, saved, true, sent), entwurfAus(saved));
+  assert.notStrictEqual(naechsterEntwurf(sent, saved, true, sent), sent);
+  for (const change of [
+    { titel: 'Newer title' },
+    { sichtbarkeit: 'public' as const },
+    { autoStart: true },
+    { autoStop: true },
+    { liveFreigeben: true },
+  ]) {
+    const newer = { ...sent, ...change };
+    assert.strictEqual(naechsterEntwurf(newer, saved, true, sent), newer);
+    assert.strictEqual(naechsterEntwurf(newer, saved, true), newer);
+  }
+});
+
 test('speichernErlaubt sperrt leeren und zu langen Titel', () => {
   const basisEntwurf = entwurfAus(null);
   assert.equal(speichernErlaubt({ ...basisEntwurf, titel: '' }), false);
