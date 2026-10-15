@@ -457,7 +457,7 @@ fn known_chat_bot_not_in_clause(column: &str, start: usize) -> String {
 /// Der Orchestrator verdrahtet die konkrete Implementierung.
 #[async_trait]
 pub trait InviteResolver: Send + Sync {
-    /// Liefert (invite_url, is_specific). Fallback: PROMO_DISCORD_INVITE, false.
+    /// Liefert (invite_url, is_specific) aus Streamer- oder Heimserver-Invite.
     async fn resolve_invite(&self, channel_login: &str) -> (String, bool);
 
     async fn community_promotions(&self, _channel_login: &str) -> bool {

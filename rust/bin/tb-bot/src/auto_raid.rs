@@ -237,7 +237,7 @@ pub struct OfflineRaidHandler {
     /// Spielname in Original-Schreibweise (für die Kategorie-Suche).
     target_game: String,
     target_game_lower: String,
-    /// Lazy aufgelöste Helix-Kategorie-ID des Ziel-Spiels (für den DE-Fallback).
+    /// Lazy aufgelöste Helix-Kategorie-ID des Ziel-Spiels (für den Sprach-Fallback).
     category_id_cache: tokio::sync::Mutex<Option<String>>,
 }
 

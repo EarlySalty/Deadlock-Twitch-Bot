@@ -321,7 +321,7 @@ pub struct AutoRaidRequest {
     pub stream_duration_sec: i32,
     /// Online-Partner nach Deadlock-Eligibility-Filter.
     pub partners: Vec<OnlineCandidate>,
-    /// Kategorie-ID für den DE-Fallback (None → kein Fallback).
+    /// Kategorie-ID für den Sprach-Fallback (None → kein Fallback).
     pub category_id: Option<String>,
     pub language: Option<String>,
     /// Unix-Zeitpunkt des Offline-Triggers (für Arrival-Latenz-Metriken).

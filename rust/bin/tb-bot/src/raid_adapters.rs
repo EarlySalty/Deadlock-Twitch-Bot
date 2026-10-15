@@ -61,7 +61,7 @@ impl RaidApi for HelixRaidApi {
     }
 }
 
-/// Wandelt einen Helix-Stream in einen Fairness-Kandidaten des DE-Fallbacks.
+/// Wandelt einen Helix-Stream in einen Fairness-Kandidaten des Sprach-Fallbacks.
 /// Follower werden hier bewusst NICHT geholt (bis zu 50 Streams → 50 Calls) —
 /// `followers_total` startet auf [`FOLLOWERS_UNKNOWN`] und wird erst für den
 /// **gefilterten** Pool per [`HelixFollowerEnricher`] angereichert (Python

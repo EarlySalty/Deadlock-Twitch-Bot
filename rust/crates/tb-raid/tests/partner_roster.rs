@@ -72,6 +72,11 @@ async fn shared_server_ignores_language_and_cross_server_needs_language_and_both
         .await
         .unwrap();
     assert_eq!(ids(&store, "100").await, ["200", "400", "500"]);
+    sqlx::query("UPDATE twitch_streamers_partner_state SET is_partner_active=0 WHERE twitch_user_id IN ('200','400')")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(ids(&store, "100").await, ["500"]);
     sqlx::query("UPDATE streamer_guilds SET active=false WHERE twitch_user_id='100'")
         .execute(&db.pool)
         .await

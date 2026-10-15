@@ -6,7 +6,7 @@
 //! Aktuell unterstützt: `!invite`
 //!   - Unabhängig vom Streamstatus und der Kategorie verfügbar.
 //!   - Invite-URL: zuerst streamer-spezifisch aus `twitch_streamer_invites`,
-//!     dann Env-Var `PROMO_DISCORD_INVITE` oder globaler Default.
+//!     dann der Invite des Heimservers, sonst keine Antwort.
 
 use axum::{extract::State, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
@@ -49,7 +49,6 @@ pub async fn handler(
         return Ok(Json(CommandResponse { reply: None }));
     }
 
-    // Invite-URL: streamer-spezifisch oder globaler Fallback.
     let invite_url = get_invite_url(&pool, &channel).await?;
     let Some(invite_url) = invite_url else {
         return Ok(Json(CommandResponse { reply: None }));

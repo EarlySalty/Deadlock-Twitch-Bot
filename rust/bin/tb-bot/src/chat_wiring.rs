@@ -1160,7 +1160,7 @@ pub async fn build_runtime(
         )),
         invite_question: Arc::new(InviteQuestionResponder::new(
             Arc::clone(&api),
-            Arc::new(DbInviteUrlWithFallback { pool: pool.clone() }),
+            Arc::new(DbScopedInviteUrl { pool: pool.clone() }),
             Arc::new(PgInviteQuestionStore::new(pool.clone())),
             Arc::new(LlmInviteQuestionJudge::new(EngagementLlmClient::new(
                 None, None, None, None,
@@ -1182,7 +1182,7 @@ pub async fn build_runtime(
         lfg_pitch: Arc::new({
             let responder = LfgPitchResponder::new(
                 Arc::clone(&api),
-                Arc::new(DbInviteUrlWithFallback { pool: pool.clone() }),
+                Arc::new(DbScopedInviteUrl { pool: pool.clone() }),
                 Arc::clone(&lfg_judge),
                 lfg_pitch_enabled,
                 Some(Arc::clone(&promos) as Arc<dyn tb_chat::commands::PromoBlockCheck>),
@@ -2721,12 +2721,12 @@ impl DiscordLinkPort for DbDiscordLink {
     }
 }
 
-struct DbInviteUrlWithFallback {
+struct DbScopedInviteUrl {
     pool: PgPool,
 }
 
 #[async_trait::async_trait]
-impl InviteQuestionInviteUrlPort for DbInviteUrlWithFallback {
+impl InviteQuestionInviteUrlPort for DbScopedInviteUrl {
     async fn invite_url(&self, channel_login: &str) -> Result<Option<String>, String> {
         tb_db::guild_membership::scoped_invite(&self.pool, channel_login)
             .await

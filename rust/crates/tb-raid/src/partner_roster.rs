@@ -47,6 +47,8 @@ pub struct PartnerRosterStore {
     pool: PgPool,
 }
 
+type CandidateScope = (String, bool, Vec<(i64, bool)>);
+
 impl PartnerRosterStore {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
@@ -106,9 +108,11 @@ impl PartnerRosterStore {
              JOIN streamer_guilds sg USING(twitch_user_id)
              JOIN discord_guilds g USING(guild_id)
              WHERE sg.active AND g.status='active' AND g.removed_at IS NULL
-               AND i.twitch_user_id <> $1 AND i.twitch_login IS NOT NULL")
+               AND i.twitch_user_id <> $1 AND i.twitch_login IS NOT NULL
+               AND EXISTS (SELECT 1 FROM twitch_streamers_partner_state ps
+                           WHERE ps.twitch_user_id=i.twitch_user_id AND ps.is_partner_active=1)")
             .bind(source_user_id).bind(community).fetch_all(&self.pool).await?;
-        let mut grouped: HashMap<String, (String, bool, Vec<(i64, bool)>)> = HashMap::new();
+        let mut grouped: HashMap<String, CandidateScope> = HashMap::new();
         for (login, id, language, guild, enabled) in candidates {
             let same_language = source_language.is_some()
                 && tb_db::guild_membership::language_group(&language) == source_language;

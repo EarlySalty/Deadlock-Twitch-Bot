@@ -10,7 +10,7 @@ export function GuildRaidsSection() {
   });
   return <section className="panel-card space-y-4 rounded-2xl p-6" aria-labelledby="guild-raids-heading">
     <h2 id="guild-raids-heading" className="text-lg font-semibold text-white">Raids über Servergrenzen</h2>
-    <p className="text-sm text-text-secondary">Standardmäßig sind Raids zu anderen Servern derselben Sprachgruppe erlaubt. Beide Server müssen zustimmen. Änderungen gelten sofort.</p>
+    <p className="text-sm text-text-secondary">Partner eines gemeinsamen Servers können sich immer raiden, auch bei anderer Stream-Sprache. Raids zu Partnern anderer Server sind nur bei gleicher Stream-Sprache möglich und nur, wenn der Heimserver des raidenden Partners und ein Server des Ziels das erlauben. Änderungen gelten sofort.</p>
     {query.isPending && <p role="status">Server werden geladen …</p>}
     {query.error && <p role="alert">Die Server konnten nicht geladen werden.</p>}
     {query.data?.length === 0 && <p>Keine aktiven Server vorhanden.</p>}
