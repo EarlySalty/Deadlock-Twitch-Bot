@@ -18,10 +18,10 @@ Round 2 (Opus r2, 2026-10-15): Main = LIVE 408557c6a (D11-D13, SOC-EN, SEC-NPM, 
 
 | DB rotation (user ok 15.10, Opus) | coder opus | ttb-opus-dbrot-20261015 | ops/opus-db-rotation-20261015 | - | rotated 10:31, backup+restore proven; consumers+decrypt verified, PREV+backup deleted on user ok |
 | H2 hub rollout (user ok) | sol | ttb-opus-h2-20261015 | feat/opus-h2-hub-rollout-20261015 | a0cacfcd0 | LIVE 909d8f362, unit enabled, auth 200, #1061 closed |
-| G1 guilds | opus (sol ended) | ttb-opus-g1-20261015 | feat/opus-g1-guilds-20261015 | - | gate + Rust verify running |
+| G1 guilds | opus | ttb-opus-g1-20261015 | feat/opus-g1-guilds-20261015 | 79890b37b | LIVE 1bd54951f, migration applied, guild_runtime off; 1 shadow mismatch (open exclusion, legacy view already inactive); needs Hub OAuth secrets, redirects, GUILD_MEMBERS |
 | K1 AI switch | opus (sol ended) | ttb-opus-k1-20261015 | feat/opus-k1-ai-switch-20261015 | - | Rust verify, commit, gate running |
 | C1 English texts #1067 | sol | ttb-opus-c1-20261015 | feat/opus-c1-english-texts-20261015 | - | running, base G1; WIP pushed, no new agent (user 15.10) |
-| R1 raids by language #1065 | opus (sol ended) | ttb-opus-r1-20261015 | feat/opus-r1-raids-lang-20261015 | - | running, base G1; WIP pushed, no new agent (user 15.10) |
+| R1 raids by language #1065 | integrator | ttb-opus-r1-20261015 | feat/opus-r1-raids-lang-20261015 | d12e377e3 | user rule: shared server any language, else same stream language + both switches; gate r1 BLOCK fixed, r2 running |
 
 Blocked:
 - L #1069: Fireworks HTTP 412 (account suspended), billing = user/money decision.
