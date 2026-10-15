@@ -82,9 +82,15 @@ export function naechsterEntwurf(
   entwurf: YouTubeLiveEntwurf,
   einstellungen: YouTubeLiveEinstellungen | null,
   beruehrt: boolean,
+  gesendet: YouTubeLiveEntwurf | null = null,
 ): YouTubeLiveEntwurf {
-  if (beruehrt) return entwurf;
-  return entwurfAus(einstellungen);
+  const gespeichert = entwurfAus(einstellungen);
+  const bestaetigt = gesendet !== null && einstellungen !== null &&
+    (Object.keys(gesendet) as Array<keyof YouTubeLiveEntwurf>).every(
+      (key) => gespeichert[key] === gesendet[key] && entwurf[key] === gesendet[key],
+    );
+  if (beruehrt && !bestaetigt) return entwurf;
+  return gespeichert;
 }
 
 function beendenErlaubt(status: YouTubeLiveStatus | null): boolean {
@@ -166,11 +172,17 @@ export function UplinkYouTubeLive({
   const sichtHinweisId = `${basisId}-sicht-hinweis`;
 
   const beruehrt = useRef(false);
+  const gesendet = useRef<YouTubeLiveEntwurf | null>(null);
   const [entwurf, setEntwurf] = useState<YouTubeLiveEntwurf>(() => entwurfAus(einstellungen));
 
   useEffect(() => {
-    setEntwurf((v) => naechsterEntwurf(v, einstellungen, beruehrt.current));
-  }, [einstellungen]);
+    const bestaetigung = !beschaeftigt && !fehlerText ? gesendet.current : null;
+    setEntwurf((v) => {
+      const naechster = naechsterEntwurf(v, einstellungen, beruehrt.current, bestaetigung);
+      if (naechster !== v) beruehrt.current = false;
+      return naechster;
+    });
+  }, [einstellungen, beschaeftigt, fehlerText]);
 
   const aendern = (teil: Partial<YouTubeLiveEntwurf>) => {
     beruehrt.current = true;
@@ -178,8 +190,8 @@ export function UplinkYouTubeLive({
   };
 
   const speichern = () => {
-    beruehrt.current = false;
-    onSpeichern(entwurf);
+    gesendet.current = { ...entwurf };
+    onSpeichern({ ...entwurf });
   };
 
   if (!verbunden) {
