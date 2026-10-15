@@ -1,3 +1,4 @@
+import { useT } from '../../context/LanguageContext';
 import { useState, useEffect } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { X, Sparkles, Clock } from 'lucide-react';
@@ -7,6 +8,7 @@ import { PREVIEW_PRICING_ROUTE } from '../../preview/routes';
 const MODAL_SHOWN_KEY = 'trial-expiry-modal-shown';
 
 export function TrialExpiryModal() {
+  const t = useT();
   const { trialInfo, tier } = usePlan();
   const [visible, setVisible] = useState(false);
 
@@ -91,7 +93,7 @@ export function TrialExpiryModal() {
           type="button"
           onClick={handleDismiss}
           className="absolute right-4 top-4 rounded-lg p-1 text-text-secondary hover:bg-white/5 hover:text-white transition-colors"
-          aria-label="Schließen"
+          aria-label={t("Schließen")}
         >
           <X className="h-5 w-5" />
         </button>
@@ -102,28 +104,27 @@ export function TrialExpiryModal() {
           </div>
 
           <h2 className="mb-2 text-xl font-bold text-white">
-            Deine Testphase läuft ab
+            {t("Deine Testphase läuft ab")}
           </h2>
           <p className="mb-6 text-sm text-text-secondary">
-            In weniger als 7 Tagen endet deine kostenlose Testphase.
-            Danach werden einige Analytics-Funktionen eingeschränkt.
+            {t("In weniger als 7 Tagen endet deine kostenlose Testphase. Danach werden einige Analytics-Funktionen eingeschränkt.")}
           </p>
 
           <div className="mb-6 rounded-xl border border-warning/30 bg-warning/10 p-4">
             <div className="flex items-center justify-center gap-2 text-warning">
               <Sparkles className="h-5 w-5" />
               <span className="font-semibold">
-                {trialInfo?.trialDaysRemaining ?? 0} Tage verbleibend
+                {t('{days} Tage verbleibend', { days: trialInfo?.trialDaysRemaining ?? 0 })}
               </span>
             </div>
           </div>
 
           <div className="mb-6 space-y-2 text-left text-sm text-text-secondary">
-            <p className="font-medium text-white">Was passiert nach der Testphase?</p>
+            <p className="font-medium text-white">{t("Was passiert nach der Testphase?")}</p>
             <ul className="list-inside list-disc space-y-1 text-text-secondary">
-              <li>Erweiterte Analytics werden deaktiviert</li>
-              <li>Manche Tabs sind nicht mehr zugänglich</li>
-              <li>Keine Daten gehen verloren, alles bleibt gespeichert</li>
+              <li>{t("Erweiterte Analytics werden deaktiviert")}</li>
+              <li>{t("Manche Tabs sind nicht mehr zugänglich")}</li>
+              <li>{t("Keine Daten gehen verloren, alles bleibt gespeichert")}</li>
             </ul>
           </div>
 
@@ -133,7 +134,7 @@ export function TrialExpiryModal() {
               onClick={handleDismiss}
               className="flex-1 rounded-lg border border-border bg-white/5 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/10"
             >
-              Vielleicht später
+              {t("Vielleicht später")}
             </button>
             <button
               type="button"
@@ -141,7 +142,7 @@ export function TrialExpiryModal() {
               className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-[#0D0806] transition hover:bg-primary/80"
             >
               <Sparkles className="h-4 w-4" />
-              Jetzt upgraden
+              {t("Jetzt upgraden")}
             </button>
           </div>
         </div>
