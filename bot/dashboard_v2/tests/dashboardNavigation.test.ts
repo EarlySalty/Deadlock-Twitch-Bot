@@ -13,6 +13,7 @@ test('dashboard navigation retains the document only for owned unmodified links'
   let blocksUnload = false;
   Object.defineProperty(globalThis, 'window', { configurable: true, value: {
     location: { href: 'https://dashboard.example/twitch/dashboard', origin: 'https://dashboard.example' },
+    navigation: { currentEntry: { index: 0 } },
     history: { pushState: (...args: unknown[]) => pushed.push(args) },
     dispatchEvent: (event: Event) => {
       dispatched.push(event);
@@ -58,6 +59,12 @@ test('dashboard navigation retains the document only for owned unmodified links'
     blocksUnload = true;
     assert.equal(click('/twitch/analyse'), true);
     assert.equal(pushed.length, 1);
+    blocksUnload = false;
+    Reflect.deleteProperty(window, 'navigation');
+    assert.equal(click('/twitch/analyse'), false);
+    assert.equal(pushed.length, 1);
+    const unsubscribe = subscribeNavigation(() => assert.fail('legacy navigation must remain document-owned'));
+    unsubscribe();
   } finally {
     for (const [key, descriptor] of [['window', originalWindow], ['document', originalDocument], ['PopStateEvent', originalPopState]] as const) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor);
@@ -69,9 +76,9 @@ test('dashboard navigation retains the document only for owned unmodified links'
 test('history navigation retains unsaved editors and pending saves unless discard is approved', () => {
   const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
   const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
-  const entries = ['dashboard', 'challenges', 'overlay'].map((path, dashboardIndex) => ({
+  const entries = ['dashboard', 'challenges', 'overlay'].map(path => ({
     url: `https://dashboard.example/twitch/${path}`,
-    state: { dashboardIndex } as Record<string, unknown>,
+    state: {} as Record<string, unknown>,
   }));
   const location = { href: entries[2].url };
   let position = 2;
@@ -110,6 +117,7 @@ test('history navigation retains unsaved editors and pending saves unless discar
   let confirmations = 0;
   Object.defineProperty(globalThis, 'window', { configurable: true, value: {
     location,
+    navigation: { get currentEntry() { return { index: position }; } },
     history,
     addEventListener: (name: string, handler: () => void) => handlers.set(name, handler),
     removeEventListener: (name: string) => handlers.delete(name),
@@ -154,7 +162,7 @@ test('history navigation retains unsaved editors and pending saves unless discar
     assert.equal(position, 2);
     assert.equal(notifications, 2);
     history.replaceState({}, '', `${location.href}?tab=profile`);
-    assert.equal(history.state.dashboardIndex, 2);
+    assert.deepEqual(history.state, {});
     const replacedEntries = structuredClone(entries);
     approved = false;
     traverse(-2);
@@ -167,8 +175,8 @@ test('history navigation retains unsaved editors and pending saves unless discar
     assert.deepEqual(entries, replacedEntries);
     history.pushState({}, '', `${location.href}#section`);
     handlers.get('popstate')?.();
-    assert.equal(history.state.dashboardIndex, 1);
-    history.pushState({ dashboardIndex: 2 }, '', 'https://dashboard.example/twitch/overlay');
+    assert.deepEqual(history.state, {});
+    history.pushState({}, '', 'https://dashboard.example/twitch/overlay');
     handlers.get('dashboard:navigate')?.();
     const fragmentEntries = structuredClone(entries);
     const notificationsBeforeFragment = notifications;
@@ -190,7 +198,7 @@ test('history navigation retains unsaved editors and pending saves unless discar
     handlers.get('popstate')?.();
     while (pending.length) pending.shift()?.();
     assert.equal(position, 1);
-    assert.equal(entries[2].state.dashboardIndex, 2);
+    assert.deepEqual(entries[2].state, {});
     assert.equal(entries.length, 3);
     unsubscribe();
     assert.equal(handlers.size, 0);
