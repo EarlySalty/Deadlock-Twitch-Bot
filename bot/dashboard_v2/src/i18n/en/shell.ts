@@ -440,6 +440,12 @@ export const SHELL_EN: Record<string, string> = {
   Details: 'Details',
   'Alle Scopes sind autorisiert.': 'All scopes are authorized.',
   '{count} fehlen': '{count} missing',
+  'Warm-Dark Theme': 'Warm-dark theme',
+  'Graphit statt Navy, ruhigere Flächenhierarchie.': 'Graphite instead of navy, with a calmer visual hierarchy.',
+  'Local Preview Sandbox': 'Local preview sandbox',
+  'Komplett getrennte localhost-Kopie des Dashboards.': 'A completely isolated localhost copy of the dashboard.',
+  'Analyse Routing fix': 'Analytics routing fix',
+  'Alte Analyseadressen leiten sauber auf /twitch/analyse um.': 'Old analytics URLs redirect correctly to /twitch/analyse.',
 };
 
 Object.assign(SHELL_EN, {

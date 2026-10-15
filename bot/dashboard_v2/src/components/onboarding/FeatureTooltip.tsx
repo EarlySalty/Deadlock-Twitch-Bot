@@ -1,3 +1,4 @@
+import { useT } from '../../context/LanguageContext';
 import { motion } from 'framer-motion';
 import type { LucideIcon } from 'lucide-react';
 
@@ -16,6 +17,7 @@ export function FeatureTooltip({
   position = 'top',
   children,
 }: FeatureTooltipProps) {
+  const t = useT();
   const arrowClass = {
     top: 'top-full left-1/2 -translate-x-1/2 border-t-primary border-l-transparent border-r-transparent border-b-transparent',
     bottom: 'bottom-full left-1/2 -translate-x-1/2 border-b-primary border-l-transparent border-r-transparent border-t-transparent',
@@ -46,8 +48,8 @@ export function FeatureTooltip({
             <Icon className="w-4 h-4 text-on-gold" />
           </div>
         )}
-        <h3 className="text-sm font-bold text-white mb-1">{title}</h3>
-        <p className="text-xs text-text-secondary leading-relaxed">{description}</p>
+        <h3 className="text-sm font-bold text-white mb-1">{t(title)}</h3>
+        <p className="text-xs text-text-secondary leading-relaxed">{t(description)}</p>
       </motion.div>
     </div>
   );

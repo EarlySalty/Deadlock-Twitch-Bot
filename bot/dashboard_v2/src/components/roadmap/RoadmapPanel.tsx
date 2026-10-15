@@ -26,15 +26,16 @@ const STATUS_CONFIG = {
 } as const;
 
 function RoadmapCard({ item }: { item: RoadmapItem }) {
+  const t = useT();
   const cfg = STATUS_CONFIG[item.status] ?? STATUS_CONFIG.planned;
   return (
     <div className="rounded-lg border border-border bg-background/50 p-3 transition-colors hover:border-border-hover">
       <div className="flex items-start gap-2">
         <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${cfg.dotClass}`} />
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-white leading-snug">{item.title}</p>
+          <p className="text-sm font-semibold text-white leading-snug">{t(item.title)}</p>
           {item.description && (
-            <p className="mt-0.5 text-xs text-text-secondary leading-5">{item.description}</p>
+            <p className="mt-0.5 text-xs text-text-secondary leading-5">{t(item.description)}</p>
           )}
         </div>
       </div>
