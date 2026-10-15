@@ -1,3 +1,4 @@
+import { useT } from '../../../../context/LanguageContext';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AiJobDetails } from '../../ai/AiEditorPanel';
@@ -12,6 +13,7 @@ export function AiRevisionPanel({ owner, videoId, onRefresh, onClose, onBusyChan
   onClose: () => void;
   onBusyChange: (busy: boolean) => void;
 }) {
+  const t = useT();
   const client = useQueryClient();
   const [selectedJob, setSelectedJob] = useState<number | null>(null);
   const [locked, setLocked] = useState(false);
@@ -47,9 +49,9 @@ export function AiRevisionPanel({ owner, videoId, onRefresh, onClose, onBusyChan
     retry.reset();
     return onRefresh();
   };
-  return <section className="social-ai publish-ai-revision" aria-label="KI-Fassung überarbeiten">
-    <header className="publish-review-header"><div><h3>KI-Fassung überarbeiten</h3><p>Die bisherige Datei bleibt zum Vergleich erhalten. Nach der Überarbeitung musst du die neue Fassung erneut freigeben.</p></div><button type="button" disabled={locked || retry.isPending} onClick={onClose}>Überarbeitung schließen</button></header>
-    {!canStart && <p className="publish-note">Für neue KI-Änderungen brauchst du die Freigabe für externe KI im Bereich „KI-Videoschnitt“.</p>}
-    {opening.isError || job.isError ? <div role="alert"><p>Die KI-Fassung konnte nicht geladen werden.</p><button type="button" onClick={() => { if (jobId) void job.refetch(); else void opening.refetch(); }}>Erneut laden</button></div> : job.data ? <AiJobDetails key={job.data.id} job={job.data} channel={owner} canStart={canStart} publishing={false} onBusyChange={reportBusy} onJob={update} onReload={reload} onRetry={() => { if (job.data && canRetryJob(job.data, { canStart, retryPending: retry.isPending, locked })) retry.mutate(); }} retryPending={retry.isPending} retryError={retry.isError} /> : <p role="status">Gespeicherte KI-Fassung wird geladen…</p>}
+  return <section className="social-ai publish-ai-revision" aria-label={t("KI-Fassung überarbeiten")}>
+    <header className="publish-review-header"><div><h3>{t("KI-Fassung überarbeiten")}</h3><p>{t("Die bisherige Datei bleibt zum Vergleich erhalten. Nach der Überarbeitung musst du die neue Fassung erneut freigeben.")}</p></div><button type="button" disabled={locked || retry.isPending} onClick={onClose}>{t("Überarbeitung schließen")}</button></header>
+    {!canStart && <p className="publish-note">{t("Für neue KI-Änderungen brauchst du die Freigabe für externe KI im Bereich „KI-Videoschnitt“.")}</p>}
+    {opening.isError || job.isError ? <div role="alert"><p>{t("Die KI-Fassung konnte nicht geladen werden.")}</p><button type="button" onClick={() => { if (jobId) void job.refetch(); else void opening.refetch(); }}>{t("Erneut laden")}</button></div> : job.data ? <AiJobDetails key={job.data.id} job={job.data} channel={owner} canStart={canStart} publishing={false} onBusyChange={reportBusy} onJob={update} onReload={reload} onRetry={() => { if (job.data && canRetryJob(job.data, { canStart, retryPending: retry.isPending, locked })) retry.mutate(); }} retryPending={retry.isPending} retryError={retry.isError} /> : <p role="status">{t("Gespeicherte KI-Fassung wird geladen…")}</p>}
   </section>;
 }

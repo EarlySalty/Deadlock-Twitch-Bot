@@ -440,4 +440,18 @@ export const SHELL_EN: Record<string, string> = {
   Details: 'Details',
   'Alle Scopes sind autorisiert.': 'All scopes are authorized.',
   '{count} fehlen': '{count} missing',
+  'Warm-Dark Theme': 'Warm-dark theme',
+  'Graphit statt Navy, ruhigere Flächenhierarchie.': 'Graphite instead of navy, with a calmer visual hierarchy.',
+  'Local Preview Sandbox': 'Local preview sandbox',
+  'Komplett getrennte localhost-Kopie des Dashboards.': 'A completely isolated localhost copy of the dashboard.',
+  'Analyse Routing fix': 'Analytics routing fix',
+  'Alte Analyseadressen leiten sauber auf /twitch/analyse um.': 'Old analytics URLs redirect correctly to /twitch/analyse.',
 };
+
+Object.assign(SHELL_EN, {
+  "Hier verwaltest du deinen Bot und änderst deine Einstellungen. Speichere dir diese Seite jetzt als": "Manage your bot and change your settings here. Save this page as a",
+  ", damit du sie später nicht suchen musst.": ", so you can find it easily later.",
+  "Du findest es auch auf unserer": "You can also find it on our",
+  "unter": "under",
+  "{days} Tage verbleibend": "{days} days remaining"
+});

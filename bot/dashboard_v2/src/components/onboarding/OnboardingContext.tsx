@@ -1,3 +1,4 @@
+import { useT } from '../../context/LanguageContext';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuthStatus } from '@/hooks/useAnalytics';
@@ -9,6 +10,7 @@ import { ProgressCoordinator } from './progressCoordinator';
 import { isConnectionStep, nextStep, stepDefinition, type OnboardingStepId } from './steps';
 
 export function OnboardingProvider({ children }: { children: ReactNode }) {
+  const t = useT();
   const { data: auth } = useAuthStatus();
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<string | null>(null);
@@ -49,7 +51,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   };
   const canNavigate = () => {
     if (!document.querySelector('[data-unsaved="true"]')) { setNotice(null); return true; }
-    setNotice('Du hast ungespeicherte Änderungen. Speichere deinen Entwurf oder verwirf ihn bewusst, bevor du den Rundgang öffnest.');
+    setNotice("Du hast ungespeicherte Änderungen. Speichere deinen Entwurf oder verwirf ihn bewusst, bevor du den Rundgang öffnest.");
     return false;
   };
   const resume = async (update: OnboardingUpdate, target?: string) => {
@@ -75,13 +77,13 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   const status: OnboardingStatus | undefined = query.data && enabled ? { ...query.data, paused: query.data.paused || localPause === id,
     discord_status: query.isError ? 'error' : query.data.discord_status, steam_status: query.isError ? 'error' : query.data.steam_status } : undefined;
   return <OnboardingContext.Provider value={{ enabled, status, loading: query.isFetching, pending: mutation.isPending,
-    error: mutation.isError ? 'Dein Fortschritt wurde nicht gespeichert. Bitte versuche es erneut.' : query.isError ? 'Deine Einrichtung konnte gerade nicht geladen werden.' : null,
+    error: mutation.isError ? t("Dein Fortschritt wurde nicht gespeichert. Bitte versuche es erneut.") : query.isError ? t("Deine Einrichtung konnte gerade nicht geladen werden.") : null,
     refresh: () => { mutation.reset(); void query.refetch(); void queryClient.invalidateQueries({queryKey: ['internal-home']}); }, save, open, pause, advance }}>
     {children}
     {(notice || (localPause === id && mutation.isError)) && <aside role="alert" className="fixed bottom-4 right-4 z-50 max-w-sm rounded-xl border border-warning bg-card p-4 text-sm text-text-primary shadow-xl">
-      <p>{notice ?? 'Deine Pause wurde nicht gespeichert. Du kannst hierbleiben und es erneut versuchen.'}</p>
-      {!notice && <button type="button" disabled={mutation.isPending} onClick={() => void pause()} className="mt-2 min-h-11 text-primary underline">Pause speichern</button>}
-      <button type="button" onClick={() => { setNotice(null); mutation.reset(); }} className="ml-3 min-h-11 underline">Schließen</button>
+      <p>{notice ? t(notice) : t("Deine Pause wurde nicht gespeichert. Du kannst hierbleiben und es erneut versuchen.")}</p>
+      {!notice && <button type="button" disabled={mutation.isPending} onClick={() => void pause()} className="mt-2 min-h-11 text-primary underline">{t("Pause speichern")}</button>}
+      <button type="button" onClick={() => { setNotice(null); mutation.reset(); }} className="ml-3 min-h-11 underline">{t("Schließen")}</button>
     </aside>}
   </OnboardingContext.Provider>;
 }
