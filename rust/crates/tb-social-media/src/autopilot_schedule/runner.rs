@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 
+mod upload_mode;
+
 use crate::production_jobs::autopilot_schedule::{
     plan_owner, recover_after_lease, retry_or_review, ScheduleError,
 };
@@ -174,7 +176,7 @@ impl AutopilotWorker {
         match job.mode.ok_or(RunnerError::Source)? {
             ProductionMode::Ai => self.produce_ai(lease, job).await,
             ProductionMode::Static => {
-                if let Err(error) = self.produce_static(lease, job).await {
+                if let Err(error) = self.produce_without_ai(lease, job).await {
                     tracing::warn!(error = %error, job_id = job.id, "Static Auto-Pilot production failed");
                     lease.ensure_held().await?;
                     let retryable = matches!(
@@ -199,6 +201,22 @@ impl AutopilotWorker {
                     }
                 }
                 Ok(())
+            }
+        }
+    }
+
+    async fn produce_without_ai(
+        &self,
+        lease: &mut ProductionLease,
+        job: &ProductionJob,
+    ) -> Result<(), RunnerError> {
+        match self.static_route(job).await? {
+            upload_mode::StaticRoute::Legacy => self.produce_static(lease, job).await,
+            upload_mode::StaticRoute::Upload(policy) => {
+                self.produce_upload(lease, job, &policy).await
+            }
+            upload_mode::StaticRoute::Unavailable(reason) => {
+                self.hold_unavailable_mode(lease, job, reason).await
             }
         }
     }
@@ -367,6 +385,17 @@ impl AutopilotWorker {
         let description: String = row.try_get("description")?;
         let hashtags: Vec<String> =
             serde_json::from_str(row.try_get::<String, _>("hashtags")?.as_str())?;
+        let mut platforms = serde_json::Map::new();
+        for platform in self.publication_platforms(job).await? {
+            platforms.insert(
+                platform,
+                json!({"title":title,"description":description,"hashtags":hashtags}),
+            );
+        }
+        Ok(json!({"platforms":platforms,"production_mode":"static"}))
+    }
+
+    async fn publication_platforms(&self, job: &ProductionJob) -> Result<Vec<String>, RunnerError> {
         let settings = autopilot_settings::load(&self.pool, &job.twitch_user_id)
             .await
             .map_err(ScheduleError::from)?;
@@ -375,16 +404,13 @@ impl AutopilotWorker {
             crate::production_jobs::autopilot_schedule::reservations_on(&mut connection, job.id)
                 .await?;
         drop(connection);
-        let mut platforms = serde_json::Map::new();
-        for platform in settings.target_platforms.into_iter().filter(|platform| {
-            reserved.is_empty() || reserved.iter().any(|slot| &slot.platform == platform)
-        }) {
-            platforms.insert(
-                platform,
-                json!({"title":title,"description":description,"hashtags":hashtags}),
-            );
-        }
-        Ok(json!({"platforms":platforms,"production_mode":"static"}))
+        Ok(settings
+            .target_platforms
+            .into_iter()
+            .filter(|platform| {
+                reserved.is_empty() || reserved.iter().any(|slot| &slot.platform == platform)
+            })
+            .collect())
     }
 
     async fn prepare_static(

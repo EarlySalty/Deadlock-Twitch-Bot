@@ -614,7 +614,7 @@ async fn autopilot_runner_repeated_resource_holds_do_not_drain_the_pool() {
 }
 
 #[tokio::test]
-async fn autopilot_runner_transient_progress_and_finish_failures_reuse_the_version() {
+async fn autopilot_runner_upload_mode_transient_failures_reuse_the_exact_artifact() {
     for stage in ["rendering", "rendered", "completed", "existing_completed"] {
         let pool = pool().await;
         let (root, config, source, clip_id) = real_static_fixture(&pool).await;
@@ -632,7 +632,7 @@ async fn autopilot_runner_transient_progress_and_finish_failures_reuse_the_versi
             },
         )
         .await
-        .expect("scheduled automatic static job");
+        .expect("scheduled automatic upload job");
         let existing = stage == "existing_completed";
         inject_job_database_failure(
             &pool,
@@ -649,7 +649,7 @@ async fn autopilot_runner_transient_progress_and_finish_failures_reuse_the_versi
             .expect("output root")
             .join("42")
             .join(format!("production-{}", queued.id))
-            .join("version-1.mp4");
+            .join("upload-1.mp4");
         let mut previous_bytes = None;
         if existing {
             previous_bytes = Some(
@@ -691,7 +691,7 @@ async fn autopilot_runner_transient_progress_and_finish_failures_reuse_the_versi
             }
         );
         let saved_file = if stage == "rendered" {
-            Some(expected.with_extension("rendering.mp4"))
+            Some(expected.with_extension("staged.mp4"))
         } else if stage == "rendering" {
             None
         } else {
@@ -701,15 +701,11 @@ async fn autopilot_runner_transient_progress_and_finish_failures_reuse_the_versi
             previous_bytes = Some(tokio::fs::read(file).await.expect("valid checkpoint bytes"));
         }
         retry_now(&pool, queued.id).await;
-        let restart = if stage == "rendering" {
-            worker(&pool, root.path(), VideoProcessor::default())
-        } else {
-            worker(
-                &pool,
-                root.path(),
-                VideoProcessor::new("unavailable-ffmpeg", "unavailable-ffprobe"),
-            )
-        };
+        let restart = worker(
+            &pool,
+            root.path(),
+            VideoProcessor::new("unavailable-ffmpeg", "unavailable-ffprobe"),
+        );
         assert!(restart
             .run_once()
             .await
@@ -730,6 +726,18 @@ async fn autopilot_runner_transient_progress_and_finish_failures_reuse_the_versi
         assert_eq!(finished[0].file_path.as_deref(), expected.to_str());
         assert_eq!(finished[0].scheduled_at, Some(slot));
         assert!(!finished[0].needs_review);
+        assert_eq!(finished[0].metadata["production_mode"], "upload");
+        assert_eq!(
+            finished[0].metadata["upload_artifact"]["conversion"],
+            "exact"
+        );
+        assert!(done.policy_snapshot.is_some());
+        assert_eq!(
+            tokio::fs::read(&expected)
+                .await
+                .expect("exact upload artifact"),
+            original
+        );
         if let Some(bytes) = previous_bytes {
             assert_eq!(
                 tokio::fs::read(&expected)
@@ -901,5 +909,267 @@ async fn autopilot_runner_recovers_when_the_retry_write_also_fails_transiently()
             .id,
         video[0].id
     );
+    cleanup(pool).await;
+}
+
+async fn upload_policy_fixture(
+    pool: &PgPool,
+    review_policy: crate::autopilot_settings::ReviewPolicy,
+    pipeline_mode: crate::autopilot_settings::PipelineMode,
+    platforms: &[&str],
+) -> chrono::DateTime<chrono::Utc> {
+    sqlx::raw_sql("INSERT INTO social_media_platform_auth (platform, twitch_user_id, enabled)
+        VALUES ('youtube', '42', 1), ('tiktok', '42', 1), ('instagram', '42', 1);
+        CREATE TABLE llm_usage (id BIGSERIAL PRIMARY KEY, ts TEXT, purpose TEXT,
+        provider TEXT, model TEXT, attempt_state TEXT, tokens_in BIGINT, tokens_out BIGINT, latency_ms BIGINT)")
+        .execute(pool).await.expect("connected targets and usage ledger");
+    let slot = automatic_schedule(pool, "42", false, true).await;
+    super::save_schedule(
+        pool,
+        "42",
+        &super::SchedulePatch {
+            target_platforms: Some(platforms.iter().map(|p| (*p).to_owned()).collect()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("upload targets");
+    let mut policy = crate::autopilot_settings::load_policy(pool, "42")
+        .await
+        .expect("legacy policy");
+    policy.pipeline_mode = pipeline_mode;
+    policy.review_policy = review_policy;
+    policy.metadata_scope = crate::autopilot_settings::PolicyScope::PerPlatform;
+    policy.text_defaults.per_platform.insert(
+        "tiktok".into(),
+        crate::autopilot_settings::TextDefaults {
+            description: "Standardtext".into(),
+            hashtags: vec!["deadlock".into()],
+        },
+    );
+    crate::autopilot_settings::save_policy(pool, "42", &policy)
+        .await
+        .expect("upload pipeline policy");
+    slot
+}
+
+async fn upload_job(pool: &PgPool, clip_id: i64, slot: chrono::DateTime<chrono::Utc>) -> i64 {
+    production_jobs::insert(
+        pool,
+        &production_jobs::NewProductionJob {
+            twitch_user_id: "42".into(),
+            clip_id,
+            source: production_jobs::JobSource::Autopilot,
+            requested_mode: None,
+            scheduled_at: Some(slot),
+            max_attempts: 3,
+        },
+    )
+    .await
+    .expect("automatic upload job")
+    .id
+}
+
+#[tokio::test]
+async fn autopilot_runner_upload_mode_keeps_original_and_honors_review_policy() {
+    use crate::autopilot_settings::{PipelineMode, ReviewPolicy};
+    use std::os::unix::fs::MetadataExt;
+    for review_policy in [
+        ReviewPolicy::Off,
+        ReviewPolicy::Required,
+        ReviewPolicy::VetoUntilDeadline,
+    ] {
+        let pool = pool().await;
+        let (root, _, source, clip_id) = real_static_fixture(&pool).await;
+        let original = tokio::fs::read(&source).await.expect("original bytes");
+        sqlx::query("UPDATE twitch_clips_social_media SET custom_title='Eigener Titel', custom_description=NULL WHERE id=$1")
+            .bind(clip_id).execute(&pool).await.expect("own title without own description");
+        let slot =
+            upload_policy_fixture(&pool, review_policy, PipelineMode::Upload, &["tiktok"]).await;
+        let job_id = upload_job(&pool, clip_id, slot).await;
+        let runner = worker(
+            &pool,
+            root.path(),
+            VideoProcessor::new("unavailable-ffmpeg", "unavailable-ffprobe"),
+        );
+        assert!(runner.run_once().await.expect("upload preparation"));
+        let done = production_jobs::get(&pool, "42", job_id)
+            .await
+            .expect("upload job")
+            .expect("owned job");
+        assert_eq!(done.status, "completed");
+        assert_eq!(
+            done.policy_snapshot
+                .as_ref()
+                .map(|policy| policy.review_policy),
+            Some(review_policy)
+        );
+        let videos = produced_video::list(&pool, "42", 50)
+            .await
+            .expect("upload version");
+        assert_eq!(videos.len(), 1);
+        let video = &videos[0];
+        let output = video.file_path.clone().expect("exact upload artifact path");
+        assert!(output.ends_with(&format!("production-{job_id}/upload-1.mp4")));
+        assert_eq!(tokio::fs::read(&output).await.expect("artifact"), original);
+        assert_eq!(video.status, "review");
+        assert_eq!(video.needs_review, review_policy == ReviewPolicy::Required);
+        assert_eq!(video.review_reasons, json!([]));
+        assert_eq!(video.metadata["production_mode"], "upload");
+        assert_eq!(video.metadata["upload_artifact"]["conversion"], "exact");
+        assert_eq!(
+            video.metadata["platforms"],
+            json!({"tiktok":{"title":"Eigener Titel","description":"Standardtext","hashtags":["deadlock"]}})
+        );
+        assert_eq!(
+            video.metadata["veto_deadline"],
+            if review_policy == ReviewPolicy::VetoUntilDeadline {
+                json!(slot)
+            } else {
+                json!(null)
+            }
+        );
+        let video_policy: Option<String> = sqlx::query_scalar(
+            "SELECT policy_snapshot->>'review_policy' FROM social_produced_videos WHERE id=$1",
+        )
+        .bind(video.id)
+        .fetch_one(&pool)
+        .await
+        .expect("frozen version policy");
+        assert_eq!(
+            video_policy,
+            Some(
+                serde_json::to_value(review_policy)
+                    .expect("policy")
+                    .as_str()
+                    .expect("name")
+                    .to_owned()
+            )
+        );
+        let untouched: Option<String> = sqlx::query_scalar(
+            "SELECT custom_description FROM twitch_clips_social_media WHERE id=$1",
+        )
+        .bind(clip_id)
+        .fetch_one(&pool)
+        .await
+        .expect("clip row");
+        assert_eq!(untouched, None);
+        let usage: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM llm_usage")
+            .fetch_one(&pool)
+            .await
+            .expect("no AI or STT usage");
+        assert_eq!(usage, 0);
+        let inode = std::fs::metadata(&output).expect("artifact metadata").ino();
+        sqlx::query(
+            "UPDATE social_produced_videos SET status='rendering', file_path=NULL WHERE id=$1",
+        )
+        .bind(video.id)
+        .execute(&pool)
+        .await
+        .expect("crash before final bookkeeping");
+        sqlx::query("UPDATE social_production_jobs SET status='running', stage='rendered', finished_at=NULL WHERE id=$1")
+            .bind(job_id).execute(&pool).await.expect("interrupted job");
+        assert!(runner.run_once().await.expect("checkpoint restart"));
+        let restarted = produced_video::list(&pool, "42", 50)
+            .await
+            .expect("same version");
+        assert_eq!(restarted.len(), 1);
+        assert_eq!(restarted[0].id, video.id);
+        assert_eq!(restarted[0].status, "review");
+        assert_eq!(restarted[0].file_path.as_deref(), Some(output.as_str()));
+        assert_eq!(std::fs::metadata(&output).expect("artifact").ino(), inode);
+        assert_eq!(
+            production_jobs::get(&pool, "42", job_id)
+                .await
+                .expect("restarted job")
+                .expect("owned job")
+                .status,
+            "completed"
+        );
+        cleanup(pool).await;
+    }
+}
+
+#[tokio::test]
+async fn autopilot_runner_upload_mode_reports_platform_tasks_instead_of_editing() {
+    use crate::autopilot_settings::{PipelineMode, ReviewPolicy};
+    let pool = pool().await;
+    let (root, config, source, clip_id) = real_static_fixture(&pool).await;
+    let container = config.source_root.join("fixture-original.mkv");
+    let status = tokio::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-i"])
+        .arg(&source)
+        .args(["-c", "copy"])
+        .arg(&container)
+        .status()
+        .await
+        .expect("container-only variant");
+    assert!(status.success());
+    sqlx::query("UPDATE twitch_clips_social_media SET local_file_path=$2 WHERE id=$1")
+        .bind(clip_id)
+        .bind(container.to_string_lossy().as_ref())
+        .execute(&pool)
+        .await
+        .expect("matroska source");
+    let slot = upload_policy_fixture(
+        &pool,
+        ReviewPolicy::Off,
+        PipelineMode::Upload,
+        &["youtube", "instagram"],
+    )
+    .await;
+    let job_id = upload_job(&pool, clip_id, slot).await;
+    let runner = worker(&pool, root.path(), VideoProcessor::default());
+    assert!(runner.run_once().await.expect("upload preparation"));
+    let videos = produced_video::list(&pool, "42", 50)
+        .await
+        .expect("upload version");
+    assert_eq!(videos.len(), 1);
+    let video = &videos[0];
+    assert_eq!(video.metadata["upload_artifact"]["conversion"], "remux");
+    assert_eq!(video.metadata["upload_artifact"]["media"]["width"], 640);
+    assert_eq!(video.metadata["upload_artifact"]["media"]["height"], 360);
+    assert!(video.needs_review);
+    assert_eq!(
+        video.review_reasons,
+        json!([
+            "instagram_duration_out_of_range",
+            "youtube_needs_vertical_layout"
+        ])
+    );
+    assert_eq!(video.metadata["preparation_tasks"], video.review_reasons);
+    let done = production_jobs::get(&pool, "42", job_id)
+        .await
+        .expect("upload job")
+        .expect("owned job");
+    assert_eq!(done.status, "completed");
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn autopilot_runner_upload_text_mode_is_held_without_fallback() {
+    use crate::autopilot_settings::{PipelineMode, ReviewPolicy};
+    let pool = pool().await;
+    let (root, _, _, clip_id) = real_static_fixture(&pool).await;
+    let slot = upload_policy_fixture(
+        &pool,
+        ReviewPolicy::Off,
+        PipelineMode::UploadText,
+        &["tiktok"],
+    )
+    .await;
+    let job_id = upload_job(&pool, clip_id, slot).await;
+    let runner = worker(&pool, root.path(), VideoProcessor::default());
+    assert!(runner.run_once().await.expect("held dispatch"));
+    let held = production_jobs::get(&pool, "42", job_id)
+        .await
+        .expect("held job")
+        .expect("owned job");
+    assert_eq!(held.status, "review");
+    assert_eq!(held.review_reasons, json!(["upload_text_mode_unavailable"]));
+    assert!(produced_video::list(&pool, "42", 50)
+        .await
+        .expect("no fallback version")
+        .is_empty());
     cleanup(pool).await;
 }
