@@ -354,16 +354,22 @@ async fn external_consent_requires_admin_csrf_and_records_actor() {
         data(call(&app, "/external-consent", None, Some(&cookie), None).await).await["enabled"],
         false
     );
+    let cross_origin = Request::builder()
+        .method("PUT")
+        .uri("/twitch/api/admin/social-ai/external-consent")
+        .header("host", "admin.test")
+        .header("origin", "https://attacker.example")
+        .header("x-dashboard-context", "admin")
+        .header("cookie", &cookie)
+        .header("Content-Type", "application/json")
+        .body(Body::from(json!({"enabled":true}).to_string()))
+        .expect("request");
     assert_eq!(
-        call(
-            &app,
-            "/external-consent",
-            Some(json!({"enabled":true})),
-            Some(&cookie),
-            None
-        )
-        .await
-        .status(),
+        app.clone()
+            .oneshot(cross_origin)
+            .await
+            .expect("response")
+            .status(),
         StatusCode::FORBIDDEN
     );
     for enabled in [true, false] {
