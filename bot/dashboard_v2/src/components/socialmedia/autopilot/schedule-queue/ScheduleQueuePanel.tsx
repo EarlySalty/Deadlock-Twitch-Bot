@@ -140,7 +140,12 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged, r
     return () => { live.current = false; refresh.current = null; controller.abort(); window.clearInterval(timer); };
   }, [api, twitchUserId]);
 
-  useEffect(() => { if (reloadKey) refresh.current?.(); }, [reloadKey]);
+  const seenReloadKey = useRef(reloadKey);
+  useEffect(() => {
+    if (seenReloadKey.current === reloadKey) return;
+    seenReloadKey.current = reloadKey;
+    refresh.current?.();
+  }, [reloadKey]);
 
   function edit(change: SchedulePatch) {
     dirty.current = true;

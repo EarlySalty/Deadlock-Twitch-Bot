@@ -6,7 +6,7 @@ import { StudioActivity } from '@/components/socialmedia/StudioActivity';
 import { ClipCard } from '@/components/socialmedia/ClipCard';
 import { StudioHero } from '@/components/socialmedia/StudioHero';
 import { useEffect, useMemo, useRef, useState, type ComponentType, type DragEvent, type ReactNode } from 'react';
-import { useIsFetching, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, BarChart3, ChevronDown, CheckCircle2, Archive, Film, Loader2, ShieldAlert, Layers3, Calendar, Gamepad2, ExternalLink, Pencil, SlidersHorizontal, DownloadCloud, Crop, List, LayoutGrid, X } from 'lucide-react';
 import { useLanguage, useT } from '@/context/LanguageContext';
 
@@ -94,7 +94,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
   const [showAiEditor, setShowAiEditor] = useState(() => ['ai', 'review'].includes(new URLSearchParams(window.location.search).get('view') ?? ''));
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
-  const reloading = useIsFetching({ predicate: (query) => RELOAD_QUERY_ROOTS.has(String(query.queryKey[0])) }) > 0;
+  const [reloading, setReloading] = useState(false);
   const [publishedView, setPublishedView] = useState<'clips' | 'vod'>(() => new URLSearchParams(window.location.search).get('view') === 'vod' ? 'vod' : 'clips');
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -384,8 +384,9 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
   };
   const refreshAll = () => {
     if (reloading) return;
-    void queryClient.invalidateQueries({ predicate: (query) => RELOAD_QUERY_ROOTS.has(String(query.queryKey[0])) });
+    setReloading(true);
     setReloadKey((key) => key + 1);
+    void queryClient.invalidateQueries({ predicate: (query) => RELOAD_QUERY_ROOTS.has(String(query.queryKey[0])) }).finally(() => setReloading(false));
   };
   const legacyPlan = postingPlanQuery.data;
   const legacyWeekly = legacyPlan?.platforms.filter((entry) => entry.auto_post).reduce((sum, entry) => sum + entry.posts_per_week, 0);
@@ -691,7 +692,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
         ) : activeView === 'veroeffentlicht' && (publishedView === 'vod' || !streamer) ? (
           <>
             {streamer && <PublishedSwitch value={publishedView} onChange={setPublishedView} />}
-            <VodArchiveList twitchUserId={twitchUserId} isAdmin={isAdmin} reloadKey={reloadKey} />
+            <VodArchiveList twitchUserId={twitchUserId} isAdmin={isAdmin} />
           </>
         ) : (
           <>

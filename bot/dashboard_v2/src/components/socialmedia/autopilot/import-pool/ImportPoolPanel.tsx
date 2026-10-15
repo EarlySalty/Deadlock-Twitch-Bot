@@ -286,21 +286,28 @@ function OwnerImportPool({
     saveMutation.reset();
   }
 
+  function clearSettledFeedback() {
+    for (const mutation of [saveMutation, startMutation, resumeMutation, selectionMutation, bulkMutation]) {
+      if (!mutation.isPending) mutation.reset();
+    }
+  }
+
   function reload() {
-    saveMutation.reset();
-    startMutation.reset();
-    resumeMutation.reset();
-    selectionMutation.reset();
-    bulkMutation.reset();
+    clearSettledFeedback();
     void preferencesQuery.refetch();
     void poolQuery.refetch();
     void latestQuery.refetch();
     if (activeImport(job) || importQuery.isError) void importQuery.refetch();
   }
 
-  const reloadRef = useRef(reload);
-  useEffect(() => { reloadRef.current = reload; });
-  useEffect(() => { if (reloadKey) reloadRef.current(); }, [reloadKey]);
+  const clearRef = useRef(clearSettledFeedback);
+  useEffect(() => { clearRef.current = clearSettledFeedback; });
+  const seenReloadKey = useRef(reloadKey);
+  useEffect(() => {
+    if (seenReloadKey.current === reloadKey) return;
+    seenReloadKey.current = reloadKey;
+    clearRef.current();
+  }, [reloadKey]);
 
   return (
     <section
