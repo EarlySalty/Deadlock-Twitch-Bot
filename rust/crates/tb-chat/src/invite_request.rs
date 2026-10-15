@@ -55,6 +55,9 @@ pub(crate) fn is_clear_invite_request(content: &str) -> bool {
     });
     let generic_access = words.contains(&"wie")
         && words.contains(&"man")
+        && words
+            .iter()
+            .any(|word| word.starts_with("invit") || word.starts_with("einlad"))
         && words.iter().any(|word| {
             ["komm", "bekomm", "krieg", "erhalt", "reinkomm", "rankomm"]
                 .iter()
@@ -194,6 +197,7 @@ mod tests {
             "Ich will nicht eingeladen werden",
             "Mich hat gestern einer eingeladen",
             "wie lädt man freunde in die party ein",
+            "wie bekommt man in der beta mehr seelen",
         ] {
             assert!(!is_clear_invite_request(raw), "falsch erkannt: {raw}");
         }

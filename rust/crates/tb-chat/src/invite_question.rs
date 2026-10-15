@@ -790,7 +790,9 @@ impl InviteQuestionResponder {
                 false,
             );
         }
-        if self.pending_confirmation_open(&channel_login, &chatter_login) && is_affirmative(raw) {
+        if self.pending_confirmation_open(&channel_login, &chatter_login)
+            && is_affirmative(&self.answer_without_bot_mention(event).await)
+        {
             let Some(invite_url) = self.resolve_invite_url(&channel_login).await else {
                 return InviteQuestionDecision::pending_silent(
                     SilentReason::NoInviteUrl,
@@ -1110,6 +1112,21 @@ impl InviteQuestionResponder {
         }
     }
 
+    async fn answer_without_bot_mention(&self, event: &ChatMessageEvent) -> String {
+        let raw = event.text().trim();
+        let Some(reply) = event.reply.as_ref() else {
+            return raw.to_string();
+        };
+        if reply.parent_user_id.is_empty() || reply.parent_user_id != self.api.bot_user_id().await {
+            return raw.to_string();
+        }
+        let mention = format!("@{}", reply.parent_user_login);
+        match raw.split_once(char::is_whitespace) {
+            Some((first, rest)) if first.eq_ignore_ascii_case(&mention) => rest.trim().to_string(),
+            _ => raw.to_string(),
+        }
+    }
+
     async fn resolve_invite_url(&self, channel_login: &str) -> Option<String> {
         match self.invite_url.invite_url(channel_login).await {
             Ok(Some(url)) if !url.trim().is_empty() => Some(url),
@@ -1181,23 +1198,28 @@ fn normalize_login(login: &str) -> String {
 }
 
 fn is_affirmative(raw: &str) -> bool {
-    let without_mentions = raw
+    let first_word = raw
+        .trim()
+        .trim_start_matches('!')
         .split_whitespace()
-        .skip_while(|word| word.starts_with('@'))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let normalized: String = without_mentions
-        .to_lowercase()
-        .chars()
-        .filter(|ch| ch.is_alphanumeric() || ch.is_whitespace())
-        .collect();
-    let normalized = normalized.trim();
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+    let word = first_word.trim_end_matches(|ch: char| !ch.is_alphanumeric());
     [
         "ja", "jo", "jop", "jap", "jup", "joa", "klar", "gerne", "bitte", "yes", "ye", "yep",
         "yeah", "sure",
     ]
     .iter()
-    .any(|token| normalized.starts_with(token))
+    .any(|token| is_stretched_token(word, token))
+}
+
+fn is_stretched_token(word: &str, token: &str) -> bool {
+    let Some(rest) = word.strip_prefix(token) else {
+        return false;
+    };
+    let last = token.chars().last();
+    rest.chars().all(|ch| Some(ch) == last)
 }
 
 #[cfg(test)]
@@ -2543,7 +2565,14 @@ mod tests {
             .await;
         assert_eq!(api.messages(), vec![expected_confirm("viewer")]);
 
-        for answer in ["@DeutscheDeadlockCommunity ja", "!ja"] {
+        for (answer, from_bot_reply, expect_go) in [
+            ("@DeutscheDeadlockCommunity ja", true, true),
+            ("!ja", false, true),
+            ("Jaaa!", false, true),
+            ("@freund ja", false, false),
+            ("!join", false, false),
+            ("jarvis ist cool", false, false),
+        ] {
             let api = MockApi::new();
             let invite = responder(
                 api.clone(),
@@ -2558,14 +2587,19 @@ mod tests {
                     "streamer",
                 )
                 .await;
-            invite
-                .maybe_respond(&event("viewer", answer), "streamer")
-                .await;
-            assert_eq!(
-                api.messages(),
-                vec![expected_confirm("viewer"), expected_go("viewer")],
-                "{answer}"
-            );
+            let mut answer_event = event("viewer", answer);
+            if from_bot_reply {
+                answer_event.reply = Some(crate::types::ChatReply {
+                    parent_user_id: "bot-id".to_string(),
+                    parent_user_login: "deutschedeadlockcommunity".to_string(),
+                });
+            }
+            invite.maybe_respond(&answer_event, "streamer").await;
+            let mut expected = vec![expected_confirm("viewer")];
+            if expect_go {
+                expected.push(expected_go("viewer"));
+            }
+            assert_eq!(api.messages(), expected, "{answer}");
         }
 
         let api = MockApi::new();

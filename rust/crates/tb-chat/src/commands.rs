@@ -137,6 +137,17 @@ fn is_invite_decoration(word: &str) -> bool {
     word.starts_with('@') || !word.chars().any(char::is_alphanumeric)
 }
 
+fn invite_mention_target(args: &str) -> Option<String> {
+    args.split_whitespace()
+        .filter_map(|word| word.strip_prefix('@'))
+        .map(|login| {
+            login
+                .trim_end_matches(|ch: char| !ch.is_alphanumeric() && ch != '_')
+                .to_lowercase()
+        })
+        .find(|login| !login.is_empty())
+}
+
 fn dashboard_reply() -> String {
     format!("Dein Dashboard findest du hier: {DASHBOARD_URL}")
 }
@@ -2338,8 +2349,6 @@ impl CommandEngine {
     // -----------------------------------------------------------------------
 
     async fn cmd_invite(&self, event: &ChatMessageEvent, args: &str) {
-        // Exact-Match-Semantik: nur der aufgelöste Befehl ohne Argumente.
-        // Damit gilt dieselbe Regel auch für einen kanalbezogenen eigenen Namen.
         if !args.split_whitespace().all(is_invite_decoration) {
             return;
         }
@@ -2360,10 +2369,13 @@ impl CommandEngine {
         }
 
         let channel_login = event.broadcaster_user_login.to_lowercase();
-        let chatter_login = event.chatter_user_login.to_lowercase();
+        let mentioned_login = invite_mention_target(args);
+        let chatter_login = mentioned_login
+            .clone()
+            .unwrap_or_else(|| event.chatter_user_login.to_lowercase());
         let cooldown_key = (
             event.broadcaster_user_id.clone(),
-            event.chatter_user_id.clone(),
+            mentioned_login.unwrap_or_else(|| event.chatter_user_id.clone()),
         );
 
         // Cooldown-Check: 1h pro (channel, chatter) — bot.py:345
@@ -2835,8 +2847,8 @@ mod tests {
     }
     #[async_trait]
     impl InvitePort for MockInvite {
-        async fn invite_line(&self, _: &str, _: &str) -> Result<Option<String>, String> {
-            Ok(self.reply.clone())
+        async fn invite_line(&self, _: &str, login: &str) -> Result<Option<String>, String> {
+            Ok(self.reply.as_ref().map(|reply| format!("{reply} @{login}")))
         }
     }
 
@@ -4069,10 +4081,14 @@ mod tests {
         assert_eq!(api.message_count().await, 0);
         assert!(
             engine
-                .handle(&make_event("!join @viewer :)", false, false))
+                .handle(&make_event("!join @Neuling :)", false, false))
                 .await
         );
         assert_eq!(api.message_count().await, 1);
+        assert!(api
+            .last_message()
+            .await
+            .is_some_and(|message| message.ends_with("@neuling")));
     }
 
     #[tokio::test]
