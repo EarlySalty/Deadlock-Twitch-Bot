@@ -1,3 +1,4 @@
+import { translateManagementError } from '../../i18n/managementErrors';
 import { useT } from '../../context/LanguageContext';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Loader2 } from 'lucide-react';
@@ -146,7 +147,7 @@ export function EditableCommandName({ command, className = '' }: { command: stri
       <p id={`command-name-hint-${command}`} className="mt-1 text-[11px] text-text-secondary">
         {t("Namen ändern · speichert automatisch · nur Buchstaben und Zahlen")}
       </p>
-      {message && <p role={validCommandNameInput(draft ?? '') ? 'status' : 'alert'} className={`mt-1 text-xs ${validCommandNameInput(draft ?? '') ? 'text-text-secondary' : 'text-danger'}`}>{t(message)}</p>}
+      {message && <p role={validCommandNameInput(draft ?? '') ? 'status' : 'alert'} className={`mt-1 text-xs ${validCommandNameInput(draft ?? '') ? 'text-text-secondary' : 'text-danger'}`}>{translateManagementError(message, t)}</p>}
     </div>
   );
 }

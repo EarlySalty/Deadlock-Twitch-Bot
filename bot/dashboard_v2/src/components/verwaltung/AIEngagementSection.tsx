@@ -1,3 +1,5 @@
+import { translateManagementError } from '@/i18n/managementErrors';
+import { useLanguage } from '@/context/LanguageContext';
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Loader2, Power, PowerOff, Save } from 'lucide-react';
@@ -31,6 +33,7 @@ const DECISION_COLORS: Record<string, string> = {
 };
 
 export function AIEngagementSection() {
+  const { t, locale } = useLanguage();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [settings, setSettings] = useState<EngagementSettings | null>(null);
@@ -127,33 +130,30 @@ export function AIEngagementSection() {
     >
       <div className="mb-5">
         <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">
-          AI-Engagement (Beta)
+          {t("AI-Engagement (Beta)")}
         </p>
         <h2 className="display-font text-2xl font-bold text-white mb-1">
-          Stammgast-AI im Chat
+          {t("Stammgast-AI im Chat")}
         </h2>
         <p className="text-sm text-text-secondary">
-          Die KI liest deinen Chat mit und mischt sich situativ ein, kennt Deadlock,
-          merkt sich Konversationen mit deinen Chattern, deaktiviert sich automatisch bei
-          Stream-Ende.
+          {t("Die KI liest deinen Chat mit und mischt sich situativ ein, kennt Deadlock, merkt sich Konversationen mit deinen Chattern, deaktiviert sich automatisch bei Stream-Ende.")}
         </p>
       </div>
 
       {error && (
         <div className="mb-4 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
-          {error}
+          {translateManagementError(error, t)}
         </div>
       )}
 
       {loading ? (
         <div className="flex items-center gap-3 text-text-secondary text-sm">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          AI-Status wird geladen ...
+          {t("AI-Status wird geladen ...")}
         </div>
       ) : !channelLogin ? (
         <div className="rounded-xl border border-border bg-background/40 px-4 py-6 text-sm text-text-secondary text-center">
-          Dein Twitch-Account konnte nicht aus der Session gelesen werden. Bitte
-          erneut einloggen.
+          {t("Dein Twitch-Account konnte nicht aus der Session gelesen werden. Bitte erneut einloggen.")}
         </div>
       ) : (
         <>
@@ -165,12 +165,12 @@ export function AIEngagementSection() {
                     enabled ? 'text-success' : 'text-text-secondary'
                   }`}
                 >
-                  {enabled ? 'AI ist AKTIV' : 'AI ist aus'}
+                  {enabled ? t('AI ist AKTIV') : t('AI ist aus')}
                 </p>
                 <p className="text-xs text-text-secondary mt-0.5">
                   {enabled
-                    ? 'Schaltet sich am Stream-Ende automatisch wieder aus.'
-                    : 'Aktiviere die AI, damit sie deinen Stream-Chat begleitet.'}
+                    ? t('Schaltet sich am Stream-Ende automatisch wieder aus.')
+                    : t('Aktiviere die AI, damit sie deinen Stream-Chat begleitet.')}
                 </p>
               </div>
               <button
@@ -190,20 +190,17 @@ export function AIEngagementSection() {
                 ) : (
                   <Power className="h-4 w-4" />
                 )}
-                {enabled ? 'AI deaktivieren' : 'AI aktivieren'}
+                {enabled ? t('AI deaktivieren') : t('AI aktivieren')}
               </button>
             </div>
           </div>
 
           <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-5">
             <label htmlFor="steam-id-eingabe" className="block text-sm font-semibold text-white">
-              Steam-Anbindung
+              {t("Steam-Anbindung")}
             </label>
             <p className="mt-0.5 text-xs text-text-secondary">
-              Deine SteamID64 verbindet deinen Kanal mit deinem Deadlock-Account. Sie macht
-              deinen Match-Status auslesbar, etwa für den Werbemanager, der Werbung in deine
-              Warteschlange legt. Deine SteamID64 steht in deinem Steam-Profil (Rechtsklick,
-              Steam-ID kopieren).
+              {t("Deine SteamID64 verbindet deinen Kanal mit deinem Deadlock-Account. Sie macht deinen Match-Status auslesbar, etwa für den Werbemanager, der Werbung in deine Warteschlange legt. Deine SteamID64 steht in deinem Steam-Profil (Rechtsklick, Steam-ID kopieren).")}
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <input
@@ -227,7 +224,7 @@ export function AIEngagementSection() {
                 ) : (
                   <Save className="h-4 w-4" />
                 )}
-                Speichern
+                {t("Speichern")}
               </button>
             </div>
           </div>
@@ -235,7 +232,7 @@ export function AIEngagementSection() {
           {logEntries.length > 0 && (
             <div>
               <h3 className="text-xs uppercase tracking-wider font-semibold text-text-secondary mb-2">
-                Letzte Aktionen
+                {t("Letzte Aktionen")}
               </h3>
               <div className="space-y-1">
                 {logEntries.map((entry, i) => {
@@ -248,9 +245,9 @@ export function AIEngagementSection() {
                       className="rounded-md border border-border/60 bg-background/40 px-3 py-2 text-xs"
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <span className={`font-semibold ${colorClass}`}>{label}</span>
+                        <span className={`font-semibold ${colorClass}`}>{t(label)}</span>
                         <span className="text-text-secondary">
-                          {entry.ts ? new Date(entry.ts).toLocaleString('de-DE') : '–'}
+                          {entry.ts ? new Date(entry.ts).toLocaleString(locale) : '–'}
                         </span>
                       </div>
                       {entry.responseText && (

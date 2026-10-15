@@ -593,6 +593,8 @@
     const card = document.getElementById('overlay-card');
     const params = new URLSearchParams(window.location.search);
     const streamer = (params.get('streamer') || '').trim();
+    let translations = params.get('editor') === '1' && params.get('lang') === 'en' ? null : {};
+    const t = text => translations?.[text] ?? text;
 
     const oneOf = (key, allowed, fallback) => {
       const value = (params.get(key) || '').trim().toLowerCase();
@@ -695,8 +697,8 @@
     let latestData = null;
 
     const isNumber = (value) => typeof value === 'number' && Number.isFinite(value);
-    const nf1 = new Intl.NumberFormat('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-    const nf2 = new Intl.NumberFormat('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    let nf1 = new Intl.NumberFormat('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+    let nf2 = new Intl.NumberFormat('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
     function rankBadgeUrl(badgeLevel) {
       if (!Number.isInteger(badgeLevel)) return null;
@@ -727,7 +729,7 @@
     }
 
     function fallbackTile(result) {
-      return el('span', `ov-tile ov-tile-fallback ${result}`, result === 'win' ? 'S' : 'N');
+      return el('span', `ov-tile ov-tile-fallback ${result}`, result === 'win' ? t('S') : t('N'));
     }
 
     function recentRow(recent) {
@@ -739,7 +741,7 @@
         if (icon) {
           const image = el('img', `ov-tile ${result}`);
           image.src = icon;
-          image.alt = (match.hero || 'Held') + ' – ' + (result === 'win' ? 'Sieg' : 'Niederlage');
+          image.alt = (match.hero || t('Held')) + ' – ' + (result === 'win' ? t('Sieg') : t('Niederlage'));
           image.title = image.alt;
           image.decoding = 'async';
           image.loading = 'lazy';
@@ -775,7 +777,7 @@
       const mods = [];
 
       if (flags.rank && data.rank_name) {
-        mods.push({ key: 'rank', label: 'RANG', value: () => rankValueNode(data) });
+        mods.push({ key: 'rank', label: t('RANG'), value: () => rankValueNode(data) });
       }
 
       if (flags.winrate && isNumber(data.winrate) && isNumber(data.wins) && isNumber(data.losses)) {
@@ -794,7 +796,7 @@
       if (flags.today && isNumber(data.today_wins) && isNumber(data.today_losses)) {
         mods.push({
           key: 'today',
-          label: 'HEUTE',
+          label: t('HEUTE'),
           value: () => {
             const value = el('div', 'ov-value');
             value.appendChild(el('span', 'ov-win', String(data.today_wins)));
@@ -809,11 +811,11 @@
           (data.streak_kind === 'win' || data.streak_kind === 'loss')) {
         mods.push({
           key: 'streak',
-          label: 'SERIE',
+          label: t('SERIE'),
           value: () => {
             const value = el('div', 'ov-value');
             const cls = data.streak_kind === 'win' ? 'ov-win' : 'ov-loss';
-            value.appendChild(el('span', cls, `${data.streak_len} ${data.streak_kind === 'win' ? (data.streak_len === 1 ? 'Sieg' : 'Siege') : (data.streak_len === 1 ? 'Niederlage' : 'Niederlagen')}`));
+            value.appendChild(el('span', cls, `${data.streak_len} ${data.streak_kind === 'win' ? (data.streak_len === 1 ? t('Sieg') : t('Siege')) : (data.streak_len === 1 ? t('Niederlage') : t('Niederlagen'))}`));
             return value;
           },
         });
@@ -830,11 +832,11 @@
       if (flags.lastmatch && (data.last_result === 'win' || data.last_result === 'loss')) {
         mods.push({
           key: 'lastmatch',
-          label: 'LETZTES SPIEL',
+          label: t('LETZTES SPIEL'),
           value: () => {
             const value = el('div', 'ov-value');
             const cls = data.last_result === 'win' ? 'ov-win' : 'ov-loss';
-            value.appendChild(el('span', cls, data.last_result === 'win' ? 'Sieg' : 'Niederlage'));
+            value.appendChild(el('span', cls, data.last_result === 'win' ? t('Sieg') : t('Niederlage')));
             if (isNumber(data.last_kills) && isNumber(data.last_deaths) && isNumber(data.last_assists)) {
               value.appendChild(el('span', 'ov-sub-kda', `${data.last_kills}/${data.last_deaths}/${data.last_assists}`));
             }
@@ -846,7 +848,7 @@
       if (flags.mostplayed && data.most_played_hero) {
         mods.push({
           key: 'mostplayed',
-          label: 'LIEBLINGSHELD',
+          label: t('LIEBLINGSHELD'),
           value: () => {
             const value = el('div', 'ov-value');
             const icon = cleanIcon(data.most_played_icon);
@@ -927,7 +929,7 @@
         const row = recentRow(data.recent);
         if (row) {
           const wrap = el('div', 'ov-recent');
-          wrap.appendChild(el('div', 'ov-recent-label', 'Letzte Spiele · neuestes links'));
+          wrap.appendChild(el('div', 'ov-recent-label', t('Letzte Spiele · neuestes links')));
           wrap.appendChild(row);
           frag.appendChild(wrap);
         }
@@ -972,7 +974,7 @@
         const row = recentRow(data.recent);
         if (row) {
           const seg = el('div', 'ov-seg');
-          seg.appendChild(el('span', 'ov-seg-label', 'Match-Verlauf'));
+          seg.appendChild(el('span', 'ov-seg-label', t('Match-Verlauf')));
           seg.appendChild(row);
           bar.appendChild(seg);
         }
@@ -1008,10 +1010,22 @@
 
     // Nur die eingebettete Editor-Vorschau nimmt Geometrie vom eigenen Elternfenster an.
     window.addEventListener('message', event => {
-      if (layout !== 'canvas' || !scalableCanvas || params.get('editor') !== '1') return;
+      if (params.get('editor') !== '1') return;
       if (event.source !== window.parent || event.origin !== window.location.origin) return;
       const message = event.data;
-      if (!message || message.type !== 'ddc-overlay-scene' || !message.sources || typeof message.sources !== 'object' || Array.isArray(message.sources)) return;
+      if (!message || message.type !== 'ddc-overlay-scene') return;
+      if (message.translations && typeof message.translations === 'object' && !Array.isArray(message.translations) &&
+          Object.values(message.translations).every(value => typeof value === 'string') &&
+          (message.language === 'de' || message.language === 'en')) {
+        const changed = JSON.stringify(translations) !== JSON.stringify(message.translations);
+        translations = message.translations;
+        document.documentElement.lang = message.language;
+        const locale = message.language === 'en' ? 'en-US' : 'de-DE';
+        nf1 = new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+        nf2 = new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        if (changed && latestData) render(latestData);
+      }
+      if (layout !== 'canvas' || !scalableCanvas || !message.sources || typeof message.sources !== 'object' || Array.isArray(message.sources)) return;
       const next = {};
       for (const key of Object.keys(defaultCanvasScene)) {
         const rect = message.sources[key];
@@ -1047,7 +1061,7 @@
       if (flags.header && streamer) {
         const head = el('div', 'ov-head');
         head.appendChild(el('div', 'ov-name', streamer));
-        frag.appendChild(canvasSource('header', 'Spielername', head));
+        frag.appendChild(canvasSource('header', t('Spielername'), head));
       }
 
       if (flags.live && data.live === true) {
@@ -1057,7 +1071,7 @@
         if (data.hero) details.push(data.hero);
         if (isNumber(data.minutes)) details.push(`${data.minutes}′`);
         live.appendChild(el('span', null, details.length ? `LIVE · ${details.join(' · ')}` : 'LIVE'));
-        frag.appendChild(canvasSource('live', 'Laufendes Spiel', live));
+        frag.appendChild(canvasSource('live', t('Laufendes Spiel'), live));
       }
 
       for (const mod of activeModules(data)) {
@@ -1072,9 +1086,9 @@
         const row = recentRow(data.recent);
         if (row) {
           const recent = el('div', 'ov-recent');
-          recent.appendChild(el('div', 'ov-recent-label', 'Letzte Spiele · neuestes links'));
+          recent.appendChild(el('div', 'ov-recent-label', t('Letzte Spiele · neuestes links')));
           recent.appendChild(row);
-          frag.appendChild(canvasSource('recent', 'Match-Verlauf', recent));
+          frag.appendChild(canvasSource('recent', t('Match-Verlauf'), recent));
         }
       }
 
@@ -1089,6 +1103,7 @@
         return;
       }
       latestData = data;
+      if (translations === null) return;
 
       const content = layout === 'bar' ? buildBar(data) : layout === 'canvas' ? buildCanvas(data) : buildBox(data);
       if (!content) {

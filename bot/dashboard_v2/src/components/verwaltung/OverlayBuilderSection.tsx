@@ -1,3 +1,5 @@
+import { useLanguage } from '@/context/LanguageContext';
+import { overlayPreviewTranslations } from '@/i18n/overlayPreview';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { flushSync } from 'react-dom';
 import { motion } from 'framer-motion';
@@ -190,6 +192,8 @@ type OverlayBuilderSectionProps = {
 };
 
 export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
+  const { t, language } = useLanguage();
+  const previewTranslations = useMemo(() => overlayPreviewTranslations(t), [t]);
   const normalizedLogin = login.trim();
   const [theme, setTheme] = useState<OverlayTheme>('dark');
   const [layout, setLayout] = useState<OverlayLayout>('canvas');
@@ -315,14 +319,14 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   }, [endGesture, normalizedLogin]);
 
   const syncPreview = () => {
-    iframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources }, window.location.origin);
-    outputIframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources }, window.location.origin);
+    iframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources, translations: previewTranslations, language }, window.location.origin);
+    outputIframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources, translations: previewTranslations, language }, window.location.origin);
   };
 
   useEffect(() => {
-    iframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources }, window.location.origin);
-    outputIframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources }, window.location.origin);
-  }, [sources]);
+    iframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources, translations: previewTranslations, language }, window.location.origin);
+    outputIframeRef.current?.contentWindow?.postMessage({ type: 'ddc-overlay-scene', sources, translations: previewTranslations, language }, window.location.origin);
+  }, [sources, previewTranslations, language]);
 
   const storageKey = `ddc-overlay-layout-v1:${normalizedLogin}`;
 
@@ -485,6 +489,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
   const previewUrl = new URL(overlayUrl, 'http://localhost');
   previewUrl.searchParams.delete('scene');
   previewUrl.searchParams.set('editor', '1');
+  previewUrl.searchParams.set('lang', language);
   const debouncedUrl = useDebouncedValue(previewUrl.toString(), 300);
   const unsaved = retainedUrl !== null && retainedUrl !== overlayUrl;
 
@@ -731,13 +736,13 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
       >
         <div>
           <p className="mb-1 text-sm font-medium uppercase tracking-wider text-primary">
-            Stream-Overlay
+            {t("Stream-Overlay")}
           </p>
           <h2 className="display-font mb-1 text-2xl font-bold text-white">
-            Overlay noch nicht verfügbar
+            {t("Overlay noch nicht verfügbar")}
           </h2>
           <p className="text-sm text-text-secondary">
-            Sobald dein Konto verbunden ist, kannst du dir hier dein Stream-Overlay zusammenstellen.
+            {t("Sobald dein Konto verbunden ist, kannst du dir hier dein Stream-Overlay zusammenstellen.")}
           </p>
         </div>
       </motion.section>
@@ -791,7 +796,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
       onPointerDownCapture={() => setTouchSource(null)}
       onPointerMoveCapture={(event) => { if (event.pointerType === 'mouse') setTouchSource(null); }}
       data-unsaved={unsaved}
-      data-unsaved-hint="Dein Overlay ist angepasst. Kopiere zuerst die neue OBS-Adresse oder bestätige unten, dass du sie übernommen hast. Du kannst auch den Rundgang pausieren und hierbleiben."
+      data-unsaved-hint={t("Dein Overlay ist angepasst. Kopiere zuerst die neue OBS-Adresse oder bestätige unten, dass du sie übernommen hast. Du kannst auch den Rundgang pausieren und hierbleiben.")}
       className="panel-card rounded-2xl p-5 md:p-6"
       initial={{ opacity: 0, y: 16 }}
       whileInView={{ opacity: 1, y: 0 }}
@@ -800,29 +805,28 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
     >
       <div className="mb-5">
         <p className="mb-1 text-sm font-medium uppercase tracking-wider text-primary">
-          Stream-Overlay
+          {t("Stream-Overlay")}
         </p>
         <h2 className="display-font mb-1 text-2xl font-bold text-white">
-          Overlay für OBS zusammenstellen
+          {t("Overlay für OBS zusammenstellen")}
         </h2>
         <p className="text-sm text-text-secondary">
-          {editorMode === 'advanced' ? 'Zieh deine Module an die gewünschte Stelle. Strg oder ⌘ + Klick wählt mehrere aus; am Griff änderst du die Größe der aktiven Quelle.' : 'Wähle eine fertige Karte oder Leiste und passe Inhalte und Farbe an. Dein eigenes Layout bleibt beim Wechsel erhalten.'} Die Vorschau zeigt deine echten Spielwerte.
-          Voraussetzung: ein über den Discord verknüpfter Steam-Account.
+          {editorMode === 'advanced' ? t('Zieh deine Module an die gewünschte Stelle. Strg oder ⌘ + Klick wählt mehrere aus; am Griff änderst du die Größe der aktiven Quelle.') : t('Wähle eine fertige Karte oder Leiste und passe Inhalte und Farbe an. Dein eigenes Layout bleibt beim Wechsel erhalten.')} {t("Die Vorschau zeigt deine echten Spielwerte. Voraussetzung: ein über den Discord verknüpfter Steam-Account.")}
         </p>
       </div>
 
       <div className="mb-5 flex flex-wrap items-center gap-3">
-        <div role="group" aria-label="Bedienmodus" className="inline-flex rounded-xl border border-border bg-background/60 p-1">
-          {([{ value: 'simple', label: 'Einfach' }, { value: 'advanced', label: 'Erweitert' }] as const).map(item => <button key={item.value} type="button" aria-pressed={editorMode === item.value} onClick={() => { endGesture(); setEditorMode(item.value); }} className={`min-h-11 rounded-lg px-4 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-primary ${editorMode === item.value ? 'bg-primary/15 text-primary' : 'text-text-secondary hover:text-white'}`}>{item.label}</button>)}
+        <div role="group" aria-label={t("Bedienmodus")} className="inline-flex rounded-xl border border-border bg-background/60 p-1">
+          {([{ value: 'simple', label: 'Einfach' }, { value: 'advanced', label: 'Erweitert' }] as const).map(item => <button key={item.value} type="button" aria-pressed={editorMode === item.value} onClick={() => { endGesture(); setEditorMode(item.value); }} className={`min-h-11 rounded-lg px-4 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-primary ${editorMode === item.value ? 'bg-primary/15 text-primary' : 'text-text-secondary hover:text-white'}`}>{t(item.label)}</button>)}
         </div>
-        <p className="text-xs text-text-secondary">Der Modus ändert nur die Bedienung. Layout und OBS-Adresse bleiben gleich.</p>
+        <p className="text-xs text-text-secondary">{t("Der Modus ändert nur die Bedienung. Layout und OBS-Adresse bleiben gleich.")}</p>
       </div>
 
-      {editorMode === 'simple' && <section className="mb-5 space-y-3 rounded-xl border border-border bg-background/40 p-4" aria-label="Fertige Vorlagen">
-        <h3 className="text-sm font-semibold text-white">Vorlage auswählen</h3>
-        {layout === 'canvas' && <p className="text-sm text-text-secondary">Aktuell: Eigenes Layout. Es bleibt erhalten, bis du ausdrücklich eine Vorlage auswählst. Unter „Erweitert“ kannst du es weiter bearbeiten.</p>}
+      {editorMode === 'simple' && <section className="mb-5 space-y-3 rounded-xl border border-border bg-background/40 p-4" aria-label={t("Fertige Vorlagen")}>
+        <h3 className="text-sm font-semibold text-white">{t("Vorlage auswählen")}</h3>
+        {layout === 'canvas' && <p className="text-sm text-text-secondary">{t("Aktuell: Eigenes Layout. Es bleibt erhalten, bis du ausdrücklich eine Vorlage auswählst. Unter „Erweitert“ kannst du es weiter bearbeiten.")}</p>}
         <div className="grid gap-3 sm:grid-cols-2">
-          {([{ value: 'box', label: 'Feste Karte', detail: 'Kompakte Übersicht · 440 × 660' }, { value: 'bar', label: 'Feste Leiste', detail: 'Breites Overlay · 960 × 300' }] as const).map(preset => <button key={preset.value} type="button" aria-pressed={layout === preset.value} onClick={() => setLayout(preset.value)} className={`flex min-h-20 items-center gap-4 rounded-xl border p-4 text-left focus-visible:outline-2 focus-visible:outline-primary ${layout === preset.value ? 'border-primary bg-primary/10 text-white' : 'border-border bg-background text-text-secondary hover:border-primary/50'}`}><span aria-hidden="true" className={`shrink-0 rounded border-2 border-primary/60 bg-primary/10 ${preset.value === 'box' ? 'h-12 w-8' : 'h-6 w-16'}`} /><span><span className="block font-semibold">{preset.label}</span><span className="text-xs text-text-secondary">{preset.detail}</span></span></button>)}
+          {([{ value: 'box', label: 'Feste Karte', detail: t('Kompakte Übersicht · 440 × 660') }, { value: 'bar', label: 'Feste Leiste', detail: t('Breites Overlay · 960 × 300') }] as const).map(preset => <button key={preset.value} type="button" aria-pressed={layout === preset.value} onClick={() => setLayout(preset.value)} className={`flex min-h-20 items-center gap-4 rounded-xl border p-4 text-left focus-visible:outline-2 focus-visible:outline-primary ${layout === preset.value ? 'border-primary bg-primary/10 text-white' : 'border-border bg-background text-text-secondary hover:border-primary/50'}`}><span aria-hidden="true" className={`shrink-0 rounded border-2 border-primary/60 bg-primary/10 ${preset.value === 'box' ? 'h-12 w-8' : 'h-6 w-16'}`} /><span><span className="block font-semibold">{t(preset.label)}</span><span className="text-xs text-text-secondary">{t(preset.detail)}</span></span></button>)}
         </div>
       </section>}
 
@@ -831,7 +835,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           ref={previewPanelRef}
           tabIndex={0}
           role="region"
-          aria-label="Overlay-Baukasten und Live-Ausgabe"
+          aria-label={t("Overlay-Baukasten und Live-Ausgabe")}
           onPointerDown={(event) => {
             if (event.target instanceof HTMLElement && !event.target.closest('button, input, select, textarea, [contenteditable]')) {
               event.currentTarget.focus({ preventScroll: true });
@@ -841,26 +845,26 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           style={fullscreen ? { width: '100%', height: '100dvh', padding: 16, background: '#090a0d', overflow: 'auto' } : theaterMode ? { height: 'max(240px, calc(100dvh - 12rem))' } : undefined}
         >
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold text-white">{editorMode === 'advanced' ? 'Baukasten & Live-Ausgabe' : 'Deine Vorschau'}</h3>
+            <h3 className="text-sm font-semibold text-white">{editorMode === 'advanced' ? t('Baukasten & Live-Ausgabe') : t('Deine Vorschau')}</h3>
             <div className="flex flex-wrap items-center gap-2">
               {editorMode === 'advanced' && layout === 'canvas' && <>
-                <span data-testid="overlay-selection-count" className="text-xs text-text-secondary">{visibleSelection.length} ausgewählt</span>
-                <button type="button" aria-label="Magnet" aria-pressed={magnetEnabled} onClick={() => { magnetRef.current = !magnetEnabled; setMagnetEnabled(!magnetEnabled); setSnapHits([]); }} className="min-h-11 rounded-lg border border-border px-3 text-xs text-primary aria-pressed:border-primary aria-pressed:bg-primary/10">Magnet {magnetEnabled ? 'an' : 'aus'}</button>
+                <span data-testid="overlay-selection-count" className="text-xs text-text-secondary">{t('{count} ausgewählt', { count: visibleSelection.length })}</span>
+                <button type="button" aria-label={t('Magnet')} aria-pressed={magnetEnabled} onClick={() => { magnetRef.current = !magnetEnabled; setMagnetEnabled(!magnetEnabled); setSnapHits([]); }} className="min-h-11 rounded-lg border border-border px-3 text-xs text-primary aria-pressed:border-primary aria-pressed:bg-primary/10">{t('Magnet')} {magnetEnabled ? t('an') : t('aus')}</button>
               </>}
-              <select aria-label="Vorschau-Hintergrund" value={previewBackdrop} onChange={event => setPreviewBackdrop(event.target.value as typeof previewBackdrop)} className="min-h-11 rounded-lg border border-border bg-background px-2 text-xs text-white"><option value="checker">Transparenz</option><option value="dark">Dunkle Szene</option><option value="light">Helle Szene</option></select>
-              <button type="button" title="Kino-Modus (Alt+T)" aria-label="Kino-Modus (Alt+T)" aria-keyshortcuts="Alt+t" aria-pressed={theaterMode} disabled={fullscreen} onClick={() => { endGesture(); setTheaterMode(current => !current); setFullscreenNotice(''); }} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary aria-pressed:border-primary aria-pressed:text-primary disabled:opacity-40">
+              <select aria-label={t("Vorschau-Hintergrund")} value={previewBackdrop} onChange={event => setPreviewBackdrop(event.target.value as typeof previewBackdrop)} className="min-h-11 rounded-lg border border-border bg-background px-2 text-xs text-white"><option value="checker">{t("Transparenz")}</option><option value="dark">{t("Dunkle Szene")}</option><option value="light">{t("Helle Szene")}</option></select>
+              <button type="button" title={t("Kino-Modus (Alt+T)")} aria-label={t("Kino-Modus (Alt+T)")} aria-keyshortcuts="Alt+t" aria-pressed={theaterMode} disabled={fullscreen} onClick={() => { endGesture(); setTheaterMode(current => !current); setFullscreenNotice(''); }} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary aria-pressed:border-primary aria-pressed:text-primary disabled:opacity-40">
                 <RectangleHorizontal aria-hidden="true" className="h-5 w-5" />
               </button>
-              <button type="button" title={fullscreen ? 'Vollbild beenden (F)' : 'Vollbild (F)'} aria-label={fullscreen ? 'Vollbild beenden (F)' : 'Vollbild (F)'} aria-keyshortcuts="f" aria-pressed={fullscreen} onClick={() => void toggleFullscreen()} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary">
+              <button type="button" title={fullscreen ? t('Vollbild beenden (F)') : t('Vollbild (F)')} aria-label={fullscreen ? t('Vollbild beenden (F)') : t('Vollbild (F)')} aria-keyshortcuts="f" aria-pressed={fullscreen} onClick={() => void toggleFullscreen()} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary">
                 {fullscreen ? <Minimize aria-hidden="true" className="h-5 w-5" /> : <Maximize aria-hidden="true" className="h-5 w-5" />}
               </button>
-              {expandedPreview && <button type="button" title={fullscreen ? 'Vollbild schließen (Escape)' : 'Kino-Modus schließen (Escape)'} aria-label={fullscreen ? 'Vollbild schließen (Escape)' : 'Kino-Modus schließen (Escape)'} onClick={() => { endGesture(); if (fullscreen) void toggleFullscreen(); else { setTheaterMode(false); setFullscreenNotice(''); previewPanelRef.current?.focus({ preventScroll: true }); } }} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary"><X aria-hidden="true" className="h-5 w-5" /></button>}
+              {expandedPreview && <button type="button" title={fullscreen ? t('Vollbild schließen (Escape)') : t('Kino-Modus schließen (Escape)')} aria-label={fullscreen ? t('Vollbild schließen (Escape)') : t('Kino-Modus schließen (Escape)')} onClick={() => { endGesture(); if (fullscreen) void toggleFullscreen(); else { setTheaterMode(false); setFullscreenNotice(''); previewPanelRef.current?.focus({ preventScroll: true }); } }} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-white hover:border-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary"><X aria-hidden="true" className="h-5 w-5" /></button>}
             </div>
           </div>
-          {fullscreenNotice && <p role="status" className="shrink-0 text-xs text-text-secondary">{fullscreenNotice}</p>}
+          {fullscreenNotice && <p role="status" className="shrink-0 text-xs text-text-secondary">{t(fullscreenNotice)}</p>}
           <div className={`grid min-w-0 items-start content-start gap-4 ${editorMode === 'advanced' ? 'lg:grid-cols-2' : ''} ${expandedPreview ? 'min-h-0 flex-1 overflow-auto' : ''}`}>
           <div className="flex min-w-0 flex-col gap-2">
-          <h4 className="text-sm font-semibold text-primary">{editorMode === 'advanced' ? 'Baukasten · Editor' : 'So erscheint dein Overlay in OBS'}</h4>
+          <h4 className="text-sm font-semibold text-primary">{editorMode === 'advanced' ? t('Baukasten · Editor') : t('So erscheint dein Overlay in OBS')}</h4>
           <div ref={previewHostRef} className="min-w-0 shrink-0">
           <div
             ref={editorRef}
@@ -875,7 +879,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
               data-testid="overlay-editor-frame"
               onLoad={syncPreview}
               src={debouncedUrl}
-              title="Overlay-Editor mit echten Spielwerten"
+              title={t("Overlay-Editor mit echten Spielwerten")}
               style={{ width: renderWidth, height: renderHeight, transform: `scale(${canvasPreviewScale})`, transformOrigin: 'top left' }}
               className="pointer-events-none absolute left-0 top-0 block max-w-none border-0 bg-transparent"
             />
@@ -893,22 +897,22 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                     >
                       <button
                         type="button"
-                        aria-label={`${label} verschieben und auswählen`}
+                        aria-label={t('{label} verschieben und auswählen', { label: t(label) })}
                         aria-pressed={visibleSelection.includes(key)}
-                        title={`${label}: ziehen zum Verschieben`}
+                        title={t('{label}: ziehen zum Verschieben', { label: t(label) })}
                         onClick={(event) => { if (event.detail === 0) selectSource(key, event.ctrlKey || event.metaKey || event.shiftKey); }}
                         onPointerDown={(event) => beginSourceDrag(event, key, 'move')}
                         className="absolute inset-0 touch-none cursor-move rounded border-2 border-transparent text-left group-hover/source:border-primary group-has-[:focus-visible]/source:border-primary group-data-[chrome=visible]/source:border-primary"
                       >
-                        <span className="pointer-events-none absolute left-0 bottom-full mb-1 whitespace-nowrap rounded bg-background/95 px-2 py-1 text-xs font-semibold text-primary opacity-0 group-hover/source:opacity-100 group-has-[:focus-visible]/source:opacity-100 group-data-[chrome=visible]/source:opacity-100">{label}</span>
+                        <span className="pointer-events-none absolute left-0 bottom-full mb-1 whitespace-nowrap rounded bg-background/95 px-2 py-1 text-xs font-semibold text-primary opacity-0 group-hover/source:opacity-100 group-has-[:focus-visible]/source:opacity-100 group-data-[chrome=visible]/source:opacity-100">{t(label)}</span>
                       </button>
                       <button
                         type="button"
-                        aria-label={`${label}: Größe ändern`}
+                        aria-label={t('{label}: Größe ändern', { label: t(label) })}
                         onPointerDown={(event) => beginSourceDrag(event, key, 'resize')}
                         onClick={(event) => { if (event.detail === 0) { if (!visibleSelection.includes(key)) selectSource(key); else setSelectedSource(key); } }}
                         className="pointer-events-none absolute bottom-0 right-0 flex h-6 w-6 touch-none cursor-se-resize items-center justify-center rounded-tl border border-primary bg-primary text-black opacity-0 group-hover/source:pointer-events-auto group-hover/source:opacity-100 group-has-[:focus-visible]/source:pointer-events-auto group-has-[:focus-visible]/source:opacity-100 group-data-[chrome=visible]/source:pointer-events-auto group-data-[chrome=visible]/source:opacity-100"
-                        title={`${label}: ziehen zum Vergrößern oder Verkleinern`}
+                        title={t('{label}: ziehen zum Vergrößern oder Verkleinern', { label: t(label) })}
                       ><span aria-hidden="true">↘</span></button>
                     </div>
                   );
@@ -924,42 +928,42 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           </div>
           </div>
           {editorMode === 'advanced' && layout === 'canvas' && groupBounds && <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
-            <span>{visibleSelection.length > 1 ? `${visibleSelection.length} Module` : MODULES.find(({ key }) => key === visibleSelection[0])?.label} · {groupBounds.width} × {groupBounds.height} px</span>
-            <button type="button" onClick={() => centerSelection('x')} className="min-h-9 rounded border border-border px-2 text-primary">Horizontal zentrieren</button>
-            <button type="button" onClick={() => centerSelection('y')} className="min-h-9 rounded border border-border px-2 text-primary">Vertikal zentrieren</button>
-            <span data-testid="overlay-center-status">Horizontal {Math.abs(groupBounds.x + groupBounds.width / 2 - canvasWidth / 2) <= 0.5 ? 'mittig' : 'nicht mittig'} · Vertikal {Math.abs(groupBounds.y + groupBounds.height / 2 - canvasHeight / 2) <= 0.5 ? 'mittig' : 'nicht mittig'}</span>
+            <span>{visibleSelection.length > 1 ? t('{count} Module', { count: visibleSelection.length }) : t(MODULES.find(({ key }) => key === visibleSelection[0])?.label || '')} · {groupBounds.width} × {groupBounds.height} px</span>
+            <button type="button" onClick={() => centerSelection('x')} className="min-h-9 rounded border border-border px-2 text-primary">{t("Horizontal zentrieren")}</button>
+            <button type="button" onClick={() => centerSelection('y')} className="min-h-9 rounded border border-border px-2 text-primary">{t("Vertikal zentrieren")}</button>
+            <span data-testid="overlay-center-status">{t("Horizontal")} {Math.abs(groupBounds.x + groupBounds.width / 2 - canvasWidth / 2) <= 0.5 ? t('mittig') : t('nicht mittig')} · {t('Vertikal')} {Math.abs(groupBounds.y + groupBounds.height / 2 - canvasHeight / 2) <= 0.5 ? t('mittig') : t('nicht mittig')}</span>
           </div>}
-          <p hidden={editorMode === 'simple'} className="text-xs text-text-secondary">Strg/⌘/Shift + Klick: Auswahl ändern. Rahmen auf freier Fläche ziehen, mit Strg/⌘/Shift ergänzen. Alt: ohne Magnet. Größengriff: nur ein Modul. Freier Klick oder Escape: Auswahl aufheben.</p>
+          <p hidden={editorMode === 'simple'} className="text-xs text-text-secondary">{t("Strg/⌘/Shift + Klick: Auswahl ändern. Rahmen auf freier Fläche ziehen, mit Strg/⌘/Shift ergänzen. Alt: ohne Magnet. Größengriff: nur ein Modul. Freier Klick oder Escape: Auswahl aufheben.")}</p>
           </div>
           <div ref={outputHostRef} hidden={editorMode === 'simple'} className="flex min-w-0 flex-col gap-2">
-            <h4 className="text-sm font-semibold text-white">Vorschau · So sieht es im Stream aus</h4>
+            <h4 className="text-sm font-semibold text-white">{t("Vorschau · So sieht es im Stream aus")}</h4>
             <div data-testid="overlay-clean-output" className="relative min-w-0 shrink-0 overflow-hidden rounded-xl ring-1 ring-border" style={{ ...(previewBackdrop === 'checker' ? CHECKER_STYLE : { background: previewBackdrop === 'dark' ? '#090a0d' : '#d8dce1' }), width: canvasPreviewWidth, height: canvasPreviewHeight, marginInline: 'auto' }}>
-              <iframe ref={outputIframeRef} data-testid="overlay-output-frame" onLoad={syncPreview} src={debouncedUrl} title="Overlay-Live-Ausgabe ohne Bearbeitungshilfen" className="pointer-events-none absolute left-0 top-0 block max-w-none border-0 bg-transparent" style={{ width: renderWidth, height: renderHeight, transform: `scale(${canvasPreviewScale})`, transformOrigin: 'top left' }} />
+              <iframe ref={outputIframeRef} data-testid="overlay-output-frame" onLoad={syncPreview} src={debouncedUrl} title={t("Overlay-Live-Ausgabe ohne Bearbeitungshilfen")} className="pointer-events-none absolute left-0 top-0 block max-w-none border-0 bg-transparent" style={{ width: renderWidth, height: renderHeight, transform: `scale(${canvasPreviewScale})`, transformOrigin: 'top left' }} />
             </div>
-            <p className="text-xs text-text-secondary">Echte Spielwerte, laufend aktualisiert. Ohne verknüpftes Steam-Konto bleiben die Werte leer.</p>
+            <p className="text-xs text-text-secondary">{t("Echte Spielwerte, laufend aktualisiert. Ohne verknüpftes Steam-Konto bleiben die Werte leer.")}</p>
           </div>
           </div>
         </div>
 
         <details hidden={expandedPreview} open={editorMode === 'simple' || undefined} className={`min-w-0 rounded-xl border border-border p-3 ${editorMode === 'advanced' ? 'lg:w-[calc(50%-0.5rem)]' : ''}`}>
-        <summary className="cursor-pointer text-sm font-semibold text-primary">Optionen · Module, Farben und OBS-Adresse</summary>
+        <summary className="cursor-pointer text-sm font-semibold text-primary">{t("Optionen · Module, Farben und OBS-Adresse")}</summary>
         <div className="mt-3 min-w-0 space-y-4">
           <button hidden={editorMode === 'simple'} type="button" aria-pressed={layout === 'canvas'} onClick={() => setLayout('canvas')} className="min-h-11 w-full rounded-lg border border-primary bg-primary/15 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/25">
-            Module frei bearbeiten
+            {t("Module frei bearbeiten")}
           </button>
           {editorMode === 'advanced' && layout === 'canvas' && hasSelection && (
               <div className="rounded-lg border border-border bg-background/60 p-3">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <h3 className="text-sm font-semibold text-white">{visibleSelection.length > 1 ? 'Aktive Quelle der Gruppe' : 'Ausgewählte Quelle'}: {selectedLabel}</h3>
-                    <p className="text-xs text-text-secondary">X/Y = Position · Breite/Höhe = Größe{visibleSelection.length > 1 ? ' · Gilt nur für die aktive Quelle, die Gruppe bleibt ausgewählt.' : ''}</p>
+                    <h3 className="text-sm font-semibold text-white">{visibleSelection.length > 1 ? t('Aktive Quelle der Gruppe') : t('Ausgewählte Quelle')}: {t(selectedLabel)}</h3>
+                    <p className="text-xs text-text-secondary">{t("X/Y = Position · Breite/Höhe = Größe")}{visibleSelection.length > 1 ? t(' · Gilt nur für die aktive Quelle, die Gruppe bleibt ausgewählt.') : ''}</p>
                   </div>
-                  <button type="button" onClick={() => resetSource(selectedSource)} className="min-h-10 rounded-lg border border-border px-3 text-xs font-semibold text-text-secondary hover:border-primary hover:text-primary">Quelle zurücksetzen</button>
+                  <button type="button" onClick={() => resetSource(selectedSource)} className="min-h-10 rounded-lg border border-border px-3 text-xs font-semibold text-text-secondary hover:border-primary hover:text-primary">{t("Quelle zurücksetzen")}</button>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   {(['x', 'y', 'width', 'height'] as const).map((field) => (
                     <label key={field} className="text-xs font-semibold uppercase tracking-wider text-text-secondary">
-                      {field === 'width' ? 'Breite' : field === 'height' ? 'Höhe' : field.toUpperCase()}
+                      {field === 'width' ? t('Breite') : field === 'height' ? t('Höhe') : field.toUpperCase()}
                       <input type="number" min={field === 'width' ? 120 : field === 'height' ? 48 : 0} max={field === 'width' ? canvasWidth - selected.x : field === 'height' ? canvasHeight - selected.y : field === 'x' ? canvasWidth - selected.width : canvasHeight - selected.height} step={1} value={selectedDraft[field]} onFocus={() => setEditingField({ key: selectedSource, field })} onChange={(event) => setSourceDrafts(current => ({ ...current, [selectedSource]: { ...current[selectedSource], [field]: event.target.value } }))} onBlur={() => commitSourceField(selectedSource, field)} className="mt-1 block w-full rounded-lg border border-border bg-background px-2 py-2 font-mono text-sm font-normal normal-case tracking-normal text-white" />
                     </label>
                   ))}
@@ -970,7 +974,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
               <label htmlFor="overlay-theme" className="block text-sm font-semibold text-white">
-                Stil
+                {t("Stil")}
               </label>
               <select
                 id="overlay-theme"
@@ -980,7 +984,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
               >
                 {THEMES.map(({ value, label }) => (
                   <option key={value} value={value}>
-                    {label}
+                    {t(label)}
                   </option>
                 ))}
               </select>
@@ -998,7 +1002,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
               >
                 {LAYOUTS.map(({ value, label }) => (
                   <option key={value} value={value}>
-                    {label}
+                    {t(label)}
                   </option>
                 ))}
               </select>
@@ -1006,7 +1010,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
 
             <div className="space-y-2">
               <label htmlFor="overlay-mode" className="block text-sm font-semibold text-white">
-                Spielmodus
+                {t("Spielmodus")}
               </label>
               <select
                 id="overlay-mode"
@@ -1016,7 +1020,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
               >
                 {MODES.map(({ value, label }) => (
                   <option key={value} value={value}>
-                    {label}
+                    {t(label)}
                   </option>
                 ))}
               </select>
@@ -1024,24 +1028,24 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           </div>
 
           <fieldset hidden={editorMode === 'simple'} className="space-y-3">
-            <legend className="text-sm font-semibold text-white">Deine Farben</legend>
+            <legend className="text-sm font-semibold text-white">{t("Deine Farben")}</legend>
             <div className="flex flex-wrap gap-2">
               {[
                 { name: 'Nachtgold', accent: '#d6b56c', background: '#0d0f14', text: '#f4f7fb' },
                 { name: 'Eisblau', accent: '#67d8f3', background: '#101922', text: '#f3faff' },
                 { name: 'Flieder', accent: '#bca1ff', background: '#181322', text: '#f8f3ff' },
                 { name: 'Papier', accent: '#765321', background: '#f5f3ef', text: '#17191f' },
-              ].map(preset => <button key={preset.name} type="button" onClick={() => { setAccent(preset.accent); setBackground(preset.background); setText(preset.text); setTheme(preset.name === 'Papier' ? 'light' : 'dark'); }} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border bg-background/60 px-3 text-sm text-white hover:border-primary focus-visible:outline-2 focus-visible:outline-primary"><span className="h-3 w-3 rounded-full" style={{ background: preset.accent }} />{preset.name}</button>)}
+              ].map(preset => <button key={preset.name} type="button" onClick={() => { setAccent(preset.accent); setBackground(preset.background); setText(preset.text); setTheme(preset.name === 'Papier' ? 'light' : 'dark'); }} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border bg-background/60 px-3 text-sm text-white hover:border-primary focus-visible:outline-2 focus-visible:outline-primary"><span className="h-3 w-3 rounded-full" style={{ background: preset.accent }} />{t(preset.name)}</button>)}
             </div>
             <div className="grid gap-2">
-              {[{ key: 'accent', label: 'Akzent', value: accent, change: setAccent }, { key: 'background', label: 'Hintergrund', value: background, change: setBackground }, { key: 'text', label: 'Schrift', value: text, change: setText }].map(color => <label key={color.key} className="flex min-h-16 items-center gap-3 rounded-xl border border-border bg-background/60 p-3"><input aria-label={color.label} type="color" value={color.value} onChange={event => color.change(event.target.value)} className="h-9 w-10 cursor-pointer border-0 bg-transparent" /><span className="text-sm text-white">{color.label}<span className="block font-mono text-xs text-text-secondary">{color.value.toUpperCase()}</span></span></label>)}
+              {[{ key: 'accent', label: 'Akzent', value: accent, change: setAccent }, { key: 'background', label: 'Hintergrund', value: background, change: setBackground }, { key: 'text', label: 'Schrift', value: text, change: setText }].map(color => <label key={color.key} className="flex min-h-16 items-center gap-3 rounded-xl border border-border bg-background/60 p-3"><input aria-label={t(color.label)} type="color" value={color.value} onChange={event => color.change(event.target.value)} className="h-9 w-10 cursor-pointer border-0 bg-transparent" /><span className="text-sm text-white">{t(color.label)}<span className="block font-mono text-xs text-text-secondary">{color.value.toUpperCase()}</span></span></label>)}
             </div>
-            <label className="block text-sm text-white" htmlFor="overlay-radius">Rundung <span className="text-text-secondary">{radius} px</span><input id="overlay-radius" type="range" min={0} max={32} value={radius} onChange={event => setRadius(Number(event.target.value))} className="mt-2 block w-full accent-primary" /></label>
+            <label className="block text-sm text-white" htmlFor="overlay-radius">{t("Rundung")} <span className="text-text-secondary">{radius} px</span><input id="overlay-radius" type="range" min={0} max={32} value={radius} onChange={event => setRadius(Number(event.target.value))} className="mt-2 block w-full accent-primary" /></label>
           </fieldset>
 
           {/* Module */}
           <fieldset className="space-y-3">
-            <legend className="text-sm font-semibold text-white">Inhalte</legend>
+            <legend className="text-sm font-semibold text-white">{t("Inhalte")}</legend>
             <div className="grid gap-2">
               {MODULES.map(({ key, label }) => {
                 const enabled = modules[key];
@@ -1050,12 +1054,12 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                     key={key}
                     className="soft-elevate flex items-center justify-between gap-3 rounded-xl border border-border bg-background/60 p-3"
                   >
-                    <span className="text-sm font-medium text-white">{label}</span>
+                    <span className="text-sm font-medium text-white">{t(label)}</span>
                     <button
                       type="button"
                       role="switch"
                       aria-checked={enabled}
-                      aria-label={label}
+                      aria-label={t(label)}
                       onClick={() => toggleModule(key)}
                       className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
                         enabled ? 'bg-primary' : 'bg-border'
@@ -1080,7 +1084,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                 htmlFor="overlay-recent-n"
                 className="flex items-center justify-between text-sm font-semibold text-white"
               >
-                <span>Anzahl im Verlauf</span>
+                <span>{t("Anzahl im Verlauf")}</span>
                 <span className="text-text-secondary">{recentN}</span>
               </label>
               <input
@@ -1101,7 +1105,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                 htmlFor="overlay-opacity"
                 className="flex items-center justify-between text-sm font-semibold text-white"
               >
-                <span>Hintergrund-Deckkraft</span>
+                <span>{t("Hintergrund-Deckkraft")}</span>
                 <span className="text-text-secondary">{opacity}%</span>
               </label>
               <input
@@ -1119,31 +1123,31 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
 
           {editorMode === 'advanced' && layout === 'canvas' && (
             <fieldset className="space-y-4 rounded-xl border border-primary/30 bg-background/50 p-4">
-              <legend className="px-1 text-sm font-semibold text-white">OBS-Leinwand und Quellen</legend>
+              <legend className="px-1 text-sm font-semibold text-white">{t("OBS-Leinwand und Quellen")}</legend>
               <p className="text-sm leading-relaxed text-text-secondary">
-                Stell hier deine OBS-Leinwand ein. Zieh die Quellen in der Vorschau an die richtige Stelle oder ändere ihre Breite und Höhe ganz genau.
+                {t("Stell hier deine OBS-Leinwand ein. Zieh die Quellen in der Vorschau an die richtige Stelle oder ändere ihre Breite und Höhe ganz genau.")}
               </p>
 
               <div className="flex flex-wrap gap-2">
                 {CANVAS_PRESETS.map((preset) => (
                   <button
-                    key={preset.label}
+                    key={t(preset.label)}
                     type="button"
                     onClick={() => resizeCanvas(preset.width, preset.height)}
                     className="min-h-10 rounded-lg border border-border bg-background/70 px-3 text-sm font-semibold text-white transition-colors hover:border-primary hover:text-primary"
                   >
-                    {preset.label} · {preset.width} × {preset.height}
+                    {t(preset.label)} · {preset.width} × {preset.height}
                   </button>
                 ))}
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <label className="text-sm font-medium text-white">
-                  Leinwand-Breite
+                  {t("Leinwand-Breite")}
                   <input type="number" min={320} max={3840} step={1} value={canvasWidthDraft} onFocus={() => setEditingCanvasDimension('width')} onChange={(event) => setCanvasWidthDraft(event.target.value)} onBlur={() => commitCanvasDimension('width')} className="mt-1 block w-full rounded-lg border border-border bg-background/70 px-3 py-2 font-mono text-sm text-white" />
                 </label>
                 <label className="text-sm font-medium text-white">
-                  Leinwand-Höhe
+                  {t("Leinwand-Höhe")}
                   <input type="number" min={180} max={2160} step={1} value={canvasHeightDraft} onFocus={() => setEditingCanvasDimension('height')} onChange={(event) => setCanvasHeightDraft(event.target.value)} onBlur={() => commitCanvasDimension('height')} className="mt-1 block w-full rounded-lg border border-border bg-background/70 px-3 py-2 font-mono text-sm text-white" />
                 </label>
               </div>
@@ -1152,8 +1156,8 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
 
               <div>
                 <div className="mb-2 flex items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold text-white">Quellen</h3>
-                  <button type="button" onClick={resetCanvas} className="text-xs font-semibold text-text-secondary underline underline-offset-4 hover:text-primary">Leinwand zurücksetzen</button>
+                  <h3 className="text-sm font-semibold text-white">{t("Quellen")}</h3>
+                  <button type="button" onClick={resetCanvas} className="text-xs font-semibold text-text-secondary underline underline-offset-4 hover:text-primary">{t("Leinwand zurücksetzen")}</button>
                 </div>
                 <div className="grid gap-2">
                   {MODULES.map(({ key, label }) => {
@@ -1163,12 +1167,12 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                         key={key}
                         type="button"
                         disabled={!modules[key]}
-                        title={!modules[key] ? 'Diese Quelle zuerst unter Inhalte einschalten.' : undefined}
+                        title={!modules[key] ? t('Diese Quelle zuerst unter Inhalte einschalten.') : undefined}
                         aria-pressed={visibleSelection.includes(key)}
                         onClick={(event) => selectSource(key, event.ctrlKey || event.metaKey || event.shiftKey)}
                         className={`flex min-h-11 items-center justify-between gap-3 rounded-lg border px-3 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${visibleSelection.includes(key) ? 'border-primary bg-primary/10 text-white' : 'border-border bg-background/50 text-text-secondary hover:border-primary/60'}`}
                       >
-                        <span className="min-w-0 truncate">{label}</span>
+                        <span className="min-w-0 truncate">{t(label)}</span>
                         <span className="shrink-0 font-mono text-xs">{Math.round(source.width)} × {Math.round(source.height)}</span>
                       </button>
                     );
@@ -1181,7 +1185,7 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
           {/* URL */}
           <div className="space-y-2">
             <label htmlFor="overlay-url" className="block text-sm font-semibold text-white">
-              Deine Overlay-URL
+              {t("Deine Overlay-URL")}
             </label>
             <div className="flex flex-col gap-2">
               <input
@@ -1196,33 +1200,33 @@ export function OverlayBuilderSection({ login }: OverlayBuilderSectionProps) {
                 className="inline-flex items-center justify-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2 text-sm font-semibold text-primary transition-colors hover:border-primary/60 hover:bg-primary/20"
               >
                 {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                {copied ? 'Kopiert!' : 'URL kopieren'}
+                {copied ? t('Kopiert!') : t('URL kopieren')}
               </button>
             </div>
           </div>
 
-          {copyFailed && <p role="alert" className="text-sm text-warning">Die Adresse konnte nicht kopiert werden. Kopiere sie aus dem markierten Feld und übernimm sie in OBS.</p>}
+          {copyFailed && <p role="alert" className="text-sm text-warning">{t("Die Adresse konnte nicht kopiert werden. Kopiere sie aus dem markierten Feld und übernimm sie in OBS.")}</p>}
             <div className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/25 bg-primary/5 px-3 py-2">
               <button type="button" onClick={saveLayout} className="min-h-11 rounded-lg border border-primary/50 bg-primary/15 px-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/25">
-                {saved ? 'Layout gespeichert' : 'Layout speichern'}
+                {saved ? t('Layout gespeichert') : t('Layout speichern')}
               </button>
-              <span className="text-xs text-text-secondary">Dein Layout wird in diesem Browser gemerkt. Die fertige URL kannst du danach in OBS einfügen.</span>
+              <span className="text-xs text-text-secondary">{t("Dein Layout wird in diesem Browser gemerkt. Die fertige URL kannst du danach in OBS einfügen.")}</span>
             </div>
-          {saveFailed && <p role="alert" className="text-sm text-warning">Das Layout konnte in diesem Browser nicht gespeichert werden.</p>}
-          {unsaved && <button type="button" onClick={() => setRetainedUrl(overlayUrl)} className="min-h-11 text-sm text-primary underline underline-offset-4">Adresse in OBS übernommen</button>}
+          {saveFailed && <p role="alert" className="text-sm text-warning">{t("Das Layout konnte in diesem Browser nicht gespeichert werden.")}</p>}
+          {unsaved && <button type="button" onClick={() => setRetainedUrl(overlayUrl)} className="min-h-11 text-sm text-primary underline underline-offset-4">{t("Adresse in OBS übernommen")}</button>}
 
           {/* OBS */}
           <div className="space-y-2">
-            <h3 className="text-sm font-semibold text-white">So fügst du es in OBS ein</h3>
+            <h3 className="text-sm font-semibold text-white">{t("So fügst du es in OBS ein")}</h3>
             <ol className="list-decimal space-y-1.5 pl-5 text-sm text-text-secondary">
-              <li>Klick in OBS unten bei „Quellen" auf das Plus und wähle „Browser".</li>
-              <li>Vergib einen Namen (z. B. „Deadlock-Stats") und bestätige mit OK.</li>
-              <li>Füge die obige Overlay-URL in das Feld „URL" ein.</li>
-              <li>{layout === 'canvas' ? `Stell die Browser-Quelle auf ${canvasWidth} × ${canvasHeight}, passend zur Leinwand oben.` : 'Stell die Größe der Browser-Quelle passend zum Layout ein (siehe Empfehlung unten).'}</li>
-              <li>Zieh die Quelle an die gewünschte Stelle — sie aktualisiert sich automatisch.</li>
+              <li>{t("Klick in OBS unten bei „Quellen\" auf das Plus und wähle „Browser\".")}</li>
+              <li>{t("Vergib einen Namen (z. B. „Deadlock-Stats\") und bestätige mit OK.")}</li>
+              <li>{t("Füge die obige Overlay-URL in das Feld „URL\" ein.")}</li>
+              <li>{layout === 'canvas' ? t('Stell die Browser-Quelle auf {width} × {height}, passend zur Leinwand oben.', { width: canvasWidth, height: canvasHeight }) : t('Stell die Größe der Browser-Quelle passend zum Layout ein (siehe Empfehlung unten).')}</li>
+              <li>{t("Zieh die Quelle an die gewünschte Stelle — sie aktualisiert sich automatisch.")}</li>
             </ol>
             <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background/60 px-3 py-2 text-sm">
-              <span className="font-medium text-text-secondary">Empfohlene OBS-Größe</span>
+              <span className="font-medium text-text-secondary">{t("Empfohlene OBS-Größe")}</span>
               <span className="font-mono font-semibold text-white">{recommendedSize}</span>
             </div>
           </div>
