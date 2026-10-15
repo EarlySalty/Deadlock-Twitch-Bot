@@ -307,23 +307,23 @@ export function ProfileEditor({
   return (
     <div className="w-full space-y-6">
       <section className={panel}>
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex min-w-0 items-center gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-4 xl:flex-nowrap">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
             <span title={t("Wird automatisch aus deinem Twitch-Konto übernommen.")}>
               <Avatar url={effectiveAvatar} login={data.login} size="small" />
             </span>
             <div className="min-w-0">
               <h2 className="display-font text-lg font-bold text-white">{t("Mein öffentliches Profil")}</h2>
               <p className="text-xs text-text-secondary">@{data.login}</p>
-              <div className="break-all text-xs text-text-secondary">
+              <div className="truncate text-xs text-text-secondary">
                 {data.active && savedPublished ? (
                   <a href={data.public_path} target="_blank" rel="noopener noreferrer" className="hover:text-primary">deutsche-deadlock-community.de{data.public_path} ↗</a>
                 ) : <span>deutsche-deadlock-community.de{data.public_path}</span>}
               </div>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="flex cursor-pointer flex-wrap items-center gap-2 text-sm font-semibold text-white">
+          <div className="flex flex-wrap items-center gap-3 xl:shrink-0 xl:flex-nowrap">
+            <label className="flex cursor-pointer items-center gap-2 whitespace-nowrap text-sm font-semibold text-white">
               <input
                 className="h-5 w-5 accent-primary"
                 type="checkbox"
