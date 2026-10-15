@@ -73,13 +73,15 @@ pub fn raid_scope_allows(
     source_guilds: &[(i64, bool)],
     home: i64,
     target_guilds: &[(i64, bool)],
+    same_language: bool,
 ) -> bool {
     source_guilds
         .iter()
         .any(|(source, _)| target_guilds.iter().any(|(target, _)| source == target))
-        || (source_guilds
-            .iter()
-            .any(|(guild, enabled)| *guild == home && *enabled)
+        || (same_language
+            && source_guilds
+                .iter()
+                .any(|(guild, enabled)| *guild == home && *enabled)
             && target_guilds.iter().any(|(_, enabled)| *enabled))
 }
 
@@ -101,21 +103,25 @@ mod tests {
     }
 
     #[test]
-    fn raid_switch_requires_both_sides_only_across_servers() {
-        assert!(raid_scope_allows(&[(1, false)], 1, &[(1, false)]));
-        assert!(!raid_scope_allows(&[(1, false)], 1, &[(2, true)]));
-        assert!(!raid_scope_allows(&[(1, true)], 1, &[(2, false)]));
-        assert!(raid_scope_allows(&[(1, true)], 1, &[(2, true)]));
+    fn shared_server_ignores_language_and_cross_server_needs_language_and_both_switches() {
+        assert!(raid_scope_allows(&[(1, false)], 1, &[(1, false)], true));
+        assert!(raid_scope_allows(&[(1, false)], 1, &[(1, false)], false));
+        assert!(!raid_scope_allows(&[(1, false)], 1, &[(2, true)], true));
+        assert!(!raid_scope_allows(&[(1, true)], 1, &[(2, false)], true));
+        assert!(raid_scope_allows(&[(1, true)], 1, &[(2, true)], true));
+        assert!(!raid_scope_allows(&[(1, true)], 1, &[(2, true)], false));
         assert!(raid_scope_allows(
             &[(1, false), (2, false)],
             1,
-            &[(2, false)]
+            &[(2, false)],
+            false
         ));
         assert!(!raid_scope_allows(
             &[(1, false), (2, true)],
             1,
-            &[(3, true)]
+            &[(3, true)],
+            true
         ));
-        assert!(!raid_scope_allows(&[], 1, &[(2, true)]));
+        assert!(!raid_scope_allows(&[], 1, &[(2, true)], true));
     }
 }

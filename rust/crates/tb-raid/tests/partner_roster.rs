@@ -36,7 +36,7 @@ async fn roster_preserves_german_home_partners_and_excludes_source() {
 }
 
 #[tokio::test]
-async fn pool_filters_language_and_honors_both_cross_server_switches() {
+async fn shared_server_ignores_language_and_cross_server_needs_language_and_both_switches() {
     let db = postgres::TestPostgres::start().await;
     guilds::schema(&db.pool).await;
     for id in ["100", "200", "300", "400", "500"] {
@@ -65,13 +65,13 @@ async fn pool_filters_language_and_honors_both_cross_server_switches() {
         .unwrap();
     assert_eq!(ids(&store, "100").await, ["200", "500"]);
     sqlx::query("UPDATE twitch_streamer_identities SET broadcaster_language='en-us' WHERE twitch_user_id='100'").execute(&db.pool).await.unwrap();
-    assert!(ids(&store, "100").await.is_empty());
+    assert_eq!(ids(&store, "100").await, ["200", "500"]);
     sqlx::query("UPDATE discord_guilds SET cross_server_raids=true WHERE guild_id=$1")
         .bind(home)
         .execute(&db.pool)
         .await
         .unwrap();
-    assert_eq!(ids(&store, "100").await, ["400"]);
+    assert_eq!(ids(&store, "100").await, ["200", "400", "500"]);
     sqlx::query("UPDATE streamer_guilds SET active=false WHERE twitch_user_id='100'")
         .execute(&db.pool)
         .await

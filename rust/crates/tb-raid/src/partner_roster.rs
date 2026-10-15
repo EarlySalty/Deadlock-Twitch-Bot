@@ -88,9 +88,7 @@ impl PartnerRosterStore {
         else {
             return Ok(Vec::new());
         };
-        let Some(source_language) = self.source_language(source_user_id).await? else {
-            return Ok(Vec::new());
-        };
+        let source_language = self.source_language(source_user_id).await?;
         let source_guilds: Vec<(i64, bool)> = sqlx::query_as(
             "SELECT sg.guild_id, g.cross_server_raids FROM streamer_guilds sg JOIN discord_guilds g USING(guild_id)
              WHERE sg.twitch_user_id=$1 AND sg.active AND g.status='active' AND g.removed_at IS NULL")
@@ -110,19 +108,23 @@ impl PartnerRosterStore {
              WHERE sg.active AND g.status='active' AND g.removed_at IS NULL
                AND i.twitch_user_id <> $1 AND i.twitch_login IS NOT NULL")
             .bind(source_user_id).bind(community).fetch_all(&self.pool).await?;
-        let mut grouped: HashMap<String, (String, Vec<(i64, bool)>)> = HashMap::new();
+        let mut grouped: HashMap<String, (String, bool, Vec<(i64, bool)>)> = HashMap::new();
         for (login, id, language, guild, enabled) in candidates {
-            if tb_db::guild_membership::language_group(&language).as_deref()
-                != Some(source_language.as_str())
-            {
-                continue;
-            }
-            let entry = grouped.entry(id).or_insert_with(|| (login, Vec::new()));
-            entry.1.push((guild, enabled));
+            let same_language = source_language.is_some()
+                && tb_db::guild_membership::language_group(&language) == source_language;
+            let entry = grouped
+                .entry(id)
+                .or_insert_with(|| (login, same_language, Vec::new()));
+            entry.2.push((guild, enabled));
         }
         let mut rows = Vec::new();
-        for (id, (login, guilds)) in grouped {
-            if tb_db::guild_membership::raid_scope_allows(&source_guilds, home, &guilds) {
+        for (id, (login, same_language, guilds)) in grouped {
+            if tb_db::guild_membership::raid_scope_allows(
+                &source_guilds,
+                home,
+                &guilds,
+                same_language,
+            ) {
                 rows.push(RosterRow {
                     twitch_login: Some(login),
                     twitch_user_id: Some(id),
