@@ -60,3 +60,18 @@ export async function rollbackSkill(skillId: string, body: RollbackChange) {
   }
   return data;
 }
+
+function requireExternalConsent(value: unknown): { enabled: boolean } {
+  if (!value || typeof value !== 'object' || !('enabled' in value) || typeof value.enabled !== 'boolean') throw new Error('Die Freigabe konnte nicht bestätigt werden. Bitte lade den Stand neu.');
+  return { enabled: value.enabled };
+}
+
+export async function fetchExternalConsent(signal?: AbortSignal) {
+  return requireExternalConsent(await admin<unknown>('/social-ai/external-consent', { cache: 'no-store', signal }));
+}
+
+export async function saveExternalConsent(enabled: boolean) {
+  const data = requireExternalConsent(await postAdminJson<unknown, { enabled: boolean }>('/social-ai/external-consent', { enabled }, 'PUT'));
+  if (data.enabled !== enabled) throw new Error('Die Freigabe konnte nicht bestätigt werden. Bitte lade den Stand neu.');
+  return data;
+}

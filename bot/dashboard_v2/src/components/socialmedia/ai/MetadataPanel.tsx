@@ -71,6 +71,7 @@ export function MetadataPanel({ channel, videoId, disabled = false, onEditingCha
   const key = ['social-ai', 'metadata', channel, videoId] as const;
   const metadata = useQuery({ queryKey: key, queryFn: ({ signal }) => fetchAiVersionMetadata(channel, videoId, signal), retry: false, refetchOnWindowFocus: false });
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [mode, setMode] = useState<{ videoId: number; channel: string; shared: boolean } | null>(null);
   const save = useMutation({
     mutationFn: (copy: Record<AiCopyPlatform, AiPlatformCopy>) => saveAiVersionMetadata(channel, videoId, copy),
     onSuccess: (value) => { client.setQueryData(key, value); setDraft(null); },
@@ -81,33 +82,47 @@ export function MetadataPanel({ channel, videoId, disabled = false, onEditingCha
   }, [draft, save.isPending, save.isError, onEditingChange]);
   if (metadata.isPending) return <p role="status">{t("Titel und Beschreibungen werden geladen…")}</p>;
   if (metadata.isError) return <div className="social-ai-alert" role="alert"><div><p>{t("Titel und Beschreibungen konnten nicht geladen werden.")}</p><button type="button" className="studio-button" onClick={() => { void metadata.refetch(); }}>{t("Erneut laden")}</button></div></div>;
-  const current = draft ?? toDraft(metadata.data);
+  const stored = toDraft(metadata.data);
+  const current = draft ?? stored;
+  const shared = mode?.videoId === videoId && mode.channel === channel ? mode.shared : AI_COPY_PLATFORMS.every((platform) => JSON.stringify(stored[platform]) === JSON.stringify(stored.youtube));
   const copy = toCopy(current);
   const issues = AI_COPY_PLATFORMS.map((platform) => ({ platform, list: copyIssues(platform, copy[platform]) }));
   const valid = issues.every((entry) => entry.list.length === 0);
   const editable = metadata.data.editable && !save.isPending && !save.isError && !metadata.isFetching && !disabled;
   const update = (platform: AiCopyPlatform, field: keyof Draft[AiCopyPlatform], value: string) => {
     save.reset();
-    setDraft({ ...current, [platform]: { ...current[platform], [field]: value } });
+    const entry = { ...current[platform], [field]: value };
+    setDraft(shared ? { youtube: { ...entry }, tiktok: { ...entry }, instagram: { ...entry } } : { ...current, [platform]: entry });
   };
   return <form className="social-ai-metadata" data-unsaved={draft !== null || save.isPending || save.isError ? 'true' : undefined} data-saving={save.isPending ? 'true' : undefined} aria-label={t("Titel, Beschreibung und Hashtags")} onSubmit={(event) => { event.preventDefault(); if (editable && valid && draft) save.mutate(copy); }}>
     <h4>{t("Titel, Beschreibung und Hashtags")}</h4>
     <p>{metadata.data.editable ? t("Diese Texte werden beim Veröffentlichen dieser Fassung verwendet. Hashtags trennst du mit Leerzeichen.") : t("Diese Fassung ist nicht zur Bearbeitung ihrer Veröffentlichungstexte freigegeben.")}</p>
-    {AI_COPY_PLATFORMS.map((platform) => {
+    <fieldset disabled={!editable}>
+      <legend>{t("Texte für die Plattformen")}</legend>
+      <label><input type="radio" name={`${formId}-mode`} checked={shared} onChange={() => {
+        setMode({ videoId, channel, shared: true });
+        setDraft({ youtube: { ...current.youtube }, tiktok: { ...current.youtube }, instagram: { ...current.youtube } });
+        save.reset();
+      }} />{t("Für alle Plattformen gleich")}</label>
+      <label><input type="radio" name={`${formId}-mode`} checked={!shared} onChange={() => { setMode({ videoId, channel, shared: false }); }} />{t("Je Plattform getrennt")}</label>
+      {!shared && <p>{t("Beim Zusammenführen werden die YouTube-Texte für alle Plattformen übernommen.")}</p>}
+    </fieldset>
+    {(shared ? ['youtube'] as const : AI_COPY_PLATFORMS).map((platform) => {
       const id = `${formId}-${platform}`;
-      const platformIssues = issues.find((entry) => entry.platform === platform)?.list ?? [];
+      const platformIssues = shared ? [...new Set(issues.flatMap((entry) => entry.list))] : issues.find((entry) => entry.platform === platform)?.list ?? [];
       return <fieldset key={platform} disabled={!editable}>
-        <legend>{labels[platform]}</legend>
+        <legend>{shared ? t("Alle Plattformen") : labels[platform]}</legend>
         {platform === 'instagram' ? <p>{t("Instagram verwendet keinen Titel, nur Beschreibung und Hashtags.")}</p> : <><label htmlFor={`${id}-title`}>{t("Titel")}</label><input id={`${id}-title`} type="text" value={current[platform].title} onChange={(event) => update(platform, 'title', event.target.value)} /></>}
         <label htmlFor={`${id}-description`}>{t("Beschreibung")}</label>
         <textarea id={`${id}-description`} rows={3} value={current[platform].description} onChange={(event) => update(platform, 'description', event.target.value)} />
         <label htmlFor={`${id}-hashtags`}>{t("Hashtags")}</label>
         <input id={`${id}-hashtags`} type="text" value={current[platform].hashtags} onChange={(event) => update(platform, 'hashtags', event.target.value)} placeholder="#deadlock #clips" />
-        <small>{usage(platform, copy[platform], t)}</small>
+        {(shared ? AI_COPY_PLATFORMS : [platform]).map((target) => <small key={target} style={{ display: 'block' }}>{labels[target]}: {usage(target, copy[target], t)}</small>)}
+        {(shared || platform === 'youtube') && <small>{t("YouTube: Beschreibung und Hashtags einschließlich #Shorts höchstens 5000 Bytes.")}</small>}
         {platformIssues.map((issue) => <p key={issue} className="social-ai-caution" role="alert">{t(issue)}</p>)}
       </fieldset>;
     })}
-    {(metadata.data.editable || draft) && <div className="social-ai-actions">{metadata.data.editable && <button type="submit" className="studio-primary" disabled={!editable || !valid || !draft}>{save.isPending ? t("Texte werden gespeichert…") : t("Texte speichern")}</button>}{draft && <button type="button" className="studio-button" disabled={save.isPending || save.isError || metadata.isFetching} onClick={() => { if (!save.isPending && !save.isError && !metadata.isFetching) { save.reset(); setDraft(null); } }}>{t("Änderungen verwerfen")}</button>}</div>}
+    {(metadata.data.editable || draft) && <div className="social-ai-actions">{metadata.data.editable && <button type="submit" className="studio-primary" disabled={!editable || !valid || !draft}>{save.isPending ? t("Texte werden gespeichert…") : t("Texte speichern")}</button>}{draft && <button type="button" className="studio-button" disabled={save.isPending || save.isError || metadata.isFetching} onClick={() => { if (!save.isPending && !save.isError && !metadata.isFetching) { save.reset(); setDraft(null); setMode(null); } }}>{t("Änderungen verwerfen")}</button>}</div>}
     {save.isSuccess && <p role="status">{t("Titel, Beschreibung und Hashtags sind gespeichert.")}</p>}
     {save.isError && <div className="social-ai-caution" role="alert"><p>{language === 'en' ? editorErrorExplanation(save.error, t) : save.error instanceof Error ? save.error.message : t("Die Texte konnten nicht gespeichert werden.")} {t("Lade den gespeicherten Stand neu, bevor du erneut speicherst oder Änderungen verwirfst.")}</p><button type="button" className="studio-button" disabled={metadata.isFetching} onClick={async () => { const result = await metadata.refetch(); if (result.isSuccess) save.reset(); }}>{t("Gespeicherte Texte neu laden")}</button></div>}
   </form>;
