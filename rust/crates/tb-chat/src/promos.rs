@@ -165,20 +165,10 @@ const PARTNER_STREAMER_PITCH_ENABLED: bool = false;
 const PITCH_MAX_CONCURRENT: usize = 8;
 const PROMO_MAX_CONCURRENT: usize = 16;
 const PROMO_DUE_CONCURRENCY: usize = 4;
-/// Fallback-Discord-Invite (constants.py: PROMO_DISCORD_INVITE).
 #[cfg(test)]
 const DEFAULT_PROMO_DISCORD_INVITE: &str = "https://discord.gg/z5TfVHuQq2";
 /// Partner-Seite für Streamer-Pitches in den Promo-Texten.
 pub const STREAMER_PARTNER_URL: &str = "https://deutsche-deadlock-community.de/streamer";
-
-/// Liefert den konfigurierten globalen Promo-Invite oder den Python-paritären
-/// Default. Ein fehlendes/leeres Secret darf keinen leeren `{invite}`-Text
-/// erzeugen.
-#[cfg(test)]
-fn promo_invite_fallback(configured: Option<&str>) -> String {
-    let configured = configured.map(str::trim).filter(|value| !value.is_empty());
-    configured.unwrap_or_default().to_string()
-}
 
 fn render_promo_template(template: &str, invite: &str) -> Option<String> {
     let chars: Vec<char> = template.chars().collect();
@@ -3491,17 +3481,6 @@ mod tests {
     #[test]
     fn periodischer_promo_text_leer_gibt_keinen_text() {
         assert!(crate::promo_pitch::finalize_channel_promo("", "https://discord.gg/x").is_none());
-    }
-
-    #[test]
-    fn promo_invite_fallback_nutzt_default_bei_fehlender_oder_leerer_config() {
-        assert_eq!(promo_invite_fallback(None), "");
-        assert_eq!(promo_invite_fallback(Some("")), "");
-        assert_eq!(promo_invite_fallback(Some("   ")), "");
-        assert_eq!(
-            promo_invite_fallback(Some(" https://discord.gg/custom ")),
-            "https://discord.gg/custom"
-        );
     }
 
     #[test]

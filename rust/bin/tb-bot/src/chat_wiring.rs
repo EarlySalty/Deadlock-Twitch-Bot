@@ -2850,6 +2850,15 @@ impl InviteResolver for DbInviteResolver {
 }
 
 impl DbInviteResolver {
+    async fn invite_channel(&self, home: i64, community: i64) -> Option<u64> {
+        if home == community {
+            return self.invite_channel_id;
+        }
+        let channel: Option<i64> = sqlx::query_scalar("SELECT announce_channel_id FROM discord_guilds WHERE guild_id=$1 AND status='active' AND removed_at IS NULL")
+            .bind(home).fetch_optional(&self.pool).await.ok().flatten()?;
+        u64::try_from(channel?).ok()
+    }
+
     async fn create_and_store_streamer_invite(&self, channel_login: &str) -> Option<String> {
         let login = channel_login.trim().to_lowercase();
         if login.is_empty() {
@@ -2869,9 +2878,7 @@ impl DbInviteResolver {
             .await
             .ok()
             .flatten()?;
-        let channel: Option<i64> = sqlx::query_scalar("SELECT announce_channel_id FROM discord_guilds WHERE guild_id=$1 AND status='active' AND removed_at IS NULL")
-            .bind(home).fetch_optional(&self.pool).await.ok().flatten()?;
-        let channel_id = u64::try_from(channel?).ok()?;
+        let channel_id = self.invite_channel(home, community).await?;
         let reason = format!("streamer-invite:{login}");
         let invite = match relay.create_invite(channel_id, &reason).await {
             Ok(invite) => invite,
