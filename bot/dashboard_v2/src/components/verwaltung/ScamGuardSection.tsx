@@ -154,11 +154,12 @@ function SettingsBlock() {
   const t = useT();
   const { loading, error, savedAt, unsaved, draft, update } = useScamSettings();
 
-  if (loading || !draft) {
+  if (!draft) {
+    if (!loading && error) return <p role="alert" className="text-sm text-danger">{t(error)}</p>;
     return (
       <div className="flex items-center gap-3 text-text-secondary text-sm">
         <Loader2 className="h-4 w-4 animate-spin text-primary" />
-        {error ? t(error) : t("Einstellungen werden geladen ...")}
+        {t("Einstellungen werden geladen ...")}
       </div>
     );
   }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchPostingPlan, savePostingPlanSettings } from '@/api/socialMedia';
 import { getBrowserTimezone } from '@/api/core';
@@ -6,12 +6,18 @@ import { useT } from '@/context/LanguageContext';
 import { scheduleQueueApi } from '@/components/socialmedia/autopilot/schedule-queue';
 import { importPoolApi } from '@/components/socialmedia/autopilot/import-pool/api';
 import { SavedIndicator } from './SavedIndicator';
+import { useSerialSave, type SaveOutcome } from './useSerialSave';
 
 function supportedTimezones(): string[] {
   try { return Intl.supportedValuesOf('timeZone'); } catch { return []; }
 }
 
 const TIMEZONES = supportedTimezones();
+
+function validTimezone(zone: string): boolean {
+  if (!zone) return false;
+  try { new Intl.DateTimeFormat('de-DE', { timeZone: zone }).format(); return true; } catch { return false; }
+}
 
 function timezoneOptions(current: string): string[] {
   return current && !TIMEZONES.includes(current) ? [current, ...TIMEZONES] : TIMEZONES;
@@ -26,19 +32,18 @@ function TimezoneEditor({ owner, channelScoped }: { owner: string; channelScoped
   const client = useQueryClient();
   const [draft, setDraft] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
-  const attempted = useRef<string | null>(null);
+  const latestRequest = useRef(0);
   const key = ['social-media', 'global-timezone', owner];
   const current = useQuery({ queryKey: key, queryFn: async () => {
     const [plan, schedule, preferences] = await Promise.all([fetchPostingPlan(owner), scheduleQueueApi.load(owner), importPoolApi.getPreferences(owner)]);
     return { plan, schedule, preferences };
   }, retry: false });
   const timezone = draft ?? current.data?.plan.timezone ?? '';
-  let valid = false;
-  try { if (timezone) { new Intl.DateTimeFormat('de-DE', { timeZone: timezone }).format(); valid = true; } } catch { valid = false; }
+  const valid = validTimezone(timezone);
   const values = current.data ? [current.data.plan.timezone, current.data.schedule.settings.timezone, current.data.preferences.timezone] : [];
   const diverged = new Set(values).size > 1;
   const dirty = current.isSuccess && values.some(value => value !== timezone);
-  const save = useMutation({ mutationFn: async () => {
+  const save = useMutation<void, Error, string>({ mutationFn: async timezone => {
     const preferences = await importPoolApi.getPreferences(owner);
     const results = await Promise.allSettled([
       savePostingPlanSettings(owner, { timezone }),
@@ -46,20 +51,30 @@ function TimezoneEditor({ owner, channelScoped }: { owner: string; channelScoped
       importPoolApi.savePreferences(owner, { ...preferences, timezone }),
     ]);
     if (results.some(result => result.status === 'rejected')) throw new Error('Zeitzone nicht überall gespeichert. Prüfe den aktuellen Stand und versuche es erneut.');
-  }, onSuccess: () => { setDraft(null); setSavedAt(Date.now()); }, onSettled: async () => {
+  }, onSettled: async () => {
     await client.invalidateQueries({ queryKey: ['social-media'] });
     await client.invalidateQueries({ queryKey: ['social-posting-plan'] });
   } });
-  const { mutate, isPending } = save;
+  const { mutateAsync, isPending } = save;
+  const request = useSerialSave(
+    ({ zone }: { zone: string; id: number }) => mutateAsync(zone),
+    ({ id }: { zone: string; id: number }, outcome: SaveOutcome<void>) => {
+      if (id !== latestRequest.current || !outcome.ok) return;
+      setDraft(null);
+      setSavedAt(Date.now());
+    },
+  );
+  const persist = (zone: string) => {
+    latestRequest.current += 1;
+    request({ zone, id: latestRequest.current });
+  };
 
-  useEffect(() => {
-    if (draft === null || draft === attempted.current || !valid || !dirty || isPending) return;
-    attempted.current = draft;
-    mutate();
-  }, [draft, valid, dirty, isPending, mutate]);
-
-  const locked = !current.isSuccess || isPending;
-  const choose = (value: string) => { attempted.current = null; setSavedAt(null); setDraft(value); };
+  const locked = !current.isSuccess;
+  const choose = (value: string) => {
+    setSavedAt(null);
+    setDraft(value);
+    if (current.isSuccess && validTimezone(value) && (isPending || values.some(stored => stored !== value))) persist(value);
+  };
 
   return <section className="panel-card rounded-2xl p-5" data-unsaved={draft !== null && dirty ? 'true' : undefined} data-saving={isPending ? 'true' : undefined}>
     <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
@@ -78,7 +93,7 @@ function TimezoneEditor({ owner, channelScoped }: { owner: string; channelScoped
     </div>
     {current.isPending && <p role="status" className="mt-2 text-xs text-text-secondary">{t('Wird geladen')}</p>}
     {current.isError && <p role="alert" className="mt-2 text-xs text-danger">{t('Die Zeitzonen konnten nicht geladen werden.')}</p>}
-    {diverged && <p role="status" className="mt-2 text-xs text-text-secondary">{t('Die gespeicherten Zeitzonen unterscheiden sich: {zones}. Speichern gleicht alle drei Bereiche ab.', { zones: values.join(' / ') })} <button type="button" className="underline" disabled={!valid || locked} onClick={() => mutate()}>{t('Jetzt abgleichen')}</button></p>}
-    {save.isError && <p role="alert" className="mt-2 text-xs text-danger">{t('Zeitzone nicht überall gespeichert. Prüfe den aktuellen Stand und versuche es erneut.')} {!diverged && <button type="button" className="underline" disabled={!valid || locked} onClick={() => mutate()}>{t('Erneut versuchen')}</button>}</p>}
+    {diverged && <p role="status" className="mt-2 text-xs text-text-secondary">{t('Die gespeicherten Zeitzonen unterscheiden sich: {zones}. Speichern gleicht alle drei Bereiche ab.', { zones: values.join(' / ') })} <button type="button" className="underline" disabled={!valid || locked || isPending} onClick={() => persist(timezone)}>{t('Jetzt abgleichen')}</button></p>}
+    {save.isError && <p role="alert" className="mt-2 text-xs text-danger">{t('Zeitzone nicht überall gespeichert. Prüfe den aktuellen Stand und versuche es erneut.')} {!diverged && <button type="button" className="underline" disabled={!valid || locked || isPending} onClick={() => persist(timezone)}>{t('Erneut versuchen')}</button>}</p>}
   </section>;
 }

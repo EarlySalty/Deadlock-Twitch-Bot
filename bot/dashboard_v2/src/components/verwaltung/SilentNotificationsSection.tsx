@@ -92,7 +92,7 @@ export function SilentNotificationsSection() {
       eyebrow={t("Chat-Benachrichtigungen")}
       icon={<BellOff className="h-4 w-4" />}
       title={t("Stille Hinweise")}
-      description={t("Steuere, ob der Bot Chat-Notizen zu Auto-Bans und Raids postet. Das geht auch mit den Chat-Befehlen in den Feldern darunter.")}
+      description={t("Steuere, ob der Bot Chat-Notizen zu Auto-Bans und Raids postet. Das geht auch mit den Chat-Befehlen in den Feldern daneben.")}
     >
       {error && <p role="alert" className="mb-2 text-sm text-danger">{t(error)}</p>}
       {loading ? (

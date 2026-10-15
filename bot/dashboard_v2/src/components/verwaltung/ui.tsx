@@ -88,7 +88,7 @@ export interface CommandRowProps {
 export function CommandRow({ command, title, description, icon, inputSide = 'start', toggle, savedAt, error, children }: CommandRowProps) {
   const t = useT();
   const input = command
-    ? <EditableCommandName command={command} className="w-[140px] shrink-0" />
+    ? <EditableCommandName command={command} className="min-w-[140px] max-w-full shrink-0" />
     : inputSide === 'start'
       ? <span aria-hidden="true" className="hidden w-[140px] shrink-0 sm:block" />
       : null;

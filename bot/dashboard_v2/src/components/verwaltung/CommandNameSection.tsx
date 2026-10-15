@@ -118,7 +118,7 @@ export function EditableCommandName({ command, className = '' }: { command: stri
 
   return (
     <div className={className}>
-      <label className="flex min-h-10 w-full items-center rounded-lg border border-primary/50 bg-[#0d0806] px-3 font-mono text-sm font-bold text-white shadow-inner transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/25">
+      <label className="flex min-h-10 w-full items-center rounded-lg border border-primary/50 bg-[#0d0806] px-2 font-mono text-[13px] font-bold text-white shadow-inner transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/25">
         <span aria-hidden="true" className="select-none text-primary">!</span>
         <input
           type="text"
@@ -139,7 +139,8 @@ export function EditableCommandName({ command, className = '' }: { command: stri
             setDraft(next);
             setMessage(validCommandNameInput(next) ? '' : 'Nur Buchstaben und Zahlen eingeben; das ! steht bereits davor.');
           }}
-          className="min-w-0 flex-1 bg-transparent py-2 outline-none placeholder:text-text-secondary/60"
+          style={{ width: `${Math.max(value.length, 1) + 1}ch` }}
+          className="min-w-0 flex-auto bg-transparent py-2 outline-none placeholder:text-text-secondary/60"
         />
         {pending && <Loader2 aria-label={t("Wird gespeichert")} className="ml-1 h-3.5 w-3.5 animate-spin text-primary" />}
       </label>

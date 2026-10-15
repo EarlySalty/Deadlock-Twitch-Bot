@@ -97,7 +97,7 @@ export function PrivateVodSection() {
       <p className="text-xs font-semibold uppercase tracking-wider text-text-secondary">{t("Private VOD-Ausschnitte")}</p>
       <CommandRow
         command="vodclip"
-        title={t("Private VOD-Ausschnitte")}
+        title={t("VOD-Ausschnitt-Befehl")}
         description={t("Schneide einen längeren Bereich aus der Twitch-Aufzeichnung. Im laufenden Stream wird dessen Aufzeichnung verwendet, offline die neueste. Twitch muss den gewählten Abschnitt bereits bereitstellen.")}
         savedAt={savedAt}
         toggle={{ checked: Boolean(data?.enabled), onChange: () => void toggle(), label: t('VOD-Befehl'), disabled: !data, pending }}

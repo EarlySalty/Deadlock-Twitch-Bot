@@ -878,7 +878,7 @@ test('global timezone writes all existing stores and preserves import selection 
       { getPreferences: async () => preferences, savePreferences: async (owner: string, payload: unknown) => { calls.push(['import', owner, payload]); } },
       '42', 'UTC',
     );
-    if (failSchedule) await assert.rejects(save(), /nicht überall gespeichert/); else await save();
+    if (failSchedule) await assert.rejects(save('UTC'), /nicht überall gespeichert/); else await save('UTC');
     assert.deepEqual(calls, [['legacy', '42', { timezone: 'UTC' }], ['schedule', '42', { timezone: 'UTC' }], ['import', '42', { ...preferences, timezone: 'UTC' }]]);
   }
 });
