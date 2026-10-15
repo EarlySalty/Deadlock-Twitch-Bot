@@ -1426,7 +1426,8 @@ impl DashboardAuthState {
                 ORDER BY CASE COALESCE(status, '') WHEN 'active' THEN 0 WHEN 'archived' THEN 1 WHEN 'departnered' THEN 2 ELSE 3 END,
                     COALESCE(departnered_at, admin_archived_at, partnered_at) DESC NULLS LAST
                 LIMIT 1
-             ) current_partner WHERE LOWER(COALESCE(technical_pause_reason, '')) <> 'blocked'",
+             ) current_partner WHERE LOWER(COALESCE(technical_pause_reason, '')) <> 'blocked'
+                AND public.guild_partner_allowed(twitch_user_id)",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
@@ -1992,14 +1993,7 @@ impl DashboardAuthState {
             return false;
         }
         let row = sqlx::query_scalar::<_, bool>(
-            "SELECT COALESCE(status, '') = 'active'
-                AND COALESCE(manual_partner_opt_out, 0) = 0
-                AND COALESCE(technical_pause_reason, '') = ''
-                AND admin_archived_at IS NULL
-             FROM twitch_partners WHERE twitch_user_id = $1
-             ORDER BY CASE COALESCE(status, '') WHEN 'active' THEN 0 WHEN 'archived' THEN 1 WHEN 'departnered' THEN 2 ELSE 3 END,
-                 COALESCE(departnered_at, admin_archived_at, partnered_at) DESC NULLS LAST
-             LIMIT 1",
+            "SELECT is_partner_active = 1 FROM twitch_partners_all_state WHERE twitch_user_id = $1 ORDER BY is_partner_active DESC LIMIT 1",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
@@ -3172,9 +3166,8 @@ print(f.encrypt(payload.encode()).decode(), end='')
     /// B3-2-Gate: aktiver Partner wird gefunden; unbekannter Login nicht.
     #[tokio::test]
     async fn find_partner_for_login_findet_aktiven_partner() {
-        let Some(pool) = maybe_pool().await else {
-            return;
-        };
+        let db = crate::guild_onboarding::tests::fixture().await;
+        let pool = db.pool.clone();
         ensure_sessions_table(&pool).await;
         ensure_partners_table(&pool).await;
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
@@ -3219,9 +3212,8 @@ print(f.encrypt(payload.encode()).decode(), end='')
     /// B3-2-Gate: `technical_pause_reason='blocked'` → kein Treffer (Hard-Kill).
     #[tokio::test]
     async fn find_partner_for_login_blocked_wird_abgelehnt() {
-        let Some(pool) = maybe_pool().await else {
-            return;
-        };
+        let db = crate::guild_onboarding::tests::fixture().await;
+        let pool = db.pool.clone();
         ensure_sessions_table(&pool).await;
         ensure_partners_table(&pool).await;
         let state = DashboardAuthState::new(pool.clone(), test_fernet_key());
@@ -3253,9 +3245,8 @@ print(f.encrypt(payload.encode()).decode(), end='')
 
     #[tokio::test]
     async fn is_partner_active_folgt_kanonischer_view_logik() {
-        let Some(pool) = maybe_pool().await else {
-            return;
-        };
+        let db = crate::guild_onboarding::tests::fixture().await;
+        let pool = db.pool.clone();
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS twitch_partners (
                 id BIGSERIAL PRIMARY KEY, twitch_login TEXT, twitch_user_id TEXT, status TEXT,
@@ -3871,10 +3862,8 @@ mod identity_regression_tests {
 
     #[tokio::test]
     async fn recycled_login_never_changes_authenticated_id_in_either_session_type() {
-        let db = crate::test_database::Database::new().await;
-        sqlx::raw_sql("CREATE TABLE twitch_partners(id BIGSERIAL PRIMARY KEY,twitch_login TEXT NOT NULL,twitch_user_id TEXT,status TEXT,technical_pause_reason TEXT,manual_partner_opt_out INTEGER,departnered_at TIMESTAMPTZ,admin_archived_at TIMESTAMPTZ,partnered_at TIMESTAMPTZ);
-            CREATE TABLE dashboard_sessions(session_id TEXT PRIMARY KEY,session_type TEXT NOT NULL,payload_enc BYTEA NOT NULL,created_at DOUBLE PRECISION NOT NULL,expires_at DOUBLE PRECISION NOT NULL);
-            CREATE TABLE twitch_partner_signup_denylist(twitch_user_id TEXT,twitch_login TEXT);
+        let db = crate::guild_onboarding::tests::fixture().await;
+        sqlx::raw_sql("CREATE TABLE dashboard_sessions(session_id TEXT PRIMARY KEY,session_type TEXT NOT NULL,payload_enc BYTEA NOT NULL,created_at DOUBLE PRECISION NOT NULL,expires_at DOUBLE PRECISION NOT NULL);
             INSERT INTO twitch_partners(twitch_login,twitch_user_id,status,manual_partner_opt_out) VALUES ('recycled','111','active',0),('old_name','222','archived',0),('older_name','222','departnered',0),('former','111','archived',0);
             CREATE UNIQUE INDEX one_active_partner_per_id ON twitch_partners(twitch_user_id) WHERE status='active';
             INSERT INTO twitch_partners(twitch_login,twitch_user_id,status,technical_pause_reason) VALUES('blocked_current','403','active','blocked'),('allowed_old','403','archived',NULL);")

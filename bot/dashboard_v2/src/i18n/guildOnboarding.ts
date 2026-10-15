@@ -1,0 +1,18 @@
+export const GUILD_ONBOARDING_EN: Record<string, string> = {
+  'Community wählen': 'Choose a community',
+  'Wähle deine Community': 'Choose your community',
+  'Verbinde Twitch und Discord. Danach kannst du einen Server wählen, auf dem du Mitglied bist und der den Bot eingerichtet hat.': 'Connect Twitch and Discord. Then choose a server you belong to that has set up the bot.',
+  'Die Einrichtung konnte gerade nicht abgeschlossen werden. Verbinde Discord erneut oder versuche es noch einmal.': 'Setup could not be completed. Reconnect Discord or try again.',
+  'Mit Twitch angemeldet als {name}': 'Signed in to Twitch as {name}',
+  'Discord erneut verbinden': 'Reconnect Discord',
+  'Mit Discord verbinden': 'Connect Discord',
+  'Auf deinen Discord-Servern ist noch kein eingerichteter Bot verfügbar. Bitte den Server-Owner, den Bot hinzuzufügen und /setup auszuführen.': 'None of your Discord servers has set up the bot yet. Ask the server owner to add it and run /setup.',
+  'Verfügbare Server': 'Available servers',
+  'Du bist Mitglied dieser Community.': 'You belong to this community.',
+  'Deine Aufnahme wartet auf Freigabe durch den Server-Admin.': 'Your membership is waiting for approval from a server admin.',
+  'Du wirst direkt Partner dieses Servers.': 'You will immediately become a partner of this server.',
+  'Ein Server-Admin muss deine Aufnahme freigeben.': 'A server admin needs to approve your membership.',
+  'Diesen Server wählen': 'Choose this server',
+  'Deine Serverwahl wird gespeichert …': 'Saving your server choice …',
+  'Weiter zum Dashboard': 'Continue to dashboard',
+};

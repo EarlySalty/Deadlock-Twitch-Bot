@@ -53,6 +53,46 @@ async fn main() -> Result<(), String> {
             .map_err(|e| format!("Broker-Weiterleitung: {e}"))?,
     );
 
+    let pool = match std::env::var("DATABASE_URL") {
+        Ok(url) => Some(
+            sqlx::PgPool::connect(&url)
+                .await
+                .map_err(|_| "Hub database connection failed")?,
+        ),
+        Err(_) => None,
+    };
+    let gateway_task = match (config.bot_token.as_ref(), pool.as_ref()) {
+        (Some(token), Some(pool)) => Some(tb_discord_hub::gateway::spawn(
+            tb_discord_hub::gateway::GatewayConfig {
+                bot_token: token.clone(),
+                application_id: Some(tb_discord_hub::config::APPLICATION_ID),
+                community_guild_id: config.community_guild_id,
+                pool: Some(pool.clone()),
+            },
+            Arc::new(tb_discord_hub::guilds::PgSink::new(pool.clone())),
+        )),
+        _ => None,
+    };
+    let reconciliation_task = match (config.bot_token.as_ref(), pool.as_ref()) {
+        (Some(token), Some(pool)) => {
+            let sink = tb_discord_hub::guilds::PgSink::new(pool.clone());
+            let rest = tb_discord_hub::gateway::rest::DiscordRest::new(
+                tb_discord_hub::gateway::rest::DISCORD_API_BASE,
+                token.clone(),
+            );
+            Some(tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    interval.tick().await;
+                    if let Err(error) = sink.reconcile(&rest).await {
+                        tracing::warn!(%error, "Guild membership reconciliation failed");
+                    }
+                }
+            }))
+        }
+        _ => None,
+    };
     let direct: Option<Arc<dyn DirectDiscord>> = match config.bot_token.as_deref() {
         Some(bot_token) => Some(Arc::new(
             DiscordRest::new(bot_token).map_err(|e| format!("Discord-REST: {e}"))?,
@@ -80,6 +120,14 @@ async fn main() -> Result<(), String> {
         .await
         .map_err(|e| format!("HTTP-Server: {e}"));
 
+    if let Some(task) = reconciliation_task {
+        task.abort();
+        let _ = task.await;
+    }
+    if let Some(task) = gateway_task {
+        task.abort();
+        let _ = task.await;
+    }
     tracing::info!("Discord-Hub beendet");
     result
 }

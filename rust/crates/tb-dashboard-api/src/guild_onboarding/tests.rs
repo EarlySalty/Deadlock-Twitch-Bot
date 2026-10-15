@@ -1,0 +1,341 @@
+use super::*;
+use crate::auth::level::DashboardAuthLevel;
+use axum::{body::Body, extract::FromRequestParts, http::Request};
+use tower::ServiceExt;
+
+pub(crate) async fn fixture() -> crate::test_database::Database {
+    let db = crate::test_database::Database::new().await;
+    sqlx::raw_sql(r#"
+        CREATE TABLE twitch_partners (
+            id bigserial PRIMARY KEY, twitch_user_id text NOT NULL, twitch_login text NOT NULL,
+            require_discord_link integer DEFAULT 0, next_link_check_at text,
+            manual_partner_opt_out integer DEFAULT 0, partnered_at text DEFAULT CURRENT_TIMESTAMP,
+            admin_archived_at text, status text NOT NULL DEFAULT 'active', departnered_at text,
+            raid_bot_enabled integer DEFAULT 0, silent_ban integer DEFAULT 0, silent_raid integer DEFAULT 0,
+            live_ping_role_id bigint, live_ping_enabled integer DEFAULT 1, technical_pause_reason text,
+            inactivity_flagged_at text, added_by text, manual_verified_permanent integer DEFAULT 0,
+            manual_verified_until text, manual_verified_at text
+        );
+        CREATE TABLE twitch_streamer_identities (twitch_user_id text PRIMARY KEY, twitch_login text NOT NULL,
+            discord_user_id text, discord_display_name text, is_on_discord integer DEFAULT 0);
+        CREATE TABLE twitch_exclusions (twitch_user_id text PRIMARY KEY, reactivated_at timestamptz);
+        CREATE TABLE twitch_partner_signup_denylist (twitch_user_id text, twitch_login text);
+        CREATE TABLE twitch_channel_updates (twitch_user_id text, language text, recorded_at timestamptz);
+        CREATE TABLE twitch_stream_sessions (twitch_user_id text, language text, started_at timestamptz);
+        INSERT INTO twitch_streamer_identities (twitch_user_id,twitch_login) VALUES ('42','existing');
+        INSERT INTO twitch_partners (twitch_user_id,twitch_login) VALUES ('42','existing');
+    "#).execute(&db.pool).await.unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20260623150000_drop_manual_verified_columns.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/20261015100000_guild_membership_onboarding.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    db
+}
+
+fn headers(raw: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(header::HOST, HeaderValue::from_static("dead-lock.de"));
+    headers.insert(
+        header::ORIGIN,
+        HeaderValue::from_static("https://dead-lock.de"),
+    );
+    headers.insert(header::COOKIE, format!("{COOKIE}={raw}").parse().unwrap());
+    headers
+}
+
+async fn new_session(pool: &PgPool, raw: &str, user: &str, guilds: &[i64]) {
+    sqlx::query("INSERT INTO guild_onboarding_sessions (session_hash, twitch_user_id, twitch_login, discord_user_id, guild_ids, discord_verified_at) VALUES ($1,$2,$3,'987',$4,now())")
+        .bind(session_lookup_key(raw)).bind(user).bind(format!("user{user}")).bind(guilds).execute(pool).await.unwrap();
+}
+
+fn auth(pool: PgPool) -> DashboardAuthState {
+    use base64::Engine;
+    DashboardAuthState::new(
+        pool,
+        base64::engine::general_purpose::URL_SAFE.encode([0u8; 32]),
+    )
+}
+
+#[tokio::test]
+async fn migration_preserves_home_parity_and_cutover_requires_matching_shadow() {
+    let db = fixture().await;
+    let summary: (i64, i64, i64, i64) =
+        sqlx::query_as("SELECT * FROM twitch_partner_shadow_summary()")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(summary, (1, 1, 1, 0));
+    assert!(
+        !sqlx::query_scalar::<_, bool>("SELECT enabled FROM guild_runtime")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap()
+    );
+    sqlx::query(
+        "UPDATE streamer_guilds SET active=false,deactivated_at=now() WHERE twitch_user_id='42'",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert!(sqlx::query("SELECT enable_guild_runtime()")
+        .execute(&db.pool)
+        .await
+        .is_err());
+    sqlx::query(
+        "UPDATE streamer_guilds SET active=true,deactivated_at=NULL WHERE twitch_user_id='42'",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query("SELECT enable_guild_runtime()")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE streamer_guilds SET active=false,deactivated_at=now() WHERE twitch_user_id='42'",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i32>(
+            "SELECT is_partner_active FROM twitch_partners_all_state WHERE twitch_user_id='42'"
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap(),
+        0
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn per_guild_discord_requirement_and_language_observations_stay_current() {
+    let db = fixture().await;
+    sqlx::query("UPDATE twitch_partners SET require_discord_link=1 WHERE twitch_user_id='42'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM partner_guild_active")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        0
+    );
+    sqlx::query("UPDATE twitch_streamer_identities SET discord_user_id='987',is_on_discord=1 WHERE twitch_user_id='42'").execute(&db.pool).await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM partner_guild_active")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        1
+    );
+    sqlx::query("INSERT INTO twitch_channel_updates VALUES ('42','EN',now()),('42','de',now()-interval '1 day'),('42','und',now()+interval '1 day')").execute(&db.pool).await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT broadcaster_language FROM twitch_streamer_identities WHERE twitch_user_id='42'"
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap(),
+        "en"
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn relinking_discord_invalidates_existing_guild_proofs() {
+    let db = fixture().await;
+    sqlx::query("UPDATE twitch_streamer_identities SET discord_user_id='987',is_on_discord=1 WHERE twitch_user_id='42'").execute(&db.pool).await.unwrap();
+    sqlx::query("INSERT INTO discord_guilds(guild_id,status) VALUES(700,'active')")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO streamer_guilds(twitch_user_id,guild_id,active,is_on_discord,require_discord_link,deactivated_at) VALUES('42',700,true,true,true,NULL)").execute(&db.pool).await.unwrap();
+    sqlx::query(
+        "UPDATE twitch_streamer_identities SET discord_user_id='988' WHERE twitch_user_id='42'",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let membership: (bool,bool) = sqlx::query_as("SELECT active,is_on_discord FROM streamer_guilds WHERE twitch_user_id='42' AND guild_id=700").fetch_one(&db.pool).await.unwrap();
+    assert_eq!(membership, (false, false));
+    assert!(!sqlx::query_scalar::<_,bool>("SELECT is_on_discord FROM streamer_guilds WHERE twitch_user_id='42' AND guild_id=1289721245281292288").fetch_one(&db.pool).await.unwrap());
+    db.close().await;
+}
+
+#[tokio::test]
+async fn membership_selection_enforces_proof_runtime_approval_and_admin_decisions() {
+    let db = fixture().await;
+    let raw = "synthetic-onboarding-session-0000000001";
+    let hash = session_lookup_key(raw);
+    sqlx::query("INSERT INTO discord_guilds(guild_id,name,status,auto_partner_default) VALUES (700,'Test server','active',true),(701,'Approval server','active',false)").execute(&db.pool).await.unwrap();
+    new_session(&db.pool, raw, "100", &[700, 701]).await;
+    assert_eq!(assign(&db.pool, &hash, 700).await.unwrap(), None);
+    sqlx::query("SELECT enable_guild_runtime()")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(assign(&db.pool, &hash, 702).await.unwrap(), None);
+    assert_eq!(assign(&db.pool, &hash, 701).await.unwrap(), Some(false));
+    assert_eq!(assign(&db.pool, &hash, 700).await.unwrap(), Some(true));
+    let guilds: Vec<i64> = sqlx::query_scalar(
+        "SELECT guild_id FROM streamer_guilds WHERE twitch_user_id='100' ORDER BY guild_id",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(guilds, vec![700, 701]);
+    sqlx::query("UPDATE streamer_guilds SET active=false,deactivated_by='admin',deactivated_at=now() WHERE twitch_user_id='100' AND guild_id=700").execute(&db.pool).await.unwrap();
+    assert_eq!(assign(&db.pool, &hash, 700).await.unwrap(), Some(false));
+    sqlx::query(
+        "UPDATE guild_onboarding_sessions SET discord_verified_at=now()-interval '3 minutes'",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(assign(&db.pool, &hash, 700).await.unwrap(), None);
+    db.close().await;
+}
+
+#[tokio::test]
+async fn session_uses_only_hash_expires_and_requires_same_origin_for_writes() {
+    let db = fixture().await;
+    let raw = "synthetic-onboarding-session-0000000002";
+    new_session(&db.pool, raw, "100", &[HOME]).await;
+    let stored: String = sqlx::query_scalar("SELECT session_hash FROM guild_onboarding_sessions")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, session_lookup_key(raw));
+    assert_ne!(stored, raw);
+    assert!(load(&db.pool, &headers(raw)).await.is_ok());
+    let response = cookie(COOKIE, raw, TTL);
+    for attribute in [
+        "HttpOnly",
+        "Secure",
+        "SameSite=Lax",
+        "Max-Age=1200",
+        "Path=/twitch/guild-onboarding",
+    ] {
+        assert!(response.contains(attribute));
+    }
+    assert!(same_origin(&headers(raw)));
+    let mut foreign = headers(raw);
+    foreign.insert(
+        header::ORIGIN,
+        HeaderValue::from_static("https://evil.example"),
+    );
+    assert!(!same_origin(&foreign));
+    let response = select(
+        Extension(auth(db.pool.clone())),
+        foreign,
+        Json(Selection {
+            guild_id: HOME.to_string(),
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    sqlx::query("UPDATE guild_onboarding_sessions SET expires_at=now()-interval '1 second'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert!(load(&db.pool, &headers(raw)).await.is_err());
+    db.close().await;
+}
+
+fn rust_sources(directory: &std::path::Path, sources: &mut Vec<String>) {
+    for entry in std::fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            rust_sources(&path, sources);
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            sources.push(std::fs::read_to_string(path).unwrap());
+        }
+    }
+}
+
+#[tokio::test]
+async fn onboarding_cookie_never_authenticates_any_dashboard_or_admin_route() {
+    let db = fixture().await;
+    let raw = "synthetic-onboarding-session-0000000003";
+    new_session(&db.pool, raw, "42", &[HOME]).await;
+    let auth = auth(db.pool.clone());
+    let mut sources = Vec::new();
+    rust_sources(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut sources,
+    );
+    let route = regex::Regex::new(r#"\.route\(\s*"([^"\n]+)""#).unwrap();
+    let mut paths = std::collections::BTreeSet::new();
+    for source in sources {
+        for capture in route.captures_iter(&source) {
+            let path = capture[1].to_string();
+            if path.starts_with("/twitch/")
+                || path.starts_with("/api/")
+                || path.starts_with("/admin/")
+            {
+                paths.insert(path);
+            }
+        }
+    }
+    assert!(
+        paths.len() > 250,
+        "route coverage unexpectedly shrank: {}",
+        paths.len()
+    );
+    for path in &paths {
+        let mut request = Request::builder()
+            .uri(path.replace(['{', '}'], ""))
+            .body(Body::empty())
+            .unwrap();
+        *request.headers_mut() = headers(raw);
+        request.extensions_mut().insert(auth.clone());
+        let (mut parts, _) = request.into_parts();
+        let resolved = DashboardAuthLevel::from_request_parts(&mut parts, &())
+            .await
+            .unwrap();
+        assert_eq!(resolved, DashboardAuthLevel::None, "{path}");
+    }
+    let app = crate::build_router(db.pool.clone(), "synthetic-internal-token".into())
+        .layer(Extension(auth));
+    for path in [
+        "/twitch/api/v2/streamer/onboarding",
+        "/twitch/api/v2/overview",
+        "/twitch/api/v2/admin/config",
+        "/twitch/dashboard",
+        "/twitch/verwaltung",
+        "/twitch/analyse",
+    ] {
+        let mut request = Request::builder().uri(path).body(Body::empty()).unwrap();
+        *request.headers_mut() = headers(raw);
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert!(
+            !response.status().is_success(),
+            "onboarding cookie reached {path}"
+        );
+    }
+    println!(
+        "Onboarding-only session rejected by shared auth on {} registered route paths",
+        paths.len()
+    );
+    db.close().await;
+}
+
+#[test]
+fn domain_allowlist_ignores_forwarded_hosts_and_rejects_unknown_origins() {
+    let mut headers = headers("synthetic-onboarding-session-0000000004");
+    headers.insert("x-forwarded-host", HeaderValue::from_static("evil.example"));
+    assert_eq!(origin(&headers), Some("https://dead-lock.de"));
+    headers.insert(header::HOST, HeaderValue::from_static("evil.example"));
+    assert_eq!(origin(&headers), None);
+}

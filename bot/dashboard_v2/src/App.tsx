@@ -24,6 +24,7 @@ import { UplinkPage } from '@/pages/Uplink';
 import { VerwaltungPage } from '@/pages/Verwaltung';
 import { OverlayBuilderPage } from '@/pages/OverlayBuilder';
 import Pricing from '@/pages/Pricing';
+import { GuildOnboardingPage } from '@/pages/GuildOnboarding';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { OnboardingProvider } from '@/components/onboarding/OnboardingContext';
 import { EinrichtungCard } from '@/components/onboarding/EinrichtungCard';
@@ -396,6 +397,9 @@ function PricingRoute() {
 
 export default function App() {
   const path = normalizePathname(window.location.pathname);
+  if (path === '/twitch/guild-onboarding') {
+    return <QueryClientProvider client={queryClient}><LanguageProvider><ErrorBoundary><GuildOnboardingPage /></ErrorBoundary></LanguageProvider></QueryClientProvider>;
+  }
   const isInternalHomeRoute = path === PREVIEW_HOME_ROUTE || path === '/twitch/onboarding';
   const isHelpRoute = path === '/twitch/hilfe';
   const isFeedbackRoute = path === '/twitch/feedback';
