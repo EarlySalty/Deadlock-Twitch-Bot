@@ -61,6 +61,7 @@ export function useOverview(streamer: string | null, days: TimeRange) {
     queryKey: ['overview', streamer, days],
     queryFn: () => fetchOverview(streamer, days),
     staleTime: STALE_TIME,
+    placeholderData: (previous, query) => query?.queryKey[1] === streamer ? previous : undefined,
     enabled: true,
   });
 }
@@ -78,6 +79,7 @@ export function useWeekdayStats(streamer: string | null, days: TimeRange) {
     queryKey: ['weekday-stats', streamer, days],
     queryFn: () => fetchWeekdayStats(streamer, days),
     staleTime: STALE_TIME,
+    placeholderData: (previous, query) => query?.queryKey[1] === streamer ? previous : undefined,
   });
 }
 
@@ -86,6 +88,7 @@ export function useHourlyHeatmap(streamer: string | null, days: TimeRange) {
     queryKey: ['hourly-heatmap', streamer, days],
     queryFn: () => fetchHourlyHeatmap(streamer, days),
     staleTime: STALE_TIME,
+    placeholderData: (previous, query) => query?.queryKey[1] === streamer ? previous : undefined,
   });
 }
 
@@ -102,6 +105,7 @@ export function useChatAnalytics(streamer: string | null, days: TimeRange) {
     queryKey: ['chat-analytics', streamer, days],
     queryFn: () => fetchChatAnalytics(streamer, days),
     staleTime: STALE_TIME,
+    placeholderData: (previous, query) => query?.queryKey[1] === streamer ? previous : undefined,
   });
 }
 
@@ -178,7 +182,7 @@ export function useAuthStatus() {
   return useQuery({
     queryKey: ['auth-status'],
     queryFn: fetchAuthStatus,
-    staleTime: 60 * 1000, // 1 minute
+    staleTime: 5 * 60 * 1000,
     retry: false,
   });
 }

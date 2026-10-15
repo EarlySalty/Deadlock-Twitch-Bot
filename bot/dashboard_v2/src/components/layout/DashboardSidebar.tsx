@@ -1,5 +1,7 @@
 import { useId, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { navigateDashboard } from '@/navigation';
+import { prefetchDashboard } from '@/prefetchDashboard';
 import { motion } from 'framer-motion';
 import { Rise } from '@/motion/Rise';
 import { useDashboardProfile } from '@/hooks/useDashboardProfile';
@@ -62,6 +64,8 @@ function SidebarLink({
   label: string;
   active?: boolean;
 }) {
+  const queryClient = useQueryClient();
+  const prefetch = () => prefetchDashboard(href, queryClient);
   const activeClasses =
     'border border-primary/25 bg-primary/10 text-primary lg:rounded-l-none lg:border-y-0 lg:border-r-0 lg:border-t-0 lg:border-l-2 lg:border-primary lg:pl-2.5';
   const inactiveClasses =
@@ -70,6 +74,9 @@ function SidebarLink({
   return (
     <a
       href={href}
+      onClick={navigateDashboard}
+      onMouseEnter={prefetch}
+      onFocus={prefetch}
       aria-current={active ? 'page' : undefined}
       className={`flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold no-underline transition-colors whitespace-nowrap lg:whitespace-normal ${active ? activeClasses : inactiveClasses}`}
     >
