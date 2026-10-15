@@ -20,6 +20,8 @@ Round 2 (Opus r2, 2026-10-15): Main = LIVE 408557c6a (D11-D13, SOC-EN, SEC-NPM, 
 | H2 hub rollout (user ok) | sol | ttb-opus-h2-20261015 | feat/opus-h2-hub-rollout-20261015 | a0cacfcd0 | LIVE 909d8f362, unit enabled, auth 200, #1061 closed |
 | G1 guilds | sol | ttb-opus-g1-20261015 | feat/opus-g1-guilds-20261015 | - | gate + Rust verify running |
 | K1 AI switch | sol | ttb-opus-k1-20261015 | feat/opus-k1-ai-switch-20261015 | - | Rust verify, commit, gate running |
+| C1 English texts #1067 | sol | ttb-opus-c1-20261015 | feat/opus-c1-english-texts-20261015 | - | running, base G1 |
+| R1 raids by language #1065 | sol | ttb-opus-r1-20261015 | feat/opus-r1-raids-lang-20261015 | - | running, base G1 |
 
 Blocked:
 - L #1069: Fireworks HTTP 412 (account suspended), billing = user/money decision.
