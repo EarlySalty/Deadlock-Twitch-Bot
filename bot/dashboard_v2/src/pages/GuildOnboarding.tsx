@@ -70,8 +70,8 @@ export function GuildOnboardingPage() {
             const membership = session.memberships.find(item => item.guild_id === guild.guild_id);
             return <div key={guild.guild_id} className="rounded-xl border border-border bg-black/30 p-4">
               <h2 className="font-semibold">{guild.name || guild.guild_id}</h2>
-              <p className="mt-1 text-sm text-text-secondary">{t(membership?.active ? 'Du bist Mitglied dieser Community.' : membership ? 'Deine Aufnahme wartet auf Freigabe durch den Server-Admin.' : guild.auto_partner_default ? 'Du wirst direkt Partner dieses Servers.' : 'Ein Server-Admin muss deine Aufnahme freigeben.')}</p>
-              {!membership && <button type="button" disabled={pending} onClick={() => void choose(guild.guild_id)} className="mt-3 min-h-11 rounded-lg bg-primary px-4 py-2 font-bold text-bg disabled:opacity-50">{t('Diesen Server wählen')}</button>}
+              <p className="mt-1 text-sm text-text-secondary">{t(membership?.active ? 'Du bist Mitglied dieser Community.' : membership?.can_rejoin ? 'Deine Mitgliedschaft ist nicht mehr aktiv. Bestätige den Server erneut.' : membership ? 'Deine Aufnahme wartet auf Freigabe durch den Server-Admin.' : guild.auto_partner_default ? 'Du wirst direkt Partner dieses Servers.' : 'Ein Server-Admin muss deine Aufnahme freigeben.')}</p>
+              {(!membership || membership.can_rejoin) && <button type="button" disabled={pending} onClick={() => void choose(guild.guild_id)} className="mt-3 min-h-11 rounded-lg bg-primary px-4 py-2 font-bold text-bg disabled:opacity-50">{t('Diesen Server wählen')}</button>}
             </div>;
           })}
         </div>}

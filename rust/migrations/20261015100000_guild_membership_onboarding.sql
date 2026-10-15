@@ -297,29 +297,31 @@ CREATE TABLE public.guild_onboarding_sessions (
 CREATE INDEX guild_onboarding_sessions_expiry ON public.guild_onboarding_sessions (expires_at);
 
 CREATE FUNCTION public.guild_partner_allowed(uid text) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT NOT (SELECT enabled FROM public.guild_runtime WHERE singleton)
-        OR EXISTS (SELECT 1 FROM public.partner_guild_active WHERE twitch_user_id = uid);
+    SELECT CASE WHEN (SELECT enabled FROM public.guild_runtime WHERE singleton) THEN
+        EXISTS (SELECT 1 FROM public.partner_guild_active WHERE twitch_user_id = uid)
+    ELSE
+        EXISTS (SELECT 1 FROM public.streamer_guilds WHERE twitch_user_id = uid AND guild_id = 1289721245281292288)
+        OR (NOT EXISTS (SELECT 1 FROM public.streamer_guilds WHERE twitch_user_id = uid)
+            AND EXISTS (SELECT 1 FROM public.twitch_partners WHERE twitch_user_id = uid AND COALESCE(added_by, '') <> 'guild_onboarding'))
+    END;
 $$;
 
 CREATE FUNCTION public.sync_legacy_home_membership() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE eligible boolean;
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM public.streamer_guilds WHERE twitch_user_id = NEW.twitch_user_id)
-       AND (SELECT enabled FROM public.guild_runtime WHERE singleton) THEN
-        RETURN NEW;
-    END IF;
-    eligible := NEW.status = 'active' AND coalesce(NEW.manual_partner_opt_out, 0) = 0
-        AND coalesce(NEW.technical_pause_reason, '') = '' AND NEW.admin_archived_at IS NULL;
+    SELECT COALESCE(bool_or(p.status = 'active' AND COALESCE(p.manual_partner_opt_out, 0) = 0
+        AND COALESCE(p.technical_pause_reason, '') = '' AND p.admin_archived_at IS NULL), false)
+    INTO eligible FROM public.twitch_partners p WHERE p.twitch_user_id = NEW.twitch_user_id;
     INSERT INTO public.streamer_guilds (twitch_user_id, guild_id, active, source, deactivated_at, require_discord_link, is_on_discord)
     SELECT NEW.twitch_user_id, 1289721245281292288, eligible, 'migration', CASE WHEN eligible THEN NULL ELSE now() END,
-        COALESCE(NEW.require_discord_link, 0) = 1,
+        EXISTS (SELECT 1 FROM public.twitch_partners WHERE twitch_user_id = NEW.twitch_user_id AND COALESCE(require_discord_link, 0) = 1),
         EXISTS (SELECT 1 FROM public.twitch_streamer_identities WHERE twitch_user_id = NEW.twitch_user_id AND is_on_discord = 1)
     WHERE EXISTS (SELECT 1 FROM public.twitch_streamer_identities WHERE twitch_user_id = NEW.twitch_user_id)
       AND (EXISTS (SELECT 1 FROM public.streamer_guilds WHERE twitch_user_id = NEW.twitch_user_id AND guild_id = 1289721245281292288)
           OR NOT EXISTS (SELECT 1 FROM public.streamer_guilds WHERE twitch_user_id = NEW.twitch_user_id))
     ON CONFLICT (twitch_user_id, guild_id) DO UPDATE
        SET active = EXCLUDED.active, deactivated_at = EXCLUDED.deactivated_at,
-           require_discord_link = EXCLUDED.require_discord_link, is_on_discord = EXCLUDED.is_on_discord
+           require_discord_link = EXCLUDED.require_discord_link
        WHERE streamer_guilds.source = 'migration' AND coalesce(streamer_guilds.deactivated_by, '') <> 'admin';
     RETURN NEW;
 END;
@@ -337,7 +339,7 @@ BEGIN
             deactivated_by = CASE WHEN guild_id = 1289721245281292288 OR deactivated_by = 'admin' THEN deactivated_by ELSE 'identity_change' END,
             deactivated_at = CASE WHEN guild_id = 1289721245281292288 THEN deactivated_at ELSE COALESCE(deactivated_at, now()) END
         WHERE twitch_user_id = NEW.twitch_user_id;
-    ELSE
+    ELSIF NEW.is_on_discord IS DISTINCT FROM OLD.is_on_discord THEN
         UPDATE public.streamer_guilds SET is_on_discord = COALESCE(NEW.is_on_discord, 0) = 1
         WHERE twitch_user_id = NEW.twitch_user_id AND guild_id = 1289721245281292288;
     END IF;

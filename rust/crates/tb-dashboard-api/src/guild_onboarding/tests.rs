@@ -174,6 +174,40 @@ async fn relinking_discord_invalidates_existing_guild_proofs() {
 }
 
 #[tokio::test]
+async fn active_home_membership_with_invalidated_proof_can_be_verified_again() {
+    let db = fixture().await;
+    sqlx::raw_sql("UPDATE twitch_streamer_identities SET discord_user_id='987',is_on_discord=1 WHERE twitch_user_id='42';
+        UPDATE streamer_guilds SET require_discord_link=true WHERE twitch_user_id='42';
+        UPDATE twitch_streamer_identities SET discord_user_id='988' WHERE twitch_user_id='42';").execute(&db.pool).await.unwrap();
+    let raw = "synthetic-home-reverification-session-000001";
+    new_session(&db.pool, raw, "42", &[HOME]).await;
+    sqlx::query("UPDATE guild_onboarding_sessions SET discord_user_id='988'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let response = status(Extension(auth(db.pool.clone())), headers(raw)).await;
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["memberships"][0]["active"], false);
+    assert_eq!(body["memberships"][0]["can_rejoin"], true);
+    assert_eq!(
+        assign(&db.pool, &session_lookup_key(raw), HOME)
+            .await
+            .unwrap(),
+        Some(true)
+    );
+    assert!(sqlx::query_scalar::<_, bool>(
+        "SELECT is_on_discord FROM streamer_guilds WHERE twitch_user_id='42'"
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap());
+    db.close().await;
+}
+
+#[tokio::test]
 async fn membership_selection_enforces_proof_runtime_approval_and_admin_decisions() {
     let db = fixture().await;
     let raw = "synthetic-onboarding-session-0000000001";
@@ -338,4 +372,121 @@ fn domain_allowlist_ignores_forwarded_hosts_and_rejects_unknown_origins() {
     assert_eq!(origin(&headers), Some("https://dead-lock.de"));
     headers.insert(header::HOST, HeaderValue::from_static("evil.example"));
     assert_eq!(origin(&headers), None);
+}
+
+#[tokio::test]
+async fn cutover_preserves_legacy_signup_history_and_rollback_rejects_foreign_only_partners() {
+    let db = fixture().await;
+    sqlx::query("SELECT enable_guild_runtime()")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql("INSERT INTO twitch_streamer_identities(twitch_user_id,twitch_login) VALUES('500','home_new');
+        INSERT INTO twitch_partners(twitch_user_id,twitch_login) VALUES('500','home_new');
+        INSERT INTO twitch_partners(twitch_user_id,twitch_login,status,admin_archived_at,manual_partner_opt_out) VALUES('500','home_old','archived',CURRENT_TIMESTAMP,1);
+        UPDATE twitch_partners SET technical_pause_reason='maintenance' WHERE twitch_user_id='500' AND status='archived';")
+        .execute(&db.pool).await.unwrap();
+    assert!(sqlx::query_scalar::<_,bool>("SELECT active FROM streamer_guilds WHERE twitch_user_id='500' AND guild_id=1289721245281292288").fetch_one(&db.pool).await.unwrap());
+    assert_eq!(sqlx::query_scalar::<_,i32>("SELECT is_partner_active FROM twitch_partners_all_state WHERE twitch_user_id='500' AND status='active'").fetch_one(&db.pool).await.unwrap(), 1);
+    sqlx::query("INSERT INTO discord_guilds(guild_id,status) VALUES(700,'active')")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let raw = "synthetic-cutover-foreign-session-000001";
+    new_session(&db.pool, raw, "100", &[700]).await;
+    assert_eq!(
+        assign(&db.pool, &session_lookup_key(raw), 700)
+            .await
+            .unwrap(),
+        Some(true)
+    );
+    sqlx::raw_sql("UPDATE streamer_guilds SET active=false,is_on_discord=false,deactivated_by='discord_leave',deactivated_at=now() WHERE twitch_user_id='100'; UPDATE guild_runtime SET enabled=false;").execute(&db.pool).await.unwrap();
+    assert!(
+        !sqlx::query_scalar::<_, bool>("SELECT guild_partner_allowed('100')")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap()
+    );
+    assert!(auth(db.pool.clone())
+        .find_partner_for_login("user100", "100")
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        sqlx::query_scalar::<_, i32>(
+            "SELECT is_partner_active FROM twitch_partners_all_state WHERE twitch_user_id='100'"
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap(),
+        0
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn current_partner_state_and_independent_home_proof_survive_other_assignments() {
+    let db = fixture().await;
+    sqlx::query("SELECT enable_guild_runtime()")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql("INSERT INTO twitch_partners(twitch_user_id,twitch_login,status,admin_archived_at,manual_partner_opt_out) VALUES('42','historical','archived',CURRENT_TIMESTAMP,1);
+        INSERT INTO discord_guilds(guild_id,status,auto_partner_default) VALUES(700,'active',true),(701,'active',false);
+        UPDATE streamer_guilds SET is_on_discord=true,require_discord_link=true WHERE twitch_user_id='42';").execute(&db.pool).await.unwrap();
+    let raw = "synthetic-existing-proof-session-000001";
+    let hash = session_lookup_key(raw);
+    new_session(&db.pool, raw, "42", &[HOME, 700, 701]).await;
+    assert_eq!(assign(&db.pool, &hash, 701).await.unwrap(), Some(false));
+    assert!(sqlx::query_scalar::<_,bool>("SELECT is_on_discord FROM streamer_guilds WHERE twitch_user_id='42' AND guild_id=1289721245281292288").fetch_one(&db.pool).await.unwrap());
+    assert_eq!(assign(&db.pool, &hash, 700).await.unwrap(), Some(true));
+    sqlx::query("UPDATE twitch_partners SET technical_pause_reason='maintenance' WHERE twitch_user_id='42' AND status='archived'").execute(&db.pool).await.unwrap();
+    assert!(sqlx::query_scalar::<_,bool>("SELECT is_on_discord FROM streamer_guilds WHERE twitch_user_id='42' AND guild_id=1289721245281292288").fetch_one(&db.pool).await.unwrap());
+    assert_eq!(assign(&db.pool, &hash, HOME).await.unwrap(), Some(true));
+    assert_eq!(
+        sqlx::query_scalar::<_, i32>(
+            "SELECT is_on_discord FROM twitch_streamer_identities WHERE twitch_user_id='42'"
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap(),
+        1
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn automatic_admission_reactivates_unblocked_history_and_departed_members_can_rejoin() {
+    let db = fixture().await;
+    sqlx::query("SELECT enable_guild_runtime()")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql("INSERT INTO twitch_streamer_identities(twitch_user_id,twitch_login) VALUES('100','former');
+        INSERT INTO twitch_partners(twitch_user_id,twitch_login,status) VALUES('100','former','departnered');
+        INSERT INTO discord_guilds(guild_id,status) VALUES(700,'active');").execute(&db.pool).await.unwrap();
+    let raw = "synthetic-returning-partner-session-000001";
+    let hash = session_lookup_key(raw);
+    new_session(&db.pool, raw, "100", &[700]).await;
+    assert_eq!(assign(&db.pool, &hash, 700).await.unwrap(), Some(true));
+    assert!(
+        auth(db.pool.clone())
+            .is_partner_active("user100", "100")
+            .await
+    );
+    sqlx::query("UPDATE streamer_guilds SET active=false,is_on_discord=false,deactivated_at=now(),deactivated_by='discord_leave' WHERE twitch_user_id='100' AND guild_id=700").execute(&db.pool).await.unwrap();
+    let response = status(Extension(auth(db.pool.clone())), headers(raw)).await;
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert!(body["memberships"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|m| m["guild_id"] == "700" && m["can_rejoin"] == true));
+    assert_eq!(assign(&db.pool, &hash, 700).await.unwrap(), Some(true));
+    sqlx::query("UPDATE streamer_guilds SET active=false,deactivated_at=now(),deactivated_by='admin' WHERE twitch_user_id='100' AND guild_id=700").execute(&db.pool).await.unwrap();
+    assert_eq!(assign(&db.pool, &hash, 700).await.unwrap(), Some(false));
+    db.close().await;
 }
