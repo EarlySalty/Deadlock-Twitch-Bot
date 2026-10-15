@@ -570,11 +570,16 @@ async fn place_on(
             .collect(),
         _ => reserved,
     };
-    let mut allocator = autopilot_schedule::Allocator::load_on(tx, &video.twitch_user_id, settings)
-        .await
-        .map_err(schedule_error)?;
+    let subject = autopilot_schedule::Subject {
+        job: video.job_id,
+        video: Some(video.id),
+    };
+    let mut allocator =
+        autopilot_schedule::Allocator::load_for(tx, &video.twitch_user_id, settings, subject)
+            .await
+            .map_err(schedule_error)?;
     let allocation = allocator
-        .place(now, &kept, selected)
+        .place_committed(now, &kept, selected)
         .map_err(schedule_error)?
         .ok_or(ProducedVideoError::NoSlot)?;
     autopilot_schedule::place_video_on(tx, &video.twitch_user_id, video.id, &allocation)

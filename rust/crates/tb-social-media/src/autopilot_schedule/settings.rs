@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, PgPool};
 
 use super::{
-    hold_slots_on, place_video_on, queued_platforms_on, reservations_on, reserve_on, Allocator,
-    Reservation, ScheduleError,
+    place_video_on, queued_platforms_on, reservations_on, reserve_on, Allocator, Reservation,
+    ScheduleError, Subject,
 };
 use crate::autopilot_settings::{self, AutopilotSettings, ScheduleSlot};
 
@@ -201,26 +201,19 @@ pub(crate) async fn retime_on(
     let queued = release_queued_on(connection, owner).await?;
     let probe = Allocator::load_on(connection, owner, settings).await?;
     let stale = stale_videos_on(connection, owner, &probe, now).await?;
-    for (video, _) in &stale {
-        if let Some(job) = video.1 {
-            hold_slots_on(connection, owner, job, None, &[]).await?;
-        }
-    }
-    let mut allocator = Allocator::load_on(connection, owner, settings).await?;
     for (video, previous) in stale {
-        let mut platforms: Vec<String> = previous.into_iter().map(|slot| slot.platform).collect();
+        let subject = Subject {
+            job: video.1,
+            video: Some(video.0),
+        };
+        let mut allocator = Allocator::load_for(connection, owner, settings, subject).await?;
         let queued_platforms = queued_platforms_on(connection, video.0).await?;
-        platforms.extend(
-            queued_platforms
-                .into_iter()
-                .filter(|platform| !platforms.contains(platform))
-                .collect::<Vec<_>>(),
-        );
-        match allocator.place(now, &[], &platforms)? {
+        match allocator.place_video(now, &previous, &queued_platforms)? {
             Some(allocation) => place_video_on(connection, owner, video.0, &allocation).await?,
             None => unschedule_video_on(connection, &video).await?,
         }
     }
+    let mut allocator = Allocator::load_on(connection, owner, settings).await?;
     for (id, previous) in queued {
         let allocation = allocator.plan_job(now, &previous)?;
         reserve_on(connection, owner, id, allocation.as_ref()).await?;
@@ -255,7 +248,9 @@ pub async fn save_schedule(
         .bind(settings.lead_time_hours).bind(&settings.timezone).bind(serde_json::to_string(&settings.schedule_slots)?)
         .bind(serde_json::to_string(&settings.target_platforms)?)
         .execute(&mut *tx).await?;
-    if previous.schedule_slots != settings.schedule_slots || previous.timezone != settings.timezone
+    if previous.schedule_slots != settings.schedule_slots
+        || previous.timezone != settings.timezone
+        || previous.target_platforms != settings.target_platforms
     {
         retime_on(&mut tx, owner, &settings).await?;
     }

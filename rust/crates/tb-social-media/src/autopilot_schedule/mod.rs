@@ -182,6 +182,12 @@ pub(crate) async fn has_schedule_on(
     Ok(schedule_exists(settings, &policy))
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Subject {
+    pub job: Option<i64>,
+    pub video: Option<i64>,
+}
+
 #[derive(Debug, Default)]
 struct Occupancy {
     channel: Vec<DateTime<Utc>>,
@@ -189,24 +195,34 @@ struct Occupancy {
 }
 
 impl Occupancy {
-    async fn load_on(connection: &mut PgConnection, owner: &str) -> Result<Self, sqlx::Error> {
+    async fn load_on(
+        connection: &mut PgConnection,
+        owner: &str,
+        subject: Subject,
+    ) -> Result<Self, sqlx::Error> {
         let channel = sqlx::query_scalar("SELECT j.scheduled_at FROM social_production_jobs j
             WHERE j.twitch_user_id = $1 AND j.scheduled_at IS NOT NULL AND j.status IN ('queued', 'running', 'completed')
+            AND j.id IS DISTINCT FROM $2
             AND NOT EXISTS (SELECT 1 FROM social_publication_reservations r WHERE r.job_id = j.id AND r.state = 'reserved')
             UNION SELECT v.scheduled_at FROM social_produced_videos v
             WHERE v.twitch_user_id = $1 AND v.scheduled_at IS NOT NULL
+            AND v.id IS DISTINCT FROM $3 AND (v.job_id IS NULL OR v.job_id IS DISTINCT FROM $2)
             AND NOT EXISTS (SELECT 1 FROM social_publication_reservations r WHERE r.job_id = v.job_id
                 AND r.state = 'reserved' AND r.scheduled_at = v.scheduled_at)")
-            .bind(owner).fetch_all(&mut *connection).await?;
+            .bind(owner).bind(subject.job).bind(subject.video).fetch_all(&mut *connection).await?;
         let rows: Vec<(String, DateTime<Utc>)> = sqlx::query_as(
             "SELECT platform, scheduled_at FROM social_publication_reservations
-            WHERE twitch_user_id = $1 AND state = 'reserved'
+            WHERE twitch_user_id = $1 AND state = 'reserved' AND job_id IS DISTINCT FROM $2
             UNION SELECT q.platform, q.scheduled_at FROM twitch_clips_upload_queue q
             JOIN twitch_clips_social_media c ON c.id = q.clip_id
             WHERE c.twitch_user_id = $1 AND q.scheduled_at IS NOT NULL AND q.platform IS NOT NULL
-            AND COALESCE(q.status, '') NOT IN ('failed', 'cancelled', 'autopilot_discarded', 'autopilot_failed')",
+            AND COALESCE(q.status, '') NOT IN ('failed', 'cancelled', 'autopilot_discarded', 'autopilot_failed')
+            AND NOT EXISTS (SELECT 1 FROM social_produced_videos v WHERE v.id = q.produced_video_id
+                AND (v.id = $3 OR v.job_id = $2))",
         )
         .bind(owner)
+        .bind(subject.job)
+        .bind(subject.video)
         .fetch_all(connection)
         .await?;
         let mut platforms: BTreeMap<String, Vec<DateTime<Utc>>> = BTreeMap::new();
@@ -230,6 +246,12 @@ impl Occupancy {
             taken.extend(self.platforms.get(*platform).into_iter().flatten());
         }
         taken
+    }
+
+    fn is_free(&self, slot: &Reservation) -> bool {
+        !self
+            .for_platforms(&[slot.platform.as_str()])
+            .contains(&slot.scheduled_at)
     }
 
     fn add(&mut self, allocation: &Allocation) {
@@ -280,8 +302,17 @@ impl Allocator {
         owner: &str,
         settings: &AutopilotSettings,
     ) -> Result<Self, ScheduleError> {
+        Self::load_for(connection, owner, settings, Subject::default()).await
+    }
+
+    pub(crate) async fn load_for(
+        connection: &mut PgConnection,
+        owner: &str,
+        settings: &AutopilotSettings,
+        subject: Subject,
+    ) -> Result<Self, ScheduleError> {
         let policy = autopilot_settings::load_policy_on(connection, owner).await?;
-        let occupancy = Occupancy::load_on(connection, owner).await?;
+        let occupancy = Occupancy::load_on(connection, owner, subject).await?;
         Ok(Self {
             settings: settings.clone(),
             policy,
@@ -427,37 +458,100 @@ impl Allocator {
         Ok(slots)
     }
 
+    fn keeps(&self, now: DateTime<Utc>, slot: &Reservation) -> Result<bool, ScheduleError> {
+        let slots = self.policy.slots_for(&self.settings, &slot.platform);
+        Ok(slot.scheduled_at > now
+            && self.occupancy.is_free(slot)
+            && self.is_slot(slot.scheduled_at, slots)?)
+    }
+
+    fn arrange(
+        &self,
+        now: DateTime<Utc>,
+        kept: &[Reservation],
+        selected: &[String],
+        validate: bool,
+    ) -> Result<Option<Allocation>, ScheduleError> {
+        if selected.is_empty() {
+            return self.channel_wide(now);
+        }
+        let targets = self.scheduled(selected);
+        let mut placed = Vec::new();
+        for slot in kept {
+            let wanted = if validate {
+                targets.contains(&slot.platform.as_str()) && self.keeps(now, slot)?
+            } else {
+                selected.contains(&slot.platform)
+            };
+            if wanted
+                && !placed
+                    .iter()
+                    .any(|done: &Reservation| done.platform == slot.platform)
+            {
+                placed.extend([slot.clone()]);
+            }
+        }
+        let missing: Vec<String> = targets
+            .iter()
+            .filter(|platform| !placed.iter().any(|slot| slot.platform == **platform))
+            .map(|platform| (*platform).to_owned())
+            .collect();
+        if !missing.is_empty() {
+            placed.extend(self.place_missing(now, &missing)?);
+        }
+        Ok(Allocation::from_reservations(placed))
+    }
+
+    fn settle(&mut self, allocation: Option<Allocation>) -> Option<Allocation> {
+        if let Some(plan) = &allocation {
+            self.commit(plan);
+        }
+        allocation
+    }
+
     pub(crate) fn place(
         &mut self,
         now: DateTime<Utc>,
         kept: &[Reservation],
         selected: &[String],
     ) -> Result<Option<Allocation>, ScheduleError> {
-        let allocation = if selected.is_empty() {
-            self.channel_wide(now)?
-        } else {
-            let mut placed: Vec<Reservation> = kept
-                .iter()
-                .filter(|slot| selected.contains(&slot.platform))
-                .cloned()
-                .collect();
-            let missing: Vec<String> = selected
-                .iter()
-                .filter(|platform| !placed.iter().any(|slot| &slot.platform == *platform))
-                .cloned()
-                .collect();
-            if !missing.is_empty() {
-                placed.extend(self.place_missing(now, &missing)?);
-            }
-            if placed.len() < selected.len() {
-                return Ok(None);
-            }
-            Allocation::from_reservations(placed)
-        };
-        if let Some(plan) = &allocation {
-            self.commit(plan);
+        let allocation = self.arrange(now, kept, selected, true)?;
+        Ok(self.settle(allocation))
+    }
+
+    pub(crate) fn place_committed(
+        &mut self,
+        now: DateTime<Utc>,
+        kept: &[Reservation],
+        selected: &[String],
+    ) -> Result<Option<Allocation>, ScheduleError> {
+        let allocation = self.arrange(now, kept, selected, false)?;
+        Ok(self.settle(allocation))
+    }
+
+    pub(crate) fn place_video(
+        &mut self,
+        now: DateTime<Utc>,
+        previous: &[Reservation],
+        queued: &[String],
+    ) -> Result<Option<Allocation>, ScheduleError> {
+        let targets = &self.settings.target_platforms;
+        let mut selected: Vec<String> = previous
+            .iter()
+            .map(|slot| slot.platform.clone())
+            .filter(|platform| targets.is_empty() || targets.contains(platform))
+            .collect();
+        if !self.independent() {
+            selected.extend(targets.iter().cloned());
         }
-        Ok(allocation)
+        selected.extend(queued.iter().cloned());
+        selected.sort();
+        selected.dedup();
+        if selected.is_empty() && !targets.is_empty() {
+            let allocation = self.plan(now)?;
+            return Ok(self.settle(allocation));
+        }
+        self.place(now, previous, &selected)
     }
 
     pub(crate) fn plan(&self, now: DateTime<Utc>) -> Result<Option<Allocation>, ScheduleError> {
@@ -469,14 +563,24 @@ impl Allocator {
         now: DateTime<Utc>,
         previous: &[Reservation],
     ) -> Result<Option<Allocation>, ScheduleError> {
-        let kept = previous
-            .iter()
-            .find(|slot| self.settings.target_platforms.contains(&slot.platform));
-        match kept {
-            Some(slot) if self.independent() => {
-                self.plan_for(now, std::slice::from_ref(&slot.platform))
+        let targets = &self.settings.target_platforms;
+        if targets.is_empty() {
+            return self.plan(now);
+        }
+        let selected = if self.independent() {
+            match previous
+                .iter()
+                .find(|slot| targets.contains(&slot.platform))
+            {
+                Some(slot) => vec![slot.platform.clone()],
+                None => return self.plan(now),
             }
-            _ => self.plan(now),
+        } else {
+            targets.clone()
+        };
+        match self.arrange(now, previous, &selected, true)? {
+            Some(allocation) => Ok(Some(allocation)),
+            None => self.plan(now),
         }
     }
 
@@ -505,6 +609,17 @@ impl Allocator {
         Ok(self.next_in(before, &[], slots)? == Some(at))
     }
 
+    fn fits(&self, reservations: &[Reservation]) -> bool {
+        let targets = self.scheduled(&self.settings.target_platforms);
+        let covered = reservations
+            .iter()
+            .all(|slot| targets.contains(&slot.platform.as_str()));
+        if self.independent() {
+            return covered && reservations.len() == 1;
+        }
+        covered && reservations.len() == targets.len()
+    }
+
     pub(crate) fn holds(
         &self,
         at: DateTime<Utc>,
@@ -512,6 +627,9 @@ impl Allocator {
     ) -> Result<bool, ScheduleError> {
         if reservations.is_empty() {
             return self.is_slot(at, &self.settings.schedule_slots);
+        }
+        if !self.fits(reservations) {
+            return Ok(false);
         }
         for slot in reservations {
             let slots = self.policy.slots_for(&self.settings, &slot.platform);
@@ -689,10 +807,26 @@ async fn queue_jobs_on(
     .fetch_all(&mut *connection)
     .await?;
     let titles: std::collections::HashMap<i64, String> = titles.into_iter().collect();
+    let ids: Vec<i64> = jobs.iter().map(|job| job.id).collect();
+    let rows: Vec<(i64, String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT job_id, platform, scheduled_at FROM social_publication_reservations
+        WHERE job_id = ANY($1) AND state = 'reserved' ORDER BY scheduled_at, platform",
+    )
+    .bind(&ids)
+    .fetch_all(&mut *connection)
+    .await?;
+    let mut reserved: std::collections::HashMap<i64, Vec<Reservation>> =
+        std::collections::HashMap::new();
+    for (job, platform, scheduled_at) in rows {
+        reserved.entry(job).or_default().extend([Reservation {
+            platform,
+            scheduled_at,
+        }]);
+    }
     let mut queued = Vec::with_capacity(jobs.len());
     for job in jobs {
         let title = titles.get(&job.clip_id).cloned().unwrap_or_default();
-        let reservations = reservations_on(connection, job.id).await?;
+        let reservations = reserved.remove(&job.id).unwrap_or_default();
         queued.extend([QueueJob::from_job(job, title, reservations)?]);
     }
     Ok(queued)

@@ -981,3 +981,56 @@ async fn per_platform_schedule_without_shared_slots_starts_production() {
     assert_eq!(claimed.id, slots[0].0);
     cleanup(pool).await;
 }
+
+#[tokio::test]
+async fn missed_job_keeps_its_valid_future_destination_slot() {
+    let pool = pool().await;
+    choose_year(&pool, 2025, ClipSort::OldestFirst).await;
+    let patch = SchedulePatch {
+        lead_time_hours: Some(48),
+        ..schedule()
+    };
+    targets(&pool, "owner", &["youtube", "tiktok"], patch).await;
+    policy(
+        &pool,
+        "owner",
+        "per_platform",
+        json!({"youtube":[{"weekday":1,"local_time":"08:00"},{"weekday":2,"local_time":"08:00"}],
+            "tiktok":[{"weekday":1,"local_time":"20:00"},{"weekday":2,"local_time":"20:00"}]}),
+        "same_clip",
+    )
+    .await;
+    clip(&pool, "owner", "a", utc("2025-02-01T00:00:00Z")).await;
+    assert_eq!(
+        planned(plan_owner(&pool, "owner", utc("2026-10-11T18:00:00Z")).await),
+        1
+    );
+    let job = production_jobs::list(&pool, "owner", 500)
+        .await
+        .expect("queue")[0]
+        .id;
+    let tiktok = utc("2026-10-12T18:00:00Z");
+    assert_eq!(
+        reserved(&pool, "owner").await,
+        vec![
+            (job, "youtube".into(), utc("2026-10-12T06:00:00Z")),
+            (job, "tiktok".into(), tiktok),
+        ]
+    );
+    let report = plan_owner(&pool, "owner", utc("2026-10-12T07:00:00Z"))
+        .await
+        .expect("missed planner");
+    assert_eq!(report.retimed, 1);
+    assert_eq!(
+        reserved(&pool, "owner").await,
+        vec![
+            (job, "tiktok".into(), tiktok),
+            (job, "youtube".into(), utc("2026-10-13T06:00:00Z")),
+        ]
+    );
+    let jobs = production_jobs::list(&pool, "owner", 500)
+        .await
+        .expect("retimed queue");
+    assert_eq!(jobs[0].scheduled_at, Some(tiktok));
+    cleanup(pool).await;
+}

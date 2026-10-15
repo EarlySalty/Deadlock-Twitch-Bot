@@ -416,9 +416,14 @@ impl PublishExecutor {
             let mut platforms: BTreeSet<String> = approved.iter().cloned().collect();
             platforms.extend(autopilot_schedule::queued_platforms_on(&mut tx, id).await?);
             let platforms: Vec<String> = platforms.into_iter().collect();
+            let subject = autopilot_schedule::Subject {
+                job,
+                video: Some(id),
+            };
+            let reserved = autopilot_schedule::video_destinations_on(&mut tx, id).await?;
             let mut allocator =
-                autopilot_schedule::Allocator::load_on(&mut tx, owner, &settings).await?;
-            match allocator.place(now, &[], &platforms)? {
+                autopilot_schedule::Allocator::load_for(&mut tx, owner, &settings, subject).await?;
+            match allocator.place(now, &reserved, &platforms)? {
                 Some(next) => autopilot_schedule::place_video_on(&mut tx, owner, id, &next).await?,
                 None => release_slot(&mut tx, id).await?,
             }

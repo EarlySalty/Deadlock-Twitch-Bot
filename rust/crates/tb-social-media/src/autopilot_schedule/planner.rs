@@ -4,9 +4,9 @@ use sqlx::{PgConnection, PgPool};
 
 use super::{
     hold, production_horizon, reservations_on, reserve_on, review_count_on, Allocation, Allocator,
-    ProductionHold, ScheduleError,
+    ProductionHold, ScheduleError, Subject,
 };
-use crate::autopilot_settings::{self, ClipSort};
+use crate::autopilot_settings::{self, AutopilotSettings, ClipSort};
 
 type ClipBounds = (DateTime<Utc>, DateTime<Utc>);
 
@@ -42,7 +42,7 @@ async fn select_on(
 async fn retime_on(
     connection: &mut PgConnection,
     owner: &str,
-    allocator: &mut Allocator,
+    settings: &AutopilotSettings,
     now: DateTime<Utc>,
 ) -> Result<u64, ScheduleError> {
     let missed: Vec<i64> = sqlx::query_scalar(
@@ -58,10 +58,14 @@ async fn retime_on(
     let mut changed = 0;
     for id in missed {
         let previous = reservations_on(connection, id).await?;
+        let subject = Subject {
+            job: Some(id),
+            video: None,
+        };
+        let allocator = Allocator::load_for(connection, owner, settings, subject).await?;
         let allocation = allocator.plan_job(now, &previous)?;
         reserve_on(connection, owner, id, allocation.as_ref()).await?;
-        if let Some(allocation) = allocation {
-            allocator.commit(&allocation);
+        if allocation.is_some() {
             changed += 1;
         }
     }
@@ -115,7 +119,7 @@ pub async fn plan_owner(
     autopilot_settings::lock_owner(&mut tx, owner).await?;
     let settings = autopilot_settings::load_on(&mut tx, owner).await?;
     let reviews = review_count_on(&mut tx, owner).await?;
-    let mut allocator = Allocator::load_on(&mut tx, owner, &settings).await?;
+    let allocator = Allocator::load_on(&mut tx, owner, &settings).await?;
     let mut report = PlanReport {
         next_slot: allocator.plan(now)?.map(|plan| plan.reference),
         ..Default::default()
@@ -140,7 +144,8 @@ pub async fn plan_owner(
         tx.commit().await?;
         return Ok(report);
     }
-    report.retimed = retime_on(&mut tx, owner, &mut allocator, now).await?;
+    report.retimed = retime_on(&mut tx, owner, &settings, now).await?;
+    let mut allocator = Allocator::load_on(&mut tx, owner, &settings).await?;
     let window = crate::clip_pool::bounds(&settings, now)
         .map_err(|error| ScheduleError::Invalid(error.to_string()))?;
     let bounds = (window.start, window.end);

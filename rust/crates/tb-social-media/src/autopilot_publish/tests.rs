@@ -1245,3 +1245,228 @@ async fn per_platform_schedule_publishes_each_destination_at_its_own_slot() {
     assert_ne!(tiktok.0, "uploaded");
     cleanup(pool).await;
 }
+
+async fn split_schedule(pool: &PgPool, distribution: &str) {
+    configure(
+        pool,
+        &["youtube", "tiktok"],
+        &[("youtube", "yt-1"), ("tiktok", "tt-1")],
+    )
+    .await;
+    let morning: Vec<serde_json::Value> = (1..=7)
+        .map(|weekday| json!({"weekday": weekday, "local_time": "06:00"}))
+        .collect();
+    let evening: Vec<serde_json::Value> = (1..=7)
+        .map(|weekday| json!({"weekday": weekday, "local_time": "18:00"}))
+        .collect();
+    sqlx::query("UPDATE social_media_autopilot_settings SET pipeline_mode = 'upload', schedule_scope = 'per_platform',
+        platform_schedule_slots = $2::text::jsonb, distribution_policy = $3 WHERE twitch_user_id = $1")
+        .bind("owner")
+        .bind(json!({"youtube": morning, "tiktok": evening}).to_string())
+        .bind(distribution)
+        .execute(pool)
+        .await
+        .expect("per destination schedule");
+}
+
+async fn job_video(pool: &PgPool, name: &str) -> i64 {
+    let (id, _) = video(pool, name).await;
+    let job: i64 = sqlx::query_scalar(
+        "INSERT INTO social_production_jobs (twitch_user_id, clip_id, queue_order, status, mode, started_at, finished_at)
+        SELECT twitch_user_id, clip_id, 1, 'completed', 'static', NOW(), NOW() FROM social_produced_videos WHERE id = $1
+        RETURNING id",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .expect("completed job");
+    sqlx::query("UPDATE social_produced_videos SET job_id = $2 WHERE id = $1")
+        .bind(id)
+        .bind(job)
+        .execute(pool)
+        .await
+        .expect("video job");
+    id
+}
+
+type Slots = Vec<(String, chrono::DateTime<chrono::Utc>)>;
+
+async fn video_slots(pool: &PgPool, id: i64) -> (Slots, Slots) {
+    let reserved = sqlx::query_as(
+        "SELECT r.platform, r.scheduled_at FROM social_publication_reservations r
+        JOIN social_produced_videos v ON v.job_id = r.job_id
+        WHERE v.id = $1 AND r.state = 'reserved' ORDER BY r.platform",
+    )
+    .bind(id)
+    .fetch_all(pool)
+    .await
+    .expect("reservations");
+    let uploads = sqlx::query_as(
+        "SELECT platform, scheduled_at FROM twitch_clips_upload_queue WHERE produced_video_id = $1 ORDER BY platform",
+    )
+    .bind(id)
+    .fetch_all(pool)
+    .await
+    .expect("uploads");
+    (reserved, uploads)
+}
+
+#[tokio::test]
+async fn destination_without_own_slots_keeps_the_other_placements() {
+    let pool = pool().await;
+    split_schedule(&pool, "same_clip").await;
+    let first = job_video(&pool, "first").await;
+    approve(&pool, "owner", first, &decisions(&["youtube", "tiktok"]))
+        .await
+        .expect("approve first");
+    let (reserved, uploads) = video_slots(&pool, first).await;
+    assert_eq!(reserved, uploads);
+    assert_eq!(reserved.len(), 2);
+    let youtube = reserved[1].1;
+    let mut policy = autopilot_settings::load_policy(&pool, "owner")
+        .await
+        .expect("policy");
+    policy
+        .platform_schedule_slots
+        .insert("tiktok".into(), Vec::new());
+    autopilot_settings::save_policy(&pool, "owner", &policy)
+        .await
+        .expect("tiktok without slots");
+    let (reserved, uploads) = video_slots(&pool, first).await;
+    assert_eq!(reserved, vec![("youtube".to_string(), youtube)]);
+    assert_eq!(
+        uploads,
+        vec![
+            ("tiktok".to_string(), youtube),
+            ("youtube".to_string(), youtube)
+        ]
+    );
+    let second = job_video(&pool, "second").await;
+    approve(&pool, "owner", second, &decisions(&["youtube", "tiktok"]))
+        .await
+        .expect("approve without tiktok slots");
+    let (reserved, uploads) = video_slots(&pool, second).await;
+    assert_eq!(reserved.len(), 1);
+    assert_eq!(reserved[0].0, "youtube");
+    assert!(reserved[0].1 > youtube);
+    assert_eq!(uploads.len(), 2);
+    assert!(uploads.iter().all(|upload| upload.1 == reserved[0].1));
+    cleanup(pool).await;
+}
+
+async fn review_with_reservations(pool: &PgPool, name: &str) -> i64 {
+    let id = job_video(pool, name).await;
+    approve(pool, "owner", id, &decisions(&["youtube", "tiktok"]))
+        .await
+        .expect("reserve destinations");
+    sqlx::query("DELETE FROM twitch_clips_upload_queue WHERE produced_video_id = $1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .expect("no uploads yet");
+    sqlx::query("UPDATE social_produced_videos SET status = 'review' WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .expect("back in review");
+    id
+}
+
+async fn retarget(pool: &PgPool, platforms: &[&str]) {
+    crate::production_jobs::autopilot_schedule::save_schedule(
+        pool,
+        "owner",
+        &crate::production_jobs::autopilot_schedule::SchedulePatch {
+            target_platforms: Some(platforms.iter().map(|value| (*value).to_owned()).collect()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("retarget");
+}
+
+#[tokio::test]
+async fn target_change_rederives_destination_reservations() {
+    let pool = pool().await;
+    split_schedule(&pool, "same_clip").await;
+    let id = review_with_reservations(&pool, "review").await;
+    let (before, _) = video_slots(&pool, id).await;
+    assert_eq!(before.len(), 2);
+    retarget(&pool, &["youtube"]).await;
+    let (reserved, _) = video_slots(&pool, id).await;
+    assert_eq!(reserved, vec![before[1].clone()]);
+    retarget(&pool, &["youtube", "tiktok"]).await;
+    let (reserved, _) = video_slots(&pool, id).await;
+    assert_eq!(reserved, before);
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn independent_clip_moves_to_a_remaining_destination() {
+    let pool = pool().await;
+    split_schedule(&pool, "independent_clips").await;
+    let (id, _) = video(&pool, "solo").await;
+    let job: i64 = sqlx::query_scalar(
+        "INSERT INTO social_production_jobs (twitch_user_id, clip_id, queue_order, status, mode, started_at, finished_at)
+        SELECT twitch_user_id, clip_id, 1, 'completed', 'static', NOW(), NOW() FROM social_produced_videos WHERE id = $1
+        RETURNING id",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .expect("completed job");
+    let evening: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+        "SELECT ((date_trunc('day', clock_timestamp() AT TIME ZONE s.timezone) + INTERVAL '2 days 18 hours')
+            AT TIME ZONE s.timezone) FROM social_media_autopilot_settings s WHERE s.twitch_user_id = 'owner'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("tiktok slot");
+    sqlx::query("UPDATE social_produced_videos SET job_id = $2, scheduled_at = $3 WHERE id = $1")
+        .bind(id)
+        .bind(job)
+        .bind(evening)
+        .execute(&pool)
+        .await
+        .expect("video slot");
+    sqlx::query("INSERT INTO social_publication_reservations (twitch_user_id, platform, scheduled_at, job_id, produced_video_id)
+        VALUES ('owner', 'tiktok', $2, $1, $3)")
+        .bind(job)
+        .bind(evening)
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("tiktok reservation");
+    retarget(&pool, &["youtube"]).await;
+    let (reserved, _) = video_slots(&pool, id).await;
+    assert_eq!(reserved.len(), 1);
+    assert_eq!(reserved[0].0, "youtube");
+    assert!(reserved[0].1 > chrono::Utc::now());
+    cleanup(pool).await;
+}
+
+#[tokio::test]
+async fn late_event_keeps_its_valid_future_destination_slot() {
+    let pool = pool().await;
+    split_schedule(&pool, "same_clip").await;
+    let id = job_video(&pool, "late").await;
+    approve(&pool, "owner", id, &decisions(&["youtube", "tiktok"]))
+        .await
+        .expect("approve");
+    let (_, before) = video_slots(&pool, id).await;
+    sqlx::query("UPDATE social_produced_videos SET scheduled_at = clock_timestamp() - INTERVAL '3 hours' WHERE id = $1")
+        .bind(id).execute(&pool).await.expect("late video");
+    sqlx::query("UPDATE twitch_clips_upload_queue SET scheduled_at = clock_timestamp() - INTERVAL '3 hours' WHERE produced_video_id = $1 AND platform = 'youtube'")
+        .bind(id).execute(&pool).await.expect("late youtube");
+    let publisher = ScriptedPublisher::with(vec![]);
+    let report = PublishExecutor::new(pool.clone(), publisher.clone())
+        .tick()
+        .await
+        .expect("tick");
+    assert_eq!(report.rescheduled, 1);
+    assert!(publisher.calls().is_empty());
+    let (reserved, uploads) = video_slots(&pool, id).await;
+    assert_eq!(uploads, before);
+    assert_eq!(reserved, before);
+    cleanup(pool).await;
+}

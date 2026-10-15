@@ -45,6 +45,22 @@ async fn move_uploads_on(
         .execute(&mut *connection)
         .await?;
     }
+    sqlx::query(
+        "UPDATE twitch_clips_upload_queue SET scheduled_at = $3
+        WHERE produced_video_id = $1 AND scheduled_at IS NOT NULL AND scheduled_at <> $3
+        AND NOT (platform = ANY($2))",
+    )
+    .bind(video)
+    .bind(
+        allocation
+            .slots
+            .iter()
+            .map(|slot| slot.platform.clone())
+            .collect::<Vec<_>>(),
+    )
+    .bind(allocation.reference)
+    .execute(connection)
+    .await?;
     Ok(())
 }
 
