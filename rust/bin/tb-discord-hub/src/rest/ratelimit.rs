@@ -1,10 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use reqwest::header::HeaderMap;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use tokio::time::Instant;
+
+const MAX_BUCKETS: usize = 4096;
 
 #[derive(Debug, Default)]
 struct BucketState {
@@ -21,6 +23,35 @@ struct Inner {
     routes: HashMap<RouteKey, Bucket>,
     buckets: HashMap<(String, String), Bucket>,
     global_until: Option<Instant>,
+}
+
+impl Inner {
+    fn prune(&mut self) {
+        if self.routes.len() + self.buckets.len() < MAX_BUCKETS
+            && self.route_bucket.len() < MAX_BUCKETS
+        {
+            return;
+        }
+        let now = Instant::now();
+        let retain = |bucket: &Bucket| {
+            Arc::strong_count(bucket) > 1
+                || bucket.try_lock().map_or(true, |state| {
+                    state.reset_at.is_some_and(|until| until > now)
+                        || state.blocked_until.is_some_and(|until| until > now)
+                })
+        };
+        self.routes.retain(|_, bucket| retain(bucket));
+        self.buckets.retain(|_, bucket| retain(bucket));
+        let hashes: HashSet<_> = self.buckets.keys().map(|(hash, _)| hash.as_str()).collect();
+        let templates: HashSet<_> = self
+            .routes
+            .keys()
+            .map(|route| route.template.as_str())
+            .collect();
+        self.route_bucket.retain(|template, hash| {
+            hashes.contains(hash.as_str()) || templates.contains(template.as_str())
+        });
+    }
 }
 
 #[derive(Debug, Default)]
@@ -67,6 +98,15 @@ pub(crate) struct BucketGuard<'a> {
     limiter: &'a RateLimiter,
     route: RouteKey,
     state: OwnedMutexGuard<BucketState>,
+    binding_route: bool,
+}
+
+impl Drop for BucketGuard<'_> {
+    fn drop(&mut self) {
+        if self.binding_route {
+            self.limiter.lock().routes.remove(&self.route);
+        }
+    }
 }
 
 impl BucketGuard<'_> {
@@ -80,20 +120,36 @@ impl BucketGuard<'_> {
         };
         let mut discovered = false;
         if let Some(hash) = header("x-ratelimit-bucket") {
-            let bucket = {
+            let candidate = Bucket::default();
+            let candidate_state = candidate.clone().lock_owned().await;
+            let (bucket, unknown) = {
                 let mut inner = self.limiter.lock();
+                inner.prune();
+                let unknown = inner.routes.contains_key(&self.route);
                 inner
                     .route_bucket
                     .insert(self.route.template.clone(), hash.to_string());
-                inner
+                let bucket = inner
                     .buckets
                     .entry((hash.to_string(), self.route.major.clone()))
-                    .or_insert_with(|| OwnedMutexGuard::mutex(&self.state).clone())
-                    .clone()
+                    .or_insert_with(|| candidate.clone())
+                    .clone();
+                (bucket, unknown)
             };
-            if !Arc::ptr_eq(&bucket, OwnedMutexGuard::mutex(&self.state)) {
-                drop(self.state);
-                self.state = bucket.lock_owned().await;
+            if Arc::ptr_eq(&bucket, &candidate) {
+                self.limiter.lock().routes.remove(&self.route);
+                self.state = candidate_state;
+            } else if !Arc::ptr_eq(&bucket, OwnedMutexGuard::mutex(&self.state)) {
+                if unknown {
+                    self.binding_route = true;
+                    let state = bucket.lock_owned().await;
+                    self.limiter.lock().routes.remove(&self.route);
+                    self.state = state;
+                    self.binding_route = false;
+                } else {
+                    self.state = candidate_state;
+                    self.state = bucket.lock_owned().await;
+                }
                 discovered = true;
             }
         }
@@ -141,16 +197,27 @@ impl RateLimiter {
         self.inner.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    fn bucket(&self, route: &RouteKey) -> Bucket {
+    fn bucket(&self, route: &RouteKey) -> Result<Bucket, ()> {
         let mut inner = self.lock();
+        inner.prune();
+        let count = inner.routes.len() + inner.buckets.len();
+        if count > MAX_BUCKETS || inner.route_bucket.len() > MAX_BUCKETS {
+            return Err(());
+        }
+        if let Some(bucket) = inner.routes.get(route) {
+            return Ok(bucket.clone());
+        }
         if let Some(hash) = inner.route_bucket.get(&route.template).cloned() {
-            inner
-                .buckets
-                .entry((hash, route.major.clone()))
-                .or_default()
-                .clone()
+            let key = (hash, route.major.clone());
+            if count >= MAX_BUCKETS && !inner.buckets.contains_key(&key) {
+                return Err(());
+            }
+            Ok(inner.buckets.entry(key).or_default().clone())
         } else {
-            inner.routes.entry(route.clone()).or_default().clone()
+            if inner.route_bucket.len() >= MAX_BUCKETS || count >= MAX_BUCKETS {
+                return Err(());
+            }
+            Ok(inner.routes.entry(route.clone()).or_default().clone())
         }
     }
 
@@ -161,9 +228,9 @@ impl RateLimiter {
     ) -> Result<BucketGuard<'_>, ()> {
         tokio::time::timeout(max_wait, async {
             loop {
-                let bucket = self.bucket(route);
+                let bucket = self.bucket(route)?;
                 let mut state = bucket.clone().lock_owned().await;
-                if !Arc::ptr_eq(&bucket, &self.bucket(route)) {
+                if !Arc::ptr_eq(&bucket, &self.bucket(route)?) {
                     continue;
                 }
                 loop {
@@ -186,17 +253,18 @@ impl RateLimiter {
                         if let Some(remaining) = &mut state.remaining {
                             *remaining = remaining.saturating_sub(1);
                         }
-                        return BucketGuard {
+                        return Ok(BucketGuard {
                             limiter: self,
                             route: route.clone(),
                             state,
-                        };
+                            binding_route: false,
+                        });
                     }
                 }
             }
         })
         .await
-        .map_err(|_| ())
+        .map_err(|_| ())?
     }
 }
 
@@ -342,6 +410,162 @@ mod tests {
         pending(next.as_mut()).await;
         tokio::time::advance(Duration::from_secs(4)).await;
         assert!(next.await.is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shared_bucket_binding_preserves_route_serialization_and_cancellation() {
+        for cancel in [false, true] {
+            let limiter = RateLimiter::default();
+            let known = RouteKey::new("GET", "/channels/1/messages");
+            let unknown = RouteKey::new("DELETE", "/channels/1/messages/5");
+            let held = limiter
+                .acquire(&known, Duration::from_secs(10))
+                .await
+                .expect("known");
+            let held = held.update(&headers("shared", "3", "60")).await;
+            let first = limiter
+                .acquire(&unknown, Duration::from_secs(10))
+                .await
+                .expect("unknown");
+            let mut next = Box::pin(limiter.acquire(&unknown, Duration::from_secs(10)));
+            pending(next.as_mut()).await;
+            let response = headers("shared", "1", "60");
+            let mut binding = Box::pin(first.update(&response));
+            pending(binding.as_mut()).await;
+            pending(next.as_mut()).await;
+            if cancel {
+                drop(binding);
+                pending(next.as_mut()).await;
+                drop(held);
+            } else {
+                drop(held);
+                let mut first = binding.await;
+                first.block(Duration::from_secs(5), false);
+                drop(first);
+                tokio::time::advance(Duration::from_secs(4)).await;
+                pending(next.as_mut()).await;
+                tokio::time::advance(Duration::from_secs(1)).await;
+            }
+            assert!(next.await.is_ok());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn discovery_keeps_waiters_serialized_and_hash_changes_do_not_alias_state() {
+        let limiter = RateLimiter::default();
+        let route = RouteKey::new("GET", "/channels/1/messages");
+        let first = limiter
+            .acquire(&route, Duration::from_secs(10))
+            .await
+            .expect("first");
+        let other = RouteKey::new("GET", "/channels/2/messages");
+        limiter
+            .acquire(&other, Duration::from_secs(10))
+            .await
+            .expect("other")
+            .update(&headers("old", "3", "60"))
+            .await;
+        let next = limiter.acquire(&route, Duration::from_secs(10));
+        tokio::pin!(next);
+        pending(next.as_mut()).await;
+        let first = first.update(&headers("old", "3", "60")).await;
+        pending(next.as_mut()).await;
+        drop(first);
+        let second = next.await.expect("second");
+        let _second = second.update(&headers("new", "3", "60")).await;
+        let inner = limiter.lock();
+        assert!(!Arc::ptr_eq(
+            inner.buckets.get(&("old".into(), "1".into())).expect("old"),
+            inner.buckets.get(&("new".into(), "1".into())).expect("new"),
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_routes_are_reclaimed_without_evicting_an_active_guard() {
+        let limiter = RateLimiter::default();
+        let route = RouteKey::new("GET", "/channels/1/messages");
+        let first = limiter
+            .acquire(&route, Duration::from_secs(10))
+            .await
+            .expect("first");
+        let first = first.update(&headers("active", "3", "60")).await;
+        for major in 2..MAX_BUCKETS * 2 {
+            let other = RouteKey::new("GET", &format!("/guilds/{major}/members"));
+            drop(
+                limiter
+                    .acquire(&other, Duration::from_secs(10))
+                    .await
+                    .expect("idle"),
+            );
+        }
+        {
+            let inner = limiter.lock();
+            assert!(inner.routes.len() + inner.buckets.len() <= MAX_BUCKETS);
+        }
+        let next = limiter.acquire(&route, Duration::from_secs(10));
+        tokio::pin!(next);
+        pending(next.as_mut()).await;
+        drop(first);
+        assert!(next.await.is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn full_registry_preserves_deadlines_and_recovers_after_expiry() {
+        let limiter = RateLimiter::default();
+        for major in 1..=MAX_BUCKETS {
+            let route = RouteKey::new("GET", &format!("/channels/{major}/messages"));
+            limiter
+                .acquire(&route, Duration::from_secs(10))
+                .await
+                .expect("guard")
+                .update(&headers("quota", "0", "60"))
+                .await;
+        }
+        let other = RouteKey::new("GET", "/channels/99999/messages");
+        assert!(limiter
+            .acquire(&other, Duration::from_secs(10))
+            .await
+            .is_err());
+        assert_eq!(limiter.lock().buckets.len(), MAX_BUCKETS);
+        let blocked = RouteKey::new("GET", "/channels/1/messages");
+        let mut next = Box::pin(limiter.acquire(&blocked, Duration::from_secs(10)));
+        pending(next.as_mut()).await;
+        drop(next);
+        tokio::time::advance(Duration::from_secs(61)).await;
+        assert!(limiter
+            .acquire(&other, Duration::from_secs(10))
+            .await
+            .is_ok());
+        assert!(limiter.lock().buckets.len() < MAX_BUCKETS);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shared_bucket_route_mappings_are_bounded() {
+        let limiter = RateLimiter::default();
+        for index in 0..MAX_BUCKETS {
+            let route = RouteKey {
+                template: format!("GET /synthetic-{index}"),
+                major: "1".into(),
+            };
+            limiter
+                .acquire(&route, Duration::from_secs(10))
+                .await
+                .expect("guard")
+                .update(&headers("shared", "999999", "60"))
+                .await;
+        }
+        let route = RouteKey::new("GET", "/new-route");
+        assert!(limiter
+            .acquire(&route, Duration::from_secs(10))
+            .await
+            .is_err());
+        assert_eq!(limiter.lock().route_bucket.len(), MAX_BUCKETS);
+        tokio::time::advance(Duration::from_secs(61)).await;
+        assert!(limiter
+            .acquire(&route, Duration::from_secs(10))
+            .await
+            .is_ok());
+        assert!(limiter.lock().route_bucket.is_empty());
     }
 
     #[tokio::test(start_paused = true)]
