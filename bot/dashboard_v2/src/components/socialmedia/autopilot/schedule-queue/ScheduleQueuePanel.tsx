@@ -1,10 +1,11 @@
 import { globalTimezoneUrl } from '@/utils/socialMediaChannel';
-import { useEffect, useId, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, Calendar, Clock3, RefreshCw, Trash2 } from 'lucide-react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { ArrowDown, ArrowUp, Calendar, Clock3, ListOrdered, Trash2 } from 'lucide-react';
 import { StudioSectionHeading } from '../../StudioSectionHeading';
 import { ApiHttpError } from '@/api/core';
 import { useLanguage, type LanguageContextValue } from '@/context/LanguageContext';
 import { SOCIAL_EN } from '@/i18n/en/social';
+import { platformIconUrl } from '../../platformIcon';
 import { scheduleQueueApi } from './api';
 import { ReviewJobActions } from './ReviewJobActions';
 import type { QueueJob, SchedulePatch, ScheduleQueueApi, ScheduleQueueSnapshot, ScheduleSettings } from './api';
@@ -14,6 +15,8 @@ export interface ScheduleQueuePanelProps {
   twitchUserId?: string;
   api?: ScheduleQueueApi;
   onChanged?: () => void;
+  reloadKey?: number;
+  modeSlot?: ReactNode;
 }
 
 const WEEKDAYS = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
@@ -62,7 +65,7 @@ export function ScheduleQueuePanel(props: ScheduleQueuePanelProps) {
   return <ScheduleQueueOwner key={props.twitchUserId ?? 'self'} {...props} />;
 }
 
-function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }: ScheduleQueuePanelProps) {
+function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged, reloadKey = 0, modeSlot }: ScheduleQueuePanelProps) {
   const { t, locale } = useLanguage();
   const id = useId();
   const [snapshot, setSnapshot] = useState<ScheduleQueueSnapshot | null>(null);
@@ -137,6 +140,13 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
     return () => { live.current = false; refresh.current = null; controller.abort(); window.clearInterval(timer); };
   }, [api, twitchUserId]);
 
+  const seenReloadKey = useRef(reloadKey);
+  useEffect(() => {
+    if (seenReloadKey.current === reloadKey) return;
+    seenReloadKey.current = reloadKey;
+    refresh.current?.();
+  }, [reloadKey]);
+
   function edit(change: SchedulePatch) {
     dirty.current = true;
     setEdited(true);
@@ -174,10 +184,19 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
     }
   }
 
-  if (!snapshot || !draft) return <section className="schedule-queue" aria-busy={!error} data-unsaved={unsaved} data-saving={saving ? 'true' : undefined}>
-    <h2>{t('Auto-Pilot und Zeitplan')}</h2>
-    {error ? <><p role="alert">{t(error)}</p><button onClick={() => refresh.current?.('Aktualisiert.')}>{t('Erneut laden')}</button></> : <p role="status">{t('Zeitplan wird geladen.')}</p>}
+  const queueCard = (content: ReactNode) => <section className="studio-card sq-queue-card" aria-labelledby={`${id}-queue-heading`}>
+    <StudioSectionHeading id={`${id}-queue-heading`} title={t('Produktionswarteschlange & Veröffentlichungsmodus')} icon={ListOrdered} />
+    {modeSlot}
+    {content}
   </section>;
+
+  if (!snapshot || !draft) return <div className="studio-plan-top">
+    <section className="studio-card schedule-queue" aria-busy={!error} data-unsaved={unsaved} data-saving={saving ? 'true' : undefined}>
+      <h2>{t('Auto-Pilot und Zeitplan')}</h2>
+      {error ? <><p role="alert">{t(error)}</p><button onClick={() => refresh.current?.('Aktualisiert.')}>{t('Erneut laden')}</button></> : <p role="status">{t('Zeitplan wird geladen.')}</p>}
+    </section>
+    {queueCard(null)}
+  </div>;
 
   const unstarted = snapshot.jobs.filter(job => job.status === 'queued' && !job.started_at);
   const visible = snapshot.jobs.filter(job => job.status !== 'completed' && job.status !== 'cancelled');
@@ -190,10 +209,10 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
     void act(() => api.reorder(order, twitchUserId), 'Reihenfolge gespeichert.');
   }
 
-  return <section className="schedule-queue" aria-labelledby={`${id}-heading`} data-unsaved={unsaved} data-saving={saving ? 'true' : undefined}>
+  return <div className="studio-plan-top">
+    <section className="studio-card schedule-queue" aria-labelledby={`${id}-heading`} data-unsaved={unsaved} data-saving={saving ? 'true' : undefined}>
     <StudioSectionHeading id={`${id}-heading`} title={t('Auto-Pilot und Zeitplan')} icon={Calendar}
-      description={t('Ein Video pro Termin, gemeinsam für deine ausgewählten Plattformen.')}
-      actions={<button type="button" disabled={busy} onClick={() => refresh.current?.('Aktualisiert.')}><RefreshCw size={16} />{t('Aktualisieren')}</button>} />
+      description={t('Ein Video pro Termin, gemeinsam für deine ausgewählten Plattformen.')} />
     <div className="sq-status" role="status">
       <Clock3 size={18} aria-hidden="true" />
       <div><strong>{t('Nächster freier Termin')}: {slotLabel(snapshot.next_slot, snapshot.settings.timezone, locale, t)}</strong>
@@ -202,7 +221,6 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
     </div>
     {error && <p className="sq-error" role="alert">{t(error)}</p>}
     {notice && <p className="sq-notice" role="status">{t(notice)}</p>}
-    <div className="sq-columns">
       <form className="sq-editor" onSubmit={event => { event.preventDefault(); void act(() => api.save(patch, twitchUserId), 'Zeitplan gespeichert.', true); }}>
         <h3>{t('Wöchentliche Termine')}</h3>
         <fieldset disabled={busy}>
@@ -223,7 +241,7 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
                     onChange={event => edit({ target_platforms: event.target.checked
                       ? [...draft.target_platforms, platform.id]
                       : draft.target_platforms.filter(value => value !== platform.id) })} />
-                  <span>{platform.label}{!connected && ` (${t('nicht verbunden')})`}</span>
+                  <span className="sq-platform-label"><img src={platformIconUrl(platform.id)} width="16" height="16" alt="" aria-hidden="true" />{platform.label}{!connected && ` (${t('nicht verbunden')})`}</span>
                 </label>;
               })}
             </div>
@@ -246,7 +264,8 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
           <div className="sq-actions"><button type="button" disabled={draft.schedule_slots.length >= 28} onClick={() => edit({ schedule_slots: [...draft.schedule_slots, { weekday: 1, local_time: '18:00' }] })}>{t('Termin hinzufügen')}</button><button className="sq-primary" type="submit" disabled={!hasChanges}>{t(busy ? 'Wird gespeichert' : 'Änderungen speichern')}</button></div>
         </fieldset>
       </form>
-      <div className="sq-queue">
+    </section>
+    {queueCard(<div className="schedule-queue sq-queue">
         <h3>{t('Produktionswarteschlange')}</h3>
         <p className="sq-help">{t('Ein Auftrag nach dem anderen. Laufende Aufträge lassen sich nicht entfernen oder umordnen.')}</p>
         {!visible.length && <div className="sq-empty"><strong>{t('Die Warteschlange ist leer.')}</strong><p>{t('Passende Clips werden erst ausgewählt, wenn ein freier Termin im Vorlauf liegt.')}</p></div>}
@@ -272,7 +291,6 @@ function ScheduleQueueOwner({ twitchUserId, api = scheduleQueueApi, onChanged }:
             </li>;
           })}
         </ol>
-      </div>
-    </div>
-  </section>;
+      </div>)}
+  </div>;
 }

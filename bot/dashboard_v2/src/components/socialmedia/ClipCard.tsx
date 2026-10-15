@@ -209,8 +209,12 @@ export function ClipCard({
             </div>
           )}
         </div>
-        <div className="min-w-0 space-y-2.5">
+        <div className="studio-clip-body">
           {ready && <VideoFullscreenButton videoRef={videoRef} />}
+          <h3 className="studio-clip-title">
+            {displayTitle || clip.title || t('Clip ohne Titel')}
+          </h3>
+          <div className="studio-clip-meta">
           <StatusChip tone={queueStage(clip) === 'failed' ? 'danger' : queueStage(clip) === 'planned' ? 'info' : queueStage(clip) === 'posted' ? 'success' : queueStage(clip) === 'review' ? 'warning' : 'neutral'}>
             {waitingPlatforms.length > 0
               ? t('Wartet auf Verbindung')
@@ -222,13 +226,11 @@ export function ClipCard({
                     ? t('Privat auf YouTube')
                     : t(status.label)}
           </StatusChip>
-          <h3 className="break-words text-sm font-semibold leading-6">
-            {displayTitle || clip.title || t('Clip ohne Titel')}
-          </h3>
-          <p className="text-xs text-text-secondary">
-            {clip.source_kind === 'manual_upload' ? t('Upload') : 'Twitch'} / {clip.streamer_login}{' '}
-            · {t('{views} Views', { views: clip.view_count.toLocaleString(locale) })}
-          </p>
+            <span className="studio-clip-layout" data-custom={clip.layout_override ? 'true' : undefined}>{clip.layout_override ? t('Eigenes Layout') : t('Standard-Layout')}</span>
+            <span>{clip.source_kind === 'manual_upload' ? t('Upload') : 'Twitch'} / {clip.streamer_login}</span>
+            <time dateTime={clip.created_at}>{new Date(clip.created_at).toLocaleDateString(locale)}</time>
+            <span>{t('{views} Views', { views: clip.view_count.toLocaleString(locale) })}</span>
+          </div>
           {canDecide ? (
             <fieldset className="studio-platforms" disabled={approvalPending}>
               <legend className="sr-only">{t('Zielplattformen')}</legend>
@@ -320,7 +322,6 @@ export function ClipCard({
               } as Record<string, string>)[clip.publish_states.tiktok] ?? 'TikTok: Bestätigung steht noch aus.')}
             </p>
           )}
-          {clip.layout_override && <p className="text-xs text-accent">{t('Eigenes Layout')}</p>}
           {uploadFehler.length > 0 && (
             <div role="alert" className="break-words text-sm text-danger">
               {uploadFehler.map(({ platform, text }) => (
@@ -376,9 +377,6 @@ export function ClipCard({
           )}
         </div>
         <div className="studio-clip-actions">
-          <button type="button" className="studio-button" onClick={onOpenPlatformStatus}>
-            {t('Plattformstatus')}
-          </button>
           {!canDecide && !terminal && !clip.platform_status.tiktok
             && clip.approval?.state === 'approved'
             && clip.approval.approved_platforms.includes('tiktok')
@@ -424,9 +422,11 @@ export function ClipCard({
               <XCircle className="h-4 w-4" />
               {t('Post stoppen')}
             </button>
-          ) : (
-            !terminal &&
-            clip.status !== 'publishing' && (
+          ) : null}
+          <button type="button" className="studio-button" onClick={onOpenPlatformStatus}>
+            {t('Plattformstatus')}
+          </button>
+          {!canDecide && !stoppbar && !terminal && clip.status !== 'publishing' && (
               <button
                 type="button"
                 className="studio-button"
@@ -436,7 +436,6 @@ export function ClipCard({
                 <Archive className="h-4 w-4" />
                 {t('Archivieren')}
               </button>
-            )
           )}
           <details
             ref={menu}

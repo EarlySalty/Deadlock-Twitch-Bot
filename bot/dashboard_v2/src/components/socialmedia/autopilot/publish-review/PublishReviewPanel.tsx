@@ -15,6 +15,7 @@ export interface PublishReviewPanelProps {
   onChanged?: () => void;
   onOpenVideo?: (videoId: number) => void;
   onConfigureTikTok?: (videoId: number) => Promise<TikTokVersionOptions | null>;
+  reloadKey?: number;
 }
 
 const names: Record<PublishPlatform, string> = { youtube: 'YouTube', tiktok: 'TikTok', instagram: 'Instagram' };
@@ -48,7 +49,7 @@ export function PublishReviewPanel(props: PublishReviewPanelProps) {
   return <OwnerPanel key={props.twitchUserId} {...props} />;
 }
 
-function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClient, onChanged, onOpenVideo, onConfigureTikTok }: PublishReviewPanelProps) {
+function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClient, onChanged, onOpenVideo, onConfigureTikTok, reloadKey = 0 }: PublishReviewPanelProps) {
   const { t } = useLanguage();
   const [editorVideo, setEditorVideo] = useState<number | null>(null);
   const [editorBusy, setEditorBusy] = useState(false);
@@ -62,7 +63,10 @@ function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClien
   const dialog = useRef<HTMLDialogElement>(null);
   const mounted = useRef(false);
   const saving = useRef(false);
+  const [retry, setRetry] = useState(0);
   const preferencesDirty = preferences !== null && snapshot !== null && JSON.stringify(preferences) !== JSON.stringify(snapshot.settings.notifications);
+  const dirtyRef = useRef(preferencesDirty);
+  useEffect(() => { dirtyRef.current = preferencesDirty; });
 
   useEffect(() => {
     mounted.current = true;
@@ -72,12 +76,15 @@ function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClien
   useEffect(() => {
     const controller = new AbortController();
     client.load(twitchUserId, controller.signal).then((data) => {
-      if (!controller.signal.aborted) { setSnapshot(data); setPreferences(data.settings.notifications); }
+      if (controller.signal.aborted || saving.current) return;
+      setSnapshot(data);
+      setError(null);
+      if (!dirtyRef.current) setPreferences(data.settings.notifications);
     }).catch(() => {
       if (!controller.signal.aborted) setError({ key: 'Die Veröffentlichungsdaten konnten nicht geladen werden. Bitte versuche es erneut.' });
     });
     return () => controller.abort();
-  }, [client, twitchUserId]);
+  }, [client, twitchUserId, reloadKey, retry]);
 
   useEffect(() => {
     if (modeDialog && !dialog.current?.open) dialog.current?.showModal();
@@ -109,9 +116,9 @@ function OwnerPanel({ twitchUserId, section = 'all', client = publishReviewClien
 
   return <section className="publish-review" aria-label={t('Freigabe und Veröffentlichung')} aria-busy={busy} data-unsaved={preferencesDirty || pending !== null || busy ? 'true' : undefined} data-saving={busy ? 'true' : undefined}>
     <StudioSectionHeading title={t(section === 'videos' ? 'Fertige Videos' : section === 'mode' ? 'Veröffentlichungsmodus' : section === 'notifications' ? 'Benachrichtigungen' : 'Freigabe & Veröffentlichung')} icon={ShieldCheck}
-      description={t('Prüfe die fertige Videoversion. Eine Kontoverbindung ist noch keine Freigabe.')}
-      actions={<button type="button" disabled={busy} onClick={() => void act(async () => {}, { key: 'Stand aktualisiert.' })}>{t('Aktualisieren')}</button>} />
+      description={t('Prüfe die fertige Videoversion. Eine Kontoverbindung ist noch keine Freigabe.')} />
     {error && <p role="alert" className="publish-error">{'raw' in error ? error.raw : t(error.key, error.params)}</p>}
+    {error && !snapshot && <button type="button" disabled={busy} onClick={() => setRetry((value) => value + 1)}>{t('Erneut laden')}</button>}
     {message && <p role="status" className="publish-message">{t(message.key, message.params)}</p>}
     {!snapshot && !error && <p role="status">{t('Veröffentlichungsdaten werden geladen.')}</p>}
     {snapshot && <>
