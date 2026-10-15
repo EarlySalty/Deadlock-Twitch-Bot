@@ -22,6 +22,7 @@ use regex::Regex;
 use sqlx::PgPool;
 use tracing::info;
 
+use crate::home_invite::{HomeInviteResolver, StreamerKey};
 use crate::types::ChatMessageEvent;
 
 // ---------------------------------------------------------------------------
@@ -40,12 +41,57 @@ fn discord_invite_re() -> &'static Regex {
 const OWN_DISCORD_INVITE_CODE: &str = "z5tfvhuqq2";
 
 fn contains_foreign_discord_invite(content: &str) -> bool {
-    discord_invite_re().find_iter(content).any(|invite| {
-        let Some((_, code)) = invite.as_str().rsplit_once('/') else {
-            return false;
-        };
-        !code.eq_ignore_ascii_case(OWN_DISCORD_INVITE_CODE)
+    !foreign_invite_codes(content).is_empty()
+}
+
+/// Codes aller Einladungen in `content`, die nicht die Community-Einladung sind.
+fn foreign_invite_codes(content: &str) -> Vec<String> {
+    discord_invite_re()
+        .find_iter(content)
+        .filter_map(|invite| invite.as_str().rsplit_once('/').map(|(_, code)| code))
+        .filter(|code| !code.eq_ignore_ascii_case(OWN_DISCORD_INVITE_CODE))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Code einer gespeicherten Einladungs-URL (`https://discord.gg/<code>` oder
+/// `https://discord.com/invite/<code>`).
+fn invite_code_of(url: &str) -> Option<String> {
+    let url = url.trim().trim_end_matches('/');
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    let code = rest
+        .strip_prefix("discord.gg/")
+        .or_else(|| rest.strip_prefix("discord.com/invite/"))?;
+    (!code.is_empty() && code.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .then(|| code.to_string())
+}
+
+/// Vollständige Einladungscodes in `content`, auch mit `-` (Vanity-Links wie
+/// `discord.gg/deadlock-en`), ohne die Community-Einladung. Nur für den
+/// Abgleich mit den Einladungen des Heimat-Servers; die Erkennung selbst
+/// (`discord_invite_re`) bleibt unverändert.
+fn full_invite_codes(content: &str) -> Vec<String> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)discord\.gg/([A-Za-z0-9-]+)").expect("Einladungs-Regex ist konstant")
     })
+    .captures_iter(content)
+    .filter_map(|caps| caps.get(1))
+    .map(|code| code.as_str().trim_end_matches('-'))
+    .filter(|code| !code.is_empty() && !code.eq_ignore_ascii_case(OWN_DISCORD_INVITE_CODE))
+    .map(str::to_string)
+    .collect()
+}
+
+/// `true`, wenn jeder Code in `codes` einer der eigenen Codes ist.
+fn all_codes_known(codes: &[String], own: &[String]) -> bool {
+    !codes.is_empty()
+        && codes
+            .iter()
+            .all(|code| own.iter().any(|known| known.eq_ignore_ascii_case(code)))
 }
 
 fn log_decision(
@@ -192,6 +238,21 @@ impl SusInviteCheck {
             return None;
         }
 
+        // Eigene Server-Einladung im Chat eines anderen Servers (Paket R). Erst
+        // nach den günstigen Prüfungen, aber vor dem Cooldown, damit sie den
+        // Cooldown nicht verbraucht.
+        if self.only_home_server_invites(content, channel_login).await {
+            log_decision(
+                content,
+                channel_login,
+                &chatter_login,
+                "allow",
+                "own_server_invite",
+                "no_action",
+            );
+            return None;
+        }
+
         // Cooldown-Check (moderation.py Z. 865–873)
         if !self.cooldown_ok(channel_login, &chatter_login) {
             log_decision(
@@ -219,6 +280,34 @@ impl SusInviteCheck {
             chatter_id: event.chatter_user_id.clone(),
             content: content.to_string(),
         })
+    }
+
+    /// Kanäle von Streamern anderer Server (Paket R): Deren Server-Einladung
+    /// und die persönliche Einladung dieses Servers gelten dort als eigene,
+    /// sonst würden Zuschauer für die Werbung des Bots getimeoutet. Für den
+    /// deutschen Server bleibt allein die Community-Einladung eigen.
+    async fn only_home_server_invites(&self, content: &str, channel_login: &str) -> bool {
+        let lookup = HomeInviteResolver::new(self.pool.clone(), None);
+        let key = StreamerKey::Login(channel_login);
+        let Some(home) = lookup.home_guild(key).await else {
+            return false;
+        };
+        if home.is_community() {
+            return false;
+        }
+        let mut own: Vec<String> = home
+            .promo_invite()
+            .and_then(invite_code_of)
+            .into_iter()
+            .collect();
+        match lookup.fitting_personal_invite(&home, key).await {
+            Ok(Some(url)) => own.extend(invite_code_of(&url)),
+            Ok(None) => {}
+            Err(error) => {
+                tracing::debug!(%error, channel_login, "Sus-Invite: Streamer-Invite nicht lesbar");
+            }
+        }
+        all_codes_known(&full_invite_codes(content), &own)
     }
 
     /// Prüft ob ein Chatter als etabliert gilt.
@@ -368,6 +457,50 @@ mod tests {
     }
 
     #[test]
+    fn einladungs_code_aus_gespeicherter_url() {
+        assert_eq!(
+            invite_code_of("https://discord.gg/English").as_deref(),
+            Some("English")
+        );
+        assert_eq!(
+            invite_code_of(" https://discord.com/invite/abc-1/ ").as_deref(),
+            Some("abc-1")
+        );
+        assert_eq!(invite_code_of("https://discord.gg/"), None);
+        assert_eq!(invite_code_of("https://example.com/abc"), None);
+    }
+
+    #[test]
+    fn nur_bekannte_codes_gelten_als_eigene() {
+        let own = vec!["English".to_string()];
+        assert!(all_codes_known(
+            &full_invite_codes("discord.gg/english"),
+            &own
+        ));
+        assert!(!all_codes_known(
+            &full_invite_codes("discord.gg/english und discord.gg/fremd"),
+            &own
+        ));
+        assert!(!all_codes_known(&[], &own));
+        // Vanity-Links mit Bindestrich werden vollständig verglichen.
+        let vanity = vec!["deadlock-en".to_string()];
+        assert!(all_codes_known(
+            &full_invite_codes("discord.gg/Deadlock-EN"),
+            &vanity
+        ));
+        let kurz = vec!["deadlock".to_string()];
+        assert!(!all_codes_known(
+            &full_invite_codes("discord.gg/deadlock-giveaway"),
+            &kurz
+        ));
+        // Die Community-Einladung zählt nicht als fremder Code.
+        assert_eq!(
+            full_invite_codes("discord.gg/z5TfVHuQq2 discord.gg/abc-"),
+            vec!["abc".to_string()]
+        );
+    }
+
+    #[test]
     fn mod_wird_nicht_geflaggt() {
         let event = make_event("komm auf discord.gg/test123", true);
         // is_mod_or_broadcaster gibt true → würde early-return auslösen
@@ -482,6 +615,75 @@ mod db_tests {
             color: String::new(),
             ..Default::default()
         }
+    }
+
+    /// Minimales Guild-Schema (Paket R) für einen Streamer eines anderen Servers.
+    async fn create_guild_tables(pool: &PgPool) {
+        sqlx::raw_sql(
+            "CREATE TABLE twitch_streamer_identities (
+                twitch_user_id TEXT PRIMARY KEY, twitch_login TEXT NOT NULL,
+                broadcaster_language TEXT);
+             CREATE TABLE discord_guilds (
+                guild_id BIGINT PRIMARY KEY, language TEXT NOT NULL,
+                cross_server_raids BOOLEAN NOT NULL DEFAULT TRUE, promo_invite_url TEXT,
+                status TEXT NOT NULL DEFAULT 'active', removed_at TIMESTAMPTZ);
+             CREATE TABLE streamer_guilds (
+                twitch_user_id TEXT NOT NULL, guild_id BIGINT NOT NULL,
+                active BOOLEAN NOT NULL DEFAULT TRUE,
+                joined_at TIMESTAMPTZ NOT NULL DEFAULT now());
+             CREATE TABLE twitch_streamer_invites (
+                streamer_login TEXT, twitch_user_id TEXT, guild_id BIGINT, invite_url TEXT);
+             INSERT INTO discord_guilds (guild_id, language, promo_invite_url)
+                VALUES (42, 'en', 'https://discord.gg/English');
+             INSERT INTO twitch_streamer_identities (twitch_user_id, twitch_login)
+                VALUES ('en1', 'englishstreamer');
+             INSERT INTO streamer_guilds (twitch_user_id, guild_id) VALUES ('en1', 42);
+             INSERT INTO twitch_streamer_invites VALUES
+                ('englishstreamer', 'en1', 42, 'https://discord.gg/persoenlich');",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn eigene_server_einladung_ist_im_chat_des_servers_erlaubt() {
+        let pool = pool_or_skip!("si_heimat_server");
+        create_tables(&pool).await;
+        create_guild_tables(&pool).await;
+        let check = SusInviteCheck::new(pool.clone());
+
+        for text in [
+            "discord.gg/english",
+            "discord.gg/persoenlich und discord.gg/English",
+        ] {
+            assert!(
+                check
+                    .check(&make_event_db(text), "englishstreamer")
+                    .await
+                    .is_none(),
+                "{text}"
+            );
+        }
+        assert!(check
+            .check(
+                &make_event_db("discord.gg/english und discord.gg/fremd"),
+                "englishstreamer"
+            )
+            .await
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn deutscher_kanal_behandelt_fremde_server_einladung_wie_bisher() {
+        let pool = pool_or_skip!("si_heimat_deutsch");
+        create_tables(&pool).await;
+        create_guild_tables(&pool).await;
+        let check = SusInviteCheck::new(pool.clone());
+        assert!(check
+            .check(&make_event_db("discord.gg/english"), "streamer1")
+            .await
+            .is_some());
     }
 
     #[tokio::test]
