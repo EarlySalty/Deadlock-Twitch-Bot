@@ -33,7 +33,7 @@ test('dashboard navigation retains the document only for owned unmodified links'
   try {
     assert.equal(click('/twitch/challenges'), true);
     assert.equal(pushed.length, 1);
-    assert.equal(dispatched.length, 1);
+    assert.equal(dispatched.length, 2);
     assert.equal(click('/twitch/analyse', { ctrlKey: true }), false);
     assert.equal(click('/twitch/analyse', { button: 1 }), false);
     assert.equal(click('/twitch/auth/logout'), false);
@@ -55,8 +55,39 @@ test('dashboard navigation retains the document only for owned unmodified links'
 test('history navigation retains unsaved editors and pending saves unless discard is approved', () => {
   const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
   const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
-  const location = { href: 'https://dashboard.example/twitch/overlay' };
+  const entries = ['dashboard', 'challenges', 'overlay'].map((path, dashboardIndex) => ({
+    url: `https://dashboard.example/twitch/${path}`,
+    state: { dashboardIndex } as Record<string, unknown>,
+  }));
+  const location = { href: entries[2].url };
+  let position = 2;
+  const pending: (() => void)[] = [];
   const handlers = new Map<string, () => void>();
+  const history = {
+    get state() { return entries[position].state; },
+    replaceState(state: Record<string, unknown>, _title: string, url?: string | URL | null) {
+      entries[position].state = state;
+      if (url != null) entries[position].url = location.href = String(url);
+    },
+    pushState(state: Record<string, unknown>, _title: string, url: string) {
+      entries.splice(position + 1);
+      entries.push({ state, url });
+      position += 1;
+      location.href = url;
+    },
+    go(delta: number) {
+      pending.push(() => {
+        position += delta;
+        assert.ok(position >= 0 && position < entries.length);
+        location.href = entries[position].url;
+        handlers.get('popstate')?.();
+      });
+    },
+  };
+  const traverse = (delta: number) => {
+    history.go(delta);
+    while (pending.length) pending.shift()?.();
+  };
   let dirty = false;
   let saving = false;
   let editorBlocksUnload = false;
@@ -65,7 +96,7 @@ test('history navigation retains unsaved editors and pending saves unless discar
   let confirmations = 0;
   Object.defineProperty(globalThis, 'window', { configurable: true, value: {
     location,
-    history: { pushState: (_state: unknown, _title: string, url: string) => { location.href = url; } },
+    history,
     addEventListener: (name: string, handler: () => void) => handlers.set(name, handler),
     removeEventListener: (name: string) => handlers.delete(name),
     dispatchEvent: (event: Event) => { if (editorBlocksUnload) event.preventDefault(); },
@@ -75,30 +106,51 @@ test('history navigation retains unsaved editors and pending saves unless discar
   } });
   try {
     const unsubscribe = subscribeNavigation(() => { notifications += 1; }, () => { confirmations += 1; return approved; });
-    const navigateBack = () => { location.href = 'https://dashboard.example/twitch/dashboard'; handlers.get('popstate')?.(); };
+    const originalEntries = structuredClone(entries);
     dirty = true;
-    navigateBack();
+    traverse(-1);
     assert.equal(notifications, 0);
-    assert.equal(location.href, 'https://dashboard.example/twitch/overlay');
-    assert.equal(confirmations, 1);
+    assert.equal(position, 2);
+    assert.deepEqual(entries, originalEntries);
+    traverse(-2);
+    assert.equal(position, 2);
+    assert.deepEqual(entries, originalEntries);
+    approved = true;
+    traverse(-1);
+    assert.equal(position, 1);
+    assert.equal(notifications, 1);
+    approved = false;
+    traverse(1);
+    assert.equal(position, 1);
+    assert.deepEqual(entries, originalEntries);
     dirty = false;
     editorBlocksUnload = true;
-    navigateBack();
-    assert.equal(notifications, 0);
-    assert.equal(location.href, 'https://dashboard.example/twitch/overlay');
-    approved = true;
+    traverse(1);
+    assert.equal(position, 1);
+    assert.deepEqual(entries, originalEntries);
+    const confirmationsBeforeSave = confirmations;
     saving = true;
-    navigateBack();
-    assert.equal(notifications, 0);
-    assert.equal(confirmations, 2);
+    traverse(-1);
+    assert.equal(position, 1);
+    assert.equal(confirmations, confirmationsBeforeSave);
+    assert.deepEqual(entries, originalEntries);
     saving = false;
-    navigateBack();
-    assert.equal(notifications, 1);
-    assert.equal(location.href, 'https://dashboard.example/twitch/dashboard');
-    editorBlocksUnload = false;
-    navigateBack();
+    approved = true;
+    traverse(1);
+    assert.equal(position, 2);
     assert.equal(notifications, 2);
-    assert.equal(confirmations, 3);
+    history.replaceState({}, '', `${location.href}?tab=profile`);
+    assert.equal(history.state.dashboardIndex, 2);
+    const replacedEntries = structuredClone(entries);
+    approved = false;
+    traverse(-2);
+    assert.equal(position, 2);
+    assert.deepEqual(entries, replacedEntries);
+    editorBlocksUnload = false;
+    traverse(-2);
+    assert.equal(position, 0);
+    assert.equal(notifications, 3);
+    assert.deepEqual(entries, replacedEntries);
     unsubscribe();
     assert.equal(handlers.size, 0);
   } finally {

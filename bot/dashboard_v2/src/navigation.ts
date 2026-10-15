@@ -32,8 +32,11 @@ export function navigateDashboard(event: MouseEvent<HTMLAnchorElement>) {
   const destination = dashboardDestination(event.currentTarget.href);
   if (!destination || destination.hash) return;
   event.preventDefault();
-  window.history.pushState(null, '', destination);
-  window.dispatchEvent(new PopStateEvent('popstate'));
+  const unload = new Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(unload);
+  if (document.querySelector('[data-saving="true"]') || (unload.defaultPrevented && !window.confirm(translate(readInitialLanguage(), 'Ungespeicherte Änderungen verwerfen?')))) return;
+  window.history.pushState({ dashboardIndex: (window.history.state?.dashboardIndex ?? 0) + 1 }, '', destination);
+  window.dispatchEvent(new Event('dashboard:navigate'));
   window.scrollTo(0, 0);
 }
 
@@ -41,21 +44,43 @@ export function subscribeNavigation(
   listener: () => void,
   confirmDiscard = () => window.confirm(translate(readInitialLanguage(), 'Ungespeicherte Änderungen verwerfen?')),
 ) {
-  let currentUrl = window.location.href;
+  const history = window.history;
+  const replaceState = history.replaceState;
+  let currentIndex: number = history.state?.dashboardIndex ?? 0;
+  let restoring = false;
+  history.replaceState = function (state, unused, url) {
+    replaceState.call(this, { ...state, dashboardIndex: this.state?.dashboardIndex ?? currentIndex }, unused, url);
+  };
+  history.replaceState(history.state, '', window.location.href);
   const onNavigate = () => {
+    const nextIndex: number | undefined = history.state?.dashboardIndex;
+    if (restoring) {
+      if (nextIndex === currentIndex) restoring = false;
+      return;
+    }
     const unload = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(unload);
     const saving = document.querySelector('[data-saving="true"]');
     const dirty = document.querySelector('[data-unsaved="true"]') || unload.defaultPrevented;
-    if (saving || (dirty && !confirmDiscard())) {
-      window.history.pushState(null, '', currentUrl);
+    if (nextIndex !== undefined && (saving || (dirty && !confirmDiscard()))) {
+      restoring = true;
+      history.go(currentIndex - nextIndex);
       return;
     }
-    currentUrl = window.location.href;
+    currentIndex = nextIndex ?? currentIndex;
     listener();
   };
+  const onPush = () => {
+    currentIndex = history.state.dashboardIndex;
+    listener();
+  };
+  window.addEventListener('dashboard:navigate', onPush);
   window.addEventListener('popstate', onNavigate);
-  return () => window.removeEventListener('popstate', onNavigate);
+  return () => {
+    window.removeEventListener('dashboard:navigate', onPush);
+    window.removeEventListener('popstate', onNavigate);
+    history.replaceState = replaceState;
+  };
 }
 
 export function navigationSnapshot() {
