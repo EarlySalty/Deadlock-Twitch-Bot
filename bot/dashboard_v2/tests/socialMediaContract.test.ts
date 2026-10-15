@@ -443,6 +443,7 @@ test('route discovery observes schedule and queue callers with optional query st
   const source = lies(API_MODULE[2]);
   const prefix = '/twitch/social-media/api/autopilot';
   assert.deepEqual(gebautePfade([source]), [
+    `${prefix}/policy`,
     `${prefix}/queue/:p/cancel`,
     `${prefix}/queue/:p/next`,
     `${prefix}/queue/:p/resolve`,

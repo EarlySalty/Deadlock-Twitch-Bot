@@ -16,6 +16,31 @@ export interface ScheduleSettings {
 }
 
 export type SchedulePatch = Partial<ScheduleSettings>;
+export type PipelineMode = 'upload' | 'upload_text' | 'ai_edit';
+export type ReviewPolicy = 'off' | 'required' | 'veto_until_deadline';
+export type PolicyScope = 'shared' | 'per_platform';
+export type DistributionPolicy = 'same_clip' | 'independent_clips';
+
+export interface TextDefaults {
+  description: string;
+  hashtags: string[];
+}
+
+export interface PipelinePolicy {
+  pipeline_mode: PipelineMode;
+  review_policy: ReviewPolicy;
+  metadata_scope: PolicyScope;
+  text_defaults: { shared: TextDefaults; per_platform: Record<string, TextDefaults> };
+  schedule_scope: PolicyScope;
+  platform_schedule_slots: Record<string, WeeklySlot[]>;
+  distribution_policy: DistributionPolicy;
+  policy_revision: number;
+}
+
+export interface Reservation {
+  platform: string;
+  scheduled_at: string;
+}
 export type ProductionHold = 'disabled' | 'paused' | 'review_backlog' | 'empty_pool' | 'no_schedule' | 'outside_lead' | null;
 
 export interface QueueJob {
@@ -30,6 +55,7 @@ export interface QueueJob {
   attempts: number;
   max_attempts: number;
   scheduled_at: string | null;
+  reservations?: Reservation[];
   started_at: string | null;
   last_error: string | null;
   review_reasons: string[];
@@ -39,7 +65,10 @@ export interface QueueJob {
 export interface ScheduleQueueSnapshot {
   settings: ScheduleSettings;
   persisted: boolean;
+  schedule_scope?: PolicyScope;
+  distribution_policy?: DistributionPolicy;
   next_slot: string | null;
+  next_slots?: Record<string, string>;
   jobs: QueueJob[];
   review_count: number;
   production_hold: ProductionHold;
@@ -55,6 +84,8 @@ export interface ScheduleQueueApi {
   next(jobId: number, twitchUserId?: string): Promise<ScheduleQueueSnapshot>;
   cancel(jobId: number, twitchUserId?: string): Promise<ScheduleQueueSnapshot>;
   resolve(jobId: number, action: ReviewDecision, note: string, twitchUserId?: string): Promise<ScheduleQueueSnapshot>;
+  loadPolicy(twitchUserId?: string, signal?: AbortSignal): Promise<PipelinePolicy>;
+  savePolicy(policy: PipelinePolicy, twitchUserId?: string): Promise<PipelinePolicy>;
 }
 
 const PREFIX = '/twitch/social-media/api/autopilot';
@@ -87,6 +118,19 @@ export const scheduleQueueApi: ScheduleQueueApi = {
     return fetchJson(`${PREFIX}/queue/${jobId}/resolve`, withCookieCredentials({
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ twitch_user_id: twitchUserId, action, note }),
+    }));
+  },
+  loadPolicy(twitchUserId, signal) {
+    const query = new URLSearchParams();
+    if (twitchUserId) query.set('twitch_user_id', twitchUserId);
+    return fetchJson(`${PREFIX}/policy${query.size ? `?${query}` : ''}`, withCookieCredentials({ signal }));
+  },
+  savePolicy(policy, twitchUserId) {
+    const query = new URLSearchParams();
+    if (twitchUserId) query.set('twitch_user_id', twitchUserId);
+    return fetchJson(`${PREFIX}/policy${query.size ? `?${query}` : ''}`, withCookieCredentials({
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(policy),
     }));
   },
   cancel(jobId, twitchUserId) {
