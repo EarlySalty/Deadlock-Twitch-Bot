@@ -45,10 +45,10 @@ test('Fehler beim Laden oder Speichern werden nicht als Erfolg behandelt', async
 test('zeigt acht unabhängige Schalter und sperrt nur die gerade gespeicherte Reihe', () => {
   const commands = Object.fromEntries(STAT_COMMANDS.map(({command}) => [command, command !== 'rank'])) as import('../src/api/statCommands').StatCommandSettings;
   const html = renderToStaticMarkup(<CommandNamesProvider><StatCommandRows settings={commands} pending={{rank:true}} messages={{rank:'Gespeichert.'}} onToggle={() => {}} /></CommandNamesProvider>);
-  assert.equal((html.match(/<button /g) ?? []).length, 8);
+  assert.equal((html.match(/role="switch"/g) ?? []).length, 8);
   assert.equal((html.match(/disabled=""/g) ?? []).length, 1);
-  assert.ok(html.includes('aria-label="Dein aktueller Rang aktivieren"'));
-  assert.ok(html.includes('aria-label="Deine Siege deaktivieren"'));
+  assert.ok(html.includes('aria-checked="false" aria-label="Dein aktueller Rang"'));
+  assert.ok(html.includes('aria-checked="true" aria-label="Deine Siege"'));
   assert.ok(html.includes('role="status"'));
   assert.equal((html.match(/Befehl wird geladen/g) ?? []).length, 8);
 });

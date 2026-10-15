@@ -7,7 +7,7 @@ import { ClipCard } from '@/components/socialmedia/ClipCard';
 import { StudioHero } from '@/components/socialmedia/StudioHero';
 import { useEffect, useMemo, useRef, useState, type ComponentType, type DragEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertCircle, ChevronDown, CheckCircle2, Archive, Film, Loader2, ShieldAlert, Layers3, Calendar, Gamepad2, ExternalLink, Pencil, SlidersHorizontal, DownloadCloud, Crop, List, LayoutGrid } from 'lucide-react';
+import { AlertCircle, BarChart3, ChevronDown, CheckCircle2, Archive, Film, Loader2, ShieldAlert, Layers3, Calendar, Gamepad2, ExternalLink, Pencil, SlidersHorizontal, DownloadCloud, Crop, List, LayoutGrid, X } from 'lucide-react';
 import { useLanguage, useT } from '@/context/LanguageContext';
 
 import { TikTokPostDialog } from '@/components/socialmedia/TikTokPostDialog';
@@ -53,6 +53,8 @@ export interface SocialMediaProps {
 
 const PLATTFORMEN: SocialPlatform[] = ['youtube', 'tiktok', 'instagram'];
 
+const RELOAD_QUERY_ROOTS = new Set(['social-media', 'social-ai', 'social-ai-publishing-context', 'vod-archive']);
+
 type EditMode = 'layout' | 'enrichment';
 
 const TAB_ICONS: Record<SocialMediaView, React.ComponentType<{ className?: string }>> = {
@@ -91,6 +93,9 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
   }, []);
   const [showAiEditor, setShowAiEditor] = useState(() => ['ai', 'review'].includes(new URLSearchParams(window.location.search).get('view') ?? ''));
   const [showAnalytics, setShowAnalytics] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [reloading, setReloading] = useState(false);
+  const [publishedView, setPublishedView] = useState<'clips' | 'vod'>(() => new URLSearchParams(window.location.search).get('view') === 'vod' ? 'vod' : 'clips');
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -366,6 +371,7 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
   const openView = (view: SocialMediaViewTarget, stage?: QueueStage) => {
     if (!changeView(view)) return;
     if (!stage) return;
+    setPublishedView('clips');
     setStatusFilter(stage);
     setSearch('');
     setPlatformFilter('all');
@@ -375,6 +381,12 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
   const refreshSchedule = () => {
     void queryClient.invalidateQueries({ queryKey: ['social-media', 'autopilot-schedule', twitchUserId] });
     void queryClient.invalidateQueries({ queryKey: ['social-media', 'autopilot-publish', twitchUserId] });
+  };
+  const refreshAll = () => {
+    if (reloading) return;
+    setReloading(true);
+    setReloadKey((key) => key + 1);
+    void queryClient.invalidateQueries({ predicate: (query) => RELOAD_QUERY_ROOTS.has(String(query.queryKey[0])) }).finally(() => setReloading(false));
   };
   const legacyPlan = postingPlanQuery.data;
   const legacyWeekly = legacyPlan?.platforms.filter((entry) => entry.auto_post).reduce((sum, entry) => sum + entry.posts_per_week, 0);
@@ -405,74 +417,9 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
     );
   }
 
-  return (
-    <div className="social-studio space-y-6" data-studio-version="industrial-gold-live-v1">
-      <StudioHero
-        streamer={streamer}
-        activeView={activeView}
-        onUpload={() => setShowUpload(true)}
-        onOpenAnalytics={() => setShowAnalytics(true)}
-        onNavigate={openView}
-        data={overviewData}
-        now={now}
-        onOpenLayout={() => setLayoutChoice(layoutForEditor)}
-      />
-      <StudioStatusBar poolFailed={postingPlanQuery.isError} data={overviewData} pool={postingPlanQuery.isError ? undefined : postingPlanQuery.data?.pool} now={now} onNavigate={openView} />
-
-      <nav className="studio-tabs" role="tablist" aria-label={t('Social Studio')}>
-        {SOCIAL_MEDIA_TABS.map(({ id, label }, index) => {
-          const Icon = TAB_ICONS[id];
-          return (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              id={`studio-tab-${id}`}
-              aria-controls="studio-panel"
-              aria-selected={activeView === id}
-              tabIndex={activeView === id ? 0 : -1}
-              className="studio-tab"
-              onClick={() => { if (changeView(id)) { setStatusFilter('all'); setPage(1); } }}
-              onKeyDown={(event) => {
-                const nextIndex =
-                  event.key === 'Home'
-                    ? 0
-                    : event.key === 'End'
-                      ? SOCIAL_MEDIA_TABS.length - 1
-                      : event.key === 'ArrowRight'
-                        ? (index + 1) % SOCIAL_MEDIA_TABS.length
-                        : event.key === 'ArrowLeft'
-                          ? (index + SOCIAL_MEDIA_TABS.length - 1) % SOCIAL_MEDIA_TABS.length
-                          : null;
-                if (nextIndex === null) return;
-                event.preventDefault();
-                if (changeView(SOCIAL_MEDIA_TABS[nextIndex].id)) {
-                  document.getElementById(`studio-tab-${SOCIAL_MEDIA_TABS[nextIndex].id}`)?.focus();
-                }
-              }}
-            >
-              <Icon className="h-4 w-4" />
-              {t(label)}
-            </button>
-          );
-        })}
-      </nav>
-      <section
-        id="studio-panel"
-        role="tabpanel"
-        aria-labelledby={`studio-tab-${activeView}`}
-        className={workspaceView === 'pool' || false ? 'studio-pipeline min-w-0 space-y-4' : workspaceView === 'archiv' ? 'studio-archive min-w-0' : selectedAiClipId !== undefined ? 'studio-ai-workspace min-w-0' : 'studio-automation-workspace min-w-0'}
-      >
-        {activeView === 'heute' ? (
-          <PipelineOverview data={overviewData} now={now} onNavigate={openView} activity={<StudioActivity twitchUserId={twitchUserId} data={overviewData} now={now} onNavigate={openView} onAi={() => setShowAiEditor(true)} />} />
-        ) : workspaceView === 'plan' ? (
-          <div className="studio-plan-workspace">
-            <div className="studio-card studio-plan-card">
-              {workspaceSlots?.automation ?? <ScheduleQueuePanel twitchUserId={twitchUserId} api={scheduleApi} onChanged={refreshSchedule} />}
-            </div>
-            <div className="studio-card studio-plan-card">
-              {workspaceSlots?.publishReview ?? (twitchUserId && <PublishReviewPanel twitchUserId={twitchUserId} client={publishClient} section="mode" onChanged={refreshSchedule} />)}
-            </div>
+  const modeSlot = (
+    <div className="studio-mode-slot">
+      {workspaceSlots?.publishReview ?? (twitchUserId && <PublishReviewPanel twitchUserId={twitchUserId} client={publishClient} section="mode" onChanged={refreshSchedule} reloadKey={reloadKey} />)}
           <details className="studio-legacy-pipeline">
             <summary>
               <span className="studio-legacy-summary-text">
@@ -591,11 +538,75 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
           </PostingPlanDraft>
           </div>
           </details>
-          <div className="studio-library-import">{workspaceSlots?.libraryImport ?? <ImportPoolPanel twitchUserId={twitchUserId} />}</div>
+    </div>
+  );
+
+  return (
+    <div className="social-studio space-y-6" data-studio-version="industrial-gold-live-v1">
+      <StudioHero streamer={streamer} onUpload={() => setShowUpload(true)} onRefresh={refreshAll} refreshing={reloading} />
+      <StudioStatusBar poolFailed={postingPlanQuery.isError} data={overviewData} pool={postingPlanQuery.isError ? undefined : postingPlanQuery.data?.pool} now={now} onNavigate={openView} />
+
+      <nav className="studio-tabs" role="tablist" aria-label={t('Social Studio')}>
+        {SOCIAL_MEDIA_TABS.map(({ id, label }, index) => {
+          const Icon = TAB_ICONS[id];
+          return (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              id={`studio-tab-${id}`}
+              aria-controls="studio-panel"
+              aria-selected={activeView === id}
+              tabIndex={activeView === id ? 0 : -1}
+              className="studio-tab"
+              onClick={() => { if (changeView(id)) { setStatusFilter('all'); setPage(1); } }}
+              onKeyDown={(event) => {
+                const nextIndex =
+                  event.key === 'Home'
+                    ? 0
+                    : event.key === 'End'
+                      ? SOCIAL_MEDIA_TABS.length - 1
+                      : event.key === 'ArrowRight'
+                        ? (index + 1) % SOCIAL_MEDIA_TABS.length
+                        : event.key === 'ArrowLeft'
+                          ? (index + SOCIAL_MEDIA_TABS.length - 1) % SOCIAL_MEDIA_TABS.length
+                          : null;
+                if (nextIndex === null) return;
+                event.preventDefault();
+                if (changeView(SOCIAL_MEDIA_TABS[nextIndex].id)) {
+                  document.getElementById(`studio-tab-${SOCIAL_MEDIA_TABS[nextIndex].id}`)?.focus();
+                }
+              }}
+            >
+              <Icon className="h-4 w-4" />
+              {t(label)}
+            </button>
+          );
+        })}
+      </nav>
+      <section
+        id="studio-panel"
+        role="tabpanel"
+        aria-labelledby={`studio-tab-${activeView}`}
+        className={workspaceView === 'pool' || false ? 'studio-pipeline min-w-0 space-y-4' : workspaceView === 'archiv' ? 'studio-archive min-w-0' : selectedAiClipId !== undefined ? 'studio-ai-workspace min-w-0' : 'studio-automation-workspace min-w-0'}
+      >
+        {activeView === 'heute' ? (
+          <PipelineOverview data={overviewData} now={now} onNavigate={openView} activity={<StudioActivity twitchUserId={twitchUserId} data={overviewData} now={now} onNavigate={openView} onAi={() => setShowAiEditor(true)} />} />
+        ) : workspaceView === 'plan' ? (
+          <div className="studio-plan-workspace">
+            {workspaceSlots?.automation ? (
+              <div className="studio-plan-top">
+                <div className="studio-card">{workspaceSlots.automation}</div>
+                <div className="studio-card">{modeSlot}</div>
+              </div>
+            ) : (
+              <ScheduleQueuePanel twitchUserId={twitchUserId} api={scheduleApi} onChanged={refreshSchedule} reloadKey={reloadKey} modeSlot={modeSlot} />
+            )}
+            <div className="studio-library-import">{workspaceSlots?.libraryImport ?? <ImportPoolPanel twitchUserId={twitchUserId} reloadKey={reloadKey} />}</div>
           </div>
         ) : workspaceView === 'konten' ? (
-          <div className="studio-settings space-y-6">
-            <div className="studio-accounts grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <div className="studio-settings">
+            <div className="studio-settings-row">
               <PlatformConnectionsCard
                 now={now}
                 twitchUserId={twitchUserId}
@@ -608,23 +619,34 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
                 error={disconnectMutation.error}
                 disconnectResult={disconnectMutation.data?.twitchUserId === twitchUserId ? disconnectMutation.data ?? null : null}
               />
-              <div className="space-y-4">
-                <VodArchiveCard
-                  streamer={streamer}
-                  settings={vodArchiveQuery.data ?? null}
-                  isLoading={vodArchiveQuery.isLoading}
-                  ladeFehler={vodArchiveQuery.error}
-                  isSaving={vodArchiveMutation.isPending}
-                  error={vodArchiveMutation.error}
-                  onChange={(next) => vodArchiveMutation.mutate(next)}
-                />
-
-              </div>
+              <VodArchiveCard
+                streamer={streamer}
+                settings={vodArchiveQuery.data ?? null}
+                isLoading={vodArchiveQuery.isLoading}
+                ladeFehler={vodArchiveQuery.error}
+                isSaving={vodArchiveMutation.isPending}
+                error={vodArchiveMutation.error}
+                onChange={(next) => vodArchiveMutation.mutate(next)}
+              />
             </div>
+            <section className="studio-card studio-templates-card">
             <StudioSectionHeading
               title={t('Vorlagen & Layouts')}
               icon={Crop}
               description={t('Lege den Standard-Ausschnitt für neue Clips fest. Einzelne Clips kannst du weiterhin separat anpassen.')}
+              actions={
+                <button
+                  type="button"
+                  className="studio-button"
+                  disabled={layoutQuery.isLoading || layoutQuery.isError || !layoutQuery.data}
+                  onClick={() => {
+                    saveLayoutMutation.reset();
+                    setLayoutChoice(layoutForEditor);
+                  }}
+                >
+                  {t('Gespeichertes Layout öffnen')}
+                </button>
+              }
             />
             {layoutQuery.isError ? <LadeFehlerHinweis fehler={layoutQuery.error} /> : null}
             <div className="grid gap-4 md:grid-cols-3">
@@ -661,32 +683,38 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
                 </button>
               ))}
             </div>
-            <button
-              type="button"
-              className="studio-button"
-              disabled={layoutQuery.isLoading || layoutQuery.isError || !layoutQuery.data}
-              onClick={() => {
-                saveLayoutMutation.reset();
-                setLayoutChoice(layoutForEditor);
-              }}
-            >
-              {t('Gespeichertes Layout öffnen')}
-            </button>
-            <h2 className="studio-section-title">{t('Produktion')}</h2>
-            {AiEditor && twitchUserId && <AiEditor twitchUserId={twitchUserId} streamer={streamer} settingsOnly scheduleApi={scheduleApi} />}
-            {twitchUserId && <PublishReviewPanel twitchUserId={twitchUserId} client={publishClient} section="notifications" onChanged={refreshSchedule} />}
+            </section>
+            {AiEditor && twitchUserId && <section className="studio-card studio-production-card" aria-labelledby="studio-production-title">
+              <AiEditor twitchUserId={twitchUserId} streamer={streamer} settingsOnly scheduleApi={scheduleApi} />
+            </section>}
+            {twitchUserId && <section className="studio-card"><PublishReviewPanel twitchUserId={twitchUserId} client={publishClient} section="notifications" onChanged={refreshSchedule} reloadKey={reloadKey} /></section>}
           </div>
+        ) : activeView === 'veroeffentlicht' && (publishedView === 'vod' || !streamer) ? (
+          <>
+            {streamer && <PublishedSwitch value={publishedView} onChange={setPublishedView} />}
+            <VodArchiveList twitchUserId={twitchUserId} isAdmin={isAdmin} />
+          </>
         ) : (
           <>
+            {activeView === 'veroeffentlicht' && <PublishedSwitch value={publishedView} onChange={setPublishedView} />}
             <div id="studio-clip-list" className="studio-clip-list space-y-3">
               <div className="studio-toolbar">
-                <StatusFilter
-                  value={statusFilter}
-                  onChange={(next) => {
-                    setStatusFilter(next);
-                    setPage(1);
-                  }}
-                />
+                {activeView === 'veroeffentlicht' ? (
+                  statusFilter !== 'all' && (
+                    <button type="button" className="studio-filter" aria-pressed="true" onClick={() => { setStatusFilter('all'); setPage(1); }}>
+                      {t(QUEUE_FILTERS.find(({ id }) => id === statusFilter)?.label ?? 'Alle')}
+                      <X className="h-3.5 w-3.5" aria-label={t('Filter entfernen')} />
+                    </button>
+                  )
+                ) : (
+                  <StatusFilter
+                    value={statusFilter}
+                    onChange={(next) => {
+                      setStatusFilter(next);
+                      setPage(1);
+                    }}
+                  />
+                )}
                 <div className="flex max-w-full flex-wrap items-center gap-2 xl:ml-auto">
                   <input
                     type="search"
@@ -733,15 +761,22 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
                   >
                     <LayoutGrid className="h-4 w-4" />
                   </button>
-                  <button
-                    type="button"
-                    className="studio-button"
-                    disabled={clipsHolenMutation.isPending}
-                    onClick={() => clipsHolenMutation.mutate()}
-                  >
-                    <DownloadCloud className="h-4 w-4" />
-                    {t('Clips holen')}
-                  </button>
+                  {activeView === 'veroeffentlicht' ? (
+                    <button type="button" className="studio-button" onClick={() => setShowAnalytics(true)}>
+                      <BarChart3 className="h-4 w-4" aria-hidden />
+                      {t('Auswertung')}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="studio-button"
+                      disabled={clipsHolenMutation.isPending}
+                      onClick={() => clipsHolenMutation.mutate()}
+                    >
+                      <DownloadCloud className="h-4 w-4" />
+                      {t('Clips holen')}
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -902,9 +937,8 @@ export function SocialMedia({ streamer, twitchUserId, isAdmin = false, aiEditor:
       </section>
       {activeView === 'freigabe' && twitchUserId && <>
         <button type="button" className="studio-button" onClick={() => setShowAiEditor(true)}>{t('KI-Aufträge ansehen')}</button>
-        {workspaceSlots?.publishReview ?? <PublishReviewPanel twitchUserId={twitchUserId} client={publishClient} section="videos" onChanged={refreshSchedule} />}
+        {workspaceSlots?.publishReview ?? <PublishReviewPanel twitchUserId={twitchUserId} client={publishClient} section="videos" onChanged={refreshSchedule} reloadKey={reloadKey} />}
       </>}
-      {activeView === 'veroeffentlicht' && <VodArchiveList twitchUserId={twitchUserId} isAdmin={isAdmin} />}
       {(showAiEditor || selectedAiClipId !== undefined) && <WorkspaceDialog eyebrow={t('Mit KI bearbeiten')} title={selectedAiClip?.title ?? t('KI-Bearbeitung & Prüfung')} onClose={() => { setShowAiEditor(false); setSelectedAiClipId(undefined); const params = new URLSearchParams(window.location.search); params.delete('clip_db_id'); window.history.replaceState({}, '', `${window.location.pathname}?${params}${window.location.hash}`); }}>
         {AiEditor && twitchUserId ? <AiEditor twitchUserId={twitchUserId} streamer={streamer} clipDbId={selectedAiClipId} /> : <p>{t('KI-Bearbeitung noch nicht verfügbar')}</p>}
       </WorkspaceDialog>}
@@ -1083,6 +1117,16 @@ function ClipEditorDialog({
         <EnrichmentPanel clipDbId={clip.clip_db_id} onClose={onClose} onSavingChange={setEnrichmentSaving} />
       )}
     </WorkspaceDialog>
+  );
+}
+
+function PublishedSwitch({ value, onChange }: { value: 'clips' | 'vod'; onChange: (next: 'clips' | 'vod') => void }) {
+  const t = useT();
+  return (
+    <div className="studio-subtabs" role="group" aria-label={t('Ansicht wählen')}>
+      <button type="button" className="studio-subtab" aria-pressed={value === 'clips'} onClick={() => onChange('clips')}>{t('Veröffentlichte Clips')}</button>
+      <button type="button" className="studio-subtab" aria-pressed={value === 'vod'} onClick={() => onChange('vod')}>{t('VOD-Archiv')}</button>
+    </div>
   );
 }
 
@@ -1804,7 +1848,7 @@ function PlatformConnectionsCard({
   const rueckmeldung = leseOauthRueckmeldung();
 
   return (
-    <div className="space-y-4 rounded-2xl border border-border bg-ui-panel p-4">
+    <section className="studio-card space-y-4">
       <StudioSectionHeading title={`${t('Verbindungen')} · ${streamer}`} icon={ExternalLink} level={3}
         actions={isLoading && <Loader2 className="h-4 w-4 animate-spin text-ui-accent" />} />
 
@@ -1939,7 +1983,7 @@ function PlatformConnectionsCard({
       </div>
 
       {error ? <div className="text-xs text-danger">{fehlerText(error, t)}</div> : null}
-    </div>
+    </section>
   );
 }
 
@@ -1976,7 +2020,7 @@ function VodArchiveCard({
   };
 
   return (
-    <div className="space-y-4 rounded-2xl border border-border bg-ui-panel p-4">
+    <section className="studio-card space-y-4">
       <StudioSectionHeading title={`${t('VOD-Archiv')} · ${settings?.streamer_login ?? streamer}`} icon={Archive} level={3}
         actions={isSaving && <Loader2 className="h-4 w-4 animate-spin text-ui-accent" />} />
 
@@ -2024,7 +2068,7 @@ function VodArchiveCard({
       </div>
 
       {error ? <div className="text-xs text-danger">{fehlerText(error, t)}</div> : null}
-    </div>
+    </section>
   );
 }
 

@@ -1,6 +1,8 @@
+import { translateManagementError } from '../../i18n/managementErrors';
 import { useT } from '../../context/LanguageContext';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Loader2 } from 'lucide-react';
+import { SavedIndicator } from './SavedIndicator';
 import {
   CommandNameApiError,
   fetchCommandNames,
@@ -47,7 +49,6 @@ export function CommandNamesProvider({ children }: { children: ReactNode }) {
   return <CommandNamesContext.Provider value={{ commands, loading, error, update }}>{children}</CommandNamesContext.Provider>;
 }
 
-// Shared by the inline editor and the remaining command list.
 // eslint-disable-next-line react-refresh/only-export-components
 export function useCommandNames() {
   const context = useContext(CommandNamesContext);
@@ -117,7 +118,7 @@ export function EditableCommandName({ command, className = '' }: { command: stri
 
   return (
     <div className={className}>
-      <label className="inline-flex min-h-11 max-w-full items-center rounded-lg border border-primary/50 bg-[#0d0806] px-3 font-mono text-base font-bold text-white shadow-inner transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/25">
+      <label className="flex min-h-10 w-full items-center rounded-lg border border-primary/50 bg-[#0d0806] px-2 font-mono text-[13px] font-bold text-white shadow-inner transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/25">
         <span aria-hidden="true" className="select-none text-primary">!</span>
         <input
           type="text"
@@ -128,7 +129,6 @@ export function EditableCommandName({ command, className = '' }: { command: stri
           autoCorrect="off"
           spellCheck={false}
           aria-label={t('{command} Befehlsname ändern', { command: row.default_name })}
-          aria-describedby={`command-name-hint-${command}`}
           value={value}
           onBlur={saveNow}
           aria-invalid={draft !== null && !validCommandNameInput(draft)}
@@ -139,37 +139,12 @@ export function EditableCommandName({ command, className = '' }: { command: stri
             setDraft(next);
             setMessage(validCommandNameInput(next) ? '' : 'Nur Buchstaben und Zahlen eingeben; das ! steht bereits davor.');
           }}
-          className="min-w-0 w-[12ch] max-w-[22ch] bg-transparent py-2 outline-none placeholder:text-text-secondary/60"
+          style={{ width: `${Math.max(value.length, 1) + 1}ch` }}
+          className="min-w-0 flex-auto bg-transparent py-2 outline-none placeholder:text-text-secondary/60"
         />
         {pending && <Loader2 aria-label={t("Wird gespeichert")} className="ml-1 h-3.5 w-3.5 animate-spin text-primary" />}
       </label>
-      <p id={`command-name-hint-${command}`} className="mt-1 text-[11px] text-text-secondary">
-        {t("Namen ändern · speichert automatisch · nur Buchstaben und Zahlen")}
-      </p>
-      {message && <p role={validCommandNameInput(draft ?? '') ? 'status' : 'alert'} className={`mt-1 text-xs ${validCommandNameInput(draft ?? '') ? 'text-text-secondary' : 'text-danger'}`}>{t(message)}</p>}
-    </div>
-  );
-}
-
-export function OtherCommandNames({ excluded }: { excluded: string[] }) {
-  const t = useT();
-  const { commands, loading, error } = useCommandNames();
-  const remaining = commands.filter(row => !excluded.includes(row.command));
-  if (loading) return <p className="text-sm text-text-secondary">{t("Weitere Befehle werden geladen …")}</p>;
-  if (error) return <p role="alert" className="text-sm text-danger">{t(error)}</p>;
-  if (!remaining.length) return null;
-  return (
-    <div className="mt-2">
-      <h3 className="mb-3 text-lg font-bold text-white">{t("Weitere Chat-Befehle")}</h3>
-      <div className="grid gap-3 md:grid-cols-2">
-        {remaining.map(row => (
-          <div key={row.command} className="soft-elevate rounded-xl border border-border bg-background/60 p-4">
-            <EditableCommandName command={row.command} />
-            <p className="mt-2 text-xs leading-5 text-text-secondary">{t(row.summary).split(row.default_name).join(row.effective_name)}</p>
-            {row.command === 'discord' && <p className="mt-2 text-xs leading-5 text-primary">{t("Wenn du diesen Namen änderst, hilft der Bot bei !dldc mit „Meinst du")} {row.effective_name}{t("?“ weiter.")}</p>}
-          </div>
-        ))}
-      </div>
+      {message === 'Gespeichert.' ? <SavedIndicator className="mt-1 block" /> : message && message !== 'Wird gespeichert …' && <p role={validCommandNameInput(draft ?? '') ? 'status' : 'alert'} className={`mt-1 text-xs ${validCommandNameInput(draft ?? '') ? 'text-text-secondary' : 'text-danger'}`}>{translateManagementError(message, t)}</p>}
     </div>
   );
 }

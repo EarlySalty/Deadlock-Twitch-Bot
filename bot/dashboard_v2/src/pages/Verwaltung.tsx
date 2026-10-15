@@ -26,6 +26,11 @@ import { LurkerTaxSection } from '@/components/verwaltung/LurkerTaxSection';
 import { SilentNotificationsSection } from '@/components/verwaltung/SilentNotificationsSection';
 import { ModerationSection } from '@/components/verwaltung/ModerationSection';
 import { ScamGuardSection } from '@/components/verwaltung/ScamGuardSection';
+import { PrivateVodSection } from '@/components/verwaltung/PrivateVodSection';
+import { OtherCommandNames } from '@/components/verwaltung/OtherCommandsSection';
+import { ConnectionCard, ScopeDisclosure, type ConnectionTone } from '@/components/verwaltung/ConnectionCard';
+import { SectionCard } from '@/components/verwaltung/ui';
+import { STAT_COMMANDS } from '@/api/statCommands';
 import { resolveVerwaltungTab, type VerwaltungTabId } from '@/pages/verwaltungTabs';
 import {
   ArrowRight,
@@ -40,6 +45,17 @@ import {
   Terminal,
   User,
 } from 'lucide-react';
+
+const OTHER_COMMANDS_EXCLUDED = [...STAT_COMMANDS.map(item => item.command), 'clip', 'vodclip', 'title', 'lurk', 'sub', 'silentban', 'silentraid'];
+
+function ProfileField({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="border-b border-border/60 py-2.5">
+      <dt className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary">{label}</dt>
+      <dd className={`mt-1 text-sm font-semibold text-white ${mono ? 'font-mono' : ''}`}>{value}</dd>
+    </div>
+  );
+}
 
 interface VerwaltungTabDef {
   id: VerwaltungTabId;
@@ -70,7 +86,6 @@ export function VerwaltungPage() {
     window.history.replaceState(null, '', window.location.pathname + (query ? '?' + query : '') + window.location.hash);
   }, []);
 
-  // Tab im Hash halten: Reload und geteilte Links landen wieder im selben Bereich.
   const [tab, setTab] = useState<VerwaltungTabId>(() =>
     resolveVerwaltungTab(typeof window === 'undefined' ? '' : window.location.hash),
   );
@@ -145,15 +160,12 @@ export function VerwaltungPage() {
   const steamConnected = Boolean(home.steam?.connected);
   const steamConnectUrl = home.steam?.connectUrl ? oauthLink(home.steam.connectUrl) : null;
   const userId = (authStatus as any)?.userId || (home as any)?.userId || '';
-  // Eigener Kanal-Login für die Trenn-Aktion. Leer heißt: Aktion bleibt
-  // gesperrt, statt gegen einen geratenen Login zu bestätigen.
   const selfLogin = String(
     (authStatus as any)?.twitchLogin || (home as any)?.twitchLogin || '',
   ).trim();
 
   const oauthConnected = oauthStatus === 'connected' && !hasScopeIssue;
   const oauthStatusText = oauthConnected ? 'Verbunden' : needsReauth ? 'Re-Auth nötig' : 'Unvollständig';
-  const oauthStatusClass = oauthConnected ? 'text-success' : needsReauth ? 'text-error' : 'text-warning';
   const oauthHintText = oauthConnected
     ? 'Twitch-OAuth ist aktiv und vollständig.'
     : needsReauth
@@ -164,237 +176,106 @@ export function VerwaltungPage() {
   const partnerStatus = String((authStatus as any)?.partnerStatus || '').trim().toLowerCase();
   const tokenErrorGraceExpiresAt = String((authStatus as any)?.tokenErrorGraceExpiresAt || '').trim();
 
+  const discordStatus = isFetching ? 'Wird geprüft …' : discordError ? 'Gerade nicht prüfbar' : discordConnected ? 'Verbunden' : 'Nicht verbunden';
+  const steamStatus = isFetching ? 'Wird geprüft …' : steamError ? 'Gerade nicht prüfbar' : steamConnected ? 'Verbunden' : 'Nicht verbunden';
+  const serviceTone = (connected: boolean, failed: boolean): ConnectionTone => isFetching ? 'muted' : failed ? 'warning' : connected ? 'success' : 'warning';
+
   const kontoTab = (
     <>
       {timezoneOwner ? <GlobalTimezone owner={timezoneOwner} channelScoped={new URLSearchParams(window.location.search).has('twitch_user_id')} /> : <p role="alert">{t('Bitte einen gültigen Twitch-Kanal für die Zeitzone auswählen.')}</p>}
-      {/* Twitch OAuth Section */}
-      <motion.section
-        className="panel-card rounded-2xl p-5 md:p-6"
-        initial={{ opacity: 0, y: 16 }}
-        whileInView={{ opacity: 1, y: 0 }}
-        viewport={{ once: true }}
-        transition={{ duration: 0.32, delay: 0.04 }}
-      >
-        <div className="mb-5">
-          <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">OAuth</p>
-          <h2 className="display-font text-2xl font-bold text-white mb-1">{t("Twitch-Verbindung")}</h2>
-        </div>
-
-        <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-4">
-          <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-lg gradient-accent flex items-center justify-center shrink-0">
-              {oauthConnected
-                ? <ShieldCheck className="h-5 w-5 text-on-gold" />
-                : <ShieldAlert className="h-5 w-5 text-on-gold" />}
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className={`text-base font-bold ${oauthStatusClass}`}>{t(oauthStatusText)}</p>
-              <p className="mt-0.5 text-xs text-text-secondary">{t(oauthHintText)}</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Scope chips */}
-        {(grantedScopes.length > 0 || missingScopes.length > 0) && (
-          <div className="mb-5 space-y-2">
-            {grantedScopes.length > 0 && (
-              <div>
-                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-secondary">{t("Aktive Scopes (")}{grantedScopes.length.toLocaleString(locale)})</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {grantedScopes.map((scope: string) => (
-                    <span key={scope} className="rounded-full border border-success/30 bg-success/10 px-2.5 py-0.5 text-[11px] font-medium text-success">
-                      {scope}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-            {missingScopes.length > 0 && (
-              <div>
-                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-secondary">{t("Fehlende Scopes (")}{missingScopes.length.toLocaleString(locale)})</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {missingScopes.map((scope: string) => (
-                    <span key={scope} className="rounded-full border border-error/40 bg-error/10 px-2.5 py-0.5 text-[11px] font-medium text-error">
-                      {scope}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        <a
-          href={reconnectUrl}
-          className="inline-flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-5 py-2.5 text-sm font-semibold text-primary transition-colors hover:border-primary/60 hover:bg-primary/20"
+      <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(300px,1fr))]">
+        <ConnectionCard
+          icon={oauthConnected ? <ShieldCheck className="h-5 w-5 text-primary" /> : <ShieldAlert className="h-5 w-5 text-warning" />}
+          title={t("Twitch-Verbindung")}
+          status={t(oauthStatusText)}
+          tone={oauthConnected ? 'success' : needsReauth ? 'error' : 'warning'}
+          sentence={t(oauthHintText)}
+          footer={<a href={reconnectUrl} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-border-hover hover:bg-card-hover"><ShieldCheck className="h-4 w-4" />{t("Jetzt neu autorisieren")}</a>}
         >
-          <ShieldCheck className="h-4 w-4" />
-          {t("Jetzt neu autorisieren")}
-        </a>
-      </motion.section>
-
-      {/* Discord Section */}
-      <motion.section
-        tabIndex={-1}
-        data-tour-id="onboarding-discord"
-        data-tour-ready="true"
-        className="panel-card rounded-2xl p-5 md:p-6"
-        initial={{ opacity: 0, y: 16 }}
-        whileInView={{ opacity: 1, y: 0 }}
-        viewport={{ once: true }}
-        transition={{ duration: 0.32, delay: 0.08 }}
-      >
-        <div className="mb-5">
-          <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">Discord</p>
-          <h2 className="display-font text-2xl font-bold text-white mb-1">{t("Discord verbinden")}</h2>
-        </div>
-
-        <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-5">
-          <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-lg gradient-accent flex items-center justify-center shrink-0">
-              <MessageSquare className="h-5 w-5 text-on-gold" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className={`text-base font-bold ${discordConnected ? 'text-success' : 'text-warning'}`}>
-                {isFetching ? t("Wird geprüft …") : discordError ? t("Gerade nicht prüfbar") : discordConnected ? t('Verbunden') : t("Nicht verbunden")}
-              </p>
-              <p className="mt-0.5 text-xs text-text-secondary">
-                {discordError ? t("Der Status konnte nicht geprüft werden. Das bedeutet nicht, dass deine Verbindung fehlt.") : discordConnected ? t("Dein Discord-Konto ist mit Twitch verknüpft.") : t("Verbinde Discord zuerst, damit du danach Steam zuordnen kannst.")}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {discordConnectUrl && !discordError ? (
-          <a
-            href={discordConnectUrl}
-            className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-5 py-2.5 text-sm font-semibold text-accent transition-colors hover:border-accent/60 hover:bg-accent/20"
-          >
-            <MessageSquare className="h-4 w-4" />
-            {discordConnected ? t("Erneut verbinden") : t("Discord verknüpfen")}
-          </a>
-        ) : (
-          <div className="space-y-2">
-            <button
-              type="button"
-              disabled
-              className="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-border bg-background/70 px-5 py-2.5 text-sm font-semibold text-text-secondary"
-            >
+          <ScopeDisclosure granted={grantedScopes} missing={missingScopes} />
+        </ConnectionCard>
+        <ConnectionCard
+          tourId="onboarding-discord"
+          icon={<MessageSquare className="h-5 w-5 text-primary" />}
+          title="Discord"
+          status={t(discordStatus)}
+          tone={serviceTone(discordConnected, discordError)}
+          sentence={discordError ? t("Der Status konnte nicht geprüft werden. Das bedeutet nicht, dass deine Verbindung fehlt.") : discordConnected ? t("Dein Discord-Konto ist mit Twitch verknüpft.") : t("Verbinde Discord zuerst, damit du danach Steam zuordnen kannst.")}
+          footer={discordConnectUrl && !discordError ? (
+            <a href={discordConnectUrl} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-border-hover hover:bg-card-hover">
               <MessageSquare className="h-4 w-4" />
-              {discordError || isFetching ? t("Status prüfen") : discordConnected ? t("Discord verbunden") : t("Discord-Verbindung nicht verfügbar")}
-            </button>
-            {!discordConnected && !discordError && !isFetching && (
-              <p className="text-xs text-text-secondary">
-                {t("Öffne deine persönliche Partner-Ansicht, um Discord zu verbinden.")}
-              </p>
-            )}
-          </div>
-        )}
-      </motion.section>
-
-      {/* Steam Section */}
-      <motion.section
-        tabIndex={-1}
-        data-tour-id="onboarding-steam"
-        data-tour-ready="true"
-        className="panel-card rounded-2xl p-5 md:p-6"
-        initial={{ opacity: 0, y: 16 }}
-        whileInView={{ opacity: 1, y: 0 }}
-        viewport={{ once: true }}
-        transition={{ duration: 0.32, delay: 0.1 }}
-      >
-        <div className="mb-5">
-          <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">Steam</p>
-          <h2 className="display-font text-2xl font-bold text-white mb-1">{t("Steam verbinden")}</h2>
-        </div>
-
-        <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-5">
-          <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-lg gradient-accent flex items-center justify-center shrink-0">
-              <Gamepad2 className="h-5 w-5 text-on-gold" />
+              {discordConnected ? t("Erneut verbinden") : t("Discord verknüpfen")}
+            </a>
+          ) : (
+            <div className="space-y-2">
+              <button type="button" disabled className="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-text-secondary">
+                <MessageSquare className="h-4 w-4" />
+                {discordError || isFetching ? t("Status prüfen") : discordConnected ? t("Discord verbunden") : t("Discord-Verbindung nicht verfügbar")}
+              </button>
+              {!discordConnected && !discordError && !isFetching && (
+                <p className="text-xs text-text-secondary">{t("Öffne deine persönliche Partner-Ansicht, um Discord zu verbinden.")}</p>
+              )}
             </div>
-            <div className="min-w-0 flex-1">
-              <p className={`text-base font-bold ${steamConnected ? 'text-success' : 'text-warning'}`}>
-                {isFetching ? t("Wird geprüft …") : steamError ? t("Gerade nicht prüfbar") : steamConnected ? t('Verbunden') : t("Nicht verbunden")}
-              </p>
-              <p className="mt-0.5 text-xs text-text-secondary">
-                {steamError ? t("Der Status konnte nicht geprüft werden. Eine bestehende Verbindung kann weiterhin gültig sein.") : steamConnected ? t("Dein Steam-Account ist verknüpft.") : discordConnected ? t("Verknüpfe Steam für deinen Deadlock-Rang und deine Spielstatistiken.") : t("Verbinde zuerst Discord, danach Steam.")}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {steamConnectUrl && !steamError ? (
-          <a
-            href={steamConnectUrl}
-            className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-5 py-2.5 text-sm font-semibold text-accent transition-colors hover:border-accent/60 hover:bg-accent/20"
-          >
-            <Gamepad2 className="h-4 w-4" />
-            {steamConnected ? t("Erneut verknüpfen") : t("Steam verknüpfen")}
-          </a>
-        ) : (
-          <div className="space-y-2">
-            <button
-              type="button"
-              disabled
-              className="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-border bg-background/70 px-5 py-2.5 text-sm font-semibold text-text-secondary"
-            >
+          )}
+        />
+        <ConnectionCard
+          tourId="onboarding-steam"
+          icon={<Gamepad2 className="h-5 w-5 text-primary" />}
+          title="Steam"
+          status={t(steamStatus)}
+          tone={serviceTone(steamConnected, steamError)}
+          sentence={steamError ? t("Der Status konnte nicht geprüft werden. Eine bestehende Verbindung kann weiterhin gültig sein.") : steamConnected ? t("Dein Steam-Account ist verknüpft.") : discordConnected ? t("Verknüpfe Steam für deinen Deadlock-Rang und deine Spielstatistiken.") : t("Verbinde zuerst Discord, danach Steam.")}
+          footer={steamConnectUrl && !steamError ? (
+            <a href={steamConnectUrl} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-border-hover hover:bg-card-hover">
               <Gamepad2 className="h-4 w-4" />
-              {t("Steam verknüpfen")}
-            </button>
-            <p className="text-xs text-text-secondary">
-              {steamError || isFetching ? t("Bitte prüfe den Status erneut, bevor du ein Konto neu verknüpfst.") : discordConnected ? t("Der Verbindungslink ist gerade nicht verfügbar. Bitte prüfe den Status erneut.") : t("Verknüpfe zuerst deinen Discord-Account. Die Steam-Verknüpfung läuft darüber.")}
-            </p>
-          </div>
-        )}
-      </motion.section>
+              {steamConnected ? t("Erneut verknüpfen") : t("Steam verknüpfen")}
+            </a>
+          ) : (
+            <div className="space-y-2">
+              <button type="button" disabled className="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-text-secondary">
+                <Gamepad2 className="h-4 w-4" />
+                {t("Steam verknüpfen")}
+              </button>
+              <p className="text-xs text-text-secondary">
+                {steamError || isFetching ? t("Bitte prüfe den Status erneut, bevor du ein Konto neu verknüpfst.") : discordConnected ? t("Der Verbindungslink ist gerade nicht verfügbar. Bitte prüfe den Status erneut.") : t("Verknüpfe zuerst deinen Discord-Account. Die Steam-Verknüpfung läuft darüber.")}
+              </p>
+            </div>
+          )}
+        />
+      </div>
 
-      <button type="button" onClick={checkConnections} disabled={isFetching} className="min-h-11 w-fit rounded-lg border border-primary/50 px-4 py-2 text-sm font-semibold text-primary disabled:opacity-50">{t("Status prüfen")}</button>
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="button" onClick={checkConnections} disabled={isFetching} className="min-h-11 w-fit rounded-lg border border-primary/50 px-4 py-2 text-sm font-semibold text-primary disabled:opacity-50">{t("Status prüfen")}</button>
+        <p role="status" aria-atomic="true" className="text-sm text-text-secondary">{connectionNotice === 'checking' ? t('Verbindungen werden geprüft …') : connectionNotice ? t('Prüfung abgeschlossen. Discord {discord}. Steam {steam}.', { discord: t(connectionNotice.discord), steam: t(connectionNotice.steam) }) : ''}</p>
+      </div>
 
-      <p role="status" aria-atomic="true" className="text-sm text-text-secondary">{connectionNotice === 'checking' ? t('Verbindungen werden geprüft …') : connectionNotice ? t('Prüfung abgeschlossen. Discord {discord}. Steam {steam}.', { discord: t(connectionNotice.discord), steam: t(connectionNotice.steam) }) : ''}</p>
-
-      {/* Profile Section */}
-      <motion.section
-        className="panel-card rounded-2xl p-5 md:p-6"
-        initial={{ opacity: 0, y: 16 }}
-        whileInView={{ opacity: 1, y: 0 }}
-        viewport={{ once: true }}
-        transition={{ duration: 0.32, delay: 0.12 }}
-      >
-        <div className="mb-5">
-          <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">{t("Profil")}</p>
-          <h2 className="display-font text-2xl font-bold text-white mb-1">{t("Account-Details")}</h2>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-3 mb-4">
-          <div className="soft-elevate rounded-xl border border-border bg-background/60 p-3.5">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary mb-1.5">{t("Twitch Login")}</p>
-            <p className="text-sm font-semibold text-white font-mono">{twitchLogin ? `@${twitchLogin}` : '–'}</p>
-          </div>
-          <div className="soft-elevate rounded-xl border border-border bg-background/60 p-3.5">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary mb-1.5">{t("Display Name")}</p>
-            <p className="text-sm font-semibold text-white">{displayName || '–'}</p>
-          </div>
-          <div className="soft-elevate rounded-xl border border-border bg-background/60 p-3.5">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary mb-1.5">{t("User-ID")}</p>
-            <p className="text-sm font-semibold text-white font-mono">{userId || '–'}</p>
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-border/50 bg-background/40 px-4 py-3 text-xs text-text-secondary">
+      <SectionCard eyebrow={t("Profil")} title={t("Account-Details")}>
+        <dl className="grid gap-x-6 sm:grid-cols-3">
+          <ProfileField label={t("Twitch Login")} value={twitchLogin ? `@${twitchLogin}` : '–'} mono />
+          <ProfileField label={t("Display Name")} value={displayName || '–'} />
+          <ProfileField label={t("User-ID")} value={userId || '–'} mono />
+        </dl>
+        <p className="mt-3 text-xs text-text-secondary">
           {t("Profiländerungen direkt auf Twitch vornehmen. Daten werden beim nächsten Login synchronisiert.")}
-        </div>
-      </motion.section>
+        </p>
+      </SectionCard>
     </>
   );
 
   const chatTab = (
     <CommandNamesProvider>
-      <GreetingSection />
-      <LurkCommandSection />
-      <ClipCommandSection />
-      <TitleCommandSection />
+      <p className="text-xs text-text-secondary">{t("Namen ändern · speichert automatisch · nur Buchstaben und Zahlen")}</p>
+      <SectionCard eyebrow={t("Chat-Interaktion & Clips")}>
+        <GreetingSection />
+        <LurkCommandSection />
+        <TitleCommandSection />
+        <ClipCommandSection />
+        <PrivateVodSection />
+      </SectionCard>
       <StatCommandSection />
+      <SectionCard eyebrow={t("Community, Raids & System")}>
+        <OtherCommandNames excluded={OTHER_COMMANDS_EXCLUDED} />
+      </SectionCard>
       <SubReminderSection />
       <LurkerTaxSection />
     </CommandNamesProvider>
@@ -492,15 +373,12 @@ export function VerwaltungPage() {
 
         {returnMessage && <p role="status" className={`rounded-xl border p-4 text-sm ${returnMessage.failed ? 'border-warning/40 text-warning' : 'border-success/40 text-success'}`}>{t(returnMessage.text)}</p>}
         {isError && data && <p role="alert" className="text-sm text-warning">{t("Der aktuelle Kontostatus konnte nicht geladen werden.")} <button onClick={checkConnections} className="underline">{t("Status prüfen")}</button></p>}
-        <Rise as="section" className="panel-card rounded-2xl p-5 md:p-6">
-          <div className="mb-1 text-[11px] font-bold uppercase tracking-[0.18em] text-primary">
-            {t("Konto")}
-          </div>
+        <header>
           <h1 className="display-font text-2xl font-extrabold text-white">{t("Dein Bot, deine Einstellungen")}</h1>
-          <p className="mt-2 max-w-2xl text-sm text-text-secondary">
+          <p className="mt-1 max-w-2xl text-sm text-text-secondary">
             {t("Hier verbindest du deine Konten und schaltest Funktionen an oder aus. Wähle einen Bereich und passe den Bot an deinen Kanal an.")}
           </p>
-        </Rise>
+        </header>
 
         <nav aria-label={t("Verwaltungsbereiche")} className="sticky top-2 z-20 flex flex-wrap gap-1.5 rounded-xl border border-border bg-card/90 p-1.5 backdrop-blur">
           {tabs.map((item) => {

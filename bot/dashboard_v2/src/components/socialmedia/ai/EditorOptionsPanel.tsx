@@ -1,9 +1,7 @@
-import type { ScheduleQueueApi } from '../autopilot/schedule-queue';
 import { useT } from '@/context/LanguageContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AiEditorOptions, AiPublishLanguage } from './api';
 import { fetchAiOptions, saveAiOptions } from './api';
-import { ProductionSwitch } from '../ProductionSwitch';
 
 const languages: { value: AiPublishLanguage; label: string }[] = [
   { value: 'de', label: 'Deutsch' },
@@ -16,7 +14,7 @@ const choices: { key: 'multi_output_enabled' | 'experimental_ai_layout'; label: 
   { key: 'experimental_ai_layout', label: 'Experimentelles KI-Layout', help: 'Vorbereitet für eigene Bildaufteilungen durch die KI. Vorerst bleibt dein gespeichertes Layout aktiv und es werden keine Item-Grafiken eingeblendet.' },
 ];
 
-export function EditorOptionsPanel({ channel, disabled = false, scheduleApi }: { channel: string; disabled?: boolean; scheduleApi?: ScheduleQueueApi }) {
+export function EditorOptionsPanel({ channel, disabled = false }: { channel: string; disabled?: boolean }) {
   const t = useT();
   const client = useQueryClient();
   const key = ['social-ai', 'options', channel] as const;
@@ -31,7 +29,6 @@ export function EditorOptionsPanel({ channel, disabled = false, scheduleApi }: {
       {choices.map((choice) => <label className="studio-switch" key={choice.key}><input type="checkbox" checked={options.data[choice.key]} disabled={disabled || save.isPending || options.isFetching} onChange={(event) => save.mutate({ ...options.data, [choice.key]: event.target.checked })} /><span>{t(choice.label)}</span><small>{t(choice.help)}</small></label>)}
       <label className="social-ai-language"><span>{t("Sprache für Titel, Beschreibung und Hashtags")}</span><select className="studio-select" value={options.data.publish_language} disabled={disabled || save.isPending || options.isFetching} onChange={(event) => save.mutate({ ...options.data, publish_language: event.target.value as AiPublishLanguage })}>{languages.map((language) => <option key={language.value} value={language.value}>{t(language.label)}</option>)}</select><small>{t("Die Untertitel bleiben in der gesprochenen Sprache des Clips.")}</small></label>
     </div>}
-    <ProductionSwitch owner={channel} disabled={disabled} api={scheduleApi} />
     <div role="status" aria-live="polite">{save.isSuccess && <p>{t("Optionen gespeichert.")}</p>}{save.isError && <p className="social-ai-caution">{t("Speichern fehlgeschlagen. Bitte versuche es erneut.")}</p>}</div>
   </section>;
 }

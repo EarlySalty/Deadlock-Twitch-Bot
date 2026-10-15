@@ -1,7 +1,7 @@
 import { useT } from '../../context/LanguageContext';
 import { useEffect, useState } from 'react';
-import { motion } from 'framer-motion';
-import { CheckCircle2, CircleAlert, Gift, Loader2, Power, PowerOff } from 'lucide-react';
+import { CheckCircle2, CircleAlert, Gift, Loader2 } from 'lucide-react';
+import { CommandRow, SectionCard } from './ui';
 import {
   fetchLurkerTaxSettings,
   toggleLurkerTax,
@@ -12,7 +12,7 @@ export function LurkerTaxSection() {
   const t = useT();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
   const [settings, setSettings] = useState<LurkerTaxSettingsResponse | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -34,11 +34,11 @@ export function LurkerTaxSection() {
   }, []);
 
   const onToggle = async () => {
-    if (!settings) return;
+    if (!settings || pending) return;
     const want = !settings.lurker_tax_enabled;
     setPending(true);
     setError(null);
-    setSuccess(null);
+    setSavedAt(null);
     try {
       const data = await toggleLurkerTax(want);
       setSettings((current) => ({
@@ -47,7 +47,7 @@ export function LurkerTaxSection() {
           current?.has_moderator_read_chatters ?? settings.has_moderator_read_chatters,
         reward_present: current?.reward_present ?? settings.reward_present,
       }));
-      setSuccess('Gespeichert.');
+      setSavedAt(Date.now());
     } catch {
       setError('Speichern fehlgeschlagen. Bitte versuch es nochmal.');
     } finally {
@@ -65,143 +65,97 @@ export function LurkerTaxSection() {
         : 'unknown';
 
   return (
-    <motion.section
-      className="panel-card rounded-2xl p-5 md:p-6"
-      initial={{ opacity: 0, y: 16 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true }}
-      transition={{ duration: 0.32, delay: 0.16 }}
+    <SectionCard
+      eyebrow={t("Stammzuschauer")}
+      title={t("Lurker-Steuer")}
+      description={t("Erinnert deine ruhigsten Stamm-Lurker ab und zu mit einem freundlichen @-Hinweis daran, mal wieder Hallo zu sagen. Höchstens zwei pro Erinnerung und nur bei langjährigen Zuschauern. Standardmäßig aus.")}
     >
-      <div className="mb-5">
-        <p className="text-sm uppercase tracking-wider font-medium text-primary mb-1">
-          {t("Stammzuschauer")}
-        </p>
-        <h2 className="display-font text-2xl font-bold text-white mb-1">
-          {t("Lurker-Steuer")}
-        </h2>
-        <p className="text-sm text-text-secondary">
-          {t("Erinnert deine ruhigsten Stamm-Lurker ab und zu mit einem freundlichen @-Hinweis daran, mal wieder Hallo zu sagen. Höchstens zwei pro Erinnerung und nur bei langjährigen Zuschauern. Standardmäßig aus.")}
-        </p>
-      </div>
-
-      {error && (
-        <div className="mb-4 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
-          {t(error)}
-        </div>
-      )}
-
-      {success && (
-        <div className="mb-4 rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-sm text-success">
-          {t(success)}
-        </div>
-      )}
-
       {loading ? (
         <div className="flex items-center gap-3 text-text-secondary text-sm">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
           {t("Status wird geladen ...")}
         </div>
       ) : !settings ? (
-        <div className="rounded-xl border border-border bg-background/40 px-4 py-6 text-sm text-text-secondary text-center">
-          {t("Die Einstellung ist gerade nicht verfügbar. Bitte lade die Seite neu.")}
-        </div>
+        <p role="alert" className="text-sm text-text-secondary">
+          {error ? t(error) : t("Die Einstellung ist gerade nicht verfügbar. Bitte lade die Seite neu.")}
+        </p>
       ) : (
         <>
-          <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-5">
-            <div className="flex items-center justify-between gap-4 flex-wrap">
-              <div className="min-w-0">
-                <p
-                  className={`text-base font-bold ${
-                    enabled ? 'text-success' : 'text-text-secondary'
-                  }`}
-                >
-                  {enabled ? t("Lurker-Steuer ist AKTIV") : t("Lurker-Steuer ist aus")}
-                </p>
-                <p className="text-xs text-text-secondary mt-0.5">
-                  {enabled
-                    ? t("Holt sehr sparsam deine ruhigsten Stamm-Lurker zurück in den Chat.")
-                    : t("Aktiviere sie, um stille Stammzuschauer sanft zurück in den Chat zu holen.")}
-                </p>
-              </div>
-              <button
-                type="button"
-                disabled={pending}
-                onClick={() => void onToggle()}
-                className={`inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold transition-colors ${
-                  enabled
-                    ? 'border border-danger/40 bg-danger/10 text-danger hover:bg-danger/20'
-                    : 'border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20'
-                } disabled:opacity-50 disabled:cursor-not-allowed`}
-              >
-                {pending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : enabled ? (
-                  <PowerOff className="h-4 w-4" />
-                ) : (
-                  <Power className="h-4 w-4" />
-                )}
-                {enabled ? t("Lurker-Steuer deaktivieren") : t("Lurker-Steuer aktivieren")}
-              </button>
-            </div>
-          </div>
-
-          <div className="soft-elevate rounded-xl border border-border bg-background/60 p-4 mb-5">
-            <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-              <div className="flex items-center gap-2 min-w-0">
-                <Gift className="h-4 w-4 text-primary shrink-0" />
-                <p className="text-base font-bold text-white">{t("Belohnung zum Einlösen")}</p>
-              </div>
-              {rewardStatus === 'found' ? (
-                <span className="inline-flex items-center gap-1.5 rounded-lg border border-success/40 bg-success/10 px-2.5 py-1 text-xs font-semibold text-success">
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  {t("Belohnung gefunden")}
-                </span>
-              ) : rewardStatus === 'missing' ? (
-                <span className="inline-flex items-center gap-1.5 rounded-lg border border-warning/40 bg-warning/10 px-2.5 py-1 text-xs font-semibold text-warning">
-                  <CircleAlert className="h-3.5 w-3.5" />
-                  {t("Belohnung fehlt")}
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background/40 px-2.5 py-1 text-xs font-semibold text-text-secondary">
-                  <CircleAlert className="h-3.5 w-3.5" />
-                  {t("Status unbekannt")}
-                </span>
-              )}
-            </div>
-            <p className="text-sm text-text-secondary mb-3">
-              {t("Damit deine Lurker etwas zum Antippen haben, legst du in Twitch eine Kanalpunkte-Belohnung mit genau diesem Namen an. Den Preis bestimmst du selbst, zum Beispiel 10 Punkte.")}
-            </p>
-            <div className="rounded-lg border border-border bg-background/40 px-3 py-2 mb-3">
-              <p className="text-xs text-text-secondary mb-0.5">{t("Name der Belohnung")}</p>
-              <p className="text-sm font-semibold text-white">Lurker Steuer</p>
-            </div>
-            <p className="text-xs font-semibold text-text-secondary mb-1.5">
-              {t("So legst du sie in Twitch an:")}
-            </p>
-            <ol className="list-decimal pl-5 space-y-1 text-sm text-text-secondary">
-              <li>{t("Öffne dein Twitch Creator-Dashboard.")}</li>
-              <li>{t("Geh zu Zuschauerbelohnungen.")}</li>
-              <li>{t("Öffne Punkte und Belohnungen.")}</li>
-              <li>
-                {t("Wähle Individuelle Belohnung hinzufügen und nenn sie genau")}
-                {' '}
-                <span className="font-semibold text-white">Lurker Steuer</span>.
-              </li>
-            </ol>
-            {rewardStatus === 'unknown' && (
-              <p className="text-xs text-text-secondary mt-3">
-                {t("Wir konnten gerade nicht prüfen, ob die Belohnung schon da ist. Sobald die Verbindung wieder klappt, siehst du hier den Status.")}
-              </p>
-            )}
-          </div>
-
+          <CommandRow
+            title={t("Lurker-Steuer")}
+            description={enabled
+              ? t("Holt sehr sparsam deine ruhigsten Stamm-Lurker zurück in den Chat.")
+              : t("Aktiviere sie, um stille Stammzuschauer sanft zurück in den Chat zu holen.")}
+            inputSide="end"
+            savedAt={savedAt}
+            error={error}
+            toggle={{ checked: enabled, onChange: () => void onToggle(), label: t("Lurker-Steuer"), pending }}
+          />
+          <RewardGuide status={rewardStatus} />
           {enabled && !scopeReady && (
-            <div className="rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">
+            <p role="status" className="mt-3 text-sm text-warning">
               {t("Der Schalter ist an, aber der Community-Bot braucht dafür noch die Leseberechtigung für deine Zuschauerliste. Darum kümmern wir uns, du musst nichts tun.")}
-            </div>
+            </p>
           )}
         </>
       )}
-    </motion.section>
+    </SectionCard>
+  );
+}
+
+function RewardBadge({ status }: { status: 'found' | 'missing' | 'unknown' }) {
+  const t = useT();
+  if (status === 'found') {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-success">
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        {t("Belohnung gefunden")}
+      </span>
+    );
+  }
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-xs font-semibold ${status === 'missing' ? 'text-warning' : 'text-text-secondary'}`}>
+      <CircleAlert className="h-3.5 w-3.5" />
+      {status === 'missing' ? t("Belohnung fehlt") : t("Status unbekannt")}
+    </span>
+  );
+}
+
+function RewardGuide({ status }: { status: 'found' | 'missing' | 'unknown' }) {
+  const t = useT();
+  return (
+    <div className="pt-4">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+        <p className="flex items-center gap-2 text-sm font-bold text-white">
+          <Gift className="h-4 w-4 shrink-0 text-primary" />
+          {t("Belohnung zum Einlösen")}
+        </p>
+        <RewardBadge status={status} />
+      </div>
+      <p className="mb-2 text-sm text-text-secondary">
+        {t("Damit deine Lurker etwas zum Antippen haben, legst du in Twitch eine Kanalpunkte-Belohnung mit genau diesem Namen an. Den Preis bestimmst du selbst, zum Beispiel 10 Punkte.")}
+      </p>
+      <p className="mb-3 text-sm text-text-secondary">
+        {t("Name der Belohnung")}: <span className="font-semibold text-white">Lurker Steuer</span>
+      </p>
+      <p className="mb-1.5 text-xs font-semibold text-text-secondary">
+        {t("So legst du sie in Twitch an:")}
+      </p>
+      <ol className="list-decimal pl-5 space-y-1 text-sm text-text-secondary">
+        <li>{t("Öffne dein Twitch Creator-Dashboard.")}</li>
+        <li>{t("Geh zu Zuschauerbelohnungen.")}</li>
+        <li>{t("Öffne Punkte und Belohnungen.")}</li>
+        <li>
+          {t("Wähle Individuelle Belohnung hinzufügen und nenn sie genau")}
+          {' '}
+          <span className="font-semibold text-white">Lurker Steuer</span>.
+        </li>
+      </ol>
+      {status === 'unknown' && (
+        <p className="text-xs text-text-secondary mt-3">
+          {t("Wir konnten gerade nicht prüfen, ob die Belohnung schon da ist. Sobald die Verbindung wieder klappt, siehst du hier den Status.")}
+        </p>
+      )}
+    </div>
   );
 }

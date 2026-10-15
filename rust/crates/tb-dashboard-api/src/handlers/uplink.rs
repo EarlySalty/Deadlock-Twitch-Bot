@@ -1695,6 +1695,33 @@ mod tests {
     use crate::auth::level::AdminActor;
 
     #[tokio::test]
+    async fn dock_rotation_proxy_preserves_generation_and_urls() {
+        use wiremock::{
+            matchers::{method, path, query_param},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let server = MockServer::start().await;
+        let expected = json!({"ok":true,"generation":42,"dock_urls":{"chat":"https://relay.test/dock/chat?t=synthetic","activity":"https://relay.test/dock/activity?t=synthetic","stream_info":"https://relay.test/dock/stream-info?t=synthetic","points":"https://relay.test/dock/points?t=synthetic"}});
+        Mock::given(method("POST"))
+            .and(path("/v1/me/dock-token/rotate"))
+            .and(query_param("streamer_id", "4242"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&expected))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let actual = relay_json_mit(
+            &server.uri(),
+            "synthetic-api",
+            reqwest::Method::POST,
+            &dock_token_rotate_pfad(4242),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
     async fn proxy_rejects_successful_but_invalid_json() {
         use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
         let server = MockServer::start().await;

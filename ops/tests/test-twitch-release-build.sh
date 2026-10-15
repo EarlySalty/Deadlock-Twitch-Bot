@@ -29,7 +29,7 @@ set -euo pipefail
 [[ $* == *'--release --locked --timings --jobs 12'* ]]
 printf '%s\n' "$*" >>"$HOME/cargo-calls"
 mkdir -p target/release
-for binary in tb-bot tb-dashboard tb-stream-audit tb-config-check tb-llm-usage-recover tb-stt-server tb-twitch-watchdog tb-category-storage clip_context_learn; do
+for binary in tb-bot tb-dashboard tb-stream-audit tb-config-check tb-llm-usage-recover tb-discord-hub tb-stt-server tb-twitch-watchdog tb-category-storage clip_context_learn; do
   printf '%s\n' '#!/usr/bin/env bash' '[[ ${1:-} == --build-revision ]]' "printf 'unstamped\\n'" >"target/release/$binary"
   chmod +x "target/release/$binary"
 done
@@ -73,6 +73,9 @@ staging="$HOME/repos/twitch-release-$sha"
 [[ -z $(git -C "$staging" status --porcelain) ]]
 [[ $(cat "$staging/website/dist/index.html") == "$sha" ]]
 [[ -f "$staging/rust/target/release/tb-stt-server" ]]
+[[ -x "$staging/rust/target/release/tb-discord-hub" ]]
+[[ $("$staging/rust/target/release/tb-discord-hub" --build-revision) == "$sha" ]]
+[[ $(cat "$HOME/cargo-calls") == *'-p tb-discord-hub'* ]]
 [[ ! -L "$staging/rust/target/release/tb-bot" ]]
 [[ ! -e "$staging/rust/target/release/tb-category-collector" ]]
 if "$script" "$sha" >/dev/null 2>&1; then exit 1; fi

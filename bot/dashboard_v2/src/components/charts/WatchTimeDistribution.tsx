@@ -19,7 +19,7 @@ const SEGMENTS = [
 ] as const;
 
 export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
-  const { t, locale } = useLanguage();
+  const { t, locale, language } = useLanguage();
   const method = data?.dataQuality?.method;
   const isNoData =
     !data ||
@@ -182,7 +182,7 @@ export function WatchTimeDistribution({ data }: WatchTimeDistributionProps) {
                   {hasPrevious && prevVal != null && prevVal > 0 ? (
                     <DeltaBadge current={currVal} previous={prevVal} inverted={segment.key === 'under5min'} />
                   ) : (
-                    <span className="text-xs text-text-secondary">—</span>
+                    <span className="text-xs text-text-secondary">{language === 'de' ? '—' : '-'}</span>
                   )}
                 </div>
               </div>

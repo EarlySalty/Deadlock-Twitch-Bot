@@ -85,6 +85,7 @@ generated=(
   rust/target/release/tb-stream-audit
   rust/target/release/tb-config-check
   rust/target/release/tb-llm-usage-recover
+  rust/target/release/tb-discord-hub
   "$dashboard_source"
   bot/admin_dashboard/dist
   website/dist
@@ -144,7 +145,7 @@ done
 
 check_binary_revisions() {
   local source_root="$1" binary embedded_revision
-  local binaries=(tb-bot tb-dashboard tb-stream-audit tb-config-check tb-llm-usage-recover)
+  local binaries=(tb-bot tb-dashboard tb-stream-audit tb-config-check tb-llm-usage-recover tb-discord-hub)
   if [[ "$social_ai_expected" == 1 ]]; then binaries+=(tb-stt-server); fi
   if [[ "$collector_expected" == 1 ]]; then binaries+=(tb-category-collector); fi
   if [[ "$clip_context_expected" == 1 ]]; then binaries+=(clip_context_learn); fi
@@ -165,6 +166,9 @@ required_files=(
   rust/scripts/run_tb_dashboard_service.sh
   rust/scripts/run_stream_audit_service.sh
   ops/systemd/twitch-runtime-roles.sql
+  ops/systemd/run-discord-hub
+  ops/systemd/deadlock-twitch-discord-hub-rust.service
+  ops/systemd/discord-hub.conf
 )
 if [[ "$social_ai_expected" == 1 ]]; then
   required_files+=(
@@ -218,6 +222,7 @@ if [[ ! -e "$release" ]]; then
   install -m 0755 "$checkout/rust/target/release/tb-stream-audit" "$stage/rust/target/release/tb-stream-audit"
   install -m 0755 "$checkout/rust/target/release/tb-config-check" "$stage/rust/target/release/tb-config-check"
   install -m 0755 "$checkout/rust/target/release/tb-llm-usage-recover" "$stage/rust/target/release/tb-llm-usage-recover"
+  install -m 0755 "$checkout/rust/target/release/tb-discord-hub" "$stage/rust/target/release/tb-discord-hub"
   if [[ "$social_ai_expected" == 1 ]]; then
     install -m 0755 "$checkout/rust/target/release/tb-stt-server" "$stage/rust/target/release/tb-stt-server"
   fi

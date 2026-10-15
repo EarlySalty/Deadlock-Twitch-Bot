@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useT } from '@/context/LanguageContext';
 import { SocialMedia, type SocialMediaProps } from '@/pages/SocialMedia';
 import { ImportPoolPanel } from '@/components/socialmedia/autopilot/import-pool';
 import { createImportPoolFixture } from '@/components/socialmedia/autopilot/import-pool/fixtures';
@@ -82,6 +83,7 @@ function PreviewImport({
 }
 
 export default function SocialWorkspaces(props: SocialMediaProps) {
+  const t = useT();
   const [scheduleApi] = useState(createPreviewScheduleApi);
   const [publishFixture] = useState(createPublishReviewFixture);
   const workspaceSlots = {
@@ -99,8 +101,7 @@ export default function SocialWorkspaces(props: SocialMediaProps) {
         className="studio-preview-notice"
         data-preview="p3-social-workspace-synthetic-v1"
       >
-        Lokale Layoutvorschau mit synthetischen Daten. Änderungen und
-        Importaufträge bleiben lokal. Keine KI-Aufrufe oder Veröffentlichungen.
+        {t('Lokale Layoutvorschau mit synthetischen Daten. Änderungen und Importaufträge bleiben lokal. Keine KI-Aufrufe oder Veröffentlichungen.')}
       </p>
       <SocialMedia
         {...props}

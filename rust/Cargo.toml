@@ -35,6 +35,7 @@ members = [
     "bin/tb-bot",
     "bin/tb-category-collector",
     "bin/tb-stt-server",
+    "bin/tb-discord-hub",
 ]
 
 [workspace.package]

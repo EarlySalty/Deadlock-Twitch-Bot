@@ -88,8 +88,17 @@ export interface DockUrls {
  * Karte direkt nach dem Klick etwas zeigen kann, statt auf den naechsten Abruf
  * zu warten.
  */
-export async function rotateUplinkDockToken(): Promise<DockUrls> {
-  const antwort = await fetchJson<{ dock_urls?: DockUrls }>(
+export interface DockRotation {
+  dock_urls: DockUrls;
+  generation: number;
+}
+
+export function newestDockRotation(current: DockRotation | null, incoming: DockRotation): DockRotation {
+  return current && current.generation >= incoming.generation ? current : incoming;
+}
+
+export async function rotateUplinkDockToken(): Promise<DockRotation> {
+  const antwort = await fetchJson<Partial<DockRotation>>(
     '/twitch/api/v2/uplink/dock-token/rotate',
     withCookieCredentials({
       method: 'POST',
@@ -104,7 +113,10 @@ export async function rotateUplinkDockToken(): Promise<DockUrls> {
   if (!antwort.dock_urls?.chat) {
     throw new Error('Das Relay hat keine Dock-Adressen zurueckgegeben.');
   }
-  return antwort.dock_urls;
+  if (typeof antwort.generation !== 'number' || !Number.isSafeInteger(antwort.generation) || antwort.generation < 1) {
+    throw new Error('Die neuen Dock-Adressen konnten nicht als aktuell bestätigt werden. Bitte lade die Seite neu.');
+  }
+  return { dock_urls: antwort.dock_urls, generation: antwort.generation };
 }
 
 /**

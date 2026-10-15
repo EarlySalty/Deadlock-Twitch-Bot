@@ -447,4 +447,7 @@ export const UPLINK_EN: Record<string, string> = {
   '{fehlend} von {gesamt} Kapiteln konnten nicht geladen werden.': '{fehlend} of {gesamt} chapters could not be loaded.',
   'Hilfe wird geladen: {label}': 'Loading help: {label}',
   'Uplink-Hilfe als eigene Seite öffnen': 'Open Uplink help as a separate page',
+
+  'Auf YouTube live seit {zeit}': 'Live on YouTube since {zeit}',
+  'Broadcast-Kennung:': 'Broadcast ID:',
 };

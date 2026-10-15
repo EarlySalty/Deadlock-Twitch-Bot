@@ -1,8 +1,10 @@
+import { useT } from '../../context/LanguageContext';
 import { motion } from 'framer-motion';
 import { Sparkles, CreditCard, ArrowRight } from 'lucide-react';
 import { PREVIEW_BILLING_ROUTE, isPreviewModeEnabled } from '../../preview/routes';
 
 export default function TrialCallout() {
+  const t = useT();
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.95 }}
@@ -25,9 +27,9 @@ export default function TrialCallout() {
             <div>
               <p className="text-white font-semibold text-base flex items-center gap-2">
                 <CreditCard className="w-4 h-4 text-white/50" />
-                Keine Kreditkarte erforderlich – risikofrei starten
+                {t("Keine Kreditkarte erforderlich – risikofrei starten")}
               </p>
-              <p className="text-white/45 text-sm mt-0.5">Einmalig pro Account · Jederzeit kündbar</p>
+              <p className="text-white/45 text-sm mt-0.5">{t("Einmalig pro Account · Jederzeit kündbar")}</p>
             </div>
           </div>
 
@@ -36,7 +38,7 @@ export default function TrialCallout() {
             href={isPreviewModeEnabled() ? PREVIEW_BILLING_ROUTE : '/twitch/abbo'}
             className="flex items-center gap-2 px-6 py-3 rounded-xl bg-white/10 hover:bg-white/15 border border-white/20 text-white font-medium transition-[gap,background-color,border-color,transform,translate,scale] duration-200 hover:gap-3"
           >
-            Mehr erfahren
+            {t("Mehr erfahren")}
             <ArrowRight className="w-4 h-4" />
           </a>
         </div>

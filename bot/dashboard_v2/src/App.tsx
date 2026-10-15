@@ -363,6 +363,7 @@ function AnalyticsDashboard() {
 }
 
 function TitleGeneratorRoute() {
+  const t = useT();
   const { data: authStatus } = useAuthStatus();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const ownId = authStatus?.twitchUserId ?? null;
@@ -371,12 +372,12 @@ function TitleGeneratorRoute() {
   return (
     <DashboardShell activeRoute="title">
       {authStatus?.isAdmin && <div className="mx-auto max-w-4xl pt-4">
-        <label htmlFor="title-streamer" className="text-sm text-text-secondary">Twitch-Kanal</label>
+        <label htmlFor="title-streamer" className="text-sm text-text-secondary">{t("Twitch-Kanal")}</label>
         <select id="title-streamer" value={streamer ?? ''} onChange={(event) => setSelectedId(event.target.value)} className="ml-3 rounded-lg border border-border bg-card px-3 py-2 text-white">
-          {ownId ? <option value={ownId}>Mein Kanal</option> : <option value="" disabled>Kanal auswählen</option>}
+          {ownId ? <option value={ownId}>{t("Mein Kanal")}</option> : <option value="" disabled>{t("Kanal auswählen")}</option>}
           {directory.data?.items.filter((item) => item.twitchUserId && item.twitchUserId !== ownId).map((item) => <option key={item.twitchUserId} value={item.twitchUserId!}>{item.login}</option>)}
         </select>
-        {directory.isError && <p role="status" className="mt-2 text-sm text-error">Die Kanalliste ist gerade nicht verfügbar.</p>}
+        {directory.isError && <p role="status" className="mt-2 text-sm text-error">{t("Die Kanalliste ist gerade nicht verfügbar.")}</p>}
       </div>}
       <TitleGenerator key={streamer} streamer={streamer} />
     </DashboardShell>
@@ -415,6 +416,7 @@ export default function App() {
     (isAnalyticsRoute && new URLSearchParams(window.location.search).get('view') === 'category');
 
   const zeigeAssistent =
+    path === PREVIEW_HOME_ROUTE &&
     !isPreviewModeEnabled() &&
     !hasDemoRuntimeConfig() &&
     !resolveEffectiveDemoMode({
@@ -468,7 +470,7 @@ export default function App() {
           )}
         </OnboardingProvider>
         </ErrorBoundary>
-        {zeigeAssistent && <DashboardAssistent imDokumentfluss={isUplinkRoute} />}
+        {zeigeAssistent && <DashboardAssistent />}
       </LanguageProvider>
     </QueryClientProvider>
   );

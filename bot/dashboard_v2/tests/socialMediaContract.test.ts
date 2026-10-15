@@ -69,6 +69,10 @@ function lies(relativ: string): string {
 
 /** Dateien, deren Texte ein englischsprachiger Nutzer zu sehen bekommt. */
 const OBERFLAECHE = [
+  'src/preview/SocialWorkspaces.tsx',
+  ...fs.readdirSync(path.join(WURZEL, 'src/components/socialmedia'), { recursive: true })
+    .filter((file): file is string => typeof file === 'string' && /\.tsx?$/.test(file) && !/(?:test|fixture|Fixture|preview)/.test(file))
+    .map((file) => `src/components/socialmedia/${file}`),
   'src/pages/SocialMedia.tsx',
   'src/components/socialmedia/ClipCard.tsx',
   'src/components/socialmedia/StudioHero.tsx',
@@ -140,6 +144,32 @@ test('jeder Schluessel der Oberflaeche hat eine englische Fassung', () => {
     [],
     `Ohne englischen Eintrag steht der deutsche Text im englischen Dashboard:\n${fehlend.join('\n')}`,
   );
+});
+
+test('legacy plan save controls stay in flow instead of covering approval content', () => {
+  const css = lies('src/components/socialmedia/studio.css');
+  assert.match(css, /\.studio-legacy-plan \.studio-savebar\s*\{[^}]*position:\s*static;/);
+});
+
+test('conditional social interface messages have English translations', () => {
+  const en = dictionaryFor('en');
+  const missing: string[] = [];
+  for (const file of OBERFLAECHE) {
+    const source = ts.createSourceFile(file, lies(file), ts.ScriptTarget.Latest, true);
+    const check = (node: ts.Node): void => {
+      if (ts.isStringLiteral(node) && !(node.text in en)) missing.push(`${file}: ${node.text}`);
+      else if (ts.isConditionalExpression(node)) {
+        check(node.whenTrue);
+        check(node.whenFalse);
+      }
+    };
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) && node.expression.getText(source) === 't' && node.arguments[0]) check(node.arguments[0]);
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+  }
+  assert.deepEqual(missing, []);
 });
 
 test('Wartecodes und Altaufträge nutzen übersetzbare Vorlagen statt Servertext', () => {
@@ -848,7 +878,7 @@ test('global timezone writes all existing stores and preserves import selection 
       { getPreferences: async () => preferences, savePreferences: async (owner: string, payload: unknown) => { calls.push(['import', owner, payload]); } },
       '42', 'UTC',
     );
-    if (failSchedule) await assert.rejects(save(), /nicht überall gespeichert/); else await save();
+    if (failSchedule) await assert.rejects(save('UTC'), /nicht überall gespeichert/); else await save('UTC');
     assert.deepEqual(calls, [['legacy', '42', { timezone: 'UTC' }], ['schedule', '42', { timezone: 'UTC' }], ['import', '42', { ...preferences, timezone: 'UTC' }]]);
   }
 });
