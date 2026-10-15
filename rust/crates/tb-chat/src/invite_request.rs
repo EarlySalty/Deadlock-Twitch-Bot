@@ -53,7 +53,15 @@ pub(crate) fn is_clear_invite_request(content: &str) -> bool {
             "wie" | "benotige" | "brauche" | "krieg" | "kriege" | "mochte" | "will" | "suche"
         )
     });
-    let self_request = (asks && words.contains(&"ich"))
+    let generic_access = words.contains(&"wie")
+        && words.contains(&"man")
+        && words.iter().any(|word| {
+            ["komm", "bekomm", "krieg", "erhalt", "reinkomm", "rankomm"]
+                .iter()
+                .any(|stem| word.starts_with(stem))
+        });
+    let self_request = generic_access
+        || (asks && words.contains(&"ich"))
         || words.iter().any(|word| {
             matches!(*word, "mich" | "mcih" | "mir" | "uns" | "me")
                 || (word.starts_with('m') && word.len() >= 3 && close_word(word, "mich", 1))
@@ -164,6 +172,8 @@ mod tests {
             "Ich möchte eingeladen werden",
             "Kann mich schon mal jemand einladen?",
             "kann mich nicht jemand einladen?",
+            "Heyo :)  Wollte fragen wie man an einen Invite kommt? Spiel sieht geil aus nur schwer rann zu kommen",
+            "wie bekommt man einen invite",
         ] {
             assert!(is_clear_invite_request(raw), "nicht erkannt: {raw}");
         }
@@ -183,6 +193,7 @@ mod tests {
             "hat mich schon jemand eingeladen?",
             "Ich will nicht eingeladen werden",
             "Mich hat gestern einer eingeladen",
+            "wie lädt man freunde in die party ein",
         ] {
             assert!(!is_clear_invite_request(raw), "falsch erkannt: {raw}");
         }

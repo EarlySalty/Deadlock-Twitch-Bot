@@ -790,6 +790,23 @@ impl InviteQuestionResponder {
                 false,
             );
         }
+        if self.pending_confirmation_open(&channel_login, &chatter_login) && is_affirmative(raw) {
+            let Some(invite_url) = self.resolve_invite_url(&channel_login).await else {
+                return InviteQuestionDecision::pending_silent(
+                    SilentReason::NoInviteUrl,
+                    channel_login,
+                    chatter_login,
+                    raw.to_string(),
+                );
+            };
+            return InviteQuestionDecision::pending_send_go(
+                channel_login,
+                chatter_login,
+                raw.to_string(),
+                invite_url,
+            );
+        }
+
         if raw.starts_with('!') {
             return InviteQuestionDecision::silent(
                 SilentReason::CommandPrefix,
@@ -808,23 +825,6 @@ impl InviteQuestionResponder {
                 raw.to_string(),
                 false,
                 false,
-            );
-        }
-
-        if self.pending_confirmation_open(&channel_login, &chatter_login) && is_affirmative(raw) {
-            let Some(invite_url) = self.resolve_invite_url(&channel_login).await else {
-                return InviteQuestionDecision::pending_silent(
-                    SilentReason::NoInviteUrl,
-                    channel_login,
-                    chatter_login,
-                    raw.to_string(),
-                );
-            };
-            return InviteQuestionDecision::pending_send_go(
-                channel_login,
-                chatter_login,
-                raw.to_string(),
-                invite_url,
             );
         }
 
@@ -1181,8 +1181,12 @@ fn normalize_login(login: &str) -> String {
 }
 
 fn is_affirmative(raw: &str) -> bool {
-    let normalized: String = raw
-        .trim()
+    let without_mentions = raw
+        .split_whitespace()
+        .skip_while(|word| word.starts_with('@'))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let normalized: String = without_mentions
         .to_lowercase()
         .chars()
         .filter(|ch| ch.is_alphanumeric() || ch.is_whitespace())
@@ -2538,6 +2542,31 @@ mod tests {
             .maybe_respond(&event("viewer", "ja"), "streamer")
             .await;
         assert_eq!(api.messages(), vec![expected_confirm("viewer")]);
+
+        for answer in ["@DeutscheDeadlockCommunity ja", "!ja"] {
+            let api = MockApi::new();
+            let invite = responder(
+                api.clone(),
+                Arc::new(FakeStore {
+                    rollup: rollup(1, false),
+                }),
+                FakeJudge::new(vec![verdict(InviteQuestionVerdictKind::Unsure, 0.0)]),
+            );
+            invite
+                .maybe_respond(
+                    &event("viewer", "Wie bekomme ich Zugang zu Deadlock?"),
+                    "streamer",
+                )
+                .await;
+            invite
+                .maybe_respond(&event("viewer", answer), "streamer")
+                .await;
+            assert_eq!(
+                api.messages(),
+                vec![expected_confirm("viewer"), expected_go("viewer")],
+                "{answer}"
+            );
+        }
 
         let api = MockApi::new();
         let invite = responder(

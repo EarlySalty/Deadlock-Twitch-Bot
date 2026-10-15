@@ -133,6 +133,10 @@ fn commands_reply(broadcaster_id: &str) -> String {
     format!("Alle Befehle für diesen Kanal findest du hier: {COMMANDS_URL}?streamer_id={id}")
 }
 
+fn is_invite_decoration(word: &str) -> bool {
+    word.starts_with('@') || !word.chars().any(char::is_alphanumeric)
+}
+
 fn dashboard_reply() -> String {
     format!("Dein Dashboard findest du hier: {DASHBOARD_URL}")
 }
@@ -2336,7 +2340,7 @@ impl CommandEngine {
     async fn cmd_invite(&self, event: &ChatMessageEvent, args: &str) {
         // Exact-Match-Semantik: nur der aufgelöste Befehl ohne Argumente.
         // Damit gilt dieselbe Regel auch für einen kanalbezogenen eigenen Namen.
-        if !args.is_empty() {
+        if !args.split_whitespace().all(is_invite_decoration) {
             return;
         }
 
@@ -4063,7 +4067,11 @@ mod tests {
                 .await
         );
         assert_eq!(api.message_count().await, 0);
-        assert!(engine.handle(&make_event("!join", false, false)).await);
+        assert!(
+            engine
+                .handle(&make_event("!join @viewer :)", false, false))
+                .await
+        );
         assert_eq!(api.message_count().await, 1);
     }
 
