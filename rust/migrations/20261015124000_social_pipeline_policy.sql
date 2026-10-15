@@ -12,7 +12,7 @@ ALTER TABLE social_production_jobs ADD COLUMN policy_snapshot JSONB CHECK (jsonb
 ALTER TABLE social_produced_videos ADD COLUMN policy_snapshot JSONB CHECK (jsonb_typeof(policy_snapshot) = 'object');
 
 CREATE TABLE social_pipeline_cutover (
-    twitch_user_id TEXT PRIMARY KEY REFERENCES twitch_streamers(twitch_user_id),
+    twitch_user_id TEXT PRIMARY KEY REFERENCES twitch_streamers(twitch_user_id) ON DELETE CASCADE,
     state TEXT NOT NULL DEFAULT 'legacy' CHECK (state IN ('legacy', 'shadow', 'paused', 'unified')),
     migration_version INTEGER NOT NULL CHECK (migration_version > 0),
     reconciliation JSONB NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(reconciliation) = 'object'),
@@ -20,7 +20,7 @@ CREATE TABLE social_pipeline_cutover (
 );
 
 CREATE TABLE social_pipeline_migration_map (
-    twitch_user_id TEXT NOT NULL REFERENCES twitch_streamers(twitch_user_id),
+    twitch_user_id TEXT NOT NULL REFERENCES twitch_streamers(twitch_user_id) ON DELETE CASCADE,
     legacy_table TEXT NOT NULL CHECK (legacy_table <> ''),
     legacy_key TEXT NOT NULL CHECK (legacy_key <> ''),
     migration_version INTEGER NOT NULL CHECK (migration_version > 0),
@@ -40,7 +40,7 @@ DECLARE
     runtime_role TEXT;
 BEGIN
     FOR runtime_role IN SELECT rolname FROM pg_roles WHERE rolname IN ('twitchbot', 'twitchdash', 'twitchlegacy') LOOP
-        EXECUTE format('GRANT SELECT, INSERT, UPDATE ON social_pipeline_cutover, social_pipeline_migration_map TO %I', runtime_role);
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON social_pipeline_cutover, social_pipeline_migration_map TO %I', runtime_role);
     END LOOP;
 END;
 $$;
