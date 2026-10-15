@@ -1,3 +1,4 @@
+import { useAiFeatures } from '@/hooks/useAiFeatures';
 import { useState } from 'react';
 import { SubTabs, type SubTabDef } from '@/components/layout/SubTabs';
 import { AIAnalysis } from '@/pages/AIAnalysis';
@@ -12,6 +13,7 @@ interface WasTunProps {
 }
 
 export function WasTun({ streamer, days, initialMode }: WasTunProps) {
+  const aiFeatures = useAiFeatures(streamer);
   const [mode, setMode] = useState(initialMode ?? 'empfehlungen');
   const tabs: SubTabDef[] = [
     {
@@ -40,5 +42,5 @@ export function WasTun({ streamer, days, initialMode }: WasTunProps) {
       render: () => <AIAnalysis streamer={streamer} days={days} />,
     },
   ];
-  return <SubTabs tabs={tabs} active={mode} onChange={setMode} />;
+  return <SubTabs tabs={tabs.filter((tab) => aiFeatures || tab.id !== 'ki')} active={!aiFeatures && mode === 'ki' ? 'empfehlungen' : mode} onChange={setMode} />;
 }

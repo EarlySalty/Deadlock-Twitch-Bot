@@ -1,3 +1,4 @@
+import { useAiFeatures } from '@/hooks/useAiFeatures';
 import { formatDateFull, formatNumber } from '@/utils/formatters';
 import { useLanguage } from '@/context/LanguageContext';
 import { useState } from 'react';
@@ -591,7 +592,7 @@ export function ChatNetzwerkSection({ data, windowStart }: { data: ChatSocialGra
   );
 }
 
-export function ChatDeepLlmSection({
+function ChatDeepLlmContent({
   streamer,
   sessionId,
 }: {
@@ -726,4 +727,9 @@ export function ChatDeepLlmSection({
       )}
     </Rise>
   );
+}
+
+export function ChatDeepLlmSection(props: { streamer: string; sessionId?: number }) {
+  const enabled = useAiFeatures(props.streamer);
+  return enabled ? <ChatDeepLlmContent {...props} /> : null;
 }

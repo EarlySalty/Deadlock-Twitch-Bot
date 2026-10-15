@@ -994,6 +994,7 @@ impl PromoEngine {
             )
             .await;
             let input = PitchJudgeInput {
+                channel_id: channel_id.to_string(),
                 trigger_text: text.to_string(),
                 game: game.clone(),
                 title: title.clone(),
@@ -1148,6 +1149,7 @@ impl PromoEngine {
         )
         .await;
         let ctx = PartnerPitchContext {
+            channel_id: channel_id.to_string(),
             target_login: target_login.to_string(),
             target_messages: vec![trigger.to_string()],
             game,
@@ -2048,6 +2050,7 @@ impl PromoEngine {
         )
         .await;
         let ctx = ChannelPromoContext {
+            channel_login: login.to_string(),
             game,
             title,
             recent_chat: self.load_recent_channel_messages(login, 8).await,

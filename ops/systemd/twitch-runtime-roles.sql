@@ -541,3 +541,19 @@ BEGIN
     END IF;
 END
 $private_vod_roles$;
+
+DO $streamer_ai_policy_reads$
+DECLARE
+    role_name text;
+    table_name text;
+BEGIN
+    FOREACH role_name IN ARRAY ARRAY['twitchbot','twitchdash','twitchanalysis','twitchlegacy','twitchaudit'] LOOP
+        FOREACH table_name IN ARRAY ARRAY['twitch_streamer_identities','twitch_streamer_ai_policy'] LOOP
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name)
+                AND to_regclass('public.' || table_name) IS NOT NULL THEN
+                EXECUTE format('GRANT SELECT ON public.%I TO %I', table_name, role_name);
+            END IF;
+        END LOOP;
+    END LOOP;
+END
+$streamer_ai_policy_reads$;

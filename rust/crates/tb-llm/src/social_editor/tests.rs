@@ -184,7 +184,7 @@ fn compiled_schema_rejects_invalid_output_and_external_references() {
 fn invalid_schema_is_blocked_before_database_or_network() {
     let config = config();
     let context = EditorContext {
-        twitch_user_id: "person".into(),
+        twitch_user_id: "303".into(),
         job_id: "job".into(),
         stage: "caption".into(),
     };
@@ -210,7 +210,7 @@ fn bounded_input_reservation_is_enforced_before_transport() {
     let mut configuration = config();
     configuration.provider.max_input_tokens = 100;
     let context = EditorContext {
-        twitch_user_id: "person".into(),
+        twitch_user_id: "303".into(),
         job_id: "job".into(),
         stage: "stage".into(),
     };
@@ -277,6 +277,14 @@ impl DisposablePostgres {
             .execute(&pool)
             .await
             .expect("limit owner schema");
+        sqlx::raw_sql("CREATE TABLE public.twitch_streamer_identities(twitch_user_id TEXT PRIMARY KEY,twitch_login TEXT NOT NULL); INSERT INTO public.twitch_streamer_identities VALUES ('101','test101'),('202','test202'),('303','test303')")
+            .execute(&pool).await.expect("policy identities");
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/20261015120000_streamer_ai_policy.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("policy migration");
         if migrate {
             sqlx::raw_sql(include_str!(
                 "../../../../migrations/20261011200001_social_ai_provider_usage.sql"
@@ -494,7 +502,7 @@ async fn invalid_reservation_data_blocks_new_attempts() {
     let database = DisposablePostgres::start().await;
     let pool = &database.pool;
     let context = EditorContext {
-        twitch_user_id: "person".into(),
+        twitch_user_id: "303".into(),
         job_id: "job".into(),
         stage: "caption".into(),
     };
@@ -522,7 +530,7 @@ async fn structured_provider_codes_are_bounded_and_saved_without_messages() {
     let database = DisposablePostgres::start().await;
     let pool = &database.pool;
     let context = EditorContext {
-        twitch_user_id: "person".into(),
+        twitch_user_id: "303".into(),
         job_id: "job".into(),
         stage: "caption".into(),
     };
@@ -621,7 +629,7 @@ async fn failed_finalization_blocks_reservations_until_exact_recovery() {
     let database = DisposablePostgres::start().await;
     let pool = &database.pool;
     let context = EditorContext {
-        twitch_user_id: "person".into(),
+        twitch_user_id: "303".into(),
         job_id: "job".into(),
         stage: "caption".into(),
     };
@@ -783,7 +791,7 @@ async fn orphaned_unknown_usage_stays_reserved_until_recovered() {
     let database = DisposablePostgres::start().await;
     let pool = &database.pool;
     let context = EditorContext {
-        twitch_user_id: "person".into(),
+        twitch_user_id: "303".into(),
         job_id: "job".into(),
         stage: "caption".into(),
     };
@@ -888,7 +896,7 @@ async fn consent_budget_and_native_mock_contract() {
     let database = DisposablePostgres::start().await;
     let pool = &database.pool;
     let context = EditorContext {
-        twitch_user_id: "person".into(),
+        twitch_user_id: "303".into(),
         job_id: "job".into(),
         stage: "caption".into(),
     };

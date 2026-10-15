@@ -525,6 +525,10 @@ pub async fn promote_streamer_to_partner(
         is_on_discord,
     )
     .await?;
+    sqlx::query("INSERT INTO public.twitch_streamer_ai_policy(twitch_user_id,guild_id,ai_features) VALUES ($1,1289721245281292288,true) ON CONFLICT (twitch_user_id) DO NOTHING")
+        .bind(normalized_user_id)
+        .execute(&mut *tx)
+        .await?;
 
     // Bestehenden Partner-Datensatz (egal welcher Status) reaktivieren …
     let updated = sqlx::query!(

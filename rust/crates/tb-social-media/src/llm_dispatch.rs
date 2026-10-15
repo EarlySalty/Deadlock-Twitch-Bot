@@ -51,7 +51,9 @@ fn env_rate(var: &str, default: f64) -> f64 {
 
 fn dispatch_error(error: tb_llm::LlmError) -> LlmError {
     match error {
-        tb_llm::LlmError::Unavailable(detail) => LlmError::ProviderUnavailable(detail),
+        tb_llm::LlmError::Unavailable(detail) | tb_llm::LlmError::Disabled(detail) => {
+            LlmError::ProviderUnavailable(detail)
+        }
         other => LlmError::ProviderError(format!("Fireworks-Fehler: {other}")),
     }
 }
@@ -93,7 +95,18 @@ impl LlmProvider for FireworksProvider {
     async fn generate(&self, request: &LlmRequest) -> Result<LlmResponse, LlmError> {
         let prompt = render_user_prompt(request);
         let text = self
-            .generate_text(SYSTEM_PROMPT, &prompt, 600, self.temperature)
+            .complete_text(
+                SYSTEM_PROMPT,
+                &prompt,
+                600,
+                self.temperature,
+                &request
+                    .streamer
+                    .as_ref()
+                    .map(|profile| profile.streamer_login.clone())
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+            )
             .await?;
         parse_llm_payload(
             &text.content,
@@ -110,6 +123,20 @@ impl LlmProvider for FireworksProvider {
         max_tokens: i64,
         temperature: f64,
     ) -> Result<LlmTextResponse, LlmError> {
+        self.complete_text(system_prompt, user_prompt, max_tokens, temperature, &[])
+            .await
+    }
+}
+
+impl FireworksProvider {
+    async fn complete_text(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+        max_tokens: i64,
+        temperature: f64,
+        channels: &[String],
+    ) -> Result<LlmTextResponse, LlmError> {
         let strict_json = system_prompt.to_lowercase().contains("strict json");
         let mut request = tb_llm::Request::simple(system_prompt, user_prompt)
             .max_tokens(max_tokens)
@@ -117,6 +144,7 @@ impl LlmProvider for FireworksProvider {
             .timeout(std::time::Duration::from_secs(TIMEOUT_SECONDS))
             .ledger_purpose("social-media-fireworks")
             .endpoint(self.endpoint.clone());
+        request = request.twitch_channels(channels.iter().cloned());
         if strict_json {
             request = request.json_object();
         }
@@ -171,6 +199,26 @@ impl LlmDispatcher {
         FireworksProvider::from_connector()?.generate(request).await
     }
 
+    pub async fn generate_text_for_channels(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+        max_tokens: i64,
+        temperature: f64,
+        channels: &[String],
+    ) -> Result<LlmTextResponse, LlmError> {
+        self.ensure_consent().await?;
+        FireworksProvider::from_connector()?
+            .complete_text(
+                system_prompt,
+                user_prompt,
+                max_tokens,
+                temperature,
+                channels,
+            )
+            .await
+    }
+
     pub async fn generate_text(
         &self,
         system_prompt: &str,
@@ -197,6 +245,15 @@ mod tests {
 
     #[tokio::test]
     async fn social_media_laeuft_ueber_fireworks_und_rechnet_fireworks_preis() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "social_media_laeuft_ueber_fireworks_und_rechnet_fireworks_preis"
+        ))
+        .await
+        else {
+            return;
+        };
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
@@ -216,7 +273,16 @@ mod tests {
             api_key: Some("test-key".to_string()),
         });
 
-        let response = provider.generate(&LlmRequest::default()).await.unwrap();
+        let response = provider
+            .generate(&LlmRequest {
+                streamer: Some(crate::llm::StreamerProfile {
+                    streamer_login: "home".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
         assert_eq!(response.provider, "fireworks");
         assert_eq!(
             response.model,

@@ -188,6 +188,7 @@ impl BrainRoute {
         let ende = Instant::now() + frist;
         let mut versuch = 0u8;
         loop {
+            crate::ai_guard::check(TITLE_AI_USE_CASE, request).await?;
             let started = Instant::now();
             let rest = ende.saturating_duration_since(started);
             if rest.is_zero() {
@@ -641,6 +642,15 @@ mod tests {
 
     #[tokio::test]
     async fn aktive_route_sendet_genau_den_vertrag_und_nie_an_fireworks() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "aktive_route_sendet_genau_den_vertrag_und_nie_an_fireworks"
+        ))
+        .await
+        else {
+            return;
+        };
         for (purpose, contract_purpose) in [("title", "title"), ("title-insight", "insight")] {
             let fireworks_server = silent_fireworks().await;
             let brain = MockServer::start().await;
@@ -712,6 +722,15 @@ mod tests {
 
     #[tokio::test]
     async fn fehlende_token_zahlen_bleiben_unbekannt() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "fehlende_token_zahlen_bleiben_unbekannt"
+        ))
+        .await
+        else {
+            return;
+        };
         let fireworks_server = silent_fireworks().await;
         let brain = MockServer::start().await;
         let ledger = Arc::new(RecordingLedger::default());
@@ -748,6 +767,15 @@ mod tests {
 
     #[tokio::test]
     async fn brain_fehler_werden_llm_fehler_ohne_fireworks_aufruf() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "brain_fehler_werden_llm_fehler_ohne_fireworks_aufruf"
+        ))
+        .await
+        else {
+            return;
+        };
         let cases = [
             (
                 ResponseTemplate::new(200),
@@ -821,6 +849,15 @@ mod tests {
 
     #[tokio::test]
     async fn fremde_antworten_sind_unbrauchbar() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "fremde_antworten_sind_unbrauchbar"
+        ))
+        .await
+        else {
+            return;
+        };
         for result in [
             json!({"contract_version": "brain.bot_tasks.v0", "request_id": "SAME", "result": {"kind": "twitch_title", "text": "T", "model": "m", "usage": {}}}),
             json!({"contract_version": BOT_TASK_VERSION, "request_id": "andere", "result": {"kind": "twitch_title", "text": "T", "model": "m", "usage": {}}}),
@@ -856,6 +893,15 @@ mod tests {
 
     #[tokio::test]
     async fn brain_429_nutzt_die_bestehende_wiederholung() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "brain_429_nutzt_die_bestehende_wiederholung"
+        ))
+        .await
+        else {
+            return;
+        };
         let fireworks_server = silent_fireworks().await;
         let brain = MockServer::start().await;
         let ledger = Arc::new(RecordingLedger::default());
@@ -925,6 +971,15 @@ mod tests {
 
     #[tokio::test]
     async fn anbieter_ratenlimit_nutzt_die_bestehende_wiederholung() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "anbieter_ratenlimit_nutzt_die_bestehende_wiederholung"
+        ))
+        .await
+        else {
+            return;
+        };
         let fireworks_server = silent_fireworks().await;
         let brain = MockServer::start().await;
         let ledger = Arc::new(RecordingLedger::default());
@@ -978,6 +1033,15 @@ mod tests {
 
     #[tokio::test]
     async fn ohne_gepruefte_kanal_id_bleibt_alles_geschlossen() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "ohne_gepruefte_kanal_id_bleibt_alles_geschlossen"
+        ))
+        .await
+        else {
+            return;
+        };
         for broadcaster in [None, Some("abc"), Some("0123"), Some(""), Some("1 2")] {
             let fireworks_server = silent_fireworks().await;
             let brain = MockServer::start().await;
@@ -998,13 +1062,22 @@ mod tests {
             )
             .await
             .expect_err("ohne Identität");
-            assert!(matches!(failure.error, LlmError::Unavailable(_)));
+            assert!(matches!(failure.error, LlmError::Disabled(_)));
             assert!(ledger.events.lock().unwrap().is_empty());
         }
     }
 
     #[tokio::test]
     async fn nicht_nutzbare_route_ruft_niemanden_auf() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "nicht_nutzbare_route_ruft_niemanden_auf"
+        ))
+        .await
+        else {
+            return;
+        };
         let fireworks_server = silent_fireworks().await;
         let failure = complete_routed(
             "title_ai",
@@ -1023,6 +1096,15 @@ mod tests {
 
     #[tokio::test]
     async fn unbekannter_zweck_wird_nicht_umgeleitet() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "unbekannter_zweck_wird_nicht_umgeleitet"
+        ))
+        .await
+        else {
+            return;
+        };
         let fireworks_server = silent_fireworks().await;
         let brain = MockServer::start().await;
         Mock::given(method("POST"))
@@ -1042,6 +1124,15 @@ mod tests {
 
     #[tokio::test]
     async fn zu_grosse_tokengrenze_wird_nicht_umgeleitet() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "zu_grosse_tokengrenze_wird_nicht_umgeleitet"
+        ))
+        .await
+        else {
+            return;
+        };
         let fireworks_server = silent_fireworks().await;
         let brain = MockServer::start().await;
         Mock::given(method("POST"))
@@ -1063,6 +1154,15 @@ mod tests {
 
     #[tokio::test]
     async fn inaktive_route_schickt_den_unveraenderten_fireworks_request() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "inaktive_route_schickt_den_unveraenderten_fireworks_request"
+        ))
+        .await
+        else {
+            return;
+        };
         let fireworks_server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))

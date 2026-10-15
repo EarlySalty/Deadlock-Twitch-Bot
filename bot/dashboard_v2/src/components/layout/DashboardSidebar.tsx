@@ -1,3 +1,4 @@
+import { useAiFeatures } from '@/hooks/useAiFeatures';
 import { useId, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
@@ -87,6 +88,7 @@ interface SidebarNavItem {
 }
 
 export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute }) {
+  const aiFeatures = useAiFeatures();
   const {
     authStatus,
     displayName,
@@ -147,12 +149,12 @@ export function DashboardSidebar({ activeRoute }: { activeRoute: DashboardRoute 
       icon: MonitorPlay,
       active: activeRoute === 'overlay',
     },
-    {
+    ...(aiFeatures ? [{
       href: PREVIEW_TITLE_ROUTE,
       label: t('Titel-Studio'),
       icon: Sparkles,
       active: activeRoute === 'title',
-    },
+    }] : []),
     {
       href: PREVIEW_PRICING_ROUTE,
       label: t('Plan: {plan}', { plan: planName }),

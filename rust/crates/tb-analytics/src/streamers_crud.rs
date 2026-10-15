@@ -142,6 +142,8 @@ pub async fn add_streamer(
         return Ok(AddStreamerResult::AlreadyExists);
     }
 
+    let mut tx = pool.begin().await?;
+
     // Upsert in twitch_streamers
     sqlx::query!(
         r#"
@@ -156,7 +158,7 @@ pub async fn add_streamer(
         &login,
         user_id
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     // Identity-Eintrag wenn user_id bekannt
@@ -178,11 +180,16 @@ pub async fn add_streamer(
                 uid,
                 &login
             )
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
+            sqlx::query("INSERT INTO public.twitch_streamer_ai_policy(twitch_user_id,guild_id,ai_features) VALUES ($1,1289721245281292288,true) ON CONFLICT (twitch_user_id) DO NOTHING")
+                .bind(uid)
+                .execute(&mut *tx)
+                .await?;
         }
     }
 
+    tx.commit().await?;
     Ok(AddStreamerResult::Added)
 }
 
@@ -1209,6 +1216,63 @@ pub async fn session_detail(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn home_registration_initializes_ai_without_overriding_foreign_policy() {
+        let Some(database) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::home_registration_initializes_ai_without_overriding_foreign_policy"
+        ))
+        .await
+        else {
+            return;
+        };
+        let pool = &database.pool;
+        sqlx::raw_sql("ALTER TABLE twitch_streamer_identities ADD COLUMN is_on_discord INTEGER DEFAULT 0, ADD COLUMN created_at TIMESTAMPTZ, ADD COLUMN updated_at TIMESTAMPTZ; CREATE TABLE twitch_streamers(twitch_login TEXT PRIMARY KEY,twitch_user_id TEXT,created_at TIMESTAMPTZ)")
+            .execute(pool).await.unwrap();
+        super::add_streamer(pool, "newhome", Some("501"))
+            .await
+            .unwrap();
+        assert!(
+            tb_llm::ai_guard::allowed_with_pool(pool, Some("501"), Some("newhome"))
+                .await
+                .unwrap()
+        );
+        sqlx::raw_sql("INSERT INTO twitch_streamer_identities(twitch_user_id,twitch_login) VALUES ('502','foreign'); INSERT INTO twitch_streamer_ai_policy(twitch_user_id,guild_id) VALUES ('502',987654321)")
+            .execute(pool).await.unwrap();
+        super::add_streamer(pool, "foreign", Some("502"))
+            .await
+            .unwrap();
+        assert!(
+            !tb_llm::ai_guard::allowed_with_pool(pool, Some("502"), None)
+                .await
+                .unwrap()
+        );
+        sqlx::query(
+            "UPDATE twitch_streamer_ai_policy SET ai_features=false WHERE twitch_user_id='501'",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        super::add_streamer(pool, "newhome", Some("501"))
+            .await
+            .unwrap();
+        assert!(
+            !tb_llm::ai_guard::allowed_with_pool(pool, Some("501"), None)
+                .await
+                .unwrap()
+        );
+        sqlx::query("ALTER TABLE twitch_streamer_ai_policy ADD CHECK (twitch_user_id <> '503')")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert!(super::add_streamer(pool, "rollback", Some("503"))
+            .await
+            .is_err());
+        let present: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM twitch_streamers WHERE twitch_user_id='503') OR EXISTS(SELECT 1 FROM twitch_streamer_identities WHERE twitch_user_id='503')")
+            .fetch_one(pool).await.unwrap();
+        assert!(!present);
+    }
+
     use super::*;
     use sqlx::postgres::PgPoolOptions;
 

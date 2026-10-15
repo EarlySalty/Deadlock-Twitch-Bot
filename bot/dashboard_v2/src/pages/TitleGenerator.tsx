@@ -1,3 +1,4 @@
+import { useAiFeatures } from '@/hooks/useAiFeatures';
 import { neverWordList } from '../utils/titlePreferences';
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -78,7 +79,7 @@ function Toggle({ checked, onChange, disabled = false }: { checked: boolean; onC
   );
 }
 
-export function TitleGenerator({ streamer }: TitleGeneratorProps) {
+function TitleGeneratorContent({ streamer }: TitleGeneratorProps) {
   const t = useT();
   const oauthLink = useOAuthLink();
   const queryClient = useQueryClient();
@@ -462,4 +463,9 @@ export function TitleGenerator({ streamer }: TitleGeneratorProps) {
       )}
     </div>
   );
+}
+
+export function TitleGenerator(props: TitleGeneratorProps) {
+  const enabled = useAiFeatures(props.streamer);
+  return enabled ? <TitleGeneratorContent {...props} /> : null;
 }

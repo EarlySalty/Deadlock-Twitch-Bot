@@ -1,3 +1,4 @@
+import { useAiFeatures } from '@/hooks/useAiFeatures';
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Bot, Loader2, MessageCircle, Send, X } from 'lucide-react';
@@ -53,6 +54,7 @@ function seiteSlug(): string {
 }
 
 export function DashboardAssistent() {
+  const aiFeatures = useAiFeatures();
   const { language } = useLanguage();
   const t = useT();
   const { data: authStatus, isLoading: authLaedt } = useAuthStatus();
@@ -133,7 +135,7 @@ export function DashboardAssistent() {
     ? t('Hi {name}! Ich helfe dir hier im Dashboard weiter. Frag mich alles zum Bot, zum Partnernetz und zu deinem Kanal.', { name })
     : t('Hi! Ich helfe dir hier im Dashboard weiter. Frag mich alles zum Bot, zum Partnernetz und zu deinem Kanal.');
 
-  if (authLaedt || authStatus?.authenticated !== true) {
+  if (authLaedt || authStatus?.authenticated !== true || !aiFeatures) {
     return null;
   }
 

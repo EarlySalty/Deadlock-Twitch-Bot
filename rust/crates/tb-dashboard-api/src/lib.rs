@@ -1022,6 +1022,10 @@ fn build_authed_router_with_analysis_store(
             "/twitch/api/v2/ai/analysis",
             get(ai_analysis::ai_analysis_handler),
         )
+        .route(
+            "/twitch/api/v2/ai/capabilities",
+            get(handlers::ai_switch::capabilities),
+        )
         .route("/twitch/api/v2/ai/chat", post(ai_chat::ai_chat_handler))
         .layer(axum::Extension(ai_store))
         .route(

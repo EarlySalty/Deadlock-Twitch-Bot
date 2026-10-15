@@ -564,6 +564,12 @@ async fn complete_with_key(
     configuration.validate()?;
     let config = &configuration.provider;
     let validator = validate_request(config, context, request)?;
+    if !crate::ai_guard::allowed_with_pool(pool, Some(&context.twitch_user_id), None)
+        .await
+        .map_err(|_| EditorError::new(ErrorKind::Consent))?
+    {
+        return Err(EditorError::new(ErrorKind::Consent));
+    }
     let body = build_body(config, request)?;
     let reservation = config
         .pricing
@@ -588,6 +594,12 @@ async fn complete_with_key(
                 return Err(EditorError::new(ErrorKind::Transport));
             }
             tokio::time::sleep(delay).await;
+        }
+        if !crate::ai_guard::allowed_with_pool(pool, Some(&context.twitch_user_id), None)
+            .await
+            .map_err(|_| EditorError::new(ErrorKind::Consent))?
+        {
+            return Err(EditorError::new(ErrorKind::Consent));
         }
         let reserved_attempt = begin_attempt(pool, config, context).await?;
         let id = reserved_attempt.id;

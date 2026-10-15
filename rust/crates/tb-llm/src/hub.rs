@@ -106,6 +106,8 @@ pub struct Request {
     /// aus fachlichen Gruenden an genau einer Adresse haengen.
     pub endpoint: Option<LlmEndpoint>,
     pub twitch_broadcaster: Option<String>,
+    pub twitch_channel: Option<String>,
+    pub twitch_channels: Vec<String>,
 }
 
 impl Request {
@@ -199,6 +201,16 @@ impl Request {
         self.endpoint = Some(endpoint);
         self
     }
+    pub fn twitch_channels(mut self, channels: impl IntoIterator<Item = String>) -> Self {
+        self.twitch_channels = channels.into_iter().collect();
+        self
+    }
+
+    pub fn twitch_channel(mut self, login: impl Into<String>) -> Self {
+        self.twitch_channel = Some(login.into());
+        self
+    }
+
     pub fn twitch_broadcaster(mut self, broadcaster_id: impl Into<String>) -> Self {
         self.twitch_broadcaster = Some(broadcaster_id.into());
         self
@@ -227,12 +239,16 @@ pub enum LlmError {
     Timeout(String),
     /// Antwort kam, war aber kein Erfolg. Der Body haengt dran, damit der
     /// Aufrufer Anbietertexte wie "credit balance is too low" lesen kann.
-    Http { status: u16, body: String },
+    Http {
+        status: u16,
+        body: String,
+    },
     /// Verbindung, TLS, Abbruch.
     Transport(String),
     /// Antwort kam an, taugte aber nicht: leerer Text oder abgelehnt vom
     /// `accept`-Praedikat des Aufrufers.
     Unparsable(String),
+    Disabled(String),
 }
 
 impl LlmError {
@@ -244,6 +260,7 @@ impl LlmError {
             Self::Http { .. } => "http_status",
             Self::Transport(_) => "transport",
             Self::Unparsable(_) => "unparsable",
+            Self::Disabled(_) => "ai_disabled",
         }
     }
 }
@@ -261,6 +278,7 @@ impl std::fmt::Display for LlmError {
             }
             Self::Transport(e) => write!(f, "LLM-Aufruf fehlgeschlagen: {e}"),
             Self::Unparsable(e) => write!(f, "LLM-Antwort unbrauchbar: {e}"),
+            Self::Disabled(e) => write!(f, "KI ausgeschaltet: {e}"),
         }
     }
 }
@@ -309,6 +327,13 @@ pub(crate) async fn complete_routed(
     request: Request,
     brain: Option<Arc<crate::brain_route::BrainRoute>>,
 ) -> Result<Response, LlmFailure> {
+    crate::ai_guard::check(use_case, &request)
+        .await
+        .map_err(|error| LlmFailure {
+            provider: "policy".into(),
+            model: String::new(),
+            error,
+        })?;
     match brain {
         Some(route) => route.complete(use_case, &request).await,
         None => complete_direct(use_case, request).await,
@@ -515,6 +540,7 @@ pub(crate) async fn call_endpoint(
     let ende = Instant::now() + frist;
     let mut versuch = 0u8;
     let raw = loop {
+        crate::ai_guard::check(purpose.unwrap_or("unknown"), request).await?;
         let started = Instant::now();
         let rest = ende.saturating_duration_since(started);
         if rest.is_zero() {
@@ -1107,6 +1133,15 @@ mod tests {
 
     #[tokio::test]
     async fn title_ai_weist_glm_ohne_nutzerfreigabe_ab() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "title_ai_weist_glm_ohne_nutzerfreigabe_ab"
+        ))
+        .await
+        else {
+            return;
+        };
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
@@ -1121,6 +1156,7 @@ mod tests {
         let error = complete(
             "title_ai",
             Request::prompt("titel")
+                .twitch_broadcaster("42")
                 .denken_aus()
                 .no_ledger()
                 .endpoint(LlmEndpoint {

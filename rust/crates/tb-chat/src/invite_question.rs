@@ -348,6 +348,7 @@ impl From<&InviteQuestionVerdict> for InviteQuestionLoggedVerdict {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InviteQuestionJudgeInput {
+    pub channel_login: String,
     pub message: String,
     pub is_newcomer: bool,
     pub is_deadlock_live: bool,
@@ -392,6 +393,7 @@ impl InviteQuestionJudge for LlmInviteQuestionJudge {
 
         match self
             .client
+            .for_channel(input.channel_login)
             .messages_completion_uncapped(messages, 0.0, "invite_question")
             .await
         {
@@ -887,6 +889,7 @@ impl InviteQuestionResponder {
         let verdict = self
             .judge
             .judge(InviteQuestionJudgeInput {
+                channel_login: channel_login.to_string(),
                 message: raw.to_string(),
                 is_newcomer,
                 is_deadlock_live: true,

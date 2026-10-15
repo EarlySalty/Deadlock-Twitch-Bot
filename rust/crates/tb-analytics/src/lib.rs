@@ -8,14 +8,13 @@
 pub mod ad_manager;
 pub mod admin_affiliate;
 pub mod admin_billing;
+pub mod admin_config;
+pub mod admin_streamers;
+pub mod ads_schedule_collector;
 pub mod affiliate_claim_window;
 pub mod affiliate_commission;
 pub mod affiliate_gutschrift;
 pub mod affiliate_pii;
-pub mod admin_config;
-pub mod promo_timers;
-pub mod community_announcements;
-pub mod admin_streamers;
 pub mod ai_analysis;
 pub mod ai_history;
 pub mod bans;
@@ -23,15 +22,16 @@ pub mod bekannte_bots;
 pub mod billing;
 pub mod category_activity;
 pub mod chat_analytics;
-pub mod chatter_verlauf;
 pub mod chat_analytics_lexicon;
-pub mod chat_deep_llm;
-pub mod chat_typen;
 pub mod chat_content_analysis;
 pub mod chat_content_lexicon;
+pub mod chat_deep_llm;
 pub mod chat_hype_timeline;
 pub mod chat_social_graph;
+pub mod chat_typen;
+pub mod chatter_verlauf;
 pub mod coaching;
+pub mod community_announcements;
 pub mod community_points;
 pub mod dashboard_assistent_log;
 pub mod engagement_metrics;
@@ -47,30 +47,30 @@ pub mod partner_signup_block;
 pub mod partner_signup_tag_block;
 pub mod peer_group;
 pub mod plan;
-pub mod raw_chat_status;
-pub mod tag_analysis;
-pub mod watch_time;
 pub mod post_stream;
 pub mod promo_mode;
+pub mod promo_timers;
 pub mod raid_blacklist;
 pub mod raid_history;
 pub mod raids;
+pub mod raw_chat_status;
 pub mod self_explainer_log;
 pub mod stream_kennzahlen;
 pub mod streamer_link;
-pub mod ads_schedule_collector;
-pub mod subs_snapshot_collector;
 pub mod streamers;
 pub mod streamers_crud;
-pub mod stufe;
 pub mod stripe;
+pub mod stufe;
+pub mod subs_snapshot_collector;
 pub mod system_database;
 pub mod system_errors;
 pub mod system_eventsub;
 pub mod system_health;
 pub mod system_oauth_scopes;
+pub mod tag_analysis;
 pub mod telemetry_routes;
 pub mod trial;
+pub mod watch_time;
 
 pub mod category;
 
@@ -81,3 +81,7 @@ mod test_sql;
 #[cfg(test)]
 #[path = "../../../test-support/postgres.rs"]
 pub(crate) mod test_postgres;
+
+#[cfg(test)]
+#[path = "../../../test-support/ai_policy.rs"]
+mod ai_test_policy;

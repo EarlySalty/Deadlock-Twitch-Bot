@@ -644,6 +644,7 @@ impl SocialMediaReportWriter {
         self.render_with_llm(
             &prompt,
             fallback_streamer_report(streamer_login, period, &top, &bottom, &totals),
+            &[streamer_login.to_string()],
         )
         .await
     }
@@ -672,8 +673,15 @@ impl SocialMediaReportWriter {
             streamer_list = format_streamer_list(streamers.iter().take(8).cloned().collect::<Vec<_>>().as_slice()),
             clip_list = format_clip_list(&ranked_clips(clips, 8)),
         );
-        self.render_with_llm(&prompt, fallback_cross_report(period, &streamers, clips))
-            .await
+        self.render_with_llm(
+            &prompt,
+            fallback_cross_report(period, &streamers, clips),
+            &clips
+                .iter()
+                .map(|clip| clip.streamer_login.clone())
+                .collect::<Vec<_>>(),
+        )
+        .await
     }
 
     async fn render_admin_report(&self, period: &Period, clips: &[ClipPerformance]) -> Rendered {
@@ -702,15 +710,24 @@ impl SocialMediaReportWriter {
         self.render_with_llm(
             &prompt,
             fallback_admin_report(period, &streamers, &top_clips),
+            &clips
+                .iter()
+                .map(|clip| clip.streamer_login.clone())
+                .collect::<Vec<_>>(),
         )
         .await
     }
 
     /// Ruft den LLM-Dispatcher; bei Fehler oder leerem Output → Fallback-Markdown.
-    async fn render_with_llm(&self, prompt: &str, fallback: String) -> Rendered {
+    async fn render_with_llm(
+        &self,
+        prompt: &str,
+        fallback: String,
+        channels: &[String],
+    ) -> Rendered {
         match self
             .dispatcher
-            .generate_text(REPORT_SYSTEM_PROMPT, prompt, 1400, 0.2)
+            .generate_text_for_channels(REPORT_SYSTEM_PROMPT, prompt, 1400, 0.2, channels)
             .await
         {
             Ok(resp) => {

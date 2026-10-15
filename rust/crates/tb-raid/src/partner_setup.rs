@@ -861,6 +861,10 @@ pub async fn promote_streamer_to_partner(
         identity_is_on_discord,
     )
     .await?;
+    sqlx::query("INSERT INTO public.twitch_streamer_ai_policy(twitch_user_id,guild_id,ai_features) VALUES ($1,1289721245281292288,true) ON CONFLICT (twitch_user_id) DO NOTHING")
+        .bind(&normalized_user_id)
+        .execute(&mut **tx)
+        .await?;
 
     let effective_partnered_at = active
         .and_then(|a| a.partnered_at.clone())

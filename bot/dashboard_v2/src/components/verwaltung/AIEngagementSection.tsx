@@ -1,3 +1,4 @@
+import { useAiFeatures } from '@/hooks/useAiFeatures';
 import { translateManagementError } from '@/i18n/managementErrors';
 import { useLanguage } from '@/context/LanguageContext';
 import { useEffect, useState } from 'react';
@@ -32,7 +33,7 @@ const DECISION_COLORS: Record<string, string> = {
   provider_error: 'text-danger',
 };
 
-export function AIEngagementSection() {
+function AIEngagementContent() {
   const { t, locale } = useLanguage();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +70,6 @@ export function AIEngagementSection() {
 
   useEffect(() => {
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const onToggle = async () => {
@@ -266,4 +266,9 @@ export function AIEngagementSection() {
       )}
     </motion.section>
   );
+}
+
+export function AIEngagementSection() {
+  const enabled = useAiFeatures();
+  return enabled ? <AIEngagementContent /> : null;
 }

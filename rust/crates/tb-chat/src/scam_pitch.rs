@@ -1689,56 +1689,59 @@ impl SpamAiReviewer {
         // Die Kette arbeitet der gemeinsame Eingang ab; ohne konfigurierten
         // Anbieter liefert er `Unavailable`, das unten als ProviderError
         // landet. Hier bleibt nur die Fachauswertung des Urteils.
-        let (last_error, last_verdict) = match call_judge(None, true, &content).await {
-            Ok(review) => {
-                let (learned, rejected_pattern, save_failed) =
-                    persist_spam_learning(&self.pool, &review, &content, &channel).await;
-                let reason = review.reason.unwrap_or_default();
-                let confidence = review.confidence;
-                let (outcome, verdict) = if review.is_spam {
-                    (
-                        AiReviewOutcome::Spam {
-                            reason,
-                            confidence,
-                            learned,
-                            rejected_pattern,
-                            save_failed,
-                        },
-                        SpamReviewVerdict::Spam,
-                    )
-                } else {
-                    (AiReviewOutcome::Safe { reason }, SpamReviewVerdict::Clean)
-                };
-                let persisted_reason = match &outcome {
-                    AiReviewOutcome::Spam { reason, .. } | AiReviewOutcome::Safe { reason } => {
-                        reason.clone()
-                    }
-                    _ => String::new(),
-                };
-                return self
-                    .record_and_return(event, outcome, verdict, confidence, persisted_reason)
-                    .await;
-            }
-            Err(failure) => {
-                let modell = failure.model;
-                let (verdict, detail) = match failure.error {
-                    JudgeCallError::Timeout(detail) => (SpamReviewVerdict::Timeout, detail),
-                    JudgeCallError::Provider(detail) => (SpamReviewVerdict::ProviderError, detail),
-                    JudgeCallError::Parse(detail) => (SpamReviewVerdict::ParseError, detail),
-                };
-                // Der Eingang hat pro Kettenglied schon gewarnt (mit
-                // Anbieter-Body); hier nur noch der Spur halber.
-                debug!(model = %modell, fehler = %detail, "Judge-Call fehlgeschlagen");
-                // Ohne Absender (kein Anbieter konfiguriert) kein fuehrender
-                // Doppelpunkt im Bericht.
-                let meldung = if modell.is_empty() {
-                    detail
-                } else {
-                    format!("{modell}: {detail}")
-                };
-                (meldung, verdict)
-            }
-        };
+        let (last_error, last_verdict) =
+            match call_judge(None, true, &content, Some(&event.broadcaster_user_id)).await {
+                Ok(review) => {
+                    let (learned, rejected_pattern, save_failed) =
+                        persist_spam_learning(&self.pool, &review, &content, &channel).await;
+                    let reason = review.reason.unwrap_or_default();
+                    let confidence = review.confidence;
+                    let (outcome, verdict) = if review.is_spam {
+                        (
+                            AiReviewOutcome::Spam {
+                                reason,
+                                confidence,
+                                learned,
+                                rejected_pattern,
+                                save_failed,
+                            },
+                            SpamReviewVerdict::Spam,
+                        )
+                    } else {
+                        (AiReviewOutcome::Safe { reason }, SpamReviewVerdict::Clean)
+                    };
+                    let persisted_reason = match &outcome {
+                        AiReviewOutcome::Spam { reason, .. } | AiReviewOutcome::Safe { reason } => {
+                            reason.clone()
+                        }
+                        _ => String::new(),
+                    };
+                    return self
+                        .record_and_return(event, outcome, verdict, confidence, persisted_reason)
+                        .await;
+                }
+                Err(failure) => {
+                    let modell = failure.model;
+                    let (verdict, detail) = match failure.error {
+                        JudgeCallError::Timeout(detail) => (SpamReviewVerdict::Timeout, detail),
+                        JudgeCallError::Provider(detail) => {
+                            (SpamReviewVerdict::ProviderError, detail)
+                        }
+                        JudgeCallError::Parse(detail) => (SpamReviewVerdict::ParseError, detail),
+                    };
+                    // Der Eingang hat pro Kettenglied schon gewarnt (mit
+                    // Anbieter-Body); hier nur noch der Spur halber.
+                    debug!(model = %modell, fehler = %detail, "Judge-Call fehlgeschlagen");
+                    // Ohne Absender (kein Anbieter konfiguriert) kein fuehrender
+                    // Doppelpunkt im Bericht.
+                    let meldung = if modell.is_empty() {
+                        detail
+                    } else {
+                        format!("{modell}: {detail}")
+                    };
+                    (meldung, verdict)
+                }
+            };
         self.record_and_return(
             event,
             AiReviewOutcome::Error {
@@ -2015,6 +2018,7 @@ async fn call_judge(
     endpoint: Option<&tb_llm::LlmEndpoint>,
     record_usage: bool,
     content: &str,
+    broadcaster_id: Option<&str>,
 ) -> Result<AiReview, JudgeFailure> {
     let truncated: String = content.chars().take(500).collect();
     let mut request =
@@ -2030,6 +2034,9 @@ async fn call_judge(
         Some(endpoint) => request.endpoint(endpoint.clone()),
         None => request.failover(),
     };
+    if let Some(id) = broadcaster_id {
+        request = request.twitch_broadcaster(id);
+    }
     let request = if record_usage {
         request.ledger_purpose(JUDGE_PURPOSE)
     } else {
@@ -3164,6 +3171,15 @@ mod tests {
 
     #[tokio::test]
     async fn spam_ai_review_contract_judge_call_lernt_spam() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "spam_ai_review_contract_judge_call_lernt_spam"
+        ))
+        .await
+        else {
+            return;
+        };
         let pool = pool_or_skip!("scam_ai_contract_judge_mock");
         let content = "@cheazycrust Targeted viewers PeakPy. c0m SSSsss remove space";
         let server = MockServer::start().await;
@@ -3189,7 +3205,7 @@ mod tests {
             api_key: Some("test-key".to_string()),
             model: tb_llm::selection::configured_fireworks_model().to_string(),
         };
-        let review = call_judge(Some(&provider), false, content)
+        let review = call_judge(Some(&provider), false, content, Some("42"))
             .await
             .expect("Transport ok und Urteil parsebar");
         assert!(review.is_spam);
@@ -3214,6 +3230,15 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn call_judge_behaelt_lokalen_mock_bei_404_ohne_externen_fallback() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "call_judge_behaelt_lokalen_mock_bei_404_ohne_externen_fallback"
+        ))
+        .await
+        else {
+            return;
+        };
         let _guard = PROVIDER_ENV_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -3235,7 +3260,7 @@ mod tests {
             api_key: Some("fw-key".to_string()),
             model: tb_llm::selection::configured_fireworks_model().to_string(),
         };
-        let error = call_judge(Some(&provider), false, "cheap viewers telegram")
+        let error = call_judge(Some(&provider), false, "cheap viewers telegram", Some("42"))
             .await
             .expect_err("404 bleibt ein Providerfehler");
         assert!(
@@ -3247,6 +3272,15 @@ mod tests {
 
     #[tokio::test]
     async fn call_judge_schaltet_das_denken_ab() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "call_judge_schaltet_das_denken_ab"
+        ))
+        .await
+        else {
+            return;
+        };
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
@@ -3265,7 +3299,7 @@ mod tests {
             api_key: Some("test-key".to_string()),
             model: tb_llm::selection::configured_fireworks_model().to_string(),
         };
-        call_judge(Some(&provider), false, "harmlose nachricht")
+        call_judge(Some(&provider), false, "harmlose nachricht", Some("42"))
             .await
             .expect("Urteil parsebar");
 
@@ -3700,6 +3734,15 @@ mod tests {
     #[tokio::test]
     #[ignore = "Live-Baseline: braucht FIREWORK_API_KEY"]
     async fn live_judge_erkennt_anonyme_viewbot_angebote() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "live_judge_erkennt_anonyme_viewbot_angebote"
+        ))
+        .await
+        else {
+            return;
+        };
         let providers = tb_llm::endpoint_chain(JUDGE_USE_CASE);
         let provider = providers.first().expect("kein Judge-Key gesetzt");
 
@@ -3718,7 +3761,7 @@ mod tests {
             ("gönne viewer du weißt", false),
             ("gönn dir viewer bro bin nur am lurken", false),
         ] {
-            let review = call_judge(Some(provider), false, message)
+            let review = call_judge(Some(provider), false, message, Some("42"))
                 .await
                 .expect("Judge-Call fehlgeschlagen");
             eprintln!(

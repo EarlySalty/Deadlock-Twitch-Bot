@@ -1,4 +1,6 @@
-//! Prüft Verbrauch und Abbrüche ausschließlich in einer isolierten Testdatenbank.
+#[path = "../../../test-support/postgres.rs"]
+mod postgres;
+
 use sqlx::postgres::PgPoolOptions;
 use tb_engagement::llm_chat::{ChatMessage, EngagementLlmClient};
 use wiremock::matchers::{method, path};
@@ -13,6 +15,7 @@ fn client_for(server: &MockServer) -> EngagementLlmClient {
         Some("deepseek-v4-flash".to_string()),
         None,
     )
+    .for_broadcaster("42")
 }
 
 fn history() -> Vec<ChatMessage> {
@@ -36,33 +39,16 @@ async fn mock_usage(server: &MockServer, content: &str, prompt: i64, completion:
 
 #[tokio::test]
 async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
-    #[derive(serde::Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct TestDatabase {
-        socket: String,
-        database: String,
-        user: String,
-    }
-    let Ok(config_text) = std::fs::read_to_string("/tmp/tb-llm-ledger-test-database.json") else {
-        eprintln!("Ledger-DB-Test übersprungen: normale Testdatenbank-Konfigurationsdatei fehlt");
-        return;
-    };
-    let config: TestDatabase =
-        serde_json::from_str(&config_text).expect("Testdatenbankkonfiguration gültig");
-    assert!(
-        config.database.starts_with("fireworks_usage_test"),
-        "Ausschließlich isolierte Ledger-Testdatenbanken verwenden"
-    );
-    let verify = PgPoolOptions::new()
-        .max_connections(1)
-        .connect_with(
-            sqlx::postgres::PgConnectOptions::new()
-                .host(&config.socket)
-                .database(&config.database)
-                .username(&config.user),
-        )
-        .await
-        .expect("Test-DB verbinden");
+    let database = postgres::TestPostgres::start().await;
+    let verify = database.pool.clone();
+    sqlx::raw_sql("CREATE TABLE public.twitch_streamer_identities(twitch_user_id text PRIMARY KEY,twitch_login text NOT NULL); INSERT INTO public.twitch_streamer_identities VALUES ('42','home')")
+        .execute(&verify).await.unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20261015120000_streamer_ai_policy.sql"
+    ))
+    .execute(&verify)
+    .await
+    .unwrap();
 
     sqlx::query("DROP TABLE IF EXISTS public.llm_usage")
         .execute(&verify)
@@ -77,12 +63,7 @@ async fn engagement_client_verbucht_usage_ins_zentrale_ledger() {
 
     let blockers = PgPoolOptions::new()
         .max_connections(2)
-        .connect_with(
-            sqlx::postgres::PgConnectOptions::new()
-                .host(&config.socket)
-                .database(&config.database)
-                .username(&config.user),
-        )
+        .connect_with(verify.connect_options().as_ref().clone())
         .await
         .expect("Isolierter Sperrpool");
     let server = MockServer::start().await;

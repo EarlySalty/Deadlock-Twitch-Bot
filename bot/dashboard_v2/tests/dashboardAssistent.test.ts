@@ -73,5 +73,5 @@ test('das Widget berechnet den Seiten-Slug beim Öffnen und beim Senden neu', ()
 
 test('das Widget rendert nichts, solange der Nutzer nicht eingeloggt ist', () => {
   assert.match(WIDGET, /isLoading: authLaedt/);
-  assert.match(WIDGET, /if \(authLaedt \|\| authStatus\?\.authenticated !== true\) \{/);
+  assert.match(WIDGET, /if \(authLaedt \|\| authStatus\?\.authenticated !== true \|\| !aiFeatures\) \{/);
 });

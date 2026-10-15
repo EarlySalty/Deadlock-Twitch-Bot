@@ -141,3 +141,7 @@ pub mod streamer_voice;
 #[cfg(test)]
 #[path = "../../../test-support/schema_sql.rs"]
 mod test_sql;
+
+#[cfg(test)]
+#[path = "../../../test-support/ai_policy.rs"]
+mod ai_test_policy;

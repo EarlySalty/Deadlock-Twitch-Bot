@@ -648,6 +648,7 @@ pub enum GenerateError {
     Http(String),
     /// Antwort kam an, war aber nicht verwertbar (leer, ungueltiger Body).
     Unparsable(String),
+    Disabled(String),
 }
 
 impl std::fmt::Display for GenerateError {
@@ -658,6 +659,7 @@ impl std::fmt::Display for GenerateError {
             GenerateError::Transport(e) => write!(f, "Modell-Aufruf fehlgeschlagen: {e}"),
             GenerateError::Http(e) => write!(f, "Modell-Aufruf fehlgeschlagen: {e}"),
             GenerateError::Unparsable(e) => write!(f, "Modell-Antwort unbrauchbar: {e}"),
+            GenerateError::Disabled(e) => write!(f, "KI ausgeschaltet: {e}"),
         }
     }
 }
@@ -677,6 +679,7 @@ impl From<tb_llm::LlmError> for GenerateError {
             tb_llm::LlmError::Transport(detail) => Self::Transport(detail),
             tb_llm::LlmError::Unparsable(detail) => Self::Unparsable(detail),
             http @ tb_llm::LlmError::Http { .. } => Self::Http(http.to_string()),
+            tb_llm::LlmError::Disabled(detail) => Self::Disabled(detail),
         }
     }
 }
@@ -690,6 +693,7 @@ impl From<tb_llm::LlmError> for GenerateError {
 /// Anbieter und Modell kommen ausschließlich aus der gemeinsamen Auswahl unter
 /// dem jeweiligen Anwendungsfall. Frühere KI-Variablen und Modell-
 /// Overrides werden nicht verwendet.
+#[derive(Clone)]
 pub struct EngagementLlmClient {
     use_case: &'static str,
     endpoint: tb_llm::LlmEndpoint,
@@ -698,6 +702,9 @@ pub struct EngagementLlmClient {
     /// wird bewusst ignoriert.
     festgenagelt: bool,
     timeout: Duration,
+    twitch_broadcaster: Option<String>,
+    twitch_channel: Option<String>,
+    twitch_channels: Vec<String>,
 }
 
 impl EngagementLlmClient {
@@ -740,6 +747,30 @@ impl EngagementLlmClient {
             endpoint,
             festgenagelt,
             timeout: timeout.unwrap_or_else(|| Duration::from_secs(30)),
+            twitch_broadcaster: None,
+            twitch_channel: None,
+            twitch_channels: Vec::new(),
+        }
+    }
+
+    pub fn for_broadcaster(&self, twitch_user_id: impl Into<String>) -> Self {
+        Self {
+            twitch_broadcaster: Some(twitch_user_id.into()),
+            ..self.clone()
+        }
+    }
+
+    pub fn for_channels(&self, channels: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            twitch_channels: channels.into_iter().collect(),
+            ..self.clone()
+        }
+    }
+
+    pub fn for_channel(&self, channel_login: impl Into<String>) -> Self {
+        Self {
+            twitch_channel: Some(channel_login.into()),
+            ..self.clone()
         }
     }
 
@@ -946,9 +977,14 @@ impl EngagementLlmClient {
     /// Ohne explizite Testparameter läuft der Aufruf über die zentrale Kette,
     /// die genau den freigegebenen Fireworks-Endpunkt enthält.
     async fn call(&self, request: tb_llm::Request) -> Result<tb_llm::Response, GenerateError> {
-        let request = request
-            .timeout(self.timeout)
-            .total_deadline(self.timeout);
+        let mut request = request.timeout(self.timeout).total_deadline(self.timeout);
+        if let Some(id) = &self.twitch_broadcaster {
+            request = request.twitch_broadcaster(id.clone());
+        }
+        if let Some(login) = &self.twitch_channel {
+            request = request.twitch_channel(login.clone());
+        }
+        let request = request.twitch_channels(self.twitch_channels.clone());
         let request = if self.festgenagelt {
             request.endpoint(self.endpoint.clone())
         } else {
@@ -1015,12 +1051,8 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn client_for(server: &MockServer) -> EngagementLlmClient {
-        EngagementLlmClient::new(
-            Some("test-key".to_string()),
-            Some(server.uri()),
-            None,
-            None,
-        )
+        EngagementLlmClient::new(Some("test-key".to_string()), Some(server.uri()), None, None)
+            .for_broadcaster("42")
     }
 
     /// Serialisiert die Env-Mutationen der Provider-Tests.
@@ -1093,10 +1125,16 @@ mod tests {
             .model()
             .contains("deepseek"));
 
-        std::env::set_var("TB_LLM_MODEL_ENGAGEMENT", "accounts/fireworks/models/anders");
+        std::env::set_var(
+            "TB_LLM_MODEL_ENGAGEMENT",
+            "accounts/fireworks/models/anders",
+        );
         let client = EngagementLlmClient::new(None, None, None, None);
         assert_eq!(client.endpoint.provider, "fireworks");
-        assert_eq!(client.model(), tb_llm::selection::configured_fireworks_model());
+        assert_eq!(
+            client.model(),
+            tb_llm::selection::configured_fireworks_model()
+        );
         clear_provider_env();
     }
 
@@ -1108,7 +1146,10 @@ mod tests {
         let client = EngagementLlmClient::new(None, None, None, None);
         assert_eq!(client.endpoint.api_key, None);
         assert_eq!(client.endpoint.provider, "fireworks");
-        assert_eq!(client.model(), tb_llm::selection::configured_fireworks_model());
+        assert_eq!(
+            client.model(),
+            tb_llm::selection::configured_fireworks_model()
+        );
         clear_provider_env();
     }
 
@@ -1375,6 +1416,15 @@ mod tests {
 
     #[tokio::test]
     async fn generate_parst_antwort_und_tokens() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "generate_parst_antwort_und_tokens"
+        ))
+        .await
+        else {
+            return;
+        };
         redirect_ledger_for_tests();
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -1401,6 +1451,15 @@ mod tests {
 
     #[tokio::test]
     async fn generate_answer_laesst_217_zeichen_durch() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "generate_answer_laesst_217_zeichen_durch"
+        ))
+        .await
+        else {
+            return;
+        };
         redirect_ledger_for_tests();
         let server = MockServer::start().await;
         let answer = "a".repeat(217);
@@ -1423,6 +1482,15 @@ mod tests {
 
     #[tokio::test]
     async fn generate_silent_marker_gibt_none() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "generate_silent_marker_gibt_none"
+        ))
+        .await
+        else {
+            return;
+        };
         redirect_ledger_for_tests();
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -1456,7 +1524,10 @@ mod tests {
             Some("nicht-freigegebenes-modell".to_string()),
             None,
         );
-        assert_eq!(client.model(), tb_llm::selection::configured_fireworks_model());
+        assert_eq!(
+            client.model(),
+            tb_llm::selection::configured_fireworks_model()
+        );
 
         clear_provider_env();
     }
@@ -1464,6 +1535,15 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn generate_ohne_key_unavailable() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "generate_ohne_key_unavailable"
+        ))
+        .await
+        else {
+            return;
+        };
         // Die Env-Sperre haelt parallele Tests davon ab, waehrenddessen einen
         // Fireworks-Key zu setzen; sonst wird aus "kein Key"
         // ein Transportfehler gegen 127.0.0.1:1.
@@ -1474,7 +1554,11 @@ mod tests {
             Some("deepseek-v4-flash".to_string()),
             None,
         );
-        match client.generate("s", &[], 500, 480).await {
+        match client
+            .for_broadcaster("42")
+            .generate("s", &[], 500, 480)
+            .await
+        {
             Err(GenerateError::Unavailable(_)) => {}
             other => panic!("erwartete Unavailable, war {other:?}"),
         }

@@ -59,8 +59,20 @@ pub const GAME_EXTRA: &[&str] = &[
 ];
 
 const KNOWN_EMOTES: &[&str] = &[
-    "lul", "lulw", "kekw", "omegalul", "kappa", "monkas", "sadge", "copium", "deadge", "pepega",
-    "pepehands", "widepeepohappy", "catjam", "peepohappy",
+    "lul",
+    "lulw",
+    "kekw",
+    "omegalul",
+    "kappa",
+    "monkas",
+    "sadge",
+    "copium",
+    "deadge",
+    "pepega",
+    "pepehands",
+    "widepeepohappy",
+    "catjam",
+    "peepohappy",
 ];
 
 const SHORT_WORDS: &[&str] = &[
@@ -337,19 +349,22 @@ fn modell_prompt(pakete: &[(i64, String)]) -> String {
 
 pub async fn klassifiziere_modell(
     pakete: &[(i64, String)],
+    channels: &[String],
 ) -> Result<(Vec<(i64, Nachrichtentyp)>, String), tb_llm::LlmError> {
-    klassifiziere_modell_intern(pakete, None).await
+    klassifiziere_modell_intern(pakete, None, channels).await
 }
 
 async fn klassifiziere_modell_intern(
     pakete: &[(i64, String)],
     endpoint: Option<tb_llm::LlmEndpoint>,
+    channels: &[String],
 ) -> Result<(Vec<(i64, Nachrichtentyp)>, String), tb_llm::LlmError> {
     if pakete.is_empty() {
         return Ok((Vec::new(), String::new()));
     }
     let max_tokens = (pakete.len() as i64) * 24 + 256;
     let mut request = tb_llm::Request::prompt(modell_prompt(pakete))
+        .twitch_channels(channels.iter().cloned())
         .temperature(0.0)
         .max_tokens(max_tokens)
         .timeout(Duration::from_secs(MODELL_TIMEOUT_SECS))
@@ -385,12 +400,14 @@ async fn klassifiziere_modell_intern(
 pub async fn lade_unlabelte(
     pool: &sqlx::PgPool,
     limit: i64,
-) -> Result<Vec<(i64, String, String)>, sqlx::Error> {
-    let rows: Vec<(i64, String, String)> = sqlx::query_as(
+) -> Result<Vec<(i64, String, String, String, bool)>, sqlx::Error> {
+    let rows: Vec<(i64, String, String, String, bool)> = sqlx::query_as(
         r#"
         SELECT cm.id,
                COALESCE(cm.content, '') AS content,
-               COALESCE(cm.chatter_login, '') AS chatter_login
+               COALESCE(cm.chatter_login, '') AS chatter_login,
+               COALESCE(cm.streamer_login, ''),
+               public.twitch_streamer_ai_allowed(NULL, cm.streamer_login)
         FROM twitch_chat_messages cm
         LEFT JOIN twitch_chat_message_labels l ON l.message_id = cm.id
         WHERE l.message_id IS NULL
@@ -501,26 +518,46 @@ mod tests {
 
     #[test]
     fn evidence_system() {
-        assert_eq!(regel("Plorki_GER redeemed Confetti (duo) for 0 Bits"), "System");
         assert_eq!(
-            regel("🔧 Eisen-Truhe! !loot (riskant) · !prüfen (vorsichtig) · !dodge (sicher) ... 45s"),
+            regel("Plorki_GER redeemed Confetti (duo) for 0 Bits"),
             "System"
         );
-        assert_eq!(regel("Brain_BP Abofalle schlägt zu! Vielen Dank HappyPag"), "System");
-        assert_eq!(klassifiziere_regel("hallo zusammen", "nightbot").api_key(), "System");
+        assert_eq!(
+            regel(
+                "🔧 Eisen-Truhe! !loot (riskant) · !prüfen (vorsichtig) · !dodge (sicher) ... 45s"
+            ),
+            "System"
+        );
+        assert_eq!(
+            regel("Brain_BP Abofalle schlägt zu! Vielen Dank HappyPag"),
+            "System"
+        );
+        assert_eq!(
+            klassifiziere_regel("hallo zusammen", "nightbot").api_key(),
+            "System"
+        );
     }
 
     #[test]
     fn evidence_game() {
         assert_eq!(regel("phantom 4 gerade"), "Game-Related");
-        assert_eq!(regel("du bist phantom 5 und nicht top 1000 ingame"), "Game-Related");
-        assert_eq!(regel("Emmi 1 angefangen solo hoch gecarryt auf Emmi 6"), "Game-Related");
+        assert_eq!(
+            regel("du bist phantom 5 und nicht top 1000 ingame"),
+            "Game-Related"
+        );
+        assert_eq!(
+            regel("Emmi 1 angefangen solo hoch gecarryt auf Emmi 6"),
+            "Game-Related"
+        );
         assert_eq!(regel("Rigged matchmaking"), "Game-Related");
         assert_eq!(
             regel("ich versteh auch nicht wie niedrig die velocity von der sniper ist"),
             "Game-Related"
         );
-        assert_eq!(regel("Graves Doorman hätten nie ins Game kommen sollen"), "Game-Related");
+        assert_eq!(
+            regel("Graves Doorman hätten nie ins Game kommen sollen"),
+            "Game-Related"
+        );
     }
 
     #[test]
@@ -529,8 +566,14 @@ mod tests {
             regel("ist schon echt gut muss ich sagen und sieht qualitativ auch echt ok aus ngl"),
             "Statement"
         );
-        assert_eq!(regel("das ist der reiz.. arc raider war mir zu viel mimimi"), "Statement");
-        assert_eq!(regel("Astronomie meint er übrigens, nicht Astrologie"), "Statement");
+        assert_eq!(
+            regel("das ist der reiz.. arc raider war mir zu viel mimimi"),
+            "Statement"
+        );
+        assert_eq!(
+            regel("Astronomie meint er übrigens, nicht Astrologie"),
+            "Statement"
+        );
         assert_eq!(regel("Ai viewers streamboo . Com"), "Other");
     }
 
@@ -548,6 +591,15 @@ mod tests {
 
     #[tokio::test]
     async fn modell_bekommt_nur_other_und_wird_genau_einmal_gerufen() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "modell_bekommt_nur_other_und_wird_genau_einmal_gerufen"
+        ))
+        .await
+        else {
+            return;
+        };
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
@@ -570,11 +622,15 @@ mod tests {
             .filter(|(_, c)| klassifiziere_regel(c, "") == Nachrichtentyp::Other)
             .cloned()
             .collect();
-        assert_eq!(others.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![11, 13]);
+        assert_eq!(
+            others.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![11, 13]
+        );
 
-        let (ergebnis, modell) = klassifiziere_modell_intern(&others, Some(mock_endpoint(&server)))
-            .await
-            .expect("Modellantwort");
+        let (ergebnis, modell) =
+            klassifiziere_modell_intern(&others, Some(mock_endpoint(&server)), &["home".into()])
+                .await
+                .expect("Modellantwort");
 
         assert_eq!(modell, "accounts/fireworks/models/deepseek-v4-flash-0731");
         assert_eq!(ergebnis[0], (11, Nachrichtentyp::Statement));
@@ -591,6 +647,15 @@ mod tests {
 
     #[tokio::test]
     async fn body_schaltet_das_denken_ab() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "body_schaltet_das_denken_ab"
+        ))
+        .await
+        else {
+            return;
+        };
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
@@ -603,7 +668,7 @@ mod tests {
             .await;
 
         let pakete: Vec<(i64, String)> = vec![(1, "irgendein spam text".to_string())];
-        klassifiziere_modell_intern(&pakete, Some(mock_endpoint(&server)))
+        klassifiziere_modell_intern(&pakete, Some(mock_endpoint(&server)), &["home".into()])
             .await
             .expect("Modellantwort");
 
@@ -616,6 +681,15 @@ mod tests {
 
     #[tokio::test]
     async fn erschoepftes_budget_nennt_die_ursache() {
+        let Some(_policy) = crate::ai_test_policy::authorized_database(concat!(
+            module_path!(),
+            "::",
+            "erschoepftes_budget_nennt_die_ursache"
+        ))
+        .await
+        else {
+            return;
+        };
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
@@ -628,9 +702,10 @@ mod tests {
             .await;
 
         let pakete: Vec<(i64, String)> = vec![(1, "irgendein spam text".to_string())];
-        let fehler = klassifiziere_modell_intern(&pakete, Some(mock_endpoint(&server)))
-            .await
-            .expect_err("Budget-Fehler");
+        let fehler =
+            klassifiziere_modell_intern(&pakete, Some(mock_endpoint(&server)), &["home".into()])
+                .await
+                .expect_err("Budget-Fehler");
         let text = format!("{fehler}");
         assert!(text.contains("Budget"), "Fehlertext: {text}");
     }
@@ -643,9 +718,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
-        let (ergebnis, _) = klassifiziere_modell_intern(&[], Some(mock_endpoint(&server)))
-            .await
-            .expect("leer");
+        let (ergebnis, _) =
+            klassifiziere_modell_intern(&[], Some(mock_endpoint(&server)), &["home".into()])
+                .await
+                .expect("leer");
         assert!(ergebnis.is_empty());
         assert!(server.received_requests().await.expect("req").is_empty());
     }

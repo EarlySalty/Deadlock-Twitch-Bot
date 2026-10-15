@@ -29,7 +29,8 @@ const ANCHOR_SYS: &str = "Du bist eine feste Twitch-Chat-Persönlichkeit (ein De
 Antworte knapp und nur mit dem Verlangten.";
 
 /// Vorspann: betont, dass dies INNERER Geschmack ist, nicht der Chat-Ton.
-const SOUL_INTRO: &str = "Noch was zu dir — aber WICHTIG: das hier ist dein INNERER Geschmack und dein \
+const SOUL_INTRO: &str =
+    "Noch was zu dir — aber WICHTIG: das hier ist dein INNERER Geschmack und dein \
 Gedächtnis, nicht dein Chat-Ton. Zieh daraus deine Meinung, aber bleib im Chat \
 trocken und knapp wie immer. Kipp diese Begeisterung NICHT 1:1 raus, kein Gehype, \
 kein Schwall — eine ruhige, beiläufige Zeile reicht. Beziehe dich nur auf Helden/\
@@ -37,7 +38,8 @@ Abilities, die hier vorkommen.";
 
 /// Vorspann im Neuling-Modus: derselbe Zweck, aber ohne die Einladung, daraus
 /// eine Meinung zu ziehen — die hat ein Neuling nicht.
-const SOUL_INTRO_ROOKIE: &str = "Noch was zu dir — aber WICHTIG: das hier ist dein Gedächtnis, nicht dein \
+const SOUL_INTRO_ROOKIE: &str =
+    "Noch was zu dir — aber WICHTIG: das hier ist dein Gedächtnis, nicht dein \
 Chat-Ton und erst recht kein Fachwissen. Es sind Sachen, die dir als Neuling \
 aufgefallen sind. Greif sie höchstens beiläufig auf, wenn es gerade passt, und \
 bleib im Chat kurz und normal. Leite daraus KEINE Einschätzung zum Spiel ab und \
@@ -62,13 +64,21 @@ pub fn build_soul_fragment_for(
     if takes.is_none() && anchors.is_empty() {
         return String::new();
     }
-    let intro = if rookie { SOUL_INTRO_ROOKIE } else { SOUL_INTRO };
+    let intro = if rookie {
+        SOUL_INTRO_ROOKIE
+    } else {
+        SOUL_INTRO
+    };
     let mut parts: Vec<String> = vec![intro.to_string()];
     if let Some(t) = takes {
         parts.push(format!("Deine Hero-Vorlieben:\n{t}"));
     }
     if !anchors.is_empty() {
-        let lines = anchors.iter().map(|a| format!("- {a}")).collect::<Vec<_>>().join("\n");
+        let lines = anchors
+            .iter()
+            .map(|a| format!("- {a}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         parts.push(format!(
             "Dinge, die dir zuletzt aufgefallen sind oder die du cool fandest \
              (nur beiläufig aufgreifen, wenn's grad passt):\n{lines}"
@@ -86,7 +96,10 @@ fn build_transcript(rows: &[(String, Option<String>, String)]) -> String {
             let who = if role == "assistant" {
                 "ich".to_string()
             } else {
-                login.clone().filter(|l| !l.is_empty()).unwrap_or_else(|| "jemand".to_string())
+                login
+                    .clone()
+                    .filter(|l| !l.is_empty())
+                    .unwrap_or_else(|| "jemand".to_string())
             };
             format!("{who}: {content}")
         })
@@ -149,8 +162,8 @@ impl SoulStore {
             kind,
             content
         )
-            .execute(&self.pool)
-            .await?;
+        .execute(&self.pool)
+        .await?;
         if kind == "anchor" {
             sqlx::query!(
                 "DELETE FROM twitch_engagement_soul \
@@ -205,20 +218,20 @@ impl SoulStore {
 
     /// Die `limit` jüngsten Konversations-Turns (role, login, content),
     /// chronologisch (älteste zuerst).
-    async fn recent_convo(&self, limit: i64) -> Vec<(String, Option<String>, String)> {
-        let rows = sqlx::query!(
-            r#"SELECT role AS "role!", twitch_login, content AS "content!"
+    async fn recent_convo(&self, limit: i64) -> Vec<(String, Option<String>, String, String)> {
+        sqlx::query_as::<_, (String, Option<String>, String, String)>(
+            "SELECT role, twitch_login, content, channel_login
              FROM twitch_engagement_conversation
-             ORDER BY ts DESC LIMIT $1"#,
-            limit
+             WHERE public.twitch_streamer_ai_allowed(NULL, channel_login)
+             ORDER BY ts DESC LIMIT $1",
         )
+        .bind(limit)
         .fetch_all(&self.pool)
         .await
-        .unwrap_or_default();
-        rows.into_iter()
-            .rev()
-            .map(|r| (r.role, r.twitch_login, r.content))
-            .collect()
+        .unwrap_or_default()
+        .into_iter()
+        .rev()
+        .collect()
     }
 
     /// Der jüngste Anker (für die Dedup-Prüfung).
@@ -238,11 +251,12 @@ impl SoulStore {
     /// Reflektiert die letzten Chats; speichert einen Anker, wenn etwas
     /// hängenblieb (Python `reflect_and_store_anchor`). Hintergrund-Job, nicht
     /// per-Message. Liefert den neuen Anker oder None.
-    pub async fn reflect_and_store_anchor(
-        &self,
-        llm: &EngagementLlmClient,
-    ) -> Option<String> {
-        let rows = self.recent_convo(REFLECT_TURNS).await;
+    pub async fn reflect_and_store_anchor(&self, llm: &EngagementLlmClient) -> Option<String> {
+        let sourced_rows = self.recent_convo(REFLECT_TURNS).await;
+        let (rows, channels): (Vec<_>, Vec<_>) = sourced_rows
+            .into_iter()
+            .map(|(role, login, content, channel)| ((role, login, content), channel))
+            .unzip();
         if rows.len() < REFLECT_MIN_TURNS {
             return None;
         }
@@ -252,6 +266,7 @@ impl SoulStore {
         }
         let transcript = build_transcript(&rows);
         let raw = llm
+            .for_channels(channels)
             .raw_completion_tracked(
                 ANCHOR_SYS,
                 &anchor_user_prompt(&transcript),
@@ -304,7 +319,10 @@ mod tests {
         assert!(rookie.contains("kein Fachwissen"));
 
         // Nur Takes und Rookie-Modus: nichts bleibt übrig.
-        assert_eq!(build_soul_fragment_for(Some("mag Haze"), &[], PersonaMode::Rookie), "");
+        assert_eq!(
+            build_soul_fragment_for(Some("mag Haze"), &[], PersonaMode::Rookie),
+            ""
+        );
 
         // Veteran bleibt unberührt.
         let veteran = build_soul_fragment_for(Some("mag Haze"), &anchors, PersonaMode::Veteran);
@@ -313,12 +331,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(crate::test_sql::drop_schema(schema, true)).execute(&admin).await.unwrap();
-        sqlx::query(crate::test_sql::create_schema(schema, false)).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(crate::test_sql::create_schema(schema, false))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_engagement_soul (\
              id BIGSERIAL PRIMARY KEY, kind TEXT NOT NULL, content TEXT NOT NULL, \
@@ -355,13 +389,20 @@ mod tests {
             Some("kurzer merker".to_string())
         );
         // identisch zum letzten Anker → None
-        assert_eq!(process_anchor_text("gleicher anker", Some("Gleicher Anker")), None);
+        assert_eq!(
+            process_anchor_text("gleicher anker", Some("Gleicher Anker")),
+            None
+        );
     }
 
     #[test]
     fn transcript_who_und_kuerzung() {
         let rows = vec![
-            ("user".to_string(), Some("chatter".to_string()), "hi".to_string()),
+            (
+                "user".to_string(),
+                Some("chatter".to_string()),
+                "hi".to_string(),
+            ),
             ("assistant".to_string(), None, "antwort".to_string()),
             ("user".to_string(), None, "ohne login".to_string()),
         ];
@@ -373,7 +414,9 @@ mod tests {
 
     #[tokio::test]
     async fn reflect_speichert_anker() {
-        let Some(pool) = make_pool("t_eng_soul_reflect").await else { return };
+        let Some(pool) = make_pool("t_eng_soul_reflect").await else {
+            return;
+        };
         // 8 Turns inkl. einem Assistant-Turn.
         sqlx::query(
             "INSERT INTO twitch_engagement_conversation (channel_login, role, twitch_login, content) VALUES \
@@ -403,13 +446,18 @@ mod tests {
         let store = SoulStore::new(pool.clone());
         let anchor = store.reflect_and_store_anchor(&llm).await;
         assert_eq!(anchor.as_deref(), Some("der dive war echt wild")); // Quotes weg
-        // Persistiert → taucht im Fragment auf.
-        assert!(store.get_soul_extension_fragment().await.contains("der dive war echt wild"));
+                                                                       // Persistiert → taucht im Fragment auf.
+        assert!(store
+            .get_soul_extension_fragment()
+            .await
+            .contains("der dive war echt wild"));
     }
 
     #[tokio::test]
     async fn reflect_zu_wenig_turns_none() {
-        let Some(pool) = make_pool("t_eng_soul_reflect_few").await else { return };
+        let Some(pool) = make_pool("t_eng_soul_reflect_few").await else {
+            return;
+        };
         sqlx::query(
             "INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES \
              ('nani','assistant','a'),('nani','user','b')",
@@ -424,15 +472,26 @@ mod tests {
             None,
         );
         // < 8 Turns → None, ohne KI zu rufen.
-        assert_eq!(SoulStore::new(pool).reflect_and_store_anchor(&llm).await, None);
+        assert_eq!(
+            SoulStore::new(pool).reflect_and_store_anchor(&llm).await,
+            None
+        );
     }
 
     #[tokio::test]
     async fn store_und_fragment_aus_db() {
-        let Some(pool) = make_pool("t_eng_soul").await else { return };
+        let Some(pool) = make_pool("t_eng_soul").await else {
+            return;
+        };
         let store = SoulStore::new(pool.clone());
-        store.store_soul_entry("hero_takes", "Haze ist mein liebling").await.unwrap();
-        store.store_soul_entry("anchor", "der dive war wild").await.unwrap();
+        store
+            .store_soul_entry("hero_takes", "Haze ist mein liebling")
+            .await
+            .unwrap();
+        store
+            .store_soul_entry("anchor", "der dive war wild")
+            .await
+            .unwrap();
 
         let frag = store.get_soul_extension_fragment().await;
         assert!(frag.contains("Haze ist mein liebling"));
@@ -441,7 +500,9 @@ mod tests {
 
     #[tokio::test]
     async fn anchor_pruning_haelt_30() {
-        let Some(pool) = make_pool("t_eng_soul_prune").await else { return };
+        let Some(pool) = make_pool("t_eng_soul_prune").await else {
+            return;
+        };
         let store = SoulStore::new(pool.clone());
         // 32 Anker mit aufsteigender created_at, damit das DESC-Pruning deterministisch ist.
         for i in 0..32 {

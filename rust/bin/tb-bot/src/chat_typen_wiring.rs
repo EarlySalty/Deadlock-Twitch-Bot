@@ -59,9 +59,11 @@ async fn lauf(pool: &sqlx::PgPool, zaehler: &mut TagesZaehler) -> Result<(), sql
 
     let mut regel_rows: Vec<(i64, Nachrichtentyp, &str, Option<String>)> = Vec::new();
     let mut offen: Vec<(i64, String)> = Vec::new();
-    for (id, content, login) in &unlabelte {
+    let mut sources = std::collections::HashMap::new();
+    for (id, content, login, channel, allowed) in &unlabelte {
         let typ = klassifiziere_regel(content, login);
-        if ist_modellkandidat(typ, content) {
+        if *allowed && ist_modellkandidat(typ, content) {
+            sources.insert(*id, channel.clone());
             offen.push((*id, content.clone()));
         } else {
             regel_rows.push((*id, typ, "regel", None));
@@ -83,7 +85,11 @@ async fn lauf(pool: &sqlx::PgPool, zaehler: &mut TagesZaehler) -> Result<(), sql
         }
         zaehler.zaehle();
         modell_aufrufe += 1;
-        match klassifiziere_modell(paket).await {
+        let channels: Vec<_> = paket
+            .iter()
+            .filter_map(|(id, _)| sources.get(id).cloned())
+            .collect();
+        match klassifiziere_modell(paket, &channels).await {
             Ok((ergebnis, modell)) => {
                 fehler_serie = 0;
                 let rows: Vec<(i64, Nachrichtentyp, &str, Option<String>)> = ergebnis

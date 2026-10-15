@@ -24,7 +24,11 @@ kein Vorwort, keine Meta.";
 
 /// Build-Prompt aus den gepoolten Nachrichten (Python `_build_user_prompt`).
 fn build_user_prompt(lines: &[String]) -> String {
-    let block = lines.iter().map(|m| format!("- {m}")).collect::<Vec<_>>().join("\n");
+    let block = lines
+        .iter()
+        .map(|m| format!("- {m}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     format!(
         "Hier echte Twitch-Chat-Nachrichten aus mehreren Deadlock-Streams (zusammengeworfen). \
          Destillier in 3-6 knappen Stichpunkten, wie sich Deadlock GERADE anfühlt — Stimmung, \
@@ -57,21 +61,22 @@ impl GlobalSentiment {
         Self { pool }
     }
 
-    async fn load_pooled(&self) -> Vec<String> {
-        sqlx::query_scalar!(
-            r#"SELECT content AS "content!" FROM twitch_engagement_conversation
+    async fn load_pooled(&self) -> Vec<(String, String)> {
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT content, channel_login FROM twitch_engagement_conversation
              WHERE role = 'user' AND ts > NOW() - make_interval(hours => $1)
-             ORDER BY ts DESC LIMIT $2"#,
-            POOL_MAX_AGE_HOURS,
-            POOL_LIMIT
+               AND public.twitch_streamer_ai_allowed(NULL, channel_login)
+             ORDER BY ts DESC LIMIT $2",
         )
+        .bind(POOL_MAX_AGE_HOURS)
+        .bind(POOL_LIMIT)
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|c| {
-            let t = c.trim().to_string();
-            (t.chars().count() > 3).then_some(t)
+        .filter_map(|(content, channel)| {
+            let text = content.trim().to_string();
+            (text.chars().count() > 3).then_some((text, channel))
         })
         .collect()
     }
@@ -122,16 +127,17 @@ impl GlobalSentiment {
 
     /// Pool über alle Channels → KI-Destillation → persistieren
     /// (Hintergrund-Job). Liefert den Text oder None.
-    pub async fn rebuild_global_sentiment(
-        &self,
-        llm: &EngagementLlmClient,
-    ) -> Option<String> {
-        let lines = self.load_pooled().await;
+    pub async fn rebuild_global_sentiment(&self, llm: &EngagementLlmClient) -> Option<String> {
+        let (lines, channels): (Vec<_>, Vec<_>) = self.load_pooled().await.into_iter().unzip();
         if lines.len() < MIN_MSGS_TO_BUILD {
-            tracing::info!(msgs = lines.len(), "GlobalSentiment: zu wenig Material, skip");
+            tracing::info!(
+                msgs = lines.len(),
+                "GlobalSentiment: zu wenig Material, skip"
+            );
             return None;
         }
         let (raw, model) = llm
+            .for_channels(channels)
             .raw_completion_with_model(
                 SYS,
                 &build_user_prompt(&lines),
@@ -147,7 +153,11 @@ impl GlobalSentiment {
             return None;
         }
         self.store(text, lines.len() as i64, &model).await.ok()?;
-        tracing::info!(msgs = lines.len(), chars = text.chars().count(), "GlobalSentiment: neu gebaut");
+        tracing::info!(
+            msgs = lines.len(),
+            chars = text.chars().count(),
+            "GlobalSentiment: neu gebaut"
+        );
         Some(text.to_string())
     }
 }
@@ -172,12 +182,28 @@ mod tests {
 
     async fn make_pool(schema: &str) -> Option<PgPool> {
         let dsn = std::env::var("TB_TEST_DATABASE_URL").ok()?;
-        let admin = PgPoolOptions::new().max_connections(1).connect(&dsn).await.unwrap();
-        sqlx::query(crate::test_sql::drop_schema(schema, true)).execute(&admin).await.unwrap();
-        sqlx::query(crate::test_sql::create_schema(schema, false)).execute(&admin).await.unwrap();
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&dsn)
+            .await
+            .unwrap();
+        sqlx::query(crate::test_sql::drop_schema(schema, true))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(crate::test_sql::create_schema(schema, false))
+            .execute(&admin)
+            .await
+            .unwrap();
         admin.close().await;
-        let opts = PgConnectOptions::from_str(&dsn).unwrap().options([("search_path", schema)]);
-        let pool = PgPoolOptions::new().max_connections(2).connect_with(opts).await.unwrap();
+        let opts = PgConnectOptions::from_str(&dsn)
+            .unwrap()
+            .options([("search_path", schema)]);
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE twitch_engagement_conversation (\
              id BIGSERIAL PRIMARY KEY, channel_login TEXT, role TEXT, content TEXT, \
@@ -199,7 +225,9 @@ mod tests {
 
     #[tokio::test]
     async fn rebuild_und_fragment_e2e() {
-        let Some(pool) = make_pool("t_eng_sentiment").await else { return };
+        let Some(pool) = make_pool("t_eng_sentiment").await else {
+            return;
+        };
         // 8 User-Msgs über mehrere Channels.
         for i in 0..8 {
             sqlx::query("INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES ($1, 'user', $2)")
@@ -227,15 +255,20 @@ mod tests {
 
         let gs = GlobalSentiment::new(pool.clone());
         let text = gs.rebuild_global_sentiment(&llm).await;
-        assert_eq!(text.as_deref(), Some("- meta ist grad spicy\n- haze gefeiert")); // <think> raus
-        // Frisches Fragment.
+        assert_eq!(
+            text.as_deref(),
+            Some("- meta ist grad spicy\n- haze gefeiert")
+        ); // <think> raus
+           // Frisches Fragment.
         let frag = gs.get_sentiment_fragment(FRESH_MAX_AGE_HOURS).await;
         assert!(frag.contains("- meta ist grad spicy"));
     }
 
     #[tokio::test]
     async fn rebuild_zu_wenig_none() {
-        let Some(pool) = make_pool("t_eng_sentiment_few").await else { return };
+        let Some(pool) = make_pool("t_eng_sentiment_few").await else {
+            return;
+        };
         sqlx::query("INSERT INTO twitch_engagement_conversation (channel_login, role, content) VALUES ('a','user','eine lange nachricht')")
             .execute(&pool).await.unwrap();
         let llm = EngagementLlmClient::new(
@@ -244,6 +277,11 @@ mod tests {
             Some("m".to_string()),
             None,
         );
-        assert_eq!(GlobalSentiment::new(pool).rebuild_global_sentiment(&llm).await, None);
+        assert_eq!(
+            GlobalSentiment::new(pool)
+                .rebuild_global_sentiment(&llm)
+                .await,
+            None
+        );
     }
 }

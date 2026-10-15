@@ -32,6 +32,8 @@
 //! Schlüssel kommen ausschließlich aus der Umgebung (Infisical/systemd) über
 //! den konsolidierten Resolver [`keys`] und werden NIE geloggt.
 
+pub mod ai_guard;
+pub use ai_guard::streamer_ai_allowed;
 pub mod brain_route;
 pub mod daily_model_resolver;
 pub mod hub;
@@ -49,3 +51,10 @@ pub use hub::{
     Request, Response,
 };
 pub use selection::{endpoint_chain, endpoint_for, LlmEndpoint};
+
+#[cfg(test)]
+#[path = "../../../test-support/ai_policy.rs"]
+mod ai_test_policy;
+
+#[cfg(test)]
+extern crate self as tb_llm;

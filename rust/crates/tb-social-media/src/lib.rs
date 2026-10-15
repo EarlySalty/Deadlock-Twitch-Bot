@@ -126,3 +126,7 @@ mod test_sql;
 
 #[cfg(test)]
 mod autopilot_compatibility_tests;
+
+#[cfg(test)]
+#[path = "../../../test-support/ai_policy.rs"]
+mod ai_test_policy;

@@ -1,3 +1,4 @@
+import { useAiFeatures } from '@/hooks/useAiFeatures';
 import { useState, useRef } from 'react';
 import { useLanguage } from '@/context/LanguageContext';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -74,7 +75,7 @@ function getPriorityConfig(priority: string) {
 
 type GameFilter = 'deadlock' | 'all';
 
-export function AIAnalysis({ streamer, days }: AIAnalysisProps) {
+function AIAnalysisContent({ streamer, days }: AIAnalysisProps) {
   const { t, locale } = useLanguage();
   const { data: authStatus, isLoading: loadingAuth } = useAuthStatus();
   const { hasEntitlement } = usePlan();
@@ -851,3 +852,8 @@ function HistoryPanel({ history, activeId, onRestore }: HistoryPanelProps) {
 }
 
 export default AIAnalysis;
+
+export function AIAnalysis(props: AIAnalysisProps) {
+  const enabled = useAiFeatures(props.streamer);
+  return enabled ? <AIAnalysisContent {...props} /> : null;
+}

@@ -201,8 +201,14 @@ fn karte_letzter_stream(letzter: &Value) -> Option<String> {
         return None;
     }
     let datum = letzter.get("date").and_then(Value::as_str).unwrap_or("");
-    let avg = letzter.get("avg_viewers").and_then(Value::as_f64).unwrap_or(0.0);
-    let peak = letzter.get("peak_viewers").and_then(Value::as_i64).unwrap_or(0);
+    let avg = letzter
+        .get("avg_viewers")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let peak = letzter
+        .get("peak_viewers")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
     let follower = letzter
         .get("follower_delta")
         .and_then(Value::as_i64)
@@ -240,7 +246,10 @@ fn karte_raids(raids: &[Value]) -> Option<String> {
             .get("target_login")
             .and_then(Value::as_str)
             .unwrap_or("");
-        let zuschauer = raid.get("viewer_count").and_then(Value::as_i64).unwrap_or(0);
+        let zuschauer = raid
+            .get("viewer_count")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
         if ziel.is_empty() {
             zeilen.push(format!("{datum}: Raid mit {zuschauer} Zuschauern"));
         } else {
@@ -251,9 +260,7 @@ fn karte_raids(raids: &[Value]) -> Option<String> {
 }
 
 fn karte_ban_zaehler(anzahl: i64) -> String {
-    format!(
-        "### Entfernte Spam- und Scam-Konten der letzten 30 Tage\nAnzahl: {anzahl}"
-    )
+    format!("### Entfernte Spam- und Scam-Konten der letzten 30 Tage\nAnzahl: {anzahl}")
 }
 
 fn karte_schutzschalter(settings: &ModerationSettings) -> String {
@@ -314,13 +321,7 @@ fn sprachregel(language: &str) -> &'static str {
     }
 }
 
-fn baue_system_prompt(
-    name: &str,
-    language: &str,
-    page: &str,
-    facts: &str,
-    karten: &str,
-) -> String {
+fn baue_system_prompt(name: &str, language: &str, page: &str, facts: &str, karten: &str) -> String {
     let seite = if page.trim().is_empty() {
         "unbekannt"
     } else {
@@ -373,7 +374,13 @@ fn karten_nicht_verfuegbar(language: &str) -> String {
     }
 }
 
-fn baue_antwort(answer: &str, parts: &[String], sources: &[String], grounded: bool, page: &str) -> Value {
+fn baue_antwort(
+    answer: &str,
+    parts: &[String],
+    sources: &[String],
+    grounded: bool,
+    page: &str,
+) -> Value {
     json!({
         "answer": answer,
         "parts": parts,
@@ -439,11 +446,18 @@ pub async fn ask(
     let login = login_roh.trim().to_lowercase();
     let user_id = user_id_roh.trim().to_string();
     let display_name = anzeigename(&auth);
+    if let Some(resp) = super::ai_switch::blocked(&pool, Some(&user_id), Some(&login)).await {
+        return resp;
+    }
 
     let value: Value = match serde_json::from_str(&body) {
         Ok(v) => v,
         Err(_) => {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_json" }))).into_response()
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "invalid_json" })),
+            )
+                .into_response()
         }
     };
 
@@ -598,6 +612,7 @@ pub async fn ask(
             .total_deadline(Duration::from_secs(MODEL_TIMEOUT_SEC))
             .strip_think()
             .accept(|text| !output_unusable(text))
+            .twitch_broadcaster(user_id.clone())
             .ledger_purpose("dashboard-assistent"),
     )
     .await;
@@ -620,7 +635,9 @@ pub async fn ask(
                 );
                 return (
                     StatusCode::BAD_GATEWAY,
-                    Json(json!({ "error": "model_unavailable", "message": fehler_text(&language) })),
+                    Json(
+                        json!({ "error": "model_unavailable", "message": fehler_text(&language) }),
+                    ),
                 )
                     .into_response();
             }
@@ -668,7 +685,14 @@ pub async fn ask(
         ),
     );
 
-    Json(baue_antwort(&text, &parts, &grounding.sources, grounded, &page)).into_response()
+    Json(baue_antwort(
+        &text,
+        &parts,
+        &grounding.sources,
+        grounded,
+        &page,
+    ))
+    .into_response()
 }
 
 #[cfg(test)]
@@ -723,7 +747,9 @@ mod tests {
     #[test]
     fn geheimnis_filter_verwirft_lange_zufallskette() {
         let kette = "x".repeat(40);
-        assert!(!karten_sind_frei_von_geheimnissen(&format!("Wert: {kette}")));
+        assert!(!karten_sind_frei_von_geheimnissen(&format!(
+            "Wert: {kette}"
+        )));
     }
 
     #[test]
@@ -738,7 +764,10 @@ mod tests {
         for i in 0..(RATE_DAY_MAX - 2) {
             assert!(tag.allow(uid, 1000.0 + i as f64), "Tages-Treffer {i} frei");
         }
-        assert!(!tag.allow(uid, 5000.0), "Tageslimit nach genau max erreicht");
+        assert!(
+            !tag.allow(uid, 5000.0),
+            "Tageslimit nach genau max erreicht"
+        );
     }
 
     #[test]
@@ -806,7 +835,10 @@ mod tests {
     fn rate_limiter_blockt_nach_zwanzig() {
         let rl = RateLimiter::new(RATE_MINUTE_WINDOW, RATE_MINUTE_MAX);
         for i in 0..RATE_MINUTE_MAX {
-            assert!(rl.allow("42", i as f64 * 0.1), "Treffer {i} im Fenster erlaubt");
+            assert!(
+                rl.allow("42", i as f64 * 0.1),
+                "Treffer {i} im Fenster erlaubt"
+            );
         }
         assert!(!rl.allow("42", 2.5), "Treffer 21 im Fenster blockt");
         assert!(rl.allow("99", 2.5), "anderer Streamer unabhängig");
@@ -951,7 +983,10 @@ mod tests {
 
         let uplink = karte_uplink(
             Some("live"),
-            &[("twitch".to_string(), "verbunden"), ("kick".to_string(), "getrennt")],
+            &[
+                ("twitch".to_string(), "verbunden"),
+                ("kick".to_string(), "getrennt"),
+            ],
         )
         .expect("Uplink-Karte");
         assert!(uplink.contains("Livestatus: live"));

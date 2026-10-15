@@ -494,6 +494,9 @@ pub async fn suggest_handler(
         Err(resp) => return resp.into_response(),
     };
 
+    if let Some(response) = super::ai_switch::blocked(&pool, Some(&user_id), None).await {
+        return response;
+    }
     let history = title_db::get_streamer_title_history(&pool, &user_id, 30).await;
     let own_avg = title_db::get_streamer_avg_viewers(&pool, &user_id).await;
     let analysis: Vec<serde_json::Value> = history
@@ -635,6 +638,9 @@ pub async fn insights_handler(
         Err(resp) => return resp.into_response(),
     };
 
+    if let Some(response) = super::ai_switch::blocked(&pool, Some(&user_id), None).await {
+        return response;
+    }
     match title_db::get_latest_insight(&pool, &user_id).await {
         Ok(insight) => Json(json!({"insight": insight})).into_response(),
         Err(e) => {

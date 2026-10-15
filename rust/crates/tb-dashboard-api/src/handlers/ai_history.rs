@@ -75,6 +75,9 @@ pub async fn ai_history_handler(
         )
             .into_response();
     }
+    if let Some(response) = super::ai_switch::blocked(&pool, None, Some(&streamer)).await {
+        return response;
+    }
     let limit = params.limit.unwrap_or(20).clamp(1, 50) as i64;
 
     match tb_analytics::ai_history::load_ai_history(&pool, &streamer, limit).await {
