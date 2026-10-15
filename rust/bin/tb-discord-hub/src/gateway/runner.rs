@@ -120,7 +120,7 @@ pub(crate) async fn run(
         config.pool,
     ));
     let (tx, rx) = mpsc::unbounded_channel();
-    let worker = tokio::spawn(sink_worker(rx, sink));
+    let mut worker = tokio::spawn(sink_worker(rx, sink));
 
     let result = Runner {
         session: Session::new(config.bot_token, protocol::INTENTS),
@@ -131,8 +131,13 @@ pub(crate) async fn run(
     .run_loop()
     .await;
 
-    worker.abort();
-    let _ = worker.await;
+    if tokio::time::timeout(Duration::from_secs(5), &mut worker)
+        .await
+        .is_err()
+    {
+        worker.abort();
+        let _ = worker.await;
+    }
     result
 }
 
