@@ -416,6 +416,7 @@ export default function App() {
     (isAnalyticsRoute && new URLSearchParams(window.location.search).get('view') === 'category');
 
   const zeigeAssistent =
+    path === PREVIEW_HOME_ROUTE &&
     !isPreviewModeEnabled() &&
     !hasDemoRuntimeConfig() &&
     !resolveEffectiveDemoMode({
@@ -469,7 +470,7 @@ export default function App() {
           )}
         </OnboardingProvider>
         </ErrorBoundary>
-        {zeigeAssistent && <DashboardAssistent imDokumentfluss={isUplinkRoute} />}
+        {zeigeAssistent && <DashboardAssistent />}
       </LanguageProvider>
     </QueryClientProvider>
   );
