@@ -52,7 +52,11 @@ async fn call(
     let body = match body {
         Some(body) => {
             request = request
-                .method("POST")
+                .method(if path == "/external-consent" {
+                    "PUT"
+                } else {
+                    "POST"
+                })
                 .header("Content-Type", "application/json");
             Body::from(body.to_string())
         }
@@ -77,7 +81,7 @@ async fn data(response: Response) -> Value {
 #[tokio::test]
 async fn m4_registered_routes_enforce_real_admin_session_and_csrf() {
     let (database, state, app) = fixture().await;
-    for path in ["/usage", "/limits"] {
+    for path in ["/usage", "/limits", "/external-consent"] {
         assert_eq!(
             call(&app, path, None, None, None).await.status(),
             StatusCode::UNAUTHORIZED
@@ -289,5 +293,135 @@ fn m4_strict_write_contract_rejects_cap_actor_and_unknown_fields() {
     assert_eq!(
         limit_error(LimitError::Conflict).status,
         StatusCode::CONFLICT
+    );
+}
+
+#[tokio::test]
+async fn external_consent_requires_admin_csrf_and_records_actor() {
+    let (database, state, app) = fixture().await;
+    sqlx::raw_sql("CREATE TABLE social_media_settings(key TEXT PRIMARY KEY,value JSONB,updated_at TIMESTAMPTZ,updated_by TEXT)")
+        .execute(&database.pool).await.expect("settings table");
+    assert_eq!(
+        call(
+            &app,
+            "/external-consent",
+            Some(json!({"enabled":true})),
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    sqlx::query("INSERT INTO public.twitch_partners(id,twitch_login,twitch_user_id) VALUES(101,'fixture','101')").execute(&database.pool).await.expect("partner");
+    let partner = state
+        .create_partner_session("fixture", "101", "Fixture")
+        .await
+        .expect("partner session");
+    let cookie = format!(
+        "{}={}",
+        crate::auth::session::PARTNER_COOKIE_NAME,
+        partner.session_id
+    );
+    assert_eq!(
+        call(&app, "/external-consent", None, Some(&cookie), None)
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &app,
+            "/external-consent",
+            Some(json!({"enabled":true})),
+            Some(&cookie),
+            Some(&partner.csrf_token)
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    let admin = state
+        .create_admin_session("42", "fixture-admin")
+        .await
+        .expect("admin session");
+    let cookie = format!(
+        "{}={}",
+        crate::auth::session::ADMIN_COOKIE_NAME,
+        admin.session_id
+    );
+    assert_eq!(
+        data(call(&app, "/external-consent", None, Some(&cookie), None).await).await["enabled"],
+        false
+    );
+    assert_eq!(
+        call(
+            &app,
+            "/external-consent",
+            Some(json!({"enabled":true})),
+            Some(&cookie),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    for enabled in [true, false] {
+        let body = json!({"enabled":enabled,"csrf_token":admin.csrf_token});
+        assert_eq!(
+            data(
+                call(
+                    &app,
+                    "/external-consent",
+                    Some(body),
+                    Some(&cookie),
+                    Some(&admin.csrf_token)
+                )
+                .await
+            )
+            .await["enabled"],
+            enabled
+        );
+        assert_eq!(
+            tb_social_media::settings::external_llm_consent(&database.pool).await,
+            enabled
+        );
+        let actor: String = sqlx::query_scalar(
+            "SELECT updated_by FROM social_media_settings WHERE key='external_llm_consent'",
+        )
+        .fetch_one(&database.pool)
+        .await
+        .expect("saved actor");
+        assert_eq!(actor, "discord:42");
+    }
+    assert_eq!(
+        call(
+            &app,
+            "/external-consent",
+            Some(json!({"enabled":"true","csrf_token":admin.csrf_token})),
+            Some(&cookie),
+            Some(&admin.csrf_token)
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    sqlx::query("UPDATE social_media_settings SET value='\"true\"'::jsonb")
+        .execute(&database.pool)
+        .await
+        .expect("non boolean");
+    assert_eq!(
+        data(call(&app, "/external-consent", None, Some(&cookie), None).await).await["enabled"],
+        false
+    );
+    sqlx::query("DROP TABLE social_media_settings")
+        .execute(&database.pool)
+        .await
+        .expect("unavailable settings");
+    assert_eq!(
+        call(&app, "/external-consent", None, Some(&cookie), None)
+            .await
+            .status(),
+        StatusCode::SERVICE_UNAVAILABLE
     );
 }
