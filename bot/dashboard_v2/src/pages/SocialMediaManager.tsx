@@ -26,8 +26,8 @@ const SocialMediaPage = import.meta.env.MODE === 'preview'
 export function SocialMediaManager() {
   const t = useT();
   useEffect(() => {
-    document.title = 'Social-Media-Manager';
-  }, []);
+    document.title = t('Social-Media-Manager');
+  }, [t]);
 
   const [streamerUserId, setStreamerUserId] = useState('');
   const requestedChannel = useRef(new URLSearchParams(window.location.search));
