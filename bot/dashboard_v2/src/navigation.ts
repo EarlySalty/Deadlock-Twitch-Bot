@@ -1,4 +1,5 @@
 import type { MouseEvent } from 'react';
+import { readInitialLanguage, translate } from './i18n/dictionary';
 import {
   PREVIEW_ANALYTICS_ROUTE,
   PREVIEW_HOME_ROUTE,
@@ -36,9 +37,25 @@ export function navigateDashboard(event: MouseEvent<HTMLAnchorElement>) {
   window.scrollTo(0, 0);
 }
 
-export function subscribeNavigation(listener: () => void) {
-  window.addEventListener('popstate', listener);
-  return () => window.removeEventListener('popstate', listener);
+export function subscribeNavigation(
+  listener: () => void,
+  confirmDiscard = () => window.confirm(translate(readInitialLanguage(), 'Ungespeicherte Änderungen verwerfen?')),
+) {
+  let currentUrl = window.location.href;
+  const onNavigate = () => {
+    const unload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(unload);
+    const saving = document.querySelector('[data-saving="true"]');
+    const dirty = document.querySelector('[data-unsaved="true"]') || unload.defaultPrevented;
+    if (saving || (dirty && !confirmDiscard())) {
+      window.history.pushState(null, '', currentUrl);
+      return;
+    }
+    currentUrl = window.location.href;
+    listener();
+  };
+  window.addEventListener('popstate', onNavigate);
+  return () => window.removeEventListener('popstate', onNavigate);
 }
 
 export function navigationSnapshot() {
