@@ -5,7 +5,6 @@ import {
   CalendarDays,
   CheckCircle2,
   Clock3,
-  ExternalLink,
   Eye,
   Gamepad2,
   Link2,
@@ -16,7 +15,6 @@ import {
   Save,
   Sparkles,
   UserRound,
-  UsersRound,
 } from 'lucide-react';
 import {
   fetchPartnerProfile,
@@ -151,10 +149,17 @@ export function ProfileEditor({
   const [month, setMonth] = useState(() => berlinInput(new Date().toISOString()).slice(0, 7));
   const [draft, setDraft] = useState<EventDraft | null>(null);
   const [eventError, setEventError] = useState('');
+  const [featuredInput, setFeaturedInput] = useState('');
+  const [showAllTwitch, setShowAllTwitch] = useState(false);
+  const [calendarToggle, setCalendarToggle] = useState<{ month: string; open: boolean } | null>(null);
 
   const profile = data.profile;
   const twitch = data.twitch;
   const calendar = monthDays(month);
+  const calendarOpen = calendarToggle?.month === month ? calendarToggle.open : profile.events.some(event =>
+    berlinInput(event.starts_at).slice(0, 7) <= month &&
+    berlinInput(new Date(Date.parse(event.ends_at) - 1).toISOString()).slice(0, 7) >= month,
+  );
   const locked = saving || importing || !data.active;
   const effectiveAvatar = twitch?.profile_image_url?.trim() || twitchAvatarUrl?.trim() || profile.avatar_url.trim();
   const completionChecks = [
@@ -182,6 +187,16 @@ export function ProfileEditor({
     setData(current => ({ ...current, profile: { ...current.profile, ...values } }));
     setDirty(true);
     setNotice('');
+  }
+
+  function addFeatured() {
+    const names = [...profile.featured];
+    for (const raw of featuredInput.split(',')) {
+      const name = raw.trim().replace(/^@+/, '');
+      if (name && !names.some(value => value.toLowerCase() === name.toLowerCase()) && names.length < 6) names.push(name);
+    }
+    if (names.length !== profile.featured.length) change({ featured: names });
+    setFeaturedInput('');
   }
 
   async function importFromTwitch() {
@@ -290,44 +305,27 @@ export function ProfileEditor({
   }
 
   return (
-    <div className="mx-auto max-w-[1320px] space-y-5">
+    <div className="w-full space-y-6">
       <section className={panel}>
-        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-          <div className="flex min-w-0 items-start gap-4">
-            <Avatar url={effectiveAvatar} login={data.login} />
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <span title={t("Wird automatisch aus deinem Twitch-Konto übernommen.")}>
+              <Avatar url={effectiveAvatar} login={data.login} size="small" />
+            </span>
             <div className="min-w-0">
-              <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-primary">
-                {t("Dein Platz im Partnernetzwerk")}</div>
-              <h1 className="display-font mt-1 text-2xl font-extrabold text-white">{t("Mein öffentliches Profil")}</h1>
-              <p className="mt-2 max-w-2xl text-sm leading-relaxed text-text-secondary">
-                {t("Stell dich als Streamer vor, verlinke deine Kanäle und plane Termine für deine Community.")}</p>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <span className="rounded-full border border-border bg-background/60 px-2.5 py-1 text-xs font-semibold text-text-secondary">
-                  @{data.login}
-                </span>
-                <span
-                  className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${
-                    !data.active
-                      ? 'border-warning/30 bg-warning/10 text-warning'
-                      : savedPublished
-                        ? 'border-success/30 bg-success/10 text-success'
-                        : 'border-border bg-background/60 text-text-secondary'
-                  }`}
-                >
-                  {!data.active
-                    ? t("Bot derzeit nicht aktiv")
-                    : savedPublished
-                      ? t("Profil veröffentlicht")
-                      : t("Noch nicht veröffentlicht")}
-                </span>
+              <h2 className="display-font text-lg font-bold text-white">{t("Mein öffentliches Profil")}</h2>
+              <p className="text-xs text-text-secondary">@{data.login}</p>
+              <div className="break-all text-xs text-text-secondary">
+                {data.active && savedPublished ? (
+                  <a href={data.public_path} target="_blank" rel="noopener noreferrer" className="hover:text-primary">deutsche-deadlock-community.de{data.public_path} ↗</a>
+                ) : <span>deutsche-deadlock-community.de{data.public_path}</span>}
               </div>
             </div>
           </div>
-
-          <div className="flex w-full flex-col gap-3 xl:w-auto xl:min-w-[340px]">
-            <label className="soft-elevate flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-background/60 p-3.5">
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex cursor-pointer flex-wrap items-center gap-2 text-sm font-semibold text-white">
               <input
-                className="mt-0.5 h-5 w-5 accent-primary"
+                className="h-5 w-5 accent-primary"
                 type="checkbox"
                 disabled={locked}
                 checked={data.published}
@@ -337,82 +335,34 @@ export function ProfileEditor({
                   setNotice('');
                 }}
               />
-              <span className="min-w-0">
-                <span className="block text-sm font-bold text-white">{t("Profil veröffentlichen")}</span>
-                <span className="mt-0.5 block text-xs leading-relaxed text-text-secondary">
-                  {t("Ausgeschaltet bleibt dein Profil ein privater Entwurf.")}</span>
+              {t("Profil veröffentlichen")}
+              <span
+                title={!savedPublished ? t("Noch nicht veröffentlicht") : undefined}
+                className={`rounded-full px-2 py-1 text-xs ${!data.active ? 'bg-warning/10 text-warning' : savedPublished ? 'bg-success/10 text-success' : 'bg-background/60 text-text-secondary'}`}
+              >
+                {!data.active ? t("Bot derzeit nicht aktiv") : savedPublished ? t("Veröffentlicht") : t("Entwurf")}
               </span>
             </label>
             <button
               type="button"
-              disabled={locked || !dirty || Boolean(draft)}
-              className={primaryButton}
-              onClick={() => void save()}
+              className={secondaryButton}
+              disabled={locked}
+              onClick={() => void importFromTwitch()}
+              title={t("Lädt Twitch-Bio, Profilbild, Banner und Streamplan neu. Zusätzliche Social-Links stellt Twitch hier nicht bereit.")}
             >
-              <Save className="h-4 w-4" />
-              {saving ? t("Wird gespeichert …") : t("Änderungen speichern")}
+              <RefreshCw className={`h-4 w-4 ${importing ? 'animate-spin' : ''}`} />
+              {importing ? t("Twitch wird aktualisiert") : t("Aus Twitch importieren")}
             </button>
-            <p className="text-right text-xs text-text-secondary" role="status">
-              {draft
-                ? t("Offenen Termin zuerst übernehmen oder abbrechen.")
-                : dirty
-                  ? t("Ungespeicherte Änderungen")
-                  : t("Gespeicherter Stand")}
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
-          <div className="panel-inset flex min-w-0 flex-wrap items-center gap-3 rounded-xl px-4 py-3">
-            <div className="min-w-0 flex-1">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-secondary">{t("Öffentliche Adresse")}</p>
-              <code className="mt-1 block truncate text-xs text-white">deutsche-deadlock-community.de{data.public_path}</code>
-            </div>
-            {data.active && savedPublished ? (
-              <a
-                href={data.public_path}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={secondaryButton}
-              >
-                {t("Profil öffnen")}
-                <ExternalLink className="h-4 w-4" />
-              </a>
-            ) : null}
-          </div>
-          <div className="panel-inset flex items-center gap-3 rounded-xl px-4 py-3">
-            <Avatar url={effectiveAvatar} login={data.login} size="small" />
             <div>
-              <p className="text-sm font-semibold text-white">{t("Profilbild von Twitch")}</p>
-              <p className="mt-0.5 text-xs text-text-secondary">{t("Wird automatisch aus deinem Twitch-Konto übernommen.")}</p>
+              <button type="button" disabled={locked || !dirty || Boolean(draft)} className={primaryButton} onClick={() => void save()}>
+                <Save className="h-4 w-4" />{saving ? t("Wird gespeichert …") : t("Änderungen speichern")}
+              </button>
+              <p className="mt-1 text-xs text-text-secondary" role="status">
+                {draft ? t("Offenen Termin zuerst übernehmen oder abbrechen.") : dirty ? t("Ungespeicherte Änderungen") : t("Gespeicherter Stand")}
+              </p>
             </div>
           </div>
         </div>
-
-        <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
-          <div className="panel-inset rounded-xl px-4 py-3.5">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <p className="text-sm font-bold text-white">{t("Profil zu {p0}% vollständig", { p0: completion })}</p>
-                <p className="mt-0.5 text-xs text-text-secondary">{t("Überschrift, Bio, Deadlock-Angaben, Links und Streamplan zählen in die Einrichtung.")}</p>
-              </div>
-              {completion === 100 ? <CheckCircle2 className="h-5 w-5 shrink-0 text-success" /> : null}
-            </div>
-            <div className="mt-3 h-2 overflow-hidden rounded-full bg-background">
-              <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${completion}%` }} />
-            </div>
-          </div>
-          <button
-            type="button"
-            className={secondaryButton}
-            disabled={locked}
-            onClick={() => void importFromTwitch()}
-          >
-            <RefreshCw className={`h-4 w-4 ${importing ? 'animate-spin' : ''}`} />
-            {importing ? t("Twitch wird aktualisiert") : t("Aus Twitch importieren")}
-          </button>
-        </div>
-        <p className="mt-2 text-xs text-text-secondary">{t("Lädt Twitch-Bio, Profilbild, Banner und Streamplan neu. Zusätzliche Social-Links stellt Twitch hier nicht bereit.")}</p>
 
         {!data.active ? (
           <p role="status" className="mt-4 rounded-xl border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
@@ -438,8 +388,8 @@ export function ProfileEditor({
         ) : null}
       </section>
 
-      <fieldset disabled={locked} className="min-w-0 space-y-5 disabled:opacity-60">
-        <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.75fr)]">
+      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
+      <fieldset disabled={locked} className="flex min-w-0 flex-col gap-6 disabled:opacity-60">
           <section className={panel}>
             <SectionTitle
               icon={<UserRound className="h-5 w-5 text-on-gold" />}
@@ -473,15 +423,16 @@ export function ProfileEditor({
                 <span className="block text-xs font-normal text-text-secondary">{t("{p0} / 4000 Zeichen", { p0: profile.about.length })}</span>
               </label>
 
-              <div className="rounded-2xl border border-border bg-background/35 p-4">
-                <div className="flex items-start gap-3">
-                  <Gamepad2 className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
-                  <div>
-                    <h3 className="text-sm font-bold text-white">{t("Deadlock auf einen Blick")}</h3>
-                    <p className="mt-1 text-xs leading-relaxed text-text-secondary">{t("Diese Angaben erscheinen als kompakte Badges direkt im Profilkopf.")}</p>
-                  </div>
-                </div>
-                <div className="mt-4 grid gap-4 md:grid-cols-2">
+            </div>
+          </section>
+          <section className={panel}>
+            <SectionTitle
+              icon={<Gamepad2 className="h-5 w-5 text-on-gold" />}
+              eyebrow={t("Deadlock & Profil-Design")}
+              title={t("Deadlock auf einen Blick")}
+            />
+            <div className="mt-5 space-y-5">
+                <div className="grid gap-4 md:grid-cols-2">
                   <label className="block space-y-1.5 text-sm font-semibold text-white">
                     {t("Rangbereich")}
                     <select className={field} value={profile.rank} onChange={event => change({ rank: event.target.value })}>
@@ -489,9 +440,18 @@ export function ProfileEditor({
                       {RANK_OPTIONS.map(rank => <option key={rank} value={rank}>{rank}</option>)}
                     </select>
                   </label>
-                  <div className="space-y-1.5">
+                  <label className="block space-y-1.5 text-sm font-semibold text-white">
+                    {t("Akzentfarbe")}
+                    <select className={field} value={profile.accent} onChange={event => change({ accent: event.target.value as ProfileContent['accent'] })}>
+                      <option value="gold">{t("Community-Gold")}</option>
+                      <option value="violet">{t("Violett")}</option>
+                      <option value="teal">{t("Petrol")}</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="space-y-1.5">
                     <span className="block text-sm font-semibold text-white">{t("Main Heroes, bis zu drei")}</span>
-                    <div className="grid gap-2 sm:grid-cols-3">
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                       {[0, 1, 2].map(index => (
                         <select
                           key={index}
@@ -510,7 +470,6 @@ export function ProfileEditor({
                         </select>
                       ))}
                     </div>
-                  </div>
                 </div>
                 <fieldset className="mt-4">
                   <legend className="text-sm font-semibold text-white">{t("Streamstil")}</legend>
@@ -531,23 +490,9 @@ export function ProfileEditor({
                     })}
                   </div>
                 </fieldset>
-              </div>
 
-              <div className="grid gap-4 md:grid-cols-2">
-                <label className="block space-y-1.5 text-sm font-semibold text-white">
-                  {t("Akzentfarbe")}
-                  <select
-                    className={field}
-                    value={profile.accent}
-                    onChange={event => change({ accent: event.target.value as ProfileContent['accent'] })}
-                  >
-                    <option value="gold">{t("Community-Gold")}</option>
-                    <option value="violet">{t("Violett")}</option>
-                    <option value="teal">{t("Petrol")}</option>
-                  </select>
-                </label>
-
-                <label className="soft-elevate flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-background/60 p-3.5">
+              <div className="border-t border-border/60 pt-5">
+                <label className="flex cursor-pointer items-start gap-3">
                   <input
                     className="mt-0.5 h-5 w-5 accent-primary"
                     type="checkbox"
@@ -564,64 +509,17 @@ export function ProfileEditor({
             </div>
           </section>
 
-          <section className={`${panel} xl:sticky xl:top-20`}>
-            <SectionTitle
-              icon={<Eye className="h-5 w-5 text-on-gold" />}
-              eyebrow={t("Live-Vorschau")}
-              title={t("So wirkst du nach außen")}
-              description={t("Die Vorschau aktualisiert sich direkt beim Tippen.")}
-            />
-            <div className="panel-inset mt-5 overflow-hidden rounded-2xl p-4">
-              <div className="flex items-center gap-3">
-                <Avatar url={effectiveAvatar} login={data.login} size="small" />
-                <div className="min-w-0">
-                  <p className="truncate text-base font-bold text-white">@{data.login}</p>
-                  <p className="text-xs text-text-secondary">{t("Deadlock Partner")}</p>
-                </div>
-              </div>
-              <div className="mt-4 border-t border-border/70 pt-4">
-                <h3 className="display-font text-lg font-bold text-white">
-                  {profile.headline.trim() || t("Deine Profilüberschrift")}
-                </h3>
-                <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-text-secondary">
-                  {profile.about.trim() || twitch?.description?.trim() || t("Hier erscheint deine Vorstellung. Erzähl kurz, was deinen Stream und deine Community ausmacht.")}
-                </p>
-              </div>
-              <div className="mt-4 flex flex-wrap gap-2 text-xs">
-                {profile.rank ? <span className="rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-primary">{t("Rang: {p0}", { p0: profile.rank })}</span> : null}
-                {profile.main_heroes.map(hero => <span key={hero} className="rounded-full border border-border bg-card px-2.5 py-1 text-text-secondary">{t("Main: {p0}", { p0: hero })}</span>)}
-                {profile.playstyles.map(style => {
-                  const label = PLAYSTYLE_OPTIONS.find(([value]) => value === style)?.[1] ?? style;
-                  return <span key={style} className="rounded-full border border-border bg-card px-2.5 py-1 text-text-secondary">{t(label)}</span>;
-                })}
-                <span className="rounded-full border border-border bg-card px-2.5 py-1 text-text-secondary">
-                  {t("{p0} Links", { p0: profile.socials.length })}</span>
-                <span className="rounded-full border border-border bg-card px-2.5 py-1 text-text-secondary">
-                  {t("{p0} Empfehlungen", { p0: profile.featured.filter(value => value.trim()).length })}
-                </span>
-                <span className="rounded-full border border-border bg-card px-2.5 py-1 text-text-secondary">
-                  {t("{p0} Termine", { p0: profile.events.length })}</span>
-              </div>
-            </div>
-            <div className="mt-4 flex items-start gap-2 rounded-xl border border-primary/20 bg-primary/5 p-3 text-xs leading-relaxed text-text-secondary">
-              <Palette className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-              {t("Das Profilbild kommt direkt von Twitch. Die Akzentfarbe steuerst du hier im Dashboard.")}
-            </div>
-          </section>
-        </div>
-
-        <div className="grid items-start gap-5 xl:grid-cols-2">
           <section className={panel}>
             <SectionTitle
               icon={<Link2 className="h-5 w-5 text-on-gold" />}
               eyebrow={t("Links")}
-              title={t("Hier findet man dich")}
+              title={t("Vernetzung & Empfehlungen")}
               description={t("Dein Twitch-Kanal gehört automatisch zum Profil. Ergänze die Plattformen, auf denen du noch aktiv bist.")}
               aside={<span className="rounded-full border border-border bg-background/60 px-2.5 py-1 text-xs text-text-secondary">{profile.socials.length} / 12</span>}
             />
             <div className="mt-5 space-y-3">
               {profile.socials.map((social, index) => (
-                <div key={index} className="panel-inset rounded-xl p-3.5">
+                <div key={index} className="border-t border-border/60 pt-5">
                   <div className="grid gap-3 sm:grid-cols-[minmax(140px,0.4fr)_minmax(0,1fr)_auto] sm:items-end">
                     <label className="block space-y-1.5 text-xs font-semibold text-text-secondary">
                       {t("Plattform")}
@@ -670,7 +568,7 @@ export function ProfileEditor({
                 </div>
               ))}
               {profile.socials.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-border bg-background/35 px-4 py-5 text-sm text-text-secondary">
+                <div className="border-t border-border/60 pt-5 text-sm text-text-secondary">
                   {t("Noch keine zusätzlichen Links eingetragen.")}</div>
               ) : null}
               <button
@@ -683,35 +581,40 @@ export function ProfileEditor({
                 {t("Link hinzufügen")}
               </button>
             </div>
-          </section>
-
-          <section className={panel}>
-            <SectionTitle
-              icon={<UsersRound className="h-5 w-5 text-on-gold" />}
-              eyebrow={t("Partnernetzwerk")}
-              title={t("Leute aus deinem Umfeld")}
-              description={t("Empfiehl Streamer, mit denen du gerne spielst oder zusammen Content machst. Sichtbar werden aktive Partner mit veröffentlichtem Profil.")}
-              aside={<span className="rounded-full border border-border bg-background/60 px-2.5 py-1 text-xs text-text-secondary">{profile.featured.filter(value => value.trim()).length} / 6</span>}
-            />
+            <div className="mt-5 flex items-center justify-between gap-3 border-t border-border/60 pt-5">
+              <h3 className="text-base font-bold text-white">{t("Partnernetzwerk")}</h3>
+              <span className="text-xs text-text-secondary">{profile.featured.length} / 6</span>
+            </div>
+            <p className="mt-2 text-xs text-text-secondary">{t("Empfiehl Streamer, mit denen du gerne spielst oder zusammen Content machst. Sichtbar werden aktive Partner mit veröffentlichtem Profil.")}</p>
             <div className="mt-5">
+              <div className="mb-3 flex flex-wrap gap-2">
+                {profile.featured.map((name, index) => (
+                  <span key={`${name}-${index}`} className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-3 py-1 text-sm text-primary">
+                    @{name}
+                    <button type="button" aria-label={t("{p0} entfernen", { p0: name })} onClick={() => change({ featured: profile.featured.filter((_, current) => current !== index) })}>×</button>
+                  </span>
+                ))}
+              </div>
               <label className="block space-y-1.5 text-sm font-semibold text-white">
                 {t("Twitch-Namen")}
                 <input
                   className={field}
-                  value={profile.featured.join(', ')}
+                  value={featuredInput}
+                  disabled={profile.featured.length >= 6}
                   placeholder={t("partner_eins, partner_zwei")}
-                  onChange={event =>
-                    change({
-                      featured: event.target.value
-                        .split(',')
-                        .map(value => value.trim().replace(/^@/, '')),
-                    })
-                  }
+                  onChange={event => setFeaturedInput(event.target.value)}
+                  onBlur={addFeatured}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter' || event.key === ',') {
+                      event.preventDefault();
+                      addFeatured();
+                    }
+                  }}
                 />
                 <span className="block text-xs font-normal leading-relaxed text-text-secondary">
                   {t("Mehrere Namen mit Komma trennen. Das @ musst du nicht mitschreiben.")}</span>
               </label>
-              <div className="panel-inset mt-4 rounded-xl p-4">
+              <div className="mt-4">
                 <div className="flex items-start gap-3">
                   <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                   <p className="text-xs leading-relaxed text-text-secondary">
@@ -720,7 +623,6 @@ export function ProfileEditor({
               </div>
             </div>
           </section>
-        </div>
 
         <section className={panel}>
           <SectionTitle
@@ -728,24 +630,10 @@ export function ProfileEditor({
             eyebrow={t("Streamplan")}
             title={t("Dein Streamplan")}
             description={t("Nutze deinen Twitch-Streamplan automatisch. Eigene Zusatztermine kannst du darunter weiterhin eintragen.")}
-            aside={
-              <label className="block text-xs font-semibold text-text-secondary">
-                {t("Monat")}
-                <input
-                  aria-label={t("Kalendermonat")}
-                  type="month"
-                  min="2000-01"
-                  max="2100-12"
-                  className={`${field} mt-1 min-w-44`}
-                  value={month}
-                  onChange={event => setMonth(event.target.value)}
-                />
-              </label>
-            }
           />
 
-          <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.75fr)]">
-            <label className="soft-elevate flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-background/60 p-4">
+          <div className="mt-5 grid gap-5 lg:grid-cols-2">
+            <label className="flex cursor-pointer items-start gap-3">
               <input
                 className="mt-0.5 h-5 w-5 accent-primary"
                 type="checkbox"
@@ -757,7 +645,7 @@ export function ProfileEditor({
                 <span className="mt-1 block text-xs leading-relaxed text-text-secondary">{t("Künftige Twitch-Termine erscheinen automatisch im öffentlichen Profil. Du musst sie hier nicht doppelt pflegen.")}</span>
               </span>
             </label>
-            <div className="panel-inset rounded-xl p-4">
+            <div className="min-w-0">
               <div className="flex items-center gap-2 text-sm font-bold text-white"><Clock3 className="h-4 w-4 text-primary" /> {t("Typische Streamingzeiten")}</div>
               <div className="mt-3 flex flex-wrap gap-2">
                 {TIME_OPTIONS.map(([value, label]) => {
@@ -779,7 +667,7 @@ export function ProfileEditor({
           </div>
 
           {profile.sync_twitch_schedule ? (
-            <div className="panel-inset mt-4 rounded-xl p-4">
+            <div className="mt-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-bold text-white">{t("Twitch Termine")}</p>
@@ -787,26 +675,38 @@ export function ProfileEditor({
                 </div>
                 <span className="rounded-full border border-border bg-background/60 px-2.5 py-1 text-xs text-text-secondary">{t("{p0} gefunden", { p0: twitch?.schedule?.length ?? 0 })}</span>
               </div>
-              <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                {(twitch?.schedule ?? []).slice(0, 6).map(item => (
-                  <div key={item.id} className="rounded-xl border border-border bg-background/45 p-3">
-                    <p className="truncate text-xs font-bold text-white">{item.title || t("Twitch Stream")}</p>
-                    <p className="mt-1 text-[11px] text-text-secondary">{t("{p0} Uhr", { p0: formatEventTime(item.starts_at) })}</p>
+              <div className="mt-3 space-y-2">
+                {(twitch?.schedule ?? []).slice(0, showAllTwitch ? undefined : 4).map(item => (
+                  <div key={item.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-border/60 pt-3">
+                    <p className="shrink-0 text-[11px] text-text-secondary">{t("{p0} Uhr", { p0: formatEventTime(item.starts_at) })}</p>
+                    <p className="min-w-0 break-words text-xs font-bold text-white">{item.title || t("Twitch Stream")}</p>
                   </div>
                 ))}
+                {(twitch?.schedule?.length ?? 0) > 4 ? (
+                  <button type="button" className={secondaryButton} onClick={() => setShowAllTwitch(!showAllTwitch)}>
+                    {showAllTwitch ? t("Weniger anzeigen") : t("Alle {p0} Termine anzeigen", { p0: twitch?.schedule?.length ?? 0 })}
+                  </button>
+                ) : null}
                 {(twitch?.schedule?.length ?? 0) === 0 ? <p className="text-xs text-text-secondary">{t("Aktuell sind keine kommenden Twitch Termine verfügbar.")}</p> : null}
               </div>
             </div>
           ) : null}
 
-          <div className="mt-6 flex items-center justify-between gap-4 border-t border-border/70 pt-5">
+          <div className="mt-6 flex flex-wrap items-center justify-between gap-4 border-t border-border/60 pt-5">
             <div>
               <h3 className="text-base font-bold text-white">{t("Eigene Zusatztermine")}</h3>
               <p className="mt-1 text-xs text-text-secondary">{t("Für Community-Abende, Events oder Termine außerhalb deines Twitch-Streamplans.")}</p>
             </div>
+            <label className="block text-xs font-semibold text-text-secondary">
+              {t("Monat")}
+              <input aria-label={t("Kalendermonat")} type="month" min="2000-01" max="2100-12" className={`${field} mt-1`} value={month} onChange={event => setMonth(event.target.value)} />
+            </label>
           </div>
 
-          <div className="mt-4 overflow-x-auto pb-2">
+          <button type="button" className={`${secondaryButton} mt-4`} aria-expanded={calendarOpen} onClick={() => setCalendarToggle({ month, open: !calendarOpen })}>
+            {calendarOpen ? t("Kalender schließen") : t("Kalender für Zusatztermine öffnen")}
+          </button>
+          {calendarOpen ? <div className="mt-4 overflow-x-auto pb-2">
             <div className="grid min-w-[680px] grid-cols-7 gap-2">
               {['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'].map(day => (
                 <span key={day} className="px-2 py-1 text-[11px] font-bold uppercase tracking-[0.14em] text-text-secondary">
@@ -848,10 +748,10 @@ export function ProfileEditor({
                 );
               })}
             </div>
-          </div>
+          </div> : null}
 
           {draft ? (
-            <div className="mt-4 rounded-2xl border border-primary/30 bg-primary/5 p-4 md:p-5">
+            <div className="mt-4 border-t border-border/60 pt-5">
               <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
                   <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-primary">{t("Kalendereintrag")}</div>
@@ -929,7 +829,7 @@ export function ProfileEditor({
               .map(event => (
                 <div
                   key={event.id}
-                  className="panel-inset flex flex-wrap items-center justify-between gap-3 rounded-xl px-4 py-3"
+                  className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 py-3"
                 >
                   <div className="min-w-0">
                     <h3 className="truncate text-sm font-bold text-white">{event.title}</h3>
@@ -955,13 +855,61 @@ export function ProfileEditor({
           </div>
 
           {profile.events.length === 0 ? (
-            <div className="mt-4 rounded-xl border border-dashed border-border bg-background/35 px-4 py-5 text-sm text-text-secondary">
+            <div className="mt-4 border-t border-border/60 pt-5 text-sm text-text-secondary">
               {t("Noch keine Termine. Wähle oben deinen ersten Streamtag aus.")}</div>
           ) : null}
           <p className="mt-4 text-xs text-text-secondary">
             {t("{p0} / 200 Termine. Keine automatische Löschung alter Termine. Erfasste Livestreams werden separat angezeigt und lassen sich hier nicht verändern.", { p0: profile.events.length })}</p>
         </section>
       </fieldset>
+      <section className={`${panel} min-w-0 lg:sticky lg:top-20`}>
+        <div className="mb-5 border-b border-border/60 pb-5">
+          <div className="flex items-center justify-between gap-4">
+            <p className="text-sm font-bold text-white">{t("Profil zu {p0}% vollständig", { p0: completion })}</p>
+            {completion === 100 ? <CheckCircle2 className="h-5 w-5 shrink-0 text-success" /> : null}
+          </div>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-background">
+            <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${completion}%` }} />
+          </div>
+        </div>
+        <SectionTitle
+          icon={<Eye className="h-5 w-5 text-on-gold" />}
+          eyebrow={t("Live-Vorschau")}
+          title={t("So wirkst du nach außen")}
+          description={t("Die Vorschau aktualisiert sich direkt beim Tippen.")}
+        />
+        <div className="mt-5 border-t border-border/60 pt-5">
+          <div className="flex items-center gap-3">
+            <Avatar url={effectiveAvatar} login={data.login} size="small" />
+            <div className="min-w-0">
+              <p className="truncate text-base font-bold text-white">@{data.login}</p>
+              <p className="text-xs text-text-secondary">{t("Deadlock Partner")}</p>
+            </div>
+          </div>
+          <div className="mt-4 border-t border-border/60 pt-5">
+            <h3 className="display-font text-lg font-bold text-white">{profile.headline.trim() || t("Deine Profilüberschrift")}</h3>
+            <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed text-text-secondary">
+              {profile.about.trim() || twitch?.description?.trim() || t("Hier erscheint deine Vorstellung. Erzähl kurz, was deinen Stream und deine Community ausmacht.")}
+            </p>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2 text-xs">
+            {profile.rank ? <span className="rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-primary">{t("Rang: {p0}", { p0: profile.rank })}</span> : null}
+            {profile.main_heroes.map(hero => <span key={hero} className="rounded-full border border-border bg-card px-2.5 py-1 text-text-secondary">{t("Main: {p0}", { p0: hero })}</span>)}
+            {profile.playstyles.map(style => {
+              const label = PLAYSTYLE_OPTIONS.find(([value]) => value === style)?.[1] ?? style;
+              return <span key={style} className="rounded-full border border-border bg-card px-2.5 py-1 text-text-secondary">{t(label)}</span>;
+            })}
+            <span className="rounded-full border border-border bg-card px-2.5 py-1 text-text-secondary">{t("{p0} Links", { p0: profile.socials.length })}</span>
+            <span className="rounded-full border border-border bg-card px-2.5 py-1 text-text-secondary">{t("{p0} Empfehlungen", { p0: profile.featured.filter(value => value.trim()).length })}</span>
+            <span className="rounded-full border border-border bg-card px-2.5 py-1 text-text-secondary">{t("{p0} Termine", { p0: profile.events.length })}</span>
+          </div>
+        </div>
+        <div className="mt-4 flex items-start gap-2 border-t border-border/60 pt-5 text-xs leading-relaxed text-text-secondary">
+          <Palette className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+          {t("Das Profilbild kommt direkt von Twitch. Die Akzentfarbe steuerst du hier im Dashboard.")}
+        </div>
+      </section>
+      </div>
     </div>
   );
 }

@@ -336,7 +336,7 @@ export function VerwaltungPage() {
   const activeTab = tabs.find((item) => item.id === tab) ?? tabs[0];
 
   return (
-    <>
+    <div className="w-full max-w-[1440px] space-y-4 md:space-y-5">
         {partnerStatus && partnerStatus !== 'active' && partnerStatus !== 'blocked' ? (
           <Rise
             as="section"
@@ -380,7 +380,7 @@ export function VerwaltungPage() {
           </p>
         </header>
 
-        <nav aria-label={t("Verwaltungsbereiche")} className="sticky top-2 z-20 flex flex-wrap gap-1.5 rounded-xl border border-border bg-card/90 p-1.5 backdrop-blur">
+        <nav aria-label={t("Verwaltungsbereiche")} className="sticky top-0 z-20 flex flex-wrap gap-1.5 rounded-xl border border-border bg-card/90 p-1.5 backdrop-blur">
           {tabs.map((item) => {
             const Icon = item.icon;
             const isActive = item.id === activeTab.id;
@@ -403,6 +403,6 @@ export function VerwaltungPage() {
         {onboarding.status?.paused && onboarding.error && <p role="alert" className="rounded-lg border border-warning/40 p-3 text-sm text-warning">{t(onboarding.error)} <button type="button" onClick={() => void onboarding.save({paused: true})} className="underline">{t("Pause speichern")}</button></p>}
         <OnboardingGuide tab={activeTab.id} />
         <div className="space-y-4 md:space-y-5">{activeTab.render()}</div>
-    </>
+    </div>
   );
 }
