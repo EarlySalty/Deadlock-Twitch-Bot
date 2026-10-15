@@ -68,7 +68,7 @@ Then restart, one by one, checking each:
 
 1. Restore role password from the saved verifier, as postgres only:
    `sudo -n -u postgres python3 -I -c "import sys;v=open('/var/backups/dbrot-20261015/twitchlegacy.verifier.prev').read().strip();sys.stdout.write(\"ALTER ROLE twitchlegacy PASSWORD '\"+v+\"';\n\")" | sudo -n -u postgres psql -X -v ON_ERROR_STOP=1 -d postgres`
-2. Restore Infisical: run `/tmp/dbrot-tools/restore_prev.py` (loads `TWITCH_ANALYTICS_DSN_PREV` in-process and pipes it into `update_gpt_secret.py --secret TWITCH_ANALYTICS_DSN`).
+2. Restore Infisical: from `.tasks/2026-10-15-db-rotation/tools/` run `python3 restore_prev.py TWITCH_ANALYTICS_DSN` (loads `TWITCH_ANALYTICS_DSN_PREV` in-process and pipes it into `update_gpt_secret.py --secret TWITCH_ANALYTICS_DSN`).
 3. `bot-restart web-backend`, then the Twitch units as above.
 4. Verify old password logs in over TCP and `--pruefen` passes.
 5. Data loss is impossible from this change; if anything else broke, `/var/backups/dbrot-20261015/twitch_analytics.dump` restores the database (`timescaledb_pre_restore()`, `pg_restore -d`, `timescaledb_post_restore()`).
