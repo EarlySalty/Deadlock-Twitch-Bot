@@ -21,6 +21,8 @@ const statusAppearance = {
   unknown: { icon: TriangleAlert, color: 'text-warning' },
 };
 
+const toneByColor: Record<string, string> = { 'text-success': 'success', 'text-primary': 'gold', 'text-warning': 'warning', 'text-danger': 'danger' };
+
 export function VodArchiveEntry({ vod, pending, onAction }: {
   vod: ArchivedVod;
   pending: boolean;
@@ -43,22 +45,24 @@ export function VodArchiveEntry({ vod, pending, onAction }: {
   const observations = check?.observations ?? [];
   const links = observations.length ? observations.map((o) => ({ id: o.video_id, index: o.part_index, state: o.state, privacy: o.privacy })) : vod.parts.flatMap((part) => part.youtube_video_id?.trim() ? [{ id: part.youtube_video_id, index: part.index, state: part.status, privacy: null }] : []);
   const privacyLabel = (privacy: string | null) => privacy === 'private' ? t('Privat') : privacy === 'unlisted' ? t('Nicht gelistet') : privacy === 'public' ? t('Öffentlich') : null;
-  return <article className="min-w-0 p-4 sm:p-5">
-    <h3 className="break-words text-base font-semibold text-text-primary">{vod.title}</h3>
-    <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
-      <span className={`inline-flex items-start gap-2 text-sm font-semibold ${appearance.color}`}>
-        <StatusIcon aria-hidden="true" className={`mt-0.5 h-4 w-4 shrink-0 ${vod.display_status === 'uploading' ? 'motion-safe:animate-spin' : ''}`} />
-        {t(vod.status_label)}
-      </span>
-      {vod.total_parts > 1 && !vod.drive_complete && <span className="text-sm text-text-secondary">{t(VOD_UPLOAD_PARTS_LABEL, { done: vod.confirmed_parts, total: vod.total_parts })}</span>}
+  return <article className="studio-vod-row">
+    <div className="studio-vod-main">
+      <div className="studio-vod-title-row">
+        <h3>{vod.title}</h3>
+        <span className={`studio-vod-badge ${appearance.color}`} data-tone={toneByColor[appearance.color] ?? 'neutral'}>
+          <StatusIcon aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 ${vod.display_status === 'uploading' ? 'motion-safe:animate-spin' : ''}`} />
+          {t(vod.status_label)}
+        </span>
+        {vod.total_parts > 1 && !vod.drive_complete && <span className="studio-vod-parts">{t(VOD_UPLOAD_PARTS_LABEL, { done: vod.confirmed_parts, total: vod.total_parts })}</span>}
+      </div>
+      <div className="studio-vod-meta">
+        <span className="break-all">{vod.channel}</span>
+        <span>{date(vod.recorded_at) ?? t('Aufnahmedatum unbekannt')}</span>
+        <span className="tabular-nums">{Math.floor(vod.duration_sec / 3600)}:{String(Math.floor(vod.duration_sec % 3600 / 60)).padStart(2, '0')} h</span>
+        {completedAt ? <time dateTime={vod.uploaded_at!}>{t('Abgeschlossen: {date}', { date: completedAt })}</time> : attemptedAt && <time dateTime={vod.last_attempt_at!}>{t('Letzter Versuch: {date}', { date: attemptedAt })}</time>}
+      </div>
     </div>
-    <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm text-text-secondary">
-      <span className="break-all">{vod.channel}</span>
-      <span>{date(vod.recorded_at) ?? t('Aufnahmedatum unbekannt')}</span>
-      <span className="tabular-nums">{Math.floor(vod.duration_sec / 3600)}:{String(Math.floor(vod.duration_sec % 3600 / 60)).padStart(2, '0')} h</span>
-      {completedAt ? <time dateTime={vod.uploaded_at!}>{t('Abgeschlossen: {date}', { date: completedAt })}</time> : attemptedAt && <time dateTime={vod.last_attempt_at!}>{t('Letzter Versuch: {date}', { date: attemptedAt })}</time>}
-    </div>
-    <details className="studio-vod-details"><summary>{t("Details & Aktionen")}</summary>
+    <details className="studio-vod-details"><summary className="studio-vod-toggle">{t("Details & Aktionen")}</summary>
     {checkedAt && <p className="mt-2 text-sm text-text-secondary"><time dateTime={check!.last_success_at!}>{t('Zuletzt geprüft: {date}', { date: checkedAt })}</time></p>}
     {check?.error && <p className="mt-2 max-w-prose text-sm text-warning" role="status">{t(check.error === 'connection' || check.error === 'channel_changed' ? 'Für den Abgleich braucht YouTube eine erneute Verbindung mit deinem Kanal.' : check.error === 'quota' ? 'YouTube lässt gerade keine weiteren Prüfungen zu. Der Abgleich wird später fortgesetzt.' : 'YouTube konnte gerade nicht abgefragt werden. Der letzte Nachweis bleibt erhalten.')}{checkAttemptAt && <> <time dateTime={check.last_attempt_at!}>{t('Prüfversuch: {date}', { date: checkAttemptAt })}</time></>}</p>}
     {check?.state === 'partial' && <p className="mt-2 max-w-prose text-sm text-warning">{t('Videos gefunden, aber die vollständige Zuordnung aller Teile ist noch nicht belegt.')}</p>}
@@ -86,7 +90,7 @@ export function VodArchiveEntry({ vod, pending, onAction }: {
   </article>;
 }
 
-export function VodArchiveTab({ twitchUserId, isAdmin }: { twitchUserId?: string; isAdmin: boolean }) {
+export function VodArchiveTab({ twitchUserId, isAdmin, reloadKey = 0 }: { twitchUserId?: string; isAdmin: boolean; reloadKey?: number }) {
   const { t } = useLanguage();
   const client = useQueryClient();
   const [allChannels, setAllChannels] = useState(isAdmin && !twitchUserId);
@@ -120,6 +124,10 @@ export function VodArchiveTab({ twitchUserId, isAdmin }: { twitchUserId?: string
     if (kind === 'drive' && !window.confirm(t('Dieses VOD auf Drive sichern? Für die Kopie wird ein teilbarer Link erstellt.'))) return;
     action.mutate({ vod, kind });
   };
+  const refetch = list.refetch;
+  useEffect(() => {
+    if (reloadKey) void refetch();
+  }, [reloadKey, refetch]);
   return <section className="space-y-5" aria-labelledby="vod-archive-title">
     <div className="flex flex-wrap items-start justify-between gap-4">
       <div>
@@ -131,7 +139,7 @@ export function VodArchiveTab({ twitchUserId, isAdmin }: { twitchUserId?: string
     {isAdmin && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={allChannels} onChange={(event) => { setAllChannels(event.target.checked); setPage(1); }} />{t('Alle Kanäle anzeigen')}</label>}
     {notice && <p role="status" className="text-sm text-success">{notice}</p>}
     {action.isError && <p role="alert" className="text-sm text-danger">{t('Die Aktion konnte nicht ausgeführt werden. Das VOD wird gerade bearbeitet oder ist bereits fertig. Lade die Liste erneut.')}</p>}
-    {list.isPending ? <p role="status" className="flex items-center gap-2 text-sm text-text-secondary"><Loader2 className="h-4 w-4 animate-spin" />{t('VODs werden geladen…')}</p> : list.isError ? <div role="alert"><p>{t('Die VOD-Liste konnte nicht geladen werden.')}</p><button className="studio-button mt-3" onClick={() => list.refetch()}>{t('Erneut laden')}</button></div> : list.data?.items.length === 0 ? <p className="rounded-xl border border-border p-6 text-text-secondary">{t('Hier stehen noch keine VODs. Schalte das Archiv für deinen Kanal ein, damit neue Streams gesichert werden.')}</p> : <div className="divide-y divide-border">
+    {list.isPending ? <p role="status" className="flex items-center gap-2 text-sm text-text-secondary"><Loader2 className="h-4 w-4 animate-spin" />{t('VODs werden geladen…')}</p> : list.isError ? <div role="alert"><p>{t('Die VOD-Liste konnte nicht geladen werden.')}</p><button className="studio-button mt-3" onClick={() => list.refetch()}>{t('Erneut laden')}</button></div> : list.data?.items.length === 0 ? <p className="rounded-xl border border-border p-6 text-text-secondary">{t('Hier stehen noch keine VODs. Schalte das Archiv für deinen Kanal ein, damit neue Streams gesichert werden.')}</p> : <div className="studio-vod-rows">
       {list.data?.items.map((vod) => <VodArchiveEntry key={vod.id} vod={vod} pending={action.isPending} onAction={act} />)}
     </div>}
     {list.data && (page > 1 || list.data.total > 50) && <div className="flex flex-wrap items-center justify-between gap-3"><button className="studio-button" disabled={page <= 1} onClick={() => setPage(page - 1)}>{t('Zurück')}</button><span className="text-sm text-text-secondary">{t('Seite {page}', { page })}</span><button className="studio-button" disabled={page * 50 >= list.data.total} onClick={() => setPage(page + 1)}>{t('Weiter')}</button></div>}

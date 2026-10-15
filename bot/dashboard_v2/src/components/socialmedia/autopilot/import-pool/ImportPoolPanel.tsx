@@ -2,13 +2,12 @@ import { globalTimezoneUrl } from '@/utils/socialMediaChannel';
 import { ImportPopover } from '../../ImportPopover';
 import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, ExternalLink, Film, RefreshCw, Save } from "lucide-react";
+import { Archive, ExternalLink, Film, Save } from "lucide-react";
 
 import { useLanguage, useT } from "@/context/LanguageContext";
 import { importPoolApi } from "./api";
 import { activeImport, clipDuration, clipStatus, clipStatusTone, clipThumbnail, filterDescription, localTimestamp, parsePreferencesDraft, poolError, preferencesDraft, samePreferences, selectionAllowed, sourceMetadata, unauthorized, type PreferencesDraft } from "./presentation";
 import { ImportProgress } from "./ImportProgress";
-import { StudioSectionHeading } from '../../StudioSectionHeading';
 import type { ImportJob, ImportPoolApi, ImportPoolPanelProps, PoolPreferences } from "./types";
 import "./ImportPoolPanel.css";
 
@@ -21,11 +20,12 @@ export function ImportPoolPanel({
   twitchUserId,
   api = importPoolApi,
   onChanged,
+  reloadKey = 0,
 }: ImportPoolPanelProps) {
   const t = useT();
   if (!twitchUserId || !/^\d+$/.test(twitchUserId)) {
     return (
-      <section className="import-pool">
+      <section className="import-pool studio-card">
         <p>
           {t(
             "Bitte einen Twitch-Kanal auswählen, um historische Clips zu importieren.",
@@ -40,6 +40,7 @@ export function ImportPoolPanel({
       owner={twitchUserId}
       api={api}
       onChanged={onChanged}
+      reloadKey={reloadKey}
     />
   );
 }
@@ -48,10 +49,12 @@ function OwnerImportPool({
   owner,
   api,
   onChanged,
+  reloadKey,
 }: {
   owner: string;
   api: ImportPoolApi;
   onChanged?: () => void;
+  reloadKey: number;
 }) {
   const { t, locale } = useLanguage();
   const queryClient = useQueryClient();
@@ -295,226 +298,74 @@ function OwnerImportPool({
     if (activeImport(job) || importQuery.isError) void importQuery.refetch();
   }
 
+  const reloadRef = useRef(reload);
+  useEffect(() => { reloadRef.current = reload; });
+  useEffect(() => { if (reloadKey) reloadRef.current(); }, [reloadKey]);
+
   return (
     <section
-      className="import-pool"
+      className="import-pool studio-card"
       aria-label={t("Clip-Vorrat")}
       data-owner={owner}
       data-unsaved={dirty || busy ? "true" : undefined}
       data-saving={busy ? "true" : undefined}
     >
-      <StudioSectionHeading
-        title={t("Clip-Vorrat")}
-        description={t("Deadlock-Clips erfassen. Markierte Clips werden in deiner gewählten Reihenfolge zuerst verarbeitet, danach die übrigen passenden Clips.")}
-        icon={Archive}
-        actions={<button className="studio-button" type="button" onClick={reload} disabled={busy}>
-          <RefreshCw size={16} aria-hidden="true" />{t("Erneut laden")}
-        </button>}
-      />
-      {errors.length > 0 && (
-        <div role="alert" className="import-pool-error">
-          {[...new Set(errors.map(poolError))].map((text) => (
-            <p key={text}>{t(text)}</p>
-          ))}
+      <div className="import-pool-toolbar">
+        <div className="import-pool-toolbar-title">
+          <h2><Archive size={18} aria-hidden="true" />{t("Clip-Vorrat (Pool)")}</h2>
+          <p>
+            {page
+              ? t("{count} Clips erfasst", { count: page.total.toLocaleString(locale) })
+              : t(poolQuery.isError ? "Clip-Pool nicht geladen" : "Clip-Pool laden …")}
+            {saved && ` · ${t(saved.clip_sort === "oldest_first" ? "Älteste Clips zuerst" : "Neueste Clips zuerst")}`}
+          </p>
         </div>
-      )}
-      <p className="import-pool-feedback" role="status">
-        {feedback ? t(feedback) : ""}
-      </p>
-      {!current && !preferencesQuery.isError && (
-        <p role="status">{t("Gespeicherten Zeitraum laden …")}</p>
-      )}
-      {current && (
-        <ImportPopover><form
-          className="import-pool-preferences"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (busy || blocked || !dirty || !parsed?.preferences) return;
-            setFeedback("");
-            saveMutation.mutate({
-              preferences: parsed.preferences,
-              after: onChanged,
-            });
-          }}
-        >
-          <h3>{t("Zeitraum und Reihenfolge")}</h3>
-          <fieldset
-            disabled={busy || blocked}
-            aria-describedby={`${id}-date-help`}
-          >
-            <div className="import-pool-fields">
-              <label htmlFor={`${id}-kind`}>
-                {t("Zeitraum")}
-                <select
-                  id={`${id}-kind`}
-                  className="studio-select"
-                  value={current.kind}
-                  onChange={(event) =>
-                    edit({
-                      kind: event.target.value as PreferencesDraft["kind"],
-                    })
-                  }
+        <div className="import-pool-toolbar-actions">
+          <details className="import-pool-history">
+            <summary className="studio-button">
+              {job ? t("Historischer Import ({count} erfasst)", { count: job.persisted_count.toLocaleString(locale) }) : t("Historischer Import")}
+            </summary>
+            <div className="import-pool-history-panel" aria-label={t("Historischer Import")} role="group">
+              <p className="import-pool-help">
+                {t(
+                  "Verwendet den gespeicherten Zeitraum. Ein laufender Import behält seinen ursprünglichen Zeitraum.",
+                )}
+              </p>
+              {dirty && (
+                <p className="import-pool-help">
+                  {t("Änderungen vor dem Import speichern oder verwerfen.")}
+                </p>
+              )}
+              {latestQuery.isPending ? (
+                <p role="status">{t("Importstatus laden …")}</p>
+              ) : job ? (
+                <ImportProgress job={job} />
+              ) : (
+                latestQuery.isSuccess && (
+                  <p className="import-pool-help">
+                    {t("Noch kein historischer Import vorhanden.")}
+                  </p>
+                )
+              )}
+              {job && ["error", "incomplete"].includes(job.status) && (
+                <button
+                  type="button"
+                  className="studio-button"
+                  disabled={busy || blocked || !importKnown}
+                  onClick={() => {
+                    setFeedback("");
+                    resumeMutation.mutate({ jobId: job.id, after: onChanged });
+                  }}
                 >
-                  <option value="all">{t("Alle historischen Clips")}</option>
-                  <option value="year">{t("Ein Jahr")}</option>
-                  <option value="quarter">{t("Ein Quartal")}</option>
-                  <option value="range">{t("Eigener Zeitraum")}</option>
-                  <option value="before">{t("Vor einem Datum")}</option>
-                  <option value="after">{t("Nach einem Datum")}</option>
-                </select>
-              </label>
-              {(current.kind === "year" || current.kind === "quarter") && (
-                <label htmlFor={`${id}-year`}>
-                  {t("Jahr")}
-                  <input
-                    id={`${id}-year`}
-                    className="studio-input"
-                    type="number"
-                    step="1"
-                    required
-                    value={current.year}
-                    onChange={(event) => edit({ year: event.target.value })}
-                  />
-                </label>
+                  {t(
+                    resumeMutation.isPending
+                      ? "Import wird fortgesetzt …"
+                      : "Import fortsetzen",
+                  )}
+                </button>
               )}
-              {current.kind === "quarter" && (
-                <label htmlFor={`${id}-quarter`}>
-                  {t("Quartal")}
-                  <select
-                    id={`${id}-quarter`}
-                    className="studio-select"
-                    value={current.quarter}
-                    onChange={(event) => edit({ quarter: event.target.value })}
-                  >
-                    {[1, 2, 3, 4].map((quarter) => (
-                      <option key={quarter} value={quarter}>
-                        {t("Quartal")} {quarter}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              {current.kind === "range" && (
-                <>
-                  <label htmlFor={`${id}-start`}>
-                    {t("Beginn")}
-                    <input
-                      id={`${id}-start`}
-                      className="studio-input"
-                      type="date"
-                      required
-                      value={current.start}
-                      onChange={(event) => edit({ start: event.target.value })}
-                    />
-                  </label>
-                  <label htmlFor={`${id}-end`}>
-                    {t("Ende")}
-                    <input
-                      id={`${id}-end`}
-                      className="studio-input"
-                      type="date"
-                      required
-                      value={current.end}
-                      onChange={(event) => edit({ end: event.target.value })}
-                    />
-                  </label>
-                </>
-              )}
-              {(current.kind === "before" || current.kind === "after") && (
-                <label htmlFor={`${id}-date`}>
-                  {t("Datum")}
-                  <input
-                    id={`${id}-date`}
-                    className="studio-input"
-                    type="date"
-                    required
-                    value={current.date}
-                    onChange={(event) => edit({ date: event.target.value })}
-                  />
-                </label>
-              )}
-              <label htmlFor={`${id}-sort`}>
-                {t("Reihenfolge")}
-                <select
-                  id={`${id}-sort`}
-                  className="studio-select"
-                  value={current.clipSort}
-                  onChange={(event) =>
-                    edit({
-                      clipSort: event.target
-                        .value as PreferencesDraft["clipSort"],
-                    })
-                  }
-                >
-                  <option value="oldest_first">
-                    {t("Älteste Clips zuerst")}
-                  </option>
-                  <option value="newest_first">
-                    {t("Neueste Clips zuerst")}
-                  </option>
-                </select>
-              </label>
             </div>
-            <a href={globalTimezoneUrl(owner)}>{t("Zeitzone in Verwaltung ändern")}</a>
-          </fieldset>
-          <p id={`${id}-date-help`} className="import-pool-help">
-            {parsed?.preferences
-              ? `${filterDescription(parsed.preferences.clip_date_filter, t)}. ${t("Kalendertage gelten in der gewählten Zeitzone. Zukünftige Clips werden nicht importiert.")}`
-              : t(parsed?.error ?? "")}
-          </p>
-          <p className="import-pool-help">
-            {t(
-              "Änderungen gelten für neue Auswahlen und Importe, nicht für vorhandene Aufträge oder Videos. Der Import lädt keine Videodateien und startet keine Verarbeitung oder Veröffentlichung.",
-            )}
-          </p>
-          <div className="import-pool-save">
-            <span>
-              {t(
-                saveMutation.isPending
-                  ? "Wird gespeichert …"
-                  : dirty
-                    ? "Ungespeicherte Änderungen"
-                    : "Gespeicherter Stand",
-              )}
-            </span>
-            <div>
-              <button
-                type="button"
-                className="studio-button"
-                disabled={!dirty || busy}
-                onClick={() => {
-                  setDraft(null);
-                  saveMutation.reset();
-                  setFeedback("");
-                }}
-              >
-                {t("Verwerfen")}
-              </button>
-              <button
-                type="submit"
-                className="studio-primary"
-                disabled={busy || blocked || !dirty || !parsed?.preferences}
-              >
-                <Save size={16} aria-hidden="true" />
-                {t("Zeitraum speichern")}
-              </button>
-            </div>
-          </div>
-        </form></ImportPopover>
-      )}
-      <section
-        className="import-pool-import"
-        aria-label={t("Historischer Import")}
-      >
-        <div className="import-pool-heading">
-          <div>
-            <h3>{t("Historischer Import")}</h3>
-            <p>
-              {t(
-                "Verwendet den gespeicherten Zeitraum. Ein laufender Import behält seinen ursprünglichen Zeitraum.",
-              )}
-            </p>
-          </div>
+          </details>
           <button
             type="button"
             className="studio-button"
@@ -532,68 +383,190 @@ function OwnerImportPool({
                 : "Import starten",
             )}
           </button>
-        </div>
-        {dirty && (
-          <p className="import-pool-help">
-            {t("Änderungen vor dem Import speichern oder verwerfen.")}
-          </p>
-        )}
-        {latestQuery.isPending ? (
-          <p role="status">{t("Importstatus laden …")}</p>
-        ) : job ? (
-          <ImportProgress job={job} />
-        ) : (
-          latestQuery.isSuccess && (
-            <p className="import-pool-help">
-              {t("Noch kein historischer Import vorhanden.")}
-            </p>
-          )
-        )}
-        {job && ["error", "incomplete"].includes(job.status) && (
-          <button
-            type="button"
-            className="studio-button"
-            disabled={busy || blocked || !importKnown}
-            onClick={() => {
-              setFeedback("");
-              resumeMutation.mutate({ jobId: job.id, after: onChanged });
-            }}
-          >
-            {t(
-              resumeMutation.isPending
-                ? "Import wird fortgesetzt …"
-                : "Import fortsetzen",
-            )}
-          </button>
-        )}
-      </section>
-      <section className="import-pool-library" aria-label={t("Clip-Pool")}>
-        <div className="import-pool-heading">
-          <div>
-            <h3>{t("Clip-Pool")}</h3>
-            {saved && (
-              <p>
-                {t(
-                  saved.clip_sort === "oldest_first"
-                    ? "Älteste Clips zuerst"
-                    : "Neueste Clips zuerst",
-                )}
-                {" · "}
-                {page
-                  ? `${t("Im Clip-Vorrat erfasst")}: ${page.total.toLocaleString(locale)}`
-                  : t(
-                      poolQuery.isError
-                        ? "Clip-Pool nicht geladen"
-                        : "Clip-Pool laden …",
-                    )}
+          {current && (
+            <ImportPopover><form
+              className="import-pool-preferences"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (busy || blocked || !dirty || !parsed?.preferences) return;
+                setFeedback("");
+                saveMutation.mutate({
+                  preferences: parsed.preferences,
+                  after: onChanged,
+                });
+              }}
+            >
+              <h3>{t("Zeitraum und Reihenfolge")}</h3>
+              <fieldset
+                disabled={busy || blocked}
+                aria-describedby={`${id}-date-help`}
+              >
+                <div className="import-pool-fields">
+                  <label htmlFor={`${id}-kind`}>
+                    {t("Zeitraum")}
+                    <select
+                      id={`${id}-kind`}
+                      className="studio-select"
+                      value={current.kind}
+                      onChange={(event) =>
+                        edit({
+                          kind: event.target.value as PreferencesDraft["kind"],
+                        })
+                      }
+                    >
+                      <option value="all">{t("Alle historischen Clips")}</option>
+                      <option value="year">{t("Ein Jahr")}</option>
+                      <option value="quarter">{t("Ein Quartal")}</option>
+                      <option value="range">{t("Eigener Zeitraum")}</option>
+                      <option value="before">{t("Vor einem Datum")}</option>
+                      <option value="after">{t("Nach einem Datum")}</option>
+                    </select>
+                  </label>
+                  {(current.kind === "year" || current.kind === "quarter") && (
+                    <label htmlFor={`${id}-year`}>
+                      {t("Jahr")}
+                      <input
+                        id={`${id}-year`}
+                        className="studio-input"
+                        type="number"
+                        step="1"
+                        required
+                        value={current.year}
+                        onChange={(event) => edit({ year: event.target.value })}
+                      />
+                    </label>
+                  )}
+                  {current.kind === "quarter" && (
+                    <label htmlFor={`${id}-quarter`}>
+                      {t("Quartal")}
+                      <select
+                        id={`${id}-quarter`}
+                        className="studio-select"
+                        value={current.quarter}
+                        onChange={(event) => edit({ quarter: event.target.value })}
+                      >
+                        {[1, 2, 3, 4].map((quarter) => (
+                          <option key={quarter} value={quarter}>
+                            {t("Quartal")} {quarter}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  {current.kind === "range" && (
+                    <>
+                      <label htmlFor={`${id}-start`}>
+                        {t("Beginn")}
+                        <input
+                          id={`${id}-start`}
+                          className="studio-input"
+                          type="date"
+                          required
+                          value={current.start}
+                          onChange={(event) => edit({ start: event.target.value })}
+                        />
+                      </label>
+                      <label htmlFor={`${id}-end`}>
+                        {t("Ende")}
+                        <input
+                          id={`${id}-end`}
+                          className="studio-input"
+                          type="date"
+                          required
+                          value={current.end}
+                          onChange={(event) => edit({ end: event.target.value })}
+                        />
+                      </label>
+                    </>
+                  )}
+                  {(current.kind === "before" || current.kind === "after") && (
+                    <label htmlFor={`${id}-date`}>
+                      {t("Datum")}
+                      <input
+                        id={`${id}-date`}
+                        className="studio-input"
+                        type="date"
+                        required
+                        value={current.date}
+                        onChange={(event) => edit({ date: event.target.value })}
+                      />
+                    </label>
+                  )}
+                  <label htmlFor={`${id}-sort`}>
+                    {t("Reihenfolge")}
+                    <select
+                      id={`${id}-sort`}
+                      className="studio-select"
+                      value={current.clipSort}
+                      onChange={(event) =>
+                        edit({
+                          clipSort: event.target
+                            .value as PreferencesDraft["clipSort"],
+                        })
+                      }
+                    >
+                      <option value="oldest_first">
+                        {t("Älteste Clips zuerst")}
+                      </option>
+                      <option value="newest_first">
+                        {t("Neueste Clips zuerst")}
+                      </option>
+                    </select>
+                  </label>
+                </div>
+                <a href={globalTimezoneUrl(owner)}>{t("Zeitzone in Verwaltung ändern")}</a>
+              </fieldset>
+              <p id={`${id}-date-help`} className="import-pool-help">
+                {parsed?.preferences
+                  ? `${filterDescription(parsed.preferences.clip_date_filter, t)}. ${t("Kalendertage gelten in der gewählten Zeitzone. Zukünftige Clips werden nicht importiert.")}`
+                  : t(parsed?.error ?? "")}
               </p>
-            )}
-          </div>
+              <p className="import-pool-help">
+                {t(
+                  "Änderungen gelten für neue Auswahlen und Importe, nicht für vorhandene Aufträge oder Videos. Der Import lädt keine Videodateien und startet keine Verarbeitung oder Veröffentlichung.",
+                )}
+              </p>
+              <div className="import-pool-save">
+                <span>
+                  {t(
+                    saveMutation.isPending
+                      ? "Wird gespeichert …"
+                      : dirty
+                        ? "Ungespeicherte Änderungen"
+                        : "Gespeicherter Stand",
+                  )}
+                </span>
+                <div>
+                  <button
+                    type="button"
+                    className="studio-button"
+                    disabled={!dirty || busy}
+                    onClick={() => {
+                      setDraft(null);
+                      saveMutation.reset();
+                      setFeedback("");
+                    }}
+                  >
+                    {t("Verwerfen")}
+                  </button>
+                  <button
+                    type="submit"
+                    className="studio-primary"
+                    disabled={busy || blocked || !dirty || !parsed?.preferences}
+                  >
+                    <Save size={16} aria-hidden="true" />
+                    {t("Zeitraum speichern")}
+                  </button>
+                </div>
+              </div>
+            </form></ImportPopover>
+          )}
           {page && page.clips.length > 0 && (
             <div className="import-pool-bulk">
               <button
                 type="button"
                 className="studio-button"
+                title={t("Alle auf dieser Seite auswählen")}
                 disabled={selectionLocked || selectableOnPage.length === 0}
                 onClick={() =>
                   bulkSelect(
@@ -605,7 +578,7 @@ function OwnerImportPool({
                 {t(
                   bulkMutation.isPending
                     ? "Auswahl wird gespeichert …"
-                    : "Alle auf dieser Seite auswählen",
+                    : "Alle auswählen",
                 )}
               </button>
               <button
@@ -624,6 +597,24 @@ function OwnerImportPool({
             </div>
           )}
         </div>
+      </div>
+      {errors.length > 0 && (
+        <div role="alert" className="import-pool-error">
+          {[...new Set(errors.map(poolError))].map((text) => (
+            <p key={text}>{t(text)}</p>
+          ))}
+          <button className="studio-button" type="button" onClick={reload} disabled={busy}>
+            {t("Erneut laden")}
+          </button>
+        </div>
+      )}
+      <p className="import-pool-feedback" role="status">
+        {feedback ? t(feedback) : ""}
+      </p>
+      {!current && !preferencesQuery.isError && (
+        <p role="status">{t("Gespeicherten Zeitraum laden …")}</p>
+      )}
+      <div className="import-pool-library">
         {poolQuery.isFetching && (
           <p role="status" className="import-pool-help">
             {t("Clip-Pool wird aktualisiert …")}
@@ -769,7 +760,7 @@ function OwnerImportPool({
             </button>
           </nav>
         )}
-      </section>
+      </div>
     </section>
   );
 }

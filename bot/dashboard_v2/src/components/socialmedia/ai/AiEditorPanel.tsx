@@ -2,7 +2,7 @@ import type { ScheduleQueueApi } from '@/components/socialmedia/autopilot/schedu
 import { useLanguage, useT } from '@/context/LanguageContext';
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Check, Clock3, Film, RotateCcw, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, Check, Clock3, Film, RotateCcw, ShieldCheck, Sparkles } from 'lucide-react';
 import { fetchClips } from '@/api/socialMedia';
 import type { AiJobView, AiTimeRange } from './api';
 import { fetchAiConsent, fetchAiJob, fetchAiJobs, retryAiJob, saveAiConsent, startAiJob } from './api';
@@ -11,6 +11,7 @@ import { findChannelClip, isSelectableClip } from './clipLookup';
 import { canRetryJob, failureExplanation } from './failure';
 import { RevisionControls } from './RevisionControls';
 import { EditorOptionsPanel } from './EditorOptionsPanel';
+import { ProductionSwitch } from '../ProductionSwitch';
 import { removedSections } from './timeline';
 import { attachSyncedPlayback } from './playback';
 import './AiEditorPanel.css';
@@ -273,6 +274,7 @@ function AiEditorContent({ twitchUserId, streamer, clipDbId, settingsOnly = fals
   const clipCount = clips.data?.total ?? 0;
   return <section className="social-ai" aria-labelledby={settingsOnly ? undefined : "social-ai-title"} data-saving={savingConsent.isPending || start.isPending || retry.isPending || detailsLocked ? "true" : undefined} data-unsaved={confirmChannel !== null && confirmed ? "true" : undefined}>
     {!settingsOnly && <header className="social-ai-header"><div><h2 id="social-ai-title"><Film aria-hidden="true" size={25} />{t("KI-Videoschnitt")}</h2><p>{t('Wähle einen Clip aus deinem Kanal')} {streamer ? <strong>{streamer}</strong> : null} {t('und starte eine einzelne Bearbeitung. Dafür muss der Auto-Pilot nicht aktiviert sein.')}</p></div><span className="social-ai-manual"><ShieldCheck aria-hidden="true" size={16} />{t("Manuelle Sichtung")}</span></header>}
+    {settingsOnly && <header className="studio-production-head"><h2 id="studio-production-title"><Sparkles aria-hidden="true" size={18} />{t("KI-Produktion & Bearbeitung")}</h2>{hasChannel && <ProductionSwitch owner={twitchUserId} disabled={!consent.isSuccess || !consent.data.global_allowed} api={scheduleApi} />}</header>}
     {!settingsOnly && <p className="social-ai-notice">{t("Ein fertiges Video wird hier zur Sichtung bereitgestellt. Es wird durch diesen Auftrag nicht automatisch veröffentlicht oder in den Zeitplan übernommen.")}</p>}
     {!hasChannel ? <EditorError>{t("Bitte wähle zuerst einen Kanal, um Clips und Freigaben zu laden.")}</EditorError> : <>
       <section className="social-ai-setup" aria-label={t("Freigabe und Clipauswahl")}>
@@ -295,7 +297,7 @@ function AiEditorContent({ twitchUserId, streamer, clipDbId, settingsOnly = fals
           {start.isError && currentStartAction && <EditorError>{t("Die Bearbeitung konnte nicht gestartet werden. Es wurde kein fertiges Video bestätigt. Bitte prüfe Freigabe und Clip und versuche es erneut.")}</EditorError>}
         </div>}
       </section>
-      {settingsOnly && <EditorOptionsPanel key={twitchUserId} channel={twitchUserId} scheduleApi={scheduleApi} disabled={!consent.isSuccess || !consent.data.global_allowed} />}
+      {settingsOnly && <EditorOptionsPanel key={twitchUserId} channel={twitchUserId} disabled={!consent.isSuccess || !consent.data.global_allowed} />}
       {!settingsOnly && <>
       <div className="social-ai-history"><div><h3>{t("Bearbeitungsaufträge")}</h3><p>{t("Zuletzt gestartete Aufträge für diesen Kanal.")}</p></div>{jobs.data && jobs.data.length > 0 && <label>{t("Auftrag ansehen")}<select className="studio-select" value={selectedJobId ?? ''} disabled={detailsLocked} onChange={(event) => { advanceSelection(); setJobSelection({ channel: twitchUserId, id: Number(event.target.value) }); }}>{jobs.data.map((item) => <option key={item.id} value={item.id}>{t("Auftrag")} {item.id} · {t(statusLabels[item.status])}</option>)}</select></label>}</div>
       {jobs.isPending ? <p role="status">{t("Aufträge werden geladen…")}</p> : jobs.isError ? <EditorError retry={() => jobs.refetch()}>{t("Die Aufträge konnten nicht geladen werden. Der Start bleibt gesperrt, bis der Stand bekannt ist.")}</EditorError> : jobs.data?.length === 0 ? <p className="social-ai-empty">{t("Noch kein Auftrag für diesen Kanal. Wähle oben einen Clip für einen manuellen Test.")}</p> : job.isPending ? <p role="status">{t("Auftrag wird geladen…")}</p> : job.isError ? <EditorError retry={() => job.refetch()}>{t("Der Auftrag konnte nicht geladen werden. Die letzte bekannte Fassung wird nicht als aktueller Stand angezeigt.")}</EditorError> : job.data && <AiJobDetails key={`${twitchUserId}-${job.data.id}`} job={job.data} channel={twitchUserId} onBusyChange={setDetailsLocked} onReload={async () => (await job.refetch()).isSuccess} onJob={(value) => {client.setQueryData(['social-ai','job',twitchUserId,value.id],value);client.invalidateQueries({queryKey:jobsKey});if (selectionRevision === jobSelectionRevision.current && value.id !== selectedJobId) setJobSelection({channel:twitchUserId,id:value.id});}} canStart={canStart} onRetry={() => { if (job.data && canRetryJob(job.data, { canStart, retryPending: retry.isPending, locked: detailsLocked })) retry.mutate({ channel: twitchUserId, id: job.data.id, revision: jobSelectionRevision.current }); }} retryPending={retry.isPending && currentRetryAction} retryError={retry.isError && currentRetryAction} />}

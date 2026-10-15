@@ -7,6 +7,7 @@ import type { QueueJob, ScheduleQueueSnapshot } from './autopilot/schedule-queue
 import type { PublishSnapshot, PublishVideo } from './autopilot/publish-review/api';
 import { upcomingTerms, upcomingTermView } from './upcomingTerms';
 import { connectionFact } from './platformPresentation';
+import { platformIconUrl } from './platformIcon';
 import { PLATFORM_LABELS, type SocialMediaViewTarget } from './labels';
 import { formatTerminInZone, queueStage, queuedPostings, type QueueStage } from './queuePresentation';
 
@@ -140,27 +141,46 @@ interface OverviewRow {
   title: string;
   meta: string;
   tone?: Tone;
+  platform?: string;
   onClick: () => void;
 }
 
-function OverviewColumn({ icon: Icon, title, count, rows, empty, footer }: {
+function OverviewColumn({ icon: Icon, title, count, rows, empty, footer, variant }: {
   icon: IconComponent;
   title: string;
   count: number | null;
   rows: OverviewRow[];
   empty: string;
   footer?: ReactNode;
+  variant?: 'actions' | 'now' | 'next';
 }) {
-  return <section className="studio-overview-column">
+  return <section className="studio-overview-column" data-variant={variant}>
     <header className="studio-overview-column-head"><Icon className="h-4 w-4" aria-hidden /><h2>{title}</h2>{count !== null && count > 0 && <span>{count}</span>}</header>
-    {rows.length === 0 ? <p className="studio-overview-empty">{empty}</p> : <ul className="studio-overview-rows">{rows.map(row => <li key={row.key}>
+    {rows.length === 0 ? (empty ? <p className="studio-overview-empty">{empty}</p> : null) : <ul className="studio-overview-rows" data-scroll={rows.length > 8 ? 'true' : undefined}>{rows.map(row => <li key={row.key}>
       <button type="button" className="studio-overview-row" data-tone={row.tone ?? 'neutral'} onClick={row.onClick}>
+        {row.platform && <img className="studio-overview-platform" src={platformIconUrl(row.platform)} width="16" height="16" alt="" aria-hidden />}
         <span className="studio-overview-row-text"><strong title={row.title}>{row.title}</strong><span title={row.meta}>{row.meta}</span></span>
         <ArrowRight className="h-4 w-4" aria-hidden />
       </button>
     </li>)}</ul>}
     {footer}
   </section>;
+}
+
+const PLATFORM_ICONS = new Set(['youtube', 'tiktok', 'instagram']);
+
+function rowPlatform(key: string): string | undefined {
+  const platform = key.startsWith('platform-') ? key.slice('platform-'.length) : key.startsWith('tiktok-') ? 'tiktok' : undefined;
+  return platform && PLATFORM_ICONS.has(platform) ? platform : undefined;
+}
+
+function HoldBanner({ row, onNavigate }: { row: OverviewRow & { hold: 'empty_pool' | 'no_schedule' }; onNavigate: (view: SocialMediaViewTarget) => void }) {
+  const { t } = useLanguage();
+  return <div className="studio-overview-banner" data-tone="warning" role="status">
+    <AlertTriangle className="h-4 w-4" aria-hidden />
+    <span className="studio-overview-banner-text"><strong>{row.title}</strong><span>{row.meta}</span></span>
+    <button type="button" className="studio-button" onClick={() => onNavigate('planen')}>{t(row.hold === 'empty_pool' ? 'Clip-Vorrat öffnen' : 'Termin hinzufügen')}</button>
+  </div>;
 }
 
 export function PipelineOverview({ data, now, onNavigate, activity }: {
@@ -184,7 +204,10 @@ export function PipelineOverview({ data, now, onNavigate, activity }: {
     ...(clips ?? []).filter(clip => clip.status === 'publishing').map(clip => ({ key: `publish-${clip.clip_db_id}`, title: clip.title || clip.clip_id, meta: t('Wird veröffentlicht'), tone: 'gold' as Tone, onClick: () => onNavigate('pool', queueStage(clip)) })),
     ...(publish?.videos ?? []).filter(video => video.event?.destinations.some(destination => ['preparing', 'effect_started', 'processing'].includes(destination.state))).map(video => ({ key: `video-${video.id}`, title: videoTitle(video), meta: t('Wird veröffentlicht'), tone: 'gold' as Tone, onClick: () => onNavigate('freigabe') })),
   ];
-  const actionRows: OverviewRow[] = studioActions(data, now, t).map(action => ({ ...action, onClick: () => onNavigate(action.view, action.stage) }));
+  const allActions: OverviewRow[] = studioActions(data, now, t).map(action => ({ ...action, platform: rowPlatform(action.key), onClick: () => onNavigate(action.view, action.stage) }));
+  const holdRow = allActions.find(row => row.key === 'hold');
+  const hold = schedule?.production_hold === 'empty_pool' || schedule?.production_hold === 'no_schedule' ? schedule.production_hold : null;
+  const actionRows = allActions.filter(row => row.key !== 'hold');
 
   const nextRows: OverviewRow[] = upcomingTerms(data, now).slice(0, 8).map(term => {
     const video = publish?.videos.find(video => `video-${video.id}` === term.key);
@@ -203,9 +226,14 @@ export function PipelineOverview({ data, now, onNavigate, activity }: {
   const unavailable = failed ? t('Nicht abrufbar') : loading ? t('Wird geladen') : null;
   return <div className="studio-overview" aria-busy={loading || undefined}>
     {failed && <p className="studio-overview-notice" role="status">{t('Die Übersicht ist nicht vollständig abrufbar. Bereits geladene Einträge bleiben sichtbar.')}</p>}
-    <OverviewColumn icon={CircleDot} title={t('Läuft gerade')} count={null} rows={nowRows} empty={activity ? '' : unavailable ?? t('Gerade läuft nichts.')} footer={activity} />
-    <OverviewColumn icon={AlertTriangle} title={t('Braucht dich')} count={actionRows.length} rows={actionRows} empty={unavailable ?? t('Nichts offen. Du bist auf dem aktuellen Stand.')} />
-    <OverviewColumn icon={Clock3} title={t('Als Nächstes')} count={null} rows={nextRows} empty={unavailable ?? t('Noch nichts eingeplant.')}
-      footer={<button type="button" className="studio-overview-link" onClick={() => onNavigate('plan')}>{t('Zeitplan öffnen')}<ArrowRight className="h-4 w-4" aria-hidden /></button>} />
+    {holdRow && hold && <HoldBanner row={{ ...holdRow, hold }} onNavigate={onNavigate} />}
+    <div className="studio-overview-grid">
+      <OverviewColumn variant="actions" icon={AlertTriangle} title={t('Braucht dich')} count={actionRows.length} rows={actionRows} empty={unavailable ?? (holdRow ? t('Sonst ist nichts offen.') : t('Nichts offen. Du bist auf dem aktuellen Stand.'))} />
+      <div className="studio-overview-side">
+        <OverviewColumn variant="now" icon={CircleDot} title={t('Läuft gerade')} count={null} rows={nowRows} empty={activity ? '' : unavailable ?? t('Gerade läuft nichts.')} footer={activity} />
+        <OverviewColumn variant="next" icon={Clock3} title={t('Als Nächstes')} count={null} rows={nextRows} empty={unavailable ?? t('Noch nichts eingeplant.')}
+          footer={<button type="button" className="studio-overview-link" onClick={() => onNavigate('plan')}>{t('Zeitplan öffnen')}<ArrowRight className="h-4 w-4" aria-hidden /></button>} />
+      </div>
+    </div>
   </div>;
 }

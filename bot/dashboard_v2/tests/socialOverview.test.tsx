@@ -91,7 +91,7 @@ test('empty pool is an actionable warning rather than an all-clear', () => {
   const strip = renderToStaticMarkup(<StudioStatusStrip data={data} onNavigate={() => {}} />);
   assert.match(strip, /data-tone="warning"/);
   const html = renderToStaticMarkup(<PipelineOverview data={data} now={Date.parse('2026-10-14T12:00:00Z')} onNavigate={() => {}} />);
-  assert.match(html, /class="studio-overview-row" data-tone="warning"/);
+  assert.match(html, /class="studio-overview-banner" data-tone="warning"/);
 });
 
 test('empty overview exposes incomplete data instead of asserting an all-clear', () => {

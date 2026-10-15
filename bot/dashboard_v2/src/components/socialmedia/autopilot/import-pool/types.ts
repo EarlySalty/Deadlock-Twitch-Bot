@@ -112,4 +112,5 @@ export interface ImportPoolPanelProps {
   twitchUserId?: string;
   api?: ImportPoolApi;
   onChanged?: () => void;
+  reloadKey?: number;
 }
