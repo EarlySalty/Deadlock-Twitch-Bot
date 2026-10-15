@@ -360,3 +360,34 @@ pub async fn publish_retry_handler(
     };
     publish_result(publish::retry(&pool, &owner, id, &input.platform).await)
 }
+
+pub async fn pipeline_policy_get_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(query): Query<OwnerQuery>,
+) -> Response {
+    let (_, owner) = match target(&auth, &pool, query.twitch_user_id.as_deref()).await {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    match tb_social_media::autopilot_settings::load_policy(&pool, &owner).await {
+        Ok(policy) => Json(policy).into_response(),
+        Err(error) => error_response(error.into()),
+    }
+}
+
+pub async fn pipeline_policy_put_handler(
+    auth: DashboardAuthLevel,
+    State(pool): State<PgPool>,
+    Query(query): Query<OwnerQuery>,
+    Json(input): Json<tb_social_media::autopilot_settings::PipelinePolicy>,
+) -> Response {
+    let (_, owner) = match target(&auth, &pool, query.twitch_user_id.as_deref()).await {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    match tb_social_media::autopilot_settings::save_policy(&pool, &owner, &input).await {
+        Ok(policy) => Json(policy).into_response(),
+        Err(error) => error_response(error.into()),
+    }
+}

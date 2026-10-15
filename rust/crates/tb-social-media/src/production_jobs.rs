@@ -89,6 +89,7 @@ pub struct ProductionJob {
     pub max_attempts: i32,
     pub review_reasons: Value,
     pub metadata: Value,
+    pub policy_snapshot: Option<autopilot_settings::PipelinePolicy>,
     pub last_error: Option<String>,
     pub scheduled_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
@@ -99,7 +100,7 @@ pub struct ProductionJob {
 const SELECT: &str =
     "SELECT id, twitch_user_id, clip_id, source, requested_mode, mode, queue_order,
     status, stage, attempts, max_attempts, review_reasons::text, metadata::text, last_error,
-    scheduled_at, created_at, started_at, finished_at FROM social_production_jobs";
+    scheduled_at, created_at, started_at, finished_at, NULLIF(to_jsonb(social_production_jobs)->'policy_snapshot', 'null'::jsonb)::text AS policy_snapshot FROM social_production_jobs";
 
 fn from_row(row: sqlx::postgres::PgRow) -> Result<ProductionJob, JobError> {
     let source: String = row.try_get("source")?;
@@ -126,6 +127,10 @@ fn from_row(row: sqlx::postgres::PgRow) -> Result<ProductionJob, JobError> {
         max_attempts: row.try_get("max_attempts")?,
         review_reasons: json_column(&row, "review_reasons")?,
         metadata: json_column(&row, "metadata")?,
+        policy_snapshot: row
+            .try_get::<Option<String>, _>("policy_snapshot")?
+            .map(|raw| serde_json::from_str(&raw))
+            .transpose()?,
         last_error: row.try_get("last_error")?,
         scheduled_at: row.try_get("scheduled_at")?,
         created_at: row.try_get("created_at")?,

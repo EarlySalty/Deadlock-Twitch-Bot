@@ -68,6 +68,7 @@ pub struct ProducedVideo {
     pub needs_review: bool,
     pub review_reasons: Value,
     pub metadata: Value,
+    pub policy_snapshot: Option<autopilot_settings::PipelinePolicy>,
     pub created_at: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
     pub scheduled_at: Option<DateTime<Utc>>,
@@ -90,7 +91,7 @@ pub struct PublishingReservation {
 
 const SELECT: &str = "SELECT id, twitch_user_id, clip_id, job_id, mode, version_no, parent_version_id,
     variant_index, file_path, duration_ms, status, needs_review, review_reasons::text, metadata::text,
-    created_at, expires_at, scheduled_at FROM social_produced_videos";
+    created_at, expires_at, scheduled_at, NULLIF(to_jsonb(social_produced_videos)->'policy_snapshot', 'null'::jsonb)::text AS policy_snapshot FROM social_produced_videos";
 
 fn from_row(row: sqlx::postgres::PgRow) -> Result<ProducedVideo, ProducedVideoError> {
     let mode: String = row.try_get("mode")?;
@@ -109,6 +110,10 @@ fn from_row(row: sqlx::postgres::PgRow) -> Result<ProducedVideo, ProducedVideoEr
         needs_review: row.try_get("needs_review")?,
         review_reasons: json_column(&row, "review_reasons")?,
         metadata: json_column(&row, "metadata")?,
+        policy_snapshot: row
+            .try_get::<Option<String>, _>("policy_snapshot")?
+            .map(|raw| serde_json::from_str(&raw))
+            .transpose()?,
         created_at: row.try_get("created_at")?,
         expires_at: row.try_get("expires_at")?,
         scheduled_at: row.try_get("scheduled_at")?,

@@ -59,6 +59,12 @@ async fn pool() -> PgPool {
     .execute(&pool)
     .await
     .expect("actual additive migration");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/20261015124000_social_pipeline_policy.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("canonical policy migration");
     pool
 }
 
@@ -218,6 +224,77 @@ async fn postgres_contracts_preserve_legacy_and_exact_file_reservations() {
         .await,
         Err(ProducedVideoError::Ownership)
     ));
+    let legacy_policy = autopilot_settings::load_policy(&pool, "owner")
+        .await
+        .expect("legacy policy projection");
+    assert_eq!(legacy_policy.policy_revision, 0);
+    assert_eq!(
+        legacy_policy.pipeline_mode,
+        autopilot_settings::PipelineMode::Upload
+    );
+    assert!(record.policy_snapshot.is_none());
+    let original_settings = autopilot_settings::load(&pool, "owner")
+        .await
+        .expect("original settings");
+    for mode in [
+        autopilot_settings::PipelineMode::Upload,
+        autopilot_settings::PipelineMode::UploadText,
+        autopilot_settings::PipelineMode::AiEdit,
+    ] {
+        for review in [
+            autopilot_settings::ReviewPolicy::Off,
+            autopilot_settings::ReviewPolicy::Required,
+            autopilot_settings::ReviewPolicy::VetoUntilDeadline,
+        ] {
+            let mut policy = autopilot_settings::load_policy(&pool, "owner")
+                .await
+                .expect("policy");
+            policy.pipeline_mode = mode;
+            policy.review_policy = review;
+            policy.metadata_scope = autopilot_settings::PolicyScope::PerPlatform;
+            policy.schedule_scope = autopilot_settings::PolicyScope::PerPlatform;
+            policy.distribution_policy = autopilot_settings::DistributionPolicy::IndependentClips;
+            policy.text_defaults.shared.description = "Für alle Plattformen".into();
+            policy.text_defaults.per_platform.insert(
+                "tiktok".into(),
+                autopilot_settings::TextDefaults {
+                    description: "Nur TikTok".into(),
+                    hashtags: vec!["Deadlock".into()],
+                },
+            );
+            policy.platform_schedule_slots.insert(
+                "youtube".into(),
+                vec![ScheduleSlot {
+                    weekday: 1,
+                    local_time: "08:00".into(),
+                }],
+            );
+            let stored = autopilot_settings::save_policy(&pool, "owner", &policy)
+                .await
+                .expect("save canonical policy");
+            assert_eq!(stored.policy_revision, policy.policy_revision + 1);
+            assert_eq!(
+                stored,
+                autopilot_settings::load_policy(&pool, "owner")
+                    .await
+                    .expect("round trip")
+            );
+            assert!(autopilot_settings::save_policy(&pool, "owner", &policy)
+                .await
+                .is_err());
+        }
+    }
+    assert_eq!(
+        original_settings,
+        autopilot_settings::load(&pool, "owner")
+            .await
+            .expect("no activation or legacy settings mutation")
+    );
+    let cutovers: i64 = sqlx::query_scalar("SELECT count(*) FROM social_pipeline_cutover")
+        .fetch_one(&pool)
+        .await
+        .expect("no cutover");
+    assert_eq!(cutovers, 0);
     let job = production_jobs::insert(
         &pool,
         &NewProductionJob {
@@ -237,6 +314,43 @@ async fn postgres_contracts_preserve_legacy_and_exact_file_reservations() {
         .expect("claimed");
     assert_eq!(claimed.id, job.id);
     assert_eq!(claimed.mode, Some(ProductionMode::Ai));
+    assert!(claimed.policy_snapshot.is_none());
+    let snapshot = autopilot_settings::load_policy(&pool, "owner")
+        .await
+        .expect("policy snapshot");
+    let raw = serde_json::to_string(&snapshot).expect("snapshot JSON");
+    sqlx::query(
+        "UPDATE social_production_jobs SET policy_snapshot = $2::text::jsonb WHERE id = $1",
+    )
+    .bind(job.id)
+    .bind(&raw)
+    .execute(&pool)
+    .await
+    .expect("frozen job contract");
+    sqlx::query(
+        "UPDATE social_produced_videos SET policy_snapshot = $2::text::jsonb WHERE id = $1",
+    )
+    .bind(first)
+    .bind(&raw)
+    .execute(&pool)
+    .await
+    .expect("frozen artifact contract");
+    assert_eq!(
+        production_jobs::get(&pool, "owner", job.id)
+            .await
+            .expect("job")
+            .expect("existing")
+            .policy_snapshot,
+        Some(snapshot.clone())
+    );
+    assert_eq!(
+        produced_video::get(&pool, "owner", first)
+            .await
+            .expect("video")
+            .expect("existing")
+            .policy_snapshot,
+        Some(snapshot)
+    );
     assert!(production_jobs::claim_next(&pool)
         .await
         .expect("sequential guard")
@@ -325,4 +439,23 @@ fn shared_schedule_handles_weekdays_dst_and_no_implicit_slots() {
     }
     .validate()
     .is_err());
+}
+
+#[test]
+fn canonical_policy_rejects_invalid_platforms_and_revisions() {
+    use autopilot_settings::{PipelinePolicy, ReviewPolicy};
+    assert!(serde_json::from_value::<PipelinePolicy>(json!({"enabled":true})).is_err());
+    assert!(serde_json::from_value::<PipelinePolicy>(json!({"pipeline_mode":"static"})).is_err());
+    let mut policy = PipelinePolicy {
+        review_policy: ReviewPolicy::VetoUntilDeadline,
+        ..PipelinePolicy::default()
+    };
+    assert!(policy.validate().is_ok());
+    policy.policy_revision = -1;
+    assert!(policy.validate().is_err());
+    policy.policy_revision = 0;
+    policy
+        .platform_schedule_slots
+        .insert("YouTube".into(), Vec::new());
+    assert!(policy.validate().is_err());
 }
