@@ -511,6 +511,11 @@ async fn assign(pool: &PgPool, hash: &str, guild: i64) -> Result<Option<bool>, s
     let active: bool = sqlx::query_scalar("INSERT INTO streamer_guilds (twitch_user_id, guild_id, active, deactivated_at, source, is_on_discord, require_discord_link) VALUES ($1,$2,$3,CASE WHEN $3 THEN NULL ELSE now() END,'onboarding',true,true) ON CONFLICT (twitch_user_id,guild_id) DO UPDATE SET is_on_discord = true, active = CASE WHEN streamer_guilds.deactivated_by = 'admin' OR streamer_guilds.source = 'admin' OR streamer_guilds.active THEN streamer_guilds.active ELSE $3 END, deactivated_at = CASE WHEN streamer_guilds.deactivated_by = 'admin' OR streamer_guilds.source = 'admin' OR streamer_guilds.active THEN streamer_guilds.deactivated_at WHEN $3 THEN NULL ELSE now() END RETURNING active")
         .bind(&session.twitch_user_id).bind(guild).bind(automatic).fetch_one(&mut *tx).await?;
     if active {
+        if guild != HOME {
+            sqlx::query("SET LOCAL tb.foreign_guild_admission = 'true'")
+                .execute(&mut *tx)
+                .await?;
+        }
         sqlx::query("UPDATE twitch_partners SET status = 'active', departnered_at = NULL, technical_pause_reason = CASE WHEN lower(btrim(COALESCE(technical_pause_reason, ''))) LIKE 'token_error%' THEN NULL ELSE technical_pause_reason END WHERE id = (SELECT id FROM twitch_partners WHERE twitch_user_id = $1 ORDER BY CASE COALESCE(status, '') WHEN 'active' THEN 0 WHEN 'archived' THEN 1 WHEN 'departnered' THEN 2 ELSE 3 END, COALESCE(departnered_at, admin_archived_at, partnered_at) DESC NULLS LAST LIMIT 1 FOR UPDATE) AND status <> 'active' AND admin_archived_at IS NULL AND COALESCE(manual_partner_opt_out, 0) = 0 AND lower(btrim(COALESCE(technical_pause_reason, ''))) NOT IN ('blocked','bot_banned')")
             .bind(&session.twitch_user_id).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO twitch_partners (twitch_user_id, twitch_login, status, added_by) SELECT $1,$2,'active','guild_onboarding' WHERE NOT EXISTS (SELECT 1 FROM twitch_partners WHERE twitch_user_id = $1)")

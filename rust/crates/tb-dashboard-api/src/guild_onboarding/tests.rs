@@ -456,6 +456,75 @@ async fn current_partner_state_and_independent_home_proof_survive_other_assignme
 }
 
 #[tokio::test]
+async fn foreign_admission_preserves_inactive_home_membership_after_revocation() {
+    for (partner_status, removal) in [
+        ("departnered", "discord_leave"),
+        ("archived", "guild_removed"),
+    ] {
+        let db = fixture().await;
+        sqlx::query("SELECT enable_guild_runtime()")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE twitch_partners SET status=$1 WHERE twitch_user_id='42'")
+            .bind(partner_status)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO discord_guilds(guild_id,status) VALUES(700,'active')")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let raw = "synthetic-cross-guild-admission-session-000001";
+        new_session(&db.pool, raw, "42", &[HOME, 700]).await;
+        assert_eq!(
+            assign(&db.pool, &session_lookup_key(raw), 700)
+                .await
+                .unwrap(),
+            Some(true)
+        );
+        let home: (bool, bool) = sqlx::query_as("SELECT active,require_discord_link FROM streamer_guilds WHERE twitch_user_id='42' AND guild_id=$1")
+            .bind(HOME).fetch_one(&db.pool).await.unwrap();
+        assert_eq!(home, (false, false));
+        assert!(
+            auth(db.pool.clone())
+                .is_partner_active("existing", "42")
+                .await
+        );
+        if removal == "guild_removed" {
+            sqlx::query(
+                "UPDATE discord_guilds SET status='removed',removed_at=now() WHERE guild_id=700",
+            )
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query("UPDATE streamer_guilds SET active=false,is_on_discord=false,deactivated_at=now(),deactivated_by=$1 WHERE twitch_user_id='42' AND guild_id=700")
+            .bind(removal).execute(&db.pool).await.unwrap();
+        assert!(
+            !auth(db.pool.clone())
+                .is_partner_active("existing", "42")
+                .await
+        );
+        assert!(auth(db.pool.clone())
+            .find_partner_for_login("existing", "42")
+            .await
+            .unwrap()
+            .is_none());
+        sqlx::raw_sql("UPDATE twitch_partners SET status='departnered' WHERE twitch_user_id='42'; UPDATE twitch_partners SET status='active' WHERE twitch_user_id='42';")
+            .execute(&db.pool).await.unwrap();
+        assert!(sqlx::query_scalar::<_, bool>(
+            "SELECT active FROM streamer_guilds WHERE twitch_user_id='42' AND guild_id=$1"
+        )
+        .bind(HOME)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap());
+        db.close().await;
+    }
+}
+
+#[tokio::test]
 async fn automatic_admission_reactivates_unblocked_history_and_departed_members_can_rejoin() {
     let db = fixture().await;
     sqlx::query("SELECT enable_guild_runtime()")

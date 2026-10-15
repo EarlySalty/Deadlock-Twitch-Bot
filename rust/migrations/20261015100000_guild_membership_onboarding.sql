@@ -309,6 +309,9 @@ $$;
 CREATE FUNCTION public.sync_legacy_home_membership() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE eligible boolean;
 BEGIN
+    IF current_setting('tb.foreign_guild_admission', true) = 'true' THEN
+        RETURN NEW;
+    END IF;
     SELECT COALESCE(bool_or(p.status = 'active' AND COALESCE(p.manual_partner_opt_out, 0) = 0
         AND COALESCE(p.technical_pause_reason, '') = '' AND p.admin_archived_at IS NULL), false)
     INTO eligible FROM public.twitch_partners p WHERE p.twitch_user_id = NEW.twitch_user_id;
